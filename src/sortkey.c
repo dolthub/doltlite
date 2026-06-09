@@ -463,7 +463,14 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
   }
   if( flags & (MEM_Str|MEM_Blob) ){
     if( flags & MEM_Zero ){
-      return SQLITE_NOTFOUND;
+      /* A zeroblob's tail exists only as u.nZero. Bailing (SQLITE_NOTFOUND)
+      ** let an indexed probe build a key that misses the stored entry, so
+      ** WHERE b=zeroblob(N) found nothing through an index (zeroblob-2.2) —
+      ** the MEM_IntReal lesson again. Expand to the literal bytes; on OOM
+      ** mallocFailed is set and the statement aborts. */
+      if( sqlite3VdbeMemExpandBlob(pMem)!=SQLITE_OK ){
+        return SQLITE_NOMEM;
+      }
     }
     if( pMem->n < 0 || (pMem->n > 0 && pMem->z==0) ){
       return SQLITE_CORRUPT;
@@ -493,11 +500,13 @@ static int sortKeyEncodeMemArray(
     u32 serialType;
     u32 fieldLen;
     u8 aNum[8];
-    const u8 *pField = (const u8*)pMem->z;
+    const u8 *pField;
     int coll;
     int rc = sortKeyMemSerialType(pMem, &serialType, &fieldLen);
     if( rc==SQLITE_NOTFOUND ) return -3;
     if( rc!=SQLITE_OK ) return -1;
+    /* After the serial-type call: zeroblob expansion reallocates pMem->z. */
+    pField = (const u8*)pMem->z;
 
     if( serialType <= 6 || serialType==8 || serialType==9 ){
       writeIntBE(aNum, pMem->u.i, (int)fieldLen);

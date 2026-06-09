@@ -1866,3 +1866,10 @@ attach3 attach3-11.1  # cascade: aux name still attached after 11.0
 temptable2 temptable2-8.1  # PRAGMA page_count: chunk store has no SQLite page count
 temptable2 temptable2-8.3  # sqlite3_backup_init: page-image backup unsupported on prolly
 temptable2 temptable2-8.6  # sqlite3_backup_init: page-image backup unsupported on prolly
+# zeroblob-1.1.x — internal instrumentation: sqlite3_max_blobsize tracks the
+# largest blob allocation (prolly record encoding materializes the zeroblob,
+# stock keeps it lazy) and the memory-highwater bound assumes that laziness.
+# Value semantics are correct (indexed/unindexed lookups, UNIQUE, BLOB
+# round-trip all match stock).
+zeroblob zeroblob-1.1.1  # sqlite3_max_blobsize allocation metric (zeroblob materialized)
+zeroblob zeroblob-1.1.2  # memory-highwater bound assumes lazy zeroblob
