@@ -27,7 +27,9 @@ normalize_log() {
           dt = substr($5, 1, 10)
           "date +%Y-%m-%d" | getline today
           close("date +%Y-%m-%d")
-          if (dt == today) {
+          "date -u +%Y-%m-%d" | getline utc_today
+          close("date -u +%Y-%m-%d")
+          if (dt == today || dt == utc_today) {
             dt = "RECENT"
           }
           print "L\t" $2 "\t" $3 "\t" email "\t" dt

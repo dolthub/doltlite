@@ -3346,6 +3346,9 @@ int sqlite3VdbeHalt(Vdbe *p){
     p->rc = SQLITE_NOMEM_BKPT;
   }
   closeAllCursors(p);
+  if( db->mallocFailed ){
+    p->rc = SQLITE_NOMEM_BKPT;
+  }
   checkActiveVdbeCnt(db);
 
   /* No commit or rollback needed if the program never started or if the
@@ -3382,7 +3385,11 @@ int sqlite3VdbeHalt(Vdbe *p){
       ** the pager to a consistent state.
       */
       if( !p->readOnly || mrc!=SQLITE_INTERRUPT ){
-        if( (mrc==SQLITE_NOMEM || mrc==SQLITE_FULL) && p->usesStmtJournal ){
+        if( (mrc==SQLITE_NOMEM || mrc==SQLITE_FULL
+#ifdef DOLTLITE_PROLLY
+             || (mrc&0xff)==SQLITE_NOMEM
+#endif
+            ) && p->usesStmtJournal ){
           eStatementOp = SAVEPOINT_ROLLBACK;
         }else{
           /* We are forced to roll back the active transaction. Before doing
@@ -3471,6 +3478,16 @@ int sqlite3VdbeHalt(Vdbe *p){
     */
     if( eStatementOp ){
       rc = sqlite3VdbeCloseStatement(p, eStatementOp);
+#ifdef DOLTLITE_PROLLY
+      if( rc==SQLITE_OK && eStatementOp==SAVEPOINT_RELEASE
+       && db->mallocFailed ){
+        p->rc = SQLITE_NOMEM_BKPT;
+        sqlite3RollbackAll(db, SQLITE_ABORT_ROLLBACK);
+        sqlite3CloseSavepoints(db);
+        db->autoCommit = 1;
+        p->nChange = 0;
+      }
+#endif
       if( rc ){
         if( p->rc==SQLITE_OK || (p->rc&0xff)==SQLITE_CONSTRAINT ){
           p->rc = rc;

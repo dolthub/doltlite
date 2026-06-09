@@ -548,6 +548,8 @@ static SQLITE_INLINE i64 cursorCurrentTreeIntKey(BtCursor *pCur){
 static int cacheCursorPayloadReconstructed(
   BtCursor *pCur, const u8 *pSortKey, int nSortKey
 );
+static int prollyBtCursorNext(BtCursor *pCur, int flags);
+static int prollyBtCursorPrevious(BtCursor *pCur, int flags);
 
 static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
@@ -559,6 +561,40 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
       pCur->cachedPayloadOwned = 0;
     }
   }
+}
+
+static int cursorOnDegenerateSchemaRow(BtCursor *pCur, int *pIsDegenerate){
+  const u8 *pVal;
+  int nVal;
+  int rc;
+  *pIsDegenerate = 0;
+  if( pCur->pgnoRoot!=1 || !pCur->curIntKey ) return SQLITE_OK;
+  if( pCur->eState!=CURSOR_VALID ) return SQLITE_OK;
+  rc = getCursorPayload(pCur, &pVal, &nVal);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !pVal || nVal<=0 ){
+    *pIsDegenerate = 1;
+  }
+  return SQLITE_OK;
+}
+
+static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
+  int rc = SQLITE_OK;
+  int isDegenerate = 0;
+  if( pRes ) *pRes = 0;
+  while( pCur->eState==CURSOR_VALID ){
+    rc = cursorOnDegenerateSchemaRow(pCur, &isDegenerate);
+    if( rc!=SQLITE_OK || !isDegenerate ) break;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    rc = dir>=0 ? prollyBtCursorNext(pCur, 0) : prollyBtCursorPrevious(pCur, 0);
+    if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) break;
+    if( pCur->eState==CURSOR_INVALID ){
+      if( pRes ) *pRes = 1;
+      rc = SQLITE_OK;
+      break;
+    }
+  }
+  return rc;
 }
 
 static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
@@ -1421,6 +1457,10 @@ static int schemaCatalogRowIsVirtualTable(const SchemaCatalogRow *pRow){
   return sqlite3_strnicmp(zSql, "CREATE VIRTUAL TABLE ", 21)==0;
 }
 
+static int schemaNameIsInternalAutoindex(const char *zName){
+  return zName && strncmp(zName, "sqlite_autoindex_", 17)==0;
+}
+
 typedef struct SchemaFieldValue SchemaFieldValue;
 struct SchemaFieldValue {
   int eType;
@@ -1643,6 +1683,19 @@ static int schemaCatalogRowWanted(
       }
     }
   }
+  if( pRow->zType && strcmp(pRow->zType, "index")==0 ){
+    for(i=0; i<nTables; i++){
+      if( !aTables[i].zName ) continue;
+      if( pRow->zName && strcmp(aTables[i].zName, pRow->zName)==0 ){
+        return 1;
+      }
+      if( schemaNameIsInternalAutoindex(pRow->zName)
+       && pRow->zTblName
+       && strcmp(aTables[i].zName, pRow->zTblName)==0 ){
+        return 1;
+      }
+    }
+  }
   return 0;
 }
 
@@ -1713,7 +1766,8 @@ static int appendMissingSchemaCatalogRows(
         }
       }else if( strcmp(aMeta[i].zType, "index")==0 ){
         if( strcmp(aTables[j].zName, aMeta[i].zName)==0
-         || strcmp(aTables[j].zName, aMeta[i].zTblName)==0 ){
+         || (schemaNameIsInternalAutoindex(aMeta[i].zName)
+             && strcmp(aTables[j].zName, aMeta[i].zTblName)==0) ){
           wanted = 1;
           break;
         }
@@ -6298,6 +6352,9 @@ static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   }
   pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
   pCur->curFlags &= ~BTCF_AtLast;
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, 1, pRes);
+  }
   return rc;
 }
 int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
@@ -6327,6 +6384,9 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
     pCur->curFlags |= BTCF_AtLast;
   } else {
     pCur->eState = CURSOR_INVALID;
+  }
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, -1, pRes);
   }
   return rc;
 }
@@ -6453,6 +6513,9 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
     }
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, 1, 0);
+  }
   return rc;
 }
 int sqlite3BtreeNext(BtCursor *pCur, int flags){
@@ -6554,6 +6617,9 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
     }
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, -1, 0);
+  }
   return rc;
 }
 int sqlite3BtreePrevious(BtCursor *pCur, int flags){
@@ -8280,6 +8346,75 @@ delete_cleanup:
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   if( !pCur ) return SQLITE_OK;
   return pCur->pCurOps->xDelete(pCur, flags);
+}
+
+int sqlite3BtreeDeleteSchemaEntryByName(Btree *p, const char *zName){
+  BtCursor cur;
+  int rc;
+  int res = 0;
+
+  if( !p || !zName || !zName[0] ) return SQLITE_OK;
+  if( p->pOps!=&prollyBtreeOps ) return SQLITE_OK;
+  if( p->inTrans!=TRANS_WRITE ) return SQLITE_OK;
+
+  memset(&cur, 0, sizeof(cur));
+  rc = sqlite3BtreeCursor(p, 1, BTREE_WRCSR, 0, &cur);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3BtreeFirst(&cur, &res);
+  while( rc==SQLITE_OK && res==0 ){
+    u32 nPayload = sqlite3BtreePayloadSize(&cur);
+    u8 *pPayload = 0;
+    if( nPayload>0 ){
+      pPayload = sqlite3_malloc(nPayload);
+      if( !pPayload ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      rc = sqlite3BtreePayload(&cur, 0, nPayload, pPayload);
+      if( rc==SQLITE_OK ){
+        DoltliteRecordInfo ri;
+        char *zType = 0;
+        char *zRowName = 0;
+        int shouldDelete = 0;
+        if( doltliteParseRecordStrict(pPayload, (int)nPayload, &ri)==SQLITE_OK
+         && ri.nField>=5
+        ){
+          rc = schemaCatalogTextField(pPayload, (int)nPayload, &ri, 0, &zType);
+          if( rc==SQLITE_OK ){
+            rc = schemaCatalogTextField(
+                pPayload, (int)nPayload, &ri, 1, &zRowName);
+          }
+          shouldDelete = rc==SQLITE_OK
+              && zType && strcmp(zType, "table")==0
+              && zRowName && strcmp(zRowName, zName)==0;
+          sqlite3_free(zType);
+          sqlite3_free(zRowName);
+          if( shouldDelete ){
+            rc = sqlite3BtreeDelete(&cur, 0);
+            sqlite3_free(pPayload);
+            if( rc!=SQLITE_OK ) break;
+            rc = sqlite3BtreeFirst(&cur, &res);
+            continue;
+          }
+        }
+      }
+      sqlite3_free(pPayload);
+    }
+    if( rc!=SQLITE_OK ) break;
+    rc = sqlite3BtreeNext(&cur, 0);
+    if( rc==SQLITE_DONE ){
+      rc = SQLITE_OK;
+      break;
+    }
+    res = sqlite3BtreeEof(&cur);
+  }
+
+  {
+    int rcClose = sqlite3BtreeCloseCursor(&cur);
+    if( rc==SQLITE_OK ) rc = rcClose;
+  }
+  return rc;
 }
 
 static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){

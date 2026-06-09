@@ -1,0 +1,90 @@
+# 2026 June 08
+#
+# The author disclaims copyright to this source code.  In place of
+# a legal notice, here is a blessing:
+#
+#    May you do good and not evil.
+#    May you find forgiveness for yourself and forgive others.
+#    May you share freely, never taking more than you give.
+#
+#***********************************************************************
+#
+# DoltLite regression tests for FTS3 virtual-table create failure cleanup.
+#
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable {!fts3 || !builtin_test} {
+  finish_test
+  return
+}
+
+sqlite3_db_config_lookaside db 0 0 0
+
+do_execsql_test doltlite_fts3_oom-1.0 {
+  CREATE VIRTUAL TABLE ft1 USING fts3(a, b);
+  CREATE VIRTUAL TABLE ft2 USING fts3([a], [b]);
+  CREATE VIRTUAL TABLE ft3 USING fts3('a', "b");
+  CREATE VIRTUAL TABLE ft4 USING fts3(`a`, 'fred''s column');
+} {}
+
+foreach iFail {240 241 242 243 244 245 246 247 248 249 250 251 252 253 254
+               255 256 257 258 259 260 261 262 263 264 265 266 267 268 269
+               270} {
+  do_test doltlite_fts3_oom-1.1.$iFail {
+    sqlite3_memdebug_fail $iFail -repeat 1
+    set res [catchsql {
+      CREATE VIRTUAL TABLE ft5 USING fts3(a, b, tokenize unknown)
+    }]
+    sqlite3_memdebug_fail -1
+    set nFt5 [db one {SELECT count(*) FROM sqlite_schema WHERE name='ft5'}]
+    set rc [lindex $res 0]
+    set msg [lindex $res 1]
+    expr {
+      $rc==1
+      && ($msg=="out of memory" || $msg=="unknown tokenizer: unknown")
+      && $nFt5==0
+    }
+  } {1}
+}
+
+do_execsql_test doltlite_fts3_oom-2.0 {
+  DROP TABLE ft1;
+  DROP TABLE ft2;
+  DROP TABLE ft3;
+  DROP TABLE ft4;
+  CREATE VIRTUAL TABLE ft6 USING fts3(a, b, tokenize porter);
+  CREATE VIRTUAL TABLE ft7 USING fts4(a, b, notindexed=b);
+  DROP TABLE ft6;
+  DROP TABLE ft7;
+  CREATE VIRTUAL TABLE ft USING fts3(a, b);
+} {}
+
+do_test doltlite_fts3_oom-2.1 {
+  for {set ii 1} {$ii < 32} {incr ii} {
+    set a [list]
+    set b [list]
+    if {$ii & 0x01} {lappend a one   ; lappend b neung}
+    if {$ii & 0x02} {lappend a two   ; lappend b song }
+    if {$ii & 0x04} {lappend a three ; lappend b sahm }
+    if {$ii & 0x08} {lappend a four  ; lappend b see  }
+    if {$ii & 0x10} {lappend a five  ; lappend b hah  }
+    execsql { INSERT INTO ft VALUES($a, $b) }
+  }
+} {}
+
+foreach {tn iFail sql okres} {
+  1 90 {SELECT count(*) FROM sqlite_master} {0 4}
+  2 92 {SELECT * FROM ft WHERE docid = 1} {0 {one neung}}
+} {
+  do_test doltlite_fts3_oom-2.2.$tn {
+    sqlite3_memdebug_fail $iFail -repeat 1
+    set res [catchsql $sql]
+    sqlite3_memdebug_fail -1
+    expr {$res=="1 {out of memory}" || $res==$okres}
+  } {1}
+}
+
+sqlite3_memdebug_fail -1
+finish_test
