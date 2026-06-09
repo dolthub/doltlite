@@ -99,17 +99,17 @@ int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 #define BTS_READ_ONLY       0x0001
 #define BTS_INITIALLY_EMPTY 0x0010
 
-#define CLEAR_CACHED_PAYLOAD(pCur) do{ \
-  if( (pCur)->cachedPayloadOwned && (pCur)->pCachedPayload ){ \
-    sqlite3_free((pCur)->pCachedPayload); \
+#define CLEAR_CACHED_PAYLOAD(pCsr) do{ \
+  if( (pCsr)->cachedPayloadOwned && (pCsr)->pCachedPayload ){ \
+    sqlite3_free((pCsr)->pCachedPayload); \
   } \
-  if( (pCur)->pCachedFrom ){ \
-    prollyCacheRelease((pCur)->pCur.pCache, (pCur)->pCachedFrom); \
-    (pCur)->pCachedFrom = 0; \
+  if( (pCsr)->pCachedFrom ){ \
+    prollyCacheRelease((pCsr)->pCur.pCache, (pCsr)->pCachedFrom); \
+    (pCsr)->pCachedFrom = 0; \
   } \
-  (pCur)->pCachedPayload = 0; \
-  (pCur)->nCachedPayload = 0; \
-  (pCur)->cachedPayloadOwned = 0; \
+  (pCsr)->pCachedPayload = 0; \
+  (pCsr)->nCachedPayload = 0; \
+  (pCsr)->cachedPayloadOwned = 0; \
 }while(0)
 
 #define CLEAR_CACHED_SEEK_KEY(pCur) do{ \
@@ -1187,6 +1187,29 @@ static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
 
       prollyCursorReleaseAll(&p->pCur);
     }
+  }
+}
+
+/* Stock invalidateIncrblobCursors: a SQL-level write to a row aborts any
+** incrblob handle open on it. Blob-handle writes also route through
+** sqlite3BtreeInsert here (stock patches pages in place), so callers skip
+** this when the writer is itself an incrblob cursor. */
+static void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
+                                      i64 iRow, int isClearTable){
+  BtCursor *p;
+  for(p=pBt->pCursor; p; p=p->pNext){
+    if( (p->curFlags & BTCF_Incrblob)==0 || p->pgnoRoot!=pgnoRoot ) continue;
+    if( !isClearTable ){
+      if( p->eState==CURSOR_REQUIRESEEK ){
+        if( p->nKey!=iRow ) continue;
+      }else if( p->curFlags & BTCF_ValidNKey ){
+        if( p->cachedIntKey!=iRow ) continue;
+      }
+    }
+    p->eState = CURSOR_FAULT;
+    p->skipNext = SQLITE_ABORT;
+    p->mmActive = 0;
+    prollyCursorReleaseAll(&p->pCur);
   }
 }
 
@@ -5978,6 +6001,7 @@ static int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
     int rc = saveAllCursors(p, pBt, (Pgno)iTable, 0);
     if( rc!=SQLITE_OK ) return rc;
   }
+  prollyInvalidateIncrblobCursors(pBt, (Pgno)iTable, 0, 1);
   {
     int rc = syncBtreeSavepoints(p);
     if( rc!=SQLITE_OK ) return rc;
@@ -6311,6 +6335,17 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
 static int prollyBtCursorCursorHasMoved(BtCursor *pCur){
   return (pCur->eState!=CURSOR_VALID);
 }
+/* -1: handle invalidated (SQL write to its row, or a cursor trip) — abort.
+**  1: cursor saved by an unrelated write — caller must re-seek.
+**  0: nothing to do; also all orig-engine cursors, whose incrblob cursors
+**     never move and restore themselves in accessPayloadChecked. */
+int sqlite3BtreeIncrblobCursorReseek(BtCursor *pCur){
+  if( pCur->pCurOps!=&prollyCursorOps ) return 0;
+  if( pCur->eState==CURSOR_VALID ) return 0;
+  if( pCur->eState==CURSOR_FAULT ) return -1;
+  return 1;
+}
+
 int sqlite3BtreeCursorHasMoved(BtCursor *pCur){
   if( !pCur ) return 0;
   if( pCur->pCurOps==&prollyCursorOps ){
@@ -8057,6 +8092,10 @@ static int prollyBtCursorInsert(
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
   if( rc!=SQLITE_OK ) return rc;
 
+  if( pCur->curIntKey && !(pCur->curFlags & BTCF_Incrblob) ){
+    prollyInvalidateIncrblobCursors(pCur->pBt, pCur->pgnoRoot, pPayload->nKey, 0);
+  }
+
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -8295,8 +8334,10 @@ static int flushIfNeeded(BtCursor *pCur){
   /* A cursor saved by saveAllCursors (e.g. another statement scanning this
   ** table while we flush a DELETE/UPDATE) keeps its REQUIRESEEK state: it has a
   ** saved key and must reseek against the new root on next access. Clobbering it
-  ** to INVALID here dropped the saved position, ending the other scan early. */
-  if( pCur->eState!=CURSOR_REQUIRESEEK ){
+  ** to INVALID here dropped the saved position, ending the other scan early.
+  ** CURSOR_FAULT likewise: commit can flush a table through a faulted incrblob
+  ** cursor, and downgrading it erased the invalidation and its abort code. */
+  if( pCur->eState!=CURSOR_REQUIRESEEK && pCur->eState!=CURSOR_FAULT ){
     pCur->eState = CURSOR_INVALID;
   }
   return SQLITE_OK;
@@ -8461,6 +8502,10 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
+
+  if( pCur->curIntKey && hasSavedKey ){
+    prollyInvalidateIncrblobCursors(pCur->pBt, pCur->pgnoRoot, savedIntKey, 0);
+  }
 
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
@@ -9318,7 +9363,10 @@ static int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   }
   assert( pCur->curFlags & BTCF_Incrblob );
 
-  prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+  /* A mutmap-sourced row's current value lives in the pending map, not the
+  ** tree leaf; the raw tree value here is stale or unpositioned. */
+  rc = getCursorPayload(pCur, &pVal, &nVal);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( (i64)offset + (i64)amt > (i64)nVal ){
     return SQLITE_CORRUPT_BKPT;
@@ -9333,7 +9381,13 @@ static int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   memset(&payload, 0, sizeof(payload));
 
   if( pCur->curIntKey ){
-    payload.nKey = prollyCursorIntKey(&pCur->pCur);
+    /* A row pending in the mutmap may have no positioned tree cursor. */
+    if( pCur->mmActive
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+      payload.nKey = prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
+    }else{
+      payload.nKey = prollyCursorIntKey(&pCur->pCur);
+    }
     payload.pData = pNew;
     payload.nData = nVal;
   } else {

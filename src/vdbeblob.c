@@ -115,6 +115,16 @@ static int blobSeekToRow(Incrblob *p, sqlite3_int64 iRow, char **pzErr){
   return rc;
 }
 
+/* Re-seek a blob handle to the row it is open on (register 1 of the
+** handle's statement holds that rowid). */
+static int blobSeekToRowForAccess(Incrblob *p){
+  char *zErr = 0;
+  Vdbe *v = (Vdbe*)p->pStmt;
+  int rc = blobSeekToRow(p, v->aMem[1].u.i, &zErr);
+  sqlite3DbFree(p->db, zErr);
+  return rc;
+}
+
 /*
 ** Open a blob handle.
 */
@@ -386,6 +396,7 @@ static int blobReadWrite(
   int (*xCall)(BtCursor*, u32, u32, void*)
 ){
   int rc = SQLITE_OK;
+  int iReseek;
   Incrblob *p = (Incrblob *)pBlob;
   Vdbe *v;
   sqlite3 *db;
@@ -402,6 +413,17 @@ static int blobReadWrite(
     /* If there is no statement handle, then the blob-handle has
     ** already been invalidated. Return SQLITE_ABORT in this case.
     */
+    rc = SQLITE_ABORT;
+  }else if( (iReseek = sqlite3BtreeIncrblobCursorReseek(p->pCsr))!=0
+         && (iReseek<0 || blobSeekToRowForAccess(p)!=SQLITE_OK) ){
+    /* doltlite: a blob write re-inserts the row, which saves every cursor
+    ** on the table (stock incrblob cursors never move). Re-seek to rebuild
+    ** the cursor's merge view. A negative answer means a SQL write hit this
+    ** row and the handle is invalidated, matching stock semantics. */
+    if( p->pStmt ){
+      sqlite3_finalize(p->pStmt);
+      p->pStmt = 0;
+    }
     rc = SQLITE_ABORT;
   }else{
     /* Call either BtreeData() or BtreePutData(). If SQLITE_ABORT is

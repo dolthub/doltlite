@@ -275,6 +275,7 @@ void sqlite3BtreeProllyClearCompareKey(BtCursor*);
 int sqlite3BtreeUsesOrig(Btree*);
 #endif
 int sqlite3BtreeCursorHasMoved(BtCursor*);
+int sqlite3BtreeIncrblobCursorReseek(BtCursor*);
 int sqlite3BtreeCursorRestore(BtCursor*, int*);
 int sqlite3BtreeDelete(BtCursor*, u8 flags);
 
