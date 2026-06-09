@@ -1,3 +1,8 @@
+#if defined(__GNUC__)
+/* Vendored blake3 uses C99 mid-block declarations; keep its style. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+#endif
 /* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception OR CC0-1.0
 **
 ** Vendored verbatim from https://github.com/BLAKE3-team/BLAKE3 (1.8.5).
@@ -439,3 +444,6 @@ void blake3_hasher_reset(blake3_hasher *self) {
   chunk_state_reset(&self->chunk, self->key, 0);
   self->cv_stack_len = 0;
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif

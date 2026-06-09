@@ -2636,7 +2636,7 @@ int sqlite3BtreeOpen(
                  && sqlite3PagerVfs(pBt->pPager)==pVfs ){
           int iDb;
           for(iDb=db->nDb-1; iDb>=0; iDb--){
-            Btree *pExisting = db->aDb[iDb].pBt;
+            Btree *pExisting = (void*)db->aDb[iDb].pBt;
             if( pExisting && pExisting->pBt==pBt ){
               sqlite3_mutex_leave(mutexShared);
               sqlite3_mutex_leave(mutexOpen);
@@ -2774,7 +2774,7 @@ int sqlite3BtreeOpen(
     int i;
     Btree *pSib;
     for(i=0; i<db->nDb; i++){
-      if( (pSib = db->aDb[i].pBt)!=0 && pSib->sharable ){
+      if( (pSib = (void*)db->aDb[i].pBt)!=0 && pSib->sharable ){
         while( pSib->pPrev ){ pSib = pSib->pPrev; }
         if( (uptr)p->pBt<(uptr)pSib->pBt ){
           p->pNext = pSib;
@@ -4246,7 +4246,7 @@ static int autoVacuumCommit(Btree *p){
     if( db->xAutovacPages ){
       int iDb;
       for(iDb=0; ALWAYS(iDb<db->nDb); iDb++){
-        if( db->aDb[iDb].pBt==p ) break;
+        if( (void*)db->aDb[iDb].pBt==(void*)p ) break;
       }
       nVac = db->xAutovacPages(
         db->pAutovacPagesArg,
