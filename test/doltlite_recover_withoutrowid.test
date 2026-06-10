@@ -1,0 +1,1129 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Recovers the intent of upstream assertions gated as WITHOUT-ROWID-surface
+# divergences (#1176 class): doltlite stores any non-INTEGER / composite-PK
+# table WITHOUT ROWID, so `rowid` is not a column, sqlite_autoindex_* rows are
+# not materialized, and the PK is implicitly NOT NULL. Each original is
+# re-asserted through the declared PK: uniqueness, PK-order iteration, point
+# lookups, UPDATE/DELETE by PK, FK actions, and plan shape via PRIMARY KEY.
+#
+# covers: fordelete fordelete-1.1 — DELETE WHERE pk=? on implicit-PK table deletes exactly that row (section 1)
+# covers: fordelete fordelete-1.2 — DELETE WHERE pk=? AND b=? deletes only on full match (section 1)
+# covers: fordelete fordelete-1.3 — DELETE WHERE pk>? range-delete by PK (section 1)
+# covers: fordelete fordelete-1.4 — point delete by key (rowid=? re-expressed as pk=?) (section 1)
+# covers: fkey_malloc fkey_malloc-6.transient.33 — self-ref FK INSERT/DELETE/UPDATE sequence by PK succeeds (section 2)
+# covers: fkey_malloc fkey_malloc-6.transient.34 — same scenario, DELETE leg (section 2)
+# covers: fkey_malloc fkey_malloc-6.transient.35 — same scenario, UPDATE SET DEFAULT leg (section 2)
+# covers: fkey_malloc fkey_malloc-6.transient.69 — final state {jkl jkl} after full sequence (section 2)
+# covers: fkey_malloc fkey_malloc-6.persistent.69 — same final-state assertion (section 2)
+# covers: fkey_malloc fkey_malloc-7.transient.200 — DROP child then parent with composite-PK FK succeeds (section 2)
+# covers: fkey_malloc fkey_malloc-7.transient.201 — same drop sequence (section 2)
+# covers: fkey_malloc fkey_malloc-7.transient.202 — same drop sequence (section 2)
+# covers: fkey_malloc fkey_malloc-7.transient.523 — same drop sequence (section 2)
+# covers: fkey_malloc fkey_malloc-7.transient.524 — same drop sequence (section 2)
+# covers: fkey_malloc fkey_malloc-7.transient.525 — same drop sequence + FK still enforced after (section 2)
+# covers: notnull notnull-6.5 — `a IS ?` on implicit-PK table: plan parity with explicit WITHOUT ROWID (no OP_Next), rows correct (section 3)
+# covers: update2 update2-2.3 — point UPDATE by PK on t3(a PRIMARY KEY,b,c) with secondary index (section 4)
+# covers: whereF whereF-4.0 — EQP for composite-PK t4 a=?,b=? lookup uses (a=? AND b=?) seek (section 5)
+# covers: without_rowid5 without_rowid5-1.1 — implicit-PK table behaves as WITHOUT ROWID: rowid/_rowid_/oid all rejected, data identical to explicit twin (section 6)
+# covers: without_rowid5 without_rowid5-5.5 — NULL into any composite-PK column rejected NOT NULL, like explicit WITHOUT ROWID (section 6)
+# covers: tkt1567 tkt1567-1.3 — bulk UPDATE of half the TEXT-PK rows inside txn succeeds (section 7)
+# covers: tkt1567 tkt1567-1.4 — colliding UPDATE fails UNIQUE, txn commits, integrity ok (section 7)
+# covers: where4 where4-5.2 — IN lists with NULL prune correctly on composite-PK table (section 8)
+# covers: where4 where4-5.3 — NULL in first IN list likewise (section 8)
+# covers: whereD whereD-3.4.1 — PK point lookup returns correct row (search-count metric dropped) (section 9)
+# covers: whereD whereD-3.4.2 — OR-of-AND with one subquery term, rows correct (section 9)
+# covers: whereD whereD-3.4.3 — commuted OR-of-AND, rows correct (section 9)
+# covers: whereD whereD-3.4.4 — both terms subqueries, rows correct (section 9)
+# covers: whereG whereG-3.1 — commuted b1=a1: plan identical across commutations, SEARCH b by PK (section 10)
+# covers: whereG whereG-3.2 — a1=b1 commutation same plan (section 10)
+# covers: whereG whereG-3.3 — a2=5 AND b1=a1 commutation same plan (section 10)
+# covers: whereG whereG-3.4 — a2=5 AND a1=b1 commutation same plan (section 10)
+# covers: whereL whereL-110 — constant propagation through view join: rows correct (section 11)
+# covers: whereL whereL-120 — t3.j=5 propagation: SEARCH lt1/lt2 then SCAN lt3, no sort (section 11)
+# covers: whereL whereL-121 — abs(5) propagates: plan identical to whereL-120 (section 11)
+# covers: whereL whereL-122 — coalesce(5,random()) not constant: plan differs, rows still equal (section 11)
+# covers: tkt-3a77c9714e tkt-3a77c9714e-3.0 — nested OR/IN flattening returns NULL row; doltlite NULL-PK rejection asserted as contract (section 12)
+# covers: without_rowid1 without_rowid1-7.1 — CHECK(rowid) on implicit-PK table fails CREATE with no such column: rowid (section 13)
+# covers: without_rowid1 without_rowid1-7.2 — cascade: t70a not created, INSERT errors no such table (section 13)
+# covers: rowvalue9 rowvalue9-1.0.1 — composite-PK a1 + a2 setup via explicit lbl column (section 14)
+# covers: rowvalue9 rowvalue9-1.0.2 — a2 affinity/typeof round-trip in rowid order (section 14)
+# covers: rowvalue9 rowvalue9-1.1.1 — scalar-subquery row-value lookup by (a,b) affinity (section 14)
+# covers: rowvalue9 rowvalue9-1.1.2 — (a,b)=(x,y) vector form same result (section 14)
+# covers: rowvalue9 rowvalue9-1.2.3 — join form a=x AND b=y (section 14)
+# covers: rowvalue9 rowvalue9-1.2.4 — join vector form (a,b)=(x,y) (section 14)
+# covers: rowvalue9 rowvalue9-1.3.1 — coalesce-wrapped comparison loses index affinity, all rows match (section 14)
+# covers: rowvalue9 rowvalue9-1.3.2 — vector coalesce form (section 14)
+# covers: rowvalue9 rowvalue9-1.4.1 — +x/+y unindexed comparison (section 14)
+# covers: rowvalue9 rowvalue9-1.4.2 — vector +x,+y form (section 14)
+# covers: rowvalue9 rowvalue9-1.5.1 — subquery with +x/+y (section 14)
+# covers: rowvalue9 rowvalue9-1.5.2 — subquery vector (a,b)=(+x,+y) (section 14)
+# covers: rowvalue9 rowvalue9-1.5.3 — subquery vector (+x,+y)=(a,b) (section 14)
+# covers: rowvalue9 rowvalue9-1.6.1 — (a,b) IN (SELECT x,y) row-value IN (section 14)
+# covers: rowvalue9 rowvalue9-1.6.2 — EXISTS row-value correlated form (section 14)
+# covers: without_rowid7 without_rowid7-2.4 — PRIMARY KEY(a COLLATE nocase, a) accepted; PK uniqueness uses both components (section 15)
+# covers: skipscan1 skipscan1-2.2eqp — skip-scan over composite PK: EQP shows PRIMARY KEY (ANY(a) AND b=?) (section 16)
+# covers: skipscan1 skipscan1-3.1 — order-distinct skip-scan DISTINCT rows correct (NULL PK re-expressed as distinct non-NULL keys) (section 16)
+# covers: skipscan1 skipscan1-3.2 — skip-scan DISTINCT plan: PK skip-scan + temp b-tree for DISTINCT (section 16)
+# covers: skipscan2 skipscan2-1.5eqp — height>=180 query rows correct under faked stats (plan choice may differ) (section 16)
+# covers: tkt3871 tkt3871-1.1 — 500-row TEXT-PK table built in txn, count correct (section 17)
+# covers: tkt3871 tkt3871-1.2 — a=1 OR a=2 returns both rows via index lookups (section 17)
+# covers: tkt3871 tkt3871-1.3 — OR optimization: plan uses two PK seeks, not a scan (section 17)
+# covers: tkt3871 tkt3871-1.4 — a=1 OR a=2 OR b=9 includes UNIQUE-index leg (section 17)
+# covers: tkt3871 tkt3871-1.5 — OR plan uses PK and UNIQUE index seeks, not a scan (section 17)
+# covers: tkt3121 vtabD-1.2 — join on PK column returns matching descr (echo layer dropped; same query over real tables) (section 18)
+# covers: vtab4 vtab4-1.2 — implicit-txn INSERT: vtab lifecycle xBegin/xSync/xCommit asserted via echo over rowid table; PK-table insert verified directly (section 19)
+# covers: vtab4 vtab4-1.3 — implicit-txn UPDATE on PK table applies fully (section 19)
+# covers: vtab4 vtab4-1.4 — implicit-txn DELETE empties PK table (section 19)
+# covers: vtab4 vtab4-2.1 — multi-INSERT inside BEGIN/COMMIT commits once, all rows present (section 19)
+# covers: vtab4 vtab4-2.2 — two-table txn: INSERT SELECT + DELETE commit atomically (section 19)
+# covers: vtab4 vtab4-2.3 — sreal contents after commit (section 19)
+# covers: vtab4 vtab4-2.4 — treal emptied after commit (section 19)
+# covers: vtab4 vtab4-2.5 — explicit ROLLBACK of two-table txn (section 19)
+# covers: vtab4 vtab4-2.6 — sreal restored after rollback (section 19)
+# covers: vtab4 vtab4-2.7 — treal restored after rollback (section 19)
+# covers: vtab4 vtab4-3.1 — failed commit (xSync fail via echo over rowid table) reports error; PK dup gives real UNIQUE message (section 19)
+# covers: vtab4 vtab4-3.2 — xSync failure triggers xRollback, data unchanged (section 19)
+# covers: vtab4 vtab4-3.3 — failed txn leaves both tables consistent (section 19)
+# covers: dbstatus2 dbstatus2-1.1 — PK-blob table survives reopen with correct sizes (cache-stat metric dropped) (section 20)
+# covers: dbstatus2 dbstatus2-1.2 — point lookup a=2 returns 600-byte blob (section 20)
+# covers: dbstatus2 dbstatus2-1.3 — repeated lookup stable (section 20)
+# covers: dbstatus2 dbstatus2-1.4 — repeated lookup stable (section 20)
+# covers: dbstatus2 dbstatus2-1.5 — repeated lookup stable (section 20)
+# covers: dbstatus2 dbstatus2-1.7 — blob content length readable (incrblob re-expressed as length(b)) (section 20)
+# covers: dbstatus2 dbstatus2-1.8 — read-after-reopen consistency (section 20)
+# covers: dbstatus2 dbstatus2-1.9 — read-after-reopen consistency (section 20)
+# covers: dbstatus2 dbstatus2-2.2 — INSERT row 4 persists (write-stat metric dropped) (section 20)
+# covers: dbstatus2 dbstatus2-2.3 — table count after insert (section 20)
+# covers: dbstatus2 dbstatus2-2.6 — journal-mode write path: insert row 5 persists (section 20)
+# covers: dbstatus2 dbstatus2-2.7 — insert row 5 verified (section 20)
+# covers: dbstatus2 dbstatus2-2.8 — post-insert state stable (section 20)
+# covers: dbstatus2 dbstatus2-3.2 — UPDATE all blobs to 1000 bytes (spill scenario) succeeds (section 20)
+# covers: dbstatus2 dbstatus2-3.3 — post-update lengths + integrity ok (section 20)
+# covers: index index-7.3 — implicit PK index enforces uniqueness on test1.f2 (autoindex name dropped) (section 21)
+# covers: index index-16.1 — c UNIQUE PRIMARY KEY: single constraint enforced, dup rejected (section 21)
+# covers: index index-16.2 — recreate same shape, still enforced (section 21)
+# covers: index index-16.3 — c PRIMARY KEY + UNIQUE(c): dup rejected once (section 21)
+# covers: index index-16.4 — UNIQUE(c,d)+PK(c,d): same-pair dup rejected, differing d allowed (section 21)
+# covers: index index-16.5 — UNIQUE(c)+PK(c,d): c alone enforced even with new d (section 21)
+# covers: fkey2 fkey2-5.2 — incrblob write to FK column rejected (rowid child table) (section 22)
+# covers: fkey2 fkey2-5.3 — incrblob -readonly on FK column allowed (section 22)
+# covers: fkey2 fkey2-5.4 — incrblob write allowed once foreign_keys=off (section 22)
+# covers: fkey2 fkey2-13.1.2.1 — REPLACE that would orphan child fails FK (PK-conflict form replaces rowid form) (section 23)
+# covers: fkey2 fkey2-13.1.2.3 — same REPLACE inside explicit txn fails FK (section 23)
+# covers: fkey2 fkey2-13.1.3 — REPLACE keeping referenced (b,c) succeeds, child intact (section 23)
+# covers: fkey2 fkey2-13.1.4 — repeat REPLACE of same content succeeds, child intact (section 23)
+# covers: e_createtable e_createtable-3.11.2 — lowered SQLITE_LIMIT_COLUMN rejects 501-column CREATE with its own table name (section 24)
+# covers: e_createtable e_createtable-4.4.1 — NULL into single-col PK rejected NOT NULL (doltlite contract); NULL-distinctness held by UNIQUE col (section 24)
+# covers: e_createtable e_createtable-4.4.2 — same, repeat insert (section 24)
+# covers: e_createtable e_createtable-4.4.3 — same, repeat insert (section 24)
+# covers: e_createtable e_createtable-4.4.4 — NULL into composite-PK x rejected (section 24)
+# covers: e_createtable e_createtable-4.4.5 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.6 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.7 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.8 — NULL into composite-PK y rejected (section 24)
+# covers: e_createtable e_createtable-4.4.9 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.10 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.11 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.12 — same class (section 24)
+# covers: e_createtable e_createtable-4.4.13 — NULL,NULL rejected on first PK col (section 24)
+# covers: e_createtable e_createtable-4.4.14 — same class (section 24)
+# covers: e_createtable e_createtable-4.5.1.1 — NULL-distinctness intent re-expressed: 3 NULLs coexist under UNIQUE, counted (section 24)
+# covers: e_createtable e_createtable-4.5.1.2 — PK columns hold zero NULLs (implicit NOT NULL) (section 24)
+# covers: e_createtable e_createtable-4.5.1.3 — same count contract (section 24)
+# covers: e_createtable e_createtable-4.5.1.4 — same count contract (section 24)
+# covers: e_createtable e_createtable-4.9.1 — TEXT PK enforced by unique index semantics: dup rejected (section 24)
+# covers: e_createtable e_createtable-4.9.4 — PK + UNIQUE both enforced independently (section 24)
+# covers: e_createtable e_createtable-4.9.5 — PK + UNIQUE(c,b) both enforced (section 24)
+# covers: e_createtable e_createtable-4.10.1 — PK lookup planned as SEARCH ... PRIMARY KEY (b=?) (section 24)
+# covers: e_createtable e_createtable-4.15.5.4 — ON CONFLICT REPLACE final rows asserted in PK order (section 24)
+# covers: e_createtable e_createtable-5.3.4 — composite integer PK is not a rowid alias: no rowid column at all (section 24)
+# covers: e_createtable e_createtable-5.3.5 — pk int + composite: same contract (section 24)
+# covers: e_createtable e_createtable-5.3.6 — pk int single: same contract (section 24)
+# covers: e_createtable e_createtable-5.3.7 — pk int primary key: same contract (section 24)
+# covers: e_createtable e_createtable-5.4.2.1 — INT pk not rowid alias (no rowid), integer affinity + unique (section 24)
+# covers: e_createtable e_createtable-5.4.2.2 — BIGINT pk same (section 24)
+# covers: e_createtable e_createtable-5.4.2.3 — SHORT INTEGER pk same (section 24)
+# covers: e_createtable e_createtable-5.4.2.4 — UNSIGNED INTEGER pk same (section 24)
+# covers: e_createtable e_createtable-5.4.3 — '2.0' coerced to integer 2 in all four INT-ish PKs (section 24)
+# covers: e_createtable e_createtable-5.6.1 — INTEGER PRIMARY KEY DESC is not a rowid alias; row round-trips by declared PK (section 24)
+# covers: e_fkey e_fkey-16.4 — nocase-collated parent key: DELETE parent by PK blocked by FK (section 25)
+# covers: e_fkey e_fkey-17.4 — NUMERIC-affinity parent: DELETE referenced row by PK blocked, unreferenced row deletable (section 25)
+# covers: e_fkey e_fkey-44.2 — ON DELETE SET NULL: delete parent by PK value (section 25)
+# covers: e_fkey e_fkey-44.3 — child key set NULL (section 25)
+# covers: e_fkey e_fkey-44.4 — ON UPDATE SET NULL: update parent PK by value (section 25)
+# covers: e_fkey e_fkey-44.5 — child key set NULL on update (section 25)
+# covers: e_fkey e_fkey-45.1 — SET DEFAULT setup without explicit rowids (section 25)
+# covers: e_fkey e_fkey-45.2 — delete parent; remaining parents in PK order (section 25)
+# covers: e_fkey e_fkey-45.3 — child reset to DEFAULT X'0000' (section 25)
+# covers: e_fkey e_fkey-45.4 — update parent PK; remaining parents in PK order (section 25)
+# covers: e_fkey e_fkey-45.5 — child reset to DEFAULT X'9999' (section 25)
+# covers: e_fkey e_fkey-51.2 — BEFORE-trigger/constraint/FK-action/AFTER-trigger ordering observed via child default (22) (section 25)
+# covers: e_fkey e_fkey-51.3 — negative-key variant orders differently, child default 23 distinguishes step order (section 25)
+# covers: e_fkey e_fkey-52.6 — ON UPDATE CASCADE fires only on distinct values; NULL into composite PK rejected as doltlite contract (section 25)
+# covers: e_fkey e_fkey-57.7 — explicit DELETE fires AFTER DELETE trigger (logged via old.a); DROP TABLE's implicit delete does not (section 25)
+# covers: e_fkey e_fkey-58.3 — DROP TABLE parent inside txn fails immediate FK, table intact (section 25)
+#
+# not-covered: (none)
+
+#-------------------------------------------------------------------------
+# 1: fordelete — DELETE forms on an implicit-PK (WITHOUT ROWID) table.
+do_execsql_test doltlite_recover_withoutrowid-1.1 {
+  CREATE TABLE fd1(a PRIMARY KEY, b);
+  INSERT INTO fd1 VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f'),(7,'g'),(8,'h');
+  DELETE FROM fd1 WHERE a=2;
+  SELECT a FROM fd1 ORDER BY a;
+} {1 3 4 5 6 7 8}
+do_execsql_test doltlite_recover_withoutrowid-1.2 {
+  DELETE FROM fd1 WHERE a=3 AND b='c';
+  DELETE FROM fd1 WHERE a=4 AND b='zzz';
+  SELECT a FROM fd1 ORDER BY a;
+} {1 4 5 6 7 8}
+do_execsql_test doltlite_recover_withoutrowid-1.3 {
+  DELETE FROM fd1 WHERE a>5;
+  SELECT a, b FROM fd1 ORDER BY a;
+} {1 a 4 d 5 e}
+do_execsql_test doltlite_recover_withoutrowid-1.4 {
+  PRAGMA integrity_check;
+} {ok}
+
+#-------------------------------------------------------------------------
+# 2: fkey_malloc-6/7 — the gated DML re-expressed by PK instead of rowid.
+do_execsql_test doltlite_recover_withoutrowid-2.1 {
+  PRAGMA foreign_keys = 1;
+  CREATE TABLE fm1(
+    x PRIMARY KEY,
+    y REFERENCES fm1 ON DELETE RESTRICT ON UPDATE SET DEFAULT
+  );
+  INSERT INTO fm1 VALUES('abc', 'abc');
+  INSERT INTO fm1 VALUES('def', 'def');
+  INSERT INTO fm1 VALUES('ghi', 'ghi');
+  DELETE FROM fm1 WHERE x<>'abc';
+  UPDATE fm1 SET x='jkl', y='jkl';
+  SELECT * FROM fm1;
+} {jkl jkl}
+do_catchsql_test doltlite_recover_withoutrowid-2.2 {
+  INSERT INTO fm1 VALUES('mno', 'nope');
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test doltlite_recover_withoutrowid-2.3 {
+  CREATE TABLE fmx(a, b, PRIMARY KEY(a, b));
+  CREATE TABLE fmy(c, d,
+    FOREIGN KEY(d, c) REFERENCES fmx DEFERRABLE INITIALLY DEFERRED
+  );
+  CREATE TABLE fmz(e, f, FOREIGN KEY(e, f) REFERENCES fmx);
+  DROP TABLE fmy;
+  DROP TABLE fmx;
+  SELECT name FROM sqlite_master WHERE name IN ('fmx','fmy','fmz') ORDER BY name;
+} {fmz}
+
+#-------------------------------------------------------------------------
+# 3: notnull-6.5 — implicit-PK `a IS ?` plans like explicit WITHOUT ROWID
+# (single seek, no OP_Next) and returns correct rows.
+do_test doltlite_recover_withoutrowid-3.1 {
+  execsql {
+    CREATE TABLE nn5(a PRIMARY KEY);
+    CREATE TABLE nn8(a PRIMARY KEY) WITHOUT ROWID;
+    INSERT INTO nn5 VALUES('x'),('y');
+    INSERT INTO nn8 VALUES('x'),('y');
+  }
+  set counts {}
+  foreach t {nn5 nn8} {
+    set n 0
+    db eval "EXPLAIN SELECT * FROM $t WHERE a IS ?" r {
+      if {$r(opcode)=="Next"} {incr n}
+    }
+    lappend counts $n
+  }
+  set counts
+} {0 0}
+do_execsql_test doltlite_recover_withoutrowid-3.2 {
+  SELECT * FROM nn5 WHERE a IS 'x';
+  SELECT * FROM nn8 WHERE a IS 'x';
+  SELECT count(*) FROM nn5 WHERE a IS NULL;
+} {x x 0}
+
+#-------------------------------------------------------------------------
+# 4: update2-2.3 — point UPDATE by PK on the implicit-PK table.
+do_execsql_test doltlite_recover_withoutrowid-4.1 {
+  CREATE TABLE u3(a PRIMARY KEY, b, c);
+  CREATE INDEX u3i ON u3(b);
+  UPDATE u3 SET c=1 WHERE a='nosuch';
+  INSERT INTO u3 VALUES('k1', 10, 0), ('k2', 20, 0);
+  UPDATE u3 SET c=1 WHERE a='k2';
+  SELECT a, c FROM u3 ORDER BY a;
+} {k1 0 k2 1}
+
+#-------------------------------------------------------------------------
+# 5: whereF-4.0 — composite-PK lookup plan.
+do_execsql_test doltlite_recover_withoutrowid-5.1 {
+  CREATE TABLE wf4(a,b,c,d,e, PRIMARY KEY(a,b,c));
+  CREATE INDEX wf4adc ON wf4(a,d,c);
+  CREATE UNIQUE INDEX wf4aebc ON wf4(a,e,b,c);
+  EXPLAIN QUERY PLAN SELECT d FROM wf4 WHERE a=? AND b=?;
+} {/a=. AND b=./}
+
+#-------------------------------------------------------------------------
+# 6: without_rowid5 — implicit-PK table is a WITHOUT ROWID table.
+do_execsql_test doltlite_recover_withoutrowid-6.1 {
+  CREATE TABLE wr1(a PRIMARY KEY,b,c);
+  CREATE TABLE wr1w(a PRIMARY KEY,b,c) WITHOUT ROWID;
+  INSERT INTO wr1 VALUES(1565,681,1148),(1429,1190,1619),(425,358,1306);
+  INSERT INTO wr1w SELECT a,b,c FROM wr1;
+  SELECT a,b,c FROM wr1 ORDER BY a;
+  SELECT a,b,c FROM wr1w ORDER BY a;
+} {425 358 1306 1429 1190 1619 1565 681 1148 425 358 1306 1429 1190 1619 1565 681 1148}
+do_catchsql_test doltlite_recover_withoutrowid-6.2 {
+  SELECT rowid FROM wr1;
+} {1 {no such column: rowid}}
+do_catchsql_test doltlite_recover_withoutrowid-6.3 {
+  SELECT _rowid_ FROM wr1;
+} {1 {no such column: _rowid_}}
+do_catchsql_test doltlite_recover_withoutrowid-6.4 {
+  SELECT oid FROM wr1;
+} {1 {no such column: oid}}
+do_execsql_test doltlite_recover_withoutrowid-6.5 {
+  CREATE TABLE wrnn(a, b, c, d, e, PRIMARY KEY(c,a,e));
+  INSERT INTO wrnn VALUES(1,2,3,4,5);
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-6.6 {
+  INSERT INTO wrnn VALUES(NULL, 3,4,5,6);
+} {1 {NOT NULL constraint failed: wrnn.a}}
+do_catchsql_test doltlite_recover_withoutrowid-6.7 {
+  INSERT INTO wrnn VALUES(3,4,NULL,7,8);
+} {1 {NOT NULL constraint failed: wrnn.c}}
+do_catchsql_test doltlite_recover_withoutrowid-6.8 {
+  INSERT INTO wrnn VALUES(4,5,6,7,NULL);
+} {1 {NOT NULL constraint failed: wrnn.e}}
+do_execsql_test doltlite_recover_withoutrowid-6.9 {
+  SELECT count(*) FROM wrnn;
+} {1}
+
+#-------------------------------------------------------------------------
+# 7: tkt1567 — TEXT-PK bulk update inside txn; collision fails UNIQUE.
+do_test doltlite_recover_withoutrowid-7.1 {
+  execsql {CREATE TABLE k1(a TEXT PRIMARY KEY)}
+  set bigstr abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+  for {set i 0} {$i<100} {incr i} {
+    set x [format %5d [expr $i*2]]
+    execsql "INSERT INTO k1 VALUES('$x-$bigstr')"
+  }
+  execsql {
+    BEGIN;
+    UPDATE k1 SET a = a||'x' WHERE substr(a,5,1)='0' OR substr(a,5,1)='2';
+  }
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-7.2 {
+  UPDATE k1 SET a = CASE WHEN a<'  100' THEN substr(a,1,10) ELSE '9999' END;
+} {1 {UNIQUE constraint failed: k1.a}}
+do_execsql_test doltlite_recover_withoutrowid-7.3 {
+  COMMIT;
+  SELECT count(*) FROM k1;
+} {100}
+do_execsql_test doltlite_recover_withoutrowid-7.4 {
+  PRAGMA integrity_check;
+} {ok}
+
+#-------------------------------------------------------------------------
+# 8: where4-5.2/5.3 — IN + NULL pruning on a composite-PK table.
+do_execsql_test doltlite_recover_withoutrowid-8.1 {
+  CREATE TABLE w4(x,y,z,PRIMARY KEY(x,y));
+  INSERT INTO w4 VALUES(1,1,11),(1,2,12),(1,3,13),(2,2,22);
+  SELECT x,y FROM w4 WHERE x IN (1,9,2,5) AND y IN (1,3,NULL,2) AND z!=13 ORDER BY x,y;
+} {1 1 1 2 2 2}
+do_execsql_test doltlite_recover_withoutrowid-8.2 {
+  SELECT x,y FROM w4 WHERE x IN (1,9,NULL,2) AND y IN (1,3,2) AND z!=13 ORDER BY x,y;
+} {1 1 1 2 2 2}
+
+#-------------------------------------------------------------------------
+# 9: whereD-3.4.* — OR-of-AND with subquery terms over implicit-PK lookup.
+do_execsql_test doltlite_recover_withoutrowid-9.1 {
+  CREATE TABLE d3(a, b, c);
+  CREATE UNIQUE INDEX di3 ON d3(a, b);
+  INSERT INTO d3 VALUES(1,'one','i'),(3,'three','iii'),(6,'six','vi'),
+                       (2,'two','ii'),(4,'four','iv'),(5,'five','v');
+  CREATE TABLE d4(x PRIMARY KEY, y);
+  INSERT INTO d4 VALUES('a','one'),('b','two');
+  SELECT y FROM d4 WHERE x='a';
+} {one}
+do_execsql_test doltlite_recover_withoutrowid-9.2 {
+  SELECT a, b FROM d3 WHERE
+        (a=1 AND b=(SELECT y FROM d4 WHERE x='a'))
+     OR (a=2 AND b='two') ORDER BY a;
+} {1 one 2 two}
+do_execsql_test doltlite_recover_withoutrowid-9.3 {
+  SELECT a, b FROM d3 WHERE
+        (a=2 AND b='two')
+     OR (a=1 AND b=(SELECT y FROM d4 WHERE x='a')) ORDER BY a;
+} {1 one 2 two}
+do_execsql_test doltlite_recover_withoutrowid-9.4 {
+  SELECT a, b FROM d3 WHERE
+        (a=2 AND b=(SELECT y FROM d4 WHERE x='b'))
+     OR (a=1 AND b=(SELECT y FROM d4 WHERE x='a')) ORDER BY a;
+} {1 one 2 two}
+
+#-------------------------------------------------------------------------
+# 10: whereG-3.* — commuting WHERE terms must not change the plan; the
+# b1 lookup is a PK seek in doltlite.
+proc wr_plan {sql} {
+  set res {}
+  db eval "EXPLAIN QUERY PLAN $sql" r {lappend res $r(detail)}
+  join $res {; }
+}
+do_execsql_test doltlite_recover_withoutrowid-10.1 {
+  CREATE TABLE ga(a1 PRIMARY KEY, a2);
+  CREATE TABLE gb(b1 PRIMARY KEY, b2);
+  INSERT INTO ga VALUES(10, 5), (11, 6);
+  INSERT INTO gb VALUES(10, 'ten'), (11, 'eleven');
+} {}
+do_test doltlite_recover_withoutrowid-10.2 {
+  set p1 [wr_plan {SELECT * FROM ga, gb WHERE b1=a1 AND a2=5}]
+  set p2 [wr_plan {SELECT * FROM ga, gb WHERE a1=b1 AND a2=5}]
+  set p3 [wr_plan {SELECT * FROM ga, gb WHERE a2=5 AND b1=a1}]
+  set p4 [wr_plan {SELECT * FROM ga, gb WHERE a2=5 AND a1=b1}]
+  list [expr {$p1 eq $p2}] [expr {$p1 eq $p3}] [expr {$p1 eq $p4}] \
+       [string match {*SEARCH gb USING PRIMARY KEY (b1=?)*} $p1]
+} {1 1 1 1}
+do_execsql_test doltlite_recover_withoutrowid-10.3 {
+  SELECT * FROM ga, gb WHERE a2=5 AND a1=b1;
+} {10 5 10 ten}
+
+#-------------------------------------------------------------------------
+# 11: whereL — constant propagation across implicit-PK joins.
+do_execsql_test doltlite_recover_withoutrowid-11.1 {
+  CREATE TABLE lt1(a INT PRIMARY KEY, b, c, d, e);
+  CREATE TABLE lt2(a INT PRIMARY KEY, f, g, h, i);
+  CREATE TABLE lt3(a INT PRIMARY KEY, j, k, l, m);
+  CREATE VIEW lv4 AS SELECT * FROM lt2 UNION ALL SELECT * FROM lt3;
+  INSERT INTO lt1 VALUES(5,'b','c','d','e');
+  INSERT INTO lt2 VALUES(5,'f','g','h','i');
+  INSERT INTO lt3 VALUES(9,5,'k','l','m');
+  SELECT * FROM lt1, lv4 WHERE lt1.a=5 AND lv4.a=lt1.a;
+} {5 b c d e 5 f g h i}
+do_test doltlite_recover_withoutrowid-11.2 {
+  set q120 {SELECT * FROM lt1, lt2, lt3
+            WHERE lt1.a=lt2.a AND lt2.a=lt3.j AND lt3.j=5 ORDER BY lt1.a}
+  set q121 {SELECT * FROM lt1, lt2, lt3
+            WHERE lt1.a=lt2.a AND lt2.a=lt3.j AND lt3.j=abs(5) ORDER BY lt1.a}
+  set q122 {SELECT * FROM lt1, lt2, lt3
+            WHERE lt1.a=lt2.a AND lt2.a=lt3.j AND lt3.j=coalesce(5,random()) ORDER BY lt1.a}
+  set p120 [wr_plan $q120]
+  set p121 [wr_plan $q121]
+  set p122 [wr_plan $q122]
+  list [expr {$p120 eq $p121}] [expr {$p120 eq $p122}] \
+       [string match {*SEARCH lt1 USING PRIMARY KEY (a=?)*} $p120] \
+       [expr {[execsql $q120] eq [execsql $q121]}] \
+       [expr {[execsql $q120] eq [execsql $q122]}]
+} {1 0 1 1 1}
+do_execsql_test doltlite_recover_withoutrowid-11.3 {
+  SELECT * FROM lt1, lt2, lt3
+   WHERE lt1.a=lt2.a AND lt2.a=lt3.j AND lt3.j=5 ORDER BY lt1.a;
+} {5 b c d e 5 f g h i 9 5 k l m}
+
+#-------------------------------------------------------------------------
+# 12: tkt-3a77c9714e-3.0 — nested OR/IN flattening over INT-PK table;
+# NULL PK rejected is the doltlite contract, query intent kept with i=1.
+do_catchsql_test doltlite_recover_withoutrowid-12.1 {
+  CREATE TABLE tk1(i INT PRIMARY KEY, a, b);
+  INSERT INTO tk1 VALUES(NULL,'one','i');
+} {1 {NOT NULL constraint failed: tk1.i}}
+do_execsql_test doltlite_recover_withoutrowid-12.2 {
+  INSERT INTO tk1 VALUES(1,'one','i');
+  CREATE INDEX tki1a ON tk1(a);
+  CREATE INDEX tki1b ON tk1(b);
+  SELECT (SELECT 1
+            FROM (SELECT 1 FROM tk1 WHERE a=1 OR b='i')
+           WHERE a='o'
+              OR b IN (SELECT a=('b' IN (SELECT 'a'))))
+    FROM tk1;
+} {{}}
+
+#-------------------------------------------------------------------------
+# 13: without_rowid1-7.* — CHECK(rowid) cannot resolve on an implicit
+# WITHOUT ROWID table (same as upstream's explicit WITHOUT ROWID case 7.3).
+do_catchsql_test doltlite_recover_withoutrowid-13.1 {
+  CREATE TABLE t70a(
+     a INT CHECK( rowid!=33 ),
+     b TEXT PRIMARY KEY
+  );
+} {1 {no such column: rowid}}
+do_catchsql_test doltlite_recover_withoutrowid-13.2 {
+  INSERT INTO t70a(a,b) VALUES(99,'hello');
+} {1 {no such table: t70a}}
+
+#-------------------------------------------------------------------------
+# 14: rowvalue9 section 1 — row-value affinity over a composite-PK table,
+# rowid labels re-expressed as an explicit lbl column.
+do_execsql_test doltlite_recover_withoutrowid-14.1 {
+  CREATE TABLE a1(lbl, c, b INTEGER, a TEXT, PRIMARY KEY(a, b));
+  INSERT INTO a1 (lbl, c, b, a) VALUES(3,  '0x03', 1, 1);
+  INSERT INTO a1 (lbl, c, b, a) VALUES(14, '0x0E', 2, 2);
+  INSERT INTO a1 (lbl, c, b, a) VALUES(15, '0x0F', 3, 3);
+  INSERT INTO a1 (lbl, c, b, a) VALUES(92, '0x5C', 4, 4);
+  CREATE TABLE a2(x BLOB, y BLOB);
+  INSERT INTO a2(x, y) VALUES(1, 1);
+  INSERT INTO a2(x, y) VALUES(2, '2');
+  INSERT INTO a2(x, y) VALUES('3', 3);
+  INSERT INTO a2(x, y) VALUES('4', '4');
+} {}
+do_execsql_test doltlite_recover_withoutrowid-14.2 {
+  SELECT x, typeof(x), y, typeof(y) FROM a2 ORDER BY rowid;
+} {1 integer 1 integer 2 integer 2 text 3 text 3 integer 4 text 4 text}
+do_execsql_test doltlite_recover_withoutrowid-14.3 {
+  SELECT (SELECT lbl FROM a1 WHERE a=x AND b=y) FROM a2 ORDER BY rowid;
+} {{} {} 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.4 {
+  SELECT (SELECT lbl FROM a1 WHERE (a, b) = (x, y)) FROM a2 ORDER BY rowid;
+} {{} {} 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.5 {
+  SELECT a1.lbl FROM a1, a2 WHERE a=x AND b=y ORDER BY 1;
+} {15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.6 {
+  SELECT a1.lbl FROM a1, a2 WHERE (a, b) = (x, y) ORDER BY 1;
+} {15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.7 {
+  SELECT a1.lbl FROM a1, a2
+   WHERE coalesce(NULL,x)=a AND coalesce(NULL,y)=b ORDER BY 1;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.8 {
+  SELECT a1.lbl FROM a1, a2
+   WHERE (coalesce(NULL,x), coalesce(NULL,y)) = (a, b) ORDER BY 1;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.9 {
+  SELECT a1.lbl FROM a1, a2 WHERE +x=a AND +y=b ORDER BY 1;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.10 {
+  SELECT a1.lbl FROM a1, a2 WHERE (+x, +y) = (a, b) ORDER BY 1;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.11 {
+  SELECT (SELECT lbl FROM a1 WHERE a=+x AND b=+y) FROM a2 ORDER BY rowid;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.12 {
+  SELECT (SELECT lbl FROM a1 WHERE (a, b) = (+x, +y)) FROM a2 ORDER BY rowid;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.13 {
+  SELECT (SELECT lbl FROM a1 WHERE (+x, +y) = (a, b)) FROM a2 ORDER BY rowid;
+} {3 14 15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.14 {
+  SELECT a1.lbl FROM a1 WHERE (a, b) IN (SELECT x, y FROM a2) ORDER BY 1;
+} {15 92}
+do_execsql_test doltlite_recover_withoutrowid-14.15 {
+  SELECT a1.lbl FROM a1, a2 WHERE EXISTS (
+    SELECT 1 FROM a1 WHERE a=x AND b=y
+  ) ORDER BY 1;
+} {3 3 14 14 15 15 92 92}
+
+#-------------------------------------------------------------------------
+# 15: without_rowid7-2.4 — duplicate PK column with collation accepted;
+# uniqueness keyed on both components.
+do_execsql_test doltlite_recover_withoutrowid-15.1 {
+  CREATE TABLE wt3(a, b, PRIMARY KEY(a COLLATE nocase, a));
+  INSERT INTO wt3 VALUES('abc',1);
+  INSERT INTO wt3 VALUES('ABC',2);
+  SELECT a, b FROM wt3 ORDER BY b;
+} {abc 1 ABC 2}
+do_catchsql_test doltlite_recover_withoutrowid-15.2 {
+  INSERT INTO wt3 VALUES('abc',3);
+} {1 {UNIQUE constraint failed: wt3.a, wt3.a}}
+
+#-------------------------------------------------------------------------
+# 16: skipscan1 / skipscan2 — skip-scan over the composite PRIMARY KEY.
+do_execsql_test doltlite_recover_withoutrowid-16.1 {
+  CREATE TABLE sk2(a TEXT, b INT, c INT, d INT, PRIMARY KEY(a,b,c));
+  INSERT INTO sk2 VALUES('abc',345,7,8),('def',345,9,10),('ghi',346,11,12);
+  ANALYZE;
+  UPDATE sqlite_stat1 SET stat='10000 5000 2000 10' WHERE tbl='sk2';
+  ANALYZE sqlite_master;
+  SELECT a,b,c,d,'|' FROM sk2 WHERE d<>99 AND b=345 ORDER BY a;
+} {abc 345 7 8 | def 345 9 10 |}
+do_execsql_test doltlite_recover_withoutrowid-16.2 {
+  EXPLAIN QUERY PLAN
+  SELECT a,b,c,d,'|' FROM sk2 WHERE d<>99 AND b=345 ORDER BY a;
+} {/* PRIMARY KEY (ANY(a) AND b=?)*/}
+do_execsql_test doltlite_recover_withoutrowid-16.3 {
+  CREATE TABLE skt1 (c1, c2, c3, c4, PRIMARY KEY(c4, c3));
+  INSERT INTO skt1 VALUES(3,0,1,7);
+  INSERT INTO skt1 VALUES(0,4,1,8);
+  INSERT INTO skt1 VALUES(5,6,1,9);
+  INSERT INTO skt1 VALUES(0,4,1,10);
+  ANALYZE;
+  UPDATE sqlite_stat1 SET stat='18 18 6' WHERE tbl='skt1';
+  ANALYZE sqlite_master;
+  SELECT DISTINCT quote(c1), quote(c2), quote(c3), '|'
+    FROM skt1 WHERE skt1.c3 = 1 ORDER BY 1, 2;
+} {0 4 1 | 3 0 1 | 5 6 1 |}
+do_execsql_test doltlite_recover_withoutrowid-16.4 {
+  EXPLAIN QUERY PLAN
+  SELECT DISTINCT quote(c1), quote(c2), quote(c3), quote(c4), '|'
+    FROM skt1 WHERE skt1.c3 = 1;
+} {/* PRIMARY KEY (ANY(c4) AND c3=?)*/}
+do_execsql_test doltlite_recover_withoutrowid-16.5 {
+  CREATE TABLE people(
+    name TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    height INT NOT NULL,
+    CHECK( role IN ('student','teacher') )
+  );
+  CREATE INDEX people_idx1 ON people(role, height);
+  INSERT INTO people VALUES('Alice','student',156),('Bob','student',161),
+   ('Cindy','student',155),('David','student',181),('Emily','teacher',158),
+   ('Fred','student',163),('Ginny','student',169),('Harold','student',172),
+   ('Imma','student',179),('Jack','student',181),('Karen','student',163),
+   ('Logan','student',177),('Megan','teacher',159),('Nathan','student',163),
+   ('Olivia','student',161),('Patrick','teacher',180),('Quiana','student',182),
+   ('Robert','student',159),('Sally','student',166),('Tom','student',171),
+   ('Ursula','student',170),('Vance','student',179),('Willma','student',175),
+   ('Xavier','teacher',185),('Yvonne','student',149),('Zach','student',170);
+  ANALYZE sqlite_master;
+  INSERT INTO sqlite_stat1 VALUES('people','people_idx1','1000000 250000 2000');
+  ANALYZE sqlite_master;
+  SELECT name FROM people WHERE height>=180 ORDER BY +name;
+} {David Jack Patrick Quiana Xavier}
+
+#-------------------------------------------------------------------------
+# 17: tkt3871 — OR optimization over TEXT PK + UNIQUE column.
+do_test doltlite_recover_withoutrowid-17.1 {
+  execsql {
+    BEGIN;
+    CREATE TABLE q1(a PRIMARY KEY, b UNIQUE);
+  }
+  for {set i 0} {$i < 500} {incr i} {
+    execsql { INSERT INTO q1 VALUES($i, $i*$i) }
+  }
+  execsql COMMIT
+  execsql { SELECT count(*) FROM q1 }
+} {500}
+do_execsql_test doltlite_recover_withoutrowid-17.2 {
+  SELECT * FROM q1 WHERE a = 1 OR a = 2 ORDER BY a;
+} {1 1 2 4}
+do_test doltlite_recover_withoutrowid-17.3 {
+  set p [wr_plan {SELECT * FROM q1 WHERE a = 1 OR a = 2}]
+  string match {*SCAN q1*} $p
+} {0}
+do_execsql_test doltlite_recover_withoutrowid-17.4 {
+  SELECT * FROM q1 WHERE a = 1 OR a = 2 OR b = 9 ORDER BY a;
+} {1 1 2 4 3 9}
+do_test doltlite_recover_withoutrowid-17.5 {
+  set p [wr_plan {SELECT * FROM q1 WHERE a = 1 OR a = 2 OR b = 9}]
+  string match {*SCAN q1*} $p
+} {0}
+
+#-------------------------------------------------------------------------
+# 18: tkt3121 vtabD-1.2 — join on the PK column.
+do_execsql_test doltlite_recover_withoutrowid-18.1 {
+  CREATE TABLE r1(field);
+  CREATE TABLE r2(col PRIMARY KEY, descr);
+  INSERT INTO r1 VALUES('abcd');
+  INSERT INTO r2 VALUES('abcd', 'A nice description');
+  INSERT INTO r2 VALUES('efgh', 'Another description');
+  SELECT r1.field AS Field, r2.descr AS Descr
+    FROM r1 INNER JOIN r2 ON r1.field = r2.col ORDER BY r1.field;
+} {abcd {A nice description}}
+
+#-------------------------------------------------------------------------
+# 19: vtab4 — transaction lifecycle. Row semantics on the PK table
+# directly; xBegin/xSync/xCommit/xRollback via echo over a rowid table.
+do_execsql_test doltlite_recover_withoutrowid-19.1 {
+  CREATE TABLE vreal(a PRIMARY KEY, b, c);
+  INSERT INTO vreal VALUES(1, 2, 3);
+  UPDATE vreal SET a = 2;
+  SELECT * FROM vreal;
+} {2 2 3}
+do_execsql_test doltlite_recover_withoutrowid-19.2 {
+  DELETE FROM vreal;
+  SELECT count(*) FROM vreal;
+} {0}
+do_execsql_test doltlite_recover_withoutrowid-19.3 {
+  BEGIN;
+  INSERT INTO vreal VALUES(1, 2, 3);
+  INSERT INTO vreal VALUES(4, 5, 6);
+  INSERT INTO vreal VALUES(7, 8, 9);
+  COMMIT;
+  SELECT * FROM vreal ORDER BY a;
+} {1 2 3 4 5 6 7 8 9}
+do_execsql_test doltlite_recover_withoutrowid-19.4 {
+  CREATE TABLE sreal(a, b, c UNIQUE);
+  BEGIN;
+  INSERT INTO sreal SELECT * FROM vreal;
+  DELETE FROM vreal;
+  COMMIT;
+  SELECT * FROM sreal ORDER BY a;
+  SELECT count(*) FROM vreal;
+} {1 2 3 4 5 6 7 8 9 0}
+do_execsql_test doltlite_recover_withoutrowid-19.5 {
+  BEGIN;
+  INSERT INTO vreal SELECT * FROM sreal;
+  DELETE FROM sreal;
+  ROLLBACK;
+  SELECT * FROM sreal ORDER BY a;
+  SELECT count(*) FROM vreal;
+} {1 2 3 4 5 6 7 8 9 0}
+do_catchsql_test doltlite_recover_withoutrowid-19.6 {
+  INSERT INTO sreal VALUES(10, 11, 3);
+} {1 {UNIQUE constraint failed: sreal.c}}
+do_test doltlite_recover_withoutrowid-19.7 {
+  register_echo_module [sqlite3_connection_pointer db]
+  execsql {
+    CREATE TABLE rreal(a INTEGER PRIMARY KEY, b, c);
+    CREATE VIRTUAL TABLE recho USING echo(rreal);
+  }
+  set ::echo_module [list]
+  execsql { INSERT INTO recho VALUES(1, 2, 3) }
+  string match {*xBegin echo(rreal) xSync echo(rreal) xCommit echo(rreal)} \
+      $::echo_module
+} {1}
+do_test doltlite_recover_withoutrowid-19.8 {
+  set ::echo_module [list]
+  set ::echo_module_sync_fail rreal
+  set res [catchsql { INSERT INTO recho VALUES(4, 5, 6) }]
+  unset ::echo_module_sync_fail
+  list $res [string match \
+      {*xBegin echo(rreal) xSync echo(rreal) xRollback echo(rreal)} \
+      $::echo_module]
+} {{1 {unknown error}} 1}
+do_execsql_test doltlite_recover_withoutrowid-19.9 {
+  SELECT * FROM rreal;
+} {1 2 3}
+
+#-------------------------------------------------------------------------
+# 20: dbstatus2 — the data scenario behind the cache-stat metrics:
+# PK-blob table, reopen, point lookups, inserts, spill-sized update.
+do_test doltlite_recover_withoutrowid-20.1 {
+  execsql {
+    CREATE TABLE bt1(a PRIMARY KEY, b);
+    INSERT INTO bt1 VALUES(1, zeroblob(600));
+    INSERT INTO bt1 VALUES(2, zeroblob(600));
+    INSERT INTO bt1 VALUES(3, zeroblob(600));
+  }
+  db close
+  sqlite3 db test.db
+  execsql { SELECT count(*) FROM bt1 }
+} {3}
+do_execsql_test doltlite_recover_withoutrowid-20.2 {
+  SELECT length(b) FROM bt1 WHERE a=2;
+} {600}
+do_execsql_test doltlite_recover_withoutrowid-20.3 {
+  SELECT length(b) FROM bt1 WHERE a=2;
+} {600}
+do_execsql_test doltlite_recover_withoutrowid-20.4 {
+  SELECT length(b) FROM bt1 WHERE a=1;
+} {600}
+do_execsql_test doltlite_recover_withoutrowid-20.5 {
+  INSERT INTO bt1 VALUES(4, zeroblob(600));
+  INSERT INTO bt1 VALUES(5, zeroblob(600));
+  SELECT a, length(b) FROM bt1 ORDER BY a;
+} {1 600 2 600 3 600 4 600 5 600}
+do_execsql_test doltlite_recover_withoutrowid-20.6 {
+  UPDATE bt1 SET b=zeroblob(1000);
+  SELECT a, length(b) FROM bt1 ORDER BY a;
+} {1 1000 2 1000 3 1000 4 1000 5 1000}
+do_execsql_test doltlite_recover_withoutrowid-20.7 {
+  PRAGMA integrity_check;
+} {ok}
+
+#-------------------------------------------------------------------------
+# 21: index — implicit PK/UNIQUE constraint enforcement (autoindex
+# bookkeeping rows are not materialized in doltlite).
+do_execsql_test doltlite_recover_withoutrowid-21.1 {
+  CREATE TABLE test1(f1 int, f2 int primary key);
+  INSERT INTO test1 VALUES(15, 32768), (16, 65536), (17, 131072);
+  SELECT f1 FROM test1 WHERE f2=65536;
+} {16}
+do_catchsql_test doltlite_recover_withoutrowid-21.2 {
+  INSERT INTO test1 VALUES(99, 65536);
+} {1 {UNIQUE constraint failed: test1.f2}}
+do_test doltlite_recover_withoutrowid-21.3 {
+  execsql {
+    CREATE TABLE t7(c UNIQUE PRIMARY KEY);
+    INSERT INTO t7 VALUES(1);
+  }
+  catchsql { INSERT INTO t7 VALUES(1) }
+} {1 {UNIQUE constraint failed: t7.c}}
+do_test doltlite_recover_withoutrowid-21.4 {
+  execsql {
+    DROP TABLE t7;
+    CREATE TABLE t7(c UNIQUE PRIMARY KEY);
+    INSERT INTO t7 VALUES(1);
+  }
+  catchsql { INSERT INTO t7 VALUES(1) }
+} {1 {UNIQUE constraint failed: t7.c}}
+do_test doltlite_recover_withoutrowid-21.5 {
+  execsql {
+    DROP TABLE t7;
+    CREATE TABLE t7(c PRIMARY KEY, UNIQUE(c));
+    INSERT INTO t7 VALUES(1);
+  }
+  catchsql { INSERT INTO t7 VALUES(1) }
+} {1 {UNIQUE constraint failed: t7.c}}
+do_test doltlite_recover_withoutrowid-21.6 {
+  execsql {
+    DROP TABLE t7;
+    CREATE TABLE t7(c, d, UNIQUE(c, d), PRIMARY KEY(c, d));
+    INSERT INTO t7 VALUES(1, 1);
+    INSERT INTO t7 VALUES(1, 2);
+  }
+  catchsql { INSERT INTO t7 VALUES(1, 1) }
+} {1 {UNIQUE constraint failed: t7.c, t7.d}}
+do_test doltlite_recover_withoutrowid-21.7 {
+  execsql {
+    DROP TABLE t7;
+    CREATE TABLE t7(c, d, UNIQUE(c), PRIMARY KEY(c, d));
+    INSERT INTO t7 VALUES(1, 1);
+  }
+  catchsql { INSERT INTO t7 VALUES(1, 2) }
+} {1 {UNIQUE constraint failed: t7.c}}
+
+#-------------------------------------------------------------------------
+# 22: fkey2-5.* — incrblob may not write an FK column while FKs are on
+# (child kept a rowid table so the incrblob API itself applies).
+do_test doltlite_recover_withoutrowid-22.1 {
+  execsql {
+    PRAGMA foreign_keys = 1;
+    CREATE TABLE fbp(a PRIMARY KEY, b);
+    CREATE TABLE fbc(id INTEGER PRIMARY KEY, b REFERENCES fbp(a));
+    INSERT INTO fbp VALUES('hello', 'world');
+    INSERT INTO fbc VALUES(1, 'hello');
+  }
+  set rc [catch { set fd [db incrblob fbc b 1] } msg]
+  list $rc $msg
+} {1 {cannot open foreign key column for writing}}
+do_test doltlite_recover_withoutrowid-22.2 {
+  set rc [catch { set fd [db incrblob -readonly fbc b 1] } msg]
+  close $fd
+  set rc
+} {0}
+do_test doltlite_recover_withoutrowid-22.3 {
+  execsql { PRAGMA foreign_keys = off }
+  set rc [catch { set fd [db incrblob fbc b 1] } msg]
+  close $fd
+  execsql { PRAGMA foreign_keys = on }
+  set rc
+} {0}
+
+#-------------------------------------------------------------------------
+# 23: fkey2-13.1.* — FK processing on REPLACE, conflicts taken on the
+# declared keys instead of an explicit rowid.
+do_execsql_test doltlite_recover_withoutrowid-23.1 {
+  CREATE TABLE pp(a UNIQUE, b, c, PRIMARY KEY(b, c));
+  CREATE TABLE cc(d, e, f UNIQUE, FOREIGN KEY(d, e) REFERENCES pp);
+  INSERT INTO pp VALUES(1, 2, 3);
+  INSERT INTO cc VALUES(2, 3, 1);
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-23.2 {
+  REPLACE INTO pp VALUES(1, 4, 5);
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test doltlite_recover_withoutrowid-23.3 {
+  SELECT * FROM pp;
+  SELECT * FROM cc;
+} {1 2 3 2 3 1}
+do_test doltlite_recover_withoutrowid-23.4 {
+  execsql BEGIN
+  catchsql { REPLACE INTO pp VALUES(1, 4, 5) }
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test doltlite_recover_withoutrowid-23.5 {
+  COMMIT;
+  SELECT * FROM pp;
+  SELECT * FROM cc;
+} {1 2 3 2 3 1}
+do_execsql_test doltlite_recover_withoutrowid-23.6 {
+  REPLACE INTO pp VALUES(2, 2, 3);
+  SELECT * FROM pp;
+  SELECT * FROM cc;
+} {2 2 3 2 3 1}
+do_execsql_test doltlite_recover_withoutrowid-23.7 {
+  REPLACE INTO pp VALUES(2, 2, 3);
+  SELECT * FROM pp;
+  SELECT * FROM cc;
+} {2 2 3 2 3 1}
+
+#-------------------------------------------------------------------------
+# 24: e_createtable — column limit, PK NOT-NULL contract, NULL
+# distinctness via UNIQUE, constraint-as-index semantics, REPLACE order,
+# non-rowid-alias PK shapes.
+do_test doltlite_recover_withoutrowid-24.1 {
+  set cols500 {}
+  set cols501 {}
+  for {set i 0} {$i < 500} {incr i} { lappend cols500 "c$i" }
+  for {set i 0} {$i < 501} {incr i} { lappend cols501 "c$i" }
+  sqlite3_limit db SQLITE_LIMIT_COLUMN 500
+  set r1 [catchsql "CREATE TABLE ctok([join $cols500 ,])"]
+  set r2 [catchsql "CREATE TABLE ct11([join $cols501 ,])"]
+  sqlite3_limit db SQLITE_LIMIT_COLUMN 2000
+  list $r1 $r2
+} {{0 {}} {1 {too many columns on ct11}}}
+do_execsql_test doltlite_recover_withoutrowid-24.2 {
+  CREATE TABLE et1(x PRIMARY KEY, y);
+  CREATE TABLE et2(x, y, PRIMARY KEY(x, y));
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-24.3 {
+  INSERT INTO et1 VALUES(NULL, 0);
+} {1 {NOT NULL constraint failed: et1.x}}
+do_catchsql_test doltlite_recover_withoutrowid-24.4 {
+  INSERT INTO et2 VALUES(NULL, 'zero');
+} {1 {NOT NULL constraint failed: et2.x}}
+do_catchsql_test doltlite_recover_withoutrowid-24.5 {
+  INSERT INTO et2 VALUES(0, NULL);
+} {1 {NOT NULL constraint failed: et2.y}}
+do_catchsql_test doltlite_recover_withoutrowid-24.6 {
+  INSERT INTO et2 VALUES(NULL, NULL);
+} {1 {NOT NULL constraint failed: et2.x}}
+do_execsql_test doltlite_recover_withoutrowid-24.7 {
+  CREATE TABLE etu(x UNIQUE, y);
+  INSERT INTO etu VALUES(NULL, 0);
+  INSERT INTO etu VALUES(NULL, 0);
+  INSERT INTO etu VALUES(NULL, 0);
+  SELECT count(*) FROM etu WHERE x IS NULL;
+} {3}
+do_execsql_test doltlite_recover_withoutrowid-24.8 {
+  SELECT count(*) FROM et1 WHERE x IS NULL;
+  SELECT count(*) FROM et2 WHERE x IS NULL;
+  SELECT count(*) FROM et2 WHERE y IS NULL;
+} {0 0 0}
+do_test doltlite_recover_withoutrowid-24.9 {
+  execsql {
+    CREATE TABLE ei1(a TEXT PRIMARY KEY, b);
+    INSERT INTO ei1 VALUES('k', 1);
+  }
+  catchsql { INSERT INTO ei1 VALUES('k', 2) }
+} {1 {UNIQUE constraint failed: ei1.a}}
+do_test doltlite_recover_withoutrowid-24.10 {
+  execsql {
+    CREATE TABLE ei4(a PRIMARY KEY, b TEXT UNIQUE);
+    INSERT INTO ei4 VALUES(1, 'x');
+  }
+  list [catchsql { INSERT INTO ei4 VALUES(1, 'y') }] \
+       [catchsql { INSERT INTO ei4 VALUES(2, 'x') }]
+} {{1 {UNIQUE constraint failed: ei4.a}} {1 {UNIQUE constraint failed: ei4.b}}}
+do_test doltlite_recover_withoutrowid-24.11 {
+  execsql {
+    CREATE TABLE ei5(a PRIMARY KEY, b, c, UNIQUE(c, b));
+    INSERT INTO ei5 VALUES(1, 'b', 'c');
+  }
+  list [catchsql { INSERT INTO ei5 VALUES(1, 'q', 'r') }] \
+       [catchsql { INSERT INTO ei5 VALUES(2, 'b', 'c') }]
+} {{1 {UNIQUE constraint failed: ei5.a}} {1 {UNIQUE constraint failed: ei5.c, ei5.b}}}
+do_execsql_test doltlite_recover_withoutrowid-24.12 {
+  CREATE TABLE eq1(a, b PRIMARY KEY);
+  INSERT INTO eq1 VALUES('x', 5);
+  EXPLAIN QUERY PLAN SELECT * FROM eq1 WHERE b = 5;
+} {/*SEARCH eq1 USING PRIMARY KEY (b=?)*/}
+do_execsql_test doltlite_recover_withoutrowid-24.13 {
+  SELECT * FROM eq1 WHERE b = 5;
+} {x 5}
+do_execsql_test doltlite_recover_withoutrowid-24.14 {
+  CREATE TABLE t1_re(a PRIMARY KEY ON CONFLICT REPLACE, b);
+  INSERT INTO t1_re VALUES(1, 'one');
+  INSERT INTO t1_re VALUES(2, 'two');
+  BEGIN;
+  INSERT INTO t1_re VALUES(3, 'three');
+  INSERT INTO t1_re SELECT ((a%2)*a+3), 'string' FROM t1_re;
+  SELECT * FROM t1_re ORDER BY a;
+} {1 one 2 two 3 string 4 string 6 string}
+do_test doltlite_recover_withoutrowid-24.15 {
+  set ac [sqlite3_get_autocommit db]
+  execsql COMMIT
+  set ac
+} {0}
+do_test doltlite_recover_withoutrowid-24.16 {
+  set res {}
+  foreach create {
+    {CREATE TABLE et5(pk integer, v integer, primary key(pk, v))}
+    {CREATE TABLE et5(pk int, v integer, primary key(pk, v))}
+    {CREATE TABLE et5(pk int, v integer, primary key(pk))}
+    {CREATE TABLE et5(pk int primary key, v integer)}
+  } {
+    catchsql { DROP TABLE et5 }
+    execsql $create
+    lappend res [catchsql { SELECT rowid FROM et5 }]
+  }
+  set res
+} [lrepeat 4 {1 {no such column: rowid}}]
+do_test doltlite_recover_withoutrowid-24.17 {
+  execsql {
+    CREATE TABLE et6(pk INT primary key);
+    CREATE TABLE et7(pk BIGINT primary key);
+    CREATE TABLE et8(pk SHORT INTEGER primary key);
+    CREATE TABLE et9(pk UNSIGNED INTEGER primary key);
+  }
+  list [catchsql {SELECT rowid FROM et6}] [catchsql {SELECT rowid FROM et7}] \
+       [catchsql {SELECT rowid FROM et8}] [catchsql {SELECT rowid FROM et9}]
+} [lrepeat 4 {1 {no such column: rowid}}]
+do_execsql_test doltlite_recover_withoutrowid-24.18 {
+  INSERT INTO et6 VALUES('2.0');
+  INSERT INTO et7 VALUES('2.0');
+  INSERT INTO et8 VALUES('2.0');
+  INSERT INTO et9 VALUES('2.0');
+  SELECT typeof(pk), pk FROM et6;
+  SELECT typeof(pk), pk FROM et7;
+  SELECT typeof(pk), pk FROM et8;
+  SELECT typeof(pk), pk FROM et9;
+} {integer 2 integer 2 integer 2 integer 2}
+do_catchsql_test doltlite_recover_withoutrowid-24.19 {
+  INSERT INTO et6 VALUES(2);
+} {1 {UNIQUE constraint failed: et6.pk}}
+do_test doltlite_recover_withoutrowid-24.20 {
+  execsql { CREATE TABLE etd(x INTEGER PRIMARY KEY DESC, y, z) }
+  list [catchsql { SELECT rowid FROM etd }] \
+       [execsql { INSERT INTO etd VALUES(5,1,2); SELECT x,y,z FROM etd }]
+} {{1 {no such column: rowid}} {5 1 2}}
+
+#-------------------------------------------------------------------------
+# 25: e_fkey — FK actions addressed by PK value instead of rowid.
+do_execsql_test doltlite_recover_withoutrowid-25.1 {
+  CREATE TABLE kt1(a COLLATE nocase PRIMARY KEY);
+  CREATE TABLE kt2(b REFERENCES kt1);
+  INSERT INTO kt1 VALUES('oNe');
+  INSERT INTO kt2 VALUES('one');
+  INSERT INTO kt2 VALUES('ONE');
+  UPDATE kt2 SET b = 'OnE';
+  UPDATE kt1 SET a = 'ONE';
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-25.2 {
+  DELETE FROM kt1 WHERE a='one';
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test doltlite_recover_withoutrowid-25.3 {
+  CREATE TABLE at1(a NUMERIC PRIMARY KEY);
+  CREATE TABLE at2(b TEXT REFERENCES at1);
+  INSERT INTO at1 VALUES(1);
+  INSERT INTO at1 VALUES(2);
+  INSERT INTO at1 VALUES('three');
+  INSERT INTO at2 VALUES('2.0');
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-25.4 {
+  DELETE FROM at1 WHERE a=2;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test doltlite_recover_withoutrowid-25.5 {
+  DELETE FROM at1 WHERE a=1;
+  SELECT count(*) FROM at1;
+} {2}
+do_execsql_test doltlite_recover_withoutrowid-25.6 {
+  CREATE TABLE pA(x PRIMARY KEY);
+  CREATE TABLE cA(c REFERENCES pA ON DELETE SET NULL);
+  CREATE TABLE cB(c REFERENCES pA ON UPDATE SET NULL);
+  INSERT INTO pA VALUES(X'ABCD');
+  INSERT INTO pA VALUES(X'1234');
+  INSERT INTO cA VALUES(X'ABCD');
+  INSERT INTO cB VALUES(X'1234');
+  DELETE FROM pA WHERE x=X'ABCD';
+  SELECT quote(x) FROM pA;
+} {X'1234'}
+do_execsql_test doltlite_recover_withoutrowid-25.7 {
+  SELECT quote(c) FROM cA;
+} {NULL}
+do_execsql_test doltlite_recover_withoutrowid-25.8 {
+  UPDATE pA SET x = X'8765' WHERE x=X'1234';
+  SELECT quote(x) FROM pA;
+} {X'8765'}
+do_execsql_test doltlite_recover_withoutrowid-25.9 {
+  SELECT quote(c) FROM cB;
+} {NULL}
+do_execsql_test doltlite_recover_withoutrowid-25.10 {
+  CREATE TABLE pD(x PRIMARY KEY);
+  CREATE TABLE cD(c DEFAULT X'0000' REFERENCES pD ON DELETE SET DEFAULT);
+  CREATE TABLE cE(c DEFAULT X'9999' REFERENCES pD ON UPDATE SET DEFAULT);
+  INSERT INTO pD VALUES(X'0000');
+  INSERT INTO pD VALUES(X'9999');
+  INSERT INTO pD VALUES(X'ABCD');
+  INSERT INTO pD VALUES(X'1234');
+  INSERT INTO cD VALUES(X'ABCD');
+  INSERT INTO cE VALUES(X'1234');
+} {}
+do_execsql_test doltlite_recover_withoutrowid-25.11 {
+  DELETE FROM pD WHERE x=X'ABCD';
+  SELECT quote(x) FROM pD ORDER BY x;
+} {X'0000' X'1234' X'9999'}
+do_execsql_test doltlite_recover_withoutrowid-25.12 {
+  SELECT quote(c) FROM cD;
+} {X'0000'}
+do_execsql_test doltlite_recover_withoutrowid-25.13 {
+  UPDATE pD SET x = X'8765' WHERE x=X'1234';
+  SELECT quote(x) FROM pD ORDER BY x;
+} {X'0000' X'8765' X'9999'}
+do_execsql_test doltlite_recover_withoutrowid-25.14 {
+  SELECT quote(c) FROM cE;
+} {X'9999'}
+do_test doltlite_recover_withoutrowid-25.15 {
+  proc maxparent {args} { db one {SELECT max(x) FROM parent} }
+  db func maxparent maxparent
+  execsql {
+    CREATE TABLE parent(x PRIMARY KEY);
+    CREATE TRIGGER bu BEFORE UPDATE ON parent BEGIN
+      INSERT INTO parent VALUES(new.x-old.x);
+    END;
+    CREATE TABLE child(
+      a DEFAULT (maxparent()) REFERENCES parent ON UPDATE SET DEFAULT
+    );
+    CREATE TRIGGER au AFTER UPDATE ON parent BEGIN
+      INSERT INTO parent VALUES(new.x+old.x);
+    END;
+    INSERT INTO parent VALUES(1);
+    INSERT INTO child VALUES(1);
+    UPDATE parent SET x = 22;
+    SELECT x FROM parent ORDER BY x; SELECT 'xxx'; SELECT a FROM child;
+  }
+} {21 22 23 xxx 22}
+do_execsql_test doltlite_recover_withoutrowid-25.16 {
+  DELETE FROM child;
+  DELETE FROM parent;
+  INSERT INTO parent VALUES(-1);
+  INSERT INTO child VALUES(-1);
+  UPDATE parent SET x = 22;
+  SELECT x FROM parent ORDER BY x; SELECT 'xxx'; SELECT a FROM child;
+} {21 22 23 xxx 23}
+do_execsql_test doltlite_recover_withoutrowid-25.17 {
+  CREATE TABLE zeus(a INTEGER COLLATE NOCASE, b, PRIMARY KEY(a, b));
+  CREATE TABLE apollo(c, d, FOREIGN KEY(c, d) REFERENCES zeus ON UPDATE CASCADE);
+  INSERT INTO zeus VALUES('abc', 'xyz');
+  INSERT INTO apollo VALUES('ABC', 'xyz');
+  UPDATE zeus SET a = 'aBc';
+  SELECT * FROM apollo;
+} {ABC xyz}
+do_execsql_test doltlite_recover_withoutrowid-25.18 {
+  UPDATE zeus SET b = 'www';
+  SELECT typeof(c), c, typeof(d), d FROM apollo;
+} {text aBc text www}
+do_catchsql_test doltlite_recover_withoutrowid-25.19 {
+  UPDATE zeus SET b = NULL;
+} {1 {NOT NULL constraint failed: zeus.b}}
+do_execsql_test doltlite_recover_withoutrowid-25.20 {
+  CREATE TABLE p(a, b, PRIMARY KEY(a, b));
+  CREATE TABLE pc1(c, d, FOREIGN KEY(c, d) REFERENCES p ON DELETE SET NULL);
+  CREATE TABLE pc5(c, d, FOREIGN KEY(c, d) REFERENCES p ON DELETE NO ACTION);
+  CREATE TABLE log(msg);
+  CREATE TRIGGER tt AFTER DELETE ON p BEGIN
+    INSERT INTO log VALUES('delete ' || old.a);
+  END;
+  INSERT INTO p VALUES('a', 'b');
+  INSERT INTO pc1 VALUES('a', 'b');
+  BEGIN;
+  DROP TABLE p;
+  SELECT * FROM pc1;
+} {{} {}}
+do_execsql_test doltlite_recover_withoutrowid-25.21 {
+  SELECT * FROM log;
+} {}
+do_execsql_test doltlite_recover_withoutrowid-25.22 {
+  ROLLBACK;
+  BEGIN;
+  DELETE FROM p;
+  SELECT * FROM log;
+} {{delete a}}
+do_execsql_test doltlite_recover_withoutrowid-25.23 {
+  ROLLBACK;
+  DELETE FROM pc1;
+  INSERT INTO pc5 VALUES('a', 'b');
+} {}
+do_catchsql_test doltlite_recover_withoutrowid-25.24 {
+  BEGIN;
+  DROP TABLE p;
+} {1 {FOREIGN KEY constraint failed}}
+do_test doltlite_recover_withoutrowid-25.25 {
+  set res [execsql {
+    SELECT * FROM p;
+    SELECT * FROM pc5;
+  }]
+  catchsql ROLLBACK
+  set res
+} {a b a b}
+
+finish_test

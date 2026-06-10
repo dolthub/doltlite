@@ -83,6 +83,10 @@ decimal
 distinct
 distinctagg
 doltlite_fts3_oom
+doltlite_recover_collation
+doltlite_recover_ordering
+doltlite_recover_utf16_errtext
+doltlite_recover_withoutrowid
 e_blobbytes
 e_expr
 e_resolve
@@ -308,10 +312,10 @@ skipscan3
 skipscan5
 skipscan6
 snapshot
+snapshot_up
 snapshot2
 snapshot3
 snapshot4
-snapshot_up
 sort
 sort2
 sort3
@@ -384,11 +388,11 @@ whereI
 whereJ
 whereK
 whereL
-whereM
-whereN
 wherelimit
 wherelimit2
 wherelimit3
+whereM
+whereN
 window1
 window2
 window3
