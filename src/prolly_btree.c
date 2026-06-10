@@ -303,6 +303,7 @@ struct Btree {
   u8 bCatalogDropped;     /* OOM rollback dropped the catalog; reload before
                           ** treating an empty committedCatalogHash as a
                           ** fresh database */
+  Pgno mxPageCount;       /* Synthetic max_page_count limit */
 
   int nSavepoint;
   int nSavepointAlloc;
@@ -719,6 +720,33 @@ static int btreeDeleteImmediate(BtCursor *pCur);
 static int mutMapShouldDrain(BtCursor *pCur){
   return pCur && pCur->pMutMap
       && prollyMutMapCount(pCur->pMutMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
+}
+
+static i64 prollyBtreeSyntheticPageCount(Btree *p){
+  ChunkStore *cs;
+  i64 n;
+  if( !p || !p->pBt ) return 0;
+  cs = &p->pBt->store;
+  n = (i64)chunkIndexCount(&cs->index)
+    + (i64)chunkStagingPendingCount(&cs->staging)
+    + (i64)chunkStagingRecentCount(&cs->staging);
+  if( n < 0 ) n = 0;
+  if( n > (i64)0xfffffffe ) n = (i64)0xfffffffe;
+  if( p->aMeta[BTREE_LARGEST_ROOT_PAGE]>(Pgno)n ){
+    n = p->aMeta[BTREE_LARGEST_ROOT_PAGE];
+  }
+  return n;
+}
+
+static int prollyBtreeCheckMaxPageCount(Btree *p){
+  if( !p ) return SQLITE_OK;
+  if( p->mxPageCount==0 || p->mxPageCount>=SQLITE_MAX_PAGE_COUNT ){
+    return SQLITE_OK;
+  }
+  if( prollyBtreeSyntheticPageCount(p) > (i64)p->mxPageCount ){
+    return SQLITE_FULL;
+  }
+  return SQLITE_OK;
 }
 
 static int prollyBtreeClose(Btree*);
@@ -4304,6 +4332,7 @@ int sqlite3BtreeOpen(
   p->bSchemaChangedTxn = 0;
   p->bMasterRootChangedTxn = 0;
   p->bFilterSchemaPlaceholders = 0;
+  p->mxPageCount = SQLITE_MAX_PAGE_COUNT;
 
   if( pBt->store.readOnly ){
     pBt->btsFlags |= BTS_READ_ONLY;
@@ -4591,8 +4620,18 @@ int sqlite3BtreeGetPageSize(Btree *p){
 }
 
 static Pgno prollyBtreeMaxPageCount(Btree *p, Pgno mxPage){
-  (void)p; (void)mxPage;
-  return (Pgno)0x7FFFFFFF;
+  Pgno nCurrent;
+  if( !p ) return 0;
+  nCurrent = (Pgno)prollyBtreeSyntheticPageCount(p);
+  if( mxPage>0 ){
+    if( mxPage<nCurrent ){
+      mxPage = nCurrent;
+    }
+    p->mxPageCount = mxPage;
+  }else if( p->mxPageCount<nCurrent ){
+    p->mxPageCount = nCurrent;
+  }
+  return p->mxPageCount;
 }
 Pgno sqlite3BtreeMaxPageCount(Btree *p, Pgno mxPage){
   if( !p ) return 0;
@@ -4600,22 +4639,7 @@ Pgno sqlite3BtreeMaxPageCount(Btree *p, Pgno mxPage){
 }
 
 static Pgno prollyBtreeLastPage(Btree *p){
-  ChunkStore *cs;
-  i64 n;
-  if( !p || !p->pBt ) return 0;
-  cs = &p->pBt->store;
-  n = (i64)chunkIndexCount(&cs->index)
-    + (i64)chunkStagingPendingCount(&cs->staging)
-    + (i64)chunkStagingRecentCount(&cs->staging);
-  if( n < 0 ) n = 0;
-  if( n > (i64)0xfffffffe ) n = (i64)0xfffffffe;
-  /* SQLite uses LastPage as an upper bound when validating schema rootpages.
-  ** Doltlite's physical page count is a chunk count, which GC can reduce
-  ** below stable sqlite_master rootpage numbers. */
-  if( p->aMeta[BTREE_LARGEST_ROOT_PAGE]>(Pgno)n ){
-    n = p->aMeta[BTREE_LARGEST_ROOT_PAGE];
-  }
-  return (Pgno)n;
+  return (Pgno)prollyBtreeSyntheticPageCount(p);
 }
 Pgno sqlite3BtreeLastPage(Btree *p){
   return p->pOps->xLastPage(p);
@@ -8372,6 +8396,11 @@ static int prollyBtCursorInsert(
     }
   }
 
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pIntKeyBuf);
+    return rc;
+  }
+  rc = prollyBtreeCheckMaxPageCount(pCur->pBtree);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pIntKeyBuf);
     return rc;
