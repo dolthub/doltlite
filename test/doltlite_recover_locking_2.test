@@ -77,7 +77,7 @@ source $testdir/tester.tcl
 # covers: pragma2 pragma2-4.8 — cache_spill=ON accepted, reads 0; no exclusive lock state (8.14)
 # covers: pragma2 pragma2-5.1 — fresh db: page_size+cache_size+cache_spill=YES accepted, cache_spill reads 0 (8.16)
 # covers: pragma2 pragma2-5.3 — cache_spill(-51) accepted, reads 0 (8.16)
-# covers: memdb2 memdb2-1.1.1 — two-connection shared-db scenario recast on doltlite's shared surface (a db file); memdb VFS statements are unsupported (9.1)
+# covers: memdb2 memdb2-1.1.1 — two-connection shared-db scenario recast on doltlite's shared surface (a db file); the memdb VFS cannot back a chunk store so the open is refused outright (9.0, 9.1)
 # covers: memdb2 memdb2-1.1.2 — reader opens txn, sees initial rows (9.1)
 # covers: memdb2 memdb2-1.1.3 — writer opens txn + insert while reader open (9.2)
 # covers: memdb2 memdb2-1.1.4 — writer COMMIT succeeds instead of "database is locked" (9.3)
@@ -461,6 +461,13 @@ do_test doltlite_recover_locking_2-8.16 {
 #-------------------------------------------------------------------------
 # 9.* memdb2 recast: writer COMMIT not blocked by reader holding SHARED.
 #
+# The memdb VFS has no xDelete, which the chunk store requires; the open is
+# refused instead of half-opening a connection whose statements all fail
+# 'unknown operation'.
+do_test doltlite_recover_locking_2-9.0 {
+  list [catch {sqlite3 dbmem file:/x.db?vfs=memdb -uri 1} msg] $msg
+} {1 {unable to open database file}}
+
 do_test doltlite_recover_locking_2-9.1 {
   execsql {CREATE TABLE m(x, y); INSERT INTO m VALUES(1, 2);}
   execsql {BEGIN; SELECT * FROM m;} db2

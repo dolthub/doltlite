@@ -926,14 +926,34 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
   ChunkStore *destCs;
   int iSrc, iDest;
 
-  if( !pDest || !pSrc || pDest==pSrc ) return 0;
+  if( !pDest || !pSrc ) return 0;
+  if( pDest==pSrc ){
+    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
+                        "source and destination must be distinct");
+    return 0;
+  }
 
   iSrc = sqlite3FindDbName(pSrc, zSrcDb);
   iDest = sqlite3FindDbName(pDest, zDestDb);
-  if( iSrc < 0 || iDest < 0 ) return 0;
+  if( iSrc < 0 || iDest < 0 ){
+    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "unknown database %s",
+                        iSrc<0 ? zSrcDb : zDestDb);
+    return 0;
+  }
 
   if( iSrc != 0 || iDest != 0 ){
-    return orig_sqlite3_backup_init(pDest, zDestDb, pSrc, zSrcDb);
+    /* The original backup engine can only run when neither side is a
+    ** doltlite-format btree; otherwise it would push SQLite pages through
+    ** the prolly pager shim. */
+    if( !sqlite3BtreeIsDoltliteFormat(pSrc->aDb[iSrc].pBt)
+     && !sqlite3BtreeIsDoltliteFormat(pDest->aDb[iDest].pBt)
+    ){
+      return orig_sqlite3_backup_init(pDest, zDestDb, pSrc, zSrcDb);
+    }
+    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
+        "backup of non-main databases is not supported on doltlite-format "
+        "databases");
+    return 0;
   }
 
   srcCs = doltliteGetChunkStore(pSrc);

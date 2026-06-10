@@ -4598,7 +4598,9 @@ int sqlite3BtreeSetPagerFlags(Btree *p, unsigned pgFlags){
 
 static int prollyBtreeSetPageSize(Btree *p, int nPagesize, int nReserve, int eFix){
   (void)nReserve; (void)eFix;
-  if( nPagesize>=512 && nPagesize<=65536 ){
+  /* Same validation as the stock btree: ignore values that are not a power
+  ** of two in [512,65536]. The value is layout-inert either way. */
+  if( nPagesize>=512 && nPagesize<=65536 && ((nPagesize-1)&nPagesize)==0 ){
     p->pBt->pageSize = (u32)nPagesize;
   }
   return SQLITE_OK;

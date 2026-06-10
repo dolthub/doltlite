@@ -735,7 +735,7 @@ do_test doltlite_recover_jrnlwal_2-13.1 {
 } {1 {auto_vacuum is not supported on doltlite-format databases}}
 do_test doltlite_recover_jrnlwal_2-13.2 {
   catchsql {PRAGMA incremental_vacuum(4)} dbm
-} {1 {SQL logic error}}
+} {1 {incremental_vacuum is not supported on doltlite-format databases}}
 do_test doltlite_recover_jrnlwal_2-13.3 {
   execsql {
     CREATE TABLE v1(k INTEGER PRIMARY KEY, x);

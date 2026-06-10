@@ -683,7 +683,7 @@ do_test doltlite_recover_jrnlwal_4-10.4 {
 do_test doltlite_recover_jrnlwal_4-10.5 {
   list [catchsql {PRAGMA incremental_vacuum}] \
        [execsql {SELECT count(*) FROM t1}]
-} {{1 {SQL logic error}} 5}
+} {{1 {incremental_vacuum is not supported on doltlite-format databases}} 5}
 do_execsql_test doltlite_recover_jrnlwal_4-10.6 {
   PRAGMA cache_size = 1;
   CREATE TABLE abc(a, b, c);
