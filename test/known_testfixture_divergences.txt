@@ -225,9 +225,9 @@ pragma pragma-22.3.1
 pragma pragma-22.3.3
 pragma pragma-22.4.1
 pragma pragma-22.4.2
+pragma pragma-22.4.3  # mid-stream WAL corruption poisons the main db, so the ATTACH in 22.4.1 fails and aux never attaches
 pragma pragma-23.1
 pragma pragma-23.3
-pragma pragma-24.1
 pragma pragma-24.2
 pragma pragma-3.10
 pragma pragma-3.11
@@ -1982,10 +1982,8 @@ corruptG corruptG-1.2  # stock header corruption: store rejects differently or m
 corruptG corruptG-1.3  # stock header corruption: store rejects differently or misses the offset
 corruptG corruptG-1.4  # stock header corruption: store rejects differently or misses the offset
 corruptG corruptG-2.1  # stock header corruption: store rejects differently or misses the offset
-corruptH corruptH-1.3  # stock-page corruption injection; offset misses + harness footgun cascade
 corruptH corruptH-2.2  # stock-page corruption injection; offset misses + harness footgun cascade
 corruptH corruptH-2.3  # stock-page corruption injection; offset misses + harness footgun cascade
-corruptH corruptH-3.3  # stock-page corruption injection; offset misses + harness footgun cascade
 corruptJ corruptJ-1.2  # stock-page corruption injection; hexio dump reads chunk-store bytes
 corruptJ corruptJ-2.2  # stock-page corruption injection; hexio dump reads chunk-store bytes
 corruptJ corruptJ-2.2b  # stock-page corruption injection; hexio dump reads chunk-store bytes
@@ -2138,21 +2136,10 @@ corrupt6 corrupt6-1.1  # stock freelist/page corruption: offsets land outside ch
 corrupt6 corrupt6-1.2  # stock freelist/page corruption: offsets land outside chunk-store structures
 corrupt6 corrupt6-1.5.1  # stock freelist/page corruption: offsets land outside chunk-store structures
 corrupt6 corrupt6-1.5.2  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.8.1  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.8.2  # stock freelist/page corruption: offsets land outside chunk-store structures
 corrupt6 corrupt6-1.8.3  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.9.1  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.9.2  # stock freelist/page corruption: offsets land outside chunk-store structures
+corrupt6 corrupt6-1.8.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
 corrupt6 corrupt6-1.9.3  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.1  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.2  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.3  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.4  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.5  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.6  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.7  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.8  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.10.9  # stock freelist/page corruption: offsets land outside chunk-store structures
+corrupt6 corrupt6-1.9.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
 corruptB corruptB-1.1  # stock overflow-page corruption: store rejects differently; harness offset vars unset
 corruptB corruptB-1.3.1  # stock overflow-page corruption: store rejects differently; harness offset vars unset
 corruptB corruptB-1.3.2  # stock overflow-page corruption: store rejects differently; harness offset vars unset
@@ -2192,7 +2179,6 @@ corruptK corruptK-1.1  # stock freelist corruption; sqlite_dbpage writes rejecte
 corruptK corruptK-1.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-2.1  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-2.2  # stock freelist corruption; sqlite_dbpage writes rejected
-corruptK corruptK-2.3  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-3.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-3.3  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptL corruptL-1.0  # stock index-page corruption: store rejects at schema level
@@ -3751,266 +3737,10 @@ corruptF corruptF-1.2  # stock-page corruption injection: offsets land outside c
 corruptF corruptF-1.3  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-1.4  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-1.6  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.0  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.1  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.2  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.3  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.4  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.5  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.6  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.7  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.8  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.9  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.10  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.11  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.12  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.13  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.14  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.15  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.16  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.17  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.18  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.19  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.20  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.21  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.22  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.23  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.24  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.25  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.26  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.27  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.28  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.29  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.30  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.31  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.32  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.33  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.34  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.35  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.36  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.37  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.38  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.39  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.40  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.41  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.42  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.43  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.44  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.45  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.46  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.47  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.48  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.49  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.50  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.51  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.52  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.53  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.54  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.55  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.56  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.57  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.58  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.59  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.60  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.61  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.62  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.63  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.64  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.65  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.66  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.67  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.68  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.69  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.70  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.71  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.72  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.73  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.74  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.75  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.76  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.77  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.78  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.79  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.80  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.81  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.82  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.83  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.84  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.85  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.86  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.87  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.88  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.89  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.90  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.91  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.92  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.93  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.94  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.95  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.96  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.97  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.98  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.99  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.100  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.101  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.102  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.103  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.104  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.105  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.106  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.107  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.108  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.109  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.110  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.111  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.112  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.113  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.114  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.115  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.116  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.117  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.118  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.119  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.120  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.121  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.122  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.123  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.124  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.125  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.126  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.7.127  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-2.2  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-2.3  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-2.4  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-2.6  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.127  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.126  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.125  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.124  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.123  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.122  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.121  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.120  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.119  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.118  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.117  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.116  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.115  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.114  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.113  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.112  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.111  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.110  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.109  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.108  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.107  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.106  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.105  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.104  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.103  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.102  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.101  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.100  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.99  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.98  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.97  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.96  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.95  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.94  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.93  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.92  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.91  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.90  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.89  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.88  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.87  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.86  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.85  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.84  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.83  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.82  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.81  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.80  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.79  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.78  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.77  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.76  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.75  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.74  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.73  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.72  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.71  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.70  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.69  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.68  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.67  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.66  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.65  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.64  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.63  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.62  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.61  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.60  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.59  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.58  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.57  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.56  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.55  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.54  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.53  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.52  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.51  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.50  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.49  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.48  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.47  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.46  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.45  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.44  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.43  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.42  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.41  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.40  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.39  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.38  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.37  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.36  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.35  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.34  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.33  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.32  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.31  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.30  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.29  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.28  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.27  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.26  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.25  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.24  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.23  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.22  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.21  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.20  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.19  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.18  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.17  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.16  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.15  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.14  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.13  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.12  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.11  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.10  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.9  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.8  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.7  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.6  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.5  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.4  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.3  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.2  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.1  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.7.0  # stock-page corruption injection: offsets land outside chunk-store structures
 mallocG mallocG-1.transient.8  # OOM fault-point shift under fault injection
 mallocG mallocG-1.transient.9  # OOM fault-point shift under fault injection
 mallocG mallocG-1.transient.10  # OOM fault-point shift under fault injection

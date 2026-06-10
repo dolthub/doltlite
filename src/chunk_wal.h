@@ -13,6 +13,7 @@ typedef struct ChunkStoreReloadState ChunkStoreReloadState;
 struct WalState {
   i64 iWalOffset;
   i64 nWalData;
+  u8 recoveredMidStream;
 };
 
 struct ChunkStoreReplayState {

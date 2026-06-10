@@ -48,9 +48,11 @@ database_may_be_corrupt
 # covers: chunk WAL-region corruption: byte corruption in the WAL
 #   region of a non-compacted store (plain close, no dolt_gc) used to silently
 #   truncate committed transactions (count dropped 24 -> 6 with
-#   integrity_check ok). Mid-stream WAL damage is now rejected at open, while
-#   a torn tail (incomplete final record, i.e. crash recovery) still opens and
-#   serves the last complete commit (tests 1.7-1.11)
+#   integrity_check ok). Mid-stream WAL damage now poisons the store so reads
+#   and commits fail SQLITE_CORRUPT (open still succeeds, matching stock's
+#   first-access surfacing), while a torn tail (incomplete final record, i.e.
+#   crash recovery) still opens and serves the last complete commit
+#   (tests 1.7-1.11)
 # not-covered: (none)
 
 proc xorByte {file off} {

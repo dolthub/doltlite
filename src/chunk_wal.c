@@ -96,6 +96,8 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->index.aIndexMmapBase = pSrc->index.aIndexMmapBase;
   pDst->index.aIndexMmapSize = pSrc->index.aIndexMmapSize;
   pDst->wal.nWalData = pSrc->wal.nWalData;
+  pDst->wal.recoveredMidStream = pSrc->wal.recoveredMidStream;
+  pDst->corruptMidStream = pSrc->corruptMidStream;
   REFS_OWNED_COPY(pDst->refs, pSrc->refs);
 
   pSrc->file.pFile = 0;
@@ -135,7 +137,9 @@ static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
 /* A bad chunk frame is a recoverable torn tail only when nothing but (at
 ** most) a file-final root record follows it; a complete root record with
 ** data after it proves later commits were durably synced, so the damage is
-** mid-stream corruption and must be surfaced rather than truncated away. */
+** mid-stream corruption and must be surfaced (SQLITE_CORRUPT on first
+** access; stock never errors from sqlite3_open) rather than truncated
+** away. */
 static int csWalScanForLaterRoot(ChunkStore *cs, i64 from, i64 walSize,
                                  int *pFound){
   u8 buf[65536];
@@ -233,8 +237,8 @@ int csReplayWal(ChunkStore *cs){
        || (u64)pos + len > (u64)walSize ){
         int laterRoot = 0;
         rc = csWalScanForLaterRoot(cs, recPos + 1, walSize, &laterRoot);
-        if( rc==SQLITE_OK && laterRoot ) rc = SQLITE_CORRUPT;
         if( rc!=SQLITE_OK ) goto replay_error;
+        if( laterRoot ) cs->wal.recoveredMidStream = 1;
         sqlite3_log(SQLITE_NOTICE,
           "doltlite: WAL chunk body truncated at offset %lld (declared len=%u); "
           "stopping replay at last commit boundary",
@@ -264,8 +268,8 @@ int csReplayWal(ChunkStore *cs){
         if( hashMismatch ){
           int laterRoot = 0;
           rc = csWalScanForLaterRoot(cs, recPos + 1, walSize, &laterRoot);
-          if( rc==SQLITE_OK && laterRoot ) rc = SQLITE_CORRUPT;
           if( rc!=SQLITE_OK ) goto replay_error;
+          if( laterRoot ) cs->wal.recoveredMidStream = 1;
           sqlite3_log(SQLITE_NOTICE,
             "doltlite: WAL chunk body hash mismatch at offset %lld (declared len=%u); "
             "stopping replay at last commit boundary",

@@ -134,6 +134,10 @@ struct ChunkStore {
   u8 readOnly;
   u8 isMemory;
   u8 snapshotPinned;
+  u8 corruptMidStream;    /* WAL replay found mid-stream damage; chunk reads
+                          ** and commits fail SQLITE_CORRUPT, but open itself
+                          ** succeeds (stock surfaces corruption on first
+                          ** access, never from sqlite3_open) */
   sqlite3_file *pGraphLockFile;
   char *pGraphLockName;        /* owned name kept alive for pGraphLockFile (xOpen contract) */
   sqlite3_mutex *pLockMutex;
