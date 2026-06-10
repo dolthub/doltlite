@@ -333,6 +333,7 @@ struct Btree {
     ProllyHash rebaseOntoCommit;
     char *zRebaseOrigBranch;
     char *zRebaseReturnBranch;
+    u32 aMeta[16];
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
@@ -341,6 +342,7 @@ struct Btree {
   ProllyHash committedMergeCommitHash;
   ProllyHash committedConflictsCatalogHash;
   ProllyHash committedConstraintViolationsHash;
+  u32 committedAMeta[16];
   ProllyHash catalogCacheHash;
   u8 *pCatalogCache;
   int nCatalogCache;
@@ -2513,6 +2515,13 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   memset(aMetaNew, 0, sizeof(aMetaNew));
   aMetaNew[BTREE_FILE_FORMAT] = 4;
   aMetaNew[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
+  /* Session-scoped meta is not stored in the catalog; a reload must not
+  ** zero it (user_version was lost on any commit that reloaded the
+  ** catalog, #1344). */
+  aMetaNew[BTREE_DEFAULT_CACHE_SIZE] = pBtree->aMeta[BTREE_DEFAULT_CACHE_SIZE];
+  aMetaNew[BTREE_USER_VERSION] = pBtree->aMeta[BTREE_USER_VERSION];
+  aMetaNew[BTREE_INCR_VACUUM] = pBtree->aMeta[BTREE_INCR_VACUUM];
+  aMetaNew[BTREE_APPLICATION_ID] = pBtree->aMeta[BTREE_APPLICATION_ID];
 
   {
     ProllyHash h;
@@ -3355,6 +3364,7 @@ static void captureSavepointSessionState(
 ){
   pState->iNextTable = pBtree->cat.iNextTable;
   pState->iLargestRootPage = pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE];
+  memcpy(pState->aMeta, pBtree->aMeta, sizeof(pState->aMeta));
   pState->stagedCatalog = pBtree->stagedCatalog;
   pState->isMerging = pBtree->isMerging;
   pState->mergeCommitHash = pBtree->mergeCommitHash;
@@ -3380,6 +3390,7 @@ static void restoreSavepointSessionState(
   pBtree->mergeCommitHash = pState->mergeCommitHash;
   pBtree->conflictsCatalogHash = pState->conflictsCatalogHash;
   pBtree->constraintViolationsHash = pState->constraintViolationsHash;
+  memcpy(pBtree->aMeta, pState->aMeta, sizeof(pBtree->aMeta));
   pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = pState->iLargestRootPage;
   pBtree->isRebasing = pState->isRebasing;
   pBtree->preRebaseWorkingCat = pState->preRebaseWorkingCat;
@@ -5130,6 +5141,7 @@ static void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash)
   p->committedMergeCommitHash = p->mergeCommitHash;
   p->committedConflictsCatalogHash = p->conflictsCatalogHash;
   p->committedConstraintViolationsHash = p->constraintViolationsHash;
+  memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
 }
 
 static void btreeBumpDataVersion(Btree *p){
@@ -5403,6 +5415,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->committedMergeCommitHash = p->mergeCommitHash;
       p->committedConflictsCatalogHash = p->conflictsCatalogHash;
       p->committedConstraintViolationsHash = p->constraintViolationsHash;
+      memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
       btreeMarkWorkingStateChanged(p);
       if( bReloadSchema ){
         BtCursor *pC;
@@ -5559,6 +5572,7 @@ static int restoreFromCommitted(Btree *p){
       memset(&loadedCatHash, 0, sizeof(loadedCatHash));
       rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
       if( rc!=SQLITE_OK ) return rc;
+      memcpy(p->aMeta, p->committedAMeta, sizeof(p->aMeta));
       btreeStoreCommittedFromCurrent(p, &loadedCatHash);
       p->bCatalogDropped = 0;
       return SQLITE_OK;
@@ -5657,6 +5671,7 @@ static int restoreFromCommitted(Btree *p){
   p->mergeCommitHash = p->committedMergeCommitHash;
   p->conflictsCatalogHash = p->committedConflictsCatalogHash;
   p->constraintViolationsHash = p->committedConstraintViolationsHash;
+  memcpy(p->aMeta, p->committedAMeta, sizeof(p->aMeta));
   return SQLITE_OK;
 }
 
@@ -6273,7 +6288,10 @@ static int prollyBtreeUpdateMeta(Btree *p, int idx, u32 value){
   }
 
   {
-    int rc = ensureStatementSavepointsCaptured(p);
+    /* Btree savepoints push lazily at write time; a meta write is a write,
+    ** so push them here or ROLLBACK TO cannot restore the old value. */
+    int rc = syncBtreeSavepoints(p);
+    if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(p);
     if( rc!=SQLITE_OK ) return rc;
   }
 

@@ -266,7 +266,6 @@ pragma pragma-8.1.3
 pragma pragma-8.1.4
 pragma pragma-8.1.6
 pragma pragma-8.1.9
-pragma pragma-8.2.12
 pragma pragma-8.2.13
 pragma pragma-8.2.3.2
 pragma pragma-8.2.4.1
