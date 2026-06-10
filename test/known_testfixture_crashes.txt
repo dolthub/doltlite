@@ -151,7 +151,7 @@ walsetlk       # opens test.db-shm: no shm sidecar
 walsetlk_recover # shm/recovery locks: no shm sidecar
 ioerr2         # fault loop runs tens of thousands of iterations; exceeds any per-file timeout
 lock4          # waits on a cross-process lock that never materializes under chunk-store locking
-sharedA        # shared-cache scenario hangs awaiting a lock state doltlite never enters
+sharedA        # waits for a rollback-journal xRead during shared-cache rollback; native contract covered by doltlite_recover_locking_2-17.*
 quota          # quota-VFS thresholds trip at run-varying chunk-store sizes: failure set nondeterministic
 ioerr          # giant IO-fault loop: runtime load-sensitive, exceeds per-file timeout under CI load
 malloc         # giant OOM-fault loop: runtime load-sensitive, exceeds per-file timeout under CI load
