@@ -115,6 +115,23 @@ void csFreeReloadState(ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
 }
 
+/* True if the WAL region from pos to walSize is all zero bytes. */
+static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
+  u8 buf[4096];
+  i64 off = cs->wal.iWalOffset + pos;
+  i64 end = cs->wal.iWalOffset + walSize;
+  while( off < end ){
+    int n = (end - off) > (i64)sizeof(buf) ? (int)sizeof(buf) : (int)(end - off);
+    int i;
+    if( sqlite3OsRead(cs->file.pFile, buf, n, off) != SQLITE_OK ) return 0;
+    for(i=0; i<n; i++){
+      if( buf[i] ) return 0;
+    }
+    off += n;
+  }
+  return 1;
+}
+
 int csReplayWal(ChunkStore *cs){
   i64 walSize;
   ChunkStoreReplayState saved;
@@ -271,6 +288,14 @@ int csReplayWal(ChunkStore *cs){
       pos = recPos + 1 + CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->staging.nPending;
       nRootRecordsSeen++;
+
+    } else if( tag == 0 && csWalTailIsZero(cs, recPos, walSize) ){
+      /* SQLITE_FCNTL_SIZE_HINT (or filesystem preallocation) zero-extends the
+      ** file past the last commit. Treat the all-zero tail as absent: rewind
+      ** the logical end of file so the next append reclaims it. */
+      cs->wal.nWalData = recPos;
+      cs->file.iFileSize = cs->wal.iWalOffset + recPos;
+      break;
 
     } else {
       rc = SQLITE_CORRUPT;

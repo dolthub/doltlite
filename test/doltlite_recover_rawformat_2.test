@@ -164,13 +164,13 @@ source $testdir/tester.tcl
 #   fails with a permission error; the CI container runs as root, which bypasses
 #   file permissions, so the readonly condition cannot be created in this
 #   environment (verified: backup onto a 0400 file succeeds as root)
-# not-covered: syscall syscall-8.4.1 syscall-8.4.2 syscall-8.4.3 syscall-8.4.4
-#   syscall-8.4.5 — SUSPECTED BUG: SQLITE_FCNTL_SIZE_HINT that extends the file
-#   after SQLITE_FCNTL_CHUNK_SIZE (e.g. chunksize 4096 then sizehint 8192 on a
-#   fresh db) appends chunk-rounded zero bytes the chunk store cannot parse; the
-#   next INSERT fails with 'database disk image is malformed'. The originals
-#   exist to assert exactly this extension behavior, so they cannot be
-#   recovered until the size-hint path is fixed.
+# covers-class: syscall syscall-8.4.{1..5} (5 entries): originals assert exact
+#   chunk-rounded byte sizes from SIZE_HINT after a 16-byte CHUNK_SIZE; a fresh
+#   doltlite chunk store already exceeds those sizes so the byte counts can
+#   never match. Recovered invariant (formerly a bug here): an extending
+#   size hint zero-pads the file to the chunk-rounded size and the chunk store
+#   treats the all-zero tail as absent — the next INSERT, close/reopen, and
+#   integrity_check all succeed (3.8)
 
 #-------------------------------------------------------------------------
 # 1.* pagesize
@@ -358,6 +358,21 @@ do_test doltlite_recover_rawformat_2-3.7 {
   list $res [execsql {SELECT * FROM s8 ORDER BY a}] \
       [execsql {PRAGMA integrity_check}]
 } {{} {1 2 3 4} ok}
+
+do_test doltlite_recover_rawformat_2-3.8 {
+  db close
+  forcedelete test.db
+  sqlite3 db test.db
+  execsql {CREATE TABLE s9(a, b); INSERT INTO s9 VALUES(1, 2);}
+  file_control_chunksize_test db main 4096
+  file_control_sizehint_test db main 8192
+  set sz [file size test.db]
+  execsql {INSERT INTO s9 VALUES(3, 4)}
+  db close
+  sqlite3 db test.db
+  list $sz [execsql {SELECT * FROM s9 ORDER BY a}] \
+      [execsql {PRAGMA integrity_check}]
+} {8192 {1 2 3 4} ok}
 
 #-------------------------------------------------------------------------
 # 4.* encodings: e_expr-27/28/29/30/33, enc3, enc4
