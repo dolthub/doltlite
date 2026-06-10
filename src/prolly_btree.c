@@ -738,12 +738,50 @@ static i64 prollyBtreeSyntheticPageCount(Btree *p){
   return n;
 }
 
+static i64 prollyBtreePendingPageEstimate(Btree *p, i64 nLimit){
+  i64 nBytes = 0;
+  i64 nInsert = 0;
+  i64 nBytePages;
+  i64 nRowPages;
+  i64 nPageSize;
+  int i;
+  if( !p || !p->pBt ) return 0;
+  nPageSize = p->pBt->pageSize>0 ? (i64)p->pBt->pageSize : 1024;
+  for(i=0; i<p->cat.n; i++){
+    if( p->cat.a[i].pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)p->cat.a[i].pPending;
+      int j;
+      for(j=0; j<pMap->nEntries; j++){
+        ProllyMutMapEntry *pEntry = &pMap->aEntries[j];
+        if( pEntry->op==PROLLY_EDIT_INSERT ){
+          nInsert++;
+          nBytes += (i64)pEntry->nKey + (i64)pEntry->nVal + 16;
+          if( nLimit>0 && nInsert/16 + nBytes/(2*nPageSize) > nLimit ){
+            return nLimit + 1;
+          }
+        }
+      }
+    }
+  }
+  nBytePages = (nBytes + 2*nPageSize - 1)/(2*nPageSize);
+  nRowPages = (nInsert + 15)/16;
+  return nBytePages > nRowPages ? nBytePages : nRowPages;
+}
+
 static int prollyBtreeCheckMaxPageCount(Btree *p){
+  i64 nCurrent;
+  i64 nPending;
   if( !p ) return SQLITE_OK;
   if( p->mxPageCount==0 || p->mxPageCount>=SQLITE_MAX_PAGE_COUNT ){
     return SQLITE_OK;
   }
-  if( prollyBtreeSyntheticPageCount(p) > (i64)p->mxPageCount ){
+  nCurrent = prollyBtreeSyntheticPageCount(p);
+  if( nCurrent > (i64)p->mxPageCount ){
+    return SQLITE_FULL;
+  }
+  nPending = prollyBtreePendingPageEstimate(
+      p, (i64)p->mxPageCount - nCurrent);
+  if( nCurrent + nPending > (i64)p->mxPageCount ){
     return SQLITE_FULL;
   }
   return SQLITE_OK;
