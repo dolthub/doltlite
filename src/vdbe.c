@@ -8513,10 +8513,20 @@ case OP_JournalMode: {    /* out2 */
 
 #ifdef DOLTLITE_PROLLY
   if( eNew!=eOld && sqlite3BtreeIsDoltliteFormat(pBt) ){
-    rc = SQLITE_ERROR;
-    sqlite3VdbeError(p,
-      "journal_mode is not configurable on doltlite-format databases");
-    goto abort_due_to_error;
+#ifndef SQLITE_OMIT_WAL
+    if( eNew==PAGER_JOURNALMODE_WAL && !sqlite3PagerWalSupported(pPager) ){
+      /* Stock treats a wal request on a db that cannot support WAL (e.g. an
+      ** in-memory db) as a no-op rather than an error; match that so main
+      ** and attached doltlite dbs behave identically. */
+      eNew = eOld;
+    }else
+#endif
+    {
+      rc = SQLITE_ERROR;
+      sqlite3VdbeError(p,
+        "journal_mode is not configurable on doltlite-format databases");
+      goto abort_due_to_error;
+    }
   }
 #endif
 

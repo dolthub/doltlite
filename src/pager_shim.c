@@ -379,7 +379,7 @@ static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
   return SQLITE_OK;
 }
 static int shimPagerWalSupported(Pager *p){
-  (void)p; return 1;
+  return !shimPagerIsMemdb(p);
 }
 static int shimPagerOpenWal(Pager *p, int *pisOpen){
   if( !shimPagerIsMemdb(p) ){

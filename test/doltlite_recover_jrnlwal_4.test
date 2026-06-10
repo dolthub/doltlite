@@ -182,7 +182,7 @@ source $testdir/tester.tcl
 # covers: walmode walmode-4.16 — every connection reports wal; concurrent second connection reads fine (1.12,1.13,4.1)
 # covers: walmode walmode-4.17 — every connection reports wal; concurrent second connection reads fine (1.12,1.13,4.1)
 # covers: walmode walmode-4.18 — every connection reports wal; concurrent second connection reads fine (1.12,1.13,4.1)
-# covers: walmode walmode-5.1.2 — :memory: db cannot become wal: setter errors, stays memory, db usable (8.1,8.2)
+# covers: walmode walmode-5.1.2 — :memory: db cannot become wal: setter no-ops like stock, stays memory, db usable (8.1,8.2)
 # covers: walmode walmode-5.1.4 — :memory: db cannot become wal: setter errors, stays memory, db usable (8.1,8.2)
 # covers: walmode walmode-6.1 — per-mode-to-wal loop collapses: =wal echoes wal, other modes rejected (1.8,1.3-1.7)
 # covers: walmode walmode-6.2 — per-mode-to-wal loop collapses: =wal echoes wal, other modes rejected (1.8,1.3-1.7)
@@ -575,8 +575,9 @@ do_test doltlite_recover_jrnlwal_4-7.9 {
 do_test doltlite_recover_jrnlwal_4-8.1 {
   sqlite3 db3 :memory:
   list [execsql {PRAGMA main.journal_mode} db3] \
-       [catchsql {PRAGMA main.journal_mode = wal} db3]
-} [list memory [list 1 $JM_ERR]]
+       [catchsql {PRAGMA main.journal_mode = wal} db3] \
+       [catchsql {PRAGMA main.journal_mode = delete} db3]
+} [list memory {0 memory} [list 1 $JM_ERR]]
 do_test doltlite_recover_jrnlwal_4-8.2 {
   execsql {
     CREATE TABLE m(x);

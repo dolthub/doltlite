@@ -2766,8 +2766,6 @@ walmode walmode-4.12  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.16  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.17  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.18  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-5.1.2  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-5.1.4  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-6.1  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-6.2  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-6.3  # journal_mode fixed; -wal sidecar absent; file sizes

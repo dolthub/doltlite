@@ -283,6 +283,14 @@ do_test doltlite_recover_rawformat_2-3.1 {
   catchsql {PRAGMA main.journal_mode = delete}
 } {1 {journal_mode is not configurable on doltlite-format databases}}
 
+# The rejection applies identically to the attached db, and a wal request
+# (already the reported mode) is an accepted no-op on both.
+do_test doltlite_recover_rawformat_2-3.1b {
+  list [catchsql {PRAGMA aux.journal_mode = delete}] \
+      [execsql {PRAGMA main.journal_mode = wal}] \
+      [execsql {PRAGMA aux.journal_mode = wal}]
+} {{1 {journal_mode is not configurable on doltlite-format databases}} wal wal}
+
 do_test doltlite_recover_rawformat_2-3.2 {
   execsql {
     BEGIN;
