@@ -924,6 +924,9 @@ static void resolveP2Values(Vdbe *p, int *pMaxVtabArgs){
         }
 #ifndef SQLITE_OMIT_VIRTUALTABLE
         case OP_VUpdate: {
+#if defined(DOLTLITE_PROLLY)
+          p->hasVUpdate = 1;
+#endif
           if( pOp->p2>nMaxVtabArgs ) nMaxVtabArgs = pOp->p2;
           break;
         }
@@ -3453,6 +3456,12 @@ int sqlite3VdbeHalt(Vdbe *p){
       }else if( p->rc==SQLITE_SCHEMA && db->nVdbeActive>1 ){
         p->nChange = 0;
       }else{
+#ifdef DOLTLITE_PROLLY
+        if( eStatementOp ){
+          rc = sqlite3VdbeCloseStatement(p, eStatementOp);
+          eStatementOp = 0;
+        }
+#endif
         sqlite3RollbackAll(db, SQLITE_OK);
         p->nChange = 0;
       }
