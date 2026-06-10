@@ -2517,7 +2517,7 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   aMetaNew[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
   /* Session-scoped meta is not stored in the catalog; a reload must not
   ** zero it (user_version was lost on any commit that reloaded the
-  ** catalog, #1344). */
+  ** catalog). */
   aMetaNew[BTREE_DEFAULT_CACHE_SIZE] = pBtree->aMeta[BTREE_DEFAULT_CACHE_SIZE];
   aMetaNew[BTREE_USER_VERSION] = pBtree->aMeta[BTREE_USER_VERSION];
   aMetaNew[BTREE_INCR_VACUUM] = pBtree->aMeta[BTREE_INCR_VACUUM];
