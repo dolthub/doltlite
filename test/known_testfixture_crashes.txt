@@ -157,4 +157,5 @@ ioerr          # giant IO-fault loop: runtime load-sensitive, exceeds per-file t
 malloc         # giant OOM-fault loop: runtime load-sensitive, exceeds per-file timeout under CI load
 backup_ioerr   # divergences exceed the 1000-error cap mid-file; capped list is order-fragile
 malloc6        # OOM fault-point set varies run to run: failure list nondeterministic
+misc7          # WHERE rowid=? on a PK table errors (intentional rowid-on-PK divergence); do_eqp_test 14.1 throws uncaught -> aborts pre-summary
 multiplex      # multiplex-VFS fault set varies run to run: failure list nondeterministic
