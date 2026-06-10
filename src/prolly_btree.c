@@ -158,6 +158,7 @@ typedef struct SavepointTableEntry SavepointTableEntry;
 struct SavepointTableEntry {
   Pgno iTable;
   u8 pendingFlushSeekEdits;
+  ProllyMutMap *pPending;
 };
 
 typedef struct SavepointCatalogEntry SavepointCatalogEntry;
@@ -3280,6 +3281,13 @@ static void freeSavepointTables(struct SavepointTableState *pState){
     pState->nPendingSnapshotAlloc = 0;
   }
   if( pState->aTables ){
+    int i;
+    for(i=0; i<pState->nTables; i++){
+      if( pState->aTables[i].pPending ){
+        prollyMutMapFree(pState->aTables[i].pPending);
+        sqlite3_free(pState->aTables[i].pPending);
+      }
+    }
     sqlite3_free(pState->aTables);
     pState->aTables = 0;
   }
@@ -3431,6 +3439,7 @@ static int captureSavepointTables(
     pState->aTables[k].iTable = pBtree->cat.a[k].iTable;
     pState->aTables[k].pendingFlushSeekEdits =
         pBtree->cat.a[k].pendingFlushSeekEdits;
+    pState->aTables[k].pPending = 0;
   }
   pState->nTables = pBtree->cat.n;
   pState->bTablesCaptured = 1;
@@ -3713,27 +3722,22 @@ static int restoreTablesFromSavepoint(
   Btree *pBtree,
   struct SavepointTableState *pState
 ){
-  ProllyMutMap **apPending = 0;
   int k;
   int rc;
   struct TableEntry *aCurrent = pBtree->cat.a;
   int nCurrent = pBtree->cat.n;
+  int bRestoredCatalogInPlace = 0;
 
   if( pState->nTables>0 ){
-    apPending = sqlite3_malloc64(
-        pState->nTables * sizeof(ProllyMutMap*));
-    if( !apPending ) return SQLITE_NOMEM;
-    memset(apPending, 0, pState->nTables * sizeof(ProllyMutMap*));
-
     if( pBtree->cat.nAlloc < pState->nTables ){
       struct TableEntry *aNew = sqlite3_realloc(
           pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
       if( !aNew ){
-        sqlite3_free(apPending);
         return SQLITE_NOMEM;
       }
       pBtree->cat.a = aNew;
       pBtree->cat.nAlloc = pState->nTables;
+      aCurrent = pBtree->cat.a;
     }
   }
 
@@ -3746,7 +3750,7 @@ static int restoreTablesFromSavepoint(
     iSaved = findSavepointTableIndexInArray(
         pState->aTables, pState->nTables, aCurrent[k].iTable);
     if( iSaved>=0 ){
-      apPending[iSaved] = pMap;
+      pState->aTables[iSaved].pPending = pMap;
     }else{
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
@@ -3756,42 +3760,64 @@ static int restoreTablesFromSavepoint(
 
   if( prollyHashIsEmpty(&pState->catalogHash) ){
     if( pState->bCatalogSnapshot ){
-      btreeFreeCatalogTables(pBtree);
-      initDefaultMeta(pBtree);
-      if( pState->nTables>0 ){
-        if( pBtree->cat.nAlloc < pState->nTables ){
-          struct TableEntry *aNew = sqlite3_realloc(
-              pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
-          if( !aNew ){
-            sqlite3_free(apPending);
-            return SQLITE_NOMEM;
-          }
-          pBtree->cat.a = aNew;
-          pBtree->cat.nAlloc = pState->nTables;
-        }
-        memset(pBtree->cat.a, 0, pState->nTables * sizeof(struct TableEntry));
+      if( pBtree->cat.n==pState->nTables ){
+        int bSameShape = 1;
         for(k=0; k<pState->nTables; k++){
-          struct TableEntry *pDst = &pBtree->cat.a[k];
-          SavepointCatalogEntry *pSrc = &pState->aCatalogSnapshot[k];
-          pDst->iTable = pSrc->iTable;
-          pDst->root = pSrc->root;
-          pDst->schemaHash = pSrc->schemaHash;
-          pDst->flags = pSrc->flags;
-          pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
-          pDst->tableRootKnown = pSrc->tableRootKnown;
-          pDst->isTableRoot = pSrc->isTableRoot;
-          if( pSrc->zName ){
-            pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
-            if( !pDst->zName ){
-              sqlite3_free(apPending);
-              btreeFreeCatalogTables(pBtree);
-              initDefaultMeta(pBtree);
+          if( pBtree->cat.a[k].iTable!=pState->aCatalogSnapshot[k].iTable ){
+            bSameShape = 0;
+            break;
+          }
+        }
+        if( bSameShape ){
+          for(k=0; k<pState->nTables; k++){
+            struct TableEntry *pDst = &pBtree->cat.a[k];
+            SavepointCatalogEntry *pSrc = &pState->aCatalogSnapshot[k];
+            pDst->root = pSrc->root;
+            pDst->schemaHash = pSrc->schemaHash;
+            pDst->flags = pSrc->flags;
+            pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+            pDst->tableRootKnown = pSrc->tableRootKnown;
+            pDst->isTableRoot = pSrc->isTableRoot;
+          }
+          bRestoredCatalogInPlace = 1;
+        }
+      }
+      if( !bRestoredCatalogInPlace ){
+        btreeFreeCatalogTables(pBtree);
+        initDefaultMeta(pBtree);
+        if( pState->nTables>0 ){
+          if( pBtree->cat.nAlloc < pState->nTables ){
+            struct TableEntry *aNew = sqlite3_realloc(
+                pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
+            if( !aNew ){
               return SQLITE_NOMEM;
+            }
+            pBtree->cat.a = aNew;
+            pBtree->cat.nAlloc = pState->nTables;
+          }
+          memset(pBtree->cat.a, 0, pState->nTables * sizeof(struct TableEntry));
+          for(k=0; k<pState->nTables; k++){
+            struct TableEntry *pDst = &pBtree->cat.a[k];
+            SavepointCatalogEntry *pSrc = &pState->aCatalogSnapshot[k];
+            pDst->iTable = pSrc->iTable;
+            pDst->root = pSrc->root;
+            pDst->schemaHash = pSrc->schemaHash;
+            pDst->flags = pSrc->flags;
+            pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+            pDst->tableRootKnown = pSrc->tableRootKnown;
+            pDst->isTableRoot = pSrc->isTableRoot;
+            if( pSrc->zName ){
+              pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
+              if( !pDst->zName ){
+                btreeFreeCatalogTables(pBtree);
+                initDefaultMeta(pBtree);
+                return SQLITE_NOMEM;
+              }
             }
           }
         }
+        pBtree->cat.n = pState->nTables;
       }
-      pBtree->cat.n = pState->nTables;
       pBtree->cat.iNextTable = pState->iNextTable;
     }else{
       btreeFreeCatalogTables(pBtree);
@@ -3803,13 +3829,11 @@ static int restoreTablesFromSavepoint(
     int nCatData = 0;
     rc = chunkStoreGet(&pBtree->pBt->store, &pState->catalogHash, &catData, &nCatData);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(apPending);
       return rc;
     }
     rc = deserializeCatalog(pBtree, catData, nCatData);
     sqlite3_free(catData);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(apPending);
       return rc;
     }
   }
@@ -3819,12 +3843,11 @@ static int restoreTablesFromSavepoint(
       int idx = findTableIndexInArray(
           pBtree->cat.a, pBtree->cat.n, pState->aTables[k].iTable);
       if( idx < 0 ){
-        sqlite3_free(apPending);
         return SQLITE_CORRUPT;
       }
       pBtree->cat.a[idx].pendingFlushSeekEdits =
           pState->aTables[k].pendingFlushSeekEdits;
-      if( apPending[k]==0 ){
+      if( pState->aTables[k].pPending==0 ){
         /* A table dropped after this savepoint has no live mutmap, and
         ** rollbackMutMapsToSavepoint only visits the current catalog so it
         ** never saw it. Recover its pre-drop edits from the savepoint pending
@@ -3839,18 +3862,17 @@ static int restoreTablesFromSavepoint(
           if( rc!=SQLITE_OK ){
             prollyMutMapFree(pSnap);
             sqlite3_free(pSnap);
-            sqlite3_free(apPending);
             return rc;
           }
-          apPending[k] = pSnap;
+          pState->aTables[k].pPending = pSnap;
         }
       }
-      pBtree->cat.a[idx].pPending = apPending[k];
+      pBtree->cat.a[idx].pPending = pState->aTables[k].pPending;
+      pState->aTables[k].pPending = 0;
     }
   }
 
   pBtree->cat.iNextTable = pState->iNextTable;
-  sqlite3_free(apPending);
   return SQLITE_OK;
 }
 
@@ -5515,11 +5537,87 @@ static int restoreFromCommitted(Btree *p){
   }else{
     u8 *catData = 0;
     int nCatData = 0;
-    int rc = chunkStoreGet(&p->pBt->store, &p->committedCatalogHash,
-                           &catData, &nCatData);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = deserializeCatalog(p, catData, nCatData);
-    sqlite3_free(catData);
+    int rc = SQLITE_NOTFOUND;
+    if( p->pCatalogCache
+     && p->nCatalogCache>0
+     && !p->bSchemaChangedTxn
+     && !p->bMasterRootChangedTxn
+     && prollyHashCompare(&p->catalogCacheHash,
+                          &p->committedCatalogHash)==0 ){
+      const u8 *q;
+      int nTables = 0;
+      int iFormat = 0;
+      int i;
+      if( catalogParseHeaderEx(p->pCatalogCache, p->nCatalogCache,
+                               &iFormat, &nTables, &q)
+       && nTables==p->cat.n ){
+        rc = SQLITE_OK;
+        for(i=0; i<nTables; i++){
+          Pgno iTable;
+          u8 flags;
+          int nSkip;
+          struct TableEntry *pTE;
+          if( q + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+              + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE
+              > p->pCatalogCache + p->nCatalogCache ){
+            rc = SQLITE_CORRUPT;
+            break;
+          }
+          iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+          pTE = &p->cat.a[i];
+          if( pTE->iTable!=iTable ){
+            rc = SQLITE_NOTFOUND;
+            break;
+          }
+          if( pTE->pPending ){
+            prollyMutMapFree(pTE->pPending);
+            sqlite3_free(pTE->pPending);
+            pTE->pPending = 0;
+          }
+          q += CAT_ENTRY_ITABLE_SIZE;
+          flags = *q++;
+          pTE->flags = flags;
+          memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
+          q += PROLLY_HASH_SIZE;
+          memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
+          q += PROLLY_HASH_SIZE;
+          if( iFormat==CATALOG_FORMAT_V4 ){
+            int nType, nName, nTbl;
+            if( q + 6 > p->pCatalogCache + p->nCatalogCache ){
+              rc = SQLITE_CORRUPT;
+              break;
+            }
+            nType = q[0] | (q[1]<<8);
+            nName = q[2] | (q[3]<<8);
+            nTbl = q[4] | (q[5]<<8);
+            q += 6;
+            nSkip = nType + nName + nTbl;
+          }else{
+            if( q + 2 > p->pCatalogCache + p->nCatalogCache ){
+              rc = SQLITE_CORRUPT;
+              break;
+            }
+            nSkip = q[0] | (q[1]<<8);
+            q += 2;
+          }
+          if( nSkip<0 || q + nSkip > p->pCatalogCache + p->nCatalogCache ){
+            rc = SQLITE_CORRUPT;
+            break;
+          }
+          q += nSkip;
+        }
+        if( rc==SQLITE_OK && q!=p->pCatalogCache+p->nCatalogCache ){
+          rc = SQLITE_CORRUPT;
+        }
+      }
+    }
+    if( rc==SQLITE_NOTFOUND ){
+      rc = chunkStoreGet(&p->pBt->store, &p->committedCatalogHash,
+                         &catData, &nCatData);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = deserializeCatalog(p, catData, nCatData);
+      sqlite3_free(catData);
+    }
     if( rc!=SQLITE_OK ) return rc;
   }
   p->stagedCatalog = p->committedStagedCatalog;
@@ -5585,6 +5683,12 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
+      if( bAutocommitOomRollback ){
+        p->inTrans = TRANS_NONE;
+        p->inTransaction = TRANS_NONE;
+        btreeDiscardAllSavepoints(p);
+        chunkStoreRollback(&pBt->store);
+      }
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
       return rc;
@@ -5691,6 +5795,12 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
   return p->pOps->xBeginStmt(p, iStatement);
 }
 
+int doltliteBtreeCaptureStatement(void *pArg){
+  Btree *p = (Btree*)pArg;
+  if( !p || p->pOps!=&prollyBtreeOps ) return SQLITE_OK;
+  return ensureStatementSavepointsCaptured(p);
+}
+
 static int rollbackCommittedState(Btree *p, BtShared *pBt){
   BtCursor *pC;
   int rc = restoreFromCommitted(p);
@@ -5766,7 +5876,6 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   BtCursor *pC;
   int j;
   int rc;
-
   /* Save every cursor's position before unwinding the savepoint, mirroring
   ** stock sqlite3BtreeSavepoint's saveAllCursors() call. A statement-savepoint
   ** rollback (a nested statement that failed) must leave the *parent*
@@ -5774,8 +5883,23 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   ** faulting all cursors here aborts the parent and discards rows it already
   ** inserted (tkt3718). Saved cursors become CURSOR_REQUIRESEEK and re-seek the
   ** restored tree on next access. */
-  rc = saveAllCursors(p, pBt, 0, 0);
-  if( rc!=SQLITE_OK ) return rc;
+  if( p->db && p->db->mallocFailed ){
+    for(pC=pBt->pCursor; pC; pC=pC->pNext){
+      if( pC->pBtree!=p ) continue;
+      pC->eState = CURSOR_FAULT;
+      pC->skipNext = SQLITE_NOMEM;
+      pC->mmActive = 0;
+      pC->mmPhysActive = 0;
+      pC->deferredTreeSeek = 0;
+      pC->mmIdx = -1;
+      pC->mmPhysIdx = -1;
+      pC->pMutMap = 0;
+      prollyCursorReleaseAll(&pC->pCur);
+    }
+  }else{
+    rc = saveAllCursors(p, pBt, 0, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
   if( rc!=SQLITE_OK ) return rc;

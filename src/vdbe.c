@@ -4422,7 +4422,11 @@ case OP_Transaction: {
 
     if( p->usesStmtJournal
      && pOp->p2
-     && (db->autoCommit==0 || db->nVdbeRead>1)
+     && (db->autoCommit==0 || db->nVdbeRead>1
+#if defined(DOLTLITE_PROLLY)
+         || p->hasVUpdate
+#endif
+        )
     ){
       assert( sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE );
       if( p->iStatement==0 ){
@@ -4430,7 +4434,6 @@ case OP_Transaction: {
         db->nStatement++;
         p->iStatement = db->nSavepoint + db->nStatement;
       }
-
       if( db->nVtabSavepoint==0 ){
         rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
       }else{
@@ -4439,6 +4442,11 @@ case OP_Transaction: {
       if( rc==SQLITE_OK ){
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
+#if defined(DOLTLITE_PROLLY)
+      if( rc==SQLITE_OK && p->hasVUpdate ){
+        rc = doltliteBtreeCaptureStatement(pBt);
+      }
+#endif
 
       /* Store the current value of the database handles deferred constraint
       ** counter. If the statement transaction needs to be rolled back,

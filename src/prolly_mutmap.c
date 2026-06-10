@@ -336,11 +336,13 @@ static int rebuildHash(ProllyMutMap *mm){
   int i;
   int nHash = MUTMAP_MIN_HASH;
   while( nHash < (mm->nEntries > 0 ? mm->nEntries * 2 : 1) ) nHash *= 2;
-  if( nHash != mm->nHashAlloc ){
+  if( nHash > mm->nHashAlloc ){
     int *aNew = sqlite3_realloc(mm->aHash, nHash * sizeof(int));
     if( !aNew ) return SQLITE_NOMEM;
     mm->aHash = aNew;
     mm->nHashAlloc = nHash;
+  }else if( mm->nHashAlloc==0 ){
+    return SQLITE_OK;
   }
   memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
   for(i=0; i<mm->nEntries; i++){
@@ -755,6 +757,11 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
   int rc;
   if( !mm ) return SQLITE_OK;
 
+  if( mm->nEntries==0 && mm->nUndo==0 ){
+    mm->currentSavepointLevel = level - 1;
+    return SQLITE_OK;
+  }
+
   while( mm->nUndo > 0
       && mm->aUndo[mm->nUndo - 1].level >= level ){
     ProllyMutMapUndoRec *rec = &mm->aUndo[mm->nUndo - 1];
@@ -773,30 +780,29 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
 
   {
     int oldN = mm->nEntries;
-    int *aMap = 0;
     int newN = 0;
-    if( oldN > 0 ){
-      aMap = sqlite3_malloc(oldN * sizeof(int));
-      if( !aMap ) return SQLITE_NOMEM;
-    }
     for(i=0; i<oldN; i++){
       if( decodeLevel(mm, mm->aEntries[i].bornAt) >= level ){
         freeEntryData(&mm->aEntries[i]);
-        aMap[i] = -1;
+        mm->aPos[i] = -1;
       }else{
         if( newN != i ){
           mm->aEntries[newN] = mm->aEntries[i];
           fixInlineKeyPtr(&mm->aEntries[newN]);
         }
-        aMap[i] = newN++;
+        mm->aPos[i] = newN++;
       }
     }
     {
       int j;
       int out = 0;
+      for(j=0; j<mm->nUndo; j++){
+        int idx = mm->aUndo[j].entryIdx;
+        mm->aUndo[j].entryIdx = idx>=0 && idx<oldN ? mm->aPos[idx] : -1;
+      }
       if( mm->keepSorted ){
         for(j=0; j<oldN; j++){
-          int mapped = aMap[mm->aOrder[j]];
+          int mapped = mm->aPos[mm->aOrder[j]];
           if( mapped >= 0 ){
             mm->aOrder[out++] = mapped;
           }
@@ -812,11 +818,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
         mm->posDirty = 1;
         mm->appendSorted = 0;
       }
-      for(j=0; j<mm->nUndo; j++){
-        mm->aUndo[j].entryIdx = aMap[mm->aUndo[j].entryIdx];
-      }
     }
-    sqlite3_free(aMap);
   }
 
   if( !mm->keepSorted ){

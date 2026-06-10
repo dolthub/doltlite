@@ -250,5 +250,82 @@ do_test doltlite_fts3_oom-3.4 {
   list $bad $drop
 } {ok {0 {}}}
 
+do_test doltlite_fts3_oom-4.0 {
+  set zChild [file join [pwd] doltlite_fts3_oom_child.tcl]
+  set fd [open $zChild w]
+  puts $fd {
+    proc catchsql {sql} {
+      set rc [catch {db eval $sql} msg]
+      return [list $rc $msg]
+    }
+    sqlite3 db :memory:
+    sqlite3_db_config_lookaside db 0 0 0
+    db eval {CREATE VIRTUAL TABLE ft_rollback USING fts3(a, b)}
+    for {set ii 1} {$ii < 32} {incr ii} {
+      set a [list]
+      set b [list]
+      if {$ii & 0x01} {lappend a one   ; lappend b neung}
+      if {$ii & 0x02} {lappend a two   ; lappend b song }
+      if {$ii & 0x04} {lappend a three ; lappend b sahm }
+      if {$ii & 0x08} {lappend a four  ; lappend b see  }
+      if {$ii & 0x10} {lappend a five  ; lappend b hah  }
+      db eval {INSERT INTO ft_rollback VALUES($a, $b)}
+    }
+    db eval BEGIN
+    for {set ii 32} {$ii < 1024} {incr ii} {
+      set a [list]
+      set b [list]
+      if {$ii & 0x0001} {lappend a one   ; lappend b neung }
+      if {$ii & 0x0002} {lappend a two   ; lappend b song  }
+      if {$ii & 0x0004} {lappend a three ; lappend b sahm  }
+      if {$ii & 0x0008} {lappend a four  ; lappend b see   }
+      if {$ii & 0x0010} {lappend a five  ; lappend b hah   }
+      if {$ii & 0x0020} {lappend a six   ; lappend b hok   }
+      if {$ii & 0x0040} {lappend a seven ; lappend b jet   }
+      if {$ii & 0x0080} {lappend a eight ; lappend b bairt }
+      if {$ii & 0x0100} {lappend a nine  ; lappend b gow   }
+      if {$ii & 0x0200} {lappend a ten   ; lappend b sip   }
+      db eval {INSERT INTO ft_rollback VALUES($a, $b)}
+    }
+    db eval COMMIT
+    db eval {DELETE FROM ft_rollback WHERE docid>=32}
+
+    proc write_test {tbl sql} {
+      db eval "SELECT * FROM $tbl" V break
+      set cksumsql "SELECT md5sum([join [concat rowid $V(*)] ,]) FROM $tbl"
+      set cksum1 [db one $cksumsql]
+      foreach iFail {104 138 217 222 255} {
+        sqlite3_memdebug_fail $iFail -repeat 100000
+        set res [catchsql $sql]
+        set nFail [sqlite3_memdebug_fail -1 -benigncnt nBenign]
+        set cksum2 [db one $cksumsql]
+        if {$nFail>0 && ($res!="1 {out of memory}" || $cksum1 ne $cksum2)} {
+          puts [list fail $iFail $res $nFail $cksum1 $cksum2]
+          exit 1
+        }
+      }
+      set res [catchsql $sql]
+      if {$res!="0 {}"} {
+        puts [list fail final $res]
+        exit 1
+      }
+    }
+
+    write_test ft_rollback_content {DELETE FROM ft_rollback WHERE ft_rollback MATCH 'one'}
+    write_test ft_rollback_content {DELETE FROM ft_rollback WHERE ft_rollback MATCH 'three'}
+    write_test ft_rollback_content {DELETE FROM ft_rollback WHERE ft_rollback MATCH 'five'}
+    set rows [db eval {SELECT a FROM ft_rollback}]
+    if {$rows ne [list two four {two four}]} {
+      puts [list fail rows $rows]
+      exit 1
+    }
+    puts ok
+  }
+  close $fd
+  set rc [catch {exec [info nameofexecutable] $zChild} out]
+  forcedelete $zChild
+  list $rc $out
+} {0 ok}
+
 sqlite3_memdebug_fail -1
 finish_test

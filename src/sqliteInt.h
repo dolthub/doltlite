@@ -5697,6 +5697,7 @@ void sqlite3VtabEponymousTableClear(sqlite3*,Module*);
 void sqlite3VtabMakeWritable(Parse*,Table*);
 #ifdef DOLTLITE_PROLLY
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
+int doltliteBtreeCaptureStatement(void*);
 #endif
 void sqlite3VtabBeginParse(Parse*, Token*, Token*, Token*, int);
 void sqlite3VtabFinishParse(Parse*, Token*);

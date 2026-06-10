@@ -506,6 +506,9 @@ struct Vdbe {
   bft explain:2;          /* 0: normal, 1: EXPLAIN, 2: EXPLAIN QUERY PLAN */
   bft changeCntOn:1;      /* True to update the change-counter */
   bft usesStmtJournal:1;  /* True if uses a statement journal */
+#if defined(DOLTLITE_PROLLY)
+  bft hasVUpdate:1;       /* True if program invokes virtual-table xUpdate */
+#endif
   bft readOnly:1;         /* True for statements that do not write */
   bft bIsReader:1;        /* True for statements that read */
   bft haveEqpOps:1;       /* Bytecode supports EXPLAIN QUERY PLAN */

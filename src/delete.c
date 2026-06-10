@@ -666,12 +666,17 @@ void sqlite3DeleteFrom(
       const char *pVTab = (const char *)sqlite3GetVTable(db, pTab);
       sqlite3VtabMakeWritable(pParse, pTab);
       assert( eOnePass==ONEPASS_OFF || eOnePass==ONEPASS_SINGLE );
+#if defined(DOLTLITE_PROLLY)
+      sqlite3MultiWrite(pParse);
+#endif
       sqlite3MayAbort(pParse);
       if( eOnePass==ONEPASS_SINGLE ){
         sqlite3VdbeAddOp1(v, OP_Close, iTabCur);
+#if !defined(DOLTLITE_PROLLY)
         if( sqlite3IsToplevel(pParse) ){
           pParse->isMultiWrite = 0;
         }
+#endif
       }
       sqlite3VdbeAddOp4(v, OP_VUpdate, 0, 1, iKey, pVTab, P4_VTAB);
       sqlite3VdbeChangeP5(v, OE_Abort);
