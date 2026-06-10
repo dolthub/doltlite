@@ -269,6 +269,16 @@ int sqlite3VdbeAddOp1(Vdbe *p, int op, int p1){
 int sqlite3VdbeAddOp2(Vdbe *p, int op, int p1, int p2){
   return sqlite3VdbeAddOp3(p, op, p1, p2, 0);
 }
+#if defined(DOLTLITE_PROLLY)
+static void doltliteVdbeMarkVtabWrite(Vdbe *p, int op){
+#ifndef SQLITE_OMIT_VIRTUALTABLE
+  if( op==OP_VUpdate || op==OP_VCreate || op==OP_VDestroy
+   || op==OP_VRename ){
+    p->hasVtabWrite = 1;
+  }
+#endif
+}
+#endif
 int sqlite3VdbeAddOp3(Vdbe *p, int op, int p1, int p2, int p3){
   int i;
   VdbeOp *pOp;
@@ -279,6 +289,9 @@ int sqlite3VdbeAddOp3(Vdbe *p, int op, int p1, int p2, int p3){
   if( p->nOpAlloc<=i ){
     return growOp3(p, op, p1, p2, p3);
   }
+#if defined(DOLTLITE_PROLLY)
+  doltliteVdbeMarkVtabWrite(p, op);
+#endif
   assert( p->aOp!=0 );
   p->nOp++;
   pOp = &p->aOp[i];
@@ -329,6 +342,9 @@ int sqlite3VdbeAddOp4Int(
   if( p->nOpAlloc<=i ){
     return addOp4IntSlow(p, op, p1, p2, p3, p4);
   }
+#if defined(DOLTLITE_PROLLY)
+  doltliteVdbeMarkVtabWrite(p, op);
+#endif
   p->nOp++;
   pOp = &p->aOp[i];
   assert( pOp!=0 );
@@ -925,7 +941,7 @@ static void resolveP2Values(Vdbe *p, int *pMaxVtabArgs){
 #ifndef SQLITE_OMIT_VIRTUALTABLE
         case OP_VUpdate: {
 #if defined(DOLTLITE_PROLLY)
-          p->hasVUpdate = 1;
+          p->hasVtabWrite = 1;
 #endif
           if( pOp->p2>nMaxVtabArgs ) nMaxVtabArgs = pOp->p2;
           break;

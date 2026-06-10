@@ -507,7 +507,7 @@ struct Vdbe {
   bft changeCntOn:1;      /* True to update the change-counter */
   bft usesStmtJournal:1;  /* True if uses a statement journal */
 #if defined(DOLTLITE_PROLLY)
-  bft hasVUpdate:1;       /* True if program invokes virtual-table xUpdate */
+  bft hasVtabWrite:1;     /* True if program invokes a virtual-table writer */
 #endif
   bft readOnly:1;         /* True for statements that do not write */
   bft bIsReader:1;        /* True for statements that read */

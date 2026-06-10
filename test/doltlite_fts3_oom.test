@@ -120,6 +120,20 @@ foreach {tn iFail sql okres} {
   } {1}
 }
 
+do_test doltlite_fts3_oom-2.3 {
+  set bad ok
+  for {set iFail 1} {$iFail<=25 && $bad=="ok"} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 1
+    set res [catchsql {SELECT count(*) FROM sqlite_master}]
+    sqlite3_memdebug_fail -1
+    set ft [catchsql {SELECT count(*) FROM ft}]
+    if {($res!="1 {out of memory}" && $res!="0 4") || $ft!="0 31"} {
+      set bad [list $iFail $res $ft]
+    }
+  }
+  set bad
+} {ok}
+
 do_test doltlite_fts3_oom-3.1 {
   set bad ok
   for {set iFail 1} {$iFail<=340 && $bad=="ok"} {incr iFail} {
@@ -249,6 +263,36 @@ do_test doltlite_fts3_oom-3.4 {
   forcedelete test4.db
   list $bad $drop
 } {ok {0 {}}}
+
+do_test doltlite_fts3_oom-3.5 {
+  forcedelete test5.db
+  sqlite3 db5 test5.db
+  sqlite3_db_config_lookaside db5 0 0 0
+
+  db5 eval {CREATE VIRTUAL TABLE ft1 USING fts3(a, b)}
+  db5 eval "SELECT * FROM sqlite_master" V break
+  set cksumsql "SELECT md5sum([join [concat rowid $V(*)] ,]) FROM sqlite_master"
+  set cksum1 [db5 one $cksumsql]
+
+  sqlite3_memdebug_fail 60 -repeat 100000
+  set res [catchsql {
+    CREATE VIRTUAL TABLE ft2 USING fts3([a], [b])
+  } db5]
+  set nFail [sqlite3_memdebug_fail -1 -benigncnt nBenign]
+  set q2 [catch {db5 one $cksumsql} cksum2]
+  set integrity [catchsql {PRAGMA integrity_check} db5]
+  set ft1 [catchsql {SELECT count(*) FROM ft1} db5]
+  set ft2 [catchsql {SELECT count(*) FROM ft2} db5]
+  catch {db5 close}
+  forcedelete test5.db
+
+  list [expr {$res=="1 {out of memory}" && $nFail>0}] \
+       $q2 \
+       [expr {!$q2 && $cksum1 eq $cksum2}] \
+       $integrity \
+       $ft1 \
+       $ft2
+} {1 0 1 {0 ok} {0 0} {1 {no such table: ft2}}}
 
 do_test doltlite_fts3_oom-4.0 {
   set zChild [file join [pwd] doltlite_fts3_oom_child.tcl]

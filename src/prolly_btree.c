@@ -333,6 +333,7 @@ struct Btree {
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
+  ProllyHash committedMasterRoot;
   ProllyHash committedStagedCatalog;
   u8 committedIsMerging;
   ProllyHash committedMergeCommitHash;
@@ -423,6 +424,7 @@ struct BtCursor {
 static struct TableEntry *catFind(Catalog *cat, Pgno iTable);
 static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags);
 static void catRemove(Catalog *cat, Pgno iTable);
+static void catClear(Catalog *cat);
 static void catFree(Catalog *cat);
 static int btreeLoadBranchHeadCatalog(ChunkStore *cs, const char *zBranch,
                                       ProllyHash *pCatHash,
@@ -436,6 +438,9 @@ static inline struct TableEntry *addTable(Btree *p, Pgno iTable, u8 flags){
 }
 static inline void removeTable(Btree *p, Pgno iTable){
   catRemove(&p->cat, iTable);
+}
+static inline void btreeClearCatalogTables(Btree *p){
+  catClear(&p->cat);
 }
 static inline void btreeFreeCatalogTables(Btree *p){
   catFree(&p->cat);
@@ -1082,6 +1087,14 @@ static struct TableEntry *catFind(Catalog *cat, Pgno iTable){
   return 0;
 }
 
+static int tableEntryCmpByRoot(const void *a, const void *b){
+  const struct TableEntry *ea = (const struct TableEntry*)a;
+  const struct TableEntry *eb = (const struct TableEntry*)b;
+  if( ea->iTable < eb->iTable ) return -1;
+  if( ea->iTable > eb->iTable ) return 1;
+  return 0;
+}
+
 static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
   struct TableEntry *pEntry;
 
@@ -1145,6 +1158,22 @@ static void catRemove(Catalog *cat, Pgno iTable){
       return;
     }
   }
+}
+
+static void catClear(Catalog *cat){
+  int k;
+  for(k=0; k<cat->n; k++){
+    sqlite3_free(cat->a[k].zName);
+    cat->a[k].zName = 0;
+    if( cat->a[k].pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)cat->a[k].pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      cat->a[k].pPending = 0;
+    }
+  }
+  cat->n = 0;
+  cat->iNextTable = 0;
 }
 
 static void catFree(Catalog *cat){
@@ -2618,6 +2647,111 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   btreeFreeCatalogTables(pBtree);
   pBtree->cat = catNew;
   memcpy(pBtree->aMeta, aMetaNew, sizeof(aMetaNew));
+  return SQLITE_OK;
+}
+
+static int restoreCatalogFromCacheNoAlloc(Btree *pBtree){
+  const u8 *data = pBtree->pCatalogCache;
+  int nData = pBtree->nCatalogCache;
+  const u8 *q = data;
+  int nTables = 0;
+  int iFormat = 0;
+  int i;
+  Pgno maxCatalogTable = 0;
+
+  if( !data || nData<=0 ) return SQLITE_NOTFOUND;
+  if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &q) ){
+    return SQLITE_CORRUPT;
+  }
+  if( nTables > pBtree->cat.nAlloc ){
+    return SQLITE_NOTFOUND;
+  }
+
+  for(i=0; i<nTables; i++){
+    int nSkip;
+    if( q + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+        + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE > data+nData ){
+      return SQLITE_CORRUPT;
+    }
+    q += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+       + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      if( q + 6 > data+nData ) return SQLITE_CORRUPT;
+      nType = q[0] | (q[1]<<8);
+      nName = q[2] | (q[3]<<8);
+      nTbl = q[4] | (q[5]<<8);
+      q += 6;
+      nSkip = nType + nName + nTbl;
+    }else{
+      if( q + 2 > data+nData ) return SQLITE_CORRUPT;
+      nSkip = q[0] | (q[1]<<8);
+      q += 2;
+    }
+    if( nSkip<0 || q+nSkip > data+nData ) return SQLITE_CORRUPT;
+    q += nSkip;
+  }
+  if( q!=data+nData ) return SQLITE_CORRUPT;
+
+  for(i=0; i<pBtree->cat.n; i++){
+    sqlite3_free(pBtree->cat.a[i].zName);
+    pBtree->cat.a[i].zName = 0;
+    if( pBtree->cat.a[i].pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[i].pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pBtree->cat.a[i].pPending = 0;
+    }
+  }
+  memset(pBtree->cat.a, 0, nTables * sizeof(struct TableEntry));
+  q = data + CAT_HEADER_SIZE_V3;
+  for(i=0; i<nTables; i++){
+    Pgno iTable;
+    u8 flags;
+    struct TableEntry *pTE = &pBtree->cat.a[i];
+    iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+    q += CAT_ENTRY_ITABLE_SIZE;
+    flags = *q++;
+    pTE->iTable = iTable;
+    pTE->flags = flags;
+    if( iTable>maxCatalogTable ) maxCatalogTable = iTable;
+    memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      const u8 *pType;
+      nType = q[0] | (q[1]<<8); q += 2;
+      nName = q[0] | (q[1]<<8); q += 2;
+      nTbl = q[0] | (q[1]<<8); q += 2;
+      pType = q;
+      q += nType + nName + nTbl;
+      pTE->tableRootKnown = 1;
+      pTE->isTableRoot = nType==5 && memcmp(pType, "table", 5)==0 && nName>0;
+    }else{
+      int nLen = q[0] | (q[1]<<8);
+      q += 2 + nLen;
+    }
+  }
+  pBtree->cat.n = nTables;
+  if( pBtree->cat.n>1 ){
+    qsort(pBtree->cat.a, pBtree->cat.n, sizeof(struct TableEntry),
+          tableEntryCmpByRoot);
+  }
+  pBtree->cat.iNextTable = maxCatalogTable + 1;
+  initDefaultMeta(pBtree);
+  pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxCatalogTable;
+  {
+    ProllyHash h;
+    u32 schemaHash;
+    prollyHashCompute(data, nData, &h);
+    schemaHash = ((u32)h.data[0])
+               | ((u32)h.data[1] << 8)
+               | ((u32)h.data[2] << 16)
+               | ((u32)h.data[3] << 24);
+    pBtree->aMeta[BTREE_SCHEMA_VERSION] = schemaHash | 1;
+  }
   return SQLITE_OK;
 }
 
@@ -5117,8 +5251,15 @@ static int btreeReloadBranchWorkingStateInto(
 }
 
 static void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
+  struct TableEntry *pMaster;
   if( pCatHash ){
     p->committedCatalogHash = *pCatHash;
+  }
+  pMaster = findTable(p, 1);
+  if( pMaster ){
+    p->committedMasterRoot = pMaster->root;
+  }else{
+    memset(&p->committedMasterRoot, 0, sizeof(p->committedMasterRoot));
   }
   p->committedStagedCatalog = p->stagedCatalog;
   p->committedIsMerging = p->isMerging;
@@ -5323,7 +5464,10 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash catHash;
+  ProllyHash runtimeMasterRoot;
+  int bReloadSchema = 0;
   (void)bCleanup;
+  memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
 
   /* Catalog serialization runs a SELECT whose finalize re-enters
   ** commit/rollback; that nested call is read-only, so no-op it instead of
@@ -5385,27 +5529,37 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       }
     }
 
+    bReloadSchema = p->bSchemaChangedTxn;
+    if( bReloadSchema ){
+      rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(catData);
+        chunkStoreRollback(&pBt->store);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
+    }
+
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
-      int bReloadSchema = p->bSchemaChangedTxn;
-      ProllyHash runtimeMasterRoot;
-      memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
       p->committedCatalogHash = catHash;
       p->committedStagedCatalog = p->stagedCatalog;
       p->committedIsMerging = p->isMerging;
       p->committedMergeCommitHash = p->mergeCommitHash;
       p->committedConflictsCatalogHash = p->conflictsCatalogHash;
       p->committedConstraintViolationsHash = p->constraintViolationsHash;
+      {
+        struct TableEntry *pMaster = findTable(p, 1);
+        if( pMaster ){
+          p->committedMasterRoot = pMaster->root;
+        }else{
+          memset(&p->committedMasterRoot, 0, sizeof(p->committedMasterRoot));
+        }
+      }
       btreeMarkWorkingStateChanged(p);
       if( bReloadSchema ){
         BtCursor *pC;
-        rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(catData);
-          chunkStoreUnlock(&pBt->store);
-          pBt->store.snapshotPinned = 0;
-          return rc;
-        }
         /* A statement can still be mid-scan here (a callback ran DDL in
         ** autocommit — tkt3080). Save this handle's cursors so it survives
         ** the catalog reload; fault only what can't be saved. The reload
@@ -5440,7 +5594,10 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
         }
         {
           struct TableEntry *pMaster = findTable(p, 1);
-          if( pMaster ) pMaster->root = runtimeMasterRoot;
+          if( pMaster ){
+            pMaster->root = runtimeMasterRoot;
+            p->committedMasterRoot = runtimeMasterRoot;
+          }
         }
         /* A saved cursor whose table vanished in the reload would re-seek a
         ** stale root; fault it. */
@@ -5531,7 +5688,7 @@ int sqlite3BtreeCommit(Btree *p){
 
 static int restoreFromCommitted(Btree *p){
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
-    btreeFreeCatalogTables(p);
+    btreeClearCatalogTables(p);
     initDefaultMeta(p);
     p->cat.iNextTable = 2;
   }else{
@@ -5540,15 +5697,15 @@ static int restoreFromCommitted(Btree *p){
     int rc = SQLITE_NOTFOUND;
     if( p->pCatalogCache
      && p->nCatalogCache>0
-     && !p->bSchemaChangedTxn
-     && !p->bMasterRootChangedTxn
      && prollyHashCompare(&p->catalogCacheHash,
                           &p->committedCatalogHash)==0 ){
       const u8 *q;
       int nTables = 0;
       int iFormat = 0;
       int i;
-      if( catalogParseHeaderEx(p->pCatalogCache, p->nCatalogCache,
+      if( !p->bSchemaChangedTxn
+       && !p->bMasterRootChangedTxn
+       && catalogParseHeaderEx(p->pCatalogCache, p->nCatalogCache,
                                &iFormat, &nTables, &q)
        && nTables==p->cat.n ){
         rc = SQLITE_OK;
@@ -5610,6 +5767,9 @@ static int restoreFromCommitted(Btree *p){
           rc = SQLITE_CORRUPT;
         }
       }
+      if( rc==SQLITE_NOTFOUND ){
+        rc = restoreCatalogFromCacheNoAlloc(p);
+      }
     }
     if( rc==SQLITE_NOTFOUND ){
       rc = chunkStoreGet(&p->pBt->store, &p->committedCatalogHash,
@@ -5619,6 +5779,10 @@ static int restoreFromCommitted(Btree *p){
       sqlite3_free(catData);
     }
     if( rc!=SQLITE_OK ) return rc;
+  }
+  if( !prollyHashIsEmpty(&p->committedMasterRoot) ){
+    struct TableEntry *pMaster = findTable(p, 1);
+    if( pMaster ) pMaster->root = p->committedMasterRoot;
   }
   p->stagedCatalog = p->committedStagedCatalog;
   p->isMerging = p->committedIsMerging;
@@ -5693,7 +5857,9 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       pBt->store.snapshotPinned = 0;
       return rc;
     }
-    resetConnectionSchema(p);
+    if( !bAutocommitOomRollback ){
+      resetConnectionSchema(p);
+    }
     chunkStoreRollback(&pBt->store);
     if( bAutocommitOomRollback ){
       p->bFilterSchemaPlaceholders = 1;

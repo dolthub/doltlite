@@ -4424,7 +4424,7 @@ case OP_Transaction: {
      && pOp->p2
      && (db->autoCommit==0 || db->nVdbeRead>1
 #if defined(DOLTLITE_PROLLY)
-         || p->hasVUpdate
+         || p->hasVtabWrite
 #endif
         )
     ){
@@ -4443,7 +4443,7 @@ case OP_Transaction: {
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
 #if defined(DOLTLITE_PROLLY)
-      if( rc==SQLITE_OK && p->hasVUpdate ){
+      if( rc==SQLITE_OK && p->hasVtabWrite ){
         rc = doltliteBtreeCaptureStatement(pBt);
       }
 #endif
