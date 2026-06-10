@@ -270,6 +270,7 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
 );
 int sqlite3BtreeProllyIndexRowid(BtCursor*, i64*);
 void sqlite3BtreeProllyClearCompareKey(BtCursor*);
+int sqlite3BtreeIncrblobCursorReseek(BtCursor*);
 #endif
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 int sqlite3BtreeUsesOrig(Btree*);

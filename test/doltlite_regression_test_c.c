@@ -7578,6 +7578,89 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   chunkStoreClose(&cs);
 }
 
+/* Issue #1319: each incrblob write re-inserts the row, which saved every
+** cursor on the table including the writer's own. The next operation on any
+** handle then aborted, and a second write patched a stale base value,
+** silently dropping the first write. */
+static void run_incrblob_chunked_and_multihandle(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3_blob *h1 = 0, *h2 = 0;
+  char buf[8];
+  int rc;
+
+  printf("=== Incrblob Chunked Record And Multi-Handle Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_incrblob_chunked");
+  removeDbFiles(dbpath);
+
+  check("incrblob_open_db", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+  check("incrblob_setup", execSql(db,
+      "CREATE TABLE t(k INTEGER PRIMARY KEY, v BLOB);"
+      "INSERT INTO t VALUES(1, zeroblob(5000));"
+      "INSERT INTO t VALUES(2, zeroblob(20));")==SQLITE_OK);
+
+  /* Write spanning the first chunk boundary of a chunked record. */
+  check("incrblob_open_h1", sqlite3_blob_open(db, "main", "t", "v", 1, 1, &h1)==SQLITE_OK);
+  check("incrblob_open_h2", sqlite3_blob_open(db, "main", "t", "v", 1, 1, &h2)==SQLITE_OK);
+  check("incrblob_first_write", sqlite3_blob_write(h2, "SQLite", 6, 4094)==SQLITE_OK);
+  check("incrblob_second_write", sqlite3_blob_write(h2, "again!", 6, 10)==SQLITE_OK);
+  memset(buf, 0, sizeof(buf));
+  check("incrblob_other_handle_read", sqlite3_blob_read(h1, buf, 6, 4094)==SQLITE_OK);
+  check("incrblob_other_handle_sees_write", memcmp(buf, "SQLite", 6)==0);
+  memset(buf, 0, sizeof(buf));
+  check("incrblob_writer_read_back", sqlite3_blob_read(h2, buf, 6, 4094)==SQLITE_OK
+      && memcmp(buf, "SQLite", 6)==0);
+  sqlite3_blob_close(h1); h1 = 0;
+  sqlite3_blob_close(h2); h2 = 0;
+  check("incrblob_size_intact",
+      strcmp(queryScalarText(db, "SELECT length(v) FROM t WHERE k=1"), "5000")==0);
+  check("incrblob_data_landed",
+      strcmp(queryScalarText(db,
+        "SELECT CAST(substr(v,4095,6) AS TEXT) FROM t WHERE k=1"), "SQLite")==0);
+  check("incrblob_first_write_survives_second",
+      strcmp(queryScalarText(db,
+        "SELECT CAST(substr(v,11,6) AS TEXT) || CAST(substr(v,4095,6) AS TEXT)"
+        " FROM t WHERE k=1"), "again!SQLite")==0);
+
+  /* A SQL write to the open row must invalidate the handle (stock
+  ** invalidateIncrblobCursors); a write to another row must not. */
+  check("incrblob_reopen_h1", sqlite3_blob_open(db, "main", "t", "v", 2, 0, &h1)==SQLITE_OK);
+  check("incrblob_other_row_update", execSql(db,
+      "UPDATE t SET v = zeroblob(5001) WHERE k=1")==SQLITE_OK);
+  check("incrblob_survives_other_row", sqlite3_blob_read(h1, buf, 2, 0)==SQLITE_OK);
+  check("incrblob_open_row_update", execSql(db,
+      "UPDATE t SET v = zeroblob(21) WHERE k=2")==SQLITE_OK);
+  rc = sqlite3_blob_read(h1, buf, 2, 0);
+  check("incrblob_aborted_after_sql_write", rc==SQLITE_ABORT);
+  sqlite3_blob_close(h1); h1 = 0;
+
+  check("incrblob_reopen_h2", sqlite3_blob_open(db, "main", "t", "v", 2, 0, &h2)==SQLITE_OK);
+  check("incrblob_delete_open_row", execSql(db, "DELETE FROM t WHERE k=2")==SQLITE_OK);
+  rc = sqlite3_blob_read(h2, buf, 2, 0);
+  check("incrblob_aborted_after_delete", rc==SQLITE_ABORT);
+  sqlite3_blob_close(h2); h2 = 0;
+
+  /* Blob write on a row still pending in the transaction's mutmap: the
+  ** re-insert key must come from the merge view, not the tree cursor. */
+  check("incrblob_pending_setup", execSql(db,
+      "BEGIN; INSERT INTO t VALUES(4, zeroblob(20));")==SQLITE_OK);
+  check("incrblob_pending_open", sqlite3_blob_open(db, "main", "t", "v", 4, 1, &h1)==SQLITE_OK);
+  check("incrblob_pending_write", h1 && sqlite3_blob_write(h1, "HELLO!", 6, 7)==SQLITE_OK);
+  memset(buf, 0, sizeof(buf));
+  check("incrblob_pending_read", h1 && sqlite3_blob_read(h1, buf, 6, 7)==SQLITE_OK
+      && memcmp(buf, "HELLO!", 6)==0);
+  if( h1 ) sqlite3_blob_close(h1);
+  check("incrblob_pending_commit", execSql(db, "COMMIT;")==SQLITE_OK);
+  check("incrblob_pending_durable",
+      strcmp(queryScalarText(db,
+        "SELECT CAST(substr(v,8,6) AS TEXT) || '/' || length(v) FROM t WHERE k=4"),
+        "HELLO!/20")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
@@ -7705,7 +7788,8 @@ static const RegressionCase aCases[] = {
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node },
   { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
-  { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption }
+  { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
+  { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle }
 };
 
 static int run_case_by_name(const char *zName){
