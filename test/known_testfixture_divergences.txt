@@ -959,10 +959,6 @@ savepoint savepoint-15.1.2
 savepoint savepoint-15.1.3
 savepoint savepoint-15.2.2
 savepoint savepoint-15.2.3
-
-# Isolated savepoint-17.1 passes. In the full file it observes state left by
-# the earlier lock-divergent multi-client blocks.
-savepoint savepoint-17.1
 select2 select2-3.3  # sqlite_search_count metric; SELECT f1 WHERE f2==2000 returns 1000 on both
 # trans-9.*: the ".5" labels assert sqlite_fullsync_count/sqlite_sync_count > 0 —
 # SQLite-pager fsync instrumentation that doltlite's prolly backend never drives
