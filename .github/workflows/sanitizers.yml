@@ -82,3 +82,23 @@ jobs:
 
     - name: Correctness regression tests
       run: cd build && bash ../test/correctness_test.sh ./doltlite
+
+    # The C regression corpus (~310k checks) under ASan/UBSan with leak
+    # detection — where the #1325/#1328 use-after-frees and leaks lived.
+    # Reuses the objects built above; only the archive and link are new.
+    # No stdbuf here: its LD_PRELOAD loads ahead of the ASan runtime and
+    # aborts the process. Buffered stdout is lost if LSan exits nonzero,
+    # but the sanitizer report itself goes to unbuffered stderr.
+    - name: C regression corpus (ASan/UBSan)
+      run: |
+        cd build
+        make \
+          CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
+          LDFLAGS="-fsanitize=address,undefined" \
+          libdoltlite.a
+        cc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all \
+          -I. -I../src \
+          -o doltlite_regression_test_c ../test/doltlite_regression_test_c.c \
+          libdoltlite.a -lz -lpthread -lm
+        ./doltlite_regression_test_c all
+
