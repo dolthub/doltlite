@@ -1,0 +1,680 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Recovers the intent of gated locking-model divergences (shard locking_2).
+# Stock asserted rollback-journal/shared-cache lock states and "database is
+# locked" errors. doltlite's chunk-store contract instead: concurrent
+# connections read AND write; readers hold statement/transaction snapshots;
+# PRAGMA lock_status always reads unlocked; pager metrics read 0.
+#
+# covers: attach2 attach2-2.4 — encoding mismatch unfirable: PRAGMA encoding pinned UTF-8, utf16 set is a no-op, ATTACH always succeeds and text round-trips (1.1-1.3)
+# covers: attach2 attach2-4.2.1 — lock_status during read txn reads unlocked (2.7)
+# covers: attach2 attach2-4.3.1 — lock_status while 2nd conn reads stays unlocked (2.2-2.5, 2.7)
+# covers: attach2 attach2-4.4 — 2nd-conn write during 1st conn read txn succeeds (2.6)
+# covers: attach2 attach2-4.4.1 — lock_status after concurrent write reads unlocked (2.7)
+# covers: attach2 attach2-4.5.1 — lock_status with 2nd-conn open write txn on attached db reads unlocked (2.10)
+# covers: attach2 attach2-4.5.2 — same, writer side reads unlocked not reserved (2.10)
+# covers: attach2 attach2-4.6.1.1 — read of attached db another conn is writing allowed; lock_status unlocked (2.9, 2.10)
+# covers: attach2 attach2-4.6.1.2 — writer's lock_status stays unlocked during reads (2.10)
+# covers: attach2 attach2-4.6.2.1 — write against attached db another conn is writing errors "database is locked" (chunk-store write lock), lock_status still unlocked (2.10, 2.11)
+# covers: attach2 attach2-4.6.2.2 — same, writer side state unchanged (2.10, 2.11)
+# covers: attach2 attach2-4.7.1 — lock states unchanged while 2nd conn write txn open (2.10, 2.17)
+# covers: attach2 attach2-4.7.2 — same, 2nd conn side (2.17)
+# covers: attach2 attach2-4.8 — 2nd conn reads main db inside its txn: own writes + committed rows visible (2.13)
+# covers: attach2 attach2-4.8.1 — lock_status unlocked while write txn open (2.10) and after commits (2.17)
+# covers: attach2 attach2-4.8.2 — same, 2nd conn (2.17)
+# covers: attach2 attach2-4.9.1 — 1st conn write while 2nd conn write txn open errors "database is locked"; lock_status never surfaces it (2.14)
+# covers: attach2 attach2-4.9.2 — same, 2nd conn state (2.17)
+# covers: attach2 attach2-4.10 — 2nd conn COMMIT while 1st conn read txn open succeeds, not "database is locked" (2.15)
+# covers: attach2 attach2-4.10.1 — lock_status after that commit unlocked (2.17)
+# covers: attach2 attach2-4.10.2 — no pending state surfaced (2.17)
+# covers: attach2 attach2-4.11.2 — after 1st conn commit no residual reserved/pending state (2.16, 2.17)
+# covers: attach2 attach2-4.12 — both commits land; final lock_status unlocked on both conns (2.16, 2.17)
+# covers: attach2 attach2-4.15 — after the conflict both conns write again and converge on identical contents (2.18-2.22)
+# covers: savepoint savepoint-3.2 — savepoint write holds no pager lock: lock_status unlocked after INSERT (3.1)
+# covers: savepoint savepoint-3.3 — ROLLBACK TO keeps txn open, lock_status unlocked, write undone (3.2)
+# covers: savepoint savepoint-3.4 — re-insert after rollback works, lock_status unlocked (3.3); RELEASE ends txn (3.4, 3.5)
+# covers: savepoint savepoint-5.4.3 — RELEASE succeeds while 2nd conn holds read txn (4.2, 4.3)
+# covers: savepoint savepoint-5.4.4 — after release: reader snapshot intact, then sees committed rows (4.4-4.6)
+# covers: savepoint savepoint-14.1.2 — RELEASE while reader open succeeds instead of "database is locked" (5.2)
+# covers: savepoint savepoint-14.1.3 — savepoint really gone after release: ROLLBACK TO errors (5.3)
+# covers: savepoint savepoint-14.1.4 — reader commits and sees released rows (5.4)
+# covers: savepoint savepoint-14.1.5 — second round: savepoint+insert with reader open works (5.5)
+# covers: savepoint savepoint-14.1.6 — ROLLBACK TO + more inserts + RELEASE all complete (5.5)
+# covers: savepoint savepoint-14.2.2 — same contract, second multiclient permutation collapses to same scenario (5.2-5.5)
+# covers: savepoint savepoint-14.2.3 — see 5.3
+# covers: savepoint savepoint-14.2.4 — see 5.4-5.5
+# covers: savepoint savepoint-14.2.5 — see 5.5
+# covers: savepoint savepoint-14.2.6 — index build on 2nd conn + integrity_check ok after savepoint traffic (5.6)
+# covers: savepoint savepoint-15.1.2 — COMMIT under locking_mode=EXCLUSIVE with reader open succeeds (6.2, 6.3)
+# covers: savepoint savepoint-15.1.3 — rollback-free recovery: reader snapshot then convergence (6.4, 6.5)
+# covers: savepoint savepoint-15.2.2 — same contract, second permutation (6.2-6.5)
+# covers: savepoint savepoint-15.2.3 — locking_mode back to NORMAL, writes work, integrity ok (6.6, 6.7)
+# covers: savepoint savepoint-17.1 — schema-cache rollback scenario verbatim, no upstream lock-state pollution (7.1, 7.2)
+# SUSPECTED BUG (separate, not asserted here): after another connection
+# commits a data write (INSERT, or CREATE INDEX on a populated table), a txn
+# doing CREATE TABLE; INSERT; SAVEPOINT; ROLLBACK TO loses the pre-savepoint
+# row (SELECT returns empty; should return it). Repro:
+#   conn2: CREATE TABLE w(x); INSERT INTO w VALUES(1);
+#   conn1: BEGIN; CREATE TABLE tc(a,b); INSERT INTO tc VALUES(1,2);
+#          SAVEPOINT one; INSERT INTO tc VALUES(3,4); ROLLBACK TO one;
+#          SELECT * FROM tc;  -- returns {} instead of {1 2}
+# Pure cross-connection CREATE TABLE (no row writes) does not trigger it.
+# Section 7 therefore runs before any second-connection writes.
+# covers: pragma2 pragma2-1.3 — DROP works; freelist_count reads 0 (no freelist pages in prolly) (8.1, 8.2)
+# covers: pragma2 pragma2-1.4 — main.freelist_count reads 0 (8.3)
+# covers: pragma2 pragma2-2.5 — DELETE on attached db works; aux freelist_count reads 0 (8.4)
+# covers: pragma2 pragma2-3.1 — freelist_count on all schemas reads 0 (8.5)
+# covers: pragma2 pragma2-3.2 — writing freelist_count is a no-op (8.6)
+# covers: pragma2 pragma2-3.3 — writing aux freelist_count is a no-op (8.7)
+# covers: pragma2 pragma2-4.1 — cache_size echoes set value; cache_spill reads 0 (8.8)
+# covers: pragma2 pragma2-4.4 — UPDATE in txn takes no pager lock (lock_status unlocked, vs stock exclusive); rows correct after rollback (8.9)
+# covers: pragma2 pragma2-4.5.1 — cache_spill=OFF accepted, reads 0; data unaffected (8.10)
+# covers: pragma2 pragma2-4.5.2 — cache_spill=100000 accepted, reads 0 (8.11)
+# covers: pragma2 pragma2-4.5.3 — cache_spill=25 accepted, reads 0, no exclusive lock possible (8.12)
+# covers: pragma2 pragma2-4.5.4 — cache_spill(-25) accepted, reads 0 (8.13)
+# covers: pragma2 pragma2-4.6 — txn UPDATE on attached db: lock_status unlocked on all schemas, commit works (8.15)
+# covers: pragma2 pragma2-4.8 — cache_spill=ON accepted, reads 0; no exclusive lock state (8.14)
+# covers: pragma2 pragma2-5.1 — fresh db: page_size+cache_size+cache_spill=YES accepted, cache_spill reads 0 (8.16)
+# covers: pragma2 pragma2-5.3 — cache_spill(-51) accepted, reads 0 (8.16)
+# covers: memdb2 memdb2-1.1.1 — two-connection shared-db scenario recast on doltlite's shared surface (a db file); memdb VFS statements are unsupported (9.1)
+# covers: memdb2 memdb2-1.1.2 — reader opens txn, sees initial rows (9.1)
+# covers: memdb2 memdb2-1.1.3 — writer opens txn + insert while reader open (9.2)
+# covers: memdb2 memdb2-1.1.4 — writer COMMIT succeeds instead of "database is locked" (9.3)
+# covers: memdb2 memdb2-1.1.5 — reader keeps snapshot until END (9.4)
+# covers: memdb2 memdb2-1.1.6 — no deferred-commit dance needed; commit already landed (9.3)
+# covers: memdb2 memdb2-1.1.7 — reader sees all rows after closing its txn (9.5)
+# covers: memdb2 memdb2-1.2.1 — same scenario; the tn=2 permutation only varied the memdb URI spelling (9.1)
+# covers: memdb2 memdb2-1.2.2 — see 9.1
+# covers: memdb2 memdb2-1.2.3 — see 9.2
+# covers: memdb2 memdb2-1.2.4 — see 9.3
+# covers: memdb2 memdb2-1.2.5 — see 9.4
+# covers: memdb2 memdb2-1.2.6 — see 9.3
+# covers: memdb2 memdb2-1.2.7 — see 9.5
+# covers: nolock nolock-1.0 — xLock counts inapplicable; contract: default open writes+reads correctly (10.1, 10.2)
+# covers: nolock nolock-1.1 — nolock=0 open behaves identically (10.3)
+# covers: nolock nolock-1.2 — nolock=1 open: create/insert/select work (10.1)
+# covers: nolock nolock-1.3 — readonly open reads correctly (10.3)
+# covers: nolock nolock-2.2 — second connection reads same data (10.4)
+# covers: nolock nolock-2.12 — immutable=0-equivalent plain reopen reads (10.2, 10.4)
+# covers: nolock nolock-2.22 — immutable=1 open reads correctly (10.5)
+# covers: nolock nolock-2.32 — immutable=1 + readonly reads correctly (10.5)
+# covers: nolock nolock-3.2 — IOCAP_IMMUTABLE class: immutable read path returns correct data (10.5)
+# covers: nolock nolock-3.12 — immutable + readonly read path (10.5)
+# covers: nolock nolock-4.1 — journal_mode=WAL request under nolock: db usable, rows durable (10.6)
+# covers: nolock nolock-4.3 — WAL-requested db reopened with nolock=1 reads fine (doltlite has no WAL-shm gate) (10.6)
+# covers: shared8 shared8-0.0 — shared-cache premise replaced: multiple connections to one db share committed schema (11.1)
+# covers: shared8 shared8-1.3 — 2nd conn sees schema (table+view) created by 1st (11.1)
+# covers: shared8 shared8-1.4 — closing 1st conn does not invalidate 2nd conn's schema (11.2)
+# covers: shared8 shared8-1.5 — 3rd conn opens and reads view (11.3)
+# covers: shared8 shared8-1.6 — 2nd conn still works alongside 3rd (11.4)
+# covers: shared8 shared8-1.7 — closing 2nd conn leaves 3rd working (11.5)
+# covers: shared9 shared9-2.1 — custom-collation index rejected with doltlite's exact error; column collation accepted (12.1)
+# covers: shared9 shared9-3.4 — COMMIT with 2nd-conn read txn open succeeds instead of "database is locked" (12.5)
+# covers: shared9 shared9-3.5 — no busy-handler cross-fire possible: commit completes, reader snapshot intact (12.6)
+# covers: shared9 shared9-3.6 — after reader closes txn both conns converge (12.7); no dangling collation use-after-close (12.2)
+# covers: tkt4018 tkt4018-1.3 — 2nd-conn write while 1st holds read txn succeeds; 1st conn snapshot excludes it (13.1, 13.2)
+# covers: tkt4018 tkt4018-2.2 — BEGIN; SELECT ORDER BY sees all committed rows; readonly conn write rejected (13.3-13.5)
+# covers: shared shared-1.7.2 — open scan unaffected by concurrent delete of sibling table; full contents returned (14.1-14.3)
+# covers: capi2 capi2-6.5 — 2nd-conn INSERT into table mid-scan succeeds; running statement keeps its snapshot (14.1, 14.3)
+#
+# not-covered: (none)
+
+db close
+foreach f {rlk2.db rlk2b.db rlk2p.db rlk2q.db rlk2n.db rlk2w.db rlk2s.db rlk2t.db} {
+  forcedelete $f
+  forcedelete .${f}-lock
+}
+sqlite3 db rlk2.db
+
+#-------------------------------------------------------------------------
+# 1.* attach2-2.4: UTF-8 only, ATTACH encoding mismatch cannot exist.
+#
+do_execsql_test doltlite_recover_locking_2-1.1 {
+  PRAGMA encoding;
+} {UTF-8}
+do_execsql_test doltlite_recover_locking_2-1.2 {
+  PRAGMA encoding='UTF-16le';
+  PRAGMA encoding;
+} {UTF-8}
+do_test doltlite_recover_locking_2-1.3 {
+  sqlite3 dbe rlk2b.db
+  dbe eval {
+    PRAGMA encoding='utf16';
+    CREATE TABLE tt(x);
+    INSERT INTO tt VALUES('text2');
+    CREATE TABLE t1f(a,b);
+  }
+  dbe close
+  list [catchsql {ATTACH 'rlk2b.db' AS file2}] [catchsql {SELECT x FROM file2.tt}]
+} {{0 {}} {0 text2}}
+
+#-------------------------------------------------------------------------
+# 7.* savepoint-17.1: schema rollback leaves a clean schema cache. Runs
+# before any second-connection writes (see SUSPECTED BUG above).
+#
+do_execsql_test doltlite_recover_locking_2-7.1 {
+  BEGIN;
+    CREATE TABLE t6(a, b);
+    INSERT INTO t6 VALUES(1, 2);
+    SAVEPOINT one;
+      INSERT INTO t6 VALUES(3, 4);
+    ROLLBACK TO one;
+    SELECT * FROM t6;
+  ROLLBACK;
+} {1 2}
+do_execsql_test doltlite_recover_locking_2-7.2 {
+  CREATE TABLE t6(a, b);
+  SELECT count(*) FROM t6;
+} {0}
+
+#-------------------------------------------------------------------------
+# 2.* attach2-4: two connections + attached db; everything stays unlocked
+# and concurrent writes succeed.
+#
+do_execsql_test doltlite_recover_locking_2-2.1 {
+  CREATE TABLE t1(a,b);
+  SELECT count(*) FROM t1;
+} {0}
+do_test doltlite_recover_locking_2-2.2 {
+  execsql {PRAGMA lock_status}
+} {main unlocked temp closed file2 unlocked}
+do_test doltlite_recover_locking_2-2.3 {
+  sqlite3 db2 rlk2.db
+  db2 eval {ATTACH 'rlk2b.db' AS file2}
+  execsql {PRAGMA lock_status} db2
+} {main unlocked temp closed file2 unlocked}
+do_test doltlite_recover_locking_2-2.4 {
+  execsql {BEGIN; SELECT * FROM t1;}
+} {}
+do_test doltlite_recover_locking_2-2.5 {
+  execsql {SELECT * FROM t1} db2
+} {}
+do_test doltlite_recover_locking_2-2.6 {
+  catchsql {INSERT INTO t1 VALUES(1,2)} db2
+} {0 {}}
+do_test doltlite_recover_locking_2-2.7 {
+  execsql {PRAGMA lock_status}
+} {main unlocked temp closed file2 unlocked}
+do_test doltlite_recover_locking_2-2.8 {
+  execsql {BEGIN; INSERT INTO file2.t1f VALUES(1,2);} db2
+} {}
+do_test doltlite_recover_locking_2-2.9 {
+  execsql {SELECT count(*) FROM file2.t1f}
+} {0}
+do_test doltlite_recover_locking_2-2.10 {
+  list [execsql {PRAGMA lock_status}] [execsql {PRAGMA lock_status} db2]
+} {{main unlocked temp closed file2 unlocked} {main unlocked temp closed file2 unlocked}}
+do_test doltlite_recover_locking_2-2.11 {
+  catchsql {UPDATE file2.t1f SET a=0}
+} {1 {database is locked}}
+do_test doltlite_recover_locking_2-2.12 {
+  catchsql {INSERT INTO t1 VALUES(3,4)} db2
+} {0 {}}
+do_test doltlite_recover_locking_2-2.13 {
+  execsql {SELECT a,b FROM t1 ORDER BY a} db2
+} {1 2 3 4}
+do_test doltlite_recover_locking_2-2.14 {
+  catchsql {INSERT INTO t1 VALUES(5,6)}
+} {1 {database is locked}}
+do_test doltlite_recover_locking_2-2.15 {
+  catchsql {COMMIT} db2
+} {0 {}}
+do_test doltlite_recover_locking_2-2.16 {
+  catchsql {COMMIT}
+} {0 {}}
+do_test doltlite_recover_locking_2-2.17 {
+  list [execsql {PRAGMA lock_status}] [execsql {PRAGMA lock_status} db2]
+} {{main unlocked temp closed file2 unlocked} {main unlocked temp closed file2 unlocked}}
+do_test doltlite_recover_locking_2-2.18 {
+  catchsql {INSERT INTO t1 VALUES(5,6)}
+} {0 {}}
+do_test doltlite_recover_locking_2-2.19 {
+  execsql {SELECT a,b FROM t1 ORDER BY a}
+} {1 2 3 4 5 6}
+do_test doltlite_recover_locking_2-2.20 {
+  execsql {SELECT a,b FROM t1 ORDER BY a} db2
+} {1 2 3 4 5 6}
+do_test doltlite_recover_locking_2-2.21 {
+  execsql {SELECT a,b FROM file2.t1f ORDER BY a} db2
+} {1 2}
+do_test doltlite_recover_locking_2-2.22 {
+  execsql {SELECT a,b FROM file2.t1f ORDER BY a}
+} {1 2}
+
+#-------------------------------------------------------------------------
+# 3.* savepoint-3: savepoint writes hold no pager locks.
+#
+do_execsql_test doltlite_recover_locking_2-3.1 {
+  CREATE TABLE ts(a,b,c);
+  SAVEPOINT "transaction";
+  INSERT INTO ts VALUES(1,2,3);
+  PRAGMA lock_status;
+} {main unlocked temp closed file2 unlocked}
+do_execsql_test doltlite_recover_locking_2-3.2 {
+  ROLLBACK TO "transaction";
+  SELECT count(*) FROM ts;
+  PRAGMA lock_status;
+} {0 main unlocked temp closed file2 unlocked}
+do_execsql_test doltlite_recover_locking_2-3.3 {
+  INSERT INTO ts VALUES(4,5,6);
+  PRAGMA lock_status;
+} {main unlocked temp closed file2 unlocked}
+do_execsql_test doltlite_recover_locking_2-3.4 {
+  RELEASE "transaction";
+  SELECT * FROM ts;
+  PRAGMA lock_status;
+} {4 5 6 main unlocked temp closed file2 unlocked}
+do_catchsql_test doltlite_recover_locking_2-3.5 {
+  COMMIT
+} {1 {cannot commit - no transaction is active}}
+
+#-------------------------------------------------------------------------
+# 4.* savepoint-5.4: RELEASE not blocked by a second connection's read txn.
+#
+do_execsql_test doltlite_recover_locking_2-4.1 {
+  CREATE TABLE blobs(x);
+  INSERT INTO blobs VALUES('blob one');
+} {}
+do_test doltlite_recover_locking_2-4.2 {
+  execsql {SAVEPOINT main; INSERT INTO blobs VALUES('another blob');}
+  execsql {BEGIN; SELECT count(*) FROM blobs;} db2
+} {1}
+do_test doltlite_recover_locking_2-4.3 {
+  catchsql {RELEASE main}
+} {0 {}}
+do_test doltlite_recover_locking_2-4.4 {
+  execsql {SELECT count(*) FROM blobs} db2
+} {1}
+do_test doltlite_recover_locking_2-4.5 {
+  execsql {COMMIT} db2
+  execsql {SELECT count(*) FROM blobs} db2
+} {2}
+do_test doltlite_recover_locking_2-4.6 {
+  execsql {SELECT count(*) FROM blobs}
+} {2}
+
+#-------------------------------------------------------------------------
+# 5.* savepoint-14: savepoint release/rollback with a concurrent reader.
+#
+do_test doltlite_recover_locking_2-5.1 {
+  execsql {
+    CREATE TABLE foo(x);
+    INSERT INTO foo VALUES(1);
+    INSERT INTO foo VALUES(2);
+  }
+  execsql {BEGIN; SELECT x FROM foo ORDER BY x;} db2
+} {1 2}
+do_test doltlite_recover_locking_2-5.2 {
+  execsql {SAVEPOINT one; INSERT INTO foo VALUES(1);}
+  catchsql {RELEASE one}
+} {0 {}}
+do_catchsql_test doltlite_recover_locking_2-5.3 {
+  ROLLBACK TO one
+} {1 {no such savepoint: one}}
+do_test doltlite_recover_locking_2-5.4 {
+  execsql {COMMIT} db2
+  execsql {SELECT x FROM foo ORDER BY x} db2
+} {1 1 2}
+do_test doltlite_recover_locking_2-5.5 {
+  execsql {BEGIN; SELECT count(*) FROM foo;} db2
+  execsql {SAVEPOINT one; INSERT INTO foo VALUES(9);}
+  execsql {ROLLBACK TO one}
+  execsql {
+    INSERT INTO foo VALUES(3);
+    INSERT INTO foo VALUES(4);
+    INSERT INTO foo VALUES(5);
+    RELEASE one;
+  }
+  execsql {COMMIT} db2
+  execsql {SELECT x FROM foo ORDER BY x} db2
+} {1 1 2 3 4 5}
+do_test doltlite_recover_locking_2-5.6 {
+  execsql {CREATE INDEX fooidx ON foo(x)} db2
+  execsql {PRAGMA integrity_check}
+} {ok}
+
+#-------------------------------------------------------------------------
+# 6.* savepoint-15: locking_mode=EXCLUSIVE commit not blocked by reader.
+#
+do_test doltlite_recover_locking_2-6.1 {
+  execsql {BEGIN; SELECT count(*) FROM foo;} db2
+} {6}
+do_test doltlite_recover_locking_2-6.2 {
+  execsql {PRAGMA locking_mode=EXCLUSIVE}
+} {exclusive}
+do_test doltlite_recover_locking_2-6.3 {
+  execsql {BEGIN; INSERT INTO foo VALUES(6);}
+  catchsql {COMMIT}
+} {0 {}}
+do_test doltlite_recover_locking_2-6.4 {
+  execsql {SELECT count(*) FROM foo} db2
+} {6}
+do_test doltlite_recover_locking_2-6.5 {
+  execsql {COMMIT} db2
+  execsql {SELECT count(*) FROM foo} db2
+} {7}
+do_test doltlite_recover_locking_2-6.6 {
+  execsql {PRAGMA locking_mode=NORMAL}
+} {normal}
+do_test doltlite_recover_locking_2-6.7 {
+  execsql {INSERT INTO foo VALUES(7)}
+  list [execsql {SELECT count(*) FROM foo}] \
+       [execsql {SELECT count(*) FROM foo} db2] \
+       [execsql {PRAGMA integrity_check} db2]
+} {8 8 ok}
+
+#-------------------------------------------------------------------------
+# 8.* pragma2: pager metrics read 0/unlocked; row outcomes match stock.
+#
+do_execsql_test doltlite_recover_locking_2-8.1 {
+  CREATE TABLE abc(a, b, c);
+  PRAGMA freelist_count;
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.2 {
+  DROP TABLE abc;
+  PRAGMA freelist_count;
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.3 {
+  PRAGMA main.freelist_count;
+} {0}
+do_test doltlite_recover_locking_2-8.4 {
+  execsql {ATTACH 'rlk2p.db' AS paux}
+  set v [string repeat 0123456789 1000]
+  execsql {CREATE TABLE paux.pabc(a, b, c)}
+  db eval {INSERT INTO paux.pabc VALUES(1, 2, $v)}
+  execsql {
+    DELETE FROM paux.pabc;
+    PRAGMA paux.freelist_count;
+  }
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.5 {
+  PRAGMA paux.freelist_count;
+  PRAGMA main.freelist_count;
+  PRAGMA freelist_count;
+} {0 0 0}
+do_execsql_test doltlite_recover_locking_2-8.6 {
+  PRAGMA freelist_count = 500;
+  PRAGMA freelist_count;
+} {0 0}
+do_execsql_test doltlite_recover_locking_2-8.7 {
+  PRAGMA paux.freelist_count = 500;
+  PRAGMA paux.freelist_count;
+} {0 0}
+do_execsql_test doltlite_recover_locking_2-8.8 {
+  PRAGMA main.cache_size=2000;
+  PRAGMA main.cache_size;
+  PRAGMA cache_spill;
+} {2000 0}
+do_test doltlite_recover_locking_2-8.9 {
+  execsql {
+    CREATE TABLE p2(a INTEGER PRIMARY KEY, b);
+    INSERT INTO p2 VALUES(1,'x'),(2,'y');
+  }
+  execsql {BEGIN; UPDATE p2 SET b=b||'1';}
+  set mainState [lindex [execsql {PRAGMA lock_status}] 1]
+  execsql {ROLLBACK}
+  list $mainState [execsql {SELECT a,b FROM p2 ORDER BY a}]
+} {unlocked {1 x 2 y}}
+do_execsql_test doltlite_recover_locking_2-8.10 {
+  PRAGMA cache_spill=OFF;
+  PRAGMA cache_spill;
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.11 {
+  PRAGMA cache_spill=100000;
+  PRAGMA cache_spill;
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.12 {
+  PRAGMA cache_spill=25;
+  PRAGMA main.cache_spill;
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.13 {
+  PRAGMA cache_spill(-25);
+  PRAGMA main.cache_spill;
+} {0}
+do_execsql_test doltlite_recover_locking_2-8.14 {
+  PRAGMA cache_spill=ON;
+  PRAGMA cache_spill;
+} {0}
+do_test doltlite_recover_locking_2-8.15 {
+  execsql {INSERT INTO paux.pabc VALUES(3, 4, 'z')}
+  execsql {BEGIN; UPDATE paux.pabc SET a=a+1;}
+  set ls [execsql {PRAGMA lock_status}]
+  execsql {COMMIT}
+  list [lindex $ls 1] [lindex $ls end] [execsql {SELECT a FROM paux.pabc}]
+} {unlocked unlocked 4}
+do_test doltlite_recover_locking_2-8.16 {
+  sqlite3 dbp rlk2q.db
+  dbp eval {
+    PRAGMA page_size=16384;
+    CREATE TABLE q1(x);
+    PRAGMA cache_size=2;
+    PRAGMA cache_spill=YES;
+  }
+  set a [dbp eval {PRAGMA cache_spill}]
+  dbp eval {PRAGMA cache_spill(-51)}
+  set b [dbp eval {PRAGMA cache_spill}]
+  dbp close
+  list $a $b
+} {0 0}
+
+#-------------------------------------------------------------------------
+# 9.* memdb2 recast: writer COMMIT not blocked by reader holding SHARED.
+#
+do_test doltlite_recover_locking_2-9.1 {
+  execsql {CREATE TABLE m(x, y); INSERT INTO m VALUES(1, 2);}
+  execsql {BEGIN; SELECT * FROM m;} db2
+} {1 2}
+do_test doltlite_recover_locking_2-9.2 {
+  execsql {BEGIN; INSERT INTO m VALUES(3, 4);}
+} {}
+do_catchsql_test doltlite_recover_locking_2-9.3 {
+  COMMIT
+} {0 {}}
+do_test doltlite_recover_locking_2-9.4 {
+  execsql {SELECT * FROM m; END;} db2
+} {1 2}
+do_test doltlite_recover_locking_2-9.5 {
+  execsql {SELECT x, y FROM m ORDER BY x} db2
+} {1 2 3 4}
+
+#-------------------------------------------------------------------------
+# 10.* nolock/immutable URI params: accepted, data correct and durable.
+#
+do_test doltlite_recover_locking_2-10.1 {
+  sqlite3 dbn file:rlk2n.db?nolock=1 -uri 1
+  dbn eval {
+    CREATE TABLE n(x);
+    INSERT INTO n VALUES('youngling');
+    SELECT * FROM n;
+  }
+} {youngling}
+do_test doltlite_recover_locking_2-10.2 {
+  dbn close
+  sqlite3 dbn rlk2n.db
+  set r [dbn eval {SELECT * FROM n}]
+  dbn close
+  set r
+} {youngling}
+do_test doltlite_recover_locking_2-10.3 {
+  sqlite3 dbn file:rlk2n.db?nolock=0 -uri 1 -readonly 1
+  set r [dbn eval {SELECT * FROM n}]
+  dbn close
+  set r
+} {youngling}
+do_test doltlite_recover_locking_2-10.4 {
+  sqlite3 dbn rlk2n.db
+  sqlite3 dbn2 rlk2n.db
+  set r [list [dbn eval {SELECT * FROM n}] [dbn2 eval {SELECT * FROM n}]]
+  dbn close
+  dbn2 close
+  set r
+} {youngling youngling}
+do_test doltlite_recover_locking_2-10.5 {
+  sqlite3 dbn file:rlk2n.db?immutable=1 -uri 1
+  set r [dbn eval {SELECT * FROM n}]
+  dbn close
+  sqlite3 dbn file:rlk2n.db?immutable=1 -uri 1 -readonly 1
+  lappend r [dbn eval {SELECT * FROM n}]
+  dbn close
+  set r
+} {youngling youngling}
+do_test doltlite_recover_locking_2-10.6 {
+  sqlite3 dbn rlk2w.db
+  dbn eval {PRAGMA journal_mode=WAL}
+  dbn eval {CREATE TABLE t1(x); INSERT INTO t1 VALUES('catbird');}
+  dbn close
+  sqlite3 dbn file:rlk2w.db?nolock=1 -uri 1
+  set r [catch {dbn eval {SELECT * FROM t1}} msg]
+  dbn close
+  list $r $msg
+} {0 catbird}
+
+#-------------------------------------------------------------------------
+# 11.* shared8 recast: schema visible across connections, stable across
+# closing sibling connections.
+#
+do_test doltlite_recover_locking_2-11.1 {
+  sqlite3 dba rlk2s.db
+  sqlite3 dbb rlk2s.db
+  dba eval {
+    CREATE TABLE st(a, b);
+    INSERT INTO st VALUES(1, 1);
+    INSERT INTO st VALUES(2, 2);
+    INSERT INTO st VALUES(3, 3);
+    INSERT INTO st VALUES(4, 4);
+    CREATE VIEW sv AS SELECT a, b+10 AS b10 FROM st;
+  }
+  dbb eval {SELECT a, b10 FROM sv ORDER BY a}
+} {1 11 2 12 3 13 4 14}
+do_test doltlite_recover_locking_2-11.2 {
+  dba close
+  dbb eval {SELECT a, b10 FROM sv ORDER BY a}
+} {1 11 2 12 3 13 4 14}
+do_test doltlite_recover_locking_2-11.3 {
+  sqlite3 dbc rlk2s.db
+  dbc eval {SELECT a, b10 FROM sv ORDER BY a}
+} {1 11 2 12 3 13 4 14}
+do_test doltlite_recover_locking_2-11.4 {
+  dbb eval {SELECT count(*) FROM sv}
+} {4}
+do_test doltlite_recover_locking_2-11.5 {
+  dbb close
+  set r [dbc eval {SELECT a, b10 FROM sv ORDER BY a}]
+  dbc close
+  set r
+} {1 11 2 12 3 13 4 14}
+
+#-------------------------------------------------------------------------
+# 12.* shared9: custom-collation index rejection; commit not blocked by
+# a second connection's read transaction.
+#
+do_test doltlite_recover_locking_2-12.1 {
+  sqlite3 dba rlk2t.db
+  sqlite3 dbb rlk2t.db
+  proc coll9 {a b} {string compare $a $b}
+  dba collate collate1 coll9
+  dbb collate collate1 coll9
+  dba eval {CREATE TABLE ct(a, b, c COLLATE collate1)}
+  set rc [catch {dba eval {CREATE INDEX ci ON ct(a COLLATE collate1, c, b)}} msg]
+  list $rc $msg
+} {1 {doltlite does not support indexes with custom collation 'collate1'}}
+do_test doltlite_recover_locking_2-12.2 {
+  dba close
+  dbb eval {INSERT INTO ct VALUES('abc','def','ghi'); SELECT * FROM ct}
+} {abc def ghi}
+do_test doltlite_recover_locking_2-12.3 {
+  sqlite3 dba rlk2t.db
+  dba eval {
+    CREATE TABLE s3a(a, b);
+    CREATE TABLE s3b(a, b);
+    INSERT INTO s3a VALUES(1, 2);
+    INSERT INTO s3b VALUES(1, 2);
+  }
+  dba eval {BEGIN; INSERT INTO s3a VALUES(3, 4);}
+  dbb eval {BEGIN; SELECT * FROM s3a;}
+} {1 2}
+do_test doltlite_recover_locking_2-12.4 {
+  dbb eval {SELECT * FROM s3b}
+} {1 2}
+do_test doltlite_recover_locking_2-12.5 {
+  set rc [catch {dba eval COMMIT} msg]
+  list $rc $msg
+} {0 {}}
+do_test doltlite_recover_locking_2-12.6 {
+  dbb eval {SELECT * FROM s3a}
+} {1 2}
+do_test doltlite_recover_locking_2-12.7 {
+  dbb eval {COMMIT}
+  set r [dbb eval {SELECT a, b FROM s3a ORDER BY a}]
+  dba close
+  dbb close
+  set r
+} {1 2 3 4}
+
+#-------------------------------------------------------------------------
+# 13.* tkt4018: writes from other connections succeed against an open read
+# txn; snapshot isolation; readonly connections still rejected.
+#
+do_test doltlite_recover_locking_2-13.1 {
+  execsql {CREATE TABLE tk(a, b); BEGIN; SELECT * FROM tk;}
+  catchsql {INSERT INTO tk VALUES(3, 4)} db2
+} {0 {}}
+do_test doltlite_recover_locking_2-13.2 {
+  execsql {SELECT * FROM tk}
+} {}
+do_test doltlite_recover_locking_2-13.3 {
+  execsql {COMMIT}
+  execsql {SELECT a, b FROM tk ORDER BY a}
+} {3 4}
+do_test doltlite_recover_locking_2-13.4 {
+  execsql {BEGIN; SELECT a, b FROM tk ORDER BY a;}
+} {3 4}
+do_test doltlite_recover_locking_2-13.5 {
+  execsql {COMMIT}
+  sqlite3 dbr rlk2.db -readonly 1
+  set r [catchsql {INSERT INTO tk VALUES(5, 6)} dbr]
+  dbr close
+  set r
+} {1 {attempt to write a readonly database}}
+
+#-------------------------------------------------------------------------
+# 14.* shared-1.7.2 + capi2-6.5: open scans keep their snapshot while a
+# second connection deletes a sibling table and inserts into the scanned one.
+#
+do_test doltlite_recover_locking_2-14.1 {
+  execsql {
+    CREATE TABLE t1s(a INTEGER PRIMARY KEY, b);
+    CREATE TABLE t2s(a INTEGER PRIMARY KEY, b);
+    WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<20)
+      INSERT INTO t1s SELECT i, 'v'||i FROM c;
+    INSERT INTO t2s SELECT * FROM t1s;
+  }
+  set seen {}
+  set fired 0
+  db eval {SELECT a FROM t2s ORDER BY a} {
+    if {$a==3 && !$fired} {
+      set fired 1
+      set ::midDel [catchsql {DELETE FROM t1s} db2]
+      set ::midIns [catchsql {INSERT INTO t2s VALUES(999, 'mid')} db2]
+    }
+    lappend seen $a
+  }
+  list [llength $seen] [lindex $seen end] $::midDel $::midIns
+} {20 20 {0 {}} {0 {}}}
+do_test doltlite_recover_locking_2-14.2 {
+  execsql {SELECT count(*) FROM t1s}
+} {0}
+do_test doltlite_recover_locking_2-14.3 {
+  execsql {SELECT count(*) FROM t2s}
+} {21}
+
+#-------------------------------------------------------------------------
+# 15.* both connections healthy after all conflict scenarios.
+#
+do_test doltlite_recover_locking_2-15.1 {
+  list [execsql {PRAGMA integrity_check}] [execsql {PRAGMA integrity_check} db2]
+} {ok ok}
+
+db2 close
+finish_test

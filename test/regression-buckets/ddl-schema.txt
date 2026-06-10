@@ -49,6 +49,9 @@ delete
 delete3
 delete4
 descidx3
+doltlite_recover_locking_1
+doltlite_recover_locking_2
+doltlite_recover_rejections
 e_changes
 e_createtable
 e_delete
