@@ -5,6 +5,7 @@ autovacuum_ioerr2
 backup_malloc
 carrayfault
 cffault
+checkfault
 default
 exprfault
 exprfault2
