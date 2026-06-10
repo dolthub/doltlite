@@ -31,7 +31,6 @@
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
-shared        # shared-cache semantics unsupported under doltlite; setup aborts
 
 # Raw-format/WAL divergences whose failed open cascades into an uncaught Tcl
 # error before the summary line. doltlite validates the chunk-store manifest at
