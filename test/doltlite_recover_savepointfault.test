@@ -1,0 +1,81 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_savepointfault
+
+# Recovered coverage for savepointfault.test, which cannot run as a whole
+# file: malloc-4's -sqlprep opens with "PRAGMA auto_vacuum = incremental"
+# (and later runs "PRAGMA incremental_vacuum"), both rejected by design on
+# doltlite-format databases. The prep failure happens before the malloc
+# fault is armed, so it is deterministic, and do_malloc_test's loop never
+# reaches its stop condition (nFail>0): the file repeats the identical
+# failure until the tester's error cap aborts it. The fault scenarios that
+# do not depend on auto_vacuum are ported here verbatim.
+#
+# covers: savepointfault savepointfault-malloc-1 — OOM at every allocation point through nested savepoints with INSERT/DELETE, ROLLBACK TO, RELEASE; each iteration either fails with OOM or completes (malloc-1)
+# covers: savepointfault savepointfault-malloc-2 — same contract under cache pressure: multi-hundred-row table, nested savepoints with DELETEs, double ROLLBACK TO, RELEASE (malloc-2)
+# covers: savepointfault savepointfault-ioerr-3 — IO errors at every point through BEGIN/UPDATE/SAVEPOINT/UPDATE/COMMIT; database checksum verified intact after each recovery (ioerr-3)
+# not-covered: savepointfault savepointfault-malloc-4 — prep requires auto_vacuum=incremental and PRAGMA incremental_vacuum, both intentionally rejected on doltlite-format databases; the page-freelist savepoint rollback it targets has no doltlite equivalent
+
+do_malloc_test 1 -sqlprep {
+  CREATE TABLE t1(a, b, c);
+  INSERT INTO t1 VALUES(1, 2, 3);
+} -sqlbody {
+  SAVEPOINT one;
+    INSERT INTO t1 VALUES(4, 5, 6);
+    SAVEPOINT two;
+      DELETE FROM t1;
+    ROLLBACK TO two;
+  RELEASE one;
+}
+
+do_malloc_test 2 -sqlprep {
+  PRAGMA cache_size = 10;
+  CREATE TABLE t1(a, b, c);
+  INSERT INTO t1 VALUES(randstr(400,400), randstr(400,400), randstr(400,400));
+  INSERT INTO t1 SELECT
+    randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+  INSERT INTO t1
+    SELECT randstr(400,400), randstr(400,400), randstr(400,400) FROM t1;
+} -sqlbody {
+  PRAGMA cache_size = 10;
+  SAVEPOINT one;
+    DELETE FROM t1 WHERE rowid < 5;
+    SAVEPOINT two;
+      DELETE FROM t1 WHERE rowid > 10;
+    ROLLBACK TO two;
+  ROLLBACK TO one;
+  RELEASE one;
+}
+
+do_ioerr_test 3 -sqlprep {
+  CREATE TABLE t1(a, b, c);
+  INSERT INTO t1 VALUES(1, randstr(1000,1000), randstr(1000,1000));
+  INSERT INTO t1 VALUES(2, randstr(1000,1000), randstr(1000,1000));
+} -sqlbody {
+  BEGIN;
+    UPDATE t1 SET a = 3 WHERE a = 1;
+    SAVEPOINT one;
+      UPDATE t1 SET a = 4 WHERE a = 2;
+  COMMIT;
+} -cleanup {
+  db eval {
+    SAVEPOINT one;
+    RELEASE one;
+  }
+}
+
+finish_test
