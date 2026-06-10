@@ -804,7 +804,6 @@ int sqlite3VtabCallCreate(sqlite3 *db, int iDb, const char *zTab, char **pzErr){
   }
 #ifdef DOLTLITE_PROLLY
   else if( rc!=SQLITE_OK ){
-    sqlite3BtreeMarkMasterRootChanged(db->aDb[iDb].pBt);
     sqlite3ResetOneSchema(db, iDb);
   }
 #endif

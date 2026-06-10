@@ -2322,7 +2322,8 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
 }
 
 static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
-  int rc = serializeCatalogPatchRoots(pBtree, ppOut, pnOut);
+  int rc;
+  rc = serializeCatalogPatchRoots(pBtree, ppOut, pnOut);
   if( rc==SQLITE_OK ) return SQLITE_OK;
   if( rc!=SQLITE_NOTFOUND ) return rc;
   return serializeCatalog(pBtree, ppOut, pnOut);
@@ -6094,6 +6095,7 @@ int sqlite3BtreeUpdateMeta(Btree *p, int idx, u32 value){
 
 void sqlite3BtreeMarkMasterRootChanged(Btree *p){
   if( p && p->pOps==&prollyBtreeOps ){
+    p->bSchemaChangedTxn = 1;
     p->bMasterRootChangedTxn = 1;
   }
 }
