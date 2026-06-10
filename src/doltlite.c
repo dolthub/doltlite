@@ -4120,13 +4120,17 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteSwitchCatalog(db, &headCommit.catalogHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&headCommit);
+    return rc;
+  }
   doltliteSetSessionBranch(db, zBranch);
   doltliteSetSessionHead(db, &headHash);
   doltliteSetSessionStaged(db, &headCommit.catalogHash);
   doltliteClearSessionMergeState(db);
   memset(&emptyHash, 0, sizeof(emptyHash));
   doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  doltliteCommitClear(&headCommit);
   return SQLITE_OK;
 }
 
