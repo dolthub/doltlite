@@ -1,0 +1,316 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Recovered coverage for explicit-rejection divergences (#1313, shard "rejections").
+# In doltlite VACUUM is a runtime-detected no-op on prolly storage (#322/#991),
+# VACUUM INTO is explicitly rejected, and the deserialize page-image API is
+# rejected (#1225). These tests pin the doltlite-native contract: rejections
+# fire with the exact message, no-op VACUUM never disturbs committed data or
+# in-progress statements, and the database stays fully usable afterward.
+#
+# covers: vacuum vacuum-5.1 — table-swap txn (DROP/CREATE/copy + view) then VACUUM succeeds; data/view intact and integrity ok across reopen (1.x)
+# covers: vacuum2 vacuum2-5.2 — VACUUM mid-scan: doltlite no-op VACUUM succeeds inside an active SELECT without disturbing the scan (2.2)
+# covers: vacuum2 vacuum2-5.3 — VACUUM inside a trivial active statement succeeds as a no-op (2.3)
+# covers: vacuum2 vacuum2-5.4 — VACUUM fired mid-scan: full row set still returned in order, db consistent after (2.4/2.5)
+# covers-class: crash7 (83 entries: crash7-1.1.crash..crash7-1.63.crash, crash7-2.1.1..crash7-2.20.1): stock crash-during-VACUUM recovery — represented by doltlite-native durability: content hash and rows unchanged across page_size+VACUUM+close+reopen for each page-size variant, repeated VACUUM/reopen cycles after bulk delete, integrity_check ok every time (3.x)
+# covers: pragma6 pragma6-1.0 — db deserialize page-image API rejected with exact message; connection remains fully usable (4.x)
+# covers: vacuum-into vacuum-into-110 — VACUUM main INTO 'file' rejected with exact doltlite message (5.1)
+# covers: vacuum-into vacuum-into-120 — rejected VACUUM INTO creates no output file to read back (5.2)
+# covers: vacuum-into vacuum-into-130 — bare VACUUM INTO 'file' rejected identically (5.3)
+# covers: vacuum-into vacuum-into-140 — VACUUM INTO a fresh nonexistent path still rejected (5.4)
+# covers: vacuum-into vacuum-into-150 — second attempt at same path rejected identically (5.4)
+# covers: vacuum-into vacuum-into-200 — VACUUM main INTO ':memory:' rejected (5.5)
+# covers: vacuum-into vacuum-into-300 — expression target (SELECT name FROM t2) evaluates, then rejection fires (5.6)
+# covers: vacuum-into vacuum-into-310 — VACUUM INTO null rejected (doltlite rejects before stock's non-text filename check) (5.7)
+# covers: vacuum-into vacuum-into-410 — function-valued target evaluates, rejection fires, no file created (5.8)
+# covers: vacuum-into vacuum-into-500 — rejection leaves source db untouched (hash unchanged) and writable (5.9; stock's read-only-source aspect is moot since no copy is ever made)
+# covers: vacuum-into vacuum-into-510 — source schema/data fully intact and queryable after rejection (5.9/5.10)
+# covers: vacuum-into vacuum-into-620 — PRAGMA page_size change does not alter the rejection (5.11)
+# covers: vacuum-into vacuum-into-630 — no output db exists to inspect after page_size+VACUUM INTO attempt (5.11)
+# covers: vacuum-into vacuum-into-710.1 — PRAGMA synchronous=normal then VACUUM INTO rejected (5.12)
+# covers: vacuum-into vacuum-into-710.2 — source hash unchanged after rejected attempt under synchronous=normal (5.12)
+# covers: vacuum-into vacuum-into-720.1 — PRAGMA synchronous=full then VACUUM INTO rejected (5.12)
+# covers: vacuum-into vacuum-into-720.2 — source hash unchanged after rejected attempt under synchronous=full (5.12)
+# covers: vacuum-into vacuum-into-730.1 — PRAGMA synchronous=off then VACUUM INTO rejected (5.12)
+# covers: vacuum-into vacuum-into-740.1 — PRAGMA synchronous=extra then VACUUM INTO rejected (5.12)
+# covers: vacuum-into vacuum-into-740.2 — source hash unchanged after rejected attempt under synchronous=extra (5.12)
+# covers: vacuum-into vacuum-into-750.1 — fullfsync=1 + synchronous=full then VACUUM INTO rejected (5.12)
+# covers: vacuum-into vacuum-into-750.2 — source hash unchanged after rejected attempt under fullfsync (5.12)
+# (5.13/5.14 additionally pin: rejection stable across close/reopen, data intact, integrity ok)
+# not-covered: (none)
+
+#-------------------------------------------------------------------------
+# 1.x: vacuum-5.1 — VACUUM after a table-swap transaction with a dependent
+# view succeeds and leaves a consistent database.
+#
+do_test doltlite_recover_rejections-1.1 {
+  db close
+  forcedelete test.db
+  sqlite3 db test.db
+  catchsql {
+    CREATE TABLE Test (TestID int primary key);
+    INSERT INTO Test VALUES (1);
+    CREATE VIEW viewTest AS SELECT * FROM Test;
+
+    BEGIN;
+    CREATE TABLE tempTest (TestID int primary key, Test2 int NULL);
+    INSERT INTO tempTest SELECT TestID, 1 FROM Test;
+    DROP TABLE Test;
+    CREATE TABLE Test(TestID int primary key, Test2 int NULL);
+    INSERT INTO Test SELECT * FROM tempTest;
+    DROP TABLE tempTest;
+    COMMIT;
+    VACUUM;
+  }
+} {0 {}}
+do_test doltlite_recover_rejections-1.2 {
+  catchsql {VACUUM}
+} {0 {}}
+do_test doltlite_recover_rejections-1.3 {
+  execsql {SELECT TestID, Test2 FROM Test ORDER BY TestID}
+} {1 1}
+do_test doltlite_recover_rejections-1.4 {
+  execsql {SELECT TestID, Test2 FROM viewTest ORDER BY TestID}
+} {1 1}
+do_test doltlite_recover_rejections-1.5 {
+  db close
+  sqlite3 db test.db
+  list [execsql {SELECT TestID, Test2 FROM Test ORDER BY TestID}] \
+       [execsql {PRAGMA integrity_check}]
+} {{1 1} ok}
+
+#-------------------------------------------------------------------------
+# 2.x: vacuum2-5.2/5.3/5.4 — stock errors "cannot VACUUM - SQL statements in
+# progress"; doltlite's no-op VACUUM succeeds mid-statement. The recovered
+# intent: a VACUUM fired while a scan is active must not disturb the scan or
+# the database.
+#
+do_test doltlite_recover_rejections-2.1 {
+  execsql {
+    CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT);
+    WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<16)
+    INSERT INTO t1 SELECT x, printf('row-%02d', x) FROM c;
+    SELECT count(*) FROM t1;
+  }
+} {16}
+do_test doltlite_recover_rejections-2.2 {
+  set rows {}
+  set vres {}
+  db eval {SELECT a FROM t1 ORDER BY a} {
+    if {$a == 8} { set vres [catchsql VACUUM] }
+    lappend rows $a
+  }
+  list $rows $vres
+} {{1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16} {0 {}}}
+do_test doltlite_recover_rejections-2.3 {
+  list [catch {
+    db eval {SELECT 1, 2, 3} { execsql VACUUM }
+  } msg] $msg
+} {0 {}}
+do_test doltlite_recover_rejections-2.4 {
+  set res {}
+  set res2 {}
+  db eval {SELECT a, b FROM t1 WHERE a<=10 ORDER BY a} {
+    if {$a==6} { set res [catchsql VACUUM] }
+    lappend res2 $a
+  }
+  lappend res2 $res
+} {1 2 3 4 5 6 7 8 9 10 {0 {}}}
+do_test doltlite_recover_rejections-2.5 {
+  list [execsql {SELECT count(*), min(a), max(a) FROM t1}] \
+       [execsql {PRAGMA integrity_check}]
+} {{16 1 16} ok}
+
+#-------------------------------------------------------------------------
+# 3.x: crash7 class — stock crashed mid-VACUUM at varied page sizes and
+# verified recovery. doltlite-native: VACUUM (with page_size changes) never
+# perturbs committed content: hash and rows identical across VACUUM and
+# close/reopen, integrity ok each time.
+#
+do_test doltlite_recover_rejections-3.0 {
+  db close
+  forcedelete test.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE abc(a PRIMARY KEY, b, c);
+    WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<48)
+    INSERT INTO abc
+      SELECT printf('key-%03d', x),
+             zeroblob(200 + (x%7)*100),
+             printf('%.*c', 500 + (x%5)*900, 'z')
+      FROM n;
+    SELECT count(*) FROM abc;
+  }
+} {48}
+
+set ::sig3 [execsql {SELECT dolt_hashof_table('abc')}]
+set tn 0
+foreach psz {1024 2048 4096 8192} {
+  incr tn
+  do_test doltlite_recover_rejections-3.$tn.1 {
+    execsql "PRAGMA page_size = $psz"
+    catchsql {VACUUM}
+  } {0 {}}
+  do_test doltlite_recover_rejections-3.$tn.2 {
+    db close
+    sqlite3 db test.db
+    list [string equal $::sig3 [execsql {SELECT dolt_hashof_table('abc')}]] \
+         [execsql {SELECT count(*) FROM abc}] \
+         [execsql {PRAGMA integrity_check}]
+  } {1 48 ok}
+}
+
+# crash7-2 analogue: UNIQUE index + bulk delete, then repeated VACUUM/reopen.
+do_test doltlite_recover_rejections-3.5 {
+  execsql {
+    CREATE TABLE t2(a, b, UNIQUE(a, b));
+    WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<64)
+    INSERT INTO t2 SELECT printf('a%03d', x), printf('b%03d', x) FROM n;
+    DELETE FROM t2 WHERE rowid%2;
+    SELECT count(*) FROM t2;
+  }
+} {32}
+set ::sig3b [execsql {SELECT dolt_hashof_table('t2')}]
+for {set i 1} {$i <= 5} {incr i} {
+  do_test doltlite_recover_rejections-3.6.$i {
+    set v [catchsql {VACUUM}]
+    db close
+    sqlite3 db test.db
+    list $v \
+         [string equal $::sig3b [execsql {SELECT dolt_hashof_table('t2')}]] \
+         [execsql {PRAGMA integrity_check}]
+  } {{0 {}} 1 ok}
+}
+do_test doltlite_recover_rejections-3.7 {
+  execsql {SELECT a, b FROM t2 WHERE rowid<=4 ORDER BY a}
+} {a002 b002 a004 b004}
+
+#-------------------------------------------------------------------------
+# 4.x: pragma6-1.0 — the deserialize page-image API is rejected cleanly and
+# the connection stays usable.
+#
+do_test doltlite_recover_rejections-4.1 {
+  sqlite3 dbm {}
+  list [catch {dbm deserialize [decode_hexdb {
+    .open --hexdb
+    | size 4096 pagesize 4096 filename x.db
+    | page 1 offset 0
+    |      0: 53 51 4c 69 74 65 20 66 6f 72 6d 61 74 20 33 00   SQLite format 3.
+    | end x.db
+  }]} msg] $msg
+} {1 {unable to set MEMDB content}}
+do_test doltlite_recover_rejections-4.2 {
+  set res [dbm eval {
+    CREATE TABLE z(a INTEGER PRIMARY KEY, b TEXT);
+    INSERT INTO z VALUES(5,'five');
+    SELECT a, b FROM z ORDER BY a;
+  }]
+  dbm close
+  set res
+} {5 five}
+
+#-------------------------------------------------------------------------
+# 5.x: vacuum-into — every form of VACUUM INTO is rejected with the exact
+# message, no output file is ever produced, the source database is untouched
+# and fully usable, and the rejection is stable across reopen.
+#
+do_test doltlite_recover_rejections-5.0 {
+  db close
+  forcedelete test.db
+  forcedelete out.db
+  forcedelete out2.db
+  forcedelete test.db2
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t1(
+      a INTEGER PRIMARY KEY,
+      b ANY,
+      c INT AS (b+1),
+      CHECK( typeof(b)!='integer' OR b>a-5 )
+    );
+    WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<100)
+    INSERT INTO t1(a,b) SELECT x, zeroblob(600) FROM c;
+    CREATE INDEX t1b ON t1(b);
+    DELETE FROM t1 WHERE a%2;
+    SELECT count(*), sum(a), sum(length(b)) FROM t1;
+  }
+} {50 2550 30000}
+set ::sig5 [execsql {SELECT dolt_hashof_table('t1')}]
+
+do_catchsql_test doltlite_recover_rejections-5.1 {
+  VACUUM main INTO 'out.db';
+} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_test doltlite_recover_rejections-5.2 {
+  file exists out.db
+} {0}
+do_catchsql_test doltlite_recover_rejections-5.3 {
+  VACUUM INTO 'out.db';
+} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_test doltlite_recover_rejections-5.4 {
+  list [catchsql {VACUUM INTO 'out2.db'}] \
+       [catchsql {VACUUM INTO 'out2.db'}] \
+       [file exists out2.db]
+} {{1 {VACUUM INTO is not supported for doltlite databases}} {1 {VACUUM INTO is not supported for doltlite databases}} 0}
+do_catchsql_test doltlite_recover_rejections-5.5 {
+  VACUUM main INTO ':memory:';
+} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_test doltlite_recover_rejections-5.6 {
+  execsql {
+    CREATE TABLE t2(name TEXT);
+    INSERT INTO t2 VALUES(':memory:');
+  }
+  catchsql {VACUUM main INTO (SELECT name FROM t2)}
+} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_catchsql_test doltlite_recover_rejections-5.7 {
+  VACUUM INTO null;
+} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_test doltlite_recover_rejections-5.8 {
+  db func target target
+  proc target {} { return "test.db2" }
+  list [catchsql {VACUUM INTO target()}] [file exists test.db2]
+} {{1 {VACUUM INTO is not supported for doltlite databases}} 0}
+do_test doltlite_recover_rejections-5.9 {
+  list [string equal $::sig5 [execsql {SELECT dolt_hashof_table('t1')}]] \
+       [execsql {SELECT count(*), sum(a), sum(length(b)) FROM t1}]
+} {1 {50 2550 30000}}
+do_test doltlite_recover_rejections-5.10 {
+  execsql {SELECT name FROM sqlite_master WHERE name IN ('t1','t1b','t2') ORDER BY 1}
+} {t1 t1b t2}
+do_test doltlite_recover_rejections-5.11 {
+  execsql {PRAGMA page_size=1024}
+  list [catchsql {VACUUM INTO 'test.db2'}] [file exists test.db2]
+} {{1 {VACUUM INTO is not supported for doltlite databases}} 0}
+
+set tn 0
+foreach pragma {
+  {PRAGMA synchronous = normal}
+  {PRAGMA synchronous = full}
+  {PRAGMA synchronous = off}
+  {PRAGMA synchronous = extra}
+  {PRAGMA fullfsync = 1; PRAGMA synchronous = full}
+} {
+  incr tn
+  do_test doltlite_recover_rejections-5.12.$tn {
+    forcedelete test.db2
+    db eval $pragma
+    list [catchsql {VACUUM INTO 'test.db2'}] \
+         [file exists test.db2] \
+         [string equal $::sig5 [execsql {SELECT dolt_hashof_table('t1')}]]
+  } {{1 {VACUUM INTO is not supported for doltlite databases}} 0 1}
+}
+
+do_test doltlite_recover_rejections-5.13 {
+  db close
+  sqlite3 db test.db
+  catchsql {VACUUM INTO 'out.db'}
+} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_test doltlite_recover_rejections-5.14 {
+  execsql {
+    INSERT INTO t1(a,b) VALUES(101, 200);
+  }
+  list [execsql {SELECT count(*) FROM t1}] \
+       [execsql {SELECT b, c FROM t1 WHERE a=101}] \
+       [execsql {PRAGMA integrity_check}]
+} {51 {200 201} ok}
+
+finish_test
