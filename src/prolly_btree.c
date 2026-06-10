@@ -300,6 +300,9 @@ struct Btree {
   u8 bSchemaChangedTxn;
   u8 bMasterRootChangedTxn;
   u8 bFilterSchemaPlaceholders;
+  u8 bCatalogDropped;     /* OOM rollback dropped the catalog; reload before
+                          ** treating an empty committedCatalogHash as a
+                          ** fresh database */
 
   int nSavepoint;
   int nSavepointAlloc;
@@ -5043,6 +5046,8 @@ static int btreeReloadBranchWorkingStateInto(
   memset(&rebaseOnto, 0, sizeof(rebaseOnto));
   memset(&constraintViolationsHash, 0, sizeof(constraintViolationsHash));
 
+  rc = chunkStoreEnsureRefsFresh(&pBt->store);
+  if( rc!=SQLITE_OK ) return rc;
   rc = btreeLoadWorkingSetBlob(
       &pBt->store, zBr, &catHash, &workingCommitHash, &stagedCatalog, &isMerging,
       &mergeCommitHash, &conflictsCatalogHash,
@@ -5155,6 +5160,7 @@ static int btreeRefreshSharedWorkingState(Btree *p){
   rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
   if( rc!=SQLITE_OK ) return rc;
   btreeStoreCommittedFromCurrent(p, &loadedCatHash);
+  p->bCatalogDropped = 0;
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
   btreeBumpDataVersion(p);
   return SQLITE_OK;
@@ -5269,6 +5275,7 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         return rc;
       }
       btreeStoreCommittedFromCurrent(p, &loadedCatHash);
+      p->bCatalogDropped = 0;
     }
     btreeStoreCommittedFromCurrent(p, 0);
 
@@ -5474,7 +5481,18 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       sqlite3_free(catData);
       rc2 = restoreFromCommitted(p);
       if( rc2!=SQLITE_OK ){
+        /* Same shape as the rollback path: the reload OOM'd, but the
+        ** transaction must end with the partial state discarded, or the
+        ** next statement's autocommit publishes it. */
+        btreeFreeCatalogTables(p);
+        memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
+        p->bCatalogDropped = 1;
+        p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+        resetConnectionSchema(p);
         chunkStoreRollback(&pBt->store);
+        p->inTrans = TRANS_NONE;
+        p->inTransaction = TRANS_NONE;
+        btreeDiscardAllSavepoints(p);
         chunkStoreUnlock(&pBt->store);
         pBt->store.snapshotPinned = 0;
         /* Preserve the original commit error; restore failure is secondary. */
@@ -5531,6 +5549,20 @@ int sqlite3BtreeCommit(Btree *p){
 
 static int restoreFromCommitted(Btree *p){
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
+    if( p->bCatalogDropped ){
+      /* A prior OOM rollback dropped the catalog. Installing the default
+      ** empty catalog here would let the persist-on-rollback path write an
+      ** empty working set over real tables. Reload the committed state
+      ** from the store instead; failure keeps the dropped state. */
+      ProllyHash loadedCatHash;
+      int rc;
+      memset(&loadedCatHash, 0, sizeof(loadedCatHash));
+      rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
+      if( rc!=SQLITE_OK ) return rc;
+      btreeStoreCommittedFromCurrent(p, &loadedCatHash);
+      p->bCatalogDropped = 0;
+      return SQLITE_OK;
+    }
     btreeFreeCatalogTables(p);
     initDefaultMeta(p);
     p->cat.iNextTable = 2;
@@ -5683,12 +5715,21 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
-      if( bAutocommitOomRollback ){
-        p->inTrans = TRANS_NONE;
-        p->inTransaction = TRANS_NONE;
-        btreeDiscardAllSavepoints(p);
-        chunkStoreRollback(&pBt->store);
-      }
+      /* Reloading the committed catalog failed (OOM). The transaction must
+      ** still end with nothing dangling: chunkStoreRollback() is about to
+      ** discard staging, and the catalog may still point at staged chunks
+      ** (a DDL attempt repoints the sqlite_master root at one). Drop the
+      ** catalog without allocating and force the next BeginTrans to reload
+      ** the committed working state. */
+      btreeFreeCatalogTables(p);
+      memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
+      p->bCatalogDropped = 1;
+      p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+      resetConnectionSchema(p);
+      p->inTrans = TRANS_NONE;
+      p->inTransaction = TRANS_NONE;
+      btreeDiscardAllSavepoints(p);
+      chunkStoreRollback(&pBt->store);
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
       return rc;
@@ -5700,7 +5741,8 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     /* Autocommit OOM rollback restores in-memory state only. Persisting the
     ** restored catalog here can make a failed DDL attempt the new baseline. */
-    if( !bAutocommitOomRollback ){
+    if( !bAutocommitOomRollback && !p->bCatalogDropped
+     && !pBt->store.bRefsStale ){
       u8 *catData = 0;
       int nCatData = 0;
       ProllyHash catHash;
@@ -5804,7 +5846,19 @@ int doltliteBtreeCaptureStatement(void *pArg){
 static int rollbackCommittedState(Btree *p, BtShared *pBt){
   BtCursor *pC;
   int rc = restoreFromCommitted(p);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    /* The reload OOM'd partway; the catalog may still point at staged
+    ** chunks the rollback is about to discard (a DDL attempt repointed
+    ** the sqlite_master root). Drop it without allocating and let the
+    ** next BeginTrans reload the committed working state. */
+    btreeFreeCatalogTables(p);
+    memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
+    p->bCatalogDropped = 1;
+    p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+    invalidateCursors(pBt, 0, SQLITE_ABORT);
+    resetConnectionSchema(p);
+    return rc;
+  }
   /* Like invalidateCursors, but keep the code of an existing fault:
   ** OP_Savepoint's cursor trip already stamped SQLITE_ABORT_ROLLBACK and
   ** clobbering it to SQLITE_ABORT misreported the abort (savepoint7-2.2). */

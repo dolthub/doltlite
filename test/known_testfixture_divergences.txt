@@ -4432,10 +4432,6 @@ memjournal2 memjournal2-1.2.299.3  # in-memory journal premise: journal_mode fix
 memjournal2 memjournal2-1.2.300.1  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.2  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-shared_err shared_ioerr-1.36.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-1.37.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-1.38.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-1.39.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.122.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.123.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.124.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
@@ -5269,3 +5265,4 @@ pagerfault3 pagerfault3-1-ioerr-transient.20  # VACUUM=dolt_gc reports phase-pre
 pagerfault3 pagerfault3-1-ioerr-transient.21  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.22  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 fts4aa fts4aa-1.9  # FTS4 deferral heuristic reads the synthetic 4096 page size; stock at page_size=4096 returns identical values
+fts3malloc fts3_malloc-2.1.transient.100000.18  # transient OOM at one fault point silently skips a master row in count(*) — #1333

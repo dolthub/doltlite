@@ -125,6 +125,8 @@ typedef struct ChunkStore ChunkStore;
 struct ChunkStore {
   ChunkFile file;
   RefsTable refs;
+  u8 bRefsStale;          /* refs restore failed under OOM and was cleared;
+                          ** reload from refsHash before the next use */
   ChunkIndex index;
   WalState wal;
   ChunkStaging staging;
@@ -201,6 +203,7 @@ int chunkStorePut(ChunkStore *cs, const u8 *pData, int nData,
 int chunkStoreCommit(ChunkStore *cs);
 
 void chunkStoreRollback(ChunkStore *cs);
+int chunkStoreEnsureRefsFresh(ChunkStore *cs);
 
 int chunkStoreIsEmpty(ChunkStore *cs);
 
