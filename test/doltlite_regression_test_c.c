@@ -1255,8 +1255,10 @@ static void init_v3_catalog_blob(u8 *aCat, int nCat, u16 nName){
   aCat[1] = 1;
   aCat[5] = 2;
   aCat[9] = BTREE_INTKEY;
-  aCat[50] = (u8)nName;
-  aCat[51] = (u8)(nName >> 8);
+  if( nCat>51 ){
+    aCat[50] = (u8)nName;
+    aCat[51] = (u8)(nName >> 8);
+  }
   if( nName>0 && nCat>52 ){
     aCat[52] = 't';
   }
@@ -3728,6 +3730,7 @@ static void run_integrity_check_walks_prolly_nodes(void){
         strcmp(queryScalarText(db2, "PRAGMA integrity_check"), "ok")!=0);
 
   sqlite3_close(db2);
+  doltliteFreeCatalog(aTables, nTables);
   removeDbFiles(dbpath);
 }
 
