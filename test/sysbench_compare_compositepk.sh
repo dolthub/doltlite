@@ -24,6 +24,8 @@ SQLITE3=${SQLITE3:-./sqlite3}
 BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
+# Match stock SQLite's file-backed page cache to DoltLite's chunk cache.
+SQLITE_FILE_CACHE_PRAGMA=${SQLITE_FILE_CACHE_PRAGMA:-"PRAGMA cache_size=16384;"}
 ROWS=${BENCH_ROWS:-100000}
 BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.5}
 BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-2}
@@ -411,9 +413,13 @@ run_bench() {
     rm -f "$db"
   fi
   local bench_sql_file="$sql_file"
-  if [ "$engine" = "sqlite" ] && [ -n "${SQLITE_BENCH_PRAGMAS:-}" ]; then
+  local sqlite_pragmas="${SQLITE_BENCH_PRAGMAS:-}"
+  if [ "$engine" = "sqlite" ] && [ "$db_template" != ":memory:" ]; then
+    sqlite_pragmas="$SQLITE_FILE_CACHE_PRAGMA $sqlite_pragmas"
+  fi
+  if [ "$engine" = "sqlite" ] && [ -n "$sqlite_pragmas" ]; then
     bench_sql_file="$TMPDIR/pragma_${engine}_${RANDOM}_$$.sql"
-    printf "%s\n" "$SQLITE_BENCH_PRAGMAS" > "$bench_sql_file"
+    printf "%s\n" "$sqlite_pragmas" > "$bench_sql_file"
     cat "$sql_file" >> "$bench_sql_file"
   fi
   local timer=""
