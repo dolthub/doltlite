@@ -5772,7 +5772,7 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
   return p->pOps->xBeginStmt(p, iStatement);
 }
 
-SQLITE_PRIVATE int doltliteBtreeCaptureStatement(void *pArg){
+int doltliteBtreeCaptureStatement(void *pArg){
   Btree *p = (Btree*)pArg;
   if( !p || p->pOps!=&prollyBtreeOps ) return SQLITE_OK;
   return ensureStatementSavepointsCaptured(p);
