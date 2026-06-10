@@ -207,7 +207,7 @@
 # covers: savepoint savepoint-7.2.1 — CREATE TABLE inside savepoint rolled back cleanly, integrity ok (6.2)
 # covers: savepoint savepoint-7.3.1 — table repopulation from existing data (6.3)
 # covers: savepoint savepoint-7.3.2 — DELETE + vacuum pragma + nested savepoint ROLLBACK TO leaves empty table, integrity ok (6.3)
-# not-covered: savepoint savepoint-7.4.1 — SUSPECTED BUG: ROLLBACK TO a savepoint with no subsequent writes resurrects the transaction's earlier DELETE/UPDATE (BEGIN; DELETE; SAVEPOINT s; ROLLBACK TO s; COMMIT leaves the deleted row present)
+# covers: savepoint savepoint-7.4.1 — ROLLBACK TO a savepoint with no subsequent writes keeps the transaction's earlier DELETE (6.4.1)
 # covers: savepoint savepoint-7.5.1 — t5 nested-rollback outcome x={3,4,5}, integrity ok (6.5)
 # covers: savepoint savepoint-7.5.2 — DROP TABLE t5 succeeds after the scenario (6.6)
 # covers: savepoint savepoint-10.2.1 — two ATTACH-ed dbs created, per-db schema visible (6.7)
@@ -218,11 +218,11 @@
 # covers: savepoint savepoint-10.2.6 — aux write visible inside savepoint (6.8)
 # covers: savepoint savepoint-10.2.7 — ROLLBACK TO two reverts only the aux1 write (6.9)
 # covers: savepoint savepoint-10.2.8 — stock pager lock states inapplicable; doltlite lock_status at rest (6.16)
-# not-covered: savepoint savepoint-10.2.9 — SUSPECTED BUG: ROLLBACK TO an inner savepoint reverts other attached databases' writes made under the outer savepoint (SAVEPOINT one; INSERT main; SAVEPOINT two; INSERT aux; ROLLBACK TO two loses the main insert)
-# not-covered: savepoint savepoint-10.2.10 — SUSPECTED BUG: cross-db savepoint rollback over-reverts, so triple-nested savepoints across three dbs cannot be asserted; was: triple-nested savepoints across three dbs (6.12)
-# not-covered: savepoint savepoint-10.2.11 — SUSPECTED BUG: cross-db savepoint rollback over-reverts, so ROLLBACK TO two reverting aux writes only cannot be asserted; was: ROLLBACK TO two reverts aux writes only (6.13)
-# not-covered: savepoint savepoint-10.2.12 — SUSPECTED BUG: cross-db savepoint rollback over-reverts, so repeat ROLLBACK TO two cannot be asserted; was: re-insert then second ROLLBACK TO two gives identical state (6.14)
-# not-covered: savepoint savepoint-10.2.13 — SUSPECTED BUG: cross-db savepoint rollback over-reverts the RELEASE-committed state; full ROLLBACK of the never-released txn is still asserted correct (6.10)
+# covers: savepoint savepoint-10.2.9 — ROLLBACK TO an inner savepoint keeps other attached databases' writes made under the outer savepoint (6.9.1)
+# covers: savepoint savepoint-10.2.10 — triple-nested savepoints across three dbs, all writes visible (6.10.1)
+# covers: savepoint savepoint-10.2.11 — ROLLBACK TO two reverts only writes made after it, outer main-db write survives (6.10.2)
+# covers: savepoint savepoint-10.2.12 — re-insert then second ROLLBACK TO two gives identical state (6.10.3)
+# covers: savepoint savepoint-10.2.13 — full ROLLBACK after nested cross-db savepoint traffic empties all three dbs (6.10, 6.10.4)
 # covers: savepoint savepoint-10.2.14 — lock_status unlocked after full ROLLBACK (6.16)
 # covers: savepoint savepoint-11.1 — auto_vacuum=full rejection (1.10); UNIQUE-table setup (6.18)
 # covers: savepoint savepoint-11.8 — ROLLBACK discards savepoint-created tables; wal_checkpoint no-op reports 0 0 0; data + integrity intact (6.18); DROP-in-savepoint rollback + reopen (6.19-6.20)
@@ -612,9 +612,25 @@ do_test doltlite_recover_jrnlwal_3-6.3 {
     PRAGMA integrity_check;
   }
 } {0 ok}
-# savepoint-7.4.1's flow (BEGIN; DELETE; SAVEPOINT; ROLLBACK TO; COMMIT)
-# is NOT asserted here: doltlite currently resurrects the deleted row.
-# See "SUSPECTED BUG" in the not-covered header lines.
+# savepoint-7.4.1's flow: a savepoint with no subsequent writes must not
+# resurrect the transaction's earlier DELETE when rolled back to.
+do_test doltlite_recover_jrnlwal_3-6.4.1 {
+  execsql {
+    CREATE TABLE s741(a);
+    INSERT INTO s741 VALUES(1);
+    INSERT INTO s741 VALUES(2);
+    BEGIN;
+      DELETE FROM s741 WHERE a=1;
+      SAVEPOINT s;
+      ROLLBACK TO s;
+    COMMIT;
+    SELECT a FROM s741;
+    PRAGMA integrity_check;
+  }
+} {2 ok}
+do_test doltlite_recover_jrnlwal_3-6.4.2 {
+  execsql { DROP TABLE s741 }
+} {}
 do_test doltlite_recover_jrnlwal_3-6.5 {
   execsql {
     CREATE TABLE t5(x, y);
@@ -669,13 +685,55 @@ do_test doltlite_recover_jrnlwal_3-6.9 {
   execsql { ROLLBACK TO two }
   execsql { SELECT * FROM tb ORDER BY x }
 } {}
-# The rest of savepoint-10.2's flow (cross-db state after ROLLBACK TO two,
-# RELEASE one, and the triple-nested block) is NOT asserted: doltlite
-# currently rolls back other databases' outer-savepoint writes when an
-# inner savepoint with no subsequent writes on them is rolled back.
-# See "SUSPECTED BUG" in the not-covered header lines. Full ROLLBACK of
-# the whole savepoint transaction is still correct:
+# Writes made under the outer savepoint in other databases survive the
+# inner rollback.
+do_test doltlite_recover_jrnlwal_3-6.9.1 {
+  execsql {
+    SELECT 'a', * FROM ta;
+    SELECT 'c', * FROM tc;
+  }
+} {a 1 2 c 3 4}
 do_test doltlite_recover_jrnlwal_3-6.10 {
+  execsql {
+    ROLLBACK;
+    SELECT count(*) FROM ta;
+    SELECT count(*) FROM tb;
+    SELECT count(*) FROM tc;
+  }
+} {0 0 0}
+# Triple-nested savepoints across the three databases: ROLLBACK TO an inner
+# savepoint reverts only writes made after it, repeatably.
+do_test doltlite_recover_jrnlwal_3-6.10.1 {
+  execsql {
+    SAVEPOINT one;
+      INSERT INTO ta VALUES('a', 'b');
+      SAVEPOINT two;
+        INSERT INTO tb VALUES('c', 'd');
+        SAVEPOINT three;
+          INSERT INTO tc VALUES('e', 'f');
+    SELECT * FROM ta;
+    SELECT * FROM tb;
+    SELECT * FROM tc;
+  }
+} {a b c d e f}
+do_test doltlite_recover_jrnlwal_3-6.10.2 {
+  execsql {
+    ROLLBACK TO two;
+    SELECT count(*) FROM ta;
+    SELECT count(*) FROM tb;
+    SELECT count(*) FROM tc;
+  }
+} {1 0 0}
+do_test doltlite_recover_jrnlwal_3-6.10.3 {
+  execsql {
+    INSERT INTO tc VALUES('g', 'h');
+    ROLLBACK TO two;
+    SELECT count(*) FROM ta;
+    SELECT count(*) FROM tb;
+    SELECT count(*) FROM tc;
+  }
+} {1 0 0}
+do_test doltlite_recover_jrnlwal_3-6.10.4 {
   execsql {
     ROLLBACK;
     SELECT count(*) FROM ta;
