@@ -396,7 +396,9 @@ static int blobReadWrite(
   int (*xCall)(BtCursor*, u32, u32, void*)
 ){
   int rc = SQLITE_OK;
+#ifdef DOLTLITE_PROLLY
   int iReseek;
+#endif
   Incrblob *p = (Incrblob *)pBlob;
   Vdbe *v;
   sqlite3 *db;
@@ -414,6 +416,7 @@ static int blobReadWrite(
     ** already been invalidated. Return SQLITE_ABORT in this case.
     */
     rc = SQLITE_ABORT;
+#ifdef DOLTLITE_PROLLY
   }else if( (iReseek = sqlite3BtreeIncrblobCursorReseek(p->pCsr))!=0
          && (iReseek<0 || blobSeekToRowForAccess(p)!=SQLITE_OK) ){
     /* doltlite: a blob write re-inserts the row, which saves every cursor
@@ -425,6 +428,7 @@ static int blobReadWrite(
       p->pStmt = 0;
     }
     rc = SQLITE_ABORT;
+#endif
   }else{
     /* Call either BtreeData() or BtreePutData(). If SQLITE_ABORT is
     ** returned, clean-up the statement handle.
