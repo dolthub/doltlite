@@ -292,7 +292,7 @@ int csReplayWal(ChunkStore *cs){
     } else if( tag == 0 && csWalTailIsZero(cs, recPos, walSize) ){
       /* SQLITE_FCNTL_SIZE_HINT (or filesystem preallocation) zero-extends the
       ** file past the last commit. Treat the all-zero tail as absent: rewind
-      ** the logical end of file so the next append reclaims it (#1342). */
+      ** the logical end of file so the next append reclaims it. */
       cs->wal.nWalData = recPos;
       cs->file.iFileSize = cs->wal.iWalOffset + recPos;
       break;

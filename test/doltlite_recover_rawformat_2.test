@@ -167,7 +167,7 @@ source $testdir/tester.tcl
 # covers-class: syscall syscall-8.4.{1..5} (5 entries): originals assert exact
 #   chunk-rounded byte sizes from SIZE_HINT after a 16-byte CHUNK_SIZE; a fresh
 #   doltlite chunk store already exceeds those sizes so the byte counts can
-#   never match. Recovered invariant (#1342, formerly a bug here): an extending
+#   never match. Recovered invariant (formerly a bug here): an extending
 #   size hint zero-pads the file to the chunk-rounded size and the chunk store
 #   treats the all-zero tail as absent — the next INSERT, close/reopen, and
 #   integrity_check all succeed (3.8)
