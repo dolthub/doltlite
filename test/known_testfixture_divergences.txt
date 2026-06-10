@@ -87,7 +87,7 @@ intpkey intpkey-1.1  # tests INTEGER vs INT primary key alias semantics
 collate1 collate1-6.7  # collation on the rowid column
 
 # ── collate4 ──
-collate4 collate4-1.1.7   # collation interacting with rowid ordering
+collate4 collate4-1.1.7   # b UNIQUE COLLATE TEXT now rejected at CREATE (was NULL-PK rejection)
 collate4 collate4-1.1.8
 collate4 collate4-1.1.9
 collate4 collate4-1.1.10
@@ -458,6 +458,28 @@ select9 select9-2.1.1  # CREATE INDEX with COLLATE REVERSE
 select9 select9-2.X
 select9 select9-3.1    # depends on index dropped in select9-2.X
 select9 select9-4.1
+# Column-level "<col> PRIMARY KEY/UNIQUE COLLATE <custom>" used to bypass the
+# custom-collation index rejection because sqlite3AddCollateType retrofitted
+# the collation onto the already-created autoindex. The rejection now
+# fires there too, so CREATE TABLEs that upstream expects to succeed error
+# with "doltlite does not support indexes with custom collation", and their
+# downstream assertions fail on the missing table.
+collate1 collate1-6.5   # CREATE TABLE p1(a PRIMARY KEY COLLATE '"""') rejected
+collate1 collate1-6.6   # depends on p1/c1 from 6.5
+collate1 collate1-6.8   # depends on p1/c1 from 6.5
+without_rowid7 without_rowid7-3.0    # PRIMARY KEY COLLATE mysort rejected
+without_rowid7 without_rowid7-3.1.1  # depends on t1 from 3.0
+without_rowid7 without_rowid7-3.1.2
+without_rowid7 without_rowid7-3.2.1
+without_rowid7 without_rowid7-3.2.2
+without_rowid7 without_rowid7-3.3.1
+without_rowid7 without_rowid7-3.3.2
+without_rowid7 without_rowid7-3.4.1
+without_rowid7 without_rowid7-3.4.2
+without_rowid7 without_rowid7-3.5.1
+without_rowid7 without_rowid7-3.5.2
+without_rowid7 without_rowid7-3.6
+vacuum2 vacuum2-6.0  # PRIMARY KEY COLLATE cmp WITHOUT ROWID rejected
 
 # ---------------------------------------------------------------------------
 # Real-doltlite divergences surfaced when the amalgamation became genuine

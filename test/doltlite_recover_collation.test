@@ -17,7 +17,8 @@ source $testdir/tester.tcl
 # covers: collate4 collate4-1.1.0 — table with NOCASE+custom-TEXT columns; NOCASE index accepted (1.1), custom-TEXT index rejected verbatim (1.2)
 # covers: collate4 collate4-1.1.4 — ORDER BY custom-TEXT column returns binary order via registered collation, sorter not index (1.4)
 # covers: collate4 collate4-1.1.5 — ORDER BY b COLLATE TEXT same result through explicit custom collate (1.5)
-# covers: collate4 collate4-1.1.8 — NOCASE PK iterates in case-insensitive order, nosort (1.8); NULL PK rejected is the doltlite divergence that gated the family (1.7)
+# covers: collate4 collate4-1.1.7 — column-level "b UNIQUE COLLATE TEXT" rejected verbatim (12.1)
+# covers: collate4 collate4-1.1.8 — NOCASE PK iterates in case-insensitive order, nosort (1.8)
 # covers: collate4 collate4-1.1.9 — ORDER BY a COLLATE NOCASE == PK order, nosort (1.8)
 # covers: collate4 collate4-1.1.10 — binary (upstream TEXT) order over NOCASE PK needs a sort, correct result (1.9)
 # covers: collate4 collate4-1.1.11 — column-level UNIQUE index drives ORDER BY, nosort (1.11)
@@ -91,17 +92,15 @@ source $testdir/tester.tcl
 # covers: collate3 collate3-4.6 — explicit COLLATE-in-index form rejected before it can persist (11.3)
 # not-covered: (none)
 #
-# SUSPECTED BUG: "CREATE TABLE t(b UNIQUE COLLATE custom)" bypasses the
-# custom-collation index rejection.  sqlite3AddCollateType (src/build.c:1976)
-# retrofits the collation onto the already-created implicit UNIQUE index
-# without the DOLTLITE_PROLLY check that sqlite3CreateIndex applies
-# (src/build.c:4387).  The persisted index then uses the custom collation
-# (PRAGMA index_list shows it; ORDER BY b COLLATE custom scans it nosort), and
-# after reopen without the collation registered PRAGMA integrity_check fails
-# with "no such collation sequence" — exactly the state the rejection exists
-# to prevent.  This is why collate4-1.1.7's table (a PRIMARY KEY COLLATE
-# NOCASE, b UNIQUE COLLATE TEXT) is creatable here; tests below use built-in
-# collation equivalents instead of relying on the buggy path.
+# Section 12 pins the custom-collation rejection: "CREATE TABLE t(b UNIQUE COLLATE custom)"
+# used to bypass the custom-collation index rejection because
+# sqlite3AddCollateType retrofitted the collation onto the already-created
+# implicit UNIQUE/PK autoindex without the DOLTLITE_PROLLY check that
+# sqlite3CreateIndex applies.  The persisted index then used the custom
+# collation, and after reopen without the collation registered PRAGMA
+# integrity_check failed with "no such collation sequence" — exactly the
+# state the rejection exists to prevent.  The retrofit path now rejects
+# identically; built-in BINARY/NOCASE/RTRIM retrofits still work.
 
 proc cksort {sql} {
   set ::sqlite_sort_count 0
@@ -565,5 +564,50 @@ do_test doltlite_recover_collation-11.15 {
 do_test doltlite_recover_collation-11.16 {
   execsql { SELECT count(*) FROM ct1 }
 } {0}
+
+#-------------------------------------------------------------------------
+# 12.* — column-level UNIQUE/PRIMARY KEY COLLATE <custom> must hit
+# the same rejection as CREATE INDEX instead of retrofitting the custom
+# collation onto the implicit autoindex.
+#
+db collate TEXT text_collate2
+proc text_collate2 {a b} { return [string compare $a $b] }
+do_test doltlite_recover_collation-12.1 {
+  catchsql {
+    CREATE TABLE rt1(a PRIMARY KEY COLLATE NOCASE, b UNIQUE COLLATE TEXT)
+  }
+} {1 {doltlite does not support indexes with custom collation 'TEXT'}}
+do_test doltlite_recover_collation-12.2 {
+  catchsql { CREATE TABLE rt2(a TEXT PRIMARY KEY COLLATE TEXT) }
+} {1 {doltlite does not support indexes with custom collation 'TEXT'}}
+do_test doltlite_recover_collation-12.3 {
+  catchsql { CREATE TABLE rt3(a PRIMARY KEY COLLATE TEXT, b) WITHOUT ROWID }
+} {1 {doltlite does not support indexes with custom collation 'TEXT'}}
+do_test doltlite_recover_collation-12.4 {
+  execsql {
+    SELECT name FROM sqlite_master WHERE name LIKE 'rt%' OR name LIKE '%autoindex%'
+  }
+} {}
+do_test doltlite_recover_collation-12.5 {
+  execsql {
+    CREATE TABLE rt4(a TEXT PRIMARY KEY COLLATE NOCASE, b UNIQUE COLLATE RTRIM,
+                     c UNIQUE COLLATE BINARY);
+    INSERT INTO rt4 VALUES('a','a ','a');
+    INSERT INTO rt4 VALUES('B','B','B');
+    SELECT a FROM rt4 ORDER BY a;
+  }
+} {a B}
+do_test doltlite_recover_collation-12.6 {
+  catchsql { INSERT INTO rt4 VALUES('x','a','y') }
+} {1 {UNIQUE constraint failed: rt4.b}}
+do_test doltlite_recover_collation-12.7 {
+  execsql {
+    CREATE TABLE rt5(c TEXT COLLATE TEXT);
+    INSERT INTO rt5 VALUES('z');
+  }
+  db close
+  sqlite3 db test.db
+  execsql { PRAGMA integrity_check }
+} {ok}
 
 finish_test

@@ -1976,6 +1976,22 @@ void sqlite3AddCollateType(Parse *pParse, Token *pToken){
     for(pIdx=p->pIndex; pIdx; pIdx=pIdx->pNext){
       assert( pIdx->nKeyCol==1 );
       if( pIdx->aiColumn[0]==i ){
+#ifdef DOLTLITE_PROLLY
+        /* This retrofit would persist a custom-collated index, which
+        ** prolly-tree sort keys cannot support. Apply the same rejection
+        ** as sqlite3CreateIndex. */
+        if( sqlite3StrICmp(zColl, "BINARY")!=0
+         && sqlite3StrICmp(zColl, "NOCASE")!=0
+         && sqlite3StrICmp(zColl, "RTRIM")!=0 ){
+          Btree *pColBt = db->aDb[sqlite3SchemaToIndex(db, p->pSchema)].pBt;
+          if( pColBt && !sqlite3BtreeUsesOrig(pColBt) ){
+            sqlite3ErrorMsg(pParse,
+              "doltlite does not support indexes with custom collation '%s'",
+              zColl);
+            break;
+          }
+        }
+#endif
         pIdx->azColl[0] = sqlite3ColumnColl(&p->aCol[i]);
       }
     }
