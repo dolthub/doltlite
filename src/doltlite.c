@@ -240,15 +240,19 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
   const char *zName;
   while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
     sqlite3_stmt *pStmt = 0;
-    char *zSql = sqlite3_mprintf(
-      "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'", zName);
+    /* zName points into the catalog, and stepping the query below can
+    ** begin a transaction that reloads it (cherry-pick refresh). */
+    char *zNameCopy = sqlite3_mprintf("%s", zName);
+    char *zSql = zNameCopy ? sqlite3_mprintf(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'",
+      zNameCopy) : 0;
     if( zSql ){
       if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK ){
         if( sqlite3_step(pStmt)==SQLITE_ROW ){
           const char *zCreate = (const char*)sqlite3_column_text(pStmt, 0);
           if( zCreate ){
             ProllyHash h;
-            char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zName);
+            char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zNameCopy);
             if( zCanon ){
               prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
               sqlite3_free(zCanon);
@@ -260,6 +264,7 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
       }
       sqlite3_free(zSql);
     }
+    sqlite3_free(zNameCopy);
   }
 
   {
@@ -905,7 +910,6 @@ static struct TableEntry *addFindEntryByName(
 
 typedef struct AddNameSlot AddNameSlot;
 struct AddNameSlot {
-  const char *zName;
   int iEntry;
 };
 
@@ -947,14 +951,13 @@ static int addNameIndexInit(
     u32 slot;
     if( !aEntry[i].zName ) continue;
     slot = addNameHash(aEntry[i].zName) & (u32)(nSlot - 1);
-    while( pIdx->aSlot[slot].zName ){
-      if( strcmp(pIdx->aSlot[slot].zName, aEntry[i].zName)==0 ){
+    while( pIdx->aSlot[slot].iEntry ){
+      if( strcmp(aEntry[pIdx->aSlot[slot].iEntry - 1].zName, aEntry[i].zName)==0 ){
         break;
       }
       slot = (slot + 1) & (u32)(nSlot - 1);
     }
-    if( !pIdx->aSlot[slot].zName ){
-      pIdx->aSlot[slot].zName = aEntry[i].zName;
+    if( !pIdx->aSlot[slot].iEntry ){
       pIdx->aSlot[slot].iEntry = i + 1;
     }
   }
@@ -976,8 +979,11 @@ static struct TableEntry *addNameIndexFind(
   slot = addNameHash(zName) & (u32)(pIdx->nSlot - 1);
   for(i=0; i<pIdx->nSlot; i++){
     AddNameSlot *pSlot = &pIdx->aSlot[slot];
-    if( !pSlot->zName ) return 0;
-    if( strcmp(pSlot->zName, zName)==0 ){
+    /* Compare through aEntry, not a cached pointer: the caller replaces
+    ** entry names while the index is live (dolt_commit -A), and a cached
+    ** pointer dangled after the old name was freed. */
+    if( !pSlot->iEntry ) return 0;
+    if( strcmp(pIdx->aEntry[pSlot->iEntry - 1].zName, zName)==0 ){
       return &pIdx->aEntry[pSlot->iEntry - 1];
     }
     slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
