@@ -321,7 +321,10 @@ int chunkStoreOpen(
    || strcmp(zFilename, ":memory:")==0 ){
     cs->isMemory = 1;
     cs->file.zFilename = sqlite3_mprintf(":memory:");
-    if( cs->file.zFilename==0 ) return SQLITE_NOMEM;
+    if( cs->file.zFilename==0 ){
+      chunkStoreClose(cs);
+      return SQLITE_NOMEM;
+    }
     cs->index.nChunks = 0;
     cs->index.iIndexOffset = 0;
     cs->index.nIndexSize = 0;
@@ -331,12 +334,14 @@ int chunkStoreOpen(
   }
 
   rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    chunkStoreClose(cs);
+    return rc;
+  }
 
   rc = sqlite3OsAccess(pVfs, cs->file.zFilename, SQLITE_ACCESS_EXISTS, &exists);
   if( rc != SQLITE_OK ){
-    sqlite3_free(cs->file.zFilename);
-    cs->file.zFilename = 0;
+    chunkStoreClose(cs);
     return rc;
   }
 
@@ -344,8 +349,7 @@ int chunkStoreOpen(
     i64 mainSize = 0;
     rc = csFileSizeByName(pVfs, cs->file.zFilename, &mainSize);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(cs->file.zFilename);
-      cs->file.zFilename = 0;
+      chunkStoreClose(cs);
       return rc;
     }
     if( mainSize==0 ){
@@ -366,15 +370,13 @@ int chunkStoreOpen(
     rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
       if( wantReadOnly ){
-        sqlite3_free(cs->file.zFilename);
-        cs->file.zFilename = 0;
+        chunkStoreClose(cs);
         return rc;
       }
       openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
       rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
       if( rc != SQLITE_OK ){
-        sqlite3_free(cs->file.zFilename);
-        cs->file.zFilename = 0;
+        chunkStoreClose(cs);
         return rc;
       }
       cs->readOnly = 1;
@@ -387,28 +389,19 @@ int chunkStoreOpen(
 
     rc = csReadManifest(cs);
     if( rc != SQLITE_OK ){
-      csCloseFile(cs->file.pFile);
-      cs->file.pFile = 0;
-      sqlite3_free(cs->file.zFilename);
-      cs->file.zFilename = 0;
+      chunkStoreClose(cs);
       return rc;
     }
 
     rc = csReadIndex(cs);
     if( rc != SQLITE_OK ){
-      csCloseFile(cs->file.pFile);
-      cs->file.pFile = 0;
-      sqlite3_free(cs->file.zFilename);
-      cs->file.zFilename = 0;
+      chunkStoreClose(cs);
       return rc;
     }
 
     rc = csReplayWal(cs);
     if( rc != SQLITE_OK ){
-      csCloseFile(cs->file.pFile);
-      cs->file.pFile = 0;
-      sqlite3_free(cs->file.zFilename);
-      cs->file.zFilename = 0;
+      chunkStoreClose(cs);
       return rc;
     }
 
@@ -436,8 +429,7 @@ int chunkStoreOpen(
     }
   }else{
     if( !(flags & SQLITE_OPEN_CREATE) ){
-      sqlite3_free(cs->file.zFilename);
-      cs->file.zFilename = 0;
+      chunkStoreClose(cs);
       return SQLITE_CANTOPEN;
     }
     cs->index.nChunks = 0;

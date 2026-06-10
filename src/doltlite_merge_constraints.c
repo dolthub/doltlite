@@ -1109,6 +1109,7 @@ int doltliteDetectMergeUniqueViolations(
   }
   if( rc == SQLITE_DONE ) rc = SQLITE_OK;
   sqlite3_finalize(pTbls);
+  if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
   return rc;
 }
 
