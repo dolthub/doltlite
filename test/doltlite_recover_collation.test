@@ -17,7 +17,7 @@ source $testdir/tester.tcl
 # covers: collate4 collate4-1.1.0 — table with NOCASE+custom-TEXT columns; NOCASE index accepted (1.1), custom-TEXT index rejected verbatim (1.2)
 # covers: collate4 collate4-1.1.4 — ORDER BY custom-TEXT column returns binary order via registered collation, sorter not index (1.4)
 # covers: collate4 collate4-1.1.5 — ORDER BY b COLLATE TEXT same result through explicit custom collate (1.5)
-# covers: collate4 collate4-1.1.7 — column-level "b UNIQUE COLLATE TEXT" rejected verbatim since #1343 (12.1)
+# covers: collate4 collate4-1.1.7 — column-level "b UNIQUE COLLATE TEXT" rejected verbatim (12.1)
 # covers: collate4 collate4-1.1.8 — NOCASE PK iterates in case-insensitive order, nosort (1.8)
 # covers: collate4 collate4-1.1.9 — ORDER BY a COLLATE NOCASE == PK order, nosort (1.8)
 # covers: collate4 collate4-1.1.10 — binary (upstream TEXT) order over NOCASE PK needs a sort, correct result (1.9)
@@ -92,7 +92,7 @@ source $testdir/tester.tcl
 # covers: collate3 collate3-4.6 — explicit COLLATE-in-index form rejected before it can persist (11.3)
 # not-covered: (none)
 #
-# Section 12 pins the #1343 fix: "CREATE TABLE t(b UNIQUE COLLATE custom)"
+# Section 12 pins the custom-collation rejection: "CREATE TABLE t(b UNIQUE COLLATE custom)"
 # used to bypass the custom-collation index rejection because
 # sqlite3AddCollateType retrofitted the collation onto the already-created
 # implicit UNIQUE/PK autoindex without the DOLTLITE_PROLLY check that
@@ -566,7 +566,7 @@ do_test doltlite_recover_collation-11.16 {
 } {0}
 
 #-------------------------------------------------------------------------
-# 12.* — #1343: column-level UNIQUE/PRIMARY KEY COLLATE <custom> must hit
+# 12.* — column-level UNIQUE/PRIMARY KEY COLLATE <custom> must hit
 # the same rejection as CREATE INDEX instead of retrofitting the custom
 # collation onto the implicit autoindex.
 #
