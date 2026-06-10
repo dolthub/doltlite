@@ -83,10 +83,6 @@ decimal
 distinct
 distinctagg
 doltlite_fts3_oom
-doltlite_recover_collation
-doltlite_recover_ordering
-doltlite_recover_utf16_errtext
-doltlite_recover_withoutrowid
 e_blobbytes
 e_expr
 e_resolve

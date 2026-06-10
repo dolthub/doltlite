@@ -34,10 +34,6 @@ crash8
 crashM
 dbpage
 dbstatus2
-doltlite_recover_jrnlwal_1
-doltlite_recover_jrnlwal_2
-doltlite_recover_jrnlwal_3
-doltlite_recover_jrnlwal_4
 exclusive
 exclusive2
 format4

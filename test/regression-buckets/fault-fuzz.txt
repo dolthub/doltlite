@@ -6,11 +6,6 @@ backup_malloc
 carrayfault
 cffault
 default
-doltlite_recover_corruption
-doltlite_recover_pragma_output
-doltlite_recover_rawformat_1
-doltlite_recover_rawformat_2
-doltlite_recover_rawformat_3
 exprfault
 exprfault2
 filterfault
