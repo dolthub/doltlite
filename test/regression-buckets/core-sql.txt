@@ -348,6 +348,7 @@ tpch01
 trace2
 trace3
 trans
+trans2
 trans3
 transitive1
 types

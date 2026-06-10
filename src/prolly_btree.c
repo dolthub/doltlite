@@ -6670,7 +6670,12 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
-  rc = prollyCursorSeekInt(&pCur->pCur, pCur->cachedIntKey, &res);
+  if( pCur->curIntKey ){
+    rc = prollyCursorSeekInt(&pCur->pCur, pCur->cachedIntKey, &res);
+  }else{
+    ProllyMutMapEntry *e = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+    rc = prollyCursorSeekBlob(&pCur->pCur, e->pKey, e->nKey, &res);
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( res==0 ){
     pCur->mergeSrc = MERGE_SRC_BOTH;
@@ -7573,6 +7578,10 @@ static int prollyBtCursorIndexMoveto(
         if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
           setCursorToMutMapEntryPhys(
               pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+          /* The tree side is still wherever the last operation left it. A
+          ** later step must re-seek it to this key before merging, or it
+          ** feeds stale entries into the merge scan. */
+          pCur->deferredTreeSeek = 1;
           *pRes = 0;
           pIdxKey->eqSeen = 1;
           return SQLITE_OK;
@@ -7583,14 +7592,10 @@ static int prollyBtCursorIndexMoveto(
         rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-          if( pEntry->nVal>0 && pEntry->pVal ){
-            rc = cacheCursorPayloadCopy(pCur, pEntry->pVal, pEntry->nVal);
-          }else{
-            rc = cacheCursorPayloadReconstructed(
-                pCur, pEntry->pKey, pEntry->nKey);
-          }
-          if( rc!=SQLITE_OK ) return rc;
-          pCur->eState = CURSOR_VALID;
+          pCur->pMutMap = pPending;
+          setCursorToMutMapEntryPhys(
+              pCur, (int)(pEntry - pPending->aEntries));
+          pCur->deferredTreeSeek = 1;
           *pRes = 0;
           pIdxKey->eqSeen = 1;
           return SQLITE_OK;
