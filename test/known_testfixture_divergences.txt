@@ -5272,3 +5272,4 @@ pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-pre
 pagerfault3 pagerfault3-1-ioerr-transient.20  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.21  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.22  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+fts4aa fts4aa-1.9  # FTS4 deferral heuristic reads the synthetic 4096 page size; stock at page_size=4096 returns identical values

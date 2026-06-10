@@ -120,6 +120,7 @@ fts3snippet2
 fts3sort
 fts3tok1
 fts3varint
+fts4aa
 fts4docid
 fts4incr
 fts4intck1
@@ -325,6 +326,7 @@ upsert5
 view
 view2
 view3
+vtab_alter
 vtab2
 vtab3
 vtab4
@@ -337,6 +339,8 @@ vtabA
 vtabB
 vtabC
 vtabD
+vtabdistinct
+vtabdrop
 vtabE
 vtabF
 vtabH
@@ -344,7 +348,4 @@ vtabI
 vtabJ
 vtabK
 vtabL
-vtab_alter
-vtabdistinct
-vtabdrop
 vtabrhs1
