@@ -796,6 +796,10 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     {
       int j;
       int out = 0;
+      for(j=0; j<mm->nUndo; j++){
+        int idx = mm->aUndo[j].entryIdx;
+        mm->aUndo[j].entryIdx = idx>=0 && idx<oldN ? mm->aPos[idx] : -1;
+      }
       if( mm->keepSorted ){
         for(j=0; j<oldN; j++){
           int mapped = mm->aPos[mm->aOrder[j]];
@@ -813,10 +817,6 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
         mm->orderDirty = 1;
         mm->posDirty = 1;
         mm->appendSorted = 0;
-      }
-      for(j=0; j<mm->nUndo; j++){
-        int idx = mm->aUndo[j].entryIdx;
-        mm->aUndo[j].entryIdx = idx>=0 && idx<oldN ? mm->aPos[idx] : -1;
       }
     }
   }
