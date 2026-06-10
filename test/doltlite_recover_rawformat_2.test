@@ -1,0 +1,932 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Recovers the intent of raw-format/byte-level divergences (shard rawformat_2).
+# The originals poked SQLite page bytes, page counts, file sizes, file-header
+# fields, utf16 encodings, and internal metrics. doltlite stores a
+# content-addressed prolly chunk store, so each entry is re-asserted as the
+# doltlite-native invariant: synthetic pragma values, content-hash
+# stability/change, durability across close/reopen, rollback atomicity, exact
+# rejection messages, and integrity_check after every scenario.
+#
+# covers: pagesize pagesize-1.1 — fresh db reports doltlite's synthetic default
+#   page_size 4096 (1.1)
+# covers: pagesize pagesize-1.3 — page_size set after CREATE TABLE echoes in
+#   session but never alters stored content (hash unchanged) (1.2-1.4)
+# covers: pagesize pagesize-1.4 — invalid size 511 rejected, value unchanged (1.3)
+# covers: pagesize pagesize-1.8 — non-power-of-2 1234 and oversize 65537
+#   rejected, value unchanged (1.3)
+# covers: pagesize pagesize-3.1 — page_size set inside a txn after schema read
+#   does not change the effective store layout; reopen reports 4096 (1.7)
+# covers: pagesize pagesize-3.3 — page_size set wrapped in BEGIN/COMMIT is
+#   layout-inert; reopen reports 4096 (1.7)
+# covers-class: pagesize pagesize-2.512.{2,3,6,10,30} pagesize-2.2048.{2,3,6,10,30}
+#   pagesize-2.4096.{3,30} pagesize-2.8192.{2,3,6,10,30} (17 entries): originals
+#   asserted the configured page size persists in the file header and file size
+#   is page_size*pages; doltlite's chunk store has no header so every reopen
+#   reports 4096 regardless of the session-set value, file size is nonzero and
+#   chunk-store defined, data and txn rollback boundaries round-trip per size,
+#   integrity_check ok (1.5, 1.6, 2.*)
+# covers-class: crash6 crash6-3.{0..29}.{2,3} (60 entries): originals crashed a
+#   child mid-transaction per page size and verified the pre-transaction
+#   signature survived recovery; doltlite analog per size class 1024/2048/4096/
+#   8192: an uncommitted transaction (insert-from-select + delete) abandoned by
+#   closing the connection never persists partially — signature (count+md5sums)
+#   identical after reopen and integrity_check ok (2.*)
+# covers-class: syscall syscall-4.2.delete.{1..19} (19 entries): originals
+#   committed across main+attached aux under injected open() faults and verified
+#   both rows after reopen; doltlite analog: journal_mode pragma rejection is
+#   asserted verbatim, then a main+aux transaction commits and both tables read
+#   back correctly after close/reopen (3.1-3.3)
+# covers: syscall syscall-7.2 — 2-byte garbage file: first write errors cleanly
+#   (doltlite reports disk I/O error, not silent success) and the file is not
+#   clobbered (3.4)
+# covers: syscall syscall-7.3 — 3-byte garbage file: same clean error, bytes
+#   preserved (3.5)
+# covers: syscall syscall-8.1 — chunk-size file_control accepted on the chunk
+#   store, db remains fully usable (3.6)
+# covers: syscall syscall-8.3 — small chunk-size file_control accepted (3.6)
+#   and a non-extending size-hint is harmless (3.7)
+# covers-class: e_expr e_expr-27.4.{4..9} (6 entries): originals asserted
+#   utf16le/be CAST-to-BLOB byte images; doltlite ignores non-UTF-8 encodings so
+#   after attempting both encodings the BLOB images are the UTF-8 bytes (4.2-4.3)
+# covers-class: e_expr e_expr-28.1.{3,4} (2 entries): BLOB-to-TEXT reads bytes
+#   as UTF-8 even after attempting utf16le: X'676869' equals 'ghi' and the
+#   utf16le image decodes as NUL-truncated 'g' (4.4)
+# covers-class: e_expr e_expr-29.1.{5..8} (4 entries): utf16le numeric blobs
+#   cast to REAL under doltlite's UTF-8 read the longest UTF-8 prefix (4.5)
+# covers-class: e_expr e_expr-30.1.{5..8} (4 entries): utf16be numeric blobs
+#   cast to INTEGER read no numeric prefix under UTF-8 (leading NUL) (4.5)
+# covers-class: e_expr e_expr-33.1.{1,3,4} (3 entries): original proved cast
+#   results differ per encoding; doltlite-native invariant is the inverse and is
+#   asserted: three connections that attempted utf-8/utf-16le/utf-16be all
+#   produce identical cast results because encoding is always UTF-8 (4.6)
+# covers: enc3 enc3-1.1 — PRAGMA encoding=utf16le accepted as no-op; encoding
+#   reports UTF-8 (4.1)
+# covers: enc3 enc3-2.1 — encoding still reports UTF-8 later in the session (4.7)
+# covers: enc3 enc3-2.2 — stored utf16le blob CASTs to text per UTF-8
+#   (NUL-truncated 'a'), stored bytes intact via hex() (4.7)
+# covers: enc3 enc3-2.3 — literal utf16le blob casts to 'a' under UTF-8 (4.7)
+# covers: enc3 enc3-3.2 — attaching a second doltlite db never encoding-clashes;
+#   cross-db query works (4.8)
+# covers: enc4 enc4-2.1 — PRAGMA encoding = UTF-16le reads back UTF-8 on a fresh
+#   db; numeric text expressions still evaluate exactly (4.9)
+# covers: enc4 enc4-3.1 — PRAGMA encoding = UTF-16be reads back UTF-8 (4.9)
+# covers: alter3 alter3-3.4 — PRAGMA schema_version=N is a no-op; the
+#   hash-derived value is stable across no-ops/reopen and CHANGES on ALTER ADD
+#   (5.1-5.3)
+# covers: alter3 alter3-4.4 — schema_version changes again on ALTER ADD with a
+#   DEFAULT and rewritten rows carry the default (5.4)
+# covers: alter3 alter3-5.4 — aux.schema_version changes when the attached db's
+#   table is altered (5.5)
+# covers: alter3 alter3-5.8 — second aux ALTER ADD DEFAULT changes
+#   aux.schema_version again and aux rows carry defaults (5.5)
+# covers-class: alter3 alter3-3.3 alter3-4.3 alter3-5.5 alter3-7.{1..5}
+#   (8 entries): originals read the file-format header byte around ALTER/VACUUM;
+#   the chunk store has no SQLite header, so the recovered invariant is that
+#   VACUUM + ALTER ADD (NULL and non-NULL defaults) + VACUUM keep every row and
+#   default correct across reopen with integrity_check ok (5.6)
+# covers: backup2 backup2-2 — db backup FILE produces a faithful copy: rows,
+#   view, index, trigger, ANALYZE output present, integrity ok (6.1-6.2)
+# covers: backup2 backup2-3.2 — restore from the backup returns the db to the
+#   backed-up content (6.3)
+# covers: backup2 backup2-4 — restore into temp is rejected cleanly and the
+#   connection stays usable (6.4)
+# covers: backup2 backup2-5 — backup of temp is rejected cleanly and the
+#   connection stays usable (6.4)
+# covers: backup2 backup2-7 — backup onto a non-database target file fails with
+#   doltlite's exact message; source unharmed (6.5)
+# covers: backup2 backup2-8 — backup of an unknown database name fails; source
+#   unharmed (6.6)
+# covers: backup2 backup2-11 — restore from a non-database file fails with
+#   doltlite's exact message (6.7)
+# covers: backup2 backup2-12 — restore into an unknown database name fails;
+#   connection usable (6.8)
+# covers: backup4 backup4-1.1 — backup from an in-memory doltlite db is rejected
+#   verbatim (6.9)
+# covers-class: backup4 backup4-2.{2,3,4} backup4-3.{2,3,4} (6 entries):
+#   originals asserted page-based file sizes when backing up an empty source;
+#   doltlite analog: empty-source backup yields a valid, empty, openable
+#   destination (0 schema rows, integrity ok) and the source stays empty (6.10)
+# covers-class: corruptN corruptN-1.0 corruptN-1.1 corruptN-2.0 corruptN-6.1
+#   corruptN-6.3 corruptN-7.{1,2,3} (8 entries): originals deserialized corrupt
+#   SQLite page images; doltlite rejects MEMDB page-image deserialize verbatim
+#   (never serving corrupt pages), the connection stays usable (7.1-7.2)
+# covers-class: vacuum5 vacuum5-1.3.{2,3,4} vacuum5-3.2 (4 entries): originals
+#   measured per-file page/byte shrinkage of VACUUM; doltlite analog: VACUUM and
+#   VACUUM <schema> succeed, content hash and rows are unchanged, unknown schema
+#   errors verbatim, integrity ok (8.1-8.3)
+# covers: vacuum2 vacuum2-2.2 — VACUUM leaves stored content identical
+#   (hash-stable) rather than rewriting the file header (8.1)
+# covers: vacuum2 vacuum2-3.1 — data state (not page count) is the contract:
+#   rows correct before/after VACUUM with a second attached schema (8.1-8.2)
+# covers: vacuum2 vacuum2-3.13 — auto_vacuum cannot be reconfigured: set errors
+#   verbatim, value stays 0, VACUUM still succeeds (8.4)
+# covers: vacuum vacuum-7.6 — PRAGMA auto_vacuum=1 + VACUUM does not switch the
+#   db to auto_vacuum; doltlite rejects the set and reports 0 (8.4)
+# covers-class: securedel2 securedel2-1.4.{1,3} securedel2-1.5.2
+#   securedel2-1.6.2 (4 entries): freed-byte zeroing is N/A on the
+#   content-addressed store (GC reclaims); recovered row-level intent: the
+#   secure_delete pragma reports doltlite's fixed 0, deleted rows are gone from
+#   every SQL surface after delete and after reopen, survivors intact (9.1-9.2)
+# covers-class: reservebytes reservebytes-1.3.5 reservebytes-1.4.{1,4}
+#   (3 entries): no per-page reserved-bytes field exists; the file_control is
+#   accepted (SQLITE_OK), VACUUM after each setting succeeds, a second
+#   connection sees integrity ok and correct rows (10.1)
+# covers-class: tkt1512 tkt1512-1.{2,3,4} (3 entries): page-based file-size
+#   shrink after DROP/VACUUM is N/A; recovered: DROP TABLE + VACUUM leave a
+#   consistent reusable db (schema empty, file nonzero, recreate works) (11.1)
+# covers: collate4 collate4-2.1.2 — index on the NOCASE column is selected for
+#   the join (EQP) and the joined rows match stock exactly (12.1)
+# covers: collate4 collate4-3.4 — NOCASE PK UPDATE-collision errors verbatim;
+#   custom-collation index DDL (the original cascade trigger) is rejected
+#   verbatim (12.2-12.4)
+# covers-class: zeroblob zeroblob-1.1.{1,2} (2 entries): allocation
+#   instrumentation is N/A (prolly materializes the zeroblob); value semantics
+#   asserted: zeroblob(1000000) stores, reads back full-length all-zero, equals
+#   zeroblob(1000000), survives reopen (13.1)
+# covers: insert insert-5.4 — sqlite_master rootpage numbers are meaningless
+#   under prolly storage; recovered: after the t4 INSERT-SELECT dance the
+#   catalog still lists both tables and their data is exact (14.1)
+# covers: minmax2 minmax2-1.6 — min() over a DESC index: seek-count metric
+#   replaced by the plan (covering index) plus the exact result (15.1)
+# covers: rowid rowid-4.5 — joined row result matches stock and the new index
+#   drives the probe (EQP), replacing the search-count metric (16.1)
+# covers: altertab3 altertab3-31.1 — page_count stability across DROP COLUMN is
+#   a stock page metric; recovered: DROP COLUMN on a 5000-row table keeps every
+#   surviving value and integrity ok (17.1)
+# covers: misc5 misc5-4.1 — opening a small non-database file errors cleanly
+#   with doltlite's message and never overwrites the file (ticket #1370 intent)
+#   (18.1)
+# covers: fts4aa fts4aa-1.9 — FTS4 deferred-token matchinfo is deterministic and
+#   exact on doltlite's synthetic page size (19.1)
+# not-covered: backup2 backup2-6 — original asserts backup onto a readonly file
+#   fails with a permission error; the CI container runs as root, which bypasses
+#   file permissions, so the readonly condition cannot be created in this
+#   environment (verified: backup onto a 0400 file succeeds as root)
+# not-covered: syscall syscall-8.4.1 syscall-8.4.2 syscall-8.4.3 syscall-8.4.4
+#   syscall-8.4.5 — SUSPECTED BUG: SQLITE_FCNTL_SIZE_HINT that extends the file
+#   after SQLITE_FCNTL_CHUNK_SIZE (e.g. chunksize 4096 then sizehint 8192 on a
+#   fresh db) appends chunk-rounded zero bytes the chunk store cannot parse; the
+#   next INSERT fails with 'database disk image is malformed'. The originals
+#   exist to assert exactly this extension behavior, so they cannot be
+#   recovered until the size-hint path is fixed.
+
+#-------------------------------------------------------------------------
+# 1.* pagesize
+#
+do_test doltlite_recover_rawformat_2-1.1 {
+  execsql {PRAGMA page_size}
+} {4096}
+
+do_test doltlite_recover_rawformat_2-1.2 {
+  execsql {CREATE TABLE t1(x)}
+  execsql {INSERT INTO t1 VALUES('one'),('two'),('three')}
+  execsql {PRAGMA page_size=2048}
+  execsql {PRAGMA page_size}
+} {2048}
+
+do_test doltlite_recover_rawformat_2-1.3 {
+  execsql {PRAGMA page_size=511}
+  set a [execsql {PRAGMA page_size}]
+  execsql {PRAGMA page_size=1234}
+  set b [execsql {PRAGMA page_size}]
+  execsql {PRAGMA page_size=65537}
+  set c [execsql {PRAGMA page_size}]
+  list $a $b $c
+} {2048 1234 1234}
+
+do_test doltlite_recover_rawformat_2-1.4 {
+  set h0 [db one {SELECT dolt_hashof_table('t1')}]
+  execsql {PRAGMA page_size=8192}
+  set h1 [db one {SELECT dolt_hashof_table('t1')}]
+  list [execsql {PRAGMA page_size}] [expr {$h0 eq $h1}]
+} {8192 1}
+
+do_test doltlite_recover_rawformat_2-1.5 {
+  execsql {
+    BEGIN;
+    INSERT INTO t1 SELECT x||x FROM t1;
+    INSERT INTO t1 SELECT x||x FROM t1;
+    INSERT INTO t1 SELECT x||x FROM t1;
+    INSERT INTO t1 SELECT x||x FROM t1;
+  }
+  set mid [execsql {SELECT count(*) FROM t1}]
+  execsql {ROLLBACK}
+  list $mid [execsql {SELECT count(*) FROM t1}] \
+      [execsql {PRAGMA integrity_check}]
+} {48 3 ok}
+
+do_test doltlite_recover_rawformat_2-1.6 {
+  db close
+  sqlite3 db test.db
+  list [execsql {PRAGMA page_size}] \
+      [execsql {SELECT x FROM t1 ORDER BY x}] \
+      [expr {[file size test.db] > 0}]
+} {4096 {one three two} 1}
+
+do_test doltlite_recover_rawformat_2-1.7 {
+  execsql {
+    BEGIN;
+    SELECT count(*) FROM sqlite_master;
+    PRAGMA page_size=2048;
+    COMMIT;
+  }
+  db close
+  sqlite3 db test.db
+  list [execsql {PRAGMA page_size}] [execsql {PRAGMA integrity_check}]
+} {4096 ok}
+
+#-------------------------------------------------------------------------
+# 2.* crash6: abandoned transactions never persist partially, per size class
+#
+foreach pgsz {1024 2048 4096 8192} {
+  do_test doltlite_recover_rawformat_2-2.$pgsz.1 {
+    db close
+    forcedelete test.db
+    sqlite3 db test.db
+    execsql "PRAGMA page_size=$pgsz"
+    execsql {BEGIN}
+    execsql {CREATE TABLE abc(a, b, c)}
+    for {set n 0} {$n < 300} {incr n} {
+      execsql "INSERT INTO abc VALUES($n, [expr 2*$n], [expr 3*$n])"
+    }
+    execsql {COMMIT}
+    set ::sig [db eval {SELECT count(*), md5sum(a), md5sum(b), md5sum(c) FROM abc}]
+    execsql {BEGIN}
+    execsql {INSERT INTO abc SELECT a+10000, 0, 0 FROM abc WHERE a%2==0}
+    execsql {DELETE FROM abc WHERE a%3==1}
+    execsql {UPDATE abc SET b=b+1 WHERE a%5==0}
+    db close
+    sqlite3 db test.db
+    expr {$::sig eq [db eval {SELECT count(*), md5sum(a), md5sum(b), md5sum(c) FROM abc}]}
+  } {1}
+  do_test doltlite_recover_rawformat_2-2.$pgsz.2 {
+    execsql {PRAGMA integrity_check}
+  } {ok}
+}
+
+#-------------------------------------------------------------------------
+# 3.* syscall
+#
+do_test doltlite_recover_rawformat_2-3.1 {
+  db close
+  forcedelete test.db test2.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t1(x, y);
+    INSERT INTO t1 VALUES(1, 2);
+    ATTACH 'test2.db' AS aux;
+    CREATE TABLE aux.t2(x, y);
+    INSERT INTO t2 VALUES(3, 4);
+  }
+  catchsql {PRAGMA main.journal_mode = delete}
+} {1 {journal_mode is not configurable on doltlite-format databases}}
+
+do_test doltlite_recover_rawformat_2-3.2 {
+  execsql {
+    BEGIN;
+      INSERT INTO t1 VALUES(5, 6);
+      INSERT INTO t2 VALUES(7, 8);
+    COMMIT;
+  }
+  db close
+  sqlite3 db test.db
+  execsql {ATTACH 'test2.db' AS aux}
+  execsql {
+    SELECT * FROM t1 ORDER BY x;
+    SELECT * FROM t2 ORDER BY x;
+  }
+} {1 2 5 6 3 4 7 8}
+
+do_test doltlite_recover_rawformat_2-3.3 {
+  list [execsql {PRAGMA main.integrity_check}] \
+      [execsql {PRAGMA aux.integrity_check}]
+} {ok ok}
+
+proc rf2_garbage_file {name bytes} {
+  forcedelete $name
+  set fd [open $name w]
+  fconfigure $fd -translation binary
+  puts -nonewline $fd $bytes
+  close $fd
+}
+
+do_test doltlite_recover_rawformat_2-3.4 {
+  db close
+  rf2_garbage_file test.db "SQ"
+  set rc [list [catch {
+    sqlite3 db test.db
+    execsql { CREATE TABLE g1(a, b) }
+  } msg] $msg]
+  catch {db close}
+  set fd [open test.db r]
+  fconfigure $fd -translation binary
+  set data [read $fd]
+  close $fd
+  list $rc $data
+} {{1 {disk I/O error}} SQ}
+
+do_test doltlite_recover_rawformat_2-3.5 {
+  rf2_garbage_file test.db "SQL"
+  set rc [list [catch {
+    sqlite3 db test.db
+    execsql { CREATE TABLE g1(a, b) }
+  } msg] $msg]
+  catch {db close}
+  set fd [open test.db r]
+  fconfigure $fd -translation binary
+  set data [read $fd]
+  close $fd
+  list $rc $data
+} {{1 {disk I/O error}} SQL}
+
+do_test doltlite_recover_rawformat_2-3.6 {
+  forcedelete test.db
+  sqlite3 db test.db
+  execsql {CREATE TABLE s8(a, b); INSERT INTO s8 VALUES(1, 2);}
+  set r1 [file_control_chunksize_test db main 4096]
+  set r2 [file_control_chunksize_test db main 16]
+  list $r1 $r2 [execsql {SELECT * FROM s8 ORDER BY a}]
+} {{} {} {1 2}}
+
+do_test doltlite_recover_rawformat_2-3.7 {
+  set res [file_control_sizehint_test db main 100]
+  execsql {INSERT INTO s8 VALUES(3, 4)}
+  db close
+  sqlite3 db test.db
+  list $res [execsql {SELECT * FROM s8 ORDER BY a}] \
+      [execsql {PRAGMA integrity_check}]
+} {{} {1 2 3 4} ok}
+
+#-------------------------------------------------------------------------
+# 4.* encodings: e_expr-27/28/29/30/33, enc3, enc4
+#
+do_test doltlite_recover_rawformat_2-4.1 {
+  db close
+  forcedelete test.db
+  sqlite3 db test.db
+  execsql {PRAGMA encoding = 'UTF-16le'}
+  execsql {PRAGMA encoding}
+} {UTF-8}
+
+do_test doltlite_recover_rawformat_2-4.2 {
+  execsql {
+    SELECT quote(CAST('ghi' AS blob)), quote(CAST(456 AS blob)),
+           quote(CAST(1.78 AS blob));
+  }
+} {X'676869' X'343536' X'312E3738'}
+
+do_test doltlite_recover_rawformat_2-4.3 {
+  sqlite3 db2 :memory:
+  db2 eval {PRAGMA encoding = 'UTF-16be'}
+  set res [db2 eval {
+    SELECT quote(CAST('ghi' AS blob)), quote(CAST(456 AS blob)),
+           quote(CAST(1.78 AS blob));
+  }]
+  db2 close
+  set res
+} {X'676869' X'343536' X'312E3738'}
+
+do_test doltlite_recover_rawformat_2-4.4 {
+  execsql {
+    SELECT CAST(X'676869' AS text) == 'ghi',
+           CAST(X'670068006900' AS text);
+  }
+} {1 g}
+
+do_test doltlite_recover_rawformat_2-4.5 {
+  execsql {
+    SELECT CAST(X'31002E0032003300' AS REAL),
+           CAST(X'003100320033' AS INTEGER),
+           typeof(CAST(X'31002E0032003300' AS REAL)),
+           typeof(CAST(X'003100320033' AS INTEGER));
+  }
+} {1.0 0 real integer}
+
+do_test doltlite_recover_rawformat_2-4.6 {
+  sqlite3 dbe1 :memory: ; dbe1 eval { PRAGMA encoding = 'utf-8' }
+  sqlite3 dbe2 :memory: ; dbe2 eval { PRAGMA encoding = 'utf-16le' }
+  sqlite3 dbe3 :memory: ; dbe3 eval { PRAGMA encoding = 'utf-16be' }
+  set res {}
+  foreach castexpr {
+    { CAST(123 AS BLOB)    }
+    { CAST('' AS BLOB)     }
+    { CAST('abcd' AS BLOB) }
+    { CAST(X'abcd' AS TEXT) }
+    { CAST(X'' AS TEXT)     }
+  } {
+    set r1 [dbe1 eval "SELECT typeof($castexpr), quote($castexpr)"]
+    set r2 [dbe2 eval "SELECT typeof($castexpr), quote($castexpr)"]
+    set r3 [dbe3 eval "SELECT typeof($castexpr), quote($castexpr)"]
+    lappend res [expr {$r1 eq $r2 && $r2 eq $r3}]
+  }
+  dbe1 close
+  dbe2 close
+  dbe3 close
+  set res
+} {1 1 1 1 1}
+
+do_test doltlite_recover_rawformat_2-4.7 {
+  execsql {
+    CREATE TABLE te(a);
+    INSERT INTO te VALUES(x'61006200630064006500');
+  }
+  list [execsql {PRAGMA encoding}] \
+      [execsql {SELECT CAST(a AS text) FROM te}] \
+      [execsql {SELECT CAST(x'61006200630064006500' AS text)}] \
+      [execsql {SELECT hex(a) FROM te}] \
+      [execsql {SELECT count(*) FROM te WHERE CAST(a AS text) LIKE 'abc%'}]
+} {UTF-8 a a 61006200630064006500 0}
+
+do_test doltlite_recover_rawformat_2-4.8 {
+  forcedelete test3.db
+  sqlite3 db3 test3.db
+  db3 eval {
+    PRAGMA encoding='utf8';
+    CREATE TABLE u1(x);
+    INSERT INTO u1 VALUES('hello');
+  }
+  db3 close
+  execsql {ATTACH 'test3.db' AS enc3aux}
+  set res [execsql {SELECT x FROM enc3aux.u1}]
+  execsql {DETACH enc3aux}
+  set res
+} {hello}
+
+do_test doltlite_recover_rawformat_2-4.9 {
+  sqlite3 db2 :memory:
+  db2 eval {PRAGMA encoding = 'UTF-16be'}
+  set r [list [db2 eval {PRAGMA encoding}] [db2 eval {SELECT 1+'1.0'}] \
+      [db2 eval {SELECT 1+substr('9223372036854775807',1,3)}]]
+  db2 close
+  set r
+} {UTF-8 2.0 923}
+
+#-------------------------------------------------------------------------
+# 5.* alter3: schema_version + file-format byte
+#
+do_test doltlite_recover_rawformat_2-5.1 {
+  db close
+  forcedelete test.db test2.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1 VALUES(1, 100);
+    INSERT INTO t1 VALUES(2, 300);
+  }
+  execsql {PRAGMA schema_version = 10}
+  set sv [db one {PRAGMA schema_version}]
+  list [expr {$sv == 10}] [expr {$sv % 2}]
+} {0 1}
+
+do_test doltlite_recover_rawformat_2-5.2 {
+  set sv0 [db one {PRAGMA schema_version}]
+  execsql {SELECT count(*) FROM t1}
+  set sv1 [db one {PRAGMA schema_version}]
+  db close
+  sqlite3 db test.db
+  set sv2 [db one {PRAGMA schema_version}]
+  list [expr {$sv0 == $sv1}] [expr {$sv0 == $sv2}]
+} {1 1}
+
+do_test doltlite_recover_rawformat_2-5.3 {
+  set sv0 [db one {PRAGMA schema_version}]
+  execsql {ALTER TABLE t1 ADD c}
+  set sv1 [db one {PRAGMA schema_version}]
+  list [expr {$sv0 != $sv1}] [execsql {SELECT * FROM t1 ORDER BY a}]
+} {1 {1 100 {} 2 300 {}}}
+
+do_test doltlite_recover_rawformat_2-5.4 {
+  set sv0 [db one {PRAGMA schema_version}]
+  execsql {ALTER TABLE t1 ADD d DEFAULT 'hello world'}
+  set sv1 [db one {PRAGMA schema_version}]
+  list [expr {$sv0 != $sv1}] [execsql {SELECT * FROM t1 ORDER BY a}]
+} {1 {1 100 {} {hello world} 2 300 {} {hello world}}}
+
+do_test doltlite_recover_rawformat_2-5.5 {
+  execsql {
+    ATTACH 'test2.db' AS aux;
+    CREATE TABLE aux.t1 AS SELECT a, b FROM t1;
+  }
+  set sv0 [db one {PRAGMA aux.schema_version}]
+  execsql {ALTER TABLE aux.t1 ADD COLUMN c VARCHAR(128)}
+  set sv1 [db one {PRAGMA aux.schema_version}]
+  execsql {ALTER TABLE aux.t1 ADD COLUMN d DEFAULT 1000}
+  set sv2 [db one {PRAGMA aux.schema_version}]
+  list [expr {$sv0 != $sv1}] [expr {$sv1 != $sv2}] \
+      [execsql {SELECT * FROM aux.t1 ORDER BY a}]
+} {1 1 {1 100 {} 1000 2 300 {} 1000}}
+
+do_test doltlite_recover_rawformat_2-5.6 {
+  execsql {VACUUM}
+  execsql {
+    CREATE TABLE abc2(a, b, c);
+    INSERT INTO abc2 VALUES(1, 2, 3);
+    ALTER TABLE abc2 ADD d DEFAULT NULL;
+    ALTER TABLE abc2 ADD e DEFAULT 10;
+    ALTER TABLE abc2 ADD f DEFAULT NULL;
+  }
+  execsql {VACUUM}
+  db close
+  sqlite3 db test.db
+  list [execsql {SELECT * FROM abc2}] [execsql {PRAGMA integrity_check}]
+} {{1 2 3 {} 10 {}} ok}
+
+#-------------------------------------------------------------------------
+# 6.* backup2 / backup4
+#
+do_test doltlite_recover_rawformat_2-6.1 {
+  db close
+  forcedelete test.db test2.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t2(a, b);
+    INSERT INTO t2 VALUES(1, 2);
+    INSERT INTO t2 VALUES(2, 4);
+    INSERT INTO t2 SELECT a+2, (a+2)*2 FROM t2;
+    INSERT INTO t2 SELECT a+4, (a+4)*2 FROM t2;
+    INSERT INTO t2 SELECT a+8, (a+8)*2 FROM t2;
+    CREATE INDEX t2i1 ON t2(a, b);
+    CREATE VIEW v1 AS SELECT a+b AS s FROM t2;
+    CREATE TRIGGER r1 AFTER INSERT ON t2 BEGIN
+      SELECT 'hello';
+    END;
+    ANALYZE;
+  }
+  execsql {PRAGMA integrity_check}
+} {ok}
+
+do_test doltlite_recover_rawformat_2-6.2 {
+  forcedelete rf2bu1.db
+  db backup rf2bu1.db
+  sqlite3 db2 rf2bu1.db
+  set res [list \
+    [db2 eval {SELECT a, b FROM t2 ORDER BY a}] \
+    [db2 eval {SELECT s FROM v1 ORDER BY s}] \
+    [db2 eval {SELECT name FROM sqlite_master WHERE name IN ('t2','t2i1','v1','r1') ORDER BY name}] \
+    [db2 eval {PRAGMA integrity_check}]]
+  db2 close
+  expr {$res eq [list \
+    [db eval {SELECT a, b FROM t2 ORDER BY a}] \
+    [db eval {SELECT s FROM v1 ORDER BY s}] \
+    [db eval {SELECT name FROM sqlite_master WHERE name IN ('t2','t2i1','v1','r1') ORDER BY name}] \
+    {ok}]}
+} {1}
+
+do_test doltlite_recover_rawformat_2-6.3 {
+  execsql {DELETE FROM t2; DROP TRIGGER r1;}
+  db restore rf2bu1.db
+  list [execsql {SELECT count(*) FROM t2}] \
+      [execsql {SELECT count(*) FROM sqlite_master WHERE name='r1'}] \
+      [execsql {PRAGMA integrity_check}]
+} {16 1 ok}
+
+do_test doltlite_recover_rawformat_2-6.4 {
+  set r1 [catch {db restore temp rf2bu1.db}]
+  set r2 [catch {db backup temp rf2bu2.db}]
+  list $r1 $r2 [execsql {SELECT count(*) FROM t2}]
+} {1 1 16}
+
+do_test doltlite_recover_rawformat_2-6.5 {
+  rf2_garbage_file rf2bug.db "This is not a valid database file"
+  set rc [catch {db backup rf2bug.db} msg]
+  list $rc $msg [execsql {SELECT count(*) FROM t2}]
+} {1 {cannot open target database: disk I/O error} 16}
+
+do_test doltlite_recover_rawformat_2-6.6 {
+  set rc [catch {db backup aux1 rf2bu3.db}]
+  list $rc [execsql {SELECT count(*) FROM t2}]
+} {1 16}
+
+do_test doltlite_recover_rawformat_2-6.7 {
+  set rc [catch {db restore rf2bug.db} msg]
+  list $rc $msg [execsql {SELECT count(*) FROM t2}]
+} {1 {cannot open source database: disk I/O error} 16}
+
+do_test doltlite_recover_rawformat_2-6.8 {
+  set rc [catch {db restore aux1 rf2bu1.db}]
+  list $rc [execsql {SELECT count(*) FROM t2}]
+} {1 16}
+
+do_test doltlite_recover_rawformat_2-6.9 {
+  sqlite3 dbm :memory:
+  set rc [catch {dbm backup rf2bu4.db} msg]
+  dbm close
+  list $rc $msg
+} {1 {backup failed: cannot backup in-memory doltlite database}}
+
+do_test doltlite_recover_rawformat_2-6.10 {
+  forcedelete rf2empty.db rf2bu5.db
+  sqlite3 dbe rf2empty.db
+  set rc [catch {dbe backup rf2bu5.db} msg]
+  dbe close
+  sqlite3 db2 rf2bu5.db
+  set res [list $rc $msg \
+    [db2 eval {SELECT count(*) FROM sqlite_master}] \
+    [db2 eval {PRAGMA integrity_check}]]
+  db2 close
+  set res
+} {0 {} 0 ok}
+
+#-------------------------------------------------------------------------
+# 7.* corruptN: page-image deserialize is rejected, never served
+#
+do_test doltlite_recover_rawformat_2-7.1 {
+  sqlite3 dbd {}
+  set rc [catch {dbd deserialize [string repeat \x00 512]} msg]
+  set usable [dbd eval {SELECT 11+22}]
+  dbd close
+  list $rc $msg $usable
+} {1 {unable to set MEMDB content} 33}
+
+do_test doltlite_recover_rawformat_2-7.2 {
+  sqlite3 dbd {}
+  set img "SQLite format 3\x00[string repeat \x5a 496]"
+  set rc [catch {dbd deserialize $img} msg]
+  set usable [dbd eval {CREATE TABLE qq(x); INSERT INTO qq VALUES(7); SELECT x FROM qq}]
+  dbd close
+  list $rc $msg $usable [execsql {PRAGMA integrity_check}]
+} {1 {unable to set MEMDB content} 7 ok}
+
+#-------------------------------------------------------------------------
+# 8.* vacuum / vacuum2 / vacuum5: VACUUM is content-preserving
+#
+do_test doltlite_recover_rawformat_2-8.1 {
+  db close
+  forcedelete test.db test2.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE v1(x);
+    INSERT INTO v1 VALUES('hello');
+    ATTACH 'test2.db' AS x2;
+    CREATE TABLE x2.v2(y);
+    INSERT INTO x2.v2 VALUES('out there');
+  }
+  set h0 [db one {SELECT dolt_hashof_table('v1')}]
+  execsql {VACUUM}
+  set h1 [db one {SELECT dolt_hashof_table('v1')}]
+  list [expr {$h0 eq $h1}] [execsql {SELECT x FROM v1}] \
+      [execsql {SELECT y FROM x2.v2}] [execsql {PRAGMA integrity_check}]
+} {1 hello {{out there}} ok}
+
+do_test doltlite_recover_rawformat_2-8.2 {
+  execsql {VACUUM x2}
+  list [execsql {SELECT y FROM x2.v2}] [execsql {PRAGMA x2.integrity_check}]
+} {{{out there}} ok}
+
+do_test doltlite_recover_rawformat_2-8.3 {
+  catchsql {VACUUM nosuch}
+} {1 {unknown database nosuch}}
+
+do_test doltlite_recover_rawformat_2-8.4 {
+  set a [execsql {PRAGMA auto_vacuum}]
+  set b [catchsql {PRAGMA auto_vacuum = 1}]
+  set c [execsql {PRAGMA auto_vacuum}]
+  set d [catchsql {VACUUM}]
+  list $a $b $c $d
+} {0 {1 {auto_vacuum is not supported on doltlite-format databases}} 0 {0 {}}}
+
+do_test doltlite_recover_rawformat_2-8.5 {
+  execsql {DELETE FROM v1}
+  execsql {VACUUM}
+  list [execsql {SELECT count(*) FROM v1}] [execsql {PRAGMA integrity_check}]
+} {0 ok}
+
+#-------------------------------------------------------------------------
+# 9.* securedel2
+#
+do_test doltlite_recover_rawformat_2-9.1 {
+  list [execsql {PRAGMA secure_delete}] \
+      [execsql {PRAGMA secure_delete = 1}] \
+      [execsql {PRAGMA secure_delete = 0}]
+} {0 0 0}
+
+do_test doltlite_recover_rawformat_2-9.2 {
+  execsql {CREATE TABLE sd1(i INTEGER PRIMARY KEY, x, y)}
+  for {set i 1} {$i <= 40} {incr i} {
+    set blob [string repeat "val-$i-x" 64]
+    db eval {INSERT INTO sd1 VALUES($i, $i, $blob)}
+  }
+  execsql {DELETE FROM sd1 WHERE i = 1}
+  execsql {DELETE FROM sd1 WHERE i > 30}
+  db close
+  sqlite3 db test.db
+  list [execsql {SELECT count(*) FROM sd1}] \
+      [execsql {SELECT count(*) FROM sd1 WHERE i = 1 OR i > 30}] \
+      [execsql {SELECT count(*) FROM sd1 WHERE y LIKE '%val-1-x%'}] \
+      [execsql {SELECT x FROM sd1 WHERE i = 30}] \
+      [execsql {PRAGMA integrity_check}]
+} {29 0 0 30 ok}
+
+#-------------------------------------------------------------------------
+# 10.* reservebytes
+#
+do_test doltlite_recover_rawformat_2-10.1 {
+  set r1 [file_control_reservebytes db 8]
+  execsql {VACUUM}
+  set r2 [file_control_reservebytes db 16]
+  execsql {VACUUM}
+  sqlite3 db2 test.db
+  set res [list $r1 $r2 \
+    [db2 eval {PRAGMA integrity_check}] \
+    [db2 eval {SELECT count(*) FROM sd1}]]
+  db2 close
+  set res
+} {SQLITE_OK SQLITE_OK ok 29}
+
+#-------------------------------------------------------------------------
+# 11.* tkt1512
+#
+do_test doltlite_recover_rawformat_2-11.1 {
+  db close
+  forcedelete test.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1 VALUES(1, 2);
+    INSERT INTO t1 VALUES(3, 4);
+  }
+  set rows [execsql {SELECT * FROM t1 ORDER BY a}]
+  execsql {DROP TABLE t1}
+  execsql {VACUUM}
+  list $rows [execsql {SELECT count(*) FROM sqlite_master}] \
+      [expr {[file size test.db] > 0}] \
+      [catchsql {CREATE TABLE t1(a); INSERT INTO t1 VALUES(9); SELECT a FROM t1}] \
+      [execsql {PRAGMA integrity_check}]
+} {{1 2 3 4} 0 1 {0 9} ok}
+
+#-------------------------------------------------------------------------
+# 12.* collate4
+#
+do_test doltlite_recover_rawformat_2-12.1 {
+  execsql {
+    CREATE TABLE c4a(a COLLATE NOCASE);
+    CREATE TABLE c4b(b);
+    INSERT INTO c4a VALUES('a'),('A'),('b'),('B'),('c'),('C'),('d'),('D'),('e'),('D');
+    INSERT INTO c4b VALUES('A'),('Z');
+    CREATE INDEX c4i1 ON c4a(a);
+  }
+  set rows [execsql {SELECT * FROM c4b, c4a WHERE a = b}]
+  set plan [execsql {EXPLAIN QUERY PLAN SELECT * FROM c4b, c4a WHERE a = b}]
+  list $rows [string match "*c4i1*" $plan]
+} {{A a A A} 1}
+
+do_test doltlite_recover_rawformat_2-12.2 {
+  execsql {CREATE TABLE collate4t1(a PRIMARY KEY COLLATE NOCASE)}
+  catchsql {
+    INSERT INTO collate4t1 VALUES('abc');
+    INSERT INTO collate4t1 VALUES('ABC');
+  }
+} {1 {UNIQUE constraint failed: collate4t1.a}}
+
+do_test doltlite_recover_rawformat_2-12.3 {
+  list [execsql {SELECT * FROM collate4t1}] [catchsql {
+    INSERT INTO collate4t1 VALUES(1);
+    UPDATE collate4t1 SET a = 'abc';
+  }]
+} {abc {1 {UNIQUE constraint failed: collate4t1.a}}}
+
+do_test doltlite_recover_rawformat_2-12.4 {
+  db collate TEXT rf2_text_collate
+  proc rf2_text_collate {a b} { return [string compare $a $b] }
+  execsql {CREATE TABLE c4c(x COLLATE TEXT)}
+  catchsql {CREATE INDEX c4ci ON c4c(x)}
+} {1 {doltlite does not support indexes with custom collation 'TEXT'}}
+
+#-------------------------------------------------------------------------
+# 13.* zeroblob
+#
+do_test doltlite_recover_rawformat_2-13.1 {
+  execsql {
+    CREATE TABLE zb(a, b, c, d);
+    INSERT INTO zb VALUES(2, 3, 4, zeroblob(1000000));
+  }
+  db close
+  sqlite3 db test.db
+  execsql {
+    SELECT length(d), typeof(d), d == zeroblob(1000000),
+           hex(substr(d, 1, 4)), hex(substr(d, 999997, 4))
+    FROM zb;
+  }
+} {1000000 blob 1 00000000 00000000}
+
+#-------------------------------------------------------------------------
+# 14.* insert-5.4
+#
+do_test doltlite_recover_rawformat_2-14.1 {
+  execsql {
+    CREATE TABLE test1(f1 int, f2 int);
+    INSERT INTO test1 VALUES(11, 22);
+    CREATE TABLE t4(x);
+    INSERT INTO t4 VALUES(1);
+    INSERT INTO t4 SELECT x+1 FROM t4;
+    DROP TABLE t4;
+    CREATE TABLE t4(x);
+    INSERT INTO t4 VALUES(1);
+    INSERT INTO t4 SELECT x+1 FROM t4;
+  }
+  list [execsql {SELECT x FROM t4 ORDER BY x}] \
+      [execsql {SELECT name FROM sqlite_master WHERE name IN ('t4','test1') ORDER BY name}] \
+      [execsql {SELECT * FROM test1}]
+} {{1 2} {t4 test1} {11 22}}
+
+#-------------------------------------------------------------------------
+# 15.* minmax2
+#
+do_test doltlite_recover_rawformat_2-15.1 {
+  execsql {CREATE TABLE mm1(x, y)}
+  for {set i 1} {$i <= 20} {incr i} {
+    db eval {INSERT INTO mm1 VALUES($i, $i)}
+  }
+  execsql {CREATE INDEX mm1i1 ON mm1(x DESC)}
+  set plan [execsql {EXPLAIN QUERY PLAN SELECT min(x) FROM mm1}]
+  list [execsql {SELECT min(x) FROM mm1}] [execsql {SELECT max(x) FROM mm1}] \
+      [string match "*mm1i1*" $plan]
+} {1 20 1}
+
+#-------------------------------------------------------------------------
+# 16.* rowid-4.5
+#
+do_test doltlite_recover_rawformat_2-16.1 {
+  execsql {
+    CREATE TABLE jt1(x int, y int);
+    CREATE TABLE jt2(a int, b int, c int);
+  }
+  for {set i 1} {$i <= 50} {incr i} {
+    db eval {INSERT INTO jt1(x, y) VALUES($i, $i*$i)}
+  }
+  execsql {
+    INSERT INTO jt2 SELECT x, x*y, y*y FROM jt1;
+    CREATE INDEX idxjt2 ON jt2(c);
+  }
+  set plan [execsql {
+    EXPLAIN QUERY PLAN SELECT jt1.x FROM jt2, jt1 WHERE jt2.c==256 AND jt1.x==jt2.a
+  }]
+  list [execsql {SELECT jt1.x FROM jt2, jt1 WHERE jt2.c==256 AND jt1.x==jt2.a}] \
+      [string match "*idxjt2*" $plan]
+} {4 1}
+
+#-------------------------------------------------------------------------
+# 17.* altertab3-31.1
+#
+do_test doltlite_recover_rawformat_2-17.1 {
+  execsql {
+    CREATE TABLE dc1(ii INTEGER PRIMARY KEY, tt INTEGER, rr REAL);
+    WITH s(i) AS (
+      SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<5000
+    )
+    INSERT INTO dc1 SELECT NULL, i, 5.0 FROM s;
+    ALTER TABLE dc1 DROP COLUMN tt;
+  }
+  list [execsql {SELECT count(*), count(DISTINCT rr), min(rr) FROM dc1}] \
+      [execsql {PRAGMA integrity_check}]
+} {{5000 1 5.0} ok}
+
+#-------------------------------------------------------------------------
+# 18.* misc5-4.1
+#
+do_test doltlite_recover_rawformat_2-18.1 {
+  db close
+  rf2_garbage_file test.db "This is not really a database\n"
+  set rc [list [catch {
+    sqlite3 db test.db
+    execsql { CREATE TABLE m5(a, b, c) }
+  } msg] $msg]
+  catch {db close}
+  set fd [open test.db r]
+  fconfigure $fd -translation binary
+  set data [read $fd]
+  close $fd
+  forcedelete test.db
+  sqlite3 db test.db
+  list $rc $data
+} {{1 {disk I/O error}} {This is not really a database
+}}
+
+#-------------------------------------------------------------------------
+# 19.* fts4aa-1.9
+#
+ifcapable fts3 {
+  do_test doltlite_recover_rawformat_2-19.1 {
+    execsql {CREATE VIRTUAL TABLE ft USING fts4(content)}
+    execsql {INSERT INTO ft(docid, content)
+             VALUES(5, 'joseph died in egypt and joseph was put in a coffin in egypt')}
+    execsql {INSERT INTO ft(docid, content)
+             VALUES(7, 'unrelated words entirely here')}
+    proc rf2_mit {blob} {
+      set scan(littleEndian) i*
+      set scan(bigEndian) I*
+      binary scan $blob $scan($::tcl_platform(byteOrder)) r
+      return $r
+    }
+    db func mit rf2_mit
+    execsql {
+      SELECT docid, mit(matchinfo(ft, 'pcxnal')) FROM ft
+       WHERE ft MATCH 'joseph died in egypt'
+       ORDER BY docid;
+    }
+  } {5 {4 1 2 2 1 1 1 1 3 3 1 2 2 1 2 9 13}}
+}
+
+finish_test

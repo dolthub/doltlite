@@ -1,0 +1,953 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Recovers the intent of raw-format/crash-recovery divergences (shard
+# rawformat_3). The originals poked SQLite page bytes (hexio), crashed child
+# processes mid-journal-sync, counted VFS ops/file sizes/btree seeks
+# (sqlite_search_count), or drove page-image APIs (dbpage writes, backup,
+# deserialize). doltlite stores a content-addressed prolly chunk store, so each
+# entry is re-asserted as the doltlite-native invariant: transactions are
+# atomic across an abandoned connection (the crash analog), committed data
+# round-trips bit-exactly across reopen, query RESULTS match stock where only
+# the seek-count metric diverged, synthetic pragmas report their documented
+# values, and page-image APIs are rejected cleanly with the db left usable.
+#
+# covers: crash2 crash2-1.1 — multi-table CREATE inside one txn commits;
+#   reopen shows both tables, file nonempty, integrity ok (1.1)
+# covers-class: crash2 crash2-2.{1..29}.1 crash2-2.{1..16}.2 (45 entries):
+#   originals crashed a child during journal sync per sector size and required
+#   the pre-txn signature (count+md5sums) back after recovery; doltlite analog:
+#   an insert/delete/update txn abandoned by closing the connection mid-txn
+#   never persists — signature identical after reopen and integrity ok,
+#   repeated for 4 mutation mixes (1.4.1-1.4.4)
+# covers-class: crash2 crash2-3.{1..9}.1 (9 entries): crash during database
+#   sync, same signature contract; additionally a committed mutation IS fully
+#   visible after reopen — the signature changes exactly at COMMIT and survives
+#   reopen unchanged (1.5)
+# covers-class: crash3 crash3-1.{41..50}.3 (10 entries): originals required abc
+#   to hold either the pre- or post-state (never a partial row) after an
+#   atomic-write crash on INSERT of a 1000-char value; doltlite: the committed
+#   1000-char insert is fully present after reopen (2.1), an abandoned one is
+#   fully absent (2.2), and an abandoned DELETE keeps all rows while a
+#   committed one removes all (2.3)
+# covers: minmax3 minmax3-1.0 — same table built across a close/reopen (the
+#   original's set_file_format+reopen step) with the original's rows and
+#   PRAGMA automatic_index=OFF (3.0)
+# covers-class: minmax3 minmax3-1.1.{1..6} (6 entries): max(y) WHERE x='2'
+#   returns V/IV through every index config the original cycled (none, (x),
+#   (x,y), (x,y DESC), y!= / y< / z!= residuals); only the seek-count metric
+#   diverged (3.1.1-3.1.6)
+# covers-class: minmax3 minmax3-1.2.{1..4} (4 entries): min(y) WHERE x='2'
+#   returns II through the same index cycle (3.2.1-3.2.4)
+# covers-class: minmax3 minmax3-1.3.{1..3} (3 entries): min(y) over the table
+#   returns I with no index, (y), and (y DESC) (3.3.1-3.3.3)
+# covers-class: minmax3 minmax3-1.4.{1..4} (4 entries): max(y) returns VI with
+#   no index, (y), (y DESC); final DROP INDEX succeeds (3.4.1-3.4.4)
+# covers-class: minmax3 minmax3-2.{1..8} (8 entries): min(b) with index
+#   i3(a,b) over the original's 11 rows: all eight WHERE variants return the
+#   stock values (3.5.1-3.5.8)
+# covers-class: minmax3 minmax3-3.{1..8} (8 entries): identical eight variants
+#   with the DESC index i3(a, b DESC) (3.6.1-3.6.8)
+# covers-class: minmax3 minmax3-4.{1,2,3,4,5,6,10,11,12,13,14,15} (12 entries):
+#   max/min under BINARY vs nocase vs rtrim collation over {'abc','BCD'} return
+#   the stock pairs (3.7.1-3.7.12)
+# covers: minmax minmax-1.6 — index-optimized min(x)/max(x) over 1..20 return
+#   1/20; only the search-count metric diverged (3.8)
+# covers: intpkey intpkey-3.2 — point lookup WHERE a=5 on an INTEGER PRIMARY
+#   KEY table returns (5,hello,world); only search_count diverged (3.9)
+# covers: intpkey intpkey-3.6 — covering-index lookup WHERE c=='world' returns
+#   the same row; only search_count diverged (3.9)
+# covers-class: io io-1.{1..5} (5 entries): originals counted pager writes per
+#   INSERT of 230-byte rows; doltlite analog: the same 9-row dataset commits
+#   and round-trips across reopen with integrity ok (4.1)
+# covers-class: io io-3.{1..3} (3 entries): originals asserted cache-spill file
+#   growth and one fsync at COMMIT for a 2048-row txn; doltlite analog: the
+#   full txn is visible mid-txn to its own connection, commits, survives
+#   reopen, and the store file grew (4.2)
+# covers-class: io io-4.1 io-4.2.{1..3} io-4.3.{1,3,4} (7 entries): originals
+#   asserted journal-header/fsync details around simple and cache-spill
+#   commits; doltlite analog: the same DELETE/INSERT/BEGIN..COMMIT and
+#   41-page-scale UPDATE txns commit exactly and round-trip (4.3)
+# covers-class: io io-5.{1..5} (5 entries): originals derived page size from
+#   sector size/atomic flags; doltlite reports synthetic page_size 4096, a
+#   session SET echoes back but reverts to 4096 on reopen (4.4)
+# covers-class: resetdb resetdb-{100,110} (2 entries): sample db (20 rows of
+#   randomblob(300), 2 indexes) reports the stock sums, integrity ok, and
+#   doltlite's journal_mode 'wal'; a second connection sees identical content
+#   (5.1-5.3)
+# covers-class: resetdb resetdb-{200,201,320,330,700,710} (6 entries):
+#   originals corrupted page 1 via sqlite_dbpage and required 'file is not a
+#   database'; doltlite rejects the write ('table sqlite_dbpage may not be
+#   modified') so the db is NEVER corrupted: quick_check ok on both
+#   connections afterwards (5.4, 5.5)
+# covers-class: resetdb resetdb-{210,400,500,740} (4 entries): RESET_DB
+#   dbconfig is accepted and VACUUM under it succeeds; since no corruption is
+#   possible the db stays intact and both connections agree on content and
+#   quick_check (doltlite's current no-reset contract, see suspected bug note)
+#   (5.6)
+# covers-class: resetdb resetdb-{300,310} (2 entries): journal_mode reports
+#   'wal' on both connections; setting WAL is accepted (already wal) and
+#   setting DELETE is rejected verbatim (5.1, 5.7)
+# covers-class: resetdb resetdb-{840,850,860} (3 entries): PRAGMA encoding to
+#   utf16 is ignored (reads UTF-8) so the stock 'attached databases must use
+#   the same text encoding' state is unreachable; cross-connection reads keep
+#   working (5.8, 11.1-11.2)
+# covers: attach attach-2.15 — aux sqlite_master lists table/table/trigger/
+#   index rows for objects created through the attach (6.1)
+# covers: attach attach-2.16 — same rows after close/reopen/reattach, and the
+#   aux trigger still fires (6.2)
+# covers: attach attach-8.1 — attaching a non-database file fails cleanly with
+#   doltlite's 'unable to open database' (6.3)
+# covers: attach attach-8.2 — errorcode after the failed attach is 10
+#   (doltlite's code for the unreadable store; stock used 26) and the
+#   connection stays usable (6.3)
+# covers: attach attach-8.3 — doltlite's concurrency model lets ATTACH succeed
+#   while another connection holds BEGIN EXCLUSIVE on that file (6.4)
+# covers: attach attach-8.4 — errorcode 0 after that attach; once the writer
+#   commits, the attached db reads the committed row (6.4)
+# covers: attach attach-10.2 — PRAGMA database_list reports the '' and
+#   ':memory:' attaches by name with empty file paths, and the memory attach
+#   stores rows (6.5)
+# covers-class: securedel securedel-1.{1,4,5,6,7,8} securedel-2.1 (7 entries):
+#   PRAGMA secure_delete reads 0 and stays 0 through ON/FAST and per-db
+#   (main./aux.) sets including across re-attach — there is no page freelist
+#   to zero; the DELETE itself works: row gone, table hash changed, integrity
+#   ok (7.1-7.3)
+# covers-class: corruptK corruptK-{1.1,1.2,2.1,2.2,2.3,3.2,3.3} (7 entries):
+#   originals corrupted freelist slots and poked bytes via incrblob; doltlite
+#   analog: delete-then-reuse of variable-size blob slots stays exact, an
+#   incrblob byte write lands at the right offset, and integrity stays ok
+#   across reopen (8.1-8.3)
+# covers-class: alter4 alter4-{3.4,4.4} (2 entries): PRAGMA schema_version is
+#   hash-derived, nonzero, CHANGES after ALTER TABLE ADD, is stable across
+#   reopen, and an explicit SET is ignored; the ALTER's data is correct (9.1)
+# covers-class: alter4 alter4-{5.4,5.8} (2 entries): same contract for PRAGMA
+#   aux.schema_version around ALTER TABLE aux.t ADD COLUMN d DEFAULT 1000,
+#   with the default applied to existing rows (9.2)
+# covers-class: tkt2920 tkt2920-1.{1,3,5} (3 entries): PRAGMA max_page_count
+#   is ignored (reads 2147483647) — the chunk store has no page cap, so the
+#   original's disk-full path is unreachable; the same blob volume inserts
+#   fine with integrity ok (10.1, 10.2)
+# covers: tkt2920 tkt2920-1.9 — after the txn is rolled back, COMMIT errors
+#   'cannot commit - no transaction is active' verbatim (10.3)
+# covers: enc enc-12.1 — PRAGMA encoding='UTF-16le' on a fresh db is ignored:
+#   data stores fine and encoding reads back UTF-8 (11.1)
+# covers: enc enc-12.3 — attaching that db never raises the stock encoding-
+#   mismatch error; rows read correctly (11.2)
+# covers: enc enc-12.8 — cross-db query touching the attached db plus a temp
+#   table succeeds where stock errored on mixed encodings (11.2)
+# covers-class: format4 format4-1.{1..3} (3 entries): originals measured file
+#   size as serial types 8/9 (int 0/1) gave way to 2-byte ints; doltlite
+#   analog: 64 rows of all-0 / all-1 / all-2 produce three distinct table
+#   hashes (the 0->1 transition is content-visible) and the final state
+#   round-trips across reopen (12.1)
+# covers: temptable2 temptable2-8.1 — same 20-row indexed dataset commits;
+#   page_count is a chunk-store metric asserted >0, not a page count (13.1)
+# covers-class: temptable2 temptable2-8.{3,6} (2 entries): sqlite3_backup_init
+#   fails verbatim on the prolly store ('sqlite3_backup_init() failed'); both
+#   connections remain fully usable (13.2)
+# covers: pagerfault3 pagerfault3-pre1 — page_size 2048 session set + 1200-byte
+#   blob commit; chunk-store page_count metric >0 (14.1)
+# covers: pagerfault3 pagerfault3-pre2 — reopen, set page_size 1024, VACUUM
+#   succeeds, data intact, integrity ok (14.2)
+# covers: check check-4.9 — CHECK enforcement survives the schema reload; the
+#   error text is doltlite's catalog-regenerated single-line form of the same
+#   expression (15.1)
+# covers: quote quote-2.5 — DQS=3 build accepts the double-quoted-string CHECK
+#   DDL outright; enforcement treats "null" as a literal before and after
+#   reopen and sqlite_master carries the regenerated DQS sql (15.2)
+# covers: descidx3 descidx3-1.1 — the DESC-index schema the original built
+#   after poking file-format 4 works: DESC ordering correct across reopen,
+#   integrity ok (15.3)
+# covers: index5 index5-1.3 — CREATE INDEX over a populated table (the
+#   original asserted page write order) yields a correct, integrity-ok index:
+#   min/max/count via the index match (15.4)
+# covers: vtab2 vtab2-5.3 — PRAGMA encoding='UTF16' is ignored, so the
+#   injected malformed-schema reparse is unreachable; creating a vtable on the
+#   missing module errors 'no such module: s' (15.5)
+# covers: gencol1 gencol1-15.10 — db deserialize of a raw page image is
+#   rejected verbatim ('unable to set MEMDB content') and the connection
+#   stays usable (15.6)
+# covers: gencol1 gencol1-15.20 — REPLACE INTO a table with a generated column
+#   computes the column (15.7)
+# not-covered: attach attach-11.1 — SUSPECTED BUG: ATTACH of a ~9000-char URI
+#   filename fails 'unable to open database: file:000...' (stock supports
+#   arbitrarily long URI filenames; likely a fixed-size path buffer in the
+#   chunk-store open path). Test 6.6 only asserts the connection survives the
+#   attempt either way.
+# not-covered: resetdb resetdb-630 — SUSPECTED BUG (feature gap):
+#   SQLITE_DBCONFIG_RESET_DATABASE is accepted but VACUUM under it does not
+#   reset the database (sqlite_master keeps its rows), so the original's
+#   "reset during another connection's scan empties the schema" assertion has
+#   no doltlite equivalent today.
+
+proc sig {} {
+  return [db eval {SELECT count(*), md5sum(a), md5sum(b), md5sum(c) FROM abc}]
+}
+
+#-------------------------------------------------------------------------
+# 1.* crash2: rollback-journal crash recovery -> abandoned-connection atomicity
+#
+do_test doltlite_recover_rawformat_3-1.1 {
+  execsql {
+    BEGIN;
+    CREATE TABLE abc AS SELECT 1 AS a, 2 AS b, 3 AS c;
+    CREATE TABLE def AS SELECT 1 AS d, 2 AS e, 3 AS f;
+    COMMIT;
+  }
+  db close
+  sqlite3 db test.db
+  list [execsql {SELECT * FROM abc; SELECT * FROM def}] \
+       [expr {[file size test.db]>0}] [execsql {PRAGMA integrity_check}]
+} {{1 2 3 1 2 3} 1 ok}
+
+do_test doltlite_recover_rawformat_3-1.2 {
+  execsql BEGIN
+  for {set n 0} {$n < 200} {incr n} {
+    execsql "INSERT INTO abc VALUES($n, [expr 2*$n], [expr 3*$n])"
+  }
+  execsql {
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+  }
+  execsql COMMIT
+  db one {SELECT count(*) FROM abc}
+} {1608}
+
+foreach {k mut} {
+  1 {INSERT INTO abc SELECT a+5000, b+1, c+2 FROM abc WHERE a%3==0}
+  2 {DELETE FROM abc WHERE a%2==1}
+  3 {UPDATE abc SET b=b+99 WHERE a%5==0}
+  4 {INSERT INTO abc SELECT * FROM abc; DELETE FROM abc WHERE a%7==3}
+} {
+  do_test doltlite_recover_rawformat_3-1.4.$k {
+    set ::s [sig]
+    execsql BEGIN
+    execsql $mut
+    db close
+    sqlite3 db test.db
+    list [expr {[sig] eq $::s}] [execsql {PRAGMA integrity_check}]
+  } {1 ok}
+}
+
+do_test doltlite_recover_rawformat_3-1.5 {
+  set s [sig]
+  execsql {
+    BEGIN;
+    INSERT INTO abc SELECT a+1000000, b, c FROM abc WHERE a%2==0;
+    DELETE FROM abc WHERE a%2==1 AND a<1000000;
+    COMMIT;
+  }
+  set s2 [sig]
+  db close
+  sqlite3 db test.db
+  list [expr {$s2 eq $s}] [expr {[sig] eq $s2}] [execsql {PRAGMA integrity_check}]
+} {0 1 ok}
+
+#-------------------------------------------------------------------------
+# 2.* crash3: atomic-write crash -> all-or-nothing transactions
+#
+do_test doltlite_recover_rawformat_3-2.1 {
+  execsql {CREATE TABLE abc3(a,b,c); INSERT INTO abc3 VALUES(1,2,3)}
+  execsql "BEGIN; INSERT INTO abc3 VALUES(4,5,'[string repeat y 1000]'); COMMIT"
+  db close
+  sqlite3 db test.db
+  execsql {SELECT a,b,length(c) FROM abc3 ORDER BY a; PRAGMA integrity_check}
+} {1 2 1 4 5 1000 ok}
+
+do_test doltlite_recover_rawformat_3-2.2 {
+  execsql BEGIN
+  execsql "INSERT INTO abc3 VALUES(7,8,'[string repeat z 1000]')"
+  db close
+  sqlite3 db test.db
+  execsql {SELECT count(*) FROM abc3; PRAGMA integrity_check}
+} {2 ok}
+
+do_test doltlite_recover_rawformat_3-2.3 {
+  execsql {BEGIN; DELETE FROM abc3}
+  db close
+  sqlite3 db test.db
+  set r1 [db one {SELECT count(*) FROM abc3}]
+  execsql {DELETE FROM abc3}
+  db close
+  sqlite3 db test.db
+  list $r1 [db one {SELECT count(*) FROM abc3}] [execsql {PRAGMA integrity_check}]
+} {2 0 ok}
+
+#-------------------------------------------------------------------------
+# 3.* minmax3 / minmax / intpkey: results identical, only seek metrics diverged
+#
+do_test doltlite_recover_rawformat_3-3.0 {
+  execsql { CREATE TABLE mm1(x, y, z) }
+  db close
+  sqlite3 db test.db
+  execsql {
+    BEGIN;
+    INSERT INTO mm1 VALUES('1', 'I',   'one');
+    INSERT INTO mm1 VALUES('2', 'IV',  'four');
+    INSERT INTO mm1 VALUES('2', NULL,  'three');
+    INSERT INTO mm1 VALUES('2', 'II',  'two');
+    INSERT INTO mm1 VALUES('2', 'V',   'five');
+    INSERT INTO mm1 VALUES('3', 'VI',  'six');
+    COMMIT;
+    PRAGMA automatic_index=OFF;
+  }
+} {}
+do_test doltlite_recover_rawformat_3-3.1.1 {
+  execsql { SELECT max(y) FROM mm1 WHERE x = '2' }
+} {V}
+do_test doltlite_recover_rawformat_3-3.1.2 {
+  execsql { CREATE INDEX mi1 ON mm1(x) }
+  execsql { SELECT max(y) FROM mm1 WHERE x = '2' }
+} {V}
+do_test doltlite_recover_rawformat_3-3.1.3 {
+  execsql { CREATE INDEX mi2 ON mm1(x,y) }
+  execsql { SELECT max(y) FROM mm1 WHERE x = '2' }
+} {V}
+do_test doltlite_recover_rawformat_3-3.1.4 {
+  execsql { DROP INDEX mi2 ; CREATE INDEX mi2 ON mm1(x, y DESC) }
+  execsql { SELECT max(y) FROM mm1 WHERE x = '2' }
+} {V}
+do_test doltlite_recover_rawformat_3-3.1.5 {
+  execsql { SELECT max(y) FROM mm1 WHERE x = '2' AND y != 'V' }
+} {IV}
+do_test doltlite_recover_rawformat_3-3.1.6 {
+  list [execsql { SELECT max(y) FROM mm1 WHERE x = '2' AND y < 'V' }] \
+       [execsql { SELECT max(y) FROM mm1 WHERE x = '2' AND z != 'five' }]
+} {IV IV}
+do_test doltlite_recover_rawformat_3-3.2.1 {
+  execsql { DROP INDEX mi1 ; DROP INDEX mi2 }
+  execsql { SELECT min(y) FROM mm1 WHERE x = '2' }
+} {II}
+do_test doltlite_recover_rawformat_3-3.2.2 {
+  execsql { CREATE INDEX mi1 ON mm1(x) }
+  execsql { SELECT min(y) FROM mm1 WHERE x = '2' }
+} {II}
+do_test doltlite_recover_rawformat_3-3.2.3 {
+  execsql { CREATE INDEX mi2 ON mm1(x,y) }
+  execsql { SELECT min(y) FROM mm1 WHERE x = '2' }
+} {II}
+do_test doltlite_recover_rawformat_3-3.2.4 {
+  execsql { DROP INDEX mi2 ; CREATE INDEX mi2 ON mm1(x, y DESC) }
+  execsql { SELECT min(y) FROM mm1 WHERE x = '2' }
+} {II}
+do_test doltlite_recover_rawformat_3-3.3.1 {
+  execsql { DROP INDEX mi1 ; DROP INDEX mi2 }
+  execsql { SELECT min(y) FROM mm1 }
+} {I}
+do_test doltlite_recover_rawformat_3-3.3.2 {
+  execsql { CREATE INDEX mi1 ON mm1(y) }
+  execsql { SELECT min(y) FROM mm1 }
+} {I}
+do_test doltlite_recover_rawformat_3-3.3.3 {
+  execsql { DROP INDEX mi1 ; CREATE INDEX mi1 ON mm1(y DESC) }
+  execsql { SELECT min(y) FROM mm1 }
+} {I}
+do_test doltlite_recover_rawformat_3-3.4.1 {
+  execsql { DROP INDEX mi1 }
+  execsql { SELECT max(y) FROM mm1 }
+} {VI}
+do_test doltlite_recover_rawformat_3-3.4.2 {
+  execsql { CREATE INDEX mi1 ON mm1(y) }
+  execsql { SELECT max(y) FROM mm1 }
+} {VI}
+do_test doltlite_recover_rawformat_3-3.4.3 {
+  execsql { DROP INDEX mi1 ; CREATE INDEX mi1 ON mm1(y DESC) }
+  execsql { SELECT max(y) FROM mm1 }
+} {VI}
+do_test doltlite_recover_rawformat_3-3.4.4 {
+  execsql { DROP INDEX mi1 }
+} {}
+
+do_test doltlite_recover_rawformat_3-3.5.1 {
+  execsql {
+    CREATE TABLE mm2(a, b);
+    CREATE INDEX mmi3 ON mm2(a, b);
+    INSERT INTO mm2 VALUES(1, NULL);
+    INSERT INTO mm2 VALUES(1, 1);
+    INSERT INTO mm2 VALUES(1, 2);
+    INSERT INTO mm2 VALUES(1, 3);
+    INSERT INTO mm2 VALUES(2, NULL);
+    INSERT INTO mm2 VALUES(2, 1);
+    INSERT INTO mm2 VALUES(2, 2);
+    INSERT INTO mm2 VALUES(2, 3);
+    INSERT INTO mm2 VALUES(3, 1);
+    INSERT INTO mm2 VALUES(3, 2);
+    INSERT INTO mm2 VALUES(3, 3);
+  }
+} {}
+do_test doltlite_recover_rawformat_3-3.5.2 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.5.3 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b>1 }
+} {2}
+do_test doltlite_recover_rawformat_3-3.5.4 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b>-1 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.5.5 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.5.6 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b<2 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.5.7 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b<1 }
+} {{}}
+do_test doltlite_recover_rawformat_3-3.5.8 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 3 AND b<1 }
+} {{}}
+
+do_test doltlite_recover_rawformat_3-3.6.1 {
+  execsql {
+    DROP TABLE mm2;
+    CREATE TABLE mm2(a, b);
+    CREATE INDEX mmi3 ON mm2(a, b DESC);
+    INSERT INTO mm2 VALUES(1, NULL);
+    INSERT INTO mm2 VALUES(1, 1);
+    INSERT INTO mm2 VALUES(1, 2);
+    INSERT INTO mm2 VALUES(1, 3);
+    INSERT INTO mm2 VALUES(2, NULL);
+    INSERT INTO mm2 VALUES(2, 1);
+    INSERT INTO mm2 VALUES(2, 2);
+    INSERT INTO mm2 VALUES(2, 3);
+    INSERT INTO mm2 VALUES(3, 1);
+    INSERT INTO mm2 VALUES(3, 2);
+    INSERT INTO mm2 VALUES(3, 3);
+  }
+} {}
+do_test doltlite_recover_rawformat_3-3.6.2 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.6.3 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b>1 }
+} {2}
+do_test doltlite_recover_rawformat_3-3.6.4 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b>-1 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.6.5 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.6.6 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b<2 }
+} {1}
+do_test doltlite_recover_rawformat_3-3.6.7 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 1 AND b<1 }
+} {{}}
+do_test doltlite_recover_rawformat_3-3.6.8 {
+  execsql { SELECT min(b) FROM mm2 WHERE a = 3 AND b<1 }
+} {{}}
+
+do_test doltlite_recover_rawformat_3-3.7.1 {
+  execsql {
+    CREATE TABLE mm4(x);
+    INSERT INTO mm4 VALUES('abc');
+    INSERT INTO mm4 VALUES('BCD');
+    SELECT max(x) FROM mm4;
+  }
+} {abc}
+do_test doltlite_recover_rawformat_3-3.7.2 {
+  execsql { SELECT max(x COLLATE nocase) FROM mm4 }
+} {BCD}
+do_test doltlite_recover_rawformat_3-3.7.3 {
+  execsql { SELECT max(x), max(x COLLATE nocase) FROM mm4 }
+} {abc BCD}
+do_test doltlite_recover_rawformat_3-3.7.4 {
+  execsql { SELECT max(x COLLATE binary), max(x COLLATE nocase) FROM mm4 }
+} {abc BCD}
+do_test doltlite_recover_rawformat_3-3.7.5 {
+  execsql { SELECT max(x COLLATE nocase), max(x COLLATE rtrim) FROM mm4 }
+} {BCD abc}
+do_test doltlite_recover_rawformat_3-3.7.6 {
+  execsql { SELECT max(x COLLATE nocase), max(x) FROM mm4 }
+} {BCD abc}
+do_test doltlite_recover_rawformat_3-3.7.7 {
+  execsql { SELECT min(x) FROM mm4 }
+} {BCD}
+do_test doltlite_recover_rawformat_3-3.7.8 {
+  execsql { SELECT min(x COLLATE nocase) FROM mm4 }
+} {abc}
+do_test doltlite_recover_rawformat_3-3.7.9 {
+  execsql { SELECT min(x), min(x COLLATE nocase) FROM mm4 }
+} {BCD abc}
+do_test doltlite_recover_rawformat_3-3.7.10 {
+  execsql { SELECT min(x COLLATE binary), min(x COLLATE nocase) FROM mm4 }
+} {BCD abc}
+do_test doltlite_recover_rawformat_3-3.7.11 {
+  execsql { SELECT min(x COLLATE nocase), min(x COLLATE rtrim) FROM mm4 }
+} {abc BCD}
+do_test doltlite_recover_rawformat_3-3.7.12 {
+  execsql { SELECT min(x COLLATE nocase), min(x) FROM mm4 }
+} {abc BCD}
+
+do_test doltlite_recover_rawformat_3-3.8 {
+  execsql {CREATE TABLE mmx(x)}
+  execsql BEGIN
+  for {set i 1} {$i<=20} {incr i} { execsql "INSERT INTO mmx VALUES($i)" }
+  execsql COMMIT
+  execsql {CREATE INDEX mmxi1 ON mmx(x)}
+  execsql {SELECT min(x), max(x) FROM mmx}
+} {1 20}
+
+do_test doltlite_recover_rawformat_3-3.9 {
+  execsql {
+    CREATE TABLE tpk(a INTEGER PRIMARY KEY, b, c);
+    INSERT INTO tpk VALUES(4,'one','two');
+    INSERT INTO tpk VALUES(5,'hello','world');
+    INSERT INTO tpk VALUES(6,'second','record');
+    CREATE INDEX tpki2 ON tpk(a);
+    CREATE INDEX tpki3 ON tpk(c,a);
+  }
+  list [execsql {SELECT * FROM tpk WHERE a=5}] \
+       [execsql {SELECT * FROM tpk WHERE c=='world'}]
+} {{5 hello world} {5 hello world}}
+
+#-------------------------------------------------------------------------
+# 4.* io: VFS op counts/file sizes -> commit/round-trip + synthetic page_size
+#
+do_test doltlite_recover_rawformat_3-4.1 {
+  execsql {CREATE TABLE ioabc(a,b)}
+  for {set i 1} {$i<=9} {incr i} {
+    execsql "INSERT INTO ioabc VALUES($i,'[string repeat [format %c [expr 96+$i]] 230]')"
+  }
+  db close
+  sqlite3 db test.db
+  execsql {SELECT count(*), sum(length(b)) FROM ioabc; PRAGMA integrity_check}
+} {9 2070 ok}
+
+do_test doltlite_recover_rawformat_3-4.2 {
+  set sz0 [file size test.db]
+  execsql {
+    CREATE TABLE iobig(a,b);
+    BEGIN;
+    INSERT INTO iobig VALUES('hello','world');
+  }
+  for {set i 0} {$i<11} {incr i} { execsql {INSERT INTO iobig SELECT * FROM iobig} }
+  set mid [db one {SELECT count(*) FROM iobig}]
+  execsql COMMIT
+  db close
+  sqlite3 db test.db
+  list $mid [db one {SELECT count(*) FROM iobig}] \
+       [expr {[file size test.db] > $sz0}] [execsql {PRAGMA integrity_check}]
+} {2048 2048 1 ok}
+
+do_test doltlite_recover_rawformat_3-4.3 {
+  execsql {DELETE FROM ioabc}
+  execsql {INSERT INTO ioabc VALUES('a','b')}
+  execsql {BEGIN}
+  execsql {INSERT INTO ioabc VALUES('c','d')}
+  set mid [execsql {SELECT a FROM ioabc ORDER BY a}]
+  execsql {COMMIT}
+  execsql {BEGIN; UPDATE iobig SET a='x'; COMMIT}
+  db close
+  sqlite3 db test.db
+  list $mid [execsql {SELECT a FROM ioabc ORDER BY a}] \
+       [db one {SELECT count(*) FROM iobig WHERE a='x'}] \
+       [execsql {PRAGMA integrity_check}]
+} {{a c} {a c} 2048 ok}
+
+do_test doltlite_recover_rawformat_3-4.4 {
+  set v0 [execsql {PRAGMA page_size}]
+  execsql {PRAGMA page_size=8192}
+  set v1 [execsql {PRAGMA page_size}]
+  db close
+  sqlite3 db test.db
+  list $v0 $v1 [execsql {PRAGMA page_size}]
+} {4096 8192 4096}
+
+#-------------------------------------------------------------------------
+# 5.* resetdb: dbpage corruption rejected, db never corrupt, reset is inert
+#
+do_test doltlite_recover_rawformat_3-5.1 {
+  execsql {
+    CREATE TABLE rt1(a,b);
+    WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<20)
+      INSERT INTO rt1(a,b) SELECT x, randomblob(300) FROM c;
+    CREATE INDEX rt1a ON rt1(a);
+    CREATE INDEX rt1b ON rt1(b);
+  }
+  execsql {
+    SELECT sum(a), sum(length(b)) FROM rt1;
+    PRAGMA integrity_check;
+    PRAGMA journal_mode;
+  }
+} {210 6000 ok wal}
+do_test doltlite_recover_rawformat_3-5.2 {
+  list [db one {SELECT count(*)>0 FROM sqlite_dbpage}] \
+       [expr {[db one {PRAGMA page_count}]>0}]
+} {1 1}
+do_test doltlite_recover_rawformat_3-5.3 {
+  sqlite3 db2 test.db
+  execsql { SELECT sum(a), sum(length(b)) FROM rt1; PRAGMA quick_check } db2
+} {210 6000 ok}
+do_test doltlite_recover_rawformat_3-5.4 {
+  sqlite3_db_config db DEFENSIVE 0
+  catchsql { UPDATE sqlite_dbpage SET data=randomblob(4096) WHERE pgno=1 }
+} {1 {table sqlite_dbpage may not be modified}}
+do_test doltlite_recover_rawformat_3-5.5 {
+  list [execsql {PRAGMA quick_check}] [execsql {PRAGMA quick_check} db2]
+} {ok ok}
+do_test doltlite_recover_rawformat_3-5.6 {
+  sqlite3_db_config db RESET_DB 1
+  db eval VACUUM
+  sqlite3_db_config db RESET_DB 0
+  execsql {
+    SELECT count(*) FROM rt1;
+    SELECT count(*) FROM sqlite_master WHERE name LIKE 'rt1%';
+    PRAGMA quick_check;
+  } db2
+} {20 3 ok}
+do_test doltlite_recover_rawformat_3-5.7 {
+  list [execsql {PRAGMA journal_mode=WAL}] \
+       [catchsql {PRAGMA journal_mode=DELETE}] \
+       [execsql {PRAGMA journal_mode} db2]
+} {wal {1 {journal_mode is not configurable on doltlite-format databases}} wal}
+do_test doltlite_recover_rawformat_3-5.8 {
+  execsql {PRAGMA encoding='utf16'}
+  set e [execsql {PRAGMA encoding}]
+  set q [execsql {PRAGMA quick_check} db2]
+  db2 close
+  list $e $q
+} {UTF-8 ok}
+
+#-------------------------------------------------------------------------
+# 6.* attach: aux schema objects, bad files, locking, database_list, URIs
+#
+do_test doltlite_recover_rawformat_3-6.1 {
+  forcedelete test2.db
+  execsql {ATTACH 'test2.db' AS adb}
+  execsql {
+    CREATE TABLE adb.t2(x);
+    CREATE TABLE adb.tx(x);
+    CREATE TRIGGER adb.r1 AFTER INSERT ON t2 BEGIN UPDATE tx SET x=x+1; END;
+    CREATE INDEX adb.i2 ON t2(x);
+  }
+  execsql {SELECT type, name, tbl_name FROM adb.sqlite_master ORDER BY name}
+} {index i2 t2 trigger r1 t2 table t2 t2 table tx tx}
+do_test doltlite_recover_rawformat_3-6.2 {
+  db close
+  sqlite3 db test.db
+  execsql {ATTACH 'test2.db' AS adb}
+  list [execsql {SELECT type, name, tbl_name FROM adb.sqlite_master ORDER BY name}] \
+       [execsql {INSERT INTO adb.tx VALUES(0); INSERT INTO adb.t2 VALUES(1); SELECT x FROM adb.tx}]
+} {{index i2 t2 trigger r1 t2 table t2 t2 table tx tx} 1}
+do_test doltlite_recover_rawformat_3-6.3 {
+  execsql {DETACH adb}
+  set fd [open testnotdb.db w]
+  puts $fd "This file is not a valid SQLite database"
+  close $fd
+  set r [catchsql {ATTACH 'testnotdb.db' AS bad}]
+  set rc [db errorcode]
+  forcedelete testnotdb.db
+  list $r $rc [db one {SELECT 1}]
+} {{1 {unable to open database: testnotdb.db}} 10 1}
+do_test doltlite_recover_rawformat_3-6.4 {
+  forcedelete testex.db
+  sqlite3 dbex testex.db
+  dbex eval {CREATE TABLE ext1(x)}
+  dbex eval {BEGIN EXCLUSIVE; INSERT INTO ext1 VALUES(1)}
+  set r [catchsql {ATTACH 'testex.db' AS exd}]
+  set rc [db errorcode]
+  dbex eval COMMIT
+  dbex close
+  list $r $rc [db one {SELECT count(*) FROM exd.ext1}]
+} {{0 {}} 0 1}
+do_test doltlite_recover_rawformat_3-6.5 {
+  execsql {DETACH exd}
+  execsql {ATTACH '' AS noname}
+  execsql {ATTACH ':memory:' AS inmem}
+  set res {}
+  foreach {seq name file} [execsql {PRAGMA database_list}] {
+    if {$name eq "noname" || $name eq "inmem"} { lappend res $name $file }
+  }
+  execsql {CREATE TABLE inmem.tm(x); INSERT INTO inmem.tm VALUES(7)}
+  set rows [execsql {SELECT * FROM inmem.tm}]
+  execsql {DETACH noname}
+  execsql {DETACH inmem}
+  list $res $rows
+} {{noname {} inmem {}} 7}
+do_test doltlite_recover_rawformat_3-6.6 {
+  catch {execsql {ATTACH printf('file:%09000x/x.db?mode=memory&cache=shared',1) AS auxlong}}
+  catch {execsql {DETACH auxlong}}
+  db one {SELECT 1}
+} {1}
+
+#-------------------------------------------------------------------------
+# 7.* securedel: secure_delete pragma inert; DELETE itself correct
+#
+do_test doltlite_recover_rawformat_3-7.1 {
+  execsql {PRAGMA secure_delete}
+} {0}
+do_test doltlite_recover_rawformat_3-7.2 {
+  forcedelete test3.db
+  execsql {ATTACH 'test3.db' AS sdb}
+  list [execsql {PRAGMA main.secure_delete=ON; PRAGMA sdb.secure_delete}] \
+       [execsql {PRAGMA secure_delete=ON; PRAGMA sdb.secure_delete}] \
+       [execsql {PRAGMA secure_delete=FAST; PRAGMA sdb.secure_delete}] \
+       [execsql {PRAGMA main.secure_delete=FAST; PRAGMA sdb.secure_delete}] \
+       [execsql {DETACH sdb; ATTACH 'test3.db' AS sdb; PRAGMA sdb.secure_delete}]
+} {{0 0} {0 0} {0 0} {0 0} 0}
+do_test doltlite_recover_rawformat_3-7.3 {
+  execsql {DETACH sdb}
+  execsql {
+    CREATE TABLE sd1(i INTEGER PRIMARY KEY, v);
+    INSERT INTO sd1 VALUES(1,'keep'),(2,'gone'),(3,'keep2');
+  }
+  set h0 [db one {SELECT dolt_hashof_table('sd1')}]
+  execsql {DELETE FROM sd1 WHERE i=2}
+  set h1 [db one {SELECT dolt_hashof_table('sd1')}]
+  db close
+  sqlite3 db test.db
+  list [execsql {SELECT i FROM sd1 ORDER BY i}] [expr {$h0 eq $h1}] \
+       [execsql {PRAGMA integrity_check}]
+} {{1 3} 0 ok}
+
+#-------------------------------------------------------------------------
+# 8.* corruptK: free-slot reuse + incrblob byte writes stay exact
+#
+do_test doltlite_recover_rawformat_3-8.1 {
+  execsql {
+    CREATE TABLE ck1(id INTEGER PRIMARY KEY, x);
+    INSERT INTO ck1 VALUES(1, zeroblob(20));
+    INSERT INTO ck1 VALUES(2, zeroblob(100));
+    INSERT INTO ck1 VALUES(3, zeroblob(27));
+    INSERT INTO ck1 VALUES(4, zeroblob(800));
+    DELETE FROM ck1 WHERE id=2;
+    INSERT INTO ck1 VALUES(5, zeroblob(20));
+  }
+  execsql {SELECT id, length(x) FROM ck1 ORDER BY id; PRAGMA integrity_check}
+} {1 20 3 27 4 800 5 20 ok}
+do_test doltlite_recover_rawformat_3-8.2 {
+  set fd [db incrblob ck1 x 3]
+  fconfigure $fd -translation binary
+  seek $fd 22
+  puts -nonewline $fd "\x5d"
+  close $fd
+  execsql {SELECT hex(substr(x,23,1)) FROM ck1 WHERE id=3; PRAGMA integrity_check}
+} {5D ok}
+do_test doltlite_recover_rawformat_3-8.3 {
+  execsql {
+    CREATE TABLE ck2(id INTEGER PRIMARY KEY, x);
+    INSERT INTO ck2 VALUES(1,zeroblob(20)),(2,zeroblob(20)),(3,zeroblob(20)),
+                          (4,zeroblob(20)),(5,zeroblob(20));
+    DELETE FROM ck2 WHERE id IN (2,4);
+    INSERT INTO ck2 VALUES(6, zeroblob(20)),(7, zeroblob(90));
+  }
+  db close
+  sqlite3 db test.db
+  execsql {SELECT id, length(x) FROM ck2 ORDER BY id; PRAGMA integrity_check}
+} {1 20 3 20 5 20 6 20 7 90 ok}
+
+#-------------------------------------------------------------------------
+# 9.* alter4: schema_version is hash-derived, changes on ALTER, set ignored
+#
+do_test doltlite_recover_rawformat_3-9.1 {
+  execsql {CREATE TABLE al1(a,b); INSERT INTO al1 VALUES(1,100),(2,300)}
+  set v0 [db one {PRAGMA schema_version}]
+  execsql {ALTER TABLE al1 ADD c}
+  set v1 [db one {PRAGMA schema_version}]
+  db close
+  sqlite3 db test.db
+  set v2 [db one {PRAGMA schema_version}]
+  execsql {PRAGMA schema_version=5}
+  set v3 [db one {PRAGMA schema_version}]
+  list [execsql {SELECT * FROM al1 ORDER BY a}] \
+       [expr {$v0!=0}] [expr {$v0==$v1}] [expr {$v1==$v2}] [expr {$v3==$v2}]
+} {{1 100 {} 2 300 {}} 1 0 1 1}
+do_test doltlite_recover_rawformat_3-9.2 {
+  forcedelete test4.db
+  execsql {ATTACH 'test4.db' AS aux2}
+  execsql {CREATE TABLE aux2.t1al(a,b); INSERT INTO aux2.t1al VALUES(1,'one'),(2,'two')}
+  set v0 [db one {PRAGMA aux2.schema_version}]
+  execsql {ALTER TABLE aux2.t1al ADD COLUMN d DEFAULT 1000}
+  set v1 [db one {PRAGMA aux2.schema_version}]
+  set rows [execsql {SELECT * FROM aux2.t1al ORDER BY a}]
+  execsql {DETACH aux2}
+  list $rows [expr {$v0!=0}] [expr {$v0==$v1}]
+} {{1 one 1000 2 two 1000} 1 0}
+
+#-------------------------------------------------------------------------
+# 10.* tkt2920: no page cap / disk-full path; rollback then COMMIT error
+#
+do_test doltlite_recover_rawformat_3-10.1 {
+  execsql {PRAGMA max_page_count=40}
+} {2147483647}
+do_test doltlite_recover_rawformat_3-10.2 {
+  execsql {CREATE TABLE filler(fill)}
+  execsql BEGIN
+  for {set i 0} {$i<40} {incr i} { execsql {INSERT INTO filler VALUES(zeroblob(2048))} }
+  execsql COMMIT
+  execsql {SELECT count(*), sum(length(fill)) FROM filler; PRAGMA integrity_check}
+} {40 81920 ok}
+do_test doltlite_recover_rawformat_3-10.3 {
+  execsql {BEGIN; INSERT INTO filler VALUES(zeroblob(10)); ROLLBACK}
+  catchsql COMMIT
+} {1 {cannot commit - no transaction is active}}
+
+#-------------------------------------------------------------------------
+# 11.* enc: utf16 database encodings ignored; no mismatch errors possible
+#
+do_test doltlite_recover_rawformat_3-11.1 {
+  forcedelete test5.db
+  sqlite3 db5 test5.db
+  set r [db5 eval {
+    PRAGMA encoding='UTF-16le';
+    CREATE TABLE te(d,e,f);
+    INSERT INTO te VALUES('d','e','f');
+    PRAGMA encoding;
+  }]
+  db5 close
+  set r
+} {UTF-8}
+do_test doltlite_recover_rawformat_3-11.2 {
+  execsql {ATTACH 'test5.db' AS encdb}
+  execsql {CREATE TEMP TABLE tt1(a); INSERT INTO tt1 VALUES('xxx')}
+  set r [execsql {SELECT * FROM encdb.te; SELECT * FROM tt1}]
+  execsql {DETACH encdb}
+  set r
+} {d e f xxx}
+
+#-------------------------------------------------------------------------
+# 12.* format4: serial-type transitions are content-visible and round-trip
+#
+do_test doltlite_recover_rawformat_3-12.1 {
+  execsql {
+    CREATE TABLE f4(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9);
+    INSERT INTO f4 VALUES(0,0,0,0,0,0,0,0,0,0);
+  }
+  for {set i 0} {$i<6} {incr i} { execsql {INSERT INTO f4 SELECT * FROM f4} }
+  set h0 [db one {SELECT dolt_hashof_table('f4')}]
+  execsql {UPDATE f4 SET x0=1,x1=1,x2=1,x3=1,x4=1,x5=1,x6=1,x7=1,x8=1,x9=1}
+  set h1 [db one {SELECT dolt_hashof_table('f4')}]
+  execsql {UPDATE f4 SET x0=2,x1=2,x2=2,x3=2,x4=2,x5=2,x6=2,x7=2,x8=2,x9=2}
+  set h2 [db one {SELECT dolt_hashof_table('f4')}]
+  db close
+  sqlite3 db test.db
+  list [db one {SELECT count(*) FROM f4 WHERE x0=2 AND x9=2}] \
+       [expr {$h0 eq $h1}] [expr {$h1 eq $h2}] \
+       [expr {[db one {SELECT dolt_hashof_table('f4')}] eq $h2}]
+} {64 0 0 1}
+
+#-------------------------------------------------------------------------
+# 13.* temptable2: chunk-store page_count metric; backup API rejected cleanly
+#
+do_test doltlite_recover_rawformat_3-13.1 {
+  execsql {
+    CREATE TABLE tt2(a,b);
+    CREATE INDEX tti2 ON tt2(a,b);
+    WITH x(i) AS ( SELECT 1 UNION ALL SELECT i+1 FROM x WHERE i<20 )
+    INSERT INTO tt2 SELECT randomblob(100), randomblob(100) FROM x;
+  }
+  list [expr {[db one {PRAGMA page_count}]>0}] [db one {SELECT count(*) FROM tt2}]
+} {1 20}
+do_test doltlite_recover_rawformat_3-13.2 {
+  sqlite3 tmp ""
+  tmp eval {CREATE TABLE t1(a,b); INSERT INTO t1 VALUES(1,2)}
+  set rc [catch {sqlite3_backup B tmp main db main} msg]
+  catch {B finish}
+  set r [list $rc $msg [tmp eval {SELECT count(*) FROM t1}] [db one {SELECT 1}]]
+  tmp close
+  set r
+} {1 {sqlite3_backup_init() failed} 1 1}
+
+#-------------------------------------------------------------------------
+# 14.* pagerfault3: page-size change + VACUUM round-trip
+#
+do_test doltlite_recover_rawformat_3-14.1 {
+  execsql {
+    PRAGMA page_size = 2048;
+    CREATE TABLE pf1(x);
+    INSERT INTO pf1 VALUES(zeroblob(1200));
+  }
+  expr {[db one {PRAGMA page_count}]>0}
+} {1}
+do_test doltlite_recover_rawformat_3-14.2 {
+  db close
+  sqlite3 db test.db
+  execsql {PRAGMA page_size = 1024}
+  execsql {VACUUM}
+  list [db one {SELECT length(x) FROM pf1}] \
+       [expr {[db one {PRAGMA page_count}]>0}] [execsql {PRAGMA integrity_check}]
+} {1200 1 ok}
+
+#-------------------------------------------------------------------------
+# 15.* singles: check, quote, descidx3, index5, vtab2, gencol1
+#
+do_test doltlite_recover_rawformat_3-15.1 {
+  execsql {CREATE TABLE ch4(x,y, CHECK( x+y==11
+        OR x*y==12
+        OR x/y BETWEEN 5 AND 8
+        OR -x==y+10 ))}
+  execsql {INSERT INTO ch4 VALUES(12,-22)}
+  db close
+  sqlite3 db test.db
+  catchsql {UPDATE ch4 SET x=0, y=2}
+} {1 {CHECK constraint failed: x+y==11 OR x*y==12 OR x/y BETWEEN 5 AND 8 OR -x==y+10}}
+
+do_test doltlite_recover_rawformat_3-15.2 {
+  execsql {CREATE TABLE qxyz(a, b, c CHECK (c!="null") )}
+  set r1 [catchsql {INSERT INTO qxyz VALUES(1,2,'null')}]
+  execsql {INSERT INTO qxyz VALUES(1,2,3)}
+  db close
+  sqlite3 db test.db
+  set r2 [catchsql {INSERT INTO qxyz VALUES(4,5,'null')}]
+  list $r1 $r2 [db one {SELECT sql FROM sqlite_master WHERE name='qxyz'}]
+} {{1 {CHECK constraint failed: c!="null"}} {1 {CHECK constraint failed: c!="null"}} {CREATE TABLE qxyz(a, b, c CHECK(c!="null"))}}
+
+do_test doltlite_recover_rawformat_3-15.3 {
+  execsql {
+    CREATE TABLE dt1(i INTEGER PRIMARY KEY,a,b,c,d);
+    CREATE INDEX dt1i1 ON dt1(a DESC, b ASC, c DESC);
+    CREATE INDEX dt1i2 ON dt1(b DESC, c ASC, d DESC);
+    INSERT INTO dt1 VALUES(1, 'one', 'I', 'a', NULL);
+    INSERT INTO dt1 VALUES(2, 'two', 'II', 'b', 4.5);
+    INSERT INTO dt1 VALUES(3, 'three', 'III', 'c', 99);
+    INSERT INTO dt1 VALUES(4, 'four', 'IV', 'd', 100);
+  }
+  db close
+  sqlite3 db test.db
+  list [execsql {SELECT i FROM dt1 ORDER BY a DESC, b ASC, c DESC}] \
+       [execsql {SELECT b FROM dt1 ORDER BY b DESC, c ASC, d DESC}] \
+       [execsql {PRAGMA integrity_check}]
+} {{2 3 1 4} {IV III II I} ok}
+
+do_test doltlite_recover_rawformat_3-15.4 {
+  execsql {CREATE TABLE ix1(x)}
+  execsql BEGIN
+  for {set i 0} {$i<500} {incr i} {
+    execsql "INSERT INTO ix1 VALUES('k[format %05d $i]')"
+  }
+  execsql COMMIT
+  execsql {CREATE INDEX ixi1 ON ix1(x)}
+  list [db one {SELECT min(x) FROM ix1}] [db one {SELECT max(x) FROM ix1}] \
+       [db one {SELECT count(*) FROM ix1}] [execsql {PRAGMA integrity_check}]
+} {k00000 k00499 500 ok}
+
+do_test doltlite_recover_rawformat_3-15.5 {
+  execsql {PRAGMA encoding='UTF16'}
+  list [execsql {PRAGMA encoding}] [catchsql {CREATE VIRTUAL TABLE vx USING s}]
+} {UTF-8 {1 {no such module: s}}}
+
+do_test doltlite_recover_rawformat_3-15.6 {
+  sqlite3 dd {}
+  set rc [catch {dd deserialize [decode_hexdb {
+| size 8192 pagesize 4096 filename c27.db
+| page 1 offset 0
+|      0: 53 51 4c 69 74 65 20 66 6f 72 6d 61 74 20 33 00   SQLite format 3.
+| end c27.db
+}]} msg]
+  set ok [dd one {SELECT 1}]
+  dd close
+  list $rc $msg $ok
+} {1 {unable to set MEMDB content} 1}
+
+do_test doltlite_recover_rawformat_3-15.7 {
+  execsql {
+    CREATE TABLE gc1(a INT PRIMARY KEY, b AS (a*3));
+    REPLACE INTO gc1(a) VALUES(9);
+    SELECT a, b FROM gc1;
+  }
+} {9 27}
+
+finish_test
