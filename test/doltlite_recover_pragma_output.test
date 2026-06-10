@@ -59,7 +59,12 @@ source $testdir/tester.tcl
 # covers: pragma pragma-8.2.4.2 — VACUUM preserves user_version 2, stock-identical (5.8)
 # covers: pragma pragma-8.2.4.3 — doltlite contract: VACUUM is a no-op, schema_version unchanged (5.8)
 # covers: pragma pragma-8.2.8 — main.user_version independent of aux.user_version (6.1)
-# covers: pragma pragma-8.2.3.2 — doltlite contract: user_version is session scoped, reopen reads 0 (6.2)
+# covers: pragma pragma-8.2.9 — user_version set inside a txn on main and aux (6.2)
+# covers: pragma pragma-8.2.10 — in-txn aux.user_version reads back 10 (6.2)
+# covers: pragma pragma-8.2.11 — in-txn main.user_version reads back 11 (6.2)
+# covers: pragma pragma-8.2.12 — ROLLBACK restores aux.user_version to 3 (6.3)
+# covers: pragma pragma-8.2.13 — ROLLBACK restores main.user_version to 2 (6.3)
+# covers: pragma pragma-8.2.3.2 — doltlite contract: user_version is session scoped, reopen reads 0 (6.6)
 # covers: pragma pragma-14.1 — fresh db reports synthetic page_count {4 4} (7.1)
 # covers: pragma pragma-14.2 — CREATE TABLE grows page_count; temp.page_count 0 (7.2)
 # covers: pragma pragma-14.2uc — uppercase PAGE_COUNT matches (7.3)
@@ -91,13 +96,6 @@ source $testdir/tester.tcl
 # covers: multiplex4 multiplex4-1.2 — PRAGMA multiplex_truncate is a no-op returning nothing (11.4)
 # covers: multiplex4 multiplex4-1.10 — growing data never spawns numbered overflow files (11.2)
 # covers: multiplex4 multiplex4-1.11 — DELETE+VACUUM keeps the single-file layout and data readable (11.3)
-# not-covered: pragma pragma-8.2.12 — SUSPECTED BUG: PRAGMA user_version set inside a
-#   transaction is not undone by ROLLBACK for attached dbs (aux stays 10 instead of
-#   reverting to 3), and main reverts only sometimes depending on prior connection
-#   state; behavior is nondeterministic so it cannot be asserted
-# not-covered: pragma pragma-8.2.13 — SUSPECTED BUG: same ROLLBACK scenario, post-rollback
-#   main.user_version is inconsistent across runs (observed both 0 and 11 for the same
-#   script shape)
 
 #-----------------------------------------------------------------------
 # 1: cache_size / default_cache_size / synchronous session contract
@@ -384,7 +382,7 @@ do_test doltlite_recover_pragma_output-5.8 {
 } {1 1 2}
 
 #-----------------------------------------------------------------------
-# 6: user_version is per-database and session scoped
+# 6: user_version is per-database, transactional, and session scoped
 #
 do_test doltlite_recover_pragma_output-6.1 {
   execsql {
@@ -395,6 +393,38 @@ do_test doltlite_recover_pragma_output-6.1 {
   }
 } {0 3 2}
 do_test doltlite_recover_pragma_output-6.2 {
+  execsql {
+    BEGIN;
+    PRAGMA aux.user_version=10;
+    PRAGMA user_version=11;
+    PRAGMA aux.user_version;
+    PRAGMA main.user_version;
+  }
+} {10 11}
+do_test doltlite_recover_pragma_output-6.3 {
+  execsql {
+    ROLLBACK;
+    PRAGMA aux.user_version;
+    PRAGMA main.user_version;
+  }
+} {3 2}
+do_test doltlite_recover_pragma_output-6.4 {
+  execsql {
+    BEGIN;
+    PRAGMA user_version=6;
+    SAVEPOINT sp;
+    PRAGMA user_version=10;
+    ROLLBACK TO sp;
+    PRAGMA user_version;
+  }
+} {6}
+do_test doltlite_recover_pragma_output-6.5 {
+  execsql {
+    COMMIT;
+    PRAGMA user_version;
+  }
+} {6}
+do_test doltlite_recover_pragma_output-6.6 {
   execsql {DETACH aux}
   db close
   sqlite3 db test.db
