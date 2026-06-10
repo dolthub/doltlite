@@ -45,13 +45,13 @@ database_may_be_corrupt
 #   mmap_size is accepted (reports 0, mmap unused), reads and writes still
 #   correct after it, and file-tail corruption is detected (tests 4.1, 2.10,
 #   2.13) instead of being mapped and served
+# covers: chunk WAL-region corruption (#1341): byte corruption in the WAL
+#   region of a non-compacted store (plain close, no dolt_gc) used to silently
+#   truncate committed transactions (count dropped 24 -> 6 with
+#   integrity_check ok). Mid-stream WAL damage is now rejected at open, while
+#   a torn tail (incomplete final record, i.e. crash recovery) still opens and
+#   serves the last complete commit (tests 1.7-1.11)
 # not-covered: (none)
-#
-# SUSPECTED BUG: byte corruption in the chunk WAL region of a non-compacted
-# store (plain close, no dolt_gc) silently truncates committed transactions:
-# count(*) drops from 24 to 6 yet PRAGMA integrity_check reports ok. Committed
-# data is lost without any corruption signal. Tests below assert detection only
-# on the compacted form; the WAL-region gap is not asserted as correct.
 
 proc xorByte {file off} {
   set f [open $file r+]
@@ -77,9 +77,9 @@ proc openCorrupt {file} {
   catch {dbc close}
   return opened
 }
-proc csDetect {off} {
+proc csDetect {off {src rch2.db}} {
   forcedelete rcor.db
-  file copy -force rch2.db rcor.db
+  file copy -force $src rcor.db
   xorByte rcor.db $off
   if {[catch {sqlite3 dbc rcor.db}]} { return detected }
   set rc [catch {dbc eval {SELECT count(*) FROM t1}} cnt]
@@ -145,6 +145,51 @@ do_test doltlite_recover_corruption-1.6 {
   dbc close
   set res
 } {24 ok}
+
+# The WAL region of rch1.db begins at 168 with a chunk frame:
+# tag(1) + hash(32) + len(4) + body. Offsets 169/201/205 hit the first
+# frame's hash, length, and body respectively.
+do_test doltlite_recover_corruption-1.7 {
+  set ::ncSz [file size rch1.db]
+  csDetect 169 rch1.db
+} {detected}
+
+do_test doltlite_recover_corruption-1.8 {
+  csDetect 201 rch1.db
+} {detected}
+
+do_test doltlite_recover_corruption-1.9 {
+  csDetect [expr {168 + ($::ncSz - 168)/2}] rch1.db
+} {detected}
+
+do_test doltlite_recover_corruption-1.10 {
+  forcedelete rcor.db
+  file copy -force rch1.db rcor.db
+  set f [open rcor.db r+]
+  chan truncate $f [expr {$::ncSz - 40}]
+  close $f
+  sqlite3 dbc rcor.db
+  set res [list [dbc eval {SELECT count(*) FROM t1}] \
+                [dbc eval {SELECT count(*) FROM tw1}] \
+                [dbc eval {PRAGMA integrity_check}]]
+  dbc close
+  set res
+} {24 0 ok}
+
+do_test doltlite_recover_corruption-1.11 {
+  forcedelete rcor.db
+  file copy -force rch1.db rcor.db
+  set f [open rcor.db a]
+  fconfigure $f -translation binary
+  puts -nonewline $f [binary format c 1][string repeat A 36]
+  close $f
+  sqlite3 dbc rcor.db
+  set res [list [dbc eval {SELECT count(*) FROM t1}] \
+                [dbc eval {SELECT count(*) FROM tw1}] \
+                [dbc eval {PRAGMA integrity_check}]]
+  dbc close
+  set res
+} {24 1 ok}
 
 do_test doltlite_recover_corruption-2.1 {
   sqlite3 db test.db

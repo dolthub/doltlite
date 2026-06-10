@@ -132,6 +132,34 @@ static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
   return 1;
 }
 
+/* A bad chunk frame is a recoverable torn tail only when nothing but (at
+** most) a file-final root record follows it; a complete root record with
+** data after it proves later commits were durably synced, so the damage is
+** mid-stream corruption and must be surfaced rather than truncated away. */
+static int csWalScanForLaterRoot(ChunkStore *cs, i64 from, i64 walSize,
+                                 int *pFound){
+  u8 buf[65536];
+  i64 q = from;
+  i64 last = walSize - (1 + CHUNK_MANIFEST_SIZE) - 1;
+  *pFound = 0;
+  while( q <= last ){
+    i64 nAvail = walSize - q;
+    int n = nAvail > (i64)sizeof(buf) ? (int)sizeof(buf) : (int)nAvail;
+    int i;
+    int rc = sqlite3OsRead(cs->file.pFile, buf, n, cs->wal.iWalOffset + q);
+    if( rc != SQLITE_OK ) return rc;
+    for(i=0; i+5<=n && q+i<=last; i++){
+      if( buf[i]==CS_WAL_TAG_ROOT && CS_READ_U32(buf+i+1)==CHUNK_STORE_MAGIC ){
+        *pFound = 1;
+        return SQLITE_OK;
+      }
+    }
+    if( (i64)n >= nAvail ) break;
+    q += n - 4;
+  }
+  return SQLITE_OK;
+}
+
 int csReplayWal(ChunkStore *cs){
   i64 walSize;
   ChunkStoreReplayState saved;
@@ -203,6 +231,10 @@ int csReplayWal(ChunkStore *cs){
       len = CS_READ_U32(aPrefix + CS_WAL_CHUNK_LEN_OFF);
       if( pos < 0 || len > (u32)0x7fffffff
        || (u64)pos + len > (u64)walSize ){
+        int laterRoot = 0;
+        rc = csWalScanForLaterRoot(cs, recPos + 1, walSize, &laterRoot);
+        if( rc==SQLITE_OK && laterRoot ) rc = SQLITE_CORRUPT;
+        if( rc!=SQLITE_OK ) goto replay_error;
         sqlite3_log(SQLITE_NOTICE,
           "doltlite: WAL chunk body truncated at offset %lld (declared len=%u); "
           "stopping replay at last commit boundary",
@@ -230,6 +262,10 @@ int csReplayWal(ChunkStore *cs){
         blake3_hasher_finalize(&hasher, bodyHash.data, PROLLY_HASH_SIZE);
         if( prollyHashCompare(&bodyHash, &hash) != 0 ) hashMismatch = 1;
         if( hashMismatch ){
+          int laterRoot = 0;
+          rc = csWalScanForLaterRoot(cs, recPos + 1, walSize, &laterRoot);
+          if( rc==SQLITE_OK && laterRoot ) rc = SQLITE_CORRUPT;
+          if( rc!=SQLITE_OK ) goto replay_error;
           sqlite3_log(SQLITE_NOTICE,
             "doltlite: WAL chunk body hash mismatch at offset %lld (declared len=%u); "
             "stopping replay at last commit boundary",
