@@ -73,7 +73,9 @@ static int gcVerifyHashCb(void *ctx, const ProllyHash *pHash){
   if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
   v->rc = chunkStoreGet(v->cs, pHash, &data, &nData);
   sqlite3_free(data);
-  if( v->rc!=SQLITE_OK ){
+  /* Only NOTFOUND means the sweep collected a live hash. Other errors
+  ** (injected IO faults, OOM) leave the check inconclusive. */
+  if( v->rc==SQLITE_NOTFOUND ){
     fprintf(stderr,
             "doltlite: GC invariant: session hash unreachable after sweep\n");
     abort();

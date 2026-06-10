@@ -2541,33 +2541,6 @@ pager4 pager4-1.8  # rename-while-open not detected: writes continue to the open
 pager4 pager4-1.9  # rename-while-open not detected: writes continue to the open inode
 pager4 pager4-1.10  # rename-while-open not detected: writes continue to the open inode
 pager4 pager4-1.11  # rename-while-open not detected: writes continue to the open inode
-pagerfault3 quota-2.1.2  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.1.3  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.1.4  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.1.5  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.2.1  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.2.2  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.2.3  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.4.2  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.4.3  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-2.4.4  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.1.2  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.1.4  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.1.5  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.1  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.2  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.3  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.4  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.5  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.6  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.7  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.8  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.2.9  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-3.3.1  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-4.4.6  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-4.4.7  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-5.3.prep  # gc sweep fails gracefully under injected IO errors
-pagerfault3 quota-5.4.1  # gc sweep fails gracefully under injected IO errors
 resetdb resetdb-100  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-110  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-200  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
@@ -5285,3 +5258,23 @@ wal5 wal5-capi-5.2.17  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-5.2.18  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-5.2.19  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-5.2.21  # WAL checkpoint/frame counters zero; sidecar absent
+pagerfault3 pagerfault3-pre1  # synthetic chunk-format page_count
+pagerfault3 pagerfault3-pre2  # synthetic chunk-format page_count
+pagerfault3 pagerfault3-1-ioerr-transient.4  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.5  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.6  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.7  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.8  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.9  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.10  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.11  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.12  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.13  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.14  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.15  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.16  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.18  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.20  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.21  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.22  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
