@@ -4228,6 +4228,7 @@ int sqlite3BtreeOpen(
   Btree *p = 0;
   BtShared *pBt = 0;
   int rc = SQLITE_OK;
+  u8 poisonAfterOpen = 0;
 
   *ppBtree = 0;
 
@@ -4272,6 +4273,10 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return rc;
   }
+  /* Serve the recovered prefix to the connection-open catalog reads below,
+  ** then re-arm so the first data access fails SQLITE_CORRUPT instead. */
+  poisonAfterOpen = pBt->store.corruptMidStream;
+  pBt->store.corruptMidStream = 0;
 
   rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_SIZE);
   if( rc!=SQLITE_OK ){
@@ -4454,6 +4459,7 @@ int sqlite3BtreeOpen(
     }
   }
 
+  pBt->store.corruptMidStream = poisonAfterOpen;
   *ppBtree = p;
 
   registerDoltiteFunctions(db);

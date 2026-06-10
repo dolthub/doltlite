@@ -469,6 +469,9 @@ int chunkStoreOpen(
     cs->file.pFile = 0;
   }
 
+  /* Poison only after the open's own refs/branch reads are done. */
+  if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
+
   csMarkRefsCommitted(cs);
   return SQLITE_OK;
 }
@@ -953,6 +956,8 @@ int chunkStoreGet(
   *ppData = 0;
   *pnData = 0;
 
+  if( cs->corruptMidStream ) return SQLITE_CORRUPT;
+
   rc = csSearchPending(cs, hash, &idx);
   if( rc!=SQLITE_OK ) return rc;
   if( idx >= 0 ){
@@ -1409,6 +1414,7 @@ int chunkStoreCommit(ChunkStore *cs){
   SavedRefsState savedRefs;
 
   memset(&savedRefs, 0, sizeof(savedRefs));
+  if( cs->corruptMidStream ) return SQLITE_CORRUPT;
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( !csFileLockHeld(CS_GRAPH_LOCK(cs)) && cs->file.zFilename ){
