@@ -5439,7 +5439,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       }
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
-      p->nSavepoint = 0;
+      btreeDiscardAllSavepoints(p);
       p->bSchemaChangedTxn = 0;
       p->bMasterRootChangedTxn = 0;
 
@@ -5469,7 +5469,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       chunkStoreRollback(&pBt->store);
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
-      p->nSavepoint = 0;
+      btreeDiscardAllSavepoints(p);
       p->bSchemaChangedTxn = 0;
       p->bMasterRootChangedTxn = 0;
       chunkStoreUnlock(&pBt->store);
@@ -5482,7 +5482,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   p->inTransaction = TRANS_NONE;
   p->bSchemaChangedTxn = 0;
   p->bMasterRootChangedTxn = 0;
-  p->nSavepoint = 0;
+  btreeDiscardAllSavepoints(p);
 
   chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
