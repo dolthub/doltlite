@@ -4432,10 +4432,6 @@ memjournal2 memjournal2-1.2.299.3  # in-memory journal premise: journal_mode fix
 memjournal2 memjournal2-1.2.300.1  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.2  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-shared_err shared_ioerr-1.36.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-1.37.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-1.38.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-1.39.cleanup.2  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.122.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.123.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.124.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts

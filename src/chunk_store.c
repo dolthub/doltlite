@@ -224,7 +224,35 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
     csFreeSequences(cs);
     return csEnsureDefaultBranch(cs);
   }
-  return chunkStoreReloadRefs(cs);
+  {
+    int rc = chunkStoreReloadRefs(cs);
+    if( rc!=SQLITE_OK ){
+      /* The reload allocates and can fail mid-OOM-rollback. Leaving the
+      ** uncommitted refs in place dangles pointers at chunks the rollback
+      ** is discarding; clear them without allocating and reload from
+      ** committedRefsHash at the next use instead. */
+      csFreeBranches(cs);
+      csFreeTags(cs);
+      csFreeRemotes(cs);
+      csFreeTracking(cs);
+      csFreeSequences(cs);
+      cs->bRefsStale = 1;
+      return rc;
+    }
+    cs->bRefsStale = 0;
+    return SQLITE_OK;
+  }
+}
+
+/* Repair a stale refs table (cleared by an OOM rollback) by reloading it
+** from the committed refs blob. Called before refs lookups that would
+** otherwise read an empty table as a valid empty database. */
+int chunkStoreEnsureRefsFresh(ChunkStore *cs){
+  int rc;
+  if( !cs->bRefsStale ) return SQLITE_OK;
+  rc = chunkStoreReloadRefs(cs);
+  if( rc==SQLITE_OK ) cs->bRefsStale = 0;
+  return rc;
 }
 
 static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){

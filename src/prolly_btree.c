@@ -5046,6 +5046,8 @@ static int btreeReloadBranchWorkingStateInto(
   memset(&rebaseOnto, 0, sizeof(rebaseOnto));
   memset(&constraintViolationsHash, 0, sizeof(constraintViolationsHash));
 
+  rc = chunkStoreEnsureRefsFresh(&pBt->store);
+  if( rc!=SQLITE_OK ) return rc;
   rc = btreeLoadWorkingSetBlob(
       &pBt->store, zBr, &catHash, &workingCommitHash, &stagedCatalog, &isMerging,
       &mergeCommitHash, &conflictsCatalogHash,
@@ -5739,7 +5741,8 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     /* Autocommit OOM rollback restores in-memory state only. Persisting the
     ** restored catalog here can make a failed DDL attempt the new baseline. */
-    if( !bAutocommitOomRollback && !p->bCatalogDropped ){
+    if( !bAutocommitOomRollback && !p->bCatalogDropped
+     && !pBt->store.bRefsStale ){
       u8 *catData = 0;
       int nCatData = 0;
       ProllyHash catHash;
