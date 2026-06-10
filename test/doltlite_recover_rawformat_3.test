@@ -125,9 +125,9 @@ source $testdir/tester.tcl
 #   aux.schema_version around ALTER TABLE aux.t ADD COLUMN d DEFAULT 1000,
 #   with the default applied to existing rows (9.2)
 # covers-class: tkt2920 tkt2920-1.{1,3,5} (3 entries): PRAGMA max_page_count
-#   is ignored (reads 2147483647) — the chunk store has no page cap, so the
-#   original's disk-full path is unreachable; the same blob volume inserts
-#   fine with integrity ok (10.1, 10.2)
+#   uses DoltLite's synthetic page metric. Attempts to lower below the current
+#   metric clamp to the current value; the cap can be raised again and the same
+#   blob volume inserts fine with integrity ok (10.1, 10.2)
 # covers: tkt2920 tkt2920-1.9 — after the txn is rolled back, COMMIT errors
 #   'cannot commit - no transaction is active' verbatim (10.3)
 # covers: enc enc-12.1 — PRAGMA encoding='UTF-16le' on a fresh db is ignored:
@@ -778,11 +778,14 @@ do_test doltlite_recover_rawformat_3-9.2 {
 } {{1 one 1000 2 two 1000} 1 0}
 
 #-------------------------------------------------------------------------
-# 10.* tkt2920: no page cap / disk-full path; rollback then COMMIT error
+# 10.* tkt2920: synthetic page cap clamp; rollback then COMMIT error
 #
 do_test doltlite_recover_rawformat_3-10.1 {
-  execsql {PRAGMA max_page_count=40}
-} {2147483647}
+  set before [db one {PRAGMA page_count}]
+  set capped [db one {PRAGMA max_page_count=40}]
+  execsql {PRAGMA max_page_count=2147483647}
+  list [expr {$before>40}] [expr {$capped==$before}]
+} {1 1}
 do_test doltlite_recover_rawformat_3-10.2 {
   execsql {CREATE TABLE filler(fill)}
   execsql BEGIN

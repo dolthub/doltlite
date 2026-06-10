@@ -330,6 +330,7 @@ spellfix3
 spellfix4
 sqldiff1
 sqllog
+sqllimits1
 starschema1
 stat
 strict1
