@@ -81,9 +81,9 @@ source $testdir/tester.tcl
 #   modified') so the db is NEVER corrupted: quick_check ok on both
 #   connections afterwards (5.4, 5.5)
 # covers-class: resetdb resetdb-{210,400,500,740} (4 entries): RESET_DB
-#   dbconfig is accepted and VACUUM under it succeeds; since no corruption is
-#   possible the db stays intact and both connections agree on content and
-#   quick_check (doltlite's current no-reset contract, see suspected bug note)
+#   dbconfig is refused on doltlite-format dbs (no silent no-op) and VACUUM
+#   still succeeds; since no corruption is possible the db stays intact and
+#   both connections agree on content and quick_check (see feature-gap note)
 #   (5.6)
 # covers-class: resetdb resetdb-{300,310} (2 entries): journal_mode reports
 #   'wal' on both connections; setting WAL is accepted (already wal) and
@@ -170,16 +170,15 @@ source $testdir/tester.tcl
 #   stays usable (15.6)
 # covers: gencol1 gencol1-15.20 — REPLACE INTO a table with a generated column
 #   computes the column (15.7)
-# not-covered: attach attach-11.1 — SUSPECTED BUG: ATTACH of a ~9000-char URI
-#   filename fails 'unable to open database: file:000...' (stock supports
-#   arbitrarily long URI filenames; likely a fixed-size path buffer in the
-#   chunk-store open path). Test 6.6 only asserts the connection survives the
-#   attempt either way.
-# not-covered: resetdb resetdb-630 — SUSPECTED BUG (feature gap):
-#   SQLITE_DBCONFIG_RESET_DATABASE is accepted but VACUUM under it does not
-#   reset the database (sqlite_master keeps its rows), so the original's
-#   "reset during another connection's scan empties the schema" assertion has
-#   no doltlite equivalent today.
+# covers: attach attach-11.1 — ATTACH of a ~9000-char mode=memory URI opens an
+#   in-memory chunk store (no path canonicalization), is usable, and detaches
+#   cleanly (6.6)
+# not-covered: resetdb resetdb-630 — feature gap:
+#   SQLITE_DBCONFIG_RESET_DATABASE is not implemented for doltlite-format
+#   databases; enabling it is now refused (SQLITE_ERROR, flag stays clear,
+#   see 5.6) instead of silently no-opping, so the original's "reset during
+#   another connection's scan empties the schema" assertion still has no
+#   doltlite equivalent.
 
 proc sig {} {
   return [db eval {SELECT count(*), md5sum(a), md5sum(b), md5sum(c) FROM abc}]
@@ -588,16 +587,18 @@ do_test doltlite_recover_rawformat_3-5.4 {
 do_test doltlite_recover_rawformat_3-5.5 {
   list [execsql {PRAGMA quick_check}] [execsql {PRAGMA quick_check} db2]
 } {ok ok}
+# RESET_DB is refused on doltlite-format dbs (read-back value stays 0, the
+# C call returns SQLITE_ERROR), so VACUUM never silently skips a reset.
 do_test doltlite_recover_rawformat_3-5.6 {
-  sqlite3_db_config db RESET_DB 1
+  set r1 [sqlite3_db_config db RESET_DB 1]
   db eval VACUUM
-  sqlite3_db_config db RESET_DB 0
-  execsql {
+  set r2 [sqlite3_db_config db RESET_DB 0]
+  list $r1 $r2 [execsql {
     SELECT count(*) FROM rt1;
     SELECT count(*) FROM sqlite_master WHERE name LIKE 'rt1%';
     PRAGMA quick_check;
-  } db2
-} {20 3 ok}
+  } db2]
+} {0 0 {20 3 ok}}
 do_test doltlite_recover_rawformat_3-5.7 {
   list [execsql {PRAGMA journal_mode=WAL}] \
        [catchsql {PRAGMA journal_mode=DELETE}] \
@@ -668,10 +669,19 @@ do_test doltlite_recover_rawformat_3-6.5 {
   list $res $rows
 } {{noname {} inmem {}} 7}
 do_test doltlite_recover_rawformat_3-6.6 {
-  catch {execsql {ATTACH printf('file:%09000x/x.db?mode=memory&cache=shared',1) AS auxlong}}
-  catch {execsql {DETACH auxlong}}
-  db one {SELECT 1}
-} {1}
+  db close
+  sqlite3 db test.db -uri 1
+  execsql {ATTACH printf('file:%09000x/x.db?mode=memory&cache=shared',1) AS auxlong}
+  execsql {
+    CREATE TABLE auxlong.lt(x);
+    INSERT INTO auxlong.lt VALUES(42);
+  }
+  set r [execsql {SELECT x FROM auxlong.lt}]
+  execsql {DETACH auxlong}
+  db close
+  sqlite3 db test.db
+  list $r [db one {SELECT 1}]
+} {42 1}
 
 #-------------------------------------------------------------------------
 # 7.* securedel: secure_delete pragma inert; DELETE itself correct

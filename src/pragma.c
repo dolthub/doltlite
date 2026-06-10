@@ -858,6 +858,13 @@ void sqlite3Pragma(
 #ifndef SQLITE_OMIT_AUTOVACUUM
   case PragTyp_INCREMENTAL_VACUUM: {
     int iLimit = 0, addr;
+#ifdef DOLTLITE_PROLLY
+    if( sqlite3BtreeIsDoltliteFormat(pDb->pBt) ){
+      sqlite3ErrorMsg(pParse,
+        "incremental_vacuum is not supported on doltlite-format databases");
+      goto pragma_out;
+    }
+#endif
     if( zRight==0 || !sqlite3GetInt32(zRight, &iLimit) || iLimit<=0 ){
       iLimit = 0x7fffffff;
     }

@@ -345,10 +345,10 @@ do_catchsql_test doltlite_recover_jrnlwal_3-1.11 {
 } {1 {auto_vacuum is not supported on doltlite-format databases}}
 do_catchsql_test doltlite_recover_jrnlwal_3-1.12 {
   PRAGMA incremental_vacuum;
-} {1 {SQL logic error}}
+} {1 {incremental_vacuum is not supported on doltlite-format databases}}
 do_catchsql_test doltlite_recover_jrnlwal_3-1.13 {
   PRAGMA incremental_vacuum(5);
-} {1 {SQL logic error}}
+} {1 {incremental_vacuum is not supported on doltlite-format databases}}
 do_execsql_test doltlite_recover_jrnlwal_3-1.14 {
   PRAGMA incr_vacuum;
 } {}
@@ -830,7 +830,7 @@ do_test doltlite_recover_jrnlwal_3-7.1 {
   list [catchsql {PRAGMA incremental_vacuum(1)}] \
        [execsql {SELECT count(*) FROM iv}] \
        [execsql {PRAGMA integrity_check}]
-} {{1 {SQL logic error}} 0 ok}
+} {{1 {incremental_vacuum is not supported on doltlite-format databases}} 0 ok}
 do_test doltlite_recover_jrnlwal_3-7.2 {
   forcedelete test2.db test2.db-wal
   execsql {
@@ -843,7 +843,7 @@ do_test doltlite_recover_jrnlwal_3-7.2 {
   }
   list [catchsql {PRAGMA aux.incremental_vacuum(1)}] \
        [execsql {SELECT count(*) FROM iv; SELECT count(*) FROM aux.iv2}]
-} {{1 {SQL logic error}} {0 0}}
+} {{1 {incremental_vacuum is not supported on doltlite-format databases}} {0 0}}
 do_test doltlite_recover_jrnlwal_3-7.3 {
   execsql { DETACH aux }
   execsql {

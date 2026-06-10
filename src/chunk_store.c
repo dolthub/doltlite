@@ -346,7 +346,8 @@ int chunkStoreOpen(
   cs->lockDepth = 0;
 
   if( zFilename==0 || zFilename[0]=='\0'
-   || strcmp(zFilename, ":memory:")==0 ){
+   || strcmp(zFilename, ":memory:")==0
+   || (flags & SQLITE_OPEN_MEMORY)!=0 ){
     cs->isMemory = 1;
     cs->file.zFilename = sqlite3_mprintf(":memory:");
     if( cs->file.zFilename==0 ){
@@ -359,6 +360,15 @@ int chunkStoreOpen(
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     cs->file.pFile = 0;
     return SQLITE_OK;
+  }
+
+  /* A file-backed chunk store needs the full VFS file API (the GC's
+  ** atomic-replace deletes files, lock refresh probes HAS_MOVED). VFSes
+  ** without xDelete, like memdb, would half-open: the open succeeds but
+  ** every statement fails. Fail the open instead. */
+  if( pVfs->xDelete==0 ){
+    chunkStoreClose(cs);
+    return SQLITE_CANTOPEN;
   }
 
   rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename);

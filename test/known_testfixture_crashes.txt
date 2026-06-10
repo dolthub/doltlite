@@ -31,7 +31,6 @@
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
-shared        # shared-cache semantics unsupported under doltlite; setup aborts
 
 # Raw-format/WAL divergences whose failed open cascades into an uncaught Tcl
 # error before the summary line. doltlite validates the chunk-store manifest at
@@ -130,6 +129,7 @@ incrblob         # incrblob API on a PK (WITHOUT ROWID) table: "cannot open tabl
 pager1           # journal/txn-model cascade: "cannot commit - no transaction is active"
 backup           # sqlite3_backup_init: page-image backup unsupported
 mallocAll        # failed open -> "db" command never created (test-harness footgun)
+memdb2           # chunk store intentionally refuses the memdb VFS at open (it half-opened before) -> uncaught open error, "db" never created
 walthread        # multi-threaded WAL stress: nondeterministic class (same as thread*)
 win32heap        # windows-only: silent platform return, no summary line
 win32lock        # windows-only: silent platform return, no summary line
