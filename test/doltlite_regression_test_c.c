@@ -3480,7 +3480,7 @@ static void run_diff_stat_surfaces_corrupt_root(void){
 
   sqlite3_free(pCommitData);
   sqlite3_free(pCatData);
-  sqlite3_free(aTables);
+  doltliteFreeCatalog(aTables, nTables);
   doltliteCommitClear(&badCommit);
   doltliteCommitClear(&fromCommit);
   doltliteCommitClear(&headCommit);
