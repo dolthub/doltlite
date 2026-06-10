@@ -45,7 +45,7 @@ database_may_be_corrupt
 #   mmap_size is accepted (reports 0, mmap unused), reads and writes still
 #   correct after it, and file-tail corruption is detected (tests 4.1, 2.10,
 #   2.13) instead of being mapped and served
-# covers: chunk WAL-region corruption (#1341): byte corruption in the WAL
+# covers: chunk WAL-region corruption: byte corruption in the WAL
 #   region of a non-compacted store (plain close, no dolt_gc) used to silently
 #   truncate committed transactions (count dropped 24 -> 6 with
 #   integrity_check ok). Mid-stream WAL damage is now rejected at open, while
