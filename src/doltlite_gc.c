@@ -422,7 +422,11 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
+      /* Best-effort removal of a stale tmp file; a failure here (including
+      ** the OS-layer fault probe) must not fail the GC. */
+      sqlite3BeginBenignMalloc();
       sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+      sqlite3EndBenignMalloc();
 
       rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
       if( rc != SQLITE_OK ){
@@ -498,7 +502,9 @@ static int gcRewriteFile(
             if( restoreRc!=SQLITE_OK ) rc = restoreRc;
           }
 #endif
+          sqlite3BeginBenignMalloc();
           sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+          sqlite3EndBenignMalloc();
         }else{
           *pReplaced = 1;
 #if !SQLITE_OS_WIN
@@ -536,7 +542,9 @@ static int gcRewriteFile(
           sqlite3OsCloseFree(pNewFile);
         }
       }else{
+        sqlite3BeginBenignMalloc();
         sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+        sqlite3EndBenignMalloc();
       }
       if( !*pReplaced && pTmpFile ){
         sqlite3OsCloseFree(pTmpFile);
