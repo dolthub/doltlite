@@ -18,4 +18,5 @@ doltlite_recover_rtree
 doltlite_recover_savepointfault
 doltlite_recover_shared_ioerr
 doltlite_recover_utf16_errtext
+doltlite_recover_vtab1
 doltlite_recover_withoutrowid
