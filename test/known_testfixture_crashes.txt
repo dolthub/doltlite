@@ -21,9 +21,7 @@
 #   rtree -- crashes only under rtree-enabled builds (vtab shadow-table
 #     reload abort) and completes vacuously without the capability, so the
 #     expectation depends on build flags.
-#   e_walckpt -- unbounded memory growth at e_walckpt-1.3.2.2 OOM-kills the
-#     host (a CI runner dies with a shutdown signal); must not run at all.
-#
+
 # trigger2 used to be here but was fixed by commit 5cd33a12a
 # (removed obsolete DOLTLITE_PROLLY UPDATE codegen branches; see issue #361).
 
@@ -91,7 +89,6 @@ walro         # readonly_shm + readonly *-shm perms; doltlite has no WAL shm, op
 # tvfsLock during WAL-checkpoint teardown). Feature gaps, not prolly bugs.
 dbpagefault   # shm-fault injection; doltlite has no *-shm, setup aborts pre-summary
 walfault      # WAL-frame fault injection; no WAL, aborts pre-summary
-e_walckpt     # unbounded memory growth at 1.3.2.2 OOM-kills the host (not bucket-enforced; see header)
 
 # memdb1 exercises the sqlite3_serialize()/sqlite3_deserialize() page-image API,
 # which is unsupported on prolly storage (no stock page image). sqlite3_serialize
