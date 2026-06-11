@@ -5779,3 +5779,1590 @@ e_walckpt e_walckpt-5.3.2
 e_walckpt e_walckpt-6.1
 e_walckpt e_walckpt-6.2
 e_walckpt e_walckpt-6.4
+
+# == 1357 sweep: formerly-unswept files, every list verified identical over three runs ==
+
+# raw stock-SQLite corrupt page images injected via `db deserialize`; doltlite's
+# chunk format cannot host raw page images, so setup fails and the ALTERs see
+# "no such table" instead of "database disk image is malformed"
+altercorrupt altercorrupt-1.0
+altercorrupt altercorrupt-1.1
+altercorrupt altercorrupt-2.0
+altercorrupt altercorrupt-2.1
+
+# DEFENSIVE shadow-name reservation at CREATE is a warm-schema-cache check
+# (sqlite3FindTable without forced load); doltlite invalidates the schema
+# cache after DDL so the fts3 parent vtab isn't visible at parse time and the
+# reserved-name error is skipped (stock has the same gap on a cold cache).
+# 16.24/16.25 are cascade: 16.23's CREATE leaves y1_segments behind.
+altertab altertab-16.23
+altertab altertab-16.24
+altertab altertab-16.25
+
+# PRAGMA encoding=UTF16be is a no-op (doltlite stores UTF-8 only), so the
+# expected UTF-8->UTF-16 conversion artifacts (00xx widening, FFFD
+# replacement of invalid sequences) never happen; hex() shows raw bytes
+badutf badutf-1.10
+badutf badutf-1.11
+badutf badutf-1.12
+badutf badutf-1.13
+badutf badutf-1.14
+badutf badutf-1.15
+badutf badutf-1.16
+badutf badutf-1.17
+badutf badutf-1.18
+badutf badutf-1.19
+badutf badutf-1.20
+
+# 3GB single-transaction insert: doltlite stages all uncommitted writes in
+# memory (no pager spill), exceeding the 6g CI memory cap -> clean SQLITE_NOMEM;
+# stock spills dirty pages to disk and completes
+bigsort bigsort-1.0
+
+# group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly
+# chunks, not legacy pager pages, so pager_cache_size expectations never match
+cache cache-1.2
+cache cache-2.1.0.3
+cache cache-2.1.1.3
+cache cache-2.1.2.3
+cache cache-2.1.3.3
+cache cache-2.1.4.3
+cache cache-2.1.5.3
+cache cache-2.1.6.3
+cache cache-2.1.7.3
+cache cache-2.1.8.3
+cache cache-2.1.9.3
+cache cache-2.1.10.3
+cache cache-2.1.11.3
+cache cache-2.1.12.3
+cache cache-2.1.13.3
+cache cache-2.1.14.3
+cache cache-2.1.15.3
+cache cache-2.1.16.3
+cache cache-2.1.17.3
+cache cache-2.1.18.3
+cache cache-2.1.19.3
+cache cache-2.2.0.3
+cache cache-2.2.1.3
+cache cache-2.2.2.3
+cache cache-2.2.3.3
+cache cache-2.2.4.3
+cache cache-2.2.5.3
+cache cache-2.2.6.3
+cache cache-2.2.7.3
+cache cache-2.2.8.3
+cache cache-2.2.9.3
+cache cache-2.2.10.3
+cache cache-2.2.11.3
+cache cache-2.2.12.3
+cache cache-2.2.13.3
+cache cache-2.2.14.3
+cache cache-2.2.15.3
+cache cache-2.2.16.3
+cache cache-2.2.17.3
+cache cache-2.2.18.3
+cache cache-2.2.19.3
+# group (b): journal_mode=DELETE rejection in cache-2.0's setup execsql aborts
+# the table creation, so 2.3.x/2.4.x cascade with "no such table" / 0 pages
+cache cache-2.0
+cache cache-2.3.1
+cache cache-2.3.2
+cache cache-2.3.3
+cache cache-2.3.4
+cache cache-2.3.6
+cache cache-2.3.7
+cache cache-2.3.8
+cache cache-2.4.1
+cache cache-2.4.2
+cache cache-2.4.3
+cache cache-2.4.4
+cache cache-2.4.7
+
+# sqlite3_db_cacheflush flushes dirty pager pages mid-transaction; doltlite
+# keeps uncommitted writes in chunk staging so the on-disk file copy only has
+# committed rows, and the "database is locked" cases never fire (MVCC, no
+# file locks)
+cacheflush cacheflush-1.1.2
+cacheflush cacheflush-1.2.2
+cacheflush cacheflush-1.3.2
+cacheflush cacheflush-1.4.2
+cacheflush cacheflush-1.4.4
+cacheflush cacheflush-2.1.3
+cacheflush cacheflush-2.1.4
+cacheflush cacheflush-2.2.3
+cacheflush cacheflush-2.2.5
+cacheflush cacheflush-2.2.6
+cacheflush cacheflush-4.0
+cacheflush cacheflush-4.1
+cacheflush cacheflush-4.2
+cacheflush cacheflush-4.3
+cacheflush cacheflush-4.4
+
+# pager cache-spill behavior: doltlite's chunk file isn't page-sized and
+# uncommitted writes stage in memory/chunk-staging, never spilling into the
+# main file mid-transaction, so the file-size expectations can't match
+cachespill cachespill-1.2
+cachespill cachespill-1.3
+cachespill cachespill-1.4
+cachespill cachespill-1.5
+
+# no file-lock BUSY semantics under doltlite MVCC: writer succeeds while a
+# reader transaction is open; the test's repeated "expect BUSY" re-steps then
+# auto-reset and re-run the INSERT, duplicating rows
+capi3b capi3b-1.4
+capi3b capi3b-1.5.1
+capi3b capi3b-1.5.2
+capi3b capi3b-1.8
+capi3b capi3b-1.9
+capi3b capi3b-2.3
+capi3b capi3b-2.6
+capi3b capi3b-2.9
+capi3b capi3b-2.10
+capi3b capi3b-2.12
+
+# every section's setup is "PRAGMA journal_mode = off; CREATE TABLE t1..." in
+# one execsql; doltlite rejects the journal_mode pragma so t1 is never created
+# and all 66 section tests cascade — the changes()/total_changes() semantics
+# under test are never actually exercised
+changes changes-1.1.0
+changes changes-1.1.1
+changes changes-1.1.2
+changes changes-1.1.3
+changes changes-1.1.4
+changes changes-1.1.5
+changes changes-1.1.6
+changes changes-1.1.7a
+changes changes-1.1.7
+changes changes-1.1.8
+changes changes-1.1.9
+changes changes-1.2.0
+changes changes-1.2.1
+changes changes-1.2.2
+changes changes-1.2.3
+changes changes-1.2.4
+changes changes-1.2.5
+changes changes-1.2.6
+changes changes-1.2.7a
+changes changes-1.2.7
+changes changes-1.2.8
+changes changes-1.2.9
+changes changes-1.3.0
+changes changes-1.3.1
+changes changes-1.3.2
+changes changes-1.3.3
+changes changes-1.3.4
+changes changes-1.3.5
+changes changes-1.3.6
+changes changes-1.3.7a
+changes changes-1.3.7
+changes changes-1.3.8
+changes changes-1.3.9
+changes changes-1.4.0
+changes changes-1.4.1
+changes changes-1.4.2
+changes changes-1.4.3
+changes changes-1.4.4
+changes changes-1.4.5
+changes changes-1.4.6
+changes changes-1.4.7a
+changes changes-1.4.7
+changes changes-1.4.8
+changes changes-1.4.9
+changes changes-1.5.0
+changes changes-1.5.1
+changes changes-1.5.2
+changes changes-1.5.3
+changes changes-1.5.4
+changes changes-1.5.5
+changes changes-1.5.6
+changes changes-1.5.7a
+changes changes-1.5.7
+changes changes-1.5.8
+changes changes-1.5.9
+changes changes-1.6.0
+changes changes-1.6.1
+changes changes-1.6.2
+changes changes-1.6.3
+changes changes-1.6.4
+changes changes-1.6.5
+changes changes-1.6.6
+changes changes-1.6.7a
+changes changes-1.6.7
+changes changes-1.6.8
+changes changes-1.6.9
+
+# journal_mode=delete rejected (wal accepted), and FCNTL_CHUNK_SIZE rounding
+# doesn't apply: the chunk file is its natural size, not page-multiple padded
+chunksize chunksize-1.0
+chunksize chunksize-1.2
+chunksize chunksize-2.2
+
+# doltlite rejects CREATE INDEX over application-registered collations (prolly
+# index keys need a stable serialized byte order); 1.5/3.1 are the rejection,
+# the rest cascade: sort-vs-nosort instrumentation (rows still correct) and an
+# integrity_check that upstream expects to fail via the stale collated index
+collate9 collate9-1.5
+collate9 collate9-1.6
+collate9 collate9-3.1
+collate9 collate9-3.3
+collate9 collate9-3.5
+collate9 collate9-4.2
+collate9 collate9-4.5
+
+# doltlite PKs are the prolly key and are NOT NULL (Dolt semantics, enforced —
+# INSERT NULL fails); table_column_metadata reports notnull=1 where stock's
+# rowid-table quirk reports nullable non-INTEGER PKs
+colmeta colmeta-5.1
+colmeta colmeta-5.2
+
+# UPDATE OR REPLACE + AFTER DELETE trigger that empties the table: stock
+# aborts with "constraint failed" (pinned-cursor protection) and rolls back;
+# doltlite runs to completion and deletes every row. Real bug, pinned
+# pending fix (#1387). 13.1.3/13.2.3 are the post-statement table contents.
+conflict3 conflict3-13.1.1
+conflict3 conflict3-13.1.3
+conflict3 conflict3-13.2.1
+conflict3 conflict3-13.2.3
+
+# dbfuzz001 injects corrupt raw SQLite-format images via `db deserialize
+# [decode_hexdb ...]`. doltlite's serialize/deserialize does not carry the
+# SQLite file format (serialize returns empty, deserialize fails "unable to
+# set MEMDB content" — verified with a roundtrip repro), so every image
+# fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330
+# are cascades that then see an empty db instead of the corrupt content
+# ("ok" / "no such table" instead of "database disk image is malformed").
+dbfuzz001 dbfuzz001-100
+dbfuzz001 dbfuzz001-101a
+dbfuzz001 dbfuzz001-110
+dbfuzz001 dbfuzz001-200
+dbfuzz001 dbfuzz001-310
+dbfuzz001 dbfuzz001-320
+dbfuzz001 dbfuzz001-330
+# PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not
+# configurable on doltlite-format databases") — intentional rejection class.
+dbfuzz001 dbfuzz001-420
+dbfuzz001 dbfuzz001-440
+
+# Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite —
+# no rowid alias, so `DELETE FROM q WHERE rowid=1` errors "no such column:
+# rowid" (reproduced directly). 1.8/1.11 are cascades: the row that the
+# rowid DELETE should have removed is still present.
+delete2 delete2-1.6
+delete2 delete2-1.8
+delete2 delete2-1.9
+delete2 delete2-1.11
+
+# doltlite never creates -journal/-wal/-shm sidecars (verified: no sidecar
+# exists mid-write-transaction), so the file-listing assertions that expect
+# them fail. 1.4.0 additionally sees more multiplexor chunks (test3.database
+# 001..010 vs 003) because the doltlite-format file is larger at the same
+# multiplex chunk_size. The actual delete_database calls all pass.
+delete_db delete_db-1.1.0
+delete_db delete_db-1.2.0
+delete_db delete_db-1.3.0
+delete_db delete_db-1.4.0
+
+# get_file_format (hexio_read test.db 44 4) returns 0 on doltlite-format
+# files (no SQLite header), so every file-format assertion fails. All the
+# substantive DESC-index behavior tests (sections 2-5, ordering/lookup)
+# pass.
+descidx1 descidx1-1.1
+descidx1 descidx1-1.2
+descidx1 descidx1-6.3
+descidx1 descidx1-6.3.1
+descidx1 descidx1-6.5
+descidx1 descidx1-6.6
+descidx1 descidx1-6.7
+
+# descidx2 manipulates the SQLite file-format word directly: get_file_format
+# (hexio_read offset 44) returns 0 on doltlite files (1.1/1.2), and
+# set_file_format (hexio_write offsets 40/44) corrupts the doltlite-format
+# file, so reopening at 2.0 fails "database disk image is malformed" and the
+# db handle is gone — every later test in the file cascades with
+# "invalid command name db".
+descidx2 descidx2-1.1
+descidx2 descidx2-1.2
+descidx2 descidx2-2.0
+descidx2 descidx2-2.1
+descidx2 descidx2-2.2
+descidx2 descidx2-2.3
+descidx2 descidx2-2.4
+descidx2 descidx2-2.5
+descidx2 descidx2-2.6
+descidx2 descidx2-3.1
+descidx2 descidx2-3.2
+descidx2 descidx2-3.3
+descidx2 descidx2-3.4
+descidx2 descidx2-3.5
+descidx2 descidx2-3.6
+descidx2 descidx2-3.7
+descidx2 descidx2-3.8
+descidx2 descidx2-3.9
+descidx2 descidx2-3.10
+descidx2 descidx2-3.11
+descidx2 descidx2-3.12
+descidx2 descidx2-3.21
+descidx2 descidx2-3.22
+descidx2 descidx2-3.23
+descidx2 descidx2-3.24
+descidx2 descidx2-3.25
+descidx2 descidx2-3.26
+
+# do_diskfull_test injects sqlite_diskfull_pending at increasing IO counts
+# during VACUUM. doltlite's VACUUM runs the GC path; when the injected
+# SQLITE_FULL hits during the sweep phase the statement still fails, but
+# with GC's own message ("gc sweep phase failed") instead of SQLITE_FULL's
+# text. Every post-failure integrity_check (2.x.2) passes — no corruption,
+# wording-only divergence.
+diskfull diskfull-2.2.1
+diskfull diskfull-2.3.1
+diskfull diskfull-2.4.1
+diskfull diskfull-2.5.1
+
+# t0 declares PRIMARY KEY(c0,c1) / PRIMARY KEY(c0,c1 NOT NULL); the setup
+# INSERTs leave PK columns NULL, which stock's legacy rowid-PK quirk allows
+# but doltlite rejects ("NOT NULL constraint failed: t0.c0") because the PK
+# is the real storage key. 2000/3000 fail in setup; 2010/2020/3010/3030 are
+# cascades querying the rows that were never inserted.
+distinct2 distinct2-2000
+distinct2 distinct2-2010
+distinct2 distinct2-2020
+distinct2 distinct2-3000
+distinct2 distinct2-3010
+distinct2 distinct2-3030
+
+# doltlite takes no SQLite-level file locks, so PRAGMA lock_status reports
+# "main unlocked" where stock reports shared/reserved while blob handles or
+# write transactions are open (verified: lock_status is unlocked even inside
+# an open write transaction).
+e_blobclose e_blobclose-1.2
+e_blobclose e_blobclose-2.1.1
+e_blobclose e_blobclose-2.1.2
+e_blobclose e_blobclose-2.1.3
+e_blobclose e_blobclose-2.1.4
+e_blobclose e_blobclose-2.2.1
+e_blobclose e_blobclose-2.2.2
+e_blobclose e_blobclose-2.3.1
+e_blobclose e_blobclose-2.3.3
+e_blobclose e_blobclose-2.3.4
+e_blobclose e_blobclose-2.3.5
+# Stock: closing a read-write blob handle commits, and a second connection
+# holding an open read transaction makes that commit fail SQLITE_BUSY and
+# roll back. doltlite's MVCC commit succeeds with the reader open — the
+# reader keeps its snapshot and sees the new data after its transaction
+# ends (verified with a two-connection repro). So blob_close returns OK
+# (3.3/3.4) and the transaction persists instead of rolling back (3.5).
+e_blobclose e_blobclose-3.3
+e_blobclose e_blobclose-3.4
+e_blobclose e_blobclose-3.5
+
+# All 4.8.* tests call sqlite3_blob_open on t3(a PRIMARY KEY, b, c, d, e, f,
+# UNIQUE(e,f)) — an explicit-PK table that doltlite stores without a rowid,
+# so blob_open fails "cannot open table without rowid: t3" (rowid-on-PK
+# class). The 4.8.1.* read-access opens that stock allows fail outright, and
+# the 4.8.2.* cases that expect "cannot open indexed column for writing"
+# get the without-rowid message instead. Every blob_open test on genuine
+# rowid tables (sections 1-4.7, 4.9+) passes.
+e_blobopen e_blobopen-4.8.1.1.1
+e_blobopen e_blobopen-4.8.1.1.2
+e_blobopen e_blobopen-4.8.1.1.3
+e_blobopen e_blobopen-4.8.1.1.4
+e_blobopen e_blobopen-4.8.1.2.1
+e_blobopen e_blobopen-4.8.1.2.2
+e_blobopen e_blobopen-4.8.1.2.3
+e_blobopen e_blobopen-4.8.1.2.4
+e_blobopen e_blobopen-4.8.1.3.1
+e_blobopen e_blobopen-4.8.1.3.2
+e_blobopen e_blobopen-4.8.1.3.3
+e_blobopen e_blobopen-4.8.1.3.4
+e_blobopen e_blobopen-4.8.1.4.1
+e_blobopen e_blobopen-4.8.1.4.2
+e_blobopen e_blobopen-4.8.1.4.3
+e_blobopen e_blobopen-4.8.1.4.4
+e_blobopen e_blobopen-4.8.1.5.1
+e_blobopen e_blobopen-4.8.1.5.2
+e_blobopen e_blobopen-4.8.1.5.3
+e_blobopen e_blobopen-4.8.1.5.4
+e_blobopen e_blobopen-4.8.1.6.1
+e_blobopen e_blobopen-4.8.1.6.2
+e_blobopen e_blobopen-4.8.1.6.3
+e_blobopen e_blobopen-4.8.1.6.4
+e_blobopen e_blobopen-4.8.2.1.3
+e_blobopen e_blobopen-4.8.2.2.3
+e_blobopen e_blobopen-4.8.2.3.1
+e_blobopen e_blobopen-4.8.2.3.2
+e_blobopen e_blobopen-4.8.2.3.3
+e_blobopen e_blobopen-4.8.2.3.4
+e_blobopen e_blobopen-4.8.2.4.1
+e_blobopen e_blobopen-4.8.2.4.2
+e_blobopen e_blobopen-4.8.2.4.3
+e_blobopen e_blobopen-4.8.2.4.4
+e_blobopen e_blobopen-4.8.2.5.3
+e_blobopen e_blobopen-4.8.2.6.3
+
+# e_reindex-1.3 hides the indexes via writable_schema, mutates the table,
+# restores the index rows, and checks integrity_check output. doltlite
+# detects the same corruption but emits only the per-row diagnostics
+# ("row 3/4 missing from index i1/i2") without stock's two "wrong # of
+# entries in index" summary lines (reproduced standalone; REINDEX then
+# repairs and 1.4 passes). Diagnostic-detail wording divergence.
+e_reindex e_reindex-1.3
+# Section 2 builds its dataset with CREATE INDEX ... COLLATE collA/collB
+# where collA/collB are tcl-registered collations. doltlite explicitly
+# rejects indexes with custom collations ("doltlite does not support
+# indexes with custom collation 'collA'" — same intentional class already
+# gated for collate*/windowE), so 2.0 errors and every test in section 2
+# cascades: empty results from t1, and "no such table: t2/t3" for the
+# tables the failed setup never created.
+e_reindex e_reindex-2.0
+e_reindex e_reindex-2.1.1
+e_reindex e_reindex-2.1.2
+e_reindex e_reindex-2.1.3
+e_reindex e_reindex-2.1.4
+e_reindex e_reindex-2.1.5
+e_reindex e_reindex-2.1.6
+e_reindex e_reindex-2.2.2
+e_reindex e_reindex-2.2.3
+e_reindex e_reindex-2.2.4
+e_reindex e_reindex-2.2.5
+e_reindex e_reindex-2.2.6
+e_reindex e_reindex-2.2.7
+e_reindex e_reindex-2.3.2
+e_reindex e_reindex-2.3.3
+e_reindex e_reindex-2.3.4
+e_reindex e_reindex-2.3.5
+e_reindex e_reindex-2.3.6
+e_reindex e_reindex-2.3.7
+e_reindex e_reindex-2.3.9
+e_reindex e_reindex-2.3.10
+e_reindex e_reindex-2.3.11
+e_reindex e_reindex-2.3.12
+e_reindex e_reindex-2.3.13
+e_reindex e_reindex-2.3.14
+e_reindex e_reindex-2.4.2
+e_reindex e_reindex-2.4.3
+e_reindex e_reindex-2.4.4
+e_reindex e_reindex-2.4.5
+e_reindex e_reindex-2.4.6
+e_reindex e_reindex-2.4.7
+e_reindex e_reindex-2.4.8
+e_reindex e_reindex-2.4.9
+e_reindex e_reindex-2.4.10
+e_reindex e_reindex-2.4.11
+e_reindex e_reindex-2.4.12
+e_reindex e_reindex-2.4.13
+e_reindex e_reindex-2.4.14
+e_reindex e_reindex-2.4.15
+e_reindex e_reindex-2.4.16
+e_reindex e_reindex-2.4.17
+e_reindex e_reindex-2.4.18
+e_reindex e_reindex-2.4.19
+e_reindex e_reindex-2.4.20
+e_reindex e_reindex-2.4.21
+e_reindex e_reindex-2.5.1
+e_reindex e_reindex-2.5.2
+e_reindex e_reindex-2.5.3
+e_reindex e_reindex-2.5.4
+e_reindex e_reindex-2.5.5
+e_reindex e_reindex-2.5.6
+e_reindex e_reindex-2.5.7
+e_reindex e_reindex-2.5.8
+e_reindex e_reindex-2.5.9
+e_reindex e_reindex-2.5.10
+e_reindex e_reindex-2.5.11
+e_reindex e_reindex-2.5.12
+e_reindex e_reindex-2.5.13
+e_reindex e_reindex-2.5.14
+e_reindex e_reindex-2.5.15
+e_reindex e_reindex-2.5.16
+e_reindex e_reindex-2.5.17
+e_reindex e_reindex-2.5.18
+e_reindex e_reindex-2.5.19
+e_reindex e_reindex-2.5.20
+e_reindex e_reindex-2.5.21
+e_reindex e_reindex-2.5.22
+e_reindex e_reindex-2.5.23
+e_reindex e_reindex-2.5.24
+e_reindex e_reindex-2.5.25
+e_reindex e_reindex-2.5.26
+e_reindex e_reindex-2.5.27
+e_reindex e_reindex-2.5.28
+e_reindex e_reindex-2.5.29
+e_reindex e_reindex-2.5.30
+e_reindex e_reindex-2.5.31
+e_reindex e_reindex-2.5.32
+e_reindex e_reindex-2.5.33
+e_reindex e_reindex-2.5.34
+e_reindex e_reindex-2.5.35
+e_reindex e_reindex-2.5.36
+e_reindex e_reindex-2.5.37
+e_reindex e_reindex-2.5.38
+e_reindex e_reindex-2.5.39
+e_reindex e_reindex-2.5.40
+e_reindex e_reindex-2.5.41
+e_reindex e_reindex-2.5.42
+e_reindex e_reindex-2.6.0
+e_reindex e_reindex-2.6.1
+e_reindex e_reindex-2.6.2
+e_reindex e_reindex-2.6.4
+e_reindex e_reindex-2.6.5
+e_reindex e_reindex-2.6.7
+e_reindex e_reindex-2.6.8
+
+# ATTACH creates the database file lazily in doltlite — the file only
+# materializes on first write (verified: missing right after ATTACH,
+# present after CREATE TABLE+INSERT) — so the file-exists checks right
+# after ATTACH see no file under either URI interpretation.
+e_uri e_uri-1.2
+e_uri e_uri-1.4
+e_uri e_uri-1.6
+e_uri e_uri-1.8
+# parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk
+# store performs extra VFS opens after the initial URI open (traced with a
+# log-all-xOpens repro): for relative paths it re-opens the resolved
+# absolute path with no URI parameter block, so the recorded open has the
+# right file but empty params (3.2/3.3); for absolute paths the recorded
+# open is the eager ".{db}-lock" sidecar (4.2-4.5, 12.x, 13.x), so both the
+# filename and the parameter list differ.
+e_uri e_uri-3.2
+e_uri e_uri-3.3
+e_uri e_uri-4.2
+e_uri e_uri-4.3
+e_uri e_uri-4.4
+e_uri e_uri-4.5
+e_uri e_uri-12.1
+e_uri e_uri-12.2
+e_uri e_uri-13.1
+e_uri e_uri-13.2
+e_uri e_uri-13.3
+# Shared-cache table locks: stock returns "database table is locked: t1"
+# when a shared-cache connection reads a table mid-write-transaction of
+# another connection; doltlite has no shared-cache table locks (MVCC
+# snapshot read succeeds, "not an error"). Same no-lock class as
+# e_blobclose/lock_status.
+e_uri e_uri-11.1.2
+e_uri e_uri-11.1.5
+e_uri e_uri-11.1.6
+e_uri e_uri-11.3.1
+e_uri e_uri-11.3.2
+e_uri e_uri-11.3.3
+e_uri e_uri-11.3.4
+e_uri e_uri-11.3.5
+e_uri e_uri-11.3.6
+
+# expridx2's nWrite proc measures sqlite3_db_status CACHE_WRITE around each
+# UPDATE. doltlite never dirties pager-cache pages (verified: CACHE_WRITE
+# stays 0 even after a 100KB insert), so every expected page count compares
+# against 0. The data-correctness check (integrity_check 1.4) passes.
+expridx2 expridx2-1.1
+expridx2 expridx2-1.2
+expridx2 expridx2-1.3
+expridx2 expridx2-1.5
+expridx2 expridx2-1.6
+expridx2 expridx2-1.7
+
+# 1.1.4 starts a read transaction from an external process and expects
+# file_control_external_reader to report 1. doltlite has no -wal/-shm
+# sidecars or shm read-marks (its readers hold MVCC snapshots, not WAL read
+# locks), so the file control reports 0. The same-process variant (1.2.4,
+# bExternal=0) and all other steps pass.
+external_reader external_reader-1.1.4
+
+# ── fallocate ──
+# The test sizes the db file via SQLITE_FCNTL_CHUNK_SIZE rounding and
+# page bookkeeping. doltlite's file is a content-addressed chunk store:
+# [file size] reflects chunk payload (e.g. 1896 bytes after CREATE
+# TABLE), never page images rounded up to the chunk size, so every
+# size expectation differs. fallocate-1.1 fails on the intentional
+# auto_vacuum rejection, which also kills the CREATE TABLE in the same
+# execsql batch; 1.2-1.5 and 1.7 cascade with "no such table: t1".
+fallocate fallocate-1.1  # auto_vacuum rejected; CREATE TABLE in same batch lost
+fallocate fallocate-1.2  # cascade: no such table t1
+fallocate fallocate-1.3  # cascade: no such table t1
+fallocate fallocate-1.4  # cascade: no such table t1
+fallocate fallocate-1.5  # cascade: no such table t1
+fallocate fallocate-1.7  # cascade: no such table t1
+fallocate fallocate-1.8  # file not chunk-size padded, nFile>100 false
+fallocate fallocate-2.1  # file size = chunk payload, not 32KB chunk rounding
+fallocate fallocate-2.2  # file size = chunk payload
+fallocate fallocate-2.3  # file size = chunk payload
+fallocate fallocate-2.4  # file size = chunk payload
+fallocate fallocate-2.5  # file size = chunk payload
+fallocate fallocate-2.6  # file size = chunk payload
+fallocate fallocate-2.8  # file size = chunk payload
+
+# doltlite-format ignores non-UTF-8 database encodings
+fts3ai fts3ai-1.0  # PRAGMA encoding=UTF-16le reports UTF-8
+
+# sqlite_master enumeration order: doltlite returns schema rows in name
+# order, upstream in creation order (segdir sorts before segments)
+fts3ao fts3ao-2.7
+fts3ao fts3ao-2.11
+
+# fts3corrupt4 sections from 5.0 on (except 6.*) each deserialize a raw
+# stock-format corrupt db image (decode_hexdb); prolly MEMDB rejects the
+# format ("unable to set MEMDB content") and the rest of the section
+# cascades to "no such table". 6.0 inserts NULL into the %_segdir
+# composite PK — a rowid-table quirk doltlite's WITHOUT-ROWID conversion
+# rejects with NOT NULL.
+fts3corrupt4 fts3corrupt4-5.0
+fts3corrupt4 fts3corrupt4-5.1
+fts3corrupt4 fts3corrupt4-6.0
+fts3corrupt4 fts3corrupt4-7.0
+fts3corrupt4 fts3corrupt4-7.1
+fts3corrupt4 fts3corrupt4-8.0
+fts3corrupt4 fts3corrupt4-8.1
+fts3corrupt4 fts3corrupt4-9.0
+fts3corrupt4 fts3corrupt4-9.1
+fts3corrupt4 fts3corrupt4-10.0
+fts3corrupt4 fts3corrupt4-10.1
+fts3corrupt4 fts3corrupt4-10.3
+fts3corrupt4 fts3corrupt4-11.0
+fts3corrupt4 fts3corrupt4-11.1
+fts3corrupt4 fts3corrupt4-12.0
+fts3corrupt4 fts3corrupt4-12.1
+fts3corrupt4 fts3corrupt4-13.0
+fts3corrupt4 fts3corrupt4-13.1
+fts3corrupt4 fts3corrupt4-14.0
+fts3corrupt4 fts3corrupt4-14.1
+fts3corrupt4 fts3corrupt4-14.2
+fts3corrupt4 fts3corrupt4-16.0
+fts3corrupt4 fts3corrupt4-16.1
+fts3corrupt4 fts3corrupt4-17.0
+fts3corrupt4 fts3corrupt4-17.1
+fts3corrupt4 fts3corrupt4-17.2
+fts3corrupt4 fts3corrupt4-18.0
+fts3corrupt4 fts3corrupt4-18.1
+fts3corrupt4 fts3corrupt4-19.0
+fts3corrupt4 fts3corrupt4-19.1
+fts3corrupt4 fts3corrupt4-20.0
+fts3corrupt4 fts3corrupt4-20.1
+fts3corrupt4 fts3corrupt4-20.2
+fts3corrupt4 fts3corrupt4-21.0
+fts3corrupt4 fts3corrupt4-21.1
+fts3corrupt4 fts3corrupt4-22.0
+fts3corrupt4 fts3corrupt4-22.1
+fts3corrupt4 fts3corrupt4-23.0
+fts3corrupt4 fts3corrupt4-23.1
+fts3corrupt4 fts3corrupt4-24.0
+fts3corrupt4 fts3corrupt4-24.1
+fts3corrupt4 fts3corrupt4-24.2
+fts3corrupt4 fts3corrupt4-24.3
+fts3corrupt4 fts3corrupt4-24.4
+fts3corrupt4 fts3corrupt4-24.5
+fts3corrupt4 fts3corrupt4-24.7
+fts3corrupt4 fts3corrupt4-25.0
+fts3corrupt4 fts3corrupt4-25.1
+fts3corrupt4 fts3corrupt4-25.2
+fts3corrupt4 fts3corrupt4-25.3
+fts3corrupt4 fts3corrupt4-25.4
+fts3corrupt4 fts3corrupt4-25.5
+fts3corrupt4 fts3corrupt4-25.6a
+fts3corrupt4 fts3corrupt4-25.6b
+fts3corrupt4 fts3corrupt4-26.0
+fts3corrupt4 fts3corrupt4-26.1
+fts3corrupt4 fts3corrupt4-27.0
+fts3corrupt4 fts3corrupt4-27.2
+fts3corrupt4 fts3corrupt4-27.3
+fts3corrupt4 fts3corrupt4-27.4
+fts3corrupt4 fts3corrupt4-27.5
+fts3corrupt4 fts3corrupt4-27.6
+fts3corrupt4 fts3corrupt4-28.0
+fts3corrupt4 fts3corrupt4-28.1
+fts3corrupt4 fts3corrupt4-28.2
+fts3corrupt4 fts3corrupt4-28.3
+fts3corrupt4 fts3corrupt4-28.4
+fts3corrupt4 fts3corrupt4-28.5
+fts3corrupt4 fts3corrupt4-28.6
+fts3corrupt4 fts3corrupt4-28.7
+fts3corrupt4 fts3corrupt4-28.8
+fts3corrupt4 fts3corrupt4-29.0
+fts3corrupt4 fts3corrupt4-29.1
+fts3corrupt4 fts3corrupt4-30.0
+fts3corrupt4 fts3corrupt4-30.1
+fts3corrupt4 fts3corrupt4-30.2
+fts3corrupt4 fts3corrupt4-32.0
+fts3corrupt4 fts3corrupt4-32.1
+fts3corrupt4 fts3corrupt4-38.0
+fts3corrupt4 fts3corrupt4-38.1
+fts3corrupt4 fts3corrupt4-38.2
+fts3corrupt4 fts3corrupt4-45.0
+fts3corrupt4 fts3corrupt4-45.2
+fts3corrupt4 fts3corrupt4-48.0
+fts3corrupt4 fts3corrupt4-48.1
+fts3corrupt4 fts3corrupt4-49.0
+fts3corrupt4 fts3corrupt4-49.1
+fts3corrupt4 fts3corrupt4-50.0
+fts3corrupt4 fts3corrupt4-50.1
+fts3corrupt4 fts3corrupt4-51.0
+fts3corrupt4 fts3corrupt4-51.1
+fts3corrupt4 fts3corrupt4-52.0
+fts3corrupt4 fts3corrupt4-52.1
+fts3corrupt4 fts3corrupt4-53.0
+fts3corrupt4 fts3corrupt4-53.1
+fts3corrupt4 fts3corrupt4-54.0
+fts3corrupt4 fts3corrupt4-54.1
+
+# raw stock-format hexdb images cannot deserialize into prolly MEMDB
+fts3corrupt7 fts3corrupt7-1.0
+fts3corrupt7 fts3corrupt7-1.1
+fts3corrupt7 fts3corrupt7-2.1
+
+# fts deferred-token decisions key off segment geometry derived from
+# PRAGMA page_size; prolly reports a synthetic 4096 (test builds use
+# 1024), so 'a' is not deferred: matchinfo shows actual counts instead
+# of deferred estimates (2.2.x.1) and the zeroed-block read in 2.2.3.1
+# errors malformed because the token's doclist is actually read.
+# Proven: with PRAGMA page_size=1024 doltlite returns the expected values.
+fts3defer2 fts3defer2-2.2.1.1
+fts3defer2 fts3defer2-2.2.2.1
+fts3defer2 fts3defer2-2.2.3.1
+
+# same page-size geometry class as fts3defer2: at the synthetic 4096
+# page size all doclists stay inline in the segdir root, %_segments is
+# empty, so the segment-block assertions and the corrupt-block read
+# diverge. Proven identical to upstream with PRAGMA page_size=1024.
+fts3defer3 fts3defer3-1.2
+fts3defer3 fts3defer3-1.4
+fts3defer3 fts3defer3-1.7
+
+# raw stock-format hexdb images cannot deserialize into prolly MEMDB
+fts3fuzz001 fts3fuzz001-100
+fts3fuzz001 fts3fuzz001-110
+fts3fuzz001 fts3fuzz001-120
+fts3fuzz001 fts3fuzz001-121
+
+# order=DESC fts4 config: global matchinfo hit/doc counts are off by one
+# document (one doc's terms missing from index stats; same fts index
+# consistency family as the stale shadow-read issue). The returned row
+# sets match; only the aggregate stats diverge. The file stops at the
+# 1000-error tester cap; the capped list is md5-stable across runs.
+
+# shared-cache table locks are not surfaced by prolly storage: reads and
+# writes proceed where stock expects "database table is locked"
+# (established shared3/shared9 class)
+fts3shared fts3shared-1.3
+fts3shared fts3shared-2.2.2
+fts3shared fts3shared-2.2.3
+fts3shared fts3shared-2.2.4
+fts3shared fts3shared-2.2.5
+fts3shared fts3shared-2.2.6
+fts3shared fts3shared-2.3.3
+fts3shared fts3shared-2.3.4
+fts3shared fts3shared-2.3.6
+fts3shared fts3shared-2.4.1
+fts3shared fts3shared-2.4.2
+fts3shared fts3shared-2.4.3
+fts3shared fts3shared-2.4.4
+fts3shared fts3shared-2.4.5
+fts3shared fts3shared-2.5.2
+fts3shared fts3shared-2.5.3
+fts3shared fts3shared-2.5.5
+
+# REAL BUG pinned (issue: fts shadow-table reads inside an open
+# transaction see stale pre-transaction state through the vtab's cached
+# statements): deleting a %_segdir row in-txn is invisible to
+# integrity-check, which reports ok where upstream detects malformed.
+# Disruptions 1/2 (content-table edits) are detected fine.
+fts4check fts4check-1.2.2.3
+fts4check fts4check-1.2.3.3
+fts4check fts4check-2.2.2.3
+fts4check fts4check-2.2.3.3
+
+# doltlite does not materialize sqlite_autoindex_* rows for the
+# WITHOUT-ROWID-converted %_segdir shadow table (fordelete class)
+fts4content fts4content-5.1.1
+fts4content fts4content-5.1.3
+fts4content fts4content-6.2.3
+# content= table dropped/recreated with mismatched columns: doltlite
+# re-prepares and returns "no such table" (6.2.2) or an empty/NULL row
+# (6.2.8/6.2.9) where stock's stale vtab schema errors "SQL logic error"
+fts4content fts4content-6.2.2
+fts4content fts4content-6.2.8
+fts4content fts4content-6.2.9
+
+# segment geometry (synthetic 4096 page size vs the 1024 the test build
+# sets) drives every asserted %_segdir/%_stat number: end_block stays 0
+# (no spill), root sizes and incremental-merge work accounting differ.
+# Proven: section-1 state matches upstream exactly under page_size=1024.
+fts4growth fts4growth-1.6
+fts4growth fts4growth-1.7
+fts4growth fts4growth-2.5
+fts4growth fts4growth-2.6
+fts4growth fts4growth-2.7
+fts4growth fts4growth-2.8
+fts4growth fts4growth-4.3
+fts4growth fts4growth-5.2
+fts4growth fts4growth-5.3
+fts4growth fts4growth-5.4
+fts4growth fts4growth-5.5
+fts4growth fts4growth-6.2
+fts4growth fts4growth-6.3
+fts4growth fts4growth-6.4
+fts4growth fts4growth-6.5
+fts4growth fts4growth-7.1
+fts4growth fts4growth-7.2
+fts4growth fts4growth-7.3
+fts4growth fts4growth-7.4
+fts4growth fts4growth-7.5
+fts4growth fts4growth-7.6
+fts4growth fts4growth-7.7
+
+# page-size geometry: %_stat and segdir accounting at synthetic 4096
+# page size (see fts4growth)
+fts4growth2 fts4growth2-1.2
+fts4growth2 fts4growth2-1.3
+
+# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
+# statements): 'rebuild' flushes per langid change inside one statement;
+# stale max(idx) reads make REPLACE INTO %_segdir overwrite live
+# segments, losing most documents from each language partition (queries
+# return one docid instead of 31).
+fts4langid fts4langid-2.3.1.0
+fts4langid fts4langid-2.3.1.1
+fts4langid fts4langid-2.3.1.2
+fts4langid fts4langid-2.3.1.3
+fts4langid fts4langid-2.3.1.4
+fts4langid fts4langid-2.3.1.5
+fts4langid fts4langid-2.3.1.6
+fts4langid fts4langid-2.3.1.7
+fts4langid fts4langid-2.3.2.0
+fts4langid fts4langid-2.3.2.1
+fts4langid fts4langid-2.3.2.2
+fts4langid fts4langid-2.3.2.3
+fts4langid fts4langid-2.3.2.4
+fts4langid fts4langid-2.3.2.5
+fts4langid fts4langid-2.3.2.6
+fts4langid fts4langid-2.3.2.7
+fts4langid fts4langid-2.3.3.0
+fts4langid fts4langid-2.3.3.1
+fts4langid fts4langid-2.3.3.2
+fts4langid fts4langid-2.3.3.3
+fts4langid fts4langid-2.3.3.4
+fts4langid fts4langid-2.3.3.5
+fts4langid fts4langid-2.3.3.6
+fts4langid fts4langid-2.3.3.7
+fts4langid fts4langid-2.3.4.0
+fts4langid fts4langid-2.3.4.1
+fts4langid fts4langid-2.3.4.2
+fts4langid fts4langid-2.3.4.3
+fts4langid fts4langid-2.3.4.4
+fts4langid fts4langid-2.3.4.5
+fts4langid fts4langid-2.3.4.6
+fts4langid fts4langid-2.3.4.7
+fts4langid fts4langid-3.1.1.0
+fts4langid fts4langid-3.1.1.1
+fts4langid fts4langid-3.1.1.2
+fts4langid fts4langid-3.1.1.3
+fts4langid fts4langid-3.1.1.4
+fts4langid fts4langid-3.1.1.5
+fts4langid fts4langid-3.1.1.6
+fts4langid fts4langid-3.1.1.7
+fts4langid fts4langid-3.1.2.0
+fts4langid fts4langid-3.1.2.1
+fts4langid fts4langid-3.1.2.2
+fts4langid fts4langid-3.1.2.3
+fts4langid fts4langid-3.1.2.4
+fts4langid fts4langid-3.1.2.5
+fts4langid fts4langid-3.1.2.6
+fts4langid fts4langid-3.1.2.7
+fts4langid fts4langid-3.1.3.0
+fts4langid fts4langid-3.1.3.1
+fts4langid fts4langid-3.1.3.2
+fts4langid fts4langid-3.1.3.3
+fts4langid fts4langid-3.1.3.4
+fts4langid fts4langid-3.1.3.5
+fts4langid fts4langid-3.1.3.6
+fts4langid fts4langid-3.1.3.7
+fts4langid fts4langid-3.1.4.0
+fts4langid fts4langid-3.1.4.1
+fts4langid fts4langid-3.1.4.2
+fts4langid fts4langid-3.1.4.3
+fts4langid fts4langid-3.1.4.4
+fts4langid fts4langid-3.1.4.5
+fts4langid fts4langid-3.1.4.6
+fts4langid fts4langid-3.1.4.7
+fts4langid fts4langid-3.3.1.0
+fts4langid fts4langid-3.3.1.1
+fts4langid fts4langid-3.3.1.2
+fts4langid fts4langid-3.3.1.3
+fts4langid fts4langid-3.3.1.4
+fts4langid fts4langid-3.3.1.5
+fts4langid fts4langid-3.3.1.6
+fts4langid fts4langid-3.3.1.7
+fts4langid fts4langid-3.3.2.0
+fts4langid fts4langid-3.3.2.1
+fts4langid fts4langid-3.3.2.2
+fts4langid fts4langid-3.3.2.3
+fts4langid fts4langid-3.3.2.4
+fts4langid fts4langid-3.3.2.5
+fts4langid fts4langid-3.3.2.6
+fts4langid fts4langid-3.3.2.7
+fts4langid fts4langid-3.3.3.0
+fts4langid fts4langid-3.3.3.1
+fts4langid fts4langid-3.3.3.2
+fts4langid fts4langid-3.3.3.3
+fts4langid fts4langid-3.3.3.4
+fts4langid fts4langid-3.3.3.5
+fts4langid fts4langid-3.3.3.6
+fts4langid fts4langid-3.3.3.7
+fts4langid fts4langid-3.3.4.0
+fts4langid fts4langid-3.3.4.1
+fts4langid fts4langid-3.3.4.2
+fts4langid fts4langid-3.3.4.3
+fts4langid fts4langid-3.3.4.4
+fts4langid fts4langid-3.3.4.5
+fts4langid fts4langid-3.3.4.6
+fts4langid fts4langid-3.3.4.7
+# in-transaction langid UPDATE then integrity-check: false malformed
+# report (same stale shadow-read family)
+fts4langid fts4langid-6.1
+fts4langid fts4langid-6.2
+
+# incremental-merge work accounting diverges (page-size geometry sizes
+# merge steps; see also the stale shadow-read issue): merge=200,10
+# reports no work where upstream still has level-0 segments to merge
+fts4merge fts4merge-fts3-7.3
+fts4merge fts4merge-fts4-7.3
+
+# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
+# statements corrupt automerge bookkeeping): automerge after a multi-row
+# DELETE leaves wrong segdir level/idx layout and malformed index reports
+fts4merge4 fts4merge4-2.2.1.1
+fts4merge4 fts4merge4-2.2.1.2
+fts4merge4 fts4merge4-2.2.2.1
+fts4merge4 fts4merge4-2.2.2.2
+fts4merge4 fts4merge4-2.2.3.1
+fts4merge4 fts4merge4-2.2.3.2
+fts4merge4 fts4merge4-2.2.4.1
+fts4merge4 fts4merge4-2.2.4.2
+
+# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
+# statements): bulk INSERT...SELECT into fts3 with tiny nodesize fails
+# "database disk image is malformed" mid-statement
+fts4merge5 fts4merge5-1.3
+
+# sql_uses_stmt instrumentation: doltlite deliberately opens statement
+# scope for every vtab write (hasVUpdate), upstream's onepass docid=?
+# forms use none
+fts4onepass fts4onepass-1.1.2
+fts4onepass fts4onepass-1.1.3
+# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
+# statements): onepass-or-not UPDATE/DELETE over MATCH with intra-
+# statement flushes errors "database disk image is malformed"
+fts4onepass fts4onepass-3.2.4.c
+fts4onepass fts4onepass-3.2.5.c
+
+# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
+# statements): bulk INSERT...SELECT across langid partitions aborts with
+# "constraint failed" when a stale max(idx) read collides on the
+# %_segdir (level,idx) primary key
+fts4opt fts4opt-1.8
+fts4opt fts4opt-2.8
+
+# ── incrblob2 ──
+# Shared-cache table-level locking does not exist in doltlite. A blob
+# handle takes no table read-lock, so the second connection's INSERT
+# fails with the database-level "database is locked" message instead of
+# "database table is locked" (5.3), opening a read-only blob while
+# another connection holds an open write txn succeeds where stock
+# errors (5.5), and PRAGMA read_uncommitted cannot expose another
+# connection's uncommitted row (5.6: "no such rowid: 4", which leaves
+# $blob stale so 5.8's close cascades). 7.1/7.2/7.4: inserting a 10MB
+# zeroblob is fully materialized while building the prolly record
+# (measured ~65MB peak malloc), so sqlite3_memory_highwater()<5MB is
+# false; stock streams zeroblob without materializing.
+incrblob2 incrblob2-5.3  # db-level lock message, not table-level
+incrblob2 incrblob2-5.5  # readonly blob open succeeds; no shared-cache table lock
+incrblob2 incrblob2-5.6  # no dirty read of other connection's uncommitted row
+incrblob2 incrblob2-5.8  # cascade from 5.6: stale $blob channel
+incrblob2 incrblob2-7.1  # 10MB zeroblob materialized, highwater >5MB
+incrblob2 incrblob2-7.2  # 10MB zeroblob materialized, highwater >5MB
+incrblob2 incrblob2-7.4  # 10MB zeroblob materialized, highwater >5MB
+
+# ── index3 ──
+# PRIMARY KEY('a') becomes the clustered prolly storage key, so no
+# sqlite_autoindex_t1_1 btree exists in sqlite_master; the UNIQUE
+# constraint still creates sqlite_autoindex_t1_2.
+index3 index3-2.3
+
+# ── indexedby ──
+# t3(e PRIMARY KEY, f) is clustered on e, so INDEXED BY
+# sqlite_autoindex_t3_1 resolves to the primary key and the plans read
+# "SCAN t3" / "SEARCH t3 USING PRIMARY KEY (e=?)" instead of
+# "... USING INDEX sqlite_autoindex_t3_1". The INDEXED BY name itself
+# is still accepted (3.7/3.10 pass).
+indexedby indexedby-3.8
+indexedby indexedby-3.9
+
+# ── memsubsys1 ──
+# Table data lives in the prolly chunk store, not pager pages, so the
+# SQLITE_CONFIG_PAGECACHE pool registers almost no usage: the build
+# workload touches 2 pages instead of filling the 20-page pool (2.4,
+# 3.2.4) or 45-50 of 50 (4.3), and never overflows it (2.3, expected
+# 1024 got 0). Chunk encoding also issues mallocs >=9000 bytes, so the
+# MALLOC_SIZE<9000 expectation fails (4.5).
+memsubsys1 memsubsys1-2.3
+memsubsys1 memsubsys1-2.4
+memsubsys1 memsubsys1-3.2.4
+memsubsys1 memsubsys1-4.3
+memsubsys1 memsubsys1-4.5
+
+# ── misc4 ──
+# doltlite VACUUM runs dolt_gc() chunk garbage collection (src/vacuum.c
+# DOLTLITE_PROLLY branch); it never rebuilds the database by
+# re-executing the schema SQL, so the malformed CREATE text written via
+# writable_schema is not reparsed and the "unrecognized token" error
+# stock raises from VACUUM's schema replay never happens.
+misc4 misc4-7.1
+
+# ── mjournal ──
+# A transaction spanning two file databases is expected to open a
+# super-journal (*mj* file, observed via a testvfs xOpen hook). doltlite
+# commits each chunk store through its internal WAL and never uses the
+# super-journal protocol, so no *mj* file is opened.
+mjournal mjournal-2.1
+
+# ── mutex1 ──
+# The per-mode mutex inventory differs from stock in all three
+# threading modes: the chunk store allocates and enters a recursive
+# lock mutex (chunk_store.c, sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE))
+# which the counter shim records even in singlethread mode, and the
+# open/insert workload never engages the unix inode-list mutex
+# (static_open) or the pcache1 page-allocator mutex (static_pmem)
+# because file locking and page caching go through the chunk store
+# instead.
+mutex1 mutex1.2.singlethread.4
+mutex1 mutex1.2.multithread.4
+mutex1 mutex1.2.serialized.4
+
+# ── pcache2 ──
+# Database content is cached as prolly chunks, not pager pages drawn
+# from the SQLITE_CONFIG_PAGECACHE pool, so PAGECACHE_USED stays 0
+# where stock reports 2/4 pages after opening connections (1.2, 1.3)
+# and 13 pages after the write workload (1.4).
+pcache2 pcache2-1.2
+pcache2 pcache2-1.3
+pcache2 pcache2-1.4
+
+# CREATE TABLE t2 with an index using custom collation c1 is rejected
+# (2.1), so t2 never exists and 2.2-2.8 cascade with "no such table: t2";
+# 2.5.1 checks the same state. 3.x REINDEX-by-collation then targets
+# collations/indexes that were never created, giving "unable to identify
+# the object to be reindexed" (3.1/3.2) or success where stock errors
+# about the missing collation (3.3).
+reindex reindex-2.1
+reindex reindex-2.2
+reindex reindex-2.3
+reindex reindex-2.4
+reindex reindex-2.5
+reindex reindex-2.5.1
+reindex reindex-2.6
+reindex reindex-2.7
+reindex reindex-2.8
+reindex reindex-3.1
+reindex reindex-3.2
+reindex reindex-3.3
+
+# md5file over the raw db file: chunk-store file bytes differ where stock
+# page images are identical (110-3/110-4: UNIQUE(a)/index-order variants),
+# and are identical where stock differs (130: rowid vs WITHOUT ROWID
+# variants store the same prolly content because doltlite keys by PK).
+schema6 schema6-110-3
+schema6 schema6-110-4
+schema6 schema6-130-1
+schema6 schema6-130-2
+
+# freelist_count page accounting: no page freelist in the chunk store
+shortread1 shortread1-1.2
+
+# doltlite PK-keyed storage gives these UPDATE OR REPLACE stress tests
+# stock WITHOUT ROWID semantics (verified byte-for-byte against stock
+# sqlite3 using WITHOUT ROWID variants of the same schema):
+# 2.x: SET a=(SELECT b FROM chng WHERE a=t1.a) yields NULL for unmatched
+# rows; a is the table key, so the statement errors "NOT NULL constraint
+# failed: t1.a" instead of keeping NULL rows in a UNIQUE column.
+sidedelete sidedelete-2.2.1
+sidedelete sidedelete-2.3.1
+sidedelete sidedelete-2.4.1
+sidedelete sidedelete-2.5.1
+sidedelete sidedelete-2.6.1
+sidedelete sidedelete-2.7.1
+sidedelete sidedelete-2.8.1
+sidedelete sidedelete-2.9.1
+sidedelete sidedelete-2.10.1
+sidedelete sidedelete-2.11.1
+sidedelete sidedelete-2.12.1
+sidedelete sidedelete-2.13.1
+sidedelete sidedelete-2.14.1
+sidedelete sidedelete-2.15.1
+sidedelete sidedelete-2.16.1
+sidedelete sidedelete-2.17.1
+sidedelete sidedelete-2.18.1
+sidedelete sidedelete-2.19.1
+sidedelete sidedelete-2.20.1
+sidedelete sidedelete-2.21.1
+sidedelete sidedelete-2.22.1
+sidedelete sidedelete-2.23.1
+sidedelete sidedelete-2.24.1
+sidedelete sidedelete-2.25.1
+sidedelete sidedelete-2.26.1
+sidedelete sidedelete-2.27.1
+sidedelete sidedelete-2.28.1
+sidedelete sidedelete-2.29.1
+sidedelete sidedelete-2.30.1
+sidedelete sidedelete-2.31.1
+sidedelete sidedelete-2.32.1
+sidedelete sidedelete-2.33.1
+sidedelete sidedelete-2.34.1
+sidedelete sidedelete-2.35.1
+sidedelete sidedelete-2.36.1
+sidedelete sidedelete-2.37.1
+sidedelete sidedelete-2.38.1
+sidedelete sidedelete-2.39.1
+sidedelete sidedelete-2.40.1
+sidedelete sidedelete-2.41.1
+sidedelete sidedelete-2.42.1
+sidedelete sidedelete-2.43.1
+sidedelete sidedelete-2.44.1
+sidedelete sidedelete-2.45.1
+sidedelete sidedelete-2.46.1
+sidedelete sidedelete-2.47.1
+sidedelete sidedelete-2.48.1
+sidedelete sidedelete-2.49.1
+sidedelete sidedelete-2.50.1
+sidedelete sidedelete-2.51.1
+sidedelete sidedelete-2.52.1
+sidedelete sidedelete-2.53.1
+sidedelete sidedelete-2.54.1
+sidedelete sidedelete-2.55.1
+sidedelete sidedelete-2.56.1
+sidedelete sidedelete-2.57.1
+sidedelete sidedelete-2.58.1
+sidedelete sidedelete-2.59.1
+sidedelete sidedelete-2.60.1
+sidedelete sidedelete-2.61.1
+sidedelete sidedelete-2.62.1
+sidedelete sidedelete-2.63.1
+sidedelete sidedelete-2.64.1
+sidedelete sidedelete-2.65.1
+sidedelete sidedelete-2.66.1
+sidedelete sidedelete-2.67.1
+sidedelete sidedelete-2.68.1
+sidedelete sidedelete-2.69.1
+sidedelete sidedelete-2.70.1
+sidedelete sidedelete-2.71.1
+sidedelete sidedelete-2.72.1
+sidedelete sidedelete-2.73.1
+sidedelete sidedelete-2.74.1
+sidedelete sidedelete-2.75.1
+sidedelete sidedelete-2.76.1
+sidedelete sidedelete-2.77.1
+sidedelete sidedelete-2.78.1
+sidedelete sidedelete-2.79.1
+sidedelete sidedelete-2.80.1
+sidedelete sidedelete-2.81.1
+sidedelete sidedelete-2.82.1
+sidedelete sidedelete-2.83.1
+sidedelete sidedelete-2.84.1
+sidedelete sidedelete-2.85.1
+sidedelete sidedelete-2.86.1
+sidedelete sidedelete-2.87.1
+sidedelete sidedelete-2.88.1
+sidedelete sidedelete-2.89.1
+sidedelete sidedelete-2.90.1
+sidedelete sidedelete-2.91.1
+sidedelete sidedelete-2.92.1
+sidedelete sidedelete-2.93.1
+sidedelete sidedelete-2.94.1
+sidedelete sidedelete-2.95.1
+sidedelete sidedelete-2.96.1
+sidedelete sidedelete-2.97.1
+sidedelete sidedelete-2.98.1
+sidedelete sidedelete-2.99.1
+sidedelete sidedelete-2.100.1
+# 3.x: UPDATE OR REPLACE t1 SET a=a+1 on the PK-keyed table cascades the
+# REPLACE deletes in key order, collapsing the table to a single row
+# (count=1, max value), exactly as stock does for WITHOUT ROWID.
+sidedelete sidedelete-3.2.1
+sidedelete sidedelete-3.3.1
+sidedelete sidedelete-3.4.1
+sidedelete sidedelete-3.5.1
+sidedelete sidedelete-3.6.1
+sidedelete sidedelete-3.7.1
+sidedelete sidedelete-3.8.1
+sidedelete sidedelete-3.9.1
+sidedelete sidedelete-3.10.1
+sidedelete sidedelete-3.11.1
+sidedelete sidedelete-3.12.1
+sidedelete sidedelete-3.13.1
+sidedelete sidedelete-3.14.1
+sidedelete sidedelete-3.15.1
+sidedelete sidedelete-3.16.1
+sidedelete sidedelete-3.17.1
+sidedelete sidedelete-3.18.1
+sidedelete sidedelete-3.19.1
+sidedelete sidedelete-3.20.1
+sidedelete sidedelete-3.21.1
+sidedelete sidedelete-3.22.1
+sidedelete sidedelete-3.23.1
+sidedelete sidedelete-3.24.1
+sidedelete sidedelete-3.25.1
+sidedelete sidedelete-3.26.1
+sidedelete sidedelete-3.27.1
+sidedelete sidedelete-3.28.1
+sidedelete sidedelete-3.29.1
+sidedelete sidedelete-3.30.1
+sidedelete sidedelete-3.31.1
+sidedelete sidedelete-3.32.1
+sidedelete sidedelete-3.33.1
+sidedelete sidedelete-3.34.1
+sidedelete sidedelete-3.35.1
+sidedelete sidedelete-3.36.1
+sidedelete sidedelete-3.37.1
+sidedelete sidedelete-3.38.1
+sidedelete sidedelete-3.39.1
+sidedelete sidedelete-3.40.1
+sidedelete sidedelete-3.41.1
+sidedelete sidedelete-3.42.1
+sidedelete sidedelete-3.43.1
+sidedelete sidedelete-3.44.1
+sidedelete sidedelete-3.45.1
+sidedelete sidedelete-3.46.1
+sidedelete sidedelete-3.47.1
+sidedelete sidedelete-3.48.1
+sidedelete sidedelete-3.49.1
+sidedelete sidedelete-3.50.1
+sidedelete sidedelete-3.51.1
+sidedelete sidedelete-3.52.1
+sidedelete sidedelete-3.53.1
+sidedelete sidedelete-3.54.1
+sidedelete sidedelete-3.55.1
+sidedelete sidedelete-3.56.1
+sidedelete sidedelete-3.57.1
+sidedelete sidedelete-3.58.1
+sidedelete sidedelete-3.59.1
+sidedelete sidedelete-3.60.1
+sidedelete sidedelete-3.61.1
+sidedelete sidedelete-3.62.1
+sidedelete sidedelete-3.63.1
+sidedelete sidedelete-3.64.1
+sidedelete sidedelete-3.65.1
+sidedelete sidedelete-3.66.1
+sidedelete sidedelete-3.67.1
+sidedelete sidedelete-3.68.1
+sidedelete sidedelete-3.69.1
+sidedelete sidedelete-3.70.1
+sidedelete sidedelete-3.71.1
+sidedelete sidedelete-3.72.1
+sidedelete sidedelete-3.73.1
+sidedelete sidedelete-3.74.1
+sidedelete sidedelete-3.75.1
+sidedelete sidedelete-3.76.1
+sidedelete sidedelete-3.77.1
+sidedelete sidedelete-3.78.1
+sidedelete sidedelete-3.79.1
+sidedelete sidedelete-3.80.1
+sidedelete sidedelete-3.81.1
+sidedelete sidedelete-3.82.1
+sidedelete sidedelete-3.83.1
+sidedelete sidedelete-3.84.1
+sidedelete sidedelete-3.85.1
+sidedelete sidedelete-3.86.1
+sidedelete sidedelete-3.87.1
+sidedelete sidedelete-3.88.1
+sidedelete sidedelete-3.89.1
+sidedelete sidedelete-3.90.1
+sidedelete sidedelete-3.91.1
+sidedelete sidedelete-3.92.1
+sidedelete sidedelete-3.93.1
+sidedelete sidedelete-3.94.1
+sidedelete sidedelete-3.95.1
+sidedelete sidedelete-3.96.1
+sidedelete sidedelete-3.97.1
+sidedelete sidedelete-3.98.1
+sidedelete sidedelete-3.99.1
+sidedelete sidedelete-3.100.1
+
+# auto_vacuum rejection on doltlite-format databases
+softheap1 softheap1-2.1
+
+# raw file size and max_page_count page accounting on chunk-store files
+
+# dbstat vtable (per-page b-tree stats) empty on chunk store: the no-fault
+# result is 0, never the expected 8 pages
+statfault statfault-1-cantopen-persistent.1
+statfault statfault-1-cantopen-transient.1
+statfault statfault-1-full.1
+statfault statfault-1-interrupt.27
+statfault statfault-1-interrupt.28
+statfault statfault-1-ioerr-persistent.3
+statfault statfault-1-ioerr-transient.3
+statfault statfault-1-oom-persistent.132
+statfault statfault-1-oom-transient.132
+statfault statfault-1-shmerr-persistent.1
+statfault statfault-1-shmerr-transient.1
+
+# writable_schema rootpage aliasing (raw-format poke): the post-DDL schema
+# reload can't rebind tables whose rootpage was pointed at another table's
+# root, so 2.0/3.0 die with "malformed database schema (t1nn)"
+strict2 strict2-2.0
+strict2 strict2-3.0
+
+# backup step count derived from PRAGMA page_count: synthetic page count
+# on the chunk store finishes the backup in one step (SQLITE_DONE)
+subjournal subjournal-2.1
+
+# unionvtab rowid-table probe fails on a PK-keyed doltlite table, so the
+# error surfaces one check earlier than stock's schema-mismatch message
+swarmvtab swarmvtab-2.3
+
+# sections 1/1.2.x: open/getcwd/fstat fault injection — the chunk store
+# performs different syscalls at each fault index, so some fault points
+# surface "disk I/O error" / "attempt to write a readonly database" where
+# the test only allows its own short error list; later indexes recover.
+sysfault sysfault-1-vfsfault-transient.5
+sysfault sysfault-1-vfsfault-transient.6
+sysfault sysfault-1-vfsfault-transient.7
+sysfault sysfault-1.2.1-vfsfault-transient.8
+sysfault sysfault-1.2.2-vfsfault-transient.8
+# sections 2.1/2.2: the body runs PRAGMA journal_mode=truncate, which
+# doltlite intentionally rejects ("journal_mode is not configurable on
+# doltlite-format databases"), so every fault index — including the
+# fault-free final iteration — fails with that error.
+sysfault sysfault-2.1-vfsfault-transient.1
+sysfault sysfault-2.1-vfsfault-transient.2
+sysfault sysfault-2.1-vfsfault-transient.3
+sysfault sysfault-2.1-vfsfault-transient.4
+sysfault sysfault-2.1-vfsfault-transient.5
+sysfault sysfault-2.1-vfsfault-transient.6
+sysfault sysfault-2.1-vfsfault-transient.7
+sysfault sysfault-2.1-vfsfault-transient.8
+sysfault sysfault-2.1-vfsfault-transient.9
+sysfault sysfault-2.1-vfsfault-transient.10
+sysfault sysfault-2.1-vfsfault-transient.11
+sysfault sysfault-2.1-vfsfault-transient.12
+sysfault sysfault-2.1-vfsfault-transient.13
+sysfault sysfault-2.1-vfsfault-transient.14
+sysfault sysfault-2.1-vfsfault-transient.15
+sysfault sysfault-2.1-vfsfault-transient.16
+sysfault sysfault-2.1-vfsfault-transient.17
+sysfault sysfault-2.1-vfsfault-transient.18
+sysfault sysfault-2.1-vfsfault-transient.19
+sysfault sysfault-2.1-vfsfault-transient.20
+sysfault sysfault-2.1-vfsfault-transient.21
+sysfault sysfault-2.1-vfsfault-transient.22
+sysfault sysfault-2.1-vfsfault-transient.23
+sysfault sysfault-2.1-vfsfault-transient.24
+sysfault sysfault-2.1-vfsfault-transient.25
+sysfault sysfault-2.1-vfsfault-transient.26
+sysfault sysfault-2.1-vfsfault-transient.27
+sysfault sysfault-2.1-vfsfault-transient.28
+sysfault sysfault-2.1-vfsfault-transient.29
+sysfault sysfault-2.1-vfsfault-transient.30
+sysfault sysfault-2.1-vfsfault-transient.31
+sysfault sysfault-2.1-vfsfault-transient.32
+sysfault sysfault-2.1-vfsfault-transient.33
+sysfault sysfault-2.1-vfsfault-transient.34
+sysfault sysfault-2.1-vfsfault-transient.35
+sysfault sysfault-2.1-vfsfault-transient.36
+sysfault sysfault-2.1-vfsfault-transient.37
+sysfault sysfault-2.1-vfsfault-transient.38
+sysfault sysfault-2.1-vfsfault-transient.39
+sysfault sysfault-2.1-vfsfault-transient.40
+sysfault sysfault-2.1-vfsfault-transient.41
+sysfault sysfault-2.1-vfsfault-transient.42
+sysfault sysfault-2.1-vfsfault-transient.43
+sysfault sysfault-2.1-vfsfault-transient.44
+sysfault sysfault-2.1-vfsfault-transient.45
+sysfault sysfault-2.1-vfsfault-transient.46
+sysfault sysfault-2.1-vfsfault-transient.47
+sysfault sysfault-2.1-vfsfault-transient.48
+sysfault sysfault-2.1-vfsfault-transient.49
+sysfault sysfault-2.1-vfsfault-transient.50
+sysfault sysfault-2.1-vfsfault-transient.51
+sysfault sysfault-2.1-vfsfault-transient.52
+sysfault sysfault-2.1-vfsfault-transient.53
+sysfault sysfault-2.1-vfsfault-transient.54
+sysfault sysfault-2.1-vfsfault-transient.55
+sysfault sysfault-2.1-vfsfault-transient.56
+sysfault sysfault-2.1-vfsfault-transient.57
+sysfault sysfault-2.1-vfsfault-transient.58
+sysfault sysfault-2.1-vfsfault-transient.59
+sysfault sysfault-2.1-vfsfault-transient.60
+sysfault sysfault-2.1-vfsfault-transient.61
+sysfault sysfault-2.1-vfsfault-transient.62
+sysfault sysfault-2.1-vfsfault-transient.63
+sysfault sysfault-2.1-vfsfault-transient.64
+sysfault sysfault-2.1-vfsfault-transient.65
+sysfault sysfault-2.1-vfsfault-transient.66
+sysfault sysfault-2.1-vfsfault-transient.67
+sysfault sysfault-2.1-vfsfault-transient.68
+sysfault sysfault-2.1-vfsfault-transient.69
+sysfault sysfault-2.1-vfsfault-transient.70
+sysfault sysfault-2.1-vfsfault-transient.71
+sysfault sysfault-2.1-vfsfault-transient.72
+sysfault sysfault-2.1-vfsfault-transient.73
+sysfault sysfault-2.1-vfsfault-transient.74
+sysfault sysfault-2.1-vfsfault-transient.75
+sysfault sysfault-2.1-vfsfault-transient.76
+sysfault sysfault-2.1-vfsfault-transient.77
+sysfault sysfault-2.1-vfsfault-transient.78
+sysfault sysfault-2.1-vfsfault-transient.79
+sysfault sysfault-2.1-vfsfault-transient.80
+sysfault sysfault-2.1-vfsfault-transient.81
+sysfault sysfault-2.1-vfsfault-transient.82
+sysfault sysfault-2.1-vfsfault-transient.83
+sysfault sysfault-2.1-vfsfault-transient.84
+sysfault sysfault-2.1-vfsfault-transient.85
+sysfault sysfault-2.1-vfsfault-transient.86
+sysfault sysfault-2.1-vfsfault-transient.87
+sysfault sysfault-2.2-vfsfault-persistent.87
+sysfault sysfault-2.2-vfsfault-transient.1
+sysfault sysfault-2.2-vfsfault-transient.2
+sysfault sysfault-2.2-vfsfault-transient.3
+sysfault sysfault-2.2-vfsfault-transient.5
+sysfault sysfault-2.2-vfsfault-transient.6
+sysfault sysfault-2.2-vfsfault-transient.44
+sysfault sysfault-2.2-vfsfault-transient.45
+sysfault sysfault-2.2-vfsfault-transient.46
+sysfault sysfault-2.2-vfsfault-transient.47
+sysfault sysfault-2.2-vfsfault-transient.48
+sysfault sysfault-2.2-vfsfault-transient.49
+sysfault sysfault-2.2-vfsfault-transient.50
+sysfault sysfault-2.2-vfsfault-transient.52
+sysfault sysfault-2.2-vfsfault-transient.53
+sysfault sysfault-2.2-vfsfault-transient.54
+sysfault sysfault-2.2-vfsfault-transient.56
+sysfault sysfault-2.2-vfsfault-transient.57
+sysfault sysfault-2.2-vfsfault-transient.87
+# section 3: fstat/fallocate EIO injection — stock expects every fault
+# point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
+# paths where the fault becomes a "disk I/O error".
+sysfault sysfault-3-vfsfault-persistent.1
+sysfault sysfault-3-vfsfault-persistent.2
+sysfault sysfault-3-vfsfault-persistent.3
+sysfault sysfault-3-vfsfault-persistent.4
+sysfault sysfault-3-vfsfault-transient.1
+sysfault sysfault-3-vfsfault-transient.3
+sysfault sysfault-3-vfsfault-transient.4
+
+# MVCC: no reader-blocks-writer / exclusive-blocks-reader lock errors
+tclsqlite tcl-10.18
+tclsqlite tcl-10.22
+
+# auto_vacuum/incremental_vacuum intentionally unsupported + cascade
+tkt3918 tkt3918.1
+tkt3918 tkt3918.2
+tkt3918 tkt3918.3
+tkt3918 tkt3918.4
+
+# VACUUM's internal "-- SELECT dolt_gc()" shows up in the trace output
+trace trace-2.6
+
+# post-DDL schema reload under trusted_schema=off re-parses t2's unsafe
+# CHECK and fails schema load (stock fresh-connection behavior, hit
+# mid-session); the rest cascades from tables that were never created
+trustschema1 trustschema1-1.310
+trustschema1 trustschema1-1.311
+trustschema1 trustschema1-1.320
+trustschema1 trustschema1-1.400
+trustschema1 trustschema1-1.410
+trustschema1 trustschema1-1.420
+trustschema1 trustschema1-1.421
+trustschema1 trustschema1-1.430
+trustschema1 trustschema1-1.440
+trustschema1 trustschema1-1.500
+trustschema1 trustschema1-1.510
+trustschema1 trustschema1-1.520
+trustschema1 trustschema1-1.521
+trustschema1 trustschema1-1.530
+trustschema1 trustschema1-1.540
+
+# NULL into a (typo-typed) PRIMARY KEY column: PK-keyed storage enforces
+# NOT NULL (stock WITHOUT ROWID semantics) + cascade onto views from 5.1
+unionall unionall-5.1
+unionall unionall-5.10
+unionall unionall-5.20
+unionall unionall-5.30
+
+# ATTACH creates the database file lazily in doltlite — verified with a
+# repro: file missing right after ATTACH, present after the first write —
+# so the file-exists check right after ATTACH fails for every URI form.
+uri uri-1.1.4
+uri uri-1.2.4
+uri uri-1.3.4
+uri uri-1.4.4
+uri uri-1.5.4
+uri uri-1.6.4
+uri uri-1.7.4
+uri uri-1.8.4
+uri uri-1.9.4
+uri uri-1.10.4
+uri uri-1.11.4
+uri uri-1.12.4
+uri uri-1.13.4
+uri uri-1.14.4
+uri uri-1.15.4
+uri uri-1.16.4
+# URI query parameters are not visible to the VFS layer: doltlite re-dups
+# the main-db filename (double-nul form) before xOpen, dropping the URI
+# parameter tail (verified with a testvfs repro: xOpen fires for test.db
+# but with an empty parameter list), so every expected key/value list
+# comes back empty. The vfs= parameter itself still works (resolved by
+# the core before open), which is why 2.4 and 2.11 pass.
+uri uri-2.1.1
+uri uri-2.1.2
+uri uri-2.2.1
+uri uri-2.2.2
+uri uri-2.3.1
+uri uri-2.3.2
+uri uri-2.5.1
+uri uri-2.5.2
+uri uri-2.6.1
+uri uri-2.6.2
+uri uri-2.7.1
+uri uri-2.7.2
+uri uri-2.8.1
+uri uri-2.8.2
+uri uri-2.9.1
+uri uri-2.9.2
+uri uri-2.10.1
+uri uri-2.10.2
+uri uri-2.12.1
+uri uri-2.12.2
+# Shared-cache table locks don't exist on doltlite (MVCC snapshots):
+# a reader sees its own snapshot instead of "database table is locked".
+uri uri-4.2.1
+uri uri-4.2.3
+uri uri-4.2.6
+# 5.1: PRAGMA journal_mode=PERSIST/WAL is rejected on doltlite-format
+# attached dbs, and the chunk store never touches -journal/-wal sidecar
+# names through the per-db VFS, so the recorded VFS call set differs.
+uri uri-5.1.1
+uri uri-5.1.2
+
+# custom-collation index rejection
+utf16align utf16align-1.2
+utf16align utf16align-1.3
+# doltlite-format ignores non-UTF-8 database encodings
+utf16align utf16align-2.1
+
+# shared-cache is inert: no shared schema (db2 can't use the echo vtab
+# registered on db) and no shared-cache table locks
+vtab_shared vtab_shared-1.8.2
+vtab_shared vtab_shared-1.8.3
+vtab_shared vtab_shared-1.8.5
+vtab_shared vtab_shared-1.10
+vtab_shared vtab_shared-1.12.1
+vtab_shared vtab_shared-1.12.2
+vtab_shared vtab_shared-1.13.1
+vtab_shared vtab_shared-1.13.2
+vtab_shared vtab_shared-1.13.3
+
+# journal_mode not configurable on doltlite-format databases + cascade
+zerodamage zerodamage-2.0
+zerodamage zerodamage-2.1
+zerodamage zerodamage-3.0
+zerodamage zerodamage-3.1
+
