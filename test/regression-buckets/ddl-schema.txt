@@ -46,7 +46,6 @@ capi3e
 check
 conflict
 conflict2
-conflict3
 createtab
 dbstatus
 delete

@@ -7231,6 +7231,9 @@ static int prollyBtCursorTableMoveto(
     if( rc!=SQLITE_OK ) return rc;
     if( pEntry ){
       if( pEntry->op == PROLLY_EDIT_INSERT ){
+        if( pCur->isPinned ){
+          return SQLITE_CONSTRAINT_PINNED;
+        }
         *pRes = 0;
         setCursorToMutMapEntryPhys(pCur, (int)(pEntry - pCur->pMutMap->aEntries));
         pCur->deferredTreeSeek = 1;
@@ -7670,6 +7673,9 @@ static int prollyBtCursorIndexMoveto(
         rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          if( pCur->isPinned ){
+            return SQLITE_CONSTRAINT_PINNED;
+          }
           setCursorToMutMapEntryPhys(
               pCur, (int)(pEntry - pCur->pMutMap->aEntries));
           /* The tree side is still wherever the last operation left it. A
@@ -7686,6 +7692,9 @@ static int prollyBtCursorIndexMoveto(
         rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          if( pCur->isPinned ){
+            return SQLITE_CONSTRAINT_PINNED;
+          }
           pCur->pMutMap = pPending;
           setCursorToMutMapEntryPhys(
               pCur, (int)(pEntry - pPending->aEntries));
@@ -8711,9 +8720,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
-  if( pCur->isPinned ){
-    return SQLITE_CONSTRAINT_PINNED;
-  }
 
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
