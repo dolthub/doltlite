@@ -113,11 +113,14 @@ source $testdir/tester.tcl
 #   marker: the child holds a write txn on test2, the parent is locked out,
 #   parent commit unblocks the child write to test1, and both dbs converge
 #   (17.1).
+# covers: sharedA sharedA-2.1 — shared-cache setup with attached db and peer reader works (18.1, 18.2)
+# covers: sharedA sharedA-2.2 — schema+attached writes inside txn roll back atomically enough for peer statement reuse (18.3, 18.4)
+# covers: sharedA sharedA-2.3 — after rollback, main and attached dbs keep pre-rollback rows and integrity ok (18.5)
 #
 # not-covered: (none)
 
 db close
-foreach f {rlk2.db rlk2b.db rlk2p.db rlk2q.db rlk2n.db rlk2w.db rlk2s.db rlk2t.db} {
+foreach f {rlk2.db rlk2b.db rlk2p.db rlk2q.db rlk2n.db rlk2w.db rlk2s.db rlk2t.db rlk2u.db rlk2u.db2} {
   forcedelete $f
   forcedelete .${f}-lock
 }
@@ -762,6 +765,54 @@ do_test doltlite_recover_locking_2-17.1 {
   lk4b close
   set out
 } {1 {1 {database is locked}} {0 {}} {0 {}} {0 {}} {1 2} 2}
+
+#-------------------------------------------------------------------------
+# 18.* sharedA recast: upstream waits for an xRead on test.db2-journal during
+# rollback.  doltlite has no rollback-journal sidecar, so cover the durable
+# contract after that rollback point instead.
+#
+do_test doltlite_recover_locking_2-18.1 {
+  set ::rlk2_shared_cache [sqlite3_enable_shared_cache 1]
+  sqlite3 dba rlk2u.db
+  dba eval {ATTACH 'rlk2u.db2' AS two}
+  dba eval {
+    CREATE TABLE t1(x);
+    INSERT INTO t1 VALUES(1);
+    INSERT INTO t1 VALUES(2);
+    INSERT INTO t1 VALUES(3);
+    CREATE TABLE two.t2(x);
+    INSERT INTO t2 SELECT * FROM t1;
+  }
+  sqlite3 dbb rlk2u.db
+  dbb eval {SELECT x FROM t1 ORDER BY x}
+} {1 2 3}
+do_test doltlite_recover_locking_2-18.2 {
+  set ::rlk2_stmt [sqlite3_prepare dbb "CREATE INDEX i1 ON t1(x)" -1 tail]
+  expr {[string length $::rlk2_stmt] > 0}
+} {1}
+do_test doltlite_recover_locking_2-18.3 {
+  dba eval {
+    BEGIN;
+      CREATE INDEX i1 ON t1(x);
+      INSERT INTO t2 VALUES('value!');
+    ROLLBACK;
+  }
+} {}
+do_test doltlite_recover_locking_2-18.4 {
+  list [sqlite3_step $::rlk2_stmt] [sqlite3_finalize $::rlk2_stmt] [sqlite3_errmsg dbb]
+} {SQLITE_DONE SQLITE_OK {not an error}}
+do_test doltlite_recover_locking_2-18.5 {
+  set r [list \
+    [dba eval {PRAGMA integrity_check}] \
+    [dbb eval {SELECT x FROM t1 ORDER BY x}] \
+    [dba eval {SELECT x FROM two.t2 ORDER BY x}] \
+  ]
+  dbb close
+  dba close
+  sqlite3_enable_shared_cache $::rlk2_shared_cache
+  unset -nocomplain ::rlk2_stmt ::rlk2_shared_cache
+  set r
+} {ok {1 2 3} {1 2 3}}
 
 db2 close
 finish_test
