@@ -140,7 +140,7 @@ corrupt4         # completes or aborts depending on the run; either expectation 
 corruptC         # corruption-injection cascade: setup table never created
 corruptI         # corruption injection: chunk store reports malformed, file aborts
 multiplex2       # multiplex VFS on chunk store: disk I/O error aborts setup
-incrblob         # incrblob API on a PK (WITHOUT ROWID) table: "cannot open table without rowid"
+incrblob         # full file assumes PRIMARY KEY tables expose rowids; direct DoltLite rejection and INTEGER PRIMARY KEY success covered by doltlite_recover_incrblob
 pager1           # journal/txn-model cascade: "cannot commit - no transaction is active"
 backup           # sqlite3_backup_init: page-image backup unsupported
 mallocAll        # failed open -> "db" command never created (test-harness footgun)
@@ -155,7 +155,7 @@ win32nolock      # windows-only: silent platform return, no summary line
 corrupt9       # freelist raw-format probe aborts ("Freelist is empty")
 dbstatus       # dbstat vtable constructor fails on prolly; memory-stat probes differ
 e_walauto      # reads test.db-shm: no shm sidecar
-incrblob_err   # fault harness blob channel dies mid-injection (I/O error)
+incrblob_err   # full fault file still aborts; blob-read IOERR cleanup path covered by doltlite_recover_incrblob
 malloc3        # OOM mid-file leaves setup table missing; uncaught -> aborts
 pendingrace    # copies sv_test.db-journal: no journal sidecar
 shmlock        # shm locking probe: "BUSY false-positive" thrown by the test

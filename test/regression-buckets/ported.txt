@@ -1,5 +1,6 @@
 doltlite_recover_collation
 doltlite_recover_corruption
+doltlite_recover_incrblob
 doltlite_recover_jrnlwal_1
 doltlite_recover_jrnlwal_2
 doltlite_recover_jrnlwal_3
