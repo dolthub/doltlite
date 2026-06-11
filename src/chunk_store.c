@@ -5,6 +5,7 @@
 #include "chunk_store.h"
 #include "prolly_hash.h"
 #include "prolly_encoding.h"
+#include "../ext/blake3/blake3.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -169,6 +170,17 @@ static int csCanonicalFilename(
   if( !zFull ) return SQLITE_NOMEM;
 
   rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
+#if SQLITE_OS_WIN
+  /* Registering under the xFullPathname result broke msys2 builds: a store
+  ** written under the rewritten name was not found again on the next open.
+  ** Keep registering under the caller's name on Windows; the canonical
+  ** registration below is what lets unix callers reach one store through
+  ** relative and absolute names alike. */
+  if( rc==SQLITE_OK ){
+    sqlite3_free(zFull);
+    return chunkStoreDupFilenameDoubleNul(zFilename, pzOut);
+  }
+#endif
   if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
     rc = chunkStoreDupFilenameDoubleNul(zFull, pzOut);
     sqlite3_free(zFull);
@@ -290,6 +302,33 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memcpy(aBuf + CS_MANIFEST_REFS_HASH_OFF, cs->refs.refsHash.data, PROLLY_HASH_SIZE);
 }
 
+void csManifestSeal(u8 *aBuf){
+  blake3_hasher hasher;
+  memset(aBuf + CS_MANIFEST_SELF_HASH_OFF, 0, PROLLY_HASH_SIZE);
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, aBuf, CHUNK_MANIFEST_SIZE);
+  blake3_hasher_finalize(&hasher, aBuf + CS_MANIFEST_SELF_HASH_OFF,
+                         PROLLY_HASH_SIZE);
+}
+
+int csManifestHashState(const u8 *aBuf){
+  blake3_hasher hasher;
+  u8 aCopy[CHUNK_MANIFEST_SIZE];
+  u8 aHash[PROLLY_HASH_SIZE];
+  int i;
+  for(i=0; i<PROLLY_HASH_SIZE; i++){
+    if( aBuf[CS_MANIFEST_SELF_HASH_OFF+i] ) break;
+  }
+  if( i==PROLLY_HASH_SIZE ) return CS_MANIFEST_HASH_LEGACY;
+  memcpy(aCopy, aBuf, CHUNK_MANIFEST_SIZE);
+  memset(aCopy + CS_MANIFEST_SELF_HASH_OFF, 0, PROLLY_HASH_SIZE);
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, aCopy, CHUNK_MANIFEST_SIZE);
+  blake3_hasher_finalize(&hasher, aHash, PROLLY_HASH_SIZE);
+  return memcmp(aHash, aBuf + CS_MANIFEST_SELF_HASH_OFF, PROLLY_HASH_SIZE)==0
+       ? CS_MANIFEST_HASH_OK : CS_MANIFEST_HASH_BAD;
+}
+
 static int csReadManifest(ChunkStore *cs){
   u8 aBuf[CHUNK_MANIFEST_SIZE];
   u32 magic, version;
@@ -310,6 +349,10 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
+  /* The header manifest's seal is deliberately not verified: inherited
+  ** tests (and stock tooling habits) poke historically-ignored header
+  ** bytes, and the fields read below have their own validation. The seal
+  ** is enforced where it is load-bearing — on WAL root records. */
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
@@ -317,6 +360,53 @@ static int csReadManifest(ChunkStore *cs){
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
+  return SQLITE_OK;
+}
+
+/* Classify a file whose header manifest is unreadable. *pEverCommitted is
+** set when any root record proves a commit was once synced: a legacy root,
+** or a sealed root whose DURABLE_TO lies past the header. *pCreationRoot is
+** set when a sealed root from a crashed creation batch (DURABLE_TO at or
+** below the header size) is present. */
+static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
+                                  int *pCreationRoot){
+  u8 buf[65536];
+  i64 fileSize = 0;
+  i64 q = CHUNK_MANIFEST_SIZE;
+  int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
+  *pEverCommitted = 0;
+  *pCreationRoot = 0;
+  if( rc != SQLITE_OK ) return rc;
+  while( q + 5 <= fileSize ){
+    i64 nAvail = fileSize - q;
+    int n = nAvail > (i64)sizeof(buf) ? (int)sizeof(buf) : (int)nAvail;
+    int i;
+    rc = sqlite3OsRead(cs->file.pFile, buf, n, q);
+    if( rc != SQLITE_OK ) return rc;
+    for(i=0; i+5<=n; i++){
+      if( buf[i]==CS_WAL_TAG_ROOT && CS_READ_U32(buf+i+1)==CHUNK_STORE_MAGIC ){
+        u8 m[CHUNK_MANIFEST_SIZE];
+        int state;
+        if( q + i + 1 + CHUNK_MANIFEST_SIZE > fileSize ) continue;
+        rc = sqlite3OsRead(cs->file.pFile, m, CHUNK_MANIFEST_SIZE, q + i + 1);
+        if( rc != SQLITE_OK ) return rc;
+        state = csManifestHashState(m);
+        if( state==CS_MANIFEST_HASH_LEGACY ){
+          *pEverCommitted = 1;
+          return SQLITE_OK;
+        }
+        if( state==CS_MANIFEST_HASH_OK ){
+          if( CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF) > CHUNK_MANIFEST_SIZE ){
+            *pEverCommitted = 1;
+            return SQLITE_OK;
+          }
+          *pCreationRoot = 1;
+        }
+      }
+    }
+    if( (i64)n >= nAvail ) break;
+    q += n - 4;
+  }
   return SQLITE_OK;
 }
 
@@ -441,6 +531,42 @@ int chunkStoreOpen(
     }
 
     rc = csReadManifest(cs);
+    if( (rc==SQLITE_NOTADB || rc==SQLITE_CORRUPT)
+     && (flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly ){
+      /* A crash during the very first commit can drop or tear the header
+      ** write (header, chunks and root share one sync batch), which is the
+      ** one crash shape replay cannot reach. Stock recovers a crashed
+      ** creation to an empty database via the journal; match that — but
+      ** only on positive evidence of a crashed creation (a sealed root
+      ** whose DURABLE_TO is the header size, or an all-zero header from
+      ** the dropped header write), and never when any root proves the
+      ** file once held synced commits. A foreign file or a real store
+      ** with a damaged header keeps its open error. */
+      int everCommitted = 1;
+      int creationRoot = 0;
+      int rc2 = csScanForCommittedRoot(cs, &everCommitted, &creationRoot);
+      if( rc2==SQLITE_OK && !everCommitted && !creationRoot ){
+        u8 aHdr[CHUNK_MANIFEST_SIZE];
+        rc2 = sqlite3OsRead(cs->file.pFile, aHdr, CHUNK_MANIFEST_SIZE, 0);
+        if( rc2==SQLITE_OK ){
+          int i;
+          for(i=0; i<CHUNK_MANIFEST_SIZE && aHdr[i]==0; i++){}
+          creationRoot = (i==CHUNK_MANIFEST_SIZE);
+        }
+      }
+      if( rc2==SQLITE_OK && !everCommitted && creationRoot ){
+        cs->index.nChunks = 0;
+        cs->index.iIndexOffset = 0;
+        cs->index.nIndexSize = 0;
+        cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+        cs->file.iFileSize = 0;
+        rc = sqlite3OsTruncate(cs->file.pFile, 0);
+        if( rc==SQLITE_OK ){
+          csMarkRefsCommitted(cs);
+          return SQLITE_OK;
+        }
+      }
+    }
     if( rc != SQLITE_OK ){
       chunkStoreClose(cs);
       return rc;
@@ -1132,13 +1258,17 @@ static int csCommitToFile(ChunkStore *cs){
   int rc;
   int i;
   i64 fileSize = 0;
+  i64 physFileSize = -1;
   i64 origFileSize = 0;
   i64 writeOff = 0;
+  i64 durableTo = 0;
+  i64 batchStart = 0;
+  i64 contentEnd = 0;
+  int sectorSize = 1;
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
   char *lockName = 0;
   int hadFile = (cs->file.pFile != 0);
   int lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
-  i64 newWalSize = cs->wal.nWalData;
   ChunkIndexEntry *aCommittedPending = 0;
   ChunkIndexEntry aSmallCommittedPending[32];
   ChunkIndexEntry *aMergePending = 0;
@@ -1168,6 +1298,7 @@ static int csCommitToFile(ChunkStore *cs){
   }else{
     rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
     if( rc != SQLITE_OK ) goto commit_done;
+    physFileSize = fileSize;
   }
 
   if( hadFile && !lockHeld ){
@@ -1186,11 +1317,43 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = cs->file.iFileSize;
   }
+  /* The logical EOF can sit past the physical one (the previous root's
+  ** sector-aligned NEXT_OFF leaves an unwritten gap) or before it (torn-tail
+  ** recovery rewound over crash garbage). Append at the logical EOF, and
+  ** drop recovered-over garbage so replay never re-reads it. */
+  if( hadFile && cs->file.iFileSize > fileSize ){
+    fileSize = cs->file.iFileSize;
+  }
+  if( physFileSize > fileSize ){
+    (void)sqlite3OsTruncate(cs->file.pFile, fileSize);
+  }
   origFileSize = fileSize;
+
+  /* Without powersafe-overwrite, a torn sector write can damage bytes
+  ** adjacent to the one being written, so each batch must occupy fresh
+  ** sectors or its crash could destroy previously synced commits (stock
+  ** wal does the same via padToSectorBoundary); fully atomic writes
+  ** cannot tear at all. The skipped bytes are never written or read:
+  ** this root's BATCH_START lets replay resume across the leading gap,
+  ** and its NEXT_OFF pre-declares the trailing one. A new file keeps its
+  ** batch right after the header — they share one sync, so sector
+  ** isolation cannot protect either. */
+  if( (cs->file.pFile->pMethods->xDeviceCharacteristics(cs->file.pFile)
+       & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
+    sectorSize = cs->file.pFile->pMethods->xSectorSize(cs->file.pFile);
+    if( sectorSize < 512 ) sectorSize = 512;
+    if( sectorSize > 65536 ) sectorSize = 65536;
+  }
+  durableTo = fileSize > 0 ? fileSize : (i64)CHUNK_MANIFEST_SIZE;
+  batchStart = durableTo;
+  if( fileSize > 0 && sectorSize > 1 && (batchStart % sectorSize)!=0 ){
+    batchStart += sectorSize - 1;
+    batchStart -= batchStart % sectorSize;
+  }
 
   if( cs->staging.nPending > 0 ){
     ChunkStore mergeView;
-    i64 filePos = fileSize > 0 ? fileSize : (i64)CHUNK_MANIFEST_SIZE;
+    i64 filePos = batchStart;
     i64 appendBytes = 0;
 
     for( i = 0; i < cs->staging.nPending; i++ ){
@@ -1205,7 +1368,6 @@ static int csCommitToFile(ChunkStore *cs){
       rc = SQLITE_TOOBIG;
       goto commit_done;
     }
-    newWalSize = cs->wal.nWalData + appendBytes;
 
     if( cs->staging.nPending <= (int)(sizeof(aSmallCommittedPending)
                                     / sizeof(aSmallCommittedPending[0])) ){
@@ -1282,13 +1444,13 @@ static int csCommitToFile(ChunkStore *cs){
     u8 manifest[CHUNK_MANIFEST_SIZE];
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
+    csManifestSeal(manifest);
     CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
     if( rc != SQLITE_OK ) goto commit_done;
-    fileSize = CHUNK_MANIFEST_SIZE;
   }
 
-  writeOff = fileSize;
+  writeOff = batchStart;
 
   /* Append chunks before the root record. Recovery ignores appended data until
   ** it finds a later valid root record that points at the new manifest. */
@@ -1361,12 +1523,23 @@ static int csCommitToFile(ChunkStore *cs){
   /* The root record is the commit point for the append-only chunk store. */
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
+    i64 rootEnd = writeOff + (i64)sizeof(rootRec);
+    i64 nextOff = rootEnd;
+    if( sectorSize > 1 ){
+      nextOff = rootEnd + (sectorSize - 1);
+      nextOff -= nextOff % sectorSize;
+    }
     rootRec[0] = CS_WAL_TAG_ROOT;
     csSerializeManifest(cs, rootRec + 1);
+    CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, durableTo);
+    CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, nextOff);
+    CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, batchStart);
+    csManifestSeal(rootRec + 1);
     CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
-    writeOff += sizeof(rootRec);
+    contentEnd = rootEnd;
+    writeOff = nextOff;
   }
 
   CRASH_CHECK_WRITE();
@@ -1378,7 +1551,10 @@ static int csCommitToFile(ChunkStore *cs){
 #endif
   if( rc != SQLITE_OK ) goto commit_done;
 
+  /* iFileSize is the logical append cursor (the aligned NEXT_OFF), nWalData
+  ** the physically present WAL content. */
   cs->file.iFileSize = writeOff;
+  cs->wal.nWalData = contentEnd - cs->wal.iWalOffset;
 
 commit_done:
   csFileUnlock(lockFd, &lockName);
@@ -1411,7 +1587,6 @@ commit_done:
       cs->staging.nRecent = 0;
       csRecentHTClear(cs);
     }
-    cs->wal.nWalData = newWalSize;
   }else{
     sqlite3_free(aMerged);
   }

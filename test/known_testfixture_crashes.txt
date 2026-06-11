@@ -30,7 +30,30 @@
 # the divergence file.
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
-fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
+# fuzz3 left the bucket sweep entirely (it was listed here as a crash, and
+# before that never passed). It flips single bytes of committed data and
+# accepts only rollback-journal-mode outcomes (rc==0 or a corruption
+# error). A flip inside the FINAL commit batch is in-band
+# indistinguishable from that batch having crashed mid-write (stock can
+# only tell the difference via its journal sidecar), so chunk-store
+# recovery now rolls it back like a torn crash tail and the test sees
+# "no such table" instead of "malformed". Its failures also exceed
+# testfixture's 1000-error cap, so a per-test divergence list can never
+# stabilize. The corruption-detection intent is covered natively by
+# doltlite_recover_corruption.test and test/corruption_test.c.
+
+# crash4 crash-simulates a brand-new database's very first commit. The
+# simulator can sector-trash that whole creation batch (header, chunks and
+# the root record share the first sectors of a fresh file), leaving pure
+# garbage with no surviving anchor to recover from. Stock recovers via its
+# rollback-journal sidecar, synced before the db write; a sidecar-free store
+# cannot, and a garbage-only file must keep failing open as "file is not a
+# database" (foreign-file rejection) rather than be reinitialized. The
+# reopen error then aborts the script pre-summary. Verified: the leftover
+# is one trashed sector of random bytes, and every post-creation crash
+# shape recovers (crash2-1.2/3.*, crash3 test.db rows, crash6, savepoint4
+# all pass clean).
+crash4        # creation-batch sector trash leaves no recovery anchor (no journal sidecar); reopen aborts pre-summary
 
 # Raw-format/WAL divergences whose failed open cascades into an uncaught Tcl
 # error before the summary line. doltlite validates the chunk-store manifest at

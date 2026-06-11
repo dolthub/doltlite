@@ -3517,9 +3517,24 @@ static void run_truncated_wal_is_rejected(void){
   }
   chunkStoreClose(&cs);
 
+  /* The corrupted tag sits below the later commit's DURABLE_TO, so this is
+  ** mid-stream corruption: the open succeeds poisoned (stock surfaces
+  ** corruption on first access, never from sqlite3_open) and chunk reads
+  ** fail SQLITE_CORRUPT. */
   rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
-  check("chunk_store_open_rejects_corrupt_wal", rc==SQLITE_CORRUPT);
+  check("chunk_store_open_succeeds_on_corrupt_wal", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    u8 *pData = 0;
+    int nData = 0;
+    check("corrupt_wal_poisons_store", cs.corruptMidStream);
+    if( cs.index.nIndex > 0 ){
+      rc = chunkStoreGet(&cs, &cs.index.aIndex[0].hash, &pData, &nData);
+      check("chunk_read_rejects_corrupt_wal", rc==SQLITE_CORRUPT);
+      sqlite3_free(pData);
+    }
+    chunkStoreClose(&cs);
+  }
 
   removeDbFiles(dbpath);
 }
@@ -3665,9 +3680,23 @@ static void run_wal_mid_corruption_rejected(void){
   }
   chunkStoreClose(&cs);
 
+  /* Mid-stream damage with later durable commits poisons the store: the
+  ** open itself succeeds (stock surfaces corruption on first access, never
+  ** from sqlite3_open) and every chunk read then fails SQLITE_CORRUPT. */
   rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
-  check("chunk_store_open_rejects_mid_wal_corruption", rc==SQLITE_CORRUPT);
+  check("chunk_store_open_succeeds_on_mid_wal_corruption", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    u8 *pData = 0;
+    int nData = 0;
+    check("mid_wal_corruption_poisons_store", cs.corruptMidStream);
+    if( cs.index.nIndex > 0 ){
+      rc = chunkStoreGet(&cs, &cs.index.aIndex[0].hash, &pData, &nData);
+      check("chunk_read_rejects_mid_wal_corruption", rc==SQLITE_CORRUPT);
+      sqlite3_free(pData);
+    }
+    chunkStoreClose(&cs);
+  }
 
   removeDbFiles(dbpath);
 }

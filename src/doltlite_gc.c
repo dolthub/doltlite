@@ -403,6 +403,7 @@ static int gcRewriteFile(
   walStateSetOffset(&manifestCs.wal, indexOffset + indexSize);
 
   csSerializeManifest(&manifestCs, manifest);
+  csManifestSeal(manifest);
 
   if( chunkFileGetFilename(&cs->file) && strcmp(chunkFileGetFilename(&cs->file), ":memory:")!=0 ){
     char *zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
