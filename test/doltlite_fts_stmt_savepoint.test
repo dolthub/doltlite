@@ -1,0 +1,76 @@
+# Statement-scope savepoints vs vtab xSavepoint flushes.
+#
+# When a statement journal opens, fts3's xSavepoint callback flushes its
+# pending-terms hash to the shadow tables via nested SQL. The pager engine
+# only starts journaling at sqlite3BtreeBeginStmt, which runs after the
+# callback, so upstream those flush writes survive a statement rollback.
+# Prolly captures statement savepoints lazily at write time keyed off
+# db->nStatement, which already counts the new statement during the
+# callback — so the flush itself used to trigger a pre-flush capture and a
+# constraint abort then erased the flush while fts3 also cleared its hash,
+# silently dropping committed rows from the index (upstream fts3conf-1.7.3
+# and 1.17.3, and 214 fts3fault3 OOM-recovery integrity failures).
+#
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+ifcapable !fts3 { finish_test ; return }
+set testprefix doltlite-fts-stmtsvpt
+
+do_execsql_test 1.0 {
+  CREATE VIRTUAL TABLE t1 USING fts3(x);
+  INSERT INTO t1(rowid, x) VALUES(1, 'a b c d');
+  INSERT INTO t1(rowid, x) VALUES(2, 'e f g h');
+  CREATE TABLE source(a, b);
+  INSERT INTO source VALUES(4, 'z');
+  INSERT INTO source VALUES(2, 'y');
+}
+
+# INSERT OR ABORT: rowid 4 is inserted, then rowid 2 conflicts; the
+# statement rolls back. Rowid 3 was pending when the statement began and
+# is flushed by xSavepoint as the statement journal opens.
+do_execsql_test 1.1 {
+  BEGIN;
+  INSERT INTO t1(rowid, x) VALUES(3, 'i j k l');
+}
+do_catchsql_test 1.2 {
+  INSERT OR ABORT INTO t1(rowid, x) SELECT * FROM source;
+} {1 {constraint failed}}
+do_execsql_test 1.3 { COMMIT }
+do_execsql_test 1.4 {
+  SELECT rowid FROM t1 WHERE x MATCH 'i';
+} {3}
+do_execsql_test 1.5 {
+  SELECT rowid FROM t1 WHERE x MATCH 'z';
+} {}
+do_execsql_test 1.6 {
+  SELECT rowid, x FROM t1;
+} {1 {a b c d} 2 {e f g h} 3 {i j k l}}
+
+# UPDATE OR ABORT flavor (upstream fts3conf-1.17.3).
+do_execsql_test 2.0 {
+  BEGIN;
+  INSERT INTO t1(rowid, x) VALUES(5, 'm n o p');
+}
+do_catchsql_test 2.1 {
+  UPDATE OR ABORT t1 SET docid = CASE WHEN docid = 1 THEN 8 ELSE 3 END
+  WHERE docid <= 2;
+} {1 {constraint failed}}
+do_execsql_test 2.2 { COMMIT }
+do_execsql_test 2.3 {
+  SELECT rowid FROM t1 WHERE x MATCH 'm';
+} {5}
+do_execsql_test 2.4 {
+  SELECT rowid FROM t1 WHERE x MATCH 'a';
+} {1}
+
+# The index must agree with a from-scratch rebuild of the same content.
+do_execsql_test 3.0 {
+  CREATE VIRTUAL TABLE tcheck USING fts4term(t1);
+  CREATE VIRTUAL TABLE t2 USING fts3(x);
+  INSERT INTO t2(rowid, x) SELECT rowid, x FROM t1;
+  CREATE VIRTUAL TABLE t2check USING fts4term(t2);
+  SELECT (SELECT md5sum(term, docid, col, pos) FROM tcheck) =
+         (SELECT md5sum(term, docid, col, pos) FROM t2check);
+} {1}
+
+finish_test
