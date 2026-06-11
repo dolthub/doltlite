@@ -5814,11 +5814,6 @@ badutf badutf-1.18
 badutf badutf-1.19
 badutf badutf-1.20
 
-# 3GB single-transaction insert: doltlite stages all uncommitted writes in
-# memory (no pager spill), exceeding the 6g CI memory cap -> clean SQLITE_NOMEM;
-# stock spills dirty pages to disk and completes
-bigsort bigsort-1.0
-
 # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly
 # chunks, not legacy pager pages, so pager_cache_size expectations never match
 cache cache-1.2
@@ -7365,4 +7360,3 @@ zerodamage zerodamage-2.0
 zerodamage zerodamage-2.1
 zerodamage zerodamage-3.0
 zerodamage zerodamage-3.1
-
