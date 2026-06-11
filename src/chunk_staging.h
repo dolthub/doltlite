@@ -14,6 +14,8 @@ struct ChunkStaging {
   ChunkIndexEntry *aRecent;
   int nRecent;
   int nRecentAlloc;
+  int nRecentUncommitted;
+  i64 iUncommittedStart;
   int *aRecentHT;
   int *aRecentHTNext;
   int nRecentHTBuilt;

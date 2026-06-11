@@ -1,0 +1,37 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-chunk-pending-drain
+
+set saved_pending_drain_limit [expr {[info exists env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)] ? $env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) : ""}]
+set had_pending_drain_limit [info exists env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)]
+set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) 32768
+
+do_execsql_test 1.0 {
+  PRAGMA page_size = 1024;
+  CREATE TABLE t1(a, b);
+  BEGIN;
+  WITH data(x,y) AS (
+    SELECT 1, zeroblob(10000)
+    UNION ALL
+    SELECT x+1, y FROM data WHERE x < 300
+  )
+  INSERT INTO t1 SELECT * FROM data;
+  COMMIT;
+  SELECT count(*), length(max(b)) FROM t1;
+} {300 10000}
+
+db close
+sqlite3 db test.db
+
+do_execsql_test 1.1 {
+  SELECT count(*), length(max(b)) FROM t1;
+} {300 10000}
+
+if {$had_pending_drain_limit} {
+  set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) $saved_pending_drain_limit
+} else {
+  unset env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)
+}
+
+finish_test

@@ -80,6 +80,8 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->staging.aRecent = 0;
   pDst->staging.nRecent = 0;
   pDst->staging.nRecentAlloc = 0;
+  pDst->staging.nRecentUncommitted = 0;
+  pDst->staging.iUncommittedStart = 0;
   csRecentHTClear(pDst);
 
   pDst->file.pFile = pSrc->file.pFile;

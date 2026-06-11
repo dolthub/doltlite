@@ -23,3 +23,4 @@ doltlite_recover_vfs_wrappers
 doltlite_recover_vtab1
 doltlite_recover_withoutrowid
 doltlite_fts_stmt_savepoint
+doltlite_chunk_pending_drain

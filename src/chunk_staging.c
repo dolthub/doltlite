@@ -33,6 +33,8 @@ int chunkStagingRecentCount(const ChunkStaging *st){
 void chunkStagingResetAfterSweep(ChunkStaging *st){
   st->nPending = 0;
   st->nRecent = 0;
+  st->nRecentUncommitted = 0;
+  st->iUncommittedStart = 0;
   sqlite3_free(st->aRecentHT);
   sqlite3_free(st->aRecentHTNext);
   st->aRecentHT = 0;
