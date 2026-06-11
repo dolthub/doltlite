@@ -5462,7 +5462,8 @@ tkt-fc62af4523 tkt-fc62af4523.4
 tkt-fc62af4523 tkt-fc62af4523.6
 
 # quota-VFS byte thresholds trip at chunk-store file sizes, not stock
-# page-file sizes; deterministic under the pinned fd limit.
+# page-file sizes. The native wrapper contract is covered by
+# doltlite_recover_vfs_wrappers.
 quota quota-2.1.2
 quota quota-2.1.3
 quota quota-2.1.4
@@ -5489,7 +5490,8 @@ quota quota-3.3.1
 quota quota-5.3.prep
 
 # multiplex VFS chunk boundaries differ over a chunk store; remaining
-# entries are size/journal-shape expectations. Deterministic.
+# entries are size/journal-shape expectations. The native initialized-wrapper
+# contract is covered by doltlite_recover_vfs_wrappers.
 multiplex multiplex-1.9.2
 multiplex multiplex-2.1.2
 multiplex multiplex-2.1.3
