@@ -11010,12 +11010,18 @@ static int origBtreeLockTableVt(Btree *p, int iTab, u8 isWriteLock){
 static int origBtreeCursorVt(Btree *p, Pgno iTable, int wrFlag,
                              struct KeyInfo *pKeyInfo, BtCursor *pCur){
   void *pOC = sqlite3_malloc(origBtreeCursorSize());
+  int rc;
   if( !pOC ) return SQLITE_NOMEM;
   memset(pOC, 0, origBtreeCursorSize());
   pCur->pOrigCursor = pOC;
   pCur->pCurOps = &origCursorVtOps;
   pCur->pBtree = p;
-  return origBtreeCursor(p->pOrigBtree, iTable, wrFlag, pKeyInfo, pOC);
+  rc = origBtreeCursor(p->pOrigBtree, iTable, wrFlag, pKeyInfo, pOC);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pOC);
+    pCur->pOrigCursor = 0;
+  }
+  return rc;
 }
 static void origBtreeEnterVt(Btree *p){
   origBtreeEnter(p->pOrigBtree);
@@ -11038,9 +11044,11 @@ static int origCursorClearTableOfCursorVt(BtCursor *pCur){
 }
 static int origCursorCloseCursorVt(BtCursor *pCur){
   Btree *pWrapper = pCur->pBtree;
-  int willAutoCloseInner =
-      origBtreeCursorIsLastOnSingle(pCur->pOrigCursor);
-  int rc = origBtreeCloseCursor(pCur->pOrigCursor);
+  int willAutoCloseInner;
+  int rc;
+  if( pCur->pOrigCursor==0 ) return SQLITE_OK;
+  willAutoCloseInner = origBtreeCursorIsLastOnSingle(pCur->pOrigCursor);
+  rc = origBtreeCloseCursor(pCur->pOrigCursor);
   sqlite3_free(pCur->pOrigCursor);
   pCur->pOrigCursor = 0;
   if( willAutoCloseInner && pWrapper ){
