@@ -650,6 +650,7 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
     sqlite3_result_error_nomem(context);
   }else{
     sqlite3_result_error(context, zMsg, -1);
+    sqlite3_result_error_code(context, rc);
   }
 }
 

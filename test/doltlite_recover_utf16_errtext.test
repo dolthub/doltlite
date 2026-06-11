@@ -2,12 +2,12 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 source $testdir/malloc_common.tcl
 
-# Recovers gated utf16-encoding and fault-error-text divergences (#1164, #1208).
+# Recovers gated utf16-encoding and fault-error-text divergences.
 #
 # like3-8.*: the originals set PRAGMA encoding=UTF-16le/be and asserted the
 # connection reported that encoding, around a scenario storing invalid-UTF8
 # text (CAST X'FF..' AS TEXT) and matching it with LIKE pre/post index.
-# doltlite stores all text as UTF-8 and PRAGMA encoding reports UTF-8 (#1164).
+# doltlite stores all text as UTF-8 and PRAGMA encoding reports UTF-8.
 # Recovered intent: the utf16 pragma is accepted-but-ignored (reports UTF-8),
 # and the exact same invalid-UTF8 values round-trip byte-exactly through the
 # UTF-8 store across an index build and a close/reopen, with LIKE matching.
@@ -18,10 +18,11 @@ source $testdir/malloc_common.tcl
 #
 # pagerfault3-1-ioerr-transient.*: original ran VACUUM under transient IO
 # fault injection expecting stock pager error text; doltlite's VACUUM runs
-# dolt_gc, which reports phase-prefixed error text (#1208). Recovered intent:
+# dolt_gc, which reports phase-prefixed error text. Recovered intent:
 # under each injected fault point, VACUUM either succeeds or fails with one of
-# doltlite's exact gc error messages, the data stays readable on the same
-# connection, integrity_check is ok, and a fault-free VACUUM then succeeds.
+# doltlite's exact gc error messages, sweep-phase IO failures preserve
+# SQLITE_IOERR, the data stays readable on the same connection, integrity_check
+# is ok, and a fault-free VACUUM then succeeds.
 #
 # covers: like3 like3-8.utf16le.1.2 — PRAGMA encoding='UTF-16le' then encoding reports UTF-8; X'FF' text scenario intact
 # covers: like3 like3-8.utf16le.2.2 — same UTF-8 report; X'FFBF' text scenario intact
@@ -213,5 +214,33 @@ do_test doltlite_recover_utf16_errtext-4.27 {
   list [execsql {SELECT count(*), length(x) FROM t1}] \
        [execsql {PRAGMA integrity_check}]
 } {{1 1200} ok}
+
+do_test doltlite_recover_utf16_errtext-4.28 {
+  reset_db
+  execsql {
+    SELECT dolt_config('user.name', 'T');
+    SELECT dolt_config('user.email', 't@example.com');
+    CREATE TABLE gcio(id INTEGER PRIMARY KEY, x BLOB);
+    WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40)
+      INSERT INTO gcio SELECT i, zeroblob(1200) FROM c;
+    SELECT dolt_commit('-Am', 'init');
+    DELETE FROM gcio WHERE id>5;
+    SELECT dolt_commit('-am', 'delete');
+  }
+  faultsim_save_and_close
+  faultsim_restore_and_reopen
+  set ::sqlite_io_error_persist 1
+  set ::sqlite_io_error_pending 29
+  set rc [catch {db eval {VACUUM}} msg]
+  set errcode [sqlite3_errcode db]
+  set xerrcode [sqlite3_extended_errcode db]
+  set ::sqlite_io_error_pending 0
+  set ::sqlite_io_error_persist 0
+  set ::sqlite_io_error_hit 0
+  set ::sqlite_io_error_hardhit 0
+  list $rc $msg [string match SQLITE_IOERR* $errcode] \
+       [string match SQLITE_IOERR* $xerrcode] \
+       [execsql {PRAGMA integrity_check}]
+} {1 {gc sweep phase failed} 1 1 ok}
 
 finish_test
