@@ -1,0 +1,313 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_recover_misc7
+
+# Recovered coverage for misc7.test sections 10-23. The upstream file is
+# crash-listed: misc7-14.1 plans WHERE rowid=? against a PRIMARY KEY table,
+# which errors under the intentional rowid-on-PK divergence, and do_eqp_test
+# throws it uncaught, aborting the file before its summary. The echo virtual
+# table sections fail the same way (echo generates rowid-based SQL against
+# its backing table). Sections here run echo over a rowid table, pin the
+# doltlite-native shapes for the rowid/journal/readonly divergences, and
+# carry the rest verbatim.
+#
+# covers: misc7 misc7-10 — echo vtab over a rowid table: WHERE + ORDER BY through xBestIndex returns the row (1.1)
+# covers: misc7 misc7-10.1 — UPSERT on a virtual table rejected with stock message (1.2)
+# covers: misc7 misc7-11 — self-join of echo vtab with un-indexable ORDER BY (1.3)
+# covers: misc7 misc7-13 — xBestIndex cost above SQLITE_BIG_DOUBLE still plans and returns rows (1.5)
+# covers: misc7 misc7-12 — IO faults through echo vtab xBestIndex/xFilter paths (2.x)
+# covers: misc7 misc7-14.1 — stock plans rowid=? on a PK table; doltlite tables with an explicit PK have no rowid, so the query itself is rejected (3.1); the PK search plan is pinned instead (3.2)
+# covers: misc7 misc7-14.2 — point lookup on the PK: SEARCH USING PRIMARY KEY (3.2)
+# covers: misc7 misc7-14.3 — ORDER BY the PK: plain SCAN, prolly PK storage is ordered (3.3)
+# covers: misc7 misc7-15.1 — 256-row multi-statement txn under cache pressure commits; file grows past 10KB (4.1)
+# covers: misc7 misc7-15.2 — rowid-predicate DELETE then re-insert on the same table (rowid table here; upstream's PK table has no rowid) (4.2)
+# covers: misc7 misc7-16 — IO faults through UNIQUE-constrained UPDATE under cache pressure; row count intact after (5.x)
+# covers: misc7 misc7-18.1 — subquery flattening with GROUP BY over a cross join (6.1)
+# covers: misc7 misc7-19.1 — sqlite3_status with out-of-range opcode -1 (7.1)
+# covers: misc7 misc7-19.2 — sqlite3_status with out-of-range opcode 1000 (7.2)
+# covers: misc7 misc7-20.1 — sqlite3_global_recover no-op (7.3)
+# covers: misc7 misc7-21.1 — over-long database filename rejected at open (7.4)
+# covers: misc7 misc7-22.1 — INSERT on a -readonly connection rejected (8.1)
+# covers: misc7 misc7-22.2 — readonly connection still reads (8.2)
+# covers: misc7 misc7-22.3 — stock aborts reads when a hot journal cannot be rolled back (SQLITE_READONLY_ROLLBACK); doltlite has no journal sidecar, so a stray garbage -journal file is ignored and reads keep working (8.3)
+# covers: misc7 misc7-23.2 — database inside a read-only directory still reads (9.2)
+# covers: misc7 misc7-23.3 — write into a read-only directory refused: stock says "attempt to write a readonly database" (SQLITE_READONLY_DIRECTORY, journal creation); doltlite fails creating its lock file ("unable to open database file"); either way nothing lands (9.3, 9.4)
+# not-covered: misc7 misc7-17.1 — hot-journal with denied write access: no rollback-journal sidecar exists to deny
+# not-covered: misc7 misc7-17.3 — writable_schema rootpage poke is a stock raw-format probe; prolly catalog has no page numbers
+# not-covered: misc7 misc7-22.4 — SQLITE_READONLY_ROLLBACK unreachable: no journal sidecar (see 8.3)
+
+#-------------------------------------------------------------------------
+# 1.* echo virtual table over a rowid table (misc7-10/11/13). Upstream
+# backs echo with a PK table; echo's generated SQL uses rowid, which a
+# doltlite PK table does not expose. 1.6 pins that shape.
+#
+do_execsql_test 1.0 {
+  CREATE TABLE rt(a, b, c);
+  INSERT INTO rt VALUES(1, 2, 3);
+}
+do_test 1.1 {
+  register_echo_module [sqlite3_connection_pointer db]
+  execsql {
+    CREATE VIRTUAL TABLE t1 USING echo(rt);
+    SELECT a FROM t1 WHERE a = 1 ORDER BY b;
+  }
+} {1}
+do_catchsql_test 1.2 {
+  INSERT INTO t1(a,b,c) VALUES(12345,2,3) ON CONFLICT(a) DO NOTHING;
+} {1 {UPSERT not implemented for virtual table "t1"}}
+do_test 1.3 {
+  execsql {
+    SELECT t1.a, t2.a FROM t1, t1 AS t2 ORDER BY 2 LIMIT 1;
+  }
+} {1 1}
+do_test 1.5 {
+  set ::echo_module_cost 2.0e+99
+  set res [execsql {SELECT * FROM t1 WHERE a = 1}]
+  unset ::echo_module_cost
+  set res
+} {1 2 3}
+do_test 1.6 {
+  execsql {
+    CREATE TABLE pkt(a PRIMARY KEY, b, c);
+    INSERT INTO pkt VALUES(1, 2, 3);
+    CREATE VIRTUAL TABLE t2 USING echo(pkt);
+  }
+  catchsql { SELECT a FROM t2 WHERE a = 1 }
+} {1 {SQL logic error}}
+
+#-------------------------------------------------------------------------
+# 2.* misc7-12: an error code other than SQLITE_NOMEM out of the vtab
+# xBestIndex callback, via IO faults.
+#
+do_ioerr_test 2 -tclprep {
+  sqlite3 db2 test.db
+  register_echo_module [sqlite3_connection_pointer db2]
+  db2 eval {
+    CREATE TABLE rt(a, b, c);
+    INSERT INTO rt VALUES(1, 2, 3);
+    CREATE VIRTUAL TABLE t1 USING echo(rt);
+  }
+  db2 close
+} -tclbody {
+  register_echo_module [sqlite3_connection_pointer db]
+  execsql {SELECT * FROM t1 WHERE a = 1;}
+}
+
+#-------------------------------------------------------------------------
+# 3.* misc7-14: query plans on a PK table.
+#
+do_execsql_test 3.0 {
+  CREATE TABLE abc(a PRIMARY KEY, b, c);
+}
+do_catchsql_test 3.1 {
+  SELECT * FROM abc AS t2 WHERE rowid = 1;
+} {1 {no such column: rowid}}
+do_eqp_test 3.2 {
+  SELECT * FROM abc AS t2 WHERE a = 1;
+} {
+  QUERY PLAN
+  `--SEARCH t2 USING PRIMARY KEY (a=?)
+}
+do_eqp_test 3.3 {
+  SELECT * FROM abc AS t2 ORDER BY a;
+} {
+  QUERY PLAN
+  `--SCAN t2
+}
+
+#-------------------------------------------------------------------------
+# 4.* misc7-15: statement-journal churn under cache pressure. Upstream's
+# table has a PK; this one is a rowid table so 4.2's rowid predicate
+# works.
+#
+db close
+forcedelete test.db
+sqlite3 db test.db
+do_test 4.1 {
+  execsql {
+    PRAGMA cache_size = 10;
+    BEGIN;
+    CREATE TABLE abc2(a, b, c);
+    INSERT INTO abc2
+    VALUES(randstr(100,100), randstr(100,100), randstr(100,100));
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    COMMIT;
+  }
+  expr {[file size test.db]>10240}
+} {1}
+do_test 4.2 {
+  execsql {
+    DELETE FROM abc2 WHERE rowid > 12;
+    INSERT INTO abc2 SELECT
+            randstr(100,100), randstr(100,100), randstr(100,100) FROM abc2;
+    SELECT count(*) FROM abc2;
+  }
+} {24}
+
+#-------------------------------------------------------------------------
+# 5.* misc7-16: IO faults through a UNIQUE-constrained UPDATE under cache
+# pressure (verbatim; t3 is a rowid table so the rowid predicate works).
+#
+db close
+forcedelete test.db
+sqlite3 db test.db
+
+do_ioerr_test 5 -sqlprep {
+   PRAGMA cache_size = 10;
+   CREATE TABLE t3(a, b, UNIQUE(a, b));
+   INSERT INTO t3 VALUES( randstr(100, 100), randstr(100, 100) );
+   INSERT INTO t3 SELECT randstr(100, 100), randstr(100, 100) FROM t3;
+   INSERT INTO t3 SELECT randstr(100, 100), randstr(100, 100) FROM t3;
+   INSERT INTO t3 SELECT randstr(100, 100), randstr(100, 100) FROM t3;
+   INSERT INTO t3 SELECT randstr(100, 100), randstr(100, 100) FROM t3;
+   INSERT INTO t3 SELECT randstr(100, 100), randstr(100, 100) FROM t3;
+   UPDATE t3
+   SET b = 'hello world'
+   WHERE rowid >= (SELECT max(rowid)-1 FROM t3);
+} -tclbody {
+  set rc [catch {db eval {
+    BEGIN;
+      PRAGMA cache_size = 10;
+      INSERT INTO t3 VALUES( randstr(100, 100), randstr(100, 100) );
+      UPDATE t3 SET a = b;
+    COMMIT;
+  }} msg]
+
+  if {!$rc || ($rc && [string first "UNIQUE" $msg]==0)} {
+    set msg
+  } else {
+    error $msg
+  }
+}
+
+sqlite3 db test.db
+do_test 5.X {
+  execsql {
+    SELECT count(*) FROM t3;
+  }
+} {32}
+
+#-------------------------------------------------------------------------
+# 6.* misc7-18: subquery flattening with GROUP BY over a cross join.
+#
+reset_db
+do_test 6.1 {
+  execsql {
+    CREATE TABLE table_1 (col_10);
+    CREATE TABLE table_2 (
+      col_1, col_2, col_3, col_4, col_5,
+      col_6, col_7, col_8, col_9, col_10
+    );
+    SELECT a.col_10
+    FROM
+      (SELECT table_1.col_10 AS col_10 FROM table_1) a,
+      (SELECT table_1.col_10, table_2.col_9 AS qcol_9
+         FROM table_1, table_2
+        GROUP BY table_1.col_10, qcol_9);
+  }
+} {}
+
+#-------------------------------------------------------------------------
+# 7.* misc7-19/20/21: C-API boundary conditions.
+#
+do_test 7.1 {
+  sqlite3_status -1 0
+} {21 0 0}
+do_test 7.2 {
+  sqlite3_status 1000 0
+} {21 0 0}
+do_test 7.3 {
+  sqlite3_global_recover
+} {SQLITE_OK}
+do_test 7.4 {
+  set zFile [file join [get_pwd] "[string repeat abcde 104].db"]
+  set rc [catch {sqlite3 db2 $zFile} msg]
+  list $rc $msg
+} {1 {unable to open database file}}
+
+#-------------------------------------------------------------------------
+# 8.* misc7-22: readonly connections. Stock's 22.3/22.4 plant a garbage
+# hot journal and expect reads to fail SQLITE_READONLY_ROLLBACK; doltlite
+# has no journal sidecar, so the stray file is ignored and reads work.
+#
+do_test 8.1 {
+  db close
+  forcedelete test.db test.db-journal
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1 VALUES(1, 2);
+    INSERT INTO t1 VALUES(3, 4);
+  }
+  db close
+  sqlite3 db test.db -readonly 1
+  catchsql {
+    INSERT INTO t1 VALUES(5, 6);
+  }
+} {1 {attempt to write a readonly database}}
+do_test 8.2 { execsql { SELECT * FROM t1 } } {1 2 3 4}
+do_test 8.3 {
+  set fd [open test.db-journal w]
+  puts $fd [string repeat abc 1000]
+  close $fd
+  catchsql { SELECT * FROM t1 }
+} {0 {1 2 3 4}}
+catch { db close }
+forcedelete test.db test.db-journal
+
+#-------------------------------------------------------------------------
+# 9.* misc7-23: database inside a read-only directory. Reads work; the
+# write is refused (doltlite cannot create its lock file there, where
+# stock cannot create its journal) and nothing lands. Note: as root the
+# permission check is bypassed and the write succeeds, so this section
+# pins the unprivileged behavior CI runs under.
+#
+if {$::tcl_platform(platform) eq "unix"} {
+  reset_db
+  do_execsql_test 9.0 {
+    CREATE TABLE t1(x, y);
+    INSERT INTO t1 VALUES(1, 2);
+  }
+  do_test 9.1 {
+    db close
+    forcedelete tst
+    file mkdir tst
+    forcecopy test.db tst/test.db
+    file attributes tst -permissions r-xr-xr-x
+  } {}
+  sqlite3 db tst/test.db
+  do_execsql_test 9.2 {
+    SELECT * FROM t1;
+  } {1 2}
+  do_catchsql_test 9.3 {
+    INSERT INTO t1 VALUES(3, 4);
+  } {1 {unable to open database file}}
+  do_test 9.4 {
+    db close
+    sqlite3 db tst/test.db
+    execsql { SELECT * FROM t1 ORDER BY x }
+  } {1 2}
+  do_test 9.5 {
+    db close
+    file attributes tst -permissions rwxr-xr-x
+    forcedelete tst
+  } {}
+}
+
+finish_test
