@@ -107,9 +107,15 @@ source $testdir/tester.tcl
 # covers: tkt4018 tkt4018-2.2 — BEGIN; SELECT ORDER BY sees all committed rows; readonly conn write rejected (13.3-13.5)
 # covers: shared shared-1.7.2 — open scan unaffected by concurrent delete of sibling table; full contents returned (14.1-14.3)
 # covers: capi2 capi2-6.5 — 2nd-conn INSERT into table mid-scan succeeds; running statement keeps its snapshot (14.1, 14.3)
-# covers: sharedA sharedA-2.1 — shared-cache setup with attached db and peer reader works (17.1, 17.2)
-# covers: sharedA sharedA-2.2 — schema+attached writes inside txn roll back atomically enough for peer statement reuse (17.3, 17.4)
-# covers: sharedA sharedA-2.3 — after rollback, main and attached dbs keep pre-rollback rows and integrity ok (17.5)
+# covers-class: lock4 lock4-{1.1,1.2,1.3,999.1}: the inherited test waits
+#   for a rollback-journal sidecar as its cross-process synchronization point.
+#   DoltLite has no journal sidecar, so the native contract uses an explicit
+#   marker: the child holds a write txn on test2, the parent is locked out,
+#   parent commit unblocks the child write to test1, and both dbs converge
+#   (17.1).
+# covers: sharedA sharedA-2.1 — shared-cache setup with attached db and peer reader works (18.1, 18.2)
+# covers: sharedA sharedA-2.2 — schema+attached writes inside txn roll back atomically enough for peer statement reuse (18.3, 18.4)
+# covers: sharedA sharedA-2.3 — after rollback, main and attached dbs keep pre-rollback rows and integrity ok (18.5)
 #
 # not-covered: (none)
 
@@ -698,11 +704,74 @@ do_test doltlite_recover_locking_2-16.3 {
 } {ok}
 
 #-------------------------------------------------------------------------
-# 17.* sharedA recast: upstream waits for an xRead on test.db2-journal during
+# 17.* lock4: cross-process write-lock ordering without journal sidecars.
+#
+do_test doltlite_recover_locking_2-17.1 {
+  foreach f {
+    lk4a.db lk4b.db lk4.ready lk4.done lk4.write lk4.commit lk4-child.tcl
+  } {
+    forcedelete $f
+  }
+  sqlite3 lk4a lk4a.db
+  lk4a eval {CREATE TABLE t1(x)}
+  sqlite3 lk4b lk4b.db
+  lk4b eval {CREATE TABLE t2(x)}
+  lk4b close
+
+  set out [open lk4-child.tcl w]
+  puts $out "sqlite3_test_control_pending_byte [set sqlite_pending_byte]"
+  puts $out {
+    sqlite3 child2 lk4b.db
+    child2 timeout 1000
+    child2 eval {BEGIN; INSERT INTO t2 VALUES(2)}
+    set f [open lk4.ready w]; puts $f ready; close $f
+
+    sqlite3 child1 lk4a.db
+    child1 timeout 1000
+    set r [catch {child1 eval {INSERT INTO t1 VALUES(2)}} msg]
+    set f [open lk4.write w]; puts $f [list $r $msg]; close $f
+    catch {child1 close}
+
+    set r [catch {child2 eval COMMIT} msg]
+    set f [open lk4.commit w]; puts $f [list $r $msg]; close $f
+    catch {child2 close}
+    set f [open lk4.done w]; puts $f done; close $f
+    exit
+  }
+  close $out
+
+  lk4a eval {BEGIN EXCLUSIVE; INSERT INTO t1 VALUES(1)}
+  exec [info nameofexec] ./lk4-child.tcl &
+  set n 0
+  while {![file exists lk4.ready] && $n<200} { after 10; incr n }
+
+  sqlite3 lk4b lk4b.db
+  set parentWrite [catchsql {INSERT INTO t2 VALUES(1)} lk4b]
+  set parentCommit [catchsql {COMMIT} lk4a]
+  set n2 0
+  while {![file exists lk4.done] && $n2<200} { after 10; incr n2 }
+
+  set f [open lk4.write]; set childWrite [read $f]; close $f
+  set f [open lk4.commit]; set childCommit [read $f]; close $f
+  set out [list \
+      [expr {$n<200}] \
+      $parentWrite \
+      $parentCommit \
+      [string trim $childWrite] \
+      [string trim $childCommit] \
+      [lk4a eval {SELECT * FROM t1 ORDER BY x}] \
+      [lk4b eval {SELECT * FROM t2 ORDER BY x}]]
+  lk4a close
+  lk4b close
+  set out
+} {1 {1 {database is locked}} {0 {}} {0 {}} {0 {}} {1 2} 2}
+
+#-------------------------------------------------------------------------
+# 18.* sharedA recast: upstream waits for an xRead on test.db2-journal during
 # rollback.  doltlite has no rollback-journal sidecar, so cover the durable
 # contract after that rollback point instead.
 #
-do_test doltlite_recover_locking_2-17.1 {
+do_test doltlite_recover_locking_2-18.1 {
   set ::rlk2_shared_cache [sqlite3_enable_shared_cache 1]
   sqlite3 dba rlk2u.db
   dba eval {ATTACH 'rlk2u.db2' AS two}
@@ -717,11 +786,11 @@ do_test doltlite_recover_locking_2-17.1 {
   sqlite3 dbb rlk2u.db
   dbb eval {SELECT x FROM t1 ORDER BY x}
 } {1 2 3}
-do_test doltlite_recover_locking_2-17.2 {
+do_test doltlite_recover_locking_2-18.2 {
   set ::rlk2_stmt [sqlite3_prepare dbb "CREATE INDEX i1 ON t1(x)" -1 tail]
   expr {[string length $::rlk2_stmt] > 0}
 } {1}
-do_test doltlite_recover_locking_2-17.3 {
+do_test doltlite_recover_locking_2-18.3 {
   dba eval {
     BEGIN;
       CREATE INDEX i1 ON t1(x);
@@ -729,10 +798,10 @@ do_test doltlite_recover_locking_2-17.3 {
     ROLLBACK;
   }
 } {}
-do_test doltlite_recover_locking_2-17.4 {
+do_test doltlite_recover_locking_2-18.4 {
   list [sqlite3_step $::rlk2_stmt] [sqlite3_finalize $::rlk2_stmt] [sqlite3_errmsg dbb]
 } {SQLITE_DONE SQLITE_OK {not an error}}
-do_test doltlite_recover_locking_2-17.5 {
+do_test doltlite_recover_locking_2-18.5 {
   set r [list \
     [dba eval {PRAGMA integrity_check}] \
     [dbb eval {SELECT x FROM t1 ORDER BY x}] \
