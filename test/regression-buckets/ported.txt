@@ -22,3 +22,4 @@ doltlite_recover_utf16_errtext
 doltlite_recover_vtab1
 doltlite_recover_withoutrowid
 doltlite_fts_stmt_savepoint
+doltlite_returningfault_issue1390
