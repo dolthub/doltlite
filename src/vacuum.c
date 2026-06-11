@@ -182,6 +182,12 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
     int rcGc = sqlite3_prepare_v2(db, "SELECT dolt_gc()", -1, &pStmt, 0);
     if( rcGc!=SQLITE_OK ){
       sqlite3_finalize(pStmt);
+      /* dolt_gc() may legitimately be unregistered, but an OOM during
+      ** prepare must not turn VACUUM into a silent no-op. */
+      if( rcGc==SQLITE_NOMEM || rcGc==SQLITE_IOERR_NOMEM ){
+        sqlite3SetString(pzErrMsg, db, "out of memory");
+        return rcGc;
+      }
       return SQLITE_OK;
     }
     rcGc = sqlite3_step(pStmt);

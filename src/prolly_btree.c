@@ -38,7 +38,7 @@
 #define MAX_RECORD_FIELDS    256
 #define MAX_ONEBYTE_HEADER   126
 
-static void registerDoltiteFunctions(sqlite3 *db);
+static int registerDoltiteFunctions(sqlite3 *db);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
@@ -4294,16 +4294,20 @@ int sqlite3BtreeOpen(
   Btree *p = 0;
   BtShared *pBt = 0;
   int rc = SQLITE_OK;
+  int useOrig;
   u8 poisonAfterOpen = 0;
 
   *ppBtree = 0;
 
-  if( !zFilename || zFilename[0]=='\0'
+  useOrig = !zFilename || zFilename[0]=='\0'
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
-   || (vfsFlags & SQLITE_OPEN_TEMP_DB)
-   || origBtreeIsSqliteFile(pVfs, zFilename)
-  ){
+   || (vfsFlags & SQLITE_OPEN_TEMP_DB);
+  if( !useOrig ){
+    rc = origBtreeIsSqliteFile(pVfs, zFilename, &useOrig);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( useOrig ){
     p = sqlite3_malloc(sizeof(Btree));
     if( !p ) return SQLITE_NOMEM;
     memset(p, 0, sizeof(*p));
@@ -4311,8 +4315,18 @@ int sqlite3BtreeOpen(
     p->pOps = &origBtreeVtOps;
     rc = origBtreeOpen(pVfs, zFilename, db, &p->pOrigBtree, flags, vfsFlags);
     if( rc!=SQLITE_OK ){ sqlite3_free(p); return rc; }
+    /* *ppBtree may be db->aDb[0].pBt, which registration (seeding) resolves
+    ** through, so it must be assigned first. Registration is best-effort when
+    ** functions already exist (re-running it mid-statement can return
+    ** SQLITE_BUSY), but an OOM must fail the open rather than leave it
+    ** silently incomplete. */
     *ppBtree = p;
-    registerDoltiteFunctions(db);
+    rc = registerDoltiteFunctions(db);
+    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+      *ppBtree = 0;
+      sqlite3BtreeClose(p);
+      return rc;
+    }
     return SQLITE_OK;
   }
 
@@ -4519,6 +4533,10 @@ int sqlite3BtreeOpen(
     const char *defBranch = chunkStoreGetDefaultBranch(&pBt->store);
     ProllyHash branchCommit;
     p->zBranch = sqlite3_mprintf("%s", defBranch);
+    if( p->zBranch==0 ){
+      sqlite3BtreeClose(p);
+      return SQLITE_NOMEM;
+    }
 
     if( prollyHashIsEmpty(&p->headCommit)
      && chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
@@ -4529,7 +4547,12 @@ int sqlite3BtreeOpen(
   pBt->store.corruptMidStream = poisonAfterOpen;
   *ppBtree = p;
 
-  registerDoltiteFunctions(db);
+  rc = registerDoltiteFunctions(db);
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+    *ppBtree = 0;
+    sqlite3BtreeClose(p);
+    return rc;
+  }
 
   return SQLITE_OK;
 }
@@ -7689,7 +7712,11 @@ static int prollyBtCursorIndexMoveto(
         }
       }
     }
-    if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    /* A failed tree seek must not fall through to the mut-map merge below:
+    ** that path resets rc and reports "row not found" for what was really
+    ** an I/O or allocation failure. */
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       int iLevel = pCur->pCur.iLevel;
       ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
       int seekIdx = pCur->pCur.aLevel[iLevel].idx;
@@ -11150,12 +11177,13 @@ static int origCursorCursorIsValidNNVt(BtCursor *pCur){
   return origBtreeCursorIsValidNN(pCur->pOrigCursor);
 }
 
-extern void doltliteRegister(sqlite3 *db);
+extern int doltliteRegister(sqlite3 *db);
 
-static void registerDoltiteFunctions(sqlite3 *db){
-  sqlite3_create_function(db, "doltlite_engine", 0, SQLITE_UTF8, 0,
-                          doltiteEngineFunc, 0, 0);
-  doltliteRegister(db);
+static int registerDoltiteFunctions(sqlite3 *db){
+  int rc = sqlite3_create_function(db, "doltlite_engine", 0, SQLITE_UTF8, 0,
+                                   doltiteEngineFunc, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteRegister(db);
 }
 
 static int doltliteExtInit(
@@ -11163,9 +11191,11 @@ static int doltliteExtInit(
   char **pzErrMsg,
   const sqlite3_api_routines *pApi
 ){
+  int rc;
   (void)pzErrMsg;
   (void)pApi;
-  registerDoltiteFunctions(db);
+  rc = registerDoltiteFunctions(db);
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   return SQLITE_OK;
 }
 

@@ -4975,28 +4975,28 @@ static void doltliteDefaultBranchFunc(
     "dolt_default_branch() takes 0 or 1 arguments", -1);
 }
 
-static void doltliteMaybeSeedRepo(sqlite3 *db){
+static int doltliteMaybeSeedRepo(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash emptyParent;
   ProllyHash emptyCatalog;
   ProllyHash seedHash;
   int rc;
 
-  if( !cs ) return;
-  if( refsTableBranchCount(&cs->refs) > 0 ) return;
-  if( sqlite3_db_readonly(db, "main")==1 ) return;
+  if( !cs ) return SQLITE_OK;
+  if( refsTableBranchCount(&cs->refs) > 0 ) return SQLITE_OK;
+  if( sqlite3_db_readonly(db, "main")==1 ) return SQLITE_OK;
 
   memset(&emptyParent, 0, sizeof(emptyParent));
   memset(&emptyCatalog, 0, sizeof(emptyCatalog));
 
   rc = doltliteCreateAndStoreCommit(db, &emptyParent, &emptyCatalog,
       "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
-  if( rc!=SQLITE_OK ) return;
+  if( rc!=SQLITE_OK ) return rc;
 
-  (void)doltliteAdvanceBranch(db, &seedHash, &emptyCatalog, 0);
+  return doltliteAdvanceBranch(db, &seedHash, &emptyCatalog, 0);
 }
 
-void doltliteRegister(sqlite3 *db){
+int doltliteRegister(sqlite3 *db){
   int rc;
   rc = sqlite3_create_function(db, "dolt_commit", -1, SQLITE_UTF8, 0,
                                doltliteCommitFunc, 0, 0);
@@ -5018,35 +5018,35 @@ void doltliteRegister(sqlite3 *db){
                                                    doltliteVersionFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_default_branch", -1, SQLITE_UTF8, 0,
                                                    doltliteDefaultBranchFunc, 0, 0);
-  if( rc!=SQLITE_OK ) return;
-  if( doltliteLogRegister(db)!=SQLITE_OK ) return;
-  if( doltliteCommitAncestorsRegister(db)!=SQLITE_OK ) return;
-  if( doltliteStatusRegister(db)!=SQLITE_OK ) return;
-  if( doltliteDiffRegister(db)!=SQLITE_OK ) return;
-  if( doltliteBranchRegister(db)!=SQLITE_OK ) return;
-  if( doltliteTagRegister(db)!=SQLITE_OK ) return;
-  if( doltliteConflictsRegister(db)!=SQLITE_OK ) return;
-  if( doltliteGcRegister(db)!=SQLITE_OK ) return;
-  if( doltliteRegisterDiffTables(db)!=SQLITE_OK ) return;
-  if( doltliteRegisterWorkspaceTables(db)!=SQLITE_OK ) return;
-  if( doltliteAncestorRegister(db)!=SQLITE_OK ) return;
-  if( doltliteRegisterAtTables(db)!=SQLITE_OK ) return;
-  if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;
-  if( doltliteRegisterBlameTables(db)!=SQLITE_OK ) return;
-  if( doltliteSchemaDiffRegister(db)!=SQLITE_OK ) return;
-  if( doltliteSchemasRegister(db)!=SQLITE_OK ) return;
-  if( doltliteDiffStatRegister(db)!=SQLITE_OK ) return;
-  if( doltliteRemoteSqlRegister(db)!=SQLITE_OK ) return;
+  if( rc!=SQLITE_OK ) return rc;
+  if( (rc = doltliteLogRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteCommitAncestorsRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteStatusRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteDiffRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteBranchRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteTagRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteConflictsRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteGcRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteRegisterDiffTables(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteRegisterWorkspaceTables(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteAncestorRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteRegisterAtTables(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteRegisterHistoryTables(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteRegisterBlameTables(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteSchemaDiffRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteSchemasRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteDiffStatRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteRemoteSqlRegister(db))!=SQLITE_OK ) return rc;
   {
     extern int doltliteHashofRegister(sqlite3*);
-    if( doltliteHashofRegister(db)!=SQLITE_OK ) return;
+    if( (rc = doltliteHashofRegister(db))!=SQLITE_OK ) return rc;
   }
   {
     extern int doltliteConstraintViolationsRegister(sqlite3*);
-    if( doltliteConstraintViolationsRegister(db)!=SQLITE_OK ) return;
+    if( (rc = doltliteConstraintViolationsRegister(db))!=SQLITE_OK ) return rc;
   }
 
-  doltliteMaybeSeedRepo(db);
+  return doltliteMaybeSeedRepo(db);
 }
 
 #endif

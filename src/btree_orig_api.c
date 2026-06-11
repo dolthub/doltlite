@@ -161,38 +161,47 @@ void origBtreeEnter(void *p){ orig_sqlite3BtreeEnter(B(p)); }
 void origBtreeLeave(void *p){ orig_sqlite3BtreeLeave(B(p)); }
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
 
-int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename){
+/* Probe failures normally mean "not a legacy sqlite file" (the chunk-store
+** open reports the real problem), but an OOM must propagate so it is not
+** masked by a successful chunk-store open. */
+int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
+                          int *pIsSqliteFile){
   sqlite3_file *pFile = 0;
   int exists = 0;
   int outFlags = 0;
   int rc;
   u8 buf[16];
 
+  *pIsSqliteFile = 0;
   if( !zFilename || zFilename[0]=='\0'
    || strcmp(zFilename, ":memory:")==0 ){
-    return 0;
+    return SQLITE_OK;
   }
   if( !pVfs ){
     pVfs = sqlite3_vfs_find(0);
-    if( !pVfs ) return 0;
+    if( !pVfs ) return SQLITE_OK;
   }
 
   rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
-  if( rc!=SQLITE_OK || !exists ) return 0;
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+  if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
 
   rc = sqlite3OsOpenMalloc(pVfs, zFilename, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
-    return 0;
+    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+    return SQLITE_OK;
   }
 
   rc = sqlite3OsRead(pFile, buf, sizeof(buf), 0);
   sqlite3OsCloseFree(pFile);
-  if( rc!=SQLITE_OK ) return 0;
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+  if( rc!=SQLITE_OK ) return SQLITE_OK;
 
-  return memcmp(buf, "SQLite format 3\000", 16)==0;
+  *pIsSqliteFile = memcmp(buf, "SQLite format 3\000", 16)==0;
+  return SQLITE_OK;
 }
 
 int origBtreeIntegrityCheck(

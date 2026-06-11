@@ -169,17 +169,13 @@ static int csCanonicalFilename(
   if( !zFull ) return SQLITE_NOMEM;
 
   rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
-  if( rc==SQLITE_OK_SYMLINK ){
+  if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
     rc = chunkStoreDupFilenameDoubleNul(zFull, pzOut);
     sqlite3_free(zFull);
     return rc;
   }
   sqlite3_free(zFull);
-  if( rc!=SQLITE_OK ){
-    return rc;
-  }
-
-  return chunkStoreDupFilenameDoubleNul(zFilename, pzOut);
+  return rc;
 }
 
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
@@ -343,6 +339,10 @@ int chunkStoreOpen(
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   cs->pGraphLockName = 0;
   cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
+  if( cs->pLockMutex==0 && sqlite3GlobalConfig.bCoreMutex ){
+    chunkStoreClose(cs);
+    return SQLITE_NOMEM;
+  }
   cs->lockDepth = 0;
 
   if( zFilename==0 || zFilename[0]=='\0'
@@ -407,7 +407,10 @@ int chunkStoreOpen(
     int outFlags = 0;
     rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
-      if( wantReadOnly ){
+      /* The read-only fallback exists for OS write-permission denials. An OOM
+      ** during the read-write open must propagate, not silently downgrade the
+      ** connection to read-only. */
+      if( wantReadOnly || rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
         chunkStoreClose(cs);
         return rc;
       }
@@ -1148,7 +1151,9 @@ static int csCommitToFile(ChunkStore *cs){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                   | SQLITE_OPEN_MAIN_DB;
     rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
-    if( rc != SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_CANTOPEN;
+    if( rc != SQLITE_OK ){
+      return (rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM) ? rc : SQLITE_CANTOPEN;
+    }
   }
 
   if( lockHeld ){
