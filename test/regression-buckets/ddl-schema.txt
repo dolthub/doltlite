@@ -159,7 +159,6 @@ pragma
 pragma2
 pragma5
 pragma6
-rtree
 schema
 schema2
 schema3

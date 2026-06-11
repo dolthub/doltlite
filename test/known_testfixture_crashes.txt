@@ -18,6 +18,9 @@
 #   ioerr2, lock4, sharedA, walsetlk_recover -- run past the per-file
 #     timeout; enforcing them would add dead minutes to every CI run and
 #     flap on faster runners.
+#   rtree -- crashes only under rtree-enabled builds (vtab shadow-table
+#     reload abort) and completes vacuously without the capability, so the
+#     expectation depends on build flags.
 #
 # trigger2 used to be here but was fixed by commit 5cd33a12a
 # (removed obsolete DOLTLITE_PROLLY UPDATE codegen branches; see issue #361).
@@ -106,6 +109,7 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 # footgun exposed by the intentional PRAGMA divergence, like alter2/walro.
 # (createtab additionally diverges on read-cursor-abort-across-DDL; see triggerC-12.2.)
 createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
+rtree         # rtree vtab shadow-table reload aborts under rtree-enabled builds; vacuous without the capability (not bucket-enforced)
 
 tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
 savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
