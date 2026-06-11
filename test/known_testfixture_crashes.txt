@@ -139,7 +139,7 @@ rollback         # copies test.db-journal: no rollback-journal sidecar
 corrupt4         # completes or aborts depending on the run; either expectation flaps (not bucket-enforced)
 corruptC         # corruption-injection cascade: setup table never created
 corruptI         # corruption injection: chunk store reports malformed, file aborts
-multiplex2       # multiplex VFS on chunk store: disk I/O error aborts setup
+multiplex2       # full multiclient file still aborts; explicit initialized -vfs multiplex contract covered by doltlite_recover_vfs_wrappers
 incrblob         # incrblob API on a PK (WITHOUT ROWID) table: "cannot open table without rowid"
 pager1           # journal/txn-model cascade: "cannot commit - no transaction is active"
 backup           # sqlite3_backup_init: page-image backup unsupported
