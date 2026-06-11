@@ -35,6 +35,7 @@ ioerr5
 ioerr6
 malloc4
 malloc5
+malloc6
 malloc7
 malloc8
 malloc9
