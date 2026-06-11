@@ -1024,12 +1024,20 @@ int recordFromSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
-  u32 aType[64];
-  u32 aLen[64];
+  u32 aTypeStk[64];
+  u32 aLenStk[64];
 
-  const u8 *aFieldPtr[64];
-  int aEncLen[64];
-  u8 aIntBuf[64][8];
+  const u8 *aFieldPtrStk[64];
+  int aEncLenStk[64];
+  u8 aIntBufStk[64][8];
+  u32 *aType = aTypeStk;
+  u32 *aLen = aLenStk;
+  const u8 **aFieldPtr = aFieldPtrStk;
+  int *aEncLen = aEncLenStk;
+  u8 (*aIntBuf)[8] = aIntBufStk;
+  u8 *pFieldHeap = 0;
+  int nFieldCap = 64;
+  int rc = SQLITE_OK;
   int nFields = 0;
   int pos = 0;
   u8 *pOut;
@@ -1067,8 +1075,53 @@ int recordFromSortKeyBuffer(
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
 
-  while( pos < nSortKey && nFields < 64 ){
-    u8 tag = pSortKey[pos++];
+  while( pos < nSortKey ){
+    u8 tag;
+
+    if( nFields==nFieldCap ){
+      /* More fields than the stack arrays hold (e.g. an index on 64+
+      ** columns): regrow all five parallel arrays into a single heap
+      ** carve. Truncating here used to silently drop the trailing
+      ** fields, corrupting every record decoded from a wide index. */
+      sqlite3_int64 nNew = (sqlite3_int64)nFieldCap*2;
+      sqlite3_int64 nByte = nNew*(sizeof(const u8*) + 8
+                                  + sizeof(u32)*2 + sizeof(int));
+      u8 *pNew = (u8*)sqlite3_malloc64((sqlite3_uint64)nByte);
+      const u8 **aNewFieldPtr;
+      u8 (*aNewIntBuf)[8];
+      u32 *aNewType;
+      u32 *aNewLen;
+      int *aNewEncLen;
+      if( !pNew ){
+        rc = SQLITE_NOMEM;
+        goto record_from_sortkey_done;
+      }
+      aNewFieldPtr = (const u8**)pNew;
+      aNewIntBuf = (u8(*)[8])(pNew + nNew*sizeof(const u8*));
+      aNewType = (u32*)(pNew + nNew*(sizeof(const u8*) + 8));
+      aNewLen = aNewType + nNew;
+      aNewEncLen = (int*)(aNewLen + nNew);
+      memcpy(aNewFieldPtr, aFieldPtr, nFields*sizeof(const u8*));
+      memcpy(aNewIntBuf, aIntBuf, nFields*8);
+      memcpy(aNewType, aType, nFields*sizeof(u32));
+      memcpy(aNewLen, aLen, nFields*sizeof(u32));
+      memcpy(aNewEncLen, aEncLen, nFields*sizeof(int));
+      /* aFieldPtr entries that point into the old aIntBuf must follow
+      ** the integer payloads to their new location */
+      for(i = 0; i < nFields; i++){
+        if( aFieldPtr[i]==aIntBuf[i] ) aNewFieldPtr[i] = aNewIntBuf[i];
+      }
+      sqlite3_free(pFieldHeap);
+      pFieldHeap = pNew;
+      aFieldPtr = aNewFieldPtr;
+      aIntBuf = aNewIntBuf;
+      aType = aNewType;
+      aLen = aNewLen;
+      aEncLen = aNewEncLen;
+      nFieldCap = (int)nNew;
+    }
+
+    tag = pSortKey[pos++];
 
     if( tag == SORTKEY_NULL ){
       aType[nFields] = 0;
@@ -1081,7 +1134,10 @@ int recordFromSortKeyBuffer(
       int nNum;
       pos--;
       nNum = numericSortKeyLen(pSortKey + pos, nSortKey - pos);
-      if( nNum==0 ) return SQLITE_CORRUPT;
+      if( nNum==0 ){
+        rc = SQLITE_CORRUPT;
+        goto record_from_sortkey_done;
+      }
       decodeNumericSortKeyToRecord(pSortKey + pos + 1, nNum - 1,
                                    &aType[nFields], &aLen[nFields],
                                    aIntBuf[nFields]);
@@ -1097,13 +1153,19 @@ int recordFromSortKeyBuffer(
       while( pos < nSortKey ){
         const u8 *p0 = pSortKey + pos;
         const u8 *pZero = (const u8*)memchr(p0, 0x00, (size_t)(nSortKey - pos));
-        if( pZero==0 ) return SQLITE_CORRUPT;
+        if( pZero==0 ){
+          rc = SQLITE_CORRUPT;
+          goto record_from_sortkey_done;
+        }
         {
           int gap = (int)(pZero - p0);
           dataLen += gap;
           pos += gap;
         }
-        if( pos + 1 >= nSortKey ) return SQLITE_CORRUPT;
+        if( pos + 1 >= nSortKey ){
+          rc = SQLITE_CORRUPT;
+          goto record_from_sortkey_done;
+        }
         if( pSortKey[pos+1] == 0x00 ){
           pos += 2;
           break;
@@ -1111,7 +1173,8 @@ int recordFromSortKeyBuffer(
           dataLen++;
           pos += 2;
         }else{
-          return SQLITE_CORRUPT;
+          rc = SQLITE_CORRUPT;
+          goto record_from_sortkey_done;
         }
       }
       if( tag == SORTKEY_TEXT ){
@@ -1126,7 +1189,8 @@ int recordFromSortKeyBuffer(
       nFields++;
 
     }else{
-      return SQLITE_CORRUPT;
+      rc = SQLITE_CORRUPT;
+      goto record_from_sortkey_done;
     }
   }
 
@@ -1142,7 +1206,10 @@ int recordFromSortKeyBuffer(
   nTotal = nHdr + nData;
   if( *pnAlloc < nTotal ){
     u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
-    if( !pNew ) return SQLITE_NOMEM;
+    if( !pNew ){
+      rc = SQLITE_NOMEM;
+      goto record_from_sortkey_done;
+    }
     *ppBuf = pNew;
     *pnAlloc = nTotal;
   }
@@ -1197,7 +1264,10 @@ int recordFromSortKeyBuffer(
   }
 
   *pnOut = nTotal;
-  return SQLITE_OK;
+
+record_from_sortkey_done:
+  sqlite3_free(pFieldHeap);
+  return rc;
 }
 
 static int sortKeyHasDescFields(const KeyInfo *pKeyInfo){
