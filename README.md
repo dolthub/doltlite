@@ -858,11 +858,13 @@ standard behavior); reads are concurrent.
 Doltlite is a drop-in replacement for SQLite, so the natural question is: what
 does version control cost?
 
-Every PR runs a [sysbench-style benchmark](test/sysbench_compare.sh) comparing
-doltlite against stock SQLite on 31 OLTP workloads, with a 2× ceiling enforced
-by CI. The per-release numbers (reads + writes table) are published with each
-release on the [GitHub releases page](https://github.com/dolthub/doltlite/releases).
-Run `test/sysbench_compare.sh` to reproduce locally.
+Every PR runs sysbench-style benchmarks comparing doltlite against stock SQLite:
+the int-key suite in [`test/sysbench_compare.sh`](test/sysbench_compare.sh), plus
+TEXT, BLOB, and composite-primary-key variants. CI enforces a 2.5x ceiling on
+individual read/write ratios and a 2x ceiling on section averages, with wider
+autocommit-write ceilings for expected durability variance. The per-release
+numbers are published with each release on the
+[GitHub releases page](https://github.com/dolthub/doltlite/releases).
 
 ### Algorithmic Complexity
 
@@ -879,35 +881,51 @@ All numbers below have automated assertions in CI (`test/doltlite_perf.sh` and `
 ### SQLite Tcl Test Suite
 
 `testfixture` is built from real doltlite (the prolly + version-control engine,
-not stock SQLite) and runs the upstream SQLite TCL suite. This matters: before
-the amalgamation build was fixed, parts of this job compared stock SQLite
-against stock SQLite and could not expose doltlite storage-engine failures.
+not stock SQLite) and runs the upstream SQLite TCL suite.
 
-The current TCL state is tracked by two allowlists:
+The TCL suite is gated in two layers:
 
-- `test/known_testfixture_divergences.txt` — per-test-name divergences. As of
-  the current audit it contains 930 entries. The dominant classes are
-  doltlite's **rowid / primary-key identity** semantics (non-INTEGER primary
-  key tables are stored as PK-keyed WITHOUT ROWID tables), tests that inspect
-  or mutate the raw SQLite page format (`hexio_write`, file-format bytes,
+- Passing upstream files are split into five CI buckets under
+  [`test/regression-buckets`](test/regression-buckets): `core-sql`,
+  `ddl-schema`, `storage`, `fault-fuzz`, and `ported`. The `ported` bucket holds
+  doltlite-native rewrites of upstream tests whose original synchronization or
+  raw-file assumptions do not apply to prolly storage.
+- Remaining inherited-file gaps are tracked in
+  [`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt)
+  and [`test/known_testfixture_crashes.txt`](test/known_testfixture_crashes.txt).
+  The dominant classes are doltlite's **rowid / primary-key identity** semantics
+  (non-INTEGER primary key tables are stored as PK-keyed WITHOUT ROWID tables),
+  raw SQLite page-format probes (`hexio_write`, file-format bytes,
   rootpage/page-count assertions), unsupported non-UTF-8 database encodings,
-  custom-collation indexes, pager-lock-status expectations, VACUUM/page-layout
-  behavior, planner counters such as `sqlite_search_count`, and a small number
-  of diagnostic text differences such as canonicalized CHECK constraint text.
-- `test/known_testfixture_crashes.txt` — file-level crash/timeout divergences.
-  It currently has 5 entries for raw stock page-format tests, crash-recovery
-  simulations that do not map to prolly storage, and unsupported shared-cache
-  semantics.
+  custom-collation indexes, pager/WAL/rollback-journal lock-state expectations,
+  VACUUM/page-layout behavior, planner counters such as `sqlite_search_count`,
+  and a small number of diagnostic text differences.
 
 `test/run_testfixture.sh` enforces these lists **bidirectionally**: every actual
-failure must be listed, and every listed entry must still fail. That catches
-both new regressions and stale allowlist entries. The list is still treated as
-an audit backlog rather than proof of correctness — suspicious entries should
-either get a reproducible GitHub issue or a precise comment in the allowlist
-explaining why the divergence is intentional. CI runs the sweep on every PR in
-`.github/workflows/build-test.yml`.
+failure/crash must be listed, and every listed entry must still fail/crash. That
+catches both new regressions and stale allowlist entries. The lists are still an
+audit backlog rather than proof of correctness: suspicious entries should get a
+reproducible GitHub issue, native regression coverage, or a precise comment
+explaining why the divergence is intentional. CI runs the bucket sweep on every
+PR in [`.github/workflows/test.yml`](.github/workflows/test.yml).
 
-To rerun the full known-divergence gate locally:
+To rerun the gated buckets locally:
+
+```bash
+cd build
+bash ../test/run_testfixture.sh "SQLite regression core-sql" 300 \
+  $(tr '\n' ' ' < ../test/regression-buckets/core-sql.txt)
+bash ../test/run_testfixture.sh "SQLite regression ddl-schema" 300 \
+  $(tr '\n' ' ' < ../test/regression-buckets/ddl-schema.txt)
+bash ../test/run_testfixture.sh "SQLite regression storage" 300 \
+  $(tr '\n' ' ' < ../test/regression-buckets/storage.txt)
+bash ../test/run_testfixture.sh "SQLite regression fault-fuzz" 300 \
+  $(tr '\n' ' ' < ../test/regression-buckets/fault-fuzz.txt)
+bash ../test/run_testfixture.sh "SQLite regression ported" 300 \
+  $(tr '\n' ' ' < ../test/regression-buckets/ported.txt)
+```
+
+To audit only the known-divergence and expected-crash files:
 
 ```bash
 cd build
@@ -943,12 +961,11 @@ bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 Doltlite ships a suite of differential oracle tests that run the same SQL
 through doltlite and stock sqlite3, or through doltlite and Dolt for
 version-control behavior, and compare results byte-for-byte. Each
-script is focused on a SQL feature surface — savepoints, foreign keys,
-UPSERT, generated columns, WITHOUT ROWID, large BLOBs at chunk boundaries,
-ATTACH cross-engine queries, TEMP tables, triggers, dot-commands, FTS5 —
-workspace staging, and version-control operations — and scenarios are written
-to hit storage-layer edge cases. The oracles drove most of the correctness
-fixes in recent releases.
+script is focused on a SQL feature surface: savepoints, foreign keys, UPSERT,
+generated columns, WITHOUT ROWID, large BLOBs at chunk boundaries, ATTACH
+cross-engine queries, TEMP tables, triggers, dot-commands, FTS5, workspace
+staging, or version-control operations. Scenarios are written to hit
+storage-layer edge cases.
 
 ```bash
 cd build
@@ -974,8 +991,9 @@ catch memory and undefined-behavior bugs before they reach master.
 
 doltlite runs the full [sqllogictest](https://www.sqlite.org/sqllogictest/)
 corpus — the same 5.7M-statement set SQLite uses — against **real doltlite** and
-matches stock SQLite on every file. Run
-`bash test/run_sqllogictest.sh <doltlite-runner> <stock-runner> <corpus-dir>`
+stock SQLite. `test/run_sqllogictest.sh` compares doltlite-only divergences
+against `test/known_sqllogictest_divergences.txt`.
+Run `bash test/run_sqllogictest.sh <doltlite-runner> <stock-runner> <corpus-dir>`
 locally (requires Fossil for the upstream corpus).
 
 ### Concurrent Branch Tests
