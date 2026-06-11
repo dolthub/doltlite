@@ -4216,6 +4216,12 @@ memjournal2 memjournal2-1.2.299.3  # in-memory journal premise: journal_mode fix
 memjournal2 memjournal2-1.2.300.1  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.2  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.3  # in-memory journal premise: journal_mode fixed, sidecar absent
+# shared_err shared_ioerr-2.*.cleanup.1: shared-cache fault injection reaches
+# different lock/fault points under DoltLite. Native cleanup coverage in
+# doltlite_recover_shared_ioerr asserts the important contract for
+# representative points 122 and 126: IOERR does not crash, peer readers see a
+# consistent committed state, writer cleanup leaves a sane connection, and
+# integrity_check remains ok.
 shared_err shared_ioerr-2.122.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.123.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.124.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts

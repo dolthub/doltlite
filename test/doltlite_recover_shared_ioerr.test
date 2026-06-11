@@ -1,0 +1,104 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_shared_ioerr
+
+ifcapable !shared_cache||!subquery {
+  finish_test
+  return
+}
+
+# Recovered coverage for shared_err.test. The upstream file injects IO errors
+# while two shared-cache connections are active. DoltLite does not expose the
+# same shared-cache lock/fault-point timing, so shared_ioerr-2 cleanup tests
+# diverge. The durable contract is still required: an IOERR during writer-side
+# cleanup must not crash, must not corrupt the database, and must not expose a
+# partial failed transaction to a peer connection.
+#
+# covers: shared_err shared_ioerr-2.122.cleanup.1 -- writer has completed the
+#   first DELETE, later write transaction hits IOERR; peer still sees the last
+#   committed state and writer remains sane after cleanup (1.1)
+# covers: shared_err shared_ioerr-2.126.cleanup.1 -- same cleanup contract at a
+#   later fault point in the same failed write transaction (1.2)
+# not-covered: the rest of shared_ioerr-2.*.cleanup.1, which exercise the same
+#   fault-point-shift class and remain recorded in the divergence list
+
+set ::drs_shared_cache [sqlite3_enable_shared_cache 1]
+
+proc drs_setup {} {
+  catch {db close}
+  catch {db2 close}
+  forcedelete test.db test.db-journal test.db-wal test.db-shm
+  sqlite3 db test.db
+  sqlite3 db2 test.db
+  execsql {
+    PRAGMA read_uncommitted = 1;
+    BEGIN;
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1(oid) VALUES(NULL);
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    INSERT INTO t1(oid) SELECT NULL FROM t1;
+    UPDATE t1 SET a = oid, b = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    CREATE INDEX i1 ON t1(a);
+    COMMIT;
+    BEGIN;
+    SELECT * FROM sqlite_master;
+  } db2
+}
+
+proc drs_body {} {
+  set ::drs_residx 0
+  execsql {DELETE FROM t1 WHERE 0 = (a % 2);}
+  incr ::drs_residx
+
+  execsql {BEGIN;}
+  execsql {INSERT INTO t1 SELECT a+1, b FROM t1;}
+  execsql {INSERT INTO t1 SELECT 'string' || a, b FROM t1 WHERE 0 = (a%7);}
+  execsql {COMMIT;}
+  incr ::drs_residx
+}
+
+proc drs_run {iFail} {
+  drs_setup
+  set ::sqlite_io_error_persist 1
+  set ::sqlite_io_error_pending $iFail
+  set rc [catch {drs_body} msg]
+  set hit $::sqlite_io_error_hit
+  set ::sqlite_io_error_persist 0
+  set ::sqlite_io_error_pending 0
+  set ::sqlite_io_error_hit 0
+  set ::sqlite_io_error_hardhit 0
+
+  catchsql ROLLBACK
+  set peer [catchsql {
+    SELECT max(a), min(a), count(*) FROM (SELECT a FROM t1 ORDER BY a);
+  } db2]
+  set writer [catchsql {
+    SELECT max(a), min(a), count(*) FROM (SELECT a FROM t1 ORDER BY a);
+  } db]
+  set ic [catchsql {PRAGMA integrity_check} db]
+  db2 close
+  db close
+  list $rc $msg $::drs_residx [expr {$hit>0}] $peer $writer $ic
+}
+
+do_test 1.1 {
+  drs_run 122
+} {1 {disk I/O error} 1 1 {0 {1024 1 1024}} {0 {1023 1 512}} {0 ok}}
+
+do_test 1.2 {
+  drs_run 126
+} {1 {disk I/O error} 1 1 {0 {1024 1 1024}} {0 {1023 1 512}} {0 ok}}
+
+sqlite3_enable_shared_cache $::drs_shared_cache
+unset -nocomplain ::drs_shared_cache ::drs_residx
+finish_test
