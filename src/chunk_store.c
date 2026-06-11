@@ -439,6 +439,9 @@ int chunkStoreOpen(
    || strcmp(zFilename, ":memory:")==0
    || (flags & SQLITE_OPEN_MEMORY)!=0 ){
     cs->isMemory = 1;
+    /* Honor SQLITE_OPEN_READONLY for in-memory stores too; otherwise a
+    ** read-only :memory: connection silently accepts writes. */
+    cs->readOnly = (flags & SQLITE_OPEN_READONLY)!=0;
     cs->file.zFilename = sqlite3_mprintf(":memory:");
     if( cs->file.zFilename==0 ){
       chunkStoreClose(cs);
