@@ -57,8 +57,32 @@
 #define CS_MANIFEST_CHUNK_COUNT_OFF  28
 #define CS_MANIFEST_INDEX_OFFSET_OFF 32
 #define CS_MANIFEST_INDEX_SIZE_OFF   40
+/* Root-record commit metadata (zero in legacy stores and in the offset-0
+** header manifest, which describes no commit batch):
+**   DURABLE_TO: absolute offset of the valid prefix the writer observed
+**     when it began this commit batch. All bytes below it were valid then,
+**     so WAL damage below a sealed root's DURABLE_TO is mid-stream
+**     corruption; damage at or above every sealed root's DURABLE_TO is a
+**     torn tail from a crashed batch.
+**   BATCH_START: absolute offset of the batch's first byte. On devices
+**     without powersafe-overwrite the writer starts each batch on a fresh
+**     sector (a crashed batch must never tear a sector holding previously
+**     synced bytes), so BATCH_START can sit past DURABLE_TO; the bytes
+**     between are an unwritten gap that replay resumes across.
+**   NEXT_OFF: absolute offset where the writer puts the next batch (the
+**     sector-aligned end of this one). Replay skips the gap unread.
+**   SELF_HASH: hash of the manifest with this field zeroed. A root whose
+**     stored hash is nonzero and wrong is damage, not a commit point. */
+#define CS_MANIFEST_DURABLE_TO_OFF   44
+#define CS_MANIFEST_NEXT_OFF_OFF     52
+#define CS_MANIFEST_BATCH_START_OFF  60
 #define CS_MANIFEST_WAL_OFFSET_OFF   84
 #define CS_MANIFEST_REFS_HASH_OFF    104
+#define CS_MANIFEST_SELF_HASH_OFF    124
+
+#define CS_MANIFEST_HASH_LEGACY 0
+#define CS_MANIFEST_HASH_OK     1
+#define CS_MANIFEST_HASH_BAD    2
 
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
@@ -143,6 +167,9 @@ struct ChunkStore {
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 };
+
+void csManifestSeal(u8 *aBuf);
+int csManifestHashState(const u8 *aBuf);
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
                    const char *zFilename, int flags);

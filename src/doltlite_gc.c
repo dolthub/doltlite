@@ -86,7 +86,11 @@ static int gcVerifyHashCb(void *ctx, const ProllyHash *pHash){
 static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
   GcVerifyCtx v;
   v.cs = cs; v.rc = SQLITE_OK;
+  /* Diagnostic-only pass; allocation failures inside it are deliberately
+  ** inconclusive (see gcVerifyHashCb), so mark them benign. */
+  sqlite3BeginBenignMalloc();
   (void)doltliteSeedSessionHashes(db, cs, gcVerifyHashCb, &v);
+  sqlite3EndBenignMalloc();
 }
 #endif
 
@@ -399,6 +403,7 @@ static int gcRewriteFile(
   walStateSetOffset(&manifestCs.wal, indexOffset + indexSize);
 
   csSerializeManifest(&manifestCs, manifest);
+  csManifestSeal(manifest);
 
   if( chunkFileGetFilename(&cs->file) && strcmp(chunkFileGetFilename(&cs->file), ":memory:")!=0 ){
     char *zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
@@ -422,12 +427,16 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
+      /* Best-effort removal of a stale tmp file; a failure here (including
+      ** the OS-layer fault probe) must not fail the GC. */
+      sqlite3BeginBenignMalloc();
       sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+      sqlite3EndBenignMalloc();
 
       rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
       if( rc != SQLITE_OK ){
         sqlite3_free(zTmp); sqlite3_free(indexBuf);
-        return SQLITE_CANTOPEN;
+        return rc;
       }
 
       GC_CRASH_CHECK();
@@ -498,7 +507,9 @@ static int gcRewriteFile(
             if( restoreRc!=SQLITE_OK ) rc = restoreRc;
           }
 #endif
+          sqlite3BeginBenignMalloc();
           sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+          sqlite3EndBenignMalloc();
         }else{
           *pReplaced = 1;
 #if !SQLITE_OS_WIN
@@ -525,6 +536,8 @@ static int gcRewriteFile(
               sqlite3OsCloseFree(pNewFile);
               pNewFile = 0;
             }
+            /* Retrying would mask an allocation failure as success. */
+            if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) break;
           }
         }
 
@@ -536,7 +549,9 @@ static int gcRewriteFile(
           sqlite3OsCloseFree(pNewFile);
         }
       }else{
+        sqlite3BeginBenignMalloc();
         sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+        sqlite3EndBenignMalloc();
       }
       if( !*pReplaced && pTmpFile ){
         sqlite3OsCloseFree(pTmpFile);
@@ -627,6 +642,17 @@ static int gcSweep(
   return rc;
 }
 
+/* Report a gc phase failure without masking an OOM: callers (e.g. the OOM
+** fault harness) must see SQLITE_NOMEM when the underlying failure was an
+** allocation failure, not a generic SQLITE_ERROR message. */
+static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+    sqlite3_result_error_nomem(context);
+  }else{
+    sqlite3_result_error(context, zMsg, -1);
+  }
+}
+
 static void doltliteGcFunc(
   sqlite3_context *context,
   int argc,
@@ -659,14 +685,14 @@ static void doltliteGcFunc(
     return;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "failed to acquire lock for gc", -1);
+    gcResultError(context, rc, "failed to acquire lock for gc");
     return;
   }
 
   rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
-    sqlite3_result_error(context, "out of memory", -1);
+    sqlite3_result_error_nomem(context);
     return;
   }
 
@@ -674,7 +700,7 @@ static void doltliteGcFunc(
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&marked);
     chunkStoreUnlock(cs);
-    sqlite3_result_error(context, "gc mark phase failed", -1);
+    gcResultError(context, rc, "gc mark phase failed");
     return;
   }
 
@@ -686,7 +712,7 @@ static void doltliteGcFunc(
   chunkStoreUnlock(cs);
 
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "gc sweep phase failed", -1);
+    gcResultError(context, rc, "gc sweep phase failed");
     return;
   }
 
