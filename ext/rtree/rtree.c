@@ -3590,10 +3590,9 @@ static int getNodeSize(
     if( rc!=SQLITE_OK ){
       *pzErr = sqlite3_mprintf("%s", sqlite3_errmsg(db));
     }else if( pRtree->iNodeSize<(512-64) ){
-      rc = SQLITE_CORRUPT_VTAB;
       RTREE_IS_CORRUPT(pRtree);
-      *pzErr = sqlite3_mprintf("undersize RTree blobs in \"%q_node\"",
-                               pRtree->zName);
+      /* Allow xConnect to succeed so xDestroy can drop corrupt shadow tables. */
+      pRtree->iNodeSize = 512-64;
     }
   }
 

@@ -13,6 +13,7 @@ doltlite_recover_rawformat_1
 doltlite_recover_rawformat_2
 doltlite_recover_rawformat_3
 doltlite_recover_rejections
+doltlite_recover_rtree
 doltlite_recover_savepointfault
 doltlite_recover_utf16_errtext
 doltlite_recover_withoutrowid
