@@ -6,6 +6,7 @@ backup_malloc
 carrayfault
 cffault
 checkfault
+dbpagefault
 default
 exprfault
 exprfault2
@@ -25,13 +26,16 @@ fuzzer2
 fuzzerfault
 gcfault
 incrblobfault
+incrvacuum_ioerr
 indexfault
 insertfault
 instrfault
 ioerr
 ioerr3
+ioerr4
 ioerr5
 ioerr6
+malloc3
 malloc4
 malloc5
 malloc6
@@ -39,7 +43,9 @@ malloc7
 malloc8
 malloc9
 mallocA
+mallocAll
 mallocB
+mallocC
 mallocD
 mallocE
 mallocF
@@ -52,6 +58,7 @@ mallocM
 mmapfault
 notnullfault
 oserror
+pagerfault
 pagerfault3
 pragmafault
 rollbackfault
@@ -67,6 +74,7 @@ unionvtabfault
 upfromfault
 valuesfault
 vtab_err
+walfault
 wherefault
 wherelfault
 windowfault

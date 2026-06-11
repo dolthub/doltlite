@@ -5,6 +5,20 @@
 #
 # Format: <test_file>  # reason
 #
+# Every file listed here is also in a regression bucket unless noted below,
+# so the gate re-verifies each expected crash on every CI run and flags the
+# entry the moment a fix makes the file complete. Files that CANNOT be
+# bucket-enforced (kept out of the buckets on purpose):
+#   malloc, backup_ioerr -- complete at the tester error cap with a summary
+#     line, so the gate would report them as fixed crashes; their failure
+#     lists are cap-truncated and order-fragile, so they cannot be gated as
+#     divergences either.
+#   pagerfault2, corrupt4 -- complete or abort depending on the run; either
+#     expectation flaps.
+#   ioerr2, lock4, sharedA, walsetlk_recover -- run past the per-file
+#     timeout; enforcing them would add dead minutes to every CI run and
+#     flap on faster runners.
+#
 # trigger2 used to be here but was fixed by commit 5cd33a12a
 # (removed obsolete DOLTLITE_PROLLY UPDATE codegen branches; see issue #361).
 
@@ -65,7 +79,6 @@ crash4        # creation-batch sector trash leaves no recovery anchor (no journa
 # is fixed in test1.c; the underlying open-time divergence is intentional.
 alter2        # set_file_format corrupts the prolly manifest; eager open fails, db command never created
 walro         # readonly_shm + readonly *-shm perms; doltlite has no WAL shm, open fails, db command never created
-nan           # raw hexio_write of NaN bit patterns into the manifest; eager open fails, db command never created (same footgun as alter2)
 
 # WAL / shm feature divergences. doltlite has no rollback-journal or WAL *-shm
 # sidecar, so these files' journal-mode / shm-fault setups abort before the
@@ -74,11 +87,6 @@ nan           # raw hexio_write of NaN bit patterns into the manifest; eager ope
 dbpagefault   # shm-fault injection; doltlite has no *-shm, setup aborts pre-summary
 walfault      # WAL-frame fault injection; no WAL, aborts pre-summary
 e_walckpt     # WAL checkpoint semantics; reaches summary then UAFs in test_vfs tvfsLock teardown
-
-# rtree virtual table: after DROP+CREATE the %_node shadow table reload reads an
-# empty/undersized blob (vtable schema-reload visibility), accumulating into a
-# hang. History-dependent; not per-test gateable. Tracked in #1119.
-rtree         # rtree vtable schema-reload visibility; times out
 
 # memdb1 exercises the sqlite3_serialize()/sqlite3_deserialize() page-image API,
 # which is unsupported on prolly storage (no stock page image). sqlite3_serialize
@@ -98,20 +106,8 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 # footgun exposed by the intentional PRAGMA divergence, like alter2/walro.
 # (createtab additionally diverges on read-cursor-abort-across-DDL; see triggerC-12.2.)
 createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
-incrcorrupt   # PRAGMA auto_vacuum/incremental_vacuum errors (intentional) -> stale stmt var -> UAF
 
-# These tkt-* files set PRAGMA auto_vacuum or journal_mode in their setup, which
-# DoltLite intentionally rejects ("not supported on doltlite-format databases").
-# That aborts the setup before the schema is created, so every later subtest
-# fails with "no such table ..." -- a cascade of one intentional feature-gap, not
-# hundreds of independent divergences. Documented here rather than recording the
-# whole cascade in the divergence list.
-tkt1667        # auto_vacuum unsupported -> setup aborts -> cascade
-tkt-9d68c883   # auto_vacuum unsupported -> setup aborts -> cascade
-tkt-5e10420e8d # auto_vacuum unsupported -> setup aborts -> cascade
 tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
-tkt-5d863f876e # journal_mode unsupported -> setup aborts -> cascade
-tkt-fc62af4523 # journal_mode unsupported -> setup aborts -> cascade
 savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
 vtab1          # echo constructor over a PK (WITHOUT ROWID) table fails at vtab1-5.x; uncaught -> aborts pre-summary
 
@@ -130,7 +126,7 @@ mmap1            # auto_vacuum unsupported -> uncaught setup error
 vacuum3          # auto_vacuum unsupported -> uncaught setup error
 pager2           # journal_mode not configurable -> uncaught setup error
 pagerfault       # journal_mode not configurable -> uncaught setup error
-pagerfault2      # journal_mode not configurable -> uncaught setup error
+pagerfault2      # journal_mode rejection cascades into the faultsim harness; abort point varies run to run (not bucket-enforced)
 wal6             # journal_mode not configurable -> uncaught setup error
 walnoshm         # journal_mode not configurable -> uncaught setup error
 wal              # reads test.db-wal: doltlite has no -wal sidecar
@@ -142,9 +138,7 @@ walslow          # copies test.db-wal: no -wal sidecar
 walvfs           # reads test.db-wal: no -wal sidecar
 lock5            # copies test.db-journal: no rollback-journal sidecar
 rollback         # copies test.db-journal: no rollback-journal sidecar
-bigfile2         # corruption injection: chunk store reports malformed, file aborts
-corrupt          # corruption injection: chunk store reports malformed, file aborts
-corrupt4         # corruption injection: "file is not a database" aborts the file
+corrupt4         # completes or aborts depending on the run; either expectation flaps (not bucket-enforced)
 corruptC         # corruption-injection cascade: setup table never created
 corruptI         # corruption injection: chunk store reports malformed, file aborts
 multiplex2       # multiplex VFS on chunk store: disk I/O error aborts setup
@@ -175,8 +169,6 @@ walsetlk_recover # shm/recovery locks: no shm sidecar
 ioerr2         # fault loop runs tens of thousands of iterations; exceeds any per-file timeout
 lock4          # waits on test2.db-journal sidecar; native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
 sharedA        # waits for a rollback-journal xRead during shared-cache rollback; native contract covered by doltlite_recover_locking_2-18.* (#1366)
-quota          # quota-VFS thresholds trip at run-varying chunk-store sizes: failure set nondeterministic
 malloc         # malloc-14 prep copies a rollback-journal file doltlite never writes; the uncaught prep error repeats every iteration to the 1000-error cap
 backup_ioerr   # divergences exceed the 1000-error cap mid-file; capped list is order-fragile
 misc7          # WHERE rowid=? on a PK table errors (intentional rowid-on-PK divergence); do_eqp_test 14.1 throws uncaught -> aborts pre-summary
-multiplex      # multiplex-VFS fault set varies run to run: failure list nondeterministic

@@ -1,4 +1,5 @@
 alter
+alter2
 alter3
 alter4
 alterauth
@@ -45,6 +46,8 @@ capi3e
 check
 conflict
 conflict2
+createtab
+dbstatus
 delete
 delete3
 delete4
@@ -151,10 +154,12 @@ insert2
 insert3
 insert4
 insert5
+memdb1
 pragma
 pragma2
 pragma5
 pragma6
+rtree
 schema
 schema2
 schema3
@@ -182,6 +187,8 @@ tkt-4c86b126f2
 tkt-4dd95f6943
 tkt-4ef7e3cfca
 tkt-54844eea3f
+tkt-5d863f876e
+tkt-5e10420e8d
 tkt-5ee23731f
 tkt-6bfb98dfc0
 tkt-752e1646fc
@@ -196,6 +203,7 @@ tkt-8c63ff0ec
 tkt-91e2e8ba6f
 tkt-99378177930f87bd
 tkt-9a8b09f8e6
+tkt-9d68c883
 tkt-9f2eb3abac
 tkt-a7b7803e
 tkt-a7debbe0
@@ -219,6 +227,7 @@ tkt-f777251dc7a
 tkt-f7b4edec
 tkt-f973c7ac31
 tkt-fa7bf5ec
+tkt-fc62af4523
 tkt-fc7bd6358f
 tkt1435
 tkt1443
@@ -232,6 +241,7 @@ tkt1536
 tkt1537
 tkt1567
 tkt1644
+tkt1667
 tkt1873
 tkt2141
 tkt2192
@@ -243,6 +253,7 @@ tkt2339
 tkt2391
 tkt2409
 tkt2450
+tkt2565
 tkt2640
 tkt2643
 tkt2767
