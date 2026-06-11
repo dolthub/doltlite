@@ -16,3 +16,4 @@ doltlite_recover_rejections
 doltlite_recover_savepointfault
 doltlite_recover_utf16_errtext
 doltlite_recover_withoutrowid
+doltlite_fts_stmt_savepoint

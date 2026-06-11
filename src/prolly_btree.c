@@ -3133,7 +3133,16 @@ static int flushPendingForTable(
 }
 static int syncBtreeSavepoints(Btree *pBtree){
   sqlite3 *db = pBtree ? pBtree->db : 0;
-  if( db ){
+  /* Writes made inside a vtab xSavepoint callback (e.g. fts3 flushing its
+  ** pending-terms hash when a statement journal opens) belong to the scope
+  ** being entered's PARENT: the pager engine only starts journaling at
+  ** sqlite3BtreeBeginStmt, which runs after the callback returns. By that
+  ** point db->nStatement already counts the new statement, so pushing
+  ** savepoints here would capture pre-flush state and a later statement
+  ** rollback would erase the flush while fts3 also clears its hash --
+  ** losing committed rows from the index. Let the writes land in the
+  ** current deepest scope instead. */
+  if( db && db->nVtabSavepoint==0 ){
     int target = db->nSavepoint + db->nStatement;
     while( pBtree->nSavepoint < target ){
       int rc = pushSavepoint(pBtree, pBtree->nSavepoint >= db->nSavepoint);
