@@ -4761,9 +4761,13 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
 }
 
 static int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
-  (void)p;
-  if( autoVacuum==BTREE_AUTOVACUUM_NONE ) return SQLITE_OK;
-  return SQLITE_ERROR;
+  /* Prolly storage has no page freelist, so auto_vacuum can never apply.
+  ** Stock accepts the pragma on databases that cannot support it and the
+  ** read-back reports the file's actual mode (none); match that instead
+  ** of erroring, since setting auto_vacuum at startup is a common app
+  ** idiom. */
+  (void)p; (void)autoVacuum;
+  return SQLITE_OK;
 }
 int sqlite3BtreeSetAutoVacuum(Btree *p, int autoVacuum){
   if( !p ) return SQLITE_OK;
@@ -4780,8 +4784,10 @@ int sqlite3BtreeGetAutoVacuum(Btree *p){
 }
 
 static int prollyBtreeIncrVacuum(Btree *p){
+  /* No freelist pages to reclaim: report completion immediately, exactly
+  ** like stock on a database whose auto_vacuum is none. */
   (void)p;
-  return SQLITE_ERROR;
+  return SQLITE_DONE;
 }
 int sqlite3BtreeIncrVacuum(Btree *p){
   if( !p ) return SQLITE_DONE;
