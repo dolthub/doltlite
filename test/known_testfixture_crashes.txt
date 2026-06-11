@@ -168,5 +168,5 @@ ioerr2         # fault loop runs tens of thousands of iterations; exceeds any pe
 lock4          # waits on test2.db-journal sidecar; native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
 sharedA        # waits for a rollback-journal xRead during shared-cache rollback; native contract covered by doltlite_recover_locking_2-18.* (#1366)
 malloc         # malloc-14 prep copies a rollback-journal file doltlite never writes; the uncaught prep error repeats every iteration to the 1000-error cap
-backup_ioerr   # divergences exceed the 1000-error cap mid-file; capped list is order-fragile
+backup_ioerr   # page-copy IOERR sequencing exceeds cap; native Tcl backup/restore IOERR cleanup covered in doltlite_recover_backup_fault
 misc7          # WHERE rowid=? on a PK table errors (intentional rowid-on-PK divergence); do_eqp_test 14.1 throws uncaught -> aborts pre-summary
