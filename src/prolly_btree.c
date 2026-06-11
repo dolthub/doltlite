@@ -7231,6 +7231,9 @@ static int prollyBtCursorTableMoveto(
     if( rc!=SQLITE_OK ) return rc;
     if( pEntry ){
       if( pEntry->op == PROLLY_EDIT_INSERT ){
+        if( pCur->isPinned ){
+          return SQLITE_CONSTRAINT_PINNED;
+        }
         *pRes = 0;
         setCursorToMutMapEntryPhys(pCur, (int)(pEntry - pCur->pMutMap->aEntries));
         pCur->deferredTreeSeek = 1;
@@ -7670,6 +7673,9 @@ static int prollyBtCursorIndexMoveto(
         rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          if( pCur->isPinned ){
+            return SQLITE_CONSTRAINT_PINNED;
+          }
           setCursorToMutMapEntryPhys(
               pCur, (int)(pEntry - pCur->pMutMap->aEntries));
           /* The tree side is still wherever the last operation left it. A
@@ -7686,6 +7692,9 @@ static int prollyBtCursorIndexMoveto(
         rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          if( pCur->isPinned ){
+            return SQLITE_CONSTRAINT_PINNED;
+          }
           pCur->pMutMap = pPending;
           setCursorToMutMapEntryPhys(
               pCur, (int)(pEntry - pPending->aEntries));
@@ -11010,12 +11019,18 @@ static int origBtreeLockTableVt(Btree *p, int iTab, u8 isWriteLock){
 static int origBtreeCursorVt(Btree *p, Pgno iTable, int wrFlag,
                              struct KeyInfo *pKeyInfo, BtCursor *pCur){
   void *pOC = sqlite3_malloc(origBtreeCursorSize());
+  int rc;
   if( !pOC ) return SQLITE_NOMEM;
   memset(pOC, 0, origBtreeCursorSize());
   pCur->pOrigCursor = pOC;
   pCur->pCurOps = &origCursorVtOps;
   pCur->pBtree = p;
-  return origBtreeCursor(p->pOrigBtree, iTable, wrFlag, pKeyInfo, pOC);
+  rc = origBtreeCursor(p->pOrigBtree, iTable, wrFlag, pKeyInfo, pOC);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pOC);
+    pCur->pOrigCursor = 0;
+  }
+  return rc;
 }
 static void origBtreeEnterVt(Btree *p){
   origBtreeEnter(p->pOrigBtree);
@@ -11038,9 +11053,11 @@ static int origCursorClearTableOfCursorVt(BtCursor *pCur){
 }
 static int origCursorCloseCursorVt(BtCursor *pCur){
   Btree *pWrapper = pCur->pBtree;
-  int willAutoCloseInner =
-      origBtreeCursorIsLastOnSingle(pCur->pOrigCursor);
-  int rc = origBtreeCloseCursor(pCur->pOrigCursor);
+  int willAutoCloseInner;
+  int rc;
+  if( pCur->pOrigCursor==0 ) return SQLITE_OK;
+  willAutoCloseInner = origBtreeCursorIsLastOnSingle(pCur->pOrigCursor);
+  rc = origBtreeCloseCursor(pCur->pOrigCursor);
   sqlite3_free(pCur->pOrigCursor);
   pCur->pOrigCursor = 0;
   if( willAutoCloseInner && pWrapper ){
