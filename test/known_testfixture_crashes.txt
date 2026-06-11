@@ -153,7 +153,6 @@ ioerr2         # fault loop runs tens of thousands of iterations; exceeds any pe
 lock4          # waits on test2.db-journal sidecar; native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
 sharedA        # waits for a rollback-journal xRead during shared-cache rollback; native contract covered by doltlite_recover_locking_2-18.* (#1366)
 quota          # quota-VFS thresholds trip at run-varying chunk-store sizes: failure set nondeterministic
-ioerr          # giant IO-fault loop: runtime load-sensitive, exceeds per-file timeout under CI load
 malloc         # giant OOM-fault loop: runtime load-sensitive, exceeds per-file timeout under CI load
 backup_ioerr   # divergences exceed the 1000-error cap mid-file; capped list is order-fragile
 malloc6        # OOM fault-point set varies run to run: failure list nondeterministic

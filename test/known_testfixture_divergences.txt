@@ -2466,6 +2466,174 @@ incrvacuum2 incrvacuum2-4.1  # auto_vacuum rejected; -wal sidecar absent
 incrvacuum2 incrvacuum2-4.2  # auto_vacuum rejected; -wal sidecar absent
 incrvacuum2 incrvacuum2-4.2.1  # auto_vacuum rejected; -wal sidecar absent
 incrvacuum2 incrvacuum2-4.3  # auto_vacuum rejected; -wal sidecar absent
+# ioerr: doltlite VACUUM maps to dolt_gc. Under DOLTLITE_PROLLY_CHECK (the
+# CI testfixture build) gc runs a post-sweep session-resolvability check
+# that re-reads chunks and deliberately treats injected IO faults as
+# inconclusive (only NOTFOUND aborts), so the final fault points record a
+# hit while the VACUUM statement still succeeds. A non-CHECK build passes
+# these three.
+ioerr ioerr-2.31.3  # PROLLY_CHECK gc verify ignores injected read faults
+ioerr ioerr-2.32.3  # PROLLY_CHECK gc verify ignores injected read faults
+ioerr ioerr-2.33.3  # PROLLY_CHECK gc verify ignores injected read faults
+# ioerr: the chunk store journals inside the single database file, so a
+# -journal sidecar never exists. Preps that crash a child on journal sync
+# (ioerr-6) or copy the journal aside (ioerr-7/9) fail before fault
+# injection starts; recovery itself passes once the prep error clears.
+ioerr ioerr-6.1.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.2.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.3.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.4.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.5.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.6.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.7.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.8.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.9.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.10.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.11.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.12.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.13.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.14.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.15.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.16.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.17.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.18.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.19.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.20.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.21.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.22.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.23.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.24.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.25.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.26.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.27.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.28.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.29.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.30.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.31.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.32.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.33.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.34.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.35.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.36.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.37.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.38.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.39.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.40.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.41.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.42.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.43.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.44.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.45.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.46.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.47.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.48.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.49.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.50.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.51.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.52.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.53.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.54.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.55.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.56.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.57.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.58.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.59.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.60.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.61.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.62.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.63.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.64.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.65.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.66.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.67.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.68.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.69.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.70.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.71.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.72.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.73.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.74.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.75.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.76.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.77.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.78.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.79.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.80.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.81.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.82.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.83.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.84.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.85.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.86.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.87.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-7.2.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.3.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.4.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.5.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.6.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.7.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.8.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.9.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.10.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.11.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.12.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.13.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.14.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.15.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.16.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.17.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.18.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.19.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.20.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.21.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.22.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.23.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.24.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.25.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.26.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.27.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.28.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.29.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.30.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.31.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.32.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.33.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.34.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.35.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.36.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.37.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.38.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.39.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.40.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.41.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.42.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.43.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.44.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.45.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.46.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.47.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.48.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.49.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.50.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.51.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.52.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.53.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.54.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.55.1  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-9.1.1  # master-journal prep copies absent -journal sidecar
+# ioerr: auto_vacuum rejected on doltlite-format databases; the prep
+# aborts before creating its tables and the body then errors without an
+# IO fault, breaking the hit-XOR-success invariant (cascade).
+ioerr ioerr-12.1.1  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-12.1.3  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-13.1.1  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-13.2.1  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-13.2.3  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-14.1.1  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-14.2.1  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-14.2.3  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-16.1.1  # auto_vacuum rejected; prep aborts, body fails without fault
+ioerr ioerr-16.1.3  # auto_vacuum rejected; prep aborts, body fails without fault
 ioerr3 ioerr3-2.3.3  # IO-fault point shift
 ioerr3 ioerr3-2.4.3  # IO-fault point shift
 ioerr3 ioerr3-2.5.3  # IO-fault point shift

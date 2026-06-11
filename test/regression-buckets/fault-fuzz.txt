@@ -29,6 +29,7 @@ incrblobfault
 indexfault
 insertfault
 instrfault
+ioerr
 ioerr3
 ioerr5
 ioerr6
