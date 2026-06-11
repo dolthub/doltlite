@@ -417,6 +417,18 @@ int chunkStoreOpen(
         chunkStoreClose(cs);
         return rc;
       }
+      /* unixOpen already retries read-only for permission failures, so a
+      ** handle that only this second attempt could open may not be a
+      ** readable database at all: Linux opens a directory O_RDONLY and
+      ** every later read fails SQLITE_IOERR_READ. Probe one byte so that
+      ** shape surfaces as "unable to open database file", like stock. */
+      {
+        u8 probe;
+        if( sqlite3OsRead(cs->file.pFile, &probe, 1, 0)==SQLITE_IOERR_READ ){
+          chunkStoreClose(cs);
+          return SQLITE_CANTOPEN;
+        }
+      }
       cs->readOnly = 1;
     }else if( wantReadOnly || (outFlags & SQLITE_OPEN_READONLY) ){
       /* Either the caller asked for read-only, or a read-write open silently

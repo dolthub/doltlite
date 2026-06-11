@@ -32,6 +32,12 @@ LABEL="${1:?Usage: run_testfixture.sh <label> <timeout_secs> test1 test2 ...}"
 TIMEOUT="${2:?Missing timeout}"
 shift 2
 
+# Several inherited tests (misc7-6.*) exhaust all file descriptors one tcl
+# channel at a time, so runtime scales with the fd limit: at CI's default
+# soft limit (1024) they take seconds, but dev machines and docker commonly
+# raise it to ~1M, which looks like a hang. Pin the soft limit to match CI.
+ulimit -Sn 1024 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 CRASH_FILE="${CRASH_FILE:-$SCRIPT_DIR/known_testfixture_crashes.txt}"
