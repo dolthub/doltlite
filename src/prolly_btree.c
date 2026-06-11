@@ -9470,7 +9470,11 @@ int sqlite3BtreeIntegrityCheck(
   ctx.mxErr = mxErr;
   ctx.pnErr = &nErr;
   rc = prollyHashSetInit(&ctx.seen, 256);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    if( pnErr ) *pnErr = 1;
+    if( pzOut ) *pzOut = 0;
+    return rc;
+  }
 
   for(i=0; i<nRoot; i++){
 
@@ -9494,7 +9498,14 @@ int sqlite3BtreeIntegrityCheck(
 
 integrity_done:
   prollyHashSetFree(&ctx.seen);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    /* OP_IntegrityCk reads *pnErr and frees *pzOut even when an error is
+    ** returned, so the outputs must be set on every path.  Count the failed
+    ** check itself as an error, as the stock btree does for OOM. */
+    if( pnErr ) *pnErr = nErr+1;
+    if( pzOut ) *pzOut = 0;
+    return rc;
+  }
 
   if( pnErr ) *pnErr = nErr;
   if( pzOut ){
