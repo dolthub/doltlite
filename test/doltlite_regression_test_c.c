@@ -177,6 +177,31 @@ static void run_create_collation_unsupported(void){
   sqlite3_close(db);
 }
 
+static void run_memory_readonly_open(void){
+  sqlite3 *db = 0;
+  int rc;
+
+  check("memory_readonly_open",
+        sqlite3_open_v2(":memory:", &db, SQLITE_OPEN_READONLY, 0)==SQLITE_OK);
+  if( db==0 ) return;
+  rc = sqlite3_exec(db, "CREATE TABLE t1(x)", 0, 0, 0);
+  check("memory_readonly_write_rejected", rc==SQLITE_READONLY);
+  check("memory_readonly_errmsg",
+        strcmp(sqlite3_errmsg(db), "attempt to write a readonly database")==0);
+  check("memory_readonly_read_ok",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM sqlite_master"), "0")==0);
+  sqlite3_close(db);
+  db = 0;
+
+  check("memory_readwrite_open",
+        sqlite3_open_v2(":memory:", &db,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE, 0)==SQLITE_OK);
+  if( db==0 ) return;
+  check("memory_readwrite_write_ok",
+        sqlite3_exec(db, "CREATE TABLE t1(x)", 0, 0, 0)==SQLITE_OK);
+  sqlite3_close(db);
+}
+
 static void run_rowid_in_integer_literals_uses_rowset(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -7697,6 +7722,7 @@ static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
+  { "memory_readonly_open", "Memory Read-Only Open Test", run_memory_readonly_open },
   { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
