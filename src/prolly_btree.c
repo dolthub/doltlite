@@ -8711,6 +8711,9 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
+  if( pCur->isPinned ){
+    return SQLITE_CONSTRAINT_PINNED;
+  }
 
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
