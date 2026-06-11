@@ -45,7 +45,6 @@ dbpage
 dbstatus2
 e_vacuum
 e_walauto
-e_walckpt
 exclusive
 exclusive2
 format4
