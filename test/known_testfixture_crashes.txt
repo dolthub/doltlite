@@ -107,7 +107,7 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
 tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
 savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
-vtab1          # echo constructor over a PK (WITHOUT ROWID) table fails at vtab1-5.x; uncaught -> aborts pre-summary
+vtab1          # post-vtab1-5 cleanup drops echo backing tables before vtabs; clean error + implicit-PK echo behavior covered by doltlite_recover_vtab1
 
 # ── feature-gap sweep wave 1 (#1208): files whose setup aborts pre-summary on
 # an intentional rejection or a stock-only artifact. Reasons captured from a
