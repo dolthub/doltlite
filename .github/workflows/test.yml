@@ -248,3 +248,44 @@ jobs:
         cd build
         bash ../test/run_testfixture.sh "SQLite regression ${{ matrix.bucket }}" 300 \
           $(tr '\n' ' ' < ../test/regression-buckets/${{ matrix.bucket }}.txt)
+
+  # Cross-version database compatibility: fixtures built by pinned old
+  # release tags must open + pass feature smoke tests when the on-disk
+  # format signature is unchanged, and must be refused cleanly when it
+  # differs. Format changes without a minor version bump fail the suite.
+  compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+
+    - name: Cache old-version binaries
+      uses: actions/cache@v4
+      with:
+        path: .compat-cache
+        key: compat-bins-${{ runner.os }}-${{ github.base_ref || github.ref_name }}
+        restore-keys: |
+          compat-bins-${{ runner.os }}-
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build doltlite
+      run: cd build && make -j4 doltlite
+
+    - name: Cross-version compatibility tests
+      run: bash test/doltlite_compat_test.sh build/doltlite
