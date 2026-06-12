@@ -6591,11 +6591,6 @@ multiplex multiplex-3.2.7
 multiplex multiplex-3.2.8
 multiplex multiplex-3.2.9
 multiplex multiplex-3.3.1
-# Zeroblob edits keep their zero tail symbolic, which routes them through
-# the full chunker mutate instead of the surgical no-rechunk node rewrite;
-# the append-only store grows by more bytes per update, crossing a
-# multiplex chunk boundary so multiplex_list reports an extra file.
-multiplex multiplex-4.1.12
 multiplex multiplex-6.1.0
 multiplex multiplex-6.2.1
 multiplex multiplex-6.2.2
