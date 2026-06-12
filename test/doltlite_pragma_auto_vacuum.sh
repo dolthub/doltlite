@@ -21,6 +21,8 @@ PASS=0; FAIL=0; ERRORS=""
 
 run_test() {
   local n="$1" got="$2" want="$3"
+  # msys2 emits CRLF; normalize before comparing multi-line output
+  got=$(printf '%s' "$got" | tr -d '\r')
   if [ "$got" = "$want" ]; then
     PASS=$((PASS+1))
   else
