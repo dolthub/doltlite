@@ -6545,16 +6545,6 @@ fts3shared fts3shared-2.5.2
 fts3shared fts3shared-2.5.3
 fts3shared fts3shared-2.5.5
 
-# REAL BUG pinned (issue: fts shadow-table reads inside an open
-# transaction see stale pre-transaction state through the vtab's cached
-# statements): deleting a %_segdir row in-txn is invisible to
-# integrity-check, which reports ok where upstream detects malformed.
-# Disruptions 1/2 (content-table edits) are detected fine.
-fts4check fts4check-1.2.2.3
-fts4check fts4check-1.2.3.3
-fts4check fts4check-2.2.2.3
-fts4check fts4check-2.2.3.3
-
 # doltlite does not materialize sqlite_autoindex_* rows for the
 # WITHOUT-ROWID-converted %_segdir shadow table (fordelete class)
 fts4content fts4content-5.1.1
@@ -6738,13 +6728,6 @@ fts4onepass fts4onepass-1.1.3
 # statement flushes errors "database disk image is malformed"
 fts4onepass fts4onepass-3.2.4.c
 fts4onepass fts4onepass-3.2.5.c
-
-# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
-# statements): bulk INSERT...SELECT across langid partitions aborts with
-# "constraint failed" when a stale max(idx) read collides on the
-# %_segdir (level,idx) primary key
-fts4opt fts4opt-1.8
-fts4opt fts4opt-2.8
 
 # ── incrblob2 ──
 # Shared-cache table-level locking does not exist in doltlite. A blob

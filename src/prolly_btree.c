@@ -7103,15 +7103,29 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
         prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
                              prollyCursorIntKey(&pCur->pCur));
+        if( it.idx >= pCur->pMutMap->nEntries
+         || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
+         || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
+        ){
+          it.idx--;
+        }
       }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
         const u8 *pK; int nK;
         prollyCursorKey(&pCur->pCur, &pK, &nK);
         prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
+        if( it.idx >= pCur->pMutMap->nEntries
+         || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
+         || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
+        ){
+          it.idx--;
+        }
       }else if( pCur->eState==CURSOR_VALID ){
         rc = seedMutMapIterFromCursor(pCur, &it);
         if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
         if( rc==SQLITE_NOTFOUND ){
           prollyMutMapIterLast(&it, pCur->pMutMap);
+        }else{
+          it.idx--;
         }
       }else{
         prollyMutMapIterLast(&it, pCur->pMutMap);
