@@ -916,7 +916,8 @@ void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   if( !mm ) return;
   target = level - 1;
 
-  if( level==1 && target==0 ){
+  /* The levelBase shortcut is only safe when no nested edits exist. */
+  if( level==1 && target==0 && mm->currentSavepointLevel<=1 ){
     for(i=0; i<mm->nUndo; i++){
       sqlite3_free(mm->aUndo[i].prevVal);
       mm->aUndo[i].prevVal = 0;

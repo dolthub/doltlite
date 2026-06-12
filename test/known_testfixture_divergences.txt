@@ -6678,18 +6678,6 @@ savepoint savepoint-15.1.3
 savepoint savepoint-15.2.2
 savepoint savepoint-15.2.3
 
-# ── savepoint6 ──
-# REAL BUG (#1414), not an intentional divergence: a write under two
-# savepoints collapsed by one RELEASE of the middle name, followed by a
-# new savepoint and a write with no intervening read, makes ROLLBACK TO
-# restore a stale pre-DELETE state (deleted row resurrected); under the
-# file's continued random load the connection then throws 'database disk
-# image is malformed'. First divergence at savepoint6-normal.997.1,
-# deterministic 3/3; everything from there is the same root cause
-# cascading through the shared shadow-array harness until the tester's
-# 1000-error cap aborts the file. Remove this whole block when #1414 is
-# fixed.
-
 # shared3: shared-cache cache_size cross-connection visibility (2.4) and pager
 # exclusive-lock "database is locked" on cache spill (2.8) — doltlite's MVCC
 # lock model takes no page-level exclusive lock. Row outcomes match stock.

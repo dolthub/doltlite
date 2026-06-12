@@ -94,7 +94,7 @@ is_crash_expected() {
 is_in_set() {
   local needle="$1"
   local haystack="$2"
-  printf '%s\n' "$haystack" | grep -Fxq -- "$needle"
+  grep -Fxq -- "$needle" <<< "$haystack"
 }
 
 count_lines() {
