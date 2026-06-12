@@ -9,22 +9,22 @@ source $testdir/tester.tcl
 # stability/change, durability across close/reopen, rollback atomicity, exact
 # rejection messages, and integrity_check after every scenario.
 #
-# covers: pagesize pagesize-1.1 — fresh db reports doltlite's synthetic default
-#   page_size 4096 (1.1)
+# covers: pagesize pagesize-1.1 — fresh db reports doltlite's synthetic
+#   page_size default from the build (1.1)
 # covers: pagesize pagesize-1.3 — page_size set after CREATE TABLE echoes in
 #   session but never alters stored content (hash unchanged) (1.2-1.4)
 # covers: pagesize pagesize-1.4 — invalid size 511 rejected, value unchanged (1.3)
 # covers: pagesize pagesize-1.8 — non-power-of-2 1234 and oversize 65537
 #   rejected, value unchanged (1.3)
 # covers: pagesize pagesize-3.1 — page_size set inside a txn after schema read
-#   does not change the effective store layout; reopen reports 4096 (1.7)
+#   does not change the effective store layout; reopen reports the build default (1.7)
 # covers: pagesize pagesize-3.3 — page_size set wrapped in BEGIN/COMMIT is
-#   layout-inert; reopen reports 4096 (1.7)
+#   layout-inert; reopen reports the build default (1.7)
 # covers-class: pagesize pagesize-2.512.{2,3,6,10,30} pagesize-2.2048.{2,3,6,10,30}
 #   pagesize-2.4096.{3,30} pagesize-2.8192.{2,3,6,10,30} (17 entries): originals
 #   asserted the configured page size persists in the file header and file size
 #   is page_size*pages; doltlite's chunk store has no header so every reopen
-#   reports 4096 regardless of the session-set value, file size is nonzero and
+#   reports the build default regardless of the session-set value, file size is nonzero and
 #   chunk-store defined, data and txn rollback boundaries round-trip per size,
 #   integrity_check ok (1.5, 1.6, 2.*)
 # covers-class: crash6 crash6-3.{0..29}.{2,3} (60 entries): originals crashed a
@@ -177,7 +177,7 @@ source $testdir/tester.tcl
 #
 do_test doltlite_recover_rawformat_2-1.1 {
   execsql {PRAGMA page_size}
-} {4096}
+} {1024}
 
 do_test doltlite_recover_rawformat_2-1.2 {
   execsql {CREATE TABLE t1(x)}
@@ -223,7 +223,7 @@ do_test doltlite_recover_rawformat_2-1.6 {
   list [execsql {PRAGMA page_size}] \
       [execsql {SELECT x FROM t1 ORDER BY x}] \
       [expr {[file size test.db] > 0}]
-} {4096 {one three two} 1}
+} {1024 {one three two} 1}
 
 do_test doltlite_recover_rawformat_2-1.7 {
   execsql {
@@ -235,7 +235,7 @@ do_test doltlite_recover_rawformat_2-1.7 {
   db close
   sqlite3 db test.db
   list [execsql {PRAGMA page_size}] [execsql {PRAGMA integrity_check}]
-} {4096 ok}
+} {1024 ok}
 
 #-------------------------------------------------------------------------
 # 2.* crash6: abandoned transactions never persist partially, per size class

@@ -124,7 +124,11 @@ int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 
 #define PROLLY_DEFAULT_CACHE_SIZE 16384
 
-#define PROLLY_DEFAULT_PAGE_SIZE 4096
+#ifdef SQLITE_DEFAULT_PAGE_SIZE
+# define PROLLY_DEFAULT_PAGE_SIZE SQLITE_DEFAULT_PAGE_SIZE
+#else
+# define PROLLY_DEFAULT_PAGE_SIZE 4096
+#endif
 
 #define PROLLY_MAX_RECORD_SIZE ((sqlite3_int64)(1024*1024*1024))
 

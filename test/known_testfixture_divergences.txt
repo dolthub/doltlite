@@ -6494,24 +6494,6 @@ fts3corrupt7 fts3corrupt7-1.0
 fts3corrupt7 fts3corrupt7-1.1
 fts3corrupt7 fts3corrupt7-2.1
 
-# fts deferred-token decisions key off segment geometry derived from
-# PRAGMA page_size; prolly reports a synthetic 4096 (test builds use
-# 1024), so 'a' is not deferred: matchinfo shows actual counts instead
-# of deferred estimates (2.2.x.1) and the zeroed-block read in 2.2.3.1
-# errors malformed because the token's doclist is actually read.
-# Proven: with PRAGMA page_size=1024 doltlite returns the expected values.
-fts3defer2 fts3defer2-2.2.1.1
-fts3defer2 fts3defer2-2.2.2.1
-fts3defer2 fts3defer2-2.2.3.1
-
-# same page-size geometry class as fts3defer2: at the synthetic 4096
-# page size all doclists stay inline in the segdir root, %_segments is
-# empty, so the segment-block assertions and the corrupt-block read
-# diverge. Proven identical to upstream with PRAGMA page_size=1024.
-fts3defer3 fts3defer3-1.2
-fts3defer3 fts3defer3-1.4
-fts3defer3 fts3defer3-1.7
-
 # raw stock-format hexdb images cannot deserialize into prolly MEMDB
 fts3fuzz001 fts3fuzz001-100
 fts3fuzz001 fts3fuzz001-110
@@ -6557,37 +6539,14 @@ fts4content fts4content-6.2.2
 fts4content fts4content-6.2.8
 fts4content fts4content-6.2.9
 
-# segment geometry (synthetic 4096 page size vs the 1024 the test build
-# sets) drives every asserted %_segdir/%_stat number: end_block stays 0
-# (no spill), root sizes and incremental-merge work accounting differ.
-# Proven: section-1 state matches upstream exactly under page_size=1024.
+# %_segdir level/idx layout ordering differs after large inserts and
+# deletes. Segment sizes now match upstream; only row order / idx
+# assignment diverges in these assertions.
 fts4growth fts4growth-1.6
-fts4growth fts4growth-1.7
-fts4growth fts4growth-2.5
-fts4growth fts4growth-2.6
-fts4growth fts4growth-2.7
-fts4growth fts4growth-2.8
-fts4growth fts4growth-4.3
-fts4growth fts4growth-5.2
-fts4growth fts4growth-5.3
 fts4growth fts4growth-5.4
 fts4growth fts4growth-5.5
-fts4growth fts4growth-6.2
 fts4growth fts4growth-6.3
-fts4growth fts4growth-6.4
 fts4growth fts4growth-6.5
-fts4growth fts4growth-7.1
-fts4growth fts4growth-7.2
-fts4growth fts4growth-7.3
-fts4growth fts4growth-7.4
-fts4growth fts4growth-7.5
-fts4growth fts4growth-7.6
-fts4growth fts4growth-7.7
-
-# page-size geometry: %_stat and segdir accounting at synthetic 4096
-# page size (see fts4growth)
-fts4growth2 fts4growth2-1.2
-fts4growth2 fts4growth2-1.3
 
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements): 'rebuild' flushes per langid change inside one statement;
@@ -6694,12 +6653,6 @@ fts4langid fts4langid-3.3.4.7
 # report (same stale shadow-read family)
 fts4langid fts4langid-6.1
 fts4langid fts4langid-6.2
-
-# incremental-merge work accounting diverges (page-size geometry sizes
-# merge steps; see also the stale shadow-read issue): merge=200,10
-# reports no work where upstream still has level-0 segments to merge
-fts4merge fts4merge-fts3-7.3
-fts4merge fts4merge-fts4-7.3
 
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements corrupt automerge bookkeeping): automerge after a multi-row

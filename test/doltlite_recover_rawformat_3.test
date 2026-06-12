@@ -69,8 +69,8 @@ source $testdir/tester.tcl
 #   commits; doltlite analog: the same DELETE/INSERT/BEGIN..COMMIT and
 #   41-page-scale UPDATE txns commit exactly and round-trip (4.3)
 # covers-class: io io-5.{1..5} (5 entries): originals derived page size from
-#   sector size/atomic flags; doltlite reports synthetic page_size 4096, a
-#   session SET echoes back but reverts to 4096 on reopen (4.4)
+#   sector size/atomic flags; doltlite reports the build's synthetic page_size
+#   default, a session SET echoes back but reverts to that default on reopen (4.4)
 # covers-class: resetdb resetdb-{100,110} (2 entries): sample db (20 rows of
 #   randomblob(300), 2 indexes) reports the stock sums, integrity ok, and
 #   doltlite's journal_mode 'wal'; a second connection sees identical content
@@ -553,7 +553,7 @@ do_test doltlite_recover_rawformat_3-4.4 {
   db close
   sqlite3 db test.db
   list $v0 $v1 [execsql {PRAGMA page_size}]
-} {4096 8192 4096}
+} {1024 8192 1024}
 
 #-------------------------------------------------------------------------
 # 5.* resetdb: dbpage corruption rejected, db never corrupt, reset is inert
