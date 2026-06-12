@@ -104,24 +104,13 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 # It is undetectable defensively (a freed stmt pointer looks valid) and is a test
 # footgun exposed by the intentional PRAGMA divergence, like alter2/walro.
 # (createtab additionally diverges on read-cursor-abort-across-DDL; see triggerC-12.2.)
-createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
-tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
-savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
 vtab1          # post-vtab1-5 cleanup drops echo backing tables before vtabs; clean error + implicit-PK echo behavior covered by doltlite_recover_vtab1
 
 # ── feature-gap sweep wave 1 (#1208): files whose setup aborts pre-summary on
 # an intentional rejection or a stock-only artifact. Reasons captured from a
 # per-file non-root run.
-autovacuum       # auto_vacuum unsupported -> uncaught setup error
 corrupt2         # auto_vacuum unsupported -> uncaught setup error
-e_vacuum         # auto_vacuum unsupported -> uncaught setup error
-incrvacuum       # auto_vacuum unsupported -> uncaught setup error
 incrvacuum3      # auto_vacuum unsupported -> uncaught setup error
-incrvacuum_ioerr # auto_vacuum unsupported -> uncaught setup error
-ioerr4           # auto_vacuum unsupported -> uncaught setup error
-mallocC          # auto_vacuum unsupported -> uncaught setup error
-mmap1            # auto_vacuum unsupported -> uncaught setup error
-vacuum3          # auto_vacuum unsupported -> uncaught setup error
 pager2           # journal_mode not configurable -> uncaught setup error
 pagerfault       # journal_mode not configurable -> uncaught setup error
 pagerfault2      # journal_mode rejection cascades into the faultsim harness; abort point varies run to run (not bucket-enforced)
@@ -155,7 +144,6 @@ win32nolock      # windows-only: silent platform return, no summary line
 corrupt9       # freelist raw-format probe aborts ("Freelist is empty")
 dbstatus       # dbstat vtable constructor fails on prolly; memory-stat probes differ
 e_walauto      # reads test.db-shm: no shm sidecar
-incrblob_err   # full fault file still aborts; blob-read IOERR cleanup path covered by doltlite_recover_incrblob
 malloc3        # OOM mid-file leaves setup table missing; uncaught -> aborts
 pendingrace    # copies sv_test.db-journal: no journal sidecar
 shmlock        # shm locking probe: "BUSY false-positive" thrown by the test
@@ -180,10 +168,8 @@ filefmt  # raw-format pokes (16-byte "SQLite format 3" header, page-size at offs
 fts3  # fts3.test is a suite-runner (permutations.test run_test_suite fts3) that re-sources the whole fts3 family inline; it aborts deterministically (3/3, only Time: lines differ) inside the fts3corrupt2 portion at "SELECT rowid, length(root), root FROM t2_segdir" — same rowid-on-WITHOUT-ROWID-%_segdir mechanism as the standalone fts3corrupt2 crash
 fts3corrupt2  # stable 3/3 abort after fts3corrupt2-1.163.5 at line 90: "db eval {SELECT rowid, length(root), root FROM t2_segdir}" — %_segdir has composite PRIMARY KEY(level,idx), doltlite auto-converts it to WITHOUT ROWID so rowid does not exist; uncaught tcl error (all 163 corruption loops before it pass)
 pragma3  # aborts at line 263 when execsql {PRAGMA journal_mode = PERSIST; PRAGMA locking_mode = EXCLUSIVE} raises doltlite's intentional "journal_mode is not configurable on doltlite-format databases" outside any catch. Stable abort, 3/3 runs. Masked underneath: every data_version expectation diverges because doltlite bumps data_version on same-connection commits too (each commit installs a new root; verified: CREATE+INSERT moves it 1->4 on one connection), where stock only bumps it for other-connection changes.
-pragma4  # aborts at the first foreach (line 30, test 1.3.2) when do_pragma_ncol_test calls an uncaught sqlite3_prepare_v2 on "PRAGMA auto_vacuum = 1" and doltlite's intentional auto_vacuum rejection fails the prepare ("auto_vacuum is not supported on doltlite-format databases"). Stable abort, 3/3 runs; only 5 tests run before the abort.
 qrf04  # upstream qrf04.test has no finish_test call; its single do_test (qrf01-1.0, db format -splitcolumn) runs and passes but the summary line is never printed (rc=0, deterministic 3/3), so the harness sees it as a crash
 superlock  # sqlite3demo_superlock cannot acquire its byte-range/WAL superlock on doltlite chunk-store files (PRAGMA journal_mode=DELETE is rejected with "journal_mode is not configurable on doltlite-format databases" and the lock demo fails with disk I/O error), so the `unlock` proc it registers on success never exists; the bare `unlock` call after test 5.$tn.12 inside do_multiclient_test (superlock.test line 91, body line 64) is outside any do_test and the tcl error aborts the file before finish_test; deterministic 3/3
-tkt2686  # bare top-level `db eval {... PRAGMA auto_vacuum=1 ...}` at tkt2686.test line 55 (not wrapped in do_test) hits doltlite's intentional "auto_vacuum is not supported on doltlite-format databases" error and the uncaught tcl error aborts the file before finish_test; all 1997 prior tests pass; deterministic 3/3
 
 # == permanently excluded classes (1357 sweep close-out) ==
 #
@@ -211,4 +197,9 @@ tkt2686  # bare top-level `db eval {... PRAGMA auto_vacuum=1 ...}` at tkt2686.te
 # whenever fts behavior changes (observed across one merge wave). Gating it
 # would churn a 1000-line block on every fts fix; revisit when the fts
 # shadow-table stale-read bug is fixed and the count drops below the cap.
+#
+# savepoint6: a randomized savepoint fuzz workload sitting on an open
+# savepoint-state bug (deleted rows resurrected after a RELEASE-collapsed
+# ROLLBACK TO), so its failure set differs between builds; re-bucket and
+# gate once the bug is fixed and the file runs clean.
 
