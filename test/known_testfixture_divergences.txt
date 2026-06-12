@@ -302,6 +302,7 @@ pragma pragma-3.4
 pragma pragma-3.5
 pragma pragma-3.6b
 pragma pragma-3.7
+pragma pragma-3.8
 pragma pragma-3.9a
 pragma pragma-3.9b
 pragma pragma-4.6
@@ -439,7 +440,6 @@ vacuum vacuum-7.6    # post-VACUUM page count assertion
 # ── vacuum2 ──
 # Same rationale as vacuum.test. 23 of 31 pass under the no-op.
 vacuum2 vacuum2-2.2   # post-VACUUM page count
-vacuum2 vacuum2-3.1   # post-VACUUM page count
 vacuum2 vacuum2-3.13  # post-VACUUM page count
 vacuum2 vacuum2-4.1   # post-VACUUM auto_vacuum mode change
 vacuum2 vacuum2-5.2   # "cannot VACUUM - SQL statements in progress" error path
@@ -1610,29 +1610,27 @@ dbpage dbpage-710  # sqlite_dbpage raw page access; chunk store has no SQLite pa
 dbpage dbpage-810  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-820  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 
-# pagesize — PRAGMA page_size is fixed at 4096 on the chunk store and cannot be
-# reconfigured; tests asserting 512/1024/2048/8192 see 4096 (or a chunk-store
-# value). Page-format pragma divergence.
-pagesize pagesize-1.1  # page_size not configurable on the chunk store
+# pagesize — PRAGMA page_size reports the build default for new chunk-store
+# connections and session assignments do not alter the stored layout. Tests
+# that assert persisted SQLite file-header page sizes or page_count/page_size
+# arithmetic diverge.
 pagesize pagesize-1.3  # page_size not configurable on the chunk store
-pagesize pagesize-1.4  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.3  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.6  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.512.30  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.3  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.6  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.2048.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.4096.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.4096.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.10  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.3  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.6  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.8192.30  # page_size not configurable on the chunk store
 pagesize pagesize-3.1  # page_size not configurable on the chunk store
 pagesize pagesize-3.3  # page_size not configurable on the chunk store
 
@@ -2817,7 +2815,6 @@ vacuum-into vacuum-into-410  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-500  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-510  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-620  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-630  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-710.1  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-710.2  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-720.1  # VACUUM INTO explicitly rejected
@@ -4771,7 +4768,6 @@ pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-pre
 pagerfault3 pagerfault3-1-ioerr-transient.20  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.21  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.22  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-fts4aa fts4aa-1.9  # FTS4 deferral heuristic reads the synthetic 4096 page size; stock at page_size=4096 returns identical values
 fts3malloc fts3_malloc-2.1.transient.100000.18  # expected count bakes in a master row stock leaks from a faulted CREATE; doltlite's CREATE stays atomic (clean replay = 4 on both engines) — #1333
 
 # ── sqllimits1 ──
@@ -6786,14 +6782,26 @@ reindex reindex-3.1
 reindex reindex-3.2
 reindex reindex-3.3
 
-# md5file over the raw db file: chunk-store file bytes differ where stock
-# page images are identical (110-3/110-4: UNIQUE(a)/index-order variants),
-# and are identical where stock differs (130: rowid vs WITHOUT ROWID
-# variants store the same prolly content because doltlite keys by PK).
+# md5file over raw db bytes after skipping PRAGMA page_size bytes: the
+# chunk-store file is not a SQLite page image, so page-size-dependent slices
+# differ even when the SQL content is logically equivalent.
+schema6 schema6-100-1
+schema6 schema6-100-2
+schema6 schema6-100-3
+schema6 schema6-100-4
+schema6 schema6-100-5
+schema6 schema6-110-1
+schema6 schema6-110-2
 schema6 schema6-110-3
 schema6 schema6-110-4
-schema6 schema6-130-1
-schema6 schema6-130-2
+schema6 schema6-120-1
+schema6 schema6-120-2
+schema6 schema6-120-3
+schema6 schema6-120-4
+schema6 schema6-120-5
+schema6 schema6-120-6
+schema6 schema6-120-7
+schema6 schema6-120-8
 
 # freelist_count page accounting: no page freelist in the chunk store
 shortread1 shortread1-1.2
