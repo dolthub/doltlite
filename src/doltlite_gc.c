@@ -642,12 +642,15 @@ static int gcSweep(
   return rc;
 }
 
-/* Report a gc phase failure without masking an OOM: callers (e.g. the OOM
-** fault harness) must see SQLITE_NOMEM when the underlying failure was an
-** allocation failure, not a generic SQLITE_ERROR message. */
+/* Report a gc phase failure without masking canonical resource errors:
+** callers (e.g. the fault harnesses) must see SQLITE_NOMEM / SQLITE_FULL
+** when the underlying failure was one of those result codes, not a generic
+** SQLITE_ERROR message. */
 static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
     sqlite3_result_error_nomem(context);
+  }else if( rc==SQLITE_FULL ){
+    sqlite3_result_error_code(context, rc);
   }else{
     sqlite3_result_error(context, zMsg, -1);
     sqlite3_result_error_code(context, rc);
