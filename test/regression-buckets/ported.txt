@@ -26,4 +26,5 @@ doltlite_fts_stmt_savepoint
 doltlite_chunk_pending_drain
 doltlite_returningfault_issue1390
 doltlite_fts_reverse_pending_delete
+doltlite_data_version
 doltlite_page_size_default
