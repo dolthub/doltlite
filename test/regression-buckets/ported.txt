@@ -25,3 +25,4 @@ doltlite_recover_withoutrowid
 doltlite_fts_stmt_savepoint
 doltlite_chunk_pending_drain
 doltlite_returningfault_issue1390
+doltlite_fts_reverse_pending_delete
