@@ -4540,7 +4540,7 @@ int sqlite3BtreeOpen(
   p->pBt = pBt;
   p->pOps = &prollyBtreeOps;
   p->inTrans = TRANS_NONE;
-  p->iBDataVersion = 1;
+  p->iBDataVersion = pBt->pPagerShim ? 0 : 1;
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
   p->nSeek = 0;
 
@@ -5227,21 +5227,35 @@ static void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash)
   memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
 }
 
-static void btreeBumpDataVersion(Btree *p){
-  p->iBDataVersion++;
+static void btreeBumpExternalDataVersion(Btree *p){
   if( p->pBt->pPagerShim ){
     p->pBt->pPagerShim->iDataVersion++;
+  }else{
+    p->iBDataVersion++;
   }
 }
 
-static void btreeMarkWorkingStateChanged(Btree *p){
+static void btreeBumpLocalDataVersion(Btree *p){
+  if( p->pBt->pPagerShim ){
+    p->pBt->pPagerShim->iDataVersion++;
+    p->iBDataVersion--;
+  }else{
+    p->iBDataVersion++;
+  }
+}
+
+static void btreeMarkWorkingStateChanged(Btree *p, int bLocal){
   BtShared *pBt = p->pBt;
   pBt->iWorkingStateVersion++;
   if( pBt->iWorkingStateVersion==0 ){
     pBt->iWorkingStateVersion = 1;
   }
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
-  btreeBumpDataVersion(p);
+  if( bLocal ){
+    btreeBumpLocalDataVersion(p);
+  }else{
+    btreeBumpExternalDataVersion(p);
+  }
 }
 
 static int btreeRefreshSharedWorkingState(Btree *p){
@@ -5257,7 +5271,7 @@ static int btreeRefreshSharedWorkingState(Btree *p){
   btreeStoreCommittedFromCurrent(p, &loadedCatHash);
   p->bCatalogDropped = 0;
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
-  btreeBumpDataVersion(p);
+  btreeBumpExternalDataVersion(p);
   return SQLITE_OK;
 }
 
@@ -5285,7 +5299,7 @@ static int btreeRefreshFromDisk(Btree *p){
   if( rc!=SQLITE_OK ) return rc;
 
   btreeStoreCommittedFromCurrent(p, &loadedCatHash);
-  btreeMarkWorkingStateChanged(p);
+  btreeMarkWorkingStateChanged(p, 0);
 
   return SQLITE_OK;
 }
@@ -5499,7 +5513,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->committedConflictsCatalogHash = p->conflictsCatalogHash;
       p->committedConstraintViolationsHash = p->constraintViolationsHash;
       memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
-      btreeMarkWorkingStateChanged(p);
+      btreeMarkWorkingStateChanged(p, 1);
       if( bReloadSchema ){
         BtCursor *pC;
         rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
@@ -6352,7 +6366,7 @@ static void prollyBtreeGetMeta(Btree *p, int idx, u32 *pValue){
 
   if( idx==BTREE_DATA_VERSION ){
     if( pBt->pPagerShim ){
-      *pValue = pBt->pPagerShim->iDataVersion;
+      *pValue = pBt->pPagerShim->iDataVersion + p->iBDataVersion;
     } else {
       *pValue = p->iBDataVersion;
     }
@@ -6366,8 +6380,6 @@ void sqlite3BtreeGetMeta(Btree *p, int idx, u32 *pValue){
 }
 
 static int prollyBtreeUpdateMeta(Btree *p, int idx, u32 value){
-  BtShared *pBt = p->pBt;
-
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
@@ -6388,10 +6400,7 @@ static int prollyBtreeUpdateMeta(Btree *p, int idx, u32 value){
   if( idx==BTREE_SCHEMA_VERSION ){
     p->bSchemaChangedTxn = 1;
     p->bMasterRootChangedTxn = 1;
-    p->iBDataVersion++;
-    if( pBt->pPagerShim ){
-      pBt->pPagerShim->iDataVersion++;
-    }
+    btreeBumpLocalDataVersion(p);
   }
 
   return SQLITE_OK;
@@ -9608,10 +9617,9 @@ BtCursor *sqlite3BtreeFakeValidCursor(void){
 }
 
 int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
-  BtShared *pBtTo = pTo->pBt;
   int i;
 
-  invalidateCursors(pBtTo, 0, SQLITE_ABORT);
+  invalidateCursors(pTo->pBt, 0, SQLITE_ABORT);
 
   catFree(&pTo->cat);
 
@@ -9626,10 +9634,7 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   memcpy(pTo->aMeta, pFrom->aMeta, sizeof(pTo->aMeta));
   pTo->cat.iNextTable = pFrom->cat.iNextTable;
 
-  pTo->iBDataVersion++;
-  if( pBtTo->pPagerShim ){
-    pBtTo->pPagerShim->iDataVersion++;
-  }
+  btreeBumpLocalDataVersion(pTo);
 
   return SQLITE_OK;
 }
@@ -10355,10 +10360,7 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   if( rc!=SQLITE_OK ) return rc;
 
   pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
-  pBtree->iBDataVersion++;
-  if( pBt->pPagerShim ){
-    pBt->pPagerShim->iDataVersion++;
-  }
+  btreeBumpLocalDataVersion(pBtree);
 
   if( pBtree->db ){
     sqlite3ExpirePreparedStatements(pBtree->db, 0);
@@ -10422,10 +10424,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   }
 
   pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
-  pBtree->iBDataVersion++;
-  if( pBt->pPagerShim ){
-    pBt->pPagerShim->iDataVersion++;
-  }
+  btreeBumpLocalDataVersion(pBtree);
 
   if( pBtree->db ){
     sqlite3ExpirePreparedStatements(pBtree->db, 0);
@@ -10467,10 +10466,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
       invalidateSchema(pBtree);
     }
     pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
-    pBtree->iBDataVersion++;
-    if( pBt->pPagerShim ){
-      pBt->pPagerShim->iDataVersion++;
-    }
+    btreeBumpLocalDataVersion(pBtree);
     chunkStoreRollback(cs);
     sqlite3_free(oldCatData);
     return rc;
