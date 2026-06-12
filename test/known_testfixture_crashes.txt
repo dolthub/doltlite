@@ -198,8 +198,3 @@ superlock  # sqlite3demo_superlock cannot acquire its byte-range/WAL superlock o
 # would churn a 1000-line block on every fts fix; revisit when the fts
 # shadow-table stale-read bug is fixed and the count drops below the cap.
 #
-# savepoint6: a randomized savepoint fuzz workload sitting on an open
-# savepoint-state bug (deleted rows resurrected after a RELEASE-collapsed
-# ROLLBACK TO), so its failure set differs between builds; re-bucket and
-# gate once the bug is fixed and the file runs clean.
-

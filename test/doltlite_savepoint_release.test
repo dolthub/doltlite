@@ -1,0 +1,39 @@
+# 2026-06-12
+#
+# The author disclaims copyright to this source code.  In place of
+# a legal notice, here is a blessing:
+#
+#    May you do good and not evil.
+#    May you find forgiveness for yourself and forgive others.
+#    May you share freely, never taking more than you give.
+#
+#***********************************************************************
+# Focused coverage for RELEASE of a middle savepoint followed by a later
+# ROLLBACK TO. This is the deterministic savepoint6 failure behind #1414.
+#
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test doltlite_savepoint_release-1.1 {
+  CREATE TABLE t1(x, y);
+  INSERT INTO t1 VALUES(231,'aaa');
+  SAVEPOINT four;
+  SAVEPOINT five;
+  SAVEPOINT three;
+  DELETE FROM t1 WHERE x = 231;
+  RELEASE five;
+  SAVEPOINT nine;
+  INSERT INTO t1 VALUES(662,'bbb');
+  ROLLBACK TO nine;
+  SELECT count(*) FROM t1;
+} {0}
+
+do_execsql_test doltlite_savepoint_release-1.2 {
+  RELEASE nine;
+  RELEASE four;
+  SELECT count(*) FROM t1;
+  PRAGMA integrity_check;
+} {0 ok}
+
+finish_test
