@@ -201,9 +201,9 @@
 # covers: wal4 wal4-2-oom-transient.93 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
 # covers: wal4 wal4-2-shmerr-persistent.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
 # covers: wal4 wal4-2-shmerr-transient.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: savepoint savepoint-6.1 — auto_vacuum=incremental rejection (1.9); indexed nested-savepoint txn setup/outcome (6.1)
+# covers: savepoint savepoint-6.1 — auto_vacuum=incremental no-op (1.9); indexed nested-savepoint txn setup/outcome (6.1)
 # covers: savepoint savepoint-6.3 — nested savepoints + ROLLBACK TO under cache pressure keep the outer UPDATE and discard savepoint work, integrity ok (6.1)
-# covers: savepoint savepoint-7.1 — auto_vacuum rejection (1.9); growing-db txn setup outcome (6.2)
+# covers: savepoint savepoint-7.1 — auto_vacuum no-op (1.9); growing-db txn setup outcome (6.2)
 # covers: savepoint savepoint-7.2.1 — CREATE TABLE inside savepoint rolled back cleanly, integrity ok (6.2)
 # covers: savepoint savepoint-7.3.1 — table repopulation from existing data (6.3)
 # covers: savepoint savepoint-7.3.2 — DELETE + vacuum pragma + nested savepoint ROLLBACK TO leaves empty table, integrity ok (6.3)
@@ -224,22 +224,22 @@
 # covers: savepoint savepoint-10.2.12 — re-insert then second ROLLBACK TO two gives identical state (6.10.3)
 # covers: savepoint savepoint-10.2.13 — full ROLLBACK after nested cross-db savepoint traffic empties all three dbs (6.10, 6.10.4)
 # covers: savepoint savepoint-10.2.14 — lock_status unlocked after full ROLLBACK (6.16)
-# covers: savepoint savepoint-11.1 — auto_vacuum=full rejection (1.10); UNIQUE-table setup (6.18)
+# covers: savepoint savepoint-11.1 — auto_vacuum=full no-op (1.10); UNIQUE-table setup (6.18)
 # covers: savepoint savepoint-11.8 — ROLLBACK discards savepoint-created tables; wal_checkpoint no-op reports 0 0 0; data + integrity intact (6.18); DROP-in-savepoint rollback + reopen (6.19-6.20)
 # covers: savepoint savepoint-13.1 — journal_mode=off rejection (1.6); the journal-off block's savepoint/rollback data outcome (6.21)
-# covers: incrvacuum2 incrvacuum2-1.1 — incremental_vacuum rejected with stable error (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-1.2 — incremental_vacuum rejected with stable error (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-1.3 — incremental_vacuum rejected with stable error (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-1.4 — incremental_vacuum rejected with stable error (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-2.1 — aux.incremental_vacuum rejected; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.2 — aux.incremental_vacuum rejected; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.3 — aux.incremental_vacuum rejected; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.4 — aux.incremental_vacuum rejected; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.5 — aux.incremental_vacuum rejected; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.6 — aux.incremental_vacuum rejected; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-3.1 — auto_vacuum='full' rejected (1.10); txn create+insert outcome (7.3)
+# covers: incrvacuum2 incrvacuum2-1.1 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
+# covers: incrvacuum2 incrvacuum2-1.2 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
+# covers: incrvacuum2 incrvacuum2-1.3 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
+# covers: incrvacuum2 incrvacuum2-1.4 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
+# covers: incrvacuum2 incrvacuum2-2.1 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
+# covers: incrvacuum2 incrvacuum2-2.2 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
+# covers: incrvacuum2 incrvacuum2-2.3 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
+# covers: incrvacuum2 incrvacuum2-2.4 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
+# covers: incrvacuum2 incrvacuum2-2.5 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
+# covers: incrvacuum2 incrvacuum2-2.6 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
+# covers: incrvacuum2 incrvacuum2-3.1 — auto_vacuum='full' no-op (1.10); txn create+insert outcome (7.3)
 # covers: incrvacuum2 incrvacuum2-3.2 — txn DELETE + vacuum-pragma no-op commits cleanly, integrity ok (7.3)
-# covers: incrvacuum2 incrvacuum2-4.1 — auto_vacuum=2 rejected (1.11); 512-row blob churn workload (7.4)
+# covers: incrvacuum2 incrvacuum2-4.1 — auto_vacuum=2 no-op (1.11); 512-row blob churn workload (7.4)
 # covers: incrvacuum2 incrvacuum2-4.2 — journal_mode remains wal after churn (7.4)
 # covers: incrvacuum2 incrvacuum2-4.2.1 — no wal sidecar to checkpoint/size; durability proven via reopen (7.5)
 # covers: incrvacuum2 incrvacuum2-4.3 — reopen after churn: data correct, integrity ok (7.5)
@@ -279,12 +279,12 @@
 # covers: walpersist walpersist-3.1 — wal_autocheckpoint/journal_size_limit echo doltlite's values (1.16-1.19)
 # covers: walpersist walpersist-3.3 — no wal file after close (2.3)
 # covers: walpersist walpersist-4.1 — journal-mode switching rejected with stable error; wal accepted (1.2-1.7)
-# covers: vacuum2 vacuum2-4.1 — AUTOINCREMENT table drop + VACUUM ok (7.7); auto_vacuum=1 rejected, stays 0 (7.9)
+# covers: vacuum2 vacuum2-4.1 — AUTOINCREMENT table drop + VACUUM ok (7.7); auto_vacuum=1 no-op, stays 0 (7.9)
 # covers: vacuum2 vacuum2-2.1 — change-counter intent: content hash stable across VACUUM no-op, data intact (7.8)
-# covers: vacuum2 vacuum2-3.3 — auto_vacuum=FULL rejected (1.10); data + hash unchanged by VACUUM (7.8)
-# covers: vacuum2 vacuum2-4.2 — auto_vacuum remains 0 after rejected set + VACUUM (7.9)
+# covers: vacuum2 vacuum2-3.3 — auto_vacuum=FULL no-op (1.10); data + hash unchanged by VACUUM (7.8)
+# covers: vacuum2 vacuum2-4.2 — auto_vacuum remains 0 after no-op set + VACUUM (7.9)
 # covers: vacuum2 vacuum2-4.4 — auto_vacuum reports 0 across reopen (7.10)
-# covers: vacuum2 vacuum2-4.5 — auto_vacuum=2 rejected (1.11, 7.9)
+# covers: vacuum2 vacuum2-4.5 — auto_vacuum=2 no-op (1.11, 7.9)
 # covers: vacuum2 vacuum2-4.7 — auto_vacuum 0 across reopen, data + integrity ok (7.10)
 # covers: walprotocol walprotocol-1.1 — shm-lock sequences inapplicable; cold open + read returns committed data (5.1-5.2)
 # covers: walprotocol walprotocol-1.2 — shm-lock sequences inapplicable; cold open + read returns committed data (5.1-5.2)
@@ -300,7 +300,7 @@
 # covers: interrupt2 interrupt2-2.0 — temp INSERT..SELECT copies exactly: matching counts and zero NULL rows (10.1-10.2)
 # covers: interrupt2 interrupt2-3.1.2 — close leaves no -wal artifact; reopen consistent (10.3)
 # covers: interrupt2 interrupt2-4.1 — no SQLite wal frame counter; autocheckpoint-sized writes durable with integrity ok (10.4)
-# covers: tkt3762 tkt3762-1.1 — auto_vacuum=INCREMENTAL rejected (1.9); zeroblob(900) churn under cache_size=10 reopens clean (7.6)
+# covers: tkt3762 tkt3762-1.1 — auto_vacuum=INCREMENTAL no-op (1.9); zeroblob(900) churn under cache_size=10 reopens clean (7.6)
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
@@ -308,7 +308,8 @@ source $testdir/tester.tcl
 #-------------------------------------------------------------------------
 # Section 1: journal/WAL/vacuum pragma contract. doltlite-format databases
 # are permanently journal_mode=wal, reject reconfiguration with stable
-# error text, and reject auto_vacuum / incremental_vacuum.
+# error text, and accept auto_vacuum / incremental_vacuum as no-ops
+# (auto_vacuum always reads back 0).
 #
 do_execsql_test doltlite_recover_jrnlwal_3-1.1 {
   PRAGMA journal_mode;
@@ -334,21 +335,24 @@ do_execsql_test doltlite_recover_jrnlwal_3-1.7 {
 do_execsql_test doltlite_recover_jrnlwal_3-1.8 {
   PRAGMA auto_vacuum;
 } {0}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.9 {
-  PRAGMA auto_vacuum=incremental;
-} {1 {auto_vacuum is not supported on doltlite-format databases}}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.10 {
-  PRAGMA auto_vacuum=full;
-} {1 {auto_vacuum is not supported on doltlite-format databases}}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.11 {
-  PRAGMA auto_vacuum=2;
-} {1 {auto_vacuum is not supported on doltlite-format databases}}
+do_test doltlite_recover_jrnlwal_3-1.9 {
+  list [catchsql {PRAGMA auto_vacuum=incremental}] \
+       [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_jrnlwal_3-1.10 {
+  list [catchsql {PRAGMA auto_vacuum=full}] \
+       [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_jrnlwal_3-1.11 {
+  list [catchsql {PRAGMA auto_vacuum=2}] \
+       [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
 do_catchsql_test doltlite_recover_jrnlwal_3-1.12 {
   PRAGMA incremental_vacuum;
-} {1 {incremental_vacuum is not supported on doltlite-format databases}}
+} {0 {}}
 do_catchsql_test doltlite_recover_jrnlwal_3-1.13 {
   PRAGMA incremental_vacuum(5);
-} {1 {incremental_vacuum is not supported on doltlite-format databases}}
+} {0 {}}
 do_execsql_test doltlite_recover_jrnlwal_3-1.14 {
   PRAGMA incr_vacuum;
 } {}
@@ -555,7 +559,8 @@ do_test doltlite_recover_jrnlwal_3-5.9 {
 
 #-------------------------------------------------------------------------
 # Section 6: savepoint semantics that the originals exercised under
-# auto_vacuum / journal_mode permutations doltlite rejects. The savepoint
+# auto_vacuum / journal_mode permutations doltlite does not honor
+# (auto_vacuum sets no-op; journal_mode is fixed at wal). The savepoint
 # data outcomes themselves must match stock exactly.
 #
 do_test doltlite_recover_jrnlwal_3-6.1 {
@@ -830,7 +835,7 @@ do_test doltlite_recover_jrnlwal_3-7.1 {
   list [catchsql {PRAGMA incremental_vacuum(1)}] \
        [execsql {SELECT count(*) FROM iv}] \
        [execsql {PRAGMA integrity_check}]
-} {{1 {incremental_vacuum is not supported on doltlite-format databases}} 0 ok}
+} {{0 {}} 0 ok}
 do_test doltlite_recover_jrnlwal_3-7.2 {
   forcedelete test2.db test2.db-wal
   execsql {
@@ -843,7 +848,7 @@ do_test doltlite_recover_jrnlwal_3-7.2 {
   }
   list [catchsql {PRAGMA aux.incremental_vacuum(1)}] \
        [execsql {SELECT count(*) FROM iv; SELECT count(*) FROM aux.iv2}]
-} {{1 {incremental_vacuum is not supported on doltlite-format databases}} {0 0}}
+} {{0 {}} {0 0}}
 do_test doltlite_recover_jrnlwal_3-7.3 {
   execsql { DETACH aux }
   execsql {
@@ -916,7 +921,7 @@ do_test doltlite_recover_jrnlwal_3-7.8 {
 do_test doltlite_recover_jrnlwal_3-7.9 {
   list [catchsql {PRAGMA auto_vacuum=1; VACUUM}] \
        [execsql {PRAGMA auto_vacuum}]
-} {{1 {auto_vacuum is not supported on doltlite-format databases}} 0}
+} {{0 {}} 0}
 do_test doltlite_recover_jrnlwal_3-7.10 {
   db close
   sqlite3 db test.db

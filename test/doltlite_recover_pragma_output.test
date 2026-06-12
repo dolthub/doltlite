@@ -7,7 +7,7 @@ source $testdir/tester.tcl
 # scoped cache/synchronous/user_version pragmas, content-derived schema_version
 # that no-ops on write but invalidates prepared statements on real DDL,
 # integrity_check argument forms with stock-identical error text, synthetic
-# page_size/page_count, auto_vacuum rejection, corrupted files refused at
+# page_size/page_count, auto_vacuum no-ops, corrupted files refused at
 # open/ATTACH, single-file storage (multiplex intent), and shrink_memory /
 # sqlite3_db_release_memory as safe no-ops.
 #
@@ -74,12 +74,12 @@ source $testdir/tester.tcl
 # covers: pragma pragma-14.5 — ROLLBACK restores pre-txn page_count (7.5)
 # covers: pragma pragma-14.6 — aux.page_count reports the attached db's count (7.7)
 # covers: pragma pragma-14.6uc — AUX.PAGE_COUNT uppercase matches (7.7)
-# covers: pragma pragma-17.1.1 — auto_vacuum=1 rejected with exact doltlite message (8.1)
-# covers: pragma pragma-17.1.2 — auto_vacuum=2 rejected (8.2)
-# covers: pragma pragma-17.1.full — auto_vacuum=full rejected (8.3)
-# covers: pragma pragma-17.1.FULL — auto_vacuum=FULL rejected (8.3)
-# covers: pragma pragma-17.1.incremental — auto_vacuum=incremental rejected (8.4)
-# covers: pragma pragma-17.1.INCREMENTAL — auto_vacuum=INCREMENTAL rejected (8.4)
+# covers: pragma pragma-17.1.1 — auto_vacuum=1 accepted as a no-op, reads back 0 (8.1)
+# covers: pragma pragma-17.1.2 — auto_vacuum=2 no-op, reads back 0 (8.2)
+# covers: pragma pragma-17.1.full — auto_vacuum=full no-op, reads back 0 (8.3)
+# covers: pragma pragma-17.1.FULL — auto_vacuum=FULL no-op, reads back 0 (8.3)
+# covers: pragma pragma-17.1.incremental — auto_vacuum=incremental no-op, reads back 0 (8.4)
+# covers: pragma pragma-17.1.INCREMENTAL — auto_vacuum=INCREMENTAL no-op, reads back 0 (8.4)
 # covers: pragma pragma-22.2 — corruption never silently served: opening a corrupted file errors {file is not a database} (3.1)
 # covers: pragma pragma-22.3.1 — ATTACHing a corrupted file errors {unable to open database: testerr.db}; healthy main unaffected (3.2)
 # covers: pragma pragma-22.3.3 — aux.integrity_check scopes to the attached db (3.3)
@@ -493,27 +493,26 @@ do_test doltlite_recover_pragma_output-7.7 {
 execsql {DETACH aux}
 
 #-----------------------------------------------------------------------
-# 8: auto_vacuum settings are rejected, never half-applied
+# 8: auto_vacuum settings are accepted as no-ops, never applied
 #
-set avmsg {auto_vacuum is not supported on doltlite-format databases}
-do_catchsql_test doltlite_recover_pragma_output-8.1 {
-  PRAGMA auto_vacuum=1
-} [list 1 $avmsg]
-do_catchsql_test doltlite_recover_pragma_output-8.2 {
-  PRAGMA auto_vacuum=2
-} [list 1 $avmsg]
-do_catchsql_test doltlite_recover_pragma_output-8.3a {
-  PRAGMA auto_vacuum=full
-} [list 1 $avmsg]
-do_catchsql_test doltlite_recover_pragma_output-8.3b {
-  PRAGMA auto_vacuum=FULL
-} [list 1 $avmsg]
-do_catchsql_test doltlite_recover_pragma_output-8.4a {
-  PRAGMA auto_vacuum=incremental
-} [list 1 $avmsg]
-do_catchsql_test doltlite_recover_pragma_output-8.4b {
-  PRAGMA auto_vacuum=INCREMENTAL
-} [list 1 $avmsg]
+do_test doltlite_recover_pragma_output-8.1 {
+  list [catchsql {PRAGMA auto_vacuum=1}] [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_pragma_output-8.2 {
+  list [catchsql {PRAGMA auto_vacuum=2}] [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_pragma_output-8.3a {
+  list [catchsql {PRAGMA auto_vacuum=full}] [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_pragma_output-8.3b {
+  list [catchsql {PRAGMA auto_vacuum=FULL}] [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_pragma_output-8.4a {
+  list [catchsql {PRAGMA auto_vacuum=incremental}] [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
+do_test doltlite_recover_pragma_output-8.4b {
+  list [catchsql {PRAGMA auto_vacuum=INCREMENTAL}] [execsql {PRAGMA auto_vacuum}]
+} {{0 {}} 0}
 do_test doltlite_recover_pragma_output-8.5 {
   execsql {
     PRAGMA auto_vacuum=0;

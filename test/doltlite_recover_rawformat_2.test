@@ -120,10 +120,10 @@ source $testdir/tester.tcl
 #   (hash-stable) rather than rewriting the file header (8.1)
 # covers: vacuum2 vacuum2-3.1 — data state (not page count) is the contract:
 #   rows correct before/after VACUUM with a second attached schema (8.1-8.2)
-# covers: vacuum2 vacuum2-3.13 — auto_vacuum cannot be reconfigured: set errors
-#   verbatim, value stays 0, VACUUM still succeeds (8.4)
+# covers: vacuum2 vacuum2-3.13 — auto_vacuum cannot be reconfigured: set is a
+#   silent no-op, value stays 0, VACUUM still succeeds (8.4)
 # covers: vacuum vacuum-7.6 — PRAGMA auto_vacuum=1 + VACUUM does not switch the
-#   db to auto_vacuum; doltlite rejects the set and reports 0 (8.4)
+#   db to auto_vacuum; doltlite no-ops the set and reports 0 (8.4)
 # covers-class: securedel2 securedel2-1.4.{1,3} securedel2-1.5.2
 #   securedel2-1.6.2 (4 entries): freed-byte zeroing is N/A on the
 #   content-addressed store (GC reclaims); recovered row-level intent: the
@@ -708,7 +708,7 @@ do_test doltlite_recover_rawformat_2-8.4 {
   set c [execsql {PRAGMA auto_vacuum}]
   set d [catchsql {VACUUM}]
   list $a $b $c $d
-} {0 {1 {auto_vacuum is not supported on doltlite-format databases}} 0 {0 {}}}
+} {0 {0 {}} 0 {0 {}}}
 
 do_test doltlite_recover_rawformat_2-8.5 {
   execsql {DELETE FROM v1}

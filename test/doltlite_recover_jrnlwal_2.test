@@ -299,7 +299,7 @@ source $testdir/tester.tcl
 # covers: tkt3457 tkt3457-1.5 — sec 10: no -journal file exists; db-file snapshot taken mid-transaction opens clean with only committed rows; original connection commits all rows
 # covers: where where-1.1.1 — sec 12: SELECT x,y,w WHERE w=10 -> {3 121 10} and EXPLAIN QUERY PLAN proves SEARCH via index i1w (search-count metric re-expressed as plan assertion)
 # covers: tkt-2d1a5c67d tkt-2d1a5c67d-3.6 — sec 11: committed db file copied to a new name opens clean and returns 'xyz' (chunk-store analog of WAL-file recovery)
-# covers: tkt3761 tkt3761-1.1 — sec 13: auto_vacuum=INCREMENTAL rejected verbatim on :memory:, incremental_vacuum errors, DELETE+ROLLBACK in-memory leaves rows and integrity intact
+# covers: tkt3761 tkt3761-1.1 — sec 13: auto_vacuum=INCREMENTAL accepted as a no-op on :memory: (reads back 0), incremental_vacuum no-ops, DELETE+ROLLBACK in-memory leaves rows and integrity intact
 
 # Recovered intent for the jrnlwal_2 shard: journal/WAL pragma surface,
 # checkpoint semantics, and durability. doltlite has no WAL sidecar or
@@ -725,17 +725,19 @@ do_test doltlite_recover_jrnlwal_2-12.4 {
 } {SCAN wt1}
 
 #-------------------------------------------------------------------------
-# Section 13: tkt3761. auto_vacuum/incremental_vacuum are rejected; the
-# rollback-integrity intent (DELETE inside a transaction, then ROLLBACK,
-# database intact) holds on an in-memory database.
+# Section 13: tkt3761. auto_vacuum/incremental_vacuum are accepted as
+# no-ops (auto_vacuum reads back 0); the rollback-integrity intent
+# (DELETE inside a transaction, then ROLLBACK, database intact) holds
+# on an in-memory database.
 #
 do_test doltlite_recover_jrnlwal_2-13.1 {
   sqlite3 dbm :memory:
-  catchsql {PRAGMA auto_vacuum=INCREMENTAL} dbm
-} {1 {auto_vacuum is not supported on doltlite-format databases}}
+  list [catchsql {PRAGMA auto_vacuum=INCREMENTAL} dbm] \
+       [execsql {PRAGMA auto_vacuum} dbm]
+} {{0 {}} 0}
 do_test doltlite_recover_jrnlwal_2-13.2 {
   catchsql {PRAGMA incremental_vacuum(4)} dbm
-} {1 {incremental_vacuum is not supported on doltlite-format databases}}
+} {0 {}}
 do_test doltlite_recover_jrnlwal_2-13.3 {
   execsql {
     CREATE TABLE v1(k INTEGER PRIMARY KEY, x);

@@ -71,6 +71,7 @@ pragmafault
 returningfault
 rollbackfault
 rowvaluefault
+savepointfault
 schemafault
 shared_err
 snapshot_fault

@@ -814,11 +814,14 @@ void sqlite3Pragma(
       ** as an auto-vacuum capable db.
       */
       rc = sqlite3BtreeSetAutoVacuum(pBt, eAuto);
-      if( rc==SQLITE_ERROR ){
-        sqlite3ErrorMsg(pParse,
-          "auto_vacuum is not supported on doltlite-format databases");
-        goto pragma_out;
-      }
+#ifdef DOLTLITE_PROLLY
+      /* Accepted as a no-op on doltlite-format databases: there is no
+      ** page freelist for any mode to act on, and the meta write below
+      ** would start a write transaction just to record a setting the
+      ** format ignores. LARGEST_ROOT_PAGE is the max table id here, so
+      ** stock'"'"'s capability probe would wrongly pass. */
+      if( sqlite3BtreeIsDoltliteFormat(pBt) ) break;
+#endif
       if( rc==SQLITE_OK && (eAuto==1 || eAuto==2) ){
         /* When setting the auto_vacuum mode to either "full" or
         ** "incremental", write the value of meta[6] in the database
@@ -858,13 +861,6 @@ void sqlite3Pragma(
 #ifndef SQLITE_OMIT_AUTOVACUUM
   case PragTyp_INCREMENTAL_VACUUM: {
     int iLimit = 0, addr;
-#ifdef DOLTLITE_PROLLY
-    if( sqlite3BtreeIsDoltliteFormat(pDb->pBt) ){
-      sqlite3ErrorMsg(pParse,
-        "incremental_vacuum is not supported on doltlite-format databases");
-      goto pragma_out;
-    }
-#endif
     if( zRight==0 || !sqlite3GetInt32(zRight, &iLimit) || iLimit<=0 ){
       iLimit = 0x7fffffff;
     }
