@@ -6094,17 +6094,6 @@ descidx2 descidx2-3.24
 descidx2 descidx2-3.25
 descidx2 descidx2-3.26
 
-# do_diskfull_test injects sqlite_diskfull_pending at increasing IO counts
-# during VACUUM. doltlite's VACUUM runs the GC path; when the injected
-# SQLITE_FULL hits during the sweep phase the statement still fails, but
-# with GC's own message ("gc sweep phase failed") instead of SQLITE_FULL's
-# text. Every post-failure integrity_check (2.x.2) passes — no corruption,
-# wording-only divergence.
-diskfull diskfull-2.2.1
-diskfull diskfull-2.3.1
-diskfull diskfull-2.4.1
-diskfull diskfull-2.5.1
-
 # t0 declares PRIMARY KEY(c0,c1) / PRIMARY KEY(c0,c1 NOT NULL); the setup
 # INSERTs leave PK columns NULL, which stock's legacy rowid-PK quirk allows
 # but doltlite rejects ("NOT NULL constraint failed: t0.c0") because the PK
