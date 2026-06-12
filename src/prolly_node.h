@@ -78,6 +78,8 @@ struct ProllyNodeBuilder {
   int nKeyBufAlloc;
   u8 *pValBuf;
   int nValBufAlloc;
+  i64 nValZeroTail;        /* trailing zeros of the last value, not stored in
+                           ** pValBuf; nValBytes and aValOff stay logical */
   u64 *aSubtreeCount;
   int nSubtreeCountAlloc;
 };
@@ -93,7 +95,15 @@ int prollyNodeBuilderAddWithCount(ProllyNodeBuilder *b,
                                   const u8 *pVal, int nVal,
                                   u64 subtreeCount);
 
+int prollyNodeBuilderAddZeroTail(ProllyNodeBuilder *b,
+                                 const u8 *pKey, int nKey,
+                                 const u8 *pVal, int nValPrefix,
+                                 i64 nZeroTail);
+
 int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut);
+
+int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
+                                  i64 *pnZeroTail);
 
 void prollyNodeBuilderReset(ProllyNodeBuilder *b);
 

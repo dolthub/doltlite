@@ -252,8 +252,14 @@ int csGrowPending(ChunkStore *cs){
     ChunkIndexEntry *aNew = (ChunkIndexEntry *)sqlite3_realloc(
       cs->staging.aPending, nNew * (int)sizeof(ChunkIndexEntry)
     );
+    i64 *aNewZ;
     if( aNew == 0 ) return SQLITE_NOMEM;
     cs->staging.aPending = aNew;
+    aNewZ = (i64 *)sqlite3_realloc(
+      cs->staging.aPendingZeroTail, nNew * (int)sizeof(i64)
+    );
+    if( aNewZ == 0 ) return SQLITE_NOMEM;
+    cs->staging.aPendingZeroTail = aNewZ;
     cs->staging.nPendingAlloc = nNew;
   }
   return SQLITE_OK;

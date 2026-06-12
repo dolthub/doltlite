@@ -654,6 +654,7 @@ int chunkStoreClose(ChunkStore *cs){
   cs->index.aIndexMmapBase = 0;
   cs->index.aIndexMmapSize = 0;
   sqlite3_free(cs->staging.aPending);
+  sqlite3_free(cs->staging.aPendingZeroTail);
   sqlite3_free(cs->staging.aRecent);
   csPendHTClear(cs);
   csRecentHTClear(cs);
@@ -1130,10 +1131,12 @@ int chunkStoreGet(
     ChunkIndexEntry *e = &cs->staging.aPending[idx];
     i64 off = e->offset;
     int sz = e->size;
+    i64 nZ = cs->staging.aPendingZeroTail[idx];
     u8 *pCopy = (u8 *)sqlite3_malloc(sz);
     if( pCopy == 0 ) return SQLITE_NOMEM;
 
-    memcpy(pCopy, cs->staging.pWriteBuf + off + 4, sz);
+    memcpy(pCopy, cs->staging.pWriteBuf + off + 4, (size_t)(sz - nZ));
+    if( nZ>0 ) memset(pCopy + (sz - nZ), 0, (size_t)nZ);
     *ppData = pCopy;
     *pnData = sz;
     return SQLITE_OK;
@@ -1255,7 +1258,8 @@ static int csDrainPendingToWal(ChunkStore *cs){
     ChunkIndexEntry *pr = &cs->staging.aRecent[cs->staging.nRecent+i];
     u8 recHdr[CS_WAL_CHUNK_HDR_SIZE];
     const u8 *pSrc = cs->staging.pWriteBuf + pe->offset + 4;
-    int remaining = pe->size;
+    i64 zeroTail = cs->staging.aPendingZeroTail[i];
+    int remaining = (int)(pe->size - zeroTail);
 
     if( writeOff > LARGEST_INT64 - (i64)CS_WAL_CHUNK_HDR_SIZE
      || writeOff + (i64)CS_WAL_CHUNK_HDR_SIZE > LARGEST_INT64 - (i64)pe->size ){
@@ -1280,6 +1284,15 @@ static int csDrainPendingToWal(ChunkStore *cs){
       pSrc += toWrite;
       writeOff += toWrite;
       remaining -= toWrite;
+    }
+    while( zeroTail > 0 ){
+      static const u8 aZeroWin[65536];
+      int toWrite = zeroTail > (i64)sizeof(aZeroWin)
+                  ? (int)sizeof(aZeroWin) : (int)zeroTail;
+      rc = sqlite3OsWrite(cs->file.pFile, aZeroWin, toWrite, writeOff);
+      if( rc!=SQLITE_OK ) return rc;
+      writeOff += toWrite;
+      zeroTail -= toWrite;
     }
   }
 
@@ -1333,6 +1346,7 @@ int chunkStorePut(
     e->hash = h;
     e->offset = (i64)cs->staging.nWriteBuf;
     e->size = nData;
+    cs->staging.aPendingZeroTail[cs->staging.nPending] = 0;
     cs->staging.nPending++;
   }
 
@@ -1340,6 +1354,82 @@ int chunkStorePut(
   cs->staging.nWriteBuf += 4;
   memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
   cs->staging.nWriteBuf += nData;
+
+  if( cs->staging.nWriteBuf >= csPendingDrainLimit() ){
+    rc = csDrainPendingToWal(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  return SQLITE_OK;
+}
+
+/* Stage a chunk whose content is pPrefix[0..nPrefix) followed by nZeroTail
+** zero bytes, holding only the prefix in memory. The chunk on disk and in
+** the index is identical to a flat put of the full content: the commit
+** writers emit the zeros in bounded windows. Memory-backed stores keep the
+** write buffer as permanent storage with no tail metadata, so they take
+** the flat path. */
+int chunkStorePutSparse(
+  ChunkStore *cs,
+  const u8 *pPrefix,
+  int nPrefix,
+  i64 nZeroTail,
+  ProllyHash *pHash
+){
+  int rc;
+  ProllyHash h;
+  i64 nTotal64 = (i64)nPrefix + nZeroTail;
+  int nData;
+
+  if( nPrefix<0 || nZeroTail<0 || nTotal64 > (i64)0x7fffffff ){
+    return SQLITE_TOOBIG;
+  }
+  nData = (int)nTotal64;
+  if( nZeroTail==0 ){
+    return chunkStorePut(cs, pPrefix, nData, pHash);
+  }
+  if( cs->isMemory ){
+    u8 *pFlat = (u8*)sqlite3_malloc(nData>0 ? nData : 1);
+    if( !pFlat ) return SQLITE_NOMEM;
+    if( nPrefix>0 ) memcpy(pFlat, pPrefix, nPrefix);
+    memset(pFlat + nPrefix, 0, (size_t)nZeroTail);
+    rc = chunkStorePut(cs, pFlat, nData, pHash);
+    sqlite3_free(pFlat);
+    return rc;
+  }
+
+  prollyHashComputeZeroTail(pPrefix, nPrefix, nZeroTail, &h);
+  if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
+
+  {
+    int bHas = 0;
+    int hasRc = chunkStoreHas(cs, &h, &bHas);
+    if( hasRc==SQLITE_OK && bHas ){
+      return SQLITE_OK;
+    }
+    if( hasRc!=SQLITE_OK ) return hasRc;
+  }
+
+  rc = csGrowPending(cs);
+  if( rc != SQLITE_OK ) return rc;
+  rc = csGrowWriteBuf(cs, 4 + nPrefix);
+  if( rc != SQLITE_OK ) return rc;
+
+  {
+    ChunkIndexEntry *e = &cs->staging.aPending[cs->staging.nPending];
+    e->hash = h;
+    e->offset = (i64)cs->staging.nWriteBuf;
+    e->size = nData;
+    cs->staging.aPendingZeroTail[cs->staging.nPending] = nZeroTail;
+    cs->staging.nPending++;
+  }
+
+  CS_WRITE_U32(cs->staging.pWriteBuf + cs->staging.nWriteBuf, (u32)nData);
+  cs->staging.nWriteBuf += 4;
+  if( nPrefix>0 ){
+    memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pPrefix, nPrefix);
+    cs->staging.nWriteBuf += nPrefix;
+  }
 
   if( cs->staging.nWriteBuf >= csPendingDrainLimit() ){
     rc = csDrainPendingToWal(cs);
@@ -1574,11 +1664,13 @@ static int csCommitToFile(ChunkStore *cs){
     u8 *pWalBatch = 0;
     u8 aSmallWalBatch[4096];
     u8 *pOut = 0;
+    int hasSparse = 0;
     for( i = 0; i < cs->staging.nPending; i++ ){
       walBytes += (i64)CS_WAL_CHUNK_HDR_SIZE
                 + (i64)cs->staging.aPending[i].size;
+      if( cs->staging.aPendingZeroTail[i] ) hasSparse = 1;
     }
-    if( !crashWriteActive && walBytes <= 64*1024 ){
+    if( !crashWriteActive && !hasSparse && walBytes <= 64*1024 ){
       if( walBytes <= (i64)sizeof(aSmallWalBatch) ){
         pWalBatch = aSmallWalBatch;
       }else{
@@ -1621,7 +1713,8 @@ static int csCommitToFile(ChunkStore *cs){
 
         {
           const u8 *pSrc = cs->staging.pWriteBuf + bufOff;
-          int remaining = pe->size;
+          i64 zeroTail = cs->staging.aPendingZeroTail[i];
+          int remaining = (int)(pe->size - zeroTail);
           while( remaining > 0 && rc==SQLITE_OK ){
             int toWrite = remaining > 65536 ? 65536 : remaining;
             CRASH_CHECK_WRITE();
@@ -1629,6 +1722,15 @@ static int csCommitToFile(ChunkStore *cs){
             pSrc += toWrite;
             writeOff += toWrite;
             remaining -= toWrite;
+          }
+          while( zeroTail > 0 && rc==SQLITE_OK ){
+            static const u8 aZeroWin[65536];
+            int toWrite = zeroTail > (i64)sizeof(aZeroWin)
+                        ? (int)sizeof(aZeroWin) : (int)zeroTail;
+            CRASH_CHECK_WRITE();
+            rc = sqlite3OsWrite(cs->file.pFile, aZeroWin, toWrite, writeOff);
+            writeOff += toWrite;
+            zeroTail -= toWrite;
           }
         }
         if( rc != SQLITE_OK ) goto commit_done;

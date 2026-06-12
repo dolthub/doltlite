@@ -41,6 +41,11 @@ int prollyChunkerAdd(ProllyChunker *ch,
                      const u8 *pKey, int nKey,
                      const u8 *pVal, int nVal);
 
+int prollyChunkerAddZeroTail(ProllyChunker *ch,
+                             const u8 *pKey, int nKey,
+                             const u8 *pVal, int nValPrefix,
+                             i64 nZeroTail);
+
 int prollyChunkerFinish(ProllyChunker *ch);
 
 void prollyChunkerGetRoot(ProllyChunker *ch, ProllyHash *pRoot);
