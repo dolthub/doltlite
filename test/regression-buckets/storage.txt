@@ -124,7 +124,6 @@ reservebytes
 resetdb
 rollback
 rollback2
-savepoint6
 schema6
 securedel
 securedel2

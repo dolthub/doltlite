@@ -124,7 +124,11 @@ int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 
 #define PROLLY_DEFAULT_CACHE_SIZE 16384
 
-#define PROLLY_DEFAULT_PAGE_SIZE 4096
+#ifdef SQLITE_DEFAULT_PAGE_SIZE
+# define PROLLY_DEFAULT_PAGE_SIZE SQLITE_DEFAULT_PAGE_SIZE
+#else
+# define PROLLY_DEFAULT_PAGE_SIZE 4096
+#endif
 
 #define PROLLY_MAX_RECORD_SIZE ((sqlite3_int64)(1024*1024*1024))
 
@@ -4761,9 +4765,13 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
 }
 
 static int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
-  (void)p;
-  if( autoVacuum==BTREE_AUTOVACUUM_NONE ) return SQLITE_OK;
-  return SQLITE_ERROR;
+  /* Prolly storage has no page freelist, so auto_vacuum can never apply.
+  ** Stock accepts the pragma on databases that cannot support it and the
+  ** read-back reports the file's actual mode (none); match that instead
+  ** of erroring, since setting auto_vacuum at startup is a common app
+  ** idiom. */
+  (void)p; (void)autoVacuum;
+  return SQLITE_OK;
 }
 int sqlite3BtreeSetAutoVacuum(Btree *p, int autoVacuum){
   if( !p ) return SQLITE_OK;
@@ -4780,8 +4788,10 @@ int sqlite3BtreeGetAutoVacuum(Btree *p){
 }
 
 static int prollyBtreeIncrVacuum(Btree *p){
+  /* No freelist pages to reclaim: report completion immediately, exactly
+  ** like stock on a database whose auto_vacuum is none. */
   (void)p;
-  return SQLITE_ERROR;
+  return SQLITE_DONE;
 }
 int sqlite3BtreeIncrVacuum(Btree *p){
   if( !p ) return SQLITE_DONE;
