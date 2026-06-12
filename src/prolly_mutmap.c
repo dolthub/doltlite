@@ -631,6 +631,84 @@ int prollyMutMapInsert(
   return SQLITE_OK;
 }
 
+/* Like prollyMutMapInsert, but adopts pVal instead of copying it.
+** Ownership transfers to the entry only on SQLITE_OK; on error the
+** caller still owns pVal. Lets large values (an expanded zeroblob)
+** enter the map without a second full-size buffer. */
+int prollyMutMapInsertOwnedVal(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  u8 *pVal, int nVal
+){
+  int found = 0, idx = 0, rc, phys = -1;
+  u8 keyBuf[8];
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
+
+  if( mm->keepSorted || !mm->orderDirty ){
+    idx = bsearch_key(mm, pKey, nKey, &found);
+    if( found ){
+      phys = mm->aOrder[idx];
+    }
+  }else{
+    rc = findPhysLazy(mm, pKey, nKey, &phys);
+    if( rc!=SQLITE_OK ) return rc;
+    found = (phys >= 0);
+  }
+
+  if( found ){
+    ProllyMutMapEntry *e = &mm->aEntries[phys];
+
+    if( mm->currentSavepointLevel > 0
+     && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+      rc = appendUndoRec(mm, phys);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    e->op = PROLLY_EDIT_INSERT;
+    sqlite3_free(e->pVal);
+    e->pVal = pVal;
+    e->nVal = nVal;
+    e->nValAlloc = nVal;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+    return SQLITE_OK;
+  }
+
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = ensureHashForInsert(mm);
+  if( rc!=SQLITE_OK ) return rc;
+
+  {
+    ProllyMutMapEntry *e;
+    phys = mm->nEntries;
+    e = &mm->aEntries[phys];
+    memset(e, 0, sizeof(*e));
+    e->op = PROLLY_EDIT_INSERT;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+    rc = copyEntryData(mm, e, pKey, nKey, 0, 0);
+    if( rc!=SQLITE_OK ){
+      return rc;
+    }
+    e->pVal = pVal;
+    e->nVal = nVal;
+    e->nValAlloc = nVal;
+    updateAppendSorted(mm, phys);
+    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
+      insertOrderEntry(mm, idx, phys);
+    }else{
+      mm->aOrder[phys] = phys;
+      mm->aPos[phys] = phys;
+      mm->orderDirty = 1;
+    }
+  }
+
+  mm->nEntries++;
+  if( !mm->keepSorted ){
+    hashInsertPhys(mm, phys);
+  }
+  mm->generation++;
+  return SQLITE_OK;
+}
+
 int prollyMutMapReplaceEntry(
   ProllyMutMap *mm,
   ProllyMutMapEntry *e,

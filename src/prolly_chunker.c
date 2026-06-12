@@ -99,7 +99,10 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
   if( rc==SQLITE_OK && ch->pCache ){
     ProllyCacheEntry *pEntry;
-    pEntry = prollyCachePut(ch->pCache, pHash, pData, nData, &rc);
+    /* The cache adopts the finished node; copying it doubled the peak for
+    ** large single-value leaves. */
+    pEntry = prollyCachePutOwned(ch->pCache, pHash, pData, nData, &rc);
+    pData = 0;  /* consumed on every PutOwned path, including failure */
     if( pEntry ) prollyCacheRelease(ch->pCache, pEntry);
   }
   sqlite3_free(pData);
