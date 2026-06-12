@@ -116,10 +116,10 @@ source $testdir/tester.tcl
 # covers: jrnlmode jrnlmode-2.4 — cross-db txn commits atomically, rows visible, no -journal sidecars (7.4,3.1,3.2)
 # covers: jrnlmode jrnlmode-2.5 — cross-db txn commits atomically, rows visible, no -journal sidecars (7.4,3.1,3.2)
 # covers: jrnlmode jrnlmode-3.2 — BEGIN IMMEDIATE + INSERT OR IGNORE across attached dbs commits (7.5)
-# covers: jrnlmode jrnlmode-4.1 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum rejected (10.6,10.4,2.8)
-# covers: jrnlmode jrnlmode-4.2 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum rejected (10.6,10.4,2.8)
-# covers: jrnlmode jrnlmode-4.3 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum rejected (10.6,10.4,2.8)
-# covers: jrnlmode jrnlmode-4.4 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum rejected (10.6,10.4,2.8)
+# covers: jrnlmode jrnlmode-4.1 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum no-op (10.6,10.4,2.8)
+# covers: jrnlmode jrnlmode-4.2 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum no-op (10.6,10.4,2.8)
+# covers: jrnlmode jrnlmode-4.3 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum no-op (10.6,10.4,2.8)
+# covers: jrnlmode jrnlmode-4.4 — cache_size=1 + blob insert/delete + integrity_check ok; auto_vacuum no-op (10.6,10.4,2.8)
 # covers: jrnlmode jrnlmode-5.1 — journal_size_limit fixed at -1, set echoes -1 incl. aux (6.1-6.3,7.3)
 # covers: jrnlmode jrnlmode-5.3 — journal_size_limit fixed at -1, set echoes -1 incl. aux (6.1-6.3,7.3)
 # covers: jrnlmode jrnlmode-5.4.1 — journal_size_limit fixed at -1, set echoes -1 incl. aux (6.1-6.3,7.3)
@@ -292,9 +292,9 @@ source $testdir/tester.tcl
 # covers: journal3 journal3-1.2.4.4 — no -journal sidecar is ever created during an open txn; rollback intact (3.1,2.2)
 # covers: shared3 shared3-2.4 — cache_size echoes per connection; cross-connection reads consistent (10.1,10.2)
 # covers: shared3 shared3-2.8 — no pager-lock cache spill: concurrent write conflict is deterministic 'database is locked' (4.2)
-# covers: shared3 shared3-3.1 — auto_vacuum=2 rejected with exact error (10.4)
+# covers: shared3 shared3-3.1 — auto_vacuum=2 accepted as a no-op, reads back 0 (10.4)
 # covers: shared3 shared3-3.2 — uncommitted schema change invisible to second connection (4.7)
-# covers: shared3 shared3-3.3 — incremental_vacuum errors; database unaffected (10.5)
+# covers: shared3 shared3-3.3 — incremental_vacuum no-ops; database unaffected (10.5)
 # covers: shared3 shared3-3.4 — uncommitted schema change invisible to second connection (4.7)
 # covers: tkt-f3e5abed55 tkt-f3e5abed55-1.4 — multi-db COMMIT succeeds under snapshot isolation (no pager write-lock); atomic visibility (7.4)
 # covers: tkt-f3e5abed55 tkt-f3e5abed55-1.5 — both connections continue to commit cleanly; rows from both dbs visible (4.3,7.4,7.5)
@@ -302,13 +302,12 @@ source $testdir/tester.tcl
 # covers: tkt-f3e5abed55 tkt-f3e5abed55-2.4 — both connections continue to commit cleanly; rows from both dbs visible (4.3,7.4,7.5)
 # covers: tkt-f3e5abed55 tkt-f3e5abed55-2.5 — multi-db txn durable across reopen; no master-journal files (7.8,7.4)
 # covers: vacuum vacuum-7.1 — freelist_count is 0 in prolly storage even after DROP TABLE (10.3)
-# covers: vacuum vacuum-7.5 — auto_vacuum=1 rejected; auto_vacuum reads 0 (10.4)
+# covers: vacuum vacuum-7.5 — auto_vacuum=1 no-op; auto_vacuum reads 0 (10.4)
 # covers: misc1 misc1-14.2b — no -journal sidecar during open write transaction (3.1)
 # not-covered: (none)
 
 set JM_ERR {journal_mode is not configurable on doltlite-format databases}
 set CKPT_ERR {wal_checkpoint mode is not configurable on doltlite-format databases; use the default (PASSIVE) form}
-set AV_ERR {auto_vacuum is not supported on doltlite-format databases}
 
 #-------------------------------------------------------------------------
 # 1.*: PRAGMA journal_mode contract: fixed at wal, setters rejected.
@@ -656,7 +655,7 @@ do_test doltlite_recover_jrnlwal_4-9.5 {
 
 #-------------------------------------------------------------------------
 # 10.*: pager-metric pragmas: cache_size echo, freelist_count, auto_vacuum
-# and incremental_vacuum rejection, user_version, lock_status.
+# and incremental_vacuum no-ops, user_version, lock_status.
 #
 do_execsql_test doltlite_recover_jrnlwal_4-10.1 {
   PRAGMA main.cache_size = 10;
@@ -678,12 +677,13 @@ do_execsql_test doltlite_recover_jrnlwal_4-10.3 {
 do_test doltlite_recover_jrnlwal_4-10.4 {
   list [execsql {PRAGMA auto_vacuum}] \
        [catchsql {PRAGMA auto_vacuum = 1}] \
-       [catchsql {PRAGMA auto_vacuum = 2}]
-} [list 0 [list 1 $AV_ERR] [list 1 $AV_ERR]]
+       [catchsql {PRAGMA auto_vacuum = 2}] \
+       [execsql {PRAGMA auto_vacuum}]
+} {0 {0 {}} {0 {}} 0}
 do_test doltlite_recover_jrnlwal_4-10.5 {
   list [catchsql {PRAGMA incremental_vacuum}] \
        [execsql {SELECT count(*) FROM t1}]
-} {{1 {incremental_vacuum is not supported on doltlite-format databases}} 5}
+} {{0 {}} 5}
 do_execsql_test doltlite_recover_jrnlwal_4-10.6 {
   PRAGMA cache_size = 1;
   CREATE TABLE abc(a, b, c);
