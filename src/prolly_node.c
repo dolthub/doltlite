@@ -382,6 +382,9 @@ static int builderGrowValBuf(ProllyNodeBuilder *b, int nAdd){
       nNew *= 2;
     }
     if( nNew < nNeeded ) return SQLITE_NOMEM;
+    /* A single oversize value would leave most of a doubled buffer dead;
+    ** size to fit and let the next ordinary add resume doubling. */
+    if( nAdd >= 1024*1024 && nNew > nNeeded ) nNew = nNeeded;
     pNew = (u8*)sqlite3_realloc(b->pValBuf, (int)nNew);
     if( !pNew ) return SQLITE_NOMEM;
     b->pValBuf = pNew;

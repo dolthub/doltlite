@@ -8446,7 +8446,14 @@ static int prollyBtCursorInsert(
     pInsertedPayload = pData;
     nInsertedPayload = nData;
 
-    if( pCur->mmActive
+    if( pIntKeyBuf ){
+      /* The expanded zero-tail buffer was allocated above; hand it to the
+      ** map instead of paying a second full-size copy. */
+      rc = prollyMutMapInsertOwnedVal(pCur->pMutMap,
+                                      NULL, 0, pPayload->nKey,
+                                      pIntKeyBuf, nData);
+      if( rc==SQLITE_OK ) pIntKeyBuf = 0;
+    }else if( pCur->mmActive
      && pCur->mmPhysActive
      && pCur->pMutMap
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH)
