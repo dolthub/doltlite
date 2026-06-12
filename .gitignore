@@ -9,3 +9,4 @@ build-fuzz/
 .logs/
 __pycache__/
 state.json
+.compat-cache/
