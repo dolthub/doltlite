@@ -1378,6 +1378,10 @@ static int addCatalogEntryMeta(
   aMeta[*pnMeta].zName = sqlite3_mprintf("%s", zName ? zName : "");
   aMeta[*pnMeta].zTblName = sqlite3_mprintf("%s", zTblName ? zTblName : "");
   if( !aMeta[*pnMeta].zType || !aMeta[*pnMeta].zName || !aMeta[*pnMeta].zTblName ){
+    sqlite3_free(aMeta[*pnMeta].zType);
+    sqlite3_free(aMeta[*pnMeta].zName);
+    sqlite3_free(aMeta[*pnMeta].zTblName);
+    memset(&aMeta[*pnMeta], 0, sizeof(CatalogEntryMeta));
     return SQLITE_NOMEM;
   }
   (*pnMeta)++;
@@ -2092,6 +2096,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     rc = prollyMutMapInit(&mm, 1);
     if( rc!=SQLITE_OK ){
       freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
       return rc;
     }
     for(i=0; i<nRows; i++){
@@ -2173,6 +2178,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     aSorted = sqlite3_malloc(nTables * (int)sizeof(CatalogSerializeEntry));
     if( !aSorted ){
       freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
       return SQLITE_NOMEM;
     }
     memset(aSorted, 0, nTables * (int)sizeof(CatalogSerializeEntry));
