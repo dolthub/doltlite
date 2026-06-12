@@ -5814,11 +5814,6 @@ badutf badutf-1.18
 badutf badutf-1.19
 badutf badutf-1.20
 
-# 3GB single-transaction insert: doltlite stages all uncommitted writes in
-# memory (no pager spill), exceeding the 6g CI memory cap -> clean SQLITE_NOMEM;
-# stock spills dirty pages to disk and completes
-bigsort bigsort-1.0
-
 # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly
 # chunks, not legacy pager pages, so pager_cache_size expectations never match
 cache cache-1.2
@@ -6014,15 +6009,6 @@ collate9 collate9-4.5
 # rowid-table quirk reports nullable non-INTEGER PKs
 colmeta colmeta-5.1
 colmeta colmeta-5.2
-
-# UPDATE OR REPLACE + AFTER DELETE trigger that empties the table: stock
-# aborts with "constraint failed" (pinned-cursor protection) and rolls back;
-# doltlite runs to completion and deletes every row. Real bug, pinned
-# pending fix (#1387). 13.1.3/13.2.3 are the post-statement table contents.
-conflict3 conflict3-13.1.1
-conflict3 conflict3-13.1.3
-conflict3 conflict3-13.2.1
-conflict3 conflict3-13.2.3
 
 # dbfuzz001 injects corrupt raw SQLite-format images via `db deserialize
 # [decode_hexdb ...]`. doltlite's serialize/deserialize does not carry the
@@ -7365,4 +7351,3 @@ zerodamage zerodamage-2.0
 zerodamage zerodamage-2.1
 zerodamage zerodamage-3.0
 zerodamage zerodamage-3.1
-

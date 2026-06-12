@@ -105,6 +105,18 @@ static int csCrashWriteInjectionActive(void){
 
 #define CS_RECENT_FAST_PATH_MAX 16384
 #define CS_WRITEBUF_RETAIN_MAX (64*1024)
+#define CS_PENDING_DRAIN_LIMIT (64*1024*1024)
+
+static i64 csPendingDrainLimit(void){
+#ifdef SQLITE_TEST
+  const char *zEnv = getenv("DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT");
+  if( zEnv && zEnv[0] ){
+    int n = atoi(zEnv);
+    if( n>0 ) return (i64)n;
+  }
+#endif
+  return (i64)CS_PENDING_DRAIN_LIMIT;
+}
 
 #if CHUNK_STORE_LE_PACKING
 typedef char chunk_index_entry_size_check[
@@ -1195,6 +1207,100 @@ int chunkStoreGet(
   return SQLITE_OK;
 }
 
+static int csDrainPendingToWal(ChunkStore *cs){
+  int rc;
+  int i;
+  i64 writeOff;
+
+  if( cs->isMemory || cs->readOnly || cs->corruptMidStream ){
+    return SQLITE_OK;
+  }
+  if( cs->staging.nPending==0 ){
+    return SQLITE_OK;
+  }
+  if( !csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+    return SQLITE_OK;
+  }
+
+  if( cs->file.pFile == 0 ){
+    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                  | SQLITE_OPEN_MAIN_DB;
+    rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile,
+                    openFlags, 0);
+    if( rc != SQLITE_OK ){
+      return (rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM) ? rc : SQLITE_CANTOPEN;
+    }
+  }
+
+  if( cs->staging.nRecentUncommitted==0 ){
+    cs->staging.iUncommittedStart = cs->file.iFileSize;
+  }
+
+  writeOff = cs->file.iFileSize;
+  if( writeOff == 0 ){
+    u8 manifest[CHUNK_MANIFEST_SIZE];
+    cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+    csSerializeManifest(cs, manifest);
+    csManifestSeal(manifest);
+    rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    writeOff = CHUNK_MANIFEST_SIZE;
+  }
+
+  rc = csGrowRecent(cs, cs->staging.nPending);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for( i=0; i<cs->staging.nPending; i++ ){
+    ChunkIndexEntry *pe = &cs->staging.aPending[i];
+    ChunkIndexEntry *pr = &cs->staging.aRecent[cs->staging.nRecent+i];
+    u8 recHdr[CS_WAL_CHUNK_HDR_SIZE];
+    const u8 *pSrc = cs->staging.pWriteBuf + pe->offset + 4;
+    int remaining = pe->size;
+
+    if( writeOff > LARGEST_INT64 - (i64)CS_WAL_CHUNK_HDR_SIZE
+     || writeOff + (i64)CS_WAL_CHUNK_HDR_SIZE > LARGEST_INT64 - (i64)pe->size ){
+      return SQLITE_TOOBIG;
+    }
+
+    *pr = *pe;
+    pr->offset = writeOff + CS_WAL_CHUNK_LEN_OFF;
+
+    recHdr[0] = CS_WAL_TAG_CHUNK;
+    memcpy(recHdr + CS_WAL_CHUNK_HASH_OFF, &pe->hash, PROLLY_HASH_SIZE);
+    CS_WRITE_U32(recHdr + CS_WAL_CHUNK_LEN_OFF, (u32)pe->size);
+
+    rc = sqlite3OsWrite(cs->file.pFile, recHdr, CS_WAL_CHUNK_HDR_SIZE, writeOff);
+    if( rc!=SQLITE_OK ) return rc;
+    writeOff += CS_WAL_CHUNK_HDR_SIZE;
+
+    while( remaining > 0 ){
+      int toWrite = remaining > 65536 ? 65536 : remaining;
+      rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
+      if( rc!=SQLITE_OK ) return rc;
+      pSrc += toWrite;
+      writeOff += toWrite;
+      remaining -= toWrite;
+    }
+  }
+
+  cs->staging.nRecent += cs->staging.nPending;
+  cs->staging.nRecentUncommitted += cs->staging.nPending;
+  cs->file.iFileSize = writeOff;
+  if( writeOff > cs->wal.iWalOffset ){
+    cs->wal.nWalData = writeOff - cs->wal.iWalOffset;
+  }
+
+  cs->staging.nPending = 0;
+  csPendHTReset(cs);
+  cs->staging.nWriteBuf = 0;
+  if( cs->staging.nWriteBufAlloc > CS_WRITEBUF_RETAIN_MAX ){
+    sqlite3_free(cs->staging.pWriteBuf);
+    cs->staging.pWriteBuf = 0;
+    cs->staging.nWriteBufAlloc = 0;
+  }
+  return SQLITE_OK;
+}
+
 int chunkStorePut(
   ChunkStore *cs,
   const u8 *pData,
@@ -1234,6 +1340,11 @@ int chunkStorePut(
   cs->staging.nWriteBuf += 4;
   memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
   cs->staging.nWriteBuf += nData;
+
+  if( cs->staging.nWriteBuf >= csPendingDrainLimit() ){
+    rc = csDrainPendingToWal(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   return SQLITE_OK;
 }
@@ -1360,7 +1471,8 @@ static int csCommitToFile(ChunkStore *cs){
     i64 appendBytes = 0;
 
     for( i = 0; i < cs->staging.nPending; i++ ){
-      i64 recBytes = (i64)25 + (i64)cs->staging.aPending[i].size;
+      i64 recBytes = (i64)CS_WAL_CHUNK_HDR_SIZE
+                   + (i64)cs->staging.aPending[i].size;
       if( appendBytes > LARGEST_INT64 - recBytes ){
         rc = SQLITE_TOOBIG;
         goto commit_done;
@@ -1388,8 +1500,8 @@ static int csCommitToFile(ChunkStore *cs){
     for( i = 0; i < cs->staging.nPending; i++ ){
       ChunkIndexEntry *pSrc = &cs->staging.aPending[i];
       aCommittedPending[i] = *pSrc;
-      aCommittedPending[i].offset = filePos + 21;
-      filePos += (i64)25 + (i64)pSrc->size;
+      aCommittedPending[i].offset = filePos + CS_WAL_CHUNK_LEN_OFF;
+      filePos += (i64)CS_WAL_CHUNK_HDR_SIZE + (i64)pSrc->size;
     }
 
     useRecent = !crashWriteActive
@@ -1463,7 +1575,8 @@ static int csCommitToFile(ChunkStore *cs){
     u8 aSmallWalBatch[4096];
     u8 *pOut = 0;
     for( i = 0; i < cs->staging.nPending; i++ ){
-      walBytes += (i64)25 + (i64)cs->staging.aPending[i].size;
+      walBytes += (i64)CS_WAL_CHUNK_HDR_SIZE
+                + (i64)cs->staging.aPending[i].size;
     }
     if( !crashWriteActive && walBytes <= 64*1024 ){
       if( walBytes <= (i64)sizeof(aSmallWalBatch) ){
@@ -1598,6 +1711,8 @@ commit_done:
   }
   sqlite3_free(aMergePending);
 
+  cs->staging.nRecentUncommitted = 0;
+  cs->staging.iUncommittedStart = 0;
   cs->staging.nWriteBuf = 0;
   if( cs->staging.nWriteBufAlloc > CS_WRITEBUF_RETAIN_MAX ){
     sqlite3_free(cs->staging.pWriteBuf);
@@ -1657,6 +1772,19 @@ void chunkStoreRollback(ChunkStore *cs){
 
     cs->staging.nWriteBuf = cs->staging.nCommittedWriteBuf;
   }else{
+    if( cs->staging.nRecentUncommitted > 0 ){
+      assert( cs->staging.nRecent >= cs->staging.nRecentUncommitted );
+      cs->staging.nRecent -= cs->staging.nRecentUncommitted;
+      cs->staging.nRecentUncommitted = 0;
+      csRecentHTClear(cs);
+      cs->file.iFileSize = cs->staging.iUncommittedStart;
+      if( cs->file.iFileSize >= cs->wal.iWalOffset ){
+        cs->wal.nWalData = cs->file.iFileSize - cs->wal.iWalOffset;
+      }else{
+        cs->wal.nWalData = 0;
+      }
+      cs->staging.iUncommittedStart = 0;
+    }
     cs->staging.nWriteBuf = 0;
   }
   (void)csRestoreCommittedRefsState(cs);
