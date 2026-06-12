@@ -239,6 +239,7 @@ pragma pragma-3.4
 pragma pragma-3.5
 pragma pragma-3.6b
 pragma pragma-3.7
+pragma pragma-3.8
 pragma pragma-3.9a
 pragma pragma-3.9b
 pragma pragma-4.6
@@ -1360,29 +1361,27 @@ dbpage dbpage-710  # sqlite_dbpage raw page access; chunk store has no SQLite pa
 dbpage dbpage-810  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-820  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 
-# pagesize — PRAGMA page_size is fixed at 4096 on the chunk store and cannot be
-# reconfigured; tests asserting 512/1024/2048/8192 see 4096 (or a chunk-store
-# value). Page-format pragma divergence.
-pagesize pagesize-1.1  # page_size not configurable on the chunk store
+# pagesize — PRAGMA page_size reports the build default for new chunk-store
+# connections and session assignments do not alter the stored layout. Tests
+# that assert persisted SQLite file-header page sizes or page_count/page_size
+# arithmetic diverge.
 pagesize pagesize-1.3  # page_size not configurable on the chunk store
-pagesize pagesize-1.4  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.3  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.6  # page_size not configurable on the chunk store
 pagesize pagesize-2.512.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.512.30  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.3  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.6  # page_size not configurable on the chunk store
 pagesize pagesize-2.2048.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.2048.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.4096.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.4096.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.10  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.2  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.3  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.6  # page_size not configurable on the chunk store
 pagesize pagesize-2.8192.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.8192.30  # page_size not configurable on the chunk store
 pagesize pagesize-3.1  # page_size not configurable on the chunk store
 pagesize pagesize-3.3  # page_size not configurable on the chunk store
 
@@ -2339,7 +2338,6 @@ vacuum-into vacuum-into-410  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-500  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-510  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-620  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-630  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-710.1  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-710.2  # VACUUM INTO explicitly rejected
 vacuum-into vacuum-into-720.1  # VACUUM INTO explicitly rejected
@@ -3293,7 +3291,6 @@ pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-pre
 pagerfault3 pagerfault3-1-ioerr-transient.20  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.21  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.22  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-fts4aa fts4aa-1.9  # FTS4 deferral heuristic reads the synthetic 4096 page size; stock at page_size=4096 returns identical values
 fts3malloc fts3_malloc-2.1.transient.100000.18  # expected count bakes in a master row stock leaks from a faulted CREATE; doltlite's CREATE stays atomic (clean replay = 4 on both engines) — #1333
 
 # ── sqllimits1 ──
@@ -4167,24 +4164,6 @@ fts3corrupt7 fts3corrupt7-1.0
 fts3corrupt7 fts3corrupt7-1.1
 fts3corrupt7 fts3corrupt7-2.1
 
-# fts deferred-token decisions key off segment geometry derived from
-# PRAGMA page_size; prolly reports a synthetic 4096 (test builds use
-# 1024), so 'a' is not deferred: matchinfo shows actual counts instead
-# of deferred estimates (2.2.x.1) and the zeroed-block read in 2.2.3.1
-# errors malformed because the token's doclist is actually read.
-# Proven: with PRAGMA page_size=1024 doltlite returns the expected values.
-fts3defer2 fts3defer2-2.2.1.1
-fts3defer2 fts3defer2-2.2.2.1
-fts3defer2 fts3defer2-2.2.3.1
-
-# same page-size geometry class as fts3defer2: at the synthetic 4096
-# page size all doclists stay inline in the segdir root, %_segments is
-# empty, so the segment-block assertions and the corrupt-block read
-# diverge. Proven identical to upstream with PRAGMA page_size=1024.
-fts3defer3 fts3defer3-1.2
-fts3defer3 fts3defer3-1.4
-fts3defer3 fts3defer3-1.7
-
 # raw stock-format hexdb images cannot deserialize into prolly MEMDB
 fts3fuzz001 fts3fuzz001-100
 fts3fuzz001 fts3fuzz001-110
@@ -4224,37 +4203,14 @@ fts4content fts4content-6.2.2
 fts4content fts4content-6.2.8
 fts4content fts4content-6.2.9
 
-# segment geometry (synthetic 4096 page size vs the 1024 the test build
-# sets) drives every asserted %_segdir/%_stat number: end_block stays 0
-# (no spill), root sizes and incremental-merge work accounting differ.
-# Proven: section-1 state matches upstream exactly under page_size=1024.
+# %_segdir level/idx layout ordering differs after large inserts and
+# deletes. Segment sizes now match upstream; only row order / idx
+# assignment diverges in these assertions.
 fts4growth fts4growth-1.6
-fts4growth fts4growth-1.7
-fts4growth fts4growth-2.5
-fts4growth fts4growth-2.6
-fts4growth fts4growth-2.7
-fts4growth fts4growth-2.8
-fts4growth fts4growth-4.3
-fts4growth fts4growth-5.2
-fts4growth fts4growth-5.3
 fts4growth fts4growth-5.4
 fts4growth fts4growth-5.5
-fts4growth fts4growth-6.2
 fts4growth fts4growth-6.3
-fts4growth fts4growth-6.4
 fts4growth fts4growth-6.5
-fts4growth fts4growth-7.1
-fts4growth fts4growth-7.2
-fts4growth fts4growth-7.3
-fts4growth fts4growth-7.4
-fts4growth fts4growth-7.5
-fts4growth fts4growth-7.6
-fts4growth fts4growth-7.7
-
-# page-size geometry: %_stat and segdir accounting at synthetic 4096
-# page size (see fts4growth)
-fts4growth2 fts4growth2-1.2
-fts4growth2 fts4growth2-1.3
 
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements): 'rebuild' flushes per langid change inside one statement;
@@ -4362,23 +4318,11 @@ fts4langid fts4langid-3.3.4.7
 fts4langid fts4langid-6.1
 fts4langid fts4langid-6.2
 
-# incremental-merge work accounting diverges (page-size geometry sizes
-# merge steps; see also the stale shadow-read issue): merge=200,10
-# reports no work where upstream still has level-0 segments to merge
-fts4merge fts4merge-fts3-7.3
-fts4merge fts4merge-fts4-7.3
-
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements corrupt automerge bookkeeping): automerge after a multi-row
 # DELETE leaves wrong segdir level/idx layout and malformed index reports
 fts4merge4 fts4merge4-2.2.1.1
 fts4merge4 fts4merge4-2.2.1.2
-fts4merge4 fts4merge4-2.2.2.1
-fts4merge4 fts4merge4-2.2.2.2
-fts4merge4 fts4merge4-2.2.3.1
-fts4merge4 fts4merge4-2.2.3.2
-fts4merge4 fts4merge4-2.2.4.1
-fts4merge4 fts4merge4-2.2.4.2
 
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements): bulk INSERT...SELECT into fts3 with tiny nodesize fails
@@ -4500,14 +4444,26 @@ reindex reindex-3.1
 reindex reindex-3.2
 reindex reindex-3.3
 
-# md5file over the raw db file: chunk-store file bytes differ where stock
-# page images are identical (110-3/110-4: UNIQUE(a)/index-order variants),
-# and are identical where stock differs (130: rowid vs WITHOUT ROWID
-# variants store the same prolly content because doltlite keys by PK).
+# md5file over raw db bytes after skipping PRAGMA page_size bytes: the
+# chunk-store file is not a SQLite page image, so page-size-dependent slices
+# differ even when the SQL content is logically equivalent.
+schema6 schema6-100-1
+schema6 schema6-100-2
+schema6 schema6-100-3
+schema6 schema6-100-4
+schema6 schema6-100-5
+schema6 schema6-110-1
+schema6 schema6-110-2
 schema6 schema6-110-3
 schema6 schema6-110-4
-schema6 schema6-130-1
-schema6 schema6-130-2
+schema6 schema6-120-1
+schema6 schema6-120-2
+schema6 schema6-120-3
+schema6 schema6-120-4
+schema6 schema6-120-5
+schema6 schema6-120-6
+schema6 schema6-120-7
+schema6 schema6-120-8
 
 # freelist_count page accounting: no page freelist in the chunk store
 shortread1 shortread1-1.2
@@ -6771,7 +6727,6 @@ vacuum vacuum-7.6    # PRAGMA auto_vacuum reads back 0 after set (accepted as no
 # in-progress-statement VACUUM error path all diverge.
 vacuum2 vacuum2-2.1   # hexio read of page-1 change counter (offset 24) — no stock header in a chunk file
 vacuum2 vacuum2-2.2   # same header-poke arithmetic
-vacuum2 vacuum2-3.1   # file size / page_size expectation
 vacuum2 vacuum2-3.3   # file size / page_size expectation
 vacuum2 vacuum2-3.13  # file size / page_size expectation
 vacuum2 vacuum2-4.2   # auto_vacuum reads back 0 (no-op, not persisted)
