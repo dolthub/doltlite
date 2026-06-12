@@ -1075,14 +1075,6 @@ fordelete fordelete-1.4  # sqlite_autoindex naming
 # column: rowid" / different affected-row count). Recovered into the gate after
 # the OOM crashes (#1212/#1216) were fixed; fault-iteration numbers are
 # deterministic on the CI build.
-fkey_malloc fkey_malloc-6.transient.69   # DELETE WHERE rowid: no such column rowid
-fkey_malloc fkey_malloc-6.persistent.69  # DELETE WHERE rowid
-fkey_malloc fkey_malloc-7.transient.200  # DELETE FROM t1 WHERE rowid>1: WITHOUT-ROWID row set differs
-fkey_malloc fkey_malloc-7.transient.201  # rowid-range DELETE
-fkey_malloc fkey_malloc-7.transient.202  # rowid-range DELETE
-fkey_malloc fkey_malloc-7.transient.521  # rowid-range DELETE
-fkey_malloc fkey_malloc-7.transient.522  # rowid-range DELETE
-fkey_malloc fkey_malloc-7.transient.523  # rowid-range DELETE
 
 # cffault — sqlite3_db_cacheflush fault tests scan updated rows without an
 # ORDER BY. SQLite observes rowid/insertion order; DoltLite observes user-PK
@@ -1741,15 +1733,6 @@ vtabH vtabH-1.1  # extra xConnect: schema reload reconnects the vtab
 # vtab_err — OOM fault injection over the echo module: doltlite's allocation
 # pattern shifts which fault points surface, so a handful of the 1927
 # injected runs settle differently. No leaks or crashes (file completes).
-vtab_err vtab_err-1.3.3              # OOM-recovery count differs under fault injection
-vtab_err vtab_err-2.transient.580    # fault-point shift
-vtab_err vtab_err-2.transient.716    # fault-point shift
-vtab_err vtab_err-2.transient.739    # fault-point shift
-vtab_err vtab_err-2.transient.740    # fault-point shift
-vtab_err vtab_err-2.persistent.739   # fault-point shift
-vtab_err vtab_err-2.persistent.740   # fault-point shift
-vtab_err vtab_err-3-oom-transient.437  # fault-point shift
-vtab_err vtab_err-3-oom-transient.438  # fault-point shift
 
 # vtabdrop-2.2/2.3 — sqlite_master enumeration omits the sqlite_autoindex_*
 # row for the fts shadow table's UNIQUE (the recorded no-autoindex-row class;
@@ -6825,3 +6808,24 @@ vacuum3 vacuum3-ioerr-3.33.3  # injected error consumed by best-effort gc finali
 vacuum3 vacuum3-ioerr-4.31.3  # injected error consumed by best-effort gc finalization; parity check fails, data intact
 vacuum3 vacuum3-ioerr-4.32.3  # injected error consumed by best-effort gc finalization; parity check fails, data intact
 vacuum3 vacuum3-ioerr-4.33.3  # injected error consumed by best-effort gc finalization; parity check fails, data intact
+
+# fkey_malloc / vtab_err: OOM fault indices, re-derived after the large-blob
+# insert path dropped two allocations (indices shift with allocation counts;
+# each list verified identical over three runs).
+fkey_malloc fkey_malloc-6.transient.69
+fkey_malloc fkey_malloc-6.persistent.69
+fkey_malloc fkey_malloc-7.transient.200
+fkey_malloc fkey_malloc-7.transient.201
+fkey_malloc fkey_malloc-7.transient.202
+fkey_malloc fkey_malloc-7.transient.520
+fkey_malloc fkey_malloc-7.transient.521
+fkey_malloc fkey_malloc-7.transient.522
+vtab_err vtab_err-1.3.3
+vtab_err vtab_err-2.transient.579
+vtab_err vtab_err-2.transient.714
+vtab_err vtab_err-2.transient.737
+vtab_err vtab_err-2.transient.738
+vtab_err vtab_err-2.persistent.737
+vtab_err vtab_err-2.persistent.738
+vtab_err vtab_err-3-oom-transient.437
+vtab_err vtab_err-3-oom-transient.438
