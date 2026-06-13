@@ -12,6 +12,8 @@ struct ProllyHash {
 };
 
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut);
+void prollyHashComputeZeroTail(const void *pData, int nData, sqlite3_int64 nZeroTail,
+                               ProllyHash *pOut);
 
 int prollyHashCompare(const ProllyHash *a, const ProllyHash *b);
 

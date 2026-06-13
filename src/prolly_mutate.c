@@ -42,8 +42,9 @@ static int buildFromEdits(
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
-      rc = prollyChunkerAdd(&chunker, pEntry->pKey, pEntry->nKey,
-                            pEntry->pVal, pEntry->nVal);
+      rc = prollyChunkerAddZeroTail(&chunker, pEntry->pKey, pEntry->nKey,
+                                    pEntry->pVal, pEntry->nVal,
+                                    pEntry->nZeroTail);
       if( rc!=SQLITE_OK ){
         prollyChunkerFree(&chunker);
         return rc;
@@ -145,7 +146,8 @@ static int mergeLeaf(
     }else if( cmp == 0 ){
 
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAddZeroTail(pCh, pEd->pKey, pEd->nKey,
+                                      pEd->pVal, pEd->nVal, pEd->nZeroTail);
         if( rc!=SQLITE_OK ) return rc;
       }
       j++;
@@ -153,7 +155,8 @@ static int mergeLeaf(
     }else{
 
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAddZeroTail(pCh, pEd->pKey, pEd->nKey,
+                                      pEd->pVal, pEd->nVal, pEd->nZeroTail);
         if( rc!=SQLITE_OK ) return rc;
       }
       prollyMutMapIterNext(pIter);
@@ -164,7 +167,8 @@ static int mergeLeaf(
     while( prollyMutMapIterValid(pIter) ){
       ProllyMutMapEntry *pEd = prollyMutMapIterEntry(pIter);
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAddZeroTail(pCh, pEd->pKey, pEd->nKey,
+                                      pEd->pVal, pEd->nVal, pEd->nZeroTail);
         if( rc!=SQLITE_OK ) return rc;
       }
       prollyMutMapIterNext(pIter);
@@ -551,6 +555,11 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
   if( pEdit->op!=PROLLY_EDIT_INSERT ){
     return SQLITE_NOTFOUND;
   }
+  /* These no-rechunk builders copy pVal verbatim; a symbolic zero tail
+  ** needs the chunker path, which knows how to keep it sparse. */
+  if( pEdit->nZeroTail ){
+    return SQLITE_NOTFOUND;
+  }
   if( (pMut->flags & PROLLY_NODE_INTKEY) && pEdit->nKey!=8 ){
     return SQLITE_NOTFOUND;
   }
@@ -777,6 +786,9 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
 
   pEdit = &pMut->pEdits->aEntries[0];
   if( pEdit->op!=PROLLY_EDIT_INSERT ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pEdit->nZeroTail ){
     return SQLITE_NOTFOUND;
   }
   if( (pMut->flags & PROLLY_NODE_INTKEY) && pEdit->nKey!=8 ){
@@ -1086,6 +1098,10 @@ static int replaceBatchLeafNoRechunk(
       prollyNodeBuilderFree(&b);
       return SQLITE_NOTFOUND;
     }else if( cmp==0 ){
+      if( pEd->nZeroTail ){
+        prollyNodeBuilderFree(&b);
+        return SQLITE_NOTFOUND;
+      }
       rc = prollyNodeBuilderAdd(&b, pCurKey, nCurKey,
                                 pEd->pVal, pEd->nVal);
       changed = 1;

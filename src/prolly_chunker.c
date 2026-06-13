@@ -14,7 +14,7 @@ static int initLevel(ProllyChunker *ch, int level);
 static int flushLevel(ProllyChunker *ch, int level);
 static int addToLevel(ProllyChunker *ch, int level,
                       const u8 *pKey, int nKey,
-                      const u8 *pVal, int nVal,
+                      const u8 *pVal, int nVal, i64 nZeroTail,
                       u64 childSubtreeCount);
 static int finishFlushLevel(ProllyChunker *ch, int level,
                             ProllyHash *pHash);
@@ -76,7 +76,7 @@ static int flushLevel(ProllyChunker *ch, int level){
 
   rc = addToLevel(ch, level + 1,
                   pLastKey, nLastKey,
-                  hash.data, PROLLY_HASH_SIZE,
+                  hash.data, PROLLY_HASH_SIZE, 0,
                   flushedCount);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -89,12 +89,23 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   ProllyChunkerLevel *pLevel = &ch->aLevel[level];
   u8 *pData = 0;
   int nData = 0;
+  i64 nZeroTail = 0;
   int rc;
 
   assert( pLevel->builder.nItems > 0 );
 
-  rc = prollyNodeBuilderFinish(&pLevel->builder, &pData, &nData);
+  rc = prollyNodeBuilderFinishSparse(&pLevel->builder, &pData, &nData,
+                                     &nZeroTail);
   if( rc!=SQLITE_OK ) return rc;
+
+  if( nZeroTail>0 ){
+    /* Sparse leaves skip the node cache: readers reconstruct the dense
+    ** node through chunkStoreGet, and caching would materialize the tail. */
+    rc = chunkStorePutSparse(ch->pStore, pData, nData - (int)nZeroTail,
+                             nZeroTail, pHash);
+    sqlite3_free(pData);
+    return rc;
+  }
 
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
   if( rc==SQLITE_OK && ch->pCache ){
@@ -135,7 +146,7 @@ static int finishPropagateLevel(ProllyChunker *ch, int level){
   if( rc!=SQLITE_OK ) return rc;
 
   rc = addToLevel(ch, level + 1, pLastKey, nLastKey,
-                  hash.data, PROLLY_HASH_SIZE, flushedCount);
+                  hash.data, PROLLY_HASH_SIZE, 0, flushedCount);
   if( rc!=SQLITE_OK ) return rc;
 
   resetLevel(pLevel);
@@ -144,7 +155,7 @@ static int finishPropagateLevel(ProllyChunker *ch, int level){
 
 static int addToLevel(ProllyChunker *ch, int level,
                       const u8 *pKey, int nKey,
-                      const u8 *pVal, int nVal,
+                      const u8 *pVal, int nVal, i64 nZeroTail,
                       u64 childSubtreeCount){
   ProllyChunkerLevel *pLevel;
   int rc;
@@ -152,6 +163,7 @@ static int addToLevel(ProllyChunker *ch, int level,
   u64 incCount;
 
   assert( level >= 0 && level < PROLLY_CURSOR_MAX_DEPTH );
+  assert( nZeroTail==0 || level==0 );
 
   if( level >= ch->nLevels ){
     while( ch->nLevels <= level ){
@@ -165,7 +177,13 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   if( level==0 ){
     incCount = 1;
-    rc = prollyNodeBuilderAdd(&pLevel->builder, pKey, nKey, pVal, nVal);
+    if( nZeroTail>0 ){
+      rc = prollyNodeBuilderAddZeroTail(&pLevel->builder, pKey, nKey,
+                                        pVal, nVal, nZeroTail);
+      nVal += (int)nZeroTail;  /* size accounting below is logical */
+    }else{
+      rc = prollyNodeBuilderAdd(&pLevel->builder, pKey, nKey, pVal, nVal);
+    }
   }else{
     incCount = childSubtreeCount;
     rc = prollyNodeBuilderAddWithCount(&pLevel->builder, pKey, nKey,
@@ -220,10 +238,17 @@ int prollyChunkerAdd(ProllyChunker *ch,
                      const u8 *pVal, int nVal){
   int rc;
 
-  rc = addToLevel(ch, 0, pKey, nKey, pVal, nVal, 0);
+  rc = addToLevel(ch, 0, pKey, nKey, pVal, nVal, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   return SQLITE_OK;
+}
+
+int prollyChunkerAddZeroTail(ProllyChunker *ch,
+                             const u8 *pKey, int nKey,
+                             const u8 *pVal, int nValPrefix,
+                             i64 nZeroTail){
+  return addToLevel(ch, 0, pKey, nKey, pVal, nValPrefix, nZeroTail, 0);
 }
 
 int prollyChunkerFinish(ProllyChunker *ch){
@@ -289,7 +314,7 @@ int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,
                                      const u8 *pKey, int nKey,
                                      const u8 *pVal, int nVal,
                                      u64 subtreeCount){
-  return addToLevel(ch, level, pKey, nKey, pVal, nVal, subtreeCount);
+  return addToLevel(ch, level, pKey, nKey, pVal, nVal, 0, subtreeCount);
 }
 
 void prollyChunkerFree(ProllyChunker *ch){

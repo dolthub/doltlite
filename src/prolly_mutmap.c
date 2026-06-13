@@ -239,6 +239,7 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->keyHash = 0;
   e->nVal = 0;
   e->nValAlloc = 0;
+  e->nZeroTail = 0;
 }
 
 static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
@@ -250,6 +251,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
   e->keyHash = 0;
   e->pVal = 0;
   e->nVal = 0;
+  e->nZeroTail = 0;
   if( pKey && nKey>0 ){
     if( nKey <= (int)sizeof(e->aKeyInline) ){
       e->pKey = e->aKeyInline;
@@ -284,6 +286,7 @@ static int replaceEntryValue(ProllyMutMapEntry *e, const u8 *pVal, int nVal){
     e->pVal = 0;
     e->nVal = 0;
     e->nValAlloc = 0;
+    e->nZeroTail = 0;
     return SQLITE_OK;
   }
   if( e->nValAlloc < nVal ){
@@ -294,6 +297,7 @@ static int replaceEntryValue(ProllyMutMapEntry *e, const u8 *pVal, int nVal){
   }
   memcpy(e->pVal, pVal, nVal);
   e->nVal = nVal;
+  e->nZeroTail = 0;
   return SQLITE_OK;
 }
 
@@ -551,6 +555,7 @@ static int appendUndoRec(ProllyMutMap *mm, int idx){
   rec->prevBornAt = decodeLevel(mm, e->bornAt);
   rec->prevOp = e->op;
   rec->nPrevVal = e->nVal;
+  rec->nPrevZeroTail = e->nZeroTail;
   if( e->nVal > 0 && e->pVal ){
     rec->prevVal = (u8*)sqlite3_malloc(e->nVal);
     if( !rec->prevVal ) return SQLITE_NOMEM;
@@ -668,6 +673,7 @@ int prollyMutMapInsertOwnedVal(
     e->pVal = pVal;
     e->nVal = nVal;
     e->nValAlloc = nVal;
+    e->nZeroTail = 0;
     e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     return SQLITE_OK;
   }
@@ -691,6 +697,87 @@ int prollyMutMapInsertOwnedVal(
     e->pVal = pVal;
     e->nVal = nVal;
     e->nValAlloc = nVal;
+    updateAppendSorted(mm, phys);
+    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
+      insertOrderEntry(mm, idx, phys);
+    }else{
+      mm->aOrder[phys] = phys;
+      mm->aPos[phys] = phys;
+      mm->orderDirty = 1;
+    }
+  }
+
+  mm->nEntries++;
+  if( !mm->keepSorted ){
+    hashInsertPhys(mm, phys);
+  }
+  mm->generation++;
+  return SQLITE_OK;
+}
+
+/* Insert a value of pVal[0..nValPrefix) followed by nZeroTail zero bytes,
+** storing only the prefix. Intkey maps only: blob-key consumers read pVal
+** without consulting nZeroTail. */
+int prollyMutMapInsertZeroTail(
+  ProllyMutMap *mm, i64 intKey,
+  const u8 *pVal, int nValPrefix,
+  i64 nZeroTail
+){
+  int found = 0, idx = 0, rc, phys = -1;
+  const u8 *pKey = 0;
+  int nKey = 0;
+  u8 keyBuf[8];
+
+  assert( mm->isIntKey );
+  if( nZeroTail<=0 ){
+    return prollyMutMapInsert(mm, 0, 0, intKey, pVal, nValPrefix);
+  }
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
+
+  if( mm->keepSorted || !mm->orderDirty ){
+    idx = bsearch_key(mm, pKey, nKey, &found);
+    if( found ){
+      phys = mm->aOrder[idx];
+    }
+  }else{
+    rc = findPhysLazy(mm, pKey, nKey, &phys);
+    if( rc!=SQLITE_OK ) return rc;
+    found = (phys >= 0);
+  }
+
+  if( found ){
+    ProllyMutMapEntry *e = &mm->aEntries[phys];
+
+    if( mm->currentSavepointLevel > 0
+     && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+      rc = appendUndoRec(mm, phys);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    e->op = PROLLY_EDIT_INSERT;
+    rc = replaceEntryValue(e, pVal, nValPrefix);
+    if( rc!=SQLITE_OK ) return rc;
+    e->nZeroTail = nZeroTail;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+    return SQLITE_OK;
+  }
+
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = ensureHashForInsert(mm);
+  if( rc!=SQLITE_OK ) return rc;
+
+  {
+    ProllyMutMapEntry *e;
+    phys = mm->nEntries;
+    e = &mm->aEntries[phys];
+    memset(e, 0, sizeof(*e));
+    e->op = PROLLY_EDIT_INSERT;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+    rc = copyEntryData(mm, e, pKey, nKey, pVal, nValPrefix);
+    if( rc!=SQLITE_OK ){
+      return rc;
+    }
+    e->nZeroTail = nZeroTail;
     updateAppendSorted(mm, phys);
     if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
       insertOrderEntry(mm, idx, phys);
@@ -850,6 +937,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
       e->bornAt = encodeLevel(mm, rec->prevBornAt);
       rc = replaceEntryValue(e, rec->prevVal, rec->nPrevVal);
       if( rc!=SQLITE_OK ) return rc;
+      e->nZeroTail = rec->nPrevZeroTail;
     }
     sqlite3_free(rec->prevVal);
     rec->prevVal = 0;
@@ -1167,6 +1255,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         de->nVal = se->nVal;
         de->nValAlloc = se->nVal;
       }
+      de->nZeroTail = se->nZeroTail;
       dst->nEntries++;
     }
     if( src->keepSorted || !src->orderDirty ){
@@ -1209,6 +1298,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         memcpy(dr->prevVal, sr->prevVal, sr->nPrevVal);
         dr->nPrevVal = sr->nPrevVal;
       }
+      dr->nPrevZeroTail = sr->nPrevZeroTail;
       dst->nUndo++;
     }
   }

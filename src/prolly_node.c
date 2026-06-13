@@ -393,6 +393,23 @@ static int builderGrowValBuf(ProllyNodeBuilder *b, int nAdd){
   return SQLITE_OK;
 }
 
+/* Restore the physical-equals-logical invariant on pValBuf by writing the
+** symbolic zero tail of the last value into the buffer. */
+static int builderMaterializeZeroTail(ProllyNodeBuilder *b){
+  int rc;
+  int nTail = (int)b->nValZeroTail;
+  int nPhys;
+  if( nTail==0 ) return SQLITE_OK;
+  nPhys = b->nValBytes - nTail;
+  b->nValBytes = nPhys;
+  rc = builderGrowValBuf(b, nTail);
+  b->nValBytes = nPhys + nTail;
+  if( rc ) return rc;
+  memset(b->pValBuf + nPhys, 0, (size_t)nTail);
+  b->nValZeroTail = 0;
+  return SQLITE_OK;
+}
+
 static int builderAddCore(
   ProllyNodeBuilder *b,
   const u8 *pKey, int nKey,
@@ -404,6 +421,9 @@ static int builderAddCore(
   if( b->nItems>=PROLLY_NODE_MAX_ITEMS ){
     return SQLITE_FULL;
   }
+
+  rc = builderMaterializeZeroTail(b);
+  if( rc ) return rc;
 
   rc = builderGrowOffsets(b);
   if( rc ) return rc;
@@ -460,9 +480,85 @@ int prollyNodeBuilderAddWithCount(
   return builderAddCore(b, pKey, nKey, pVal, nVal, subtreeCount, 1);
 }
 
+/* Add an entry whose value is pVal[0..nValPrefix) followed by nZeroTail zero
+** bytes. The zeros are recorded symbolically; they materialize only if
+** another entry is added afterward (the tail must remain the final bytes of
+** the value region) or the node is finished with the flat Finish. */
+int prollyNodeBuilderAddZeroTail(
+  ProllyNodeBuilder *b,
+  const u8 *pKey, int nKey,
+  const u8 *pVal, int nValPrefix,
+  i64 nZeroTail
+){
+  int rc;
+
+  if( nZeroTail<=0 ){
+    return builderAddCore(b, pKey, nKey, pVal, nValPrefix, 0, 0);
+  }
+  assert( b->level==0 );
+
+  if( b->nItems>=PROLLY_NODE_MAX_ITEMS ){
+    return SQLITE_FULL;
+  }
+  if( (i64)b->nValBytes + (i64)nValPrefix + nZeroTail > (i64)0x7fffffff ){
+    return SQLITE_NOMEM;
+  }
+
+  rc = builderMaterializeZeroTail(b);
+  if( rc ) return rc;
+
+  rc = builderGrowOffsets(b);
+  if( rc ) return rc;
+  rc = builderGrowKeyBuf(b, nKey);
+  if( rc ) return rc;
+  rc = builderGrowValBuf(b, nValPrefix);
+  if( rc ) return rc;
+
+  if( b->nItems==0 ){
+    b->aKeyOff[0] = 0;
+    b->aValOff[0] = 0;
+  }
+
+  if( nKey > 0 ){
+    memcpy(b->pKeyBuf + b->nKeyBytes, pKey, nKey);
+    b->nKeyBytes += nKey;
+  }
+  b->aKeyOff[b->nItems + 1] = (u32)b->nKeyBytes;
+
+  if( nValPrefix > 0 ){
+    memcpy(b->pValBuf + b->nValBytes, pVal, nValPrefix);
+  }
+  b->nValBytes += nValPrefix + (int)nZeroTail;
+  b->nValZeroTail = nZeroTail;
+  b->aValOff[b->nItems + 1] = (u32)b->nValBytes;
+
+  b->nItems++;
+  return SQLITE_OK;
+}
+
 int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
+  i64 nZeroTail = 0;
+  int rc = builderMaterializeZeroTail(b);
+  if( rc ){
+    *ppOut = 0;
+    *pnOut = 0;
+    return rc;
+  }
+  rc = prollyNodeBuilderFinishSparse(b, ppOut, pnOut, &nZeroTail);
+  assert( rc!=SQLITE_OK || nZeroTail==0 );
+  return rc;
+}
+
+/* Like prollyNodeBuilderFinish, but a symbolic zero tail stays symbolic:
+** *ppOut holds the node minus its final *pnZeroTail zero bytes while *pnOut
+** is still the full logical size. Tails only arise on leaves, where the
+** value region is the last region of the node, so the omitted bytes are
+** always the chunk's final bytes. */
+int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
+                                  i64 *pnZeroTail){
   int nOff;
   int nTotal;
+  int nPhys;
   u8 *pBuf;
   u8 *pCur;
   int i;
@@ -471,6 +567,7 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
 
   *ppOut = 0;
   *pnOut = 0;
+  *pnZeroTail = 0;
 
   writeCounts = (b->level > 0 && b->aSubtreeCount != 0 && b->nItems > 0) ? 1 : 0;
   flagsOut = b->flags;
@@ -485,8 +582,10 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
   if( writeCounts ){
     nTotal += b->nItems * 8;
   }
+  assert( b->nValZeroTail==0 || !writeCounts );
+  nPhys = nTotal - (int)b->nValZeroTail;
 
-  pBuf = (u8*)sqlite3_malloc(nTotal);
+  pBuf = (u8*)sqlite3_malloc(nPhys);
   if( !pBuf ) return SQLITE_NOMEM;
 
   PROLLY_PUT_U32(pBuf + PROLLY_MAGIC_OFF, PROLLY_NODE_MAGIC);
@@ -512,8 +611,9 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
   }
 
   if( b->nValBytes>0 ){
-    memcpy(pCur, b->pValBuf, b->nValBytes);
-    pCur += b->nValBytes;
+    int nValPhys = b->nValBytes - (int)b->nValZeroTail;
+    memcpy(pCur, b->pValBuf, nValPhys);
+    pCur += nValPhys;
   }
 
   if( writeCounts ){
@@ -531,10 +631,11 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
     }
   }
 
-  assert( pCur==pBuf+nTotal );
+  assert( pCur==pBuf+nPhys );
 
   *ppOut = pBuf;
   *pnOut = nTotal;
+  *pnZeroTail = b->nValZeroTail;
   return SQLITE_OK;
 }
 
@@ -542,6 +643,7 @@ void prollyNodeBuilderReset(ProllyNodeBuilder *b){
   b->nItems = 0;
   b->nKeyBytes = 0;
   b->nValBytes = 0;
+  b->nValZeroTail = 0;
 }
 
 void prollyNodeBuilderFree(ProllyNodeBuilder *b){

@@ -759,7 +759,8 @@ static i64 prollyBtreePendingPageEstimate(Btree *p, i64 nLimit){
         ProllyMutMapEntry *pEntry = &pMap->aEntries[j];
         if( pEntry->op==PROLLY_EDIT_INSERT ){
           nInsert++;
-          nBytes += (i64)pEntry->nKey + (i64)pEntry->nVal + 16;
+          nBytes += (i64)pEntry->nKey + (i64)pEntry->nVal
+                  + pEntry->nZeroTail + 16;
           if( nLimit>0 && nInsert/16 + nBytes/(2*nPageSize) > nLimit ){
             return nLimit + 1;
           }
@@ -2740,6 +2741,29 @@ static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->pCachedPayload = pCopy;
   pCur->nCachedPayload = nData;
+  pCur->cachedPayloadOwned = 1;
+  return SQLITE_OK;
+}
+
+/* Cache a payload stored as a prefix plus a symbolic zero tail,
+** materializing the zeros. */
+static int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
+                                      int nData, i64 nZeroTail){
+  i64 nTotal64 = (i64)nData + nZeroTail;
+  int nTotal;
+  u8 *pCopy;
+  if( nTotal64 > 0x7fffffff ) return SQLITE_TOOBIG;
+  nTotal = (int)nTotal64;
+  if( nTotal<=0 ) return cacheCursorPayloadCopy(pCur, pData, nData);
+  pCopy = sqlite3_malloc(nTotal);
+  if( !pCopy ) return SQLITE_NOMEM;
+  if( nData > 0 ){
+    memcpy(pCopy, pData, nData);
+  }
+  memset(pCopy + nData, 0, (size_t)(nTotal - nData));
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->pCachedPayload = pCopy;
+  pCur->nCachedPayload = nTotal;
   pCur->cachedPayloadOwned = 1;
   return SQLITE_OK;
 }
@@ -8254,7 +8278,16 @@ static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
     ProllyMutMapEntry *e = currentMutMapEntry(pCur);
     if( pCur->curIntKey ){
-
+      if( e->nZeroTail > 0 ){
+        int rc = cacheCursorPayloadZeroTail(pCur, e->pVal, e->nVal,
+                                            e->nZeroTail);
+        if( rc!=SQLITE_OK ){
+          return cursorPayloadFault(pCur, rc, ppData, pnData);
+        }
+        *ppData = pCur->pCachedPayload;
+        *pnData = pCur->nCachedPayload;
+        return SQLITE_OK;
+      }
       pCur->pCachedPayload = e->pVal;
       pCur->nCachedPayload = e->nVal;
       pCur->cachedPayloadOwned = 0;
@@ -8318,6 +8351,15 @@ static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   assert( pCur->eState==CURSOR_VALID );
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     return (u32)pCur->nCachedPayload;
+  }
+  if( pCur->curIntKey && pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( e && e->nZeroTail > 0 ){
+      /* Answer from the symbolic form; fetching would materialize the
+      ** zero tail. */
+      return (u32)((i64)e->nVal + e->nZeroTail);
+    }
   }
   if( getCursorPayload(pCur, &pData, &nData)!=SQLITE_OK ){
     return 0;
@@ -8404,7 +8446,6 @@ static int prollyBtCursorInsert(
   int rc;
   const u8 *pInsertedPayload = 0;
   int nInsertedPayload = 0;
-  u8 *pIntKeyBuf = 0;
   u8 aLocalSortKey[128];
   const u8 *pSortKey = 0;
   int nSortKey = 0;
@@ -8440,32 +8481,18 @@ static int prollyBtCursorInsert(
     const u8 *pData = (const u8*)pPayload->pData;
     int nData = pPayload->nData;
     i64 nTotal64 = (i64)nData + (i64)pPayload->nZero;
-    int nTotal;
 
     if( nData<0 || pPayload->nZero<0 || nTotal64 > 0x7fffffff ){
       return SQLITE_TOOBIG;
     }
-    nTotal = (int)nTotal64;
-    if( pPayload->nZero > 0 ){
-      pIntKeyBuf = sqlite3_malloc(nTotal);
-      if( !pIntKeyBuf ) return SQLITE_NOMEM;
-      if( nData > 0 ){
-        memcpy(pIntKeyBuf, pData, nData);
-      }
-      memset(pIntKeyBuf + nData, 0, pPayload->nZero);
-      pData = pIntKeyBuf;
-      nData = nTotal;
-    }
     pInsertedPayload = pData;
     nInsertedPayload = nData;
 
-    if( pIntKeyBuf ){
-      /* The expanded zero-tail buffer was allocated above; hand it to the
-      ** map instead of paying a second full-size copy. */
-      rc = prollyMutMapInsertOwnedVal(pCur->pMutMap,
-                                      NULL, 0, pPayload->nKey,
-                                      pIntKeyBuf, nData);
-      if( rc==SQLITE_OK ) pIntKeyBuf = 0;
+    if( pPayload->nZero > 0 ){
+      /* The zero tail stays symbolic all the way to the chunk store; the
+      ** zeros are never materialized in memory. */
+      rc = prollyMutMapInsertZeroTail(pCur->pMutMap, pPayload->nKey,
+                                      pData, nData, (i64)pPayload->nZero);
     }else if( pCur->mmActive
      && pCur->mmPhysActive
      && pCur->pMutMap
@@ -8539,12 +8566,10 @@ static int prollyBtCursorInsert(
   }
 
   if( rc!=SQLITE_OK ){
-    sqlite3_free(pIntKeyBuf);
     return rc;
   }
   rc = prollyBtreeCheckMaxPageCount(pCur->pBtree);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(pIntKeyBuf);
     return rc;
   }
 
@@ -8558,15 +8583,20 @@ static int prollyBtCursorInsert(
         pCur->eState = CURSOR_VALID;
         pCur->curFlags |= BTCF_ValidNKey;
         pCur->cachedIntKey = pPayload->nKey;
-        rc = cacheCursorPayloadCopy(pCur, pInsertedPayload, nInsertedPayload);
-        sqlite3_free(pIntKeyBuf);
+        if( pPayload->nZero > 0 ){
+          rc = cacheCursorPayloadZeroTail(pCur, pInsertedPayload,
+                                          nInsertedPayload,
+                                          (i64)pPayload->nZero);
+        }else{
+          rc = cacheCursorPayloadCopy(pCur, pInsertedPayload,
+                                      nInsertedPayload);
+        }
         if( rc!=SQLITE_OK ) return rc;
 
         pCur->mmActive = 0;
         pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
         ProllyMutMapEntry *pEntry = 0;
-        sqlite3_free(pIntKeyBuf);
         CLEAR_CACHED_PAYLOAD(pCur);
         if( prollyCursorIsValid(&pCur->pCur) ){
           int trc = prollyCursorNext(&pCur->pCur);
@@ -8589,7 +8619,6 @@ static int prollyBtCursorInsert(
         }
         pCur->flushSeekEdits = 0;
       } else {
-        sqlite3_free(pIntKeyBuf);
         pCur->eState = CURSOR_INVALID;
         pCur->flushSeekEdits = 0;
       }
@@ -8597,7 +8626,6 @@ static int prollyBtCursorInsert(
     }
   }
 
-  sqlite3_free(pIntKeyBuf);
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
   {

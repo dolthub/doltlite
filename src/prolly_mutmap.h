@@ -20,6 +20,10 @@ struct ProllyMutMapEntry {
   u8 *pVal;
   int nVal;
   int nValAlloc;
+  /* The logical value is pVal[0..nVal) followed by nZeroTail zero bytes
+  ** that are never materialized in pVal. Only intkey-table inserts create
+  ** tails; blob-key (index) entries always have nZeroTail==0. */
+  i64 nZeroTail;
   int bornAt;
 };
 
@@ -33,6 +37,7 @@ struct ProllyMutMapUndoRec {
   u8 prevOp;
   u8 *prevVal;
   int nPrevVal;
+  i64 nPrevZeroTail;
 };
 
 struct ProllyMutMap {
@@ -73,6 +78,10 @@ int prollyMutMapInsertOwnedVal(ProllyMutMap *mm,
 int prollyMutMapInsert(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
                        const u8 *pVal, int nVal);
+
+int prollyMutMapInsertZeroTail(ProllyMutMap *mm, i64 intKey,
+                               const u8 *pVal, int nValPrefix,
+                               i64 nZeroTail);
 
 int prollyMutMapReplaceEntry(
   ProllyMutMap *mm,

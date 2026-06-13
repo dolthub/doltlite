@@ -12,6 +12,23 @@ void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
   blake3_hasher_finalize(&h, pOut->data, PROLLY_HASH_SIZE);
 }
 
+/* Hash of pData[0..nData) followed by nZeroTail zero bytes, without
+** materializing the zeros. */
+void prollyHashComputeZeroTail(const void *pData, int nData, sqlite3_int64 nZeroTail,
+                               ProllyHash *pOut){
+  blake3_hasher h;
+  static const u8 aZero[8192];
+  blake3_hasher_init(&h);
+  if( nData>0 ) blake3_hasher_update(&h, pData, (size_t)nData);
+  while( nZeroTail>0 ){
+    size_t n = nZeroTail > (sqlite3_int64)sizeof(aZero)
+             ? sizeof(aZero) : (size_t)nZeroTail;
+    blake3_hasher_update(&h, aZero, n);
+    nZeroTail -= (sqlite3_int64)n;
+  }
+  blake3_hasher_finalize(&h, pOut->data, PROLLY_HASH_SIZE);
+}
+
 int prollyHashCompare(const ProllyHash *a, const ProllyHash *b){
   return memcmp(a->data, b->data, PROLLY_HASH_SIZE);
 }
