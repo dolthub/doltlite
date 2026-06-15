@@ -1,0 +1,41 @@
+# 2026-06-15
+#
+# The author disclaims copyright to this source code.  In place of
+# a legal notice, here is a blessing:
+#
+#    May you do good and not evil.
+#    May you find forgiveness for yourself and forgive others.
+#    May you share freely, never taking more than you give.
+#
+#***********************************************************************
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test doltlite_default_materialization-1.1 {
+  CREATE TABLE t(id TEXT PRIMARY KEY, a INTEGER DEFAULT 0);
+  INSERT INTO t
+    WITH RECURSIVE c(x) AS (
+      SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 1000
+    )
+    SELECT 'k'||x, x FROM c;
+  SELECT total_changes();
+  SELECT length(dolt_commit('-Am','default table'));
+  SELECT total_changes();
+} {1000 40 1000}
+
+reset_db
+
+do_execsql_test doltlite_default_materialization-2.1 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1,'a'),(2,'b');
+  SELECT length(dolt_commit('-Am','init'));
+  SELECT total_changes();
+  ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7;
+  SELECT total_changes();
+  SELECT length(dolt_commit('-Am','add default'));
+  SELECT total_changes();
+  SELECT group_concat(id || ':' || v || ':' || x, '|') FROM t ORDER BY id;
+} {40 2 4 40 4 1:a:7|2:b:7}
+
+finish_test
