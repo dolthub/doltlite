@@ -295,82 +295,6 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
   }
 }
 
-int doltliteMaterializeDefaultColumns(sqlite3 *db){
-  int idx = 0;
-  Pgno iTable;
-  const char *zName;
-  int rc = SQLITE_OK;
-  while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
-    char *zLiveName = 0;
-    const char *zTableName = zName;
-    sqlite3_stmt *pStmt = 0;
-    char *zPragma = 0;
-    char *zUpdate = 0;
-    sqlite3_str *pSet = 0;
-    int nCols = 0;
-    zLiveName = doltliteResolveTableNumber(db, iTable);
-    if( zLiveName ) zTableName = zLiveName;
-
-    zPragma = sqlite3_mprintf("PRAGMA main.table_info(%Q)", zTableName);
-    if( !zPragma ){
-      sqlite3_free(zLiveName);
-      return SQLITE_NOMEM;
-    }
-    rc = sqlite3_prepare_v2(db, zPragma, -1, &pStmt, 0);
-    sqlite3_free(zPragma);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zLiveName);
-      return rc;
-    }
-
-    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
-      const char *zCol = (const char*)sqlite3_column_text(pStmt, 1);
-      const char *zDflt = (const char*)sqlite3_column_text(pStmt, 4);
-      if( zCol && zDflt ){
-        if( !pSet ){
-          pSet = sqlite3_str_new(db);
-          if( !pSet ){
-            sqlite3_finalize(pStmt);
-            sqlite3_free(zLiveName);
-            return SQLITE_NOMEM;
-          }
-        }
-        if( nCols>0 ) sqlite3_str_appendall(pSet, ", ");
-        sqlite3_str_appendf(pSet, "\"%w\"=\"%w\"", zCol, zCol);
-        nCols++;
-      }
-    }
-    if( rc!=SQLITE_DONE ){
-      sqlite3_finalize(pStmt);
-      if( pSet ) sqlite3_str_finish(pSet);
-      sqlite3_free(zLiveName);
-      return rc;
-    }
-    sqlite3_finalize(pStmt);
-    if( nCols>0 ){
-      char *zSet = sqlite3_str_finish(pSet);
-      if( !zSet ){
-        sqlite3_free(zLiveName);
-        return SQLITE_NOMEM;
-      }
-      zUpdate = sqlite3_mprintf("UPDATE \"%w\" SET %s", zTableName, zSet);
-      sqlite3_free(zSet);
-      if( !zUpdate ){
-        sqlite3_free(zLiveName);
-        return SQLITE_NOMEM;
-      }
-      rc = sqlite3_exec(db, zUpdate, 0, 0, 0);
-      sqlite3_free(zUpdate);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zLiveName);
-        return rc;
-      }
-    }
-    sqlite3_free(zLiveName);
-  }
-  return SQLITE_OK;
-}
-
 int doltliteLoadLiveSchemaSql(
   sqlite3 *db,
   const char *zType,
@@ -465,7 +389,8 @@ int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
 }
 
 static int doltlitePrepareCatalogForPersistence(sqlite3 *db){
-  return doltliteMaterializeDefaultColumns(db);
+  UNUSED_PARAMETER(db);
+  return SQLITE_OK;
 }
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n){
@@ -4975,6 +4900,46 @@ static void doltliteDefaultBranchFunc(
     "dolt_default_branch() takes 0 or 1 arguments", -1);
 }
 
+static void doltliteInternalMaterializeDefaultColumnFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *zDb;
+  const char *zTable;
+  const char *zColumn;
+  char *zSql;
+  int rc;
+
+  if( argc!=3 ){
+    sqlite3_result_error(ctx,
+        "doltlite_internal_materialize_default_column() takes 3 arguments", -1);
+    return;
+  }
+  zDb = (const char*)sqlite3_value_text(argv[0]);
+  zTable = (const char*)sqlite3_value_text(argv[1]);
+  zColumn = (const char*)sqlite3_value_text(argv[2]);
+  if( !zDb || !zTable || !zColumn ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+
+  zSql = sqlite3_mprintf("UPDATE \"%w\".\"%w\" SET \"%w\"=\"%w\"",
+                         zDb, zTable, zColumn, zColumn);
+  if( !zSql ){
+    sqlite3_result_error_nomem(ctx);
+    return;
+  }
+  rc = sqlite3_exec(db, zSql, 0, 0, 0);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  sqlite3_result_int(ctx, 0);
+}
+
 static int doltliteMaybeSeedRepo(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash emptyParent;
@@ -5018,6 +4983,11 @@ int doltliteRegister(sqlite3 *db){
                                                    doltliteVersionFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_default_branch", -1, SQLITE_UTF8, 0,
                                                    doltliteDefaultBranchFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db,
+                                                   "doltlite_internal_materialize_default_column",
+                                                   3, SQLITE_UTF8, 0,
+                                                   doltliteInternalMaterializeDefaultColumnFunc,
+                                                   0, 0);
   if( rc!=SQLITE_OK ) return rc;
   if( (rc = doltliteLogRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteCommitAncestorsRegister(db))!=SQLITE_OK ) return rc;

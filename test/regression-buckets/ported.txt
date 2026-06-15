@@ -29,3 +29,4 @@ doltlite_fts_reverse_pending_delete
 doltlite_data_version
 doltlite_page_size_default
 doltlite_savepoint_release
+doltlite_default_materialization

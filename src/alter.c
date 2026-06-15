@@ -471,6 +471,21 @@ void sqlite3AlterFinishAddColumn(Parse *pParse, Token *pColDef){
         zTab, zDb
       );
     }
+
+#ifdef DOLTLITE_PROLLY
+    if( pDflt && (pCol->colFlags & COLFLAG_GENERATED)==0 ){
+      FuncDef *pFunc = sqlite3FindFunction(
+          db, "doltlite_internal_materialize_default_column", 3, ENC(db), 0);
+      if( pFunc ){
+        int regArg = sqlite3GetTempRange(pParse, 4);
+        sqlite3VdbeLoadString(v, regArg, zDb);
+        sqlite3VdbeLoadString(v, regArg+1, zTab);
+        sqlite3VdbeLoadString(v, regArg+2, pCol->zCnName);
+        sqlite3VdbeAddFunctionCall(pParse, 0, regArg, regArg+3, 3, pFunc, 0);
+        sqlite3ReleaseTempRange(pParse, regArg, 4);
+      }
+    }
+#endif
   }
 }
 
