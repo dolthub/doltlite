@@ -5016,6 +5016,32 @@ static const char *findLastPathSep(const char *zPath){
 }
 
 #ifdef DOLTLITE_PROLLY
+static int doltliteShellReadableFile(const char *zFilename){
+  sqlite3_vfs *pVfs;
+  sqlite3_file *pFile;
+  int outFlags = 0;
+  sqlite3_int64 nSize = 0;
+  unsigned char b;
+  int rc;
+
+  pVfs = sqlite3_vfs_find(0);
+  if( pVfs==0 ) return 0;
+  pFile = sqlite3_malloc64(pVfs->szOsFile);
+  if( pFile==0 ) return 0;
+  memset(pFile, 0, pVfs->szOsFile);
+  rc = pVfs->xOpen(pVfs, zFilename, pFile,
+                   SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, &outFlags);
+  if( rc==SQLITE_OK ){
+    rc = pFile->pMethods->xFileSize(pFile, &nSize);
+    if( rc==SQLITE_OK && nSize>0 ){
+      rc = pFile->pMethods->xRead(pFile, &b, 1, 0);
+    }
+    pFile->pMethods->xClose(pFile);
+  }
+  sqlite3_free(pFile);
+  return rc==SQLITE_OK && nSize>0;
+}
+
 static void parseDoltiteDbBranch(
   const char *zInput,
   char **pzFilename,
@@ -5042,9 +5068,8 @@ static void parseDoltiteDbBranch(
 
   zSep = findLastPathSep(zInput);
   if( zSep && zSep[1]!=0 ){
-    struct stat x;
     zBase = sqlite3_mprintf("%.*s", (int)(zSep - zInput), zInput);
-    if( zBase && stat(zBase, &x)==0 && !S_ISDIR(x.st_mode) ){
+    if( zBase && doltliteShellReadableFile(zBase) ){
       *pzFilename = zBase;
       *pzBranch = sqlite3_mprintf("%s", zSep + 1);
       return;
