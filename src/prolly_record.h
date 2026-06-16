@@ -43,10 +43,12 @@ static inline int dlSerialIsInt(int st){
 }
 
 static inline i64 dlReadIntBytes(const u8 *p, int nBytes){
-  i64 v = (nBytes>0 && (p[0] & 0x80)) ? -1 : 0;
+  /* Accumulate in unsigned: a left shift of a sign-extended negative i64 is
+  ** undefined behavior. Two's-complement makes the unsigned result identical. */
+  u64 v = (nBytes>0 && (p[0] & 0x80)) ? ~(u64)0 : 0;
   int i;
   for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
-  return v;
+  return (i64)v;
 }
 
 static inline i64 dlDecodeSerialInt(int st, const u8 *p, int n){
