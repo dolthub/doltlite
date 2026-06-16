@@ -7,7 +7,6 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_record.h"
-#include "record_codec.h"
 
 /*
  * Shared prefix for virtual table instances whose per-table metadata
@@ -71,15 +70,6 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
     c->nVal = nVal;
   }
   c->hasRow = 1;
-  return SQLITE_OK;
-}
-
-static SQLITE_INLINE int doltliteVtabCommonClose(
-  sqlite3_vtab_cursor *cur
-){
-  DoltliteVtabCursorCommon *c = (DoltliteVtabCursorCommon*)cur;
-  doltliteVtabCommonReset(c);
-  sqlite3_free(c);
   return SQLITE_OK;
 }
 
