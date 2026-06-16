@@ -156,17 +156,22 @@ for N in 100 2000; do
 done
 
 echo ""
-echo "--- 8. Diff accuracy ---"
+echo "--- 8. Diff accuracy (incl. negative values: reads route through the
+#       signed-int decoder, which must not shift a negative value) ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
   "$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x,0 FROM c;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
-    UPDATE t SET b=1 WHERE id%2=0;
+    UPDATE t SET b=-1 WHERE id%2=0;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','update');" > /dev/null 2>&1
   result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
   check "diff accuracy N=$N" "$((N/2))" "$result"
+  # Explicit-ref diff decodes stored values via the signed-int reader; a
+  # negative here would shift a negative value (UB) before the fix.
+  negval=$(query_value "$TMPDIR/t.db" "SELECT DISTINCT to_b FROM dolt_diff_t('HEAD^','HEAD') WHERE diff_type='modified';")
+  check "diff negative readback N=$N" "-1" "$negval"
 done
 
 echo ""
