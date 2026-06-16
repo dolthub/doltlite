@@ -288,6 +288,11 @@ jobs:
       run: |
         cd build
         export DLTEST_STRIP_CR=1
+        DBGDB=/tmp/doltlite_debug_branch_$$.db
+        rm -f "$DBGDB"
+        ./doltlite "$DBGDB" "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','feature');"
+        DOLTLITE_DEBUG_SHELL_BRANCH=1 ./doltlite "$DBGDB/feature" "SELECT active_branch(); SELECT count(*) FROM t;"
+        DOLTLITE_DEBUG_SHELL_BRANCH=1 ./doltlite "$DBGDB@feature" "SELECT active_branch(); SELECT count(*) FROM t;"
         tests=(
           ../test/doltlite_parity.sh
           ../test/doltlite_commit.sh

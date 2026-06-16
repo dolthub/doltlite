@@ -5023,6 +5023,7 @@ static int doltliteShellReadableFile(const char *zFilename){
   sqlite3_int64 nSize = 0;
   unsigned char b;
   int rc;
+  const char *zDebug = getenv("DOLTLITE_DEBUG_SHELL_BRANCH");
 
   pVfs = sqlite3_vfs_find(0);
   if( pVfs==0 ) return 0;
@@ -5039,6 +5040,10 @@ static int doltliteShellReadableFile(const char *zFilename){
     pFile->pMethods->xClose(pFile);
   }
   sqlite3_free(pFile);
+  if( zDebug ){
+    fprintf(stderr, "shell branch readable file=[%s] rc=%d size=%lld ok=%d\n",
+            zFilename, rc, (long long)nSize, rc==SQLITE_OK && nSize>0);
+  }
   return rc==SQLITE_OK && nSize>0;
 }
 
@@ -5072,7 +5077,15 @@ static void parseDoltiteDbBranch(
     if( zBase && doltliteShellReadableFile(zBase) ){
       *pzFilename = zBase;
       *pzBranch = sqlite3_mprintf("%s", zSep + 1);
+      if( getenv("DOLTLITE_DEBUG_SHELL_BRANCH") ){
+        fprintf(stderr, "shell branch parsed input=[%s] file=[%s] branch=[%s]\n",
+                zInput, *pzFilename, *pzBranch);
+      }
       return;
+    }
+    if( getenv("DOLTLITE_DEBUG_SHELL_BRANCH") ){
+      fprintf(stderr, "shell branch skipped input=[%s] file=[%s]\n",
+              zInput, zBase ? zBase : "");
     }
     sqlite3_free(zBase);
   }
