@@ -250,40 +250,10 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
 
 static int htConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  DoltliteVtabCommon *v; int rc; const char *zMod; char *zSchema;
   (void)pAux;
-
-  v = sqlite3_malloc(sizeof(HistVtab));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(HistVtab));
-  v->db = db;
-
-  zMod = argv[0];
-  if( zMod && strncmp(zMod, "dolt_history_", 13) == 0 )
-    v->zTableName = sqlite3_mprintf("%s", zMod + 13);
-  else if( argc > 3 ) v->zTableName = sqlite3_mprintf("%s", argv[3]);
-  else v->zTableName = sqlite3_mprintf("");
-
-  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName); doltliteFreeColInfo(&v->cols); sqlite3_free(v);
-    return rc;
-  }
-  zSchema = htBuildSchema(&v->cols);
-  if( !zSchema ){
-    sqlite3_free(v->zTableName); doltliteFreeColInfo(&v->cols); sqlite3_free(v);
-    return SQLITE_NOMEM;
-  }
-
-  rc = sqlite3_declare_vtab(db, zSchema);
-  sqlite3_free(zSchema);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName); doltliteFreeColInfo(&v->cols); sqlite3_free(v);
-    return rc;
-  }
-
-  *ppVtab = &v->base;
-  return SQLITE_OK;
+  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_history_",
+                                      sizeof(HistVtab), htBuildSchema,
+                                      ppVtab, pzErr);
 }
 
 static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){

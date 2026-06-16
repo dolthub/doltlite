@@ -98,4 +98,55 @@ static SQLITE_INLINE int doltliteVtabCommonRowid(
   return SQLITE_OK;
 }
 
+/*
+ * xConnect/xCreate body for a per-user-table vtab whose instance begins with
+ * DoltliteVtabCommon: derive the table name from the module name (zPrefix) or
+ * argv[3], load its columns, build the schema via xBuildSchema, and declare
+ * the vtab. Allocates nByte (>= sizeof(DoltliteVtabCommon)) so callers with
+ * trailing fields can use it and fill them in after success. On any failure
+ * the partial instance is freed through doltliteVtabCommonDisconnect.
+ */
+static SQLITE_INLINE int doltliteVtabConnectUserTable(
+  sqlite3 *db, int argc, const char *const *argv,
+  const char *zPrefix, int nByte,
+  char *(*xBuildSchema)(DoltliteColInfo*),
+  sqlite3_vtab **ppVtab, char **pzErr
+){
+  DoltliteVtabCommon *v;
+  const char *zMod = argv[0];
+  size_t nPrefix = strlen(zPrefix);
+  char *zSchema;
+  int rc;
+
+  v = sqlite3_malloc(nByte);
+  if( !v ) return SQLITE_NOMEM;
+  memset(v, 0, nByte);
+  v->db = db;
+
+  if( zMod && strncmp(zMod, zPrefix, nPrefix)==0 ){
+    v->zTableName = sqlite3_mprintf("%s", zMod + nPrefix);
+  }else if( argc > 3 ){
+    v->zTableName = sqlite3_mprintf("%s", argv[3]);
+  }else{
+    v->zTableName = sqlite3_mprintf("");
+  }
+
+  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
+  if( rc==SQLITE_OK ){
+    zSchema = xBuildSchema(&v->cols);
+    if( !zSchema ){
+      rc = SQLITE_NOMEM;
+    }else{
+      rc = sqlite3_declare_vtab(db, zSchema);
+      sqlite3_free(zSchema);
+    }
+  }
+  if( rc!=SQLITE_OK ){
+    doltliteVtabCommonDisconnect(&v->base);
+    return rc;
+  }
+  *ppVtab = &v->base;
+  return SQLITE_OK;
+}
+
 #endif /* DOLTLITE_VTAB_UTIL_H */

@@ -44,51 +44,10 @@ static void atCursorReset(AtCursor *c){
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  DoltliteVtabCommon *v;
-  int rc;
-  const char *zMod;
-  char *zSchema;
-
-  v = sqlite3_malloc(sizeof(AtVtab));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(AtVtab));
-  v->db = db;
-
-  zMod = argv[0];
-  if( zMod && strncmp(zMod, "dolt_at_", 8) == 0 ){
-    v->zTableName = sqlite3_mprintf("%s", zMod + 8);
-  }else if( argc > 3 ){
-    v->zTableName = sqlite3_mprintf("%s", argv[3]);
-  }else{
-    v->zTableName = sqlite3_mprintf("");
-  }
-
-  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
-  if( rc != SQLITE_OK ){
-    sqlite3_free(v->zTableName);
-    doltliteFreeColInfo(&v->cols);
-    sqlite3_free(v);
-    return rc;
-  }
-  zSchema = atBuildSchema(&v->cols);
-  if( !zSchema ){
-    sqlite3_free(v->zTableName);
-    doltliteFreeColInfo(&v->cols);
-    sqlite3_free(v);
-    return SQLITE_NOMEM;
-  }
-
-  rc = sqlite3_declare_vtab(db, zSchema);
-  sqlite3_free(zSchema);
-  if( rc != SQLITE_OK ){
-    sqlite3_free(v->zTableName);
-    doltliteFreeColInfo(&v->cols);
-    sqlite3_free(v);
-    return rc;
-  }
-
-  *ppVtab = &v->base;
-  return SQLITE_OK;
+  (void)pAux;
+  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_at_",
+                                      sizeof(AtVtab), atBuildSchema,
+                                      ppVtab, pzErr);
 }
 
 static int atOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
