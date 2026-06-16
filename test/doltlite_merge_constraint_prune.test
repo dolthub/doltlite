@@ -1,0 +1,80 @@
+# 2026-06-16
+#
+# The author disclaims copyright to this source code.  In place of
+# a legal notice, here is a blessing:
+#
+#    May you do good and not evil.
+#    May you find forgiveness for yourself and forgive others.
+#    May you share freely, never taking more than you give.
+#
+#***********************************************************************
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc dlt_check_probe {x} {
+  incr ::dlt_check_probe_calls
+  return 1
+}
+
+db function dlt_check_probe dlt_check_probe
+set ::dlt_check_probe_calls 0
+
+do_test doltlite_merge_constraint_prune-1.1 {
+  execsql {
+    CREATE TABLE big(
+      id INTEGER PRIMARY KEY,
+      v INTEGER CHECK(dlt_check_probe(v))
+    );
+    CREATE TABLE small(id INTEGER PRIMARY KEY, v TEXT);
+    WITH RECURSIVE c(i) AS (
+      SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<100
+    )
+    INSERT INTO big SELECT i, i FROM c;
+    INSERT INTO small VALUES(1,'base');
+    SELECT dolt_commit('-A','-m','init');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+    INSERT INTO small VALUES(2,'feature');
+    SELECT dolt_commit('-A','-m','feature');
+    SELECT dolt_checkout('main');
+    INSERT INTO small VALUES(3,'main');
+    SELECT dolt_commit('-A','-m','main');
+  }
+  set ::dlt_check_probe_calls 0
+  execsql { SELECT length(dolt_merge('feature')) }
+  set ::dlt_check_probe_calls
+} {0}
+
+reset_db
+
+do_test doltlite_merge_constraint_prune-2.1 {
+  execsql {
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE parent(id INTEGER PRIMARY KEY);
+    CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id));
+    INSERT INTO parent VALUES(1),(2);
+    INSERT INTO child VALUES(1,1);
+    SELECT dolt_commit('-A','-m','init');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+    UPDATE child SET parent_id=2 WHERE id=1;
+    SELECT dolt_commit('-A','-m','move child');
+  }
+  db close
+  sqlite3 db test.db
+  execsql {
+    PRAGMA foreign_keys=ON;
+    SELECT dolt_checkout('main');
+    DELETE FROM parent WHERE id=2;
+    SELECT dolt_commit('-A','-m','delete parent');
+  }
+  db close
+  sqlite3 db test.db
+  catchsql {
+    PRAGMA foreign_keys=ON;
+    SELECT dolt_merge('feature');
+  }
+} {1 {Committing this transaction resulted in a working set with constraint violations, transaction rolled back.}}
+
+finish_test
