@@ -235,63 +235,31 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
 }
 
 void doltliteUpdateSchemaHashes(sqlite3 *db){
-  int idx = 0;
-  Pgno iTable;
-  const char *zName;
-  while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
-    sqlite3_stmt *pStmt = 0;
-    /* zName points into the catalog, and stepping the query below can
-    ** begin a transaction that reloads it (cherry-pick refresh). */
-    char *zNameCopy = sqlite3_mprintf("%s", zName);
-    char *zSql = zNameCopy ? sqlite3_mprintf(
-      "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'",
-      zNameCopy) : 0;
-    if( zSql ){
-      if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK ){
-        if( sqlite3_step(pStmt)==SQLITE_ROW ){
-          const char *zCreate = (const char*)sqlite3_column_text(pStmt, 0);
-          if( zCreate ){
-            ProllyHash h;
-            char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zNameCopy);
-            if( zCanon ){
-              prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
-              sqlite3_free(zCanon);
-              doltliteSetTableSchemaHash(db, iTable, &h);
-            }
-          }
-        }
-        sqlite3_finalize(pStmt);
-      }
-      sqlite3_free(zSql);
-    }
-    sqlite3_free(zNameCopy);
-  }
-
-  {
-    sqlite3_stmt *pStmt = 0;
-    if( sqlite3_prepare_v2(
-          db,
-          "SELECT name, rootpage, sql "
-          "FROM main.sqlite_master "
-          "WHERE type='index' AND sql IS NOT NULL",
-          -1, &pStmt, 0
-        )==SQLITE_OK ){
-      while( sqlite3_step(pStmt)==SQLITE_ROW ){
-        const char *zIdxName = (const char*)sqlite3_column_text(pStmt, 0);
-        Pgno iRoot = (Pgno)sqlite3_column_int(pStmt, 1);
-        const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
-        if( zIdxName && zCreate ){
-          ProllyHash h;
-          char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zIdxName);
-          if( zCanon ){
-            prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
-            sqlite3_free(zCanon);
-            doltliteSetTableSchemaHash(db, iRoot, &h);
-          }
+  sqlite3_stmt *pStmt = 0;
+  /* One scan of sqlite_master covers every table and index; both key their
+  ** catalog entry by rootpage and canonicalize by their own name. */
+  if( sqlite3_prepare_v2(
+        db,
+        "SELECT name, rootpage, sql "
+        "FROM main.sqlite_master "
+        "WHERE type IN ('table','index') AND sql IS NOT NULL",
+        -1, &pStmt, 0
+      )==SQLITE_OK ){
+    while( sqlite3_step(pStmt)==SQLITE_ROW ){
+      const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+      Pgno iRoot = (Pgno)sqlite3_column_int(pStmt, 1);
+      const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
+      if( zName && zCreate ){
+        ProllyHash h;
+        char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zName);
+        if( zCanon ){
+          prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
+          sqlite3_free(zCanon);
+          doltliteSetTableSchemaHash(db, iRoot, &h);
         }
       }
-      sqlite3_finalize(pStmt);
     }
+    sqlite3_finalize(pStmt);
   }
 }
 
