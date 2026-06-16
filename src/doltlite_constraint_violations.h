@@ -36,6 +36,17 @@ int doltliteAppendConstraintViolation(
 
 int doltliteClearAllConstraintViolations(sqlite3 *db);
 
+/* Batch many appends into one load + one store. Begin loads the current
+** violations; while a batch is open doltliteAppendConstraintViolation
+** accumulates in memory; End persists once (commit!=0) or discards.
+** Not nestable. */
+int doltliteConstraintViolationBatchBegin(sqlite3 *db);
+int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
+
 int doltliteConstraintViolationsRegister(sqlite3 *db);
+
+/* Storage for an open batch hangs off the connection's prolly Btree. */
+void *doltliteGetCvBatch(sqlite3 *db);
+void doltliteSetCvBatch(sqlite3 *db, void *pBatch);
 
 #endif

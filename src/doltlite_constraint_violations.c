@@ -247,34 +247,23 @@ static int storeUpdatedViolations(
   return doltliteSaveWorkingSet(db);
 }
 
-int doltliteAppendConstraintViolation(
-  sqlite3 *db,
-  const char *zTable,
-  u8 violationType,
-  i64 intKey,
-  const u8 *pKey, int nKey,
-  const u8 *pVal, int nVal,
+/* Append one violation row to an in-memory table set. */
+static int cvAppendRow(
+  ConstraintViolationTable **paTables, int *pnTables,
+  const char *zTable, u8 violationType, i64 intKey,
+  const u8 *pKey, int nKey, const u8 *pVal, int nVal,
   const char *zInfoJson
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ConstraintViolationTable *aTables = 0;
-  int nTables = 0;
   ConstraintViolationTable *pT;
-  ConstraintViolationRow *pRow;
+  ConstraintViolationRow *pRow, *aNew;
   int rc;
-  ConstraintViolationRow *aNew;
 
-  if( !cs || !zTable ) return SQLITE_ERROR;
-
-  rc = loadAllViolations(db, cs, &aTables, &nTables);
-  if( rc!=SQLITE_OK ) return rc;
-
-  pT = findOrCreateViolationTable(&aTables, &nTables, zTable);
-  if( !pT ){ freeViolationTables(aTables, nTables); return SQLITE_NOMEM; }
+  pT = findOrCreateViolationTable(paTables, pnTables, zTable);
+  if( !pT ) return SQLITE_NOMEM;
 
   aNew = sqlite3_realloc(pT->aRows,
       (pT->nRows + 1) * (int)sizeof(ConstraintViolationRow));
-  if( !aNew ){ freeViolationTables(aTables, nTables); return SQLITE_NOMEM; }
+  if( !aNew ) return SQLITE_NOMEM;
   pT->aRows = aNew;
   pRow = &pT->aRows[pT->nRows];
   memset(pRow, 0, sizeof(*pRow));
@@ -290,12 +279,84 @@ int doltliteAppendConstraintViolation(
   }
   if( rc!=SQLITE_OK ){
     freeViolationRow(pRow);
-    freeViolationTables(aTables, nTables);
     return rc;
   }
   pT->nRows++;
+  return SQLITE_OK;
+}
 
-  rc = storeUpdatedViolations(db, cs, aTables, nTables);
+typedef struct ConstraintViolationBatch ConstraintViolationBatch;
+struct ConstraintViolationBatch {
+  ConstraintViolationTable *aTables;
+  int nTables;
+  int nAppended;   /* stays 0 when no violation was added, matching the
+                   ** non-batch path, which never stores in that case */
+};
+
+int doltliteConstraintViolationBatchBegin(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ConstraintViolationBatch *pBatch;
+  int rc;
+  if( !cs ) return SQLITE_ERROR;
+  if( doltliteGetCvBatch(db) ) return SQLITE_MISUSE;  /* not nestable */
+  pBatch = sqlite3_malloc(sizeof(*pBatch));
+  if( !pBatch ) return SQLITE_NOMEM;
+  memset(pBatch, 0, sizeof(*pBatch));
+  rc = loadAllViolations(db, cs, &pBatch->aTables, &pBatch->nTables);
+  if( rc!=SQLITE_OK ){ sqlite3_free(pBatch); return rc; }
+  doltliteSetCvBatch(db, pBatch);
+  return SQLITE_OK;
+}
+
+int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit){
+  ConstraintViolationBatch *pBatch = (ConstraintViolationBatch*)doltliteGetCvBatch(db);
+  int rc = SQLITE_OK;
+  if( !pBatch ) return SQLITE_OK;
+  doltliteSetCvBatch(db, 0);
+  if( commit && pBatch->nAppended>0 ){
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    rc = cs ? storeUpdatedViolations(db, cs, pBatch->aTables, pBatch->nTables)
+            : SQLITE_ERROR;
+  }
+  freeViolationTables(pBatch->aTables, pBatch->nTables);
+  sqlite3_free(pBatch);
+  return rc;
+}
+
+int doltliteAppendConstraintViolation(
+  sqlite3 *db,
+  const char *zTable,
+  u8 violationType,
+  i64 intKey,
+  const u8 *pKey, int nKey,
+  const u8 *pVal, int nVal,
+  const char *zInfoJson
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ConstraintViolationBatch *pBatch;
+  ConstraintViolationTable *aTables = 0;
+  int nTables = 0;
+  int rc;
+
+  if( !cs || !zTable ) return SQLITE_ERROR;
+
+  /* Inside a batch, accumulate in memory; the single load and store happen
+  ** at Begin/End, turning a per-violation O(total) round-trip into O(1). */
+  pBatch = (ConstraintViolationBatch*)doltliteGetCvBatch(db);
+  if( pBatch ){
+    rc = cvAppendRow(&pBatch->aTables, &pBatch->nTables, zTable,
+                     violationType, intKey, pKey, nKey, pVal, nVal, zInfoJson);
+    if( rc==SQLITE_OK ) pBatch->nAppended++;
+    return rc;
+  }
+
+  rc = loadAllViolations(db, cs, &aTables, &nTables);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = cvAppendRow(&aTables, &nTables, zTable, violationType, intKey,
+                   pKey, nKey, pVal, nVal, zInfoJson);
+  if( rc==SQLITE_OK ){
+    rc = storeUpdatedViolations(db, cs, aTables, nTables);
+  }
   freeViolationTables(aTables, nTables);
   return rc;
 }
