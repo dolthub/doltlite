@@ -1,14 +1,10 @@
 
 #ifdef DOLTLITE_PROLLY
 
-#include "sqliteInt.h"
-#include "prolly_hash.h"
+#include "doltlite_vtab_util.h"
 #include "prolly_diff.h"
 #include "prolly_mutate.h"
-#include "prolly_cache.h"
-#include "chunk_store.h"
 #include "doltlite_commit.h"
-#include "doltlite_record.h"
 #include "doltlite_internal.h"
 
 #include <string.h>
@@ -56,7 +52,7 @@ static void wsClearCache(WorkspaceVtab *p){
   p->nCache = 0;
 }
 
-static char *wsBuildSchema(DoltliteColInfo *ci){
+static char *wsBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   int i;
@@ -231,47 +227,14 @@ static int wsLoadRows(WorkspaceVtab *pVtab){
 
 static int wsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  WorkspaceVtab *pVtab;
-  const char *zModName;
-  char *zSchema;
-  int rc;
   (void)pAux;
-
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
-  pVtab->db = db;
-  zModName = argv[0];
-  if( zModName && strncmp(zModName, "dolt_workspace_", 15)==0 ){
-    pVtab->zTableName = sqlite3_mprintf("%s", zModName + 15);
-  }else if( argc>3 ){
-    pVtab->zTableName = sqlite3_mprintf("%s", argv[3]);
-  }else{
-    pVtab->zTableName = sqlite3_mprintf("");
-  }
-  rc = doltliteLoadUserTableColumns(db, pVtab->zTableName, &pVtab->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pVtab->zTableName);
-    sqlite3_free(pVtab);
-    return rc;
-  }
-  zSchema = wsBuildSchema(&pVtab->cols);
-  if( !zSchema ){
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab->zTableName);
-    sqlite3_free(pVtab);
-    return SQLITE_NOMEM;
-  }
-  rc = sqlite3_declare_vtab(db, zSchema);
-  sqlite3_free(zSchema);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab->zTableName);
-    sqlite3_free(pVtab);
-    return rc;
-  }
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
+  /* WorkspaceVtab has trailing aCache/nCache fields, but they start zeroed
+  ** and only fill in during xFilter, so the shared Connect (which inits the
+  ** common prefix and cleans up via the common disconnect on failure) is
+  ** safe here; wsDisconnect still frees the cache at teardown. */
+  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_workspace_",
+                                      sizeof(WorkspaceVtab), wsBuildSchema,
+                                      ppVtab, pzErr);
 }
 
 static int wsDisconnect(sqlite3_vtab *pBase){

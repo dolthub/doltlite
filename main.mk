@@ -614,6 +614,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_commit.h $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
+    $(TOP)/src/doltlite_vtab_util.h \
     $(TOP)/src/btree_orig_prefix.h $(TOP)/src/btree_orig_api.h $(TOP)/src/btree_orig_api.c \
     $(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3_portable.c \
     $(TOP)/ext/blake3/blake3_dispatch.c $(TOP)/ext/blake3/blake3.h \
