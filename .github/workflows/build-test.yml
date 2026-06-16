@@ -287,14 +287,24 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
+        export DLTEST_STRIP_CR=1
         tests=(
           ../test/doltlite_parity.sh
+          ../test/doltlite_commit.sh
           ../test/doltlite_staging.sh
+          ../test/doltlite_workspace.sh
+          ../test/doltlite_branch.sh
+          ../test/doltlite_tag.sh
+          ../test/doltlite_merge.sh
+          ../test/doltlite_conflicts.sh
           ../test/doltlite_diff_table.sh
           ../test/doltlite_schema_diff.sh
           ../test/doltlite_schema_merge.sh
+          ../test/doltlite_cherry_pick.sh
           ../test/doltlite_revert_dirty.sh
           ../test/doltlite_conflict_rows.sh
+          ../test/doltlite_reset.sh
+          ../test/doltlite_working_set.sh
           ../test/doltlite_gc.sh
           ../test/doltlite_gc_session_state.sh
           ../test/doltlite_gc_scale.sh
