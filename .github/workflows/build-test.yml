@@ -294,6 +294,7 @@ jobs:
           ../test/doltlite_staging.sh
           ../test/doltlite_workspace.sh
           ../test/doltlite_branch.sh
+          ../test/doltlite_open_branch.sh
           ../test/doltlite_tag.sh
           ../test/doltlite_merge.sh
           ../test/doltlite_conflicts.sh
