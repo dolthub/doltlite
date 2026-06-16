@@ -1,10 +1,7 @@
 
 #ifdef DOLTLITE_PROLLY
 
-#include "sqliteInt.h"
-#include "prolly_hash.h"
-#include "chunk_store.h"
-#include "doltlite_record.h"
+#include "doltlite_vtab_util.h"
 #include "doltlite_internal.h"
 #include "doltlite_constraint_violations.h"
 
@@ -424,61 +421,11 @@ static char *cvrBuildSchema(const DoltliteColInfo *ci){
 
 static int cvrConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  CvRowVtab *v;
-  int rc;
-  const char *zMod;
-  char *zSchema;
   (void)pAux;
-
-  v = sqlite3_malloc(sizeof(*v));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(*v));
-  v->db = db;
-
-  zMod = argv[0];
-  if( zMod && strncmp(zMod, "dolt_constraint_violations_", 27)==0 ){
-    v->zTableName = sqlite3_mprintf("%s", zMod + 27);
-  }else if( argc > 3 ){
-    v->zTableName = sqlite3_mprintf("%s", argv[3]);
-  }else{
-    v->zTableName = sqlite3_mprintf("");
-  }
-  if( !v->zTableName ){ sqlite3_free(v); return SQLITE_NOMEM; }
-
-  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName);
-    doltliteFreeColInfo(&v->cols);
-    sqlite3_free(v);
-    return rc;
-  }
-
-  zSchema = cvrBuildSchema(&v->cols);
-  if( !zSchema ){
-    sqlite3_free(v->zTableName);
-    doltliteFreeColInfo(&v->cols);
-    sqlite3_free(v);
-    return SQLITE_NOMEM;
-  }
-  rc = sqlite3_declare_vtab(db, zSchema);
-  sqlite3_free(zSchema);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName);
-    doltliteFreeColInfo(&v->cols);
-    sqlite3_free(v);
-    return rc;
-  }
-
-  *ppVtab = &v->base;
-  return SQLITE_OK;
-}
-
-static int cvrDisconnect(sqlite3_vtab *pVtab){
-  CvRowVtab *v = (CvRowVtab*)pVtab;
-  sqlite3_free(v->zTableName);
-  doltliteFreeColInfo(&v->cols);
-  sqlite3_free(v);
-  return SQLITE_OK;
+  return doltliteVtabConnectUserTable(db, argc, argv,
+                                      "dolt_constraint_violations_",
+                                      sizeof(CvRowVtab), cvrBuildSchema,
+                                      ppVtab, pzErr);
 }
 
 static int cvrOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
@@ -649,8 +596,8 @@ static sqlite3_module cvRowModule = {
   cvrConnect,
   cvrConnect,
   cvrBestIndex,
-  cvrDisconnect,
-  cvrDisconnect,
+  doltliteVtabCommonDisconnect,
+  doltliteVtabCommonDisconnect,
   cvrOpen,
   cvrClose,
   cvrFilter,

@@ -8,7 +8,7 @@
 #include <string.h>
 #include <time.h>
 
-static char *atBuildSchema(DoltliteColInfo *ci){
+static char *atBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   if( !pStr ) return 0;

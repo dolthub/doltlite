@@ -109,7 +109,7 @@ static SQLITE_INLINE int doltliteVtabCommonRowid(
 static SQLITE_INLINE int doltliteVtabConnectUserTable(
   sqlite3 *db, int argc, const char *const *argv,
   const char *zPrefix, int nByte,
-  char *(*xBuildSchema)(DoltliteColInfo*),
+  char *(*xBuildSchema)(const DoltliteColInfo*),
   sqlite3_vtab **ppVtab, char **pzErr
 ){
   DoltliteVtabCommon *v;

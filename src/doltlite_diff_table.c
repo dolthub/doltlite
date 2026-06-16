@@ -11,7 +11,7 @@
 #include <string.h>
 #include <time.h>
 
-static char *buildDiffSchema(DoltliteColInfo *ci){
+static char *buildDiffSchema(const DoltliteColInfo *ci){
   int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
