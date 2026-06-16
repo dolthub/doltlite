@@ -289,5 +289,36 @@ run_test "fk_chain_delete_cascades_same_session" "PRAGMA foreign_keys=ON; DELETE
 run_test "fk_chain_reopen_state" "PRAGMA foreign_keys=ON; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "1|0|0" "$DB22"
 run_test "fk_chain_reopen_delete_last_root" "PRAGMA foreign_keys=ON; DELETE FROM gp WHERE id=2; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "0|0|0" "$DB22"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22"
+# Many constraint violations in a single merge: feat adds 300 children, main
+# deletes their parent, so the merge orphans all 300 at once. Each is appended
+# to the violation set during one detection pass; the count must reflect every
+# one (exercises batched accumulation at scale, not just a single violation).
+DB23=/tmp/test_merge23_$$.db; rm -f "$DB23"
+echo "CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT, FOREIGN KEY(pid) REFERENCES parent(id));
+INSERT INTO parent VALUES(1);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');
+INSERT INTO child(id,pid) WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<300) SELECT i, 1 FROM c;
+SELECT dolt_commit('-A','-m','add 300 children');
+SELECT dolt_checkout('main'); DELETE FROM parent WHERE id=1; SELECT dolt_commit('-A','-m','drop parent');" | $DOLTLITE "$DB23" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       (SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='child');
+ROLLBACK;" | $DOLTLITE "$DB23" 2>&1 | grep '^TX|')
+if [ "$TX_OUT" = "TX|1|300" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: many_fk_violations_all_recorded\n  expected: TX|1|300\n  got:      $TX_OUT"
+fi
+# Autocommit merge with the same violations rolls the whole merge back.
+echo "SELECT dolt_merge('feat');" | $DOLTLITE "$DB23" > /dev/null 2>&1
+run_test "many_fk_violations_autocommit_rolled_back" \
+  "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB23"
+run_test "many_fk_violations_parent_restored" \
+  "SELECT count(*) FROM parent;" "0" "$DB23"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23"
 dltest_finish

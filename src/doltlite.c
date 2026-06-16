@@ -573,8 +573,11 @@ static int doltliteDetectPostMergeConstraintViolations(
     return SQLITE_OK;
   }
 
-  rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
-                                       &zDetectErrMsg, &nViolations);
+  rc = doltliteConstraintViolationBatchBegin(db);
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
+                                         &zDetectErrMsg, &nViolations);
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteDetectMergeUniqueViolations(db, pAncCatHash,
                                              &zDetectErrMsg, &nUnique);
@@ -582,6 +585,10 @@ static int doltliteDetectPostMergeConstraintViolations(
   if( rc==SQLITE_OK ){
     rc = doltliteDetectMergeCheckViolations(db, pAncCatHash,
                                             &zDetectErrMsg, &nCheck);
+  }
+  {
+    int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+    if( rc==SQLITE_OK ) rc = erc;
   }
   sqlite3_free(zDetectErrMsg);
   if( rc!=SQLITE_OK ) return rc;
@@ -2820,8 +2827,11 @@ static void doltliteMergeFunc(
     int nUnique = 0;
     int nCheck = 0;
     char *zDetectErrMsg = 0;
-    int vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
-                                              &zDetectErrMsg, &nViolations);
+    int vrc = doltliteConstraintViolationBatchBegin(db);
+    if( vrc == SQLITE_OK ){
+      vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
+                                            &zDetectErrMsg, &nViolations);
+    }
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash,
                                                 &zDetectErrMsg, &nUnique);
@@ -2829,6 +2839,10 @@ static void doltliteMergeFunc(
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash,
                                                &zDetectErrMsg, &nCheck);
+    }
+    {
+      int erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
+      if( vrc==SQLITE_OK ) vrc = erc;
     }
     if( vrc != SQLITE_OK ){
       if( zDetectErrMsg ){
@@ -3105,8 +3119,11 @@ static int applyMergedCatalogAndCommit(
     int nCheck = 0;
     char *zDetectErrMsg = 0;
 
-    rc = doltliteDetectMergeFkViolations(db, ancCatHash,
-                                         &zDetectErrMsg, &nViolations);
+    rc = doltliteConstraintViolationBatchBegin(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeFkViolations(db, ancCatHash,
+                                           &zDetectErrMsg, &nViolations);
+    }
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeUniqueViolations(db, ancCatHash,
                                                &zDetectErrMsg, &nUnique);
@@ -3114,6 +3131,10 @@ static int applyMergedCatalogAndCommit(
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeCheckViolations(db, ancCatHash,
                                               &zDetectErrMsg, &nCheck);
+    }
+    {
+      int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+      if( rc==SQLITE_OK ) rc = erc;
     }
     if( rc!=SQLITE_OK ){
       if( zDetectErrMsg ){

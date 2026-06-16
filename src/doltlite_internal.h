@@ -425,6 +425,9 @@ int doltliteDetectMergeUniqueViolations(sqlite3 *db, const ProllyHash *pAncCatHa
 int doltliteDetectMergeCheckViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
                                        char **pzErrMsg, int *pnFound);
 
+int doltliteConstraintViolationBatchBegin(sqlite3 *db);
+int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
+
 int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
                                  ProllyHash *pSchemaHash);

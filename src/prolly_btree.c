@@ -367,6 +367,10 @@ struct Btree {
   char *zRebaseReturnBranch;
 
   ProllyHash constraintViolationsHash;
+  /* Transient: a constraint-violation batch open across a merge detection
+  ** pass, so appends accumulate in memory and persist once. Owned by
+  ** doltlite_constraint_violations.c. */
+  void *pCvBatch;
 
   const struct BtreeOps *pOps;
   void *pOrigBtree;
@@ -10802,6 +10806,17 @@ void doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash
 int doltliteSessionHasConstraintViolations(sqlite3 *db){
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
   return !prollyHashIsEmpty(&db->aDb[0].pBt->constraintViolationsHash);
+}
+
+void *doltliteGetCvBatch(sqlite3 *db){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
+  return db->aDb[0].pBt->pCvBatch;
+}
+
+void doltliteSetCvBatch(sqlite3 *db, void *pBatch){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    db->aDb[0].pBt->pCvBatch = pBatch;
+  }
 }
 
 int doltliteSeedSessionHashes(
