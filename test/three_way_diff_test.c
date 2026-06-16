@@ -1,14 +1,3 @@
-/*
-** Unit test for prollyThreeWayDiff.
-**
-** Builds prolly trees using the mutate API, then runs three-way diffs
-** and verifies the change stream is correct.
-**
-** Build (from the build/ directory):
-**   cc -g -I. -I../src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
-**      -o three_way_diff_test ../test/three_way_diff_test.c \
-**      $(ls *.o | grep -v 'sqlite3.o\|shell.o\|tclsqlite') -lz -lpthread
-*/
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -31,12 +20,10 @@ static void check(const char *name, int condition){
   }
 }
 
-/* Collected three-way changes for verification */
 #define MAX_CHANGES 64
 static ThreeWayChange aChanges[MAX_CHANGES];
 static int nChanges = 0;
 
-/* Deep-copy a blob, returning NULL for NULL/empty. */
 static u8 *copyBlob(const u8 *p, int n){
   u8 *c;
   if( !p || n<=0 ) return 0;
@@ -45,25 +32,12 @@ static u8 *copyBlob(const u8 *p, int n){
   return c;
 }
 
-/*
-** Encode a C string as a single-column SQLite record holding a TEXT
-** value. The prolly engine expects record-encoded values (header +
-** serial-type stream + payload) -- raw bytes shorter than 2 bytes
-** trip a strict-record sanity check in prollyValuesEqual and surface
-** as SQLITE_CORRUPT, so all inserted values must be encoded this way.
-**
-** Records produced here use a 2-byte header (matches doltlite/SQLite
-** serial-type encoding for a single TEXT column with length < 64).
-** Returns a malloc'd buffer; caller frees with sqlite3_free.
-*/
 static u8 *encodeTextRecord(const char *zText, int *pnRec){
   int nText = (int)strlen(zText);
   int serialType = nText*2 + 13;     /* TEXT serial type for length nText */
   int nRec;
   u8 *pRec;
 
-  /* For nText up to ~25, serialType fits in 1 varint byte (<0x80) and the
-  ** header is 2 bytes: [headerSize=2][serialType]. We assert that here. */
   if( serialType >= 0x80 ){
     fprintf(stderr, "encodeTextRecord: text too long (%d)\n", nText);
     *pnRec = 0;
@@ -80,10 +54,6 @@ static u8 *encodeTextRecord(const char *zText, int *pnRec){
   return pRec;
 }
 
-/*
-** Predicate: does a record-encoded value (as produced by
-** encodeTextRecord) carry the given text payload?
-*/
 static int recordHasText(const u8 *pRec, int nRec, const char *zText){
   int nText = (int)strlen(zText);
   if( pRec==0 ) return 0;
@@ -122,13 +92,6 @@ static void resetChanges(void){
   nChanges = 0;
 }
 
-/*
-** Helper: insert an integer-keyed row into a tree, return new root.
-** The string value is encoded as a SQLite single-column TEXT record so
-** that the engine's record-validating value comparator (prollyValuesEqual)
-** accepts it -- a raw 1-byte value like "a" trips a strict-record check
-** and surfaces as SQLITE_CORRUPT inside prollyThreeWayDiff.
-*/
 static int treeInsertInt(
   ChunkStore *cs, ProllyCache *cache,
   const ProllyHash *pRoot, i64 key,
@@ -146,9 +109,6 @@ static int treeInsertInt(
   return rc;
 }
 
-/*
-** Helper: delete an integer-keyed row from a tree, return new root.
-*/
 static int treeDeleteInt(
   ChunkStore *cs, ProllyCache *cache,
   const ProllyHash *pRoot, i64 key,
@@ -158,7 +118,6 @@ static int treeDeleteInt(
                             0, 0, key, pNewRoot);
 }
 
-/* Open a chunk store + cache for testing */
 static int openTestStore(ChunkStore *cs, ProllyCache *cache, const char *path){
   int rc;
   char chunks[512];
@@ -185,10 +144,6 @@ static void closeTestStore(ChunkStore *cs, ProllyCache *cache, const char *path)
   }
 }
 
-/*
-** Build a tree from an array of (key, value) pairs.
-** Returns SQLITE_OK on success with root in *pRoot.
-*/
 static int buildTree(
   ChunkStore *cs, ProllyCache *cache,
   i64 *aKeys, const char **aVals, int n,
@@ -211,9 +166,6 @@ static int buildTree(
   return SQLITE_OK;
 }
 
-/*
-** Test 1: Identical trees → no changes.
-*/
 static void test_identical(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -241,9 +193,6 @@ static void test_identical(void){
   printf("  test_identical passed\n");
 }
 
-/*
-** Test 2: Left-only add.
-*/
 static void test_left_add(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -261,7 +210,6 @@ static void test_left_add(void){
     check("left_add: build ancestor", rc==SQLITE_OK);
   }
 
-  /* Ours: add key 2 */
   rc = treeInsertInt(&cs, &cache, &ancestor, 2, "added", &ours);
   check("left_add: insert", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
@@ -282,9 +230,6 @@ static void test_left_add(void){
   printf("  test_left_add passed\n");
 }
 
-/*
-** Test 3: Right-only add.
-*/
 static void test_right_add(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -320,9 +265,6 @@ static void test_right_add(void){
   printf("  test_right_add passed\n");
 }
 
-/*
-** Test 4: Left-only delete.
-*/
 static void test_left_delete(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -359,9 +301,6 @@ static void test_left_delete(void){
   printf("  test_left_delete passed\n");
 }
 
-/*
-** Test 5: Right-only delete.
-*/
 static void test_right_delete(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -398,9 +337,6 @@ static void test_right_delete(void){
   printf("  test_right_delete passed\n");
 }
 
-/*
-** Test 6: Left-only modify.
-*/
 static void test_left_modify(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -418,7 +354,6 @@ static void test_left_modify(void){
     check("left_modify: build", rc==SQLITE_OK);
   }
 
-  /* Modify by re-inserting with different value */
   rc = treeInsertInt(&cs, &cache, &ancestor, 1, "modified", &ours);
   check("left_modify: modify", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
@@ -442,9 +377,6 @@ static void test_left_modify(void){
   printf("  test_left_modify passed\n");
 }
 
-/*
-** Test 7: Right-only modify.
-*/
 static void test_right_modify(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -481,9 +413,6 @@ static void test_right_modify(void){
   printf("  test_right_modify passed\n");
 }
 
-/*
-** Test 8: Convergent modify — both modify to same value.
-*/
 static void test_convergent_modify(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -524,9 +453,6 @@ static void test_convergent_modify(void){
   printf("  test_convergent_modify passed\n");
 }
 
-/*
-** Test 9: Convergent delete — both delete the same row.
-*/
 static void test_convergent_delete(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -567,9 +493,6 @@ static void test_convergent_delete(void){
   printf("  test_convergent_delete passed\n");
 }
 
-/*
-** Test 10: Convergent add — both add the same key with same value.
-*/
 static void test_convergent_add(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -610,9 +533,6 @@ static void test_convergent_add(void){
   printf("  test_convergent_add passed\n");
 }
 
-/*
-** Test 11: Conflict MM — both modify same key to different values.
-*/
 static void test_conflict_mm(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -657,9 +577,6 @@ static void test_conflict_mm(void){
   printf("  test_conflict_mm passed\n");
 }
 
-/*
-** Test 12: Conflict DM — one deletes, other modifies.
-*/
 static void test_conflict_dm(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -677,12 +594,10 @@ static void test_conflict_dm(void){
     check("conflict_dm: build", rc==SQLITE_OK);
   }
 
-  /* Ours: delete */
   rc = treeDeleteInt(&cs, &cache, &ancestor, 1, &ours);
   check("conflict_dm: ours del", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
 
-  /* Theirs: modify */
   rc = treeInsertInt(&cs, &cache, &ancestor, 1, "theirs-mod", &theirs);
   check("conflict_dm: theirs mod", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
@@ -702,9 +617,6 @@ static void test_conflict_dm(void){
   printf("  test_conflict_dm passed\n");
 }
 
-/*
-** Test 13: Conflict DM — reversed (theirs deletes, ours modifies).
-*/
 static void test_conflict_dm_reversed(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -722,12 +634,10 @@ static void test_conflict_dm_reversed(void){
     check("conflict_dm_r: build", rc==SQLITE_OK);
   }
 
-  /* Ours: modify */
   rc = treeInsertInt(&cs, &cache, &ancestor, 1, "ours-mod", &ours);
   check("conflict_dm_r: ours mod", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
 
-  /* Theirs: delete */
   rc = treeDeleteInt(&cs, &cache, &ancestor, 1, &theirs);
   check("conflict_dm_r: theirs del", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
@@ -741,7 +651,6 @@ static void test_conflict_dm_reversed(void){
     check("conflict_dm_r: type CONFLICT_DM",
           aChanges[0].type==THREE_WAY_CONFLICT_DM);
     check("conflict_dm_r: key 1", aChanges[0].intKey==1);
-    /* Ours modified, so pOurVal should be set */
     check("conflict_dm_r: our val present", aChanges[0].pOurVal!=0);
   }
 
@@ -749,9 +658,6 @@ static void test_conflict_dm_reversed(void){
   printf("  test_conflict_dm_reversed passed\n");
 }
 
-/*
-** Test 14: Mixed changes — multiple change types in one diff.
-*/
 static void test_mixed(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -771,14 +677,12 @@ static void test_mixed(void){
     check("mixed: build", rc==SQLITE_OK);
   }
 
-  /* Ours: add key 4, modify key 1 */
   rc = treeInsertInt(&cs, &cache, &ancestor, 4, "ours-added", &tmp);
   check("mixed: ours add", rc==SQLITE_OK);
   rc = treeInsertInt(&cs, &cache, &tmp, 1, "ours-mod", &ours);
   check("mixed: ours mod", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
 
-  /* Theirs: delete key 3, modify key 1 differently */
   rc = treeDeleteInt(&cs, &cache, &ancestor, 3, &tmp);
   check("mixed: theirs del", rc==SQLITE_OK);
   rc = treeInsertInt(&cs, &cache, &tmp, 1, "theirs-mod", &theirs);
@@ -791,7 +695,6 @@ static void test_mixed(void){
   check("mixed: diff ok", rc==SQLITE_OK);
   check("mixed: 3 changes", nChanges==3);
 
-  /* Verify we got the expected change types */
   for(i=0; i<nChanges; i++){
     if( aChanges[i].intKey==1 && aChanges[i].type==THREE_WAY_CONFLICT_MM ){
       foundConflict = 1;
@@ -811,9 +714,6 @@ static void test_mixed(void){
   printf("  test_mixed passed\n");
 }
 
-/*
-** Test 15: Empty ancestor — both branches add from scratch.
-*/
 static void test_empty_ancestor(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -824,10 +724,8 @@ static void test_empty_ancestor(void){
   rc = openTestStore(&cs, &cache, path);
   check("empty_anc: open", rc==SQLITE_OK);
 
-  /* Ancestor is the zero hash (empty tree) */
   memset(&ancestor, 0, sizeof(ancestor));
 
-  /* Ours: add keys 1,2 */
   {
     i64 keys[] = {1, 2};
     const char *vals[] = {"a", "b"};
@@ -835,7 +733,6 @@ static void test_empty_ancestor(void){
     check("empty_anc: build ours", rc==SQLITE_OK);
   }
 
-  /* Theirs: add keys 3,4 */
   {
     i64 keys[] = {3, 4};
     const char *vals[] = {"c", "d"};
@@ -849,7 +746,6 @@ static void test_empty_ancestor(void){
   check("empty_anc: diff ok", rc==SQLITE_OK);
   check("empty_anc: 4 changes", nChanges==4);
 
-  /* Keys 1,2 should be LEFT_ADD; keys 3,4 should be RIGHT_ADD */
   {
     int leftAdds=0, rightAdds=0;
     int i;
@@ -865,9 +761,6 @@ static void test_empty_ancestor(void){
   printf("  test_empty_ancestor passed\n");
 }
 
-/*
-** Test 16: Both add same key with different values (conflict).
-*/
 static void test_conflict_add(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -885,7 +778,6 @@ static void test_conflict_add(void){
     check("conflict_add: build", rc==SQLITE_OK);
   }
 
-  /* Both add key 5 but with different values */
   rc = treeInsertInt(&cs, &cache, &ancestor, 5, "ours-5", &ours);
   check("conflict_add: ours", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
@@ -909,9 +801,6 @@ static void test_conflict_add(void){
   printf("  test_conflict_add passed\n");
 }
 
-/*
-** Test 17: Many rows — verify correctness at scale.
-*/
 static void test_many_rows(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -923,7 +812,6 @@ static void test_many_rows(void){
   rc = openTestStore(&cs, &cache, path);
   check("many_rows: open", rc==SQLITE_OK);
 
-  /* Build ancestor with 20 rows */
   {
     ProllyHash cur;
     memset(&cur, 0, sizeof(cur));
@@ -939,7 +827,6 @@ static void test_many_rows(void){
     check("many_rows: build ancestor", rc==SQLITE_OK);
   }
 
-  /* Ours: modify rows 1-5 */
   {
     ProllyHash cur = ancestor;
     for(i=1; i<=5; i++){
@@ -954,7 +841,6 @@ static void test_many_rows(void){
     check("many_rows: build ours", rc==SQLITE_OK);
   }
 
-  /* Theirs: modify rows 16-20 */
   {
     ProllyHash cur = ancestor;
     for(i=16; i<=20; i++){
@@ -975,7 +861,6 @@ static void test_many_rows(void){
   check("many_rows: diff ok", rc==SQLITE_OK);
   check("many_rows: 10 changes", nChanges==10);
 
-  /* Verify: 5 LEFT_MODIFY + 5 RIGHT_MODIFY */
   {
     int lm=0, rm=0;
     for(i=0; i<nChanges; i++){
@@ -990,9 +875,6 @@ static void test_many_rows(void){
   printf("  test_many_rows passed\n");
 }
 
-/*
-** Test 18: Changes are emitted in sorted key order.
-*/
 static void test_sorted_output(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -1011,13 +893,11 @@ static void test_sorted_output(void){
     check("sorted: build", rc==SQLITE_OK);
   }
 
-  /* Ours: add 5, modify 20 */
   rc = treeInsertInt(&cs, &cache, &ancestor, 5, "new-5", &tmp);
   rc = treeInsertInt(&cs, &cache, &tmp, 20, "mod-20", &ours);
   check("sorted: ours", rc==SQLITE_OK);
   rc = chunkStoreCommit(&cs);
 
-  /* Theirs: add 25, delete 30 */
   rc = treeInsertInt(&cs, &cache, &ancestor, 25, "new-25", &tmp);
   rc = treeDeleteInt(&cs, &cache, &tmp, 30, &theirs);
   check("sorted: theirs", rc==SQLITE_OK);
@@ -1029,7 +909,6 @@ static void test_sorted_output(void){
   check("sorted: diff ok", rc==SQLITE_OK);
   check("sorted: 4 changes", nChanges==4);
 
-  /* Verify sorted by key: 5, 20, 25, 30 */
   if( nChanges==4 ){
     check("sorted: key[0]=5", aChanges[0].intKey==5);
     check("sorted: key[1]=20", aChanges[1].intKey==20);

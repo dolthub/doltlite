@@ -119,11 +119,7 @@ void csFreeReloadState(ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
 }
 
-/* Damage classification and the zero-tail probe read at most this many
-** bytes. Writer-generated structure past a parse failure is sector-bounded
-** (alignment gaps), so anything legitimate sits well inside the cap; only
-** alien file extensions (fake_big_file-style multi-GB tails) exceed it,
-** and those must not turn every open into a whole-file scan. */
+/* Cap recovery scans; valid writer gaps are sector-bounded. */
 #define CS_WAL_SCAN_MAX (64*1024*1024)
 
 /* True if the WAL region from pos to walSize is zero as far as the scan
@@ -149,24 +145,7 @@ static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
 #define CS_DAMAGE_MIDSTREAM 1
 #define CS_DAMAGE_RESUME    2
 
-/* Classify unparseable WAL bytes at absolute offset damageAbs by scanning
-** forward for root records:
-**
-**   MIDSTREAM — a later root proves the damaged bytes were once valid, so
-**     this is corruption and must be surfaced (SQLITE_CORRUPT on first
-**     access; stock never errors from sqlite3_open). A sealed root proves
-**     it for every byte below its DURABLE_TO (the valid prefix its writer
-**     observed); a torn batch's own roots carry DURABLE_TO at or below the
-**     damage, so they never count. Legacy roots keep the older inference:
-**     any complete legacy root with data after it counts.
-**
-**   RESUME — the bytes are a sector-alignment gap a sealed root declares
-**     ([DURABLE_TO, BATCH_START) was skipped, never written): replay
-**     continues at *pResume = BATCH_START.
-**
-**   TORN — nothing past the damage proves anything: the damage is the
-**     crashed batch itself and recovery rolls back to the last commit
-**     boundary. */
+/* Classify WAL damage as committed corruption, declared gap, or torn tail. */
 static int csWalResolveDamage(
   ChunkStore *cs,
   i64 damagePos,
@@ -422,11 +401,7 @@ int csReplayWal(ChunkStore *cs){
       rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
       if( rc != SQLITE_OK ) goto replay_error;
       if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
-      /* A nonzero unparseable tag as the WAL's very first record, with no
-      ** root past it, means the tail was never doltlite WAL content at all
-      ** (e.g. foreign bytes appended to a compacted store): reject it. Past
-      ** the first record — or as dropped-write zeros — the same shape is
-      ** crash garbage. */
+      /* Foreign bytes at WAL start are corruption; later junk is crash tail. */
       if( damageAction==CS_DAMAGE_TORN && recPos == 0 && tag != 0 ){
         rc = SQLITE_CORRUPT;
         goto replay_error;
@@ -436,13 +411,7 @@ int csReplayWal(ChunkStore *cs){
     }
   }
 
-  /* Anything past the last commit boundary (orphan chunks, crash garbage, a
-  ** zero tail, a sector-alignment gap) is not committed state: rewind the
-  ** logical EOF so the next append reclaims it. The boundary can sit past
-  ** the physical EOF (the final root's NEXT_OFF gap is never written), so
-  ** nWalData — the readable WAL content — is capped at the physical tail.
-  ** A poisoned store keeps its physical size; it rejects reads and commits
-  ** anyway. */
+  /* Reclaim uncommitted tail bytes unless the store is poisoned. */
   if( !sawMidStream ){
     cs->wal.nWalData = lastBoundary < walSize ? lastBoundary : walSize;
     cs->file.iFileSize = cs->wal.iWalOffset + lastBoundary;

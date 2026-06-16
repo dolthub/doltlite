@@ -1,13 +1,3 @@
-/*
-** Chunk-store fork-lock regression test.
-**
-** Historically the Unix chunk-store graph lock used open()+flock(). BSD flock
-** state is associated with the open file description, so a child created by
-** fork() inherits a reference that keeps the parent's lock alive after the
-** parent closes its fd. This test holds the chunk-store lock, forks a sleeping
-** child, unlocks in the parent, then verifies that a second ChunkStore can
-** acquire the same lock before the child exits.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

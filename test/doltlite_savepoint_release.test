@@ -8,9 +8,6 @@
 #    May you share freely, never taking more than you give.
 #
 #***********************************************************************
-# Focused coverage for RELEASE of a middle savepoint followed by a later
-# ROLLBACK TO. This is the deterministic savepoint6 failure behind #1414.
-#
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl

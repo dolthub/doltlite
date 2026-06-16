@@ -1,36 +1,4 @@
 #!/bin/bash
-#
-# Cross-version database compatibility gate.
-#
-# The on-disk format may only change with a minor version bump
-# (vMAJOR.MINOR.PATCH tags). For each pinned historical tag this suite
-# builds that tag's doltlite (cached under $DOLTLITE_COMPAT_CACHE) and
-# creates a fixture database with versioned history, then asserts:
-#
-#   - If the tag's format signature (CHUNK_STORE_VERSION, WS_FORMAT_VERSION,
-#     on-disk magics) matches the current tree's, the current binary MUST
-#     open the fixture and version-control features must work against it:
-#     reads, indexed lookups, dolt_log, new commits, branch checkout,
-#     merge, and tags.
-#
-#   - If CHUNK_STORE_VERSION differs, the current binary MUST refuse the
-#     fixture with a clean not-a-database error: no crash, no silent
-#     misread. A format break is only legal alongside a minor bump, so a
-#     differing signature with an unchanged minor version fails the suite.
-#
-#   - Any other piece of the format signature changing without a
-#     CHUNK_STORE_VERSION bump fails the suite outright: old databases
-#     would open and then silently misparse the changed structure.
-#
-# Usage: doltlite_compat_test.sh [path-to-current-doltlite]
-#   DOLTLITE_COMPAT_TAGS   override the tag list (default: computed from
-#                          git history — the latest patch of the two most
-#                          recent prior minor series, plus the first and
-#                          latest tags of the current series; the exact
-#                          tag being released, if HEAD is tagged, is
-#                          excluded since it would test itself)
-#   DOLTLITE_COMPAT_CACHE  cache dir for old-version binaries
-#   DOLTLITE_COMPAT_JOBS   make -j for old-version builds (default 4)
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,9 +28,6 @@ if ! git -C "$REPO_ROOT" rev-parse v0.11.0 >/dev/null 2>&1; then
   exit 1
 fi
 
-# The on-disk format signature: the open-time version gate plus every
-# structural constant whose meaning a reader bakes in. Add new format
-# constants to the grep when they are introduced.
 format_signature() {
   local ref="$1" f content
   for f in src/chunk_store.h src/prolly_node.h; do
@@ -85,9 +50,6 @@ series_of() {  # v0.11.12[-g...] -> 0.11
   printf '%s\n' "$1" | sed -n 's/^v\([0-9]*\.[0-9]*\)\..*/\1/p'
 }
 
-# Latest patch of the two most recent prior minor series, plus the latest
-# and first tags of the current series. A tag pointing at HEAD (the tag a
-# release run is building) is skipped: it would test against itself.
 compute_default_tags() {
   local cur_series="$1"
   local exact t series out="" priors=""
@@ -98,8 +60,6 @@ compute_default_tags() {
     series=$(series_of "$t")
     [ -z "$series" ] && continue
     if [ "$series" = "$cur_series" ]; then
-      # Newest-first scan: the first hit is the series tip, the last
-      # assignment leaves the earliest tag.
       [ -z "$cur_last" ] && cur_last="$t"
       cur_first="$t"
     else
@@ -166,7 +126,6 @@ make_fixture() {  # make_fixture <old-binary> <db>
     SELECT dolt_branch('fixture-branch');
     SELECT dolt_tag('fixture-tag');
   " >/dev/null 2>&1
-  # The fixture must be readable by its own creator before it proves anything.
   local n
   n=$(sql "$bin" "$db" "SELECT count(*) FROM people;")
   [ "$n" = "60" ]
@@ -251,8 +210,6 @@ for tag in $TAGS; do
     continue
   fi
 
-  # Release policy: a format change of any kind requires a minor bump, and
-  # any signature change beyond that requires bumping the open-time gate.
   if [ "$old_series" = "$cur_series" ] && [ "$old_sig" != "$cur_sig" ]; then
     bad "$tag: format signature changed inside minor series $cur_series — bump the minor version"
     continue

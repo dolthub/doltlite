@@ -18,7 +18,6 @@ run_test_lastline "memory_supports_dolt_checkout_isolates_branches" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat-row'); SELECT dolt_checkout('main'); SELECT count(*) FROM t;" \
   "1" ":memory:"
 
-# Independent :memory: opens don't share state.
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(99);" | $DOLTLITE :memory: > /dev/null 2>&1
 R=$(echo "SELECT count(*) FROM t;" | $DOLTLITE :memory: 2>&1)
 if echo "$R" | grep -q "no such table"; then
@@ -27,7 +26,6 @@ else
   dltest_fail "memory_opens_are_independent" "  expected: 'no such table'\n  got:      $R"
 fi
 
-# :memory: doesn't write to disk. Run in scratch dir, verify empty.
 SCRATCH=/tmp/test_memory_no_disk_$$
 mkdir -p $SCRATCH
 ORIG=$PWD
@@ -43,8 +41,6 @@ else
 fi
 rm -rf $SCRATCH
 
-# ATTACH ':memory:' as a secondary DB: standard SQLite semantics on
-# the attached schema; main keeps its doltlite engine.
 run_test_lastline "attached_memory_table_independent" \
   "ATTACH ':memory:' AS aux; CREATE TABLE aux.t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO aux.t VALUES(1,'a'); SELECT count(*) FROM aux.t;" \
   "1" ":memory:"

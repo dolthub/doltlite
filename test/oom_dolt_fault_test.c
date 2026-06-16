@@ -1,19 +1,3 @@
-/*
-** OOM fault-injection harness for dolt_* SQL functions and vtables.
-**
-** Strategy: install a sqlite3_mem_methods wrapper that fails the Nth
-** allocation. For each target op, sweep N=1..MAX_FAIL_N; for each N,
-** reset the database to a known state, run the op, and assert that the
-** process did not crash and that the result is either SQLITE_OK or a
-** real error code (typically SQLITE_NOMEM / SQLITE_ERROR / SQLITE_FULL).
-**
-** Surfaced crashes / assertion failures / hangs are real bugs in the
-** dolt_* error paths (e.g. leaked memory, double-frees, missing NULL
-** checks on allocation results). The harness intentionally does NOT
-** fix them; it only detects them. Followups go in the PR body.
-**
-** This is wired into c-tests via test/run_c_tests.sh.
-*/
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -235,12 +219,6 @@ static OpEntry kOps[] = {
 
 static const char *kDbBase = "/tmp/test_oom_dolt.db";
 
-/*
-** Child exit code conventions:
-**   0   - op ran clean (rc=OK or acceptable error, close=OK)
-**   1   - op exited cleanly but with a non-zero acceptable error
-**   2   - BUG: crash, double-free, or non-acceptable error code
-*/
 #define CHILD_OK 0
 #define CHILD_ERR_OK 1
 #define CHILD_BUG 2
@@ -253,10 +231,6 @@ static int childRunOp(OpEntry *op, long long failAt){
   long long triggered;
   long long ncall;
   cleanupFiles(kDbBase);
-  /*
-  ** Setup phase runs with allocator failures disabled. We only want to
-  ** fault-inject the target op itself, not the open/setup work.
-  */
   disableOom();
   rc = sqlite3_open(kDbBase, &db);
   if( rc!=SQLITE_OK ){

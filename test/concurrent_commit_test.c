@@ -1,25 +1,3 @@
-/*
-** Concurrent commit invariant tests for DoltLite.
-**
-** These tests verify the commit isolation invariant:
-**
-**   NO SILENT COMMIT LOSS: If dolt_commit returns a hash, that commit
-**   is the branch tip. If another connection committed to the same branch
-**   since this connection last saw it, dolt_commit must return an error —
-**   not silently overwrite the other connection's commit.
-**
-** This invariant was violated in the original code. Aaron's code review
-** demonstrated the bug: Connection A commits "add one", Connection B
-** commits "add two", and "add one" disappears from the log with no error.
-**
-** Test 1 reproduces Aaron's exact scenario.
-** Test 2 verifies single-connection commits still work (no false positives).
-** Test 3 verifies sequential commits from reopened connections work.
-**
-** Build:
-**   cc -g -I. -o concurrent_commit_test \
-**     ../test/concurrent_commit_test.c libdoltlite.a -lz -lpthread
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,17 +46,6 @@ static int execSql(sqlite3 *db, const char *sql){
   return rc;
 }
 
-/*
-** Test 1: Aaron's exact scenario.
-**
-** Connection 1 creates a table and commits.
-** Connection 2 opens and sees the table.
-** Connection 1 inserts a row and commits ("add one").
-** Connection 2 inserts a different row and commits ("add two").
-**
-** Before fix: "add one" commit is silently lost.
-** After fix: "add two" commit fails with a conflict error.
-*/
 static void test_aaron_scenario(void){
   sqlite3 *db1 = 0, *db2 = 0;
   const char *dbpath = "/tmp/test_concurrent_commit.db";
@@ -92,32 +59,24 @@ static void test_aaron_scenario(void){
   rc = sqlite3_open(dbpath, &db1);
   check("open_db1", rc==SQLITE_OK);
 
-  /* Connection 1: create table and commit */
   execSql(db1, "CREATE TABLE vals (id INT, val INT)");
   res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'Initial commit')");
   check("initial_commit_ok", strlen(res)==40);
 
-  /* Connection 2: open, sees the table */
   rc = sqlite3_open(dbpath, &db2);
   check("open_db2", rc==SQLITE_OK);
   res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("db2_sees_table", strcmp(res, "0")==0);
 
-  /* Connection 1: insert and commit */
   execSql(db1, "INSERT INTO vals VALUES (1, 1)");
   res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
   check("commit_add_one", strlen(res)==40);
 
-  /* Connection 2: insert and try to commit — should fail */
   execSql(db2, "INSERT INTO vals VALUES (2, 2)");
   res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
   check("commit_add_two_rejected",
     strstr(res, "ERROR") != 0 || strstr(res, "conflict") != 0);
 
-  /* Verify "add one" commit is NOT lost.
-  ** Re-open db1 to get a fresh view — the shared in-memory state may have
-  ** been polluted by db2's uncommitted DML (a known issue with shared
-  ** BtShared when concurrent DML touches the same tables). */
   sqlite3_close(db1);
   rc = sqlite3_open(dbpath, &db1);
   check("reopen_db1", rc==SQLITE_OK);
@@ -128,7 +87,6 @@ static void test_aaron_scenario(void){
   res = queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1");
   check("latest_commit_is_add_one", strcmp(res, "add one")==0);
 
-  /* Verify the data from "add one" is intact */
   res = queryScalarText(db1, "SELECT val FROM vals WHERE id=1");
   check("add_one_data_intact", strcmp(res, "1")==0);
 
@@ -137,9 +95,6 @@ static void test_aaron_scenario(void){
   remove(dbpath);
 }
 
-/*
-** Test 2: Single connection commits work normally (no false positives).
-*/
 static void test_single_connection(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_single_commit.db";
@@ -174,10 +129,6 @@ static void test_single_connection(void){
   remove(dbpath);
 }
 
-/*
-** Test 3: Sequential commits from different connections (no overlap) should
-** work fine — each connection refreshes before committing.
-*/
 static void test_sequential_multi_connection(void){
   sqlite3 *db1 = 0, *db2 = 0;
   const char *dbpath = "/tmp/test_sequential_commit.db";
@@ -193,14 +144,10 @@ static void test_sequential_multi_connection(void){
   rc = sqlite3_open(dbpath, &db2);
   check("seq_open_db2", rc==SQLITE_OK);
 
-  /* db1 creates and commits */
   execSql(db1, "CREATE TABLE seq (id INT, name TEXT)");
   res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'create seq')");
   check("seq_first_commit", strlen(res)==40);
 
-  /* db2 opens AFTER db1's commit, inserts, and commits.
-  ** Since db2 opened after the commit, it should see the committed state
-  ** and be able to commit without conflict. */
   sqlite3_close(db2);
   rc = sqlite3_open(dbpath, &db2);
   check("seq_reopen_db2", rc==SQLITE_OK);
@@ -209,7 +156,6 @@ static void test_sequential_multi_connection(void){
   res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'db2 insert')");
   check("seq_db2_commit", strlen(res)==40);
 
-  /* Reopen db1 to get fresh state, then commit */
   sqlite3_close(db1);
   rc = sqlite3_open(dbpath, &db1);
   check("seq_reopen_db1", rc==SQLITE_OK);
@@ -218,7 +164,6 @@ static void test_sequential_multi_connection(void){
   res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'db1 insert')");
   check("seq_db1_commit", strlen(res)==40);
 
-  /* Both rows should exist */
   res = queryScalarText(db1, "SELECT count(*) FROM seq");
   check("seq_both_rows", strcmp(res, "2")==0);
 

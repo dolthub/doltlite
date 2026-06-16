@@ -1,29 +1,3 @@
-/*
-** Aggressive multi-process concurrency tests for dolt_gc().
-**
-** dolt_gc() must never lose data, never corrupt the chunk store, and
-** must serialize cleanly against every other operation that can race
-** with the mark+sweep window. This suite forks pairs/trios of OS
-** processes that exercise these races and verifies post-conditions on
-** the database from a fresh connection afterward.
-**
-** Tests:
-**  1. test_gc_vs_gc_parallel:        two concurrent dolt_gc() calls
-**  2. test_gc_blocked_then_retries:  dolt_gc() vs BEGIN-held write lock
-**  3. test_gc_vs_dolt_commit:        dolt_gc() racing dolt_commit() in a tight loop
-**  4. test_reader_iterator_during_gc: an open SELECT iterator during dolt_gc()
-**  5. test_gc_vs_branch_create:      dolt_gc() racing dolt_branch()
-**  6. test_gc_vs_merge:              dolt_gc() racing dolt_merge()
-**  7. test_gc_vs_checkout:           dolt_gc() racing dolt_checkout()
-**  8. test_continuous_writes_with_gc: writer hammers commits while GC loops
-**  9. test_kill_gc_mid_sweep:        SIGKILL during dolt_gc(); recover on reopen
-** 10. test_gc_tmp_file_cleanup:      no orphan *-gc-tmp survives a killed GC
-** 11. test_concurrent_staging_then_gc: cross-process staged session vs GC
-**
-** Build from build/ directory:
-**   cc -g -I. -I../src -o multi_process_gc_test \
-**     ../test/multi_process_gc_test.c libdoltlite.a -lz -lpthread -lm
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,13 +84,6 @@ static int looks_like_lock_busy(const char *s){
   return 0;
 }
 
-/*
-** Call a SQL function (dolt_commit, dolt_gc, dolt_branch, ...) that
-** acquires the chunk-store lock. That lock is non-blocking and ignores
-** sqlite3_busy_timeout — dolt_commit's own error text instructs callers
-** to "Please retry your transaction." This helper retries with backoff
-** so the tests exercise the same contract a well-behaved client would.
-*/
 static const char *callWithRetry(sqlite3 *db, const char *sql, int max_attempts){
   int attempt;
   static char last[4096];
@@ -147,8 +114,6 @@ static void setup_db_with_rows(const char *path, int n){
   sqlite3_close(db);
 }
 
-/* Insert+commit then delete+commit to leave reachable rows but unreachable
-** chunk versions for GC to actually have work to do. */
 static void make_garbage(const char *path, int n){
   sqlite3 *db = 0;
   int i;
@@ -165,12 +130,6 @@ static void make_garbage(const char *path, int n){
 }
 
 
-/*
-** Test 1: Two concurrent dolt_gc() calls.
-** Both children use a generous busy timeout; one will block on the
-** chunkStoreLockAndRefresh from the other, then proceed. Both must
-** complete with no error and the data must be intact afterward.
-*/
 static void test_gc_vs_gc_parallel(void){
   const char *path = "/tmp/test_gc_vs_gc.db";
   pid_t pid1, pid2;
@@ -222,12 +181,6 @@ static void test_gc_vs_gc_parallel(void){
 }
 
 
-/*
-** Test 2: GC blocked by an in-flight write transaction.
-** Child holds BEGIN/INSERT (uncommitted). Parent's GC with a short
-** busy_timeout must fail. After the child commits, parent retries and
-** GC succeeds with all data intact.
-*/
 static void test_gc_blocked_then_retries(void){
   const char *path = "/tmp/test_gc_blocked_retry.db";
   pid_t pid;
@@ -291,12 +244,6 @@ static void test_gc_blocked_then_retries(void){
 }
 
 
-/*
-** Test 3: dolt_gc() racing dolt_commit() in a tight loop.
-** Child commits new rows. Parent fires repeated dolt_gc(). Lock
-** serialization should keep both safe. Final state must reflect every
-** committed row.
-*/
 static void test_gc_vs_dolt_commit(void){
   const char *path = "/tmp/test_gc_vs_commit.db";
   pid_t pid;
@@ -359,14 +306,6 @@ static void test_gc_vs_dolt_commit(void){
 }
 
 
-/*
-** Test 4: A SELECT iterator open during dolt_gc() in another process.
-**
-** Parent prepares a SELECT and steps a few rows (holding a SHARED page
-** lock). Parent then signals child to start dolt_gc(). The child's
-** chunkStoreLockAndRefresh must wait for the parent's read. Parent
-** finishes stepping and must see all 100 rows with no corruption.
-*/
 static void test_reader_iterator_during_gc(void){
   const char *path = "/tmp/test_reader_iter_gc.db";
   pid_t pid;
@@ -416,8 +355,6 @@ static void test_reader_iterator_during_gc(void){
     write(pipefd_go[1], "G", 1);
     close(pipefd_go[1]);
 
-    /* Give child a window to attempt GC. The child's GC will block on
-    ** our held read lock until we finalize. */
     usleep(150000);
 
     while( (rc = sqlite3_step(s))==SQLITE_ROW ){
@@ -445,11 +382,6 @@ static void test_reader_iterator_during_gc(void){
 }
 
 
-/*
-** Test 5: dolt_gc() racing dolt_branch() create.
-** Child creates ten new branches in a loop. Parent fires two GCs.
-** Each new branch's head commit must survive (checkout returns 50 rows).
-*/
 static void test_gc_vs_branch_create(void){
   const char *path = "/tmp/test_gc_vs_branch.db";
   pid_t pid;
@@ -515,12 +447,6 @@ static void test_gc_vs_branch_create(void){
 }
 
 
-/*
-** Test 6: dolt_gc() racing dolt_merge().
-** Set up divergent main/feat branches with non-overlapping primary keys.
-** Child runs dolt_merge('feat'). Parent fires GC concurrently. The
-** merge result must contain every row from both branches.
-*/
 static void test_gc_vs_merge(void){
   const char *path = "/tmp/test_gc_vs_merge.db";
   pid_t pid;
@@ -616,12 +542,6 @@ static void test_gc_vs_merge(void){
 }
 
 
-/*
-** Test 7: dolt_gc() racing dolt_checkout().
-** Multiple branches exist with distinct identifying rows. Child flips
-** between branches in a tight loop while parent runs GC. After both
-** processes return, every branch must still hold its identifying row.
-*/
 static void test_gc_vs_checkout(void){
   const char *path = "/tmp/test_gc_vs_checkout.db";
   pid_t pid;
@@ -710,12 +630,6 @@ static void test_gc_vs_checkout(void){
 }
 
 
-/*
-** Test 8: Continuous writes hammered by repeated GC.
-** Two child processes: one inserts+commits N rows in a tight loop, the
-** other runs dolt_gc() in a loop. Both must complete cleanly. Every
-** written row must be present at the end.
-*/
 static void test_continuous_writes_with_gc(void){
   const char *path = "/tmp/test_continuous_gc.db";
   pid_t writer_pid, gc_pid;
@@ -785,11 +699,6 @@ static void test_continuous_writes_with_gc(void){
 }
 
 
-/*
-** Test 9: SIGKILL during dolt_gc(); reopen must recover with no data loss.
-** Best-effort timing — repeats with varied delays to hit different
-** sweep stages over the run.
-*/
 static void test_kill_gc_mid_sweep(void){
   const char *path = "/tmp/test_kill_gc.db";
   pid_t pid;
@@ -845,11 +754,6 @@ static void test_kill_gc_mid_sweep(void){
 }
 
 
-/*
-** Test 10: No orphan *-gc-tmp file survives across a killed GC.
-** Kill several mid-GCs with varied timings. A subsequent successful GC
-** must leave no -gc-tmp behind, and the data must be intact.
-*/
 static void test_gc_tmp_file_cleanup(void){
   const char *path = "/tmp/test_gc_tmp_cleanup.db";
   char tmpPath[256];
@@ -901,19 +805,6 @@ static void test_gc_tmp_file_cleanup(void){
 }
 
 
-/*
-** Test 11: Cross-process staged data must survive a GC in another process.
-**
-** Child A: inserts, dolt_add('-A'), then waits with the connection still
-**          open for parent to finish GC. After GC, dolt_commit must
-**          succeed and reference no swept-away chunks.
-** Parent: waits for A's signal, runs dolt_gc, signals A to commit.
-**
-** If GC in the parent doesn't see chunks reachable through A's session
-** state, A's commit will fail or the resulting commit will reference
-** missing chunks — either way, data loss. The check here is that A's
-** commit succeeds and the post-conditions are intact.
-*/
 static void test_concurrent_staging_then_gc(void){
   const char *path = "/tmp/test_concurrent_stage.db";
   pid_t pid;

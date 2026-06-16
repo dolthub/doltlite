@@ -1,37 +1,3 @@
-/*
-** Crash recovery tests for DoltLite.
-**
-** These tests verify the storage invariants that a content-addressed
-** chunk store must preserve across process crashes:
-**
-**   ATOMICITY: After a crash, either ALL chunks for a commit are on disk
-**   or NONE are. There is no state where a root record references chunks
-**   that don't exist. (Tests 3, 5, 10, 15, 18-22)
-**
-**   DURABILITY: After dolt_commit returns, the data survives a crash.
-**   The WAL root record is written last before fsync, and fsync completes
-**   before the function returns. (Tests 2, 6, 13, 16, 25, 26)
-**
-**   RECOVERY: On open, the WAL is fully replayed. The manifest at offset 0
-**   may be stale — the WAL root record is authoritative. A truncated WAL
-**   record is ignored, recovering to the last complete root. (Tests 1-30)
-**
-**   PREFIX INTEGRITY: If N commits were attempted and a crash occurs,
-**   some prefix of those commits (0..N) is intact and the commit chain
-**   from any branch tip terminates at the initial commit without
-**   encountering a missing chunk. (Tests 7, 11, 17, 28)
-**
-** Uses POSIX fork()/kill(SIGKILL) to simulate crashes. The parent
-** process reopens the database and verifies invariants hold.
-**
-** The GC cases in this file are best-effort async-kill tests around
-** dolt_gc(). Deterministic crash-at-write coverage for the rewrite path
-** lives in test/crash_injection_test.sh under SQLITE_TEST builds.
-**
-** Build from build/ directory:
-**   cc -I. -o crash_recovery_test \
-**     ../test/crash_recovery_test.c libdoltlite.a -lz -lpthread
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,7 +20,6 @@ static void check(const char *name, int condition){
   }
 }
 
-/* Execute SQL, return first column of first row (static buffer). */
 static char g_buf[8192];
 static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
@@ -76,7 +41,6 @@ static const char *queryScalarText(sqlite3 *db, const char *sql){
   return g_buf;
 }
 
-/* Execute SQL, return the integer from first column of first row. */
 static int queryScalarInt(sqlite3 *db, const char *sql, int dflt){
   sqlite3_stmt *stmt;
   int val = dflt;
@@ -89,18 +53,15 @@ static int queryScalarInt(sqlite3 *db, const char *sql, int dflt){
   return val;
 }
 
-/* Execute SQL, ignore result. Return rc. */
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK && err ){
-    /* Silently consume; caller decides what to check. */
     sqlite3_free(err);
   }
   return rc;
 }
 
-/* Remove database and associated WAL/journal files. */
 static void removeDbFiles(const char *path){
   char tmp[512];
   remove(path);
@@ -110,7 +71,6 @@ static void removeDbFiles(const char *path){
   remove(tmp);
 }
 
-/* Generate a unique database path for each test invocation. */
 static int g_test_seq = 0;
 static char g_dbpath[512];
 static const char *fresh_db(void){
@@ -120,15 +80,6 @@ static const char *fresh_db(void){
   return g_dbpath;
 }
 
-/*
-** Verify database consistency after crash.
-** Returns 1 if the database is consistent, 0 otherwise.
-** Checks:
-**   1. sqlite3_open succeeds
-**   2. All branches in dolt_branches are valid
-**   3. dolt_log shows a consistent commit chain
-**   4. No unexpected errors from normal queries
-*/
 static int verify_consistency(const char *dbpath, const char *label){
   sqlite3 *db = 0;
   int rc;
@@ -143,7 +94,6 @@ static int verify_consistency(const char *dbpath, const char *label){
     return 0;
   }
 
-  /* Check that dolt_branches is queryable and all branches are valid. */
   {
     sqlite3_stmt *stmt = 0;
     rc = sqlite3_prepare_v2(db,
@@ -175,7 +125,6 @@ static int verify_consistency(const char *dbpath, const char *label){
     sqlite3_finalize(stmt);
   }
 
-  /* Check that dolt_log is queryable. */
   {
     int nLog = queryScalarInt(db, "SELECT count(*) FROM dolt_log", -1);
     snprintf(desc, sizeof(desc), "%s: dolt_log has entries", label);
@@ -187,9 +136,6 @@ static int verify_consistency(const char *dbpath, const char *label){
   return ok;
 }
 
-/*
-** Verify that a specific table has the expected row count.
-*/
 static void verify_row_count(const char *dbpath, const char *label,
                              const char *table, int expected){
   sqlite3 *db = 0;
@@ -210,9 +156,6 @@ static void verify_row_count(const char *dbpath, const char *label,
   sqlite3_close(db);
 }
 
-/*
-** Verify the commit count in dolt_log.
-*/
 static int verify_commit_count(const char *dbpath, const char *label,
                                 int expected){
   sqlite3 *db = 0;
@@ -231,8 +174,6 @@ static int verify_commit_count(const char *dbpath, const char *label,
   return cnt;
 }
 
-/* dolt_log includes the automatic repository initialization commit.
-** Crash tests generally care about user commits after that seed. */
 static int exec_user_commit_count(sqlite3 *db){
   int nLog = queryScalarInt(db, "SELECT count(*) FROM dolt_log", -1);
   if( nLog<0 ) return nLog;
@@ -257,14 +198,7 @@ static int verify_user_commit_count(const char *dbpath, const char *label,
   return cnt;
 }
 
-/* ====================================================================
-** GROUP 1: Single commit crash recovery
-** ==================================================================== */
 
-/*
-** Test 1: Baseline -- commit completes, child exits cleanly.
-** Parent verifies data is visible after reopen.
-*/
 static void test_01_clean_commit(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -273,7 +207,6 @@ static void test_01_clean_commit(void){
 
   pid = fork();
   if( pid==0 ){
-    /* Child: create, insert, commit, exit cleanly. */
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
     execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT)");
@@ -284,7 +217,6 @@ static void test_01_clean_commit(void){
     sqlite3_close(db);
     _exit(0);
   }
-  /* Parent: wait for child, then verify. */
   {
     int status;
     waitpid(pid, &status, 0);
@@ -296,10 +228,6 @@ static void test_01_clean_commit(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 2: Kill child immediately after dolt_commit returns.
-** The commit should be fully durable.
-*/
 static void test_02_kill_after_commit(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -314,13 +242,10 @@ static void test_02_kill_after_commit(void){
     execSql(db, "INSERT INTO t VALUES(1, 'alpha')");
     execSql(db, "INSERT INTO t VALUES(2, 'beta')");
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'committed')");
-    /* Signal parent we are past the commit. */
     sqlite3_sleep(500);
-    /* Parent will kill us here. */
     sqlite3_sleep(60000);
     _exit(0);
   }
-  /* Parent: give child time to commit, then kill. */
   sqlite3_sleep(2000);
   kill(pid, SIGKILL);
   {
@@ -334,10 +259,6 @@ static void test_02_kill_after_commit(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 3: Kill child during commit (before dolt_commit likely finishes).
-** The database should be usable; commit is either fully present or fully absent.
-*/
 static void test_03_kill_during_commit(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -358,12 +279,10 @@ static void test_03_kill_during_commit(void){
         execSql(db, sql);
       }
     }
-    /* Start the commit -- parent will try to kill during this. */
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'big commit')");
     sqlite3_sleep(60000);
     _exit(0);
   }
-  /* Kill quickly to try to interrupt the commit. */
   sqlite3_sleep(100);
   kill(pid, SIGKILL);
   {
@@ -371,15 +290,12 @@ static void test_03_kill_during_commit(void){
     waitpid(pid, &status, 0);
   }
 
-  /* Database must be openable. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     check("test_03: db opens after crash", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
-      /* Commit is either fully present (1 commit) or fully absent (0 commits).
-      ** 0 means the initial state (no user commit), 1 means the commit landed. */
       check("test_03: commit atomic (0 or 1)",
             nLog==0 || nLog==1);
       if( nLog==1 ){
@@ -392,9 +308,6 @@ static void test_03_kill_during_commit(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 4: Two commits, kill after second. First commit must be intact.
-*/
 static void test_04_two_commits_kill_after_second(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -422,13 +335,11 @@ static void test_04_two_commits_kill_after_second(void){
   }
   verify_consistency(dbpath, "test_04");
 
-  /* First commit must always be present. */
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
     int nLog = exec_user_commit_count(db);
     check("test_04: at least commit-1 present", nLog>=1);
-    /* If both commits landed, verify both rows. */
     if( nLog>=2 ){
       int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
       check("test_04: both commits => 2 rows", cnt==2);
@@ -441,10 +352,6 @@ static void test_04_two_commits_kill_after_second(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 5: Two commits, kill during second commit.
-** First commit must always be intact.
-*/
 static void test_05_kill_during_second_commit(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -459,7 +366,6 @@ static void test_05_kill_during_second_commit(void){
     execSql(db, "INSERT INTO t VALUES(1, 'stable')");
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'stable-commit')");
 
-    /* Second commit: insert many rows to increase commit duration. */
     {
       int i;
       char sql[128];
@@ -473,7 +379,6 @@ static void test_05_kill_during_second_commit(void){
     sqlite3_sleep(60000);
     _exit(0);
   }
-  /* Let first commit finish, then try to catch second commit mid-flight. */
   sqlite3_sleep(1500);
   kill(pid, SIGKILL);
   {
@@ -488,7 +393,6 @@ static void test_05_kill_during_second_commit(void){
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
       check("test_05: at least stable-commit present", nLog>=1);
-      /* The stable row must always be present. */
       int hasStable = queryScalarInt(db,
         "SELECT count(*) FROM t WHERE val='stable'", -1);
       check("test_05: stable row survives crash", hasStable==1);
@@ -498,17 +402,12 @@ static void test_05_kill_during_second_commit(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 6: Commit, close, reopen, commit again. Kill after second commit.
-** Verifies persistence across open/close cycles.
-*/
 static void test_06_reopen_then_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 06: Reopen then crash ---\n");
 
-  /* First: set up initial commit in a separate child. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -521,7 +420,6 @@ static void test_06_reopen_then_crash(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Second child: reopen, add data, commit, then get killed. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -537,7 +435,6 @@ static void test_06_reopen_then_crash(void){
   { int status; waitpid(pid, &status, 0); }
 
   verify_consistency(dbpath, "test_06");
-  /* First commit must survive. */
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
@@ -549,14 +446,7 @@ static void test_06_reopen_then_crash(void){
   removeDbFiles(dbpath);
 }
 
-/* ====================================================================
-** GROUP 2: Multi-commit sequences
-** ==================================================================== */
 
-/*
-** Test 7: Five sequential commits. Kill at a random point.
-** Verify some prefix of commits is intact.
-*/
 static void test_07_five_commits_random_kill(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -564,7 +454,6 @@ static void test_07_five_commits_random_kill(void){
 
   printf("--- Test 07: Five sequential commits, random kill ---\n");
 
-  /* Choose a random kill delay between 500ms and 4000ms. */
   srand((unsigned)time(NULL) ^ (unsigned)getpid());
   kill_delay_ms = 500 + (rand() % 3500);
 
@@ -597,7 +486,6 @@ static void test_07_five_commits_random_kill(void){
       int nLog = exec_user_commit_count(db);
       check("test_07: commit count in [0..5]", nLog>=0 && nLog<=5);
 
-      /* If there are N commits, there should be N rows. */
       if( nLog>0 ){
         int nRows = queryScalarInt(db, "SELECT count(*) FROM t", -1);
         check("test_07: row count matches commit count", nRows==nLog);
@@ -608,10 +496,6 @@ static void test_07_five_commits_random_kill(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 08: Branch, commit on branch, checkout main, commit on main.
-** Kill. Verify branches are consistent.
-*/
 static void test_08_branch_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -648,7 +532,6 @@ static void test_08_branch_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_08: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      /* dolt_branches must be queryable with valid hashes. */
       sqlite3_stmt *stmt = 0;
       rc = sqlite3_prepare_v2(db,
         "SELECT name, hash FROM dolt_branches", -1, &stmt, 0);
@@ -663,7 +546,6 @@ static void test_08_branch_crash(void){
       }
       sqlite3_finalize(stmt);
 
-      /* dolt_log must be consistent. */
       int nLog = exec_user_commit_count(db);
       check("test_08: dolt_log consistent", nLog>=0);
     }
@@ -672,10 +554,6 @@ static void test_08_branch_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 09: Three commits on main, create branch at second commit.
-** Kill after all operations. Verify both branches are valid.
-*/
 static void test_09_branch_at_commit(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -691,7 +569,6 @@ static void test_09_branch_at_commit(void){
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'first')");
     execSql(db, "INSERT INTO t VALUES(2, 'two')");
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'second')");
-    /* Create branch from current HEAD. */
     queryScalarText(db, "SELECT dolt_branch('snap')");
     execSql(db, "INSERT INTO t VALUES(3, 'three')");
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'third')");
@@ -707,10 +584,6 @@ static void test_09_branch_at_commit(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 10: Five sequential commits. Kill very quickly (10ms).
-** Very early kill to test minimal state.
-*/
 static void test_10_very_early_kill(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -738,25 +611,18 @@ static void test_10_very_early_kill(void){
   kill(pid, SIGKILL);
   { int status; waitpid(pid, &status, 0); }
 
-  /* Database file might not even exist if killed early enough. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
-      /* Whatever number of commits landed, data must be consistent. */
       check("test_10: commit count non-negative", nLog>=0);
       if( nLog>0 ){
         int nRows = queryScalarInt(db, "SELECT count(*) FROM t", -1);
-        /* The INSERT for the next would-be commit may already have
-        ** autocommitted before the process is killed inside
-        ** dolt_commit(). In that case recovery can legitimately see one
-        ** extra row beyond the durable Dolt commit count. */
         check("test_10: row count matches commits or next insert",
               nRows==nLog || nRows==nLog+1);
       }
     }else{
-      /* If we killed before the file was created, that's OK. */
       check("test_10: db either opens or does not exist", 1);
     }
     sqlite3_close(db);
@@ -764,9 +630,6 @@ static void test_10_very_early_kill(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 11: Multiple commits with increasing data. Kill mid-sequence.
-*/
 static void test_11_increasing_data_kill(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -783,7 +646,6 @@ static void test_11_increasing_data_kill(void){
 
     int row_id = 1;
     for( i=1; i<=5; i++ ){
-      /* Commit i inserts i*10 rows. */
       for( j=0; j<i*10; j++ ){
         snprintf(sql, sizeof(sql),
                  "INSERT INTO t VALUES(%d, 'batch%d-row%d')", row_id++, i, j);
@@ -807,16 +669,8 @@ static void test_11_increasing_data_kill(void){
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
       check("test_11: commit count in [0..5]", nLog>=0 && nLog<=5);
-      /* Verify data is self-consistent: all queryable rows belong to
-      ** the committed prefix plus, at most, the next in-flight batch.
-      ** Individual INSERTs autocommit into the working set, so after a
-      ** crash the reopened working set may contain rows beyond the branch
-      ** tip commit prefix. What must hold is that the committed prefix is
-      ** intact and we never observe rows from more than one uncommitted
-      ** post-prefix batch. */
       {
         int nRows = queryScalarInt(db, "SELECT count(*) FROM t", -1);
-        /* Expected rows = sum of 10+20+...+nLog*10 = nLog*(nLog+1)*5 */
         int expected = nLog * (nLog + 1) * 5;
         int upper = expected;
         if( nLog<5 ){
@@ -833,21 +687,13 @@ static void test_11_increasing_data_kill(void){
   removeDbFiles(dbpath);
 }
 
-/* ====================================================================
-** GROUP 3: GC crash recovery
-** ==================================================================== */
 
-/*
-** Test 12: Commit, GC, commit. Asynchronously kill around GC.
-** Database should be usable afterward.
-*/
 static void test_12_gc_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 12: GC crash recovery ---\n");
 
-  /* First, create a database with some history to give GC work to do. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -864,7 +710,6 @@ static void test_12_gc_crash(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Now run GC in a child and kill it. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -877,16 +722,13 @@ static void test_12_gc_crash(void){
   kill(pid, SIGKILL);
   { int status; waitpid(pid, &status, 0); }
 
-  /* Verify the database is still usable. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     check("test_12: db opens after GC crash", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      /* Must be able to query data. */
       int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
       check("test_12: table queryable after GC crash", cnt>=0);
-      /* dolt_log must still work. */
       int nLog = exec_user_commit_count(db);
       check("test_12: dolt_log works after GC crash", nLog>=1);
     }
@@ -895,10 +737,6 @@ static void test_12_gc_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 13: GC completes cleanly, then crash.
-** Verify that the post-GC state is durable.
-*/
 static void test_13_gc_then_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -915,7 +753,6 @@ static void test_13_gc_then_crash(void){
     execSql(db, "INSERT INTO t VALUES(2, 'b')");
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'c2')");
     queryScalarText(db, "SELECT dolt_gc()");
-    /* Now do more work after GC. */
     execSql(db, "INSERT INTO t VALUES(3, 'c')");
     queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'post-gc')");
     sqlite3_sleep(500);
@@ -939,17 +776,12 @@ static void test_13_gc_then_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 14: GC with branches. Asynchronously kill around GC.
-** Both branches' data must remain reachable.
-*/
 static void test_14_gc_with_branches_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 14: GC with branches crash ---\n");
 
-  /* Setup: two branches with data. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -969,7 +801,6 @@ static void test_14_gc_with_branches_crash(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Now GC and crash. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -986,7 +817,6 @@ static void test_14_gc_with_branches_crash(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
-    /* Both branches should still exist. */
     int nBranch = queryScalarInt(db,
       "SELECT count(*) FROM dolt_branches", -1);
     check("test_14: both branches survive GC crash", nBranch==2);
@@ -995,14 +825,7 @@ static void test_14_gc_with_branches_crash(void){
   removeDbFiles(dbpath);
 }
 
-/* ====================================================================
-** GROUP 4: Large data
-** ==================================================================== */
 
-/*
-** Test 15: Insert 1000 rows, commit (multi-chunk). Kill mid-commit.
-** Verify atomicity.
-*/
 static void test_15_large_insert_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1025,7 +848,6 @@ static void test_15_large_insert_crash(void){
     sqlite3_sleep(60000);
     _exit(0);
   }
-  /* Kill during/after the large commit. */
   sqlite3_sleep(500);
   kill(pid, SIGKILL);
   { int status; waitpid(pid, &status, 0); }
@@ -1047,9 +869,6 @@ static void test_15_large_insert_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 16: Large insert that completes, then kill. All data must persist.
-*/
 static void test_16_large_insert_complete_then_kill(void){
   const char *dbpath = fresh_db();
   char donepath[1024];
@@ -1104,9 +923,6 @@ static void test_16_large_insert_complete_then_kill(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 17: Multiple large commits. Verify prefix integrity.
-*/
 static void test_17_multiple_large_commits(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1162,14 +978,7 @@ static void test_17_multiple_large_commits(void){
   removeDbFiles(dbpath);
 }
 
-/* ====================================================================
-** Additional crash scenarios
-** ==================================================================== */
 
-/*
-** Test 18: CREATE TABLE + commit, then ALTER TABLE + commit. Kill after ALTER.
-** Schema changes must be atomic with the commit.
-*/
 static void test_18_schema_change_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1201,12 +1010,10 @@ static void test_18_schema_change_crash(void){
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
       check("test_18: at least 1 commit", nLog>=1);
-      /* If both commits landed, the extra column must exist. */
       if( nLog==2 ){
         const char *v = queryScalarText(db, "SELECT extra FROM t WHERE id=2");
         check("test_18: alter committed with data", strcmp(v, "y")==0);
       }
-      /* If only first commit, table is still basic schema. */
       if( nLog==1 ){
         int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
         check("test_18: first commit has 1 row", cnt==1);
@@ -1217,16 +1024,12 @@ static void test_18_schema_change_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 19: Delete all rows, commit. Kill. Verify empty table or prior state.
-*/
 static void test_19_delete_all_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 19: Delete all rows then crash ---\n");
 
-  /* Setup with data. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1241,7 +1044,6 @@ static void test_19_delete_all_crash(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Now delete all and try to commit. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1263,8 +1065,6 @@ static void test_19_delete_all_crash(void){
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
       int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
-      /* Either the delete committed (0 rows, 2 log entries) or
-      ** only the initial state remains (3 rows, 1 log entry). */
       check("test_19: consistent state",
             (nLog==2 && cnt==0) || (nLog==1 && cnt==3));
     }
@@ -1273,9 +1073,6 @@ static void test_19_delete_all_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 20: UPDATE all rows, commit. Kill. Verify either old or new values.
-*/
 static void test_20_update_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1310,7 +1107,6 @@ static void test_20_update_crash(void){
         "SELECT count(*) FROM t WHERE val='old'", -1);
       int nNew = queryScalarInt(db,
         "SELECT count(*) FROM t WHERE val='new'", -1);
-      /* Either all old (3) or all new (3). No partial updates. */
       check("test_20: atomic update (all old or all new)",
             (nOld==3 && nNew==0) || (nOld==0 && nNew==3));
     }
@@ -1319,9 +1115,6 @@ static void test_20_update_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 21: DROP TABLE then crash. Table is either dropped or not.
-*/
 static void test_21_drop_table_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1352,10 +1145,8 @@ static void test_21_drop_table_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_21: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      /* t must always exist. */
       int cnt_t = queryScalarInt(db, "SELECT count(*) FROM t", -1);
       check("test_21: table t exists", cnt_t==1);
-      /* t2 either exists or not. */
       int cnt_t2 = queryScalarInt(db, "SELECT count(*) FROM t2", -2);
       check("test_21: t2 state consistent",
             cnt_t2==1 || cnt_t2==-2);
@@ -1365,9 +1156,6 @@ static void test_21_drop_table_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 22: Multiple tables created in one commit. Atomicity check.
-*/
 static void test_22_multi_table_commit_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1404,7 +1192,6 @@ static void test_22_multi_table_commit_crash(void){
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
       if( nLog==1 ){
-        /* If committed, all 10 tables must exist with data. */
         int i;
         int allOk = 1;
         for( i=1; i<=10; i++ ){
@@ -1424,16 +1211,12 @@ static void test_22_multi_table_commit_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 23: Merge then crash. Verify either merge completed or pre-merge state.
-*/
 static void test_23_merge_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 23: Merge then crash ---\n");
 
-  /* Setup: main and feature branches. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1451,7 +1234,6 @@ static void test_23_merge_crash(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Now merge and crash. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1469,7 +1251,6 @@ static void test_23_merge_crash(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
-    /* Data should be consistent regardless of merge status. */
     int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
     check("test_23: row count is 1 or 2",
           cnt==1 || cnt==2);
@@ -1478,10 +1259,6 @@ static void test_23_merge_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 24: Repeated crash-and-recover cycles. Each cycle adds a commit.
-** Verifies that recovery does not corrupt state for subsequent operations.
-*/
 static void test_24_repeated_crash_cycles(void){
   const char *dbpath = fresh_db();
   int cycle;
@@ -1489,7 +1266,6 @@ static void test_24_repeated_crash_cycles(void){
 
   printf("--- Test 24: Repeated crash/recover cycles ---\n");
 
-  /* Initial setup. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1502,7 +1278,6 @@ static void test_24_repeated_crash_cycles(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Now do 5 crash-and-recover cycles. */
   for( cycle=1; cycle<=5; cycle++ ){
     pid = fork();
     if( pid==0 ){
@@ -1523,7 +1298,6 @@ static void test_24_repeated_crash_cycles(void){
     kill(pid, SIGKILL);
     { int status; waitpid(pid, &status, 0); }
 
-    /* Verify database is usable after each crash. */
     {
       sqlite3 *db = 0;
       int rc = sqlite3_open(dbpath, &db);
@@ -1540,7 +1314,6 @@ static void test_24_repeated_crash_cycles(void){
     }
   }
 
-  /* Final check: seed row must always be present. */
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
@@ -1552,9 +1325,6 @@ static void test_24_repeated_crash_cycles(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 25: Tag creation then crash.
-*/
 static void test_25_tag_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1581,7 +1351,6 @@ static void test_25_tag_crash(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
-    /* Commit must be present. Tag may or may not have persisted. */
     int nLog = exec_user_commit_count(db);
     check("test_25: commit present", nLog>=1);
     int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
@@ -1591,9 +1360,6 @@ static void test_25_tag_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 26: Commit with BLOB data. Kill. Verify atomicity with binary data.
-*/
 static void test_26_blob_data_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1633,7 +1399,6 @@ static void test_26_blob_data_crash(void){
       if( nLog==1 ){
         int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
         check("test_26: all 50 blob rows if committed", cnt==50);
-        /* Verify blobs are readable (not corrupted). */
         int blobLen = queryScalarInt(db,
           "SELECT length(data) FROM t WHERE id=0", -1);
         check("test_26: blob data intact", blobLen==1024);
@@ -1644,17 +1409,12 @@ static void test_26_blob_data_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 27: Uncommitted changes (no dolt_commit). Kill.
-** On reopen, only the last committed state should be visible.
-*/
 static void test_27_uncommitted_changes_crash(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 27: Uncommitted changes crash ---\n");
 
-  /* First: create committed baseline. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1667,14 +1427,12 @@ static void test_27_uncommitted_changes_crash(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* Second child: make uncommitted changes and crash. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
     execSql(db, "INSERT INTO t VALUES(2, 'uncommitted')");
     execSql(db, "INSERT INTO t VALUES(3, 'uncommitted')");
-    /* No dolt_commit! */
     sqlite3_sleep(500);
     sqlite3_sleep(60000);
     _exit(0);
@@ -1688,9 +1446,6 @@ static void test_27_uncommitted_changes_crash(void){
     sqlite3_open(dbpath, &db);
     int nLog = exec_user_commit_count(db);
     check("test_27: only baseline commit", nLog==1);
-    /* The committed row must be present. The uncommitted rows may or
-    ** may not be in the SQL layer (WAL recovery), but dolt state should
-    ** reflect only committed data. */
     int committed = queryScalarInt(db,
       "SELECT count(*) FROM t WHERE val='committed'", -1);
     check("test_27: committed data present", committed==1);
@@ -1699,10 +1454,6 @@ static void test_27_uncommitted_changes_crash(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 28: Rapid small commits (10 commits of 1 row each).
-** Kill at random time. Verify prefix integrity.
-*/
 static void test_28_rapid_small_commits(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1740,10 +1491,6 @@ static void test_28_rapid_small_commits(void){
       check("test_28: commit count in [0..10]", nLog>=0 && nLog<=10);
       if( nLog>0 ){
         int nRows = queryScalarInt(db, "SELECT count(*) FROM t", -1);
-        /* INSERT autocommits before the surrounding dolt_commit() runs;
-        ** SIGKILL can land in the gap, leaving the row durable in the
-        ** working set but no Dolt commit recorded for it (same race as
-        ** test_10). */
         check("test_28: rows match commits or next insert",
               nRows==nLog || nRows==nLog+1);
       }
@@ -1753,17 +1500,12 @@ static void test_28_rapid_small_commits(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 29: GC after many small commits. Asynchronously kill around GC.
-** All committed data must remain accessible.
-*/
 static void test_29_gc_after_many_commits(void){
   const char *dbpath = fresh_db();
   pid_t pid;
 
   printf("--- Test 29: GC after many commits then crash ---\n");
 
-  /* Setup: 10 commits. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1784,7 +1526,6 @@ static void test_29_gc_after_many_commits(void){
   }
   { int status; waitpid(pid, &status, 0); }
 
-  /* GC and crash. */
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
@@ -1812,10 +1553,6 @@ static void test_29_gc_after_many_commits(void){
   removeDbFiles(dbpath);
 }
 
-/*
-** Test 30: Crash immediately on open (before any SQL).
-** Verify empty database is not corrupted.
-*/
 static void test_30_crash_on_open(void){
   const char *dbpath = fresh_db();
   pid_t pid;
@@ -1826,7 +1563,6 @@ static void test_30_crash_on_open(void){
   if( pid==0 ){
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
-    /* Do nothing -- just crash immediately. */
     sqlite3_sleep(60000);
     _exit(0);
   }
@@ -1834,25 +1570,19 @@ static void test_30_crash_on_open(void){
   kill(pid, SIGKILL);
   { int status; waitpid(pid, &status, 0); }
 
-  /* The database file might not exist or might be a valid empty DB. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
-    /* Either the file is valid or does not exist (open creates empty). */
     check("test_30: db openable after early crash", rc==SQLITE_OK);
     sqlite3_close(db);
   }
   removeDbFiles(dbpath);
 }
 
-/* ====================================================================
-** Main
-** ==================================================================== */
 
 int main(void){
   printf("=== DoltLite Crash Recovery Tests ===\n\n");
 
-  /* Group 1: Single commit crash recovery */
   test_01_clean_commit();
   test_02_kill_after_commit();
   test_03_kill_during_commit();
@@ -1860,24 +1590,20 @@ int main(void){
   test_05_kill_during_second_commit();
   test_06_reopen_then_crash();
 
-  /* Group 2: Multi-commit sequences */
   test_07_five_commits_random_kill();
   test_08_branch_crash();
   test_09_branch_at_commit();
   test_10_very_early_kill();
   test_11_increasing_data_kill();
 
-  /* Group 3: GC crash recovery */
   test_12_gc_crash();
   test_13_gc_then_crash();
   test_14_gc_with_branches_crash();
 
-  /* Group 4: Large data */
   test_15_large_insert_crash();
   test_16_large_insert_complete_then_kill();
   test_17_multiple_large_commits();
 
-  /* Additional scenarios */
   test_18_schema_change_crash();
   test_19_delete_all_crash();
   test_20_update_crash();

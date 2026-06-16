@@ -1,8 +1,4 @@
 #!/bin/bash
-#
-# HTTP remote integration tests for doltlite.
-# Starts a remotesrv server, runs push/fetch/pull/clone against it.
-#
 
 DOLTLITE_ARG="${1:-$(dirname "$0")/../build/doltlite}"
 DOLTLITE="$(cd "$(dirname "$DOLTLITE_ARG")" && pwd)/$(basename "$DOLTLITE_ARG")"
@@ -609,7 +605,6 @@ int main(int argc, char **argv) {
 }
 CEOF
 
-# Build the test
 cd "$TMPDIR"
 BUILD_DIR="$(dirname "$DOLTLITE")"
 if [ -d "$BUILD_DIR/src" ]; then
@@ -631,7 +626,6 @@ else
   test_exit=$?
   echo "$http_output"
   if [ $test_exit -eq 0 ]; then
-    # Count passes/fails from the "  PASS:" and "  FAIL:" lines only
     embedded_pass=$(echo "$http_output" | grep -c "^  PASS:")
     embedded_fail=$(echo "$http_output" | grep -c "^  FAIL:")
     embedded_assertions=$(echo "$http_output" | awk '/^Assertions: [0-9][0-9]* \/ [0-9][0-9]* expected$/ { print $2, $4 }' | tail -1)

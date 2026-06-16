@@ -27,8 +27,6 @@ probe_c="$probe_dir/probe.c"
 trap 'rm -rf "$probe_dir"' EXIT
 
 cat >"$probe_c" <<'EOF'
-#include "sqlite3.h"
-#include <stdio.h>
 
 int main(void){
   sqlite3 *db = 0;

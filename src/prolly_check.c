@@ -38,13 +38,7 @@ static int checkSubtree(
     return rc;
   }
 
-  /* Re-derive the content hash and compare. chunkStoreGet's own verify
-  ** only covers the disk-read path; chunks served from the in-memory
-  ** pending or recent buffers return their cached bytes unverified.
-  ** The integrity walker is the last line of defense against an
-  ** in-process corruption (buffer overrun, stale alias, etc.) that
-  ** mutated the staging bytes between write and check, so re-hash
-  ** unconditionally here. */
+  /* Re-hash cached chunks too; chunkStoreGet verifies only disk reads. */
   {
     ProllyHash computed;
     prollyHashCompute(pData, nData, &computed);

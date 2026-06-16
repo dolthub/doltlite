@@ -1,316 +1,7 @@
-# Recovered coverage for shard jrnlwal_3 (#1313).
-# Each line maps one gated upstream assertion to the doltlite-native
-# assertion(s) in this file that recover its intent.
-#
-# covers: wal4 wal4-2-cantopen-persistent.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-cantopen-transient.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-full.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-persistent.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-persistent.2 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-persistent.3 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-persistent.4 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-transient.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-transient.2 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-transient.3 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-ioerr-transient.4 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.2 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.3 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.4 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.5 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.6 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.7 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.8 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.9 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.10 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.11 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.12 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.13 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.14 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.15 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.16 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.17 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.18 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.19 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.20 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.21 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.22 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.23 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.24 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.25 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.26 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.27 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.28 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.29 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.30 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.31 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.32 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.33 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.34 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.35 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.36 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.37 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.38 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.39 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.40 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.41 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.42 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.43 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.44 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.45 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.46 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.47 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.48 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.49 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.50 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.51 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.52 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.53 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.54 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.55 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.56 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.57 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.58 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.59 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.60 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.61 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.62 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.63 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.64 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.65 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.66 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.67 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.68 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.69 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.70 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.71 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.72 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.73 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.74 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.75 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.76 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.77 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.78 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.79 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.80 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.81 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.82 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.83 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.84 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.85 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.86 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.87 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.88 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.89 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.90 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.91 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.92 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-persistent.93 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.2 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.3 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.4 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.5 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.6 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.7 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.8 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.9 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.10 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.11 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.12 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.13 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.14 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.15 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.16 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.17 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.18 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.19 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.20 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.21 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.22 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.23 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.24 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.25 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.26 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.27 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.28 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.29 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.30 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.31 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.32 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.33 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.34 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.35 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.36 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.37 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.38 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.39 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.40 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.41 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.42 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.43 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.44 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.45 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.46 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.47 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.48 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.49 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.50 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.51 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.52 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.53 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.54 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.55 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.56 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.57 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.58 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.59 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.60 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.61 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.62 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.63 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.64 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.65 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.66 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.67 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.68 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.69 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.70 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.71 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.72 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.73 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.74 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.75 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.76 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.77 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.78 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.79 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.80 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.81 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.82 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.83 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.84 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.85 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.86 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.87 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.88 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.89 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.90 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.91 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.92 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-oom-transient.93 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-shmerr-persistent.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: wal4 wal4-2-shmerr-transient.1 — no -wal sidecar after writes (2.1-2.3); zero-byte db beside stray garbage -wal opens to empty schema, the stray wal is ignored and left byte-identical, db fully usable after (3.1-3.5); uncommitted txn never surfaces and integrity holds after reopen (4.2-4.3)
-# covers: savepoint savepoint-6.1 — auto_vacuum=incremental no-op (1.9); indexed nested-savepoint txn setup/outcome (6.1)
-# covers: savepoint savepoint-6.3 — nested savepoints + ROLLBACK TO under cache pressure keep the outer UPDATE and discard savepoint work, integrity ok (6.1)
-# covers: savepoint savepoint-7.1 — auto_vacuum no-op (1.9); growing-db txn setup outcome (6.2)
-# covers: savepoint savepoint-7.2.1 — CREATE TABLE inside savepoint rolled back cleanly, integrity ok (6.2)
-# covers: savepoint savepoint-7.3.1 — table repopulation from existing data (6.3)
-# covers: savepoint savepoint-7.3.2 — DELETE + vacuum pragma + nested savepoint ROLLBACK TO leaves empty table, integrity ok (6.3)
-# covers: savepoint savepoint-7.4.1 — ROLLBACK TO a savepoint with no subsequent writes keeps the transaction's earlier DELETE (6.4.1)
-# covers: savepoint savepoint-7.5.1 — t5 nested-rollback outcome x={3,4,5}, integrity ok (6.5)
-# covers: savepoint savepoint-7.5.2 — DROP TABLE t5 succeeds after the scenario (6.6)
-# covers: savepoint savepoint-10.2.1 — two ATTACH-ed dbs created, per-db schema visible (6.7)
-# covers: savepoint savepoint-10.2.2 — stock pager lock states inapplicable; doltlite lock_status reports unlocked at rest (6.16)
-# covers: savepoint savepoint-10.2.3 — savepoint write to main db (6.8); lock_status at rest (6.16)
-# covers: savepoint savepoint-10.2.4 — savepoint write to second attached db (6.8); lock_status at rest (6.16)
-# covers: savepoint savepoint-10.2.5 — nested savepoint write to first attached db (6.8)
-# covers: savepoint savepoint-10.2.6 — aux write visible inside savepoint (6.8)
-# covers: savepoint savepoint-10.2.7 — ROLLBACK TO two reverts only the aux1 write (6.9)
-# covers: savepoint savepoint-10.2.8 — stock pager lock states inapplicable; doltlite lock_status at rest (6.16)
-# covers: savepoint savepoint-10.2.9 — ROLLBACK TO an inner savepoint keeps other attached databases' writes made under the outer savepoint (6.9.1)
-# covers: savepoint savepoint-10.2.10 — triple-nested savepoints across three dbs, all writes visible (6.10.1)
-# covers: savepoint savepoint-10.2.11 — ROLLBACK TO two reverts only writes made after it, outer main-db write survives (6.10.2)
-# covers: savepoint savepoint-10.2.12 — re-insert then second ROLLBACK TO two gives identical state (6.10.3)
-# covers: savepoint savepoint-10.2.13 — full ROLLBACK after nested cross-db savepoint traffic empties all three dbs (6.10, 6.10.4)
-# covers: savepoint savepoint-10.2.14 — lock_status unlocked after full ROLLBACK (6.16)
-# covers: savepoint savepoint-11.1 — auto_vacuum=full no-op (1.10); UNIQUE-table setup (6.18)
-# covers: savepoint savepoint-11.8 — ROLLBACK discards savepoint-created tables; wal_checkpoint no-op reports 0 0 0; data + integrity intact (6.18); DROP-in-savepoint rollback + reopen (6.19-6.20)
-# covers: savepoint savepoint-13.1 — journal_mode=off rejection (1.6); the journal-off block's savepoint/rollback data outcome (6.21)
-# covers: incrvacuum2 incrvacuum2-1.1 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-1.2 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-1.3 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-1.4 — incremental_vacuum accepted as a no-op (1.12-1.13, 7.1); 30000-byte blob insert/delete workload correct + integrity ok (7.1)
-# covers: incrvacuum2 incrvacuum2-2.1 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.2 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.3 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.4 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.5 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-2.6 — aux.incremental_vacuum no-ops; cross-db blob insert/copy/delete outcomes correct (7.2)
-# covers: incrvacuum2 incrvacuum2-3.1 — auto_vacuum='full' no-op (1.10); txn create+insert outcome (7.3)
-# covers: incrvacuum2 incrvacuum2-3.2 — txn DELETE + vacuum-pragma no-op commits cleanly, integrity ok (7.3)
-# covers: incrvacuum2 incrvacuum2-4.1 — auto_vacuum=2 no-op (1.11); 512-row blob churn workload (7.4)
-# covers: incrvacuum2 incrvacuum2-4.2 — journal_mode remains wal after churn (7.4)
-# covers: incrvacuum2 incrvacuum2-4.2.1 — no wal sidecar to checkpoint/size; durability proven via reopen (7.5)
-# covers: incrvacuum2 incrvacuum2-4.3 — reopen after churn: data correct, integrity ok (7.5)
-# covers: journal2 journal2-1.1 — no -journal sidecar is ever created (2.1)
-# covers: journal2 journal2-1.2 — journal_mode=truncate rejected (1.3); writes durable without sidecars (2.1-2.2)
-# covers: journal2 journal2-1.4 — rows visible after journal-mode-related writes (2.2)
-# covers: journal2 journal2-1.5 — second-connection write errors cleanly under contention (5.5) and succeeds otherwise (4.4)
-# covers: journal2 journal2-1.6 — no journal sidecar artifact exists (2.1)
-# covers: journal2 journal2-1.7 — reader sees only committed rows during another connection's txn (5.4)
-# covers: journal2 journal2-1.8 — second connection commit succeeds (4.4, 5.7)
-# covers: journal2 journal2-1.9 — both connections converge on committed data (5.6)
-# covers: journal2 journal2-1.10 — bulk UNIQUE-table growth with no journal sidecar, count + integrity ok (4.1)
-# covers: journal2 journal2-1.14 — hot-journal premise: interrupted commit state never visible; uncommitted txn dropped at close (4.2)
-# covers: journal2 journal2-1.16 — mid-commit partial state is never observable; reopen integrity ok (4.2-4.3)
-# covers: journal2 journal2-1.20 — no torn on-disk state to copy: reopened db passes integrity_check (4.2-4.3)
-# covers: journal2 journal2-2.1 — journal_mode=persist rejected with stable error (1.4)
-# covers: journal2 journal2-2.2 — committing writes creates no -journal file (2.1)
-# covers: journal2 journal2-2.3 — no journal sidecar exists to size (2.1)
-# covers: journal2 journal2-2.4 — PRAGMA journal_mode=WAL accepted, reports wal (1.7)
-# covers: e_walhook e_walhook-1.3 — chunk-store commit does not drive the wal hook: counter stays 0 (8.1)
-# covers: e_walhook e_walhook-1.4 — multi-statement txn commit: hook counter stays 0 (8.1)
-# covers: e_walhook e_walhook-2.1 — committed data immediately visible to a second connection after the statement (8.2)
-# covers: e_walhook e_walhook-3.1.2 — no SQLite wal frame count exists; commit visibility asserted instead (8.1-8.2)
-# covers: e_walhook e_walhook-4.1 — hook error returns cannot poison a commit: inserts succeed and all rows present (8.3)
-# covers: e_walhook e_walhook-4.2 — hook error returns cannot poison a commit: inserts succeed and all rows present (8.3)
-# covers: e_walhook e_walhook-4.3 — hook error returns cannot poison a commit: inserts succeed and all rows present (8.3)
-# covers: e_walhook e_walhook-5.1 — hook replacement accepted; replaced hook never fires; commits unaffected (8.4)
-# covers: e_walhook e_walhook-5.2 — hook replacement accepted; replaced hook never fires; commits unaffected (8.4)
-# covers: e_walhook e_walhook-6.1.1 — wal_autocheckpoint pragma echoes its value; commits unaffected (8.5-8.6)
-# covers: e_walhook e_walhook-6.1.2 — wal_autocheckpoint pragma echoes its value; commits unaffected (8.5-8.6)
-# covers: walpersist walpersist-1.0 — WAL-mode writes create no -wal sidecar (2.1)
-# covers: walpersist walpersist-1.1 — no -shm sidecar (2.1)
-# covers: walpersist walpersist-1.4 — reopen + read creates no sidecars (2.2)
-# covers: walpersist walpersist-1.11 — close leaves only the database file (2.2)
-# covers: walpersist walpersist-2.1 — journal_size_limit reports -1 and is not configurable (1.18-1.19); large update durable (2.3)
-# covers: walpersist walpersist-2.2 — no wal file exists to persist or truncate (2.3)
-# covers: walpersist walpersist-3.1 — wal_autocheckpoint/journal_size_limit echo doltlite's values (1.16-1.19)
-# covers: walpersist walpersist-3.3 — no wal file after close (2.3)
-# covers: walpersist walpersist-4.1 — journal-mode switching rejected with stable error; wal accepted (1.2-1.7)
-# covers: vacuum2 vacuum2-4.1 — AUTOINCREMENT table drop + VACUUM ok (7.7); auto_vacuum=1 no-op, stays 0 (7.9)
-# covers: vacuum2 vacuum2-2.1 — change-counter intent: content hash stable across VACUUM no-op, data intact (7.8)
-# covers: vacuum2 vacuum2-3.3 — auto_vacuum=FULL no-op (1.10); data + hash unchanged by VACUUM (7.8)
-# covers: vacuum2 vacuum2-4.2 — auto_vacuum remains 0 after no-op set + VACUUM (7.9)
-# covers: vacuum2 vacuum2-4.4 — auto_vacuum reports 0 across reopen (7.10)
-# covers: vacuum2 vacuum2-4.5 — auto_vacuum=2 no-op (1.11, 7.9)
-# covers: vacuum2 vacuum2-4.7 — auto_vacuum 0 across reopen, data + integrity ok (7.10)
-# covers: walprotocol walprotocol-1.1 — shm-lock sequences inapplicable; cold open + read returns committed data (5.1-5.2)
-# covers: walprotocol walprotocol-1.2 — shm-lock sequences inapplicable; cold open + read returns committed data (5.1-5.2)
-# covers: walprotocol walprotocol-1.3 — recovery-lock contention intent: write contention surfaces as clean 'database is locked' (5.5), both connections usable after (5.6-5.9)
-# covers: walprotocol walprotocol-1.4 — recovery-lock contention intent: write contention surfaces as clean 'database is locked' (5.5), both connections usable after (5.6-5.9)
-# covers: walprotocol walprotocol-2.1 — setup + PRAGMA wal_checkpoint reports 0 0 0 (5.1)
-# covers: walprotocol walprotocol-2.6 — reader concurrent with writer sees full committed data mid-scan (5.3)
-# covers: walprotocol walprotocol-2.8 — second reader during another connection's read returns full data (5.3, 5.6)
-# covers: trigger1 trigger1-6.1 — schema listing after DROP-induced rowid gap asserted order-independently (9.1)
-# covers: trigger1 trigger1-6.2 — trigger named same as its table created; schema listing (9.2); RAISE(ABORT) blocks delete, rows intact (9.3)
-# covers: trigger1 trigger1-6.5 — trigger + view + table schema persists across reopen (9.4)
-# covers: trigger1 trigger1-6.6 — DROP TRIGGER restores listing; table rows intact (9.5)
-# covers: interrupt2 interrupt2-2.0 — temp INSERT..SELECT copies exactly: matching counts and zero NULL rows (10.1-10.2)
-# covers: interrupt2 interrupt2-3.1.2 — close leaves no -wal artifact; reopen consistent (10.3)
-# covers: interrupt2 interrupt2-4.1 — no SQLite wal frame counter; autocheckpoint-sized writes durable with integrity ok (10.4)
-# covers: tkt3762 tkt3762-1.1 — auto_vacuum=INCREMENTAL no-op (1.9); zeroblob(900) churn under cache_size=10 reopens clean (7.6)
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-#-------------------------------------------------------------------------
-# Section 1: journal/WAL/vacuum pragma contract. doltlite-format databases
-# are permanently journal_mode=wal, reject reconfiguration with stable
-# error text, and accept auto_vacuum / incremental_vacuum as no-ops
-# (auto_vacuum always reads back 0).
-#
 do_execsql_test doltlite_recover_jrnlwal_3-1.1 {
   PRAGMA journal_mode;
 } {wal}
@@ -375,11 +66,6 @@ do_catchsql_test doltlite_recover_jrnlwal_3-1.20 {
   PRAGMA wal_checkpoint(TRUNCATE);
 } {1 {wal_checkpoint mode is not configurable on doltlite-format databases; use the default (PASSIVE) form}}
 
-#-------------------------------------------------------------------------
-# Section 2: the database is fully self-contained: writes never create
-# -wal/-shm/-journal sidecars, and data is durable across close/reopen
-# with no sidecar present.
-#
 do_test doltlite_recover_jrnlwal_3-2.1 {
   execsql {
     PRAGMA wal_autocheckpoint=1000;
@@ -410,12 +96,6 @@ do_test doltlite_recover_jrnlwal_3-2.3 {
               [execsql {PRAGMA integrity_check}]
 } {0 0 50001 ok}
 
-#-------------------------------------------------------------------------
-# Section 3: wal4 recovery premise, doltlite-native. A zero-byte database
-# beside a stray garbage -wal sidecar opens to an empty schema: the stray
-# wal is never interpreted as data, the db file is not written by the
-# read, and the database is fully usable afterwards.
-#
 set ::straywal "garbage bytes that are not a valid wal file 0123456789"
 do_test doltlite_recover_jrnlwal_3-3.1 {
   forcedelete test2.db test2.db-wal test2.db-shm
@@ -427,7 +107,6 @@ do_test doltlite_recover_jrnlwal_3-3.1 {
   catchsql {SELECT name FROM sqlite_master} dbz
 } {0 {}}
 do_test doltlite_recover_jrnlwal_3-3.2 {
-  # The stray sidecar is never interpreted, deleted or rewritten.
   set fd [open test2.db-wal r]
   set content [read $fd]
   close $fd
@@ -455,11 +134,6 @@ do_test doltlite_recover_jrnlwal_3-3.5 {
   set {} {}
 } {}
 
-#-------------------------------------------------------------------------
-# Section 4: commit/rollback durability boundaries. Committed data
-# survives close/reopen byte-identically (content hash stable);
-# uncommitted work open at close never surfaces after reopen.
-#
 do_test doltlite_recover_jrnlwal_3-4.1 {
   execsql {
     CREATE TABLE big(a UNIQUE, b UNIQUE);
@@ -496,11 +170,6 @@ do_test doltlite_recover_jrnlwal_3-4.4 {
   execsql { SELECT count(*) FROM big WHERE a='from-db2' }
 } {1}
 
-#-------------------------------------------------------------------------
-# Section 5: multi-connection contract (walprotocol/journal2 intent).
-# Readers always see consistent committed data; writer contention
-# surfaces as a clean 'database is locked' error, never corruption.
-#
 do_test doltlite_recover_jrnlwal_3-5.1 {
   execsql {
     CREATE TABLE b(c);
@@ -557,12 +226,6 @@ do_test doltlite_recover_jrnlwal_3-5.9 {
   set res
 } {ok ok}
 
-#-------------------------------------------------------------------------
-# Section 6: savepoint semantics that the originals exercised under
-# auto_vacuum / journal_mode permutations doltlite does not honor
-# (auto_vacuum sets no-op; journal_mode is fixed at wal). The savepoint
-# data outcomes themselves must match stock exactly.
-#
 do_test doltlite_recover_jrnlwal_3-6.1 {
   execsql {
     CREATE TABLE s6(k INTEGER PRIMARY KEY, a, b, c);
@@ -617,8 +280,6 @@ do_test doltlite_recover_jrnlwal_3-6.3 {
     PRAGMA integrity_check;
   }
 } {0 ok}
-# savepoint-7.4.1's flow: a savepoint with no subsequent writes must not
-# resurrect the transaction's earlier DELETE when rolled back to.
 do_test doltlite_recover_jrnlwal_3-6.4.1 {
   execsql {
     CREATE TABLE s741(a);
@@ -662,7 +323,6 @@ do_test doltlite_recover_jrnlwal_3-6.6 {
   execsql { DROP TABLE t5 }
 } {}
 
-# savepoint-10.2.*: savepoints spanning ATTACH-ed databases.
 do_test doltlite_recover_jrnlwal_3-6.7 {
   forcedelete test2.db test2.db-wal test3.db test3.db-wal
   execsql {
@@ -690,8 +350,6 @@ do_test doltlite_recover_jrnlwal_3-6.9 {
   execsql { ROLLBACK TO two }
   execsql { SELECT * FROM tb ORDER BY x }
 } {}
-# Writes made under the outer savepoint in other databases survive the
-# inner rollback.
 do_test doltlite_recover_jrnlwal_3-6.9.1 {
   execsql {
     SELECT 'a', * FROM ta;
@@ -706,8 +364,6 @@ do_test doltlite_recover_jrnlwal_3-6.10 {
     SELECT count(*) FROM tc;
   }
 } {0 0 0}
-# Triple-nested savepoints across the three databases: ROLLBACK TO an inner
-# savepoint reverts only writes made after it, repeatably.
 do_test doltlite_recover_jrnlwal_3-6.10.1 {
   execsql {
     SAVEPOINT one;
@@ -759,7 +415,6 @@ do_test doltlite_recover_jrnlwal_3-6.17 {
   set {} {}
 } {}
 
-# savepoint-11.*: CREATE/DROP TABLE inside nested savepoints.
 do_test doltlite_recover_jrnlwal_3-6.18 {
   execsql {
     CREATE TABLE s11(a, b, UNIQUE(a, b));
@@ -805,7 +460,6 @@ do_test doltlite_recover_jrnlwal_3-6.20 {
   execsql { SELECT * FROM s11y ORDER BY x }
 } {1 2 3 4}
 
-# savepoint-13.*: the journal_mode=off block's savepoint/rollback flow.
 do_test doltlite_recover_jrnlwal_3-6.21 {
   execsql {
     CREATE TABLE s13(a PRIMARY KEY, b);
@@ -821,11 +475,6 @@ do_test doltlite_recover_jrnlwal_3-6.21 {
   }
 } {1 2 ok}
 
-#-------------------------------------------------------------------------
-# Section 7: incremental-vacuum / vacuum workloads. Space management is
-# internal to the chunk store; the data outcomes of the original
-# workloads must hold and VACUUM must be a safe no-op.
-#
 do_test doltlite_recover_jrnlwal_3-7.1 {
   execsql {
     CREATE TABLE iv(x);
@@ -932,12 +581,6 @@ do_test doltlite_recover_jrnlwal_3-7.10 {
   }
 } {0 1 hello ok}
 
-#-------------------------------------------------------------------------
-# Section 8: wal-hook surface. doltlite accepts sqlite3_wal_hook()
-# registration but its chunk-store commits never drive the hook; commits
-# remain durable and immediately visible to other connections, and hook
-# return codes can never poison a commit.
-#
 do_test doltlite_recover_jrnlwal_3-8.1 {
   set ::whc 0
   proc my_wal_hook {args} { incr ::whc ; return 0 }
@@ -991,10 +634,6 @@ do_test doltlite_recover_jrnlwal_3-8.6 {
   }
 } {9}
 
-#-------------------------------------------------------------------------
-# Section 9: trigger named after its table, schema listing after a
-# DROP TABLE leaves a rowid gap (order-independent via ORDER BY).
-#
 do_test doltlite_recover_jrnlwal_3-9.1 {
   execsql {
     CREATE TABLE tg1(a);
@@ -1037,11 +676,6 @@ do_test doltlite_recover_jrnlwal_3-9.5 {
   }
 } {table tg2 view vg1 3 4 7 8}
 
-#-------------------------------------------------------------------------
-# Section 10: interrupt2's non-interrupt premises: temp INSERT..SELECT
-# copies exactly, close leaves no wal artifact, autocheckpoint-sized
-# writes are durable.
-#
 do_test doltlite_recover_jrnlwal_3-10.1 {
   execsql {
     CREATE TABLE t1k(k INTEGER PRIMARY KEY, v);

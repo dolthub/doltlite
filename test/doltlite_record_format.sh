@@ -1,14 +1,4 @@
 #!/bin/bash
-# Cover the three deep-review record-format hardening items:
-#
-# P10 — varint 9th byte: doltlite's dlReadVarint must accept SQLite-
-#       writer-encoded values >= 2^55, where the 9th byte carries a
-#       full 8 bits (not 7).
-# P11 — serial types 10 and 11 are SQLite-reserved/internal. A record
-#       carrying them must surface as SQLITE_CORRUPT, not silently
-#       coerce to NULL.
-# P12 — wide tables: SQLite's default SQLITE_MAX_COLUMN is 2000.
-#       doltlite must accept tables up to that, not the prior 256.
 
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
@@ -40,12 +30,6 @@ db_rm() { rm -f "$1" "${1}-wal"; }
 echo "=== Record-format hardening (P10/P11/P12) ==="
 echo ""
 
-# ----------------------------------------------------------------
-# P10 — large integer keys / values requiring 9-byte varint
-# ----------------------------------------------------------------
-# Value 2^55 is the boundary where SQLite's writer flips to 9-byte
-# form. Roundtripping it tests that doltlite's reader decodes the
-# 9th byte at full 8-bit width.
 DB=/tmp/test_recfmt_v55_$$.db; db_rm "$DB"
 run_test "p10_2pow55_roundtrip" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
@@ -54,7 +38,6 @@ SELECT n FROM t WHERE id=1;" \
   "36028797018963968" "$DB"
 db_rm "$DB"
 
-# Larger: just under 2^63.
 DB=/tmp/test_recfmt_v63_$$.db; db_rm "$DB"
 run_test "p10_near_max_int_roundtrip" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
@@ -63,7 +46,6 @@ SELECT n FROM t WHERE id=1;" \
   "9223372036854775000" "$DB"
 db_rm "$DB"
 
-# Negative values use the same 9-byte form for their unsigned wrap.
 DB=/tmp/test_recfmt_vneg_$$.db; db_rm "$DB"
 run_test "p10_negative_roundtrip" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
@@ -72,10 +54,6 @@ SELECT n FROM t WHERE id=1;" \
   "-9223372036854775000" "$DB"
 db_rm "$DB"
 
-# ----------------------------------------------------------------
-# P12 — wide tables (>256 columns, up to SQLITE_MAX_COLUMN)
-# ----------------------------------------------------------------
-# Build a 500-column CREATE statement programmatically and round-trip.
 DB=/tmp/test_recfmt_wide_$$.db; db_rm "$DB"
 {
   printf "CREATE TABLE wide(id INTEGER PRIMARY KEY"
@@ -101,7 +79,6 @@ else
 fi
 db_rm "$DB"
 
-# 1500 columns — still under SQLITE_MAX_COLUMN=2000.
 DB=/tmp/test_recfmt_wide1500_$$.db; db_rm "$DB"
 {
   printf "CREATE TABLE wide(id INTEGER PRIMARY KEY"
@@ -122,13 +99,6 @@ else
 fi
 db_rm "$DB"
 
-# ----------------------------------------------------------------
-# P11 — serial types 10/11 are not directly producible from SQL
-# (SQLite's writer never emits them). We assert by SQL parity that
-# normal records still decode correctly; the reject path is
-# exercised by the regression C tests if a corrupted blob shows up.
-# Smoke: ordinary records still work.
-# ----------------------------------------------------------------
 DB=/tmp/test_recfmt_smoke_$$.db; db_rm "$DB"
 run_test "p11_normal_record_decode" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b BLOB, c REAL, d INTEGER);

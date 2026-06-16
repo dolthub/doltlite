@@ -1,11 +1,4 @@
 #!/bin/bash
-#
-# Coverage for the merge-time secondary-index cleanup. Before the fix,
-# a three-way merge that produced a row-level conflict could leave the
-# secondary index with entries from BOTH sides (theirs's entry for the
-# conflict row was never filtered out), even though the table itself
-# kept ours's value. After conflict-resolve --ours and commit, scans
-# through the index returned phantom rows.
 
 set -u
 
@@ -29,8 +22,6 @@ check() {
   fi
 }
 
-# ── Classic conflict + --ours: index should have exactly ours's entry
-# for the conflict row, plus the non-conflicting rows from both sides.
 DB="$TMPROOT/ours.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -51,24 +42,17 @@ SELECT dolt_conflicts_resolve('--ours','t');
 SELECT dolt_commit('-A','-m','resolved');
 COMMIT;
 EOF
-# Table: ours's row 1 plus both branches' new rows.
 out=$("$DOLTLITE" "$DB" "SELECT id || '|' || v FROM t ORDER BY id;")
 check "ours_table_state" "1|3
 2|20
 3|30" "$out"
-# Covering index scan returns the same 3 rows, ordered by v. The pre-fix
-# bug surfaced as a fourth phantom row from theirs's (v=2, rowid=1).
 out=$("$DOLTLITE" "$DB" "SELECT id || '|' || v FROM t INDEXED BY iv WHERE v > 0 ORDER BY v;")
 check "ours_iv_three_rows" "1|3
 2|20
 3|30" "$out"
-# count(*) of an indexed range matches the table.
 out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t INDEXED BY iv WHERE v > 0;")
 check "ours_iv_count_matches" "3" "$out"
 
-# ── --theirs path: dolt_conflicts_resolve --theirs writes theirs's
-# row via doltliteApplyRawRowMutation, which now maintains secondary
-# indexes too (was a known limitation before this PR).
 DB="$TMPROOT/theirs.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -98,8 +82,6 @@ check "theirs_iv_three_rows" "1|2
 2|20
 3|30" "$out"
 
-# ── Non-conflict merge: both sides add disjoint rows. Index should
-# reflect all rows.
 DB="$TMPROOT/clean.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -119,8 +101,6 @@ check "clean_merge_iv_complete" "1|1
 2|20
 3|30" "$out"
 
-# ── Two indexes on one table, conflict on a different column than the
-# indexed ones. Both indexes should be consistent post-merge.
 DB="$TMPROOT/twoidx.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
@@ -151,8 +131,6 @@ check "two_idx_iw" "1|30
 2|2000
 3|3000" "$out"
 
-# ── DELETE-vs-MODIFY conflict: feat deletes row 1, main updates it.
-# Resolve --ours keeps main's value; index should reflect that.
 DB="$TMPROOT/delmod.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

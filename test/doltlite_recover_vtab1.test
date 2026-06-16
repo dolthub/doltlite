@@ -8,20 +8,6 @@ ifcapable !vtab||!schema_pragmas {
   return
 }
 
-# Recovered coverage for vtab1.test. The full file is crash-listed because
-# after vtab1-5.x it drops real tables before their echo virtual tables. On
-# DoltLite that reconnects the echo vtab after its backing table is gone, so
-# the DROP batch returns "vtable constructor failed". The vtab1-5.x join
-# behavior itself works over rowid backing tables.
-#
-# vtab1 also uses echo over tables declared with PRIMARY KEY in later sections.
-# DoltLite treats those as implicit WITHOUT ROWID tables. The echo test module
-# hard-codes rowid in its generated SELECT statements, so creating the virtual
-# table succeeds but scanning it is rejected cleanly.
-#
-# covers: vtab1 vtab1-5-1..5-7 - echo joins over rowid backing tables, including indexed constraint pushdown (1.x)
-# covers: vtab1 cleanup after vtab1-5-7 - dropping backing tables before echo vtabs returns a clean error and leaves the connection usable (2.x)
-# covers: vtab1 vtab1-6-2/6-3 shape - echo over an implicit WITHOUT ROWID PRIMARY KEY table creates, but scans fail when echo generates rowid SQL (3.x)
 
 proc filter {log} {
   set out [list]

@@ -1,14 +1,4 @@
 #!/bin/bash
-#
-# REINDEX tests for doltlite.
-#
-# Verifies that REINDEX correctly rebuilds secondary indexes
-# across various contexts: after commit, with dirty working set,
-# with multiple indexes, NULLs, WITHOUT ROWID tables, compound
-# PKs, after merge, after checkout, and after reopen.
-#
-# Usage: bash test/oracle_reindex_test.sh <doltlite>
-#
 
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite>}"
@@ -26,7 +16,6 @@ dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
 
 echo "=== REINDEX Tests ==="
 
-# ── 1: Basic REINDEX after commit ─────────────────────────
 echo ""
 echo "--- 1: Basic REINDEX after commit ---"
 DB="$TMPROOT/1.db"
@@ -35,7 +24,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=20;")" = "1" ] && pass_name "1_idx" || fail_name "1_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "1_integrity" || fail_name "1_integrity"
 
-# ── 2: REINDEX with dirty working set ────────────────────
 echo ""
 echo "--- 2: REINDEX with dirty working set ---"
 DB="$TMPROOT/2.db"
@@ -44,7 +32,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=20;")" = "1" ] && pass_name "2_idx" || fail_name "2_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "2_integrity" || fail_name "2_integrity"
 
-# ── 3: REINDEX with multiple indexes ─────────────────────
 echo ""
 echo "--- 3: Multiple indexes ---"
 DB="$TMPROOT/3.db"
@@ -55,7 +42,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT); CREATE INDEX id
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE a=10 AND b='x';")" = "2" ] && pass_name "3_idx_ab" || fail_name "3_idx_ab"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "3_integrity" || fail_name "3_integrity"
 
-# ── 4: REINDEX with NULLs ────────────────────────────────
 echo ""
 echo "--- 4: NULLs in indexed columns ---"
 DB="$TMPROOT/4.db"
@@ -64,7 +50,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k IS NULL;")" = "2" ] && pass_name "4_null" || fail_name "4_null"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "4_integrity" || fail_name "4_integrity"
 
-# ── 5: WITHOUT ROWID table (TEXT PK) ─────────────────────
 echo ""
 echo "--- 5: WITHOUT ROWID table ---"
 DB="$TMPROOT/5.db"
@@ -73,7 +58,6 @@ dl "$DB" "CREATE TABLE t(a TEXT PRIMARY KEY, b INT); CREATE INDEX idx ON t(b); I
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE b=10;")" = "2" ] && pass_name "5_idx" || fail_name "5_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "5_integrity" || fail_name "5_integrity"
 
-# ── 6: Compound PK ───────────────────────────────────────
 echo ""
 echo "--- 6: Compound PK ---"
 DB="$TMPROOT/6.db"
@@ -82,7 +66,6 @@ dl "$DB" "CREATE TABLE t(a INT, b INT, c TEXT, PRIMARY KEY(a,b)); CREATE INDEX i
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE c='alpha';")" = "2" ] && pass_name "6_idx" || fail_name "6_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "6_integrity" || fail_name "6_integrity"
 
-# ── 7: REINDEX after merge ───────────────────────────────
 echo ""
 echo "--- 7: REINDEX after merge ---"
 DB="$TMPROOT/7.db"
@@ -92,7 +75,6 @@ dl "$DB" "REINDEX;" >/dev/null
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=20;")" = "1" ] && pass_name "7_idx" || fail_name "7_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "7_integrity" || fail_name "7_integrity"
 
-# ── 8: REINDEX after checkout ────────────────────────────
 echo ""
 echo "--- 8: REINDEX after checkout ---"
 DB="$TMPROOT/8.db"
@@ -100,7 +82,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "2" ] && pass_name "8_count" || fail_name "8_count"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "8_integrity" || fail_name "8_integrity"
 
-# ── 9: REINDEX after reopen ──────────────────────────────
 echo ""
 echo "--- 9: REINDEX after reopen ---"
 DB="$TMPROOT/9.db"
@@ -110,7 +91,6 @@ dl "$DB" "REINDEX;" >/dev/null
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=20;")" = "1" ] && pass_name "9_idx" || fail_name "9_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "9_integrity" || fail_name "9_integrity"
 
-# ── 10: REINDEX after DELETE ─────────────────────────────
 echo ""
 echo "--- 10: REINDEX after DELETE ---"
 DB="$TMPROOT/10.db"
@@ -119,7 +99,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k>0;")" = "3" ] && pass_name "10_idx" || fail_name "10_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "10_integrity" || fail_name "10_integrity"
 
-# ── 11: REINDEX after UPDATE on indexed column ───────────
 echo ""
 echo "--- 11: REINDEX after UPDATE ---"
 DB="$TMPROOT/11.db"
@@ -128,7 +107,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=20;")" = "0" ] && pass_name "11_old_gone" || fail_name "11_old_gone"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "11_integrity" || fail_name "11_integrity"
 
-# ── 12: REINDEX with UNIQUE index ────────────────────────
 echo ""
 echo "--- 12: UNIQUE index ---"
 DB="$TMPROOT/12.db"
@@ -136,7 +114,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT UNIQUE); INSERT INTO t VA
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "3" ] && pass_name "12_count" || fail_name "12_count"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "12_integrity" || fail_name "12_integrity"
 
-# ── 13: REINDEX preserves data through commit cycle ──────
 echo ""
 echo "--- 13: REINDEX + commit + reopen ---"
 DB="$TMPROOT/13.db"
@@ -145,7 +122,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=30;")" = "1" ] && pass_name "13_idx" || fail_name "13_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "13_integrity" || fail_name "13_integrity"
 
-# ── 14: Large table REINDEX ──────────────────────────────
 echo ""
 echo "--- 14: Large table (1000 rows) ---"
 DB="$TMPROOT/14.db"

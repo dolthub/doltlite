@@ -102,11 +102,7 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 
 #define MAX_HEADER_SIZE 4096
 
-/* Defense-in-depth limits for incoming requests. The remote protocol has no
-** authentication or transport security yet (see issue #228); these caps keep
-** a misbehaving or hostile peer from exhausting memory or driving the chunk
-** parser past the end of the body.
-*/
+/* Request caps for an unauthenticated protocol. */
 #define MAX_CHUNK_BYTES   (64 * 1024 * 1024)   /* 64 MiB single chunk */
 #define MAX_REQUEST_BYTES (128 * 1024 * 1024)  /* 128 MiB total body */
 
@@ -358,12 +354,7 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
         | ((u32)pBody[offset+3] << 24);
     offset += 4;
 
-    /* Compare as unsigned: previously len was cast to int, so a value
-    ** >= 0x80000000 would underflow past the bounds check and reach
-    ** chunkStorePut with a negative size (OOB read in memcpy/BLAKE3).
-    ** Also enforce a sanity cap so a single chunk can't exhaust memory
-    ** or stall the parser.
-    */
+    /* Compare as unsigned and cap single-chunk memory use. */
     if( len > (u32)MAX_CHUNK_BYTES
      || len > (u32)(nBody - offset) ){
       sendBadRequest(fd);
@@ -640,11 +631,7 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port,
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
 
-  /* Default to loopback. The remote protocol has no auth/TLS (issue #228),
-  ** so binding to all interfaces by default would expose unauthenticated
-  ** writeable databases. Callers can opt into broader binding by passing
-  ** an explicit zBindAddr (e.g. via --bind on the CLI).
-  */
+  /* Default to loopback: the protocol has no auth or TLS. */
   if( zBindAddr==0 || zBindAddr[0]=='\0' ){
     zBindAddr = "127.0.0.1";
   }
@@ -656,7 +643,7 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port,
   if( bindIn.s_addr != htonl(INADDR_LOOPBACK) ){
     fprintf(stderr,
       "WARNING: doltlite-remotesrv bound to %s — the remote protocol "
-      "has no authentication or TLS yet (see issue #228). Only do this "
+      "has no authentication or TLS yet. Only do this "
       "on trusted networks or behind a reverse proxy.\n",
       zBindAddr);
   }

@@ -1,10 +1,4 @@
 #!/bin/bash
-# run_doltlite_tests.sh — Run all doltlite feature test scripts
-#
-# Usage: bash test/run_doltlite_tests.sh
-#
-# Runs all suites from the build directory, regardless of caller cwd.
-# Override the build directory with DOLTLITE_BUILD_DIR.
 
 set -euo pipefail
 
@@ -25,10 +19,8 @@ if [ ! -x "$BUILD_DIR/doltlite" ]; then
 fi
 
 TESTS=(
-  # Core SQL parity
   doltlite_parity.sh
 
-  # Versioning features
   doltlite_commit.sh
   doltlite_staging.sh
   doltlite_workspace.sh
@@ -46,14 +38,12 @@ TESTS=(
   doltlite_cherry_pick.sh
   doltlite_revert_dirty.sh
 
-  # Virtual tables
   doltlite_diff_table.sh
   doltlite_history.sh
   doltlite_at.sh
   doltlite_schema_diff.sh
   doltlite_dolt_table_pushdown.sh
 
-  # Storage and persistence
   doltlite_persistence.sh
   doltlite_branding.sh
   doltlite_memory_db.sh
@@ -71,7 +61,6 @@ TESTS=(
   doltlite_schema_merge.sh
   doltlite_branch_gc_stress.sh
 
-  # Edge cases and integration
   doltlite_unicode_blob.sh
   doltlite_edge_cases.sh
   doltlite_advanced.sh
@@ -83,7 +72,6 @@ TESTS=(
   doltlite_demo.sh
   doltlite_e2e.sh
 
-  # Additional tests
   doltlite_attach_sqlite.sh
   doltlite_dbpage.sh
   doltlite_arm_correctness.sh

@@ -1,22 +1,3 @@
-/*
-** Multi-process concurrency tests.
-**
-** Verifies that two separate OS processes can safely interact with
-** the same DoltLite database file. Uses fork() to create child
-** processes that operate independently.
-**
-** Tests:
-** 1. Two writers: second process gets SQLITE_BUSY
-** 2. Reader during write: reader sees consistent pre-commit state
-** 3. Sequential writes from different processes: both succeed
-** 4. GC while another process has the file open
-** 5. GC blocks if another process holds a write lock
-** 6. Cross-process dolt_commit detects stale branch heads
-**
-** Build from build/ directory:
-**   cc -g -I. -o multi_process_test \
-**     ../test/multi_process_test.c libdoltlite.a -lz -lpthread
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,10 +57,6 @@ static void setup_db(const char *path){
   sqlite3_close(db);
 }
 
-/*
-** Test 1: Two processes try to write simultaneously.
-** Child holds a write transaction, parent tries to write — gets BUSY.
-*/
 static void test_two_writers(void){
   const char *path = "/tmp/test_mp_writers.db";
   pid_t pid;
@@ -90,7 +67,6 @@ static void test_two_writers(void){
 
   pid = fork();
   if( pid==0 ){
-    /* Child: open, begin write, hold it for 2 seconds */
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
     execSql(db, "BEGIN");
@@ -101,7 +77,6 @@ static void test_two_writers(void){
     _exit(0);
   }
 
-  /* Parent: wait briefly for child to acquire lock, then try to write */
   usleep(200000); /* 200ms — child should have the lock by now */
 
   {
@@ -117,7 +92,6 @@ static void test_two_writers(void){
   waitpid(pid, &status, 0);
   check("mp_child_exited_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
 
-  /* After child exits, parent can write */
   {
     sqlite3 *db = 0;
     int rc;
@@ -130,10 +104,6 @@ static void test_two_writers(void){
   remove(path);
 }
 
-/*
-** Test 2: Reader during concurrent write.
-** Child writes (doesn't commit yet), parent reads — sees pre-commit state.
-*/
 static void test_reader_during_write(void){
   const char *path = "/tmp/test_mp_readwrite.db";
   pid_t pid;
@@ -144,7 +114,6 @@ static void test_reader_during_write(void){
 
   pid = fork();
   if( pid==0 ){
-    /* Child: begin write, hold for 2 seconds, then commit */
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
     execSql(db, "BEGIN");
@@ -157,7 +126,6 @@ static void test_reader_during_write(void){
 
   usleep(200000); /* Wait for child to start writing */
 
-  /* Parent reads — should see the committed state (1 row), not child's uncommitted INSERT */
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
@@ -170,7 +138,6 @@ static void test_reader_during_write(void){
 
   waitpid(pid, &status, 0);
 
-  /* After child commits, a new connection sees both rows */
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
@@ -182,10 +149,6 @@ static void test_reader_during_write(void){
   remove(path);
 }
 
-/*
-** Test 3: Sequential writes from different processes.
-** Child writes and exits. Parent writes after. Both rows survive.
-*/
 static void test_sequential_processes(void){
   const char *path = "/tmp/test_mp_seq.db";
   pid_t pid;
@@ -207,7 +170,6 @@ static void test_sequential_processes(void){
   waitpid(pid, &status, 0);
   check("mp_seq_child_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
 
-  /* Parent writes after child is done */
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
@@ -216,9 +178,6 @@ static void test_sequential_processes(void){
 
     check("mp_seq_count",
       strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "3")==0);
-    /* doltlite's dolt_log includes the genesis commit, so:
-    **   genesis + init + child commit + parent commit = 4 entries.
-    ** (Dolt's main doesn't have a genesis commit; doltlite does.) */
     check("mp_seq_log",
       strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "4")==0);
     sqlite3_close(db);
@@ -227,11 +186,6 @@ static void test_sequential_processes(void){
   remove(path);
 }
 
-/*
-** Test 4: GC while another process has the file open for reading.
-** The reader should still be able to read (old fd is valid on POSIX).
-** After GC, a new open should see the compacted file.
-*/
 static void test_gc_during_read(void){
   const char *path = "/tmp/test_mp_gc_read.db";
   pid_t pid;
@@ -241,7 +195,6 @@ static void test_gc_during_read(void){
   printf("--- Test 4: GC while another process reads ---\n");
   setup_db(path);
 
-  /* Add more data to make GC meaningful */
   {
     sqlite3 *db = 0;
     int i;
@@ -259,23 +212,18 @@ static void test_gc_during_read(void){
 
   pid = fork();
   if( pid==0 ){
-    /* Child: open file, signal parent, then hold it open */
     sqlite3 *db = 0;
     char buf;
     close(pipefd[0]);
     sqlite3_open(path, &db);
 
-    /* Verify we can read */
     queryScalarText(db, "SELECT count(*) FROM t");
 
-    /* Signal parent: "I have the file open" */
     write(pipefd[1], "R", 1);
     close(pipefd[1]);
 
-    /* Hold open for 3 seconds while parent does GC */
     sleep(3);
 
-    /* After GC, can we still read? (POSIX: old fd still valid) */
     {
       const char *r = queryScalarText(db, "SELECT count(*) FROM t");
       int ok = (strcmp(r, "10")==0);
@@ -284,7 +232,6 @@ static void test_gc_during_read(void){
     }
   }
 
-  /* Parent: wait for child to open file, then GC */
   {
     char buf;
     sqlite3 *db = 0;
@@ -300,7 +247,6 @@ static void test_gc_during_read(void){
   waitpid(pid, &status, 0);
   check("mp_gc_child_still_reads", WIFEXITED(status) && WEXITSTATUS(status)==0);
 
-  /* After GC, new connection sees all data */
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
@@ -312,11 +258,6 @@ static void test_gc_during_read(void){
   remove(path);
 }
 
-/*
-** Test 5: GC while another process holds a write lock.
-** GC involves chunkStoreCommit which acquires the graph lock.
-** If another process holds the write lock, GC should get BUSY.
-*/
 static void test_gc_blocked_by_writer(void){
   const char *path = "/tmp/test_mp_gc_write.db";
   pid_t pid;
@@ -330,14 +271,12 @@ static void test_gc_blocked_by_writer(void){
 
   pid = fork();
   if( pid==0 ){
-    /* Child: hold write lock for 2 seconds */
     sqlite3 *db = 0;
     close(pipefd[0]);
     sqlite3_open(path, &db);
     execSql(db, "BEGIN");
     execSql(db, "INSERT INTO t VALUES(2, 'blocking')");
 
-    /* Signal parent: "I hold the write lock" */
     write(pipefd[1], "W", 1);
     close(pipefd[1]);
 
@@ -347,7 +286,6 @@ static void test_gc_blocked_by_writer(void){
     _exit(0);
   }
 
-  /* Parent: wait for child to hold lock, then try GC */
   {
     char buf;
     sqlite3 *db = 0;
@@ -359,8 +297,6 @@ static void test_gc_blocked_by_writer(void){
     sqlite3_open(path, &db);
     sqlite3_busy_timeout(db, 100); /* Short timeout */
     r = queryScalarText(db, "SELECT dolt_gc()");
-    /* GC should fail because child holds the write lock.
-    ** It either returns an error or BUSY. */
     check("mp_gc_blocked",
       strstr(r, "ERR")!=0 || strstr(r, "BUSY")!=0 ||
       strstr(r, "busy")!=0 || strstr(r, "locked")!=0 ||
@@ -370,7 +306,6 @@ static void test_gc_blocked_by_writer(void){
 
   waitpid(pid, &status, 0);
 
-  /* After child exits, GC should succeed */
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
@@ -383,12 +318,6 @@ static void test_gc_blocked_by_writer(void){
   remove(path);
 }
 
-/*
-** Test 6: dolt_commit from two processes to the same branch.
-** A connection opened before a peer process advances the branch must reject
-** its stale commit. A fresh connection opened after the peer commit should
-** commit on top of the peer, preserving both commits.
-*/
 static void test_cross_process_commit_conflict(void){
   const char *stalePath = "/tmp/test_mp_conflict_stale.db";
   const char *freshPath = "/tmp/test_mp_conflict_fresh.db";
@@ -404,7 +333,6 @@ static void test_cross_process_commit_conflict(void){
 
   pid = fork();
   if( pid==0 ){
-    /* Child: insert and commit */
     sqlite3 *db = 0;
     char buf;
     close(pipefd[0]);
@@ -412,14 +340,12 @@ static void test_cross_process_commit_conflict(void){
     execSql(db, "INSERT INTO t VALUES(2, 'child')");
     queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
 
-    /* Signal parent */
     write(pipefd[1], "C", 1);
     close(pipefd[1]);
     sqlite3_close(db);
     _exit(0);
   }
 
-  /* Parent: open before child commits (stale state) */
   {
     sqlite3 *db = 0;
     const char *r;
@@ -427,13 +353,11 @@ static void test_cross_process_commit_conflict(void){
 
     sqlite3_open(stalePath, &db);
 
-    /* Wait for child to commit */
     close(pipefd[1]);
     read(pipefd[0], &buf, 1);
     close(pipefd[0]);
     waitpid(pid, &status, 0);
 
-    /* Parent tries to commit — should detect conflict */
     execSql(db, "INSERT INTO t VALUES(3, 'parent')");
     r = queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");
     check("mp_conflict_detected",
@@ -442,7 +366,6 @@ static void test_cross_process_commit_conflict(void){
     sqlite3_close(db);
   }
 
-  /* Verify the stale parent did not move the branch. */
   {
     sqlite3 *db = 0;
     sqlite3_open(stalePath, &db);

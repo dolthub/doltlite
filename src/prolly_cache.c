@@ -179,11 +179,7 @@ ProllyCacheEntry *prollyCachePutOwned(
     memset(pEntry, 0, sizeof(*pEntry));
   }
 
-  /* A reader parsing the last cell's record header (e.g. OP_Column) lets
-  ** GetVarint32 speculatively read up to 8 bytes past the cell's payload.
-  ** SQLite's page buffers carry that slack; prolly node buffers are exactly
-  ** sized, so grow the owned buffer with zeroed trailing slop to keep those
-  ** boundary over-reads in bounds. nData stays the logical size. */
+  /* Add SQLite-style trailing slop for speculative varint reads. */
   {
     u8 *pPadded = (u8*)sqlite3_realloc(pData, nData + PROLLY_NODE_BUFFER_SLOP);
     if( pPadded==0 ){

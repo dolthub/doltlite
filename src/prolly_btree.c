@@ -2374,11 +2374,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
     }
 
     q += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE;
-    /* The persisted sqlite_master root is canonicalized. DML does not change
-    ** it, and the in-memory root may be a runtime view after DDL. Virtual-table
-    ** DDL can update sqlite_master without tripping the normal schema-version
-    ** path, so patch the master root only when a page-1 write has survived
-    ** statement rollback in this transaction. */
+    /* Patch sqlite_master only after a surviving page-1 write. */
     if( iTable!=1 || pBtree->bMasterRootChangedTxn ){
       memcpy(q, pTE->root.data, PROLLY_HASH_SIZE);
     }
@@ -2463,14 +2459,7 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
     return rc;
   }
 
-  /* Drop degenerate rows whose type field is NULL. loadSchemaCatalogRows()
-  ** returns a row for every master-root record, and schemaCatalogTextField()
-  ** hands back a NULL string for a record field stored as SQL NULL (serial
-  ** type 0). Such a row carries no table/index/view/trigger and would crash
-  ** the strcmp() classification below; schemaCatalogRowWanted() already
-  ** filters them on other read paths. They appear after an OOM-interrupted
-  ** schema build leaves empty records in the master root — skipping them here
-  ** also keeps them out of the rebuilt root, so the schema self-heals. */
+  /* Drop NULL-type schema rows left by interrupted schema rebuilds. */
   {
     int nKept = 0;
     for(i=0; i<nRows; i++){
@@ -3167,15 +3156,7 @@ static int flushPendingForTable(
 }
 static int syncBtreeSavepoints(Btree *pBtree){
   sqlite3 *db = pBtree ? pBtree->db : 0;
-  /* Writes made inside a vtab xSavepoint callback (e.g. fts3 flushing its
-  ** pending-terms hash when a statement journal opens) belong to the scope
-  ** being entered's PARENT: the pager engine only starts journaling at
-  ** sqlite3BtreeBeginStmt, which runs after the callback returns. By that
-  ** point db->nStatement already counts the new statement, so pushing
-  ** savepoints here would capture pre-flush state and a later statement
-  ** rollback would erase the flush while fts3 also clears its hash --
-  ** losing committed rows from the index. Let the writes land in the
-  ** current deepest scope instead. */
+  /* vtab xSavepoint writes belong to the parent statement scope. */
   if( db && db->nVtabSavepoint==0 ){
     int target = db->nSavepoint + db->nStatement;
     while( pBtree->nSavepoint < target ){
@@ -3216,11 +3197,7 @@ static int ensureMutMap(BtCursor *pCur){
 
   if( pTE->pPending ){
     ProllyMutMap *pExisting = (ProllyMutMap*)pTE->pPending;
-    /* Keep an empty pending map's savepoint level in step with the btree's
-    ** current depth. A savepoint release can drop the depth without rewriting
-    ** a map that had no live entries to commit, leaving currentSavepointLevel
-    ** stale; a later edit would then be stamped at a released level and undone
-    ** by an unrelated statement's rollback. */
+    /* Empty maps still track savepoint depth for later edits. */
     if( pCur->pBtree
      && prollyMutMapIsEmpty(pExisting)
      && pExisting->currentSavepointLevel != pCur->pBtree->nSavepoint ){
@@ -3947,10 +3924,7 @@ static int restoreTablesFromSavepoint(
       pBtree->cat.a[idx].pendingFlushSeekEdits =
           pState->aTables[k].pendingFlushSeekEdits;
       if( pState->aTables[k].pPending==0 ){
-        /* A table dropped after this savepoint has no live mutmap, and
-        ** rollbackMutMapsToSavepoint only visits the current catalog so it
-        ** never saw it. Recover its pre-drop edits from the savepoint pending
-        ** snapshot so rows created before the drop survive ROLLBACK TO. */
+        /* Restore pre-drop edits captured by this savepoint. */
         int iThis = (int)(pState - pBtree->aSavepointTables);
         int iSp = -1, iSnap = -1;
         ProllyMutMap *pSnap = findPendingSnapshot(
@@ -4358,11 +4332,7 @@ int sqlite3BtreeOpen(
     p->pOps = &origBtreeVtOps;
     rc = origBtreeOpen(pVfs, zFilename, db, &p->pOrigBtree, flags, vfsFlags);
     if( rc!=SQLITE_OK ){ sqlite3_free(p); return rc; }
-    /* *ppBtree may be db->aDb[0].pBt, which registration (seeding) resolves
-    ** through, so it must be assigned first. Registration is best-effort when
-    ** functions already exist (re-running it mid-statement can return
-    ** SQLITE_BUSY), but an OOM must fail the open rather than leave it
-    ** silently incomplete. */
+    /* Registration resolves through db->aDb[0].pBt, so assign first. */
     *ppBtree = p;
     rc = registerDoltiteFunctions(db);
     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
@@ -4417,11 +4387,7 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return SQLITE_NOMEM;
   }
-  /* Bind the shim to the chunk store so sqlite3PagerFile() always resolves
-  ** to the current cs->pFile. Without this, csReloadFromDisk (triggered by
-  ** concurrent connections or peer processes mutating the chunk store) can
-  ** free the old pFile and leave the shim with a dangling pointer, crashing
-  ** the next sqlite3OsFileControl on a deref'd id->pMethods. */
+  /* Resolve shim file handles through the chunk store after reloads. */
   pagerShimSetStore(pBt->pPagerShim, &pBt->store);
 
   pBt->db = db;
@@ -4789,11 +4755,7 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
 }
 
 static int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
-  /* Prolly storage has no page freelist, so auto_vacuum can never apply.
-  ** Stock accepts the pragma on databases that cannot support it and the
-  ** read-back reports the file's actual mode (none); match that instead
-  ** of erroring, since setting auto_vacuum at startup is a common app
-  ** idiom. */
+  /* Prolly storage has no page freelist; accept auto_vacuum as a no-op. */
   (void)p; (void)autoVacuum;
   return SQLITE_OK;
 }
@@ -5557,10 +5519,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           pBt->store.snapshotPinned = 0;
           return rc;
         }
-        /* A statement can still be mid-scan here (a callback ran DDL in
-        ** autocommit — tkt3080). Save this handle's cursors so it survives
-        ** the catalog reload; fault only what can't be saved. The reload
-        ** frees the pending maps, so detach aliases either way. */
+        /* Save this handle's live cursors before catalog reload. */
         for(pC = pBt->pCursor; pC; pC = pC->pNext){
           if( pC->pBtree==p ){
             if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
@@ -5819,14 +5778,8 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   if( p->inTrans==TRANS_WRITE ){
     assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
     assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
-    /* Trip cursors for the rollback. A read-only cursor survives a writeOnly
-    ** rollback (schema unchanged): save its position so it re-seeks the
-    ** restored tree on next access, matching stock sqlite3BtreeTripAllCursors.
-    ** Otherwise a ROLLBACK issued mid-SELECT (e.g. from a user function) would
-    ** wrongly abort the read with SQLITE_ABORT_ROLLBACK (misc8-1.4). Write
-    ** cursors, and every cursor when the rollback changes the schema, are
-    ** faulted.
-    **
+    /* Read cursors survive write-only rollback by reseeking the restored tree.
+    ** Write cursors, and all cursors after schema changes, are faulted.
     ** Either way detach the cursor's pending-edit map alias before
     ** restoreFromCommitted() (via catFree) frees it. Detach AFTER
     ** saveCursorPosition(), which copies out the key it needs first. We only
@@ -5861,12 +5814,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
-      /* Reloading the committed catalog failed (OOM). The transaction must
-      ** still end with nothing dangling: chunkStoreRollback() is about to
-      ** discard staging, and the catalog may still point at staged chunks
-      ** (a DDL attempt repoints the sqlite_master root at one). Drop the
-      ** catalog without allocating and force the next BeginTrans to reload
-      ** the committed working state. */
+      /* Drop catalog pointers into staging before rollback discards chunks. */
       btreeFreeCatalogTables(p);
       memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
       p->bCatalogDropped = 1;
@@ -6076,13 +6024,7 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   BtCursor *pC;
   int j;
   int rc;
-  /* Save every cursor's position before unwinding the savepoint, mirroring
-  ** stock sqlite3BtreeSavepoint's saveAllCursors() call. A statement-savepoint
-  ** rollback (a nested statement that failed) must leave the *parent*
-  ** statement's cursors usable so the outer statement can continue. Hard-
-  ** faulting all cursors here aborts the parent and discards rows it already
-  ** inserted (tkt3718). Saved cursors become CURSOR_REQUIRESEEK and re-seek the
-  ** restored tree on next access. */
+  /* Save cursors so parent statements survive nested-statement rollback. */
   if( p->db && p->db->mallocFailed ){
     for(pC=pBt->pCursor; pC; pC=pC->pNext){
       if( pC->pBtree!=p ) continue;
@@ -6178,11 +6120,7 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
      && p->aSavepointTables ){
       return rollbackNamedSavepoint(p, pBt, iSavepoint);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      /* Savepoints push lazily at write time (syncBtreeSavepoints,
-      ** BeginTrans), so no savepoint at this level means this btree wrote
-      ** nothing since the SQL savepoint was created. Stock's pager no-ops
-      ** here; restoring committed state would wipe the btree's earlier
-      ** in-transaction writes. */
+      /* No pushed savepoint means this btree has no writes at that level. */
       return SQLITE_OK;
     } else if( iSavepoint<0 ){
       return rollbackAllSavepoints(p, pBt);
@@ -6338,27 +6276,14 @@ static int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   }
 
   if( pnChange ){
-    /* The change count must include rows that exist only as pending,
-    ** same-transaction mutations not yet in the committed root — e.g. a
-    ** whole-table DELETE inside a trigger that just populated the table.
-    ** Merge pending into the root first (mirroring the SELECT count(*) path,
-    ** flushPendingForTable + countTreeEntries) so the count is exact; the
-    ** truncate below then clears the merged root. */
+    /* Count pending rows too; same-transaction writes may not be flushed. */
     int rc = flushPendingForTable(p, pBt, pTE, 1);
     if( rc!=SQLITE_OK ) return rc;
     rc = countTreeEntries(p, (Pgno)iTable, pnChange);
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* TRUNCATE: discard any pending mutations for this table. Without this,
-  ** merging the now-empty tree with stale pending inserts would resurrect
-  ** rows the caller asked to remove. Inside a savepoint that captured
-  ** this table, hand the dirty map to the savepoint (via the same path
-  ** flushPendingForTable uses) so ROLLBACK TO can restore pre-savepoint
-  ** pending edits. Outside any savepoint, free the map outright. Either
-  ** way the cursor aliases must be updated since saving the cursors
-  ** leaves pCur->pMutMap untouched. (After a counted flush above the pending
-  ** map is already empty; this still releases it cleanly.) */
+  /* TRUNCATE discards pending rows, preserving savepoint rollback state. */
   if( pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     ProllyMutMap *pFlushMap = pMap;
@@ -6517,22 +6442,7 @@ static int prollyBtreeCursor(
 
   pTE = findTable(p, iTable);
   if( !pTE ){
-    /* Two shapes land here:
-    **
-    **  (a) iTable < iNextTable — the iTable was previously allocated
-    **      and is gone from the catalog. Almost always indicates a
-    **      stale SQLite schema cache referring to a table that doltlite
-    **      has dropped (DROP TABLE, branch switch, dolt_reset). Stock
-    **      SQLite would return SQLITE_CORRUPT_PGNO from xCursor under
-    **      similar conditions; matching that behavior is much safer
-    **      than synthesizing a phantom entry that subsequent inserts
-    **      then write into and persist on commit.
-    **
-    **  (b) iTable >= iNextTable — the iTable has never been allocated
-    **      in this catalog. The merge / catalog-rebuild paths use this
-    **      shape to materialize tables they're importing from another
-    **      branch, opening read cursors before doltlite's catalog has
-    **      formally registered them. Synthesize for these. */
+    /* Missing old roots are stale-schema errors; future roots are imports. */
     if( iTable!=1 && iTable < p->cat.iNextTable ){
       sqlite3_log(SQLITE_CORRUPT,
         "doltlite: cursor open on iTable=%u not in catalog "
@@ -7317,11 +7227,7 @@ static int prollyBtCursorTableMoveto(
     rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
   }
   if( rootIsEmpty ){
-    /* Empty table: match stock SQLite, which returns res<0 with the cursor
-    ** invalid. The VDBE seek opcodes rely on this — SeekGE/GT advance and hit
-    ** EOF, SeekLE/LT fall through to the sqlite3BtreeEof() check — so all four
-    ** correctly find no rows. Returning +1 here made SeekGE/GT skip the
-    ** advance and materialize the invalid cursor as a phantom NULL row. */
+    /* Empty tables return res<0 with an invalid cursor, matching stock. */
     *pRes = -1;
     pCur->eState = CURSOR_INVALID;
     return SQLITE_OK;
@@ -7627,13 +7533,7 @@ static int prollyBtCursorIndexMoveto(
     if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
       nSeekKeyField = (int)pIdxKey->nField;
     }
-    /* A table-root (WITHOUT ROWID / PK) tree is keyed by the PK columns only;
-    ** the non-PK columns live in the row value. A range seek (default_rc!=0)
-    ** whose probe extends past the PK — e.g. a SeekGE that appends a sentinel
-    ** field for ORDER BY positioning — must seek on the PK prefix. Otherwise
-    ** the longer probe sort key sorts past the shorter tree keys and lands
-    ** beyond the target row, so the move-to scan starts too late and returns
-    ** the wrong (or no) row (in7-2.1: IN(...) ORDER BY <non-PK> NULLS LAST). */
+    /* Table-root range seeks must ignore probe fields beyond the PK. */
     if( pCur->isTableRoot && pCur->pKeyInfo
      && pIdxKey->default_rc != 0
      && pIdxKey->nField > pCur->pKeyInfo->nKeyField
@@ -8137,13 +8037,7 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   }
 }
 
-/* Drop the cached packed compare key. The cache (pCompareSortKey, keyed on
-** nField) is only valid while the comparison target is unchanged. Moveto /
-** First / Last clear it, but OP_SeekScan reaches the next seek target by
-** stepping the cursor and jumping past the OP_SeekGE — bypassing Moveto — so
-** the following OP_IdxGT/GE would otherwise reuse the previous target's key
-** (same nField, different value), e.g. `b IN (2,3)` (in4-13.0). OP_SeekScan
-** calls this to invalidate the cache before processing a new target. */
+/* Clear cached compare key before OP_SeekScan changes seek targets. */
 void sqlite3BtreeProllyClearCompareKey(BtCursor *pCur){
   if( pCur ){
     CLEAR_CACHED_COMPARE_KEY(pCur);
@@ -8685,10 +8579,7 @@ static int flushIfNeeded(BtCursor *pCur){
     }
   }
 
-  /* Save the initiating cursor too — it can belong to a statement that is
-  ** still running (a callback issued COMMIT, capi3-11.4); dropping it to
-  ** INVALID below ended that scan. Before flushMutMap: a map-sourced row's
-  ** key is read out of the map being flushed. */
+  /* Save the initiating cursor too; callback-driven COMMIT can keep it live. */
   if( !pCur->isPinned
    && (pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_SKIPNEXT) ){
     rc = saveCursorPosition(pCur);
@@ -8708,12 +8599,7 @@ static int flushIfNeeded(BtCursor *pCur){
   ** mmActive/mmIdx would consult it at a dead index. */
   refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
                              pTE ? (ProllyMutMap*)pTE->pPending : 0);
-  /* A cursor saved by saveAllCursors (e.g. another statement scanning this
-  ** table while we flush a DELETE/UPDATE) keeps its REQUIRESEEK state: it has a
-  ** saved key and must reseek against the new root on next access. Clobbering it
-  ** to INVALID here dropped the saved position, ending the other scan early.
-  ** CURSOR_FAULT likewise: commit can flush a table through a faulted incrblob
-  ** cursor, and downgrading it erased the invalidation and its abort code. */
+  /* Preserve REQUIRESEEK/FAULT states across flush. */
   if( pCur->eState!=CURSOR_REQUIRESEEK && pCur->eState!=CURSOR_FAULT ){
     pCur->eState = CURSOR_INVALID;
   }
@@ -8887,13 +8773,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
 
-  /* If no key could be resolved from cursor state, treat the delete as
-  ** a no-op. Falling through would call prollyMutMapDelete with iKey=0
-  ** (intkey) or an empty blob key, silently deleting rowid 0 or the
-  ** empty-blob row if either exists. Reachable today only via
-  ** CURSOR_INVALID without cached key — SQLite's VDBE doesn't issue
-  ** Delete on an invalid cursor in normal bytecode, but a future
-  ** refactor or fuzz path could. */
+  /* No saved key means no-op; falling through would delete rowid 0 or ''. */
   if( !hasSavedKey ){
     rc = SQLITE_OK;
     goto delete_cleanup;
@@ -8933,10 +8813,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     }else{
       rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
     }
-    /* Don't free pSavedDelKey here. The SAVEPOSITION reseek below reads
-    ** from pKey, which aliases pSavedDelKey when savedDelKeyOwned is
-    ** set; freeing now would memcpy from a dangling pointer. Cleanup
-    ** runs at delete_cleanup once the reseek (if any) has finished. */
+    /* pKey may alias pSavedDelKey until the reseek below finishes. */
   }
 
   if( rc!=SQLITE_OK ) goto delete_cleanup;
@@ -9181,11 +9058,7 @@ int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){
   }
   return SQLITE_OK;
 }
-/* Backend-agnostic row transfer for when pSrc and pDest use different cursor
-** backends (e.g. VACUUM copying a prolly table into a stock-btree temp db).
-** Each backend's xTransferRow fast path assumes the other cursor is the same
-** type and reaches into pOrigCursor / pCur directly, which is a NULL deref
-** across backends. Copy via the public payload accessors instead. */
+/* Cross-backend row transfer must use public cursor accessors. */
 static int btreeGenericTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   int rc;
   BtreePayload x;
@@ -11186,11 +11059,7 @@ static int origCursorTransferRowVt(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   return origBtreeTransferRow(pDest->pOrigCursor, pSrc->pOrigCursor, iKey);
 }
 static void origCursorClearCursorVt(BtCursor *pCur){
-  /* Must invalidate the underlying stock cursor. OP_NullRow calls this to
-  ** null-extend a LEFT JOIN; if the orig (ephemeral/automatic-index) cursor
-  ** keeps its live position, the following OP_Next walks the index instead of
-  ** terminating, emitting spurious matched rows (join5-3.2: a NULL join key
-  ** that should match nothing returns extra rows). */
+  /* OP_NullRow must invalidate underlying orig cursors too. */
   origBtreeClearCursor(pCur->pOrigCursor);
 }
 static int origCursorCountVt(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){

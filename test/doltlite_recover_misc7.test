@@ -3,45 +3,7 @@ source $testdir/tester.tcl
 
 set testprefix doltlite_recover_misc7
 
-# Recovered coverage for misc7.test sections 10-23. The upstream file is
-# crash-listed: misc7-14.1 plans WHERE rowid=? against a PRIMARY KEY table,
-# which errors under the intentional rowid-on-PK divergence, and do_eqp_test
-# throws it uncaught, aborting the file before its summary. The echo virtual
-# table sections fail the same way (echo generates rowid-based SQL against
-# its backing table). Sections here run echo over a rowid table, pin the
-# doltlite-native shapes for the rowid/journal/readonly divergences, and
-# carry the rest verbatim.
-#
-# covers: misc7 misc7-10 — echo vtab over a rowid table: WHERE + ORDER BY through xBestIndex returns the row (1.1)
-# covers: misc7 misc7-10.1 — UPSERT on a virtual table rejected with stock message (1.2)
-# covers: misc7 misc7-11 — self-join of echo vtab with un-indexable ORDER BY (1.3)
-# covers: misc7 misc7-13 — xBestIndex cost above SQLITE_BIG_DOUBLE still plans and returns rows (1.5)
-# covers: misc7 misc7-12 — IO faults through echo vtab xBestIndex/xFilter paths (2.x)
-# covers: misc7 misc7-14.1 — stock plans rowid=? on a PK table; doltlite tables with an explicit PK have no rowid, so the query itself is rejected (3.1); the PK search plan is pinned instead (3.2)
-# covers: misc7 misc7-14.2 — point lookup on the PK: SEARCH USING PRIMARY KEY (3.2)
-# covers: misc7 misc7-14.3 — ORDER BY the PK: plain SCAN, prolly PK storage is ordered (3.3)
-# covers: misc7 misc7-15.1 — 256-row multi-statement txn under cache pressure commits; file grows past 10KB (4.1)
-# covers: misc7 misc7-15.2 — rowid-predicate DELETE then re-insert on the same table (rowid table here; upstream's PK table has no rowid) (4.2)
-# covers: misc7 misc7-16 — IO faults through UNIQUE-constrained UPDATE under cache pressure; row count intact after (5.x)
-# covers: misc7 misc7-18.1 — subquery flattening with GROUP BY over a cross join (6.1)
-# covers: misc7 misc7-19.1 — sqlite3_status with out-of-range opcode -1 (7.1)
-# covers: misc7 misc7-19.2 — sqlite3_status with out-of-range opcode 1000 (7.2)
-# covers: misc7 misc7-20.1 — sqlite3_global_recover no-op (7.3)
-# covers: misc7 misc7-21.1 — over-long database filename rejected at open (7.4)
-# covers: misc7 misc7-22.1 — INSERT on a -readonly connection rejected (8.1)
-# covers: misc7 misc7-22.2 — readonly connection still reads (8.2)
-# covers: misc7 misc7-22.3 — stock aborts reads when a hot journal cannot be rolled back (SQLITE_READONLY_ROLLBACK); doltlite has no journal sidecar, so a stray garbage -journal file is ignored and reads keep working (8.3)
-# covers: misc7 misc7-23.2 — database inside a read-only directory still reads (9.2)
-# covers: misc7 misc7-23.3 — write into a read-only directory refused: stock says "attempt to write a readonly database" (SQLITE_READONLY_DIRECTORY, journal creation); doltlite fails creating its lock file ("unable to open database file"); either way nothing lands (9.3, 9.4)
-# not-covered: misc7 misc7-17.1 — hot-journal with denied write access: no rollback-journal sidecar exists to deny
-# not-covered: misc7 misc7-17.3 — writable_schema rootpage poke is a stock raw-format probe; prolly catalog has no page numbers
-# not-covered: misc7 misc7-22.4 — SQLITE_READONLY_ROLLBACK unreachable: no journal sidecar (see 8.3)
 
-#-------------------------------------------------------------------------
-# 1.* echo virtual table over a rowid table (misc7-10/11/13). Upstream
-# backs echo with a PK table; echo's generated SQL uses rowid, which a
-# doltlite PK table does not expose. 1.6 pins that shape.
-#
 do_execsql_test 1.0 {
   CREATE TABLE rt(a, b, c);
   INSERT INTO rt VALUES(1, 2, 3);
@@ -76,10 +38,6 @@ do_test 1.6 {
   catchsql { SELECT a FROM t2 WHERE a = 1 }
 } {1 {SQL logic error}}
 
-#-------------------------------------------------------------------------
-# 2.* misc7-12: an error code other than SQLITE_NOMEM out of the vtab
-# xBestIndex callback, via IO faults.
-#
 do_ioerr_test 2 -tclprep {
   sqlite3 db2 test.db
   register_echo_module [sqlite3_connection_pointer db2]
@@ -94,9 +52,6 @@ do_ioerr_test 2 -tclprep {
   execsql {SELECT * FROM t1 WHERE a = 1;}
 }
 
-#-------------------------------------------------------------------------
-# 3.* misc7-14: query plans on a PK table.
-#
 do_execsql_test 3.0 {
   CREATE TABLE abc(a PRIMARY KEY, b, c);
 }
@@ -116,11 +71,6 @@ do_eqp_test 3.3 {
   `--SCAN t2
 }
 
-#-------------------------------------------------------------------------
-# 4.* misc7-15: statement-journal churn under cache pressure. Upstream's
-# table has a PK; this one is a rowid table so 4.2's rowid predicate
-# works.
-#
 db close
 forcedelete test.db
 sqlite3 db test.db
@@ -160,10 +110,6 @@ do_test 4.2 {
   }
 } {24}
 
-#-------------------------------------------------------------------------
-# 5.* misc7-16: IO faults through a UNIQUE-constrained UPDATE under cache
-# pressure (verbatim; t3 is a rowid table so the rowid predicate works).
-#
 db close
 forcedelete test.db
 sqlite3 db test.db
@@ -203,9 +149,6 @@ do_test 5.X {
   }
 } {32}
 
-#-------------------------------------------------------------------------
-# 6.* misc7-18: subquery flattening with GROUP BY over a cross join.
-#
 reset_db
 do_test 6.1 {
   execsql {
@@ -223,9 +166,6 @@ do_test 6.1 {
   }
 } {}
 
-#-------------------------------------------------------------------------
-# 7.* misc7-19/20/21: C-API boundary conditions.
-#
 do_test 7.1 {
   sqlite3_status -1 0
 } {21 0 0}
@@ -241,11 +181,6 @@ do_test 7.4 {
   list $rc $msg
 } {1 {unable to open database file}}
 
-#-------------------------------------------------------------------------
-# 8.* misc7-22: readonly connections. Stock's 22.3/22.4 plant a garbage
-# hot journal and expect reads to fail SQLITE_READONLY_ROLLBACK; doltlite
-# has no journal sidecar, so the stray file is ignored and reads work.
-#
 do_test 8.1 {
   db close
   forcedelete test.db test.db-journal
@@ -271,13 +206,6 @@ do_test 8.3 {
 catch { db close }
 forcedelete test.db test.db-journal
 
-#-------------------------------------------------------------------------
-# 9.* misc7-23: database inside a read-only directory. Reads work; the
-# write is refused (doltlite cannot create its lock file there, where
-# stock cannot create its journal) and nothing lands. Note: as root the
-# permission check is bypassed and the write succeeds, so this section
-# pins the unprivileged behavior CI runs under.
-#
 if {$::tcl_platform(platform) eq "unix"} {
   reset_db
   do_execsql_test 9.0 {

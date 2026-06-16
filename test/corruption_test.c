@@ -1,25 +1,3 @@
-/*
-** Corruption test for DoltLite: verifies that DoltLite properly detects
-** and reports corruption instead of silently continuing.
-**
-** These tests write directly to the database FILE to corrupt it, then
-** verify that opening/using the database produces errors (not silent
-** success).
-**
-** DoltLite file format (from chunk_store.h):
-**   [Manifest header: 168 bytes at offset 0]
-**     magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-**     index_offset(8) + index_size(4) + reserved(40) +
-**     wal_offset(8) + reserved(12) + refs_hash(20) + reserved(44)
-**   [Compacted chunk data: offset 168 to iWalOffset]
-**     length(4) + data(length), with sorted index
-**   [WAL region: iWalOffset to EOF]
-**     chunk record: tag(0x01) + hash(20) + len(4) + data
-**     root record:  tag(0x02) + manifest(168)
-**
-** Build (from the build/ directory):
-**   cc -g -I. -o corruption_test ../test/corruption_test.c libdoltlite.a -lz -lpthread
-*/
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -30,7 +8,6 @@
 
 #define MANIFEST_SIZE 168
 
-/* Magic bytes for DoltLite: "DLTC" = 0x444C5443 */
 static const unsigned char DLTC_MAGIC[4] = { 0x44, 0x4C, 0x54, 0x43 };
 
 static int nPass = 0;
@@ -45,7 +22,6 @@ static void check(const char *name, int condition){
   }
 }
 
-/* Execute SQL, return first column of first row as string (static buffer). */
 static char result_buf[8192];
 static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
@@ -67,25 +43,16 @@ static const char *queryScalarText(sqlite3 *db, const char *sql){
   return result_buf;
 }
 
-/* Execute SQL, ignore result. */
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
-    /* Intentionally silent for corruption tests -- caller checks rc. */
     sqlite3_free(err);
   }
   return rc;
 }
 
-/* ========================================================================
-** Helper functions for file corruption
-** ======================================================================== */
 
-/*
-** Write arbitrary bytes at a given offset in a file.
-** Returns 0 on success, -1 on error.
-*/
 static int corrupt_bytes(const char *path, off_t offset,
                          const void *data, size_t len){
   int fd = open(path, O_WRONLY);
@@ -99,17 +66,10 @@ static int corrupt_bytes(const char *path, off_t offset,
   return (w == (ssize_t)len) ? 0 : -1;
 }
 
-/*
-** Truncate a file to the given size.
-** Returns 0 on success, -1 on error.
-*/
 static int truncate_file(const char *path, off_t size){
   return truncate(path, size);
 }
 
-/*
-** Get the size of a file. Returns -1 on error.
-*/
 static off_t file_size(const char *path){
   struct stat st;
   if( stat(path, &st) != 0 ) return -1;
@@ -179,9 +139,6 @@ static off_t first_wal_chunk_body_offset(const char *path){
   return -1;
 }
 
-/*
-** Remove database and associated files.
-*/
 static void removeDb(const char *path){
   char wal[512];
   remove(path);
@@ -189,9 +146,6 @@ static void removeDb(const char *path){
   remove(wal);
 }
 
-/*
-** Copy a file from src to dst. Returns 0 on success.
-*/
 static int copy_file(const char *src, const char *dst){
   int fdin, fdout;
   char buf[8192];
@@ -211,14 +165,6 @@ static int copy_file(const char *src, const char *dst){
   return 0;
 }
 
-/*
-** Create a known-good DoltLite database with some committed data.
-** Returns 0 on success. The database will have:
-**   - Table t1(id INTEGER PRIMARY KEY, val TEXT) with 5 rows
-**   - 2 commits on main
-** Note: This creates a WAL-based database (no GC). The manifest header
-** is overridden by WAL root records during replay.
-*/
 static int create_good_db(const char *path){
   sqlite3 *db = 0;
   int rc;
@@ -250,12 +196,6 @@ static int create_good_db(const char *path){
   return 0;
 }
 
-/*
-** Create a known-good DoltLite database and run GC to compact it.
-** After GC, the manifest is authoritative (WAL region is empty) and
-** all chunk data is in the compacted region.
-** Returns 0 on success.
-*/
 static int create_compacted_db(const char *path){
   sqlite3 *db = 0;
   int rc;
@@ -283,7 +223,6 @@ static int create_compacted_db(const char *path){
     return -1;
   }
 
-  /* GC compacts all chunks and empties the WAL region */
   res = queryScalarText(db, "SELECT dolt_gc()");
   if( strncmp(res, "ERROR", 5)==0 ){
     sqlite3_close(db);
@@ -294,12 +233,6 @@ static int create_compacted_db(const char *path){
   return 0;
 }
 
-/*
-** Try to open a database and perform basic operations.
-** Returns 1 if any error is detected (good -- corruption was caught).
-** Returns 0 if everything appeared to succeed silently (bad -- corruption
-** was swallowed).
-*/
 static int open_and_probe(const char *path){
   sqlite3 *db = 0;
   int rc;
@@ -312,23 +245,18 @@ static int open_and_probe(const char *path){
     return errSeen;
   }
 
-  /* Try to query branches */
   rc = execSql(db, "SELECT * FROM dolt_branches");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
-  /* Try to query log */
   rc = execSql(db, "SELECT * FROM dolt_log");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
-  /* Try to query user table */
   rc = execSql(db, "SELECT * FROM t1");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
-  /* Try to query status */
   rc = execSql(db, "SELECT * FROM dolt_status");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
-  /* Try active_branch */
   {
     const char *r = queryScalarText(db, "SELECT active_branch()");
     if( strncmp(r, "ERROR", 5)==0 || strlen(r)==0 ) errSeen = 1;
@@ -338,11 +266,6 @@ static int open_and_probe(const char *path){
   return errSeen;
 }
 
-/*
-** Try to open a database -- returns 1 if open itself fails or the
-** database is unusable (any query returns an error), 0 if it opens
-** cleanly and is usable.
-*/
 static int open_fails_or_errors(const char *path){
   sqlite3 *db = 0;
   int rc;
@@ -353,7 +276,6 @@ static int open_fails_or_errors(const char *path){
     return 1;
   }
 
-  /* Check if even a basic query works */
   rc = execSql(db, "SELECT active_branch()");
   if( rc!=SQLITE_OK ){
     sqlite3_close(db);
@@ -364,14 +286,7 @@ static int open_fails_or_errors(const char *path){
   return 0;
 }
 
-/* ========================================================================
-** Test scenarios
-** ======================================================================== */
 
-/*
-** Test 1: Truncate file to 100 bytes (mid-manifest).
-** Open should fail or return error.
-*/
 static void test_truncate_mid_manifest(void){
   const char *dbpath = "/tmp/test_corr_trunc_manifest.db";
 
@@ -386,10 +301,6 @@ static void test_truncate_mid_manifest(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 2: Truncate file mid-WAL-record.
-** Open should recover to last good root or error.
-*/
 static void test_truncate_mid_wal(void){
   const char *dbpath = "/tmp/test_corr_trunc_wal.db";
   const char *goodpath = "/tmp/test_corr_trunc_wal_good.db";
@@ -398,25 +309,18 @@ static void test_truncate_mid_wal(void){
 
   check("create_good_2", create_good_db(dbpath)==0);
 
-  /* Save a copy of the good DB */
   copy_file(dbpath, goodpath);
 
   off_t sz = file_size(dbpath);
   check("file_has_data_2", sz > MANIFEST_SIZE);
 
-  /* Truncate to remove the last few bytes (likely mid-WAL record) */
   if( sz > MANIFEST_SIZE + 50 ){
     check("truncate_2", truncate_file(dbpath, sz - 30)==0);
   }
 
-  /* Database should either recover gracefully or report an error,
-  ** but NOT silently lose data without any indication. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
-    /* It's acceptable for this to succeed if WAL replay
-    ** stops at the corruption boundary. The key invariant is
-    ** that it doesn't crash or silently corrupt. */
     check("truncated_wal_open_ok_or_error",
       rc==SQLITE_OK || rc!=SQLITE_OK);
     if( db ) sqlite3_close(db);
@@ -426,11 +330,6 @@ static void test_truncate_mid_wal(void){
   removeDb(goodpath);
 }
 
-/*
-** Test 3: Zero out bytes 0-167 (entire manifest).
-** WAL replay should recover or error -- not silently continue with
-** corrupted state.
-*/
 static void test_zero_manifest(void){
   const char *dbpath = "/tmp/test_corr_zero_manifest.db";
 
@@ -442,29 +341,17 @@ static void test_zero_manifest(void){
   memset(zeros, 0, sizeof(zeros));
   check("corrupt_3", corrupt_bytes(dbpath, 0, zeros, MANIFEST_SIZE)==0);
 
-  /* With zeroed manifest, the magic number is gone. Open should detect
-  ** this and either fail or attempt WAL recovery. */
   int err = open_fails_or_errors(dbpath);
   check("zeroed_manifest_detected", err==1);
 
   removeDb(dbpath);
 }
 
-/*
-** Test 4: Write random bytes to a chunk in the compacted region.
-** Reading that chunk should detect a hash mismatch.
-**
-** Uses a compacted (post-GC) database where all chunks live in the
-** data region between the manifest and the WAL offset. Corrupting bytes
-** in this region should cause hash verification failures when those
-** chunks are read.
-*/
 static void test_corrupt_chunk_data(void){
   const char *dbpath = "/tmp/test_corr_chunk.db";
 
   printf("--- Test 4: Corrupt chunk data ---\n");
 
-  /* Create a compacted DB with enough data */
   {
     sqlite3 *db = 0;
     int i;
@@ -484,22 +371,16 @@ static void test_corrupt_chunk_data(void){
   off_t sz = file_size(dbpath);
   check("file_large_enough_4", sz > MANIFEST_SIZE + 200);
 
-  /* After GC, the compacted chunk region is bytes [168, WAL_offset).
-  ** Corrupt a large block spanning multiple chunk boundaries to ensure
-  ** we hit actual chunk data, not just inter-chunk padding. */
   {
     unsigned char garbage[128];
     int i;
     srand(12345);
     for( i=0; i<128; i++ ) garbage[i] = (unsigned char)(rand() & 0xFF);
-    /* Target the middle of the compacted region */
     off_t target = MANIFEST_SIZE + (sz - MANIFEST_SIZE) / 3;
     check("corrupt_4",
       corrupt_bytes(dbpath, target, garbage, sizeof(garbage))==0);
   }
 
-  /* Open and try to read data -- should detect hash mismatch on
-  ** at least one of these queries */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
@@ -520,10 +401,6 @@ static void test_corrupt_chunk_data(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 5: Truncate file to just past manifest (no index, no WAL).
-** Should handle gracefully.
-*/
 static void test_truncate_past_manifest(void){
   const char *dbpath = "/tmp/test_corr_just_manifest.db";
 
@@ -532,19 +409,12 @@ static void test_truncate_past_manifest(void){
   check("create_good_5", create_good_db(dbpath)==0);
   check("truncate_5", truncate_file(dbpath, MANIFEST_SIZE + 1)==0);
 
-  /* The manifest points to chunks that no longer exist.
-  ** This should be detected, not silently accepted. */
   int err = open_and_probe(dbpath);
   check("truncated_past_manifest_detected", err==1);
 
   removeDb(dbpath);
 }
 
-/*
-** Test 6: Zero out the refs hash in the manifest of a compacted DB.
-** After GC, the manifest is authoritative (no WAL to recover from).
-** Should error on refs load, not silently lose branches.
-*/
 static void test_zero_refs_hash(void){
   const char *dbpath = "/tmp/test_corr_refs.db";
 
@@ -552,15 +422,10 @@ static void test_zero_refs_hash(void){
 
   check("create_compacted_6", create_compacted_db(dbpath)==0);
 
-  /* refs_hash is at offset 104 (20 bytes) in the manifest.
-  ** After GC, this is the authoritative location -- no WAL root
-  ** records will override it. */
   unsigned char zeros[20];
   memset(zeros, 0, sizeof(zeros));
   check("corrupt_6", corrupt_bytes(dbpath, 104, zeros, sizeof(zeros))==0);
 
-  /* Opening should detect the inconsistency: headCommit is set but
-  ** refs are missing. Must return an error, not silently lose branches. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
@@ -577,10 +442,6 @@ static void test_zero_refs_hash(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 7: Append garbage after WAL region.
-** Should be ignored or detected.
-*/
 static void test_append_garbage(void){
   const char *dbpath = "/tmp/test_corr_append.db";
 
@@ -590,7 +451,6 @@ static void test_append_garbage(void){
 
   off_t sz = file_size(dbpath);
 
-  /* Append 1KB of random garbage */
   {
     int fd = open(dbpath, O_WRONLY|O_APPEND);
     check("open_for_append_7", fd >= 0);
@@ -604,21 +464,15 @@ static void test_append_garbage(void){
     }
   }
 
-  /* The database should either ignore the trailing garbage (safe behavior)
-  ** or detect and report it. It should NOT incorporate the garbage as
-  ** valid WAL records. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      /* If it opens, the original data should still be intact */
       const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
-      /* Either we get the correct count (garbage ignored) or an error */
       int count_ok = (strcmp(r, "5")==0);
       int count_err = (strncmp(r, "ERROR", 5)==0);
       check("appended_garbage_handled", count_ok || count_err);
     }else{
-      /* Open failed -- also acceptable */
       check("appended_garbage_handled", 1);
     }
     if( db ) sqlite3_close(db);
@@ -627,17 +481,12 @@ static void test_append_garbage(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 8: Empty file (0 bytes).
-** Should be treated as new database.
-*/
 static void test_empty_file(void){
   const char *dbpath = "/tmp/test_corr_empty.db";
 
   printf("--- Test 8: Empty file (0 bytes) ---\n");
   removeDb(dbpath);
 
-  /* Create an empty file */
   {
     int fd = open(dbpath, O_WRONLY|O_CREAT|O_TRUNC, 0644);
     check("create_empty_8", fd >= 0);
@@ -646,13 +495,11 @@ static void test_empty_file(void){
 
   check("empty_file_is_zero", file_size(dbpath)==0);
 
-  /* Opening an empty file should treat it as a new database */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     check("empty_open_ok", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      /* Should be able to create tables and use it normally */
       rc = execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY)");
       check("empty_create_table", rc==SQLITE_OK);
 
@@ -666,10 +513,6 @@ static void test_empty_file(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 9: File with only manifest header (168 bytes, no data).
-** Should work as empty DB.
-*/
 static void test_manifest_only(void){
   const char *dbpath = "/tmp/test_corr_manifest_only.db";
 
@@ -679,23 +522,14 @@ static void test_manifest_only(void){
   check("truncate_to_manifest_9", truncate_file(dbpath, MANIFEST_SIZE)==0);
   check("manifest_size_9", file_size(dbpath)==MANIFEST_SIZE);
 
-  /* The manifest now points to non-existent chunk data.
-  ** The system should either treat this as an error or handle it
-  ** gracefully. It should not crash. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
-    /* We accept either behavior: open fails, or open succeeds but queries
-    ** return errors. The key is no crash and no silent data loss. */
     if( rc==SQLITE_OK ){
-      /* It opened, but queries should reveal the problem */
       const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
-      /* Either error (data gone) or 0 (empty) -- both are acceptable.
-      ** What's NOT acceptable is returning stale data count of 5. */
       check("manifest_only_no_stale_data",
         strncmp(r, "ERROR", 5)==0 || strcmp(r, "0")==0);
     }else{
-      /* Open failed -- that's fine */
       check("manifest_only_no_stale_data", 1);
     }
     if( db ) sqlite3_close(db);
@@ -704,10 +538,6 @@ static void test_manifest_only(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 10: Corrupt a WAL chunk record tag byte.
-** WAL replay should stop at corruption.
-*/
 static void test_corrupt_wal_tag(void){
   const char *dbpath = "/tmp/test_corr_wal_tag.db";
 
@@ -717,34 +547,21 @@ static void test_corrupt_wal_tag(void){
 
   off_t sz = file_size(dbpath);
 
-  /* The WAL region is at the end of the file. We need to find where
-  ** it starts. For a freshly created DB (no GC), the WAL starts right
-  ** after the manifest + any compacted data.
-  ** We'll corrupt a byte somewhere in the second half of the file,
-  ** which is likely WAL territory. */
   if( sz > MANIFEST_SIZE + 100 ){
-    /* Pick a position in the latter part of the file */
     off_t wal_pos = sz / 2 + 50;
-    /* Write an invalid tag byte (0xFF is not a valid WAL record tag) */
     unsigned char bad_tag = 0xFF;
     check("corrupt_10",
       corrupt_bytes(dbpath, wal_pos, &bad_tag, 1)==0);
 
-    /* Close and reopen -- WAL replay should stop at the corruption */
     {
       sqlite3 *db = 0;
       int rc = sqlite3_open(dbpath, &db);
       if( rc==SQLITE_OK ){
-        /* It might open successfully but lose some data.
-        ** The key is that it doesn't crash or return garbage. */
         const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
         if( strncmp(r, "ERROR", 5)!=0 ){
           int cnt = atoi(r);
-          /* Should have some rows but possibly not all
-          ** (WAL replay stopped at corruption) */
           check("wal_tag_data_reasonable", cnt >= 0 && cnt <= 5);
         }else{
-          /* Error is acceptable */
           check("wal_tag_data_reasonable", 1);
         }
       }else{
@@ -759,12 +576,6 @@ static void test_corrupt_wal_tag(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 11: Corrupt a WAL chunk body before a later root record.
-** Replay should stop at the previous root boundary and open the
-** previously durable state instead of accepting a root that may reference
-** the corrupted chunk.
-*/
 static void test_corrupt_wal_chunk_body_stops_replay(void){
   const char *dbpath = "/tmp/test_corr_wal_chunk_body.db";
   sqlite3 *db = 0;
@@ -805,10 +616,6 @@ static void test_corrupt_wal_chunk_body_stops_replay(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 12: Set file size field in manifest to wrong value.
-** Should handle gracefully.
-*/
 static void test_wrong_file_size_in_manifest(void){
   const char *dbpath = "/tmp/test_corr_filesize.db";
 
@@ -816,28 +623,16 @@ static void test_wrong_file_size_in_manifest(void){
 
   check("create_good_11", create_good_db(dbpath)==0);
 
-  /* The wal_offset field is at offset:
-  **   magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-  **   index_offset(8) + index_size(4) + reserved(40) +
-  **   wal_offset(8) = offset 84
-  ** wal_offset is an i64 at offset 84
-  **
-  ** Set it to a wildly wrong value */
   unsigned char bad_offset[8] = { 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00 };
   check("corrupt_11",
     corrupt_bytes(dbpath, 84, bad_offset, sizeof(bad_offset))==0);
 
-  /* Database should detect the invalid offset */
   int err = open_and_probe(dbpath);
   check("wrong_wal_offset_detected", err==1);
 
   removeDb(dbpath);
 }
 
-/*
-** Test 13: Corrupt magic number.
-** Should fail to open as DoltLite.
-*/
 static void test_corrupt_magic(void){
   const char *dbpath = "/tmp/test_corr_magic.db";
 
@@ -845,7 +640,6 @@ static void test_corrupt_magic(void){
 
   check("create_good_13", create_good_db(dbpath)==0);
 
-  /* Overwrite magic with garbage */
   unsigned char bad_magic[4] = { 0x00, 0x00, 0x00, 0x00 };
   check("corrupt_13",
     corrupt_bytes(dbpath, 0, bad_magic, sizeof(bad_magic))==0);
@@ -856,9 +650,6 @@ static void test_corrupt_magic(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 14: Corrupt version number to unsupported version.
-*/
 static void test_corrupt_version(void){
   const char *dbpath = "/tmp/test_corr_version.db";
 
@@ -866,7 +657,6 @@ static void test_corrupt_version(void){
 
   check("create_good_14", create_good_db(dbpath)==0);
 
-  /* Version is at offset 4, 4 bytes. Set to 255. */
   unsigned char bad_ver[4] = { 0xFF, 0x00, 0x00, 0x00 };
   check("corrupt_14",
     corrupt_bytes(dbpath, 4, bad_ver, sizeof(bad_ver))==0);
@@ -877,14 +667,6 @@ static void test_corrupt_version(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 15: Corrupt the reserved former head_commit bytes in a compacted DB.
-**
-** NOTE: The system recovers head_commit from the active branch's commit
-** hash in refs, so manifest head_commit corruption is tolerated. This test
-** verifies the system does not crash and either detects the corruption
-** or recovers gracefully via branch refs.
-*/
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
 
@@ -892,7 +674,6 @@ static void test_corrupt_head_commit(void){
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
 
-  /* head_commit is at offset 64 (20 bytes) */
   unsigned char bad_hash[20];
   memset(bad_hash, 0xCD, sizeof(bad_hash));
   check("corrupt_15",
@@ -902,15 +683,11 @@ static void test_corrupt_head_commit(void){
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      /* The system may recover head_commit from branch refs.
-      ** Verify it doesn't crash and returns some coherent result. */
       const char *r = queryScalarText(db, "SELECT count(*) FROM dolt_log");
       int log_err = (strncmp(r, "ERROR", 5)==0);
       int log_valid = (!log_err && atoi(r) >= 0);
       check("corrupt_head_commit_no_crash", log_err || log_valid);
 
-      /* If the system silently recovered, the branch ref was the
-      ** fallback. Verify branches are still accessible. */
       if( log_valid && atoi(r) > 0 ){
         const char *b = queryScalarText(db, "SELECT count(*) FROM dolt_branches");
         check("corrupt_head_branches_accessible",
@@ -925,10 +702,6 @@ static void test_corrupt_head_commit(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 16: Corrupt the chunk_count field in a compacted DB.
-** After GC, chunk_count should govern how many index entries to read.
-*/
 static void test_corrupt_chunk_count(void){
   const char *dbpath = "/tmp/test_corr_chunkcount.db";
 
@@ -936,8 +709,6 @@ static void test_corrupt_chunk_count(void){
 
   check("create_compacted_16", create_compacted_db(dbpath)==0);
 
-  /* chunk_count is at offset 28 (4 bytes, little-endian).
-  ** Set to a huge value that doesn't match the actual index size. */
   unsigned char huge_count[4] = { 0xFF, 0xFF, 0xFF, 0x7F };
   check("corrupt_16",
     corrupt_bytes(dbpath, 28, huge_count, sizeof(huge_count))==0);
@@ -947,15 +718,11 @@ static void test_corrupt_chunk_count(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 17: Corrupt index_offset to point past end of file.
-*/
 static void test_corrupt_index_offset(void){
   const char *dbpath = "/tmp/test_corr_idxoff.db";
 
   printf("--- Test 17: Corrupt index_offset ---\n");
 
-  /* Create and GC */
   {
     sqlite3 *db = 0;
     removeDb(dbpath);
@@ -967,7 +734,6 @@ static void test_corrupt_index_offset(void){
     sqlite3_close(db);
   }
 
-  /* index_offset is an i64 at offset 32 */
   unsigned char bad_idx[8] = { 0xFF, 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00 };
   check("corrupt_17",
     corrupt_bytes(dbpath, 32, bad_idx, sizeof(bad_idx))==0);
@@ -978,9 +744,6 @@ static void test_corrupt_index_offset(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 18: Corrupt a compacted index entry to point before chunk data.
-*/
 static void test_corrupt_index_entry_offset(void){
   const char *dbpath = "/tmp/test_corr_idxentryoff.db";
   long long indexOffset;
@@ -1000,10 +763,6 @@ static void test_corrupt_index_entry_offset(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 19: Corrupt compacted index ordering. The on-disk index must be
-** strictly sorted by chunk hash for binary search to be correct.
-*/
 static void test_corrupt_index_order(void){
   const char *dbpath = "/tmp/test_corr_idxorder.db";
   long long indexOffset;
@@ -1024,9 +783,6 @@ static void test_corrupt_index_order(void){
   removeDb(dbpath);
 }
 
-/* ========================================================================
-** Main
-** ======================================================================== */
 
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");

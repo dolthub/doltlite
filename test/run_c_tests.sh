@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
-#
-# Runner for the orphan C tests that are wired into CI.
-#
-# Usage: run_c_tests.sh BUILD_DIR
-#   BUILD_DIR is where the test binaries live (typically the doltlite build
-#   directory, e.g. "build" or "build-test"). All test binaries are expected
-#   to already be built. Use `make c-tests` to build them.
 
 set -u
 
 BUILD_DIR="${1:-.}"
 cd "$BUILD_DIR" || { echo "Build dir $BUILD_DIR not found"; exit 2; }
 
-# Tests that pass cleanly on master and should break CI on regression.
 GATING=(
   ancestor_test
   sql_transaction_test

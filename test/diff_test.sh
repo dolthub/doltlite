@@ -1,8 +1,4 @@
 #!/bin/bash
-#
-# Comprehensive diff tests for doltlite.
-# Covers all change types, column counts, scale boundaries, and performance.
-#
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 TMPDIR=$(mktemp -d)
@@ -56,17 +52,14 @@ check_time() {
 
 ts() { date +%s; }
 
-# Helper: create table, insert N rows, commit
 setup_table() {
   local db="$1" cols="$2" n="$3" insert_expr="$4"
   "$DB" "$db" "CREATE TABLE t($cols); WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$n) INSERT INTO t SELECT $insert_expr FROM c; SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" > /dev/null 2>&1
 }
 
-# ════════════════════════════════════════════════════════════
 echo "=== Diff Test Suite ==="
 echo ""
 
-# ── 1. Modify: 3-column table at various scales ──────────
 echo "--- 1. Modify (3-col) at scale boundaries ---"
 for N in 100 500 1000 5000 10000; do
   rm -f "$TMPDIR/t.db"
@@ -76,7 +69,6 @@ for N in 100 500 1000 5000 10000; do
   check "modify 3-col N=$N" "$((N/2))" "$result"
 done
 
-# ── 2. Modify: 2-column INTKEY table ─────────────────────
 echo ""
 echo "--- 2. Modify (2-col INTKEY) at scale boundaries ---"
 for N in 100 500 1000 5000 10000; do
@@ -87,7 +79,6 @@ for N in 100 500 1000 5000 10000; do
   check "modify 2-col N=$N" "$((N/2))" "$result"
 done
 
-# ── 3. Delete: 3-column table ────────────────────────────
 echo ""
 echo "--- 3. Delete (3-col) ---"
 for N in 100 500 1000 5000; do
@@ -98,7 +89,6 @@ for N in 100 500 1000 5000; do
   check "delete 3-col N=$N" "$((N/10))" "$result"
 done
 
-# ── 4. Delete: 2-column INTKEY (known bug #164) ─────────
 echo ""
 echo "--- 4. Delete (2-col INTKEY) ---"
 for N in 100 1000; do
@@ -109,20 +99,16 @@ for N in 100 1000; do
   check "delete 2-col N=$N count" "$((N - N/10))" "$count"
 done
 
-# ── 5. Insert: new rows added ────────────────────────────
 echo ""
 echo "--- 5. Insert (add rows) ---"
 for N in 100 1000 5000; do
   rm -f "$TMPDIR/t.db"
   setup_table "$TMPDIR/t.db" "id INTEGER PRIMARY KEY, a INT, b INT" "$N" "x, x, 0"
   "$DB" "$TMPDIR/t.db" "INSERT INTO t VALUES($((N+1)), 999, 999), ($((N+2)), 998, 998); SELECT dolt_add('-A'); SELECT dolt_commit('-m','add');" > /dev/null 2>&1
-  # dolt_diff_t may not have to_commit column — use total count minus init
   total=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='added';")
-  # Total adds = N (initial commit) + 2 (new rows)
   check "insert 3-col N=$N total adds" "$((N+2))" "$total"
 done
 
-# ── 6. Mixed operations in one commit ────────────────────
 echo ""
 echo "--- 6. Mixed: modify + insert + delete ---"
 for N in 100 1000 5000; do
@@ -130,11 +116,9 @@ for N in 100 1000 5000; do
   setup_table "$TMPDIR/t.db" "id INTEGER PRIMARY KEY, a INT, b INT" "$N" "x, x, 0"
   "$DB" "$TMPDIR/t.db" "UPDATE t SET b=1 WHERE id<=10; INSERT INTO t VALUES($((N+1)),999,999); DELETE FROM t WHERE id=$N; SELECT dolt_add('-A'); SELECT dolt_commit('-m','mixed');" > /dev/null 2>&1
   mod=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
-  # modified should be >= 10 (from the last commit diff)
   check "mixed mod N=$N" "1" "$([ "$mod" -ge 10 ] && echo 1 || echo 0)"
 done
 
-# ── 7. Single row changes ────────────────────────────────
 echo ""
 echo "--- 7. Single row change ---"
 for N in 100 1000 5000; do
@@ -145,7 +129,6 @@ for N in 100 1000 5000; do
   check "1-row modify N=$N" "1" "$result"
 done
 
-# ── 8. Change percentages ────────────────────────────────
 echo ""
 echo "--- 8. Change percentages (3-col, N=5000) ---"
 for pct in 1 10 50 100; do
@@ -158,7 +141,6 @@ for pct in 1 10 50 100; do
   check "modify ${pct}% of 5000" "$expected" "$result"
 done
 
-# ── 9. Many-column table ─────────────────────────────────
 echo ""
 echo "--- 9. Many columns (10 cols) ---"
 rm -f "$TMPDIR/t.db"
@@ -167,7 +149,6 @@ rm -f "$TMPDIR/t.db"
 result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
 check "10-col modify 50%" "500" "$result"
 
-# ── 10. TEXT columns ──────────────────────────────────────
 echo ""
 echo "--- 10. TEXT columns ---"
 rm -f "$TMPDIR/t.db"
@@ -176,7 +157,6 @@ rm -f "$TMPDIR/t.db"
 result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
 check "text col modify 20%" "200" "$result"
 
-# ── 11. Working diff (uncommitted) ────────────────────────
 echo ""
 echo "--- 11. Working diff (uncommitted changes) ---"
 for N in 100 1000 5000; do
@@ -187,7 +167,6 @@ for N in 100 1000 5000; do
   check "working diff N=$N" "$((N/2))" "$result"
 done
 
-# ── 12. No changes = empty diff ───────────────────────────
 echo ""
 echo "--- 12. No changes ---"
 rm -f "$TMPDIR/t.db"
@@ -195,7 +174,6 @@ setup_table "$TMPDIR/t.db" "id INTEGER PRIMARY KEY, a INT, b INT" "1000" "x, x, 
 result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';")
 check "no-change diff" "0" "$result"
 
-# ── 13. Performance: O(changes) not O(table) ─────────────
 echo ""
 echo "--- 13. Performance: 10 changes on large table ---"
 rm -f "$TMPDIR/t.db"
@@ -213,7 +191,6 @@ elapsed=$(( $(ts) - t0 ))
 check "10 changes on 100K" "10" "$result"
 check_time "diff perf 100K" "$elapsed" "5"
 
-# ── 14. Diff after branch + merge ─────────────────────────
 echo ""
 echo "--- 14. Diff after merge ---"
 rm -f "$TMPDIR/t.db"
@@ -238,7 +215,6 @@ check "post-merge feat change" "1" "$result"
 result=$(query_value "$TMPDIR/t.db" "SELECT a FROM t WHERE id=1;")
 check "post-merge main change" "999" "$result"
 
-# ── 15. Diff with ALTER TABLE ADD COLUMN ──────────────────
 echo ""
 echo "--- 15. Schema change diff ---"
 rm -f "$TMPDIR/t.db"
@@ -247,7 +223,6 @@ setup_table "$TMPDIR/t.db" "id INTEGER PRIMARY KEY, a INT" "100" "x, x"
 result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
 check "schema change diff" "10" "$result"
 
-# ════════════════════════════════════════════════════════════
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed, $skip skipped"

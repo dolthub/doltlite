@@ -8,9 +8,6 @@
 #    May you share freely, never taking more than you give.
 #
 #***********************************************************************
-# Focused DoltLite coverage for PRAGMA data_version semantics from
-# pragma3.test.
-#
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl

@@ -1,13 +1,4 @@
 #!/bin/bash
-#
-# Large merge tests.
-#
-# Verifies merge correctness at scale: 10K-100K row merges with
-# various conflict patterns. Tests both the streaming three-way
-# diff and the merge application path under memory pressure.
-#
-# Usage: bash test/large_merge_test.sh [path/to/doltlite] [--quick]
-#
 
 set -u
 
@@ -26,7 +17,6 @@ fail_name() {
 
 echo "=== Large Merge Tests ==="
 
-# Helper: generate N INSERT statements for a table t(id PK, v TEXT)
 gen_inserts() {
   local start=$1 end=$2 prefix=$3
   local i
@@ -35,7 +25,6 @@ gen_inserts() {
   done
 }
 
-# Helper: generate N UPDATE statements
 gen_updates() {
   local start=$1 end=$2 new_prefix=$3
   local i
@@ -44,21 +33,18 @@ gen_updates() {
   done
 }
 
-# ── Scenario 1: Large non-overlapping merge (10K rows each side) ──
 echo ""
 echo "--- Scenario 1: Non-overlapping merge (10K rows each side) ---"
 
 DB="$TMPROOT/s1.db"
 rm -f "$DB"
 
-# Base: rows 1-1000
 "$DOLTLITE" "$DB" "$(
   echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
   gen_inserts 1 1000 base
   echo "SELECT dolt_commit('-Am','base');"
 )" >/dev/null 2>&1
 
-# Branch feat: add rows 1001-11000
 "$DOLTLITE" "$DB" "$(
   echo "SELECT dolt_branch('feat');"
   echo "SELECT dolt_checkout('feat');"
@@ -69,7 +55,6 @@ rm -f "$DB"
   echo "SELECT dolt_checkout('main');"
 )" >/dev/null 2>&1
 
-# Main: add rows 11001-21000
 "$DOLTLITE" "$DB" "$(
   echo "BEGIN;"
   gen_inserts 11001 21000 main
@@ -77,7 +62,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','main adds 10K');"
 )" >/dev/null 2>&1
 
-# Merge
 RESULT=$("$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" 2>&1)
 COUNT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
 if [ "$COUNT" = "21000" ]; then
@@ -87,7 +71,6 @@ else
   echo "    expected 21000, got $COUNT"
 fi
 
-# Verify data from both sides survived
 V1=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=5000;" 2>/dev/null)
 V2=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=15000;" 2>/dev/null)
 if [ "$V1" = "feat_5000" ] && [ "$V2" = "main_15000" ]; then
@@ -107,7 +90,6 @@ fi
 
 echo ""
 
-# ── Scenario 2: Large overlapping updates (both sides modify same rows) ──
 echo "--- Scenario 2: Overlapping updates (5K rows modified by both sides) ---"
 
 DB="$TMPROOT/s2.db"
@@ -119,7 +101,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','base 5K rows');"
 )" >/dev/null 2>&1
 
-# feat: update odd rows
 "$DOLTLITE" "$DB" "$(
   echo "SELECT dolt_branch('feat');"
   echo "SELECT dolt_checkout('feat');"
@@ -132,7 +113,6 @@ rm -f "$DB"
   echo "SELECT dolt_checkout('main');"
 )" >/dev/null 2>&1
 
-# main: update even rows
 "$DOLTLITE" "$DB" "$(
   echo "BEGIN;"
   for i in $(seq 2 2 5000); do
@@ -142,7 +122,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','main updates even rows');"
 )" >/dev/null 2>&1
 
-# Merge - should succeed, no overlap
 RESULT=$("$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" 2>&1)
 COUNT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
 if [ "$COUNT" = "5000" ]; then
@@ -171,7 +150,6 @@ fi
 
 echo ""
 
-# ── Scenario 3: Massive conflict merge (both sides update same rows differently) ──
 echo "--- Scenario 3: Conflict merge (1000 rows conflicting) ---"
 
 DB="$TMPROOT/s3.db"
@@ -183,7 +161,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','base 2K');"
 )" >/dev/null 2>&1
 
-# feat: update rows 501-1500
 "$DOLTLITE" "$DB" "$(
   echo "SELECT dolt_branch('feat');"
   echo "SELECT dolt_checkout('feat');"
@@ -194,7 +171,6 @@ rm -f "$DB"
   echo "SELECT dolt_checkout('main');"
 )" >/dev/null 2>&1
 
-# main: update rows 1001-2000 (overlap: 1001-1500 = 500 rows conflicting)
 "$DOLTLITE" "$DB" "$(
   echo "BEGIN;"
   gen_updates 1001 2000 main
@@ -202,7 +178,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','main updates 1K');"
 )" >/dev/null 2>&1
 
-# Merge - should produce conflicts for rows 1001-1500
 "$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" >/dev/null 2>&1
 CONFLICTS=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;" 2>/dev/null)
 if [ "$CONFLICTS" = "1" ]; then
@@ -212,7 +187,6 @@ else
   echo "    expected 1 (one table), got $CONFLICTS"
 fi
 
-# Non-conflicting rows should be merged correctly
 V500=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=500;" 2>/dev/null)
 V600=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=600;" 2>/dev/null)
 V1800=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=1800;" 2>/dev/null)
@@ -225,7 +199,6 @@ fi
 
 echo ""
 
-# ── Scenario 4: Large delete vs modify (one side deletes, other modifies) ──
 echo "--- Scenario 4: Large delete vs modify (500 rows) ---"
 
 DB="$TMPROOT/s4.db"
@@ -237,7 +210,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','base');"
 )" >/dev/null 2>&1
 
-# feat: delete rows 501-1000
 "$DOLTLITE" "$DB" "$(
   echo "SELECT dolt_branch('feat');"
   echo "SELECT dolt_checkout('feat');"
@@ -250,7 +222,6 @@ rm -f "$DB"
   echo "SELECT dolt_checkout('main');"
 )" >/dev/null 2>&1
 
-# main: modify rows 501-1000
 "$DOLTLITE" "$DB" "$(
   echo "BEGIN;"
   gen_updates 501 1000 main_mod
@@ -258,7 +229,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','main modifies same 500');"
 )" >/dev/null 2>&1
 
-# Merge - should produce delete-modify conflicts
 "$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" >/dev/null 2>&1
 CONFLICTS=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;" 2>/dev/null)
 if [ "$CONFLICTS" = "1" ]; then
@@ -268,7 +238,6 @@ else
   echo "    conflicts=$CONFLICTS"
 fi
 
-# Rows outside the conflict zone should be untouched
 V1=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=1;" 2>/dev/null)
 V2000=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=2000;" 2>/dev/null)
 if [ "$V1" = "base_1" ] && [ "$V2000" = "base_2000" ]; then
@@ -280,7 +249,6 @@ fi
 
 echo ""
 
-# ── Scenario 5: Convergent merge (both sides make same changes) ──
 echo "--- Scenario 5: Convergent merge (both sides same 1K updates) ---"
 
 DB="$TMPROOT/s5.db"
@@ -292,7 +260,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','base');"
 )" >/dev/null 2>&1
 
-# Both sides make the exact same change
 "$DOLTLITE" "$DB" "$(
   echo "SELECT dolt_branch('feat');"
   echo "SELECT dolt_checkout('feat');"
@@ -310,7 +277,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','main converged updates');"
 )" >/dev/null 2>&1
 
-# Merge - should succeed with zero conflicts
 "$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" >/dev/null 2>&1
 CONFLICTS=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;" 2>/dev/null)
 V1000=$("$DOLTLITE" "$DB" "SELECT v FROM t WHERE id=1000;" 2>/dev/null)
@@ -323,7 +289,6 @@ fi
 
 echo ""
 
-# ── Scenario 6: Multi-table merge at scale ──
 echo "--- Scenario 6: Multi-table merge (3 tables, 5K rows each) ---"
 
 DB="$TMPROOT/s6.db"
@@ -339,7 +304,6 @@ rm -f "$DB"
   echo "SELECT dolt_commit('-Am','base 3 tables');"
 )" >/dev/null 2>&1
 
-# feat: add 5K rows to each table
 "$DOLTLITE" "$DB" "$(
   echo "SELECT dolt_branch('feat');"
   echo "SELECT dolt_checkout('feat');"
@@ -352,7 +316,6 @@ rm -f "$DB"
   echo "SELECT dolt_checkout('main');"
 )" >/dev/null 2>&1
 
-# main: add 5K different rows to each table
 "$DOLTLITE" "$DB" "$(
   echo "BEGIN;"
   gen_inserts 6001 11000 main | sed 's/INTO t/INTO t1/'
@@ -375,7 +338,6 @@ fi
 
 echo ""
 
-# ── Scenario 6b: Repeated merge abort/retry across multiple tables ──
 echo "--- Scenario 6b: Repeated merge abort/retry across multiple tables ---"
 
 DB="$TMPROOT/s6b.db"
@@ -454,13 +416,11 @@ if [ "$QUICK" = "1" ]; then
   exit 0
 fi
 
-# ── Scenario 7: 50K row non-overlapping merge ──
 echo "--- Scenario 7: 50K rows each side, non-overlapping ---"
 
 DB="$TMPROOT/s7.db"
 rm -f "$DB"
 
-# Use pipe to avoid shell argument length limits
 {
   echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
   echo "INSERT INTO t VALUES(0,'anchor');"
@@ -504,13 +464,11 @@ fi
 
 echo ""
 
-# ── Scenario 8: Large merge with secondary index ──
 echo "--- Scenario 8: 10K merge with secondary index ---"
 
 DB="$TMPROOT/s8.db"
 rm -f "$DB"
 
-# Helper for 3-column inserts: (id, k, v)
 gen_inserts_3col() {
   local start=$1 end=$2 prefix=$3
   local i
@@ -543,17 +501,11 @@ gen_inserts_3col() {
   echo "SELECT dolt_commit('-Am','main 10K indexed');"
 } | "$DOLTLITE" "$DB" >/dev/null 2>&1
 
-# Note: secondary index merge currently only merges the main table
-# rows, not the index entries from the other branch. The index is
-# rebuilt from the merged main table. This means the main-table row
-# count reflects the merge, but the index merge is a known gap.
 "$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" >/dev/null 2>&1
 COUNT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
 if [ "$COUNT" = "21000" ]; then
   pass_name "s8_indexed_merge_count"
 else
-  # Pre-existing: index merge doesn't propagate feat-side rows.
-  # Track separately from the streaming diff change.
   fail_name "s8_indexed_merge_count (known issue)"
   echo "    count=$COUNT (expected 21000)"
 fi
