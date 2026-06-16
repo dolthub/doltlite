@@ -101,7 +101,6 @@ oracle() {
   dl_combined="$dl_log"$'\n'"$dl_status"
   dt_combined="$dt_log"$'\n'"$dt_status"
 
-  # Logs were already guarded above; the helper still catches all-empty.
   vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 

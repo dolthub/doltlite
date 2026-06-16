@@ -182,7 +182,7 @@ DIFF_10_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
   (SELECT commit_hash FROM dolt_log LIMIT 1),
   't');" | $DOLTLITE "$DB_DIFF" 2>&1)
-echo "  (correctness: $DIFF_10_COUNT changes — known issue if 0 on large tables)"
+echo "  (correctness: $DIFF_10_COUNT changes; expected nonzero on large tables)"
 
 python3 -c "
 for i in range(100, 1100):

@@ -1,29 +1,4 @@
 #!/bin/bash
-#
-# run_sqllogictest.sh — Run the sqllogictest suite and gate on a per-assertion
-# known-divergence allow-list (mirrors run_testfixture.sh).
-#
-# Usage: bash run_sqllogictest.sh <doltlite-runner> <stock-runner> <test-dir> [divergence-file]
-#
-#   doltlite-runner: sqllogictest binary linked against doltlite's amalgamation
-#   stock-runner:    sqllogictest binary linked against stock SQLite (reference)
-#   test-dir:        root of the sqllogictest test/ directory (Fossil corpus)
-#   divergence-file: known-divergence allow-list (default: known_sqllogictest_divergences.txt)
-#
-# Both runners MUST be built from a sqllogictest.c patched with
-# test/patch_sqllogictest.pl, which makes the runner emit one
-#   !DIVERGE <query-start-line>
-# token per query record whose verify result differs from the file's expected
-# output. For each test file we take doltlite's divergent query lines, subtract
-# any the stock reference also flags (so corpus/SQLite-version quirks don't count
-# against doltlite), and compare the remainder to the allow-list:
-#
-#   (1) every doltlite divergence must be listed (else: unexpected -> regression)
-#   (2) every listed entry must still diverge (else: fixed -> remove from list)
-#
-# doltlite's prolly format legitimately differs from stock on a small set of
-# assertions; those are the allow-list. Any divergence outside it fails the job.
-# (Functional correctness is also covered by the object-build suites.)
 
 set -uo pipefail
 
@@ -35,7 +10,6 @@ DIVERGENCE_FILE="${4:-$SCRIPT_DIR/known_sqllogictest_divergences.txt}"
 
 PER_FILE_TIMEOUT=300
 
-# Print the expected divergent query-line numbers for a file (one per line).
 expected_for() {
   local rel="$1"
   [ -f "$DIVERGENCE_FILE" ] || return 0
@@ -46,14 +20,11 @@ expected_for() {
   ' "$DIVERGENCE_FILE"
 }
 
-# Print every file path referenced by the allow-list (one per line, unique).
 listed_files() {
   [ -f "$DIVERGENCE_FILE" ] || return 0
   awk '{ sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); if ($0=="") next; print $1 }' "$DIVERGENCE_FILE" | sort -u
 }
 
-# !DIVERGE query lines emitted by <runner> on <file>. Sorted with LC_ALL=C so
-# the lists feed `comm` consistently (comm compares lexically, not numerically).
 tokens() {
   timeout "$PER_FILE_TIMEOUT" "$1" --verify "$2" 2>&1 \
     | grep -oE '!DIVERGE [0-9]+' | awk '{print $2}' | LC_ALL=C sort -u
@@ -100,7 +71,6 @@ for f in "${TEST_FILES[@]}"; do
   dl=$(echo "$dl_out" | grep -oE '!DIVERGE [0-9]+' | awk '{print $2}' | LC_ALL=C sort -u)
   st=$(tokens "$STOCK_RUNNER" "$f")
 
-  # doltlite-only divergences (exclude assertions the stock reference also flags)
   divg=$(comm -23 <(printf '%s\n' "$dl" | grep -v '^$') <(printf '%s\n' "$st" | grep -v '^$'))
   exp=$(expected_for "$rel" | LC_ALL=C sort -u)
 
@@ -133,7 +103,6 @@ for f in "${TEST_FILES[@]}"; do
   fi
 done
 
-# Allow-list entries pointing at files that no longer exist in the corpus.
 while IFS= read -r lf; do
   [ -z "$lf" ] && continue
   if ! printf '%s' "$seen_file_list" | grep -Fxq -- "$lf"; then

@@ -1,13 +1,4 @@
 #!/bin/bash
-#
-# Large-scale tests: 1M and 10M rows with performance thresholds.
-#
-# Usage:
-#   large_scale_test.sh [doltlite-binary] [--quick]
-#
-# Quick mode (CI): 100K rows, relaxed thresholds
-# Full mode:       1M + 10M rows, strict thresholds
-#
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 TMPDIR=$(mktemp -d)
@@ -56,7 +47,6 @@ file_uri() {
   esac
 }
 
-# Insert N rows in batches of 100K to avoid CTE ephemeral table overhead.
 batch_insert() {
   local dbpath="$1" table="$2" total="$3" cols="$4"
   local batch=100000 i=1
@@ -91,13 +81,11 @@ else
   N10_CLONE_MAX=60
 fi
 
-# ════════════════════════════════════════════════════════════
 echo ""
 echo "══════════════════════════════════════"
 echo "  ${N1}-row single table test"
 echo "══════════════════════════════════════"
 
-# ── 1. Insert ────────────────────────────────────────────
 echo ""
 echo "--- 1. Insert ${N1} rows ---"
 "$DB" "$TMPDIR/db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, status TEXT);" > /dev/null 2>&1
@@ -113,7 +101,6 @@ check "row count" "$N1" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT min(id), max(id) FROM t;")
 check "id range" "1|$N1" "$result"
 
-# ── 2. Commit ────────────────────────────────────────────
 echo ""
 echo "--- 2. dolt_add + dolt_commit ---"
 t0=$(ts)
@@ -122,7 +109,6 @@ elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
 check_time "commit ${N1} rows" "$elapsed" "$N1_COMMIT_MAX"
 
-# ── 3. Bulk update 50% ──────────────────────────────────
 echo ""
 echo "--- 3. Update 50% of rows ---"
 t0=$(ts)
@@ -134,7 +120,6 @@ check_time "update 50%" "$elapsed" "$N1_UPDATE_MAX"
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM t WHERE status='done';")
 check "half updated" "$((N1/2))" "$result"
 
-# ── 4. Diff ──────────────────────────────────────────────
 echo ""
 echo "--- 4. Diff ---"
 t0=$(ts)
@@ -144,14 +129,12 @@ echo "  ${elapsed}s"
 check_time "diff" "$elapsed" "$N1_DIFF_MAX"
 check "diff count" "$((N1/2))" "$result"
 
-# ── 5. Delete 10% ───────────────────────────────────────
 echo ""
 echo "--- 5. Delete 10% ---"
 "$DB" "$TMPDIR/db" "DELETE FROM t WHERE id%10=0; SELECT dolt_add('-A'); SELECT dolt_commit('-m','delete 10%');" > /dev/null 2>&1
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM t;")
 check "rows after delete" "$((N1 - N1/10))" "$result"
 
-# ── 6. Branch + merge ───────────────────────────────────
 echo ""
 echo "--- 6. Branch + merge ---"
 "$DB" "$TMPDIR/db" <<ENDSQL
@@ -174,7 +157,6 @@ check "main change kept" "0" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT name FROM t WHERE id=$((N1+1));")
 check "feature row present" "feature_row" "$result"
 
-# ── 7. Clone ─────────────────────────────────────────────
 echo ""
 echo "--- 7. Clone ---"
 t0=$(ts)
@@ -187,7 +169,6 @@ check_time "push + clone" "$elapsed" "$N1_CLONE_MAX"
 result=$("$DB" "$TMPDIR/clone" "SELECT count(*) FROM t;")
 check "clone row count" "$((N1 - N1/10 + 1))" "$result"
 
-# ── 8. Push from clone + pull ────────────────────────────
 echo ""
 echo "--- 8. Round-trip ---"
 "$DB" "$TMPDIR/clone" "INSERT INTO t VALUES(99999999,'clone_row',42,'pushed'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','from clone'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
@@ -196,7 +177,6 @@ result=${result//$'\r'/}
 check "pull from clone" "0
 clone_row" "$result"
 
-# ── 9. Rapid commits ─────────────────────────────────────
 echo ""
 echo "--- 9. 20 rapid commits ---"
 for i in $(seq 1 20); do
@@ -205,7 +185,6 @@ done
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM dolt_log;")
 check "commits in log" "1" "$([ "$result" -ge 25 ] && echo 1 || echo 0)"
 
-# ── 10. Queries ──────────────────────────────────────────
 echo ""
 echo "--- 10. Queries ---"
 result=$("$DB" "$TMPDIR/db" "SELECT avg(val) IS NOT NULL FROM t;")
@@ -215,12 +194,10 @@ check "distinct" "1" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) > 0 FROM t WHERE val BETWEEN 100 AND 200;")
 check "range scan" "1" "$result"
 
-# ── 11. File size ────────────────────────────────────────
 echo ""
 db_size=$(stat -f%z "$TMPDIR/db" 2>/dev/null || stat -c%s "$TMPDIR/db" 2>/dev/null)
 echo "  Database: $((db_size / 1048576))MB"
 
-# ════════════════════════════════════════════════════════════
 if [ "$N10" -gt 0 ]; then
 echo ""
 echo "══════════════════════════════════════"

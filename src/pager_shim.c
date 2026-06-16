@@ -169,18 +169,10 @@ static sqlite3_file *pagerShimDummyFile(void){
 
 static sqlite3_file *shimPagerFile(Pager *p){
   PagerShim *s = SHIM(p);
-  /* When the shim is bound to a chunk store, resolve through the store so
-  ** the file handle returned reflects the current cs->pFile rather than a
-  ** stale snapshot from shim creation. This is critical when another
-  ** actor (concurrent connection, peer process, or gc) replaces the
-  ** chunk store's file handle via csReloadFromDisk or gcRewriteFile. */
+  /* Resolve through the store so reloads cannot leave a stale file handle. */
   if( s->pStore ){
     sqlite3_file *pCurrent = chunkFileGetHandle(&((ChunkStore*)s->pStore)->file);
-    /* The store owns the handle and may have closed it without reopening — e.g.
-    ** a csRollbackFailedAppend reopen that failed under OOM leaves it NULL. Do
-    ** NOT fall back to s->pFd here: it is the stale snapshot from shim creation
-    ** and may point at the handle the store just freed (use-after-free). Return
-    ** the inert dummy so file ops fail cleanly until the store reopens. */
+    /* Never fall back to s->pFd; it may be a freed pre-reload handle. */
     return pCurrent ? pCurrent : pagerShimDummyFile();
   }
   return s->pFd;

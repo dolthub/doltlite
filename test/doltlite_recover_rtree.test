@@ -6,17 +6,6 @@ set testprefix doltlite_recover_rtree
 
 ifcapable !rtree { finish_test ; return }
 
-# RTree shadow-table corruption must surface on access, but it must not make
-# schema reload fail before DROP TABLE can invoke xDestroy and clean up the
-# shadow tables.
-#
-# covers: rtree rtree8-2.1.6 -- after the %_node table is emptied and a table
-#   access reports corruption, DROP TABLE still succeeds and the virtual table
-#   name can be recreated (1.1-1.6)
-# covers: rtree reopen-before-drop -- the same cleanup path works if the schema
-#   is reloaded by a fresh connection before DROP TABLE (2.1-2.4)
-# not-covered: full rtree wrapper divergences; this file only gates the
-#   shadow-table cleanup contract that previously aborted test/rtree.test
 
 do_execsql_test 1.1 {
   CREATE VIRTUAL TABLE t1 USING rtree_i32(id, x1, x2);

@@ -1,30 +1,4 @@
 #!/bin/bash
-# run_testfixture.sh — Run SQLite testfixture tests with per-test divergence tracking
-#
-# Usage: bash run_testfixture.sh <label> <timeout_secs> test1 test2 ...
-#
-# For each .test file:
-#   - Runs it via ./testfixture under `timeout`
-#   - Parses the trailing "!Failures on these tests:" line to get the
-#     names of every test that failed (covers both mismatch failures
-#     and runtime-error failures)
-#   - Compares against the per-file expected-divergence list loaded
-#     from $DIVERGENCE_FILE (default: ../test/known_testfixture_divergences.txt)
-#
-# A test file is considered to pass overall if BOTH:
-#   (1) Every actual failure is on the expected-divergence list, AND
-#   (2) Every expected-divergence entry actually fails.
-#
-# (2) is the "fixed but still listed" check — it forces removal of
-# entries when a divergent test starts passing again, so the list
-# stays honest. If you want to add a new known divergence, append it
-# to the divergence file with a comment explaining why.
-#
-# Files that crash before producing the testfixture summary line
-# (no "errors out of N tests" line) are listed in $CRASH_FILE
-# (default: ../test/known_testfixture_crashes.txt). Crashes from
-# files NOT on that list are reported as failures; entries on the
-# list that DON'T crash are reported as needing removal.
 
 set -uo pipefail
 
@@ -32,18 +6,12 @@ LABEL="${1:?Usage: run_testfixture.sh <label> <timeout_secs> test1 test2 ...}"
 TIMEOUT="${2:?Missing timeout}"
 shift 2
 
-# Several inherited tests (misc7-6.*) exhaust all file descriptors one tcl
-# channel at a time, so runtime scales with the fd limit: at CI's default
-# soft limit (1024) they take seconds, but dev machines and docker commonly
-# raise it to ~1M, which looks like a hang. Pin the soft limit to match CI.
 ulimit -Sn 1024 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 CRASH_FILE="${CRASH_FILE:-$SCRIPT_DIR/known_testfixture_crashes.txt}"
 
-# Use `timeout` if available (Linux/CI); fall back to running directly
-# (macOS dev box doesn't ship coreutils' timeout by default)
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_CMD="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then
@@ -60,7 +28,6 @@ run_with_timeout() {
   fi
 }
 
-# Print the expected-divergence test names for a given file (one per line)
 expected_for() {
   local file="$1"
   [ -f "$DIVERGENCE_FILE" ] || return 0
@@ -74,7 +41,6 @@ expected_for() {
   ' "$DIVERGENCE_FILE"
 }
 
-# Returns 0 if $1 is on the crash list
 is_crash_expected() {
   local file="$1"
   [ -f "$CRASH_FILE" ] || return 1
@@ -90,7 +56,6 @@ is_crash_expected() {
   ' "$CRASH_FILE"
 }
 
-# is_in_set <name> <newline-separated-set>  → exit 0 if name is in set
 is_in_set() {
   local needle="$1"
   local haystack="$2"
@@ -138,7 +103,6 @@ for test in "$@"; do
     unused_lines="$unused_lines"$'\n'"  $test (crash list)"
   fi
 
-  # actual failures: split the !Failures line on whitespace, one per line
   actual=""
   if [ -n "$fail_line" ]; then
     actual=$(echo "$fail_line" | sed 's/^!Failures on these tests://' | tr ' ' '\n' | grep -v '^$' || true)

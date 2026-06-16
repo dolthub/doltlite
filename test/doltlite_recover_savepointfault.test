@@ -4,19 +4,6 @@ source $testdir/malloc_common.tcl
 
 set testprefix doltlite_recover_savepointfault
 
-# Recovered coverage for savepointfault.test. malloc-4's -sqlprep opens
-# with "PRAGMA auto_vacuum = incremental" (and later runs "PRAGMA
-# incremental_vacuum"); doltlite accepts both as no-ops, so the upstream
-# file now completes. But because incremental_vacuum no-ops, the savepoint
-# in malloc-4's prep records no freelist changes and its ROLLBACK TO body
-# has nothing real to roll back — the page-freelist rollback path it
-# targets still has no doltlite equivalent. The fault scenarios that do
-# not depend on auto_vacuum are ported here verbatim.
-#
-# covers: savepointfault savepointfault-malloc-1 — OOM at every allocation point through nested savepoints with INSERT/DELETE, ROLLBACK TO, RELEASE; each iteration either fails with OOM or completes (malloc-1)
-# covers: savepointfault savepointfault-malloc-2 — same contract under cache pressure: multi-hundred-row table, nested savepoints with DELETEs, double ROLLBACK TO, RELEASE (malloc-2)
-# covers: savepointfault savepointfault-ioerr-3 — IO errors at every point through BEGIN/UPDATE/SAVEPOINT/UPDATE/COMMIT; database checksum verified intact after each recovery (ioerr-3)
-# not-covered: savepointfault savepointfault-malloc-4 — prep's auto_vacuum=incremental and PRAGMA incremental_vacuum are accepted as no-ops, so the upstream file runs whole; with incremental_vacuum a no-op the savepoint holds no freelist changes and the ROLLBACK TO under OOM exercises only an empty-savepoint rollback — the page-freelist rollback it targets has no doltlite equivalent
 
 do_malloc_test 1 -sqlprep {
   CREATE TABLE t1(a, b, c);

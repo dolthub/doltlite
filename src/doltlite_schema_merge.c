@@ -90,11 +90,7 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   nVal = pChange->nNewVal;
   if( !pVal || nVal<=0 ) return SQLITE_OK;
 
-  /* PROLLY_DIFF_ADD: their branch inserted a new row that doesn't exist
-  ** in the merged working set (row-merge was skipped because of schema
-  ** actions). UPDATE WHERE rowid=? would match zero rows, leaving the
-  ** new column NULL. Use the INSERT statement so the row materializes
-  ** with all their-side column values. */
+  /* Added rows need INSERT; UPDATE would match nothing after schema merge. */
   bIsAdd = (pChange->type == PROLLY_DIFF_ADD);
   pStmt = bIsAdd ? ctx->pIns : ctx->pUpd;
   if( !pStmt ) return SQLITE_OK;

@@ -6,8 +6,6 @@ db_rm() { rm -f "$1" "${1}-wal"; }
 echo "=== dolt_revert dirty-set behavior ==="
 echo ""
 
-# Case 1: dirty unstaged change to an UNRELATED table -> revert SUCCEEDS,
-# dirty change is included in the revert commit, leaving a clean worktree.
 
 DB=/tmp/test_rv_dirty_unrelated_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
@@ -31,8 +29,6 @@ run_test "rv_dirty_unrelated_log_has_revert" \
 
 db_rm "$DB"
 
-# Case 2: dirty unstaged change to the SAME table the revert would touch
-# -> revert REFUSES, no new commit, dirty change still there.
 
 DB=/tmp/test_rv_dirty_same_table_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
@@ -52,9 +48,6 @@ run_test "rv_dirty_same_row_kept" \
 
 db_rm "$DB"
 
-# Case 3: STAGED change to ANY table -> revert REFUSES (git's index-clean
-# requirement), even when the staged table is unrelated to the revert target.
-# Matches Dolt 2.0.5 (dolthub/dolt#11073 follow-up commit 014f1d8).
 
 DB=/tmp/test_rv_staged_unrelated_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
@@ -79,7 +72,6 @@ run_test "rv_staged_unrelated_meta_staged" \
 
 db_rm "$DB"
 
-# Case 4: clean working set -> revert SUCCEEDS (regression guard).
 
 DB=/tmp/test_rv_clean_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);

@@ -1,11 +1,3 @@
-/*
-** Deterministic multi-process concurrency stress test for DoltLite.
-**
-** This is intentionally modest enough for CI, but broad enough to exercise
-** repeated cross-process writer serialization, concurrent reads, connection
-** reopen, and final persisted-state verification. If this fails, the seed,
-** worker count, and operation count printed by main() reproduce the run.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

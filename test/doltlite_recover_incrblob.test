@@ -9,15 +9,6 @@ ifcapable !incrblob {
   return
 }
 
-# Recovered coverage for incrblob.test and incrblob_err.test. The full
-# incrblob.test file assumes "PRIMARY KEY" tables still expose rowids for
-# sqlite3_blob_open(); DoltLite's non-integer primary-key tables are implicit
-# WITHOUT ROWID tables, so the native equivalent is to reject blob handles for
-# those tables and keep normal INTEGER PRIMARY KEY blob handles working.
-#
-# covers: incrblob incrblob-1.2.* - direct incrblob open/read/write against a table declared with PRIMARY KEY is rejected as WITHOUT ROWID on DoltLite
-# covers: incrblob incrblob-1.2.* - same blob API succeeds on an INTEGER PRIMARY KEY table and preserves byte-for-byte reads
-# covers: incrblob_err incrblob_err-4 - IO faults while reading through an open incrblob handle are cleaned up without changing database content
 
 do_execsql_test 1.0 {
   CREATE TABLE pk(a PRIMARY KEY, b BLOB);

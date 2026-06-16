@@ -1,14 +1,4 @@
 #!/bin/bash
-#
-# Physical chunk deduplication test.
-#
-# Content-addressed storage must not physically store multiple chunk records for
-# the same hash. This scans both compacted index entries and append-only WAL
-# chunk records so it catches duplicate bytes, not just duplicate reachable
-# index entries.
-#
-# Usage: bash chunk_physical_dups_test.sh [path/to/doltlite]
-#
 
 set -euo pipefail
 

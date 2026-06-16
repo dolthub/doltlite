@@ -1,34 +1,4 @@
 #!/bin/bash
-#
-# Oracle test: SQLite shell dot-commands
-#
-# Runs identical shell sessions against doltlite and stock sqlite3 built
-# from the same tree, compares normalized output. Exercises dot-commands
-# that should behave exactly like upstream SQLite — anything where
-# doltlite is a superset should still emit the stock behavior for the
-# shared surface.
-#
-# Covers: .tables, .schema, .indexes, .databases, .dump, .fullschema.
-#
-# Deliberately NOT covered (not comparable or not meaningful):
-#   - .mode, .headers, .separator — just change display, not stateful
-#     output. Exercised indirectly via queries in other oracles.
-#   - .show, .help, .timer, .stats — display engine-specific state.
-#   - .import — has its own oracle (oracle_import_test.sh).
-#   - .output, .read, .quit, .open — I/O redirection / shell control.
-#   - .backup, .restore, .recover — file-level ops not comparable.
-#
-# .dbinfo note: doltlite registers a custom sqlite_dbpage override
-# (doltlite_dbpage.c) that synthesizes a 100-byte SQLite-format-3
-# header on pgno=1, so .dbinfo's fixed format fields (page size,
-# read/write format, schema format, encoding, software version) match
-# stock. The mutable fields (file change counter, schema cookie, db
-# page count, largest root) are derived from doltlite's catalog/commit
-# state and differ from stock by design — those are NOT oracle-tested
-# here; the .dbinfo scenario only checks the invariant fields.
-#
-# Usage: bash oracle_dot_commands_test.sh [path/to/doltlite] [path/to/sqlite3]
-#
 
 set -u
 
@@ -39,11 +9,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-# Normalize filesystem paths to a placeholder so .databases output
-# (which prints the absolute DB path) compares equal even when the two
-# runs use different temp dirs. On macOS `/tmp` resolves to `/private/tmp`
-# via a symlink, which is what sqlite3's realpath-based .databases output
-# prints — strip the /private prefix first so the two sides line up.
 normalize() {
   tr -d '\r' \
     | sed -e "s|/private$TMPROOT|TMP|g" -e "s|$TMPROOT|TMP|g" \
@@ -51,17 +16,11 @@ normalize() {
     | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//'
 }
 
-# $1=name, $2=setup SQL, $3=dot command(s) to run
-# Both sides run setup + the command in one invocation so state matches.
-# String literals in setup MUST use single quotes to avoid the DQS=0
-# build option both engines share ("alice" would be parsed as a column).
 oracle() {
   local name="$1" setup="$2" cmd="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir"
 
-  # Use the same filename per side so .databases output (which prints
-  # the full DB path) compares equal after TMPROOT normalization.
   mkdir -p "$dir/dl" "$dir/sq"
   local dl_out
   dl_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
@@ -85,12 +44,6 @@ oracle() {
   fi
 }
 
-# Oracle that strips .dbinfo rows whose values legitimately differ
-# between stock SQLite (raw page storage) and doltlite (prolly tree
-# storage mapped into a synthesized page 1 header): change counter,
-# db page count, schema cookie, autovacuum top root, data version.
-# The remaining rows are format-level invariants that must match
-# byte-for-byte.
 oracle_dbinfo() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
@@ -121,7 +74,6 @@ oracle_dbinfo() {
   fi
 }
 
-# Common schemas for the test scenarios.
 SEED_EMPTY=""
 
 SEED_ONE_TABLE="CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -252,9 +204,6 @@ oracle "schema_sqlite_pattern_with_autoinc" "$SEED_AUTOINC" ".schema sqlite_%"
 
 echo "--- .dbinfo (invariant fields) ---"
 
-# Truly empty dbs have no stock page 1 to read (stock sqlite3 returns
-# "unable to read database header"), while doltlite always synthesizes
-# one. Only oracle scenarios with at least one table.
 oracle_dbinfo "dbinfo_one_table"  "$SEED_ONE_TABLE"
 oracle_dbinfo "dbinfo_with_index" "$SEED_WITH_INDEX"
 oracle_dbinfo "dbinfo_with_view"  "$SEED_WITH_VIEW"

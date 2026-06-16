@@ -1,315 +1,8 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# covers: wal5 wal5-pragma-1.1.1 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.3 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.4 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.5 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.6 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.7 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.9 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.11 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.1.12 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.1 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.3 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.4 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.5 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.6 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.7 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.9 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.11 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-1.2.12 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all
-# covers: wal5 wal5-pragma-2.2.1.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.1.1.3 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.1.1.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.2.2.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.1.2.3 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.1.2.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.2.1.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.2.1.5 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.2.2.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.2.2.5 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.1.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.1.6 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.1.7 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.1.8 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.2.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.2.6 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.2.7 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.3.2.8 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen
-# covers: wal5 wal5-pragma-2.4.1.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.1.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.2.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.2.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.3.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.3.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.3.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.3.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.4.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.4.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.4.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.4.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.5.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.5.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.5.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.5.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.6.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.6.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.6.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.6.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.7.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.7.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.7.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.7.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.8.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.8.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.8.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.8.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.9.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.9.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.9.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.9.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.10.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.10.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.10.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.10.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.11.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.11.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.11.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.11.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.12.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.12.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.12.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.12.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.13.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.13.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.13.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.13.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.14.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.14.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.14.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-2.4.14.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after
-# covers: wal5 wal5-pragma-3.1.2 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}
-# covers: wal5 wal5-pragma-3.1.3 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}
-# covers: wal5 wal5-pragma-3.1.4 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}
-# covers: wal5 wal5-pragma-3.2.2 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}
-# covers: wal5 wal5-pragma-3.2.3 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}
-# covers: wal5 wal5-pragma-3.2.4 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}
-# covers: wal5 wal5-pragma-4.1.1 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.1.2 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.1.3 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.1.5 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.2.1 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.2.2 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.2.3 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-4.2.5 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar
-# covers: wal5 wal5-pragma-5.1.1 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.3 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.5 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.6 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.8 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.9 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.10 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.11 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.12 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.14 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.15 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.16 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.17 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.18 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.19 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.20 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.1.21 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.1 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.3 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.5 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.6 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.8 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.9 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.10 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.11 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.12 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.14 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.15 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.16 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.17 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.18 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.19 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.20 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-pragma-5.2.21 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact
-# covers: wal5 wal5-capi-1.1.1 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.3 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.4 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.5 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.6 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.7 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.9 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.11 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.1.12 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.1 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.3 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.4 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.5 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.6 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.7 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.9 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.11 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-1.2.12 — sec 3 reader-snapshot scenario: wal_checkpoint reports {0 0 0}, open reader keeps its snapshot, all rows durable across reopen-all; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.2.1.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.1.1.3 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.1.1.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.2.2.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.1.2.3 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.1.2.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.2.1.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.2.1.5 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.2.2.4 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.2.2.5 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.1.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.1.6 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.1.7 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.1.8 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.2.2 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.2.6 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.2.7 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.3.2.8 — sec 5 attached-db checkpoint: main and aux wal_checkpoint -> {0 0 0}, rows in both dbs durable across reopen; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.1.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.1.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.2.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.2.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.3.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.3.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.3.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.3.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.4.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.4.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.4.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.4.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.5.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.5.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.5.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.5.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.6.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.6.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.6.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.6.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.7.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.7.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.7.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.7.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.8.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.8.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.8.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.8.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.9.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.9.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.9.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.9.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.10.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.10.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.10.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.10.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.11.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.11.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.11.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.11.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.12.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.12.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.12.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.12.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.13.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.13.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.13.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.13.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.14.1.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.14.1.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.14.2.2 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-2.4.14.2.3 — secs 1+4 mode/busy matrix: FULL/RESTART/TRUNCATE pragma forms rejected verbatim, passive/unknown-mode -> {0 0 0}, checkpoint reports busy=1 while a writer holds the lock, concurrent writer gets "database is locked", both connections usable after; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-3.1.2 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-3.1.3 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-3.1.4 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-3.2.2 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-3.2.3 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-3.2.4 — sec 5 cross-connection checkpoint: second connection sees journal_mode=wal, its wal_checkpoint -> {0 0 0}; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-4.1.1 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-4.1.3 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-4.1.5 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-4.2.1 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-4.2.3 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-4.2.5 — sec 6 truncate-class checkpoint: post-checkpoint data visible to a second connection, that connection can write, no -wal sidecar; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.1 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.3 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.5 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.6 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.8 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.9 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.10 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.12 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.14 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.15 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.16 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.17 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.18 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.19 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.1.21 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.1 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.3 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.5 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.6 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.8 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.9 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.10 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.12 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.14 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.15 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.16 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.17 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.18 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.19 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: wal5 wal5-capi-5.2.21 — secs 3+6 already-checkpointed blocking modes: checkpoint with reader open, write-txn ROLLBACK leaves committed rows intact; checkpoint API form proven in sec 2 (sqlite3_wal_checkpoint_v2 all modes -> {0 0 0})
-# covers: walhook walhook-1.1 — sec 7: wal_hook installs cleanly, commits with hook in place persist; hook stays silent (doltlite has no WAL frames) as stable contract
-# covers: walhook walhook-1.2 — sec 7: wal_hook installs cleanly, commits with hook in place persist; hook stays silent (doltlite has no WAL frames) as stable contract
-# covers: walhook walhook-1.3 — sec 7: wal_hook installs cleanly, commits with hook in place persist; hook stays silent (doltlite has no WAL frames) as stable contract
-# covers: walhook walhook-1.4 — sec 7: wal_hook installs cleanly, commits with hook in place persist; hook stays silent (doltlite has no WAL frames) as stable contract
-# covers: walhook walhook-1.5 — sec 7: wal_hook installs cleanly, commits with hook in place persist; hook stays silent (doltlite has no WAL frames) as stable contract
-# covers: walhook walhook-2.4 — sec 7: wal_autocheckpoint=10 echoed, write workload under it succeeds and is durable across reopen
-# covers: walhook walhook-2.5 — sec 7: wal_autocheckpoint=10 echoed, write workload under it succeeds and is durable across reopen
-# covers: walhook walhook-2.6 — sec 7: wal_autocheckpoint=10 echoed, write workload under it succeeds and is durable across reopen
-# covers: walhook walhook-2.7 — sec 7: wal_autocheckpoint=10 echoed, write workload under it succeeds and is durable across reopen
-# covers: walhook walhook-2.8 — sec 7: wal_autocheckpoint=10 echoed, write workload under it succeeds and is durable across reopen
-# covers: walhook walhook-2.9 — sec 7: wal_autocheckpoint=10 echoed, write workload under it succeeds and is durable across reopen
-# covers: nockpt nockpt-1.1 — sec 8.1-8.4: no -wal sidecar ever exists, NO_CKPT_ON_CLOSE accepted (returns 1), all rows durable across close/reopen
-# covers: nockpt nockpt-1.2 — sec 8.1-8.4: no -wal sidecar ever exists, NO_CKPT_ON_CLOSE accepted (returns 1), all rows durable across close/reopen
-# covers: nockpt nockpt-1.6 — sec 8.1-8.4: no -wal sidecar ever exists, NO_CKPT_ON_CLOSE accepted (returns 1), all rows durable across close/reopen
-# covers: nockpt nockpt-1.8 — sec 8.1-8.4: no -wal sidecar ever exists, NO_CKPT_ON_CLOSE accepted (returns 1), all rows durable across close/reopen
-# covers: nockpt nockpt-1.10 — sec 8.1-8.4: no -wal sidecar ever exists, NO_CKPT_ON_CLOSE accepted (returns 1), all rows durable across close/reopen
-# covers: nockpt nockpt-1.11 — sec 8.1-8.4: no -wal sidecar ever exists, NO_CKPT_ON_CLOSE accepted (returns 1), all rows durable across close/reopen
-# covers: nockpt nockpt-1.14 — sec 8.5-8.6: journal_mode=delete rejected verbatim, mode still reports wal
-# covers: nockpt nockpt-2.3 — sec 8.7-8.9 partial-checkpoint scenario: UPDATE + wal_checkpoint while reader holds BEGIN, then third connection sees integrity ok and updated row
-# covers: wal7 wal7-1.0 — sec 9: journal_size_limit reports/sets as no-op (-1) before and after journal_mode=WAL, 200KB-blob create/delete/insert-select workload correct and durable
-# covers: wal7 wal7-1.1 — sec 9: journal_size_limit reports/sets as no-op (-1) before and after journal_mode=WAL, 200KB-blob create/delete/insert-select workload correct and durable
-# covers: wal7 wal7-1.2 — sec 9: journal_size_limit reports/sets as no-op (-1) before and after journal_mode=WAL, 200KB-blob create/delete/insert-select workload correct and durable
-# covers: wal7 wal7-2.0 — sec 9: journal_size_limit reports/sets as no-op (-1) before and after journal_mode=WAL, 200KB-blob create/delete/insert-select workload correct and durable
-# covers: wal7 wal7-3.0 — sec 9: journal_size_limit reports/sets as no-op (-1) before and after journal_mode=WAL, 200KB-blob create/delete/insert-select workload correct and durable
-# covers: wal7 wal7-4.0 — sec 9: journal_size_limit reports/sets as no-op (-1) before and after journal_mode=WAL, 200KB-blob create/delete/insert-select workload correct and durable
-# covers: tkt3457 tkt3457-1.1 — sec 10: no -journal file exists; db-file snapshot taken mid-transaction opens clean with only committed rows; original connection commits all rows
-# covers: tkt3457 tkt3457-1.2 — sec 10: no -journal file exists; db-file snapshot taken mid-transaction opens clean with only committed rows; original connection commits all rows
-# covers: tkt3457 tkt3457-1.3 — sec 10: no -journal file exists; db-file snapshot taken mid-transaction opens clean with only committed rows; original connection commits all rows
-# covers: tkt3457 tkt3457-1.4 — sec 10: no -journal file exists; db-file snapshot taken mid-transaction opens clean with only committed rows; original connection commits all rows
-# covers: tkt3457 tkt3457-1.5 — sec 10: no -journal file exists; db-file snapshot taken mid-transaction opens clean with only committed rows; original connection commits all rows
-# covers: where where-1.1.1 — sec 12: SELECT x,y,w WHERE w=10 -> {3 121 10} and EXPLAIN QUERY PLAN proves SEARCH via index i1w (search-count metric re-expressed as plan assertion)
-# covers: tkt-2d1a5c67d tkt-2d1a5c67d-3.6 — sec 11: committed db file copied to a new name opens clean and returns 'xyz' (chunk-store analog of WAL-file recovery)
-# covers: tkt3761 tkt3761-1.1 — sec 13: auto_vacuum=INCREMENTAL accepted as a no-op on :memory: (reads back 0), incremental_vacuum no-ops, DELETE+ROLLBACK in-memory leaves rows and integrity intact
 
-# Recovered intent for the jrnlwal_2 shard: journal/WAL pragma surface,
-# checkpoint semantics, and durability. doltlite has no WAL sidecar or
-# rollback journal; PRAGMA wal_checkpoint always reports {0 0 0} and the
-# mode forms are rejected. These tests pin that contract and re-assert the
-# data-correctness intent of the gated originals through real scenarios.
 
-#-------------------------------------------------------------------------
-# Section 1: journal/WAL pragma surface contract.
-#
 do_test doltlite_recover_jrnlwal_2-1.1 {
   execsql {PRAGMA journal_mode}
 } {wal}
@@ -362,10 +55,6 @@ do_test doltlite_recover_jrnlwal_2-1.15 {
   list [file exists test.db-wal] [file exists test.db-journal]
 } {0 0}
 
-#-------------------------------------------------------------------------
-# Section 2: checkpoint via the C API (wal5-capi class). All modes succeed
-# and report {0 0 0} because there is never a WAL to move.
-#
 do_test doltlite_recover_jrnlwal_2-2.1 {
   sqlite3_wal_checkpoint_v2 db passive
 } {0 0 0}
@@ -382,12 +71,6 @@ do_test doltlite_recover_jrnlwal_2-2.5 {
   sqlite3_wal_checkpoint_v2 db passive main
 } {0 0 0}
 
-#-------------------------------------------------------------------------
-# Section 3: wal5 1.* / 5.* scenario. A reader holding an open transaction
-# keeps its snapshot while a writer inserts and checkpoints; after COMMIT
-# it sees the new rows; a write transaction ROLLBACK leaves data intact;
-# everything survives closing and reopening every connection.
-#
 do_test doltlite_recover_jrnlwal_2-3.1 {
   sqlite3 db2 test.db
   execsql {BEGIN; SELECT x FROM t1 ORDER BY x} db2
@@ -424,12 +107,6 @@ do_test doltlite_recover_jrnlwal_2-3.7 {
   execsql {PRAGMA integrity_check}
 } {ok}
 
-#-------------------------------------------------------------------------
-# Section 4: wal5 2.4.* busy-matrix class. The writer lock is exclusive:
-# a second writer fails immediately with the doltlite error, a checkpoint
-# attempted while the writer holds the lock reports busy=1, and both
-# connections work after the conflict.
-#
 do_test doltlite_recover_jrnlwal_2-4.1 {
   sqlite3 db2 test.db
   execsql {BEGIN; INSERT INTO t1 VALUES(7, zeroblob(10))} db2
@@ -453,11 +130,6 @@ do_test doltlite_recover_jrnlwal_2-4.6 {
   execsql {PRAGMA integrity_check}
 } {ok}
 
-#-------------------------------------------------------------------------
-# Section 5: wal5 2.1-2.3 / 3.* class. Checkpointing covers attached
-# databases without error; other connections report journal_mode=wal and
-# may checkpoint; rows in both files survive reopen.
-#
 do_test doltlite_recover_jrnlwal_2-5.1 {
   forcedelete test.db2jw2
   execsql {
@@ -491,10 +163,6 @@ do_test doltlite_recover_jrnlwal_2-5.6 {
   execsql {DETACH aux}
 } {}
 
-#-------------------------------------------------------------------------
-# Section 6: wal5 4.* truncate class. After a (passive) checkpoint a
-# second connection sees all data, can write, and no -wal sidecar appears.
-#
 do_test doltlite_recover_jrnlwal_2-6.1 {
   execsql {PRAGMA wal_checkpoint}
   sqlite3 db2 test.db
@@ -509,12 +177,6 @@ do_test doltlite_recover_jrnlwal_2-6.3 {
   file exists test.db-wal
 } {0}
 
-#-------------------------------------------------------------------------
-# Section 7: walhook. The wal_hook installs cleanly and writes made with
-# it in place persist. doltlite never produces WAL frames, so the hook
-# staying silent is the pinned contract. wal_autocheckpoint=10 workload
-# from walhook-2.* completes and survives reopen.
-#
 set ::wal_hook [list]
 proc wal_hook_proc {zDb nEntry} { lappend ::wal_hook $zDb $nEntry ; return 0 }
 do_test doltlite_recover_jrnlwal_2-7.1 {
@@ -545,13 +207,6 @@ do_test doltlite_recover_jrnlwal_2-7.5 {
   execsql {SELECT count(*) FROM h4}
 } {5}
 
-#-------------------------------------------------------------------------
-# Section 8: nockpt. No -wal sidecar ever exists; NO_CKPT_ON_CLOSE is
-# accepted; data is durable across close/reopen regardless. journal_mode
-# cannot be changed away from wal. Partial-checkpoint scenario: a writer
-# updates and checkpoints while a reader holds an open transaction, then
-# a third connection verifies integrity and the updated row.
-#
 do_test doltlite_recover_jrnlwal_2-8.1 {
   execsql {
     CREATE TABLE c1(x INTEGER PRIMARY KEY, y, z);
@@ -609,12 +264,6 @@ do_test doltlite_recover_jrnlwal_2-8.9 {
   set res
 } {ok a b c d e g}
 
-#-------------------------------------------------------------------------
-# Section 9: wal7 journal_size_limit class. The pragma is a stable no-op
-# (-1) whether set before or after journal_mode=WAL, the big-blob
-# create/delete/insert-select workload completes correctly, and the data
-# survives reopen with no -wal file.
-#
 do_test doltlite_recover_jrnlwal_2-9.1 {
   db close
   forcedelete test.db
@@ -650,11 +299,6 @@ do_test doltlite_recover_jrnlwal_2-9.5 {
   execsql {SELECT count(*) FROM t1; SELECT z FROM t2}
 } {0 hi}
 
-#-------------------------------------------------------------------------
-# Section 10: tkt3457 hot-journal class. doltlite has no rollback journal;
-# the equivalent guarantee is that a snapshot of the database file taken
-# mid-transaction contains only committed state and opens cleanly.
-#
 do_test doltlite_recover_jrnlwal_2-10.1 {
   execsql {
     CREATE TABLE j1(a, b, c);
@@ -679,10 +323,6 @@ do_test doltlite_recover_jrnlwal_2-10.3 {
   execsql {SELECT a, b, c FROM j1 ORDER BY a}
 } {1 2 3 4 5 6}
 
-#-------------------------------------------------------------------------
-# Section 11: tkt-2d1a5c67d-3.6 recovery class. A copy of the committed
-# database file opens cleanly and serves the committed row.
-#
 do_test doltlite_recover_jrnlwal_2-11.1 {
   execsql {
     CREATE TABLE t4(a PRIMARY KEY, b);
@@ -698,11 +338,6 @@ do_test doltlite_recover_jrnlwal_2-11.1 {
   set res
 } {xyz ok}
 
-#-------------------------------------------------------------------------
-# Section 12: where-1.1.1. The sqlite_search_count metric is re-expressed
-# as a plan assertion: the indexed query returns the right row via a
-# SEARCH on i1w; forcing a scan returns the same row.
-#
 do_test doltlite_recover_jrnlwal_2-12.1 {
   execsql {CREATE TABLE wt1(w int, x int, y int)}
   for {set i 1} {$i<=100} {incr i} {
@@ -724,12 +359,6 @@ do_test doltlite_recover_jrnlwal_2-12.4 {
   lindex [execsql {EXPLAIN QUERY PLAN SELECT x, y, w FROM wt1 WHERE +w=10}] 3
 } {SCAN wt1}
 
-#-------------------------------------------------------------------------
-# Section 13: tkt3761. auto_vacuum/incremental_vacuum are accepted as
-# no-ops (auto_vacuum reads back 0); the rollback-integrity intent
-# (DELETE inside a transaction, then ROLLBACK, database intact) holds
-# on an in-memory database.
-#
 do_test doltlite_recover_jrnlwal_2-13.1 {
   sqlite3 dbm :memory:
   list [catchsql {PRAGMA auto_vacuum=INCREMENTAL} dbm] \

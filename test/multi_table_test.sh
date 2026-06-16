@@ -1,10 +1,4 @@
 #!/bin/bash
-#
-# Multi-table large-scale test.
-# Tests 3 tables with 100K+ rows each, indexes, joins, diffs, merges, clones.
-#
-# Usage: multi_table_test.sh [doltlite-binary] [--quick]
-#
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 TMPDIR=$(mktemp -d)
@@ -51,7 +45,6 @@ else
   echo "=== FULL: ${NU} users, ${NO} orders, ${NE} events ==="
 fi
 
-# ── 1. Create schema and load data ──────────────────────
 echo ""
 echo "--- 1. Create 3 tables and load data ---"
 t0=$(ts)
@@ -89,7 +82,6 @@ check "orders count" "$NO" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM events;")
 check "events count" "$NE" "$result"
 
-# ── 2. Cross-table queries ──────────────────────────────
 echo ""
 echo "--- 2. Cross-table queries ---"
 t0=$(ts)
@@ -109,7 +101,6 @@ result=$("$DB" "$TMPDIR/db" "SELECT avg(price) > 0 FROM orders;")
 check "avg price positive" "1" "$result"
 echo "  ($(( $(ts) - t0 ))s)"
 
-# ── 3. Bulk update across tables ────────────────────────
 echo ""
 echo "--- 3. Bulk update + commit ---"
 t0=$(ts)
@@ -129,7 +120,6 @@ check "1% users inactive" "$((NU/100))" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM events;")
 check "90% events remain" "$((NE - NE/10))" "$result"
 
-# ── 4. Diff across tables ──────────────────────────────
 echo ""
 echo "--- 4. Diff ---"
 t0=$(ts)
@@ -143,7 +133,6 @@ result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM dolt_diff_users WHERE diff_typ
 check "diff: users modified" "$((NU/100))" "$result"
 echo "  ($(( $(ts) - t0 ))s)"
 
-# ── 5. Branch + merge with multi-table changes ─────────
 echo ""
 echo "--- 7. Branch + merge ---"
 t0=$(ts)
@@ -172,7 +161,6 @@ check "merged: main change kept" "99" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT product FROM orders WHERE id=$((NO+1));")
 check "merged: feature order present" "NewProduct" "$result"
 
-# ── 8. Clone multi-table database ──────────────────────
 echo ""
 echo "--- 8. Clone ---"
 t0=$(ts)
@@ -190,7 +178,6 @@ check "clone: orders" "$((NO+1))" "$result"
 result=$("$DB" "$TMPDIR/clone" "SELECT count(*) FROM events;")
 check "clone: events" "$((NE - NE/10))" "$result"
 
-# ── 9. Schema change (ALTER TABLE) ─────────────────────
 echo ""
 echo "--- 9. Schema change ---"
 t0=$(ts)
@@ -209,7 +196,6 @@ check "phone column populated" "555-42" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT phone IS NULL FROM users WHERE id=500;")
 check "phone null for unset rows" "1" "$result"
 
-# ── 10. Push schema change + pull ──────────────────────
 echo ""
 echo "--- 10. Push schema change + pull ---"
 t0=$(ts)
@@ -220,7 +206,6 @@ echo "  ($(( $(ts) - t0 ))s)"
 result=$("$DB" "$TMPDIR/clone" "SELECT phone FROM users WHERE id=42;")
 check "clone pulled schema change" "555-42" "$result"
 
-# ── 11. Index creation (after merge, on final data) ────
 echo ""
 echo "--- 11. Index creation ---"
 t0=$(ts)
@@ -241,7 +226,6 @@ check "users intact after index" "$((NU+1))" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM orders;")
 check "orders intact after index" "$((NO+1))" "$result"
 
-# ── 12. 20 tables ──────────────────────────────────────
 echo ""
 echo "--- 11. 20 dimension tables ---"
 t0=$(ts)
@@ -256,7 +240,6 @@ check "20 dim tables" "20" "$result"
 result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM dim_15;")
 check "dim tables have 500 rows" "500" "$result"
 
-# ── 12. File size ──────────────────────────────────────
 echo ""
 db_size=$(stat -f%z "$TMPDIR/db" 2>/dev/null || stat -c%s "$TMPDIR/db" 2>/dev/null)
 db_mb=$((db_size / 1048576))

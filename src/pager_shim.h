@@ -14,11 +14,7 @@ struct PagerShim {
   u32 magic;
   const PagerOps *pOps;
   sqlite3_file *pFd;
-  /* pStore is a back-reference to the chunk store whose pFile this shim
-  ** exposes. When pStore is non-NULL, callers of shimPagerFile resolve
-  ** pStore->pFile dynamically rather than reading the cached pFd, so
-  ** cross-actor mutations that replace cs->pFile (via csReloadFromDisk
-  ** or gc rewrite) do not leave the shim pointing at a freed handle. */
+  /* Non-NULL means shimPagerFile resolves the current store pFile. */
   struct ChunkStore *pStore;
   char *zFilename;
   char *zJournal;

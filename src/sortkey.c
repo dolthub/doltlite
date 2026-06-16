@@ -442,13 +442,7 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
     return SQLITE_OK;
   }
   if( flags & MEM_IntReal ){
-    /* An integer-valued real (e.g. an integer coerced into a REAL column by
-    ** affinity): the value lives in u.i. Encode it via its integer serial
-    ** type — encodeNumeric normalizes integer serial types to the same IEEE
-    ** bytes as serialType 7, so this produces a key identical to a true real
-    ** of the same magnitude. Bailing here (SQLITE_NOTFOUND) instead let two
-    ** identical integer-valued reals build mismatched index keys, so UNIQUE
-    ** conflicts went undetected and duplicates were stored (#1267). */
+    /* Encode integer-valued REALs identically to true REALs of that value. */
     intSerialType(pMem->u.i, pSerialType, pLen);
     return SQLITE_OK;
   }
@@ -463,11 +457,7 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
   }
   if( flags & (MEM_Str|MEM_Blob) ){
     if( flags & MEM_Zero ){
-      /* A zeroblob's tail exists only as u.nZero. Bailing (SQLITE_NOTFOUND)
-      ** let an indexed probe build a key that misses the stored entry, so
-      ** WHERE b=zeroblob(N) found nothing through an index (zeroblob-2.2) —
-      ** the MEM_IntReal lesson again. Expand to the literal bytes; on OOM
-      ** mallocFailed is set and the statement aborts. */
+      /* Expand zeroblob tails so indexed probes match stored keys. */
       if( sqlite3VdbeMemExpandBlob(pMem)!=SQLITE_OK ){
         return SQLITE_NOMEM;
       }

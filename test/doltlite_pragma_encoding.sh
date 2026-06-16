@@ -1,7 +1,4 @@
 #!/bin/bash
-# Doltlite's prolly storage stores SQL text in UTF-8. Ignore unsupported
-# database encodings instead of allowing SQLite's UTF-16 setup path to fail
-# later while initializing the schema.
 
 source "$(dirname "$0")/lib/doltlite_test_common.sh"
 
