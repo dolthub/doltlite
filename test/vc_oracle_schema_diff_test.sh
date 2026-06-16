@@ -598,12 +598,6 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "main" "feat" "u"
 
-# The three replay_fk_tables_plus_check cases below currently produce no rows
-# on both doltlite AND dolt for dolt_schema_diff of replayed FK tables (p,c).
-# The parity holds, but whether dolt_schema_diff should skip tables introduced
-# by replay is an open question (related to #839). Marked EXPECT_EMPTY so the
-# empty-both guard doesn't block CI on a parity-preserving gap; swap back to
-# the standard assertion once that question is resolved.
 oracle "merge_replay_fk_tables_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

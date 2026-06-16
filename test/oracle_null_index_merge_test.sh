@@ -1,14 +1,4 @@
 #!/bin/bash
-#
-# Oracle tests: NULL values in indexed columns through merge.
-#
-# Verifies that tables with NULLs in non-PK indexed columns
-# survive merge correctly. Non-unique indexes can have multiple
-# rows with the same sort key (e.g. two rows with a=NULL, b=NULL)
-# and the merge must preserve all of them.
-#
-# Usage: bash test/oracle_null_index_merge_test.sh <doltlite>
-#
 
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite>}"
@@ -29,7 +19,6 @@ dl() {
 
 echo "=== NULL Index Merge Tests ==="
 
-# ── A: Non-unique index with duplicate NULL keys through merge ──
 echo ""
 echo "--- A: Duplicate NULL index keys through merge ---"
 
@@ -64,7 +53,6 @@ INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
 [ "$INDEX_CNT" = "7" ] && pass_name "a_index_count" || fail_name "a_index_count; got $INDEX_CNT"
 [ "$INTEGRITY" = "ok" ] && pass_name "a_integrity" || fail_name "a_integrity; got $INTEGRITY"
 
-# ── B: Simple case: no NULL collisions ────────────────────
 echo ""
 echo "--- B: Index merge without NULL collisions ---"
 
@@ -90,7 +78,6 @@ INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
 [ "$CNT" = "3" ] && pass_name "b_count" || fail_name "b_count; got $CNT"
 [ "$INTEGRITY" = "ok" ] && pass_name "b_integrity" || fail_name "b_integrity; got $INTEGRITY"
 
-# ── C: Single NULL column in index ────────────────────────
 echo ""
 echo "--- C: Single NULL column in index through merge ---"
 
@@ -121,7 +108,6 @@ INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
 [ "$INDEX_CNT" = "6" ] && pass_name "c_index_count" || fail_name "c_index_count; got $INDEX_CNT"
 [ "$INTEGRITY" = "ok" ] && pass_name "c_integrity" || fail_name "c_integrity; got $INTEGRITY"
 
-# ── D: All NULLs from both sides ──────────────────────────
 echo ""
 echo "--- D: All-NULL index values from both branches ---"
 

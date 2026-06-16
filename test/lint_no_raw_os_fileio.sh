@@ -1,10 +1,4 @@
 #!/bin/bash
-#
-# DoltLite storage should route filesystem access through SQLite's VFS layer.
-# This lint keeps raw OS file calls out of DoltLite-owned production code.
-#
-# Allowlisted exceptions are either socket/pipe descriptors, not database
-# files, or the os_kv.c VFS implementation itself.
 
 set -u
 

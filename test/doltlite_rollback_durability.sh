@@ -1,14 +1,4 @@
 #!/bin/bash
-# Pure-SQL ROLLBACK must be byte-stable on disk: BEGIN, mutate, ROLLBACK,
-# close — the file is identical to its pre-BEGIN state. This locks in the
-# bMatchesDisk short-circuit in prollyBtreeRollback (chunk_store writes
-# are skipped when the in-memory state matches what's already on disk).
-#
-# Deliberately NOT covered here:
-# - VC commands inside a txn (dolt_checkout etc.) persist immediately by
-#   design and ROLLBACK cannot undo them.
-# - COMMITs that fail with constraint violations persist the violations
-#   catalog as a user-visible feature.
 DOLTLITE="${1:-./doltlite}"
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT

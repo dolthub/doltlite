@@ -1,11 +1,3 @@
-/*
-** Concurrent version-control ref mutation stress test.
-**
-** Each worker repeatedly creates a unique branch, commits a disjoint row on
-** that branch, races to merge it back into main, then deletes the branch.
-** This complements vc_concurrency_test.c, which mostly exercises concurrent
-** commits to pre-created worker branches.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -149,10 +149,6 @@ for episode in range(6):
         next_id += 1
         checkpoint(f"{episode}_dirty_before_reset")
         vc_call("dolt_reset", "--hard")
-        # The hard reset restores the committed branch state. Since all dirty
-        # changes above were intentionally uncommitted, replay the same model by
-        # reopening the branch from Dolt/Doltlite rather than carrying the dirty
-        # mutations forward.
         branches[current] = before
         checkpoint(f"{episode}_after_reset")
 

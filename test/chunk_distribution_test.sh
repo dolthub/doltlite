@@ -1,21 +1,4 @@
 #!/bin/bash
-#
-# Chunk size distribution test.
-#
-# After porting Dolt's keySplitter (Weibull-distribution boundary
-# check) to DoltLite, prolly tree chunks should cluster tightly
-# around the 4096-byte target. This test materializes a moderately
-# large database, then walks the chunk store directly and asserts:
-#
-#   - mean prolly chunk size is in [3200, 4500]
-#   - stdev is below 1500 (tighter than the old geometric distribution)
-#   - max observed is below the MAX clamp (16384)
-#   - min observed is at or above the MIN clamp (512)
-#   - median is within 600 bytes of mean (roughly symmetric)
-#   - the bulk of chunks (p10..p90) span < 4000 bytes
-#
-# Usage: bash chunk_distribution_test.sh [path/to/doltlite]
-#
 
 set -u
 set -o pipefail
@@ -56,7 +39,6 @@ STATS=$(python3 "$ANALYZER" "$DBFILE" --json)
 echo "$STATS"
 echo
 
-# Assertions
 fail=0
 check() {
   local name="$1"

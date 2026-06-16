@@ -305,7 +305,6 @@ else
   echo "    expected 1, got $DL_I"
 fi
 
-# ── Test J: Rollback inside nested savepoint before dolt_commit ──
 echo ""
 echo "--- ROLLBACK TO nested savepoint before dolt_commit ---"
 
@@ -342,7 +341,6 @@ else
   echo "    expected clean status, got $DL_J_STATUS"
 fi
 
-# ── Test K: DDL inside nested savepoint committed by dolt_commit ──
 echo ""
 echo "--- DDL in nested savepoint + dolt_commit ---"
 
@@ -408,7 +406,6 @@ else
   echo "    expected clean status, got $DL_K_STATUS"
 fi
 
-# ── Test L: Connection remains usable after nested savepoint commit ──
 echo ""
 echo "--- Reuse connection after nested savepoint + dolt_commit ---"
 
@@ -480,7 +477,6 @@ else
   echo "    expected clean status, got $DL_L_STATUS"
 fi
 
-# ── Test M: BEGIN, BEGIN, COMMIT, dolt_commit ──────────────
 echo ""
 echo "--- BEGIN + BEGIN + COMMIT + dolt_commit ---"
 
@@ -514,7 +510,6 @@ else
   echo "    expected clean status, got $DL_M_STATUS"
 fi
 
-# ── Test N: BEGIN, BEGIN, dolt_commit, COMMIT ──────────────
 echo ""
 echo "--- BEGIN + BEGIN + dolt_commit + COMMIT ---"
 
@@ -548,7 +543,6 @@ else
   echo "    expected clean status, got $DL_N_STATUS"
 fi
 
-# ── Test O: BEGIN IMMEDIATE, BEGIN, COMMIT, dolt_commit ────
 echo ""
 echo "--- BEGIN IMMEDIATE + BEGIN + COMMIT + dolt_commit ---"
 
@@ -582,7 +576,6 @@ else
   echo "    expected clean status, got $DL_O_STATUS"
 fi
 
-# ── Test P: BEGIN IMMEDIATE, BEGIN, dolt_commit, COMMIT ────
 echo ""
 echo "--- BEGIN IMMEDIATE + BEGIN + dolt_commit + COMMIT ---"
 
@@ -616,7 +609,6 @@ else
   echo "    expected clean status, got $DL_P_STATUS"
 fi
 
-# ── Test Q: BEGIN IMMEDIATE + nested savepoint + dolt_commit ──
 echo ""
 echo "--- BEGIN IMMEDIATE + nested savepoint + dolt_commit ---"
 

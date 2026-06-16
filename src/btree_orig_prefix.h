@@ -1,9 +1,4 @@
-/* Rename shim. The vanilla SQLite btree/pager/wal/backup code is
-** compiled with this header force-included (see Makefile) so every
-** external symbol it exports gets an `orig_` prefix. That keeps the
-** original implementation linkable alongside doltlite's shimmed
-** entry points (btree.c, pager_shim.c), which export the unprefixed
-** names used by the rest of SQLite. */
+/* Prefix stock btree/pager/wal/backup symbols so shims can coexist. */
 
 #ifndef BTREE_ORIG_PREFIX_H
 #define BTREE_ORIG_PREFIX_H

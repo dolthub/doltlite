@@ -1,11 +1,3 @@
-/*
-** Test doltliteFindAncestor: find common ancestor between two branches.
-**
-** Creates a commit history like:
-**   C1 -- C2 -- C3 (main)
-**               \-- C4 -- C5 (feature)
-** Then verifies that the common ancestor of C3 and C5 is C2.
-*/
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -67,35 +59,28 @@ int main(){
   rc = sqlite3_open(dbpath, &db);
   check("open db", rc==SQLITE_OK);
 
-  /* Create table and initial commit (C1) */
   execSql(db, "CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT)");
   execSql(db, "INSERT INTO t1 VALUES(1, 'hello')");
   execSql(db, "SELECT dolt_add('-A')");
   execSql(db, "SELECT dolt_commit('-m', 'C1: initial')");
 
-  /* Second commit on main (C2) - this will be the common ancestor */
   execSql(db, "INSERT INTO t1 VALUES(2, 'world')");
   execSql(db, "SELECT dolt_add('-A')");
   execSql(db, "SELECT dolt_commit('-m', 'C2: add row 2')");
 
-  /* Record C2's hash (this is HEAD on main right now) */
   const char *c2_hash = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   char c2_hash_buf[128];
   snprintf(c2_hash_buf, sizeof(c2_hash_buf), "%s", c2_hash);
 
-  /* Create feature branch at C2 */
   execSql(db, "SELECT dolt_branch('feature')");
 
-  /* Continue on main: C3 */
   execSql(db, "INSERT INTO t1 VALUES(3, 'main-only')");
   execSql(db, "SELECT dolt_add('-A')");
   execSql(db, "SELECT dolt_commit('-m', 'C3: main diverge')");
 
-  /* Record main HEAD (C3) */
   main_head = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(main_head_buf, sizeof(main_head_buf), "%s", main_head);
 
-  /* Switch to feature branch and make commits C4, C5 */
   execSql(db, "SELECT dolt_checkout('feature')");
   execSql(db, "INSERT INTO t1 VALUES(4, 'feature-row')");
   execSql(db, "SELECT dolt_add('-A')");
@@ -105,7 +90,6 @@ int main(){
   execSql(db, "SELECT dolt_add('-A')");
   execSql(db, "SELECT dolt_commit('-m', 'C5: more feature work')");
 
-  /* Record feature HEAD (C5) */
   feature_head = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(feature_head_buf, sizeof(feature_head_buf), "%s", feature_head);
 
@@ -113,7 +97,6 @@ int main(){
   printf("C3 (main HEAD):         %s\n", main_head_buf);
   printf("C5 (feature HEAD):      %s\n", feature_head_buf);
 
-  /* Test 1: Find ancestor of main HEAD and feature HEAD */
   {
     char sql[512];
     snprintf(sql, sizeof(sql),
@@ -124,7 +107,6 @@ int main(){
           strcmp(ancestor, c2_hash_buf)==0);
   }
 
-  /* Test 2: Ancestor of a commit with itself */
   {
     char sql[512];
     snprintf(sql, sizeof(sql),
@@ -135,7 +117,6 @@ int main(){
           strcmp(ancestor, main_head_buf)==0);
   }
 
-  /* Test 3: Ancestor where one is ancestor of the other */
   {
     char sql[512];
     snprintf(sql, sizeof(sql),
@@ -146,13 +127,11 @@ int main(){
           strcmp(ancestor, c2_hash_buf)==0);
   }
 
-  /* Merge feature back into main to exercise ^N parent selection. */
   execSql(db, "SELECT dolt_checkout('main')");
   execSql(db, "SELECT dolt_merge('feature')");
   main_head = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(merge_head_buf, sizeof(merge_head_buf), "%s", main_head);
 
-  /* Test 4: HEAD^2 resolves to the second parent of the merge commit. */
   {
     char sql[512];
     snprintf(sql, sizeof(sql),
@@ -163,7 +142,6 @@ int main(){
           strcmp(ancestor, feature_head_buf)==0);
   }
 
-  /* Test 5: second parent vs first parent merges at the branch point. */
   {
     char sql[512];
     snprintf(sql, sizeof(sql),

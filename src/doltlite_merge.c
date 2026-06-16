@@ -51,13 +51,7 @@ void doltliteIpkWriteBE(u8 *p, i64 v, int n){
   for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
 }
 
-/* Builds the sort key for an index entry from a table-row record. For
-** IPK tables, the row record stores the IPK column as NULL (a ghost
-** placeholder) — the real value lives in the b-tree intkey. If iPKey
-** points at the IPK column position, we substitute intKey for the
-** ghost so the resulting sort key matches the native index format
-** written by the SQL INSERT path (see sortKeyFromIntRecordLocal in
-** prolly_btree.c). */
+/* Build index keys from row records; substitute intkey for IPK ghosts. */
 int doltliteBuildIndexSortKey(
   const u8 *pRec, int nRec,
   const i16 *aiColumn, int nIdxCol,
@@ -109,10 +103,7 @@ int doltliteBuildIndexSortKey(
           aUsed[col] = 1;
         }
       }
-      /* For IPK tables, append the IPK column so the sort key resolves
-      ** ties between rows with equal indexed-column values. Non-indexed,
-      ** non-IPK columns are intentionally omitted — they are not part
-      ** of the native secondary-index key format. */
+      /* IPK is the secondary-index tie-breaker. */
       if( iPKey>=0 && iPKey<info.nField && !aUsed[iPKey] ){
         aFieldOrder[out++] = iPKey;
         aUsed[iPKey] = 1;
@@ -182,11 +173,7 @@ int doltliteBuildIndexSortKey(
   rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
                                     ppKey, pnKey);
   sqlite3_free(pIdxRec);
-  /* WITHOUT ROWID tables don't store the PK columns in the row value
-  ** (they're in the b-tree key). Append the table tree key bytes to
-  ** the sort key so the secondary index has a unique suffix per row,
-  ** matching the native INSERT path (e.g. iv key = sortkey(v1) +
-  ** sortkey(pk) for t(pk TEXT PRIMARY KEY, v1 INT UNIQUE)). */
+  /* WITHOUT ROWID secondary indexes suffix the table-tree key. */
   if( rc==SQLITE_OK && iPKey<0 && pTreeKey && nTreeKey>0 ){
     u8 *pCombined = sqlite3_realloc(*ppKey, *pnKey + nTreeKey);
     if( !pCombined ){
@@ -1855,11 +1842,7 @@ static int mergeCatalogPass1(
 ){
   int i, rc = SQLITE_OK;
   int iTable1Idx = -1;
-  /* Pending inline-merged index roots, applied at end of pass1. The
-  ** standalone three-way merge of an index entry doesn't see table-
-  ** row conflicts and would leak rejected-side index entries; the
-  ** inline merge driven from the table's row-changes correctly skips
-  ** conflict rows. We use the inline result. */
+  /* Inline index merges see row conflicts; standalone index merges do not. */
   struct IndexMergePatch {
     Pgno iTable;
     ProllyHash mergedRoot;
@@ -1977,14 +1960,7 @@ do_merge_entry:
           }
         }
 
-        /* sqlite_sequence rows are derived: the authoritative
-        ** AUTOINCREMENT counter lives in ChunkRefs.aSequences (a
-        ** non-versioned per-database map). When both branches modify
-        ** sqlite_sequence we'd hit row-level conflicts even though
-        ** the data underneath is just a per-table seq counter that
-        ** the shared map already tracks. Take ours; aSequences is
-        ** merged separately (max per table name) outside the
-        ** per-table row merge. */
+        /* sqlite_sequence is derived; aSequences is merged separately. */
         if( !skipRowMerge && zName
          && strcmp(zName, "sqlite_sequence")==0
          && oursChanged && theirsChanged ){
@@ -1992,12 +1968,7 @@ do_merge_entry:
           skipRowMerge = 1;
         }
 
-        /* sqlite_stat1/stat4 are derived data: re-ANALYZE on the merged
-        ** tree will regenerate them, so the contents of either side are
-        ** safely discarded. Take ours to keep some stats around, skip
-        ** the row-merge (which would either dedupe or raise spurious
-        ** PK conflicts on the same (tbl,idx) keys). dolt_merge runs
-        ** ANALYZE as a final merge step to refresh against merged data. */
+        /* sqlite_stat rows are derived; ANALYZE refreshes them after merge. */
         if( !skipRowMerge && zName
          && oursChanged && theirsChanged
          && (strcmp(zName, "sqlite_stat1")==0
@@ -2027,12 +1998,7 @@ do_merge_entry:
                     memset(aIdxInfo, 0, nIdx*(int)sizeof(MergeIndexInfo));
                     for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
                       struct TableEntry *oursIdx;
-                      /* For WITHOUT ROWID tables SQLite exposes the
-                      ** PK as a pseudo-INDEX in pTab->pIndex. Its
-                      ** tnum equals the table's own root, so treating
-                      ** it like a secondary index would build an
-                      ** empty-valued entry and the end-of-pass patch
-                      ** would overwrite the table tree with it. Skip. */
+                      /* WITHOUT ROWID exposes the PK as the table root. */
                       if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ){
                         continue;
                       }
@@ -2219,11 +2185,7 @@ post_merge_table_rows:;
     }
   }
 
-  /* Apply pending inline-merged index roots. Overrides whatever the
-  ** standalone three-way merge of each index entry produced — that
-  ** path doesn't see table-level conflicts and would leak rejected-
-  ** side index entries (e.g. theirs's iv entry for a row whose data
-  ** resolved to ours's value). */
+  /* Prefer inline index roots because they account for row conflicts. */
   {
     int ip;
     for(ip=0; ip<nPatches; ip++){
@@ -2303,11 +2265,7 @@ static int mergeCatalogPass2(
             if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
             aMerged[(*pnMerged)++] = newEntry;
           }else{
-            /* Index existed in ancestor, dropped on ours. Theirs may
-            ** have "modified" it as a side effect of data inserts —
-            ** auto-maintained index entries, not user intent. Honor
-            ** ours' explicit DROP and let the post-merge REINDEX
-            ** rebuild any surviving indexes against the merged data. */
+            /* Honor our explicit DROP; theirs may only have auto-updated it. */
           }
         }
         continue;

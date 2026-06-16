@@ -1,106 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of upstream collation assertions that doltlite's CI gates
-# as intentional divergences.  Doltlite's prolly-tree sort keys only support the
-# built-in BINARY, NOCASE, and RTRIM collations, so CREATE INDEX (and implicit
-# PK/UNIQUE indexes) that depend on a user-defined collation are rejected with
-# "doltlite does not support indexes with custom collation '<name>'".  Custom
-# collations remain fully usable in ORDER BY / WHERE / window frames.  These
-# tests re-assert: the exact rejection, that query SEMANTICS stay correct
-# without the rejected index (built-in BINARY stands in for the upstream
-# binary-equivalent custom TEXT collation), that built-in-collation indexes
-# still give sorted (nosort) scans, and that a database holding custom-collated
-# COLUMNS stays healthy across reopen without the collation registered (unlike
-# stock, where the custom-collated index makes integrity_check/REINDEX fail).
-#
-# covers: collate4 collate4-1.1.0 — table with NOCASE+custom-TEXT columns; NOCASE index accepted (1.1), custom-TEXT index rejected verbatim (1.2)
-# covers: collate4 collate4-1.1.4 — ORDER BY custom-TEXT column returns binary order via registered collation, sorter not index (1.4)
-# covers: collate4 collate4-1.1.5 — ORDER BY b COLLATE TEXT same result through explicit custom collate (1.5)
-# covers: collate4 collate4-1.1.7 — column-level "b UNIQUE COLLATE TEXT" rejected verbatim (12.1)
-# covers: collate4 collate4-1.1.8 — NOCASE PK iterates in case-insensitive order, nosort (1.8)
-# covers: collate4 collate4-1.1.9 — ORDER BY a COLLATE NOCASE == PK order, nosort (1.8)
-# covers: collate4 collate4-1.1.10 — binary (upstream TEXT) order over NOCASE PK needs a sort, correct result (1.9)
-# covers: collate4 collate4-1.1.11 — column-level UNIQUE index drives ORDER BY, nosort (1.11)
-# covers: collate4 collate4-1.1.12 — ORDER BY b == unique-index collation order, nosort (1.11)
-# covers: collate4 collate4-1.1.13 — ORDER BY b under the other collation requires sort, correct (1.12)
-# covers: collate4 collate4-1.1.14 — table-constraint PRIMARY KEY on custom-TEXT column rejected verbatim (1.13); built-in equivalent created (1.14)
-# covers: collate4 collate4-1.1.15 — UNIQUE(a NOCASE) index orders ORDER BY a, nosort (1.15)
-# covers: collate4 collate4-1.1.16 — ORDER BY a COLLATE NOCASE same, nosort (1.15)
-# covers: collate4 collate4-1.1.17 — ORDER BY a COLLATE BINARY sorts, correct order (1.16)
-# covers: collate4 collate4-1.1.18 — PK(b) drives ORDER BY b, nosort (1.17)
-# covers: collate4 collate4-1.1.19 — ORDER BY b in PK collation, nosort (1.17)
-# covers: collate4 collate4-1.1.20 — ORDER BY b COLLATE NOCASE sorts, correct (1.18)
-# covers: collate4 collate4-1.1.21 — CREATE INDEX ... (a COLLATE TEXT) rejected verbatim (1.20)
-# covers: collate4 collate4-1.1.24 — binary-order query over NOCASE column stays correct without the rejected custom index (1.23)
-# covers: collate4 collate4-1.1.27 — index with explicit built-in COLLATE NOCASE accepted and drives ORDER BY, nosort (1.21, 1.22)
-# covers: collate4 collate4-1.1.30 — all section-1 tables drop cleanly after rejections (1.24)
-# covers: collate4 collate4-1.2.0 — two-column index covering a custom-TEXT column rejected verbatim (2.2)
-# covers: collate4 collate4-1.2.1 — (a, b COLLATE BINARY) index orders ORDER BY a, nosort (2.4)
-# covers: collate4 collate4-1.2.2 — ORDER BY a COLLATE nocase same, nosort (2.4)
-# covers: collate4 collate4-1.2.4 — ORDER BY a, b-second-column, nosort via two-column index (2.5)
-# covers: collate4 collate4-1.2.6 — ORDER BY a, b in index collation, nosort (2.5)
-# covers: collate4 collate4-1.2.14 — index (a COLLATE TEXT, b COLLATE NOCASE) rejected verbatim (2.6)
-# covers: collate4 collate4-1.2.17 — (a COLLATE BINARY, b COLLATE NOCASE) index orders ORDER BY a COLLATE BINARY, nosort (2.8)
-# covers: collate4 collate4-1.2.19 — both index columns order the query, nosort (2.9)
-# covers: collate4 collate4-1.2.21 — DESC scan of that index, nosort (2.10)
-# covers: collate4 collate4-1.2.24 — DESC over both columns, nosort (2.11)
-# covers: collate4 collate4-1.2.7 — composite PK containing custom-TEXT column rejected verbatim (2.12); NOCASE composite PK equivalent created (2.13)
-# covers: collate4 collate4-1.2.8 — composite NOCASE PK orders ORDER BY a, nosort (2.14)
-# covers: collate4 collate4-1.2.9 — ORDER BY a COLLATE nocase same, nosort (2.14)
-# covers: collate4 collate4-1.2.10 — ORDER BY a COLLATE BINARY sorts, correct (2.15)
-# covers: collate4 collate4-1.2.11 — ORDER BY a, b follows PK, nosort (2.16)
-# covers: collate4 collate4-1.2.12 — ORDER BY a, b COLLATE NOCASE breaks PK order, sorts, correct (2.17)
-# covers: collate4 collate4-1.2.13 — ORDER BY a, b in declared collations == PK order, nosort (2.16)
-# covers: collate4 collate4-1.2.25 — section-2 tables drop cleanly (2.18)
-# covers: collate4 collate4-2.1.4 — custom-TEXT index rejected (3.4); cross-collation WHERE a=b result stays correct without it (3.1)
-# covers: collate4 collate4-2.1.5 — WHERE b=a compares under left operand's custom TEXT collation: exact-case match only (3.3)
-# covers: collate4 collate4-2.1.7 — NOCASE index accepted; WHERE a=b and IN-subquery results unchanged by index (3.2, 3.6)
-# covers: collate4 collate4-2.1.8 — a IN ('z','a') matches case-insensitively (3.5)
-# covers: collate4 collate4-2.1.9 — after the custom-index rejection the IN query still returns the NOCASE-correct rows (3.4, 3.5)
-# covers: collate4 collate4-2.2.1b — NATURAL JOIN across nocase/custom-text columns returns all matches with no index (4.1); the (a,b,c) index the original built is rejected because b is custom-collated (4.2)
-# covers: collate4 collate4-2.2.2 — explicit (.. c COLLATE TEXT) index rejected (4.3); BINARY-override index accepted and join result unchanged (4.4)
-# covers: collate4 collate4-4.3 — min() over custom-TEXT column correct with the index rejected (5.1, 5.2)
-# covers: collate4 collate4-4.4 — max() over custom-TEXT column correct (5.1)
-# covers: collate4 collate4-4.5 — COLLATE NUMERIC index rejected verbatim; min/max still correct (5.3, 5.4)
-# covers: enc enc-11.1 — index on test_collate column rejected verbatim; table usable, collation-based equality still answers (6.1, 6.2)
-# covers: select9 select9-2.1.1 — CREATE INDEX ... e COLLATE REVERSE rejected verbatim (7.1); compound UNION ORDER BY 2 COLLATE reverse, 1 returns the exact upstream rows (7.3)
-# covers: select9 select9-2.X — the rejected index truly does not exist: DROP INDEX fails with no such index (7.2)
-# covers: select9 select9-3.1 — SELECT a ORDER BY 1 with no index sorts, full correct order (7.4)
-# covers: select9 select9-4.1 — same assertion as 3.1 upstream (7.4); index restores nosort ordered scan (7.5)
-# covers: window6 window6-3.1 — index named with keyword 'window' using custom collation rejected verbatim (8.1); ORDER BY x COLLATE window correct without it (8.2) and with a keyword-named BINARY index (8.3)
-# covers: windowE windowE-1.0 — CREATE INDEX t1b ON t1(b custom-collated) rejected verbatim (9.1); window RANGE frame over the custom collation works, upstream 1.2 result (9.2)
-# covers: windowE windowE-1.3 — after the collation proc flips, the frame result equals stock's verified no-index answer (9.3)
-# covers: collate1 collate1-6.7 — DELETE of a parent row referenced through a case-insensitive-collated PK fails with FOREIGN KEY constraint failed; built-in NOCASE stands in for the custom '"""' collation and the row is addressed by PK value, not rowid (10.1, 10.2, 10.3)
-# covers: collate3 collate3-1.6.1 — custom-collated column orders correctly while registered (11.1); index on it rejected verbatim instead of being created (11.2)
-# covers: collate3 collate3-1.6.3 — reopen without the collation: integrity_check is ok because no custom-collated index can exist (11.10)
-# covers: collate3 collate3-1.6.4 — REINDEX succeeds after reopen for the same reason (11.11)
-# covers: collate3 collate3-1.7.1 — CREATE INDEX (a COLLATE caseless) on a plain column rejected verbatim (11.3)
-# covers: collate3 collate3-1.7.3 — integrity_check ok without the collation registered (11.10)
-# covers: collate3 collate3-1.7.4 — REINDEX ok without the collation registered (11.11)
-# covers: collate3 collate3-3.0 — index rejected at creation (11.2), reopen still serves the data (11.4)
-# covers: collate3 collate3-3.1 — INSERT succeeds after reopen: no custom index forces a comparison (11.12)
-# covers: collate3 collate3-3.2 — UPDATE of the custom-collated column succeeds for the same reason (11.13); other columns too (11.14)
-# covers: collate3 collate3-3.4 — DELETE ... WHERE 1 succeeds: no collation-dependent comparison needed (11.15)
-# covers: collate3 collate3-3.5 — table data remains readable throughout (11.4, 11.16)
-# covers: collate3 collate3-3.8 — integrity_check stays ok where stock errored on the orphaned index (11.10)
-# covers: collate3 collate3-3.10 — ORDER BY 1 COLLATE caseless errors: no such collation sequence (11.6)
-# covers: collate3 collate3-3.11 — ORDER BY c1 errors identically through the column collation (11.5)
-# covers: collate3 collate3-3.12 — WHERE c1 = ... errors identically (11.7)
-# covers: collate3 collate3-3.13 — CREATE TABLE referencing the missing collation errors (11.8)
-# covers: collate3 collate3-3.14 — CREATE INDEX on the column errors with no such collation sequence (11.9)
-# covers: collate3 collate3-4.6 — explicit COLLATE-in-index form rejected before it can persist (11.3)
-# not-covered: (none)
-#
-# Section 12 pins the custom-collation rejection: "CREATE TABLE t(b UNIQUE COLLATE custom)"
-# used to bypass the custom-collation index rejection because
-# sqlite3AddCollateType retrofitted the collation onto the already-created
-# implicit UNIQUE/PK autoindex without the DOLTLITE_PROLLY check that
-# sqlite3CreateIndex applies.  The persisted index then used the custom
-# collation, and after reopen without the collation registered PRAGMA
-# integrity_check failed with "no such collation sequence" — exactly the
-# state the rejection exists to prevent.  The retrofit path now rejects
-# identically; built-in BINARY/NOCASE/RTRIM retrofits still work.
 
 proc cksort {sql} {
   set ::sqlite_sort_count 0
@@ -118,9 +18,6 @@ proc numeric_collate {lhs rhs} {
   return [expr ($lhs>$rhs)?1:-1]
 }
 
-#-------------------------------------------------------------------------
-# 1.* — collate4-1.1.*: ORDER BY with single-column indexes.
-#
 do_test doltlite_recover_collation-1.1 {
   execsql {
     CREATE TABLE c4t1(a COLLATE NOCASE, b COLLATE TEXT);
@@ -231,9 +128,6 @@ do_test doltlite_recover_collation-1.24 {
   }
 } {}
 
-#-------------------------------------------------------------------------
-# 2.* — collate4-1.2.*: ORDER BY with two-column indexes.
-#
 do_test doltlite_recover_collation-2.1 {
   execsql {
     CREATE TABLE u1(a COLLATE NOCASE, b COLLATE TEXT);
@@ -303,9 +197,6 @@ do_test doltlite_recover_collation-2.18 {
   }
 } {}
 
-#-------------------------------------------------------------------------
-# 3.* — collate4-2.1.*: WHERE clauses across differently-collated columns.
-#
 do_test doltlite_recover_collation-3.1 {
   execsql {
     CREATE TABLE w1(a COLLATE NOCASE);
@@ -332,9 +223,6 @@ do_test doltlite_recover_collation-3.6 {
   execsql { SELECT a FROM w1 WHERE a IN (SELECT b FROM w2) ORDER BY a COLLATE BINARY }
 } {A a}
 
-#-------------------------------------------------------------------------
-# 4.* — collate4-2.2.*: NATURAL JOIN with mixed collations.
-#
 do_test doltlite_recover_collation-4.1 {
   execsql {
     CREATE TABLE j1(a COLLATE NOCASE, b COLLATE TEXT, c);
@@ -356,9 +244,6 @@ do_test doltlite_recover_collation-4.4 {
   execsql { SELECT * FROM j2 NATURAL JOIN j1 ORDER BY j1.a, j1.b, j1.c }
 } {0 0 0 0 0 1 0 1 0 0 1 1 1 0 0 1 0 1 1 1 0 1 1 1}
 
-#-------------------------------------------------------------------------
-# 5.* — collate4-4.*: min()/max() over a custom-collated column.
-#
 do_test doltlite_recover_collation-5.1 {
   execsql {
     CREATE TABLE mm(a COLLATE TEXT);
@@ -376,9 +261,6 @@ do_test doltlite_recover_collation-5.4 {
   execsql { SELECT min(a), max(a) FROM mm }
 } {10 20}
 
-#-------------------------------------------------------------------------
-# 6.* — enc-11.1: index over a custom-collated text column with odd utf8.
-#
 db collate test_collate test_collate_cmp
 proc test_collate_cmp {a b} { return [string compare $a $b] }
 do_test doltlite_recover_collation-6.1 {
@@ -394,9 +276,6 @@ do_test doltlite_recover_collation-6.2 {
   execsql { SELECT count(*) FROM ab WHERE a = $::cp200 }
 } {1}
 
-#-------------------------------------------------------------------------
-# 7.* — select9: compound selects ordered by a custom collation.
-#
 db collate reverse reverse_cmp
 proc reverse_cmp {lhs rhs} { return [string compare $rhs $lhs] }
 do_test doltlite_recover_collation-7.1 {
@@ -429,9 +308,6 @@ do_test doltlite_recover_collation-7.5 {
   cksort { SELECT a FROM s1 ORDER BY 1 }
 } {1 2 3 4 5 6 7 8 9 10 nosort}
 
-#-------------------------------------------------------------------------
-# 8.* — window6-3.1: 'window' keyword as object name + custom collation.
-#
 db collate window wincmp
 proc wincmp {a b} { string compare $b $a }
 do_test doltlite_recover_collation-8.1 {
@@ -451,9 +327,6 @@ do_test doltlite_recover_collation-8.3 {
   }
 } {cate bob alice}
 
-#-------------------------------------------------------------------------
-# 9.* — windowE: RANGE window frames ordered by a custom collation.
-#
 db collate custom custom_cmp
 proc custom_cmp {a b} { return [string compare $a $b] }
 do_test doltlite_recover_collation-9.1 {
@@ -478,9 +351,6 @@ do_test doltlite_recover_collation-9.3 {
   }
 } {2 3 6 1 4 5}
 
-#-------------------------------------------------------------------------
-# 10.* — collate1-6.7: FK enforcement through a case-insensitive parent PK.
-#
 do_test doltlite_recover_collation-10.1 {
   execsql {
     PRAGMA foreign_keys = ON;
@@ -497,11 +367,6 @@ do_test doltlite_recover_collation-10.3 {
   execsql { SELECT * FROM p1 }
 } {abc}
 
-#-------------------------------------------------------------------------
-# 11.* — collate3: reopen without the custom collation registered.  Because
-# doltlite refuses to persist custom-collated indexes, the database stays
-# fully consistent: only statements that actually need the collation fail.
-#
 db close
 forcedelete test.db
 sqlite3 db test.db
@@ -565,11 +430,6 @@ do_test doltlite_recover_collation-11.16 {
   execsql { SELECT count(*) FROM ct1 }
 } {0}
 
-#-------------------------------------------------------------------------
-# 12.* — column-level UNIQUE/PRIMARY KEY COLLATE <custom> must hit
-# the same rejection as CREATE INDEX instead of retrofitting the custom
-# collation onto the implicit autoindex.
-#
 db collate TEXT text_collate2
 proc text_collate2 {a b} { return [string compare $a $b] }
 do_test doltlite_recover_collation-12.1 {

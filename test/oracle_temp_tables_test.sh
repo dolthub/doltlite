@@ -1,19 +1,4 @@
 #!/bin/bash
-#
-# Oracle test: CREATE TEMP TABLE / CREATE TEMP TRIGGER / TEMP
-# indices against stock SQLite.
-#
-# In both engines the TEMP database is a stock-SQLite btree opened
-# behind pOrigBtree, sitting alongside the main prolly database.
-# Temp tables exercise the subset of cross-engine paths where the
-# "other" db is always the same implicit `temp` — most real bugs
-# would be caught by the ATTACH oracle, but TEMP has its own
-# parser-level path (CREATE TEMP ... without an explicit schema
-# qualifier) and interacts with triggers, savepoints, and cursor
-# walks that make it worth pinning separately.
-#
-# Usage: bash oracle_temp_tables_test.sh [doltlite] [sqlite3]
-#
 
 set -u
 
@@ -57,7 +42,6 @@ oracle() {
 echo "=== Oracle Tests: CREATE TEMP TABLE / TRIGGER ==="
 echo ""
 
-# ─── Basic round-trip ─────────────────────────────────────────────
 echo "--- basic ---"
 
 oracle "temp_table_create_and_query" "
@@ -66,33 +50,26 @@ INSERT INTO t VALUES(1, 'a'),(2, 'b');
 SELECT id, v FROM t ORDER BY id;
 "
 
-# Explicit schema qualifier.
 oracle "temp_qualified_name" "
 CREATE TABLE temp.t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO temp.t VALUES(1, 'a');
 SELECT id, v FROM temp.t;
 "
 
-# CREATE TEMPORARY (long form) works the same as CREATE TEMP.
 oracle "temporary_long_form" "
 CREATE TEMPORARY TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1, 'a');
 SELECT id, v FROM t;
 "
 
-# Temp table is listed in sqlite_temp_master (one of the shadow
-# schemas). Both engines should expose it.
 oracle "temp_table_in_sqlite_temp_master" "
 CREATE TEMP TABLE t(id INT PRIMARY KEY);
 INSERT INTO t VALUES(1);
 SELECT name FROM sqlite_temp_master WHERE type='table' AND name='t';
 "
 
-# ─── Name collision with main ─────────────────────────────────────
 echo "--- name collision with main ---"
 
-# A temp table shadows a main table with the same name: unqualified
-# reference picks the TEMP one.
 oracle "temp_shadows_main_unqualified" "
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1, 'main');
@@ -101,7 +78,6 @@ INSERT INTO t VALUES(1, 'temp');
 SELECT id, v FROM t;
 "
 
-# Explicit qualifiers disambiguate.
 oracle "temp_vs_main_qualified" "
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1, 'main');
@@ -111,7 +87,6 @@ SELECT 'main', v FROM main.t;
 SELECT 'temp', v FROM temp.t;
 "
 
-# DROPping the temp table un-shadows the main table.
 oracle "drop_temp_unshadows_main" "
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1, 'main');
@@ -121,10 +96,8 @@ DROP TABLE t;
 SELECT id, v FROM t;
 "
 
-# ─── Cross-engine JOIN ────────────────────────────────────────────
 echo "--- cross-engine JOIN ---"
 
-# JOIN between a prolly table in main and a temp table (stock).
 oracle "join_main_with_temp" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10),(2, 20),(3, 30);
@@ -133,7 +106,6 @@ INSERT INTO keep VALUES(1),(3);
 SELECT t.id, t.v FROM t JOIN keep USING (id) ORDER BY t.id;
 "
 
-# Subquery from temp feeding a main-db DELETE.
 oracle "delete_from_main_by_temp_filter" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,1),(2,2),(3,3);
@@ -143,7 +115,6 @@ DELETE FROM t WHERE id IN (SELECT id FROM drop_ids);
 SELECT id, v FROM t ORDER BY id;
 "
 
-# INSERT INTO main SELECT FROM temp.
 oracle "insert_into_main_from_temp" "
 CREATE TEMP TABLE src(id INT PRIMARY KEY, v INT);
 INSERT INTO src VALUES(1,10),(2,20);
@@ -152,7 +123,6 @@ INSERT INTO t SELECT id, v * 100 FROM src;
 SELECT id, v FROM t ORDER BY id;
 "
 
-# INSERT INTO temp SELECT FROM main.
 oracle "insert_into_temp_from_main" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,1),(2,2);
@@ -161,7 +131,6 @@ INSERT INTO dst SELECT id, v * 10 FROM t;
 SELECT id, v FROM dst ORDER BY id;
 "
 
-# ─── Savepoint spanning main + temp ───────────────────────────────
 echo "--- savepoint spanning main + temp ---"
 
 oracle "savepoint_rollback_spans_main_and_temp" "
@@ -200,10 +169,8 @@ SELECT count(*) FROM t;
 SELECT count(*) FROM u;
 "
 
-# ─── TEMP triggers ────────────────────────────────────────────────
 echo "--- TEMP triggers ---"
 
-# TEMP trigger on a main table, body writes to another main table.
 oracle "temp_trigger_on_main_writes_main" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 CREATE TABLE log(id INTEGER PRIMARY KEY AUTOINCREMENT, what TEXT);
@@ -214,9 +181,6 @@ INSERT INTO t VALUES(1, 10), (2, 20);
 SELECT what FROM log ORDER BY id;
 "
 
-# TEMP trigger on a main table, body writes to a TEMP table.
-# This is the path where the trigger body spans engines: read
-# from prolly, write to stock.
 oracle "temp_trigger_writes_temp" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 CREATE TEMP TABLE tlog(id INTEGER PRIMARY KEY AUTOINCREMENT, what TEXT);
@@ -227,7 +191,6 @@ INSERT INTO t VALUES(1, 10), (2, 20);
 SELECT what FROM tlog ORDER BY id;
 "
 
-# TEMP trigger that fires on UPDATE and reads old.
 oracle "temp_trigger_on_update_reads_old" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 CREATE TEMP TABLE log(id INTEGER PRIMARY KEY AUTOINCREMENT, msg TEXT);
@@ -239,7 +202,6 @@ UPDATE t SET v = 99 WHERE id = 1;
 SELECT msg FROM log;
 "
 
-# ─── Indexes on TEMP tables ───────────────────────────────────────
 echo "--- indexes on TEMP tables ---"
 
 oracle "temp_table_index_seek" "
@@ -257,7 +219,6 @@ INSERT INTO t VALUES(2, 100);
 SELECT id, u FROM t ORDER BY id;
 "
 
-# ─── Constraints on TEMP tables ───────────────────────────────────
 echo "--- TEMP constraints ---"
 
 oracle "temp_check_constraint" "
@@ -273,7 +234,6 @@ INSERT INTO t VALUES(1, NULL);
 SELECT count(*) FROM t;
 "
 
-# ─── Bulk ─────────────────────────────────────────────────────────
 echo "--- bulk ---"
 
 make_inserts() {
@@ -291,8 +251,6 @@ SELECT count(*) FROM t;
 SELECT v FROM t WHERE id = 25;
 "
 
-# Bulk cross-engine: 50 rows into main and temp via a single
-# statement (copy temp to main).
 oracle "bulk_50_copy_temp_to_main" "
 CREATE TEMP TABLE src(id INT PRIMARY KEY, v TEXT);
 $(make_inserts 50 src)
@@ -302,7 +260,6 @@ SELECT count(*) FROM t;
 SELECT v FROM t WHERE id = 25;
 "
 
-# ─── Final report ───────────────────────────────────────────────────
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

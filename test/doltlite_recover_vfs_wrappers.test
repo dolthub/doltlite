@@ -8,19 +8,6 @@ ifcapable !curdir {
   return
 }
 
-# Recovered coverage for quota.test, multiplex.test, and multiplex2.test.
-# The full files assert stock page-file byte counts, journal sidecars, and
-# multiplex chunk-file layouts. DoltLite stores table content in its chunk
-# store, so those size and sidecar assertions are not a native contract. The
-# wrapper VFS contract is that initialized wrappers can sit above DoltLite's
-# VFS, ordinary writes remain durable, quota-full failures are clean, and the
-# connection remains usable afterwards.
-#
-# covers: quota quota-1.* - quota wrapper initialization/shutdown succeeds and registers above the default VFS (1.1, 1.6)
-# covers: quota quota-2.* - writes under a generous quota succeed and preserve integrity; tiny quota fails cleanly with SQLITE_FULL (1.2, 2.1)
-# covers: multiplex multiplex-1.* - multiplex wrapper initialization/shutdown succeeds and registers above the default VFS (3.1, 3.5)
-# covers: multiplex multiplex-2.* - normal writes through initialized multiplex wrapper are durable and integrity remains ok (3.2)
-# covers: multiplex2 multiplex-1.* - explicit -vfs multiplex opens after initialization and supports ordinary reads/writes (3.6)
 
 proc cleanup_wrappers {} {
   catch {db close}

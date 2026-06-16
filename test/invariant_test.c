@@ -1,13 +1,3 @@
-/*
-** Invariant test for DoltLite: verifies internal consistency of a
-** DoltLite database after various operations.
-**
-** Uses SQL functions and virtual tables to inspect the state of
-** branches, commits, working set, and tables.
-**
-** Build (from the build/ directory):
-**   cc -g -I. -o invariant_test ../test/invariant_test.c libdoltlite.a -lz -lpthread
-*/
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -26,7 +16,6 @@ static void check(const char *name, int condition){
   }
 }
 
-/* Execute SQL, return first column of first row as string (static buffer). */
 static char result_buf[8192];
 static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
@@ -48,14 +37,12 @@ static const char *queryScalarText(sqlite3 *db, const char *sql){
   return result_buf;
 }
 
-/* Execute SQL, return integer result. Returns -1 on error. */
 static int queryScalarInt(sqlite3 *db, const char *sql){
   const char *r = queryScalarText(db, sql);
   if( strncmp(r, "ERROR", 5)==0 ) return -1;
   return atoi(r);
 }
 
-/* Execute SQL, ignore result. */
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -67,7 +54,6 @@ static int execSql(sqlite3 *db, const char *sql){
   return rc;
 }
 
-/* Return 1 if string is a valid 40-char hex hash. */
 static int isValidHash(const char *s){
   int i;
   if( !s || strlen(s)!=40 ) return 0;
@@ -77,15 +63,10 @@ static int isValidHash(const char *s){
   return 1;
 }
 
-/*
-** checkInvariants: verify internal consistency of a DoltLite database.
-** Returns the number of invariant violations found.
-*/
 static int checkInvariants(sqlite3 *db, const char *context){
   int violations = 0;
   char label[256];
 
-  /* --- Invariant 1: Every branch has a valid 40-hex-char commit hash --- */
   {
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db,
@@ -120,7 +101,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
     }
   }
 
-  /* --- Invariant 2: Every commit in dolt_log has required fields --- */
   {
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db,
@@ -174,8 +154,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
     }
   }
 
-  /* --- Invariant 3: active_branch() returns a non-empty string
-  **     that exists in dolt_branches --- */
   {
     const char *branch = queryScalarText(db, "SELECT active_branch()");
     snprintf(label, sizeof(label), "%s: active_branch() non-empty", context);
@@ -184,7 +162,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
     }else{
       check(label, 1);
 
-      /* Verify the active branch exists in dolt_branches */
       char sql[512];
       snprintf(sql, sizeof(sql),
         "SELECT count(*) FROM dolt_branches WHERE name='%s'", branch);
@@ -199,7 +176,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
     }
   }
 
-  /* --- Invariant 4: Every table in sqlite_master is queryable --- */
   {
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db,
@@ -225,7 +201,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
     }
   }
 
-  /* --- Invariant 5: dolt_status doesn't crash and returns valid rows --- */
   {
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db,
@@ -237,7 +212,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
     }else{
       check(label, 1);
       while( sqlite3_step(stmt)==SQLITE_ROW ){
-        /* Just iterate; if it crashes, the test crashes. */
         const char *tname = (const char*)sqlite3_column_text(stmt, 0);
         int staged = sqlite3_column_int(stmt, 1);
         const char *status = (const char*)sqlite3_column_text(stmt, 2);
@@ -250,9 +224,6 @@ static int checkInvariants(sqlite3 *db, const char *context){
   return violations;
 }
 
-/*
-** checkCleanStatus: verify that dolt_status shows no uncommitted changes.
-*/
 static void checkCleanStatus(sqlite3 *db, const char *context){
   char label[256];
   int cnt = queryScalarInt(db, "SELECT count(*) FROM dolt_status");
@@ -261,9 +232,6 @@ static void checkCleanStatus(sqlite3 *db, const char *context){
   check(label, cnt==0);
 }
 
-/*
-** Helper to remove DB files.
-*/
 static void removeDb(const char *path){
   char wal[512];
   remove(path);
@@ -271,13 +239,7 @@ static void removeDb(const char *path){
   remove(wal);
 }
 
-/* ========================================================================
-** Test scenarios
-** ======================================================================== */
 
-/*
-** Test 1: Create table, insert, commit -> check invariants.
-*/
 static void test_basic_commit(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_basic.db";
@@ -298,9 +260,6 @@ static void test_basic_commit(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 2: Create 3 branches, commit on each -> check invariants on each.
-*/
 static void test_multi_branch(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_multibranch.db";
@@ -310,44 +269,35 @@ static void test_multi_branch(void){
 
   check("open_multibranch", sqlite3_open(dbpath, &db)==SQLITE_OK);
 
-  /* Initial commit on main */
   execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
   execSql(db, "INSERT INTO t1 VALUES(1, 'main-init')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init on main')");
 
-  /* Create branches */
   queryScalarText(db, "SELECT dolt_branch('dev')");
   queryScalarText(db, "SELECT dolt_branch('staging')");
 
-  /* Commit on dev */
   queryScalarText(db, "SELECT dolt_checkout('dev')");
   execSql(db, "INSERT INTO t1 VALUES(2, 'dev-row')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'dev commit')");
   checkInvariants(db, "multibranch_dev");
   checkCleanStatus(db, "multibranch_dev");
 
-  /* Commit on staging */
   queryScalarText(db, "SELECT dolt_checkout('staging')");
   execSql(db, "INSERT INTO t1 VALUES(3, 'staging-row')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'staging commit')");
   checkInvariants(db, "multibranch_staging");
   checkCleanStatus(db, "multibranch_staging");
 
-  /* Back to main, verify */
   queryScalarText(db, "SELECT dolt_checkout('main')");
   checkInvariants(db, "multibranch_main");
   checkCleanStatus(db, "multibranch_main");
 
-  /* Verify branch count */
   check("three_branches", queryScalarInt(db, "SELECT count(*) FROM dolt_branches")==3);
 
   sqlite3_close(db);
   removeDb(dbpath);
 }
 
-/*
-** Test 3: Merge two branches -> check invariants.
-*/
 static void test_merge(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_merge.db";
@@ -373,16 +323,12 @@ static void test_merge(void){
   queryScalarText(db, "SELECT dolt_merge('feature')");
   checkInvariants(db, "after_merge");
 
-  /* After merge commit, all 3 rows should exist */
   check("merge_row_count", queryScalarInt(db, "SELECT count(*) FROM t1")==3);
 
   sqlite3_close(db);
   removeDb(dbpath);
 }
 
-/*
-** Test 4: Create table, add rows, commit, delete some, commit -> check.
-*/
 static void test_insert_delete(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_del.db";
@@ -412,9 +358,6 @@ static void test_insert_delete(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 5: 10 sequential commits with mixed operations -> check after each.
-*/
 static void test_sequential_commits(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_seq.db";
@@ -457,17 +400,12 @@ static void test_sequential_commits(void){
     checkCleanStatus(db, ctx);
   }
 
-  /* Verify log has 12 commits: 1 init (auto, "Initialize data repository")
-  ** + 1 create-table commit + 10 sequential loop commits. */
   check("seq_log_count", queryScalarInt(db, "SELECT count(*) FROM dolt_log")==12);
 
   sqlite3_close(db);
   removeDb(dbpath);
 }
 
-/*
-** Test 6: Branch, modify schema (add column), commit, checkout original.
-*/
 static void test_schema_change(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_schema.db";
@@ -489,12 +427,10 @@ static void test_schema_change(void){
   checkInvariants(db, "schema_branch");
   checkCleanStatus(db, "schema_branch");
 
-  /* Switch back to original branch */
   queryScalarText(db, "SELECT dolt_checkout('main')");
   checkInvariants(db, "schema_main_after");
   checkCleanStatus(db, "schema_main_after");
 
-  /* Main should not have the age column */
   const char *r = queryScalarText(db, "SELECT age FROM t1");
   check("main_no_age_column", strncmp(r, "ERROR", 5)==0);
 
@@ -502,9 +438,6 @@ static void test_schema_change(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 7: GC -> check invariants.
-*/
 static void test_gc(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_gc.db";
@@ -527,16 +460,12 @@ static void test_gc(void){
   checkCleanStatus(db, "after_gc");
 
   check("gc_data_intact", queryScalarInt(db, "SELECT count(*) FROM t1")==3);
-  /* 4 = 1 auto-init commit + 3 user commits (c1, c2, c3). */
   check("gc_log_intact", queryScalarInt(db, "SELECT count(*) FROM dolt_log")==4);
 
   sqlite3_close(db);
   removeDb(dbpath);
 }
 
-/*
-** Test 8: Reset --hard -> check invariants.
-*/
 static void test_reset_hard(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_reset.db";
@@ -550,11 +479,9 @@ static void test_reset_hard(void){
   execSql(db, "INSERT INTO t1 VALUES(1, 'original')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
 
-  /* Make uncommitted changes */
   execSql(db, "INSERT INTO t1 VALUES(2, 'uncommitted')");
   execSql(db, "UPDATE t1 SET val='modified' WHERE id=1");
 
-  /* Verify dirty status before reset */
   check("dirty_before_reset",
     queryScalarInt(db, "SELECT count(*) FROM dolt_status") > 0);
 
@@ -562,7 +489,6 @@ static void test_reset_hard(void){
   checkInvariants(db, "after_reset");
   checkCleanStatus(db, "after_reset");
 
-  /* Data reverted */
   check("reset_data", strcmp(queryScalarText(db, "SELECT val FROM t1 WHERE id=1"),
                              "original")==0);
   check("reset_row_count", queryScalarInt(db, "SELECT count(*) FROM t1")==1);
@@ -571,9 +497,6 @@ static void test_reset_hard(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 9: Random sequence of 100 operations -> check invariants at end.
-*/
 static void test_random_operations(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_random.db";
@@ -616,7 +539,6 @@ static void test_random_operations(void){
     }
   }
 
-  /* Final commit to ensure everything is committed */
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'final random commit')");
   checkInvariants(db, "after_random_100");
   checkCleanStatus(db, "after_random_100");
@@ -625,9 +547,6 @@ static void test_random_operations(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 10: Multiple tables with foreign-key-like relationships.
-*/
 static void test_multi_table(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_multi.db";
@@ -649,7 +568,6 @@ static void test_multi_table(void){
   checkInvariants(db, "multi_table");
   checkCleanStatus(db, "multi_table");
 
-  /* Modify multiple tables */
   execSql(db, "INSERT INTO users VALUES(3,'charlie')");
   execSql(db, "INSERT INTO posts VALUES(3,3,'Third post')");
   execSql(db, "INSERT INTO tags VALUES(2,3,'new')");
@@ -662,9 +580,6 @@ static void test_multi_table(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 11: Branch, diverge, merge with non-conflicting changes.
-*/
 static void test_diverge_merge(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_divmerge.db";
@@ -681,24 +596,20 @@ static void test_diverge_merge(void){
   queryScalarText(db, "SELECT dolt_branch('branch_a')");
   queryScalarText(db, "SELECT dolt_branch('branch_b')");
 
-  /* Diverge on branch_a */
   queryScalarText(db, "SELECT dolt_checkout('branch_a')");
   execSql(db, "INSERT INTO t1 VALUES(100, 'from_a')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'branch_a work')");
   checkInvariants(db, "branch_a");
 
-  /* Diverge on branch_b */
   queryScalarText(db, "SELECT dolt_checkout('branch_b')");
   execSql(db, "INSERT INTO t1 VALUES(200, 'from_b')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'branch_b work')");
   checkInvariants(db, "branch_b");
 
-  /* Merge branch_a into main */
   queryScalarText(db, "SELECT dolt_checkout('main')");
   queryScalarText(db, "SELECT dolt_merge('branch_a')");
   checkInvariants(db, "merge_a_into_main");
 
-  /* Merge branch_b into main */
   queryScalarText(db, "SELECT dolt_merge('branch_b')");
   checkInvariants(db, "merge_b_into_main");
 
@@ -708,9 +619,6 @@ static void test_diverge_merge(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 12: GC after branch deletion -> check invariants.
-*/
 static void test_gc_after_branch_delete(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_gcbr.db";
@@ -741,9 +649,6 @@ static void test_gc_after_branch_delete(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 13: Reopen database -> check invariants persist.
-*/
 static void test_persistence(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_persist.db";
@@ -758,7 +663,6 @@ static void test_persistence(void){
   queryScalarText(db, "SELECT dolt_branch('saved')");
   sqlite3_close(db);
 
-  /* Reopen */
   db = 0;
   check("open_persist2", sqlite3_open(dbpath, &db)==SQLITE_OK);
   checkInvariants(db, "after_reopen");
@@ -773,9 +677,6 @@ static void test_persistence(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 14: Large number of rows -> check invariants.
-*/
 static void test_large_table(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_large.db";
@@ -804,9 +705,6 @@ static void test_large_table(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 15: Drop table, commit, check invariants.
-*/
 static void test_drop_table(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_drop.db";
@@ -828,7 +726,6 @@ static void test_drop_table(void){
   checkInvariants(db, "after_drop");
   checkCleanStatus(db, "after_drop");
 
-  /* t2 should no longer exist */
   const char *r = queryScalarText(db, "SELECT count(*) FROM t2");
   check("t2_gone", strncmp(r, "ERROR", 5)==0);
 
@@ -836,9 +733,6 @@ static void test_drop_table(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 16: Staging workflow -> check invariants.
-*/
 static void test_staging(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_staging.db";
@@ -852,17 +746,14 @@ static void test_staging(void){
   execSql(db, "INSERT INTO t1 VALUES(1, 'a')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
 
-  /* Make changes, stage manually */
   execSql(db, "INSERT INTO t1 VALUES(2, 'b')");
   queryScalarText(db, "SELECT dolt_add('t1')");
 
-  /* Status should show staged changes */
   check("staging_has_staged",
     queryScalarInt(db, "SELECT count(*) FROM dolt_status WHERE staged=1") > 0);
 
   checkInvariants(db, "with_staged_changes");
 
-  /* Commit staged changes */
   queryScalarText(db, "SELECT dolt_commit('-m', 'staged commit')");
   checkInvariants(db, "after_staged_commit");
   checkCleanStatus(db, "after_staged_commit");
@@ -871,9 +762,6 @@ static void test_staging(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 17: Reset to specific commit hash.
-*/
 static void test_reset_to_hash(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_resethash.db";
@@ -887,7 +775,6 @@ static void test_reset_to_hash(void){
   execSql(db, "INSERT INTO t1 VALUES(1, 'v1')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'c1')");
 
-  /* Save first commit hash */
   const char *h = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   char hash1[64];
   snprintf(hash1, sizeof(hash1), "%s", h);
@@ -898,11 +785,9 @@ static void test_reset_to_hash(void){
   execSql(db, "INSERT INTO t1 VALUES(3, 'v3')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'c3')");
 
-  /* 4 = 1 auto-init commit + 3 user commits (c1, c2, c3). */
   check("before_reset_3_commits",
     queryScalarInt(db, "SELECT count(*) FROM dolt_log")==4);
 
-  /* Reset to first commit */
   {
     char sql[256];
     snprintf(sql, sizeof(sql), "SELECT dolt_reset('--hard','%s')", hash1);
@@ -917,9 +802,6 @@ static void test_reset_to_hash(void){
   removeDb(dbpath);
 }
 
-/*
-** Test 18: Single-row delete/reinsert on a multi-level integer-key table.
-*/
 static void test_single_row_mutation_fast_path(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_single_mutation.db";
@@ -1019,9 +901,6 @@ static void test_single_row_mutation_fast_path(void){
   removeDb(dbpath);
 }
 
-/* ========================================================================
-** Main
-** ======================================================================== */
 
 int main(void){
   printf("=== DoltLite Invariant Tests ===\n\n");

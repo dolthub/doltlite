@@ -1,24 +1,4 @@
 #!/bin/bash
-# P5 — Cursor opens on an iTable that isn't in the catalog used to
-# silently synthesize a TableEntry guessing the key class from
-# pKeyInfo (BLOBKEY if non-NULL, INTKEY else). The review flagged
-# this as a wrong-key-class hazard on schema-cache miss or ATTACH
-# race; in practice, with the P13 blake3 schema cookie ruling out
-# spurious cache-miss invalidation, the surviving exposure is
-# stale-prepared-statement races.
-#
-# The fix adds a defensive sqlite3_log notice when synthesis fires
-# AND iTable is below the catalog's iNextTable — the anomaly case
-# (the table should already be there). Normal paths
-# (merge/cherry-pick that introduce cross-branch tables with
-# iTable >= iNextTable) take the synthesis path without the log.
-#
-# This test pins:
-#   1. Normal usage doesn't trigger spurious "no such table" errors.
-#   2. Merge/cherry-pick across branches with new tables still work
-#      (these rely on the synthesis path).
-#   3. CREATE TABLE / DROP TABLE / re-CREATE keeps the catalog
-#      consistent.
 
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
@@ -50,10 +30,6 @@ db_rm() { rm -f "$1" "${1}-wal"; }
 echo "=== P5 — unknown-table cursor synthesis ==="
 echo ""
 
-# ----------------------------------------------------------------
-# Normal CREATE TABLE / writes / reads — catalog is always
-# populated before cursors open. No anomaly.
-# ----------------------------------------------------------------
 DB=/tmp/test_p5_create_$$.db; db_rm "$DB"
 run_test "p5_create_insert_select" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -61,9 +37,6 @@ INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
 SELECT count(*) FROM t;" "3" "$DB"
 db_rm "$DB"
 
-# Mixed key classes: rowid table, integer PK alias, blob PK,
-# composite PK, WITHOUT ROWID. Each has different
-# (iTable, flags) tuples in the catalog.
 DB=/tmp/test_p5_mixed_$$.db; db_rm "$DB"
 echo "
 CREATE TABLE rt(id INTEGER PRIMARY KEY, v TEXT);
@@ -82,13 +55,6 @@ run_test "p5_composite_pk" "SELECT v FROM ct WHERE a=1 AND b=2;" "c2" "$DB"
 run_test "p5_rowid_index_lookup" "SELECT id FROM rt WHERE v='r2';" "2" "$DB"
 db_rm "$DB"
 
-# ----------------------------------------------------------------
-# Merge with new tables on the incoming branch. The synthesis
-# path fires here when main opens cursors on feat-introduced
-# tables that have iTable >= main's iNextTable. The defensive
-# log filter (iTable < iNextTable) skips these — no warning,
-# no error.
-# ----------------------------------------------------------------
 DB=/tmp/test_p5_merge_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
@@ -119,8 +85,6 @@ run_test "p5_merge_feat_table_p" "SELECT count(*) FROM p;" "1" "$DB"
 run_test "p5_merge_feat_table_c" "SELECT count(*) FROM c;" "1" "$DB"
 db_rm "$DB"
 
-# Cherry-pick has the same cross-branch table-introduction path.
-# Get the commit hash while still on feat.
 DB=/tmp/test_p5_cp_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);

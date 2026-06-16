@@ -1,16 +1,4 @@
 #!/bin/bash
-# Open a stock-SQLite-format file with doltlite and exercise it.
-# This is the "drop-in replacement" scenario: someone has a SQLite
-# database (built by sqlite3 CLI, an app's SDK, etc.) and opens it
-# with doltlite to inspect or modify it. doltlite detects the SQLite
-# header via origBtreeIsSqliteFile and routes the whole connection
-# through the renamed-orig stock SQLite engine.
-#
-# All cases here use a file that was created and seeded by the stock
-# `sqlite3` binary, then opened by `./doltlite`. The contract is:
-# anything the stock binary can do on that file, doltlite should also
-# be able to do. dolt_* VC features are out of scope (the file isn't
-# in doltlite format).
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
@@ -36,11 +24,8 @@ skip() {
   echo "  SKIP: $name — $reason"
 }
 
-# Run SQL on stock sqlite3, return last line of stdout.
 sq_last() { printf '%s\n' "$1" | $SQLITE3 "$2" 2>&1 | tail -1; }
-# Run SQL on doltlite, return last line of stdout.
 dl_last() { printf '%s\n' "$1" | $DOLTLITE "$2" 2>&1 | tail -1; }
-# Run SQL on doltlite, return all output.
 dl_all()  { printf '%s\n' "$1" | $DOLTLITE "$2" 2>&1; }
 
 want_vc_unavailable() {
@@ -48,7 +33,6 @@ want_vc_unavailable() {
   want_eq "$name" "$(dl_all "$sql" "$db" | grep -c "$VC_UNAVAILABLE")" "1"
 }
 
-# Seed a stock SQLite file at $1 with $2 (the schema/data SQL).
 seed_stock() {
   rm -f "$1"
   $SQLITE3 "$1" "$2"
@@ -63,9 +47,6 @@ if [ ! -x "$SQLITE3" ]; then
   exit 0
 fi
 
-# ============================================================
-# Reads
-# ============================================================
 echo ""
 echo "--- reads ---"
 
@@ -83,7 +64,6 @@ want_eq "R2_join" \
 want_eq "R3_aggregate" \
   "$(dl_last "SELECT group_concat(v,',') FROM (SELECT v FROM t ORDER BY id);" "$DB")" "a,b,c"
 
-# Pre-existing index — reads should use it transparently.
 DB=$TMP/r4.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX idx_v ON t(v); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');"
 want_eq "R4_select_via_pre_existing_index" \
@@ -126,9 +106,6 @@ want_eq "R12_blob_pk_reads_payload_columns" \
   "$(dl_last "SELECT group_concat(hex(k)||':'||label||':'||n, ',') FROM (SELECT * FROM blobs ORDER BY k);" "$DB")" \
   "01:one:1,0203:two-three:23"
 
-# ============================================================
-# Autocommit writes
-# ============================================================
 echo ""
 echo "--- autocommit writes ---"
 
@@ -162,9 +139,6 @@ want_eq "W7_composite_pk_insert_update_payload" \
   "$(dl_last "INSERT INTO orders VALUES('west',1,'bag',4); UPDATE orders SET qty=5 WHERE region='east' AND order_id=1; SELECT group_concat(region||':'||order_id||':'||item||':'||qty, ',') FROM (SELECT * FROM orders ORDER BY region, order_id);" "$DB")" \
   "east:1:pen:5,west:1:bag:4"
 
-# ============================================================
-# DDL
-# ============================================================
 echo ""
 echo "--- DDL ---"
 
@@ -184,7 +158,6 @@ seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t 
 want_eq "D4_create_index_on_populated_table" \
   "$(dl_last "CREATE INDEX idx_v ON t(v); SELECT id FROM t WHERE v='b';" "$DB")" "2"
 
-# Variant — empty table.
 DB=$TMP/d5.db
 seed_stock "$DB" "CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);"
 want_eq "D5_create_index_on_empty_table" \
@@ -210,9 +183,6 @@ want_eq "D9_created_text_pk_table_readable_by_stock" \
   "$(sq_last "SELECT group_concat(k||':'||v||':'||n, ',') FROM (SELECT * FROM created ORDER BY k);" "$DB")" \
   "a:alpha:1,b:beta:2"
 
-# ============================================================
-# Constraints (declared at table-create time)
-# ============================================================
 echo ""
 echo "--- constraints ---"
 
@@ -241,9 +211,6 @@ seed_stock "$DB" "CREATE TABLE orders(region TEXT NOT NULL, order_id INTEGER NOT
 want_eq "C5_composite_pk_uniqueness_enforced" \
   "$(dl_all "INSERT INTO orders VALUES('east',1,'pad');" "$DB" | grep -ci 'unique')" "1"
 
-# ============================================================
-# Transactions
-# ============================================================
 echo ""
 echo "--- transactions ---"
 
@@ -267,16 +234,11 @@ seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t 
 want_eq "T4_savepoint_rollback_to" \
   "$(dl_last "BEGIN; SAVEPOINT s; INSERT INTO t VALUES(2,'b'); ROLLBACK TO s; COMMIT; SELECT count(*) FROM t;" "$DB")" "1"
 
-# ============================================================
-# VC features on a stock-SQLite file (should error cleanly, not crash)
-# ============================================================
 echo ""
 echo "--- VC features on non-doltlite file ---"
 
 DB=$TMP/v1.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY);"
-# Connection-level functions are registered for both routes; on a
-# stock-format file doltlite_engine() reports 'orig'.
 want_eq "V1_doltlite_engine_reports_orig" \
   "$(dl_last "SELECT doltlite_engine();" "$DB")" "orig"
 
@@ -304,27 +266,21 @@ want_vc_unavailable "V8_dolt_log_unavailable_on_stock_format" \
 want_vc_unavailable "V9_dolt_status_unavailable_on_stock_format" \
   "SELECT count(*) FROM dolt_status;" "$DB"
 
-# ============================================================
-# Durability across reopen
-# ============================================================
 echo ""
 echo "--- durability ---"
 
 DB=$TMP/p1.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');"
-# Write through doltlite, close, reopen through doltlite.
 dl_all "INSERT INTO t VALUES(2,'b'); UPDATE t SET v='Z' WHERE id=1;" "$DB" >/dev/null
 want_eq "P1_doltlite_writes_durable_reopen_with_doltlite" \
   "$(dl_last "SELECT v||'/'||(SELECT count(*) FROM t) FROM t WHERE id=1;" "$DB")" "Z/2"
 
-# And readable from stock sqlite3 — file is still a valid SQLite file.
 want_eq "P2_doltlite_writes_visible_in_stock_sqlite3" \
   "$(sq_last "SELECT v||'/'||(SELECT count(*) FROM t) FROM t WHERE id=1;" "$DB")" "Z/2"
 
 DB=$TMP/p3.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');"
 dl_all "INSERT INTO t VALUES(2,'b'); UPDATE t SET v='Z' WHERE id=1;" "$DB" >/dev/null
-# Then make another write through stock sqlite3 and read with doltlite.
 $SQLITE3 "$DB" "INSERT INTO t VALUES(3,'c');"
 want_eq "P3_stock_writes_after_doltlite_visible_in_doltlite" \
   "$(dl_last "SELECT count(*) FROM t;" "$DB")" "3"

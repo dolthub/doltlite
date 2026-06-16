@@ -374,13 +374,6 @@ SELECT dolt_commit('-m','composite_delete_subset');
 SELECT CONCAT('R|WORKING_DIFF|', from_a, '|', from_b, '|', from_v, '|', diff_type)
   FROM dolt_diff_m('HEAD', 'WORKING') ORDER BY from_a,from_b;"
 
-# ---------------------------------------------------------------------------
-# Indexed-table single-row staging (#1276): the staged secondary index must
-# stay consistent with the staged data. Each test stages a subset of rows on a
-# table with a secondary index, commits, and checks the committed diff AND an
-# index-served query (point lookup / ORDER BY / range) against the Dolt oracle
-# -- a stale or wrong staged index would diverge from Dolt.
-# ---------------------------------------------------------------------------
 IDX="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, confidence INT);
 CREATE INDEX iv ON t(v);

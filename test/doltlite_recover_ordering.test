@@ -1,38 +1,7 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of gated ordering/metric divergences through doltlite's
-# real surface: rowid/insertion-order assertions become PK-ordered (ORDER BY)
-# multiset assertions, and internal scan-counter assertions become EXPLAIN
-# QUERY PLAN assertions.
-#
-# covers: select1 select1-2.23 — aliased-aggregate misuse error still raised; NULL PKs of the original replaced with real PKs (doltlite PKs are NOT NULL)
-# covers: index index-11.1 — PK(b) point lookup returns the right row AND EQP proves SEARCH USING PRIMARY KEY (search_count metric replaced by plan assertion)
-# covers: index index-13.2 — t5 UNIQUE auto-indexes exist by name (ORDER BY name; PK has no separate index in doltlite), all undroppable, PK+UNIQUE still enforced
-# covers: index index-17.1 — sqlite_autoindex_t7_N naming convention asserted with ORDER BY name instead of rowid order; constraints enforced and undroppable
-# covers: collate4 collate4-1.1.7 — NOCASE PK accepts case-distinct rows, rejects NOCASE-equal dup and NULL PK; NOCASE vs BINARY ORDER BY both asserted (custom TEXT collation replaced by built-in BINARY)
-# covers: window1 window1-10.7 — same correlated window subquery with ORDER BY outer.emp added; same multiset of rows
-# covers: window1 window1-10.8 — same FILTER window subquery with ORDER BY outer.emp added; same multiset of rows
-# covers: e_select e_select-4.9.4 — GROUP BY boolean expression groups the same rows; group_concat asserted in doltlite's deterministic PK scan order, ordered by group
-# covers: shared shared-1.10.5 — closing a second connection mid-write-transaction rolls it back; survivor sees only committed rows (ORDER BY pk) and can still write
-# covers: cffault cffault-2.1-cantopen-persistent.1 — cacheflush mid-scan over pending UPDATE: scan sees updated rows in PK order, txn stays open, COMMIT durable across reopen
-# covers: cffault cffault-2.1-cantopen-transient.1 — same scenario (single deterministic cacheflush pass; fault-injection variants collapse to it)
-# covers: cffault cffault-2.1-full.1 — same scenario
-# covers: cffault cffault-2.1-ioerr-persistent.1 — same scenario
-# covers: cffault cffault-2.1-ioerr-transient.1 — same scenario
-# covers: cffault cffault-2.1-oom-persistent.31 — same scenario
-# covers: cffault cffault-2.1-oom-transient.28 — same scenario
-# covers: cffault cffault-2.1-oom-transient.31 — same scenario
-# covers: cffault cffault-2.1-shmerr-persistent.1 — same scenario
-# covers: cffault cffault-2.1-shmerr-transient.1 — same scenario
-# covers: cffault cffault-2.4-oom-transient.22 — cacheflush + db_release_memory + cacheflush over pending UPDATE: SELECT sees updated rows, ROLLBACK restores originals
-# covers: altercol altercol-11.1 — RENAME COLUMN rewrites table and index SQL; sqlite_master read with ORDER BY name instead of creation order (echo vtable dropped: module not built here, vtable surface is doltlite-intentional)
-# covers: limit2 limit2-110.3 — search_count ratio replaced by plan assertion: both ORDER BY b and ORDER BY +b forms return identical correct rows and EQP uses covering-index searches, never a full scan
-# not-covered: (none)
 
-#-------------------------------------------------------------------------
-# select1-2.23
-#
 do_test doltlite_recover_ordering-1.1 {
   execsql {
     CREATE TABLE tkt2526(a,b,c PRIMARY KEY);
@@ -47,9 +16,6 @@ do_test doltlite_recover_ordering-1.2 {
   execsql {SELECT a, count(a) FROM tkt2526 GROUP BY a ORDER BY a}
 } {x 2}
 
-#-------------------------------------------------------------------------
-# index-11.1
-#
 do_test doltlite_recover_ordering-2.1 {
   execsql {
     CREATE TABLE t3(
@@ -72,9 +38,6 @@ do_test doltlite_recover_ordering-2.2 {
   set res
 } {{SEARCH t3 USING PRIMARY KEY (b=?)}}
 
-#-------------------------------------------------------------------------
-# index-13.2
-#
 do_test doltlite_recover_ordering-3.1 {
   execsql {
    CREATE TABLE t5(
@@ -106,9 +69,6 @@ do_test doltlite_recover_ordering-3.6 {
   catchsql {DROP INDEX 'sqlite_autoindex_t5_3'}
 } {1 {index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped}}
 
-#-------------------------------------------------------------------------
-# index-17.1
-#
 do_test doltlite_recover_ordering-4.1 {
   execsql {
     CREATE TABLE t7(c, d UNIQUE, UNIQUE(c), PRIMARY KEY(c, d) );
@@ -128,9 +88,6 @@ do_test doltlite_recover_ordering-4.4 {
   catchsql {DROP INDEX sqlite_autoindex_t7_2}
 } {1 {index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped}}
 
-#-------------------------------------------------------------------------
-# collate4-1.1.7
-#
 do_test doltlite_recover_ordering-5.1 {
   execsql {
     CREATE TABLE collate4t2(
@@ -154,9 +111,6 @@ do_test doltlite_recover_ordering-5.5 {
   execsql {SELECT a FROM collate4t2 ORDER BY a COLLATE BINARY}
 } {B a}
 
-#-------------------------------------------------------------------------
-# window1-10.7 / window1-10.8
-#
 do_test doltlite_recover_ordering-6.1 {
   execsql {
     CREATE TABLE sales(emp TEXT PRIMARY KEY, region, total);
@@ -188,9 +142,6 @@ do_test doltlite_recover_ordering-6.2 {
   }
 } {Alice North 220 Brad North 232 Charles North 209 Darrell South 246 Elizabeth South 155 Frank South 232 Grant South 231 Horace East 253}
 
-#-------------------------------------------------------------------------
-# e_select-4.9.4
-#
 do_test doltlite_recover_ordering-7.1 {
   execsql {
     CREATE TABLE b1(one PRIMARY KEY, two);
@@ -214,9 +165,6 @@ do_test doltlite_recover_ordering-7.2 {
   }
 } {0 3,4,5,6,7 1 1,2}
 
-#-------------------------------------------------------------------------
-# shared-1.10.5
-#
 do_test doltlite_recover_ordering-8.1 {
   execsql {
     CREATE TABLE de(d PRIMARY KEY, e);
@@ -238,9 +186,6 @@ do_test doltlite_recover_ordering-8.2 {
   }
 } {{Chiang Mai} {Khon Kaen} Ubon}
 
-#-------------------------------------------------------------------------
-# cffault-2.1-* : sqlite3_db_cacheflush during a scan of updated rows
-#
 do_test doltlite_recover_ordering-9.1 {
   execsql {
     CREATE TABLE cf1(a PRIMARY KEY, b, c);
@@ -279,9 +224,6 @@ do_test doltlite_recover_ordering-9.5 {
   execsql {PRAGMA integrity_check}
 } {ok}
 
-#-------------------------------------------------------------------------
-# cffault-2.4-oom-transient.22 : cacheflush + release-memory + cacheflush
-#
 do_test doltlite_recover_ordering-10.1 {
   execsql {
     BEGIN;
@@ -300,9 +242,6 @@ do_test doltlite_recover_ordering-10.3 {
   execsql {PRAGMA integrity_check}
 } {ok}
 
-#-------------------------------------------------------------------------
-# altercol-11.1
-#
 do_test doltlite_recover_ordering-11.1 {
   execsql {
     CREATE TABLE x1(a, b, c);
@@ -320,9 +259,6 @@ do_test doltlite_recover_ordering-11.2 {
   execsql {SELECT bbb FROM x1 WHERE bbb=2 ORDER BY a}
 } {2}
 
-#-------------------------------------------------------------------------
-# limit2-110.3
-#
 do_test doltlite_recover_ordering-12.1 {
   execsql {
     CREATE TABLE lt1(a,b);

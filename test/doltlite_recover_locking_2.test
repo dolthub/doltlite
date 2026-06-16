@@ -1,123 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of gated locking-model divergences (shard locking_2).
-# Stock asserted rollback-journal/shared-cache lock states and "database is
-# locked" errors. doltlite's chunk-store contract instead: concurrent
-# connections read AND write; readers hold statement/transaction snapshots;
-# PRAGMA lock_status always reads unlocked; pager metrics read 0.
-#
-# covers: attach2 attach2-2.4 — encoding mismatch unfirable: PRAGMA encoding pinned UTF-8, utf16 set is a no-op, ATTACH always succeeds and text round-trips (1.1-1.3)
-# covers: attach2 attach2-4.2.1 — lock_status during read txn reads unlocked (2.7)
-# covers: attach2 attach2-4.3.1 — lock_status while 2nd conn reads stays unlocked (2.2-2.5, 2.7)
-# covers: attach2 attach2-4.4 — 2nd-conn write during 1st conn read txn succeeds (2.6)
-# covers: attach2 attach2-4.4.1 — lock_status after concurrent write reads unlocked (2.7)
-# covers: attach2 attach2-4.5.1 — lock_status with 2nd-conn open write txn on attached db reads unlocked (2.10)
-# covers: attach2 attach2-4.5.2 — same, writer side reads unlocked not reserved (2.10)
-# covers: attach2 attach2-4.6.1.1 — read of attached db another conn is writing allowed; lock_status unlocked (2.9, 2.10)
-# covers: attach2 attach2-4.6.1.2 — writer's lock_status stays unlocked during reads (2.10)
-# covers: attach2 attach2-4.6.2.1 — write against attached db another conn is writing errors "database is locked" (chunk-store write lock), lock_status still unlocked (2.10, 2.11)
-# covers: attach2 attach2-4.6.2.2 — same, writer side state unchanged (2.10, 2.11)
-# covers: attach2 attach2-4.7.1 — lock states unchanged while 2nd conn write txn open (2.10, 2.17)
-# covers: attach2 attach2-4.7.2 — same, 2nd conn side (2.17)
-# covers: attach2 attach2-4.8 — 2nd conn reads main db inside its txn: own writes + committed rows visible (2.13)
-# covers: attach2 attach2-4.8.1 — lock_status unlocked while write txn open (2.10) and after commits (2.17)
-# covers: attach2 attach2-4.8.2 — same, 2nd conn (2.17)
-# covers: attach2 attach2-4.9.1 — 1st conn write while 2nd conn write txn open errors "database is locked"; lock_status never surfaces it (2.14)
-# covers: attach2 attach2-4.9.2 — same, 2nd conn state (2.17)
-# covers: attach2 attach2-4.10 — 2nd conn COMMIT while 1st conn read txn open succeeds, not "database is locked" (2.15)
-# covers: attach2 attach2-4.10.1 — lock_status after that commit unlocked (2.17)
-# covers: attach2 attach2-4.10.2 — no pending state surfaced (2.17)
-# covers: attach2 attach2-4.11.2 — after 1st conn commit no residual reserved/pending state (2.16, 2.17)
-# covers: attach2 attach2-4.12 — both commits land; final lock_status unlocked on both conns (2.16, 2.17)
-# covers: attach2 attach2-4.15 — after the conflict both conns write again and converge on identical contents (2.18-2.22)
-# covers: savepoint savepoint-3.2 — savepoint write holds no pager lock: lock_status unlocked after INSERT (3.1)
-# covers: savepoint savepoint-3.3 — ROLLBACK TO keeps txn open, lock_status unlocked, write undone (3.2)
-# covers: savepoint savepoint-3.4 — re-insert after rollback works, lock_status unlocked (3.3); RELEASE ends txn (3.4, 3.5)
-# covers: savepoint savepoint-5.4.3 — RELEASE succeeds while 2nd conn holds read txn (4.2, 4.3)
-# covers: savepoint savepoint-5.4.4 — after release: reader snapshot intact, then sees committed rows (4.4-4.6)
-# covers: savepoint savepoint-14.1.2 — RELEASE while reader open succeeds instead of "database is locked" (5.2)
-# covers: savepoint savepoint-14.1.3 — savepoint really gone after release: ROLLBACK TO errors (5.3)
-# covers: savepoint savepoint-14.1.4 — reader commits and sees released rows (5.4)
-# covers: savepoint savepoint-14.1.5 — second round: savepoint+insert with reader open works (5.5)
-# covers: savepoint savepoint-14.1.6 — ROLLBACK TO + more inserts + RELEASE all complete (5.5)
-# covers: savepoint savepoint-14.2.2 — same contract, second multiclient permutation collapses to same scenario (5.2-5.5)
-# covers: savepoint savepoint-14.2.3 — see 5.3
-# covers: savepoint savepoint-14.2.4 — see 5.4-5.5
-# covers: savepoint savepoint-14.2.5 — see 5.5
-# covers: savepoint savepoint-14.2.6 — index build on 2nd conn + integrity_check ok after savepoint traffic (5.6)
-# covers: savepoint savepoint-15.1.2 — COMMIT under locking_mode=EXCLUSIVE with reader open succeeds (6.2, 6.3)
-# covers: savepoint savepoint-15.1.3 — rollback-free recovery: reader snapshot then convergence (6.4, 6.5)
-# covers: savepoint savepoint-15.2.2 — same contract, second permutation (6.2-6.5)
-# covers: savepoint savepoint-15.2.3 — locking_mode back to NORMAL, writes work, integrity ok (6.6, 6.7)
-# covers: savepoint savepoint-17.1 — schema-cache rollback scenario verbatim, no upstream lock-state pollution (7.1, 7.2)
-# covers: pragma2 pragma2-1.3 — DROP works; freelist_count reads 0 (no freelist pages in prolly) (8.1, 8.2)
-# covers: pragma2 pragma2-1.4 — main.freelist_count reads 0 (8.3)
-# covers: pragma2 pragma2-2.5 — DELETE on attached db works; aux freelist_count reads 0 (8.4)
-# covers: pragma2 pragma2-3.1 — freelist_count on all schemas reads 0 (8.5)
-# covers: pragma2 pragma2-3.2 — writing freelist_count is a no-op (8.6)
-# covers: pragma2 pragma2-3.3 — writing aux freelist_count is a no-op (8.7)
-# covers: pragma2 pragma2-4.1 — cache_size echoes set value; cache_spill reads 0 (8.8)
-# covers: pragma2 pragma2-4.4 — UPDATE in txn takes no pager lock (lock_status unlocked, vs stock exclusive); rows correct after rollback (8.9)
-# covers: pragma2 pragma2-4.5.1 — cache_spill=OFF accepted, reads 0; data unaffected (8.10)
-# covers: pragma2 pragma2-4.5.2 — cache_spill=100000 accepted, reads 0 (8.11)
-# covers: pragma2 pragma2-4.5.3 — cache_spill=25 accepted, reads 0, no exclusive lock possible (8.12)
-# covers: pragma2 pragma2-4.5.4 — cache_spill(-25) accepted, reads 0 (8.13)
-# covers: pragma2 pragma2-4.6 — txn UPDATE on attached db: lock_status unlocked on all schemas, commit works (8.15)
-# covers: pragma2 pragma2-4.8 — cache_spill=ON accepted, reads 0; no exclusive lock state (8.14)
-# covers: pragma2 pragma2-5.1 — fresh db: page_size+cache_size+cache_spill=YES accepted, cache_spill reads 0 (8.16)
-# covers: pragma2 pragma2-5.3 — cache_spill(-51) accepted, reads 0 (8.16)
-# covers: memdb2 memdb2-1.1.1 — two-connection shared-db scenario recast on doltlite's shared surface (a db file); the memdb VFS cannot back a chunk store so the open is refused outright (9.0, 9.1)
-# covers: memdb2 memdb2-1.1.2 — reader opens txn, sees initial rows (9.1)
-# covers: memdb2 memdb2-1.1.3 — writer opens txn + insert while reader open (9.2)
-# covers: memdb2 memdb2-1.1.4 — writer COMMIT succeeds instead of "database is locked" (9.3)
-# covers: memdb2 memdb2-1.1.5 — reader keeps snapshot until END (9.4)
-# covers: memdb2 memdb2-1.1.6 — no deferred-commit dance needed; commit already landed (9.3)
-# covers: memdb2 memdb2-1.1.7 — reader sees all rows after closing its txn (9.5)
-# covers: memdb2 memdb2-1.2.1 — same scenario; the tn=2 permutation only varied the memdb URI spelling (9.1)
-# covers: memdb2 memdb2-1.2.2 — see 9.1
-# covers: memdb2 memdb2-1.2.3 — see 9.2
-# covers: memdb2 memdb2-1.2.4 — see 9.3
-# covers: memdb2 memdb2-1.2.5 — see 9.4
-# covers: memdb2 memdb2-1.2.6 — see 9.3
-# covers: memdb2 memdb2-1.2.7 — see 9.5
-# covers: nolock nolock-1.0 — xLock counts inapplicable; contract: default open writes+reads correctly (10.1, 10.2)
-# covers: nolock nolock-1.1 — nolock=0 open behaves identically (10.3)
-# covers: nolock nolock-1.2 — nolock=1 open: create/insert/select work (10.1)
-# covers: nolock nolock-1.3 — readonly open reads correctly (10.3)
-# covers: nolock nolock-2.2 — second connection reads same data (10.4)
-# covers: nolock nolock-2.12 — immutable=0-equivalent plain reopen reads (10.2, 10.4)
-# covers: nolock nolock-2.22 — immutable=1 open reads correctly (10.5)
-# covers: nolock nolock-2.32 — immutable=1 + readonly reads correctly (10.5)
-# covers: nolock nolock-3.2 — IOCAP_IMMUTABLE class: immutable read path returns correct data (10.5)
-# covers: nolock nolock-3.12 — immutable + readonly read path (10.5)
-# covers: nolock nolock-4.1 — journal_mode=WAL request under nolock: db usable, rows durable (10.6)
-# covers: nolock nolock-4.3 — WAL-requested db reopened with nolock=1 reads fine (doltlite has no WAL-shm gate) (10.6)
-# covers: shared8 shared8-0.0 — shared-cache premise replaced: multiple connections to one db share committed schema (11.1)
-# covers: shared8 shared8-1.3 — 2nd conn sees schema (table+view) created by 1st (11.1)
-# covers: shared8 shared8-1.4 — closing 1st conn does not invalidate 2nd conn's schema (11.2)
-# covers: shared8 shared8-1.5 — 3rd conn opens and reads view (11.3)
-# covers: shared8 shared8-1.6 — 2nd conn still works alongside 3rd (11.4)
-# covers: shared8 shared8-1.7 — closing 2nd conn leaves 3rd working (11.5)
-# covers: shared9 shared9-2.1 — custom-collation index rejected with doltlite's exact error; column collation accepted (12.1)
-# covers: shared9 shared9-3.4 — COMMIT with 2nd-conn read txn open succeeds instead of "database is locked" (12.5)
-# covers: shared9 shared9-3.5 — no busy-handler cross-fire possible: commit completes, reader snapshot intact (12.6)
-# covers: shared9 shared9-3.6 — after reader closes txn both conns converge (12.7); no dangling collation use-after-close (12.2)
-# covers: tkt4018 tkt4018-1.3 — 2nd-conn write while 1st holds read txn succeeds; 1st conn snapshot excludes it (13.1, 13.2)
-# covers: tkt4018 tkt4018-2.2 — BEGIN; SELECT ORDER BY sees all committed rows; readonly conn write rejected (13.3-13.5)
-# covers: shared shared-1.7.2 — open scan unaffected by concurrent delete of sibling table; full contents returned (14.1-14.3)
-# covers: capi2 capi2-6.5 — 2nd-conn INSERT into table mid-scan succeeds; running statement keeps its snapshot (14.1, 14.3)
-# covers-class: lock4 lock4-{1.1,1.2,1.3,999.1}: the inherited test waits
-#   for a rollback-journal sidecar as its cross-process synchronization point.
-#   DoltLite has no journal sidecar, so the native contract uses an explicit
-#   marker: the child holds a write txn on test2, the parent is locked out,
-#   parent commit unblocks the child write to test1, and both dbs converge
-#   (17.1).
-# covers: sharedA sharedA-2.1 — shared-cache setup with attached db and peer reader works (18.1, 18.2)
-# covers: sharedA sharedA-2.2 — schema+attached writes inside txn roll back atomically enough for peer statement reuse (18.3, 18.4)
-# covers: sharedA sharedA-2.3 — after rollback, main and attached dbs keep pre-rollback rows and integrity ok (18.5)
-#
-# not-covered: (none)
 
 db close
 foreach f {rlk2.db rlk2b.db rlk2p.db rlk2q.db rlk2n.db rlk2w.db rlk2s.db rlk2t.db rlk2u.db rlk2u.db2} {
@@ -126,9 +9,6 @@ foreach f {rlk2.db rlk2b.db rlk2p.db rlk2q.db rlk2n.db rlk2w.db rlk2s.db rlk2t.d
 }
 sqlite3 db rlk2.db
 
-#-------------------------------------------------------------------------
-# 1.* attach2-2.4: UTF-8 only, ATTACH encoding mismatch cannot exist.
-#
 do_execsql_test doltlite_recover_locking_2-1.1 {
   PRAGMA encoding;
 } {UTF-8}
@@ -148,9 +28,6 @@ do_test doltlite_recover_locking_2-1.3 {
   list [catchsql {ATTACH 'rlk2b.db' AS file2}] [catchsql {SELECT x FROM file2.tt}]
 } {{0 {}} {0 text2}}
 
-#-------------------------------------------------------------------------
-# 7.* savepoint-17.1: schema rollback leaves a clean schema cache.
-#
 do_execsql_test doltlite_recover_locking_2-7.1 {
   BEGIN;
     CREATE TABLE t6(a, b);
@@ -166,10 +43,6 @@ do_execsql_test doltlite_recover_locking_2-7.2 {
   SELECT count(*) FROM t6;
 } {0}
 
-#-------------------------------------------------------------------------
-# 2.* attach2-4: two connections + attached db; everything stays unlocked
-# and concurrent writes succeed.
-#
 do_execsql_test doltlite_recover_locking_2-2.1 {
   CREATE TABLE t1(a,b);
   SELECT count(*) FROM t1;
@@ -240,9 +113,6 @@ do_test doltlite_recover_locking_2-2.22 {
   execsql {SELECT a,b FROM file2.t1f ORDER BY a}
 } {1 2}
 
-#-------------------------------------------------------------------------
-# 3.* savepoint-3: savepoint writes hold no pager locks.
-#
 do_execsql_test doltlite_recover_locking_2-3.1 {
   CREATE TABLE ts(a,b,c);
   SAVEPOINT "transaction";
@@ -267,9 +137,6 @@ do_catchsql_test doltlite_recover_locking_2-3.5 {
   COMMIT
 } {1 {cannot commit - no transaction is active}}
 
-#-------------------------------------------------------------------------
-# 4.* savepoint-5.4: RELEASE not blocked by a second connection's read txn.
-#
 do_execsql_test doltlite_recover_locking_2-4.1 {
   CREATE TABLE blobs(x);
   INSERT INTO blobs VALUES('blob one');
@@ -292,9 +159,6 @@ do_test doltlite_recover_locking_2-4.6 {
   execsql {SELECT count(*) FROM blobs}
 } {2}
 
-#-------------------------------------------------------------------------
-# 5.* savepoint-14: savepoint release/rollback with a concurrent reader.
-#
 do_test doltlite_recover_locking_2-5.1 {
   execsql {
     CREATE TABLE foo(x);
@@ -332,9 +196,6 @@ do_test doltlite_recover_locking_2-5.6 {
   execsql {PRAGMA integrity_check}
 } {ok}
 
-#-------------------------------------------------------------------------
-# 6.* savepoint-15: locking_mode=EXCLUSIVE commit not blocked by reader.
-#
 do_test doltlite_recover_locking_2-6.1 {
   execsql {BEGIN; SELECT count(*) FROM foo;} db2
 } {6}
@@ -362,9 +223,6 @@ do_test doltlite_recover_locking_2-6.7 {
        [execsql {PRAGMA integrity_check} db2]
 } {8 8 ok}
 
-#-------------------------------------------------------------------------
-# 8.* pragma2: pager metrics read 0/unlocked; row outcomes match stock.
-#
 do_execsql_test doltlite_recover_locking_2-8.1 {
   CREATE TABLE abc(a, b, c);
   PRAGMA freelist_count;
@@ -456,12 +314,6 @@ do_test doltlite_recover_locking_2-8.16 {
   list $a $b
 } {0 0}
 
-#-------------------------------------------------------------------------
-# 9.* memdb2 recast: writer COMMIT not blocked by reader holding SHARED.
-#
-# The memdb VFS has no xDelete, which the chunk store requires; the open is
-# refused instead of half-opening a connection whose statements all fail
-# 'unknown operation'.
 do_test doltlite_recover_locking_2-9.0 {
   list [catch {sqlite3 dbmem file:/x.db?vfs=memdb -uri 1} msg] $msg
 } {1 {unable to open database file}}
@@ -483,9 +335,6 @@ do_test doltlite_recover_locking_2-9.5 {
   execsql {SELECT x, y FROM m ORDER BY x} db2
 } {1 2 3 4}
 
-#-------------------------------------------------------------------------
-# 10.* nolock/immutable URI params: accepted, data correct and durable.
-#
 do_test doltlite_recover_locking_2-10.1 {
   sqlite3 dbn file:rlk2n.db?nolock=1 -uri 1
   dbn eval {
@@ -535,10 +384,6 @@ do_test doltlite_recover_locking_2-10.6 {
   list $r $msg
 } {0 catbird}
 
-#-------------------------------------------------------------------------
-# 11.* shared8 recast: schema visible across connections, stable across
-# closing sibling connections.
-#
 do_test doltlite_recover_locking_2-11.1 {
   sqlite3 dba rlk2s.db
   sqlite3 dbb rlk2s.db
@@ -570,10 +415,6 @@ do_test doltlite_recover_locking_2-11.5 {
   set r
 } {1 11 2 12 3 13 4 14}
 
-#-------------------------------------------------------------------------
-# 12.* shared9: custom-collation index rejection; commit not blocked by
-# a second connection's read transaction.
-#
 do_test doltlite_recover_locking_2-12.1 {
   sqlite3 dba rlk2t.db
   sqlite3 dbb rlk2t.db
@@ -617,10 +458,6 @@ do_test doltlite_recover_locking_2-12.7 {
   set r
 } {1 2 3 4}
 
-#-------------------------------------------------------------------------
-# 13.* tkt4018: writes from other connections succeed against an open read
-# txn; snapshot isolation; readonly connections still rejected.
-#
 do_test doltlite_recover_locking_2-13.1 {
   execsql {CREATE TABLE tk(a, b); BEGIN; SELECT * FROM tk;}
   catchsql {INSERT INTO tk VALUES(3, 4)} db2
@@ -643,10 +480,6 @@ do_test doltlite_recover_locking_2-13.5 {
   set r
 } {1 {attempt to write a readonly database}}
 
-#-------------------------------------------------------------------------
-# 14.* shared-1.7.2 + capi2-6.5: open scans keep their snapshot while a
-# second connection deletes a sibling table and inserts into the scanned one.
-#
 do_test doltlite_recover_locking_2-14.1 {
   execsql {
     CREATE TABLE t1s(a INTEGER PRIMARY KEY, b);
@@ -674,18 +507,10 @@ do_test doltlite_recover_locking_2-14.3 {
   execsql {SELECT count(*) FROM t2s}
 } {21}
 
-#-------------------------------------------------------------------------
-# 15.* both connections healthy after all conflict scenarios.
-#
 do_test doltlite_recover_locking_2-15.1 {
   list [execsql {PRAGMA integrity_check}] [execsql {PRAGMA integrity_check} db2]
 } {ok ok}
 
-#-------------------------------------------------------------------------
-# 16.* ROLLBACK TO inside a txn that created its own table, run after the
-# second connection has committed writes; formerly the rollback lost the
-# pre-savepoint row.
-#
 do_execsql_test doltlite_recover_locking_2-16.1 {
   BEGIN;
     CREATE TABLE t7(a, b);
@@ -703,9 +528,6 @@ do_test doltlite_recover_locking_2-16.3 {
   execsql {PRAGMA integrity_check}
 } {ok}
 
-#-------------------------------------------------------------------------
-# 17.* lock4: cross-process write-lock ordering without journal sidecars.
-#
 do_test doltlite_recover_locking_2-17.1 {
   foreach f {
     lk4a.db lk4b.db lk4.ready lk4.done lk4.write lk4.commit lk4-child.tcl
@@ -766,11 +588,6 @@ do_test doltlite_recover_locking_2-17.1 {
   set out
 } {1 {1 {database is locked}} {0 {}} {0 {}} {0 {}} {1 2} 2}
 
-#-------------------------------------------------------------------------
-# 18.* sharedA recast: upstream waits for an xRead on test.db2-journal during
-# rollback.  doltlite has no rollback-journal sidecar, so cover the durable
-# contract after that rollback point instead.
-#
 do_test doltlite_recover_locking_2-18.1 {
   set ::rlk2_shared_cache [sqlite3_enable_shared_cache 1]
   sqlite3 dba rlk2u.db

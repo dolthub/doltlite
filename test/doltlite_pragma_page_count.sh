@@ -1,18 +1,4 @@
 #!/bin/bash
-# P7 (page_count slice). Doltlite has no page concept at storage —
-# the file is a content-addressed chunk store. The legacy
-# `PRAGMA page_count` was hardcoded to `iNextTable + 1000`, which
-# is a function of how many user tables have been created (not the
-# database's actual storage footprint), plus a fixed offset.
-#
-# `PRAGMA page_count` returns the total chunk count (index + pending
-# + recent), clamped high enough to cover SQLite-visible schema rootpages.
-# This keeps it an honest storage-footprint proxy while preserving the
-# invariant SQLite's schema loader expects: rootpage <= last page.
-#
-# Numbers are NOT directly comparable to stock SQLite's page_count
-# (chunks are variable size, content-addressed). They are a coarse
-# proxy for storage footprint.
 
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
@@ -52,14 +38,12 @@ db_rm() { rm -f "$1" "${1}-wal"; }
 echo "=== PRAGMA page_count (chunk count) ==="
 echo ""
 
-# Empty doltlite-format DB: at least a few bookkeeping chunks.
 DB=/tmp/test_pc_empty_$$.db; db_rm "$DB"
 $DOLTLITE "$DB" "SELECT 1;" > /dev/null 2>&1
 empty_pc=$($DOLTLITE "$DB" "PRAGMA page_count;" 2>&1 | tr -d '\n')
 run_test_int_in "pc_empty_db_small_positive" "$empty_pc" 1 100
 db_rm "$DB"
 
-# Database with one small table and one commit: grows.
 DB=/tmp/test_pc_small_$$.db; db_rm "$DB"
 $DOLTLITE "$DB" "SELECT 1;" > /dev/null 2>&1
 pre=$($DOLTLITE "$DB" "PRAGMA page_count;" 2>&1 | tr -d '\n')
@@ -70,7 +54,6 @@ post=$($DOLTLITE "$DB" "PRAGMA page_count;" 2>&1 | tr -d '\n')
 run_test_grows "pc_grows_with_data" "$pre" "$post"
 db_rm "$DB"
 
-# Large insert: chunk count grows further.
 DB=/tmp/test_pc_large_$$.db; db_rm "$DB"
 $DOLTLITE "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -89,15 +72,9 @@ small=$($DOLTLITE "$DB" "PRAGMA page_count;" 2>&1 | tr -d '\n')
 big=$($DOLTLITE "$DB" "PRAGMA page_count;" 2>&1 | tr -d '\n')
 run_test_grows "pc_grows_with_bulk_insert" "$small" "$big"
 
-# Should be well below the legacy fabricated value of iNextTable+1000.
-# With one user table, the legacy value would have been ~1002; the
-# real chunk count is much smaller (low tens).
 run_test_int_in "pc_not_fabricated_value" "$big" 1 200
 db_rm "$DB"
 
-# GC can compact the physical chunk count below stable sqlite_master rootpage
-# numbers. Fresh opens still need page_count/LastPage to cover those rootpages,
-# otherwise SQLite rejects the schema as malformed during initialization.
 DB=/tmp/test_pc_gc_rootpages_$$.db; db_rm "$DB"
 $DOLTLITE "$DB" "PRAGMA foreign_keys=ON;
 CREATE TABLE a(

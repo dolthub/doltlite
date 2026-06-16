@@ -394,11 +394,7 @@ static int wsPatchCatalogRoot(
   return rc;
 }
 
-/* Apply one row's index-entry transition to a single secondary index's root:
-** remove the entry for pSrc (the value leaving the staged tree) and add the
-** entry for pTgt (the value entering it). pSrc/pTgt are full row records (or
-** NULL when the row is absent on that side). Uses doltliteBuildIndexSortKey
-** to reconstruct the native secondary-index key, mirroring the merge path. */
+/* Apply one row's old/new records to one secondary-index root. */
 static int wsApplyRowToIndex(
   ChunkStore *cs, ProllyCache *pCache,
   struct TableEntry *idxEntry, Index *pIdx, int iPKey,
@@ -451,12 +447,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   int nCatBuf = 0;
   int rc;
 
-  /* The staged copy of this row moves between its HEAD value and its WORKING
-  ** value. For ADD the row is absent at HEAD; for DELETE it is absent in the
-  ** working set. Staging advances HEAD->WORKING; unstaging reverts
-  ** WORKING->HEAD. The data tree is keyed by primary key (set or delete the
-  ** target), while each secondary index must drop the source value's key and
-  ** add the target value's key (#1276). */
+  /* Staging rewrites data by PK and secondary indexes by old/new index key. */
   const u8 *pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
   int        nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
   const u8 *pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;

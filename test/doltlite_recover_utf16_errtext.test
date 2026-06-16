@@ -2,70 +2,7 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 source $testdir/malloc_common.tcl
 
-# Recovers gated utf16-encoding and fault-error-text divergences.
-#
-# like3-8.*: the originals set PRAGMA encoding=UTF-16le/be and asserted the
-# connection reported that encoding, around a scenario storing invalid-UTF8
-# text (CAST X'FF..' AS TEXT) and matching it with LIKE pre/post index.
-# doltlite stores all text as UTF-8 and PRAGMA encoding reports UTF-8.
-# Recovered intent: the utf16 pragma is accepted-but-ignored (reports UTF-8),
-# and the exact same invalid-UTF8 values round-trip byte-exactly through the
-# UTF-8 store across an index build and a close/reopen, with LIKE matching.
-#
-# numcast-utf16{le,be}.0: originals asserted the encoding report on a fresh
-# :memory: db; recovered as the UTF-8 report plus the full numeric CAST table
-# the original ran under that encoding (including non-ASCII strings).
-#
-# pagerfault3-1-ioerr-transient.*: original ran VACUUM under transient IO
-# fault injection expecting stock pager error text; doltlite's VACUUM runs
-# dolt_gc, which reports phase-prefixed error text. Recovered intent:
-# under each injected fault point, VACUUM either succeeds or fails with one of
-# doltlite's exact gc error messages, sweep-phase IO failures preserve
-# SQLITE_IOERR, the data stays readable on the same connection, integrity_check
-# is ok, and a fault-free VACUUM then succeeds.
-#
-# covers: like3 like3-8.utf16le.1.2 — PRAGMA encoding='UTF-16le' then encoding reports UTF-8; X'FF' text scenario intact
-# covers: like3 like3-8.utf16le.2.2 — same UTF-8 report; X'FFBF' text scenario intact
-# covers: like3 like3-8.utf16le.3.2 — same UTF-8 report; X'FFBFBF' text scenario intact
-# covers: like3 like3-8.utf16le.4.2 — same UTF-8 report; X'FFBFBFBF' text scenario intact
-# covers: like3 like3-8.utf16le.5.2 — same UTF-8 report; 'abc'||X'FF' text scenario intact
-# covers: like3 like3-8.utf16le.6.2 — same UTF-8 report; 'def'||X'FFBF' text scenario intact
-# covers: like3 like3-8.utf16le.7.2 — same UTF-8 report; 'ghi'||X'FFBFBF' text scenario intact
-# covers: like3 like3-8.utf16le.8.2 — same UTF-8 report; 'jkl'||X'FFBFBFBF' text scenario intact
-# covers: like3 like3-8.utf16be.1.2 — PRAGMA encoding='UTF-16be' then encoding reports UTF-8; X'FF' text scenario intact
-# covers: like3 like3-8.utf16be.2.2 — same UTF-8 report; X'FFBF' text scenario intact
-# covers: like3 like3-8.utf16be.3.2 — same UTF-8 report; X'FFBFBF' text scenario intact
-# covers: like3 like3-8.utf16be.4.2 — same UTF-8 report; X'FFBFBFBF' text scenario intact
-# covers: like3 like3-8.utf16be.5.2 — same UTF-8 report; 'abc'||X'FF' text scenario intact
-# covers: like3 like3-8.utf16be.6.2 — same UTF-8 report; 'def'||X'FFBF' text scenario intact
-# covers: like3 like3-8.utf16be.7.2 — same UTF-8 report; 'ghi'||X'FFBFBF' text scenario intact
-# covers: like3 like3-8.utf16be.8.2 — same UTF-8 report; 'jkl'||X'FFBFBFBF' text scenario intact
-# covers: numcast numcast-utf16le.0 — fresh :memory: db, PRAGMA encoding='utf16le', report normalizes to utf8; full cast table re-run
-# covers: numcast numcast-utf16be.0 — fresh :memory: db, PRAGMA encoding='utf16be', report normalizes to utf8; full cast table re-run
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.4 — fault point 4: VACUUM error in doltlite gc-message set; data+integrity preserved
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.5 — fault point 5: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.6 — fault point 6: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.7 — fault point 7: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.8 — fault point 8: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.9 — fault point 9: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.10 — fault point 10: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.11 — fault point 11: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.12 — fault point 12: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.13 — fault point 13: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.14 — fault point 14: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.15 — fault point 15: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.16 — fault point 16: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.18 — fault point 18: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.19 — fault point 19: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.20 — fault point 20: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.21 — fault point 21: same contract
-# covers: pagerfault3 pagerfault3-1-ioerr-transient.22 — fault point 22: same contract
-# not-covered: (none)
 
-#-------------------------------------------------------------------------
-# 1.* doltlite encoding pragma contract: utf16 forms are accepted but the
-# connection stays UTF-8; truly unknown names still error.
-#
 do_test doltlite_recover_utf16_errtext-1.1 {
   execsql {PRAGMA encoding='UTF-16le'}
   execsql {PRAGMA encoding}
@@ -78,9 +15,6 @@ do_catchsql_test doltlite_recover_utf16_errtext-1.3 {
   PRAGMA encoding='bogus'
 } {1 {unsupported encoding: bogus}}
 
-#-------------------------------------------------------------------------
-# 2.* numcast under attempted utf16 encodings (numcast-utf16{le,be}.0)
-#
 foreach enc {utf16le utf16be} {
   do_test doltlite_recover_utf16_errtext-2.$enc.0 {
     db close
@@ -108,11 +42,6 @@ foreach enc {utf16le utf16be} {
   }
 }
 
-#-------------------------------------------------------------------------
-# 3.* like3-8 recovery: invalid-UTF8 text under attempted utf16 encodings.
-# hexwant is the byte-exact UTF-8 image the value must keep across index
-# creation and a close/reopen of the persistent chunk store.
-#
 foreach enc {UTF-16le UTF-16be} {
   foreach {tn expr hexwant} {
     1 "CAST (X'FF' AS TEXT)"                FF
@@ -155,12 +84,6 @@ foreach enc {UTF-16le UTF-16be} {
   }
 }
 
-#-------------------------------------------------------------------------
-# 4.* pagerfault3-1 recovery: VACUUM (= dolt_gc) under transient IO faults.
-# Each fault point must yield either success or one of doltlite's exact gc
-# error messages, leave the data readable and integrity ok, and a fault-free
-# VACUUM afterwards must succeed.
-#
 reset_db
 do_test doltlite_recover_utf16_errtext-4.0 {
   execsql {

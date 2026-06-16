@@ -1,11 +1,3 @@
-/*
-** Version-control operation concurrency tests.
-**
-** Exercises concurrent dolt_checkout(), dolt_commit(), branch metadata reads,
-** connection reopen, and post-concurrency dolt_merge() correctness across
-** multiple OS processes. Each worker owns a separate branch and key range so
-** correctness is deterministic while the VC operations still interleave.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -352,7 +344,6 @@ static int runWorker(const char *path, int worker){
       "SELECT count(*) FROM dolt_branches", &branchCount);
     if( rc!=SQLITE_OK || branchCount<N_WORKERS+1 ) goto worker_error;
 
-    /* Periodically bounce through main and reopen to exercise session state. */
     if( i%2==0 ){
       rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
       if( rc!=SQLITE_OK ) goto worker_error;

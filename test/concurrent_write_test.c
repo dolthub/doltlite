@@ -1,16 +1,3 @@
-/*
-** Concurrent access tests for DoltLite.
-**
-** These tests verify multi-connection DML and reader consistency:
-** multiple sqlite3 handles can write through the same in-process BtShared
-** without corrupting the shared prolly state, and readers see a consistent
-** view - either the state before or after a write, never a partial or corrupt
-** intermediate state.
-**
-** Explicit overlapping write transactions still serialize through SQLite's
-** write lock. A second writer may get SQLITE_BUSY until the first transaction
-** commits or rolls back.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,7 +16,6 @@ static void check(const char *name, int condition){
   }
 }
 
-/* Execute SQL, return first column of first row as string (static buffer) */
 static char result_buf[4096];
 static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
@@ -51,7 +37,6 @@ static const char *queryScalarText(sqlite3 *db, const char *sql){
   return result_buf;
 }
 
-/* Execute SQL, ignore result */
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -62,7 +47,6 @@ static int execSql(sqlite3 *db, const char *sql){
   return rc;
 }
 
-/* Execute SQL with retry on SQLITE_BUSY */
 static int execSqlWithBusyRetry(sqlite3 *db, const char *sql, int maxRetries){
   char *err = 0;
   int rc;
@@ -170,7 +154,6 @@ static void test_multi_writer_dml(void){
   remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 }
 
-/* queryScalarText with retry on SQLITE_BUSY */
 static const char *exec1_busy(sqlite3 *db, const char *sql, int maxRetries){
   sqlite3_stmt *stmt = 0;
   int rc;
@@ -211,7 +194,6 @@ int main(){
 
   printf("=== Concurrent Write Test ===\n\n");
 
-  /* --- Open 4 connections to the same database --- */
   rc = sqlite3_open(dbpath, &db1);
   check("open_db1", rc==SQLITE_OK);
   rc = sqlite3_open(dbpath, &db2);
@@ -221,13 +203,11 @@ int main(){
   rc = sqlite3_open(dbpath, &db4);
   check("open_db4", rc==SQLITE_OK);
 
-  /* Set busy timeout on all connections */
   sqlite3_busy_timeout(db1, 5000);
   sqlite3_busy_timeout(db2, 5000);
   sqlite3_busy_timeout(db3, 5000);
   sqlite3_busy_timeout(db4, 5000);
 
-  /* --- All connections should be on main --- */
   check("db1_on_main", strcmp(queryScalarText(db1, "SELECT active_branch()"), "main")==0);
   check("db2_on_main", strcmp(queryScalarText(db2, "SELECT active_branch()"), "main")==0);
   check("db3_on_main", strcmp(queryScalarText(db3, "SELECT active_branch()"), "main")==0);
@@ -240,15 +220,12 @@ int main(){
   check("seed_insert", rc==SQLITE_OK);
   queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'initial schema and seed data')");
 
-  /* Verify all connections see the table */
   check("db2_sees_table", strcmp(queryScalarText(db2, "SELECT count(*) FROM items"), "1")==0);
   check("db3_sees_table", strcmp(queryScalarText(db3, "SELECT count(*) FROM items"), "1")==0);
   check("db4_sees_table", strcmp(queryScalarText(db4, "SELECT count(*) FROM items"), "1")==0);
 
   printf("--- Test 2: Single-writer INSERT, multi-reader verify ---\n");
 
-  /* All DML goes through db1 to avoid shared BtShared corruption.
-  ** Other connections verify reads. See INVARIANTS.md X3. */
   rc = execSql(db1, "INSERT INTO items VALUES(2, 'banana', 20)");
   check("db1_insert_2", rc==SQLITE_OK);
   rc = execSql(db1, "INSERT INTO items VALUES(3, 'cherry', 30)");
@@ -258,7 +235,6 @@ int main(){
   rc = execSql(db1, "INSERT INTO items VALUES(5, 'elderberry', 50)");
   check("db1_insert_5", rc==SQLITE_OK);
 
-  /* All rows visible from writer and readers */
   check("all_inserts_visible_db1", strcmp(queryScalarText(db1, "SELECT count(*) FROM items"), "5")==0);
   check("all_inserts_visible_db2", strcmp(queryScalarText(db2, "SELECT count(*) FROM items"), "5")==0);
 
@@ -273,7 +249,6 @@ int main(){
   rc = execSql(db1, "UPDATE items SET qty=44 WHERE id=4");
   check("db1_update_4", rc==SQLITE_OK);
 
-  /* Verify updates from reader connections */
   check("update_visible_1", strcmp(queryScalarText(db3, "SELECT qty FROM items WHERE id=1"), "11")==0);
   check("update_visible_2", strcmp(queryScalarText(db4, "SELECT qty FROM items WHERE id=2"), "22")==0);
   check("update_visible_3", strcmp(queryScalarText(db2, "SELECT qty FROM items WHERE id=3"), "33")==0);
@@ -296,7 +271,6 @@ int main(){
   rc = execSql(db1, "DELETE FROM items WHERE id=4");
   check("mix_delete", rc==SQLITE_OK);
 
-  /* Verify final state from readers: ids 1,2,3,6 remain */
   check("final_count", strcmp(queryScalarText(db2, "SELECT count(*) FROM items"), "4")==0);
   check("row1_name", strcmp(queryScalarText(db3, "SELECT name FROM items WHERE id=1"), "apricot")==0);
   check("row6_exists", strcmp(queryScalarText(db4, "SELECT name FROM items WHERE id=6"), "fig")==0);
@@ -306,17 +280,12 @@ int main(){
 
   queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'writes from single connection')");
 
-  /* Verify commit from the same connection that committed */
   check("commit_log_db1",
     strcmp(queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1"),
            "writes from single connection")==0);
 
   printf("--- Test 7: dolt_log shows commit from this session ---\n");
 
-  /* Each session has its own branch view. When multiple connections write
-  ** to the WAL, each connection's commit chain is independent. db1 sees
-  ** its most recent commit; earlier commits may not chain correctly when
-  ** other connections' WAL writes interleave. */
   check("log_has_entries", strcmp(queryScalarText(db1, "SELECT count(*) FROM dolt_log"), "0")!=0);
   check("log_first",
     strcmp(queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1"),
@@ -324,11 +293,9 @@ int main(){
 
   printf("--- Test 8: Reads from other connections while writing ---\n");
 
-  /* Write on db1, read from others */
   rc = execSql(db1, "INSERT INTO items VALUES(7, 'grape', 70)");
   check("write_for_read_test", rc==SQLITE_OK);
 
-  /* Other connections can read */
   check("read_during_write_db2",
     strcmp(queryScalarText(db2, "SELECT count(*) FROM items"), "5")==0);
   check("read_during_write_db3",
@@ -336,7 +303,6 @@ int main(){
   check("read_during_write_db4",
     strcmp(queryScalarText(db4, "SELECT count(*) FROM items WHERE id=7"), "1")==0);
 
-  /* More writes from db1, reads from others */
   rc = execSql(db1, "UPDATE items SET qty=77 WHERE id=7");
   check("update_write", rc==SQLITE_OK);
 
@@ -345,7 +311,6 @@ int main(){
 
   printf("--- Test 9: Bulk writes from single connection ---\n");
 
-  /* All bulk writes go through db1 */
   {
     int i;
     int totalOk = 0;
@@ -368,9 +333,7 @@ int main(){
     strcmp(queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1"),
            "bulk inserts and interleaved ops")==0);
 
-  /* Final row count from writer */
   check("final_total_db1", strcmp(queryScalarText(db1, "SELECT count(*) FROM items"), "15")==0);
-  /* Readers see the committed state via fresh connections */
   {
     sqlite3 *fresh = 0;
     sqlite3_open(dbpath, &fresh);
@@ -378,7 +341,6 @@ int main(){
     sqlite3_close(fresh);
   }
 
-  /* --- Cleanup --- */
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
