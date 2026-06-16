@@ -115,22 +115,15 @@ static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
                        i64 *pnRow){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  ProllyCursor cur;
-  int rc, res;
-  i64 n = 0;
+  u64 n = 0;
+  int rc;
+  UNUSED_PARAMETER(flags);
   if( pnRow ) *pnRow = 0;
   if( !cs || !pCache ) return SQLITE_ERROR;
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
-  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &res);
-  if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
-  while( !res && prollyCursorIsValid(&cur) ){
-    n++;
-    rc = prollyCursorNext(&cur);
-    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
-  }
-  prollyCursorClose(&cur);
-  if( pnRow ) *pnRow = n;
+  rc = prollySubtreeCount(cs, pCache, pRoot, &n);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pnRow ) *pnRow = (i64)n;
   return SQLITE_OK;
 }
 

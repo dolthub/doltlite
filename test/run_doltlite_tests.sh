@@ -48,6 +48,7 @@ TESTS=(
 
   # Virtual tables
   doltlite_diff_table.sh
+  doltlite_diff_stat_scale.sh
   doltlite_history.sh
   doltlite_at.sh
   doltlite_schema_diff.sh
