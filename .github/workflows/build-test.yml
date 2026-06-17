@@ -288,7 +288,8 @@ jobs:
       run: |
         cd build
         export DLTEST_STRIP_CR=1
-        mkdir -p /d/tmp
+        rm -rf /d/tmp
+        cmd.exe /C "mklink /J D:\\tmp $(cygpath -w /tmp)"
         export MSYS2_ARG_CONV_EXCL='*'
         tests=(
           ../test/doltlite_parity.sh
