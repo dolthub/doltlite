@@ -536,19 +536,64 @@ static SQLITE_INLINE int doltliteDupBytes(const u8 *pIn, int nIn, u8 **ppOut){
   return SQLITE_OK;
 }
 
+int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
+                        struct TableEntry **ppTables, int *pnTables,
+                        Pgno *piNextTable);
+void doltliteFreeCatalog(struct TableEntry *a, int n);
+
 static SQLITE_INLINE int doltliteFindTableRootByName(
   struct TableEntry *a, int n, const char *zName,
-  ProllyHash *pRoot, u8 *pFlags
+  ProllyHash *pRoot, u8 *pFlags, ProllyHash *pSchemaHash
 ){
   struct TableEntry *e = doltliteFindTableByName(a, n, zName);
   if( e ){
     memcpy(pRoot, &e->root, sizeof(ProllyHash));
     if( pFlags ) *pFlags = e->flags;
+    if( pSchemaHash ) memcpy(pSchemaHash, &e->schemaHash, sizeof(ProllyHash));
     return SQLITE_OK;
   }
   memset(pRoot, 0, sizeof(ProllyHash));
   if( pFlags ) *pFlags = 0;
+  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(ProllyHash));
   return SQLITE_NOTFOUND;
+}
+
+static SQLITE_INLINE int doltliteLoadTableRootByName(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  int rc;
+
+  memset(pRoot, 0, sizeof(*pRoot));
+  if( pFlags ) *pFlags = 0;
+  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(*pSchemaHash));
+  if( !pCatHash || prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
+
+  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteFindTableRootByName(aTables, nTables, zTableName,
+                                   pRoot, pFlags, pSchemaHash);
+  doltliteFreeCatalog(aTables, nTables);
+  return rc;
+}
+
+static SQLITE_INLINE int doltliteLoadTableRootByNameOrEmpty(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  int rc = doltliteLoadTableRootByName(db, pCatHash, zTableName,
+                                       pRoot, pFlags, pSchemaHash);
+  return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
 }
 
 /* Sticky little-endian cursor for conflicts and constraint-violation codecs. */
@@ -651,10 +696,6 @@ BtShared *doltliteGetBtShared(sqlite3 *db);
 int doltliteIsStockSqliteDb(sqlite3 *db);
 void doltliteInvalidateWorkingState(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);
-int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                        struct TableEntry **ppTables, int *pnTables,
-                        Pgno *piNextTable);
-void doltliteFreeCatalog(struct TableEntry *a, int n);
 int doltliteSerializeCatalogEntries(sqlite3 *db, struct TableEntry *aTables,
                                     int nTables, u8 **ppOut, int *pnOut);
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
