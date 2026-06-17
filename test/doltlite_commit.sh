@@ -4,13 +4,21 @@ PASS=0
 FAIL=0
 ERRORS=""
 
+run_sql() {
+  if [ "${DLTEST_STRIP_CR:-0}" = "1" ]; then
+    echo "$1" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$2" 2>&1 | tr -d '\r'
+  else
+    echo "$1" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$2" 2>&1
+  fi
+}
+
 run_test() {
   local name="$1"
   local sql="$2"
   local expected="$3"
   local db="${4:-:memory:}"
   local result
-  result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
+  result=$(run_sql "$sql" "$db")
   local exit_code=$?
   if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
     result="CRASH (exit $exit_code)"
@@ -29,7 +37,7 @@ run_test_match() {
   local pattern="$3"
   local db="${4:-:memory:}"
   local result
-  result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
+  result=$(run_sql "$sql" "$db")
   if echo "$result" | grep -qE "$pattern"; then
     PASS=$((PASS+1))
   else

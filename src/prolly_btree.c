@@ -4304,6 +4304,129 @@ static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
   return SQLITE_OK;
 }
 
+static int doltliteLooksLikeDbPath(const char *zFilename){
+  const char *z;
+  const char *zBase = zFilename;
+  if( !zFilename ) return 0;
+  for(z=zFilename; *z; z++){
+    if( *z=='/' || *z=='\\' ) zBase = z + 1;
+  }
+  return strstr(zBase, ".db")!=0 || strstr(zBase, ".sqlite")!=0;
+}
+
+static int doltliteFileExists(sqlite3_vfs *pVfs, const char *zFilename,
+                              int *pExists){
+  int rc;
+  *pExists = 0;
+  if( !zFilename || zFilename[0]=='\0' || strcmp(zFilename, ":memory:")==0 ){
+    return SQLITE_OK;
+  }
+  if( !pVfs ){
+    pVfs = sqlite3_vfs_find(0);
+    if( !pVfs ) return SQLITE_CANTOPEN;
+  }
+  rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, pExists);
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+  if( rc!=SQLITE_OK ) *pExists = 0;
+  return SQLITE_OK;
+}
+
+static int doltliteReadableFile(sqlite3_vfs *pVfs, const char *zFilename,
+                                int *pIsFile){
+  sqlite3_file *pFile = 0;
+  int outFlags = 0;
+  int rc;
+  i64 nSize = 0;
+  u8 b;
+
+  *pIsFile = 0;
+  rc = sqlite3OsOpenMalloc(pVfs, zFilename, &pFile,
+                           SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                           &outFlags);
+  if( rc!=SQLITE_OK ){
+    if( pFile ) sqlite3OsCloseFree(pFile);
+    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+    return SQLITE_OK;
+  }
+  rc = sqlite3OsFileSize(pFile, &nSize);
+  if( rc==SQLITE_OK && nSize>0 ){
+    rc = sqlite3OsRead(pFile, &b, 1, 0);
+  }
+  sqlite3OsCloseFree(pFile);
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+  if( rc==SQLITE_OK && nSize>0 ) *pIsFile = 1;
+  return SQLITE_OK;
+}
+
+static int doltliteResolveOpenBranchPath(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  char **pzStoreFilename,
+  const char **pzBranch
+){
+  const char *z;
+  const char *zSep = 0;
+  int parentExists = 0;
+  int rc;
+  char *zParent;
+  int nParent;
+  int parentIsFile = 0;
+  int parentIsSqlite = 0;
+
+  *pzStoreFilename = 0;
+  *pzBranch = 0;
+  if( !zFilename || zFilename[0]=='\0' || strcmp(zFilename, ":memory:")==0 ){
+    return SQLITE_OK;
+  }
+
+  for(z=zFilename; *z; z++){
+    if( *z=='/' || *z=='\\' || *z=='@' ) zSep = z;
+  }
+  if( !zSep || zSep==zFilename || zSep[1]=='\0' ) return SQLITE_OK;
+
+  nParent = (int)(zSep - zFilename);
+  zParent = sqlite3_mprintf("%.*s", nParent, zFilename);
+  if( !zParent ) return SQLITE_NOMEM;
+  if( !doltliteLooksLikeDbPath(zParent) ){
+    sqlite3_free(zParent);
+    return SQLITE_OK;
+  }
+
+  rc = doltliteFileExists(pVfs, zParent, &parentExists);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zParent);
+    return rc;
+  }
+  if( !parentExists ){
+    sqlite3_free(zParent);
+    return SQLITE_OK;
+  }
+
+  rc = doltliteReadableFile(pVfs, zParent, &parentIsFile);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zParent);
+    return rc;
+  }
+  if( !parentIsFile ){
+    sqlite3_free(zParent);
+    return SQLITE_OK;
+  }
+
+  rc = origBtreeIsSqliteFile(pVfs, zParent, &parentIsSqlite);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zParent);
+    return rc;
+  }
+  if( parentIsSqlite ){
+    sqlite3_free(zParent);
+    return SQLITE_OK;
+  }
+
+  *pzStoreFilename = zParent;
+  *pzBranch = zSep + 1;
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeOpen(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -4317,6 +4440,9 @@ int sqlite3BtreeOpen(
   int rc = SQLITE_OK;
   int useOrig;
   u8 poisonAfterOpen = 0;
+  char *zStoreFilename = 0;
+  const char *zBranchFromPath = 0;
+  const char *zOpenFilename = zFilename;
 
   *ppBtree = 0;
 
@@ -4325,36 +4451,57 @@ int sqlite3BtreeOpen(
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB);
   if( !useOrig ){
-    rc = origBtreeIsSqliteFile(pVfs, zFilename, &useOrig);
+    rc = doltliteResolveOpenBranchPath(pVfs, zFilename, &zStoreFilename,
+                                       &zBranchFromPath);
     if( rc!=SQLITE_OK ) return rc;
+    if( zStoreFilename ) zOpenFilename = zStoreFilename;
+    rc = origBtreeIsSqliteFile(pVfs, zOpenFilename, &useOrig);
+    if( useOrig && zStoreFilename ){
+      useOrig = 0;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zStoreFilename);
+      return rc;
+    }
   }
   if( useOrig ){
     p = sqlite3_malloc(sizeof(Btree));
-    if( !p ) return SQLITE_NOMEM;
+    if( !p ){
+      sqlite3_free(zStoreFilename);
+      return SQLITE_NOMEM;
+    }
     memset(p, 0, sizeof(*p));
     p->db = db;
     p->pOps = &origBtreeVtOps;
     rc = origBtreeOpen(pVfs, zFilename, db, &p->pOrigBtree, flags, vfsFlags);
-    if( rc!=SQLITE_OK ){ sqlite3_free(p); return rc; }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zStoreFilename);
+      sqlite3_free(p);
+      return rc;
+    }
     /* Registration resolves through db->aDb[0].pBt, so assign first. */
     *ppBtree = p;
     rc = registerDoltiteFunctions(db);
     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
       *ppBtree = 0;
       sqlite3BtreeClose(p);
+      sqlite3_free(zStoreFilename);
       return rc;
     }
+    sqlite3_free(zStoreFilename);
     return SQLITE_OK;
   }
 
   p = sqlite3_malloc(sizeof(Btree));
   if( !p ){
+    sqlite3_free(zStoreFilename);
     return SQLITE_NOMEM;
   }
   memset(p, 0, sizeof(*p));
 
   pBt = sqlite3_malloc(sizeof(BtShared));
   if( !pBt ){
+    sqlite3_free(zStoreFilename);
     sqlite3_free(p);
     return SQLITE_NOMEM;
   }
@@ -4362,10 +4509,12 @@ int sqlite3BtreeOpen(
 
   if( !zFilename || zFilename[0]=='\0' ){
     zFilename = ":memory:";
+    zOpenFilename = zFilename;
   }
 
-  rc = chunkStoreOpen(&pBt->store, pVfs, zFilename, vfsFlags);
+  rc = chunkStoreOpen(&pBt->store, pVfs, zOpenFilename, vfsFlags);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zStoreFilename);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return rc;
@@ -4378,15 +4527,17 @@ int sqlite3BtreeOpen(
   rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_SIZE);
   if( rc!=SQLITE_OK ){
     chunkStoreClose(&pBt->store);
+    sqlite3_free(zStoreFilename);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return rc;
   }
 
-  pBt->pPagerShim = pagerShimCreate(pVfs, zFilename, chunkFileGetHandle(&pBt->store.file));
+  pBt->pPagerShim = pagerShimCreate(pVfs, zOpenFilename, chunkFileGetHandle(&pBt->store.file));
   if( !pBt->pPagerShim ){
     prollyCacheFree(&pBt->cache);
     chunkStoreClose(&pBt->store);
+    sqlite3_free(zStoreFilename);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return SQLITE_NOMEM;
@@ -4434,7 +4585,8 @@ int sqlite3BtreeOpen(
     char *zRebaseOrigBranch = 0;
     char *zRebaseReturnBranch = 0;
     u8 isRebasing = 0;
-    const char *zDef = chunkStoreGetDefaultBranch(&pBt->store);
+    const char *zDef = zBranchFromPath ? zBranchFromPath :
+      chunkStoreGetDefaultBranch(&pBt->store);
     u8 isMerging = 0;
     if( !zDef ) zDef = "main";
     memset(&catHash, 0, sizeof(catHash));
@@ -4446,6 +4598,18 @@ int sqlite3BtreeOpen(
     memset(&preRebaseCat, 0, sizeof(preRebaseCat));
     memset(&rebaseOnto, 0, sizeof(rebaseOnto));
     memset(&constraintViolationsHash, 0, sizeof(constraintViolationsHash));
+    if( zBranchFromPath
+     && chunkStoreFindBranch(&pBt->store, zDef, &branchCommit)!=SQLITE_OK ){
+      sqlite3ErrorWithMsg(db, SQLITE_ERROR, "unable to select branch \"%s\"",
+                          zDef);
+      pagerShimDestroy(pBt->pPagerShim);
+      prollyCacheFree(&pBt->cache);
+      chunkStoreClose(&pBt->store);
+      sqlite3_free(zStoreFilename);
+      sqlite3_free(pBt);
+      sqlite3_free(p);
+      return SQLITE_ERROR;
+    }
     rc = btreeLoadWorkingSetBlob(&pBt->store, zDef, &catHash, &workingCommit,
                                  &stagedCatalog, &isMerging,
                                  &mergeCommitHash, &conflictsCatalogHash,
@@ -4459,6 +4623,7 @@ int sqlite3BtreeOpen(
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
       chunkStoreClose(&pBt->store);
+      sqlite3_free(zStoreFilename);
       sqlite3_free(pBt);
       sqlite3_free(p);
       return rc;
@@ -4472,6 +4637,7 @@ int sqlite3BtreeOpen(
         pagerShimDestroy(pBt->pPagerShim);
         prollyCacheFree(&pBt->cache);
         chunkStoreClose(&pBt->store);
+        sqlite3_free(zStoreFilename);
         sqlite3_free(pBt);
         sqlite3_free(p);
         return rc;
@@ -4488,6 +4654,7 @@ int sqlite3BtreeOpen(
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
           chunkStoreClose(&pBt->store);
+          sqlite3_free(zStoreFilename);
           sqlite3_free(pBt);
           sqlite3_free(p);
           return rc;
@@ -4498,6 +4665,7 @@ int sqlite3BtreeOpen(
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
           chunkStoreClose(&pBt->store);
+          sqlite3_free(zStoreFilename);
           sqlite3_free(pBt);
           sqlite3_free(p);
           return rc;
@@ -4529,6 +4697,7 @@ int sqlite3BtreeOpen(
     pagerShimDestroy(pBt->pPagerShim);
     prollyCacheFree(&pBt->cache);
     chunkStoreClose(&pBt->store);
+    sqlite3_free(zStoreFilename);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return SQLITE_NOMEM;
@@ -4543,10 +4712,13 @@ int sqlite3BtreeOpen(
   p->nSeek = 0;
 
   {
-    const char *defBranch = chunkStoreGetDefaultBranch(&pBt->store);
+    const char *defBranch = zBranchFromPath ? zBranchFromPath :
+      chunkStoreGetDefaultBranch(&pBt->store);
     ProllyHash branchCommit;
+    if( !defBranch ) defBranch = "main";
     p->zBranch = sqlite3_mprintf("%s", defBranch);
     if( p->zBranch==0 ){
+      sqlite3_free(zStoreFilename);
       sqlite3BtreeClose(p);
       return SQLITE_NOMEM;
     }
@@ -4563,10 +4735,12 @@ int sqlite3BtreeOpen(
   rc = registerDoltiteFunctions(db);
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
     *ppBtree = 0;
+    sqlite3_free(zStoreFilename);
     sqlite3BtreeClose(p);
     return rc;
   }
 
+  sqlite3_free(zStoreFilename);
   return SQLITE_OK;
 }
 

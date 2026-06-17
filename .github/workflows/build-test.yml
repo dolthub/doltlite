@@ -292,14 +292,34 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
+        export DLTEST_STRIP_CR=1
+        rm -rf /d/tmp
+        powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
+        cat > ./doltlite-no-msys-conv <<'SH'
+        #!/usr/bin/env bash
+        export MSYS2_ARG_CONV_EXCL='*'
+        exec ./doltlite "$@"
+        SH
+        chmod +x ./doltlite-no-msys-conv
+        export DOLTLITE=./doltlite-no-msys-conv
         tests=(
           ../test/doltlite_parity.sh
+          ../test/doltlite_commit.sh
           ../test/doltlite_staging.sh
+          ../test/doltlite_workspace.sh
+          ../test/doltlite_branch.sh
+          ../test/doltlite_open_branch.sh
+          ../test/doltlite_tag.sh
+          ../test/doltlite_merge.sh
+          ../test/doltlite_conflicts.sh
           ../test/doltlite_diff_table.sh
           ../test/doltlite_schema_diff.sh
           ../test/doltlite_schema_merge.sh
+          ../test/doltlite_cherry_pick.sh
           ../test/doltlite_revert_dirty.sh
           ../test/doltlite_conflict_rows.sh
+          ../test/doltlite_reset.sh
+          ../test/doltlite_working_set.sh
           ../test/doltlite_gc.sh
           ../test/doltlite_gc_session_state.sh
           ../test/doltlite_gc_scale.sh
@@ -323,7 +343,7 @@ jobs:
         )
         for test in "${tests[@]}"; do
           echo "━━━ ${test} ━━━"
-          bash "$test"
+          bash "$test" "$DOLTLITE"
         done
       timeout-minutes: 20
 
