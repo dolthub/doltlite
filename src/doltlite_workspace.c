@@ -55,30 +55,23 @@ static void wsClearCache(WorkspaceVtab *p){
 static char *wsBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
-  int i;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(id INTEGER, staged INTEGER, diff_type TEXT");
-  for(i=0; i<ci->nCol; i++){
-    char *z = sqlite3_mprintf("to_%s", ci->azName[i] ? ci->azName[i] : "");
-    if( !z ){ sqlite3_str_reset(pStr); return 0; }
+  if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
-    if( doltliteAppendQuotedIdent(pStr, z)!=SQLITE_OK ){
-      sqlite3_free(z);
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol,
+                                       "to_", ", ")!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
-    sqlite3_free(z);
   }
-  for(i=0; i<ci->nCol; i++){
-    char *z = sqlite3_mprintf("from_%s", ci->azName[i] ? ci->azName[i] : "");
-    if( !z ){ sqlite3_str_reset(pStr); return 0; }
+  if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
-    if( doltliteAppendQuotedIdent(pStr, z)!=SQLITE_OK ){
-      sqlite3_free(z);
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol,
+                                       "from_", ", ")!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
-    sqlite3_free(z);
   }
   sqlite3_str_appendall(pStr, ")");
   z = sqlite3_str_finish(pStr);
