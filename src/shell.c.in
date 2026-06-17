@@ -5019,7 +5019,7 @@ static const char *findLastPathSep(const char *zPath){
 static int doltliteShellLooksLikeDbPath(const char *zFilename){
   const char *zBase = findLastPathSep(zFilename);
   zBase = zBase ? zBase + 1 : zFilename;
-  return zBase && strstr(zBase, ".db")!=0;
+  return zBase && (strstr(zBase, ".db")!=0 || strstr(zBase, ".sqlite")!=0);
 }
 
 static int doltliteShellReadableFile(const char *zFilename){

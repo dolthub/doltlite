@@ -4311,7 +4311,7 @@ static int doltliteLooksLikeDbPath(const char *zFilename){
   for(z=zFilename; *z; z++){
     if( *z=='/' || *z=='\\' ) zBase = z + 1;
   }
-  return strstr(zBase, ".db")!=0;
+  return strstr(zBase, ".db")!=0 || strstr(zBase, ".sqlite")!=0;
 }
 
 static int doltliteFileExists(sqlite3_vfs *pVfs, const char *zFilename,
