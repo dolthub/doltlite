@@ -12,41 +12,24 @@
 #include <time.h>
 
 static char *buildDiffSchema(const DoltliteColInfo *ci){
-  int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
-  char *zColName;
   if( !pStr ) return 0;
 
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  for(i=0; i<ci->nCol; i++){
-    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
-    zColName = sqlite3_mprintf("to_%s", ci->azName[i] ? ci->azName[i] : "");
-    if( !zColName ){
-      sqlite3_str_reset(pStr);
-      return 0;
-    }
-    if( doltliteAppendQuotedIdent(pStr, zColName)!=SQLITE_OK ){
-      sqlite3_free(zColName);
-      sqlite3_str_reset(pStr);
-      return 0;
-    }
-    sqlite3_free(zColName);
+  if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol,
+                                     "to_", ", ")!=SQLITE_OK ){
+    sqlite3_str_reset(pStr);
+    return 0;
   }
   sqlite3_str_appendall(pStr, ", to_commit TEXT, to_commit_date TEXT");
-  for(i=0; i<ci->nCol; i++){
+  if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
-    zColName = sqlite3_mprintf("from_%s", ci->azName[i] ? ci->azName[i] : "");
-    if( !zColName ){
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol,
+                                       "from_", ", ")!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
-    if( doltliteAppendQuotedIdent(pStr, zColName)!=SQLITE_OK ){
-      sqlite3_free(zColName);
-      sqlite3_str_reset(pStr);
-      return 0;
-    }
-    sqlite3_free(zColName);
   }
   sqlite3_str_appendall(pStr, ", from_commit TEXT, from_commit_date TEXT"
                               ", diff_type TEXT"
