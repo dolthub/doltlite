@@ -621,7 +621,6 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port,
     return SQLITE_ERROR;
   }
 
-  /* Warn loudly when bound non-loopback. */
   if( bindIn.s_addr != htonl(INADDR_LOOPBACK) ){
     fprintf(stderr,
       "WARNING: doltlite-remotesrv bound to %s — the remote protocol "
