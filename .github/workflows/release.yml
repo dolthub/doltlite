@@ -4,12 +4,6 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:  # Manual trigger from Actions tab for testing
-    inputs:
-      test_binding_release_token:
-        description: "Only verify RELEASE_BOT_TOKEN access to binding repos"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -17,7 +11,6 @@ permissions:
 jobs:
   # ── Source artifacts (run once on Linux) ──────────────────
   source:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     runs-on: ubuntu-latest
     env:
       EMSDK_VERSION: 3.1.74
@@ -123,7 +116,6 @@ jobs:
 
   # ── Binary builds (per-platform) ─────────────────────────
   build:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     strategy:
       fail-fast: false
       matrix:
@@ -334,7 +326,7 @@ jobs:
     # tag push (where the binaries-linux-x64 artifact will have been
     # produced by `build`). Manual workflow_dispatch runs also produce
     # artifacts, so allow those too.
-    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     steps:
     - name: Download linux-x64 binary artifacts
       uses: actions/download-artifact@v4
@@ -432,7 +424,6 @@ jobs:
 
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -478,7 +469,6 @@ jobs:
   # refused cleanly when it differs. A format change without a minor
   # version bump fails this job, which blocks the release.
   compat:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -581,6 +571,7 @@ jobs:
           exit 1
         fi
         gh auth status
+        gh auth setup-git
 
     - name: Confirm core release assets are available
       run: |
@@ -686,29 +677,3 @@ jobs:
 
         git tag "${VERSION}"
         git push origin "${VERSION}"
-
-  test-binding-release-token:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token }}
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-    steps:
-    - name: Verify token can access binding repos
-      run: |
-        set -euo pipefail
-        if [ -z "${GH_TOKEN}" ]; then
-          echo "RELEASE_BOT_TOKEN is not available"
-          exit 1
-        fi
-        gh auth status
-        for repo in doltlite-node doltlite-python; do
-          echo "Checking dolthub/${repo}"
-          gh api "repos/dolthub/${repo}" --jq '
-            if .permissions.push == true then
-              "push permission confirmed"
-            else
-              error("RELEASE_BOT_TOKEN does not have push permission")
-            end
-          '
-          gh api "repos/dolthub/${repo}/git/matching-refs/tags/v" --jq 'length'
-        done
