@@ -289,7 +289,7 @@ jobs:
         cd build
         export DLTEST_STRIP_CR=1
         rm -rf /d/tmp
-        cmd.exe /C "mklink /J D:\\tmp $(cygpath -w /tmp)"
+        powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
         export MSYS2_ARG_CONV_EXCL='*'
         tests=(
           ../test/doltlite_parity.sh
