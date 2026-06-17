@@ -5016,6 +5016,12 @@ static const char *findLastPathSep(const char *zPath){
 }
 
 #ifdef DOLTLITE_PROLLY
+static int doltliteShellLooksLikeDbPath(const char *zFilename){
+  const char *zBase = findLastPathSep(zFilename);
+  zBase = zBase ? zBase + 1 : zFilename;
+  return zBase && strstr(zBase, ".db")!=0;
+}
+
 static int doltliteShellReadableFile(const char *zFilename){
   sqlite3_vfs *pVfs;
   sqlite3_file *pFile;
@@ -5081,7 +5087,8 @@ static void parseDoltiteDbBranch(
   zSep = findLastPathSep(zInput);
   if( zSep && zSep[1]!=0 ){
     zBase = sqlite3_mprintf("%.*s", (int)(zSep - zInput), zInput);
-    if( zBase && doltliteShellReadableFile(zBase) ){
+    if( zBase && doltliteShellLooksLikeDbPath(zBase)
+     && doltliteShellReadableFile(zBase) ){
       *pzFilename = zBase;
       *pzBranch = sqlite3_mprintf("%s", zSep + 1);
       return;

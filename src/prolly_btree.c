@@ -4304,6 +4304,16 @@ static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
   return SQLITE_OK;
 }
 
+static int doltliteLooksLikeDbPath(const char *zFilename){
+  const char *z;
+  const char *zBase = zFilename;
+  if( !zFilename ) return 0;
+  for(z=zFilename; *z; z++){
+    if( *z=='/' || *z=='\\' ) zBase = z + 1;
+  }
+  return strstr(zBase, ".db")!=0;
+}
+
 static int doltliteFileExists(sqlite3_vfs *pVfs, const char *zFilename,
                               int *pExists){
   int rc;
@@ -4377,6 +4387,10 @@ static int doltliteResolveOpenBranchPath(
   nParent = (int)(zSep - zFilename);
   zParent = sqlite3_mprintf("%.*s", nParent, zFilename);
   if( !zParent ) return SQLITE_NOMEM;
+  if( !doltliteLooksLikeDbPath(zParent) ){
+    sqlite3_free(zParent);
+    return SQLITE_OK;
+  }
 
   rc = doltliteFileExists(pVfs, zParent, &parentExists);
   if( rc!=SQLITE_OK ){
