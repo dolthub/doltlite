@@ -4,6 +4,8 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "prolly_hashset.h"
+#include "doltlite_commit.h"
 #include "chunk_store.h"
 #include <time.h>
 #include <ctype.h>
@@ -13,6 +15,7 @@ typedef struct ProllyCache ProllyCache;
 typedef struct SchemaEntry SchemaEntry;
 typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
+typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 
 struct DoltlitePkRange {
   i64 pkLo;
@@ -22,6 +25,101 @@ struct DoltlitePkRange {
   int pkLoStrict;
   int pkHiStrict;
 };
+
+struct DoltliteCommitQueue {
+  ProllyHash *aQueue;
+  int qHead, qTail, qAlloc;
+  ProllyHashSet visited, queued;
+  int visitedInit, queuedInit;
+};
+
+static SQLITE_INLINE void doltliteCommitQueueClear(DoltliteCommitQueue *q){
+  sqlite3_free(q->aQueue);
+  q->aQueue = 0;
+  q->qHead = q->qTail = q->qAlloc = 0;
+  if( q->visitedInit ){
+    prollyHashSetFree(&q->visited);
+    q->visitedInit = 0;
+  }
+  if( q->queuedInit ){
+    prollyHashSetFree(&q->queued);
+    q->queuedInit = 0;
+  }
+}
+
+static SQLITE_INLINE int doltliteCommitQueueEnqueue(
+  DoltliteCommitQueue *q,
+  const ProllyHash *pHash
+){
+  int rc;
+  if( !pHash || prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  if( prollyHashSetContains(&q->visited, pHash) ) return SQLITE_OK;
+  if( prollyHashSetContains(&q->queued, pHash) ) return SQLITE_OK;
+  if( q->qTail >= q->qAlloc ){
+    i64 nNew = q->qAlloc ? (i64)q->qAlloc * 2 : (i64)16;
+    ProllyHash *tmp;
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ) return SQLITE_NOMEM;
+    tmp = sqlite3_realloc(q->aQueue, (int)(nNew * (i64)sizeof(ProllyHash)));
+    if( !tmp ) return SQLITE_NOMEM;
+    q->aQueue = tmp;
+    q->qAlloc = (int)nNew;
+  }
+  q->aQueue[q->qTail++] = *pHash;
+  rc = prollyHashSetAdd(&q->queued, pHash);
+  return rc;
+}
+
+static SQLITE_INLINE int doltliteCommitQueueInit(
+  DoltliteCommitQueue *q,
+  const ProllyHash *pHead
+){
+  int rc;
+  doltliteCommitQueueClear(q);
+  rc = prollyHashSetInit(&q->visited, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  q->visitedInit = 1;
+  rc = prollyHashSetInit(&q->queued, 64);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitQueueClear(q);
+    return rc;
+  }
+  q->queuedInit = 1;
+  rc = doltliteCommitQueueEnqueue(q, pHead);
+  if( rc!=SQLITE_OK ) doltliteCommitQueueClear(q);
+  return rc;
+}
+
+static SQLITE_INLINE int doltliteCommitQueueNext(
+  DoltliteCommitQueue *q,
+  ProllyHash *pHash,
+  int *pHas
+){
+  int rc;
+  *pHas = 0;
+  while( q->qHead < q->qTail ){
+    ProllyHash cur = q->aQueue[q->qHead++];
+    if( prollyHashSetContains(&q->visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&q->visited, &cur);
+    if( rc!=SQLITE_OK ) return rc;
+    *pHash = cur;
+    *pHas = 1;
+    return SQLITE_OK;
+  }
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteCommitQueueEnqueueParents(
+  DoltliteCommitQueue *q,
+  const DoltliteCommit *pCommit
+){
+  int i, rc;
+  for(i=0; i<doltliteCommitParentCount(pCommit); i++){
+    const ProllyHash *pParent = doltliteCommitParentHash(pCommit, i);
+    rc = doltliteCommitQueueEnqueue(q, pParent);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
 
 typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
 enum DoltliteVcTxnMode {

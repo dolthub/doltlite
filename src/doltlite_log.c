@@ -4,7 +4,6 @@
 #include "sqliteInt.h"
 #include "doltlite_commit.h"
 #include "prolly_hash.h"
-#include "prolly_hashset.h"
 #include "chunk_store.h"
 
 #include "doltlite_internal.h"
@@ -22,10 +21,7 @@ struct DoltliteLogVtab {
 typedef struct DoltliteLogCursor DoltliteLogCursor;
 struct DoltliteLogCursor {
   sqlite3_vtab_cursor base;
-  ProllyHash *aQueue;
-  int qHead, qTail, qAlloc;
-  ProllyHashSet visited;
-  int visitedInit;
+  DoltliteCommitQueue queue;
   char zHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
   int hasRow;
@@ -81,13 +77,7 @@ static int doltliteLogOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
 static void logCursorReset(DoltliteLogCursor *pCur){
   doltliteCommitClear(&pCur->curCommit);
   memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
-  sqlite3_free(pCur->aQueue);
-  pCur->aQueue = 0;
-  pCur->qHead = pCur->qTail = pCur->qAlloc = 0;
-  if( pCur->visitedInit ){
-    prollyHashSetFree(&pCur->visited);
-    pCur->visitedInit = 0;
-  }
+  doltliteCommitQueueClear(&pCur->queue);
   pCur->hasRow = 0;
   pCur->iRowid = 0;
 }
@@ -100,18 +90,17 @@ static int doltliteLogClose(sqlite3_vtab_cursor *pCursor){
 }
 
 static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
-  int i, rc;
+  int rc, hasHash;
 
   doltliteCommitClear(&pCur->curCommit);
   memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
   pCur->hasRow = 0;
 
-  while( pCur->qHead < pCur->qTail ){
-    ProllyHash cur = pCur->aQueue[pCur->qHead++];
-
-    if( prollyHashSetContains(&pCur->visited, &cur) ) continue;
-    rc = prollyHashSetAdd(&pCur->visited, &cur);
+  for(;;){
+    ProllyHash cur;
+    rc = doltliteCommitQueueNext(&pCur->queue, &cur, &hasHash);
     if( rc!=SQLITE_OK ) return rc;
+    if( !hasHash ) break;
 
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
     if( rc!=SQLITE_OK ){
@@ -128,21 +117,8 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
 
     if( pCur->singleCommit ) return SQLITE_OK;
 
-    for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
-      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( pCur->qTail >= pCur->qAlloc ){
-        i64 nNew = pCur->qAlloc ? (i64)pCur->qAlloc * 2 : (i64)16;
-        ProllyHash *tmp;
-        if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ) return SQLITE_NOMEM;
-        tmp = sqlite3_realloc(pCur->aQueue,
-                              (int)(nNew * (i64)sizeof(ProllyHash)));
-        if( !tmp ) return SQLITE_NOMEM;
-        pCur->aQueue = tmp;
-        pCur->qAlloc = (int)nNew;
-      }
-      pCur->aQueue[pCur->qTail++] = *pParent;
-    }
+    rc = doltliteCommitQueueEnqueueParents(&pCur->queue, &pCur->curCommit);
+    if( rc!=SQLITE_OK ) return rc;
     return SQLITE_OK;
   }
   return SQLITE_OK;
@@ -201,15 +177,8 @@ static int doltliteLogFilter(
     pCur->singleCommit = 0;
   }
 
-  rc = prollyHashSetInit(&pCur->visited, 64);
+  rc = doltliteCommitQueueInit(&pCur->queue, &head);
   if( rc!=SQLITE_OK ) return rc;
-  pCur->visitedInit = 1;
-
-  pCur->qAlloc = 16;
-  pCur->aQueue = sqlite3_malloc(pCur->qAlloc * (int)sizeof(ProllyHash));
-  if( !pCur->aQueue ) return SQLITE_NOMEM;
-  pCur->aQueue[0] = head;
-  pCur->qTail = 1;
 
   return logAdvance(pCur, pVtab->db);
 }
