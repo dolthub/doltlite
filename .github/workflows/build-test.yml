@@ -290,7 +290,13 @@ jobs:
         export DLTEST_STRIP_CR=1
         rm -rf /d/tmp
         powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
+        cat > ./doltlite-no-msys-conv <<'SH'
+        #!/usr/bin/env bash
         export MSYS2_ARG_CONV_EXCL='*'
+        exec ./doltlite "$@"
+        SH
+        chmod +x ./doltlite-no-msys-conv
+        export DOLTLITE=./doltlite-no-msys-conv
         tests=(
           ../test/doltlite_parity.sh
           ../test/doltlite_commit.sh
@@ -332,7 +338,7 @@ jobs:
         )
         for test in "${tests[@]}"; do
           echo "━━━ ${test} ━━━"
-          bash "$test"
+          bash "$test" "$DOLTLITE"
         done
       timeout-minutes: 20
 
