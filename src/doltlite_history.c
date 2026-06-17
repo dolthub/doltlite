@@ -2,7 +2,6 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_vtab_util.h"
-#include "prolly_hashset.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include <string.h>
@@ -40,10 +39,7 @@ struct HistVtab {
 typedef struct HistCursor HistCursor;
 struct HistCursor {
   DoltliteVtabCursorCommon common;
-  ProllyHash *aQueue;
-  int qHead, qTail, qAlloc;
-  ProllyHashSet visited, queued;
-  int visitedInit, queuedInit;
+  DoltliteCommitQueue queue;
   char zCommitHex[PROLLY_HASH_SIZE*2+1];
   char *zCommitter;
   i64 commitDate;
@@ -60,17 +56,7 @@ static void htCursorReset(HistCursor *c){
   doltliteVtabCommonReset(&c->common);
   sqlite3_free(c->zCommitter);
   c->zCommitter = 0;
-  sqlite3_free(c->aQueue);
-  c->aQueue = 0;
-  c->qHead = c->qTail = c->qAlloc = 0;
-  if( c->visitedInit ){
-    prollyHashSetFree(&c->visited);
-    c->visitedInit = 0;
-  }
-  if( c->queuedInit ){
-    prollyHashSetFree(&c->queued);
-    c->queuedInit = 0;
-  }
+  doltliteCommitQueueClear(&c->queue);
 }
 
 static int htRowMatchesUpper(HistCursor *c){
@@ -106,35 +92,10 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     return SQLITE_NOMEM;
   }
 
-  {
-    int i;
-    for(i=0; i<doltliteCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( prollyHashSetContains(&c->visited, pParent) ) continue;
-      if( prollyHashSetContains(&c->queued, pParent) ) continue;
-      if( c->qTail >= c->qAlloc ){
-        i64 nNew = c->qAlloc ? (i64)c->qAlloc * 2 : (i64)16;
-        ProllyHash *tmp;
-        if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
-          doltliteCommitClear(&commit);
-          return SQLITE_NOMEM;
-        }
-        tmp = sqlite3_realloc(c->aQueue,
-                              (int)(nNew * (i64)sizeof(ProllyHash)));
-        if( !tmp ){
-          doltliteCommitClear(&commit);
-          return SQLITE_NOMEM;
-        }
-        c->aQueue = tmp; c->qAlloc = (int)nNew;
-      }
-      c->aQueue[c->qTail++] = *pParent;
-      rc = prollyHashSetAdd(&c->queued, pParent);
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&commit);
-        return rc;
-      }
-    }
+  rc = doltliteCommitQueueEnqueueParents(&c->queue, &commit);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&commit);
+    return rc;
   }
 
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aT, &nT, 0);
@@ -229,12 +190,13 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     }
   }
 
-  while( c->qHead < c->qTail ){
-    ProllyHash cur = c->aQueue[c->qHead++];
+  for(;;){
+    ProllyHash cur;
+    int hasHash;
 
-    if( prollyHashSetContains(&c->visited, &cur) ) continue;
-    rc = prollyHashSetAdd(&c->visited, &cur);
+    rc = doltliteCommitQueueNext(&c->queue, &cur, &hasHash);
     if( rc!=SQLITE_OK ) return rc;
+    if( !hasHash ) break;
 
     rc = htOpenTableAtCommit(c, db, zTableName, &cur);
     if( rc!=SQLITE_OK ) return rc;
@@ -396,20 +358,7 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   doltliteGetSessionHead(v->db, &head);
   if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
 
-  rc = prollyHashSetInit(&c->visited, 64);
-  if( rc!=SQLITE_OK ) return rc;
-  c->visitedInit = 1;
-
-  rc = prollyHashSetInit(&c->queued, 64);
-  if( rc!=SQLITE_OK ) return rc;
-  c->queuedInit = 1;
-
-  c->qAlloc = 16;
-  c->aQueue = sqlite3_malloc(c->qAlloc * (int)sizeof(ProllyHash));
-  if( !c->aQueue ) return SQLITE_NOMEM;
-  c->aQueue[0] = head;
-  c->qTail = 1;
-  rc = prollyHashSetAdd(&c->queued, &head);
+  rc = doltliteCommitQueueInit(&c->queue, &head);
   if( rc!=SQLITE_OK ) return rc;
 
   return htAdvance(c, v->db, v->zTableName);

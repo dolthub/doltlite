@@ -3,7 +3,6 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
-#include "prolly_hashset.h"
 #include "prolly_diff.h"
 #include "prolly_cache.h"
 #include "chunk_store.h"
@@ -110,10 +109,7 @@ struct DoltliteDiffVtab {
 typedef struct DoltliteDiffCursor DoltliteDiffCursor;
 struct DoltliteDiffCursor {
   sqlite3_vtab_cursor base;
-  ProllyHash *aQueue;
-  int qHead, qTail, qAlloc;
-  ProllyHashSet visited, queued;
-  int visitedInit, queuedInit;
+  DoltliteCommitQueue queue;
   DiffSummaryRow *aBatch;
   int nBatch;
   int iBatch;
@@ -339,15 +335,15 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
     }
   }
 
-  while( pCur->qHead < pCur->qTail ){
-    ProllyHash cur = pCur->aQueue[pCur->qHead++];
+  for(;;){
+    ProllyHash cur;
     DoltliteCommit commit;
     char zHex[PROLLY_HASH_SIZE*2+1];
-    int i;
+    int hasHash;
 
-    if( prollyHashSetContains(&pCur->visited, &cur) ) continue;
-    rc = prollyHashSetAdd(&pCur->visited, &cur);
+    rc = doltliteCommitQueueNext(&pCur->queue, &cur, &hasHash);
     if( rc!=SQLITE_OK ) return rc;
+    if( !hasHash ) break;
 
     memset(&commit, 0, sizeof(commit));
     rc = doltliteLoadCommit(db, &cur, &commit);
@@ -361,33 +357,10 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
     }
 
     if( !pCur->singleCommit ){
-      for(i=0; i<doltliteCommitParentCount(&commit); i++){
-        const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-        if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-        if( prollyHashSetContains(&pCur->visited, pParent) ) continue;
-        if( prollyHashSetContains(&pCur->queued,  pParent) ) continue;
-        if( pCur->qTail >= pCur->qAlloc ){
-          i64 nNew = (i64)pCur->qAlloc * 2;
-          i64 nBytes;
-          ProllyHash *tmp;
-          if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
-            doltliteCommitClear(&commit);
-            return SQLITE_NOMEM;
-          }
-          nBytes = nNew * (i64)sizeof(ProllyHash);
-          tmp = sqlite3_realloc(pCur->aQueue, (int)nBytes);
-          if( !tmp ){
-            doltliteCommitClear(&commit);
-            return SQLITE_NOMEM;
-          }
-          pCur->aQueue = tmp; pCur->qAlloc = (int)nNew;
-        }
-        pCur->aQueue[pCur->qTail++] = *pParent;
-        rc = prollyHashSetAdd(&pCur->queued, pParent);
-        if( rc!=SQLITE_OK ){
-          doltliteCommitClear(&commit);
-          return rc;
-        }
+      rc = doltliteCommitQueueEnqueueParents(&pCur->queue, &commit);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&commit);
+        return rc;
       }
     }
     doltliteCommitClear(&commit);
@@ -404,17 +377,7 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
 
 static void diffCursorReset(DoltliteDiffCursor *pCur){
   freeBatch(pCur);
-  sqlite3_free(pCur->aQueue);
-  pCur->aQueue = 0;
-  pCur->qHead = pCur->qTail = pCur->qAlloc = 0;
-  if( pCur->visitedInit ){
-    prollyHashSetFree(&pCur->visited);
-    pCur->visitedInit = 0;
-  }
-  if( pCur->queuedInit ){
-    prollyHashSetFree(&pCur->queued);
-    pCur->queuedInit = 0;
-  }
+  doltliteCommitQueueClear(&pCur->queue);
   sqlite3_free(pCur->zFilterTable);
   pCur->zFilterTable = 0;
   pCur->phase = 0;
@@ -565,20 +528,7 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     pCur->singleCommit = 0;
   }
 
-  rc = prollyHashSetInit(&pCur->visited, 64);
-  if( rc!=SQLITE_OK ) return rc;
-  pCur->visitedInit = 1;
-
-  rc = prollyHashSetInit(&pCur->queued, 64);
-  if( rc!=SQLITE_OK ) return rc;
-  pCur->queuedInit = 1;
-
-  pCur->qAlloc = 16;
-  pCur->aQueue = sqlite3_malloc(pCur->qAlloc * (int)sizeof(ProllyHash));
-  if( !pCur->aQueue ) return SQLITE_NOMEM;
-  pCur->aQueue[0] = head;
-  pCur->qTail = 1;
-  rc = prollyHashSetAdd(&pCur->queued, &head);
+  rc = doltliteCommitQueueInit(&pCur->queue, &head);
   if( rc!=SQLITE_OK ) return rc;
 
   if( useStart ){
