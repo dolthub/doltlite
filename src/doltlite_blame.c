@@ -699,66 +699,18 @@ static int bmDisconnect(sqlite3_vtab *pVtab){
 
 static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   BlameVtab *v = (BlameVtab*)pVtab;
-  int iEq = -1, iGe = -1, iLe = -1, iGt = -1, iLt = -1;
-  int i, nArg = 0, idxNum = 0;
-
-  pInfo->estimatedCost = 100000.0;
-  pInfo->estimatedRows = 1000;
 
   if( !blameIntPkEnabled(v) ){
+    pInfo->estimatedCost = 100000.0;
+    pInfo->estimatedRows = 1000;
     pInfo->idxNum = 0;
     return SQLITE_OK;
   }
 
-  for(i=0; i<pInfo->nConstraint; i++){
-    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
-    if( !pC->usable ) continue;
-    if( pC->iColumn != 0 ) continue;
-    switch( pC->op ){
-      case SQLITE_INDEX_CONSTRAINT_EQ: if( iEq<0 ) iEq = i; break;
-      case SQLITE_INDEX_CONSTRAINT_GE: if( iGe<0 ) iGe = i; break;
-      case SQLITE_INDEX_CONSTRAINT_LE: if( iLe<0 ) iLe = i; break;
-      case SQLITE_INDEX_CONSTRAINT_GT: if( iGt<0 ) iGt = i; break;
-      case SQLITE_INDEX_CONSTRAINT_LT: if( iLt<0 ) iLt = i; break;
-      default: break;
-    }
-  }
-
-  if( iEq >= 0 ){
-    pInfo->aConstraintUsage[iEq].argvIndex = ++nArg;
-    pInfo->aConstraintUsage[iEq].omit = 1;
-    idxNum |= BLAME_IDX_PK_EQ;
-    pInfo->estimatedCost = 100.0;
-    pInfo->estimatedRows = 1;
-  }else{
-    if( iGe >= 0 ){
-      pInfo->aConstraintUsage[iGe].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iGe].omit = 1;
-      idxNum |= BLAME_IDX_PK_GE;
-    }
-    if( iGt >= 0 ){
-      pInfo->aConstraintUsage[iGt].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iGt].omit = 1;
-      idxNum |= BLAME_IDX_PK_GT;
-    }
-    if( iLe >= 0 ){
-      pInfo->aConstraintUsage[iLe].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iLe].omit = 1;
-      idxNum |= BLAME_IDX_PK_LE;
-    }
-    if( iLt >= 0 ){
-      pInfo->aConstraintUsage[iLt].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iLt].omit = 1;
-      idxNum |= BLAME_IDX_PK_LT;
-    }
-    if( idxNum != 0 ){
-      pInfo->estimatedCost = 1000.0;
-      pInfo->estimatedRows = 100;
-    }
-  }
-
-  pInfo->idxNum = idxNum;
-  return SQLITE_OK;
+  return doltliteBestIndexIntPkRange(pInfo, 0,
+      BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
+      BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
+      100000.0, 1000, 100.0, 1, 1000.0, 100);
 }
 
 static int bmOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
@@ -785,56 +737,16 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   ProllyHash tableRoot;
   u8 tableFlags = 0;
   int rc;
-  int iArg = 0;
-  i64 pkLo = 0, pkHi = 0;
-  int hasPkLo = 0, hasPkHi = 0;
-  int pkLoStrict = 0, pkHiStrict = 0;
+  DoltlitePkRange pkRange;
   (void)idxStr;
 
   blameFreeRows(c);
   c->iRow = 0;
 
-  if( idxNum & BLAME_IDX_PK_EQ ){
-    if( iArg < argc ){
-      pkLo = sqlite3_value_int64(argv[iArg++]);
-      hasPkLo = 1;
-    }
-  }else{
-    if( idxNum & BLAME_IDX_PK_GE ){
-      if( iArg < argc ){
-        pkLo = sqlite3_value_int64(argv[iArg++]);
-        hasPkLo = 1;
-        pkLoStrict = 0;
-      }
-    }
-    if( idxNum & BLAME_IDX_PK_GT ){
-      if( iArg < argc ){
-        i64 v2 = sqlite3_value_int64(argv[iArg++]);
-        if( !hasPkLo || v2 >= pkLo ){
-          pkLo = v2;
-          hasPkLo = 1;
-          pkLoStrict = 1;
-        }
-      }
-    }
-    if( idxNum & BLAME_IDX_PK_LE ){
-      if( iArg < argc ){
-        pkHi = sqlite3_value_int64(argv[iArg++]);
-        hasPkHi = 1;
-        pkHiStrict = 0;
-      }
-    }
-    if( idxNum & BLAME_IDX_PK_LT ){
-      if( iArg < argc ){
-        i64 v2 = sqlite3_value_int64(argv[iArg++]);
-        if( !hasPkHi || v2 <= pkHi ){
-          pkHi = v2;
-          hasPkHi = 1;
-          pkHiStrict = 1;
-        }
-      }
-    }
-  }
+  doltlitePkRangeFromArgs(idxNum,
+      BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
+      BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
+      argc, argv, &pkRange);
 
   if( !cs || !pCache ) return SQLITE_OK;
 
@@ -853,8 +765,10 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
 
   rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags,
                             idxNum,
-                            pkLo, hasPkLo, pkLoStrict,
-                            pkHi, hasPkHi, pkHiStrict);
+                            pkRange.pkLo, pkRange.hasPkLo,
+                            pkRange.pkLoStrict,
+                            pkRange.pkHi, pkRange.hasPkHi,
+                            pkRange.pkHiStrict);
   if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
   c->nUnresolved = c->nRows;
 

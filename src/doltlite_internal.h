@@ -12,6 +12,16 @@ typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 typedef struct SchemaEntry SchemaEntry;
 typedef struct DoltliteTxnState DoltliteTxnState;
+typedef struct DoltlitePkRange DoltlitePkRange;
+
+struct DoltlitePkRange {
+  i64 pkLo;
+  i64 pkHi;
+  int hasPkLo;
+  int hasPkHi;
+  int pkLoStrict;
+  int pkHiStrict;
+};
 
 typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
 enum DoltliteVcTxnMode {
@@ -165,6 +175,140 @@ static SQLITE_INLINE int doltliteBestIndexRefs(
   pInfo->idxNum = (iFrom>=0 ? 1 : 0) | (iTo>=0 ? 2 : 0) | (iTbl>=0 ? 4 : 0);
   pInfo->estimatedCost = 1000.0;
   return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteBestIndexIntPkRange(
+  sqlite3_index_info *pInfo,
+  int iPkCol,
+  int idxEq,
+  int idxGe,
+  int idxLe,
+  int idxGt,
+  int idxLt,
+  double fullCost,
+  sqlite3_int64 fullRows,
+  double eqCost,
+  sqlite3_int64 eqRows,
+  double rangeCost,
+  sqlite3_int64 rangeRows
+){
+  int iEq = -1, iGe = -1, iLe = -1, iGt = -1, iLt = -1;
+  int i, nArg = 0, idxNum = 0;
+
+  pInfo->estimatedCost = fullCost;
+  pInfo->estimatedRows = fullRows;
+
+  if( iPkCol < 0 ){
+    pInfo->idxNum = 0;
+    return SQLITE_OK;
+  }
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->iColumn != iPkCol ) continue;
+    switch( pC->op ){
+      case SQLITE_INDEX_CONSTRAINT_EQ: if( iEq<0 ) iEq = i; break;
+      case SQLITE_INDEX_CONSTRAINT_GE: if( iGe<0 ) iGe = i; break;
+      case SQLITE_INDEX_CONSTRAINT_LE: if( iLe<0 ) iLe = i; break;
+      case SQLITE_INDEX_CONSTRAINT_GT: if( iGt<0 ) iGt = i; break;
+      case SQLITE_INDEX_CONSTRAINT_LT: if( iLt<0 ) iLt = i; break;
+      default: break;
+    }
+  }
+
+  if( iEq >= 0 ){
+    pInfo->aConstraintUsage[iEq].argvIndex = ++nArg;
+    pInfo->aConstraintUsage[iEq].omit = 1;
+    idxNum |= idxEq;
+    pInfo->estimatedCost = eqCost;
+    pInfo->estimatedRows = eqRows;
+  }else{
+    if( iGe >= 0 ){
+      pInfo->aConstraintUsage[iGe].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iGe].omit = 1;
+      idxNum |= idxGe;
+    }
+    if( iGt >= 0 ){
+      pInfo->aConstraintUsage[iGt].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iGt].omit = 1;
+      idxNum |= idxGt;
+    }
+    if( iLe >= 0 ){
+      pInfo->aConstraintUsage[iLe].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iLe].omit = 1;
+      idxNum |= idxLe;
+    }
+    if( iLt >= 0 ){
+      pInfo->aConstraintUsage[iLt].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iLt].omit = 1;
+      idxNum |= idxLt;
+    }
+    if( idxNum != 0 ){
+      pInfo->estimatedCost = rangeCost;
+      pInfo->estimatedRows = rangeRows;
+    }
+  }
+
+  pInfo->idxNum = idxNum;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE void doltlitePkRangeFromArgs(
+  int idxNum,
+  int idxEq,
+  int idxGe,
+  int idxLe,
+  int idxGt,
+  int idxLt,
+  int argc,
+  sqlite3_value **argv,
+  DoltlitePkRange *pRange
+){
+  int iArg = 0;
+  memset(pRange, 0, sizeof(*pRange));
+
+  if( idxNum & idxEq ){
+    if( iArg < argc ){
+      pRange->pkLo = sqlite3_value_int64(argv[iArg++]);
+      pRange->hasPkLo = 1;
+    }
+  }else{
+    if( idxNum & idxGe ){
+      if( iArg < argc ){
+        pRange->pkLo = sqlite3_value_int64(argv[iArg++]);
+        pRange->hasPkLo = 1;
+        pRange->pkLoStrict = 0;
+      }
+    }
+    if( idxNum & idxGt ){
+      if( iArg < argc ){
+        i64 v2 = sqlite3_value_int64(argv[iArg++]);
+        if( !pRange->hasPkLo || v2 >= pRange->pkLo ){
+          pRange->pkLo = v2;
+          pRange->hasPkLo = 1;
+          pRange->pkLoStrict = 1;
+        }
+      }
+    }
+    if( idxNum & idxLe ){
+      if( iArg < argc ){
+        pRange->pkHi = sqlite3_value_int64(argv[iArg++]);
+        pRange->hasPkHi = 1;
+        pRange->pkHiStrict = 0;
+      }
+    }
+    if( idxNum & idxLt ){
+      if( iArg < argc ){
+        i64 v2 = sqlite3_value_int64(argv[iArg++]);
+        if( !pRange->hasPkHi || v2 <= pRange->pkHi ){
+          pRange->pkHi = v2;
+          pRange->hasPkHi = 1;
+          pRange->pkHiStrict = 1;
+        }
+      }
+    }
+  }
 }
 
 static SQLITE_INLINE void doltliteResultTimestamp(sqlite3_context *ctx, i64 timestamp){

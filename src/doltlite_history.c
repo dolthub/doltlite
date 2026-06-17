@@ -48,12 +48,7 @@ struct HistCursor {
   char *zCommitter;
   i64 commitDate;
   int idxNum;
-  i64 pkLo;
-  i64 pkHi;
-  int hasPkLo;
-  int hasPkHi;
-  int pkLoStrict;
-  int pkHiStrict;
+  DoltlitePkRange pkRange;
 };
 
 static void htCursorReset(HistCursor *c){
@@ -75,12 +70,12 @@ static void htCursorReset(HistCursor *c){
 
 static int htRowMatchesUpper(HistCursor *c){
   i64 k;
-  if( !c->hasPkHi ) return 1;
+  if( !c->pkRange.hasPkHi ) return 1;
   k = prollyCursorIntKey(&c->common.tblCur);
-  if( c->pkHiStrict ){
-    return k < c->pkHi;
+  if( c->pkRange.pkHiStrict ){
+    return k < c->pkRange.pkHi;
   }
-  return k <= c->pkHi;
+  return k <= c->pkRange.pkHi;
 }
 
 static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
@@ -154,7 +149,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
           && (c->idxNum & HIST_IDX_PK_ANY) != 0;
 
   if( seekable && (c->idxNum & HIST_IDX_PK_EQ) ){
-    rc = prollyCursorSeekInt(&c->common.tblCur, c->pkLo, &res);
+    rc = prollyCursorSeekInt(&c->common.tblCur, c->pkRange.pkLo, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
       return rc;
@@ -167,9 +162,9 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     return SQLITE_OK;
   }
 
-  if( seekable && c->hasPkLo ){
-    i64 startKey = c->pkLo;
-    if( c->pkLoStrict ) startKey++;
+  if( seekable && c->pkRange.hasPkLo ){
+    i64 startKey = c->pkRange.pkLo;
+    if( c->pkRange.pkLoStrict ) startKey++;
     rc = prollyCursorSeekInt(&c->common.tblCur, startKey, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
@@ -199,7 +194,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
-  if( seekable && c->hasPkHi && !htRowMatchesUpper(c) ){
+  if( seekable && c->pkRange.hasPkHi && !htRowMatchesUpper(c) ){
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
@@ -258,67 +253,10 @@ static int htConnect(sqlite3 *db, void *pAux, int argc,
 
 static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   DoltliteVtabCommon *vt = (DoltliteVtabCommon*)v;
-  int iEq = -1, iGe = -1, iLe = -1, iGt = -1, iLt = -1;
-  int i, nArg = 0, idxNum = 0;
-  int iPk = vt->cols.iPkCol;
-
-  p->estimatedCost = 100000.0;
-  p->estimatedRows = 100000;
-
-  if( iPk < 0 ){
-    p->idxNum = 0;
-    return SQLITE_OK;
-  }
-
-  for(i=0; i<p->nConstraint; i++){
-    const struct sqlite3_index_constraint *pC = &p->aConstraint[i];
-    if( !pC->usable ) continue;
-    if( pC->iColumn != iPk ) continue;
-    switch( pC->op ){
-      case SQLITE_INDEX_CONSTRAINT_EQ: if( iEq<0 ) iEq = i; break;
-      case SQLITE_INDEX_CONSTRAINT_GE: if( iGe<0 ) iGe = i; break;
-      case SQLITE_INDEX_CONSTRAINT_LE: if( iLe<0 ) iLe = i; break;
-      case SQLITE_INDEX_CONSTRAINT_GT: if( iGt<0 ) iGt = i; break;
-      case SQLITE_INDEX_CONSTRAINT_LT: if( iLt<0 ) iLt = i; break;
-      default: break;
-    }
-  }
-
-  if( iEq >= 0 ){
-    p->aConstraintUsage[iEq].argvIndex = ++nArg;
-    p->aConstraintUsage[iEq].omit = 1;
-    idxNum |= HIST_IDX_PK_EQ;
-    p->estimatedCost = 100.0;
-    p->estimatedRows = 100;
-  }else{
-    if( iGe >= 0 ){
-      p->aConstraintUsage[iGe].argvIndex = ++nArg;
-      p->aConstraintUsage[iGe].omit = 1;
-      idxNum |= HIST_IDX_PK_GE;
-    }
-    if( iGt >= 0 ){
-      p->aConstraintUsage[iGt].argvIndex = ++nArg;
-      p->aConstraintUsage[iGt].omit = 1;
-      idxNum |= HIST_IDX_PK_GT;
-    }
-    if( iLe >= 0 ){
-      p->aConstraintUsage[iLe].argvIndex = ++nArg;
-      p->aConstraintUsage[iLe].omit = 1;
-      idxNum |= HIST_IDX_PK_LE;
-    }
-    if( iLt >= 0 ){
-      p->aConstraintUsage[iLt].argvIndex = ++nArg;
-      p->aConstraintUsage[iLt].omit = 1;
-      idxNum |= HIST_IDX_PK_LT;
-    }
-    if( idxNum != 0 ){
-      p->estimatedCost = 1000.0;
-      p->estimatedRows = 1000;
-    }
-  }
-
-  p->idxNum = idxNum;
-  return SQLITE_OK;
+  return doltliteBestIndexIntPkRange(p, vt->cols.iPkCol,
+      HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
+      HIST_IDX_PK_GT, HIST_IDX_PK_LT,
+      100000.0, 100000, 100.0, 100, 1000.0, 1000);
 }
 
 static int htOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
@@ -338,57 +276,15 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   ProllyHash head;
   ChunkStore *cs;
   int rc;
-  int iArg = 0;
-  (void)idxStr;(void)argc;
+  (void)idxStr;
 
   htCursorReset(c);
 
   c->idxNum = idxNum;
-  c->hasPkLo = c->hasPkHi = 0;
-  c->pkLoStrict = c->pkHiStrict = 0;
-  c->pkLo = c->pkHi = 0;
-
-  if( idxNum & HIST_IDX_PK_EQ ){
-    if( iArg < argc ){
-      c->pkLo = sqlite3_value_int64(argv[iArg++]);
-      c->hasPkLo = 1;
-    }
-  }else{
-    if( idxNum & HIST_IDX_PK_GE ){
-      if( iArg < argc ){
-        c->pkLo = sqlite3_value_int64(argv[iArg++]);
-        c->hasPkLo = 1;
-        c->pkLoStrict = 0;
-      }
-    }
-    if( idxNum & HIST_IDX_PK_GT ){
-      if( iArg < argc ){
-        i64 v2 = sqlite3_value_int64(argv[iArg++]);
-        if( !c->hasPkLo || v2 >= c->pkLo ){
-          c->pkLo = v2;
-          c->hasPkLo = 1;
-          c->pkLoStrict = 1;
-        }
-      }
-    }
-    if( idxNum & HIST_IDX_PK_LE ){
-      if( iArg < argc ){
-        c->pkHi = sqlite3_value_int64(argv[iArg++]);
-        c->hasPkHi = 1;
-        c->pkHiStrict = 0;
-      }
-    }
-    if( idxNum & HIST_IDX_PK_LT ){
-      if( iArg < argc ){
-        i64 v2 = sqlite3_value_int64(argv[iArg++]);
-        if( !c->hasPkHi || v2 <= c->pkHi ){
-          c->pkHi = v2;
-          c->hasPkHi = 1;
-          c->pkHiStrict = 1;
-        }
-      }
-    }
-  }
+  doltlitePkRangeFromArgs(idxNum,
+      HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
+      HIST_IDX_PK_GT, HIST_IDX_PK_LT,
+      argc, argv, &c->pkRange);
 
   cs = doltliteGetChunkStore(v->db);
   if( !cs ) return SQLITE_OK;
