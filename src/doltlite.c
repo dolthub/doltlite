@@ -2967,6 +2967,23 @@ static void doltliteMergeFunc(
       return;
     }
 
+    /* Re-confirm under the lock right before advancing; the merge's first
+    ** confirm is staled by intervening lock-cycling SQL (ANALYZE, etc.). */
+    rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
+    if( rc==SQLITE_BUSY ){
+      sqlite3_result_error(context,
+        "merge conflict: another connection committed to this branch. Please retry your transaction.",
+        -1);
+      doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+      return;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+      return;
+    }
+    graphLocked = 1;
+
     rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash, 0);
     if( graphLocked ){
       chunkStoreUnlock(cs);
@@ -3216,6 +3233,12 @@ static int applyMergedCatalogAndCommit(
   rc = doltliteCreateAndStoreCommit(db, ourHead, &liveMergedCatHash,
       zMessage, NULL, NULL, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  /* Re-confirm under the lock right before advancing; the first confirm is
+  ** staled by intervening lock-cycling SQL. */
+  rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+  graphLocked = 1;
 
   rc = doltliteAdvanceBranch(db, &commitHash, &liveMergedCatHash, 0);
   if( rc!=SQLITE_OK ) goto apply_rollback;

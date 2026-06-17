@@ -15,6 +15,7 @@ GATING=(
   vc_ref_mutation_stress_test
   multi_process_test
   multi_process_gc_test
+  multi_process_merge_rebase_test
   oom_dolt_fault_test
   cross_branch_test
   corruption_test
