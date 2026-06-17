@@ -320,23 +320,7 @@ static int remoteGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
 
 static int fsSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   FsRemote *p = (FsRemote*)pRemote;
-  ProllyHash oldRefsHash;
-  ProllyHash refsHash;
-  int rc = chunkStorePut(&p->store, pData, nData, &refsHash);
-  if( rc==SQLITE_OK ){
-    memcpy(&oldRefsHash, refsTableGetHash(&p->store.refs), sizeof(ProllyHash));
-    refsTableSetHash(&p->store.refs, &refsHash);
-
-    rc = chunkStoreReloadRefs(&p->store);
-    if( rc!=SQLITE_OK ){
-      refsTableSetHash(&p->store.refs, &oldRefsHash);
-      if( !prollyHashIsEmpty(&oldRefsHash) ){
-        int restoreRc = chunkStoreReloadRefs(&p->store);
-        if( restoreRc!=SQLITE_OK ) return restoreRc;
-      }
-    }
-  }
-  return rc;
+  return chunkStoreInstallRefsBlob(&p->store, pData, nData);
 }
 
 static int fsSetRefsIf(
@@ -422,12 +406,7 @@ struct LocalAsRemote {
 
 static int localSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
-  ProllyHash refsHash;
-  int rc = chunkStorePut(p->pStore, pData, nData, &refsHash);
-  if( rc==SQLITE_OK ){
-    refsTableSetHash(&p->pStore->refs, &refsHash);
-  }
-  return rc;
+  return chunkStoreInstallRefsBlob(p->pStore, pData, nData);
 }
 
 static int localSetRefsIf(
@@ -781,9 +760,17 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   int nRoots = 0;
   DoltliteRemote *pLocalDst = 0;
   ProllyHash oldRefsHash;
+  ProllyHash oldCommittedRefsHash;
+  SavedRefsState savedRefs;
+  int refsDetached = 0;
+  u8 oldRefsStale;
   int rc;
 
   memcpy(&oldRefsHash, refsTableGetHash(&pLocal->refs), sizeof(ProllyHash));
+  memcpy(&oldCommittedRefsHash, &pLocal->refs.committedRefsHash,
+         sizeof(ProllyHash));
+  memset(&savedRefs, 0, sizeof(savedRefs));
+  oldRefsStale = pLocal->bRefsStale;
 
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
@@ -820,30 +807,33 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   }
 
   if( refsData && nRefsData > 0 ){
-    ProllyHash refsHash;
-    rc = chunkStorePut(pLocal, refsData, nRefsData, &refsHash);
-    if( rc==SQLITE_OK ){
-      refsTableSetHash(&pLocal->refs, &refsHash);
-    }
+    csDetachSavedRefsState(pLocal, &savedRefs);
+    refsDetached = 1;
+    rc = chunkStoreInstallRefsBlob(pLocal, refsData, nRefsData);
   }
   sqlite3_free(refsData);
-  if( rc!=SQLITE_OK ) return rc;
+  refsData = 0;
+  if( rc!=SQLITE_OK ) goto clone_restore_refs;
 
   rc = chunkStoreCommit(pLocal);
   if( rc!=SQLITE_OK ){
-    refsTableSetHash(&pLocal->refs, &oldRefsHash);
-    return rc;
+    goto clone_restore_refs;
   }
 
-  rc = chunkStoreReloadRefs(pLocal);
-  if( rc!=SQLITE_OK ){
-    refsTableSetHash(&pLocal->refs, &oldRefsHash);
-    if( !prollyHashIsEmpty(&oldRefsHash) ){
-      int restoreRc = chunkStoreReloadRefs(pLocal);
-      if( restoreRc!=SQLITE_OK ) return restoreRc;
-    }
-  }
+  if( refsDetached ) csFreeSavedRefsState(&savedRefs);
+  return rc;
 
+clone_restore_refs:
+  sqlite3_free(refsData);
+  if( refsDetached ){
+    csFreeRefsState(pLocal);
+    csRestoreSavedRefsState(pLocal, &savedRefs);
+    memset(&savedRefs, 0, sizeof(savedRefs));
+  }
+  refsTableSetHash(&pLocal->refs, &oldRefsHash);
+  memcpy(&pLocal->refs.committedRefsHash, &oldCommittedRefsHash,
+         sizeof(ProllyHash));
+  pLocal->bRefsStale = oldRefsStale;
   return rc;
 }
 

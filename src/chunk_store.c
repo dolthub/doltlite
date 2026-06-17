@@ -1044,6 +1044,31 @@ int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
   return csReplaceRefsStateFromBlob(cs, data, nData, 1);
 }
 
+int chunkStoreInstallRefsBlob(ChunkStore *cs, const u8 *data, int nData){
+  ChunkStore refsView;
+  ProllyHash refsHash;
+  int rc;
+
+  if( !data || nData<=0 ) return SQLITE_ERROR;
+  rc = csDeserializeRefsIntoTemp(&refsView, data, nData);
+  if( rc!=SQLITE_OK ){
+    csFreeRefsState(&refsView);
+    return rc;
+  }
+
+  rc = chunkStorePut(cs, data, nData, &refsHash);
+  if( rc!=SQLITE_OK ){
+    csFreeRefsState(&refsView);
+    return rc;
+  }
+
+  csFreeRefsState(cs);
+  csAdoptRefsState(cs, &refsView);
+  refsTableSetHash(&cs->refs, &refsHash);
+  cs->bRefsStale = 0;
+  return SQLITE_OK;
+}
+
 int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   return csSerializeRefsBlob(cs, ppOut, pnOut);
 }

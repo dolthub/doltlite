@@ -222,6 +222,8 @@ int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
 
 int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData);
 
+int chunkStoreInstallRefsBlob(ChunkStore *cs, const u8 *data, int nData);
+
 int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut);
 
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult);
