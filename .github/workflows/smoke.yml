@@ -4,6 +4,34 @@ on:
   pull_request:
 
 jobs:
+  vc-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential zlib1g-dev python3
+
+    - name: Configure
+      run: |
+        mkdir -p build-vc-fuzz && cd build-vc-fuzz
+        ../configure
+
+    - name: Build DoltLite
+      run: |
+        cd build-vc-fuzz
+        make DOLTLITE_PROLLY_CHECK=1 doltlite
+
+    - name: Run stateful version-control fuzzer
+      run: |
+        cd build-vc-fuzz
+        DOLTLITE_VC_STATEFUL_SECONDS=600 bash ../test/vc_stateful_fuzzer.sh ./doltlite
+      timeout-minutes: 12
+
   # Single sequential job — these checks are short individually and we'd
   # rather not fan out runners. Crash → history-independence → fuzz, each
   # with its own out-of-tree build dir so they don't trip over each other.
