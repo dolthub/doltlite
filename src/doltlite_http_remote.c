@@ -5,6 +5,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_remote.h"
+#include "doltlite_commit.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,16 +36,6 @@ struct HttpRemote {
   ProllyHash expectedRefsHash;
   u8 hasExpectedRefsHash;
 };
-
-static void hashToHex(const ProllyHash *pHash, char *zOut){
-  static const char hex[] = "0123456789abcdef";
-  int i;
-  for(i=0; i<PROLLY_HASH_SIZE; i++){
-    zOut[i*2]   = hex[pHash->data[i] >> 4];
-    zOut[i*2+1] = hex[pHash->data[i] & 0x0f];
-  }
-  zOut[PROLLY_HASH_SIZE*2] = 0;
-}
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
 
@@ -322,7 +313,7 @@ static int httpGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
   *ppData = 0;
   *pnData = 0;
 
-  hashToHex(pHash, zHex);
+  doltliteHashToHex(pHash, zHex);
   snprintf(zSuffix, sizeof(zSuffix), "/chunk/%s", zHex);
   zPath = buildPath(p, zSuffix);
   if( !zPath ) return SQLITE_NOMEM;

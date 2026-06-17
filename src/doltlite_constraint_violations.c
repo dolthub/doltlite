@@ -15,17 +15,6 @@ static void freeViolationRow(ConstraintViolationRow *r){
   memset(r, 0, sizeof(*r));
 }
 
-static int dupBytes(const u8 *pIn, int nIn, u8 **ppOut){
-  u8 *pCopy;
-  *ppOut = 0;
-  if( !pIn || nIn<=0 ) return SQLITE_OK;
-  pCopy = sqlite3_malloc(nIn);
-  if( !pCopy ) return SQLITE_NOMEM;
-  memcpy(pCopy, pIn, nIn);
-  *ppOut = pCopy;
-  return SQLITE_OK;
-}
-
 static void freeViolationTables(ConstraintViolationTable *a, int n){
   int i, j;
   if( !a ) return;
@@ -267,8 +256,8 @@ static int cvAppendRow(
 
   pRow->violationType = violationType;
   pRow->intKey = intKey;
-  rc = dupBytes(pKey, nKey, &pRow->pKey);
-  if( rc==SQLITE_OK ){ pRow->nKey = nKey; rc = dupBytes(pVal, nVal, &pRow->pVal); }
+  rc = doltliteDupBytes(pKey, nKey, &pRow->pKey);
+  if( rc==SQLITE_OK ){ pRow->nKey = nKey; rc = doltliteDupBytes(pVal, nVal, &pRow->pVal); }
   if( rc==SQLITE_OK && pVal ) pRow->nVal = nVal;
   if( rc==SQLITE_OK && zInfoJson ){
     pRow->zInfo = sqlite3_mprintf("%s", zInfoJson);
