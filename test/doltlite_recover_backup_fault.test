@@ -4,26 +4,6 @@ source $testdir/malloc_common.tcl
 
 set testprefix doltlite_recover_backup_fault
 
-# Recovered coverage for backup fault-injection files. The upstream tests drive
-# sqlite3_backup_step() over stock pages; raw sqlite3_backup_init is unsupported
-# on DoltLite's prolly store, while Tcl-level db backup/restore is the supported
-# API. These tests assert the native fault contracts: OOM/IOERR fail cleanly,
-# the live source connection remains usable, and any target/source file left
-# behind is absent or still a valid DoltLite database.
-#
-# covers: backup_malloc backup_malloc-1.transient.0 -- OOM while opening the
-#   Tcl backup target errors cleanly, creates no target, source remains usable
-#   (1.1)
-# covers: backup_malloc backup_malloc-1.persistent.0 -- same native OOM
-#   boundary; direct memdebug failure represents both transient/persistent
-#   upstream classes at the supported Tcl backup entry point (1.1)
-# covers: backup_ioerr early backup target open/write fault -- IOERR during db
-#   backup leaves source usable and target valid but empty of source tables
-#   (1.2)
-# covers: backup restore OOM/IOERR source-open cleanup -- restore source open
-#   failure leaves the current database unchanged and usable (2.1, 2.2)
-# not-covered: sqlite3_backup_step page-by-page error-code sequencing; raw
-#   sqlite3_backup_init is rejected separately in doltlite_recover_rawformat_3
 
 proc dbState {{h db}} {
   list [$h eval {

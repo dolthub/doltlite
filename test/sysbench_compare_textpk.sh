@@ -1,18 +1,4 @@
 #!/bin/bash
-#
-# Sysbench-style OLTP benchmark (TEXT PK variant): doltlite vs stock SQLite
-#
-# Same shapes as test/sysbench_compare.sh, but every workload runs against
-# tables with a 32-char hex TEXT PRIMARY KEY (UUID-shaped). Surfaces the
-# non-INTKEY mutmap-flush cost; companion to issue #718's followup work.
-#
-# Ceilings: BENCH_MAX_MULTIPLIER (default 2.5×) on individual
-# read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 2×) on
-# section averages. Autocommit writes are gated separately by
-# BENCH_AC_WRITE_MAX_MULTIPLIER / BENCH_AC_WRITE_AVG_MAX_MULTIPLIER
-# (defaults 6× individual / 5× average) since per-statement durability
-# has wider variance.
-#
 set -e
 
 DOLTLITE=${DOLTLITE:-./doltlite}
@@ -20,7 +6,6 @@ SQLITE3=${SQLITE3:-./sqlite3}
 BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
-# Match stock SQLite's file-backed page cache to DoltLite's chunk cache.
 SQLITE_FILE_CACHE_PRAGMA=${SQLITE_FILE_CACHE_PRAGMA:-"PRAGMA cache_size=16384;"}
 ROWS=${BENCH_ROWS:-100000}
 BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.5}
@@ -41,9 +26,6 @@ print(f"{int(sys.argv[1]):,}")
 PYEOF
 }
 
-# ============================================================
-# Generate SQL files: each test = prepare + timing markers + workload
-# ============================================================
 python3 << PYEOF
 import random, string, os
 
@@ -59,13 +41,9 @@ def rint(a, b):
 def rstr(n):
     return ''.join(random.choices(string.ascii_lowercase, k=n))
 
-# Hex-encode an integer as a 32-char string (left-padded). Same shape as a
-# UUID hex without dashes — gives sqlite/doltlite a wide TEXT key without
-# random ordering noise from a real UUID generator.
 def hk(i):
     return f"{i:032x}"
 
-# Common schema + data uses TEXT PRIMARY KEY here.
 def write_prepare(f):
     f.write("CREATE TABLE sbtest1(id TEXT PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
     f.write("CREATE INDEX k_idx ON sbtest1(k);\n")
@@ -89,8 +67,6 @@ def write_prepare_types(f):
         f.write(f"INSERT INTO sbtest_types VALUES('{hk(i)}',{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
 
-# Each test file: prepare + ".print BENCH_START" + workload + ".print BENCH_END"
-# The runner times between START and END markers
 
 def stable_seed(name):
     h = 0
@@ -99,11 +75,11 @@ def stable_seed(name):
     return $SEED + h
 
 def make_test(name, prepare_fn, workload_fn):
-    random.seed($SEED)  # Reset for deterministic prepare
+    random.seed($SEED)
     with open(f'{d}/{name}.sql', 'w') as f:
         prepare_fn(f)
         f.write(".print BENCH_START\n")
-        random.seed(stable_seed(name))  # Unique deterministic workload seed
+        random.seed(stable_seed(name))
         workload_fn(f)
         f.write(".print BENCH_END\n")
 
@@ -118,11 +94,6 @@ def prep_with_types(f):
     write_prepare(f)
     write_prepare_types(f)
 
-# --- Tests ---
-# All sbtest1 / sbtest2 lookups go through the TEXT PK; ranges use the
-# hk-encoded keys' lexicographic ordering. With keys from hk(1) up to
-# hk(R), BETWEEN hk(s) AND hk(s+99) covers the same logical row range
-# as the integer-PK suite.
 
 def w_bulk_insert(f):
     f.write("CREATE TABLE sbtest_bulk(id TEXT PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
@@ -270,7 +241,6 @@ def w_read_write(f):
         f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
-# Generate all test SQL files
 make_test("oltp_bulk_insert",    prep_main, w_bulk_insert)
 make_test("oltp_point_select",   prep_main, w_point_select)
 make_test("oltp_range_select",   prep_main, w_range_select)
@@ -295,20 +265,6 @@ make_test("table_scan",          prep_main, w_table_scan)
 make_test("oltp_read_only",      prep_main, w_read_only)
 make_test("oltp_read_write",     prep_main, w_read_write)
 
-# ----------------------------------------------------------------
-# Autocommit variants — every statement is its own transaction.
-# Same workload shapes as the file-backed write tests, but the
-# wrapping BEGIN/COMMIT is removed so each statement fsyncs.
-# This is the shape that real CLI traffic and short-lived
-# connections produce, and it's where per-commit fixed costs
-# (manifest update, refs blob rewrite, WAL bookkeeping) become
-# the dominant signal instead of being amortized over thousands
-# of statements in one transaction.
-#
-# Inner loop counts are reduced (each statement now does an fsync,
-# so the same wall-time budget buys far fewer statements) — total
-# stays near the existing tests' wall time per iteration.
-# ----------------------------------------------------------------
 AC = 200  # statements per autocommit test
 
 def w_bulk_insert_autocommit(f):
@@ -329,15 +285,12 @@ def w_update_non_index_autocommit(f):
         f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
 
 def w_delete_insert_autocommit(f):
-    # Each iteration emits 2 statements (DELETE + INSERT OR REPLACE).
-    # Halve the loop so total commits ≈ AC.
     for _ in range(AC // 2):
         id = rint(1, R)
         f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
         f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_write_only_autocommit(f):
-    # Each iteration emits 4 statements; quarter the loop so total commits ≈ AC.
     for _ in range(AC // 4):
         f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
         f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
@@ -346,16 +299,12 @@ def w_write_only_autocommit(f):
         f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_types_delete_insert_autocommit(f):
-    # 2 statements per iteration; halve the loop.
     for _ in range(AC // 2):
         id = rint(1, R)
         f.write(f"DELETE FROM sbtest_types WHERE id='{hk(id)}';\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES('{hk(id)}',{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
 
 def w_read_write_autocommit(f):
-    # The mix is ~16 statements per iteration (10 point selects, 3 ranges,
-    # 2 updates, 1 delete, 1 insert). Reads are cheap at autocommit (no
-    # commit needed) but writes each fsync. Sized so total writes ≈ AC.
     iters = AC // 4
     for _ in range(iters):
         for _ in range(10):
@@ -380,13 +329,8 @@ make_test("types_delete_insert_ac",   prep_with_types, w_types_delete_insert_aut
 make_test("oltp_read_write_ac",       prep_main, w_read_write_autocommit)
 PYEOF
 
-# ============================================================
-# Run each test: single invocation, host-clock timing when the timer
-# helper is available. Fall back to SQL timestamps for local ad hoc runs.
-# ============================================================
 run_bench() {
   local engine="$1" binary="$2" sql_file="$3" db_template="$4"
-  # For file-backed, use a unique temp file per invocation
   local db="$db_template"
   if [ "$db" != ":memory:" ]; then
     db="/tmp/bench_${engine}_${RANDOM}_$$.db"
@@ -419,7 +363,6 @@ run_bench() {
     -e "s/\.print BENCH_END/SELECT 'TS_END:' || CAST((julianday('now')*86400000000) AS INTEGER);/" \
     "$bench_sql_file" | "$binary" "$db" 2>&1)
   if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
-  # Extract timestamps and compute delta
   echo "$output" | python3 -c "
 import sys, re
 start = end = None
@@ -436,10 +379,6 @@ else:
 }
 
 bench_runs_for_test() {
-  # BENCH_RUNS=1 for fast local iteration; default 5 for the TEXT PK
-  # suite — each non-INTKEY write on doltlite goes through a per-statement
-  # mutmap flush, so most tests keep the normal median-of-5 budget. The
-  # autocommit writes are noisier in CI, so they get a wider median window.
   case "$1" in
     *_ac) echo "$BENCH_AC_WRITE_RUNS" ;;
     *) echo "${BENCH_RUNS:-5}" ;;
@@ -491,9 +430,6 @@ WRITE_TESTS_AC="oltp_bulk_insert_ac oltp_insert_ac oltp_update_index_ac oltp_upd
 BENCH_RESULTS_FILE="$TMPDIR/bench_results.tsv"
 : > "$BENCH_RESULTS_FILE"
 
-# ============================================================
-# Output markdown table
-# ============================================================
 run_section() {
   local section="$1" tests="$2" db_sq="$3" db_dl="$4"
   local ratio_sum=0
@@ -576,11 +512,6 @@ SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRIT
 echo ""
 echo "_${ROWS} rows, $(bench_runs_summary), workload-only timing via host monotonic clock when available._"
 
-# ============================================================
-# Enforce performance ceiling — gates the same shape sysbench_compare.sh
-# does (file-backed wrapped reads + writes, plus autocommit writes), so
-# a regression on TEXT PK shows up as a CI failure.
-# ============================================================
 check_ceiling() {
   local section="$1" tests="$2" max="$3"
   local failed=0

@@ -1,192 +1,11 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of raw-format/crash-recovery divergences (shard
-# rawformat_3). The originals poked SQLite page bytes (hexio), crashed child
-# processes mid-journal-sync, counted VFS ops/file sizes/btree seeks
-# (sqlite_search_count), or drove page-image APIs (dbpage writes, backup,
-# deserialize). doltlite stores a content-addressed prolly chunk store, so each
-# entry is re-asserted as the doltlite-native invariant: transactions are
-# atomic across an abandoned connection (the crash analog), committed data
-# round-trips bit-exactly across reopen, query RESULTS match stock where only
-# the seek-count metric diverged, synthetic pragmas report their documented
-# values, and page-image APIs are rejected cleanly with the db left usable.
-#
-# covers: crash2 crash2-1.1 — multi-table CREATE inside one txn commits;
-#   reopen shows both tables, file nonempty, integrity ok (1.1)
-# covers-class: crash2 crash2-2.{1..29}.1 crash2-2.{1..16}.2 (45 entries):
-#   originals crashed a child during journal sync per sector size and required
-#   the pre-txn signature (count+md5sums) back after recovery; doltlite analog:
-#   an insert/delete/update txn abandoned by closing the connection mid-txn
-#   never persists — signature identical after reopen and integrity ok,
-#   repeated for 4 mutation mixes (1.4.1-1.4.4)
-# covers-class: crash2 crash2-3.{1..9}.1 (9 entries): crash during database
-#   sync, same signature contract; additionally a committed mutation IS fully
-#   visible after reopen — the signature changes exactly at COMMIT and survives
-#   reopen unchanged (1.5)
-# covers-class: crash3 crash3-1.{41..50}.3 (10 entries): originals required abc
-#   to hold either the pre- or post-state (never a partial row) after an
-#   atomic-write crash on INSERT of a 1000-char value; doltlite: the committed
-#   1000-char insert is fully present after reopen (2.1), an abandoned one is
-#   fully absent (2.2), and an abandoned DELETE keeps all rows while a
-#   committed one removes all (2.3)
-# covers: minmax3 minmax3-1.0 — same table built across a close/reopen (the
-#   original's set_file_format+reopen step) with the original's rows and
-#   PRAGMA automatic_index=OFF (3.0)
-# covers-class: minmax3 minmax3-1.1.{1..6} (6 entries): max(y) WHERE x='2'
-#   returns V/IV through every index config the original cycled (none, (x),
-#   (x,y), (x,y DESC), y!= / y< / z!= residuals); only the seek-count metric
-#   diverged (3.1.1-3.1.6)
-# covers-class: minmax3 minmax3-1.2.{1..4} (4 entries): min(y) WHERE x='2'
-#   returns II through the same index cycle (3.2.1-3.2.4)
-# covers-class: minmax3 minmax3-1.3.{1..3} (3 entries): min(y) over the table
-#   returns I with no index, (y), and (y DESC) (3.3.1-3.3.3)
-# covers-class: minmax3 minmax3-1.4.{1..4} (4 entries): max(y) returns VI with
-#   no index, (y), (y DESC); final DROP INDEX succeeds (3.4.1-3.4.4)
-# covers-class: minmax3 minmax3-2.{1..8} (8 entries): min(b) with index
-#   i3(a,b) over the original's 11 rows: all eight WHERE variants return the
-#   stock values (3.5.1-3.5.8)
-# covers-class: minmax3 minmax3-3.{1..8} (8 entries): identical eight variants
-#   with the DESC index i3(a, b DESC) (3.6.1-3.6.8)
-# covers-class: minmax3 minmax3-4.{1,2,3,4,5,6,10,11,12,13,14,15} (12 entries):
-#   max/min under BINARY vs nocase vs rtrim collation over {'abc','BCD'} return
-#   the stock pairs (3.7.1-3.7.12)
-# covers: minmax minmax-1.6 — index-optimized min(x)/max(x) over 1..20 return
-#   1/20; only the search-count metric diverged (3.8)
-# covers: intpkey intpkey-3.2 — point lookup WHERE a=5 on an INTEGER PRIMARY
-#   KEY table returns (5,hello,world); only search_count diverged (3.9)
-# covers: intpkey intpkey-3.6 — covering-index lookup WHERE c=='world' returns
-#   the same row; only search_count diverged (3.9)
-# covers-class: io io-1.{1..5} (5 entries): originals counted pager writes per
-#   INSERT of 230-byte rows; doltlite analog: the same 9-row dataset commits
-#   and round-trips across reopen with integrity ok (4.1)
-# covers-class: io io-3.{1..3} (3 entries): originals asserted cache-spill file
-#   growth and one fsync at COMMIT for a 2048-row txn; doltlite analog: the
-#   full txn is visible mid-txn to its own connection, commits, survives
-#   reopen, and the store file grew (4.2)
-# covers-class: io io-4.1 io-4.2.{1..3} io-4.3.{1,3,4} (7 entries): originals
-#   asserted journal-header/fsync details around simple and cache-spill
-#   commits; doltlite analog: the same DELETE/INSERT/BEGIN..COMMIT and
-#   41-page-scale UPDATE txns commit exactly and round-trip (4.3)
-# covers-class: io io-5.{1..5} (5 entries): originals derived page size from
-#   sector size/atomic flags; doltlite reports the build's synthetic page_size
-#   default, a session SET echoes back but reverts to that default on reopen (4.4)
-# covers-class: resetdb resetdb-{100,110} (2 entries): sample db (20 rows of
-#   randomblob(300), 2 indexes) reports the stock sums, integrity ok, and
-#   doltlite's journal_mode 'wal'; a second connection sees identical content
-#   (5.1-5.3)
-# covers-class: resetdb resetdb-{200,201,320,330,700,710} (6 entries):
-#   originals corrupted page 1 via sqlite_dbpage and required 'file is not a
-#   database'; doltlite rejects the write ('table sqlite_dbpage may not be
-#   modified') so the db is NEVER corrupted: quick_check ok on both
-#   connections afterwards (5.4, 5.5)
-# covers-class: resetdb resetdb-{210,400,500,740} (4 entries): RESET_DB
-#   dbconfig is refused on doltlite-format dbs (no silent no-op) and VACUUM
-#   still succeeds; since no corruption is possible the db stays intact and
-#   both connections agree on content and quick_check (see feature-gap note)
-#   (5.6)
-# covers-class: resetdb resetdb-{300,310} (2 entries): journal_mode reports
-#   'wal' on both connections; setting WAL is accepted (already wal) and
-#   setting DELETE is rejected verbatim (5.1, 5.7)
-# covers-class: resetdb resetdb-{840,850,860} (3 entries): PRAGMA encoding to
-#   utf16 is ignored (reads UTF-8) so the stock 'attached databases must use
-#   the same text encoding' state is unreachable; cross-connection reads keep
-#   working (5.8, 11.1-11.2)
-# covers: attach attach-2.15 — aux sqlite_master lists table/table/trigger/
-#   index rows for objects created through the attach (6.1)
-# covers: attach attach-2.16 — same rows after close/reopen/reattach, and the
-#   aux trigger still fires (6.2)
-# covers: attach attach-8.1 — attaching a non-database file fails cleanly with
-#   doltlite's 'unable to open database' (6.3)
-# covers: attach attach-8.2 — errorcode after the failed attach is 10
-#   (doltlite's code for the unreadable store; stock used 26) and the
-#   connection stays usable (6.3)
-# covers: attach attach-8.3 — doltlite's concurrency model lets ATTACH succeed
-#   while another connection holds BEGIN EXCLUSIVE on that file (6.4)
-# covers: attach attach-8.4 — errorcode 0 after that attach; once the writer
-#   commits, the attached db reads the committed row (6.4)
-# covers: attach attach-10.2 — PRAGMA database_list reports the '' and
-#   ':memory:' attaches by name with empty file paths, and the memory attach
-#   stores rows (6.5)
-# covers-class: securedel securedel-1.{1,4,5,6,7,8} securedel-2.1 (7 entries):
-#   PRAGMA secure_delete reads 0 and stays 0 through ON/FAST and per-db
-#   (main./aux.) sets including across re-attach — there is no page freelist
-#   to zero; the DELETE itself works: row gone, table hash changed, integrity
-#   ok (7.1-7.3)
-# covers-class: corruptK corruptK-{1.1,1.2,2.1,2.2,2.3,3.2,3.3} (7 entries):
-#   originals corrupted freelist slots and poked bytes via incrblob; doltlite
-#   analog: delete-then-reuse of variable-size blob slots stays exact, an
-#   incrblob byte write lands at the right offset, and integrity stays ok
-#   across reopen (8.1-8.3)
-# covers-class: alter4 alter4-{3.4,4.4} (2 entries): PRAGMA schema_version is
-#   hash-derived, nonzero, CHANGES after ALTER TABLE ADD, is stable across
-#   reopen, and an explicit SET is ignored; the ALTER's data is correct (9.1)
-# covers-class: alter4 alter4-{5.4,5.8} (2 entries): same contract for PRAGMA
-#   aux.schema_version around ALTER TABLE aux.t ADD COLUMN d DEFAULT 1000,
-#   with the default applied to existing rows (9.2)
-# covers-class: tkt2920 tkt2920-1.{1,3,5} (3 entries): PRAGMA max_page_count
-#   uses DoltLite's synthetic page metric. Attempts to lower below the current
-#   metric clamp to the current value; the cap can be raised again and the same
-#   blob volume inserts fine with integrity ok (10.1, 10.2)
-# covers: tkt2920 tkt2920-1.9 — after the txn is rolled back, COMMIT errors
-#   'cannot commit - no transaction is active' verbatim (10.3)
-# covers: enc enc-12.1 — PRAGMA encoding='UTF-16le' on a fresh db is ignored:
-#   data stores fine and encoding reads back UTF-8 (11.1)
-# covers: enc enc-12.3 — attaching that db never raises the stock encoding-
-#   mismatch error; rows read correctly (11.2)
-# covers: enc enc-12.8 — cross-db query touching the attached db plus a temp
-#   table succeeds where stock errored on mixed encodings (11.2)
-# covers-class: format4 format4-1.{1..3} (3 entries): originals measured file
-#   size as serial types 8/9 (int 0/1) gave way to 2-byte ints; doltlite
-#   analog: 64 rows of all-0 / all-1 / all-2 produce three distinct table
-#   hashes (the 0->1 transition is content-visible) and the final state
-#   round-trips across reopen (12.1)
-# covers: temptable2 temptable2-8.1 — same 20-row indexed dataset commits;
-#   page_count is a chunk-store metric asserted >0, not a page count (13.1)
-# covers-class: temptable2 temptable2-8.{3,6} (2 entries): sqlite3_backup_init
-#   fails verbatim on the prolly store ('sqlite3_backup_init() failed'); both
-#   connections remain fully usable (13.2)
-# covers: pagerfault3 pagerfault3-pre1 — page_size 2048 session set + 1200-byte
-#   blob commit; chunk-store page_count metric >0 (14.1)
-# covers: pagerfault3 pagerfault3-pre2 — reopen, set page_size 1024, VACUUM
-#   succeeds, data intact, integrity ok (14.2)
-# covers: check check-4.9 — CHECK enforcement survives the schema reload; the
-#   error text is doltlite's catalog-regenerated single-line form of the same
-#   expression (15.1)
-# covers: quote quote-2.5 — DQS=3 build accepts the double-quoted-string CHECK
-#   DDL outright; enforcement treats "null" as a literal before and after
-#   reopen and sqlite_master carries the regenerated DQS sql (15.2)
-# covers: descidx3 descidx3-1.1 — the DESC-index schema the original built
-#   after poking file-format 4 works: DESC ordering correct across reopen,
-#   integrity ok (15.3)
-# covers: index5 index5-1.3 — CREATE INDEX over a populated table (the
-#   original asserted page write order) yields a correct, integrity-ok index:
-#   min/max/count via the index match (15.4)
-# covers: vtab2 vtab2-5.3 — PRAGMA encoding='UTF16' is ignored, so the
-#   injected malformed-schema reparse is unreachable; creating a vtable on the
-#   missing module errors 'no such module: s' (15.5)
-# covers: gencol1 gencol1-15.10 — db deserialize of a raw page image is
-#   rejected verbatim ('unable to set MEMDB content') and the connection
-#   stays usable (15.6)
-# covers: gencol1 gencol1-15.20 — REPLACE INTO a table with a generated column
-#   computes the column (15.7)
-# covers: attach attach-11.1 — ATTACH of a ~9000-char mode=memory URI opens an
-#   in-memory chunk store (no path canonicalization), is usable, and detaches
-#   cleanly (6.6)
-# not-covered: resetdb resetdb-630 — feature gap:
-#   SQLITE_DBCONFIG_RESET_DATABASE is not implemented for doltlite-format
-#   databases; enabling it is now refused (SQLITE_ERROR, flag stays clear,
-#   see 5.6) instead of silently no-opping, so the original's "reset during
-#   another connection's scan empties the schema" assertion still has no
-#   doltlite equivalent.
 
 proc sig {} {
   return [db eval {SELECT count(*), md5sum(a), md5sum(b), md5sum(c) FROM abc}]
 }
 
-#-------------------------------------------------------------------------
-# 1.* crash2: rollback-journal crash recovery -> abandoned-connection atomicity
-#
 do_test doltlite_recover_rawformat_3-1.1 {
   execsql {
     BEGIN;
@@ -244,9 +63,6 @@ do_test doltlite_recover_rawformat_3-1.5 {
   list [expr {$s2 eq $s}] [expr {[sig] eq $s2}] [execsql {PRAGMA integrity_check}]
 } {0 1 ok}
 
-#-------------------------------------------------------------------------
-# 2.* crash3: atomic-write crash -> all-or-nothing transactions
-#
 do_test doltlite_recover_rawformat_3-2.1 {
   execsql {CREATE TABLE abc3(a,b,c); INSERT INTO abc3 VALUES(1,2,3)}
   execsql "BEGIN; INSERT INTO abc3 VALUES(4,5,'[string repeat y 1000]'); COMMIT"
@@ -274,9 +90,6 @@ do_test doltlite_recover_rawformat_3-2.3 {
   list $r1 [db one {SELECT count(*) FROM abc3}] [execsql {PRAGMA integrity_check}]
 } {2 0 ok}
 
-#-------------------------------------------------------------------------
-# 3.* minmax3 / minmax / intpkey: results identical, only seek metrics diverged
-#
 do_test doltlite_recover_rawformat_3-3.0 {
   execsql { CREATE TABLE mm1(x, y, z) }
   db close
@@ -502,9 +315,6 @@ do_test doltlite_recover_rawformat_3-3.9 {
        [execsql {SELECT * FROM tpk WHERE c=='world'}]
 } {{5 hello world} {5 hello world}}
 
-#-------------------------------------------------------------------------
-# 4.* io: VFS op counts/file sizes -> commit/round-trip + synthetic page_size
-#
 do_test doltlite_recover_rawformat_3-4.1 {
   execsql {CREATE TABLE ioabc(a,b)}
   for {set i 1} {$i<=9} {incr i} {
@@ -555,9 +365,6 @@ do_test doltlite_recover_rawformat_3-4.4 {
   list $v0 $v1 [execsql {PRAGMA page_size}]
 } {1024 8192 1024}
 
-#-------------------------------------------------------------------------
-# 5.* resetdb: dbpage corruption rejected, db never corrupt, reset is inert
-#
 do_test doltlite_recover_rawformat_3-5.1 {
   execsql {
     CREATE TABLE rt1(a,b);
@@ -587,8 +394,6 @@ do_test doltlite_recover_rawformat_3-5.4 {
 do_test doltlite_recover_rawformat_3-5.5 {
   list [execsql {PRAGMA quick_check}] [execsql {PRAGMA quick_check} db2]
 } {ok ok}
-# RESET_DB is refused on doltlite-format dbs (read-back value stays 0, the
-# C call returns SQLITE_ERROR), so VACUUM never silently skips a reset.
 do_test doltlite_recover_rawformat_3-5.6 {
   set r1 [sqlite3_db_config db RESET_DB 1]
   db eval VACUUM
@@ -612,9 +417,6 @@ do_test doltlite_recover_rawformat_3-5.8 {
   list $e $q
 } {UTF-8 ok}
 
-#-------------------------------------------------------------------------
-# 6.* attach: aux schema objects, bad files, locking, database_list, URIs
-#
 do_test doltlite_recover_rawformat_3-6.1 {
   forcedelete test2.db
   execsql {ATTACH 'test2.db' AS adb}
@@ -683,9 +485,6 @@ do_test doltlite_recover_rawformat_3-6.6 {
   list $r [db one {SELECT 1}]
 } {42 1}
 
-#-------------------------------------------------------------------------
-# 7.* securedel: secure_delete pragma inert; DELETE itself correct
-#
 do_test doltlite_recover_rawformat_3-7.1 {
   execsql {PRAGMA secure_delete}
 } {0}
@@ -713,9 +512,6 @@ do_test doltlite_recover_rawformat_3-7.3 {
        [execsql {PRAGMA integrity_check}]
 } {{1 3} 0 ok}
 
-#-------------------------------------------------------------------------
-# 8.* corruptK: free-slot reuse + incrblob byte writes stay exact
-#
 do_test doltlite_recover_rawformat_3-8.1 {
   execsql {
     CREATE TABLE ck1(id INTEGER PRIMARY KEY, x);
@@ -749,9 +545,6 @@ do_test doltlite_recover_rawformat_3-8.3 {
   execsql {SELECT id, length(x) FROM ck2 ORDER BY id; PRAGMA integrity_check}
 } {1 20 3 20 5 20 6 20 7 90 ok}
 
-#-------------------------------------------------------------------------
-# 9.* alter4: schema_version is hash-derived, changes on ALTER, set ignored
-#
 do_test doltlite_recover_rawformat_3-9.1 {
   execsql {CREATE TABLE al1(a,b); INSERT INTO al1 VALUES(1,100),(2,300)}
   set v0 [db one {PRAGMA schema_version}]
@@ -777,9 +570,6 @@ do_test doltlite_recover_rawformat_3-9.2 {
   list $rows [expr {$v0!=0}] [expr {$v0==$v1}]
 } {{1 one 1000 2 two 1000} 1 0}
 
-#-------------------------------------------------------------------------
-# 10.* tkt2920: synthetic page cap clamp; rollback then COMMIT error
-#
 do_test doltlite_recover_rawformat_3-10.1 {
   set before [db one {PRAGMA page_count}]
   set capped [db one {PRAGMA max_page_count=40}]
@@ -798,9 +588,6 @@ do_test doltlite_recover_rawformat_3-10.3 {
   catchsql COMMIT
 } {1 {cannot commit - no transaction is active}}
 
-#-------------------------------------------------------------------------
-# 11.* enc: utf16 database encodings ignored; no mismatch errors possible
-#
 do_test doltlite_recover_rawformat_3-11.1 {
   forcedelete test5.db
   sqlite3 db5 test5.db
@@ -821,9 +608,6 @@ do_test doltlite_recover_rawformat_3-11.2 {
   set r
 } {d e f xxx}
 
-#-------------------------------------------------------------------------
-# 12.* format4: serial-type transitions are content-visible and round-trip
-#
 do_test doltlite_recover_rawformat_3-12.1 {
   execsql {
     CREATE TABLE f4(x0,x1,x2,x3,x4,x5,x6,x7,x8,x9);
@@ -842,9 +626,6 @@ do_test doltlite_recover_rawformat_3-12.1 {
        [expr {[db one {SELECT dolt_hashof_table('f4')}] eq $h2}]
 } {64 0 0 1}
 
-#-------------------------------------------------------------------------
-# 13.* temptable2: chunk-store page_count metric; backup API rejected cleanly
-#
 do_test doltlite_recover_rawformat_3-13.1 {
   execsql {
     CREATE TABLE tt2(a,b);
@@ -864,9 +645,6 @@ do_test doltlite_recover_rawformat_3-13.2 {
   set r
 } {1 {sqlite3_backup_init() failed} 1 1}
 
-#-------------------------------------------------------------------------
-# 14.* pagerfault3: page-size change + VACUUM round-trip
-#
 do_test doltlite_recover_rawformat_3-14.1 {
   execsql {
     PRAGMA page_size = 2048;
@@ -884,9 +662,6 @@ do_test doltlite_recover_rawformat_3-14.2 {
        [expr {[db one {PRAGMA page_count}]>0}] [execsql {PRAGMA integrity_check}]
 } {1200 1 ok}
 
-#-------------------------------------------------------------------------
-# 15.* singles: check, quote, descidx3, index5, vtab2, gencol1
-#
 do_test doltlite_recover_rawformat_3-15.1 {
   execsql {CREATE TABLE ch4(x,y, CHECK( x+y==11
         OR x*y==12

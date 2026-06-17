@@ -465,13 +465,7 @@ static int diffNodesOneLevel(
             sqlite3_free(pCO); sqlite3_free(pCN);
             rc = SQLITE_NOMEM;
           }else{
-            /* Walk only the current subtree, NOT the absolute root.
-            ** Using pOldRoot/pNewRoot would re-traverse regions
-            ** already queued on the driver's stack (sibling subtrees
-            ** of ancestors), causing duplicate ADD/DELETE/MODIFY
-            ** callbacks once those pairs get popped and processed.
-            ** Compare with the level-mismatch path at the bottom of
-            ** this function, which already passes pOldHash/pNewHash. */
+            /* Walk this subtree only; the driver stack owns siblings. */
             prollyCursorInit(pCO, pStore, pCache, pOldHash, flags);
             prollyCursorInit(pCN, pStore, pCache, pNewHash, flags);
 

@@ -1,9 +1,4 @@
 #!/bin/bash
-#
-# Regression guards for every issue from Aaron's code review.
-# Each test section references the specific bug it prevents from regressing.
-# If any of these fail, a fix from the review remediation has regressed.
-#
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() {
@@ -22,11 +17,6 @@ run_test_match() {
 echo "=== Review Regression Guards ==="
 echo ""
 
-# ============================================================
-# GUARD 1: Durability — committed data survives reopen
-# Bug: pre-fsync manifest overwrite could lose data on crash
-# Fix: removed write to offset 0 before fsync
-# ============================================================
 
 echo "--- Guard 1: Durability (data survives reopen) ---"
 
@@ -38,7 +28,6 @@ SELECT dolt_commit('-A','-m','persist test');" | $DOLTLITE "$DB" > /dev/null 2>&
 run_test "durable_data" "SELECT v FROM t WHERE id=1;" "durable" "$DB"
 run_test "durable_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
-# Second commit
 echo "INSERT INTO t VALUES(2,'also durable');
 SELECT dolt_commit('-A','-m','second persist');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -46,12 +35,6 @@ run_test "durable_second" "SELECT v FROM t WHERE id=2;" "also durable" "$DB"
 run_test "durable_log2" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 rm -f "$DB"
 
-# ============================================================
-# GUARD 2: Error propagation — corrupt refs returns error
-# Bug: csDeserializeRefs errors were silently swallowed,
-#      losing all branches/tags without any error
-# Fix: propagate error at all 3 call sites + consistency check
-# ============================================================
 
 echo "--- Guard 2: Error propagation (refs integrity) ---"
 
@@ -60,41 +43,27 @@ echo "CREATE TABLE t(id INT);
 INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Refs must exist after commit
 run_test_match "refs_exist" \
   "SELECT count(*) FROM dolt_branches;" "^[1-9]" "$DB"
 
-# Branches must have valid commit hashes
 run_test_match "refs_valid_hash" \
   "SELECT length(hash) FROM dolt_branches LIMIT 1;" "^40$" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 3: Concurrent commit conflict detection
-# Bug: two connections commit to same branch, first is silently
-#      lost. No error, no indication of data loss.
-# Fix: session HEAD vs branch tip check under graph lock
-# ============================================================
 
 echo "--- Guard 3: Concurrent commit detection ---"
 
-# This requires the C test (concurrent_commit_test.c) which
-# exercises the actual two-connection scenario. Here we verify
-# the simpler invariant: after commit, session HEAD matches
-# branch tip (prerequisite for conflict detection to work).
 
 DB=/tmp/test_rg_conflict_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INT, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','first');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# HEAD commit hash should match the branch's commit hash
 run_test "head_matches_branch" \
   "SELECT (SELECT commit_hash FROM dolt_log LIMIT 1) = (SELECT hash FROM dolt_branches WHERE name='main');" \
   "1" "$DB"
 
-# After a second commit, still matches
 echo "INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','second');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -104,12 +73,6 @@ run_test "head_matches_branch_2" \
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 4: Merge log shows both parents' history
-# Bug: dolt_log and dolt_history only followed parentHash
-#      (first parent), missing the merged branch's commits
-# Fix: BFS all parents with dedup
-# ============================================================
 
 echo "--- Guard 4: Merge log shows both parents ---"
 
@@ -126,26 +89,17 @@ INSERT INTO t VALUES(3,'main2');
 SELECT dolt_commit('-A','-m','main work');
 SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Log must have 5 entries: merge + main work + feature work + init + seed
 run_test "merge_log_all_parents" \
   "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
-# Feature commit must be visible in the log
 run_test_match "merge_log_has_feature" \
   "SELECT group_concat(message, '|') FROM dolt_log;" "feature work" "$DB"
 
-# Main commit must also be visible
 run_test_match "merge_log_has_main" \
   "SELECT group_concat(message, '|') FROM dolt_log;" "main work" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 5: Branch commit reopen with diverged manifest head
-# Bug: p->root was set from always-empty commit.rootHash,
-#      zeroing the working tree on reopen
-# Fix: use chunkStoreGetRoot instead of commit.rootHash
-# ============================================================
 
 echo "--- Guard 5: Branch reopen with diverged manifest ---"
 
@@ -161,18 +115,11 @@ SELECT dolt_checkout('main');
 INSERT INTO t VALUES(3,'main_again');
 SELECT dolt_commit('-A','-m','main second');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Reopen on dev — manifest head is main's latest, not dev's
 run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB/dev"
 run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB/dev"
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 6: Virtual tables use real column names, not fallback
-# Bug: when column names couldn't be determined, virtual tables
-#      fell back to generic schemas (from_value, to_value)
-# Fix: return SQLITE_ERROR instead of generic schema
-# ============================================================
 
 echo "--- Guard 6: Virtual table schema correctness ---"
 
@@ -181,23 +128,16 @@ echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INT);
 INSERT INTO users VALUES(1,'alice',30);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# dolt_diff_users must have from_name/to_name columns, not from_value/to_value
 run_test_match "diff_has_real_cols" \
   "SELECT group_concat(name) FROM pragma_table_info('dolt_diff_users');" \
   "from_name" "$DB"
 
-# dolt_history_users must have actual column names
 run_test_match "history_has_real_cols" \
   "SELECT group_concat(name) FROM pragma_table_info('dolt_history_users');" \
   "\bname\b" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 7: Commit chain integrity after multiple operations
-# Bug: various issues could leave orphan commits, broken chains
-# Fix: multiple fixes; this verifies the invariant holistically
-# ============================================================
 
 echo "--- Guard 7: Commit chain integrity ---"
 
@@ -218,31 +158,20 @@ SELECT dolt_merge('br');
 SELECT dolt_commit('-A','-m','c5 merge');
 SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# After all operations + GC, commit chain must be intact
 run_test_match "chain_log_count" \
   "SELECT count(*) FROM dolt_log;" "^[5-6]$" "$DB"
 
-# All branches must point to valid commits
 run_test_match "chain_branches_valid" \
   "SELECT length(hash) FROM dolt_branches WHERE name='main';" "^40$" "$DB"
 
-# Data must be complete
 run_test "chain_data_count" "SELECT count(*) FROM t;" "4" "$DB"
 
-# Reopen and verify persistence
 run_test "chain_reopen_count" "SELECT count(*) FROM t;" "4" "$DB"
 run_test_match "chain_reopen_log" \
   "SELECT count(*) FROM dolt_log;" "^[5-6]$" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 10: .read mixed DML preserves composite-PK tables
-# Bug shape: statement-streamed blob-key mutations could lose older
-#            rows once many small edits accumulated in-session.
-# Invariant: large insert/update/delete streams preserve full table
-#            contents and exact point-lookups after reopen.
-# ============================================================
 
 echo "--- Guard 10: .read mixed DML on composite PK ---"
 
@@ -294,13 +223,6 @@ run_test "mixed_dml_tail_row" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 11: .read interleaved mixed DML keeps per-table state separate
-# Bug shape: large statement streams might corrupt deferred edits when
-#            switching between blob-key tables repeatedly.
-# Invariant: interleaved edits to multiple composite-PK tables reopen
-#            with the exact expected counts and point rows.
-# ============================================================
 
 echo "--- Guard 11: .read interleaved composite-PK tables ---"
 
@@ -362,13 +284,6 @@ run_test "interleaved_b_kept" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 12: .read mixed DML preserves WITHOUT ROWID composite-PK tables
-# Bug shape: statement-streamed blob-key mutations are especially risky
-#            on non-rowid layouts because the PK record is the full key.
-# Invariant: large mixed insert/update/delete streams keep exact row
-#            counts and point lookups after reopen.
-# ============================================================
 
 echo "--- Guard 12: .read mixed DML on WITHOUT ROWID composite PK ---"
 
@@ -420,12 +335,6 @@ run_test "mixed_dml_wor_tail" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 13: .read interleaved WITHOUT ROWID composite-PK tables
-# Bug shape: deferred edits could bleed across tables while switching
-#            between non-rowid blob-key roots in a long statement file.
-# Invariant: both tables keep exact counts and point rows after reopen.
-# ============================================================
 
 echo "--- Guard 13: .read interleaved WITHOUT ROWID tables ---"
 
@@ -487,12 +396,6 @@ run_test "interleaved_wor_b_kept" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 14: .read savepoint-heavy composite-PK stream keeps exact state
-# Bug shape: the #710 fix touched released mutmap savepoint metadata.
-# Invariant: repeated SAVEPOINT / RELEASE / ROLLBACK TO around large
-#            composite-PK DML streams preserves only the intended rows.
-# ============================================================
 
 echo "--- Guard 14: .read savepoint-heavy composite PK ---"
 
@@ -552,11 +455,6 @@ run_test "savepoint_blobkey_delete" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 15: .read savepoint-heavy WITHOUT ROWID composite-PK stream
-# Invariant: the same release/rollback pattern works on non-rowid
-#            blob-key tables and reopens with exact expected rows.
-# ============================================================
 
 echo "--- Guard 15: .read savepoint-heavy WITHOUT ROWID composite PK ---"
 
@@ -616,13 +514,6 @@ run_test "savepoint_wor_delete" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 16: .read mixed DML preserves composite-PK secondary indexes
-# Bug shape: large streamed writes on blob-key table roots can also
-#            desynchronize secondary indexes from table contents.
-# Invariant: after reopen, forced indexed lookups and range counts
-#            match the exact expected row set.
-# ============================================================
 
 echo "--- Guard 16: .read mixed DML on composite PK with indexes ---"
 
@@ -674,11 +565,6 @@ run_test "mixed_dml_idx_deleted_missing" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 17: .read mixed DML preserves WITHOUT ROWID secondary indexes
-# Invariant: the same indexed reopen checks work on non-rowid
-#            composite-PK tables with secondary indexes.
-# ============================================================
 
 echo "--- Guard 17: .read mixed DML on WITHOUT ROWID composite PK with indexes ---"
 
@@ -730,13 +616,6 @@ run_test "mixed_dml_wor_idx_deleted_missing" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 18: bulk .read indexed rowid tables survive VC state transitions
-# Bug shape: shell-streamed blob-key writes can look correct in-table
-#            but still drift when staged/committed/persisted through VC.
-# Invariant: status, add, commit, and reopen all preserve the same
-#            secondary-index-visible row set.
-# ============================================================
 
 echo "--- Guard 18: .read indexed composite PK through add/commit/reopen ---"
 
@@ -793,11 +672,6 @@ run_test "bulk_vc_idx_status_clean" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 19: bulk .read indexed WITHOUT ROWID tables survive VC states
-# Invariant: the same add/commit/reopen checks work on non-rowid
-#            composite-PK tables with secondary indexes.
-# ============================================================
 
 echo "--- Guard 19: .read indexed WITHOUT ROWID composite PK through add/commit/reopen ---"
 
@@ -854,14 +728,6 @@ run_test "bulk_vc_wor_idx_status_clean" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 20: bulk .read indexed rowid tables survive branch divergence
-# Bug shape: shell-streamed blob-key writes may persist on main but
-#            drift once a branch checkout, branch commit, and reopen
-#            switch the selected root and index set.
-# Invariant: main and feat reopen independently with their own exact
-#            indexed rows after divergence.
-# ============================================================
 
 echo "--- Guard 20: .read indexed composite PK through branch divergence ---"
 
@@ -936,11 +802,6 @@ run_test "bulk_branch_idx_feat_log" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 21: bulk .read indexed WITHOUT ROWID tables survive branches
-# Invariant: the same checkout/commit/reopen isolation works on
-#            non-rowid composite-PK tables with secondary indexes.
-# ============================================================
 
 echo "--- Guard 21: .read indexed WITHOUT ROWID composite PK through branch divergence ---"
 
@@ -1015,21 +876,12 @@ run_test "bulk_branch_wor_idx_feat_log" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 22: databases larger than 2 GiB still open
-# Bug: open-time WAL replay slurped the entire WAL into one malloc,
-#      tripping SQLite's allocator ceiling around 2^31 bytes and
-#      surfacing as a bogus "out of memory".
-# Invariant: a sparse synthetic chunk-store file just over 2 GiB with
-#            a valid WAL chunk+root frame opens and answers queries.
-# ============================================================
 
 echo "--- Guard 22: sparse >2GiB database opens ---"
 
 TMPROOT=$(mktemp -d)
 DB="$TMPROOT/large_open.db"
 
-# Read CHUNK_STORE_VERSION from the header so the test tracks format bumps.
 GUARD22_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD22_VERSION=$(grep '^#define CHUNK_STORE_VERSION ' "$GUARD22_SCRIPT_DIR/../src/chunk_store.h" | awk '{print $3}')
 
@@ -1091,20 +943,11 @@ fi
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 8: Encoding consistency (LE macros match inline code)
-# Bug: encoding was done inline with inconsistent patterns
-# Fix: shared PROLLY_GET/PUT_U16/U32 macros
-# Invariant: round-trip encode/decode produces same values
-# (tested implicitly by all persistence tests; this verifies
-# the serialization format hasn't drifted)
-# ============================================================
 
 echo "--- Guard 8: Serialization round-trip ---"
 
 DB=/tmp/test_rg_serial_$$.db; rm -f "$DB"
 
-# Create data that exercises various field types and sizes
 echo "CREATE TABLE mixed(
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -1117,7 +960,6 @@ INSERT INTO mixed VALUES(2,'world',2.71828,X'00FF00FF00',0);
 INSERT INTO mixed VALUES(999999,'big id',0.0,NULL,-1);
 SELECT dolt_commit('-A','-m','mixed types');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Reopen and verify all types survived serialization
 run_test "serial_text" "SELECT name FROM mixed WHERE id=1;" "hello" "$DB"
 run_test "serial_real" "SELECT printf('%.2f',score) FROM mixed WHERE id=1;" "3.14" "$DB"
 run_test "serial_blob" "SELECT hex(data) FROM mixed WHERE id=1;" "DEADBEEF" "$DB"
@@ -1127,11 +969,6 @@ run_test "serial_large_id" "SELECT name FROM mixed WHERE id=999999;" "big id" "$
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 9: GC preserves all reachable data
-# Bug: hardcoded offsets in GC catalog parsing could miss chunks
-# Fix: named constants (CAT_HEADER_SIZE, etc.)
-# ============================================================
 
 echo "--- Guard 9: GC preserves data ---"
 
@@ -1147,19 +984,10 @@ run_test "gc_data_intact" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "gc_log_intact" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 run_test "gc_val_intact" "SELECT v FROM t WHERE id=1;" "before gc" "$DB"
 
-# Reopen after GC
 run_test "gc_reopen_data" "SELECT count(*) FROM t;" "2" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# GUARD 10: .read bulk INSERT VALUES preserves all rows
-# Bug: repeated INSERT ... VALUES statements streamed through
-#      the shell could silently drop older rows in composite-PK
-#      tables once sparse blob-key edits were applied one row at a time.
-# Fix: avoid the streaming sparse-edit path for non-intkey roots and
-#      flatten released savepoint bornAt state back to level 0.
-# ============================================================
 
 echo "--- Guard 10: .read bulk INSERT VALUES ---"
 
@@ -1196,13 +1024,6 @@ run_test "bulk_read_max_pk" \
 
 rm -rf "$TMPROOT"
 
-# ============================================================
-# GUARD 23: Large integer secondary-index keys remain exact
-# Bug: sort keys encoded all numeric values as double bytes, collapsing
-#      distinct INTEGER values above 2^53 in secondary indexes.
-# Fix: append exact integer bytes when an INTEGER cannot round-trip through
-#      double without precision loss.
-# ============================================================
 
 echo "--- Guard 23: Large integer index keys ---"
 
@@ -1235,9 +1056,6 @@ run_test "negative_large_int_index_lookup" \
 
 rm -f "$DB"
 
-# ============================================================
-# Done
-# ============================================================
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

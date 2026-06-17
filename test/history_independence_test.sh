@@ -1,31 +1,4 @@
 #!/bin/bash
-#
-# History independence suite.
-#
-# Goal:
-#   For a fixed final logical database state, dolt_hashof_db() must be
-#   identical regardless of the SQL history used to produce that state.
-#
-# Current phase:
-#   - DML and initial DDL coverage
-#   - small datasets for PR-speed baseline coverage
-#   - direct-write and branch/merge histories
-#   - key families:
-#       * INTEGER PRIMARY KEY
-#       * TEXT PRIMARY KEY
-#       * BLOB PRIMARY KEY
-#       * composite PRIMARY KEY
-#
-# This suite deliberately proves three things for each case:
-#   1. final user-visible state matches, by hashing canonical ordered rows
-#   2. dolt_hashof_db() matches across distinct histories
-#   3. dolt_hashof_catalog() eventually matches too, proving stored catalog identity
-#
-# Planned expansion phases:
-#   - richer DDL branch / merge histories
-#   - larger DDL recreate / rename matrices
-#   - clone / fetch / push / pull histories
-#
 
 set -euo pipefail
 

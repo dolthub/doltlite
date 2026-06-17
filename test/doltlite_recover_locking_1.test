@@ -1,122 +1,12 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovered-intent coverage for gated divergences (shard locking_1).
-# All scenarios run on uniquely-named db files (rloc1*.db) so concurrent
-# harness runs sharing build-ci cannot interfere with this file's state.
-#
-# covers: enc2 enc2-1.3 — SELECT * multiset asserted with ORDER BY a; bare SELECT * iterates in PK order
-# covers: enc2 enc2-1.7 — rows with c>3 are exactly {four five}, asserted via ORDER BY c
-# covers: enc2 enc2-1.8 — second c>3 row retrievable with correct text (ORDER BY c result)
-# covers: enc2 enc2-2.3 — same dbcontents scenario after PRAGMA encoding=UTF16le (ignored; identical UTF-8 behavior)
-# covers: enc2 enc2-2.7 — c>3 multiset unchanged after UTF16le pragma
-# covers: enc2 enc2-2.8 — c>3 multiset unchanged after UTF16le pragma
-# covers: enc2 enc2-3.3 — same scenario after PRAGMA encoding=UTF16be (ignored)
-# covers: enc2 enc2-3.7 — c>3 multiset unchanged after UTF16be pragma
-# covers: enc2 enc2-3.8 — c>3 multiset unchanged after UTF16be pragma
-# covers: enc2 enc2-2.0.1 — doltlite reports UTF-8 after PRAGMA encoding=UTF16le on fresh db
-# covers: enc2 enc2-2.0.2 — PRAGMA encoding=UTF8 leaves report at UTF-8
-# covers: enc2 enc2-2.0.3 — PRAGMA encoding=UTF16le ignored, reports UTF-8
-# covers: enc2 enc2-2.0.4 — PRAGMA encoding=UTF16be ignored, reports UTF-8
-# covers: enc2 enc2-2.10 — encoding still reports UTF-8 after data ops on the "UTF-16le" db
-# covers: enc2 enc2-3.0.1 — UTF16be variant of 2.0.1 (single UTF-8-locked contract)
-# covers: enc2 enc2-3.0.2 — UTF16be variant of 2.0.2
-# covers: enc2 enc2-3.0.3 — UTF16be variant of 2.0.3
-# covers: enc2 enc2-3.0.4 — UTF16be variant of 2.0.4
-# covers: enc2 enc2-3.10 — UTF16be variant of 2.10
-# covers: enc2 enc2-4.3 — ATTACH of another doltlite db always succeeds: every doltlite db is UTF-8 so no encoding mismatch is possible
-# covers: enc2 enc2-5.5 — best-match collation in (always-)UTF-8 db chosen and sorts correctly
-# covers: enc2 enc2-5.6 — UTF-16BE-only collation still selected and sorts correctly
-# covers: enc2 enc2-5.9 — all-encodings collation: UTF-8 version chosen, sort correct
-# covers: enc2 enc2-5.10 — UTF-16LE-only collation still selected and sorts correctly
-# covers: enc2 enc2-5.13 — collation-needed callback registers collation; sort correct
-# covers: enc2 enc2-6.4 — best-match user function is the UTF-8 version in a doltlite db; result text correct
-# covers: enc2 enc2-6.8 — UTF-16BE-only user function still callable with correct result
-# covers: enc2 enc2-7.2 — fresh db opened "as UTF-16" reports UTF-8; schema visible to second handle
-# covers: enc2 enc2-9.2 — PRAGMA encoding=UTF-16le on empty db: reports UTF-8
-# covers: enc2 enc2-9.4 — table creatable after UTF-16le pragma; encoding stays UTF-8
-# covers: enc2 enc2-9.5 — encoding report stable (UTF-8) across reopen; unicode data round-trips
-# covers: windowC 2.0 — group_concat window over blob value after PRAGMA encoding=UTF16le: no crash, deterministic UTF-8 bytes
-# covers: windowC 2.1 — same after PRAGMA encoding=UTF16be: identical result (encoding pragma is a no-op)
-# covers: shared6 shared6-1.1.2 — sqlite3_enable_shared_cache(1) reports 0: shared-cache is permanently disabled in doltlite
-# covers: shared2 shared2-3.2 — same shared-cache-disabled contract
-# covers: shared6 shared6-1.2.1 — db2 reads committed snapshot while db holds BEGIN EXCLUSIVE
-# covers: shared6 shared6-1.3.3 — db2 reads committed snapshot while db has an open write txn
-# covers: shared6 shared6-1.3.4 — db2 write during db's open write txn fails {database is locked}
-# covers: shared6 shared6-1.3.5 — db2 write during db's open write txn fails; reads still proceed
-# covers: shared6 shared6-1.4.2 — db2 read proceeds while db's txn includes a CREATE TABLE (schema write)
-# covers: shared6 shared6-1.4.3 — with read_uncommitted=1, db2 sees only committed rows; db2 write during db read-only txn succeeds
-# covers: shared6 shared6-2.2 — second connection reads committed data while first has open write txn
-# covers: shared6 shared6-2.3 — reader connections always see last-committed state
-# covers: shared6 shared6-2.4 — after COMMIT every connection sees the new rows
-# covers: shared6 shared6-3.2 — write from second connection during first's open scan proceeds; scan keeps its snapshot
-# covers: shared6 shared6-3.3 — BEGIN EXCLUSIVE succeeds while another connection holds an active read statement; same-connection DROP mid-scan errors {database table is locked}
-# covers: shared6 shared6-3.4 — db2 SELECT proceeds while db holds BEGIN EXCLUSIVE
-# covers: shared6 shared6-3.5 — COMMIT of the exclusive txn succeeds
-# covers: shared6 shared6-3.6 — BEGIN EXCLUSIVE while other connection is in an open read txn succeeds
-# covers: shared6 shared6-3.7 — with both connections in BEGIN, the writer's INSERT succeeds
-# covers: shared6 shared6-3.8 — both txns commit; both connections converge on the same rows
-# covers: shared6 shared6-3.10 — a third connection can BEGIN;ROLLBACK; then read normally
-# covers: tkt2854 tkt2854-1.3 — BEGIN EXCLUSIVE while another connection holds an open read txn succeeds (chunk-store writers don't block on readers)
-# covers: tkt2854 tkt2854-1.7 — prepared statements on db2 stay usable across db's exclusive txn
-# covers: tkt2854 tkt2854-1.8 — db2 BEGIN EXCLUSIVE during db's exclusive txn fails {database is locked}
-# covers: tkt2854 tkt2854-1.9 — db2 BEGIN IMMEDIATE during db's exclusive txn fails {database is locked}
-# covers: tkt2854 tkt2854-1.10 — db2 plain BEGIN during db's exclusive txn succeeds (deferred, touches nothing)
-# covers: tkt2854 tkt2854-1.11 — db2 prepared SELECT steps fine during db's exclusive txn (snapshot read)
-# covers: tkt2854 tkt2854-1.12 — db2 BEGIN EXCLUSIVE blocked with doltlite's lock error
-# covers: tkt2854 tkt2854-1.13 — db2 BEGIN IMMEDIATE blocked with doltlite's lock error
-# covers: tkt2854 tkt2854-1.14 — plain BEGIN + read + COMMIT all succeed under the other connection's exclusive lock
-# covers: tkt2854 tkt2854-1.16 — independent connection reads committed snapshot during exclusive txn
-# covers: tkt2854 tkt2854-1.20 — BEGIN EXCLUSIVE fails {database is locked} when another connection holds a write txn on an attached db; both connections recover
-# covers: tkt2409 tkt2409-2.2 — write txn + COMMIT succeed while another connection holds an active read statement
-# covers: tkt2409 tkt2409-2.3 — after releasing the read statement, both connections consistent and integrity_check ok
-# covers: shared2 shared2-1.1 — DELETE of all rows from another connection mid-scan: scan completes its snapshot; delete commits
-# covers: exclusive exclusive-2.5 — locking_mode=exclusive does not lock out a second connection's writes
-# covers: exclusive exclusive-2.6 — second connection's txn commits while first is in locking_mode=exclusive
-# covers: exclusive exclusive-2.7 — no stuck COMMIT: txns complete normally
-# covers: exclusive exclusive-2.8 — ROLLBACK of second connection's txn restores its snapshot
-# covers: exclusive exclusive-2.9 — first connection's writes don't lock out the second's reads
-# covers: exclusive exclusive-2.10 — switching locking_mode does not strand locks; reads proceed
-# covers: exclusive exclusive-2.11 — after locking_mode=normal both connections converge
-# covers: exclusive exclusive-3.1 — txn boundary: BEGIN;DELETE;COMMIT durable across reopen (journal-file states have no doltlite analog)
-# covers: exclusive exclusive-3.2 — committed state intact after reopen
-# covers: exclusive exclusive-3.5 — BEGIN;UPDATE;ROLLBACK restores prior rows
-# covers: exclusive exclusive-5.5 — multi-statement txn with UNIQUE indexes commits correct rows (statement-journal analog)
-# covers: exclusive exclusive-6.2 — uncommitted txn rows are invisible to a newly opened connection
-# covers: exclusive exclusive-6.3 — new connection sees exactly the committed prefix
-# covers: exclusive exclusive-7.1 — locking_mode/journal_mode pragma dance: exclusive wal normal 0, then journal_mode=DELETE rejected with exact message; db stays usable
-# covers: exclusive2 exclusive2-1.2 — committed change by db2 immediately visible to db (no stale page cache to fool)
-# covers: exclusive2 exclusive2-1.6 — every committed txn changes visible content (signature changes)
-# covers: exclusive2 exclusive2-1.9 — no stale-cache serving: db re-reads current committed state
-# covers: exclusive2 exclusive2-2.2 — under locking_mode=exclusive, db still sees db2's committed update
-# covers: exclusive2 exclusive2-2.8 — reads after lock-mode flips return correct data, integrity_check ok (never serves stale/corrupt cache)
-# covers: exclusive2 exclusive2-3.0 — content hash advances on commit (change-counter analog)
-# covers: exclusive2 exclusive2-3.1 — content hash changes after first INSERT
-# covers: exclusive2 exclusive2-3.2 — content hash changes after second INSERT
-# covers: exclusive2 exclusive2-3.3 — hash changes under locking_mode=exclusive too
-# covers: exclusive2 exclusive2-3.4 — hash stable across a pure read (no-op does not change content)
-# covers: exclusive2 exclusive2-3.5 — hash stable across locking_mode flip without writes
-# covers: exclusive2 exclusive2-3.6 — hash changes again on next INSERT after mode flip
-# covers: capi3 capi3-3.3 — bogus-path open: doltlite defers the error; handle reports SQLITE_OK
-# covers: capi3 capi3-3.4 — errmsg on the deferred handle is "not an error"; first real use fails "unable to open database file"
-# covers: capi3 capi3-4.3 — same deferred-open contract (utf16 open path shares it; doltlite is UTF-8-only)
-# covers: capi3 capi3-4.4 — same deferred errmsg contract
-# covers: capi3 capi3-8.3 — writable_schema INSERT INTO sqlite_master cannot corrupt the prolly catalog: reopen works, schema usable, integrity ok
-# covers: capi3 capi3-11.3.4 — PRAGMA lock_status reports doltlite's model: main unlocked after COMMIT during active read
-# covers: capi3 capi3-11.12 — step after DONE (post writeOnly-ROLLBACK stmt) returns SQLITE_ERROR; data via fresh query correct
-# covers: capi3 capi3-11.13 — finalize of that statement returns SQLITE_SCHEMA; connection unaffected
-# covers: select2 select2-3.3 — after DROP INDEX the plan is a full SCAN (EQP) instead of index search; result identical
-#
-# not-covered: (none)
 
 db close
 forcedelete rloc1.db rloc1b.db rloc1e.db
 sqlite3 db rloc1.db
 set DB [sqlite3_connection_pointer db]
 
-#-------------------------------------------------------------------
-# 1.* enc2 unordered-SELECT class: PK-order iteration, multiset equal.
-#
 do_test doltlite_recover_locking_1-1.1 {
   execsql {
     CREATE TABLE t1(a PRIMARY KEY, b, c);
@@ -147,9 +37,6 @@ do_test doltlite_recover_locking_1-1.5 {
   }
 } {four IV 4}
 
-#-------------------------------------------------------------------
-# 2.* enc2 reports-UTF-8 class: encoding locked to UTF-8 everywhere.
-#
 do_test doltlite_recover_locking_1-2.1 {
   execsql {PRAGMA encoding}
 } {UTF-8}
@@ -185,7 +72,6 @@ do_test doltlite_recover_locking_1-2.7 {
   }
 } {8364 233 20013 3 UTF-8}
 do_test doltlite_recover_locking_1-2.8 {
-  # second handle sees the schema created above; encoding agrees
   sqlite3 dbe2 rloc1e.db
   set res [dbe2 eval {SELECT name FROM sqlite_master ORDER BY name; PRAGMA encoding;}]
   dbe2 close
@@ -193,9 +79,6 @@ do_test doltlite_recover_locking_1-2.8 {
   set res
 } {zz UTF-8}
 
-#-------------------------------------------------------------------
-# 3.* enc2-4.3: ATTACH always compatible (all doltlite dbs are UTF-8).
-#
 do_test doltlite_recover_locking_1-3.1 {
   sqlite3 dbx rloc1b.db
   dbx eval {CREATE TABLE abc(a,b,c); INSERT INTO abc VALUES(1,2,3);}
@@ -209,9 +92,6 @@ do_test doltlite_recover_locking_1-3.2 {
   execsql {DETACH aux}
 } {}
 
-#-------------------------------------------------------------------
-# 4.* enc2-5.x: collation selection in the UTF-8-locked db.
-#
 set ::values [list one two three four five]
 set ::test_collate_enc INVALID
 proc test_collate {enc lhs rhs} {
@@ -252,9 +132,6 @@ do_test doltlite_recover_locking_1-4.4 {
   lappend res $::test_collate_enc
 } {one two three four five UTF-8}
 
-#-------------------------------------------------------------------
-# 5.* enc2-6.x: user-function encoding selection.
-#
 proc test_function {enc arg} { return "$enc $arg" }
 do_test doltlite_recover_locking_1-5.1 {
   add_test_function $DB 1 1 1
@@ -275,10 +152,6 @@ do_test doltlite_recover_locking_1-5.3 {
   execsql {SELECT test_function('sqlite')}
 } {{UTF-16BE sqlite}}
 
-#-------------------------------------------------------------------
-# 6.* windowC-2.x: blob group_concat window query is crash-free and
-# yields the same UTF-8 bytes whatever encoding was requested.
-#
 do_test doltlite_recover_locking_1-6.1 {
   execsql {
     PRAGMA encoding=UTF16le;
@@ -298,9 +171,6 @@ do_test doltlite_recover_locking_1-6.2 {
   }
 } {{} 31 5585D09013455178CD11CE4A 31}
 
-#-------------------------------------------------------------------
-# 7.* shared-cache / locking model: doltlite's concurrency contract.
-#
 do_test doltlite_recover_locking_1-7.1 {
   list [sqlite3_enable_shared_cache 1] [sqlite3_enable_shared_cache]
 } {0 0}
@@ -310,12 +180,10 @@ do_test doltlite_recover_locking_1-7.2 {
   db2 eval {SELECT * FROM c1}
 } {1 2}
 do_test doltlite_recover_locking_1-7.3 {
-  # db has an open write txn (data + schema writes): db2 reads the snapshot
   execsql {BEGIN; INSERT INTO c1 VALUES(3,4); CREATE TABLE c2(x);}
   db2 eval {SELECT * FROM c1 ORDER BY a}
 } {1 2}
 do_test doltlite_recover_locking_1-7.4 {
-  # ... but db2 cannot write while db's write txn is open
   catchsql {INSERT INTO c1 VALUES(5,6)} db2
 } {1 {database is locked}}
 do_test doltlite_recover_locking_1-7.5 {
@@ -323,7 +191,6 @@ do_test doltlite_recover_locking_1-7.5 {
   list [execsql {SELECT * FROM c1 ORDER BY a}] [db2 eval {SELECT * FROM c1 ORDER BY a}]
 } {{1 2 3 4} {1 2 3 4}}
 do_test doltlite_recover_locking_1-7.6 {
-  # exclusive txn: db2 reads proceed, db2 writes are locked out
   execsql {BEGIN EXCLUSIVE}
   list [db2 eval {SELECT * FROM c1 ORDER BY a}] [catchsql {INSERT INTO c1 VALUES(7,8)} db2]
 } {{1 2 3 4} {1 {database is locked}}}
@@ -331,7 +198,6 @@ do_test doltlite_recover_locking_1-7.7 {
   list [catchsql {BEGIN EXCLUSIVE} db2] [catchsql {BEGIN IMMEDIATE} db2]
 } {{1 {database is locked}} {1 {database is locked}}}
 do_test doltlite_recover_locking_1-7.8 {
-  # plain BEGIN touches nothing: it, reads, and COMMIT all succeed
   db2 eval {BEGIN; SELECT count(*) FROM c1; COMMIT;}
 } {2}
 do_test doltlite_recover_locking_1-7.9 {
@@ -339,8 +205,6 @@ do_test doltlite_recover_locking_1-7.9 {
   db2 eval {SELECT * FROM c1 ORDER BY a}
 } {1 2 3 4 7 8}
 do_test doltlite_recover_locking_1-7.10 {
-  # BEGIN EXCLUSIVE while db2 holds an active read statement: succeeds,
-  # the write commits, and db2's statement keeps working on its snapshot.
   set ::S1 [sqlite3_prepare db2 "SELECT a FROM c1 ORDER BY a" -1 TAIL]
   list [sqlite3_step $::S1] [catchsql {BEGIN EXCLUSIVE}] \
        [catchsql {INSERT INTO c1 VALUES(9,10)}] [catchsql {COMMIT}]
@@ -353,20 +217,16 @@ do_test doltlite_recover_locking_1-7.11 {
   lappend res [sqlite3_finalize $::S1]
 } {3 7 SQLITE_OK}
 do_test doltlite_recover_locking_1-7.12 {
-  # after releasing the read statement both connections are consistent
   list [db2 eval {SELECT count(*) FROM c1}] [execsql {SELECT count(*) FROM c1}] \
        [execsql {PRAGMA integrity_check}] [db2 eval {PRAGMA integrity_check}]
 } {4 4 ok ok}
 do_test doltlite_recover_locking_1-7.13 {
-  # BEGIN EXCLUSIVE while db2 is inside an open read txn: succeeds
   db2 eval {BEGIN; SELECT count(*) FROM c1;}
   set res [list [catchsql {BEGIN EXCLUSIVE}] [catchsql {COMMIT}]]
   db2 eval {COMMIT}
   set res
 } {{0 {}} {0 {}}}
 do_test doltlite_recover_locking_1-7.14 {
-  # db2 write while db holds a read-only txn: succeeds (writers don't
-  # block on readers); db's snapshot is stable until COMMIT
   execsql {BEGIN; SELECT count(*) FROM c1;}
   set w [catchsql {INSERT INTO c1 VALUES(11,12)} db2]
   set during [execsql {SELECT count(*) FROM c1}]
@@ -374,7 +234,6 @@ do_test doltlite_recover_locking_1-7.14 {
   list $w $during [execsql {SELECT count(*) FROM c1}]
 } {{0 {}} 4 5}
 do_test doltlite_recover_locking_1-7.15 {
-  # both connections in BEGIN, reader active: writer's INSERT succeeds
   db2 eval {BEGIN; SELECT count(*) FROM c1;}
   execsql {BEGIN}
   set w [catchsql {INSERT INTO c1 VALUES(13,14)}]
@@ -384,14 +243,12 @@ do_test doltlite_recover_locking_1-7.15 {
   list $w $in2 [db2 eval {SELECT count(*) FROM c1}]
 } {{0 {}} 5 6}
 do_test doltlite_recover_locking_1-7.16 {
-  # third connection: BEGIN;ROLLBACK then normal reads
   sqlite3 db3 rloc1.db
   set res [db3 eval {BEGIN; ROLLBACK; SELECT count(*) FROM c1;}]
   db3 close
   set res
 } {6}
 do_test doltlite_recover_locking_1-7.17 {
-  # insert from db2 mid-scan: write proceeds, scan keeps its snapshot
   set got {}
   db eval {SELECT a FROM c1 ORDER BY a} {
     lappend got $a
@@ -402,7 +259,6 @@ do_test doltlite_recover_locking_1-7.17 {
   set got
 } {1 0 3 7 9 11 13}
 do_test doltlite_recover_locking_1-7.18 {
-  # DELETE of every row from db2 mid-scan: scan completes its snapshot
   set n 0
   set w {}
   db eval {SELECT a FROM c1 ORDER BY a} {
@@ -412,7 +268,6 @@ do_test doltlite_recover_locking_1-7.18 {
   list $n $w [execsql {SELECT count(*) FROM c1}]
 } {7 0 0}
 do_test doltlite_recover_locking_1-7.19 {
-  # DROP TABLE from the same connection mid-scan is refused
   execsql {INSERT INTO c1 VALUES(1,2),(2,3),(3,4)}
   set got {}
   db eval {SELECT a FROM c1 ORDER BY a} {
@@ -423,7 +278,6 @@ do_test doltlite_recover_locking_1-7.19 {
   set got
 } {1 {database table is locked}}
 do_test doltlite_recover_locking_1-7.20 {
-  # read_uncommitted is accepted; reads still see only committed rows
   db2 eval {PRAGMA read_uncommitted=1}
   execsql {BEGIN; INSERT INTO c1 VALUES(4,5);}
   set res [db2 eval {SELECT count(*) FROM c1}]
@@ -431,8 +285,6 @@ do_test doltlite_recover_locking_1-7.20 {
   list $res [db2 eval {SELECT count(*) FROM c1}]
 } {3 4}
 do_test doltlite_recover_locking_1-7.21 {
-  # write txn on an ATTACHed db held by another connection blocks
-  # BEGIN EXCLUSIVE; everything recovers after that txn commits
   sqlite3 db4 rloc1b.db
   execsql {ATTACH 'rloc1b.db' AS aux}
   db4 eval {BEGIN IMMEDIATE; INSERT INTO abc VALUES(4,5,6);}
@@ -448,9 +300,6 @@ do_test doltlite_recover_locking_1-7.22 {
   db2 close
 } {}
 
-#-------------------------------------------------------------------
-# 8.* exclusive: locking_mode=exclusive holds no locks in doltlite.
-#
 do_test doltlite_recover_locking_1-8.1 {
   execsql {
     DELETE FROM c1;
@@ -459,21 +308,17 @@ do_test doltlite_recover_locking_1-8.1 {
   }
 } {exclusive}
 do_test doltlite_recover_locking_1-8.2 {
-  # db (exclusive mode) has read the db; db2 can still read AND write
   execsql {SELECT count(*) FROM c1}
   sqlite3 db2 rloc1.db
   db2 eval {INSERT INTO c1 VALUES(10,11); SELECT count(*) FROM c1;}
 } {4}
 do_test doltlite_recover_locking_1-8.3 {
-  # db sees db2's commit immediately (no lock, no stale cache)
   execsql {SELECT count(*) FROM c1}
 } {4}
 do_test doltlite_recover_locking_1-8.4 {
-  # db2 rollback restores its snapshot
   db2 eval {BEGIN; INSERT INTO c1 VALUES(13,14); ROLLBACK; SELECT count(*) FROM c1;}
 } {4}
 do_test doltlite_recover_locking_1-8.5 {
-  # db writes while in exclusive mode; db2 reads proceed
   execsql {INSERT INTO c1 VALUES(16,17)}
   db2 eval {SELECT count(*) FROM c1}
 } {5}
@@ -482,7 +327,6 @@ do_test doltlite_recover_locking_1-8.6 {
   list [execsql {SELECT count(*) FROM c1}] [db2 eval {SELECT count(*) FROM c1}]
 } {5 5}
 do_test doltlite_recover_locking_1-8.7 {
-  # txn boundaries durable across reopen (journal truncation analog)
   execsql {
     PRAGMA locking_mode=exclusive;
     BEGIN;
@@ -505,7 +349,6 @@ do_test doltlite_recover_locking_1-8.8 {
   }
 } {A B}
 do_test doltlite_recover_locking_1-8.9 {
-  # multi-statement txn over UNIQUE columns: statement-journal analog
   execsql {
     CREATE TABLE abc2(a UNIQUE, b UNIQUE, c UNIQUE);
     PRAGMA locking_mode=exclusive;
@@ -519,7 +362,6 @@ do_test doltlite_recover_locking_1-8.9 {
        [execsql {PRAGMA locking_mode=normal}]
 } {{1 {UNIQUE constraint failed: abc2.c}} {1 2 3 2 3 4} normal}
 do_test doltlite_recover_locking_1-8.10 {
-  # uncommitted rows invisible to a newly opened connection
   execsql {BEGIN; INSERT INTO abc2 VALUES(10,11,12);}
   sqlite3 db2 rloc1.db
   set res [db2 eval {SELECT count(*) FROM abc2}]
@@ -539,7 +381,6 @@ do_test doltlite_recover_locking_1-8.12 {
   catchsql {PRAGMA journal_mode = DELETE}
 } {1 {journal_mode is not configurable on doltlite-format databases}}
 do_test doltlite_recover_locking_1-8.13 {
-  # the rejection leaves the db fully usable and is stable across reopen
   db close
   sqlite3 db rloc1.db
   set DB [sqlite3_connection_pointer db]
@@ -548,10 +389,6 @@ do_test doltlite_recover_locking_1-8.13 {
        [execsql {PRAGMA integrity_check}]
 } {{1 {journal_mode is not configurable on doltlite-format databases}} 3 ok}
 
-#-------------------------------------------------------------------
-# 9.* exclusive2: no page cache to go stale; content hash is the
-# change-counter analog.
-#
 do_test doltlite_recover_locking_1-9.1 {
   execsql {CREATE TABLE x1(a PRIMARY KEY, b)}
   execsql {INSERT INTO x1 VALUES(1,'one'),(2,'two')}
@@ -562,7 +399,6 @@ do_test doltlite_recover_locking_1-9.1 {
   list $sig1 $sig2
 } {{2 one,two} {2 one,TWO}}
 do_test doltlite_recover_locking_1-9.2 {
-  # same freshness under locking_mode=exclusive
   execsql {PRAGMA locking_mode=exclusive; SELECT count(*) FROM x1;}
   db2 eval {UPDATE x1 SET b='II' WHERE a=2}
   set res [execsql {SELECT b FROM x1 WHERE a=2}]
@@ -591,10 +427,6 @@ do_test doltlite_recover_locking_1-9.4 {
   db2 close
 } {}
 
-#-------------------------------------------------------------------
-# 10.* capi3: deferred bogus-path open, catalog robustness,
-# lock_status, stmt lifecycle after rollback-during-read.
-#
 do_test doltlite_recover_locking_1-10.1 {
   set dbh [sqlite3_open /bogus/path/rloc1.db {}]
   list [sqlite3_errcode $dbh] [sqlite3_errmsg $dbh]
@@ -607,7 +439,6 @@ do_test doltlite_recover_locking_1-10.2 {
   list $rc $msg
 } {1 {unable to open database file}}
 do_test doltlite_recover_locking_1-10.3 {
-  # writable_schema garbage row cannot corrupt the prolly catalog
   sqlite3_db_config db DEFENSIVE 0
   set r1 [catchsql {
     PRAGMA writable_schema=ON;
@@ -622,7 +453,6 @@ do_test doltlite_recover_locking_1-10.3 {
        [execsql {PRAGMA integrity_check}]
 } {{0 {}} 0 6 1 ok}
 do_test doltlite_recover_locking_1-10.4 {
-  # COMMIT during an active read succeeds; lock_status shows main unlocked
   execsql {
     CREATE TABLE t2(a);
     INSERT INTO t2 VALUES(1);
@@ -636,24 +466,18 @@ do_test doltlite_recover_locking_1-10.4 {
   lrange [execsql {PRAGMA lock_status}] 0 1
 } {main unlocked}
 do_test doltlite_recover_locking_1-10.5 {
-  # the read cursor survives the writeOnly ROLLBACK and finishes its scan
   list [sqlite3_step $::STMT] [sqlite3_step $::STMT] [sqlite3_step $::STMT]
 } {SQLITE_ROW SQLITE_ROW SQLITE_DONE}
 do_test doltlite_recover_locking_1-10.6 {
-  # step after DONE: doltlite reports SQLITE_ERROR (no silent auto-reset)
   sqlite3_step $::STMT
 } {SQLITE_ERROR}
 do_test doltlite_recover_locking_1-10.7 {
   sqlite3_finalize $::STMT
 } {SQLITE_SCHEMA}
 do_test doltlite_recover_locking_1-10.8 {
-  # connection unaffected; committed data correct (the 3 was rolled back)
   execsql {SELECT a FROM t2 ORDER BY a}
 } {1 2}
 
-#-------------------------------------------------------------------
-# 11.* select2-3.3: DROP INDEX forces a full scan; results identical.
-#
 do_test doltlite_recover_locking_1-11.1 {
   execsql {
     CREATE TABLE tbl2(f1 int PRIMARY KEY, f2 int);

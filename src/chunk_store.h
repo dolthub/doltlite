@@ -167,11 +167,7 @@ struct ChunkStore {
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 
-  /* Nonzero while a checkpoint runs on this store. Checkpoints are not
-  ** reentrant: a nested attempt returns SQLITE_BUSY, like stock's
-  ** exclusive checkpoint lock. Without this, a VFS write hook that issues
-  ** a checkpoint recurses without bound through the checkpoint's own
-  ** writes. */
+  /* Prevent checkpoint reentry through VFS write hooks. */
   int checkpointActive;
 };
 

@@ -183,11 +183,7 @@ static int csCanonicalFilename(
 
   rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
 #if SQLITE_OS_WIN
-  /* Registering under the xFullPathname result broke msys2 builds: a store
-  ** written under the rewritten name was not found again on the next open.
-  ** Keep registering under the caller's name on Windows; the canonical
-  ** registration below is what lets unix callers reach one store through
-  ** relative and absolute names alike. */
+  /* Windows reopens must use the caller's name, not xFullPathname output. */
   if( rc==SQLITE_OK ){
     sqlite3_free(zFull);
     return chunkStoreDupFilenameDoubleNul(zFilename, pzOut);
@@ -247,10 +243,7 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
   {
     int rc = chunkStoreReloadRefs(cs);
     if( rc!=SQLITE_OK ){
-      /* The reload allocates and can fail mid-OOM-rollback. Leaving the
-      ** uncommitted refs in place dangles pointers at chunks the rollback
-      ** is discarding; clear them without allocating and reload from
-      ** committedRefsHash at the next use instead. */
+      /* Clear refs without allocating; rollback is discarding staged chunks. */
       csFreeBranches(cs);
       csFreeTags(cs);
       csFreeRemotes(cs);
@@ -361,10 +354,7 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  /* The header manifest's seal is deliberately not verified: inherited
-  ** tests (and stock tooling habits) poke historically-ignored header
-  ** bytes, and the fields read below have their own validation. The seal
-  ** is enforced where it is load-bearing — on WAL root records. */
+  /* Header seals are advisory; WAL root seals are load-bearing. */
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
@@ -375,11 +365,7 @@ static int csReadManifest(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-/* Classify a file whose header manifest is unreadable. *pEverCommitted is
-** set when any root record proves a commit was once synced: a legacy root,
-** or a sealed root whose DURABLE_TO lies past the header. *pCreationRoot is
-** set when a sealed root from a crashed creation batch (DURABLE_TO at or
-** below the header size) is present. */
+/* Classify unreadable headers as crashed creation or damaged committed DB. */
 static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
                                   int *pCreationRoot){
   u8 buf[65536];
@@ -467,10 +453,7 @@ int chunkStoreOpen(
     return SQLITE_OK;
   }
 
-  /* A file-backed chunk store needs the full VFS file API (the GC's
-  ** atomic-replace deletes files, lock refresh probes HAS_MOVED). VFSes
-  ** without xDelete, like memdb, would half-open: the open succeeds but
-  ** every statement fails. Fail the open instead. */
+  /* File-backed stores need xDelete and HAS_MOVED file controls. */
   if( pVfs->xDelete==0 ){
     chunkStoreClose(cs);
     return SQLITE_CANTOPEN;
@@ -501,20 +484,14 @@ int chunkStoreOpen(
   }
 
   if( exists ){
-    /* Honor a caller-requested read-only open (SQLITE_OPEN_READONLY, e.g. the
-    ** sqlite3_open_v2 READONLY flag or a file:...?mode=ro URI). Without this we
-    ** always opened read-write and only fell back to read-only when the OS
-    ** denied write access, so a read-only connection on a writable file
-    ** silently accepted writes (#1275). */
+    /* Honor SQLITE_OPEN_READONLY even when the file is writable. */
     int wantReadOnly = (flags & SQLITE_OPEN_READONLY)!=0;
     int openFlags = (wantReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE)
                   | SQLITE_OPEN_MAIN_DB;
     int outFlags = 0;
     rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
-      /* The read-only fallback exists for OS write-permission denials. An OOM
-      ** during the read-write open must propagate, not silently downgrade the
-      ** connection to read-only. */
+      /* Do not downgrade OOM-failed writable opens to read-only. */
       if( wantReadOnly || rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
         chunkStoreClose(cs);
         return rc;
@@ -525,11 +502,7 @@ int chunkStoreOpen(
         chunkStoreClose(cs);
         return rc;
       }
-      /* unixOpen already retries read-only for permission failures, so a
-      ** handle that only this second attempt could open may not be a
-      ** readable database at all: Linux opens a directory O_RDONLY and
-      ** every later read fails SQLITE_IOERR_READ. Probe one byte so that
-      ** shape surfaces as "unable to open database file", like stock. */
+      /* Probe fallback handles so directories fail at open time. */
       {
         u8 probe;
         if( sqlite3OsRead(cs->file.pFile, &probe, 1, 0)==SQLITE_IOERR_READ ){
@@ -548,15 +521,7 @@ int chunkStoreOpen(
     rc = csReadManifest(cs);
     if( (rc==SQLITE_NOTADB || rc==SQLITE_CORRUPT)
      && (flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly ){
-      /* A crash during the very first commit can drop or tear the header
-      ** write (header, chunks and root share one sync batch), which is the
-      ** one crash shape replay cannot reach. Stock recovers a crashed
-      ** creation to an empty database via the journal; match that — but
-      ** only on positive evidence of a crashed creation (a sealed root
-      ** whose DURABLE_TO is the header size, or an all-zero header from
-      ** the dropped header write), and never when any root proves the
-      ** file once held synced commits. A foreign file or a real store
-      ** with a damaged header keeps its open error. */
+      /* Recover only proven first-commit crashes to an empty database. */
       int everCommitted = 1;
       int creationRoot = 0;
       int rc2 = csScanForCommittedRoot(cs, &everCommitted, &creationRoot);
@@ -1363,12 +1328,7 @@ int chunkStorePut(
   return SQLITE_OK;
 }
 
-/* Stage a chunk whose content is pPrefix[0..nPrefix) followed by nZeroTail
-** zero bytes, holding only the prefix in memory. The chunk on disk and in
-** the index is identical to a flat put of the full content: the commit
-** writers emit the zeros in bounded windows. Memory-backed stores keep the
-** write buffer as permanent storage with no tail metadata, so they take
-** the flat path. */
+/* Stage pPrefix plus a symbolic zero tail without materializing the zeros. */
 int chunkStorePutSparse(
   ChunkStore *cs,
   const u8 *pPrefix,
@@ -1521,10 +1481,7 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = cs->file.iFileSize;
   }
-  /* The logical EOF can sit past the physical one (the previous root's
-  ** sector-aligned NEXT_OFF leaves an unwritten gap) or before it (torn-tail
-  ** recovery rewound over crash garbage). Append at the logical EOF, and
-  ** drop recovered-over garbage so replay never re-reads it. */
+  /* Append at logical EOF and truncate crash garbage beyond it. */
   if( hadFile && cs->file.iFileSize > fileSize ){
     fileSize = cs->file.iFileSize;
   }
@@ -1533,15 +1490,7 @@ static int csCommitToFile(ChunkStore *cs){
   }
   origFileSize = fileSize;
 
-  /* Without powersafe-overwrite, a torn sector write can damage bytes
-  ** adjacent to the one being written, so each batch must occupy fresh
-  ** sectors or its crash could destroy previously synced commits (stock
-  ** wal does the same via padToSectorBoundary); fully atomic writes
-  ** cannot tear at all. The skipped bytes are never written or read:
-  ** this root's BATCH_START lets replay resume across the leading gap,
-  ** and its NEXT_OFF pre-declares the trailing one. A new file keeps its
-  ** batch right after the header — they share one sync, so sector
-  ** isolation cannot protect either. */
+  /* On non-atomic media, isolate commit batches on fresh sectors. */
   if( (cs->file.pFile->pMethods->xDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
     sectorSize = cs->file.pFile->pMethods->xSectorSize(cs->file.pFile);
@@ -1998,12 +1947,7 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
 
-  /* Always probe SQLITE_FCNTL_HAS_MOVED so cross-process renames (e.g.
-  ** GC's atomic-replace of the chunk store file) are detected on the
-  ** next lock acquisition. A cached "checked once" result lets the open
-  ** fd keep writing into the unlinked inode after another process swaps
-  ** the file underneath us, which loses every subsequent commit from
-  ** this connection. */
+  /* Recheck HAS_MOVED on each lock; GC may atomically replace the file. */
   rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
   if( rc!=SQLITE_OK ) return rc;
   if( bMoved ){
@@ -2071,11 +2015,7 @@ static int csReloadFromDisk(ChunkStore *cs){
                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* chunkStoreOpen falls back to a read-only handle when the read-write open
-  ** fails transiently (e.g. an OOM-faulted open). Adopting that would wedge a
-  ** writable store read-only and make every later commit return
-  ** SQLITE_READONLY. Don't downgrade: fail so the caller retries (which
-  ** reopens read-write) and leave the current writable store untouched. */
+  /* Reload must not replace a writable store with a fallback read-only one. */
   if( tmp.readOnly && !cs->readOnly ){
     chunkStoreClose(&tmp);
     return SQLITE_BUSY;
@@ -2084,10 +2024,7 @@ static int csReloadFromDisk(ChunkStore *cs){
   csCaptureReloadState(cs, &saved);
   csAdoptOpenedStoreState(cs, &tmp);
 
-  /* The freshly-opened pFile's internal zPath aliases tmp.zFilename, so
-  ** take ownership of that buffer (and detach it from tmp). Keep the
-  ** previous zFilename alive until saved.pFile is closed, since the
-  ** previous pFile's zPath still aliases it. */
+  /* pFile->zPath aliases zFilename; keep each filename with its file. */
   zOldFilename = cs->file.zFilename;
   cs->file.zFilename = tmp.file.zFilename;
   tmp.file.zFilename = 0;

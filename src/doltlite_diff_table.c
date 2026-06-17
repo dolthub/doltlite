@@ -1,21 +1,17 @@
 
 #ifdef DOLTLITE_PROLLY
 
-#include "sqliteInt.h"
-#include "prolly_hash.h"
+#include "doltlite_vtab_util.h"
 #include "prolly_hashset.h"
 #include "prolly_diff.h"
-#include "prolly_cache.h"
-#include "chunk_store.h"
 #include "doltlite_commit.h"
-#include "doltlite_record.h"
 #include "doltlite_internal.h"
 
 #include <assert.h>
 #include <string.h>
 #include <time.h>
 
-static char *buildDiffSchema(DoltliteColInfo *ci){
+static char *buildDiffSchema(const DoltliteColInfo *ci){
   int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
@@ -858,61 +854,10 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
 
 static int dtConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  DiffTblVtab *pVtab;
-  int rc;
-  const char *zModName;
-  char *zSchema;
-  (void)pAux; (void)pzErr;
-
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
-  pVtab->db = db;
-
-  zModName = argv[0];
-  if( zModName && strncmp(zModName, "dolt_diff_", 10)==0 ){
-    pVtab->zTableName = sqlite3_mprintf("%s", zModName + 10);
-  }else if( argc > 3 ){
-    pVtab->zTableName = sqlite3_mprintf("%s", argv[3]);
-  }else{
-    pVtab->zTableName = sqlite3_mprintf("");
-  }
-
-  rc = doltliteLoadUserTableColumns(db, pVtab->zTableName, &pVtab->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pVtab->zTableName);
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab);
-    return rc;
-  }
-  zSchema = buildDiffSchema(&pVtab->cols);
-
-  if( !zSchema ){
-    sqlite3_free(pVtab->zTableName);
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab);
-    return SQLITE_NOMEM;
-  }
-
-  rc = sqlite3_declare_vtab(db, zSchema);
-  sqlite3_free(zSchema);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pVtab->zTableName);
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab);
-    return rc;
-  }
-
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-
-static int dtDisconnect(sqlite3_vtab *pBase){
-  DiffTblVtab *pVtab = (DiffTblVtab*)pBase;
-  sqlite3_free(pVtab->zTableName);
-  doltliteFreeColInfo(&pVtab->cols);
-  sqlite3_free(pVtab);
-  return SQLITE_OK;
+  (void)pAux;
+  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_diff_",
+                                      sizeof(DiffTblVtab), buildDiffSchema,
+                                      ppVtab, pzErr);
 }
 
 static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
@@ -1076,7 +1021,8 @@ static int dtRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
 }
 
 static sqlite3_module diffTableModule = {
-  0, dtConnect, dtConnect, dtBestIndex, dtDisconnect, dtDisconnect,
+  0, dtConnect, dtConnect, dtBestIndex,
+  doltliteVtabCommonDisconnect, doltliteVtabCommonDisconnect,
   dtOpen, dtClose, dtFilter, dtNext, dtEof, dtColumn, dtRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };

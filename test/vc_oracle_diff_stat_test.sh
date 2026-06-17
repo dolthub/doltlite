@@ -159,8 +159,6 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- table creation / drop ---"
 
-# stat for create-table-of-empty-rows yields no rows on both sides; summary still
-# reports one row for the table creation.
 oracle_stat    "create_table_empty" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 SELECT dolt_add('-A');
@@ -176,8 +174,6 @@ oracle_both "create_table_with_rows" "
 $SEED
 " "HEAD~1" "HEAD"
 
-# stat for drop-table-of-empty-rows yields no rows on both sides; summary still
-# reports one row for the drop.
 oracle_stat    "drop_table_empty" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 SELECT dolt_add('-A');

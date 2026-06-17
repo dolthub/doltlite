@@ -38,4 +38,73 @@ do_execsql_test doltlite_default_materialization-2.1 {
   SELECT group_concat(id || ':' || v || ':' || x, '|') FROM t ORDER BY id;
 } {40 2 4 40 4 1:a:7|2:b:7}
 
+reset_db
+
+do_test doltlite_default_materialization-3.1 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, x INTEGER DEFAULT 7);
+    INSERT INTO t VALUES(1,'a',7),(2,'b',7),(3,'c',7);
+  }
+  set ::direct_hash [db one {SELECT dolt_hashof_table('t')}]
+  expr {[string length $::direct_hash] == 40}
+} {1}
+
+reset_db
+
+do_test doltlite_default_materialization-3.2 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+    ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7;
+  }
+  set altered_hash [db one {SELECT dolt_hashof_table('t')}]
+  list [expr {$altered_hash eq $::direct_hash}] \
+       [db one {PRAGMA integrity_check}] \
+       [db one {SELECT group_concat(id || ':' || v || ':' || x, '|') FROM t ORDER BY id}]
+} {1 ok 1:a:7|2:b:7|3:c:7}
+
+reset_db
+
+do_test doltlite_default_materialization-4.1 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+    SELECT dolt_commit('-A','-m','init');
+    ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7;
+    CREATE INDEX t_x_v ON t(x, v);
+  }
+  set h1 [db one {SELECT dolt_hashof_table('t')}]
+  set diff_rows [db one {SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING'}]
+  execsql {SELECT dolt_commit('-A','-m','add default')}
+  set h2 [db one {SELECT dolt_hashof_table('t')}]
+  db close
+  sqlite3 db test.db
+  set h3 [db one {SELECT dolt_hashof_table('t')}]
+  list [expr {$h1 eq $h2}] [expr {$h1 eq $h3}] $diff_rows \
+       [db one {PRAGMA integrity_check}] \
+       [db one {SELECT group_concat(v, '|') FROM t WHERE x=7 ORDER BY v}]
+} {1 1 3 ok a|b|c}
+
+reset_db
+
+do_test doltlite_default_materialization-5.1 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a'),(2,'b');
+    SELECT dolt_commit('-A','-m','init');
+    SELECT dolt_branch('feature');
+    ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7;
+    UPDATE t SET x=8 WHERE id=1;
+    SELECT dolt_commit('-A','-m','main alter');
+    SELECT dolt_checkout('feature');
+    UPDATE t SET v='bb' WHERE id=2;
+    SELECT dolt_commit('-A','-m','feature edit');
+    SELECT dolt_checkout('main');
+    SELECT dolt_merge('feature');
+  }
+  list [db one {PRAGMA integrity_check}] \
+       [db one {SELECT group_concat(id || ':' || v || ':' || x, '|') FROM t ORDER BY id}] \
+       [db one {SELECT count(*) FROM t WHERE x IS NULL}]
+} {ok 1:a:8|2:bb:7 0}
+
 finish_test

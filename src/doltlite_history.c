@@ -1,20 +1,14 @@
 
 #ifdef DOLTLITE_PROLLY
 
-#include "sqliteInt.h"
-#include "prolly_hash.h"
-#include "prolly_cursor.h"
-#include "prolly_cache.h"
+#include "doltlite_vtab_util.h"
 #include "prolly_hashset.h"
-#include "chunk_store.h"
 #include "doltlite_commit.h"
-
-#include "doltlite_record.h"
 #include "doltlite_internal.h"
 #include <string.h>
 #include <time.h>
 
-static char *htBuildSchema(DoltliteColInfo *ci){
+static char *htBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   if( !pStr ) return 0;
@@ -45,7 +39,7 @@ struct HistVtab {
 
 typedef struct HistCursor HistCursor;
 struct HistCursor {
-  sqlite3_vtab_cursor base;
+  DoltliteVtabCursorCommon common;
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited, queued;
@@ -53,12 +47,6 @@ struct HistCursor {
   char zCommitHex[PROLLY_HASH_SIZE*2+1];
   char *zCommitter;
   i64 commitDate;
-  ProllyCursor tblCur;
-  int tblCurOpen;
-  i64 intKey;
-  u8 *pVal; int nVal;
-  int hasRow;
-  i64 iRowid;
   int idxNum;
   i64 pkLo;
   i64 pkHi;
@@ -69,12 +57,7 @@ struct HistCursor {
 };
 
 static void htCursorReset(HistCursor *c){
-  if( c->tblCurOpen ){
-    prollyCursorClose(&c->tblCur);
-    c->tblCurOpen = 0;
-  }
-  sqlite3_free(c->pVal);
-  c->pVal = 0; c->nVal = 0;
+  doltliteVtabCommonReset(&c->common);
   sqlite3_free(c->zCommitter);
   c->zCommitter = 0;
   sqlite3_free(c->aQueue);
@@ -88,30 +71,12 @@ static void htCursorReset(HistCursor *c){
     prollyHashSetFree(&c->queued);
     c->queuedInit = 0;
   }
-  c->hasRow = 0;
-  c->iRowid = 0;
-}
-
-static int htCaptureRow(HistCursor *c){
-  const u8 *pVal; int nVal;
-  sqlite3_free(c->pVal);
-  c->pVal = 0; c->nVal = 0;
-  c->intKey = prollyCursorIntKey(&c->tblCur);
-  prollyCursorValue(&c->tblCur, &pVal, &nVal);
-  if( pVal && nVal>0 ){
-    c->pVal = sqlite3_malloc(nVal);
-    if( !c->pVal ) return SQLITE_NOMEM;
-    memcpy(c->pVal, pVal, nVal);
-    c->nVal = nVal;
-  }
-  c->hasRow = 1;
-  return SQLITE_OK;
 }
 
 static int htRowMatchesUpper(HistCursor *c){
   i64 k;
   if( !c->hasPkHi ) return 1;
-  k = prollyCursorIntKey(&c->tblCur);
+  k = prollyCursorIntKey(&c->common.tblCur);
   if( c->pkHiStrict ){
     return k < c->pkHi;
   }
@@ -183,84 +148,84 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   }
   doltliteFreeCatalog(aT, nT);
 
-  prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
+  prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
 
   seekable = (flags & PROLLY_NODE_INTKEY) != 0
           && (c->idxNum & HIST_IDX_PK_ANY) != 0;
 
   if( seekable && (c->idxNum & HIST_IDX_PK_EQ) ){
-    rc = prollyCursorSeekInt(&c->tblCur, c->pkLo, &res);
+    rc = prollyCursorSeekInt(&c->common.tblCur, c->pkLo, &res);
     if( rc!=SQLITE_OK ){
-      prollyCursorClose(&c->tblCur);
+      prollyCursorClose(&c->common.tblCur);
       return rc;
     }
-    if( res!=0 || !prollyCursorIsValid(&c->tblCur) ){
-      prollyCursorClose(&c->tblCur);
+    if( res!=0 || !prollyCursorIsValid(&c->common.tblCur) ){
+      prollyCursorClose(&c->common.tblCur);
       return SQLITE_OK;
     }
-    c->tblCurOpen = 1;
+    c->common.tblCurOpen = 1;
     return SQLITE_OK;
   }
 
   if( seekable && c->hasPkLo ){
     i64 startKey = c->pkLo;
     if( c->pkLoStrict ) startKey++;
-    rc = prollyCursorSeekInt(&c->tblCur, startKey, &res);
+    rc = prollyCursorSeekInt(&c->common.tblCur, startKey, &res);
     if( rc!=SQLITE_OK ){
-      prollyCursorClose(&c->tblCur);
+      prollyCursorClose(&c->common.tblCur);
       return rc;
     }
     if( res<0 ){
-      rc = prollyCursorNext(&c->tblCur);
+      rc = prollyCursorNext(&c->common.tblCur);
       if( rc!=SQLITE_OK ){
-        prollyCursorClose(&c->tblCur);
+        prollyCursorClose(&c->common.tblCur);
         return rc;
       }
     }
-    if( !prollyCursorIsValid(&c->tblCur) || !htRowMatchesUpper(c) ){
-      prollyCursorClose(&c->tblCur);
+    if( !prollyCursorIsValid(&c->common.tblCur) || !htRowMatchesUpper(c) ){
+      prollyCursorClose(&c->common.tblCur);
       return SQLITE_OK;
     }
-    c->tblCurOpen = 1;
+    c->common.tblCurOpen = 1;
     return SQLITE_OK;
   }
 
-  rc = prollyCursorFirst(&c->tblCur, &res);
+  rc = prollyCursorFirst(&c->common.tblCur, &res);
   if( rc!=SQLITE_OK ){
-    prollyCursorClose(&c->tblCur);
+    prollyCursorClose(&c->common.tblCur);
     return rc;
   }
   if( res ){
-    prollyCursorClose(&c->tblCur);
+    prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
   if( seekable && c->hasPkHi && !htRowMatchesUpper(c) ){
-    prollyCursorClose(&c->tblCur);
+    prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
-  c->tblCurOpen = 1;
+  c->common.tblCurOpen = 1;
   return SQLITE_OK;
 }
 
 static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
   int rc;
 
-  if( c->tblCurOpen ){
+  if( c->common.tblCurOpen ){
     if( c->idxNum & HIST_IDX_PK_EQ ){
-      prollyCursorClose(&c->tblCur);
-      c->tblCurOpen = 0;
+      prollyCursorClose(&c->common.tblCur);
+      c->common.tblCurOpen = 0;
     }else{
-      rc = prollyCursorNext(&c->tblCur);
+      rc = prollyCursorNext(&c->common.tblCur);
       if( rc!=SQLITE_OK ){
-        prollyCursorClose(&c->tblCur);
-        c->tblCurOpen = 0;
+        prollyCursorClose(&c->common.tblCur);
+        c->common.tblCurOpen = 0;
         return rc;
       }
-      if( prollyCursorIsValid(&c->tblCur) && htRowMatchesUpper(c) ){
-        return htCaptureRow(c);
+      if( prollyCursorIsValid(&c->common.tblCur) && htRowMatchesUpper(c) ){
+        return doltliteVtabCommonCaptureRow(&c->common);
       }
-      prollyCursorClose(&c->tblCur);
-      c->tblCurOpen = 0;
+      prollyCursorClose(&c->common.tblCur);
+      c->common.tblCurOpen = 0;
     }
   }
 
@@ -274,51 +239,25 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     rc = htOpenTableAtCommit(c, db, zTableName, &cur);
     if( rc!=SQLITE_OK ) return rc;
 
-    if( c->tblCurOpen ){
-      return htCaptureRow(c);
+    if( c->common.tblCurOpen ){
+      return doltliteVtabCommonCaptureRow(&c->common);
     }
   }
 
-  c->hasRow = 0;
+  c->common.hasRow = 0;
   return SQLITE_OK;
 }
 
 static int htConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  HistVtab *v; int rc; const char *zMod; char *zSchema;
   (void)pAux;
-
-  v=sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
-  memset(v,0,sizeof(*v)); v->db=db;
-
-  zMod=argv[0];
-  if(zMod&&strncmp(zMod,"dolt_history_",13)==0)
-    v->zTableName=sqlite3_mprintf("%s",zMod+13);
-  else if(argc>3) v->zTableName=sqlite3_mprintf("%s",argv[3]);
-  else v->zTableName=sqlite3_mprintf("");
-
-  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
-    return rc;
-  }
-  zSchema=htBuildSchema(&v->cols);
-  if(!zSchema){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
-
-  rc=sqlite3_declare_vtab(db,zSchema); sqlite3_free(zSchema);
-  if(rc!=SQLITE_OK){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return rc;}
-
-  *ppVtab=&v->base; return SQLITE_OK;
-}
-
-static int htDisconnect(sqlite3_vtab *pVtab){
-  HistVtab *v=(HistVtab*)pVtab;
-  sqlite3_free(v->zTableName); doltliteFreeColInfo(&v->cols);
-  sqlite3_free(v); return SQLITE_OK;
+  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_history_",
+                                      sizeof(HistVtab), htBuildSchema,
+                                      ppVtab, pzErr);
 }
 
 static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
-  HistVtab *vt = (HistVtab*)v;
+  DoltliteVtabCommon *vt = (DoltliteVtabCommon*)v;
   int iEq = -1, iGe = -1, iLe = -1, iGt = -1, iLt = -1;
   int i, nArg = 0, idxNum = 0;
   int iPk = vt->cols.iPkCol;
@@ -395,7 +334,7 @@ static int htClose(sqlite3_vtab_cursor *cur){
 static int htFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   HistCursor *c=(HistCursor*)cur;
-  HistVtab *v=(HistVtab*)cur->pVtab;
+  DoltliteVtabCommon *v=(DoltliteVtabCommon*)cur->pVtab;
   ProllyHash head;
   ChunkStore *cs;
   int rc;
@@ -478,24 +417,21 @@ static int htFilter(sqlite3_vtab_cursor *cur,
 
 static int htNext(sqlite3_vtab_cursor *cur){
   HistCursor *c=(HistCursor*)cur;
-  HistVtab *v=(HistVtab*)cur->pVtab;
-  c->iRowid++;
+  DoltliteVtabCommon *v=(DoltliteVtabCommon*)cur->pVtab;
+  c->common.iRowid++;
   return htAdvance(c, v->db, v->zTableName);
-}
-
-static int htEof(sqlite3_vtab_cursor *cur){
-  return !((HistCursor*)cur)->hasRow;
 }
 
 static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   HistCursor *c=(HistCursor*)cur;
-  HistVtab *v=(HistVtab*)cur->pVtab;
+  DoltliteVtabCommon *v=(DoltliteVtabCommon*)cur->pVtab;
   int nCols;
-  if( !c->hasRow ) return SQLITE_OK;
+  if( !c->common.hasRow ) return SQLITE_OK;
   nCols=v->cols.nCol;
 
   if(nCols>0 && col<nCols){
-    doltliteResultUserCol(ctx, &v->cols, c->pVal, c->nVal, c->intKey, col);
+    doltliteResultUserCol(ctx, &v->cols, c->common.pVal, c->common.nVal,
+                          c->common.intKey, col);
   }else{
     int fixedCol=col-nCols;
     switch(fixedCol){
@@ -513,13 +449,11 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 
-static int htRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
-  *r=((HistCursor*)cur)->iRowid; return SQLITE_OK;
-}
-
 static sqlite3_module historyModule = {
-  0, htConnect, htConnect, htBestIndex, htDisconnect, htDisconnect,
-  htOpen, htClose, htFilter, htNext, htEof, htColumn, htRowid,
+  0, htConnect, htConnect, htBestIndex,
+  doltliteVtabCommonDisconnect, doltliteVtabCommonDisconnect,
+  htOpen, htClose, htFilter, htNext,
+  doltliteVtabCommonEof, htColumn, doltliteVtabCommonRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 

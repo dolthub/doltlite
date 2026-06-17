@@ -238,7 +238,7 @@ if {$doltlite} {
     prolly_three_way_merge.h prolly_xxhash.h
     doltlite_ancestor.h doltlite_chunk_walk.h doltlite_commit.h
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
-    doltlite_record.h doltlite_remote.h doltlite_remotesrv.h
+    doltlite_record.h doltlite_remote.h doltlite_remotesrv.h doltlite_vtab_util.h
   } {
     set available_hdr($hdr) 1
   }

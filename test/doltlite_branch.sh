@@ -136,11 +136,8 @@ DB10=/tmp/test_branch10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 echo "SELECT dolt_checkout('-b','other');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 
-# main is the persisted default at this point, so delete is rejected
-# against the new "cannot delete the default branch" guard (#579).
 run_test_match "delete_default_rejected" "SELECT dolt_branch('-d','main');" "cannot delete the default branch" "$DB10/other"
 run_test_match "force_delete_default_rejected" "SELECT dolt_branch('-D','main');" "cannot delete the default branch" "$DB10/other"
-# Rename of the default is allowed; the default pointer follows.
 run_test "rename_default_allowed" "SELECT dolt_branch('-m','main','trunk');" "0" "$DB10/other"
 run_test "renamed_default_listed" "SELECT count(*) FROM dolt_branches WHERE name='trunk';" "1" "$DB10/other"
 run_test "default_pointer_followed" "SELECT dolt_default_branch();" "trunk" "$DB10/other"

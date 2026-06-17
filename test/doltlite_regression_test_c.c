@@ -3542,10 +3542,6 @@ static void run_truncated_wal_is_rejected(void){
   }
   chunkStoreClose(&cs);
 
-  /* The corrupted tag sits below the later commit's DURABLE_TO, so this is
-  ** mid-stream corruption: the open succeeds poisoned (stock surfaces
-  ** corruption on first access, never from sqlite3_open) and chunk reads
-  ** fail SQLITE_CORRUPT. */
   rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
   check("chunk_store_open_succeeds_on_corrupt_wal", rc==SQLITE_OK);
@@ -3705,9 +3701,6 @@ static void run_wal_mid_corruption_rejected(void){
   }
   chunkStoreClose(&cs);
 
-  /* Mid-stream damage with later durable commits poisons the store: the
-  ** open itself succeeds (stock surfaces corruption on first access, never
-  ** from sqlite3_open) and every chunk read then fails SQLITE_CORRUPT. */
   rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
   check("chunk_store_open_succeeds_on_mid_wal_corruption", rc==SQLITE_OK);
@@ -4629,9 +4622,6 @@ static void run_mutmap_rollback_stale_order(void){
     "DELETE FROM leaf; DELETE FROM node;")==SQLITE_OK);
   check("insert_leaf_for_mutmap_stale_order", execSql(db,
     "INSERT INTO leaf VALUES(91,1),(92,2),(93,1);")==SQLITE_OK);
-  /* The 3rd row dups nodeid=1 -> UNIQUE violation aborts the statement. Its
-  ** partial inserts must roll back without leaving node's mutmap order index
-  ** pointing at a freed entry slot (which read back as "malformed"). */
   rc = sqlite3_exec(db, "INSERT INTO node SELECT parent,3 FROM leaf;", 0, 0, &err);
   sqlite3_free(err); err = 0;
   check("failed_insert_aborts_for_mutmap_stale_order", rc!=SQLITE_OK);
@@ -7635,10 +7625,6 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   chunkStoreClose(&cs);
 }
 
-/* Issue #1319: each incrblob write re-inserts the row, which saved every
-** cursor on the table including the writer's own. The next operation on any
-** handle then aborted, and a second write patched a stale base value,
-** silently dropping the first write. */
 static void run_incrblob_chunked_and_multihandle(void){
   char dbpath[512];
   sqlite3 *db = 0;
@@ -7657,7 +7643,6 @@ static void run_incrblob_chunked_and_multihandle(void){
       "INSERT INTO t VALUES(1, zeroblob(5000));"
       "INSERT INTO t VALUES(2, zeroblob(20));")==SQLITE_OK);
 
-  /* Write spanning the first chunk boundary of a chunked record. */
   check("incrblob_open_h1", sqlite3_blob_open(db, "main", "t", "v", 1, 1, &h1)==SQLITE_OK);
   check("incrblob_open_h2", sqlite3_blob_open(db, "main", "t", "v", 1, 1, &h2)==SQLITE_OK);
   check("incrblob_first_write", sqlite3_blob_write(h2, "SQLite", 6, 4094)==SQLITE_OK);
@@ -7680,8 +7665,6 @@ static void run_incrblob_chunked_and_multihandle(void){
         "SELECT CAST(substr(v,11,6) AS TEXT) || CAST(substr(v,4095,6) AS TEXT)"
         " FROM t WHERE k=1"), "again!SQLite")==0);
 
-  /* A SQL write to the open row must invalidate the handle (stock
-  ** invalidateIncrblobCursors); a write to another row must not. */
   check("incrblob_reopen_h1", sqlite3_blob_open(db, "main", "t", "v", 2, 0, &h1)==SQLITE_OK);
   check("incrblob_other_row_update", execSql(db,
       "UPDATE t SET v = zeroblob(5001) WHERE k=1")==SQLITE_OK);
@@ -7698,8 +7681,6 @@ static void run_incrblob_chunked_and_multihandle(void){
   check("incrblob_aborted_after_delete", rc==SQLITE_ABORT);
   sqlite3_blob_close(h2); h2 = 0;
 
-  /* Blob write on a row still pending in the transaction's mutmap: the
-  ** re-insert key must come from the merge view, not the tree cursor. */
   check("incrblob_pending_setup", execSql(db,
       "BEGIN; INSERT INTO t VALUES(4, zeroblob(20));")==SQLITE_OK);
   check("incrblob_pending_open", sqlite3_blob_open(db, "main", "t", "v", 4, 1, &h1)==SQLITE_OK);

@@ -5,8 +5,7 @@ typedef struct DoltliteServer DoltliteServer;
 
 /* Listens on the given dotted-quad IPv4 address (e.g. "0.0.0.0",
 ** "127.0.0.1", "192.168.1.5"). If zBindAddr is NULL or empty,
-** defaults to "127.0.0.1". The remote protocol has no auth or TLS —
-** see issue #228.
+** defaults to "127.0.0.1". The protocol has no auth or TLS.
 */
 int doltliteServe(const char *zDir, int port, const char *zBindAddr);
 

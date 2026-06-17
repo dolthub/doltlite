@@ -2,58 +2,6 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 database_may_be_corrupt
 
-# Recovers the intent of the stock page-corruption suites: corruption must be
-# DETECTED (open error, read error, or integrity_check failure) and never crash
-# or be silently served. Stock tests poked btree page bytes with hexio_write;
-# doltlite has no pages, so the same intent is asserted against the chunk-store
-# file: header/magic/manifest corruption fails at open, chunk-body and
-# chunk-index corruption (after dolt_gc compaction) fails at open, first read,
-# or PRAGMA integrity_check, truncation and trailing garbage are rejected, and
-# a healthy copy keeps working after every rejection. The sqlite_dbpage entries
-# are recovered against doltlite's read-only single-page header-stub vtable.
-#
-# covers-class: corrupt8 (1000 entries): stock ptrmap-byte corruption flagged by
-#   integrity_check — represented by chunk/index byte corruption at computed
-#   offsets being detected at open/read/integrity_check (tests 2.3-2.10)
-# covers-class: corruptF (264 entries): stock freelist/page-byte corruption
-#   returning SQLITE_CORRUPT — represented by chunk-region corruption detection
-#   and post-rejection usability of a healthy copy (tests 2.3-2.10, 2.16)
-# covers-class: corruptL (44 entries): stock index-page corruption — represented
-#   by detection of corruption in the compacted store that backs both table and
-#   index content (tests 2.3-2.10); schema stays readable on healthy copies
-# covers-class: dbpage (25 entries): sqlite_dbpage raw page reads/writes —
-#   doltlite serves exactly one synthetic header page (pgno=1, 4096 bytes,
-#   'SQLite format 3' magic), rejects any other pgno with its documented error,
-#   and rejects all writes, so dbpage-injected corruption is impossible and
-#   integrity_check stays ok (tests 3.1-3.8)
-# covers-class: corrupt6 (19 entries): corrupt SerialTypeLen values — value
-#   encoding lives inside hashed chunks; byte corruption there is detected
-#   (tests 2.3-2.6)
-# covers-class: corruptE (18 entries): rowid-order corruption — key order lives
-#   inside hashed chunks; corruption detected, healthy copy iterates correctly
-#   (tests 2.3-2.6, 2.16)
-# covers-class: corruptB (17 entries): btree loop corruption — tree linkage is
-#   by content hash; corrupting linkage bytes is detected, no crash/hang
-#   (tests 2.3-2.10)
-# covers-class: corruptH (4 entries): corruption during open cursors — open-time
-#   and read-time detection asserted; no crash (tests 1.2-1.5, 2.3-2.10)
-# covers-class: corrupt7 (4 entries): corrupt cell offsets — chunk-index entry
-#   corruption detected at open (tests 2.7-2.9)
-# covers-class: corruptJ (3 entries): page-is-its-own-child corruption —
-#   content-addressed linkage corruption detected (tests 2.3-2.10)
-# covers: mmapcorrupt mmapcorrupt-2.1 — same WITHOUT ROWID schema; PRAGMA
-#   mmap_size is accepted (reports 0, mmap unused), reads and writes still
-#   correct after it, and file-tail corruption is detected (tests 4.1, 2.10,
-#   2.13) instead of being mapped and served
-# covers: chunk WAL-region corruption: byte corruption in the WAL
-#   region of a non-compacted store (plain close, no dolt_gc) used to silently
-#   truncate committed transactions (count dropped 24 -> 6 with
-#   integrity_check ok). Mid-stream WAL damage now poisons the store so reads
-#   and commits fail SQLITE_CORRUPT (open still succeeds, matching stock's
-#   first-access surfacing), while a torn tail (incomplete final record, i.e.
-#   crash recovery) still opens and serves the last complete commit
-#   (tests 1.7-1.11)
-# not-covered: (none)
 
 proc xorByte {file off} {
   set f [open $file r+]
@@ -148,9 +96,6 @@ do_test doltlite_recover_corruption-1.6 {
   set res
 } {24 ok}
 
-# The WAL region of rch1.db begins at 168 with a chunk frame:
-# tag(1) + hash(32) + len(4) + body. Offsets 169/201/205 hit the first
-# frame's hash, length, and body respectively.
 do_test doltlite_recover_corruption-1.7 {
   set ::ncSz [file size rch1.db]
   csDetect 169 rch1.db

@@ -83,6 +83,21 @@ jobs:
     - name: Correctness regression tests
       run: cd build && bash ../test/correctness_test.sh ./doltlite
 
+    # Version-control virtual tables decode stored values and rebuild rows
+    # through the prolly record codec — exactly where signed-int / value
+    # decode UB lives (the left-shift-of-negative this PR fixes surfaced
+    # here). The oracle suites above are stock-SQL semantics and the C
+    # corpus is C-API level; neither exercises these SQL vtab read paths.
+    - name: VC virtual-table read suites
+      run: |
+        cd build
+        for s in doltlite_at doltlite_history doltlite_diff doltlite_diff_table \
+                 doltlite_schema_diff doltlite_workspace doltlite_conflicts \
+                 doltlite_conflict_rows doltlite_comparison doltlite_merge; do
+          echo "=== $s ==="
+          bash ../test/$s.sh ./doltlite || exit 1
+        done
+
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     # Reuses the objects built above; only the archive and link are new.

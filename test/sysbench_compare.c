@@ -1,22 +1,3 @@
-/*
-** sysbench_compare.c — Sysbench-style OLTP benchmark: doltlite vs stock SQLite
-**
-** Runs identical workloads against both engines in-process and prints
-** a markdown comparison table. Links against sqlite3.h — caller provides
-** the library (libdoltlite.a or libsqlite3.a) at link time.
-**
-** Build (from build/):
-**   # Stock SQLite:
-**   make DOLTLITE_PROLLY=0 sqlite3.o
-**   gcc -O2 -o bench_sqlite ../test/sysbench_compare.c sqlite3.o -I. -lpthread -lz -lm -DENGINE_NAME='"SQLite"'
-**
-**   # Doltlite:
-**   gcc -O2 -o bench_doltlite ../test/sysbench_compare.c -I. libdoltlite.a -lpthread -lz -lm -DENGINE_NAME='"Doltlite"'
-**
-** Run:
-**   ./bench_sqlite    # prints JSON line
-**   ./bench_doltlite  # prints JSON line
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,14 +11,12 @@
 #define ROWS 10000
 #define SEED 42
 
-/* ---- Timing ---- */
 static double now_ms(void){
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
 
-/* ---- Simple LCG PRNG (deterministic, no libc rand state) ---- */
 static unsigned long rng_state;
 static void rng_seed(unsigned long s){ rng_state = s; }
 static int rng_int(int lo, int hi){
@@ -50,8 +29,6 @@ static void rng_str(char *buf, int len){
   buf[len] = 0;
 }
 
-/* Pre-generated strings for benchmarks. Avoids per-character rand() calls
-** in the timed loop, which otherwise dominate the measurement. */
 static char g_c[121];
 static char g_pad[61];
 static void init_strings(void){
@@ -59,7 +36,6 @@ static void init_strings(void){
   rng_str(g_pad, 60);
 }
 
-/* ---- Helpers ---- */
 static void exec(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -78,7 +54,6 @@ static void execf(sqlite3 *db, const char *fmt, ...){
   exec(db, buf);
 }
 
-/* ---- Benchmark results ---- */
 #define MAX_TESTS 30
 static struct { const char *name; double ms; } results[MAX_TESTS];
 static int nResults = 0;
@@ -89,7 +64,6 @@ static void record(const char *name, double ms){
   nResults++;
 }
 
-/* ---- Prepare: create schema and insert ROWS ---- */
 static void prepare(sqlite3 *db){
   int i;
   char c[121], pad[61];
@@ -106,13 +80,10 @@ static void prepare(sqlite3 *db){
 
   exec(db, "BEGIN");
   for(i=1; i<=ROWS; i++){
-    /* pre-generated */
-    /* pre-generated */
     execf(db, "INSERT INTO sbtest1 VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), g_c, g_pad);
   }
   exec(db, "COMMIT");
 
-  /* Second table for join tests */
   exec(db,
     "CREATE TABLE sbtest2("
     "  id INTEGER PRIMARY KEY,"
@@ -124,13 +95,10 @@ static void prepare(sqlite3 *db){
   );
   exec(db, "BEGIN");
   for(i=1; i<=1000; i++){
-    /* pre-generated */
-    /* pre-generated */
     execf(db, "INSERT INTO sbtest2 VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), g_c, g_pad);
   }
   exec(db, "COMMIT");
 
-  /* Types table */
   exec(db,
     "CREATE TABLE sbtest_types("
     "  id INTEGER PRIMARY KEY,"
@@ -148,10 +116,8 @@ static void prepare(sqlite3 *db){
   exec(db, "COMMIT");
 }
 
-/* ---- Individual benchmarks ---- */
 
 static void bench_bulk_insert(sqlite3 *db){
-  /* Already done in prepare — re-time it with a fresh table */
   int i;
   char c[121], pad[61];
   double t0;
@@ -160,8 +126,6 @@ static void bench_bulk_insert(sqlite3 *db){
   t0 = now_ms();
   exec(db, "BEGIN");
   for(i=1; i<=ROWS; i++){
-    /* pre-generated */
-    /* pre-generated */
     execf(db, "INSERT INTO sbtest_bulk VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), g_c, g_pad);
   }
   exec(db, "COMMIT");
@@ -302,7 +266,6 @@ static void bench_update_non_index(sqlite3 *db){
   t0 = now_ms();
   exec(db, "BEGIN");
   for(i=0; i<10000; i++){
-    /* pre-generated */
     sqlite3_bind_text(stmt, 1, g_c, 120, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 2, rng_int(1,ROWS));
     sqlite3_step(stmt);
@@ -328,8 +291,6 @@ static void bench_delete_insert(sqlite3 *db){
     sqlite3_bind_int(del_stmt, 1, id);
     sqlite3_step(del_stmt);
     sqlite3_reset(del_stmt);
-    /* pre-generated */
-    /* pre-generated */
     sqlite3_bind_int(ins_stmt, 1, id);
     sqlite3_bind_int(ins_stmt, 2, rng_int(1,ROWS));
     sqlite3_bind_text(ins_stmt, 3, g_c, 120, SQLITE_STATIC);
@@ -353,8 +314,6 @@ static void bench_oltp_insert(sqlite3 *db){
   t0 = now_ms();
   exec(db, "BEGIN");
   for(i=0; i<5000; i++){
-    /* pre-generated */
-    /* pre-generated */
     sqlite3_bind_int(stmt, 1, rng_int(1,ROWS+5000));
     sqlite3_bind_int(stmt, 2, rng_int(1,ROWS));
     sqlite3_bind_text(stmt, 3, g_c, 120, SQLITE_STATIC);
@@ -382,12 +341,10 @@ static void bench_write_only(sqlite3 *db){
   for(i=0; i<1000; i++){
     sqlite3_bind_int(upd_k, 1, rng_int(1,ROWS)); sqlite3_bind_int(upd_k, 2, rng_int(1,ROWS));
     sqlite3_step(upd_k); sqlite3_reset(upd_k);
-    /* pre-generated */
     sqlite3_bind_text(upd_c, 1, g_c, 120, SQLITE_STATIC); sqlite3_bind_int(upd_c, 2, rng_int(1,ROWS));
     sqlite3_step(upd_c); sqlite3_reset(upd_c);
     id = rng_int(1,ROWS);
     sqlite3_bind_int(del, 1, id); sqlite3_step(del); sqlite3_reset(del);
-    /* pre-generated */ /* pre-generated */
     sqlite3_bind_int(ins, 1, id); sqlite3_bind_int(ins, 2, rng_int(1,ROWS));
     sqlite3_bind_text(ins, 3, g_c, 120, SQLITE_STATIC);
     sqlite3_bind_text(ins, 4, g_pad, 60, SQLITE_STATIC);
@@ -562,7 +519,6 @@ static void bench_table_scan(sqlite3 *db){
 }
 
 static void bench_read_only(sqlite3 *db){
-  /* Sysbench oltp_read_only: 10 point selects + 1 range + 1 sum + 1 order + 1 distinct per txn */
   int i, j, s;
   sqlite3_stmt *ps, *rs, *ss, *os, *ds;
   double t0;
@@ -597,7 +553,6 @@ static void bench_read_only(sqlite3 *db){
 }
 
 static void bench_read_write(sqlite3 *db){
-  /* oltp_read_write: read_only + 2 updates + 1 delete/insert per txn */
   int i, j, s, id;
   char c[121], pad[61];
   sqlite3_stmt *ps, *rs, *ss, *uk, *uc, *del, *ins;
@@ -625,12 +580,10 @@ static void bench_read_write(sqlite3 *db){
     sqlite3_step(ss); sqlite3_reset(ss);
     sqlite3_bind_int(uk,1,rng_int(1,ROWS)); sqlite3_bind_int(uk,2,rng_int(1,ROWS));
     sqlite3_step(uk); sqlite3_reset(uk);
-    /* pre-generated */
     sqlite3_bind_text(uc,1,g_c,120,SQLITE_STATIC); sqlite3_bind_int(uc,2,rng_int(1,ROWS));
     sqlite3_step(uc); sqlite3_reset(uc);
     id=rng_int(1,ROWS);
     sqlite3_bind_int(del,1,id); sqlite3_step(del); sqlite3_reset(del);
-    /* pre-generated */ /* pre-generated */
     sqlite3_bind_int(ins,1,id); sqlite3_bind_int(ins,2,rng_int(1,ROWS));
     sqlite3_bind_text(ins,3,g_c,120,SQLITE_STATIC);
     sqlite3_bind_text(ins,4,g_pad,60,SQLITE_STATIC);
@@ -643,8 +596,6 @@ static void bench_read_write(sqlite3 *db){
   sqlite3_finalize(del); sqlite3_finalize(ins);
 }
 
-/* Reset: close DB, delete files, reopen, re-prepare.
-** Gives each benchmark a fresh chunk store with no accumulated state. */
 static void fresh_db(sqlite3 **ppDb){
   if( *ppDb ) sqlite3_close(*ppDb);
   remove("/tmp/sysbench_compare.db");
@@ -655,7 +606,6 @@ static void fresh_db(sqlite3 **ppDb){
   prepare(*ppDb);
 }
 
-/* ---- Main ---- */
 static void run_benchmarks(void){
   sqlite3 *db = 0;
   int i;
@@ -664,8 +614,6 @@ static void run_benchmarks(void){
   init_strings();
   fresh_db(&db);
 
-  /* Run all benchmarks. Write-heavy tests get a fresh DB to avoid
-  ** chunk store accumulation inflating their numbers. */
   rng_seed(SEED + 1); bench_bulk_insert(db);
   rng_seed(SEED + 2); bench_point_select(db);
   rng_seed(SEED + 3); bench_range_select(db);
@@ -696,7 +644,6 @@ static void run_benchmarks(void){
   remove("/tmp/sysbench_compare.db-wal");
   remove("/tmp/sysbench_compare.db-journal");
 
-  /* Output JSON */
   printf("{\"engine\":\"%s\",\"rows\":%d,\"results\":{", ENGINE_NAME, ROWS);
   for(i=0; i<nResults; i++){
     if(i>0) printf(",");
@@ -714,8 +661,6 @@ static void *bench_thread(void *arg){
 }
 
 int main(void){
-  /* Run on a thread with 8MB stack to avoid stack overflow in prolly tree's
-  ** serializeCatalog -> sqlite3Prepare recursive call chain */
   pthread_t th;
   pthread_attr_t attr;
   pthread_attr_init(&attr);

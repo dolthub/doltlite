@@ -9,20 +9,6 @@ ifcapable !shared_cache||!subquery {
   return
 }
 
-# Recovered coverage for shared_err.test. The upstream file injects IO errors
-# while two shared-cache connections are active. DoltLite does not expose the
-# same shared-cache lock/fault-point timing, so shared_ioerr-2 cleanup tests
-# diverge. The durable contract is still required: an IOERR during writer-side
-# cleanup must not crash, must not corrupt the database, and must not expose a
-# partial failed transaction to a peer connection.
-#
-# covers: shared_err shared_ioerr-2.122.cleanup.1 -- writer has completed the
-#   first DELETE, later write transaction hits IOERR; peer still sees the last
-#   committed state and writer remains sane after cleanup (1.1)
-# covers: shared_err shared_ioerr-2.126.cleanup.1 -- same cleanup contract at a
-#   later fault point in the same failed write transaction (1.2)
-# not-covered: the rest of shared_ioerr-2.*.cleanup.1, which exercise the same
-#   fault-point-shift class and remain recorded in the divergence list
 
 set ::drs_shared_cache [sqlite3_enable_shared_cache 1]
 

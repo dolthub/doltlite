@@ -1,32 +1,4 @@
 #!/bin/bash
-#
-# Oracle test: WITHOUT ROWID tables against stock SQLite.
-#
-# doltlite keys the prolly btree on the user PK for every table —
-# not on sqlite's auto-allocated rowid — so a WITHOUT ROWID
-# declaration is closer to a no-op here than in stock sqlite. That
-# makes this oracle especially pointed at:
-#
-#   - the few SQL-level behaviors that WITHOUT ROWID genuinely
-#     changes (no rowid column; INTEGER PRIMARY KEY is NOT a rowid
-#     alias; AUTOINCREMENT is illegal; PK columns become NOT NULL
-#     effectively via "PRIMARY KEY implies NOT NULL" in WITHOUT
-#     ROWID — in plain tables it still allows NULL),
-#   - composite PK shapes (WITHOUT ROWID was invented to support
-#     these efficiently; the prolly btree key encoder has to match),
-#   - TEXT / BLOB PKs with non-default collations,
-#   - PK updates, where stock sqlite has to delete + re-insert the
-#     row record while doltlite's prolly mutate does the same work
-#     via a different code path,
-#   - interactions with generated columns, triggers, FKs, and
-#     savepoints that we've previously oracled on rowid tables.
-#
-# Oracle target is stock sqlite3 built from the same source tree so
-# both engines parse identical SQL and the only variable is the
-# storage layer.
-#
-# Usage: bash oracle_without_rowid_test.sh [doltlite] [sqlite3]
-#
 
 set -u
 
@@ -70,43 +42,34 @@ oracle() {
 echo "=== Oracle Tests: WITHOUT ROWID ==="
 echo ""
 
-# ─── Basic round-trip ──────────────────────────────────────────────
 echo "--- basic round-trip ---"
 
-# Simple single-column PK.
 oracle "int_pk_basic" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 'a'), (2, 'b'), (3, 'c');
 SELECT id, v FROM t ORDER BY id;
 "
 
-# TEXT PK.
 oracle "text_pk_basic" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES('apple', 1), ('banana', 2), ('cherry', 3);
 SELECT k, v FROM t ORDER BY k;
 "
 
-# BLOB PK.
 oracle "blob_pk_basic" "
 CREATE TABLE t(k BLOB PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(x'01', 1), (x'02', 2), (x'0f', 3);
 SELECT hex(k), v FROM t ORDER BY k;
 "
 
-# Ordering relies on the PK comparator — reverse-ordered INSERT,
-# natural SELECT order.
 oracle "int_pk_sorted_on_scan" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(3,30),(1,10),(2,20);
 SELECT id, v FROM t;
 "
 
-# ─── rowid column absence ──────────────────────────────────────────
 echo "--- rowid column absence ---"
 
-# Referring to rowid in a WITHOUT ROWID table is an error in stock
-# sqlite (rowid is not a column). Both engines should reject it.
 oracle "select_rowid_rejected" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 10);
@@ -119,39 +82,27 @@ INSERT INTO t VALUES(1, 10);
 SELECT oid FROM t;
 "
 
-# SELECT * must NOT include a rowid column for a WITHOUT ROWID table
-# (it doesn't include one for plain tables either, but pin it here).
 oracle "select_star_no_rowid_column" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 10), (2, 20);
 SELECT * FROM t ORDER BY id;
 "
 
-# ─── INTEGER PRIMARY KEY is NOT a rowid alias ──────────────────────
 echo "--- integer PK semantics ---"
 
-# In a WITHOUT ROWID table, INTEGER PRIMARY KEY is a regular
-# integer-typed column. It is still UNIQUE (PK), but it does NOT
-# alias rowid, which means INSERT does not auto-allocate a value,
-# and AUTOINCREMENT is not allowed.
 oracle "int_pk_without_rowid_no_autoalloc" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t(v) VALUES('a');
 SELECT id, v FROM t;
 "
 
-# AUTOINCREMENT is illegal on WITHOUT ROWID.
 oracle "autoincrement_rejected" "
 CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT) WITHOUT ROWID;
 SELECT 1;
 "
 
-# ─── PRIMARY KEY implies NOT NULL ──────────────────────────────────
 echo "--- PK implies NOT NULL ---"
 
-# A quirk of stock sqlite: in a plain (rowid) table, a non-INTEGER
-# PRIMARY KEY column allows NULL values. In a WITHOUT ROWID table
-# the PK is strictly NOT NULL. Both engines should match.
 oracle "text_pk_null_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(NULL, 1);
@@ -164,7 +115,6 @@ INSERT INTO t VALUES(1, NULL, 10);
 SELECT count(*) FROM t;
 "
 
-# ─── Composite PK ──────────────────────────────────────────────────
 echo "--- composite PK ---"
 
 oracle "composite_int_pk_round_trip" "
@@ -187,7 +137,6 @@ INSERT INTO t VALUES(1,1,11),(1,2,12),(2,1,21),(2,2,22),(3,1,31);
 SELECT a, b, v FROM t WHERE a = 2 ORDER BY b;
 "
 
-# Duplicate composite PK must be rejected.
 oracle "composite_pk_dup_rejected" "
 CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 1, 'a');
@@ -195,10 +144,8 @@ INSERT INTO t VALUES(1, 1, 'b');
 SELECT a, b, v FROM t;
 "
 
-# ─── PK with collation ─────────────────────────────────────────────
 echo "--- PK collation ---"
 
-# NOCASE collation on a TEXT PK: 'Alice' and 'alice' collide.
 oracle "text_pk_nocase" "
 CREATE TABLE t(k TEXT PRIMARY KEY COLLATE NOCASE, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES('Alice', 1);
@@ -206,7 +153,6 @@ INSERT INTO t VALUES('alice', 2);
 SELECT k, v FROM t ORDER BY k;
 "
 
-# RTRIM collation.
 oracle "text_pk_rtrim" "
 CREATE TABLE t(k TEXT PRIMARY KEY COLLATE RTRIM, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES('abc', 1);
@@ -214,12 +160,8 @@ INSERT INTO t VALUES('abc ', 2);
 SELECT k, v FROM t;
 "
 
-# ─── UPDATE the PK ─────────────────────────────────────────────────
 echo "--- UPDATE PK ---"
 
-# UPDATE that changes the PK: row is effectively deleted + inserted
-# under the new key. In the prolly btree this flows through the
-# mutmap as an INSERT of the new key and a DELETE of the old.
 oracle "update_pk_same_row" "
 CREATE TABLE t(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 'a'),(2, 'b');
@@ -227,7 +169,6 @@ UPDATE t SET k = 99 WHERE k = 1;
 SELECT k, v FROM t ORDER BY k;
 "
 
-# UPDATE composite PK half.
 oracle "update_composite_pk_half" "
 CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 1, 'a'),(1, 2, 'b'),(2, 1, 'c');
@@ -235,7 +176,6 @@ UPDATE t SET a = 10 WHERE a = 1 AND b = 1;
 SELECT a, b, v FROM t ORDER BY a, b;
 "
 
-# UPDATE that would collide with an existing PK is rejected.
 oracle "update_pk_to_existing_collides" "
 CREATE TABLE t(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 'a'),(2, 'b');
@@ -243,7 +183,6 @@ UPDATE t SET k = 2 WHERE k = 1;
 SELECT k, v FROM t ORDER BY k;
 "
 
-# ─── REPLACE / UPSERT ──────────────────────────────────────────────
 echo "--- REPLACE / UPSERT ---"
 
 oracle "replace_into_without_rowid" "
@@ -267,7 +206,6 @@ INSERT INTO t VALUES(1, 'b') ON CONFLICT(k) DO NOTHING;
 SELECT k, v FROM t;
 "
 
-# Composite UPSERT target.
 oracle "composite_upsert_do_update" "
 CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 1, 10);
@@ -276,7 +214,6 @@ INSERT INTO t VALUES(1, 1, 999)
 SELECT a, b, v FROM t;
 "
 
-# ─── Secondary indexes ─────────────────────────────────────────────
 echo "--- secondary indexes ---"
 
 oracle "secondary_index_on_without_rowid" "
@@ -294,7 +231,6 @@ INSERT INTO t VALUES(2, 100, 'b');
 SELECT k, u FROM t ORDER BY k;
 "
 
-# ─── Aggregates, joins, ORDER BY ───────────────────────────────────
 echo "--- aggregates / joins ---"
 
 oracle "aggregate_over_without_rowid" "
@@ -311,7 +247,6 @@ INSERT INTO b VALUES(1, 100), (2, 200);
 SELECT a.k, a.x, b.y FROM a JOIN b USING (k) ORDER BY a.k;
 "
 
-# Join between a rowid table and a WITHOUT ROWID table.
 oracle "join_mixed_rowid_and_without" "
 CREATE TABLE a(k INT PRIMARY KEY, x INT);
 CREATE TABLE b(k INT PRIMARY KEY, y INT) WITHOUT ROWID;
@@ -320,10 +255,8 @@ INSERT INTO b VALUES(1, 100),(2, 200);
 SELECT a.k, a.x, b.y FROM a JOIN b USING (k) ORDER BY a.k;
 "
 
-# ─── FK interactions ──────────────────────────────────────────────
 echo "--- FK interactions ---"
 
-# FK from a WITHOUT ROWID child to a WITHOUT ROWID parent.
 oracle "fk_without_rowid_parent_and_child" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE p(k INT PRIMARY KEY, name TEXT) WITHOUT ROWID;
@@ -336,7 +269,6 @@ SELECT k FROM p ORDER BY k;
 SELECT id, pk FROM c ORDER BY id;
 "
 
-# Composite-PK parent with FK from a plain child.
 oracle "fk_to_composite_pk_parent" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE p(region TEXT, code INT, PRIMARY KEY(region, code)) WITHOUT ROWID;
@@ -349,7 +281,6 @@ SELECT region, code FROM p;
 SELECT id FROM c ORDER BY id;
 "
 
-# ─── Triggers ─────────────────────────────────────────────────────
 echo "--- triggers ---"
 
 oracle "trigger_before_insert_on_without_rowid" "
@@ -374,7 +305,6 @@ UPDATE t SET v = 99 WHERE k = 1;
 SELECT old_v, new_v FROM log;
 "
 
-# ─── Generated columns ────────────────────────────────────────────
 echo "--- generated columns ---"
 
 oracle "stored_generated_on_without_rowid" "
@@ -397,7 +327,6 @@ INSERT INTO t(k, a) VALUES(1, 5);
 SELECT k, a, doubled FROM t;
 "
 
-# ─── Savepoint interaction ────────────────────────────────────────
 echo "--- savepoint ---"
 
 oracle "rollback_to_savepoint_without_rowid" "
@@ -411,7 +340,6 @@ RELEASE SAVEPOINT s;
 SELECT k, v FROM t ORDER BY k;
 "
 
-# Nested savepoint: inner rollback should keep outer inserts.
 oracle "nested_savepoint_without_rowid" "
 CREATE TABLE t(k INT PRIMARY KEY, v INT) WITHOUT ROWID;
 SAVEPOINT s1;
@@ -424,7 +352,6 @@ RELEASE SAVEPOINT s1;
 SELECT k, v FROM t ORDER BY k;
 "
 
-# ─── Bulk ─────────────────────────────────────────────────────────
 echo "--- bulk ---"
 
 make_inserts() {
@@ -460,7 +387,6 @@ SELECT v FROM t WHERE a = 2 AND b = 25;
 SELECT count(*) FROM t WHERE a = 1;
 "
 
-# ─── Final report ───────────────────────────────────────────────────
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

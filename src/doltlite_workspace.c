@@ -1,14 +1,10 @@
 
 #ifdef DOLTLITE_PROLLY
 
-#include "sqliteInt.h"
-#include "prolly_hash.h"
+#include "doltlite_vtab_util.h"
 #include "prolly_diff.h"
 #include "prolly_mutate.h"
-#include "prolly_cache.h"
-#include "chunk_store.h"
 #include "doltlite_commit.h"
-#include "doltlite_record.h"
 #include "doltlite_internal.h"
 
 #include <string.h>
@@ -56,7 +52,7 @@ static void wsClearCache(WorkspaceVtab *p){
   p->nCache = 0;
 }
 
-static char *wsBuildSchema(DoltliteColInfo *ci){
+static char *wsBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   int i;
@@ -231,47 +227,14 @@ static int wsLoadRows(WorkspaceVtab *pVtab){
 
 static int wsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  WorkspaceVtab *pVtab;
-  const char *zModName;
-  char *zSchema;
-  int rc;
   (void)pAux;
-
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
-  pVtab->db = db;
-  zModName = argv[0];
-  if( zModName && strncmp(zModName, "dolt_workspace_", 15)==0 ){
-    pVtab->zTableName = sqlite3_mprintf("%s", zModName + 15);
-  }else if( argc>3 ){
-    pVtab->zTableName = sqlite3_mprintf("%s", argv[3]);
-  }else{
-    pVtab->zTableName = sqlite3_mprintf("");
-  }
-  rc = doltliteLoadUserTableColumns(db, pVtab->zTableName, &pVtab->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pVtab->zTableName);
-    sqlite3_free(pVtab);
-    return rc;
-  }
-  zSchema = wsBuildSchema(&pVtab->cols);
-  if( !zSchema ){
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab->zTableName);
-    sqlite3_free(pVtab);
-    return SQLITE_NOMEM;
-  }
-  rc = sqlite3_declare_vtab(db, zSchema);
-  sqlite3_free(zSchema);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeColInfo(&pVtab->cols);
-    sqlite3_free(pVtab->zTableName);
-    sqlite3_free(pVtab);
-    return rc;
-  }
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
+  /* WorkspaceVtab has trailing aCache/nCache fields, but they start zeroed
+  ** and only fill in during xFilter, so the shared Connect (which inits the
+  ** common prefix and cleans up via the common disconnect on failure) is
+  ** safe here; wsDisconnect still frees the cache at teardown. */
+  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_workspace_",
+                                      sizeof(WorkspaceVtab), wsBuildSchema,
+                                      ppVtab, pzErr);
 }
 
 static int wsDisconnect(sqlite3_vtab *pBase){
@@ -394,11 +357,7 @@ static int wsPatchCatalogRoot(
   return rc;
 }
 
-/* Apply one row's index-entry transition to a single secondary index's root:
-** remove the entry for pSrc (the value leaving the staged tree) and add the
-** entry for pTgt (the value entering it). pSrc/pTgt are full row records (or
-** NULL when the row is absent on that side). Uses doltliteBuildIndexSortKey
-** to reconstruct the native secondary-index key, mirroring the merge path. */
+/* Apply one row's old/new records to one secondary-index root. */
 static int wsApplyRowToIndex(
   ChunkStore *cs, ProllyCache *pCache,
   struct TableEntry *idxEntry, Index *pIdx, int iPKey,
@@ -451,12 +410,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   int nCatBuf = 0;
   int rc;
 
-  /* The staged copy of this row moves between its HEAD value and its WORKING
-  ** value. For ADD the row is absent at HEAD; for DELETE it is absent in the
-  ** working set. Staging advances HEAD->WORKING; unstaging reverts
-  ** WORKING->HEAD. The data tree is keyed by primary key (set or delete the
-  ** target), while each secondary index must drop the source value's key and
-  ** add the target value's key (#1276). */
+  /* Staging rewrites data by PK and secondary indexes by old/new index key. */
   const u8 *pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
   int        nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
   const u8 *pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;

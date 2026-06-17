@@ -298,11 +298,7 @@ static SQLITE_INLINE int doltliteFindTableRootByName(
   return SQLITE_NOTFOUND;
 }
 
-/* Little-endian read/write cursors for the hand-rolled conflicts and
-** constraint-violation on-disk codecs. The reader is sticky: any short read
-** sets ->err and yields 0, so a group of fields can be read then checked once.
-** Blob/name/string readers also return SQLITE_CORRUPT (bad length) or
-** SQLITE_NOMEM directly. */
+/* Sticky little-endian cursor for conflicts and constraint-violation codecs. */
 typedef struct DlByteReader { const u8 *p; const u8 *end; int err; } DlByteReader;
 
 static SQLITE_INLINE void dlReaderInit(DlByteReader *r, const u8 *data, int n){
@@ -424,6 +420,9 @@ int doltliteDetectMergeUniqueViolations(sqlite3 *db, const ProllyHash *pAncCatHa
                                         char **pzErrMsg, int *pnFound);
 int doltliteDetectMergeCheckViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
                                        char **pzErrMsg, int *pnFound);
+
+int doltliteConstraintViolationBatchBegin(sqlite3 *db);
+int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
 
 int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
@@ -568,13 +567,7 @@ struct MigrateDiffCtx {
   int *aiColIdx;
   char **azColNames;
   int nCols;
-  /* For PROLLY_DIFF_ADD: their-side row doesn't exist in the merged
-  ** working set yet (row-merge was skipped due to schema actions), so
-  ** UPDATE...WHERE rowid=? matches zero rows. pIns is an INSERT statement
-  ** that materializes the full row from their-side record bytes. azAllCols
-  ** / aiAllColIdx describe every column in their schema (record-field
-  ** index), in declared order, so we can bind values from the their-side
-  ** record into the INSERT. */
+  /* PROLLY_DIFF_ADD binds their full row through pIns, not pUpd. */
   sqlite3_stmt *pIns;
   int *aiAllColIdx;
   int nAllCols;

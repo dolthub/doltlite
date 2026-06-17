@@ -1,14 +1,3 @@
-/*
-** SQL transaction concurrency tests.
-**
-** Two connections open explicit transactions (BEGIN), make conflicting
-** changes, and the first writer's lock blocks the second. The second
-** gets SQLITE_BUSY on its write statement (not on COMMIT).
-**
-** Build from build/ directory:
-**   cc -g -I. -o sql_transaction_test \
-**     ../test/sql_transaction_test.c libdoltlite.a -lz -lpthread
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +22,6 @@ static int execSql(sqlite3 *db, const char *sql){
   return rc;
 }
 
-/* Execute with busy retry */
 static int execSqlWithRetry(sqlite3 *db, const char *sql, int maxRetries){
   char *err = 0;
   int rc;
@@ -76,10 +64,6 @@ static sqlite3 *open_db(const char *path){
   return db;
 }
 
-/*
-** Test 1: INSERT same PK from two transactions.
-** B's INSERT gets SQLITE_BUSY because A holds the write lock.
-*/
 static void test_insert_conflict(void){
   const char *path = "/tmp/test_txn_insert.db";
   sqlite3 *a, *b;
@@ -100,15 +84,12 @@ static void test_insert_conflict(void){
   rc_a_ins = execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
   check("insert_a_ok", rc_a_ins==SQLITE_OK);
 
-  /* B's INSERT should get BUSY because A holds the write lock */
   rc_b_ins = execSql(b, "INSERT INTO t VALUES(1, 'from_b')");
   check("insert_b_busy", rc_b_ins==SQLITE_BUSY);
 
   execSql(a, "COMMIT");
 
-  /* After A commits and releases the lock, B can retry */
   rc_b_ins = execSql(b, "INSERT INTO t VALUES(1, 'from_b')");
-  /* B's INSERT should fail with SQLITE_CONSTRAINT (PK already exists) */
   check("insert_b_constraint", rc_b_ins!=SQLITE_OK);
 
   execSql(b, "ROLLBACK");
@@ -121,10 +102,6 @@ static void test_insert_conflict(void){
   remove(path);
 }
 
-/*
-** Test 2: UPDATE same row from two transactions.
-** B's UPDATE gets SQLITE_BUSY.
-*/
 static void test_update_conflict(void){
   const char *path = "/tmp/test_txn_update.db";
   sqlite3 *a, *b;
@@ -162,10 +139,6 @@ static void test_update_conflict(void){
   remove(path);
 }
 
-/*
-** Test 3: DELETE and UPDATE same row.
-** B gets SQLITE_BUSY.
-*/
 static void test_delete_update_conflict(void){
   const char *path = "/tmp/test_txn_delupd.db";
   sqlite3 *a, *b;
@@ -203,17 +176,6 @@ static void test_delete_update_conflict(void){
   remove(path);
 }
 
-/*
-** Test 4: Non-conflicting INSERTs (different PKs).
-** B waits for A to commit, then succeeds. Both rows survive.
-**
-** NOTE: see https://github.com/dolthub/doltlite/issues/824 — a second
-** connection opened while a first is also open captures a stale branch
-** HEAD that doesn't refresh when the first connection commits. The
-** workaround used here is to close+reopen B between A's commit and
-** B's writes. The "two concurrent connections, sequential writes"
-** scenario is still being verified; only the open-order is constrained.
-*/
 static void test_non_conflicting_inserts(void){
   const char *path = "/tmp/test_txn_noconflict.db";
   sqlite3 *a, *b;
@@ -228,17 +190,14 @@ static void test_non_conflicting_inserts(void){
   execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
   queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
-  /* A inserts and commits first */
   execSql(a, "BEGIN");
   execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
   rc = execSql(a, "COMMIT");
   check("noconflict_a_ok", rc==SQLITE_OK);
 
-  /* Reopen B to pick up A's committed HEAD (workaround for #824). */
   sqlite3_close(b);
   b = open_db(path);
 
-  /* B inserts different PK — should succeed now that A released */
   execSql(b, "BEGIN");
   rc = execSql(b, "INSERT INTO t VALUES(2, 'from_b')");
   check("noconflict_b_insert_ok", rc==SQLITE_OK);
@@ -257,13 +216,6 @@ static void test_non_conflicting_inserts(void){
   remove(path);
 }
 
-/*
-** Test 5: Sequential transactions (no overlap) both succeed.
-**
-** NOTE: see https://github.com/dolthub/doltlite/issues/824 — B is
-** reopened between A's commit and B's writes to work around a stale
-** branch-HEAD bug on the second concurrent connection.
-*/
 static void test_sequential_transactions(void){
   const char *path = "/tmp/test_txn_seq.db";
   sqlite3 *a, *b;
@@ -283,7 +235,6 @@ static void test_sequential_transactions(void){
   rc = execSql(a, "COMMIT");
   check("seq_a_ok", rc==SQLITE_OK);
 
-  /* Reopen B to pick up A's committed HEAD (workaround for #824). */
   sqlite3_close(b);
   b = open_db(path);
 
@@ -293,7 +244,6 @@ static void test_sequential_transactions(void){
   rc = execSql(b, "COMMIT");
   check("seq_b_commit_ok", rc==SQLITE_OK);
 
-  /* Reopen to see both commits */
   {
     sqlite3 *c = open_db(path);
     check("seq_count",
@@ -306,9 +256,6 @@ static void test_sequential_transactions(void){
   remove(path);
 }
 
-/*
-** Test 6: Read during write transaction.
-*/
 static void test_read_during_write(void){
   const char *path = "/tmp/test_txn_readwrite.db";
   sqlite3 *a, *b;
@@ -326,7 +273,6 @@ static void test_read_during_write(void){
   execSql(a, "BEGIN");
   execSql(a, "INSERT INTO t VALUES(2, 'new_row')");
 
-  /* B should still be able to read (read doesn't need write lock) */
   check("read_during_write",
     strcmp(queryScalarText(b, "SELECT count(*) FROM t"), "0")!=0);
 
@@ -337,9 +283,6 @@ static void test_read_during_write(void){
   remove(path);
 }
 
-/*
-** Test 7: ROLLBACK releases the write lock.
-*/
 static void test_rollback_releases(void){
   const char *path = "/tmp/test_txn_rollback.db";
   sqlite3 *a, *b;
@@ -358,7 +301,6 @@ static void test_rollback_releases(void){
   execSql(a, "INSERT INTO t VALUES(1, 'will_rollback')");
   execSql(a, "ROLLBACK");
 
-  /* B should be able to acquire write lock now */
   execSql(b, "BEGIN");
   rc = execSql(b, "INSERT INTO t VALUES(1, 'from_b')");
   check("rollback_b_insert_ok", rc==SQLITE_OK);
@@ -373,9 +315,6 @@ static void test_rollback_releases(void){
   remove(path);
 }
 
-/*
-** Test 8: B uses busy_timeout to wait for A, then succeeds.
-*/
 static void test_busy_retry(void){
   const char *path = "/tmp/test_txn_retry.db";
   sqlite3 *a, *b;
@@ -393,16 +332,12 @@ static void test_busy_retry(void){
   execSql(a, "BEGIN");
   execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
 
-  /* B's INSERT will get BUSY, but busy_timeout should wait */
-  /* Since A hasn't committed yet, B will timeout. Use short timeout. */
   sqlite3_busy_timeout(b, 100);
   rc = execSql(b, "INSERT INTO t VALUES(2, 'from_b')");
   check("retry_b_busy_timeout", rc==SQLITE_BUSY);
 
-  /* Now A commits */
   execSql(a, "COMMIT");
 
-  /* B can now retry and succeed */
   rc = execSqlWithRetry(b, "INSERT INTO t VALUES(2, 'from_b')", 50);
   check("retry_b_succeeds_after", rc==SQLITE_OK);
 

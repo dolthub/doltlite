@@ -11,11 +11,7 @@ struct ChunkStaging {
   ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
-  /* Parallel to aPending: trailing zero bytes of each staged chunk that are
-  ** not present in pWriteBuf (the chunk's logical size is e->size; only
-  ** e->size - aPendingZeroTail[i] bytes follow its length word in the
-  ** buffer). Zero for ordinary chunks; written as literal zeros at commit,
-  ** so nothing on disk or in the index changes shape. */
+  /* Parallel to aPending: symbolic trailing zero bytes per staged chunk. */
   i64 *aPendingZeroTail;
   ChunkIndexEntry *aRecent;
   int nRecent;

@@ -1,18 +1,4 @@
 #!/bin/bash
-#
-# Correctness regression tests for doltlite.
-#
-# Every test inserts known data, operates on it, and verifies exact results.
-# Tests run at 100 AND 2000 rows to catch bugs that only appear when the
-# prolly tree has multiple levels (typically >800 rows for small records).
-#
-# This suite would have caught:
-#   - #164: scan-based DELETE with indexes failing at 1000+ rows
-#   - #156: diff returning wrong counts
-#   - #153: CREATE INDEX corrupting data
-#   - The big-endian key encoding bug
-#   - The canDefer ephemeral table regression
-#
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 TMPDIR=$(mktemp -d)
@@ -60,7 +46,6 @@ check() {
   fi
 }
 
-# Run a test at both small (single-level tree) and large (multi-level tree) scale
 for_each_scale() {
   local name="$1"
   shift
@@ -69,11 +54,9 @@ for_each_scale() {
   done
 }
 
-# ════════════════════════════════════════════════════════════
 echo "=== Correctness Regression Tests ==="
 echo ""
 
-# ── 1. INSERT + SELECT round-trip ─────────────────────────
 echo "--- 1. INSERT + SELECT round-trip ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
@@ -93,7 +76,6 @@ for N in 100 2000; do
   check "3-col round-trip N=$N" "$N|1|$N" "$result"
 done
 
-# ── 2. UPDATE preserves count, changes values ─────────────
 echo ""
 echo "--- 2. UPDATE correctness ---"
 for N in 100 2000; do
@@ -108,7 +90,6 @@ for N in 100 2000; do
   check "UPDATE changed N=$N" "$((N/2))" "$changed"
 done
 
-# ── 3. Scan-based DELETE ──────────────────────────────────
 echo ""
 echo "--- 3. Scan DELETE (no index) ---"
 for N in 100 2000; do
@@ -121,7 +102,6 @@ for N in 100 2000; do
   check "scan DELETE no-idx N=$N" "$((N - N/10))" "$result"
 done
 
-# ── 4. Scan DELETE with index ─────────────────────────────
 echo ""
 echo "--- 4. Scan DELETE with index ---"
 for N in 100 2000; do
@@ -135,7 +115,6 @@ for N in 100 2000; do
   check "scan DELETE with-idx N=$N" "$((N - N/10))" "$result"
 done
 
-# ── 5. Scan DELETE with BLOBKEY (id PRIMARY KEY) ──────────
 echo ""
 echo "--- 5. BLOBKEY scan DELETE ---"
 for N in 100 2000; do
@@ -148,7 +127,6 @@ for N in 100 2000; do
   check "BLOBKEY DELETE N=$N" "$((N - N/10))" "$result"
 done
 
-# ── 6. Scan UPDATE with index ─────────────────────────────
 echo ""
 echo "--- 6. Scan UPDATE with index ---"
 for N in 100 2000; do
@@ -164,7 +142,6 @@ for N in 100 2000; do
   check "UPDATE+idx changed N=$N" "$((N/10))" "$updated"
 done
 
-# ── 7. CREATE INDEX doesn't lose data ─────────────────────
 echo ""
 echo "--- 7. CREATE INDEX preserves data ---"
 for N in 100 2000; do
@@ -178,22 +155,25 @@ for N in 100 2000; do
   check "CREATE INDEX count N=$N" "$N" "$result"
 done
 
-# ── 8. Diff returns exact counts ──────────────────────────
 echo ""
-echo "--- 8. Diff accuracy ---"
+echo "--- 8. Diff accuracy (incl. negative values: reads route through the
+#       signed-int decoder, which must not shift a negative value) ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
   "$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x,0 FROM c;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
-    UPDATE t SET b=1 WHERE id%2=0;
+    UPDATE t SET b=-1 WHERE id%2=0;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','update');" > /dev/null 2>&1
   result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
   check "diff accuracy N=$N" "$((N/2))" "$result"
+  # Explicit-ref diff decodes stored values via the signed-int reader; a
+  # negative here would shift a negative value (UB) before the fix.
+  negval=$(query_value "$TMPDIR/t.db" "SELECT DISTINCT to_b FROM dolt_diff_t('HEAD^','HEAD') WHERE diff_type='modified';")
+  check "diff negative readback N=$N" "-1" "$negval"
 done
 
-# ── 9. CTE recursion works ────────────────────────────────
 echo ""
 echo "--- 9. CTE correctness ---"
 rm -f "$TMPDIR/t.db"
@@ -206,7 +186,6 @@ result=$(query_value "$TMPDIR/t.db" "CREATE TABLE tree(id INT, name TEXT, parent
   ) SELECT count(*) FROM hier;")
 check "CTE recursion" "4" "$result"
 
-# ── 10. EXISTS subquery ───────────────────────────────────
 echo ""
 echo "--- 10. EXISTS subquery ---"
 rm -f "$TMPDIR/t.db"
@@ -216,7 +195,6 @@ result=$(query_value :memory: "CREATE TABLE users(name TEXT); CREATE TABLE order
   SELECT name FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_name=users.name);")
 check "EXISTS subquery" "alice" "$result"
 
-# ── 11. LEFT JOIN ─────────────────────────────────────────
 echo ""
 echo "--- 11. LEFT JOIN ---"
 rm -f "$TMPDIR/t.db"
@@ -230,7 +208,6 @@ y|r
 z|"
 check "LEFT JOIN" "$expected" "$result"
 
-# ── 12. Branch + merge preserves data ─────────────────────
 echo ""
 echo "--- 12. Merge correctness ---"
 for N in 100 2000; do
@@ -255,7 +232,6 @@ for N in 100 2000; do
   check "merge main row N=$N" "0" "$main"
 done
 
-# ── 13. Clone preserves data ──────────────────────────────
 echo ""
 echo "--- 13. Clone correctness ---"
 for N in 100 2000; do
@@ -274,7 +250,6 @@ for N in 100 2000; do
   check "clone sum N=$N" "$((N*(N+1)/2))" "$sum"
 done
 
-# ── 14. Committed data survives reopen ────────────────────
 echo ""
 echo "--- 14. Persistence ---"
 for N in 100 2000; do
@@ -283,14 +258,12 @@ for N in 100 2000; do
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','data');" > /dev/null 2>&1
-  # Reopen in new session
   count=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t;" 2>/dev/null)
   sum=$("$DB" "$TMPDIR/t.db" "SELECT sum(val) FROM t;" 2>/dev/null)
   check "persist count N=$N" "$N" "$count"
   check "persist sum N=$N" "$((N*(N+1)/2))" "$sum"
 done
 
-# ── 15. Mixed operations in single transaction ────────────
 echo ""
 echo "--- 15. Mixed ops ---"
 for N in 100 2000; do
@@ -302,13 +275,11 @@ for N in 100 2000; do
     DELETE FROM t WHERE id%5=0;
     INSERT INTO t VALUES($((N+1)),999);
     SELECT count(*) FROM t;" > /dev/null 2>&1
-  # N rows - N/5 deleted + 1 inserted = N - N/5 + 1
   expected=$((N - N/5 + 1))
   count=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t;" 2>/dev/null)
   check "mixed ops count N=$N" "$expected" "$count"
 done
 
-# ════════════════════════════════════════════════════════════
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

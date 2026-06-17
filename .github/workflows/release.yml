@@ -4,6 +4,12 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:  # Manual trigger from Actions tab for testing
+    inputs:
+      test_binding_release_token:
+        description: "Only verify RELEASE_BOT_TOKEN access to binding repos"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -11,6 +17,7 @@ permissions:
 jobs:
   # ── Source artifacts (run once on Linux) ──────────────────
   source:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     runs-on: ubuntu-latest
     env:
       EMSDK_VERSION: 3.1.74
@@ -116,6 +123,7 @@ jobs:
 
   # ── Binary builds (per-platform) ─────────────────────────
   build:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     strategy:
       fail-fast: false
       matrix:
@@ -326,7 +334,7 @@ jobs:
     # tag push (where the binaries-linux-x64 artifact will have been
     # produced by `build`). Manual workflow_dispatch runs also produce
     # artifacts, so allow those too.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     steps:
     - name: Download linux-x64 binary artifacts
       uses: actions/download-artifact@v4
@@ -424,6 +432,7 @@ jobs:
 
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -469,6 +478,7 @@ jobs:
   # refused cleanly when it differs. A format change without a minor
   # version bump fails this job, which blocks the release.
   compat:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -549,3 +559,156 @@ jobs:
           printf '%s\n%s' "$EXISTING" "$APPEND" > /tmp/release_body.md
           gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release_body.md
         fi
+
+  # ── Trigger binding releases ─────────────────────────────
+  # The node and python bindings publish from tag pushes in their own
+  # repositories. After the core doltlite release is created and all
+  # release assets are uploaded, bump each binding package to the same
+  # version, push that commit to its main branch, then push the matching
+  # release tag. The tag push starts each binding repo's publish workflow.
+  release-bindings:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+    - name: Check release bot token
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to push commits and tags to doltlite-node and doltlite-python"
+          exit 1
+        fi
+        gh auth status
+
+    - name: Confirm core release assets are available
+      run: |
+        version="${VERSION#v}"
+        gh release view "${VERSION}" --repo dolthub/doltlite --json assets --jq '.assets[].name' > /tmp/assets.txt
+        grep -qx "doltlite-autoconf-${version}.tar.gz" /tmp/assets.txt
+        grep -qx "doltlite-tools-linux-x64-${version}.zip" /tmp/assets.txt
+        grep -qx "doltlite-tools-osx-arm64-${version}.zip" /tmp/assets.txt
+        grep -qx "doltlite-tools-win-x64-${version}.zip" /tmp/assets.txt
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - name: Release doltlite-node
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+
+        if gh api "repos/dolthub/doltlite-node/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-node ${VERSION} already exists; skipping"
+          exit 0
+        fi
+
+        gh repo clone dolthub/doltlite-node doltlite-node
+        cd doltlite-node
+        git checkout main
+        git pull --ff-only origin main
+
+        node <<'NODE'
+        const fs = require("fs");
+        const version = process.env.VERSION.slice(1);
+        for (const file of ["package.json", "package-lock.json"]) {
+          const data = JSON.parse(fs.readFileSync(file, "utf8"));
+          data.version = version;
+          if (data.packages && data.packages[""]) {
+            data.packages[""].version = version;
+          }
+          fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+        }
+        NODE
+
+        if ! git diff --quiet; then
+          git add package.json package-lock.json
+          git commit -m "Bump version to ${version} to match doltlite ${VERSION}"
+          git push origin main
+        fi
+
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
+
+    - name: Release doltlite-python
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+
+        if gh api "repos/dolthub/doltlite-python/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-python ${VERSION} already exists; skipping"
+          exit 0
+        fi
+
+        gh repo clone dolthub/doltlite-python doltlite-python
+        cd doltlite-python
+        git checkout main
+        git pull --ff-only origin main
+
+        python3 <<'PY'
+        from pathlib import Path
+        import os
+        import re
+
+        version = os.environ["VERSION"][1:]
+
+        path = Path("pyproject.toml")
+        text = path.read_text()
+        text = re.sub(r'version = "[^"]+"', f'version = "{version}"', text, count=1)
+        text = re.sub(
+            r"post-releases: [0-9.]+\.post1, [0-9.]+\.post2, etc\.",
+            f"post-releases: {version}.post1, {version}.post2, etc.",
+            text,
+            count=1,
+        )
+        path.write_text(text)
+
+        path = Path("scripts/build-libdoltlite.sh")
+        text = path.read_text()
+        ref_line = 'DOLTLITE_REF="${' + f'DOLTLITE_REF:-v{version}' + '}"'
+        text = re.sub(r'DOLTLITE_REF="\$\{DOLTLITE_REF:-v[^}]+\}"', ref_line, text, count=1)
+        path.write_text(text)
+
+        path = Path("src/doltlite/__init__.py")
+        text = path.read_text()
+        text = re.sub(r'__version__ = "[^"]+"', f'__version__ = "{version}"', text, count=1)
+        path.write_text(text)
+        PY
+
+        if ! git diff --quiet; then
+          git add pyproject.toml scripts/build-libdoltlite.sh src/doltlite/__init__.py
+          git commit -m "Bump package to ${version}"
+          git push origin main
+        fi
+
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
+
+  test-binding-release-token:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_binding_release_token }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+    steps:
+    - name: Verify token can access binding repos
+      run: |
+        set -euo pipefail
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is not available"
+          exit 1
+        fi
+        gh auth status
+        for repo in doltlite-node doltlite-python; do
+          echo "Checking dolthub/${repo}"
+          gh api "repos/dolthub/${repo}" --jq '
+            if .permissions.push == true then
+              "push permission confirmed"
+            else
+              error("RELEASE_BOT_TOKEN does not have push permission")
+            end
+          '
+          gh api "repos/dolthub/${repo}/git/matching-refs/tags/v" --jq 'length'
+        done

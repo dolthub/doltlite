@@ -1,48 +1,7 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovered coverage for explicit-rejection divergences (#1313, shard "rejections").
-# In doltlite VACUUM is a runtime-detected no-op on prolly storage (#322/#991),
-# VACUUM INTO is explicitly rejected, and the deserialize page-image API is
-# rejected (#1225). These tests pin the doltlite-native contract: rejections
-# fire with the exact message, no-op VACUUM never disturbs committed data or
-# in-progress statements, and the database stays fully usable afterward.
-#
-# covers: vacuum vacuum-5.1 — table-swap txn (DROP/CREATE/copy + view) then VACUUM succeeds; data/view intact and integrity ok across reopen (1.x)
-# covers: vacuum2 vacuum2-5.2 — VACUUM mid-scan: doltlite no-op VACUUM succeeds inside an active SELECT without disturbing the scan (2.2)
-# covers: vacuum2 vacuum2-5.3 — VACUUM inside a trivial active statement succeeds as a no-op (2.3)
-# covers: vacuum2 vacuum2-5.4 — VACUUM fired mid-scan: full row set still returned in order, db consistent after (2.4/2.5)
-# covers-class: crash7 (83 entries: crash7-1.1.crash..crash7-1.63.crash, crash7-2.1.1..crash7-2.20.1): stock crash-during-VACUUM recovery — represented by doltlite-native durability: content hash and rows unchanged across page_size+VACUUM+close+reopen for each page-size variant, repeated VACUUM/reopen cycles after bulk delete, integrity_check ok every time (3.x)
-# covers: pragma6 pragma6-1.0 — db deserialize page-image API rejected with exact message; connection remains fully usable (4.x)
-# covers: vacuum-into vacuum-into-110 — VACUUM main INTO 'file' rejected with exact doltlite message (5.1)
-# covers: vacuum-into vacuum-into-120 — rejected VACUUM INTO creates no output file to read back (5.2)
-# covers: vacuum-into vacuum-into-130 — bare VACUUM INTO 'file' rejected identically (5.3)
-# covers: vacuum-into vacuum-into-140 — VACUUM INTO a fresh nonexistent path still rejected (5.4)
-# covers: vacuum-into vacuum-into-150 — second attempt at same path rejected identically (5.4)
-# covers: vacuum-into vacuum-into-200 — VACUUM main INTO ':memory:' rejected (5.5)
-# covers: vacuum-into vacuum-into-300 — expression target (SELECT name FROM t2) evaluates, then rejection fires (5.6)
-# covers: vacuum-into vacuum-into-310 — VACUUM INTO null rejected (doltlite rejects before stock's non-text filename check) (5.7)
-# covers: vacuum-into vacuum-into-410 — function-valued target evaluates, rejection fires, no file created (5.8)
-# covers: vacuum-into vacuum-into-500 — rejection leaves source db untouched (hash unchanged) and writable (5.9; stock's read-only-source aspect is moot since no copy is ever made)
-# covers: vacuum-into vacuum-into-510 — source schema/data fully intact and queryable after rejection (5.9/5.10)
-# covers: vacuum-into vacuum-into-620 — PRAGMA page_size change does not alter the rejection (5.11)
-# covers: vacuum-into vacuum-into-630 — no output db exists to inspect after page_size+VACUUM INTO attempt (5.11)
-# covers: vacuum-into vacuum-into-710.1 — PRAGMA synchronous=normal then VACUUM INTO rejected (5.12)
-# covers: vacuum-into vacuum-into-710.2 — source hash unchanged after rejected attempt under synchronous=normal (5.12)
-# covers: vacuum-into vacuum-into-720.1 — PRAGMA synchronous=full then VACUUM INTO rejected (5.12)
-# covers: vacuum-into vacuum-into-720.2 — source hash unchanged after rejected attempt under synchronous=full (5.12)
-# covers: vacuum-into vacuum-into-730.1 — PRAGMA synchronous=off then VACUUM INTO rejected (5.12)
-# covers: vacuum-into vacuum-into-740.1 — PRAGMA synchronous=extra then VACUUM INTO rejected (5.12)
-# covers: vacuum-into vacuum-into-740.2 — source hash unchanged after rejected attempt under synchronous=extra (5.12)
-# covers: vacuum-into vacuum-into-750.1 — fullfsync=1 + synchronous=full then VACUUM INTO rejected (5.12)
-# covers: vacuum-into vacuum-into-750.2 — source hash unchanged after rejected attempt under fullfsync (5.12)
-# (5.13/5.14 additionally pin: rejection stable across close/reopen, data intact, integrity ok)
-# not-covered: (none)
 
-#-------------------------------------------------------------------------
-# 1.x: vacuum-5.1 — VACUUM after a table-swap transaction with a dependent
-# view succeeds and leaves a consistent database.
-#
 do_test doltlite_recover_rejections-1.1 {
   db close
   forcedelete test.db
@@ -79,12 +38,6 @@ do_test doltlite_recover_rejections-1.5 {
        [execsql {PRAGMA integrity_check}]
 } {{1 1} ok}
 
-#-------------------------------------------------------------------------
-# 2.x: vacuum2-5.2/5.3/5.4 — stock errors "cannot VACUUM - SQL statements in
-# progress"; doltlite's no-op VACUUM succeeds mid-statement. The recovered
-# intent: a VACUUM fired while a scan is active must not disturb the scan or
-# the database.
-#
 do_test doltlite_recover_rejections-2.1 {
   execsql {
     CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT);
@@ -121,12 +74,6 @@ do_test doltlite_recover_rejections-2.5 {
        [execsql {PRAGMA integrity_check}]
 } {{16 1 16} ok}
 
-#-------------------------------------------------------------------------
-# 3.x: crash7 class — stock crashed mid-VACUUM at varied page sizes and
-# verified recovery. doltlite-native: VACUUM (with page_size changes) never
-# perturbs committed content: hash and rows identical across VACUUM and
-# close/reopen, integrity ok each time.
-#
 do_test doltlite_recover_rejections-3.0 {
   db close
   forcedelete test.db
@@ -160,7 +107,6 @@ foreach psz {1024 2048 4096 8192} {
   } {1 48 ok}
 }
 
-# crash7-2 analogue: UNIQUE index + bulk delete, then repeated VACUUM/reopen.
 do_test doltlite_recover_rejections-3.5 {
   execsql {
     CREATE TABLE t2(a, b, UNIQUE(a, b));
@@ -185,10 +131,6 @@ do_test doltlite_recover_rejections-3.7 {
   execsql {SELECT a, b FROM t2 WHERE rowid<=4 ORDER BY a}
 } {a002 b002 a004 b004}
 
-#-------------------------------------------------------------------------
-# 4.x: pragma6-1.0 — the deserialize page-image API is rejected cleanly and
-# the connection stays usable.
-#
 do_test doltlite_recover_rejections-4.1 {
   sqlite3 dbm {}
   list [catch {dbm deserialize [decode_hexdb {
@@ -209,11 +151,6 @@ do_test doltlite_recover_rejections-4.2 {
   set res
 } {5 five}
 
-#-------------------------------------------------------------------------
-# 5.x: vacuum-into — every form of VACUUM INTO is rejected with the exact
-# message, no output file is ever produced, the source database is untouched
-# and fully usable, and the rejection is stable across reopen.
-#
 do_test doltlite_recover_rejections-5.0 {
   db close
   forcedelete test.db

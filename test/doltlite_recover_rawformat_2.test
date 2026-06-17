@@ -1,180 +1,7 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of raw-format/byte-level divergences (shard rawformat_2).
-# The originals poked SQLite page bytes, page counts, file sizes, file-header
-# fields, utf16 encodings, and internal metrics. doltlite stores a
-# content-addressed prolly chunk store, so each entry is re-asserted as the
-# doltlite-native invariant: synthetic pragma values, content-hash
-# stability/change, durability across close/reopen, rollback atomicity, exact
-# rejection messages, and integrity_check after every scenario.
-#
-# covers: pagesize pagesize-1.1 — fresh db reports doltlite's synthetic
-#   page_size default from the build (1.1)
-# covers: pagesize pagesize-1.3 — page_size set after CREATE TABLE echoes in
-#   session but never alters stored content (hash unchanged) (1.2-1.4)
-# covers: pagesize pagesize-1.4 — invalid size 511 rejected, value unchanged (1.3)
-# covers: pagesize pagesize-1.8 — non-power-of-2 1234 and oversize 65537
-#   rejected, value unchanged (1.3)
-# covers: pagesize pagesize-3.1 — page_size set inside a txn after schema read
-#   does not change the effective store layout; reopen reports the build default (1.7)
-# covers: pagesize pagesize-3.3 — page_size set wrapped in BEGIN/COMMIT is
-#   layout-inert; reopen reports the build default (1.7)
-# covers-class: pagesize pagesize-2.512.{2,3,6,10,30} pagesize-2.2048.{2,3,6,10,30}
-#   pagesize-2.4096.{3,30} pagesize-2.8192.{2,3,6,10,30} (17 entries): originals
-#   asserted the configured page size persists in the file header and file size
-#   is page_size*pages; doltlite's chunk store has no header so every reopen
-#   reports the build default regardless of the session-set value, file size is nonzero and
-#   chunk-store defined, data and txn rollback boundaries round-trip per size,
-#   integrity_check ok (1.5, 1.6, 2.*)
-# covers-class: crash6 crash6-3.{0..29}.{2,3} (60 entries): originals crashed a
-#   child mid-transaction per page size and verified the pre-transaction
-#   signature survived recovery; doltlite analog per size class 1024/2048/4096/
-#   8192: an uncommitted transaction (insert-from-select + delete) abandoned by
-#   closing the connection never persists partially — signature (count+md5sums)
-#   identical after reopen and integrity_check ok (2.*)
-# covers-class: syscall syscall-4.2.delete.{1..19} (19 entries): originals
-#   committed across main+attached aux under injected open() faults and verified
-#   both rows after reopen; doltlite analog: journal_mode pragma rejection is
-#   asserted verbatim, then a main+aux transaction commits and both tables read
-#   back correctly after close/reopen (3.1-3.3)
-# covers: syscall syscall-7.2 — 2-byte garbage file: first write errors cleanly
-#   (doltlite reports disk I/O error, not silent success) and the file is not
-#   clobbered (3.4)
-# covers: syscall syscall-7.3 — 3-byte garbage file: same clean error, bytes
-#   preserved (3.5)
-# covers: syscall syscall-8.1 — chunk-size file_control accepted on the chunk
-#   store, db remains fully usable (3.6)
-# covers: syscall syscall-8.3 — small chunk-size file_control accepted (3.6)
-#   and a non-extending size-hint is harmless (3.7)
-# covers-class: e_expr e_expr-27.4.{4..9} (6 entries): originals asserted
-#   utf16le/be CAST-to-BLOB byte images; doltlite ignores non-UTF-8 encodings so
-#   after attempting both encodings the BLOB images are the UTF-8 bytes (4.2-4.3)
-# covers-class: e_expr e_expr-28.1.{3,4} (2 entries): BLOB-to-TEXT reads bytes
-#   as UTF-8 even after attempting utf16le: X'676869' equals 'ghi' and the
-#   utf16le image decodes as NUL-truncated 'g' (4.4)
-# covers-class: e_expr e_expr-29.1.{5..8} (4 entries): utf16le numeric blobs
-#   cast to REAL under doltlite's UTF-8 read the longest UTF-8 prefix (4.5)
-# covers-class: e_expr e_expr-30.1.{5..8} (4 entries): utf16be numeric blobs
-#   cast to INTEGER read no numeric prefix under UTF-8 (leading NUL) (4.5)
-# covers-class: e_expr e_expr-33.1.{1,3,4} (3 entries): original proved cast
-#   results differ per encoding; doltlite-native invariant is the inverse and is
-#   asserted: three connections that attempted utf-8/utf-16le/utf-16be all
-#   produce identical cast results because encoding is always UTF-8 (4.6)
-# covers: enc3 enc3-1.1 — PRAGMA encoding=utf16le accepted as no-op; encoding
-#   reports UTF-8 (4.1)
-# covers: enc3 enc3-2.1 — encoding still reports UTF-8 later in the session (4.7)
-# covers: enc3 enc3-2.2 — stored utf16le blob CASTs to text per UTF-8
-#   (NUL-truncated 'a'), stored bytes intact via hex() (4.7)
-# covers: enc3 enc3-2.3 — literal utf16le blob casts to 'a' under UTF-8 (4.7)
-# covers: enc3 enc3-3.2 — attaching a second doltlite db never encoding-clashes;
-#   cross-db query works (4.8)
-# covers: enc4 enc4-2.1 — PRAGMA encoding = UTF-16le reads back UTF-8 on a fresh
-#   db; numeric text expressions still evaluate exactly (4.9)
-# covers: enc4 enc4-3.1 — PRAGMA encoding = UTF-16be reads back UTF-8 (4.9)
-# covers: alter3 alter3-3.4 — PRAGMA schema_version=N is a no-op; the
-#   hash-derived value is stable across no-ops/reopen and CHANGES on ALTER ADD
-#   (5.1-5.3)
-# covers: alter3 alter3-4.4 — schema_version changes again on ALTER ADD with a
-#   DEFAULT and rewritten rows carry the default (5.4)
-# covers: alter3 alter3-5.4 — aux.schema_version changes when the attached db's
-#   table is altered (5.5)
-# covers: alter3 alter3-5.8 — second aux ALTER ADD DEFAULT changes
-#   aux.schema_version again and aux rows carry defaults (5.5)
-# covers-class: alter3 alter3-3.3 alter3-4.3 alter3-5.5 alter3-7.{1..5}
-#   (8 entries): originals read the file-format header byte around ALTER/VACUUM;
-#   the chunk store has no SQLite header, so the recovered invariant is that
-#   VACUUM + ALTER ADD (NULL and non-NULL defaults) + VACUUM keep every row and
-#   default correct across reopen with integrity_check ok (5.6)
-# covers: backup2 backup2-2 — db backup FILE produces a faithful copy: rows,
-#   view, index, trigger, ANALYZE output present, integrity ok (6.1-6.2)
-# covers: backup2 backup2-3.2 — restore from the backup returns the db to the
-#   backed-up content (6.3)
-# covers: backup2 backup2-4 — restore into temp is rejected cleanly and the
-#   connection stays usable (6.4)
-# covers: backup2 backup2-5 — backup of temp is rejected cleanly and the
-#   connection stays usable (6.4)
-# covers: backup2 backup2-7 — backup onto a non-database target file fails with
-#   doltlite's exact message; source unharmed (6.5)
-# covers: backup2 backup2-8 — backup of an unknown database name fails; source
-#   unharmed (6.6)
-# covers: backup2 backup2-11 — restore from a non-database file fails with
-#   doltlite's exact message (6.7)
-# covers: backup2 backup2-12 — restore into an unknown database name fails;
-#   connection usable (6.8)
-# covers: backup4 backup4-1.1 — backup from an in-memory doltlite db is rejected
-#   verbatim (6.9)
-# covers-class: backup4 backup4-2.{2,3,4} backup4-3.{2,3,4} (6 entries):
-#   originals asserted page-based file sizes when backing up an empty source;
-#   doltlite analog: empty-source backup yields a valid, empty, openable
-#   destination (0 schema rows, integrity ok) and the source stays empty (6.10)
-# covers-class: corruptN corruptN-1.0 corruptN-1.1 corruptN-2.0 corruptN-6.1
-#   corruptN-6.3 corruptN-7.{1,2,3} (8 entries): originals deserialized corrupt
-#   SQLite page images; doltlite rejects MEMDB page-image deserialize verbatim
-#   (never serving corrupt pages), the connection stays usable (7.1-7.2)
-# covers-class: vacuum5 vacuum5-1.3.{2,3,4} vacuum5-3.2 (4 entries): originals
-#   measured per-file page/byte shrinkage of VACUUM; doltlite analog: VACUUM and
-#   VACUUM <schema> succeed, content hash and rows are unchanged, unknown schema
-#   errors verbatim, integrity ok (8.1-8.3)
-# covers: vacuum2 vacuum2-2.2 — VACUUM leaves stored content identical
-#   (hash-stable) rather than rewriting the file header (8.1)
-# covers: vacuum2 vacuum2-3.1 — data state (not page count) is the contract:
-#   rows correct before/after VACUUM with a second attached schema (8.1-8.2)
-# covers: vacuum2 vacuum2-3.13 — auto_vacuum cannot be reconfigured: set is a
-#   silent no-op, value stays 0, VACUUM still succeeds (8.4)
-# covers: vacuum vacuum-7.6 — PRAGMA auto_vacuum=1 + VACUUM does not switch the
-#   db to auto_vacuum; doltlite no-ops the set and reports 0 (8.4)
-# covers-class: securedel2 securedel2-1.4.{1,3} securedel2-1.5.2
-#   securedel2-1.6.2 (4 entries): freed-byte zeroing is N/A on the
-#   content-addressed store (GC reclaims); recovered row-level intent: the
-#   secure_delete pragma reports doltlite's fixed 0, deleted rows are gone from
-#   every SQL surface after delete and after reopen, survivors intact (9.1-9.2)
-# covers-class: reservebytes reservebytes-1.3.5 reservebytes-1.4.{1,4}
-#   (3 entries): no per-page reserved-bytes field exists; the file_control is
-#   accepted (SQLITE_OK), VACUUM after each setting succeeds, a second
-#   connection sees integrity ok and correct rows (10.1)
-# covers-class: tkt1512 tkt1512-1.{2,3,4} (3 entries): page-based file-size
-#   shrink after DROP/VACUUM is N/A; recovered: DROP TABLE + VACUUM leave a
-#   consistent reusable db (schema empty, file nonzero, recreate works) (11.1)
-# covers: collate4 collate4-2.1.2 — index on the NOCASE column is selected for
-#   the join (EQP) and the joined rows match stock exactly (12.1)
-# covers: collate4 collate4-3.4 — NOCASE PK UPDATE-collision errors verbatim;
-#   custom-collation index DDL (the original cascade trigger) is rejected
-#   verbatim (12.2-12.4)
-# covers-class: zeroblob zeroblob-1.1.{1,2} (2 entries): allocation
-#   instrumentation is N/A (prolly materializes the zeroblob); value semantics
-#   asserted: zeroblob(1000000) stores, reads back full-length all-zero, equals
-#   zeroblob(1000000), survives reopen (13.1)
-# covers: insert insert-5.4 — sqlite_master rootpage numbers are meaningless
-#   under prolly storage; recovered: after the t4 INSERT-SELECT dance the
-#   catalog still lists both tables and their data is exact (14.1)
-# covers: minmax2 minmax2-1.6 — min() over a DESC index: seek-count metric
-#   replaced by the plan (covering index) plus the exact result (15.1)
-# covers: rowid rowid-4.5 — joined row result matches stock and the new index
-#   drives the probe (EQP), replacing the search-count metric (16.1)
-# covers: altertab3 altertab3-31.1 — page_count stability across DROP COLUMN is
-#   a stock page metric; recovered: DROP COLUMN on a 5000-row table keeps every
-#   surviving value and integrity ok (17.1)
-# covers: misc5 misc5-4.1 — opening a small non-database file errors cleanly
-#   with doltlite's message and never overwrites the file (ticket #1370 intent)
-#   (18.1)
-# covers: fts4aa fts4aa-1.9 — FTS4 deferred-token matchinfo is deterministic and
-#   exact on doltlite's synthetic page size (19.1)
-# not-covered: backup2 backup2-6 — original asserts backup onto a readonly file
-#   fails with a permission error; the CI container runs as root, which bypasses
-#   file permissions, so the readonly condition cannot be created in this
-#   environment (verified: backup onto a 0400 file succeeds as root)
-# covers-class: syscall syscall-8.4.{1..5} (5 entries): originals assert exact
-#   chunk-rounded byte sizes from SIZE_HINT after a 16-byte CHUNK_SIZE; a fresh
-#   doltlite chunk store already exceeds those sizes so the byte counts can
-#   never match. Recovered invariant (formerly a bug here): an extending
-#   size hint zero-pads the file to the chunk-rounded size and the chunk store
-#   treats the all-zero tail as absent — the next INSERT, close/reopen, and
-#   integrity_check all succeed (3.8)
 
-#-------------------------------------------------------------------------
-# 1.* pagesize
-#
 do_test doltlite_recover_rawformat_2-1.1 {
   execsql {PRAGMA page_size}
 } {1024}
@@ -237,9 +64,6 @@ do_test doltlite_recover_rawformat_2-1.7 {
   list [execsql {PRAGMA page_size}] [execsql {PRAGMA integrity_check}]
 } {1024 ok}
 
-#-------------------------------------------------------------------------
-# 2.* crash6: abandoned transactions never persist partially, per size class
-#
 foreach pgsz {1024 2048 4096 8192} {
   do_test doltlite_recover_rawformat_2-2.$pgsz.1 {
     db close
@@ -266,9 +90,6 @@ foreach pgsz {1024 2048 4096 8192} {
   } {ok}
 }
 
-#-------------------------------------------------------------------------
-# 3.* syscall
-#
 do_test doltlite_recover_rawformat_2-3.1 {
   db close
   forcedelete test.db test2.db
@@ -283,8 +104,6 @@ do_test doltlite_recover_rawformat_2-3.1 {
   catchsql {PRAGMA main.journal_mode = delete}
 } {1 {journal_mode is not configurable on doltlite-format databases}}
 
-# The rejection applies identically to the attached db, and a wal request
-# (already the reported mode) is an accepted no-op on both.
 do_test doltlite_recover_rawformat_2-3.1b {
   list [catchsql {PRAGMA aux.journal_mode = delete}] \
       [execsql {PRAGMA main.journal_mode = wal}] \
@@ -382,9 +201,6 @@ do_test doltlite_recover_rawformat_2-3.8 {
       [execsql {PRAGMA integrity_check}]
 } {8192 {1 2 3 4} ok}
 
-#-------------------------------------------------------------------------
-# 4.* encodings: e_expr-27/28/29/30/33, enc3, enc4
-#
 do_test doltlite_recover_rawformat_2-4.1 {
   db close
   forcedelete test.db
@@ -486,9 +302,6 @@ do_test doltlite_recover_rawformat_2-4.9 {
   set r
 } {UTF-8 2.0 923}
 
-#-------------------------------------------------------------------------
-# 5.* alter3: schema_version + file-format byte
-#
 do_test doltlite_recover_rawformat_2-5.1 {
   db close
   forcedelete test.db test2.db
@@ -556,9 +369,6 @@ do_test doltlite_recover_rawformat_2-5.6 {
   list [execsql {SELECT * FROM abc2}] [execsql {PRAGMA integrity_check}]
 } {{1 2 3 {} 10 {}} ok}
 
-#-------------------------------------------------------------------------
-# 6.* backup2 / backup4
-#
 do_test doltlite_recover_rawformat_2-6.1 {
   db close
   forcedelete test.db test2.db
@@ -652,9 +462,6 @@ do_test doltlite_recover_rawformat_2-6.10 {
   set res
 } {0 {} 0 ok}
 
-#-------------------------------------------------------------------------
-# 7.* corruptN: page-image deserialize is rejected, never served
-#
 do_test doltlite_recover_rawformat_2-7.1 {
   sqlite3 dbd {}
   set rc [catch {dbd deserialize [string repeat \x00 512]} msg]
@@ -672,9 +479,6 @@ do_test doltlite_recover_rawformat_2-7.2 {
   list $rc $msg $usable [execsql {PRAGMA integrity_check}]
 } {1 {unable to set MEMDB content} 7 ok}
 
-#-------------------------------------------------------------------------
-# 8.* vacuum / vacuum2 / vacuum5: VACUUM is content-preserving
-#
 do_test doltlite_recover_rawformat_2-8.1 {
   db close
   forcedelete test.db test2.db
@@ -716,9 +520,6 @@ do_test doltlite_recover_rawformat_2-8.5 {
   list [execsql {SELECT count(*) FROM v1}] [execsql {PRAGMA integrity_check}]
 } {0 ok}
 
-#-------------------------------------------------------------------------
-# 9.* securedel2
-#
 do_test doltlite_recover_rawformat_2-9.1 {
   list [execsql {PRAGMA secure_delete}] \
       [execsql {PRAGMA secure_delete = 1}] \
@@ -742,9 +543,6 @@ do_test doltlite_recover_rawformat_2-9.2 {
       [execsql {PRAGMA integrity_check}]
 } {29 0 0 30 ok}
 
-#-------------------------------------------------------------------------
-# 10.* reservebytes
-#
 do_test doltlite_recover_rawformat_2-10.1 {
   set r1 [file_control_reservebytes db 8]
   execsql {VACUUM}
@@ -758,9 +556,6 @@ do_test doltlite_recover_rawformat_2-10.1 {
   set res
 } {SQLITE_OK SQLITE_OK ok 29}
 
-#-------------------------------------------------------------------------
-# 11.* tkt1512
-#
 do_test doltlite_recover_rawformat_2-11.1 {
   db close
   forcedelete test.db
@@ -779,9 +574,6 @@ do_test doltlite_recover_rawformat_2-11.1 {
       [execsql {PRAGMA integrity_check}]
 } {{1 2 3 4} 0 1 {0 9} ok}
 
-#-------------------------------------------------------------------------
-# 12.* collate4
-#
 do_test doltlite_recover_rawformat_2-12.1 {
   execsql {
     CREATE TABLE c4a(a COLLATE NOCASE);
@@ -817,9 +609,6 @@ do_test doltlite_recover_rawformat_2-12.4 {
   catchsql {CREATE INDEX c4ci ON c4c(x)}
 } {1 {doltlite does not support indexes with custom collation 'TEXT'}}
 
-#-------------------------------------------------------------------------
-# 13.* zeroblob
-#
 do_test doltlite_recover_rawformat_2-13.1 {
   execsql {
     CREATE TABLE zb(a, b, c, d);
@@ -834,9 +623,6 @@ do_test doltlite_recover_rawformat_2-13.1 {
   }
 } {1000000 blob 1 00000000 00000000}
 
-#-------------------------------------------------------------------------
-# 14.* insert-5.4
-#
 do_test doltlite_recover_rawformat_2-14.1 {
   execsql {
     CREATE TABLE test1(f1 int, f2 int);
@@ -854,9 +640,6 @@ do_test doltlite_recover_rawformat_2-14.1 {
       [execsql {SELECT * FROM test1}]
 } {{1 2} {t4 test1} {11 22}}
 
-#-------------------------------------------------------------------------
-# 15.* minmax2
-#
 do_test doltlite_recover_rawformat_2-15.1 {
   execsql {CREATE TABLE mm1(x, y)}
   for {set i 1} {$i <= 20} {incr i} {
@@ -868,9 +651,6 @@ do_test doltlite_recover_rawformat_2-15.1 {
       [string match "*mm1i1*" $plan]
 } {1 20 1}
 
-#-------------------------------------------------------------------------
-# 16.* rowid-4.5
-#
 do_test doltlite_recover_rawformat_2-16.1 {
   execsql {
     CREATE TABLE jt1(x int, y int);
@@ -890,9 +670,6 @@ do_test doltlite_recover_rawformat_2-16.1 {
       [string match "*idxjt2*" $plan]
 } {4 1}
 
-#-------------------------------------------------------------------------
-# 17.* altertab3-31.1
-#
 do_test doltlite_recover_rawformat_2-17.1 {
   execsql {
     CREATE TABLE dc1(ii INTEGER PRIMARY KEY, tt INTEGER, rr REAL);
@@ -906,9 +683,6 @@ do_test doltlite_recover_rawformat_2-17.1 {
       [execsql {PRAGMA integrity_check}]
 } {{5000 1 5.0} ok}
 
-#-------------------------------------------------------------------------
-# 18.* misc5-4.1
-#
 do_test doltlite_recover_rawformat_2-18.1 {
   db close
   rf2_garbage_file test.db "This is not really a database\n"
@@ -927,9 +701,6 @@ do_test doltlite_recover_rawformat_2-18.1 {
 } {{1 {disk I/O error}} {This is not really a database
 }}
 
-#-------------------------------------------------------------------------
-# 19.* fts4aa-1.9
-#
 ifcapable fts3 {
   do_test doltlite_recover_rawformat_2-19.1 {
     execsql {CREATE VIRTUAL TABLE ft USING fts4(content)}

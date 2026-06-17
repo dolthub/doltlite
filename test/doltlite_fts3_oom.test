@@ -8,9 +8,6 @@
 #    May you share freely, never taking more than you give.
 #
 #***********************************************************************
-#
-# DoltLite regression tests for FTS3 virtual-table create failure cleanup.
-#
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl

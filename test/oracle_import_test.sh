@@ -1,21 +1,4 @@
 #!/bin/bash
-#
-# Oracle test: shell `.import` dot-command
-#
-# Imports the same CSV via doltlite (`.import file table`) and Dolt
-# (`dolt table import -c table file`) and compares the resulting row
-# data. Per project convention, column names are NOT compared (doltlite
-# uses ANY-typed columns and may name them differently than dolt's
-# inferred schema). Only row content is compared, with rows sorted
-# textually after stripping CSV quoting.
-#
-# Specifically targets the regression where doltlite's `.import` would
-# inherit the column separator from the *display* mode (default `list`
-# in batch mode → `|`), causing comma-CSV files to be parsed as a single
-# column whose name was the entire header line (issue #383).
-#
-# Usage: bash oracle_import_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 
@@ -26,26 +9,21 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-# Strip CSV quoting and CR, sort the rows. The two engines may quote
-# differently on output even when the underlying values agree.
 normalize() {
   tr -d '"\r' | sort
 }
 
-# $1=name, $2=csv body, $3=optional explicit pk column for dolt
 oracle_import() {
   local name="$1" csv="$2" pk="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
   printf '%s' "$csv" > "$dir/data.csv"
 
-  # doltlite: use .import, then dump rows as CSV without headers.
   local dl_out
   dl_out=$(printf '.import %s t\n.headers off\n.mode csv\nSELECT * FROM t;\n' "$dir/data.csv" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize)
 
-  # dolt: use `dolt table import -c`, then dump rows.
   local pk_arg=""
   if [ -n "$pk" ]; then pk_arg="--pk $pk"; fi
   local dt_out
@@ -55,7 +33,6 @@ oracle_import() {
     "$DOLT" table import -c $pk_arg t "$dir/data.csv" >"$dir/dt.imp" 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT * FROM t" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
-  # Strip dolt's header row (first line of csv output).
   dt_out=$(tail -n +2 "$dir/dt.raw" | normalize)
 
   if [ "$dl_out" = "$dt_out" ]; then
@@ -69,10 +46,6 @@ oracle_import() {
   fi
 }
 
-# Like oracle_import, but only checks doltlite — verifies that the
-# created table has the expected number of columns. This is the most
-# direct test for the #383 regression: a header line with N comma-
-# separated names must produce a table with N columns, not 1.
 assert_dl_columns() {
   local name="$1" csv="$2" expected_ncols="$3"
   local dir="$TMPROOT/$name"
@@ -100,7 +73,6 @@ echo ""
 
 echo "--- column count regression (#383) ---"
 
-# The exact bug: a comma-CSV must produce N columns, not 1.
 assert_dl_columns "header_three_cols" \
 "name,age,city
 Alice,30,NYC
@@ -145,7 +117,6 @@ oracle_import "empty_fields" \
 
 echo "--- many rows ---"
 
-# Build a 50-row CSV.
 big_csv="id,n
 "
 for i in $(seq 1 50); do

@@ -1,110 +1,7 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of gated PRAGMA-output divergences through doltlite's
-# real surface. Stock asserted persisted header fields, raw page counts, and
-# page-corruption reporting; doltlite's contract is asserted instead: session
-# scoped cache/synchronous/user_version pragmas, content-derived schema_version
-# that no-ops on write but invalidates prepared statements on real DDL,
-# integrity_check argument forms with stock-identical error text, synthetic
-# page_size/page_count, auto_vacuum no-ops, corrupted files refused at
-# open/ATTACH, single-file storage (multiplex intent), and shrink_memory /
-# sqlite3_db_release_memory as safe no-ops.
-#
-# covers: pragma pragma-1.9.1 — default_cache_size=-123 reports {123 123}; reopen resets to synthetic {-2000 -2000 2} (1.6)
-# covers: pragma pragma-1.9.2 — VACUUM preserves session {123 123 2} exactly as stock expected (1.2)
-# covers: pragma pragma-1.10 — PRAGMA synchronous=NORMAL reports 1 (1.3)
-# covers: pragma pragma-1.11.1 — PRAGMA synchronous=EXTRA reports 3 (1.4)
-# covers: pragma pragma-1.11.2 — PRAGMA synchronous=FULL reports 2 (1.5)
-# covers: pragma pragma-1.12 — reopen reports synchronous 2 as stock expected; cache values reset to doltlite synthetic defaults (1.6)
-# covers: pragma pragma-1.15.4 — default_cache_size=-500 reports flattened 500 (1.7)
-# covers: pragma pragma-4.6 — aux.default_cache_size=456 reports {456 456}; doltlite contract: resets to -2000 after DETACH/reATTACH, session scoped (1.8)
-# covers: pragma pragma-3.2 — index+table db passes integrity_check; corrupted file is refused at open instead of served (2.1, 3.1)
-# covers: pragma pragma-3.3 — integrity_check=1 limit form accepted (2.2)
-# covers: pragma pragma-3.4 — same file ATTACHed twice, integrity_check spans both and reads work (2.9)
-# covers: pragma pragma-3.5 — integrity_check=4 accepted (2.8)
-# covers: pragma pragma-3.5.2 — integrity_check='4' errors {no such table: 4}, stock-identical (2.3)
-# covers: pragma pragma-3.6 — integrity_check=xyz errors {no such table: xyz} (2.4)
-# covers: pragma pragma-3.6b — integrity_check=t2 checks the named table (2.5)
-# covers: pragma pragma-3.6c — integrity_check=sqlite_schema ok (2.6)
-# covers: pragma pragma-3.7 — integrity_check=0 accepted (2.7)
-# covers: pragma pragma-3.8 — REINDEX then integrity_check ok (2.10)
-# covers: pragma pragma-3.8.1 — quick_check ok (2.10)
-# covers: pragma pragma-3.8.2 — uppercase QUICK_CHECK ok (2.10)
-# covers: pragma pragma-3.9a — second db ATTACHed, integrity_check spans both dbs (2.11)
-# covers: pragma pragma-3.9b — PRAGMA aux.integrity_check=<table> scopes to the attached db; missing table errors {no such table: aux.nosuch} (2.12)
-# covers: pragma pragma-3.9c — PRAGMA aux.integrity_check=sqlite_schema ok (2.13)
-# covers: pragma pragma-3.10 — integrity_check=1 with two attached dbs (2.14)
-# covers: pragma pragma-3.11 — integrity_check=5 with two attached dbs (2.14)
-# covers: pragma pragma-3.12 — integrity_check=4 with two attached dbs (2.14)
-# covers: pragma pragma-3.13 — integrity_check=3 with two attached dbs (2.14)
-# covers: pragma pragma-3.14 — paren form integrity_check(2) (2.14)
-# covers: pragma pragma-3.15 — integrity_check spans three dbs after second ATTACH (2.11, 2.14)
-# covers: pragma pragma-3.16 — paren form integrity_check(10) (2.14)
-# covers: pragma pragma-3.17 — integrity_check=8 (2.14)
-# covers: pragma pragma-3.18 — integrity_check=4 repeated after attach churn (2.14)
-# covers: pragma pragma-6.2.2 — table_info(t5) defaults CURRENT_TIMESTAMP/5+3/NULL/'' verbatim; doltlite reports notnull=1 for PK members (4.1)
-# covers: pragma pragma-6.8 — duplicate PK column: doltlite dedupes, pk ordinals 1,2,3 (4.2)
-# covers: pragma pragma-8.1.2 — schema_version reports a stable integer (5.1)
-# covers: pragma pragma-8.1.3 — writing schema_version is a no-op, value unchanged (5.2)
-# covers: pragma pragma-8.1.4 — writing schema_version is a no-op even without DEFENSIVE; doltlite derives it from content (5.2)
-# covers: pragma pragma-8.1.6 — CREATE TABLE changes schema_version (5.3)
-# covers: pragma pragma-8.1.9 — second connection's prepared stmt returns SQLITE_ERROR after real DDL by first (5.4)
-# covers: pragma pragma-8.1.10 — finalize reports SQLITE_SCHEMA (5.4)
-# covers: pragma pragma-8.1.12 — aux.schema_version reports a stable integer; write is a no-op (5.5)
-# covers: pragma pragma-8.1.13 — main schema_version unchanged by aux DDL (5.6)
-# covers: pragma pragma-8.1.16 — aux schema change expires other connection's stmt: SQLITE_ERROR (5.7)
-# covers: pragma pragma-8.1.17 — finalize reports SQLITE_SCHEMA for the aux case (5.7)
-# covers: pragma pragma-8.2.4.1 — user_version ops leave schema_version unchanged (5.8)
-# covers: pragma pragma-8.2.4.2 — VACUUM preserves user_version 2, stock-identical (5.8)
-# covers: pragma pragma-8.2.4.3 — doltlite contract: VACUUM is a no-op, schema_version unchanged (5.8)
-# covers: pragma pragma-8.2.8 — main.user_version independent of aux.user_version (6.1)
-# covers: pragma pragma-8.2.9 — user_version set inside a txn on main and aux (6.2)
-# covers: pragma pragma-8.2.10 — in-txn aux.user_version reads back 10 (6.2)
-# covers: pragma pragma-8.2.11 — in-txn main.user_version reads back 11 (6.2)
-# covers: pragma pragma-8.2.12 — ROLLBACK restores aux.user_version to 3 (6.3)
-# covers: pragma pragma-8.2.13 — ROLLBACK restores main.user_version to 2 (6.3)
-# covers: pragma pragma-8.2.3.2 — doltlite contract: user_version is session scoped, reopen reads 0 (6.6)
-# covers: pragma pragma-14.1 — fresh db reports synthetic page_count {4 4} (7.1)
-# covers: pragma pragma-14.2 — CREATE TABLE grows page_count; temp.page_count 0 (7.2)
-# covers: pragma pragma-14.2uc — uppercase PAGE_COUNT matches (7.3)
-# covers: pragma pragma-14.3 — page_count reflects uncommitted CREATE TABLE inside txn (7.4)
-# covers: pragma pragma-14.3uc — uppercase form inside txn matches (7.4)
-# covers: pragma pragma-14.4 — synthetic page_size follows the build default; stock's filesize/page_size identity does not hold in chunk format (7.6)
-# covers: pragma pragma-14.5 — ROLLBACK restores pre-txn page_count (7.5)
-# covers: pragma pragma-14.6 — aux.page_count reports the attached db's count (7.7)
-# covers: pragma pragma-14.6uc — AUX.PAGE_COUNT uppercase matches (7.7)
-# covers: pragma pragma-17.1.1 — auto_vacuum=1 accepted as a no-op, reads back 0 (8.1)
-# covers: pragma pragma-17.1.2 — auto_vacuum=2 no-op, reads back 0 (8.2)
-# covers: pragma pragma-17.1.full — auto_vacuum=full no-op, reads back 0 (8.3)
-# covers: pragma pragma-17.1.FULL — auto_vacuum=FULL no-op, reads back 0 (8.3)
-# covers: pragma pragma-17.1.incremental — auto_vacuum=incremental no-op, reads back 0 (8.4)
-# covers: pragma pragma-17.1.INCREMENTAL — auto_vacuum=INCREMENTAL no-op, reads back 0 (8.4)
-# covers: pragma pragma-22.2 — corruption never silently served: opening a corrupted file errors {file is not a database} (3.1)
-# covers: pragma pragma-22.3.1 — ATTACHing a corrupted file errors {unable to open database: testerr.db}; healthy main unaffected (3.2)
-# covers: pragma pragma-22.3.3 — aux.integrity_check scopes to the attached db (3.3)
-# covers: pragma pragma-22.4.1 — corrupted file refused at open, so a corrupt main can never report ok (3.1)
-# covers: pragma pragma-22.4.2 — main.integrity_check scopes to main (3.3)
-# covers: pragma pragma-23.1 — DDL by one connection visible to another via sqlite_master (9.1)
-# covers: pragma pragma-23.3 — index_list(t1) via second connection after DROP/CREATE INDEX; index_info column order stock-identical (9.2, 9.3)
-# covers: pragma pragma-24.1 — corrupted db cannot be read: refused at open with clean error, no crash (3.1)
-# covers: pragma pragma-24.2 — corruption is reported as an error, not ok: open fails and a healthy copy still passes integrity_check (3.1, 3.2)
-# covers: shrink shrink-1.1 — sqlite3_db_release_memory returns SQLITE_OK and data stays intact (10.1)
-# covers: shrink shrink-1.2 — UPDATE works after release_memory (10.2)
-# covers: shrink shrink-1.3 — PRAGMA shrink_memory no-ops; data and integrity_check intact (10.3)
-# covers: multiplex4 multiplex4-1.0 — multiplex VFS absent ({no such vfs: multiplex}); 250KB row stays in one file, no .001 overflow (11.1, 11.2)
-# covers: multiplex4 multiplex4-1.2 — PRAGMA multiplex_truncate is a no-op returning nothing (11.4)
-# covers: multiplex4 multiplex4-1.10 — growing data never spawns numbered overflow files (11.2)
-# covers: multiplex4 multiplex4-1.11 — DELETE+VACUUM keeps the single-file layout and data readable (11.3)
-# covers-class: tkt2686 tkt2686-{1..1999}.{1..3}: max_page_count accounts for
-#   unflushed pending writes, so repeated fill-to-full loops hit SQLITE_FULL,
-#   drain cleanly, preserve integrity, and never grow the file unbounded
-#   (12.1, 12.2). The per-iteration insert count depends on the randstr
-#   stream, so the assertion bounds the file size, not the count.
 
-#-----------------------------------------------------------------------
-# 1: cache_size / default_cache_size / synchronous session contract
-#
 do_test doltlite_recover_pragma_output-1.1 {
   execsql {
     PRAGMA default_cache_size=-123;
@@ -175,9 +72,6 @@ do_test doltlite_recover_pragma_output-1.9 {
 } {-2000 -2000}
 execsql {DETACH aux}
 
-#-----------------------------------------------------------------------
-# 2: integrity_check argument forms (same schema as the original)
-#
 do_test doltlite_recover_pragma_output-2.1 {
   execsql {
     CREATE TABLE t2(a,b,c);
@@ -263,9 +157,6 @@ do_test doltlite_recover_pragma_output-2.14 {
 } {ok ok ok ok ok ok ok ok}
 execsql {DETACH aux2; DETACH aux}
 
-#-----------------------------------------------------------------------
-# 3: corrupted files are refused, never silently served
-#
 do_test doltlite_recover_pragma_output-3.1 {
   forcedelete testerr.db
   forcecopy testdup.db testerr.db
@@ -290,9 +181,6 @@ do_test doltlite_recover_pragma_output-3.3 {
 } {ok ok}
 execsql {DETACH aux}
 
-#-----------------------------------------------------------------------
-# 4: table_info default values and PK ordinals
-#
 db nullvalue <<NULL>>
 do_test doltlite_recover_pragma_output-4.1 {
   execsql {
@@ -316,9 +204,6 @@ do_test doltlite_recover_pragma_output-4.2 {
   }
 } {0 a {} 1 {} 1 1 b {} 1 {} 2 2 c {} 1 {} 3}
 
-#-----------------------------------------------------------------------
-# 5: schema_version is content-derived; real DDL invalidates statements
-#
 do_test doltlite_recover_pragma_output-5.1 {
   set ::sv0 [execsql {PRAGMA schema_version}]
   list [string is integer -strict $::sv0] \
@@ -386,9 +271,6 @@ do_test doltlite_recover_pragma_output-5.8 {
        [execsql {PRAGMA user_version}]
 } {1 1 2}
 
-#-----------------------------------------------------------------------
-# 6: user_version is per-database, transactional, and session scoped
-#
 do_test doltlite_recover_pragma_output-6.1 {
   execsql {
     PRAGMA aux.user_version;
@@ -436,9 +318,6 @@ do_test doltlite_recover_pragma_output-6.6 {
   execsql {PRAGMA user_version}
 } {0}
 
-#-----------------------------------------------------------------------
-# 7: synthetic page_count / page_size
-#
 do_test doltlite_recover_pragma_output-7.1 {
   db close
   foreach f [glob -nocomplain testpc.db* testpc2.db*] {forcedelete $f}
@@ -492,9 +371,6 @@ do_test doltlite_recover_pragma_output-7.7 {
 } {1 1 1}
 execsql {DETACH aux}
 
-#-----------------------------------------------------------------------
-# 8: auto_vacuum settings are accepted as no-ops, never applied
-#
 do_test doltlite_recover_pragma_output-8.1 {
   list [catchsql {PRAGMA auto_vacuum=1}] [execsql {PRAGMA auto_vacuum}]
 } {{0 {}} 0}
@@ -523,9 +399,6 @@ do_test doltlite_recover_pragma_output-8.5 {
   }
 } {0 1 2 3}
 
-#-----------------------------------------------------------------------
-# 9: schema changes propagate across connections (index_list/index_info)
-#
 do_test doltlite_recover_pragma_output-9.1 {
   db close
   foreach f [glob -nocomplain testpc.db*] {forcedelete $f}
@@ -556,9 +429,6 @@ do_test doltlite_recover_pragma_output-9.3 {
 } {0 2 c 1 3 d 2 1 b}
 db2 close
 
-#-----------------------------------------------------------------------
-# 10: shrink_memory / sqlite3_db_release_memory are safe no-ops
-#
 do_test doltlite_recover_pragma_output-10.1 {
   execsql {
     PRAGMA cache_size=2000;
@@ -582,9 +452,6 @@ do_test doltlite_recover_pragma_output-10.3 {
   }
 } {1000000 2 ok}
 
-#-----------------------------------------------------------------------
-# 11: single-file storage; multiplex VFS intent
-#
 do_test doltlite_recover_pragma_output-11.1 {
   set rc [catch {sqlite3 dbm mxt.db -vfs multiplex} msg]
   catch {dbm close}
@@ -619,9 +486,6 @@ do_test doltlite_recover_pragma_output-11.4 {
        [execsql {PRAGMA multiplex_truncate=on}]
 } {{} {} {}}
 
-#-----------------------------------------------------------------------
-# 12: max_page_count includes pending writes before mutmap drain
-#
 do_test doltlite_recover_pragma_output-12.1 {
   db close
   forcedelete test2686.db

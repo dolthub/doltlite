@@ -1,7 +1,4 @@
 #!/bin/bash
-#
-# Tests for dolt_config() — committer name and email configuration.
-#
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 TMPDIR=$(mktemp -d)

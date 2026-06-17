@@ -1,24 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-# Recovers the intent of the date-14 family, which used hexio_write to poke raw
-# IEEE754 bytes into a SQLite page and then verified date/time behavior on the
-# mutated stored double. doltlite's prolly format has no SQLite page layout, so
-# instead each exact bit pattern the original produced on disk is constructed in
-# tcl (binary format/scan), stored through doltlite's REAL serialization, and
-# verified after a close/reopen round-trip through the persistent chunk store.
-#
-# covers: date date-14.1 — same bit pattern 4142ba32bffffff9 built in tcl, stored
-#   as REAL, survives close/reopen bit-exactly, and SELECT prints 2454629.5; the
-#   original's PRAGMA auto_vacuum=OFF / page_size=1024 setup is asserted as
-#   doltlite's synthetic pragma values
-# covers-class: date date-14.2.0 .. date-14.2.255 (256 entries): original varied
-#   the least significant byte of the stored double on disk (offset 2047) over
-#   00..FF; here all 256 bit patterns 4142ba32bfffffXX are constructed in tcl,
-#   stored in one table, round-tripped across reopen bit-exactly, and per-value
-#   datetime(x) must be 2008-06-12 00:00:00 or 2008-06-11 23:59:59, never
-#   24:00:00
-# not-covered: (none)
 
 proc bits2double {hex} {
   binary scan [binary format H16 $hex] Q d
@@ -54,8 +36,6 @@ do_test doltlite_recover_rawformat_1-1.3 {
   db one {SELECT datetime(x) FROM t1}
 } {2008-06-12 00:00:00}
 
-# The original's byte poke mutated stored content; doltlite's analog is that the
-# table hash changes when the stored double's bits change, and only then.
 do_test doltlite_recover_rawformat_1-1.4 {
   set h0 [db one {SELECT dolt_hashof_table('t1')}]
   db eval {UPDATE t1 SET x=x}

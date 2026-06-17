@@ -235,63 +235,31 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
 }
 
 void doltliteUpdateSchemaHashes(sqlite3 *db){
-  int idx = 0;
-  Pgno iTable;
-  const char *zName;
-  while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
-    sqlite3_stmt *pStmt = 0;
-    /* zName points into the catalog, and stepping the query below can
-    ** begin a transaction that reloads it (cherry-pick refresh). */
-    char *zNameCopy = sqlite3_mprintf("%s", zName);
-    char *zSql = zNameCopy ? sqlite3_mprintf(
-      "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'",
-      zNameCopy) : 0;
-    if( zSql ){
-      if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK ){
-        if( sqlite3_step(pStmt)==SQLITE_ROW ){
-          const char *zCreate = (const char*)sqlite3_column_text(pStmt, 0);
-          if( zCreate ){
-            ProllyHash h;
-            char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zNameCopy);
-            if( zCanon ){
-              prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
-              sqlite3_free(zCanon);
-              doltliteSetTableSchemaHash(db, iTable, &h);
-            }
-          }
-        }
-        sqlite3_finalize(pStmt);
-      }
-      sqlite3_free(zSql);
-    }
-    sqlite3_free(zNameCopy);
-  }
-
-  {
-    sqlite3_stmt *pStmt = 0;
-    if( sqlite3_prepare_v2(
-          db,
-          "SELECT name, rootpage, sql "
-          "FROM main.sqlite_master "
-          "WHERE type='index' AND sql IS NOT NULL",
-          -1, &pStmt, 0
-        )==SQLITE_OK ){
-      while( sqlite3_step(pStmt)==SQLITE_ROW ){
-        const char *zIdxName = (const char*)sqlite3_column_text(pStmt, 0);
-        Pgno iRoot = (Pgno)sqlite3_column_int(pStmt, 1);
-        const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
-        if( zIdxName && zCreate ){
-          ProllyHash h;
-          char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zIdxName);
-          if( zCanon ){
-            prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
-            sqlite3_free(zCanon);
-            doltliteSetTableSchemaHash(db, iRoot, &h);
-          }
+  sqlite3_stmt *pStmt = 0;
+  /* One scan of sqlite_master covers every table and index; both key their
+  ** catalog entry by rootpage and canonicalize by their own name. */
+  if( sqlite3_prepare_v2(
+        db,
+        "SELECT name, rootpage, sql "
+        "FROM main.sqlite_master "
+        "WHERE type IN ('table','index') AND sql IS NOT NULL",
+        -1, &pStmt, 0
+      )==SQLITE_OK ){
+    while( sqlite3_step(pStmt)==SQLITE_ROW ){
+      const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+      Pgno iRoot = (Pgno)sqlite3_column_int(pStmt, 1);
+      const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
+      if( zName && zCreate ){
+        ProllyHash h;
+        char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zName);
+        if( zCanon ){
+          prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
+          sqlite3_free(zCanon);
+          doltliteSetTableSchemaHash(db, iRoot, &h);
         }
       }
-      sqlite3_finalize(pStmt);
     }
+    sqlite3_finalize(pStmt);
   }
 }
 
@@ -605,8 +573,11 @@ static int doltliteDetectPostMergeConstraintViolations(
     return SQLITE_OK;
   }
 
-  rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
-                                       &zDetectErrMsg, &nViolations);
+  rc = doltliteConstraintViolationBatchBegin(db);
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
+                                         &zDetectErrMsg, &nViolations);
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteDetectMergeUniqueViolations(db, pAncCatHash,
                                              &zDetectErrMsg, &nUnique);
@@ -614,6 +585,10 @@ static int doltliteDetectPostMergeConstraintViolations(
   if( rc==SQLITE_OK ){
     rc = doltliteDetectMergeCheckViolations(db, pAncCatHash,
                                             &zDetectErrMsg, &nCheck);
+  }
+  {
+    int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+    if( rc==SQLITE_OK ) rc = erc;
   }
   sqlite3_free(zDetectErrMsg);
   if( rc!=SQLITE_OK ) return rc;
@@ -1758,11 +1733,7 @@ static void doltliteCommitFunc(
     }
   }
 
-  /* If this commit is finalizing a merge (whether autocommit-style
-  ** straight through dolt_merge, or explicit-txn with dolt_conflicts_
-  ** resolve in between), regenerate sqlite_stat1 against the merged
-  ** tree before sealing the commit. mergeCatalogPass1 took ours for
-  ** the stat rows; this ANALYZE makes them match post-merge data. */
+  /* Final merge commits refresh derived sqlite_stat rows. */
   {
     u8 isMergingCommit = 0;
     doltliteGetSessionMergeState(db, &isMergingCommit, 0, 0);
@@ -2796,15 +2767,7 @@ static void doltliteMergeFunc(
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
     }
 
-    /* Stats merge step (#990). mergeCatalogPass1 takes ours for the
-    ** sqlite_stat tables instead of three-way merging derived rows
-    ** that would either dedupe spuriously or surface phantom PK
-    ** conflicts. ANALYZE here regenerates stats against the merged
-    ** tree so they reflect post-merge data, not whichever branch's
-    ** snapshot we happened to keep.
-    ** Skip on row-level conflicts: the conflict path rolls back
-    ** through an autocommit unwind that doesn't cleanly undo
-    ** sqlite_stat1 writes. */
+    /* Regenerate stats after a clean merge; stat rows are derived data. */
     if( nMergeConflicts==0 ){
       sqlite3_stmt *pProbe = 0;
       int hasStat1 = 0;
@@ -2852,8 +2815,11 @@ static void doltliteMergeFunc(
     int nUnique = 0;
     int nCheck = 0;
     char *zDetectErrMsg = 0;
-    int vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
-                                              &zDetectErrMsg, &nViolations);
+    int vrc = doltliteConstraintViolationBatchBegin(db);
+    if( vrc == SQLITE_OK ){
+      vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
+                                            &zDetectErrMsg, &nViolations);
+    }
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash,
                                                 &zDetectErrMsg, &nUnique);
@@ -2861,6 +2827,10 @@ static void doltliteMergeFunc(
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash,
                                                &zDetectErrMsg, &nCheck);
+    }
+    {
+      int erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
+      if( vrc==SQLITE_OK ) vrc = erc;
     }
     if( vrc != SQLITE_OK ){
       if( zDetectErrMsg ){
@@ -3137,8 +3107,11 @@ static int applyMergedCatalogAndCommit(
     int nCheck = 0;
     char *zDetectErrMsg = 0;
 
-    rc = doltliteDetectMergeFkViolations(db, ancCatHash,
-                                         &zDetectErrMsg, &nViolations);
+    rc = doltliteConstraintViolationBatchBegin(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeFkViolations(db, ancCatHash,
+                                           &zDetectErrMsg, &nViolations);
+    }
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeUniqueViolations(db, ancCatHash,
                                                &zDetectErrMsg, &nUnique);
@@ -3146,6 +3119,10 @@ static int applyMergedCatalogAndCommit(
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeCheckViolations(db, ancCatHash,
                                               &zDetectErrMsg, &nCheck);
+    }
+    {
+      int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+      if( rc==SQLITE_OK ) rc = erc;
     }
     if( rc!=SQLITE_OK ){
       if( zDetectErrMsg ){

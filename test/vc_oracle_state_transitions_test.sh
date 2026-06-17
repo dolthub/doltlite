@@ -105,8 +105,6 @@ oracle() {
   ) > "$dir/dt.table.raw"
   dt_table=$(tail -n +2 "$dir/dt.table.raw" | tr -d '"' | normalize_table)
 
-  # Surface the stricter "log+table both empty" case so the original guard's
-  # message is preserved; the helper still catches the all-empty combined.
   if [ -z "$dl_log" ] && [ -z "$dt_log" ] && [ -z "$dl_table" ] && [ -z "$dt_table" ]; then
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"

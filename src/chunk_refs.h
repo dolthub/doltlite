@@ -38,12 +38,7 @@ struct TrackingBranch {
   ProllyHash commitHash;
 };
 
-/* Shared (non-versioned) per-database AUTOINCREMENT counter for one table.
-** Allocated at database scope, not at branch scope: every branch sees the
-** same authoritative max-rowid for a given AUTOINCREMENT table so that
-** branches never re-issue the same id. SQLite's own sqlite_sequence table
-** is still kept in lock-step (so DROP TABLE et al. work as upstream), but
-** the value in this struct is authoritative for new-id allocation. */
+/* Non-versioned AUTOINCREMENT counter shared across all branches. */
 struct SequenceRef {
   char *zTableName;
   i64 iSeq;

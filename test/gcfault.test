@@ -8,10 +8,6 @@
 #    May you share freely, never taking more than you give.
 #
 #***********************************************************************
-# This file implements regression tests for SQLite library.  The
-# focus of this file is testing OOM error handling within the built-in 
-# group_concat() and string_agg() functions.
-#
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
