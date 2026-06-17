@@ -8,7 +8,7 @@
 # A suite counts as "run" if its basename is referenced by:
 #   - any .github/workflows/*.yml (explicit invocation), or
 #   - a CI glob those workflows expand (oracle_*_test.sh, vc_oracle_*_test.sh), or
-#   - test/run_doltlite_tests.sh or test/run_c_tests.sh, or
+#   - test/lib/doltlite_suite_manifest.sh, test/run_c_tests.sh, or
 #   - main.mk (lint targets run via `make`),
 # or it is listed in one of the two manifests beside this script:
 #   - test/ci_suite_allowlist.txt   suites run by a dedicated mechanism that
@@ -48,7 +48,7 @@ referenced() {
   local base="$1"
   grep -rIlF "$base" \
       .github/workflows/ \
-      test/run_doltlite_tests.sh test/run_c_tests.sh main.mk \
+      test/lib/doltlite_suite_manifest.sh test/run_c_tests.sh main.mk \
       2>/dev/null | grep -q .
 }
 
