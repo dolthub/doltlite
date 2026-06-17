@@ -393,15 +393,10 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
 }
 
 static int remoteSrvApplyRefs(ChunkStore *pStore, const u8 *pBody, int nBody){
-  ProllyHash hash;
   int rc;
 
   if( nBody<=0 ) return SQLITE_ERROR;
-  rc = chunkStorePut(pStore, pBody, nBody, &hash);
-  if( rc==SQLITE_OK ){
-    refsTableSetHash(&pStore->refs, &hash);
-    rc = chunkStoreReloadRefs(pStore);
-  }
+  rc = chunkStoreInstallRefsBlob(pStore, pBody, nBody);
   if( rc!=SQLITE_OK ){
     chunkStoreRollback(pStore);
     return rc;
