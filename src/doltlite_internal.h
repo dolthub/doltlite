@@ -283,6 +283,17 @@ static SQLITE_INLINE void doltliteFreeStringArray(char **az, int n){
   sqlite3_free(az);
 }
 
+static SQLITE_INLINE int doltliteDupBytes(const u8 *pIn, int nIn, u8 **ppOut){
+  u8 *pCopy;
+  *ppOut = 0;
+  if( !pIn || nIn<=0 ) return SQLITE_OK;
+  pCopy = sqlite3_malloc(nIn);
+  if( !pCopy ) return SQLITE_NOMEM;
+  memcpy(pCopy, pIn, nIn);
+  *ppOut = pCopy;
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE int doltliteFindTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags

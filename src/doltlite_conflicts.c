@@ -587,6 +587,50 @@ static int conflictsResolveSealSuccessfulTopSavepoint(sqlite3 *db){
   return SQLITE_OK;
 }
 
+/* Finish an --ours/--theirs resolve. When the table was not among the conflict
+** tables, an already-existing table is a no-op success and anything else is
+** "table not found"; otherwise persist the updated conflict set. Frees aTables
+** and sets the SQL result on every path. */
+static void conflictsResolveFinish(
+  sqlite3_context *ctx,
+  sqlite3 *db,
+  ChunkStore *cs,
+  ConflictTableInfo *aTables,
+  int nTables,
+  int found,
+  const char *zTable
+){
+  int tableExists = 0;
+  int rc;
+
+  if( !found ){
+    rc = conflictsResolveTableExists(db, zTable, &tableExists);
+    freeConflictTables(aTables, nTables);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    if( tableExists ){
+      rc = conflictsResolveSealSuccessfulTopSavepoint(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
+      sqlite3_result_int(ctx, 0);
+      return;
+    }
+    sqlite3_result_error(ctx, "table not found", -1);
+    return;
+  }
+  rc = storeUpdatedConflicts(db, cs, aTables, nTables);
+  freeConflictTables(aTables, nTables);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  sqlite3_result_int(ctx, 0);
+}
+
 static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -594,7 +638,6 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   ConflictTableInfo *aTables = 0;
   int nTables = 0;
   int found = 0;
-  int tableExists = 0;
   int i, j, rc;
 
   if(!cs){ sqlite3_result_error(ctx,"no database",-1); return; }
@@ -619,32 +662,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
         break;
       }
     }
-    if( !found ){
-      rc = conflictsResolveTableExists(db, zTable, &tableExists);
-      freeConflictTables(aTables, nTables);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(ctx, rc);
-        return;
-      }
-      if( tableExists ){
-        rc = conflictsResolveSealSuccessfulTopSavepoint(db);
-        if( rc!=SQLITE_OK ){
-          sqlite3_result_error_code(ctx, rc);
-          return;
-        }
-        sqlite3_result_int(ctx, 0);
-        return;
-      }
-      sqlite3_result_error(ctx, "table not found", -1);
-      return;
-    }
-    rc = storeUpdatedConflicts(db, cs, aTables, nTables);
-    freeConflictTables(aTables, nTables);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-    sqlite3_result_int(ctx, 0);
+    conflictsResolveFinish(ctx, db, cs, aTables, nTables, found, zTable);
 
   }else if( strcmp(zMode,"--theirs")==0 ){
 
@@ -667,32 +685,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
       removeConflictTable(aTables, &nTables, i);
       break;
     }
-    if( !found ){
-      rc = conflictsResolveTableExists(db, zTable, &tableExists);
-      freeConflictTables(aTables, nTables);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(ctx, rc);
-        return;
-      }
-      if( tableExists ){
-        rc = conflictsResolveSealSuccessfulTopSavepoint(db);
-        if( rc!=SQLITE_OK ){
-          sqlite3_result_error_code(ctx, rc);
-          return;
-        }
-        sqlite3_result_int(ctx, 0);
-        return;
-      }
-      sqlite3_result_error(ctx, "table not found", -1);
-      return;
-    }
-    rc = storeUpdatedConflicts(db, cs, aTables, nTables);
-    freeConflictTables(aTables, nTables);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-    sqlite3_result_int(ctx, 0);
+    conflictsResolveFinish(ctx, db, cs, aTables, nTables, found, zTable);
 
   }else{
     freeConflictTables(aTables, nTables);

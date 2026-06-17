@@ -1,5 +1,65 @@
 build/
 build-fuzz/
+build-*/
+
+# Compiled objects, libraries, debug symbols
+*.o
+*.a
+*.so
+*.dylib
+*.dSYM/
+
+# Amalgamation / lemon / build scratch
+tsrc/
+/Makefile
+/sqlite3.c
+/sqlite3.h
+/sqlite3ext.h
+/sqlite3session.h
+/sqlite_cfg.h
+/keywordhash.h
+/opcodes.c
+/opcodes.h
+/parse.c
+/parse.h
+/parse.out
+/parse.sql
+/parse.y
+/fts5.c
+/fts5.h
+/fts5parse.c
+/fts5parse.h
+/fts5parse.out
+/fts5parse.sql
+/fts5parse.y
+/ctime.c
+/shell.c
+/shell_renamed.c
+/tclsqlite-ex.c
+/doltlite.h
+/sqlite3.pc
+
+# Generated config / build state
+/config.log
+/.main.mk.checks
+/.target_source
+/.tclenv.sh
+/has_tclsh85
+
+# Tools and test/run binaries (root build products)
+/lemon
+/jimsh
+/mkkeywordhash
+/mksourceid
+/src-verify
+/doltlite
+/doltlite_regression_test_c
+/*_test
+/probe_wr.test
+
+# Test scratch
+/test.db
+/testdir/
 
 # Gas Town (added by gt)
 .beads/

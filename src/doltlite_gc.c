@@ -657,6 +657,53 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   }
 }
 
+/* Lock, mark, sweep and verify the chunk store. On failure pzPhase names the
+** stage that failed so callers can report it; the lock is released before
+** return on every path that acquired it. */
+static int gcRun(
+  sqlite3 *db,
+  ChunkStore *cs,
+  int *pnKept,
+  int *pnRemoved,
+  const char **pzPhase
+){
+  ProllyHashSet marked;
+  int rc;
+
+  *pnKept = 0;
+  *pnRemoved = 0;
+
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ){
+    *pzPhase = "failed to acquire lock for gc";
+    return rc;
+  }
+
+  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    *pzPhase = "gc mark phase failed";
+    return rc;
+  }
+
+  rc = gcMarkReachable(db, cs, &marked);
+  if( rc!=SQLITE_OK ){
+    prollyHashSetFree(&marked);
+    chunkStoreUnlock(cs);
+    *pzPhase = "gc mark phase failed";
+    return rc;
+  }
+
+  rc = gcSweep(cs, &marked, pnKept, pnRemoved);
+  prollyHashSetFree(&marked);
+#ifdef DOLTLITE_PROLLY_CHECK
+  if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
+#endif
+  chunkStoreUnlock(cs);
+  if( rc!=SQLITE_OK ) *pzPhase = "gc sweep phase failed";
+  return rc;
+}
+
 static void doltliteGcFunc(
   sqlite3_context *context,
   int argc,
@@ -664,9 +711,9 @@ static void doltliteGcFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHashSet marked;
   int nKept = 0, nRemoved = 0;
   int rc;
+  const char *zPhase = 0;
   char result[128];
 
   (void)argc;
@@ -682,41 +729,14 @@ static void doltliteGcFunc(
     return;
   }
 
-  rc = chunkStoreLockAndRefresh(cs);
-  if( rc==SQLITE_BUSY ){
-    sqlite3_result_error(context,
-      "database is locked by another connection", -1);
-    return;
-  }
+  rc = gcRun(db, cs, &nKept, &nRemoved, &zPhase);
   if( rc!=SQLITE_OK ){
-    gcResultError(context, rc, "failed to acquire lock for gc");
-    return;
-  }
-
-  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
-  if( rc!=SQLITE_OK ){
-    chunkStoreUnlock(cs);
-    sqlite3_result_error_nomem(context);
-    return;
-  }
-
-  rc = gcMarkReachable(db, cs, &marked);
-  if( rc!=SQLITE_OK ){
-    prollyHashSetFree(&marked);
-    chunkStoreUnlock(cs);
-    gcResultError(context, rc, "gc mark phase failed");
-    return;
-  }
-
-  rc = gcSweep(cs, &marked, &nKept, &nRemoved);
-  prollyHashSetFree(&marked);
-#ifdef DOLTLITE_PROLLY_CHECK
-  if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
-#endif
-  chunkStoreUnlock(cs);
-
-  if( rc!=SQLITE_OK ){
-    gcResultError(context, rc, "gc sweep phase failed");
+    if( rc==SQLITE_BUSY ){
+      sqlite3_result_error(context,
+        "database is locked by another connection", -1);
+    }else{
+      gcResultError(context, rc, zPhase);
+    }
     return;
   }
 
@@ -727,34 +747,15 @@ static void doltliteGcFunc(
 
 int doltliteGcCompact(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHashSet marked;
   int nKept = 0, nRemoved = 0;
-  int rc;
+  const char *zPhase = 0;
 
   if( !cs ) return SQLITE_OK;
   if( !chunkFileGetFilename(&cs->file) || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     return SQLITE_OK;
   }
 
-  rc = chunkStoreLockAndRefresh(cs);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
-  if( rc!=SQLITE_OK ){
-    chunkStoreUnlock(cs);
-    return rc;
-  }
-
-  rc = gcMarkReachable(db, cs, &marked);
-  if( rc==SQLITE_OK ){
-    rc = gcSweep(cs, &marked, &nKept, &nRemoved);
-  }
-  prollyHashSetFree(&marked);
-#ifdef DOLTLITE_PROLLY_CHECK
-  if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
-#endif
-  chunkStoreUnlock(cs);
-  return rc;
+  return gcRun(db, cs, &nKept, &nRemoved, &zPhase);
 }
 
 int doltliteGcRegister(sqlite3 *db){

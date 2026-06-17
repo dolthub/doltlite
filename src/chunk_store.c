@@ -84,15 +84,7 @@ typedef sqlite3_file *CsFileLock;
 # define CS_FILE_LOCK_INIT 0
 # define CS_GRAPH_LOCK(cs) ((cs)->pGraphLockFile)
 
-static int csOpenFile(sqlite3_vfs *pVfs, const char *zPath,
-                      sqlite3_file **ppFile, int flags, int *pOutFlags);
-static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize);
-static int csRestoreCommittedRefsState(ChunkStore *cs);
-static int csReadManifest(ChunkStore *cs);
-void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
-
 static int csReloadFromDisk(ChunkStore *cs);
-static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
 
 static int csCrashWriteInjectionActive(void){
 #ifdef SQLITE_TEST

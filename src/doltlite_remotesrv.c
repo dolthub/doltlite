@@ -31,24 +31,6 @@ struct DoltliteServer {
   pthread_t thread;
 };
 
-static int hexVal(char c){
-  if( c>='0' && c<='9' ) return c - '0';
-  if( c>='a' && c<='f' ) return c - 'a' + 10;
-  if( c>='A' && c<='F' ) return c - 'A' + 10;
-  return -1;
-}
-
-static int hexToHash(const char *zHex, ProllyHash *pHash){
-  int i;
-  for(i=0; i<PROLLY_HASH_SIZE; i++){
-    int hi = hexVal(zHex[i*2]);
-    int lo = hexVal(zHex[i*2+1]);
-    if( hi<0 || lo<0 ) return SQLITE_ERROR;
-    pHash->data[i] = (u8)((hi<<4)|lo);
-  }
-  return SQLITE_OK;
-}
-
 static void sendResponse(int fd, int status, const char *zStatus,
                          const u8 *pBody, int nBody){
   char zHeader[256];
@@ -318,7 +300,7 @@ static void handleGetChunk(ChunkStore *pStore, int fd, const char *zHexHash){
     return;
   }
 
-  if( hexToHash(zHexHash, &hash)!=SQLITE_OK ){
+  if( doltliteHexToHash(zHexHash, &hash)!=SQLITE_OK ){
     sendBadRequest(fd);
     return;
   }

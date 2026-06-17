@@ -723,7 +723,6 @@ int doltliteFetch(
   ProllyHash remoteCommit;
   DoltliteRemote *pLocalDst = 0;
   int rc;
-  int found = 0;
 
   memset(&remoteCommit, 0, sizeof(remoteCommit));
 
@@ -735,9 +734,8 @@ int doltliteFetch(
     sqlite3_free(refsData);
     return rc==SQLITE_NOTFOUND ? SQLITE_NOTFOUND : rc;
   }
-  found = !prollyHashIsEmpty(&remoteCommit);
 
-  if( !found || prollyHashIsEmpty(&remoteCommit) ){
+  if( prollyHashIsEmpty(&remoteCommit) ){
     sqlite3_free(refsData);
     return SQLITE_NOTFOUND;
   }
