@@ -257,12 +257,9 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if( col==1 ){
     sqlite3_result_int(ctx, r->staged);
   }else if( col==2 ){
-    switch( r->diffType ){
-      case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
-      case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
-      case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
-      default: sqlite3_result_null(ctx); break;
-    }
+    const char *zType = prollyDiffTypeName(r->diffType);
+    if( zType ) sqlite3_result_text(ctx, zType, -1, SQLITE_STATIC);
+    else sqlite3_result_null(ctx);
   }else if( col>=3 && col<3+nCols ){
     doltliteResultUserCol(ctx, &p->cols, r->pNewVal, r->nNewVal,
                           r->intKey, col-3);
