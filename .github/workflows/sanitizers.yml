@@ -2,6 +2,7 @@ name: Sanitizers
 
 on:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   asan-ubsan:
@@ -117,3 +118,52 @@ jobs:
           libdoltlite.a -lz -lpthread -lm
         ./doltlite_regression_test_c all
 
+  tsan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      TSAN_CFLAGS: -O1 -g -fsanitize=thread -fno-omit-frame-pointer
+      TSAN_LDFLAGS: -fsanitize=thread
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:history_size=7
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        CC=clang ../configure
+
+    - name: Build DoltLite amalgamation with TSan
+      run: |
+        cd build
+        make \
+          CC=clang \
+          CFLAGS="$TSAN_CFLAGS" \
+          LDFLAGS="$TSAN_LDFLAGS" \
+          sqlite3.c sqlite3.h
+
+    - name: Build pthread stress tests
+      run: |
+        cd build
+        clang $TSAN_CFLAGS -I. -I../src \
+          -o threadtest4 ../test/threadtest4.c sqlite3.c \
+          $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+
+    - name: Run threadtest4 serialized
+      run: |
+        cd build
+        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
+        ./threadtest4 --serialized 6
+
+    - name: Run threadtest4 multithread
+      run: |
+        cd build
+        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
+        ./threadtest4 --multithread 6
