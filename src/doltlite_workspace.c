@@ -85,34 +85,6 @@ static char *wsBuildSchema(const DoltliteColInfo *ci){
   return z;
 }
 
-static int wsLoadTableRoot(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  const char *zTableName,
-  ProllyHash *pRoot,
-  u8 *pFlags,
-  ProllyHash *pSchemaHash
-){
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
-  struct TableEntry *pEntry;
-  int rc;
-
-  memset(pRoot, 0, sizeof(*pRoot));
-  if( pFlags ) *pFlags = 0;
-  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(*pSchemaHash));
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  pEntry = doltliteFindTableByName(aTables, nTables, zTableName);
-  if( pEntry ){
-    memcpy(pRoot, &pEntry->root, sizeof(*pRoot));
-    if( pFlags ) *pFlags = pEntry->flags;
-    if( pSchemaHash ) memcpy(pSchemaHash, &pEntry->schemaHash, sizeof(*pSchemaHash));
-  }
-  doltliteFreeCatalog(aTables, nTables);
-  return SQLITE_OK;
-}
-
 static int wsAppendRow(
   WorkspaceVtab *pVtab,
   int staged,
@@ -206,14 +178,14 @@ static int wsLoadRows(WorkspaceVtab *pVtab){
   rc = doltliteFlushCatalogToHash(db, &workingCat);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = wsLoadTableRoot(db, &headCat, pVtab->zTableName,
-                       &headRoot, &headFlags, &schemaHash);
+  rc = doltliteLoadTableRootByNameOrEmpty(db, &headCat, pVtab->zTableName,
+                                          &headRoot, &headFlags, &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
-  rc = wsLoadTableRoot(db, &stagedCat, pVtab->zTableName,
-                       &stagedRoot, &stagedFlags, &schemaHash);
+  rc = doltliteLoadTableRootByNameOrEmpty(db, &stagedCat, pVtab->zTableName,
+                                          &stagedRoot, &stagedFlags, &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
-  rc = wsLoadTableRoot(db, &workingCat, pVtab->zTableName,
-                       &workingRoot, &workingFlags, &schemaHash);
+  rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, pVtab->zTableName,
+                                          &workingRoot, &workingFlags, &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
 
   if( !stagedFlags ) stagedFlags = headFlags ? headFlags : workingFlags;

@@ -354,35 +354,6 @@ static int blameRowValueEqual(const u8 *pA, int nA, const u8 *pB, int nB){
   return memcmp(pA, pB, nA)==0;
 }
 
-static int blameLoadTableRoot(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  const char *zTableName,
-  ProllyHash *pOutRoot,
-  u8 *pOutFlags
-){
-  struct TableEntry *aTables = 0;
-  int nTables = 0, rc;
-  struct TableEntry *pEntry;
-
-  memset(pOutRoot, 0, sizeof(*pOutRoot));
-  *pOutFlags = 0;
-
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
-
-  pEntry = doltliteFindTableByName(aTables, nTables, zTableName);
-  if( !pEntry ){
-    doltliteFreeCatalog(aTables, nTables);
-    return SQLITE_NOTFOUND;
-  }
-  memcpy(pOutRoot, &pEntry->root, sizeof(ProllyHash));
-  *pOutFlags = pEntry->flags;
-  doltliteFreeCatalog(aTables, nTables);
-  return SQLITE_OK;
-}
-
 static int blameAssign(
   BlameRow *pRow,
   const ProllyHash *pCommitHash,
@@ -424,7 +395,8 @@ static int blameCompareAgainstRef(
   int i;
 
   if( pRefCatHash && !prollyHashIsEmpty(pRefCatHash) ){
-    rc = blameLoadTableRoot(db, pRefCatHash, zTableName, &refRoot, &refFlags);
+    rc = doltliteLoadTableRootByName(db, pRefCatHash, zTableName,
+                                     &refRoot, &refFlags, 0);
     if( rc==SQLITE_OK ) haveRef = 1;
     else if( rc!=SQLITE_NOTFOUND ) return rc;
   }
@@ -541,8 +513,8 @@ static int blameWalk(
     rc = doltliteLoadCommit(db, &walk, &commit);
     if( rc!=SQLITE_OK ) return rc;
 
-    rc = blameLoadTableRoot(db, &commit.catalogHash, zTableName,
-                            &curTableRoot, &curFlags);
+    rc = doltliteLoadTableRootByName(db, &commit.catalogHash, zTableName,
+                                     &curTableRoot, &curFlags, 0);
     if( rc==SQLITE_OK ) haveCurTable = 1;
     else if( rc!=SQLITE_NOTFOUND ){
       doltliteCommitClear(&commit);
@@ -845,8 +817,8 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = blameLoadTableRoot(db, &headCommit.catalogHash, v->zTableName,
-                          &tableRoot, &tableFlags);
+  rc = doltliteLoadTableRootByName(db, &headCommit.catalogHash, v->zTableName,
+                                   &tableRoot, &tableFlags, 0);
   doltliteCommitClear(&headCommit);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;

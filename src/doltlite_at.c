@@ -140,7 +140,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   doltliteCommitClear(&commit);
   if(rc!=SQLITE_OK) return rc;
 
-  rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags);
+  rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags,0);
   doltliteFreeCatalog(aTables,nTables);
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
   if(rc!=SQLITE_OK) return rc;

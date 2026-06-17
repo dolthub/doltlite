@@ -301,31 +301,6 @@ static int stackPushUnique(ProllyHashSet *pSeen,
   return SQLITE_OK;
 }
 
-static int loadTblRootAtCommit(sqlite3 *db, const ProllyHash *pCatHash,
-                               const char *zTableName,
-                               ProllyHash *pTblRoot, u8 *pFlags,
-                               ProllyHash *pSchemaHash){
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
-  int rc;
-  struct TableEntry *pEntry;
-  memset(pTblRoot, 0, sizeof(*pTblRoot));
-  *pFlags = 0;
-  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(*pSchemaHash));
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  pEntry = doltliteFindTableByName(aTables, nTables, zTableName);
-  if( pEntry ){
-    memcpy(pTblRoot, &pEntry->root, sizeof(ProllyHash));
-    *pFlags = pEntry->flags;
-    if( pSchemaHash ){
-      memcpy(pSchemaHash, &pEntry->schemaHash, sizeof(ProllyHash));
-    }
-  }
-  doltliteFreeCatalog(aTables, nTables);
-  return SQLITE_OK;
-}
-
 static int seedWorkingChildInfo(
   sqlite3 *db,
   const ProllyHash *pHeadHash,
@@ -347,8 +322,9 @@ static int seedWorkingChildInfo(
 
   rc = doltliteFlushCatalogToHash(db, &workingCat);
   if( rc!=SQLITE_OK ) return rc;
-  rc = loadTblRootAtCommit(db, &workingCat, zTableName, &workingTblRoot,
-                           &workingFlags, &workingSchemaHash);
+  rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, zTableName,
+                                          &workingTblRoot, &workingFlags,
+                                          &workingSchemaHash);
   if( rc!=SQLITE_OK ) return rc;
   return cmMapPut(pMap, pHeadHash, &workingTblRoot, &workingCat,
                   &workingSchemaHash, workingFlags, zWorking, 0);
@@ -459,8 +435,9 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     rc = doltliteLoadCommit(db, &curr, &commit);
     if( rc!=SQLITE_OK ) break;
 
-    rc = loadTblRootAtCommit(db, &commit.catalogHash, zTableName,
-                             &curTblRoot, &curFlags, &curSchemaHash);
+    rc = doltliteLoadTableRootByNameOrEmpty(db, &commit.catalogHash,
+                                            zTableName, &curTblRoot,
+                                            &curFlags, &curSchemaHash);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&commit);
       break;
@@ -532,8 +509,9 @@ static int buildWorkingDiffPair(
 
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
   if( rc!=SQLITE_OK ) return rc;
-  rc = loadTblRootAtCommit(db, &headCommit.catalogHash, zTableName,
-                           &headTblRoot, &headFlags, &headSchemaHash);
+  rc = doltliteLoadTableRootByNameOrEmpty(db, &headCommit.catalogHash,
+                                          zTableName, &headTblRoot,
+                                          &headFlags, &headSchemaHash);
   if( rc==SQLITE_OK ){
     int rootsDiffer = prollyHashCompare(&headTblRoot, &workingTblRoot)!=0;
     int schemasDiffer = prollyHashCompare(&headSchemaHash, &workingSchemaHash)!=0;
@@ -599,8 +577,8 @@ static int buildSliceDiffPair(
   fromDate = fromCommit.timestamp;
   doltliteCommitClear(&fromCommit);
 
-  rc = loadTblRootAtCommit(db, &fromCatHash, zTableName,
-                           &fromTblRoot, &fromFlags, &fromSchemaHash);
+  rc = doltliteLoadTableRootByName(db, &fromCatHash, zTableName,
+                                   &fromTblRoot, &fromFlags, &fromSchemaHash);
   if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
 
   if( sqlite3_stricmp(zToRef, "WORKING")==0 ){
@@ -624,8 +602,8 @@ static int buildSliceDiffPair(
     memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));
     toDate = toCommit.timestamp;
     doltliteCommitClear(&toCommit);
-    rc = loadTblRootAtCommit(db, &toCatHash, zTableName,
-                             &toTblRoot, &toFlags, &toSchemaHash);
+    rc = doltliteLoadTableRootByName(db, &toCatHash, zTableName,
+                                     &toTblRoot, &toFlags, &toSchemaHash);
     if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
     doltliteHashToHex(&toHash, zToLabel);
   }

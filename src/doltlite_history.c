@@ -141,7 +141,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   doltliteCommitClear(&commit);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( doltliteFindTableRootByName(aT, nT, zTableName, &tableRoot, &flags)
+  if( doltliteFindTableRootByName(aT, nT, zTableName, &tableRoot, &flags, 0)
       !=SQLITE_OK || prollyHashIsEmpty(&tableRoot) ){
     doltliteFreeCatalog(aT, nT);
     return SQLITE_OK;
