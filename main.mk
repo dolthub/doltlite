@@ -2652,6 +2652,7 @@ DOLTLITE_C_TESTS = \
 	vc_ref_mutation_stress_test$(T.exe) \
 	multi_process_test$(T.exe) \
 	multi_process_gc_test$(T.exe) \
+	multi_process_merge_rebase_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
@@ -2689,6 +2690,10 @@ multi_process_test$(T.exe): $(TOP)/test/multi_process_test.c libdoltlite$(T.lib)
 
 multi_process_gc_test$(T.exe): $(TOP)/test/multi_process_gc_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/multi_process_gc_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+multi_process_merge_rebase_test$(T.exe): $(TOP)/test/multi_process_merge_rebase_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/multi_process_merge_rebase_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 sequence_reload_test$(T.exe): $(TOP)/test/sequence_reload_test.c libdoltlite$(T.lib)
