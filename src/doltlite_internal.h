@@ -409,6 +409,15 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
   }
 }
 
+static SQLITE_INLINE const char *doltliteDiffTypeNameFromPresence(
+  int baseHas,
+  int sideHas
+){
+  if( !sideHas ) return "removed";
+  if( !baseHas ) return "added";
+  return "modified";
+}
+
 static SQLITE_INLINE void doltliteResultTimestamp(sqlite3_context *ctx, i64 timestamp){
   time_t t = (time_t)timestamp;
   struct tm *tm = gmtime(&t);

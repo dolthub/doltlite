@@ -400,9 +400,7 @@ static const char *cfrDiffType(const u8 *pBase, int nBase,
                                const u8 *pSide, int nSide){
   int baseHas = (pBase && nBase>0);
   int sideHas = (pSide && nSide>0);
-  if( !sideHas ) return "removed";
-  if( !baseHas ) return "added";
-  return "modified";
+  return doltliteDiffTypeNameFromPresence(baseHas, sideHas);
 }
 
 static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){

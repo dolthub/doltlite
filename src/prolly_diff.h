@@ -13,6 +13,15 @@
 #define PROLLY_DIFF_DELETE  2
 #define PROLLY_DIFF_MODIFY  3
 
+static SQLITE_INLINE const char *prollyDiffTypeName(u8 type){
+  switch( type ){
+    case PROLLY_DIFF_ADD:    return "added";
+    case PROLLY_DIFF_DELETE: return "removed";
+    case PROLLY_DIFF_MODIFY: return "modified";
+  }
+  return 0;
+}
+
 typedef struct ProllyDiffChange ProllyDiffChange;
 
 struct ProllyDiffChange {
