@@ -1,0 +1,2 @@
+# Suites run by a dedicated mechanism the orphan-guard's greps don't catch.
+# One basename per line; keep a reason. See test/lint_orphaned_suites.sh.

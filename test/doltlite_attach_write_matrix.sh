@@ -134,8 +134,10 @@ run_config() {
   R=$(dl_last "$PRELUDE CREATE TABLE main_copy AS SELECT * FROM x.u; SELECT count(*) FROM main_copy;" "$M")
   want_eq "$cfg/X3_ctas_from_attached" "$R" "1"
 
+  # X4 clone-like: skip a :memory: attached — its fresh connection isn't
+  # seeded by $PRELUDE, so there's nothing to clone from.
   reset_dbs
-  if [ "$main_kind" != "dlmem" ]; then
+  if [ "$main_kind" != "dlmem" ] && [ "$attached_kind" != "mem" ]; then
     local M2="$TMP/${cfg}_clone.db"
     rm -f "$M2"
     R=$(dl_last "ATTACH '$ATT_PATH' AS src; CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u SELECT * FROM src.u; SELECT count(*) FROM u;" "$M2")

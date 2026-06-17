@@ -113,6 +113,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # Fast structural check (no build): every test suite must actually run.
+    - name: No orphaned test suites
+      if: matrix.platform == 'ubuntu'
+      run: bash test/lint_orphaned_suites.sh
+
     - name: Install dependencies
       if: matrix.platform == 'ubuntu'
       run: |

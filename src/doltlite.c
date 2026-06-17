@@ -4575,6 +4575,19 @@ static void doltliteRebaseInteractiveContinue(
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
+  /* Reject any unknown plan verb (e.g. a typo in dolt_rebase.action) instead
+  ** of silently treating it as a pick; abort_err restores the pre-rebase
+  ** branch and reports the failure. */
+  for(i=0; i<nPlan; i++){
+    const char *zAct = aPlan[i].zAction;
+    if( strcmp(zAct,"pick")!=0 && strcmp(zAct,"reword")!=0
+     && strcmp(zAct,"squash")!=0 && strcmp(zAct,"fixup")!=0
+     && strcmp(zAct,"drop")!=0 ){
+      rc = SQLITE_ERROR;
+      goto abort_err;
+    }
+  }
+
   i = 0;
   while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
   if( i < nPlan

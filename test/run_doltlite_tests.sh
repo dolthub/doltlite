@@ -37,15 +37,20 @@ TESTS=(
   doltlite_conflict_rows.sh
   doltlite_cherry_pick.sh
   doltlite_revert_dirty.sh
+  doltlite_rebase.sh
+  doltlite_rebase_schema.sh
+  doltlite_open_branch.sh
 
   doltlite_diff_table.sh
   doltlite_diff_stat_scale.sh
   doltlite_history.sh
+  doltlite_log.sh
   doltlite_at.sh
   doltlite_schema_diff.sh
   doltlite_dolt_table_pushdown.sh
 
   doltlite_persistence.sh
+  doltlite_attach_write_matrix.sh
   doltlite_branding.sh
   doltlite_memory_db.sh
   doltlite_gc.sh
