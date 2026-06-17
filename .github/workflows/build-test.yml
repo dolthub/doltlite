@@ -302,49 +302,12 @@ jobs:
         SH
         chmod +x ./doltlite-no-msys-conv
         export DOLTLITE=./doltlite-no-msys-conv
-        tests=(
-          ../test/doltlite_parity.sh
-          ../test/doltlite_commit.sh
-          ../test/doltlite_staging.sh
-          ../test/doltlite_workspace.sh
-          ../test/doltlite_branch.sh
-          ../test/doltlite_open_branch.sh
-          ../test/doltlite_tag.sh
-          ../test/doltlite_merge.sh
-          ../test/doltlite_conflicts.sh
-          ../test/doltlite_diff_table.sh
-          ../test/doltlite_schema_diff.sh
-          ../test/doltlite_schema_merge.sh
-          ../test/doltlite_cherry_pick.sh
-          ../test/doltlite_revert_dirty.sh
-          ../test/doltlite_conflict_rows.sh
-          ../test/doltlite_reset.sh
-          ../test/doltlite_working_set.sh
-          ../test/doltlite_gc.sh
-          ../test/doltlite_gc_session_state.sh
-          ../test/doltlite_gc_scale.sh
-          ../test/doltlite_vacuum.sh
-          ../test/doltlite_memory_db.sh
-          ../test/doltlite_dbpage.sh
-          ../test/doltlite_record_format.sh
-          ../test/doltlite_rollback_durability.sh
-          ../test/doltlite_storage_locking.sh
-          ../test/chunk_physical_dups_test.sh
-          ../test/doltlite_open_sqlite_file.sh
-          ../test/doltlite_comparison.sh
-          ../test/doltlite_merge_ignore_corners.sh
-          ../test/doltlite_pragma_auto_vacuum.sh
-          ../test/doltlite_pragma_journal_mode.sh
-          ../test/doltlite_pragma_memory_journal_mode.sh
-          ../test/doltlite_pragma_page_count.sh
-          ../test/doltlite_pragma_wal_checkpoint.sh
-          ../test/doltlite_row_count_estimate.sh
-          ../test/doltlite_schema_cookie.sh
-        )
-        for test in "${tests[@]}"; do
+        source ../test/lib/doltlite_suite_manifest.sh
+        while IFS= read -r test; do
+          test="../test/$test"
           echo "━━━ ${test} ━━━"
           bash "$test" "$DOLTLITE"
-        done
+        done < <(doltlite_windows_suites)
       timeout-minutes: 20
 
     - name: Windows correctness regression tests
