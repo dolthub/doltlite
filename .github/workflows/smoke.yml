@@ -102,57 +102,57 @@ jobs:
             -lz -lpthread
         done
 
-    - name: Run csReplayWal fuzzer (30s)
+    - name: Run csReplayWal fuzzer (2m)
       env:
         ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
       run: |
         "$GITHUB_WORKSPACE/build-fuzz/fuzz_replaywal" \
           "$GITHUB_WORKSPACE/test/fuzz-corpus/replaywal" \
-          -max_total_time=30 \
+          -max_total_time=120 \
           -timeout=10 \
           -rss_limit_mb=2048 \
           -print_final_stats=1
 
-    - name: Run prolly_node fuzzer (30s)
+    - name: Run prolly_node fuzzer (2m)
       env:
         ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
       run: |
         "$GITHUB_WORKSPACE/build-fuzz/fuzz_prolly_node" \
           "$GITHUB_WORKSPACE/test/fuzz-corpus/prolly_node" \
-          -max_total_time=30 \
+          -max_total_time=120 \
           -timeout=10 \
           -rss_limit_mb=2048 \
           -print_final_stats=1
 
-    - name: Run csDeserializeRefs fuzzer (30s)
+    - name: Run csDeserializeRefs fuzzer (2m)
       env:
         ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
       run: |
         "$GITHUB_WORKSPACE/build-fuzz/fuzz_deserialize_refs" \
           "$GITHUB_WORKSPACE/test/fuzz-corpus/deserialize_refs" \
-          -max_total_time=30 \
+          -max_total_time=120 \
           -timeout=10 \
           -rss_limit_mb=2048 \
           -print_final_stats=1
 
-    - name: Run csReadIndex fuzzer (30s)
+    - name: Run csReadIndex fuzzer (2m)
       env:
         ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
       run: |
         "$GITHUB_WORKSPACE/build-fuzz/fuzz_read_index" \
           "$GITHUB_WORKSPACE/test/fuzz-corpus/read_index" \
-          -max_total_time=30 \
+          -max_total_time=120 \
           -timeout=10 \
           -rss_limit_mb=2048 \
           -print_final_stats=1
 
-    - name: Run deserializeCatalog fuzzer (30s)
+    - name: Run deserializeCatalog fuzzer (2m)
       env:
         ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
       run: |
         "$GITHUB_WORKSPACE/build-fuzz/fuzz_deserialize_catalog" \
           "$GITHUB_WORKSPACE/test/fuzz-corpus/deserialize_catalog" \
-          -max_total_time=30 \
+          -max_total_time=120 \
           -timeout=10 \
           -rss_limit_mb=2048 \
           -print_final_stats=1
