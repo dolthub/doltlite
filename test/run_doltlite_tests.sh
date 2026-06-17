@@ -33,6 +33,7 @@ TESTS=(
   doltlite_merge.sh
   doltlite_merge_index_conflict.sh
   doltlite_stats_merge.sh
+  large_merge_test.sh
   doltlite_conflicts.sh
   doltlite_conflict_rows.sh
   doltlite_cherry_pick.sh
