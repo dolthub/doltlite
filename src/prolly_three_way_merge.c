@@ -13,14 +13,6 @@
 ** fall back to the full row-wise merge path without treating it as an error. */
 #define FM_FALLBACK  SQLITE_DONE
 
-static int fmChunkerLevelsBelowEmpty(const ProllyChunker *pCh, int level){
-  int i;
-  for( i = 0; i < level && i < pCh->nLevels; i++ ){
-    if( pCh->aLevel[i].builder.nItems > 0 ) return 0;
-  }
-  return 1;
-}
-
 typedef struct FmCtx {
   ChunkStore *pStore;
   ProllyCache *pCache;
@@ -373,7 +365,7 @@ static int fmEmitChild(
   if( pSplice ){
     /* Preserve structural sharing only when the chunker is exactly aligned at
     ** this parent level; otherwise emit rows so the rebuilt tree stays sorted. */
-    if( fmChunkerLevelsBelowEmpty(pCh, parentLevel) ){
+    if( prollyChunkerLevelsBelowEmpty(pCh, parentLevel) ){
       u64 spliceCount = 0;
       rc = prollySubtreeCount(fm->pStore, fm->pCache, pSplice, &spliceCount);
       if( rc != SQLITE_OK ) return rc;

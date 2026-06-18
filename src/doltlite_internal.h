@@ -430,6 +430,21 @@ static SQLITE_INLINE void doltliteResultTimestamp(sqlite3_context *ctx, i64 time
   }
 }
 
+static SQLITE_INLINE void doltliteRefResultError(
+  sqlite3_context *ctx,
+  int rc,
+  const char *zNotFound,
+  const char *zExists
+){
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_result_error(ctx, zNotFound, -1);
+  }else if( rc==SQLITE_ERROR && zExists ){
+    sqlite3_result_error(ctx, zExists, -1);
+  }else{
+    sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
+  }
+}
+
 static SQLITE_INLINE int doltliteVtabDisconnect(sqlite3_vtab *pVtab){
   sqlite3_free(pVtab);
   return SQLITE_OK;

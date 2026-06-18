@@ -20,21 +20,6 @@ struct TagMutationCtx {
   const char *zMessage;
 };
 
-static void tagResultError(
-  sqlite3_context *ctx,
-  int rc,
-  const char *zNotFound,
-  const char *zExists
-){
-  if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_error(ctx, zNotFound, -1);
-  }else if( rc==SQLITE_ERROR && zExists ){
-    sqlite3_result_error(ctx, zExists, -1);
-  }else{
-    sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
-  }
-}
-
 static void tagSealSavepointError(sqlite3_context *ctx){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   (void)doltliteVcSealSavepointError(db);
@@ -84,7 +69,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
       tagSealSavepointError(ctx);
-      tagResultError(ctx, rc, "tag not found", 0);
+      doltliteRefResultError(ctx, rc, "tag not found", 0);
       return;
     }
     rc = doltliteVcSealActiveSavepoints(db);
@@ -172,7 +157,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3_free(zParsedEmail);
   if( rc!=SQLITE_OK ){
     tagSealSavepointError(ctx);
-    tagResultError(ctx, rc, "tag not found", "tag already exists");
+    doltliteRefResultError(ctx, rc, "tag not found", "tag already exists");
     return;
   }
   rc = doltliteVcSealActiveSavepoints(db);

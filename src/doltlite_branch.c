@@ -30,21 +30,6 @@ static int branchNameEmpty(const char *zName){
   return zName==0 || zName[0]==0;
 }
 
-static void branchResultError(
-  sqlite3_context *ctx,
-  int rc,
-  const char *zNotFound,
-  const char *zExists
-){
-  if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_error(ctx, zNotFound, -1);
-  }else if( rc==SQLITE_ERROR && zExists ){
-    sqlite3_result_error(ctx, zExists, -1);
-  }else{
-    sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
-  }
-}
-
 static void branchSealSavepointsOnError(sqlite3_context *ctx, int bHadSavepoint){
   if( bHadSavepoint ){
     sqlite3 *db = sqlite3_context_db_handle(ctx);
@@ -70,7 +55,7 @@ static void branchNamedResultError(
   const char *zExists
 ){
   branchSealSavepointsOnError(ctx, bHadSavepoint);
-  branchResultError(ctx, rc, zNotFound, zExists);
+  doltliteRefResultError(ctx, rc, zNotFound, zExists);
 }
 
 static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){

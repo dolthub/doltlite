@@ -325,4 +325,12 @@ void prollyChunkerFree(ProllyChunker *ch){
   ch->nLevels = 0;
 }
 
+int prollyChunkerLevelsBelowEmpty(const ProllyChunker *ch, int level){
+  int i;
+  for(i = 0; i < level && i < ch->nLevels; i++){
+    if( ch->aLevel[i].builder.nItems > 0 ) return 0;
+  }
+  return 1;
+}
+
 #endif
