@@ -44,7 +44,7 @@ struct DoltliteStatusVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct DoltliteStatusCursor DoltliteStatusCursor;
 struct DoltliteStatusCursor {
   sqlite3_vtab_cursor base;
-  StatusRow *aRows; int nRows; int iRow;
+  StatusRow *aRows; int nRows; int nRowsAlloc; int iRow;
 };
 
 static void statusFreeRows(DoltliteStatusCursor *pCur){
@@ -55,6 +55,7 @@ static void statusFreeRows(DoltliteStatusCursor *pCur){
   sqlite3_free(pCur->aRows);
   pCur->aRows = 0;
   pCur->nRows = 0;
+  pCur->nRowsAlloc = 0;
 }
 
 static const char *statusSchema =
@@ -201,14 +202,21 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
 
 static int addRow(DoltliteStatusCursor *pCur, const char *zName,
                   int staged, const char *zStatus){
-  StatusRow *aNew = sqlite3_realloc(pCur->aRows,
-      (pCur->nRows+1)*(int)sizeof(StatusRow));
-  if( !aNew ) return SQLITE_NOMEM;
-  pCur->aRows = aNew;
-  aNew[pCur->nRows].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[pCur->nRows].zName ) return SQLITE_NOMEM;
-  aNew[pCur->nRows].staged = staged;
-  aNew[pCur->nRows].zStatus = zStatus;
+  StatusRow *aNew;
+  StatusRow *pRow;
+  int nNew;
+  if( pCur->nRows>=pCur->nRowsAlloc ){
+    nNew = pCur->nRowsAlloc ? pCur->nRowsAlloc*2 : 16;
+    aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(StatusRow));
+    if( !aNew ) return SQLITE_NOMEM;
+    pCur->aRows = aNew;
+    pCur->nRowsAlloc = nNew;
+  }
+  pRow = &pCur->aRows[pCur->nRows];
+  pRow->zName = sqlite3_mprintf("%s", zName);
+  if( !pRow->zName ) return SQLITE_NOMEM;
+  pRow->staged = staged;
+  pRow->zStatus = zStatus;
   pCur->nRows++;
   return SQLITE_OK;
 }
