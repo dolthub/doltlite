@@ -12,65 +12,6 @@
 
 #include <string.h>
 
-static int fetchRowByRowid(
-  ChunkStore *cs,
-  ProllyCache *pCache,
-  const ProllyHash *pRoot,
-  u8 flags,
-  i64 targetRowid,
-  u8 **ppKey, int *pnKey,
-  u8 **ppVal, int *pnVal
-){
-  ProllyCursor cur;
-  int res, rc;
-
-  *ppKey = 0; *pnKey = 0;
-  *ppVal = 0; *pnVal = 0;
-
-  if( prollyHashIsEmpty(pRoot) ) return SQLITE_NOTFOUND;
-
-  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorSeekInt(&cur, targetRowid, &res);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&cur);
-    return rc;
-  }
-  if( res!=0 ){
-    prollyCursorClose(&cur);
-    return SQLITE_NOTFOUND;
-  }
-
-  {
-    const u8 *pKey, *pVal;
-    int nKey, nVal;
-    prollyCursorKey(&cur, &pKey, &nKey);
-    prollyCursorValue(&cur, &pVal, &nVal);
-    if( pKey && nKey > 0 ){
-      *ppKey = sqlite3_malloc(nKey);
-      if( !*ppKey ){
-        prollyCursorClose(&cur);
-        return SQLITE_NOMEM;
-      }
-      memcpy(*ppKey, pKey, nKey);
-      *pnKey = nKey;
-    }
-    if( pVal && nVal > 0 ){
-      *ppVal = sqlite3_malloc(nVal);
-      if( !*ppVal ){
-        sqlite3_free(*ppKey);
-        *ppKey = 0; *pnKey = 0;
-        prollyCursorClose(&cur);
-        return SQLITE_NOMEM;
-      }
-      memcpy(*ppVal, pVal, nVal);
-      *pnVal = nVal;
-    }
-  }
-
-  prollyCursorClose(&cur);
-  return SQLITE_OK;
-}
-
 static int copyCursorRow(
   ProllyCursor *pCur,
   u8 **ppKey, int *pnKey,
@@ -101,6 +42,38 @@ static int copyCursorRow(
     *pnVal = nVal;
   }
   return SQLITE_OK;
+}
+
+static int fetchRowByRowid(
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pRoot,
+  u8 flags,
+  i64 targetRowid,
+  u8 **ppKey, int *pnKey,
+  u8 **ppVal, int *pnVal
+){
+  ProllyCursor cur;
+  int res, rc;
+
+  *ppKey = 0; *pnKey = 0;
+  *ppVal = 0; *pnVal = 0;
+
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_NOTFOUND;
+
+  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
+  rc = prollyCursorSeekInt(&cur, targetRowid, &res);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  if( res!=0 ){
+    prollyCursorClose(&cur);
+    return SQLITE_NOTFOUND;
+  }
+  rc = copyCursorRow(&cur, ppKey, pnKey, ppVal, pnVal);
+  prollyCursorClose(&cur);
+  return rc;
 }
 
 static int fetchRowByBlobKey(

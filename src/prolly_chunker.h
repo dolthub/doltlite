@@ -57,4 +57,6 @@ int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,
                                      const u8 *pVal, int nVal,
                                      u64 subtreeCount);
 
+int prollyChunkerLevelsBelowEmpty(const ProllyChunker *ch, int level);
+
 #endif
