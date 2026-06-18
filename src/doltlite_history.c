@@ -34,6 +34,7 @@ struct HistVtab {
 #define HIST_IDX_PK_LE 0x04
 #define HIST_IDX_PK_GT 0x08
 #define HIST_IDX_PK_LT 0x10
+#define HIST_IDX_COMMIT_EQ 0x20
 #define HIST_IDX_PK_ANY (HIST_IDX_PK_EQ|HIST_IDX_PK_GE|HIST_IDX_PK_LE|HIST_IDX_PK_GT|HIST_IDX_PK_LT)
 
 typedef struct HistCursor HistCursor;
@@ -45,6 +46,7 @@ struct HistCursor {
   i64 commitDate;
   int idxNum;
   DoltlitePkRange pkRange;
+  int singleCommit;
 };
 
 static void htCursorReset(HistCursor *c){
@@ -87,10 +89,12 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     return SQLITE_NOMEM;
   }
 
-  rc = doltliteCommitQueueEnqueueParents(&c->queue, &commit);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&commit);
-    return rc;
+  if( !c->singleCommit ){
+    rc = doltliteCommitQueueEnqueueParents(&c->queue, &commit);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&commit);
+      return rc;
+    }
   }
 
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aT, &nT, 0);
@@ -215,10 +219,47 @@ static int htConnect(sqlite3 *db, void *pAux, int argc,
 
 static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   DoltliteVtabCommon *vt = (DoltliteVtabCommon*)v;
-  return doltliteBestIndexIntPkRange(p, vt->cols.iPkCol,
-      HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
-      HIST_IDX_PK_GT, HIST_IDX_PK_LT,
-      100000.0, 100000, 100.0, 100, 1000.0, 1000);
+  int i, iCommitEq = -1, nArg = 0;
+  int idxNum;
+  int iPkCol = vt->cols.iPkCol;
+  int iCommitCol = vt->cols.nCol;
+
+  p->estimatedCost = 100000.0;
+  p->estimatedRows = 100000;
+
+  if( iPkCol>=0 ){
+    (void)doltliteBestIndexIntPkRange(p, iPkCol,
+        HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
+        HIST_IDX_PK_GT, HIST_IDX_PK_LT,
+        100000.0, 100000, 100.0, 100, 1000.0, 1000);
+  }else{
+    p->idxNum = 0;
+  }
+  idxNum = p->idxNum;
+  for(i=0; i<p->nConstraint; i++){
+    if( p->aConstraintUsage[i].argvIndex>nArg ){
+      nArg = p->aConstraintUsage[i].argvIndex;
+    }
+  }
+
+  for(i=0; i<p->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &p->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->iColumn != iCommitCol ) continue;
+    if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      iCommitEq = i;
+      break;
+    }
+  }
+  if( iCommitEq>=0 ){
+    p->aConstraintUsage[iCommitEq].argvIndex = ++nArg;
+    p->aConstraintUsage[iCommitEq].omit = 1;
+    idxNum |= HIST_IDX_COMMIT_EQ;
+    p->estimatedCost = (idxNum & HIST_IDX_PK_ANY) ? 10.0 : 50.0;
+    p->estimatedRows = (idxNum & HIST_IDX_PK_ANY) ? 1 : 10;
+  }
+  p->idxNum = idxNum;
+  return SQLITE_OK;
 }
 
 static int htOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
@@ -236,23 +277,47 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   HistCursor *c=(HistCursor*)cur;
   DoltliteVtabCommon *v=(DoltliteVtabCommon*)cur->pVtab;
   ProllyHash head;
+  ProllyHash startHash;
   ChunkStore *cs;
   int rc;
+  int iArg = 0;
   (void)idxStr;
 
   htCursorReset(c);
+  memset(&startHash, 0, sizeof(startHash));
+  c->singleCommit = 0;
 
   c->idxNum = idxNum;
   doltlitePkRangeFromArgs(idxNum,
       HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
       HIST_IDX_PK_GT, HIST_IDX_PK_LT,
       argc, argv, &c->pkRange);
+  if( idxNum & HIST_IDX_PK_EQ ){
+    iArg = 1;
+  }else{
+    if( idxNum & HIST_IDX_PK_GE ) iArg++;
+    if( idxNum & HIST_IDX_PK_GT ) iArg++;
+    if( idxNum & HIST_IDX_PK_LE ) iArg++;
+    if( idxNum & HIST_IDX_PK_LT ) iArg++;
+  }
+  if( idxNum & HIST_IDX_COMMIT_EQ ){
+    const char *zHash = iArg<argc ? (const char*)sqlite3_value_text(argv[iArg]) : 0;
+    if( !zHash || doltliteHexToHash(zHash, &startHash)!=SQLITE_OK
+     || prollyHashIsEmpty(&startHash) ){
+      return SQLITE_OK;
+    }
+    c->singleCommit = 1;
+  }
 
   cs = doltliteGetChunkStore(v->db);
   if( !cs ) return SQLITE_OK;
 
-  doltliteGetSessionHead(v->db, &head);
-  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  if( c->singleCommit ){
+    head = startHash;
+  }else{
+    doltliteGetSessionHead(v->db, &head);
+    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  }
 
   rc = doltliteCommitQueueInit(&c->queue, &head);
   if( rc!=SQLITE_OK ) return rc;
