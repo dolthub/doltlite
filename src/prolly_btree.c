@@ -10185,20 +10185,6 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
   return SQLITE_OK;
 }
 
-const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
-  Btree *pBtree;
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
-  pBtree = db->aDb[0].pBt;
-  while( *pIdx < pBtree->cat.n ){
-    int i = (*pIdx)++;
-    if( pBtree->cat.a[i].iTable>1 && pBtree->cat.a[i].zName ){
-      *piTable = pBtree->cat.a[i].iTable;
-      return pBtree->cat.a[i].zName;
-    }
-  }
-  return 0;
-}
-
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   BtShared *pBt = doltliteGetBtShared(db);
   Btree *pBtree;
