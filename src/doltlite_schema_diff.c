@@ -301,6 +301,141 @@ SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
   return 0;
 }
 
+typedef struct SdSchemaSlot SdSchemaSlot;
+typedef struct SdSchemaIndex SdSchemaIndex;
+typedef struct SdTableSlot SdTableSlot;
+typedef struct SdTableIndex SdTableIndex;
+
+struct SdSchemaSlot {
+  const char *zName;
+  SchemaEntry *pEntry;
+};
+struct SdSchemaIndex {
+  SdSchemaSlot *aSlot;
+  int nSlot;
+};
+struct SdTableSlot {
+  const char *zName;
+  struct TableEntry *pEntry;
+};
+struct SdTableIndex {
+  SdTableSlot *aSlot;
+  int nSlot;
+};
+
+static u32 sdNameHash(const char *zName){
+  u32 h = 2166136261u;
+  while( *zName ){
+    h ^= (u8)*zName++;
+    h *= 16777619u;
+  }
+  return h;
+}
+
+static int sdIndexSlotCount(int nEntry){
+  int nSlot = 8;
+  while( nSlot < nEntry*2 ) nSlot *= 2;
+  return nSlot;
+}
+
+static void sdSchemaIndexClear(SdSchemaIndex *pIdx){
+  sqlite3_free(pIdx->aSlot);
+  pIdx->aSlot = 0;
+  pIdx->nSlot = 0;
+}
+
+static int sdSchemaIndexInit(
+  SdSchemaIndex *pIdx,
+  SchemaEntry *aSchema,
+  int nSchema
+){
+  int nSlot = sdIndexSlotCount(nSchema);
+  int i;
+  memset(pIdx, 0, sizeof(*pIdx));
+  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(SdSchemaSlot));
+  if( !pIdx->aSlot ) return SQLITE_NOMEM;
+  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(SdSchemaSlot));
+  pIdx->nSlot = nSlot;
+  for(i=0; i<nSchema; i++){
+    const char *zName = aSchema[i].zName;
+    u32 h;
+    if( !zName ) continue;
+    h = sdNameHash(zName) & (u32)(nSlot-1);
+    while( pIdx->aSlot[h].zName ){
+      if( strcmp(pIdx->aSlot[h].zName, zName)==0 ) break;
+      h = (h + 1) & (u32)(nSlot-1);
+    }
+    pIdx->aSlot[h].zName = zName;
+    pIdx->aSlot[h].pEntry = &aSchema[i];
+  }
+  return SQLITE_OK;
+}
+
+static SchemaEntry *sdSchemaIndexFind(
+  const SdSchemaIndex *pIdx,
+  const char *zName
+){
+  u32 h;
+  if( !zName || !pIdx->aSlot || pIdx->nSlot<=0 ) return 0;
+  h = sdNameHash(zName) & (u32)(pIdx->nSlot-1);
+  while( pIdx->aSlot[h].zName ){
+    if( strcmp(pIdx->aSlot[h].zName, zName)==0 ){
+      return pIdx->aSlot[h].pEntry;
+    }
+    h = (h + 1) & (u32)(pIdx->nSlot-1);
+  }
+  return 0;
+}
+
+static void sdTableIndexClear(SdTableIndex *pIdx){
+  sqlite3_free(pIdx->aSlot);
+  pIdx->aSlot = 0;
+  pIdx->nSlot = 0;
+}
+
+static int sdTableIndexInit(
+  SdTableIndex *pIdx,
+  struct TableEntry *aTable,
+  int nTable
+){
+  int nSlot = sdIndexSlotCount(nTable);
+  int i;
+  memset(pIdx, 0, sizeof(*pIdx));
+  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(SdTableSlot));
+  if( !pIdx->aSlot ) return SQLITE_NOMEM;
+  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(SdTableSlot));
+  pIdx->nSlot = nSlot;
+  for(i=0; i<nTable; i++){
+    const char *zName = aTable[i].zName;
+    u32 h;
+    if( !zName ) continue;
+    h = sdNameHash(zName) & (u32)(nSlot-1);
+    while( pIdx->aSlot[h].zName ){
+      if( strcmp(pIdx->aSlot[h].zName, zName)==0 ) break;
+      h = (h + 1) & (u32)(nSlot-1);
+    }
+    pIdx->aSlot[h].zName = zName;
+    pIdx->aSlot[h].pEntry = &aTable[i];
+  }
+  return SQLITE_OK;
+}
+
+static struct TableEntry *sdTableIndexFind(
+  const SdTableIndex *pIdx,
+  const char *zName
+){
+  u32 h;
+  if( !zName || !pIdx->aSlot || pIdx->nSlot<=0 ) return 0;
+  h = sdNameHash(zName) & (u32)(pIdx->nSlot-1);
+  while( pIdx->aSlot[h].zName ){
+    if( strcmp(pIdx->aSlot[h].zName, zName)==0 ){
+      return pIdx->aSlot[h].pEntry;
+    }
+    h = (h + 1) & (u32)(pIdx->nSlot-1);
+  }
+  return 0;
+}
+
 static int computeSchemaDiff(
   SdCursor *pCur,
   SchemaEntry *aFrom, int nFrom,
@@ -310,7 +445,14 @@ static int computeSchemaDiff(
 ){
   int i;
   u8 *fromConsumed = 0, *toConsumed = 0;
+  SdSchemaIndex fromSchemaIdx, toSchemaIdx;
+  SdTableIndex fromTableIdx, toTableIdx;
   int rc = SQLITE_OK;
+
+  memset(&fromSchemaIdx, 0, sizeof(fromSchemaIdx));
+  memset(&toSchemaIdx, 0, sizeof(toSchemaIdx));
+  memset(&fromTableIdx, 0, sizeof(fromTableIdx));
+  memset(&toTableIdx, 0, sizeof(toTableIdx));
 
   if( nFrom > 0 ){
     fromConsumed = sqlite3_malloc(nFrom);
@@ -325,16 +467,24 @@ static int computeSchemaDiff(
     }
     memset(toConsumed, 0, nTo);
   }
+  rc = sdSchemaIndexInit(&fromSchemaIdx, aFrom, nFrom);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = sdSchemaIndexInit(&toSchemaIdx, aTo, nTo);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = sdTableIndexInit(&fromTableIdx, aFromTables, nFromTables);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = sdTableIndexInit(&toTableIdx, aToTables, nToTables);
+  if( rc!=SQLITE_OK ) goto done;
 
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry;
     struct TableEntry *toTE;
     int j;
 
-    fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
+    fromEntry = sdSchemaIndexFind(&fromSchemaIdx, aTo[i].zName);
     if( fromEntry ) continue;
 
-    toTE = doltliteFindTableByName(aToTables, nToTables, aTo[i].zName);
+    toTE = sdTableIndexFind(&toTableIdx, aTo[i].zName);
     if( !toTE || toTE->iTable==0 ) continue;
 
     for(j=0; j<nFromTables; j++){
@@ -344,9 +494,9 @@ static int computeSchemaDiff(
       if( !aFromTables[j].zName ) continue;
       if( prollyHashCompare(&aFromTables[j].root, &toTE->root)!=0 ) break;
 
-      if( doltliteFindTableByName(aToTables, nToTables, aFromTables[j].zName) ) break;
+      if( sdTableIndexFind(&toTableIdx, aFromTables[j].zName) ) break;
 
-      dropped = findSchemaEntry(aFrom, nFrom, aFromTables[j].zName);
+      dropped = sdSchemaIndexFind(&fromSchemaIdx, aFromTables[j].zName);
       if( !dropped ) break;
 
       rc = appendSchemaDiffRow(pCur, dropped->zName, aTo[i].zName,
@@ -364,7 +514,7 @@ static int computeSchemaDiff(
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry;
     if( toConsumed && toConsumed[i] ) continue;
-    fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
+    fromEntry = sdSchemaIndexFind(&fromSchemaIdx, aTo[i].zName);
 
     if( !fromEntry ){
 
@@ -383,7 +533,7 @@ static int computeSchemaDiff(
   for(i=0; i<nFrom; i++){
     SchemaEntry *toEntry;
     if( fromConsumed && fromConsumed[i] ) continue;
-    toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
+    toEntry = sdSchemaIndexFind(&toSchemaIdx, aFrom[i].zName);
     if( !toEntry ){
 
       rc = appendSchemaDiffRow(pCur, aFrom[i].zName, "",
@@ -393,6 +543,10 @@ static int computeSchemaDiff(
   }
 
 done:
+  sdSchemaIndexClear(&fromSchemaIdx);
+  sdSchemaIndexClear(&toSchemaIdx);
+  sdTableIndexClear(&fromTableIdx);
+  sdTableIndexClear(&toTableIdx);
   sqlite3_free(fromConsumed);
   sqlite3_free(toConsumed);
   return rc;
