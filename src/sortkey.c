@@ -357,6 +357,7 @@ static int sortKeyFromSingleBinaryFieldFast(
   int nSize;
   int nAlloc;
   u8 *pOut;
+  int hasZero;
 
   if( !pRec || nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
   if( descFromKeyInfo(pKeyInfo, 0) ) return SQLITE_NOTFOUND;
@@ -378,12 +379,15 @@ static int sortKeyFromSingleBinaryFieldFast(
   }else if( tag!=SORTKEY_BLOB ){
     return SQLITE_NOTFOUND;
   }
-  if( fieldLen>0 && memchr(pRec + dataOff, 0, fieldLen)!=0 ){
-    return SQLITE_NOTFOUND;
+  hasZero = fieldLen>0 && memchr(pRec + dataOff, 0, fieldLen)!=0;
+  if( hasZero ){
+    if( fieldLen>64 ) return SQLITE_NOTFOUND;
+    if( fieldLen > (u32)((INT_MAX - 3) / 2) ) return SQLITE_TOOBIG;
+    nSize = (int)fieldLen * 2 + 3;
+  }else{
+    if( fieldLen > (u32)INT_MAX - 3 ) return SQLITE_TOOBIG;
+    nSize = (int)fieldLen + 3;
   }
-  if( fieldLen > (u32)INT_MAX - 3 ) return SQLITE_TOOBIG;
-
-  nSize = (int)fieldLen + 3;
   nAlloc = nSize < 64 ? 64 : nSize;
   if( *pnAlloc < nAlloc ){
     u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
@@ -393,11 +397,15 @@ static int sortKeyFromSingleBinaryFieldFast(
   }
 
   pOut = *ppBuf;
-  pOut[0] = tag;
-  if( fieldLen>0 ) memcpy(pOut + 1, pRec + dataOff, fieldLen);
-  pOut[1 + fieldLen] = 0x00;
-  pOut[2 + fieldLen] = 0x00;
-  *pnOut = nSize;
+  if( hasZero ){
+    *pnOut = encodeVarLen(pOut, tag, pRec + dataOff, fieldLen);
+  }else{
+    pOut[0] = tag;
+    if( fieldLen>0 ) memcpy(pOut + 1, pRec + dataOff, fieldLen);
+    pOut[1 + fieldLen] = 0x00;
+    pOut[2 + fieldLen] = 0x00;
+    *pnOut = nSize;
+  }
   return SQLITE_OK;
 }
 
@@ -563,6 +571,7 @@ static int sortKeyFromSingleBinaryMemFast(
   int nSize;
   int nAlloc;
   u8 *pOut;
+  int hasZero;
 
   if( !aMem || nMem<1 || nKeyField>1 ) return SQLITE_NOTFOUND;
   if( nKeyField<=0 && nMem!=1 ) return SQLITE_NOTFOUND;
@@ -587,12 +596,15 @@ static int sortKeyFromSingleBinaryMemFast(
     return SQLITE_NOTFOUND;
   }
 
-  if( pMem->n>0 && memchr(pMem->z, 0, (size_t)pMem->n)!=0 ){
-    return SQLITE_NOTFOUND;
+  hasZero = pMem->n>0 && memchr(pMem->z, 0, (size_t)pMem->n)!=0;
+  if( hasZero ){
+    if( pMem->n>64 ) return SQLITE_NOTFOUND;
+    if( pMem->n > (INT_MAX - 3) / 2 ) return SQLITE_TOOBIG;
+    nSize = pMem->n * 2 + 3;
+  }else{
+    if( pMem->n > INT_MAX - 3 ) return SQLITE_TOOBIG;
+    nSize = pMem->n + 3;
   }
-  if( pMem->n > INT_MAX - 3 ) return SQLITE_TOOBIG;
-
-  nSize = pMem->n + 3;
   nAlloc = nSize < 64 ? 64 : nSize;
   if( *pnAlloc < nAlloc ){
     u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
@@ -602,11 +614,15 @@ static int sortKeyFromSingleBinaryMemFast(
   }
 
   pOut = *ppBuf;
-  pOut[0] = tag;
-  if( pMem->n>0 ) memcpy(pOut + 1, pMem->z, (size_t)pMem->n);
-  pOut[1 + pMem->n] = 0x00;
-  pOut[2 + pMem->n] = 0x00;
-  *pnOut = nSize;
+  if( hasZero ){
+    *pnOut = encodeVarLen(pOut, tag, (const u8*)pMem->z, (u32)pMem->n);
+  }else{
+    pOut[0] = tag;
+    if( pMem->n>0 ) memcpy(pOut + 1, pMem->z, (size_t)pMem->n);
+    pOut[1 + pMem->n] = 0x00;
+    pOut[2 + pMem->n] = 0x00;
+    *pnOut = nSize;
+  }
   return SQLITE_OK;
 }
 
