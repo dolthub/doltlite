@@ -5,15 +5,14 @@
 #include <string.h>
 #include <assert.h>
 
-int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
-                       const ProllyHash *pHash, u64 *pCount){
-  ProllyCacheEntry *pEntry = 0;
+int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
+                   const ProllyHash *pHash, ProllyCacheEntry **ppEntry){
+  ProllyCacheEntry *pEntry;
   u8 *pData = 0;
   int nData = 0;
-  int rc = SQLITE_OK;
-  int i;
-  u64 sum = 0;
+  int rc;
 
+  *ppEntry = 0;
   pEntry = prollyCacheGet(pCache, pHash);
   if( !pEntry ){
     rc = chunkStoreGet(pStore, pHash, &pData, &nData);
@@ -21,6 +20,19 @@ int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
     pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
     if( !pEntry ) return rc;
   }
+  *ppEntry = pEntry;
+  return SQLITE_OK;
+}
+
+int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
+                       const ProllyHash *pHash, u64 *pCount){
+  ProllyCacheEntry *pEntry = 0;
+  int rc;
+  int i;
+  u64 sum = 0;
+
+  rc = prollyLoadNode(pStore, pCache, pHash, &pEntry);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( pEntry->node.level==0 ){
     sum = (u64)pEntry->node.nItems;
@@ -49,31 +61,7 @@ int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
 
 static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
                     ProllyCacheEntry **ppEntry){
-  ProllyCacheEntry *pEntry;
-  int rc;
-  u8 *pData = 0;
-  int nData = 0;
-
-  *ppEntry = 0;
-
-  pEntry = prollyCacheGet(cur->pCache, hash);
-  if( pEntry ){
-    *ppEntry = pEntry;
-    return SQLITE_OK;
-  }
-
-  rc = chunkStoreGet(cur->pStore, hash, &pData, &nData);
-  if( rc!=SQLITE_OK ){
-    return rc;
-  }
-
-  pEntry = prollyCachePutOwned(cur->pCache, hash, pData, nData, &rc);
-  if( pEntry==0 ){
-    return rc;
-  }
-
-  *ppEntry = pEntry;
-  return SQLITE_OK;
+  return prollyLoadNode(cur->pStore, cur->pCache, hash, ppEntry);
 }
 
 static int initCursorAtRoot(ProllyCursor *cur, ProllyCacheEntry **ppRoot){
