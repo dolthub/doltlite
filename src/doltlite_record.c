@@ -385,47 +385,91 @@ void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
   (void)doltliteParseRecordStrict(pData, nData, pInfo);
 }
 
-void doltliteResultField(
-  sqlite3_context *ctx, const u8 *pData, int nData,
-  int st, int off
+typedef struct DoltliteDecodedField DoltliteDecodedField;
+struct DoltliteDecodedField {
+  int eType;
+  i64 i;
+  double r;
+  const u8 *p;
+  int n;
+};
+
+static void doltliteDecodeField(
+  const u8 *pData, int nData,
+  int st, int off,
+  DoltliteDecodedField *pOut
 ){
-  if( st==0 ){ sqlite3_result_null(ctx); return; }
-  if( st==8 ){ sqlite3_result_int(ctx, 0); return; }
-  if( st==9 ){ sqlite3_result_int(ctx, 1); return; }
+  memset(pOut, 0, sizeof(*pOut));
+  pOut->eType = SQLITE_NULL;
+
+  if( st==0 ) return;
+  if( st==8 ){
+    pOut->eType = SQLITE_INTEGER;
+    pOut->i = 0;
+    return;
+  }
+  if( st==9 ){
+    pOut->eType = SQLITE_INTEGER;
+    pOut->i = 1;
+    return;
+  }
   if( st>=1 && st<=6 ){
     int nB = dlSerialTypeLen((u64)st);
-    if( off+nB <= nData ){
-      sqlite3_result_int64(ctx, dlReadIntBytes(pData + off, nB));
-    }else{
-      sqlite3_result_null(ctx);
+    if( off>=0 && off<=nData-nB ){
+      pOut->eType = SQLITE_INTEGER;
+      pOut->i = dlReadIntBytes(pData + off, nB);
     }
     return;
   }
   if( st==7 ){
-    if( off+8 <= nData ){
+    if( off>=0 && off<=nData-8 ){
       const u8 *q = pData + off;
-      double v; u64 bits = 0; int i;
+      u64 bits = 0;
+      int i;
       for(i=0; i<8; i++) bits = (bits<<8) | q[i];
-      memcpy(&v, &bits, 8);
-      sqlite3_result_double(ctx, v);
-    }else{
-      sqlite3_result_null(ctx);
+      pOut->eType = SQLITE_FLOAT;
+      memcpy(&pOut->r, &bits, 8);
     }
     return;
   }
   if( st>=13 && (st&1)==1 ){
     int len = (st-13)/2;
-    if( off+len <= nData )
-      sqlite3_result_text(ctx, (const char*)(pData+off), len, SQLITE_TRANSIENT);
-    else sqlite3_result_null(ctx);
+    if( off>=0 && off<=nData-len ){
+      pOut->eType = SQLITE_TEXT;
+      pOut->p = pData + off;
+      pOut->n = len;
+    }
     return;
   }
   if( st>=12 && (st&1)==0 ){
     int len = (st-12)/2;
-    if( off+len <= nData )
-      sqlite3_result_blob(ctx, pData+off, len, SQLITE_TRANSIENT);
-    else sqlite3_result_null(ctx);
-    return;
+    if( off>=0 && off<=nData-len ){
+      pOut->eType = SQLITE_BLOB;
+      pOut->p = pData + off;
+      pOut->n = len;
+    }
+  }
+}
+
+void doltliteResultField(
+  sqlite3_context *ctx, const u8 *pData, int nData,
+  int st, int off
+){
+  DoltliteDecodedField f;
+  doltliteDecodeField(pData, nData, st, off, &f);
+  switch( f.eType ){
+    case SQLITE_INTEGER:
+      sqlite3_result_int64(ctx, f.i);
+      return;
+    case SQLITE_FLOAT:
+      sqlite3_result_double(ctx, f.r);
+      return;
+    case SQLITE_TEXT:
+      sqlite3_result_text(ctx, (const char*)f.p, f.n, SQLITE_TRANSIENT);
+      return;
+    case SQLITE_BLOB:
+      sqlite3_result_blob(ctx, f.p, f.n, SQLITE_TRANSIENT);
+      return;
   }
   sqlite3_result_null(ctx);
 }
@@ -470,37 +514,18 @@ int doltliteBindField(
   const u8 *pData, int nData,
   int st, int off
 ){
-  if( st==0 ) return sqlite3_bind_null(pStmt, iParam);
-  if( st==8 ) return sqlite3_bind_int(pStmt, iParam, 0);
-  if( st==9 ) return sqlite3_bind_int(pStmt, iParam, 1);
-  if( st>=1 && st<=6 ){
-    int nB = dlSerialTypeLen((u64)st);
-    if( off+nB <= nData ){
-      return sqlite3_bind_int64(pStmt, iParam, dlReadIntBytes(pData + off, nB));
-    }
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( st==7 ){
-    if( off+8 <= nData ){
-      const u8 *q = pData + off;
-      double v; u64 bits = 0; int i;
-      for(i=0; i<8; i++) bits = (bits<<8) | q[i];
-      memcpy(&v, &bits, 8);
-      return sqlite3_bind_double(pStmt, iParam, v);
-    }
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( st>=13 && (st&1)==1 ){
-    int len = (st-13)/2;
-    if( off+len <= nData )
-      return sqlite3_bind_text(pStmt, iParam, (const char*)(pData+off), len, SQLITE_TRANSIENT);
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( st>=12 && (st&1)==0 ){
-    int len = (st-12)/2;
-    if( off+len <= nData )
-      return sqlite3_bind_blob(pStmt, iParam, pData+off, len, SQLITE_TRANSIENT);
-    return sqlite3_bind_null(pStmt, iParam);
+  DoltliteDecodedField f;
+  doltliteDecodeField(pData, nData, st, off, &f);
+  switch( f.eType ){
+    case SQLITE_INTEGER:
+      return sqlite3_bind_int64(pStmt, iParam, f.i);
+    case SQLITE_FLOAT:
+      return sqlite3_bind_double(pStmt, iParam, f.r);
+    case SQLITE_TEXT:
+      return sqlite3_bind_text(pStmt, iParam, (const char*)f.p, f.n,
+                               SQLITE_TRANSIENT);
+    case SQLITE_BLOB:
+      return sqlite3_bind_blob(pStmt, iParam, f.p, f.n, SQLITE_TRANSIENT);
   }
   return sqlite3_bind_null(pStmt, iParam);
 }
