@@ -10,6 +10,8 @@
 #include "doltlite_ignore.h"
 #include "prolly_cursor.h"
 
+#define STATUS_IDX_STAGED_EQ 0x01
+
 typedef struct StatusRow StatusRow;
 struct StatusRow {
   char *zName;
@@ -516,14 +518,18 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headCatHash, stagedCatHash, workingCatHash;
   struct TableEntry *aHead = 0, *aStaged = 0, *aWorking = 0;
-  int nHead = 0, nStaged = 0, nWorking = 0, rc;
-  (void)idxNum;
+  int nHead = 0, nStaged = 0, nWorking = 0, rc = SQLITE_OK;
+  int iStagedOnly = -1;
   (void)idxStr;
-  (void)argc;
-  (void)argv;
 
   statusFreeRows(pCur);
   pCur->iRow = 0;
+  if( idxNum & STATUS_IDX_STAGED_EQ ){
+    if( argc<1 ) return SQLITE_OK;
+    iStagedOnly = sqlite3_value_int(argv[0]);
+    if( iStagedOnly!=0 && iStagedOnly!=1 ) return SQLITE_OK;
+  }
+
   if( !cs ){
     if( doltliteIsStockSqliteDb(db) ){
       pCursor->pVtab->zErrMsg = sqlite3_mprintf("%s",
@@ -533,28 +539,34 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
     return SQLITE_OK;
   }
 
+  doltliteGetSessionStaged(db, &stagedCatHash);
+  if( iStagedOnly==1 && prollyHashIsEmpty(&stagedCatHash) ){
+    goto status_done;
+  }
+
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
   if( rc != SQLITE_OK ) goto status_done;
   rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
   if( rc != SQLITE_OK ) goto status_done;
 
-  doltliteGetSessionStaged(db, &stagedCatHash);
   if( !prollyHashIsEmpty(&stagedCatHash) ){
     rc = doltliteLoadCatalog(db, &stagedCatHash, &aStaged, &nStaged, 0);
     if( rc != SQLITE_OK ) goto status_done;
   }
 
-  rc = doltliteFlushCatalogToHash(db, &workingCatHash);
-  if( rc == SQLITE_OK ){
-    rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
+  if( iStagedOnly!=1 ){
+    rc = doltliteFlushCatalogToHash(db, &workingCatHash);
+    if( rc == SQLITE_OK ){
+      rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
+    }
+    if( rc != SQLITE_OK ) goto status_done;
   }
-  if( rc != SQLITE_OK ) goto status_done;
 
-  if( aStaged ){
+  if( aStaged && iStagedOnly!=0 ){
     rc = compareCatalogs(pCur, db, aHead, nHead, aStaged, nStaged, 1);
     if( rc != SQLITE_OK ) goto status_done;
   }
-  {
+  if( iStagedOnly!=1 ){
     struct TableEntry *aBase = aStaged ? aStaged : aHead;
     int nBase = aStaged ? nStaged : nHead;
     if( aWorking && aBase ){
@@ -603,8 +615,28 @@ static int statusRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
   return SQLITE_OK;
 }
 static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  int i;
+  int iStagedEq = -1;
   (void)pVtab;
-  pInfo->estimatedCost = 100.0;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->iColumn==1 && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      iStagedEq = i;
+      break;
+    }
+  }
+
+  if( iStagedEq>=0 ){
+    pInfo->aConstraintUsage[iStagedEq].argvIndex = 1;
+    pInfo->idxNum = STATUS_IDX_STAGED_EQ;
+    pInfo->estimatedCost = 50.0;
+    pInfo->estimatedRows = 10;
+  }else{
+    pInfo->idxNum = 0;
+    pInfo->estimatedCost = 100.0;
+  }
   return SQLITE_OK;
 }
 
