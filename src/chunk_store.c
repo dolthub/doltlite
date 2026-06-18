@@ -1175,6 +1175,12 @@ int chunkStoreGet(
   return SQLITE_OK;
 }
 
+static void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size){
+  p[0] = CS_WAL_TAG_CHUNK;
+  memcpy(p + CS_WAL_CHUNK_HASH_OFF, pHash, PROLLY_HASH_SIZE);
+  CS_WRITE_U32(p + CS_WAL_CHUNK_LEN_OFF, size);
+}
+
 static int csDrainPendingToWal(ChunkStore *cs){
   int rc;
   int i;
@@ -1234,9 +1240,7 @@ static int csDrainPendingToWal(ChunkStore *cs){
     *pr = *pe;
     pr->offset = writeOff + CS_WAL_CHUNK_LEN_OFF;
 
-    recHdr[0] = CS_WAL_TAG_CHUNK;
-    memcpy(recHdr + CS_WAL_CHUNK_HASH_OFF, &pe->hash, PROLLY_HASH_SIZE);
-    CS_WRITE_U32(recHdr + CS_WAL_CHUNK_LEN_OFF, (u32)pe->size);
+    csFillChunkHdr(recHdr, &pe->hash, (u32)pe->size);
 
     rc = sqlite3OsWrite(cs->file.pFile, recHdr, CS_WAL_CHUNK_HDR_SIZE, writeOff);
     if( rc!=SQLITE_OK ) return rc;
@@ -1633,9 +1637,7 @@ static int csCommitToFile(ChunkStore *cs){
       for( i = 0; i < cs->staging.nPending; i++ ){
         ChunkIndexEntry *pe = &cs->staging.aPending[i];
         i64 bufOff = pe->offset + 4;
-        pOut[0] = CS_WAL_TAG_CHUNK;
-        memcpy(pOut + CS_WAL_CHUNK_HASH_OFF, &pe->hash, PROLLY_HASH_SIZE);
-        CS_WRITE_U32(pOut + CS_WAL_CHUNK_LEN_OFF, (u32)pe->size);
+        csFillChunkHdr(pOut, &pe->hash, (u32)pe->size);
         pOut += CS_WAL_CHUNK_HDR_SIZE;
         memcpy(pOut, cs->staging.pWriteBuf + bufOff, pe->size);
         pOut += pe->size;
@@ -1650,9 +1652,7 @@ static int csCommitToFile(ChunkStore *cs){
         ChunkIndexEntry *pe = &cs->staging.aPending[i];
         u8 recHdr[CS_WAL_CHUNK_HDR_SIZE];
         i64 bufOff;
-        recHdr[0] = CS_WAL_TAG_CHUNK;
-        memcpy(recHdr + CS_WAL_CHUNK_HASH_OFF, &pe->hash, PROLLY_HASH_SIZE);
-        CS_WRITE_U32(recHdr + CS_WAL_CHUNK_LEN_OFF, (u32)pe->size);
+        csFillChunkHdr(recHdr, &pe->hash, (u32)pe->size);
 
         bufOff = pe->offset + 4;
         CRASH_CHECK_WRITE();
