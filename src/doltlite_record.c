@@ -530,4 +530,50 @@ int doltliteBindField(
   return sqlite3_bind_null(pStmt, iParam);
 }
 
+u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut){
+  u32 *aType, *aLen;
+  u8 *pOut, *pHdr, *pBody;
+  int i, hdrSize = 0, bodySize = 0, pos;
+
+  *pnOut = 0;
+  if( nField<=0 ) return 0;
+
+  aType = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
+  aLen = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
+  if( !aType || !aLen ){
+    sqlite3_free(aType);
+    sqlite3_free(aLen);
+    return 0;
+  }
+
+  for(i=0; i<nField; i++){
+    aType[i] = doltliteSerialTypeOf(&aMem[i], &aLen[i]);
+    hdrSize += sqlite3VarintLen(aType[i]);
+    bodySize += (int)aLen[i];
+  }
+  hdrSize += sqlite3VarintLen(hdrSize);
+
+  pOut = sqlite3_malloc(hdrSize + bodySize);
+  if( !pOut ){
+    sqlite3_free(aType);
+    sqlite3_free(aLen);
+    return 0;
+  }
+
+  pos = sqlite3PutVarint(pOut, hdrSize);
+  pHdr = pOut + pos;
+  pBody = pOut + hdrSize;
+  for(i=0; i<nField; i++){
+    pHdr += sqlite3PutVarint(pHdr, aType[i]);
+    if( aLen[i]>0 ){
+      doltliteSerialPut(pBody, &aMem[i], aType[i]);
+      pBody += aLen[i];
+    }
+  }
+  *pnOut = hdrSize + bodySize;
+  sqlite3_free(aType);
+  sqlite3_free(aLen);
+  return pOut;
+}
+
 #endif

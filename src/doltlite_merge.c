@@ -1417,13 +1417,8 @@ static u8 *mergeBuildSchemaCatalogRecord(
   int *pnOut
 ){
   DoltliteSerialValue aMem[5];
-  u32 aType[5];
-  u32 aLen[5];
-  int i, hdrSize = 0, bodySize = 0, pos;
-  u8 *pOut, *pHdr, *pBody;
 
   memset(aMem, 0, sizeof(aMem));
-  *pnOut = 0;
 
   aMem[0].eType = SQLITE_TEXT;    aMem[0].p = zType;    aMem[0].n = (int)strlen(zType);
   aMem[1].eType = SQLITE_TEXT;    aMem[1].p = zName;    aMem[1].n = (int)strlen(zName);
@@ -1439,28 +1434,7 @@ static u8 *mergeBuildSchemaCatalogRecord(
     aMem[4].n = 0;
   }
 
-  for(i=0; i<5; i++){
-    aType[i] = doltliteSerialTypeOf(&aMem[i], &aLen[i]);
-    hdrSize += sqlite3VarintLen(aType[i]);
-    bodySize += (int)aLen[i];
-  }
-  hdrSize += sqlite3VarintLen(hdrSize);
-
-  pOut = sqlite3_malloc(hdrSize + bodySize);
-  if( !pOut ) return 0;
-
-  pos = sqlite3PutVarint(pOut, hdrSize);
-  pHdr = pOut + pos;
-  pBody = pOut + hdrSize;
-  for(i=0; i<5; i++){
-    pHdr += sqlite3PutVarint(pHdr, aType[i]);
-    if( aLen[i]>0 ){
-      doltliteSerialPut(pBody, &aMem[i], aType[i]);
-      pBody += aLen[i];
-    }
-  }
-  *pnOut = hdrSize + bodySize;
-  return pOut;
+  return doltliteBuildRecord(aMem, 5, pnOut);
 }
 
 static SchemaEntry *mergedSchemaChoice(

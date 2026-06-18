@@ -284,22 +284,14 @@ static u8 *buildRecordFromStmtCols(
   int *pnOut
 ){
   DoltliteSerialValue *aMem = 0;
-  u32 *aType = 0;
-  u32 *aLen = 0;
-  u8 *pOut = 0;
-  int hdrSize = 0, bodySize = 0, i, pos;
-  u8 *pHdr, *pBody;
+  u8 *pOut;
+  int i;
 
   *pnOut = 0;
   if( nField<=0 ) return 0;
 
   aMem = sqlite3_malloc64((sqlite3_int64)nField * sizeof(DoltliteSerialValue));
-  aType = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
-  aLen = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
-  if( !aMem || !aType || !aLen ){
-    sqlite3_free(aMem); sqlite3_free(aType); sqlite3_free(aLen);
-    return 0;
-  }
+  if( !aMem ) return 0;
   memset(aMem, 0, (size_t)nField * sizeof(DoltliteSerialValue));
 
   for(i=0; i<nField; i++){
@@ -325,33 +317,10 @@ static u8 *buildRecordFromStmtCols(
       default:
         break;
     }
-    aType[i] = doltliteSerialTypeOf(&aMem[i], &aLen[i]);
-    hdrSize += sqlite3VarintLen(aType[i]);
-    bodySize += (int)aLen[i];
-  }
-  hdrSize += sqlite3VarintLen(hdrSize);
-
-  pOut = sqlite3_malloc(hdrSize + bodySize);
-  if( !pOut ){
-    sqlite3_free(aMem); sqlite3_free(aType); sqlite3_free(aLen);
-    return 0;
   }
 
-  pos = sqlite3PutVarint(pOut, hdrSize);
-  pHdr = pOut + pos;
-  pBody = pOut + hdrSize;
-  for(i=0; i<nField; i++){
-    pHdr += sqlite3PutVarint(pHdr, aType[i]);
-    if( aLen[i]>0 ){
-      doltliteSerialPut(pBody, &aMem[i], aType[i]);
-      pBody += aLen[i];
-    }
-  }
-
-  *pnOut = hdrSize + bodySize;
+  pOut = doltliteBuildRecord(aMem, nField, pnOut);
   sqlite3_free(aMem);
-  sqlite3_free(aType);
-  sqlite3_free(aLen);
   return pOut;
 }
 
