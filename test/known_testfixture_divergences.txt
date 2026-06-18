@@ -560,7 +560,6 @@ capi2 capi2-6.5  # 2nd-connection write expects "database is locked"; doltlite h
 # enforcement are correct; this is schema-text fidelity only. Tracked: #1200.
 check check-4.9
 collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
-collate4 collate4-3.4    # full-file cascade after unsupported custom-collation index DDL
 # date-14 writes raw IEEE754 bytes directly into SQLite page offsets with
 # hexio_write, then verifies date/time behavior through that mutated record.
 # DoltLite's prolly storage has no SQLite page layout at those offsets, so
