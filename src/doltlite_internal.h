@@ -755,6 +755,17 @@ int doltliteApplyRawRowMutation(sqlite3 *db, const char *zTable,
                                 const u8 *pKey, int nKey, i64 intKey,
                                 const u8 *pVal, int nVal);
 
+typedef struct DoltliteConflictRow DoltliteConflictRow;
+struct DoltliteConflictRow {
+  i64 intKey;
+  u8 *pKey; int nKey;
+  u8 *pBaseVal; int nBaseVal;
+  u8 *pOurVal; int nOurVal;
+  u8 *pTheirVal; int nTheirVal;
+};
+
+void doltliteConflictRowFree(DoltliteConflictRow *pRow);
+
 /* Index key construction helpers (see doltlite_merge.c). Exposed for
 ** dolt_conflicts_resolve --theirs to maintain secondary indexes when
 ** writing theirs's row directly via the raw-row mutation path. */
