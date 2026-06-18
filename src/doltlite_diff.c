@@ -112,6 +112,7 @@ struct DoltliteDiffCursor {
   DoltliteCommitQueue queue;
   DiffSummaryRow *aBatch;
   int nBatch;
+  int nBatchAlloc;
   int iBatch;
   char *zFilterTable;
   int phase;
@@ -141,6 +142,89 @@ static const char *diffSchema =
 #define DIFF_COL_SCHEMA_CHANGE 6
 #define DIFF_COL_TABLE_NAME    7
 
+typedef struct DiffNameSlot DiffNameSlot;
+struct DiffNameSlot {
+  const char *zName;
+  int iEntry;
+};
+
+typedef struct DiffNameIndex DiffNameIndex;
+struct DiffNameIndex {
+  struct TableEntry *aEntry;
+  DiffNameSlot *aSlot;
+  int nSlot;
+};
+
+static u32 diffStringHash(const char *z){
+  u32 h = 2166136261u;
+  while( z && *z ){
+    h ^= (unsigned char)*z;
+    h *= 16777619u;
+    z++;
+  }
+  return h;
+}
+
+static int diffNameIndexInit(
+  DiffNameIndex *pIdx,
+  struct TableEntry *aEntry,
+  int nEntry
+){
+  int i;
+  int nSlot = 16;
+
+  memset(pIdx, 0, sizeof(*pIdx));
+  pIdx->aEntry = aEntry;
+  if( nEntry<=0 ) return SQLITE_OK;
+
+  while( nSlot < nEntry*2 ) nSlot *= 2;
+  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(DiffNameSlot));
+  if( !pIdx->aSlot ) return SQLITE_NOMEM;
+  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(DiffNameSlot));
+  pIdx->nSlot = nSlot;
+
+  for(i=0; i<nEntry; i++){
+    u32 slot;
+    if( !aEntry[i].zName ) continue;
+    slot = diffStringHash(aEntry[i].zName) & (u32)(nSlot - 1);
+    while( pIdx->aSlot[slot].zName ){
+      if( strcmp(pIdx->aSlot[slot].zName, aEntry[i].zName)==0 ){
+        break;
+      }
+      slot = (slot + 1) & (u32)(nSlot - 1);
+    }
+    if( !pIdx->aSlot[slot].zName ){
+      pIdx->aSlot[slot].zName = aEntry[i].zName;
+      pIdx->aSlot[slot].iEntry = i + 1;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static void diffNameIndexFree(DiffNameIndex *pIdx){
+  sqlite3_free(pIdx->aSlot);
+  memset(pIdx, 0, sizeof(*pIdx));
+}
+
+static struct TableEntry *diffNameIndexFind(
+  const DiffNameIndex *pIdx,
+  const char *zName
+){
+  u32 slot;
+  int i;
+  if( !zName || pIdx->nSlot==0 ) return 0;
+  slot = diffStringHash(zName) & (u32)(pIdx->nSlot - 1);
+  for(i=0; i<pIdx->nSlot; i++){
+    DiffNameSlot *pSlot = &pIdx->aSlot[slot];
+    if( !pSlot->zName ) return 0;
+    if( strcmp(pSlot->zName, zName)==0 ){
+      return &pIdx->aEntry[pSlot->iEntry - 1];
+    }
+    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
+  }
+  return 0;
+}
+
 static void freeBatch(DoltliteDiffCursor *pCur){
   int i;
   for(i=0; i<pCur->nBatch; i++){
@@ -152,6 +236,7 @@ static void freeBatch(DoltliteDiffCursor *pCur){
   sqlite3_free(pCur->aBatch);
   pCur->aBatch = 0;
   pCur->nBatch = 0;
+  pCur->nBatchAlloc = 0;
   pCur->iBatch = 0;
 }
 
@@ -161,14 +246,19 @@ static int batchAppend(DoltliteDiffCursor *pCur,
                        const DoltliteCommit *pCommit,
                        u8 dataChange, u8 schemaChange){
   DiffSummaryRow *aNew, *r;
+  int nNew;
   if( pCur->zFilterTable && strcmp(pCur->zFilterTable, zTableName)!=0 ){
     return SQLITE_OK;
   }
-  aNew = sqlite3_realloc(pCur->aBatch,
-                         (pCur->nBatch+1)*(int)sizeof(DiffSummaryRow));
-  if( !aNew ) return SQLITE_NOMEM;
-  pCur->aBatch = aNew;
-  r = &aNew[pCur->nBatch];
+  if( pCur->nBatch>=pCur->nBatchAlloc ){
+    nNew = pCur->nBatchAlloc ? pCur->nBatchAlloc*2 : 16;
+    aNew = sqlite3_realloc(pCur->aBatch,
+                           nNew*(int)sizeof(DiffSummaryRow));
+    if( !aNew ) return SQLITE_NOMEM;
+    pCur->aBatch = aNew;
+    pCur->nBatchAlloc = nNew;
+  }
+  r = &pCur->aBatch[pCur->nBatch];
   memset(r, 0, sizeof(*r));
   memcpy(r->zCommitHex, zCommitHex, PROLLY_HASH_SIZE*2+1);
   r->zTableName = sqlite3_mprintf("%s", zTableName ? zTableName : "");
@@ -203,6 +293,16 @@ static int diffCatalogPair(
   const char *zHex, const DoltliteCommit *pCommit
 ){
   int rc = SQLITE_OK, i;
+  DiffNameIndex childIdx;
+  DiffNameIndex parentIdx;
+  memset(&childIdx, 0, sizeof(childIdx));
+  memset(&parentIdx, 0, sizeof(parentIdx));
+
+  rc = diffNameIndexInit(&childIdx, aChild, nChild);
+  if( rc!=SQLITE_OK ) goto diff_done;
+  rc = diffNameIndexInit(&parentIdx, aParent, nParent);
+  if( rc!=SQLITE_OK ) goto diff_done;
+
   for(i=0; i<nChild; i++){
     struct TableEntry *e = &aChild[i];
     struct TableEntry *p;
@@ -219,11 +319,11 @@ static int diffCatalogPair(
           schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
         rc = batchAppend(pCur, zHex, "dolt_schemas", pCommit,
                          1, schemaChangeFlag);
-        if( rc!=SQLITE_OK ) return rc;
+        if( rc!=SQLITE_OK ) goto diff_done;
       }
       continue;
     }
-    p = doltliteFindTableByName(aParent, nParent, e->zName);
+    p = diffNameIndexFind(&parentIdx, e->zName);
     if( !p ){
       dataChange = 1;
       schemaChange = 1;
@@ -233,15 +333,18 @@ static int diffCatalogPair(
       if( !dataChange && !schemaChange ) continue;
     }
     rc = batchAppend(pCur, zHex, e->zName, pCommit, dataChange, schemaChange);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto diff_done;
   }
   for(i=0; i<nParent; i++){
     struct TableEntry *p = &aParent[i];
     if( !p->zName ) continue;
-    if( doltliteFindTableByName(aChild, nChild, p->zName) ) continue;
+    if( diffNameIndexFind(&childIdx, p->zName) ) continue;
     rc = batchAppend(pCur, zHex, p->zName, pCommit, 1, 1);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto diff_done;
   }
+diff_done:
+  diffNameIndexFree(&childIdx);
+  diffNameIndexFree(&parentIdx);
   return rc;
 }
 

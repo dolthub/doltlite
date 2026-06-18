@@ -83,6 +83,7 @@ struct DiffTblCursor {
 
   DiffPair *aPairs;
   int nPairs;
+  int nPairsAlloc;
   int iPair;
   int pairsDone;
 
@@ -245,11 +246,16 @@ static int pairsAppend(DiffTblCursor *pCur,
                        const ProllyHash *pToSchemaHash,
                        u8 toFlags, i64 toDate){
   DiffPair *aNew, *r;
-  aNew = sqlite3_realloc(pCur->aPairs,
-                         (pCur->nPairs+1)*(int)sizeof(DiffPair));
-  if( !aNew ) return SQLITE_NOMEM;
-  pCur->aPairs = aNew;
-  r = &aNew[pCur->nPairs++];
+  int nNew;
+  if( pCur->nPairs>=pCur->nPairsAlloc ){
+    nNew = pCur->nPairsAlloc ? pCur->nPairsAlloc*2 : 16;
+    aNew = sqlite3_realloc(pCur->aPairs,
+                           nNew*(int)sizeof(DiffPair));
+    if( !aNew ) return SQLITE_NOMEM;
+    pCur->aPairs = aNew;
+    pCur->nPairsAlloc = nNew;
+  }
+  r = &pCur->aPairs[pCur->nPairs++];
   memset(r, 0, sizeof(*r));
   r->fromHash       = *pFromHash;
   r->fromTblRoot    = *pFromTblRoot;
@@ -891,6 +897,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   sqlite3_free(c->aPairs);
   c->aPairs = 0;
   c->nPairs = 0;
+  c->nPairsAlloc = 0;
   c->iPair = 0;
   c->pairsDone = 0;
   c->hasRow = 0;
