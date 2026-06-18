@@ -560,8 +560,8 @@ static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
   ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
   ProllyNode *pNode = &pLeaf->node;
   int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
-  u32 off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
-  const u8 *p = pNode->pKeyData + off;
+  const u8 *p = pNode->pKeyData + i*8;
+  assert( (pNode->flags & PROLLY_NODE_INTKEY)!=0 );
   return ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40)
        | ((u64)p[3]<<32) | ((u64)p[4]<<24) | ((u64)p[5]<<16)
        | ((u64)p[6]<<8) | (u64)p[7];
