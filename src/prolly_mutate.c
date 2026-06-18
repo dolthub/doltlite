@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutate.h"
+#include "prolly_cursor.h"
 #include "prolly_check.h"
 #include "prolly_xxhash.h"
 #include <stdio.h>
@@ -226,19 +227,11 @@ static int streamingMergeNode(
     }else{
       ProllyHash childHash;
       ProllyCacheEntry *pChildEntry;
-      u8 *pChildData = 0;
-      int nChildData = 0;
 
       assert( nChildVal == PROLLY_HASH_SIZE );
       memcpy(&childHash, pChildVal, PROLLY_HASH_SIZE);
-      pChildEntry = prollyCacheGet(pCache, &childHash);
-      if( !pChildEntry ){
-        rc = chunkStoreGet(pMut->pStore, &childHash, &pChildData, &nChildData);
-        if( rc!=SQLITE_OK ) return rc;
-        pChildEntry = prollyCachePutOwned(pCache, &childHash,
-                                          pChildData, nChildData, &rc);
-        if( !pChildEntry ) return rc;
-      }
+      rc = prollyLoadNode(pMut->pStore, pCache, &childHash, &pChildEntry);
+      if( rc!=SQLITE_OK ) return rc;
 
 #ifdef DOLTLITE_PROLLY_CHECK
       if( pChildEntry->node.level != pNode->level - 1 ){
@@ -1185,19 +1178,10 @@ static int validateReplaceBatchNode(
     if( forceDescend || subtreeHasEdits(pIter, pBoundKey, nBoundKey) ){
       ProllyHash childHash;
       ProllyCacheEntry *pChildEntry;
-      u8 *pChildData = 0;
-      int nChildData = 0;
 
       memcpy(&childHash, pChildVal, PROLLY_HASH_SIZE);
-      pChildEntry = prollyCacheGet(pMut->pCache, &childHash);
-      if( !pChildEntry ){
-        rc = chunkStoreGet(pMut->pStore, &childHash,
-                           &pChildData, &nChildData);
-        if( rc!=SQLITE_OK ) return rc;
-        pChildEntry = prollyCachePutOwned(pMut->pCache, &childHash,
-                                          pChildData, nChildData, &rc);
-        if( !pChildEntry ) return rc;
-      }
+      rc = prollyLoadNode(pMut->pStore, pMut->pCache, &childHash, &pChildEntry);
+      if( rc!=SQLITE_OK ) return rc;
       rc = validateReplaceBatchNode(pMut, &pChildEntry->node, pIter,
                                     childIsLast);
       prollyCacheRelease(pMut->pCache, pChildEntry);
@@ -1255,23 +1239,11 @@ static int replaceBatchNodeNoRechunk(
 
     if( forceDescend || subtreeHasEdits(pIter, pBoundKey, nBoundKey) ){
       ProllyCacheEntry *pChildEntry;
-      u8 *pChildData = 0;
-      int nChildData = 0;
 
-      pChildEntry = prollyCacheGet(pMut->pCache, &childHash);
-      if( !pChildEntry ){
-        rc = chunkStoreGet(pMut->pStore, &childHash,
-                           &pChildData, &nChildData);
-        if( rc!=SQLITE_OK ){
-          prollyNodeBuilderFree(&b);
-          return rc;
-        }
-        pChildEntry = prollyCachePutOwned(pMut->pCache, &childHash,
-                                          pChildData, nChildData, &rc);
-        if( !pChildEntry ){
-          prollyNodeBuilderFree(&b);
-          return rc;
-        }
+      rc = prollyLoadNode(pMut->pStore, pMut->pCache, &childHash, &pChildEntry);
+      if( rc!=SQLITE_OK ){
+        prollyNodeBuilderFree(&b);
+        return rc;
       }
       rc = replaceBatchNodeNoRechunk(pMut, &pChildEntry->node, pIter,
                                      childIsLast, &newChildHash,
