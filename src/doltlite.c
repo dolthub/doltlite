@@ -164,24 +164,33 @@ static int doltliteRefreshAndConfirmHead(
 ){
   const char *zBranch;
   ProllyHash branchTip;
+  int found = 0;
   int rc;
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Reload persisted refs so this CAS compares against the true on-disk branch
-  ** tip. The lock-time change heuristic can miss a peer commit (WAL reuse
-  ** leaves the file size unchanged), and a stale tip would let a fast-forward
-  ** clobber the peer's advance. */
+  /* Refresh in-memory state so a subsequent advance builds on the current
+  ** view. This is a no-op when we hold the lock reentrantly (a VC op already
+  ** in a write transaction), so it cannot be the basis of the CAS below. */
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     return rc;
   }
 
+  /* Compare against the authoritative on-disk tip, read directly rather than
+  ** from the in-memory refs. The in-memory tip can be stale here: force-refresh
+  ** above is suppressed under a reentrant lock, and even the lock-time heuristic
+  ** can miss a peer commit when WAL reuse leaves the file size unchanged. A
+  ** stale tip would let this advance clobber the peer's commit (lost update). */
   zBranch = doltliteGetSessionBranch(db);
-  if( chunkStoreFindBranch(cs, zBranch, &branchTip)==SQLITE_OK
-   && prollyHashCompare(&branchTip, pExpectedHead)!=0 ){
+  rc = chunkStoreReadDiskBranchTip(cs, zBranch, &branchTip, &found);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    return rc;
+  }
+  if( found && prollyHashCompare(&branchTip, pExpectedHead)!=0 ){
     chunkStoreUnlock(cs);
     return SQLITE_BUSY;
   }

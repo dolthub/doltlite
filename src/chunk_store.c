@@ -670,6 +670,31 @@ int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit)
   return SQLITE_OK;
 }
 
+/* Read zName's committed tip straight from disk into *pTip, leaving this
+** store's in-memory state untouched. Opens a throwaway view of the file (as
+** csReloadFromDisk does) so a commit/merge head-CAS sees a peer's advance even
+** when its force-refresh is suppressed (a reentrant lock holder, or a WAL-reuse
+** commit the file-size heuristic misses). *pFound is 0 if the branch is absent.
+** Caller must hold the chunk-store lock. */
+int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
+                                ProllyHash *pTip, int *pFound){
+  ChunkStore tmp;
+  int rc;
+
+  *pFound = 0;
+  if( cs->isMemory || !cs->file.zFilename ){
+    if( chunkStoreFindBranch(cs, zName, pTip)==SQLITE_OK ) *pFound = 1;
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ) return rc;
+  if( chunkStoreFindBranch(&tmp, zName, pTip)==SQLITE_OK ) *pFound = 1;
+  chunkStoreClose(&tmp);
+  return SQLITE_OK;
+}
+
 int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
   int n = cs->refs.nBranches;
   if( chunkStoreFindBranch(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
