@@ -235,6 +235,76 @@ struct DsSummaryRow {
   u8 schemaChange;
 };
 
+typedef struct DsNameSlot DsNameSlot;
+typedef struct DsNameIndex DsNameIndex;
+struct DsNameSlot {
+  const char *zName;
+  struct TableEntry *pEntry;
+};
+struct DsNameIndex {
+  DsNameSlot *aSlot;
+  int nSlot;
+};
+
+static u32 dsNameHash(const char *zName){
+  u32 h = 2166136261u;
+  while( *zName ){
+    h ^= (u8)*zName++;
+    h *= 16777619u;
+  }
+  return h;
+}
+
+static void dsNameIndexClear(DsNameIndex *pIdx){
+  sqlite3_free(pIdx->aSlot);
+  pIdx->aSlot = 0;
+  pIdx->nSlot = 0;
+}
+
+static int dsNameIndexInit(
+  DsNameIndex *pIdx,
+  struct TableEntry *aCat,
+  int nCat
+){
+  int nSlot = 8;
+  int i;
+  memset(pIdx, 0, sizeof(*pIdx));
+  while( nSlot < nCat*2 ) nSlot *= 2;
+  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(DsNameSlot));
+  if( !pIdx->aSlot ) return SQLITE_NOMEM;
+  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(DsNameSlot));
+  pIdx->nSlot = nSlot;
+  for(i=0; i<nCat; i++){
+    const char *zName = aCat[i].zName;
+    u32 h;
+    if( !zName ) continue;
+    h = dsNameHash(zName) & (u32)(nSlot-1);
+    while( pIdx->aSlot[h].zName ){
+      if( strcmp(pIdx->aSlot[h].zName, zName)==0 ) break;
+      h = (h + 1) & (u32)(nSlot-1);
+    }
+    pIdx->aSlot[h].zName = zName;
+    pIdx->aSlot[h].pEntry = &aCat[i];
+  }
+  return SQLITE_OK;
+}
+
+static struct TableEntry *dsNameIndexFind(
+  const DsNameIndex *pIdx,
+  const char *zName
+){
+  u32 h;
+  if( !zName || !pIdx->aSlot || pIdx->nSlot<=0 ) return 0;
+  h = dsNameHash(zName) & (u32)(pIdx->nSlot-1);
+  while( pIdx->aSlot[h].zName ){
+    if( strcmp(pIdx->aSlot[h].zName, zName)==0 ){
+      return pIdx->aSlot[h].pEntry;
+    }
+    h = (h + 1) & (u32)(pIdx->nSlot-1);
+  }
+  return 0;
+}
+
 static int dsResolveCatHash(sqlite3 *db, const char *zRef,
                             ProllyHash *pOut){
   if( zRef ){
@@ -257,11 +327,10 @@ static int dsComputeTableStats(
   const char *zTableName,
   const ProllyHash *pFromCatHash,
   const ProllyHash *pToCatHash,
+  struct TableEntry *pFromEntry,
+  struct TableEntry *pToEntry,
   DsStatRow *pOut
 ){
-  struct TableEntry *aFrom = 0, *aTo = 0;
-  int nFromCat = 0, nToCat = 0;
-  struct TableEntry *pFromEntry, *pToEntry;
   int hasFrom = 0, hasTo = 0;
   int schemaChanged = 0;
   ProllyHash fromRoot, toRoot;
@@ -278,16 +347,6 @@ static int dsComputeTableStats(
   memset(pOut, 0, sizeof(*pOut));
   memset(&colMap, 0, sizeof(colMap));
 
-  rc = doltliteLoadCatalog(db, pFromCatHash, &aFrom, &nFromCat, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, pToCatHash, &aTo, &nToCat, 0);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeCatalog(aFrom, nFromCat);
-    return rc;
-  }
-
-  pFromEntry = doltliteFindTableByName(aFrom, nFromCat, zTableName);
-  pToEntry   = doltliteFindTableByName(aTo,   nToCat,   zTableName);
   hasFrom = pFromEntry!=0;
   hasTo = pToEntry!=0;
 
@@ -301,8 +360,6 @@ static int dsComputeTableStats(
     memcpy(&toRoot, &pToEntry->root, sizeof(ProllyHash));
     toFlags = pToEntry->flags;
   }
-  doltliteFreeCatalog(aFrom, nFromCat);
-  doltliteFreeCatalog(aTo, nToCat);
 
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
@@ -444,6 +501,7 @@ struct DstCursor {
   sqlite3_vtab_cursor base;
   DsStatRow *aRows;
   int nRows;
+  int nRowsAlloc;
   int iRow;
 };
 
@@ -476,6 +534,7 @@ static void dstFreeRows(DstCursor *c){
   sqlite3_free(c->aRows);
   c->aRows = 0;
   c->nRows = 0;
+  c->nRowsAlloc = 0;
 }
 
 static int dstConnect(sqlite3 *db, void *pAux, int argc,
@@ -508,10 +567,14 @@ static int dstClose(sqlite3_vtab_cursor *cur){
 }
 
 static int dstAppend(DstCursor *c, const DsStatRow *r){
-  DsStatRow *aNew = sqlite3_realloc(c->aRows,
-                                    (c->nRows+1)*(int)sizeof(DsStatRow));
-  if( !aNew ) return SQLITE_NOMEM;
-  c->aRows = aNew;
+  if( c->nRows>=c->nRowsAlloc ){
+    int nNew = c->nRowsAlloc ? c->nRowsAlloc*2 : 16;
+    DsStatRow *aNew = sqlite3_realloc(c->aRows,
+                                      nNew*(int)sizeof(DsStatRow));
+    if( !aNew ) return SQLITE_NOMEM;
+    c->aRows = aNew;
+    c->nRowsAlloc = nNew;
+  }
   c->aRows[c->nRows] = *r;
   c->nRows++;
   return SQLITE_OK;
@@ -519,15 +582,14 @@ static int dstAppend(DstCursor *c, const DsStatRow *r){
 
 static int dsAppendTableNames(
   struct TableEntry *aCat, int nCat,
+  const DsNameIndex *pSkip,
   char ***paz, int *pn, int *pAlloc
 ){
-  int i, j;
+  int i;
   for(i=0; i<nCat; i++){
     const char *zName = aCat[i].zName;
-    int dup = 0;
     if( !zName || aCat[i].iTable==1 ) continue;
-    for(j=0; j<*pn; j++){ if( strcmp((*paz)[j], zName)==0 ){ dup=1; break; } }
-    if( dup ) continue;
+    if( pSkip && dsNameIndexFind(pSkip, zName) ) continue;
     if( *pn>=*pAlloc ){
       int newAlloc = *pAlloc ? *pAlloc*2 : 8;
       char **aNew = sqlite3_realloc(*paz, newAlloc*(int)sizeof(char*));
@@ -550,10 +612,12 @@ static int dsCollectTableNames(
 ){
   struct TableEntry *aFrom = 0, *aTo = 0;
   int nFrom = 0, nTo = 0;
+  DsNameIndex fromIdx;
   char **az = 0;
   int n = 0, alloc = 0;
   int rc, j;
 
+  memset(&fromIdx, 0, sizeof(fromIdx));
   *pazOut = 0;
   *pnOut = 0;
 
@@ -565,10 +629,15 @@ static int dsCollectTableNames(
     return rc;
   }
 
-  rc = dsAppendTableNames(aFrom, nFrom, &az, &n, &alloc);
-  if( rc==SQLITE_OK ) rc = dsAppendTableNames(aTo, nTo, &az, &n, &alloc);
+  rc = dsNameIndexInit(&fromIdx, aFrom, nFrom);
+  if( rc!=SQLITE_OK ) goto fail;
+  rc = dsAppendTableNames(aFrom, nFrom, 0, &az, &n, &alloc);
+  if( rc==SQLITE_OK ){
+    rc = dsAppendTableNames(aTo, nTo, &fromIdx, &az, &n, &alloc);
+  }
   if( rc!=SQLITE_OK ) goto fail;
 
+  dsNameIndexClear(&fromIdx);
   doltliteFreeCatalog(aFrom, nFrom);
   doltliteFreeCatalog(aTo, nTo);
   *pazOut = az;
@@ -578,6 +647,7 @@ static int dsCollectTableNames(
 fail:
   for(j=0; j<n; j++) sqlite3_free(az[j]);
   sqlite3_free(az);
+  dsNameIndexClear(&fromIdx);
   doltliteFreeCatalog(aFrom, nFrom);
   doltliteFreeCatalog(aTo, nTo);
   return rc;
@@ -643,19 +713,36 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   DstVtab *v = (DstVtab*)cur->pVtab;
   sqlite3 *db = v->db;
   DsFilterCtx fctx;
+  struct TableEntry *aFromCat = 0, *aToCat = 0;
+  int nFromCat = 0, nToCat = 0;
+  DsNameIndex fromIdx, toIdx;
   int rc, i;
   (void)idxStr;
 
+  memset(&fromIdx, 0, sizeof(fromIdx));
+  memset(&toIdx, 0, sizeof(toIdx));
   dstFreeRows(c);
   c->iRow = 0;
 
   rc = dsFilterInit(db, &v->base, idxNum, argc, argv, "dolt_diff_stat", &fctx);
   if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, &fctx.fromCat, &aFromCat, &nFromCat, 0);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dsNameIndexInit(&fromIdx, aFromCat, nFromCat);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dsNameIndexInit(&toIdx, aToCat, nToCat);
+  if( rc!=SQLITE_OK ) goto done;
 
   for(i=0; i<fctx.nNames; i++){
     DsStatRow row;
+    struct TableEntry *pFromEntry, *pToEntry;
     if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
-    rc = dsComputeTableStats(db, fctx.azNames[i], &fctx.fromCat, &fctx.toCat, &row);
+    pFromEntry = dsNameIndexFind(&fromIdx, fctx.azNames[i]);
+    pToEntry = dsNameIndexFind(&toIdx, fctx.azNames[i]);
+    rc = dsComputeTableStats(db, fctx.azNames[i], &fctx.fromCat, &fctx.toCat,
+                             pFromEntry, pToEntry, &row);
     if( rc!=SQLITE_OK ){
       sqlite3_free(row.zTableName);
       goto done;
@@ -677,6 +764,10 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   }
 
 done:
+  dsNameIndexClear(&fromIdx);
+  dsNameIndexClear(&toIdx);
+  doltliteFreeCatalog(aFromCat, nFromCat);
+  doltliteFreeCatalog(aToCat, nToCat);
   dsFilterCtxClear(&fctx);
   return rc;
 }
@@ -737,6 +828,7 @@ struct DssCursor {
   sqlite3_vtab_cursor base;
   DsSummaryRow *aRows;
   int nRows;
+  int nRowsAlloc;
   int iRow;
 };
 
@@ -766,6 +858,7 @@ static void dssFreeRows(DssCursor *c){
   sqlite3_free(c->aRows);
   c->aRows = 0;
   c->nRows = 0;
+  c->nRowsAlloc = 0;
 }
 
 static int dssConnect(sqlite3 *db, void *pAux, int argc,
@@ -799,10 +892,14 @@ static int dssClose(sqlite3_vtab_cursor *cur){
 
 static int dssAppend(DssCursor *c, const char *zFrom, const char *zTo,
                      const char *zDiffType, int dataChange, int schemaChange){
-  DsSummaryRow *aNew = sqlite3_realloc(c->aRows,
-      (c->nRows+1)*(int)sizeof(DsSummaryRow));
-  if( !aNew ) return SQLITE_NOMEM;
-  c->aRows = aNew;
+  if( c->nRows>=c->nRowsAlloc ){
+    int nNew = c->nRowsAlloc ? c->nRowsAlloc*2 : 16;
+    DsSummaryRow *aNew = sqlite3_realloc(c->aRows,
+        nNew*(int)sizeof(DsSummaryRow));
+    if( !aNew ) return SQLITE_NOMEM;
+    c->aRows = aNew;
+    c->nRowsAlloc = nNew;
+  }
   c->aRows[c->nRows].zFromName  = sqlite3_mprintf("%s", zFrom ? zFrom : "");
   c->aRows[c->nRows].zToName    = sqlite3_mprintf("%s", zTo   ? zTo   : "");
   c->aRows[c->nRows].zDiffType  = sqlite3_mprintf("%s", zDiffType);
@@ -864,9 +961,12 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   DsFilterCtx fctx;
   struct TableEntry *aFromCat = 0, *aToCat = 0;
   int nFromCat = 0, nToCat = 0;
+  DsNameIndex fromIdx, toIdx;
   int rc, i;
   (void)idxStr;
 
+  memset(&fromIdx, 0, sizeof(fromIdx));
+  memset(&toIdx, 0, sizeof(toIdx));
   dssFreeRows(c);
   c->iRow = 0;
 
@@ -877,20 +977,26 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   if( rc!=SQLITE_OK ) goto done;
   rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
   if( rc!=SQLITE_OK ) goto done;
+  rc = dsNameIndexInit(&fromIdx, aFromCat, nFromCat);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dsNameIndexInit(&toIdx, aToCat, nToCat);
+  if( rc!=SQLITE_OK ) goto done;
 
   for(i=0; i<fctx.nNames; i++){
     struct TableEntry *pFromEntry, *pToEntry;
 
     if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
 
-    pFromEntry = doltliteFindTableByName(aFromCat, nFromCat, fctx.azNames[i]);
-    pToEntry   = doltliteFindTableByName(aToCat,   nToCat,   fctx.azNames[i]);
+    pFromEntry = dsNameIndexFind(&fromIdx, fctx.azNames[i]);
+    pToEntry = dsNameIndexFind(&toIdx, fctx.azNames[i]);
     rc = dssAppendTableChange(c, db, fctx.azNames[i], pFromEntry, pToEntry);
 
     if( rc!=SQLITE_OK ) goto done;
   }
 
 done:
+  dsNameIndexClear(&fromIdx);
+  dsNameIndexClear(&toIdx);
   doltliteFreeCatalog(aFromCat, nFromCat);
   doltliteFreeCatalog(aToCat, nToCat);
   dsFilterCtxClear(&fctx);
