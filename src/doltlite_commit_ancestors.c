@@ -10,6 +10,8 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
+#define CA_IDX_COMMIT_EQ 0x01
+
 typedef struct CommitAncestorsVtab CommitAncestorsVtab;
 struct CommitAncestorsVtab {
   sqlite3_vtab base;
@@ -29,6 +31,7 @@ struct CommitAncestorsCursor {
   int curParentIdx;
   int hasRow;
   i64 iRowid;
+  int singleCommit;
 };
 
 static const char *commitAncestorsSchema =
@@ -74,6 +77,7 @@ static void caCursorReset(CommitAncestorsCursor *pCur){
   pCur->curParents = 0;
   pCur->curParentIdx = 0;
   pCur->iRowid = 0;
+  pCur->singleCommit = 0;
 }
 
 static int caClose(sqlite3_vtab_cursor *pCursor){
@@ -102,7 +106,14 @@ static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
 
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      if( pCur->singleCommit ){
+        doltliteCommitClear(&pCur->curCommit);
+        memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
+        return SQLITE_OK;
+      }
+      return rc;
+    }
 
     doltliteHashToHex(&cur, pCur->zCurHex);
     pCur->hasRow = 1;
@@ -110,11 +121,14 @@ static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
     if( pCur->curParents == 0 ) pCur->curParents = 1;
     pCur->curParentIdx = 0;
 
-    for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
-      if( pParent ){
-        rc = caEnqueue(pCur, pParent);
-        if( rc!=SQLITE_OK ) return rc;
+    if( !pCur->singleCommit ){
+      for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
+        const ProllyHash *pParent;
+        pParent = doltliteCommitParentHash(&pCur->curCommit, i);
+        if( pParent ){
+          rc = caEnqueue(pCur, pParent);
+          if( rc!=SQLITE_OK ) return rc;
+        }
       }
     }
     return SQLITE_OK;
@@ -160,9 +174,20 @@ static int caFilter(
   ProllyHash head;
   int rc;
   int i;
-  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  (void)idxStr;
 
   caCursorReset(pCur);
+
+  if( idxNum & CA_IDX_COMMIT_EQ ){
+    const char *z;
+    if( argc<=0 ) return SQLITE_OK;
+    z = (const char*)sqlite3_value_text(argv[0]);
+    if( !z || doltliteHexToHash(z, &head)!=SQLITE_OK
+        || prollyHashIsEmpty(&head) ){
+      return SQLITE_OK;
+    }
+    pCur->singleCommit = 1;
+  }
 
   cs = doltliteGetChunkStore(pVtab->db);
   if( !cs ) return SQLITE_OK;
@@ -171,11 +196,14 @@ static int caFilter(
   if( rc!=SQLITE_OK ) return rc;
   pCur->visitedInit = 1;
 
-  doltliteGetSessionHead(pVtab->db, &head);
+  if( !pCur->singleCommit ){
+    doltliteGetSessionHead(pVtab->db, &head);
+  }
+
   rc = caEnqueue(pCur, &head);
   if( rc!=SQLITE_OK ) return rc;
 
-  {
+  if( !pCur->singleCommit ){
     int nBr; const BranchRef *aBr;
     refsTableGetBranches(&cs->refs, &nBr, &aBr);
     for( i = 0; i < nBr; i++ ){
@@ -183,7 +211,7 @@ static int caFilter(
       if( rc!=SQLITE_OK ) return rc;
     }
   }
-  {
+  if( !pCur->singleCommit ){
     int nTg; const TagRef *aTg;
     refsTableGetTags(&cs->refs, &nTg, &aTg);
     for( i = 0; i < nTg; i++ ){
@@ -248,9 +276,30 @@ static int caRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
 }
 
 static int caBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  int i;
+  int iCommitEq = -1;
   (void)pVtab;
-  pInfo->estimatedCost = 1000.0;
-  pInfo->estimatedRows = 100;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->iColumn==0 && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      iCommitEq = i;
+      break;
+    }
+  }
+
+  if( iCommitEq>=0 ){
+    pInfo->aConstraintUsage[iCommitEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iCommitEq].omit = 1;
+    pInfo->idxNum = CA_IDX_COMMIT_EQ;
+    pInfo->estimatedCost = 10.0;
+    pInfo->estimatedRows = 2;
+  }else{
+    pInfo->idxNum = 0;
+    pInfo->estimatedCost = 1000.0;
+    pInfo->estimatedRows = 100;
+  }
   return SQLITE_OK;
 }
 
