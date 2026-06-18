@@ -33,6 +33,8 @@ run_test_match "multi_has_added" "SELECT count(*) FROM dolt_diff_t WHERE diff_ty
 run_test_match "multi_has_modified" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" "^1$" "$DB"
 
 run_test "multi_commits" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" "3" "$DB"
+run_test "multi_to_commit_count" "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" "1" "$DB"
+run_test "multi_to_commit_row" "SELECT diff_type || ':' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" "added:2" "$DB"
 
 rm -f "$DB"
 
