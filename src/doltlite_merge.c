@@ -197,13 +197,7 @@ struct RowMergeCtx {
   int nIndexes;
   int nConflicts;
 
-  struct MergeConflictRow {
-    i64 intKey;
-    u8 *pKey; int nKey;
-    u8 *pBaseVal; int nBaseVal;
-    u8 *pOurVal; int nOurVal;
-    u8 *pTheirVal; int nTheirVal;
-  } *aConflicts;
+  DoltliteConflictRow *aConflicts;
   int nConflictsAlloc;
 };
 
@@ -590,7 +584,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
                                 ctx->nConflicts + 1, 16);
       if( rc!=SQLITE_OK ) return rc;
       {
-        struct MergeConflictRow *cr = &ctx->aConflicts[ctx->nConflicts];
+        DoltliteConflictRow *cr = &ctx->aConflicts[ctx->nConflicts];
         memset(cr, 0, sizeof(*cr));
         cr->intKey = pChange->intKey;
         if( pChange->pKey && pChange->nKey>0 ){
@@ -673,10 +667,7 @@ static int canFastMerge(
 static void freeRowMergeCtx(RowMergeCtx *ctx){
   int i;
   for(i=0; i<ctx->nConflicts; i++){
-    sqlite3_free(ctx->aConflicts[i].pKey);
-    sqlite3_free(ctx->aConflicts[i].pBaseVal);
-    sqlite3_free(ctx->aConflicts[i].pOurVal);
-    sqlite3_free(ctx->aConflicts[i].pTheirVal);
+    doltliteConflictRowFree(&ctx->aConflicts[i]);
   }
   sqlite3_free(ctx->aConflicts);
   if( ctx->pEdits ){
@@ -693,7 +684,7 @@ static int mergeTableRows(
   u8 flags,
   ProllyHash *pMergedRoot,
   int *pnConflicts,
-  struct MergeConflictRow **ppConflicts,
+  DoltliteConflictRow **ppConflicts,
   MergeIndexInfo *aIndexes,
   int nIndexes
 ){
@@ -1156,16 +1147,13 @@ typedef struct MergeConflictTable MergeConflictTable;
 struct MergeConflictTable {
   char *zName;
   int nConflicts;
-  struct MergeConflictRow *aRows;
+  DoltliteConflictRow *aRows;
 };
 
-static void freeConflictRows(struct MergeConflictRow *aRows, int nRows){
+static void freeConflictRows(DoltliteConflictRow *aRows, int nRows){
   int i;
   for(i=0; i<nRows; i++){
-    sqlite3_free(aRows[i].pKey);
-    sqlite3_free(aRows[i].pBaseVal);
-    sqlite3_free(aRows[i].pOurVal);
-    sqlite3_free(aRows[i].pTheirVal);
+    doltliteConflictRowFree(&aRows[i]);
   }
   sqlite3_free(aRows);
 }
@@ -1181,7 +1169,7 @@ static int appendConflictTable(
   int *pnConflictTables,
   const char *zName,
   int nConflicts,
-  struct MergeConflictRow *aConflictRows
+  DoltliteConflictRow *aConflictRows
 ){
   MergeConflictTable *aNew;
   aNew = sqlite3_realloc(*ppConflictTables,
@@ -1971,7 +1959,7 @@ do_merge_entry:
 
             ProllyHash mergedTableRoot;
             int nConflicts = 0;
-            struct MergeConflictRow *aConflictRows = 0;
+            DoltliteConflictRow *aConflictRows = 0;
 
             MergeIndexInfo *aIdxInfo = 0;
             int nIdxInfo = 0;
@@ -2132,7 +2120,7 @@ post_merge_table_rows:;
 
         ProllyHash mergedTableRoot;
         int nConflicts = 0;
-        struct MergeConflictRow *aConflictRows = 0;
+        DoltliteConflictRow *aConflictRows = 0;
         int theirSchemaChanged2 = prollyHashCompare(
             &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
 

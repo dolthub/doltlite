@@ -9,23 +9,22 @@ typedef struct ConflictTableInfo ConflictTableInfo;
 struct ConflictTableInfo {
   char *zName;
   int nConflicts;
-  struct ConflictRow {
-    i64 intKey;
-    u8 *pKey; int nKey;
-    u8 *pBaseVal; int nBaseVal;
-    u8 *pOurVal; int nOurVal;
-    u8 *pTheirVal; int nTheirVal;
-  } *aRows;
+  DoltliteConflictRow *aRows;
 };
 
 static void freeConflictTables(ConflictTableInfo *aTables, int nTables);
 
-static void freeConflictRow(struct ConflictRow *pRow){
+void doltliteConflictRowFree(DoltliteConflictRow *pRow){
   if( !pRow ) return;
   sqlite3_free(pRow->pKey);
   sqlite3_free(pRow->pBaseVal);
   sqlite3_free(pRow->pOurVal);
   sqlite3_free(pRow->pTheirVal);
+}
+
+static void freeConflictRow(DoltliteConflictRow *pRow){
+  if( !pRow ) return;
+  doltliteConflictRowFree(pRow);
   memset(pRow, 0, sizeof(*pRow));
 }
 
@@ -33,7 +32,7 @@ static void removeConflictRow(ConflictTableInfo *pTable, int iRow){
   if( !pTable || iRow<0 || iRow>=pTable->nConflicts ) return;
   freeConflictRow(&pTable->aRows[iRow]);
   doltliteArrayRemoveAt(pTable->aRows, &pTable->nConflicts, iRow,
-                        (int)sizeof(struct ConflictRow));
+                        (int)sizeof(DoltliteConflictRow));
 }
 
 static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int iTable){
@@ -88,7 +87,7 @@ int doltliteSerializeConflicts(
     dlWriteU16Name(&w, aTables[i].zName, nl);
     dlWriteU32(&w, aTables[i].nConflicts);
     for(j=0; j<aTables[i].nConflicts; j++){
-      struct ConflictRow *cr = &aTables[i].aRows[j];
+      DoltliteConflictRow *cr = &aTables[i].aRows[j];
       dlWriteU32Blob(&w, cr->pKey, cr->nKey);
       dlWriteI64(&w, cr->intKey);
       dlWriteU32Blob(&w, cr->pBaseVal, cr->nBaseVal);
@@ -147,12 +146,12 @@ static int loadAllConflicts(
       rc = SQLITE_CORRUPT; goto conflicts_cleanup;
     }
     aTables[i].nConflicts = nc;
-    aTables[i].aRows = sqlite3_malloc64((sqlite3_uint64)nc * sizeof(struct ConflictRow));
+    aTables[i].aRows = sqlite3_malloc64((sqlite3_uint64)nc * sizeof(DoltliteConflictRow));
     if( !aTables[i].aRows ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
-    memset(aTables[i].aRows, 0, (sqlite3_uint64)nc * sizeof(struct ConflictRow));
+    memset(aTables[i].aRows, 0, (sqlite3_uint64)nc * sizeof(DoltliteConflictRow));
 
     for(j=0; j<nc; j++){
-      struct ConflictRow *cr = &aTables[i].aRows[j];
+      DoltliteConflictRow *cr = &aTables[i].aRows[j];
       rc = dlReadU32Blob(&r, &cr->pKey, &cr->nKey);
       if( rc!=SQLITE_OK ) goto conflicts_cleanup;
       cr->intKey = dlReadI64(&r);
@@ -406,7 +405,7 @@ static const char *cfrDiffType(const u8 *pBase, int nBase,
   return doltliteDiffTypeNameFromPresence(baseHas, sideHas);
 }
 
-static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
+static sqlite3_int64 cfrConflictRowid(const DoltliteConflictRow *cr){
   u64 h = DOLTLITE_FNV1A_OFFSET;
   h = doltliteFnv1aBytes(h, cr->pKey, cr->nKey);
   h = doltliteFnv1aSep(h);
@@ -423,7 +422,7 @@ static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
 static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   CfRowCur *c = (CfRowCur*)cur;
   CfRowVtab *v = (CfRowVtab*)cur->pVtab;
-  struct ConflictRow *cr;
+  DoltliteConflictRow *cr;
   int nUserCols;
   int colBaseStart, colOurStart, colOurDiff;
   int colTheirStart, colTheirDiff, colConflictId;
@@ -672,7 +671,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
       found = 1;
 
       for(j=0; j<aTables[i].nConflicts; j++){
-        struct ConflictRow *cr = &aTables[i].aRows[j];
+        DoltliteConflictRow *cr = &aTables[i].aRows[j];
         rc = doltliteApplyRawRowMutation(db, zTable,
                                          cr->pKey, cr->nKey, cr->intKey,
                                          cr->pTheirVal, cr->nTheirVal);
