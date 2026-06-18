@@ -61,25 +61,24 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   char *zParsedEmail = 0;
   int rc, i;
 
-  if( !cs ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "no database", -1); return; }
-  if( argc<1 ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required", -1); return; }
+  if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
+  if( argc<1 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
 
   memset(&m, 0, sizeof(m));
 
   arg0 = (const char*)sqlite3_value_text(argv[0]);
-  if( !arg0 ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required", -1); return; }
+  if( !arg0 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
 
 
   if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
     const char *zName;
-    if( argc<2 ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required for delete", -1); return; }
+    if( argc<2 ){ doltliteVcResultError(ctx, db, "tag name required for delete"); return; }
     if( argc!=2 ){
-      tagSealSavepointError(ctx);
-      sqlite3_result_error(ctx, "too many positional arguments to dolt_tag", -1);
+      doltliteVcResultError(ctx, db, "too many positional arguments to dolt_tag");
       return;
     }
     zName = (const char*)sqlite3_value_text(argv[1]);
-    if( !zName ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required", -1); return; }
+    if( !zName ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
     m.zName = zName;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
@@ -103,10 +102,10 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     if( !arg ) continue;
     if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
       if( i+1<argc ) zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      else{ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "-m requires a message", -1); return; }
+      else{ doltliteVcResultError(ctx, db, "-m requires a message"); return; }
     }else if( strcmp(arg, "--author")==0 ){
       if( i+1<argc ) zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-      else{ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "--author requires 'name <email>'", -1); return; }
+      else{ doltliteVcResultError(ctx, db, "--author requires 'name <email>'"); return; }
     }else if( arg[0]=='-' ){
       char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
       if( zErr ){
@@ -120,8 +119,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }else if( !zCommitRef ){
       zCommitRef = arg;
     }else{
-      tagSealSavepointError(ctx);
-      sqlite3_result_error(ctx, "too many positional arguments to dolt_tag", -1);
+      doltliteVcResultError(ctx, db, "too many positional arguments to dolt_tag");
       return;
     }
   }
@@ -129,15 +127,13 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( zCommitRef ){
     rc = doltliteResolveRef(db, zCommitRef, &m.commitHash);
     if( rc!=SQLITE_OK ){
-      tagSealSavepointError(ctx);
-      sqlite3_result_error(ctx, "commit not found", -1);
+      doltliteVcResultError(ctx, db, "commit not found");
       return;
     }
   }else{
     doltliteGetSessionHead(db, &m.commitHash);
     if( prollyHashIsEmpty(&m.commitHash) ){
-      tagSealSavepointError(ctx);
-      sqlite3_result_error(ctx, "no commits to tag", -1);
+      doltliteVcResultError(ctx, db, "no commits to tag");
       return;
     }
   }
