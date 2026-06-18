@@ -33,15 +33,12 @@ static int fmEmitSubtreeRows(
   const ProllyHash *pSubtreeRoot
 ){
   u8 *pData = 0;
-  int nData = 0;
   ProllyNode node;
   int rc;
   int i;
 
-  rc = chunkStoreGet(fm->pStore, pSubtreeRoot, &pData, &nData);
+  rc = prollyFetchNode(fm->pStore, pSubtreeRoot, &node, &pData);
   if( rc != SQLITE_OK ) return rc;
-  rc = prollyNodeParse(&node, pData, nData);
-  if( rc != SQLITE_OK ){ sqlite3_free(pData); return rc; }
 
   if( node.level == 0 ){
     for( i = 0; i < (int)node.nItems; i++ ){
@@ -354,7 +351,6 @@ static int fmEmitChild(
 ){
   const ProllyHash *pSplice = 0;
   u8 *pAncData = 0, *pOursData = 0, *pTheirsData = 0;
-  int nAncData = 0, nOursData = 0, nTheirsData = 0;
   ProllyNode ancNode, oursNode, theirsNode;
   int rc;
 
@@ -377,19 +373,11 @@ static int fmEmitChild(
     return fmEmitSubtreeRows(fm, pCh, pSplice);
   }
 
-  rc = chunkStoreGet(fm->pStore, pAnc, &pAncData, &nAncData);
-  if( rc != SQLITE_OK ) return rc;
-  rc = prollyNodeParse(&ancNode, pAncData, nAncData);
+  rc = prollyFetchNode(fm->pStore, pAnc, &ancNode, &pAncData);
   if( rc != SQLITE_OK ) goto done;
-
-  rc = chunkStoreGet(fm->pStore, pOurs, &pOursData, &nOursData);
+  rc = prollyFetchNode(fm->pStore, pOurs, &oursNode, &pOursData);
   if( rc != SQLITE_OK ) goto done;
-  rc = prollyNodeParse(&oursNode, pOursData, nOursData);
-  if( rc != SQLITE_OK ) goto done;
-
-  rc = chunkStoreGet(fm->pStore, pTheirs, &pTheirsData, &nTheirsData);
-  if( rc != SQLITE_OK ) goto done;
-  rc = prollyNodeParse(&theirsNode, pTheirsData, nTheirsData);
+  rc = prollyFetchNode(fm->pStore, pTheirs, &theirsNode, &pTheirsData);
   if( rc != SQLITE_OK ) goto done;
 
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
@@ -424,7 +412,6 @@ int prollyThreeWayMergeFast(
   FmCtx fm;
   ProllyChunker chunker;
   u8 *pAncData = 0, *pOursData = 0, *pTheirsData = 0;
-  int nAncData = 0, nOursData = 0, nTheirsData = 0;
   ProllyNode ancNode, oursNode, theirsNode;
   int rc = SQLITE_OK;
 
@@ -452,26 +439,12 @@ int prollyThreeWayMergeFast(
     return SQLITE_OK;
   }
 
-  rc = chunkStoreGet(pStore, pAncRoot, &pAncData, &nAncData);
+  rc = prollyFetchNode(pStore, pAncRoot, &ancNode, &pAncData);
   if( rc != SQLITE_OK ) return rc;
-  rc = prollyNodeParse(&ancNode, pAncData, nAncData);
+  rc = prollyFetchNode(pStore, pOursRoot, &oursNode, &pOursData);
   if( rc != SQLITE_OK ){ sqlite3_free(pAncData); return rc; }
-
-  rc = chunkStoreGet(pStore, pOursRoot, &pOursData, &nOursData);
-  if( rc != SQLITE_OK ){ sqlite3_free(pAncData); return rc; }
-  rc = prollyNodeParse(&oursNode, pOursData, nOursData);
+  rc = prollyFetchNode(pStore, pTheirsRoot, &theirsNode, &pTheirsData);
   if( rc != SQLITE_OK ){ sqlite3_free(pAncData); sqlite3_free(pOursData); return rc; }
-
-  rc = chunkStoreGet(pStore, pTheirsRoot, &pTheirsData, &nTheirsData);
-  if( rc != SQLITE_OK ){
-    sqlite3_free(pAncData); sqlite3_free(pOursData);
-    return rc;
-  }
-  rc = prollyNodeParse(&theirsNode, pTheirsData, nTheirsData);
-  if( rc != SQLITE_OK ){
-    sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
-    return rc;
-  }
 
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);

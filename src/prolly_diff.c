@@ -6,6 +6,23 @@
 
 #include <string.h>
 
+int prollyFetchNode(ChunkStore *pStore, const ProllyHash *pHash,
+                    ProllyNode *pNode, u8 **ppData){
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  rc = chunkStoreGet(pStore, pHash, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyNodeParse(pNode, pData, nData);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pData);
+    return rc;
+  }
+  *ppData = pData;
+  return SQLITE_OK;
+}
+
 static void diffCompareKeys(
   ProllyCursor *pOld,
   ProllyCursor *pNew,
@@ -395,7 +412,6 @@ static int diffNodesOneLevel(
   ProllyHash **ppStack, int *pnStack, int *pnStackAlloc
 ){
   u8 *oldData = 0, *newData = 0;
-  int nOld = 0, nNew = 0;
   ProllyNode oldNode, newNode;
   int rc = SQLITE_OK;
 
@@ -409,15 +425,11 @@ static int diffNodesOneLevel(
     return diffEmitSubtree(pStore, pCache, pOldHash, flags, PROLLY_DIFF_DELETE, xCb, pCtx);
   }
 
-  rc = chunkStoreGet(pStore, pOldHash, &oldData, &nOld);
+  rc = prollyFetchNode(pStore, pOldHash, &oldNode, &oldData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = prollyNodeParse(&oldNode, oldData, nOld);
-  if( rc!=SQLITE_OK ){ sqlite3_free(oldData); return rc; }
 
-  rc = chunkStoreGet(pStore, pNewHash, &newData, &nNew);
+  rc = prollyFetchNode(pStore, pNewHash, &newNode, &newData);
   if( rc!=SQLITE_OK ){ sqlite3_free(oldData); return rc; }
-  rc = prollyNodeParse(&newNode, newData, nNew);
-  if( rc!=SQLITE_OK ){ sqlite3_free(oldData); sqlite3_free(newData); return rc; }
 
   if( oldNode.level==0 && newNode.level==0 ){
     rc = diffLeaves(&oldNode, &newNode, flags, xCb, pCtx);
