@@ -47,31 +47,17 @@ static int caConnect(
   int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
 
-  rc = sqlite3_declare_vtab(db, commitAncestorsSchema);
+  rc = doltliteVtabConnectSimple(db, commitAncestorsSchema,
+                                 sizeof(*pVtab), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (CommitAncestorsVtab*)*ppVtab;
   pVtab->db = db;
-
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-
-static int caDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 
 static int caOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  CommitAncestorsCursor *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(CommitAncestorsCursor));
 }
 
 static void caCursorReset(CommitAncestorsCursor *pCur){
@@ -270,7 +256,7 @@ static int caBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
 static sqlite3_module commitAncestorsModule = {
   0, 0,
-  caConnect, caBestIndex, caDisconnect, 0,
+  caConnect, caBestIndex, doltliteVtabDisconnect, 0,
   caOpen, caClose, caFilter, caNext,
   caEof, caColumn, caRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0

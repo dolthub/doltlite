@@ -108,18 +108,10 @@ static int dlDbpageConnect(sqlite3 *db, void *pAux, int argc,
   DbpageVtab *pVtab;
   int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, zDbpageSchema);
+  rc = doltliteVtabConnectSimple(db, zDbpageSchema, sizeof(*pVtab), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (DbpageVtab*)*ppVtab;
   pVtab->db = db;
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-
-static int dlDbpageDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 
@@ -156,18 +148,8 @@ static int dlDbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int dlDbpageOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  DlDbpageCursor *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
-}
-
-static int dlDbpageClose(sqlite3_vtab_cursor *pCursor){
-  sqlite3_free(pCursor);
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(DlDbpageCursor));
 }
 
 static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
@@ -237,8 +219,8 @@ static int dlDbpageRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
 }
 
 static sqlite3_module doltliteDbpageModule = {
-  0, 0, dlDbpageConnect, dlDbpageBestIndex, dlDbpageDisconnect, 0,
-  dlDbpageOpen, dlDbpageClose, dlDbpageFilter, dlDbpageNext, dlDbpageEof,
+  0, 0, dlDbpageConnect, dlDbpageBestIndex, doltliteVtabDisconnect, 0,
+  dlDbpageOpen, doltliteVtabClose, dlDbpageFilter, dlDbpageNext, dlDbpageEof,
   dlDbpageColumn, dlDbpageRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };

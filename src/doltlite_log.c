@@ -51,31 +51,17 @@ static int doltliteLogConnect(
   int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
 
-  rc = sqlite3_declare_vtab(db, doltliteLogSchema);
+  rc = doltliteVtabConnectSimple(db, doltliteLogSchema,
+                                 sizeof(*pVtab), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (DoltliteLogVtab*)*ppVtab;
   pVtab->db = db;
-
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-
-static int doltliteLogDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 
 static int doltliteLogOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  DoltliteLogCursor *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(DoltliteLogCursor));
 }
 
 static void logCursorReset(DoltliteLogCursor *pCur){
@@ -290,7 +276,7 @@ static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
 static sqlite3_module doltliteLogModule = {
   0, 0,
-  doltliteLogConnect, doltliteLogBestIndex, doltliteLogDisconnect, 0,
+  doltliteLogConnect, doltliteLogBestIndex, doltliteVtabDisconnect, 0,
   doltliteLogOpen, doltliteLogClose, doltliteLogFilter, doltliteLogNext,
   doltliteLogEof, doltliteLogColumn, doltliteLogRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0

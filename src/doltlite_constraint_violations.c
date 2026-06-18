@@ -382,14 +382,12 @@ static int cvsConnect(sqlite3 *db, void *pAux, int argc,
   CvSumVtab *v;
   int rc;
   (void)pAux;(void)argc;(void)argv;(void)pzErr;
-  rc = sqlite3_declare_vtab(db,
-      "CREATE TABLE x(\"table\" TEXT, num_violations INTEGER)");
+  rc = doltliteVtabConnectSimple(db,
+      "CREATE TABLE x(\"table\" TEXT, num_violations INTEGER)",
+      sizeof(*v), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  v = sqlite3_malloc(sizeof(*v));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(*v));
+  v = (CvSumVtab*)*ppVtab;
   v->db = db;
-  *ppVtab = &v->base;
   return SQLITE_OK;
 }
 static int cvsOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
