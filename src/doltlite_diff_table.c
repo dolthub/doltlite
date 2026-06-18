@@ -519,6 +519,89 @@ static int buildWorkingDiffPair(
   return rc;
 }
 
+static int buildCommitDiffPair(
+  DiffTblCursor *pCur,
+  sqlite3 *db,
+  const char *zTableName,
+  const char *zToCommit
+){
+  ProllyHash toHash;
+  ProllyHash fromHash;
+  ProllyHash fromTblRoot, toTblRoot;
+  ProllyHash fromCatHash, toCatHash;
+  ProllyHash fromSchemaHash, toSchemaHash;
+  DoltliteCommit toCommit;
+  u8 fromFlags = 0;
+  u8 toFlags = 0;
+  i64 fromDate = 0;
+  char zToLabel[PROLLY_HASH_SIZE*2+1];
+  const ProllyHash *pParent;
+  int rc;
+
+  if( !zToCommit ) return SQLITE_OK;
+
+  memset(&toHash, 0, sizeof(toHash));
+  memset(&fromHash, 0, sizeof(fromHash));
+  memset(&fromTblRoot, 0, sizeof(fromTblRoot));
+  memset(&toTblRoot, 0, sizeof(toTblRoot));
+  memset(&fromCatHash, 0, sizeof(fromCatHash));
+  memset(&toCatHash, 0, sizeof(toCatHash));
+  memset(&fromSchemaHash, 0, sizeof(fromSchemaHash));
+  memset(&toSchemaHash, 0, sizeof(toSchemaHash));
+  memset(&toCommit, 0, sizeof(toCommit));
+  memset(zToLabel, 0, sizeof(zToLabel));
+
+  rc = doltliteResolveRef(db, zToCommit, &toHash);
+  if( rc!=SQLITE_OK ) return SQLITE_OK;
+
+  rc = doltliteLoadCommit(db, &toHash, &toCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));
+  rc = doltliteLoadTableRootByNameOrEmpty(db, &toCatHash, zTableName,
+                                          &toTblRoot, &toFlags,
+                                          &toSchemaHash);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&toCommit);
+    return rc;
+  }
+
+  pParent = doltliteCommitParentHash(&toCommit, 0);
+  if( pParent && !prollyHashIsEmpty(pParent) ){
+    DoltliteCommit fromCommit;
+    memset(&fromCommit, 0, sizeof(fromCommit));
+    fromHash = *pParent;
+    rc = doltliteLoadCommit(db, &fromHash, &fromCommit);
+    if( rc==SQLITE_OK ){
+      memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
+      fromDate = fromCommit.timestamp;
+      rc = doltliteLoadTableRootByNameOrEmpty(db, &fromCatHash, zTableName,
+                                              &fromTblRoot, &fromFlags,
+                                              &fromSchemaHash);
+    }
+    doltliteCommitClear(&fromCommit);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&toCommit);
+      return rc;
+    }
+  }
+
+  if( prollyHashCompare(&fromTblRoot, &toTblRoot)==0
+   && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
+    doltliteCommitClear(&toCommit);
+    return SQLITE_OK;
+  }
+
+  if( !fromFlags ) fromFlags = toFlags;
+  if( !toFlags ) toFlags = fromFlags;
+  doltliteHashToHex(&toHash, zToLabel);
+  rc = pairsAppend(pCur, &fromHash, &fromTblRoot, &fromCatHash,
+                   &fromSchemaHash, fromFlags, fromDate,
+                   zToLabel, &toTblRoot, &toCatHash, &toSchemaHash,
+                   toFlags, toCommit.timestamp);
+  doltliteCommitClear(&toCommit);
+  return rc;
+}
+
 static int buildSliceDiffPair(
   DiffTblCursor *pCur,
   sqlite3 *db,
@@ -914,7 +997,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
     if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){
       rc = buildWorkingDiffPair(c, db, pVtab->zTableName);
     }else{
-      rc = buildDiffPairs(c, db, pVtab->zTableName);
+      rc = buildCommitDiffPair(c, db, pVtab->zTableName, zToCommit);
     }
   }else{
 
