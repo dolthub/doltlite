@@ -1272,7 +1272,7 @@ static int brConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   BrVtab *p; int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db,
+  rc = doltliteVtabConnectSimple(db,
     "CREATE TABLE x("
       "name TEXT, "
       "hash TEXT, "
@@ -1283,12 +1283,11 @@ static int brConnect(sqlite3 *db, void *pAux, int argc,
       "remote TEXT, "
       "branch TEXT, "
       "dirty INTEGER"
-    ")");
+    ")",
+    sizeof(*p), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  p = sqlite3_malloc(sizeof(*p));
-  if( !p ) return SQLITE_NOMEM;
-  memset(p, 0, sizeof(*p)); p->db = db;
-  *ppVtab = &p->base;
+  p = (BrVtab*)*ppVtab;
+  p->db = db;
   return SQLITE_OK;
 }
 static int brOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){

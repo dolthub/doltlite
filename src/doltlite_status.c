@@ -483,27 +483,15 @@ static int statusConnect(sqlite3 *db, void *pAux, int argc,
   (void)argc;
   (void)argv;
   (void)pzErr;
-  rc = sqlite3_declare_vtab(db, statusSchema);
+  rc = doltliteVtabConnectSimple(db, statusSchema, sizeof(*pVtab), ppVtab);
   if( rc != SQLITE_OK ) return rc;
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (DoltliteStatusVtab*)*ppVtab;
   pVtab->db = db;
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-static int statusDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 static int statusOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  DoltliteStatusCursor *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(DoltliteStatusCursor));
 }
 static int statusClose(sqlite3_vtab_cursor *pCursor){
   DoltliteStatusCursor *pCur = (DoltliteStatusCursor*)pCursor;
@@ -613,7 +601,7 @@ static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static sqlite3_module doltliteStatusModule = {
-  0,0,statusConnect,statusBestIndex,statusDisconnect,0,
+  0,0,statusConnect,statusBestIndex,doltliteVtabDisconnect,0,
   statusOpen,statusClose,statusFilter,statusNext,statusEof,
   statusColumn,statusRowid,
   0,0,0,0,0,0,0,0,0,0,0,0

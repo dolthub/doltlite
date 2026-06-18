@@ -449,13 +449,8 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int diffOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  DoltliteDiffCursor *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(DoltliteDiffCursor));
 }
 
 static int diffClose(sqlite3_vtab_cursor *pCursor){

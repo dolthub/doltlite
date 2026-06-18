@@ -200,7 +200,7 @@ static int tagConnect(sqlite3 *db, void *pAux, int argc,
   (void)argc;
   (void)argv;
   (void)pzErr;
-  rc = sqlite3_declare_vtab(db,
+  rc = doltliteVtabConnectSimple(db,
     "CREATE TABLE x("
       "tag_name TEXT, "
       "tag_hash TEXT, "
@@ -208,31 +208,16 @@ static int tagConnect(sqlite3 *db, void *pAux, int argc,
       "email TEXT, "
       "date TEXT, "
       "message TEXT"
-    ")");
+    ")",
+    sizeof(*pVtab), ppVtab);
   if( rc != SQLITE_OK ) return rc;
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (TagVtab*)*ppVtab;
   pVtab->db = db;
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-static int tagDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 static int tagOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  TagCur *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
-}
-static int tagClose(sqlite3_vtab_cursor *pCursor){
-  sqlite3_free(pCursor);
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(TagCur));
 }
 static int tagFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     const char *idxStr, int argc, sqlite3_value **argv){
@@ -302,8 +287,8 @@ static int tagBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static sqlite3_module tagModule = {
-  0,0,tagConnect,tagBestIndex,tagDisconnect,0,
-  tagOpen,tagClose,tagFilter,tagNext,tagEof,tagColumn,tagRowid,
+  0,0,tagConnect,tagBestIndex,doltliteVtabDisconnect,0,
+  tagOpen,doltliteVtabClose,tagFilter,tagNext,tagEof,tagColumn,tagRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 

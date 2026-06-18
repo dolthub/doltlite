@@ -43,18 +43,10 @@ static int schemasConnect(sqlite3 *db, void *pAux, int argc,
   SchemasVtab *pVtab;
   int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, zSchemasSchema);
+  rc = doltliteVtabConnectSimple(db, zSchemasSchema, sizeof(*pVtab), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (SchemasVtab*)*ppVtab;
   pVtab->db = db;
-  *ppVtab = &pVtab->base;
-  return SQLITE_OK;
-}
-
-static int schemasDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 
@@ -66,13 +58,8 @@ static int schemasBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int schemasOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  SchemasCursor *pCur;
   (void)pVtab;
-  pCur = sqlite3_malloc(sizeof(*pCur));
-  if( !pCur ) return SQLITE_NOMEM;
-  memset(pCur, 0, sizeof(*pCur));
-  *ppCursor = &pCur->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(SchemasCursor));
 }
 
 static void freeRows(SchemasCursor *pCur){
@@ -174,7 +161,7 @@ static int schemasRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
 }
 
 static sqlite3_module doltliteSchemasModule = {
-  0, 0, schemasConnect, schemasBestIndex, schemasDisconnect, 0,
+  0, 0, schemasConnect, schemasBestIndex, doltliteVtabDisconnect, 0,
   schemasOpen, schemasClose, schemasFilter, schemasNext, schemasEof,
   schemasColumn, schemasRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
