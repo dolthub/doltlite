@@ -167,3 +167,37 @@ jobs:
         cd build
         rm -f tt4-test1.db tt4-test2.db tt4-test3.db
         ./threadtest4 --multithread 6
+
+  no-dead-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # Fast structural check (no build): every test suite must actually run.
+    - name: No orphaned test suites
+      run: bash test/lint_orphaned_suites.sh
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    # The gate compiles the doltlite sources with -fsyntax-only, so it only
+    # needs the generated headers, not a full build.
+    - name: Generate headers
+      run: cd build && make doltlite.h sqlite3.h parse.h opcodes.h keywordhash.h
+
+    - name: Dead-code gate
+      run: bash test/dead_code_check.sh

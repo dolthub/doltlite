@@ -120,31 +120,6 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   return 0;
 }
 
-ProllyCacheEntry *prollyCachePut(
-  ProllyCache *cache,
-  const ProllyHash *hash,
-  const u8 *pData,
-  int nData,
-  int *pRc
-){
-  ProllyCacheEntry *pEntry;
-  u8 *pCopy;
-
-  pEntry = prollyCacheGet(cache, hash);
-  if( pEntry ){
-    if( pRc ) *pRc = SQLITE_OK;
-    return pEntry;
-  }
-
-  pCopy = (u8 *)sqlite3_malloc(nData);
-  if( pCopy==0 ){
-    if( pRc ) *pRc = SQLITE_NOMEM;
-    return 0;
-  }
-  memcpy(pCopy, pData, nData);
-  return prollyCachePutOwned(cache, hash, pCopy, nData, pRc);
-}
-
 ProllyCacheEntry *prollyCachePutOwned(
   ProllyCache *cache,
   const ProllyHash *hash,

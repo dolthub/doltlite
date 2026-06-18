@@ -82,7 +82,6 @@ extern int doltliteRemoteSqlRegister(sqlite3 *db);
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
                                  const ProllyHash *h2, ProllyHash *pAnc);
 
-extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 
 void doltliteTxnStateClear(DoltliteTxnState *p){

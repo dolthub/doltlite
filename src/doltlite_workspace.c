@@ -366,38 +366,6 @@ static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
   return 0;
 }
 
-static int wsPatchCatalogRoot(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  const char *zTableName,
-  const ProllyHash *pNewRoot,
-  ProllyHash *pNewCatHash
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
-  struct TableEntry *pEntry;
-  u8 *pData = 0;
-  int nData = 0;
-  int rc;
-  if( !cs ) return SQLITE_ERROR;
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  pEntry = doltliteFindTableByName(aTables, nTables, zTableName);
-  if( !pEntry ){
-    doltliteFreeCatalog(aTables, nTables);
-    return SQLITE_NOTFOUND;
-  }
-  pEntry->root = *pNewRoot;
-  rc = doltliteSerializeCatalogEntries(db, aTables, nTables, &pData, &nData);
-  if( rc==SQLITE_OK ){
-    rc = chunkStorePut(cs, pData, nData, pNewCatHash);
-  }
-  sqlite3_free(pData);
-  doltliteFreeCatalog(aTables, nTables);
-  return rc;
-}
-
 /* Apply one row's old/new records to one secondary-index root. */
 static int wsApplyRowToIndex(
   ChunkStore *cs, ProllyCache *pCache,

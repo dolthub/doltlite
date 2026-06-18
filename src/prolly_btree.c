@@ -9059,75 +9059,6 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   return pCur->pCurOps->xDelete(pCur, flags);
 }
 
-int sqlite3BtreeDeleteSchemaEntryByName(Btree *p, const char *zName){
-  BtCursor cur;
-  int rc;
-  int res = 0;
-
-  if( !p || !zName || !zName[0] ) return SQLITE_OK;
-  if( p->pOps!=&prollyBtreeOps ) return SQLITE_OK;
-  if( p->inTrans!=TRANS_WRITE ) return SQLITE_OK;
-
-  memset(&cur, 0, sizeof(cur));
-  rc = sqlite3BtreeCursor(p, 1, BTREE_WRCSR, 0, &cur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = sqlite3BtreeFirst(&cur, &res);
-  while( rc==SQLITE_OK && res==0 ){
-    u32 nPayload = sqlite3BtreePayloadSize(&cur);
-    u8 *pPayload = 0;
-    if( nPayload>0 ){
-      pPayload = sqlite3_malloc(nPayload);
-      if( !pPayload ){
-        rc = SQLITE_NOMEM;
-        break;
-      }
-      rc = sqlite3BtreePayload(&cur, 0, nPayload, pPayload);
-      if( rc==SQLITE_OK ){
-        DoltliteRecordInfo ri;
-        char *zType = 0;
-        char *zRowName = 0;
-        int shouldDelete = 0;
-        if( doltliteParseRecordStrict(pPayload, (int)nPayload, &ri)==SQLITE_OK
-         && ri.nField>=5
-        ){
-          rc = schemaCatalogTextField(pPayload, (int)nPayload, &ri, 0, &zType);
-          if( rc==SQLITE_OK ){
-            rc = schemaCatalogTextField(
-                pPayload, (int)nPayload, &ri, 1, &zRowName);
-          }
-          shouldDelete = rc==SQLITE_OK
-              && zType && strcmp(zType, "table")==0
-              && zRowName && strcmp(zRowName, zName)==0;
-          sqlite3_free(zType);
-          sqlite3_free(zRowName);
-          if( shouldDelete ){
-            rc = sqlite3BtreeDelete(&cur, 0);
-            sqlite3_free(pPayload);
-            if( rc!=SQLITE_OK ) break;
-            rc = sqlite3BtreeFirst(&cur, &res);
-            continue;
-          }
-        }
-      }
-      sqlite3_free(pPayload);
-    }
-    if( rc!=SQLITE_OK ) break;
-    rc = sqlite3BtreeNext(&cur, 0);
-    if( rc==SQLITE_DONE ){
-      rc = SQLITE_OK;
-      break;
-    }
-    res = sqlite3BtreeEof(&cur);
-  }
-
-  {
-    int rcClose = sqlite3BtreeCloseCursor(&cur);
-    if( rc==SQLITE_OK ) rc = rcClose;
-  }
-  return rc;
-}
-
 static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   int rc;
   BtreePayload payload;
@@ -10252,20 +10183,6 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
-}
-
-const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
-  Btree *pBtree;
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
-  pBtree = db->aDb[0].pBt;
-  while( *pIdx < pBtree->cat.n ){
-    int i = (*pIdx)++;
-    if( pBtree->cat.a[i].iTable>1 && pBtree->cat.a[i].zName ){
-      *piTable = pBtree->cat.a[i].iTable;
-      return pBtree->cat.a[i].zName;
-    }
-  }
-  return 0;
 }
 
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
