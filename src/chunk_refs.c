@@ -5,6 +5,25 @@
 #include "chunk_store.h"
 #include <string.h>
 
+int csFindNamedRef(const void *aBase, int n, int stride, const char *zName){
+  const char *p = (const char*)aBase;
+  int i;
+  if( !zName ) return -1;
+  for(i=0; i<n; i++){
+    const char *zHave = *(const char *const*)(p + (size_t)i*stride);
+    if( zHave && strcmp(zHave, zName)==0 ) return i;
+  }
+  return -1;
+}
+
+int csRefArrayGrow(void **paBase, int n, int stride){
+  void *aNew = sqlite3_realloc(*paBase, (n+1)*stride);
+  if( !aNew ) return SQLITE_NOMEM;
+  *paBase = aNew;
+  memset((char*)aNew + (size_t)n*stride, 0, stride);
+  return SQLITE_OK;
+}
+
 void refsTableGetBranches(const RefsTable *rt, int *pn, const BranchRef **par){
   *pn = rt->nBranches;
   *par = rt->aBranches;
@@ -31,15 +50,9 @@ void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par
 }
 
 i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName){
-  int i;
-  if( !zTableName ) return 0;
-  for(i=0; i<rt->nSequences; i++){
-    if( rt->aSequences[i].zTableName
-     && strcmp(rt->aSequences[i].zTableName, zTableName)==0 ){
-      return rt->aSequences[i].iSeq;
-    }
-  }
-  return 0;
+  int i = csFindNamedRef(rt->aSequences, rt->nSequences,
+                         (int)sizeof(SequenceRef), zTableName);
+  return i<0 ? 0 : rt->aSequences[i].iSeq;
 }
 
 const ProllyHash *refsTableGetHash(const RefsTable *rt){
@@ -122,28 +135,23 @@ i64 chunkStoreGetSequenceValue(ChunkStore *cs, const char *zTableName){
 
 int chunkStoreBumpSequence(ChunkStore *cs, const char *zTableName,
                            i64 newSeq){
-  int i;
-  SequenceRef *aNew;
+  int i, n;
   char *zCopy;
   if( !cs || !zTableName ) return SQLITE_MISUSE;
-  for(i=0; i<cs->refs.nSequences; i++){
-    if( cs->refs.aSequences[i].zTableName
-     && strcmp(cs->refs.aSequences[i].zTableName, zTableName)==0 ){
-      if( newSeq > cs->refs.aSequences[i].iSeq ){
-        cs->refs.aSequences[i].iSeq = newSeq;
-      }
-      return SQLITE_OK;
+  i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
+                     (int)sizeof(SequenceRef), zTableName);
+  if( i>=0 ){
+    if( newSeq > cs->refs.aSequences[i].iSeq ){
+      cs->refs.aSequences[i].iSeq = newSeq;
     }
+    return SQLITE_OK;
   }
-  aNew = sqlite3_realloc(cs->refs.aSequences,
-                         (cs->refs.nSequences+1)*(int)sizeof(SequenceRef));
-  if( !aNew ) return SQLITE_NOMEM;
-  cs->refs.aSequences = aNew;
-  memset(&aNew[cs->refs.nSequences], 0, sizeof(SequenceRef));
+  n = cs->refs.nSequences;
+  if( csRefArrayGrow((void**)&cs->refs.aSequences, n, (int)sizeof(SequenceRef)) ) return SQLITE_NOMEM;
   zCopy = sqlite3_mprintf("%s", zTableName);
   if( !zCopy ) return SQLITE_NOMEM;
-  aNew[cs->refs.nSequences].zTableName = zCopy;
-  aNew[cs->refs.nSequences].iSeq = newSeq;
+  cs->refs.aSequences[n].zTableName = zCopy;
+  cs->refs.aSequences[n].iSeq = newSeq;
   cs->refs.nSequences++;
   return SQLITE_OK;
 }
@@ -151,34 +159,29 @@ int chunkStoreBumpSequence(ChunkStore *cs, const char *zTableName,
 void chunkStoreDropSequence(ChunkStore *cs, const char *zTableName){
   int i;
   if( !cs || !zTableName ) return;
-  for(i=0; i<cs->refs.nSequences; i++){
-    if( cs->refs.aSequences[i].zTableName
-     && strcmp(cs->refs.aSequences[i].zTableName, zTableName)==0 ){
-      sqlite3_free(cs->refs.aSequences[i].zTableName);
-      if( i < cs->refs.nSequences-1 ){
-        memmove(&cs->refs.aSequences[i], &cs->refs.aSequences[i+1],
-                (cs->refs.nSequences-i-1)*sizeof(SequenceRef));
-      }
-      cs->refs.nSequences--;
-      return;
-    }
+  i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
+                     (int)sizeof(SequenceRef), zTableName);
+  if( i<0 ) return;
+  sqlite3_free(cs->refs.aSequences[i].zTableName);
+  if( i < cs->refs.nSequences-1 ){
+    memmove(&cs->refs.aSequences[i], &cs->refs.aSequences[i+1],
+            (cs->refs.nSequences-i-1)*sizeof(SequenceRef));
   }
+  cs->refs.nSequences--;
 }
 
 int chunkStoreRenameSequence(ChunkStore *cs, const char *zOld,
                              const char *zNew){
   int i;
+  char *zCopy;
   if( !cs || !zOld || !zNew ) return SQLITE_MISUSE;
-  for(i=0; i<cs->refs.nSequences; i++){
-    if( cs->refs.aSequences[i].zTableName
-     && strcmp(cs->refs.aSequences[i].zTableName, zOld)==0 ){
-      char *zCopy = sqlite3_mprintf("%s", zNew);
-      if( !zCopy ) return SQLITE_NOMEM;
-      sqlite3_free(cs->refs.aSequences[i].zTableName);
-      cs->refs.aSequences[i].zTableName = zCopy;
-      return SQLITE_OK;
-    }
-  }
+  i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
+                     (int)sizeof(SequenceRef), zOld);
+  if( i<0 ) return SQLITE_OK;
+  zCopy = sqlite3_mprintf("%s", zNew);
+  if( !zCopy ) return SQLITE_NOMEM;
+  sqlite3_free(cs->refs.aSequences[i].zTableName);
+  cs->refs.aSequences[i].zTableName = zCopy;
   return SQLITE_OK;
 }
 

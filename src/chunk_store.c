@@ -640,27 +640,18 @@ int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName){
 }
 
 static int findBranchIdx(ChunkStore *cs, const char *zName){
-  int i;
-  for(i=0; i<cs->refs.nBranches; i++){
-    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ) return i;
-  }
-  return -1;
+  return csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
+                        (int)sizeof(struct BranchRef), zName);
 }
 
 static int findTagIdx(ChunkStore *cs, const char *zName){
-  int i;
-  for(i=0; i<cs->refs.nTags; i++){
-    if( strcmp(cs->refs.aTags[i].zName, zName)==0 ) return i;
-  }
-  return -1;
+  return csFindNamedRef(cs->refs.aTags, cs->refs.nTags,
+                        (int)sizeof(struct TagRef), zName);
 }
 
 static int findRemoteIdx(ChunkStore *cs, const char *zName){
-  int i;
-  for(i=0; i<cs->refs.nRemotes; i++){
-    if( strcmp(cs->refs.aRemotes[i].zName, zName)==0 ) return i;
-  }
-  return -1;
+  return csFindNamedRef(cs->refs.aRemotes, cs->refs.nRemotes,
+                        (int)sizeof(struct RemoteRef), zName);
 }
 
 static int findTrackingIdx(ChunkStore *cs, const char *zRemote, const char *zBranch){
@@ -680,15 +671,12 @@ int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit)
 }
 
 int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
-  struct BranchRef *aNew;
+  int n = cs->refs.nBranches;
   if( chunkStoreFindBranch(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
-  aNew = sqlite3_realloc(cs->refs.aBranches, (cs->refs.nBranches+1)*(int)sizeof(struct BranchRef));
-  if( !aNew ) return SQLITE_NOMEM;
-  cs->refs.aBranches = aNew;
-  memset(&aNew[cs->refs.nBranches], 0, sizeof(struct BranchRef));
-  aNew[cs->refs.nBranches].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[cs->refs.nBranches].zName ) return SQLITE_NOMEM;
-  memcpy(&aNew[cs->refs.nBranches].commitHash, pCommit, sizeof(ProllyHash));
+  if( csRefArrayGrow((void**)&cs->refs.aBranches, n, (int)sizeof(struct BranchRef)) ) return SQLITE_NOMEM;
+  cs->refs.aBranches[n].zName = sqlite3_mprintf("%s", zName);
+  if( !cs->refs.aBranches[n].zName ) return SQLITE_NOMEM;
+  memcpy(&cs->refs.aBranches[n].commitHash, pCommit, sizeof(ProllyHash));
   cs->refs.nBranches++;
   return SQLITE_OK;
 }
@@ -746,27 +734,26 @@ int chunkStoreAddTagFull(
   i64 timestamp,
   const char *zMessage
 ){
-  struct TagRef *aNew;
+  struct TagRef *t;
+  int n = cs->refs.nTags;
   if( chunkStoreFindTag(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
-  aNew = sqlite3_realloc(cs->refs.aTags, (cs->refs.nTags+1)*(int)sizeof(struct TagRef));
-  if( !aNew ) return SQLITE_NOMEM;
-  cs->refs.aTags = aNew;
-  memset(&aNew[cs->refs.nTags], 0, sizeof(struct TagRef));
-  aNew[cs->refs.nTags].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[cs->refs.nTags].zName ) return SQLITE_NOMEM;
-  memcpy(&aNew[cs->refs.nTags].commitHash, pCommit, sizeof(ProllyHash));
-  aNew[cs->refs.nTags].zTagger  = sqlite3_mprintf("%s", zTagger  ? zTagger  : "");
-  aNew[cs->refs.nTags].zEmail   = sqlite3_mprintf("%s", zEmail   ? zEmail   : "");
-  aNew[cs->refs.nTags].zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
-  if( !aNew[cs->refs.nTags].zTagger || !aNew[cs->refs.nTags].zEmail || !aNew[cs->refs.nTags].zMessage ){
-    sqlite3_free(aNew[cs->refs.nTags].zName);
-    sqlite3_free(aNew[cs->refs.nTags].zTagger);
-    sqlite3_free(aNew[cs->refs.nTags].zEmail);
-    sqlite3_free(aNew[cs->refs.nTags].zMessage);
-    memset(&aNew[cs->refs.nTags], 0, sizeof(struct TagRef));
+  if( csRefArrayGrow((void**)&cs->refs.aTags, n, (int)sizeof(struct TagRef)) ) return SQLITE_NOMEM;
+  t = &cs->refs.aTags[n];
+  t->zName = sqlite3_mprintf("%s", zName);
+  if( !t->zName ) return SQLITE_NOMEM;
+  memcpy(&t->commitHash, pCommit, sizeof(ProllyHash));
+  t->zTagger  = sqlite3_mprintf("%s", zTagger  ? zTagger  : "");
+  t->zEmail   = sqlite3_mprintf("%s", zEmail   ? zEmail   : "");
+  t->zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
+  if( !t->zTagger || !t->zEmail || !t->zMessage ){
+    sqlite3_free(t->zName);
+    sqlite3_free(t->zTagger);
+    sqlite3_free(t->zEmail);
+    sqlite3_free(t->zMessage);
+    memset(t, 0, sizeof(struct TagRef));
     return SQLITE_NOMEM;
   }
-  aNew[cs->refs.nTags].timestamp = timestamp;
+  t->timestamp = timestamp;
   cs->refs.nTags++;
   return SQLITE_OK;
 }
@@ -788,16 +775,14 @@ int chunkStoreFindRemote(ChunkStore *cs, const char *zName, const char **pzUrl){
 }
 
 int chunkStoreAddRemote(ChunkStore *cs, const char *zName, const char *zUrl){
-  struct RemoteRef *aNew;
+  int n = cs->refs.nRemotes;
   if( chunkStoreFindRemote(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
-  aNew = sqlite3_realloc(cs->refs.aRemotes, (cs->refs.nRemotes+1)*(int)sizeof(struct RemoteRef));
-  if( !aNew ) return SQLITE_NOMEM;
-  cs->refs.aRemotes = aNew;
-  aNew[cs->refs.nRemotes].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[cs->refs.nRemotes].zName ) return SQLITE_NOMEM;
-  aNew[cs->refs.nRemotes].zUrl = sqlite3_mprintf("%s", zUrl);
-  if( !aNew[cs->refs.nRemotes].zUrl ){
-    sqlite3_free(aNew[cs->refs.nRemotes].zName);
+  if( csRefArrayGrow((void**)&cs->refs.aRemotes, n, (int)sizeof(struct RemoteRef)) ) return SQLITE_NOMEM;
+  cs->refs.aRemotes[n].zName = sqlite3_mprintf("%s", zName);
+  if( !cs->refs.aRemotes[n].zName ) return SQLITE_NOMEM;
+  cs->refs.aRemotes[n].zUrl = sqlite3_mprintf("%s", zUrl);
+  if( !cs->refs.aRemotes[n].zUrl ){
+    sqlite3_free(cs->refs.aRemotes[n].zName);
     return SQLITE_NOMEM;
   }
   cs->refs.nRemotes++;
@@ -843,18 +828,16 @@ int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
   }
 
   {
-    struct TrackingBranch *aNew;
-    aNew = sqlite3_realloc(cs->refs.aTracking, (cs->refs.nTracking+1)*(int)sizeof(struct TrackingBranch));
-    if( !aNew ) return SQLITE_NOMEM;
-    cs->refs.aTracking = aNew;
-    aNew[cs->refs.nTracking].zRemote = sqlite3_mprintf("%s", zRemote);
-    if( !aNew[cs->refs.nTracking].zRemote ) return SQLITE_NOMEM;
-    aNew[cs->refs.nTracking].zBranch = sqlite3_mprintf("%s", zBranch);
-    if( !aNew[cs->refs.nTracking].zBranch ){
-      sqlite3_free(aNew[cs->refs.nTracking].zRemote);
+    int n = cs->refs.nTracking;
+    if( csRefArrayGrow((void**)&cs->refs.aTracking, n, (int)sizeof(struct TrackingBranch)) ) return SQLITE_NOMEM;
+    cs->refs.aTracking[n].zRemote = sqlite3_mprintf("%s", zRemote);
+    if( !cs->refs.aTracking[n].zRemote ) return SQLITE_NOMEM;
+    cs->refs.aTracking[n].zBranch = sqlite3_mprintf("%s", zBranch);
+    if( !cs->refs.aTracking[n].zBranch ){
+      sqlite3_free(cs->refs.aTracking[n].zRemote);
       return SQLITE_NOMEM;
     }
-    memcpy(&aNew[cs->refs.nTracking].commitHash, pCommit, sizeof(ProllyHash));
+    memcpy(&cs->refs.aTracking[n].commitHash, pCommit, sizeof(ProllyHash));
     cs->refs.nTracking++;
   }
   return SQLITE_OK;
