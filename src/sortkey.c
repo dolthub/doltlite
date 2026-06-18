@@ -564,11 +564,15 @@ static int sortKeyFromSingleBinaryMemFast(
   int nAlloc;
   u8 *pOut;
 
-  if( !aMem || nMem!=1 || nKeyField!=0 ) return SQLITE_NOTFOUND;
+  if( !aMem || nMem<1 || nKeyField>1 ) return SQLITE_NOTFOUND;
+  if( nKeyField<=0 && nMem!=1 ) return SQLITE_NOTFOUND;
   if( descFromKeyInfo(pKeyInfo, 0) ) return SQLITE_NOTFOUND;
 
   pMem = &aMem[0];
   flags = pMem->flags;
+  if( flags & (MEM_Null|MEM_Int|MEM_IntReal|MEM_Real) ){
+    return SQLITE_NOTFOUND;
+  }
   if( flags & MEM_Zero ) return SQLITE_NOTFOUND;
   if( pMem->n < 0 || (pMem->n > 0 && pMem->z==0) ) return SQLITE_CORRUPT;
 
