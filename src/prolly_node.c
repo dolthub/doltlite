@@ -159,10 +159,11 @@ i64 prollyDecodeIntKey(const u8 *p){
 }
 
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
-  u32 off;
+  const u8 *p;
   assert( i >= 0 && i < (int)pNode->nItems );
-  off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
-  return prollyDecodeIntKey(pNode->pKeyData + off);
+  assert( (pNode->flags & PROLLY_NODE_INTKEY)!=0 );
+  p = pNode->pKeyData + i*8;
+  return prollyDecodeIntKey(p);
 }
 
 void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){
