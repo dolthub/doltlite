@@ -76,4 +76,10 @@ int prollyDiffIterOpen(ProllyDiffIter *pIter, ChunkStore *pStore,
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange);
 void prollyDiffIterClose(ProllyDiffIter *pIter);
 
+/* Fetch pHash from the store and parse it into pNode. On SQLITE_OK *ppData
+** owns the backing buffer the caller must sqlite3_free; on error nothing
+** is left allocated. */
+int prollyFetchNode(ChunkStore *pStore, const ProllyHash *pHash,
+                    ProllyNode *pNode, u8 **ppData);
+
 #endif
