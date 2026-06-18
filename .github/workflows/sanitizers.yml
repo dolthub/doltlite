@@ -175,6 +175,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # Fast structural check (no build): every test suite must actually run.
+    - name: No orphaned test suites
+      run: bash test/lint_orphaned_suites.sh
+
     - name: Install dependencies
       run: |
         sudo apt-get update
