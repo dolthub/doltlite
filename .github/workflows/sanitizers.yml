@@ -7,7 +7,7 @@ on:
 jobs:
   asan-ubsan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
 
     steps:
     - uses: actions/checkout@v4
@@ -120,7 +120,7 @@ jobs:
 
   tsan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
 
     env:
       TSAN_CFLAGS: -O1 -g -fsanitize=thread -fno-omit-frame-pointer
