@@ -28,12 +28,21 @@ struct WorkspaceVtab {
   DoltliteColInfo cols;
   WorkspaceRow *aCache;
   int nCache;
+  int nCacheAlloc;
 };
 
 typedef struct WorkspaceCursor WorkspaceCursor;
 struct WorkspaceCursor {
   sqlite3_vtab_cursor base;
   int iRow;
+  int eof;
+  int phase;
+  int iterOpen;
+  int iterStaged;
+  u8 iterFlags;
+  ProllyDiffIter iter;
+  ProllyHash headRoot, stagedRoot, workingRoot;
+  u8 stagedFlags, workingFlags;
 };
 
 static void wsFreeRows(WorkspaceRow *aRow, int nRow){
@@ -50,6 +59,7 @@ static void wsClearCache(WorkspaceVtab *p){
   wsFreeRows(p->aCache, p->nCache);
   p->aCache = 0;
   p->nCache = 0;
+  p->nCacheAlloc = 0;
 }
 
 static char *wsBuildSchema(const DoltliteColInfo *ci){
@@ -84,81 +94,82 @@ static int wsAppendRow(
   u8 flags,
   const ProllyDiffChange *pChange
 ){
+  WorkspaceRow row;
   WorkspaceRow *aNew;
-  WorkspaceRow *r;
-  aNew = sqlite3_realloc(pVtab->aCache,
-                         (pVtab->nCache+1)*(int)sizeof(WorkspaceRow));
-  if( !aNew ) return SQLITE_NOMEM;
-  pVtab->aCache = aNew;
-  r = &pVtab->aCache[pVtab->nCache];
-  memset(r, 0, sizeof(*r));
-  r->rowid = pVtab->nCache + 1;
-  r->staged = staged;
-  r->diffType = pChange->type;
-  r->flags = flags;
-  r->intKey = pChange->intKey;
+  int nNew;
+
+  memset(&row, 0, sizeof(row));
+  row.rowid = pVtab->nCache + 1;
+  row.staged = staged;
+  row.diffType = pChange->type;
+  row.flags = flags;
+  row.intKey = pChange->intKey;
   if( pChange->nKey>0 ){
-    r->pKey = sqlite3_malloc(pChange->nKey);
-    if( !r->pKey ) return SQLITE_NOMEM;
-    memcpy(r->pKey, pChange->pKey, pChange->nKey);
-    r->nKey = pChange->nKey;
+    row.pKey = sqlite3_malloc(pChange->nKey);
+    if( !row.pKey ) goto nomem;
+    memcpy(row.pKey, pChange->pKey, pChange->nKey);
+    row.nKey = pChange->nKey;
   }
   if( pChange->nOldVal>0 ){
-    r->pOldVal = sqlite3_malloc(pChange->nOldVal);
-    if( !r->pOldVal ) return SQLITE_NOMEM;
-    memcpy(r->pOldVal, pChange->pOldVal, pChange->nOldVal);
-    r->nOldVal = pChange->nOldVal;
+    row.pOldVal = sqlite3_malloc(pChange->nOldVal);
+    if( !row.pOldVal ) goto nomem;
+    memcpy(row.pOldVal, pChange->pOldVal, pChange->nOldVal);
+    row.nOldVal = pChange->nOldVal;
   }
   if( pChange->nNewVal>0 ){
-    r->pNewVal = sqlite3_malloc(pChange->nNewVal);
-    if( !r->pNewVal ) return SQLITE_NOMEM;
-    memcpy(r->pNewVal, pChange->pNewVal, pChange->nNewVal);
-    r->nNewVal = pChange->nNewVal;
+    row.pNewVal = sqlite3_malloc(pChange->nNewVal);
+    if( !row.pNewVal ) goto nomem;
+    memcpy(row.pNewVal, pChange->pNewVal, pChange->nNewVal);
+    row.nNewVal = pChange->nNewVal;
   }
+  if( pVtab->nCache>=pVtab->nCacheAlloc ){
+    nNew = pVtab->nCacheAlloc ? pVtab->nCacheAlloc*2 : 16;
+    aNew = sqlite3_realloc(pVtab->aCache,
+                           nNew*(int)sizeof(WorkspaceRow));
+    if( !aNew ) goto nomem;
+    pVtab->aCache = aNew;
+    pVtab->nCacheAlloc = nNew;
+  }
+  pVtab->aCache[pVtab->nCache] = row;
   pVtab->nCache++;
   return SQLITE_OK;
+
+nomem:
+  sqlite3_free(row.pKey);
+  sqlite3_free(row.pOldVal);
+  sqlite3_free(row.pNewVal);
+  return SQLITE_NOMEM;
 }
 
-static int wsDiffPair(
-  WorkspaceVtab *pVtab,
-  const ProllyHash *pFromRoot,
-  const ProllyHash *pToRoot,
-  u8 flags,
-  int staged
-){
-  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  ProllyCache *pCache = doltliteGetCache(pVtab->db);
-  ProllyDiffIter iter;
-  ProllyDiffChange *pChange = 0;
-  int rc;
-  if( !cs || !pCache ) return SQLITE_OK;
-  if( prollyHashCompare(pFromRoot, pToRoot)==0 ) return SQLITE_OK;
-  rc = prollyDiffIterOpen(&iter, cs, pCache, pFromRoot, pToRoot, flags);
-  if( rc!=SQLITE_OK ) return rc;
-  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
-    rc = wsAppendRow(pVtab, staged, flags, pChange);
-    if( rc!=SQLITE_OK ) break;
+static void wsCloseIter(WorkspaceCursor *c){
+  if( c->iterOpen ){
+    prollyDiffIterClose(&c->iter);
+    c->iterOpen = 0;
   }
-  prollyDiffIterClose(&iter);
-  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
-  return rc;
 }
 
-static int wsLoadRows(WorkspaceVtab *pVtab){
+static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   sqlite3 *db = pVtab->db;
   ProllyHash headHash, headCat, stagedCat, workingCat;
-  ProllyHash headRoot, stagedRoot, workingRoot;
   ProllyHash schemaHash;
-  u8 headFlags = 0, stagedFlags = 0, workingFlags = 0;
+  u8 headFlags = 0;
   int rc;
 
-  wsClearCache(pVtab);
   memset(&headCat, 0, sizeof(headCat));
   memset(&stagedCat, 0, sizeof(stagedCat));
   memset(&workingCat, 0, sizeof(workingCat));
+  memset(&c->headRoot, 0, sizeof(c->headRoot));
+  memset(&c->stagedRoot, 0, sizeof(c->stagedRoot));
+  memset(&c->workingRoot, 0, sizeof(c->workingRoot));
+  memset(&schemaHash, 0, sizeof(schemaHash));
+  c->stagedFlags = 0;
+  c->workingFlags = 0;
 
   doltliteGetSessionHead(db, &headHash);
-  if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
+  if( prollyHashIsEmpty(&headHash) ){
+    c->eof = 1;
+    return SQLITE_OK;
+  }
   rc = doltliteCommitCatalogHash(db, &headHash, &headCat);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -168,22 +179,83 @@ static int wsLoadRows(WorkspaceVtab *pVtab){
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteLoadTableRootByNameOrEmpty(db, &headCat, pVtab->zTableName,
-                                          &headRoot, &headFlags, &schemaHash);
+                                          &c->headRoot, &headFlags,
+                                          &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadTableRootByNameOrEmpty(db, &stagedCat, pVtab->zTableName,
-                                          &stagedRoot, &stagedFlags, &schemaHash);
+                                          &c->stagedRoot, &c->stagedFlags,
+                                          &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, pVtab->zTableName,
-                                          &workingRoot, &workingFlags, &schemaHash);
+                                          &c->workingRoot, &c->workingFlags,
+                                          &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( !stagedFlags ) stagedFlags = headFlags ? headFlags : workingFlags;
-  if( !workingFlags ) workingFlags = stagedFlags ? stagedFlags : headFlags;
-  rc = wsDiffPair(pVtab, &headRoot, &stagedRoot, stagedFlags, 1);
-  if( rc==SQLITE_OK ){
-    rc = wsDiffPair(pVtab, &stagedRoot, &workingRoot, workingFlags, 0);
+  if( !c->stagedFlags ){
+    c->stagedFlags = headFlags ? headFlags : c->workingFlags;
   }
-  return rc;
+  if( !c->workingFlags ){
+    c->workingFlags = c->stagedFlags ? c->stagedFlags : headFlags;
+  }
+  return SQLITE_OK;
+}
+
+static int wsOpenNextIter(WorkspaceCursor *c, WorkspaceVtab *pVtab){
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  ProllyCache *pCache = doltliteGetCache(pVtab->db);
+  const ProllyHash *pFromRoot;
+  const ProllyHash *pToRoot;
+  u8 flags;
+  int staged;
+  int rc;
+
+  if( !cs || !pCache ){
+    c->eof = 1;
+    return SQLITE_OK;
+  }
+  while( c->phase<2 ){
+    if( c->phase==0 ){
+      pFromRoot = &c->headRoot;
+      pToRoot = &c->stagedRoot;
+      flags = c->stagedFlags;
+      staged = 1;
+    }else{
+      pFromRoot = &c->stagedRoot;
+      pToRoot = &c->workingRoot;
+      flags = c->workingFlags;
+      staged = 0;
+    }
+    c->phase++;
+    if( prollyHashCompare(pFromRoot, pToRoot)==0 ) continue;
+    rc = prollyDiffIterOpen(&c->iter, cs, pCache, pFromRoot, pToRoot, flags);
+    if( rc!=SQLITE_OK ) return rc;
+    c->iterOpen = 1;
+    c->iterStaged = staged;
+    c->iterFlags = flags;
+    return SQLITE_OK;
+  }
+  c->eof = 1;
+  return SQLITE_OK;
+}
+
+static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
+  ProllyDiffChange *pChange = 0;
+  int rc;
+
+  if( c->iRow < pVtab->nCache ) return SQLITE_OK;
+  while( !c->eof ){
+    if( !c->iterOpen ){
+      rc = wsOpenNextIter(c, pVtab);
+      if( rc!=SQLITE_OK || c->eof ) return rc;
+    }
+    rc = prollyDiffIterStep(&c->iter, &pChange);
+    if( rc==SQLITE_ROW && pChange ){
+      return wsAppendRow(pVtab, c->iterStaged, c->iterFlags, pChange);
+    }
+    if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ) return rc;
+    wsCloseIter(c);
+  }
+  return SQLITE_OK;
 }
 
 static int wsConnect(sqlite3 *db, void *pAux, int argc,
@@ -219,6 +291,7 @@ static int wsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
 }
 
 static int wsClose(sqlite3_vtab_cursor *cur){
+  wsCloseIter((WorkspaceCursor*)cur);
   sqlite3_free(cur);
   return SQLITE_OK;
 }
@@ -227,20 +300,30 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
+  int rc;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  wsCloseIter(c);
+  wsClearCache(p);
   c->iRow = 0;
-  return wsLoadRows(p);
+  c->eof = 0;
+  c->phase = 0;
+  c->iterStaged = 0;
+  c->iterFlags = 0;
+  rc = wsInitCursorRoots(c, p);
+  if( rc!=SQLITE_OK ) return rc;
+  return wsLoadNextRow(c, p);
 }
 
 static int wsNext(sqlite3_vtab_cursor *cur){
-  ((WorkspaceCursor*)cur)->iRow++;
-  return SQLITE_OK;
+  WorkspaceCursor *c = (WorkspaceCursor*)cur;
+  WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
+  c->iRow++;
+  return wsLoadNextRow(c, p);
 }
 
 static int wsEof(sqlite3_vtab_cursor *cur){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
-  WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
-  return c->iRow >= p->nCache;
+  return c->eof && c->iRow >= ((WorkspaceVtab*)cur->pVtab)->nCache;
 }
 
 static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
