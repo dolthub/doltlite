@@ -198,6 +198,24 @@ static SQLITE_INLINE int prollyKeyComparePrefix(
   const u8 *pRight,
   int n
 ){
+  /* Blob-key node searches compare many short keys. Check the first word
+  ** inline before calling memcmp() for any remaining suffix. */
+  if( n>=8 ){
+    u64 left = ((u64)pLeft[0]<<56) | ((u64)pLeft[1]<<48)
+             | ((u64)pLeft[2]<<40) | ((u64)pLeft[3]<<32)
+             | ((u64)pLeft[4]<<24) | ((u64)pLeft[5]<<16)
+             | ((u64)pLeft[6]<<8) | (u64)pLeft[7];
+    u64 right = ((u64)pRight[0]<<56) | ((u64)pRight[1]<<48)
+              | ((u64)pRight[2]<<40) | ((u64)pRight[3]<<32)
+              | ((u64)pRight[4]<<24) | ((u64)pRight[5]<<16)
+              | ((u64)pRight[6]<<8) | (u64)pRight[7];
+    if( left<right ) return -1;
+    if( left>right ) return 1;
+    pLeft += 8;
+    pRight += 8;
+    n -= 8;
+    if( n==0 ) return 0;
+  }
   return memcmp(pLeft, pRight, n);
 }
 
