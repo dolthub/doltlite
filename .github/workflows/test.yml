@@ -6,7 +6,7 @@ on:
 jobs:
   concurrency-stress:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
 
   vc-concurrency-stress:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -128,7 +128,7 @@ jobs:
 
   sqllogictest:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -190,7 +190,7 @@ jobs:
 
   oracle-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -242,7 +242,7 @@ jobs:
   sqlite-regression:
     name: sqlite-regression-${{ matrix.bucket }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -305,7 +305,7 @@ jobs:
   # differs. Format changes without a minor version bump fail the suite.
   compat:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
       with:

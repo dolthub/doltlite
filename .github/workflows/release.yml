@@ -425,7 +425,7 @@ jobs:
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
 
@@ -470,7 +470,7 @@ jobs:
   # version bump fails this job, which blocks the release.
   compat:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
       with:
