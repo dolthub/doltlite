@@ -13,14 +13,63 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-static int dsLoadColNames(sqlite3 *db,
-                          const ProllyHash *pCatHash,
+typedef struct DsSchemaCache DsSchemaCache;
+struct DsSchemaCache {
+  sqlite3 *db;
+  const ProllyHash *pCatHash;
+  SchemaEntry *aSchemas;
+  int nSchemas;
+  int loaded;
+};
+
+static void dsSchemaCacheInit(
+  DsSchemaCache *pCache,
+  sqlite3 *db,
+  const ProllyHash *pCatHash
+){
+  memset(pCache, 0, sizeof(*pCache));
+  pCache->db = db;
+  pCache->pCatHash = pCatHash;
+}
+
+static void dsSchemaCacheClear(DsSchemaCache *pCache){
+  freeSchemaEntries(pCache->aSchemas, pCache->nSchemas);
+  memset(pCache, 0, sizeof(*pCache));
+}
+
+static int dsSchemaCacheLoad(DsSchemaCache *pCache){
+  ChunkStore *cs = doltliteGetChunkStore(pCache->db);
+  ProllyCache *pProllyCache = doltliteGetCache(pCache->db);
+  int rc;
+
+  if( pCache->loaded ) return SQLITE_OK;
+  pCache->loaded = 1;
+  if( prollyHashIsEmpty(pCache->pCatHash) ) return SQLITE_OK;
+  rc = loadSchemaFromCatalog(pCache->db, cs, pProllyCache, pCache->pCatHash,
+                             &pCache->aSchemas, &pCache->nSchemas);
+  if( rc!=SQLITE_OK ){
+    pCache->loaded = 0;
+  }
+  return rc;
+}
+
+static SchemaEntry *dsSchemaCacheFind(
+  DsSchemaCache *pCache,
+  const char *zTableName,
+  int *pRc
+){
+  int rc = dsSchemaCacheLoad(pCache);
+  if( rc!=SQLITE_OK ){
+    *pRc = rc;
+    return 0;
+  }
+  *pRc = SQLITE_OK;
+  return findSchemaEntry(pCache->aSchemas, pCache->nSchemas, zTableName);
+}
+
+static int dsLoadColNames(DsSchemaCache *pSchema,
                           const char *zTableName,
                           char ***pazOut, int *pnOut){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
   SchemaEntry *pEntry;
   sqlite3 *tmp = 0;
   sqlite3_stmt *pStmt = 0;
@@ -31,15 +80,9 @@ static int dsLoadColNames(sqlite3 *db,
 
   *pazOut = 0;
   *pnOut = 0;
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
-
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  pEntry = dsSchemaCacheFind(pSchema, zTableName, &rc);
   if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
-  if( !pEntry || !pEntry->zSql ){
-    freeSchemaEntries(aSchemas, nSchemas);
-    return SQLITE_OK;
-  }
+  if( !pEntry || !pEntry->zSql ) return SQLITE_OK;
 
   rc = sqlite3_open(":memory:", &tmp);
   if( rc!=SQLITE_OK ) goto cleanup;
@@ -69,7 +112,6 @@ cleanup:
   if( pStmt ) sqlite3_finalize(pStmt);
   sqlite3_free(zPragma);
   if( tmp ) sqlite3_close(tmp);
-  freeSchemaEntries(aSchemas, nSchemas);
   if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
     int k;
     for(k=0; k<n; k++) sqlite3_free(az[k]);
@@ -82,32 +124,22 @@ cleanup:
 }
 
 static int dsLoadCreateSql(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
+  DsSchemaCache *pSchema,
   const char *zTableName,
   char **pzSqlOut
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
   SchemaEntry *pEntry;
   int rc;
 
   *pzSqlOut = 0;
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
-
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  pEntry = dsSchemaCacheFind(pSchema, zTableName, &rc);
   if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
   if( pEntry && pEntry->zSql ){
     *pzSqlOut = sqlite3_mprintf("%s", pEntry->zSql);
     if( !*pzSqlOut ){
-      freeSchemaEntries(aSchemas, nSchemas);
       return SQLITE_NOMEM;
     }
   }
-  freeSchemaEntries(aSchemas, nSchemas);
   return SQLITE_OK;
 }
 
@@ -325,8 +357,8 @@ static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
 static int dsComputeTableStats(
   sqlite3 *db,
   const char *zTableName,
-  const ProllyHash *pFromCatHash,
-  const ProllyHash *pToCatHash,
+  DsSchemaCache *pFromSchema,
+  DsSchemaCache *pToSchema,
   struct TableEntry *pFromEntry,
   struct TableEntry *pToEntry,
   DsStatRow *pOut
@@ -362,17 +394,22 @@ static int dsComputeTableStats(
   }
 
   if( !hasFrom && !hasTo ) return SQLITE_OK;
+  if( hasFrom && hasTo
+   && prollyHashCompare(&fromRoot, &toRoot)==0
+   && prollyHashCompare(&pFromEntry->schemaHash, &pToEntry->schemaHash)==0 ){
+    return SQLITE_OK;
+  }
 
   if( hasFrom ){
-    rc = dsLoadCreateSql(db, pFromCatHash, zTableName, &zFromSql);
+    rc = dsLoadCreateSql(pFromSchema, zTableName, &zFromSql);
     if( rc!=SQLITE_OK ) return rc;
-    rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
+    rc = dsLoadColNames(pFromSchema, zTableName, &azFromCols, &nFromCols);
     if( rc!=SQLITE_OK ) goto done;
   }
   if( hasTo ){
-    rc = dsLoadCreateSql(db, pToCatHash, zTableName, &zToSql);
+    rc = dsLoadCreateSql(pToSchema, zTableName, &zToSql);
     if( rc!=SQLITE_OK ) goto done;
-    rc = dsLoadColNames(db, pToCatHash, zTableName, &azToCols, &nToCols);
+    rc = dsLoadColNames(pToSchema, zTableName, &azToCols, &nToCols);
     if( rc!=SQLITE_OK ){
       goto done;
     }
@@ -716,11 +753,14 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   struct TableEntry *aFromCat = 0, *aToCat = 0;
   int nFromCat = 0, nToCat = 0;
   DsNameIndex fromIdx, toIdx;
+  DsSchemaCache fromSchema, toSchema;
   int rc, i;
   (void)idxStr;
 
   memset(&fromIdx, 0, sizeof(fromIdx));
   memset(&toIdx, 0, sizeof(toIdx));
+  memset(&fromSchema, 0, sizeof(fromSchema));
+  memset(&toSchema, 0, sizeof(toSchema));
   dstFreeRows(c);
   c->iRow = 0;
 
@@ -734,6 +774,8 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   if( rc!=SQLITE_OK ) goto done;
   rc = dsNameIndexInit(&toIdx, aToCat, nToCat);
   if( rc!=SQLITE_OK ) goto done;
+  dsSchemaCacheInit(&fromSchema, db, &fctx.fromCat);
+  dsSchemaCacheInit(&toSchema, db, &fctx.toCat);
 
   for(i=0; i<fctx.nNames; i++){
     DsStatRow row;
@@ -741,7 +783,7 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
     if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
     pFromEntry = dsNameIndexFind(&fromIdx, fctx.azNames[i]);
     pToEntry = dsNameIndexFind(&toIdx, fctx.azNames[i]);
-    rc = dsComputeTableStats(db, fctx.azNames[i], &fctx.fromCat, &fctx.toCat,
+    rc = dsComputeTableStats(db, fctx.azNames[i], &fromSchema, &toSchema,
                              pFromEntry, pToEntry, &row);
     if( rc!=SQLITE_OK ){
       sqlite3_free(row.zTableName);
@@ -764,6 +806,8 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   }
 
 done:
+  dsSchemaCacheClear(&fromSchema);
+  dsSchemaCacheClear(&toSchema);
   dsNameIndexClear(&fromIdx);
   dsNameIndexClear(&toIdx);
   doltliteFreeCatalog(aFromCat, nFromCat);
