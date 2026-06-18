@@ -66,6 +66,12 @@ void refsTableGetRemotes(const RefsTable *rt, int *pn, const RemoteRef **par);
 void refsTableGetTracking(const RefsTable *rt, int *pn, const TrackingBranch **par);
 void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par);
 
+/* Index of the ref whose leading char* name field equals zName, or -1. */
+int csFindNamedRef(const void *aBase, int n, int stride, const char *zName);
+
+/* Grow a packed ref array by one zeroed element; returns SQLITE_OK/NOMEM. */
+int csRefArrayGrow(void **paBase, int n, int stride);
+
 int refsTableBranchCount(const RefsTable *rt);
 int refsTableTagCount(const RefsTable *rt);
 int refsTableRemoteCount(const RefsTable *rt);
