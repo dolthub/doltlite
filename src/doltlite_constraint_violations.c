@@ -103,11 +103,7 @@ static int serializeViolations(
   if( !buf ) return SQLITE_NOMEM;
   w.p = buf;
 
-  dlWriteU8(&w, DCV_MAGIC0);
-  dlWriteU8(&w, DCV_MAGIC1);
-  dlWriteU8(&w, DCV_MAGIC2);
-  dlWriteU8(&w, DCV_VERSION);
-  dlWriteU16(&w, nTables);
+  dlWriteFramedHeader(&w, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION, nTables);
 
   for(i=0; i<nTables; i++){
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
@@ -151,15 +147,11 @@ static int loadAllViolations(
   if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
   dlReaderInit(&rd, data, nData);
-  if( dlReadU8(&rd)!=DCV_MAGIC0
-   || dlReadU8(&rd)!=DCV_MAGIC1
-   || dlReadU8(&rd)!=DCV_MAGIC2
-   || dlReadU8(&rd)!=DCV_VERSION ){
+  if( dlReadFramedHeader(&rd, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
+                         &nTables)!=SQLITE_OK ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
-  nTables = dlReadU16(&rd);
-  if( nTables<0 ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
   aTables = sqlite3_malloc(nTables ? nTables * (int)sizeof(*aTables) : 1);
   if( !aTables ){ sqlite3_free(data); return SQLITE_NOMEM; }

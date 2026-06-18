@@ -77,11 +77,8 @@ int doltliteSerializeConflicts(
   if( !buf ) return SQLITE_NOMEM;
   w.p = buf;
 
-  dlWriteU8(&w, DOLTLITE_CONFLICTS_MAGIC0);
-  dlWriteU8(&w, DOLTLITE_CONFLICTS_MAGIC1);
-  dlWriteU8(&w, DOLTLITE_CONFLICTS_MAGIC2);
-  dlWriteU8(&w, DOLTLITE_CONFLICTS_VERSION);
-  dlWriteU16(&w, nTables);
+  dlWriteFramedHeader(&w, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
+                      DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION, nTables);
   for(i=0; i<nTables; i++){
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
     dlWriteU16Name(&w, aTables[i].zName, nl);
@@ -121,14 +118,12 @@ static int loadAllConflicts(
   if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
   dlReaderInit(&r, data, nData);
-  if( dlReadU8(&r)!=DOLTLITE_CONFLICTS_MAGIC0
-   || dlReadU8(&r)!=DOLTLITE_CONFLICTS_MAGIC1
-   || dlReadU8(&r)!=DOLTLITE_CONFLICTS_MAGIC2
-   || dlReadU8(&r)!=DOLTLITE_CONFLICTS_VERSION ){
+  if( dlReadFramedHeader(&r, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
+                         DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION,
+                         &nTables)!=SQLITE_OK ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
-  nTables = dlReadU16(&r);
 
   aTables = sqlite3_malloc(nTables * (int)sizeof(ConflictTableInfo));
   if( !aTables ){ sqlite3_free(data); return SQLITE_NOMEM; }

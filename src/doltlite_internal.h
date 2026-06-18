@@ -715,6 +715,26 @@ static SQLITE_INLINE void dlWriteU16Name(DlByteWriter *w, const char *z, int n){
   w->p += n;
 }
 
+/* Magic (3 bytes) + version + a u16 table count: the framed header shared by
+** the conflicts and constraint-violation session blobs. */
+static SQLITE_INLINE void dlWriteFramedHeader(DlByteWriter *w, u8 m0, u8 m1,
+                                              u8 m2, u8 ver, int nTables){
+  dlWriteU8(w, m0);
+  dlWriteU8(w, m1);
+  dlWriteU8(w, m2);
+  dlWriteU8(w, ver);
+  dlWriteU16(w, nTables);
+}
+
+static SQLITE_INLINE int dlReadFramedHeader(DlByteReader *r, u8 m0, u8 m1,
+                                            u8 m2, u8 ver, int *pnTables){
+  int a = dlReadU8(r), b = dlReadU8(r), c = dlReadU8(r), v = dlReadU8(r);
+  int n = dlReadU16(r);
+  if( r->err || a!=m0 || b!=m1 || c!=m2 || v!=ver ) return SQLITE_CORRUPT;
+  *pnTables = n;
+  return SQLITE_OK;
+}
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 int doltliteIsStockSqliteDb(sqlite3 *db);
