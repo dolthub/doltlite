@@ -294,12 +294,10 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
   if( rc!=SQLITE_OK ) return rc;
 
   if( hasParent ){
-    DoltliteCommit parent;
-    memset(&parent, 0, sizeof(parent));
-    rc = doltliteLoadCommit(db, pParentHash, &parent);
+    ProllyHash parentCat;
+    rc = doltliteCommitCatalogHash(db, pParentHash, &parentCat);
     if( rc==SQLITE_OK ){
-      rc = doltliteLoadCatalog(db, &parent.catalogHash, &aParent, &nParent, 0);
-      doltliteCommitClear(&parent);
+      rc = doltliteLoadCatalog(db, &parentCat, &aParent, &nParent, 0);
     }
     if( rc!=SQLITE_OK ){
       doltliteFreeCatalog(aChild, nChild);

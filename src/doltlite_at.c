@@ -93,8 +93,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   ChunkStore *cs=doltliteGetChunkStore(db);
   void *pBt; ProllyCache *pCache;
   const char *zRef;
-  ProllyHash commitHash;
-  DoltliteCommit commit;
+  ProllyHash catHash;
   struct TableEntry *aTables=0; int nTables=0;
   ProllyHash tableRoot; u8 flags=0;
   int rc, res;
@@ -112,16 +111,12 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   c->zCommitRef = sqlite3_mprintf("%s", zRef);
   if( !c->zCommitRef ) return SQLITE_NOMEM;
 
-  rc=doltliteResolveRef(db,zRef,&commitHash);
+  rc=doltliteRefToCatalogHash(db,zRef,&catHash);
   if(rc==SQLITE_NOTFOUND){
     sqlite3_free(cur->pVtab->zErrMsg);
     cur->pVtab->zErrMsg = sqlite3_mprintf("ref not found: %s", zRef);
     return SQLITE_ERROR;
   }
-  if(rc!=SQLITE_OK) return rc;
-
-  memset(&commit,0,sizeof(commit));
-  rc=doltliteLoadCommit(db,&commitHash,&commit);
   if(rc!=SQLITE_OK) return rc;
 
   {
@@ -131,13 +126,12 @@ static int atFilter(sqlite3_vtab_cursor *cur,
                     && !prollyHashIsEmpty(&branchCommit));
     if( isBranch ){
       doltliteResolveBranchEffectiveCatalog(cs, zRef, &branchCommit,
-                                            &commit.catalogHash, &effCatHash);
+                                            &catHash, &effCatHash);
     }else{
-      memcpy(&effCatHash, &commit.catalogHash, sizeof(ProllyHash));
+      memcpy(&effCatHash, &catHash, sizeof(ProllyHash));
     }
     rc=doltliteLoadCatalog(db,&effCatHash,&aTables,&nTables,0);
   }
-  doltliteCommitClear(&commit);
   if(rc!=SQLITE_OK) return rc;
 
   rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags,0);

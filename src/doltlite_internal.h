@@ -741,6 +741,11 @@ typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
                        DoltliteCommit *pCommit);
 
+int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
+                              ProllyHash *pCatHash);
+int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
+                             ProllyHash *pCatHash);
+
 int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
                              const sqlite3_module *pModule);
 
@@ -816,6 +821,8 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
 int doltliteVcSealActiveSavepoints(sqlite3 *db);
 int doltliteVcSealSavepointError(sqlite3 *db);
+void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg);
+void doltliteVcResultErrorCode(sqlite3_context *ctx, sqlite3 *db, int rc);
 int doltliteVcSealBranchStyleTxn(sqlite3 *db);
 
 typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);

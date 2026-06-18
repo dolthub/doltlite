@@ -116,43 +116,27 @@ static int remoteSqlReportOpenError(
   return 1;
 }
 
-static int remoteSqlLoadCommit(
-  ChunkStore *cs,
-  const ProllyHash *pCommitHash,
-  DoltliteCommit *pCommit
-){
-  u8 *data = 0;
-  int nData = 0;
-  int rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteCommitDeserialize(data, nData, pCommit);
-  sqlite3_free(data);
-  return rc;
-}
-
 static int remoteSqlResetSessionToCommit(
   sqlite3 *db,
   const char *zBranch,
   const ProllyHash *pCommitHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  DoltliteCommit commit;
+  ProllyHash catHash;
   int rc;
 
   if( !cs ) return SQLITE_ERROR;
-  memset(&commit, 0, sizeof(commit));
-  rc = remoteSqlLoadCommit(cs, pCommitHash, &commit);
+  rc = doltliteCommitCatalogHash(db, pCommitHash, &catHash);
   if( rc!=SQLITE_OK ) return rc;
 
   if( zBranch ){
     doltliteSetSessionBranch(db, zBranch);
   }
-  rc = doltliteHardReset(db, &commit.catalogHash);
+  rc = doltliteHardReset(db, &catHash);
   if( rc==SQLITE_OK ){
     doltliteSetSessionHead(db, pCommitHash);
-    doltliteSetSessionStaged(db, &commit.catalogHash);
+    doltliteSetSessionStaged(db, &catHash);
   }
-  doltliteCommitClear(&commit);
   return rc;
 }
 
@@ -165,13 +149,11 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   int rc;
 
   if( !cs ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "no database", -1);
+    doltliteVcResultError(ctx, db, "no database");
     return;
   }
   if( argc<2 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "usage: dolt_remote(action, name [, url])", -1);
+    doltliteVcResultError(ctx, db, "usage: dolt_remote(action, name [, url])");
     return;
   }
 
@@ -180,27 +162,23 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   zAction = (const char*)sqlite3_value_text(argv[0]);
   zName = (const char*)sqlite3_value_text(argv[1]);
   if( !zAction || !zName ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "action and name required", -1);
+    doltliteVcResultError(ctx, db, "action and name required");
     return;
   }
 
   if( strcmp(zAction, "add")==0 ){
     const char *zUrl;
     if( argc<3 ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "url required for add", -1);
+      doltliteVcResultError(ctx, db, "url required for add");
       return;
     }
     if( argc>3 ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "too many arguments", -1);
+      doltliteVcResultError(ctx, db, "too many arguments");
       return;
     }
     zUrl = (const char*)sqlite3_value_text(argv[2]);
     if( !zUrl ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "url required for add", -1);
+      doltliteVcResultError(ctx, db, "url required for add");
       return;
     }
     m.zName = zName;
@@ -214,8 +192,7 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     }
   }else if( strcmp(zAction, "remove")==0 ){
     if( argc>2 ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "too many arguments", -1);
+      doltliteVcResultError(ctx, db, "too many arguments");
       return;
     }
     m.zName = zName;
@@ -228,8 +205,7 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       return;
     }
   }else{
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "unknown action: use 'add' or 'remove'", -1);
+    doltliteVcResultError(ctx, db, "unknown action: use 'add' or 'remove'");
     return;
   }
 
@@ -251,26 +227,23 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   int bForce = 0;
   int rc;
 
-  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<2 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "usage: dolt_push(remote, branch [, '--force'])", -1);
+    doltliteVcResultError(ctx, db, "usage: dolt_push(remote, branch [, '--force'])");
     return;
   }
 
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "remote and branch required", -1);
+    doltliteVcResultError(ctx, db, "remote and branch required");
     return;
   }
 
   if( argc>=3 ){
     const char *zOpt = (const char*)sqlite3_value_text(argv[2]);
     if( argc>3 ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "too many arguments", -1);
+      doltliteVcResultError(ctx, db, "too many arguments");
       return;
     }
     if( zOpt && strcmp(zOpt, "--force")==0 ){
@@ -278,8 +251,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }else{
       char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
       if( zErr ){
-        (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error(ctx, zErr, -1);
+        doltliteVcResultError(ctx, db, zErr);
         sqlite3_free(zErr);
       }else{
         sqlite3_result_error_nomem(ctx);
@@ -374,22 +346,19 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   const char *zRemoteName;
   int rc;
 
-  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<1 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "usage: dolt_fetch(remote [, branch])", -1);
+    doltliteVcResultError(ctx, db, "usage: dolt_fetch(remote [, branch])");
     return;
   }
 
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   if( !zRemoteName ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "remote name required", -1);
+    doltliteVcResultError(ctx, db, "remote name required");
     return;
   }
   if( argc>2 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "too many arguments", -1);
+    doltliteVcResultError(ctx, db, "too many arguments");
     return;
   }
 
@@ -401,8 +370,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     const char *zBranch = (const char*)sqlite3_value_text(argv[1]);
     if( !zBranch ){
       pRemote->xClose(pRemote);
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "branch name required", -1);
+      doltliteVcResultError(ctx, db, "branch name required");
       return;
     }
     rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
@@ -422,8 +390,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
     if( rc!=SQLITE_OK ){
       pRemote->xClose(pRemote);
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "failed to read remote refs", -1);
+      doltliteVcResultError(ctx, db, "failed to read remote refs");
       return;
     }
 
@@ -434,8 +401,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       DoltliteRemote *pBrRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
       if( !pBrRemote ){
         doltliteFreeStringArray(azNames, nNames);
-        (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error(ctx, "failed to open remote (URL must start with file:// or http://)", -1);
+        doltliteVcResultError(ctx, db, "failed to open remote (URL must start with file:// or http://)");
         return;
       }
       rc = doltliteFetch(cs, pBrRemote, zRemoteName, azNames[i]);
@@ -465,23 +431,20 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteTxnState savedState;
   int rc;
 
-  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<2 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "usage: dolt_pull(remote, branch)", -1);
+    doltliteVcResultError(ctx, db, "usage: dolt_pull(remote, branch)");
     return;
   }
 
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "remote and branch required", -1);
+    doltliteVcResultError(ctx, db, "remote and branch required");
     return;
   }
   if( argc>2 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "too many arguments", -1);
+    doltliteVcResultError(ctx, db, "too many arguments");
     return;
   }
   memset(&savedState, 0, sizeof(savedState));
@@ -588,30 +551,26 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteTxnState savedState;
   int rc;
 
-  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<1 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "usage: dolt_clone(url)", -1);
+    doltliteVcResultError(ctx, db, "usage: dolt_clone(url)");
     return;
   }
 
   zUrl = (const char*)sqlite3_value_text(argv[0]);
   if( !zUrl ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "url required", -1);
+    doltliteVcResultError(ctx, db, "url required");
     return;
   }
   if( argc>1 ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "too many arguments", -1);
+    doltliteVcResultError(ctx, db, "too many arguments");
     return;
   }
   memset(&savedState, 0, sizeof(savedState));
 
   if( doltliteHasUncommittedChanges(db) ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx,
-      "database has uncommitted changes — clone into a fresh database", -1);
+    doltliteVcResultError(ctx, db,
+      "database has uncommitted changes — clone into a fresh database");
     return;
   }
 
@@ -630,8 +589,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteCommitClear(&c);
     }
     if( !virgin ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "database is not empty — clone into a fresh database", -1);
+      doltliteVcResultError(ctx, db, "database is not empty — clone into a fresh database");
       return;
     }
   }

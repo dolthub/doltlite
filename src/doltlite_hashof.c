@@ -545,7 +545,6 @@ static int hashofResolveRefCatalog(
 ){
   const char *zRef;
   ProllyHash commitHash;
-  DoltliteCommit commit;
   char zErr[64];
   int rc;
 
@@ -569,15 +568,12 @@ static int hashofResolveRefCatalog(
     sqlite3_result_error(ctx, zErr, -1);
     return 1;
   }
-  memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommit(db, &commitHash, &commit);
+  rc = doltliteCommitCatalogHash(db, &commitHash, pCatHash);
   if( rc!=SQLITE_OK ){
     sqlite3_snprintf(sizeof(zErr), zErr, "%s: commit load failed", zFn);
     sqlite3_result_error(ctx, zErr, -1);
     return 1;
   }
-  *pCatHash = commit.catalogHash;
-  doltliteCommitClear(&commit);
   return 0;
 }
 

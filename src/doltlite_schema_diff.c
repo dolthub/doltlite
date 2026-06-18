@@ -444,7 +444,6 @@ static int sdResolveOne(
   const char *zWhich,
   ProllyHash *pCatHash
 ){
-  DoltliteCommit commit;
   ProllyHash commitHash;
   int rc;
 
@@ -455,8 +454,7 @@ static int sdResolveOne(
       "dolt_schema_diff: %s '%s' could not be resolved", zWhich, zRef);
     return SQLITE_ERROR;
   }
-  memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommit(db, &commitHash, &commit);
+  rc = doltliteCommitCatalogHash(db, &commitHash, pCatHash);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pVtab->zErrMsg);
     pVtab->zErrMsg = sqlite3_mprintf(
@@ -464,8 +462,6 @@ static int sdResolveOne(
       "commit could not be loaded", zWhich, zRef);
     return SQLITE_ERROR;
   }
-  memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
-  doltliteCommitClear(&commit);
   return SQLITE_OK;
 }
 
