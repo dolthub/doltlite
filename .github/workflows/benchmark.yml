@@ -11,7 +11,7 @@ permissions:
 jobs:
   int-keys:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     env:
       BENCH_RUNS: 5
@@ -116,7 +116,7 @@ jobs:
   non-int-keys:
     name: ${{ matrix.suite.name }}-keys
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
