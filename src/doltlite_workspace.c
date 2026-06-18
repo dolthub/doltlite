@@ -149,22 +149,18 @@ static int wsLoadRows(WorkspaceVtab *pVtab){
   ProllyHash headHash, headCat, stagedCat, workingCat;
   ProllyHash headRoot, stagedRoot, workingRoot;
   ProllyHash schemaHash;
-  DoltliteCommit headCommit;
   u8 headFlags = 0, stagedFlags = 0, workingFlags = 0;
   int rc;
 
   wsClearCache(pVtab);
-  memset(&headCommit, 0, sizeof(headCommit));
   memset(&headCat, 0, sizeof(headCat));
   memset(&stagedCat, 0, sizeof(stagedCat));
   memset(&workingCat, 0, sizeof(workingCat));
 
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
-  rc = doltliteLoadCommit(db, &headHash, &headCommit);
+  rc = doltliteCommitCatalogHash(db, &headHash, &headCat);
   if( rc!=SQLITE_OK ) return rc;
-  headCat = headCommit.catalogHash;
-  doltliteCommitClear(&headCommit);
 
   doltliteGetSessionStaged(db, &stagedCat);
   if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
@@ -363,7 +359,6 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyHash headHash, headCat, stagedCat, newRoot, newCat;
-  DoltliteCommit headCommit;
   struct TableEntry *aTables = 0;
   int nTables = 0;
   struct TableEntry *pData;
@@ -383,13 +378,10 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   int        nTgt = makeStaged ? nWorkVal : nHeadVal;
 
   if( !cs || !pCache ) return SQLITE_ERROR;
-  memset(&headCommit, 0, sizeof(headCommit));
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_ERROR;
-  rc = doltliteLoadCommit(db, &headHash, &headCommit);
+  rc = doltliteCommitCatalogHash(db, &headHash, &headCat);
   if( rc!=SQLITE_OK ) return rc;
-  headCat = headCommit.catalogHash;
-  doltliteCommitClear(&headCommit);
 
   doltliteGetSessionStaged(db, &stagedCat);
   if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;

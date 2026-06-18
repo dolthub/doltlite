@@ -199,19 +199,17 @@ int doltliteForEachUserTable(
   const sqlite3_module *pModule
 ){
   ProllyHash headCommit;
-  DoltliteCommit commit;
+  ProllyHash headCat;
   struct TableEntry *aTables = 0;
   int nTables = 0, i, rc;
 
   doltliteGetSessionHead(db, &headCommit);
   if( prollyHashIsEmpty(&headCommit) ) return SQLITE_OK;
 
-  memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommit(db, &headCommit, &commit);
+  rc = doltliteCommitCatalogHash(db, &headCommit, &headCat);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
-  doltliteCommitClear(&commit);
+  rc = doltliteLoadCatalog(db, &headCat, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nTables; i++){

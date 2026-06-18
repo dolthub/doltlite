@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_commit.h"
+#include "doltlite_internal.h"
 #include <string.h>
 
 #define DLC_PUT_U16(p,v) do{ (p)[0]=(u8)(v); (p)[1]=(u8)((v)>>8); }while(0)
@@ -136,6 +137,24 @@ void doltliteCommitClear(DoltliteCommit *c){
   c->zName = 0;
   c->zEmail = 0;
   c->zMessage = 0;
+}
+
+int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
+                              ProllyHash *pCatHash){
+  DoltliteCommit commit;
+  int rc = doltliteLoadCommit(db, pCommit, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
+  doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
+                             ProllyHash *pCatHash){
+  ProllyHash commitHash;
+  int rc = doltliteResolveRef(db, zRef, &commitHash);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteCommitCatalogHash(db, &commitHash, pCatHash);
 }
 
 static const char hexchars[] = "0123456789abcdef";

@@ -523,7 +523,6 @@ static int blameWalk(
 
     if( doltliteCommitParentCount(&commit) >= 2 ){
       ProllyHash baseHash;
-      DoltliteCommit baseCommit;
       memset(&baseHash, 0, sizeof(baseHash));
       rc = blameFindAllParentMergeBase(db, &commit, &baseHash);
       if( rc!=SQLITE_OK ){
@@ -532,14 +531,13 @@ static int blameWalk(
       }
 
       if( haveCurTable && !prollyHashIsEmpty(&baseHash) ){
-        memset(&baseCommit, 0, sizeof(baseCommit));
-        rc = doltliteLoadCommit(db, &baseHash, &baseCommit);
+        ProllyHash baseCatHash;
+        rc = doltliteCommitCatalogHash(db, &baseHash, &baseCatHash);
         if( rc==SQLITE_OK ){
           rc = blameCompareAgainstRef(db, pCur, zTableName,
                                       curFlags,
-                                      &baseCommit.catalogHash,
+                                      &baseCatHash,
                                       &walk, &commit);
-          doltliteCommitClear(&baseCommit);
         }
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
@@ -557,15 +555,13 @@ static int blameWalk(
     }else{
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, 0);
       if( pParent && !prollyHashIsEmpty(pParent) ){
-        DoltliteCommit parentCommit;
-        memset(&parentCommit, 0, sizeof(parentCommit));
-        rc = doltliteLoadCommit(db, pParent, &parentCommit);
+        ProllyHash parentCatHash;
+        rc = doltliteCommitCatalogHash(db, pParent, &parentCatHash);
         if( rc==SQLITE_OK ){
           rc = blameCompareAgainstRef(db, pCur, zTableName,
                                       curFlags,
-                                      &parentCommit.catalogHash,
+                                      &parentCatHash,
                                       &walk, &commit);
-          doltliteCommitClear(&parentCommit);
         }
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
@@ -705,7 +701,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyHash headHash;
-  DoltliteCommit headCommit;
+  ProllyHash headCatHash;
   ProllyHash tableRoot;
   u8 tableFlags = 0;
   int rc;
@@ -725,13 +721,11 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
 
-  memset(&headCommit, 0, sizeof(headCommit));
-  rc = doltliteLoadCommit(db, &headHash, &headCommit);
+  rc = doltliteCommitCatalogHash(db, &headHash, &headCatHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteLoadTableRootByName(db, &headCommit.catalogHash, v->zTableName,
+  rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
                                    &tableRoot, &tableFlags, 0);
-  doltliteCommitClear(&headCommit);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 

@@ -741,6 +741,11 @@ typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
                        DoltliteCommit *pCommit);
 
+int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
+                              ProllyHash *pCatHash);
+int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
+                             ProllyHash *pCatHash);
+
 int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
                              const sqlite3_module *pModule);
 

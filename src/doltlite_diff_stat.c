@@ -237,18 +237,8 @@ struct DsSummaryRow {
 
 static int dsResolveCatHash(sqlite3 *db, const char *zRef,
                             ProllyHash *pOut){
-  DoltliteCommit commit;
-  ProllyHash commitHash;
-  int rc;
   if( zRef ){
-    rc = doltliteResolveRef(db, zRef, &commitHash);
-    if( rc!=SQLITE_OK ) return rc;
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &commitHash, &commit);
-    if( rc!=SQLITE_OK ) return rc;
-    memcpy(pOut, &commit.catalogHash, sizeof(ProllyHash));
-    doltliteCommitClear(&commit);
-    return SQLITE_OK;
+    return doltliteRefToCatalogHash(db, zRef, pOut);
   }
   return doltliteGetHeadCatalogHash(db, pOut);
 }

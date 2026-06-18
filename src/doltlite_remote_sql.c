@@ -116,43 +116,27 @@ static int remoteSqlReportOpenError(
   return 1;
 }
 
-static int remoteSqlLoadCommit(
-  ChunkStore *cs,
-  const ProllyHash *pCommitHash,
-  DoltliteCommit *pCommit
-){
-  u8 *data = 0;
-  int nData = 0;
-  int rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteCommitDeserialize(data, nData, pCommit);
-  sqlite3_free(data);
-  return rc;
-}
-
 static int remoteSqlResetSessionToCommit(
   sqlite3 *db,
   const char *zBranch,
   const ProllyHash *pCommitHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  DoltliteCommit commit;
+  ProllyHash catHash;
   int rc;
 
   if( !cs ) return SQLITE_ERROR;
-  memset(&commit, 0, sizeof(commit));
-  rc = remoteSqlLoadCommit(cs, pCommitHash, &commit);
+  rc = doltliteCommitCatalogHash(db, pCommitHash, &catHash);
   if( rc!=SQLITE_OK ) return rc;
 
   if( zBranch ){
     doltliteSetSessionBranch(db, zBranch);
   }
-  rc = doltliteHardReset(db, &commit.catalogHash);
+  rc = doltliteHardReset(db, &catHash);
   if( rc==SQLITE_OK ){
     doltliteSetSessionHead(db, pCommitHash);
-    doltliteSetSessionStaged(db, &commit.catalogHash);
+    doltliteSetSessionStaged(db, &catHash);
   }
-  doltliteCommitClear(&commit);
   return rc;
 }
 

@@ -539,15 +539,8 @@ static int checkoutLoadAndApply(
   int rc;
   ProllyHash committedCatHash;
 
-  {
-    DoltliteCommit commit;
-
-    rc = doltliteLoadCommit(db, pCommitHash, &commit);
-    if( rc!=SQLITE_OK ) return rc;
-
-    memcpy(&committedCatHash, &commit.catalogHash, sizeof(ProllyHash));
-    doltliteCommitClear(&commit);
-  }
+  rc = doltliteCommitCatalogHash(db, pCommitHash, &committedCatHash);
+  if( rc!=SQLITE_OK ) return rc;
 
   doltliteResolveBranchEffectiveCatalog(cs, zBranch, pCommitHash,
                                         &committedCatHash, pCatHash);
@@ -860,14 +853,10 @@ static int doltliteCheckoutTables(
 
   if( zSourceRef ){
     ProllyHash sourceCommit;
-    DoltliteCommit sourceC;
-    memset(&sourceC, 0, sizeof(sourceC));
     rc = doltliteResolveRef(db, zSourceRef, &sourceCommit);
     if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
-    rc = doltliteLoadCommit(db, &sourceCommit, &sourceC);
+    rc = doltliteCommitCatalogHash(db, &sourceCommit, &sourceCatHash);
     if( rc!=SQLITE_OK ) return rc;
-    memcpy(&sourceCatHash, &sourceC.catalogHash, sizeof(ProllyHash));
-    doltliteCommitClear(&sourceC);
   }else{
     doltliteGetSessionStaged(db, &stagedHash);
     if( !prollyHashIsEmpty(&stagedHash) ){
@@ -1339,15 +1328,9 @@ static int brIsDirty(
     return SQLITE_OK;
   }
 
-  {
-    DoltliteCommit c;
-    memset(&c, 0, sizeof(c));
-    rc = doltliteLoadCommit(db, &br->commitHash, &c);
-    if( rc==SQLITE_OK ){
-      memcpy(commitCat.data, c.catalogHash.data, PROLLY_HASH_SIZE);
-      *pDirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
-    }
-    doltliteCommitClear(&c);
+  rc = doltliteCommitCatalogHash(db, &br->commitHash, &commitCat);
+  if( rc==SQLITE_OK ){
+    *pDirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
   }
   return rc;
 }
