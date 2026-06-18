@@ -33,11 +33,6 @@ int prollyCacheInit(ProllyCache *cache, int nCapacity);
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
 
-ProllyCacheEntry *prollyCachePut(ProllyCache *cache,
-                                  const ProllyHash *hash,
-                                  const u8 *pData, int nData,
-                                  int *pRc);
-
 ProllyCacheEntry *prollyCachePutOwned(ProllyCache *cache,
                                       const ProllyHash *hash,
                                       u8 *pData, int nData,

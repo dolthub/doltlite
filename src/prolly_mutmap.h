@@ -72,9 +72,6 @@ struct ProllyMutMap {
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey);
 int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted);
 
-int prollyMutMapInsertOwnedVal(ProllyMutMap *mm,
-                               const u8 *pKey, int nKey, i64 intKey,
-                               u8 *pVal, int nVal);
 int prollyMutMapInsert(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
                        const u8 *pVal, int nVal);
