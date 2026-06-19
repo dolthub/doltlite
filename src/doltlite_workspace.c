@@ -9,6 +9,8 @@
 
 #include <string.h>
 
+#define WS_IDX_STAGED_EQ 0x01
+
 typedef struct WorkspaceRow WorkspaceRow;
 struct WorkspaceRow {
   i64 rowid;
@@ -43,6 +45,7 @@ struct WorkspaceCursor {
   ProllyDiffIter iter;
   ProllyHash headRoot, stagedRoot, workingRoot;
   u8 stagedFlags, workingFlags;
+  int stagedOnly;
 };
 
 static void wsFreeRows(WorkspaceRow *aRow, int nRow){
@@ -174,9 +177,15 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   if( rc!=SQLITE_OK ) return rc;
 
   doltliteGetSessionStaged(db, &stagedCat);
+  if( c->stagedOnly==1 && prollyHashIsEmpty(&stagedCat) ){
+    c->eof = 1;
+    return SQLITE_OK;
+  }
   if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
-  rc = doltliteFlushCatalogToHash(db, &workingCat);
-  if( rc!=SQLITE_OK ) return rc;
+  if( c->stagedOnly!=1 ){
+    rc = doltliteFlushCatalogToHash(db, &workingCat);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   rc = doltliteLoadTableRootByNameOrEmpty(db, &headCat, pVtab->zTableName,
                                           &c->headRoot, &headFlags,
@@ -186,10 +195,12 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
                                           &c->stagedRoot, &c->stagedFlags,
                                           &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, pVtab->zTableName,
-                                          &c->workingRoot, &c->workingFlags,
-                                          &schemaHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( c->stagedOnly!=1 ){
+    rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, pVtab->zTableName,
+                                            &c->workingRoot, &c->workingFlags,
+                                            &schemaHash);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   if( !c->stagedFlags ){
     c->stagedFlags = headFlags ? headFlags : c->workingFlags;
@@ -215,11 +226,19 @@ static int wsOpenNextIter(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   }
   while( c->phase<2 ){
     if( c->phase==0 ){
+      if( c->stagedOnly==0 ){
+        c->phase++;
+        continue;
+      }
       pFromRoot = &c->headRoot;
       pToRoot = &c->stagedRoot;
       flags = c->stagedFlags;
       staged = 1;
     }else{
+      if( c->stagedOnly==1 ){
+        c->phase++;
+        continue;
+      }
       pFromRoot = &c->stagedRoot;
       pToRoot = &c->workingRoot;
       flags = c->workingFlags;
@@ -280,8 +299,28 @@ static int wsDisconnect(sqlite3_vtab *pBase){
 }
 
 static int wsBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  int i;
+  int iStagedEq = -1;
   (void)pVtab;
-  pInfo->estimatedCost = 1000.0;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->iColumn==1 && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      iStagedEq = i;
+      break;
+    }
+  }
+
+  if( iStagedEq>=0 ){
+    pInfo->aConstraintUsage[iStagedEq].argvIndex = 1;
+    pInfo->idxNum = WS_IDX_STAGED_EQ;
+    pInfo->estimatedCost = 500.0;
+    pInfo->estimatedRows = 100;
+  }else{
+    pInfo->idxNum = 0;
+    pInfo->estimatedCost = 1000.0;
+  }
   return SQLITE_OK;
 }
 
@@ -301,7 +340,7 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
   int rc;
-  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  (void)idxStr;
   wsCloseIter(c);
   wsClearCache(p);
   c->iRow = 0;
@@ -309,6 +348,15 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   c->phase = 0;
   c->iterStaged = 0;
   c->iterFlags = 0;
+  c->stagedOnly = -1;
+  if( idxNum & WS_IDX_STAGED_EQ ){
+    if( argc<1 ) return SQLITE_OK;
+    c->stagedOnly = sqlite3_value_int(argv[0]);
+    if( c->stagedOnly!=0 && c->stagedOnly!=1 ){
+      c->eof = 1;
+      return SQLITE_OK;
+    }
+  }
   rc = wsInitCursorRoots(c, p);
   if( rc!=SQLITE_OK ) return rc;
   return wsLoadNextRow(c, p);
