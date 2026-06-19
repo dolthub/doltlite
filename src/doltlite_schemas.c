@@ -8,6 +8,9 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
+#define SCHEMAS_IDX_TYPE_EQ 0x01
+#define SCHEMAS_IDX_NAME_EQ 0x02
+
 typedef struct SchemasRow SchemasRow;
 struct SchemasRow {
   char *zType;
@@ -51,9 +54,46 @@ static int schemasConnect(sqlite3 *db, void *pAux, int argc,
 }
 
 static int schemasBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  int i;
+  int iTypeEq = -1;
+  int iNameEq = -1;
+  int idxNum = 0;
+  int argvIdx = 1;
   (void)pVtab;
-  pInfo->estimatedCost = 100.0;
-  pInfo->estimatedRows = 10;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pC->iColumn==0 && iTypeEq<0 ){
+      iTypeEq = i;
+    }else if( pC->iColumn==1 && iNameEq<0 ){
+      iNameEq = i;
+    }
+  }
+
+  if( iTypeEq>=0 ){
+    pInfo->aConstraintUsage[iTypeEq].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iTypeEq].omit = 1;
+    idxNum |= SCHEMAS_IDX_TYPE_EQ;
+  }
+  if( iNameEq>=0 ){
+    pInfo->aConstraintUsage[iNameEq].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iNameEq].omit = 1;
+    idxNum |= SCHEMAS_IDX_NAME_EQ;
+  }
+
+  pInfo->idxNum = idxNum;
+  if( idxNum & SCHEMAS_IDX_NAME_EQ ){
+    pInfo->estimatedCost = 10.0;
+    pInfo->estimatedRows = 1;
+  }else if( idxNum & SCHEMAS_IDX_TYPE_EQ ){
+    pInfo->estimatedCost = 50.0;
+    pInfo->estimatedRows = 10;
+  }else{
+    pInfo->estimatedCost = 100.0;
+    pInfo->estimatedRows = 10;
+  }
   return SQLITE_OK;
 }
 
@@ -86,17 +126,49 @@ static int schemasFilter(sqlite3_vtab_cursor *pCursor,
   SchemasCursor *pCur = (SchemasCursor*)pCursor;
   SchemasVtab *pVtab = (SchemasVtab*)pCursor->pVtab;
   sqlite3_stmt *pStmt = 0;
+  sqlite3_str *pSql;
   int rc;
-  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  int iArg = 0;
+  char *zSql;
+  (void)idxStr;
 
   freeRows(pCur);
   pCur->iRow = 0;
 
-  rc = sqlite3_prepare_v2(pVtab->db,
+  pSql = sqlite3_str_new(pVtab->db);
+  if( !pSql ) return SQLITE_NOMEM;
+  sqlite3_str_appendall(pSql,
     "SELECT type, name, sql FROM sqlite_schema "
-    "WHERE type IN ('view','trigger') ORDER BY type, name",
-    -1, &pStmt, 0);
+    "WHERE type IN ('view','trigger')");
+  if( idxNum & SCHEMAS_IDX_TYPE_EQ ){
+    sqlite3_str_appendall(pSql, " AND type=?");
+  }
+  if( idxNum & SCHEMAS_IDX_NAME_EQ ){
+    sqlite3_str_appendall(pSql, " AND name=?");
+  }
+  sqlite3_str_appendall(pSql, " ORDER BY type, name");
+  zSql = sqlite3_str_finish(pSql);
+  if( !zSql ) return SQLITE_NOMEM;
+
+  rc = sqlite3_prepare_v2(pVtab->db, zSql, -1, &pStmt, 0);
+  sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) return rc;
+  if( idxNum & SCHEMAS_IDX_TYPE_EQ ){
+    iArg++;
+    if( iArg>argc ){
+      sqlite3_finalize(pStmt);
+      return SQLITE_OK;
+    }
+    sqlite3_bind_value(pStmt, iArg, argv[iArg-1]);
+  }
+  if( idxNum & SCHEMAS_IDX_NAME_EQ ){
+    iArg++;
+    if( iArg>argc ){
+      sqlite3_finalize(pStmt);
+      return SQLITE_OK;
+    }
+    sqlite3_bind_value(pStmt, iArg, argv[iArg-1]);
+  }
 
   while( sqlite3_step(pStmt)==SQLITE_ROW ){
     const char *zType = (const char*)sqlite3_column_text(pStmt, 0);
