@@ -179,32 +179,22 @@ int loadSchemaFromCatalog(
   const ProllyHash *pCatHash,
   SchemaEntry **ppEntries, int *pnEntries
 ){
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
   ProllyHash masterRoot;
   u8 masterFlags = 0;
   ProllyCursor cur;
-  int res, rc, i;
+  int res, rc;
   SchemaEntry *aEntries = 0;
   int nEntries = 0, nAlloc = 0;
 
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ){ *ppEntries = 0; *pnEntries = 0; return rc; }
-
-  memset(&masterRoot, 0, sizeof(masterRoot));
-  for(i=0; i<nTables; i++){
-    if( aTables[i].iTable==1 ){
-      memcpy(&masterRoot, &aTables[i].root, sizeof(ProllyHash));
-      masterFlags = aTables[i].flags;
-      break;
-    }
-  }
-  doltliteFreeCatalog(aTables, nTables);
-
-  if( prollyHashIsEmpty(&masterRoot) ){
-    *ppEntries = 0; *pnEntries = 0;
+  *ppEntries = 0;
+  *pnEntries = 0;
+  rc = doltliteLoadCatalogRootByPage(db, pCatHash, 1, &masterRoot,
+                                     &masterFlags, 0);
+  if( rc==SQLITE_NOTFOUND ){
     return SQLITE_OK;
   }
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
 
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
   rc = prollyCursorFirst(&cur, &res);

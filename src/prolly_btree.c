@@ -10241,10 +10241,11 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   return SQLITE_OK;
 }
 
-int doltliteLoadTableRootByName(
+static int doltliteLoadCatalogRoot(
   sqlite3 *db,
   const ProllyHash *pCatHash,
   const char *zTableName,
+  Pgno iWantTable,
   ProllyHash *pRoot,
   u8 *pFlags,
   ProllyHash *pSchemaHash
@@ -10256,7 +10257,8 @@ int doltliteLoadTableRootByName(
   const u8 *pEntries;
   int nTables = 0;
   int iFormat = 0;
-  int nWant;
+  int nWant = 0;
+  int bByName = zTableName!=0;
   int found = 0;
   ProllyHash foundRoot;
   ProllyHash foundSchemaHash;
@@ -10268,10 +10270,14 @@ int doltliteLoadTableRootByName(
   if( pFlags ) *pFlags = 0;
   if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(*pSchemaHash));
   if( !cs ) return SQLITE_ERROR;
-  if( !zTableName || !pCatHash || prollyHashIsEmpty(pCatHash) ){
+  if( !pCatHash || prollyHashIsEmpty(pCatHash) ){
     return SQLITE_NOTFOUND;
   }
-  nWant = (int)strlen(zTableName);
+  if( bByName ){
+    nWant = (int)strlen(zTableName);
+  }else if( iWantTable==0 ){
+    return SQLITE_NOTFOUND;
+  }
 
   rc = chunkStoreGet(cs, pCatHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
@@ -10282,6 +10288,7 @@ int doltliteLoadTableRootByName(
 
   q = pEntries;
   for(i=0; i<nTables; i++){
+    Pgno iTable;
     u8 flags;
     ProllyHash root;
     ProllyHash schemaHash;
@@ -10291,6 +10298,7 @@ int doltliteLoadTableRootByName(
       sqlite3_free(data);
       return SQLITE_CORRUPT;
     }
+    iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
     q += CAT_ENTRY_ITABLE_SIZE;
     flags = *q++;
     memcpy(root.data, q, PROLLY_HASH_SIZE);
@@ -10319,8 +10327,14 @@ int doltliteLoadTableRootByName(
       pName = q;
       q += nName+nTbl;
       if( !found
+       && bByName
        && nType==5 && memcmp(pType, "table", 5)==0
        && nName==nWant && memcmp(pName, zTableName, nName)==0 ){
+        found = 1;
+        memcpy(&foundRoot, &root, sizeof(foundRoot));
+        memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
+        foundFlags = flags;
+      }else if( !found && !bByName && iTable==iWantTable ){
         found = 1;
         memcpy(&foundRoot, &root, sizeof(foundRoot));
         memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
@@ -10341,7 +10355,13 @@ int doltliteLoadTableRootByName(
       }
       pName = q;
       q += nLen;
-      if( !found && nLen==nWant && memcmp(pName, zTableName, nLen)==0 ){
+      if( !found && bByName
+       && nLen==nWant && memcmp(pName, zTableName, nLen)==0 ){
+        found = 1;
+        memcpy(&foundRoot, &root, sizeof(foundRoot));
+        memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
+        foundFlags = flags;
+      }else if( !found && !bByName && iTable==iWantTable ){
         found = 1;
         memcpy(&foundRoot, &root, sizeof(foundRoot));
         memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
@@ -10360,6 +10380,30 @@ int doltliteLoadTableRootByName(
   if( pFlags ) *pFlags = foundFlags;
   if( pSchemaHash ) memcpy(pSchemaHash, &foundSchemaHash, sizeof(*pSchemaHash));
   return SQLITE_OK;
+}
+
+int doltliteLoadTableRootByName(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  return doltliteLoadCatalogRoot(db, pCatHash, zTableName, 0,
+                                 pRoot, pFlags, pSchemaHash);
+}
+
+int doltliteLoadCatalogRootByPage(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  Pgno iTable,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  return doltliteLoadCatalogRoot(db, pCatHash, 0, iTable,
+                                 pRoot, pFlags, pSchemaHash);
 }
 
 void doltliteFreeCatalog(struct TableEntry *a, int n){
