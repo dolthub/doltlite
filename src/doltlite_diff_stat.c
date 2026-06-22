@@ -13,10 +13,25 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-static int dsLoadColNames(sqlite3 *db,
-                          const ProllyHash *pCatHash,
-                          const char *zTableName,
-                          char ***pazOut, int *pnOut){
+typedef struct DsSchemaInfo DsSchemaInfo;
+struct DsSchemaInfo {
+  char *zSql;
+  char **azCols;
+  int nCols;
+};
+
+static void dsFreeSchemaInfo(DsSchemaInfo *pInfo){
+  sqlite3_free(pInfo->zSql);
+  doltliteFreeStringArray(pInfo->azCols, pInfo->nCols);
+  memset(pInfo, 0, sizeof(*pInfo));
+}
+
+static int dsLoadSchemaInfo(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  DsSchemaInfo *pInfo
+){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   SchemaEntry *aSchemas = 0;
@@ -29,8 +44,7 @@ static int dsLoadColNames(sqlite3 *db,
   int n = 0, alloc = 0;
   int rc;
 
-  *pazOut = 0;
-  *pnOut = 0;
+  memset(pInfo, 0, sizeof(*pInfo));
   if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
   rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
@@ -39,6 +53,12 @@ static int dsLoadColNames(sqlite3 *db,
   if( !pEntry || !pEntry->zSql ){
     freeSchemaEntries(aSchemas, nSchemas);
     return SQLITE_OK;
+  }
+
+  pInfo->zSql = sqlite3_mprintf("%s", pEntry->zSql);
+  if( !pInfo->zSql ){
+    freeSchemaEntries(aSchemas, nSchemas);
+    return SQLITE_NOMEM;
   }
 
   rc = sqlite3_open(":memory:", &tmp);
@@ -74,40 +94,11 @@ cleanup:
     int k;
     for(k=0; k<n; k++) sqlite3_free(az[k]);
     sqlite3_free(az);
+    dsFreeSchemaInfo(pInfo);
     return rc;
   }
-  *pazOut = az;
-  *pnOut = n;
-  return SQLITE_OK;
-}
-
-static int dsLoadCreateSql(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  const char *zTableName,
-  char **pzSqlOut
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
-  SchemaEntry *pEntry;
-  int rc;
-
-  *pzSqlOut = 0;
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
-
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
-  if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
-  if( pEntry && pEntry->zSql ){
-    *pzSqlOut = sqlite3_mprintf("%s", pEntry->zSql);
-    if( !*pzSqlOut ){
-      freeSchemaEntries(aSchemas, nSchemas);
-      return SQLITE_NOMEM;
-    }
-  }
-  freeSchemaEntries(aSchemas, nSchemas);
+  pInfo->azCols = az;
+  pInfo->nCols = n;
   return SQLITE_OK;
 }
 
@@ -354,9 +345,7 @@ static int dsComputeTableStats(
   int schemaChanged = 0;
   ProllyHash fromRoot, toRoot;
   u8 fromFlags = 0, toFlags = 0;
-  char *zFromSql = 0, *zToSql = 0;
-  char **azFromCols = 0, **azToCols = 0;
-  int nFromCols = 0, nToCols = 0;
+  DsSchemaInfo fromInfo, toInfo;
   DsColMap colMap;
   i64 oldCount = 0, newCount = 0;
   i64 rowsMod = 0, rowsAdd = 0, rowsDel = 0;
@@ -364,6 +353,8 @@ static int dsComputeTableStats(
   int rc;
 
   memset(pOut, 0, sizeof(*pOut));
+  memset(&fromInfo, 0, sizeof(fromInfo));
+  memset(&toInfo, 0, sizeof(toInfo));
   memset(&colMap, 0, sizeof(colMap));
 
   hasFrom = pFromEntry!=0;
@@ -383,26 +374,22 @@ static int dsComputeTableStats(
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
   if( hasFrom ){
-    rc = dsLoadCreateSql(db, pFromCatHash, zTableName, &zFromSql);
+    rc = dsLoadSchemaInfo(db, pFromCatHash, zTableName, &fromInfo);
     if( rc!=SQLITE_OK ) return rc;
-    rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
-    if( rc!=SQLITE_OK ) goto done;
   }
   if( hasTo ){
-    rc = dsLoadCreateSql(db, pToCatHash, zTableName, &zToSql);
+    rc = dsLoadSchemaInfo(db, pToCatHash, zTableName, &toInfo);
     if( rc!=SQLITE_OK ) goto done;
-    rc = dsLoadColNames(db, pToCatHash, zTableName, &azToCols, &nToCols);
-    if( rc!=SQLITE_OK ){
-      goto done;
-    }
   }
 
   schemaChanged =
     hasFrom && hasTo &&
-    strcmp(zFromSql ? zFromSql : "", zToSql ? zToSql : "")!=0;
+    strcmp(fromInfo.zSql ? fromInfo.zSql : "",
+           toInfo.zSql ? toInfo.zSql : "")!=0;
 
   if( hasFrom && hasTo ){
-    rc = dsBuildColMap(azFromCols, nFromCols, azToCols, nToCols, &colMap);
+    rc = dsBuildColMap(fromInfo.azCols, fromInfo.nCols,
+                       toInfo.azCols, toInfo.nCols, &colMap);
     if( rc!=SQLITE_OK ) goto done;
   }
 
@@ -432,11 +419,11 @@ static int dsComputeTableStats(
       switch( pChange->type ){
         case PROLLY_DIFF_ADD:
           rowsAdd++;
-          cellsAdd += nToCols;
+          cellsAdd += toInfo.nCols;
           break;
         case PROLLY_DIFF_DELETE:
           rowsDel++;
-          cellsDel += nFromCols;
+          cellsDel += fromInfo.nCols;
           break;
         case PROLLY_DIFF_MODIFY: {
           int changed = dsCountChangedCells(
@@ -459,20 +446,20 @@ static int dsComputeTableStats(
   if( hasFrom && hasTo ){
     i64 rowsInBoth = oldCount - rowsDel;
     if( rowsInBoth < 0 ) rowsInBoth = 0;
-    if( nToCols > nFromCols ){
-      cellsAdd += (i64)rowsInBoth * (nToCols - nFromCols);
-    }else if( nFromCols > nToCols ){
-      cellsDel += (i64)rowsInBoth * (nFromCols - nToCols);
+    if( toInfo.nCols > fromInfo.nCols ){
+      cellsAdd += (i64)rowsInBoth * (toInfo.nCols - fromInfo.nCols);
+    }else if( fromInfo.nCols > toInfo.nCols ){
+      cellsDel += (i64)rowsInBoth * (fromInfo.nCols - toInfo.nCols);
     }
   }
 
   if( !hasFrom && hasTo ){
     rowsAdd = newCount;
-    cellsAdd = (i64)newCount * nToCols;
+    cellsAdd = (i64)newCount * toInfo.nCols;
   }
   if( hasFrom && !hasTo ){
     rowsDel = oldCount;
-    cellsDel = (i64)oldCount * nFromCols;
+    cellsDel = (i64)oldCount * fromInfo.nCols;
   }
 
   pOut->zTableName     = sqlite3_mprintf("%s", zTableName);
@@ -487,8 +474,8 @@ static int dsComputeTableStats(
   pOut->cellsModified  = cellsMod;
   pOut->oldRowCount    = oldCount;
   pOut->newRowCount    = newCount;
-  pOut->oldCellCount   = (i64)oldCount * nFromCols;
-  pOut->newCellCount   = (i64)newCount * nToCols;
+  pOut->oldCellCount   = (i64)oldCount * fromInfo.nCols;
+  pOut->newCellCount   = (i64)newCount * toInfo.nCols;
 
   if( schemaChanged
    && rowsAdd==0 && rowsDel==0 && rowsMod==0
@@ -501,10 +488,8 @@ static int dsComputeTableStats(
   }
 
 done:
-  sqlite3_free(zFromSql);
-  sqlite3_free(zToSql);
-  doltliteFreeStringArray(azFromCols, nFromCols);
-  doltliteFreeStringArray(azToCols, nToCols);
+  dsFreeSchemaInfo(&fromInfo);
+  dsFreeSchemaInfo(&toInfo);
   dsFreeColMap(&colMap);
   return rc;
 }
