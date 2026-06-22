@@ -860,6 +860,35 @@ SELECT CONCAT('LOG|P|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_fea
 SELECT CONCAT('LOG|T|', count(*)) FROM t;
 "
 
+echo "--- rebase dissolves merge commits in range ---"
+
+MERGE_DISSOLVE_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'side');
+INSERT INTO t VALUES (2, 'side_row');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'side-commit');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (10, 'feat1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_merge('side', '-m', 'Merge side into feat');
+INSERT INTO t VALUES (11, 'feat2');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (100, 'main_new');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main-new');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+"
+
+oracle "merge_dissolve_log" "$MERGE_DISSOLVE_SETUP" \
+  "SELECT CONCAT('LOG|', message) FROM dolt_log WHERE message NOT LIKE 'Initialize%';"
+
+oracle "merge_dissolve_table" "$MERGE_DISSOLVE_SETUP" \
+  "SELECT CONCAT('LOG|', id, '=', v) FROM t ORDER BY id;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

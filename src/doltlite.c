@@ -3621,14 +3621,15 @@ static int doltliteRebaseCollectReplaySet(
   int *pnReplay
 ){
   ProllyHashSet upstreamAncestors;
+  ProllyHashSet visited;
   ProllyHash *queue = 0;
   int qHead = 0, qTail = 0, qAlloc = 0;
   ProllyHash *aReplay = 0;
   int nReplay = 0, nAllocReplay = 0;
   int rc;
   int upstreamInit = 0;
-  ProllyHash walk;
-  int i;
+  int visitedInit = 0;
+  int i, j;
 
   *paReplay = 0;
   *pnReplay = 0;
@@ -3669,31 +3670,55 @@ static int doltliteRebaseCollectReplaySet(
     doltliteCommitClear(&c);
   }
 
-  sqlite3_free(queue);
-  queue = 0;
+  /* BFS from HEAD dissolves merge commits: traverse all parents but only
+  ** include non-merge commits in the replay set, linearizing the history. */
+  qHead = qTail = 0;
+  queue[qTail++] = *pHeadHash;
 
-  walk = *pHeadHash;
-  while( !prollyHashIsEmpty(&walk) && !prollyHashSetContains(&upstreamAncestors, &walk) ){
+  rc = prollyHashSetInit(&visited, 256);
+  if( rc!=SQLITE_OK ) goto cleanup;
+  visitedInit = 1;
+
+  while( qHead < qTail ){
+    ProllyHash cur = queue[qHead++];
     DoltliteCommit c;
-    const ProllyHash *pParent;
+    int nParents;
 
-    if( nReplay >= nAllocReplay ){
-      int nNew = nAllocReplay ? nAllocReplay*2 : 16;
-      ProllyHash *tmp = sqlite3_realloc(aReplay, nNew*(int)sizeof(ProllyHash));
-      if( !tmp ){ rc = SQLITE_NOMEM; goto cleanup; }
-      aReplay = tmp;
-      nAllocReplay = nNew;
-    }
-    aReplay[nReplay++] = walk;
+    if( prollyHashIsEmpty(&cur) ) continue;
+    if( prollyHashSetContains(&upstreamAncestors, &cur) ) continue;
+    if( prollyHashSetContains(&visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&visited, &cur);
+    if( rc!=SQLITE_OK ) goto cleanup;
 
     memset(&c, 0, sizeof(c));
-    rc = doltliteLoadCommit(db, &walk, &c);
+    rc = doltliteLoadCommit(db, &cur, &c);
     if( rc!=SQLITE_OK ) goto cleanup;
-    pParent = doltliteCommitParentHash(&c, 0);
-    if( pParent && !prollyHashIsEmpty(pParent) ){
-      walk = *pParent;
-    }else{
-      memset(&walk, 0, sizeof(walk));
+    nParents = doltliteCommitParentCount(&c);
+
+    if( nParents<=1 ){
+      if( nReplay >= nAllocReplay ){
+        int nNew = nAllocReplay ? nAllocReplay*2 : 16;
+        ProllyHash *tmp = sqlite3_realloc(aReplay, nNew*(int)sizeof(ProllyHash));
+        if( !tmp ){ doltliteCommitClear(&c); rc = SQLITE_NOMEM; goto cleanup; }
+        aReplay = tmp;
+        nAllocReplay = nNew;
+      }
+      aReplay[nReplay++] = cur;
+    }
+
+    for( j=0; j<nParents; j++ ){
+      const ProllyHash *pp = doltliteCommitParentHash(&c, j);
+      if( !pp || prollyHashIsEmpty(pp) ) continue;
+      if( prollyHashSetContains(&upstreamAncestors, pp) ) continue;
+      if( prollyHashSetContains(&visited, pp) ) continue;
+      if( qTail >= qAlloc ){
+        int nNew = qAlloc * 2;
+        ProllyHash *tmp = sqlite3_realloc(queue, nNew*(int)sizeof(ProllyHash));
+        if( !tmp ){ doltliteCommitClear(&c); rc = SQLITE_NOMEM; goto cleanup; }
+        queue = tmp;
+        qAlloc = nNew;
+      }
+      queue[qTail++] = *pp;
     }
     doltliteCommitClear(&c);
   }
@@ -3713,6 +3738,7 @@ cleanup:
   sqlite3_free(queue);
   sqlite3_free(aReplay);
   if( upstreamInit ) prollyHashSetFree(&upstreamAncestors);
+  if( visitedInit ) prollyHashSetFree(&visited);
   return rc;
 }
 
