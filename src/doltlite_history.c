@@ -71,7 +71,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   DoltliteCommit commit;
-  struct TableEntry *aT = 0; int nT = 0;
   ProllyHash tableRoot; u8 flags = 0;
   int rc, res;
   int seekable;
@@ -97,16 +96,15 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     }
   }
 
-  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aT, &nT, 0);
+  rc = doltliteLoadTableRootByName(db, &commit.catalogHash, zTableName,
+                                   &tableRoot, &flags, 0);
   doltliteCommitClear(&commit);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 
-  if( doltliteFindTableRootByName(aT, nT, zTableName, &tableRoot, &flags, 0)
-      !=SQLITE_OK || prollyHashIsEmpty(&tableRoot) ){
-    doltliteFreeCatalog(aT, nT);
+  if( prollyHashIsEmpty(&tableRoot) ){
     return SQLITE_OK;
   }
-  doltliteFreeCatalog(aT, nT);
 
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
 
