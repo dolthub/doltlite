@@ -552,6 +552,107 @@ done:
   return rc;
 }
 
+static int sdAppendRenameIfMatches(
+  SdCursor *pCur,
+  SchemaEntry *aFrom, int nFrom,
+  SchemaEntry *aTo, int nTo,
+  struct TableEntry *aFromTables, int nFromTables,
+  struct TableEntry *aToTables, int nToTables,
+  const char *zFilter,
+  int *pRenamed
+){
+  struct TableEntry *pTo;
+  struct TableEntry *pFrom;
+  SchemaEntry *pDropped;
+  SchemaEntry *pAdded;
+  int rc;
+
+  *pRenamed = 0;
+  if( !zFilter ) return SQLITE_OK;
+
+  pTo = doltliteFindTableByName(aToTables, nToTables, zFilter);
+  if( pTo && pTo->iTable!=0 ){
+    pFrom = doltliteFindTableByNumber(aFromTables, nFromTables, pTo->iTable);
+    if( pFrom && pFrom->zName
+     && strcmp(pFrom->zName, zFilter)!=0
+     && prollyHashCompare(&pFrom->root, &pTo->root)==0
+     && !doltliteFindTableByName(aToTables, nToTables, pFrom->zName) ){
+      pDropped = findSchemaEntry(aFrom, nFrom, pFrom->zName);
+      pAdded = findSchemaEntry(aTo, nTo, zFilter);
+      if( pDropped && pAdded && !findSchemaEntry(aFrom, nFrom, zFilter) ){
+        rc = appendSchemaDiffRow(pCur, pDropped->zName, pAdded->zName,
+                                 pDropped->zSql, pAdded->zSql);
+        if( rc!=SQLITE_OK ) return rc;
+        *pRenamed = 1;
+        return SQLITE_OK;
+      }
+    }
+  }
+
+  pFrom = doltliteFindTableByName(aFromTables, nFromTables, zFilter);
+  if( pFrom && pFrom->iTable!=0 ){
+    pTo = doltliteFindTableByNumber(aToTables, nToTables, pFrom->iTable);
+    if( pTo && pTo->zName
+     && strcmp(pTo->zName, zFilter)!=0
+     && prollyHashCompare(&pFrom->root, &pTo->root)==0
+     && !doltliteFindTableByName(aToTables, nToTables, zFilter) ){
+      pDropped = findSchemaEntry(aFrom, nFrom, zFilter);
+      pAdded = findSchemaEntry(aTo, nTo, pTo->zName);
+      if( pDropped && pAdded && !findSchemaEntry(aFrom, nFrom, pTo->zName) ){
+        rc = appendSchemaDiffRow(pCur, pDropped->zName, pAdded->zName,
+                                 pDropped->zSql, pAdded->zSql);
+        if( rc!=SQLITE_OK ) return rc;
+        *pRenamed = 1;
+      }
+    }
+  }
+
+  return SQLITE_OK;
+}
+
+static int computeSchemaDiffFiltered(
+  SdCursor *pCur,
+  SchemaEntry *aFrom, int nFrom,
+  SchemaEntry *aTo, int nTo,
+  struct TableEntry *aFromTables, int nFromTables,
+  struct TableEntry *aToTables, int nToTables,
+  const char *zFilter
+){
+  SchemaEntry *pFrom;
+  SchemaEntry *pTo;
+  int renamed = 0;
+  int rc;
+
+  if( !zFilter ){
+    return computeSchemaDiff(pCur, aFrom, nFrom, aTo, nTo,
+                             aFromTables, nFromTables,
+                             aToTables, nToTables);
+  }
+
+  rc = sdAppendRenameIfMatches(pCur, aFrom, nFrom, aTo, nTo,
+                               aFromTables, nFromTables,
+                               aToTables, nToTables, zFilter, &renamed);
+  if( rc!=SQLITE_OK ) return rc;
+
+  pFrom = findSchemaEntry(aFrom, nFrom, zFilter);
+  pTo = findSchemaEntry(aTo, nTo, zFilter);
+
+  if( pTo ){
+    if( !pFrom ){
+      if( !renamed ){
+        return appendSchemaDiffRow(pCur, "", pTo->zName, "", pTo->zSql);
+      }
+    }else if( pFrom->zSql && pTo->zSql && strcmp(pFrom->zSql, pTo->zSql)!=0 ){
+      return appendSchemaDiffRow(pCur, pTo->zName, pTo->zName,
+                                 pFrom->zSql, pTo->zSql);
+    }
+  }else if( pFrom && !renamed ){
+    return appendSchemaDiffRow(pCur, pFrom->zName, "", pFrom->zSql, "");
+  }
+
+  return SQLITE_OK;
+}
+
 static const char *sdSchema =
   "CREATE TABLE x("
   "  from_table_name TEXT,"
@@ -763,32 +864,11 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   rc = doltliteLoadCatalog(db, &toCatHash, &aToTables, &nToTables, 0);
   if( rc!=SQLITE_OK ) goto sd_filter_done;
 
-  rc = computeSchemaDiff(c, aFrom, nFrom, aTo, nTo,
-                         aFromTables, nFromTables,
-                         aToTables, nToTables);
+  rc = computeSchemaDiffFiltered(c, aFrom, nFrom, aTo, nTo,
+                                 aFromTables, nFromTables,
+                                 aToTables, nToTables,
+                                 zTableFilter);
   if( rc!=SQLITE_OK ) goto sd_filter_done;
-
-  if( zTableFilter ){
-    int j, k=0;
-    for(j=0; j<c->nRows; j++){
-      int matchFrom = c->aRows[j].zFromName
-                   && c->aRows[j].zFromName[0]
-                   && strcmp(c->aRows[j].zFromName, zTableFilter)==0;
-      int matchTo = c->aRows[j].zToName
-                 && c->aRows[j].zToName[0]
-                 && strcmp(c->aRows[j].zToName, zTableFilter)==0;
-      if( matchFrom || matchTo ){
-        if( k!=j ) c->aRows[k] = c->aRows[j];
-        k++;
-      }else{
-        sqlite3_free(c->aRows[j].zFromName);
-        sqlite3_free(c->aRows[j].zToName);
-        sqlite3_free(c->aRows[j].zFromSql);
-        sqlite3_free(c->aRows[j].zToSql);
-      }
-    }
-    c->nRows = k;
-  }
 
 sd_filter_done:
   freeSchemaEntries(aFrom, nFrom);
