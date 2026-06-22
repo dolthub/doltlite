@@ -87,12 +87,7 @@ static int schemaHasAnyViewOrTrigger(sqlite3 *db,
 
 typedef struct DiffSummaryRow DiffSummaryRow;
 struct DiffSummaryRow {
-  char zCommitHex[PROLLY_HASH_SIZE*2+1];
   char *zTableName;
-  char *zCommitter;
-  char *zEmail;
-  i64  timestamp;
-  char *zMessage;
   u8   dataChange;
   u8   schemaChange;
 };
@@ -114,6 +109,12 @@ struct DoltliteDiffCursor {
   int nBatch;
   int nBatchAlloc;
   int iBatch;
+  char zBatchCommitHex[PROLLY_HASH_SIZE*2+1];
+  char *zBatchCommitter;
+  char *zBatchEmail;
+  char *zBatchMessage;
+  i64 batchTimestamp;
+  int batchHasCommit;
   char *zFilterTable;
   int phase;
   int hasRow;
@@ -229,15 +230,43 @@ static void freeBatch(DoltliteDiffCursor *pCur){
   int i;
   for(i=0; i<pCur->nBatch; i++){
     sqlite3_free(pCur->aBatch[i].zTableName);
-    sqlite3_free(pCur->aBatch[i].zCommitter);
-    sqlite3_free(pCur->aBatch[i].zEmail);
-    sqlite3_free(pCur->aBatch[i].zMessage);
   }
   sqlite3_free(pCur->aBatch);
   pCur->aBatch = 0;
   pCur->nBatch = 0;
   pCur->nBatchAlloc = 0;
   pCur->iBatch = 0;
+  memset(pCur->zBatchCommitHex, 0, sizeof(pCur->zBatchCommitHex));
+  sqlite3_free(pCur->zBatchCommitter);
+  sqlite3_free(pCur->zBatchEmail);
+  sqlite3_free(pCur->zBatchMessage);
+  pCur->zBatchCommitter = 0;
+  pCur->zBatchEmail = 0;
+  pCur->zBatchMessage = 0;
+  pCur->batchTimestamp = 0;
+  pCur->batchHasCommit = 0;
+}
+
+static int batchSetMeta(DoltliteDiffCursor *pCur,
+                        const char *zCommitHex,
+                        const DoltliteCommit *pCommit){
+  memcpy(pCur->zBatchCommitHex, zCommitHex, PROLLY_HASH_SIZE*2+1);
+  if( !pCommit ) return SQLITE_OK;
+
+  pCur->zBatchCommitter =
+    sqlite3_mprintf("%s", pCommit->zName ? pCommit->zName : "");
+  pCur->zBatchEmail =
+    sqlite3_mprintf("%s", pCommit->zEmail ? pCommit->zEmail : "");
+  pCur->zBatchMessage =
+    sqlite3_mprintf("%s", pCommit->zMessage ? pCommit->zMessage : "");
+  if( !pCur->zBatchCommitter
+   || !pCur->zBatchEmail
+   || !pCur->zBatchMessage ){
+    return SQLITE_NOMEM;
+  }
+  pCur->batchTimestamp = pCommit->timestamp;
+  pCur->batchHasCommit = 1;
+  return SQLITE_OK;
 }
 
 static int batchAppend(DoltliteDiffCursor *pCur,
@@ -247,8 +276,13 @@ static int batchAppend(DoltliteDiffCursor *pCur,
                        u8 dataChange, u8 schemaChange){
   DiffSummaryRow *aNew, *r;
   int nNew;
+  int rc;
   if( pCur->zFilterTable && strcmp(pCur->zFilterTable, zTableName)!=0 ){
     return SQLITE_OK;
+  }
+  if( pCur->nBatch==0 ){
+    rc = batchSetMeta(pCur, zCommitHex, pCommit);
+    if( rc!=SQLITE_OK ) return rc;
   }
   if( pCur->nBatch>=pCur->nBatchAlloc ){
     nNew = pCur->nBatchAlloc ? pCur->nBatchAlloc*2 : 16;
@@ -260,22 +294,8 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   }
   r = &pCur->aBatch[pCur->nBatch];
   memset(r, 0, sizeof(*r));
-  memcpy(r->zCommitHex, zCommitHex, PROLLY_HASH_SIZE*2+1);
   r->zTableName = sqlite3_mprintf("%s", zTableName ? zTableName : "");
   if( !r->zTableName ) return SQLITE_NOMEM;
-  if( pCommit ){
-    r->zCommitter = sqlite3_mprintf("%s", pCommit->zName  ? pCommit->zName  : "");
-    r->zEmail     = sqlite3_mprintf("%s", pCommit->zEmail ? pCommit->zEmail : "");
-    r->zMessage   = sqlite3_mprintf("%s", pCommit->zMessage ? pCommit->zMessage : "");
-    if( !r->zCommitter || !r->zEmail || !r->zMessage ){
-      sqlite3_free(r->zTableName);
-      sqlite3_free(r->zCommitter);
-      sqlite3_free(r->zEmail);
-      sqlite3_free(r->zMessage);
-      return SQLITE_NOMEM;
-    }
-    r->timestamp = pCommit->timestamp;
-  }
   r->dataChange   = dataChange;
   r->schemaChange = schemaChange;
   pCur->nBatch++;
@@ -805,33 +825,33 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
   r = &pCur->aBatch[pCur->iBatch];
   switch( iCol ){
     case DIFF_COL_COMMIT_HASH:
-      sqlite3_result_text(ctx, r->zCommitHex, -1, SQLITE_TRANSIENT);
+      sqlite3_result_text(ctx, pCur->zBatchCommitHex, -1, SQLITE_TRANSIENT);
       break;
     case DIFF_COL_COMMITTER:
-      if( r->zCommitter ){
-        sqlite3_result_text(ctx, r->zCommitter, -1, SQLITE_TRANSIENT);
+      if( pCur->zBatchCommitter ){
+        sqlite3_result_text(ctx, pCur->zBatchCommitter, -1, SQLITE_TRANSIENT);
       }else{
         sqlite3_result_null(ctx);
       }
       break;
     case DIFF_COL_EMAIL:
-      if( r->zEmail ){
-        sqlite3_result_text(ctx, r->zEmail, -1, SQLITE_TRANSIENT);
+      if( pCur->zBatchEmail ){
+        sqlite3_result_text(ctx, pCur->zBatchEmail, -1, SQLITE_TRANSIENT);
       }else{
         sqlite3_result_null(ctx);
       }
       break;
     case DIFF_COL_DATE: {
-      if( r->timestamp==0 && r->zCommitter==0 ){
+      if( !pCur->batchHasCommit ){
         sqlite3_result_null(ctx);
       }else{
-        doltliteResultTimestamp(ctx, r->timestamp);
+        doltliteResultTimestamp(ctx, pCur->batchTimestamp);
       }
       break;
     }
     case DIFF_COL_MESSAGE:
-      if( r->zMessage ){
-        sqlite3_result_text(ctx, r->zMessage, -1, SQLITE_TRANSIENT);
+      if( pCur->zBatchMessage ){
+        sqlite3_result_text(ctx, pCur->zBatchMessage, -1, SQLITE_TRANSIENT);
       }else{
         sqlite3_result_null(ctx);
       }
