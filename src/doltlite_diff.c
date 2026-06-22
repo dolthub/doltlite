@@ -282,6 +282,59 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   return SQLITE_OK;
 }
 
+/* Fast path for table_name constrained scans. */
+static int diffCatalogPairOne(
+  DoltliteDiffCursor *pCur, sqlite3 *db,
+  struct TableEntry *aChild, int nChild,
+  struct TableEntry *aParent, int nParent,
+  const char *zHex, const DoltliteCommit *pCommit
+){
+  struct TableEntry *e;
+  struct TableEntry *p;
+  u8 dataChange;
+  u8 schemaChange;
+
+  if( !pCur->zFilterTable ) return SQLITE_OK;
+
+  if( strcmp(pCur->zFilterTable, "dolt_schemas")==0 ){
+    ProllyHash emptyRoot;
+    const ProllyHash *pOldRoot;
+    struct TableEntry *pNewMaster;
+    struct TableEntry *pOldMaster;
+
+    memset(&emptyRoot, 0, sizeof(emptyRoot));
+    pNewMaster = doltliteFindTableByNumber(aChild, nChild, 1);
+    pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
+    if( !pNewMaster ) return SQLITE_OK;
+
+    pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
+    if( schemaHasViewOrTriggerDiff(db, pOldRoot, &pNewMaster->root,
+                                   pNewMaster->flags) ){
+      u8 schemaChangeFlag =
+        schemaHasAnyViewOrTrigger(db, pOldRoot, pNewMaster->flags) ? 0 : 1;
+      return batchAppend(pCur, zHex, "dolt_schemas", pCommit,
+                         1, schemaChangeFlag);
+    }
+    return SQLITE_OK;
+  }
+
+  e = doltliteFindTableByName(aChild, nChild, pCur->zFilterTable);
+  p = doltliteFindTableByName(aParent, nParent, pCur->zFilterTable);
+  if( !e && !p ) return SQLITE_OK;
+
+  if( !p || !e ){
+    dataChange = 1;
+    schemaChange = 1;
+  }else{
+    dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
+    schemaChange =
+      (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
+    if( !dataChange && !schemaChange ) return SQLITE_OK;
+  }
+  return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit,
+                     dataChange, schemaChange);
+}
+
 /* Diff child against parent catalogs, emitting one batch row per changed table
 ** (plus the dolt_schemas view/trigger special case and reverse scan for
 ** drops). zHex/pCommit label the rows: "WORKING"+null for the working set, the
@@ -297,6 +350,11 @@ static int diffCatalogPair(
   DiffNameIndex parentIdx;
   memset(&childIdx, 0, sizeof(childIdx));
   memset(&parentIdx, 0, sizeof(parentIdx));
+
+  if( pCur->zFilterTable ){
+    return diffCatalogPairOne(pCur, db, aChild, nChild, aParent, nParent,
+                              zHex, pCommit);
+  }
 
   rc = diffNameIndexInit(&childIdx, aChild, nChild);
   if( rc!=SQLITE_OK ) goto diff_done;
