@@ -1232,6 +1232,8 @@ typedef struct BrCur BrCur;
 struct BrCur {
   sqlite3_vtab_cursor base;
   int iRow;
+  int bSingle;
+  int iSingle;
   int iCommitRow;
   DoltliteCommit commit;
 };
@@ -1280,9 +1282,23 @@ static int brClose(sqlite3_vtab_cursor *cur){
   return SQLITE_OK;
 }
 static int brFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
-  (void)n;(void)s;(void)a;(void)v;
-  brClearCommit((BrCur*)c);
-  ((BrCur*)c)->iRow = 0; return SQLITE_OK;
+  BrVtab *pVtab = (BrVtab*)c->pVtab;
+  BrCur *pCur = (BrCur*)c;
+  (void)s;
+  (void)a;
+  brClearCommit(pCur);
+  pCur->iRow = 0;
+  pCur->bSingle = 0;
+  pCur->iSingle = -1;
+  if( n==1 ){
+    ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+    const char *zName = (const char*)sqlite3_value_text(v[0]);
+    pCur->bSingle = 1;
+    pCur->iSingle = cs ? csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
+                                        (int)sizeof(BranchRef), zName) : -1;
+    pCur->iRow = pCur->iSingle;
+  }
+  return SQLITE_OK;
 }
 static int brNext(sqlite3_vtab_cursor *c){
   brClearCommit((BrCur*)c);
@@ -1291,8 +1307,11 @@ static int brNext(sqlite3_vtab_cursor *c){
 }
 static int brEof(sqlite3_vtab_cursor *c){
   BrVtab *v = (BrVtab*)c->pVtab;
+  BrCur *pCur = (BrCur*)c;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
-  return !cs || ((BrCur*)c)->iRow >= refsTableBranchCount(&cs->refs);
+  if( !cs ) return 1;
+  if( pCur->bSingle ) return pCur->iSingle<0 || pCur->iRow!=pCur->iSingle;
+  return pCur->iRow >= refsTableBranchCount(&cs->refs);
 }
 
 static int brIsDirty(
@@ -1428,7 +1447,10 @@ static int brRowid(sqlite3_vtab_cursor *c, sqlite3_int64 *r){
   *r=((BrCur*)c)->iRow; return SQLITE_OK;
 }
 static int brBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
-  (void)v; p->estimatedCost=10; p->estimatedRows=5; return SQLITE_OK;
+  (void)v;
+  p->estimatedCost=10;
+  p->estimatedRows=5;
+  return doltliteBestIndexEq(p, 0);
 }
 static sqlite3_module brMod = {
   0,0,brConnect,brBestIndex,doltliteVtabDisconnect,0,
