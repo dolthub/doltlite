@@ -10241,6 +10241,127 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   return SQLITE_OK;
 }
 
+int doltliteLoadTableRootByName(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  u8 *data = 0;
+  int nData = 0;
+  const u8 *q;
+  const u8 *pEntries;
+  int nTables = 0;
+  int iFormat = 0;
+  int nWant;
+  int found = 0;
+  ProllyHash foundRoot;
+  ProllyHash foundSchemaHash;
+  u8 foundFlags = 0;
+  int i;
+  int rc;
+
+  memset(pRoot, 0, sizeof(*pRoot));
+  if( pFlags ) *pFlags = 0;
+  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(*pSchemaHash));
+  if( !cs ) return SQLITE_ERROR;
+  if( !zTableName || !pCatHash || prollyHashIsEmpty(pCatHash) ){
+    return SQLITE_NOTFOUND;
+  }
+  nWant = (int)strlen(zTableName);
+
+  rc = chunkStoreGet(cs, pCatHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries) ){
+    sqlite3_free(data);
+    return SQLITE_CORRUPT;
+  }
+
+  q = pEntries;
+  for(i=0; i<nTables; i++){
+    u8 flags;
+    ProllyHash root;
+    ProllyHash schemaHash;
+
+    if( q+CAT_ENTRY_ITABLE_SIZE+CAT_ENTRY_FLAGS_SIZE
+        +PROLLY_HASH_SIZE+PROLLY_HASH_SIZE > data+nData ){
+      sqlite3_free(data);
+      return SQLITE_CORRUPT;
+    }
+    q += CAT_ENTRY_ITABLE_SIZE;
+    flags = *q++;
+    memcpy(root.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    memcpy(schemaHash.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      const u8 *pType;
+      const u8 *pName;
+      if( q+6 > data+nData ){
+        sqlite3_free(data);
+        return SQLITE_CORRUPT;
+      }
+      nType = q[0] | (q[1]<<8);
+      nName = q[2] | (q[3]<<8);
+      nTbl = q[4] | (q[5]<<8);
+      q += 6;
+      if( q+nType+nName+nTbl > data+nData ){
+        sqlite3_free(data);
+        return SQLITE_CORRUPT;
+      }
+      pType = q;
+      q += nType;
+      pName = q;
+      q += nName+nTbl;
+      if( !found
+       && nType==5 && memcmp(pType, "table", 5)==0
+       && nName==nWant && memcmp(pName, zTableName, nName)==0 ){
+        found = 1;
+        memcpy(&foundRoot, &root, sizeof(foundRoot));
+        memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
+        foundFlags = flags;
+      }
+    }else{
+      int nLen;
+      const u8 *pName;
+      if( q+2 > data+nData ){
+        sqlite3_free(data);
+        return SQLITE_CORRUPT;
+      }
+      nLen = q[0] | (q[1]<<8);
+      q += 2;
+      if( q+nLen > data+nData ){
+        sqlite3_free(data);
+        return SQLITE_CORRUPT;
+      }
+      pName = q;
+      q += nLen;
+      if( !found && nLen==nWant && memcmp(pName, zTableName, nLen)==0 ){
+        found = 1;
+        memcpy(&foundRoot, &root, sizeof(foundRoot));
+        memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
+        foundFlags = flags;
+      }
+    }
+  }
+
+  if( q!=data+nData ){
+    sqlite3_free(data);
+    return SQLITE_CORRUPT;
+  }
+  sqlite3_free(data);
+  if( !found ) return SQLITE_NOTFOUND;
+  memcpy(pRoot, &foundRoot, sizeof(*pRoot));
+  if( pFlags ) *pFlags = foundFlags;
+  if( pSchemaHash ) memcpy(pSchemaHash, &foundSchemaHash, sizeof(*pSchemaHash));
+  return SQLITE_OK;
+}
+
 void doltliteFreeCatalog(struct TableEntry *a, int n){
   int i;
   if( !a ) return;

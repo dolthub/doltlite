@@ -602,30 +602,14 @@ static SQLITE_INLINE int doltliteFindTableRootByName(
   return SQLITE_NOTFOUND;
 }
 
-static SQLITE_INLINE int doltliteLoadTableRootByName(
+int doltliteLoadTableRootByName(
   sqlite3 *db,
   const ProllyHash *pCatHash,
   const char *zTableName,
   ProllyHash *pRoot,
   u8 *pFlags,
   ProllyHash *pSchemaHash
-){
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
-  int rc;
-
-  memset(pRoot, 0, sizeof(*pRoot));
-  if( pFlags ) *pFlags = 0;
-  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(*pSchemaHash));
-  if( !pCatHash || prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
-
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteFindTableRootByName(aTables, nTables, zTableName,
-                                   pRoot, pFlags, pSchemaHash);
-  doltliteFreeCatalog(aTables, nTables);
-  return rc;
-}
+);
 
 static SQLITE_INLINE int doltliteLoadTableRootByNameOrEmpty(
   sqlite3 *db,

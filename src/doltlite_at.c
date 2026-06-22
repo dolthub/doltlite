@@ -164,7 +164,6 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   void *pBt; ProllyCache *pCache;
   const char *zRef;
   ProllyHash catHash;
-  struct TableEntry *aTables=0; int nTables=0;
   ProllyHash tableRoot; u8 flags=0;
   int rc, res;
   int seekable;
@@ -206,12 +205,9 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     }else{
       memcpy(&effCatHash, &catHash, sizeof(ProllyHash));
     }
-    rc=doltliteLoadCatalog(db,&effCatHash,&aTables,&nTables,0);
+    rc=doltliteLoadTableRootByName(db,&effCatHash,v->zTableName,&tableRoot,
+                                   &flags,0);
   }
-  if(rc!=SQLITE_OK) return rc;
-
-  rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags,0);
-  doltliteFreeCatalog(aTables,nTables);
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
   if(rc!=SQLITE_OK) return rc;
 
