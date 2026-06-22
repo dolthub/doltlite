@@ -246,6 +246,13 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'rename_table');
 " "HEAD~1" "HEAD" "t"
 
+oracle "modified_rename_table_filter_new_name" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_table');
+" "HEAD~1" "HEAD" "t2"
+
 oracle "modified_add_not_null_default" "
 $SEED
 ALTER TABLE t ADD COLUMN extra VARCHAR(32) NOT NULL DEFAULT '';
