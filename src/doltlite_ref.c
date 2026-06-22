@@ -7,6 +7,43 @@
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 
+typedef struct DoltliteUserTableCache DoltliteUserTableCache;
+struct DoltliteUserTableCache {
+  ProllyHash headCommit;
+  struct TableEntry *aTables;
+  int nTables;
+  int valid;
+};
+
+static void doltliteUserTableCacheFree(void *pArg){
+  DoltliteUserTableCache *pCache = (DoltliteUserTableCache*)pArg;
+  if( pCache ){
+    doltliteFreeCatalog(pCache->aTables, pCache->nTables);
+    sqlite3_free(pCache);
+  }
+}
+
+static int doltliteUserTableCacheGet(
+  sqlite3 *db,
+  DoltliteUserTableCache **ppCache
+){
+  DoltliteUserTableCache *pCache;
+  static const char zCacheName[] = "doltlite.user_table_cache";
+
+  pCache = (DoltliteUserTableCache*)sqlite3_get_clientdata(db, zCacheName);
+  if( !pCache ){
+    pCache = sqlite3_malloc(sizeof(*pCache));
+    if( !pCache ) return SQLITE_NOMEM;
+    memset(pCache, 0, sizeof(*pCache));
+    if( sqlite3_set_clientdata(db, zCacheName, pCache,
+                               doltliteUserTableCacheFree)!=SQLITE_OK ){
+      return SQLITE_NOMEM;
+    }
+  }
+  *ppCache = pCache;
+  return SQLITE_OK;
+}
+
 static int doltliteValidateCommitHash(
   sqlite3 *db,
   const ProllyHash *pHash
@@ -198,36 +235,46 @@ int doltliteForEachUserTable(
   const char *zPrefix,
   const sqlite3_module *pModule
 ){
+  DoltliteUserTableCache *pCache = 0;
   ProllyHash headCommit;
   ProllyHash headCat;
-  struct TableEntry *aTables = 0;
-  int nTables = 0, i, rc;
+  int i, rc;
 
   doltliteGetSessionHead(db, &headCommit);
   if( prollyHashIsEmpty(&headCommit) ) return SQLITE_OK;
 
-  rc = doltliteCommitCatalogHash(db, &headCommit, &headCat);
+  rc = doltliteUserTableCacheGet(db, &pCache);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteLoadCatalog(db, &headCat, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
+  if( !pCache->valid
+   || prollyHashCompare(&pCache->headCommit, &headCommit)!=0 ){
+    doltliteFreeCatalog(pCache->aTables, pCache->nTables);
+    memset(pCache, 0, sizeof(*pCache));
 
-  for(i=0; i<nTables; i++){
-    if( aTables[i].zName && aTables[i].iTable > 1 ){
-      char *zMod = sqlite3_mprintf("%s%s", zPrefix, aTables[i].zName);
+    rc = doltliteCommitCatalogHash(db, &headCommit, &headCat);
+    if( rc!=SQLITE_OK ) return rc;
+
+    rc = doltliteLoadCatalog(db, &headCat, &pCache->aTables,
+                             &pCache->nTables, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&pCache->headCommit, &headCommit, sizeof(pCache->headCommit));
+    pCache->valid = 1;
+  }
+
+  for(i=0; i<pCache->nTables; i++){
+    if( pCache->aTables[i].zName && pCache->aTables[i].iTable > 1 ){
+      char *zMod = sqlite3_mprintf("%s%s", zPrefix,
+                                   pCache->aTables[i].zName);
       if( !zMod ){
-        doltliteFreeCatalog(aTables, nTables);
         return SQLITE_NOMEM;
       }
       rc = sqlite3_create_module(db, zMod, pModule, 0);
       sqlite3_free(zMod);
       if( rc!=SQLITE_OK ){
-        doltliteFreeCatalog(aTables, nTables);
         return rc;
       }
     }
   }
-  doltliteFreeCatalog(aTables, nTables);
   return SQLITE_OK;
 }
 

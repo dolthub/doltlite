@@ -4783,31 +4783,19 @@ sysfault sysfault-2.1-vfsfault-transient.78
 sysfault sysfault-2.1-vfsfault-transient.79
 sysfault sysfault-2.1-vfsfault-transient.80
 sysfault sysfault-2.1-vfsfault-transient.81
-sysfault sysfault-2.1-vfsfault-transient.82
-sysfault sysfault-2.1-vfsfault-transient.83
-sysfault sysfault-2.1-vfsfault-transient.84
-sysfault sysfault-2.1-vfsfault-transient.85
-sysfault sysfault-2.1-vfsfault-transient.86
-sysfault sysfault-2.1-vfsfault-transient.87
-sysfault sysfault-2.2-vfsfault-persistent.87
+sysfault sysfault-2.2-vfsfault-persistent.81
 sysfault sysfault-2.2-vfsfault-transient.1
 sysfault sysfault-2.2-vfsfault-transient.2
 sysfault sysfault-2.2-vfsfault-transient.3
 sysfault sysfault-2.2-vfsfault-transient.5
 sysfault sysfault-2.2-vfsfault-transient.6
 sysfault sysfault-2.2-vfsfault-transient.44
-sysfault sysfault-2.2-vfsfault-transient.45
 sysfault sysfault-2.2-vfsfault-transient.46
 sysfault sysfault-2.2-vfsfault-transient.47
 sysfault sysfault-2.2-vfsfault-transient.48
-sysfault sysfault-2.2-vfsfault-transient.49
 sysfault sysfault-2.2-vfsfault-transient.50
-sysfault sysfault-2.2-vfsfault-transient.52
-sysfault sysfault-2.2-vfsfault-transient.53
-sysfault sysfault-2.2-vfsfault-transient.54
-sysfault sysfault-2.2-vfsfault-transient.56
-sysfault sysfault-2.2-vfsfault-transient.57
-sysfault sysfault-2.2-vfsfault-transient.87
+sysfault sysfault-2.2-vfsfault-transient.51
+sysfault sysfault-2.2-vfsfault-transient.81
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
