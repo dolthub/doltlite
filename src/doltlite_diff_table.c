@@ -704,34 +704,115 @@ static void freePairCols(DiffTblCursor *pCur){
   pCur->needFilter = 0;
 }
 
+static int dtSchemaTextField(
+  const u8 *pVal,
+  int nVal,
+  const DoltliteRecordInfo *pRi,
+  int iField,
+  char **pzOut
+){
+  int st, off, len;
+  char *zOut;
+  *pzOut = 0;
+  if( iField>=pRi->nField ) return SQLITE_CORRUPT;
+  st = pRi->aType[iField];
+  off = pRi->aOffset[iField];
+  if( st==0 ) return SQLITE_OK;
+  if( st<13 || (st&1)==0 ) return SQLITE_CORRUPT;
+  len = (st-13)/2;
+  if( off<0 || off+len>nVal ) return SQLITE_CORRUPT;
+  zOut = sqlite3_malloc(len+1);
+  if( !zOut ) return SQLITE_NOMEM;
+  memcpy(zOut, pVal+off, len);
+  zOut[len] = 0;
+  *pzOut = zOut;
+  return SQLITE_OK;
+}
+
+static int loadSchemaSqlAtCatalog(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  char **pzSql
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyHash masterRoot;
+  u8 masterFlags = 0;
+  ProllyCursor cur;
+  int rc, res;
+
+  *pzSql = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
+
+  rc = doltliteLoadCatalogRootByPage(db, pCatHash, 1, &masterRoot,
+                                     &masterFlags, 0);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_NOTFOUND;
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_NOTFOUND;
+
+  prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return rc!=SQLITE_OK ? rc : SQLITE_NOTFOUND;
+  }
+
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal;
+    int nVal;
+    DoltliteRecordInfo ri;
+    char *zName = 0;
+
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( pVal && nVal>0 ){
+      doltliteParseRecord(pVal, nVal, &ri);
+      if( ri.nField<5 ){
+        rc = SQLITE_CORRUPT;
+        break;
+      }
+      rc = dtSchemaTextField(pVal, nVal, &ri, 1, &zName);
+      if( rc!=SQLITE_OK ) break;
+      if( zName && strcmp(zName, zTableName)==0 ){
+        sqlite3_free(zName);
+        rc = dtSchemaTextField(pVal, nVal, &ri, 4, pzSql);
+        if( rc==SQLITE_OK && !*pzSql ) rc = SQLITE_NOTFOUND;
+        break;
+      }
+      sqlite3_free(zName);
+    }
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
+  }
+
+  prollyCursorClose(&cur);
+  if( rc==SQLITE_OK && !*pzSql ) rc = SQLITE_NOTFOUND;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*pzSql);
+    *pzSql = 0;
+  }
+  return rc;
+}
+
 static int loadColInfoAtCatalog(
   sqlite3 *db,
   const ProllyHash *pCatHash,
   const char *zTableName,
   DoltliteColInfo *pOut
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
-  SchemaEntry *pEntry;
   sqlite3 *tmp = 0;
+  char *zSql = 0;
   int rc;
 
   memset(pOut, 0, sizeof(*pOut));
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
 
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  rc = loadSchemaSqlAtCatalog(db, pCatHash, zTableName, &zSql);
   if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
-  if( !pEntry || !pEntry->zSql ){
-    freeSchemaEntries(aSchemas, nSchemas);
-    return SQLITE_NOTFOUND;
-  }
 
   rc = sqlite3_open(":memory:", &tmp);
   if( rc!=SQLITE_OK ) goto cleanup;
-  rc = sqlite3_exec(tmp, pEntry->zSql, 0, 0, 0);
+  rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto cleanup;
 
   rc = doltliteGetColumnNames(tmp, zTableName, pOut);
@@ -740,7 +821,7 @@ static int loadColInfoAtCatalog(
 
 cleanup:
   if( tmp ) sqlite3_close(tmp);
-  freeSchemaEntries(aSchemas, nSchemas);
+  sqlite3_free(zSql);
   if( rc!=SQLITE_OK ){
     doltliteFreeColInfo(pOut);
   }
