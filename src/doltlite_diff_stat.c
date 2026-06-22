@@ -322,6 +322,25 @@ static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
   return SQLITE_OK;
 }
 
+static int dsLoadTableEntryByName(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  struct TableEntry *pEntry,
+  int *pFound
+){
+  int rc;
+  memset(pEntry, 0, sizeof(*pEntry));
+  *pFound = 0;
+  rc = doltliteLoadTableRootByName(db, pCatHash, zTableName, &pEntry->root,
+                                   &pEntry->flags, &pEntry->schemaHash);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  pEntry->zName = (char*)zTableName;
+  *pFound = 1;
+  return SQLITE_OK;
+}
+
 static int dsComputeTableStats(
   sqlite3 *db,
   const char *zTableName,
@@ -727,6 +746,8 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   DsFilterCtx fctx;
   struct TableEntry *aFromCat = 0, *aToCat = 0;
   int nFromCat = 0, nToCat = 0;
+  struct TableEntry fromFilterEntry, toFilterEntry;
+  int foundFromFilter = 0, foundToFilter = 0;
   DsNameIndex fromIdx, toIdx;
   int rc, i;
   (void)idxStr;
@@ -738,11 +759,18 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
 
   rc = dsFilterInit(db, &v->base, idxNum, argc, argv, "dolt_diff_stat", &fctx);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, &fctx.fromCat, &aFromCat, &nFromCat, 0);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
-  if( rc!=SQLITE_OK ) goto done;
-  if( !fctx.zTblFilter ){
+  if( fctx.zTblFilter ){
+    rc = dsLoadTableEntryByName(db, &fctx.fromCat, fctx.zTblFilter,
+                                &fromFilterEntry, &foundFromFilter);
+    if( rc!=SQLITE_OK ) goto done;
+    rc = dsLoadTableEntryByName(db, &fctx.toCat, fctx.zTblFilter,
+                                &toFilterEntry, &foundToFilter);
+    if( rc!=SQLITE_OK ) goto done;
+  }else{
+    rc = doltliteLoadCatalog(db, &fctx.fromCat, &aFromCat, &nFromCat, 0);
+    if( rc!=SQLITE_OK ) goto done;
+    rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
+    if( rc!=SQLITE_OK ) goto done;
     rc = dsNameIndexInit(&fromIdx, aFromCat, nFromCat);
     if( rc!=SQLITE_OK ) goto done;
     rc = dsNameIndexInit(&toIdx, aToCat, nToCat);
@@ -754,8 +782,8 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
     struct TableEntry *pFromEntry, *pToEntry;
     if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
     if( fctx.zTblFilter ){
-      pFromEntry = doltliteFindTableByName(aFromCat, nFromCat, fctx.azNames[i]);
-      pToEntry = doltliteFindTableByName(aToCat, nToCat, fctx.azNames[i]);
+      pFromEntry = foundFromFilter ? &fromFilterEntry : 0;
+      pToEntry = foundToFilter ? &toFilterEntry : 0;
     }else{
       pFromEntry = dsNameIndexFind(&fromIdx, fctx.azNames[i]);
       pToEntry = dsNameIndexFind(&toIdx, fctx.azNames[i]);
@@ -980,6 +1008,8 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   DsFilterCtx fctx;
   struct TableEntry *aFromCat = 0, *aToCat = 0;
   int nFromCat = 0, nToCat = 0;
+  struct TableEntry fromFilterEntry, toFilterEntry;
+  int foundFromFilter = 0, foundToFilter = 0;
   DsNameIndex fromIdx, toIdx;
   int rc, i;
   (void)idxStr;
@@ -992,11 +1022,18 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   rc = dsFilterInit(db, &v->base, idxNum, argc, argv,
                     "dolt_diff_summary", &fctx);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, &fctx.fromCat, &aFromCat, &nFromCat, 0);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
-  if( rc!=SQLITE_OK ) goto done;
-  if( !fctx.zTblFilter ){
+  if( fctx.zTblFilter ){
+    rc = dsLoadTableEntryByName(db, &fctx.fromCat, fctx.zTblFilter,
+                                &fromFilterEntry, &foundFromFilter);
+    if( rc!=SQLITE_OK ) goto done;
+    rc = dsLoadTableEntryByName(db, &fctx.toCat, fctx.zTblFilter,
+                                &toFilterEntry, &foundToFilter);
+    if( rc!=SQLITE_OK ) goto done;
+  }else{
+    rc = doltliteLoadCatalog(db, &fctx.fromCat, &aFromCat, &nFromCat, 0);
+    if( rc!=SQLITE_OK ) goto done;
+    rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
+    if( rc!=SQLITE_OK ) goto done;
     rc = dsNameIndexInit(&fromIdx, aFromCat, nFromCat);
     if( rc!=SQLITE_OK ) goto done;
     rc = dsNameIndexInit(&toIdx, aToCat, nToCat);
@@ -1009,8 +1046,8 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
     if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
 
     if( fctx.zTblFilter ){
-      pFromEntry = doltliteFindTableByName(aFromCat, nFromCat, fctx.azNames[i]);
-      pToEntry = doltliteFindTableByName(aToCat, nToCat, fctx.azNames[i]);
+      pFromEntry = foundFromFilter ? &fromFilterEntry : 0;
+      pToEntry = foundToFilter ? &toFilterEntry : 0;
     }else{
       pFromEntry = dsNameIndexFind(&fromIdx, fctx.azNames[i]);
       pToEntry = dsNameIndexFind(&toIdx, fctx.azNames[i]);
