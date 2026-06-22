@@ -3377,11 +3377,22 @@ static void doltliteCherryPickFunc(
     return;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "cherry-pick failed", -1);
+    char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
+    sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
+    sqlite3_free(zMsg);
     return;
   }
 
   if( nConflicts > 0 ){
+    char *zMsg = sqlite3_mprintf(
+        "cherry-pick of %s resulted in %d conflict(s); "
+        "resolve in dolt_conflicts then dolt_commit to finish", zRef, nConflicts);
+    if( zMsg ){
+      sqlite3_result_error(context, zMsg, -1);
+      sqlite3_free(zMsg);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
     return;
   }else if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
@@ -3595,11 +3606,22 @@ static void doltliteRevertFunc(
     return;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "revert failed", -1);
+    char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
+    sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
+    sqlite3_free(zMsg);
     return;
   }
 
   if( nConflicts > 0 ){
+    char *zMsg = sqlite3_mprintf(
+        "revert of \"%s\" resulted in %d conflict(s); "
+        "resolve in dolt_conflicts then dolt_commit to finish", zRef, nConflicts);
+    if( zMsg ){
+      sqlite3_result_error(context, zMsg, -1);
+      sqlite3_free(zMsg);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
     return;
   }else if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
@@ -3610,7 +3632,11 @@ revert_error:
   doltliteCommitClear(&revertCommit);
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
-  sqlite3_result_error(context, "revert failed", -1);
+  {
+    char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
+    sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
+    sqlite3_free(zMsg);
+  }
 }
 
 static int doltliteRebaseCollectReplaySet(
@@ -3758,6 +3784,8 @@ static int doltliteRebaseLinearReplay(
   int savedInit = 0;
   int rc;
   int i;
+  char *zFailedMsg = 0;
+  int bConflict = 0;
 
   *pzFinalMessage = 0;
   memset(&saved, 0, sizeof(saved));
@@ -3837,6 +3865,10 @@ static int doltliteRebaseLinearReplay(
     rc = doltliteLoadCommit(db, &aReplay[i], &replayCommit);
     if( rc!=SQLITE_OK ) goto rollback;
 
+    sqlite3_free(zFailedMsg);
+    zFailedMsg = sqlite3_mprintf("%.200s",
+        replayCommit.zMessage ? replayCommit.zMessage : "");
+
     if( doltliteCommitParentCount(&replayCommit)==0 ){
       doltliteCommitClear(&replayCommit);
       rc = SQLITE_ERROR;
@@ -3869,11 +3901,12 @@ static int doltliteRebaseLinearReplay(
     doltliteCommitClear(&curHeadCommit);
 
     if( rc!=SQLITE_OK ) goto rollback;
-    if( nConflicts>0 ){ rc = SQLITE_ERROR; goto rollback; }
+    if( nConflicts>0 ){ bConflict = 1; rc = SQLITE_ERROR; goto rollback; }
   }
 
   doltliteTxnStateClear(&saved);
   sqlite3_free(aReplay);
+  sqlite3_free(zFailedMsg);
   *pzFinalMessage = sqlite3_mprintf(
     "Successfully rebased and updated refs/heads/%s",
     doltliteGetSessionBranch(db));
@@ -3886,8 +3919,19 @@ rollback:
   (void)cs;
   sqlite3_free(aReplay);
   {
-    char *zErr = sqlite3_mprintf(
-      "rebase failed (conflict or error during replay) — branch restored to pre-rebase state");
+    char *zErr;
+    if( bConflict && zFailedMsg && zFailedMsg[0] ){
+      zErr = sqlite3_mprintf(
+          "conflict rebasing \"%s\"; rebase aborted, branch restored to pre-rebase state",
+          zFailedMsg);
+    }else if( zFailedMsg && zFailedMsg[0] ){
+      zErr = sqlite3_mprintf(
+          "error rebasing \"%s\"; rebase aborted, branch restored to pre-rebase state",
+          zFailedMsg);
+    }else{
+      zErr = sqlite3_mprintf(
+          "rebase aborted, branch restored to pre-rebase state");
+    }
     if( zErr ){
       sqlite3_result_error(context, zErr, -1);
       sqlite3_free(zErr);
@@ -3895,6 +3939,7 @@ rollback:
       sqlite3_result_error_code(context, rc);
     }
   }
+  sqlite3_free(zFailedMsg);
   if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
   return SQLITE_ERROR;
 }
