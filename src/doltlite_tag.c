@@ -171,7 +171,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 typedef struct TagVtab TagVtab;
 struct TagVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct TagCur TagCur;
-struct TagCur { sqlite3_vtab_cursor base; int iRow; };
+struct TagCur { sqlite3_vtab_cursor base; int iRow; int bSingle; int iSingle; };
 
 static int tagConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -202,11 +202,20 @@ static int tagOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
 }
 static int tagFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     const char *idxStr, int argc, sqlite3_value **argv){
-  (void)idxNum;
+  TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
+  TagCur *pCur = (TagCur*)pCursor;
   (void)idxStr;
-  (void)argc;
-  (void)argv;
-  ((TagCur*)pCursor)->iRow = 0;
+  pCur->iRow = 0;
+  pCur->bSingle = 0;
+  pCur->iSingle = -1;
+  if( idxNum==1 && argc==1 ){
+    ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+    const char *zName = (const char*)sqlite3_value_text(argv[0]);
+    pCur->bSingle = 1;
+    pCur->iSingle = cs ? csFindNamedRef(cs->refs.aTags, cs->refs.nTags,
+                                        (int)sizeof(TagRef), zName) : -1;
+    pCur->iRow = pCur->iSingle;
+  }
   return SQLITE_OK;
 }
 static int tagNext(sqlite3_vtab_cursor *pCursor){
@@ -215,8 +224,11 @@ static int tagNext(sqlite3_vtab_cursor *pCursor){
 }
 static int tagEof(sqlite3_vtab_cursor *pCursor){
   TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
+  TagCur *pCur = (TagCur*)pCursor;
   ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  return !cs || ((TagCur*)pCursor)->iRow >= refsTableTagCount(&cs->refs);
+  if( !cs ) return 1;
+  if( pCur->bSingle ) return pCur->iSingle<0 || pCur->iRow!=pCur->iSingle;
+  return pCur->iRow >= refsTableTagCount(&cs->refs);
 }
 static int tagColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col){
   TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
@@ -264,7 +276,7 @@ static int tagBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   (void)pVtab;
   pInfo->estimatedCost = 10;
   pInfo->estimatedRows = 5;
-  return SQLITE_OK;
+  return doltliteBestIndexEq(pInfo, 0);
 }
 
 static sqlite3_module tagModule = {

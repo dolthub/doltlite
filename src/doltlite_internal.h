@@ -275,6 +275,26 @@ static SQLITE_INLINE int doltliteBestIndexRefs(
   return SQLITE_OK;
 }
 
+static SQLITE_INLINE int doltliteBestIndexEq(
+  sqlite3_index_info *pInfo,
+  int iColumn
+){
+  int i;
+  for(i=0; i<pInfo->nConstraint; i++){
+    if( !pInfo->aConstraint[i].usable ) continue;
+    if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pInfo->aConstraint[i].iColumn!=iColumn ) continue;
+    pInfo->aConstraintUsage[i].argvIndex = 1;
+    pInfo->aConstraintUsage[i].omit = 1;
+    pInfo->idxNum = 1;
+    pInfo->estimatedCost = 1.0;
+    pInfo->estimatedRows = 1;
+    return SQLITE_OK;
+  }
+  pInfo->idxNum = 0;
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE int doltliteBestIndexIntPkRange(
   sqlite3_index_info *pInfo,
   int iPkCol,
