@@ -47,6 +47,49 @@ oracle() {
   fi
 }
 
+status_filter_pushdown() {
+  local name="$1" setup="$2" filter="$3" expected_idx="$4"
+  local dir="$TMPROOT/${name}_pushdown"
+  mkdir -p "$dir"
+
+  local script
+  script="$setup
+.headers off
+.mode list
+.separator '	'
+CREATE TEMP TABLE expected_status AS
+  SELECT table_name, staged, status FROM dolt_status;
+SELECT 'A|' || table_name || '|' || staged || '|' || status
+  FROM expected_status
+ WHERE $filter
+ ORDER BY table_name, staged, status;
+SELECT 'B|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ WHERE $filter
+ ORDER BY table_name, staged, status;
+EXPLAIN QUERY PLAN SELECT * FROM dolt_status WHERE $filter;"
+
+  local out actual expected plan
+  out=$(printf "%s\n" "$script" \
+        | "$DOLTLITE" "$dir/db" 2>"$dir/err" \
+        | tr -d '\r')
+  expected=$(printf "%s\n" "$out" | grep '^A|' | sed 's/^A|//')
+  actual=$(printf "%s\n" "$out" | grep '^B|' | sed 's/^B|//')
+  plan=$(printf "%s\n" "$out" | grep "VIRTUAL TABLE INDEX $expected_idx")
+
+  if [ "$actual" = "$expected" ] && [ -n "$plan" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    expected:"; echo "$expected" | sed 's/^/      /'
+    echo "    actual:";   echo "$actual" | sed 's/^/      /'
+    echo "    plan:";     printf "%s\n" "$out" | grep "dolt_status" | sed 's/^/      /'
+    echo "    stderr:";   sed 's/^/      /' "$dir/err"
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_status ==="
 echo ""
 
@@ -228,6 +271,48 @@ ALTER TABLE t RENAME TO t2;
 ALTER TABLE t2 RENAME TO t3;
 SELECT dolt_add('t3');
 "
+
+echo "--- filtered scans ---"
+
+status_filter_pushdown "filtered_table_name_matches_unfiltered" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+INSERT INTO a VALUES (2, 20);
+INSERT INTO b VALUES (2, 20);
+SELECT dolt_add('a');
+" "table_name='a'" "2"
+
+status_filter_pushdown "filtered_table_name_and_staged_matches_unfiltered" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+INSERT INTO a VALUES (2, 20);
+INSERT INTO b VALUES (2, 20);
+SELECT dolt_add('a');
+" "staged=1 AND table_name='a'" "3"
+
+status_filter_pushdown "filtered_rename_new_name_stays_empty" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a RENAME TO b;
+" "table_name='b'" "2"
+
+status_filter_pushdown "filtered_rename_compound_name_matches" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a RENAME TO b;
+" "table_name='a -> b'" "2"
 
 echo "--- multi-table ---"
 

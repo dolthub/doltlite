@@ -11,6 +11,7 @@
 #include "prolly_cursor.h"
 
 #define STATUS_IDX_STAGED_EQ 0x01
+#define STATUS_IDX_TABLE_EQ  0x02
 
 typedef struct StatusRow StatusRow;
 struct StatusRow {
@@ -485,6 +486,206 @@ compare_done:
   #undef DOLT_STATUS_RENAME_CAP
 }
 
+static int statusHasUnnamedUserTable(struct TableEntry *aEntry, int nEntry){
+  int i;
+  for(i=0; i<nEntry; i++){
+    if( aEntry[i].iTable>1 && !aEntry[i].zName ) return 1;
+  }
+  return 0;
+}
+
+static int statusMaybeAddRename(
+  DoltliteStatusCursor *pCur,
+  sqlite3 *db,
+  const StatusCatalogIndex *pFromIdx,
+  const StatusCatalogIndex *pToIdx,
+  const struct TableEntry *pFrom,
+  const struct TableEntry *pTo,
+  int staged,
+  const char *zFilter,
+  int *pIsRename
+){
+  int rc = SQLITE_OK;
+  *pIsRename = 0;
+  if( !pFrom || !pTo ) return SQLITE_OK;
+  if( isRenamePair(db, pFromIdx, pToIdx, pFrom, pTo) ){
+    char *zCompound;
+    *pIsRename = 1;
+    zCompound = sqlite3_mprintf("%s -> %s", pFrom->zName, pTo->zName);
+    if( !zCompound ) return SQLITE_NOMEM;
+    if( strcmp(zCompound, zFilter)==0 ){
+      rc = addRow(pCur, zCompound, staged, "renamed");
+    }
+    sqlite3_free(zCompound);
+  }
+  return rc;
+}
+
+static int statusInitPairIndexes(
+  StatusCatalogIndex *pFromIdx,
+  StatusCatalogIndex *pToIdx,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo
+){
+  int rc;
+  rc = statusCatalogIndexInit(pFromIdx, aFrom, nFrom);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = statusCatalogIndexInit(pToIdx, aTo, nTo);
+  if( rc!=SQLITE_OK ){
+    statusCatalogIndexFree(pFromIdx);
+    return rc;
+  }
+  return SQLITE_OK;
+}
+
+static int compareCatalogsFiltered(
+  DoltliteStatusCursor *pCur, sqlite3 *db,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  int staged,
+  const char *zFilter
+){
+  StatusCatalogIndex fromIdx;
+  StatusCatalogIndex toIdx;
+  struct TableEntry *pFrom;
+  struct TableEntry *pTo;
+  int rc;
+  int useRename;
+  int idxInit = 0;
+
+  #define DOLT_STATUS_RENAME_CAP 4096
+  useRename = (nFrom <= DOLT_STATUS_RENAME_CAP && nTo <= DOLT_STATUS_RENAME_CAP);
+
+  if( !zFilter ) return compareCatalogs(pCur, db, aFrom, nFrom, aTo, nTo, staged);
+
+  if( statusHasUnnamedUserTable(aFrom, nFrom)
+   || statusHasUnnamedUserTable(aTo, nTo) ){
+    int nStart = pCur->nRows;
+    rc = compareCatalogs(pCur, db, aFrom, nFrom, aTo, nTo, staged);
+    if( rc==SQLITE_OK ){
+      int i, j = nStart;
+      for(i=nStart; i<pCur->nRows; i++){
+        if( pCur->aRows[i].zName
+         && strcmp(pCur->aRows[i].zName, zFilter)==0 ){
+          if( j!=i ) pCur->aRows[j] = pCur->aRows[i];
+          j++;
+        }else{
+          sqlite3_free(pCur->aRows[i].zName);
+        }
+      }
+      pCur->nRows = j;
+    }
+    return rc;
+  }
+
+  memset(&fromIdx, 0, sizeof(fromIdx));
+  memset(&toIdx, 0, sizeof(toIdx));
+
+  if( useRename && strstr(zFilter, " -> ")!=0 ){
+    int i;
+    rc = statusInitPairIndexes(&fromIdx, &toIdx, aFrom, nFrom, aTo, nTo);
+    if( rc!=SQLITE_OK ) return rc;
+    idxInit = 1;
+    for(i=0; i<nFrom; i++){
+      int isRename = 0;
+      if( aFrom[i].iTable<=1 ) continue;
+      pTo = statusCatalogFindNumber(&toIdx, aFrom[i].iTable);
+      if( !pTo || pTo->iTable<=1 ) continue;
+      rc = statusMaybeAddRename(pCur, db, &fromIdx, &toIdx,
+                                &aFrom[i], pTo, staged, zFilter, &isRename);
+      if( rc!=SQLITE_OK ) goto filtered_done;
+    }
+  }
+
+  pTo = doltliteFindTableByName(aTo, nTo, zFilter);
+  if( pTo && pTo->iTable>1 ){
+    int isRename = 0;
+    pFrom = doltliteFindTableByNumber(aFrom, nFrom, pTo->iTable);
+    if( useRename && pFrom && pFrom->zName && pTo->zName
+     && strcmp(pFrom->zName, pTo->zName)!=0 ){
+      if( !idxInit ){
+        rc = statusInitPairIndexes(&fromIdx, &toIdx, aFrom, nFrom, aTo, nTo);
+        if( rc!=SQLITE_OK ) return rc;
+        idxInit = 1;
+      }
+      rc = statusMaybeAddRename(pCur, db, &fromIdx, &toIdx,
+                                pFrom, pTo, staged, zFilter, &isRename);
+      if( rc!=SQLITE_OK ) goto filtered_done;
+    }
+    if( !isRename ){
+      pFrom = pTo->zName ? doltliteFindTableByName(aFrom, nFrom, pTo->zName)
+                         : doltliteFindTableByNumber(aFrom, nFrom, pTo->iTable);
+      if( !pFrom ){
+        if( staged==0 ){
+          int ignored = 0;
+          char *zIgnErr = 0;
+          int irc = doltliteCheckIgnore(db, zFilter, &ignored, &zIgnErr);
+          if( irc==SQLITE_CONSTRAINT ){
+            if( pCur->base.pVtab->zErrMsg ){
+              sqlite3_free(pCur->base.pVtab->zErrMsg);
+            }
+            pCur->base.pVtab->zErrMsg = zIgnErr;
+            rc = SQLITE_ERROR;
+            goto filtered_done;
+          }
+          if( irc!=SQLITE_OK ){
+            sqlite3_free(zIgnErr);
+            rc = irc;
+            goto filtered_done;
+          }
+          if( ignored ) goto check_deleted;
+        }
+        rc = addRow(pCur, zFilter, staged, "new table");
+        if( rc!=SQLITE_OK ) goto filtered_done;
+      }else{
+        int bRootChanged =
+          prollyHashCompare(&pFrom->root, &pTo->root)!=0;
+        int bSchemaChanged =
+          !prollyHashIsEmpty(&pFrom->schemaHash)
+          && !prollyHashIsEmpty(&pTo->schemaHash)
+          && prollyHashCompare(&pFrom->schemaHash, &pTo->schemaHash)!=0;
+        if( bRootChanged || bSchemaChanged ){
+          rc = addRow(pCur, zFilter, staged, "modified");
+          if( rc!=SQLITE_OK ) goto filtered_done;
+        }
+      }
+    }
+  }
+
+check_deleted:
+  pFrom = doltliteFindTableByName(aFrom, nFrom, zFilter);
+  if( pFrom && pFrom->iTable>1 ){
+    int isRename = 0;
+    pTo = doltliteFindTableByNumber(aTo, nTo, pFrom->iTable);
+    if( useRename && pTo && pFrom->zName && pTo->zName
+     && strcmp(pFrom->zName, pTo->zName)!=0 ){
+      if( !idxInit ){
+        rc = statusInitPairIndexes(&fromIdx, &toIdx, aFrom, nFrom, aTo, nTo);
+        if( rc!=SQLITE_OK ) return rc;
+        idxInit = 1;
+      }
+      rc = statusMaybeAddRename(pCur, db, &fromIdx, &toIdx,
+                                pFrom, pTo, staged, zFilter, &isRename);
+      if( rc!=SQLITE_OK ) goto filtered_done;
+    }
+    if( !isRename
+     && !(pFrom->zName ? doltliteFindTableByName(aTo, nTo, pFrom->zName)
+                       : doltliteFindTableByNumber(aTo, nTo, pFrom->iTable)) ){
+      rc = addRow(pCur, zFilter, staged, "deleted");
+      if( rc!=SQLITE_OK ) goto filtered_done;
+    }
+  }
+  rc = SQLITE_OK;
+
+filtered_done:
+  if( idxInit ){
+    statusCatalogIndexFree(&fromIdx);
+    statusCatalogIndexFree(&toIdx);
+  }
+  return rc;
+  #undef DOLT_STATUS_RENAME_CAP
+}
+
 static int statusConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DoltliteStatusVtab *pVtab;
@@ -520,14 +721,21 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   struct TableEntry *aHead = 0, *aStaged = 0, *aWorking = 0;
   int nHead = 0, nStaged = 0, nWorking = 0, rc = SQLITE_OK;
   int iStagedOnly = -1;
+  const char *zTableFilter = 0;
+  int iArg = 0;
   (void)idxStr;
 
   statusFreeRows(pCur);
   pCur->iRow = 0;
   if( idxNum & STATUS_IDX_STAGED_EQ ){
-    if( argc<1 ) return SQLITE_OK;
-    iStagedOnly = sqlite3_value_int(argv[0]);
+    if( iArg>=argc ) return SQLITE_OK;
+    iStagedOnly = sqlite3_value_int(argv[iArg++]);
     if( iStagedOnly!=0 && iStagedOnly!=1 ) return SQLITE_OK;
+  }
+  if( idxNum & STATUS_IDX_TABLE_EQ ){
+    if( iArg>=argc ) return SQLITE_OK;
+    zTableFilter = (const char*)sqlite3_value_text(argv[iArg++]);
+    if( !zTableFilter ) return SQLITE_OK;
   }
 
   if( !cs ){
@@ -563,16 +771,19 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   }
 
   if( aStaged && iStagedOnly!=0 ){
-    rc = compareCatalogs(pCur, db, aHead, nHead, aStaged, nStaged, 1);
+    rc = compareCatalogsFiltered(pCur, db, aHead, nHead, aStaged, nStaged,
+                                 1, zTableFilter);
     if( rc != SQLITE_OK ) goto status_done;
   }
   if( iStagedOnly!=1 ){
     struct TableEntry *aBase = aStaged ? aStaged : aHead;
     int nBase = aStaged ? nStaged : nHead;
     if( aWorking && aBase ){
-      rc = compareCatalogs(pCur, db, aBase, nBase, aWorking, nWorking, 0);
+      rc = compareCatalogsFiltered(pCur, db, aBase, nBase,
+                                   aWorking, nWorking, 0, zTableFilter);
     }else if( aWorking && !aBase ){
-      rc = compareCatalogs(pCur, db, 0, 0, aWorking, nWorking, 0);
+      rc = compareCatalogsFiltered(pCur, db, 0, 0, aWorking, nWorking,
+                                   0, zTableFilter);
     }
     if( rc != SQLITE_OK ) goto status_done;
   }
@@ -617,24 +828,41 @@ static int statusRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
 static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int i;
   int iStagedEq = -1;
+  int iTableEq = -1;
+  int argvIdx = 1;
+  int idxNum = 0;
   (void)pVtab;
 
   for(i=0; i<pInfo->nConstraint; i++){
     const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
     if( !pC->usable ) continue;
-    if( pC->iColumn==1 && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+    if( pC->op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pC->iColumn==1 ){
       iStagedEq = i;
-      break;
+    }else if( pC->iColumn==0 ){
+      iTableEq = i;
     }
   }
 
   if( iStagedEq>=0 ){
-    pInfo->aConstraintUsage[iStagedEq].argvIndex = 1;
-    pInfo->idxNum = STATUS_IDX_STAGED_EQ;
+    pInfo->aConstraintUsage[iStagedEq].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iStagedEq].omit = 1;
+    idxNum |= STATUS_IDX_STAGED_EQ;
+  }
+  if( iTableEq>=0 ){
+    pInfo->aConstraintUsage[iTableEq].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iTableEq].omit = 1;
+    idxNum |= STATUS_IDX_TABLE_EQ;
+  }
+
+  pInfo->idxNum = idxNum;
+  if( idxNum & STATUS_IDX_TABLE_EQ ){
+    pInfo->estimatedCost = (idxNum & STATUS_IDX_STAGED_EQ) ? 5.0 : 10.0;
+    pInfo->estimatedRows = (idxNum & STATUS_IDX_STAGED_EQ) ? 1 : 2;
+  }else if( idxNum & STATUS_IDX_STAGED_EQ ){
     pInfo->estimatedCost = 50.0;
     pInfo->estimatedRows = 10;
   }else{
-    pInfo->idxNum = 0;
     pInfo->estimatedCost = 100.0;
   }
   return SQLITE_OK;
