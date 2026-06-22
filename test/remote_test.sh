@@ -597,6 +597,41 @@ check "A continues from pulled counter (1,2,3,4)" "1|a
 3|c
 4|d" "$result"
 
+echo "=== 27. Non-fast-forward push rejection ==="
+"$DB" "$TMPDIR/nff_a.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_remote('add','origin','$R/nff_remote.db');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/nff_b.db" "SELECT dolt_clone('$R/nff_remote.db');")
+check "nff clone ok" "0" "$result"
+
+"$DB" "$TMPDIR/nff_a.db" <<'ENDSQL'
+INSERT INTO t VALUES(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','A commit');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+
+"$DB" "$TMPDIR/nff_b.db" <<'ENDSQL'
+INSERT INTO t VALUES(10,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','B commit');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/nff_b.db" "SELECT dolt_push('origin','main');" 2>&1)
+check_match "non-ff push rejected" "not a fast-forward" "$result"
+
+result=$("$DB" "$TMPDIR/nff_b.db" "SELECT dolt_push('origin','main','--force');")
+check "force push succeeds" "0" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
