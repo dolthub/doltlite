@@ -56,10 +56,9 @@ static int hashofTableInCatalog(
   struct TableEntry *pTE = 0;
   ChunkStore *cs;
   ProllyCache *cache;
-  SchemaEntry *aSchema = 0;
-  SchemaEntry *pSchema = 0;
+  SchemaEntry schemaEntry;
   int nTables = 0;
-  int nSchema = 0;
+  int foundSchema = 0;
   ProllyHash schemaHash;
   ProllyHash tableHash;
   u8 aBuf[PROLLY_HASH_SIZE*2];
@@ -80,16 +79,17 @@ static int hashofTableInCatalog(
     return SQLITE_ERROR;
   }
 
-  rc = loadSchemaFromCatalog(db, cs, cache, pCatHash, &aSchema, &nSchema);
+  rc = loadSchemaEntryFromCatalog(db, cs, cache, pCatHash, zTable,
+                                  &schemaEntry, &foundSchema);
   if( rc!=SQLITE_OK ){
     doltliteFreeCatalog(aTables, nTables);
     return rc;
   }
-  pSchema = findSchemaEntry(aSchema, nSchema, zTable);
-  if( pSchema ){
-    char *zCanon = doltliteCanonicalizeSchemaSql(pSchema->zSql, pSchema->zName);
+  if( foundSchema ){
+    char *zCanon = doltliteCanonicalizeSchemaSql(schemaEntry.zSql,
+                                                 schemaEntry.zName);
     if( !zCanon ){
-      freeSchemaEntries(aSchema, nSchema);
+      clearSchemaEntry(&schemaEntry);
       doltliteFreeCatalog(aTables, nTables);
       return SQLITE_NOMEM;
     }
@@ -102,7 +102,7 @@ static int hashofTableInCatalog(
   memcpy(aBuf, pTE->root.data, PROLLY_HASH_SIZE);
   memcpy(aBuf + PROLLY_HASH_SIZE, schemaHash.data, PROLLY_HASH_SIZE);
   prollyHashCompute(aBuf, sizeof(aBuf), &tableHash);
-  freeSchemaEntries(aSchema, nSchema);
+  clearSchemaEntry(&schemaEntry);
   doltliteFreeCatalog(aTables, nTables);
   doltliteHashToHex(&tableHash, pHex);
   return SQLITE_OK;

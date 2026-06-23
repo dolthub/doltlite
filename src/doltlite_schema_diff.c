@@ -211,7 +211,8 @@ int loadSchemaFromCatalog(
   if( rc!=SQLITE_OK || res ){ prollyCursorClose(&cur); *ppEntries = 0; *pnEntries = 0; return rc; }
 
   while( prollyCursorIsValid(&cur) ){
-    const u8 *pVal; int nVal;
+    const u8 *pVal;
+    int nVal;
     DoltliteRecordInfo ri;
 
     prollyCursorValue(&cur, &pVal, &nVal);
@@ -282,13 +283,117 @@ load_schema_done:
   return rc;
 }
 
+int loadSchemaEntryFromCatalog(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pCatHash,
+  const char *zName,
+  SchemaEntry *pEntry,
+  int *pFound
+){
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  ProllyHash masterRoot;
+  u8 masterFlags = 0;
+  ProllyCursor cur;
+  int res, rc, i;
+
+  memset(pEntry, 0, sizeof(*pEntry));
+  *pFound = 0;
+  if( !zName || prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
+
+  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  memset(&masterRoot, 0, sizeof(masterRoot));
+  for(i=0; i<nTables; i++){
+    if( aTables[i].iTable==1 ){
+      memcpy(&masterRoot, &aTables[i].root, sizeof(ProllyHash));
+      masterFlags = aTables[i].flags;
+      break;
+    }
+  }
+  doltliteFreeCatalog(aTables, nTables);
+
+  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
+
+  prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal; int nVal;
+    DoltliteRecordInfo ri;
+
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( pVal && nVal > 0 ){
+      char *zType = 0, *zEntryName = 0, *zTblName = 0, *zSql = 0;
+      i64 iRootpage = 0;
+
+      doltliteParseRecord(pVal, nVal, &ri);
+      if( ri.nField < 5 ){
+        rc = SQLITE_CORRUPT;
+        goto load_schema_entry_done;
+      }
+
+      rc = schemaTextField(pVal, nVal, &ri, 1, &zEntryName);
+      if( rc!=SQLITE_OK ) goto load_schema_entry_done;
+      if( zEntryName && strcmp(zEntryName, zName)==0 ){
+        rc = schemaTextField(pVal, nVal, &ri, 0, &zType);
+        if( rc==SQLITE_OK ){
+          rc = schemaTextField(pVal, nVal, &ri, 2, &zTblName);
+        }
+        if( rc==SQLITE_OK ){
+          iRootpage = schemaIntField(pVal, nVal, &ri, 3);
+          rc = schemaTextField(pVal, nVal, &ri, 4, &zSql);
+        }
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zType);
+          sqlite3_free(zEntryName);
+          sqlite3_free(zTblName);
+          sqlite3_free(zSql);
+          goto load_schema_entry_done;
+        }
+        pEntry->zName = zEntryName;
+        pEntry->zTblName = zTblName;
+        pEntry->zSql = zSql;
+        pEntry->zType = zType;
+        pEntry->iRootpage = (Pgno)iRootpage;
+        *pFound = 1;
+        break;
+      }
+      sqlite3_free(zEntryName);
+    }
+
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
+  }
+
+load_schema_entry_done:
+  prollyCursorClose(&cur);
+  if( rc!=SQLITE_OK ){
+    clearSchemaEntry(pEntry);
+    *pFound = 0;
+  }
+  return rc;
+}
+
+void clearSchemaEntry(SchemaEntry *pEntry){
+  sqlite3_free(pEntry->zName);
+  sqlite3_free(pEntry->zTblName);
+  sqlite3_free(pEntry->zSql);
+  sqlite3_free(pEntry->zType);
+  memset(pEntry, 0, sizeof(*pEntry));
+}
+
 void freeSchemaEntries(SchemaEntry *a, int n){
   int i;
   for(i=0; i<n; i++){
-    sqlite3_free(a[i].zName);
-    sqlite3_free(a[i].zTblName);
-    sqlite3_free(a[i].zSql);
-    sqlite3_free(a[i].zType);
+    clearSchemaEntry(&a[i]);
   }
   sqlite3_free(a);
 }
@@ -653,6 +758,105 @@ static int computeSchemaDiffFiltered(
   return SQLITE_OK;
 }
 
+static int sdAppendSchemaEntryByName(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pCatHash,
+  const char *zName,
+  SchemaEntry **paEntry,
+  int *pnEntry
+){
+  SchemaEntry entry;
+  SchemaEntry *aNew;
+  int found = 0;
+  int i, rc;
+
+  if( !zName ) return SQLITE_OK;
+  for(i=0; i<*pnEntry; i++){
+    if( (*paEntry)[i].zName && strcmp((*paEntry)[i].zName, zName)==0 ){
+      return SQLITE_OK;
+    }
+  }
+
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zName,
+                                  &entry, &found);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !found ) return SQLITE_OK;
+
+  aNew = sqlite3_realloc(*paEntry,
+                         (*pnEntry + 1) * (int)sizeof(SchemaEntry));
+  if( !aNew ){
+    clearSchemaEntry(&entry);
+    return SQLITE_NOMEM;
+  }
+  *paEntry = aNew;
+  (*paEntry)[*pnEntry] = entry;
+  (*pnEntry)++;
+  return SQLITE_OK;
+}
+
+static int sdLoadFilteredSchemas(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pFromCatHash,
+  const ProllyHash *pToCatHash,
+  struct TableEntry *aFromTables,
+  int nFromTables,
+  struct TableEntry *aToTables,
+  int nToTables,
+  const char *zFilter,
+  SchemaEntry **paFrom,
+  int *pnFrom,
+  SchemaEntry **paTo,
+  int *pnTo
+){
+  struct TableEntry *pFrom;
+  struct TableEntry *pTo;
+  int rc;
+
+  *paFrom = 0;
+  *pnFrom = 0;
+  *paTo = 0;
+  *pnTo = 0;
+
+  rc = sdAppendSchemaEntryByName(db, cs, pCache, pFromCatHash, zFilter,
+                                 paFrom, pnFrom);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sdAppendSchemaEntryByName(db, cs, pCache, pToCatHash, zFilter,
+                                 paTo, pnTo);
+  if( rc!=SQLITE_OK ) return rc;
+
+  pTo = doltliteFindTableByName(aToTables, nToTables, zFilter);
+  if( pTo && pTo->iTable!=0 ){
+    pFrom = doltliteFindTableByNumber(aFromTables, nFromTables, pTo->iTable);
+    if( pFrom && pFrom->zName && strcmp(pFrom->zName, zFilter)!=0 ){
+      rc = sdAppendSchemaEntryByName(db, cs, pCache, pFromCatHash,
+                                     pFrom->zName, paFrom, pnFrom);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = sdAppendSchemaEntryByName(db, cs, pCache, pToCatHash,
+                                     pFrom->zName, paTo, pnTo);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+
+  pFrom = doltliteFindTableByName(aFromTables, nFromTables, zFilter);
+  if( pFrom && pFrom->iTable!=0 ){
+    pTo = doltliteFindTableByNumber(aToTables, nToTables, pFrom->iTable);
+    if( pTo && pTo->zName && strcmp(pTo->zName, zFilter)!=0 ){
+      rc = sdAppendSchemaEntryByName(db, cs, pCache, pFromCatHash,
+                                     pTo->zName, paFrom, pnFrom);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = sdAppendSchemaEntryByName(db, cs, pCache, pToCatHash,
+                                     pTo->zName, paTo, pnTo);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+
+  return SQLITE_OK;
+}
+
 static const char *sdSchema =
   "CREATE TABLE x("
   "  from_table_name TEXT,"
@@ -854,14 +1058,21 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   rc = sdResolveRefs(db, &v->base, zFromRef, zToRef, &fromCatHash, &toCatHash);
   if( rc!=SQLITE_OK ) goto sd_filter_done;
 
-  rc = loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
-  if( rc!=SQLITE_OK ) goto sd_filter_done;
-  rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
-  if( rc!=SQLITE_OK ) goto sd_filter_done;
-
   rc = doltliteLoadCatalog(db, &fromCatHash, &aFromTables, &nFromTables, 0);
   if( rc!=SQLITE_OK ) goto sd_filter_done;
   rc = doltliteLoadCatalog(db, &toCatHash, &aToTables, &nToTables, 0);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  if( zTableFilter ){
+    rc = sdLoadFilteredSchemas(db, cs, pCache, &fromCatHash, &toCatHash,
+                               aFromTables, nFromTables, aToTables, nToTables,
+                               zTableFilter, &aFrom, &nFrom, &aTo, &nTo);
+  }else{
+    rc = loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
+    if( rc==SQLITE_OK ){
+      rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
+    }
+  }
   if( rc!=SQLITE_OK ) goto sd_filter_done;
 
   rc = computeSchemaDiffFiltered(c, aFrom, nFrom, aTo, nTo,

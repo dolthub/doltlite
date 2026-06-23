@@ -897,7 +897,11 @@ struct SchemaEntry {
 int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                           const ProllyHash *pCatHash,
                           SchemaEntry **ppEntries, int *pnEntries);
+int loadSchemaEntryFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
+                               const ProllyHash *pCatHash, const char *zName,
+                               SchemaEntry *pEntry, int *pFound);
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
+void clearSchemaEntry(SchemaEntry *pEntry);
 void freeSchemaEntries(SchemaEntry *a, int n);
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType, const char *zDb,
