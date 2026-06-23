@@ -496,11 +496,31 @@ static int cvsClose(sqlite3_vtab_cursor *cur){
 static int cvsFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlite3_value **v){
   CvSumCur *c = (CvSumCur*)cur;
   CvSumVtab *vt = (CvSumVtab*)cur->pVtab;
-  (void)n;(void)s;(void)a;(void)v;
+  int rc;
+  (void)s;
   freeViolationTables(c->aTables, c->nTables);
   c->aTables = 0;
   c->nTables = 0;
   c->iRow = 0;
+  if( n==1 && a>=1 ){
+    const char *zTable = (const char*)sqlite3_value_text(v[0]);
+    ConstraintViolationTable table;
+    int found = 0;
+    if( !zTable ) return SQLITE_OK;
+    rc = loadViolationTable(vt->db, doltliteGetChunkStore(vt->db),
+                            zTable, &table, &found);
+    if( rc!=SQLITE_OK ) return rc;
+    if( found ){
+      c->aTables = sqlite3_malloc(sizeof(*c->aTables));
+      if( !c->aTables ){
+        freeViolationTable(&table);
+        return SQLITE_NOMEM;
+      }
+      c->aTables[0] = table;
+      c->nTables = 1;
+    }
+    return SQLITE_OK;
+  }
   return loadAllViolations(vt->db, doltliteGetChunkStore(vt->db),
                            &c->aTables, &c->nTables);
 }
@@ -528,7 +548,7 @@ static int cvsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
 static int cvsBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   (void)v;
   p->estimatedCost = 10;
-  return SQLITE_OK;
+  return doltliteBestIndexEq(p, 0);
 }
 
 static sqlite3_module cvSummaryModule = {
