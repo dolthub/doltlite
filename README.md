@@ -59,11 +59,11 @@ Download `doltlite-tools-win-x64-<ver>.zip` from
 
 Language-specific wrappers around `libdoltlite`. Each one exposes the full `sqlite3_*` C API plus the dolt version-control functions.
 
-| Language | Package | Source |
+| Language | Distribution | Source |
 |---|---|---|
-| Node.js / Bun | `@dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
-| Python | `doltlite` (`pip install doltlite`) | [dolthub/doltlite-python](https://github.com/dolthub/doltlite-python) |
-| Browser / WASM | `@dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
+| Python | `pip install doltlite` | [dolthub/doltlite-python](https://github.com/dolthub/doltlite-python) |
+| Node.js / Bun | `npm install @dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
+| Browser / WASM | `npm install @dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
 
 ## Building
 
