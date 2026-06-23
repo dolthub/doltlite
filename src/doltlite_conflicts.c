@@ -367,8 +367,31 @@ static int cfClose(sqlite3_vtab_cursor *cur){
 static int cfFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlite3_value **v){
   ConflictsCur *c=(ConflictsCur*)cur;
   ConflictsVtab *vt=(ConflictsVtab*)cur->pVtab;
-  (void)n;(void)s;(void)a;(void)v;
+  int rc;
+  (void)s;
   c->iRow=0;
+  freeConflictTables(c->aTables, c->nTables);
+  c->aTables = 0;
+  c->nTables = 0;
+  if( n==1 && a>=1 ){
+    const char *zTable = (const char*)sqlite3_value_text(v[0]);
+    ConflictTableInfo table;
+    int found = 0;
+    if( !zTable ) return SQLITE_OK;
+    rc = loadConflictTable(vt->db, doltliteGetChunkStore(vt->db),
+                           zTable, &table, &found);
+    if( rc!=SQLITE_OK ) return rc;
+    if( found ){
+      c->aTables = sqlite3_malloc(sizeof(*c->aTables));
+      if( !c->aTables ){
+        freeConflictTable(&table);
+        return SQLITE_NOMEM;
+      }
+      c->aTables[0] = table;
+      c->nTables = 1;
+    }
+    return SQLITE_OK;
+  }
   return loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
 }
 static int cfNext(sqlite3_vtab_cursor *cur){ ((ConflictsCur*)cur)->iRow++; return SQLITE_OK; }
@@ -382,7 +405,11 @@ static int cfColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 static int cfRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){ *r=((ConflictsCur*)cur)->iRow; return SQLITE_OK; }
-static int cfBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){ (void)v; p->estimatedCost=10; return SQLITE_OK; }
+static int cfBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
+  (void)v;
+  p->estimatedCost = 10;
+  return doltliteBestIndexEq(p, 0);
+}
 
 static sqlite3_module conflictsModule = {
   0,0,cfConnect,cfBestIndex,doltliteVtabDisconnect,0,cfOpen,cfClose,cfFilter,cfNext,cfEof,
