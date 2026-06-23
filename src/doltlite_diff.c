@@ -282,6 +282,57 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   return SQLITE_OK;
 }
 
+static int diffFilteredTableRoots(
+  DoltliteDiffCursor *pCur,
+  sqlite3 *db,
+  const ProllyHash *pChildCat,
+  const ProllyHash *pParentCat,
+  const char *zHex,
+  const DoltliteCommit *pCommit
+){
+  ProllyHash childRoot;
+  ProllyHash parentRoot;
+  ProllyHash childSchema;
+  ProllyHash parentSchema;
+  int childFound;
+  int parentFound;
+  int rc;
+
+  if( !pCur->zFilterTable ) return SQLITE_OK;
+  if( strcmp(pCur->zFilterTable, "dolt_schemas")==0 ) return SQLITE_NOTFOUND;
+
+  rc = doltliteLoadTableRootByName(db, pChildCat, pCur->zFilterTable,
+                                   &childRoot, 0, &childSchema);
+  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  childFound = rc==SQLITE_OK;
+  if( !childFound ){
+    memset(&childRoot, 0, sizeof(childRoot));
+    memset(&childSchema, 0, sizeof(childSchema));
+  }
+
+  rc = doltliteLoadTableRootByName(db, pParentCat, pCur->zFilterTable,
+                                   &parentRoot, 0, &parentSchema);
+  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  parentFound = rc==SQLITE_OK;
+  if( !parentFound ){
+    memset(&parentRoot, 0, sizeof(parentRoot));
+    memset(&parentSchema, 0, sizeof(parentSchema));
+  }
+
+  if( !childFound && !parentFound ) return SQLITE_OK;
+
+  if( !childFound || !parentFound ){
+    return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit, 1, 1);
+  }
+  if( prollyHashCompare(&childRoot, &parentRoot)==0
+   && prollyHashCompare(&childSchema, &parentSchema)==0 ){
+    return SQLITE_OK;
+  }
+  return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit,
+                     prollyHashCompare(&childRoot, &parentRoot)!=0,
+                     prollyHashCompare(&childSchema, &parentSchema)!=0);
+}
+
 /* Fast path for table_name constrained scans. */
 static int diffCatalogPairOne(
   DoltliteDiffCursor *pCur, sqlite3 *db,
@@ -424,6 +475,12 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
 
   if( prollyHashCompare(&headCat, &workCat)==0 ) return SQLITE_OK;
 
+  if( pCur->zFilterTable && strcmp(pCur->zFilterTable, "dolt_schemas")!=0 ){
+    memset(zHexBuf, 0, sizeof(zHexBuf));
+    memcpy(zHexBuf, zWorkingHex, sizeof(zWorkingHex));
+    return diffFilteredTableRoots(pCur, db, &workCat, &headCat, zHexBuf, 0);
+  }
+
   rc = doltliteLoadCatalog(db, &headCat, &aHead, &nHead, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, &workCat, &aWork, &nWork, 0);
@@ -450,6 +507,17 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
   int rc;
   const ProllyHash *pParentHash = doltliteCommitParentHash(pCommit, 0);
   int hasParent = (pParentHash && !prollyHashIsEmpty(pParentHash));
+
+  if( pCur->zFilterTable && strcmp(pCur->zFilterTable, "dolt_schemas")!=0 ){
+    ProllyHash parentCat;
+    memset(&parentCat, 0, sizeof(parentCat));
+    if( hasParent ){
+      rc = doltliteCommitCatalogHash(db, pParentHash, &parentCat);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    return diffFilteredTableRoots(pCur, db, &pCommit->catalogHash, &parentCat,
+                                  zCommitHex, pCommit);
+  }
 
   rc = doltliteLoadCatalog(db, &pCommit->catalogHash, &aChild, &nChild, 0);
   if( rc!=SQLITE_OK ) return rc;
