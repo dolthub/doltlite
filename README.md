@@ -64,6 +64,7 @@ Language-specific wrappers around `libdoltlite`. Each one exposes the full `sqli
 | Python | `pip install doltlite` | [dolthub/doltlite-python](https://github.com/dolthub/doltlite-python) |
 | Node.js / Bun | `npm install @dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
 | Browser / WASM | `npm install @dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
+| Swift (iOS / macOS) | SwiftPM: `https://github.com/dolthub/doltlite-swift` | [dolthub/doltlite-swift](https://github.com/dolthub/doltlite-swift) (XCFramework built by [`packaging/swift`](packaging/swift)) |
 
 ## Building
 

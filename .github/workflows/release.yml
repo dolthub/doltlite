@@ -771,3 +771,116 @@ jobs:
           exit 0
         fi
         npm publish --access public
+
+  # ── Build the Swift XCFramework ──────────────────────────
+  # Compiles the doltlite amalgamation for the Apple platform slices (iOS,
+  # iOS Simulator, macOS, Mac Catalyst) and packs them into doltlite.xcframework.
+  # The zip is uploaded as an artifact so the `release` job attaches it to the
+  # GitHub release; the SwiftPM checksum is exposed as a job output for
+  # release-swift. Needs full Xcode, so it runs on macOS.
+  swift-xcframework:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: macos-latest
+    outputs:
+      checksum: ${{ steps.build.outputs.checksum }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build generated SQLite files
+      run: |
+        ./configure
+        make sqlite3.c sqlite3.h sqlite3ext.h
+
+    - name: Build XCFramework
+      id: build
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        bash packaging/swift/build-xcframework.sh "$VERSION" build-swift
+
+    - name: Upload XCFramework artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: swift-xcframework
+        path: build-swift/doltlite-*.xcframework.zip
+
+  # ── Tag the Swift package ────────────────────────────────
+  # After the release exists, attach the XCFramework zip as a release asset,
+  # then point dolthub/doltlite-swift's Package.swift at it (url + checksum) and
+  # tag it, the same way release-bindings tags the node/python repos. Kept off
+  # the `release` job's critical path so a flaky Xcode build can't block the
+  # core release; re-running this job alone recovers it.
+  release-swift:
+    if: github.event_name != 'workflow_dispatch'
+    needs: [release, swift-xcframework]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+      CHECKSUM: ${{ needs.swift-xcframework.outputs.checksum }}
+    steps:
+    - name: Check release bot token
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to push commits and tags to doltlite-swift"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - name: Download XCFramework artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: swift-xcframework
+        path: swift-dist
+
+    - name: Attach XCFramework to the release
+      run: |
+        version="${VERSION#v}"
+        gh release upload "${VERSION}" "swift-dist/doltlite-${version}.xcframework.zip" \
+          --repo dolthub/doltlite --clobber
+
+    - name: Tag doltlite-swift
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+
+        if gh api "repos/dolthub/doltlite-swift/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-swift ${VERSION} already exists; skipping"
+          exit 0
+        fi
+        if [ -z "${CHECKSUM}" ]; then
+          echo "missing XCFramework checksum from swift-xcframework job"
+          exit 1
+        fi
+
+        gh repo clone dolthub/doltlite-swift doltlite-swift
+        cd doltlite-swift
+        git checkout main
+        git pull --ff-only origin main
+
+        python3 - "$version" "$CHECKSUM" <<'PY'
+        import re, sys
+        from pathlib import Path
+        version, checksum = sys.argv[1], sys.argv[2]
+        url = (f"https://github.com/dolthub/doltlite/releases/download/"
+               f"v{version}/doltlite-{version}.xcframework.zip")
+        p = Path("Package.swift")
+        text = p.read_text()
+        text = re.sub(r'url: "[^"]*"', f'url: "{url}"', text, count=1)
+        text = re.sub(r'checksum: "[0-9a-f]*"', f'checksum: "{checksum}"', text, count=1)
+        p.write_text(text)
+        PY
+
+        if ! git diff --quiet; then
+          git add Package.swift
+          git commit -m "Release ${version}: point XCFramework at this release"
+          git push origin main
+        fi
+
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
