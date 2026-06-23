@@ -712,26 +712,25 @@ static int loadColInfoAtCatalog(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
-  SchemaEntry *pEntry;
+  SchemaEntry entry;
+  int found = 0;
   sqlite3 *tmp = 0;
   int rc;
 
   memset(pOut, 0, sizeof(*pOut));
   if( prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
 
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTableName,
+                                  &entry, &found);
   if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
-  if( !pEntry || !pEntry->zSql ){
-    freeSchemaEntries(aSchemas, nSchemas);
+  if( !found || !entry.zSql ){
+    clearSchemaEntry(&entry);
     return SQLITE_NOTFOUND;
   }
 
   rc = sqlite3_open(":memory:", &tmp);
   if( rc!=SQLITE_OK ) goto cleanup;
-  rc = sqlite3_exec(tmp, pEntry->zSql, 0, 0, 0);
+  rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto cleanup;
 
   rc = doltliteGetColumnNames(tmp, zTableName, pOut);
@@ -740,7 +739,7 @@ static int loadColInfoAtCatalog(
 
 cleanup:
   if( tmp ) sqlite3_close(tmp);
-  freeSchemaEntries(aSchemas, nSchemas);
+  clearSchemaEntry(&entry);
   if( rc!=SQLITE_OK ){
     doltliteFreeColInfo(pOut);
   }

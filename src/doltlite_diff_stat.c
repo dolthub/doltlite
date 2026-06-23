@@ -19,9 +19,8 @@ static int dsLoadColNames(sqlite3 *db,
                           char ***pazOut, int *pnOut){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
-  SchemaEntry *pEntry;
+  SchemaEntry entry;
+  int found = 0;
   sqlite3 *tmp = 0;
   sqlite3_stmt *pStmt = 0;
   char *zPragma = 0;
@@ -33,17 +32,17 @@ static int dsLoadColNames(sqlite3 *db,
   *pnOut = 0;
   if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTableName,
+                                  &entry, &found);
   if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
-  if( !pEntry || !pEntry->zSql ){
-    freeSchemaEntries(aSchemas, nSchemas);
+  if( !found || !entry.zSql ){
+    clearSchemaEntry(&entry);
     return SQLITE_OK;
   }
 
   rc = sqlite3_open(":memory:", &tmp);
   if( rc!=SQLITE_OK ) goto cleanup;
-  rc = sqlite3_exec(tmp, pEntry->zSql, 0, 0, 0);
+  rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto cleanup;
 
   zPragma = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTableName);
@@ -69,7 +68,7 @@ cleanup:
   if( pStmt ) sqlite3_finalize(pStmt);
   sqlite3_free(zPragma);
   if( tmp ) sqlite3_close(tmp);
-  freeSchemaEntries(aSchemas, nSchemas);
+  clearSchemaEntry(&entry);
   if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
     int k;
     for(k=0; k<n; k++) sqlite3_free(az[k]);
@@ -89,25 +88,24 @@ static int dsLoadCreateSql(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aSchemas = 0;
-  int nSchemas = 0;
-  SchemaEntry *pEntry;
+  SchemaEntry entry;
+  int found = 0;
   int rc;
 
   *pzSqlOut = 0;
   if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTableName,
+                                  &entry, &found);
   if( rc!=SQLITE_OK ) return rc;
-  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
-  if( pEntry && pEntry->zSql ){
-    *pzSqlOut = sqlite3_mprintf("%s", pEntry->zSql);
+  if( found && entry.zSql ){
+    *pzSqlOut = sqlite3_mprintf("%s", entry.zSql);
     if( !*pzSqlOut ){
-      freeSchemaEntries(aSchemas, nSchemas);
+      clearSchemaEntry(&entry);
       return SQLITE_NOMEM;
     }
   }
-  freeSchemaEntries(aSchemas, nSchemas);
+  clearSchemaEntry(&entry);
   return SQLITE_OK;
 }
 
