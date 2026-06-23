@@ -52,58 +52,44 @@ static int hashofTableInCatalog(
   const char *zTable,
   char *pHex
 ){
-  struct TableEntry *aTables = 0;
-  struct TableEntry *pTE = 0;
   ChunkStore *cs;
   ProllyCache *cache;
   SchemaEntry schemaEntry;
-  int nTables = 0;
   int foundSchema = 0;
+  ProllyHash tableRoot;
   ProllyHash schemaHash;
   ProllyHash tableHash;
   u8 aBuf[PROLLY_HASH_SIZE*2];
   int rc;
 
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+  rc = doltliteLoadTableRootByName(db, pCatHash, zTable, &tableRoot, 0,
+                                   &schemaHash);
   if( rc!=SQLITE_OK ) return rc;
-  pTE = doltliteFindTableByName(aTables, nTables, zTable);
-  if( !pTE ){
-    doltliteFreeCatalog(aTables, nTables);
-    return SQLITE_NOTFOUND;
-  }
 
   cs = doltliteGetChunkStore(db);
   cache = doltliteGetCache(db);
   if( !cs || !cache ){
-    doltliteFreeCatalog(aTables, nTables);
     return SQLITE_ERROR;
   }
 
   rc = loadSchemaEntryFromCatalog(db, cs, cache, pCatHash, zTable,
                                   &schemaEntry, &foundSchema);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeCatalog(aTables, nTables);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) return rc;
   if( foundSchema ){
     char *zCanon = doltliteCanonicalizeSchemaSql(schemaEntry.zSql,
                                                  schemaEntry.zName);
     if( !zCanon ){
       clearSchemaEntry(&schemaEntry);
-      doltliteFreeCatalog(aTables, nTables);
       return SQLITE_NOMEM;
     }
     prollyHashCompute(zCanon, (int)strlen(zCanon), &schemaHash);
     sqlite3_free(zCanon);
-  }else{
-    schemaHash = pTE->schemaHash;
   }
 
-  memcpy(aBuf, pTE->root.data, PROLLY_HASH_SIZE);
+  memcpy(aBuf, tableRoot.data, PROLLY_HASH_SIZE);
   memcpy(aBuf + PROLLY_HASH_SIZE, schemaHash.data, PROLLY_HASH_SIZE);
   prollyHashCompute(aBuf, sizeof(aBuf), &tableHash);
   clearSchemaEntry(&schemaEntry);
-  doltliteFreeCatalog(aTables, nTables);
   doltliteHashToHex(&tableHash, pHex);
   return SQLITE_OK;
 }
