@@ -884,3 +884,77 @@ jobs:
 
         git tag "${VERSION}"
         git push origin "${VERSION}"
+
+  # ── Release the Ruby gem ─────────────────────────────────
+  # Builds precompiled platform gems for dolthub/doltlite-ruby from this
+  # release's per-platform libdoltlite zips and pushes them to RubyGems, then
+  # bumps + tags the repo. Like the other bindings it is post-release and
+  # non-blocking. Needs RUBYGEMS_API_KEY (a RubyGems API key with push rights to
+  # the doltlite gem) and RELEASE_BOT_TOKEN.
+  release-ruby:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+      GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+    steps:
+    - name: Check tokens
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to push commits and tags to doltlite-ruby"
+          exit 1
+        fi
+        if [ -z "${GEM_HOST_API_KEY}" ]; then
+          echo "RUBYGEMS_API_KEY is required to push gems to RubyGems"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: "3.2"
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - name: Build and push gems, tag doltlite-ruby
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+
+        if gh api "repos/dolthub/doltlite-ruby/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-ruby ${VERSION} already exists; skipping"
+          exit 0
+        fi
+
+        gh repo clone dolthub/doltlite-ruby doltlite-ruby
+        cd doltlite-ruby
+        git checkout main
+        git pull --ff-only origin main
+
+        sed -i "s/VERSION = \"[^\"]*\"/VERSION = \"${version}\"/" lib/doltlite/version.rb
+
+        # Per-platform libdoltlite zips from this release feed the gem build.
+        mkdir -p ../libs
+        gh release download "${VERSION}" --repo dolthub/doltlite \
+          --pattern 'doltlite-lib-*.zip' --dir ../libs
+        bash script/build-gems.sh "${version}" ../libs
+
+        for g in pkg/*.gem; do
+          echo "pushing $g"
+          gem push "$g"
+        done
+
+        if ! git diff --quiet; then
+          git add lib/doltlite/version.rb
+          git commit -m "Bump version to ${version}"
+          git push origin main
+        fi
+
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
