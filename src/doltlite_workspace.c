@@ -407,9 +407,9 @@ static int wsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *pRowid){
 }
 
 static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
-  int i;
-  for(i=0; i<p->nCache; i++){
-    if( p->aCache[i].rowid==rowid ) return &p->aCache[i];
+  if( rowid>=1 && rowid<=p->nCache ){
+    WorkspaceRow *r = &p->aCache[rowid - 1];
+    if( r->rowid==rowid ) return r;
   }
   return 0;
 }
