@@ -40,12 +40,14 @@ run_test "jm_dl_set_wal" \
 
 for mode in DELETE TRUNCATE PERSIST MEMORY; do
   out=$($DOLTLITE "$DB" "PRAGMA journal_mode = $mode;" 2>&1)
-  run_test_match "jm_dl_set_${mode}_rejected" "$out" \
-    "journal_mode is not configurable on doltlite-format"
+  run_test "jm_dl_set_${mode}_noop" "$out" "$(echo "$mode" | tr '[:upper:]' '[:lower:]')"
 done
 
 out=$($DOLTLITE "$DB" "PRAGMA journal_mode = OFF;" 2>&1)
 run_test "jm_dl_set_off_defensive" "$out" "wal"
+
+run_test "jm_dl_still_wal" \
+  "$($DOLTLITE "$DB" "PRAGMA journal_mode;" 2>&1)" "wal"
 
 db_rm "$DB"
 

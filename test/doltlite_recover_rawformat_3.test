@@ -408,7 +408,7 @@ do_test doltlite_recover_rawformat_3-5.7 {
   list [execsql {PRAGMA journal_mode=WAL}] \
        [catchsql {PRAGMA journal_mode=DELETE}] \
        [execsql {PRAGMA journal_mode} db2]
-} {wal {1 {journal_mode is not configurable on doltlite-format databases}} wal}
+} {wal {0 delete} wal}
 do_test doltlite_recover_rawformat_3-5.8 {
   execsql {PRAGMA encoding='utf16'}
   set e [execsql {PRAGMA encoding}]

@@ -5,9 +5,9 @@ source $testdir/tester.tcl
 do_test doltlite_recover_jrnlwal_1-1.1 {
   execsql {PRAGMA journal_mode}
 } {wal}
-do_catchsql_test doltlite_recover_jrnlwal_1-1.2 {
+do_execsql_test doltlite_recover_jrnlwal_1-1.2 {
   PRAGMA journal_mode = memory
-} {1 {journal_mode is not configurable on doltlite-format databases}}
+} {memory}
 do_test doltlite_recover_jrnlwal_1-1.3 {
   execsql {PRAGMA journal_mode = wal}
 } {wal}

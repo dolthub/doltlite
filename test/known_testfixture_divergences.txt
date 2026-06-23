@@ -1789,18 +1789,14 @@ lock7 lock7-1.6  # PRAGMA lock_status reports doltlite locking model
 mallocK mallocK-6.0  # custom collation utf16_aligned explicitly rejected
 memdb memdb-6.12  # rowid on composite-PK (WITHOUT ROWID) table; auto_vacuum rejected
 memdb memdb-9.1  # rowid on composite-PK (WITHOUT ROWID) table; auto_vacuum rejected
-memjournal memjournal-1.0  # journal_mode pragma rejected + cascade
-memjournal memjournal-1.1  # journal_mode pragma rejected + cascade
-memjournal memjournal-1.2  # journal_mode pragma rejected + cascade
 mmapcorrupt mmapcorrupt-2.1  # mmap stock-page corruption: offset misses chunk-store structures
 mmapwarm mmapwarm-1.0  # PRAGMA page_count: chunk store has no SQLite page count
 oserror oserror-1.3.1  # open-path differs: lock-file opened first; no -wal to unlink
 oserror oserror-1.3.2  # open-path differs: lock-file opened first; no -wal to unlink
 oserror oserror-2.1.1  # open-path differs: lock-file opened first; no -wal to unlink
 oserror oserror-2.1.2  # open-path differs: lock-file opened first; no -wal to unlink
-pager3 pager3-1.1.1  # journal-file existence probes; journal_mode rejected
-pager3 pager3-1.4.2  # journal-file existence probes; journal_mode rejected
-pager3 pager3-1.5.2  # journal-file existence probes; journal_mode rejected
+pager3 pager3-1.4.2  # journal-file existence probes; no rollback-journal sidecar
+pager3 pager3-1.5.2  # journal-file existence probes; no rollback-journal sidecar
 rdonly rdonly-1.2  # stock write-version header byte poke (offset 18) has no doltlite meaning; cascade
 rdonly rdonly-1.3.1  # stock write-version header byte poke (offset 18) has no doltlite meaning; cascade
 rdonly rdonly-1.4  # stock write-version header byte poke (offset 18) has no doltlite meaning; cascade
@@ -1862,7 +1858,6 @@ backup_malloc backup_malloc-1.transient.3  # OOM fault-point shift + harness cas
 backup_malloc backup_malloc-1.transient.4  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.5  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.6  # OOM fault-point shift + harness cascade
-backup_malloc backup_malloc-1.transient.33  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.0  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.1  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.2  # OOM fault-point shift + harness cascade
@@ -1980,7 +1975,6 @@ dbstatus2 dbstatus2-2.3  # DBSTATUS cache stats zero under chunk store; dbstat o
 dbstatus2 dbstatus2-2.6  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-2.7  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-2.8  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
-dbstatus2 dbstatus2-3.2  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-3.3  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 e_wal e_wal-1.1.1  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_wal e_wal-1.1.4  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
@@ -2007,7 +2001,6 @@ e_wal e_wal-3.4.2  # journal_mode fixed at wal-reporting; locking-model cascades
 e_wal e_wal-4.1.2  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_wal e_wal-4.1.4  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_wal e_wal-4.2.2  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
-e_wal e_wal-4.2.3  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_wal e_wal-4.3  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_walhook e_walhook-1.3  # wal hook fires with doltlite checkpoint semantics; counters differ
 e_walhook e_walhook-1.4  # wal hook fires with doltlite checkpoint semantics; counters differ
@@ -2033,7 +2026,6 @@ exclusive exclusive-3.5  # locking_mode=exclusive not enforced; cascades re-ran 
 exclusive exclusive-5.5  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
 exclusive exclusive-6.2  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
 exclusive exclusive-6.3  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-7.1  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
 exclusive2 exclusive2-1.2  # exclusive-mode read-marks; chunk store has no page cache to count
 exclusive2 exclusive2-1.6  # exclusive-mode read-marks; chunk store has no page cache to count
 exclusive2 exclusive2-1.9  # exclusive-mode read-marks; chunk store has no page cache to count
@@ -2060,25 +2052,16 @@ exclusive2 exclusive2-3.6  # exclusive-mode read-marks; chunk store has no page 
 # aborts before creating its tables and the body then errors without an
 # IO fault, breaking the hit-XOR-success invariant (cascade).
 ioerr3 ioerr3-2.3.3  # IO-fault point shift
-ioerr3 ioerr3-2.4.3  # IO-fault point shift
-ioerr3 ioerr3-2.5.3  # IO-fault point shift
-ioerr3 ioerr3-2.6.3  # IO-fault point shift
-ioerr3 ioerr3-2.7.3  # IO-fault point shift
-ioerr3 ioerr3-2.8.3  # IO-fault point shift
-ioerr3 ioerr3-2.9.3  # IO-fault point shift
 journal2 journal2-1.1  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.2  # hot-journal crash simulation needs -journal sidecar; copied state differs
-journal2 journal2-1.4  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.5  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.6  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.7  # hot-journal crash simulation needs -journal sidecar; copied state differs
-journal2 journal2-1.8  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.9  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.10  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.14  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.16  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.20  # hot-journal crash simulation needs -journal sidecar; copied state differs
-journal2 journal2-2.1  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-2.2  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-2.3  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-2.4  # hot-journal crash simulation needs -journal sidecar; copied state differs
@@ -2090,102 +2073,51 @@ journal3 journal3-1.2.3.3  # journal file permission probes: no -journal sidecar
 journal3 journal3-1.2.3.4  # journal file permission probes: no -journal sidecar
 journal3 journal3-1.2.4.3  # journal file permission probes: no -journal sidecar
 journal3 journal3-1.2.4.4  # journal file permission probes: no -journal sidecar
-jrnlmode2 jrnlmode2-1.1  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-1.2  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-1.3  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-1.4  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-1.5  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-1.6  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-1.7  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-2.1  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-2.2  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-2.3  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-2.4  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode2 jrnlmode2-2.6  # journal_mode rejected; hot-journal premise inapplicable + cascade
-jrnlmode3 jrnlmode3-1.1  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-1.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-2.1  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-2.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.1.1-(delete-to-persist)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.1.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.1.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.1.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.2.1-(delete-to-truncate)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.2.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.2.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.2.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.3.1-(delete-to-memory)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.3.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.3.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.3.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.4.1-(delete-to-off)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.4.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.4.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.4.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.5.1-(persist-to-delete)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.5.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.5.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.5.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.6.1-(persist-to-truncate)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.6.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.6.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.6.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.7.1-(persist-to-memory)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.7.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.7.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.7.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.8.1-(persist-to-off)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.8.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.8.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.8.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.9.1-(truncate-to-delete)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.9.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.9.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.9.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.10.1-(truncate-to-persist)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.10.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.10.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.10.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.11.1-(truncate-to-memory)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.11.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.11.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.11.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.12.1-(truncate-to-off)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.12.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.12.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.12.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.13.1-(memory-to-delete)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.13.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.13.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.13.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.14.1-(memory-to-persist)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.14.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.14.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.14.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.15.1-(memory-to-truncate)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.15.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.15.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.15.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.16.1-(memory-to-off)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.16.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.16.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.16.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.17.1-(off-to-delete)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.17.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.17.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.17.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.18.1-(off-to-persist)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.18.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.18.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.18.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.19.1-(off-to-truncate)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.19.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.19.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.19.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.20.1-(off-to-memory)  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.20.2  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.20.3  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
-jrnlmode3 jrnlmode3-3.20.5  # journal_mode fixed (reports wal); per-mode loop collapses + cascade
+jrnlmode2 jrnlmode2-1.2  # hot-journal/sidecar premise inapplicable on doltlite chunk storage
+jrnlmode2 jrnlmode2-1.4  # hot-journal/sidecar premise inapplicable on doltlite chunk storage
+jrnlmode2 jrnlmode2-1.5  # hot-journal/sidecar premise inapplicable on doltlite chunk storage
+jrnlmode2 jrnlmode2-2.2  # hot-journal/sidecar premise inapplicable on doltlite chunk storage
+jrnlmode2 jrnlmode2-2.3  # hot-journal/sidecar premise inapplicable on doltlite chunk storage
+jrnlmode3 jrnlmode3-3.1.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.1.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.2.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.2.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.3.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.3.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.4.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.4.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.5.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.5.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.6.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.6.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.7.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.7.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.8.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.8.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.9.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.9.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.10.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.10.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.11.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.11.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.12.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.12.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.13.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.13.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.14.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.14.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.15.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.15.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.16.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.16.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.17.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.17.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.18.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.18.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.19.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.19.3  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.20.2  # effective journal mode and sidecar shape differ
+jrnlmode3 jrnlmode3-3.20.3  # effective journal mode and sidecar shape differ
 mmap3 mmap3-1.0  # mmap read statistics zero: chunk store does not mmap pages
 mmap3 mmap3-1.2  # mmap read statistics zero: chunk store does not mmap pages
 mmap3 mmap3-1.3  # mmap read statistics zero: chunk store does not mmap pages
@@ -2199,7 +2131,6 @@ nockpt nockpt-1.6  # no-checkpoint-on-close probes need -wal sidecar
 nockpt nockpt-1.8  # no-checkpoint-on-close probes need -wal sidecar
 nockpt nockpt-1.10  # no-checkpoint-on-close probes need -wal sidecar
 nockpt nockpt-1.11  # no-checkpoint-on-close probes need -wal sidecar
-nockpt nockpt-1.14  # no-checkpoint-on-close probes need -wal sidecar
 nockpt nockpt-2.3  # no-checkpoint-on-close probes need -wal sidecar
 nolock nolock-1.0  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-1.1  # VFS xLock call counts differ under chunk-store locking
@@ -2215,8 +2146,6 @@ nolock nolock-4.1  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.3  # VFS xLock call counts differ under chunk-store locking
 pager4 pager4-1.3  # rename-while-open not detected: writes continue to the open inode
 pager4 pager4-1.4  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.7  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.8  # rename-while-open not detected: writes continue to the open inode
 pager4 pager4-1.9  # rename-while-open not detected: writes continue to the open inode
 pager4 pager4-1.10  # rename-while-open not detected: writes continue to the open inode
 pager4 pager4-1.11  # rename-while-open not detected: writes continue to the open inode
@@ -2273,32 +2202,11 @@ symlink symlink-1.1.2  # opens through renamed/symlinked paths succeed (deferred
 symlink symlink-1.1.4  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-2.1.2  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-2.1.4  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.1.7  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-2.2.2  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-2.2.4  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.2.7  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-4.2.2  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-4.3.2  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-4.4.2  # opens through renamed/symlinked paths succeed (deferred open)
-syscall syscall-4.2.delete.1  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.2  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.3  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.4  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.5  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.6  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.7  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.8  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.9  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.10  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.11  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.12  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.13  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.14  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.15  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.16  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.17  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.18  # fault-injected syscall error text; chunk-store file size
-syscall syscall-4.2.delete.19  # fault-injected syscall error text; chunk-store file size
 syscall syscall-7.2  # fault-injected syscall error text; chunk-store file size
 syscall syscall-7.3  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.1  # fault-injected syscall error text; chunk-store file size
@@ -2362,32 +2270,21 @@ walmode walmode-1.5  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-1.6  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-2.2  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-3.2  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-4.1  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.2  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.5  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.6  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.9  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-4.11  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.12  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.16  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.17  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-4.18  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-6.1  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-6.2  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-6.3  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-6.4  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-6.5  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-7.3  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-7.4  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-7.5  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-7.11  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-7.12  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-7.13  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-8.3  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-8.4  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-8.7  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-8.9  # journal_mode fixed; -wal sidecar absent; file sizes
-walmode walmode-8.20  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-8.21  # journal_mode fixed; -wal sidecar absent; file sizes
 walmode walmode-8.22  # journal_mode fixed; -wal sidecar absent; file sizes
 walpersist walpersist-1.0  # -wal/-shm persistence flags inapplicable
@@ -2398,7 +2295,6 @@ walpersist walpersist-2.1  # -wal/-shm persistence flags inapplicable
 walpersist walpersist-2.2  # -wal/-shm persistence flags inapplicable
 walpersist walpersist-3.1  # -wal/-shm persistence flags inapplicable
 walpersist walpersist-3.3  # -wal/-shm persistence flags inapplicable
-walpersist walpersist-4.1  # -wal/-shm persistence flags inapplicable
 walprotocol walprotocol-1.1  # WAL locking protocol: recovery-lock contention not reproduced
 walprotocol walprotocol-1.2  # WAL locking protocol: recovery-lock contention not reproduced
 walprotocol walprotocol-1.3  # WAL locking protocol: recovery-lock contention not reproduced
@@ -2417,311 +2313,6 @@ corruptF corruptF-2.2  # stock-page corruption injection: offsets land outside c
 corruptF corruptF-2.3  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-2.4  # stock-page corruption injection: offsets land outside chunk-store structures
 corruptF corruptF-2.6  # stock-page corruption injection: offsets land outside chunk-store structures
-memjournal2 memjournal2-1.0  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.200.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.200.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.200.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.201.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.201.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.201.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.202.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.202.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.202.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.203.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.203.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.203.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.204.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.204.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.204.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.205.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.205.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.205.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.206.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.206.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.206.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.207.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.207.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.207.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.208.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.208.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.208.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.209.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.209.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.209.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.210.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.210.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.210.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.211.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.211.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.211.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.212.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.212.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.212.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.213.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.213.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.213.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.214.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.214.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.214.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.215.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.215.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.215.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.216.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.216.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.216.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.217.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.217.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.217.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.218.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.218.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.218.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.219.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.219.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.219.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.220.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.220.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.220.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.221.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.221.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.221.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.222.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.222.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.222.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.223.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.223.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.223.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.224.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.224.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.224.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.225.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.225.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.225.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.226.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.226.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.226.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.227.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.227.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.227.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.228.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.228.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.228.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.229.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.229.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.229.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.230.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.230.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.230.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.231.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.231.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.231.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.232.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.232.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.232.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.233.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.233.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.233.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.234.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.234.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.234.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.235.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.235.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.235.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.236.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.236.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.236.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.237.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.237.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.237.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.238.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.238.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.238.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.239.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.239.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.239.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.240.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.240.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.240.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.241.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.241.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.241.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.242.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.242.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.242.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.243.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.243.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.243.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.244.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.244.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.244.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.245.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.245.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.245.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.246.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.246.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.246.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.247.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.247.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.247.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.248.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.248.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.248.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.249.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.249.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.249.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.250.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.250.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.250.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.251.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.251.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.251.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.252.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.252.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.252.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.253.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.253.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.253.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.254.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.254.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.254.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.255.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.255.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.255.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.256.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.256.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.256.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.257.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.257.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.257.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.258.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.258.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.258.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.259.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.259.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.259.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.260.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.260.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.260.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.261.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.261.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.261.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.262.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.262.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.262.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.263.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.263.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.263.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.264.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.264.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.264.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.265.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.265.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.265.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.266.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.266.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.266.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.267.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.267.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.267.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.268.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.268.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.268.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.269.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.269.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.269.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.270.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.270.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.270.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.271.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.271.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.271.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.272.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.272.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.272.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.273.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.273.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.273.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.274.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.274.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.274.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.275.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.275.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.275.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.276.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.276.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.276.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.277.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.277.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.277.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.278.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.278.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.278.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.279.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.279.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.279.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.280.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.280.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.280.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.281.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.281.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.281.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.282.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.282.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.282.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.283.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.283.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.283.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.284.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.284.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.284.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.285.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.285.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.285.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.286.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.286.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.286.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.287.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.287.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.287.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.288.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.288.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.288.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.289.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.289.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.289.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.290.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.290.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.290.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.291.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.291.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.291.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.292.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.292.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.292.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.293.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.293.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.293.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.294.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.294.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.294.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.295.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.295.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.295.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.296.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.296.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.296.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.297.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.297.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.297.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.298.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.298.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.298.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.299.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.299.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.299.3  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.300.1  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.300.2  # in-memory journal premise: journal_mode fixed, sidecar absent
-memjournal2 memjournal2-1.2.300.3  # in-memory journal premise: journal_mode fixed, sidecar absent
 # shared_err shared_ioerr-2.*.cleanup.1: shared-cache fault injection reaches
 # different lock/fault points under DoltLite. Native cleanup coverage in
 # doltlite_recover_shared_ioerr asserts the important contract for
@@ -2780,14 +2371,6 @@ shared_err shared_ioerr-2.170.cleanup.1  # shared-cache fault injection: locking
 shared_err shared_ioerr-2.171.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.172.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 shared_err shared_ioerr-2.173.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.174.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.175.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.176.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.177.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.178.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.179.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.180.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.181.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
 wal4 wal4-2-cantopen-persistent.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-cantopen-transient.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-full.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
@@ -3297,19 +2880,10 @@ nan nan-3.4
 nan nan-3.5
 nan nan-3.6
 
-# journal_mode is not configurable on doltlite-format databases; setup
-# rejection cascades.
-tkt-5d863f876e tkt-5d863f876e-1.1
-tkt-5d863f876e tkt-5d863f876e-1.3
-tkt-5d863f876e tkt-5d863f876e-2.1
-tkt-5d863f876e tkt-5d863f876e-2.3
-
-# journal_mode rejection cascade (see tkt-5d863f876e).
-tkt-fc62af4523 tkt-fc62af4523.1
+# remaining tkt-fc62af4523 divergences: page-count and persistence
+# expectations differ on doltlite chunk storage after journal-mode no-op setup.
 tkt-fc62af4523 tkt-fc62af4523.2
-tkt-fc62af4523 tkt-fc62af4523.3
 tkt-fc62af4523 tkt-fc62af4523.4
-tkt-fc62af4523 tkt-fc62af4523.6
 
 # e_walckpt: WAL checkpoint API contract over a store with no -wal/-shm
 # sidecars. The remaining entries assert sidecar file sizes, checkpoint
@@ -3503,61 +3077,18 @@ badutf badutf-1.20
 # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly
 # chunks, not legacy pager pages, so pager_cache_size expectations never match
 cache cache-1.2
-cache cache-2.1.0.3
-cache cache-2.1.1.3
-cache cache-2.1.2.3
-cache cache-2.1.3.3
-cache cache-2.1.4.3
-cache cache-2.1.5.3
-cache cache-2.1.6.3
-cache cache-2.1.7.3
-cache cache-2.1.8.3
-cache cache-2.1.9.3
-cache cache-2.1.10.3
-cache cache-2.1.11.3
-cache cache-2.1.12.3
-cache cache-2.1.13.3
-cache cache-2.1.14.3
-cache cache-2.1.15.3
-cache cache-2.1.16.3
-cache cache-2.1.17.3
-cache cache-2.1.18.3
-cache cache-2.1.19.3
-cache cache-2.2.0.3
-cache cache-2.2.1.3
-cache cache-2.2.2.3
-cache cache-2.2.3.3
-cache cache-2.2.4.3
-cache cache-2.2.5.3
-cache cache-2.2.6.3
-cache cache-2.2.7.3
-cache cache-2.2.8.3
-cache cache-2.2.9.3
-cache cache-2.2.10.3
-cache cache-2.2.11.3
-cache cache-2.2.12.3
-cache cache-2.2.13.3
-cache cache-2.2.14.3
-cache cache-2.2.15.3
-cache cache-2.2.16.3
-cache cache-2.2.17.3
-cache cache-2.2.18.3
-cache cache-2.2.19.3
 # group (b): journal_mode=DELETE rejection in cache-2.0's setup execsql aborts
 # the table creation, so 2.3.x/2.4.x cascade with "no such table" / 0 pages
-cache cache-2.0
 cache cache-2.3.1
 cache cache-2.3.2
 cache cache-2.3.3
 cache cache-2.3.4
 cache cache-2.3.6
-cache cache-2.3.7
 cache cache-2.3.8
 cache cache-2.4.1
 cache cache-2.4.2
 cache cache-2.4.3
 cache cache-2.4.4
-cache cache-2.4.7
 
 # sqlite3_db_cacheflush flushes dirty pager pages mid-transaction; doltlite
 # keeps uncommitted writes in chunk staging so the on-disk file copy only has
@@ -3601,80 +3132,8 @@ capi3b capi3b-2.9
 capi3b capi3b-2.10
 capi3b capi3b-2.12
 
-# every section's setup is "PRAGMA journal_mode = off; CREATE TABLE t1..." in
-# one execsql; doltlite rejects the journal_mode pragma so t1 is never created
-# and all 66 section tests cascade — the changes()/total_changes() semantics
-# under test are never actually exercised
-changes changes-1.1.0
-changes changes-1.1.1
-changes changes-1.1.2
-changes changes-1.1.3
-changes changes-1.1.4
-changes changes-1.1.5
-changes changes-1.1.6
-changes changes-1.1.7a
-changes changes-1.1.7
-changes changes-1.1.8
-changes changes-1.1.9
-changes changes-1.2.0
-changes changes-1.2.1
-changes changes-1.2.2
-changes changes-1.2.3
-changes changes-1.2.4
-changes changes-1.2.5
-changes changes-1.2.6
-changes changes-1.2.7a
-changes changes-1.2.7
-changes changes-1.2.8
-changes changes-1.2.9
-changes changes-1.3.0
-changes changes-1.3.1
-changes changes-1.3.2
-changes changes-1.3.3
-changes changes-1.3.4
-changes changes-1.3.5
-changes changes-1.3.6
-changes changes-1.3.7a
-changes changes-1.3.7
-changes changes-1.3.8
-changes changes-1.3.9
-changes changes-1.4.0
-changes changes-1.4.1
-changes changes-1.4.2
-changes changes-1.4.3
-changes changes-1.4.4
-changes changes-1.4.5
-changes changes-1.4.6
-changes changes-1.4.7a
-changes changes-1.4.7
-changes changes-1.4.8
-changes changes-1.4.9
-changes changes-1.5.0
-changes changes-1.5.1
-changes changes-1.5.2
-changes changes-1.5.3
-changes changes-1.5.4
-changes changes-1.5.5
-changes changes-1.5.6
-changes changes-1.5.7a
-changes changes-1.5.7
-changes changes-1.5.8
-changes changes-1.5.9
-changes changes-1.6.0
-changes changes-1.6.1
-changes changes-1.6.2
-changes changes-1.6.3
-changes changes-1.6.4
-changes changes-1.6.5
-changes changes-1.6.6
-changes changes-1.6.7a
-changes changes-1.6.7
-changes changes-1.6.8
-changes changes-1.6.9
-
-# journal_mode=delete rejected (wal accepted), and FCNTL_CHUNK_SIZE rounding
-# doesn't apply: the chunk file is its natural size, not page-multiple padded
-chunksize chunksize-1.0
+# FCNTL_CHUNK_SIZE rounding doesn't apply: the chunk file is its natural
+# size, not page-multiple padded.
 chunksize chunksize-1.2
 chunksize chunksize-2.2
 
@@ -3710,11 +3169,6 @@ dbfuzz001 dbfuzz001-200
 dbfuzz001 dbfuzz001-310
 dbfuzz001 dbfuzz001-320
 dbfuzz001 dbfuzz001-330
-# PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not
-# configurable on doltlite-format databases") — intentional rejection class.
-dbfuzz001 dbfuzz001-420
-dbfuzz001 dbfuzz001-440
-
 # Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite —
 # no rowid alias, so `DELETE FROM q WHERE rowid=1` errors "no such column:
 # rowid" (reproduced directly). 1.8/1.11 are cascades: the row that the
@@ -4670,8 +4124,6 @@ statfault statfault-1-interrupt.27
 statfault statfault-1-interrupt.28
 statfault statfault-1-ioerr-persistent.3
 statfault statfault-1-ioerr-transient.3
-statfault statfault-1-oom-persistent.132
-statfault statfault-1-oom-transient.132
 statfault statfault-1-shmerr-persistent.1
 statfault statfault-1-shmerr-transient.1
 
@@ -4698,104 +4150,6 @@ sysfault sysfault-1-vfsfault-transient.6
 sysfault sysfault-1-vfsfault-transient.7
 sysfault sysfault-1.2.1-vfsfault-transient.8
 sysfault sysfault-1.2.2-vfsfault-transient.8
-# sections 2.1/2.2: the body runs PRAGMA journal_mode=truncate, which
-# doltlite intentionally rejects ("journal_mode is not configurable on
-# doltlite-format databases"), so every fault index — including the
-# fault-free final iteration — fails with that error.
-sysfault sysfault-2.1-vfsfault-transient.1
-sysfault sysfault-2.1-vfsfault-transient.2
-sysfault sysfault-2.1-vfsfault-transient.3
-sysfault sysfault-2.1-vfsfault-transient.4
-sysfault sysfault-2.1-vfsfault-transient.5
-sysfault sysfault-2.1-vfsfault-transient.6
-sysfault sysfault-2.1-vfsfault-transient.7
-sysfault sysfault-2.1-vfsfault-transient.8
-sysfault sysfault-2.1-vfsfault-transient.9
-sysfault sysfault-2.1-vfsfault-transient.10
-sysfault sysfault-2.1-vfsfault-transient.11
-sysfault sysfault-2.1-vfsfault-transient.12
-sysfault sysfault-2.1-vfsfault-transient.13
-sysfault sysfault-2.1-vfsfault-transient.14
-sysfault sysfault-2.1-vfsfault-transient.15
-sysfault sysfault-2.1-vfsfault-transient.16
-sysfault sysfault-2.1-vfsfault-transient.17
-sysfault sysfault-2.1-vfsfault-transient.18
-sysfault sysfault-2.1-vfsfault-transient.19
-sysfault sysfault-2.1-vfsfault-transient.20
-sysfault sysfault-2.1-vfsfault-transient.21
-sysfault sysfault-2.1-vfsfault-transient.22
-sysfault sysfault-2.1-vfsfault-transient.23
-sysfault sysfault-2.1-vfsfault-transient.24
-sysfault sysfault-2.1-vfsfault-transient.25
-sysfault sysfault-2.1-vfsfault-transient.26
-sysfault sysfault-2.1-vfsfault-transient.27
-sysfault sysfault-2.1-vfsfault-transient.28
-sysfault sysfault-2.1-vfsfault-transient.29
-sysfault sysfault-2.1-vfsfault-transient.30
-sysfault sysfault-2.1-vfsfault-transient.31
-sysfault sysfault-2.1-vfsfault-transient.32
-sysfault sysfault-2.1-vfsfault-transient.33
-sysfault sysfault-2.1-vfsfault-transient.34
-sysfault sysfault-2.1-vfsfault-transient.35
-sysfault sysfault-2.1-vfsfault-transient.36
-sysfault sysfault-2.1-vfsfault-transient.37
-sysfault sysfault-2.1-vfsfault-transient.38
-sysfault sysfault-2.1-vfsfault-transient.39
-sysfault sysfault-2.1-vfsfault-transient.40
-sysfault sysfault-2.1-vfsfault-transient.41
-sysfault sysfault-2.1-vfsfault-transient.42
-sysfault sysfault-2.1-vfsfault-transient.43
-sysfault sysfault-2.1-vfsfault-transient.44
-sysfault sysfault-2.1-vfsfault-transient.45
-sysfault sysfault-2.1-vfsfault-transient.46
-sysfault sysfault-2.1-vfsfault-transient.47
-sysfault sysfault-2.1-vfsfault-transient.48
-sysfault sysfault-2.1-vfsfault-transient.49
-sysfault sysfault-2.1-vfsfault-transient.50
-sysfault sysfault-2.1-vfsfault-transient.51
-sysfault sysfault-2.1-vfsfault-transient.52
-sysfault sysfault-2.1-vfsfault-transient.53
-sysfault sysfault-2.1-vfsfault-transient.54
-sysfault sysfault-2.1-vfsfault-transient.55
-sysfault sysfault-2.1-vfsfault-transient.56
-sysfault sysfault-2.1-vfsfault-transient.57
-sysfault sysfault-2.1-vfsfault-transient.58
-sysfault sysfault-2.1-vfsfault-transient.59
-sysfault sysfault-2.1-vfsfault-transient.60
-sysfault sysfault-2.1-vfsfault-transient.61
-sysfault sysfault-2.1-vfsfault-transient.62
-sysfault sysfault-2.1-vfsfault-transient.63
-sysfault sysfault-2.1-vfsfault-transient.64
-sysfault sysfault-2.1-vfsfault-transient.65
-sysfault sysfault-2.1-vfsfault-transient.66
-sysfault sysfault-2.1-vfsfault-transient.67
-sysfault sysfault-2.1-vfsfault-transient.68
-sysfault sysfault-2.1-vfsfault-transient.69
-sysfault sysfault-2.1-vfsfault-transient.70
-sysfault sysfault-2.1-vfsfault-transient.71
-sysfault sysfault-2.1-vfsfault-transient.72
-sysfault sysfault-2.1-vfsfault-transient.73
-sysfault sysfault-2.1-vfsfault-transient.74
-sysfault sysfault-2.1-vfsfault-transient.75
-sysfault sysfault-2.1-vfsfault-transient.76
-sysfault sysfault-2.1-vfsfault-transient.77
-sysfault sysfault-2.1-vfsfault-transient.78
-sysfault sysfault-2.1-vfsfault-transient.79
-sysfault sysfault-2.1-vfsfault-transient.80
-sysfault sysfault-2.1-vfsfault-transient.81
-sysfault sysfault-2.2-vfsfault-persistent.81
-sysfault sysfault-2.2-vfsfault-transient.1
-sysfault sysfault-2.2-vfsfault-transient.2
-sysfault sysfault-2.2-vfsfault-transient.3
-sysfault sysfault-2.2-vfsfault-transient.5
-sysfault sysfault-2.2-vfsfault-transient.6
-sysfault sysfault-2.2-vfsfault-transient.44
-sysfault sysfault-2.2-vfsfault-transient.46
-sysfault sysfault-2.2-vfsfault-transient.47
-sysfault sysfault-2.2-vfsfault-transient.48
-sysfault sysfault-2.2-vfsfault-transient.50
-sysfault sysfault-2.2-vfsfault-transient.51
-sysfault sysfault-2.2-vfsfault-transient.81
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
@@ -4914,7 +4268,8 @@ vtab_shared vtab_shared-1.13.1
 vtab_shared vtab_shared-1.13.2
 vtab_shared vtab_shared-1.13.3
 
-# journal_mode not configurable on doltlite-format databases + cascade
+# zerodamage probes rollback-journal sidecar behavior that doltlite chunk
+# storage does not expose.
 zerodamage zerodamage-2.0
 zerodamage zerodamage-2.1
 zerodamage zerodamage-3.0
@@ -4996,6 +4351,1122 @@ avtrans avtrans-9.34.5-21225  # sqlite_fullsync_count stays 0 (chunk-store sync 
 avtrans avtrans-9.36.5-25685  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 avtrans avtrans-9.38.5-30883  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 
+# ── journal_mode no-op storage-suite crash-list reductions ──
+# These files used to abort during setup when journal_mode requests errored.
+# With journal_mode accepted as a no-op, they run far enough to expose the
+# underlying sidecar/journal-shape divergences directly.
+crash8 crash8-3.3
+crash8 crash8-3.4
+crash8 crash8-3.5
+crash8 crash8-3.6
+crash8 crash8-3.7
+crash8 crash8-3.8
+crash8 crash8-3.9
+crash8 crash8-3.10
+crash8 crash8-3.11
+crash8 crash8.4.1.1
+crash8 crash8-4.5
+crash8 crash8-4.6
+crash8 crash8-4.8
+crash8 crash8-4.10
+crash8 crash8-5.1.2
+crash8 crash8-5.2.2
+crash8 crash8-5.3.2
+crash8 crash8-5.4.2
+crash8 crash8-5.5.2
+crash8 crash8-5.6.2
+crash8 crash8-5.7.2
+crash8 crash8-5.8.2
+crash8 crash8-5.9.2
+incrvacuum3 incrvacuum3-1.1.1.3
+incrvacuum3 incrvacuum3-1.1.2.3
+incrvacuum3 incrvacuum3-1.1.3.3
+incrvacuum3 incrvacuum3-1.1.4.3
+incrvacuum3 incrvacuum3-1.1.5.3
+incrvacuum3 incrvacuum3-1.1.6.3
+incrvacuum3 incrvacuum3-1.1.7.3
+incrvacuum3 incrvacuum3-1.1.8.3
+incrvacuum3 incrvacuum3-2.1.1.3
+incrvacuum3 incrvacuum3-2.1.2.3
+incrvacuum3 incrvacuum3-2.1.3.3
+incrvacuum3 incrvacuum3-2.1.4.3
+incrvacuum3 incrvacuum3-2.1.5.3
+incrvacuum3 incrvacuum3-2.1.6.3
+incrvacuum3 incrvacuum3-2.1.7.3
+incrvacuum3 incrvacuum3-2.1.8.3
+pager2 pager2-2.2
+pager2 pager2-3.1
+pragma3 pragma3-400
+pragma3 pragma3-410
+pragma3 pragma3-420
+pragma3 pragma3-430
+walbak walbak-1.1
+walbak walbak-1.5
+walbak walbak-1.6
+walbak walbak-1.6.1
+walbak walbak-1.7
+walbak walbak-1.8
+walbak walbak-1.9
+walbak walbak-2.4
+walbak walbak-2.5
+walbak walbak-2.6
+walbak walbak-2.8
+walbak walbak-2.9
+walbak walbak-2.10
+walbak walbak-3.1.2
+walbak walbak-3.1.3
+walbak walbak-3.1.4
+walbak walbak-3.1.6
+walbak walbak-3.2.2
+walbak walbak-3.2.3
+walbak walbak-3.2.4
+walbak walbak-3.2.6
+walbak walbak-3.3.6
+walbak walbak-3.3.8
+walbak walbak-3.4.6
+walbak walbak-3.4.8
+walbak walbak-4.1.2
+walbak walbak-4.1.3
+walbak walbak-4.1.5
+walbak walbak-4.1.7
+walbak walbak-4.2.2
+walbak walbak-4.3.3
+
+# Fault injection indexes shifted after journal_mode requests became no-ops:
+# setup reaches later allocation/syscall sites before failing.
+backup_malloc backup_malloc-1.transient.33
+fkey_malloc fkey_malloc-6.transient.69
+fkey_malloc fkey_malloc-6.persistent.69
+fkey_malloc fkey_malloc-7.transient.200
+fkey_malloc fkey_malloc-7.transient.201
+fkey_malloc fkey_malloc-7.transient.202
+fkey_malloc fkey_malloc-7.transient.520
+fkey_malloc fkey_malloc-7.transient.521
+fkey_malloc fkey_malloc-7.transient.522
+ioerr ioerr-2.31.3
+ioerr ioerr-2.32.3
+ioerr ioerr-2.33.3
+shared_err shared_ioerr-2.174.cleanup.1
+shared_err shared_ioerr-2.175.cleanup.1
+shared_err shared_ioerr-2.176.cleanup.1
+shared_err shared_ioerr-2.177.cleanup.1
+shared_err shared_ioerr-2.178.cleanup.1
+shared_err shared_ioerr-2.179.cleanup.1
+shared_err shared_ioerr-2.180.cleanup.1
+shared_err shared_ioerr-2.181.cleanup.1
+statfault statfault-1-oom-persistent.132
+statfault statfault-1-oom-transient.132
+vtab_err vtab_err-2.transient.579
+vtab_err vtab_err-2.transient.714
+vtab_err vtab_err-2.transient.737
+vtab_err vtab_err-2.transient.738
+vtab_err vtab_err-2.persistent.737
+vtab_err vtab_err-2.persistent.738
+vtab_err vtab_err-3-oom-transient.437
+vtab_err vtab_err-3-oom-transient.438
+
+# pagerfault now reaches normal faultsim summaries after journal_mode setup succeeds.
+pagerfault pagerfault-3-cantopen-persistent.1
+pagerfault pagerfault-3-cantopen-transient.1
+pagerfault pagerfault-3-full.1
+pagerfault pagerfault-3-ioerr-persistent.1
+pagerfault pagerfault-3-ioerr-persistent.2
+pagerfault pagerfault-3-ioerr-persistent.3
+pagerfault pagerfault-3-ioerr-persistent.4
+pagerfault pagerfault-3-ioerr-persistent.5
+pagerfault pagerfault-3-ioerr-persistent.6
+pagerfault pagerfault-3-ioerr-persistent.7
+pagerfault pagerfault-3-ioerr-persistent.8
+pagerfault pagerfault-3-ioerr-persistent.9
+pagerfault pagerfault-3-ioerr-persistent.10
+pagerfault pagerfault-3-ioerr-transient.1
+pagerfault pagerfault-3-ioerr-transient.2
+pagerfault pagerfault-3-ioerr-transient.3
+pagerfault pagerfault-3-ioerr-transient.4
+pagerfault pagerfault-3-ioerr-transient.5
+pagerfault pagerfault-3-ioerr-transient.6
+pagerfault pagerfault-3-ioerr-transient.7
+pagerfault pagerfault-3-ioerr-transient.8
+pagerfault pagerfault-3-ioerr-transient.9
+pagerfault pagerfault-3-ioerr-transient.10
+pagerfault pagerfault-3-oom-persistent.1
+pagerfault pagerfault-3-oom-persistent.2
+pagerfault pagerfault-3-oom-persistent.3
+pagerfault pagerfault-3-oom-persistent.4
+pagerfault pagerfault-3-oom-persistent.5
+pagerfault pagerfault-3-oom-persistent.6
+pagerfault pagerfault-3-oom-persistent.7
+pagerfault pagerfault-3-oom-persistent.8
+pagerfault pagerfault-3-oom-persistent.9
+pagerfault pagerfault-3-oom-persistent.10
+pagerfault pagerfault-3-oom-persistent.11
+pagerfault pagerfault-3-oom-persistent.12
+pagerfault pagerfault-3-oom-persistent.13
+pagerfault pagerfault-3-oom-persistent.14
+pagerfault pagerfault-3-oom-persistent.15
+pagerfault pagerfault-3-oom-persistent.16
+pagerfault pagerfault-3-oom-persistent.17
+pagerfault pagerfault-3-oom-persistent.18
+pagerfault pagerfault-3-oom-persistent.19
+pagerfault pagerfault-3-oom-persistent.20
+pagerfault pagerfault-3-oom-persistent.21
+pagerfault pagerfault-3-oom-persistent.22
+pagerfault pagerfault-3-oom-persistent.23
+pagerfault pagerfault-3-oom-persistent.24
+pagerfault pagerfault-3-oom-persistent.25
+pagerfault pagerfault-3-oom-persistent.26
+pagerfault pagerfault-3-oom-persistent.27
+pagerfault pagerfault-3-oom-persistent.28
+pagerfault pagerfault-3-oom-persistent.29
+pagerfault pagerfault-3-oom-persistent.30
+pagerfault pagerfault-3-oom-persistent.31
+pagerfault pagerfault-3-oom-persistent.32
+pagerfault pagerfault-3-oom-persistent.33
+pagerfault pagerfault-3-oom-persistent.34
+pagerfault pagerfault-3-oom-persistent.35
+pagerfault pagerfault-3-oom-persistent.36
+pagerfault pagerfault-3-oom-persistent.37
+pagerfault pagerfault-3-oom-persistent.38
+pagerfault pagerfault-3-oom-persistent.39
+pagerfault pagerfault-3-oom-persistent.40
+pagerfault pagerfault-3-oom-persistent.41
+pagerfault pagerfault-3-oom-persistent.42
+pagerfault pagerfault-3-oom-persistent.43
+pagerfault pagerfault-3-oom-persistent.44
+pagerfault pagerfault-3-oom-persistent.45
+pagerfault pagerfault-3-oom-persistent.46
+pagerfault pagerfault-3-oom-persistent.47
+pagerfault pagerfault-3-oom-persistent.48
+pagerfault pagerfault-3-oom-persistent.49
+pagerfault pagerfault-3-oom-persistent.50
+pagerfault pagerfault-3-oom-persistent.51
+pagerfault pagerfault-3-oom-persistent.52
+pagerfault pagerfault-3-oom-persistent.53
+pagerfault pagerfault-3-oom-persistent.54
+pagerfault pagerfault-3-oom-persistent.55
+pagerfault pagerfault-3-oom-persistent.56
+pagerfault pagerfault-3-oom-persistent.57
+pagerfault pagerfault-3-oom-persistent.58
+pagerfault pagerfault-3-oom-persistent.59
+pagerfault pagerfault-3-oom-persistent.60
+pagerfault pagerfault-3-oom-persistent.61
+pagerfault pagerfault-3-oom-persistent.62
+pagerfault pagerfault-3-oom-persistent.63
+pagerfault pagerfault-3-oom-persistent.64
+pagerfault pagerfault-3-oom-persistent.65
+pagerfault pagerfault-3-oom-persistent.66
+pagerfault pagerfault-3-oom-persistent.67
+pagerfault pagerfault-3-oom-persistent.68
+pagerfault pagerfault-3-oom-persistent.69
+pagerfault pagerfault-3-oom-persistent.70
+pagerfault pagerfault-3-oom-persistent.71
+pagerfault pagerfault-3-oom-persistent.72
+pagerfault pagerfault-3-oom-persistent.73
+pagerfault pagerfault-3-oom-persistent.74
+pagerfault pagerfault-3-oom-persistent.75
+pagerfault pagerfault-3-oom-persistent.76
+pagerfault pagerfault-3-oom-persistent.77
+pagerfault pagerfault-3-oom-persistent.78
+pagerfault pagerfault-3-oom-persistent.79
+pagerfault pagerfault-3-oom-persistent.80
+pagerfault pagerfault-3-oom-persistent.81
+pagerfault pagerfault-3-oom-persistent.82
+pagerfault pagerfault-3-oom-persistent.83
+pagerfault pagerfault-3-oom-persistent.84
+pagerfault pagerfault-3-oom-persistent.85
+pagerfault pagerfault-3-oom-persistent.86
+pagerfault pagerfault-3-oom-persistent.87
+pagerfault pagerfault-3-oom-persistent.88
+pagerfault pagerfault-3-oom-persistent.89
+pagerfault pagerfault-3-oom-persistent.90
+pagerfault pagerfault-3-oom-persistent.91
+pagerfault pagerfault-3-oom-persistent.92
+pagerfault pagerfault-3-oom-persistent.93
+pagerfault pagerfault-3-oom-persistent.94
+pagerfault pagerfault-3-oom-persistent.95
+pagerfault pagerfault-3-oom-persistent.96
+pagerfault pagerfault-3-oom-persistent.97
+pagerfault pagerfault-3-oom-persistent.98
+pagerfault pagerfault-3-oom-persistent.99
+pagerfault pagerfault-3-oom-persistent.100
+pagerfault pagerfault-3-oom-persistent.101
+pagerfault pagerfault-3-oom-persistent.102
+pagerfault pagerfault-3-oom-persistent.103
+pagerfault pagerfault-3-oom-persistent.104
+pagerfault pagerfault-3-oom-persistent.105
+pagerfault pagerfault-3-oom-persistent.106
+pagerfault pagerfault-3-oom-persistent.107
+pagerfault pagerfault-3-oom-persistent.108
+pagerfault pagerfault-3-oom-persistent.109
+pagerfault pagerfault-3-oom-persistent.110
+pagerfault pagerfault-3-oom-persistent.111
+pagerfault pagerfault-3-oom-persistent.112
+pagerfault pagerfault-3-oom-persistent.113
+pagerfault pagerfault-3-oom-persistent.114
+pagerfault pagerfault-3-oom-persistent.115
+pagerfault pagerfault-3-oom-persistent.116
+pagerfault pagerfault-3-oom-persistent.117
+pagerfault pagerfault-3-oom-persistent.118
+pagerfault pagerfault-3-oom-persistent.119
+pagerfault pagerfault-3-oom-persistent.120
+pagerfault pagerfault-3-oom-persistent.121
+pagerfault pagerfault-3-oom-persistent.122
+pagerfault pagerfault-3-oom-persistent.123
+pagerfault pagerfault-3-oom-persistent.124
+pagerfault pagerfault-3-oom-persistent.125
+pagerfault pagerfault-3-oom-persistent.126
+pagerfault pagerfault-3-oom-persistent.127
+pagerfault pagerfault-3-oom-persistent.128
+pagerfault pagerfault-3-oom-persistent.129
+pagerfault pagerfault-3-oom-persistent.130
+pagerfault pagerfault-3-oom-persistent.131
+pagerfault pagerfault-3-oom-persistent.132
+pagerfault pagerfault-3-oom-persistent.133
+pagerfault pagerfault-3-oom-persistent.134
+pagerfault pagerfault-3-oom-persistent.135
+pagerfault pagerfault-3-oom-persistent.136
+pagerfault pagerfault-3-oom-persistent.137
+pagerfault pagerfault-3-oom-persistent.138
+pagerfault pagerfault-3-oom-persistent.139
+pagerfault pagerfault-3-oom-persistent.140
+pagerfault pagerfault-3-oom-persistent.141
+pagerfault pagerfault-3-oom-persistent.142
+pagerfault pagerfault-3-oom-persistent.143
+pagerfault pagerfault-3-oom-persistent.144
+pagerfault pagerfault-3-oom-persistent.145
+pagerfault pagerfault-3-oom-persistent.146
+pagerfault pagerfault-3-oom-persistent.147
+pagerfault pagerfault-3-oom-persistent.148
+pagerfault pagerfault-3-oom-persistent.149
+pagerfault pagerfault-3-oom-persistent.150
+pagerfault pagerfault-3-oom-persistent.151
+pagerfault pagerfault-3-oom-persistent.152
+pagerfault pagerfault-3-oom-persistent.153
+pagerfault pagerfault-3-oom-persistent.154
+pagerfault pagerfault-3-oom-persistent.155
+pagerfault pagerfault-3-oom-persistent.156
+pagerfault pagerfault-3-oom-persistent.157
+pagerfault pagerfault-3-oom-persistent.158
+pagerfault pagerfault-3-oom-persistent.159
+pagerfault pagerfault-3-oom-persistent.160
+pagerfault pagerfault-3-oom-persistent.161
+pagerfault pagerfault-3-oom-persistent.162
+pagerfault pagerfault-3-oom-persistent.163
+pagerfault pagerfault-3-oom-persistent.164
+pagerfault pagerfault-3-oom-persistent.165
+pagerfault pagerfault-3-oom-persistent.166
+pagerfault pagerfault-3-oom-persistent.167
+pagerfault pagerfault-3-oom-persistent.168
+pagerfault pagerfault-3-oom-persistent.169
+pagerfault pagerfault-3-oom-persistent.170
+pagerfault pagerfault-3-oom-persistent.171
+pagerfault pagerfault-3-oom-persistent.172
+pagerfault pagerfault-3-oom-persistent.173
+pagerfault pagerfault-3-oom-persistent.174
+pagerfault pagerfault-3-oom-persistent.175
+pagerfault pagerfault-3-oom-persistent.176
+pagerfault pagerfault-3-oom-persistent.177
+pagerfault pagerfault-3-oom-persistent.178
+pagerfault pagerfault-3-oom-persistent.179
+pagerfault pagerfault-3-oom-persistent.180
+pagerfault pagerfault-3-oom-persistent.181
+pagerfault pagerfault-3-oom-persistent.182
+pagerfault pagerfault-3-oom-persistent.183
+pagerfault pagerfault-3-oom-persistent.184
+pagerfault pagerfault-3-oom-persistent.185
+pagerfault pagerfault-3-oom-persistent.186
+pagerfault pagerfault-3-oom-persistent.187
+pagerfault pagerfault-3-oom-persistent.188
+pagerfault pagerfault-3-oom-persistent.189
+pagerfault pagerfault-3-oom-persistent.190
+pagerfault pagerfault-3-oom-persistent.191
+pagerfault pagerfault-3-oom-persistent.192
+pagerfault pagerfault-3-oom-transient.1
+pagerfault pagerfault-3-oom-transient.2
+pagerfault pagerfault-3-oom-transient.3
+pagerfault pagerfault-3-oom-transient.4
+pagerfault pagerfault-3-oom-transient.5
+pagerfault pagerfault-3-oom-transient.6
+pagerfault pagerfault-3-oom-transient.7
+pagerfault pagerfault-3-oom-transient.8
+pagerfault pagerfault-3-oom-transient.9
+pagerfault pagerfault-3-oom-transient.10
+pagerfault pagerfault-3-oom-transient.11
+pagerfault pagerfault-3-oom-transient.12
+pagerfault pagerfault-3-oom-transient.13
+pagerfault pagerfault-3-oom-transient.14
+pagerfault pagerfault-3-oom-transient.15
+pagerfault pagerfault-3-oom-transient.16
+pagerfault pagerfault-3-oom-transient.17
+pagerfault pagerfault-3-oom-transient.18
+pagerfault pagerfault-3-oom-transient.19
+pagerfault pagerfault-3-oom-transient.20
+pagerfault pagerfault-3-oom-transient.21
+pagerfault pagerfault-3-oom-transient.22
+pagerfault pagerfault-3-oom-transient.23
+pagerfault pagerfault-3-oom-transient.24
+pagerfault pagerfault-3-oom-transient.25
+pagerfault pagerfault-3-oom-transient.26
+pagerfault pagerfault-3-oom-transient.27
+pagerfault pagerfault-3-oom-transient.28
+pagerfault pagerfault-3-oom-transient.29
+pagerfault pagerfault-3-oom-transient.30
+pagerfault pagerfault-3-oom-transient.31
+pagerfault pagerfault-3-oom-transient.32
+pagerfault pagerfault-3-oom-transient.33
+pagerfault pagerfault-3-oom-transient.34
+pagerfault pagerfault-3-oom-transient.35
+pagerfault pagerfault-3-oom-transient.36
+pagerfault pagerfault-3-oom-transient.37
+pagerfault pagerfault-3-oom-transient.38
+pagerfault pagerfault-3-oom-transient.39
+pagerfault pagerfault-3-oom-transient.40
+pagerfault pagerfault-3-oom-transient.41
+pagerfault pagerfault-3-oom-transient.42
+pagerfault pagerfault-3-oom-transient.43
+pagerfault pagerfault-3-oom-transient.44
+pagerfault pagerfault-3-oom-transient.45
+pagerfault pagerfault-3-oom-transient.46
+pagerfault pagerfault-3-oom-transient.47
+pagerfault pagerfault-3-oom-transient.48
+pagerfault pagerfault-3-oom-transient.49
+pagerfault pagerfault-3-oom-transient.50
+pagerfault pagerfault-3-oom-transient.51
+pagerfault pagerfault-3-oom-transient.52
+pagerfault pagerfault-3-oom-transient.53
+pagerfault pagerfault-3-oom-transient.54
+pagerfault pagerfault-3-oom-transient.55
+pagerfault pagerfault-3-oom-transient.56
+pagerfault pagerfault-3-oom-transient.57
+pagerfault pagerfault-3-oom-transient.58
+pagerfault pagerfault-3-oom-transient.59
+pagerfault pagerfault-3-oom-transient.60
+pagerfault pagerfault-3-oom-transient.61
+pagerfault pagerfault-3-oom-transient.62
+pagerfault pagerfault-3-oom-transient.63
+pagerfault pagerfault-3-oom-transient.64
+pagerfault pagerfault-3-oom-transient.65
+pagerfault pagerfault-3-oom-transient.66
+pagerfault pagerfault-3-oom-transient.67
+pagerfault pagerfault-3-oom-transient.68
+pagerfault pagerfault-3-oom-transient.69
+pagerfault pagerfault-3-oom-transient.70
+pagerfault pagerfault-3-oom-transient.71
+pagerfault pagerfault-3-oom-transient.72
+pagerfault pagerfault-3-oom-transient.73
+pagerfault pagerfault-3-oom-transient.74
+pagerfault pagerfault-3-oom-transient.75
+pagerfault pagerfault-3-oom-transient.76
+pagerfault pagerfault-3-oom-transient.77
+pagerfault pagerfault-3-oom-transient.78
+pagerfault pagerfault-3-oom-transient.79
+pagerfault pagerfault-3-oom-transient.80
+pagerfault pagerfault-3-oom-transient.81
+pagerfault pagerfault-3-oom-transient.82
+pagerfault pagerfault-3-oom-transient.83
+pagerfault pagerfault-3-oom-transient.84
+pagerfault pagerfault-3-oom-transient.85
+pagerfault pagerfault-3-oom-transient.86
+pagerfault pagerfault-3-oom-transient.87
+pagerfault pagerfault-3-oom-transient.88
+pagerfault pagerfault-3-oom-transient.89
+pagerfault pagerfault-3-oom-transient.90
+pagerfault pagerfault-3-oom-transient.91
+pagerfault pagerfault-3-oom-transient.92
+pagerfault pagerfault-3-oom-transient.93
+pagerfault pagerfault-3-oom-transient.94
+pagerfault pagerfault-3-oom-transient.95
+pagerfault pagerfault-3-oom-transient.96
+pagerfault pagerfault-3-oom-transient.97
+pagerfault pagerfault-3-oom-transient.98
+pagerfault pagerfault-3-oom-transient.99
+pagerfault pagerfault-3-oom-transient.100
+pagerfault pagerfault-3-oom-transient.101
+pagerfault pagerfault-3-oom-transient.102
+pagerfault pagerfault-3-oom-transient.103
+pagerfault pagerfault-3-oom-transient.104
+pagerfault pagerfault-3-oom-transient.105
+pagerfault pagerfault-3-oom-transient.106
+pagerfault pagerfault-3-oom-transient.107
+pagerfault pagerfault-3-oom-transient.108
+pagerfault pagerfault-3-oom-transient.109
+pagerfault pagerfault-3-oom-transient.110
+pagerfault pagerfault-3-oom-transient.111
+pagerfault pagerfault-3-oom-transient.112
+pagerfault pagerfault-3-oom-transient.113
+pagerfault pagerfault-3-oom-transient.114
+pagerfault pagerfault-3-oom-transient.115
+pagerfault pagerfault-3-oom-transient.116
+pagerfault pagerfault-3-oom-transient.117
+pagerfault pagerfault-3-oom-transient.118
+pagerfault pagerfault-3-oom-transient.119
+pagerfault pagerfault-3-oom-transient.120
+pagerfault pagerfault-3-oom-transient.121
+pagerfault pagerfault-3-oom-transient.122
+pagerfault pagerfault-3-oom-transient.123
+pagerfault pagerfault-3-oom-transient.124
+pagerfault pagerfault-3-oom-transient.125
+pagerfault pagerfault-3-oom-transient.126
+pagerfault pagerfault-3-oom-transient.127
+pagerfault pagerfault-3-oom-transient.128
+pagerfault pagerfault-3-oom-transient.129
+pagerfault pagerfault-3-oom-transient.130
+pagerfault pagerfault-3-oom-transient.131
+pagerfault pagerfault-3-oom-transient.132
+pagerfault pagerfault-3-oom-transient.133
+pagerfault pagerfault-3-oom-transient.134
+pagerfault pagerfault-3-oom-transient.135
+pagerfault pagerfault-3-oom-transient.136
+pagerfault pagerfault-3-oom-transient.137
+pagerfault pagerfault-3-oom-transient.138
+pagerfault pagerfault-3-oom-transient.139
+pagerfault pagerfault-3-oom-transient.140
+pagerfault pagerfault-3-oom-transient.141
+pagerfault pagerfault-3-oom-transient.142
+pagerfault pagerfault-3-oom-transient.143
+pagerfault pagerfault-3-oom-transient.144
+pagerfault pagerfault-3-oom-transient.145
+pagerfault pagerfault-3-oom-transient.146
+pagerfault pagerfault-3-oom-transient.147
+pagerfault pagerfault-3-oom-transient.148
+pagerfault pagerfault-3-oom-transient.149
+pagerfault pagerfault-3-oom-transient.150
+pagerfault pagerfault-3-oom-transient.151
+pagerfault pagerfault-3-oom-transient.152
+pagerfault pagerfault-3-oom-transient.153
+pagerfault pagerfault-3-oom-transient.154
+pagerfault pagerfault-3-oom-transient.155
+pagerfault pagerfault-3-oom-transient.156
+pagerfault pagerfault-3-oom-transient.157
+pagerfault pagerfault-3-oom-transient.158
+pagerfault pagerfault-3-oom-transient.159
+pagerfault pagerfault-3-oom-transient.160
+pagerfault pagerfault-3-oom-transient.161
+pagerfault pagerfault-3-oom-transient.162
+pagerfault pagerfault-3-oom-transient.163
+pagerfault pagerfault-3-oom-transient.164
+pagerfault pagerfault-3-oom-transient.165
+pagerfault pagerfault-3-oom-transient.166
+pagerfault pagerfault-3-oom-transient.167
+pagerfault pagerfault-3-oom-transient.168
+pagerfault pagerfault-3-oom-transient.169
+pagerfault pagerfault-3-oom-transient.170
+pagerfault pagerfault-3-oom-transient.171
+pagerfault pagerfault-3-oom-transient.172
+pagerfault pagerfault-3-oom-transient.173
+pagerfault pagerfault-3-oom-transient.174
+pagerfault pagerfault-3-oom-transient.175
+pagerfault pagerfault-3-oom-transient.176
+pagerfault pagerfault-3-oom-transient.177
+pagerfault pagerfault-3-oom-transient.178
+pagerfault pagerfault-3-oom-transient.179
+pagerfault pagerfault-3-oom-transient.180
+pagerfault pagerfault-3-oom-transient.181
+pagerfault pagerfault-3-oom-transient.182
+pagerfault pagerfault-3-oom-transient.183
+pagerfault pagerfault-3-oom-transient.184
+pagerfault pagerfault-3-oom-transient.185
+pagerfault pagerfault-3-oom-transient.186
+pagerfault pagerfault-3-oom-transient.187
+pagerfault pagerfault-3-oom-transient.188
+pagerfault pagerfault-3-oom-transient.189
+pagerfault pagerfault-3-oom-transient.190
+pagerfault pagerfault-3-oom-transient.191
+pagerfault pagerfault-3-oom-transient.192
+pagerfault pagerfault-3-shmerr-persistent.1
+pagerfault pagerfault-3-shmerr-transient.1
+pagerfault pagerfault-8-pre2
+pagerfault pagerfault-9.1-cantopen-persistent.1
+pagerfault pagerfault-9.1-cantopen-transient.1
+pagerfault pagerfault-9.1-full.4
+pagerfault pagerfault-9.1-ioerr-persistent.7
+pagerfault pagerfault-9.1-ioerr-transient.7
+pagerfault pagerfault-9.1-oom-persistent.76
+pagerfault pagerfault-9.1-oom-transient.76
+pagerfault pagerfault-9.1-shmerr-persistent.1
+pagerfault pagerfault-9.1-shmerr-transient.1
+pagerfault pagerfault-14a-cantopen-persistent.4
+pagerfault pagerfault-14a-cantopen-persistent.5
+pagerfault pagerfault-14a-cantopen-persistent.6
+pagerfault pagerfault-14a-cantopen-persistent.7
+pagerfault pagerfault-14a-cantopen-persistent.8
+pagerfault pagerfault-14a-cantopen-persistent.9
+pagerfault pagerfault-14a-cantopen-persistent.10
+pagerfault pagerfault-14a-cantopen-transient.4
+pagerfault pagerfault-14a-cantopen-transient.5
+pagerfault pagerfault-14a-cantopen-transient.6
+pagerfault pagerfault-14a-cantopen-transient.7
+pagerfault pagerfault-14a-cantopen-transient.8
+pagerfault pagerfault-14a-cantopen-transient.9
+pagerfault pagerfault-14a-cantopen-transient.10
+pagerfault pagerfault-14a-full.4
+pagerfault pagerfault-14a-full.5
+pagerfault pagerfault-14a-full.6
+pagerfault pagerfault-14a-full.7
+pagerfault pagerfault-14a-full.8
+pagerfault pagerfault-14a-full.9
+pagerfault pagerfault-14a-full.10
+pagerfault pagerfault-14a-full.11
+pagerfault pagerfault-14a-full.12
+pagerfault pagerfault-14a-ioerr-persistent.29
+pagerfault pagerfault-14a-ioerr-persistent.30
+pagerfault pagerfault-14a-ioerr-persistent.31
+pagerfault pagerfault-14a-ioerr-persistent.32
+pagerfault pagerfault-14a-ioerr-persistent.33
+pagerfault pagerfault-14a-ioerr-persistent.34
+pagerfault pagerfault-14a-ioerr-persistent.35
+pagerfault pagerfault-14a-ioerr-persistent.36
+pagerfault pagerfault-14a-ioerr-persistent.37
+pagerfault pagerfault-14a-ioerr-persistent.38
+pagerfault pagerfault-14a-ioerr-persistent.39
+pagerfault pagerfault-14a-ioerr-persistent.40
+pagerfault pagerfault-14a-ioerr-persistent.41
+pagerfault pagerfault-14a-ioerr-persistent.42
+pagerfault pagerfault-14a-ioerr-persistent.43
+pagerfault pagerfault-14a-ioerr-persistent.44
+pagerfault pagerfault-14a-ioerr-persistent.45
+pagerfault pagerfault-14a-ioerr-persistent.46
+pagerfault pagerfault-14a-ioerr-persistent.47
+pagerfault pagerfault-14a-ioerr-persistent.48
+pagerfault pagerfault-14a-ioerr-persistent.49
+pagerfault pagerfault-14a-ioerr-persistent.50
+pagerfault pagerfault-14a-ioerr-persistent.51
+pagerfault pagerfault-14a-ioerr-persistent.52
+pagerfault pagerfault-14a-ioerr-persistent.53
+pagerfault pagerfault-14a-ioerr-persistent.54
+pagerfault pagerfault-14a-ioerr-persistent.55
+pagerfault pagerfault-14a-ioerr-persistent.56
+pagerfault pagerfault-14a-ioerr-persistent.57
+pagerfault pagerfault-14a-ioerr-persistent.58
+pagerfault pagerfault-14a-ioerr-persistent.59
+pagerfault pagerfault-14a-ioerr-persistent.60
+pagerfault pagerfault-14a-ioerr-persistent.61
+pagerfault pagerfault-14a-ioerr-persistent.62
+pagerfault pagerfault-14a-ioerr-persistent.63
+pagerfault pagerfault-14a-ioerr-persistent.64
+pagerfault pagerfault-14a-ioerr-persistent.65
+pagerfault pagerfault-14a-ioerr-persistent.66
+pagerfault pagerfault-14a-ioerr-persistent.67
+pagerfault pagerfault-14a-ioerr-persistent.68
+pagerfault pagerfault-14a-ioerr-persistent.69
+pagerfault pagerfault-14a-ioerr-persistent.70
+pagerfault pagerfault-14a-ioerr-transient.29
+pagerfault pagerfault-14a-ioerr-transient.30
+pagerfault pagerfault-14a-ioerr-transient.31
+pagerfault pagerfault-14a-ioerr-transient.33
+pagerfault pagerfault-14a-ioerr-transient.34
+pagerfault pagerfault-14a-ioerr-transient.35
+pagerfault pagerfault-14a-ioerr-transient.36
+pagerfault pagerfault-14a-ioerr-transient.37
+pagerfault pagerfault-14a-ioerr-transient.38
+pagerfault pagerfault-14a-ioerr-transient.39
+pagerfault pagerfault-14a-ioerr-transient.40
+pagerfault pagerfault-14a-ioerr-transient.41
+pagerfault pagerfault-14a-ioerr-transient.42
+pagerfault pagerfault-14a-ioerr-transient.43
+pagerfault pagerfault-14a-ioerr-transient.44
+pagerfault pagerfault-14a-ioerr-transient.45
+pagerfault pagerfault-14a-ioerr-transient.46
+pagerfault pagerfault-14a-ioerr-transient.47
+pagerfault pagerfault-14a-ioerr-transient.48
+pagerfault pagerfault-14a-ioerr-transient.49
+pagerfault pagerfault-14a-ioerr-transient.50
+pagerfault pagerfault-14a-ioerr-transient.51
+pagerfault pagerfault-14a-ioerr-transient.52
+pagerfault pagerfault-14a-ioerr-transient.53
+pagerfault pagerfault-14a-ioerr-transient.54
+pagerfault pagerfault-14a-ioerr-transient.55
+pagerfault pagerfault-14a-ioerr-transient.56
+pagerfault pagerfault-14a-ioerr-transient.57
+pagerfault pagerfault-14a-ioerr-transient.58
+pagerfault pagerfault-14a-ioerr-transient.59
+pagerfault pagerfault-14a-ioerr-transient.60
+pagerfault pagerfault-14a-ioerr-transient.61
+pagerfault pagerfault-14a-ioerr-transient.62
+pagerfault pagerfault-14a-ioerr-transient.63
+pagerfault pagerfault-14a-ioerr-transient.64
+pagerfault pagerfault-14a-ioerr-transient.65
+pagerfault pagerfault-14a-ioerr-transient.66
+pagerfault pagerfault-14a-ioerr-transient.67
+pagerfault pagerfault-14a-ioerr-transient.68
+pagerfault pagerfault-14a-ioerr-transient.69
+pagerfault pagerfault-14a-ioerr-transient.70
+pagerfault pagerfault-14a-oom-persistent.339
+pagerfault pagerfault-14a-oom-persistent.340
+pagerfault pagerfault-14a-oom-persistent.341
+pagerfault pagerfault-14a-oom-persistent.342
+pagerfault pagerfault-14a-oom-persistent.343
+pagerfault pagerfault-14a-oom-persistent.344
+pagerfault pagerfault-14a-oom-persistent.345
+pagerfault pagerfault-14a-oom-persistent.346
+pagerfault pagerfault-14a-oom-persistent.347
+pagerfault pagerfault-14a-oom-persistent.348
+pagerfault pagerfault-14a-oom-persistent.349
+pagerfault pagerfault-14a-oom-persistent.350
+pagerfault pagerfault-14a-oom-persistent.351
+pagerfault pagerfault-14a-oom-persistent.352
+pagerfault pagerfault-14a-oom-persistent.353
+pagerfault pagerfault-14a-oom-persistent.354
+pagerfault pagerfault-14a-oom-persistent.355
+pagerfault pagerfault-14a-oom-persistent.356
+pagerfault pagerfault-14a-oom-persistent.357
+pagerfault pagerfault-14a-oom-persistent.358
+pagerfault pagerfault-14a-oom-persistent.359
+pagerfault pagerfault-14a-oom-persistent.360
+pagerfault pagerfault-14a-oom-persistent.361
+pagerfault pagerfault-14a-oom-persistent.362
+pagerfault pagerfault-14a-oom-persistent.363
+pagerfault pagerfault-14a-oom-persistent.364
+pagerfault pagerfault-14a-oom-persistent.365
+pagerfault pagerfault-14a-oom-persistent.366
+pagerfault pagerfault-14a-oom-persistent.367
+pagerfault pagerfault-14a-oom-persistent.368
+pagerfault pagerfault-14a-oom-persistent.369
+pagerfault pagerfault-14a-oom-persistent.370
+pagerfault pagerfault-14a-oom-persistent.371
+pagerfault pagerfault-14a-oom-persistent.372
+pagerfault pagerfault-14a-oom-persistent.373
+pagerfault pagerfault-14a-oom-persistent.374
+pagerfault pagerfault-14a-oom-persistent.375
+pagerfault pagerfault-14a-oom-persistent.376
+pagerfault pagerfault-14a-oom-persistent.377
+pagerfault pagerfault-14a-oom-persistent.378
+pagerfault pagerfault-14a-oom-persistent.379
+pagerfault pagerfault-14a-oom-persistent.380
+pagerfault pagerfault-14a-oom-persistent.381
+pagerfault pagerfault-14a-oom-persistent.382
+pagerfault pagerfault-14a-oom-persistent.383
+pagerfault pagerfault-14a-oom-persistent.384
+pagerfault pagerfault-14a-oom-persistent.385
+pagerfault pagerfault-14a-oom-persistent.386
+pagerfault pagerfault-14a-oom-persistent.387
+pagerfault pagerfault-14a-oom-persistent.388
+pagerfault pagerfault-14a-oom-persistent.389
+pagerfault pagerfault-14a-oom-persistent.390
+pagerfault pagerfault-14a-oom-persistent.391
+pagerfault pagerfault-14a-oom-persistent.392
+pagerfault pagerfault-14a-oom-persistent.393
+pagerfault pagerfault-14a-oom-persistent.394
+pagerfault pagerfault-14a-oom-persistent.395
+pagerfault pagerfault-14a-oom-persistent.396
+pagerfault pagerfault-14a-oom-persistent.397
+pagerfault pagerfault-14a-oom-persistent.398
+pagerfault pagerfault-14a-oom-persistent.399
+pagerfault pagerfault-14a-oom-persistent.400
+pagerfault pagerfault-14a-oom-persistent.401
+pagerfault pagerfault-14a-oom-persistent.402
+pagerfault pagerfault-14a-oom-persistent.403
+pagerfault pagerfault-14a-oom-persistent.404
+pagerfault pagerfault-14a-oom-persistent.405
+pagerfault pagerfault-14a-oom-persistent.406
+pagerfault pagerfault-14a-oom-persistent.407
+pagerfault pagerfault-14a-oom-persistent.408
+pagerfault pagerfault-14a-oom-persistent.409
+pagerfault pagerfault-14a-oom-persistent.410
+pagerfault pagerfault-14a-oom-persistent.411
+pagerfault pagerfault-14a-oom-persistent.412
+pagerfault pagerfault-14a-oom-persistent.413
+pagerfault pagerfault-14a-oom-persistent.414
+pagerfault pagerfault-14a-oom-persistent.415
+pagerfault pagerfault-14a-oom-persistent.416
+pagerfault pagerfault-14a-oom-persistent.417
+pagerfault pagerfault-14a-oom-persistent.418
+pagerfault pagerfault-14a-oom-persistent.419
+pagerfault pagerfault-14a-oom-persistent.420
+pagerfault pagerfault-14a-oom-persistent.421
+pagerfault pagerfault-14a-oom-persistent.422
+pagerfault pagerfault-14a-oom-persistent.423
+pagerfault pagerfault-14a-oom-persistent.424
+pagerfault pagerfault-14a-oom-persistent.425
+pagerfault pagerfault-14a-oom-persistent.426
+pagerfault pagerfault-14a-oom-persistent.427
+pagerfault pagerfault-14a-oom-persistent.428
+pagerfault pagerfault-14a-oom-persistent.429
+pagerfault pagerfault-14a-oom-persistent.430
+pagerfault pagerfault-14a-oom-persistent.431
+pagerfault pagerfault-14a-oom-persistent.432
+pagerfault pagerfault-14a-oom-persistent.433
+pagerfault pagerfault-14a-oom-persistent.434
+pagerfault pagerfault-14a-oom-persistent.435
+pagerfault pagerfault-14a-oom-persistent.436
+pagerfault pagerfault-14a-oom-persistent.437
+pagerfault pagerfault-14a-oom-persistent.438
+pagerfault pagerfault-14a-oom-persistent.439
+pagerfault pagerfault-14a-oom-persistent.440
+pagerfault pagerfault-14a-oom-persistent.441
+pagerfault pagerfault-14a-oom-persistent.442
+pagerfault pagerfault-14a-oom-persistent.443
+pagerfault pagerfault-14a-oom-persistent.444
+pagerfault pagerfault-14a-oom-persistent.445
+pagerfault pagerfault-14a-oom-persistent.446
+pagerfault pagerfault-14a-oom-persistent.447
+pagerfault pagerfault-14a-oom-persistent.448
+pagerfault pagerfault-14a-oom-persistent.449
+pagerfault pagerfault-14a-oom-persistent.450
+pagerfault pagerfault-14a-oom-persistent.451
+pagerfault pagerfault-14a-oom-persistent.452
+pagerfault pagerfault-14a-oom-persistent.453
+pagerfault pagerfault-14a-oom-transient.344
+pagerfault pagerfault-14a-oom-transient.345
+pagerfault pagerfault-14a-oom-transient.346
+pagerfault pagerfault-14a-oom-transient.347
+pagerfault pagerfault-14a-oom-transient.348
+pagerfault pagerfault-14a-oom-transient.349
+pagerfault pagerfault-14a-oom-transient.350
+pagerfault pagerfault-14a-oom-transient.351
+pagerfault pagerfault-14a-oom-transient.352
+pagerfault pagerfault-14a-oom-transient.353
+pagerfault pagerfault-14a-oom-transient.354
+pagerfault pagerfault-14a-oom-transient.355
+pagerfault pagerfault-14a-oom-transient.356
+pagerfault pagerfault-14a-oom-transient.357
+pagerfault pagerfault-14a-oom-transient.358
+pagerfault pagerfault-14a-oom-transient.359
+pagerfault pagerfault-14a-oom-transient.360
+pagerfault pagerfault-14a-oom-transient.361
+pagerfault pagerfault-14a-oom-transient.362
+pagerfault pagerfault-14a-oom-transient.363
+pagerfault pagerfault-14a-oom-transient.364
+pagerfault pagerfault-14a-oom-transient.365
+pagerfault pagerfault-14a-oom-transient.366
+pagerfault pagerfault-14a-oom-transient.367
+pagerfault pagerfault-14a-oom-transient.368
+pagerfault pagerfault-14a-oom-transient.369
+pagerfault pagerfault-14a-oom-transient.370
+pagerfault pagerfault-14a-oom-transient.371
+pagerfault pagerfault-14a-oom-transient.372
+pagerfault pagerfault-14a-oom-transient.374
+pagerfault pagerfault-14a-oom-transient.375
+pagerfault pagerfault-14a-oom-transient.376
+pagerfault pagerfault-14a-oom-transient.377
+pagerfault pagerfault-14a-oom-transient.378
+pagerfault pagerfault-14a-oom-transient.379
+pagerfault pagerfault-14a-oom-transient.380
+pagerfault pagerfault-14a-oom-transient.381
+pagerfault pagerfault-14a-oom-transient.382
+pagerfault pagerfault-14a-oom-transient.383
+pagerfault pagerfault-14a-oom-transient.384
+pagerfault pagerfault-14a-oom-transient.385
+pagerfault pagerfault-14a-oom-transient.386
+pagerfault pagerfault-14a-oom-transient.387
+pagerfault pagerfault-14a-oom-transient.388
+pagerfault pagerfault-14a-oom-transient.389
+pagerfault pagerfault-14a-oom-transient.390
+pagerfault pagerfault-14a-oom-transient.391
+pagerfault pagerfault-14a-oom-transient.392
+pagerfault pagerfault-14a-oom-transient.393
+pagerfault pagerfault-14a-oom-transient.394
+pagerfault pagerfault-14a-oom-transient.395
+pagerfault pagerfault-14a-oom-transient.396
+pagerfault pagerfault-14a-oom-transient.397
+pagerfault pagerfault-14a-oom-transient.398
+pagerfault pagerfault-14a-oom-transient.399
+pagerfault pagerfault-14a-oom-transient.400
+pagerfault pagerfault-14a-oom-transient.401
+pagerfault pagerfault-14a-oom-transient.402
+pagerfault pagerfault-14a-oom-transient.403
+pagerfault pagerfault-14a-oom-transient.404
+pagerfault pagerfault-14a-oom-transient.405
+pagerfault pagerfault-14a-oom-transient.406
+pagerfault pagerfault-14a-oom-transient.407
+pagerfault pagerfault-14a-oom-transient.408
+pagerfault pagerfault-14a-oom-transient.409
+pagerfault pagerfault-14a-oom-transient.410
+pagerfault pagerfault-14a-oom-transient.411
+pagerfault pagerfault-14a-oom-transient.412
+pagerfault pagerfault-14a-oom-transient.413
+pagerfault pagerfault-14a-oom-transient.414
+pagerfault pagerfault-14a-oom-transient.415
+pagerfault pagerfault-14a-oom-transient.416
+pagerfault pagerfault-14a-oom-transient.417
+pagerfault pagerfault-14a-oom-transient.418
+pagerfault pagerfault-14a-oom-transient.419
+pagerfault pagerfault-14a-oom-transient.420
+pagerfault pagerfault-14a-oom-transient.421
+pagerfault pagerfault-14a-oom-transient.422
+pagerfault pagerfault-14a-oom-transient.423
+pagerfault pagerfault-14a-oom-transient.424
+pagerfault pagerfault-14a-oom-transient.425
+pagerfault pagerfault-14a-oom-transient.426
+pagerfault pagerfault-14a-oom-transient.427
+pagerfault pagerfault-14a-oom-transient.428
+pagerfault pagerfault-14a-oom-transient.429
+pagerfault pagerfault-14a-oom-transient.430
+pagerfault pagerfault-14a-oom-transient.431
+pagerfault pagerfault-14a-oom-transient.432
+pagerfault pagerfault-14a-oom-transient.433
+pagerfault pagerfault-14a-oom-transient.434
+pagerfault pagerfault-14a-oom-transient.435
+pagerfault pagerfault-14a-oom-transient.436
+pagerfault pagerfault-14a-oom-transient.437
+pagerfault pagerfault-14a-oom-transient.438
+pagerfault pagerfault-14a-oom-transient.439
+pagerfault pagerfault-14a-oom-transient.440
+pagerfault pagerfault-14a-oom-transient.441
+pagerfault pagerfault-14a-oom-transient.442
+pagerfault pagerfault-14a-oom-transient.443
+pagerfault pagerfault-14a-oom-transient.444
+pagerfault pagerfault-14a-oom-transient.445
+pagerfault pagerfault-14a-oom-transient.446
+pagerfault pagerfault-14a-oom-transient.447
+pagerfault pagerfault-14a-oom-transient.448
+pagerfault pagerfault-14a-oom-transient.449
+pagerfault pagerfault-14a-oom-transient.450
+pagerfault pagerfault-14a-oom-transient.451
+pagerfault pagerfault-14a-oom-transient.452
+pagerfault pagerfault-14a-oom-transient.453
+pagerfault pagerfault-14b-cantopen-persistent.1
+pagerfault pagerfault-14b-cantopen-transient.1
+pagerfault pagerfault-14b-full.1
+pagerfault pagerfault-14b-ioerr-persistent.1
+pagerfault pagerfault-14b-ioerr-transient.1
+pagerfault pagerfault-14b-oom-persistent.1
+pagerfault pagerfault-14b-oom-transient.1
+pagerfault pagerfault-14b-shmerr-persistent.1
+pagerfault pagerfault-14b-shmerr-transient.1
+pagerfault pagerfault-14c-oom-persistent.11
+pagerfault pagerfault-14c-oom-persistent.15
+pagerfault pagerfault-14c-oom-persistent.16
+pagerfault pagerfault-14c-oom-persistent.17
+pagerfault pagerfault-14c-oom-persistent.21
+pagerfault pagerfault-14c-oom-persistent.25
+pagerfault pagerfault-14c-oom-persistent.26
+pagerfault pagerfault-14c-oom-persistent.27
+pagerfault pagerfault-14c-oom-persistent.29
+pagerfault pagerfault-14c-oom-persistent.31
+pagerfault pagerfault-14c-oom-persistent.36
+pagerfault pagerfault-14c-oom-persistent.41
+pagerfault pagerfault-14c-oom-persistent.42
+pagerfault pagerfault-14c-oom-persistent.43
+pagerfault pagerfault-14c-oom-persistent.45
+pagerfault pagerfault-14c-oom-persistent.50
+pagerfault pagerfault-14c-oom-persistent.54
+pagerfault pagerfault-14c-oom-persistent.55
+pagerfault pagerfault-14c-oom-persistent.58
+pagerfault pagerfault-14c-oom-persistent.60
+pagerfault pagerfault-14c-oom-persistent.62
+pagerfault pagerfault-14c-oom-persistent.66
+pagerfault pagerfault-14c-oom-persistent.68
+pagerfault pagerfault-14c-oom-persistent.72
+pagerfault pagerfault-14c-oom-persistent.73
+pagerfault pagerfault-14c-oom-persistent.74
+pagerfault pagerfault-14c-oom-persistent.75
+pagerfault pagerfault-14c-oom-persistent.78
+pagerfault pagerfault-14c-oom-persistent.79
+pagerfault pagerfault-14c-oom-persistent.80
+pagerfault pagerfault-14c-oom-persistent.81
+pagerfault pagerfault-14c-oom-persistent.82
+pagerfault pagerfault-14c-oom-persistent.83
+pagerfault pagerfault-14c-oom-persistent.84
+pagerfault pagerfault-14c-oom-persistent.85
+pagerfault pagerfault-14c-oom-persistent.86
+pagerfault pagerfault-14c-oom-persistent.87
+pagerfault pagerfault-14c-oom-persistent.88
+pagerfault pagerfault-14c-oom-persistent.89
+pagerfault pagerfault-14c-oom-persistent.90
+pagerfault pagerfault-14c-oom-persistent.91
+pagerfault pagerfault-14c-oom-persistent.92
+pagerfault pagerfault-14c-oom-persistent.93
+pagerfault pagerfault-14c-oom-persistent.94
+pagerfault pagerfault-14c-oom-persistent.95
+pagerfault pagerfault-14c-oom-persistent.96
+pagerfault pagerfault-14c-oom-persistent.97
+pagerfault pagerfault-14c-oom-persistent.98
+pagerfault pagerfault-14c-oom-persistent.99
+pagerfault pagerfault-14c-oom-persistent.100
+pagerfault pagerfault-14c-oom-persistent.101
+pagerfault pagerfault-14c-oom-persistent.102
+pagerfault pagerfault-14c-oom-persistent.103
+pagerfault pagerfault-14c-oom-persistent.106
+pagerfault pagerfault-14c-oom-persistent.111
+pagerfault pagerfault-14c-oom-transient.11
+pagerfault pagerfault-14c-oom-transient.15
+pagerfault pagerfault-14c-oom-transient.16
+pagerfault pagerfault-14c-oom-transient.17
+pagerfault pagerfault-14c-oom-transient.21
+pagerfault pagerfault-14c-oom-transient.25
+pagerfault pagerfault-14c-oom-transient.26
+pagerfault pagerfault-14c-oom-transient.27
+pagerfault pagerfault-14c-oom-transient.29
+pagerfault pagerfault-14c-oom-transient.31
+pagerfault pagerfault-14c-oom-transient.36
+pagerfault pagerfault-14c-oom-transient.41
+pagerfault pagerfault-14c-oom-transient.42
+pagerfault pagerfault-14c-oom-transient.43
+pagerfault pagerfault-14c-oom-transient.45
+pagerfault pagerfault-14c-oom-transient.50
+pagerfault pagerfault-14c-oom-transient.54
+pagerfault pagerfault-14c-oom-transient.55
+pagerfault pagerfault-14c-oom-transient.58
+pagerfault pagerfault-14c-oom-transient.60
+pagerfault pagerfault-14c-oom-transient.62
+pagerfault pagerfault-14c-oom-transient.66
+pagerfault pagerfault-14c-oom-transient.68
+pagerfault pagerfault-14c-oom-transient.72
+pagerfault pagerfault-14c-oom-transient.73
+pagerfault pagerfault-14c-oom-transient.74
+pagerfault pagerfault-14c-oom-transient.75
+pagerfault pagerfault-14c-oom-transient.78
+pagerfault pagerfault-14c-oom-transient.79
+pagerfault pagerfault-14c-oom-transient.80
+pagerfault pagerfault-14c-oom-transient.81
+pagerfault pagerfault-14c-oom-transient.82
+pagerfault pagerfault-14c-oom-transient.83
+pagerfault pagerfault-14c-oom-transient.84
+pagerfault pagerfault-14c-oom-transient.85
+pagerfault pagerfault-14c-oom-transient.86
+pagerfault pagerfault-14c-oom-transient.87
+pagerfault pagerfault-14c-oom-transient.88
+pagerfault pagerfault-14c-oom-transient.89
+pagerfault pagerfault-14c-oom-transient.90
+pagerfault pagerfault-14c-oom-transient.91
+pagerfault pagerfault-14c-oom-transient.92
+pagerfault pagerfault-14c-oom-transient.93
+pagerfault pagerfault-14c-oom-transient.94
+pagerfault pagerfault-14c-oom-transient.95
+pagerfault pagerfault-14c-oom-transient.96
+pagerfault pagerfault-14c-oom-transient.97
+pagerfault pagerfault-14c-oom-transient.98
+pagerfault pagerfault-14c-oom-transient.99
+pagerfault pagerfault-14c-oom-transient.100
+pagerfault pagerfault-14c-oom-transient.101
+pagerfault pagerfault-14c-oom-transient.102
+pagerfault pagerfault-14c-oom-transient.103
+pagerfault pagerfault-14c-oom-transient.106
+pagerfault pagerfault-14c-oom-transient.111
+pagerfault pagerfault-17d-cantopen-persistent.1
+pagerfault pagerfault-17d-cantopen-transient.1
+pagerfault pagerfault-17d-full.1
+pagerfault pagerfault-17d-ioerr-persistent.1
+pagerfault pagerfault-17d-ioerr-transient.1
+pagerfault pagerfault-17d-oom-persistent.8
+pagerfault pagerfault-17d-oom-transient.8
+pagerfault pagerfault-17d-shmerr-persistent.1
+pagerfault pagerfault-17d-shmerr-transient.1
+pagerfault pagerfault-26-cantopen-persistent.1
+pagerfault pagerfault-26-cantopen-persistent.2
+pagerfault pagerfault-26-cantopen-persistent.3
+pagerfault pagerfault-26-cantopen-persistent.4
+pagerfault pagerfault-26-cantopen-transient.1
+pagerfault pagerfault-26-cantopen-transient.2
+pagerfault pagerfault-26-cantopen-transient.3
+pagerfault pagerfault-26-cantopen-transient.4
+pagerfault pagerfault-26-full.1
+pagerfault pagerfault-26-full.2
+pagerfault pagerfault-26-full.3
+pagerfault pagerfault-26-full.4
+pagerfault pagerfault-26-full.5
+pagerfault pagerfault-26-full.6
+pagerfault pagerfault-26-full.7
+pagerfault pagerfault-26-full.8
+pagerfault pagerfault-26-ioerr-persistent.1
+pagerfault pagerfault-26-ioerr-persistent.2
+pagerfault pagerfault-26-ioerr-persistent.3
+pagerfault pagerfault-26-ioerr-persistent.4
+pagerfault pagerfault-26-ioerr-persistent.5
+pagerfault pagerfault-26-ioerr-persistent.6
+pagerfault pagerfault-26-ioerr-persistent.7
+pagerfault pagerfault-26-ioerr-persistent.8
+pagerfault pagerfault-26-ioerr-persistent.9
+pagerfault pagerfault-26-ioerr-persistent.10
+pagerfault pagerfault-26-ioerr-persistent.11
+pagerfault pagerfault-26-ioerr-persistent.12
+pagerfault pagerfault-26-ioerr-persistent.13
+pagerfault pagerfault-26-ioerr-persistent.14
+pagerfault pagerfault-26-ioerr-persistent.15
+pagerfault pagerfault-26-ioerr-persistent.16
+pagerfault pagerfault-26-ioerr-persistent.17
+pagerfault pagerfault-26-ioerr-persistent.18
+pagerfault pagerfault-26-ioerr-persistent.19
+pagerfault pagerfault-26-ioerr-persistent.20
+pagerfault pagerfault-26-ioerr-persistent.21
+pagerfault pagerfault-26-ioerr-persistent.22
+pagerfault pagerfault-26-ioerr-persistent.23
+pagerfault pagerfault-26-ioerr-transient.1
+pagerfault pagerfault-26-ioerr-transient.2
+pagerfault pagerfault-26-ioerr-transient.3
+pagerfault pagerfault-26-ioerr-transient.4
+pagerfault pagerfault-26-ioerr-transient.5
+pagerfault pagerfault-26-ioerr-transient.6
+pagerfault pagerfault-26-ioerr-transient.7
+pagerfault pagerfault-26-ioerr-transient.8
+pagerfault pagerfault-26-ioerr-transient.9
+pagerfault pagerfault-26-ioerr-transient.10
+pagerfault pagerfault-26-ioerr-transient.11
+pagerfault pagerfault-26-ioerr-transient.12
+pagerfault pagerfault-26-ioerr-transient.13
+pagerfault pagerfault-26-ioerr-transient.14
+pagerfault pagerfault-26-ioerr-transient.15
+pagerfault pagerfault-26-ioerr-transient.16
+pagerfault pagerfault-26-ioerr-transient.17
+pagerfault pagerfault-26-ioerr-transient.18
+pagerfault pagerfault-26-ioerr-transient.19
+pagerfault pagerfault-26-ioerr-transient.20
+pagerfault pagerfault-26-ioerr-transient.21
+pagerfault pagerfault-26-ioerr-transient.22
+pagerfault pagerfault-26-ioerr-transient.23
+pagerfault pagerfault-26-oom-persistent.1
+pagerfault pagerfault-26-oom-persistent.2
+pagerfault pagerfault-26-oom-persistent.3
+pagerfault pagerfault-26-oom-persistent.4
+pagerfault pagerfault-26-oom-persistent.5
+pagerfault pagerfault-26-oom-persistent.6
+pagerfault pagerfault-26-oom-persistent.7
+pagerfault pagerfault-26-oom-persistent.8
+pagerfault pagerfault-26-oom-persistent.9
+pagerfault pagerfault-26-oom-persistent.10
+pagerfault pagerfault-26-oom-persistent.11
+pagerfault pagerfault-26-oom-persistent.12
+pagerfault pagerfault-26-oom-persistent.13
+pagerfault pagerfault-26-oom-persistent.14
+pagerfault pagerfault-26-oom-persistent.15
+pagerfault pagerfault-26-oom-persistent.16
+pagerfault pagerfault-26-oom-persistent.17
+pagerfault pagerfault-26-oom-persistent.18
+pagerfault pagerfault-26-oom-persistent.19
+pagerfault pagerfault-26-oom-persistent.20
+pagerfault pagerfault-26-oom-persistent.21
+pagerfault pagerfault-26-oom-persistent.22
+pagerfault pagerfault-26-oom-persistent.23
+pagerfault pagerfault-26-oom-persistent.24
+pagerfault pagerfault-26-oom-persistent.25
+pagerfault pagerfault-26-oom-persistent.26
+pagerfault pagerfault-26-oom-persistent.27
+pagerfault pagerfault-26-oom-persistent.28
+pagerfault pagerfault-26-oom-persistent.29
+pagerfault pagerfault-26-oom-persistent.30
+pagerfault pagerfault-26-oom-persistent.31
+pagerfault pagerfault-26-oom-persistent.32
+pagerfault pagerfault-26-oom-persistent.33
+pagerfault pagerfault-26-oom-persistent.34
+pagerfault pagerfault-26-oom-persistent.35
+pagerfault pagerfault-26-oom-persistent.36
+pagerfault pagerfault-26-oom-persistent.37
+pagerfault pagerfault-26-oom-persistent.38
+pagerfault pagerfault-26-oom-persistent.39
+pagerfault pagerfault-26-oom-persistent.40
+pagerfault pagerfault-26-oom-persistent.41
+pagerfault pagerfault-26-oom-persistent.42
+pagerfault pagerfault-26-oom-persistent.43
+pagerfault pagerfault-26-oom-persistent.44
+pagerfault pagerfault-26-oom-persistent.45
+pagerfault pagerfault-26-oom-persistent.46
+pagerfault pagerfault-26-oom-persistent.47
+pagerfault pagerfault-26-oom-persistent.48
+pagerfault pagerfault-26-oom-persistent.49
+pagerfault pagerfault-26-oom-persistent.50
+pagerfault pagerfault-26-oom-persistent.51
+pagerfault pagerfault-26-oom-persistent.52
+pagerfault pagerfault-26-oom-persistent.53
+pagerfault pagerfault-26-oom-persistent.54
+pagerfault pagerfault-26-oom-persistent.55
+pagerfault pagerfault-26-oom-persistent.56
+pagerfault pagerfault-26-oom-persistent.57
+pagerfault pagerfault-26-oom-persistent.58
+pagerfault pagerfault-26-oom-persistent.59
+pagerfault pagerfault-26-oom-persistent.60
+pagerfault pagerfault-26-oom-persistent.61
+
 # corruptB pokes stock b-tree page structures by offset. On a chunk-store
 # file the offsets read back garbage: .1 steps that compute child-page
 # offsets from in-file values die with tcl "integer value too large to
@@ -5033,7 +5504,6 @@ e_vacuum e_vacuum-1.2.4.2  # freelist_count
 e_vacuum e_vacuum-1.2.4.3  # freelist_count
 e_vacuum e_vacuum-1.3.1.1  # page_size/page_count pair after VACUUM (gc, no page rebuild)
 e_vacuum e_vacuum-1.3.1.2  # page_size/page_count pair
-e_vacuum e_vacuum-1.3.2.1  # PRAGMA journal_mode errors: not configurable on doltlite format
 e_vacuum e_vacuum-1.3.3.2  # page_size/page_count pair
 e_vacuum e_vacuum-2.1.8  # VACUUM INTO-style size comparison: file not rebuilt smaller
 e_vacuum e_vacuum-3.1.2  # VACUUM-as-gc does not renumber free rowids (stock expectation predates rowid preservation)
@@ -6130,9 +6600,6 @@ incrvacuum2 incrvacuum2-4.3  # -wal sidecar absent
 # inconclusive (only NOTFOUND aborts), so the final fault points record a
 # hit while the VACUUM statement still succeeds. A non-CHECK build passes
 # these three.
-ioerr ioerr-2.31.3  # PROLLY_CHECK gc verify ignores injected read faults
-ioerr ioerr-2.32.3  # PROLLY_CHECK gc verify ignores injected read faults
-ioerr ioerr-2.33.3  # PROLLY_CHECK gc verify ignores injected read faults
 # ioerr: the chunk store journals inside the single database file, so a
 # -journal sidecar never exists. Preps that crash a child on journal sync
 # (ioerr-6) or copy the journal aside (ioerr-7/9) fail before fault
@@ -6280,12 +6747,6 @@ ioerr ioerr-7.46.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.47.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.48.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.49.1  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.50.1  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.51.1  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.52.1  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.53.1  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.54.1  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.55.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1  # master-journal prep copies absent -journal sidecar
 
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
@@ -6294,20 +6755,14 @@ ioerr ioerr-9.1.1  # master-journal prep copies absent -journal sidecar
 ioerr4 ioerr4-1.3  # auto_vacuum no-op reads back 0
 ioerr4 ioerr4-1.6  # no page freelist; freelist_count always 0
 
-# jrnlmode — doltlite-format databases do not expose SQLite's journal-mode
-# switching: the default mode reports as the chunk WAL ('wal' where stock
-# says 'delete'), PRAGMA journal_mode=<x> errors with "journal_mode is not
-# configurable on doltlite-format databases", and journal_size_limit /
-# sidecar-size probes cascade from that.
+# jrnlmode — doltlite-format databases accept explicit journal_mode requests
+# as no-ops, but the effective mode remains the chunk WAL ('wal' where stock
+# says 'delete'), and journal_size_limit / sidecar-size probes still differ.
 jrnlmode jrnlmode-1.0
-jrnlmode jrnlmode-1.1
 jrnlmode jrnlmode-1.2
 jrnlmode jrnlmode-1.4a
-jrnlmode jrnlmode-1.4b
 jrnlmode jrnlmode-1.5
-jrnlmode jrnlmode-1.6
 jrnlmode jrnlmode-1.7
-jrnlmode jrnlmode-1.7.1
 jrnlmode jrnlmode-1.7.2
 jrnlmode jrnlmode-1.8
 jrnlmode jrnlmode-1.9
@@ -6318,23 +6773,15 @@ jrnlmode jrnlmode-1.13
 jrnlmode jrnlmode-1.14
 jrnlmode jrnlmode-1.15
 jrnlmode jrnlmode-1.16
-jrnlmode jrnlmode-1.99
 jrnlmode jrnlmode-2.1
 jrnlmode jrnlmode-2.2
-jrnlmode jrnlmode-2.3
 jrnlmode jrnlmode-2.4
-jrnlmode jrnlmode-2.5
-jrnlmode jrnlmode-3.2
 jrnlmode jrnlmode-4.1
-jrnlmode jrnlmode-4.2
-jrnlmode jrnlmode-5.1
-jrnlmode jrnlmode-5.3
 jrnlmode jrnlmode-5.4.1
 jrnlmode jrnlmode-5.4.2
 jrnlmode jrnlmode-5.5
 jrnlmode jrnlmode-5.6
 jrnlmode jrnlmode-5.7
-jrnlmode jrnlmode-5.8
 jrnlmode jrnlmode-5.10
 jrnlmode jrnlmode-5.11
 jrnlmode jrnlmode-5.12
@@ -6350,29 +6797,8 @@ jrnlmode jrnlmode-5.21
 jrnlmode jrnlmode-5.22
 jrnlmode jrnlmode-6.1
 jrnlmode jrnlmode-6.2
-jrnlmode jrnlmode-6.3
 jrnlmode jrnlmode-6.4
-jrnlmode jrnlmode-6.5
-jrnlmode jrnlmode-6.7
-jrnlmode jrnlmode-6.9
-jrnlmode jrnlmode-7.1
 jrnlmode jrnlmode-7.2
-jrnlmode jrnlmode-8.5
-jrnlmode jrnlmode-8.6
-jrnlmode jrnlmode-8.7
-jrnlmode jrnlmode-8.8
-jrnlmode jrnlmode-8.13
-jrnlmode jrnlmode-8.14
-jrnlmode jrnlmode-8.15
-jrnlmode jrnlmode-8.16
-jrnlmode jrnlmode-8.17
-jrnlmode jrnlmode-8.21
-jrnlmode jrnlmode-8.23
-jrnlmode jrnlmode-8.24
-jrnlmode jrnlmode-8.28
-jrnlmode jrnlmode-8.30
-jrnlmode jrnlmode-9.1
-jrnlmode jrnlmode-9.2
 
 # ── mmap1 ──
 # prollyBtreeSetMmapLimit is a no-op (the chunk-store pager never maps the
@@ -6446,173 +6872,38 @@ mmap1 mmap1-2.4  # page_count: chunk-page accounting
 mmap1 mmap1-5.1  # auto_vacuum reads back 0 (row data matches)
 mmap1 mmap1-6.2  # mmap_size reads back 0 / mmap stats 0
 
-# multiplex VFS over a chunk store: journal_mode is not configurable on
-# doltlite-format databases (dominant failure: the multiplex tests set
-# journal_mode=delete/truncate per cycle), multiplex chunk-boundary and
-# size/journal-shape expectations differ, and 1.9.2 surfaces residual
-# SQLITE_MISUSE warnings from the wrapper open path. The native
-# initialized-wrapper contract is covered by doltlite_recover_vfs_wrappers.
+# multiplex VFS over a chunk store: chunk-boundary and size/journal-shape
+# expectations differ, and 1.9.2 surfaces residual SQLITE_MISUSE warnings
+# from the wrapper open path. The native initialized-wrapper contract is
+# covered by doltlite_recover_vfs_wrappers.
 multiplex multiplex-1.9.2
-multiplex multiplex-2.1.2
 multiplex multiplex-2.1.3
-multiplex multiplex-2.1.4
-multiplex multiplex-2.2.1
 multiplex multiplex-2.2.3
-multiplex multiplex-2.4.2
 multiplex multiplex-2.4.4
-multiplex multiplex-2.5.2
-multiplex multiplex-2.5.3
-multiplex multiplex-2.5.4
-multiplex multiplex-2.5.5
-multiplex multiplex-2.5.6
-multiplex multiplex-2.5.7
-multiplex multiplex-2.5.8
-multiplex multiplex-2.5.9
-multiplex multiplex-2.5.10
-multiplex multiplex-2.5.11
-multiplex multiplex-2.5.12
-multiplex multiplex-2.6.2.151.delete
-multiplex multiplex-2.6.2.570.delete
-multiplex multiplex-2.6.2.989.delete
-multiplex multiplex-2.6.2.1408.delete
-multiplex multiplex-2.6.2.1827.delete
-multiplex multiplex-2.6.2.2246.delete
-multiplex multiplex-2.6.2.2665.delete
-multiplex multiplex-2.6.2.3084.delete
-multiplex multiplex-2.6.2.3503.delete
-multiplex multiplex-2.6.2.3922.delete
-multiplex multiplex-2.6.2.4341.delete
-multiplex multiplex-2.6.2.4760.delete
-multiplex multiplex-2.6.2.5179.delete
-multiplex multiplex-2.6.2.5598.delete
-multiplex multiplex-2.6.2.6017.delete
-multiplex multiplex-2.6.2.6436.delete
-multiplex multiplex-2.6.2.6855.delete
-multiplex multiplex-2.6.2.7274.delete
-multiplex multiplex-2.6.2.7693.delete
-multiplex multiplex-2.6.2.151.persist
-multiplex multiplex-2.6.2.570.persist
-multiplex multiplex-2.6.2.989.persist
-multiplex multiplex-2.6.2.1408.persist
-multiplex multiplex-2.6.2.1827.persist
-multiplex multiplex-2.6.2.2246.persist
-multiplex multiplex-2.6.2.2665.persist
-multiplex multiplex-2.6.2.3084.persist
-multiplex multiplex-2.6.2.3503.persist
-multiplex multiplex-2.6.2.3922.persist
-multiplex multiplex-2.6.2.4341.persist
-multiplex multiplex-2.6.2.4760.persist
-multiplex multiplex-2.6.2.5179.persist
-multiplex multiplex-2.6.2.5598.persist
-multiplex multiplex-2.6.2.6017.persist
-multiplex multiplex-2.6.2.6436.persist
-multiplex multiplex-2.6.2.6855.persist
-multiplex multiplex-2.6.2.7274.persist
-multiplex multiplex-2.6.2.7693.persist
-multiplex multiplex-2.6.2.151.truncate
-multiplex multiplex-2.6.2.570.truncate
-multiplex multiplex-2.6.2.989.truncate
-multiplex multiplex-2.6.2.1408.truncate
-multiplex multiplex-2.6.2.1827.truncate
-multiplex multiplex-2.6.2.2246.truncate
-multiplex multiplex-2.6.2.2665.truncate
-multiplex multiplex-2.6.2.3084.truncate
-multiplex multiplex-2.6.2.3503.truncate
-multiplex multiplex-2.6.2.3922.truncate
-multiplex multiplex-2.6.2.4341.truncate
-multiplex multiplex-2.6.2.4760.truncate
-multiplex multiplex-2.6.2.5179.truncate
-multiplex multiplex-2.6.2.5598.truncate
-multiplex multiplex-2.6.2.6017.truncate
-multiplex multiplex-2.6.2.6436.truncate
-multiplex multiplex-2.6.2.6855.truncate
-multiplex multiplex-2.6.2.7274.truncate
-multiplex multiplex-2.6.2.7693.truncate
-multiplex multiplex-2.6.2.151.memory
-multiplex multiplex-2.6.2.570.memory
-multiplex multiplex-2.6.2.989.memory
-multiplex multiplex-2.6.2.1408.memory
-multiplex multiplex-2.6.2.1827.memory
-multiplex multiplex-2.6.2.2246.memory
-multiplex multiplex-2.6.2.2665.memory
-multiplex multiplex-2.6.2.3084.memory
-multiplex multiplex-2.6.2.3503.memory
-multiplex multiplex-2.6.2.3922.memory
-multiplex multiplex-2.6.2.4341.memory
-multiplex multiplex-2.6.2.4760.memory
-multiplex multiplex-2.6.2.5179.memory
-multiplex multiplex-2.6.2.5598.memory
-multiplex multiplex-2.6.2.6017.memory
-multiplex multiplex-2.6.2.6436.memory
-multiplex multiplex-2.6.2.6855.memory
-multiplex multiplex-2.6.2.7274.memory
-multiplex multiplex-2.6.2.7693.memory
-multiplex multiplex-2.6.2.151.off
-multiplex multiplex-2.6.2.570.off
-multiplex multiplex-2.6.2.989.off
-multiplex multiplex-2.6.2.1408.off
-multiplex multiplex-2.6.2.1827.off
-multiplex multiplex-2.6.2.2246.off
-multiplex multiplex-2.6.2.2665.off
-multiplex multiplex-2.6.2.3084.off
-multiplex multiplex-2.6.2.3503.off
-multiplex multiplex-2.6.2.3922.off
-multiplex multiplex-2.6.2.4341.off
-multiplex multiplex-2.6.2.4760.off
-multiplex multiplex-2.6.2.5179.off
-multiplex multiplex-2.6.2.5598.off
-multiplex multiplex-2.6.2.6017.off
-multiplex multiplex-2.6.2.6436.off
-multiplex multiplex-2.6.2.6855.off
-multiplex multiplex-2.6.2.7274.off
-multiplex multiplex-2.6.2.7693.off
 multiplex multiplex-2.7.3
 multiplex multiplex-3.1.2
 multiplex multiplex-3.2.1a
-multiplex multiplex-3.2.2
-multiplex multiplex-3.2.3
-multiplex multiplex-3.2.4
-multiplex multiplex-3.2.5
-multiplex multiplex-3.2.6
-multiplex multiplex-3.2.7
-multiplex multiplex-3.2.8
-multiplex multiplex-3.2.9
-multiplex multiplex-3.3.1
-multiplex multiplex-6.1.0
-multiplex multiplex-6.2.1
-multiplex multiplex-6.2.2
 
 # pragma4: doltlite stores non-INTEGER-PK tables PK-keyed (WITHOUT
 # ROWID-equivalent), so PRAGMA table_list reports wr=1 for them.
 pragma4 pragma4-6.2
 
 # quota-VFS byte thresholds trip at chunk-store file sizes, not stock
-# page-file sizes, and the journal_mode pragma the suite issues errors
-# ("journal_mode is not configurable on doltlite-format databases"),
-# cascading into "no such table: t1" for the rest of the batch. The
-# native wrapper contract is covered by doltlite_recover_vfs_wrappers.
+# page-file sizes, and remaining journal/sidecar-shape expectations differ.
+# The native wrapper contract is covered by doltlite_recover_vfs_wrappers.
 quota quota-2.1.2
 quota quota-2.1.3
-quota quota-2.1.4
 quota quota-2.1.5
-quota quota-2.2.1
 quota quota-2.2.2
 quota quota-2.2.3
-quota quota-2.4.2
 quota quota-2.4.3
 quota quota-2.4.4
 quota quota-3.1.2
-quota quota-3.1.4
-quota quota-3.1.5
 quota quota-3.2.1
 quota quota-3.2.2
 quota quota-3.2.3
 quota quota-3.2.4
 quota quota-3.2.5
-quota quota-3.2.6
-quota quota-3.2.7
-quota quota-3.2.8
-quota quota-3.2.9
 quota quota-3.3.1
 
 # PRAGMA lock_status expects stock rollback-journal RESERVED locks. DoltLite's
@@ -6648,7 +6939,6 @@ savepoint savepoint-10.2.8
 savepoint savepoint-11.8
 
 # journal_mode=off is not configurable for DoltLite-format databases.
-savepoint savepoint-13.1
 
 # Multi-client tests that assert stock rollback-journal lock failures.
 # DoltLite lets the write/release complete, so the following rollback/transaction
@@ -6745,20 +7035,4 @@ vacuum3 vacuum3-ioerr-4.33.3  # injected error consumed by best-effort gc finali
 # fkey_malloc / vtab_err: OOM fault indices, re-derived after the large-blob
 # insert path dropped two allocations (indices shift with allocation counts;
 # each list verified identical over three runs).
-fkey_malloc fkey_malloc-6.transient.69
-fkey_malloc fkey_malloc-6.persistent.69
-fkey_malloc fkey_malloc-7.transient.200
-fkey_malloc fkey_malloc-7.transient.201
-fkey_malloc fkey_malloc-7.transient.202
-fkey_malloc fkey_malloc-7.transient.520
-fkey_malloc fkey_malloc-7.transient.521
-fkey_malloc fkey_malloc-7.transient.522
 vtab_err vtab_err-1.3.3
-vtab_err vtab_err-2.transient.579
-vtab_err vtab_err-2.transient.714
-vtab_err vtab_err-2.transient.737
-vtab_err vtab_err-2.transient.738
-vtab_err vtab_err-2.persistent.737
-vtab_err vtab_err-2.persistent.738
-vtab_err vtab_err-3-oom-transient.437
-vtab_err vtab_err-3-oom-transient.438

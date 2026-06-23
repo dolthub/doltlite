@@ -8522,10 +8522,15 @@ case OP_JournalMode: {    /* out2 */
     }else
 #endif
     {
-      rc = SQLITE_ERROR;
-      sqlite3VdbeError(p,
-        "journal_mode is not configurable on doltlite-format databases");
-      goto abort_due_to_error;
+      /* Doltlite-format databases do not use pager rollback journal
+      ** modes for durability. Accept explicit journal-mode requests as
+      ** SQL-compatible no-ops without changing the underlying storage mode. */
+      pOut->flags = MEM_Str|MEM_Static|MEM_Term;
+      pOut->z = (char *)sqlite3JournalModename(eNew);
+      pOut->n = sqlite3Strlen30(pOut->z);
+      pOut->enc = SQLITE_UTF8;
+      sqlite3VdbeChangeEncoding(pOut, encoding);
+      break;
     }
   }
 #endif
