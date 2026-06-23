@@ -232,30 +232,18 @@ int loadSchemaEntryFromCatalog(
   SchemaEntry *pEntry,
   int *pFound
 ){
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
   ProllyHash masterRoot;
   u8 masterFlags = 0;
   ProllyCursor cur;
-  int res, rc, i;
+  int res, rc;
 
   memset(pEntry, 0, sizeof(*pEntry));
   *pFound = 0;
   if( !zName || prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+  rc = doltliteLoadTableRootById(db, pCatHash, 1, &masterRoot, &masterFlags, 0);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
-
-  memset(&masterRoot, 0, sizeof(masterRoot));
-  for(i=0; i<nTables; i++){
-    if( aTables[i].iTable==1 ){
-      memcpy(&masterRoot, &aTables[i].root, sizeof(ProllyHash));
-      masterFlags = aTables[i].flags;
-      break;
-    }
-  }
-  doltliteFreeCatalog(aTables, nTables);
-
   if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
 
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
