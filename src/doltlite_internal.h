@@ -872,7 +872,6 @@ DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
 int doltliteVcSealActiveSavepoints(sqlite3 *db);
 int doltliteVcSealSavepointError(sqlite3 *db);
 void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg);
-void doltliteVcResultErrorCode(sqlite3_context *ctx, sqlite3 *db, int rc);
 int doltliteVcSealBranchStyleTxn(sqlite3 *db);
 
 typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);

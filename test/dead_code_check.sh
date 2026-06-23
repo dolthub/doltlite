@@ -21,7 +21,7 @@ cd "$ROOT"
 BUILD_DIR="${DOLTLITE_BUILD_DIR:-$ROOT/build}"
 CC="${CC:-cc}"
 
-SRCS=(src/doltlite_*.c src/chunk_*.c src/prolly_*.c src/remotesrv_main.c)
+SRCS=(src/doltlite.c src/doltlite_*.c src/chunk_*.c src/prolly_*.c src/remotesrv_main.c)
 
 CFLAGS=(
   -DNDEBUG -O1 -g

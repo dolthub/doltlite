@@ -651,11 +651,6 @@ void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg){
   sqlite3_result_error(ctx, zMsg, -1);
 }
 
-void doltliteVcResultErrorCode(sqlite3_context *ctx, sqlite3 *db, int rc){
-  (void)doltliteVcSealSavepointError(db);
-  sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
-}
-
 int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   int rc;
   if( db->autoCommit ) return SQLITE_OK;
