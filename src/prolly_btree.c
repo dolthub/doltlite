@@ -1503,55 +1503,6 @@ static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable)
   return 0;
 }
 
-static int schemaCatalogTextField(
-  const u8 *pVal, int nVal, DoltliteRecordInfo *pRi, int iField, char **pzOut
-){
-  int st, off, len;
-  char *zOut;
-  *pzOut = 0;
-  if( iField>=pRi->nField ) return SQLITE_CORRUPT;
-  st = pRi->aType[iField];
-  off = pRi->aOffset[iField];
-  if( st==0 ) return SQLITE_OK;
-  if( st<13 || (st&1)==0 ) return SQLITE_CORRUPT;
-  len = (st-13)/2;
-  if( off<0 || off+len>nVal ) return SQLITE_CORRUPT;
-  zOut = sqlite3_malloc(len+1);
-  if( !zOut ) return SQLITE_NOMEM;
-  memcpy(zOut, pVal+off, len);
-  zOut[len] = 0;
-  *pzOut = zOut;
-  return SQLITE_OK;
-}
-
-static i64 schemaCatalogIntField(
-  const u8 *pVal, int nVal, DoltliteRecordInfo *pRi, int iField
-){
-  const u8 *pBody;
-  int st, off, nByte, i;
-  i64 v;
-  if( iField>=pRi->nField ) return 0;
-  st = pRi->aType[iField];
-  off = pRi->aOffset[iField];
-  switch( st ){
-    case 0:
-    case 8: return 0;
-    case 9: return 1;
-    case 1: nByte = 1; break;
-    case 2: nByte = 2; break;
-    case 3: nByte = 3; break;
-    case 4: nByte = 4; break;
-    case 5: nByte = 6; break;
-    case 6: nByte = 8; break;
-    default: return 0;
-  }
-  if( off<0 || off+nByte>nVal ) return 0;
-  pBody = pVal + off;
-  v = (pBody[0] & 0x80) ? -1 : 0;
-  for(i=0; i<nByte; i++) v = (v << 8) | pBody[i];
-  return v;
-}
-
 static void freeSchemaCatalogRows(SchemaCatalogRow *aRows, int nRows){
   int i;
   for(i=0; i<nRows; i++){
@@ -1752,14 +1703,14 @@ static int loadSchemaCatalogRows(
       i64 iRootpage = 0;
       doltliteParseRecord(pVal, nVal, &ri);
       if( ri.nField<5 ){ rc = SQLITE_CORRUPT; break; }
-      rc = schemaCatalogTextField(pVal, nVal, &ri, 0, &zType);
+      rc = dlRecordTextField(pVal, nVal, &ri, 0, &zType);
       if( rc!=SQLITE_OK ) break;
-      rc = schemaCatalogTextField(pVal, nVal, &ri, 1, &zName);
+      rc = dlRecordTextField(pVal, nVal, &ri, 1, &zName);
       if( rc!=SQLITE_OK ){ sqlite3_free(zType); break; }
-      rc = schemaCatalogTextField(pVal, nVal, &ri, 2, &zTblName);
+      rc = dlRecordTextField(pVal, nVal, &ri, 2, &zTblName);
       if( rc!=SQLITE_OK ){ sqlite3_free(zType); sqlite3_free(zName); break; }
-      iRootpage = schemaCatalogIntField(pVal, nVal, &ri, 3);
-      rc = schemaCatalogTextField(pVal, nVal, &ri, 4, &zSql);
+      iRootpage = dlRecordIntField(pVal, nVal, &ri, 3);
+      rc = dlRecordTextField(pVal, nVal, &ri, 4, &zSql);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); break;
       }
