@@ -63,6 +63,7 @@ Language-specific wrappers around `libdoltlite`. Each one exposes the full `sqli
 |---|---|---|
 | Node.js / Bun | `@dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
 | Python | `doltlite` (`pip install doltlite`) | [dolthub/doltlite-python](https://github.com/dolthub/doltlite-python) |
+| Browser / WASM | `@dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
 
 ## Building
 

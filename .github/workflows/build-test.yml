@@ -84,6 +84,11 @@ jobs:
       run: |
         node ext/wasm/test-doltlite-export-roundtrip.mjs
 
+    - name: Smoke test the @dolthub/doltlite-wasm npm package
+      run: |
+        chmod +x packaging/npm/assemble.sh packaging/npm/test-package.sh
+        bash packaging/npm/test-package.sh
+
     - name: Build wasm distribution zip
       run: |
         source "$EMSDK/emsdk_env.sh"
