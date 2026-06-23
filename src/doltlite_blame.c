@@ -377,6 +377,7 @@ static int blameCompareAgainstRef(
   sqlite3 *db,
   BlameCursor *pCur,
   const char *zTableName,
+  const ProllyHash *pCurRoot,
   u8 curFlags,
   const ProllyHash *pRefCatHash,
   const ProllyHash *pCommitHash,
@@ -399,6 +400,12 @@ static int blameCompareAgainstRef(
                                      &refRoot, &refFlags, 0);
     if( rc==SQLITE_OK ) haveRef = 1;
     else if( rc!=SQLITE_NOTFOUND ) return rc;
+  }
+
+  if( haveRef && pCurRoot
+   && curFlags==refFlags
+   && prollyHashCompare(pCurRoot, &refRoot)==0 ){
+    return SQLITE_OK;
   }
 
   canScanRef = haveRef
@@ -535,6 +542,7 @@ static int blameWalk(
         rc = doltliteCommitCatalogHash(db, &baseHash, &baseCatHash);
         if( rc==SQLITE_OK ){
           rc = blameCompareAgainstRef(db, pCur, zTableName,
+                                      &curTableRoot,
                                       curFlags,
                                       &baseCatHash,
                                       &walk, &commit);
@@ -545,6 +553,7 @@ static int blameWalk(
         }
       }else if( haveCurTable ){
         rc = blameCompareAgainstRef(db, pCur, zTableName,
+                                    &curTableRoot,
                                     curFlags,
                                     0, &walk, &commit);
         if( rc!=SQLITE_OK ){
@@ -559,6 +568,7 @@ static int blameWalk(
         rc = doltliteCommitCatalogHash(db, pParent, &parentCatHash);
         if( rc==SQLITE_OK ){
           rc = blameCompareAgainstRef(db, pCur, zTableName,
+                                      haveCurTable ? &curTableRoot : 0,
                                       curFlags,
                                       &parentCatHash,
                                       &walk, &commit);
@@ -569,6 +579,7 @@ static int blameWalk(
         }
       }else if( haveCurTable ){
         rc = blameCompareAgainstRef(db, pCur, zTableName,
+                                    &curTableRoot,
                                     curFlags,
                                     0, &walk, &commit);
         if( rc!=SQLITE_OK ){
