@@ -959,62 +959,43 @@ jobs:
         git tag "${VERSION}"
         git push origin "${VERSION}"
 
-  # ── Build and publish the Android AAR ────────────────────
-  # Cross-compiles libdoltlite for the Android ABIs with the runner's NDK,
-  # assembles the AAR (FFI/JNA binding from packaging/android), attaches it to
-  # the GitHub release, and publishes to Maven Central when the signing/Sonatype
-  # secrets are present. Post-release and non-blocking like the other bindings.
+  # ── Tag the Android binding ──────────────────────────────
+  # dolthub/doltlite-android builds the per-ABI libdoltlite.so (NDK), assembles
+  # the AAR, and publishes to Maven Central in its own workflow on tag push --
+  # the same self-publishing model as doltlite-python. Here we just tag it with
+  # the matching version, like the other bindings. Post-release, non-blocking.
   release-android:
     if: github.event_name != 'workflow_dispatch'
     needs: release
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
       VERSION: ${{ github.ref_name }}
     steps:
-    - uses: actions/checkout@v4
-
-    - uses: actions/setup-java@v4
-      with:
-        distribution: temurin
-        java-version: "17"
-
-    - uses: gradle/actions/setup-gradle@v4
-
-    - name: Build generated SQLite files
+    - name: Check release bot token
       run: |
-        ./configure
-        make sqlite3.c sqlite3.h sqlite3ext.h
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to tag doltlite-android"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
 
-    - name: Cross-compile libdoltlite for Android ABIs
+    - name: Configure git identity
       run: |
-        version="${VERSION#v}"
-        bash packaging/android/build-libs.sh "$version" "${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
 
-    - name: Assemble AAR
-      working-directory: packaging/android
-      run: gradle assembleRelease -PdoltliteVersion="${VERSION#v}" --no-daemon
-
-    - name: Attach AAR to the release
+    - name: Tag doltlite-android
       run: |
-        version="${VERSION#v}"
-        aar="$(find packaging/android/build/outputs/aar -name '*-release.aar' | head -1)"
-        cp "$aar" "doltlite-android-${version}.aar"
-        gh release upload "${VERSION}" "doltlite-android-${version}.aar" \
-          --repo dolthub/doltlite --clobber
-
-    - name: Publish to Maven Central
-      working-directory: packaging/android
-      env:
-        SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-        SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-        SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-      run: |
-        # The secrets context can't be used in an `if:`, so gate here. Without
-        # the Sonatype/signing secrets we still attached the AAR to the release.
-        if [ -z "$SONATYPE_USERNAME" ] || [ -z "$SIGNING_KEY" ]; then
-          echo "Maven Central secrets not set; skipping publish (AAR is on the release)."
+        set -euo pipefail
+        if gh api "repos/dolthub/doltlite-android/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-android ${VERSION} already exists; skipping"
           exit 0
         fi
-        gradle publishReleasePublicationToSonatypeRepository -PdoltliteVersion="${VERSION#v}" --no-daemon
+        gh repo clone dolthub/doltlite-android doltlite-android
+        cd doltlite-android
+        git checkout main
+        git pull --ff-only origin main
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
