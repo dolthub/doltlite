@@ -14,6 +14,7 @@ struct ConflictTableInfo {
 
 static void freeConflictTable(ConflictTableInfo *pTable);
 static void freeConflictTables(ConflictTableInfo *aTables, int nTables);
+static sqlite3_int64 cfrConflictRowid(const DoltliteConflictRow *cr);
 
 void doltliteConflictRowFree(DoltliteConflictRow *pRow){
   if( !pRow ) return;
@@ -27,13 +28,6 @@ static void freeConflictRow(DoltliteConflictRow *pRow){
   if( !pRow ) return;
   doltliteConflictRowFree(pRow);
   memset(pRow, 0, sizeof(*pRow));
-}
-
-static void removeConflictRow(ConflictTableInfo *pTable, int iRow){
-  if( !pTable || iRow<0 || iRow>=pTable->nConflicts ) return;
-  freeConflictRow(&pTable->aRows[iRow]);
-  doltliteArrayRemoveAt(pTable->aRows, &pTable->nConflicts, iRow,
-                        (int)sizeof(DoltliteConflictRow));
 }
 
 static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int iTable){
@@ -334,6 +328,171 @@ static int storeUpdatedConflicts(
   }
 }
 
+static int storeConflictBytes(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const u8 *pData,
+  int nData,
+  int nTables
+){
+  int rc;
+  DoltliteVcTxnMode mode;
+  extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
+  extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
+
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nTables==0 ){
+    doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
+  }else{
+    ProllyHash newHash;
+    rc = chunkStorePut(cs, pData, nData, &newHash);
+    if( rc!=SQLITE_OK ) return rc;
+    doltliteSetSessionConflictsCatalog(db, &newHash);
+    doltliteSetSessionMergeState(db, 1, 0, &newHash);
+  }
+  mode = doltliteVcTxnMode(db);
+  if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    rc = doltlitePersistWorkingSet(db);
+    if( rc!=SQLITE_OK ) return rc;
+    return doltliteVcSealActiveSavepoints(db);
+  }
+  return doltliteSaveWorkingSet(db);
+}
+
+static int deleteConflictRowFromCatalog(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zTableName,
+  i64 deleteRowid
+){
+  ProllyHash hash;
+  u8 *data = 0;
+  u8 *out = 0;
+  int nData = 0;
+  DlByteReader r;
+  DlByteWriter w;
+  int nTables, nOutTables = 0;
+  int i, j, rc = SQLITE_OK;
+  int deleted = 0;
+  extern void doltliteGetSessionConflictsCatalog(sqlite3*, ProllyHash*);
+
+  doltliteGetSessionConflictsCatalog(db, &hash);
+  if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
+
+  rc = chunkStoreGet(cs, &hash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
+
+  out = sqlite3_malloc(nData);
+  if( !out ){ sqlite3_free(data); return SQLITE_NOMEM; }
+
+  dlReaderInit(&r, data, nData);
+  if( dlReadFramedHeader(&r, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
+                         DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION,
+                         &nTables)!=SQLITE_OK ){
+    rc = SQLITE_CORRUPT;
+    goto delete_conflict_done;
+  }
+
+  w.p = out;
+  dlWriteFramedHeader(&w, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
+                      DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION, 0);
+
+  for(i=0; i<nTables; i++){
+    const u8 *pTableStart = r.p;
+    u8 *pOutTableStart = w.p;
+    char *zName = 0;
+    int nc;
+    int isMatch;
+
+    rc = dlReadU16Name(&r, &zName);
+    if( rc!=SQLITE_OK ) goto delete_conflict_done;
+    nc = dlReadU32(&r);
+    if( r.err || nc<0 ){
+      sqlite3_free(zName);
+      rc = SQLITE_CORRUPT;
+      goto delete_conflict_done;
+    }
+    if( (sqlite3_uint64)nc > (sqlite3_uint64)(r.end - r.p) ){
+      sqlite3_free(zName);
+      rc = SQLITE_CORRUPT;
+      goto delete_conflict_done;
+    }
+
+    isMatch = (!deleted && zName && strcmp(zName, zTableName)==0);
+    if( isMatch ){
+      u8 *pCountOut = 0;
+      int nKeep = 0;
+      int nl = (int)strlen(zName);
+
+      dlWriteU16Name(&w, zName, nl);
+      pCountOut = w.p;
+      dlWriteU32(&w, 0);
+      for(j=0; j<nc; j++){
+        DoltliteConflictRow cr;
+        memset(&cr, 0, sizeof(cr));
+        rc = readConflictRow(&r, &cr);
+        if( rc!=SQLITE_OK ){
+          freeConflictRow(&cr);
+          sqlite3_free(zName);
+          goto delete_conflict_done;
+        }
+        if( !deleted && cfrConflictRowid(&cr) == deleteRowid ){
+          deleted = 1;
+        }else{
+          dlWriteU32Blob(&w, cr.pKey, cr.nKey);
+          dlWriteI64(&w, cr.intKey);
+          dlWriteU32Blob(&w, cr.pBaseVal, cr.nBaseVal);
+          dlWriteU32Blob(&w, cr.pOurVal, cr.nOurVal);
+          dlWriteU32Blob(&w, cr.pTheirVal, cr.nTheirVal);
+          nKeep++;
+        }
+        freeConflictRow(&cr);
+      }
+      if( nKeep==0 ){
+        w.p = pOutTableStart;
+      }else{
+        DlByteWriter cw;
+        cw.p = pCountOut;
+        dlWriteU32(&cw, nKeep);
+        nOutTables++;
+      }
+    }else{
+      for(j=0; j<nc; j++){
+        rc = skipConflictRow(&r);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zName);
+          goto delete_conflict_done;
+        }
+      }
+      assert( !isMatch );
+      {
+        int nCopy = (int)(r.p - pTableStart);
+        memcpy(w.p, pTableStart, nCopy);
+        w.p += nCopy;
+        nOutTables++;
+      }
+    }
+    sqlite3_free(zName);
+  }
+
+  if( r.err || r.p != r.end ){ rc = SQLITE_CORRUPT; goto delete_conflict_done; }
+  if( deleted ){
+    DlByteWriter hw;
+    hw.p = out;
+    dlWriteFramedHeader(&hw, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
+                        DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION,
+                        nOutTables);
+    rc = storeConflictBytes(db, cs, out, (int)(w.p - out), nOutTables);
+  }
+
+delete_conflict_done:
+  sqlite3_free(out);
+  sqlite3_free(data);
+  return rc;
+}
+
 typedef struct ConflictsVtab ConflictsVtab;
 struct ConflictsVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct ConflictsCur ConflictsCur;
@@ -620,9 +779,6 @@ static int cfrUpdate(
 ){
   CfRowVtab *v = (CfRowVtab*)pVtab;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
-  ConflictTableInfo *aTables = 0;
-  int nTables = 0;
-  int i, j, rc;
   i64 deleteRowid;
 
   (void)pRowid;
@@ -633,32 +789,7 @@ static int cfrUpdate(
   }
 
   deleteRowid = sqlite3_value_int64(apArg[0]);
-
-  rc = loadAllConflicts(v->db, cs, &aTables, &nTables);
-  if( rc!=SQLITE_OK ) return rc;
-
-  for(i=0; i<nTables; i++){
-    if( !aTables[i].zName || strcmp(aTables[i].zName, v->zTableName)!=0 )
-      continue;
-
-    for(j=0; j<aTables[i].nConflicts; j++){
-      if( cfrConflictRowid(&aTables[i].aRows[j]) == deleteRowid ){
-        removeConflictRow(&aTables[i], j);
-
-        if( aTables[i].nConflicts == 0 ){
-          removeConflictTable(aTables, &nTables, i);
-        }
-
-        rc = storeUpdatedConflicts(v->db, cs, aTables, nTables);
-        freeConflictTables(aTables, nTables);
-        return rc;
-      }
-    }
-    break;
-  }
-
-  freeConflictTables(aTables, nTables);
-  return SQLITE_OK;
+  return deleteConflictRowFromCatalog(v->db, cs, v->zTableName, deleteRowid);
 }
 
 static sqlite3_module cfRowModule = {

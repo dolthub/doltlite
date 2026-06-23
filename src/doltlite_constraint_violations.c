@@ -8,6 +8,7 @@
 #include <string.h>
 
 static void freeViolationTable(ConstraintViolationTable *pTable);
+static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r);
 
 static void freeViolationRow(ConstraintViolationRow *r){
   if( !r ) return;
@@ -24,19 +25,6 @@ static void freeViolationTables(ConstraintViolationTable *a, int n){
     freeViolationTable(&a[i]);
   }
   sqlite3_free(a);
-}
-
-static void removeViolationRow(ConstraintViolationTable *pTable, int iRow){
-  if( !pTable || iRow<0 || iRow>=pTable->nRows ) return;
-  freeViolationRow(&pTable->aRows[iRow]);
-  doltliteArrayRemoveAt(pTable->aRows, &pTable->nRows, iRow,
-                        (int)sizeof(ConstraintViolationRow));
-}
-
-static void removeViolationTable(ConstraintViolationTable *a, int *pn, int iTable){
-  if( !a || !pn || iTable<0 || iTable>=*pn ) return;
-  freeViolationTable(&a[iTable]);
-  doltliteArrayRemoveAt(a, pn, iTable, (int)sizeof(ConstraintViolationTable));
 }
 
 static ConstraintViolationTable *findOrCreateViolationTable(
@@ -335,6 +323,158 @@ static int storeUpdatedViolations(
     return doltlitePersistWorkingSet(db);
   }
   return doltliteSaveWorkingSet(db);
+}
+
+static int storeViolationBytes(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const u8 *pData,
+  int nData,
+  int nTables
+){
+  if( nTables==0 ){
+    static const ProllyHash emptyHash = {{0}};
+    doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  }else{
+    ProllyHash newHash;
+    int rc = chunkStorePut(cs, pData, nData, &newHash);
+    if( rc!=SQLITE_OK ) return rc;
+    doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
+  }
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    return doltlitePersistWorkingSet(db);
+  }
+  return doltliteSaveWorkingSet(db);
+}
+
+static int deleteViolationRowFromCatalog(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zTableName,
+  i64 deleteRowid
+){
+  ProllyHash hash;
+  u8 *data = 0;
+  u8 *out = 0;
+  int nData = 0;
+  DlByteReader rd;
+  DlByteWriter w;
+  int nTables, nOutTables = 0;
+  int i, j, rc = SQLITE_OK;
+  int deleted = 0;
+
+  doltliteGetSessionConstraintViolationsCatalog(db, &hash);
+  if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
+
+  rc = chunkStoreGet(cs, &hash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
+
+  out = sqlite3_malloc(nData);
+  if( !out ){ sqlite3_free(data); return SQLITE_NOMEM; }
+
+  dlReaderInit(&rd, data, nData);
+  if( dlReadFramedHeader(&rd, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
+                         &nTables)!=SQLITE_OK ){
+    rc = SQLITE_CORRUPT;
+    goto delete_violation_done;
+  }
+
+  w.p = out;
+  dlWriteFramedHeader(&w, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION, 0);
+
+  for(i=0; i<nTables; i++){
+    const u8 *pTableStart = rd.p;
+    u8 *pOutTableStart = w.p;
+    char *zName = 0;
+    int nr;
+    int isMatch;
+
+    rc = dlReadU16Name(&rd, &zName);
+    if( rc!=SQLITE_OK ) goto delete_violation_done;
+    nr = dlReadU32(&rd);
+    if( rd.err || nr<0 ){
+      sqlite3_free(zName);
+      rc = SQLITE_CORRUPT;
+      goto delete_violation_done;
+    }
+    if( (sqlite3_uint64)nr > (sqlite3_uint64)(rd.end - rd.p) ){
+      sqlite3_free(zName);
+      rc = SQLITE_CORRUPT;
+      goto delete_violation_done;
+    }
+
+    isMatch = (!deleted && zName && strcmp(zName, zTableName)==0);
+    if( isMatch ){
+      u8 *pCountOut = 0;
+      int nKeep = 0;
+      int nl = (int)strlen(zName);
+
+      dlWriteU16Name(&w, zName, nl);
+      pCountOut = w.p;
+      dlWriteU32(&w, 0);
+      for(j=0; j<nr; j++){
+        ConstraintViolationRow vr;
+        memset(&vr, 0, sizeof(vr));
+        rc = readViolationRow(&rd, &vr);
+        if( rc!=SQLITE_OK ){
+          freeViolationRow(&vr);
+          sqlite3_free(zName);
+          goto delete_violation_done;
+        }
+        if( !deleted && cvrViolationRowid(&vr) == deleteRowid ){
+          deleted = 1;
+        }else{
+          int ni = vr.zInfo ? (int)strlen(vr.zInfo) : 0;
+          dlWriteU8(&w, (u8)vr.violationType);
+          dlWriteU32Blob(&w, vr.pKey, vr.nKey);
+          dlWriteI64(&w, vr.intKey);
+          dlWriteU32Blob(&w, vr.pVal, vr.nVal);
+          dlWriteU32Blob(&w, (const u8*)vr.zInfo, ni);
+          nKeep++;
+        }
+        freeViolationRow(&vr);
+      }
+      if( nKeep==0 ){
+        w.p = pOutTableStart;
+      }else{
+        DlByteWriter cw;
+        cw.p = pCountOut;
+        dlWriteU32(&cw, nKeep);
+        nOutTables++;
+      }
+    }else{
+      for(j=0; j<nr; j++){
+        rc = skipViolationRow(&rd);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zName);
+          goto delete_violation_done;
+        }
+      }
+      assert( !isMatch );
+      {
+        int nCopy = (int)(rd.p - pTableStart);
+        memcpy(w.p, pTableStart, nCopy);
+        w.p += nCopy;
+        nOutTables++;
+      }
+    }
+    sqlite3_free(zName);
+  }
+
+  if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto delete_violation_done; }
+  if( deleted ){
+    DlByteWriter hw;
+    hw.p = out;
+    dlWriteFramedHeader(&hw, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
+                        nOutTables);
+    rc = storeViolationBytes(db, cs, out, (int)(w.p - out), nOutTables);
+  }
+
+delete_violation_done:
+  sqlite3_free(out);
+  sqlite3_free(data);
+  return rc;
 }
 
 /* Append one violation row to an in-memory table set. */
@@ -710,9 +850,6 @@ static int cvrUpdate(
 ){
   CvRowVtab *v = (CvRowVtab*)pVtab;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
-  ConstraintViolationTable *aTables = 0;
-  int nTables = 0;
-  int i, j, rc;
   i64 deleteRowid;
   (void)pRowid;
 
@@ -722,29 +859,7 @@ static int cvrUpdate(
     return SQLITE_ERROR;
   }
   deleteRowid = sqlite3_value_int64(apArg[0]);
-
-  rc = loadAllViolations(v->db, cs, &aTables, &nTables);
-  if( rc!=SQLITE_OK ) return rc;
-
-  for(i=0; i<nTables; i++){
-    if( !aTables[i].zName
-     || strcmp(aTables[i].zName, v->zTableName)!=0 ) continue;
-    for(j=0; j<aTables[i].nRows; j++){
-      if( cvrViolationRowid(&aTables[i].aRows[j]) == deleteRowid ){
-        removeViolationRow(&aTables[i], j);
-        if( aTables[i].nRows == 0 ){
-          removeViolationTable(aTables, &nTables, i);
-        }
-        rc = storeUpdatedViolations(v->db, cs, aTables, nTables);
-        freeViolationTables(aTables, nTables);
-        return rc;
-      }
-    }
-    break;
-  }
-
-  freeViolationTables(aTables, nTables);
-  return SQLITE_OK;
+  return deleteViolationRowFromCatalog(v->db, cs, v->zTableName, deleteRowid);
 }
 
 static sqlite3_module cvRowModule = {
