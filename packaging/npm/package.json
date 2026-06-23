@@ -1,0 +1,62 @@
+{
+  "name": "@dolthub/doltlite-wasm",
+  "version": "0.0.0",
+  "description": "DoltLite compiled to WebAssembly: SQLite with Dolt-style version control (branches, commits, merge, diff) for the browser and any JS runtime.",
+  "type": "module",
+  "main": "index.mjs",
+  "module": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./sqlite3.mjs": "./sqlite3.mjs",
+    "./sqlite3.wasm": "./sqlite3.wasm",
+    "./sqlite3-bundler-friendly.mjs": "./sqlite3-bundler-friendly.mjs",
+    "./sqlite3-node.mjs": "./sqlite3-node.mjs",
+    "./sqlite3-opfs-async-proxy.js": "./sqlite3-opfs-async-proxy.js",
+    "./sqlite3-worker1.mjs": "./sqlite3-worker1.mjs",
+    "./sqlite3-worker1-bundler-friendly.mjs": "./sqlite3-worker1-bundler-friendly.mjs",
+    "./sqlite3-worker1-promiser.mjs": "./sqlite3-worker1-promiser.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "sqlite3.mjs",
+    "sqlite3.wasm",
+    "sqlite3-bundler-friendly.mjs",
+    "sqlite3-node.mjs",
+    "sqlite3-opfs-async-proxy.js",
+    "sqlite3-worker1.mjs",
+    "sqlite3-worker1-bundler-friendly.mjs",
+    "sqlite3-worker1-promiser.mjs",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "keywords": [
+    "sqlite",
+    "wasm",
+    "webassembly",
+    "dolt",
+    "doltlite",
+    "version-control",
+    "database",
+    "opfs",
+    "local-first",
+    "git-for-data"
+  ],
+  "homepage": "https://github.com/dolthub/doltlite#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dolthub/doltlite.git",
+    "directory": "packaging/npm"
+  },
+  "bugs": {
+    "url": "https://github.com/dolthub/doltlite/issues"
+  },
+  "author": "DoltHub, Inc.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

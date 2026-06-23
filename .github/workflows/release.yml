@@ -677,3 +677,97 @@ jobs:
 
         git tag "${VERSION}"
         git push origin "${VERSION}"
+
+  # ── Publish WASM package to npm ──────────────────────────
+  # Unlike the node/python bindings (which live in their own repos and are
+  # triggered by release-bindings), the wasm "binding" is pure build output:
+  # the JS API lives in ext/wasm/api and is assembled by the build, so there
+  # is no separate repo to maintain. We publish @dolthub/doltlite-wasm straight
+  # from here — build the canonical npm distributables (make -C ext/wasm npm),
+  # stage them with packaging/npm, and npm publish. Requires the NPM_TOKEN
+  # secret: an npm automation token with publish rights to the @dolthub scope.
+  publish-wasm-npm:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      EMSDK_VERSION: 3.1.74
+      WABT_VERSION: 1.0.36
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check npm token
+      run: |
+        if [ -z "${NPM_TOKEN}" ]; then
+          echo "NPM_TOKEN is required to publish @dolthub/doltlite-wasm"
+          exit 1
+        fi
+
+    - name: Cache Emscripten SDK
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/emsdk
+        key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+
+    - name: Install Emscripten SDK
+      run: |
+        EMSDK_DIR="${RUNNER_TOOL_CACHE}/emsdk"
+        if [ ! -d "$EMSDK_DIR/.git" ]; then
+          rm -rf "$EMSDK_DIR"
+          git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+        fi
+        cd "$EMSDK_DIR"
+        git fetch --tags --quiet
+        ./emsdk install "$EMSDK_VERSION"
+        ./emsdk activate "$EMSDK_VERSION"
+        echo "EMSDK=$EMSDK_DIR" >> "$GITHUB_ENV"
+
+    - name: Cache WABT
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/wabt-${{ env.WABT_VERSION }}
+        key: wabt-${{ runner.os }}-${{ env.WABT_VERSION }}
+
+    - name: Install WABT
+      run: |
+        WABT_DIR="${RUNNER_TOOL_CACHE}/wabt-${WABT_VERSION}"
+        if [ ! -x "$WABT_DIR/bin/wasm-strip" ]; then
+          rm -rf "$WABT_DIR"
+          mkdir -p "$WABT_DIR"
+          curl -fsSL "https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/wabt-${WABT_VERSION}-ubuntu-20.04.tar.gz" \
+            | tar -xz --strip-components=1 -C "$WABT_DIR"
+        fi
+        echo "$WABT_DIR/bin" >> "$GITHUB_PATH"
+
+    - name: Build wasm npm distributables
+      run: |
+        source "$EMSDK/emsdk_env.sh"
+        ./configure
+        make sqlite3.c sqlite3.h sqlite3ext.h
+        make -C ext/wasm npm
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        registry-url: https://registry.npmjs.org
+
+    - name: Stage package
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        bash packaging/npm/assemble.sh "$VERSION" dist/npm
+
+    - name: Publish to npm
+      working-directory: dist/npm
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        # Idempotent: skip if this version is already on the registry so a
+        # re-run of the release workflow doesn't fail on a duplicate publish.
+        if npm view "@dolthub/doltlite-wasm@${VERSION}" version >/dev/null 2>&1; then
+          echo "@dolthub/doltlite-wasm@${VERSION} already published; skipping"
+          exit 0
+        fi
+        npm publish --access public
