@@ -718,15 +718,28 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   sqlite3 *db = pVtab->db;
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headCatHash, stagedCatHash, workingCatHash;
+  ProllyHash baseCatHash;
   struct TableEntry *aHead = 0, *aStaged = 0, *aWorking = 0;
+  struct TableEntry *aBase = 0;
   int nHead = 0, nStaged = 0, nWorking = 0, rc = SQLITE_OK;
+  int nBase = 0;
   int iStagedOnly = -1;
   const char *zTableFilter = 0;
   int iArg = 0;
+  int haveStaged = 0;
+  int compareStaged = 0;
+  int compareWorking = 0;
+  int headLoaded = 0;
+  int stagedLoaded = 0;
+  int workingLoaded = 0;
   (void)idxStr;
 
   statusFreeRows(pCur);
   pCur->iRow = 0;
+  memset(&headCatHash, 0, sizeof(headCatHash));
+  memset(&stagedCatHash, 0, sizeof(stagedCatHash));
+  memset(&workingCatHash, 0, sizeof(workingCatHash));
+  memset(&baseCatHash, 0, sizeof(baseCatHash));
   if( idxNum & STATUS_IDX_STAGED_EQ ){
     if( iArg>=argc ) return SQLITE_OK;
     iStagedOnly = sqlite3_value_int(argv[iArg++]);
@@ -751,47 +764,64 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   if( iStagedOnly==1 && prollyHashIsEmpty(&stagedCatHash) ){
     goto status_done;
   }
+  haveStaged = !prollyHashIsEmpty(&stagedCatHash);
 
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
   if( rc != SQLITE_OK ) goto status_done;
-  rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
-  if( rc != SQLITE_OK ) goto status_done;
+  baseCatHash = haveStaged ? stagedCatHash : headCatHash;
+  compareStaged = haveStaged
+      && iStagedOnly!=0
+      && prollyHashCompare(&headCatHash, &stagedCatHash)!=0;
 
-  if( !prollyHashIsEmpty(&stagedCatHash) ){
+  if( compareStaged ){
+    rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+    if( rc != SQLITE_OK ) goto status_done;
+    headLoaded = 1;
+
     rc = doltliteLoadCatalog(db, &stagedCatHash, &aStaged, &nStaged, 0);
+    if( rc != SQLITE_OK ) goto status_done;
+    stagedLoaded = 1;
+    rc = compareCatalogsFiltered(pCur, db, aHead, nHead, aStaged, nStaged,
+                                 1, zTableFilter);
     if( rc != SQLITE_OK ) goto status_done;
   }
 
   if( iStagedOnly!=1 ){
     rc = doltliteFlushCatalogToHash(db, &workingCatHash);
-    if( rc == SQLITE_OK ){
-      rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
-    }
     if( rc != SQLITE_OK ) goto status_done;
-  }
+    compareWorking = prollyHashCompare(&baseCatHash, &workingCatHash)!=0;
+    if( compareWorking ){
+      if( haveStaged ){
+        if( !stagedLoaded ){
+          rc = doltliteLoadCatalog(db, &stagedCatHash, &aStaged, &nStaged, 0);
+          if( rc != SQLITE_OK ) goto status_done;
+          stagedLoaded = 1;
+        }
+        aBase = aStaged;
+        nBase = nStaged;
+      }else{
+        if( !headLoaded ){
+          rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+          if( rc != SQLITE_OK ) goto status_done;
+          headLoaded = 1;
+        }
+        aBase = aHead;
+        nBase = nHead;
+      }
 
-  if( aStaged && iStagedOnly!=0 ){
-    rc = compareCatalogsFiltered(pCur, db, aHead, nHead, aStaged, nStaged,
-                                 1, zTableFilter);
-    if( rc != SQLITE_OK ) goto status_done;
-  }
-  if( iStagedOnly!=1 ){
-    struct TableEntry *aBase = aStaged ? aStaged : aHead;
-    int nBase = aStaged ? nStaged : nHead;
-    if( aWorking && aBase ){
+      rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
+      if( rc != SQLITE_OK ) goto status_done;
+      workingLoaded = 1;
       rc = compareCatalogsFiltered(pCur, db, aBase, nBase,
                                    aWorking, nWorking, 0, zTableFilter);
-    }else if( aWorking && !aBase ){
-      rc = compareCatalogsFiltered(pCur, db, 0, 0, aWorking, nWorking,
-                                   0, zTableFilter);
+      if( rc != SQLITE_OK ) goto status_done;
     }
-    if( rc != SQLITE_OK ) goto status_done;
   }
 
 status_done:
-  doltliteFreeCatalog(aHead, nHead);
-  doltliteFreeCatalog(aStaged, nStaged);
-  doltliteFreeCatalog(aWorking, nWorking);
+  if( headLoaded ) doltliteFreeCatalog(aHead, nHead);
+  if( stagedLoaded ) doltliteFreeCatalog(aStaged, nStaged);
+  if( workingLoaded ) doltliteFreeCatalog(aWorking, nWorking);
   return rc;
 }
 
