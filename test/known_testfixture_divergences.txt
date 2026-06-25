@@ -5008,6 +5008,11 @@ avtrans avtrans-9.34.5-21225  # sqlite_fullsync_count stays 0 (chunk-store sync 
 avtrans avtrans-9.36.5-25685  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 avtrans avtrans-9.38.5-30883  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 
+# corrupt8 pokes stock pointer-map page bytes by offset. DoltLite's chunk-store
+# file does not use SQLite pointer-map pages, so the raw write is not a valid
+# corruption of DoltLite's logical b-tree.
+corrupt8 corrupt8-2.1024.6
+
 # corruptB pokes stock b-tree page structures by offset. On a chunk-store
 # file the offsets read back garbage: .1 steps that compute child-page
 # offsets from in-file values die with tcl "integer value too large to
@@ -5015,10 +5020,16 @@ avtrans avtrans-9.38.5-30883  # sqlite_fullsync_count stays 0 (chunk-store sync 
 # differently ("no such table: t1" instead of "malformed", 1.3.2/2.1.2),
 # or never land at all so the read returns the intact row (1.9.2).
 corruptB corruptB-1.3.2
+corruptB corruptB-1.6.2
+corruptB corruptB-1.7.2
 corruptB corruptB-1.8.1
+corruptB corruptB-1.8.2
 corruptB corruptB-1.9.1
 corruptB corruptB-1.9.2
+corruptB corruptB-2.1.1
 corruptB corruptB-2.1.2
+corruptB corruptB-3.1.1
+corruptB corruptB-3.1.2
 
 # createtab: raw-format file-size compare; the doltlite chunk file is not
 # sized in 1024-byte pages and does not grow with auto_vacuum pointer-map
