@@ -44,6 +44,7 @@ doltlite_rollback_durability.sh
 doltlite_delete_or.sh
 doltlite_nocase_index.sh
 doltlite_update_replace_trigger.sh
+doltlite_unique_index_delete.sh
 doltlite_trigger_visibility.sh
 doltlite_schema_merge.sh
 doltlite_branch_gc_stress.sh
@@ -113,6 +114,7 @@ doltlite_memory_db.sh
 doltlite_dbpage.sh
 doltlite_record_format.sh
 doltlite_rollback_durability.sh
+doltlite_unique_index_delete.sh
 doltlite_storage_locking.sh
 chunk_physical_dups_test.sh
 doltlite_open_sqlite_file.sh
