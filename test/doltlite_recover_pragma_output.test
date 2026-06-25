@@ -316,7 +316,7 @@ do_test doltlite_recover_pragma_output-6.6 {
   db close
   sqlite3 db test.db
   execsql {PRAGMA user_version}
-} {0}
+} {6}
 
 do_test doltlite_recover_pragma_output-7.1 {
   db close
