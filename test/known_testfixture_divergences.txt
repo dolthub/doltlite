@@ -255,12 +255,8 @@ pragma pragma-8.1.3
 pragma pragma-8.1.4
 pragma pragma-8.1.6
 pragma pragma-8.1.9
-pragma pragma-8.2.13
-pragma pragma-8.2.3.2
 pragma pragma-8.2.4.1
-pragma pragma-8.2.4.2
 pragma pragma-8.2.4.3
-pragma pragma-8.2.8
 
 # ── shared ──
 # Connections to the same file don't share a pager cache: each gets its own
@@ -1177,14 +1173,6 @@ altercol altercol-11.1      # sqlite_schema row order (multiset equal)
 altercons altercons-3.7.2   # trailing space in rewritten DDL after DROP COLUMN
 altercons altercons-3.8.2   # trailing space in rewritten DDL after DROP COLUMN
 altercons altercons-6.4.1   # DDL normalizes "CHECK (" to "CHECK("
-
-# index5 — index5-1.3 records the on-disk page WRITE ORDER during CREATE INDEX
-# via a custom test VFS (forward/backward/non-contiguous page offsets) and
-# asserts a mostly-sequential pattern. DoltLite's chunk store writes
-# content-addressed chunks, not sequential btree pages, so the write-offset
-# pattern does not apply. Raw storage-layout divergence; the index is built
-# correctly (index5-1.2 passes).
-index5 index5-1.3  # page write-order via test VFS; chunk store is not page-sequential
 
 # limit2 — limit2-110.3 compares sqlite_search_count between an indexed and an
 # unindexed ORDER BY ... LIMIT, asserting the indexed plan scans <2% as many
@@ -5008,6 +4996,11 @@ avtrans avtrans-9.34.5-21225  # sqlite_fullsync_count stays 0 (chunk-store sync 
 avtrans avtrans-9.36.5-25685  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 avtrans avtrans-9.38.5-30883  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 
+# corrupt8 pokes stock pointer-map page bytes by offset. DoltLite's chunk-store
+# file does not use SQLite pointer-map pages, so the raw write is not a valid
+# corruption of DoltLite's logical b-tree.
+corrupt8 corrupt8-2.1024.6
+
 # corruptB pokes stock b-tree page structures by offset. On a chunk-store
 # file the offsets read back garbage: .1 steps that compute child-page
 # offsets from in-file values die with tcl "integer value too large to
@@ -5015,10 +5008,16 @@ avtrans avtrans-9.38.5-30883  # sqlite_fullsync_count stays 0 (chunk-store sync 
 # differently ("no such table: t1" instead of "malformed", 1.3.2/2.1.2),
 # or never land at all so the read returns the intact row (1.9.2).
 corruptB corruptB-1.3.2
+corruptB corruptB-1.6.2
+corruptB corruptB-1.7.2
 corruptB corruptB-1.8.1
+corruptB corruptB-1.8.2
 corruptB corruptB-1.9.1
 corruptB corruptB-1.9.2
+corruptB corruptB-2.1.1
 corruptB corruptB-2.1.2
+corruptB corruptB-3.1.1
+corruptB corruptB-3.1.2
 
 # createtab: raw-format file-size compare; the doltlite chunk file is not
 # sized in 1024-byte pages and does not grow with auto_vacuum pointer-map

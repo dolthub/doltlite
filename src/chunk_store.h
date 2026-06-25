@@ -117,7 +117,10 @@
 
 #define CATALOG_FORMAT_V3       0x44
 #define CATALOG_FORMAT_V4       0x45
+#define CATALOG_FORMAT_V5       0x46
 #define CAT_HEADER_SIZE_V3      5
+#define CAT_HEADER_META_SIZE_V5 8
+#define CAT_HEADER_SIZE_V5      (CAT_HEADER_SIZE_V3 + CAT_HEADER_META_SIZE_V5)
 #define CAT_ENTRY_ITABLE_SIZE   4
 #define CAT_ENTRY_FLAGS_SIZE    1
 #define CAT_ENTRY_FIXED_SIZE_V3 (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2)
@@ -128,13 +131,17 @@ static SQLITE_INLINE int catalogParseHeaderEx(
 ){
   const u8 *q;
   if( nData < CAT_HEADER_SIZE_V3 ) return 0;
-  if( data[0] != CATALOG_FORMAT_V3 && data[0] != CATALOG_FORMAT_V4 ){
+  if( data[0] != CATALOG_FORMAT_V3
+   && data[0] != CATALOG_FORMAT_V4
+   && data[0] != CATALOG_FORMAT_V5 ){
     return 0;
   }
+  if( data[0]==CATALOG_FORMAT_V5 && nData < CAT_HEADER_SIZE_V5 ) return 0;
   if( pVersion ) *pVersion = data[0];
   q = data + CAT_HEADER_SIZE_V3 - 4;
   *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
-  *ppEntries = data + CAT_HEADER_SIZE_V3;
+  *ppEntries = data + (data[0]==CATALOG_FORMAT_V5 ?
+                       CAT_HEADER_SIZE_V5 : CAT_HEADER_SIZE_V3);
   return 1;
 }
 

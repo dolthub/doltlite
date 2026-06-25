@@ -70,6 +70,17 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
 );
 int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 
+static u32 getU32LE(const u8 *p){
+  return ((u32)p[0]) | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
+}
+
+static void putU32LE(u8 *p, u32 v){
+  p[0] = (u8)v;
+  p[1] = (u8)(v>>8);
+  p[2] = (u8)(v>>16);
+  p[3] = (u8)(v>>24);
+}
+
 #ifndef TRANS_NONE
 #define TRANS_NONE  0
 #define TRANS_READ  1
@@ -2005,7 +2016,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   u8 **ppOut,
   int *pnOut
 ){
-  int sz = CAT_HEADER_SIZE_V3;
+  int sz = CAT_HEADER_SIZE_V5;
   u8 *buf, *q;
   sqlite3 *db;
   SchemaCatalogRow *aRows = 0;
@@ -2220,9 +2231,13 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   }
   q = buf;
 
-  *q++ = CATALOG_FORMAT_V4;
+  *q++ = CATALOG_FORMAT_V5;
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
+  q += 4;
+  putU32LE(q, pBtree->aMeta[BTREE_USER_VERSION]);
+  q += 4;
+  putU32LE(q, pBtree->aMeta[BTREE_APPLICATION_ID]);
   q += 4;
 
   for(i=0; i<nTables; i++){
@@ -2308,6 +2323,12 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
     sqlite3_free(buf);
     return SQLITE_NOTFOUND;
   }
+  if( iFormat!=CATALOG_FORMAT_V5 ){
+    sqlite3_free(buf);
+    return SQLITE_NOTFOUND;
+  }
+  putU32LE(buf + CAT_HEADER_SIZE_V3, pBtree->aMeta[BTREE_USER_VERSION]);
+  putU32LE(buf + CAT_HEADER_SIZE_V3 + 4, pBtree->aMeta[BTREE_APPLICATION_ID]);
 
   q = buf + (pEntries - (const u8*)buf);
   for(i=0; i<nTables; i++){
@@ -2336,7 +2357,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
     q += PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
     nPatched++;
 
-    if( iFormat==CATALOG_FORMAT_V4 ){
+    if( iFormat!=CATALOG_FORMAT_V3 ){
       int nType, nName, nTbl;
       if( q + 6 > buf + nData ){
         sqlite3_free(buf);
@@ -2535,18 +2556,25 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   memset(aMetaNew, 0, sizeof(aMetaNew));
   aMetaNew[BTREE_FILE_FORMAT] = 4;
   aMetaNew[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
-  /* Session-scoped meta is not stored in the catalog; a reload must not
-  ** zero it (user_version was lost on any commit that reloaded the
-  ** catalog). */
+  /* Keep session-scoped meta across in-connection catalog reloads. V5
+  ** catalogs persist user-visible header meta so new connections see it too. */
   aMetaNew[BTREE_DEFAULT_CACHE_SIZE] = pBtree->aMeta[BTREE_DEFAULT_CACHE_SIZE];
   aMetaNew[BTREE_USER_VERSION] = pBtree->aMeta[BTREE_USER_VERSION];
   aMetaNew[BTREE_INCR_VACUUM] = pBtree->aMeta[BTREE_INCR_VACUUM];
   aMetaNew[BTREE_APPLICATION_ID] = pBtree->aMeta[BTREE_APPLICATION_ID];
+  if( iFormat==CATALOG_FORMAT_V5 ){
+    aMetaNew[BTREE_USER_VERSION] = getU32LE(data + CAT_HEADER_SIZE_V3);
+    aMetaNew[BTREE_APPLICATION_ID] = getU32LE(data + CAT_HEADER_SIZE_V3 + 4);
+  }
 
   {
     ProllyHash h;
     u32 schemaHash;
-    prollyHashCompute(data, nData, &h);
+    if( iFormat==CATALOG_FORMAT_V5 ){
+      prollyHashCompute(q, (int)(nData - (q - data)), &h);
+    }else{
+      prollyHashCompute(data, nData, &h);
+    }
     schemaHash = ((u32)h.data[0])
                | ((u32)h.data[1] << 8)
                | ((u32)h.data[2] << 16)
@@ -2575,7 +2603,7 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     q += PROLLY_HASH_SIZE;
     memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
-    if( iFormat==CATALOG_FORMAT_V4 ){
+    if( iFormat!=CATALOG_FORMAT_V3 ){
       int nType, nName, nTbl;
       const u8 *pType, *pName, *pTbl;
       if( q+6 > data+nData ){
@@ -5846,7 +5874,7 @@ static int restoreFromCommitted(Btree *p){
           q += PROLLY_HASH_SIZE;
           memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
           q += PROLLY_HASH_SIZE;
-          if( iFormat==CATALOG_FORMAT_V4 ){
+          if( iFormat!=CATALOG_FORMAT_V3 ){
             int nType, nName, nTbl;
             if( q + 6 > p->pCatalogCache + p->nCatalogCache ){
               rc = SQLITE_CORRUPT;
@@ -10249,7 +10277,7 @@ int doltliteLoadTableRootByName(
     memcpy(schemaHash.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
 
-    if( iFormat==CATALOG_FORMAT_V4 ){
+    if( iFormat!=CATALOG_FORMAT_V3 ){
       int nType, nName, nTbl;
       const u8 *pType;
       const u8 *pName;
@@ -10366,7 +10394,7 @@ int doltliteLoadTableRootById(
     memcpy(schemaHash.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
 
-    if( iFormat==CATALOG_FORMAT_V4 ){
+    if( iFormat!=CATALOG_FORMAT_V3 ){
       int nType, nName, nTbl;
       if( q+6 > data+nData ){
         sqlite3_free(data);

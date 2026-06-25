@@ -111,7 +111,7 @@ static int enumerateCatalogChildren(
     ProllyHash tableRoot;
     const u8 *pEnd = data + nData;
 
-    if( p + (iFormat==CATALOG_FORMAT_V4 ? CAT_ENTRY_FIXED_SIZE_V4 : CAT_ENTRY_FIXED_SIZE_V3) > pEnd ){
+    if( p + (iFormat!=CATALOG_FORMAT_V3 ? CAT_ENTRY_FIXED_SIZE_V4 : CAT_ENTRY_FIXED_SIZE_V3) > pEnd ){
       return SQLITE_CORRUPT;
     }
 
@@ -123,7 +123,7 @@ static int enumerateCatalogChildren(
 
     p += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
        + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
-    if( iFormat==CATALOG_FORMAT_V4 ){
+    if( iFormat!=CATALOG_FORMAT_V3 ){
       int nType, nName, nTbl;
       if( p + 6 > pEnd ) return SQLITE_CORRUPT;
       nType = p[0] | (p[1]<<8); p += 2;
