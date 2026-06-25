@@ -67,6 +67,7 @@ doltlite_pragma_encoding.sh
 doltlite_pragma_journal_mode.sh
 doltlite_pragma_memory_journal_mode.sh
 doltlite_pragma_page_count.sh
+doltlite_pragma_user_version.sh
 doltlite_pragma_wal_checkpoint.sh
 doltlite_merge_ignore_corners.sh
 doltlite_record_format.sh
@@ -121,6 +122,7 @@ doltlite_pragma_auto_vacuum.sh
 doltlite_pragma_journal_mode.sh
 doltlite_pragma_memory_journal_mode.sh
 doltlite_pragma_page_count.sh
+doltlite_pragma_user_version.sh
 doltlite_pragma_wal_checkpoint.sh
 doltlite_row_count_estimate.sh
 doltlite_schema_cookie.sh
