@@ -958,3 +958,44 @@ jobs:
 
         git tag "${VERSION}"
         git push origin "${VERSION}"
+
+  # ── Tag the Android binding ──────────────────────────────
+  # dolthub/doltlite-android builds the per-ABI libdoltlite.so (NDK), assembles
+  # the AAR, and publishes to Maven Central in its own workflow on tag push --
+  # the same self-publishing model as doltlite-python. Here we just tag it with
+  # the matching version, like the other bindings. Post-release, non-blocking.
+  release-android:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+    - name: Check release bot token
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to tag doltlite-android"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - name: Tag doltlite-android
+      run: |
+        set -euo pipefail
+        if gh api "repos/dolthub/doltlite-android/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-android ${VERSION} already exists; skipping"
+          exit 0
+        fi
+        gh repo clone dolthub/doltlite-android doltlite-android
+        cd doltlite-android
+        git checkout main
+        git pull --ff-only origin main
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
