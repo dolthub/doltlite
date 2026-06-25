@@ -8866,6 +8866,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       }
     } else {
       if( pCur->nSeekSortKey>0
+       && pCur->nSeekKeyField==0
        && ((flags & BTREE_AUXDELETE) || cachedSeekKeyMatchesCurrent(pCur)) ){
         pSavedDelKey = pCur->pSeekSortKey;
         nSavedDelKey = pCur->nSeekSortKey;
