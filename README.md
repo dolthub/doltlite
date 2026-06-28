@@ -143,6 +143,9 @@ to get version control. The build produces `libdoltlite.a` (static) and
 `libdoltlite.dylib`/`.so` (shared) with the full prolly tree engine and all
 Dolt functions included.
 
+Loadable-extension authors use `doltliteext.h` (the rebranded `sqlite3ext.h`,
+shipped in the amalgamation zip alongside `doltlite.c`/`doltlite.h`).
+
 ```bash
 cd build
 ../configure
