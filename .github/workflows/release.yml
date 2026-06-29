@@ -73,6 +73,11 @@ jobs:
         mkdir doltlite-amalgamation-${VERSION}
         cp sqlite3.c doltlite-amalgamation-${VERSION}/doltlite.c
         cp sqlite3.h doltlite-amalgamation-${VERSION}/doltlite.h
+        # Ship the extension header too, renamed and re-pointed at doltlite.h so
+        # extension authors get a self-contained header matching the amalgamation
+        # instead of having to source the right sqlite3ext.h separately.
+        sed 's/#include "sqlite3.h"/#include "doltlite.h"/' sqlite3ext.h \
+          > doltlite-amalgamation-${VERSION}/doltliteext.h
         zip -r doltlite-amalgamation-${VERSION}.zip doltlite-amalgamation-${VERSION}/
 
     - name: Package autoconf source
