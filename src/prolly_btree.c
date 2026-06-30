@@ -8424,12 +8424,39 @@ u32 sqlite3BtreePayloadSize(BtCursor *pCur){
   return pCur->pCurOps->xPayloadSize(pCur);
 }
 
+static int copyZeroTailPayload(
+  ProllyMutMapEntry *e,
+  u32 offset,
+  u32 amt,
+  void *pBuf
+){
+  i64 nTotal = (i64)e->nVal + e->nZeroTail;
+  if( (i64)offset + (i64)amt > nTotal ){
+    return SQLITE_CORRUPT_BKPT;
+  }
+  if( amt>0 ){
+    u32 nPrefix = offset < (u32)e->nVal ? (u32)e->nVal - offset : 0;
+    if( nPrefix>amt ) nPrefix = amt;
+    if( nPrefix>0 ) memcpy(pBuf, e->pVal + offset, nPrefix);
+    if( nPrefix<amt ) memset((u8*)pBuf + nPrefix, 0, amt - nPrefix);
+  }
+  return SQLITE_OK;
+}
+
 static int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   const u8 *pData;
   int nData;
   int rc;
 
   assert( pCur->eState==CURSOR_VALID );
+  if( pCur->curIntKey
+   && pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( e && e->nZeroTail>0 ){
+      return copyZeroTailPayload(e, offset, amt, pBuf);
+    }
+  }
   rc = getCursorPayload(pCur, &pData, &nData);
   if( rc!=SQLITE_OK ){
     return rc;
@@ -8455,6 +8482,15 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     if( pAmt ) *pAmt = (u32)pCur->nCachedPayload;
     return (const void*)pCur->pCachedPayload;
+  }
+  if( pCur->curIntKey
+   && pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( e && e->nZeroTail>0 && e->nVal>0 ){
+      if( pAmt ) *pAmt = (u32)e->nVal;
+      return (const void*)e->pVal;
+    }
   }
   if( getCursorPayload(pCur, &pData, &nData)!=SQLITE_OK ){
     if( pAmt ) *pAmt = 0;
@@ -9676,6 +9712,15 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
 
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_ABORT;
+  }
+
+  if( pCur->curIntKey
+   && pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( e && e->nZeroTail>0 ){
+      return copyZeroTailPayload(e, offset, amt, pBuf);
+    }
   }
 
   rc = getCursorPayload(pCur, &pVal, &nVal);

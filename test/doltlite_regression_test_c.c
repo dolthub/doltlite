@@ -7630,6 +7630,8 @@ static void run_incrblob_chunked_and_multihandle(void){
   sqlite3 *db = 0;
   sqlite3_blob *h1 = 0, *h2 = 0;
   char buf[8];
+  int bigBlobSize = 10 * 1024 * 1024;
+  int memoryCeiling = 5 * 1024 * 1024;
   int rc;
 
   printf("=== Incrblob Chunked Record And Multi-Handle Test ===\n\n");
@@ -7694,6 +7696,25 @@ static void run_incrblob_chunked_and_multihandle(void){
       strcmp(queryScalarText(db,
         "SELECT CAST(substr(v,8,6) AS TEXT) || '/' || length(v) FROM t WHERE k=4"),
         "HELLO!/20")==0);
+
+  check("incrblob_large_pending_setup", execSql(db,
+      "BEGIN; INSERT INTO t VALUES(6, zeroblob(10 * 1024 * 1024));"
+      )==SQLITE_OK);
+  sqlite3_memory_highwater(1);
+  check("incrblob_large_pending_open",
+      sqlite3_blob_open(db, "main", "t", "v", 6, 0, &h1)==SQLITE_OK);
+  check("incrblob_large_pending_open_memory",
+      sqlite3_memory_highwater(0) < memoryCeiling);
+  memset(buf, 1, 4);
+  check("incrblob_large_pending_tail_read",
+      h1 && sqlite3_blob_read(h1, buf, 4, bigBlobSize - 4)==SQLITE_OK);
+  check("incrblob_large_pending_tail_zero",
+      buf[0]==0 && buf[1]==0 && buf[2]==0 && buf[3]==0);
+  check("incrblob_large_pending_read_memory",
+      sqlite3_memory_highwater(0) < memoryCeiling);
+  if( h1 ) sqlite3_blob_close(h1);
+  h1 = 0;
+  check("incrblob_large_pending_rollback", execSql(db, "ROLLBACK;")==SQLITE_OK);
 
   sqlite3_close(db);
   removeDbFiles(dbpath);
