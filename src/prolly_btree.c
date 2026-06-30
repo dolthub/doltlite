@@ -8053,6 +8053,7 @@ static int prollyBtCursorIndexMoveto(
         if( mutFromCursorMap ){
           setCursorToMutMapEntryPhys(
               pCur, (int)(mutE - pCur->pMutMap->aEntries));
+          pCur->deferredTreeSeek = 1;
         }else{
           rc = cacheCursorPayloadCopy(pCur, mutKey, mutNKey);
           if( rc!=SQLITE_OK ){

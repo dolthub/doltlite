@@ -239,6 +239,45 @@ run_test "mixed_10k_2prefix" \
   "SELECT count(*) FROM mixed WHERE tag='tag-5' AND seq=500;" \
   "1" "$DB7"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+DB8=/tmp/test_idx8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE block_groups (
+  id BLOB PRIMARY KEY NOT NULL,
+  collection_name TEXT NOT NULL,
+  sample_name TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_on INTEGER NOT NULL,
+  parent_block_group_id BLOB,
+  is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1))
+) STRICT;
+CREATE UNIQUE INDEX block_group_uidx
+ON block_groups(collection_name, sample_name, name,
+  IFNULL(hex(parent_block_group_id), ''));
+INSERT INTO block_groups VALUES (
+  X'1111111100000000000000000000000000000000000000000000000000000001',
+  'simple', 'simple', 'm123', 1000, NULL, 1
+);
+SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test "txn_composite_prefix_seek_excludes_stale_tree_row" \
+  "BEGIN;
+INSERT INTO block_groups VALUES (
+  X'6666666600000000000000000000000000000000000000000000000000000001',
+  'simple', 'unknown', 'm123', 1001,
+  X'1111111100000000000000000000000000000000000000000000000000000001',
+  1
+);
+SELECT count(*) FROM block_groups
+ WHERE collection_name='simple'
+   AND sample_name='unknown'
+   AND name='m123';
+SELECT sample_name FROM block_groups
+ WHERE collection_name='simple'
+   AND sample_name='unknown'
+   AND name='m123';
+END;" \
+  "1
+unknown" "$DB8"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 
 dltest_finish

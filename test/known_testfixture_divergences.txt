@@ -4286,7 +4286,6 @@ fts4langid fts4langid-3.3.4.7
 # in-transaction langid UPDATE then integrity-check: false malformed
 # report (same stale shadow-read family)
 fts4langid fts4langid-6.1
-fts4langid fts4langid-6.2
 
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements corrupt automerge bookkeeping): automerge after a multi-row
