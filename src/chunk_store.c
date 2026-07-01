@@ -613,6 +613,7 @@ int chunkStoreClose(ChunkStore *cs){
   sqlite3_free(cs->staging.aPending);
   sqlite3_free(cs->staging.aPendingZeroTail);
   sqlite3_free(cs->staging.aRecent);
+  sqlite3_free(cs->staging.aRecentZeroTail);
   csPendHTClear(cs);
   csRecentHTClear(cs);
   sqlite3_free(cs->staging.pWriteBuf);
@@ -1200,6 +1201,66 @@ int chunkStoreGet(
   return SQLITE_OK;
 }
 
+int chunkStoreGetSparse(
+  ChunkStore *cs,
+  const ProllyHash *hash,
+  u8 **ppData,
+  int *pnData,
+  int *pnDataPhys
+){
+  int idx;
+  int rc;
+
+  *ppData = 0;
+  *pnData = 0;
+  *pnDataPhys = 0;
+
+  if( cs->corruptMidStream ) return SQLITE_CORRUPT;
+
+  rc = csSearchRecent(cs, hash, &idx);
+  if( rc!=SQLITE_OK ) return rc;
+  if( idx>=0 && cs->staging.aRecentZeroTail
+   && cs->staging.aRecentZeroTail[idx]>0 ){
+    ChunkIndexEntry *e = &cs->staging.aRecent[idx];
+    i64 zeroTail = cs->staging.aRecentZeroTail[idx];
+    int nPhys;
+    u8 *pBuf;
+    u32 storedLen;
+
+    if( zeroTail<0 || zeroTail>(i64)e->size ) return SQLITE_CORRUPT;
+    nPhys = e->size - (int)zeroTail;
+    pBuf = (u8*)sqlite3_malloc(nPhys + 4);
+    if( !pBuf ) return SQLITE_NOMEM;
+    rc = sqlite3OsRead(cs->file.pFile, pBuf, nPhys + 4, e->offset);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pBuf);
+      return rc;
+    }
+    storedLen = CS_READ_U32(pBuf);
+    if( (int)storedLen != e->size ){
+      sqlite3_free(pBuf);
+      return SQLITE_CORRUPT;
+    }
+    memmove(pBuf, pBuf + 4, nPhys);
+    {
+      ProllyHash h;
+      prollyHashComputeZeroTail(pBuf, nPhys, zeroTail, &h);
+      if( memcmp(&h, hash, sizeof(ProllyHash))!=0 ){
+        sqlite3_free(pBuf);
+        return SQLITE_CORRUPT;
+      }
+    }
+    *ppData = pBuf;
+    *pnData = e->size;
+    *pnDataPhys = nPhys;
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreGet(cs, hash, ppData, pnData);
+  if( rc==SQLITE_OK ) *pnDataPhys = *pnData;
+  return rc;
+}
+
 static void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size){
   p[0] = CS_WAL_TAG_CHUNK;
   memcpy(p + CS_WAL_CHUNK_HASH_OFF, pHash, PROLLY_HASH_SIZE);
@@ -1264,6 +1325,8 @@ static int csDrainPendingToWal(ChunkStore *cs){
 
     *pr = *pe;
     pr->offset = writeOff + CS_WAL_CHUNK_LEN_OFF;
+    cs->staging.aRecentZeroTail[cs->staging.nRecent+i] =
+      cs->staging.aPendingZeroTail[i];
 
     csFillChunkHdr(recHdr, &pe->hash, (u32)pe->size);
 
@@ -1768,6 +1831,10 @@ commit_done:
     if( useRecent ){
       memcpy(cs->staging.aRecent + cs->staging.nRecent, aCommittedPending,
              cs->staging.nPending * sizeof(ChunkIndexEntry));
+      for( i=0; i<cs->staging.nPending; i++ ){
+        cs->staging.aRecentZeroTail[cs->staging.nRecent+i] =
+          cs->staging.aPendingZeroTail[i];
+      }
       cs->staging.nRecent += cs->staging.nPending;
       sqlite3_free(aMerged);
     }else{
@@ -1777,6 +1844,10 @@ commit_done:
       cs->index.aIndexMmapBase = 0;
       cs->index.aIndexMmapSize = 0;
       cs->staging.nRecent = 0;
+      if( cs->staging.aRecentZeroTail ){
+        memset(cs->staging.aRecentZeroTail, 0,
+               cs->staging.nRecentAlloc * sizeof(i64));
+      }
       csRecentHTClear(cs);
     }
   }else{

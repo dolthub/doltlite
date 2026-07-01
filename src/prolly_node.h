@@ -31,6 +31,7 @@ typedef struct ProllyNode ProllyNode;
 struct ProllyNode {
   const u8 *pData;
   int nData;
+  int nDataPhys;
   u8 level;
   u16 nItems;
   u8 flags;
@@ -42,10 +43,14 @@ struct ProllyNode {
 };
 
 int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData);
+int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
+                          int nDataPhys);
 
 void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey);
 
 void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVal);
+void prollyNodeValueSpan(const ProllyNode *pNode, int i, const u8 **ppVal,
+                         int *pnVal, int *pnAvail);
 
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i);
 

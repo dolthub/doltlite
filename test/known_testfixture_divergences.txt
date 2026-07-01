@@ -4317,16 +4317,11 @@ fts4onepass fts4onepass-3.2.5.c
 # another connection holds an open write txn succeeds where stock
 # errors (5.5), and PRAGMA read_uncommitted cannot expose another
 # connection's uncommitted row (5.6: "no such rowid: 4", which leaves
-# $blob stale so 5.8's close cascades). 7.2/7.4 are sparse-zeroblob
-# performance gaps: pending rows keep zero tails symbolic, but once the
-# leaf chunk is committed, sqlite3_blob_open/read loads the dense chunk
-# through the normal node cache.
+# $blob stale so 5.8's close cascades).
 incrblob2 incrblob2-5.3  # db-level lock message, not table-level
 incrblob2 incrblob2-5.5  # readonly blob open succeeds; no shared-cache table lock
 incrblob2 incrblob2-5.6  # no dirty read of other connection's uncommitted row
 incrblob2 incrblob2-5.8  # cascade from 5.6: stale $blob channel
-incrblob2 incrblob2-7.2  # committed 10MB zeroblob chunk materialized on open, highwater >5MB
-incrblob2 incrblob2-7.4  # committed 10MB zeroblob chunk materialized on read, highwater >5MB
 
 # ── index3 ──
 # PRIMARY KEY('a') becomes the clustered prolly storage key, so no

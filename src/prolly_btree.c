@@ -566,6 +566,41 @@ static SQLITE_INLINE void cursorCurrentTreeValue(
   *pnData = (int)(off1 - off0);
 }
 
+static SQLITE_INLINE void cursorCurrentTreeValueSpan(
+  BtCursor *pCur,
+  const u8 **ppData,
+  int *pnData,
+  int *pnAvail
+){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  ProllyNode *pNode = &pLeaf->node;
+  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  prollyNodeValueSpan(pNode, i, ppData, pnData, pnAvail);
+}
+
+static int cursorCurrentTreeValueCopy(
+  BtCursor *pCur,
+  u32 offset,
+  u32 amt,
+  void *pBuf
+){
+  const u8 *pData;
+  int nData;
+  int nAvail;
+  cursorCurrentTreeValueSpan(pCur, &pData, &nData, &nAvail);
+  if( (i64)offset + (i64)amt > (i64)nData ){
+    return SQLITE_CORRUPT_BKPT;
+  }
+  if( amt>0 ){
+    u32 nPrefix = offset < (u32)nAvail ? (u32)nAvail - offset : 0;
+    if( nPrefix>amt ) nPrefix = amt;
+    if( nPrefix>0 ) memcpy(pBuf, pData + offset, nPrefix);
+    if( nPrefix<amt ) memset((u8*)pBuf + nPrefix, 0, amt - nPrefix);
+  }
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
   ProllyCursor *pProllyCur = &pCur->pCur;
   ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
@@ -6644,6 +6679,7 @@ static int prollyBtreeCursor(
 
   prollyCursorInit(&pCur->pCur, &pBt->store, &pBt->cache,
                     &pTE->root, pTE->flags);
+  prollyCursorAllowSparse(&pCur->pCur, 1);
 
   pCur->pNext = pBt->pCursor;
   pBt->pCursor = pCur;
@@ -8413,6 +8449,15 @@ static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
       return (u32)((i64)e->nVal + e->nZeroTail);
     }
   }
+  if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    const u8 *pVal;
+    int nVal;
+    int nAvail;
+    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nAvail<nVal ){
+      return (u32)nVal;
+    }
+  }
   if( getCursorPayload(pCur, &pData, &nData)!=SQLITE_OK ){
     return 0;
   }
@@ -8458,6 +8503,15 @@ static int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
       return copyZeroTailPayload(e, offset, amt, pBuf);
     }
   }
+  if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    const u8 *pVal;
+    int nVal;
+    int nAvail;
+    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nAvail<nVal ){
+      return cursorCurrentTreeValueCopy(pCur, offset, amt, pBuf);
+    }
+  }
   rc = getCursorPayload(pCur, &pData, &nData);
   if( rc!=SQLITE_OK ){
     return rc;
@@ -8491,6 +8545,15 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
     if( e && e->nZeroTail>0 && e->nVal>0 ){
       if( pAmt ) *pAmt = (u32)e->nVal;
       return (const void*)e->pVal;
+    }
+  }
+  if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    int nLogical;
+    int nAvail;
+    cursorCurrentTreeValueSpan(pCur, &pData, &nLogical, &nAvail);
+    if( nAvail<nLogical ){
+      if( pAmt ) *pAmt = (u32)nAvail;
+      return (const void*)pData;
     }
   }
   if( getCursorPayload(pCur, &pData, &nData)!=SQLITE_OK ){
@@ -8722,6 +8785,7 @@ static int prollyBtCursorInsert(
       prollyCursorClose(&pCur->pCur);
       prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                        &pTE2->root, pTE2->flags);
+      prollyCursorAllowSparse(&pCur->pCur, 1);
     }
   }
   if( pCur->curIntKey ){
@@ -8788,6 +8852,7 @@ static int flushIfNeeded(BtCursor *pCur){
     prollyCursorClose(&pCur->pCur);
     prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                      &pTE->root, pTE->flags);
+    prollyCursorAllowSparse(&pCur->pCur, 1);
   }
   /* The flush emptied the map; a saved cursor restoring with a stale
   ** mmActive/mmIdx would consult it at a dead index. */
@@ -8844,6 +8909,7 @@ static int btreeDeleteImmediate(BtCursor *pCur){
       prollyCursorClose(&pCur->pCur);
       prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                        &pTE2->root, pTE2->flags);
+      prollyCursorAllowSparse(&pCur->pCur, 1);
     }
   }
 
@@ -9721,6 +9787,16 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
     ProllyMutMapEntry *e = currentMutMapEntry(pCur);
     if( e && e->nZeroTail>0 ){
       return copyZeroTailPayload(e, offset, amt, pBuf);
+    }
+  }
+
+  if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    const u8 *pVal;
+    int nVal;
+    int nAvail;
+    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nAvail<nVal ){
+      return cursorCurrentTreeValueCopy(pCur, offset, amt, pBuf);
     }
   }
 

@@ -24,6 +24,42 @@ int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
   return SQLITE_OK;
 }
 
+static int prollyLoadNodeMaybeSparse(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyHash *pHash,
+  int bAllowSparse,
+  ProllyCacheEntry **ppEntry
+){
+  ProllyCacheEntry *pEntry;
+  u8 *pData = 0;
+  int nData = 0;
+  int nDataPhys = 0;
+  int rc;
+
+  if( !bAllowSparse ){
+    return prollyLoadNode(pStore, pCache, pHash, ppEntry);
+  }
+
+  *ppEntry = 0;
+  pEntry = prollyCacheGet(pCache, pHash);
+  if( pEntry ){
+    *ppEntry = pEntry;
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreGetSparse(pStore, pHash, &pData, &nData, &nDataPhys);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nDataPhys==nData ){
+    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
+  }else{
+    pEntry = prollyCachePutTransientOwned(pHash, pData, nData, nDataPhys, &rc);
+  }
+  if( !pEntry ) return rc;
+  *ppEntry = pEntry;
+  return SQLITE_OK;
+}
+
 int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
                        const ProllyHash *pHash, u64 *pCount){
   ProllyCacheEntry *pEntry = 0;
@@ -61,7 +97,8 @@ int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
 
 static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
                     ProllyCacheEntry **ppEntry){
-  return prollyLoadNode(cur->pStore, cur->pCache, hash, ppEntry);
+  return prollyLoadNodeMaybeSparse(
+      cur->pStore, cur->pCache, hash, cur->bAllowSparse, ppEntry);
 }
 
 static int initCursorAtRoot(ProllyCursor *cur, ProllyCacheEntry **ppRoot){
@@ -180,6 +217,10 @@ void prollyCursorInit(ProllyCursor *cur, ChunkStore *pStore,
   memcpy(&cur->root, pRoot, sizeof(ProllyHash));
   cur->flags = flags;
   cur->eState = PROLLY_CURSOR_INVALID;
+}
+
+void prollyCursorAllowSparse(ProllyCursor *cur, int bAllowSparse){
+  cur->bAllowSparse = bAllowSparse ? 1 : 0;
 }
 
 int prollyCursorFirst(ProllyCursor *cur, int *pRes){
