@@ -57,6 +57,59 @@ static void seedBytes(unsigned char out[32]) {
   for (i = 0; i < 32; i++) out[i] = (unsigned char)i;
 }
 
+static void check_bool(const char *name, int cond) {
+  if (cond) {
+    printf("  PASS  %s\n", name);
+  } else {
+    failures++;
+    printf("  FAIL  %s\n", name);
+  }
+}
+
+/* Decode a base64url JWT segment [seg, seg+seglen) into a NUL-terminated
+** string (segments here are ASCII JSON or a raw signature). */
+static char *decodeSegZ(const char *seg, size_t seglen, size_t *outlen) {
+  char *z = (char *)malloc(seglen + 1);
+  unsigned char *raw = NULL;
+  size_t rawlen = 0;
+  char *s = NULL;
+  if (!z) return NULL;
+  memcpy(z, seg, seglen);
+  z[seglen] = '\0';
+  if (doltliteBase64UrlDecode(z, &raw, &rawlen) == 0) {
+    s = (char *)malloc(rawlen + 1);
+    if (s) {
+      memcpy(s, raw, rawlen);
+      s[rawlen] = '\0';
+      if (outlen) *outlen = rawlen;
+    }
+  }
+  free(z);
+  free(raw);
+  return s;
+}
+
+/* Golden bearer JWT for seed 00..1f, aud "doltremoteapi.dolthub.com", iat
+** 1700000000. ed25519 signatures are deterministic, so this is reproducible;
+** it has been validated with go-jose via ld's jwtauth (the DoltHub server
+** path), proving wire compatibility. */
+#define AUD "doltremoteapi.dolthub.com"
+static const char *GOLDEN_JWT =
+    "eyJhbGciOiJFZERTQSIsImtpZCI6IjdrdTFjZ2Q3dWprY3JpNXU0c21tcnNycGNwM2Vqc21n"
+    "Yzl0N28zZGtkYmFycyIsImRvbHRfdG9rZW5fdmVyc2lvbiI6IjIwMjMuMDEifQ.eyJpc3Mi"
+    "OiJkb2x0LWNsaWVudC5kb2x0aHViLmNvbSIsInN1YiI6ImRvbHRDbGllbnRDcmVkZW50aWFs"
+    "cy83a3UxY2dkN3Vqa2NyaTV1NHNtbXJzcnBjcDNlanNtZ2M5dDdvM2RrZGJhcnMiLCJhdWQi"
+    "OiJkb2x0cmVtb3RlYXBpLmRvbHRodWIuY29tIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3"
+    "MDAwMDAwMzB9.zYNXsaON_rblUat4NuSeDYNcCkkn5V5M28BVXgTybOs4lldxD_GUxRroTTeK"
+    "xlLebVONlBZxI6ukuhbW_1hvCg";
+static const char *EXP_HEADER =
+    "{\"alg\":\"EdDSA\",\"kid\":\"7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbars\","
+    "\"dolt_token_version\":\"2023.01\"}";
+static const char *EXP_CLAIMS =
+    "{\"iss\":\"dolt-client.dolthub.com\","
+    "\"sub\":\"doltClientCredentials/7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbars\","
+    "\"aud\":\"doltremoteapi.dolthub.com\",\"iat\":1700000000,\"exp\":1700000030}";
+
 int main(int argc, char **argv) {
   char hexbuf[256];
   unsigned char seed[32];
@@ -151,6 +204,43 @@ int main(int argc, char **argv) {
       free(k2);
     }
     free(json);
+  }
+
+  /* --- bearer JWT (deterministic; golden validated via ld jwtauth) --- */
+  {
+    char *jwt = NULL;
+    if (doltliteCredsBearerTokenAt(c, AUD, 1700000000L, &jwt) != 0 || !jwt) {
+      failures++;
+      printf("  FAIL  bearer token build\n");
+    } else {
+      const char *d1 = strchr(jwt, '.');
+      const char *d2 = d1 ? strchr(d1 + 1, '.') : NULL;
+      check_str("bearer JWT (golden)", jwt, GOLDEN_JWT);
+      if (!d1 || !d2) {
+        failures++;
+        printf("  FAIL  JWT has three segments\n");
+      } else {
+        char *hdr = decodeSegZ(jwt, (size_t)(d1 - jwt), NULL);
+        char *cls = decodeSegZ(d1 + 1, (size_t)(d2 - (d1 + 1)), NULL);
+        size_t siglen = 0;
+        char *sig = decodeSegZ(d2 + 1, strlen(d2 + 1), &siglen);
+        check_str("JWT header JSON", hdr, EXP_HEADER);
+        check_str("JWT claims JSON", cls, EXP_CLAIMS);
+        check_bool("JWT signature length 64", sig != NULL && siglen == 64);
+        if (sig && siglen == 64) {
+          /* signature covers "<header>.<claims>" == jwt[0 .. d2) */
+          check_bool("JWT signature verifies over signing input",
+                     ed25519_verify((const unsigned char *)sig,
+                                    (const unsigned char *)jwt,
+                                    (size_t)(d2 - jwt),
+                                    doltliteCredsPubKey(c)) == 1);
+        }
+        free(hdr);
+        free(cls);
+        free(sig);
+      }
+      free(jwt);
+    }
   }
 
   /* --- file store save/load (uses DOLTLITE_CREDS_DIR from the harness) --- */

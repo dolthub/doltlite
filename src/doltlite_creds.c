@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 struct DoltliteCreds {
@@ -139,8 +140,10 @@ int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen)
   uint32_t acc = 0;
   int nbits = 0;
 
-  if (inlen % 4 != 0) return 1;
-  cap = inlen / 4 * 3;
+  /* Accept both padded (JWK) and unpadded (JWS) base64url. A remainder of one
+  ** base64 char is never valid. */
+  if (inlen % 4 == 1) return 1;
+  cap = inlen / 4 * 3 + 3;
   buf = (unsigned char *)malloc(cap ? cap : 1);
   if (!buf) return 1;
 
@@ -231,6 +234,93 @@ char *doltliteCredsPubKeyB32(const DoltliteCreds *c) {
 void doltliteCredsSign(const DoltliteCreds *c, const unsigned char *msg,
                        size_t msglen, unsigned char sig[DOLTLITE_SIG_LEN]) {
   ed25519_sign(sig, msg, msglen, c->pub, c->expanded);
+}
+
+/* ------------------------------------------------------------------ */
+/* bearer JWT                                                          */
+/* ------------------------------------------------------------------ */
+
+#define JWT_ISSUER        "dolt-client.dolthub.com"
+#define JWT_SUBJECT_PREFIX "doltClientCredentials/"
+#define JWT_TOKEN_VERSION "2023.01"
+#define JWT_TTL_SECONDS   30
+
+/* base64url without padding, as required by JWS (RFC 7515). */
+static char *b64urlRaw(const unsigned char *in, size_t len) {
+  char *s = doltliteBase64UrlEncode(in, len);
+  size_t n;
+  if (!s) return NULL;
+  n = strlen(s);
+  while (n > 0 && s[n - 1] == '=') s[--n] = '\0';
+  return s;
+}
+
+int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
+                               long iat, char **jwtOut) {
+  char *kid = NULL, *header = NULL, *claims = NULL;
+  char *h64 = NULL, *c64 = NULL, *sig64 = NULL, *input = NULL, *token = NULL;
+  unsigned char sig[DOLTLITE_SIG_LEN];
+  int rc = 1;
+  size_t hn, cn, need;
+
+  kid = doltliteCredsKid(c);
+  if (!kid) goto done;
+
+  /* Header and claims. kid is base32 and audience is a hostname, so neither
+  ** needs JSON string escaping. */
+  hn = strlen(kid) + 96;
+  header = (char *)malloc(hn);
+  if (!header) goto done;
+  snprintf(header, hn,
+           "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"%s\"}",
+           kid, JWT_TOKEN_VERSION);
+
+  cn = strlen(kid) + strlen(audience) + 160;
+  claims = (char *)malloc(cn);
+  if (!claims) goto done;
+  snprintf(claims, cn,
+           "{\"iss\":\"%s\",\"sub\":\"%s%s\",\"aud\":\"%s\",\"iat\":%ld,\"exp\":%ld}",
+           JWT_ISSUER, JWT_SUBJECT_PREFIX, kid, audience, iat,
+           iat + JWT_TTL_SECONDS);
+
+  h64 = b64urlRaw((const unsigned char *)header, strlen(header));
+  c64 = b64urlRaw((const unsigned char *)claims, strlen(claims));
+  if (!h64 || !c64) goto done;
+
+  /* Signing input is "<b64url header>.<b64url claims>". */
+  need = strlen(h64) + 1 + strlen(c64) + 1;
+  input = (char *)malloc(need);
+  if (!input) goto done;
+  snprintf(input, need, "%s.%s", h64, c64);
+
+  doltliteCredsSign(c, (const unsigned char *)input, strlen(input), sig);
+  sig64 = b64urlRaw(sig, sizeof(sig));
+  if (!sig64) goto done;
+
+  need = strlen(input) + 1 + strlen(sig64) + 1;
+  token = (char *)malloc(need);
+  if (!token) goto done;
+  snprintf(token, need, "%s.%s", input, sig64);
+
+  *jwtOut = token;
+  token = NULL;
+  rc = 0;
+
+done:
+  free(kid);
+  free(header);
+  free(claims);
+  free(h64);
+  free(c64);
+  free(sig64);
+  free(input);
+  free(token);
+  return rc;
+}
+
+int doltliteCredsBearerToken(const DoltliteCreds *c, const char *audience,
+                             char **jwtOut) {
+  return doltliteCredsBearerTokenAt(c, audience, (long)time(NULL), jwtOut);
 }
 
 /* ------------------------------------------------------------------ */

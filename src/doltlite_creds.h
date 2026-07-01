@@ -69,6 +69,21 @@ char *doltliteCredsPubKeyB32(const DoltliteCreds *cred);
 void doltliteCredsSign(const DoltliteCreds *cred, const unsigned char *msg,
                        size_t msglen, unsigned char sig[DOLTLITE_SIG_LEN]);
 
+/* --- Bearer JWT (DoltHub-compatible) --- */
+
+/* Assemble a signed EdDSA JWT for the given audience (the remote-api host),
+** valid for ~30s from now. Header is {alg:EdDSA, kid, dolt_token_version:2023.01};
+** claims are {iss:dolt-client.dolthub.com, sub:doltClientCredentials/<kid>,
+** aud, iat, exp}. On success sets *jwtOut (malloc'd, caller frees) and returns 0.
+*/
+int doltliteCredsBearerToken(const DoltliteCreds *cred, const char *audience,
+                             char **jwtOut);
+
+/* As above but with an explicit issued-at time (Unix seconds); exp = iat + 30.
+** Deterministic — used by tests. */
+int doltliteCredsBearerTokenAt(const DoltliteCreds *cred, const char *audience,
+                               long iat, char **jwtOut);
+
 /* --- JWK persistence --- */
 
 /* Serialize to an OKP/Ed25519 JWK JSON object (stores the 32-byte seed as
