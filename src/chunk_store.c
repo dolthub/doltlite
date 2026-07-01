@@ -1217,6 +1217,28 @@ int chunkStoreGetSparse(
 
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
 
+  rc = csSearchPending(cs, hash, &idx);
+  if( rc!=SQLITE_OK ) return rc;
+  if( idx>=0 && cs->staging.aPendingZeroTail
+   && cs->staging.aPendingZeroTail[idx]>0 ){
+    ChunkIndexEntry *e = &cs->staging.aPending[idx];
+    i64 zeroTail = cs->staging.aPendingZeroTail[idx];
+    int nPhys;
+    u8 *pBuf;
+
+    if( zeroTail<0 || zeroTail>(i64)e->size ) return SQLITE_CORRUPT;
+    nPhys = e->size - (int)zeroTail;
+    pBuf = (u8*)sqlite3_malloc(nPhys>0 ? nPhys : 1);
+    if( !pBuf ) return SQLITE_NOMEM;
+    if( nPhys>0 ){
+      memcpy(pBuf, cs->staging.pWriteBuf + e->offset + 4, nPhys);
+    }
+    *ppData = pBuf;
+    *pnData = e->size;
+    *pnDataPhys = nPhys;
+    return SQLITE_OK;
+  }
+
   rc = csSearchRecent(cs, hash, &idx);
   if( rc!=SQLITE_OK ) return rc;
   if( idx>=0 && cs->staging.aRecentZeroTail

@@ -626,9 +626,9 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags);
 
 static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
-    const u8 *pVal; int nVal;
-    cursorCurrentTreeValue(pCur, &pVal, &nVal);
-    if( nVal > 0 ){
+    const u8 *pVal; int nVal; int nAvail;
+    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nVal > 0 && nAvail==nVal ){
       pCur->pCachedPayload = (u8*)pVal;
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
@@ -710,6 +710,8 @@ static int flushDeferredEdits(Btree *pBtree, BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
+static int prollyBtCursorTableMoveto(BtCursor *pCur, i64 intKey, int bias,
+                                     int *pRes);
 static int pushSavepoint(Btree *pBtree, int bStatement);
 static void btreeDiscardAllSavepoints(Btree *pBtree);
 static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
@@ -3329,7 +3331,7 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   refreshCursorRoot(pCur);
 
   if( pCur->curIntKey ){
-    rc = prollyCursorSeekInt(&pCur->pCur, pCur->nKey, &res);
+    rc = prollyBtCursorTableMoveto(pCur, pCur->nKey, 0, &res);
   } else {
     if( pCur->pKey && pCur->nKey>0 ){
       rc = prollyCursorSeekBlob(&pCur->pCur,
@@ -6773,7 +6775,12 @@ static int prollyBtCursorCursorHasMoved(BtCursor *pCur){
 **     never move and restore themselves in accessPayloadChecked. */
 int sqlite3BtreeIncrblobCursorReseek(BtCursor *pCur){
   if( pCur->pCurOps!=&prollyCursorOps ) return 0;
-  if( pCur->eState==CURSOR_VALID ) return 0;
+  if( pCur->eState==CURSOR_VALID ){
+    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+      return 1;
+    }
+    return 0;
+  }
   if( pCur->eState==CURSOR_FAULT ) return -1;
   return 1;
 }
@@ -8402,8 +8409,17 @@ static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }
 
   if( pCur->curIntKey ){
-    cursorCurrentTreeValue(pCur, ppData, pnData);
-    if( *pnData > 0 ){
+    int nAvail;
+    cursorCurrentTreeValueSpan(pCur, ppData, pnData, &nAvail);
+    if( nAvail<*pnData ){
+      int rc = cacheCursorPayloadZeroTail(pCur, *ppData, nAvail,
+                                          (i64)*pnData - nAvail);
+      if( rc!=SQLITE_OK ){
+        return cursorPayloadFault(pCur, rc, ppData, pnData);
+      }
+      *ppData = pCur->pCachedPayload;
+      *pnData = pCur->nCachedPayload;
+    }else if( *pnData > 0 ){
       pCur->pCachedPayload = (u8*)*ppData;
       pCur->nCachedPayload = *pnData;
       pCur->cachedPayloadOwned = 0;
@@ -9821,6 +9837,8 @@ static int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   const u8 *pVal;
   int nVal;
   u8 *pNew;
+  i64 savedIntKey = 0;
+  int hasSavedIntKey = 0;
   BtreePayload payload;
 
   if( pCur->eState!=CURSOR_VALID ){
@@ -9856,6 +9874,8 @@ static int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
     }else{
       payload.nKey = prollyCursorIntKey(&pCur->pCur);
     }
+    savedIntKey = payload.nKey;
+    hasSavedIntKey = 1;
     payload.pData = pNew;
     payload.nData = nVal;
   } else {
@@ -9870,6 +9890,16 @@ static int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
 
   rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
   sqlite3_free(pNew);
+  if( rc==SQLITE_OK && hasSavedIntKey ){
+    rc = flushMutMap(pCur);
+    if( rc==SQLITE_OK ){
+      pCur->nKey = savedIntKey;
+      pCur->pKey = 0;
+      pCur->cachedIntKey = savedIntKey;
+      pCur->curFlags |= BTCF_ValidNKey;
+      pCur->eState = CURSOR_REQUIRESEEK;
+    }
+  }
   return rc;
 }
 int sqlite3BtreePutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){

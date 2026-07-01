@@ -1672,7 +1672,6 @@ temptable2 temptable2-8.6  # sqlite3_backup_init: page-image backup unsupported 
 # Value semantics are correct (indexed/unindexed lookups, UNIQUE, BLOB
 # round-trip all match stock).
 zeroblob zeroblob-1.1.1  # sqlite3_max_blobsize allocation metric (zeroblob materialized)
-zeroblob zeroblob-1.1.2  # memory-highwater bound assumes lazy zeroblob
 
 # echo-vtab cluster — the echo test module (src/test8.c) reads its backing
 # table via "SELECT rowid, * FROM <real-table>". Any echo vtab over a table
