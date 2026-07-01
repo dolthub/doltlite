@@ -1,0 +1,90 @@
+/*
+** Live test for doltlite_tls: performs a real HTTPS GET with certificate +
+** hostname verification, and checks that verification is actually enforced by
+** pinning trust to an unrelated CA (which must cause the handshake to fail).
+**
+** Network-dependent; SKIPs cleanly when the host is unreachable. Run via
+** test/tls_test.sh.
+*/
+
+#include "doltlite_tls.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const char *testHost(void) {
+  const char *h = getenv("DOLTLITE_TLS_TEST_HOST");
+  return (h && *h) ? h : "dolthub.com";
+}
+
+int main(int argc, char **argv) {
+  const char *host = testHost();
+  const int port = 443;
+  int fails = 0;
+  DoltliteConn *probe, *c;
+
+  unsetenv("DOLTLITE_CA_FILE");
+
+  /* Reachability: a plain TCP connect. If this fails we're offline; skip. */
+  probe = doltliteConnOpen(host, port, 0);
+  if (!probe) {
+    printf("SKIP  cannot reach %s:%d (offline?)\n", host, port);
+    return 0;
+  }
+  doltliteConnClose(probe);
+
+  /* Positive: TLS handshake + chain/hostname verification against system roots. */
+  c = doltliteConnOpen(host, port, 1);
+  if (!c) {
+    printf("FAIL  TLS connect+verify to %s failed\n", host);
+    return 1;
+  } else {
+    char req[256];
+    int n = snprintf(req, sizeof(req),
+                     "GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                     host);
+    if (doltliteConnWriteAll(c, req, n) != 0) {
+      printf("FAIL  TLS write\n");
+      fails++;
+    } else {
+      char buf[512];
+      int r = doltliteConnRead(c, buf, (int)sizeof(buf) - 1);
+      if (r <= 0) {
+        printf("FAIL  TLS read returned %d\n", r);
+        fails++;
+      } else {
+        buf[r] = '\0';
+        if (strncmp(buf, "HTTP/", 5) == 0) {
+          char *eol = strpbrk(buf, "\r\n");
+          if (eol) *eol = '\0';
+          printf("  PASS  HTTPS GET %s -> \"%s\"\n", host, buf);
+        } else {
+          printf("FAIL  unexpected response start: %.16s\n", buf);
+          fails++;
+        }
+      }
+    }
+    doltliteConnClose(c);
+  }
+
+  /* Negative: pin trust to an unrelated self-signed CA. The real server cert is
+  ** not signed by it, so verification must fail and the connect must be NULL. */
+  if (argc > 1 && argv[1][0] != '\0') {
+    setenv("DOLTLITE_CA_FILE", argv[1], 1);
+    DoltliteConn *bad = doltliteConnOpen(host, port, 1);
+    if (bad) {
+      printf("FAIL  handshake succeeded under wrong CA (verification not enforced)\n");
+      doltliteConnClose(bad);
+      fails++;
+    } else {
+      printf("  PASS  handshake rejected under wrong CA\n");
+    }
+    unsetenv("DOLTLITE_CA_FILE");
+  } else {
+    printf("  (skipped wrong-CA negative test: no openssl to make a fake CA)\n");
+  }
+
+  printf("\n%s\n", fails ? "FAILED" : "OK");
+  return fails ? 1 : 0;
+}
