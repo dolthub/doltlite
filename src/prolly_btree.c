@@ -3335,6 +3335,10 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   if( pCur->curIntKey ){
     rc = prollyBtCursorTableMoveto(pCur, pCur->nKey, 0, &res);
   } else {
+    struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+    if( pTE && pTE->pPending && pCur->pMutMap!=(ProllyMutMap*)pTE->pPending ){
+      pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+    }
     if( pCur->pKey && pCur->nKey>0 ){
       rc = prollyCursorSeekBlob(&pCur->pCur,
                                  (const u8*)pCur->pKey, (int)pCur->nKey,
