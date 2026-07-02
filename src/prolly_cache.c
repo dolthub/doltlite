@@ -50,6 +50,56 @@ static void cacheEntryFree(ProllyCacheEntry *pEntry){
   }
 }
 
+static ProllyCacheEntry *cacheEntryNewOwned(
+  const ProllyHash *hash,
+  u8 *pData,
+  int nData,
+  int nDataPhys,
+  int bTransient,
+  int *pRc
+){
+  ProllyCacheEntry *pEntry;
+  int rc;
+
+  if( pRc ) *pRc = SQLITE_OK;
+  pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
+  if( pEntry==0 ){
+    sqlite3_free(pData);
+    if( pRc ) *pRc = SQLITE_NOMEM;
+    return 0;
+  }
+  memset(pEntry, 0, sizeof(*pEntry));
+
+  {
+    u8 *pPadded = (u8*)sqlite3_realloc(
+        pData, nDataPhys + PROLLY_NODE_BUFFER_SLOP);
+    if( pPadded==0 ){
+      sqlite3_free(pData);
+      sqlite3_free(pEntry);
+      if( pRc ) *pRc = SQLITE_NOMEM;
+      return 0;
+    }
+    pData = pPadded;
+    memset(pData + nDataPhys, 0, PROLLY_NODE_BUFFER_SLOP);
+  }
+
+  memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
+  pEntry->pData = pData;
+  pEntry->nData = nData;
+  pEntry->nDataPhys = nDataPhys;
+  pEntry->nRef = 1;
+  pEntry->bTransient = bTransient ? 1 : 0;
+
+  rc = prollyNodeParseSparse(&pEntry->node, pData, nData, nDataPhys);
+  if( rc!=SQLITE_OK ){
+    if( pRc ) *pRc = rc;
+    cacheEntryFree(pEntry);
+    return 0;
+  }
+
+  return pEntry;
+}
+
 int prollyCacheInit(ProllyCache *cache, int nCapacity){
   int nBucket;
 
@@ -170,7 +220,9 @@ ProllyCacheEntry *prollyCachePutOwned(
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
   pEntry->nData = nData;
+  pEntry->nDataPhys = nData;
   pEntry->nRef = 1;
+  pEntry->bTransient = 0;
 
   rc = prollyNodeParse(&pEntry->node, pData, nData);
   if( rc!=SQLITE_OK ){
@@ -190,10 +242,23 @@ ProllyCacheEntry *prollyCachePutOwned(
   return pEntry;
 }
 
+ProllyCacheEntry *prollyCachePutTransientOwned(
+  const ProllyHash *hash,
+  u8 *pData,
+  int nData,
+  int nDataPhys,
+  int *pRc
+){
+  return cacheEntryNewOwned(hash, pData, nData, nDataPhys, 1, pRc);
+}
+
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){
   (void)cache;
   assert( entry->nRef>0 );
   entry->nRef--;
+  if( entry->nRef==0 && entry->bTransient ){
+    cacheEntryFree(entry);
+  }
 }
 
 void prollyCacheFree(ProllyCache *cache){

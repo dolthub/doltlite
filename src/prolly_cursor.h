@@ -23,6 +23,7 @@ struct ProllyCursor {
   ProllyCache *pCache;
   ProllyHash root;
   u8 flags;
+  u8 bAllowSparse;
 
   int iLevel;
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
@@ -36,6 +37,7 @@ struct ProllyCursor {
 
 void prollyCursorInit(ProllyCursor *cur, ChunkStore *pStore,
                       ProllyCache *pCache, const ProllyHash *pRoot, u8 flags);
+void prollyCursorAllowSparse(ProllyCursor *cur, int bAllowSparse);
 
 int prollyCursorFirst(ProllyCursor *cur, int *pRes);
 

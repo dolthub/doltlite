@@ -13,8 +13,10 @@ struct ProllyCacheEntry {
   ProllyHash hash;
   u8 *pData;
   int nData;
+  int nDataPhys;
   ProllyNode node;
   int nRef;
+  u8 bTransient;
   ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
   ProllyCacheEntry *pHashNext;
@@ -36,6 +38,11 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
 ProllyCacheEntry *prollyCachePutOwned(ProllyCache *cache,
                                       const ProllyHash *hash,
                                       u8 *pData, int nData,
+                                      int *pRc);
+
+ProllyCacheEntry *prollyCachePutTransientOwned(
+                                      const ProllyHash *hash,
+                                      u8 *pData, int nData, int nDataPhys,
                                       int *pRc);
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);

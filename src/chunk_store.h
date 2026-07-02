@@ -241,6 +241,8 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas);
 
 int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
                   u8 **ppData, int *pnData);
+int chunkStoreGetSparse(ChunkStore *cs, const ProllyHash *hash,
+                        u8 **ppData, int *pnData, int *pnDataPhys);
 
 int chunkStorePut(ChunkStore *cs, const u8 *pData, int nData,
                   ProllyHash *pHash);
