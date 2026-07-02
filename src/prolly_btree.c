@@ -627,6 +627,7 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags);
 static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
     const u8 *pVal; int nVal; int nAvail;
+    CLEAR_CACHED_PAYLOAD(pCur);
     cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
     if( nVal > 0 && nAvail==nVal ){
       pCur->pCachedPayload = (u8*)pVal;
@@ -688,6 +689,7 @@ static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
 
 static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
+  CLEAR_CACHED_PAYLOAD(pCur);
   cursorCurrentTreeValue(pCur, &pVal, &nVal);
   if( nVal > 0 ){
     pCur->pCachedPayload = (u8*)pVal;
@@ -3352,7 +3354,11 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   if( rc==SQLITE_OK ){
     if( res==0 ){
       pCur->eState = CURSOR_VALID;
-      if( pDifferentRow ) *pDifferentRow = 0;
+      if( pDifferentRow ){
+        *pDifferentRow = pCur->mmActive
+                       && (pCur->mergeSrc==MERGE_SRC_MUT
+                           || pCur->mergeSrc==MERGE_SRC_BOTH);
+      }
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       pCur->skipNext = res;
       pCur->eState = CURSOR_SKIPNEXT;
@@ -6776,7 +6782,12 @@ static int prollyBtCursorCursorHasMoved(BtCursor *pCur){
 int sqlite3BtreeIncrblobCursorReseek(BtCursor *pCur){
   if( pCur->pCurOps!=&prollyCursorOps ) return 0;
   if( pCur->eState==CURSOR_VALID ){
+    struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+      return 1;
+    }
+    if( pTE && pTE->pPending
+     && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
       return 1;
     }
     return 0;
@@ -6954,7 +6965,9 @@ static int mergeStepForward(BtCursor *pCur){
   }
   if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH )
     pCur->mmIdx++;
-  return mergeScan(pCur, 1, 0);
+  rc = mergeScan(pCur, 1, 0);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  return rc;
 }
 
 static int mergeStepBackward(BtCursor *pCur){
@@ -6968,7 +6981,9 @@ static int mergeStepBackward(BtCursor *pCur){
   }
   if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH )
     pCur->mmIdx--;
-  return mergeScan(pCur, -1, 0);
+  rc = mergeScan(pCur, -1, 0);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  return rc;
 }
 
 static int seedMutMapIterFromCursor(
@@ -7306,6 +7321,11 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       if( rc==SQLITE_OK ){
         if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
           pCur->eState = CURSOR_VALID;
+          if( pCur->curIntKey ){
+            cacheCurrentTreePayloadIfIntKey(pCur);
+          }else{
+            cacheCurrentTreeStoredPayloadNonIntKey(pCur);
+          }
         } else {
           pCur->eState = CURSOR_INVALID;
           return SQLITE_DONE;
@@ -7369,6 +7389,9 @@ static int prollyBtCursorTableMoveto(
   CLEAR_CACHED_COMPARE_KEY(pCur);
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE && pTE->pPending && pCur->pMutMap!=(ProllyMutMap*)pTE->pPending ){
+    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  }
   canUseAppendSeekFloor = pCur->pBtree
     && pCur->pBtree->db
     && !pCur->pBtree->db->autoCommit
@@ -8459,11 +8482,9 @@ static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   if( pCur->curIntKey && pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
     ProllyMutMapEntry *e = currentMutMapEntry(pCur);
-    if( e && e->nZeroTail > 0 ){
-      /* Answer from the symbolic form; fetching would materialize the
-      ** zero tail. */
-      return (u32)((i64)e->nVal + e->nZeroTail);
-    }
+    /* Answer from the pending row before consulting the tree. The tree cursor
+    ** may still be valid for MERGE_SRC_BOTH, but its value is stale. */
+    return (u32)((i64)e->nVal + e->nZeroTail);
   }
   if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
     const u8 *pVal;
@@ -8518,6 +8539,13 @@ static int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
     if( e && e->nZeroTail>0 ){
       return copyZeroTailPayload(e, offset, amt, pBuf);
     }
+    if( e ){
+      if( (i64)offset + (i64)amt > (i64)e->nVal ){
+        return SQLITE_CORRUPT_BKPT;
+      }
+      memcpy(pBuf, e->pVal + offset, amt);
+      return SQLITE_OK;
+    }
   }
   if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
     const u8 *pVal;
@@ -8559,6 +8587,10 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
     ProllyMutMapEntry *e = currentMutMapEntry(pCur);
     if( e && e->nZeroTail>0 && e->nVal>0 ){
+      if( pAmt ) *pAmt = (u32)e->nVal;
+      return (const void*)e->pVal;
+    }
+    if( e && e->nVal>0 ){
       if( pAmt ) *pAmt = (u32)e->nVal;
       return (const void*)e->pVal;
     }
@@ -9804,6 +9836,13 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
     if( e && e->nZeroTail>0 ){
       return copyZeroTailPayload(e, offset, amt, pBuf);
     }
+    if( e ){
+      if( (i64)offset + (i64)amt > (i64)e->nVal ){
+        return SQLITE_CORRUPT_BKPT;
+      }
+      memcpy(pBuf, e->pVal + offset, amt);
+      return SQLITE_OK;
+    }
   }
 
   if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
@@ -9891,8 +9930,15 @@ static int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
   sqlite3_free(pNew);
   if( rc==SQLITE_OK && hasSavedIntKey ){
-    rc = flushMutMap(pCur);
-    if( rc==SQLITE_OK ){
+    ProllyMutMapEntry *pEntry = 0;
+    if( pCur->pMutMap ){
+      rc = prollyMutMapFindRc(pCur->pMutMap, 0, 0, savedIntKey, &pEntry);
+    }
+    if( rc==SQLITE_OK && pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+      setCursorToMutMapEntryPhys(
+          pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+      pCur->deferredTreeSeek = 1;
+    }else if( rc==SQLITE_OK ){
       pCur->nKey = savedIntKey;
       pCur->pKey = 0;
       pCur->cachedIntKey = savedIntKey;
