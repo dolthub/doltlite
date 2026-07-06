@@ -6996,6 +6996,8 @@ static int deferredMergedSeekPosition(BtCursor *pCur){
   return SQLITE_OK;
 }
 
+/* Complete a deferred merged seek forward: land on the first live row above
+** cachedIntKey (the key itself is known dead). */
 static int materializeDeferredMergedSeek(BtCursor *pCur){
   int res = 0;
   int rc;
@@ -7013,6 +7015,38 @@ static int materializeDeferredMergedSeek(BtCursor *pCur){
     /* Nothing live at or above the key: leave the merge state primed one
     ** past the end so a backward step lands on the last live row. */
     pCur->mergeSrc = MERGE_SRC_BOTH;
+    pCur->eState = CURSOR_INVALID;
+  }
+  return SQLITE_OK;
+}
+
+/* Complete a deferred merged seek backward: land on the last live row below
+** cachedIntKey, matching the res<0 contract the deferred moveto reported.
+** Used by the passive consumers (Eof and the payload/rowid readers), which
+** read the current position rather than stepping. */
+static int materializeDeferredMergedSeekBackward(BtCursor *pCur){
+  int res = 0;
+  int rc;
+  if( !pCur->deferredMergedSeek ) return SQLITE_OK;
+  rc = deferredMergedSeekPosition(pCur);
+  if( rc!=SQLITE_OK ) return rc;
+  pCur->mergeSrc = MERGE_SRC_BOTH;
+  if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    rc = advanceTreeCursor(pCur, -1);
+    if( rc!=SQLITE_OK ) return rc;
+  }else if( pCur->pCur.eState==PROLLY_CURSOR_EOF ){
+    rc = prollyCursorPrev(&pCur->pCur);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  pCur->mmIdx--;
+  rc = mergeScan(pCur, -1, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( res==0 ){
+    pCur->eState = CURSOR_VALID;
+    if( pCur->mergeSrc!=MERGE_SRC_MUT ){
+      cacheCurrentTreePayloadIfIntKey(pCur);
+    }
+  }else{
     pCur->eState = CURSOR_INVALID;
   }
   return SQLITE_OK;
@@ -7425,7 +7459,7 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
 
 static int prollyBtCursorEof(BtCursor *pCur){
   if( pCur->deferredMergedSeek ){
-    int rc = materializeDeferredMergedSeek(pCur);
+    int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;
       pCur->skipNext = rc;
@@ -7555,14 +7589,20 @@ static int prollyBtCursorTableMoveto(
     ** never do, while range seeks consume it immediately via Eof/Next/Prev.
     ** The raw tree position must not leak out of this path: it can sit on a
     ** delete-masked row, skip mut-map-only rows, or see an empty root when
-    ** every live row is in the mut map. */
+    ** every live row is in the mut map.
+    **
+    ** The result must be -1, not +1: the VDBE treats res>0 as "the cursor
+    ** sits on a row above the key" and reads it with no Eof check, which a
+    ** deferred position cannot honor when nothing at or above the key
+    ** survives. With res<0 every consumer either steps forward through the
+    ** merge machinery or checks Eof before reading. */
 table_moveto_deferred_miss:
     pCur->deferredMergedSeek = 1;
     pCur->mmActive = 1;
     pCur->cachedIntKey = intKey;
     pCur->curFlags &= ~BTCF_ValidNKey;
     pCur->eState = CURSOR_VALID;
-    *pRes = 1;
+    *pRes = -1;
     return SQLITE_OK;
   }
 
@@ -8505,7 +8545,9 @@ prolly_idx_rowid_corruption:
 }
 
 static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
-  if( pCur->deferredMergedSeek && materializeDeferredMergedSeek(pCur) ){
+  if( pCur->deferredMergedSeek
+   && (materializeDeferredMergedSeekBackward(pCur)
+       || pCur->eState!=CURSOR_VALID) ){
     return 0;
   }
   assert( pCur->eState==CURSOR_VALID );
@@ -8640,7 +8682,9 @@ static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
 static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   const u8 *pData;
   int nData;
-  if( pCur->deferredMergedSeek && materializeDeferredMergedSeek(pCur) ){
+  if( pCur->deferredMergedSeek
+   && (materializeDeferredMergedSeekBackward(pCur)
+       || pCur->eState!=CURSOR_VALID) ){
     return 0;
   }
   assert( pCur->eState==CURSOR_VALID );
@@ -8700,8 +8744,9 @@ static int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   int rc;
 
   if( pCur->deferredMergedSeek ){
-    rc = materializeDeferredMergedSeek(pCur);
+    rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ) return rc;
+    if( pCur->eState!=CURSOR_VALID ) return SQLITE_ABORT;
   }
   assert( pCur->eState==CURSOR_VALID );
   if( pCur->curIntKey
@@ -8749,7 +8794,9 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   const u8 *pData;
   int nData;
 
-  if( pCur->deferredMergedSeek && materializeDeferredMergedSeek(pCur) ){
+  if( pCur->deferredMergedSeek
+   && (materializeDeferredMergedSeekBackward(pCur)
+       || pCur->eState!=CURSOR_VALID) ){
     if( pAmt ) *pAmt = 0;
     return 0;
   }

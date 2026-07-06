@@ -130,6 +130,20 @@ run_test "ranged_delete_spares_rows_outside_range" \
 
 db_rm "$DB"
 
+run_test "no_phantom_row_after_all_rows_deleted" \
+  "CREATE TABLE d(k INTEGER PRIMARY KEY, v);
+   INSERT INTO d VALUES (5, 'x');
+   BEGIN;
+   DELETE FROM d WHERE k = 5;
+   SELECT count(*) FROM d WHERE k >= 0;
+   SELECT coalesce(max(k), 'none') FROM d WHERE k >= 0;
+   ROLLBACK;" \
+  "0
+none" \
+  "$DB"
+
+db_rm "$DB"
+
 run_test "prefix_seek_sees_updated_row_value" \
   "CREATE TABLE d(a INTEGER, b INTEGER, v, PRIMARY KEY(a,b));
    INSERT INTO d VALUES (1,0,'old'),(1,1,'old2'),(2,0,'oldx');
