@@ -1,0 +1,103 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_recover_changes
+
+foreach {tn nRow wor} {
+  1 50 ""
+  2 50 "WITHOUT ROWID"
+  3 5000 ""
+  4 5000 "WITHOUT ROWID"
+} {
+  reset_db
+  set nBig [expr $nRow]
+
+  do_execsql_test 1.$tn.0 "
+    CREATE TABLE t1(x INTEGER PRIMARY KEY) $wor;
+  " {}
+
+  do_execsql_test 1.$tn.1 {
+    WITH s(i) AS (
+      SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i < $nBig
+    )
+    INSERT INTO t1 SELECT i FROM s;
+  }
+
+  do_test 1.$tn.2 {
+    db changes
+  } [expr $nBig]
+
+  do_test 1.$tn.3 {
+    db total_changes
+  } [expr $nBig]
+
+  do_execsql_test 1.$tn.4 {
+    INSERT INTO t1 VALUES(-1)
+  }
+
+  do_test 1.$tn.5 {
+    db changes
+  } [expr 1]
+
+  do_test 1.$tn.6 {
+    db total_changes
+  } [expr {$nBig+1}]
+
+  do_execsql_test 1.$tn.7a {
+    SELECT count(*) FROM t1
+  } [expr {$nBig+1}]
+
+  do_execsql_test 1.$tn.7 {
+    DELETE FROM t1
+  }
+
+  do_test 1.$tn.8 {
+    db changes
+  } [expr {$nBig+1}]
+
+  do_test 1.$tn.9 {
+    db total_changes
+  } [expr {2*($nBig+1)}]
+}
+
+# Targeted assertions guarding UPDATE / no-op / monotonicity behavior.
+reset_db
+do_execsql_test 2.0 {
+  CREATE TABLE t2(x INTEGER PRIMARY KEY, y);
+  INSERT INTO t2(x,y) VALUES(1,0),(2,0),(3,0),(4,1),(5,1);
+} {}
+do_test 2.1 {
+  db changes
+} 5
+set before [db total_changes]
+
+do_execsql_test 2.2 {
+  UPDATE t2 SET y=9 WHERE y=0
+}
+do_test 2.3 {
+  db changes
+} 3
+do_test 2.4 {
+  expr {[db total_changes] == $before + 3}
+} 1
+
+do_execsql_test 2.5 {
+  UPDATE t2 SET y=9 WHERE y=12345
+}
+do_test 2.6 {
+  db changes
+} 0
+do_test 2.7 {
+  expr {[db total_changes] == $before + 3}
+} 1
+
+do_execsql_test 2.8 {
+  UPDATE t2 SET y=7 WHERE x=1
+}
+do_test 2.9 {
+  db changes
+} 1
+do_test 2.10 {
+  expr {[db total_changes] == $before + 4}
+} 1
+
+finish_test

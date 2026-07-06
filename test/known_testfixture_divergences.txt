@@ -37,7 +37,7 @@
 # the entry.
 
 # ── select1 ──
-select1 select1-2.23  # rowid-order vs PK-order on unordered SELECT
+select1 select1-2.23  # NULL into non-integer PRIMARY KEY (WITHOUT ROWID clustering key) rejected
 
 # ── where ──
 # where-5.* tests use count{} which asserts an exact number of internal
@@ -54,14 +54,14 @@ where where-5.8   # w+0 IN (same subquery): fewer seeks
 
 # ── index ──
 index index-7.3   # explicit rowid reference
-index index-11.1  # rowid-order assumption
-index index-13.2  # rowid-order assumption
+index index-11.1  # sqlite_search_count instrumentation not reproduced (value correct)
+index index-13.2  # PK auto-index not listed in sqlite_master (2 auto-indexes vs 3)
 index index-16.1  # explicit rowid reference
 index index-16.2  # explicit rowid reference
 index index-16.3  # explicit rowid reference
 index index-16.4  # explicit rowid reference
 index index-16.5  # explicit rowid reference
-index index-17.1  # rowid-order assumption
+index index-17.1  # PK auto-index not listed in sqlite_master (2 auto-index names vs 3)
 
 # ── bestindex4 ──
 bestindex4 bestindex4-2.1  # EQP names the table PRIMARY KEY instead of sqlite_autoindex_t1_1
