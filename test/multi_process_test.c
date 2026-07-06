@@ -26,6 +26,21 @@ static int execSql(sqlite3 *db, const char *sql){
   return rc;
 }
 
+static int isRetryable(int rc){
+  return rc==SQLITE_BUSY || rc==SQLITE_LOCKED || rc==SQLITE_BUSY_SNAPSHOT;
+}
+
+static int execSqlRetry(sqlite3 *db, const char *sql){
+  int i;
+  for(i=0; i<500; i++){
+    int rc = execSql(db, sql);
+    if( rc==SQLITE_OK ) return SQLITE_OK;
+    if( !isRetryable(rc) ) return rc;
+    sqlite3_sleep(5);
+  }
+  return SQLITE_BUSY;
+}
+
 static char result_buf[4096];
 static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *s = 0;
@@ -45,6 +60,16 @@ static const char *queryScalarText(sqlite3 *db, const char *sql){
   }
   sqlite3_finalize(s);
   return result_buf;
+}
+
+static int envInt(const char *zName, int defaultValue){
+  const char *z = getenv(zName);
+  char *zEnd = 0;
+  long v;
+  if( z==0 || z[0]==0 ) return defaultValue;
+  v = strtol(z, &zEnd, 10);
+  if( zEnd==z || zEnd[0]!=0 || v<0 || v>0x7fffffff ) return defaultValue;
+  return (int)v;
 }
 
 static void setup_db(const char *path){
@@ -416,6 +441,125 @@ static void test_cross_process_commit_conflict(void){
   remove(freshPath);
 }
 
+static int commit_worker(const char *path, int worker, int nOps, int fdReady, int fdGo){
+  sqlite3 *db = 0;
+  char ch = 0;
+  int op;
+  int rc = sqlite3_open(path, &db);
+  if( rc!=SQLITE_OK ) return 1;
+  sqlite3_busy_timeout(db, 5000);
+
+  if( write(fdReady, "R", 1)!=1 ) return 2;
+  if( read(fdGo, &ch, 1)!=1 ) return 3;
+  close(fdReady);
+  close(fdGo);
+
+  for(op=0; op<nOps; op++){
+    char sql[256];
+    int attempt;
+    int id = worker * 100000 + op;
+    snprintf(sql, sizeof(sql),
+             "INSERT OR IGNORE INTO t(id, v) VALUES(%d, 'worker-%d-op-%d')",
+             id, worker, op);
+    for(attempt=0; attempt<500; attempt++){
+      rc = execSqlRetry(db, "BEGIN IMMEDIATE");
+      if( rc==SQLITE_OK ){
+        rc = execSql(db, sql);
+        if( rc==SQLITE_OK ){
+          rc = execSql(db, "COMMIT");
+          if( rc==SQLITE_OK ) break;
+        }
+        if( rc!=SQLITE_OK ) execSql(db, "ROLLBACK");
+      }
+      if( !isRetryable(rc) ) break;
+      sqlite3_sleep(5);
+    }
+    if( attempt>=500 || (rc!=SQLITE_OK && !isRetryable(rc)) ){
+      sqlite3_close(db);
+      return 10;
+    }
+    if( (op % 7)==0 ) sqlite3_sleep(1);
+  }
+
+  sqlite3_close(db);
+  return 0;
+}
+
+static void test_many_process_commit_contention(void){
+  const char *path = "/tmp/test_mp_commit_contention.db";
+  enum { N_WORKERS = 6 };
+  int nOps = envInt("DOLTLITE_MP_COMMIT_OPS", 200);
+  pid_t pids[N_WORKERS];
+  int ready[N_WORKERS][2];
+  int go[N_WORKERS][2];
+  int i;
+  int status;
+
+  printf("--- Test 7: Many processes committing to one store ---\n");
+  setup_db(path);
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    execSql(db, "CREATE INDEX IF NOT EXISTS t_v_idx ON t(v)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','add index')");
+    sqlite3_close(db);
+  }
+
+  for(i=0; i<N_WORKERS; i++){
+    pipe(ready[i]);
+    pipe(go[i]);
+    pids[i] = fork();
+    if( pids[i]==0 ){
+      int rc;
+      close(ready[i][0]);
+      close(go[i][1]);
+      rc = commit_worker(path, i+1, nOps, ready[i][1], go[i][0]);
+      _exit(rc);
+    }
+    close(ready[i][1]);
+    close(go[i][0]);
+    check("mp_commit_fork", pids[i]>0);
+  }
+
+  for(i=0; i<N_WORKERS; i++){
+    char ch;
+    check("mp_commit_worker_ready", read(ready[i][0], &ch, 1)==1);
+    close(ready[i][0]);
+  }
+  for(i=0; i<N_WORKERS; i++){
+    check("mp_commit_worker_start", write(go[i][1], "G", 1)==1);
+    close(go[i][1]);
+  }
+
+  for(i=0; i<N_WORKERS; i++){
+    waitpid(pids[i], &status, 0);
+    check("mp_commit_worker_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    char zExpected[32];
+    snprintf(zExpected, sizeof(zExpected), "%d", N_WORKERS*nOps);
+    sqlite3_open(path, &db);
+    check("mp_commit_final_rows",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id>=100000"),
+             zExpected)==0);
+    check("mp_commit_index_rows",
+      strcmp(queryScalarText(db,
+        "SELECT count(*) FROM t INDEXED BY t_v_idx WHERE v >= 'worker-'"),
+        zExpected)==0);
+    check("mp_commit_log_readable",
+      atoi(queryScalarText(db, "SELECT count(*) FROM dolt_log"))>=2);
+    check("mp_commit_final_commit",
+      strlen(queryScalarText(db,
+        "SELECT dolt_commit('-A','-m','mp contention final')"))==40
+      || strstr(result_buf, "nothing to commit")!=0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -425,6 +569,7 @@ int main(){
   test_gc_during_read();
   test_gc_blocked_by_writer();
   test_cross_process_commit_conflict();
+  test_many_process_commit_contention();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
