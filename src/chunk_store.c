@@ -95,12 +95,20 @@ static int csCrashWriteInjectionActive(void){
 #endif
 }
 
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+/* Test hook: force one mid-commit reload after pending chunks drain. */
+static int csReloadInjectionActive(void){
+  const char *zEnv = getenv("DOLTLITE_RELOAD_INJECT");
+  return zEnv && atoi(zEnv)>0;
+}
+#endif
+
 #define CS_RECENT_FAST_PATH_MAX 16384
 #define CS_WRITEBUF_RETAIN_MAX (64*1024)
 #define CS_PENDING_DRAIN_LIMIT (64*1024*1024)
 
 static i64 csPendingDrainLimit(void){
-#ifdef SQLITE_TEST
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
   const char *zEnv = getenv("DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT");
   if( zEnv && zEnv[0] ){
     int n = atoi(zEnv);
@@ -262,12 +270,18 @@ int chunkStoreEnsureRefsFresh(ChunkStore *cs){
 
 static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
   int rc;
-  int preserveRefs = cs->staging.nPending > 0
-                  && prollyHashCompare(&cs->refs.refsHash,
-                                       &cs->refs.committedRefsHash)!=0;
+  int preserveRefs;
   ProllyHash savedRefsHash;
   SavedRefsState savedRefs;
 
+  /* Reloading drops aRecent; never do that with uncommitted refs to it. */
+  if( cs->staging.nRecentUncommitted > 0 ){
+    return SQLITE_BUSY_SNAPSHOT;
+  }
+
+  preserveRefs = cs->staging.nPending > 0
+              && prollyHashCompare(&cs->refs.refsHash,
+                                   &cs->refs.committedRefsHash)!=0;
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( preserveRefs ){
     savedRefsHash = cs->refs.refsHash;
@@ -1595,6 +1609,17 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = cs->file.iFileSize;
   }
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+  if( hadFile && cs->staging.nRecentUncommitted>0 && csReloadInjectionActive() ){
+    static int csReloadInjected = 0;
+    if( !csReloadInjected ){
+      csReloadInjected = 1;
+      rc = csReloadFromDiskPreservingLocalRefs(cs);
+      if( rc != SQLITE_OK ) goto commit_done;
+      fileSize = cs->file.iFileSize;
+    }
+  }
+#endif
   /* Append at logical EOF and truncate crash garbage beyond it. */
   if( hadFile && cs->file.iFileSize > fileSize ){
     fileSize = cs->file.iFileSize;
@@ -2129,8 +2154,13 @@ static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
   ChunkStoreReloadState saved;
   char *zOldFilename;
-  int rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  int rc;
+  /* Direct refresh also reaches the reload path. */
+  if( cs->staging.nRecentUncommitted > 0 ){
+    return SQLITE_BUSY_SNAPSHOT;
+  }
+  rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
   /* Reload must not replace a writable store with a fallback read-only one. */
