@@ -3,12 +3,6 @@
 #ifndef BTREE_ORIG_PREFIX_H
 #define BTREE_ORIG_PREFIX_H
 
-/* sqlite3SchemaMutexHeld is a debug-only mutex-assertion helper defined by both
-** btmutex_orig.c (stock) and prolly_btree.c (a stub, under !NDEBUG). Its sibling
-** helpers (sqlite3Btree{Holds,HoldsAll}Mutex) are already prefixed below; this
-** one was missing, so both copies were emitted unprefixed and collided at link
-** time in debug (--dev) builds. Prefix the stock copy so the prolly definition
-** stays canonical. */
 #define sqlite3SchemaMutexHeld orig_sqlite3SchemaMutexHeld
 
 #define sqlite3BtreeBeginStmt orig_sqlite3BtreeBeginStmt
