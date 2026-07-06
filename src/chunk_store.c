@@ -2168,8 +2168,22 @@ static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
   ChunkStoreReloadState saved;
   char *zOldFilename;
-  int rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  int rc;
+  /* Guard EVERY reload path at the shared low level -- not only the commit-path
+  ** wrapper csReloadFromDiskPreservingLocalRefs. The external-change refresh
+  ** (chunkStoreRefreshIfChanged) calls csReloadFromDisk DIRECTLY, so a read/op
+  ** that picks up a peer's commit while THIS connection holds uncommitted-recent
+  ** chunks (drained to file at csCommitToFile, not yet manifest-committed) would
+  ** reach csAdoptOpenedStoreState below, which frees staging.aRecent -- dropping
+  ** those chunks while cs->refs still reference them => dangling chunk =>
+  ** dolt_gc mark-phase fails + unreclaimable bloat. Refuse with a retriable
+  ** conflict; the caller rolls the transaction back and retries against the
+  ** refreshed state (same contract as a head-CAS conflict). */
+  if( cs->staging.nRecentUncommitted > 0 ){
+    return SQLITE_BUSY_SNAPSHOT;
+  }
+  rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
   /* Reload must not replace a writable store with a fallback read-only one. */
