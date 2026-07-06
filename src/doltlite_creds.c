@@ -11,6 +11,7 @@
 #include "ed25519.h"
 #include "sha512.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -149,8 +150,9 @@ int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen)
 
   for (i = 0; i < inlen; i++) {
     char c = in[i];
+    int v;
     if (c == '=') break; /* padding: rest must be padding */
-    int v = b64urlVal(c);
+    v = b64urlVal(c);
     if (v < 0) {
       free(buf);
       return 1;
@@ -355,10 +357,11 @@ static char *jsonFindString(const char *json, const char *key) {
     const char *kstart = p + 1;
     if (strncmp(kstart, key, keylen) == 0 && kstart[keylen] == '"') {
       const char *q = kstart + keylen + 1;
+      const char *vend;
       while (*q == ' ' || *q == ':' || *q == '\t') q++;
       if (*q != '"') return NULL;
       q++;
-      const char *vend = strchr(q, '"');
+      vend = strchr(q, '"');
       if (!vend) return NULL;
       {
         size_t vlen = (size_t)(vend - q);
@@ -531,6 +534,48 @@ done:
     free(json);
   }
   free(path);
+  free(owned);
+  return rc;
+}
+
+int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
+  char *owned = NULL;
+  DIR *d;
+  struct dirent *e;
+  char *kid = NULL;
+  int count = 0, rc = 1;
+
+  if (!dir) {
+    owned = doltliteCredsDir();
+    dir = owned;
+  }
+  if (!dir) return 1;
+  d = opendir(dir);
+  if (!d) {
+    free(owned);
+    return 1;
+  }
+  while ((e = readdir(d)) != NULL) {
+    size_t n = strlen(e->d_name);
+    if (n > 4 && strcmp(e->d_name + n - 4, ".jwk") == 0) {
+      count++;
+      if (count == 1) {
+        kid = (char *)malloc(n - 4 + 1);
+        if (kid) {
+          memcpy(kid, e->d_name, n - 4);
+          kid[n - 4] = '\0';
+        }
+      }
+    }
+  }
+  closedir(d);
+
+  /* Only auto-select when there is exactly one key; otherwise the caller must
+  ** name a kid (e.g. via $DOLTLITE_CREDS_KID). */
+  if (count == 1 && kid) {
+    rc = doltliteCredsLoad(dir, kid, out);
+  }
+  free(kid);
   free(owned);
   return rc;
 }

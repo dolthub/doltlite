@@ -579,7 +579,17 @@ else
   BLAKE3_SIMD_OBJS =
 endif
 
-PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
+# Remote-auth: credential/JWT signer + TLS transport, plus the vendored ed25519
+# and mbedTLS trees. Object names for the vendored trees are prefixed to avoid
+# basename clashes (e.g. sha512.c exists in both ed25519 and mbedTLS).
+ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c
+ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
+MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
+MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
+DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
+
+PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
+              prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
@@ -1362,6 +1372,24 @@ prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON) \
 
 prolly_xxhash.o:	$(TOP)/src/prolly_xxhash.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_xxhash.c
+
+# --- Remote authentication: credentials, JWT signer, and TLS transport ---
+
+doltlite_creds.o:	$(TOP)/src/doltlite_creds.c $(DEPS_OBJ_COMMON) \
+		$(TOP)/ext/ed25519/ed25519.h
+	$(T.cc.sqlite) -I$(TOP)/ext/ed25519 -c $(TOP)/src/doltlite_creds.c
+
+doltlite_tls.o:	$(TOP)/src/doltlite_tls.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -I$(TOP)/ext/mbedtls/include -c $(TOP)/src/doltlite_tls.c
+
+# Vendored ed25519 (ext/ed25519). Prefixed object names; the vendored sources
+# use C99 mid-block declarations, so relax that one warning as blake3 does.
+ed25519_%.o:	$(TOP)/ext/ed25519/%.c
+	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/ed25519 -c $< -o $@
+
+# Vendored mbedTLS (ext/mbedtls). Prefixed object names.
+mbedtls_%.o:	$(TOP)/ext/mbedtls/library/%.c
+	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/mbedtls/include -c $< -o $@
 
 # Vendored BLAKE3 sources use C99 mid-block declarations that the
 # rest of doltlite's tree bans via -Wdeclaration-after-statement.

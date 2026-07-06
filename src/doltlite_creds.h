@@ -101,6 +101,9 @@ char *doltliteCredsDir(void);
 int doltliteCredsSave(const DoltliteCreds *cred, const char *dir);
 /* Load the credential with the given kid from dir (NULL => default). */
 int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out);
+/* Load the sole credential in dir (NULL => default). Returns 0 on success, or
+** non-zero if dir does not contain exactly one .jwk file. */
+int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out);
 
 #ifdef __cplusplus
 }
