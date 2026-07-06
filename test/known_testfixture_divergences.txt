@@ -1819,8 +1819,7 @@ walshared walshared-1.2  # shared-cache WAL table locks not raised; snapshot rea
 walshared walshared-1.3  # shared-cache WAL table locks not raised; snapshot reads proceed
 
 # -- feature-gap sweep wave 3 (#1208): 44 completing files (6-100 failures),
-# every file's failure set reproduced and classified by verified mechanism;
-# incrblob2 held out as a real bug.
+# every file's failure set reproduced and classified by verified mechanism.
 backup2 backup2-2  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-3.2  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-4  # backup format/file hash and error-text differ; in-memory backup rejected
