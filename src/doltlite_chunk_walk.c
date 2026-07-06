@@ -55,7 +55,8 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   ** the catalog check reads their magic bytes as an absurd table count.
   ** Both are leaves: they embed whole row payloads and reference no other
   ** chunks. */
-  if( nData >= 6 && data[0]=='D' && data[1]=='L' && data[2]=='C' ){
+  if( nData >= 6
+   && data[0]=='D' && data[1]=='L' && data[2]=='C' && data[3]!='T' ){
     return CHUNK_CONFLICTS;
   }
   if( nData >= 6 && data[0]=='D' && data[1]=='C' && data[2]=='V' ){
