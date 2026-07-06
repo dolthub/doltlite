@@ -35,6 +35,149 @@ static int isCommitChunk(const u8 *data, int nData){
   return p == pEnd;
 }
 
+static int isCatalogChunk(const u8 *data, int nData){
+  int nTables;
+  int iFormat;
+  const u8 *p;
+  const u8 *pEnd = data + nData;
+  int i;
+
+  if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &p) ){
+    return 0;
+  }
+  if( nTables < 0 || nTables >= 10000 ) return 0;
+  for(i=0; i<nTables; i++){
+    if( p + (iFormat!=CATALOG_FORMAT_V3 ? CAT_ENTRY_FIXED_SIZE_V4 : CAT_ENTRY_FIXED_SIZE_V3) > pEnd ){
+      return 0;
+    }
+    p += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+       + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
+    if( iFormat!=CATALOG_FORMAT_V3 ){
+      int nType, nName, nTbl;
+      if( p + 6 > pEnd ) return 0;
+      nType = p[0] | (p[1]<<8); p += 2;
+      nName = p[0] | (p[1]<<8); p += 2;
+      nTbl = p[0] | (p[1]<<8); p += 2;
+      if( p + nType + nName + nTbl > pEnd ) return 0;
+      p += nType + nName + nTbl;
+    }else{
+      int nameLen;
+      if( p + 2 > pEnd ) return 0;
+      nameLen = p[0] | (p[1]<<8);
+      p += 2;
+      if( p + nameLen > pEnd ) return 0;
+      p += nameLen;
+    }
+  }
+  return p == pEnd;
+}
+
+static int isRefsChunk(const u8 *data, int nData){
+  const u8 *p = data;
+  const u8 *pEnd = data + nData;
+  int n;
+  int i;
+  int nBranches;
+  int nTags;
+  int nRemotes;
+  int nTracking;
+
+  if( nData < 5 || *p++ != 7 ) return 0;
+  if( p + 4 > pEnd ) return 0;
+  n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+  p += 4;
+  if( n < 0 || p + n > pEnd ) return 0;
+  p += n;
+
+  if( p + 4 > pEnd ) return 0;
+  nBranches = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+  p += 4;
+  if( nBranches < 0 || nBranches > 100000 ) return 0;
+  for(i=0; i<nBranches; i++){
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n + PROLLY_HASH_SIZE*2 > pEnd ) return 0;
+    p += n + PROLLY_HASH_SIZE*2;
+  }
+
+  if( p + 4 > pEnd ) return 0;
+  nTags = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+  p += 4;
+  if( nTags < 0 || nTags > 100000 ) return 0;
+  for(i=0; i<nTags; i++){
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n + PROLLY_HASH_SIZE > pEnd ) return 0;
+    p += n + PROLLY_HASH_SIZE;
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n > pEnd ) return 0;
+    p += n;
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n + 8 > pEnd ) return 0;
+    p += n + 8;
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n > pEnd ) return 0;
+    p += n;
+  }
+
+  if( p + 4 > pEnd ) return 0;
+  nRemotes = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+  p += 4;
+  if( nRemotes < 0 || nRemotes > 100000 ) return 0;
+  for(i=0; i<nRemotes; i++){
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n > pEnd ) return 0;
+    p += n;
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n > pEnd ) return 0;
+    p += n;
+  }
+
+  if( p + 4 > pEnd ) return 0;
+  nTracking = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+  p += 4;
+  if( nTracking < 0 || nTracking > 100000 ) return 0;
+  for(i=0; i<nTracking; i++){
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n > pEnd ) return 0;
+    p += n;
+    if( p + 4 > pEnd ) return 0;
+    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( n < 0 || p + n + PROLLY_HASH_SIZE > pEnd ) return 0;
+    p += n + PROLLY_HASH_SIZE;
+  }
+
+  if( p + 4 <= pEnd ){
+    int nSequences = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( nSequences < 0 || nSequences > 100000 ) return 0;
+    for(i=0; i<nSequences; i++){
+      if( p + 4 > pEnd ) return 0;
+      n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+      p += 4;
+      if( n < 0 || p + n + 8 > pEnd ) return 0;
+      p += n + 8;
+    }
+  }
+
+  return p == pEnd;
+}
+
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
@@ -58,13 +201,12 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   }
 
   {
-    int nTables; const u8 *pEntries; int iFormat;
-    if( catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries) ){
+    if( isCatalogChunk(data, nData) ){
       return CHUNK_CATALOG;
     }
   }
 
-  if( nData >= 5 && data[0] == 7 ){
+  if( isRefsChunk(data, nData) ){
     return CHUNK_REFS;
   }
 
