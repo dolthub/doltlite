@@ -50,6 +50,19 @@ run_test "gc_multi_reopen_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 db_rm "$DB"
 
+DB=/tmp/test_gc_102_byte_commit_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init','--author','beads <beads@local>');
+UPDATE t SET v='b' WHERE id=1;
+SELECT dolt_commit('-A','-m','gc update bead td-wisp-gmg4agp','--author','beads <beads@local>');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "gc_102_byte_commit" "SELECT dolt_gc();" "chunks" "$DB"
+run_test "gc_102_byte_commit_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+run_test "gc_102_byte_commit_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+
+db_rm "$DB"
+
 DB=/tmp/test_gc_branch_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
