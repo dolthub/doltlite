@@ -4183,105 +4183,8 @@ fts4growth fts4growth-6.5
 # stale max(idx) reads make REPLACE INTO %_segdir overwrite live
 # segments, losing most documents from each language partition (queries
 # return one docid instead of 31).
-fts4langid fts4langid-2.3.1.0
-fts4langid fts4langid-2.3.1.1
-fts4langid fts4langid-2.3.1.2
-fts4langid fts4langid-2.3.1.3
-fts4langid fts4langid-2.3.1.4
-fts4langid fts4langid-2.3.1.5
-fts4langid fts4langid-2.3.1.6
-fts4langid fts4langid-2.3.1.7
-fts4langid fts4langid-2.3.2.0
-fts4langid fts4langid-2.3.2.1
-fts4langid fts4langid-2.3.2.2
-fts4langid fts4langid-2.3.2.3
-fts4langid fts4langid-2.3.2.4
-fts4langid fts4langid-2.3.2.5
-fts4langid fts4langid-2.3.2.6
-fts4langid fts4langid-2.3.2.7
-fts4langid fts4langid-2.3.3.0
-fts4langid fts4langid-2.3.3.1
-fts4langid fts4langid-2.3.3.2
-fts4langid fts4langid-2.3.3.3
-fts4langid fts4langid-2.3.3.4
-fts4langid fts4langid-2.3.3.5
-fts4langid fts4langid-2.3.3.6
-fts4langid fts4langid-2.3.3.7
-fts4langid fts4langid-2.3.4.0
-fts4langid fts4langid-2.3.4.1
-fts4langid fts4langid-2.3.4.2
-fts4langid fts4langid-2.3.4.3
-fts4langid fts4langid-2.3.4.4
-fts4langid fts4langid-2.3.4.5
-fts4langid fts4langid-2.3.4.6
-fts4langid fts4langid-2.3.4.7
-fts4langid fts4langid-3.1.1.0
-fts4langid fts4langid-3.1.1.1
-fts4langid fts4langid-3.1.1.2
-fts4langid fts4langid-3.1.1.3
-fts4langid fts4langid-3.1.1.4
-fts4langid fts4langid-3.1.1.5
-fts4langid fts4langid-3.1.1.6
-fts4langid fts4langid-3.1.1.7
-fts4langid fts4langid-3.1.2.0
-fts4langid fts4langid-3.1.2.1
-fts4langid fts4langid-3.1.2.2
-fts4langid fts4langid-3.1.2.3
-fts4langid fts4langid-3.1.2.4
-fts4langid fts4langid-3.1.2.5
-fts4langid fts4langid-3.1.2.6
-fts4langid fts4langid-3.1.2.7
-fts4langid fts4langid-3.1.3.0
-fts4langid fts4langid-3.1.3.1
-fts4langid fts4langid-3.1.3.2
-fts4langid fts4langid-3.1.3.3
-fts4langid fts4langid-3.1.3.4
-fts4langid fts4langid-3.1.3.5
-fts4langid fts4langid-3.1.3.6
-fts4langid fts4langid-3.1.3.7
-fts4langid fts4langid-3.1.4.0
-fts4langid fts4langid-3.1.4.1
-fts4langid fts4langid-3.1.4.2
-fts4langid fts4langid-3.1.4.3
-fts4langid fts4langid-3.1.4.4
-fts4langid fts4langid-3.1.4.5
-fts4langid fts4langid-3.1.4.6
-fts4langid fts4langid-3.1.4.7
-fts4langid fts4langid-3.3.1.0
-fts4langid fts4langid-3.3.1.1
-fts4langid fts4langid-3.3.1.2
-fts4langid fts4langid-3.3.1.3
-fts4langid fts4langid-3.3.1.4
-fts4langid fts4langid-3.3.1.5
-fts4langid fts4langid-3.3.1.6
-fts4langid fts4langid-3.3.1.7
-fts4langid fts4langid-3.3.2.0
-fts4langid fts4langid-3.3.2.1
-fts4langid fts4langid-3.3.2.2
-fts4langid fts4langid-3.3.2.3
-fts4langid fts4langid-3.3.2.4
-fts4langid fts4langid-3.3.2.5
-fts4langid fts4langid-3.3.2.6
-fts4langid fts4langid-3.3.2.7
-fts4langid fts4langid-3.3.3.0
-fts4langid fts4langid-3.3.3.1
-fts4langid fts4langid-3.3.3.2
-fts4langid fts4langid-3.3.3.3
-fts4langid fts4langid-3.3.3.4
-fts4langid fts4langid-3.3.3.5
-fts4langid fts4langid-3.3.3.6
-fts4langid fts4langid-3.3.3.7
-fts4langid fts4langid-3.3.4.0
-fts4langid fts4langid-3.3.4.1
-fts4langid fts4langid-3.3.4.2
-fts4langid fts4langid-3.3.4.3
-fts4langid fts4langid-3.3.4.4
-fts4langid fts4langid-3.3.4.5
-fts4langid fts4langid-3.3.4.6
-fts4langid fts4langid-3.3.4.7
 # in-transaction langid UPDATE then integrity-check: false malformed
 # report (same stale shadow-read family)
-fts4langid fts4langid-6.1
 
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements corrupt automerge bookkeeping): automerge after a multi-row
@@ -4297,8 +4200,6 @@ fts4onepass fts4onepass-1.1.3
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements): onepass-or-not UPDATE/DELETE over MATCH with intra-
 # statement flushes errors "database disk image is malformed"
-fts4onepass fts4onepass-3.2.4.c
-fts4onepass fts4onepass-3.2.5.c
 
 # ── incrblob2 ──
 # Shared-cache table-level locking does not exist in doltlite. A blob
