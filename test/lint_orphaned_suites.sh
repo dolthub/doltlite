@@ -5,9 +5,18 @@
 # job invokes is dead weight that rots silently (we found rebase, large-merge,
 # persist-failure, and remote suites in exactly this state).
 #
+# The same applies to doltlite-native testfixture suites (test/doltlite_*.test):
+# each must be listed in a regression bucket (test/regression-buckets/*.txt) so a
+# CI job runs it. (Inherited upstream *.test files are gated selectively via the
+# buckets + divergence tracking, so they are NOT required here.) The .test class
+# was originally unchecked, so doltlite_gc_stop_world.test and
+# doltlite_reload_uncommitted_recent.test shipped without a bucket line and ran
+# nowhere until this guard was extended to cover them.
+#
 # A suite counts as "run" if its basename is referenced by:
 #   - any .github/workflows/*.yml (explicit invocation), or
 #   - a CI glob those workflows expand (oracle_*_test.sh, vc_oracle_*_test.sh), or
+#   - a regression bucket (test/regression-buckets/*.txt), for *.test suites, or
 #   - test/lib/doltlite_suite_manifest.sh, test/run_c_tests.sh, or
 #   - main.mk (lint targets run via `make`),
 # or it is listed in one of the two manifests beside this script:
@@ -43,6 +52,13 @@ listed_in() {  # listed_in <file> <basename>
   grep -vE '^\s*(#|$)' "$1" | grep -Fxq "$2"
 }
 
+# A *.test suite is gated if its basename (no extension) is listed in a
+# regression bucket, which a CI job runs via `testfixture`.
+in_bucket() {  # in_bucket <basename-without-.test>
+  cat test/regression-buckets/*.txt 2>/dev/null \
+    | grep -vE '^\s*(#|$)' | grep -Fxq "$1"
+}
+
 # A reference is "real" if it appears outside this guard and the manifests.
 referenced() {
   local base="$1"
@@ -67,6 +83,23 @@ for path in test/*.sh; do
   base="$(basename "$path")"
   is_excluded "$base" && continue
   if referenced "$base" || matches_ci_glob "$base" || listed_in "$allowlist" "$base"; then
+    continue
+  fi
+  if listed_in "$quarantine" "$base"; then
+    quarantined=$((quarantined + 1))
+    continue
+  fi
+  orphans+=("$base")
+done
+
+# doltlite-native testfixture suites: each must be gated in a regression bucket
+# (or explicitly allowlisted). Inherited upstream *.test files are excluded --
+# they are gated selectively, not one-per-file.
+for path in test/doltlite_*.test; do
+  [ -e "$path" ] || continue
+  base="$(basename "$path")"
+  name="${base%.test}"
+  if in_bucket "$name" || referenced "$base" || listed_in "$allowlist" "$base"; then
     continue
   fi
   if listed_in "$quarantine" "$base"; then
