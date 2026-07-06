@@ -579,3 +579,81 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
   free(owned);
   return rc;
 }
+
+int doltliteCredsList(const char *dir, char ***out, int *n) {
+  char *owned = NULL;
+  DIR *d;
+  struct dirent *e;
+  char **arr = NULL;
+  int cap = 0, cnt = 0;
+
+  *out = NULL;
+  *n = 0;
+  if (!dir) {
+    owned = doltliteCredsDir();
+    dir = owned;
+  }
+  if (!dir) return 1;
+
+  d = opendir(dir);
+  if (!d) {
+    /* No creds directory yet: an empty list is success. */
+    free(owned);
+    return 0;
+  }
+  while ((e = readdir(d)) != NULL) {
+    size_t ln = strlen(e->d_name);
+    char *kid;
+    if (!(ln > 4 && strcmp(e->d_name + ln - 4, ".jwk") == 0)) continue;
+    if (cnt == cap) {
+      int nc = cap ? cap * 2 : 8;
+      char **na = (char **)realloc(arr, (size_t)nc * sizeof(char *));
+      if (!na) goto oom;
+      arr = na;
+      cap = nc;
+    }
+    kid = (char *)malloc(ln - 4 + 1);
+    if (!kid) goto oom;
+    memcpy(kid, e->d_name, ln - 4);
+    kid[ln - 4] = '\0';
+    arr[cnt++] = kid;
+  }
+  closedir(d);
+  free(owned);
+  *out = arr;
+  *n = cnt;
+  return 0;
+
+oom:
+  closedir(d);
+  free(owned);
+  doltliteCredsFreeList(arr, cnt);
+  return 1;
+}
+
+void doltliteCredsFreeList(char **list, int n) {
+  int i;
+  if (!list) return;
+  for (i = 0; i < n; i++) free(list[i]);
+  free(list);
+}
+
+int doltliteCredsRemove(const char *dir, const char *kid) {
+  char *owned = NULL;
+  char *path;
+  int rc;
+  if (!dir) {
+    owned = doltliteCredsDir();
+    dir = owned;
+  }
+  if (!dir) return 1;
+  path = credsFilePath(dir, kid);
+  if (!path) {
+    free(owned);
+    return 1;
+  }
+  rc = (unlink(path) == 0) ? 0 : 1;
+  free(path);
+  free(owned);
+  return rc;
+}

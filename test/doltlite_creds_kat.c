@@ -264,6 +264,41 @@ int main(int argc, char **argv) {
     free(kid);
   }
 
+  /* --- list / remove (backing dolt_creds SQL) --- */
+  {
+    const char *dir = (argc > 1) ? argv[1] : NULL;
+    char *kid = doltliteCredsKid(c);
+    char **kids = NULL;
+    int n = 0, i, found = 0;
+
+    if (doltliteCredsList(dir, &kids, &n) != 0) {
+      failures++;
+      printf("  FAIL  creds list\n");
+    } else {
+      for (i = 0; i < n; i++) {
+        if (kid && strcmp(kids[i], kid) == 0) found = 1;
+      }
+      check_bool("creds list includes the saved kid", found);
+      doltliteCredsFreeList(kids, n);
+    }
+
+    if (doltliteCredsRemove(dir, kid) != 0) {
+      failures++;
+      printf("  FAIL  creds remove\n");
+    } else {
+      kids = NULL;
+      n = 0;
+      found = 0;
+      doltliteCredsList(dir, &kids, &n);
+      for (i = 0; i < n; i++) {
+        if (kid && strcmp(kids[i], kid) == 0) found = 1;
+      }
+      check_bool("creds remove deletes the kid", !found);
+      doltliteCredsFreeList(kids, n);
+    }
+    free(kid);
+  }
+
   doltliteCredsFree(c);
   doltliteCredsFree(c2);
 

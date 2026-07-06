@@ -105,6 +105,15 @@ int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out);
 ** non-zero if dir does not contain exactly one .jwk file. */
 int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out);
 
+/* List the kids of all credentials in dir (NULL => default). On success sets
+** *out (a malloc'd array of malloc'd kid strings) and *n, and returns 0; a
+** missing directory yields an empty list. Free with doltliteCredsFreeList. */
+int doltliteCredsList(const char *dir, char ***out, int *n);
+void doltliteCredsFreeList(char **list, int n);
+
+/* Delete the credential with the given kid from dir (NULL => default). */
+int doltliteCredsRemove(const char *dir, const char *kid);
+
 #ifdef __cplusplus
 }
 #endif
