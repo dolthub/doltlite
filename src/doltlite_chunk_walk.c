@@ -50,6 +50,18 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_COMMIT;
   }
 
+  /* The conflicts ("DLC") and constraint-violations ("DCV") framed blobs
+  ** lead with 'D' == CATALOG_FORMAT_V3, so they must be recognized before
+  ** the catalog check reads their magic bytes as an absurd table count.
+  ** Both are leaves: they embed whole row payloads and reference no other
+  ** chunks. */
+  if( nData >= 6 && data[0]=='D' && data[1]=='L' && data[2]=='C' ){
+    return CHUNK_CONFLICTS;
+  }
+  if( nData >= 6 && data[0]=='D' && data[1]=='C' && data[2]=='V' ){
+    return CHUNK_CONSTRAINT_VIOLATIONS;
+  }
+
   if( (data[0] == WS_FORMAT_VERSION_V5 && nData == WS_TOTAL_SIZE)
    || (data[0] == WS_FORMAT_VERSION_V4 && nData == WS_TOTAL_SIZE_V4)
    || (data[0] == WS_FORMAT_VERSION_V3 && nData == WS_TOTAL_SIZE_V3)
@@ -387,6 +399,9 @@ int doltliteEnumerateChunkChildren(
       return enumerateWorkingSetChildren(data, nData, xChild, ctx);
     case CHUNK_REFS:
       return enumerateRefsChildren(data, nData, xChild, ctx);
+    case CHUNK_CONFLICTS:
+    case CHUNK_CONSTRAINT_VIOLATIONS:
+      return SQLITE_OK;
     case CHUNK_UNKNOWN:
     default:
       return SQLITE_CORRUPT;

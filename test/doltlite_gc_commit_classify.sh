@@ -81,4 +81,39 @@ run_test_lastline "integrity_ok_with_102_byte_merge_commit" \
 
 db_rm "$DB"
 
+# The conflicts ("DLC") and constraint-violations ("DCV") blobs lead with
+# 'D' == CATALOG_FORMAT_V3, so an unresolved merge conflict in the working
+# set made the walker read them as catalogs with an absurd table count and
+# fail the mark phase the same way. Committing the conflicted transaction
+# persists the conflict, so the blob stays reachable across connections.
+run_test_match "gc_ok_with_unresolved_conflict" \
+  "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (1,'base');
+   SELECT dolt_commit('-A','-m','seed') IS NOT NULL;
+   SELECT dolt_branch('feat');
+   UPDATE t SET v='ours' WHERE k=1;
+   SELECT dolt_commit('-A','-m','ours') IS NOT NULL;
+   SELECT dolt_checkout('feat');
+   UPDATE t SET v='theirs' WHERE k=1;
+   SELECT dolt_commit('-A','-m','theirs') IS NOT NULL;
+   SELECT dolt_checkout('main');
+   BEGIN;
+   SELECT dolt_merge('feat');
+   COMMIT;
+   SELECT dolt_gc();" \
+  "chunks removed" \
+  "$DB"
+
+run_test_lastline "integrity_ok_with_unresolved_conflict" \
+  "PRAGMA integrity_check;" \
+  "ok" \
+  "$DB"
+
+run_test_lastline "conflict_survives_gc" \
+  "SELECT count(*) FROM dolt_conflicts;" \
+  "1" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
