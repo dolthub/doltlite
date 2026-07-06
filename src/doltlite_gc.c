@@ -21,6 +21,10 @@ struct GcQueueItem {
   ProllyHash hash;
   ProllyHash parent;
   const char *zSource;
+  const char *zParentType;
+  int iParentLevel;
+  int nParentItems;
+  int iChild;
 };
 struct GcQueue {
   GcQueueItem *aItems;
@@ -34,6 +38,10 @@ struct GcChildCtx {
   GcQueue *q;
   ProllyHash parent;
   const char *zSource;
+  const char *zParentType;
+  int iParentLevel;
+  int nParentItems;
+  int iNextChild;
 };
 
 typedef struct GcMarkTrace GcMarkTrace;
@@ -43,7 +51,23 @@ struct GcMarkTrace {
   ProllyHash missing;
   ProllyHash parent;
   const char *zSource;
+  const char *zParentType;
+  int iParentLevel;
+  int nParentItems;
+  int iChild;
 };
+
+static const char *gcChunkTypeName(DoltliteChunkType type){
+  switch( type ){
+    case CHUNK_COMMIT: return "commit";
+    case CHUNK_PROLLY_NODE: return "prolly-node";
+    case CHUNK_CATALOG: return "catalog";
+    case CHUNK_WORKING_SET: return "working-set";
+    case CHUNK_REFS: return "refs";
+    case CHUNK_UNKNOWN:
+    default: return "unknown";
+  }
+}
 
 static int gcQueueInit(GcQueue *q){
   q->nAlloc = 256;
@@ -63,7 +87,11 @@ static int gcQueuePush(
   GcQueue *q,
   const ProllyHash *h,
   const ProllyHash *pParent,
-  const char *zSource
+  const char *zSource,
+  const char *zParentType,
+  int iParentLevel,
+  int nParentItems,
+  int iChild
 ){
   if( prollyHashIsEmpty(h) ) return SQLITE_OK;
   if( q->nItems >= q->nAlloc ){
@@ -80,6 +108,10 @@ static int gcQueuePush(
     memset(&q->aItems[q->nItems].parent, 0, sizeof(ProllyHash));
   }
   q->aItems[q->nItems].zSource = zSource;
+  q->aItems[q->nItems].zParentType = zParentType;
+  q->aItems[q->nItems].iParentLevel = iParentLevel;
+  q->aItems[q->nItems].nParentItems = nParentItems;
+  q->aItems[q->nItems].iChild = iChild;
   q->nItems++;
   return SQLITE_OK;
 }
@@ -93,7 +125,10 @@ static int gcQueuePop(GcQueue *q, GcQueueItem *pItem){
 
 static int gcChildCb(void *ctx, const ProllyHash *pHash){
   GcChildCtx *p = (GcChildCtx*)ctx;
-  return gcQueuePush(p->q, pHash, &p->parent, p->zSource);
+  int iChild = p->iNextChild++;
+  return gcQueuePush(p->q, pHash, &p->parent, p->zSource,
+                     p->zParentType, p->iParentLevel, p->nParentItems,
+                     iChild);
 }
 
 #ifdef DOLTLITE_PROLLY_CHECK
@@ -142,16 +177,18 @@ static int gcMarkReachable(
   rc = gcQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs), 0, "refs-table");
+  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs), 0, "refs-table",
+                   0, -1, -1, -1);
 
   {
     int nBr; const BranchRef *aBr;
     refsTableGetBranches(&cs->refs, &nBr, &aBr);
     for(i=0; rc==SQLITE_OK && i<nBr; i++){
-      rc = gcQueuePush(&queue, &aBr[i].commitHash, 0, "branch-commit");
+      rc = gcQueuePush(&queue, &aBr[i].commitHash, 0, "branch-commit",
+                       0, -1, -1, -1);
       if( rc==SQLITE_OK ){
         rc = gcQueuePush(&queue, &aBr[i].workingSetHash, 0,
-                         "branch-working-set");
+                         "branch-working-set", 0, -1, -1, -1);
       }
     }
   }
@@ -160,7 +197,8 @@ static int gcMarkReachable(
     int nTg; const TagRef *aTg;
     refsTableGetTags(&cs->refs, &nTg, &aTg);
     for(i=0; rc==SQLITE_OK && i<nTg; i++){
-      rc = gcQueuePush(&queue, &aTg[i].commitHash, 0, "tag-commit");
+      rc = gcQueuePush(&queue, &aTg[i].commitHash, 0, "tag-commit",
+                       0, -1, -1, -1);
     }
   }
 
@@ -168,7 +206,8 @@ static int gcMarkReachable(
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; rc==SQLITE_OK && i<nPend; i++){
-      rc = gcQueuePush(&queue, &aPend[i].hash, 0, "pending");
+      rc = gcQueuePush(&queue, &aPend[i].hash, 0, "pending",
+                       0, -1, -1, -1);
     }
   }
 
@@ -203,6 +242,10 @@ static int gcMarkReachable(
         memcpy(&pTrace->missing, &current.hash, sizeof(ProllyHash));
         memcpy(&pTrace->parent, &current.parent, sizeof(ProllyHash));
         pTrace->zSource = current.zSource;
+        pTrace->zParentType = current.zParentType;
+        pTrace->iParentLevel = current.iParentLevel;
+        pTrace->nParentItems = current.nParentItems;
+        pTrace->iChild = current.iChild;
       }
       break;
     }
@@ -210,6 +253,17 @@ static int gcMarkReachable(
     childCtx.q = &queue;
     childCtx.parent = current.hash;
     childCtx.zSource = "child";
+    childCtx.zParentType = gcChunkTypeName(doltliteClassifyChunk(data, nData));
+    childCtx.iParentLevel = -1;
+    childCtx.nParentItems = -1;
+    childCtx.iNextChild = 0;
+    if( strcmp(childCtx.zParentType, "prolly-node")==0 ){
+      ProllyNode node;
+      if( prollyNodeParse(&node, data, nData)==SQLITE_OK ){
+        childCtx.iParentLevel = node.level;
+        childCtx.nParentItems = (int)node.nItems;
+      }
+    }
     rc = doltliteEnumerateChunkChildren(data, nData, gcChildCb, &childCtx);
 
     sqlite3_free(data);
@@ -237,10 +291,21 @@ static void gcFormatMarkFailure(
       zMissing, pTrace->zSource ? pTrace->zSource : "unknown", pTrace->rc);
   }else{
     doltliteHashToHex(&pTrace->parent, zParent);
-    sqlite3_snprintf(nBuf, zBuf,
-      "gc mark phase failed: missing chunk %s parent=%s source=%s rc=%d",
-      zMissing, zParent, pTrace->zSource ? pTrace->zSource : "unknown",
-      pTrace->rc);
+    if( pTrace->zParentType && strcmp(pTrace->zParentType, "prolly-node")==0 ){
+      sqlite3_snprintf(nBuf, zBuf,
+        "gc mark phase failed: missing chunk %s parent=%s source=%s "
+        "parent_type=%s parent_level=%d parent_items=%d child_index=%d rc=%d",
+        zMissing, zParent, pTrace->zSource ? pTrace->zSource : "unknown",
+        pTrace->zParentType, pTrace->iParentLevel, pTrace->nParentItems,
+        pTrace->iChild, pTrace->rc);
+    }else{
+      sqlite3_snprintf(nBuf, zBuf,
+        "gc mark phase failed: missing chunk %s parent=%s source=%s "
+        "parent_type=%s child_index=%d rc=%d",
+        zMissing, zParent, pTrace->zSource ? pTrace->zSource : "unknown",
+        pTrace->zParentType ? pTrace->zParentType : "unknown",
+        pTrace->iChild, pTrace->rc);
+    }
   }
 }
 
