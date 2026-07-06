@@ -4189,8 +4189,6 @@ fts4growth fts4growth-6.5
 # REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
 # statements corrupt automerge bookkeeping): automerge after a multi-row
 # DELETE leaves wrong segdir level/idx layout and malformed index reports
-fts4merge4 fts4merge4-2.2.1.1
-fts4merge4 fts4merge4-2.2.1.2
 
 # sql_uses_stmt instrumentation: doltlite deliberately opens statement
 # scope for every vtab write (hasVUpdate), upstream's onepass docid=?

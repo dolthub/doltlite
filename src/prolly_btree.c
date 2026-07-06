@@ -8268,6 +8268,24 @@ static int prollyBtCursorIndexMoveto(
     }
     if( treeFound ){
       *pRes = treeCmp;
+      /* A prefix seek can land on a tree row whose value was overwritten in
+      ** this transaction (full-key seeks catch this in the exact-match fast
+      ** path above). Serve the row from the mut map, or the caller reads the
+      ** stale tree payload. */
+      if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+        const u8 *pTreeKey = 0;
+        int nTreeKey = 0;
+        ProllyMutMapEntry *mmE = 0;
+        prollyCursorKey(&pCur->pCur, &pTreeKey, &nTreeKey);
+        rc = prollyMutMapFindRc(pCur->pMutMap, pTreeKey, nTreeKey, 0, &mmE);
+        if( rc!=SQLITE_OK ) return rc;
+        if( mmE && mmE->op==PROLLY_EDIT_INSERT ){
+          setCursorToMutMapEntryPhys(
+              pCur, (int)(mmE - pCur->pMutMap->aEntries));
+          pCur->deferredTreeSeek = 1;
+          return SQLITE_OK;
+        }
+      }
       pCur->eState = CURSOR_VALID;
       cacheCurrentTreeStoredPayloadNonIntKey(pCur);
       return SQLITE_OK;

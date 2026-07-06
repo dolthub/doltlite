@@ -130,6 +130,19 @@ run_test "ranged_delete_spares_rows_outside_range" \
 
 db_rm "$DB"
 
+run_test "prefix_seek_sees_updated_row_value" \
+  "CREATE TABLE d(a INTEGER, b INTEGER, v, PRIMARY KEY(a,b));
+   INSERT INTO d VALUES (1,0,'old'),(1,1,'old2'),(2,0,'oldx');
+   BEGIN;
+   UPDATE d SET v='new' WHERE a=1 AND b=0;
+   SELECT b, v FROM d WHERE a=1;
+   ROLLBACK;" \
+  "0|new
+1|old2" \
+  "$DB"
+
+db_rm "$DB"
+
 run_test "fts4_langid_rebuild_preserves_partitions" \
   "CREATE VIRTUAL TABLE t2 USING fts4(x, languageid=l);
    INSERT INTO t2(docid, x, l) SELECT value, 'w' || value || ' common', value % 2 FROM generate_series(0,39);
