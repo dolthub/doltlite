@@ -7,7 +7,58 @@
 #include "prolly_hash.h"
 #include "prolly_check.h"
 #include "chunk_store.h"
+#include <stdio.h>
 #include <string.h>
+
+static void checkHashToHex(const ProllyHash *pHash, char *zHex){
+  static const char zDig[] = "0123456789abcdef";
+  int i;
+  for(i=0; i<PROLLY_HASH_SIZE; i++){
+    zHex[i*2] = zDig[pHash->data[i] >> 4];
+    zHex[i*2+1] = zDig[pHash->data[i] & 0x0f];
+  }
+  zHex[PROLLY_HASH_SIZE*2] = 0;
+}
+
+int prollyCheckNodeChildrenPresent(
+  ChunkStore *pStore,
+  const u8 *pData,
+  int nData,
+  const char *zContext
+){
+  ProllyNode node;
+  ProllyHash parentHash;
+  int rc;
+  int i;
+
+  rc = prollyNodeParse(&node, pData, nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( node.level==0 ) return SQLITE_OK;
+
+  prollyHashCompute(pData, nData, &parentHash);
+  for(i=0; i<(int)node.nItems; i++){
+    ProllyHash childHash;
+    int has = 0;
+    prollyNodeChildHash(&node, i, &childHash);
+    rc = chunkStoreHas(pStore, &childHash, &has);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !has ){
+      char zParent[PROLLY_HASH_SIZE*2+1];
+      char zChild[PROLLY_HASH_SIZE*2+1];
+      checkHashToHex(&parentHash, zParent);
+      checkHashToHex(&childHash, zChild);
+      fprintf(stderr,
+              "doltlite: prolly parent publish with missing child "
+              "context=%s parent=%s child=%s parent_level=%d "
+              "parent_items=%d child_index=%d\n",
+              zContext ? zContext : "unknown", zParent, zChild,
+              (int)node.level, (int)node.nItems, i);
+      return SQLITE_CORRUPT;
+    }
+  }
+
+  return SQLITE_OK;
+}
 
 static int checkSubtree(
   ChunkStore *pStore,

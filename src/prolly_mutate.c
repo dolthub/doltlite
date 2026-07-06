@@ -417,12 +417,16 @@ static int appendNodeEntryToBuilder(
 }
 
 static int writeBuilderNode(ChunkStore *pStore, ProllyNodeBuilder *pBuilder,
-                            ProllyHash *pHash){
+                            ProllyHash *pHash, const char *zContext){
   u8 *pData = 0;
   int nData = 0;
   int rc = prollyNodeBuilderFinish(pBuilder, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = chunkStorePut(pStore, pData, nData, pHash);
+  rc = prollyCheckNodeChildrenPresent(pStore, pData, nData,
+                                      zContext);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(pStore, pData, nData, pHash);
+  }
   sqlite3_free(pData);
   return rc;
 }
@@ -440,6 +444,10 @@ static int finishAndWriteBuilderNode(ChunkStore *pStore,
   rc = prollyNodeParse(&node, pData, nData);
   if( rc==SQLITE_OK && !nodeHasSameChunkShape(&node, requireBoundary) ){
     rc = SQLITE_NOTFOUND;
+  }
+  if( rc==SQLITE_OK ){
+    rc = prollyCheckNodeChildrenPresent(pStore, pData, nData,
+                                        "prolly_mutate_shape");
   }
   if( rc==SQLITE_OK ){
     rc = chunkStorePut(pStore, pData, nData, pHash);
@@ -510,7 +518,8 @@ static int rewriteAncestorSpine(
         return rc;
       }
     }
-    rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+    rc = writeBuilderNode(pMut->pStore, &b, &parentHash,
+                          "rewriteAncestorSpine");
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ) return rc;
     *pChildHash = parentHash;
@@ -589,7 +598,8 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
       }
     }
     if( sameSize ){
-      rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+      rc = writeBuilderNode(pMut->pStore, &b, &childHash,
+                            "insertOrReplaceSingleNoRechunk.leaf");
     }else{
       rc = finishAndWriteBuilderNode(pMut->pStore, &b,
                                      !cursorLeafIsRightmost(&cur),
@@ -828,7 +838,8 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         rc = prollyNodeBuilderAdd(&b, pNewKey, nNewKey,
                                   pEdit->pVal, pEdit->nVal);
         if( rc==SQLITE_OK ){
-          rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+          rc = writeBuilderNode(pMut->pStore, &b, &childHash,
+                                "tryAppendSingleNoSplit.newLeaf");
         }
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
@@ -854,7 +865,8 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
           prollyCursorClose(&cur);
           return rc;
         }
-        rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+        rc = writeBuilderNode(pMut->pStore, &b, &childHash,
+                              "tryAppendSingleNoSplit.newRoot");
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
           prollyCursorClose(&cur);
@@ -889,7 +901,8 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         rc = prollyNodeBuilderAddWithCount(&b, pNewKey, nNewKey,
                                            childHash.data, PROLLY_HASH_SIZE, 1);
         if( rc==SQLITE_OK ){
-          rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+          rc = writeBuilderNode(pMut->pStore, &b, &parentHash,
+                                "tryAppendSingleNoSplit.parentAppend");
         }
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
@@ -920,7 +933,8 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         rc = prollyNodeBuilderAdd(&b, pNewKey, nNewKey,
                                   pEdit->pVal, pEdit->nVal);
         if( rc==SQLITE_OK ){
-          rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+          rc = writeBuilderNode(pMut->pStore, &b, &childHash,
+                                "tryAppendSingleNoSplit.leafAppend");
         }
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
@@ -965,7 +979,8 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         return rc;
       }
     }
-    rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+    rc = writeBuilderNode(pMut->pStore, &b, &parentHash,
+                          "tryAppendSingleNoSplit.rewriteAncestor");
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);
@@ -1101,7 +1116,8 @@ static int replaceBatchLeafNoRechunk(
   }
 
   if( changed ){
-    rc = writeBuilderNode(pMut->pStore, &b, pHash);
+    rc = writeBuilderNode(pMut->pStore, &b, pHash,
+                          "replaceBatchLeafNoRechunk");
   }
   prollyNodeBuilderFree(&b);
   if( rc!=SQLITE_OK ) return rc;
@@ -1254,7 +1270,8 @@ static int replaceBatchNodeNoRechunk(
   }
 
   if( changed ){
-    rc = writeBuilderNode(pMut->pStore, &b, pHash);
+    rc = writeBuilderNode(pMut->pStore, &b, pHash,
+                          "replaceBatchNodeNoRechunk");
   }
   prollyNodeBuilderFree(&b);
   if( rc!=SQLITE_OK ) return rc;

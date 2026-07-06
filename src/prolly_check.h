@@ -17,6 +17,13 @@ int prollyCheckTree(
   char **pzErr
 );
 
+int prollyCheckNodeChildrenPresent(
+  ChunkStore *pStore,
+  const u8 *pData,
+  int nData,
+  const char *zContext
+);
+
 #else
 
 static SQLITE_INLINE int prollyCheckTree(
@@ -27,6 +34,16 @@ static SQLITE_INLINE int prollyCheckTree(
 ){
   (void)pStore; (void)pRoot; (void)flags;
   if( pzErr ) *pzErr = 0;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int prollyCheckNodeChildrenPresent(
+  ChunkStore *pStore,
+  const u8 *pData,
+  int nData,
+  const char *zContext
+){
+  (void)pStore; (void)pData; (void)nData; (void)zContext;
   return SQLITE_OK;
 }
 

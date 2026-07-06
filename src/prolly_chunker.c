@@ -3,6 +3,7 @@
 
 #include "prolly_chunker.h"
 #include "prolly_cursor.h"
+#include "prolly_check.h"
 #include "prolly_xxhash.h"
 
 #include <stdio.h>
@@ -107,7 +108,11 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
     return rc;
   }
 
-  rc = chunkStorePut(ch->pStore, pData, nData, pHash);
+  rc = prollyCheckNodeChildrenPresent(ch->pStore, pData, nData,
+                                      "prolly_chunker");
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(ch->pStore, pData, nData, pHash);
+  }
   if( rc==SQLITE_OK && ch->pCache ){
     ProllyCacheEntry *pEntry;
     /* The cache adopts the finished node; copying it doubled the peak for
