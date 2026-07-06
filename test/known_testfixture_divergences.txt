@@ -1110,11 +1110,9 @@ shared9 shared9-3.5  # shared-cache locking-model divergence
 shared9 shared9-3.6  # shared-cache locking-model divergence
 
 # interrupt2 — checkpoint and cursor-step interrupts are honored after #1228.
-# The remaining failures are separate WAL/temp-db behavior gaps exposed by the
-# same fixture: temp INSERT...SELECT materializes extra NULL rows, close-time
-# WAL artifact handling differs, and DoltLite does not maintain SQLite WAL frame
-# counts for autocheckpoint growth assertions.
-interrupt2 interrupt2-2.0     # temp INSERT...SELECT into z1 has extra NULL rows
+# The remaining failures are separate WAL behavior gaps exposed by the same
+# fixture: close-time WAL artifact handling differs, and DoltLite does not
+# maintain SQLite WAL frame counts for autocheckpoint growth assertions.
 interrupt2 interrupt2-3.1.2   # close-time WAL file artifact differs
 interrupt2 interrupt2-4.1     # no SQLite WAL frame growth/autocheckpoint metric
 

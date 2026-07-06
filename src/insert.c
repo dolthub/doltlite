@@ -3312,6 +3312,24 @@ static int xferOptimization(
   sqlite3_xferopt_count++;
 #endif
   iDbSrc = sqlite3SchemaToIndex(db, pSrc->pSchema);
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+  /* The xfer optimization copies raw btree cells (OP_RowCell + a preformatted
+  ** OP_Insert), which is only valid when the source and destination tables
+  ** share a storage backend. In doltlite the temp database is not a prolly
+  ** store, so a raw cell copy between a prolly table and a temp table inserts
+  ** empty (all-NULL) rows. Fall back to the row-by-row path when the two sides
+  ** use different backends. */
+  {
+    extern int pagerShimIsShim(const Pager*);
+    Btree *pSrcBt = db->aDb[iDbSrc].pBt;
+    Btree *pDestBt = db->aDb[iDbDest].pBt;
+    if( pSrcBt && pDestBt
+     && pagerShimIsShim(sqlite3BtreePager(pSrcBt))
+          != pagerShimIsShim(sqlite3BtreePager(pDestBt)) ){
+      return 0;
+    }
+  }
+#endif
   v = sqlite3GetVdbe(pParse);
   sqlite3CodeVerifySchema(pParse, iDbSrc);
   iSrc = pParse->nTab++;
