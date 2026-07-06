@@ -3312,7 +3312,7 @@ static int xferOptimization(
   sqlite3_xferopt_count++;
 #endif
   iDbSrc = sqlite3SchemaToIndex(db, pSrc->pSchema);
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#if defined(DOLTLITE_PROLLY)
   /* The xfer optimization copies raw btree cells (OP_RowCell + a preformatted
   ** OP_Insert), which is only valid when the source and destination tables
   ** share a storage backend. In doltlite the temp database is not a prolly
