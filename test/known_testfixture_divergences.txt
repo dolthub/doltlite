@@ -4292,11 +4292,6 @@ fts4langid fts4langid-6.1
 fts4merge4 fts4merge4-2.2.1.1
 fts4merge4 fts4merge4-2.2.1.2
 
-# REAL BUG pinned (issue: stale shadow-table reads during multi-write fts
-# statements): bulk INSERT...SELECT into fts3 with tiny nodesize fails
-# "database disk image is malformed" mid-statement
-fts4merge5 fts4merge5-1.3
-
 # sql_uses_stmt instrumentation: doltlite deliberately opens statement
 # scope for every vtab write (hasVUpdate), upstream's onepass docid=?
 # forms use none

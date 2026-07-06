@@ -106,6 +106,7 @@ static void putU32LE(u8 *p, u32 v){
 #define BTCF_Incrblob   0x10
 #define BTCF_Multiple   0x20
 #define BTCF_Pinned     0x40
+#define BTCF_DeleteKey  0x80
 
 #define BTS_READ_ONLY       0x0001
 #define BTS_INITIALLY_EMPTY 0x0010
@@ -3319,6 +3320,14 @@ static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE){
   pTE->isTableRoot = pTE->zName!=0;
   pTE->tableRootKnown = 1;
   return pTE->isTableRoot ? 1 : 0;
+}
+
+static int cursorIsShadowTableRoot(BtCursor *pCur){
+  struct TableEntry *pTE;
+  if( !pCur || !pCur->pBtree || !pCur->pBtree->db ) return 0;
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( !tableEntryIsTableRoot(pCur->pBtree, pTE) || !pTE->zName ) return 0;
+  return sqlite3ShadowTableName(pCur->pBtree->db, pTE->zName);
 }
 
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
@@ -6995,7 +7004,7 @@ static int seedMutMapIterFromCursor(
   ProllyMutMapIter *pIt
 ){
   if( pCur->curIntKey ){
-    if( pCur->curFlags & BTCF_ValidNKey ){
+    if( pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey) ){
       prollyMutMapIterSeek(pIt, pCur->pMutMap, 0, 0, pCur->cachedIntKey);
       return SQLITE_OK;
     }
@@ -7147,7 +7156,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
         return SQLITE_DONE;
       }
     }
-    pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+    pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
     return rc;
   }
 
@@ -7214,7 +7223,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
       }
     }
   }
-  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
   if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
     rc = skipDegenerateSchemaRows(pCur, 1, 0);
   }
@@ -7337,7 +7346,7 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       }
     }
   }
-  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
   if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
     rc = skipDegenerateSchemaRows(pCur, -1, 0);
   }
@@ -9142,6 +9151,11 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       pCur->mmActive = 0;
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
         pCur->flushSeekEdits = 1;
+        if( pCur->curIntKey && hasSavedKey
+         && ((flags & BTREE_AUXDELETE) || cursorIsShadowTableRoot(pCur)) ){
+          pCur->cachedIntKey = iKey;
+          pCur->curFlags |= BTCF_DeleteKey;
+        }
         pCur->eState = CURSOR_SKIPNEXT;
         pCur->skipNext = 0;
       } else {
