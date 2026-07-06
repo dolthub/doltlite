@@ -163,6 +163,7 @@ jobs:
         set -o pipefail
         {
           make DOLTLITE_PROLLY_CHECK=1 doltlite
+          make DOLTLITE_PROLLY_CHECK=1 doltlite-remotesrv
           make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
           # doltlite_parity.sh compares against the package-built stock
           # SQLite CLI instead of whatever sqlite3 the runner image provides.
@@ -345,6 +346,16 @@ jobs:
     - name: Remote integration tests
       if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/remote_test.sh ./doltlite
+      timeout-minutes: 5
+
+    - name: Credential verify known-answer test
+      if: matrix.platform == 'ubuntu'
+      run: cd build && bash ../test/creds_verify_test.sh
+      timeout-minutes: 5
+
+    - name: Remote HTTPS + credential auth tests
+      if: matrix.platform == 'ubuntu'
+      run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     # -- C/Python/Go integration tests -----------------------

@@ -578,7 +578,7 @@ else
   BLAKE3_SIMD_OBJS =
 endif
 
-ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c
+ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c verify.c
 ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
 MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
 MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
