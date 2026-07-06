@@ -3240,6 +3240,9 @@ wal5 wal5-capi-5.2.19  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-5.2.21  # WAL checkpoint/frame counters zero; sidecar absent
 pagerfault3 pagerfault3-pre1  # synthetic chunk-format page_count
 pagerfault3 pagerfault3-pre2  # synthetic chunk-format page_count
+pagerfault3 pagerfault3-1-ioerr-transient.1  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.2  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.3  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.4  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.5  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.6  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
@@ -3250,14 +3253,11 @@ pagerfault3 pagerfault3-1-ioerr-transient.10  # VACUUM=dolt_gc reports phase-pre
 pagerfault3 pagerfault3-1-ioerr-transient.11  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.12  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.13  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.14  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.15  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.16  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.17  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.18  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.20  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.21  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.22  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 fts3malloc fts3_malloc-2.1.transient.100000.18  # expected count bakes in a master row stock leaks from a faulted CREATE; doltlite's CREATE stays atomic (clean replay = 4 on both engines) — #1333
 
 # ── sqllimits1 ──
@@ -4792,9 +4792,6 @@ sysfault sysfault-3-vfsfault-transient.4
 # MVCC: no reader-blocks-writer / exclusive-blocks-reader lock errors
 tclsqlite tcl-10.18
 tclsqlite tcl-10.22
-
-# VACUUM's internal "-- SELECT dolt_gc()" shows up in the trace output
-trace trace-2.6
 
 # post-DDL schema reload under trusted_schema=off re-parses t2's unsafe
 # CHECK and fails schema load (stock fresh-connection behavior, hit
