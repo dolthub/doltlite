@@ -151,7 +151,6 @@ libdir      ?= $(exec_prefix)/lib
 # libexecdir     ?= $(exec_prefix)/libexec
 ### end of autotools-compatible install dir vars
 
-
 #
 # $(LDFLAGS.{feature}) and $(CFLAGS.{feature}) =
 #
@@ -579,9 +578,6 @@ else
   BLAKE3_SIMD_OBJS =
 endif
 
-# Remote-auth: credential/JWT signer + TLS transport, plus the vendored ed25519
-# and mbedTLS trees. Object names for the vendored trees are prefixed to avoid
-# basename clashes (e.g. sha512.c exists in both ed25519 and mbedTLS).
 ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c
 ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
 MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
@@ -1373,8 +1369,6 @@ prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON) \
 prolly_xxhash.o:	$(TOP)/src/prolly_xxhash.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_xxhash.c
 
-# --- Remote authentication: credentials, JWT signer, and TLS transport ---
-
 doltlite_creds.o:	$(TOP)/src/doltlite_creds.c $(DEPS_OBJ_COMMON) \
 		$(TOP)/ext/ed25519/ed25519.h
 	$(T.cc.sqlite) -I$(TOP)/ext/ed25519 -c $(TOP)/src/doltlite_creds.c
@@ -1382,12 +1376,9 @@ doltlite_creds.o:	$(TOP)/src/doltlite_creds.c $(DEPS_OBJ_COMMON) \
 doltlite_tls.o:	$(TOP)/src/doltlite_tls.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -I$(TOP)/ext/mbedtls/include -c $(TOP)/src/doltlite_tls.c
 
-# Vendored ed25519 (ext/ed25519). Prefixed object names; the vendored sources
-# use C99 mid-block declarations, so relax that one warning as blake3 does.
 ed25519_%.o:	$(TOP)/ext/ed25519/%.c
 	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/ed25519 -c $< -o $@
 
-# Vendored mbedTLS (ext/mbedtls). Prefixed object names.
 mbedtls_%.o:	$(TOP)/ext/mbedtls/library/%.c
 	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/mbedtls/include -c $< -o $@
 
@@ -1455,7 +1446,6 @@ chunk_store.o:	$(TOP)/src/chunk_store.c $(DEPS_OBJ_COMMON)
 
 chunk_wal.o:	$(TOP)/src/chunk_wal.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_wal.c
-
 
 chunk_refs.o:	$(TOP)/src/chunk_refs.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_refs.c
@@ -2202,7 +2192,6 @@ fts5.o:	fts5.c $(DEPS_OBJ_COMMON) $(EXTHDR)
 sqlite3rbu.o:	$(TOP)/ext/rbu/sqlite3rbu.c $(DEPS_OBJ_COMMON) $(EXTHDR)
 	$(T.cc.extension) -c $(TOP)/ext/rbu/sqlite3rbu.c
 
-
 #
 # Rules to build the 'testfixture' application.
 #
@@ -2246,7 +2235,6 @@ testfixture$(T.exe):	$(T.tcl.env.sh) has_tclsh85 $(TESTFIXTURE_SRC)
 coretestprogs:	testfixture$(B.exe) sqlite3$(B.exe)
 
 testprogs:	$(TESTPROGS) srcck1$(B.exe) fuzzcheck$(T.exe) sessionfuzz$(T.exe)
-
 
 #
 # Fuzz testing
@@ -2905,7 +2893,6 @@ fuzzcheck-ubsan$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP)
 fuzzy: fuzzcheck-ubsan$(T.exe)
 xbin: fuzzcheck-ubsan$(T.exe)
 
-
 ossshell$(T.exe):	$(TOP)/test/ossfuzz.c $(TOP)/test/ossshell.c sqlite3.c sqlite3.h
 	$(T.link) -o $@ $(FUZZCHECK_OPT) $(TOP)/test/ossshell.c \
 		$(TOP)/test/ossfuzz.c sqlite3.c $(LDFLAGS.libsqlite3)
@@ -2992,7 +2979,6 @@ SHELL_DEP = \
     $(TOP)/ext/recover/sqlite3recover.c \
     $(TOP)/ext/recover/sqlite3recover.h
 
-
 shell.c:	$(SHELL_DEP) $(TOP)/tool/mkshellc.tcl $(B.tclsh)
 	$(B.tclsh) $(TOP)/tool/mkshellc.tcl shell.c
 
@@ -3054,7 +3040,6 @@ stmt.o:	$(TOP)/ext/misc/stmt.c $(DEPS_EXT_COMMON)
 $(AUXTEST): $(TOP)/test/c/$(AUXTEST).c
 	$(T.cc.sqlite) -o $@ $(TOP)/test/c/$(AUXTEST).c sqlite3.o $(LDFLAGS.libsqlite3)
 
-
 #
 # Windows section
 #
@@ -3094,7 +3079,6 @@ help:
 	echo " - soaktest      = Really, really long tests"; \
 	echo " - alltest       = Runs most or all TCL tests"; \
 	echo
-
 
 #
 # Remove build products sufficient so that subsequent makes will recompile
@@ -3149,7 +3133,6 @@ clean:	tidy
 # The main distclean rules are in Makefile.in.
 #
 distclean:	clean
-
 
 #
 # Show important variable settings.

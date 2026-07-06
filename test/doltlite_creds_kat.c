@@ -1,12 +1,3 @@
-/*
-** Known-answer tests for doltlite_creds (see src/doltlite_creds.c).
-**
-** Golden values were produced with Go's crypto/ed25519 and crypto/sha512
-** (i.e. the exact algorithms DoltHub/dolt use), so passing here proves the
-** vendored orlp ed25519 + our SHA-512/224 and encodings are wire-compatible.
-**
-** Build/run via test/creds_kat_test.sh.
-*/
 
 #include "doltlite_creds.h"
 #include "ed25519.h"
@@ -37,7 +28,6 @@ static void check_str(const char *name, const char *got, const char *want) {
   }
 }
 
-/* Fixed ed25519 seed 00,01,...,1f and its Go-derived artifacts. */
 static const char *SEED_HEX =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 static const char *PUB_HEX =
@@ -66,8 +56,6 @@ static void check_bool(const char *name, int cond) {
   }
 }
 
-/* Decode a base64url JWT segment [seg, seg+seglen) into a NUL-terminated
-** string (segments here are ASCII JSON or a raw signature). */
 static char *decodeSegZ(const char *seg, size_t seglen, size_t *outlen) {
   char *z = (char *)malloc(seglen + 1);
   unsigned char *raw = NULL;
@@ -89,10 +77,6 @@ static char *decodeSegZ(const char *seg, size_t seglen, size_t *outlen) {
   return s;
 }
 
-/* Golden bearer JWT for seed 00..1f, aud "doltremoteapi.dolthub.com", iat
-** 1700000000. ed25519 signatures are deterministic, so this is reproducible;
-** it has been validated with go-jose via ld's jwtauth (the DoltHub server
-** path), proving wire compatibility. */
 #define AUD "doltremoteapi.dolthub.com"
 static const char *GOLDEN_JWT =
     "eyJhbGciOiJFZERTQSIsImtpZCI6IjdrdTFjZ2Q3dWprY3JpNXU0c21tcnNycGNwM2Vqc21n"
@@ -115,7 +99,6 @@ int main(int argc, char **argv) {
   unsigned char seed[32];
   DoltliteCreds *c = NULL, *c2 = NULL;
 
-  /* --- SHA-512/224 --- */
   {
     unsigned char d[DOLTLITE_KID_RAW_LEN];
     doltliteSha512_224((const unsigned char *)"", 0, d);
@@ -128,7 +111,6 @@ int main(int argc, char **argv) {
               "4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa");
   }
 
-  /* --- keypair from seed (orlp == Go == dolt) --- */
   seedBytes(seed);
   if (doltliteCredsFromSeed(seed, &c) != 0) {
     printf("  FAIL  doltliteCredsFromSeed\n");
@@ -137,7 +119,6 @@ int main(int argc, char **argv) {
   hexenc(doltliteCredsPubKey(c), 32, hexbuf);
   check_str("pubkey from seed", hexbuf, PUB_HEX);
 
-  /* --- kid and pubkey base32 --- */
   {
     char *kid = doltliteCredsKid(c);
     char *pubb32 = doltliteCredsPubKeyB32(c);
@@ -147,7 +128,6 @@ int main(int argc, char **argv) {
     free(pubb32);
   }
 
-  /* --- detached signature (RFC 8032) --- */
   {
     unsigned char sig[DOLTLITE_SIG_LEN];
     doltliteCredsSign(c, (const unsigned char *)MSG, strlen(MSG), sig);
@@ -162,7 +142,6 @@ int main(int argc, char **argv) {
     }
   }
 
-  /* --- base64url --- */
   {
     char *x = doltliteBase64UrlEncode(doltliteCredsPubKey(c), 32);
     char *d = doltliteBase64UrlEncode(doltliteCredsSeed(c), 32);
@@ -184,7 +163,6 @@ int main(int argc, char **argv) {
     free(d);
   }
 
-  /* --- JWK round-trip --- */
   {
     char *json = doltliteCredsToJwk(c);
     if (!json || doltliteCredsFromJwk(json, &c2) != 0) {
@@ -206,7 +184,6 @@ int main(int argc, char **argv) {
     free(json);
   }
 
-  /* --- bearer JWT (deterministic; golden validated via ld jwtauth) --- */
   {
     char *jwt = NULL;
     if (doltliteCredsBearerTokenAt(c, AUD, 1700000000L, &jwt) != 0 || !jwt) {
@@ -228,7 +205,7 @@ int main(int argc, char **argv) {
         check_str("JWT claims JSON", cls, EXP_CLAIMS);
         check_bool("JWT signature length 64", sig != NULL && siglen == 64);
         if (sig && siglen == 64) {
-          /* signature covers "<header>.<claims>" == jwt[0 .. d2) */
+
           check_bool("JWT signature verifies over signing input",
                      ed25519_verify((const unsigned char *)sig,
                                     (const unsigned char *)jwt,
@@ -243,7 +220,6 @@ int main(int argc, char **argv) {
     }
   }
 
-  /* --- file store save/load (uses DOLTLITE_CREDS_DIR from the harness) --- */
   {
     const char *dir = (argc > 1) ? argv[1] : NULL;
     DoltliteCreds *loaded = NULL;
@@ -264,7 +240,6 @@ int main(int argc, char **argv) {
     free(kid);
   }
 
-  /* --- list / remove (backing dolt_creds SQL) --- */
   {
     const char *dir = (argc > 1) ? argv[1] : NULL;
     char *kid = doltliteCredsKid(c);

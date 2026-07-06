@@ -105,8 +105,6 @@ static int httpRequest(
   conn = doltliteConnOpen(p->zHost, p->port, p->useTls);
   if( !conn ) return SQLITE_ERROR;
 
-  /* Sign a fresh bearer token per request (30s expiry). Only ever send it
-  ** over TLS so the token is never exposed on a plaintext connection. */
   if( p->useTls && p->cred ){
     char *jwt = 0;
     if( doltliteCredsBearerToken(p->cred, p->zAudience, &jwt)==0 && jwt ){
@@ -514,9 +512,6 @@ static void httpClose(DoltliteRemote *pRemote){
   sqlite3_free(p);
 }
 
-/* Resolve a credential for this remote's host and set the JWT audience. Called
-** only for https remotes. Leaves p->cred NULL (unauthenticated) if no key is
-** available; the server then rejects writes with 401/permission-denied. */
 static void httpResolveCreds(HttpRemote *p){
   char *dir = doltliteCredsDir();
   const char *kid = getenv("DOLTLITE_CREDS_KID");

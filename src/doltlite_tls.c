@@ -1,11 +1,3 @@
-/*
-** doltlite TLS/TCP connection — see doltlite_tls.h.
-**
-** Uses the vendored mbedTLS (ext/mbedtls) for the TLS client. Certificate
-** verification is REQUIRED: the handshake fails (and doltliteConnOpen returns
-** NULL) if the server chain does not validate against the trusted roots or the
-** hostname does not match.
-*/
 
 #include "doltlite_tls.h"
 
@@ -22,7 +14,7 @@
 struct DoltliteConn {
   int useTls;
   mbedtls_net_context net;
-  /* TLS-only state (untouched when useTls == 0) */
+
   mbedtls_ssl_context ssl;
   mbedtls_ssl_config conf;
   mbedtls_x509_crt cacert;
@@ -30,21 +22,19 @@ struct DoltliteConn {
   mbedtls_entropy_context entropy;
 };
 
-/* Well-known system CA bundle locations, tried in order. */
 static const char *const CA_PATHS[] = {
-    "/etc/ssl/cert.pem",                  /* macOS (LibreSSL), *BSD  */
-    "/etc/ssl/certs/ca-certificates.crt", /* Debian, Ubuntu, Alpine  */
-    "/etc/pki/tls/certs/ca-bundle.crt",   /* RHEL, Fedora, CentOS    */
-    "/etc/ssl/ca-bundle.pem",             /* openSUSE                */
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
     NULL,
 };
 
-/* Load trusted roots into ca. Returns 0 if at least one cert was loaded. */
 static int loadTrustRoots(mbedtls_x509_crt *ca) {
   const char *env = getenv("DOLTLITE_CA_FILE");
   int i;
   if (env && *env) {
-    /* Explicit bundle: honor it exclusively so tests can pin trust. */
+
     return (mbedtls_x509_crt_parse_file(ca, env) >= 0 && ca->version != 0) ? 0 : 1;
   }
   for (i = 0; CA_PATHS[i] != NULL; i++) {
@@ -95,7 +85,7 @@ DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
   mbedtls_ssl_conf_rng(&c->conf, mbedtls_ctr_drbg_random, &c->drbg);
 
   if (mbedtls_ssl_setup(&c->ssl, &c->conf) != 0) goto fail_tls;
-  /* Sets SNI and the name checked against the certificate CN/SAN. */
+
   if (mbedtls_ssl_set_hostname(&c->ssl, host) != 0) goto fail_tls;
   mbedtls_ssl_set_bio(&c->ssl, &c->net, mbedtls_net_send, mbedtls_net_recv, NULL);
 
@@ -145,7 +135,7 @@ int doltliteConnRead(DoltliteConn *c, void *buf, int nbuf) {
       n = (int)mbedtls_net_recv(&c->net, (unsigned char *)buf, (size_t)nbuf);
     }
     if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
-    /* Peer sent close_notify (TLS) or the socket reached EOF: end of stream. */
+
     if (c->useTls && n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return 0;
     if (n < 0) return -1;
     return n;

@@ -31,7 +31,7 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
     return doltliteFsRemoteOpen(pVfs, zUrl + 7);
   }
   if( strncmp(zUrl, "http://", 7)==0 || strncmp(zUrl, "https://", 8)==0 ){
-    /* doltliteHttpRemoteOpen handles both http and (verified) https. */
+
     return doltliteHttpRemoteOpen(zUrl);
   }
 
@@ -777,12 +777,8 @@ static sqlite3_module remotesModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-/* Where users approve a new credential. Overridable for dev/DoltLab. */
 #define DOLTLITE_DEFAULT_LOGIN_URL "https://dolthub.com/settings/credentials"
 
-/* dolt_creds_new() — generate an ed25519 credential, store it under
-** ~/.doltlite/creds, and return the public key plus the approval URL. The user
-** adds the key to their DoltHub account; the next push then authenticates. */
 static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCreds *cred = 0;
@@ -827,7 +823,6 @@ static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   doltliteCredsFree(cred);
 }
 
-/* dolt_creds(['list'] | 'rm', <kid>) — list stored credential ids, or remove one. */
 static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   const char *action = "list";

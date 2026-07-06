@@ -1,9 +1,4 @@
 #!/bin/bash
-#
-# Live test for doltlite_tls: compiles the TLS module against the vendored
-# mbedTLS with a plain C compiler and runs an HTTPS GET (+ a wrong-CA negative
-# check). Network-dependent; the program SKIPs when the host is unreachable.
-#
 set -u
 set -o pipefail
 
@@ -12,7 +7,6 @@ CC="${CC:-cc}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Best-effort self-signed CA for the negative test; skipped if openssl absent.
 FAKE=""
 if command -v openssl >/dev/null 2>&1; then
   if openssl req -x509 -newkey rsa:2048 -keyout /dev/null \

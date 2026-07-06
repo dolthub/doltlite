@@ -1,9 +1,4 @@
 #!/bin/bash
-#
-# Known-answer tests for doltlite_creds: compiles the KAT program against the
-# vendored ed25519 and src/doltlite_creds.c with a plain C compiler (no full
-# doltlite build required), mirroring test/blake3_kat_test.sh.
-#
 set -u
 set -o pipefail
 
@@ -33,5 +28,4 @@ echo "=== doltlite creds KAT ==="
   exit 1
 }
 
-# Isolate the file-store test in a temp creds dir.
 DOLTLITE_CREDS_DIR="$TMP/creds" "$BIN" "$TMP/creds"

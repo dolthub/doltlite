@@ -1,11 +1,3 @@
-/*
-** Live test for doltlite_tls: performs a real HTTPS GET with certificate +
-** hostname verification, and checks that verification is actually enforced by
-** pinning trust to an unrelated CA (which must cause the handshake to fail).
-**
-** Network-dependent; SKIPs cleanly when the host is unreachable. Run via
-** test/tls_test.sh.
-*/
 
 #include "doltlite_tls.h"
 
@@ -26,7 +18,6 @@ int main(int argc, char **argv) {
 
   unsetenv("DOLTLITE_CA_FILE");
 
-  /* Reachability: a plain TCP connect. If this fails we're offline; skip. */
   probe = doltliteConnOpen(host, port, 0);
   if (!probe) {
     printf("SKIP  cannot reach %s:%d (offline?)\n", host, port);
@@ -34,7 +25,6 @@ int main(int argc, char **argv) {
   }
   doltliteConnClose(probe);
 
-  /* Positive: TLS handshake + chain/hostname verification against system roots. */
   c = doltliteConnOpen(host, port, 1);
   if (!c) {
     printf("FAIL  TLS connect+verify to %s failed\n", host);
@@ -68,8 +58,6 @@ int main(int argc, char **argv) {
     doltliteConnClose(c);
   }
 
-  /* Negative: pin trust to an unrelated self-signed CA. The real server cert is
-  ** not signed by it, so verification must fail and the connect must be NULL. */
   if (argc > 1 && argv[1][0] != '\0') {
     setenv("DOLTLITE_CA_FILE", argv[1], 1);
     DoltliteConn *bad = doltliteConnOpen(host, port, 1);
