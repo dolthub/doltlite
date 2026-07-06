@@ -337,6 +337,11 @@ jobs:
       run: cd build && bash ../test/remote_test.sh ./doltlite
       timeout-minutes: 5
 
+    - name: GC concurrent commit stress
+      if: matrix.platform == 'ubuntu'
+      run: cd build && bash ../test/gc_concurrent_commit_stress.sh ./doltlite
+      timeout-minutes: 5
+
     # -- C/Python/Go integration tests -----------------------
 
     - name: C integration tests

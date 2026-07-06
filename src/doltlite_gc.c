@@ -16,16 +16,38 @@ extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 #include "doltlite_internal.h"
 
 typedef struct GcQueue GcQueue;
+typedef struct GcQueueItem GcQueueItem;
+struct GcQueueItem {
+  ProllyHash hash;
+  ProllyHash parent;
+  const char *zSource;
+};
 struct GcQueue {
-  ProllyHash *aItems;
+  GcQueueItem *aItems;
   int nItems;
   int nAlloc;
   int iHead;
 };
 
+typedef struct GcChildCtx GcChildCtx;
+struct GcChildCtx {
+  GcQueue *q;
+  ProllyHash parent;
+  const char *zSource;
+};
+
+typedef struct GcMarkTrace GcMarkTrace;
+struct GcMarkTrace {
+  int hasMissing;
+  int rc;
+  ProllyHash missing;
+  ProllyHash parent;
+  const char *zSource;
+};
+
 static int gcQueueInit(GcQueue *q){
   q->nAlloc = 256;
-  q->aItems = sqlite3_malloc(q->nAlloc * sizeof(ProllyHash));
+  q->aItems = sqlite3_malloc(q->nAlloc * sizeof(GcQueueItem));
   if( !q->aItems ) return SQLITE_NOMEM;
   q->nItems = 0;
   q->iHead = 0;
@@ -37,30 +59,41 @@ static void gcQueueFree(GcQueue *q){
   memset(q, 0, sizeof(*q));
 }
 
-static int gcQueuePush(GcQueue *q, const ProllyHash *h){
+static int gcQueuePush(
+  GcQueue *q,
+  const ProllyHash *h,
+  const ProllyHash *pParent,
+  const char *zSource
+){
   if( prollyHashIsEmpty(h) ) return SQLITE_OK;
   if( q->nItems >= q->nAlloc ){
     int newAlloc = q->nAlloc * 2;
-    ProllyHash *aNew = sqlite3_realloc(q->aItems, newAlloc * sizeof(ProllyHash));
+    GcQueueItem *aNew = sqlite3_realloc(q->aItems, newAlloc * sizeof(GcQueueItem));
     if( !aNew ) return SQLITE_NOMEM;
     q->aItems = aNew;
     q->nAlloc = newAlloc;
   }
-  memcpy(&q->aItems[q->nItems], h, sizeof(ProllyHash));
+  memcpy(&q->aItems[q->nItems].hash, h, sizeof(ProllyHash));
+  if( pParent ){
+    memcpy(&q->aItems[q->nItems].parent, pParent, sizeof(ProllyHash));
+  }else{
+    memset(&q->aItems[q->nItems].parent, 0, sizeof(ProllyHash));
+  }
+  q->aItems[q->nItems].zSource = zSource;
   q->nItems++;
   return SQLITE_OK;
 }
 
-static int gcQueuePop(GcQueue *q, ProllyHash *h){
+static int gcQueuePop(GcQueue *q, GcQueueItem *pItem){
   if( q->iHead >= q->nItems ) return 0;
-  memcpy(h, &q->aItems[q->iHead], sizeof(ProllyHash));
+  *pItem = q->aItems[q->iHead];
   q->iHead++;
   return 1;
 }
 
 static int gcChildCb(void *ctx, const ProllyHash *pHash){
-  GcQueue *q = (GcQueue*)ctx;
-  return gcQueuePush(q, pHash);
+  GcChildCtx *p = (GcChildCtx*)ctx;
+  return gcQueuePush(p->q, pHash, &p->parent, p->zSource);
 }
 
 #ifdef DOLTLITE_PROLLY_CHECK
@@ -97,23 +130,29 @@ static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
 static int gcMarkReachable(
   sqlite3 *db,
   ChunkStore *cs,
-  ProllyHashSet *marked
+  ProllyHashSet *marked,
+  GcMarkTrace *pTrace
 ){
   GcQueue queue;
-  ProllyHash current;
+  GcQueueItem current;
+  GcChildCtx seedCtx;
   int rc, i;
 
+  memset(pTrace, 0, sizeof(*pTrace));
   rc = gcQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs));
+  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs), 0, "refs-table");
 
   {
     int nBr; const BranchRef *aBr;
     refsTableGetBranches(&cs->refs, &nBr, &aBr);
     for(i=0; rc==SQLITE_OK && i<nBr; i++){
-      rc = gcQueuePush(&queue, &aBr[i].commitHash);
-      if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &aBr[i].workingSetHash);
+      rc = gcQueuePush(&queue, &aBr[i].commitHash, 0, "branch-commit");
+      if( rc==SQLITE_OK ){
+        rc = gcQueuePush(&queue, &aBr[i].workingSetHash, 0,
+                         "branch-working-set");
+      }
     }
   }
 
@@ -121,7 +160,7 @@ static int gcMarkReachable(
     int nTg; const TagRef *aTg;
     refsTableGetTags(&cs->refs, &nTg, &aTg);
     for(i=0; rc==SQLITE_OK && i<nTg; i++){
-      rc = gcQueuePush(&queue, &aTg[i].commitHash);
+      rc = gcQueuePush(&queue, &aTg[i].commitHash, 0, "tag-commit");
     }
   }
 
@@ -129,12 +168,15 @@ static int gcMarkReachable(
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; rc==SQLITE_OK && i<nPend; i++){
-      rc = gcQueuePush(&queue, &aPend[i].hash);
+      rc = gcQueuePush(&queue, &aPend[i].hash, 0, "pending");
     }
   }
 
   if( rc==SQLITE_OK ){
-    rc = doltliteSeedSessionHashes(db, cs, gcChildCb, &queue);
+    memset(&seedCtx, 0, sizeof(seedCtx));
+    seedCtx.q = &queue;
+    seedCtx.zSource = "session";
+    rc = doltliteSeedSessionHashes(db, cs, gcChildCb, &seedCtx);
   }
 
   if( rc!=SQLITE_OK ){
@@ -145,19 +187,30 @@ static int gcMarkReachable(
   while( gcQueuePop(&queue, &current) ){
     u8 *data = 0;
     int nData = 0;
+    GcChildCtx childCtx;
 
-    if( prollyHashIsEmpty(&current) ) continue;
-    if( prollyHashSetContains(marked, &current) ) continue;
+    if( prollyHashIsEmpty(&current.hash) ) continue;
+    if( prollyHashSetContains(marked, &current.hash) ) continue;
 
-    rc = prollyHashSetAdd(marked, &current);
+    rc = prollyHashSetAdd(marked, &current.hash);
     if( rc!=SQLITE_OK ) break;
 
-    rc = chunkStoreGet(cs, &current, &data, &nData);
+    rc = chunkStoreGet(cs, &current.hash, &data, &nData);
     if( rc!=SQLITE_OK ){
+      if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+        pTrace->hasMissing = 1;
+        pTrace->rc = rc;
+        memcpy(&pTrace->missing, &current.hash, sizeof(ProllyHash));
+        memcpy(&pTrace->parent, &current.parent, sizeof(ProllyHash));
+        pTrace->zSource = current.zSource;
+      }
       break;
     }
 
-    rc = doltliteEnumerateChunkChildren(data, nData, gcChildCb, &queue);
+    childCtx.q = &queue;
+    childCtx.parent = current.hash;
+    childCtx.zSource = "child";
+    rc = doltliteEnumerateChunkChildren(data, nData, gcChildCb, &childCtx);
 
     sqlite3_free(data);
     if( rc!=SQLITE_OK ) break;
@@ -165,6 +218,30 @@ static int gcMarkReachable(
 
   gcQueueFree(&queue);
   return rc;
+}
+
+static void gcFormatMarkFailure(
+  char *zBuf,
+  int nBuf,
+  const GcMarkTrace *pTrace
+){
+  char zMissing[PROLLY_HASH_SIZE*2+1];
+  char zParent[PROLLY_HASH_SIZE*2+1];
+  if( !zBuf || nBuf<=0 || !pTrace || !pTrace->hasMissing ){
+    return;
+  }
+  doltliteHashToHex(&pTrace->missing, zMissing);
+  if( prollyHashIsEmpty(&pTrace->parent) ){
+    sqlite3_snprintf(nBuf, zBuf,
+      "gc mark phase failed: missing chunk %s source=%s rc=%d",
+      zMissing, pTrace->zSource ? pTrace->zSource : "unknown", pTrace->rc);
+  }else{
+    doltliteHashToHex(&pTrace->parent, zParent);
+    sqlite3_snprintf(nBuf, zBuf,
+      "gc mark phase failed: missing chunk %s parent=%s source=%s rc=%d",
+      zMissing, zParent, pTrace->zSource ? pTrace->zSource : "unknown",
+      pTrace->rc);
+  }
 }
 
 static int gcAppendMarkedChunk(
@@ -666,10 +743,13 @@ static int gcRun(
   int *pnKept,
   int *pnRemoved,
   const char **pzPhase,
+  char *zPhaseBuf,
+  int nPhaseBuf,
   int bRequireExclusive,
   int bForceRefresh
 ){
   ProllyHashSet marked;
+  GcMarkTrace markTrace;
   int rc;
 
   *pnKept = 0;
@@ -701,11 +781,16 @@ static int gcRun(
     return rc;
   }
 
-  rc = gcMarkReachable(db, cs, &marked);
+  rc = gcMarkReachable(db, cs, &marked, &markTrace);
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&marked);
     chunkStoreUnlock(cs);
-    *pzPhase = "gc mark phase failed";
+    if( markTrace.hasMissing && zPhaseBuf && nPhaseBuf>0 ){
+      gcFormatMarkFailure(zPhaseBuf, nPhaseBuf, &markTrace);
+      *pzPhase = zPhaseBuf;
+    }else{
+      *pzPhase = "gc mark phase failed";
+    }
     return rc;
   }
 
@@ -729,6 +814,7 @@ static void doltliteGcFunc(
   int nKept = 0, nRemoved = 0;
   int rc;
   const char *zPhase = 0;
+  char zPhaseBuf[256];
   char result[128];
 
   (void)argc;
@@ -744,7 +830,8 @@ static void doltliteGcFunc(
     return;
   }
 
-  rc = gcRun(db, cs, &nKept, &nRemoved, &zPhase, 1, 1);
+  rc = gcRun(db, cs, &nKept, &nRemoved, &zPhase, zPhaseBuf,
+             sizeof(zPhaseBuf), 1, 1);
   if( rc!=SQLITE_OK ){
     if( rc==SQLITE_BUSY ){
       sqlite3_result_error(context,
@@ -774,7 +861,7 @@ int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
     return SQLITE_OK;
   }
 
-  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0);
+  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0, 0, 0);
 }
 
 int doltliteGcCompact(sqlite3 *db){
@@ -783,8 +870,13 @@ int doltliteGcCompact(sqlite3 *db){
 }
 
 int doltliteGcRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_gc", 0, SQLITE_UTF8, 0,
-                                  doltliteGcFunc, 0, 0);
+  int rc = sqlite3_create_function(db, "dolt_gc", 0, SQLITE_UTF8, 0,
+                                   doltliteGcFunc, 0, 0);
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+  extern int doltliteChunkStoreDebugRegister(sqlite3*);
+  if( rc==SQLITE_OK ) rc = doltliteChunkStoreDebugRegister(db);
+#endif
+  return rc;
 }
 
 #endif

@@ -11,6 +11,13 @@
 #include <stdlib.h>
 #include <limits.h>
 
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+static sqlite3_int64 csDebugReloadGuardPreserve = 0;
+static sqlite3_int64 csDebugReloadGuardDirect = 0;
+static sqlite3_int64 csDebugPendingDrains = 0;
+static sqlite3_int64 csDebugPendingDrainChunks = 0;
+#endif
+
 static int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
 }
@@ -276,6 +283,9 @@ static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 
   /* Reloading drops aRecent; never do that with uncommitted refs to it. */
   if( cs->staging.nRecentUncommitted > 0 ){
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+    csDebugReloadGuardPreserve++;
+#endif
     return SQLITE_BUSY_SNAPSHOT;
   }
 
@@ -1318,6 +1328,11 @@ static int csDrainPendingToWal(ChunkStore *cs){
     return SQLITE_OK;
   }
 
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+  csDebugPendingDrains++;
+  csDebugPendingDrainChunks += cs->staging.nPending;
+#endif
+
   if( cs->file.pFile == 0 ){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                   | SQLITE_OPEN_MAIN_DB;
@@ -2157,6 +2172,9 @@ static int csReloadFromDisk(ChunkStore *cs){
   int rc;
   /* Direct refresh also reaches the reload path. */
   if( cs->staging.nRecentUncommitted > 0 ){
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+    csDebugReloadGuardDirect++;
+#endif
     return SQLITE_BUSY_SNAPSHOT;
   }
   rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
@@ -2183,5 +2201,48 @@ static int csReloadFromDisk(ChunkStore *cs){
 
   return SQLITE_OK;
 }
+
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+
+static void doltliteChunkStoreDebugFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  char zBuf[256];
+  const char *zArg = 0;
+
+  if( argc>0 && sqlite3_value_type(argv[0])!=SQLITE_NULL ){
+    zArg = (const char*)sqlite3_value_text(argv[0]);
+  }
+  if( zArg && sqlite3_stricmp(zArg, "reset")==0 ){
+    csDebugReloadGuardPreserve = 0;
+    csDebugReloadGuardDirect = 0;
+    csDebugPendingDrains = 0;
+    csDebugPendingDrainChunks = 0;
+  }
+
+  sqlite3_snprintf(sizeof(zBuf), zBuf,
+    "reload_guard_preserve=%lld reload_guard_direct=%lld "
+    "pending_drains=%lld pending_drain_chunks=%lld "
+    "recent=%d recent_uncommitted=%d pending=%d lock_depth=%d",
+    csDebugReloadGuardPreserve, csDebugReloadGuardDirect,
+    csDebugPendingDrains, csDebugPendingDrainChunks,
+    cs ? cs->staging.nRecent : 0,
+    cs ? cs->staging.nRecentUncommitted : 0,
+    cs ? cs->staging.nPending : 0,
+    cs ? cs->lockDepth : 0);
+  sqlite3_result_text(ctx, zBuf, -1, SQLITE_TRANSIENT);
+}
+
+int doltliteChunkStoreDebugRegister(sqlite3 *db){
+  return sqlite3_create_function(db, "dolt_debug_chunk_store", -1,
+                                 SQLITE_UTF8, 0,
+                                 doltliteChunkStoreDebugFunc, 0, 0);
+}
+#endif
 
 #endif
