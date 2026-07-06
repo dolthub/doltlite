@@ -1,4 +1,3 @@
-
 #include "doltlite_creds.h"
 
 #include "ed25519.h"
@@ -166,7 +165,6 @@ int doltliteCredsFromSeed(const unsigned char seed[DOLTLITE_SEED_LEN],
   DoltliteCreds *c = (DoltliteCreds *)calloc(1, sizeof(*c));
   if (!c) return 1;
   memcpy(c->seed, seed, DOLTLITE_SEED_LEN);
-
   ed25519_create_keypair(c->pub, c->expanded, c->seed);
   *out = c;
   return 0;
@@ -329,6 +327,46 @@ static char *jsonFindString(const char *json, const char *key) {
   return NULL;
 }
 
+static int jsonFindLong(const char *json, const char *key, long *out) {
+  size_t keylen = strlen(key);
+  const char *p = json;
+  while ((p = strchr(p, '"')) != NULL) {
+    const char *kstart = p + 1;
+    if (strncmp(kstart, key, keylen) == 0 && kstart[keylen] == '"') {
+      const char *q = kstart + keylen + 1;
+      char *end;
+      long v;
+      while (*q == ' ' || *q == ':' || *q == '\t') q++;
+      v = strtol(q, &end, 10);
+      if (end == q) return 0;
+      *out = v;
+      return 1;
+    }
+    p = kstart;
+  }
+  return 0;
+}
+
+static char *decodeSegZ(const char *seg, size_t seglen) {
+  char *z = (char *)malloc(seglen + 1);
+  unsigned char *raw = NULL;
+  size_t rawlen = 0;
+  char *s = NULL;
+  if (!z) return NULL;
+  memcpy(z, seg, seglen);
+  z[seglen] = '\0';
+  if (doltliteBase64UrlDecode(z, &raw, &rawlen) == 0) {
+    s = (char *)malloc(rawlen + 1);
+    if (s) {
+      memcpy(s, raw, rawlen);
+      s[rawlen] = '\0';
+    }
+  }
+  free(z);
+  free(raw);
+  return s;
+}
+
 int doltliteCredsFromJwk(const char *json, DoltliteCreds **out) {
   char *dstr = jsonFindString(json, "d");
   unsigned char *seed = NULL;
@@ -421,7 +459,6 @@ int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
 
   fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
   if (fd < 0) goto done;
-
   (void)fchmod(fd, 0600);
   {
     size_t len = strlen(json), off = 0;
@@ -542,7 +579,6 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
 
   d = opendir(dir);
   if (!d) {
-
     free(owned);
     return 0;
   }
@@ -600,5 +636,144 @@ int doltliteCredsRemove(const char *dir, const char *kid) {
   rc = (unlink(path) == 0) ? 0 : 1;
   free(path);
   free(owned);
+  return rc;
+}
+
+int doltliteCredsLoadPubKey(const char *dir, const char *kid,
+                            unsigned char pub[DOLTLITE_PUBKEY_LEN]) {
+  char *owned = NULL;
+  char *path = NULL;
+  FILE *f = NULL;
+  char *json = NULL;
+  char *xstr = NULL;
+  unsigned char *raw = NULL;
+  size_t rawlen = 0;
+  long sz;
+  int rc = 1;
+
+  if (!dir) {
+    owned = doltliteCredsDir();
+    dir = owned;
+  }
+  if (!dir) return 1;
+  path = credsFilePath(dir, kid);
+  if (!path) goto done;
+
+  f = fopen(path, "rb");
+  if (!f) goto done;
+  if (fseek(f, 0, SEEK_END) != 0) goto done;
+  sz = ftell(f);
+  if (sz < 0 || sz > 1 << 20) goto done;
+  if (fseek(f, 0, SEEK_SET) != 0) goto done;
+  json = (char *)malloc((size_t)sz + 1);
+  if (!json) goto done;
+  if (fread(json, 1, (size_t)sz, f) != (size_t)sz) goto done;
+  json[sz] = '\0';
+
+  xstr = jsonFindString(json, "x");
+  if (!xstr) goto done;
+  if (doltliteBase64UrlDecode(xstr, &raw, &rawlen)) goto done;
+  if (rawlen != DOLTLITE_PUBKEY_LEN) goto done;
+  memcpy(pub, raw, DOLTLITE_PUBKEY_LEN);
+  rc = 0;
+
+done:
+  if (f) fclose(f);
+  free(json);
+  free(path);
+  free(owned);
+  free(xstr);
+  free(raw);
+  return rc;
+}
+
+#define JWT_ISSUER_EXPECTED   "dolt-client.dolthub.com"
+#define JWT_SUBJECT_PREFIX_V  "doltClientCredentials/"
+#define JWT_TOKEN_VERSION_V   "2023.01"
+
+int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudience,
+                              const char *authKeysDir, long now, char **kidOut) {
+  const char *jwt;
+  const char *dot1, *dot2;
+  char *hdr = NULL, *claims = NULL;
+  char *alg = NULL, *ver = NULL, *kid = NULL;
+  char *iss = NULL, *sub = NULL, *aud = NULL, *expectSub = NULL;
+  char *sigStr = NULL;
+  unsigned char *sig = NULL;
+  size_t siglen = 0;
+  unsigned char pub[DOLTLITE_PUBKEY_LEN];
+  long exp = 0;
+  int rc = 1;
+
+  if (kidOut) *kidOut = NULL;
+  if (!authValue) return 1;
+
+  jwt = authValue;
+  if (strncmp(jwt, "Bearer ", 7) == 0) jwt += 7;
+  while (*jwt == ' ') jwt++;
+
+  dot1 = strchr(jwt, '.');
+  if (!dot1) return 1;
+  dot2 = strchr(dot1 + 1, '.');
+  if (!dot2) return 1;
+
+  hdr = decodeSegZ(jwt, (size_t)(dot1 - jwt));
+  claims = decodeSegZ(dot1 + 1, (size_t)(dot2 - (dot1 + 1)));
+  if (!hdr || !claims) goto done;
+
+  alg = jsonFindString(hdr, "alg");
+  ver = jsonFindString(hdr, "dolt_token_version");
+  kid = jsonFindString(hdr, "kid");
+  if (!alg || strcmp(alg, "EdDSA") != 0) goto done;
+  if (!ver || strcmp(ver, JWT_TOKEN_VERSION_V) != 0) goto done;
+  if (!kid) goto done;
+
+  if (doltliteCredsLoadPubKey(authKeysDir, kid, pub) != 0) goto done;
+
+  sigStr = (char *)malloc(strlen(dot2 + 1) + 1);
+  if (!sigStr) goto done;
+  strcpy(sigStr, dot2 + 1);
+  if (doltliteBase64UrlDecode(sigStr, &sig, &siglen)) goto done;
+  if (siglen != DOLTLITE_SIG_LEN) goto done;
+  if (ed25519_verify(sig, (const unsigned char *)jwt, (size_t)(dot2 - jwt), pub) != 1) {
+    goto done;
+  }
+
+  iss = jsonFindString(claims, "iss");
+  sub = jsonFindString(claims, "sub");
+  aud = jsonFindString(claims, "aud");
+  if (!iss || strcmp(iss, JWT_ISSUER_EXPECTED) != 0) goto done;
+
+  expectSub = (char *)malloc(strlen(JWT_SUBJECT_PREFIX_V) + strlen(kid) + 1);
+  if (!expectSub) goto done;
+  strcpy(expectSub, JWT_SUBJECT_PREFIX_V);
+  strcat(expectSub, kid);
+  if (!sub || strcmp(sub, expectSub) != 0) goto done;
+
+  if (expectedAudience && *expectedAudience) {
+    if (!aud || strcmp(aud, expectedAudience) != 0) goto done;
+  }
+
+  if (!jsonFindLong(claims, "exp", &exp)) goto done;
+  if (now >= exp) goto done;
+
+  rc = 0;
+  if (kidOut) {
+    *kidOut = kid;
+    kid = NULL;
+  }
+
+done:
+  free(hdr);
+  free(claims);
+  free(alg);
+  free(ver);
+  free(kid);
+  free(iss);
+  free(sub);
+  free(aud);
+  free(expectSub);
+  free(sigStr);
+  free(sig);
   return rc;
 }
