@@ -2440,6 +2440,7 @@ static void run_gc_rewrite_failure(void){
   res = queryScalarText(db, "SELECT dolt_gc()");
   check("gc_post_replace_open_failure_was_injected", gFailHits>0);
   check("gc_post_replace_open_failure_returns_error", strstr(res, "ERROR:")!=0);
+  gFailOpenMainOnce = 0;
   check("gc_post_replace_connection_can_continue",
     execSql(db,
       "INSERT INTO t VALUES(3,'c');"

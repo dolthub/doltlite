@@ -1,0 +1,115 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-gc-stop-world
+
+set saved_pending_drain_limit [expr {[info exists env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)] ? $env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) : ""}]
+set had_pending_drain_limit [info exists env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)]
+
+do_test 1.0 {
+  set res [execsql {
+    CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT);
+    INSERT INTO t1 VALUES(1, 'seed');
+    SELECT dolt_commit('-A', '-m', 'seed');
+  }]
+  expr {[string length [lindex $res 0]]==40}
+} {1}
+
+do_catchsql_test 1.1 {
+  BEGIN;
+  INSERT INTO t1 VALUES(2, 'txn');
+  SELECT dolt_gc();
+} {1 {gc requires exclusive access}}
+
+do_execsql_test 1.2 {
+  ROLLBACK;
+  SELECT count(*) FROM t1;
+  PRAGMA integrity_check;
+} {1 ok}
+
+db close
+forcedelete test.db
+sqlite3 db test.db
+
+do_test 2.0 {
+  set res [execsql {
+    CREATE TABLE t2(a INTEGER PRIMARY KEY, b TEXT);
+    INSERT INTO t2 VALUES(1, 'seed');
+    SELECT dolt_commit('-A', '-m', 'seed');
+  }]
+  expr {[string length [lindex $res 0]]==40}
+} {1}
+
+sqlite3 db2 test.db
+
+do_test 2.1 {
+  db2 eval {
+    INSERT INTO t2 VALUES(2, 'peer');
+    SELECT dolt_commit('-A', '-m', 'peer');
+  }
+  set gc [execsql {SELECT dolt_gc()}]
+  list [regexp {chunks removed.*chunks kept} $gc] \
+       [db2 eval {SELECT count(*) FROM t2}] \
+       [db2 eval {SELECT count(*) FROM dolt_log}] \
+       [db2 eval {PRAGMA integrity_check}]
+} {1 2 3 ok}
+
+db2 close
+db close
+sqlite3 db test.db
+
+do_execsql_test 2.2 {
+  SELECT count(*) FROM t2;
+  SELECT count(*) FROM dolt_log;
+  PRAGMA integrity_check;
+} {2 3 ok}
+
+db close
+forcedelete test.db
+sqlite3 db test.db
+set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) 1
+
+do_test 3.0 {
+  set res [execsql {
+    CREATE TABLE t3(a INTEGER PRIMARY KEY, b BLOB);
+    INSERT INTO t3 VALUES(1, zeroblob(256));
+    SELECT dolt_commit('-A', '-m', 'seed');
+  }]
+  expr {[string length [lindex $res 0]]==40}
+} {1}
+
+do_execsql_test 3.1 {
+  BEGIN;
+  WITH data(i) AS (
+    SELECT 2 UNION ALL SELECT i+1 FROM data WHERE i<80
+  )
+  INSERT INTO t3 SELECT i, randomblob(4096) FROM data;
+  PRAGMA wal_checkpoint;
+  COMMIT;
+  SELECT count(*) FROM t3;
+  PRAGMA integrity_check;
+} {0 0 0 80 ok}
+
+db close
+sqlite3 db test.db
+
+do_test 3.2 {
+  set res [catchsql {
+    SELECT count(*) FROM t3;
+    PRAGMA integrity_check;
+    SELECT dolt_gc();
+    PRAGMA integrity_check;
+  }]
+  expr {[lindex $res 0]==0
+        && [lindex [lindex $res 1] 0]==80
+        && [lindex [lindex $res 1] 1] eq "ok"
+        && [lindex [lindex $res 1] 3] eq "ok"}
+} {1}
+
+if {$had_pending_drain_limit} {
+  set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) $saved_pending_drain_limit
+} else {
+  unset env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)
+}
+
+finish_test

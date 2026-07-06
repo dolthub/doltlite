@@ -665,7 +665,9 @@ static int gcRun(
   ChunkStore *cs,
   int *pnKept,
   int *pnRemoved,
-  const char **pzPhase
+  const char **pzPhase,
+  int bRequireExclusive,
+  int bForceRefresh
 ){
   ProllyHashSet marked;
   int rc;
@@ -673,10 +675,23 @@ static int gcRun(
   *pnKept = 0;
   *pnRemoved = 0;
 
+  if( bRequireExclusive && (!sqlite3_get_autocommit(db) || cs->lockDepth>0) ){
+    *pzPhase = "gc requires exclusive access";
+    return SQLITE_BUSY;
+  }
+
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ){
     *pzPhase = "failed to acquire lock for gc";
     return rc;
+  }
+  if( bForceRefresh ){
+    rc = chunkStoreForceRefresh(cs);
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(cs);
+      *pzPhase = "failed to refresh store for gc";
+      return rc;
+    }
   }
 
   rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
@@ -729,11 +744,11 @@ static void doltliteGcFunc(
     return;
   }
 
-  rc = gcRun(db, cs, &nKept, &nRemoved, &zPhase);
+  rc = gcRun(db, cs, &nKept, &nRemoved, &zPhase, 1, 1);
   if( rc!=SQLITE_OK ){
     if( rc==SQLITE_BUSY ){
       sqlite3_result_error(context,
-        "database is locked by another connection", -1);
+        zPhase ? zPhase : "database is locked by another connection", -1);
     }else{
       gcResultError(context, rc, zPhase);
     }
@@ -745,17 +760,26 @@ static void doltliteGcFunc(
   sqlite3_result_text(context, result, -1, SQLITE_TRANSIENT);
 }
 
-int doltliteGcCompact(sqlite3 *db){
+int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int nKept = 0, nRemoved = 0;
-  const char *zPhase = 0;
 
   if( !cs ) return SQLITE_OK;
   if( !chunkFileGetFilename(&cs->file) || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     return SQLITE_OK;
   }
+  if( !sqlite3_get_autocommit(db)
+   || cs->lockDepth>0
+   || cs->staging.nRecentUncommitted>0 ){
+    return SQLITE_OK;
+  }
 
-  return gcRun(db, cs, &nKept, &nRemoved, &zPhase);
+  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0);
+}
+
+int doltliteGcCompact(sqlite3 *db){
+  const char *zPhase = 0;
+  return doltliteGcCompactWithPhase(db, &zPhase);
 }
 
 int doltliteGcRegister(sqlite3 *db){
