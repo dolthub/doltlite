@@ -161,22 +161,6 @@ static SQLITE_INLINE u64 doltliteFnv1aSep(u64 h){
   return h * DOLTLITE_FNV1A_PRIME;
 }
 
-/* Remove element iElem from a packed array of *pn elements of elemSize bytes:
-** shift the tail down, decrement *pn, and zero the freed slot. The caller must
-** release any memory the element owns first. */
-static SQLITE_INLINE void doltliteArrayRemoveAt(void *aBase, int *pn,
-                                                int iElem, int elemSize){
-  unsigned char *a = (unsigned char*)aBase;
-  int n = *pn;
-  if( !a || iElem<0 || iElem>=n ) return;
-  if( iElem < n-1 ){
-    memmove(a + (size_t)iElem*elemSize, a + (size_t)(iElem+1)*elemSize,
-            (size_t)(n-iElem-1)*elemSize);
-  }
-  *pn = n-1;
-  memset(a + (size_t)(n-1)*elemSize, 0, elemSize);
-}
-
 /* Catalog entry. This layout is shared with prolly_btree.c (which owns the
 ** catalog load/serialize routines); both definitions are guarded so a single
 ** translation unit (the amalgamation) emits it once. The version-control code

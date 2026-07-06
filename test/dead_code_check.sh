@@ -41,9 +41,13 @@ fail=0
 
 echo "== Part A: unused static functions / locals =="
 for f in "${SRCS[@]}"; do
+  # A real compile (not -fsyntax-only): GCC only runs its unused-function
+  # pass during code generation, so -fsyntax-only silently suppresses the
+  # warning under GCC (the CI compiler) while Clang still emits it. Compiling
+  # to /dev/null keeps the check compiler-portable.
   if ! "$CC" "${CFLAGS[@]}" \
         -Werror=unused-function -Werror=unused-variable \
-        -Werror=unused-but-set-variable -fsyntax-only -c "$f" 2>/tmp/dc_err.$$; then
+        -Werror=unused-but-set-variable -c -o /dev/null "$f" 2>/tmp/dc_err.$$; then
     grep -iE 'error:' /tmp/dc_err.$$ | sed "s|^|  |"
     fail=1
   fi
