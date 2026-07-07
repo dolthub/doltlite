@@ -1918,7 +1918,7 @@ corruptL corruptL-1.4  # stock index-page corruption: store rejects at schema le
 corruptL corruptL-2.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-3.1  # writable_schema index-SQL poke ACCEPTED; INSERT..SELECT then leaves the untouched index t1a flagged by integrity_check while reads stay correct (layer disagreement; audit finding, REINDEX repairs)
+corruptL corruptL-3.1  # writable_schema index-SQL poke ACCEPTED; INSERT..SELECT then leaves the untouched index t1a flagged by integrity_check while reads stay correct (layer disagreement, #1575; REINDEX repairs)
 corruptL corruptL-4.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-4.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-5.0  # stock index-page corruption: store rejects at schema level
@@ -3277,7 +3277,7 @@ sqllimits1 sqllimits1-7.7.3  # max_page_count/page_count use DoltLite synthetic 
 # Raw corruption probes. 3.x is a writable_schema rootpage swap: full scans
 # return the intact correct data, writes detect the mismatch and error
 # malformed, but the rowid point-lookup in 3.5 silently returns zero rows
-# (layer disagreement; audit finding). 5.2/8.x are hexio pokes at offsets
+# (layer disagreement, #1575). 5.2/8.x are hexio pokes at offsets
 # the chunk store does not use, so the operations succeed with correct data.
 corrupt corrupt-3.4
 corrupt corrupt-3.5
