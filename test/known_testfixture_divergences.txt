@@ -53,24 +53,24 @@ where where-5.7   # w IN (same subquery): fewer seeks
 where where-5.8   # w+0 IN (same subquery): fewer seeks
 
 # ── index ──
-index index-7.3   # explicit rowid reference
+index index-7.3   # PK auto-index not listed in sqlite_master
 index index-11.1  # sqlite_search_count instrumentation not reproduced (value correct)
 index index-13.2  # PK auto-index not listed in sqlite_master (2 auto-indexes vs 3)
-index index-16.1  # explicit rowid reference
-index index-16.2  # explicit rowid reference
-index index-16.3  # explicit rowid reference
-index index-16.4  # explicit rowid reference
-index index-16.5  # explicit rowid reference
+index index-16.1  # PK auto-index not listed in sqlite_master
+index index-16.2  # PK auto-index not listed in sqlite_master
+index index-16.3  # PK auto-index not listed in sqlite_master
+index index-16.4  # PK auto-index not listed in sqlite_master
+index index-16.5  # PK auto-index not listed in sqlite_master
 index index-17.1  # PK auto-index not listed in sqlite_master (2 auto-index names vs 3)
 
 # ── bestindex4 ──
 bestindex4 bestindex4-2.1  # EQP names the table PRIMARY KEY instead of sqlite_autoindex_t1_1
 
 # ── alter ──
-alter alter-1.2  # ALTER TABLE rowid-preservation semantics
-alter alter-1.5  # ALTER TABLE rowid-preservation semantics
-alter alter-1.6  # ALTER TABLE rowid-preservation semantics
-alter alter-1.7  # ALTER TABLE rowid-preservation semantics
+alter alter-1.2  # PK auto-index row absent from sqlite_master on PK-clustered tables
+alter alter-1.5  # PK auto-index row absent from sqlite_master on PK-clustered tables
+alter alter-1.6  # PK auto-index row absent from sqlite_master on PK-clustered tables
+alter alter-1.7  # PK auto-index row absent from sqlite_master on PK-clustered tables
 alter alter-6.6  # sqlite_master oid lookup after reopen; canonical schema row order
 
 # ── in ──
@@ -84,10 +84,10 @@ in3 in3-1.16  # IN clause variant using rowid
 in3 in3-1.17  # IN clause variant using rowid
 
 # ── intpkey ──
-intpkey intpkey-1.1  # tests INTEGER vs INT primary key alias semantics
+intpkey intpkey-1.1  # "int PRIMARY KEY" is PK-clustered: no sqlite_autoindex_t1_1 row in sqlite_master
 
 # ── collate1 ──
-collate1 collate1-6.7  # collation on the rowid column
+collate1 collate1-6.7  # cascade: p1 never created (6.5's PRIMARY KEY COLLATE '"""' rejected)
 
 # ── collate4 ──
 collate4 collate4-1.1.7   # b UNIQUE COLLATE TEXT now rejected at CREATE (was NULL-PK rejection)
@@ -113,7 +113,7 @@ collate4 collate4-1.2.12
 collate4 collate4-1.2.13
 
 # ── fkey1 ──
-fkey1 fkey1-4.2  # foreign key resolution via rowid
+fkey1 fkey1-4.2  # table_info notnull=1 on the TEXT PK column (PK-clustered; matches stock WITHOUT ROWID), not FK-related
 
 # ── fkey2 ──
 fkey2 fkey2-5.2     # FK + rowid interaction
@@ -137,7 +137,7 @@ window1 window1-10.8  # rowid-order vs PK-order on unordered SELECT
 
 # ── e_createtable ──
 e_createtable e_createtable-3.11.2  # column-limit error names the reload table (t9 vs t11)
-e_createtable e_createtable-4.4.1   # AUTOINCREMENT / sqlite_sequence
+e_createtable e_createtable-4.4.1   # NULL into PK rejected: NOT NULL (PK-clustered; stock rowid-table quirk allows it)
 e_createtable e_createtable-4.4.2
 e_createtable e_createtable-4.4.3
 e_createtable e_createtable-4.4.4
@@ -224,6 +224,10 @@ pragma pragma-22.4.3  # mid-stream WAL corruption poisons the main db, so the AT
 pragma pragma-23.1
 pragma pragma-23.3
 pragma pragma-24.2
+# pragma-3.*: integrity_check corruption injection. The hexio pokes make the
+# chunk store silently revert to an empty db with integrity_check "ok"
+# (known corruption-absorption windows in WAL replay); 3.6b/3.8/3.9b are cascades of that
+# reverted (empty) state.
 pragma pragma-3.10
 pragma pragma-3.11
 pragma pragma-3.12
@@ -560,6 +564,9 @@ collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
 # hexio_write, then verifies date/time behavior through that mutated record.
 # DoltLite's prolly storage has no SQLite page layout at those offsets, so
 # this is a raw storage-format divergence rather than a date/time bug.
+# Note: the poke manifests as a silently-empty table with integrity_check
+# "ok" rather than a malformed error (a known corruption-absorption window
+# in WAL replay, tracked separately).
 date date-14.1
 date date-14.2.0
 date date-14.2.1
@@ -875,7 +882,7 @@ minmax3 minmax3-4.3
 minmax3 minmax3-4.4
 minmax3 minmax3-4.5
 minmax3 minmax3-4.6
-quote quote-2.5  # DQS: doltlite keeps SQLITE_DQS=3 default (main.mk); oracle built DQS=0, so double-quoted-string DDL is accepted vs rejected
+quote quote-2.5  # regenerated schema-text whitespace only ("CHECK (" -> "CHECK(", trailing space); DQS handling matches stock
 rowid rowid-4.5  # sqlite_search_count metric; joined row result (4) matches stock
 
 # Multi-client tests that assert stock rollback-journal lock failures.
@@ -1077,6 +1084,10 @@ fordelete fordelete-1.4  # sqlite_autoindex naming
 # order from prolly storage, so the injected-fault iteration sees a different
 # row order/visible row set. Recovered into the gate once #1223 stopped OOM
 # payload reconstruction from returning a NULL payload pointer.
+# CAUTION: not all cffault fault points are ordering-only. Two are real,
+# separately-tracked swallowed-OOM merge bugs with rc=0 and wrong row data:
+# a duplicated key (pre- and post-UPDATE versions both emitted) and a
+# silently dropped row. Remove those entries when the bugs are fixed.
 cffault cffault-2.1-cantopen-persistent.1  # cacheflush fault during unordered scan
 cffault cffault-2.1-cantopen-transient.1   # cacheflush fault during unordered scan
 cffault cffault-2.1-full.1                 # cacheflush fault during unordered scan
@@ -1342,25 +1353,25 @@ dbpage dbpage-820  # sqlite_dbpage raw page access; chunk store has no SQLite pa
 # connections and session assignments do not alter the stored layout. Tests
 # that assert persisted SQLite file-header page sizes or page_count/page_size
 # arithmetic diverge.
-pagesize pagesize-1.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.512.2  # page_size not configurable on the chunk store
-pagesize pagesize-2.512.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.512.6  # page_size not configurable on the chunk store
-pagesize pagesize-2.512.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.2048.2  # page_size not configurable on the chunk store
-pagesize pagesize-2.2048.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.2048.6  # page_size not configurable on the chunk store
-pagesize pagesize-2.2048.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.4096.2  # page_size not configurable on the chunk store
-pagesize pagesize-2.4096.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.4096.6  # page_size not configurable on the chunk store
-pagesize pagesize-2.4096.10  # page_size not configurable on the chunk store
-pagesize pagesize-2.8192.2  # page_size not configurable on the chunk store
-pagesize pagesize-2.8192.3  # page_size not configurable on the chunk store
-pagesize pagesize-2.8192.6  # page_size not configurable on the chunk store
-pagesize pagesize-2.8192.10  # page_size not configurable on the chunk store
-pagesize pagesize-3.1  # page_size not configurable on the chunk store
-pagesize pagesize-3.3  # page_size not configurable on the chunk store
+pagesize pagesize-1.3  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.2  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.3  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.6  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.10  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.2  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.3  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.6  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.10  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.2  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.3  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.6  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.10  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.2  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.3  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.6  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.10  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-3.1  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-3.3  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
 
 # securedel — PRAGMA secure_delete is a no-op: there is no page freelist to zero
 # (content-addressed chunks, freed on GC). The pragma reads back 0 and the raw
@@ -1394,12 +1405,11 @@ shrink shrink-1.1  # no SQLite pager page-cache to release (memory model differs
 shrink shrink-1.2  # no SQLite pager page-cache to release (memory model differs)
 shrink shrink-1.3  # no SQLite pager page-cache to release (memory model differs)
 
-# format4 — reads the page_size from the SQLite file header (offset 16). The
-# chunk store is not a SQLite file, so those offsets are not the format field
-# and read garbage. Raw file-format divergence.
-format4 format4-1.1  # raw page_size read from SQLite file header; chunk store is not a SQLite file
-format4 format4-1.2  # raw page_size read from SQLite file header; chunk store is not a SQLite file
-format4 format4-1.3  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+# format4 — asserts [file size test.db] equals page-multiple totals
+# (2048/4096); the chunk-store file is its natural chunk-payload size.
+format4 format4-1.1  # file-size page-multiple assertion; chunk-store size differs
+format4 format4-1.2  # file-size page-multiple assertion; chunk-store size differs
+format4 format4-1.3  # file-size page-multiple assertion; chunk-store size differs
 
 # stat — the dbstat vtable reports per-page b-tree statistics (cells, payload,
 # page numbers). The chunk store has no SQLite pages, so dbstat returns no rows.
@@ -1419,10 +1429,10 @@ stat stat-7.1.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
 stat stat-7.1.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
 stat stat-7.1.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
 stat stat-7.1.4  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2  # DROP of a dbstat vtab whose ATTACHed schema was detached fails at xConnect re-resolve (schema-reload timing; stock only fails cross-connection)
 stat stat-7.2.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
 stat stat-7.2.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.2.4  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.4  # cascade of 7.2: x3 never dropped, CREATE collides ("table x3 already exists")
 # io — counts VFS write/sync operations and checks on-disk file size via a test
 # VFS. DoltLite's chunk store batches I/O differently and its file layout is not
 # SQLite-page-sized, so the operation counts and file sizes differ. I/O-model
@@ -1478,12 +1488,12 @@ multiplex4 multiplex4-1.11  # multiplex VFS not used by doltlite
 tkt1567 tkt1567-1.3  # explicit rowid on a WITHOUT-ROWID table (#1176)
 tkt1567 tkt1567-1.4  # explicit rowid on a WITHOUT-ROWID table (#1176)
 
-# tkt1512 / tkt2920 — read page_size from the SQLite file header and simulate a
-# full disk; the chunk store is not a SQLite file and has no page-based size or
-# disk-full path. Raw page-format divergence.
-tkt1512 tkt1512-1.2  # raw page_size from SQLite file header
-tkt1512 tkt1512-1.3  # raw page_size from SQLite file header
-tkt1512 tkt1512-1.4  # raw page_size from SQLite file header
+# tkt1512 — asserts [file size test.db] around DROP TABLE/VACUUM; chunk-store
+# file sizes differ (no page reclamation). tkt2920 simulates a full disk via
+# max_page_count, which is not enforced on the chunk store.
+tkt1512 tkt1512-1.2  # file-size assertion; chunk-store size differs
+tkt1512 tkt1512-1.3  # file-size assertion; chunk-store size differs
+tkt1512 tkt1512-1.4  # file-size assertion; chunk-store size differs
 tkt2920 tkt2920-1.1  # page_size / disk-full simulation; chunk store has neither
 tkt2920 tkt2920-1.3  # page_size / disk-full simulation; chunk store has neither
 tkt2920 tkt2920-1.5  # page_size / disk-full simulation; chunk store has neither
@@ -1517,11 +1527,12 @@ tkt3457 tkt3457-1.3  # no rollback-journal file to back up
 tkt3457 tkt3457-1.4  # no rollback-journal file to back up
 tkt3457 tkt3457-1.5  # no rollback-journal file to back up
 
-# tkt3810 — a TEMP TRIGGER whose base table is dropped becomes an orphan in stock
-# (still listed in temp.sqlite_master). DoltLite cascades the trigger drop with
-# the table, so the orphan is gone. Schema-catalog cascade divergence.
-tkt3810 tkt3810-3  # orphan temp-trigger dropped with its table (catalog cascade)
-tkt3810 tkt3810-4  # orphan temp-trigger dropped with its table (catalog cascade)
+# tkt3810 — stock creates an orphan TEMP TRIGGER against its stale schema after
+# a peer connection drops the base table. DoltLite's shared catalog sees the
+# DROP immediately, so CREATE TEMP TRIGGER fails "no such table: t1" and the
+# orphan never exists; temp.sqlite_master is empty.
+tkt3810 tkt3810-3  # CREATE TEMP TRIGGER fails "no such table" (shared catalog sees peer DROP)
+tkt3810 tkt3810-4  # temp.sqlite_master empty: the orphan trigger was never created
 
 # where4 / whereD / whereG / whereL — query-planner and storage-model
 # divergences; in every case the result rows are correct, only a plan metric,
@@ -1739,8 +1750,8 @@ busy busy-3.5  # snapshot concurrency: reader does not block the commit, busy ha
 busy busy-3.7  # snapshot concurrency: reader does not block the commit, busy handler never fires
 corrupt7 corrupt7-1.1  # stock-page corruption injection: offsets land outside chunk-store structures
 corrupt7 corrupt7-1.2  # stock-page corruption injection: offsets land outside chunk-store structures
-corrupt7 corrupt7-2.1  # stock-page corruption injection: offsets land outside chunk-store structures
-corrupt7 corrupt7-2.2  # stock-page corruption injection: offsets land outside chunk-store structures
+corrupt7 corrupt7-2.1  # cell-offset poke IS detected; generic "integrity check failed" vs stock's detailed wording
+corrupt7 corrupt7-2.2  # cell-offset poke IS detected; generic "integrity check failed" vs stock's detailed wording
 corruptA corruptA-2.1  # stock header corruption at offsets the chunk store does not use
 corruptA corruptA-2.2  # stock header corruption at offsets the chunk store does not use
 corruptA corruptA-2.3  # stock header corruption at offsets the chunk store does not use
@@ -1779,10 +1790,10 @@ memjournal memjournal-1.1  # journal_mode pragma rejected + cascade
 memjournal memjournal-1.2  # journal_mode pragma rejected + cascade
 mmapcorrupt mmapcorrupt-2.1  # mmap stock-page corruption: offset misses chunk-store structures
 mmapwarm mmapwarm-1.0  # PRAGMA page_count: chunk store has no SQLite page count
-oserror oserror-1.3.1  # open-path differs: lock-file opened first; no -wal to unlink
-oserror oserror-1.3.2  # open-path differs: lock-file opened first; no -wal to unlink
-oserror oserror-2.1.1  # open-path differs: lock-file opened first; no -wal to unlink
-oserror oserror-2.1.2  # open-path differs: lock-file opened first; no -wal to unlink
+oserror oserror-1.3.1  # deferred open: connect to a missing path succeeds; reads see an empty db; first write fails loudly
+oserror oserror-1.3.2  # deferred open: connect to a missing path succeeds; reads see an empty db; first write fails loudly
+oserror oserror-2.1.1  # no -wal sidecar to unlink; error log stays empty
+oserror oserror-2.1.2  # no -wal sidecar to unlink; error log stays empty
 pager3 pager3-1.1.1  # journal-file existence probes; journal_mode rejected
 pager3 pager3-1.4.2  # journal-file existence probes; journal_mode rejected
 pager3 pager3-1.5.2  # journal-file existence probes; journal_mode rejected
@@ -1820,8 +1831,8 @@ walshared walshared-1.3  # shared-cache WAL table locks not raised; snapshot rea
 
 # -- feature-gap sweep wave 3 (#1208): 44 completing files (6-100 failures),
 # every file's failure set reproduced and classified by verified mechanism.
-backup2 backup2-2  # backup format/file hash and error-text differ; in-memory backup rejected
-backup2 backup2-3.2  # backup format/file hash and error-text differ; in-memory backup rejected
+backup2 backup2-2  # dbcksum diff is sqlite_master enumeration order (creation vs name order); backup data byte-identical
+backup2 backup2-3.2  # dbcksum diff is sqlite_master enumeration order (creation vs name order); backup data byte-identical
 backup2 backup2-4  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-5  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-6  # backup format/file hash and error-text differ; in-memory backup rejected
@@ -1862,40 +1873,40 @@ busy2 busy2-2.2.2  # wal_checkpoint counters zero; checkpoint mode rejected
 busy2 busy2-2.2.3  # wal_checkpoint counters zero; checkpoint mode rejected
 busy2 busy2-2.2.4  # wal_checkpoint counters zero; checkpoint mode rejected
 busy2 busy2-2.2.5  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-3.1.2  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-3.1.3  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-3.2.2  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-3.2.3  # wal_checkpoint counters zero; checkpoint mode rejected
+busy2 busy2-3.1.2  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
+busy2 busy2-3.1.3  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
+busy2 busy2-3.2.2  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
+busy2 busy2-3.2.3  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 corrupt6 corrupt6-1.1  # stock freelist/page corruption: offsets land outside chunk-store structures
 corrupt6 corrupt6-1.2  # stock freelist/page corruption: offsets land outside chunk-store structures
 corrupt6 corrupt6-1.5.1  # stock freelist/page corruption: offsets land outside chunk-store structures
 corrupt6 corrupt6-1.5.2  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.8.3  # stock freelist/page corruption: offsets land outside chunk-store structures
+corrupt6 corrupt6-1.8.3  # stock's restore-byte write is fresh mid-stream corruption in the chunk store; read errors malformed instead of succeeding
 corrupt6 corrupt6-1.8.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
-corrupt6 corrupt6-1.9.3  # stock freelist/page corruption: offsets land outside chunk-store structures
+corrupt6 corrupt6-1.9.3  # stock's restore-byte write is fresh mid-stream corruption in the chunk store; read errors malformed instead of succeeding
 corrupt6 corrupt6-1.9.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
-corruptE corruptE-2.1  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-2.2  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-2.3  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-2.4  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.1  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.2  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.3  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.4  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.5  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.6  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.7  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.8  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.9  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.10  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.11  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.12  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.13  # stock cell-order corruption not representable in chunk store
-corruptE corruptE-3.14  # stock cell-order corruption not representable in chunk store
-corruptK corruptK-1.1  # stock freelist corruption; sqlite_dbpage writes rejected
+corruptE corruptE-2.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.5  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.6  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.7  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.8  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.9  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.10  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.11  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.12  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.13  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.14  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptK corruptK-1.1  # PRAGMA page_count synthetic chunk-page accounting
 corruptK corruptK-1.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-1.3  # cascade of the 1.2 raw poke: the damaged batch has no later durable root, so recovery rolls back to the prior commit boundary and t1 is absent
-corruptK corruptK-2.1  # stock freelist corruption; sqlite_dbpage writes rejected
+corruptK corruptK-2.1  # PRAGMA page_count synthetic chunk-page accounting
 corruptK corruptK-2.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-3.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-3.3  # stock freelist corruption; sqlite_dbpage writes rejected
@@ -1907,7 +1918,7 @@ corruptL corruptL-1.4  # stock index-page corruption: store rejects at schema le
 corruptL corruptL-2.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-3.1  # stock index-page corruption: store rejects at schema level
+corruptL corruptL-3.1  # writable_schema index-SQL poke ACCEPTED; INSERT..SELECT then leaves the untouched index t1a flagged by integrity_check while reads stay correct (tracked layer disagreement; REINDEX repairs)
 corruptL corruptL-4.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-4.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-5.0  # stock index-page corruption: store rejects at schema level
@@ -1936,13 +1947,13 @@ corruptL corruptL-14.2  # stock index-page corruption: store rejects at schema l
 corruptL corruptL-15.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-15.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-15.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-16.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-17.2  # stock index-page corruption: store rejects at schema level
+corruptL corruptL-16.1  # SQL rootpage swap honored; doltlite's own integrity_check flags it (detection point differs)
+corruptL corruptL-17.2  # file physically truncated to 2048 bytes; reported as disk I/O error instead of malformed
 corruptL corruptL-18.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-18.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-19.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-19.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-19.4  # stock index-page corruption: store rejects at schema level
+corruptL corruptL-19.4  # writable_schema index rewrite tolerated; store stays self-consistent (verified)
 corruptN corruptN-1.0  # MEMDB page-image deserialize unsupported; corruption reported differently
 corruptN corruptN-1.1  # MEMDB page-image deserialize unsupported; corruption reported differently
 corruptN corruptN-2.0  # MEMDB page-image deserialize unsupported; corruption reported differently
@@ -1993,31 +2004,31 @@ e_wal e_wal-4.1.4  # journal_mode fixed at wal-reporting; locking-model cascades
 e_wal e_wal-4.2.2  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_wal e_wal-4.2.3  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
 e_wal e_wal-4.3  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup
-e_walhook e_walhook-1.3  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-1.4  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-2.1  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-3.1.2  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-4.1  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-4.2  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-4.3  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-5.1  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-5.2  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-6.1.1  # wal hook fires with doltlite checkpoint semantics; counters differ
-e_walhook e_walhook-6.1.2  # wal hook fires with doltlite checkpoint semantics; counters differ
-exclusive exclusive-2.5  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-2.6  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-2.7  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-2.8  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-2.9  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-2.10  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-2.11  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-3.1  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-3.2  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-3.5  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-5.5  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-6.2  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-6.3  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
-exclusive exclusive-7.1  # locking_mode=exclusive not enforced; cascades re-ran setup inserts
+e_walhook e_walhook-1.3  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-1.4  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-2.1  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-3.1.2  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-4.1  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-4.2  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-4.3  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-5.1  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-5.2  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-6.1.1  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+e_walhook e_walhook-6.1.2  # sqlite3_wal_hook is never invoked (no WAL commit path); commits verified intact
+exclusive exclusive-2.5  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-2.6  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-2.7  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-2.8  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-2.9  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-2.10  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-2.11  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-3.1  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-3.2  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-3.5  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-5.5  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-6.2  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-6.3  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
+exclusive exclusive-7.1  # locking_mode=exclusive not enforced; extra rows are the peer's successful concurrent writes
 exclusive2 exclusive2-1.2  # exclusive-mode read-marks; chunk store has no page cache to count
 exclusive2 exclusive2-1.6  # exclusive-mode read-marks; chunk store has no page cache to count
 exclusive2 exclusive2-1.9  # exclusive-mode read-marks; chunk store has no page cache to count
@@ -2052,12 +2063,12 @@ ioerr3 ioerr3-2.8.3  # IO-fault point shift
 ioerr3 ioerr3-2.9.3  # IO-fault point shift
 journal2 journal2-1.1  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.2  # hot-journal crash simulation needs -journal sidecar; copied state differs
-journal2 journal2-1.4  # hot-journal crash simulation needs -journal sidecar; copied state differs
+journal2 journal2-1.4  # journal_mode rejection aborts the batch before its INSERTs (rows never inserted, not lost)
 journal2 journal2-1.5  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.6  # hot-journal crash simulation needs -journal sidecar; copied state differs
-journal2 journal2-1.7  # hot-journal crash simulation needs -journal sidecar; copied state differs
+journal2 journal2-1.7  # journal_mode rejection aborts the batch before its INSERTs (rows never inserted, not lost)
 journal2 journal2-1.8  # hot-journal crash simulation needs -journal sidecar; copied state differs
-journal2 journal2-1.9  # hot-journal crash simulation needs -journal sidecar; copied state differs
+journal2 journal2-1.9  # journal_mode rejection aborts the batch before its INSERTs (rows never inserted, not lost)
 journal2 journal2-1.10  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.14  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.16  # hot-journal crash simulation needs -journal sidecar; copied state differs
@@ -2197,13 +2208,13 @@ nolock nolock-3.2  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-3.12  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.1  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.3  # VFS xLock call counts differ under chunk-store locking
-pager4 pager4-1.3  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.4  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.7  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.8  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.9  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.10  # rename-while-open not detected: writes continue to the open inode
-pager4 pager4-1.11  # rename-while-open not detected: writes continue to the open inode
+pager4 pager4-1.3  # rename-while-open: commit goes BY PATH, creating a fresh db at the original path (silent fork)
+pager4 pager4-1.4  # rename-while-open: commit goes BY PATH, creating a fresh db at the original path (silent fork)
+pager4 pager4-1.7  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
+pager4 pager4-1.8  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
+pager4 pager4-1.9  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
+pager4 pager4-1.10  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
+pager4 pager4-1.11  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
 resetdb resetdb-100  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-110  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-200  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
@@ -2215,20 +2226,20 @@ resetdb resetdb-320  # sqlite_dbpage writes rejected; page counts/journal-mode r
 resetdb resetdb-330  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-400  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-500  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
-resetdb resetdb-630  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
+resetdb resetdb-630  # cascade of the resetdb-820 RESET_DATABASE refusal: db2 still sees the schema
 resetdb resetdb-700  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-710  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-740  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-820  # RESET_DATABASE dbconfig is refused on doltlite-format dbs (was a silent no-op): read-back value stays 0
 resetdb resetdb-840  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
-resetdb resetdb-850  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
-resetdb resetdb-860  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
+resetdb resetdb-850  # encoding fixed at UTF-8 + RESET_DATABASE refused: no encoding mismatch can exist
+resetdb resetdb-860  # encoding fixed at UTF-8 + RESET_DATABASE refused: no encoding mismatch can exist
 rowallock rowallock-1.1.2  # mmap statistics zero under chunk store
-rowallock rowallock-1.1.4  # mmap statistics zero under chunk store
-rowallock rowallock-1.1.5  # mmap statistics zero under chunk store
+rowallock rowallock-1.1.4  # file-exists probe on test.db-wal; no -wal sidecar
+rowallock rowallock-1.1.5  # file-exists probe on test.db-wal; no -wal sidecar
 rowallock rowallock-1.2.2  # mmap statistics zero under chunk store
-rowallock rowallock-1.2.4  # mmap statistics zero under chunk store
-rowallock rowallock-1.2.5  # mmap statistics zero under chunk store
+rowallock rowallock-1.2.4  # file-exists probe on test.db-wal; no -wal sidecar
+rowallock rowallock-1.2.5  # file-exists probe on test.db-wal; no -wal sidecar
 shared6 shared6-1.1.2  # shared-cache table locks: snapshot reads/writes proceed + cascades
 shared6 shared6-1.2.1  # shared-cache table locks: snapshot reads/writes proceed + cascades
 shared6 shared6-1.3.3  # shared-cache table locks: snapshot reads/writes proceed + cascades
@@ -2329,8 +2340,8 @@ walckptnoop walckptnoop-1.7  # wal_checkpoint counters zero; checkpoint mode rej
 walckptnoop walckptnoop-1.8  # wal_checkpoint counters zero; checkpoint mode rejected
 walckptnoop walckptnoop-1.9  # wal_checkpoint counters zero; checkpoint mode rejected
 walckptnoop walckptnoop-1.10  # wal_checkpoint counters zero; checkpoint mode rejected
-walhook walhook-1.1  # wal-hook page counts; file sizes differ
-walhook walhook-1.2  # wal-hook page counts; file sizes differ
+walhook walhook-1.1  # wal hook never fires (no WAL frames); got []
+walhook walhook-1.2  # wal hook never fires (no WAL frames); got []
 walhook walhook-1.3  # wal-hook page counts; file sizes differ
 walhook walhook-1.4  # wal-hook page counts; file sizes differ
 walhook walhook-1.5  # wal-hook page counts; file sizes differ
@@ -2712,66 +2723,66 @@ memjournal2 memjournal2-1.2.300.3  # in-memory journal premise: journal_mode fix
 # representative points 122 and 126: IOERR does not crash, peer readers see a
 # consistent committed state, writer cleanup leaves a sane connection, and
 # integrity_check remains ok.
-shared_err shared_ioerr-2.122.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.123.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.124.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.125.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.126.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.127.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.128.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.129.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.130.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.131.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.132.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.133.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.134.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.135.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.136.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.137.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.138.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.139.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.140.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.141.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.142.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.143.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.144.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.145.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.146.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.147.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.148.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.149.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.150.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.151.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.152.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.153.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.154.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.155.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.156.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.157.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.158.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.159.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.160.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.161.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.162.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.163.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.164.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.165.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.166.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.167.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.168.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.169.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.170.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.171.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.172.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.173.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.174.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.175.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.176.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.177.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.178.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.179.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.180.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
-shared_err shared_ioerr-2.181.cleanup.1  # shared-cache fault injection: locking model + fault-point shifts
+shared_err shared_ioerr-2.122.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.123.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.124.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.125.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.126.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.127.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.128.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.129.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.130.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.131.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.132.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.133.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.134.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.135.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.136.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.137.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.138.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.139.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.140.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.141.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.142.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.143.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.144.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.145.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.146.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.147.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.148.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.149.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.150.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.151.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.152.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.153.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.154.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.155.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.156.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.157.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.158.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.159.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.160.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.161.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.162.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.163.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.164.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.165.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.166.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.167.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.168.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.169.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.170.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.171.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.172.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.173.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.174.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.175.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.176.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.177.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.178.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.179.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.180.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.181.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 wal4 wal4-2-cantopen-persistent.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-cantopen-transient.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-full.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
@@ -3257,15 +3268,17 @@ pagerfault3 pagerfault3-1-ioerr-transient.16  # VACUUM=dolt_gc reports phase-pre
 pagerfault3 pagerfault3-1-ioerr-transient.17  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.18  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-fts3malloc fts3_malloc-2.1.transient.100000.18  # expected count bakes in a master row stock leaks from a faulted CREATE; doltlite's CREATE stays atomic (clean replay = 4 on both engines) — #1333
+fts3malloc fts3_malloc-2.1.transient.100000.18  # sqlite_master count 4 vs 5: sqlite_autoindex_ft_segdir_1 not materialized for the PK-clustered shadow table (clean stock = 5, clean doltlite = 4); fault #18 also lands at a shifted point
 
 # ── sqllimits1 ──
 sqllimits1 sqllimits1-7.7.1  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
 sqllimits1 sqllimits1-7.7.3  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
 
-# Raw byte-corruption probes that land inside checksummed chunk-store
-# structures; recovery rolls back or surfaces malformed where stock walks
-# damaged pages.
+# Raw corruption probes. 3.x is a writable_schema rootpage swap: full scans
+# return the intact correct data, writes detect the mismatch and error
+# malformed, but the rowid point-lookup in 3.5 silently returns zero rows
+# (tracked layer disagreement). 5.2/8.x are hexio pokes at offsets
+# the chunk store does not use, so the operations succeed with correct data.
 corrupt corrupt-3.4
 corrupt corrupt-3.5
 corrupt corrupt-3.6
@@ -3298,8 +3311,9 @@ tkt-fc62af4523 tkt-fc62af4523.6
 # e_walckpt: WAL checkpoint API contract over a store with no -wal/-shm
 # sidecars. The remaining entries assert sidecar file sizes, checkpoint
 # frame counts, and stock lock-state sequences that the chunk store does
-# not produce; checkpoint itself (and its BUSY behavior under a concurrent
-# checkpoint) now matches the documented contract.
+# not produce; checkpoint itself matches the documented contract (BUSY
+# parity is partial: the C-API variant returns OK where stock returns BUSY
+# under a concurrent checkpoint).
 e_walckpt e_walckpt-1.1.2
 e_walckpt e_walckpt-1.1.3
 e_walckpt e_walckpt-1.1.4
@@ -3945,7 +3959,9 @@ e_reindex e_reindex-2.6.8
 # ATTACH creates the database file lazily in doltlite — the file only
 # materializes on first write (verified: missing right after ATTACH,
 # present after CREATE TABLE+INSERT) — so the file-exists checks right
-# after ATTACH see no file under either URI interpretation.
+# after ATTACH see no file under either URI interpretation. (Main-database
+# opens still materialize the file eagerly; the lazy behavior is
+# ATTACH-specific.)
 e_uri e_uri-1.2
 e_uri e_uri-1.4
 e_uri e_uri-1.6
@@ -4940,9 +4956,12 @@ fallocate fallocate-2.8  # file size = chunk payload
 
 # incrcorrupt pokes the stock header freelist fields (e.g. byte 36) and
 # expects PRAGMA incremental_vacuum / incrblob reads to detect corruption.
-# On doltlite the pokes miss chunk-store structures, incremental_vacuum is
-# a no-op that never reads a freelist (succeeds where stock reports
-# malformed / SQLITE_CORRUPT), and page_count reflects chunk pages.
+# On doltlite the section-1 pokes miss chunk-store structures and
+# incremental_vacuum is a no-op that never reads a freelist (succeeds where
+# stock reports malformed / SQLITE_CORRUPT); page_count reflects chunk pages.
+# Section 2's "truncation" to 22KB is actually a harmless zero-EXTENSION of
+# the smaller (~15.5KB) doltlite file -- no damage occurs; rows, blobs and
+# integrity_check verified intact on reopen.
 incrcorrupt incrcorrupt-1.0
 incrcorrupt incrcorrupt-1.2
 incrcorrupt incrcorrupt-1.3
@@ -6462,7 +6481,7 @@ multiplex multiplex-6.2.2
 # ROWID-equivalent), so PRAGMA table_list reports wr=1 for them.
 pragma4 pragma4-6.2
 
-# quota-VFS byte thresholds trip at chunk-store file sizes, not stock
+# quota-VFS byte thresholds never trip at chunk-store file sizes (979 < 4096), unlike stock
 # page-file sizes, and the journal_mode pragma the suite issues errors
 # ("journal_mode is not configurable on doltlite-format databases"),
 # cascading into "no such table: t1" for the rest of the batch. The
@@ -6620,7 +6639,10 @@ vacuum3 vacuum3-ioerr-4.33.3  # injected error consumed by best-effort gc finali
 
 # fkey_malloc / vtab_err: OOM fault indices, re-derived after the large-blob
 # insert path dropped two allocations (indices shift with allocation counts;
-# each list verified identical over three runs).
+# each list verified identical over three runs). Mechanism notes: the
+# fkey_malloc-6.*  divergent value at the terminal (no-fault) iteration is the
+# rowid-on-PK divergence surfacing, not a fault shift; the 7.* entries are
+# swallowed OOMs reported as success with final state verified intact.
 fkey_malloc fkey_malloc-6.transient.69
 fkey_malloc fkey_malloc-6.persistent.69
 fkey_malloc fkey_malloc-7.transient.200
