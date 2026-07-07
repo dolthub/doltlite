@@ -149,24 +149,29 @@ run_test_match "gc_updates_first_msg" \
 
 db_rm "$DB"
 
-REMOTE=/tmp/test_gc_tracking_remote_$$.db
-LOCAL=/tmp/test_gc_tracking_local_$$.db
-db_rm "$REMOTE"; db_rm "$LOCAL"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    REMOTE=/tmp/test_gc_tracking_remote_$$.db
+    LOCAL=/tmp/test_gc_tracking_local_$$.db
+    db_rm "$REMOTE"; db_rm "$LOCAL"
+    echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$REMOTE" > /dev/null 2>&1
-echo "SELECT dolt_clone('file://$REMOTE');" | $DOLTLITE "$LOCAL" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(2,'remote_only');
+    echo "SELECT dolt_clone('file://$REMOTE');" | $DOLTLITE "$LOCAL" > /dev/null 2>&1
+    echo "INSERT INTO t VALUES(2,'remote_only');
 SELECT dolt_commit('-A','-m','remote only');" | $DOLTLITE "$REMOTE" > /dev/null 2>&1
-echo "SELECT dolt_fetch('origin','main');" | $DOLTLITE "$LOCAL" > /dev/null 2>&1
+    echo "SELECT dolt_fetch('origin','main');" | $DOLTLITE "$LOCAL" > /dev/null 2>&1
 
-run_test_match "gc_tracking_result" "SELECT dolt_gc();" "chunks" "$LOCAL"
-run_test "gc_tracking_integrity" "PRAGMA integrity_check;" "ok" "$LOCAL"
-run_test_match "gc_tracking_pull_fast_forwards" \
-  "SELECT dolt_pull('origin','main'); SELECT count(*) FROM t;" \
-  "2$" "$LOCAL"
+    run_test_match "gc_tracking_result" "SELECT dolt_gc();" "chunks" "$LOCAL"
+    run_test "gc_tracking_integrity" "PRAGMA integrity_check;" "ok" "$LOCAL"
+    run_test_match "gc_tracking_pull_fast_forwards" \
+      "SELECT dolt_pull('origin','main'); SELECT count(*) FROM t;" \
+      "2$" "$LOCAL"
 
-db_rm "$REMOTE"; db_rm "$LOCAL"
+    db_rm "$REMOTE"; db_rm "$LOCAL"
+    ;;
+esac
 
 run_test_match "gc_memory" \
   "SELECT dolt_gc();" "in-memory" ":memory:"
