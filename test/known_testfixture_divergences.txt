@@ -1083,11 +1083,9 @@ cffault cffault-2.1-full.1                 # cacheflush fault during unordered s
 cffault cffault-2.1-ioerr-persistent.1     # cacheflush fault during unordered scan
 cffault cffault-2.1-ioerr-transient.1      # cacheflush fault during unordered scan
 cffault cffault-2.1-oom-persistent.31      # cacheflush fault during unordered scan
-cffault cffault-2.1-oom-transient.28       # cacheflush fault during unordered scan
 cffault cffault-2.1-oom-transient.31       # cacheflush fault during unordered scan
 cffault cffault-2.1-shmerr-persistent.1    # cacheflush fault during unordered scan
 cffault cffault-2.1-shmerr-transient.1     # cacheflush fault during unordered scan
-cffault cffault-2.4-oom-transient.22       # cacheflush/release-memory unordered scan
 # vacuum5 — VACUUM file-size / page-count metrics; doltlite has no SQLite page
 # format so the byte/page counts differ (the data is correct). Recovered into
 # the gate once the cross-backend TransferRow SEGV was fixed.
