@@ -10,6 +10,31 @@
 
 #include <string.h>
 
+static int isCommitChunk(const u8 *data, int nData){
+  const u8 *p = data;
+  const u8 *pEnd = data + nData;
+  int nPar;
+  int i;
+
+  if( nData < 1 || *p++ != DOLTLITE_COMMIT_V2 ) return 0;
+  if( p >= pEnd ) return 0;
+  nPar = *p++;
+  if( nPar > DOLTLITE_MAX_PARENTS ) return 0;
+  if( pEnd - p < nPar*PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 8 + 6 ){
+    return 0;
+  }
+  p += nPar*PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 8;
+  for(i=0; i<3; i++){
+    int n;
+    if( pEnd - p < 2 ) return 0;
+    n = p[0] | (p[1]<<8);
+    p += 2;
+    if( pEnd - p < n ) return 0;
+    p += n;
+  }
+  return p == pEnd;
+}
+
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
@@ -19,6 +44,23 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
       ((u32)data[2]<<16) | ((u32)data[3]<<24);
   if( m == PROLLY_NODE_MAGIC && nData >= 8 ){
     return CHUNK_PROLLY_NODE;
+  }
+
+  if( isCommitChunk(data, nData) ){
+    return CHUNK_COMMIT;
+  }
+
+  /* The conflicts ("DLC") and constraint-violations ("DCV") framed blobs
+  ** lead with 'D' == CATALOG_FORMAT_V3, so they must be recognized before
+  ** the catalog check reads their magic bytes as an absurd table count.
+  ** Both are leaves: they embed whole row payloads and reference no other
+  ** chunks. */
+  if( nData >= 6
+   && data[0]=='D' && data[1]=='L' && data[2]=='C' && data[3]!='T' ){
+    return CHUNK_CONFLICTS;
+  }
+  if( nData >= 6 && data[0]=='D' && data[1]=='C' && data[2]=='V' ){
+    return CHUNK_CONSTRAINT_VIOLATIONS;
   }
 
   if( (data[0] == WS_FORMAT_VERSION_V5 && nData == WS_TOTAL_SIZE)
@@ -33,10 +75,6 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     if( catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries) ){
       return CHUNK_CATALOG;
     }
-  }
-
-  if( nData >= 30 && data[0] == DOLTLITE_COMMIT_V2 ){
-    return CHUNK_COMMIT;
   }
 
   if( nData >= 5 && data[0] == 7 ){
@@ -362,6 +400,9 @@ int doltliteEnumerateChunkChildren(
       return enumerateWorkingSetChildren(data, nData, xChild, ctx);
     case CHUNK_REFS:
       return enumerateRefsChildren(data, nData, xChild, ctx);
+    case CHUNK_CONFLICTS:
+    case CHUNK_CONSTRAINT_VIOLATIONS:
+      return SQLITE_OK;
     case CHUNK_UNKNOWN:
     default:
       return SQLITE_CORRUPT;

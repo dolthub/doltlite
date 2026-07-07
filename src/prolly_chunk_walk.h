@@ -11,7 +11,9 @@ typedef enum {
   CHUNK_PROLLY_NODE,
   CHUNK_CATALOG,
   CHUNK_WORKING_SET,
-  CHUNK_REFS
+  CHUNK_REFS,
+  CHUNK_CONFLICTS,
+  CHUNK_CONSTRAINT_VIOLATIONS
 } DoltliteChunkType;
 
 typedef int (*DoltliteChildCb)(void *ctx, const ProllyHash *pHash);
