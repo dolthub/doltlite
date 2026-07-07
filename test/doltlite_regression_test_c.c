@@ -1226,6 +1226,23 @@ static void run_chunk_walk_corruption(void){
   check("truncated_catalog_is_corrupt", rc==SQLITE_CORRUPT);
 
   {
+    static const u8 badConflictFrame[] = {
+      'D','L','C', 2,
+      0, 0
+    };
+    static const u8 badConstraintFrame[] = {
+      'D','C','V', 2,
+      0, 0
+    };
+    rc = doltliteEnumerateChunkChildren(badConflictFrame,
+                                        (int)sizeof(badConflictFrame), 0, 0);
+    check("bad_conflict_frame_version_is_corrupt", rc==SQLITE_CORRUPT);
+    rc = doltliteEnumerateChunkChildren(badConstraintFrame,
+                                        (int)sizeof(badConstraintFrame), 0, 0);
+    check("bad_constraint_frame_version_is_corrupt", rc==SQLITE_CORRUPT);
+  }
+
+  {
     static const u8 legacyCatalogV2[] = {
       0x43,
       1, 0, 0, 0,

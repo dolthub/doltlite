@@ -14,8 +14,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.* 2>/dev/null || true; sudo apt-get update
-        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
 
     - name: Configure
       run: |
@@ -132,8 +131,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.* 2>/dev/null || true; sudo apt-get update
-        sudo apt-get install -y clang build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh clang build-essential zlib1g-dev
 
     - name: Configure
       run: |
@@ -181,8 +179,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.* 2>/dev/null || true; sudo apt-get update
-        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
 
     - name: Configure
       run: |

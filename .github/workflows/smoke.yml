@@ -13,8 +13,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.* 2>/dev/null || true; sudo apt-get update
-        sudo apt-get install -y build-essential zlib1g-dev python3
+        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev python3
 
     - name: Configure
       run: |
@@ -44,8 +43,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.* 2>/dev/null || true; sudo apt-get update
-        sudo apt-get install -y tcl-dev libtommath-dev build-essential zlib1g-dev clang
+        bash .github/scripts/install-apt-deps.sh tcl-dev libtommath-dev build-essential zlib1g-dev clang
 
     # ── 1) crash-sqlite ──────────────────────────────────────────────
     - name: Configure SQLITE_TEST build (build-crash)

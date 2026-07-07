@@ -244,6 +244,67 @@ static void test_gc_blocked_then_retries(void){
 }
 
 
+static void test_gc_waits_for_busy_writer(void){
+  const char *path = "/tmp/test_gc_waits_busy_writer.db";
+  pid_t pid;
+  int status;
+  int pipefd[2];
+
+  printf("--- Test 2b: GC waits for busy writer ---\n");
+  setup_db_with_rows(path, 50);
+  pipe(pipefd);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    close(pipefd[0]);
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 5000);
+    execSql(db, "BEGIN");
+    execSql(db, "INSERT INTO t VALUES(9998, 'pending_wait')");
+    write(pipefd[1], "B", 1);
+    close(pipefd[1]);
+    sleep(1);
+    execSql(db, "COMMIT");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','from child wait')");
+    sqlite3_close(db);
+    _exit(0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd[1]);
+    read(pipefd[0], &buf, 1);
+    close(pipefd[0]);
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 5000);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    check("gc_waits_for_busy_writer", !looks_like_error(r));
+    check("gc_waits_not_lock_busy", !looks_like_lock_busy(r));
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_wait_writer_child_committed",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("gc_wait_writer_data_intact",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "51")==0);
+    check("gc_wait_writer_pending_row_present",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=9998"), "pending_wait")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
 static void test_gc_vs_dolt_commit(void){
   const char *path = "/tmp/test_gc_vs_commit.db";
   pid_t pid;
@@ -883,12 +944,59 @@ static void test_concurrent_staging_then_gc(void){
   remove(path);
 }
 
+static void test_stale_session_roots_after_gc(void){
+  const char *path = "/tmp/test_stale_session_roots.db";
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  sqlite3 *db3 = 0;
+  const char *r;
+
+  printf("--- Test 12: Stale session roots after reset and GC ---\n");
+  remove(path);
+
+  sqlite3_open(path, &db1);
+  sqlite3_busy_timeout(db1, 30000);
+  check("stale_session_create",
+        execSql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")==SQLITE_OK);
+  check("stale_session_insert_base",
+        execSql(db1, "INSERT INTO t VALUES(1, 'base')")==SQLITE_OK);
+  r = queryScalarText(db1, "SELECT dolt_commit('-A','-m','base')");
+  check("stale_session_base_commit", strlen(r)==40);
+  check("stale_session_insert_working",
+        execSql(db1, "INSERT INTO t VALUES(2, 'working')")==SQLITE_OK);
+  check("stale_session_db1_sees_working",
+        strcmp(queryScalarText(db1, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_open(path, &db2);
+  sqlite3_busy_timeout(db2, 30000);
+  r = queryScalarText(db2, "SELECT dolt_reset('--hard')");
+  check("stale_session_reset_ok", !looks_like_error(r));
+  r = queryScalarText(db2, "SELECT dolt_gc()");
+  check("stale_session_db2_gc_ok", !looks_like_error(r));
+  check("stale_session_db2_integrity",
+        strcmp(queryScalarText(db2, "PRAGMA integrity_check"), "ok")==0);
+  sqlite3_close(db2);
+
+  r = queryScalarText(db1, "SELECT dolt_gc()");
+  check("stale_session_db1_gc_skips_missing_session_roots",
+        !looks_like_error(r));
+  sqlite3_close(db1);
+
+  sqlite3_open(path, &db3);
+  check("stale_session_final_integrity",
+        strcmp(queryScalarText(db3, "PRAGMA integrity_check"), "ok")==0);
+  sqlite3_close(db3);
+
+  remove(path);
+}
+
 
 int main(){
   printf("=== Multi-Process GC Concurrency Tests ===\n\n");
 
   test_gc_vs_gc_parallel();
   test_gc_blocked_then_retries();
+  test_gc_waits_for_busy_writer();
   test_gc_vs_dolt_commit();
   test_reader_iterator_during_gc();
   test_gc_vs_branch_create();
@@ -898,6 +1006,7 @@ int main(){
   test_kill_gc_mid_sweep();
   test_gc_tmp_file_cleanup();
   test_concurrent_staging_then_gc();
+  test_stale_session_roots_after_gc();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);

@@ -39,7 +39,11 @@ static int buildFromEdits(
                                   pMut->flags);
   if( rc!=SQLITE_OK ) return rc;
 
-  prollyMutMapIterFirst(&iter, pMut->pEdits);
+  rc = prollyMutMapIterFirst(&iter, pMut->pEdits);
+  if( rc!=SQLITE_OK ){
+    prollyChunkerFree(&chunker);
+    return rc;
+  }
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
@@ -268,9 +272,11 @@ static int streamingMerge(
     }
   }
 
-  prollyMutMapIterFirst(&iter, pMut->pEdits);
-  rc = prollyChunkerInitWithCache(&chunker, pMut->pStore, pMut->pCache,
-                                  pMut->flags);
+  rc = prollyMutMapIterFirst(&iter, pMut->pEdits);
+  if( rc==SQLITE_OK ){
+    rc = prollyChunkerInitWithCache(&chunker, pMut->pStore, pMut->pCache,
+                                    pMut->flags);
+  }
   if( rc!=SQLITE_OK ){
     if( pRootEntry ) prollyCacheRelease(pCache, pRootEntry);
     sqlite3_free(pRootData);
@@ -1294,7 +1300,8 @@ static int tryReplaceBatchNoRechunk(ProllyMutator *pMut){
     }
   }
 
-  prollyMutMapIterFirst(&iter, pMut->pEdits);
+  rc = prollyMutMapIterFirst(&iter, pMut->pEdits);
+  if( rc!=SQLITE_OK ) goto replace_batch_cleanup;
   if( prollyMutMapIterValid(&iter) && pRootNode->nItems>0 ){
     ProllyMutMapEntry *pFirst = prollyMutMapIterEntry(&iter);
     const u8 *pMaxKey;
@@ -1311,7 +1318,9 @@ static int tryReplaceBatchNoRechunk(ProllyMutator *pMut){
     rc = SQLITE_NOTFOUND;
   }
   if( rc==SQLITE_OK ){
-    prollyMutMapIterFirst(&iter, pMut->pEdits);
+    rc = prollyMutMapIterFirst(&iter, pMut->pEdits);
+  }
+  if( rc==SQLITE_OK ){
     rc = replaceBatchNodeNoRechunk(pMut, pRootNode, &iter, 1,
                                    &newRoot, &changed);
   }
@@ -1367,7 +1376,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
      && prollyHashIsEmpty(&pMut->newRoot) ){
       ProllyMutMapIter it;
       int hasInsert = 0;
-      prollyMutMapIterFirst(&it, pMut->pEdits);
+      (void)prollyMutMapIterFirst(&it, pMut->pEdits);
       while( prollyMutMapIterValid(&it) ){
         ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&it);
         if( pEntry->op==PROLLY_EDIT_INSERT ){

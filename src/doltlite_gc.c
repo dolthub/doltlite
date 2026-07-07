@@ -36,6 +36,7 @@ struct GcQueue {
 typedef struct GcChildCtx GcChildCtx;
 struct GcChildCtx {
   GcQueue *q;
+  ChunkStore *cs;
   ProllyHash parent;
   const char *zSource;
   const char *zParentType;
@@ -133,6 +134,18 @@ static int gcChildCb(void *ctx, const ProllyHash *pHash){
                      iChild);
 }
 
+static int gcSessionChildCb(void *ctx, const ProllyHash *pHash){
+  GcChildCtx *p = (GcChildCtx*)ctx;
+  int bHas = 0;
+  int rc;
+
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  rc = chunkStoreHas(p->cs, pHash, &bHas);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !bHas ) return SQLITE_OK;
+  return gcChildCb(ctx, pHash);
+}
+
 #ifdef DOLTLITE_PROLLY_CHECK
 typedef struct GcVerifyCtx GcVerifyCtx;
 struct GcVerifyCtx { ChunkStore *cs; int rc; };
@@ -153,13 +166,24 @@ static int gcVerifyHashCb(void *ctx, const ProllyHash *pHash){
   return SQLITE_OK;
 }
 
+static int gcVerifySessionHashCb(void *ctx, const ProllyHash *pHash){
+  GcVerifyCtx *v = (GcVerifyCtx*)ctx;
+  int bHas = 0;
+
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  v->rc = chunkStoreHas(v->cs, pHash, &bHas);
+  if( v->rc!=SQLITE_OK ) return SQLITE_OK;
+  if( !bHas ) return SQLITE_OK;
+  return gcVerifyHashCb(ctx, pHash);
+}
+
 static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
   GcVerifyCtx v;
   v.cs = cs; v.rc = SQLITE_OK;
   /* Diagnostic-only pass; allocation failures inside it are deliberately
   ** inconclusive (see gcVerifyHashCb), so mark them benign. */
   sqlite3BeginBenignMalloc();
-  (void)doltliteSeedSessionHashes(db, cs, gcVerifyHashCb, &v);
+  (void)doltliteSeedSessionHashes(db, cs, gcVerifySessionHashCb, &v);
   sqlite3EndBenignMalloc();
 }
 #endif
@@ -205,6 +229,15 @@ static int gcMarkReachable(
   }
 
   {
+    int nTk; const TrackingBranch *aTk;
+    refsTableGetTracking(&cs->refs, &nTk, &aTk);
+    for(i=0; rc==SQLITE_OK && i<nTk; i++){
+      rc = gcQueuePush(&queue, &aTk[i].commitHash, 0, "tracking-commit",
+                       0, -1, -1, -1);
+    }
+  }
+
+  {
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; rc==SQLITE_OK && i<nPend; i++){
@@ -216,8 +249,9 @@ static int gcMarkReachable(
   if( rc==SQLITE_OK ){
     memset(&seedCtx, 0, sizeof(seedCtx));
     seedCtx.q = &queue;
+    seedCtx.cs = cs;
     seedCtx.zSource = "session";
-    rc = doltliteSeedSessionHashes(db, cs, gcChildCb, &seedCtx);
+    rc = doltliteSeedSessionHashes(db, cs, gcSessionChildCb, &seedCtx);
   }
 
   if( rc!=SQLITE_OK ){
@@ -253,6 +287,7 @@ static int gcMarkReachable(
     }
 
     childCtx.q = &queue;
+    childCtx.cs = cs;
     childCtx.parent = current.hash;
     childCtx.zSource = "child";
     childCtx.zParentType = gcChunkTypeName(doltliteClassifyChunk(data, nData));
@@ -801,6 +836,15 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   }
 }
 
+static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs){
+  int rc;
+  assert( sqlite3_mutex_held(db->mutex) );
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
+  return rc;
+}
+
 /* Lock, mark, sweep and verify the chunk store. On failure pzPhase names the
 ** stage that failed so callers can report it; the lock is released before
 ** return on every path that acquired it. */
@@ -827,7 +871,7 @@ static int gcRun(
     return SQLITE_BUSY;
   }
 
-  rc = chunkStoreLockAndRefresh(cs);
+  rc = gcLockAndRefresh(db, cs);
   if( rc!=SQLITE_OK ){
     *pzPhase = "failed to acquire lock for gc";
     return rc;

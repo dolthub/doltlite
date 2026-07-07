@@ -56,10 +56,11 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   ** Both are leaves: they embed whole row payloads and reference no other
   ** chunks. */
   if( nData >= 6
-   && data[0]=='D' && data[1]=='L' && data[2]=='C' && data[3]!='T' ){
+   && data[0]=='D' && data[1]=='L' && data[2]=='C' && data[3]==1 ){
     return CHUNK_CONFLICTS;
   }
-  if( nData >= 6 && data[0]=='D' && data[1]=='C' && data[2]=='V' ){
+  if( nData >= 6
+   && data[0]=='D' && data[1]=='C' && data[2]=='V' && data[3]==1 ){
     return CHUNK_CONSTRAINT_VIOLATIONS;
   }
 

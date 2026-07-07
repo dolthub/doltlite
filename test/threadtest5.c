@@ -194,10 +194,12 @@ static void *worker(void *pArg){
       }
     }else if( tid==52 ){
       exec(db, zName, __LINE__,
+         "BEGIN IMMEDIATE;"
          "CREATE TABLE IF NOT EXISTS p2(x INTEGER PRIMARY KEY);"
          "WITH RECURSIVE"
          "  c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000)"
          "INSERT INTO p2(x) SELECT x FROM c;"
+         "COMMIT;"
       );
     }else if( tid>=53 && tid<=62 ){
       int a, b, i;

@@ -121,12 +121,14 @@ struct ProllyMutMapIter {
 };
 
 /* Compute the sorted iteration order up front, returning SQLITE_NOMEM on
-** allocation failure. IterFirst/IterLast/IterSeek compute it lazily and
-** discard the error, so callers that must not iterate a stale order on OOM
-** (e.g. a tree build) should call this first and bail on failure. */
+** allocation failure. Useful before a loop of ordered reads that cannot
+** conveniently propagate an error mid-iteration. */
 int prollyMutMapEnsureOrder(ProllyMutMap *mm);
 
-void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm);
+/* Iterator initializers materialize the sorted order and return SQLITE_NOMEM
+** if that allocation fails; the iterator is left invalid (past the end) so an
+** unchecked caller iterates nothing rather than a stale order. */
+int prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm);
 
 void prollyMutMapIterNext(ProllyMutMapIter *it);
 
@@ -134,10 +136,10 @@ int prollyMutMapIterValid(ProllyMutMapIter *it);
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it);
 
-void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
-                          const u8 *pKey, int nKey, i64 intKey);
+int prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
+                         const u8 *pKey, int nKey, i64 intKey);
 
-void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
+int prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
 
 int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src);
 
