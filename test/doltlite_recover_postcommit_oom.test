@@ -1,0 +1,44 @@
+# Test OOM after DoltLite's durable DDL commit point.
+#
+# A CREATE INDEX fault used to return "out of memory" after the new index had
+# already been committed to disk. Retrying such a statement then failed with
+# "index already exists".
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_recover_postcommit_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE abc(a, b, c);
+  INSERT INTO abc VALUES(1, 2, 3);
+  INSERT INTO abc VALUES(4, 5, 6);
+  INSERT INTO abc VALUES(7, 8, 9);
+}
+
+do_test 1.1 {
+  set mismatch [list]
+  for {set iFail 1} {$iFail <= 500} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 0
+    set rc [catchsql {CREATE INDEX abc_i ON abc(a, b, c)}]
+    sqlite3_memdebug_fail -1
+    set present [execsql {
+      SELECT count(*) FROM sqlite_master WHERE name='abc_i'
+    }]
+    if {[lindex $rc 0]!=0 && $present} {
+      lappend mismatch $iFail $rc
+    }
+    if {$present} {
+      execsql {DROP INDEX abc_i}
+    }
+  }
+  set mismatch
+} {}
+
+do_execsql_test 1.2 {
+  CREATE INDEX abc_i ON abc(a, b, c);
+  PRAGMA integrity_check;
+  SELECT a FROM abc INDEXED BY abc_i ORDER BY a;
+} {ok 1 4 7}
+
+finish_test
