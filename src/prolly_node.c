@@ -11,7 +11,8 @@
 #define PROLLY_COUNT_OFF      5
 #define PROLLY_FLAGS_OFF      7
 
-int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
+int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
+                          int nDataPhys){
   u32 magic;
   u16 count;
   int nOffsets;
@@ -26,7 +27,7 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
 
   memset(pNode, 0, sizeof(*pNode));
 
-  if( nData<PROLLY_HDR_SIZE ){
+  if( nData<PROLLY_HDR_SIZE || nDataPhys<PROLLY_HDR_SIZE || nDataPhys>nData ){
     return SQLITE_CORRUPT;
   }
 
@@ -37,6 +38,7 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
 
   pNode->pData = pData;
   pNode->nData = nData;
+  pNode->nDataPhys = nDataPhys;
   pNode->level = pData[PROLLY_LEVEL_OFF];
   count = PROLLY_GET_U16(pData + PROLLY_COUNT_OFF);
   if( count > PROLLY_NODE_MAX_ITEMS ){
@@ -67,7 +69,7 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
 
   nOffsets = (int)(count + 1) * 4 * 2;
   minSize = PROLLY_HDR_SIZE + nOffsets;
-  if( nData<minSize ){
+  if( nDataPhys<minSize ){
     return SQLITE_CORRUPT;
   }
 
@@ -89,6 +91,16 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   }
   if( totalKeyBytes > (u32)nData || totalValBytes > (u32)nData
    || expectedSize != nData ){
+    return SQLITE_CORRUPT;
+  }
+  if( nDataPhys<nData ){
+    if( pNode->level!=0 || hasCounts ){
+      return SQLITE_CORRUPT;
+    }
+    if( nDataPhys < minSize + (int)totalKeyBytes ){
+      return SQLITE_CORRUPT;
+    }
+  }else if( nDataPhys!=nData ){
     return SQLITE_CORRUPT;
   }
 
@@ -120,6 +132,10 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   return SQLITE_OK;
 }
 
+int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
+  return prollyNodeParseSparse(pNode, pData, nData, nData);
+}
+
 void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey){
   u32 off0;
   u32 off1;
@@ -131,13 +147,29 @@ void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey)
 }
 
 void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVal){
+  int nAvail;
+  prollyNodeValueSpan(pNode, i, ppVal, pnVal, &nAvail);
+}
+
+void prollyNodeValueSpan(const ProllyNode *pNode, int i, const u8 **ppVal,
+                         int *pnVal, int *pnAvail){
   u32 off0;
   u32 off1;
+  int nValPhys;
   assert( i >= 0 && i < (int)pNode->nItems );
   off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
-  *ppVal = pNode->pValData + off0;
   *pnVal = (int)(off1 - off0);
+  nValPhys = pNode->nDataPhys - (int)(pNode->pValData - pNode->pData);
+  if( nValPhys<0 ) nValPhys = 0;
+  if( (int)off0 < nValPhys ){
+    *ppVal = pNode->pValData + off0;
+    *pnAvail = nValPhys - (int)off0;
+    if( *pnAvail > *pnVal ) *pnAvail = *pnVal;
+  }else{
+    *ppVal = pNode->pValData + nValPhys;
+    *pnAvail = 0;
+  }
 }
 
 void prollyEncodeIntKey(i64 v, u8 buf[8]){

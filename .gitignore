@@ -1,6 +1,7 @@
 build/
 build-fuzz/
 build-*/
+.idea/
 
 # Compiled objects, libraries, debug symbols
 *.o

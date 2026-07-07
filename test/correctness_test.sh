@@ -281,6 +281,18 @@ for N in 100 2000; do
 done
 
 echo ""
+echo "--- 16. Temp INSERT...SELECT * from main table (xfer-opt cross-backend) ---"
+# Regression: INSERT INTO <temp> SELECT * FROM <main table> must not use the
+# raw btree-cell xfer copy across the temp/prolly backend boundary, which
+# inserted extra all-NULL rows. The row-by-row path must run instead.
+xfer=$(query_value :memory: "CREATE TABLE m(a,b);
+  INSERT INTO m VALUES(1,2),(3,4);
+  CREATE TEMP TABLE z(a,b);
+  INSERT INTO z SELECT * FROM m;
+  SELECT count(*)||':'||group_concat(a||'|'||b) FROM (SELECT a,b FROM z ORDER BY a);")
+check "temp INSERT SELECT * from main" "2:1|2,3|4" "$xfer"
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="

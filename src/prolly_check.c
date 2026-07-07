@@ -21,6 +21,7 @@ static int checkSubtree(
 ){
   u8 *pData = 0;
   int nData = 0;
+  int nDataPhys = 0;
   ProllyNode node;
   int rc;
   int i;
@@ -29,10 +30,10 @@ static int checkSubtree(
   i64 iPrevKey = 0;
   u8 isInt = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-  rc = chunkStoreGet(pStore, pHash, &pData, &nData);
+  rc = chunkStoreGetSparse(pStore, pHash, &pData, &nData, &nDataPhys);
   if( rc!=SQLITE_OK ){
     *pzErr = sqlite3_mprintf(
-      "chunkStoreGet failed rc=%d hash=%02x%02x%02x%02x%02x%02x%02x%02x",
+      "chunkStoreGetSparse failed rc=%d hash=%02x%02x%02x%02x%02x%02x%02x%02x",
       rc, pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
       pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7]);
     return rc;
@@ -41,7 +42,12 @@ static int checkSubtree(
   /* Re-hash cached chunks too; chunkStoreGet verifies only disk reads. */
   {
     ProllyHash computed;
-    prollyHashCompute(pData, nData, &computed);
+    if( nDataPhys<nData ){
+      prollyHashComputeZeroTail(pData, nDataPhys,
+                                (sqlite3_int64)nData - nDataPhys, &computed);
+    }else{
+      prollyHashCompute(pData, nData, &computed);
+    }
     if( prollyHashCompare(&computed, pHash) != 0 ){
       *pzErr = sqlite3_mprintf(
         "chunk content does not hash to its store key: "
@@ -57,12 +63,12 @@ static int checkSubtree(
     }
   }
 
-  rc = prollyNodeParse(&node, pData, nData);
+  rc = prollyNodeParseSparse(&node, pData, nData, nDataPhys);
   if( rc!=SQLITE_OK ){
     *pzErr = sqlite3_mprintf(
-      "prollyNodeParse failed rc=%d nData=%d level=%d count=%u flags=0x%02x"
+      "prollyNodeParseSparse failed rc=%d nData=%d nDataPhys=%d level=%d count=%u flags=0x%02x"
       " hash=%02x%02x%02x%02x%02x%02x%02x%02x",
-      rc, nData,
+      rc, nData, nDataPhys,
       nData>=5 ? (int)pData[4] : -1,
       nData>=7 ? (unsigned)(pData[5] | (pData[6]<<8)) : 0u,
       nData>=8 ? (unsigned)pData[7] : 0u,

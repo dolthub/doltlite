@@ -30,12 +30,6 @@ static void freeConflictRow(DoltliteConflictRow *pRow){
   memset(pRow, 0, sizeof(*pRow));
 }
 
-static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int iTable){
-  if( !aTables || !pnTables || iTable<0 || iTable>=*pnTables ) return;
-  freeConflictTable(&aTables[iTable]);
-  doltliteArrayRemoveAt(aTables, pnTables, iTable, (int)sizeof(ConflictTableInfo));
-}
-
 #define DOLTLITE_CONFLICTS_MAGIC0 'D'
 #define DOLTLITE_CONFLICTS_MAGIC1 'L'
 #define DOLTLITE_CONFLICTS_MAGIC2 'C'
@@ -291,41 +285,6 @@ static void freeConflictTables(ConflictTableInfo *aTables, int nTables){
     freeConflictTable(&aTables[i]);
   }
   sqlite3_free(aTables);
-}
-
-static int storeUpdatedConflicts(
-  sqlite3 *db,
-  ChunkStore *cs,
-  ConflictTableInfo *aTables, int nTables
-){
-  int totalConflicts = 0;
-  int i;
-  DoltliteVcTxnMode mode;
-  for(i=0; i<nTables; i++) totalConflicts += aTables[i].nConflicts;
-
-  {
-    int rc;
-    extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
-    extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
-    rc = doltliteEnsureWriteTxnAndSavepoints(db);
-    if( rc!=SQLITE_OK ) return rc;
-    if( totalConflicts==0 ){
-      doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
-    }else{
-      ProllyHash newHash;
-      rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
-      if( rc!=SQLITE_OK ) return rc;
-      doltliteSetSessionConflictsCatalog(db, &newHash);
-      doltliteSetSessionMergeState(db, 1, 0, &newHash);
-    }
-    mode = doltliteVcTxnMode(db);
-    if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-      rc = doltlitePersistWorkingSet(db);
-      if( rc!=SQLITE_OK ) return rc;
-      return doltliteVcSealActiveSavepoints(db);
-    }
-    return doltliteSaveWorkingSet(db);
-  }
 }
 
 static int storeConflictBytes(

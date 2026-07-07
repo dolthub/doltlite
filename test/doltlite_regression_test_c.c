@@ -2440,6 +2440,7 @@ static void run_gc_rewrite_failure(void){
   res = queryScalarText(db, "SELECT dolt_gc()");
   check("gc_post_replace_open_failure_was_injected", gFailHits>0);
   check("gc_post_replace_open_failure_returns_error", strstr(res, "ERROR:")!=0);
+  gFailOpenMainOnce = 0;
   check("gc_post_replace_connection_can_continue",
     execSql(db,
       "INSERT INTO t VALUES(3,'c');"
@@ -7696,6 +7697,24 @@ static void run_incrblob_chunked_and_multihandle(void){
       strcmp(queryScalarText(db,
         "SELECT CAST(substr(v,8,6) AS TEXT) || '/' || length(v) FROM t WHERE k=4"),
         "HELLO!/20")==0);
+
+  check("incrblob_large_committed_setup", execSql(db,
+      "INSERT INTO t VALUES(5, zeroblob(10 * 1024 * 1024));"
+      )==SQLITE_OK);
+  sqlite3_memory_highwater(1);
+  check("incrblob_large_committed_open",
+      sqlite3_blob_open(db, "main", "t", "v", 5, 0, &h1)==SQLITE_OK);
+  check("incrblob_large_committed_open_memory",
+      sqlite3_memory_highwater(0) < memoryCeiling);
+  memset(buf, 1, 4);
+  check("incrblob_large_committed_tail_read",
+      h1 && sqlite3_blob_read(h1, buf, 4, bigBlobSize - 4)==SQLITE_OK);
+  check("incrblob_large_committed_tail_zero",
+      buf[0]==0 && buf[1]==0 && buf[2]==0 && buf[3]==0);
+  check("incrblob_large_committed_read_memory",
+      sqlite3_memory_highwater(0) < memoryCeiling);
+  if( h1 ) sqlite3_blob_close(h1);
+  h1 = 0;
 
   check("incrblob_large_pending_setup", execSql(db,
       "BEGIN; INSERT INTO t VALUES(6, zeroblob(10 * 1024 * 1024));"

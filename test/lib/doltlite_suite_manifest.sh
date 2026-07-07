@@ -35,6 +35,7 @@ doltlite_attach_write_matrix.sh
 doltlite_branding.sh
 doltlite_memory_db.sh
 doltlite_gc.sh
+doltlite_gc_commit_classify.sh
 doltlite_gc_session_state.sh
 doltlite_vacuum.sh
 doltlite_structural.sh
@@ -81,6 +82,7 @@ doltlite_branch_edge.sh
 doltlite_diff_alter.sh
 doltlite_gc_scale.sh
 doltlite_index_prefix.sh
+doltlite_txn_seek_visibility.sh
 doltlite_row_count_estimate.sh
 doltlite_regression_test_c.sh
 review_regression_test.sh

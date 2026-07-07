@@ -270,12 +270,18 @@ int csGrowRecent(ChunkStore *cs, int nAdd){
   if( nNeed > cs->staging.nRecentAlloc ){
     int nNew = cs->staging.nRecentAlloc ? cs->staging.nRecentAlloc * 2 : CS_INIT_PENDING_ALLOC;
     ChunkIndexEntry *aNew;
+    i64 *aNewZ;
     while( nNew < nNeed ) nNew *= 2;
     aNew = (ChunkIndexEntry *)sqlite3_realloc(
       cs->staging.aRecent, nNew * (int)sizeof(ChunkIndexEntry)
     );
     if( aNew == 0 ) return SQLITE_NOMEM;
     cs->staging.aRecent = aNew;
+    aNewZ = (i64 *)sqlite3_realloc(
+      cs->staging.aRecentZeroTail, nNew * (int)sizeof(i64)
+    );
+    if( aNewZ == 0 ) return SQLITE_NOMEM;
+    cs->staging.aRecentZeroTail = aNewZ;
     cs->staging.nRecentAlloc = nNew;
   }
   return SQLITE_OK;

@@ -1,0 +1,96 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-reload-uncommitted-recent
+
+set saved_pending_drain_limit [expr {[info exists env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)] ? $env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) : ""}]
+set had_pending_drain_limit [info exists env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)]
+set saved_reload_inject [expr {[info exists env(DOLTLITE_RELOAD_INJECT)] ? $env(DOLTLITE_RELOAD_INJECT) : ""}]
+set had_reload_inject [info exists env(DOLTLITE_RELOAD_INJECT)]
+
+execsql {
+  CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO t1 VALUES(1, 'seed');
+  SELECT dolt_commit('-A', '-m', 'seed');
+}
+
+set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) 1
+set env(DOLTLITE_RELOAD_INJECT) 1
+
+do_catchsql_test 1.0 {
+  BEGIN;
+  WITH RECURSIVE data(i) AS (
+    VALUES(2)
+    UNION ALL
+    SELECT i+1 FROM data WHERE i < 300
+  )
+  INSERT INTO t1 SELECT i, hex(randomblob(4096)) FROM data;
+  COMMIT;
+} {1 {database is locked}}
+
+do_test 1.1 {
+  catchsql { ROLLBACK }
+  set res [catchsql {
+    PRAGMA integrity_check;
+    SELECT dolt_gc();
+    PRAGMA integrity_check;
+    SELECT count(*) FROM t1;
+  }]
+  expr {[lindex $res 0]==0
+        && [lindex [lindex $res 1] 0] eq "ok"
+        && [lindex [lindex $res 1] 2] eq "ok"
+        && [lindex [lindex $res 1] 3]==1}
+} {1}
+
+db close
+sqlite3 db test.db
+
+do_test 1.2 {
+  set res [catchsql {
+    PRAGMA integrity_check;
+    SELECT dolt_gc();
+    PRAGMA integrity_check;
+    SELECT count(*) FROM t1;
+  }]
+  expr {[lindex $res 0]==0
+        && [lindex [lindex $res 1] 0] eq "ok"
+        && [lindex [lindex $res 1] 2] eq "ok"
+        && [lindex [lindex $res 1] 3]==1}
+} {1}
+
+do_execsql_test 1.3 {
+  BEGIN;
+  WITH RECURSIVE data(i) AS (
+    VALUES(2)
+    UNION ALL
+    SELECT i+1 FROM data WHERE i < 300
+  )
+  INSERT INTO t1 SELECT i, hex(randomblob(4096)) FROM data;
+  COMMIT;
+  SELECT count(*), max(length(b)) FROM t1;
+  PRAGMA integrity_check;
+} {300 8192 ok}
+
+do_test 1.4 {
+  set res [catchsql {
+    SELECT dolt_gc();
+    PRAGMA integrity_check;
+    SELECT count(*) FROM t1;
+  }]
+  expr {[lindex $res 0]==0
+        && [lindex [lindex $res 1] 1] eq "ok"
+        && [lindex [lindex $res 1] 2]==300}
+} {1}
+
+if {$had_pending_drain_limit} {
+  set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) $saved_pending_drain_limit
+} else {
+  unset env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT)
+}
+if {$had_reload_inject} {
+  set env(DOLTLITE_RELOAD_INJECT) $saved_reload_inject
+} else {
+  unset env(DOLTLITE_RELOAD_INJECT)
+}
+
+finish_test

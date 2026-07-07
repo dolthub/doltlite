@@ -167,6 +167,7 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
 
 
 #ifdef DOLTLITE_PROLLY
+  extern int doltliteGcCompactWithPhase(sqlite3*, const char**);
   if( pOut ){
     sqlite3SetString(pzErrMsg, db,
       "VACUUM INTO is not supported for doltlite databases");
@@ -178,26 +179,18 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
     return SQLITE_ERROR;
   }
   {
-    sqlite3_stmt *pStmt = 0;
-    int rcGc = sqlite3_prepare_v2(db, "SELECT dolt_gc()", -1, &pStmt, 0);
+    const char *zPhase = 0;
+    int rcGc = doltliteGcCompactWithPhase(db, &zPhase);
     if( rcGc!=SQLITE_OK ){
-      sqlite3_finalize(pStmt);
-      /* dolt_gc() may legitimately be unregistered, but an OOM during
-      ** prepare must not turn VACUUM into a silent no-op. */
       if( rcGc==SQLITE_NOMEM || rcGc==SQLITE_IOERR_NOMEM ){
         sqlite3SetString(pzErrMsg, db, "out of memory");
-        return rcGc;
+      }else if( rcGc==SQLITE_FULL ){
+        sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
+      }else{
+        sqlite3SetString(pzErrMsg, db, zPhase ? zPhase : sqlite3ErrStr(rcGc));
       }
-      return SQLITE_OK;
-    }
-    rcGc = sqlite3_step(pStmt);
-    if( rcGc!=SQLITE_ROW && rcGc!=SQLITE_DONE ){
-      const char *zErr = sqlite3_errmsg(db);
-      if( zErr ) sqlite3SetString(pzErrMsg, db, zErr);
-      sqlite3_finalize(pStmt);
       return rcGc;
     }
-    sqlite3_finalize(pStmt);
     return SQLITE_OK;
   }
 #endif
