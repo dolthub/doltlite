@@ -836,6 +836,15 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   }
 }
 
+static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs){
+  int rc;
+  assert( sqlite3_mutex_held(db->mutex) );
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
+  return rc;
+}
+
 /* Lock, mark, sweep and verify the chunk store. On failure pzPhase names the
 ** stage that failed so callers can report it; the lock is released before
 ** return on every path that acquired it. */
@@ -862,7 +871,7 @@ static int gcRun(
     return SQLITE_BUSY;
   }
 
-  rc = chunkStoreLockAndRefresh(cs);
+  rc = gcLockAndRefresh(db, cs);
   if( rc!=SQLITE_OK ){
     *pzPhase = "failed to acquire lock for gc";
     return rc;

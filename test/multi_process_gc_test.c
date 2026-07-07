@@ -244,6 +244,67 @@ static void test_gc_blocked_then_retries(void){
 }
 
 
+static void test_gc_waits_for_busy_writer(void){
+  const char *path = "/tmp/test_gc_waits_busy_writer.db";
+  pid_t pid;
+  int status;
+  int pipefd[2];
+
+  printf("--- Test 2b: GC waits for busy writer ---\n");
+  setup_db_with_rows(path, 50);
+  pipe(pipefd);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    close(pipefd[0]);
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 5000);
+    execSql(db, "BEGIN");
+    execSql(db, "INSERT INTO t VALUES(9998, 'pending_wait')");
+    write(pipefd[1], "B", 1);
+    close(pipefd[1]);
+    sleep(1);
+    execSql(db, "COMMIT");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','from child wait')");
+    sqlite3_close(db);
+    _exit(0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd[1]);
+    read(pipefd[0], &buf, 1);
+    close(pipefd[0]);
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 5000);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    check("gc_waits_for_busy_writer", !looks_like_error(r));
+    check("gc_waits_not_lock_busy", !looks_like_lock_busy(r));
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_wait_writer_child_committed",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("gc_wait_writer_data_intact",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "51")==0);
+    check("gc_wait_writer_pending_row_present",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=9998"), "pending_wait")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
 static void test_gc_vs_dolt_commit(void){
   const char *path = "/tmp/test_gc_vs_commit.db";
   pid_t pid;
@@ -935,6 +996,7 @@ int main(){
 
   test_gc_vs_gc_parallel();
   test_gc_blocked_then_retries();
+  test_gc_waits_for_busy_writer();
   test_gc_vs_dolt_commit();
   test_reader_iterator_during_gc();
   test_gc_vs_branch_create();

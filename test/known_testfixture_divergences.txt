@@ -3008,9 +3008,13 @@ wal5 wal5-pragma-2.3.2.6  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.3.2.7  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.3.2.8  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.1.1.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-pragma-2.4.1.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.1.2.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-pragma-2.4.1.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.2.1.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-pragma-2.4.2.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.2.2.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-pragma-2.4.2.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.3.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.3.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-2.4.3.2.2  # WAL checkpoint/frame counters zero; sidecar absent
@@ -3144,17 +3148,19 @@ wal5 wal5-capi-2.3.2.6  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.3.2.7  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.3.2.8  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.1.1.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-capi-2.4.1.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.1.2.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-capi-2.4.1.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.2.1.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-capi-2.4.2.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.2.2.2  # WAL checkpoint/frame counters zero; sidecar absent
+wal5 wal5-capi-2.4.2.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.3.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.3.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.3.2.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.3.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.4.1.2  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.4.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.4.2.2  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.4.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.5.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.5.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.5.2.2  # WAL checkpoint/frame counters zero; sidecar absent
@@ -3168,9 +3174,7 @@ wal5 wal5-capi-2.4.7.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.7.2.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.7.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.8.1.2  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.8.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.8.2.2  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.8.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.9.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.9.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.9.2.2  # WAL checkpoint/frame counters zero; sidecar absent
@@ -3179,14 +3183,10 @@ wal5 wal5-capi-2.4.10.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.10.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.10.2.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.10.2.3  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.11.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.11.1.3  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.11.2.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.11.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.12.1.2  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.12.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.12.2.2  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.12.2.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.13.1.2  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.13.1.3  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-2.4.13.2.2  # WAL checkpoint/frame counters zero; sidecar absent
@@ -3310,34 +3310,27 @@ e_walckpt e_walckpt-1.3.2.1
 e_walckpt e_walckpt-1.3.2.2
 e_walckpt e_walckpt-1.3.2.3
 e_walckpt e_walckpt-1.passive.1.4
+e_walckpt e_walckpt-1.passive.1.6
 e_walckpt e_walckpt-1.passive.1.7
+e_walckpt e_walckpt-1.passive.1.8
 e_walckpt e_walckpt-1.full.1.9
 e_walckpt e_walckpt-1.full.1.14
-e_walckpt e_walckpt-1.full.1.16
 e_walckpt e_walckpt-1.full.2.9
-e_walckpt e_walckpt-1.full.2.7
 e_walckpt e_walckpt-1.full.2.9
 e_walckpt e_walckpt-1.full.3.9
-e_walckpt e_walckpt-1.full.3.7
 e_walckpt e_walckpt-1.full.3.9
 e_walckpt e_walckpt-1.restart.1.9
 e_walckpt e_walckpt-1.restart.1.14
-e_walckpt e_walckpt-1.restart.1.16
 e_walckpt e_walckpt-1.restart.2.9
-e_walckpt e_walckpt-1.restart.2.7
 e_walckpt e_walckpt-1.restart.2.9
 e_walckpt e_walckpt-1.restart.3.9
-e_walckpt e_walckpt-1.restart.3.7
 e_walckpt e_walckpt-1.restart.3.9
 e_walckpt e_walckpt-1.restart.3.11
 e_walckpt e_walckpt-1.truncate.1.9
 e_walckpt e_walckpt-1.truncate.1.14
-e_walckpt e_walckpt-1.truncate.1.16
 e_walckpt e_walckpt-1.truncate.2.9
-e_walckpt e_walckpt-1.truncate.2.7
 e_walckpt e_walckpt-1.truncate.2.9
 e_walckpt e_walckpt-1.truncate.3.9
-e_walckpt e_walckpt-1.truncate.3.7
 e_walckpt e_walckpt-1.truncate.3.9
 e_walckpt e_walckpt-1.truncate.3.11
 e_walckpt e_walckpt-1.truncate.3.12
@@ -3350,7 +3343,9 @@ e_walckpt e_walckpt-2.3.1
 e_walckpt e_walckpt-2.3.2.1
 e_walckpt e_walckpt-2.3.2.2
 e_walckpt e_walckpt-2.passive.1.4
+e_walckpt e_walckpt-2.passive.1.6
 e_walckpt e_walckpt-2.passive.1.7
+e_walckpt e_walckpt-2.passive.1.8
 e_walckpt e_walckpt-2.full.1.3
 e_walckpt e_walckpt-2.full.1.9
 e_walckpt e_walckpt-2.full.1.14
@@ -3408,34 +3403,27 @@ e_walckpt e_walckpt-3.3.2.2
 e_walckpt e_walckpt-3.3.2.3
 e_walckpt e_walckpt-3.passive.1.3
 e_walckpt e_walckpt-3.passive.1.4
+e_walckpt e_walckpt-3.passive.1.6
 e_walckpt e_walckpt-3.passive.1.7
+e_walckpt e_walckpt-3.passive.1.8
 e_walckpt e_walckpt-3.full.1.9
 e_walckpt e_walckpt-3.full.1.14
-e_walckpt e_walckpt-3.full.1.16
 e_walckpt e_walckpt-3.full.2.9
-e_walckpt e_walckpt-3.full.2.7
 e_walckpt e_walckpt-3.full.2.9
 e_walckpt e_walckpt-3.full.3.9
-e_walckpt e_walckpt-3.full.3.7
 e_walckpt e_walckpt-3.full.3.9
 e_walckpt e_walckpt-3.restart.1.9
 e_walckpt e_walckpt-3.restart.1.14
-e_walckpt e_walckpt-3.restart.1.16
 e_walckpt e_walckpt-3.restart.2.9
-e_walckpt e_walckpt-3.restart.2.7
 e_walckpt e_walckpt-3.restart.2.9
 e_walckpt e_walckpt-3.restart.3.9
-e_walckpt e_walckpt-3.restart.3.7
 e_walckpt e_walckpt-3.restart.3.9
 e_walckpt e_walckpt-3.restart.3.11
 e_walckpt e_walckpt-3.truncate.1.9
 e_walckpt e_walckpt-3.truncate.1.14
-e_walckpt e_walckpt-3.truncate.1.16
 e_walckpt e_walckpt-3.truncate.2.9
-e_walckpt e_walckpt-3.truncate.2.7
 e_walckpt e_walckpt-3.truncate.2.9
 e_walckpt e_walckpt-3.truncate.3.9
-e_walckpt e_walckpt-3.truncate.3.7
 e_walckpt e_walckpt-3.truncate.3.9
 e_walckpt e_walckpt-3.truncate.3.11
 e_walckpt e_walckpt-3.truncate.3.12
