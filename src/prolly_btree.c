@@ -5983,6 +5983,8 @@ static int restoreFromCommitted(Btree *p){
 static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
+  int bSchemaChangedRollback = p->bSchemaChangedTxn
+      || p->bMasterRootChangedTxn;
   int bAutocommitOomRollback = writeOnly
       && p->db
       && p->db->autoCommit
@@ -6043,7 +6045,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       pBt->store.snapshotPinned = 0;
       return rc;
     }
-    resetConnectionSchema(p);
+    if( bSchemaChangedRollback ) resetConnectionSchema(p);
     chunkStoreRollback(&pBt->store);
     if( bAutocommitOomRollback ){
       p->bFilterSchemaPlaceholders = 1;
@@ -6154,6 +6156,8 @@ int doltliteBtreeCaptureStatement(void *pArg){
 
 static int rollbackCommittedState(Btree *p, BtShared *pBt){
   BtCursor *pC;
+  int bSchemaChangedRollback = p->bSchemaChangedTxn
+      || p->bMasterRootChangedTxn;
   int rc = restoreFromCommitted(p);
   if( rc!=SQLITE_OK ){
     /* The reload OOM'd partway; the catalog may still point at staged
@@ -6179,7 +6183,7 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
     pC->mmActive = 0;
     prollyCursorReleaseAll(&pC->pCur);
   }
-  resetConnectionSchema(p);
+  if( bSchemaChangedRollback ) resetConnectionSchema(p);
   return SQLITE_OK;
 }
 

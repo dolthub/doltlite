@@ -19,6 +19,7 @@ GATING=(
   oom_dolt_fault_test
   cross_branch_test
   corruption_test
+  prepared_stmt_reuse_test
   sequence_reload_test
   chunk_store_fork_lock_test
 )
