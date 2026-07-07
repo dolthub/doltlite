@@ -34,3 +34,4 @@ doltlite_merge_constraint_prune
 doltlite_recover_changes
 doltlite_gc_stop_world
 doltlite_reload_uncommitted_recent
+doltlite_recover_cacheflush_oom

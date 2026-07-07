@@ -442,9 +442,7 @@ static int ensureOrder(ProllyMutMap *mm){
 }
 
 /* Materialize the sorted iteration order now, propagating an allocation
-** failure. The void iterator-init helpers call ensureOrder() internally and
-** discard its return code, so a caller that must not iterate a stale order
-** under OOM (e.g. a tree build) calls this first and bails on error. */
+** failure. */
 int prollyMutMapEnsureOrder(ProllyMutMap *mm){
   return ensureOrder(mm);
 }
@@ -1025,10 +1023,11 @@ int prollyMutMapIsEmpty(ProllyMutMap *mm){
   return mm->nEntries == 0;
 }
 
-void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm){
-  ensureOrder(mm);
+int prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm){
+  int rc = ensureOrder(mm);
   it->pMap = mm;
-  it->idx = 0;
+  it->idx = rc==SQLITE_OK ? 0 : mm->nEntries;
+  return rc;
 }
 
 void prollyMutMapIterNext(ProllyMutMapIter *it){
@@ -1043,20 +1042,26 @@ ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
   return entryAtOrder(it->pMap, it->idx);
 }
 
-void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
-                          const u8 *pKey, int nKey, i64 intKey){
+int prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
+                         const u8 *pKey, int nKey, i64 intKey){
   int found = 0;
   u8 keyBuf[8];
-  ensureOrder(mm);
-  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
+  int rc = ensureOrder(mm);
   it->pMap = mm;
+  if( rc!=SQLITE_OK ){
+    it->idx = mm->nEntries;
+    return rc;
+  }
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
   it->idx = bsearch_key(mm, pKey, nKey, &found);
+  return SQLITE_OK;
 }
 
-void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
-  ensureOrder(mm);
+int prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
+  int rc = ensureOrder(mm);
   it->pMap = mm;
-  it->idx = mm->nEntries>0 ? mm->nEntries - 1 : mm->nEntries;
+  it->idx = (rc==SQLITE_OK && mm->nEntries>0) ? mm->nEntries - 1 : mm->nEntries;
+  return rc;
 }
 
 void prollyMutMapClear(ProllyMutMap *mm){
