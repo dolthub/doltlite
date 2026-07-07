@@ -307,4 +307,21 @@ run_test_match "gc_taghist_diff" \
 
 db_rm "$DB"
 
+# A mark failure must name the unresolvable chunk (hash, source, rc), not
+# just "gc mark phase failed" — that hash is what makes a field report
+# actionable. Flipping the first WAL record's tag byte makes the chunks
+# behind it unreachable while the store still opens.
+DB=/tmp/test_gc_mark_diag_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB" > /dev/null 2>&1
+printf '\xff' | dd of="$DB" bs=1 seek=168 conv=notrunc 2>/dev/null
+
+run_test_match "gc_mark_failure_names_missing_chunk" \
+  "SELECT dolt_gc();" \
+  "missing chunk [0-9a-f]{40}.*source=.*rc=" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
