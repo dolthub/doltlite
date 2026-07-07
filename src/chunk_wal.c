@@ -215,6 +215,7 @@ int csReplayWal(ChunkStore *cs){
   int nPendingBefore = cs->staging.nPending;
   int nRootedPending = cs->staging.nPending;
   int nRootRecordsSeen = 0;
+  int sawDamage = 0;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
   int rc = SQLITE_OK;
@@ -275,6 +276,7 @@ int csReplayWal(ChunkStore *cs){
           (long long)(cs->wal.iWalOffset + recPos));
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
+        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -289,6 +291,7 @@ int csReplayWal(ChunkStore *cs){
           (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
+        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -320,6 +323,7 @@ int csReplayWal(ChunkStore *cs){
             (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
           rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
           if( rc != SQLITE_OK ) goto replay_error;
+          sawDamage = 1;
           if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
           sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
           break;
@@ -350,6 +354,7 @@ int csReplayWal(ChunkStore *cs){
           (long long)(cs->wal.iWalOffset + recPos));
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
+        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -368,6 +373,7 @@ int csReplayWal(ChunkStore *cs){
           (long long)(cs->wal.iWalOffset + recPos));
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
+        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -400,6 +406,7 @@ int csReplayWal(ChunkStore *cs){
         (int)tag, (long long)(cs->wal.iWalOffset + recPos));
       rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
       if( rc != SQLITE_OK ) goto replay_error;
+      sawDamage = 1;
       if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
       /* Foreign bytes at WAL start are corruption; later junk is crash tail. */
       if( damageAction==CS_DAMAGE_TORN && recPos == 0 && tag != 0 ){
@@ -411,6 +418,13 @@ int csReplayWal(ChunkStore *cs){
     }
   }
 
+  /* Do not let damaged initial WAL bytes masquerade as a fresh empty store. */
+  if( sawDamage && nRootRecordsSeen == 0
+   && nPendingBefore == 0 && cs->index.nIndex == 0 ){
+    cs->wal.recoveredMidStream = 1;
+    sawMidStream = 1;
+  }
+
   /* Reclaim uncommitted tail bytes unless the store is poisoned. */
   if( !sawMidStream ){
     cs->wal.nWalData = lastBoundary < walSize ? lastBoundary : walSize;
@@ -420,7 +434,7 @@ int csReplayWal(ChunkStore *cs){
   cs->staging.nPending = nRootedPending;
 
   if( nRootRecordsSeen == 0
-   && nPendingBefore == 0 && cs->index.nIndex == 0 ){
+   && nPendingBefore == 0 && cs->index.nIndex == 0 && !sawDamage ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->index.nChunks = 0;
   }
