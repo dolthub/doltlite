@@ -30,7 +30,7 @@ CFLAGS=(
   -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_RTREE
   -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite
   "-I$BUILD_DIR" -Isrc -Iext/rtree -Iext/icu -Iext/fts3 -Iext/session
-  -Iext/misc -Iext/blake3
+  -Iext/misc -Iext/blake3 -Iext/ed25519 -Iext/mbedtls/include
 )
 
 # Intentional exports that have no in-tree caller (documented/embeddable API,

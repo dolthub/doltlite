@@ -287,6 +287,16 @@ jobs:
       run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 2
 
+    - name: Credential known-answer test
+      if: matrix.platform == 'ubuntu'
+      run: cd build && bash ../test/creds_kat_test.sh
+      timeout-minutes: 2
+
+    - name: TLS client test
+      if: matrix.platform == 'ubuntu'
+      run: cd build && bash ../test/tls_test.sh
+      timeout-minutes: 2
+
     - name: Windows Doltlite feature tests
       if: matrix.platform == 'windows'
       shell: msys2 {0}
