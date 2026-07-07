@@ -124,7 +124,7 @@ waloverwrite     # copies test.db-wal: no -wal sidecar
 walslow          # copies test.db-wal: no -wal sidecar
 walvfs           # reads test.db-wal: no -wal sidecar
 lock5            # copies test.db-journal: no rollback-journal sidecar
-rollback         # copies test.db-journal: no rollback-journal sidecar. Pre-abort failures 1.7-1.9 exposed the data-only-ROLLBACK statement-expiry bug (#1571)
+rollback         # copies test.db-journal: no rollback-journal sidecar. Pre-abort failures 1.7-1.9 exposed a separately-tracked bug: data-only ROLLBACK expires prepared statements
 corrupt4         # completes or aborts depending on the run; either expectation flaps (not bucket-enforced)
 corruptC         # 1-byte flips checksum-fail the sole commit batch; torn-tail recovery rolls back to the empty pre-batch store ("no such table"); abort is an uncaught foreign-file rejection at line 348
 corruptI         # corruption injection: chunk store reports malformed, file aborts
@@ -144,7 +144,7 @@ win32nolock      # windows-only: silent platform return, no summary line
 corrupt9       # freelist raw-format probe aborts ("Freelist is empty")
 dbstatus       # dbstat vtable constructor fails on prolly; memory-stat probes differ
 e_walauto      # reads test.db-shm: no shm sidecar
-malloc3        # OOM-"failed" CREATE INDEX actually committed (#1572), so the harness retry aborts on "index abc_i already exists"
+malloc3        # OOM-"failed" CREATE INDEX actually committed (separately-tracked reporting bug), so the harness retry aborts on "index abc_i already exists"
 pendingrace    # copies sv_test.db-journal: no journal sidecar
 shmlock        # shm locking probe: "BUSY false-positive" thrown by the test
 wal3           # copies test.db-wal: no -wal sidecar

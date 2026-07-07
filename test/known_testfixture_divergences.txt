@@ -226,7 +226,7 @@ pragma pragma-23.3
 pragma pragma-24.2
 # pragma-3.*: integrity_check corruption injection. The hexio pokes make the
 # chunk store silently revert to an empty db with integrity_check "ok"
-# (corruption-absorption windows, #1573); 3.6b/3.8/3.9b are cascades of that
+# (known corruption-absorption windows in WAL replay); 3.6b/3.8/3.9b are cascades of that
 # reverted (empty) state.
 pragma pragma-3.10
 pragma pragma-3.11
@@ -565,8 +565,8 @@ collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
 # DoltLite's prolly storage has no SQLite page layout at those offsets, so
 # this is a raw storage-format divergence rather than a date/time bug.
 # Note: the poke manifests as a silently-empty table with integrity_check
-# "ok" rather than a malformed error -- the corruption-absorption windows
-# tracked in #1573.
+# "ok" rather than a malformed error (a known corruption-absorption window
+# in WAL replay, tracked separately).
 date date-14.1
 date date-14.2.0
 date date-14.2.1
@@ -1084,10 +1084,10 @@ fordelete fordelete-1.4  # sqlite_autoindex naming
 # order from prolly storage, so the injected-fault iteration sees a different
 # row order/visible row set. Recovered into the gate once #1223 stopped OOM
 # payload reconstruction from returning a NULL payload pointer.
-# CAUTION: not all cffault fault points are ordering-only. Two are real
-# swallowed-OOM merge bugs with rc=0 and wrong row data: a duplicated key
-# (pre- and post-UPDATE versions both emitted, #1569) and a silently
-# dropped row (#1570). Remove those entries when the bugs are fixed.
+# CAUTION: not all cffault fault points are ordering-only. Two are real,
+# separately-tracked swallowed-OOM merge bugs with rc=0 and wrong row data:
+# a duplicated key (pre- and post-UPDATE versions both emitted) and a
+# silently dropped row. Remove those entries when the bugs are fixed.
 cffault cffault-2.1-cantopen-persistent.1  # cacheflush fault during unordered scan
 cffault cffault-2.1-cantopen-transient.1   # cacheflush fault during unordered scan
 cffault cffault-2.1-full.1                 # cacheflush fault during unordered scan
@@ -1885,24 +1885,24 @@ corrupt6 corrupt6-1.8.3  # stock's restore-byte write is fresh mid-stream corrup
 corrupt6 corrupt6-1.8.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
 corrupt6 corrupt6-1.9.3  # stock's restore-byte write is fresh mid-stream corruption in the chunk store; read errors malformed instead of succeeding
 corrupt6 corrupt6-1.9.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
-corruptE corruptE-2.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-2.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-2.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-2.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.5  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.6  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.7  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.8  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.9  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.10  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.11  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.12  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.13  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
-corruptE corruptE-3.14  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (#1573)
+corruptE corruptE-2.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.5  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.6  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.7  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.8  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.9  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.10  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.11  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.12  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.13  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-3.14  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
 corruptK corruptK-1.1  # PRAGMA page_count synthetic chunk-page accounting
 corruptK corruptK-1.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-1.3  # cascade of the 1.2 raw poke: the damaged batch has no later durable root, so recovery rolls back to the prior commit boundary and t1 is absent
@@ -1918,7 +1918,7 @@ corruptL corruptL-1.4  # stock index-page corruption: store rejects at schema le
 corruptL corruptL-2.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-3.1  # writable_schema index-SQL poke ACCEPTED; INSERT..SELECT then leaves the untouched index t1a flagged by integrity_check while reads stay correct (layer disagreement, #1575; REINDEX repairs)
+corruptL corruptL-3.1  # writable_schema index-SQL poke ACCEPTED; INSERT..SELECT then leaves the untouched index t1a flagged by integrity_check while reads stay correct (tracked layer disagreement; REINDEX repairs)
 corruptL corruptL-4.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-4.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-5.0  # stock index-page corruption: store rejects at schema level
@@ -3277,7 +3277,7 @@ sqllimits1 sqllimits1-7.7.3  # max_page_count/page_count use DoltLite synthetic 
 # Raw corruption probes. 3.x is a writable_schema rootpage swap: full scans
 # return the intact correct data, writes detect the mismatch and error
 # malformed, but the rowid point-lookup in 3.5 silently returns zero rows
-# (layer disagreement, #1575). 5.2/8.x are hexio pokes at offsets
+# (tracked layer disagreement). 5.2/8.x are hexio pokes at offsets
 # the chunk store does not use, so the operations succeed with correct data.
 corrupt corrupt-3.4
 corrupt corrupt-3.5
