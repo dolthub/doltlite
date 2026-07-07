@@ -121,8 +121,7 @@ jobs:
     - name: Install dependencies
       if: matrix.platform == 'ubuntu'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
 
     - name: Install Windows dependencies
       if: matrix.platform == 'windows'
