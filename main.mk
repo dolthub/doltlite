@@ -583,8 +583,9 @@ ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
 MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
 MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
 # The credential/TLS stack (ed25519 + mbedtls) is Unix-only: the HTTP remote
-# client is stubbed on Windows and mbedtls's socket/entropy layer needs Win32
-# libraries we don't link. Detect a Windows-esque build via the DLL suffix
+# client and test server are stubbed on Windows and mbedtls's socket/entropy
+# layer needs Win32 libraries we don't link. Detect a Windows-esque build via
+# the DLL suffix
 # (autosetup resolves T.dll to .dll there) or the OS env var, and drop the
 # stack. The source uses are gated on DOLTLITE_HAVE_AUTH to match.
 DOLTLITE_IS_WINDOWS := $(filter .dll,$(T.dll))$(filter Windows_NT,$(OS))

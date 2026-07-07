@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#ifdef _WIN32
+#ifndef DOLTLITE_HAVE_AUTH
 
 int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #else

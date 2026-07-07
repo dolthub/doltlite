@@ -13,23 +13,6 @@
 #include <unistd.h>
 #endif
 
-#ifndef _WIN32
-int doltliteWriteAll(int fd, const void *pBuf, int nBuf){
-  int nWritten = 0;
-  const u8 *p = (const u8*)pBuf;
-  while( nWritten < nBuf ){
-    ssize_t n = write(fd, p + nWritten, nBuf - nWritten);
-    if( n<0 ){
-      if( errno==EINTR ) continue;
-      return SQLITE_IOERR_WRITE;
-    }
-    if( n==0 ) return SQLITE_IOERR_WRITE;
-    nWritten += (int)n;
-  }
-  return SQLITE_OK;
-}
-#endif
-
 typedef struct SyncQueue SyncQueue;
 struct SyncQueue {
   ProllyHash *aItems;
