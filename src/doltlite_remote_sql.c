@@ -779,6 +779,7 @@ static sqlite3_module remotesModule = {
 
 #define DOLTLITE_DEFAULT_LOGIN_URL "https://dolthub.com/settings/credentials"
 
+#ifdef DOLTLITE_HAVE_AUTH
 static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCreds *cred = 0;
@@ -881,6 +882,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         "usage: dolt_creds(['list'] | 'rm', <kid>); use dolt_creds_new() to create");
   }
 }
+#endif /* DOLTLITE_HAVE_AUTH */
 
 int doltliteRemoteSqlRegister(sqlite3 *db){
   int rc;
@@ -894,10 +896,12 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
                                                    doltPullFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_clone", -1, SQLITE_UTF8, 0,
                                                    doltCloneFunc, 0, 0);
+#ifdef DOLTLITE_HAVE_AUTH
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_creds_new", -1, SQLITE_UTF8, 0,
                                                    doltCredsNewFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_creds", -1, SQLITE_UTF8, 0,
                                                    doltCredsFunc, 0, 0);
+#endif
   if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_remotes", &remotesModule, 0);
   return rc;
 }

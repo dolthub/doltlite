@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <errno.h>
 
-#ifdef _WIN32
+#ifndef DOLTLITE_HAVE_AUTH
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){ (void)zUrl; return 0; }
 #else

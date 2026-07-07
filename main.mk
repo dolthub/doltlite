@@ -582,7 +582,17 @@ ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c
 ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
 MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
 MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
-DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
+# The credential/TLS stack (ed25519 + mbedtls) is Unix-only: the HTTP remote
+# client is stubbed on Windows and mbedtls's socket/entropy layer needs Win32
+# libraries we don't link. Detect a Windows-esque build via the DLL suffix
+# (autosetup resolves T.dll to .dll there) or the OS env var, and drop the
+# stack. The source uses are gated on DOLTLITE_HAVE_AUTH to match.
+DOLTLITE_IS_WINDOWS := $(filter .dll,$(T.dll))$(filter Windows_NT,$(OS))
+ifeq ($(DOLTLITE_IS_WINDOWS),)
+  DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
+else
+  DOLTLITE_AUTH_OBJS =
+endif
 
 PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
