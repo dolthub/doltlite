@@ -419,8 +419,11 @@ int csReplayWal(ChunkStore *cs){
   }
 
   /* Do not let damaged initial WAL bytes masquerade as a fresh empty store. */
-  if( sawDamage && nRootRecordsSeen == 0
+  if( sawDamage && (sawMidStream || cs->wal.recoveredMidStream)
+   && nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->index.nIndex == 0 ){
+    memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
+    cs->index.nChunks = 0;
     cs->wal.recoveredMidStream = 1;
     sawMidStream = 1;
   }
@@ -434,7 +437,8 @@ int csReplayWal(ChunkStore *cs){
   cs->staging.nPending = nRootedPending;
 
   if( nRootRecordsSeen == 0
-   && nPendingBefore == 0 && cs->index.nIndex == 0 && !sawDamage ){
+   && nPendingBefore == 0 && cs->index.nIndex == 0
+   && !sawMidStream && !cs->wal.recoveredMidStream ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->index.nChunks = 0;
   }

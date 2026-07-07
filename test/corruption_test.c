@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "sqlite3.h"
+#include "chunk_store.h"
 
 #define MANIFEST_SIZE 168
 
@@ -633,21 +634,22 @@ static void test_corrupt_initial_wal_chunk_body_detected(void){
   }
 
   {
-    sqlite3 *db = 0;
-    int rc = sqlite3_open(dbpath, &db);
-    if( rc!=SQLITE_OK ){
-      check("initial_wal_body_corruption_is_loud_12", 1);
-    }else{
-      rc = execSql(db, "SELECT count(*) FROM t1");
-      if( rc!=SQLITE_CORRUPT ){
-        const char *r = queryScalarText(db, "PRAGMA integrity_check");
-        check("initial_wal_body_corruption_is_loud_12",
-          strncmp(r, "ERROR", 5)==0 || strcmp(r, "ok")!=0);
-      }else{
-        check("initial_wal_body_corruption_is_loud_12", 1);
-      }
+    ChunkStore cs;
+    ProllyHash zero;
+    u8 *pData = 0;
+    int nData = 0;
+    int rc;
+    memset(&zero, 0, sizeof(zero));
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("initial_wal_body_corruption_open_12", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("initial_wal_body_corruption_poisoned_12", cs.corruptMidStream);
+      rc = chunkStoreGet(&cs, &zero, &pData, &nData);
+      check("initial_wal_body_corruption_get_rejected_12", rc==SQLITE_CORRUPT);
+      sqlite3_free(pData);
+      chunkStoreClose(&cs);
     }
-    if( db ) sqlite3_close(db);
   }
 
   removeDb(dbpath);
