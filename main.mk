@@ -151,7 +151,6 @@ libdir      ?= $(exec_prefix)/lib
 # libexecdir     ?= $(exec_prefix)/libexec
 ### end of autotools-compatible install dir vars
 
-
 #
 # $(LDFLAGS.{feature}) and $(CFLAGS.{feature}) =
 #
@@ -579,7 +578,23 @@ else
   BLAKE3_SIMD_OBJS =
 endif
 
-PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
+ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c verify.c
+ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
+MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
+MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
+# The credential/TLS stack (ed25519 + mbedtls) is built on every platform. On
+# Windows, mbedtls's socket and entropy layers plus our own server sockets and
+# BCryptGenRandom need ws2_32 and bcrypt linked (the MSVC #pragma comment(lib)
+# in mbedtls doesn't apply under MinGW). Detect a Windows-esque build via the
+# DLL suffix (autosetup resolves T.dll to .dll there) or the OS env var.
+DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
+DOLTLITE_IS_WINDOWS := $(filter .dll,$(T.dll))$(filter Windows_NT,$(OS))
+ifneq ($(DOLTLITE_IS_WINDOWS),)
+  LDFLAGS.libsqlite3 += -lws2_32 -lbcrypt -lcrypt32
+endif
+
+PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
+              prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
@@ -614,6 +629,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_commit.h $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
+    $(TOP)/src/doltlite_creds.h $(TOP)/src/doltlite_tls.h \
     $(TOP)/src/doltlite_vtab_util.h \
     $(TOP)/src/btree_orig_prefix.h $(TOP)/src/btree_orig_api.h $(TOP)/src/btree_orig_api.c \
     $(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3_portable.c \
@@ -1363,6 +1379,19 @@ prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON) \
 prolly_xxhash.o:	$(TOP)/src/prolly_xxhash.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_xxhash.c
 
+doltlite_creds.o:	$(TOP)/src/doltlite_creds.c $(DEPS_OBJ_COMMON) \
+		$(TOP)/ext/ed25519/ed25519.h
+	$(T.cc.sqlite) -I$(TOP)/ext/ed25519 -c $(TOP)/src/doltlite_creds.c
+
+doltlite_tls.o:	$(TOP)/src/doltlite_tls.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -I$(TOP)/ext/mbedtls/include -c $(TOP)/src/doltlite_tls.c
+
+ed25519_%.o:	$(TOP)/ext/ed25519/%.c
+	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/ed25519 -c $< -o $@
+
+mbedtls_%.o:	$(TOP)/ext/mbedtls/library/%.c
+	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/mbedtls/include -c $< -o $@
+
 # Vendored BLAKE3 sources use C99 mid-block declarations that the
 # rest of doltlite's tree bans via -Wdeclaration-after-statement.
 # Disable that warning for the blake3/ ext sources only.
@@ -1427,7 +1456,6 @@ chunk_store.o:	$(TOP)/src/chunk_store.c $(DEPS_OBJ_COMMON)
 
 chunk_wal.o:	$(TOP)/src/chunk_wal.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_wal.c
-
 
 chunk_refs.o:	$(TOP)/src/chunk_refs.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_refs.c
@@ -2174,7 +2202,6 @@ fts5.o:	fts5.c $(DEPS_OBJ_COMMON) $(EXTHDR)
 sqlite3rbu.o:	$(TOP)/ext/rbu/sqlite3rbu.c $(DEPS_OBJ_COMMON) $(EXTHDR)
 	$(T.cc.extension) -c $(TOP)/ext/rbu/sqlite3rbu.c
 
-
 #
 # Rules to build the 'testfixture' application.
 #
@@ -2218,7 +2245,6 @@ testfixture$(T.exe):	$(T.tcl.env.sh) has_tclsh85 $(TESTFIXTURE_SRC)
 coretestprogs:	testfixture$(B.exe) sqlite3$(B.exe)
 
 testprogs:	$(TESTPROGS) srcck1$(B.exe) fuzzcheck$(T.exe) sessionfuzz$(T.exe)
-
 
 #
 # Fuzz testing
@@ -2882,7 +2908,6 @@ fuzzcheck-ubsan$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP)
 fuzzy: fuzzcheck-ubsan$(T.exe)
 xbin: fuzzcheck-ubsan$(T.exe)
 
-
 ossshell$(T.exe):	$(TOP)/test/ossfuzz.c $(TOP)/test/ossshell.c sqlite3.c sqlite3.h
 	$(T.link) -o $@ $(FUZZCHECK_OPT) $(TOP)/test/ossshell.c \
 		$(TOP)/test/ossfuzz.c sqlite3.c $(LDFLAGS.libsqlite3)
@@ -2969,7 +2994,6 @@ SHELL_DEP = \
     $(TOP)/ext/recover/sqlite3recover.c \
     $(TOP)/ext/recover/sqlite3recover.h
 
-
 shell.c:	$(SHELL_DEP) $(TOP)/tool/mkshellc.tcl $(B.tclsh)
 	$(B.tclsh) $(TOP)/tool/mkshellc.tcl shell.c
 
@@ -3031,7 +3055,6 @@ stmt.o:	$(TOP)/ext/misc/stmt.c $(DEPS_EXT_COMMON)
 $(AUXTEST): $(TOP)/test/c/$(AUXTEST).c
 	$(T.cc.sqlite) -o $@ $(TOP)/test/c/$(AUXTEST).c sqlite3.o $(LDFLAGS.libsqlite3)
 
-
 #
 # Windows section
 #
@@ -3071,7 +3094,6 @@ help:
 	echo " - soaktest      = Really, really long tests"; \
 	echo " - alltest       = Runs most or all TCL tests"; \
 	echo
-
 
 #
 # Remove build products sufficient so that subsequent makes will recompile
@@ -3126,7 +3148,6 @@ clean:	tidy
 # The main distclean rules are in Makefile.in.
 #
 distclean:	clean
-
 
 #
 # Show important variable settings.

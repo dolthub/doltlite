@@ -6,26 +6,29 @@
 #include "chunk_store.h"
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"
+#include "doltlite_tls.h"
+#include "doltlite_creds.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 
-#ifdef _WIN32
+#ifndef DOLTLITE_HAVE_AUTH
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){ (void)zUrl; return 0; }
 #else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <unistd.h>
+#include "doltlite_net.h"
 
 typedef struct HttpRemote HttpRemote;
 struct HttpRemote {
   DoltliteRemote base;
   char *zHost;
   int port;
+  int useTls;
   char *zBasePath;
+
+  DoltliteCreds *cred;  /* NULL when unauthenticated */
+  char *zAudience;      /* JWT audience: remote host or override */
 
   u8 *pUploadBuf;
   i64 nUploadBuf;
@@ -39,7 +42,7 @@ struct HttpRemote {
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
 
-static int readUntilEof(int fd, u8 **ppOut, int *pnOut){
+static int readUntilEof(DoltliteConn *conn, u8 **ppOut, int *pnOut){
   i64 nAlloc = 4096;
   i64 nUsed = 0;
   u8 *pBuf = sqlite3_malloc64(nAlloc);
@@ -63,7 +66,7 @@ static int readUntilEof(int fd, u8 **ppOut, int *pnOut){
       pBuf = pNew;
       nAlloc = nNew;
     }
-    n = read(fd, pBuf + nUsed, (size_t)(nAlloc - nUsed));
+    n = doltliteConnRead(conn, pBuf + nUsed, (int)(nAlloc - nUsed));
     if( n < 0 ){
       sqlite3_free(pBuf);
       return SQLITE_IOERR;
@@ -78,18 +81,16 @@ static int readUntilEof(int fd, u8 **ppOut, int *pnOut){
 }
 
 static int httpRequest(
-  const char *zHost, int port,
+  HttpRemote *p,
   const char *zMethod,
   const char *zPath,
   const u8 *pBody, int nBody,
   int *pStatus,
   u8 **ppResp, int *pnResp
 ){
-  int fd = -1;
-  struct sockaddr_in addr;
-  struct hostent *he;
-  char aReqHdr[1024];
-  int nReqHdr;
+  DoltliteConn *conn;
+  char *zAuth = 0;
+  char *zHdr;
   u8 *pRaw = 0;
   int nRaw = 0;
   int rc = SQLITE_ERROR;
@@ -98,61 +99,51 @@ static int httpRequest(
   *ppResp = 0;
   *pnResp = 0;
 
-  he = gethostbyname(zHost);
-  if( !he || he->h_addrtype != AF_INET || !he->h_addr_list[0] ){
-    return SQLITE_ERROR;
-  }
+  conn = doltliteConnOpen(p->zHost, p->port, p->useTls);
+  if( !conn ) return SQLITE_ERROR;
 
-  fd = socket(AF_INET, SOCK_STREAM, 0);
-  if( fd < 0 ) return SQLITE_ERROR;
-
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons((u16)port);
-  {
-    size_t nCopy = (size_t)he->h_length;
-    if( nCopy > sizeof(addr.sin_addr) ) nCopy = sizeof(addr.sin_addr);
-    memcpy(&addr.sin_addr, he->h_addr_list[0], nCopy);
-  }
-
-  if( connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 ){
-    close(fd);
-    return SQLITE_ERROR;
+  if( p->useTls && p->cred ){
+    char *jwt = 0;
+    if( doltliteCredsBearerToken(p->cred, p->zAudience, &jwt)==0 && jwt ){
+      zAuth = sqlite3_mprintf("Authorization: Bearer %s\r\n", jwt);
+    }
+    if( jwt ) free(jwt);
   }
 
   if( pBody && nBody > 0 ){
-    nReqHdr = snprintf(aReqHdr, sizeof(aReqHdr),
+    zHdr = sqlite3_mprintf(
       "%s %s HTTP/1.1\r\n"
       "Host: %s\r\n"
+      "%s"
       "Content-Length: %d\r\n"
       "Content-Type: application/octet-stream\r\n"
       "Connection: close\r\n"
       "\r\n",
-      zMethod, zPath, zHost, nBody);
+      zMethod, zPath, p->zHost, zAuth ? zAuth : "", nBody);
   }else{
-    nReqHdr = snprintf(aReqHdr, sizeof(aReqHdr),
+    zHdr = sqlite3_mprintf(
       "%s %s HTTP/1.1\r\n"
       "Host: %s\r\n"
+      "%s"
       "Connection: close\r\n"
       "\r\n",
-      zMethod, zPath, zHost);
+      zMethod, zPath, p->zHost, zAuth ? zAuth : "");
   }
+  sqlite3_free(zAuth);
+  if( !zHdr ){ doltliteConnClose(conn); return SQLITE_NOMEM; }
 
-  if( nReqHdr < 0 || nReqHdr >= (int)sizeof(aReqHdr) ){
-    close(fd);
-    return SQLITE_TOOBIG;
-  }
-
-  rc = doltliteWriteAll(fd, aReqHdr, nReqHdr);
-  if( rc != SQLITE_OK ){ close(fd); return rc; }
+  rc = doltliteConnWriteAll(conn, zHdr, (int)strlen(zHdr)) ? SQLITE_IOERR : SQLITE_OK;
+  sqlite3_free(zHdr);
+  if( rc != SQLITE_OK ){ doltliteConnClose(conn); return rc; }
   if( pBody && nBody > 0 ){
-    rc = doltliteWriteAll(fd, pBody, nBody);
-    if( rc != SQLITE_OK ){ close(fd); return rc; }
+    if( doltliteConnWriteAll(conn, pBody, nBody) ){
+      doltliteConnClose(conn);
+      return SQLITE_IOERR;
+    }
   }
 
-  rc = readUntilEof(fd, &pRaw, &nRaw);
-  close(fd);
-  fd = -1;
+  rc = readUntilEof(conn, &pRaw, &nRaw);
+  doltliteConnClose(conn);
   if( rc != SQLITE_OK ) return rc;
 
   {
@@ -276,7 +267,7 @@ static int httpHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
     return SQLITE_NOMEM;
   }
 
-  rc = httpRequest(p->zHost, p->port, "POST", zPath,
+  rc = httpRequest(p, "POST", zPath,
                    pReqBody, nReqBody, &status, &pResp, &nResp);
   sqlite3_free(pReqBody);
   sqlite3_free(zPath);
@@ -318,7 +309,7 @@ static int httpGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
   zPath = buildPath(p, zSuffix);
   if( !zPath ) return SQLITE_NOMEM;
 
-  rc = httpRequest(p->zHost, p->port, "GET", zPath,
+  rc = httpRequest(p, "GET", zPath,
                    0, 0, &status, &pResp, &nResp);
   sqlite3_free(zPath);
 
@@ -374,7 +365,7 @@ static int httpGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   zPath = buildPath(p, "/refs");
   if( !zPath ) return SQLITE_NOMEM;
 
-  rc = httpRequest(p->zHost, p->port, "GET", zPath,
+  rc = httpRequest(p, "GET", zPath,
                    0, 0, &status, &pResp, &nResp);
   sqlite3_free(zPath);
 
@@ -443,7 +434,7 @@ static int httpCommit(DoltliteRemote *pRemote){
     zPath = buildPath(p, "/chunks");
     if( !zPath ) return SQLITE_NOMEM;
 
-    rc = httpRequest(p->zHost, p->port, "POST", zPath,
+    rc = httpRequest(p, "POST", zPath,
                      p->pUploadBuf, (int)p->nUploadBuf,
                      &status, &pResp, &nResp);
     sqlite3_free(zPath);
@@ -465,12 +456,12 @@ static int httpCommit(DoltliteRemote *pRemote){
       }
       memcpy(pReq, p->expectedRefsHash.data, PROLLY_HASH_SIZE);
       memcpy(pReq + PROLLY_HASH_SIZE, p->pPendingRefs, p->nPendingRefs);
-      rc = httpRequest(p->zHost, p->port, "PUT", zPath,
+      rc = httpRequest(p, "PUT", zPath,
                        pReq, PROLLY_HASH_SIZE + p->nPendingRefs,
                        &status, &pResp, &nResp);
       sqlite3_free(pReq);
     }else{
-      rc = httpRequest(p->zHost, p->port, "PUT", zPath,
+      rc = httpRequest(p, "PUT", zPath,
                        p->pPendingRefs, p->nPendingRefs,
                        &status, &pResp, &nResp);
     }
@@ -486,7 +477,7 @@ static int httpCommit(DoltliteRemote *pRemote){
     zPath = buildPath(p, "/commit");
     if( !zPath ) return SQLITE_NOMEM;
 
-    rc = httpRequest(p->zHost, p->port, "POST", zPath,
+    rc = httpRequest(p, "POST", zPath,
                      0, 0, &status, &pResp, &nResp);
     sqlite3_free(zPath);
     sqlite3_free(pResp);
@@ -509,11 +500,37 @@ static int httpCommit(DoltliteRemote *pRemote){
 
 static void httpClose(DoltliteRemote *pRemote){
   HttpRemote *p = (HttpRemote*)pRemote;
+  doltliteCredsFree(p->cred);
+  sqlite3_free(p->zAudience);
   sqlite3_free(p->zHost);
   sqlite3_free(p->zBasePath);
   sqlite3_free(p->pUploadBuf);
   sqlite3_free(p->pPendingRefs);
   sqlite3_free(p);
+}
+
+static void httpResolveCreds(HttpRemote *p){
+  char *dir = doltliteCredsDir();
+  const char *kid = getenv("DOLTLITE_CREDS_KID");
+  DoltliteCreds *cred = 0;
+  if( dir ){
+    if( kid && *kid ){
+      doltliteCredsLoad(dir, kid, &cred);
+    }else{
+      doltliteCredsLoadDefault(dir, &cred);
+    }
+    free(dir);
+  }
+  if( cred ){
+    const char *aud = getenv("DOLT_OVERRIDE_GRPC_JWT_AUDIENCE");
+    if( !aud || !*aud ) aud = p->zHost;
+    p->zAudience = sqlite3_mprintf("%s", aud);
+    if( p->zAudience ){
+      p->cred = cred;
+    }else{
+      doltliteCredsFree(cred);
+    }
+  }
 }
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
@@ -523,14 +540,24 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   const char *zPortStart;
   const char *zPathStart;
   int nHost;
-  int port = 80;
+  int port;
+  int useTls;
   int nUserPath;
   int nBasePath;
 
   if( !zUrl ) return 0;
 
-  if( strncmp(zUrl, "http://", 7) != 0 ) return 0;
-  zAfterScheme = zUrl + 7;
+  if( strncmp(zUrl, "https://", 8) == 0 ){
+    useTls = 1;
+    port = 443;
+    zAfterScheme = zUrl + 8;
+  }else if( strncmp(zUrl, "http://", 7) == 0 ){
+    useTls = 0;
+    port = 80;
+    zAfterScheme = zUrl + 7;
+  }else{
+    return 0;
+  }
   zHostStart = zAfterScheme;
 
   zPortStart = 0;
@@ -544,7 +571,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
       c = zPortStart;
       while( *c && *c != '/' ) c++;
       port = atoi(zPortStart);
-      if( port <= 0 ) port = 80;
+      if( port <= 0 ) port = useTls ? 443 : 80;
       if( *c == '/' ) zPathStart = c;
     }else if( *c == '/' ){
       zPathStart = c;
@@ -591,6 +618,11 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   }
   memcpy(p->zBasePath, zPathStart, nBasePath);
   p->zBasePath[nBasePath] = '\0';
+
+  p->useTls = useTls;
+  if( useTls ){
+    httpResolveCreds(p);
+  }
 
   p->base.xGetChunk = httpGetChunk;
   p->base.xPutChunk = httpPutChunk;

@@ -10,6 +10,7 @@ probe_cflags=(-w)
 probe_libs=(-lz -lpthread -lm)
 case "$(uname -s)" in
   Linux*) probe_libs+=(-ldl) ;;
+  MINGW*|MSYS*|CYGWIN*) probe_libs+=(-lws2_32 -lbcrypt -lcrypt32) ;;
 esac
 
 check_value() {

@@ -8,7 +8,7 @@ pass=0
 fail=0
 
 check() {
-  local desc="$1" expected="$2" actual="$3"
+  local desc="$1" expected="${2//$'\r'/}" actual="${3//$'\r'/}"
   if [ "$expected" = "$actual" ]; then
     echo "  PASS: $desc"; pass=$((pass+1))
   else
@@ -20,7 +20,7 @@ check() {
 }
 
 check_match() {
-  local desc="$1" pattern="$2" actual="$3"
+  local desc="$1" pattern="$2" actual="${3//$'\r'/}"
   if echo "$actual" | grep -qE "$pattern"; then
     echo "  PASS: $desc"; pass=$((pass+1))
   else

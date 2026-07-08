@@ -54,6 +54,7 @@ tsrc/
 /mksourceid
 /src-verify
 /doltlite
+/doltlite-remotesrv
 /doltlite_regression_test_c
 /*_test
 /probe_wr.test

@@ -114,6 +114,8 @@ jobs:
             runs-on: ubuntu-latest
           - platform: windows
             runs-on: windows-latest
+          - platform: macos
+            runs-on: macos-latest
 
     steps:
     - uses: actions/checkout@v4
@@ -128,7 +130,11 @@ jobs:
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
-        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl openssl
+
+    - name: Install dependencies (macOS)
+      if: matrix.platform == 'macos'
+      run: brew install tcl-tk
 
     - name: Install Dolt
       if: matrix.platform == 'ubuntu'
@@ -155,13 +161,21 @@ jobs:
         mkdir -p build && cd build
         ../configure
 
+    - name: Configure (macOS)
+      if: matrix.platform == 'macos'
+      run: |
+        mkdir -p build && cd build
+        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        ../configure
+
     - name: Build
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: |
         cd build
         set -o pipefail
         {
           make DOLTLITE_PROLLY_CHECK=1 doltlite
+          make DOLTLITE_PROLLY_CHECK=1 doltlite-remotesrv
           make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
           # doltlite_parity.sh compares against the package-built stock
           # SQLite CLI instead of whatever sqlite3 the runner image provides.
@@ -180,17 +194,17 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
-        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-remotesrv.exe doltlite-lib
         DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 bash ../test/assert_doltlite_artifacts.sh .
         cp -f "$(command -v sqlite3)" sqlite3
 
     - name: Lint
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && make lint
       timeout-minutes: 1
 
     - name: Basic smoke tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: |
         cd build
         rm -f /tmp/build_test_smoke_basic.db /tmp/build_test_smoke_basic.db-wal /tmp/build_test_smoke_basic.db-lock
@@ -215,7 +229,7 @@ jobs:
       timeout-minutes: 2
 
     - name: GC smoke tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: |
         cd build
         rm -f /tmp/build_test_smoke_gc.db /tmp/build_test_smoke_gc.db-wal /tmp/build_test_smoke_gc.db-lock
@@ -240,50 +254,60 @@ jobs:
     # -- Doltlite feature tests ------------------------------
 
     - name: Doltlite feature tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
     - name: Correctness regression tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
       timeout-minutes: 10
 
     - name: Index operation tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/index_test.sh ./doltlite
       timeout-minutes: 5
 
     # All oracle tests (vc + sql) run in the parallel oracle-tests job
 
     - name: Large-scale test (10K rows)
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
       timeout-minutes: 5
 
     - name: Chunk size distribution
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/chunk_distribution_test.sh ./doltlite
       timeout-minutes: 5
 
     - name: Multi-table test
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/multi_table_test.sh ./doltlite --quick
       timeout-minutes: 5
 
     - name: Diff tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/diff_test.sh ./doltlite
       timeout-minutes: 10
 
     - name: Config tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/config_test.sh ./doltlite
       timeout-minutes: 2
 
     - name: BLAKE3 known-answer test
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
+      timeout-minutes: 2
+
+    - name: Credential known-answer test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/creds_kat_test.sh
+      timeout-minutes: 2
+
+    - name: TLS client test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/tls_test.sh
       timeout-minutes: 2
 
     - name: Windows Doltlite feature tests
@@ -331,15 +355,37 @@ jobs:
         bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 20
 
+    - name: Windows credential + TLS + remote tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/creds_kat_test.sh
+        bash ../test/tls_test.sh
+        bash ../test/creds_verify_test.sh
+        bash ../test/remote_test.sh ./doltlite
+        bash ../test/remote_https_auth_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+      timeout-minutes: 15
+
     - name: Remote integration tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: cd build && bash ../test/remote_test.sh ./doltlite
+      timeout-minutes: 5
+
+    - name: Credential verify known-answer test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/creds_verify_test.sh
+      timeout-minutes: 5
+
+    - name: Remote HTTPS + credential auth tests
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     # -- C/Python/Go integration tests -----------------------
 
     - name: C integration tests
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: |
         cd build
         # Quickstart
@@ -352,7 +398,7 @@ jobs:
         ./concurrent_branch_test
 
     - name: Concurrent write test
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: |
         cd build
         gcc -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
@@ -369,7 +415,7 @@ jobs:
       timeout-minutes: 10
 
     - name: Prepared statement reuse test
-      if: matrix.platform == 'ubuntu'
+      if: matrix.platform != 'windows'
       run: |
         cd build
         gcc -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \

@@ -8,7 +8,9 @@
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "doltlite_creds.h"
 #include <string.h>
+#include <stdlib.h>
 
 typedef struct RemoteMutationCtx RemoteMutationCtx;
 struct RemoteMutationCtx {
@@ -28,7 +30,8 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
   if( strncmp(zUrl, "file://", 7)==0 ){
     return doltliteFsRemoteOpen(pVfs, zUrl + 7);
   }
-  if( strncmp(zUrl, "http://", 7)==0 ){
+  if( strncmp(zUrl, "http://", 7)==0 || strncmp(zUrl, "https://", 8)==0 ){
+
     return doltliteHttpRemoteOpen(zUrl);
   }
 
@@ -774,6 +777,113 @@ static sqlite3_module remotesModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
+#define DOLTLITE_DEFAULT_LOGIN_URL "https://dolthub.com/settings/credentials"
+
+#ifdef DOLTLITE_HAVE_AUTH
+static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  DoltliteCreds *cred = 0;
+  char *kid = 0, *pub = 0, *msg = 0;
+  const char *loginUrl;
+  (void)argc;
+  (void)argv;
+
+  if( doltliteCredsGenerate(&cred)!=0 ){
+    doltliteVcResultError(ctx, db, "failed to generate credential");
+    return;
+  }
+  if( doltliteCredsSave(cred, 0)!=0 ){
+    doltliteCredsFree(cred);
+    doltliteVcResultError(ctx, db,
+        "failed to save credential under ~/.doltlite/creds (is $HOME set?)");
+    return;
+  }
+
+  kid = doltliteCredsKid(cred);
+  pub = doltliteCredsPubKeyB32(cred);
+  loginUrl = getenv("DOLTLITE_LOGIN_URL");
+  if( !loginUrl || !*loginUrl ) loginUrl = DOLTLITE_DEFAULT_LOGIN_URL;
+
+  if( kid && pub ){
+    msg = sqlite3_mprintf(
+        "Created credential %s\n"
+        "Add this public key to your DoltHub account, then push:\n"
+        "  %s#%s\n"
+        "(public key: %s)",
+        kid, loginUrl, pub, pub);
+  }
+  if( msg ){
+    sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+    sqlite3_free(msg);
+  }else{
+    doltliteVcResultError(ctx, db, "out of memory");
+  }
+
+  free(kid);
+  free(pub);
+  doltliteCredsFree(cred);
+}
+
+static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *action = "list";
+
+  if( argc>=1 && sqlite3_value_text(argv[0]) ){
+    action = (const char*)sqlite3_value_text(argv[0]);
+  }
+
+  if( strcmp(action, "list")==0 ){
+    char **kids = 0;
+    int n = 0, i;
+    char *msg;
+    if( doltliteCredsList(0, &kids, &n)!=0 ){
+      doltliteVcResultError(ctx, db, "failed to read ~/.doltlite/creds");
+      return;
+    }
+    if( n==0 ){
+      sqlite3_result_text(ctx, "no credentials; run dolt_creds_new()", -1,
+                          SQLITE_STATIC);
+      doltliteCredsFreeList(kids, n);
+      return;
+    }
+    msg = sqlite3_mprintf("%d credential(s):", n);
+    for(i=0; i<n && msg; i++){
+      char *nx = sqlite3_mprintf("%s\n  %s", msg, kids[i]);
+      sqlite3_free(msg);
+      msg = nx;
+    }
+    if( msg ){
+      sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+      sqlite3_free(msg);
+    }else{
+      doltliteVcResultError(ctx, db, "out of memory");
+    }
+    doltliteCredsFreeList(kids, n);
+  }else if( strcmp(action, "rm")==0 || strcmp(action, "remove")==0 ){
+    const char *kid;
+    if( argc<2 || !sqlite3_value_text(argv[1]) ){
+      doltliteVcResultError(ctx, db, "usage: dolt_creds('rm', <kid>)");
+      return;
+    }
+    kid = (const char*)sqlite3_value_text(argv[1]);
+    if( doltliteCredsRemove(0, kid)!=0 ){
+      doltliteVcResultError(ctx, db, "no such credential");
+    }else{
+      char *msg = sqlite3_mprintf("Removed credential %s", kid);
+      if( msg ){
+        sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+        sqlite3_free(msg);
+      }else{
+        sqlite3_result_int(ctx, 0);
+      }
+    }
+  }else{
+    doltliteVcResultError(ctx, db,
+        "usage: dolt_creds(['list'] | 'rm', <kid>); use dolt_creds_new() to create");
+  }
+}
+#endif /* DOLTLITE_HAVE_AUTH */
+
 int doltliteRemoteSqlRegister(sqlite3 *db){
   int rc;
   rc = sqlite3_create_function(db, "dolt_remote", -1, SQLITE_UTF8, 0,
@@ -786,6 +896,12 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
                                                    doltPullFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_clone", -1, SQLITE_UTF8, 0,
                                                    doltCloneFunc, 0, 0);
+#ifdef DOLTLITE_HAVE_AUTH
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_creds_new", -1, SQLITE_UTF8, 0,
+                                                   doltCredsNewFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_creds", -1, SQLITE_UTF8, 0,
+                                                   doltCredsFunc, 0, 0);
+#endif
   if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_remotes", &remotesModule, 0);
   return rc;
 }
