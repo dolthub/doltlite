@@ -9,6 +9,9 @@
 #include "mbedtls/x509_crt.h"
 
 #include "doltlite_net.h"
+#ifdef _WIN32
+#include <wincrypt.h>
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +37,21 @@ struct DoltliteTlsServer {
   mbedtls_entropy_context entropy;
 };
 
+#ifdef _WIN32
+static int loadSystemRoots(mbedtls_x509_crt *ca) {
+  HCERTSTORE store = CertOpenSystemStoreW(0, L"ROOT");
+  PCCERT_CONTEXT ctx = NULL;
+  int loaded = 0;
+  if (!store) return 1;
+  while ((ctx = CertEnumCertificatesInStore(store, ctx)) != NULL) {
+    if (mbedtls_x509_crt_parse_der(ca, ctx->pbCertEncoded, ctx->cbCertEncoded) == 0) {
+      loaded++;
+    }
+  }
+  CertCloseStore(store, 0);
+  return loaded > 0 ? 0 : 1;
+}
+#else
 static const char *const CA_PATHS[] = {
     "/etc/ssl/cert.pem",
     "/etc/ssl/certs/ca-certificates.crt",
@@ -41,20 +59,26 @@ static const char *const CA_PATHS[] = {
     "/etc/ssl/ca-bundle.pem",
     NULL,
 };
+#endif
 
 static int loadTrustRoots(mbedtls_x509_crt *ca) {
   const char *env = getenv("DOLTLITE_CA_FILE");
-  int i;
   if (env && *env) {
-
     return (mbedtls_x509_crt_parse_file(ca, env) >= 0 && ca->version != 0) ? 0 : 1;
   }
-  for (i = 0; CA_PATHS[i] != NULL; i++) {
-    if (mbedtls_x509_crt_parse_file(ca, CA_PATHS[i]) >= 0 && ca->version != 0) {
-      return 0;
+#ifdef _WIN32
+  return loadSystemRoots(ca);
+#else
+  {
+    int i;
+    for (i = 0; CA_PATHS[i] != NULL; i++) {
+      if (mbedtls_x509_crt_parse_file(ca, CA_PATHS[i]) >= 0 && ca->version != 0) {
+        return 0;
+      }
     }
+    return 1;
   }
-  return 1;
+#endif
 }
 
 DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {

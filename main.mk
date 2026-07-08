@@ -590,7 +590,7 @@ MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
 DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
 DOLTLITE_IS_WINDOWS := $(filter .dll,$(T.dll))$(filter Windows_NT,$(OS))
 ifneq ($(DOLTLITE_IS_WINDOWS),)
-  LDFLAGS.libsqlite3 += -lws2_32 -lbcrypt
+  LDFLAGS.libsqlite3 += -lws2_32 -lbcrypt -lcrypt32
 endif
 
 PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \

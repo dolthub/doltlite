@@ -5,7 +5,7 @@ set -o pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 CC="${CC:-cc}"
 DOLTLITE_EXTRA_LIBS=""
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcrypt";; esac
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcrypt -lcrypt32";; esac
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
