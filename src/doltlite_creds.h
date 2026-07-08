@@ -8,11 +8,11 @@
 #define DOLTLITE_SIG_LEN    64
 #define DOLTLITE_KID_RAW_LEN 28
 
-/* The credential + TLS stack (ed25519, mbedtls) is compiled only where it is
- * both supported and linked: off-Windows and outside the single-file
- * amalgamation, which links neither library. Callers gate their use of the
- * credential/remote-client API on this. */
-#if !defined(_WIN32) && !defined(SQLITE_AMALGAMATION)
+/* The credential + TLS stack (ed25519, mbedtls) is compiled everywhere it is
+ * linked: it is excluded only from the single-file amalgamation, which links
+ * neither library. Callers gate their use of the credential/remote-client API
+ * on this. */
+#if !defined(SQLITE_AMALGAMATION)
 #define DOLTLITE_HAVE_AUTH 1
 #endif
 

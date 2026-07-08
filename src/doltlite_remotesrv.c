@@ -19,12 +19,8 @@
 
 int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "doltlite_net.h"
 #include <pthread.h>
-#include <poll.h>
 #include <errno.h>
 
 struct DoltliteServer {
@@ -696,7 +692,8 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
       zBindAddr);
   }
 
-  pSrv->listenFd = socket(AF_INET, SOCK_STREAM, 0);
+  if( doltliteNetInit()!=0 ){ serverCleanup(pSrv); return SQLITE_ERROR; }
+  pSrv->listenFd = (int)socket(AF_INET, SOCK_STREAM, 0);
   if( pSrv->listenFd < 0 ){ serverCleanup(pSrv); return SQLITE_ERROR; }
 
   setsockopt(pSrv->listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -728,7 +725,7 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
 
 static void serverLoop(DoltliteServer *pSrv){
   while( pSrv->running ){
-    struct pollfd pfd;
+    doltlite_pollfd pfd;
     int clientFd;
     DoltliteConn *conn;
 
@@ -736,9 +733,9 @@ static void serverLoop(DoltliteServer *pSrv){
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    if( poll(&pfd, 1, 1000) <= 0 ) continue;
+    if( doltlitePoll(&pfd, 1, 1000) <= 0 ) continue;
 
-    clientFd = accept(pSrv->listenFd, NULL, NULL);
+    clientFd = (int)accept(pSrv->listenFd, NULL, NULL);
     if( clientFd < 0 ) continue;
 
     conn = pSrv->tls ? doltliteConnServerAccept(pSrv->tls, clientFd)
@@ -752,7 +749,7 @@ static void serverLoop(DoltliteServer *pSrv){
 
 static void serverCleanup(DoltliteServer *pSrv){
   if( pSrv->listenFd >= 0 ){
-    close(pSrv->listenFd);
+    doltliteCloseSocket(pSrv->listenFd);
     pSrv->listenFd = -1;
   }
   if( pSrv->tls ){
@@ -832,7 +829,7 @@ void doltliteServerStop(DoltliteServer *pServer){
   pServer->running = 0;
 
   if( pServer->listenFd >= 0 ){
-    close(pServer->listenFd);
+    doltliteCloseSocket(pServer->listenFd);
     pServer->listenFd = -1;
   }
   pthread_join(pServer->thread, 0);

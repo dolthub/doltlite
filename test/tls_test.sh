@@ -4,6 +4,8 @@ set -o pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 CC="${CC:-cc}"
+DOLTLITE_EXTRA_LIBS=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcrypt";; esac
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -21,6 +23,7 @@ echo "=== doltlite TLS test ==="
   "$HERE/test/doltlite_tls_test_main.c" \
   "$HERE/src/doltlite_tls.c" \
   "$HERE"/ext/mbedtls/library/*.c \
+  $DOLTLITE_EXTRA_LIBS \
   -o "$TMP/tls_test" 2>"$TMP/build.err" || {
   echo "  build failed:"
   cat "$TMP/build.err"

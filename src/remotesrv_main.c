@@ -3,7 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #include "doltlite_remotesrv.h"
 
 static void usage(const char *prog){
@@ -97,7 +101,13 @@ int main(int argc, char **argv){
   printf("Press Ctrl+C to stop.\n");
   fflush(stdout);
 
-  while( !g_stop ) sleep(1);
+  while( !g_stop ){
+#ifdef _WIN32
+    Sleep(1000);
+#else
+    sleep(1);
+#endif
+  }
 
   doltliteServerStop(srv);
   return 0;

@@ -582,17 +582,15 @@ ED25519_SRC = fe.c ge.c sc.c sha512.c keypair.c sign.c verify.c
 ED25519_OBJS = $(ED25519_SRC:%.c=ed25519_%.o)
 MBEDTLS_SRC = $(notdir $(wildcard $(TOP)/ext/mbedtls/library/*.c))
 MBEDTLS_OBJS = $(MBEDTLS_SRC:%.c=mbedtls_%.o)
-# The credential/TLS stack (ed25519 + mbedtls) is Unix-only: the HTTP remote
-# client and test server are stubbed on Windows and mbedtls's socket/entropy
-# layer needs Win32 libraries we don't link. Detect a Windows-esque build via
-# the DLL suffix
-# (autosetup resolves T.dll to .dll there) or the OS env var, and drop the
-# stack. The source uses are gated on DOLTLITE_HAVE_AUTH to match.
+# The credential/TLS stack (ed25519 + mbedtls) is built on every platform. On
+# Windows, mbedtls's socket and entropy layers plus our own server sockets and
+# BCryptGenRandom need ws2_32 and bcrypt linked (the MSVC #pragma comment(lib)
+# in mbedtls doesn't apply under MinGW). Detect a Windows-esque build via the
+# DLL suffix (autosetup resolves T.dll to .dll there) or the OS env var.
+DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
 DOLTLITE_IS_WINDOWS := $(filter .dll,$(T.dll))$(filter Windows_NT,$(OS))
-ifeq ($(DOLTLITE_IS_WINDOWS),)
-  DOLTLITE_AUTH_OBJS = doltlite_creds.o doltlite_tls.o $(ED25519_OBJS) $(MBEDTLS_OBJS)
-else
-  DOLTLITE_AUTH_OBJS =
+ifneq ($(DOLTLITE_IS_WINDOWS),)
+  LDFLAGS.libsqlite3 += -lws2_32 -lbcrypt
 endif
 
 PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \

@@ -4,6 +4,8 @@ set -o pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 CC="${CC:-cc}"
+DOLTLITE_EXTRA_LIBS=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcrypt";; esac
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -22,6 +24,7 @@ echo "=== doltlite creds KAT ==="
   "$HERE/ext/ed25519/sign.c" \
   "$HERE/ext/ed25519/verify.c" \
   "$HERE/ext/ed25519/add_scalar.c" \
+  $DOLTLITE_EXTRA_LIBS \
   -o "$BIN" 2>"$TMP/build.err" || {
   echo "  build failed:"
   cat "$TMP/build.err"

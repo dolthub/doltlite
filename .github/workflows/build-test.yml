@@ -131,7 +131,7 @@ jobs:
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
-        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl openssl
 
     - name: Install dependencies (macOS)
       if: matrix.platform == 'macos'
@@ -195,7 +195,7 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
-        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-remotesrv.exe doltlite-lib
         DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 bash ../test/assert_doltlite_artifacts.sh .
         cp -f "$(command -v sqlite3)" sqlite3
 
@@ -355,6 +355,18 @@ jobs:
         bash ../test/config_test.sh ./doltlite
         bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 20
+
+    - name: Windows credential + TLS + remote tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/creds_kat_test.sh
+        bash ../test/tls_test.sh
+        bash ../test/creds_verify_test.sh
+        bash ../test/remote_test.sh ./doltlite
+        bash ../test/remote_https_auth_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+      timeout-minutes: 15
 
     - name: Remote integration tests
       if: matrix.platform != 'windows'

@@ -8,10 +8,11 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/x509_crt.h"
 
+#include "doltlite_net.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 struct DoltliteConn {
   int useTls;
@@ -221,7 +222,7 @@ DoltliteConn *doltliteConnServerAccept(DoltliteTlsServer *s, int clientFd) {
   DoltliteConn *c = (DoltliteConn *)calloc(1, sizeof(*c));
   int ret;
   if (!c) {
-    close(clientFd);
+    doltliteCloseSocket(clientFd);
     return NULL;
   }
   c->useTls = 1;
@@ -248,7 +249,7 @@ fail:
 DoltliteConn *doltliteConnFromFd(int clientFd) {
   DoltliteConn *c = (DoltliteConn *)calloc(1, sizeof(*c));
   if (!c) {
-    close(clientFd);
+    doltliteCloseSocket(clientFd);
     return NULL;
   }
   c->useTls = 0;

@@ -3,16 +3,23 @@
 #include "ed25519.h"
 #include "sha512.h"
 
-#include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <bcrypt.h>
+#include <direct.h>
+#else
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 struct DoltliteCreds {
   unsigned char seed[DOLTLITE_SEED_LEN];
@@ -144,6 +151,12 @@ int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen)
 }
 
 static int randomBytes(unsigned char *p, size_t n) {
+#ifdef _WIN32
+  return BCryptGenRandom(NULL, p, (ULONG)n,
+                         BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0
+             ? 0
+             : 1;
+#else
   int fd = open("/dev/urandom", O_RDONLY);
   size_t got = 0;
   if (fd < 0) return 1;
@@ -158,6 +171,7 @@ static int randomBytes(unsigned char *p, size_t n) {
   }
   close(fd);
   return 0;
+#endif
 }
 
 int doltliteCredsFromSeed(const unsigned char seed[DOLTLITE_SEED_LEN],
@@ -395,6 +409,10 @@ char *doltliteCredsDir(void) {
     return strdup(override);
   }
   home = getenv("HOME");
+#ifdef _WIN32
+  if (!home || !*home) home = getenv("USERPROFILE");
+  if (!home || !*home) home = getenv("APPDATA");
+#endif
   if (!home || !*home) return NULL;
   {
     size_t n = strlen(home) + strlen("/.doltlite/creds") + 1;
@@ -405,22 +423,32 @@ char *doltliteCredsDir(void) {
   return dir;
 }
 
+static int makeDir(const char *path) {
+#ifdef _WIN32
+  return _mkdir(path);
+#else
+  return mkdir(path, 0700);
+#endif
+}
+
 static int mkdirp(const char *path) {
   char *tmp = strdup(path);
   size_t len, i;
   if (!tmp) return 1;
   len = strlen(tmp);
   for (i = 1; i < len; i++) {
-    if (tmp[i] == '/') {
+    if (tmp[i] == '/' || tmp[i] == '\\') {
+      char sep = tmp[i];
       tmp[i] = '\0';
-      if (mkdir(tmp, 0700) != 0 && errno != EEXIST) {
+      /* Skip a Windows drive prefix like "C:" which cannot be created. */
+      if (tmp[i - 1] != ':' && makeDir(tmp) != 0 && errno != EEXIST) {
         free(tmp);
         return 1;
       }
-      tmp[i] = '/';
+      tmp[i] = sep;
     }
   }
-  if (mkdir(tmp, 0700) != 0 && errno != EEXIST) {
+  if (makeDir(tmp) != 0 && errno != EEXIST) {
     free(tmp);
     return 1;
   }
@@ -441,7 +469,7 @@ int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
   char *kid = NULL;
   char *path = NULL;
   char *json = NULL;
-  int fd = -1, rc = 1;
+  int rc = 1;
 
   if (!dir) {
     owned = doltliteCredsDir();
@@ -457,24 +485,36 @@ int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
   json = doltliteCredsToJwk(c);
   if (!json) goto done;
 
-  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-  if (fd < 0) goto done;
-  (void)fchmod(fd, 0600);
   {
-    size_t len = strlen(json), off = 0;
+    size_t len = strlen(json);
+#ifdef _WIN32
+    FILE *f = fopen(path, "wb");
+    if (!f) goto done;
+    if (fwrite(json, 1, len, f) != len) {
+      fclose(f);
+      goto done;
+    }
+    if (fclose(f) != 0) goto done;
+#else
+    size_t off = 0;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) goto done;
+    (void)fchmod(fd, 0600);
     while (off < len) {
       ssize_t w = write(fd, json + off, len - off);
       if (w <= 0) {
         if (w < 0 && errno == EINTR) continue;
+        close(fd);
         goto done;
       }
       off += (size_t)w;
     }
+    close(fd);
+#endif
   }
   rc = 0;
 
 done:
-  if (fd >= 0) close(fd);
   free(json);
   free(path);
   free(kid);
@@ -522,10 +562,59 @@ done:
   return rc;
 }
 
+/* Minimal cross-platform directory iteration over the creds dir. */
+typedef struct DirIter {
+#ifdef _WIN32
+  HANDLE h;
+  WIN32_FIND_DATAA fd;
+  int first;
+#else
+  DIR *d;
+#endif
+} DirIter;
+
+static int dirOpen(DirIter *it, const char *dir) {
+#ifdef _WIN32
+  size_t n = strlen(dir) + 3;
+  char *pat = (char *)malloc(n);
+  if (!pat) return 1;
+  snprintf(pat, n, "%s\\*", dir);
+  it->h = FindFirstFileA(pat, &it->fd);
+  free(pat);
+  if (it->h == INVALID_HANDLE_VALUE) return 1;
+  it->first = 1;
+  return 0;
+#else
+  it->d = opendir(dir);
+  return it->d ? 0 : 1;
+#endif
+}
+
+static const char *dirNext(DirIter *it) {
+#ifdef _WIN32
+  if (it->first) {
+    it->first = 0;
+    return it->fd.cFileName;
+  }
+  return FindNextFileA(it->h, &it->fd) ? it->fd.cFileName : NULL;
+#else
+  struct dirent *e = readdir(it->d);
+  return e ? e->d_name : NULL;
+#endif
+}
+
+static void dirClose(DirIter *it) {
+#ifdef _WIN32
+  FindClose(it->h);
+#else
+  closedir(it->d);
+#endif
+}
+
 int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
   char *owned = NULL;
-  DIR *d;
-  struct dirent *e;
+  DirIter it;
+  const char *name;
   char *kid = NULL;
   int count = 0, rc = 1;
 
@@ -534,25 +623,24 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
     dir = owned;
   }
   if (!dir) return 1;
-  d = opendir(dir);
-  if (!d) {
+  if (dirOpen(&it, dir)) {
     free(owned);
     return 1;
   }
-  while ((e = readdir(d)) != NULL) {
-    size_t n = strlen(e->d_name);
-    if (n > 4 && strcmp(e->d_name + n - 4, ".jwk") == 0) {
+  while ((name = dirNext(&it)) != NULL) {
+    size_t n = strlen(name);
+    if (n > 4 && strcmp(name + n - 4, ".jwk") == 0) {
       count++;
       if (count == 1) {
         kid = (char *)malloc(n - 4 + 1);
         if (kid) {
-          memcpy(kid, e->d_name, n - 4);
+          memcpy(kid, name, n - 4);
           kid[n - 4] = '\0';
         }
       }
     }
   }
-  closedir(d);
+  dirClose(&it);
 
   if (count == 1 && kid) {
     rc = doltliteCredsLoad(dir, kid, out);
@@ -564,8 +652,8 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
 
 int doltliteCredsList(const char *dir, char ***out, int *n) {
   char *owned = NULL;
-  DIR *d;
-  struct dirent *e;
+  DirIter it;
+  const char *name;
   char **arr = NULL;
   int cap = 0, cnt = 0;
 
@@ -577,15 +665,14 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
   }
   if (!dir) return 1;
 
-  d = opendir(dir);
-  if (!d) {
+  if (dirOpen(&it, dir)) {
     free(owned);
     return 0;
   }
-  while ((e = readdir(d)) != NULL) {
-    size_t ln = strlen(e->d_name);
+  while ((name = dirNext(&it)) != NULL) {
+    size_t ln = strlen(name);
     char *kid;
-    if (!(ln > 4 && strcmp(e->d_name + ln - 4, ".jwk") == 0)) continue;
+    if (!(ln > 4 && strcmp(name + ln - 4, ".jwk") == 0)) continue;
     if (cnt == cap) {
       int nc = cap ? cap * 2 : 8;
       char **na = (char **)realloc(arr, (size_t)nc * sizeof(char *));
@@ -595,18 +682,18 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
     }
     kid = (char *)malloc(ln - 4 + 1);
     if (!kid) goto oom;
-    memcpy(kid, e->d_name, ln - 4);
+    memcpy(kid, name, ln - 4);
     kid[ln - 4] = '\0';
     arr[cnt++] = kid;
   }
-  closedir(d);
+  dirClose(&it);
   free(owned);
   *out = arr;
   *n = cnt;
   return 0;
 
 oom:
-  closedir(d);
+  dirClose(&it);
   free(owned);
   doltliteCredsFreeList(arr, cnt);
   return 1;
@@ -633,7 +720,7 @@ int doltliteCredsRemove(const char *dir, const char *kid) {
     free(owned);
     return 1;
   }
-  rc = (unlink(path) == 0) ? 0 : 1;
+  rc = (remove(path) == 0) ? 0 : 1;
   free(path);
   free(owned);
   return rc;
