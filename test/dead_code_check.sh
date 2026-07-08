@@ -35,7 +35,7 @@ CFLAGS=(
 
 # Intentional exports that have no in-tree caller (documented/embeddable API,
 # or build-glue entry points reached from outside this tree).
-ALLOW="doltliteServeAsync doltliteServerStop"
+ALLOW="doltliteServe doltliteServeAsync doltliteServerStop"
 
 fail=0
 

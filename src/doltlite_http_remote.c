@@ -17,10 +17,7 @@
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){ (void)zUrl; return 0; }
 #else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <unistd.h>
+#include "doltlite_net.h"
 
 typedef struct HttpRemote HttpRemote;
 struct HttpRemote {

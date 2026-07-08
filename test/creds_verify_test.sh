@@ -9,12 +9,13 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcry
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-BIN="$TMP/creds_kat"
+BIN="$TMP/creds_verify_kat"
+mkdir -p "$TMP/authkeys" "$TMP/empty"
 
-echo "=== doltlite creds KAT ==="
+echo "=== doltlite credential-verify KAT ==="
 "$CC" -O2 -Wall \
   -I "$HERE/src" -I "$HERE/ext/ed25519" \
-  "$HERE/test/doltlite_creds_kat.c" \
+  "$HERE/test/creds_verify_kat.c" \
   "$HERE/src/doltlite_creds.c" \
   "$HERE/ext/ed25519/fe.c" \
   "$HERE/ext/ed25519/ge.c" \
@@ -31,4 +32,4 @@ echo "=== doltlite creds KAT ==="
   exit 1
 }
 
-DOLTLITE_CREDS_DIR="$TMP/creds" "$BIN" "$TMP/creds"
+"$BIN" "$TMP/authkeys" "$TMP/empty"

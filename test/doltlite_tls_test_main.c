@@ -5,6 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+static int setenv(const char *n, const char *v, int overwrite) {
+  (void)overwrite;
+  return _putenv_s(n, v);
+}
+static int unsetenv(const char *n) { return _putenv_s(n, ""); }
+#endif
+
 static const char *testHost(void) {
   const char *h = getenv("DOLTLITE_TLS_TEST_HOST");
   return (h && *h) ? h : "dolthub.com";
