@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#ifdef SQLITE_CRASH_TEST
+#include <unistd.h>
+#endif
 
 static int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;

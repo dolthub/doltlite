@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "sqlite3.h"
+#include "chunk_store.h"
 
 #define MANIFEST_SIZE 168
 
@@ -616,6 +617,44 @@ static void test_corrupt_wal_chunk_body_stops_replay(void){
   removeDb(dbpath);
 }
 
+static void test_corrupt_initial_wal_chunk_body_detected(void){
+  const char *dbpath = "/tmp/test_corr_initial_wal_chunk_body.db";
+  off_t bodyOff;
+  unsigned char bad = 0x5A;
+
+  printf("--- Test 12: Corrupt initial WAL chunk body ---\n");
+
+  check("create_wal_only_12", create_good_db(dbpath)==0);
+
+  bodyOff = first_wal_chunk_body_offset(dbpath);
+  check("find_initial_wal_chunk_body_12", bodyOff > 0);
+  if( bodyOff > 0 ){
+    check("corrupt_initial_wal_chunk_body_12",
+      corrupt_bytes(dbpath, bodyOff, &bad, 1)==0);
+  }
+
+  {
+    ChunkStore cs;
+    ProllyHash zero;
+    u8 *pData = 0;
+    int nData = 0;
+    int rc;
+    memset(&zero, 0, sizeof(zero));
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("initial_wal_body_corruption_open_12", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("initial_wal_body_corruption_poisoned_12", cs.corruptMidStream);
+      rc = chunkStoreGet(&cs, &zero, &pData, &nData);
+      check("initial_wal_body_corruption_get_rejected_12", rc==SQLITE_CORRUPT);
+      sqlite3_free(pData);
+      chunkStoreClose(&cs);
+    }
+  }
+
+  removeDb(dbpath);
+}
+
 static void test_wrong_file_size_in_manifest(void){
   const char *dbpath = "/tmp/test_corr_filesize.db";
 
@@ -798,6 +837,7 @@ int main(void){
   test_manifest_only();
   test_corrupt_wal_tag();
   test_corrupt_wal_chunk_body_stops_replay();
+  test_corrupt_initial_wal_chunk_body_detected();
   test_wrong_file_size_in_manifest();
   test_corrupt_magic();
   test_corrupt_version();

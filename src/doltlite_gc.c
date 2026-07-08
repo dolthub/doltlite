@@ -11,6 +11,9 @@
 
 #include <string.h>
 #include <stdio.h>
+#ifdef SQLITE_CRASH_TEST
+#include <unistd.h>
+#endif
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 #include "doltlite_internal.h"
