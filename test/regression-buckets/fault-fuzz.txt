@@ -12,6 +12,7 @@ cffault
 checkfault
 dbpagefault
 default
+doltlite_recover_postcommit_oom
 existsfault
 exprfault
 exprfault2

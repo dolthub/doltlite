@@ -5690,7 +5690,13 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash catHash;
+  ProllyHash runtimeMasterRoot;
+  Btree reloadBtree;
+  int bReloadSchema = 0;
+  int bHaveReloadCatalog = 0;
   (void)bCleanup;
+  memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
+  memset(&reloadBtree, 0, sizeof(reloadBtree));
 
   /* Catalog serialization runs a SELECT whose finalize re-enters
   ** commit/rollback; that nested call is read-only, so no-op it instead of
@@ -5752,11 +5758,54 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       }
     }
 
+    bReloadSchema = p->bSchemaChangedTxn;
+    if( bReloadSchema ){
+      BtCursor *pC;
+      rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(catData);
+        chunkStoreRollback(&pBt->store);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
+      memcpy(reloadBtree.aMeta, p->aMeta, sizeof(reloadBtree.aMeta));
+      rc = deserializeCatalog(&reloadBtree, catData, nCatData);
+      if( rc!=SQLITE_OK ){
+        catFree(&reloadBtree.cat);
+        sqlite3_free(catData);
+        chunkStoreRollback(&pBt->store);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
+      bHaveReloadCatalog = 1;
+      /* Save this handle's live cursors before refreshing the schema root. */
+      for(pC = pBt->pCursor; pC; pC = pC->pNext){
+        if( pC->pBtree==p ){
+          if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
+           && saveCursorPosition(pC)!=SQLITE_OK ){
+            pC->eState = CURSOR_FAULT;
+            pC->skipNext = SQLITE_ABORT;
+            prollyCursorReleaseAll(&pC->pCur);
+          }
+          pC->pMutMap = 0;
+          pC->mmActive = 0;
+          pC->mmPhysActive = 0;
+          pC->deferredTreeSeek = 0;
+          pC->mmIdx = -1;
+          pC->mmPhysIdx = -1;
+        }else{
+          pC->eState = CURSOR_FAULT;
+          pC->skipNext = SQLITE_ABORT;
+          pC->mmActive = 0;
+          prollyCursorReleaseAll(&pC->pCur);
+        }
+      }
+    }
+
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
-      int bReloadSchema = p->bSchemaChangedTxn;
-      ProllyHash runtimeMasterRoot;
-      memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
       p->committedCatalogHash = catHash;
       p->committedStagedCatalog = p->stagedCatalog;
       p->committedIsMerging = p->isMerging;
@@ -5767,41 +5816,12 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       btreeMarkWorkingStateChanged(p, 1);
       if( bReloadSchema ){
         BtCursor *pC;
-        rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(catData);
-          chunkStoreUnlock(&pBt->store);
-          pBt->store.snapshotPinned = 0;
-          return rc;
-        }
-        /* Save this handle's live cursors before catalog reload. */
-        for(pC = pBt->pCursor; pC; pC = pC->pNext){
-          if( pC->pBtree==p ){
-            if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
-             && saveCursorPosition(pC)!=SQLITE_OK ){
-              pC->eState = CURSOR_FAULT;
-              pC->skipNext = SQLITE_ABORT;
-              prollyCursorReleaseAll(&pC->pCur);
-            }
-            pC->pMutMap = 0;
-            pC->mmActive = 0;
-            pC->mmPhysActive = 0;
-            pC->deferredTreeSeek = 0;
-            pC->mmIdx = -1;
-            pC->mmPhysIdx = -1;
-          }else{
-            pC->eState = CURSOR_FAULT;
-            pC->skipNext = SQLITE_ABORT;
-            pC->mmActive = 0;
-            prollyCursorReleaseAll(&pC->pCur);
-          }
-        }
-        rc = deserializeCatalog(p, catData, nCatData);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(catData);
-          chunkStoreUnlock(&pBt->store);
-          pBt->store.snapshotPinned = 0;
-          return rc;
+        if( bHaveReloadCatalog ){
+          btreeFreeCatalogTables(p);
+          p->cat = reloadBtree.cat;
+          memcpy(p->aMeta, reloadBtree.aMeta, sizeof(p->aMeta));
+          memset(&reloadBtree.cat, 0, sizeof(reloadBtree.cat));
+          bHaveReloadCatalog = 0;
         }
         {
           struct TableEntry *pMaster = findTable(p, 1);
@@ -5836,6 +5856,10 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       pBt->store.snapshotPinned = 0;
     }else{
       int rc2;
+      if( bHaveReloadCatalog ){
+        catFree(&reloadBtree.cat);
+        bHaveReloadCatalog = 0;
+      }
       sqlite3_free(catData);
       rc2 = restoreFromCommitted(p);
       if( rc2!=SQLITE_OK ){
