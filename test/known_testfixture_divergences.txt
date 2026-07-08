@@ -558,7 +558,6 @@ capi2 capi2-6.5  # 2nd-connection write expects "database is locked"; doltlite h
 # verbatim source. check-4.6 (same error string) passes because it runs before the
 # reload that check-4.8's integrity_check/ignore_check_constraints forces. Rows and
 # enforcement are correct; this is schema-text fidelity only. Tracked: #1200.
-check check-4.9
 collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
 # date-14 writes raw IEEE754 bytes directly into SQLite page offsets with
 # hexio_write, then verifies date/time behavior through that mutated record.

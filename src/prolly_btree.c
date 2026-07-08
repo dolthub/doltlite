@@ -1309,6 +1309,46 @@ static void resetConnectionSchema(Btree *pBtree){
   }
 }
 
+static void expireActiveStatements(Btree *pBtree){
+  Vdbe *pVdbe;
+  if( !pBtree->db ) return;
+  for(pVdbe=pBtree->db->pVdbe; pVdbe; pVdbe=pVdbe->pVNext){
+    if( pVdbe->eVdbeState==VDBE_RUN_STATE ){
+      pVdbe->expired = 1;
+    }
+  }
+}
+
+static int hasActiveSchemaProgram(Btree *pBtree){
+  Vdbe *pVdbe;
+  if( !pBtree->db ) return 0;
+  for(pVdbe=pBtree->db->pVdbe; pVdbe; pVdbe=pVdbe->pVNext){
+    int i;
+    if( pVdbe->eVdbeState!=VDBE_RUN_STATE ) continue;
+    for(i=0; i<pVdbe->nOp; i++){
+      int op = pVdbe->aOp[i].opcode;
+      if( op==OP_SetCookie
+       || op==OP_ParseSchema
+       || op==OP_CreateBtree
+       || op==OP_Destroy
+       || op==OP_DropTable
+       || op==OP_DropIndex ){
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+static int rollbackNeedsSchemaReset(Btree *pBtree){
+  return pBtree->bSchemaChangedTxn
+      || pBtree->bMasterRootChangedTxn
+      || (pBtree->db
+          && pBtree->db->init.busy==0
+          && (pBtree->db->mDbFlags & DBFLAG_SchemaChange)!=0)
+      || hasActiveSchemaProgram(pBtree);
+}
+
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   BtCursor *p;
   for(p=pBt->pCursor; p; p=p->pNext){
@@ -5983,6 +6023,7 @@ static int restoreFromCommitted(Btree *p){
 static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
+  int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
   int bAutocommitOomRollback = writeOnly
       && p->db
       && p->db->autoCommit
@@ -6043,7 +6084,11 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       pBt->store.snapshotPinned = 0;
       return rc;
     }
-    resetConnectionSchema(p);
+    if( bSchemaChangedRollback ){
+      resetConnectionSchema(p);
+    }else if( writeOnly ){
+      expireActiveStatements(p);
+    }
     chunkStoreRollback(&pBt->store);
     if( bAutocommitOomRollback ){
       p->bFilterSchemaPlaceholders = 1;
@@ -6154,6 +6199,7 @@ int doltliteBtreeCaptureStatement(void *pArg){
 
 static int rollbackCommittedState(Btree *p, BtShared *pBt){
   BtCursor *pC;
+  int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
   int rc = restoreFromCommitted(p);
   if( rc!=SQLITE_OK ){
     /* The reload OOM'd partway; the catalog may still point at staged
@@ -6179,7 +6225,7 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
     pC->mmActive = 0;
     prollyCursorReleaseAll(&pC->pCur);
   }
-  resetConnectionSchema(p);
+  if( bSchemaChangedRollback ) resetConnectionSchema(p);
   return SQLITE_OK;
 }
 
@@ -6239,6 +6285,7 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   BtCursor *pC;
   int j;
   int rc;
+  int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
   /* Save cursors so parent statements survive nested-statement rollback. */
   if( p->db && p->db->mallocFailed ){
     for(pC=pBt->pCursor; pC; pC=pC->pNext){
@@ -6284,7 +6331,11 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
     pC->mmIdx = -1;
     pC->mmPhysIdx = -1;
   }
-  invalidateSchema(p);
+  if( bSchemaChangedRollback ){
+    resetConnectionSchema(p);
+  }else{
+    invalidateSchema(p);
+  }
   return SQLITE_OK;
 }
 

@@ -461,6 +461,46 @@ static void test_partial_step(void){
   unlink("test_partial.db");
 }
 
+static void test_v1_stmt_survives_data_rollback(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pSel = 0;
+  const char *zTail = 0;
+  int rc;
+
+  unlink("test_v1_rollback.db");
+  rc = sqlite3_open("test_v1_rollback.db", &db);
+  check("v1_rollback: open", rc==SQLITE_OK);
+
+  execSql(db,
+    "CREATE TABLE t1(a);"
+    "INSERT INTO t1 VALUES(1);"
+    "INSERT INTO t1 VALUES(2);");
+
+  rc = sqlite3_prepare(db, "SELECT a FROM t1 ORDER BY a", -1, &pSel, &zTail);
+  check("v1_rollback: prepare", rc==SQLITE_OK);
+
+  rc = sqlite3_step(pSel);
+  check("v1_rollback: pre-step", rc==SQLITE_ROW);
+  check_int("v1_rollback: pre-step row", sqlite3_column_int(pSel, 0), 1);
+
+  rc = sqlite3_reset(pSel);
+  check("v1_rollback: reset", rc==SQLITE_OK);
+
+  execSql(db, "BEGIN; INSERT INTO t1 VALUES(3); ROLLBACK;");
+
+  rc = sqlite3_step(pSel);
+  check("v1_rollback: step after data rollback", rc==SQLITE_ROW);
+  if( rc==SQLITE_ROW ){
+    check_int("v1_rollback: row after rollback", sqlite3_column_int(pSel, 0), 1);
+  }
+
+  rc = sqlite3_finalize(pSel);
+  check("v1_rollback: finalize", rc==SQLITE_OK);
+
+  sqlite3_close(db);
+  unlink("test_v1_rollback.db");
+}
+
 
 int main(int argc, char **argv){
   (void)argc; (void)argv;
@@ -490,6 +530,9 @@ int main(int argc, char **argv){
 
   printf("--- partial step + reset ---\n");
   test_partial_step();
+
+  printf("--- v1 statement survives data rollback ---\n");
+  test_v1_stmt_survives_data_rollback();
 
   printf("\n=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail > 0 ? 1 : 0;

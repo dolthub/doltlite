@@ -2655,6 +2655,7 @@ DOLTLITE_C_TESTS = \
 	multi_process_merge_rebase_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
+	prepared_stmt_reuse_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
@@ -2710,6 +2711,10 @@ invariant_test$(T.exe): $(TOP)/test/invariant_test.c libdoltlite$(T.lib)
 
 corruption_test$(T.exe): $(TOP)/test/corruption_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/corruption_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+prepared_stmt_reuse_test$(T.exe): $(TOP)/test/prepared_stmt_reuse_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/prepared_stmt_reuse_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 # three_way_diff_test pokes prolly internals directly; needs sqliteInt.h
