@@ -14,12 +14,14 @@ trap cleanup EXIT
 pass=0
 fail=0
 check() {
-  if [ "$2" = "$3" ]; then echo "  PASS: $1"; pass=$((pass+1));
-  else echo "  FAIL: $1"; echo "    expected: |$2|"; echo "    actual:   |$3|"; fail=$((fail+1)); fi
+  local a="${2//$'\r'/}" b="${3//$'\r'/}"
+  if [ "$a" = "$b" ]; then echo "  PASS: $1"; pass=$((pass+1));
+  else echo "  FAIL: $1"; echo "    expected: |$a|"; echo "    actual:   |$b|"; fail=$((fail+1)); fi
 }
 check_ne() {
-  if [ "$2" != "$3" ]; then echo "  PASS: $1"; pass=$((pass+1));
-  else echo "  FAIL: $1 (got the not-allowed value |$3|)"; fail=$((fail+1)); fi
+  local a="${2//$'\r'/}" b="${3//$'\r'/}"
+  if [ "$a" != "$b" ]; then echo "  PASS: $1"; pass=$((pass+1));
+  else echo "  FAIL: $1 (got the not-allowed value |$b|)"; fail=$((fail+1)); fi
 }
 
 if ! command -v openssl >/dev/null 2>&1; then
