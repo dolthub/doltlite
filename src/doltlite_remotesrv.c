@@ -696,7 +696,7 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
   pSrv->listenFd = (int)socket(AF_INET, SOCK_STREAM, 0);
   if( pSrv->listenFd < 0 ){ serverCleanup(pSrv); return SQLITE_ERROR; }
 
-  setsockopt(pSrv->listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  setsockopt(pSrv->listenFd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
 
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
