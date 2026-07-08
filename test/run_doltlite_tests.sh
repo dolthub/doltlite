@@ -20,7 +20,8 @@ if [ ! -x "$BUILD_DIR/doltlite" ]; then
   exit 1
 fi
 
-mapfile -t TESTS < <(doltlite_all_suites)
+TESTS=()
+while IFS= read -r line; do TESTS+=("$line"); done < <(doltlite_all_suites)
 
 total_pass=0
 total_fail=0
