@@ -11,6 +11,12 @@ ulimit -Sn 1024 2>/dev/null || true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 CRASH_FILE="${CRASH_FILE:-$SCRIPT_DIR/known_testfixture_crashes.txt}"
+HOST_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+case "$HOST_OS" in
+  linux*) HOST_OS=linux ;;
+  darwin*) HOST_OS=darwin ;;
+  msys*|mingw*|cygwin*) HOST_OS=windows ;;
+esac
 
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_CMD="timeout"
@@ -31,11 +37,12 @@ run_with_timeout() {
 expected_for() {
   local file="$1"
   [ -f "$DIVERGENCE_FILE" ] || return 0
-  awk -v f="$file" '
+  awk -v f="$file" -v host_os="$HOST_OS" '
     {
       sub(/#.*/, "")
       gsub(/^[ \t]+|[ \t]+$/, "")
       if ($0 == "") next
+      if (NF >= 3 && $3 ~ /^@/ && substr($3, 2) != host_os) next
       if ($1 == f) print $2
     }
   ' "$DIVERGENCE_FILE"
