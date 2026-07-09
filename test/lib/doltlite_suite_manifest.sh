@@ -24,6 +24,7 @@ doltlite_rebase.sh
 doltlite_rebase_schema.sh
 doltlite_open_branch.sh
 doltlite_diff_table.sh
+doltlite_diff_table_range.sh
 doltlite_diff_stat_scale.sh
 doltlite_history.sh
 doltlite_log.sh
@@ -101,6 +102,7 @@ doltlite_tag.sh
 doltlite_merge.sh
 doltlite_conflicts.sh
 doltlite_diff_table.sh
+doltlite_diff_table_range.sh
 doltlite_schema_diff.sh
 doltlite_schema_merge.sh
 doltlite_cherry_pick.sh

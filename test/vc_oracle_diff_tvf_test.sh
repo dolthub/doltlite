@@ -10,11 +10,17 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
+# doltlite's dolt_diff_<tbl>(from, to) is a ranged, per-commit-attributed diff
+# (each changed row tagged with the commit inside from..to that made it). Dolt
+# has no arg form of the dolt_diff_<tbl> system table; its equivalent is that
+# same system table filtered to the commits in the from..to range, so that is
+# what we compare against. to=WORKING additionally includes the working-set row.
 translate_for_dolt() {
-  sed -E '
+  sed -E "
     s/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g
-    s/dolt_diff_([a-zA-Z0-9_]+)\(([^)]*)\)/dolt_diff(\2, "\1")/g
-  '
+    s/dolt_diff_([a-zA-Z0-9_]+)\('([^']*)', *'WORKING'\)/dolt_diff_\1 WHERE to_commit = 'WORKING' OR to_commit IN (SELECT commit_hash FROM dolt_log('\2..HEAD'))/g
+    s/dolt_diff_([a-zA-Z0-9_]+)\('([^']*)', *'([^']*)'\)/dolt_diff_\1 WHERE to_commit IN (SELECT commit_hash FROM dolt_log('\2..\3'))/g
+  "
 }
 
 oracle() {

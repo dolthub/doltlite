@@ -608,94 +608,172 @@ static int buildCommitDiffPair(
   return rc;
 }
 
-static int buildSliceDiffPair(
+/* Add pHash and all of its ancestors (its reachable set) to pSet. Used to
+** identify from_ref's history so a range walk can tell in-range commits (which
+** get attributed) from the out-of-range parents that only supply the "from"
+** side of a boundary change. */
+static int addReachableToSet(
+  sqlite3 *db,
+  ProllyHashSet *pSet,
+  const ProllyHash *pHash
+){
+  DoltliteCommitQueue q;
+  int rc;
+
+  memset(&q, 0, sizeof(q));
+  rc = doltliteCommitQueueInit(&q, pHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  while( rc==SQLITE_OK ){
+    ProllyHash cur;
+    DoltliteCommit c;
+    int has = 0;
+    rc = doltliteCommitQueueNext(&q, &cur, &has);
+    if( rc!=SQLITE_OK || !has ) break;
+    rc = prollyHashSetAdd(pSet, &cur);
+    if( rc!=SQLITE_OK ) break;
+    memset(&c, 0, sizeof(c));
+    rc = doltliteLoadCommit(db, &cur, &c);
+    if( rc!=SQLITE_OK ) break;
+    rc = doltliteCommitQueueEnqueueParents(&q, &c);
+    doltliteCommitClear(&c);
+  }
+
+  doltliteCommitQueueClear(&q);
+  return rc;
+}
+
+/* Range diff: emit, for every commit in from_ref..to_ref (reachable from
+** to_ref but not from from_ref), the change it introduced against its parent,
+** attributed to that commit -- the same per-commit walk as the unfiltered
+** dolt_diff_<table>, restricted to the range. Equivalent to the unfiltered
+** system table filtered by "to_commit IN (commits of from_ref..to_ref)". The
+** walk starts at to_ref and descends parent-ward, but only expands a commit's
+** parents when the commit is itself in range; an out-of-range parent is still
+** visited once to supply the "from" side of the boundary change (so a merge
+** parent's own history is attributed correctly). to_ref may be WORKING, in
+** which case the HEAD->working change is included and attributed to WORKING.
+** The net two-dot diff between two refs lives in the dolt_diff() function.
+**
+** Cost is O(history reachable from to_ref) plus from_ref's reachable set, the
+** same order as the unfiltered table; a range near the tip does not shortcut
+** the reachability computation. */
+static int buildRangeDiffPairs(
   DiffTblCursor *pCur,
   sqlite3 *db,
   const char *zTableName,
   const char *zFromRef,
   const char *zToRef
 ){
-  ProllyHash fromHash, toHash;
-  ProllyHash fromTblRoot, toTblRoot;
-  ProllyHash fromCatHash, toCatHash;
-  ProllyHash fromSchemaHash, toSchemaHash;
-  DoltliteCommit fromCommit;
-  u8 fromFlags = 0;
-  u8 toFlags = 0;
-  i64 fromDate = 0;
-  i64 toDate = 0;
-  int toIsWorking = 0;
-  char zToLabel[PROLLY_HASH_SIZE*2+1];
-  int rc;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash fromHash;
+  CmTblMap map;
+  ProllyHash *aStack = 0;
+  int nStack = 0, nStackAlloc = 0;
+  ProllyHashSet seen;
+  ProllyHashSet reachFrom;
+  int seenInit = 0;
+  int reachInit = 0;
+  int currInited = 0;
+  ProllyHash curr;
+  int rc = SQLITE_OK;
 
-  memset(&fromHash, 0, sizeof(fromHash));
-  memset(&toHash, 0, sizeof(toHash));
-  memset(&fromTblRoot, 0, sizeof(fromTblRoot));
-  memset(&toTblRoot, 0, sizeof(toTblRoot));
-  memset(&fromCatHash, 0, sizeof(fromCatHash));
-  memset(&toCatHash, 0, sizeof(toCatHash));
-  memset(&fromSchemaHash, 0, sizeof(fromSchemaHash));
-  memset(&toSchemaHash, 0, sizeof(toSchemaHash));
-  memset(&fromCommit, 0, sizeof(fromCommit));
-  memset(zToLabel, 0, sizeof(zToLabel));
-
+  if( !cs ) return SQLITE_OK;
   if( !zFromRef || !zToRef ) return SQLITE_OK;
+  memset(&map, 0, sizeof(map));
+  memset(&fromHash, 0, sizeof(fromHash));
 
+  /* An unresolvable from_ref leaves the range unbounded below; treat it as an
+  ** empty result rather than an error, matching the vtable's other ref paths. */
   rc = doltliteResolveRef(db, zFromRef, &fromHash);
   if( rc!=SQLITE_OK ) return SQLITE_OK;
-  rc = doltliteLoadCommit(db, &fromHash, &fromCommit);
-  if( rc!=SQLITE_OK ) return rc;
-  memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
-  fromDate = fromCommit.timestamp;
-  doltliteCommitClear(&fromCommit);
 
-  rc = doltliteLoadTableRootByName(db, &fromCatHash, zTableName,
-                                   &fromTblRoot, &fromFlags, &fromSchemaHash);
-  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  rc = prollyHashSetInit(&seen, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  seenInit = 1;
+  rc = prollyHashSetInit(&reachFrom, 64);
+  if( rc!=SQLITE_OK ) goto walk_done;
+  reachInit = 1;
+
+  /* from_ref and everything behind it are out of range (a commit is in range
+  ** iff reachable from to_ref and NOT in this set). */
+  rc = addReachableToSet(db, &reachFrom, &fromHash);
+  if( rc!=SQLITE_OK ) goto walk_done;
 
   if( sqlite3_stricmp(zToRef, "WORKING")==0 ){
-    toIsWorking = 1;
-    rc = doltliteGetWorkingTableState(db, zTableName,
-                                      &toTblRoot, &toFlags,
-                                      &toSchemaHash);
-    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-    if( rc!=SQLITE_OK ) return rc;
-    rc = doltliteFlushCatalogToHash(db, &toCatHash);
-    if( rc!=SQLITE_OK ) return rc;
-    memcpy(zToLabel, "WORKING", 7);
-    toDate = 0;
+    ProllyHash headHash;
+    doltliteGetSessionHead(db, &headHash);
+    if( prollyHashIsEmpty(&headHash) ) goto walk_done;
+    rc = seedWorkingChildInfo(db, &headHash, zTableName, &map);
+    if( rc!=SQLITE_OK ) goto walk_done;
+    rc = stackPushUnique(&seen, &aStack, &nStack, &nStackAlloc, &headHash);
+    if( rc!=SQLITE_OK ) goto walk_done;
   }else{
-    DoltliteCommit toCommit;
-    memset(&toCommit, 0, sizeof(toCommit));
+    ProllyHash toHash;
+    memset(&toHash, 0, sizeof(toHash));
     rc = doltliteResolveRef(db, zToRef, &toHash);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    rc = doltliteLoadCommit(db, &toHash, &toCommit);
-    if( rc!=SQLITE_OK ) return rc;
-    memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));
-    toDate = toCommit.timestamp;
-    doltliteCommitClear(&toCommit);
-    rc = doltliteLoadTableRootByName(db, &toCatHash, zTableName,
-                                     &toTblRoot, &toFlags, &toSchemaHash);
-    if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
-    doltliteHashToHex(&toHash, zToLabel);
+    if( rc!=SQLITE_OK ){ rc = SQLITE_OK; goto walk_done; }
+    /* to_ref is visited but never seeded with a child, so it emits no change
+    ** of its own; visiting it registers parent(to_ref)->to_ref. */
+    rc = stackPushUnique(&seen, &aStack, &nStack, &nStackAlloc, &toHash);
+    if( rc!=SQLITE_OK ) goto walk_done;
   }
 
-  if( !toIsWorking
-   && prollyHashCompare(&fromHash, &toHash)==0 ){
-    return SQLITE_OK;
-  }
-  if( prollyHashCompare(&fromTblRoot, &toTblRoot)==0
-   && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
-    return SQLITE_OK;
+  if( nStack>0 ){
+    curr = aStack[--nStack];
+    currInited = 1;
   }
 
-  if( !fromFlags ) fromFlags = toFlags;
-  if( !toFlags ) toFlags = fromFlags;
+  while( currInited ){
+    DoltliteCommit commit;
+    ProllyHash curTblRoot;
+    ProllyHash curSchemaHash;
+    u8 curFlags = 0;
+    char curHex[PROLLY_HASH_SIZE*2+1];
 
-  return pairsAppend(pCur, &fromHash, &fromTblRoot, &fromCatHash,
-                     &fromSchemaHash, fromFlags, fromDate,
-                     zToLabel, &toTblRoot, &toCatHash, &toSchemaHash,
-                     toFlags, toDate);
+    memset(&commit, 0, sizeof(commit));
+    memset(&curTblRoot, 0, sizeof(curTblRoot));
+    memset(&curSchemaHash, 0, sizeof(curSchemaHash));
+
+    rc = doltliteLoadCommit(db, &curr, &commit);
+    if( rc!=SQLITE_OK ) break;
+
+    rc = doltliteLoadTableRootByNameOrEmpty(db, &commit.catalogHash,
+                                            zTableName, &curTblRoot,
+                                            &curFlags, &curSchemaHash);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&commit);
+      break;
+    }
+
+    doltliteHashToHex(&curr, curHex);
+    /* Emit curr -> its registered child (only in-range commits ever get
+    ** registered as a child, so any emitted pair is attributed in-range). */
+    rc = appendCurrentDiffPair(pCur, &curr, &commit, &curTblRoot,
+                               &curSchemaHash, curFlags, &map);
+    /* Expand parents only for in-range commits; an out-of-range parent is a
+    ** boundary from-side and must not drag its own history into the range. */
+    if( rc==SQLITE_OK && !prollyHashSetContains(&reachFrom, &curr) ){
+      rc = registerCommitParents(&map, &seen, &aStack, &nStack, &nStackAlloc,
+                                 &commit, &curTblRoot,
+                                 &curSchemaHash, curFlags, curHex);
+    }
+    doltliteCommitClear(&commit);
+    if( rc!=SQLITE_OK ) break;
+
+    if( nStack==0 ){
+      currInited = 0;
+    }else{
+      curr = aStack[--nStack];
+    }
+  }
+
+walk_done:
+  cmMapFree(&map);
+  sqlite3_free(aStack);
+  if( seenInit ) prollyHashSetFree(&seen);
+  if( reachInit ) prollyHashSetFree(&reachFrom);
+  return rc;
 }
 
 static void freePairCols(DiffTblCursor *pCur){
@@ -997,7 +1075,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   if( (idxNum & DT_IDX_SLICE)!=0 && argc>=2 ){
     const char *zFromRef = (const char*)sqlite3_value_text(argv[0]);
     const char *zToRef = (const char*)sqlite3_value_text(argv[1]);
-    rc = buildSliceDiffPair(c, db, pVtab->zTableName, zFromRef, zToRef);
+    rc = buildRangeDiffPairs(c, db, pVtab->zTableName, zFromRef, zToRef);
   }else if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
     const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);
     if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){

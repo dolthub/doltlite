@@ -92,6 +92,7 @@ jobs:
       run: |
         cd build
         for s in doltlite_at doltlite_history doltlite_diff doltlite_diff_table \
+                 doltlite_diff_table_range \
                  doltlite_schema_diff doltlite_workspace doltlite_conflicts \
                  doltlite_conflict_rows doltlite_comparison doltlite_merge; do
           echo "=== $s ==="
