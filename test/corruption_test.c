@@ -140,6 +140,42 @@ static off_t first_wal_chunk_body_offset(const char *path){
   return -1;
 }
 
+static off_t last_wal_chunk_body_offset(const char *path){
+  long long walOffset = read_i64_le_at(path, 84);
+  off_t sz = file_size(path);
+  off_t pos;
+  off_t last = -1;
+  if( walOffset < MANIFEST_SIZE || sz <= (off_t)walOffset ) return -1;
+  pos = (off_t)walOffset;
+  while( pos < sz ){
+    unsigned char tag = 0;
+    if( read_bytes(path, pos, &tag, 1)!=0 ) return -1;
+    pos++;
+    if( tag==0x01 ){
+      unsigned int len;
+      if( pos + 24 > sz ) return -1;
+      len = read_u32_le_at(path, pos + 20);
+      if( len==0xffffffffu || pos + 24 + (off_t)len > sz ) return -1;
+      last = pos + 24;
+      pos += 24 + (off_t)len;
+    }else if( tag==0x02 ){
+      long long nextOff;
+      if( pos + MANIFEST_SIZE > sz ) return -1;
+      nextOff = read_i64_le_at(path, pos + 52);
+      if( nextOff > pos + MANIFEST_SIZE && nextOff <= sz ){
+        pos = (off_t)nextOff;
+      }else{
+        pos += MANIFEST_SIZE;
+      }
+    }else if( tag==0x00 ){
+      return last;
+    }else{
+      return -1;
+    }
+  }
+  return last;
+}
+
 static void removeDb(const char *path){
   char wal[512];
   remove(path);
@@ -608,9 +644,9 @@ static void test_corrupt_wal_chunk_body_stops_replay(void){
   check("reopen_after_wal_body_corrupt_11", rc==SQLITE_OK);
   if( rc==SQLITE_OK ){
     const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
-    check("wal_body_corrupt_uses_prior_root_11", strcmp(r, "5")==0);
+    check("wal_body_corrupt_does_not_read_clean_11", strcmp(r, "5")!=0);
     r = queryScalarText(db, "PRAGMA integrity_check");
-    check("wal_body_corrupt_integrity_11", strcmp(r, "ok")==0);
+    check("wal_body_corrupt_integrity_11", strcmp(r, "ok")!=0);
   }
   if( db ) sqlite3_close(db);
 
@@ -655,15 +691,44 @@ static void test_corrupt_initial_wal_chunk_body_detected(void){
   removeDb(dbpath);
 }
 
+static void test_corrupt_final_committed_wal_chunk_detected(void){
+  const char *dbpath = "/tmp/test_corr_final_committed_wal_chunk.db";
+  sqlite3 *db = 0;
+  off_t bodyOff;
+  unsigned char bad = 0x3C;
+  int rc;
+
+  printf("--- Test 13: Corrupt final committed WAL chunk ---\n");
+
+  check("create_good_13", create_good_db(dbpath)==0);
+
+  bodyOff = last_wal_chunk_body_offset(dbpath);
+  check("find_final_wal_chunk_body_13", bodyOff > 0);
+  if( bodyOff > 0 ){
+    check("corrupt_final_wal_chunk_body_13",
+      corrupt_bytes(dbpath, bodyOff, &bad, 1)==0);
+  }
+
+  rc = sqlite3_open(dbpath, &db);
+  check("open_after_final_wal_body_corrupt_13", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    const char *r = queryScalarText(db, "PRAGMA integrity_check");
+    check("final_wal_body_corrupt_integrity_13", strcmp(r, "ok")!=0);
+  }
+  if( db ) sqlite3_close(db);
+
+  removeDb(dbpath);
+}
+
 static void test_wrong_file_size_in_manifest(void){
   const char *dbpath = "/tmp/test_corr_filesize.db";
 
-  printf("--- Test 12: Wrong file size in manifest ---\n");
+  printf("--- Test 14: Wrong file size in manifest ---\n");
 
-  check("create_good_11", create_good_db(dbpath)==0);
+  check("create_good_14", create_good_db(dbpath)==0);
 
   unsigned char bad_offset[8] = { 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00 };
-  check("corrupt_11",
+  check("corrupt_14",
     corrupt_bytes(dbpath, 84, bad_offset, sizeof(bad_offset))==0);
 
   int err = open_and_probe(dbpath);
@@ -675,7 +740,7 @@ static void test_wrong_file_size_in_manifest(void){
 static void test_corrupt_magic(void){
   const char *dbpath = "/tmp/test_corr_magic.db";
 
-  printf("--- Test 13: Corrupt magic number ---\n");
+  printf("--- Test 15: Corrupt magic number ---\n");
 
   check("create_good_13", create_good_db(dbpath)==0);
 
@@ -692,7 +757,7 @@ static void test_corrupt_magic(void){
 static void test_corrupt_version(void){
   const char *dbpath = "/tmp/test_corr_version.db";
 
-  printf("--- Test 14: Corrupt version number ---\n");
+  printf("--- Test 16: Corrupt version number ---\n");
 
   check("create_good_14", create_good_db(dbpath)==0);
 
@@ -709,7 +774,7 @@ static void test_corrupt_version(void){
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
 
-  printf("--- Test 15: Corrupt former head_commit bytes (compacted) ---\n");
+  printf("--- Test 17: Corrupt former head_commit bytes (compacted) ---\n");
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
 
@@ -744,7 +809,7 @@ static void test_corrupt_head_commit(void){
 static void test_corrupt_chunk_count(void){
   const char *dbpath = "/tmp/test_corr_chunkcount.db";
 
-  printf("--- Test 16: Corrupt chunk_count field (compacted) ---\n");
+  printf("--- Test 18: Corrupt chunk_count field (compacted) ---\n");
 
   check("create_compacted_16", create_compacted_db(dbpath)==0);
 
@@ -760,7 +825,7 @@ static void test_corrupt_chunk_count(void){
 static void test_corrupt_index_offset(void){
   const char *dbpath = "/tmp/test_corr_idxoff.db";
 
-  printf("--- Test 17: Corrupt index_offset ---\n");
+  printf("--- Test 19: Corrupt index_offset ---\n");
 
   {
     sqlite3 *db = 0;
@@ -788,7 +853,7 @@ static void test_corrupt_index_entry_offset(void){
   long long indexOffset;
   unsigned char bad_off[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
-  printf("--- Test 18: Corrupt index entry offset ---\n");
+  printf("--- Test 20: Corrupt index entry offset ---\n");
 
   check("create_compacted_18", create_compacted_db(dbpath)==0);
   indexOffset = read_i64_le_at(dbpath, 32);
@@ -807,7 +872,7 @@ static void test_corrupt_index_order(void){
   long long indexOffset;
   unsigned char zero_hash[20];
 
-  printf("--- Test 19: Corrupt index order ---\n");
+  printf("--- Test 21: Corrupt index order ---\n");
 
   memset(zero_hash, 0, sizeof(zero_hash));
   check("create_compacted_19", create_compacted_db(dbpath)==0);
@@ -838,6 +903,7 @@ int main(void){
   test_corrupt_wal_tag();
   test_corrupt_wal_chunk_body_stops_replay();
   test_corrupt_initial_wal_chunk_body_detected();
+  test_corrupt_final_committed_wal_chunk_detected();
   test_wrong_file_size_in_manifest();
   test_corrupt_magic();
   test_corrupt_version();

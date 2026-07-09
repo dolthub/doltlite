@@ -9920,6 +9920,10 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
   if( p->pOrigBtree ) return SQLITE_OK;
 
   pBt = p->pBt;
+  if( pBt->store.corruptMidStream ){
+    if( pnErr ) *pnErr = 1;
+    return SQLITE_OK;
+  }
   memset(&ctx, 0, sizeof(ctx));
   ctx.pBt = pBt;
   ctx.mxErr = mxErr;

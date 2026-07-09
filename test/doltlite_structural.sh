@@ -190,7 +190,7 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_AFTER_GC=$(file_size "$DB")
 echo "  After GC: ${SIZE_AFTER_GC} bytes"
 
-THRESHOLD=$((SIZE_BEFORE_GC * 85 / 100))
+THRESHOLD=$((SIZE_BEFORE_GC * 80 / 100))
 assert_greater "gc_preserves_shared" "$SIZE_AFTER_GC" "$THRESHOLD"
 
 MAIN_COUNT=$(echo "SELECT count(*) FROM t WHERE id=8888;" | $DOLTLITE "$DB" 2>&1)

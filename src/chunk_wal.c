@@ -99,6 +99,7 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->index.aIndexMmapSize = pSrc->index.aIndexMmapSize;
   pDst->wal.nWalData = pSrc->wal.nWalData;
   pDst->wal.recoveredMidStream = pSrc->wal.recoveredMidStream;
+  pDst->wal.cleanCloseMarker = pSrc->wal.cleanCloseMarker;
   pDst->corruptMidStream = pSrc->corruptMidStream;
   REFS_OWNED_COPY(pDst->refs, pSrc->refs);
 
@@ -108,6 +109,7 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->index.aIndexMmapBase = 0;
   pSrc->index.aIndexMmapSize = 0;
   pSrc->wal.nWalData = 0;
+  pSrc->wal.cleanCloseMarker = 0;
   REFS_OWNED_CLEAR(pSrc->refs);
 }
 
@@ -246,6 +248,7 @@ int csReplayWal(ChunkStore *cs){
   csCaptureReplayState(cs, &saved);
 
   cs->wal.nWalData = walSize;
+  cs->wal.cleanCloseMarker = 0;
 
   pos = 0;
   while( pos < walSize ){
@@ -384,10 +387,16 @@ int csReplayWal(ChunkStore *cs){
 
       pos = recPos + 1 + CHUNK_MANIFEST_SIZE;
       if( hashState == CS_MANIFEST_HASH_OK ){
+        i64 recAbs = cs->wal.iWalOffset + recPos;
+        i64 durableTo = CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF);
+        i64 batchStart = CS_READ_I64(m + CS_MANIFEST_BATCH_START_OFF);
         i64 nextOff = CS_READ_I64(m + CS_MANIFEST_NEXT_OFF_OFF);
+        cs->wal.cleanCloseMarker = durableTo >= recAbs && batchStart == recAbs;
         if( nextOff > cs->wal.iWalOffset + pos ){
           pos = nextOff - cs->wal.iWalOffset;
         }
+      }else{
+        cs->wal.cleanCloseMarker = 0;
       }
       lastBoundary = pos;
       nRootedPending = cs->staging.nPending;
@@ -418,8 +427,11 @@ int csReplayWal(ChunkStore *cs){
     }
   }
 
-  /* Do not let damaged initial WAL bytes masquerade as a fresh empty store. */
-  if( sawDamage && (sawMidStream || cs->wal.recoveredMidStream)
+  /* Do not let damaged initial WAL bytes masquerade as a fresh empty store.
+  ** A legitimate preallocated tail reaches the zero-tail case without setting
+  ** sawDamage; once non-zero WAL bytes are malformed, the file is corrupt even
+  ** if no root manifest can be replayed. */
+  if( sawDamage
    && nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->index.nIndex == 0 ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
