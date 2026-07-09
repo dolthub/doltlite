@@ -1026,6 +1026,5 @@ functions and vtables live in `src/doltlite_*.c`, and `src/prolly_btree.c`
 is the integration point where prolly dispatches against SQLite's
 `btree.h` API.
 
-See [`doc/doltlite/architecture.md`](doc/doltlite/architecture.md) for a side-by-side
-of doltlite and Dolt covering node format, key encoding, tree mutation,
-chunk store, commit graph, and GC.
+For a deeper side-by-side of Dolt and DoltLite storage internals, see
+[Dolt vs DoltLite Storage Comparison](https://www.dolthub.com/blog/2026-07-08-dolt-doltlite-storage-comp/).
