@@ -616,7 +616,88 @@ int chunkStoreOpen(
   return SQLITE_OK;
 }
 
+static void csWriteCleanCloseMarker(ChunkStore *cs){
+  u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
+  i64 markerStart;
+  i64 markerEnd;
+  i64 markerNext;
+  int sectorSize = 1;
+  int rc;
+  CsFileLock lockFd = CS_FILE_LOCK_INIT;
+  char *lockName = 0;
+  int lockHeld;
+
+  if( cs->isMemory || cs->readOnly || cs->corruptMidStream ){
+    return;
+  }
+  if( !cs->file.pFile || !cs->file.zFilename || cs->wal.cleanCloseMarker ){
+    return;
+  }
+  if( cs->wal.iWalOffset<=0 || cs->wal.nWalData<=0 ){
+    return;
+  }
+  if( cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0 ){
+    return;
+  }
+  if( prollyHashCompare(&cs->refs.refsHash, &cs->refs.committedRefsHash)!=0 ){
+    return;
+  }
+
+  lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
+  if( !lockHeld ){
+    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd, &lockName);
+    if( rc!=SQLITE_OK ) return;
+  }
+
+  if( !lockHeld ){
+    i64 fileSize = 0;
+    rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
+    if( rc!=SQLITE_OK ) goto done;
+    if( fileSize!=cs->file.iFileSize ) goto done;
+  }
+
+  if( (cs->file.pFile->pMethods->xDeviceCharacteristics(cs->file.pFile)
+       & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
+    sectorSize = cs->file.pFile->pMethods->xSectorSize(cs->file.pFile);
+    if( sectorSize < 512 ) sectorSize = 512;
+    if( sectorSize > 65536 ) sectorSize = 65536;
+  }
+
+  markerStart = cs->file.iFileSize;
+  if( markerStart <= 0 ) goto done;
+  markerEnd = markerStart + (i64)sizeof(rootRec);
+  markerNext = markerEnd;
+  if( sectorSize > 1 ){
+    markerNext = markerEnd + (sectorSize - 1);
+    markerNext -= markerNext % sectorSize;
+  }
+
+  rootRec[0] = CS_WAL_TAG_ROOT;
+  csSerializeManifest(cs, rootRec + 1);
+  CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, markerStart);
+  CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, markerNext);
+  CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, markerStart);
+  csManifestSeal(rootRec + 1);
+
+  rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), markerStart);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
+  }
+  if( rc==SQLITE_OK ){
+    cs->file.iFileSize = markerNext;
+    cs->wal.nWalData = markerEnd - cs->wal.iWalOffset;
+    cs->wal.cleanCloseMarker = 1;
+  }else{
+    sqlite3_log(SQLITE_NOTICE,
+      "doltlite: unable to append clean-close WAL marker: %d", rc);
+  }
+
+done:
+  if( !lockHeld ) csFileUnlock(lockFd, &lockName);
+}
+
 int chunkStoreClose(ChunkStore *cs){
+  csWriteCleanCloseMarker(cs);
   chunkStoreUnlock(cs);
   if( cs->file.pFile ){
     csCloseFile(cs->file.pFile);
@@ -1860,6 +1941,7 @@ static int csCommitToFile(ChunkStore *cs){
   ** the physically present WAL content. */
   cs->file.iFileSize = writeOff;
   cs->wal.nWalData = contentEnd - cs->wal.iWalOffset;
+  cs->wal.cleanCloseMarker = 0;
 
 commit_done:
   csFileUnlock(lockFd, &lockName);

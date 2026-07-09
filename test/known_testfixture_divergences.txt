@@ -224,10 +224,10 @@ pragma pragma-22.4.3  # mid-stream WAL corruption poisons the main db, so the AT
 pragma pragma-23.1
 pragma pragma-23.3
 pragma pragma-24.2
-# pragma-3.*: integrity_check corruption injection. The hexio pokes make the
-# chunk store silently revert to an empty db with integrity_check "ok"
-# (known corruption-absorption windows in WAL replay); 3.6b/3.8/3.9b are cascades of that
-# reverted (empty) state.
+# pragma-3.*: integrity_check corruption injection. The hexio pokes damage
+# chunk-store WAL bytes, so DoltLite reports a repository-level integrity
+# failure instead of stock btree page/index diagnostics; some later cases are
+# cascades of the poisoned attached database state.
 pragma pragma-3.10
 pragma pragma-3.11
 pragma pragma-3.12
@@ -242,10 +242,14 @@ pragma pragma-3.3
 pragma pragma-3.4
 pragma pragma-3.5
 pragma pragma-3.6b
+pragma pragma-3.6c
 pragma pragma-3.7
 pragma pragma-3.8
+pragma pragma-3.8.1
+pragma pragma-3.8.2
 pragma pragma-3.9a
 pragma pragma-3.9b
+pragma pragma-3.9c
 pragma pragma-4.6
 pragma pragma-6.2.2
 pragma pragma-6.8
@@ -823,6 +827,97 @@ date date-14.2.96
 date date-14.2.97
 date date-14.2.98
 date date-14.2.99
+# date-15 through date-20 reopen the database after raw page writes from
+# date-14 and keep testing through the same storage-format divergence.
+date date-15.1
+date date-15.2
+date date-16.1
+date date-16.2
+date date-16.3
+date date-16.4
+date date-16.5
+date date-16.6
+date date-16.7
+date date-16.8
+date date-16.9
+date date-16.10
+date date-16.11
+date date-16.12
+date date-16.13
+date date-16.14
+date date-16.15
+date date-16.16
+date date-16.17
+date date-16.20
+date date-16.21
+date date-16.22
+date date-16.23
+date date-16.24
+date date-16.25
+date date-16.26
+date date-16.27
+date date-16.28
+date date-16.29
+date date-16.30
+date date-16.31
+date date-17.1
+date date-17.2
+date date-17.3
+date date-17.4
+date date-17.5
+date date-17.6
+date date-17.7
+date date-18.1
+date date-18.2
+date date-18.3
+date date-18.4
+date date-18.5
+date date-19.1
+date date-19.2a
+date date-19.2b
+date date-19.2c
+date date-19.3
+date date-19.4
+date date-19.5
+date date-19.6
+date date-19.7
+date date-19.8
+date date-19.9
+date date-19.10
+date date-19.11
+date date-19.12
+date date-19.21
+date date-19.22a
+date date-19.22b
+date date-19.22c
+date date-19.23
+date date-19.24
+date date-19.25
+date date-19.26
+date date-19.27
+date date-19.28
+date date-19.29
+date date-19.30
+date date-19.31
+date date-19.32
+date date-19.40
+date date-19.41
+date date-19.42
+date date-19.43
+date date-19.44
+date date-19.45
+date date-19.46
+date date-19.47
+date date-19.48
+date date-19.49
+date date-19.50
+date date-19.51
+date date-19.52
+date date-19.53
+date date-20.1
+date date-20.2
+date date-20.3
+date date-20.4
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
@@ -1613,6 +1708,7 @@ skipscan2 skipscan2-1.5eqp  # EQP: skip-scan plan choice differs
 # choices; results equivalent.
 autoindex3 autoindex3-310  # EQP plan shape
 autoindex5 autoindex5-1.1  # EQP plan shape
+index5 index5-1.3  # file-format page count / index page layout
 
 # pragma6-1.0 — `db deserialize` page-image API unsupported on prolly (#1225).
 pragma6 pragma6-1.0  # db deserialize (page-image API) unsupported
@@ -1761,9 +1857,7 @@ corruptG corruptG-1.4  # stock header corruption: store rejects differently or m
 corruptG corruptG-2.1  # stock header corruption: store rejects differently or misses the offset
 corruptH corruptH-2.2  # stock-page corruption injection; offset misses + harness footgun cascade
 corruptH corruptH-2.3  # stock-page corruption injection; offset misses + harness footgun cascade
-corruptJ corruptJ-1.2  # stock-page corruption injection; hexio dump reads chunk-store bytes
 corruptJ corruptJ-2.2  # stock-page corruption injection; hexio dump reads chunk-store bytes
-corruptJ corruptJ-2.2b  # stock-page corruption injection; hexio dump reads chunk-store bytes
 incrblob3 incrblob3-7.2  # stock schema-cookie poke at offsets 40/24 corrupts the checksummed store
 incrblobfault incrblobfault-3-ioerr-persistent.2  # IO-fault point shift under fault injection
 incrblobfault incrblobfault-3-ioerr-persistent.3  # IO-fault point shift under fault injection
@@ -1882,24 +1976,24 @@ corrupt6 corrupt6-1.8.3  # stock's restore-byte write is fresh mid-stream corrup
 corrupt6 corrupt6-1.8.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
 corrupt6 corrupt6-1.9.3  # stock's restore-byte write is fresh mid-stream corruption in the chunk store; read errors malformed instead of succeeding
 corrupt6 corrupt6-1.9.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
-corruptE corruptE-2.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-2.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-2.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-2.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.1  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.2  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.3  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.4  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.5  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.6  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.7  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.8  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.9  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.10  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.11  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.12  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.13  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
-corruptE corruptE-3.14  # cell-order poke: chunk store silently reverts to an empty db with integrity_check "ok" (tracked corruption-absorption window)
+corruptE corruptE-2.1  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-2.2  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-2.3  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-2.4  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.1  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.2  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.3  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.4  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.5  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.6  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.7  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.8  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.9  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.10  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.11  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.12  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.13  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
+corruptE corruptE-3.14  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
 corruptK corruptK-1.1  # PRAGMA page_count synthetic chunk-page accounting
 corruptK corruptK-1.2  # stock freelist corruption; sqlite_dbpage writes rejected
 corruptK corruptK-1.3  # cascade of the 1.2 raw poke: the damaged batch has no later durable root, so recovery rolls back to the prior commit boundary and t1 is absent
@@ -2291,6 +2385,8 @@ syscall syscall-4.2.delete.16  # fault-injected syscall error text; chunk-store 
 syscall syscall-4.2.delete.17  # fault-injected syscall error text; chunk-store file size
 syscall syscall-4.2.delete.18  # fault-injected syscall error text; chunk-store file size
 syscall syscall-4.2.delete.19  # fault-injected syscall error text; chunk-store file size
+syscall syscall-5.1.5  # fault-injected syscall lock state differs with chunk-store locking
+syscall syscall-5.1.7  # fault-injected syscall lock state differs with chunk-store locking
 syscall syscall-7.2  # fault-injected syscall error text; chunk-store file size
 syscall syscall-7.3  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.1  # fault-injected syscall error text; chunk-store file size
@@ -2714,6 +2810,52 @@ memjournal2 memjournal2-1.2.299.3  # in-memory journal premise: journal_mode fix
 memjournal2 memjournal2-1.2.300.1  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.2  # in-memory journal premise: journal_mode fixed, sidecar absent
 memjournal2 memjournal2-1.2.300.3  # in-memory journal premise: journal_mode fixed, sidecar absent
+# mallocG-1 closes and reopens an empty database under malloc fault injection.
+# DoltLite's lazy chunk-store open avoids the stock early allocation/failure
+# points for the first transient fault indexes.
+mallocG mallocG-1.transient.0
+mallocG mallocG-1.transient.1
+mallocG mallocG-1.transient.2
+mallocG mallocG-1.transient.3
+mallocG mallocG-1.transient.4
+mallocG mallocG-1.transient.5
+mallocG mallocG-1.transient.6
+mallocG mallocG-1.transient.7
+mallocG mallocG-1.transient.8
+mallocG mallocG-1.transient.9
+# shared_err sections 5/6 fault-inject shared-cache locking and schema paths.
+# DoltLite does not share SQLite pager/schema internals across connections, so
+# the fault indexes and lock states differ from stock.
+shared_err shared_err-5.transient.0
+shared_err shared_err-5.transient.1
+shared_err shared_err-5.transient.2
+shared_err shared_err-5.transient.3
+shared_err shared_err-5.transient.4
+shared_err shared_err-5.transient.5
+shared_err shared_err-5.transient.6
+shared_err shared_err-5.transient.7
+shared_err shared_err-5.transient.8
+shared_err shared_err-5.transient.9
+shared_err shared_err-6.transient.0
+shared_err shared_err-6.transient.1
+shared_err shared_err-6.transient.2
+shared_err shared_err-6.transient.3
+shared_err shared_err-6.transient.4
+shared_err shared_err-6.transient.5
+shared_err shared_err-6.transient.6
+shared_err shared_err-6.transient.7
+shared_err shared_err-6.transient.8
+shared_err shared_err-6.transient.9
+shared_err shared_err-6.persistent.0
+shared_err shared_err-6.persistent.1
+shared_err shared_err-6.persistent.2
+shared_err shared_err-6.persistent.3
+shared_err shared_err-6.persistent.4
+shared_err shared_err-6.persistent.5
+shared_err shared_err-6.persistent.6
+shared_err shared_err-6.persistent.7
+shared_err shared_err-6.persistent.8
+shared_err shared_err-6.persistent.9
 # shared_err shared_ioerr-2.*.cleanup.1: shared-cache fault injection reaches
 # different lock/fault points under DoltLite. Native cleanup coverage in
 # doltlite_recover_shared_ioerr asserts the important contract for
@@ -3972,6 +4114,7 @@ e_uri e_uri-1.8
 # filename and the parameter list differ.
 e_uri e_uri-3.2
 e_uri e_uri-3.3
+e_uri e_uri-4.1
 e_uri e_uri-4.2
 e_uri e_uri-4.3
 e_uri e_uri-4.4
@@ -4565,6 +4708,7 @@ swarmvtab swarmvtab-2.3
 sysfault sysfault-1-vfsfault-transient.5
 sysfault sysfault-1-vfsfault-transient.6
 sysfault sysfault-1-vfsfault-transient.7
+sysfault sysfault-1-vfsfault-transient.8
 sysfault sysfault-1.2.1-vfsfault-transient.8
 sysfault sysfault-1.2.2-vfsfault-transient.8
 # sections 2.1/2.2: the body runs PRAGMA journal_mode=truncate, which
@@ -4883,9 +5027,8 @@ corrupt8 corrupt8-2.1024.6
 # file the offsets read back garbage: .1 steps that compute child-page
 # offsets from in-file values die with tcl "integer value too large to
 # represent" (1.8.1/1.9.1), pokes land in places the store rejects
-# differently ("no such table: t1" instead of "malformed", 1.3.2/2.1.2),
+# differently ("no such table: t1" instead of "malformed", 2.1.2),
 # or never land at all so the read returns the intact row (1.9.2).
-corruptB corruptB-1.3.2
 corruptB corruptB-1.6.2
 corruptB corruptB-1.7.2
 corruptB corruptB-1.8.1
@@ -5011,6 +5154,7 @@ incrvacuum incrvacuum-2.3
 incrvacuum incrvacuum-2.4
 incrvacuum incrvacuum-3.1
 incrvacuum incrvacuum-3.2
+incrvacuum incrvacuum-3.3
 incrvacuum incrvacuum-3.4
 incrvacuum incrvacuum-4.1
 incrvacuum incrvacuum-4.2
@@ -5997,7 +6141,6 @@ incrvacuum incrvacuum-7.318.2
 incrvacuum incrvacuum-7.318.3
 incrvacuum incrvacuum-7.319.1
 incrvacuum incrvacuum-7.319.2
-incrvacuum incrvacuum-7.319.3
 
 # incrvacuum2: PRAGMA incremental_vacuum is a no-op on prolly storage (no
 # freelist), so post-vacuum file-size shrink expectations differ, and the

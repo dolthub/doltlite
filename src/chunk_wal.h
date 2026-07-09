@@ -14,6 +14,7 @@ struct WalState {
   i64 iWalOffset;
   i64 nWalData;
   u8 recoveredMidStream;
+  u8 cleanCloseMarker;
 };
 
 struct ChunkStoreReplayState {

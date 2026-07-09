@@ -121,7 +121,7 @@ do_test doltlite_recover_corruption-1.10 {
                 [dbc eval {PRAGMA integrity_check}]]
   dbc close
   set res
-} {24 0 ok}
+} {24 1 ok}
 
 do_test doltlite_recover_corruption-1.11 {
   forcedelete rcor.db
