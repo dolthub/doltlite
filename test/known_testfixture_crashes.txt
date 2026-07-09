@@ -142,7 +142,6 @@ win32nolock      # windows-only: silent platform return, no summary line
 corrupt9       # freelist raw-format probe aborts ("Freelist is empty")
 dbstatus       # dbstat vtable constructor fails on prolly; memory-stat probes differ
 e_walauto      # reads test.db-shm: no shm sidecar
-e_walckpt      # HANGS (not inherent size): stock runs all 348 tests in ~1s; doltlite spins forever entering the busy-handler + wal_checkpoint loop right after e_walckpt-2.3.2.3 (checkpoint appears to return BUSY indefinitely under a retrying busy handler). Real doltlite bug, tracked separately.
 malloc3        # journal_mode no-op now lets it complete (20 err/6291); failures are OOM fault-point indices that drift macOS<->Linux; kept crash-listed and UNBUCKETED rather than gated (the #1572 reporting bug it once masked is fixed)
 pendingrace    # copies sv_test.db-journal: no journal sidecar
 shmlock        # shm locking probe: "BUSY false-positive" thrown by the test
