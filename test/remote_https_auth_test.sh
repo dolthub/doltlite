@@ -115,6 +115,28 @@ else
 fi
 kill "$SRV2_PID" 2>/dev/null
 
+echo "=== 6. Multi-chunk clone integrity (batched /get-chunks) ==="
+# Enough rows with blob payloads to span many chunks, so the pull fans out
+# across the batched download path rather than a single chunk. A fresh repo
+# path avoids the section-1 history.
+BIGURL="https://localhost:$PORT/bigrepo.db"
+"$DOLTLITE" "$TMP/big.db" <<ENDSQL >/dev/null 2>&1
+CREATE TABLE blobs(id INTEGER PRIMARY KEY, payload BLOB);
+WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<2000)
+  INSERT INTO blobs SELECT i, randomblob(400) FROM c;
+SELECT dolt_commit('-A','-m','big');
+SELECT dolt_remote('add','bigorigin','$BIGURL');
+ENDSQL
+src_hash=$("$DOLTLITE" "$TMP/big.db" "SELECT dolt_hashof_table('blobs');" 2>&1)
+result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/big.db" "SELECT dolt_push('bigorigin','main');" 2>&1)
+check "large push returns 0" "0" "$result"
+result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/bigclone.db" "SELECT dolt_clone('$BIGURL');" 2>&1)
+check "large clone returns 0" "0" "$result"
+clone_rows=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/bigclone.db" "SELECT count(*) FROM blobs;" 2>&1)
+check "large clone round-trips 2000 rows" "2000" "$clone_rows"
+clone_hash=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/bigclone.db" "SELECT dolt_hashof_table('blobs');" 2>&1)
+check "clone table hash matches source (chunks intact)" "$src_hash" "$clone_hash"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

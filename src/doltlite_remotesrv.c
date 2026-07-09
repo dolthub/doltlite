@@ -320,6 +320,68 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
   sqlite3_free(aResult);
 }
 
+/* Batched read: body is N concatenated hashes; reply is the framed form
+** httpGetChunks parses -- per requested hash, a 4-byte big-endian length then
+** that many payload bytes, with length 0xFFFFFFFF marking an absent chunk. */
+static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
+                            const u8 *pBody, int nBody){
+  int nHashes, i, rc;
+  u8 *pOut = 0;
+  i64 nOut = 0, nAlloc = 0;
+
+  if( nBody % PROLLY_HASH_SIZE != 0 ){
+    sendBadRequest(fd);
+    return;
+  }
+  nHashes = nBody / PROLLY_HASH_SIZE;
+
+  for(i=0; i<nHashes; i++){
+    const ProllyHash *pHash = (const ProllyHash*)(pBody + (i * PROLLY_HASH_SIZE));
+    u8 *pData = 0;
+    int nData = 0;
+    u32 len;
+    i64 need;
+
+    rc = pStore ? chunkStoreGet(pStore, pHash, &pData, &nData) : SQLITE_NOTFOUND;
+    if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
+      sqlite3_free(pData);
+      sqlite3_free(pOut);
+      sendError(fd);
+      return;
+    }
+    len = (rc==SQLITE_NOTFOUND) ? 0xFFFFFFFFu : (u32)nData;
+
+    need = nOut + 4 + (rc==SQLITE_OK ? nData : 0);
+    if( need > nAlloc ){
+      i64 nNew = nAlloc ? nAlloc*2 : 4096;
+      u8 *pTmp;
+      while( nNew < need ) nNew *= 2;
+      pTmp = sqlite3_realloc(pOut, (int)nNew);
+      if( !pTmp ){
+        sqlite3_free(pData);
+        sqlite3_free(pOut);
+        sendError(fd);
+        return;
+      }
+      pOut = pTmp;
+      nAlloc = nNew;
+    }
+
+    pOut[nOut++] = (u8)(len >> 24);
+    pOut[nOut++] = (u8)(len >> 16);
+    pOut[nOut++] = (u8)(len >> 8);
+    pOut[nOut++] = (u8)len;
+    if( rc==SQLITE_OK ){
+      memcpy(pOut + nOut, pData, nData);
+      nOut += nData;
+    }
+    sqlite3_free(pData);
+  }
+
+  sendOk(fd, pOut, (int)nOut);
+  sqlite3_free(pOut);
+}
+
 static void handleGetChunk(ChunkStore *pStore, DoltliteConn *fd, const char *zHexHash){
   ProllyHash hash;
   u8 *pData = 0;
@@ -534,6 +596,7 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
   int flags;
   int isReadOnlyEndpoint = 0;
   int isHasChunksEndpoint = 0;
+  int isGetChunksEndpoint = 0;
   int exists = 0;
   sqlite3_vfs *pVfs;
 
@@ -573,7 +636,10 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
   isHasChunksEndpoint = strcmp(zMethod, "POST")==0
                      && strcmp(zEndpoint, "has-chunks")==0;
-  isReadOnlyEndpoint = strcmp(zMethod, "GET")==0 || isHasChunksEndpoint;
+  isGetChunksEndpoint = strcmp(zMethod, "POST")==0
+                     && strcmp(zEndpoint, "get-chunks")==0;
+  isReadOnlyEndpoint = strcmp(zMethod, "GET")==0
+                     || isHasChunksEndpoint || isGetChunksEndpoint;
   pVfs = sqlite3_vfs_find(0);
   rc = pVfs->xAccess(pVfs, zDbPath, SQLITE_ACCESS_EXISTS, &exists);
   if( rc!=SQLITE_OK ){
@@ -616,6 +682,8 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
   }else if( strcmp(zMethod, "POST")==0 ){
     if( strcmp(zEndpoint, "has-chunks")==0 ){
       handleHasChunks(&store, fd, pBody, nBody);
+    }else if( strcmp(zEndpoint, "get-chunks")==0 ){
+      handleGetChunks(&store, fd, pBody, nBody);
     }else if( strcmp(zEndpoint, "chunks")==0 ){
       handlePostChunks(&store, fd, pBody, nBody);
     }else if( strcmp(zEndpoint, "commit")==0 ){

@@ -117,6 +117,7 @@ DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
                                   MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
     goto fail_tls;
   }
+  mbedtls_ssl_conf_min_tls_version(&c->conf, MBEDTLS_SSL_VERSION_TLS1_3);
   mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
   mbedtls_ssl_conf_ca_chain(&c->conf, &c->cacert, NULL);
   mbedtls_ssl_conf_rng(&c->conf, mbedtls_ctr_drbg_random, &c->drbg);
@@ -220,6 +221,7 @@ DoltliteTlsServer *doltliteTlsServerNew(const char *certFile, const char *keyFil
                                   MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
     goto fail;
   }
+  mbedtls_ssl_conf_min_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
   mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->drbg);
 
   mbedtls_ssl_conf_authmode(&s->conf, MBEDTLS_SSL_VERIFY_NONE);

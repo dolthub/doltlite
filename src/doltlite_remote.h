@@ -8,6 +8,12 @@ struct DoltliteRemote {
   int (*xGetChunk)(DoltliteRemote*, const ProllyHash*, u8**, int*);
   int (*xPutChunk)(DoltliteRemote*, const ProllyHash*, const u8*, int);
   int (*xHasChunks)(DoltliteRemote*, const ProllyHash*, int nHash, u8 *aResult);
+  /* Optional batched fetch: retrieve nHash chunks in one round trip. On
+  ** SQLITE_OK, apData[i]/anData[i] hold each chunk (caller frees every
+  ** non-NULL apData[i]); a NULL apData[i] means that chunk was absent. May be
+  ** NULL, in which case callers fall back to per-chunk xGetChunk. */
+  int (*xGetChunks)(DoltliteRemote*, const ProllyHash *aHash, int nHash,
+                    u8 **apData, int *anData);
   int (*xGetRefs)(DoltliteRemote*, u8**, int*);
   int (*xSetRefs)(DoltliteRemote*, const u8*, int);
   int (*xSetRefsIf)(DoltliteRemote*, const ProllyHash*, const u8*, int);
