@@ -4362,12 +4362,10 @@ sysfault sysfault-2.1-vfsfault-transient.84
 sysfault sysfault-2.1-vfsfault-transient.85
 sysfault sysfault-2.1-vfsfault-transient.86
 sysfault sysfault-2.1-vfsfault-transient.87
-sysfault sysfault-2.2-vfsfault-persistent.87
 sysfault sysfault-2.2-vfsfault-transient.1
 sysfault sysfault-2.2-vfsfault-transient.2
 sysfault sysfault-2.2-vfsfault-transient.3
 sysfault sysfault-2.2-vfsfault-transient.5
-sysfault sysfault-2.2-vfsfault-transient.6
 sysfault sysfault-2.2-vfsfault-transient.44
 sysfault sysfault-2.2-vfsfault-transient.45
 sysfault sysfault-2.2-vfsfault-transient.46
@@ -4379,8 +4377,6 @@ sysfault sysfault-2.2-vfsfault-transient.52
 sysfault sysfault-2.2-vfsfault-transient.53
 sysfault sysfault-2.2-vfsfault-transient.54
 sysfault sysfault-2.2-vfsfault-transient.56
-sysfault sysfault-2.2-vfsfault-transient.57
-sysfault sysfault-2.2-vfsfault-transient.87
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
@@ -6352,3 +6348,30 @@ incrvacuum3 incrvacuum3-2.1.5.3
 incrvacuum3 incrvacuum3-2.1.6.3
 incrvacuum3 incrvacuum3-2.1.7.3
 incrvacuum3 incrvacuum3-2.1.8.3
+
+# sysfault §2 vfsfault indices that fail now that journal_mode=truncate no-ops
+# (the body runs instead of erroring at the pragma); fault-index set, Linux CI is the oracle.
+sysfault sysfault-2.1-vfsfault-transient.100
+sysfault sysfault-2.1-vfsfault-transient.101
+sysfault sysfault-2.1-vfsfault-transient.102
+sysfault sysfault-2.1-vfsfault-transient.103
+sysfault sysfault-2.1-vfsfault-transient.88
+sysfault sysfault-2.1-vfsfault-transient.89
+sysfault sysfault-2.1-vfsfault-transient.90
+sysfault sysfault-2.1-vfsfault-transient.91
+sysfault sysfault-2.1-vfsfault-transient.92
+sysfault sysfault-2.1-vfsfault-transient.93
+sysfault sysfault-2.1-vfsfault-transient.94
+sysfault sysfault-2.1-vfsfault-transient.95
+sysfault sysfault-2.1-vfsfault-transient.96
+sysfault sysfault-2.1-vfsfault-transient.97
+sysfault sysfault-2.1-vfsfault-transient.98
+sysfault sysfault-2.1-vfsfault-transient.99
+sysfault sysfault-2.2-vfsfault-persistent.100
+sysfault sysfault-2.2-vfsfault-persistent.101
+sysfault sysfault-2.2-vfsfault-persistent.102
+sysfault sysfault-2.2-vfsfault-transient.100
+sysfault sysfault-2.2-vfsfault-transient.101
+sysfault sysfault-2.2-vfsfault-transient.102
+sysfault sysfault-2.2-vfsfault-transient.95
+sysfault sysfault-2.2-vfsfault-transient.97

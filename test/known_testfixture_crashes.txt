@@ -110,7 +110,7 @@ vtab1          # post-vtab1-5 cleanup drops echo backing tables before vtabs; cl
 # an intentional rejection or a stock-only artifact. Reasons captured from a
 # per-file non-root run.
 corrupt2         # auto_vacuum is now a silent no-op; file runs deep and aborts in corruption_test's raw child-page seek (line 408); earlier pokes absorbed by torn-tail rollback
-pagerfault       # journal_mode no-op now; runs deep into the OOM faultsim and SIGSEGVs (rc=139) around pagerfault-15 -- a latent crash the setup rejection had masked (not bucket-enforced; under investigation)
+pagerfault       # journal_mode no-op now; on Linux completes with ~1000 cap-truncated OOM-faultsim failures, on macOS SIGSEGVs deep in the fault loop -- either way not pinnable, so UNBUCKETED (documented like malloc/mallocAll)
 pagerfault2      # journal_mode no-op now lets it complete (1 err/1533), but the lone failure is an OOM fault-point index that drifts macOS<->Linux; kept crash-listed and UNBUCKETED rather than gated
 wal6             # journal_mode no-op now; aborts at wal6-4.4.2 opening a 2nd WAL/shm connection (db2) that needs the -shm sidecar doltlite lacks -> uncaught "invalid command name db2"
 walnoshm         # journal_mode no-op now; aborts at walnoshm-2.2.6 opening a 2nd shm connection (db2) -> uncaught "invalid command name db2"
