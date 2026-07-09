@@ -4493,10 +4493,6 @@ vtab_shared vtab_shared-1.13.2
 vtab_shared vtab_shared-1.13.3
 
 # journal_mode not configurable on doltlite-format databases + cascade
-zerodamage zerodamage-2.0
-zerodamage zerodamage-2.1
-zerodamage zerodamage-3.0
-zerodamage zerodamage-3.1
 
 # == auto_vacuum/incremental_vacuum no-op: re-derived entry sets ==
 
@@ -6375,3 +6371,15 @@ sysfault sysfault-2.2-vfsfault-transient.101
 sysfault sysfault-2.2-vfsfault-transient.102
 sysfault sysfault-2.2-vfsfault-transient.95
 sysfault sysfault-2.2-vfsfault-transient.97
+sysfault sysfault-2.1-vfsfault-transient.104
+sysfault sysfault-2.1-vfsfault-transient.105
+sysfault sysfault-2.1-vfsfault-transient.106
+sysfault sysfault-2.1-vfsfault-transient.107
+sysfault sysfault-2.2-vfsfault-persistent.103
+sysfault sysfault-2.2-vfsfault-persistent.104
+sysfault sysfault-2.2-vfsfault-persistent.105
+sysfault sysfault-2.2-vfsfault-persistent.106
+sysfault sysfault-2.2-vfsfault-transient.103
+sysfault sysfault-2.2-vfsfault-transient.104
+sysfault sysfault-2.2-vfsfault-transient.105
+sysfault sysfault-2.2-vfsfault-transient.106

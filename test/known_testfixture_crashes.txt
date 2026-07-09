@@ -142,7 +142,7 @@ win32nolock      # windows-only: silent platform return, no summary line
 corrupt9       # freelist raw-format probe aborts ("Freelist is empty")
 dbstatus       # dbstat vtable constructor fails on prolly; memory-stat probes differ
 e_walauto      # reads test.db-shm: no shm sidecar
-e_walckpt      # WAL checkpoint API matrix runs past the per-file timeout under doltlite's no-WAL implementation
+e_walckpt      # HANGS (not inherent size): stock runs all 348 tests in ~1s; doltlite spins forever entering the busy-handler + wal_checkpoint loop right after e_walckpt-2.3.2.3 (checkpoint appears to return BUSY indefinitely under a retrying busy handler). Real doltlite bug, tracked separately.
 malloc3        # journal_mode no-op now lets it complete (20 err/6291); failures are OOM fault-point indices that drift macOS<->Linux; kept crash-listed and UNBUCKETED rather than gated (the #1572 reporting bug it once masked is fixed)
 pendingrace    # copies sv_test.db-journal: no journal sidecar
 shmlock        # shm locking probe: "BUSY false-positive" thrown by the test
@@ -150,10 +150,10 @@ wal3           # copies test.db-wal: no -wal sidecar
 walbig         # aborts at line 72 on ORDER BY rowid over a PK-clustered table ("no such column: rowid"), before any WAL size poke
 walro2         # reads test.db-shm: no shm sidecar
 walsetlk       # opens test.db-shm: no shm sidecar
-walsetlk_recover # shm/recovery locks: no shm sidecar
-ioerr2         # fault loop runs tens of thousands of iterations; exceeds any per-file timeout
-lock4          # waits on test2.db-journal sidecar; native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
-sharedA        # waits for a rollback-journal xRead during shared-cache rollback. doltlite_recover_locking_2-18.* ports the shared-cache rollback OUTCOME (ROLLBACK restores state; a cross-connection prepared stmt still steps to SQLITE_DONE; integrity ok) but NOT the original's core assertion: a tvfs xRead-on-journal callback that fires the prepared stmt mid-sqlite3RollbackAll to prove rollback is thread-atomic (no journal sidecar to hook). Coverage is partial. (#1366)
+walsetlk_recover # expects a -shm sidecar that doltlite does not produce; hangs opening test.db-shm during recovery (stock: 6 tests in ~4s)
+ioerr2         # fault loop runs tens of thousands of iterations; exceeds the per-file timeout on STOCK sqlite too (verified), so inherent test size, not a doltlite slowdown
+lock4          # expects a rollback-journal (test2.db-journal) that doltlite does not produce, so its `while {![file exists ...]}` poll never terminates (stock: 5 tests in <1s); native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
+sharedA        # expects a rollback-journal that doltlite does not produce: the test hangs waiting for a journal xRead during shared-cache rollback (stock: 9 tests in ~1s). doltlite_recover_locking_2-18.* ports the OUTCOME (ROLLBACK restores state; a cross-connection prepared stmt still steps to SQLITE_DONE; integrity ok) but NOT the tvfs xRead-on-journal hook. Partial coverage. (#1366)
 malloc         # malloc-14 prep copies a rollback-journal file doltlite never writes; the uncaught prep error repeats every iteration to the 1000-error cap
 backup_ioerr   # page-copy IOERR sequencing exceeds cap; native Tcl backup/restore IOERR cleanup covered in doltlite_recover_backup_fault
 misc7          # WHERE rowid=? on a PK table errors (intentional rowid-on-PK divergence); do_eqp_test 14.1 throws uncaught -> aborts pre-summary. On high-fd-limit machines the 6.1 fd-exhaustion loop times out first instead (same crash classification)
@@ -197,3 +197,4 @@ superlock  # sqlite3demo_superlock cannot acquire its byte-range/WAL superlock o
 # would churn a 1000-line block on every fts fix; revisit when the fts
 # shadow-table stale-read bug is fixed and the count drops below the cap.
 #
+zerodamage     # journal_mode no-op lets it run past the journal_mode=DELETE reject to line 90, where the test inlines [atomic_batch_write test.db] in an expr; doltlite returns empty for SQLITE_FCNTL_BEGIN_ATOMIC_WRITE (a page-file concept, meaningless for the chunk store), so tcl throws "missing operand" and aborts before finish_test. Feature gap, not a data bug.
