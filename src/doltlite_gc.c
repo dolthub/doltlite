@@ -839,12 +839,21 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   }
 }
 
-static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs){
+/* Acquire the graph lock for gc. When bBusyRetry is set (an explicit
+** dolt_gc() the caller expects to wait), spin on the busy handler while the
+** lock is contended. The checkpoint-driven compaction path passes 0: it is
+** best-effort and MUST NOT spin, because a checkpoint can be re-entered on a
+** second connection from within a testvfs xWrite callback while the first
+** connection already holds the shared graph file lock on this thread -- a
+** self-deadlock the busy handler can never resolve (it would spin forever).
+** Trying once and skipping compaction on BUSY is safe; stock does not compact
+** on checkpoint at all. */
+static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs, int bBusyRetry){
   int rc;
   assert( sqlite3_mutex_held(db->mutex) );
   do {
     rc = chunkStoreLockAndRefresh(cs);
-  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
+  }while( rc==SQLITE_BUSY && bBusyRetry && sqlite3InvokeBusyHandler(&db->busyHandler) );
   return rc;
 }
 
@@ -860,7 +869,8 @@ static int gcRun(
   char *zPhaseBuf,
   int nPhaseBuf,
   int bRequireExclusive,
-  int bForceRefresh
+  int bForceRefresh,
+  int bBusyRetry
 ){
   ProllyHashSet marked;
   GcMarkTrace markTrace;
@@ -874,7 +884,7 @@ static int gcRun(
     return SQLITE_BUSY;
   }
 
-  rc = gcLockAndRefresh(db, cs);
+  rc = gcLockAndRefresh(db, cs, bBusyRetry);
   if( rc!=SQLITE_OK ){
     *pzPhase = "failed to acquire lock for gc";
     return rc;
@@ -945,7 +955,7 @@ static void doltliteGcFunc(
   }
 
   rc = gcRun(db, cs, &nKept, &nRemoved, &zPhase, zPhaseBuf,
-             sizeof(zPhaseBuf), 1, 1);
+             sizeof(zPhaseBuf), 1, 1, 1);
   if( rc!=SQLITE_OK ){
     if( rc==SQLITE_BUSY ){
       sqlite3_result_error(context,
@@ -975,7 +985,7 @@ int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
     return SQLITE_OK;
   }
 
-  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0, 0, 0);
+  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0, 0, 0, 0);
 }
 
 int doltliteGcCompact(sqlite3 *db){
