@@ -351,6 +351,61 @@ static int httpPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
   return rc;
 }
 
+/* Batched fetch: POST the concatenated hashes to /get-chunks and parse the
+** framed reply (per requested hash: a 4-byte big-endian length then that many
+** payload bytes; length 0xFFFFFFFF marks an absent chunk). One round trip
+** replaces one GET /chunk per hash. */
+static int httpGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
+                         int nHash, u8 **apData, int *anData){
+  HttpRemote *p = (HttpRemote*)pRemote;
+  char *zPath;
+  u8 *pReq = 0;
+  u8 *pResp = 0;
+  int nResp = 0;
+  int status = 0;
+  int rc;
+  int i;
+  i64 poff;
+
+  for(i=0; i<nHash; i++){ apData[i] = 0; anData[i] = 0; }
+  if( nHash <= 0 ) return SQLITE_OK;
+
+  pReq = sqlite3_malloc(nHash * PROLLY_HASH_SIZE);
+  if( !pReq ) return SQLITE_NOMEM;
+  for(i=0; i<nHash; i++){
+    memcpy(pReq + (i * PROLLY_HASH_SIZE), aHash[i].data, PROLLY_HASH_SIZE);
+  }
+
+  zPath = buildPath(p, "/get-chunks");
+  if( !zPath ){ sqlite3_free(pReq); return SQLITE_NOMEM; }
+
+  rc = httpRequest(p, "POST", zPath, pReq, nHash * PROLLY_HASH_SIZE,
+                   &status, &pResp, &nResp);
+  sqlite3_free(zPath);
+  sqlite3_free(pReq);
+  if( rc != SQLITE_OK ){ sqlite3_free(pResp); return rc; }
+  if( status != 200 ){ sqlite3_free(pResp); return SQLITE_ERROR; }
+
+  poff = 0;
+  for(i=0; i<nHash; i++){
+    u32 len;
+    if( poff + 4 > nResp ){ rc = SQLITE_ERROR; break; }
+    len = ((u32)pResp[poff] << 24) | ((u32)pResp[poff+1] << 16)
+        | ((u32)pResp[poff+2] << 8) | (u32)pResp[poff+3];
+    poff += 4;
+    if( len == 0xFFFFFFFFu ) continue;            /* absent */
+    if( poff + (i64)len > nResp ){ rc = SQLITE_ERROR; break; }
+    apData[i] = sqlite3_malloc(len ? (int)len : 1);
+    if( !apData[i] ){ rc = SQLITE_NOMEM; break; }
+    memcpy(apData[i], pResp + poff, len);
+    anData[i] = (int)len;
+    poff += len;
+  }
+
+  sqlite3_free(pResp);
+  return rc;   /* caller frees any apData[i] set before an error */
+}
+
 static int httpGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   HttpRemote *p = (HttpRemote*)pRemote;
   char *zPath;
@@ -627,6 +682,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->base.xGetChunk = httpGetChunk;
   p->base.xPutChunk = httpPutChunk;
   p->base.xHasChunks = httpHasChunks;
+  p->base.xGetChunks = httpGetChunks;
   p->base.xGetRefs = httpGetRefs;
   p->base.xSetRefs = httpSetRefs;
   p->base.xSetRefsIf = httpSetRefsIf;

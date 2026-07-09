@@ -220,26 +220,45 @@ int doltliteSyncChunks(
     rc = pDst->xHasChunks(pDst, aBatch, nBatch, aPresent);
     if( rc!=SQLITE_OK ) break;
 
-    for(i=0; i<nBatch && rc==SQLITE_OK; i++){
-      u8 *data = 0;
-      int nData = 0;
+    /* Collect the chunks the destination is missing, then fetch them from the
+    ** source. A source that provides xGetChunks pulls the whole batch in one
+    ** round trip; otherwise fall back to one fetch per chunk. */
+    {
+      ProllyHash aMissing[SYNC_BATCH_SIZE];
+      int nMissing = 0;
 
-      if( aPresent[i] ){
-
-        continue;
+      for(i=0; i<nBatch; i++){
+        if( !aPresent[i] ) aMissing[nMissing++] = aBatch[i];
       }
+      if( nMissing==0 ) continue;
 
-      rc = pSrc->xGetChunk(pSrc, &aBatch[i], &data, &nData);
-      if( rc!=SQLITE_OK ) break;
+      if( pSrc->xGetChunks ){
+        u8 *apData[SYNC_BATCH_SIZE];
+        int anData[SYNC_BATCH_SIZE];
 
-      rc = pDst->xPutChunk(pDst, &aBatch[i], data, nData);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(data);
-        break;
+        memset(apData, 0, sizeof(apData[0]) * nMissing);
+        rc = pSrc->xGetChunks(pSrc, aMissing, nMissing, apData, anData);
+        for(i=0; i<nMissing && rc==SQLITE_OK; i++){
+          if( !apData[i] ){ rc = SQLITE_NOTFOUND; break; }
+          rc = pDst->xPutChunk(pDst, &aMissing[i], apData[i], anData[i]);
+          if( rc==SQLITE_OK ){
+            rc = syncEnqueueChildren(apData[i], anData[i], &queue, &seen);
+          }
+        }
+        for(i=0; i<nMissing; i++) sqlite3_free(apData[i]);
+      }else{
+        for(i=0; i<nMissing && rc==SQLITE_OK; i++){
+          u8 *data = 0;
+          int nData = 0;
+          rc = pSrc->xGetChunk(pSrc, &aMissing[i], &data, &nData);
+          if( rc!=SQLITE_OK ) break;
+          rc = pDst->xPutChunk(pDst, &aMissing[i], data, nData);
+          if( rc==SQLITE_OK ){
+            rc = syncEnqueueChildren(data, nData, &queue, &seen);
+          }
+          sqlite3_free(data);
+        }
       }
-
-      rc = syncEnqueueChildren(data, nData, &queue, &seen);
-      sqlite3_free(data);
     }
   }
 
