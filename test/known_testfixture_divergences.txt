@@ -1915,7 +1915,7 @@ corruptL corruptL-1.4  # stock index-page corruption: store rejects at schema le
 corruptL corruptL-2.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-2.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-3.1  # writable_schema index-SQL poke ACCEPTED; INSERT..SELECT then leaves the untouched index t1a flagged by integrity_check while reads stay correct (tracked layer disagreement; REINDEX repairs)
+corruptL corruptL-3.1  # writable_schema index-SQL poke tolerated instead of malformed; row-by-row INSERT..SELECT keeps unrelated indexes consistent
 corruptL corruptL-4.0  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-4.1  # stock index-page corruption: store rejects at schema level
 corruptL corruptL-5.0  # stock index-page corruption: store rejects at schema level

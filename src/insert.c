@@ -3323,9 +3323,18 @@ static int xferOptimization(
     extern int pagerShimIsShim(const Pager*);
     Btree *pSrcBt = db->aDb[iDbSrc].pBt;
     Btree *pDestBt = db->aDb[iDbDest].pBt;
+    int srcIsProlly = pSrcBt && pagerShimIsShim(sqlite3BtreePager(pSrcBt));
+    int destIsProlly = pDestBt && pagerShimIsShim(sqlite3BtreePager(pDestBt));
     if( pSrcBt && pDestBt
-     && pagerShimIsShim(sqlite3BtreePager(pSrcBt))
-          != pagerShimIsShim(sqlite3BtreePager(pDestBt)) ){
+     && srcIsProlly!=destIsProlly ){
+      return 0;
+    }
+    /* Raw index-cell transfer trusts parsed sqlite_schema metadata. Under
+    ** writable_schema, that metadata can be made inconsistent with an existing
+    ** prolly index root. Fall back to row-by-row insert so destination indexes
+    ** are rebuilt from table rows instead of copied from possibly retagged
+    ** source index storage. */
+    if( (srcIsProlly || destIsProlly) && (pSrc->pIndex || pDest->pIndex) ){
       return 0;
     }
   }

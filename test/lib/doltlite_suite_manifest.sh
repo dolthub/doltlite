@@ -75,6 +75,7 @@ doltlite_pragma_wal_checkpoint.sh
 doltlite_merge_ignore_corners.sh
 doltlite_record_format.sh
 doltlite_schema_cookie.sh
+doltlite_writable_schema.sh
 doltlite_snapshot_isolation.sh
 doltlite_storage_locking.sh
 doltlite_unknown_table_cursor.sh
