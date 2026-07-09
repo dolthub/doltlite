@@ -5,21 +5,21 @@ source $testdir/tester.tcl
 do_execsql_test doltlite_recover_jrnlwal_3-1.1 {
   PRAGMA journal_mode;
 } {wal}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.2 {
+do_execsql_test doltlite_recover_jrnlwal_3-1.2 {
   PRAGMA journal_mode=delete;
-} {1 {journal_mode is not configurable on doltlite-format databases}}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.3 {
+} {wal}
+do_execsql_test doltlite_recover_jrnlwal_3-1.3 {
   PRAGMA journal_mode=truncate;
-} {1 {journal_mode is not configurable on doltlite-format databases}}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.4 {
+} {wal}
+do_execsql_test doltlite_recover_jrnlwal_3-1.4 {
   PRAGMA journal_mode=persist;
-} {1 {journal_mode is not configurable on doltlite-format databases}}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.5 {
+} {wal}
+do_execsql_test doltlite_recover_jrnlwal_3-1.5 {
   PRAGMA journal_mode=memory;
-} {1 {journal_mode is not configurable on doltlite-format databases}}
-do_catchsql_test doltlite_recover_jrnlwal_3-1.6 {
+} {wal}
+do_execsql_test doltlite_recover_jrnlwal_3-1.6 {
   PRAGMA journal_mode=off;
-} {1 {journal_mode is not configurable on doltlite-format databases}}
+} {wal}
 do_execsql_test doltlite_recover_jrnlwal_3-1.7 {
   PRAGMA journal_mode=wal;
 } {wal}

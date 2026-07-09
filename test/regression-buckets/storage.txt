@@ -45,7 +45,6 @@ crash4
 crash5
 crash6
 crash7
-crash8
 crashM
 dbfuzz001
 dbpage
@@ -180,7 +179,6 @@ wal64k
 wal7
 wal8
 wal9
-walbak
 walbig
 walblock
 walckptnoop

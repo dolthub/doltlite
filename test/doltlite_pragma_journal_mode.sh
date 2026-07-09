@@ -38,14 +38,13 @@ run_test "jm_dl_read" \
 run_test "jm_dl_set_wal" \
   "$($DOLTLITE "$DB" "PRAGMA journal_mode = WAL;" 2>&1)" "wal"
 
-for mode in DELETE TRUNCATE PERSIST MEMORY; do
+# journal_mode is inapplicable to the chunk store, so a mode request is
+# silently ignored and the fixed mode ("wal") is reported -- SQLite's
+# convention for inapplicable journal modes, matching auto_vacuum.
+for mode in DELETE TRUNCATE PERSIST MEMORY OFF; do
   out=$($DOLTLITE "$DB" "PRAGMA journal_mode = $mode;" 2>&1)
-  run_test_match "jm_dl_set_${mode}_rejected" "$out" \
-    "journal_mode is not configurable on doltlite-format"
+  run_test "jm_dl_set_${mode}_noop" "$out" "wal"
 done
-
-out=$($DOLTLITE "$DB" "PRAGMA journal_mode = OFF;" 2>&1)
-run_test "jm_dl_set_off_defensive" "$out" "wal"
 
 db_rm "$DB"
 

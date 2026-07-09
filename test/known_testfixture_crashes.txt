@@ -43,7 +43,7 @@
 # reaches its summary line; its remaining C-API divergences are recorded in
 # the divergence file.
 # Additional crash/timeout files from the full capture (issue #1119):
-crash8        # crash-recovery simulation; incompatible with prolly format / times out
+crash8        # journal_mode no-op now lets it complete (24 err/46), but it is a crash-recovery simulation (nondeterministic kill timing); kept crash-listed and UNBUCKETED rather than gated
 # fuzz3 left the bucket sweep entirely (it was listed here as a crash, and
 # before that never passed). It flips single bytes of committed data and
 # accepts only rollback-journal-mode outcomes (rc==0 or a corruption
@@ -110,15 +110,13 @@ vtab1          # post-vtab1-5 cleanup drops echo backing tables before vtabs; cl
 # an intentional rejection or a stock-only artifact. Reasons captured from a
 # per-file non-root run.
 corrupt2         # auto_vacuum is now a silent no-op; file runs deep and aborts in corruption_test's raw child-page seek (line 408); earlier pokes absorbed by torn-tail rollback
-incrvacuum3      # journal_mode rejection at line 73 -> uncaught setup error (auto_vacuum is now a silent no-op)
-pager2           # journal_mode not configurable -> uncaught setup error
-pagerfault       # journal_mode not configurable -> uncaught setup error
-pagerfault2      # journal_mode rejection cascades into the faultsim harness; abort point varies run to run (not bucket-enforced)
-wal6             # journal_mode not configurable -> uncaught setup error
-walnoshm         # journal_mode not configurable -> uncaught setup error
+pagerfault       # journal_mode no-op now; runs deep into the OOM faultsim and SIGSEGVs (rc=139) around pagerfault-15 -- a latent crash the setup rejection had masked (not bucket-enforced; under investigation)
+pagerfault2      # journal_mode no-op now lets it complete (1 err/1533), but the lone failure is an OOM fault-point index that drifts macOS<->Linux; kept crash-listed and UNBUCKETED rather than gated
+wal6             # journal_mode no-op now; aborts at wal6-4.4.2 opening a 2nd WAL/shm connection (db2) that needs the -shm sidecar doltlite lacks -> uncaught "invalid command name db2"
+walnoshm         # journal_mode no-op now; aborts at walnoshm-2.2.6 opening a 2nd shm connection (db2) -> uncaught "invalid command name db2"
 wal              # reads test.db-wal: doltlite has no -wal sidecar
 wal2             # wal helper reads ::filename of the -wal sidecar
-walbak           # reads test.db-wal: no -wal sidecar
+walbak           # journal_mode no-op now lets it complete (31 err/84, all -wal-sidecar-absence divergences); kept crash-listed and UNBUCKETED rather than gate 31 WAL-specific entries
 walcksum         # copies test.db-wal: no -wal sidecar
 waloverwrite     # copies test.db-wal: no -wal sidecar
 walslow          # copies test.db-wal: no -wal sidecar
@@ -145,7 +143,7 @@ corrupt9       # freelist raw-format probe aborts ("Freelist is empty")
 dbstatus       # dbstat vtable constructor fails on prolly; memory-stat probes differ
 e_walauto      # reads test.db-shm: no shm sidecar
 e_walckpt      # WAL checkpoint API matrix runs past the per-file timeout under doltlite's no-WAL implementation
-malloc3        # OOM-"failed" CREATE INDEX actually committed (separately-tracked reporting bug), so the harness retry aborts on "index abc_i already exists"
+malloc3        # journal_mode no-op now lets it complete (20 err/6291); failures are OOM fault-point indices that drift macOS<->Linux; kept crash-listed and UNBUCKETED rather than gated (the #1572 reporting bug it once masked is fixed)
 pendingrace    # copies sv_test.db-journal: no journal sidecar
 shmlock        # shm locking probe: "BUSY false-positive" thrown by the test
 wal3           # copies test.db-wal: no -wal sidecar
@@ -162,16 +160,15 @@ misc7          # WHERE rowid=? on a PK table errors (intentional rowid-on-PK div
 
 # -- 1357 sweep --
 alias  # Deterministic upstream self-skip: alias.test has an unconditional top-level `return` right after sourcing tester.tcl ("Aliases are currently evaluated twice... But not now."), so it exits rc=0 before finish_test and never prints the summary line (3/3 runs identical). Not an actual crash, but the gate keys on the missing summary line, so it must ride on the crash list to be bucketed (contributes 0 tests).
-btreefault  # Stable abort 3/3 (rc=1, no summary). Setup test 1-pre1 dies on `PRAGMA journal_mode = DELETE` (journal_mode is not configurable; auto_vacuum is now a silent no-op), so t1 is never created; then do_faultsim_test 1's -prep does a bare `sqlite3_prepare db "SELECT * FROM t1 ORDER BY a"` which throws an uncaught Tcl error ("(1) no such table: t1") inside the faultsim machinery, killing the script before finish_test. (Scout's earlier "10 errors out of 149" was from a pre-pragma-error-surface master build; on current master the abort is deterministic.)
+btreefault  # Stable abort 3/3 (rc=1, no summary). journal_mode/auto_vacuum are no-ops now, so setup test 1-pre1's real blocker is `DELETE FROM t1 WHERE rowid%2` on `t1(a PRIMARY KEY, b)` -- a PK-clustered (WITHOUT ROWID) table with no rowid column -> uncaught "no such column: rowid"; t1's creation batch never completes, then do_faultsim_test 1's -prep `sqlite3_prepare db "SELECT * FROM t1 ORDER BY a"` throws "(1) no such table: t1" inside the faultsim machinery before finish_test. Rowid-on-PK divergence, not journal_mode.
 capi3c  # Stable abort 3/3 (rc=1, no summary) at line 673. capi3c-7.x's set_file_format pokes raw stock-header offsets 44 (file format) and 40 (schema cookie) of test.db; on doltlite those bytes are inside the chunk file, so the poke is genuine corruption and the next `sqlite3 db test.db` open fails immediately with "database disk image is malformed" (verified by minimal repro; correct behavior for a corrupted chunk file — stock defers the error to the first query instead). The `db` command is therefore never created, capi3c-7.2 fails with {invalid command name "db"}, and the bare `db close` at line 673 (outside any do_test) throws an uncaught Tcl error before finish_test.
 e_fts3  # Relies on rowid of a composite-PK table, which doltlite does not support: DoltLite stores composite-PRIMARY-KEY tables clustered on the PK (like WITHOUT ROWID), so the %_segdir shadow table (PRIMARY KEY(level,idx)) has no rowid. e_fts3-1.2.2.6's do_write_test (malloc_common.tcl) checksums docs_segdir with "SELECT md5sum(rowid,...)", so "no such column: rowid" raises an uncaught tcl error before the malloc phases start (stable 3/3 abort, pre-summary).
 filefmt  # raw-format pokes (16-byte "SQLite format 3" header, page-size at offset 16) hit doltlite's CTLD chunk manifest, which is validated eagerly at open; `sqlite3 db` throws inside do_test bodies leaving no global db handle, and the file's top-level bare `db close` at line 127 aborts uncaught ("invalid command name db"). Stable abort, 3/3 runs.
 fts3  # Relies on rowid of a composite-PK table, which doltlite does not support: DoltLite stores composite-PRIMARY-KEY tables clustered on the PK (like WITHOUT ROWID), so %_segdir has no rowid. fts3.test is a suite-runner (permutations.test run_test_suite fts3) that re-sources the whole fts3 family inline; it aborts deterministically (3/3, only Time: lines differ) inside the fts3corrupt2 portion at "SELECT rowid, length(root), root FROM t2_segdir" — same mechanism as the standalone fts3corrupt2 crash.
 fts3corrupt2  # Relies on rowid of a composite-PK table, which doltlite does not support: %_segdir has composite PRIMARY KEY(level,idx), and DoltLite stores composite-PRIMARY-KEY tables clustered on the PK (like WITHOUT ROWID), so rowid does not exist. Stable 3/3 abort after fts3corrupt2-1.163.5 at line 90 ("db eval {SELECT rowid, length(root), root FROM t2_segdir}"); uncaught tcl error (all 163 corruption loops before it pass).
 fts3malloc  # OOM during FTS setup can leave the test's expected ft table absent; later top-level do_write_test probes ft_content outside a catch and aborts before finish_test. The underlying FTS OOM cleanup gap is tracked by the per-test failures already listed for this file.
-pragma3  # aborts at line 263 when execsql {PRAGMA journal_mode = PERSIST; PRAGMA locking_mode = EXCLUSIVE} raises doltlite's intentional "journal_mode is not configurable on doltlite-format databases" outside any catch. Stable abort, 3/3 runs. (An earlier note here claimed data_version also diverges by bumping on same-connection commits; that is no longer true -- verified data_version stays constant across autocommit, explicit COMMIT, and dolt_commit on one connection.)
 qrf04  # upstream qrf04.test has no finish_test call; its single do_test (qrf01-1.0, db format -splitcolumn) runs and passes but the summary line is never printed (rc=0, deterministic 3/3), so the harness sees it as a crash
-superlock  # sqlite3demo_superlock cannot acquire its byte-range/WAL superlock on doltlite chunk-store files (PRAGMA journal_mode=DELETE is rejected with "journal_mode is not configurable on doltlite-format databases" and the lock demo fails with disk I/O error), so the `unlock` proc it registers on success never exists; the bare `unlock` call after test 5.$tn.12 inside do_multiclient_test (superlock.test line 91, body line 64) is outside any do_test and the tcl error aborts the file before finish_test; deterministic 3/3
+superlock  # sqlite3demo_superlock cannot acquire its byte-range/WAL superlock on doltlite chunk-store files (the lock demo fails with disk I/O error), so the `unlock` proc it registers on success never exists; the bare `unlock` call after test 5.$tn.12 inside do_multiclient_test (superlock.test line 91, body line 64) is outside any do_test and the tcl error aborts the file before finish_test; deterministic 3/3
 
 # == permanently excluded classes (1357 sweep close-out) ==
 #

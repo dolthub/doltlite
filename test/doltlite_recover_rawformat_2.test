@@ -102,13 +102,13 @@ do_test doltlite_recover_rawformat_2-3.1 {
     INSERT INTO t2 VALUES(3, 4);
   }
   catchsql {PRAGMA main.journal_mode = delete}
-} {1 {journal_mode is not configurable on doltlite-format databases}}
+} {0 wal}
 
 do_test doltlite_recover_rawformat_2-3.1b {
   list [catchsql {PRAGMA aux.journal_mode = delete}] \
       [execsql {PRAGMA main.journal_mode = wal}] \
       [execsql {PRAGMA aux.journal_mode = wal}]
-} {{1 {journal_mode is not configurable on doltlite-format databases}} wal wal}
+} {{0 wal} wal wal}
 
 do_test doltlite_recover_rawformat_2-3.2 {
   execsql {
