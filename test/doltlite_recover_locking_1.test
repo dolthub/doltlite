@@ -379,7 +379,7 @@ do_test doltlite_recover_locking_1-8.11 {
 } {exclusive wal normal 0}
 do_test doltlite_recover_locking_1-8.12 {
   catchsql {PRAGMA journal_mode = DELETE}
-} {1 {journal_mode is not configurable on doltlite-format databases}}
+} {0 wal}
 do_test doltlite_recover_locking_1-8.13 {
   db close
   sqlite3 db rloc1.db
@@ -387,7 +387,7 @@ do_test doltlite_recover_locking_1-8.13 {
   list [catchsql {PRAGMA journal_mode = DELETE}] \
        [execsql {INSERT INTO abc2 VALUES(7,8,9); SELECT count(*) FROM abc2;}] \
        [execsql {PRAGMA integrity_check}]
-} {{1 {journal_mode is not configurable on doltlite-format databases}} 3 ok}
+} {{0 wal} 3 ok}
 
 do_test doltlite_recover_locking_1-9.1 {
   execsql {CREATE TABLE x1(a PRIMARY KEY, b)}

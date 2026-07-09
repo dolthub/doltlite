@@ -2,7 +2,6 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
 
-set JM_ERR {journal_mode is not configurable on doltlite-format databases}
 set CKPT_ERR {wal_checkpoint mode is not configurable on doltlite-format databases; use the default (PASSIVE) form}
 
 do_execsql_test doltlite_recover_jrnlwal_4-1.1 {
@@ -15,7 +14,7 @@ do_execsql_test doltlite_recover_jrnlwal_4-1.2 {
 foreach {n mode} {3 delete 4 persist 5 truncate 6 memory 7 off} {
   do_test doltlite_recover_jrnlwal_4-1.$n {
     catchsql "PRAGMA journal_mode = $mode"
-  } [list 1 $JM_ERR]
+  } [list 0 wal]
 }
 do_execsql_test doltlite_recover_jrnlwal_4-1.8 {
   PRAGMA journal_mode = wal;
@@ -62,7 +61,7 @@ do_test doltlite_recover_jrnlwal_4-2.3 {
   execsql { BEGIN; INSERT INTO t1 VALUES(3); }
   set r [catchsql {PRAGMA journal_mode = delete}]
   lappend r [execsql {PRAGMA main.journal_mode}]
-} [list 1 $JM_ERR wal]
+} [list 0 wal wal]
 do_execsql_test doltlite_recover_jrnlwal_4-2.4 {
   ROLLBACK;
   SELECT * FROM t1;
@@ -82,7 +81,7 @@ do_test doltlite_recover_jrnlwal_4-2.7 {
   set r [catchsql {PRAGMA journal_mode = delete}]
   execsql { COMMIT }
   lappend r [execsql {SELECT x FROM t1 ORDER BY x}]
-} [list 1 $JM_ERR {1 4}]
+} [list 0 wal {1 4}]
 do_execsql_test doltlite_recover_jrnlwal_4-2.8 {
   PRAGMA integrity_check;
 } {ok}
@@ -198,7 +197,7 @@ do_test doltlite_recover_jrnlwal_4-7.1 {
 } {wal}
 do_test doltlite_recover_jrnlwal_4-7.2 {
   catchsql {PRAGMA two.journal_mode = delete}
-} [list 1 $JM_ERR]
+} [list 0 wal]
 do_execsql_test doltlite_recover_jrnlwal_4-7.3 {
   PRAGMA two.journal_size_limit = 10240;
 } {-1}
@@ -243,7 +242,7 @@ do_test doltlite_recover_jrnlwal_4-8.1 {
   list [execsql {PRAGMA main.journal_mode} db3] \
        [catchsql {PRAGMA main.journal_mode = wal} db3] \
        [catchsql {PRAGMA main.journal_mode = delete} db3]
-} [list memory {0 memory} [list 1 $JM_ERR]]
+} [list memory {0 memory} {0 memory}]
 do_test doltlite_recover_jrnlwal_4-8.2 {
   execsql {
     CREATE TABLE m(x);
