@@ -149,7 +149,6 @@ wal3           # copies test.db-wal: no -wal sidecar
 walbig         # aborts at line 72 on ORDER BY rowid over a PK-clustered table ("no such column: rowid"), before any WAL size poke
 walro2         # reads test.db-shm: no shm sidecar
 walsetlk       # opens test.db-shm: no shm sidecar
-walsetlk_recover # expects a -shm sidecar that doltlite does not produce; hangs opening test.db-shm during recovery (stock: 6 tests in ~4s)
 ioerr2         # fault loop runs tens of thousands of iterations; exceeds the per-file timeout on STOCK sqlite too (verified), so inherent test size, not a doltlite slowdown
 lock4          # expects a rollback-journal (test2.db-journal) that doltlite does not produce, so its `while {![file exists ...]}` poll never terminates (stock: 5 tests in <1s); native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
 sharedA        # expects a rollback-journal that doltlite does not produce: the test hangs waiting for a journal xRead during shared-cache rollback (stock: 9 tests in ~1s). doltlite_recover_locking_2-18.* ports the OUTCOME (ROLLBACK restores state; a cross-connection prepared stmt still steps to SQLITE_DONE; integrity ok) but NOT the tvfs xRead-on-journal hook. Partial coverage. (#1366)

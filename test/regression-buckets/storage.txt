@@ -195,6 +195,7 @@ walro
 walro2
 walseh1
 walsetlk
+walsetlk_recover
 walsetlk_snapshot
 walsetlk2
 walsetlk3

@@ -1,5 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+source $testdir/lock_common.tcl
 
 
 
@@ -387,5 +388,52 @@ do_test doltlite_recover_jrnlwal_2-13.4 {
   dbm close
   execsql {PRAGMA integrity_check}
 } {ok}
+
+do_test doltlite_recover_jrnlwal_2-14.1 {
+  catch {db close}
+  forcedelete jw_nohang.db .jw_nohang.db-lock jw_nohang.db-wal jw_nohang.db-shm
+  sqlite3 db jw_nohang.db
+  execsql {
+    PRAGMA journal_mode = wal;
+    CREATE TABLE wh(a, b);
+    INSERT INTO wh VALUES(1, 2), (3, 4), (5, 6);
+  }
+  db close
+
+  unset -nocomplain childDone
+  testfixture_nb childDone {
+    testvfs tvfs -fullshm 1
+    sqlite3 db jw_nohang.db -vfs tvfs
+    tvfs script wh_callback
+    tvfs filter xRead
+    set ::sawWalRead 0
+    proc wh_callback {method file args} {
+      if {[string match *-wal $file] || [string match *wal $file]} {
+        set ::sawWalRead 1
+        after 4000
+      }
+      return SQLITE_OK
+    }
+    set rows [db eval {SELECT * FROM wh ORDER BY a}]
+    db close
+    tvfs delete
+    list $rows $::sawWalRead
+  }
+
+  testvfs tvfs -fullshm 1
+  sqlite3 db jw_nohang.db -vfs tvfs
+  set parentRows [db eval {SELECT * FROM wh ORDER BY a}]
+  db close
+  tvfs delete
+
+  for {set i 0} {$i<200 && ![info exists childDone]} {incr i} {
+    after 10 {set ::wh_tick 1}
+    vwait ::wh_tick
+    unset -nocomplain ::wh_tick
+  }
+  set childResult [expr {[info exists childDone] ? $childDone : "timeout"}]
+  list $childResult $parentRows \
+      [file exists jw_nohang.db-wal] [file exists jw_nohang.db-shm]
+} {{{1 2 3 4 5 6} 0} {1 2 3 4 5 6} 0 0}
 
 finish_test
