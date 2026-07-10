@@ -1953,6 +1953,9 @@ walrestart walrestart-1.1  # wal_checkpoint frame counters zero (no-op checkpoin
 walrestart walrestart-1.2  # wal_checkpoint frame counters zero (no-op checkpoint)
 walrestart walrestart-1.4  # wal_checkpoint frame counters zero (no-op checkpoint)
 walseh1 walseh1-6-seh.1  # wal_checkpoint mode explicitly rejected under fault injection
+walsetlk_recover walsetlk_recover-1.2  # WAL recovery blocking lock not raised; snapshot read proceeds
+walsetlk_recover walsetlk_recover-1.3  # WAL recovery blocking lock not raised; no wait
+walsetlk_recover walsetlk_recover-1.5.2  # no WAL lock wait, so xSleep is not called
 walshared walshared-1.2  # shared-cache WAL table locks not raised; snapshot reads proceed
 walshared walshared-1.3  # shared-cache WAL table locks not raised; snapshot reads proceed
 
