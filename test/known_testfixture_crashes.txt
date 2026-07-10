@@ -116,7 +116,6 @@ wal6             # journal_mode no-op now; aborts at wal6-4.4.2 opening a 2nd WA
 walnoshm         # journal_mode no-op now; aborts at walnoshm-2.2.6 opening a 2nd shm connection (db2) -> uncaught "invalid command name db2"
 wal              # reads test.db-wal: doltlite has no -wal sidecar
 wal2             # wal helper reads ::filename of the -wal sidecar
-walbak           # journal_mode no-op now lets it complete (31 err/84, all -wal-sidecar-absence divergences); kept crash-listed and UNBUCKETED rather than gate 31 WAL-specific entries
 walcksum         # copies test.db-wal: no -wal sidecar
 waloverwrite     # copies test.db-wal: no -wal sidecar
 walslow          # copies test.db-wal: no -wal sidecar

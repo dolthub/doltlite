@@ -179,6 +179,7 @@ wal64k
 wal7
 wal8
 wal9
+walbak
 walbig
 walblock
 walckptnoop

@@ -1906,6 +1906,44 @@ wal9 wal9-1.3  # file-size metric + missing -wal/-shm sidecars
 wal9 wal9-1.4  # file-size metric + missing -wal/-shm sidecars
 wal9 wal9-1.5  # file-size metric + missing -wal/-shm sidecars
 wal9 wal9-1.6  # file-size metric + missing -wal/-shm sidecars
+# walbak: backup/restore in WAL mode. Two benign divergence classes; the
+# db2 copies verify integrity-ok with correct data either way:
+#   * snapshot-isolation backup -- doltlite copies an immutable snapshot as
+#     of backup-init, so a source modified mid-backup yields a consistent
+#     older copy (stock restarts to the latest) and never returns BUSY.
+#   * WAL sidecar-absent metrics -- -wal file sizes and frame-byte patterns
+#     a store with no -wal/-shm sidecar cannot reproduce.
+walbak walbak-1.1
+walbak walbak-1.5
+walbak walbak-1.6
+walbak walbak-1.6.1
+walbak walbak-1.7
+walbak walbak-1.8
+walbak walbak-1.9
+walbak walbak-2.10
+walbak walbak-2.4
+walbak walbak-2.5
+walbak walbak-2.6
+walbak walbak-2.8
+walbak walbak-2.9
+walbak walbak-3.1.2
+walbak walbak-3.1.3
+walbak walbak-3.1.4
+walbak walbak-3.1.6
+walbak walbak-3.2.2
+walbak walbak-3.2.3
+walbak walbak-3.2.4
+walbak walbak-3.2.6
+walbak walbak-3.3.6
+walbak walbak-3.3.8
+walbak walbak-3.4.6
+walbak walbak-3.4.8
+walbak walbak-4.1.2
+walbak walbak-4.1.3
+walbak walbak-4.1.5
+walbak walbak-4.1.7
+walbak walbak-4.2.2
+walbak walbak-4.3.3
 walprotocol2 walprotocol2-2.2  # WAL locking protocol: busy not raised; txn-state cascade
 walprotocol2 walprotocol2-2.3  # WAL locking protocol: busy not raised; txn-state cascade
 walprotocol2 walprotocol2-2.4  # WAL locking protocol: busy not raised; txn-state cascade
