@@ -1309,16 +1309,6 @@ static void resetConnectionSchema(Btree *pBtree){
   }
 }
 
-static void expireActiveStatements(Btree *pBtree){
-  Vdbe *pVdbe;
-  if( !pBtree->db ) return;
-  for(pVdbe=pBtree->db->pVdbe; pVdbe; pVdbe=pVdbe->pVNext){
-    if( pVdbe->eVdbeState==VDBE_RUN_STATE ){
-      pVdbe->expired = 1;
-    }
-  }
-}
-
 static int hasActiveSchemaProgram(Btree *pBtree){
   Vdbe *pVdbe;
   if( !pBtree->db ) return 0;
@@ -6110,8 +6100,6 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     if( bSchemaChangedRollback ){
       resetConnectionSchema(p);
-    }else if( writeOnly ){
-      expireActiveStatements(p);
     }
     chunkStoreRollback(&pBt->store);
     if( bAutocommitOomRollback ){

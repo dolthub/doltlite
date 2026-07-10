@@ -524,6 +524,7 @@ struct Fts3Expr {
 /* fts3_write.c */
 int sqlite3Fts3UpdateMethod(sqlite3_vtab*,int,sqlite3_value**,sqlite3_int64*);
 int sqlite3Fts3PendingTermsFlush(Fts3Table *);
+int sqlite3Fts3SetHasStat(Fts3Table *);
 void sqlite3Fts3PendingTermsClear(Fts3Table *);
 int sqlite3Fts3Optimize(Fts3Table *);
 int sqlite3Fts3SegReaderNew(int, int, sqlite3_int64,

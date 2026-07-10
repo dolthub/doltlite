@@ -3563,7 +3563,7 @@ static int fts3SyncMethod(sqlite3_vtab *pVtab){
 ** to 0 or 1). Return SQLITE_OK if successful, or an SQLite error code
 ** if an error occurs.
 */
-static int fts3SetHasStat(Fts3Table *p){
+int sqlite3Fts3SetHasStat(Fts3Table *p){
   int rc = SQLITE_OK;
   if( p->bHasStat==2 ){
     char *zTbl = sqlite3_mprintf("%s_stat", p->zName);
@@ -3589,7 +3589,7 @@ static int fts3BeginMethod(sqlite3_vtab *pVtab){
   assert( p->nPendingData==0 );
   assert( p->inTransaction!=1 );
   p->nLeafAdd = 0;
-  rc = fts3SetHasStat(p);
+  rc = sqlite3Fts3SetHasStat(p);
 #ifdef SQLITE_DEBUG
   if( rc==SQLITE_OK ){
     p->inTransaction = 1;
@@ -3872,7 +3872,7 @@ static int fts3RenameMethod(
 
   /* At this point it must be known if the %_stat table exists or not.
   ** So bHasStat may not be 2.  */
-  rc = fts3SetHasStat(p);
+  rc = sqlite3Fts3SetHasStat(p);
   
   /* As it happens, the pending terms table is always empty here. This is
   ** because an "ALTER TABLE RENAME TABLE" statement inside a transaction 

@@ -468,12 +468,15 @@ do_test doltlite_recover_locking_1-10.4 {
 do_test doltlite_recover_locking_1-10.5 {
   list [sqlite3_step $::STMT] [sqlite3_step $::STMT] [sqlite3_step $::STMT]
 } {SQLITE_ROW SQLITE_ROW SQLITE_DONE}
+# A data-only ROLLBACK no longer expires the statement (matches stock): after
+# the scan drains at 10.5, re-stepping auto-resets and reseeks the restored
+# tree, and finalize succeeds.
 do_test doltlite_recover_locking_1-10.6 {
   sqlite3_step $::STMT
-} {SQLITE_ERROR}
+} {SQLITE_ROW}
 do_test doltlite_recover_locking_1-10.7 {
   sqlite3_finalize $::STMT
-} {SQLITE_SCHEMA}
+} {SQLITE_OK}
 do_test doltlite_recover_locking_1-10.8 {
   execsql {SELECT a FROM t2 ORDER BY a}
 } {1 2}
