@@ -1155,8 +1155,6 @@ capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main 
 # scan survives the commit flush and re-seeks. capi3-11.10/11.11 (step after
 # ROLLBACK-during-active-read) pass since the read cursor survives a writeOnly
 # ROLLBACK.
-capi3 capi3-11.12  # step after ROLLBACK-during-active-read: SQLITE_ERROR vs SQLITE_ROW
-capi3 capi3-11.13  # finalize of that statement: SQLITE_SCHEMA vs SQLITE_OK
 
 # fordelete — doltlite doesn't materialize named sqlite_autoindex_* rows for
 # WITHOUT-ROWID/implicit unique indexes, so PRAGMA index_list reports just the

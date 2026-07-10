@@ -1,0 +1,41 @@
+# 2026-07-09
+#
+# The optimize() SQL function is the one fts3 write path with no xBegin (its
+# writes happen inside the function, so the compiler emits no OP_VBegin). On a
+# connection that has never written to the table, bHasStat can therefore stay
+# unresolved and the pending-terms flush tries to read a nonexistent %_stat
+# table ("no such table" -> SQL logic error) on the second optimize. Upstream
+# sqlite carries this latent bug; doltlite reaches it whenever a
+# connection-schema reset (e.g. OOM rollback recovery) reconnects the vtab.
+#
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+ifcapable !fts3 { finish_test ; return }
+
+do_execsql_test doltlite_recover_fts3_optimize-1.0 {
+  CREATE VIRTUAL TABLE t1 USING fts3(x);
+  INSERT INTO t1 VALUES('one two three');
+  INSERT INTO t1 VALUES('four five six');
+} {}
+
+# Reopen so the vtab is freshly connected and no write statement (hence no
+# xBegin) ever runs on this connection before optimize() does.
+do_test doltlite_recover_fts3_optimize-1.1 {
+  db close
+  sqlite3 db test.db
+  execsql { SELECT * FROM (SELECT optimize(t1) FROM t1 LIMIT 1) }
+} {{Index optimized}}
+
+do_test doltlite_recover_fts3_optimize-1.2 {
+  execsql { SELECT * FROM (SELECT optimize(t1) FROM t1 LIMIT 1) }
+} {{Index already optimal}}
+
+do_test doltlite_recover_fts3_optimize-1.3 {
+  execsql { SELECT * FROM (SELECT optimize(t1) FROM t1 LIMIT 1) }
+} {{Index already optimal}}
+
+do_execsql_test doltlite_recover_fts3_optimize-1.4 {
+  SELECT count(*) FROM t1 WHERE t1 MATCH 'five';
+} {1}
+
+finish_test

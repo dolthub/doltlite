@@ -5838,6 +5838,12 @@ int sqlite3Fts3UpdateMethod(
 */
 int sqlite3Fts3Optimize(Fts3Table *p){
   int rc;
+  /* This is the one write path with no xBegin (the writes happen inside the
+  ** optimize() SQL function), so bHasStat may still be unresolved (==2) on a
+  ** connection that has never written to the table. Resolve it here; the
+  ** code below and PendingTermsFlush treat bHasStat as a boolean. */
+  rc = sqlite3Fts3SetHasStat(p);
+  if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3_exec(p->db, "SAVEPOINT fts3", 0, 0, 0);
   if( rc==SQLITE_OK ){
     rc = fts3DoOptimize(p, 1);
