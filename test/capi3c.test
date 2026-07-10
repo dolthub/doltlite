@@ -659,6 +659,10 @@ proc get_file_format {{fname test.db}} {
   return [hexio_get_int [hexio_read $fname 44 4]]
 }
 
+# doltlite stores offsets 40/44 inside its checksummed manifest, so the raw
+# file-format poke below corrupts the manifest and is rejected at open() rather
+# than surfacing "unsupported file format" lazily. No prolly equivalent exists.
+ifcapable {!doltlite} {
 if {![sqlite3 -has-codec]} {
   # Test what happens when the library encounters a newer file format.
   do_test capi3c-7.1 {
@@ -671,6 +675,7 @@ if {![sqlite3 -has-codec]} {
     }
   } {1 {unsupported file format}}
   db close
+}
 }
 
 if {![sqlite3 -has-codec]} {

@@ -1151,6 +1151,18 @@ capi3 capi3-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
 capi3 capi3-4.4    # same (utf16 errmsg)
 capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
+# capi3c is the sqlite3_prepare_v2 mirror of capi3; its raw file-format block
+# (capi3c-7.x) is gated with ifcapable !doltlite like capi3's, which lets the
+# remaining 294 tests run. Same divergence classes as capi3 plus the MVCC
+# locking model.
+capi3c capi3c-3.3    # bogus-path open: doltlite defers the open error (SQLITE_OK) vs stock SQLITE_CANTOPEN
+capi3c capi3c-3.4    # same: errmsg "not an error" vs "unable to open database file"
+capi3c capi3c-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
+capi3c capi3c-4.4    # same (utf16 errmsg)
+capi3c capi3c-8.3    # all-NULL sqlite_master row tolerated at schema load; stock refuses ("malformed database schema")
+capi3c capi3-11.3.4  # upstream misnamed test inside capi3c.test; PRAGMA lock_status reports doltlite's locking model
+capi3c capi3c-18.3   # BEGIN EXCLUSIVE on a 2nd connection does not block an MVCC snapshot reader (SQLITE_ROW vs SQLITE_BUSY)
+capi3c capi3c-18.4   # same: finalize returns SQLITE_OK, not the sticky BUSY
 # capi3-11.4/11.5 (step/finalize after COMMIT-during-active-read) now pass: the
 # scan survives the commit flush and re-seeks. capi3-11.10/11.11 (step after
 # ROLLBACK-during-active-read) pass since the read cursor survives a writeOnly
@@ -3368,16 +3380,21 @@ cachespill cachespill-1.5
 # no file-lock BUSY semantics under doltlite MVCC: writer succeeds while a
 # reader transaction is open; the test's repeated "expect BUSY" re-steps then
 # auto-reset and re-run the INSERT, duplicating rows
-capi3b capi3b-1.4
-capi3b capi3b-1.5.1
-capi3b capi3b-1.5.2
-capi3b capi3b-1.8
-capi3b capi3b-1.9
-capi3b capi3b-2.3
-capi3b capi3b-2.6
-capi3b capi3b-2.9
-capi3b capi3b-2.10
-capi3b capi3b-2.12
+# capi3b polls sqlite3_step expecting SQLITE_BUSY from stock's pager write
+# lock. doltlite's MVCC has no write lock: each poll returns SQLITE_DONE and
+# v1 auto-reset re-executes the completed INSERT, so one row lands per step
+# and later scans see the duplicates -- consistent data given the inserts
+# that actually ran, not corruption.
+capi3b capi3b-1.4  # 2nd-connection INSERT vs open read txn: DONE, not BUSY
+capi3b capi3b-1.5.1  # BUSY-poll re-step: auto-reset re-executes the INSERT (DONE)
+capi3b capi3b-1.5.2  # BUSY-poll re-step: auto-reset re-executes the INSERT (DONE)
+capi3b capi3b-1.8  # scan shows the four polled inserts of 3 (1 2 3 3 3 3)
+capi3b capi3b-1.9  # same scan from the first connection
+capi3b capi3b-2.3  # INSERT while a reader is mid-scan: DONE, not BUSY
+capi3b capi3b-2.6  # BUSY-poll re-step: another INSERT (DONE)
+capi3b capi3b-2.9  # BUSY-poll re-step: another INSERT (DONE)
+capi3b capi3b-2.10  # reader's snapshot still has duplicate 3s to return (ROW, not DONE)
+capi3b capi3b-2.12  # final scan shows every polled insert (four 3s, four 4s)
 
 # every section's setup is "PRAGMA journal_mode = off; CREATE TABLE t1..." in
 # one execsql; doltlite rejects the journal_mode pragma so t1 is never created
