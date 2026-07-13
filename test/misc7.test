@@ -396,6 +396,12 @@ do_test misc7-16.X {
 # These tests do not work on windows due to restrictions in the
 # windows file system.
 #
+# The 17.x block copies and permission-locks test.db-journal, a rollback
+# sidecar doltlite never writes, so the hot-journal-denied scenario cannot be
+# staged (the forcecopy of the journal errors inside the test bodies). Only
+# runs where unix permissions are settable, which is why it surfaces on Linux
+# CI and not macOS.
+ifcapable {!doltlite} {
 if {$tcl_platform(platform) ne "windows"} {
 
   # Some network filesystems (ex: AFP) do not support setting read-only
@@ -463,6 +469,7 @@ if {$tcl_platform(platform) ne "windows"} {
       } 
     } {1 {malformed database schema (t3) - invalid rootpage}}
   }
+}
 }
 
 # Ticket #2470
