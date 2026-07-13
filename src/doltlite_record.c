@@ -3,6 +3,7 @@
 
 #include "sqliteInt.h"
 #include "doltlite_record.h"
+#include "sortkey.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -507,6 +508,50 @@ void doltliteResultUserCol(
   }
   doltliteResultField(ctx, pRec, nRec,
                       ri.aType[iRecField], ri.aOffset[iRecField]);
+}
+
+/* Reconstruct the row record for a clustered row whose stored value is
+** empty. When the PRIMARY KEY covers every column, the row lives entirely
+** in the sort key and the value record has no fields, so readers that only
+** look at the value (history/at/diff and friends) see NULLs. Decode the
+** sort key back into a record the same way the main read path does
+** (getCursorPayload's non-intkey branch). *ppRec receives a
+** sqlite3_malloc'd record the caller frees; it is left 0 for rowid tables,
+** which have no clustered key to decode. */
+int doltliteRecordFromClusteredKey(
+  sqlite3 *db, const char *zTable,
+  const u8 *pKey, int nKey,
+  u8 **ppRec, int *pnRec
+){
+  Table *pTab;
+  Index *pPk;
+  KeyInfo *pKI;
+  u8 *pBuf = 0;
+  int nAlloc = 0, nRec = 0;
+  int i, rc;
+
+  *ppRec = 0;
+  *pnRec = 0;
+  if( !pKey || nKey<=0 || !zTable ) return SQLITE_OK;
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab || HasRowid(pTab) ) return SQLITE_OK;
+  pPk = sqlite3PrimaryKeyIndex(pTab);
+  if( !pPk ) return SQLITE_OK;
+
+  pKI = sqlite3KeyInfoAlloc(db, pPk->nKeyCol, 0);
+  if( !pKI ) return SQLITE_NOMEM;
+  for(i=0; i<pPk->nKeyCol; i++){
+    pKI->aSortFlags[i] = pPk->aSortOrder[i];
+  }
+  rc = recordFromSortKeyBufferColl(pKey, nKey, pKI, &pBuf, &nAlloc, &nRec);
+  sqlite3KeyInfoUnref(pKI);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBuf);
+    return rc;
+  }
+  *ppRec = pBuf;
+  *pnRec = nRec;
+  return SQLITE_OK;
 }
 
 int doltliteBindField(

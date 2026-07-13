@@ -56,7 +56,7 @@ static SQLITE_INLINE void doltliteVtabCommonReset(
 }
 
 static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
-  DoltliteVtabCursorCommon *c
+  DoltliteVtabCursorCommon *c, sqlite3 *db, const char *zTableName
 ){
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
@@ -68,6 +68,16 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
     if( !c->pVal ) return SQLITE_NOMEM;
     memcpy(c->pVal, pVal, nVal);
     c->nVal = nVal;
+  }else{
+    /* Clustered rows whose PRIMARY KEY covers every column store an empty
+    ** value; the row lives in the sort key. Rebuild the record from the key
+    ** so column reads see the PK values instead of NULLs. */
+    const u8 *pKey; int nKey;
+    int rc;
+    prollyCursorKey(&c->tblCur, &pKey, &nKey);
+    rc = doltliteRecordFromClusteredKey(db, zTableName, pKey, nKey,
+                                        &c->pVal, &c->nVal);
+    if( rc!=SQLITE_OK ) return rc;
   }
   c->hasRow = 1;
   return SQLITE_OK;

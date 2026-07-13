@@ -2,6 +2,7 @@ doltlite_recover_collation
 doltlite_recover_corruption
 doltlite_recover_backup_fault
 doltlite_recover_fts3_optimize
+doltlite_recover_history_pk
 doltlite_recover_incrblob
 doltlite_recover_jrnlwal_1
 doltlite_recover_jrnlwal_2

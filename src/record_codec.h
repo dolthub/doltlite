@@ -47,6 +47,8 @@ void doltliteFreeColInfo(DoltliteColInfo *ci);
 void doltliteResultField(sqlite3_context *ctx, const u8 *pData, int nData,
                          int serialType, int offset);
 
+int doltliteRecordFromClusteredKey(sqlite3 *db, const char *zTable,
+    const u8 *pKey, int nKey, u8 **ppRec, int *pnRec);
 void doltliteResultUserCol(sqlite3_context *ctx,
                            const DoltliteColInfo *ci,
                            const u8 *pRec, int nRec,

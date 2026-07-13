@@ -180,7 +180,7 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
         return rc;
       }
       if( prollyCursorIsValid(&c->common.tblCur) && htRowMatchesUpper(c) ){
-        return doltliteVtabCommonCaptureRow(&c->common);
+        return doltliteVtabCommonCaptureRow(&c->common, db, zTableName);
       }
       prollyCursorClose(&c->common.tblCur);
       c->common.tblCurOpen = 0;
@@ -199,7 +199,7 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     if( rc!=SQLITE_OK ) return rc;
 
     if( c->common.tblCurOpen ){
-      return doltliteVtabCommonCaptureRow(&c->common);
+      return doltliteVtabCommonCaptureRow(&c->common, db, zTableName);
     }
   }
 
