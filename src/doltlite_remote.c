@@ -574,23 +574,26 @@ int doltlitePush(
     return rc;
   }
 
-  if( !bForce ){
-    if( rc==SQLITE_OK && refsData ){
-      rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&remoteCommit)
-          && prollyHashCompare(&remoteCommit, &localCommit)!=0 ){
+  if( refsData ){
+    rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&remoteCommit) ){
+      int cmp = prollyHashCompare(&remoteCommit, &localCommit);
+      if( cmp==0 ){
+        sqlite3_free(refsData);
+        return SQLITE_OK;
+      }else if( !bForce ){
         int isAnc = syncIsAncestor(pLocal, &remoteCommit, &localCommit);
         if( isAnc <= 0 ){
           sqlite3_free(refsData);
           return isAnc<0 ? SQLITE_NOMEM : SQLITE_ERROR;
         }
       }
-      if( rc==SQLITE_NOTFOUND ){
-        rc = SQLITE_OK;
-      }else if( rc!=SQLITE_OK ){
-        sqlite3_free(refsData);
-        return rc;
-      }
+    }
+    if( rc==SQLITE_NOTFOUND ){
+      rc = SQLITE_OK;
+    }else if( rc!=SQLITE_OK ){
+      sqlite3_free(refsData);
+      return rc;
     }
   }
   sqlite3_free(refsData);

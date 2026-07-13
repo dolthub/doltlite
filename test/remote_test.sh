@@ -31,6 +31,10 @@ check_match() {
   fi
 }
 
+file_size() {
+  wc -c < "$1" | tr -d ' '
+}
+
 DB="$DOLTLITE"
 R="file://$TMPDIR"
 
@@ -225,8 +229,17 @@ check "clone has 6 users after multi-commit pull" "0
 6" "$result"
 
 echo "=== 11. Already up-to-date ==="
+remote_size_before=$(file_size "$TMPDIR/remote.db")
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main');")
 check "push when up-to-date returns 0" "0" "$result"
+remote_size_after=$(file_size "$TMPDIR/remote.db")
+check "up-to-date push does not grow remote" "$remote_size_before" "$remote_size_after"
+
+remote_size_before=$(file_size "$TMPDIR/remote.db")
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main','--force');")
+check "force push when up-to-date returns 0" "0" "$result"
+remote_size_after=$(file_size "$TMPDIR/remote.db")
+check "up-to-date force push does not grow remote" "$remote_size_before" "$remote_size_after"
 
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_pull('origin','main');")
 check "pull when up-to-date returns 0" "0" "$result"
