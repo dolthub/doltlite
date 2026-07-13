@@ -83,6 +83,7 @@ jrnlmode3
 lock
 lock2
 lock3
+lock4
 lock5
 lock6
 lock7
@@ -128,6 +129,7 @@ schema6
 securedel
 securedel2
 shared
+sharedA
 shared2
 shared3
 shared4

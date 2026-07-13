@@ -272,6 +272,11 @@ forcedelete test.db
 forcedelete test.db-journal
 sqlite3 db test.db
 
+# doltlite clusters abc on its PRIMARY KEY: rowid does not exist (14.1 throws
+# uncaught inside do_eqp_test) and the autoindex plan shapes below are
+# structurally different. Plan-shape parity for clustered tables is not a
+# goal; row-level behavior is covered by doltlite_recover_misc7.
+ifcapable {!doltlite} {
 ifcapable explain {
   do_execsql_test misc7-14.0 {
     CREATE TABLE abc(a PRIMARY KEY, b, c);
@@ -293,6 +298,7 @@ ifcapable explain {
   } {
   QUERY PLAN
   `--SCAN t2 USING INDEX sqlite_autoindex_abc_1
+}
 }
 }
 

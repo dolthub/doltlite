@@ -44,6 +44,12 @@ do_test lock4-1.1 {
   list [file size test.db] [file size test2.db]
 } {2048 2048}
 
+# The rest of the file coordinates two processes through the existence of
+# test2.db-journal, a rollback-journal sidecar doltlite never creates, so
+# the polling loops below never terminate. Native cross-process lock
+# ordering is covered by doltlite_recover_locking_2-17.1.
+ifcapable {!doltlite} {
+
 # Create a script to drive a separate process that will
 #
 #     1.  Create a second database test2.db
@@ -122,5 +128,7 @@ do_test lock4-1.3 {
 do_test lock4-999.1 {
   rename db2 {}
 } {}
+
+}
 
 finish_test

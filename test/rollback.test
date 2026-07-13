@@ -79,6 +79,11 @@ do_test rollback-1.9 {
   sqlite3_finalize $STMT
 } {SQLITE_OK}
 
+# The whole rollback-2.x block manufactures and replays a hot rollback
+# journal (forcecopy of test.db-journal, master-journal pointer surgery),
+# a sidecar doltlite never produces; its torn-commit recovery is covered
+# natively by doltlite_recover_corruption and crash_recovery_test.
+ifcapable {!doltlite} {
 if {$tcl_platform(platform) == "unix" 
  && [permutation] ne "onefile"
  && [permutation] ne "inmemory_journal"
@@ -147,6 +152,7 @@ if {$tcl_platform(platform) == "unix"
   } {t1 t3}
 
   db2 close
+}
 }
 
 finish_test
