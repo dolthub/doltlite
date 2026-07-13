@@ -47,6 +47,46 @@ struct AtCursor {
   DoltlitePkRange pkRange;
 };
 
+typedef struct AtSeenTable AtSeenTable;
+struct AtSeenTable {
+  char **azName;
+  int nName;
+  int nAlloc;
+};
+
+static void atSeenTableClear(AtSeenTable *pSeen){
+  int i;
+  for(i=0; i<pSeen->nName; i++) sqlite3_free(pSeen->azName[i]);
+  sqlite3_free(pSeen->azName);
+  memset(pSeen, 0, sizeof(*pSeen));
+}
+
+static int atSeenTableHas(AtSeenTable *pSeen, const char *zName){
+  int i;
+  for(i=0; i<pSeen->nName; i++){
+    if( strcmp(pSeen->azName[i], zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+static int atSeenTableAdd(AtSeenTable *pSeen, const char *zName){
+  char *zCopy;
+  if( atSeenTableHas(pSeen, zName) ) return SQLITE_OK;
+  if( pSeen->nName>=pSeen->nAlloc ){
+    int nNew = pSeen->nAlloc ? pSeen->nAlloc*2 : 16;
+    char **azNew;
+    if( nNew > 0x7fffffff/(int)sizeof(char*) ) return SQLITE_NOMEM;
+    azNew = sqlite3_realloc(pSeen->azName, nNew*(int)sizeof(char*));
+    if( !azNew ) return SQLITE_NOMEM;
+    pSeen->azName = azNew;
+    pSeen->nAlloc = nNew;
+  }
+  zCopy = sqlite3_mprintf("%s", zName);
+  if( !zCopy ) return SQLITE_NOMEM;
+  pSeen->azName[pSeen->nName++] = zCopy;
+  return SQLITE_OK;
+}
+
 static void atCursorReset(AtCursor *c){
   doltliteVtabCommonReset(&c->common);
   sqlite3_free(c->zCommitRef);
@@ -65,10 +105,127 @@ static int atRowMatchesUpper(AtCursor *c){
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  DoltliteVtabCommon *v;
+  const char *zMod = argv[0];
+  size_t nPrefix = strlen("dolt_at_");
+  char *zSchema;
+  int rc;
   (void)pAux;
-  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_at_",
-                                      sizeof(AtVtab), atBuildSchema,
-                                      ppVtab, pzErr);
+
+  v = sqlite3_malloc(sizeof(AtVtab));
+  if( !v ) return SQLITE_NOMEM;
+  memset(v, 0, sizeof(AtVtab));
+  v->db = db;
+
+  if( zMod && strncmp(zMod, "dolt_at_", nPrefix)==0 ){
+    v->zTableName = sqlite3_mprintf("%s", zMod + nPrefix);
+  }else if( argc > 3 ){
+    v->zTableName = sqlite3_mprintf("%s", argv[3]);
+  }else{
+    v->zTableName = sqlite3_mprintf("");
+  }
+  if( !v->zTableName ){
+    doltliteVtabCommonDisconnect(&v->base);
+    return SQLITE_NOMEM;
+  }
+
+  if( sqlite3FindTable(db, v->zTableName, "main") ){
+    rc = doltliteGetColumnNames(db, v->zTableName, &v->cols);
+  }else{
+    rc = SQLITE_NOTFOUND;
+  }
+  if( rc==SQLITE_OK && v->cols.nCol<=0 ){
+    doltliteFreeColInfo(&v->cols);
+    rc = SQLITE_NOTFOUND;
+  }
+  if( rc==SQLITE_NOTFOUND ){
+    rc = SQLITE_OK;
+  }
+  if( rc==SQLITE_OK && v->cols.nCol<=0 ){
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyCache *pCache = doltliteGetCache(db);
+    const BranchRef *aBr = 0;
+    const TagRef *aTag = 0;
+    int nBr = 0, nTag = 0, i, has;
+    DoltliteCommitQueue q;
+    ProllyHash cur;
+    ProllyHash head;
+    memset(&q, 0, sizeof(q));
+    memset(&cur, 0, sizeof(cur));
+    memset(&head, 0, sizeof(head));
+    rc = doltliteCommitQueueInit(&q, &cur);
+    if( rc==SQLITE_OK && cs ){
+      doltliteGetSessionHead(db, &head);
+      rc = doltliteCommitQueueEnqueue(&q, &head);
+    }
+    if( rc==SQLITE_OK && cs ){
+      refsTableGetBranches(&cs->refs, &nBr, &aBr);
+      for(i=0; i<nBr && rc==SQLITE_OK; i++){
+        rc = doltliteCommitQueueEnqueue(&q, &aBr[i].commitHash);
+      }
+      refsTableGetTags(&cs->refs, &nTag, &aTag);
+      for(i=0; i<nTag && rc==SQLITE_OK; i++){
+        rc = doltliteCommitQueueEnqueue(&q, &aTag[i].commitHash);
+      }
+    }
+    while( rc==SQLITE_OK && v->cols.nCol<=0 ){
+      DoltliteCommit commit;
+      SchemaEntry entry;
+      int found = 0;
+      sqlite3 *tmp = 0;
+      memset(&entry, 0, sizeof(entry));
+      rc = doltliteCommitQueueNext(&q, &cur, &has);
+      if( rc!=SQLITE_OK || !has ) break;
+      rc = doltliteLoadCommit(db, &cur, &commit);
+      if( rc!=SQLITE_OK ) break;
+      rc = doltliteCommitQueueEnqueueParents(&q, &commit);
+      if( rc==SQLITE_OK ){
+        rc = loadSchemaEntryFromCatalog(db, cs, pCache, &commit.catalogHash,
+                                        v->zTableName, &entry, &found);
+      }
+      if( rc==SQLITE_OK && found && entry.zSql ){
+        rc = sqlite3_open(":memory:", &tmp);
+        if( rc==SQLITE_OK ){
+          rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteGetColumnNames(tmp, v->zTableName, &v->cols);
+          if( rc==SQLITE_OK && v->cols.nCol<=0 ){
+            doltliteFreeColInfo(&v->cols);
+            rc = SQLITE_NOTFOUND;
+          }
+        }
+      }
+      if( tmp ) sqlite3_close(tmp);
+      clearSchemaEntry(&entry);
+      doltliteCommitClear(&commit);
+      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    }
+    doltliteCommitQueueClear(&q);
+  }
+
+  if( rc==SQLITE_OK && v->cols.nCol<=0 ){
+    rc = SQLITE_ERROR;
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf("table not found in reachable refs: %s",
+                               v->zTableName);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    zSchema = atBuildSchema(&v->cols);
+    if( !zSchema ){
+      rc = SQLITE_NOMEM;
+    }else{
+      rc = sqlite3_declare_vtab(db, zSchema);
+      sqlite3_free(zSchema);
+    }
+  }
+  if( rc!=SQLITE_OK ){
+    doltliteVtabCommonDisconnect(&v->base);
+    return rc;
+  }
+  *ppVtab = &v->base;
+  return SQLITE_OK;
 }
 
 static int atOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
@@ -336,8 +493,87 @@ static sqlite3_module atModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
+static int atRegisterOne(sqlite3 *db, AtSeenTable *pSeen, const char *zName){
+  char *zMod;
+  int rc;
+  if( !zName || atSeenTableHas(pSeen, zName) ) return SQLITE_OK;
+  zMod = sqlite3_mprintf("dolt_at_%s", zName);
+  if( !zMod ) return SQLITE_NOMEM;
+  rc = sqlite3_create_module(db, zMod, &atModule, 0);
+  sqlite3_free(zMod);
+  if( rc!=SQLITE_OK ) return rc;
+  return atSeenTableAdd(pSeen, zName);
+}
+
+static int atRegisterCatalogTables(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  AtSeenTable *pSeen
+){
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  int i, rc;
+  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
+  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<nTables && rc==SQLITE_OK; i++){
+    if( aTables[i].zName && aTables[i].iTable > 1 ){
+      rc = atRegisterOne(db, pSeen, aTables[i].zName);
+    }
+  }
+  doltliteFreeCatalog(aTables, nTables);
+  return rc;
+}
+
 int doltliteRegisterAtTables(sqlite3 *db){
-  return doltliteForEachUserTable(db, "dolt_at_", &atModule);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const BranchRef *aBr = 0;
+  const TagRef *aTag = 0;
+  int nBr = 0, nTag = 0;
+  int i, has, rc;
+  DoltliteCommitQueue q;
+  ProllyHash cur;
+  ProllyHash head;
+  AtSeenTable seen;
+
+  memset(&q, 0, sizeof(q));
+  memset(&cur, 0, sizeof(cur));
+  memset(&head, 0, sizeof(head));
+  memset(&seen, 0, sizeof(seen));
+
+  if( !cs ) return SQLITE_OK;
+
+  rc = doltliteCommitQueueInit(&q, &cur);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteGetSessionHead(db, &head);
+  rc = doltliteCommitQueueEnqueue(&q, &head);
+
+  refsTableGetBranches(&cs->refs, &nBr, &aBr);
+  for(i=0; i<nBr && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(&q, &aBr[i].commitHash);
+  }
+  refsTableGetTags(&cs->refs, &nTag, &aTag);
+  for(i=0; i<nTag && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(&q, &aTag[i].commitHash);
+  }
+
+  while( rc==SQLITE_OK ){
+    DoltliteCommit commit;
+    rc = doltliteCommitQueueNext(&q, &cur, &has);
+    if( rc!=SQLITE_OK || !has ) break;
+    rc = doltliteLoadCommit(db, &cur, &commit);
+    if( rc!=SQLITE_OK ) break;
+    rc = atRegisterCatalogTables(db, &commit.catalogHash, &seen);
+    if( rc==SQLITE_OK ){
+      rc = doltliteCommitQueueEnqueueParents(&q, &commit);
+    }
+    doltliteCommitClear(&commit);
+  }
+
+  doltliteCommitQueueClear(&q);
+  atSeenTableClear(&seen);
+  return rc;
 }
 
 #endif

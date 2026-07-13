@@ -77,6 +77,39 @@ oracle_error() {
   fi
 }
 
+oracle_table_after_reopen() {
+  local name="$1" setup="$2" table="$3" ref="$4"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.setup.out" \
+    "$dir/dl.setup.err" "$setup"
+
+  local dl_q="SELECT 'A' || char(9) || coalesce(id,'') || char(9) || coalesce(v,'') FROM dolt_at_${table} WHERE commit_ref = '${ref}' ORDER BY id"
+  local dl_out
+  dl_out=$(printf ".headers off\n.mode list\n.separator '\t'\n%s;\n" "$dl_q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | grep -v '^[0-9]*$' \
+           | grep -v '^[0-9a-f]\{40\}$' \
+           | normalize)
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_q="SELECT concat('A', char(9), coalesce(id,''), char(9), coalesce(v,'')) FROM ${table} AS OF '${ref}' ORDER BY id"
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s;\n' "$dt_q"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize
+  )
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 echo "=== Version Control Oracle Tests: dolt_at_<table> ==="
 echo ""
 
@@ -139,6 +172,18 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 " "feature"
 
+oracle_table_after_reopen "at_table_only_on_sibling_branch" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+CREATE TABLE feature_only(id INT PRIMARY KEY, v TEXT);
+INSERT INTO feature_only VALUES (1, 'feature-one');
+INSERT INTO feature_only VALUES (2, 'feature-two');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feature table');
+SELECT dolt_checkout('main');
+" "feature_only" "feature"
+
 echo "--- tag ref ---"
 
 oracle "at_tag" "
@@ -158,6 +203,19 @@ SELECT dolt_tag('v1', 'HEAD~1');
 SELECT dolt_branch('from_tag', 'v1');
 " "from_tag"
 
+oracle_table_after_reopen "at_table_only_at_tag" "
+$SEED
+CREATE TABLE tagged_only(id INT PRIMARY KEY, v TEXT);
+INSERT INTO tagged_only VALUES (1, 'tagged-one');
+INSERT INTO tagged_only VALUES (2, 'tagged-two');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'tagged table');
+SELECT dolt_tag('has_tagged_only');
+DROP TABLE tagged_only;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop tagged table');
+" "tagged_only" "has_tagged_only"
+
 echo "--- bare commit hash ref ---"
 
 oracle "at_recent_commit_via_head" "
@@ -173,6 +231,18 @@ INSERT INTO t VALUES (3, 30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1"
+
+oracle_table_after_reopen "at_dropped_table_at_head_minus_1" "
+$SEED
+CREATE TABLE dropped_only(id INT PRIMARY KEY, v TEXT);
+INSERT INTO dropped_only VALUES (1, 'dropped-one');
+INSERT INTO dropped_only VALUES (2, 'dropped-two');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'dropped table');
+DROP TABLE dropped_only;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop dropped table');
+" "dropped_only" "HEAD~1"
 
 echo "--- working set is NOT visible at any ref ---"
 
