@@ -31,6 +31,10 @@ check_match() {
   fi
 }
 
+file_size() {
+  wc -c < "$1" | tr -d ' '
+}
+
 DB="$DOLTLITE"
 R="file://$TMPDIR"
 
@@ -104,6 +108,19 @@ check "clone has origin" "origin" "$result"
 
 result=$("$DB" "$TMPDIR/clone.db" "SELECT message FROM dolt_log LIMIT 1;")
 check "clone has commit history" "initial: two tables with data" "$result"
+
+"$DB" "$TMPDIR/noop_clone.db" "SELECT dolt_clone('$R/remote.db'); SELECT dolt_fetch('origin','main');" > /dev/null
+clone_size_before=$(file_size "$TMPDIR/noop_clone.db")
+result=$("$DB" "$TMPDIR/noop_clone.db" "SELECT dolt_fetch('origin','main');")
+check "fetch when up-to-date returns 0" "0" "$result"
+clone_size_after=$(file_size "$TMPDIR/noop_clone.db")
+check "fetch when up-to-date does not grow local" "$clone_size_before" "$clone_size_after"
+
+clone_size_before=$(file_size "$TMPDIR/noop_clone.db")
+result=$("$DB" "$TMPDIR/noop_clone.db" "SELECT dolt_pull('origin','main');")
+check "pull when up-to-date returns 0" "0" "$result"
+clone_size_after=$(file_size "$TMPDIR/noop_clone.db")
+check "pull when up-to-date does not grow local" "$clone_size_before" "$clone_size_after"
 
 result=$("$DB" "$TMPDIR/clone_followup.db" "SELECT dolt_clone('$R/remote.db'); SELECT active_branch(); SELECT count(*) FROM users; SELECT count(*) FROM dolt_remotes;")
 check "clone same-session followup queries work" "0
