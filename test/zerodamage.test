@@ -42,6 +42,13 @@ do_test zerodamage-1.2 {
   file_control_powersafe_overwrite db -1
 } {0 1}
 
+# Everything below measures rollback-journal and WAL sidecar byte sizes, and
+# even the expected-value expressions call [atomic_batch_write test.db] -- a
+# page-file file-control that returns empty on the chunk store, aborting the
+# script. Sidecar-free crash safety is covered natively by
+# doltlite_recover_corruption and crash_recovery_test.
+ifcapable {!doltlite} {
+
 # Run a transaction with zero-damage on, a small page size and a much larger
 # sectorsize.  Verify that the maximum journal size is small - that the
 # rollback journal is not being padded.
@@ -117,6 +124,7 @@ if {[wal_is_capable]} {
     }
     file size test.db-wal
   } {16800}
+}
 }
 
 finish_test

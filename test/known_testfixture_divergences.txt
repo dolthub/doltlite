@@ -556,6 +556,24 @@ attach attach-8.2
 attach attach-8.3
 attach attach-8.4
 capi2 capi2-6.5  # 2nd-connection write expects "database is locked"; doltlite has no pager write-lock
+
+# lock4: only 1.1 remains ungated (the cross-process journal-poll block is
+# ifcapable-gated); it asserts raw page-file sizes.
+lock4 lock4-1.1  # raw file-size metric: chunk files are not 2048-byte page files
+
+# misc7 (14.x plan-shape block ifcapable-gated; 6.1 exhausts fds quickly on
+# CI's default nofile limit -- high-fd machines need `ulimit -n 256` locally).
+misc7 misc7-5  # bogus-path open: doltlite defers the open error (SQLITE_OK) vs stock CANTOPEN
+misc7 misc7-7.0  # shared-cache read expects "database is locked"; MVCC snapshot read proceeds
+misc7 misc7-10  # echo vtab over a PK-clustered backing table; doltlite-correct behavior in doltlite_recover_misc7 1.x
+misc7 misc7-11  # same echo-on-clustered class
+misc7 misc7-12.64.3  # ioerr faultsim recovery check inside the echo-on-clustered class
+misc7 misc7-13  # same echo-on-clustered class (huge xBestIndex cost)
+misc7 misc7-15.2  # DELETE ... WHERE rowid on a PK-clustered table: no rowid column
+misc7 misc7-22.3  # read-only journal dir: stock cannot journal so the write fails; sidecar-free commit succeeds
+misc7 misc7-22.4  # same: SQLITE_OK, not SQLITE_READONLY_ROLLBACK
+misc7 misc7-23.3  # read-only db dir: CANTOPEN at write time vs stock's READONLY message
+misc7 misc7-23.4  # same: SQLITE_CANTOPEN, not SQLITE_READONLY_DIRECTORY
 # CHECK-constraint error text echoes the schema expression. doltlite regenerates
 # CREATE TABLE/INDEX SQL from its structural catalog on schema reload, collapsing
 # the original whitespace, so the multi-line CHECK error diverges from stock's

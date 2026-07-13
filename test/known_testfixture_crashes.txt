@@ -15,7 +15,7 @@
 #     divergences either.
 #   pagerfault2, corrupt4 -- complete or abort depending on the run; either
 #     expectation flaps.
-#   ioerr2, lock4, sharedA, walsetlk_recover -- run past the per-file
+#   ioerr2 -- run past the per-file
 #     timeout; enforcing them would add dead minutes to every CI run and
 #     flap on faster runners.
 
@@ -121,13 +121,12 @@ waloverwrite     # copies test.db-wal: no -wal sidecar
 walslow          # copies test.db-wal: no -wal sidecar
 walvfs           # reads test.db-wal: no -wal sidecar
 lock5            # copies test.db-journal: no rollback-journal sidecar
-rollback         # copies test.db-journal: no rollback-journal sidecar. Pre-abort failures 1.7-1.9 exposed a separately-tracked bug: data-only ROLLBACK expires prepared statements
 corrupt4         # completes or aborts depending on the BUILD: its raw-offset pokes land on different chunk-file bytes as engine output shifts, so the same poke is open-fatal on one commit and absorbed on another (verified: completed 4err/9 on one master, aborted 3/3 on the next); either expectation flaps (not bucket-enforced)
 corruptC         # 1-byte flips checksum-fail the sole commit batch; torn-tail recovery rolls back to the empty pre-batch store ("no such table"); abort is an uncaught foreign-file rejection at line 348
 corruptI         # corruption injection: chunk store reports malformed, file aborts
 multiplex2       # full multiclient file still aborts; explicit initialized -vfs multiplex contract covered by doltlite_recover_vfs_wrappers
 incrblob         # full file assumes PRIMARY KEY tables expose rowids; direct DoltLite rejection and INTEGER PRIMARY KEY success covered by doltlite_recover_incrblob
-pager1           # SIGSEGV in 4.3.1: testvfs re-registered while db still holds files on the old one (harness UAF after the journal_mode-rejection cascade skipped 4.2.1's teardown); the pre-abort "cannot commit" lines are benign MVCC cascades
+pager1           # aborts in the 4.4.x master-journal crash simulations: faultsim reopen of a journal-poked db fails, the db command is never recreated, and a bare `db close` aborts pre-summary. The file is rollback-journal machinery end to end (4.x hot journals, 5.x master-journal byte layouts, ...), so no small ifcapable excision unlocks it
 backup           # sqlite3_backup_init: page-image backup unsupported
 mallocAll        # failed open -> "db" command never created (test-harness footgun)
 memdb2           # chunk store intentionally refuses the memdb VFS at open (it half-opened before) -> uncaught open error, "db" never created
@@ -149,11 +148,8 @@ walbig         # aborts at line 72 on ORDER BY rowid over a PK-clustered table (
 walro2         # reads test.db-shm: no shm sidecar
 walsetlk       # opens test.db-shm: no shm sidecar
 ioerr2         # fault loop runs tens of thousands of iterations; exceeds the per-file timeout on STOCK sqlite too (verified), so inherent test size, not a doltlite slowdown
-lock4          # expects a rollback-journal (test2.db-journal) that doltlite does not produce, so its `while {![file exists ...]}` poll never terminates (stock: 5 tests in <1s); native cross-process lock ordering covered in doltlite_recover_locking_2-17.1 (#1365)
-sharedA        # expects a rollback-journal that doltlite does not produce: the test hangs waiting for a journal xRead during shared-cache rollback (stock: 9 tests in ~1s). doltlite_recover_locking_2-18.* ports the OUTCOME (ROLLBACK restores state; a cross-connection prepared stmt still steps to SQLITE_DONE; integrity ok) but NOT the tvfs xRead-on-journal hook. Partial coverage. (#1366)
 malloc         # malloc-14 prep copies a rollback-journal file doltlite never writes; the uncaught prep error repeats every iteration to the 1000-error cap
 backup_ioerr   # page-copy IOERR sequencing exceeds cap; native Tcl backup/restore IOERR cleanup covered in doltlite_recover_backup_fault
-misc7          # WHERE rowid=? on a PK table errors (intentional rowid-on-PK divergence); do_eqp_test 14.1 throws uncaught -> aborts pre-summary. On high-fd-limit machines the 6.1 fd-exhaustion loop times out first instead (same crash classification)
 
 # -- 1357 sweep --
 alias  # Deterministic upstream self-skip: alias.test has an unconditional top-level `return` right after sourcing tester.tcl ("Aliases are currently evaluated twice... But not now."), so it exits rc=0 before finish_test and never prints the summary line (3/3 runs identical). Not an actual crash, but the gate keys on the missing summary line, so it must ride on the crash list to be bucketed (contributes 0 tests).
@@ -192,4 +188,3 @@ superlock  # sqlite3demo_superlock cannot acquire its byte-range/WAL superlock o
 # would churn a 1000-line block on every fts fix; revisit when the fts
 # shadow-table stale-read bug is fixed and the count drops below the cap.
 #
-zerodamage     # journal_mode no-op lets it run past the journal_mode=DELETE reject to line 90, where the test inlines [atomic_batch_write test.db] in an expr; doltlite returns empty for SQLITE_FCNTL_BEGIN_ATOMIC_WRITE (a page-file concept, meaningless for the chunk store), so tcl throws "missing operand" and aborts before finish_test. Feature gap, not a data bug.
