@@ -87,6 +87,11 @@ foreach {rowid sz blob} [
   execsql { UPDATE t2_segments SET block = $blob WHERE rowid = $rowid }
 }
 
+# %_segdir has a composite PRIMARY KEY (level,idx), which doltlite stores
+# clustered on the PK, so the rowid addressing this loop depends on does not
+# exist. The %_segments loop above provides the same byte-flip coverage on a
+# rowid-addressable shadow table.
+ifcapable {!doltlite} {
 foreach c {50 100 150 200 250} {
   foreach {rowid sz blob} [
     db eval {SELECT rowid, length(root), root FROM t2_segdir}
@@ -102,6 +107,7 @@ foreach c {50 100 150 200 250} {
     }
     execsql { UPDATE t2_segdir SET root = $blob WHERE rowid = $rowid }
   }
+}
 }
 
 
