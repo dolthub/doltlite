@@ -802,6 +802,17 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   if( col==0 ){
     sqlite3_result_text(ctx, violationTypeName(r->violationType), -1, SQLITE_STATIC);
   }else if( col >= 1 && col <= nUserCols ){
+    if( r->nVal==0 && r->nKey>0 ){
+      /* PK-only clustered rows store an empty value; rebuild the record from
+      ** the key once and keep it as the row's value. */
+      u8 *pRec = 0; int nRec = 0;
+      if( doltliteRecordFromClusteredKey(v->db, v->zTableName,
+              r->pKey, r->nKey, &pRec, &nRec)==SQLITE_OK && pRec ){
+        sqlite3_free(r->pVal);
+        r->pVal = pRec;
+        r->nVal = nRec;
+      }
+    }
     doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, col - 1);
   }else if( col == nUserCols + 1 ){
     sqlite3_result_text(ctx, r->zInfo ? r->zInfo : "", -1, SQLITE_TRANSIENT);

@@ -45,6 +45,7 @@ struct AuditRow {
   i64 intKey;
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
+  u8 *pKeyRec; int nKeyRec;   /* owned record rebuilt from a clustered key */
   char zFromCommit[PROLLY_HASH_SIZE*2+1];
   char zToCommit[PROLLY_HASH_SIZE*2+1];
   i64 fromDate;
@@ -103,6 +104,7 @@ struct DiffTblCursor {
 #define DT_IDX_SLICE         0x02
 
 static void clearAuditRow(AuditRow *r){
+  sqlite3_free(r->pKeyRec);
   memset(r, 0, sizeof(*r));
 }
 
@@ -957,6 +959,31 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
         pCur->row.nOldVal = pChange->pOldVal ? pChange->nOldVal : 0;
         pCur->row.pNewVal = pChange->pNewVal;
         pCur->row.nNewVal = pChange->pNewVal ? pChange->nNewVal : 0;
+
+        /* PK-only clustered rows store an empty value; both sides of the
+        ** change share one key, so rebuild the record from it once and let
+        ** each side that exists (per the diff type) present it. */
+        if( (pCur->row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
+         || (pCur->row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
+          DiffTblVtab *pV = (DiffTblVtab*)pCur->base.pVtab;
+          sqlite3_free(pCur->row.pKeyRec);
+          pCur->row.pKeyRec = 0;
+          pCur->row.nKeyRec = 0;
+          rc = doltliteRecordFromClusteredKey(db, pV->zTableName,
+                   pChange->pKey, pChange->nKey,
+                   &pCur->row.pKeyRec, &pCur->row.nKeyRec);
+          if( rc!=SQLITE_OK ) return rc;
+          if( pCur->row.pKeyRec ){
+            if( pCur->row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
+              pCur->row.pOldVal = pCur->row.pKeyRec;
+              pCur->row.nOldVal = pCur->row.nKeyRec;
+            }
+            if( pCur->row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
+              pCur->row.pNewVal = pCur->row.pKeyRec;
+              pCur->row.nNewVal = pCur->row.nKeyRec;
+            }
+          }
+        }
 
         pCur->hasRow = 1;
         pCur->iRowid++;

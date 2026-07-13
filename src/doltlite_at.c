@@ -229,7 +229,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       return SQLITE_OK;
     }
     c->common.tblCurOpen = 1;
-    return doltliteVtabCommonCaptureRow(&c->common);
+    return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
   }
 
   if( seekable && c->pkRange.hasPkLo ){
@@ -252,7 +252,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       return SQLITE_OK;
     }
     c->common.tblCurOpen = 1;
-    return doltliteVtabCommonCaptureRow(&c->common);
+    return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
   }
 
   rc = prollyCursorFirst(&c->common.tblCur, &res);
@@ -269,11 +269,12 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     return SQLITE_OK;
   }
   c->common.tblCurOpen = 1;
-  return doltliteVtabCommonCaptureRow(&c->common);
+  return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
 }
 
 static int atNext(sqlite3_vtab_cursor *cur){
   AtCursor *c=(AtCursor*)cur;
+  DoltliteVtabCommon *v=(DoltliteVtabCommon*)cur->pVtab;
   int rc;
   c->common.iRowid++;
   if( !c->common.tblCurOpen ){
@@ -305,7 +306,7 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  return doltliteVtabCommonCaptureRow(&c->common);
+  return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
 }
 
 static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){

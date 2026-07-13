@@ -125,6 +125,31 @@ static int wsAppendRow(
     memcpy(row.pNewVal, pChange->pNewVal, pChange->nNewVal);
     row.nNewVal = pChange->nNewVal;
   }
+  /* PK-only clustered rows store an empty value; rebuild the record from the
+  ** key for each side the diff type says exists. */
+  if( (row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
+   || (row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
+    u8 *pRec = 0; int nRec = 0;
+    if( doltliteRecordFromClusteredKey(pVtab->db, pVtab->zTableName,
+            pChange->pKey, pChange->nKey, &pRec, &nRec)!=SQLITE_OK ){
+      goto nomem;
+    }
+    if( pRec ){
+      if( row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
+        row.pOldVal = sqlite3_malloc(nRec);
+        if( !row.pOldVal ){ sqlite3_free(pRec); goto nomem; }
+        memcpy(row.pOldVal, pRec, nRec);
+        row.nOldVal = nRec;
+      }
+      if( row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
+        row.pNewVal = sqlite3_malloc(nRec);
+        if( !row.pNewVal ){ sqlite3_free(pRec); goto nomem; }
+        memcpy(row.pNewVal, pRec, nRec);
+        row.nNewVal = nRec;
+      }
+      sqlite3_free(pRec);
+    }
+  }
   if( pVtab->nCache>=pVtab->nCacheAlloc ){
     nNew = pVtab->nCacheAlloc ? pVtab->nCacheAlloc*2 : 16;
     aNew = sqlite3_realloc(pVtab->aCache,
