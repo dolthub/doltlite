@@ -13,7 +13,8 @@ normalize() {
   tr -d '\r' \
     | sed -e "s|/private$TMPROOT|TMP|g" -e "s|$TMPROOT|TMP|g" \
     | sed -e 's|/dl/db|/db|g' -e 's|/sq/db|/db|g' \
-    | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//'
+    | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//' \
+    | sed -e 's/ (/(/g'
 }
 
 oracle() {
@@ -237,23 +238,23 @@ oracle_dbinfo "dbinfo_with_view"  "$SEED_WITH_VIEW"
 echo "--- DDL feature coverage ---"
 
 oracle_sorted "schema_trigger"        "$SEED_TRIGGER" ".schema"
-oracle "dump_trigger"          "$SEED_TRIGGER" ".dump"
-oracle "schema_autoinc"        "$SEED_AUTOINC" ".schema"
-oracle "dump_autoinc"          "$SEED_AUTOINC" ".dump"
+oracle_sorted "dump_trigger"          "$SEED_TRIGGER" ".dump"
+oracle_sorted "schema_autoinc"        "$SEED_AUTOINC" ".schema"
+oracle_sorted "dump_autoinc"          "$SEED_AUTOINC" ".dump"
 oracle "tables_autoinc"        "$SEED_AUTOINC" ".tables"
 oracle "schema_check"          "$SEED_CHECK" ".schema"
-oracle "dump_check"            "$SEED_CHECK" ".dump"
+oracle_sorted "dump_check"            "$SEED_CHECK" ".dump"
 oracle "schema_composite_pk"   "$SEED_COMPOSITE_PK" ".schema"
 oracle "dump_composite_pk"     "$SEED_COMPOSITE_PK" ".dump"
 oracle "schema_defaults"       "$SEED_DEFAULTS" ".schema"
 oracle "dump_defaults"         "$SEED_DEFAULTS" ".dump"
 oracle "schema_generated_col"  "$SEED_GENERATED" ".schema"
-oracle "dump_generated_col"    "$SEED_GENERATED" ".dump"
+oracle_sorted "dump_generated_col"    "$SEED_GENERATED" ".dump"
 oracle "dump_null_blob"        "$SEED_BLOB_NULL" ".dump"
 oracle "schema_quoted_name"    "$SEED_QUOTED_NAME" ".schema"
 oracle "dump_quoted_name"      "$SEED_QUOTED_NAME" ".dump"
-oracle "tables_mixed_case"     "$SEED_MIXED_CASE" ".tables"
-oracle "schema_mixed_case"     "$SEED_MIXED_CASE" ".schema"
+oracle_sorted "tables_mixed_case"     "$SEED_MIXED_CASE" ".tables"
+oracle_sorted "schema_mixed_case"     "$SEED_MIXED_CASE" ".schema"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
