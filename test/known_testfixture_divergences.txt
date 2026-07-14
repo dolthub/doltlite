@@ -3197,13 +3197,6 @@ sqllimits1 sqllimits1-7.7.3  # max_page_count/page_count use DoltLite synthetic 
 # malformed, but the rowid point-lookup in 3.5 silently returns zero rows
 # (tracked layer disagreement). 5.2/8.x are hexio pokes at offsets
 # the chunk store does not use, so the operations succeed with correct data.
-corrupt corrupt-3.4
-corrupt corrupt-3.5
-corrupt corrupt-3.6
-corrupt corrupt-5.2
-corrupt corrupt-8.1
-corrupt corrupt-8.2
-corrupt corrupt-3.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
 
 # Raw NaN bit-pokes into the header/manifest region; the store reads them
 # back through its own validation instead of stock page semantics.
