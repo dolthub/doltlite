@@ -502,8 +502,9 @@ static SQLITE_INLINE void doltliteResolveBranchEffectiveCatalog(
   ProllyHash wsCatHash, wsCommitHash;
   memset(&wsCatHash, 0, sizeof(wsCatHash));
   memset(&wsCommitHash, 0, sizeof(wsCommitHash));
+  /* An unborn branch matches its working set on the all-zero commit hash. */
   if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCatHash, &wsCommitHash)==SQLITE_OK
-   && !prollyHashIsEmpty(&wsCommitHash)
+   && (!prollyHashIsEmpty(&wsCommitHash) || prollyHashIsEmpty(pBranchCommit))
    && memcmp(wsCommitHash.data, pBranchCommit->data, PROLLY_HASH_SIZE)==0
    && memcmp(wsCatHash.data, pCommittedCatHash->data, PROLLY_HASH_SIZE)!=0 ){
     memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));

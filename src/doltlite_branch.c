@@ -524,8 +524,13 @@ static int checkoutLoadAndApply(
   int rc;
   ProllyHash committedCatHash;
 
-  rc = doltliteCommitCatalogHash(db, pCommitHash, &committedCatHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(pCommitHash) ){
+    /* Unborn branch: no commit, so its catalog baseline is empty. */
+    memset(&committedCatHash, 0, sizeof(committedCatHash));
+  }else{
+    rc = doltliteCommitCatalogHash(db, pCommitHash, &committedCatHash);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   doltliteResolveBranchEffectiveCatalog(cs, zBranch, pCommitHash,
                                         &committedCatHash, pCatHash);
@@ -651,7 +656,6 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
 
   rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
   if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&p->targetCommit) ) return SQLITE_EMPTY;
 
   rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
                             &p->targetCommit, &p->targetCatHash);
@@ -1348,6 +1352,10 @@ static int brIsDirty(
     return SQLITE_OK;
   }
 
+  if( prollyHashIsEmpty(&br->commitHash) ){
+    *pDirty = 1;
+    return SQLITE_OK;
+  }
   rc = doltliteCommitCatalogHash(db, &br->commitHash, &commitCat);
   if( rc==SQLITE_OK ){
     *pDirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
@@ -1417,6 +1425,13 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   {
     DoltliteCommit *cm;
     int rc;
+    /* An unborn branch (materialized by a first write on a ref-less default
+    ** branch, e.g. after pushing only a feature branch into a new database)
+    ** has the all-zero head: there is no commit to describe. */
+    if( prollyHashIsEmpty(&br->commitHash) ){
+      sqlite3_result_null(ctx);
+      return SQLITE_OK;
+    }
     rc = brLoadCommit(v, pCur, br, &cm);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
