@@ -1835,10 +1835,25 @@ static void run_commit_am_many_tables(void){
         strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' "
           "AND name='t090';"), "0")==0);
-  check("commit_am_many_tables_new_tables_left_unstaged",
-        strcmp(queryScalarText(db,
+  res = queryScalarText(db,
           "SELECT count(*) FROM dolt_status "
-          "WHERE staged=0 AND status='new table';"), "10")==0);
+          "WHERE staged=0 AND status='new table';");
+  check("commit_am_many_tables_new_tables_left_unstaged",
+        strcmp(res, "10")==0);
+  if( strcmp(res, "10")!=0 ){
+    sqlite3_stmt *pDump = 0;
+    fprintf(stderr, "  unstaged-new count=%s; full dolt_status:\n", res);
+    if( sqlite3_prepare_v2(db,
+          "SELECT table_name, staged, status FROM dolt_status;",
+          -1, &pDump, 0)==SQLITE_OK ){
+      while( sqlite3_step(pDump)==SQLITE_ROW ){
+        fprintf(stderr, "    %s staged=%d %s\n",
+                sqlite3_column_text(pDump, 0), sqlite3_column_int(pDump, 1),
+                sqlite3_column_text(pDump, 2));
+      }
+    }
+    sqlite3_finalize(pDump);
+  }
 
   sqlite3_close(db);
   removeDbFiles(dbpath);
