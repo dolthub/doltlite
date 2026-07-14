@@ -76,6 +76,9 @@ altertab2 altertab2-3.4.2  # canonical adoption: sqlite_master row order/oid bin
 check check-4.6  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 check check-4.9  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 fkey6 fkey6-6.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+fts3fault2 fts3fault2-8.0  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+fts3matchinfo fts3matchinfo-1.0  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+fts4langid fts4langid-1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 insert insert-5.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 istrue istrue-841  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 select1 select1-2.23  # NULL into non-integer PRIMARY KEY (WITHOUT ROWID clustering key) rejected
@@ -3833,6 +3836,8 @@ fts3ai fts3ai-1.0  # PRAGMA encoding=UTF-16le reports UTF-8
 # order, upstream in creation order (segdir sorts before segments)
 fts3ao fts3ao-2.7
 fts3ao fts3ao-2.11
+fts3ao fts3ao-2.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+fts3ao fts3ao-2.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # fts3corrupt4 sections from 5.0 on (except 6.*) each deserialize a raw
 # stock-format corrupt db image (decode_hexdb); prolly MEMDB rejects the
@@ -3981,6 +3986,7 @@ fts4content fts4content-6.2.3
 fts4content fts4content-6.2.2
 fts4content fts4content-6.2.8
 fts4content fts4content-6.2.9
+fts4content fts4content-7.2.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # %_segdir level/idx layout ordering differs after large inserts and
 # deletes. Segment sizes now match upstream; only row order / idx
