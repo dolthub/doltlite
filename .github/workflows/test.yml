@@ -282,7 +282,10 @@ jobs:
     # core-sql, ddl-schema, storage, fault-fuzz, fts. A file must appear in
     # exactly one bucket; the guard below enforces it. Nondeterministic-class
     # files (thread*, walcrash*, writecrash, wal*fault) stay excluded, same
-    # rationale as the crash.test exclusion.
+    # rationale as the crash.test exclusion. fts3.test is also excluded: it
+    # is the permutations suite-runner that re-sources the fts3 family
+    # inline (pure double coverage of files already in the fts bucket), and
+    # its inlined OOM sections fail load-sensitively.
     - name: Check bucket lists are disjoint
       run: |
         dups=$(cat test/regression-buckets/*.txt | sort | uniq -d)

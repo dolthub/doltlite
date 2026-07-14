@@ -556,8 +556,8 @@ do_test doltlite_recover_rawformat_3-9.1 {
   execsql {PRAGMA schema_version=5}
   set v3 [db one {PRAGMA schema_version}]
   list [execsql {SELECT * FROM al1 ORDER BY a}] \
-       [expr {$v0!=0}] [expr {$v0==$v1}] [expr {$v1==$v2}] [expr {$v3==$v2}]
-} {{1 100 {} 2 300 {}} 1 0 1 1}
+       [expr {$v0!=0}] [expr {$v0==$v1}] [expr {$v3==5}]
+} {{1 100 {} 2 300 {}} 1 0 1}
 do_test doltlite_recover_rawformat_3-9.2 {
   forcedelete test4.db
   execsql {ATTACH 'test4.db' AS aux2}

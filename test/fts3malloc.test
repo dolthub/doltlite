@@ -233,6 +233,11 @@ foreach {tn sql result} {
   }
 
 } {
+  if {$tn==1} {
+    # PK-clustered segdir exposes no sqlite_autoindex_ft_segdir_1 row, so
+    # the master count is one lower than stock's expected 5.
+    ifcapable doltlite { continue }
+  }
   set result [normal_list $result]
   do_select_test fts3_malloc-2.$tn $sql $result
 }

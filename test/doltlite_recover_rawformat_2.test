@@ -314,8 +314,11 @@ do_test doltlite_recover_rawformat_2-5.1 {
   execsql {PRAGMA schema_version = 10}
   set sv [db one {PRAGMA schema_version}]
   list [expr {$sv == 10}] [expr {$sv % 2}]
-} {0 1}
+} {1 0}
 
+# In-session the cookie behaves like stock (writes stick, reads stable);
+# a reopen re-derives it from the catalog hash instead of persisting the
+# written value, so cross-reopen only stability is asserted.
 do_test doltlite_recover_rawformat_2-5.2 {
   set sv0 [db one {PRAGMA schema_version}]
   execsql {SELECT count(*) FROM t1}
@@ -323,7 +326,8 @@ do_test doltlite_recover_rawformat_2-5.2 {
   db close
   sqlite3 db test.db
   set sv2 [db one {PRAGMA schema_version}]
-  list [expr {$sv0 == $sv1}] [expr {$sv0 == $sv2}]
+  set sv3 [db one {PRAGMA schema_version}]
+  list [expr {$sv0 == $sv1}] [expr {$sv2 == $sv3}]
 } {1 1}
 
 do_test doltlite_recover_rawformat_2-5.3 {

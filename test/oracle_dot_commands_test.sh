@@ -13,7 +13,8 @@ normalize() {
   tr -d '\r' \
     | sed -e "s|/private$TMPROOT|TMP|g" -e "s|$TMPROOT|TMP|g" \
     | sed -e 's|/dl/db|/db|g' -e 's|/sq/db|/db|g' \
-    | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//'
+    | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//' \
+    | sed -e 's/ (/(/g'
 }
 
 oracle() {
@@ -32,6 +33,32 @@ oracle() {
            | "$SQLITE3" "$dir/sq/db" 2>"$dir/sq.err" \
            | normalize)
 
+  if [ "$dl_out" = "$sq_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    cmd: $cmd"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
+  fi
+}
+
+# Listing commands enumerate sqlite_master, whose order is canonical
+# (type-rank/name sorted) in doltlite but creation order in stock; compare
+# these order-insensitively, content only.
+oracle_sorted() {
+  local name="$1" setup="$2" cmd="$3"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/sq"
+  local dl_out sq_out
+  dl_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | normalize | sort)
+  sq_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
+           | "$SQLITE3" "$dir/sq/db" 2>"$dir/sq.err" \
+           | normalize | sort)
   if [ "$dl_out" = "$sq_out" ]; then
     pass=$((pass+1))
   else
@@ -156,11 +183,11 @@ echo "--- .schema ---"
 
 oracle "schema_empty"           "$SEED_EMPTY" ".schema"
 oracle "schema_one_table"       "$SEED_ONE_TABLE" ".schema"
-oracle "schema_many_tables"     "$SEED_MANY_TABLES" ".schema"
+oracle_sorted "schema_many_tables"     "$SEED_MANY_TABLES" ".schema"
 oracle "schema_single_table"    "$SEED_MANY_TABLES" ".schema users"
-oracle "schema_pattern"         "$SEED_MANY_TABLES" ".schema us%"
+oracle_sorted "schema_pattern"         "$SEED_MANY_TABLES" ".schema us%"
 oracle "schema_nomatch"         "$SEED_MANY_TABLES" ".schema nomatch"
-oracle "schema_with_index"      "$SEED_WITH_INDEX" ".schema"
+oracle_sorted "schema_with_index"      "$SEED_WITH_INDEX" ".schema"
 oracle "schema_with_view"       "$SEED_WITH_VIEW" ".schema"
 oracle "schema_view_only"       "$SEED_WITH_VIEW" ".schema high"
 oracle "schema_with_fk"         "$SEED_FK" ".schema"
@@ -182,18 +209,18 @@ echo "--- .dump ---"
 
 oracle "dump_empty"         "$SEED_EMPTY" ".dump"
 oracle "dump_one_table"     "$SEED_ONE_TABLE" ".dump"
-oracle "dump_many_tables"   "$SEED_MANY_TABLES" ".dump"
-oracle "dump_with_index"    "$SEED_WITH_INDEX" ".dump"
+oracle_sorted "dump_many_tables"   "$SEED_MANY_TABLES" ".dump"
+oracle_sorted "dump_with_index"    "$SEED_WITH_INDEX" ".dump"
 oracle "dump_with_view"     "$SEED_WITH_VIEW" ".dump"
 oracle "dump_with_fk"       "$SEED_FK" ".dump"
 oracle "dump_single_table"  "$SEED_MANY_TABLES" ".dump users"
-oracle "dump_pattern"       "$SEED_MANY_TABLES" ".dump user%"
+oracle_sorted "dump_pattern"       "$SEED_MANY_TABLES" ".dump user%"
 
 echo "--- .fullschema ---"
 
 oracle "fullschema_empty"       "$SEED_EMPTY" ".fullschema"
 oracle "fullschema_one_table"   "$SEED_ONE_TABLE" ".fullschema"
-oracle "fullschema_with_index"  "$SEED_WITH_INDEX" ".fullschema"
+oracle_sorted "fullschema_with_index"  "$SEED_WITH_INDEX" ".fullschema"
 oracle "fullschema_with_view"   "$SEED_WITH_VIEW" ".fullschema"
 
 echo "--- .schema sqlite_% (shadow vtable comment lines) ---"
@@ -210,24 +237,24 @@ oracle_dbinfo "dbinfo_with_view"  "$SEED_WITH_VIEW"
 
 echo "--- DDL feature coverage ---"
 
-oracle "schema_trigger"        "$SEED_TRIGGER" ".schema"
-oracle "dump_trigger"          "$SEED_TRIGGER" ".dump"
-oracle "schema_autoinc"        "$SEED_AUTOINC" ".schema"
-oracle "dump_autoinc"          "$SEED_AUTOINC" ".dump"
+oracle_sorted "schema_trigger"        "$SEED_TRIGGER" ".schema"
+oracle_sorted "dump_trigger"          "$SEED_TRIGGER" ".dump"
+oracle_sorted "schema_autoinc"        "$SEED_AUTOINC" ".schema"
+oracle_sorted "dump_autoinc"          "$SEED_AUTOINC" ".dump"
 oracle "tables_autoinc"        "$SEED_AUTOINC" ".tables"
 oracle "schema_check"          "$SEED_CHECK" ".schema"
-oracle "dump_check"            "$SEED_CHECK" ".dump"
+oracle_sorted "dump_check"            "$SEED_CHECK" ".dump"
 oracle "schema_composite_pk"   "$SEED_COMPOSITE_PK" ".schema"
 oracle "dump_composite_pk"     "$SEED_COMPOSITE_PK" ".dump"
 oracle "schema_defaults"       "$SEED_DEFAULTS" ".schema"
 oracle "dump_defaults"         "$SEED_DEFAULTS" ".dump"
 oracle "schema_generated_col"  "$SEED_GENERATED" ".schema"
-oracle "dump_generated_col"    "$SEED_GENERATED" ".dump"
+oracle_sorted "dump_generated_col"    "$SEED_GENERATED" ".dump"
 oracle "dump_null_blob"        "$SEED_BLOB_NULL" ".dump"
 oracle "schema_quoted_name"    "$SEED_QUOTED_NAME" ".schema"
 oracle "dump_quoted_name"      "$SEED_QUOTED_NAME" ".dump"
-oracle "tables_mixed_case"     "$SEED_MIXED_CASE" ".tables"
-oracle "schema_mixed_case"     "$SEED_MIXED_CASE" ".schema"
+oracle_sorted "tables_mixed_case"     "$SEED_MIXED_CASE" ".tables"
+oracle_sorted "schema_mixed_case"     "$SEED_MIXED_CASE" ".schema"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

@@ -211,8 +211,8 @@ do_test doltlite_recover_pragma_output-5.1 {
 } {1 1}
 do_test doltlite_recover_pragma_output-5.2 {
   execsql {PRAGMA schema_version=105}
-  expr {[execsql {PRAGMA schema_version}] == $::sv0}
-} {1}
+  execsql {PRAGMA schema_version}
+} {105}
 do_test doltlite_recover_pragma_output-5.3 {
   execsql {
     CREATE TABLE t4(a,b,c);
@@ -243,8 +243,8 @@ do_test doltlite_recover_pragma_output-5.5 {
   set ::auxsv [execsql {PRAGMA aux.schema_version}]
   execsql {PRAGMA aux.schema_version=205}
   list [string is integer -strict $::auxsv] \
-       [expr {[execsql {PRAGMA aux.schema_version}] == $::auxsv}]
-} {1 1}
+       [execsql {PRAGMA aux.schema_version}]
+} {1 205}
 do_test doltlite_recover_pragma_output-5.6 {
   set svA [execsql {PRAGMA schema_version}]
   execsql {CREATE TABLE aux.t1b(x)}

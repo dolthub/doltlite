@@ -729,7 +729,8 @@ static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
                           BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
-static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
+static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
+                                 int *pRc);
 static int btreeRefreshFromDisk(Btree *p);
 static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pCatHash,
@@ -2124,6 +2125,11 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     ProllyMutMap mm;
     struct TableEntry masterEntry;
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
+    /* Canonical numbering: rows sort by type rank then name, and numbering
+    ** is positional, so the blob is a pure function of the logical catalog
+    ** (same schema reached through any DDL order hashes identically -- the
+    ** history-independence contract). The live session adopts this form at
+    ** every schema commit, so live and persisted never diverge. */
     for(i=0; i<nRows; i++){
       if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
         aRows[i].newPg = 0;
@@ -2145,7 +2151,10 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       int nRec = 0;
       u8 *pRec;
       ProllyHash h;
-      const char *zRecordSql = aRows[i].zSql;
+      /* Canonicalized SQL text in the stored row: ADD COLUMN and RENAME
+      ** rewrite the statement differently than typing the final form, and
+      ** history independence requires equivalent schemas to serialize
+      ** identically. */
       if( (strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0)
        && aRows[i].zSql!=0 && aRows[i].zSql[0]!=0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
@@ -2156,25 +2165,21 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
           return SQLITE_NOMEM;
         }
         prollyHashCompute((const u8*)zCanon, (int)strlen(zCanon), &h);
-        zRecordSql = zCanon;
         pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
                                         aRows[i].zTblName, aRows[i].newPg,
-                                        zRecordSql, &nRec);
+                                        zCanon, &nRec);
         sqlite3_free(zCanon);
       }else{
         memset(&h, 0, sizeof(h));
         pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
                                         aRows[i].zTblName, aRows[i].newPg,
-                                        zRecordSql, &nRec);
+                                        aRows[i].zSql, &nRec);
       }
       for(j=0; j<nTables; j++){
         if( aTables[j].iTable==aRows[i].oldPg ){
           aTables[j].schemaHash = h;
           break;
         }
-      }
-      if( aRows[i].newPg==aRows[i].oldPg ){
-        aRows[i].newPg = aRows[i].oldPg;
       }
       if( !pRec ){
         prollyMutMapFree(&mm);
@@ -2238,7 +2243,16 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         aSorted[i].zTblName = "";
         continue;
       }
-      if( aTables[i].zName ){
+      /* The table number is the entry's identity; match it first. Cached
+      ** entry names go stale across RENAME, so a name match is only a
+      ** fallback for entries whose number has no schema row. */
+      for(j=0; j<nRows; j++){
+        if( aRows[j].oldPg==aTables[i].iTable ){
+          pRow = &aRows[j];
+          break;
+        }
+      }
+      if( !pRow && aTables[i].zName ){
         for(j=0; j<nRows; j++){
           if( strcmp(aRows[j].zType, "table")==0
            && aRows[j].zName
@@ -2248,16 +2262,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
           }
         }
       }
-      for(j=0; j<nRows; j++){
-        if( !pRow && aRows[j].oldPg==aTables[i].iTable ){
-          pRow = &aRows[j];
-          break;
-        }
-      }
       if( pRow ){
-        /* The row is this entry's identity whether it matched by name or by
-        ** old page number; emitting the live iTable on an oldPg mismatch
-        ** would leak session-specific numbering into the canonical blob. */
         aSorted[i].iTable = pRow->newPg;
         aSorted[i].zType = pRow->zType;
         aSorted[i].zName = pRow->zName;
@@ -2474,130 +2479,6 @@ static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
   if( rc==SQLITE_OK ) return SQLITE_OK;
   if( rc!=SQLITE_NOTFOUND ) return rc;
   return serializeCatalog(pBtree, ppOut, pnOut);
-}
-
-static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
-  SchemaCatalogRow *aRows = 0;
-  SchemaCatalogRow *aCanon = 0;
-  CatalogEntryMeta *aMeta = 0;
-  ProllyHash currentMasterRoot;
-  u8 masterFlags = 0;
-  ProllyMutMap mm;
-  struct TableEntry masterEntry;
-  int nRows = 0, nMeta = 0;
-  int rc = SQLITE_OK;
-  int i, j;
-
-  memset(pMasterRoot, 0, sizeof(*pMasterRoot));
-  rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = loadSchemaCatalogRows(pBtree, pBtree->cat.a, pBtree->cat.n,
-                             &aRows, &nRows, &currentMasterRoot, &masterFlags);
-  if( rc!=SQLITE_OK ){
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
-  rc = appendMissingSchemaCatalogRows(pBtree->db, btreeSchemaName(pBtree),
-                                      &aRows, &nRows, aMeta, nMeta,
-                                      pBtree->cat.a, pBtree->cat.n);
-  if( rc!=SQLITE_OK ){
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
-
-  /* Drop NULL-type schema rows left by interrupted schema rebuilds. */
-  {
-    int nKept = 0;
-    for(i=0; i<nRows; i++){
-      if( aRows[i].zType==0 ){
-        sqlite3_free(aRows[i].zName);
-        sqlite3_free(aRows[i].zTblName);
-        sqlite3_free(aRows[i].zSql);
-        continue;
-      }
-      if( nKept!=i ) aRows[nKept] = aRows[i];
-      nKept++;
-    }
-    nRows = nKept;
-  }
-
-  if( nRows<=0 ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return SQLITE_OK;
-  }
-
-  aCanon = sqlite3_malloc(nRows * (int)sizeof(SchemaCatalogRow));
-  if( !aCanon ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return SQLITE_NOMEM;
-  }
-  memcpy(aCanon, aRows, nRows * (int)sizeof(SchemaCatalogRow));
-  qsort(aCanon, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
-  for(i=0; i<nRows; i++){
-    if( schemaCatalogRowIsVirtualTable(&aCanon[i]) ){
-      aCanon[i].newPg = 0;
-    }else if( strcmp(aCanon[i].zType, "table")==0 || strcmp(aCanon[i].zType, "index")==0 ){
-      aCanon[i].newPg = (Pgno)(i + 2);
-    }else{
-      aCanon[i].newPg = aCanon[i].oldPg;
-    }
-  }
-  for(i=0; i<nRows; i++){
-    aRows[i].newPg = aRows[i].oldPg;
-    if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
-      aRows[i].newPg = 0;
-    }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
-      for(j=0; j<nRows; j++){
-        if( aCanon[j].oldPg==aRows[i].oldPg ){
-          aRows[i].newPg = aCanon[j].newPg;
-          break;
-        }
-      }
-    }
-  }
-  sqlite3_free(aCanon);
-
-  memset(&mm, 0, sizeof(mm));
-  rc = prollyMutMapInit(&mm, 1);
-  if( rc!=SQLITE_OK ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
-  for(i=0; i<nRows; i++){
-    int nRec = 0;
-    u8 *pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
-                                        aRows[i].zTblName, aRows[i].newPg,
-                                        aRows[i].zSql, &nRec);
-    if( !pRec ){
-      prollyMutMapFree(&mm);
-      freeSchemaCatalogRows(aRows, nRows);
-      freeCatalogEntryMeta(aMeta, nMeta);
-      return SQLITE_NOMEM;
-    }
-    rc = prollyMutMapInsert(&mm, 0, 0, aRows[i].iRowid, pRec, nRec);
-    sqlite3_free(pRec);
-    if( rc!=SQLITE_OK ){
-      prollyMutMapFree(&mm);
-      freeSchemaCatalogRows(aRows, nRows);
-      freeCatalogEntryMeta(aMeta, nMeta);
-      return rc;
-    }
-  }
-  memset(&masterEntry, 0, sizeof(masterEntry));
-  masterEntry.iTable = 1;
-  masterEntry.flags = masterFlags;
-  masterEntry.root = currentMasterRoot;
-  rc = applyMutMapToTableRoot(pBtree->pBt, &masterEntry, &mm);
-  prollyMutMapFree(&mm);
-  if( rc==SQLITE_OK ){
-    *pMasterRoot = masterEntry.root;
-  }
-  freeSchemaCatalogRows(aRows, nRows);
-  freeCatalogEntryMeta(aMeta, nMeta);
-  return rc;
 }
 
 static void initDefaultMeta(Btree *pBtree){
@@ -3342,22 +3223,59 @@ static int saveCursorPosition(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE){
+/* Borrowed pointer into the catalog or parsed schema; NULL if the number
+** names nothing. Never allocates, so absence is unambiguous. */
+static const char *findTableNumberName(sqlite3 *db, Pgno iTable){
+  Btree *pBtree;
+  Schema *pSchema;
+  HashElem *k;
+  int i;
+  if( !db || db->nDb<=0 ) return 0;
+  pBtree = db->aDb[0].pBt;
+  if( pBtree && pBtree->cat.a ){
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
+        return pBtree->cat.a[i].zName;
+      }
+    }
+  }
+  pSchema = db->aDb[0].pSchema;
+  if( pSchema ){
+    for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+      Table *pTab = (Table*)sqliteHashData(k);
+      if( pTab && pTab->tnum==(Pgno)iTable ){
+        return pTab->zName;
+      }
+    }
+  }
+  return 0;
+}
+
+static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
+                                 int *pRc){
   if( !pTE || pTE->iTable<=1 ) return 0;
   if( pTE->tableRootKnown ) return pTE->isTableRoot ? 1 : 0;
   if( !pTE->zName && pBtree && pBtree->db ){
-    pTE->zName = doltliteResolveTableNumber(pBtree->db, pTE->iTable);
+    const char *z = findTableNumberName(pBtree->db, pTE->iTable);
+    if( z ){
+      pTE->zName = sqlite3_mprintf("%s", z);
+      if( !pTE->zName ){
+        /* Leave the verdict uncached so a post-OOM retry can classify. */
+        if( pRc ) *pRc = SQLITE_NOMEM;
+        return 0;
+      }
+    }
   }
   pTE->isTableRoot = pTE->zName!=0;
   pTE->tableRootKnown = 1;
   return pTE->isTableRoot ? 1 : 0;
 }
 
-static int cursorIsShadowTableRoot(BtCursor *pCur){
+static int cursorIsShadowTableRoot(BtCursor *pCur, int *pRc){
   struct TableEntry *pTE;
   if( !pCur || !pCur->pBtree || !pCur->pBtree->db ) return 0;
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( !tableEntryIsTableRoot(pCur->pBtree, pTE) || !pTE->zName ) return 0;
+  if( !tableEntryIsTableRoot(pCur->pBtree, pTE, pRc) || !pTE->zName ) return 0;
   return sqlite3ShadowTableName(pCur->pBtree->db, pTE->zName);
 }
 
@@ -3839,21 +3757,6 @@ static int findTableIndexInArray(
     }
   }
   return -1;
-}
-
-static char *resolveLiveSchemaTableNumber(sqlite3 *db, Pgno iTable){
-  Schema *pSchema;
-  HashElem *k;
-  if( !db || db->nDb<=0 ) return 0;
-  pSchema = db->aDb[0].pSchema;
-  if( !pSchema ) return 0;
-  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
-    Table *pTab = (Table*)sqliteHashData(k);
-    if( pTab && pTab->tnum==(Pgno)iTable ){
-      return sqlite3_mprintf("%s", pTab->zName);
-    }
-  }
-  return 0;
 }
 
 static int findSavepointTableIndexInArray(
@@ -5679,12 +5582,11 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash catHash;
-  ProllyHash runtimeMasterRoot;
   Btree reloadBtree;
   int bReloadSchema = 0;
   int bHaveReloadCatalog = 0;
+  u32 nativeSchemaCookie = 0;
   (void)bCleanup;
-  memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
   memset(&reloadBtree, 0, sizeof(reloadBtree));
 
   /* Catalog serialization runs a SELECT whose finalize re-enters
@@ -5747,17 +5649,14 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       }
     }
 
+    /* A schema-changing commit adopts the canonical catalog wholesale --
+    ** including the canonical master root, so the live view and the
+    ** persisted form never diverge (rowid bindings, rootpages, and row
+    ** order all match what any reload would see). */
     bReloadSchema = p->bSchemaChangedTxn;
     if( bReloadSchema ){
       BtCursor *pC;
-      rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(catData);
-        chunkStoreRollback(&pBt->store);
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
-        return rc;
-      }
+      nativeSchemaCookie = p->aMeta[BTREE_SCHEMA_VERSION];
       memcpy(reloadBtree.aMeta, p->aMeta, sizeof(reloadBtree.aMeta));
       rc = deserializeCatalog(&reloadBtree, catData, nCatData);
       if( rc!=SQLITE_OK ){
@@ -5809,12 +5708,12 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           btreeFreeCatalogTables(p);
           p->cat = reloadBtree.cat;
           memcpy(p->aMeta, reloadBtree.aMeta, sizeof(p->aMeta));
+          /* sqlite already bumped its cookie for this DDL; keep the stock
+          ** value instead of the reload's hash-derived one so in-session
+          ** cookie semantics stay stock (writes stick, DDL increments). */
+          p->aMeta[BTREE_SCHEMA_VERSION] = nativeSchemaCookie;
           memset(&reloadBtree.cat, 0, sizeof(reloadBtree.cat));
           bHaveReloadCatalog = 0;
-        }
-        {
-          struct TableEntry *pMaster = findTable(p, 1);
-          if( pMaster ) pMaster->root = runtimeMasterRoot;
         }
         /* A saved cursor whose table vanished in the reload would re-seek a
         ** stale root; fault it. */
@@ -5827,8 +5726,8 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
         }
         invalidateSchema(p);
         if( p->db ){
-          /* Advisory expiry: hard expiry (iCode 0) makes OP_OpenRead abort a
-          ** statement still running across this commit (tkt-c694113d5). */
+          /* Hard expiry: canonical renumbering can move rootpages compiled
+          ** into running statements (tkt-c694113d5). */
           sqlite3ExpirePreparedStatements(p->db, 1);
           sqlite3ResetAllSchemasOfConnection(p->db);
         }
@@ -5852,7 +5751,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       sqlite3_free(catData);
       rc2 = restoreFromCommitted(p);
       if( rc2!=SQLITE_OK ){
-        /* Same shape as the rollback path: the reload OOM'd, but the
+        /* Same shape as the rollback path: the restore OOM'd, but the
         ** transaction must end with the partial state discarded, or the
         ** next statement's autocommit publishes it. */
         btreeFreeCatalogTables(p);
@@ -6741,7 +6640,9 @@ static int prollyBtreeCursor(
 
   pCur->curIntKey = (pTE->flags & BTREE_INTKEY) ? 1 : 0;
   if( !pCur->curIntKey ){
-    pCur->isTableRoot = tableEntryIsTableRoot(p, pTE) ? 1 : 0;
+    int rcRoot = SQLITE_OK;
+    pCur->isTableRoot = tableEntryIsTableRoot(p, pTE, &rcRoot) ? 1 : 0;
+    if( rcRoot!=SQLITE_OK ) return rcRoot;
   }
 
   if( wrFlag & BTREE_WRCSR ){
@@ -9028,7 +8929,9 @@ static int prollyBtCursorInsert(
     int isIndex = 0;
     if( pCur->pKeyInfo ){
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-      isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
+      int rcRoot = SQLITE_OK;
+      isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE, &rcRoot));
+      if( rcRoot!=SQLITE_OK ) return rcRoot;
       storePayload = keyInfoHasLossyCollation(pCur->pKeyInfo);
     }
     if( pCur->pKeyInfo
@@ -9347,7 +9250,9 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         if( pCur->pKeyInfo
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
           struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-          if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE) ){
+          int rcRoot = SQLITE_OK;
+          if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE, &rcRoot) ){
+            if( rcRoot!=SQLITE_OK ) return rcRoot;
             nDelKeyField = 0;
           }else{
             nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
@@ -9448,11 +9353,16 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
       pCur->mmActive = 0;
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
+        int rcRoot = SQLITE_OK;
         pCur->flushSeekEdits = 1;
         if( pCur->curIntKey && hasSavedKey
-         && ((flags & BTREE_AUXDELETE) || cursorIsShadowTableRoot(pCur)) ){
+         && ((flags & BTREE_AUXDELETE)
+             || cursorIsShadowTableRoot(pCur, &rcRoot)) ){
           pCur->cachedIntKey = iKey;
           pCur->curFlags |= BTCF_DeleteKey;
+        }else if( rcRoot!=SQLITE_OK ){
+          rc = rcRoot;
+          goto delete_cleanup;
         }else if( !pCur->curIntKey && hasSavedKey && nKey>0 ){
           /* Park the cursor on the mut-map tombstone of the deleted key so
           ** the next step resumes the scan from there. Re-seeding from a
@@ -11065,22 +10975,8 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
 }
 
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
-  Btree *pBtree;
-  int i;
-  if( !db || db->nDb<=0 ) return 0;
-  pBtree = db->aDb[0].pBt;
-  if( pBtree && pBtree->cat.a ){
-    for(i=0; i<pBtree->cat.n; i++){
-      if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
-        return sqlite3_mprintf("%s", pBtree->cat.a[i].zName);
-      }
-    }
-  }
-  {
-    char *zLive = resolveLiveSchemaTableNumber(db, iTable);
-    if( zLive ) return zLive;
-  }
-  return 0;
+  const char *z = findTableNumberName(db, iTable);
+  return z ? sqlite3_mprintf("%s", z) : 0;
 }
 
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){

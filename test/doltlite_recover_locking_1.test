@@ -493,7 +493,10 @@ do_test doltlite_recover_locking_1-11.1 {
 } {1 2}
 do_test doltlite_recover_locking_1-11.2 {
   execsql {DROP INDEX idx1}
-  set eqp [execsql {EXPLAIN QUERY PLAN SELECT f1 FROM tbl2 WHERE f2=20}]
+  # Distinct SQL text: a cached EXPLAIN statement replays its compiled plan
+  # without a cookie check (stock does the same), so a fresh prepare is what
+  # actually tests that the planner stopped using the dropped index.
+  set eqp [execsql {EXPLAIN QUERY PLAN SELECT f1 FROM tbl2 WHERE f2=20 AND 1}]
   list [regexp {SCAN tbl2} $eqp] [execsql {SELECT f1 FROM tbl2 WHERE f2=20}]
 } {1 2}
 

@@ -1647,6 +1647,24 @@ static void doltliteCommitFunc(
       return;
     }
 
+    /* The master entry carries no name and pairs by table number 1. The
+    ** staged catalog must use the WORKING master root so the schema rows
+    ** and the overlaid entries share one numbering domain; keeping HEAD's
+    ** master under working-numbered entries makes the serializer pair
+    ** entries with the wrong rows. */
+    for(j=0; j<nWorking; j++){
+      if( aWorking[j].iTable!=1 ) continue;
+      for(k=0; k<nStaged; k++){
+        if( aStaged[k].iTable==1 ){
+          sqlite3_free(aStaged[k].zName);
+          aStaged[k] = aWorking[j];
+          aStaged[k].zName = 0;
+          break;
+        }
+      }
+      break;
+    }
+
     for(j=0; j<nWorking; j++){
       const char *zName = aWorking[j].zName;
       int updated = 0;

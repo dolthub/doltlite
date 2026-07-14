@@ -48,6 +48,7 @@ doltlite_nocase_index.sh
 doltlite_update_replace_trigger.sh
 doltlite_unique_index_delete.sh
 doltlite_trigger_visibility.sh
+doltlite_stable_catalog_numbers.sh
 doltlite_schema_merge.sh
 doltlite_branch_gc_stress.sh
 doltlite_unicode_blob.sh
