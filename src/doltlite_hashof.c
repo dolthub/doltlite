@@ -129,6 +129,8 @@ static int isSimpleSqlIdent(const char *zName){
     c = (unsigned char)zName[i];
     if( !(sqlite3Isalnum(c) || c=='_') ) return 0;
   }
+  /* A bare reserved word (a table named "ON") would not re-parse. */
+  if( sqlite3KeywordCode((const unsigned char*)zName, i)!=TK_ID ) return 0;
   return 1;
 }
 
@@ -242,6 +244,24 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
       continue;
     }
     if( isspace(c) ){
+      pendingSpace = 1;
+      continue;
+    }
+    /* Comments must be dropped, not whitespace-collapsed: folding the
+    ** newline after "-- comment" into a space would make the comment
+    ** swallow the rest of the statement on re-parse. */
+    if( c=='-' && z[1]=='-' ){
+      z += 2;
+      while( *z && *z!='\n' ) z++;
+      if( !*z ) break;
+      pendingSpace = 1;
+      continue;
+    }
+    if( c=='/' && z[1]=='*' ){
+      z += 2;
+      while( *z && !(*z=='*' && z[1]=='/') ) z++;
+      if( !*z ) break;
+      z++;
       pendingSpace = 1;
       continue;
     }
