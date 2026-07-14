@@ -1,11 +1,12 @@
 #!/bin/bash
 #
-# Catalog numbering is allocated at CREATE and never changes: sqlite_master
-# rowids, rootpages, and SQL text must be identical before dolt_commit,
-# after it (same session), and after reopen. Before verbatim persistence the
-# serializer renumbered at commit, so the live view flipped to canonical
-# order at dolt_commit and reloads scrambled session state (fts shadow
-# tables were the visible casualty -- e_fts3/fts3malloc aborts).
+# The live session and the persisted catalog must never diverge: after any
+# schema-changing commit the connection adopts the canonical catalog form
+# (sorted rows, positional numbering), so sqlite_master reads identically
+# in-session, after dolt_commit, and after reopen -- and the canonical form
+# makes the catalog hash independent of DDL construction order. Before this
+# held, reloads scrambled rowid bindings mid-connection (fts shadow tables
+# were the visible casualty) and OOM-retry harnesses saw phantom DDL.
 
 set -u
 
@@ -32,9 +33,9 @@ check() {
 DB="$TMPROOT/db"
 MASTER_Q="SELECT rowid||'|'||name||'|'||rootpage FROM sqlite_master;"
 
-echo "--- master view survives dolt_commit and reopen ---"
+echo "--- master view identical in-session, after commit, and after reopen ---"
 
-PRE=$("$DOLTLITE" "$DB" 2>/dev/null <<EOF
+POST=$("$DOLTLITE" "$DB" 2>/dev/null <<EOF
 CREATE TABLE zebra(z INTEGER PRIMARY KEY, v TEXT);
 CREATE VIRTUAL TABLE ft USING fts3(x);
 CREATE TABLE apple(a INTEGER PRIMARY KEY);
@@ -43,7 +44,7 @@ INSERT INTO ft VALUES ('hello world');
 $MASTER_Q
 EOF
 )
-POST=$("$DOLTLITE" "$DB" 2>/dev/null <<EOF
+COMMITTED=$("$DOLTLITE" "$DB" 2>/dev/null <<EOF
 .mode list
 SELECT CASE WHEN dolt_commit('-A','-m','c1') IS NOT NULL THEN '' END;
 $MASTER_Q
@@ -51,11 +52,11 @@ EOF
 )
 REOPEN=$("$DOLTLITE" "$DB" ".mode list" "$MASTER_Q" 2>/dev/null)
 
-check "pre_nonempty" "6" "$(printf '%s\n' "$PRE" | grep -c '|')"
-check "post_matches_pre" "$PRE" "$(printf '%s\n' "$POST" | grep '|')"
-check "reopen_matches_pre" "$PRE" "$REOPEN"
+check "post_nonempty" "6" "$(printf '%s\n' "$POST" | grep -c '|')"
+check "committed_matches_post" "$POST" "$(printf '%s\n' "$COMMITTED" | grep '|')"
+check "reopen_matches_post" "$POST" "$REOPEN"
 
-echo "--- same-session commit keeps view (single connection) ---"
+echo "--- same-session dolt_commit keeps the adopted view (single connection) ---"
 
 ONECONN=$("$DOLTLITE" "$TMPROOT/one" 2>/dev/null <<'EOF'
 CREATE TABLE zebra(z INTEGER PRIMARY KEY);
@@ -70,12 +71,16 @@ A=$(printf '%s\n' "$ONECONN" | grep '^A:' | sed 's/^A://')
 B=$(printf '%s\n' "$ONECONN" | grep '^B:' | sed 's/^B://')
 check "same_session_stable" "$A" "$B"
 
-echo "--- SQL text is preserved verbatim across reopen ---"
+echo "--- SQL text identical in-session and across reopen ---"
 
-"$DOLTLITE" "$TMPROOT/sql" "CREATE TABLE t(a INTEGER PRIMARY KEY,   b   TEXT  )" \
-  "SELECT CASE WHEN dolt_commit('-A','-m','c') IS NOT NULL THEN '' END" >/dev/null 2>&1
-SQLTXT=$("$DOLTLITE" "$TMPROOT/sql" "SELECT sql FROM sqlite_master WHERE name='t'" 2>/dev/null)
-check "sql_verbatim" "CREATE TABLE t(a INTEGER PRIMARY KEY,   b   TEXT  )" "$SQLTXT"
+INSESSION_SQL=$("$DOLTLITE" "$TMPROOT/sql" 2>/dev/null <<'EOF'
+CREATE TABLE t(a INTEGER PRIMARY KEY,   b   TEXT  );
+SELECT CASE WHEN dolt_commit('-A','-m','c') IS NOT NULL THEN '' END;
+SELECT sql FROM sqlite_master WHERE name='t';
+EOF
+)
+REOPEN_SQL=$("$DOLTLITE" "$TMPROOT/sql" "SELECT sql FROM sqlite_master WHERE name='t'" 2>/dev/null)
+check "sql_stable_across_reopen" "$(printf '%s\n' "$INSESSION_SQL" | grep CREATE)" "$REOPEN_SQL"
 
 echo "--- rolled-back DDL leaves view and cleanliness intact ---"
 
@@ -88,7 +93,7 @@ $MASTER_Q
 SELECT 'STATUS:'||count(*) FROM dolt_status;
 EOF
 )
-check "rollback_view" "$PRE" "$(printf '%s\n' "$RB" | grep -v '^STATUS:')"
+check "rollback_view" "$POST" "$(printf '%s\n' "$RB" | grep -v '^STATUS:')"
 check "rollback_clean" "STATUS:0" "$(printf '%s\n' "$RB" | grep '^STATUS:')"
 
 echo "--- ALTER through commit and reopen stays clean ---"
@@ -114,6 +119,15 @@ SELECT 'S:'||count(*) FROM dolt_status;
 EOF
 )
 check "alter_reopen_clean" "S:0 C3:1 S:0" "$(printf '%s\n' "$ALT2" | tr '\n' ' ' | sed 's/ $//')"
+
+echo "--- catalog hash independent of DDL construction order ---"
+
+"$DOLTLITE" "$TMPROOT/orderA" "CREATE TABLE aaa(x INTEGER PRIMARY KEY); CREATE INDEX i_a ON aaa(x); CREATE TABLE bbb(y INTEGER PRIMARY KEY); SELECT CASE WHEN dolt_commit('-A','-m','c') IS NOT NULL THEN '' END;" >/dev/null 2>&1
+"$DOLTLITE" "$TMPROOT/orderB" "CREATE TABLE bbb(y INTEGER PRIMARY KEY); CREATE TABLE aaa(x INTEGER PRIMARY KEY); CREATE INDEX i_a ON aaa(x); SELECT CASE WHEN dolt_commit('-A','-m','c') IS NOT NULL THEN '' END;" >/dev/null 2>&1
+HA=$("$DOLTLITE" "$TMPROOT/orderA" "SELECT dolt_hashof_catalog()" 2>/dev/null)
+HB=$("$DOLTLITE" "$TMPROOT/orderB" "SELECT dolt_hashof_catalog()" 2>/dev/null)
+check "hash_shape" "40" "${#HA}"
+check "order_independent_catalog_hash" "$HA" "$HB"
 
 echo ""
 echo "Results: $pass passed, $fail failed out of $((pass+fail)) tests"

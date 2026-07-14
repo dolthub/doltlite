@@ -671,10 +671,7 @@ do_test doltlite_recover_rawformat_3-15.1 {
   db close
   sqlite3 db test.db
   catchsql {UPDATE ch4 SET x=0, y=2}
-} {1 {CHECK constraint failed: x+y==11
-        OR x*y==12
-        OR x/y BETWEEN 5 AND 8
-        OR -x==y+10}}
+} {1 {CHECK constraint failed: x+y==11 OR x*y==12 OR x/y BETWEEN 5 AND 8 OR -x==y+10}}
 
 do_test doltlite_recover_rawformat_3-15.2 {
   execsql {CREATE TABLE qxyz(a, b, c CHECK (c!="null") )}
@@ -684,7 +681,7 @@ do_test doltlite_recover_rawformat_3-15.2 {
   sqlite3 db test.db
   set r2 [catchsql {INSERT INTO qxyz VALUES(4,5,'null')}]
   list $r1 $r2 [db one {SELECT sql FROM sqlite_master WHERE name='qxyz'}]
-} {{1 {CHECK constraint failed: c!="null"}} {1 {CHECK constraint failed: c!="null"}} {CREATE TABLE qxyz(a, b, c CHECK (c!="null") )}}
+} {{1 {CHECK constraint failed: c!="null"}} {1 {CHECK constraint failed: c!="null"}} {CREATE TABLE qxyz(a, b, c CHECK(c!="null"))}}
 
 do_test doltlite_recover_rawformat_3-15.3 {
   execsql {
