@@ -116,12 +116,9 @@ remote_flow "fetch_track_contents" "$FF_SEED" "$FF_ADVANCE" "$FETCH_TRACK" \
   "SELECT 'R|'||active_branch()||'|'||count(*) FROM t;" \
   "SELECT CONCAT('R|',active_branch(),'|',count(*)) FROM t;"
 
-# ---- divergent fetch+merge: consumer commits a disjoint row locally while
-#      the remote gains a disjoint row; fetch + merge('origin/main') unifies
-#      them. (doltlite's dolt_pull is fast-forward-only and errors on
-#      divergence -- issue #1611; fetch+merge is the supported
-#      convergence path and is what both engines are compared on here.) ----
-echo "--- divergent fetch + merge (no conflict) ---"
+# ---- divergent pull: consumer commits a disjoint row locally while the
+#      remote gains a disjoint row; pull fetches origin/main and merges it. ----
+echo "--- divergent pull auto-merge (no conflict) ---"
 MERGE_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1,'base');
@@ -137,8 +134,7 @@ SELECT dolt_push('origin','main');
 MERGE_PULL="
 INSERT INTO t VALUES (100,'from-local');
 SELECT dolt_commit('-A','-m','local row');
-SELECT dolt_fetch('origin','main');
-SELECT dolt_merge('origin/main');
+SELECT dolt_pull('origin','main');
 "
 remote_flow "merge_contents" "$MERGE_SEED" "$MERGE_ADVANCE" "$MERGE_PULL" \
   "SELECT 'R|'||id||'|'||v FROM t;" \
@@ -146,6 +142,68 @@ remote_flow "merge_contents" "$MERGE_SEED" "$MERGE_ADVANCE" "$MERGE_PULL" \
 remote_flow "merge_rowcount" "$MERGE_SEED" "$MERGE_ADVANCE" "$MERGE_PULL" \
   "SELECT 'R|'||count(*) FROM t;" \
   "SELECT CONCAT('R|',count(*)) FROM t;"
+remote_flow "merge_log_count" "$MERGE_SEED" "$MERGE_ADVANCE" "$MERGE_PULL" \
+  "SELECT 'R|'||count(*) FROM dolt_log;" \
+  "SELECT CONCAT('R|',count(*)) FROM dolt_log;"
+
+# ---- divergent pull with compatible schema/data changes: the remote changes
+#      schema while the consumer commits data against the old schema. ----
+echo "--- divergent pull auto-merge (schema + data) ---"
+SCHEMA_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'base');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+SCHEMA_ADVANCE="
+ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'remote-default';
+UPDATE t SET note='remote-note' WHERE id=1;
+INSERT INTO t(id,v,note) VALUES (200,'from-remote','remote-row');
+SELECT dolt_commit('-A','-m','remote schema');
+SELECT dolt_push('origin','main');
+"
+SCHEMA_PULL="
+INSERT INTO t VALUES (100,'from-local');
+SELECT dolt_commit('-A','-m','local row');
+SELECT dolt_pull('origin','main');
+"
+remote_flow "merge_schema_rows" "$SCHEMA_SEED" "$SCHEMA_ADVANCE" "$SCHEMA_PULL" \
+  "SELECT 'R|'||id||'|'||v||'|'||IFNULL(note,'NULL') FROM t;" \
+  "SELECT CONCAT('R|',id,'|',v,'|',IFNULL(note,'NULL')) FROM t;"
+remote_flow "merge_schema_shape" "$SCHEMA_SEED" "$SCHEMA_ADVANCE" "$SCHEMA_PULL" \
+  "SELECT 'R|'||name FROM pragma_table_info('t') ORDER BY cid;" \
+  "SELECT CONCAT('R|',column_name) FROM information_schema.columns WHERE table_name='t' ORDER BY ordinal_position;"
+
+# ---- divergent pull where the remote adds a table and the consumer changes
+#      existing data. ----
+echo "--- divergent pull auto-merge (new table + local row) ---"
+TABLE_ADVANCE="
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u VALUES (7,'remote-table');
+SELECT dolt_commit('-A','-m','remote table');
+SELECT dolt_push('origin','main');
+"
+remote_flow "merge_new_table_and_local_row" "$MERGE_SEED" "$TABLE_ADVANCE" "$MERGE_PULL" \
+  "SELECT 'R|t|'||id||'|'||v FROM t UNION ALL SELECT 'R|u|'||id||'|'||v FROM u;" \
+  "SELECT CONCAT('R|t|',id,'|',v) FROM t UNION ALL SELECT CONCAT('R|u|',id,'|',v) FROM u;"
+
+# ---- divergent pull with a data conflict: both sides update the same row.
+#      Compare the post-state, not exact error text. ----
+echo "--- divergent pull conflict post-state ---"
+CONFLICT_ADVANCE="
+UPDATE t SET v='from-remote' WHERE id=1;
+SELECT dolt_commit('-A','-m','remote update');
+SELECT dolt_push('origin','main');
+"
+CONFLICT_PULL="
+UPDATE t SET v='from-local' WHERE id=1;
+SELECT dolt_commit('-A','-m','local update');
+SELECT dolt_pull('origin','main');
+"
+remote_flow "pull_conflict_poststate" "$MERGE_SEED" "$CONFLICT_ADVANCE" "$CONFLICT_PULL" \
+  "SELECT 'R|'||(SELECT count(*) FROM dolt_conflicts)||'|'||(SELECT v FROM t WHERE id=1);" \
+  "SELECT CONCAT('R|',(SELECT COUNT(*) FROM dolt_conflicts),'|',(SELECT v FROM t WHERE id=1));"
 
 # ---- multi-branch fetch: two branches pushed; consumer fetches and tracks
 #      each; compare contents per tracked branch. ----

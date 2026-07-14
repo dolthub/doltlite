@@ -1407,7 +1407,7 @@ static void run_pull_persist_failure(void){
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_remote('add','origin','file://%s');"
-    "SELECT dolt_push('origin','main');",
+    "SELECT dolt_push('origin','main','--force');",
     remotePath);
   check("setup_local_and_push", execSql(localDb, sql)==SQLITE_OK);
 
@@ -1486,7 +1486,7 @@ static void run_pull_dirty_working_set_fails(void){
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_remote('add','origin','file://%s');"
-    "SELECT dolt_push('origin','main');",
+    "SELECT dolt_push('origin','main','--force');",
     remotePath);
   check("setup_local_and_push_for_pull_dirty", execSql(localDb, sql)==SQLITE_OK);
 
@@ -1560,7 +1560,7 @@ static void run_pull_staged_changes_fails(void){
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_remote('add','origin','file://%s');"
-    "SELECT dolt_push('origin','main');",
+    "SELECT dolt_push('origin','main','--force');",
     remotePath);
   check("setup_local_and_push_for_pull_staged", execSql(localDb, sql)==SQLITE_OK);
 

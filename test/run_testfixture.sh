@@ -104,7 +104,7 @@ for test in "$@"; do
     continue
   fi
 
-  if is_crash_expected "$test"; then
+  if is_crash_expected "$test" && [ -z "$expected" ]; then
     echo "FIXED CRASH: $test (was on crash list, now produces summary — remove from $CRASH_FILE)"
     total_unexpected_clean=$((total_unexpected_clean + 1))
     unused_lines="$unused_lines"$'\n'"  $test (crash list)"
