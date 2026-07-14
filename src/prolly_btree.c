@@ -2255,11 +2255,10 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         }
       }
       if( pRow ){
-        if( pRow->oldPg==aTables[i].iTable ){
-          aSorted[i].iTable = pRow->newPg;
-        }else{
-          aSorted[i].iTable = aTables[i].iTable;
-        }
+        /* The row is this entry's identity whether it matched by name or by
+        ** old page number; emitting the live iTable on an oldPg mismatch
+        ** would leak session-specific numbering into the canonical blob. */
+        aSorted[i].iTable = pRow->newPg;
         aSorted[i].zType = pRow->zType;
         aSorted[i].zName = pRow->zName;
         aSorted[i].zTblName = pRow->zTblName;

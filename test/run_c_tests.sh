@@ -20,6 +20,7 @@ GATING=(
   cross_branch_test
   corruption_test
   prepared_stmt_reuse_test
+  catalog_serialize_determinism_test
   sequence_reload_test
   chunk_store_fork_lock_test
 )
