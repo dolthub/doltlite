@@ -18,11 +18,6 @@ exprfault
 exprfault2
 filterfault
 fkey_malloc
-fts3fault
-fts3fault2
-fts3fault3
-fts3malloc
-fts3tok_err
 fuzz
 fuzz_malloc
 fuzz-oss1

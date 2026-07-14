@@ -244,7 +244,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bucket: [core-sql, ddl-schema, storage, fault-fuzz, ported]
+        bucket: [core-sql, ddl-schema, storage, fault-fuzz, fts, ported]
     steps:
     - uses: actions/checkout@v4
 
@@ -279,7 +279,7 @@ jobs:
     # "ported" bucket holds doltlite-native rewrites of gated divergences
     # (#1313): zero-divergence files asserting the intent the upstream
     # entries lost. Every file belongs to:
-    # core-sql, ddl-schema, storage, fault-fuzz. A file must appear in
+    # core-sql, ddl-schema, storage, fault-fuzz, fts. A file must appear in
     # exactly one bucket; the guard below enforces it. Nondeterministic-class
     # files (thread*, walcrash*, writecrash, wal*fault) stay excluded, same
     # rationale as the crash.test exclusion.
