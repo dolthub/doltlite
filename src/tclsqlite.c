@@ -121,6 +121,14 @@
 #define NUM_PREPARED_STMTS 10
 #define MAX_PREPARED_STMTS 100
 
+#ifndef SQLITE_UNTESTABLE
+  void sqlite3BeginBenignMalloc(void);
+  void sqlite3EndBenignMalloc(void);
+#else
+# define sqlite3BeginBenignMalloc()
+# define sqlite3EndBenignMalloc()
+#endif
+
 /* Forward declaration */
 typedef struct SqliteDb SqliteDb;
 
@@ -4400,12 +4408,14 @@ static int SQLITE_TCLAPI DbMain(
   p->openFlags = flags & SQLITE_OPEN_URI;
   p->interp = interp;
   zArg = Tcl_GetStringFromObj(objv[1], 0);
+  sqlite3BeginBenignMalloc();
   if( DbUseNre() ){
     Tcl_NRCreateCommand(interp, zArg, DbObjCmdAdaptor, DbObjCmd,
                         (char*)p, DbDeleteCmd);
   }else{
     Tcl_CreateObjCommand(interp, zArg, DbObjCmd, (char*)p, DbDeleteCmd);
   }
+  sqlite3EndBenignMalloc();
   p->nRef = 1;
   return TCL_OK;
 }
