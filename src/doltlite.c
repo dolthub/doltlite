@@ -2007,9 +2007,11 @@ static int resetStageNamedPaths(
   int nPaths
 ){
   struct TableEntry *aHead = 0, *aStaged = 0;
-  int nHead = 0, nStaged = 0;
+  SchemaEntry *aHeadSchema = 0;
+  int nHead = 0, nStaged = 0, nHeadSchema = 0;
   ProllyHash headCatHash, stagedHash;
-  int p;
+  Pgno iNextFree = 2;
+  int p, k;
   int rc;
 
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
@@ -2017,15 +2019,22 @@ static int resetStageNamedPaths(
   if( !prollyHashIsEmpty(&headCatHash) ){
     rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
     if( rc!=SQLITE_OK ) return rc;
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &headCatHash,
+                               &aHeadSchema, &nHeadSchema);
+    if( rc!=SQLITE_OK ){
+      doltliteFreeCatalog(aHead, nHead);
+      return rc;
+    }
   }
 
   doltliteGetSessionStaged(db, &stagedHash);
   if( !prollyHashIsEmpty(&stagedHash) ){
     rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
-    if( rc!=SQLITE_OK ){
-      doltliteFreeCatalog(aHead, nHead);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) goto done;
+  }
+
+  for(k=0; k<nStaged; k++){
+    if( aStaged[k].iTable >= iNextFree ) iNextFree = aStaged[k].iTable + 1;
   }
 
   for(p=0; p<nPaths; p++){
@@ -2045,6 +2054,10 @@ static int resetStageNamedPaths(
       }
       nStaged--;
     }else if( iS<0 ){
+      /* Restoring a staged-dropped table: the HEAD entry is numbered in
+      ** HEAD's domain and its schema row is absent from the staged master
+      ** (and from the live schema -- the table is dropped there), so it
+      ** gets a fresh number and its row comes from the HEAD fallback. */
       struct TableEntry *aNew = sqlite3_realloc(aStaged,
           (nStaged+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
@@ -2059,8 +2072,12 @@ static int resetStageNamedPaths(
       }
       aStaged[nStaged] = aHead[iH];
       aStaged[nStaged].zName = zDup;
+      aStaged[nStaged].iTable = iNextFree++;
       nStaged++;
     }else{
+      /* Take HEAD's content under the STAGED entry's number so the entry
+      ** keeps pairing with the staged catalog's schema row. */
+      Pgno iKeep = aStaged[iS].iTable;
       zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
       if( aHead[iH].zName && !zDup ){
         rc = SQLITE_NOMEM;
@@ -2069,6 +2086,7 @@ static int resetStageNamedPaths(
       sqlite3_free(aStaged[iS].zName);
       aStaged[iS] = aHead[iH];
       aStaged[iS].zName = zDup;
+      aStaged[iS].iTable = iKeep;
     }
   }
 
@@ -2076,7 +2094,8 @@ static int resetStageNamedPaths(
     u8 *buf = 0;
     int nBuf = 0;
     ProllyHash newStagedHash;
-    rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+    rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
+        db, aStaged, nStaged, aHeadSchema, nHeadSchema, &buf, &nBuf);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
     }
@@ -2089,6 +2108,10 @@ static int resetStageNamedPaths(
 done:
   doltliteFreeCatalog(aHead, nHead);
   doltliteFreeCatalog(aStaged, nStaged);
+  if( aHeadSchema ){
+    for(k=0; k<nHeadSchema; k++) clearSchemaEntry(&aHeadSchema[k]);
+    sqlite3_free(aHeadSchema);
+  }
   return rc;
 }
 
