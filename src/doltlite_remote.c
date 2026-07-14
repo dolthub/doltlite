@@ -657,9 +657,11 @@ int doltlitePush(
       if( refsData2 && nRefsData2 > 0 ){
         rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
       }else{
-        const char *zLocalDefault = chunkStoreGetDefaultBranch(pLocal);
-        chunkStoreSetDefaultBranch(&tmpCs,
-          zLocalDefault ? zLocalDefault : zBranch);
+        /* A fresh target's default branch must name a branch it actually
+        ** has -- the one being pushed. Inheriting the source's default
+        ** (usually "main") left the target opening on a ref-less branch,
+        ** the way a clone of a foo1-only remote lands on foo1. */
+        chunkStoreSetDefaultBranch(&tmpCs, zBranch);
       }
       sqlite3_free(refsData2);
       if( rc!=SQLITE_OK ){

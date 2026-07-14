@@ -1,0 +1,66 @@
+# 2026-07-14
+#
+# unborn_branch_fixture.db is a real push target captured from an engine that
+# still inherited the source's "main" default: pushing only foo1 left the
+# target opening on a ref-less main, which a first write materialized as an
+# unborn branch (all-zero head). Reading commit metadata for that branch used
+# to fail with "unknown operation", and checking out an existing branch and
+# back stranded the unborn working set behind "target branch has no commits".
+# The fix reads unborn metadata as NULL and lets an unborn branch check out;
+# a freshly pushed target now also opens on the pushed branch (see
+# vc_oracle_remotes push-default-branch), so this state only reaches new code
+# through pre-fix databases like this fixture.
+#
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_unborn_branch
+
+db close
+forcedelete unborn_work.db
+forcecopy [file join $testdir unborn_branch_fixture.db] unborn_work.db
+sqlite3 db unborn_work.db
+
+# The fixture already has foo1 (committed) + unborn main + a working
+# target_probe table on main.
+do_execsql_test 1.0 {
+  SELECT name, hash = '0000000000000000000000000000000000000000'
+    FROM dolt_branches ORDER BY name
+} {foo1 0 main 1}
+
+# Commit metadata for the unborn branch is NULL, not an error.
+do_execsql_test 1.1 {
+  SELECT name, latest_commit_date IS NULL, latest_committer IS NULL
+    FROM dolt_branches ORDER BY name
+} {foo1 0 0 main 1 1}
+do_execsql_test 1.2 {
+  SELECT name, dirty FROM dolt_branches ORDER BY name
+} {foo1 0 main 1}
+
+# Checkout away from and back to the unborn branch; its working set survives.
+do_execsql_test 2.0 { SELECT dolt_checkout('foo1') } {0}
+do_execsql_test 2.1 { SELECT count(*) FROM example } {1}
+do_execsql_test 2.2 { SELECT dolt_checkout('main') } {0}
+do_execsql_test 2.3 {
+  SELECT table_name FROM dolt_status ORDER BY table_name
+} {target_probe}
+do_execsql_test 2.4 { SELECT count(*) FROM dolt_log } {0}
+
+# The unborn branch's dirty flag holds when it is not the session branch.
+do_execsql_test 2.5 { SELECT dolt_checkout('foo1') } {0}
+do_execsql_test 2.6 {
+  SELECT name, dirty FROM dolt_branches ORDER BY name
+} {foo1 0 main 1}
+do_execsql_test 2.7 { SELECT dolt_checkout('main') } {0}
+
+# First commit on the unborn branch births it; metadata appears.
+do_test 3.0 {
+  regexp {[0-9a-f]{40}} [db one {SELECT dolt_commit('-A','-m','first on main')}]
+} {1}
+do_execsql_test 3.1 {
+  SELECT name, latest_commit_date IS NULL FROM dolt_branches ORDER BY name
+} {foo1 0 main 0}
+do_execsql_test 3.2 { SELECT count(*) FROM dolt_log } {1}
+
+db close
+forcedelete unborn_work.db
+finish_test
