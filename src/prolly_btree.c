@@ -2476,6 +2476,130 @@ static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
   return serializeCatalog(pBtree, ppOut, pnOut);
 }
 
+static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
+  SchemaCatalogRow *aRows = 0;
+  SchemaCatalogRow *aCanon = 0;
+  CatalogEntryMeta *aMeta = 0;
+  ProllyHash currentMasterRoot;
+  u8 masterFlags = 0;
+  ProllyMutMap mm;
+  struct TableEntry masterEntry;
+  int nRows = 0, nMeta = 0;
+  int rc = SQLITE_OK;
+  int i, j;
+
+  memset(pMasterRoot, 0, sizeof(*pMasterRoot));
+  rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadSchemaCatalogRows(pBtree, pBtree->cat.a, pBtree->cat.n,
+                             &aRows, &nRows, &currentMasterRoot, &masterFlags);
+  if( rc!=SQLITE_OK ){
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
+  rc = appendMissingSchemaCatalogRows(pBtree->db, btreeSchemaName(pBtree),
+                                      &aRows, &nRows, aMeta, nMeta,
+                                      pBtree->cat.a, pBtree->cat.n);
+  if( rc!=SQLITE_OK ){
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
+
+  /* Drop NULL-type schema rows left by interrupted schema rebuilds. */
+  {
+    int nKept = 0;
+    for(i=0; i<nRows; i++){
+      if( aRows[i].zType==0 ){
+        sqlite3_free(aRows[i].zName);
+        sqlite3_free(aRows[i].zTblName);
+        sqlite3_free(aRows[i].zSql);
+        continue;
+      }
+      if( nKept!=i ) aRows[nKept] = aRows[i];
+      nKept++;
+    }
+    nRows = nKept;
+  }
+
+  if( nRows<=0 ){
+    freeSchemaCatalogRows(aRows, nRows);
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return SQLITE_OK;
+  }
+
+  aCanon = sqlite3_malloc(nRows * (int)sizeof(SchemaCatalogRow));
+  if( !aCanon ){
+    freeSchemaCatalogRows(aRows, nRows);
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return SQLITE_NOMEM;
+  }
+  memcpy(aCanon, aRows, nRows * (int)sizeof(SchemaCatalogRow));
+  qsort(aCanon, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
+  for(i=0; i<nRows; i++){
+    if( schemaCatalogRowIsVirtualTable(&aCanon[i]) ){
+      aCanon[i].newPg = 0;
+    }else if( strcmp(aCanon[i].zType, "table")==0 || strcmp(aCanon[i].zType, "index")==0 ){
+      aCanon[i].newPg = (Pgno)(i + 2);
+    }else{
+      aCanon[i].newPg = aCanon[i].oldPg;
+    }
+  }
+  for(i=0; i<nRows; i++){
+    aRows[i].newPg = aRows[i].oldPg;
+    if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
+      aRows[i].newPg = 0;
+    }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
+      for(j=0; j<nRows; j++){
+        if( aCanon[j].oldPg==aRows[i].oldPg ){
+          aRows[i].newPg = aCanon[j].newPg;
+          break;
+        }
+      }
+    }
+  }
+  sqlite3_free(aCanon);
+
+  memset(&mm, 0, sizeof(mm));
+  rc = prollyMutMapInit(&mm, 1);
+  if( rc!=SQLITE_OK ){
+    freeSchemaCatalogRows(aRows, nRows);
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
+  for(i=0; i<nRows; i++){
+    int nRec = 0;
+    u8 *pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
+                                        aRows[i].zTblName, aRows[i].newPg,
+                                        aRows[i].zSql, &nRec);
+    if( !pRec ){
+      prollyMutMapFree(&mm);
+      freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
+      return SQLITE_NOMEM;
+    }
+    rc = prollyMutMapInsert(&mm, 0, 0, aRows[i].iRowid, pRec, nRec);
+    sqlite3_free(pRec);
+    if( rc!=SQLITE_OK ){
+      prollyMutMapFree(&mm);
+      freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
+      return rc;
+    }
+  }
+  memset(&masterEntry, 0, sizeof(masterEntry));
+  masterEntry.iTable = 1;
+  masterEntry.flags = masterFlags;
+  masterEntry.root = currentMasterRoot;
+  rc = applyMutMapToTableRoot(pBtree->pBt, &masterEntry, &mm);
+  prollyMutMapFree(&mm);
+  if( rc==SQLITE_OK ){
+    *pMasterRoot = masterEntry.root;
+  }
+  freeSchemaCatalogRows(aRows, nRows);
+  freeCatalogEntryMeta(aMeta, nMeta);
+  return rc;
+}
+
 static void initDefaultMeta(Btree *pBtree){
   memset(pBtree->aMeta, 0, sizeof(pBtree->aMeta));
   pBtree->aMeta[BTREE_FILE_FORMAT] = 4;
@@ -5555,10 +5679,12 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash catHash;
+  ProllyHash runtimeMasterRoot;
   Btree reloadBtree;
   int bReloadSchema = 0;
   int bHaveReloadCatalog = 0;
   (void)bCleanup;
+  memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
   memset(&reloadBtree, 0, sizeof(reloadBtree));
 
   /* Catalog serialization runs a SELECT whose finalize re-enters
@@ -5624,6 +5750,14 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     bReloadSchema = p->bSchemaChangedTxn;
     if( bReloadSchema ){
       BtCursor *pC;
+      rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(catData);
+        chunkStoreRollback(&pBt->store);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
       memcpy(reloadBtree.aMeta, p->aMeta, sizeof(reloadBtree.aMeta));
       rc = deserializeCatalog(&reloadBtree, catData, nCatData);
       if( rc!=SQLITE_OK ){
@@ -5677,6 +5811,10 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           memcpy(p->aMeta, reloadBtree.aMeta, sizeof(p->aMeta));
           memset(&reloadBtree.cat, 0, sizeof(reloadBtree.cat));
           bHaveReloadCatalog = 0;
+        }
+        {
+          struct TableEntry *pMaster = findTable(p, 1);
+          if( pMaster ) pMaster->root = runtimeMasterRoot;
         }
         /* A saved cursor whose table vanished in the reload would re-seek a
         ** stale root; fault it. */
