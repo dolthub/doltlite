@@ -2465,105 +2465,6 @@ static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
   return serializeCatalog(pBtree, ppOut, pnOut);
 }
 
-static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
-  SchemaCatalogRow *aRows = 0;
-  CatalogEntryMeta *aMeta = 0;
-  ProllyHash currentMasterRoot;
-  u8 masterFlags = 0;
-  ProllyMutMap mm;
-  struct TableEntry masterEntry;
-  int nRows = 0, nMeta = 0;
-  int rc = SQLITE_OK;
-  int i;
-
-  memset(pMasterRoot, 0, sizeof(*pMasterRoot));
-  rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = loadSchemaCatalogRows(pBtree, pBtree->cat.a, pBtree->cat.n,
-                             &aRows, &nRows, &currentMasterRoot, &masterFlags);
-  if( rc!=SQLITE_OK ){
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
-  rc = appendMissingSchemaCatalogRows(pBtree->db, btreeSchemaName(pBtree),
-                                      &aRows, &nRows, aMeta, nMeta,
-                                      pBtree->cat.a, pBtree->cat.n);
-  if( rc!=SQLITE_OK ){
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
-
-  /* Drop NULL-type schema rows left by interrupted schema rebuilds. */
-  {
-    int nKept = 0;
-    for(i=0; i<nRows; i++){
-      if( aRows[i].zType==0 ){
-        sqlite3_free(aRows[i].zName);
-        sqlite3_free(aRows[i].zTblName);
-        sqlite3_free(aRows[i].zSql);
-        continue;
-      }
-      if( nKept!=i ) aRows[nKept] = aRows[i];
-      nKept++;
-    }
-    nRows = nKept;
-  }
-
-  if( nRows<=0 ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return SQLITE_OK;
-  }
-
-  for(i=0; i<nRows; i++){
-    if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
-      aRows[i].newPg = 0;
-    }else{
-      aRows[i].newPg = aRows[i].oldPg;
-    }
-  }
-
-  memset(&mm, 0, sizeof(mm));
-  rc = prollyMutMapInit(&mm, 1);
-  if( rc!=SQLITE_OK ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
-  for(i=0; i<nRows; i++){
-    int nRec = 0;
-    u8 *pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
-                                        aRows[i].zTblName, aRows[i].newPg,
-                                        aRows[i].zSql, &nRec);
-    if( !pRec ){
-      prollyMutMapFree(&mm);
-      freeSchemaCatalogRows(aRows, nRows);
-      freeCatalogEntryMeta(aMeta, nMeta);
-      return SQLITE_NOMEM;
-    }
-    rc = prollyMutMapInsert(&mm, 0, 0, aRows[i].iRowid, pRec, nRec);
-    sqlite3_free(pRec);
-    if( rc!=SQLITE_OK ){
-      prollyMutMapFree(&mm);
-      freeSchemaCatalogRows(aRows, nRows);
-      freeCatalogEntryMeta(aMeta, nMeta);
-      return rc;
-    }
-  }
-  memset(&masterEntry, 0, sizeof(masterEntry));
-  masterEntry.iTable = 1;
-  masterEntry.flags = masterFlags;
-  masterEntry.root = currentMasterRoot;
-  rc = applyMutMapToTableRoot(pBtree->pBt, &masterEntry, &mm);
-  prollyMutMapFree(&mm);
-  if( rc==SQLITE_OK ){
-    *pMasterRoot = masterEntry.root;
-  }
-  freeSchemaCatalogRows(aRows, nRows);
-  freeCatalogEntryMeta(aMeta, nMeta);
-  return rc;
-}
-
 static void initDefaultMeta(Btree *pBtree){
   memset(pBtree->aMeta, 0, sizeof(pBtree->aMeta));
   pBtree->aMeta[BTREE_FILE_FORMAT] = 4;
@@ -5643,13 +5544,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash catHash;
-  ProllyHash runtimeMasterRoot;
-  Btree reloadBtree;
-  int bReloadSchema = 0;
-  int bHaveReloadCatalog = 0;
   (void)bCleanup;
-  memset(&runtimeMasterRoot, 0, sizeof(runtimeMasterRoot));
-  memset(&reloadBtree, 0, sizeof(reloadBtree));
 
   /* Catalog serialization runs a SELECT whose finalize re-enters
   ** commit/rollback; that nested call is read-only, so no-op it instead of
@@ -5711,52 +5606,6 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       }
     }
 
-    bReloadSchema = p->bSchemaChangedTxn;
-    if( bReloadSchema ){
-      BtCursor *pC;
-      rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(catData);
-        chunkStoreRollback(&pBt->store);
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
-        return rc;
-      }
-      memcpy(reloadBtree.aMeta, p->aMeta, sizeof(reloadBtree.aMeta));
-      rc = deserializeCatalog(&reloadBtree, catData, nCatData);
-      if( rc!=SQLITE_OK ){
-        catFree(&reloadBtree.cat);
-        sqlite3_free(catData);
-        chunkStoreRollback(&pBt->store);
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
-        return rc;
-      }
-      bHaveReloadCatalog = 1;
-      /* Save this handle's live cursors before refreshing the schema root. */
-      for(pC = pBt->pCursor; pC; pC = pC->pNext){
-        if( pC->pBtree==p ){
-          if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
-           && saveCursorPosition(pC)!=SQLITE_OK ){
-            pC->eState = CURSOR_FAULT;
-            pC->skipNext = SQLITE_ABORT;
-            prollyCursorReleaseAll(&pC->pCur);
-          }
-          pC->pMutMap = 0;
-          pC->mmActive = 0;
-          pC->mmPhysActive = 0;
-          pC->deferredTreeSeek = 0;
-          pC->mmIdx = -1;
-          pC->mmPhysIdx = -1;
-        }else{
-          pC->eState = CURSOR_FAULT;
-          pC->skipNext = SQLITE_ABORT;
-          pC->mmActive = 0;
-          prollyCursorReleaseAll(&pC->pCur);
-        }
-      }
-    }
-
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
       p->committedCatalogHash = catHash;
@@ -5767,36 +5616,6 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->committedConstraintViolationsHash = p->constraintViolationsHash;
       memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
       btreeMarkWorkingStateChanged(p, 1);
-      if( bReloadSchema ){
-        BtCursor *pC;
-        if( bHaveReloadCatalog ){
-          btreeFreeCatalogTables(p);
-          p->cat = reloadBtree.cat;
-          memcpy(p->aMeta, reloadBtree.aMeta, sizeof(p->aMeta));
-          memset(&reloadBtree.cat, 0, sizeof(reloadBtree.cat));
-          bHaveReloadCatalog = 0;
-        }
-        {
-          struct TableEntry *pMaster = findTable(p, 1);
-          if( pMaster ) pMaster->root = runtimeMasterRoot;
-        }
-        /* A saved cursor whose table vanished in the reload would re-seek a
-        ** stale root; fault it. */
-        for(pC = pBt->pCursor; pC; pC = pC->pNext){
-          if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
-           && findTable(p, pC->pgnoRoot)==0 ){
-            pC->eState = CURSOR_FAULT;
-            pC->skipNext = SQLITE_ABORT;
-          }
-        }
-        invalidateSchema(p);
-        if( p->db ){
-          /* Advisory expiry: hard expiry (iCode 0) makes OP_OpenRead abort a
-          ** statement still running across this commit (tkt-c694113d5). */
-          sqlite3ExpirePreparedStatements(p->db, 1);
-          sqlite3ResetAllSchemasOfConnection(p->db);
-        }
-      }
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
       btreeDiscardAllSavepoints(p);
@@ -5809,14 +5628,10 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       pBt->store.snapshotPinned = 0;
     }else{
       int rc2;
-      if( bHaveReloadCatalog ){
-        catFree(&reloadBtree.cat);
-        bHaveReloadCatalog = 0;
-      }
       sqlite3_free(catData);
       rc2 = restoreFromCommitted(p);
       if( rc2!=SQLITE_OK ){
-        /* Same shape as the rollback path: the reload OOM'd, but the
+        /* Same shape as the rollback path: the restore OOM'd, but the
         ** transaction must end with the partial state discarded, or the
         ** next statement's autocommit publishes it. */
         btreeFreeCatalogTables(p);
