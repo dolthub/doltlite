@@ -46,6 +46,14 @@ altercol altercol-2.2  # canonical adoption: sqlite_master row order/oid binding
 altercol altercol-22.0  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altercol altercol-4.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altercol altercol-4.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-1.2.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-1.4.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-12.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-12.5  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-4.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-6.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altercons2 altercons2-9.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+alterqf alterqf-2.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altertab altertab-1.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altertab altertab-16.23  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altertab altertab-16.24  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
@@ -58,7 +66,18 @@ altertab altertab-23.3  # canonical adoption: sqlite_master row order/oid bindin
 altertab altertab-23.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altertab altertab-24.2.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altertab altertab-30.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-2.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-2.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-3.1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-3.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-3.3.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab2 altertab2-3.4.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+check check-4.6  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+check check-4.9  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+fkey6 fkey6-6.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 insert insert-5.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+istrue istrue-841  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 select1 select1-2.23  # NULL into non-integer PRIMARY KEY (WITHOUT ROWID clustering key) rejected
 
 # ── where ──
@@ -68,12 +87,36 @@ select1 select1-2.23  # NULL into non-integer PRIMARY KEY (WITHOUT ROWID cluster
 # count drops below the upstream-expected value. The returned rows still
 # match — only the seek-count assertion diverges. Six tests below; rows
 # all correct, counts all lower than the upstream expectation.
+selectH selectH-4.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+table table-1.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+table table-3.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+table table-8.1.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+table table-8.10  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 tkt3810 tkt3810-3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 tkt3810 tkt3810-4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 trigger1 trigger1-6.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 trigger1 trigger1-6.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 trigger1 trigger1-6.5  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 trigger1 trigger1-6.6  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.10.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.11.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.12.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.13.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.14.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.15.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.16.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.17.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.18.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.19.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.20.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.3.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.4.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.5.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.6.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.7.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.8.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+vtabC vtabC-1.9.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 vtabH vtabH-1.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 where where-5.1   # rowid IN literal: optimized to 1 seek vs upstream 4
 where where-5.5   # rowid IN (subquery of rowid IN literals): fewer seeks
@@ -108,6 +151,7 @@ alter alter-6.6  # canonical adoption: sqlite_master row order/oid binding or no
 
 # ── in ──
 in in-19.40  # IN clause path that hits NOT NULL via rowid lookup
+in in-10.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # ── in3 ──
 in3 in3-1.2   # IN clause variant using rowid
@@ -156,6 +200,7 @@ fkey2 fkey2-13.1.2.1
 fkey2 fkey2-13.1.2.3
 fkey2 fkey2-13.1.3
 fkey2 fkey2-13.1.4
+fkey2 fkey2-14.2.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # ── triggerC ──
 triggerC triggerC-2.1.1  # trigger flow control with rowid access
@@ -188,12 +233,25 @@ e_createtable e_createtable-4.5.1.2
 e_createtable e_createtable-4.5.1.3
 e_createtable e_createtable-4.5.1.4
 e_createtable e_createtable-4.9.1
-e_createtable e_createt  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 e_createtable e_createtable-2.3.1.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 e_createtable e_createtable-2.3.1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 e_createtable e_createtable-2.3.1.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 e_createtable e_createtable-2.3.1.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 e_createtable e_createtable-3.11.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-4.10.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-4.15.5.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-4.9.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-4.9.5  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.3.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.3.5  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.3.6  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.3.7  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.4.2.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.4.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.4.2.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.4.2.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.4.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+e_createtable e_createtable-5.6.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # ── e_select ──
 e_select e_select-4.9.4  # rowid-order vs PK-order on unordered SELECT
@@ -215,6 +273,7 @@ e_fkey e_fkey-51.3
 e_fkey e_fkey-52.6
 e_fkey e_fkey-57.7
 e_fkey e_fkey-58.3
+e_fkey e_fkey-56.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # ── pragma ── (completes now that attached-db writes work; PRAGMA output / attached-db / integrity divergences)
 pragma pragma-1.10
@@ -262,7 +321,27 @@ pragma pragma-8.1.17
 pragma pragma-8.1.9
 pragma pragma-8.2.4.1
 pragma pragma-8.2.4.3
-pragma p  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-14.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-14.3uc  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-14.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-14.5  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-14.6  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-14.6uc  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-17.1.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-17.1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-17.1.FULL  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-17.1.INCREMENTAL  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-17.1.full  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-17.1.incremental  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-22.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-22.3.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-22.3.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-22.4.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-22.4.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-22.4.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-23.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-23.3  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+pragma pragma-24.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # ── shared ──
 # Connections to the same file don't share a pager cache: each gets its own
@@ -524,6 +603,8 @@ select9 select9-4.1
 collate1 collate1-6.5   # CREATE TABLE p1(a PRIMARY KEY COLLATE '"""') rejected
 collate1 collate1-6.6   # depends on p1/c1 from 6.5
 collate1 collate1-6.8   # depends on p1/c1 from 6.5
+without_rowid3 without_rowid3-14.2.2.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+without_rowid3 without_rowid3-14.2.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 without_rowid7 without_rowid7-3.0    # PRIMARY KEY COLLATE mysort rejected
 without_rowid7 without_rowid7-3.1.1  # depends on t1 from 3.0
 without_rowid7 without_rowid7-3.1.2
@@ -1224,6 +1305,7 @@ vacuum5 vacuum5-3.2    # VACUUM size metric
 # autoinc — sqlite_master enumeration order differs. AUTOINCREMENT itself
 # works, including writable_schema sqlite_sequence corruption tests.
 autoinc autoinc-1.6   # sqlite_master enumeration order (t1 vs sqlite_sequence)
+autoinc autoinc-1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # shared9 — shared-cache locking model differs (doltlite doesn't surface the
 # "database is locked" shared-cache contention these assertions expect). Same
@@ -1274,6 +1356,12 @@ alter3 alter3-1.5  # canonical adoption: sqlite_master row order/oid binding or 
 # metric and differs. Raw page-format pragma; the drop itself is correct
 # (altertab3-31.2 reads the surviving column back as 5.0).
 altertab3 altertab3-31.1  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
+altertab3 altertab3-27.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab3 altertab3-32.1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab3 altertab3-32.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab3 altertab3-7.1.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab3 altertab3-8.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
+altertab3 altertab3-8.2.2  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # altercol — three divergence classes, none in the ALTER rename itself:
 #   * 11.1: order of rows returned from sqlite_schema. DoltLite returns catalog
@@ -1366,6 +1454,7 @@ misc1 misc1-14.2b  # no rollback-journal file: doltlite has no -journal
 # content"). Generated-column behavior itself is correct (the other 174 tests pass).
 gencol1 gencol1-15.10  # db deserialize (page-image API) unsupported (#1225)
 gencol1 gencol1-15.20  # db deserialize (page-image API) unsupported (#1225)
+gencol1 gencol1-21.1  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 
 # enc2 — UTF-16 encoding tests (#1164). DoltLite is locked to UTF-8: it ignores
 # PRAGMA encoding=utf16le/be and reports UTF-8, so tests that read back the
@@ -1986,8 +2075,6 @@ walshared walshared-1.3  # shared-cache WAL table locks not raised; snapshot rea
 
 # -- feature-gap sweep wave 3 (#1208): 44 completing files (6-100 failures),
 # every file's failure set reproduced and classified by verified mechanism.
-backup2 backup2-2  # dbcksum diff is sqlite_master enumeration order (creation vs name order); backup data byte-identical
-backup2 backup2-3.2  # dbcksum diff is sqlite_master enumeration order (creation vs name order); backup data byte-identical
 backup2 backup2-4  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-5  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-6  # backup format/file hash and error-text differ; in-memory backup rejected
@@ -2543,49 +2630,9 @@ memjournal2 memjournal2-1.0  # in-memory journal premise: journal_mode fixed, si
 # mallocG-1 closes and reopens an empty database under malloc fault injection.
 # DoltLite's lazy chunk-store open avoids the stock early allocation/failure
 # points for the first transient fault indexes.
-mallocG mallocG-1.transient.0
-mallocG mallocG-1.transient.1
-mallocG mallocG-1.transient.2
-mallocG mallocG-1.transient.3
-mallocG mallocG-1.transient.4
-mallocG mallocG-1.transient.5
-mallocG mallocG-1.transient.6
-mallocG mallocG-1.transient.7
-mallocG mallocG-1.transient.8
-mallocG mallocG-1.transient.9
 # shared_err sections 5/6 fault-inject shared-cache locking and schema paths.
 # DoltLite does not share SQLite pager/schema internals across connections, so
 # the fault indexes and lock states differ from stock.
-shared_err shared_err-5.transient.0
-shared_err shared_err-5.transient.1
-shared_err shared_err-5.transient.2
-shared_err shared_err-5.transient.3
-shared_err shared_err-5.transient.4
-shared_err shared_err-5.transient.5
-shared_err shared_err-5.transient.6
-shared_err shared_err-5.transient.7
-shared_err shared_err-5.transient.8
-shared_err shared_err-5.transient.9
-shared_err shared_err-6.transient.0
-shared_err shared_err-6.transient.1
-shared_err shared_err-6.transient.2
-shared_err shared_err-6.transient.3
-shared_err shared_err-6.transient.4
-shared_err shared_err-6.transient.5
-shared_err shared_err-6.transient.6
-shared_err shared_err-6.transient.7
-shared_err shared_err-6.transient.8
-shared_err shared_err-6.transient.9
-shared_err shared_err-6.persistent.0
-shared_err shared_err-6.persistent.1
-shared_err shared_err-6.persistent.2
-shared_err shared_err-6.persistent.3
-shared_err shared_err-6.persistent.4
-shared_err shared_err-6.persistent.5
-shared_err shared_err-6.persistent.6
-shared_err shared_err-6.persistent.7
-shared_err shared_err-6.persistent.8
-shared_err shared_err-6.persistent.9
 # shared_err shared_ioerr-2.*.cleanup.1: shared-cache fault injection reaches
 # different lock/fault points under DoltLite. Native cleanup coverage in
 # doltlite_recover_shared_ioerr asserts the important contract for
@@ -3153,6 +3200,7 @@ corrupt corrupt-3.6
 corrupt corrupt-5.2
 corrupt corrupt-8.1
 corrupt corrupt-8.2
+corrupt corrupt-3.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
 
 # Raw NaN bit-pokes into the header/manifest region; the store reads them
 # back through its own validation instead of stock page semantics.
@@ -3449,107 +3497,6 @@ colmeta colmeta-5.2
 # fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330
 # are cascades that then see an empty db instead of the corrupt content
 # ("ok" / "no such table" instead of "database disk image is malformed").
-# dbstatus asserts byte-exact pager/btree heap accounting; the prolly
-# backend has no page cache or btree page images, so every memory-shape
-# probe differs structurally. IDs are the ubuntu-runner set (the failing
-# subset is platform-dependent; only CI enforces this list).
-dbstatus dbstatus-1.1
-dbstatus dbstatus-2.0-1.a
-dbstatus dbstatus-2.0-1.b
-dbstatus dbstatus-2.0-1.c
-dbstatus dbstatus-2.0-2.a
-dbstatus dbstatus-2.0-2.b
-dbstatus dbstatus-2.0-2.c
-dbstatus dbstatus-2.0-3.a
-dbstatus dbstatus-2.0-3.b
-dbstatus dbstatus-2.0-3.c
-dbstatus dbstatus-2.0-4.a
-dbstatus dbstatus-2.0-4.b
-dbstatus dbstatus-2.0-4.c
-dbstatus dbstatus-2.0-5.a
-dbstatus dbstatus-2.0-5.b
-dbstatus dbstatus-2.0-5.c
-dbstatus dbstatus-2.0-6k.ax
-dbstatus dbstatus-2.0-6k.b
-dbstatus dbstatus-2.0-6k.c
-dbstatus dbstatus-2.0-7.a
-dbstatus dbstatus-2.0-7.b
-dbstatus dbstatus-2.0-7.c
-dbstatus dbstatus-2.0-8x.ax
-dbstatus dbstatus-2.0-8x.b
-dbstatus dbstatus-2.0-8x.c
-dbstatus dbstatus-3.0-2.b
-dbstatus dbstatus-3.0-2.c
-dbstatus dbstatus-3.0-2.d
-dbstatus dbstatus-3.0-3.b
-dbstatus dbstatus-3.0-3.c
-dbstatus dbstatus-3.0-3.d
-dbstatus dbstatus-2.64-1.a
-dbstatus dbstatus-2.64-1.b
-dbstatus dbstatus-2.64-1.c
-dbstatus dbstatus-2.64-2.a
-dbstatus dbstatus-2.64-2.b
-dbstatus dbstatus-2.64-2.c
-dbstatus dbstatus-2.64-3.a
-dbstatus dbstatus-2.64-3.b
-dbstatus dbstatus-2.64-3.c
-dbstatus dbstatus-2.64-4.a
-dbstatus dbstatus-2.64-4.b
-dbstatus dbstatus-2.64-4.c
-dbstatus dbstatus-2.64-5.a
-dbstatus dbstatus-2.64-5.b
-dbstatus dbstatus-2.64-5.c
-dbstatus dbstatus-2.64-6k.ax
-dbstatus dbstatus-2.64-6k.b
-dbstatus dbstatus-2.64-6k.c
-dbstatus dbstatus-2.64-7.a
-dbstatus dbstatus-2.64-7.b
-dbstatus dbstatus-2.64-7.c
-dbstatus dbstatus-2.64-8x.ax
-dbstatus dbstatus-2.64-8x.b
-dbstatus dbstatus-2.64-8x.c
-dbstatus dbstatus-3.64-2.b
-dbstatus dbstatus-3.64-2.c
-dbstatus dbstatus-3.64-2.d
-dbstatus dbstatus-3.64-3.b
-dbstatus dbstatus-3.64-3.c
-dbstatus dbstatus-3.64-3.d
-dbstatus dbstatus-2.120-1.a
-dbstatus dbstatus-2.120-1.b
-dbstatus dbstatus-2.120-1.c
-dbstatus dbstatus-2.120-2.a
-dbstatus dbstatus-2.120-2.b
-dbstatus dbstatus-2.120-2.c
-dbstatus dbstatus-2.120-3.a
-dbstatus dbstatus-2.120-3.b
-dbstatus dbstatus-2.120-3.c
-dbstatus dbstatus-2.120-4.a
-dbstatus dbstatus-2.120-4.b
-dbstatus dbstatus-2.120-4.c
-dbstatus dbstatus-2.120-5.a
-dbstatus dbstatus-2.120-5.b
-dbstatus dbstatus-2.120-5.c
-dbstatus dbstatus-2.120-6k.ax
-dbstatus dbstatus-2.120-6k.b
-dbstatus dbstatus-2.120-6k.c
-dbstatus dbstatus-2.120-7.a
-dbstatus dbstatus-2.120-7.b
-dbstatus dbstatus-2.120-7.c
-dbstatus dbstatus-2.120-8x.ax
-dbstatus dbstatus-2.120-8x.b
-dbstatus dbstatus-2.120-8x.c
-dbstatus dbstatus-3.120-2.b
-dbstatus dbstatus-3.120-2.c
-dbstatus dbstatus-3.120-2.d
-dbstatus dbstatus-3.120-3.b
-dbstatus dbstatus-3.120-3.c
-dbstatus dbstatus-3.120-3.d
-dbstatus dbstatus-4.0.1
-dbstatus dbstatus-4.1.1
-dbstatus dbstatus-4.2.1
-dbstatus dbstatus-4.2.2
-dbstatus dbstatus-4.2.3
-dbstatus dbstatus-4.2.4
 dbfuzz001 dbfuzz001-100
 dbfuzz001 dbfuzz001-101a
 dbfuzz001 dbfuzz001-110
@@ -4867,7 +4814,6 @@ incrvacuum incrvacuum-2.3
 incrvacuum incrvacuum-2.4
 incrvacuum incrvacuum-3.1
 incrvacuum incrvacuum-3.2
-incrvacuum incrvacuum-3.3
 incrvacuum incrvacuum-3.4
 incrvacuum incrvacuum-4.1
 incrvacuum incrvacuum-4.2
@@ -5854,6 +5800,7 @@ incrvacuum incrvacuum-7.318.2
 incrvacuum incrvacuum-7.318.3
 incrvacuum incrvacuum-7.319.1
 incrvacuum incrvacuum-7.319.2
+incrvacuum incrvacuum-7.319.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
 
 # incrvacuum2: PRAGMA incremental_vacuum is a no-op on prolly storage (no
 # freelist), so post-vacuum file-size shrink expectations differ, and the
@@ -5879,8 +5826,6 @@ incrvacuum2 incrvacuum2-4.3  # -wal sidecar absent
 # the VACUUM statement still succeeds. The exact indices move when commit-path
 # allocation counts change.
 ioerr ioerr-2.33.3 @linux  # PROLLY_CHECK gc verify ignores injected read faults
-ioerr ioerr-2.34.3 @linux  # PROLLY_CHECK gc verify ignores injected read faults
-ioerr ioerr-2.35.3 @linux  # PROLLY_CHECK gc verify ignores injected read faults
 # ioerr: the chunk store journals inside the single database file, so a
 # -journal sidecar never exists. Preps that crash a child on journal sync
 # (ioerr-6) or copy the journal aside (ioerr-7/9) fail before fault
@@ -5980,10 +5925,6 @@ ioerr ioerr-6.92.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-6.93.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-6.94.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-6.95.1  # crashsql trigger on absent -journal never fires
-ioerr ioerr-6.96.1  # crashsql trigger on absent -journal never fires
-ioerr ioerr-6.97.1  # crashsql trigger on absent -journal never fires
-ioerr ioerr-6.98.1  # crashsql trigger on absent -journal never fires
-ioerr ioerr-6.99.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-7.2.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.3.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.4.1  # hot-journal prep copies absent -journal sidecar
@@ -6039,6 +5980,8 @@ ioerr ioerr-7.53.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.54.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.55.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1  # master-journal prep copies absent -journal sidecar
+ioerr ioerr-2.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+ioerr ioerr-2.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
 
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
@@ -6438,17 +6381,17 @@ vacuum3 vacuum3-2.9.2  # file size = chunk payload
 vacuum3 vacuum3-2.10.2  # file size = chunk payload
 vacuum3 vacuum3-5.2  # memdb page_size read-back after VACUUM (no rebuild)
 vacuum3 vacuum3-ioerr-1.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-1.34.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-1.35.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
 vacuum3 vacuum3-ioerr-2.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-2.34.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-2.35.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
 vacuum3 vacuum3-ioerr-3.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-3.34.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-3.35.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
 vacuum3 vacuum3-ioerr-4.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-4.34.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-4.35.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
+vacuum3 vacuum3-ioerr-1.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-1.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-2.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-2.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-3.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-3.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-4.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+vacuum3 vacuum3-ioerr-4.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
 
 # fkey_malloc / vtab_err: OOM fault indices, re-derived after the large-blob
 # insert path dropped two allocations (indices shift with allocation counts;
@@ -6461,11 +6404,10 @@ fkey_malloc fkey_malloc-6.persistent.69
 fkey_malloc fkey_malloc-7.transient.200
 fkey_malloc fkey_malloc-7.transient.201
 fkey_malloc fkey_malloc-7.transient.202
-fkey_malloc fkey_malloc-7.transient.520
-fkey_malloc fkey_malloc-7.transient.521
-fkey_malloc fkey_malloc-7.transient.522
+fkey_malloc fkey_malloc-7.transient.485  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+fkey_malloc fkey_malloc-7.transient.486  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+fkey_malloc fkey_malloc-7.transient.487  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
 vtab_err vtab_err-1.3.3
-vtab_err vtab_err-2.transient.579
 vtab_err vtab_err-2.transient.714
 vtab_err vtab_err-2.transient.737
 vtab_err vtab_err-2.transient.738

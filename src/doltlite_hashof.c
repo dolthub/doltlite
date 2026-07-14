@@ -144,7 +144,7 @@ static void appendCanonicalIdent(sqlite3_str *pStr, const char *zName){
 
 static const char *skipSchemaIdent(const char *z){
   if( !z ) return z;
-  if( *z=='"' || *z=='`' ){
+  if( *z=='"' || *z=='`' || *z=='\'' ){
     char q = *z++;
     while( *z ){
       if( *z==q ){

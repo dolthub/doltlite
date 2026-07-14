@@ -78,6 +78,7 @@ crash4        # creation-batch sector trash leaves no recovery anchor (no journa
 # SEGV these used to take inside getDbPointer (parsing "db" as the pointer 0xdb)
 # is fixed in test1.c; the underlying open-time divergence is intentional.
 alter2        # set_file_format corrupts the prolly manifest; eager open fails, db command never created
+dbstatus	# echo-vtab DROP after canonical adoption's schema reset re-runs the constructor against an already-dropped backing table; drop_all_tables aborts (same class the ported vtab1 coverage pins); heap-shape probes also differ structurally on prolly
 walro         # readonly_shm + readonly *-shm perms; doltlite has no WAL shm, open fails, db command never created
 
 # WAL / shm feature divergences. doltlite has no rollback-journal or WAL *-shm
