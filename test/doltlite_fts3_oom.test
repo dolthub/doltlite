@@ -117,6 +117,48 @@ foreach {tn iFail sql okres} {
   } {1}
 }
 
+do_test doltlite_fts3_oom-2.3 {
+  set base [db one {SELECT count(*) FROM sqlite_master}]
+  set bad ok
+  for {set iFail 1} {$iFail<=30 && $bad=="ok"} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 100000
+    set res [catchsql {SELECT count(*) FROM sqlite_master}]
+    set nFail [sqlite3_memdebug_fail -1 -benigncnt nBenign]
+    if {$nFail>$nBenign} {
+      if {$res!="1 {out of memory}"} {
+        set bad [list $iFail $res $nFail $nBenign]
+      }
+    } elseif {$res!="0 $base"} {
+      set bad [list $iFail $res $nFail $nBenign]
+    }
+  }
+  set bad
+} {ok}
+
+do_test doltlite_fts3_oom-2.4 {
+  forcedelete test_open_oom.db
+  sqlite3 db_open test_open_oom.db
+  sqlite3_db_config_lookaside db_open 0 0 0
+  db_open eval {
+    CREATE VIRTUAL TABLE t1 USING fts3(a, b);
+    SELECT dolt_commit('-A','-m','fts');
+  }
+  db_open close
+
+  set bad ok
+  for {set iFail 340} {$iFail<=380 && $bad=="ok"} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 1
+    set rc [catch {sqlite3 db_open test_open_oom.db} msg]
+    set nFail [sqlite3_memdebug_fail -1 -benigncnt nBenign]
+    if {!$rc} { catch {db_open close} }
+    if {$nFail>$nBenign && !$rc} {
+      set bad [list $iFail $rc $msg $nFail $nBenign]
+    }
+  }
+  forcedelete test_open_oom.db
+  set bad
+} {ok}
+
 do_test doltlite_fts3_oom-3.1 {
   set bad ok
   for {set iFail 1} {$iFail<=340 && $bad=="ok"} {incr iFail} {
