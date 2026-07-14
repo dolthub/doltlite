@@ -729,7 +729,8 @@ static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
                           BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
-static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
+static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
+                                 int *pRc);
 static int btreeRefreshFromDisk(Btree *p);
 static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pCatHash,
@@ -3207,22 +3208,59 @@ static int saveCursorPosition(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE){
+/* Borrowed pointer into the catalog or parsed schema; NULL if the number
+** names nothing. Never allocates, so absence is unambiguous. */
+static const char *findTableNumberName(sqlite3 *db, Pgno iTable){
+  Btree *pBtree;
+  Schema *pSchema;
+  HashElem *k;
+  int i;
+  if( !db || db->nDb<=0 ) return 0;
+  pBtree = db->aDb[0].pBt;
+  if( pBtree && pBtree->cat.a ){
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
+        return pBtree->cat.a[i].zName;
+      }
+    }
+  }
+  pSchema = db->aDb[0].pSchema;
+  if( pSchema ){
+    for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+      Table *pTab = (Table*)sqliteHashData(k);
+      if( pTab && pTab->tnum==(Pgno)iTable ){
+        return pTab->zName;
+      }
+    }
+  }
+  return 0;
+}
+
+static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
+                                 int *pRc){
   if( !pTE || pTE->iTable<=1 ) return 0;
   if( pTE->tableRootKnown ) return pTE->isTableRoot ? 1 : 0;
   if( !pTE->zName && pBtree && pBtree->db ){
-    pTE->zName = doltliteResolveTableNumber(pBtree->db, pTE->iTable);
+    const char *z = findTableNumberName(pBtree->db, pTE->iTable);
+    if( z ){
+      pTE->zName = sqlite3_mprintf("%s", z);
+      if( !pTE->zName ){
+        /* Leave the verdict uncached so a post-OOM retry can classify. */
+        if( pRc ) *pRc = SQLITE_NOMEM;
+        return 0;
+      }
+    }
   }
   pTE->isTableRoot = pTE->zName!=0;
   pTE->tableRootKnown = 1;
   return pTE->isTableRoot ? 1 : 0;
 }
 
-static int cursorIsShadowTableRoot(BtCursor *pCur){
+static int cursorIsShadowTableRoot(BtCursor *pCur, int *pRc){
   struct TableEntry *pTE;
   if( !pCur || !pCur->pBtree || !pCur->pBtree->db ) return 0;
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( !tableEntryIsTableRoot(pCur->pBtree, pTE) || !pTE->zName ) return 0;
+  if( !tableEntryIsTableRoot(pCur->pBtree, pTE, pRc) || !pTE->zName ) return 0;
   return sqlite3ShadowTableName(pCur->pBtree->db, pTE->zName);
 }
 
@@ -3704,21 +3742,6 @@ static int findTableIndexInArray(
     }
   }
   return -1;
-}
-
-static char *resolveLiveSchemaTableNumber(sqlite3 *db, Pgno iTable){
-  Schema *pSchema;
-  HashElem *k;
-  if( !db || db->nDb<=0 ) return 0;
-  pSchema = db->aDb[0].pSchema;
-  if( !pSchema ) return 0;
-  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
-    Table *pTab = (Table*)sqliteHashData(k);
-    if( pTab && pTab->tnum==(Pgno)iTable ){
-      return sqlite3_mprintf("%s", pTab->zName);
-    }
-  }
-  return 0;
 }
 
 static int findSavepointTableIndexInArray(
@@ -6520,7 +6543,9 @@ static int prollyBtreeCursor(
 
   pCur->curIntKey = (pTE->flags & BTREE_INTKEY) ? 1 : 0;
   if( !pCur->curIntKey ){
-    pCur->isTableRoot = tableEntryIsTableRoot(p, pTE) ? 1 : 0;
+    int rcRoot = SQLITE_OK;
+    pCur->isTableRoot = tableEntryIsTableRoot(p, pTE, &rcRoot) ? 1 : 0;
+    if( rcRoot!=SQLITE_OK ) return rcRoot;
   }
 
   if( wrFlag & BTREE_WRCSR ){
@@ -8807,7 +8832,9 @@ static int prollyBtCursorInsert(
     int isIndex = 0;
     if( pCur->pKeyInfo ){
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-      isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
+      int rcRoot = SQLITE_OK;
+      isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE, &rcRoot));
+      if( rcRoot!=SQLITE_OK ) return rcRoot;
       storePayload = keyInfoHasLossyCollation(pCur->pKeyInfo);
     }
     if( pCur->pKeyInfo
@@ -9126,7 +9153,9 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         if( pCur->pKeyInfo
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
           struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-          if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE) ){
+          int rcRoot = SQLITE_OK;
+          if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE, &rcRoot) ){
+            if( rcRoot!=SQLITE_OK ) return rcRoot;
             nDelKeyField = 0;
           }else{
             nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
@@ -9227,11 +9256,16 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
       pCur->mmActive = 0;
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
+        int rcRoot = SQLITE_OK;
         pCur->flushSeekEdits = 1;
         if( pCur->curIntKey && hasSavedKey
-         && ((flags & BTREE_AUXDELETE) || cursorIsShadowTableRoot(pCur)) ){
+         && ((flags & BTREE_AUXDELETE)
+             || cursorIsShadowTableRoot(pCur, &rcRoot)) ){
           pCur->cachedIntKey = iKey;
           pCur->curFlags |= BTCF_DeleteKey;
+        }else if( rcRoot!=SQLITE_OK ){
+          rc = rcRoot;
+          goto delete_cleanup;
         }else if( !pCur->curIntKey && hasSavedKey && nKey>0 ){
           /* Park the cursor on the mut-map tombstone of the deleted key so
           ** the next step resumes the scan from there. Re-seeding from a
@@ -10844,22 +10878,8 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
 }
 
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
-  Btree *pBtree;
-  int i;
-  if( !db || db->nDb<=0 ) return 0;
-  pBtree = db->aDb[0].pBt;
-  if( pBtree && pBtree->cat.a ){
-    for(i=0; i<pBtree->cat.n; i++){
-      if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
-        return sqlite3_mprintf("%s", pBtree->cat.a[i].zName);
-      }
-    }
-  }
-  {
-    char *zLive = resolveLiveSchemaTableNumber(db, iTable);
-    if( zLive ) return zLive;
-  }
-  return 0;
+  const char *z = findTableNumberName(db, iTable);
+  return z ? sqlite3_mprintf("%s", z) : 0;
 }
 
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){

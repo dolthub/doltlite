@@ -697,7 +697,12 @@ done:
 }
 
 int chunkStoreClose(ChunkStore *cs){
+  /* The marker is a pure optimization (skips recovery on the next open) and
+  ** every failure inside it is already a silent no-op, so its allocations
+  ** must not read as swallowed OOM under fault injection. */
+  sqlite3BeginBenignMalloc();
   csWriteCleanCloseMarker(cs);
+  sqlite3EndBenignMalloc();
   chunkStoreUnlock(cs);
   if( cs->file.pFile ){
     csCloseFile(cs->file.pFile);
