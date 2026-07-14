@@ -236,6 +236,38 @@ run_test "path_reset_recreated_table_keeps_live_row" \
   "SELECT k || '|' || n FROM a;" \
   "7|70" "$DB10"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
+# Hard reset with untracked tables present must restore every tracked
+# table (including ones dropped in the working tree), revert tracked
+# modifications, and preserve the untracked tables with their indexes --
+# with drops and creates having shifted the catalogs' positional numbering
+# so the merged catalog spans two numbering domains.
+DB11=/tmp/test_reset11_$$.db; rm -f "$DB11"
+$DOLTLITE "$DB11" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t1(a INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t2(a INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t3(a INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX i_t2 ON t2(v);
+INSERT INTO t1 VALUES(1,'one'); INSERT INTO t2 VALUES(2,'two'); INSERT INTO t3 VALUES(3,'three');
+SELECT dolt_commit('-A','-m','seed');
+DROP TABLE t1;
+UPDATE t2 SET v='MODIFIED';
+CREATE TABLE u1(x INTEGER PRIMARY KEY, w TEXT);
+CREATE INDEX i_u1 ON u1(w);
+INSERT INTO u1 VALUES(9,'kept');
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_untracked_restores_dropped_table" \
+  "SELECT v FROM t1;" "one" "$DB11"
+run_test "hard_reset_untracked_reverts_modification" \
+  "SELECT v FROM t2;" "two" "$DB11"
+run_test "hard_reset_untracked_table_survives" \
+  "SELECT w FROM u1 INDEXED BY i_u1 WHERE w='kept';" "kept" "$DB11"
+run_test "hard_reset_untracked_status" \
+  "SELECT group_concat(table_name || ':' || status) FROM dolt_status;" \
+  "u1:new table" "$DB11"
+run_test "hard_reset_untracked_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 
 dltest_finish

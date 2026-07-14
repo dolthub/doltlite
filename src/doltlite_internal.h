@@ -744,6 +744,10 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
     sqlite3 *db, struct TableEntry *aTables, int nTables,
     SchemaEntry *aFallbackSchema, int nFallbackSchema,
     u8 **ppOut, int *pnOut);
+int doltliteSerializeCatalogEntriesForeignDomain(
+    sqlite3 *db, struct TableEntry *aTables, int nTables,
+    SchemaEntry *aFallbackSchema, int nFallbackSchema,
+    u8 **ppOut, int *pnOut);
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData);

@@ -2085,6 +2085,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   int nTables,
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
+  int bForeignDomain,
   u8 **ppOut,
   int *pnOut
 ){
@@ -2110,9 +2111,15 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
-  rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
-                                      &aRows, &nRows, aMeta, nMeta,
-                                      aTables, nTables);
+  /* Live-schema supplementation keys rows by the CONNECTION's table
+  ** numbers. Arrays numbered in a foreign domain (a reset target catalog)
+  ** must not use it -- a live number there can belong to a different table
+  ** entirely, and their missing rows come from the fallback schema. */
+  if( !bForeignDomain ){
+    rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
+                                        &aRows, &nRows, aMeta, nMeta,
+                                        aTables, nTables);
+  }
   if( rc==SQLITE_OK ){
     rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
                                          aFallbackSchema, nFallbackSchema);
@@ -2243,13 +2250,25 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         aSorted[i].zTblName = "";
         continue;
       }
-      /* The table number is the entry's identity; match it first. Cached
-      ** entry names go stale across RENAME, so a name match is only a
-      ** fallback for entries whose number has no schema row. */
-      for(j=0; j<nRows; j++){
-        if( aRows[j].oldPg==aTables[i].iTable ){
-          pRow = &aRows[j];
-          break;
+      /* The table number is the entry's identity; match it first. For the
+      ** LIVE catalog that match is unconditional -- cached entry names go
+      ** stale across RENAME, so a name match is only a fallback for entries
+      ** whose number has no schema row. Constructed arrays (staging, merge,
+      ** reset) carry authoritative loaded names but may mix entries from
+      ** two numbering domains, so a number match that disagrees on name is
+      ** a cross-domain collision and must be rejected. */
+      {
+        int bLiveCatalog = (aTables==pBtree->cat.a);
+        for(j=0; j<nRows; j++){
+          if( aRows[j].oldPg==aTables[i].iTable ){
+            if( !bLiveCatalog
+             && aTables[i].zName && aRows[j].zName
+             && strcmp(aRows[j].zName, aTables[i].zName)!=0 ){
+              continue;
+            }
+            pRow = &aRows[j];
+            break;
+          }
         }
       }
       if( !pRow && aTables[i].zName ){
@@ -2359,7 +2378,23 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
-      aFallbackSchema, nFallbackSchema, ppOut, pnOut);
+      aFallbackSchema, nFallbackSchema, 0, ppOut, pnOut);
+}
+
+int doltliteSerializeCatalogEntriesForeignDomain(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
+  u8 **ppOut,
+  int *pnOut
+){
+  if( !db ) return SQLITE_MISUSE;
+  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      db->aDb[0].pBt, aTables, nTables,
+      aFallbackSchema, nFallbackSchema, 1, ppOut, pnOut);
 }
 
 static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
@@ -2470,7 +2505,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
 
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   return doltliteSerializeCatalogEntriesForBtreeImpl(
-      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
+      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, 0, ppOut, pnOut);
 }
 
 static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){

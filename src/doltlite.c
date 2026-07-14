@@ -2226,10 +2226,35 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
     pStmt = 0;
   }
 
+  /* An untracked table's indexes carry their own catalog entries. */
+  if( rc==SQLITE_OK && nUntracked>0 ){
+    rc = sqlite3_prepare_v2(db,
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
+        -1, &pStmt, 0);
+    for(j=0; rc==SQLITE_OK && j<nUntracked; j++){
+      sqlite3_bind_text(pStmt, 1, azUntracked[j], -1, SQLITE_STATIC);
+      while( sqlite3_step(pStmt)==SQLITE_ROW ){
+        const char *zIdx = (const char*)sqlite3_column_text(pStmt, 0);
+        char **aNew;
+        if( !zIdx ) continue;
+        aNew = sqlite3_realloc(azUntracked,
+            (nUntracked+1)*(int)sizeof(char*));
+        if( !aNew ){ rc = SQLITE_NOMEM; break; }
+        azUntracked = aNew;
+        azUntracked[nUntracked++] = sqlite3_mprintf("%s", zIdx);
+      }
+      sqlite3_reset(pStmt);
+    }
+    sqlite3_finalize(pStmt);
+    pStmt = 0;
+  }
+
   if( rc==SQLITE_OK && nUntracked>0 ){
     ProllyHash workingHash;
     struct TableEntry *aWorking = 0, *aTarget = 0;
-    int nWorking = 0, nTarget = 0;
+    SchemaEntry *aWorkSchema = 0;
+    int nWorking = 0, nTarget = 0, nWorkSchema = 0;
+    Pgno iNextFree = 2;
 
     rc = doltliteFlushCatalogToHash(db, &workingHash);
     if( rc==SQLITE_OK ){
@@ -2239,34 +2264,56 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
       rc = doltliteLoadCatalog(db, pTargetCatHash, &aTarget, &nTarget, 0);
     }
     if( rc==SQLITE_OK ){
-      for(j=0; j<nWorking; j++){
-        int tgtIdx = -1;
-        if( aWorking[j].iTable==1 ) continue;
-        for(k=0; k<nTarget; k++){
-          if( aTarget[k].zName && aWorking[j].zName
-           && strcmp(aTarget[k].zName, aWorking[j].zName)==0 ){
-            tgtIdx = k;
+      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
+                                 &aWorkSchema, &nWorkSchema);
+    }
+    /* Build FROM the target so every tracked table -- including ones
+    ** dropped in the working tree -- is restored, then append the
+    ** untracked entries renumbered past the target range (working numbers
+    ** can collide with target numbers for different tables). Loaded index
+    ** entries carry no name, so each untracked object is located through
+    ** the working schema rows (name -> working number -> entry); its
+    ** schema row reaches the blob via the fallback list, which pairs by
+    ** name and stamps the appended number. */
+    if( rc==SQLITE_OK ){
+      for(k=0; k<nTarget; k++){
+        if( aTarget[k].iTable >= iNextFree ) iNextFree = aTarget[k].iTable + 1;
+      }
+      for(j=0; j<nUntracked && rc==SQLITE_OK; j++){
+        SchemaEntry *pSe = findSchemaEntry(aWorkSchema, nWorkSchema,
+                                           azUntracked[j]);
+        struct TableEntry *pWork = 0;
+        struct TableEntry *aNew;
+        char *zDup;
+        if( !pSe || pSe->iRootpage<=1 ) continue;
+        for(k=0; k<nWorking; k++){
+          if( aWorking[k].iTable==pSe->iRootpage ){
+            pWork = &aWorking[k];
             break;
           }
         }
-        if( tgtIdx>=0 ){
-          char *zDup = aTarget[tgtIdx].zName
-                         ? sqlite3_mprintf("%s", aTarget[tgtIdx].zName) : 0;
-          if( aTarget[tgtIdx].zName && !zDup ){
-            rc = SQLITE_NOMEM;
-            break;
-          }
-          sqlite3_free(aWorking[j].zName);
-          aWorking[j] = aTarget[tgtIdx];
-          aWorking[j].zName = zDup;
+        if( !pWork ) continue;
+        zDup = sqlite3_mprintf("%s", azUntracked[j]);
+        aNew = zDup ? sqlite3_realloc(aTarget,
+                        (nTarget+1)*(int)sizeof(struct TableEntry)) : 0;
+        if( !aNew ){
+          sqlite3_free(zDup);
+          rc = SQLITE_NOMEM;
+          break;
         }
+        aTarget = aNew;
+        aTarget[nTarget] = *pWork;
+        aTarget[nTarget].zName = zDup;
+        aTarget[nTarget].iTable = iNextFree++;
+        nTarget++;
       }
     }
     if( rc==SQLITE_OK ){
       u8 *buf = 0;
       int nBuf = 0;
       ProllyHash mergedHash;
-      rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
+      rc = doltliteSerializeCatalogEntriesForeignDomain(
+          db, aTarget, nTarget, aWorkSchema, nWorkSchema, &buf, &nBuf);
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(cs, buf, nBuf, &mergedHash);
       }
@@ -2277,6 +2324,10 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
     }
     doltliteFreeCatalog(aWorking, nWorking);
     doltliteFreeCatalog(aTarget, nTarget);
+    if( aWorkSchema ){
+      for(j=0; j<nWorkSchema; j++) clearSchemaEntry(&aWorkSchema[j]);
+      sqlite3_free(aWorkSchema);
+    }
   }
 
   if( pStmt ) sqlite3_finalize(pStmt);
