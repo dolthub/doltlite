@@ -1,6 +1,5 @@
 e_fts3
 fts-9fd058691
-fts3
 fts3aa
 fts3ab
 fts3ac

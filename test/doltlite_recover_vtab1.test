@@ -97,12 +97,15 @@ do_test 1.6 {
   xFilter {SELECT rowid, d, e, f FROM 't2' WHERE d = ?} \
 ]
 
+# Dropping the backing table no longer reconnects the echo vtabs (schema
+# invalidation is stock-lazy, not eager at DDL commit), so the DROPs all
+# succeed; et1/et2 disconnect without re-running their constructors.
 do_catchsql_test 2.1 {
   DROP TABLE t1;
   DROP TABLE t2;
   DROP TABLE et1;
   DROP TABLE et2;
-} {1 {vtable constructor failed: et1}}
+} {0 {}}
 
 do_execsql_test 2.2 {
   CREATE TABLE still_ok(x);
@@ -133,7 +136,6 @@ do_test 3.2 {
 do_test 3.3 {
   set ::echo_module
 } [list \
-  xConnect echo main epkt pkt \
   xBestIndex {SELECT rowid, a, NULL, NULL FROM 'pkt' WHERE a = ?} \
   xFilter {SELECT rowid, a, NULL, NULL FROM 'pkt' WHERE a = ?} 1 \
 ]

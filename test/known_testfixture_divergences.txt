@@ -71,7 +71,6 @@ alter alter-1.2  # PK auto-index row absent from sqlite_master on PK-clustered t
 alter alter-1.5  # PK auto-index row absent from sqlite_master on PK-clustered tables
 alter alter-1.6  # PK auto-index row absent from sqlite_master on PK-clustered tables
 alter alter-1.7  # PK auto-index row absent from sqlite_master on PK-clustered tables
-alter alter-6.6  # sqlite_master oid lookup after reopen; canonical schema row order
 
 # ── in ──
 in in-19.40  # IN clause path that hits NOT NULL via rowid lookup
@@ -136,7 +135,6 @@ window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
 window1 window1-10.8  # rowid-order vs PK-order on unordered SELECT
 
 # ── e_createtable ──
-e_createtable e_createtable-3.11.2  # column-limit error names the reload table (t9 vs t11)
 e_createtable e_createtable-4.4.1   # NULL into PK rejected: NOT NULL (PK-clustered; stock rowid-table quirk allows it)
 e_createtable e_createtable-4.4.2
 e_createtable e_createtable-4.4.3
@@ -221,8 +219,6 @@ pragma pragma-22.3.3
 pragma pragma-22.4.1
 pragma pragma-22.4.2
 pragma pragma-22.4.3  # mid-stream WAL corruption poisons the main db, so the ATTACH in 22.4.1 fails and aux never attaches
-pragma pragma-23.1
-pragma pragma-23.3
 pragma pragma-24.2
 # pragma-3.*: integrity_check corruption injection. The hexio pokes damage
 # chunk-store WAL bytes, so DoltLite reports a repository-level integrity
@@ -254,14 +250,8 @@ pragma pragma-4.6
 pragma pragma-6.2.2
 pragma pragma-6.8
 pragma pragma-8.1.10
-pragma pragma-8.1.12
-pragma pragma-8.1.13
 pragma pragma-8.1.16
 pragma pragma-8.1.17
-pragma pragma-8.1.2
-pragma pragma-8.1.3
-pragma pragma-8.1.4
-pragma pragma-8.1.6
 pragma pragma-8.1.9
 pragma pragma-8.2.4.1
 pragma pragma-8.2.4.3
@@ -549,8 +539,6 @@ without_rowid7 without_rowid7-3.6
 # review in https://github.com/dolthub/doltlite/issues/1119
 # ---------------------------------------------------------------------------
 attach attach-10.2
-attach attach-2.15
-attach attach-2.16
 attach attach-8.1
 attach attach-8.2
 attach attach-8.3
@@ -939,7 +927,6 @@ date date-20.4
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
-insert insert-5.4  # asserts sqlite_master.rootpage page number; meaningless under prolly storage
 intpkey intpkey-3.2  # sqlite_search_count metric; row (5|hello|world) matches stock
 intpkey intpkey-3.6  # sqlite_search_count metric; row (5|hello|world) matches stock
 # minmax/minmax2/minmax3: all assert sqlite_search_count (the internal btree
@@ -1030,10 +1017,6 @@ trans trans-9.8.5-1766
 # stock keeps original rowids (v1,t2), so the rows come back in a different order.
 # Row contents and all trigger side-effects (RAISE(ABORT) blocks the delete, data
 # intact) are identical to stock — rowid-order artifact only.
-trigger1 trigger1-6.1
-trigger1 trigger1-6.2
-trigger1 trigger1-6.5
-trigger1 trigger1-6.6
 where where-1.1.1  # sqlite_search_count metric; SELECT x,y,w WHERE w=10 returns 3|121|10 on both
 
 # --- Large/Additional/Crash-recovery divergences (full local capture via the
@@ -1265,21 +1248,13 @@ descidx3 descidx3-1.1  # hexio read of SQLite file-format version byte (chunk st
 #     offset 44). The chunk store is not a SQLite file, so that field reads 0
 #     vs the expected 1/3 (same class as descidx3-1.1).
 alter3 alter3-3.3  # get_file_format byte (chunk store has no SQLite header)
-alter3 alter3-3.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
 alter3 alter3-4.3  # get_file_format byte (chunk store has no SQLite header)
-alter3 alter3-4.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
-alter3 alter3-5.4  # PRAGMA aux.schema_version is catalog-hash-derived, not stock cookie
 alter3 alter3-5.5  # get_file_format byte, main+aux (chunk store has no SQLite header)
-alter3 alter3-5.8  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
 alter3 alter3-7.1  # get_file_format byte after VACUUM (chunk store has no SQLite header)
 alter3 alter3-7.2  # get_file_format byte after ALTER ADD (chunk store has no SQLite header)
 alter3 alter3-7.3  # get_file_format byte after ALTER ADD (chunk store has no SQLite header)
 alter3 alter3-7.4  # get_file_format byte after ALTER ADD (chunk store has no SQLite header)
 alter3 alter3-7.5  # get_file_format byte after VACUUM (chunk store has no SQLite header)
-alter4 alter4-3.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
-alter4 alter4-4.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
-alter4 alter4-5.4  # PRAGMA aux.schema_version is catalog-hash-derived, not stock cookie
-alter4 alter4-5.8  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
 
 # altertab3 — altertab3-31.1 asserts `PRAGMA page_count` is unchanged across an
 # `ALTER TABLE DROP COLUMN` (stock's metadata-only drop). DoltLite stores a
@@ -1292,7 +1267,6 @@ altertab3 altertab3-31.1  # PRAGMA page_count across DROP COLUMN; chunk store ha
 #   * 11.1: order of rows returned from sqlite_schema. DoltLite returns catalog
 #     entries in its own order (virtual table e1 before base table x1); stock
 #     returns creation order. Unordered SELECT, multiset-equal.
-altercol altercol-11.1      # sqlite_schema row order (multiset equal)
 
 # altercons / altercons2 — DDL text divergences after ALTER, never wrong data:
 #   * altercons 3.7.2/3.8.2: DoltLite leaves a trailing space in the rewritten
@@ -1301,7 +1275,6 @@ altercol altercol-11.1      # sqlite_schema row order (multiset equal)
 #     stored DDL.
 altercons altercons-3.7.2   # trailing space in rewritten DDL after DROP COLUMN
 altercons altercons-3.8.2   # trailing space in rewritten DDL after DROP COLUMN
-altercons altercons-6.4.1   # DDL normalizes "CHECK (" to "CHECK("
 
 # limit2 — limit2-110.3 compares sqlite_search_count between an indexed and an
 # unindexed ORDER BY ... LIMIT, asserting the indexed plan scans <2% as many
@@ -1651,8 +1624,6 @@ tkt3457 tkt3457-1.5  # no rollback-journal file to back up
 # a peer connection drops the base table. DoltLite's shared catalog sees the
 # DROP immediately, so CREATE TEMP TRIGGER fails "no such table: t1" and the
 # orphan never exists; temp.sqlite_master is empty.
-tkt3810 tkt3810-3  # CREATE TEMP TRIGGER fails "no such table" (shared catalog sees peer DROP)
-tkt3810 tkt3810-4  # temp.sqlite_master empty: the orphan trigger was never created
 
 # where4 / whereD / whereG / whereL — query-planner and storage-model
 # divergences; in every case the result rows are correct, only a plan metric,
@@ -1790,6 +1761,7 @@ attach2 attach2-4.15    # PRAGMA lock_status: doltlite locking model
 # 11.0's successful ATTACH is still in use.
 attach3 attach3-11.0  # deferred open: ATTACH succeeds, write errors later (verified)
 attach3 attach3-11.1  # cascade: aux name still attached after 11.0
+attach3 attach3-3.2  # rootpage in raw master row is the allocation-order table number, not the stock page number
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
@@ -1827,7 +1799,6 @@ vtab2 vtab2-5.3  # encoding-dependent corruption-injection error text (#1164)
 # doltlite's post-DDL schema reload reconnecting the vtab. Everything after
 # 1.3 cascades (half-applied echo writes, empty callback logs, the real
 # UNIQUE message where stock saw "unknown error").
-vtab4 vtab4-1.2  # extra xConnect: schema reload reconnects the vtab
 vtab4 vtab4-1.3  # echo internal SELECT rowid fails (WITHOUT ROWID)
 vtab4 vtab4-1.4  # cascade
 vtab4 vtab4-2.1  # cascade
@@ -1843,7 +1814,6 @@ vtab4 vtab4-3.3  # cascade
 
 # vtabH-1.1 — extra leading xConnect (schema reload reconnects the vtab);
 # the xBestIndex/xFilter content matches stock.
-vtabH vtabH-1.1  # extra xConnect: schema reload reconnects the vtab
 
 # vtab_err — OOM fault injection over the echo module: doltlite's allocation
 # pattern shifts which fault points surface, so a handful of the 1927
@@ -3331,9 +3301,6 @@ altercorrupt altercorrupt-2.1
 # cache after DDL so the fts3 parent vtab isn't visible at parse time and the
 # reserved-name error is skipped (stock has the same gap on a cold cache).
 # 16.24/16.25 are cascade: 16.23's CREATE leaves y1_segments behind.
-altertab altertab-16.23
-altertab altertab-16.24
-altertab altertab-16.25
 
 # PRAGMA encoding=UTF16be is a no-op (doltlite stores UTF-8 only), so the
 # expected UTF-8->UTF-16 conversion artifacts (00xx widening, FFFD
@@ -3456,6 +3423,107 @@ colmeta colmeta-5.2
 # fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330
 # are cascades that then see an empty db instead of the corrupt content
 # ("ok" / "no such table" instead of "database disk image is malformed").
+# dbstatus asserts byte-exact pager/btree heap accounting; the prolly
+# backend has no page cache or btree page images, so every memory-shape
+# probe differs structurally. IDs are the ubuntu-runner set (the failing
+# subset is platform-dependent; only CI enforces this list).
+dbstatus dbstatus-1.1
+dbstatus dbstatus-2.0-1.a
+dbstatus dbstatus-2.0-1.b
+dbstatus dbstatus-2.0-1.c
+dbstatus dbstatus-2.0-2.a
+dbstatus dbstatus-2.0-2.b
+dbstatus dbstatus-2.0-2.c
+dbstatus dbstatus-2.0-3.a
+dbstatus dbstatus-2.0-3.b
+dbstatus dbstatus-2.0-3.c
+dbstatus dbstatus-2.0-4.a
+dbstatus dbstatus-2.0-4.b
+dbstatus dbstatus-2.0-4.c
+dbstatus dbstatus-2.0-5.a
+dbstatus dbstatus-2.0-5.b
+dbstatus dbstatus-2.0-5.c
+dbstatus dbstatus-2.0-6k.ax
+dbstatus dbstatus-2.0-6k.b
+dbstatus dbstatus-2.0-6k.c
+dbstatus dbstatus-2.0-7.a
+dbstatus dbstatus-2.0-7.b
+dbstatus dbstatus-2.0-7.c
+dbstatus dbstatus-2.0-8x.ax
+dbstatus dbstatus-2.0-8x.b
+dbstatus dbstatus-2.0-8x.c
+dbstatus dbstatus-3.0-2.b
+dbstatus dbstatus-3.0-2.c
+dbstatus dbstatus-3.0-2.d
+dbstatus dbstatus-3.0-3.b
+dbstatus dbstatus-3.0-3.c
+dbstatus dbstatus-3.0-3.d
+dbstatus dbstatus-2.64-1.a
+dbstatus dbstatus-2.64-1.b
+dbstatus dbstatus-2.64-1.c
+dbstatus dbstatus-2.64-2.a
+dbstatus dbstatus-2.64-2.b
+dbstatus dbstatus-2.64-2.c
+dbstatus dbstatus-2.64-3.a
+dbstatus dbstatus-2.64-3.b
+dbstatus dbstatus-2.64-3.c
+dbstatus dbstatus-2.64-4.a
+dbstatus dbstatus-2.64-4.b
+dbstatus dbstatus-2.64-4.c
+dbstatus dbstatus-2.64-5.a
+dbstatus dbstatus-2.64-5.b
+dbstatus dbstatus-2.64-5.c
+dbstatus dbstatus-2.64-6k.ax
+dbstatus dbstatus-2.64-6k.b
+dbstatus dbstatus-2.64-6k.c
+dbstatus dbstatus-2.64-7.a
+dbstatus dbstatus-2.64-7.b
+dbstatus dbstatus-2.64-7.c
+dbstatus dbstatus-2.64-8x.ax
+dbstatus dbstatus-2.64-8x.b
+dbstatus dbstatus-2.64-8x.c
+dbstatus dbstatus-3.64-2.b
+dbstatus dbstatus-3.64-2.c
+dbstatus dbstatus-3.64-2.d
+dbstatus dbstatus-3.64-3.b
+dbstatus dbstatus-3.64-3.c
+dbstatus dbstatus-3.64-3.d
+dbstatus dbstatus-2.120-1.a
+dbstatus dbstatus-2.120-1.b
+dbstatus dbstatus-2.120-1.c
+dbstatus dbstatus-2.120-2.a
+dbstatus dbstatus-2.120-2.b
+dbstatus dbstatus-2.120-2.c
+dbstatus dbstatus-2.120-3.a
+dbstatus dbstatus-2.120-3.b
+dbstatus dbstatus-2.120-3.c
+dbstatus dbstatus-2.120-4.a
+dbstatus dbstatus-2.120-4.b
+dbstatus dbstatus-2.120-4.c
+dbstatus dbstatus-2.120-5.a
+dbstatus dbstatus-2.120-5.b
+dbstatus dbstatus-2.120-5.c
+dbstatus dbstatus-2.120-6k.ax
+dbstatus dbstatus-2.120-6k.b
+dbstatus dbstatus-2.120-6k.c
+dbstatus dbstatus-2.120-7.a
+dbstatus dbstatus-2.120-7.b
+dbstatus dbstatus-2.120-7.c
+dbstatus dbstatus-2.120-8x.ax
+dbstatus dbstatus-2.120-8x.b
+dbstatus dbstatus-2.120-8x.c
+dbstatus dbstatus-3.120-2.b
+dbstatus dbstatus-3.120-2.c
+dbstatus dbstatus-3.120-2.d
+dbstatus dbstatus-3.120-3.b
+dbstatus dbstatus-3.120-3.c
+dbstatus dbstatus-3.120-3.d
+dbstatus dbstatus-4.0.1
+dbstatus dbstatus-4.1.1
+dbstatus dbstatus-4.2.1
+dbstatus dbstatus-4.2.2
+dbstatus dbstatus-4.2.3
+dbstatus dbstatus-4.2.4
 dbfuzz001 dbfuzz001-100
 dbfuzz001 dbfuzz001-101a
 dbfuzz001 dbfuzz001-110
