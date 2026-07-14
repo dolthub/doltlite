@@ -2124,11 +2124,15 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     ProllyMutMap mm;
     struct TableEntry masterEntry;
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
+    /* Numbers allocated at CREATE are permanent: the persisted form keeps
+    ** live rootpages, rowids, and SQL text verbatim, so the live session and
+    ** every reload agree by construction. Creation-order rowids are already
+    ** dependency-ordered (an object's row is inserted after the rows it
+    ** references), and merge resolves cross-branch number collisions with
+    ** its own remap. */
     for(i=0; i<nRows; i++){
       if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
         aRows[i].newPg = 0;
-      }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
-        aRows[i].newPg = (Pgno)(i + 2);
       }else{
         aRows[i].newPg = aRows[i].oldPg;
       }
@@ -2145,7 +2149,8 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       int nRec = 0;
       u8 *pRec;
       ProllyHash h;
-      const char *zRecordSql = aRows[i].zSql;
+      /* schemaHash still hashes the canonicalized SQL so schema comparison
+      ** is text-normalized, but the stored row keeps the user's text. */
       if( (strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0)
        && aRows[i].zSql!=0 && aRows[i].zSql[0]!=0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
@@ -2156,25 +2161,18 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
           return SQLITE_NOMEM;
         }
         prollyHashCompute((const u8*)zCanon, (int)strlen(zCanon), &h);
-        zRecordSql = zCanon;
-        pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
-                                        aRows[i].zTblName, aRows[i].newPg,
-                                        zRecordSql, &nRec);
         sqlite3_free(zCanon);
       }else{
         memset(&h, 0, sizeof(h));
-        pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
-                                        aRows[i].zTblName, aRows[i].newPg,
-                                        zRecordSql, &nRec);
       }
+      pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
+                                      aRows[i].zTblName, aRows[i].newPg,
+                                      aRows[i].zSql, &nRec);
       for(j=0; j<nTables; j++){
         if( aTables[j].iTable==aRows[i].oldPg ){
           aTables[j].schemaHash = h;
           break;
         }
-      }
-      if( aRows[i].newPg==aRows[i].oldPg ){
-        aRows[i].newPg = aRows[i].oldPg;
       }
       if( !pRec ){
         prollyMutMapFree(&mm);
@@ -2182,7 +2180,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         freeCatalogEntryMeta(aMeta, nMeta);
         return SQLITE_NOMEM;
       }
-      rc = prollyMutMapInsert(&mm, 0, 0, (i64)(i + 1), pRec, nRec);
+      rc = prollyMutMapInsert(&mm, 0, 0, aRows[i].iRowid, pRec, nRec);
       sqlite3_free(pRec);
       if( rc!=SQLITE_OK ){
         prollyMutMapFree(&mm);
@@ -2205,15 +2203,9 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     masterRoot = masterEntry.root;
   }
 
-  if( nMeta>0 ){
-    Pgno iNextHidden = 2;
-    for(i=0; i<nRows; i++){
-      if( aRows[i].newPg >= iNextHidden ) iNextHidden = aRows[i].newPg + 1;
-    }
-    for(i=0; i<nMeta; i++){
-      if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
-      aMeta[i].iPersistTable = iNextHidden++;
-    }
+  for(i=0; i<nMeta; i++){
+    if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
+    aMeta[i].iPersistTable = aMeta[i].iTable;
   }
 
   if( nTables > 0 ){
@@ -2255,9 +2247,6 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         }
       }
       if( pRow ){
-        /* The row is this entry's identity whether it matched by name or by
-        ** old page number; emitting the live iTable on an oldPg mismatch
-        ** would leak session-specific numbering into the canonical blob. */
         aSorted[i].iTable = pRow->newPg;
         aSorted[i].zType = pRow->zType;
         aSorted[i].zName = pRow->zName;
@@ -2478,7 +2467,6 @@ static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
 
 static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   SchemaCatalogRow *aRows = 0;
-  SchemaCatalogRow *aCanon = 0;
   CatalogEntryMeta *aMeta = 0;
   ProllyHash currentMasterRoot;
   u8 masterFlags = 0;
@@ -2486,7 +2474,7 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   struct TableEntry masterEntry;
   int nRows = 0, nMeta = 0;
   int rc = SQLITE_OK;
-  int i, j;
+  int i;
 
   memset(pMasterRoot, 0, sizeof(*pMasterRoot));
   rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
@@ -2527,37 +2515,13 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
     return SQLITE_OK;
   }
 
-  aCanon = sqlite3_malloc(nRows * (int)sizeof(SchemaCatalogRow));
-  if( !aCanon ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return SQLITE_NOMEM;
-  }
-  memcpy(aCanon, aRows, nRows * (int)sizeof(SchemaCatalogRow));
-  qsort(aCanon, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
   for(i=0; i<nRows; i++){
-    if( schemaCatalogRowIsVirtualTable(&aCanon[i]) ){
-      aCanon[i].newPg = 0;
-    }else if( strcmp(aCanon[i].zType, "table")==0 || strcmp(aCanon[i].zType, "index")==0 ){
-      aCanon[i].newPg = (Pgno)(i + 2);
-    }else{
-      aCanon[i].newPg = aCanon[i].oldPg;
-    }
-  }
-  for(i=0; i<nRows; i++){
-    aRows[i].newPg = aRows[i].oldPg;
     if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
       aRows[i].newPg = 0;
-    }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
-      for(j=0; j<nRows; j++){
-        if( aCanon[j].oldPg==aRows[i].oldPg ){
-          aRows[i].newPg = aCanon[j].newPg;
-          break;
-        }
-      }
+    }else{
+      aRows[i].newPg = aRows[i].oldPg;
     }
   }
-  sqlite3_free(aCanon);
 
   memset(&mm, 0, sizeof(mm));
   rc = prollyMutMapInit(&mm, 1);
