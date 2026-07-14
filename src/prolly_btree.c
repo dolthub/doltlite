@@ -2231,7 +2231,16 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         aSorted[i].zTblName = "";
         continue;
       }
-      if( aTables[i].zName ){
+      /* The table number is the entry's identity; match it first. Cached
+      ** entry names go stale across RENAME, so a name match is only a
+      ** fallback for entries whose number has no schema row. */
+      for(j=0; j<nRows; j++){
+        if( aRows[j].oldPg==aTables[i].iTable ){
+          pRow = &aRows[j];
+          break;
+        }
+      }
+      if( !pRow && aTables[i].zName ){
         for(j=0; j<nRows; j++){
           if( strcmp(aRows[j].zType, "table")==0
            && aRows[j].zName
@@ -2239,12 +2248,6 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
             pRow = &aRows[j];
             break;
           }
-        }
-      }
-      for(j=0; j<nRows; j++){
-        if( !pRow && aRows[j].oldPg==aTables[i].iTable ){
-          pRow = &aRows[j];
-          break;
         }
       }
       if( pRow ){
