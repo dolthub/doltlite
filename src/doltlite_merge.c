@@ -1874,10 +1874,23 @@ do_merge_entry:
       if( !theirsEntry ){
 
         if( oursChanged ){
+          /* An index root moves whenever its table's data changes, so a
+          ** changed root alone does not make an index "modified". If its
+          ** definition matches the ancestor, the other branch's DROP wins
+          ** and the entry goes away; redefined-versus-dropped stays a real
+          ** conflict. */
+          if( !zName && zSchemaMergeName && zSchemaMergeName[0]
+           && !schemaEntryChangedByName(aAncSchema, nAncSchema,
+                                        aOursSchema, nOursSchema,
+                                        zSchemaMergeName) ){
+            continue;
+          }
           if( pzErrMsg ){
             *pzErrMsg = sqlite3_mprintf(
-              "schema conflict: table '%s' modified on one branch "
-              "and deleted on the other", zLogicalName ? zLogicalName : "");
+              "schema conflict: %s '%s' modified on one branch "
+              "and deleted on the other",
+              zName ? "table" : "index",
+              zLogicalName ? zLogicalName : "");
           }
           return SQLITE_ERROR;
         }
@@ -2166,7 +2179,9 @@ static int mergeCatalogPass2(
   Pgno *piNextMerged,
   int bDisjointSchemaChanges,
   SchemaRootpageRemap **ppaRemap,
-  int *pnRemap
+  int *pnRemap,
+  char ***pazReindex,
+  int *pnReindex
 ){
   int i;
 
@@ -2215,6 +2230,19 @@ static int mergeCatalogPass2(
             }
             if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
             aMerged[(*pnMerged)++] = newEntry;
+            /* The adopted tree covers only theirs' rows; ours' row changes
+            ** never touched it. Record the index for a rebuild over the
+            ** merged table once the merged catalog is live. */
+            if( pazReindex ){
+              char **azNew = sqlite3_realloc(*pazReindex,
+                  (*pnReindex+1)*(int)sizeof(char*));
+              char *zDup;
+              if( !azNew ) return SQLITE_NOMEM;
+              *pazReindex = azNew;
+              zDup = sqlite3_mprintf("%s", pTheirSe->zName);
+              if( !zDup ) return SQLITE_NOMEM;
+              (*pazReindex)[(*pnReindex)++] = zDup;
+            }
           }else{
             /* Honor our explicit DROP; theirs may only have auto-updated it. */
           }
@@ -2377,7 +2405,9 @@ int doltliteMergeCatalogs(
   char **pzErrMsg,
   SchemaMergeAction **ppActions,
   int *pnActions,
-  int bPreferOurMaster
+  int bPreferOurMaster,
+  char ***pazReindex,
+  int *pnReindex
 ){
   struct TableEntry *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
@@ -2451,7 +2481,8 @@ int doltliteMergeCatalogs(
                           aTheirsSchema, nTheirsSchema,
                           aMerged, &nMerged, &iNextMerged,
                           bDisjointSchemaChanges,
-                          &aRemap, &nRemap);
+                          &aRemap, &nRemap,
+                          pazReindex, pnReindex);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   rc = rebuildDisjointSchemaRows(db, aMerged, nMerged,
@@ -2483,3 +2514,20 @@ merge_cleanup:
 }
 
 #endif
+
+void doltliteFreeNameList(char **az, int n){
+  int i;
+  for(i=0; i<n; i++) sqlite3_free(az[i]);
+  sqlite3_free(az);
+}
+
+int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n){
+  int i, rc = SQLITE_OK;
+  for(i=0; i<n && rc==SQLITE_OK; i++){
+    char *zSql = sqlite3_mprintf("REINDEX \"%w\"", az[i]);
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }
+  return rc;
+}
