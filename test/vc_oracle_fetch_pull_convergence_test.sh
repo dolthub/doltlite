@@ -205,6 +205,77 @@ remote_flow "pull_conflict_poststate" "$MERGE_SEED" "$CONFLICT_ADVANCE" "$CONFLI
   "SELECT 'R|'||(SELECT count(*) FROM dolt_conflicts)||'|'||(SELECT v FROM t WHERE id=1);" \
   "SELECT CONCAT('R|',(SELECT COUNT(*) FROM dolt_conflicts),'|',(SELECT v FROM t WHERE id=1));"
 
+# ---- divergent pull where both sides add independent indexes and rows. ----
+echo "--- divergent pull auto-merge (independent indexes) ---"
+INDEX_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(32), tag VARCHAR(32));
+INSERT INTO t VALUES (1,'base','base-tag');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+INDEX_ADVANCE="
+CREATE INDEX t_v_idx ON t(v);
+INSERT INTO t VALUES (200,'from-remote','remote-tag');
+SELECT dolt_commit('-A','-m','remote index');
+SELECT dolt_push('origin','main');
+"
+INDEX_PULL="
+CREATE INDEX t_tag_idx ON t(tag);
+INSERT INTO t VALUES (100,'from-local','local-tag');
+SELECT dolt_commit('-A','-m','local index');
+SELECT dolt_pull('origin','main');
+"
+remote_flow "merge_independent_indexes_rows" "$INDEX_SEED" "$INDEX_ADVANCE" "$INDEX_PULL" \
+  "SELECT 'R|row|'||id||'|'||v||'|'||tag FROM t
+   UNION ALL
+   SELECT 'R|idx|'||name FROM pragma_index_list('t') WHERE name IN ('t_tag_idx','t_v_idx');" \
+  "SELECT CONCAT('R|row|',id,'|',v,'|',tag) FROM t
+   UNION ALL
+   SELECT CONCAT('R|idx|',index_name) FROM information_schema.statistics
+    WHERE table_name='t' AND index_name IN ('t_tag_idx','t_v_idx');"
+
+# ---- divergent pull where the remote renames/adds columns while the
+#      consumer inserts a row against the old schema. ----
+echo "--- divergent pull auto-merge (rename/add column + local insert) ---"
+RENAME_ADVANCE="
+ALTER TABLE t RENAME COLUMN v TO val;
+ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'remote-default';
+UPDATE t SET note='remote-note' WHERE id=1;
+INSERT INTO t(id,val,note) VALUES (200,'from-remote','remote-row');
+SELECT dolt_commit('-A','-m','remote rename');
+SELECT dolt_push('origin','main');
+"
+remote_flow "merge_rename_add_column_local_insert" "$SCHEMA_SEED" "$RENAME_ADVANCE" "$SCHEMA_PULL" \
+  "SELECT 'R|col|'||name FROM pragma_table_info('t')
+   UNION ALL
+   SELECT 'R|row|'||id||'|'||val||'|'||IFNULL(note,'NULL') FROM t;" \
+  "SELECT CONCAT('R|col|',column_name) FROM information_schema.columns WHERE table_name='t'
+   UNION ALL
+   SELECT CONCAT('R|row|',id,'|',val,'|',IFNULL(note,'NULL')) FROM t;"
+
+# ---- divergent pull where the remote drops a table while the consumer edits
+#      that table. Compare conflict/table existence post-state. ----
+echo "--- divergent pull conflict (remote drop + local edit) ---"
+DROP_ADVANCE="
+DROP TABLE t;
+SELECT dolt_commit('-A','-m','remote drop');
+SELECT dolt_push('origin','main');
+"
+DROP_PULL="
+UPDATE t SET v='from-local' WHERE id=1;
+SELECT dolt_commit('-A','-m','local edit');
+SELECT dolt_pull('origin','main');
+"
+remote_flow "pull_drop_edit_conflict_poststate" "$MERGE_SEED" "$DROP_ADVANCE" "$DROP_PULL" \
+  "SELECT 'R|conflicts|'||(SELECT count(*) FROM dolt_conflicts)
+   UNION ALL
+   SELECT 'R|tables|'||count(*) FROM sqlite_master WHERE type='table' AND name='t';" \
+  "SELECT CONCAT('R|conflicts|',(SELECT COUNT(*) FROM dolt_conflicts))
+   UNION ALL
+   SELECT CONCAT('R|tables|',count(*)) FROM information_schema.tables
+    WHERE table_schema=database() AND table_name='t';"
+
 # ---- multi-branch fetch: two branches pushed; consumer fetches and tracks
 #      each; compare contents per tracked branch. ----
 echo "--- multi-branch fetch + tracking ---"
