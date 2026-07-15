@@ -2063,6 +2063,54 @@ static int appendFallbackSchemaCatalogRows(
     nRows++;
   }
 
+  for(i=0; i<nFallback; i++){
+    SchemaEntry *pSe = &aFallback[i];
+    SchemaCatalogRow *pRow;
+    int exists = 0;
+    if( !pSe->zName || !pSe->zType ) continue;
+    if( strcmp(pSe->zType, "table")==0 || strcmp(pSe->zType, "index")==0 ){
+      continue;
+    }
+    for(j=0; j<nRows; j++){
+      if( aRows[j].zType && aRows[j].zName
+       && strcmp(aRows[j].zType, pSe->zType)==0
+       && strcmp(aRows[j].zName, pSe->zName)==0 ){
+        exists = 1;
+        break;
+      }
+    }
+    if( exists ) continue;
+    if( nRows>=nAlloc ){
+      i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
+      SchemaCatalogRow *aNew;
+      if( nNew > (i64)0x7fffffff/(i64)sizeof(SchemaCatalogRow) ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aNew = sqlite3_realloc(aRows,
+                             (int)(nNew * (i64)sizeof(SchemaCatalogRow)));
+      if( !aNew ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aRows = aNew;
+      nAlloc = (int)nNew;
+    }
+    pRow = &aRows[nRows];
+    memset(pRow, 0, sizeof(*pRow));
+    pRow->iRowid = iNextRowid++;
+    pRow->oldPg = pSe->iRootpage;
+    pRow->zType = sqlite3_mprintf("%s", pSe->zType ? pSe->zType : "");
+    pRow->zName = sqlite3_mprintf("%s", pSe->zName ? pSe->zName : "");
+    pRow->zTblName = sqlite3_mprintf("%s", pSe->zTblName ? pSe->zTblName : "");
+    pRow->zSql = pSe->zSql ? sqlite3_mprintf("%s", pSe->zSql) : 0;
+    if( !pRow->zType || !pRow->zName || !pRow->zTblName || (pSe->zSql && !pRow->zSql) ){
+      freeSchemaCatalogRows(aRows, nRows+1);
+      return SQLITE_NOMEM;
+    }
+    nRows++;
+  }
+
   *paRows = aRows;
   *pnRows = nRows;
   return SQLITE_OK;
@@ -2085,6 +2133,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   int nTables,
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
+  int bForeignDomain,
   u8 **ppOut,
   int *pnOut
 ){
@@ -2110,9 +2159,15 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
-  rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
-                                      &aRows, &nRows, aMeta, nMeta,
-                                      aTables, nTables);
+  /* Live-schema supplementation keys rows by the CONNECTION's table
+  ** numbers. Arrays numbered in a foreign domain (a reset target catalog)
+  ** must not use it -- a live number there can belong to a different table
+  ** entirely, and their missing rows come from the fallback schema. */
+  if( !bForeignDomain ){
+    rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
+                                        &aRows, &nRows, aMeta, nMeta,
+                                        aTables, nTables);
+  }
   if( rc==SQLITE_OK ){
     rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
                                          aFallbackSchema, nFallbackSchema);
@@ -2243,13 +2298,25 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         aSorted[i].zTblName = "";
         continue;
       }
-      /* The table number is the entry's identity; match it first. Cached
-      ** entry names go stale across RENAME, so a name match is only a
-      ** fallback for entries whose number has no schema row. */
-      for(j=0; j<nRows; j++){
-        if( aRows[j].oldPg==aTables[i].iTable ){
-          pRow = &aRows[j];
-          break;
+      /* The table number is the entry's identity; match it first. For the
+      ** LIVE catalog that match is unconditional -- cached entry names go
+      ** stale across RENAME, so a name match is only a fallback for entries
+      ** whose number has no schema row. Constructed arrays (staging, merge,
+      ** reset) carry authoritative loaded names but may mix entries from
+      ** two numbering domains, so a number match that disagrees on name is
+      ** a cross-domain collision and must be rejected. */
+      {
+        int bLiveCatalog = (aTables==pBtree->cat.a);
+        for(j=0; j<nRows; j++){
+          if( aRows[j].oldPg==aTables[i].iTable ){
+            if( !bLiveCatalog
+             && aTables[i].zName && aRows[j].zName
+             && strcmp(aRows[j].zName, aTables[i].zName)!=0 ){
+              continue;
+            }
+            pRow = &aRows[j];
+            break;
+          }
         }
       }
       if( !pRow && aTables[i].zName ){
@@ -2359,7 +2426,23 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
-      aFallbackSchema, nFallbackSchema, ppOut, pnOut);
+      aFallbackSchema, nFallbackSchema, 0, ppOut, pnOut);
+}
+
+int doltliteSerializeCatalogEntriesForeignDomain(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
+  u8 **ppOut,
+  int *pnOut
+){
+  if( !db ) return SQLITE_MISUSE;
+  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      db->aDb[0].pBt, aTables, nTables,
+      aFallbackSchema, nFallbackSchema, 1, ppOut, pnOut);
 }
 
 static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
@@ -2470,7 +2553,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
 
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   return doltliteSerializeCatalogEntriesForBtreeImpl(
-      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
+      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, 0, ppOut, pnOut);
 }
 
 static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){

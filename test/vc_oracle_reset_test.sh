@@ -541,6 +541,150 @@ CALL dolt_reset('a');
 SELECT concat('Q|', count(*)) FROM dolt_status
       WHERE table_name='a' AND staged=false AND status='modified';"
 
+oracle_same_session "reset_path_staged_dropped_indexed_table_unstages_drop" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT CHECK (length(s) > 0));
+CREATE UNIQUE INDEX a_s_idx ON a(s);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE a;
+SELECT dolt_add('-A');
+SELECT dolt_reset('a');
+" "SELECT 'Q|unstaged|' || count(*) FROM dolt_status
+      WHERE table_name='a' AND staged=0 AND status='deleted';
+SELECT 'Q|staged|' || count(*) FROM dolt_status
+      WHERE table_name='a' AND staged=1;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT CHECK (length(s) > 0));
+CREATE UNIQUE INDEX a_s_idx ON a(s);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE a;
+CALL dolt_add('-A');
+CALL dolt_reset('a');
+" "SELECT concat('Q|unstaged|', count(*)) FROM dolt_status
+      WHERE table_name='a' AND staged=false AND status='deleted';
+SELECT concat('Q|staged|', count(*)) FROM dolt_status
+      WHERE table_name='a' AND staged=true;"
+
+oracle_same_session "reset_path_staged_dropped_fk_table_unstages_drop" "
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY, p_id INTEGER REFERENCES p(id));
+INSERT INTO p VALUES (1);
+INSERT INTO c VALUES (10, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE c;
+SELECT dolt_add('-A');
+SELECT dolt_reset('c');
+" "SELECT 'Q|unstaged|' || count(*) FROM dolt_status
+      WHERE table_name='c' AND staged=0 AND status='deleted';
+SELECT 'Q|staged|' || count(*) FROM dolt_status
+      WHERE table_name='c' AND staged=1;
+SELECT 'Q|parent|' || count(*) FROM p;" \
+"CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY, p_id INTEGER REFERENCES p(id));
+INSERT INTO p VALUES (1);
+INSERT INTO c VALUES (10, 1);
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE c;
+CALL dolt_add('-A');
+CALL dolt_reset('c');
+" "SELECT concat('Q|unstaged|', count(*)) FROM dolt_status
+      WHERE table_name='c' AND staged=false AND status='deleted';
+SELECT concat('Q|staged|', count(*)) FROM dolt_status
+      WHERE table_name='c' AND staged=true;
+SELECT concat('Q|parent|', count(*)) FROM p;"
+
+echo "--- hard reset preserves untracked schema objects ---"
+
+oracle_same_session "reset_hard_preserves_untracked_index_view_trigger" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v='dirty' WHERE id=1;
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+CREATE UNIQUE INDEX u_v_idx ON u(v);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+CREATE TRIGGER u_ai AFTER INSERT ON u BEGIN INSERT INTO audit VALUES (NEW.id); END;
+CREATE VIEW uv AS SELECT id, v FROM u;
+INSERT INTO u VALUES (1, 'one');
+SELECT dolt_reset('--hard');
+INSERT INTO u VALUES (2, 'two');
+" "SELECT 'Q|tracked|' || v FROM t;
+SELECT 'Q|u|' || id || '|' || v FROM u ORDER BY id;
+SELECT 'Q|idx|' || count(*) FROM pragma_index_list('u') WHERE name='u_v_idx';
+SELECT 'Q|view|' || count(*) FROM uv;
+SELECT 'Q|audit|' || count(*) FROM audit;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+UPDATE t SET v='dirty' WHERE id=1;
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+CREATE UNIQUE INDEX u_v_idx ON u(v);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+CREATE TRIGGER u_ai AFTER INSERT ON u FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+CREATE VIEW uv AS SELECT id, v FROM u;
+INSERT INTO u VALUES (1, 'one');
+CALL dolt_reset('--hard');
+INSERT INTO u VALUES (2, 'two');
+" "SELECT concat('Q|tracked|', v) FROM t;
+SELECT concat('Q|u|', id, '|', v) FROM u ORDER BY id;
+SELECT concat('Q|idx|', count(*)) FROM information_schema.statistics
+      WHERE table_name='u' AND index_name='u_v_idx';
+SELECT concat('Q|view|', count(*)) FROM uv;
+SELECT concat('Q|audit|', count(*)) FROM audit;"
+
+oracle_same_session "reset_hard_preserves_untracked_tables_after_target_recreate" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'a1');
+INSERT INTO b VALUES (1, 'b1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'recreate-a');
+CREATE TABLE u1(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE u2(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u1 VALUES (11, 'u1');
+INSERT INTO u2 VALUES (22, 'u2');
+SELECT dolt_reset('--hard', 'HEAD~1');
+" "SELECT 'Q|a_cols|' || group_concat(name || ':' || replace(lower(type), 'integer', 'int'), '|')
+       FROM pragma_table_info('a');
+SELECT 'Q|a|' || id || '|' || v FROM a;
+SELECT 'Q|b|' || count(*) FROM b;
+SELECT 'Q|u1|' || id || '|' || v FROM u1;
+SELECT 'Q|u2|' || id || '|' || v FROM u2;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'a1');
+INSERT INTO b VALUES (1, 'b1');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'recreate-a');
+CREATE TABLE u1(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE u2(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u1 VALUES (11, 'u1');
+INSERT INTO u2 VALUES (22, 'u2');
+CALL dolt_reset('--hard', 'HEAD~1');
+" "SELECT concat('Q|a_cols|', group_concat(concat(column_name, ':', replace(lower(column_type), 'integer', 'int')) ORDER BY ordinal_position SEPARATOR '|'))
+       FROM information_schema.columns
+      WHERE table_schema = database() AND table_name = 'a';
+SELECT concat('Q|a|', id, '|', v) FROM a;
+SELECT concat('Q|b|', count(*)) FROM b;
+SELECT concat('Q|u1|', id, '|', v) FROM u1;
+SELECT concat('Q|u2|', id, '|', v) FROM u2;"
+
 echo "--- error paths ---"
 
 oracle_error "reset_to_nonexistent_ref" "
