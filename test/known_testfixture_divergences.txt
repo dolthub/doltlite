@@ -3178,17 +3178,15 @@ pagerfault3 pagerfault3-1-ioerr-transient.4  # VACUUM=dolt_gc reports phase-pref
 pagerfault3 pagerfault3-1-ioerr-transient.5  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.6  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.7  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.8  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.9  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.10  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.11  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.12  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.13  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
+pagerfault3 pagerfault3-1-ioerr-transient.14  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.15  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.16  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 pagerfault3 pagerfault3-1-ioerr-transient.17  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.18  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
-pagerfault3 pagerfault3-1-ioerr-transient.19  # VACUUM=dolt_gc reports phase-prefixed error text under injected IO fault
 
 # ── sqllimits1 ──
 sqllimits1 sqllimits1-7.7.1  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
@@ -5813,7 +5811,6 @@ incrvacuum2 incrvacuum2-4.3  # -wal sidecar absent
 # inconclusive (only NOTFOUND aborts), so these fault points record a hit while
 # the VACUUM statement still succeeds. The exact indices move when commit-path
 # allocation counts change.
-ioerr ioerr-2.33.3 @linux  # PROLLY_CHECK gc verify ignores injected read faults
 # ioerr: the chunk store journals inside the single database file, so a
 # -journal sidecar never exists. Preps that crash a child on journal sync
 # (ioerr-6) or copy the journal aside (ioerr-7/9) fail before fault
@@ -5968,8 +5965,13 @@ ioerr ioerr-7.53.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.54.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.55.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1  # master-journal prep copies absent -journal sidecar
-ioerr ioerr-2.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-ioerr ioerr-2.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+# ioerr-2 VACUUM gc-rewrite window: the injected error lands in a best-effort
+# finalization write gc deliberately consumes, so the statement succeeds after
+# the error was hit. Ordinals are ubuntu-runner IDs and track the streamed
+# writer's coalesced write count; macOS no longer trips the window at all.
+ioerr ioerr-2.29.3 @linux
+ioerr ioerr-2.30.3 @linux
+ioerr ioerr-2.31.3 @linux
 
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
