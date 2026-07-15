@@ -5,6 +5,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  scaling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+
+    # Plain build: DOLTLITE_PROLLY_CHECK adds a full-tree walk to every
+    # commit, which swamps the curves this suite gates on.
+    - name: Build
+      run: |
+        mkdir -p build-plain && cd build-plain
+        ../configure
+        make doltlite
+
+    - name: Scaling curves
+      run: bash test/doltlite_scaling.sh build-plain/doltlite
+
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 20
