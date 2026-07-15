@@ -36,6 +36,15 @@
 # NOT listed here is a regression. If you fix one of these, remove
 # the entry.
 
+# ── storage corruption probes ──
+corrupt corrupt-3.3 @linux  # raw byte-flips land on CTLD manifest/hash bytes; linux trips one extra corruption guard
+corrupt corrupt-3.4  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+corrupt corrupt-3.5  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+corrupt corrupt-3.6  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+corrupt corrupt-5.2  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+corrupt corrupt-8.1  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+corrupt corrupt-8.2  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+
 # ── select1 ──
 altercol altercol-1.13.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit
 altercol altercol-1.17.4  # canonical adoption: sqlite_master row order/oid binding or normalized SQL text after a schema commit

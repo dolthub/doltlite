@@ -110,7 +110,7 @@ vtab1          # post-vtab1-5 cleanup drops echo backing tables before vtabs; cl
 # ── feature-gap sweep wave 1 (#1208): files whose setup aborts pre-summary on
 # an intentional rejection or a stock-only artifact. Reasons captured from a
 # per-file non-root run.
-corrupt	# raw byte-flips at fixed offsets land on timestamp/hash-dependent blob content, so which guard trips varies per run and platform; ubuntu runs can abort before the summary (macOS completes with varying failure sets)
+corrupt         # raw byte-flips can either abort pre-summary or complete with the corrupt-* divergences listed in known_testfixture_divergences.txt
 corrupt2         # auto_vacuum is now a silent no-op; file runs deep and aborts in corruption_test's raw child-page seek (line 408); earlier pokes absorbed by torn-tail rollback
 pagerfault       # journal_mode no-op now; on Linux completes with ~1000 cap-truncated OOM-faultsim failures, on macOS SIGSEGVs deep in the fault loop -- either way not pinnable, so UNBUCKETED (documented like malloc/mallocAll)
 pagerfault2      # journal_mode no-op now lets it complete (1 err/1533), but the lone failure is an OOM fault-point index that drifts macOS<->Linux; kept crash-listed and UNBUCKETED rather than gated
