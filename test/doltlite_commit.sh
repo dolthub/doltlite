@@ -299,7 +299,49 @@ run_test "compound_am_multi_data" \
   "SELECT count(*) FROM t;" \
   "2" "$DB8"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+# Index entries travel with their table through staging: a named dolt_add
+# must stage the table's indexes, and -am commits on top of partial staging
+# must keep every index root paired with its table across catalog domains.
+DB9=/tmp/test_dolt_stageidx_$$.db; rm -f "$DB9"
+
+run_test_match "staged_index_named_add_setup"   "CREATE TABLE a(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO a VALUES(1,10);
+CREATE INDEX av ON a(v);
+SELECT dolt_commit('-Am','c1');"   "^[0-9a-f]{40}$" "$DB9"
+
+run_test_match "staged_index_named_add_commit"   "CREATE TABLE b(id INTEGER PRIMARY KEY, w INTEGER);
+INSERT INTO b VALUES(1,5);
+CREATE INDEX bw ON b(w);
+SELECT dolt_add('b');
+UPDATE a SET v=11;
+SELECT dolt_commit('-am','mix');"   "^[0-9a-f]{40}$" "$DB9"
+
+run_test "staged_index_survives_reset"   "SELECT dolt_reset('--hard');
+SELECT group_concat(v) FROM a INDEXED BY av;
+SELECT group_concat(w) FROM b INDEXED BY bw;"   "0
+11
+5" "$DB9"
+
+run_test "staged_index_integrity"   "PRAGMA integrity_check;"   "ok" "$DB9"
+
+DB10=/tmp/test_dolt_stagedrop_$$.db; rm -f "$DB10"
+
+run_test_match "staged_drop_index_setup"   "CREATE TABLE a(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO a VALUES(1,10);
+CREATE INDEX av ON a(v);
+SELECT dolt_commit('-Am','c1');"   "^[0-9a-f]{40}$" "$DB10"
+
+run_test_match "staged_drop_index_commit"   "DROP TABLE a;
+SELECT dolt_add('a');
+SELECT dolt_commit('-m','dropped');"   "^[0-9a-f]{40}$" "$DB10"
+
+run_test "staged_drop_no_orphan_entries"   "SELECT dolt_reset('--hard');
+SELECT count(*) FROM sqlite_master;
+PRAGMA integrity_check;"   "0
+0
+ok" "$DB10"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
