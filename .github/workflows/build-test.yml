@@ -397,6 +397,11 @@ jobs:
       run: cd build && bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
+    - name: HTTP remote partial failure tests
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
     - name: Amalgamation plaintext HTTP remote test
       if: matrix.platform != 'windows'
       run: |
