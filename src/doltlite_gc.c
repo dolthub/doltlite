@@ -349,78 +349,114 @@ static void gcFormatMarkFailure(
   }
 }
 
-static int gcAppendMarkedChunk(
+/* Crash-injection plumbing shared by every write the gc rewrite issues.
+** DOLTLITE_CRASH_GC_WRITE=N hard-exits the process on the Nth write. */
+#ifdef SQLITE_TEST
+static int gcCrashTarget = -2;
+static int gcCrashCount = 0;
+static void gcCrashResetForRun(void){
+  if( gcCrashTarget == -2 ){
+    const char *zEnv = getenv("DOLTLITE_CRASH_GC_WRITE");
+    gcCrashTarget = zEnv ? atoi(zEnv) : -1;
+  }
+  if( gcCrashTarget > 0 ) gcCrashCount = 0;
+}
+#define GC_CRASH_CHECK() do{ \
+  if( gcCrashTarget>0 && ++gcCrashCount>=gcCrashTarget ){ \
+    _exit(99); \
+  } \
+}while(0)
+#else
+#define gcCrashResetForRun() ((void)0)
+#define GC_CRASH_CHECK() ((void)0)
+#endif
+
+/* Buffered forward-only writer for the gc tmp file. The compacted store is
+** streamed through this fixed-size buffer instead of being assembled in
+** memory, so gc RAM stays bounded no matter how much live data survives. */
+typedef struct GcFileWriter GcFileWriter;
+struct GcFileWriter {
+  sqlite3_file *pFile;
+  i64 iOff;           /* file offset of the first unflushed buffered byte */
+  int nBuf;
+  u8 aBuf[65536];
+};
+
+static int gcWriterFlush(GcFileWriter *pW){
+  int rc;
+  if( pW->nBuf==0 ) return SQLITE_OK;
+  GC_CRASH_CHECK();
+  rc = sqlite3OsWrite(pW->pFile, pW->aBuf, pW->nBuf, pW->iOff);
+  if( rc!=SQLITE_OK ) return rc;
+  pW->iOff += pW->nBuf;
+  pW->nBuf = 0;
+  return SQLITE_OK;
+}
+
+static int gcWriterAppend(GcFileWriter *pW, const u8 *p, int n){
+  while( n>0 ){
+    int space = (int)sizeof(pW->aBuf) - pW->nBuf;
+    int nCopy = n<space ? n : space;
+    memcpy(pW->aBuf + pW->nBuf, p, nCopy);
+    pW->nBuf += nCopy;
+    p += nCopy;
+    n -= nCopy;
+    if( pW->nBuf==(int)sizeof(pW->aBuf) ){
+      int rc = gcWriterFlush(pW);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int gcStreamMarkedChunk(
   ChunkStore *cs,
   const ProllyHash *pHash,
   ProllyHashSet *marked,
-  u8 **ppBuf,
-  int *pnBuf,
-  int *pnBufAlloc,
-  i64 dataOffset,
+  GcFileWriter *pW,          /* may be NULL: validate + index only */
+  i64 *piPos,                /* running offset in the compacted layout */
   ChunkIndexEntry *aNewIndex,
   int *pnNewIndex
 ){
   u8 *chunkData = 0;
   int nChunkData = 0;
-  i64 need;
   int rc;
 
   if( !prollyHashSetContains(marked, pHash) ) return SQLITE_OK;
 
   rc = chunkStoreGet(cs, pHash, &chunkData, &nChunkData);
   if( rc!=SQLITE_OK ) return rc;
-
   if( nChunkData < 0 ){
     sqlite3_free(chunkData);
     return SQLITE_CORRUPT;
   }
-  need = (i64)*pnBuf + 4 + (i64)nChunkData;
-  if( need > (i64)0x7fffffff ){
-    sqlite3_free(chunkData);
-    return SQLITE_NOMEM;
-  }
-  if( need > (i64)*pnBufAlloc ){
-    i64 newAlloc = *pnBufAlloc ? (i64)*pnBufAlloc * 2 : (i64)65536;
-    u8 *pNew;
-    while( newAlloc < need ){
-      if( newAlloc > (i64)0x7fffffff/2 ){
-        newAlloc = (i64)0x7fffffff;
-        break;
-      }
-      newAlloc *= 2;
-    }
-    if( newAlloc < need || newAlloc > (i64)0x7fffffff ){
-      sqlite3_free(chunkData);
-      return SQLITE_NOMEM;
-    }
-    pNew = sqlite3_realloc(*ppBuf, (int)newAlloc);
-    if( !pNew ){
-      sqlite3_free(chunkData);
-      return SQLITE_NOMEM;
-    }
-    *ppBuf = pNew;
-    *pnBufAlloc = (int)newAlloc;
-  }
-
-  CS_WRITE_U32(*ppBuf + *pnBuf, nChunkData);
 
   memcpy(&aNewIndex[*pnNewIndex].hash, pHash, sizeof(ProllyHash));
-  aNewIndex[*pnNewIndex].offset = dataOffset + *pnBuf;
+  aNewIndex[*pnNewIndex].offset = *piPos;
   aNewIndex[*pnNewIndex].size = nChunkData;
   (*pnNewIndex)++;
+  *piPos += 4 + (i64)nChunkData;
 
-  memcpy(*ppBuf + *pnBuf + 4, chunkData, nChunkData);
-  *pnBuf += 4 + nChunkData;
-
+  if( pW ){
+    u8 aLen[4];
+    CS_WRITE_U32(aLen, nChunkData);
+    rc = gcWriterAppend(pW, aLen, 4);
+    if( rc==SQLITE_OK ) rc = gcWriterAppend(pW, chunkData, nChunkData);
+  }
   sqlite3_free(chunkData);
-  return SQLITE_OK;
+  return rc;
 }
 
-static int gcBuildCompactedData(
+/* Assemble the compacted index without materializing chunk data. Offsets
+** describe the compacted layout (length-prefixed chunks after the manifest);
+** the writer, when given, streams that layout to the gc tmp file. Without a
+** writer (in-memory stores) each chunk is still fetched and discarded so
+** every kept chunk is validated against its hash. */
+static int gcBuildCompactedIndex(
   ChunkStore *cs,
   ProllyHashSet *marked,
-  u8 **ppNewData,
-  int *pnNewData,
+  GcFileWriter *pW,
+  i64 *pnNewData,
   ChunkIndexEntry **ppNewIndex,
   int *pnNewIndex
 ){
@@ -428,9 +464,7 @@ static int gcBuildCompactedData(
   int kept = 0;
   ChunkIndexEntry *aNewIndex = 0;
   int nNewIndex = 0;
-  u8 *buf = 0;
-  int nBuf = 0, nBufAlloc = 0;
-  i64 dataOffset = CHUNK_MANIFEST_SIZE;
+  i64 iPos = CHUNK_MANIFEST_SIZE;
   int rc = SQLITE_OK;
 
   {
@@ -461,47 +495,35 @@ static int gcBuildCompactedData(
   {
     int nIdx; const ChunkIndexEntry *aIdx;
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
-    for(i=0; i<nIdx; i++){
-      rc = gcAppendMarkedChunk(cs, &aIdx[i].hash, marked, &buf, &nBuf,
-                               &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aNewIndex);
-        sqlite3_free(buf);
-        return rc;
-      }
+    for(i=0; i<nIdx && rc==SQLITE_OK; i++){
+      rc = gcStreamMarkedChunk(cs, &aIdx[i].hash, marked, pW, &iPos,
+                               aNewIndex, &nNewIndex);
     }
   }
-  {
+  if( rc==SQLITE_OK ){
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
-    for(i=0; i<nPend; i++){
-      rc = gcAppendMarkedChunk(cs, &aPend[i].hash, marked, &buf, &nBuf,
-                               &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aNewIndex);
-        sqlite3_free(buf);
-        return rc;
-      }
+    for(i=0; i<nPend && rc==SQLITE_OK; i++){
+      rc = gcStreamMarkedChunk(cs, &aPend[i].hash, marked, pW, &iPos,
+                               aNewIndex, &nNewIndex);
     }
   }
-  {
+  if( rc==SQLITE_OK ){
     int nRec; const ChunkIndexEntry *aRec;
     chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
-    for(i=0; i<nRec; i++){
-      rc = gcAppendMarkedChunk(cs, &aRec[i].hash, marked, &buf, &nBuf,
-                               &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aNewIndex);
-        sqlite3_free(buf);
-        return rc;
-      }
+    for(i=0; i<nRec && rc==SQLITE_OK; i++){
+      rc = gcStreamMarkedChunk(cs, &aRec[i].hash, marked, pW, &iPos,
+                               aNewIndex, &nNewIndex);
     }
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aNewIndex);
+    return rc;
   }
 
   qsort(aNewIndex, nNewIndex, sizeof(aNewIndex[0]), csIndexEntryCmp);
 
-  *ppNewData = buf;
-  *pnNewData = nBuf;
+  *pnNewData = iPos - CHUNK_MANIFEST_SIZE;
   *ppNewIndex = aNewIndex;
   *pnNewIndex = nNewIndex;
   return SQLITE_OK;
@@ -535,218 +557,259 @@ static int gcReopenChunkFile(ChunkStore *cs, sqlite3_file **ppFile){
 
 static int gcRewriteFile(
   ChunkStore *cs,
-  const u8 *pNewData,
-  int nNewData,
-  const ChunkIndexEntry *pNewIndex,
-  int nNewIndex,
+  ProllyHashSet *marked,
+  ChunkIndexEntry **ppNewIndex,
+  int *pnNewIndex,
+  i64 *pnNewData,
   int *pReplaced
 ){
   int i;
-  int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
-  i64 indexOffset = CHUNK_MANIFEST_SIZE + nNewData;
-  u8 *indexBuf = 0;
+  int kept = 0;
+  i64 nDataBytes = 0;
+  i64 indexSize;
+  i64 finalSize;
+  ChunkIndexEntry *aNewIndex = 0;
+  int nNewIndex = 0;
+  i64 iPos = CHUNK_MANIFEST_SIZE;
   u8 manifest[CHUNK_MANIFEST_SIZE];
   ChunkStore manifestCs;
+  char *zRaw;
+  char *zTmp = 0;
   int rc = SQLITE_OK;
 
   *pReplaced = 0;
+  *ppNewIndex = 0;
+  *pnNewIndex = 0;
+  *pnNewData = 0;
 
-#ifdef SQLITE_TEST
+  gcCrashResetForRun();
+
+  /* The manifest leads the file, so the compacted geometry must be known
+  ** before any chunk is streamed. Chunk sizes come from the source entries;
+  ** the streaming pass re-checks the layout against the fetched data. */
   {
-    static int crashGcTarget = -2;
-    static int crashGcCount = 0;
-    if( crashGcTarget == -2 ){
-      const char *zEnv = getenv("DOLTLITE_CRASH_GC_WRITE");
-      crashGcTarget = zEnv ? atoi(zEnv) : -1;
+    int nIdx; const ChunkIndexEntry *aIdx;
+    chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
+    for(i=0; i<nIdx; i++){
+      if( prollyHashSetContains(marked, &aIdx[i].hash) ){
+        kept++;
+        nDataBytes += 4 + (i64)aIdx[i].size;
+      }
     }
-    if( crashGcTarget > 0 ) crashGcCount = 0;
-#define GC_CRASH_CHECK() do{ \
-  if( crashGcTarget>0 && ++crashGcCount>=crashGcTarget ){ \
-    _exit(99); \
-  } \
-}while(0)
-#else
-#define GC_CRASH_CHECK() ((void)0)
-#endif
-
-  indexBuf = sqlite3_malloc(indexSize);
-  if( !indexBuf ) return SQLITE_NOMEM;
-  for(i=0; i<nNewIndex; i++){
-    u8 *p = indexBuf + i * CHUNK_INDEX_ENTRY_SIZE;
-    memcpy(p, pNewIndex[i].hash.data, PROLLY_HASH_SIZE);
-    p += PROLLY_HASH_SIZE;
-    CS_WRITE_I64(p, pNewIndex[i].offset);
-    p += 8;
-    CS_WRITE_U32(p, (u32)pNewIndex[i].size);
   }
+  {
+    int nPend; const ChunkIndexEntry *aPend;
+    chunkStagingGetPending(&cs->staging, &nPend, &aPend);
+    for(i=0; i<nPend; i++){
+      if( prollyHashSetContains(marked, &aPend[i].hash) ){
+        kept++;
+        nDataBytes += 4 + (i64)aPend[i].size;
+      }
+    }
+  }
+  {
+    int nRec; const ChunkIndexEntry *aRec;
+    chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
+    for(i=0; i<nRec; i++){
+      if( prollyHashSetContains(marked, &aRec[i].hash) ){
+        kept++;
+        nDataBytes += 4 + (i64)aRec[i].size;
+      }
+    }
+  }
+  indexSize = (i64)kept * CHUNK_INDEX_ENTRY_SIZE;
+  finalSize = CHUNK_MANIFEST_SIZE + nDataBytes + indexSize;
 
   manifestCs = *cs;
-  chunkIndexSetMetadata(&manifestCs.index, nNewIndex, indexOffset, indexSize);
-  walStateSetOffset(&manifestCs.wal, indexOffset + indexSize);
-
+  chunkIndexSetMetadata(&manifestCs.index, kept,
+                        CHUNK_MANIFEST_SIZE + nDataBytes, indexSize);
+  walStateSetOffset(&manifestCs.wal, finalSize);
   csSerializeManifest(&manifestCs, manifest);
   csManifestSeal(manifest);
 
-  if( chunkFileGetFilename(&cs->file) && strcmp(chunkFileGetFilename(&cs->file), ":memory:")!=0 ){
-    char *zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
-    char *zTmp = 0;
-    if( !zRaw ){
-      sqlite3_free(indexBuf);
-      return SQLITE_NOMEM;
-    }
-    /* Opened with SQLITE_OPEN_MAIN_DB below, so the name needs the VFS's
-    ** double-nul terminator. */
-    rc = chunkStoreDupFilenameDoubleNul(zRaw, &zTmp);
-    sqlite3_free(zRaw);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(indexBuf);
+  aNewIndex = sqlite3_malloc((kept ? kept : 1) * (int)sizeof(ChunkIndexEntry));
+  if( !aNewIndex ) return SQLITE_NOMEM;
+
+  zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
+  if( !zRaw ){
+    sqlite3_free(aNewIndex);
+    return SQLITE_NOMEM;
+  }
+  /* Opened with SQLITE_OPEN_MAIN_DB below, so the name needs the VFS's
+  ** double-nul terminator. */
+  rc = chunkStoreDupFilenameDoubleNul(zRaw, &zTmp);
+  sqlite3_free(zRaw);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aNewIndex);
+    return rc;
+  }
+
+  {
+    sqlite3_file *pTmpFile = 0;
+    int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                 | SQLITE_OPEN_MAIN_DB;
+    GcFileWriter w;
+
+    /* Best-effort removal of a stale tmp file; a failure here (including
+    ** the OS-layer fault probe) must not fail the GC. */
+    sqlite3BeginBenignMalloc();
+    sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+    sqlite3EndBenignMalloc();
+
+    rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(zTmp);
+      sqlite3_free(aNewIndex);
       return rc;
     }
 
-    {
-      sqlite3_file *pTmpFile = 0;
-      int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-                   | SQLITE_OPEN_MAIN_DB;
-      i64 writeOff = 0;
+    w.pFile = pTmpFile;
+    w.iOff = 0;
+    w.nBuf = 0;
 
-      /* Best-effort removal of a stale tmp file; a failure here (including
-      ** the OS-layer fault probe) must not fail the GC. */
-      sqlite3BeginBenignMalloc();
-      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
-      sqlite3EndBenignMalloc();
+    rc = gcWriterAppend(&w, manifest, CHUNK_MANIFEST_SIZE);
 
-      rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(zTmp); sqlite3_free(indexBuf);
-        return rc;
+    if( rc==SQLITE_OK ){
+      int nIdx; const ChunkIndexEntry *aIdx;
+      chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
+      for(i=0; i<nIdx && rc==SQLITE_OK; i++){
+        rc = gcStreamMarkedChunk(cs, &aIdx[i].hash, marked, &w, &iPos,
+                                 aNewIndex, &nNewIndex);
       }
+    }
+    if( rc==SQLITE_OK ){
+      int nPend; const ChunkIndexEntry *aPend;
+      chunkStagingGetPending(&cs->staging, &nPend, &aPend);
+      for(i=0; i<nPend && rc==SQLITE_OK; i++){
+        rc = gcStreamMarkedChunk(cs, &aPend[i].hash, marked, &w, &iPos,
+                                 aNewIndex, &nNewIndex);
+      }
+    }
+    if( rc==SQLITE_OK ){
+      int nRec; const ChunkIndexEntry *aRec;
+      chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
+      for(i=0; i<nRec && rc==SQLITE_OK; i++){
+        rc = gcStreamMarkedChunk(cs, &aRec[i].hash, marked, &w, &iPos,
+                                 aNewIndex, &nNewIndex);
+      }
+    }
+
+    /* The manifest was written from the precomputed geometry; if the
+    ** streamed layout disagrees, the size bookkeeping in the source
+    ** entries is wrong and the rewrite must not replace the live file. */
+    if( rc==SQLITE_OK
+     && (nNewIndex!=kept || iPos!=CHUNK_MANIFEST_SIZE + nDataBytes) ){
+      rc = SQLITE_CORRUPT;
+    }
+
+    if( rc==SQLITE_OK ){
+      qsort(aNewIndex, nNewIndex, sizeof(aNewIndex[0]), csIndexEntryCmp);
+      for(i=0; i<nNewIndex && rc==SQLITE_OK; i++){
+        u8 aEntry[CHUNK_INDEX_ENTRY_SIZE];
+        u8 *p = aEntry;
+        memcpy(p, aNewIndex[i].hash.data, PROLLY_HASH_SIZE);
+        p += PROLLY_HASH_SIZE;
+        CS_WRITE_I64(p, aNewIndex[i].offset);
+        p += 8;
+        CS_WRITE_U32(p, (u32)aNewIndex[i].size);
+        rc = gcWriterAppend(&w, aEntry, CHUNK_INDEX_ENTRY_SIZE);
+      }
+    }
+    if( rc==SQLITE_OK ) rc = gcWriterFlush(&w);
+
+    if( rc==SQLITE_OK ){
+      GC_CRASH_CHECK();
+      rc = sqlite3OsTruncate(pTmpFile, finalSize);
+    }
+    if( rc==SQLITE_OK ){
+      GC_CRASH_CHECK();
+      rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
+    }
+    if( rc==SQLITE_OK ){
+      sqlite3_file *pOldFile = chunkFileGetHandle(&cs->file);
+      sqlite3_file *pNewFile = 0;
+
+#if SQLITE_OS_WIN
+      /* Windows will not reliably replace either an open source file or an
+      ** open destination file. Close both before the atomic replace call,
+      ** and restore the destination handle if replacement fails. */
+      sqlite3OsCloseFree(pTmpFile);
+      pTmpFile = 0;
+      if( pOldFile ){
+        sqlite3OsCloseFree(pOldFile);
+        pOldFile = 0;
+        chunkFileSetHandle(&cs->file, 0);
+        chunkFileSetSize(&cs->file, 0);
+      }
+#endif
 
       GC_CRASH_CHECK();
-      rc = sqlite3OsWrite(pTmpFile, manifest, CHUNK_MANIFEST_SIZE, writeOff);
-      writeOff += CHUNK_MANIFEST_SIZE;
-
-      if( rc==SQLITE_OK && nNewData>0 ){
-        const u8 *p = pNewData;
-        int remaining = nNewData;
-        while( remaining > 0 && rc==SQLITE_OK ){
-          int toWrite = remaining > 65536 ? 65536 : remaining;
-          GC_CRASH_CHECK();
-          rc = sqlite3OsWrite(pTmpFile, p, toWrite, writeOff);
-          p += toWrite;
-          writeOff += toWrite;
-          remaining -= toWrite;
-        }
-      }
-
-      if( rc==SQLITE_OK && indexSize>0 ){
-        const u8 *p = indexBuf;
-        int remaining = indexSize;
-        while( remaining > 0 && rc==SQLITE_OK ){
-          int toWrite = remaining > 65536 ? 65536 : remaining;
-          GC_CRASH_CHECK();
-          rc = sqlite3OsWrite(pTmpFile, p, toWrite, writeOff);
-          p += toWrite;
-          writeOff += toWrite;
-          remaining -= toWrite;
-        }
-      }
-
       if( rc==SQLITE_OK ){
-        GC_CRASH_CHECK();
-        rc = sqlite3OsTruncate(pTmpFile, writeOff);
+        rc = sqlite3OsReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
+                                  chunkFileGetFilename(&cs->file));
       }
-      if( rc==SQLITE_OK ){
-        GC_CRASH_CHECK();
-        rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
-      }
-      if( rc==SQLITE_OK ){
-        sqlite3_file *pOldFile = chunkFileGetHandle(&cs->file);
-        sqlite3_file *pNewFile = 0;
-
+      if( rc!=SQLITE_OK ){
 #if SQLITE_OS_WIN
-        /* Windows will not reliably replace either an open source file or an
-        ** open destination file. Close both before the atomic replace call,
-        ** and restore the destination handle if replacement fails. */
-        sqlite3OsCloseFree(pTmpFile);
-        pTmpFile = 0;
-        if( pOldFile ){
-          sqlite3OsCloseFree(pOldFile);
-          pOldFile = 0;
-          chunkFileSetHandle(&cs->file, 0);
-          chunkFileSetSize(&cs->file, 0);
+        if( chunkFileGetHandle(&cs->file)==0 ){
+          int restoreRc = gcReopenChunkFile(cs, 0);
+          if( restoreRc!=SQLITE_OK ) rc = restoreRc;
         }
 #endif
-
-        GC_CRASH_CHECK();
-        if( rc==SQLITE_OK ){
-          rc = sqlite3OsReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
-                                    chunkFileGetFilename(&cs->file));
-        }
-        if( rc!=SQLITE_OK ){
-#if SQLITE_OS_WIN
-          if( chunkFileGetHandle(&cs->file)==0 ){
-            int restoreRc = gcReopenChunkFile(cs, 0);
-            if( restoreRc!=SQLITE_OK ) rc = restoreRc;
-          }
-#endif
-          sqlite3BeginBenignMalloc();
-          sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
-          sqlite3EndBenignMalloc();
-        }else{
-          *pReplaced = 1;
-#if !SQLITE_OS_WIN
-          sqlite3OsCloseFree(pTmpFile);
-          pTmpFile = 0;
-#endif
-        }
-
-        if( *pReplaced ){
-          if( pOldFile ){
-            sqlite3OsCloseFree(pOldFile);
-          }
-          chunkFileSetHandle(&cs->file, 0);
-          chunkFileSetSize(&cs->file, 0);
-        }
-
-        if( rc==SQLITE_OK ){
-          int reopenAttempt;
-          for(reopenAttempt=0; reopenAttempt<3; reopenAttempt++){
-            pNewFile = 0;
-            rc = gcReopenChunkFile(cs, &pNewFile);
-            if( rc==SQLITE_OK ) break;
-            if( pNewFile ){
-              sqlite3OsCloseFree(pNewFile);
-              pNewFile = 0;
-            }
-            /* Retrying would mask an allocation failure as success. */
-            if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) break;
-          }
-        }
-
-        if( rc==SQLITE_OK ){
-          chunkFileSetHandle(&cs->file, pNewFile);
-          chunkFileSetSize(&cs->file, CHUNK_MANIFEST_SIZE + nNewData + indexSize);
-          walStateSetDataSize(&cs->wal, 0);
-        }else if( pNewFile ){
-          sqlite3OsCloseFree(pNewFile);
-        }
-      }else{
         sqlite3BeginBenignMalloc();
         sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
         sqlite3EndBenignMalloc();
-      }
-      if( !*pReplaced && pTmpFile ){
+      }else{
+        *pReplaced = 1;
+#if !SQLITE_OS_WIN
         sqlite3OsCloseFree(pTmpFile);
-      }
-    }
-    sqlite3_free(zTmp);
-  }
-
-  sqlite3_free(indexBuf);
-#ifdef SQLITE_TEST
-  }
-#undef GC_CRASH_CHECK
+        pTmpFile = 0;
 #endif
+      }
+
+      if( *pReplaced ){
+        if( pOldFile ){
+          sqlite3OsCloseFree(pOldFile);
+        }
+        chunkFileSetHandle(&cs->file, 0);
+        chunkFileSetSize(&cs->file, 0);
+      }
+
+      if( rc==SQLITE_OK ){
+        int reopenAttempt;
+        for(reopenAttempt=0; reopenAttempt<3; reopenAttempt++){
+          pNewFile = 0;
+          rc = gcReopenChunkFile(cs, &pNewFile);
+          if( rc==SQLITE_OK ) break;
+          if( pNewFile ){
+            sqlite3OsCloseFree(pNewFile);
+            pNewFile = 0;
+          }
+          /* Retrying would mask an allocation failure as success. */
+          if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) break;
+        }
+      }
+
+      if( rc==SQLITE_OK ){
+        chunkFileSetHandle(&cs->file, pNewFile);
+        chunkFileSetSize(&cs->file, finalSize);
+        walStateSetDataSize(&cs->wal, 0);
+      }else if( pNewFile ){
+        sqlite3OsCloseFree(pNewFile);
+      }
+    }else{
+      sqlite3BeginBenignMalloc();
+      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+      sqlite3EndBenignMalloc();
+    }
+    if( !*pReplaced && pTmpFile ){
+      sqlite3OsCloseFree(pTmpFile);
+    }
+  }
+  sqlite3_free(zTmp);
+
+  *ppNewIndex = aNewIndex;
+  *pnNewIndex = nNewIndex;
+  *pnNewData = nDataBytes;
   return rc;
 }
 
@@ -759,8 +822,7 @@ static int gcSweep(
   int i, kept = 0, removed = 0;
   ChunkIndexEntry *aNewIndex = 0;
   int nNewIndex = 0;
-  u8 *buf = 0;
-  int nBuf = 0;
+  i64 nNewData = 0;
   int rc = SQLITE_OK;
   int replaced = 0;
 
@@ -800,24 +862,27 @@ static int gcSweep(
     return SQLITE_OK;
   }
 
-  rc = gcBuildCompactedData(cs, marked, &buf, &nBuf, &aNewIndex, &nNewIndex);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex, &replaced);
+  if( chunkFileGetFilename(&cs->file)
+   && strcmp(chunkFileGetFilename(&cs->file), ":memory:")!=0 ){
+    rc = gcRewriteFile(cs, marked, &aNewIndex, &nNewIndex, &nNewData,
+                       &replaced);
+  }else{
+    rc = gcBuildCompactedIndex(cs, marked, 0, &nNewData, &aNewIndex,
+                               &nNewIndex);
+  }
 
   if( rc==SQLITE_OK || replaced ){
-    int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
+    i64 indexSize = (i64)nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
     chunkIndexReplaceEntries(&cs->index, aNewIndex, nNewIndex);
     chunkIndexSetMetadata(&cs->index, nNewIndex,
-                          CHUNK_MANIFEST_SIZE + nBuf, indexSize);
-    walStateSetOffset(&cs->wal, CHUNK_MANIFEST_SIZE + nBuf + indexSize);
+                          CHUNK_MANIFEST_SIZE + nNewData, indexSize);
+    walStateSetOffset(&cs->wal, CHUNK_MANIFEST_SIZE + nNewData + indexSize);
     aNewIndex = 0;
 
     chunkStagingResetAfterSweep(&cs->staging);
   }
 
   sqlite3_free(aNewIndex);
-  sqlite3_free(buf);
 
   *pKept = kept;
   *pRemoved = removed;

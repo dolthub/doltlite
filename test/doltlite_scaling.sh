@@ -96,15 +96,18 @@ commit_block() {
 
 # Seed in ONE session: per-batch reopens would each replay the growing WAL,
 # turning large seeds quadratic and drowning the signal this suite gates.
+# The SQL goes over stdin — at 100M rows the statement list exceeds Linux's
+# 128KB single-argument limit and execve would fail before doltlite runs.
 seed_rows() {
   local db="$1" total="$2" cols="$3"
-  local i=1 end stmts=""
-  while [ "$i" -le "$total" ]; do
-    end=$(( i + 99999 )); [ "$end" -gt "$total" ] && end=$total
-    stmts+="WITH RECURSIVE c(x) AS (VALUES($i) UNION ALL SELECT x+1 FROM c WHERE x<$end) INSERT INTO t SELECT $cols FROM c;"
-    i=$(( end + 1 ))
-  done
-  "$DOLTLITE" "$db" "$stmts" > /dev/null 2>&1
+  local i=1 end
+  {
+    while [ "$i" -le "$total" ]; do
+      end=$(( i + 99999 )); [ "$end" -gt "$total" ] && end=$total
+      printf 'WITH RECURSIVE c(x) AS (VALUES(%d) UNION ALL SELECT x+1 FROM c WHERE x<%d) INSERT INTO t SELECT %s FROM c;\n' "$i" "$end" "$cols"
+      i=$(( end + 1 ))
+    done
+  } | "$DOLTLITE" "$db" > /dev/null 2>&1
 }
 
 # Ops whose cost is currently dominated by the O(WAL-since-gc) refresh
@@ -163,9 +166,9 @@ echo ""
 echo "══════════════════════════════════════"
 echo "  Segment B: per-op cost vs table size (post-gc)"
 echo "══════════════════════════════════════"
-declare -a SIZES=(100000 1000000 10000000)
+declare -a SIZES=(100000 1000000 10000000 100000000)
 declare -a T_OPEN T_LOOKUP T_COMMIT T_SCAN T_GC T_DIFF
-for idx in 0 1 2; do
+for idx in 0 1 2 3; do
   n=${SIZES[$idx]}
   db="$TMPDIR/size$n"
   "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null 2>&1
@@ -205,6 +208,12 @@ for idx in 0 1 2; do
   T_DIFF[$idx]=$(( $(ms_now) - t0 ))
   check_eq "history diff of newest commit at N=$n" "500" "$diff_out"
 
+  # branch isolation: a delete branch sees its deletion; main does not
+  "$DOLTLITE" "$db" "SELECT dolt_checkout('-b','wipe'); DELETE FROM t WHERE id<=1000; SELECT dolt_commit('-am','wipe'); SELECT dolt_checkout('main');" > /dev/null 2>&1
+  wipe_seen=$(query "$db" "SELECT dolt_checkout('wipe'); SELECT count(*) FROM t WHERE id<=1000;" | tail -1)
+  main_seen=$(query "$db" "SELECT dolt_checkout('main'); SELECT count(*) FROM t WHERE id<=1000;" | tail -1)
+  check_eq "branch isolation at N=$n" "0|1000" "$wipe_seen|$main_seen"
+
   size_bytes=$(wc -c < "$db" | tr -d ' ')
   echo "  N=$n: open=${T_OPEN[$idx]}ms lookups400=${T_LOOKUP[$idx]}ms upd500+commit=${T_COMMIT[$idx]}ms scan=${T_SCAN[$idx]}ms gc=${T_GC[$idx]}ms diff=${T_DIFF[$idx]}ms file=$(( size_bytes / 1000000 ))MB"
   if [ "$n" -ge 1000000 ]; then
@@ -216,7 +225,7 @@ done
 # 10x more rows per step; point ops should be ~O(log n), scans/gc ~O(n).
 # The diff-vtab commit filter currently enumerates ~O(n); the gate keeps it
 # from getting worse and tightens if pushdown improves.
-for step in 1 2; do
+for step in 1 2 3; do
   lo=${SIZES[$((step-1))]}; hi=${SIZES[$step]}
   check_ratio "open cost, ${hi} vs ${lo} rows" "${T_OPEN[$step]}" "${T_OPEN[$((step-1))]}" 8
   check_ratio "400 point lookups, ${hi} vs ${lo} rows" "${T_LOOKUP[$step]}" "${T_LOOKUP[$((step-1))]}" 8
@@ -243,39 +252,6 @@ check_ratio "blob insert+commit, 16MB vs 1MB" "$b_big" "$b_small" 48
 check_ratio "blob readback, 16MB vs 1MB" "$r_big" "$r_small" 48
 
 echo ""
-echo "══════════════════════════════════════"
-echo "  Segment D: 100M-row correctness"
-echo "══════════════════════════════════════"
-# Correctness-only: dolt_gc cannot yet compact a >2GB store (tracked), so
-# every measurement here would be WAL-replay-dominated. Statements are
-# batched into few sessions so each pays the multi-GB replay once. 100M
-# joins the Segment B perf matrix when large-store gc lands.
-N4=100000000
-DBD="$TMPDIR/size100m"
-t0=$(ms_now)
-"$DOLTLITE" "$DBD" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null 2>&1
-seed_rows "$DBD" "$N4" "x, 'row_'||x, x%1000, printf('%032d', x)"
-"$DOLTLITE" "$DBD" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
-echo "  seed+commit: $(( ($(ms_now) - t0) / 1000 ))s, file=$(( $(wc -c < "$DBD" | tr -d ' ') / 1000000 ))MB"
-
-# mutate: 500-row delta commit on main, then a delete branch for isolation
-t0=$(ms_now)
-"$DOLTLITE" "$DBD" "UPDATE t SET val=val+1 WHERE id BETWEEN 50000000 AND 50000499; SELECT dolt_commit('-am','delta'); SELECT dolt_checkout('-b','wipe'); DELETE FROM t WHERE id<=1000; SELECT dolt_commit('-am','wipe'); SELECT dolt_checkout('main');" > /dev/null 2>&1
-echo "  delta commit + branch wipe: $(( ($(ms_now) - t0) / 1000 ))s"
-
-# verify main: full-pass closed-form content check + branch isolation probe
-sum_id=$(( N4 * (N4 + 1) / 2 ))
-sum_val=$(( N4 / 1000 * 499500 + 500 ))
-t0=$(ms_now)
-check_eq "content verify at N=$N4" "$N4|$sum_id|$sum_val|0|1000" \
-  "$(query "$DBD" "SELECT count(*)||'|'||sum(id)||'|'||sum(val)||'|'||sum(name <> 'row_'||id OR pad <> printf('%032d',id))||'|'||(SELECT count(*) FROM t WHERE id<=1000) FROM t;")"
-echo "  full verify pass: $(( ($(ms_now) - t0) / 1000 ))s"
-
-# verify the delete branch sees its deletion and nothing else
-check_eq "branch isolation at N=$N4" "0|$(( N4 - 1000 ))" \
-  "$(query "$DBD" "SELECT dolt_checkout('wipe'); SELECT (SELECT count(*) FROM t WHERE id<=1000)||'|'||(SELECT max(id)-min(id)+1 FROM t);" | tail -1)"
-rm -f "$DBD"
-
 echo ""
 echo "Results: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
