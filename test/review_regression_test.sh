@@ -1,5 +1,5 @@
 #!/bin/bash
-DOLTLITE=./doltlite
+DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 run_test() {
   local n="$1" s="$2" e="$3" d="$4"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DOLTLITE=./doltlite
+DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
 run_test_int_ge() {
