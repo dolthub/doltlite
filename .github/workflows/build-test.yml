@@ -382,6 +382,11 @@ jobs:
       run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
+    - name: HTTP remote Content-Length test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
     - name: Amalgamation plaintext HTTP remote test
       if: matrix.platform != 'windows'
       run: |

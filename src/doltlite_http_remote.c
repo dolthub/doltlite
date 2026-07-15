@@ -196,9 +196,11 @@ static int httpRequest(
       "%s %s HTTP/1.1\r\n"
       "Host: %s\r\n"
       "%s"
+      "%s"
       "Connection: close\r\n"
       "\r\n",
-      zMethod, zPath, p->zHost, zAuth ? zAuth : "");
+      zMethod, zPath, p->zHost, zAuth ? zAuth : "",
+      sqlite3_stricmp(zMethod, "GET")==0 ? "" : "Content-Length: 0\r\n");
   }
   sqlite3_free(zAuth);
   if( !zHdr ){ httpConnClose(conn); return SQLITE_NOMEM; }
