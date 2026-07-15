@@ -64,9 +64,6 @@ altercons2 altercons2-6.2  # canonical adoption: canonicalized SQL text after sc
 altercons2 altercons2-9.1  # canonical adoption: canonicalized SQL text after schema commit
 alterqf alterqf-2.1  # canonical adoption: canonicalized SQL text after schema commit
 altertab altertab-1.4  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-16.23  # REAL BUG pinned: defensive-mode reserved shadow-name check misses after a shadow-table RENAME; the check consults a partially reloaded schema during the adoption reparse window
-altertab altertab-16.24  # cascade of altertab-16.23: the wrongly-created table trips later already-exists errors
-altertab altertab-16.25  # cascade of altertab-16.23: the wrongly-created table trips later already-exists errors
 altertab altertab-17.0  # canonical adoption: canonicalized SQL text after schema commit
 altertab altertab-18.1.2  # canonical adoption: canonicalized SQL text after schema commit
 altertab altertab-18.2.2  # canonical adoption: canonicalized SQL text after schema commit
