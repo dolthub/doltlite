@@ -2063,6 +2063,54 @@ static int appendFallbackSchemaCatalogRows(
     nRows++;
   }
 
+  for(i=0; i<nFallback; i++){
+    SchemaEntry *pSe = &aFallback[i];
+    SchemaCatalogRow *pRow;
+    int exists = 0;
+    if( !pSe->zName || !pSe->zType ) continue;
+    if( strcmp(pSe->zType, "table")==0 || strcmp(pSe->zType, "index")==0 ){
+      continue;
+    }
+    for(j=0; j<nRows; j++){
+      if( aRows[j].zType && aRows[j].zName
+       && strcmp(aRows[j].zType, pSe->zType)==0
+       && strcmp(aRows[j].zName, pSe->zName)==0 ){
+        exists = 1;
+        break;
+      }
+    }
+    if( exists ) continue;
+    if( nRows>=nAlloc ){
+      i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
+      SchemaCatalogRow *aNew;
+      if( nNew > (i64)0x7fffffff/(i64)sizeof(SchemaCatalogRow) ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aNew = sqlite3_realloc(aRows,
+                             (int)(nNew * (i64)sizeof(SchemaCatalogRow)));
+      if( !aNew ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aRows = aNew;
+      nAlloc = (int)nNew;
+    }
+    pRow = &aRows[nRows];
+    memset(pRow, 0, sizeof(*pRow));
+    pRow->iRowid = iNextRowid++;
+    pRow->oldPg = pSe->iRootpage;
+    pRow->zType = sqlite3_mprintf("%s", pSe->zType ? pSe->zType : "");
+    pRow->zName = sqlite3_mprintf("%s", pSe->zName ? pSe->zName : "");
+    pRow->zTblName = sqlite3_mprintf("%s", pSe->zTblName ? pSe->zTblName : "");
+    pRow->zSql = pSe->zSql ? sqlite3_mprintf("%s", pSe->zSql) : 0;
+    if( !pRow->zType || !pRow->zName || !pRow->zTblName || (pSe->zSql && !pRow->zSql) ){
+      freeSchemaCatalogRows(aRows, nRows+1);
+      return SQLITE_NOMEM;
+    }
+    nRows++;
+  }
+
   *paRows = aRows;
   *pnRows = nRows;
   return SQLITE_OK;
