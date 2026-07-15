@@ -382,6 +382,15 @@ jobs:
       run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
+    - name: Amalgamation plaintext HTTP remote test
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        rm -f sqlite3.c .target_source
+        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+        bash ../test/amalgamation_http_remote_test.sh .
+      timeout-minutes: 5
+
     # -- C/Python/Go integration tests -----------------------
 
     - name: C integration tests
