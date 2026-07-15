@@ -130,6 +130,52 @@ oracle_error() {
   fi
 }
 
+oracle_query() {
+  local name="$1" setup="$2" dl_query="$3" dt_query="$4"
+  local dir="$TMPROOT/${name}_query"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out dt_out dolt_setup dolt_query
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$dl_query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' | grep '^R|' | sort)
+
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  dolt_query=$(vc_oracle_translate_for_dolt "$dt_query")
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf '%s\n' "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.setup.err"
+    printf '%s\n' "$dolt_query" | "$DOLT" sql -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"\r' | grep '^R|' | sort)
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_query_dual() {
+  local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
+  local dir="$TMPROOT/${name}_dual"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out dt_out dolt_setup dolt_query
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' | grep '^R|' | sort)
+
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  dolt_query=$(vc_oracle_translate_for_dolt "$dt_query")
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf '%s\n' "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.setup.err"
+    printf '%s\n' "$dolt_query" | "$DOLT" sql -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"\r' | grep '^R|' | sort)
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 echo "=== Version Control Oracle Tests: dolt_commit ==="
 echo ""
 
@@ -323,6 +369,101 @@ INSERT INTO b VALUES (2, 'x');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop and edit');
 "
+
+echo "--- commit -am catalog adoption edges ---"
+
+oracle_query "commit_am_schema_only_add_column" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'n/a';
+SELECT dolt_commit('-am', 'add note');
+" \
+"SELECT 'R|col|' || name FROM pragma_table_info('t')
+ UNION ALL SELECT 'R|status|' || count(*) FROM dolt_status
+ UNION ALL SELECT 'R|log|' || message FROM dolt_log;" \
+"SELECT CONCAT('R|col|', column_name) FROM information_schema.columns WHERE table_name='t'
+ UNION ALL SELECT CONCAT('R|status|', count(*)) FROM dolt_status
+ UNION ALL SELECT CONCAT('R|log|', message) FROM dolt_log;"
+
+oracle_query "commit_am_data_and_schema" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'n/a';
+INSERT INTO t(id, v, note) VALUES (2, 'second', 'explicit');
+UPDATE t SET note='updated' WHERE id=1;
+SELECT dolt_commit('-am', 'schema and data');
+" \
+"SELECT 'R|row|' || id || '|' || v || '|' || note FROM t
+ UNION ALL SELECT 'R|col|' || name FROM pragma_table_info('t')
+ UNION ALL SELECT 'R|status|' || count(*) FROM dolt_status;" \
+"SELECT CONCAT('R|row|', id, '|', v, '|', note) FROM t
+ UNION ALL SELECT CONCAT('R|col|', column_name) FROM information_schema.columns WHERE table_name='t'
+ UNION ALL SELECT CONCAT('R|status|', count(*)) FROM dolt_status;"
+
+oracle_query "commit_am_drop_recreate_same_name" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'old');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP TABLE t;
+CREATE TABLE t(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES (7, 70);
+SELECT dolt_commit('-am', 'recreate t');
+" \
+"SELECT 'R|row|' || k || '|' || n FROM t
+ UNION ALL SELECT 'R|col|' || name FROM pragma_table_info('t')
+ UNION ALL SELECT 'R|status|' || count(*) FROM dolt_status;" \
+"SELECT CONCAT('R|row|', k, '|', n) FROM t
+ UNION ALL SELECT CONCAT('R|col|', column_name) FROM information_schema.columns WHERE table_name='t'
+ UNION ALL SELECT CONCAT('R|status|', count(*)) FROM dolt_status;"
+
+oracle_query "commit_am_index_and_view" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+CREATE INDEX t_v_idx ON t(v);
+CREATE VIEW high_t AS SELECT id, v FROM t WHERE v >= 20;
+INSERT INTO t VALUES (1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+INSERT INTO t VALUES (3, 30);
+UPDATE t SET v=25 WHERE id=2;
+SELECT dolt_commit('-am', 'data with index view');
+" \
+"SELECT 'R|high|' || id || '|' || v FROM high_t
+ UNION ALL SELECT 'R|index|' || name FROM pragma_index_list('t') WHERE name='t_v_idx'
+ UNION ALL SELECT 'R|schema|' || type || '|' || name FROM sqlite_master WHERE name='high_t'
+ UNION ALL SELECT 'R|status|' || count(*) FROM dolt_status;" \
+"SELECT CONCAT('R|high|', id, '|', v) FROM high_t
+ UNION ALL SELECT CONCAT('R|index|', index_name) FROM information_schema.statistics WHERE table_name='t' AND index_name='t_v_idx'
+ UNION ALL SELECT CONCAT('R|schema|', type, '|', name) FROM dolt_schemas WHERE name='high_t'
+ UNION ALL SELECT CONCAT('R|status|', count(*)) FROM dolt_status;"
+
+oracle_query_dual "commit_am_trigger_persists" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+CREATE TABLE log(id INTEGER, v INTEGER);
+CREATE TRIGGER t_ai AFTER INSERT ON t BEGIN INSERT INTO log VALUES(new.id, new.v); END;
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'trigger and data');
+INSERT INTO t VALUES (3, 30);
+" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+CREATE TABLE log(id INTEGER, v INTEGER);
+CREATE TRIGGER t_ai AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES(new.id, new.v);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'trigger and data');
+INSERT INTO t VALUES (3, 30);
+" \
+"SELECT 'R|log|' || id || '|' || v FROM log;" \
+"SELECT CONCAT('R|log|', id, '|', v) FROM log;"
 
 echo "--- error paths ---"
 
