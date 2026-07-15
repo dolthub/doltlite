@@ -82,6 +82,59 @@ SQL
   )
 }
 
+consume_two_branches() {
+  local key="$1" first="$2" second="$3"
+  local base="$TMPROOT/$key"
+  mkdir -p "$base"
+
+  local dl_remote="$base/tgt.db"
+  CONSUME_DL="$base/clone.db"
+  CONSUME_DT="$base/clone"
+
+  printf '%s\n' "
+    CREATE TABLE example(id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO example VALUES (1, 'base');
+    SELECT dolt_commit('-A','-m','c1 base');
+    SELECT dolt_checkout('-b','$first');
+    INSERT INTO example VALUES (2, '$first');
+    SELECT dolt_commit('-A','-m','c2 on $first');
+    SELECT dolt_remote('add','origin','file://$dl_remote');
+    SELECT dolt_push('origin','$first');
+    SELECT dolt_checkout('main');
+    SELECT dolt_checkout('-b','$second');
+    INSERT INTO example VALUES (3, '$second');
+    SELECT dolt_commit('-A','-m','c3 on $second');
+    SELECT dolt_push('origin','$second');
+  " | "$DOLTLITE" "$base/src.db" >"$base/dl_push.out" 2>"$base/dl_push.err"
+  printf 'SELECT dolt_clone('"'"'file://%s'"'"');\n' "$dl_remote" \
+    | "$DOLTLITE" "$CONSUME_DL" >/dev/null 2>"$base/dl_clone.err"
+
+  (
+    mkdir -p "$base/dsrc" "$base/drem"
+    cd "$base/dsrc" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    "$DOLT" sql -c >/dev/null 2>"$base/dt_setup.err" <<SQL
+CREATE TABLE example(id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO example VALUES (1, 'base');
+CALL dolt_commit('-A','-m','c1 base');
+CALL dolt_checkout('-b','$first');
+INSERT INTO example VALUES (2, '$first');
+CALL dolt_commit('-A','-m','c2 on $first');
+CALL dolt_checkout('main');
+CALL dolt_checkout('-b','$second');
+INSERT INTO example VALUES (3, '$second');
+CALL dolt_commit('-A','-m','c3 on $second');
+SQL
+    "$DOLT" remote add origin "file://$base/drem" >/dev/null 2>&1
+    "$DOLT" checkout "$first" >/dev/null 2>&1
+    "$DOLT" push origin "$first" >/dev/null 2>"$base/dt_push_first.err"
+    "$DOLT" checkout "$second" >/dev/null 2>&1
+    "$DOLT" push origin "$second" >/dev/null 2>"$base/dt_push_second.err"
+    cd "$base" || exit 1
+    "$DOLT" clone "file://$base/drem" clone >/dev/null 2>"$base/dt_clone.err"
+  )
+}
+
 # Query the prebuilt consumers and compare. $mut (optional) is applied to a
 # fresh copy of each consumer first.
 compare() {
@@ -91,12 +144,24 @@ compare() {
 
   local dl_db="$CONSUME_DL" dt_repo="$CONSUME_DT"
   if [ -n "$mut" ]; then
+    local dl_rc dt_rc
     dl_db="$dir/tgt.db"; dt_repo="$dir/clone"
     forcecopy_db "$CONSUME_DL" "$dl_db"
     cp -R "$CONSUME_DT" "$dt_repo"
     printf '%s\n' "$mut" | "$DOLTLITE" "$dl_db" >/dev/null 2>"$dir/dl_mut.err"
+    dl_rc=$?
     ( cd "$dt_repo" && printf '%s\n' "$(vc_oracle_translate_for_dolt "$mut")" \
         | "$DOLT" sql -c >/dev/null 2>"$dir/dt_mut.err" )
+    dt_rc=$?
+    if [ "$dl_rc" -ne 0 ] || [ "$dt_rc" -ne 0 ] || [ -s "$dir/dl_mut.err" ] || [ -s "$dir/dt_mut.err" ]; then
+      echo "  FAIL: $name"
+      echo "    doltlite mutation rc=$dl_rc"
+      sed 's/^/      /' "$dir/dl_mut.err"
+      echo "    dolt mutation rc=$dt_rc"
+      sed 's/^/      /' "$dir/dt_mut.err"
+      fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
+      return
+    fi
   fi
 
   local dl_out dt_out
@@ -187,6 +252,33 @@ compare "named_active" "" \
 compare "named_contents" "" \
   "SELECT 'R|' || id || '|' || value FROM example;" \
   "SELECT CONCAT('R|', id, '|', value) FROM example;"
+
+echo "--- consume first-pushed default after second branch push ---"
+consume_two_branches twobranches foo1 bar
+
+compare "two_branch_fetch_first_checkout_contents" \
+  "SELECT dolt_fetch('origin','foo1'); SELECT dolt_branch('topic_foo','origin/foo1');" \
+  "SELECT 'R|' || id || '|' || value FROM dolt_at_example WHERE commit_ref='topic_foo';" \
+  "SELECT CONCAT('R|', id, '|', value) FROM example AS OF 'topic_foo';"
+
+compare "two_branch_fetch_second_checkout_contents" \
+  "SELECT dolt_fetch('origin','bar'); SELECT dolt_branch('topic_bar','origin/bar');" \
+  "SELECT 'R|' || id || '|' || value FROM dolt_at_example WHERE commit_ref='topic_bar';" \
+  "SELECT CONCAT('R|', id, '|', value) FROM example AS OF 'topic_bar';"
+
+compare "two_branch_rename_first_branch" \
+  "SELECT dolt_fetch('origin','foo1'); SELECT dolt_branch('topic_foo','origin/foo1'); SELECT dolt_branch('-m','topic_foo','renamed_foo');" \
+  "SELECT 'R|renamed|' || count(*) FROM dolt_branches WHERE name='renamed_foo' UNION ALL SELECT 'R|old|' || count(*) FROM dolt_branches WHERE name='topic_foo';" \
+  "SELECT CONCAT('R|renamed|', count(*)) FROM dolt_branches WHERE name='renamed_foo' UNION ALL SELECT CONCAT('R|old|', count(*)) FROM dolt_branches WHERE name='topic_foo';"
+
+MUT_DELETE_FIRST="
+SELECT dolt_fetch('origin','foo1');
+SELECT dolt_branch('topic_foo','origin/foo1');
+SELECT dolt_branch('-D','topic_foo');
+"
+compare "two_branch_delete_first_branch" "$MUT_DELETE_FIRST" \
+  "SELECT 'R|deleted|' || count(*) FROM dolt_branches WHERE name='topic_foo';" \
+  "SELECT CONCAT('R|deleted|', count(*)) FROM dolt_branches WHERE name='topic_foo';"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
