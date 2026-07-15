@@ -702,6 +702,34 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   return rc;
 }
 
+static int checkoutCreateFromRemoteTracking(
+  sqlite3 *db,
+  const char *zBranch
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const TrackingBranch *aTk = 0;
+  int nTk = 0;
+  int i;
+  int iMatch = -1;
+  BranchMutationCtx m;
+
+  if( !cs || strchr(zBranch, '/')!=0 ) return SQLITE_NOTFOUND;
+  refsTableGetTracking(&cs->refs, &nTk, &aTk);
+  for(i=0; i<nTk; i++){
+    if( aTk[i].zBranch && strcmp(aTk[i].zBranch, zBranch)==0 ){
+      if( iMatch>=0 ) return SQLITE_NOTFOUND;
+      iMatch = i;
+    }
+  }
+  if( iMatch<0 ) return SQLITE_NOTFOUND;
+  if( prollyHashIsEmpty(&aTk[iMatch].commitHash) ) return SQLITE_NOTFOUND;
+
+  memset(&m, 0, sizeof(m));
+  m.zName = zBranch;
+  memcpy(&m.head, &aTk[iMatch].commitHash, sizeof(ProllyHash));
+  return doltliteMutateRefs(db, mutateBranchRef, &m);
+}
+
 static void doltConnectBranchFunc(
   sqlite3_context *ctx,
   int argc,
@@ -1184,6 +1212,42 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3_free(zCurrentBranch);
   zCurrentBranch = 0;
   if( rc==SQLITE_NOTFOUND ){
+    rc = checkoutCreateFromRemoteTracking(db, zBranch);
+    if( rc==SQLITE_OK ){
+      memset(&m, 0, sizeof(m));
+      doltliteGetSessionHead(db, &m.oldCommitHash);
+      zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+      if( !zCurrentBranch ){
+        (void)doltliteVcSealSavepointError(db);
+        sqlite3_result_error_nomem(ctx);
+        return;
+      }
+      rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zCurrentBranch);
+        doltliteVcResultError(ctx, db, "failed to snapshot current branch state");
+        return;
+      }
+      m.haveOldState = 1;
+      checkoutSaveSession(db, &m);
+      m.zTargetBranch = zBranch;
+      m.zCurrentBranch = zCurrentBranch;
+      rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
+      if( rc!=SQLITE_OK ){
+        checkoutRestoreSession(db, &m);
+        {
+          int restoreRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
+          if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+        }
+      }
+      sqlite3_free(zCurrentBranch);
+      zCurrentBranch = 0;
+      goto checkout_done;
+    }
+    if( rc!=SQLITE_NOTFOUND ){
+      doltliteVcResultError(ctx, db, "checkout failed");
+      return;
+    }
 
     rc = doltliteCheckoutTables(db, 0, argv, 0, argc);
     if( rc==SQLITE_NOTFOUND ){
@@ -1208,6 +1272,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     sqlite3_result_int(ctx, 0);
     return;
   }
+checkout_done:
   if( rc==SQLITE_EMPTY ){
     doltliteVcResultError(ctx, db, "target branch has no commits");
     return;
