@@ -669,6 +669,54 @@ CALL dolt_reset('--hard', 'bogus');
 COMMIT;
 SELECT concat('Q|', count(*)) FROM t;"
 
+echo "--- unstaging a staged drop keeps it in the working tree ---"
+
+oracle "reset_path_staged_dropped_table_unstages_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE s(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+INSERT INTO s VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE s;
+SELECT dolt_add('-A');
+SELECT dolt_reset('s');
+"
+
+oracle "reset_soft_staged_new_table_stays_new" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+CREATE TABLE n(id INTEGER PRIMARY KEY);
+INSERT INTO n VALUES (7);
+SELECT dolt_add('-A');
+SELECT dolt_reset();
+"
+
+echo "--- hard reset preserves untracked tables ---"
+
+UNTRACKED_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE s(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'one');
+INSERT INTO s VALUES (1, 'ess');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE s;
+UPDATE t SET v = 'modified' WHERE id = 1;
+CREATE TABLE u(x INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO u VALUES (9, 'kept');
+SELECT dolt_reset('--hard');
+"
+
+oracle "reset_hard_preserves_untracked_status" "$UNTRACKED_SEED"
+
+oracle_same_session "reset_hard_preserves_untracked_contents" "$UNTRACKED_SEED" \
+  "SELECT concat('Q|t|', id, '|', v) FROM t;
+SELECT concat('Q|s|', id, '|', v) FROM s;
+SELECT concat('Q|u|', x, '|', w) FROM u;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
