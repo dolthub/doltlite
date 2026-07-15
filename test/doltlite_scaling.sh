@@ -110,9 +110,14 @@ seed_rows() {
   } | "$DOLTLITE" "$db" > /dev/null 2>&1
 }
 
-# Ops whose cost is currently dominated by the O(WAL-since-gc) refresh
-# (#1630). Tighten toward ~3x when incremental refresh lands.
-WAL_GATE=20
+# Per-commit cost is depth-independent now that the head re-confirm proves
+# the store unchanged from the tail root record instead of replaying the
+# WAL; the growth gate holds that line (~3x measured, from residual
+# per-session bookkeeping). Ops issued through fresh sessions still pay an
+# open-time WAL replay that only a user-driven gc folds away, so they get
+# more headroom.
+COMMIT_GROWTH_GATE=6
+SESSION_OP_GATE=8
 
 echo "══════════════════════════════════════"
 echo "  Segment A: cost vs history depth"
@@ -147,10 +152,10 @@ block6=$(commit_block "$DBA" $(( 5 * BLOCK )) "$BLOCK")
 read -r log6 co6 mg6 <<< "$(depth_ops side2)"
 echo "  depth 1200:  ${block6}ms/block ($((block6 / BLOCK))ms/commit) log=${log6}ms checkout=${co6}ms merge=${mg6}ms"
 
-check_ratio "per-commit growth, depth 1200 vs 200" "$block6" "$block1" "$WAL_GATE"
-check_ratio "dolt_log full walk, depth 1200 vs 200" "$log6" "$log1" "$WAL_GATE"
-check_ratio "checkout old commit, depth 1200 vs 200" "$co6" "$co1" "$WAL_GATE"
-check_ratio "merge across divergence, depth 1200 vs 200" "$mg6" "$mg1" "$WAL_GATE"
+check_ratio "per-commit growth, depth 1200 vs 200" "$block6" "$block1" "$COMMIT_GROWTH_GATE"
+check_ratio "dolt_log full walk, depth 1200 vs 200" "$log6" "$log1" "$SESSION_OP_GATE"
+check_ratio "checkout old commit, depth 1200 vs 200" "$co6" "$co1" "$SESSION_OP_GATE"
+check_ratio "merge across divergence, depth 1200 vs 200" "$mg6" "$mg1" "$SESSION_OP_GATE"
 check_eq "merged rows visible" "1|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE id=2 AND v=1;")"
 
 gc_ms=$(run_ms "$DBA" "SELECT dolt_gc();")

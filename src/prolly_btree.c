@@ -11414,23 +11414,16 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
     }
   }
   if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE ){
-    sqlite3 *db2 = 0;
-    const char *zFilename = sqlite3_db_filename(db, "main");
-    if( zFilename && sqlite3_open_v2(zFilename, &db2, SQLITE_OPEN_READONLY, 0)==SQLITE_OK
-        && db2 && db2->nDb>0 && db2->aDb[0].pBt ){
-      Btree *p2 = db2->aDb[0].pBt;
-      Btree *p = db->aDb[0].pBt;
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-      int rc = btreeLoadWorkingSetBlob(&p2->pBt->store, zBr,
-                                       0, 0, 0, &isMerging,
-                                       0, pHash, 0, 0, 0, 0, 0, 0);
-      sqlite3_close(db2);
-      if( rc!=SQLITE_OK || !isMerging ){
-        memset(pHash, 0, sizeof(*pHash));
-      }
-      return;
+    /* Idle sessions must see the DURABLE working set, not this session's
+    ** cached view. A locked refresh (cheap when the store is unchanged)
+    ** gives the in-memory read below the same guarantee the throwaway
+    ** read-only connection this used to open per call did — without paying
+    ** a full store open and WAL replay every time. */
+    ChunkStore *pStore = &db->aDb[0].pBt->pBt->store;
+    if( chunkStoreLockAndRefresh(pStore)==SQLITE_OK ){
+      (void)chunkStoreForceRefresh(pStore);
+      chunkStoreUnlock(pStore);
     }
-    if( db2 ) sqlite3_close(db2);
   }
   {
     Btree *p = db->aDb[0].pBt;

@@ -317,7 +317,9 @@ jobs:
     - name: SQLite regression tests - ${{ matrix.bucket }}
       run: |
         cd build
-        bash ../test/run_testfixture.sh "SQLite regression ${{ matrix.bucket }}" 300 \
+        # bigsort alone runs ~260s on a healthy runner; 300s left no margin
+        # for runner-load wobble and flaked as a phantom crash.
+        bash ../test/run_testfixture.sh "SQLite regression ${{ matrix.bucket }}" 450 \
           $(tr '\n' ' ' < ../test/regression-buckets/${{ matrix.bucket }}.txt)
 
   # Cross-version database compatibility: fixtures built by pinned old

@@ -774,11 +774,45 @@ int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit)
   return SQLITE_OK;
 }
 
+/* True when the on-disk store provably matches this handle's in-memory
+** state: same inode (a peer gc replaces the file), physical size equal to
+** the in-memory committed extent (the store is append-only, so any peer
+** commit or crash garbage grows it), and a sealed tail root record carrying
+** this handle's live refs hash (so uncommitted local ref changes, or any
+** size-coincident rewrite, force the slow path). */
+static int csDiskStateMatchesMemory(ChunkStore *cs){
+  int bMoved = 0;
+  i64 contentEnd;
+  i64 physSize = 0;
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  if( cs->file.pFile==0 ) return 0;
+  if( cs->wal.nWalData < 1 + CHUNK_MANIFEST_SIZE ) return 0;
+  if( sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
+                           &bMoved)!=SQLITE_OK || bMoved ){
+    return 0;
+  }
+  contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
+  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK
+   || physSize!=contentEnd ){
+    return 0;
+  }
+  if( sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot),
+                    contentEnd - (i64)sizeof(aRoot))!=SQLITE_OK ){
+    return 0;
+  }
+  return aRoot[0]==CS_WAL_TAG_ROOT
+      && csManifestHashState(aRoot+1)==CS_MANIFEST_HASH_OK
+      && memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
+                cs->refs.refsHash.data, PROLLY_HASH_SIZE)==0;
+}
+
 /* Read zName's committed tip straight from disk into *pTip, leaving this
 ** store's in-memory state untouched. Opens a throwaway view of the file (as
 ** csReloadFromDisk does) so a commit/merge head-CAS sees a peer's advance even
 ** when its force-refresh is suppressed (a reentrant lock holder, or a WAL-reuse
-** commit the file-size heuristic misses). *pFound is 0 if the branch is absent.
+** commit the file-size heuristic misses). When the tail root record proves the
+** disk still matches this handle's state, the in-memory tip IS the disk tip
+** and the throwaway open is skipped. *pFound is 0 if the branch is absent.
 ** Caller must hold the chunk-store lock. */
 int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
                                 ProllyHash *pTip, int *pFound){
@@ -787,6 +821,11 @@ int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
 
   *pFound = 0;
   if( cs->isMemory || !cs->file.zFilename ){
+    if( chunkStoreFindBranch(cs, zName, pTip)==SQLITE_OK ) *pFound = 1;
+    return SQLITE_OK;
+  }
+
+  if( csDiskStateMatchesMemory(cs) ){
     if( chunkStoreFindBranch(cs, zName, pTip)==SQLITE_OK ) *pFound = 1;
     return SQLITE_OK;
   }
@@ -2230,6 +2269,13 @@ int chunkStoreForceRefresh(ChunkStore *cs){
   ** under the outer scope's already-current view, so a multi-step VC op that
   ** holds the lock across sub-operations keeps the in-memory state it builds. */
   if( cs->lockDepth != 1 ) return SQLITE_OK;
+  /* Fast path: when the tail root record proves the on-disk store still
+  ** matches this handle's state, the reload — which replays the entire WAL —
+  ** is a no-op and can be skipped. Local uncommitted appends fall through so
+  ** the reload path keeps reporting SQLITE_BUSY_SNAPSHOT. */
+  if( cs->staging.nRecentUncommitted==0 && csDiskStateMatchesMemory(cs) ){
+    return SQLITE_OK;
+  }
   /* Reload even under a pinned snapshot — the VC write needs the true on-disk
   ** branch tips. Unpin around it (the heuristic refresh path suppresses reloads
   ** while pinned), then restore the pin. */
