@@ -2357,11 +2357,15 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   ** lost its identity crossing catalog numbering domains, and two entries
   ** sharing a number would make the serialized catalog ambiguous. Both
   ** are write-time signatures of the unnamed-entry overlay bug class —
-  ** fail fast instead of publishing the catalog. (A missing entry for an
-  ** emitted row cannot be checked here: the row filter intentionally
-  ** expresses subset catalogs, so absence is indistinguishable from a
-  ** staged drop.) */
-  for(i=0; i<nTables; i++){
+  ** fail fast instead of publishing the catalog. Only CONSTRUCTED arrays
+  ** (staging, merge, reset) are checked: that is where the overlay bugs
+  ** live, while the LIVE catalog can legitimately reach these states
+  ** through writable_schema vandalism that stock tolerates (deleted or
+  ** rootpage-aliased schema rows). A missing entry for an emitted row
+  ** cannot be checked at all: the row filter intentionally expresses
+  ** subset catalogs, so absence is indistinguishable from a staged
+  ** drop. */
+  for(i=0; aTables!=pBtree->cat.a && i<nTables; i++){
     if( aSorted[i].iTable<=1 ) continue;
     if( aSorted[i].zType && strcmp(aSorted[i].zType, "unknown")==0 ){
       fprintf(stderr,
