@@ -1115,6 +1115,71 @@ static int addStageAllTables(
   return rc;
 }
 
+/* Remove unnamed (index) staged entries whose parent table is zTable,
+** resolving parents through the staged catalog's own schema rows — entry
+** numbers do not carry across catalogs. */
+static void addRemoveIndexEntriesOfTable(
+  struct TableEntry *aStaged,
+  int *pnStaged,
+  SchemaEntry *aStagedSchema,
+  int nStagedSchema,
+  const char *zTable
+){
+  int j, i;
+  for(j=0; j<*pnStaged; ){
+    const char *zParent = 0;
+    if( aStaged[j].iTable<=1 || aStaged[j].zName ){ j++; continue; }
+    for(i=0; i<nStagedSchema; i++){
+      if( aStagedSchema[i].zType
+       && strcmp(aStagedSchema[i].zType, "index")==0
+       && aStagedSchema[i].iRootpage==aStaged[j].iTable ){
+        zParent = aStagedSchema[i].zTblName;
+        break;
+      }
+    }
+    if( !zParent || strcmp(zParent, zTable)!=0 ){ j++; continue; }
+    sqlite3_free(aStaged[j].zName);
+    if( j+1<*pnStaged ){
+      memmove(&aStaged[j], &aStaged[j+1],
+              (*pnStaged-j-1)*(int)sizeof(struct TableEntry));
+    }
+    (*pnStaged)--;
+  }
+}
+
+/* Stage zTable's index entries from the working catalog alongside its
+** table entry: an index travels with its table through staging. */
+static int addAppendIndexEntriesOfTable(
+  sqlite3_context *context,
+  struct TableEntry **paStaged,
+  int *pnStaged,
+  struct TableEntry *aWorking,
+  int nWorking,
+  SchemaEntry *aWorkSchema,
+  int nWorkSchema,
+  const char *zTable
+){
+  int i, j, rc;
+  for(i=0; i<nWorkSchema; i++){
+    if( !aWorkSchema[i].zType
+     || strcmp(aWorkSchema[i].zType, "index")!=0
+     || aWorkSchema[i].iRootpage<=1
+     || !aWorkSchema[i].zTblName
+     || strcmp(aWorkSchema[i].zTblName, zTable)!=0 ){
+      continue;
+    }
+    for(j=0; j<nWorking; j++){
+      if( aWorking[j].iTable==aWorkSchema[i].iRootpage
+       && aWorking[j].zName==0 ){
+        rc = addAppendTableEntry(context, paStaged, pnStaged, &aWorking[j]);
+        if( rc!=SQLITE_OK ) return rc;
+        break;
+      }
+    }
+  }
+  return SQLITE_OK;
+}
+
 static int addStageNamedTables(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1131,12 +1196,43 @@ static int addStageNamedTables(
   int updateMaster = 0;
   int rc;
 
+  SchemaEntry *aWorkSchema = 0;
+  SchemaEntry *aStagedSchema = 0;
+  int nWorkSchema = 0;
+  int nStagedSchema = 0;
+
+  #define ADDNAMED_FREE_ALL() do { \
+    freeSchemaEntries(aWorkSchema, nWorkSchema); \
+    freeSchemaEntries(aStagedSchema, nStagedSchema); \
+    doltliteFreeCatalog(aWorking, nWorking); \
+    doltliteFreeCatalog(aStaged, nStaged); \
+  } while(0)
+
   rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
                                        &aWorking, &nWorking,
                                        &aStaged, &nStaged);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "failed to load staged catalog", -1);
     return rc;
+  }
+
+  {
+    ProllyHash stagedSrc;
+    doltliteGetSessionStaged(db, &stagedSrc);
+    if( prollyHashIsEmpty(&stagedSrc) ){
+      (void)doltliteGetHeadCatalogHash(db, &stagedSrc);
+    }
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pWorkingHash,
+                               &aWorkSchema, &nWorkSchema);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&stagedSrc) ){
+      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedSrc,
+                                 &aStagedSchema, &nStagedSchema);
+    }
+    if( rc!=SQLITE_OK ){
+      ADDNAMED_FREE_ALL();
+      sqlite3_result_error(context, "failed to load schema for staging", -1);
+      return rc;
+    }
   }
 
   for(i=0; i<argc; i++){
@@ -1149,8 +1245,7 @@ static int addStageNamedTables(
       int ignored = 0;
       rc = addCheckIgnore(db, context, zTable, &ignored);
       if( rc!=SQLITE_OK ){
-        doltliteFreeCatalog(aWorking, nWorking);
-        doltliteFreeCatalog(aStaged, nStaged);
+        ADDNAMED_FREE_ALL();
         return rc;
       }
       if( ignored ) continue;
@@ -1186,12 +1281,13 @@ static int addStageNamedTables(
           }
           j++;
         }
+        addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                     aStagedSchema, nStagedSchema, zTable);
         updateMaster = 1;
       }
       if( !found ){
         char *zErr = sqlite3_mprintf("table not found: %s", zTable);
-        doltliteFreeCatalog(aWorking, nWorking);
-        doltliteFreeCatalog(aStaged, nStaged);
+        ADDNAMED_FREE_ALL();
         if( zErr ){
           sqlite3_result_error(context, zErr, -1);
           sqlite3_free(zErr);
@@ -1220,8 +1316,7 @@ static int addStageNamedTables(
             char *zDup = aWorking[j].zName
                            ? sqlite3_mprintf("%s", aWorking[j].zName) : 0;
             if( aWorking[j].zName && !zDup ){
-              doltliteFreeCatalog(aWorking, nWorking);
-              doltliteFreeCatalog(aStaged, nStaged);
+              ADDNAMED_FREE_ALL();
               sqlite3_result_error_nomem(context);
               return SQLITE_NOMEM;
             }
@@ -1239,10 +1334,20 @@ static int addStageNamedTables(
           updateMaster = 1;
           rc = addAppendTableEntry(context, &aStaged, &nStaged, &aWorking[j]);
           if( rc!=SQLITE_OK ){
-            doltliteFreeCatalog(aWorking, nWorking);
-            doltliteFreeCatalog(aStaged, nStaged);
+            ADDNAMED_FREE_ALL();
             return rc;
           }
+        }
+        /* An index travels with its table: replace whatever index entries
+        ** the staged catalog carried for this table with the working ones. */
+        addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                     aStagedSchema, nStagedSchema, zTable);
+        rc = addAppendIndexEntriesOfTable(context, &aStaged, &nStaged,
+                                          aWorking, nWorking,
+                                          aWorkSchema, nWorkSchema, zTable);
+        if( rc!=SQLITE_OK ){
+          ADDNAMED_FREE_ALL();
+          return rc;
         }
         break;
       }
@@ -1260,8 +1365,7 @@ static int addStageNamedTables(
       }else{
         rc = addAppendTableEntry(context, &aStaged, &nStaged, pWorkingMaster);
         if( rc!=SQLITE_OK ){
-          doltliteFreeCatalog(aWorking, nWorking);
-          doltliteFreeCatalog(aStaged, nStaged);
+          ADDNAMED_FREE_ALL();
           return rc;
         }
       }
@@ -1270,8 +1374,8 @@ static int addStageNamedTables(
 
   addAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
   rc = addWriteStagedCatalog(db, cs, aStaged, nStaged);
-  doltliteFreeCatalog(aWorking, nWorking);
-  doltliteFreeCatalog(aStaged, nStaged);
+  ADDNAMED_FREE_ALL();
+  #undef ADDNAMED_FREE_ALL
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
   }
@@ -1770,12 +1874,14 @@ static void doltliteCommitFunc(
 
       for(k2=0; k2<nStaged; ){
         const char *zParent = 0;
+        const char *zIdxName = 0;
         if( aStaged[k2].iTable<=1 || aStaged[k2].zName ){ k2++; continue; }
         for(i2=0; i2<nOldSchema; i2++){
           if( aOldSchema[i2].zType
            && strcmp(aOldSchema[i2].zType, "index")==0
            && aOldSchema[i2].iRootpage==aStaged[k2].iTable ){
             zParent = aOldSchema[i2].zTblName;
+            zIdxName = aOldSchema[i2].zName;
             break;
           }
         }
@@ -1783,8 +1889,27 @@ static void doltliteCommitFunc(
          && amTableStagedByName(aStaged, nStaged, zParent)
          && !(addNameIndexFind(&workingIdx, zParent)
               && addNameIndexFind(&headIdx, zParent)) ){
-          k2++;
-          continue;
+          /* Staged-sourced index: its table was staged explicitly and is
+          ** not refreshed from working, so the entry keeps the staged data
+          ** root — but its number is from the add-time catalog's domain,
+          ** which the serializer resolves against working-domain schema
+          ** rows. Renumber by index name so the row pairs; an index that
+          ** no longer exists in working falls through to the drop. */
+          int renumbered = 0;
+          for(i2=0; i2<nWorkSchema; i2++){
+            if( aWorkSchema[i2].zType
+             && strcmp(aWorkSchema[i2].zType, "index")==0
+             && aWorkSchema[i2].zName && zIdxName
+             && strcmp(aWorkSchema[i2].zName, zIdxName)==0 ){
+              aStaged[k2].iTable = aWorkSchema[i2].iRootpage;
+              renumbered = 1;
+              break;
+            }
+          }
+          if( renumbered ){
+            k2++;
+            continue;
+          }
         }
         sqlite3_free(aStaged[k2].zName);
         if( k2+1<nStaged ){
