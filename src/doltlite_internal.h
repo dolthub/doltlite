@@ -919,7 +919,10 @@ int doltliteMergeCatalogs(sqlite3 *db,
     const ProllyHash *theirs, ProllyHash *pMergedHash,
     int *pnConflicts, char **pzErrMsg,
     SchemaMergeAction **ppActions, int *pnActions,
-    int bPreferOurMaster);
+    int bPreferOurMaster,
+    char ***pazReindex, int *pnReindex);
+void doltliteFreeNameList(char **az, int n);
+int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 
 struct ProllyDiffChange;
 

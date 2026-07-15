@@ -2351,6 +2351,46 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     qsort(aSorted, nTables, sizeof(CatalogSerializeEntry), catalogSerializeEntryCmp);
   }
 
+#ifdef DOLTLITE_PROLLY_CHECK
+  /* Two structural failures are detectable at write time regardless of
+  ** intent: an entry that pairs with no schema row and no live meta has
+  ** lost its identity crossing catalog numbering domains, and two entries
+  ** sharing a number would make the serialized catalog ambiguous. Both
+  ** are write-time signatures of the unnamed-entry overlay bug class —
+  ** fail fast instead of publishing the catalog. (A missing entry for an
+  ** emitted row cannot be checked here: the row filter intentionally
+  ** expresses subset catalogs, so absence is indistinguishable from a
+  ** staged drop.) */
+  for(i=0; i<nTables; i++){
+    if( aSorted[i].iTable<=1 ) continue;
+    if( aSorted[i].zType && strcmp(aSorted[i].zType, "unknown")==0 ){
+      fprintf(stderr,
+        "doltlite: catalog invariant violated: entry %u (%s) pairs with no "
+        "schema row or live meta\n",
+        (unsigned)aSorted[i].iTable,
+        aSorted[i].zName && aSorted[i].zName[0] ? aSorted[i].zName : "unnamed");
+      sqlite3_log(SQLITE_CORRUPT,
+        "catalog entry invariant violated: unpairable entry %u",
+        (unsigned)aSorted[i].iTable);
+      abort();
+    }
+    for(j=i+1; j<nTables; j++){
+      if( aSorted[j].iTable==aSorted[i].iTable ){
+        fprintf(stderr,
+          "doltlite: catalog invariant violated: duplicate entry number %u "
+          "(%s / %s)\n",
+          (unsigned)aSorted[i].iTable,
+          aSorted[i].zName ? aSorted[i].zName : "unnamed",
+          aSorted[j].zName ? aSorted[j].zName : "unnamed");
+        sqlite3_log(SQLITE_CORRUPT,
+          "catalog entry invariant violated: duplicate entry %u",
+          (unsigned)aSorted[i].iTable);
+        abort();
+      }
+    }
+  }
+#endif
+
   for(i=0; i<nTables; i++){
     int nType = aSorted[i].zType ? (int)strlen(aSorted[i].zType) : 0;
     int nName = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;

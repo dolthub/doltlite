@@ -14,6 +14,7 @@ doltlite_connect_branch.sh
 doltlite_tag.sh
 doltlite_merge.sh
 doltlite_merge_index_conflict.sh
+doltlite_index_vc_matrix.sh
 doltlite_stats_merge.sh
 large_merge_test.sh
 doltlite_conflicts.sh

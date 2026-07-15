@@ -3044,9 +3044,12 @@ static void doltliteMergeFunc(
     char *zMergeErr = 0;
     SchemaMergeAction *aSchemaActions = 0;
     int nSchemaActions = 0;
+    char **azReindex = 0;
+    int nReindex = 0;
     rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
                                 &mergedCatHash, &nMergeConflicts, &zMergeErr,
-                                &aSchemaActions, &nSchemaActions, 0);
+                                &aSchemaActions, &nSchemaActions, 0,
+                                &azReindex, &nReindex);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&ourCommit);
       doltliteCommitClear(&theirCommit);
@@ -3058,6 +3061,7 @@ static void doltliteMergeFunc(
       }
       doltliteTxnStateClear(&savedState);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+      doltliteFreeNameList(azReindex, nReindex);
       return;
     }
     sqlite3_free(zMergeErr);
@@ -3068,6 +3072,7 @@ static void doltliteMergeFunc(
       doltliteCommitClear(&ourCommit);
       doltliteCommitClear(&theirCommit);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+      doltliteFreeNameList(azReindex, nReindex);
       sqlite3_result_error(context,
         "merge conflict: another connection committed to this branch. Please retry your transaction.",
         -1);
@@ -3078,6 +3083,7 @@ static void doltliteMergeFunc(
       doltliteCommitClear(&ourCommit);
       doltliteCommitClear(&theirCommit);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+      doltliteFreeNameList(azReindex, nReindex);
       sqlite3_result_error_code(context, rc);
       return;
     }
@@ -3086,6 +3092,27 @@ static void doltliteMergeFunc(
     rc = doltliteSwitchCatalog(db, &mergedCatHash);
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
+    if( rc!=SQLITE_OK ){
+      if( graphLocked ){
+        chunkStoreUnlock(cs);
+        graphLocked = 0;
+      }
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+      doltliteFreeNameList(azReindex, nReindex);
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+      return;
+    }
+
+    /* Indexes adopted from the other branch carry only that branch's
+    ** rows; rebuild them over the merged tables while the merged catalog
+    ** is live so the flush below captures correct roots. */
+    if( nReindex>0 ){
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
+    }
+    doltliteFreeNameList(azReindex, nReindex);
+    azReindex = 0;
+    nReindex = 0;
     if( rc!=SQLITE_OK ){
       if( graphLocked ){
         chunkStoreUnlock(cs);
@@ -3427,28 +3454,38 @@ static int applyMergedCatalogAndCommit(
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                              &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
-                              bPreferOurMaster);
-  if( rc!=SQLITE_OK ){
+  {
+    char **azReindex = 0;
+    int nReindex = 0;
+    rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
+                                &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
+                                bPreferOurMaster, &azReindex, &nReindex);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zMergeErr);
+      doltliteTxnStateClear(&savedState);
+      doltliteFreeNameList(azReindex, nReindex);
+      return rc;
+    }
     sqlite3_free(zMergeErr);
-    doltliteTxnStateClear(&savedState);
-    return rc;
+
+    rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
+    if( rc!=SQLITE_OK ){
+      doltliteTxnStateClear(&savedState);
+      doltliteFreeNameList(azReindex, nReindex);
+      return rc;
+    }
+    graphLocked = 1;
+
+    rc = doltliteSwitchCatalog(db, &mergedCatHash);
+    if( rc==SQLITE_OK ){
+      rc = doltlitePrimeSchemaCache(db);
+    }
+    if( rc==SQLITE_OK && nReindex>0 ){
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
+    }
+    doltliteFreeNameList(azReindex, nReindex);
+    if( rc!=SQLITE_OK ) goto apply_rollback;
   }
-  sqlite3_free(zMergeErr);
-
-  rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
-  if( rc!=SQLITE_OK ){
-    doltliteTxnStateClear(&savedState);
-    return rc;
-  }
-  graphLocked = 1;
-
-  rc = doltliteSwitchCatalog(db, &mergedCatHash);
-  if( rc!=SQLITE_OK ) goto apply_rollback;
-
-  rc = doltlitePrimeSchemaCache(db);
-  if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteFlushCatalogToHash(db, &liveMergedCatHash);
   if( rc==SQLITE_OK ){
@@ -4550,11 +4587,22 @@ static int rebaseApplyPlanRowCatalog(
     return rc;
   }
 
-  rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
-                             &replayC.catalogHash, pMergedCat,
-                             &nConflicts, 0, 0, 0, 0);
-  if( rc==SQLITE_OK && nConflicts==0 ){
-    rc = doltliteSwitchCatalog(db, pMergedCat);
+  {
+    char **azReindex = 0;
+    int nReindex = 0;
+    rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
+                               &replayC.catalogHash, pMergedCat,
+                               &nConflicts, 0, 0, 0, 0,
+                               &azReindex, &nReindex);
+    if( rc==SQLITE_OK && nConflicts==0 ){
+      rc = doltliteSwitchCatalog(db, pMergedCat);
+    }
+    if( rc==SQLITE_OK && nConflicts==0 && nReindex>0 ){
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
+      if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, pMergedCat);
+      if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pMergedCat);
+    }
+    doltliteFreeNameList(azReindex, nReindex);
   }
   if( rc==SQLITE_OK && nConflicts==0 && !bSkipConstraintDetect ){
     rc = doltliteDetectPostMergeConstraintViolations(db,
