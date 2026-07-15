@@ -6368,18 +6368,22 @@ vacuum3 vacuum3-2.8.2  # file size = chunk payload
 vacuum3 vacuum3-2.9.2  # file size = chunk payload
 vacuum3 vacuum3-2.10.2  # file size = chunk payload
 vacuum3 vacuum3-5.2  # memdb page_size read-back after VACUUM (no rebuild)
-vacuum3 vacuum3-ioerr-1.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-2.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-3.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-4.33.3 @linux  # injected error consumed by best-effort gc finalization; parity check fails, data intact
-vacuum3 vacuum3-ioerr-1.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-1.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-2.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-2.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-3.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-3.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-4.31.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-vacuum3 vacuum3-ioerr-4.32.3  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+# VACUUM gc-rewrite ioerr window: the injected error lands in a best-effort
+# finalization write that gc deliberately consumes, so the statement succeeds
+# after the error was hit; checksum subtests pass, data intact. Ordinals are
+# ubuntu-runner IDs and track the streamed writer's coalesced write count.
+vacuum3 vacuum3-ioerr-1.29.3 @linux
+vacuum3 vacuum3-ioerr-1.30.3 @linux
+vacuum3 vacuum3-ioerr-1.31.3 @linux
+vacuum3 vacuum3-ioerr-2.29.3 @linux
+vacuum3 vacuum3-ioerr-2.30.3 @linux
+vacuum3 vacuum3-ioerr-2.31.3 @linux
+vacuum3 vacuum3-ioerr-3.29.3 @linux
+vacuum3 vacuum3-ioerr-3.30.3 @linux
+vacuum3 vacuum3-ioerr-3.31.3 @linux
+vacuum3 vacuum3-ioerr-4.29.3 @linux
+vacuum3 vacuum3-ioerr-4.30.3 @linux
+vacuum3 vacuum3-ioerr-4.31.3 @linux
 
 # fkey_malloc / vtab_err: OOM fault indices, re-derived after the large-blob
 # insert path dropped two allocations (indices shift with allocation counts;
