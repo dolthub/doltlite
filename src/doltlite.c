@@ -73,6 +73,7 @@ extern int doltliteRegisterDiffTables(sqlite3 *db);
 extern int doltliteRegisterWorkspaceTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteRegisterAtTables(sqlite3 *db);
+extern int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash);
 extern int doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteRegisterBlameTables(sqlite3 *db);
 extern int doltliteRefreshConstraintViolationTables(sqlite3 *db);
@@ -1968,7 +1969,7 @@ static void doltliteCommitFunc(
     sqlite3_result_error_code(context, rc);
     return;
   }
-  rc = doltliteRegisterAtTables(db);
+  rc = doltliteRegisterAtTablesForCatalog(db, &catalogHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;

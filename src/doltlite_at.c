@@ -525,6 +525,19 @@ static int atRegisterCatalogTables(
   return rc;
 }
 
+/* Register AT vtables for one catalog only. A new commit can introduce
+** table names only from its own catalog — every historical name was
+** registered by the full-graph walk at connection init — so the commit path
+** uses this instead of re-walking the whole commit graph per commit. */
+int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash){
+  AtSeenTable seen;
+  int rc;
+  memset(&seen, 0, sizeof(seen));
+  rc = atRegisterCatalogTables(db, pCatHash, &seen);
+  atSeenTableClear(&seen);
+  return rc;
+}
+
 int doltliteRegisterAtTables(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   const BranchRef *aBr = 0;
