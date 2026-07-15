@@ -757,6 +757,13 @@ ROLLBACK TO sp1;
 oracle_nested_pull_rollback_poststate "pull_nested_savepoint_rollback_restores_state"
 oracle_fetch_checkout_tracking_poststate "fetch_then_checkout_remote_tracking_branch"
 oracle_fetch_ref_consumer_poststate \
+  "fetch_then_bare_checkout_remote_tracking_branch" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_checkout('branchA');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_checkout('branchA');" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='branchA'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
   "fetch_then_branch_remote_tracking_ref" \
   "SELECT dolt_fetch('origin', 'branchA');
 SELECT dolt_branch('topic', 'origin/branchA');" \
