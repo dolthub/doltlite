@@ -387,6 +387,11 @@ jobs:
       run: cd build && bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
+    - name: HTTP remote lifecycle test (strict proxy)
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
     - name: Amalgamation plaintext HTTP remote test
       if: matrix.platform != 'windows'
       run: |
