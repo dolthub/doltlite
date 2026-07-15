@@ -1260,6 +1260,11 @@ void sqlite3StartTable(
   }
   pParse->sNameToken = *pName;
   if( zName==0 ) return;
+  /* The reserved shadow-name check resolves the owning virtual table
+  ** through the schema, so the schema must be loaded before it runs. */
+  if( !IN_SPECIAL_PARSE && SQLITE_OK!=sqlite3ReadSchema(pParse) ){
+    goto begin_table_error;
+  }
   if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName) ){
     goto begin_table_error;
   }
