@@ -1,7 +1,8 @@
 #!/bin/bash
 # Scaling-curve gates: asserts RATIOS between sizes/depths rather than
 # wall-clock, so runner speed cancels out. Catches superlinear regressions
-# in per-commit cost vs history depth and per-op cost vs table size.
+# in per-commit cost vs history depth, per-op cost vs table size, and
+# per-byte cost vs blob size.
 #
 # IMPORTANT: perf is meaningless on a DOLTLITE_PROLLY_CHECK build (it adds a
 # full-tree walk to every commit). CI builds a plain binary for this suite.
@@ -43,6 +44,16 @@ check_max() {
   fi
 }
 
+check_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [ "$expected" = "$actual" ]; then
+    pass=$((pass+1))
+  else
+    echo "  FAIL: $desc (expected |$expected| got |$actual|)"
+    fail=$((fail+1))
+  fi
+}
+
 ms_now() {
   python3 -c 'import time; print(int(time.time()*1000))'
 }
@@ -67,6 +78,11 @@ run_ms_min3() {
   echo "$best"
 }
 
+query() {
+  local db="$1"; shift
+  "$DOLTLITE" "$db" "$@" 2>/dev/null
+}
+
 commit_block() {
   local db="$1" start="$2" count="$3"
   local stmts="" k
@@ -77,58 +93,83 @@ commit_block() {
   run_ms "$db" "$stmts"
 }
 
+# Seed in ONE session: per-batch reopens would each replay the growing WAL,
+# turning large seeds quadratic and drowning the signal this suite gates.
 seed_rows() {
   local db="$1" total="$2" cols="$3"
-  local i=1 end
+  local i=1 end stmts=""
   while [ "$i" -le "$total" ]; do
     end=$(( i + 99999 )); [ "$end" -gt "$total" ] && end=$total
-    "$DOLTLITE" "$db" "WITH RECURSIVE c(x) AS (VALUES($i) UNION ALL SELECT x+1 FROM c WHERE x<$end) INSERT INTO t SELECT $cols FROM c;" > /dev/null 2>&1
+    stmts+="WITH RECURSIVE c(x) AS (VALUES($i) UNION ALL SELECT x+1 FROM c WHERE x<$end) INSERT INTO t SELECT $cols FROM c;"
     i=$(( end + 1 ))
   done
+  "$DOLTLITE" "$db" "$stmts" > /dev/null 2>&1
 }
 
+# Ops whose cost is currently dominated by the O(WAL-since-gc) refresh
+# (#1630). Tighten toward ~3x when incremental refresh lands.
+WAL_GATE=20
+
 echo "══════════════════════════════════════"
-echo "  Segment A: per-commit cost vs history depth"
+echo "  Segment A: cost vs history depth"
 echo "══════════════════════════════════════"
 DBA="$TMPDIR/depth"
-"$DOLTLITE" "$DBA" "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);" > /dev/null 2>&1
+"$DOLTLITE" "$DBA" "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER); CREATE TABLE s(id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO s VALUES(1,0),(2,0);" > /dev/null 2>&1
 seed_rows "$DBA" 10000 "x, 0"
-"$DOLTLITE" "$DBA" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
+"$DOLTLITE" "$DBA" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed'); SELECT dolt_branch('anchor');" > /dev/null 2>&1
+
+# side branches off the seed commit for merge timing (disjoint rows: no conflicts)
+"$DOLTLITE" "$DBA" "SELECT dolt_branch('side1'); SELECT dolt_branch('side2'); SELECT dolt_checkout('side1'); UPDATE s SET v=1 WHERE id=1; SELECT dolt_commit('-am','side1'); SELECT dolt_checkout('side2'); UPDATE s SET v=1 WHERE id=2; SELECT dolt_commit('-am','side2'); SELECT dolt_checkout('main');" > /dev/null 2>&1
+
+depth_ops() {
+  # echoes "log_ms checkout_ms merge_ms" for the current depth
+  local side="$1"
+  local lg co mg
+  lg=$(run_ms_min3 "$DBA" "SELECT count(*) FROM dolt_log;")
+  co=$(run_ms "$DBA" "SELECT dolt_checkout('anchor');")
+  co=$(( co + $(run_ms "$DBA" "SELECT dolt_checkout('main');") ))
+  mg=$(run_ms "$DBA" "SELECT dolt_merge('$side');")
+  echo "$lg $co $mg"
+}
 
 BLOCK=200
 block1=$(commit_block "$DBA" 0 "$BLOCK")
-echo "  depth 1-200:      ${block1}ms ($((block1 / BLOCK))ms/commit)"
+read -r log1 co1 mg1 <<< "$(depth_ops side1)"
+echo "  depth 200:   ${block1}ms/block ($((block1 / BLOCK))ms/commit) log=${log1}ms checkout=${co1}ms merge=${mg1}ms"
 for b in 1 2 3 4; do
   commit_block "$DBA" $(( b * BLOCK )) "$BLOCK" > /dev/null
 done
 block6=$(commit_block "$DBA" $(( 5 * BLOCK )) "$BLOCK")
-echo "  depth 1001-1200:  ${block6}ms ($((block6 / BLOCK))ms/commit)"
+read -r log6 co6 mg6 <<< "$(depth_ops side2)"
+echo "  depth 1200:  ${block6}ms/block ($((block6 / BLOCK))ms/commit) log=${log6}ms checkout=${co6}ms merge=${mg6}ms"
 
-# Per-commit cost is currently O(WAL since gc), so this ratio runs ~6-11x
-# depending on the machine's fsync-vs-replay balance. The gate is a backstop
-# against anything worse; tighten to ~3x once the incremental-refresh fix
-# lands.
-check_ratio "per-commit growth over 1000 commits" "$block6" "$block1" 20
+check_ratio "per-commit growth, depth 1200 vs 200" "$block6" "$block1" "$WAL_GATE"
+check_ratio "dolt_log full walk, depth 1200 vs 200" "$log6" "$log1" "$WAL_GATE"
+check_ratio "checkout old commit, depth 1200 vs 200" "$co6" "$co1" "$WAL_GATE"
+check_ratio "merge across divergence, depth 1200 vs 200" "$mg6" "$mg1" "$WAL_GATE"
+check_eq "merged rows visible" "1|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE id=2 AND v=1;")"
 
 gc_ms=$(run_ms "$DBA" "SELECT dolt_gc();")
 echo "  dolt_gc: ${gc_ms}ms"
 postgc=$(commit_block "$DBA" 1200 50)
 postgc_scaled=$(( postgc * BLOCK / 50 ))
-echo "  post-gc:          ${postgc}ms for 50 ($((postgc / 50))ms/commit)"
+echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit)"
 check_ratio "post-gc commit cost vs shallow-history cost" "$postgc_scaled" "$block1" 3
 
 echo ""
 echo "══════════════════════════════════════"
 echo "  Segment B: per-op cost vs table size (post-gc)"
 echo "══════════════════════════════════════"
-declare -a SIZES=(100000 1000000)
-declare -a T_OPEN T_LOOKUP T_COMMIT
-for idx in 0 1; do
+declare -a SIZES=(100000 1000000 10000000)
+declare -a T_OPEN T_LOOKUP T_COMMIT T_SCAN T_GC
+for idx in 0 1 2; do
   n=${SIZES[$idx]}
   db="$TMPDIR/size$n"
   "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null 2>&1
   seed_rows "$db" "$n" "x, 'row_'||x, x%1000, printf('%032d', x)"
-  "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed'); SELECT dolt_gc();" > /dev/null 2>&1
+  "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
+  T_GC[$idx]=$(run_ms "$db" "SELECT dolt_gc();")
+  check_eq "row count at N=$n" "$n" "$(query "$db" "SELECT count(*) FROM t;")"
 
   T_OPEN[$idx]=$(run_ms_min3 "$db" "SELECT 1;")
 
@@ -142,17 +183,40 @@ for idx in 0 1; do
   T_COMMIT[$idx]=$(run_ms_min3 "$db" \
     "UPDATE t SET val=val+1 WHERE id BETWEEN $lo AND $(( lo + 499 )); SELECT dolt_commit('-am','delta');")
 
+  T_SCAN[$idx]=$(run_ms_min3 "$db" "SELECT count(*) FROM t WHERE val >= 0;")
+
   size_bytes=$(wc -c < "$db" | tr -d ' ')
-  echo "  N=$n: open=${T_OPEN[$idx]}ms lookups400=${T_LOOKUP[$idx]}ms upd500+commit=${T_COMMIT[$idx]}ms file=$(( size_bytes / 1000000 ))MB"
-  if [ "$n" = "1000000" ]; then
-    check_max "structural sharing: bytes/row at 1M" $(( size_bytes / n )) 150 "B"
+  echo "  N=$n: open=${T_OPEN[$idx]}ms lookups400=${T_LOOKUP[$idx]}ms upd500+commit=${T_COMMIT[$idx]}ms scan=${T_SCAN[$idx]}ms gc=${T_GC[$idx]}ms file=$(( size_bytes / 1000000 ))MB"
+  if [ "$n" -ge 1000000 ]; then
+    check_max "structural sharing: bytes/row at N=$n" $(( size_bytes / n )) 150 "B"
   fi
 done
 
-# 10x more rows; ops should be ~O(log n) once the store is compacted
-check_ratio "open cost, 1M vs 100k rows" "${T_OPEN[1]}" "${T_OPEN[0]}" 8
-check_ratio "400 point lookups, 1M vs 100k rows" "${T_LOOKUP[1]}" "${T_LOOKUP[0]}" 8
-check_ratio "500-row commit, 1M vs 100k rows" "${T_COMMIT[1]}" "${T_COMMIT[0]}" 8
+# 10x more rows per step; point ops should be ~O(log n), scans/gc ~O(n)
+for step in 1 2; do
+  lo=${SIZES[$((step-1))]}; hi=${SIZES[$step]}
+  check_ratio "open cost, ${hi} vs ${lo} rows" "${T_OPEN[$step]}" "${T_OPEN[$((step-1))]}" 8
+  check_ratio "400 point lookups, ${hi} vs ${lo} rows" "${T_LOOKUP[$step]}" "${T_LOOKUP[$((step-1))]}" 8
+  check_ratio "500-row commit, ${hi} vs ${lo} rows" "${T_COMMIT[$step]}" "${T_COMMIT[$((step-1))]}" 8
+  check_ratio "full scan, ${hi} vs ${lo} rows" "${T_SCAN[$step]}" "${T_SCAN[$((step-1))]}" 20
+  check_ratio "dolt_gc, ${hi} vs ${lo} rows" "${T_GC[$step]}" "${T_GC[$((step-1))]}" 20
+done
+
+echo ""
+echo "══════════════════════════════════════"
+echo "  Segment C: cost vs blob size"
+echo "══════════════════════════════════════"
+DBC="$TMPDIR/blob"
+"$DOLTLITE" "$DBC" "CREATE TABLE b(id INTEGER PRIMARY KEY, data BLOB); SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
+b_small=$(run_ms "$DBC" "INSERT INTO b VALUES(1, randomblob(1048576)); SELECT dolt_commit('-am','small');")
+b_big=$(run_ms "$DBC" "INSERT INTO b VALUES(2, randomblob(16777216)); SELECT dolt_commit('-am','big');")
+r_small=$(run_ms_min3 "$DBC" "SELECT length(data) FROM b WHERE id=1;")
+r_big=$(run_ms_min3 "$DBC" "SELECT length(data) FROM b WHERE id=2;")
+echo "  insert+commit: 1MB=${b_small}ms 16MB=${b_big}ms; read: 1MB=${r_small}ms 16MB=${r_big}ms"
+check_eq "blob roundtrip lengths" "1048576|16777216" "$(query "$DBC" "SELECT group_concat(length(data),'|') FROM b ORDER BY id;")"
+# 16x the bytes; ~linear expected, gate at 3x headroom over linear
+check_ratio "blob insert+commit, 16MB vs 1MB" "$b_big" "$b_small" 48
+check_ratio "blob readback, 16MB vs 1MB" "$r_big" "$r_small" 48
 
 echo ""
 echo "Results: $pass passed, $fail failed"
