@@ -991,6 +991,19 @@ static int addWriteStagedCatalog(
   return rc;
 }
 
+/* True when the final staged entry list contains a table entry named
+** zTbl. Index entries follow their parent table through -a staging, and
+** the parent's presence decides whether an index entry belongs at all. */
+static int amTableStagedByName(struct TableEntry *aStaged, int nStaged,
+                               const char *zTbl){
+  int i;
+  if( !zTbl ) return 0;
+  for(i=0; i<nStaged; i++){
+    if( aStaged[i].zName && strcmp(aStaged[i].zName, zTbl)==0 ) return 1;
+  }
+  return 0;
+}
+
 static int addStageAllTables(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1723,6 +1736,111 @@ static void doltliteCommitFunc(
         continue;
       }
       k++;
+    }
+
+    /* Index entries carry no name, so the by-name overlays above never
+    ** refresh them: the staged list still holds the old index roots under
+    ** tables whose data was just staged from working, committing a catalog
+    ** whose indexes disagree with their tables. Rebuild the unnamed
+    ** entries so each index follows its table's source: indexes of
+    ** working-sourced tables adopt the working entries, indexes kept for
+    ** staged-only tables stay, and indexes of deleted tables go away.
+    ** Parents resolve through each catalog's own schema rows because entry
+    ** numbers are meaningless across catalogs. */
+    {
+      SchemaEntry *aWorkSchema = 0, *aOldSchema = 0;
+      int nWorkSchema = 0, nOldSchema = 0;
+      const ProllyHash *pOldSrcHash =
+          !prollyHashIsEmpty(&stagedHash) ? &stagedHash : &headCatHash;
+      int i2, k2, nAppend = 0;
+
+      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
+                                 &aWorkSchema, &nWorkSchema);
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(pOldSrcHash) ){
+        rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pOldSrcHash,
+                                   &aOldSchema, &nOldSchema);
+      }
+      if( rc!=SQLITE_OK ){
+        freeSchemaEntries(aWorkSchema, nWorkSchema);
+        freeSchemaEntries(aOldSchema, nOldSchema);
+        sqlite3_result_error(context, "failed to load schema for staging", -1);
+        FREE_ADD_MODIFIED_CATALOGS();
+        return;
+      }
+
+      for(k2=0; k2<nStaged; ){
+        const char *zParent = 0;
+        if( aStaged[k2].iTable<=1 || aStaged[k2].zName ){ k2++; continue; }
+        for(i2=0; i2<nOldSchema; i2++){
+          if( aOldSchema[i2].zType
+           && strcmp(aOldSchema[i2].zType, "index")==0
+           && aOldSchema[i2].iRootpage==aStaged[k2].iTable ){
+            zParent = aOldSchema[i2].zTblName;
+            break;
+          }
+        }
+        if( zParent
+         && amTableStagedByName(aStaged, nStaged, zParent)
+         && !(addNameIndexFind(&workingIdx, zParent)
+              && addNameIndexFind(&headIdx, zParent)) ){
+          k2++;
+          continue;
+        }
+        sqlite3_free(aStaged[k2].zName);
+        if( k2+1<nStaged ){
+          memmove(&aStaged[k2], &aStaged[k2+1],
+                  (nStaged-k2-1)*(int)sizeof(struct TableEntry));
+        }
+        nStaged--;
+      }
+
+      for(i2=0; i2<nWorkSchema; i2++){
+        if( aWorkSchema[i2].zType
+         && strcmp(aWorkSchema[i2].zType, "index")==0
+         && aWorkSchema[i2].iRootpage>1
+         && aWorkSchema[i2].zTblName
+         && addNameIndexFind(&workingIdx, aWorkSchema[i2].zTblName)
+         && addNameIndexFind(&headIdx, aWorkSchema[i2].zTblName)
+         && amTableStagedByName(aStaged, nStaged, aWorkSchema[i2].zTblName) ){
+          nAppend++;
+        }
+      }
+      if( nAppend>0 && nStaged+nAppend>nStagedAlloc ){
+        struct TableEntry *aGrown = sqlite3_realloc(
+            aStaged, (nStaged+nAppend)*(int)sizeof(struct TableEntry));
+        if( !aGrown ){
+          freeSchemaEntries(aWorkSchema, nWorkSchema);
+          freeSchemaEntries(aOldSchema, nOldSchema);
+          sqlite3_result_error_nomem(context);
+          FREE_ADD_MODIFIED_CATALOGS();
+          return;
+        }
+        aStaged = aGrown;
+        nStagedAlloc = nStaged + nAppend;
+      }
+      for(i2=0; i2<nWorkSchema; i2++){
+        if( !aWorkSchema[i2].zType
+         || strcmp(aWorkSchema[i2].zType, "index")!=0
+         || aWorkSchema[i2].iRootpage<=1
+         || !aWorkSchema[i2].zTblName
+         || !addNameIndexFind(&workingIdx, aWorkSchema[i2].zTblName)
+         || !addNameIndexFind(&headIdx, aWorkSchema[i2].zTblName)
+         || !amTableStagedByName(aStaged, nStaged, aWorkSchema[i2].zTblName) ){
+          continue;
+        }
+        for(j=0; j<nWorking; j++){
+          if( aWorking[j].iTable==aWorkSchema[i2].iRootpage
+           && aWorking[j].zName==0 ){
+            aStaged[nStaged] = aWorking[j];
+            aStaged[nStaged].zName = 0;
+            nStaged++;
+            break;
+          }
+        }
+      }
+
+      freeSchemaEntries(aWorkSchema, nWorkSchema);
+      freeSchemaEntries(aOldSchema, nOldSchema);
     }
 
     if( nStaged==0 ){
