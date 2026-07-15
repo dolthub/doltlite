@@ -1180,6 +1180,117 @@ static int addAppendIndexEntriesOfTable(
   return SQLITE_OK;
 }
 
+/* Virtual tables persist through their shadow tables: staging a vtab by
+** name must carry the shadows (and their indexes) along, exactly as index
+** entries travel with ordinary tables. */
+static int addStageShadowTablesOf(
+  sqlite3 *db,
+  sqlite3_context *context,
+  struct TableEntry **paStaged,
+  int *pnStaged,
+  struct TableEntry *aWorking,
+  int nWorking,
+  SchemaEntry *aWorkSchema,
+  int nWorkSchema,
+  SchemaEntry *aStagedSchema,
+  int nStagedSchema,
+  const char *zTable
+){
+  Table *pTab;
+  int i, k, rc;
+
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab || !IsVirtual(pTab) ) return SQLITE_OK;
+
+  for(i=0; i<nWorkSchema; i++){
+    struct TableEntry *pWork;
+    int updated = 0;
+    if( !aWorkSchema[i].zType
+     || strcmp(aWorkSchema[i].zType, "table")!=0
+     || !aWorkSchema[i].zName
+     || strcmp(aWorkSchema[i].zName, zTable)==0
+     || !sqlite3IsShadowTableOf(db, pTab, aWorkSchema[i].zName) ){
+      continue;
+    }
+    pWork = doltliteFindTableByName(aWorking, nWorking, aWorkSchema[i].zName);
+    if( !pWork ) continue;
+    for(k=0; k<*pnStaged; k++){
+      if( (*paStaged)[k].zName
+       && strcmp((*paStaged)[k].zName, pWork->zName)==0 ){
+        char *zDup = sqlite3_mprintf("%s", pWork->zName);
+        if( !zDup ) return SQLITE_NOMEM;
+        sqlite3_free((*paStaged)[k].zName);
+        (*paStaged)[k] = *pWork;
+        (*paStaged)[k].zName = zDup;
+        updated = 1;
+        break;
+      }
+    }
+    if( !updated ){
+      rc = addAppendTableEntry(context, paStaged, pnStaged, pWork);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    addRemoveIndexEntriesOfTable(*paStaged, pnStaged,
+                                 aStagedSchema, nStagedSchema,
+                                 pWork->zName);
+    rc = addAppendIndexEntriesOfTable(context, paStaged, pnStaged,
+                                      aWorking, nWorking,
+                                      aWorkSchema, nWorkSchema,
+                                      pWork->zName);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
+/* Remove staged entries for shadow tables of a dropped virtual table. The
+** vtab is gone from the live schema, so shadows are identified through the
+** staged catalog's own rows: table rows prefixed "<zTable>_" whose parent
+** row is a CREATE VIRTUAL TABLE statement and which no longer exist in
+** working. */
+static void addRemoveShadowEntriesOfDroppedVtab(
+  struct TableEntry *aStaged,
+  int *pnStaged,
+  SchemaEntry *aStagedSchema,
+  int nStagedSchema,
+  struct TableEntry *aWorking,
+  int nWorking,
+  const char *zTable
+){
+  SchemaEntry *pParent;
+  size_t nPrefix;
+  int i, k;
+
+  pParent = findSchemaEntry(aStagedSchema, nStagedSchema, zTable);
+  if( !pParent || !pParent->zSql
+   || sqlite3_strnicmp(pParent->zSql, "CREATE VIRTUAL", 14)!=0 ){
+    return;
+  }
+  nPrefix = strlen(zTable);
+  for(i=0; i<nStagedSchema; i++){
+    if( !aStagedSchema[i].zType
+     || strcmp(aStagedSchema[i].zType, "table")!=0
+     || !aStagedSchema[i].zName
+     || sqlite3_strnicmp(aStagedSchema[i].zName, zTable, (int)nPrefix)!=0
+     || aStagedSchema[i].zName[nPrefix]!='_'
+     || doltliteFindTableByName(aWorking, nWorking, aStagedSchema[i].zName) ){
+      continue;
+    }
+    for(k=0; k<*pnStaged; ){
+      if( aStaged[k].zName
+       && strcmp(aStaged[k].zName, aStagedSchema[i].zName)==0 ){
+        sqlite3_free(aStaged[k].zName);
+        if( k+1<*pnStaged ){
+          memmove(&aStaged[k], &aStaged[k+1],
+                  (*pnStaged-k-1)*(int)sizeof(struct TableEntry));
+        }
+        (*pnStaged)--;
+        continue;
+      }
+      k++;
+    }
+  }
+}
+
 static int addStageNamedTables(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1251,6 +1362,26 @@ static int addStageNamedTables(
       if( ignored ) continue;
     }
 
+    /* Virtual tables carry no catalog entry of their own (schema row
+    ** only), so the entry-based flow below cannot see them: their commit
+    ** content IS the shadow tables. Stage those, and adopt the working
+    ** master so the vtab's schema row travels too. */
+    {
+      Table *pLive = sqlite3FindTable(db, zTable, "main");
+      if( pLive && IsVirtual(pLive) ){
+        rc = addStageShadowTablesOf(db, context, &aStaged, &nStaged,
+                                    aWorking, nWorking,
+                                    aWorkSchema, nWorkSchema,
+                                    aStagedSchema, nStagedSchema, zTable);
+        if( rc!=SQLITE_OK ){
+          ADDNAMED_FREE_ALL();
+          return rc;
+        }
+        updateMaster = 1;
+        continue;
+      }
+    }
+
     rc = doltliteResolveTableName(db, zTable, &iTable);
     if( rc!=SQLITE_OK ){
       int found = 0;
@@ -1261,6 +1392,11 @@ static int addStageNamedTables(
           found = 1;
           break;
         }
+      }
+      if( !found && findSchemaEntry(aStagedSchema, nStagedSchema, zTable) ){
+        /* A dropped virtual table has a staged schema row but no entry;
+        ** the master adoption below stages the row's removal. */
+        found = 1;
       }
       if( found ){
         for(j=0; j<nStaged; ){
@@ -1283,6 +1419,9 @@ static int addStageNamedTables(
         }
         addRemoveIndexEntriesOfTable(aStaged, &nStaged,
                                      aStagedSchema, nStagedSchema, zTable);
+        addRemoveShadowEntriesOfDroppedVtab(aStaged, &nStaged,
+                                            aStagedSchema, nStagedSchema,
+                                            aWorking, nWorking, zTable);
         updateMaster = 1;
       }
       if( !found ){
@@ -1345,6 +1484,14 @@ static int addStageNamedTables(
         rc = addAppendIndexEntriesOfTable(context, &aStaged, &nStaged,
                                           aWorking, nWorking,
                                           aWorkSchema, nWorkSchema, zTable);
+        if( rc!=SQLITE_OK ){
+          ADDNAMED_FREE_ALL();
+          return rc;
+        }
+        rc = addStageShadowTablesOf(db, context, &aStaged, &nStaged,
+                                    aWorking, nWorking,
+                                    aWorkSchema, nWorkSchema,
+                                    aStagedSchema, nStagedSchema, zTable);
         if( rc!=SQLITE_OK ){
           ADDNAMED_FREE_ALL();
           return rc;
