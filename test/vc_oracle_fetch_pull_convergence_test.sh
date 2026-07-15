@@ -116,6 +116,69 @@ remote_flow "fetch_track_contents" "$FF_SEED" "$FF_ADVANCE" "$FETCH_TRACK" \
   "SELECT 'R|'||active_branch()||'|'||count(*) FROM t;" \
   "SELECT CONCAT('R|',active_branch(),'|',count(*)) FROM t;"
 
+# ---- fresh remote whose only pushed branch is not main: clone lands on that
+#      branch, then pull/fetch by explicit branch name after the remote moves. ----
+echo "--- fresh remote non-main branch pull/fetch ---"
+NONMAIN_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'base');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_checkout('-b','feature');
+INSERT INTO t VALUES (2,'feature-base');
+SELECT dolt_commit('-A','-m','feature base');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','feature');
+"
+NONMAIN_ADVANCE="
+INSERT INTO t VALUES (3,'feature-remote');
+SELECT dolt_commit('-A','-m','feature remote');
+SELECT dolt_push('origin','feature');
+"
+remote_flow "nonmain_pull_contents" "$NONMAIN_SEED" "$NONMAIN_ADVANCE" \
+  "SELECT dolt_pull('origin','feature');" \
+  "SELECT 'R|'||active_branch()||'|'||id||'|'||v FROM t;" \
+  "SELECT CONCAT('R|',active_branch(),'|',id,'|',v) FROM t;"
+remote_flow "nonmain_fetch_track_contents" "$NONMAIN_SEED" "$NONMAIN_ADVANCE" \
+  "SELECT dolt_fetch('origin','feature'); SELECT dolt_checkout('-b','topic','origin/feature');" \
+  "SELECT 'R|'||active_branch()||'|'||id||'|'||v FROM t;" \
+  "SELECT CONCAT('R|',active_branch(),'|',id,'|',v) FROM t;"
+
+# ---- pull from an explicitly fetched remote-tracking branch after both the
+#      remote branch and the local topic branch gain independent commits. ----
+echo "--- divergent pull from refreshed remote tracking branch ---"
+TOPIC_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'base');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+SELECT dolt_checkout('-b','branchA');
+INSERT INTO t VALUES (2,'branchA-base');
+SELECT dolt_commit('-A','-m','branchA base');
+SELECT dolt_push('origin','branchA');
+SELECT dolt_checkout('main');
+"
+TOPIC_ADVANCE="
+SELECT dolt_checkout('branchA');
+INSERT INTO t VALUES (200,'branchA-remote');
+SELECT dolt_commit('-A','-m','branchA remote');
+SELECT dolt_push('origin','branchA');
+SELECT dolt_checkout('main');
+"
+TOPIC_PULL="
+SELECT dolt_fetch('origin','branchA');
+SELECT dolt_checkout('-b','topic','origin/branchA');
+INSERT INTO t VALUES (100,'topic-local');
+SELECT dolt_commit('-A','-m','topic local');
+SELECT dolt_pull('origin','branchA');
+"
+remote_flow "tracking_branch_pull_contents" "$TOPIC_SEED" "$TOPIC_ADVANCE" "$TOPIC_PULL" \
+  "SELECT 'R|'||active_branch()||'|'||id||'|'||v FROM t;" \
+  "SELECT CONCAT('R|',active_branch(),'|',id,'|',v) FROM t;"
+remote_flow "tracking_branch_pull_log_count" "$TOPIC_SEED" "$TOPIC_ADVANCE" "$TOPIC_PULL" \
+  "SELECT 'R|'||active_branch()||'|'||count(*) FROM dolt_log;" \
+  "SELECT CONCAT('R|',active_branch(),'|',count(*)) FROM dolt_log;"
+
 # ---- divergent pull: consumer commits a disjoint row locally while the
 #      remote gains a disjoint row; pull fetches origin/main and merges it. ----
 echo "--- divergent pull auto-merge (no conflict) ---"
