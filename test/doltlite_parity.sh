@@ -1,5 +1,5 @@
 #!/bin/bash
-DOLTLITE=./doltlite
+DOLTLITE="${1:-./doltlite}"
 SQLITE3=./sqlite3
 PASS=0; FAIL=0; ERRORS=""
 
