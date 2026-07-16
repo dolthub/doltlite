@@ -282,45 +282,6 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   return SQLITE_OK;
 }
 
-/* Index changes carry no named entry of their own: attribute them to the
-** parent table by comparing each catalog's index schema rows (name + sql),
-** so an index-only commit reports the table with schema_change=1 the way
-** Dolt does. */
-static int indexRowsDifferForTable(
-  SchemaEntry *aA, int nA,
-  SchemaEntry *aB, int nB,
-  const char *zTable
-){
-  int i, j, nMatchA = 0, nB4T = 0;
-  for(i=0; i<nA; i++){
-    int found = 0;
-    if( !aA[i].zType || strcmp(aA[i].zType, "index")!=0
-     || !aA[i].zTblName || strcmp(aA[i].zTblName, zTable)!=0 ){
-      continue;
-    }
-    for(j=0; j<nB; j++){
-      if( aB[j].zType && strcmp(aB[j].zType, "index")==0
-       && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0
-       && aB[j].zName && aA[i].zName
-       && strcmp(aB[j].zName, aA[i].zName)==0
-       && ((aB[j].zSql==0)==(aA[i].zSql==0))
-       && (aB[j].zSql==0 || strcmp(aB[j].zSql, aA[i].zSql)==0) ){
-        found = 1;
-        break;
-      }
-    }
-    if( !found ) return 1;
-    nMatchA++;
-  }
-  for(j=0; j<nB; j++){
-    if( aB[j].zType && strcmp(aB[j].zType, "index")==0
-     && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0 ){
-      nB4T++;
-    }
-  }
-  return nMatchA!=nB4T;
-}
-
 static int loadIndexSchemaRows(
   sqlite3 *db,
   const ProllyHash *pCatHash,
@@ -388,7 +349,7 @@ static int diffFilteredTableRoots(
         rc = loadIndexSchemaRows(db, pParentCat, &aParentRows, &nParentRows);
       }
       if( rc==SQLITE_OK
-       && indexRowsDifferForTable(aChildRows, nChildRows,
+       && doltliteIndexSchemaRowsDifferForTable(aChildRows, nChildRows,
                                   aParentRows, nParentRows,
                                   pCur->zFilterTable) ){
         schemaChange = 1;
@@ -515,7 +476,7 @@ static int diffCatalogPair(
       dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
       schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
       if( !schemaChange
-       && indexRowsDifferForTable(aChildRows, nChildRows,
+       && doltliteIndexSchemaRowsDifferForTable(aChildRows, nChildRows,
                                   aParentRows, nParentRows, e->zName) ){
         schemaChange = 1;
       }

@@ -370,7 +370,52 @@ run_test "view_in_am_commit"   "SELECT dolt_reset('--hard');
 SELECT name FROM sqlite_master WHERE type='view';"   "0
 v2" "$DB11"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+# A named add stages exactly the named objects: unstaged schema changes of
+# OTHER tables must not ride into the commit on the master adoption, and
+# previously staged state (including index roots) must survive unstaged
+# working changes and cross-domain entry-number collisions.
+DB12=/tmp/test_dolt_namedscope_$$.db; rm -f "$DB12"
+
+run_test_match "named_scope_setup"   "CREATE TABLE p(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO p VALUES(1,1);
+SELECT dolt_commit('-Am','base');"   "^[0-9a-f]{40}$" "$DB12"
+
+run_test_match "named_scope_commit"   "ALTER TABLE p ADD COLUMN c INT;
+CREATE TABLE q(id INTEGER PRIMARY KEY);
+SELECT dolt_add('q');
+SELECT dolt_commit('-m','only q');"   "^[0-9a-f]{40}$" "$DB12"
+
+run_test "unstaged_alter_stays_out"   "SELECT dolt_reset('--hard');
+SELECT count(*) FROM pragma_table_info('p');
+SELECT count(*) FROM q;
+PRAGMA integrity_check;"   "0
+2
+0
+ok" "$DB12"
+
+DB13=/tmp/test_dolt_stagedidx_$$.db; rm -f "$DB13"
+
+run_test_match "staged_index_collision_setup"   "CREATE TABLE p(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO p VALUES(1,1);
+CREATE INDEX ip ON p(v);
+SELECT dolt_commit('-Am','base');"   "^[0-9a-f]{40}$" "$DB13"
+
+run_test_match "staged_index_collision_commit"   "UPDATE p SET v=2;
+SELECT dolt_add('-A');
+DROP INDEX ip;
+CREATE TABLE q(id INTEGER PRIMARY KEY);
+SELECT dolt_add('q');
+SELECT dolt_commit('-m','mix');"   "^[0-9a-f]{40}$" "$DB13"
+
+run_test "staged_index_survives_unstaged_drop"   "SELECT dolt_reset('--hard');
+SELECT v FROM p INDEXED BY ip;
+SELECT count(*) FROM q;
+PRAGMA integrity_check;"   "0
+2
+0
+ok" "$DB13"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

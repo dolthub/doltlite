@@ -991,6 +991,45 @@ static int addWriteStagedCatalog(
   return rc;
 }
 
+/* True when the two catalogs' index schema rows for zTable differ: any
+** index added, dropped, re-targeted, or redefined. Index changes carry no
+** named catalog entry, so every surface that reports per-table change
+** (status, the diff summary) attributes them through this comparison. */
+int doltliteIndexSchemaRowsDifferForTable(
+  SchemaEntry *aA, int nA,
+  SchemaEntry *aB, int nB,
+  const char *zTable
+){
+  int i, j, nMatchA = 0, nBForTable = 0;
+  for(i=0; i<nA; i++){
+    int found = 0;
+    if( !aA[i].zType || strcmp(aA[i].zType, "index")!=0
+     || !aA[i].zTblName || strcmp(aA[i].zTblName, zTable)!=0 ){
+      continue;
+    }
+    for(j=0; j<nB; j++){
+      if( aB[j].zType && strcmp(aB[j].zType, "index")==0
+       && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0
+       && aB[j].zName && aA[i].zName
+       && strcmp(aB[j].zName, aA[i].zName)==0
+       && ((aB[j].zSql==0)==(aA[i].zSql==0))
+       && (aB[j].zSql==0 || strcmp(aB[j].zSql, aA[i].zSql)==0) ){
+        found = 1;
+        break;
+      }
+    }
+    if( !found ) return 1;
+    nMatchA++;
+  }
+  for(j=0; j<nB; j++){
+    if( aB[j].zType && strcmp(aB[j].zType, "index")==0
+     && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0 ){
+      nBForTable++;
+    }
+  }
+  return nMatchA!=nBForTable;
+}
+
 /* True when the final staged entry list contains a table entry named
 ** zTbl. Index entries follow their parent table through -a staging, and
 ** the parent's presence decides whether an index entry belongs at all. */
@@ -1311,12 +1350,33 @@ static int addStageNamedTables(
   SchemaEntry *aStagedSchema = 0;
   int nWorkSchema = 0;
   int nStagedSchema = 0;
+  /* Objects whose master rows follow WORKING in this operation: the named
+  ** tables (adds and staged drops) plus a staged vtab's shadows. Names are
+  ** borrowed from the argv values and schema arrays, which outlive use. */
+  char **azTouched = 0;
+  int nTouched = 0;
 
   #define ADDNAMED_FREE_ALL() do { \
+    int ft_; \
+    for(ft_=0; ft_<nTouched; ft_++) sqlite3_free(azTouched[ft_]); \
+    sqlite3_free((void*)azTouched); \
     freeSchemaEntries(aWorkSchema, nWorkSchema); \
     freeSchemaEntries(aStagedSchema, nStagedSchema); \
     doltliteFreeCatalog(aWorking, nWorking); \
     doltliteFreeCatalog(aStaged, nStaged); \
+  } while(0)
+
+  #define ADDNAMED_TOUCH(zN) do { \
+    char **azNew = sqlite3_realloc((void*)azTouched, \
+        (nTouched+1)*(int)sizeof(char*)); \
+    char *zOwn_ = azNew ? sqlite3_mprintf("%s", (zN)) : 0; \
+    if( azNew ) azTouched = azNew; \
+    if( !azNew || !zOwn_ ){ \
+      ADDNAMED_FREE_ALL(); \
+      sqlite3_result_error_nomem(context); \
+      return SQLITE_NOMEM; \
+    } \
+    azTouched[nTouched++] = zOwn_; \
   } while(0)
 
   rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
@@ -1369,6 +1429,7 @@ static int addStageNamedTables(
     {
       Table *pLive = sqlite3FindTable(db, zTable, "main");
       if( pLive && IsVirtual(pLive) ){
+        int w;
         rc = addStageShadowTablesOf(db, context, &aStaged, &nStaged,
                                     aWorking, nWorking,
                                     aWorkSchema, nWorkSchema,
@@ -1376,6 +1437,16 @@ static int addStageNamedTables(
         if( rc!=SQLITE_OK ){
           ADDNAMED_FREE_ALL();
           return rc;
+        }
+        ADDNAMED_TOUCH(zTable);
+        for(w=0; w<nWorkSchema; w++){
+          if( aWorkSchema[w].zType
+           && strcmp(aWorkSchema[w].zType, "table")==0
+           && aWorkSchema[w].zName
+           && strcmp(aWorkSchema[w].zName, zTable)!=0
+           && sqlite3IsShadowTableOf(db, pLive, aWorkSchema[w].zName) ){
+            ADDNAMED_TOUCH(aWorkSchema[w].zName);
+          }
         }
         updateMaster = 1;
         continue;
@@ -1422,6 +1493,7 @@ static int addStageNamedTables(
         addRemoveShadowEntriesOfDroppedVtab(aStaged, &nStaged,
                                             aStagedSchema, nStagedSchema,
                                             aWorking, nWorking, zTable);
+        ADDNAMED_TOUCH(zTable);
         updateMaster = 1;
       }
       if( !found ){
@@ -1446,13 +1518,29 @@ static int addStageNamedTables(
           int nameMatch = aStaged[k].zName && aWorking[j].zName
             && strcmp(aStaged[k].zName, aWorking[j].zName)==0;
           int rootMatch = aStaged[k].iTable==iTable;
-          int unnamedRootMatch = rootMatch
-            && (!aStaged[k].zName || !aWorking[j].zName);
+          /* An unnamed staged entry on a bare number match can be a
+          ** cross-domain collision with an index entry; pair only when
+          ** the staged catalog's own schema rows say the entry at this
+          ** number is this very table. */
+          int unnamedRootMatch = 0;
           int renameRootMatch = rootMatch
             && aStaged[k].zName && aWorking[j].zName
             && strcmp(aStaged[k].zName, aWorking[j].zName)!=0
             && !addFindEntryByName(aWorking, nWorking, aStaged[k].zName)
             && !addFindEntryByName(aStaged, nStaged, aWorking[j].zName);
+          if( rootMatch && !aStaged[k].zName && aWorking[j].zName ){
+            int r;
+            for(r=0; r<nStagedSchema; r++){
+              if( aStagedSchema[r].iRootpage==aStaged[k].iTable
+               && aStagedSchema[r].zType
+               && strcmp(aStagedSchema[r].zType, "table")==0
+               && aStagedSchema[r].zName
+               && strcmp(aStagedSchema[r].zName, aWorking[j].zName)==0 ){
+                unnamedRootMatch = 1;
+                break;
+              }
+            }
+          }
           if( nameMatch || unnamedRootMatch || renameRootMatch ){
             int schemaChanged =
               prollyHashCompare(&aStaged[k].schemaHash, &aWorking[j].schemaHash)!=0;
@@ -1460,7 +1548,14 @@ static int addStageNamedTables(
               (!aStaged[k].zName) != (!aWorking[j].zName)
               || (aStaged[k].zName && aWorking[j].zName
                   && strcmp(aStaged[k].zName, aWorking[j].zName)!=0);
-            char *zDup = aWorking[j].zName
+            char *zDup;
+            /* A rename retires the old name: its rows (and its indexes'
+            ** rows, keyed by the old tbl_name) must follow WORKING too,
+            ** where they no longer exist. */
+            if( nameChanged && aStaged[k].zName ){
+              ADDNAMED_TOUCH(aStaged[k].zName);
+            }
+            zDup = aWorking[j].zName
                            ? sqlite3_mprintf("%s", aWorking[j].zName) : 0;
             if( aWorking[j].zName && !zDup ){
               ADDNAMED_FREE_ALL();
@@ -1504,6 +1599,7 @@ static int addStageNamedTables(
           ADDNAMED_FREE_ALL();
           return rc;
         }
+        ADDNAMED_TOUCH(zTable);
         break;
       }
     }
@@ -1523,6 +1619,7 @@ static int addStageNamedTables(
               &pWorkingMaster->root, pWorkingMaster->flags,
               pStagedMaster ? &pStagedMaster->root : 0,
               pStagedMaster ? pStagedMaster->flags : 0,
+              (const char**)azTouched, nTouched,
               &composedRoot);
       if( rc!=SQLITE_OK ){
         ADDNAMED_FREE_ALL();
@@ -1549,6 +1646,7 @@ static int addStageNamedTables(
   addAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
   rc = addWriteStagedCatalog(db, cs, aStaged, nStaged);
   ADDNAMED_FREE_ALL();
+  #undef ADDNAMED_TOUCH
   #undef ADDNAMED_FREE_ALL
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);

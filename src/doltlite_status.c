@@ -361,15 +361,6 @@ static int statusRowExists(
   return 0;
 }
 
-static int statusSchemaSqlChanged(const SchemaEntry *pA, const SchemaEntry *pB){
-  const char *zA;
-  const char *zB;
-  if( !pA || !pB ) return 1;
-  zA = pA->zSql ? pA->zSql : "";
-  zB = pB->zSql ? pB->zSql : "";
-  return strcmp(zA, zB)!=0;
-}
-
 static int statusMaybeAddParentSchemaChange(
   DoltliteStatusCursor *pCur,
   const char *zParent,
@@ -396,7 +387,7 @@ static int statusCompareIndexSchemaObjects(
   SchemaEntry *aTo = 0;
   int nFrom = 0;
   int nTo = 0;
-  int i;
+  int i, j;
   int rc;
 
   if( !cs || !pCache ) return SQLITE_OK;
@@ -405,30 +396,28 @@ static int statusCompareIndexSchemaObjects(
   rc = loadSchemaFromCatalog(db, cs, pCache, pToCat, &aTo, &nTo);
   if( rc!=SQLITE_OK ) goto index_schema_done;
 
-  for(i=0; i<nTo; i++){
-    SchemaEntry *pOld;
-    if( !aTo[i].zType || strcmp(aTo[i].zType, "index")!=0 ) continue;
-    if( !aTo[i].zName || !aTo[i].zTblName ) continue;
-    pOld = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
-    if( !pOld
-     || !pOld->zType
-     || strcmp(pOld->zType, "index")!=0
-     || !pOld->zTblName
-     || strcmp(pOld->zTblName, aTo[i].zTblName)!=0
-     || statusSchemaSqlChanged(pOld, &aTo[i]) ){
-      rc = statusMaybeAddParentSchemaChange(pCur, aTo[i].zTblName,
-                                            staged, zFilter);
-      if( rc!=SQLITE_OK ) goto index_schema_done;
+  /* One comparison per distinct parent table across both row sets; the
+  ** shared comparator decides whether that table's index set changed. */
+  for(i=0; i<nFrom+nTo; i++){
+    SchemaEntry *pRow = i<nFrom ? &aFrom[i] : &aTo[i-nFrom];
+    int seen = 0;
+    if( !pRow->zType || strcmp(pRow->zType, "index")!=0
+     || !pRow->zTblName ){
+      continue;
     }
-  }
-
-  for(i=0; i<nFrom; i++){
-    SchemaEntry *pNew;
-    if( !aFrom[i].zType || strcmp(aFrom[i].zType, "index")!=0 ) continue;
-    if( !aFrom[i].zName || !aFrom[i].zTblName ) continue;
-    pNew = findSchemaEntry(aTo, nTo, aFrom[i].zName);
-    if( !pNew || !pNew->zType || strcmp(pNew->zType, "index")!=0 ){
-      rc = statusMaybeAddParentSchemaChange(pCur, aFrom[i].zTblName,
+    for(j=0; j<i; j++){
+      SchemaEntry *pPrev = j<nFrom ? &aFrom[j] : &aTo[j-nFrom];
+      if( pPrev->zType && strcmp(pPrev->zType, "index")==0
+       && pPrev->zTblName
+       && strcmp(pPrev->zTblName, pRow->zTblName)==0 ){
+        seen = 1;
+        break;
+      }
+    }
+    if( seen ) continue;
+    if( doltliteIndexSchemaRowsDifferForTable(aFrom, nFrom, aTo, nTo,
+                                              pRow->zTblName) ){
+      rc = statusMaybeAddParentSchemaChange(pCur, pRow->zTblName,
                                             staged, zFilter);
       if( rc!=SQLITE_OK ) goto index_schema_done;
     }
