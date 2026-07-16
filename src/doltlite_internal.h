@@ -922,6 +922,10 @@ int doltliteMergeCatalogs(sqlite3 *db,
     int bPreferOurMaster,
     char ***pazReindex, int *pnReindex);
 void doltliteFreeNameList(char **az, int n);
+int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
+    const ProllyHash *pWorkingMaster, u8 workingFlags,
+    const ProllyHash *pOldMaster, u8 oldFlags,
+    ProllyHash *pNewRoot);
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 
 struct ProllyDiffChange;

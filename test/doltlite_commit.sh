@@ -341,7 +341,36 @@ PRAGMA integrity_check;"   "0
 0
 ok" "$DB10"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
+# Named add stages tables, never entry-less schema objects: an unstaged
+# view or trigger must not ride into the commit on the master adoption,
+# while -A and -am legitimately carry them.
+DB11=/tmp/test_dolt_viewstage_$$.db; rm -f "$DB11"
+
+run_test_match "view_stage_setup"   "CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');"   "^[0-9a-f]{40}$" "$DB11"
+
+run_test_match "view_stage_named_commit"   "ALTER TABLE t ADD COLUMN c INTEGER;
+CREATE VIEW vv AS SELECT a FROM t;
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT 1; END;
+SELECT dolt_add('t');
+SELECT dolt_commit('-m','only t');"   "^[0-9a-f]{40}$" "$DB11"
+
+run_test "view_stays_out_of_named_commit"   "SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
+SELECT dolt_reset('--hard');
+SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
+SELECT count(*) FROM pragma_table_info('t');"   "2
+0
+0
+2" "$DB11"
+
+run_test_match "view_rides_with_am"   "CREATE VIEW v2 AS SELECT a FROM t; INSERT INTO t(a) VALUES(1);
+SELECT dolt_commit('-am','am');"   "^[0-9a-f]{40}$" "$DB11"
+
+run_test "view_in_am_commit"   "SELECT dolt_reset('--hard');
+SELECT name FROM sqlite_master WHERE type='view';"   "0
+v2" "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
