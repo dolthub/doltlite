@@ -2132,16 +2132,21 @@ int doltliteSerializeCatalogEntries(
       db, aTables, nTables, 0, 0, ppOut, pnOut);
 }
 
-/* Build a master root for a NAMED staging operation. Table and index rows
-** (including virtual tables and their shadows) come from the working
-** master so the staged entries share its numbering domain; view and
-** trigger rows keep the previously staged state, because named add stages
-** tables and never entry-less schema objects — an unstaged view must not
-** ride into the commit on the back of the master adoption. */
+/* Build a master root for a NAMED staging operation. Rows follow the
+** source of their object's staging: table and index rows for objects
+** named in this operation (azTouched — the staged tables, staged drops,
+** and a staged vtab's shadows) come from the working master, everything
+** else — other tables' rows, view and trigger rows — keeps the
+** previously staged state. Wholesale working adoption leaked unstaged
+** schema changes of untouched objects into the commit; taking only the
+** touched objects' rows keeps the numbering domain of the freshly staged
+** entries while leaving the rest of the staged picture alone. A touched
+** name with no working rows is a staged drop: its old rows simply vanish. */
 int doltliteBuildNamedStageMasterRoot(
   sqlite3 *db,
   const ProllyHash *pWorkingMaster, u8 workingFlags,
   const ProllyHash *pOldMaster, u8 oldFlags,
+  const char **azTouched, int nTouched,
   ProllyHash *pNewRoot
 ){
   Btree *pBtree;
@@ -2153,7 +2158,7 @@ int doltliteBuildNamedStageMasterRoot(
   ProllyMutMap mm;
   struct TableEntry masterEntry;
   i64 iRowid = 1;
-  int i, rc;
+  int i, t, rc;
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
@@ -2186,13 +2191,48 @@ int doltliteBuildNamedStageMasterRoot(
   }
   for(i=0; i<nWork+nOld && rc==SQLITE_OK; i++){
     SchemaCatalogRow *pRow = i<nWork ? &aWork[i] : &aOld[i-nWork];
-    int isEntryless = pRow->zType
-      && (strcmp(pRow->zType, "view")==0 || strcmp(pRow->zType, "trigger")==0);
+    int fromWorking = i<nWork;
+    int isEntryless;
+    int touched = 0;
+    const char *zParent;
+    Pgno iPg;
     u8 *pRec;
     int nRec = 0;
-    if( i<nWork ? isEntryless : !isEntryless ) continue;
+
+    if( !pRow->zType ) continue;
+    isEntryless = strcmp(pRow->zType, "view")==0
+               || strcmp(pRow->zType, "trigger")==0;
+    if( isEntryless ){
+      if( fromWorking ) continue;      /* views/triggers keep staged state */
+    }else{
+      zParent = strcmp(pRow->zType, "index")==0
+                  ? pRow->zTblName : pRow->zName;
+      for(t=0; t<nTouched; t++){
+        if( zParent && azTouched[t]
+         && strcmp(zParent, azTouched[t])==0 ){
+          touched = 1;
+          break;
+        }
+      }
+      if( fromWorking != touched ) continue;
+    }
+    /* Staged entries whose name exists in working are aligned to the
+    ** working table number, so old-sourced table rows must carry that
+    ** number too, or the composed rows collide across numbering domains
+    ** and no longer pair with their entries. Index entries are unnamed
+    ** and never aligned; their rows keep the old number. */
+    iPg = pRow->oldPg;
+    if( !fromWorking && strcmp(pRow->zType, "table")==0 && pRow->zName ){
+      for(t=0; t<nWork; t++){
+        if( aWork[t].zType && strcmp(aWork[t].zType, "table")==0
+         && aWork[t].zName && strcmp(aWork[t].zName, pRow->zName)==0 ){
+          iPg = aWork[t].oldPg;
+          break;
+        }
+      }
+    }
     pRec = buildSchemaCatalogRecord(pRow->zType, pRow->zName,
-                                    pRow->zTblName, pRow->oldPg,
+                                    pRow->zTblName, iPg,
                                     pRow->zSql, &nRec);
     if( !pRec ){
       rc = SQLITE_NOMEM;
@@ -2402,6 +2442,15 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
             if( !bLiveCatalog
              && aTables[i].zName && aRows[j].zName
              && strcmp(aRows[j].zName, aTables[i].zName)!=0 ){
+              continue;
+            }
+            /* Constructed arrays can mix numbering domains, and an
+            ** unnamed entry is always an index: a bare number match
+            ** against a table row is a cross-domain collision, not a
+            ** pairing. */
+            if( !bLiveCatalog
+             && !aTables[i].zName
+             && aRows[j].zType && strcmp(aRows[j].zType, "index")!=0 ){
               continue;
             }
             pRow = &aRows[j];
