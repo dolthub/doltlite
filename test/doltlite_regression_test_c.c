@@ -7073,59 +7073,6 @@ static void run_chunk_store_uses_vfs_full_pathname(void){
   gRewrittenFullPath[0] = 0;
 }
 
-static void run_pager_shim_uses_vfs_full_pathname(void){
-  sqlite3 *db = 0;
-  char dbpath[256];
-  const char *zDbFilename;
-  int rc;
-
-  printf("=== Pager Shim Uses VFS Full Pathname Test ===\n\n");
-
-  make_dbpath(dbpath, sizeof(dbpath), "test_pager_shim_full_pathname");
-  removeDbFiles(dbpath);
-  check("register_fail_vfs_for_pager_full_pathname", registerFailVfs()==SQLITE_OK);
-
-  gFullPathnameSuffix = ".canonical-test";
-  gFailFullPathnameHits = 0;
-  gRewrittenFullPath[0] = 0;
-  rc = sqlite3_open_v2(dbpath, &db,
-      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, gFailVfs.zName);
-  gFullPathnameSuffix = 0;
-  check("open_db_uses_full_pathname", rc==SQLITE_OK);
-
-  if( rc==SQLITE_OK ){
-    check("create_table_on_canonical_db", execSql(db,
-        "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
-        "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
-    zDbFilename = sqlite3_db_filename(db, "main");
-    check("pager_full_pathname_was_called", gFailFullPathnameHits>0);
-    check("pager_full_pathname_was_rewritten", gRewrittenFullPath[0]!=0);
-    check("pager_shim_keeps_full_pathname",
-          zDbFilename!=0 && strcmp(zDbFilename, gRewrittenFullPath)==0);
-    sqlite3_close(db);
-  }else if( db ){
-    sqlite3_close(db);
-  }
-
-  db = 0;
-  gFullPathnameSuffix = ".canonical-test";
-  rc = sqlite3_open_v2(dbpath, &db,
-      SQLITE_OPEN_READWRITE, gFailVfs.zName);
-  gFullPathnameSuffix = 0;
-  check("reopen_original_path", rc==SQLITE_OK);
-  if( rc==SQLITE_OK ){
-    check("reopened_original_path_reads_data",
-          strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "a")==0);
-    sqlite3_close(db);
-  }else if( db ){
-    sqlite3_close(db);
-  }
-
-  removeDbFiles(dbpath);
-  if( gRewrittenFullPath[0] ) removeDbFiles(gRewrittenFullPath);
-  gRewrittenFullPath[0] = 0;
-}
-
 static void run_remotesrv_put_refs_failure_restores_state(void){
   ChunkStore cs;
   ChunkStore reopened;
@@ -8003,7 +7950,6 @@ static const RegressionCase aCases[] = {
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "chunk_store_full_pathname", "Chunk Store Uses VFS Full Pathname Test", run_chunk_store_uses_vfs_full_pathname },
-  { "pager_shim_full_pathname", "Pager Shim Uses VFS Full Pathname Test", run_pager_shim_uses_vfs_full_pathname },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
   { "remotesrv_chunk_commit_failure_clears_pending", "RemoteSrv Chunk Commit Failure Clears Pending Test", run_remotesrv_chunk_commit_failure_clears_pending },
   { "prolly_int_cursor_boundary", "Prolly Int Cursor Internal Boundary Test", run_prolly_int_cursor_seek_across_internal_boundary },

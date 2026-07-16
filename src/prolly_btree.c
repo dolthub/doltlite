@@ -4705,7 +4705,6 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return rc;
   }
-  zOpenFilename = chunkStoreFilename(&pBt->store);
   /* Serve the recovered prefix to the connection-open catalog reads below,
   ** then re-arm so the first data access fails SQLITE_CORRUPT instead. */
   poisonAfterOpen = pBt->store.corruptMidStream;
