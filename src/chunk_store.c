@@ -185,6 +185,18 @@ static int csCanonicalFilename(
   if( !zFull ) return SQLITE_NOMEM;
 
   rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
+#if SQLITE_OS_WIN
+  if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
+    if( !(zFull[0]=='\\' && zFull[1]=='\\'
+       && (zFull[2]=='?' || zFull[2]=='.') && zFull[3]=='\\') ){
+      char *z = zFull;
+      while( *z ){
+        if( *z=='\\' ) *z = '/';
+        z++;
+      }
+    }
+  }
+#endif
   if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
     rc = chunkStoreDupFilenameDoubleNul(zFull, pzOut);
     sqlite3_free(zFull);
