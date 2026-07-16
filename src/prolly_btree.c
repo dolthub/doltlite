@@ -2023,11 +2023,16 @@ static int appendFallbackSchemaCatalogRows(
   for(i=0; i<nTables; i++){
     SchemaEntry *pSe = 0;
     SchemaCatalogRow *pRow;
-    if( aTables[i].iTable<=1 || !aTables[i].zName ) continue;
+    if( aTables[i].iTable<=1 ) continue;
     if( schemaCatalogHasPgno(aRows, nRows, aTables[i].iTable) ) continue;
     for(j=0; j<nFallback; j++){
       if( !aFallback[j].zName || !aFallback[j].zType ) continue;
-      if( strcmp(aFallback[j].zName, aTables[i].zName)!=0 ) continue;
+      if( aTables[i].zName ){
+        if( strcmp(aFallback[j].zName, aTables[i].zName)!=0 ) continue;
+      }else{
+        if( strcmp(aFallback[j].zType, "index")!=0 ) continue;
+        if( aFallback[j].iRootpage!=aTables[i].iTable ) continue;
+      }
       pSe = &aFallback[j];
       break;
     }

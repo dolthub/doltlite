@@ -788,7 +788,7 @@ static int addAppendTableEntry(
   if( pEntry->zName ){
     zDup = sqlite3_mprintf("%s", pEntry->zName);
     if( !zDup ){
-      sqlite3_result_error_nomem(context);
+      if( context ) sqlite3_result_error_nomem(context);
       return SQLITE_NOMEM;
     }
   }
@@ -796,7 +796,7 @@ static int addAppendTableEntry(
       *paEntries, (*pnEntries + 1) * (int)sizeof(struct TableEntry));
   if( !aNew ){
     sqlite3_free(zDup);
-    sqlite3_result_error_nomem(context);
+    if( context ) sqlite3_result_error_nomem(context);
     return SQLITE_NOMEM;
   }
   *paEntries = aNew;
@@ -1443,9 +1443,17 @@ static int addStageNamedTables(
         int k;
         int updated = 0;
         for(k=0; k<nStaged; k++){
-          if( aStaged[k].iTable==iTable
-           || (aStaged[k].zName && aWorking[j].zName
-               && strcmp(aStaged[k].zName, aWorking[j].zName)==0) ){
+          int nameMatch = aStaged[k].zName && aWorking[j].zName
+            && strcmp(aStaged[k].zName, aWorking[j].zName)==0;
+          int rootMatch = aStaged[k].iTable==iTable;
+          int unnamedRootMatch = rootMatch
+            && (!aStaged[k].zName || !aWorking[j].zName);
+          int renameRootMatch = rootMatch
+            && aStaged[k].zName && aWorking[j].zName
+            && strcmp(aStaged[k].zName, aWorking[j].zName)!=0
+            && !addFindEntryByName(aWorking, nWorking, aStaged[k].zName)
+            && !addFindEntryByName(aStaged, nStaged, aWorking[j].zName);
+          if( nameMatch || unnamedRootMatch || renameRootMatch ){
             int schemaChanged =
               prollyHashCompare(&aStaged[k].schemaHash, &aWorking[j].schemaHash)!=0;
             int nameChanged =
@@ -2475,6 +2483,8 @@ static int resetStageNamedPaths(
         goto done;
       }
       aStaged = aNew;
+      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                   aHeadSchema, nHeadSchema, zTable);
       zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
       if( aHead[iH].zName && !zDup ){
         rc = SQLITE_NOMEM;
@@ -2484,6 +2494,11 @@ static int resetStageNamedPaths(
       aStaged[nStaged].zName = zDup;
       aStaged[nStaged].iTable = iNextFree++;
       nStaged++;
+      rc = addAppendIndexEntriesOfTable(0, &aStaged, &nStaged,
+                                        aHead, nHead,
+                                        aHeadSchema, nHeadSchema,
+                                        zTable);
+      if( rc!=SQLITE_OK ) goto done;
     }else{
       /* Take HEAD's content under the STAGED entry's number so the entry
       ** keeps pairing with the staged catalog's schema row. */

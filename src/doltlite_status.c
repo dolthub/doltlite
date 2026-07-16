@@ -345,6 +345,101 @@ static int statusCompareDoltSchemas(
   return addRow(pCur, "dolt_schemas", staged, "modified");
 }
 
+static int statusRowExists(
+  DoltliteStatusCursor *pCur,
+  const char *zName,
+  int staged
+){
+  int i;
+  for(i=0; i<pCur->nRows; i++){
+    if( pCur->aRows[i].staged==staged
+     && pCur->aRows[i].zName
+     && strcmp(pCur->aRows[i].zName, zName)==0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int statusSchemaSqlChanged(const SchemaEntry *pA, const SchemaEntry *pB){
+  const char *zA;
+  const char *zB;
+  if( !pA || !pB ) return 1;
+  zA = pA->zSql ? pA->zSql : "";
+  zB = pB->zSql ? pB->zSql : "";
+  return strcmp(zA, zB)!=0;
+}
+
+static int statusMaybeAddParentSchemaChange(
+  DoltliteStatusCursor *pCur,
+  const char *zParent,
+  int staged,
+  const char *zFilter
+){
+  if( !zParent ) return SQLITE_OK;
+  if( zFilter && strcmp(zFilter, zParent)!=0 ) return SQLITE_OK;
+  if( statusRowExists(pCur, zParent, staged) ) return SQLITE_OK;
+  return addRow(pCur, zParent, staged, "modified");
+}
+
+static int statusCompareIndexSchemaObjects(
+  DoltliteStatusCursor *pCur,
+  sqlite3 *db,
+  const ProllyHash *pFromCat,
+  const ProllyHash *pToCat,
+  int staged,
+  const char *zFilter
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  SchemaEntry *aFrom = 0;
+  SchemaEntry *aTo = 0;
+  int nFrom = 0;
+  int nTo = 0;
+  int i;
+  int rc;
+
+  if( !cs || !pCache ) return SQLITE_OK;
+  rc = loadSchemaFromCatalog(db, cs, pCache, pFromCat, &aFrom, &nFrom);
+  if( rc!=SQLITE_OK ) goto index_schema_done;
+  rc = loadSchemaFromCatalog(db, cs, pCache, pToCat, &aTo, &nTo);
+  if( rc!=SQLITE_OK ) goto index_schema_done;
+
+  for(i=0; i<nTo; i++){
+    SchemaEntry *pOld;
+    if( !aTo[i].zType || strcmp(aTo[i].zType, "index")!=0 ) continue;
+    if( !aTo[i].zName || !aTo[i].zTblName ) continue;
+    pOld = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
+    if( !pOld
+     || !pOld->zType
+     || strcmp(pOld->zType, "index")!=0
+     || !pOld->zTblName
+     || strcmp(pOld->zTblName, aTo[i].zTblName)!=0
+     || statusSchemaSqlChanged(pOld, &aTo[i]) ){
+      rc = statusMaybeAddParentSchemaChange(pCur, aTo[i].zTblName,
+                                            staged, zFilter);
+      if( rc!=SQLITE_OK ) goto index_schema_done;
+    }
+  }
+
+  for(i=0; i<nFrom; i++){
+    SchemaEntry *pNew;
+    if( !aFrom[i].zType || strcmp(aFrom[i].zType, "index")!=0 ) continue;
+    if( !aFrom[i].zName || !aFrom[i].zTblName ) continue;
+    pNew = findSchemaEntry(aTo, nTo, aFrom[i].zName);
+    if( !pNew || !pNew->zType || strcmp(pNew->zType, "index")!=0 ){
+      rc = statusMaybeAddParentSchemaChange(pCur, aFrom[i].zTblName,
+                                            staged, zFilter);
+      if( rc!=SQLITE_OK ) goto index_schema_done;
+    }
+  }
+
+index_schema_done:
+  freeSchemaEntries(aFrom, nFrom);
+  freeSchemaEntries(aTo, nTo);
+  return rc;
+}
+
 static int statusLoadLiveTableSql(
   sqlite3 *db,
   const char *zName,
@@ -494,6 +589,7 @@ rename_done:
 
 static int compareCatalogs(
   DoltliteStatusCursor *pCur, sqlite3 *db,
+  const ProllyHash *pFromCat, const ProllyHash *pToCat,
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
   int staged
@@ -602,7 +698,8 @@ static int compareCatalogs(
       if( rc!=SQLITE_OK ) goto compare_done;
     }
   }
-  rc = SQLITE_OK;
+  rc = statusCompareIndexSchemaObjects(pCur, db, pFromCat, pToCat,
+                                       staged, 0);
 
 compare_done:
   statusCatalogIndexFree(&fromIdx);
@@ -665,6 +762,7 @@ static int statusInitPairIndexes(
 
 static int compareCatalogsFiltered(
   DoltliteStatusCursor *pCur, sqlite3 *db,
+  const ProllyHash *pFromCat, const ProllyHash *pToCat,
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
   int staged,
@@ -681,7 +779,10 @@ static int compareCatalogsFiltered(
   #define DOLT_STATUS_RENAME_CAP 4096
   useRename = (nFrom <= DOLT_STATUS_RENAME_CAP && nTo <= DOLT_STATUS_RENAME_CAP);
 
-  if( !zFilter ) return compareCatalogs(pCur, db, aFrom, nFrom, aTo, nTo, staged);
+  if( !zFilter ){
+    return compareCatalogs(pCur, db, pFromCat, pToCat,
+                           aFrom, nFrom, aTo, nTo, staged);
+  }
 
   if( strcmp(zFilter, "dolt_schemas")==0 ){
     return statusCompareDoltSchemas(pCur, db, aFrom, nFrom, aTo, nTo,
@@ -691,7 +792,8 @@ static int compareCatalogsFiltered(
   if( statusHasUnnamedUserTable(aFrom, nFrom)
    || statusHasUnnamedUserTable(aTo, nTo) ){
     int nStart = pCur->nRows;
-    rc = compareCatalogs(pCur, db, aFrom, nFrom, aTo, nTo, staged);
+    rc = compareCatalogs(pCur, db, pFromCat, pToCat,
+                         aFrom, nFrom, aTo, nTo, staged);
     if( rc==SQLITE_OK ){
       int i, j = nStart;
       for(i=nStart; i<pCur->nRows; i++){
@@ -805,7 +907,8 @@ check_deleted:
       if( rc!=SQLITE_OK ) goto filtered_done;
     }
   }
-  rc = SQLITE_OK;
+  rc = statusCompareIndexSchemaObjects(pCur, db, pFromCat, pToCat,
+                                       staged, zFilter);
 
 filtered_done:
   if( idxInit ){
@@ -911,7 +1014,8 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
     rc = doltliteLoadCatalog(db, &stagedCatHash, &aStaged, &nStaged, 0);
     if( rc != SQLITE_OK ) goto status_done;
     stagedLoaded = 1;
-    rc = compareCatalogsFiltered(pCur, db, aHead, nHead, aStaged, nStaged,
+    rc = compareCatalogsFiltered(pCur, db, &headCatHash, &stagedCatHash,
+                                 aHead, nHead, aStaged, nStaged,
                                  1, zTableFilter);
     if( rc != SQLITE_OK ) goto status_done;
   }
@@ -942,8 +1046,9 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
       rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
       if( rc != SQLITE_OK ) goto status_done;
       workingLoaded = 1;
-      rc = compareCatalogsFiltered(pCur, db, aBase, nBase,
-                                   aWorking, nWorking, 0, zTableFilter);
+      rc = compareCatalogsFiltered(pCur, db, &baseCatHash, &workingCatHash,
+                                   aBase, nBase, aWorking, nWorking,
+                                   0, zTableFilter);
       if( rc != SQLITE_OK ) goto status_done;
     }
   }
