@@ -47,6 +47,38 @@ oracle() {
   fi
 }
 
+oracle_dual() {
+  local name="$1" dl_setup="$2" dt_setup="$3" allow_empty="${4:-}"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$dl_setup" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | grep -v '^[0-9]*$' \
+           | grep -v '^[0-9a-f]\{40\}$' \
+           | normalize)
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
+    "$DOLT" sql -r csv -q "SELECT concat(table_name, char(9), staged, char(9), status) FROM dolt_status ORDER BY table_name, staged, status;" 2>>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+
+  local dt_out
+  dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
+
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
+  else
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+  fi
+}
+
 status_filter_pushdown() {
   local name="$1" setup="$2" filter="$3" expected_idx="$4"
   local dir="$TMPROOT/${name}_pushdown"
@@ -186,6 +218,114 @@ CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
 INSERT INTO a VALUES (7, 70);
 "
 
+echo "--- view and trigger schema rows ---"
+
+oracle "view_create_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v1 AS SELECT a FROM t;
+"
+
+oracle "view_create_staged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v1 AS SELECT a FROM t;
+SELECT dolt_add('-A');
+"
+
+oracle "view_create_named_add_table_stays_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v1 AS SELECT a FROM t;
+SELECT dolt_add('t');
+"
+
+oracle "view_modify_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE VIEW v1 AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT a + 1 AS a FROM t;
+"
+
+oracle "view_drop_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE VIEW v1 AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+DROP VIEW v1;
+"
+
+oracle "second_view_create_is_schema_modified" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE VIEW v1 AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v2 AS SELECT a FROM t WHERE a > 10;
+"
+
+oracle "view_and_table_data_mixed_status" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v1 AS SELECT a FROM t;
+INSERT INTO t VALUES (2, 'new');
+"
+
+oracle_dual "trigger_create_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+SELECT dolt_commit('-Am','base');
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES('i'); END;
+" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+SELECT dolt_commit('-Am','base');
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES('i');
+"
+
+oracle_dual "trigger_create_staged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+SELECT dolt_commit('-Am','base');
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES('i'); END;
+SELECT dolt_add('-A');
+" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+SELECT dolt_commit('-Am','base');
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES('i');
+SELECT dolt_add('-A');
+"
+
+oracle_dual "trigger_modify_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES('i'); END;
+SELECT dolt_commit('-Am','base');
+DROP TRIGGER tr;
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES('j'); END;
+" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES('i');
+SELECT dolt_commit('-Am','base');
+DROP TRIGGER tr;
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES('j');
+"
+
+oracle_dual "trigger_drop_unstaged" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES('i'); END;
+SELECT dolt_commit('-Am','base');
+DROP TRIGGER tr;
+" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE log(msg TEXT);
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES('i');
+SELECT dolt_commit('-Am','base');
+DROP TRIGGER tr;
+"
+
 echo "--- deletions ---"
 
 oracle "deleted_unstaged" "
@@ -313,6 +453,19 @@ SELECT dolt_add('a');
 SELECT dolt_commit('-m', 'seed');
 ALTER TABLE a RENAME TO b;
 " "table_name='a -> b'" "2"
+
+status_filter_pushdown "filtered_dolt_schemas_matches_unfiltered" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v1 AS SELECT a FROM t;
+" "table_name='dolt_schemas'" "2"
+
+status_filter_pushdown "filtered_dolt_schemas_staged_matches_unfiltered" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v1 AS SELECT a FROM t;
+SELECT dolt_add('-A');
+" "staged=1 AND table_name='dolt_schemas'" "3"
 
 echo "--- multi-table ---"
 
