@@ -806,6 +806,310 @@ ROLLBACK TO sp1;
 " "SELECT concat(active_branch(), char(9), IFNULL((SELECT v FROM a WHERE id=1), ''), char(9), IFNULL((SELECT v FROM a WHERE id=2), ''), char(9), IFNULL((SELECT v FROM a WHERE id=3), ''), char(9), IFNULL((SELECT v FROM b WHERE id=1), ''), char(9), IFNULL((SELECT v FROM b WHERE id=2), ''), char(9), IFNULL((SELECT v FROM b WHERE id=3), ''), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=1 AND status='modified'), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='b' AND staged=1 AND status='modified'));"
 
 echo ""
+echo "--- Schema objects (views, triggers, indexes) ---"
+
+# Schema-object observability diverges (sqlite_master vs dolt_schemas /
+# information_schema) and trigger bodies and DROP INDEX cannot share one
+# script across dialects, so these run per-system setups and queries and
+# compare the projected results.
+oracle_dual_poststate() {
+  local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
+  local dir="$TMPROOT/${name}_dual"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  # The observation runs in the SAME session as the setup: dolt_checkout is
+  # session-scoped, so a fresh session would observe the default branch.
+  # Queries tag their rows (Q|, V|, I|) and everything else is filtered out.
+  local dl_post
+  dl_post=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
+            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+            | tr -d '\r' \
+            | grep -aE '^[QVI]\|')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  local dt_post
+  dt_post=$(
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s\n' "$dt_query"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" \
+      | tr -d '"\r' \
+      | grep -aE '^[QVI]\|'
+  )
+
+  vc_oracle_assert_match "$name" "$dl_post" "$dt_post"
+}
+
+DL_VIEW_COUNT="SELECT 'V|' || count(*) FROM sqlite_master WHERE type = 'view';"
+DT_VIEW_COUNT="SELECT concat('V|', count(*)) FROM dolt_schemas WHERE type = 'view';"
+DL_IDX_COUNT="SELECT 'I|' || count(*) FROM sqlite_master WHERE name = 'idx';"
+DT_IDX_COUNT="SELECT concat('I|', count(*)) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx';"
+
+oracle_dual_poststate "checkout_unstaged_view_stays_behind" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_checkout('feature');
+" "
+CREATE TABLE t(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_checkout('feature');
+" "$DL_VIEW_COUNT" "$DT_VIEW_COUNT"
+
+oracle_dual_poststate "checkout_unstaged_view_survives_roundtrip" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_checkout('feature');
+SELECT dolt_checkout('main');
+" "
+CREATE TABLE t(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_checkout('feature');
+SELECT dolt_checkout('main');
+" "$DL_VIEW_COUNT" "$DT_VIEW_COUNT"
+
+oracle_dual_poststate "checkout_branch_local_view" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1), (2);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature');
+" "
+CREATE TABLE t(a INT PRIMARY KEY);
+INSERT INTO t VALUES (1), (2);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature');
+" "SELECT 'Q|' || group_concat(a, ',') FROM (SELECT a FROM v ORDER BY a);" \
+"SELECT concat('Q|', group_concat(a ORDER BY a SEPARATOR ',')) FROM v;"
+
+oracle_dual_poststate "checkout_view_absent_on_main" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+" "
+CREATE TABLE t(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+" "$DL_VIEW_COUNT" "$DT_VIEW_COUNT"
+
+oracle_dual_poststate "checkout_dirty_view_modify_switches" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+CREATE VIEW v AS SELECT a, b FROM t;
+SELECT dolt_checkout('feature');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+CREATE VIEW v AS SELECT a, b FROM t;
+SELECT dolt_checkout('feature');
+" "SELECT 'Q|' || group_concat(b, ',') FROM (SELECT b FROM v ORDER BY b);" \
+"SELECT concat('Q|', group_concat(b ORDER BY b SEPARATOR ',')) FROM v;"
+
+oracle_error "checkout_view_by_name_errors" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'base');
+DROP VIEW v;
+SELECT dolt_checkout('v');
+"
+
+oracle_dual_poststate "checkout_branch_local_trigger_fires" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE audit(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (5);
+" "
+CREATE TABLE t(a INT PRIMARY KEY);
+CREATE TABLE audit(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (5);
+" "SELECT 'Q|' || count(*) || '|' || coalesce((SELECT a FROM audit), '~') FROM audit;" \
+"SELECT concat('Q|', count(*), '|', coalesce((SELECT a FROM audit), '~')) FROM audit;"
+
+oracle_dual_poststate "checkout_trigger_inert_on_main" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE TABLE audit(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (5);
+" "
+CREATE TABLE t(a INT PRIMARY KEY);
+CREATE TABLE audit(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (5);
+" "SELECT 'Q|' || count(*) FROM audit;" \
+"SELECT concat('Q|', count(*)) FROM audit;"
+
+oracle_dual_poststate "checkout_unstaged_index_stays_behind" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+CREATE INDEX idx ON t(b);
+SELECT dolt_checkout('feature');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+CREATE INDEX idx ON t(b);
+SELECT dolt_checkout('feature');
+" "$DL_IDX_COUNT" "$DT_IDX_COUNT"
+
+oracle_dual_poststate "checkout_branch_local_index" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10), (2, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'feat_index');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10), (2, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'feat_index');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT group_concat(a, ',') FROM (SELECT a FROM t WHERE b = 10 ORDER BY a));" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT group_concat(a ORDER BY a SEPARATOR ',') FROM t WHERE b = 10));"
+
+oracle_dual_poststate "checkout_table_restores_dropped_index" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+DROP INDEX idx;
+UPDATE t SET b = 99;
+SELECT dolt_checkout('t');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t DROP INDEX idx;
+UPDATE t SET b = 99;
+SELECT dolt_checkout('t');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT b FROM t WHERE a = 1);" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT b FROM t WHERE a = 1));"
+
+oracle_dual_poststate "checkout_table_removes_added_index" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+CREATE INDEX idx ON t(b);
+UPDATE t SET b = 99;
+SELECT dolt_checkout('t');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+CREATE INDEX idx ON t(b);
+UPDATE t SET b = 99;
+SELECT dolt_checkout('t');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT b FROM t WHERE a = 1);" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT b FROM t WHERE a = 1));"
+
+oracle_dual_poststate "checkout_table_restores_index_definition" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT, c INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+DROP INDEX idx;
+CREATE INDEX idx ON t(c);
+SELECT dolt_checkout('t');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT, c INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t DROP INDEX idx;
+CREATE INDEX idx ON t(c);
+SELECT dolt_checkout('t');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx' AND sql LIKE '%(b)') || '|' || (SELECT b FROM t WHERE a = 1);" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx' AND column_name = 'b'), '|', (SELECT b FROM t WHERE a = 1));"
+
+oracle_dual_poststate "checkout_cross_branch_table_with_index" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+DROP INDEX idx;
+UPDATE t SET b = 77;
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main', 't');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+ALTER TABLE t DROP INDEX idx;
+UPDATE t SET b = 77;
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main', 't');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT b FROM t WHERE a = 1);" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT b FROM t WHERE a = 1));"
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"
