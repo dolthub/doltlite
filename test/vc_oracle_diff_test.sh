@@ -122,6 +122,37 @@ oracle_summary() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+# Same comparison as oracle_summary, with separate setup scripts for the
+# statements whose syntax diverges between engines (DROP INDEX, triggers).
+oracle_summary_dual() {
+  local name="$1" dl_setup="$2" dt_setup="$3"
+  local dir="$TMPROOT/${name}_summary"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q="SELECT 'S' || char(9) || dd.table_name || char(9) || coalesce(dl.message, dd.commit_hash) || char(9) || dd.data_change || char(9) || dd.schema_change FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
+  local q_dolt="SELECT concat('S', char(9), dd.table_name, char(9), coalesce(dl.message, dd.commit_hash), char(9), dd.data_change, char(9), dd.schema_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$dl_setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | normalize_summary)
+
+  local dolt_setup
+  dolt_setup=$(echo "$dt_setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s;\n' "$q_dolt"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+  )
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 oracle_summary_filter_name() {
   local name="$1" setup="$2" target="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/${name}_filter"
@@ -855,6 +886,131 @@ DROP TABLE x;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_x');
 " "x"
+
+
+# ── schema objects through the diff summary ──────────────────────
+# Index changes carry no entry of their own; the summary must attribute
+# them to the parent table (schema_change=1), matching Dolt.
+
+oracle_summary "summary_index_only_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_index');
+"
+
+oracle_summary_dual "summary_drop_index_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP INDEX iv;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_index');
+" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP INDEX iv ON t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_index');
+"
+
+oracle_summary "summary_index_plus_data_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+INSERT INTO t VALUES (2, 20);
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
+oracle_summary_dual "summary_index_change_working" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP INDEX iv;
+" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP INDEX iv ON t;
+"
+
+oracle_summary "summary_index_untouched_sibling" "
+CREATE TABLE x(a INTEGER PRIMARY KEY);
+CREATE TABLE y(b INTEGER PRIMARY KEY);
+INSERT INTO x VALUES (1);
+INSERT INTO y VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX ix ON x(a);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'ix_only');
+"
+
+oracle_summary_filter_name "summary_filter_index_only_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_index');
+" "t"
+
+oracle_summary "summary_view_only_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE VIEW vv AS SELECT id FROM t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_view');
+"
+
+oracle_summary_dual "summary_trigger_only_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT 1; END;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_trigger');
+" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW SET @x = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_trigger');
+"
+
+oracle "index_only_commit_no_row_diffs" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_index');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'data');
+" "t"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

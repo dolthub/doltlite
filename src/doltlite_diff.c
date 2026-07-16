@@ -282,6 +282,59 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   return SQLITE_OK;
 }
 
+/* Index changes carry no named entry of their own: attribute them to the
+** parent table by comparing each catalog's index schema rows (name + sql),
+** so an index-only commit reports the table with schema_change=1 the way
+** Dolt does. */
+static int indexRowsDifferForTable(
+  SchemaEntry *aA, int nA,
+  SchemaEntry *aB, int nB,
+  const char *zTable
+){
+  int i, j, nMatchA = 0, nB4T = 0;
+  for(i=0; i<nA; i++){
+    int found = 0;
+    if( !aA[i].zType || strcmp(aA[i].zType, "index")!=0
+     || !aA[i].zTblName || strcmp(aA[i].zTblName, zTable)!=0 ){
+      continue;
+    }
+    for(j=0; j<nB; j++){
+      if( aB[j].zType && strcmp(aB[j].zType, "index")==0
+       && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0
+       && aB[j].zName && aA[i].zName
+       && strcmp(aB[j].zName, aA[i].zName)==0
+       && ((aB[j].zSql==0)==(aA[i].zSql==0))
+       && (aB[j].zSql==0 || strcmp(aB[j].zSql, aA[i].zSql)==0) ){
+        found = 1;
+        break;
+      }
+    }
+    if( !found ) return 1;
+    nMatchA++;
+  }
+  for(j=0; j<nB; j++){
+    if( aB[j].zType && strcmp(aB[j].zType, "index")==0
+     && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0 ){
+      nB4T++;
+    }
+  }
+  return nMatchA!=nB4T;
+}
+
+static int loadIndexSchemaRows(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  SchemaEntry **ppRows,
+  int *pnRows
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  *ppRows = 0;
+  *pnRows = 0;
+  if( !cs || !pCatHash || prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
+  return loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pCatHash,
+                               ppRows, pnRows);
+}
+
 static int diffFilteredTableRoots(
   DoltliteDiffCursor *pCur,
   sqlite3 *db,
@@ -324,13 +377,30 @@ static int diffFilteredTableRoots(
   if( !childFound || !parentFound ){
     return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit, 1, 1);
   }
-  if( prollyHashCompare(&childRoot, &parentRoot)==0
-   && prollyHashCompare(&childSchema, &parentSchema)==0 ){
-    return SQLITE_OK;
+  {
+    u8 dataChange = prollyHashCompare(&childRoot, &parentRoot)!=0;
+    u8 schemaChange = prollyHashCompare(&childSchema, &parentSchema)!=0;
+    if( !schemaChange ){
+      SchemaEntry *aChildRows = 0, *aParentRows = 0;
+      int nChildRows = 0, nParentRows = 0;
+      rc = loadIndexSchemaRows(db, pChildCat, &aChildRows, &nChildRows);
+      if( rc==SQLITE_OK ){
+        rc = loadIndexSchemaRows(db, pParentCat, &aParentRows, &nParentRows);
+      }
+      if( rc==SQLITE_OK
+       && indexRowsDifferForTable(aChildRows, nChildRows,
+                                  aParentRows, nParentRows,
+                                  pCur->zFilterTable) ){
+        schemaChange = 1;
+      }
+      freeSchemaEntries(aChildRows, nChildRows);
+      freeSchemaEntries(aParentRows, nParentRows);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    if( !dataChange && !schemaChange ) return SQLITE_OK;
+    return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit,
+                       dataChange, schemaChange);
   }
-  return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit,
-                     prollyHashCompare(&childRoot, &parentRoot)!=0,
-                     prollyHashCompare(&childSchema, &parentSchema)!=0);
 }
 
 /* Fast path for table_name constrained scans. */
@@ -394,6 +464,8 @@ static int diffCatalogPair(
   DoltliteDiffCursor *pCur, sqlite3 *db,
   struct TableEntry *aChild, int nChild,
   struct TableEntry *aParent, int nParent,
+  SchemaEntry *aChildRows, int nChildRows,
+  SchemaEntry *aParentRows, int nParentRows,
   const char *zHex, const DoltliteCommit *pCommit
 ){
   int rc = SQLITE_OK, i;
@@ -420,6 +492,9 @@ static int diffCatalogPair(
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
+      /* Only the master entry carries schema rows; unnamed index entries
+      ** are attributed to their tables through the row comparison below. */
+      if( e->iTable!=1 ) continue;
       memset(&emptyRoot, 0, sizeof(emptyRoot));
       pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
       pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
@@ -439,6 +514,11 @@ static int diffCatalogPair(
     }else{
       dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
       schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
+      if( !schemaChange
+       && indexRowsDifferForTable(aChildRows, nChildRows,
+                                  aParentRows, nParentRows, e->zName) ){
+        schemaChange = 1;
+      }
       if( !dataChange && !schemaChange ) continue;
     }
     rc = batchAppend(pCur, zHex, e->zName, pCommit, dataChange, schemaChange);
@@ -492,7 +572,21 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   memset(zHexBuf, 0, sizeof(zHexBuf));
   memcpy(zHexBuf, zWorkingHex, sizeof(zWorkingHex));
 
-  rc = diffCatalogPair(pCur, db, aWork, nWork, aHead, nHead, zHexBuf, 0);
+  {
+    SchemaEntry *aWorkRows = 0, *aHeadRows = 0;
+    int nWorkRows = 0, nHeadRows = 0;
+    rc = loadIndexSchemaRows(db, &workCat, &aWorkRows, &nWorkRows);
+    if( rc==SQLITE_OK ){
+      rc = loadIndexSchemaRows(db, &headCat, &aHeadRows, &nHeadRows);
+    }
+    if( rc==SQLITE_OK ){
+      rc = diffCatalogPair(pCur, db, aWork, nWork, aHead, nHead,
+                           aWorkRows, nWorkRows, aHeadRows, nHeadRows,
+                           zHexBuf, 0);
+    }
+    freeSchemaEntries(aWorkRows, nWorkRows);
+    freeSchemaEntries(aHeadRows, nHeadRows);
+  }
 
   doltliteFreeCatalog(aHead, nHead);
   doltliteFreeCatalog(aWork, nWork);
@@ -534,8 +628,32 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
     }
   }
 
-  rc = diffCatalogPair(pCur, db, aChild, nChild, aParent, nParent,
-                       zCommitHex, pCommit);
+  {
+    SchemaEntry *aChildRows = 0, *aParentRows = 0;
+    int nChildRows = 0, nParentRows = 0;
+    ProllyHash parentCat;
+    memset(&parentCat, 0, sizeof(parentCat));
+    if( hasParent ){
+      rc = doltliteCommitCatalogHash(db, pParentHash, &parentCat);
+      if( rc!=SQLITE_OK ){
+        doltliteFreeCatalog(aChild, nChild);
+        doltliteFreeCatalog(aParent, nParent);
+        return rc;
+      }
+    }
+    rc = loadIndexSchemaRows(db, &pCommit->catalogHash,
+                             &aChildRows, &nChildRows);
+    if( rc==SQLITE_OK && hasParent ){
+      rc = loadIndexSchemaRows(db, &parentCat, &aParentRows, &nParentRows);
+    }
+    if( rc==SQLITE_OK ){
+      rc = diffCatalogPair(pCur, db, aChild, nChild, aParent, nParent,
+                           aChildRows, nChildRows, aParentRows, nParentRows,
+                           zCommitHex, pCommit);
+    }
+    freeSchemaEntries(aChildRows, nChildRows);
+    freeSchemaEntries(aParentRows, nParentRows);
+  }
 
   doltliteFreeCatalog(aChild, nChild);
   doltliteFreeCatalog(aParent, nParent);
