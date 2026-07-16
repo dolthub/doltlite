@@ -4,10 +4,13 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "prolly_cursor.h"
+#include "prolly_diff.h"
+#include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include "doltlite_ignore.h"
+#include "doltlite_record.h"
 #include "prolly_cursor.h"
 
 #define STATUS_IDX_STAGED_EQ 0x01
@@ -224,6 +227,124 @@ static int addRow(DoltliteStatusCursor *pCur, const char *zName,
   return SQLITE_OK;
 }
 
+static int statusSchemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
+  DoltliteRecordInfo ri;
+  int st, off, len;
+  const u8 *pBody;
+  if( !pRec || nRec<=0 ) return 0;
+  doltliteParseRecord(pRec, nRec, &ri);
+  if( ri.nField < 1 ) return 0;
+  st = ri.aType[0];
+  off = ri.aOffset[0];
+  if( st < 13 || (st & 1)==0 ) return 0;
+  len = (st - 13) / 2;
+  if( off < 0 || off + len > nRec ) return 0;
+  pBody = pRec + off;
+  if( len==4 && memcmp(pBody, "view", 4)==0 ) return 1;
+  if( len==7 && memcmp(pBody, "trigger", 7)==0 ) return 1;
+  return 0;
+}
+
+static int statusSchemaHasViewOrTrigger(sqlite3 *db,
+                                        const ProllyHash *pRoot,
+                                        u8 flags){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyCursor cur;
+  int rc, res;
+  int found = 0;
+  if( !cs || !pCache ) return 0;
+  if( prollyHashIsEmpty(pRoot) ) return 0;
+  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return 0;
+  }
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal;
+    int nVal;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( statusSchemaRecordIsViewOrTrigger(pVal, nVal) ){
+      found = 1;
+      break;
+    }
+    if( prollyCursorNext(&cur)!=SQLITE_OK ) break;
+  }
+  prollyCursorClose(&cur);
+  return found;
+}
+
+static int statusSchemaHasViewOrTriggerDiff(sqlite3 *db,
+                                            const ProllyHash *pOldRoot,
+                                            const ProllyHash *pNewRoot,
+                                            u8 flags){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyDiffIter iter;
+  ProllyDiffChange *pChange = 0;
+  int rc;
+  int found = 0;
+  if( !cs || !pCache ) return 0;
+  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return 0;
+  rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags);
+  if( rc!=SQLITE_OK ) return 0;
+  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
+    if( statusSchemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)
+     || statusSchemaRecordIsViewOrTrigger(pChange->pOldVal, pChange->nOldVal) ){
+      found = 1;
+      break;
+    }
+  }
+  prollyDiffIterClose(&iter);
+  return found;
+}
+
+static int statusCompareDoltSchemas(
+  DoltliteStatusCursor *pCur,
+  sqlite3 *db,
+  struct TableEntry *aFrom,
+  int nFrom,
+  struct TableEntry *aTo,
+  int nTo,
+  int staged,
+  const char *zFilter
+){
+  ProllyHash emptyRoot;
+  const ProllyHash *pOldRoot;
+  const ProllyHash *pNewRoot;
+  struct TableEntry *pOldMaster;
+  struct TableEntry *pNewMaster;
+  u8 flags;
+  int oldHas;
+  int newHas;
+
+  if( zFilter && strcmp(zFilter, "dolt_schemas")!=0 ) return SQLITE_OK;
+
+  memset(&emptyRoot, 0, sizeof(emptyRoot));
+  pOldMaster = doltliteFindTableByNumber(aFrom, nFrom, 1);
+  pNewMaster = doltliteFindTableByNumber(aTo, nTo, 1);
+  if( !pOldMaster && !pNewMaster ) return SQLITE_OK;
+
+  pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
+  pNewRoot = pNewMaster ? &pNewMaster->root : &emptyRoot;
+  flags = pNewMaster ? pNewMaster->flags : pOldMaster->flags;
+
+  if( !statusSchemaHasViewOrTriggerDiff(db, pOldRoot, pNewRoot, flags) ){
+    return SQLITE_OK;
+  }
+
+  oldHas = statusSchemaHasViewOrTrigger(db, pOldRoot, flags);
+  newHas = statusSchemaHasViewOrTrigger(db, pNewRoot, flags);
+  if( !oldHas && newHas ){
+    return addRow(pCur, "dolt_schemas", staged, "new table");
+  }
+  if( oldHas && !newHas ){
+    return addRow(pCur, "dolt_schemas", staged, "deleted");
+  }
+  return addRow(pCur, "dolt_schemas", staged, "modified");
+}
+
 static int statusLoadLiveTableSql(
   sqlite3 *db,
   const char *zName,
@@ -414,6 +535,10 @@ static int compareCatalogs(
     }
   }
 
+  rc = statusCompareDoltSchemas(pCur, db, aFrom, nFrom, aTo, nTo,
+                                staged, 0);
+  if( rc!=SQLITE_OK ) goto compare_done;
+
   for(i=0; i<nTo; i++){
     struct TableEntry *pFrom;
     char *zName;
@@ -557,6 +682,11 @@ static int compareCatalogsFiltered(
   useRename = (nFrom <= DOLT_STATUS_RENAME_CAP && nTo <= DOLT_STATUS_RENAME_CAP);
 
   if( !zFilter ) return compareCatalogs(pCur, db, aFrom, nFrom, aTo, nTo, staged);
+
+  if( strcmp(zFilter, "dolt_schemas")==0 ){
+    return statusCompareDoltSchemas(pCur, db, aFrom, nFrom, aTo, nTo,
+                                    staged, zFilter);
+  }
 
   if( statusHasUnnamedUserTable(aFrom, nFrom)
    || statusHasUnnamedUserTable(aTo, nTo) ){
