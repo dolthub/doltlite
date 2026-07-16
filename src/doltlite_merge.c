@@ -1452,6 +1452,9 @@ static SchemaEntry *mergedSchemaChoice(
                                                aTheirsSchema, nTheirsSchema, zName);
   if( oursChanged && !theirsChanged ) return pOurs;
   if( theirsChanged && !oursChanged ) return pTheirs;
+  /* Both sides dropped the object: falling back to the ancestor would
+  ** resurrect it in the merged catalog. */
+  if( oursChanged && theirsChanged && !pOurs && !pTheirs ) return 0;
   if( pOurs ) return pOurs;
   if( pTheirs ) return pTheirs;
   return pAnc;

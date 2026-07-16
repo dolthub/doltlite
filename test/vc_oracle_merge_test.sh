@@ -1083,6 +1083,383 @@ ROLLBACK;
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
 echo ""
+echo "--- Schema objects (views, triggers, indexes) ---"
+
+# Trigger bodies and DROP INDEX cannot share one script across dialects
+# (SQLite BEGIN...END vs MySQL FOR EACH ROW; DROP INDEX x vs x ON t), so
+# these run separate per-system setups against the same post-state query.
+oracle_dual_poststate() {
+  local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
+  local dir="$TMPROOT/${name}_dual"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup" || true
+  local dl_out
+  dl_out=$(
+    printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
+      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | tr -d '\r'
+  )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" || true
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" sql -r csv -q "$dt_query" 2>>"$dir/dt.err" \
+      | tail -n +2 \
+      | tr -d '"\r'
+  )
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_dual_error() {
+  local name="$1" dl_setup="$2" dt_setup="$3"
+  local dir="$TMPROOT/${name}_dualerr"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup"
+  dl_rc=$?
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  local dt_rc
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+  fi
+}
+
+VIEW_BASE="
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10), (2, 20);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+
+oracle_error_poststate "merge_view_add_theirs" "
+$VIEW_BASE
+CREATE VIEW v AS SELECT a, b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT count(*) FROM v) || '|' || (SELECT group_concat(a || ':' || b, ',') FROM (SELECT a, b FROM v ORDER BY a))" \
+"SELECT CONCAT((SELECT COUNT(*) FROM v), '|', (SELECT GROUP_CONCAT(CONCAT(a, ':', b) ORDER BY a SEPARATOR ',') FROM v))"
+
+oracle_error_poststate "merge_view_add_ours_data_theirs" "
+$VIEW_BASE
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_commit('-am', 'feat_data');
+SELECT dolt_checkout('main');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'main_view');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT count(*) FROM v) || '|' || (SELECT group_concat(a, ',') FROM (SELECT a FROM v ORDER BY a))" \
+"SELECT CONCAT((SELECT COUNT(*) FROM v), '|', (SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM v))"
+
+oracle_error_poststate "merge_view_both_add_identical" "
+$VIEW_BASE
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'main_view');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT count(*) FROM v) || '|' || (SELECT group_concat(a, ',') FROM (SELECT a FROM v ORDER BY a))" \
+"SELECT CONCAT((SELECT COUNT(*) FROM v), '|', (SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM v))"
+
+oracle_error "merge_view_both_add_different" "
+$VIEW_BASE
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'main_view');
+SELECT dolt_merge('feature');
+"
+
+VIEW_MOD_BASE="
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10), (2, 20);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+
+oracle_error "merge_view_both_modify_different" "
+$VIEW_MOD_BASE
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+CREATE VIEW v AS SELECT a, b FROM t;
+SELECT dolt_commit('-Am', 'main_view');
+SELECT dolt_merge('feature');
+"
+
+oracle_error "merge_view_modify_vs_drop" "
+$VIEW_MOD_BASE
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+SELECT dolt_commit('-Am', 'main_drop');
+SELECT dolt_merge('feature');
+"
+
+oracle_error_poststate "merge_view_both_drop" "
+$VIEW_MOD_BASE
+DROP VIEW v;
+SELECT dolt_commit('-Am', 'feat_drop');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+SELECT dolt_commit('-Am', 'main_drop');
+SELECT dolt_merge('feature');
+" "SELECT count(*) FROM sqlite_master WHERE type = 'view'" \
+"SELECT COUNT(*) FROM dolt_schemas WHERE type = 'view'"
+
+oracle_error_poststate "merge_view_modify_theirs" "
+$VIEW_MOD_BASE
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(b, ',') FROM (SELECT b FROM v ORDER BY b)" \
+"SELECT GROUP_CONCAT(b ORDER BY b SEPARATOR ',') FROM v"
+
+oracle_same_session "merge_view_conflict_in_session" "
+$VIEW_MOD_BASE
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+CREATE VIEW v AS SELECT a, b FROM t;
+SELECT dolt_commit('-Am', 'main_view');
+BEGIN;
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || (SELECT sum(num_conflicts) FROM dolt_conflicts);" \
+"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts), char(9), (SELECT sum(num_conflicts) FROM dolt_conflicts));"
+
+TRG_DL_BASE="
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE TABLE audit(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+TRG_DT_BASE="
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE TABLE audit(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+TRG_Q_DL="SELECT (SELECT count(*) FROM audit) || '|' || (SELECT coalesce(group_concat(a, ','), '~') FROM (SELECT a FROM audit ORDER BY a)) || '|' || (SELECT count(*) FROM t)"
+TRG_Q_DT="SELECT CONCAT((SELECT COUNT(*) FROM audit), '|', (SELECT COALESCE(GROUP_CONCAT(a ORDER BY a SEPARATOR ','), '~') FROM audit), '|', (SELECT COUNT(*) FROM t))"
+
+oracle_dual_poststate "merge_trigger_add_theirs_fires" "
+$TRG_DL_BASE
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+INSERT INTO t VALUES (5, 50);
+" "$TRG_DT_BASE
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+INSERT INTO t VALUES (5, 50);
+" "$TRG_Q_DL" "$TRG_Q_DT"
+
+oracle_dual_poststate "merge_trigger_both_add_identical" "
+$TRG_DL_BASE
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'main_trigger');
+SELECT dolt_merge('feature');
+INSERT INTO t VALUES (5, 50);
+" "$TRG_DT_BASE
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'main_trigger');
+SELECT dolt_merge('feature');
+INSERT INTO t VALUES (5, 50);
+" "$TRG_Q_DL" "$TRG_Q_DT"
+
+oracle_dual_error "merge_trigger_both_add_different" "
+$TRG_DL_BASE
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a + 100); END;
+SELECT dolt_commit('-Am', 'main_trigger');
+SELECT dolt_merge('feature');
+" "$TRG_DT_BASE
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a + 100);
+SELECT dolt_commit('-Am', 'main_trigger');
+SELECT dolt_merge('feature');
+"
+
+TRG_MOD_DL_BASE="
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE TABLE audit(a INTEGER PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a); END;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+TRG_MOD_DT_BASE="
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE TABLE audit(a INT PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+
+oracle_dual_error "merge_trigger_modify_vs_drop" "
+$TRG_MOD_DL_BASE
+DROP TRIGGER trg;
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.a + 100); END;
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'main_drop');
+SELECT dolt_merge('feature');
+" "$TRG_MOD_DT_BASE
+DROP TRIGGER trg;
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.a + 100);
+SELECT dolt_commit('-Am', 'feat_trigger');
+SELECT dolt_checkout('main');
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'main_drop');
+SELECT dolt_merge('feature');
+"
+
+oracle_dual_poststate "merge_trigger_both_drop" "
+$TRG_MOD_DL_BASE
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'feat_drop');
+SELECT dolt_checkout('main');
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'main_drop');
+SELECT dolt_merge('feature');
+INSERT INTO t VALUES (5, 50);
+" "$TRG_MOD_DT_BASE
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'feat_drop');
+SELECT dolt_checkout('main');
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'main_drop');
+SELECT dolt_merge('feature');
+INSERT INTO t VALUES (5, 50);
+" "$TRG_Q_DL" "$TRG_Q_DT"
+
+IDX_BASE="
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT, c INT);
+INSERT INTO t VALUES (1, 10, 100), (2, 20, 200);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+
+oracle_error_poststate "merge_index_add_theirs" "
+$IDX_BASE
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'feat_index');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 20, 300);
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT group_concat(a, ',') FROM (SELECT a FROM t WHERE b = 20 ORDER BY a)) || '|' || (SELECT count(*) FROM t)" \
+"SELECT CONCAT((SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM t WHERE b = 20), '|', (SELECT COUNT(*) FROM t))"
+
+oracle_error_poststate "merge_index_both_add_different_names" "
+$IDX_BASE
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'feat_index');
+SELECT dolt_checkout('main');
+CREATE INDEX idx_c ON t(c);
+SELECT dolt_commit('-Am', 'main_index');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT group_concat(a, ',') FROM (SELECT a FROM t WHERE b = 20 ORDER BY a)) || '|' || (SELECT group_concat(a, ',') FROM (SELECT a FROM t WHERE c = 100 ORDER BY a))" \
+"SELECT CONCAT((SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM t WHERE b = 20), '|', (SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM t WHERE c = 100))"
+
+oracle_error_poststate "merge_index_both_add_identical" "
+$IDX_BASE
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'feat_index');
+SELECT dolt_checkout('main');
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'main_index');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(a, ',') FROM (SELECT a FROM t WHERE b = 20 ORDER BY a)" \
+"SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM t WHERE b = 20"
+
+oracle_error "merge_index_same_name_different" "
+$IDX_BASE
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'feat_index');
+SELECT dolt_checkout('main');
+CREATE INDEX idx ON t(c);
+SELECT dolt_commit('-Am', 'main_index');
+SELECT dolt_merge('feature');
+"
+
+oracle_dual_poststate "merge_index_drop_vs_data_change" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10), (2, 20);
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+DROP INDEX idx;
+SELECT dolt_commit('-Am', 'feat_drop');
+SELECT dolt_checkout('main');
+UPDATE t SET b = 99 WHERE a = 1;
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 10), (2, 20);
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+DROP INDEX idx ON t;
+SELECT dolt_commit('-Am', 'feat_drop');
+SELECT dolt_checkout('main');
+UPDATE t SET b = 99 WHERE a = 1;
+SELECT dolt_commit('-am', 'main_data');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(a || ':' || b, ',') FROM (SELECT a, b FROM t ORDER BY a)" \
+"SELECT GROUP_CONCAT(CONCAT(a, ':', b) ORDER BY a SEPARATOR ',') FROM t"
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"
