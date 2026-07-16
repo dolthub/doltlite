@@ -1188,7 +1188,7 @@ static int nextCheckClause(
 
   while( *p ){
     if( (p[0]=='C' || p[0]=='c')
-     && strncasecmp(p, "CONSTRAINT", 10)==0
+     && sqlite3_strnicmp(p, "CONSTRAINT", 10)==0
      && (p[10]==' ' || p[10]=='\t' || p[10]=='\n') ){
       int i = 0;
       p += 10;
@@ -1200,7 +1200,7 @@ static int nextCheckClause(
       continue;
     }
     if( (p[0]=='C' || p[0]=='c')
-     && strncasecmp(p, "CHECK", 5)==0
+     && sqlite3_strnicmp(p, "CHECK", 5)==0
      && (p[5]==' ' || p[5]=='\t' || p[5]=='(' || p[5]=='\n') ){
       p += 5;
       while( *p==' ' || *p=='\t' || *p=='\n' ) p++;
