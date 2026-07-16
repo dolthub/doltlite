@@ -105,7 +105,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -226,6 +226,12 @@ jobs:
         test "$(./doltlite.exe /tmp/build_test_smoke_basic.db "SELECT v FROM t WHERE id=1;")" = "a"
         ./doltlite.exe /tmp/build_test_smoke_basic.db "SELECT dolt_commit('-A','-m','c1');"
         test "$(./doltlite.exe /tmp/build_test_smoke_basic.db "SELECT count(*) FROM dolt_log;")" = "2"
+      timeout-minutes: 2
+
+    - name: Windows path smoke tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: cd build && bash ../test/windows_path_smoke.sh ./doltlite.exe
       timeout-minutes: 2
 
     - name: GC smoke tests
@@ -367,6 +373,20 @@ jobs:
         bash ../test/remote_https_auth_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
       timeout-minutes: 15
 
+    - name: Windows HTTP remotesrv tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/http_remote_content_length_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_concurrency_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+        REMOTESRV=./doltlite-remotesrv.exe bash ../test/amalgamation_http_remote_test.sh .
+      timeout-minutes: 20
+
     - name: Remote integration tests
       if: matrix.platform != 'windows'
       run: cd build && bash ../test/remote_test.sh ./doltlite
@@ -455,6 +475,12 @@ jobs:
         gcc -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
           libdoltlite.a -lz -lpthread -lm
         ./prepared_stmt_reuse_test
+
+    - name: Windows native C regression tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: cd build && bash ../test/run_doltlite_regression_case.sh all
+      timeout-minutes: 15
 
     # Wires the previously-orphan C tests into CI. All tests in
     # test/run_c_tests.sh are gating and must pass.

@@ -11,7 +11,12 @@ if [ ! -d "$build_dir" ]; then
   exit 1
 fi
 
+link_libs=(-lz -lpthread -lm)
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*) link_libs+=(-lws2_32 -lbcrypt -lcrypt32) ;;
+esac
+
 cc -g -I"$build_dir" -I"$repo_root/src" -o "$build_dir/doltlite_regression_test_c" \
   "$repo_root/test/doltlite_regression_test_c.c" "$build_dir/libdoltlite.a" \
-  -lz -lpthread -lm
+  "${link_libs[@]}"
 "$build_dir/doltlite_regression_test_c" "$case_name"
