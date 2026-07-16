@@ -255,6 +255,50 @@ run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
 run_sql "$MUTATE SELECT dolt_commit('-am','mut'); SELECT dolt_gc();" "$DB" > /dev/null
 verify "gc_live" "$DB"; verify_commit "gc_commit" "$DB"
 
+# ── virtual tables: shadow tables travel with their vtab ─────────
+scenario "vtab shadows through staging surfaces"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body);
+INSERT INTO ft VALUES('alpha doc'),('beta doc');
+CREATE VIRTUAL TABLE rt USING rtree(id, x1, x2);
+INSERT INTO rt VALUES(1, 1.0, 2.0);
+SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
+run_sql "INSERT INTO ft VALUES('gamma doc'); INSERT INTO rt VALUES(2, 5.0, 6.0);
+SELECT dolt_add('ft'); SELECT dolt_add('rt'); SELECT dolt_commit('-m','named');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_reset('--hard');
+SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+SELECT count(*) FROM rt WHERE x1>=4.0;
+PRAGMA integrity_check;" "$DB")
+check "vtab_named_add_commit" "0
+3
+1
+ok" "$result"
+run_sql "INSERT INTO ft VALUES('delta doc'); SELECT dolt_commit('-am','am');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_reset('--hard'); SELECT count(*) FROM ft WHERE ft MATCH 'doc';" "$DB")
+check "vtab_am_commit" "0
+4" "$result"
+run_sql "DROP TABLE ft; SELECT dolt_add('ft'); SELECT dolt_commit('-m','dropft');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_reset('--hard'); SELECT count(*) FROM sqlite_master WHERE name LIKE 'ft%'; PRAGMA integrity_check;" "$DB")
+check "vtab_staged_drop" "0
+0
+ok" "$result"
+
+scenario "vtab through branch checkout and clone"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');
+SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
+run_sql "INSERT INTO ft VALUES('two doc'); SELECT dolt_commit('-am','more');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('-b','old','HEAD~1'); SELECT count(*) FROM ft WHERE ft MATCH 'doc';" "$DB")
+check "vtab_old_branch" "0
+1" "$result"
+REMOTE="file://$TDIR/vrem$N.db"
+run_sql "SELECT dolt_checkout('main'); SELECT dolt_remote('add','origin','$REMOTE'); SELECT dolt_push('origin','main');" "$DB" > /dev/null
+CLONE="$TDIR/vclone$N.db"
+result=$(run_sql "SELECT dolt_clone('$REMOTE'); SELECT count(*) FROM ft WHERE ft MATCH 'doc'; PRAGMA integrity_check;" "$CLONE")
+check "vtab_clone" "0
+2
+ok" "$result"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
