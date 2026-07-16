@@ -548,8 +548,12 @@ static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
 static int gFailOpenMainOnce = 0;
 static int gFailHits = 0;
+static int gFailFullPathnameHits = 0;
+static const char *gFullPathnameSuffix = 0;
+static char gRewrittenFullPath[512];
 
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
+static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut);
 
 static int failClose(sqlite3_file *pFile){
   FailFile *p = (FailFile*)pFile;
@@ -726,6 +730,7 @@ static int registerFailVfs(void){
   gFailVfs.szOsFile = sizeof(FailFile) + gBaseVfs->szOsFile;
   gFailVfs.xOpen = failOpen;
   gFailVfs.xAccess = failAccess;
+  gFailVfs.xFullPathname = failFullPathname;
   return sqlite3_vfs_register(&gFailVfs, 0);
 }
 
@@ -737,6 +742,23 @@ static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pRes
     return SQLITE_IOERR;
   }
   return gBaseVfs->xAccess(gBaseVfs, zName, flags, pResOut);
+}
+
+static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut){
+  int rc;
+  int n;
+  int nSuffix;
+  (void)pVfs;
+  gFailFullPathnameHits++;
+  rc = gBaseVfs->xFullPathname(gBaseVfs, zName, nOut, zOut);
+  if( (rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK) && gFullPathnameSuffix ){
+    n = (int)strlen(zOut);
+    nSuffix = (int)strlen(gFullPathnameSuffix);
+    if( n+nSuffix+1>nOut ) return SQLITE_CANTOPEN;
+    memcpy(zOut+n, gFullPathnameSuffix, nSuffix+1);
+    sqlite3_snprintf(sizeof(gRewrittenFullPath), gRewrittenFullPath, "%s", zOut);
+  }
+  return rc;
 }
 
 static int open_fail_db(const char *path, sqlite3 **ppDb){
@@ -7014,6 +7036,41 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   removeDbFiles(dbpath);
 }
 
+static void run_chunk_store_uses_vfs_full_pathname(void){
+  ChunkStore cs;
+  char dbpath[256];
+  const char *zStored;
+  int rc;
+
+  printf("=== Chunk Store Uses VFS Full Pathname Test ===\n\n");
+
+  memset(&cs, 0, sizeof(cs));
+  make_dbpath(dbpath, sizeof(dbpath), "test_chunk_store_full_pathname");
+  removeDbFiles(dbpath);
+  check("register_fail_vfs_for_full_pathname", registerFailVfs()==SQLITE_OK);
+
+  gFullPathnameSuffix = ".canonical-test";
+  gFailFullPathnameHits = 0;
+  gRewrittenFullPath[0] = 0;
+  rc = chunkStoreOpen(&cs, &gFailVfs, dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  gFullPathnameSuffix = 0;
+  check("open_store_uses_full_pathname", rc==SQLITE_OK);
+
+  if( rc==SQLITE_OK ){
+    zStored = chunkStoreFilename(&cs);
+    check("full_pathname_was_called", gFailFullPathnameHits>0);
+    check("full_pathname_was_rewritten", gRewrittenFullPath[0]!=0);
+    check("chunk_store_keeps_full_pathname",
+          zStored!=0 && strcmp(zStored, gRewrittenFullPath)==0);
+    chunkStoreClose(&cs);
+  }
+
+  removeDbFiles(dbpath);
+  if( gRewrittenFullPath[0] ) removeDbFiles(gRewrittenFullPath);
+  gRewrittenFullPath[0] = 0;
+}
+
 static void run_remotesrv_put_refs_failure_restores_state(void){
   ChunkStore cs;
   ChunkStore reopened;
@@ -7890,6 +7947,7 @@ static const RegressionCase aCases[] = {
   { "prolly_mutate_batch_int_replace", "Prolly Mutate Batch Int Replacement Test", run_prolly_mutate_batches_existing_int_replacements },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
+  { "chunk_store_full_pathname", "Chunk Store Uses VFS Full Pathname Test", run_chunk_store_uses_vfs_full_pathname },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
   { "remotesrv_chunk_commit_failure_clears_pending", "RemoteSrv Chunk Commit Failure Clears Pending Test", run_remotesrv_chunk_commit_failure_clears_pending },
   { "prolly_int_cursor_boundary", "Prolly Int Cursor Internal Boundary Test", run_prolly_int_cursor_seek_across_internal_boundary },

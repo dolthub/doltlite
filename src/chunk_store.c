@@ -185,13 +185,6 @@ static int csCanonicalFilename(
   if( !zFull ) return SQLITE_NOMEM;
 
   rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
-#if SQLITE_OS_WIN
-  /* Windows reopens must use the caller's name, not xFullPathname output. */
-  if( rc==SQLITE_OK ){
-    sqlite3_free(zFull);
-    return chunkStoreDupFilenameDoubleNul(zFilename, pzOut);
-  }
-#endif
   if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
     rc = chunkStoreDupFilenameDoubleNul(zFull, pzOut);
     sqlite3_free(zFull);
