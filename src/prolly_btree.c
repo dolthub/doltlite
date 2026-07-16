@@ -2127,6 +2127,91 @@ int doltliteSerializeCatalogEntries(
       db, aTables, nTables, 0, 0, ppOut, pnOut);
 }
 
+/* Build a master root for a NAMED staging operation. Table and index rows
+** (including virtual tables and their shadows) come from the working
+** master so the staged entries share its numbering domain; view and
+** trigger rows keep the previously staged state, because named add stages
+** tables and never entry-less schema objects — an unstaged view must not
+** ride into the commit on the back of the master adoption. */
+int doltliteBuildNamedStageMasterRoot(
+  sqlite3 *db,
+  const ProllyHash *pWorkingMaster, u8 workingFlags,
+  const ProllyHash *pOldMaster, u8 oldFlags,
+  ProllyHash *pNewRoot
+){
+  Btree *pBtree;
+  struct TableEntry m;
+  SchemaCatalogRow *aWork = 0, *aOld = 0;
+  int nWork = 0, nOld = 0;
+  ProllyHash ignoreRoot;
+  u8 ignoreFlags;
+  ProllyMutMap mm;
+  struct TableEntry masterEntry;
+  i64 iRowid = 1;
+  int i, rc;
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  memset(pNewRoot, 0, sizeof(*pNewRoot));
+
+  memset(&m, 0, sizeof(m));
+  m.iTable = 1;
+  m.root = *pWorkingMaster;
+  m.flags = workingFlags;
+  rc = loadSchemaCatalogRows(pBtree, &m, 1, &aWork, &nWork,
+                             &ignoreRoot, &ignoreFlags);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pOldMaster && !prollyHashIsEmpty(pOldMaster) ){
+    m.root = *pOldMaster;
+    m.flags = oldFlags;
+    rc = loadSchemaCatalogRows(pBtree, &m, 1, &aOld, &nOld,
+                               &ignoreRoot, &ignoreFlags);
+    if( rc!=SQLITE_OK ){
+      freeSchemaCatalogRows(aWork, nWork);
+      return rc;
+    }
+  }
+
+  memset(&mm, 0, sizeof(mm));
+  rc = prollyMutMapInit(&mm, 1);
+  if( rc!=SQLITE_OK ){
+    freeSchemaCatalogRows(aWork, nWork);
+    freeSchemaCatalogRows(aOld, nOld);
+    return rc;
+  }
+  for(i=0; i<nWork+nOld && rc==SQLITE_OK; i++){
+    SchemaCatalogRow *pRow = i<nWork ? &aWork[i] : &aOld[i-nWork];
+    int isEntryless = pRow->zType
+      && (strcmp(pRow->zType, "view")==0 || strcmp(pRow->zType, "trigger")==0);
+    u8 *pRec;
+    int nRec = 0;
+    if( i<nWork ? isEntryless : !isEntryless ) continue;
+    pRec = buildSchemaCatalogRecord(pRow->zType, pRow->zName,
+                                    pRow->zTblName, pRow->oldPg,
+                                    pRow->zSql, &nRec);
+    if( !pRec ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    rc = prollyMutMapInsert(&mm, 0, 0, iRowid++, pRec, nRec);
+    sqlite3_free(pRec);
+  }
+  freeSchemaCatalogRows(aWork, nWork);
+  freeSchemaCatalogRows(aOld, nOld);
+  if( rc!=SQLITE_OK ){
+    prollyMutMapFree(&mm);
+    return rc;
+  }
+
+  memset(&masterEntry, 0, sizeof(masterEntry));
+  masterEntry.iTable = 1;
+  masterEntry.flags = workingFlags;
+  rc = applyMutMapToTableRoot(pBtree->pBt, &masterEntry, &mm);
+  prollyMutMapFree(&mm);
+  if( rc==SQLITE_OK ) *pNewRoot = masterEntry.root;
+  return rc;
+}
+
 static int doltliteSerializeCatalogEntriesForBtreeImpl(
   Btree *pBtree,
   struct TableEntry *aTables,

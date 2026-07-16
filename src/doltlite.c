@@ -1505,12 +1505,31 @@ static int addStageNamedTables(
     struct TableEntry *pWorkingMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
     struct TableEntry *pStagedMaster = doltliteFindTableByNumber(aStaged, nStaged, 1);
     if( pWorkingMaster ){
+      /* The staged master must share the working numbering domain, but a
+      ** wholesale adoption would carry unstaged view and trigger changes
+      ** into the commit (Dolt keeps them out of a named add). Compose the
+      ** master: table and index rows from working, view and trigger rows
+      ** from the previously staged state. */
+      ProllyHash composedRoot;
+      rc = doltliteBuildNamedStageMasterRoot(db,
+              &pWorkingMaster->root, pWorkingMaster->flags,
+              pStagedMaster ? &pStagedMaster->root : 0,
+              pStagedMaster ? pStagedMaster->flags : 0,
+              &composedRoot);
+      if( rc!=SQLITE_OK ){
+        ADDNAMED_FREE_ALL();
+        sqlite3_result_error_code(context, rc);
+        return rc;
+      }
       if( pStagedMaster ){
-        pStagedMaster->root = pWorkingMaster->root;
+        pStagedMaster->root = composedRoot;
         pStagedMaster->schemaHash = pWorkingMaster->schemaHash;
         pStagedMaster->flags = pWorkingMaster->flags;
       }else{
-        rc = addAppendTableEntry(context, &aStaged, &nStaged, pWorkingMaster);
+        struct TableEntry composed = *pWorkingMaster;
+        composed.zName = 0;
+        composed.root = composedRoot;
+        rc = addAppendTableEntry(context, &aStaged, &nStaged, &composed);
         if( rc!=SQLITE_OK ){
           ADDNAMED_FREE_ALL();
           return rc;
