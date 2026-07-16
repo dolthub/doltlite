@@ -508,6 +508,79 @@ INSERT INTO t VALUES (1);
 SELECT dolt_add('nonexistent');
 "
 
+
+# ── schema objects through staging ────────────────────────────────
+# Views and triggers surface as dolt_schemas in status; index changes
+# mark their parent table. Named adds must not stage either kind of
+# entry-less object, while -A carries them.
+
+oracle "view_unstaged_after_named_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+UPDATE t SET v = 11 WHERE id = 1;
+CREATE VIEW vv AS SELECT id FROM t;
+SELECT dolt_add('t');
+"
+
+oracle "view_staged_by_all" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE VIEW vv AS SELECT id FROM t;
+SELECT dolt_add('-A');
+"
+
+oracle "view_dropped_then_all" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE VIEW vv AS SELECT id FROM t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP VIEW vv;
+SELECT dolt_add('-A');
+"
+
+oracle "index_change_unstaged_after_named_add_other" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE o(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+INSERT INTO o VALUES (1);
+SELECT dolt_add('o');
+"
+
+oracle "index_staged_with_named_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('t');
+"
+
+oracle "index_staged_by_all" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('-A');
+"
+
+oracle "index_staged_then_more_data" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX iv ON t(v);
+SELECT dolt_add('t');
+INSERT INTO t VALUES (2, 20);
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
