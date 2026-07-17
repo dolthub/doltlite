@@ -684,6 +684,212 @@ oracle_error "bad_single_arg" "$SEED" \
   "SELECT * FROM dolt_schema_diff('nope');"
 
 echo ""
+echo "--- schema objects (pinned per-system shapes) ---"
+
+# The two systems intentionally present schema objects differently:
+# doltlite emits one row per SQLite schema object (an index or view change
+# is its own row, named by the object), while Dolt folds index changes into
+# the owning table's row and stores views/triggers as rows of the
+# dolt_schemas table (whose own schema only changes when it is created or
+# dropped, so a view modification produces NO dolt_schema_diff row there).
+# Cross-comparing outputs is meaningless here; instead each system is
+# pinned to its own expected shape so a change on either side surfaces.
+DL_SHAPE_Q="SELECT 'ROW|' || coalesce(nullif(from_table_name,''),'~') || '|' || coalesce(nullif(to_table_name,''),'~') || '|' || (from_create_statement IS NOT NULL AND from_create_statement!='') || '|' || (to_create_statement IS NOT NULL AND to_create_statement!='') FROM dolt_schema_diff('HEAD~1','HEAD') ORDER BY 1;"
+DT_SHAPE_Q="SELECT CONCAT('ROW|', coalesce(nullif(from_table_name,''),'~'), '|', coalesce(nullif(to_table_name,''),'~'), '|', (from_create_statement IS NOT NULL AND from_create_statement!=''), '|', (to_create_statement IS NOT NULL AND to_create_statement!='')) FROM dolt_schema_diff('HEAD~1','HEAD') ORDER BY 1;"
+
+pinned_shapes() {
+  local name="$1" dl_setup="$2" dl_expected="$3" dt_setup="$4" dt_expected="$5"
+  local dir="$TMPROOT/${name}_pin"
+  mkdir -p "$dir/dl" "$dir/dt"
+  local ok=1
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$DL_SHAPE_Q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' | grep -a '^ROW|' | sort)
+  if [ "$dl_out" != "$dl_expected" ]; then
+    ok=0
+    echo "  FAIL: $name (doltlite shape)"
+    echo "    want:"; echo "$dl_expected" | sed 's/^/      /'
+    echo "    got:";  echo "$dl_out" | sed 's/^/      /'
+  fi
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    { printf '%s\n' "$dolt_setup"; printf '%s\n' "$DT_SHAPE_Q"; } \
+      | "$DOLT" sql -c -r csv 2>"$dir/dt.err" \
+      | tr -d '"\r' | grep -a '^ROW|' | sort
+  )
+  if [ "$dt_out" != "$dt_expected" ]; then
+    ok=0
+    echo "  FAIL: $name (dolt shape)"
+    echo "    want:"; echo "$dt_expected" | sed 's/^/      /'
+    echo "    got:";  echo "$dt_out" | sed 's/^/      /'
+  fi
+
+  if [ "$ok" -eq 1 ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+  fi
+}
+
+pinned_shapes "shape_index_add" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+SELECT dolt_commit('-Am','base');
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','c');
+" "ROW|~|idx|0|1" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+SELECT dolt_commit('-Am','base');
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','c');
+" "ROW|t|t|1|1"
+
+pinned_shapes "shape_index_drop" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','base');
+DROP INDEX idx;
+SELECT dolt_commit('-Am','c');
+" "ROW|idx|~|1|0" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP INDEX idx;
+SELECT dolt_commit('-Am','c');
+" "ROW|t|t|1|1"
+
+pinned_shapes "shape_index_modify" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT, c INT);
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','base');
+DROP INDEX idx;
+CREATE INDEX idx ON t(c);
+SELECT dolt_commit('-Am','c');
+" "ROW|idx|idx|1|1" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT, c INT);
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP INDEX idx;
+CREATE INDEX idx ON t(c);
+SELECT dolt_commit('-Am','c');
+" "ROW|t|t|1|1"
+
+pinned_shapes "shape_view_add" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','c');
+" "ROW|~|v|0|1" "
+CREATE TABLE t(a INT PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','c');
+" "ROW|~|dolt_schemas|0|1"
+
+pinned_shapes "shape_view_drop_last" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+DROP VIEW v;
+SELECT dolt_commit('-Am','c');
+" "ROW|v|~|1|0" "
+CREATE TABLE t(a INT PRIMARY KEY);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+DROP VIEW v;
+SELECT dolt_commit('-Am','c');
+" "ROW|dolt_schemas|~|1|0"
+
+pinned_shapes "shape_view_modify" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am','c');
+" "ROW|v|v|1|1" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+DROP VIEW v;
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am','c');
+" ""
+
+pinned_shapes "shape_trigger_add_existing_schemas" "
+CREATE TABLE t(a INTEGER PRIMARY KEY);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT 1; END;
+SELECT dolt_commit('-Am','c');
+" "ROW|~|trg|0|1" "
+CREATE TABLE t(a INT PRIMARY KEY);
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am','base');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW SET @x = 1;
+SELECT dolt_commit('-Am','c');
+" ""
+
+pinned_shapes "shape_mixed_commit" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+CREATE TABLE u(x INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE INDEX idx ON t(b);
+CREATE VIEW v AS SELECT a FROM t;
+ALTER TABLE u ADD COLUMN y INT;
+SELECT dolt_commit('-Am','c');
+" "ROW|~|idx|0|1
+ROW|~|v|0|1
+ROW|u|u|1|1" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+CREATE TABLE u(x INT PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE INDEX idx ON t(b);
+CREATE VIEW v AS SELECT a FROM t;
+ALTER TABLE u ADD COLUMN y INT;
+SELECT dolt_commit('-Am','c');
+" "ROW|~|dolt_schemas|0|1
+ROW|t|t|1|1
+ROW|u|u|1|1"
+
+# doltlite's third argument filters by SQLite schema-object name; the
+# owning table's filter shows only the table's own DDL changes.
+DL_FILTER_SETUP="
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+SELECT dolt_commit('-Am','base');
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am','c');
+"
+filter_check() {
+  local name="$1" filter="$2" expected="$3"
+  local dir="$TMPROOT/${name}_flt"
+  mkdir -p "$dir"
+  local q="SELECT 'ROW|' || coalesce(nullif(from_table_name,''),'~') || '|' || coalesce(nullif(to_table_name,''),'~') FROM dolt_schema_diff('HEAD~1','HEAD','$filter') ORDER BY 1;"
+  local out
+  out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$DL_FILTER_SETUP" "$q" \
+        | "$DOLTLITE" "$dir/db" 2>"$dir/err" \
+        | tr -d '\r' | grep -a '^ROW|' | sort)
+  if [ "$out" = "$expected" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    want: |$expected|"
+    echo "    got:  |$out|"
+  fi
+}
+filter_check "filter_by_index_name" "idx" "ROW|~|idx"
+filter_check "filter_by_owning_table" "t" ""
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"
