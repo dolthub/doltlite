@@ -884,6 +884,225 @@ ROLLBACK TO sp1;
   "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_conflicts))"
 
 echo ""
+echo "--- schema objects (views, triggers, indexes) ---"
+
+# Trigger bodies cannot share one script across dialects (SQLite BEGIN...END
+# vs MySQL FOR EACH ROW), so these run per-system setups against per-system
+# post-state queries.
+oracle_dual_poststate() {
+  local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
+  local dir="$TMPROOT/${name}_dual"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup" || true
+  local dl_out
+  dl_out=$(
+    printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
+      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | tr -d '\r'
+  )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" || true
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" sql -r csv -q "$dt_query" 2>>"$dir/dt.err" \
+      | tail -n +2 \
+      | tr -d '"\r'
+  )
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+DL_VCOUNT="SELECT 'V|' || count(*) FROM sqlite_master WHERE type = 'view'"
+DT_VCOUNT="SELECT concat('V|', count(*)) FROM dolt_schemas WHERE type = 'view'"
+
+oracle_poststate "revert_view_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+SELECT dolt_commit('-Am', 'base');
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'add view');
+SELECT dolt_revert('HEAD');
+" "$DL_VCOUNT" "$DT_VCOUNT"
+
+oracle_poststate "revert_view_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'base');
+DROP VIEW w;
+SELECT dolt_commit('-Am', 'drop view');
+SELECT dolt_revert('HEAD');
+" "SELECT 'Q|' || group_concat(id, ',') FROM (SELECT id FROM w ORDER BY id)" \
+"SELECT concat('Q|', group_concat(id ORDER BY id SEPARATOR ',')) FROM w"
+
+oracle_poststate "revert_index_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+CREATE INDEX idx ON t(v);
+SELECT dolt_commit('-Am', 'add index');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'more data');
+SELECT dolt_revert('HEAD~1');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT count(*) FROM t)" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT count(*) FROM t))"
+
+oracle_dual_poststate "revert_index_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx ON t(v);
+INSERT INTO t VALUES (1, 10), (2, 10);
+SELECT dolt_commit('-Am', 'base');
+DROP INDEX idx;
+SELECT dolt_commit('-Am', 'drop index');
+SELECT dolt_revert('HEAD');
+" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+CREATE INDEX idx ON t(v);
+INSERT INTO t VALUES (1, 10), (2, 10);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t DROP INDEX idx;
+SELECT dolt_commit('-Am', 'drop index');
+SELECT dolt_revert('HEAD');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT group_concat(id, ',') FROM (SELECT id FROM t WHERE v = 10 ORDER BY id))" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM t WHERE v = 10))"
+
+oracle_error "revert_view_add_after_modify_conflicts" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+SELECT dolt_commit('-Am', 'base');
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'add view');
+DROP VIEW w;
+CREATE VIEW w AS SELECT v FROM t;
+SELECT dolt_commit('-Am', 'modify view');
+SELECT dolt_revert('HEAD~1');
+"
+
+oracle_poststate "revert_preserves_unstaged_view" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+SELECT dolt_commit('-Am', 'base');
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-am', 'data');
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_revert('HEAD');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE type = 'view') || '|' || (SELECT count(*) FROM t)" \
+"SELECT concat('Q|', (SELECT count(*) FROM dolt_schemas WHERE type = 'view'), '|', (SELECT count(*) FROM t))"
+
+oracle_poststate "cherry_pick_view_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'add view');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE type = 'view') || '|' || (SELECT group_concat(id, ',') FROM (SELECT id FROM w ORDER BY id))" \
+"SELECT concat('Q|', (SELECT count(*) FROM dolt_schemas WHERE type = 'view'), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM w))"
+
+oracle_error "cherry_pick_view_add_conflicts_same_name" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'feat view');
+SELECT dolt_checkout('main');
+CREATE VIEW w AS SELECT v FROM t;
+SELECT dolt_commit('-Am', 'main view');
+SELECT dolt_cherry_pick('feat');
+"
+
+oracle_poststate "cherry_pick_view_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+DROP VIEW w;
+SELECT dolt_commit('-Am', 'drop view');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+" "$DL_VCOUNT" "$DT_VCOUNT"
+
+oracle_poststate "cherry_pick_index_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+CREATE INDEX idx ON t(v);
+SELECT dolt_commit('-Am', 'add index');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 10);
+SELECT dolt_commit('-am', 'main data');
+SELECT dolt_cherry_pick('feat');
+" "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT group_concat(id, ',') FROM (SELECT id FROM t WHERE v = 10 ORDER BY id))" \
+"SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM t WHERE v = 10))"
+
+oracle_dual_poststate "revert_trigger_add_stops_firing" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.id); END;
+SELECT dolt_commit('-Am', 'add trigger');
+SELECT dolt_revert('HEAD');
+INSERT INTO t VALUES (5);
+" "
+CREATE TABLE t(id INT PRIMARY KEY);
+CREATE TABLE audit(id INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+SELECT dolt_commit('-Am', 'add trigger');
+SELECT dolt_revert('HEAD');
+INSERT INTO t VALUES (5);
+" "SELECT 'Q|' || count(*) FROM audit" \
+"SELECT concat('Q|', count(*)) FROM audit"
+
+oracle_dual_poststate "revert_trigger_drop_fires_again" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.id); END;
+SELECT dolt_commit('-Am', 'base');
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'drop trigger');
+SELECT dolt_revert('HEAD');
+INSERT INTO t VALUES (5);
+" "
+CREATE TABLE t(id INT PRIMARY KEY);
+CREATE TABLE audit(id INT PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+SELECT dolt_commit('-Am', 'base');
+DROP TRIGGER trg;
+SELECT dolt_commit('-Am', 'drop trigger');
+SELECT dolt_revert('HEAD');
+INSERT INTO t VALUES (5);
+" "SELECT 'Q|' || count(*) || '|' || coalesce((SELECT id FROM audit), '~') FROM audit" \
+"SELECT concat('Q|', count(*), '|', coalesce((SELECT id FROM audit), '~')) FROM audit"
+
+oracle_dual_poststate "cherry_pick_trigger_add_fires" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.id); END;
+SELECT dolt_commit('-Am', 'add trigger');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+INSERT INTO t VALUES (5);
+" "
+CREATE TABLE t(id INT PRIMARY KEY);
+CREATE TABLE audit(id INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+SELECT dolt_commit('-Am', 'add trigger');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+INSERT INTO t VALUES (5);
+" "SELECT 'Q|' || count(*) || '|' || coalesce((SELECT id FROM audit), '~') FROM audit" \
+"SELECT concat('Q|', count(*), '|', coalesce((SELECT id FROM audit), '~')) FROM audit"
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"
