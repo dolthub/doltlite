@@ -555,6 +555,22 @@ static char gRewrittenFullPath[512];
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
 static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut);
 
+static void normalizeNonVerbatimWinPath(char *zPath){
+#if SQLITE_OS_WIN
+  if( zPath[0]=='\\' && zPath[1]=='\\'
+   && (zPath[2]=='?' || zPath[2]=='.') && zPath[3]=='\\'
+  ){
+    return;
+  }
+  while( *zPath ){
+    if( *zPath=='\\' ) *zPath = '/';
+    zPath++;
+  }
+#else
+  (void)zPath;
+#endif
+}
+
 static int failClose(sqlite3_file *pFile){
   FailFile *p = (FailFile*)pFile;
   return p->pReal->pMethods->xClose(p->pReal);
@@ -7041,6 +7057,7 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
 static void run_chunk_store_uses_vfs_full_pathname(void){
   ChunkStore cs;
   char dbpath[256];
+  char zExpected[512];
   const char *zStored;
   int rc;
 
@@ -7063,8 +7080,10 @@ static void run_chunk_store_uses_vfs_full_pathname(void){
     zStored = chunkStoreFilename(&cs);
     check("full_pathname_was_called", gFailFullPathnameHits>0);
     check("full_pathname_was_rewritten", gRewrittenFullPath[0]!=0);
+    sqlite3_snprintf(sizeof(zExpected), zExpected, "%s", gRewrittenFullPath);
+    normalizeNonVerbatimWinPath(zExpected);
     check("chunk_store_keeps_full_pathname",
-          zStored!=0 && strcmp(zStored, gRewrittenFullPath)==0);
+          zStored!=0 && strcmp(zStored, zExpected)==0);
     chunkStoreClose(&cs);
   }
 
@@ -7974,9 +7993,22 @@ static int run_case_by_name(const char *zName){
   return 0;
 }
 
+static int case_is_excluded(const char *zName, const char *zList){
+  int nName = (int)strlen(zName);
+  const char *z = zList;
+  while( z && *z ){
+    while( *z==',' ) z++;
+    if( strncmp(z, zName, nName)==0 && (z[nName]==0 || z[nName]==',') ){
+      return 1;
+    }
+    z = strchr(z, ',');
+  }
+  return 0;
+}
+
 static void print_usage(const char *argv0){
   int i;
-  fprintf(stderr, "Usage: %s all|", argv0);
+  fprintf(stderr, "Usage: %s all|all_except=name[,name...]|", argv0);
   for(i=0; i<(int)(sizeof(aCases)/sizeof(aCases[0])); i++){
     fprintf(stderr, "%s%s", i ? "|" : "", aCases[i].zName);
   }
@@ -7994,6 +8026,20 @@ int main(int argc, char **argv){
     printf("=== DoltLite Regression Tests ===\n\n");
     for(i=0; i<(int)(sizeof(aCases)/sizeof(aCases[0])); i++){
       aCases[i].xRun();
+      if( i+1 < (int)(sizeof(aCases)/sizeof(aCases[0])) ){
+        printf("\n");
+      }
+    }
+  }else if( strncmp(argv[1], "all_except=", 11)==0 ){
+    const char *zExclude = argv[1] + 11;
+    printf("=== DoltLite Regression Tests ===\n\n");
+    for(i=0; i<(int)(sizeof(aCases)/sizeof(aCases[0])); i++){
+      if( case_is_excluded(aCases[i].zName, zExclude) ){
+        printf("=== %s ===\n\nSKIP: excluded by command line\n",
+               aCases[i].zTitle);
+      }else{
+        aCases[i].xRun();
+      }
       if( i+1 < (int)(sizeof(aCases)/sizeof(aCases[0])) ){
         printf("\n");
       }
