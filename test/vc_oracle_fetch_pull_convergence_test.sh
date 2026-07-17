@@ -369,6 +369,202 @@ remote_flow "mb_featB" "$MB_SEED" "" \
   "SELECT CONCAT('R|',id,'|',v) FROM t;"
 
 echo ""
+echo "--- schema objects (views, triggers, indexes) ---"
+
+# Same phases as remote_flow, but per-system scripts: trigger bodies cannot
+# share one script across dialects (SQLite BEGIN...END vs MySQL FOR EACH ROW).
+remote_flow_dual() {
+  local name="$1" dl_seed="$2" dt_seed="$3" advance_dl="$4" advance_dt="$5" consume="$6" dl_query="$7" dt_query="$8"
+  local dir="$TMPROOT/$name"; mkdir -p "$dir"
+
+  local dl_remote="file://$dir/remote.db"
+  local dl_src="$dir/src.db" dl_con="$dir/con.db"
+  printf '%s\n' "${dl_seed//@REMOTE@/$dl_remote}" \
+    | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
+  printf 'SELECT dolt_clone('"'"'%s'"'"');\n' "$dl_remote" \
+    | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
+  if [ -n "$advance_dl" ]; then
+    printf '%s\n' "${advance_dl//@REMOTE@/$dl_remote}" \
+      | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
+  fi
+  printf '%s\n' "$consume" | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
+  local dl_out
+  dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
+           | "$DOLTLITE" "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
+
+  local dt_remote="$dir/dt_remote"
+  local dt_seed dt_advance dt_consume dt_q
+  dt_seed=$(vc_oracle_translate_for_dolt "${dt_seed//@REMOTE@/file://$dt_remote}")
+  dt_advance=$(vc_oracle_translate_for_dolt "${advance_dt//@REMOTE@/file://$dt_remote}")
+  dt_consume=$(vc_oracle_translate_for_dolt "$consume")
+  dt_q=$(vc_oracle_translate_for_dolt "$dt_query")
+  local dt_out
+  (
+    mkdir -p "$dir/dsrc" "$dt_remote"
+    cd "$dir/dsrc" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    printf '%s\n' "$dt_seed" | "$DOLT" sql -c >/dev/null 2>"$dir/dt_seed.err"
+    cd "$dir" || exit 1
+    "$DOLT" clone "file://$dt_remote" dcon >/dev/null 2>"$dir/dt_clone.err"
+    if [ -n "$dt_advance" ]; then
+      ( cd "$dir/dsrc" && printf '%s\n' "$dt_advance" | "$DOLT" sql -c >/dev/null 2>"$dir/dt_advance.err" )
+    fi
+    cd "$dir/dcon" || exit 1
+    printf '%s\n' "$dt_consume" | "$DOLT" sql -c >/dev/null 2>"$dir/dt_consume.err"
+    printf '%s\n' "$dt_q" | "$DOLT" sql -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+SO_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10), (2, 10);
+CREATE VIEW w AS SELECT id FROM t;
+CREATE INDEX idx ON t(v);
+SELECT dolt_commit('-Am','base with objects');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+
+remote_flow "clone_carries_view_and_index" "$SO_SEED" "" "" \
+  "SELECT 'R|w|'||group_concat(id, ',') FROM (SELECT id FROM w ORDER BY id);
+   SELECT 'R|idx|'||count(*) FROM sqlite_master WHERE name='idx';
+   SELECT 'R|rows|'||group_concat(id, ',') FROM (SELECT id FROM t WHERE v = 10 ORDER BY id);" \
+  "SELECT CONCAT('R|w|', group_concat(id ORDER BY id SEPARATOR ',')) FROM w;
+   SELECT CONCAT('R|idx|', count(*)) FROM information_schema.statistics WHERE table_name='t' AND index_name='idx';
+   SELECT CONCAT('R|rows|', group_concat(id ORDER BY id SEPARATOR ',')) FROM t WHERE v = 10;"
+
+remote_flow "ff_pull_view_add" "$FF_SEED" "
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am','add view');
+SELECT dolt_push('origin','main');
+" "$FF_PULL" \
+  "SELECT 'R|'||group_concat(id, ',') FROM (SELECT id FROM w ORDER BY id);" \
+  "SELECT CONCAT('R|', group_concat(id ORDER BY id SEPARATOR ',')) FROM w;"
+
+IDX_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+remote_flow "ff_pull_index_add" "$IDX_SEED" "
+CREATE INDEX idx ON t(v);
+INSERT INTO t VALUES (2, 10);
+SELECT dolt_commit('-Am','add index');
+SELECT dolt_push('origin','main');
+" "$FF_PULL" \
+  "SELECT 'R|'||(SELECT count(*) FROM sqlite_master WHERE name='idx')||'|'||(SELECT group_concat(id, ',') FROM (SELECT id FROM t WHERE v = 10 ORDER BY id));" \
+  "SELECT CONCAT('R|', (SELECT count(*) FROM information_schema.statistics WHERE table_name='t' AND index_name='idx'), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM t WHERE v = 10));"
+
+remote_flow "pull_merge_view_add_keeps_local_commit" "$FF_SEED" "
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am','add view');
+SELECT dolt_push('origin','main');
+" "
+INSERT INTO t VALUES (7,'local');
+SELECT dolt_commit('-am','local data');
+SELECT dolt_pull('origin','main');
+" \
+  "SELECT 'R|'||(SELECT group_concat(id, ',') FROM (SELECT id FROM w ORDER BY id))||'|'||(SELECT count(*) FROM t);" \
+  "SELECT CONCAT('R|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM w), '|', (SELECT count(*) FROM t));"
+
+remote_flow "pull_merge_view_drop" "$SO_SEED" "
+DROP VIEW w;
+SELECT dolt_commit('-Am','drop view');
+SELECT dolt_push('origin','main');
+" "
+INSERT INTO t VALUES (7, 70);
+SELECT dolt_commit('-am','local data');
+SELECT dolt_pull('origin','main');
+" \
+  "SELECT 'R|'||(SELECT count(*) FROM sqlite_master WHERE type='view')||'|'||(SELECT count(*) FROM t);" \
+  "SELECT CONCAT('R|', (SELECT count(*) FROM dolt_schemas WHERE type='view'), '|', (SELECT count(*) FROM t));"
+
+remote_flow "pull_merge_both_drop_view" "$SO_SEED" "
+DROP VIEW w;
+SELECT dolt_commit('-Am','remote drop');
+SELECT dolt_push('origin','main');
+" "
+DROP VIEW w;
+SELECT dolt_commit('-Am','local drop');
+SELECT dolt_pull('origin','main');
+" \
+  "SELECT 'R|'||count(*) FROM sqlite_master WHERE type='view';" \
+  "SELECT CONCAT('R|', count(*)) FROM dolt_schemas WHERE type='view';"
+
+TRG_DL_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.id); END;
+SELECT dolt_commit('-Am','base with trigger');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+TRG_DT_SEED="
+CREATE TABLE t(id INT PRIMARY KEY);
+CREATE TABLE audit(id INT PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+SELECT dolt_commit('-Am','base with trigger');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+
+remote_flow_dual "clone_trigger_fires" \
+  "$TRG_DL_SEED" "$TRG_DT_SEED" "" "" \
+  "INSERT INTO t VALUES (5);" \
+  "SELECT 'R|'||count(*)||'|'||coalesce((SELECT id FROM audit), '~') FROM audit;" \
+  "SELECT CONCAT('R|', count(*), '|', coalesce((SELECT id FROM audit), '~')) FROM audit;"
+
+remote_flow_dual "ff_pull_trigger_fires" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+" "
+CREATE TABLE t(id INT PRIMARY KEY);
+CREATE TABLE audit(id INT PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+" "
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.id); END;
+SELECT dolt_commit('-Am','add trigger');
+SELECT dolt_push('origin','main');
+" "
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+SELECT dolt_commit('-Am','add trigger');
+SELECT dolt_push('origin','main');
+" "
+SELECT dolt_pull('origin','main');
+INSERT INTO t VALUES (5);
+" \
+  "SELECT 'R|'||count(*)||'|'||coalesce((SELECT id FROM audit), '~') FROM audit;" \
+  "SELECT CONCAT('R|', count(*), '|', coalesce((SELECT id FROM audit), '~')) FROM audit;"
+
+remote_flow_dual "ff_pull_dirty_working_set_refused" \
+  "$TRG_DL_SEED" "$TRG_DT_SEED" \
+  "
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am','remote view');
+SELECT dolt_push('origin','main');
+" "
+CREATE VIEW w AS SELECT id FROM t;
+SELECT dolt_commit('-Am','remote view');
+SELECT dolt_push('origin','main');
+" "
+INSERT INTO t VALUES (9);
+SELECT dolt_pull('origin','main');
+" \
+  "SELECT 'R|'||(SELECT count(*) FROM sqlite_master WHERE type='view')||'|'||(SELECT count(*) FROM dolt_log);" \
+  "SELECT CONCAT('R|', (SELECT count(*) FROM dolt_schemas WHERE type='view'), '|', (SELECT count(*) FROM dolt_log));"
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ -n "$FAILED_NAMES" ]; then
   echo "Failed:$FAILED_NAMES"
