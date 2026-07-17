@@ -706,7 +706,7 @@ pinned_shapes() {
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$DL_SHAPE_Q" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | tr -d '\r' | grep -a '^ROW|' | sort)
+           | tr -d '\r' | grep -a '^ROW|' | LC_ALL=C sort)
   if [ "$dl_out" != "$dl_expected" ]; then
     ok=0
     echo "  FAIL: $name (doltlite shape)"
@@ -722,7 +722,7 @@ pinned_shapes() {
     vc_oracle_init_repo
     { printf '%s\n' "$dolt_setup"; printf '%s\n' "$DT_SHAPE_Q"; } \
       | "$DOLT" sql -c -r csv 2>"$dir/dt.err" \
-      | tr -d '"\r' | grep -a '^ROW|' | sort
+      | tr -d '"\r' | grep -a '^ROW|' | LC_ALL=C sort
   )
   if [ "$dt_out" != "$dt_expected" ]; then
     ok=0
@@ -845,9 +845,9 @@ CREATE INDEX idx ON t(b);
 CREATE VIEW v AS SELECT a FROM t;
 ALTER TABLE u ADD COLUMN y INT;
 SELECT dolt_commit('-Am','c');
-" "ROW|~|idx|0|1
-ROW|~|v|0|1
-ROW|u|u|1|1" "
+" "ROW|u|u|1|1
+ROW|~|idx|0|1
+ROW|~|v|0|1" "
 CREATE TABLE t(a INT PRIMARY KEY, b INT);
 CREATE TABLE u(x INT PRIMARY KEY);
 SELECT dolt_commit('-Am','base');
@@ -855,9 +855,9 @@ CREATE INDEX idx ON t(b);
 CREATE VIEW v AS SELECT a FROM t;
 ALTER TABLE u ADD COLUMN y INT;
 SELECT dolt_commit('-Am','c');
-" "ROW|~|dolt_schemas|0|1
-ROW|t|t|1|1
-ROW|u|u|1|1"
+" "ROW|t|t|1|1
+ROW|u|u|1|1
+ROW|~|dolt_schemas|0|1"
 
 # doltlite's third argument filters by SQLite schema-object name; the
 # owning table's filter shows only the table's own DDL changes.
