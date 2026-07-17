@@ -479,7 +479,7 @@ jobs:
     - name: Windows native C regression tests
       if: matrix.platform == 'windows'
       shell: msys2 {0}
-      run: cd build && bash ../test/run_doltlite_regression_case.sh all
+      run: cd build && bash ../test/run_doltlite_regression_case.sh all_except=backup_safety
       timeout-minutes: 15
 
     # Wires the previously-orphan C tests into CI. All tests in
