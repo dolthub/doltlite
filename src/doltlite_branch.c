@@ -848,6 +848,130 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
+/* A restored table's indexes must follow it: named indexes present only in
+** the working schema are dropped, the source's named indexes are (re)created,
+** and differing definitions are replaced. Entry roots are reconciled
+** separately after the catalog flush. */
+static int checkoutReconcileTableIndexes(
+  sqlite3 *db,
+  SchemaEntry *aSourceSchema,
+  int nSourceSchema,
+  const char *zTable
+){
+  sqlite3_stmt *pStmt = 0;
+  char **azDrop = 0;
+  int nDrop = 0;
+  int i, j, rc;
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT name, sql FROM sqlite_master"
+      " WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL",
+      -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_STATIC);
+  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+    const char *zSql = (const char*)sqlite3_column_text(pStmt, 1);
+    int keep = 0;
+    if( !zName ) continue;
+    for(j=0; j<nSourceSchema; j++){
+      if( aSourceSchema[j].zType && strcmp(aSourceSchema[j].zType, "index")==0
+       && aSourceSchema[j].zTblName && strcmp(aSourceSchema[j].zTblName, zTable)==0
+       && aSourceSchema[j].zName && strcmp(aSourceSchema[j].zName, zName)==0
+       && aSourceSchema[j].zSql ){
+        char *zLiveCanon = doltliteCanonicalizeSchemaSql(zSql ? zSql : "", zName);
+        char *zSrcCanon = doltliteCanonicalizeSchemaSql(aSourceSchema[j].zSql, zName);
+        keep = zLiveCanon && zSrcCanon && strcmp(zLiveCanon, zSrcCanon)==0;
+        sqlite3_free(zLiveCanon);
+        sqlite3_free(zSrcCanon);
+        break;
+      }
+    }
+    if( !keep ){
+      char **azNew = sqlite3_realloc((void*)azDrop, (nDrop+1)*(int)sizeof(char*));
+      char *zOwn = azNew ? sqlite3_mprintf("%s", zName) : 0;
+      if( azNew ) azDrop = azNew;
+      if( !azNew || !zOwn ){
+        sqlite3_finalize(pStmt);
+        doltliteFreeNameList(azDrop, nDrop);
+        return SQLITE_NOMEM;
+      }
+      azDrop[nDrop++] = zOwn;
+    }
+  }
+  rc = sqlite3_finalize(pStmt);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeNameList(azDrop, nDrop);
+    return rc;
+  }
+
+  for(i=0; i<nDrop && rc==SQLITE_OK; i++){
+    char *zSql = sqlite3_mprintf("DROP INDEX \"%w\"", azDrop[i]);
+    if( !zSql ){ rc = SQLITE_NOMEM; break; }
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }
+  doltliteFreeNameList(azDrop, nDrop);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(j=0; j<nSourceSchema; j++){
+    int exists;
+    sqlite3_stmt *pChk = 0;
+    if( !aSourceSchema[j].zType || strcmp(aSourceSchema[j].zType, "index")!=0 ) continue;
+    if( !aSourceSchema[j].zTblName || strcmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
+    if( !aSourceSchema[j].zName || !aSourceSchema[j].zSql ) continue;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+        -1, &pChk, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_text(pChk, 1, aSourceSchema[j].zName, -1, SQLITE_STATIC);
+    exists = sqlite3_step(pChk)==SQLITE_ROW;
+    sqlite3_finalize(pChk);
+    if( !exists ){
+      rc = sqlite3_exec(db, aSourceSchema[j].zSql, 0, 0, 0);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
+/* Point the freshly flushed working catalog's index entries for zTable at
+** the source's trees. Each side is resolved through its OWN schema rows
+** (index entries are unnamed, so name-keyed overlays cannot see them), and
+** the DDL reconcile above guarantees the two row sets agree by name. */
+static void checkoutAdoptSourceIndexRoots(
+  struct TableEntry *aWorking, int nWorking,
+  SchemaEntry *aWorkSchema, int nWorkSchema,
+  struct TableEntry *aSource, int nSource,
+  SchemaEntry *aSourceSchema, int nSourceSchema,
+  const char *zTable
+){
+  int j, k;
+  for(j=0; j<nSourceSchema; j++){
+    struct TableEntry *pSrcEntry, *pWorkEntry;
+    if( !aSourceSchema[j].zType || strcmp(aSourceSchema[j].zType, "index")!=0 ) continue;
+    if( !aSourceSchema[j].zTblName || strcmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
+    if( !aSourceSchema[j].zName ) continue;
+    pSrcEntry = doltliteFindTableByNumber(aSource, nSource,
+                                          aSourceSchema[j].iRootpage);
+    if( !pSrcEntry ) continue;
+    for(k=0; k<nWorkSchema; k++){
+      if( aWorkSchema[k].zType && strcmp(aWorkSchema[k].zType, "index")==0
+       && aWorkSchema[k].zName
+       && strcmp(aWorkSchema[k].zName, aSourceSchema[j].zName)==0 ){
+        break;
+      }
+    }
+    if( k>=nWorkSchema ) continue;
+    pWorkEntry = doltliteFindTableByNumber(aWorking, nWorking,
+                                           aWorkSchema[k].iRootpage);
+    if( !pWorkEntry || pWorkEntry->iTable<=1 ) continue;
+    pWorkEntry->root = pSrcEntry->root;
+    pWorkEntry->schemaHash = pSrcEntry->schemaHash;
+    pWorkEntry->flags = pSrcEntry->flags;
+  }
+}
+
 static int doltliteCheckoutTables(
   sqlite3 *db,
   const char *zSourceRef,
@@ -861,7 +985,9 @@ static int doltliteCheckoutTables(
   ProllyHash newWorkingHash;
   CheckoutSchemaInfo *aSchema = 0;
   struct TableEntry *aWorking = 0, *aSource = 0;
+  SchemaEntry *aSourceSchema = 0, *aWorkSchema = 0;
   int nWorking = 0, nSource = 0;
+  int nSourceSchema = 0, nWorkSchema = 0;
   int i, j;
   int rc;
 
@@ -934,6 +1060,14 @@ static int doltliteCheckoutTables(
     }
   }
 
+  rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &sourceCatHash,
+                             &aSourceSchema, &nSourceSchema);
+  if( rc!=SQLITE_OK ){
+    checkoutSchemaInfoClear(aSchema, nNames);
+    doltliteFreeCatalog(aSource, nSource);
+    return rc;
+  }
+
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int bSchemaChanged;
@@ -944,42 +1078,45 @@ static int doltliteCheckoutTables(
       || (aSchema[i].hasCurrent && aSchema[i].hasSource
           && strcmp(aSchema[i].zCurrentSql ? aSchema[i].zCurrentSql : "",
                     aSchema[i].zSourceSql ? aSchema[i].zSourceSql : "")!=0);
-    if( !bSchemaChanged ) continue;
-
-    if( aSchema[i].hasCurrent ){
-      zDrop = sqlite3_mprintf("DROP TABLE \"%w\"", zName);
-      if( !zDrop ){
-        checkoutSchemaInfoClear(aSchema, nNames);
-        doltliteFreeCatalog(aSource, nSource);
-        return SQLITE_NOMEM;
+    if( bSchemaChanged ){
+      if( aSchema[i].hasCurrent ){
+        zDrop = sqlite3_mprintf("DROP TABLE \"%w\"", zName);
+        if( !zDrop ){
+          rc = SQLITE_NOMEM;
+          break;
+        }
+        rc = sqlite3_exec(db, zDrop, 0, 0, 0);
+        sqlite3_free(zDrop);
+        if( rc!=SQLITE_OK ) break;
       }
-      rc = sqlite3_exec(db, zDrop, 0, 0, 0);
-      sqlite3_free(zDrop);
-      if( rc!=SQLITE_OK ){
-        checkoutSchemaInfoClear(aSchema, nNames);
-        doltliteFreeCatalog(aSource, nSource);
-        return rc;
+      if( aSchema[i].hasSource ){
+        rc = sqlite3_exec(db, aSchema[i].zSourceSql, 0, 0, 0);
+        if( rc!=SQLITE_OK ) break;
       }
+      aSchema[i].rebuilt = 1;
     }
     if( aSchema[i].hasSource ){
-      rc = sqlite3_exec(db, aSchema[i].zSourceSql, 0, 0, 0);
-      if( rc!=SQLITE_OK ){
-        checkoutSchemaInfoClear(aSchema, nNames);
-        doltliteFreeCatalog(aSource, nSource);
-        return rc;
-      }
+      rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema, zName);
+      if( rc!=SQLITE_OK ) break;
     }
-    aSchema[i].rebuilt = 1;
+  }
+  if( rc!=SQLITE_OK ){
+    freeSchemaEntries(aSourceSchema, nSourceSchema);
+    checkoutSchemaInfoClear(aSchema, nNames);
+    doltliteFreeCatalog(aSource, nSource);
+    return rc;
   }
 
   rc = doltliteFlushCatalogToHash(db, &workingHash);
   if( rc!=SQLITE_OK ){
+    freeSchemaEntries(aSourceSchema, nSourceSchema);
     checkoutSchemaInfoClear(aSchema, nNames);
     doltliteFreeCatalog(aSource, nSource);
     return rc;
   }
   rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
   if( rc!=SQLITE_OK ){
+    freeSchemaEntries(aSourceSchema, nSourceSchema);
     checkoutSchemaInfoClear(aSchema, nNames);
     doltliteFreeCatalog(aSource, nSource);
     return rc;
@@ -1006,6 +1143,7 @@ static int doltliteCheckoutTables(
       if( aSchema[i].rebuilt && !aSchema[i].hasSource ){
         continue;
       }
+      freeSchemaEntries(aSourceSchema, nSourceSchema);
       checkoutSchemaInfoClear(aSchema, nNames);
       doltliteFreeCatalog(aWorking, nWorking);
       doltliteFreeCatalog(aSource, nSource);
@@ -1024,6 +1162,7 @@ static int doltliteCheckoutTables(
       struct TableEntry *aNew = sqlite3_realloc(aWorking,
           (nWorking+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
+        freeSchemaEntries(aSourceSchema, nSourceSchema);
         checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
@@ -1033,6 +1172,7 @@ static int doltliteCheckoutTables(
       zDup = aSource[srcIdx].zName
                ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
       if( aSource[srcIdx].zName && !zDup ){
+        freeSchemaEntries(aSourceSchema, nSourceSchema);
         checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
@@ -1045,6 +1185,7 @@ static int doltliteCheckoutTables(
       zDup = aSource[srcIdx].zName
                ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
       if( aSource[srcIdx].zName && !zDup ){
+        freeSchemaEntries(aSourceSchema, nSourceSchema);
         checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
@@ -1060,6 +1201,24 @@ static int doltliteCheckoutTables(
         aWorking[workIdx].zName = zDup;
       }
     }
+  }
+
+  rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
+                             &aWorkSchema, &nWorkSchema);
+  if( rc!=SQLITE_OK ){
+    freeSchemaEntries(aSourceSchema, nSourceSchema);
+    checkoutSchemaInfoClear(aSchema, nNames);
+    doltliteFreeCatalog(aWorking, nWorking);
+    doltliteFreeCatalog(aSource, nSource);
+    return rc;
+  }
+  for(i=0; i<nNames; i++){
+    const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+    if( !zName ) continue;
+    checkoutAdoptSourceIndexRoots(aWorking, nWorking,
+                                  aWorkSchema, nWorkSchema,
+                                  aSource, nSource,
+                                  aSourceSchema, nSourceSchema, zName);
   }
 
   {
@@ -1081,6 +1240,8 @@ static int doltliteCheckoutTables(
     }
   }
 
+  freeSchemaEntries(aSourceSchema, nSourceSchema);
+  freeSchemaEntries(aWorkSchema, nWorkSchema);
   checkoutSchemaInfoClear(aSchema, nNames);
   doltliteFreeCatalog(aWorking, nWorking);
   doltliteFreeCatalog(aSource, nSource);
