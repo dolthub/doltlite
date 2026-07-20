@@ -978,25 +978,6 @@ int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     ProllyHash *pNewRoot);
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 
-struct ProllyDiffChange;
-
-struct MigrateDiffCtx {
-  sqlite3_stmt *pUpd;
-  int *aiColIdx;
-  char **azColNames;
-  int nCols;
-  /* PROLLY_DIFF_ADD binds their full row through pIns, not pUpd. */
-  sqlite3_stmt *pIns;
-  int *aiAllColIdx;
-  int nAllCols;
-};
-
-char *extractColNameFromDef(const char *zDef);
-int migrateDiffCb(void *pArg, const struct ProllyDiffChange *pChange);
-int migrateSchemaRowData(sqlite3 *db, const ProllyHash *pAncCatHash,
-                         const ProllyHash *pTheirCatHash,
-                         SchemaMergeAction *aActions, int nActions);
-
 static SQLITE_INLINE int doltliteAppendQuotedIdent(sqlite3_str *pStr,
                                                    const char *zName){
   sqlite3_str_appendf(pStr, "\"%w\"", zName ? zName : "");

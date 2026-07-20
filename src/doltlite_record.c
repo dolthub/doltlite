@@ -554,27 +554,6 @@ int doltliteRecordFromClusteredKey(
   return SQLITE_OK;
 }
 
-int doltliteBindField(
-  sqlite3_stmt *pStmt, int iParam,
-  const u8 *pData, int nData,
-  int st, int off
-){
-  DoltliteDecodedField f;
-  doltliteDecodeField(pData, nData, st, off, &f);
-  switch( f.eType ){
-    case SQLITE_INTEGER:
-      return sqlite3_bind_int64(pStmt, iParam, f.i);
-    case SQLITE_FLOAT:
-      return sqlite3_bind_double(pStmt, iParam, f.r);
-    case SQLITE_TEXT:
-      return sqlite3_bind_text(pStmt, iParam, (const char*)f.p, f.n,
-                               SQLITE_TRANSIENT);
-    case SQLITE_BLOB:
-      return sqlite3_bind_blob(pStmt, iParam, f.p, f.n, SQLITE_TRANSIENT);
-  }
-  return sqlite3_bind_null(pStmt, iParam);
-}
-
 u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut){
   u32 *aType, *aLen;
   u8 *pOut, *pHdr, *pBody;

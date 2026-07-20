@@ -3156,10 +3156,9 @@ static int doltliteApplyMergeSchemaActions(
     }
   }
 
-  if( rc==SQLITE_OK ){
-    rc = migrateSchemaRowData(db, pAncCatHash, pTheirCatHash,
-                              aSchemaActions, nSchemaActions);
-  }
+  /* Row data (theirs' adds, edits to shared columns, deletes, and added-column
+  ** values) is merged three-way in doltliteMergeCatalogs against a normalized
+  ** theirs root, so only the schema evolution (the ALTERs above) happens here. */
   if( rc==SQLITE_OK ){
     rc = doltliteFlushCatalogToHash(db, pMergedCatHash);
   }
