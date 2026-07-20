@@ -1794,7 +1794,12 @@ static void doltliteCommitFunc(
   /* Top-level SAVEPOINT is sealed before option validation because Dolt keeps
   ** that SQL transaction boundary durable even when dolt_commit later errors. */
   if( sealTopLevel ){
-    (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, sqlite3_errmsg(db), -1);
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
   }
 
   for(i=0; i<argc; i++){
@@ -1933,7 +1938,12 @@ static void doltliteCommitFunc(
        || db->pSavepoint) ){
     /* Plain BEGIN and nested SAVEPOINT cases stay rollbackable until argument
     ** validation and basic commit guards have succeeded. */
-    (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, sqlite3_errmsg(db), -1);
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
   }
 
   rc = doltlitePrepareCatalogForPersistence(db);

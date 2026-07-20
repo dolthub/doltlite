@@ -14,6 +14,28 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
+expect_line() {
+  local name="$1" expected="$2" output="$3"
+  if printf '%s\n' "$output" | grep -Fqx -- "$expected"; then
+    pass_name "$name"
+  else
+    fail_name "$name"
+    echo "    missing line: $expected"
+    echo "    output: $output"
+  fi
+}
+
+expect_contains() {
+  local name="$1" expected="$2" output="$3"
+  if printf '%s\n' "$output" | grep -Fq -- "$expected"; then
+    pass_name "$name"
+  else
+    fail_name "$name"
+    echo "    missing text: $expected"
+    echo "    output: $output"
+  fi
+}
+
 dl_query() {
   local db="$1"; shift
   "$DOLTLITE" "$db" "$@" 2>/dev/null
@@ -642,6 +664,163 @@ else
   fail_name "begin_immediate_nested_savepoint_dolt_commit_leaves_clean_status"
   echo "    expected clean status, got $DL_Q_STATUS"
 fi
+
+echo ""
+echo "--- Deferred FK failure under BEGIN ---"
+
+DB="$TMPROOT/r.db"
+rm -f "$DB"
+DL_R_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+.bail off
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  pid INTEGER,
+  FOREIGN KEY(pid) REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED
+);
+SELECT dolt_commit('-A','-m','schema');
+BEGIN;
+INSERT INTO c VALUES(1,99);
+SELECT dolt_commit('-A','-m','invalid fk');
+SELECT 'inside|' || count(*) FROM c;
+ROLLBACK;
+SELECT 'working|' || count(*) FROM c;
+SELECT 'head|' || count(*) FROM dolt_at_c('HEAD');
+SELECT 'badcommits|' || count(*) FROM dolt_log WHERE message='invalid fk';
+SQL
+)
+expect_contains "deferred_fk_begin_reports_commit_error" \
+  "FOREIGN KEY constraint failed" "$DL_R_OUT"
+expect_line "deferred_fk_begin_keeps_transaction_open" "inside|1" "$DL_R_OUT"
+expect_line "deferred_fk_begin_rollback_clears_working" "working|0" "$DL_R_OUT"
+expect_line "deferred_fk_begin_does_not_publish_head" "head|0" "$DL_R_OUT"
+expect_line "deferred_fk_begin_creates_no_commit" "badcommits|0" "$DL_R_OUT"
+
+DL_R_REOPEN=$(dl_query "$DB" "
+SELECT 'working|' || count(*) FROM c;
+SELECT 'head|' || count(*) FROM dolt_at_c('HEAD');
+SELECT dolt_reset('--hard');
+SELECT 'fk|' || count(*) FROM pragma_foreign_key_check;")
+expect_line "deferred_fk_begin_reopen_working_clean" "working|0" "$DL_R_REOPEN"
+expect_line "deferred_fk_begin_reopen_head_clean" "head|0" "$DL_R_REOPEN"
+expect_line "deferred_fk_begin_hard_reset_has_no_orphan" "fk|0" "$DL_R_REOPEN"
+
+echo ""
+echo "--- Deferred FK failure under top-level SAVEPOINT ---"
+
+DB="$TMPROOT/s.db"
+rm -f "$DB"
+DL_S_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+.bail off
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  pid INTEGER,
+  FOREIGN KEY(pid) REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED
+);
+SELECT dolt_commit('-A','-m','schema');
+SAVEPOINT outer;
+INSERT INTO c VALUES(1,99);
+SELECT dolt_commit('-A','-m','invalid top savepoint');
+SELECT 'inside|' || count(*) FROM c;
+ROLLBACK TO outer;
+RELEASE outer;
+SELECT 'working|' || count(*) FROM c;
+SELECT 'head|' || count(*) FROM dolt_at_c('HEAD');
+SELECT 'badcommits|' || count(*) FROM dolt_log
+  WHERE message='invalid top savepoint';
+SQL
+)
+expect_contains "deferred_fk_top_savepoint_reports_commit_error" \
+  "FOREIGN KEY constraint failed" "$DL_S_OUT"
+expect_line "deferred_fk_top_savepoint_remains_rollbackable" "inside|1" "$DL_S_OUT"
+expect_line "deferred_fk_top_savepoint_rollback_clears_working" "working|0" "$DL_S_OUT"
+expect_line "deferred_fk_top_savepoint_does_not_publish_head" "head|0" "$DL_S_OUT"
+expect_line "deferred_fk_top_savepoint_creates_no_commit" "badcommits|0" "$DL_S_OUT"
+
+echo ""
+echo "--- Deferred FK failure under nested SAVEPOINT ---"
+
+DB="$TMPROOT/t.db"
+rm -f "$DB"
+DL_T_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+.bail off
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  pid INTEGER,
+  FOREIGN KEY(pid) REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED
+);
+SELECT dolt_commit('-A','-m','schema');
+BEGIN;
+SAVEPOINT inner;
+INSERT INTO c VALUES(1,99);
+SELECT dolt_commit('-A','-m','invalid nested savepoint');
+SELECT 'inside|' || count(*) FROM c;
+ROLLBACK TO inner;
+RELEASE inner;
+COMMIT;
+SELECT 'working|' || count(*) FROM c;
+SELECT 'head|' || count(*) FROM dolt_at_c('HEAD');
+SQL
+)
+expect_contains "deferred_fk_nested_savepoint_reports_commit_error" \
+  "FOREIGN KEY constraint failed" "$DL_T_OUT"
+expect_line "deferred_fk_nested_savepoint_remains_rollbackable" "inside|1" "$DL_T_OUT"
+expect_line "deferred_fk_nested_savepoint_rollback_clears_working" "working|0" "$DL_T_OUT"
+expect_line "deferred_fk_nested_savepoint_does_not_publish_head" "head|0" "$DL_T_OUT"
+
+echo ""
+echo "--- Repair deferred FK after failed dolt_commit ---"
+
+DB="$TMPROOT/u.db"
+rm -f "$DB"
+DL_U_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+.bail off
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  pid INTEGER,
+  FOREIGN KEY(pid) REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED
+);
+SELECT dolt_commit('-A','-m','schema');
+BEGIN;
+INSERT INTO c VALUES(1,99);
+SELECT dolt_commit('-A','-m','invalid before repair');
+INSERT INTO p VALUES(99);
+SELECT 'retry_hash|' || length(dolt_commit('-A','-m','repaired'));
+SELECT 'parent|' || count(*) FROM p;
+SELECT 'child|' || count(*) FROM c;
+SELECT 'fk|' || count(*) FROM pragma_foreign_key_check;
+SELECT 'repaired_commits|' || count(*) FROM dolt_log WHERE message='repaired';
+SELECT 'invalid_commits|' || count(*) FROM dolt_log
+  WHERE message='invalid before repair';
+SQL
+)
+expect_contains "deferred_fk_repair_first_commit_reports_error" \
+  "FOREIGN KEY constraint failed" "$DL_U_OUT"
+expect_line "deferred_fk_repair_retry_commits" "retry_hash|40" "$DL_U_OUT"
+expect_line "deferred_fk_repair_keeps_parent" "parent|1" "$DL_U_OUT"
+expect_line "deferred_fk_repair_keeps_child" "child|1" "$DL_U_OUT"
+expect_line "deferred_fk_repair_is_valid" "fk|0" "$DL_U_OUT"
+expect_line "deferred_fk_repair_creates_one_commit" "repaired_commits|1" "$DL_U_OUT"
+expect_line "deferred_fk_repair_does_not_create_failed_commit" \
+  "invalid_commits|0" "$DL_U_OUT"
+
+DL_U_REOPEN=$(dl_query "$DB" "
+PRAGMA foreign_keys=ON;
+SELECT 'parent|' || count(*) FROM p;
+SELECT 'child|' || count(*) FROM c;
+SELECT 'head|' || count(*) FROM dolt_at_c('HEAD');
+SELECT 'fk|' || count(*) FROM pragma_foreign_key_check;")
+expect_line "deferred_fk_repair_reopen_parent" "parent|1" "$DL_U_REOPEN"
+expect_line "deferred_fk_repair_reopen_child" "child|1" "$DL_U_REOPEN"
+expect_line "deferred_fk_repair_reopen_head" "head|1" "$DL_U_REOPEN"
+expect_line "deferred_fk_repair_reopen_valid" "fk|0" "$DL_U_REOPEN"
 
 echo ""
 echo "======================================="
