@@ -202,7 +202,7 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         cd build
-        rm -f sqlite3.c
+        rm -rf sqlite3.c tsrc .target_source
         make DOLTLITE_PROLLY=1 testfixture
         ./testfixture ../test/testrunner.tcl --buildonly --jobs 1 mdevtest
 
