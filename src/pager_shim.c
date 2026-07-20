@@ -72,6 +72,9 @@ extern sqlite3_backup *orig_sqlite3_backup_init(sqlite3*,const char*,
 extern void orig_sqlite3PagerPagecount(Pager*, int*);
 extern int orig_sqlite3PagerCommitPhaseOne(Pager*, const char*, int);
 extern int orig_sqlite3PagerCommitPhaseTwo(Pager*);
+#if defined(SQLITE_USE_SEH) && !defined(SQLITE_OMIT_WAL)
+extern int orig_sqlite3PagerWalSystemErrno(Pager*);
+#endif
 
 struct PagerOps {
   sqlite3_file *(*xFile)(Pager*);
@@ -506,6 +509,13 @@ static inline const PagerOps *getPagerOps(const Pager *p){
 int pagerShimIsShim(const Pager *p){
   return p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC;
 }
+
+#if defined(SQLITE_USE_SEH) && !defined(SQLITE_OMIT_WAL)
+int sqlite3PagerWalSystemErrno(Pager *pPager){
+  if( pagerShimIsShim(pPager) ) return 0;
+  return orig_sqlite3PagerWalSystemErrno(pPager);
+}
+#endif
 
 PagerShim *pagerShimCreate(
   sqlite3_vfs *pVfs,
