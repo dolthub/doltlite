@@ -740,12 +740,10 @@ SELECT dolt_pull('origin', 'main');
 ##### Remote Server (`doltlite-remotesrv`)
 
 > [!WARNING]
-> The remote protocol currently provides no authentication, authorization,
-> or transport security. The server binds to `127.0.0.1` by default and a
-> 64 MiB chunk / 128 MiB request cap is enforced as defense-in-depth, but
-> these are stopgaps. Run only on trusted networks (or behind a reverse
-> proxy that adds TLS + auth) until [issue #228](https://github.com/dolthub/doltlite/issues/228)
-> ships a secure remote protocol.
+> Plain HTTP remotes are unencrypted and unauthenticated. The server binds to
+> `127.0.0.1` by default; use `--cert`, `--key`, and `--auth-keys` before
+> exposing it to a network, or place it behind a reverse proxy that provides
+> equivalent TLS and authentication.
 
 Doltlite includes a standalone HTTP server for serving databases over the
 network. Build it alongside doltlite:
@@ -761,11 +759,22 @@ Start serving a directory of databases:
 ./doltlite-remotesrv -p 8080 /path/to/databases/
 # To bind to all interfaces (e.g. behind a TLS-terminating reverse proxy):
 ./doltlite-remotesrv -p 8080 --bind 0.0.0.0 /path/to/databases/
+
+# Serve HTTPS and require authorized client credentials:
+./doltlite-remotesrv -p 8443 --bind 0.0.0.0 \
+  --cert server.crt --key server.key \
+  --auth-keys /path/to/authorized-keys --audience db.example.com \
+  /path/to/databases/
 ```
 
+HTTPS clients verify the server certificate and hostname using the system
+trust store. Set `DOLTLITE_CA_FILE` for a private CA. Client credentials live
+in `~/.doltlite/creds` and can be created with `SELECT dolt_creds_new();`.
+
 Every `.db` file in that directory becomes accessible at
-`http://host:8080/filename.db`. The server supports push, fetch, pull, and
-clone — multiple clients can collaborate on the same databases.
+`http://host:8080/filename.db` or its configured HTTPS URL. The server supports
+push, fetch, pull, and clone — multiple clients can collaborate on the same
+databases.
 
 The server is also embeddable as a library (`doltliteServeAsync` in
 `doltlite_remotesrv.h`) for applications that want to host remotes in-process.
@@ -874,8 +883,8 @@ standard behavior); reads are concurrent.
 
 ### Sysbench OLTP Benchmarks: Doltlite vs SQLite
 
-Doltlite is a drop-in replacement for SQLite, so the natural question is: what
-does version control cost?
+Doltlite retains SQLite's SQL engine and C API while replacing its storage
+engine, so the natural question is: what does version control cost?
 
 Every PR runs sysbench-style benchmarks comparing doltlite against stock SQLite:
 the int-key suite in [`test/sysbench_compare.sh`](test/sysbench_compare.sh), plus
