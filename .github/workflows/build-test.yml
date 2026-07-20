@@ -367,6 +367,7 @@ jobs:
       run: |
         cd build
         bash ../test/creds_kat_test.sh
+        bash ../test/creds_path_test.sh "$DOLTLITE"
         bash ../test/tls_test.sh
         bash ../test/creds_verify_test.sh
         bash ../test/remote_test.sh ./doltlite
@@ -394,7 +395,10 @@ jobs:
 
     - name: Credential verify known-answer test
       if: matrix.platform != 'windows'
-      run: cd build && bash ../test/creds_verify_test.sh
+      run: |
+        cd build
+        bash ../test/creds_verify_test.sh
+        bash ../test/creds_path_test.sh ./doltlite
       timeout-minutes: 5
 
     - name: Remote HTTPS + credential auth tests

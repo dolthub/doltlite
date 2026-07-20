@@ -21,9 +21,63 @@ static void check(const char *name, int ok) {
 #define MID 1700000015L
 #define LATE 1700001000L
 
+static char *encodeRaw(const unsigned char *p, size_t n) {
+  char *z = doltliteBase64UrlEncode(p, n);
+  size_t len;
+  if (!z) return NULL;
+  len = strlen(z);
+  while (len > 0 && z[len - 1] == '=') z[--len] = '\0';
+  return z;
+}
+
+static char *tokenForKid(const DoltliteCreds *c, const char *kid) {
+  char *header = NULL, *claims = NULL, *h64 = NULL, *c64 = NULL;
+  char *input = NULL, *s64 = NULL, *token = NULL;
+  unsigned char sig[DOLTLITE_SIG_LEN];
+  size_t n;
+
+  n = strlen(kid) + 96;
+  header = (char *)malloc(n);
+  if (!header) goto done;
+  snprintf(header, n,
+           "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"2023.01\"}",
+           kid);
+  n = strlen(kid) * 2 + strlen(AUD) + 160;
+  claims = (char *)malloc(n);
+  if (!claims) goto done;
+  snprintf(claims, n,
+           "{\"iss\":\"dolt-client.dolthub.com\","
+           "\"sub\":\"doltClientCredentials/%s\",\"aud\":\"%s\","
+           "\"iat\":%ld,\"exp\":%ld}",
+           kid, AUD, IAT, IAT + 30);
+  h64 = encodeRaw((const unsigned char *)header, strlen(header));
+  c64 = encodeRaw((const unsigned char *)claims, strlen(claims));
+  if (!h64 || !c64) goto done;
+  n = strlen(h64) + strlen(c64) + 2;
+  input = (char *)malloc(n);
+  if (!input) goto done;
+  snprintf(input, n, "%s.%s", h64, c64);
+  doltliteCredsSign(c, (const unsigned char *)input, strlen(input), sig);
+  s64 = encodeRaw(sig, sizeof(sig));
+  if (!s64) goto done;
+  n = strlen(input) + strlen(s64) + 2;
+  token = (char *)malloc(n);
+  if (token) snprintf(token, n, "%s.%s", input, s64);
+
+done:
+  free(header);
+  free(claims);
+  free(h64);
+  free(c64);
+  free(input);
+  free(s64);
+  return token;
+}
+
 int main(int argc, char **argv) {
   const char *authDir = argc > 1 ? argv[1] : ".";
   const char *emptyDir = argc > 2 ? argv[2] : ".";
+  const char *outsideDir = argc > 3 ? argv[3] : ".";
   unsigned char seed[32];
   DoltliteCreds *c = NULL;
   char *jwt = NULL, *kid = NULL, *kidOut = NULL;
@@ -79,6 +133,22 @@ int main(int argc, char **argv) {
   }
   check("tampered signature rejected",
         doltliteCredsVerifyBearer(tampered, AUD, authDir, MID, NULL) != 0);
+
+  {
+    char *traversalKid;
+    char *traversalJwt;
+    size_t n = strlen(kid) + strlen("../outside/") + 1;
+    check("save key outside authorized directory",
+          doltliteCredsSave(c, outsideDir) == 0);
+    traversalKid = (char *)malloc(n);
+    snprintf(traversalKid, n, "../outside/%s", kid);
+    traversalJwt = tokenForKid(c, traversalKid);
+    check("signed token cannot traverse auth-key directory",
+          traversalJwt &&
+              doltliteCredsVerifyBearer(traversalJwt, AUD, authDir, MID, NULL) != 0);
+    free(traversalKid);
+    free(traversalJwt);
+  }
 
   free(jwt);
   free(kid);
