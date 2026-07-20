@@ -11,6 +11,7 @@
 #include <time.h>
 
 #define LOG_IDX_HASH_EQ 0x01
+#define LOG_IDX_REVISION 0x02
 
 typedef struct DoltliteLogVtab DoltliteLogVtab;
 struct DoltliteLogVtab {
@@ -22,6 +23,8 @@ typedef struct DoltliteLogCursor DoltliteLogCursor;
 struct DoltliteLogCursor {
   sqlite3_vtab_cursor base;
   DoltliteCommitQueue queue;
+  ProllyHashSet excluded;
+  int excludedInit;
   char zHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
   int hasRow;
@@ -35,7 +38,8 @@ static const char *doltliteLogSchema =
   "  committer TEXT,"
   "  email TEXT,"
   "  date TEXT,"
-  "  message TEXT"
+  "  message TEXT,"
+  "  revision TEXT HIDDEN"
   ")";
 
 static int doltliteLogConnect(
@@ -64,8 +68,13 @@ static void logCursorReset(DoltliteLogCursor *pCur){
   doltliteCommitClear(&pCur->curCommit);
   memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
   doltliteCommitQueueClear(&pCur->queue);
+  if( pCur->excludedInit ){
+    prollyHashSetFree(&pCur->excluded);
+    pCur->excludedInit = 0;
+  }
   pCur->hasRow = 0;
   pCur->iRowid = 0;
+  pCur->singleCommit = 0;
 }
 
 static int doltliteLogClose(sqlite3_vtab_cursor *pCursor){
@@ -87,6 +96,10 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
     rc = doltliteCommitQueueNext(&pCur->queue, &cur, &hasHash);
     if( rc!=SQLITE_OK ) return rc;
     if( !hasHash ) break;
+    if( pCur->excludedInit
+     && prollyHashSetContains(&pCur->excluded, &cur) ){
+      continue;
+    }
 
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
     if( rc!=SQLITE_OK ){
@@ -110,6 +123,35 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
   return SQLITE_OK;
 }
 
+static int logAddReachable(
+  sqlite3 *db,
+  ProllyHashSet *pSet,
+  const ProllyHash *pHead
+){
+  DoltliteCommitQueue queue;
+  int rc;
+
+  memset(&queue, 0, sizeof(queue));
+  rc = doltliteCommitQueueInit(&queue, pHead);
+  while( rc==SQLITE_OK ){
+    ProllyHash hash;
+    DoltliteCommit commit;
+    int hasHash = 0;
+    rc = doltliteCommitQueueNext(&queue, &hash, &hasHash);
+    if( rc!=SQLITE_OK || !hasHash ) break;
+    rc = prollyHashSetAdd(pSet, &hash);
+    if( rc!=SQLITE_OK ) break;
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &hash, &commit);
+    if( rc==SQLITE_OK ){
+      rc = doltliteCommitQueueEnqueueParents(&queue, &commit);
+    }
+    doltliteCommitClear(&commit);
+  }
+  doltliteCommitQueueClear(&queue);
+  return rc;
+}
+
 static int doltliteLogNext(sqlite3_vtab_cursor *pCursor){
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
   DoltliteLogVtab *pVtab = (DoltliteLogVtab*)pCursor->pVtab;
@@ -125,24 +167,16 @@ static int doltliteLogFilter(
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
   DoltliteLogVtab *pVtab = (DoltliteLogVtab*)pCursor->pVtab;
   ProllyHash head;
+  ProllyHash secondHead;
   ProllyHash startHash;
   ChunkStore *cs;
   int rc;
   int useStart = 0;
+  int useSecondHead = 0;
   (void)idxStr;
 
   logCursorReset(pCur);
   memset(&startHash, 0, sizeof(startHash));
-
-  if( (idxNum & LOG_IDX_HASH_EQ) && argc>0 ){
-    const char *z = (const char*)sqlite3_value_text(argv[0]);
-    if( z && doltliteHexToHash(z, &startHash)==SQLITE_OK
-        && !prollyHashIsEmpty(&startHash) ){
-      useStart = 1;
-    }else{
-      return SQLITE_OK;
-    }
-  }
 
   cs = doltliteGetChunkStore(pVtab->db);
   if( !cs ){
@@ -154,17 +188,68 @@ static int doltliteLogFilter(
     return SQLITE_OK;
   }
 
-  if( useStart ){
+  if( (idxNum & LOG_IDX_HASH_EQ) && argc>0 ){
+    const char *z = (const char*)sqlite3_value_text(argv[0]);
+    if( z && doltliteHexToHash(z, &startHash)==SQLITE_OK
+        && !prollyHashIsEmpty(&startHash) ){
+      useStart = 1;
+    }else{
+      return SQLITE_OK;
+    }
+  }else if( (idxNum & LOG_IDX_REVISION) && argc>0 ){
+    const char *zSpec = (const char*)sqlite3_value_text(argv[0]);
+    char *zLeft = 0;
+    char *zRight = 0;
+    int rangeType = DOLTLITE_RANGE_NONE;
+
+    rc = doltliteSplitRevisionRange(zSpec, &zLeft, &zRight, &rangeType);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = doltliteResolveRef(pVtab->db, zSpec, &head);
+    }else if( rc==SQLITE_OK ){
+      ProllyHash leftHash;
+      rc = doltliteResolveRef(pVtab->db, zLeft, &leftHash);
+      if( rc==SQLITE_OK ) rc = doltliteResolveRef(pVtab->db, zRight, &head);
+      if( rc==SQLITE_OK ){
+        rc = prollyHashSetInit(&pCur->excluded, 64);
+        if( rc==SQLITE_OK ) pCur->excludedInit = 1;
+      }
+      if( rc==SQLITE_OK && rangeType==DOLTLITE_RANGE_THREE_DOT ){
+        ProllyHash ancestor;
+        secondHead = leftHash;
+        useSecondHead = 1;
+        rc = doltliteFindAncestor(pVtab->db, &leftHash, &head, &ancestor);
+        if( rc==SQLITE_OK ){
+          rc = logAddReachable(pVtab->db, &pCur->excluded, &ancestor);
+        }
+      }else if( rc==SQLITE_OK ){
+        rc = logAddReachable(pVtab->db, &pCur->excluded, &leftHash);
+      }
+    }
+    sqlite3_free(zLeft);
+    sqlite3_free(zRight);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pCursor->pVtab->zErrMsg);
+      pCursor->pVtab->zErrMsg = sqlite3_mprintf(
+          "invalid dolt_log revision: %s", zSpec ? zSpec : "");
+      return pCursor->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+    useStart = 2;
+  }
+
+  if( useStart==1 ){
     head = startHash;
     pCur->singleCommit = 1;
-  }else{
+  }else if( useStart==0 ){
     doltliteGetSessionHead(pVtab->db, &head);
     if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
-    pCur->singleCommit = 0;
   }
 
   rc = doltliteCommitQueueInit(&pCur->queue, &head);
   if( rc!=SQLITE_OK ) return rc;
+  if( useSecondHead ){
+    rc = doltliteCommitQueueEnqueue(&pCur->queue, &secondHead);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   return logAdvance(pCur, pVtab->db);
 }
@@ -215,7 +300,7 @@ static int doltliteLogRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid)
 }
 
 static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  int i, iHashEq = -1;
+  int i, iHashEq = -1, iRevisionEq = -1;
   int idxNum = 0;
   (void)pVtab;
 
@@ -225,10 +310,18 @@ static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( pC->op != SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pC->iColumn == 0 && iHashEq < 0 ){
       iHashEq = i;
+    }else if( pC->iColumn == 5 && iRevisionEq < 0 ){
+      iRevisionEq = i;
     }
   }
 
-  if( iHashEq >= 0 ){
+  if( iRevisionEq >= 0 ){
+    pInfo->aConstraintUsage[iRevisionEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iRevisionEq].omit = 1;
+    idxNum |= LOG_IDX_REVISION;
+    pInfo->estimatedCost = 100.0;
+    pInfo->estimatedRows = 10;
+  }else if( iHashEq >= 0 ){
     pInfo->aConstraintUsage[iHashEq].argvIndex = 1;
     pInfo->aConstraintUsage[iHashEq].omit = 1;
     idxNum |= LOG_IDX_HASH_EQ;
