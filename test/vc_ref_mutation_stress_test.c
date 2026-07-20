@@ -9,6 +9,7 @@
 #define N_WORKERS 3
 #define N_ROUNDS 4
 #define N_ATTEMPTS 600
+#define DEFAULT_RENAME_ROUNDS 50
 
 static int nPass = 0;
 static int nFail = 0;
@@ -313,6 +314,126 @@ static void verifyFinalState(const char *path){
   sqlite3_close(db);
 }
 
+static int pipeSend(int fd, char value){
+  return write(fd, &value, 1)==1 ? 0 : 1;
+}
+
+static int pipeReceive(int fd, char *pValue){
+  return read(fd, pValue, 1)==1 ? 0 : 1;
+}
+
+static int setupDefaultRenameDb(const char *path){
+  sqlite3 *db = 0;
+  int rc;
+  cleanupDb(path);
+  rc = sqlite3_open(path, &db);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+      "SELECT dolt_commit('-A','-m','init');"
+      "SELECT dolt_branch('feat')");
+  }
+  sqlite3_close(db);
+  return rc;
+}
+
+static int runDefaultSetterChild(const char *path, int readFd, int writeFd){
+  sqlite3 *db = 0;
+  char value;
+  char out[128];
+  int i;
+  int rc = sqlite3_open(path, &db);
+  if( rc!=SQLITE_OK ) return 1;
+  sqlite3_busy_timeout(db, 5000);
+  for(i=0; i<DEFAULT_RENAME_ROUNDS; i++){
+    if( pipeReceive(readFd, &value) ){
+      sqlite3_close(db);
+      return 1;
+    }
+    rc = queryTextWithRetry(db, "SELECT dolt_default_branch('feat')",
+                            out, sizeof(out));
+    value = rc==SQLITE_OK && strcmp(out, "0")==0 ? '1' : '0';
+    if( pipeSend(writeFd, value) ){
+      sqlite3_close(db);
+      return 1;
+    }
+    if( value!='1' ){
+      sqlite3_close(db);
+      return 1;
+    }
+  }
+  sqlite3_close(db);
+  return 0;
+}
+
+static void runDefaultRenameStress(void){
+  const char *path = "/tmp/test_vc_default_rename_stress.db";
+  sqlite3 *db = 0;
+  int toChild[2];
+  int fromChild[2];
+  pid_t pid;
+  int status = 0;
+  int i;
+  const char *zSrc = "main";
+  const char *zDest = "trunk";
+  char out[128];
+
+  check("default_rename_setup", setupDefaultRenameDb(path)==SQLITE_OK);
+  check("default_rename_open", sqlite3_open(path, &db)==SQLITE_OK);
+  sqlite3_busy_timeout(db, 5000);
+  check("default_rename_initial_default",
+        queryTextWithRetry(db, "SELECT dolt_default_branch()",
+                           out, sizeof(out))==SQLITE_OK
+        && strcmp(out, "main")==0);
+  check("default_rename_pipe_to_child", pipe(toChild)==0);
+  check("default_rename_pipe_from_child", pipe(fromChild)==0);
+  pid = fork();
+  check("default_rename_fork", pid>=0);
+  if( pid==0 ){
+    close(toChild[1]);
+    close(fromChild[0]);
+    _exit(runDefaultSetterChild(path, toChild[0], fromChild[1]));
+  }
+  close(toChild[0]);
+  close(fromChild[1]);
+
+  for(i=0; i<DEFAULT_RENAME_ROUNDS && pid>0; i++){
+    char value = 0;
+    char sql[256];
+    int rc;
+    check("default_rename_signal_setter", pipeSend(toChild[1], '1')==0);
+    check("default_rename_setter_completed",
+          pipeReceive(fromChild[0], &value)==0 && value=='1');
+    snprintf(sql, sizeof(sql),
+             "SELECT dolt_branch('-m','%s','%s')", zSrc, zDest);
+    rc = queryTextWithRetry(db, sql, out, sizeof(out));
+    check("default_rename_move_completed",
+          rc==SQLITE_OK && strcmp(out, "0")==0);
+    rc = queryTextWithRetry(db, "SELECT dolt_default_branch()",
+                            out, sizeof(out));
+    check("default_rename_preserves_peer_default",
+          rc==SQLITE_OK && strcmp(out, "feat")==0);
+    snprintf(sql, sizeof(sql),
+             "SELECT dolt_default_branch('%s')", zDest);
+    rc = queryTextWithRetry(db, sql, out, sizeof(out));
+    check("default_rename_prepares_next_round",
+          rc==SQLITE_OK && strcmp(out, "0")==0);
+    {
+      const char *zTmp = zSrc;
+      zSrc = zDest;
+      zDest = zTmp;
+    }
+  }
+
+  close(toChild[1]);
+  close(fromChild[0]);
+  if( pid>0 ) waitpid(pid, &status, 0);
+  check("default_rename_setter_exited_cleanly",
+        pid>0 && WIFEXITED(status) && WEXITSTATUS(status)==0);
+  sqlite3_close(db);
+  cleanupDb(path);
+}
+
 int main(void){
   const char *path = "/tmp/test_vc_ref_mutation_stress.db";
   pid_t pids[N_WORKERS];
@@ -339,6 +460,7 @@ int main(void){
 
   verifyFinalState(path);
   cleanupDb(path);
+  runDefaultRenameStress();
 
   printf("\nResults: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass+nFail);

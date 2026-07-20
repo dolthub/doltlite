@@ -5597,6 +5597,16 @@ static void doltliteVersionFunc(sqlite3_context *ctx, int argc, sqlite3_value **
   sqlite3_result_text(ctx, DOLTLITE_VERSION, -1, SQLITE_STATIC);
 }
 
+static int mutateDefaultBranch(sqlite3 *db, ChunkStore *cs, void *pArg){
+  const char *zName = (const char*)pArg;
+  ProllyHash unused;
+  int rc;
+  (void)db;
+  rc = chunkStoreFindBranch(cs, zName, &unused);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStoreSetDefaultBranch(cs, zName);
+}
+
 static void doltliteDefaultBranchFunc(
   sqlite3_context *ctx, int argc, sqlite3_value **argv
 ){
@@ -5613,7 +5623,6 @@ static void doltliteDefaultBranchFunc(
   }
   if( argc==1 ){
     const char *zNew;
-    ProllyHash unused;
     int rc;
     if( sqlite3_value_type(argv[0])!=SQLITE_TEXT ){
       sqlite3_result_error(ctx,
@@ -5625,19 +5634,13 @@ static void doltliteDefaultBranchFunc(
       sqlite3_result_error(ctx, "branch name required", -1);
       return;
     }
-    if( chunkStoreFindBranch(cs, zNew, &unused)!=SQLITE_OK ){
+    rc = doltliteMutateRefs(db, mutateDefaultBranch, (void*)zNew);
+    if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf("branch '%s' not found", zNew);
       sqlite3_result_error(ctx, zErr ? zErr : "branch not found", -1);
       sqlite3_free(zErr);
       return;
     }
-    rc = chunkStoreSetDefaultBranch(cs, zNew);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-    rc = chunkStoreSerializeRefs(cs);
-    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;

@@ -62,7 +62,9 @@ static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
 
   if( p->isDelete ){
+    const char *zDefault = chunkStoreGetDefaultBranch(cs);
     (void)db;
+    if( zDefault && strcmp(p->zName, zDefault)==0 ) return SQLITE_CONSTRAINT;
     return chunkStoreDeleteBranch(cs, p->zName);
   }
 
@@ -105,17 +107,28 @@ struct BranchMoveCtx {
 static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMoveCtx *p = (BranchMoveCtx*)pArg;
   ProllyHash srcCommit, srcWorkingSet;
+  const char *zDefault;
+  int srcIsDefault;
   int rc;
   (void)db;
 
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
+  zDefault = chunkStoreGetDefaultBranch(cs);
+  srcIsDefault = zDefault && strcmp(p->zSrc, zDefault)==0;
   rc = chunkStoreGetBranchWorkingSet(cs, p->zSrc, &srcWorkingSet);
   if( rc!=SQLITE_OK ) memset(&srcWorkingSet, 0, sizeof(srcWorkingSet));
   rc = chunkStoreAddBranch(cs, p->zDest, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
   if( !prollyHashIsEmpty(&srcWorkingSet) ){
     rc = chunkStoreSetBranchWorkingSet(cs, p->zDest, &srcWorkingSet);
+    if( rc!=SQLITE_OK ){
+      chunkStoreDeleteBranch(cs, p->zDest);
+      return rc;
+    }
+  }
+  if( srcIsDefault ){
+    rc = chunkStoreSetDefaultBranch(cs, p->zDest);
     if( rc!=SQLITE_OK ){
       chunkStoreDeleteBranch(cs, p->zDest);
       return rc;
@@ -354,15 +367,6 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         branchError(ctx, hadSavepoint, "cannot delete the current branch");
         return;
       }
-      {
-        const char *zDefault = chunkStoreGetDefaultBranch(cs);
-        if( zDefault && strcmp(aPositional[0], zDefault)==0 ){
-          branchError(ctx, hadSavepoint,
-            "cannot delete the default branch; "
-            "call dolt_default_branch(<other>) first");
-          return;
-        }
-      }
       if( !force ){
         rc = chunkStoreFindBranch(cs, aPositional[0], &branchHead);
         if( rc!=SQLITE_OK ){
@@ -380,6 +384,12 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       m.zName = aPositional[0];
       m.isDelete = 1;
       rc = doltliteMutateRefs(db, mutateBranchRef, &m);
+      if( rc==SQLITE_CONSTRAINT ){
+        branchError(ctx, hadSavepoint,
+          "cannot delete the default branch; "
+          "call dolt_default_branch(<other>) first");
+        return;
+      }
       if( rc!=SQLITE_OK ){
         branchNamedResultError(ctx, hadSavepoint, rc, "branch not found", 0);
         return;
@@ -432,26 +442,15 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
-      {
-        const char *zDefault = chunkStoreGetDefaultBranch(cs);
-        /* Resolve "was the default?" before the mutate: doltliteMutateRefs
-        ** reloads persisted refs, freeing the buffer zDefault points into. */
-        int srcWasDefault = zDefault && strcmp(m.zSrc, zDefault)==0;
-        renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
-        rc = doltliteMutateRefs(db, mutateBranchMove, &m);
-        if( rc!=SQLITE_OK ){
-          branchNamedResultError(ctx, hadSavepoint, rc,
-            "source branch not found", "destination already exists");
-          return;
-        }
-        if( renamingCurrent ){
-          doltliteSetSessionBranch(db, m.zDest);
-        }
-        if( srcWasDefault ){
-          chunkStoreSetDefaultBranch(cs, m.zDest);
-          (void)chunkStoreSerializeRefs(cs);
-          (void)chunkStoreCommit(cs);
-        }
+      renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
+      rc = doltliteMutateRefs(db, mutateBranchMove, &m);
+      if( rc!=SQLITE_OK ){
+        branchNamedResultError(ctx, hadSavepoint, rc,
+          "source branch not found", "destination already exists");
+        return;
+      }
+      if( renamingCurrent ){
+        doltliteSetSessionBranch(db, m.zDest);
       }
       break;
     }
