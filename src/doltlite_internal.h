@@ -17,6 +17,50 @@ typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
 typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 
+#define DOLTLITE_RANGE_NONE      0
+#define DOLTLITE_RANGE_TWO_DOT   2
+#define DOLTLITE_RANGE_THREE_DOT 3
+
+static SQLITE_INLINE int doltliteSplitRevisionRange(
+  const char *zSpec,
+  char **pzLeft,
+  char **pzRight,
+  int *pRangeType
+){
+  const char *zSep;
+  int nLeft;
+  int nSep;
+
+  *pzLeft = 0;
+  *pzRight = 0;
+  *pRangeType = DOLTLITE_RANGE_NONE;
+  if( !zSpec ) return SQLITE_MISMATCH;
+
+  zSep = strstr(zSpec, "...");
+  nSep = 3;
+  if( !zSep ){
+    zSep = strstr(zSpec, "..");
+    nSep = 2;
+  }
+  if( !zSep ) return SQLITE_NOTFOUND;
+  if( strstr(zSep + nSep, "..") ) return SQLITE_ERROR;
+
+  nLeft = (int)(zSep - zSpec);
+  *pzLeft = nLeft ? sqlite3_mprintf("%.*s", nLeft, zSpec)
+                  : sqlite3_mprintf("HEAD");
+  *pzRight = zSep[nSep] ? sqlite3_mprintf("%s", zSep + nSep)
+                        : sqlite3_mprintf("HEAD");
+  if( !*pzLeft || !*pzRight ){
+    sqlite3_free(*pzLeft);
+    sqlite3_free(*pzRight);
+    *pzLeft = 0;
+    *pzRight = 0;
+    return SQLITE_NOMEM;
+  }
+  *pRangeType = nSep;
+  return SQLITE_OK;
+}
+
 struct DoltlitePkRange {
   i64 pkLo;
   i64 pkHi;
@@ -773,6 +817,9 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p);
 int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p);
 
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
+int doltliteFindAncestor(sqlite3 *db, const ProllyHash *pCommit1,
+                         const ProllyHash *pCommit2,
+                         ProllyHash *pAncestor);
 
 typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,

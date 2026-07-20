@@ -366,13 +366,23 @@ SELECT diff_type, to_name, to_email, to_commit
 
 SELECT * FROM dolt_diff_users WHERE to_commit = 'WORKING';  -- staged+working
 
--- TVF form: slice between two refs without filtering. Equivalent to
+-- TVF form: compare the table snapshots at two refs. Equivalent to
 -- Dolt's dolt_diff(from_ref, to_ref, table) TVF — the table name
 -- rides in the module name (SQLite TVFs declare a static schema at
 -- xConnect, so the per-table column list can't move into the
 -- argument list) and the two refs come through as positional args.
 SELECT * FROM dolt_diff_users('HEAD~1', 'HEAD');
 SELECT * FROM dolt_diff_users('v1.0', 'WORKING');
+
+-- Two dots also compare the endpoint snapshots. Three dots compare the
+-- merge base to the right endpoint.
+SELECT * FROM dolt_diff_users('main..feature');
+SELECT * FROM dolt_diff_users('main...feature');
+
+-- Restrict the commit-attributed system table to a history range.
+SELECT d.*
+  FROM dolt_diff_users AS d
+  JOIN dolt_log('v1.0..HEAD') AS l ON l.commit_hash = d.to_commit;
 ```
 
 #### Log and History
@@ -380,6 +390,8 @@ SELECT * FROM dolt_diff_users('v1.0', 'WORKING');
 ```sql
 -- Commit history
 SELECT * FROM dolt_log;
+SELECT * FROM dolt_log('feature');
+SELECT * FROM dolt_log('main..feature');
 -- commit_hash | committer | email | date | message
 ```
 
