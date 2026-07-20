@@ -68,7 +68,7 @@ PY
     echo "FAIL: server shutdown blocked on stalled client"
     exit 1
   fi
-  wait "$SRV_PID"
+  wait "$SRV_PID" 2>/dev/null || true
   SRV_PID=""
   kill "$CLIENT_PID" 2>/dev/null || true
   wait "$CLIENT_PID" 2>/dev/null || true
