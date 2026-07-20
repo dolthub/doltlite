@@ -7,8 +7,10 @@
 #
 # Every file listed here is also in a regression bucket unless noted below,
 # so the gate re-verifies each expected crash on every CI run and flags the
-# entry the moment a fix makes the file complete. Files that CANNOT be
-# bucket-enforced (kept out of the buckets on purpose):
+# entry the moment a fix makes the file complete. Files that cannot be
+# bucket-enforced must have continuously gated replacement coverage in
+# known_testfixture_crash_coverage.txt. CI rejects missing or stale mappings.
+# Reasons some files cannot be bucket-enforced include:
 #   malloc, backup_ioerr -- complete at the tester error cap with a summary
 #     line, so the gate would report them as fixed crashes; their failure
 #     lists are cap-truncated and order-fragile, so they cannot be gated as

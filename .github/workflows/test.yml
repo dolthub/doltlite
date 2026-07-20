@@ -307,12 +307,13 @@ jobs:
     # is the permutations suite-runner that re-sources the fts3 family
     # inline (pure double coverage of files already in the fts bucket), and
     # its inlined OOM sections fail load-sensitively.
-    - name: Check bucket lists are disjoint
+    - name: Check regression coverage manifests
       run: |
         dups=$(cat test/regression-buckets/*.txt | sort | uniq -d)
         if [ -n "$dups" ]; then
           echo "::error::files in more than one regression bucket:"; echo "$dups"; exit 1
         fi
+        bash test/check_testfixture_crash_coverage.sh
 
     - name: SQLite regression tests - ${{ matrix.bucket }}
       run: |
