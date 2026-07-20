@@ -23,6 +23,7 @@ permissions:
 jobs:
   check-drift:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out doltlite
         uses: actions/checkout@v4
