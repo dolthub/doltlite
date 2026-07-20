@@ -1,0 +1,19 @@
+# Deterministic coverage for crash-listed testfixture files that cannot run in
+# a regression bucket. Format:
+#
+#   <excluded-test> <testfixture|c-test|workflow-script> <replacement>
+#
+# Multiple replacements may cover distinct behavior from one excluded file.
+
+backup_ioerr testfixture doltlite_recover_backup_fault # backup/restore OOM and persistent I/O errors
+corrupt4 c-test corruption_test # malformed chunk data, metadata, indexes, and truncated writes
+crash8 workflow-script crash_injection_test.sh # first and later commit crash durability
+ioerr2 testfixture doltlite_recover_shared_ioerr # persistent I/O errors preserve writer and peer state
+malloc testfixture doltlite_recover_savepointfault # OOM during savepoint rollback and release
+malloc c-test oom_dolt_fault_test # fork-isolated OOM sweeps over Dolt operations
+malloc3 testfixture doltlite_recover_postcommit_oom # OOM result agrees with durable statement state
+malloc3 c-test oom_dolt_fault_test # prepare, execute, and version-control allocation failures
+pagerfault testfixture doltlite_recover_cacheflush_oom # OOM during dirty-cache flush and merged scans
+pagerfault testfixture doltlite_recover_savepointfault # OOM while restoring transaction state
+pagerfault2 testfixture doltlite_recover_cacheflush_oom # large dirty-state OOM and rollback integrity
+pagerfault2 testfixture doltlite_recover_postcommit_oom # durable state remains consistent after OOM
