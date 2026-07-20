@@ -11,6 +11,7 @@ typedef struct DoltliteServeOpts {
   const char *keyFile;
   const char *authKeysDir;
   const char *audience;
+  int timeoutMs;
 } DoltliteServeOpts;
 
 int doltliteServe(const char *zDir, int port, const char *zBindAddr);

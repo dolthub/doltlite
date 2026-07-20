@@ -616,6 +616,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # Also compile original btree/pager/wal with renamed symbols for ATTACH
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
+  OPT_FEATURE_FLAGS += -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD
   # Generate a real doltlite amalgamation (prolly engine + VC layer woven in).
   AMALGAMATION_GEN_FLAGS += --doltlite
   # Source headers and the portable BLAKE3 sources that aren't in $(SRC) but the

@@ -37,6 +37,34 @@ struct DoltliteTlsServer {
   mbedtls_entropy_context entropy;
 };
 
+static void configureSocket(int fd) {
+#if !defined(_WIN32) && defined(SO_NOSIGPIPE)
+  int one = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#else
+  (void)fd;
+#endif
+}
+
+static int connSend(void *pCtx, const unsigned char *pBuf, size_t nBuf) {
+  int fd = ((mbedtls_net_context *)pCtx)->fd;
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#endif
+#ifdef _WIN32
+  {
+    int n = send(fd, (const char *)pBuf, (int)nBuf, flags);
+    return n < 0 ? MBEDTLS_ERR_NET_SEND_FAILED : n;
+  }
+#else
+  {
+    int n = (int)send(fd, pBuf, nBuf, flags);
+    return n < 0 ? MBEDTLS_ERR_NET_SEND_FAILED : n;
+  }
+#endif
+}
+
 #ifdef _WIN32
 static int loadSystemRoots(mbedtls_x509_crt *ca) {
   HCERTSTORE store = CertOpenSystemStoreW(0, L"ROOT");
@@ -95,6 +123,7 @@ DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
   if (mbedtls_net_connect(&c->net, host, portstr, MBEDTLS_NET_PROTO_TCP) != 0) {
     goto fail_net;
   }
+  configureSocket(c->net.fd);
   if (!useTls) {
     return c;
   }
@@ -125,7 +154,7 @@ DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
   if (mbedtls_ssl_setup(&c->ssl, &c->conf) != 0) goto fail_tls;
 
   if (mbedtls_ssl_set_hostname(&c->ssl, host) != 0) goto fail_tls;
-  mbedtls_ssl_set_bio(&c->ssl, &c->net, mbedtls_net_send, mbedtls_net_recv, NULL);
+  mbedtls_ssl_set_bio(&c->ssl, &c->net, connSend, mbedtls_net_recv, NULL);
 
   do {
     ret = mbedtls_ssl_handshake(&c->ssl);
@@ -155,7 +184,7 @@ int doltliteConnWriteAll(DoltliteConn *c, const void *buf, int nbuf) {
     if (c->useTls) {
       n = mbedtls_ssl_write(&c->ssl, p + off, (size_t)(nbuf - off));
     } else {
-      n = (int)mbedtls_net_send(&c->net, p + off, (size_t)(nbuf - off));
+      n = connSend(&c->net, p + off, (size_t)(nbuf - off));
     }
     if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
     if (n <= 0) return 1;
@@ -255,10 +284,11 @@ DoltliteConn *doltliteConnServerAccept(DoltliteTlsServer *s, int clientFd) {
   c->ownsConf = 0;
   mbedtls_net_init(&c->net);
   c->net.fd = clientFd;
+  configureSocket(clientFd);
   mbedtls_ssl_init(&c->ssl);
 
   if (mbedtls_ssl_setup(&c->ssl, &s->conf) != 0) goto fail;
-  mbedtls_ssl_set_bio(&c->ssl, &c->net, mbedtls_net_send, mbedtls_net_recv, NULL);
+  mbedtls_ssl_set_bio(&c->ssl, &c->net, connSend, mbedtls_net_recv, NULL);
   do {
     ret = mbedtls_ssl_handshake(&c->ssl);
   } while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
@@ -282,5 +312,6 @@ DoltliteConn *doltliteConnFromFd(int clientFd) {
   c->ownsConf = 0;
   mbedtls_net_init(&c->net);
   c->net.fd = clientFd;
+  configureSocket(clientFd);
   return c;
 }
