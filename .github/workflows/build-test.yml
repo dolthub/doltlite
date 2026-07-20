@@ -200,7 +200,10 @@ jobs:
 
     - name: Build development test configurations
       if: matrix.platform == 'ubuntu'
-      run: cd build && ../test/testrunner.tcl --buildonly --jobs 1 mdevtest
+      run: |
+        cd build
+        make testfixture
+        ./testfixture ../test/testrunner.tcl --buildonly --jobs 1 mdevtest
 
     - name: Lint
       if: matrix.platform != 'windows'
