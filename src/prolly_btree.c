@@ -6842,11 +6842,11 @@ int sqlite3BtreeSchemaLocked(Btree *p){
   return p->pOps->xSchemaLocked(p);
 }
 
-#ifndef SQLITE_OMIT_SHARED_CACHE
 static int prollyBtreeLockTable(Btree *p, int iTab, u8 isWriteLock){
   (void)p; (void)iTab; (void)isWriteLock;
   return SQLITE_OK;
 }
+#ifndef SQLITE_OMIT_SHARED_CACHE
 int sqlite3BtreeLockTable(Btree *p, int iTab, u8 isWriteLock){
   if( !p ) return SQLITE_OK;
   return p->pOps->xLockTable(p, iTab, isWriteLock);
@@ -9736,8 +9736,8 @@ static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   return rc;
 }
 
-#ifndef SQLITE_OMIT_SHARED_CACHE
 static void prollyBtreeEnter(Btree *p){ (void)p; }
+#ifndef SQLITE_OMIT_SHARED_CACHE
 void sqlite3BtreeEnter(Btree *p){
   if( p ) p->pOps->xEnter(p);
 }
@@ -9752,8 +9752,8 @@ void sqlite3BtreeEnterCursor(BtCursor *pCur){ (void)pCur; }
 int sqlite3BtreeConnectionCount(Btree *p){ (void)p; return 1; }
 #endif
 
-#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
 static void prollyBtreeLeave(Btree *p){ (void)p; }
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
 void sqlite3BtreeLeave(Btree *p){
   if( p ) p->pOps->xLeave(p);
 }
@@ -9772,9 +9772,6 @@ int sqlite3SchemaMutexHeld(sqlite3 *db, int iDb, Schema *pSchema){
   return 1;
 }
 #endif
-#elif !defined(SQLITE_OMIT_SHARED_CACHE)
-
-static void prollyBtreeLeave(Btree *p){ (void)p; }
 #endif
 
 int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){

@@ -198,6 +198,10 @@ jobs:
         DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 bash ../test/assert_doltlite_artifacts.sh .
         cp -f "$(command -v sqlite3)" sqlite3
 
+    - name: Build development test configurations
+      if: matrix.platform == 'ubuntu'
+      run: cd build && ../test/testrunner.tcl --buildonly --jobs 1 mdevtest
+
     - name: Lint
       if: matrix.platform != 'windows'
       run: cd build && make lint

@@ -456,12 +456,30 @@ proc copy_file_verbatim {filename} {
 proc emit_doltlite_storage_block {} {
   global out srcdir available_hdr skipstructs skipfns
   section_comment "doltlite: BEGIN orig_* storage engine block"
-  # Names that the prefix header renames but which are *active no-op macros* in
-  # the release build (NDEBUG, no SQLITE_TEST) — defined by btree.h/pager.h.
-  # Renaming + later #undef of these would strip the no-op macro that core code
-  # (outside this block) still needs, so leave them untouched.
-  set skiprename {disable_simulated_io_errors enable_simulated_io_errors
-                  sqlite3BtreeSeekCount}
+  # Names that are conditional functions or no-op macros in btree.h/pager.h.
+  # Emit the btree renames under the same conditions below so closing this
+  # scope does not remove a no-op macro needed by the rest of the amalgamation.
+  set conditionalrenames {
+    {defined(SQLITE_DEBUG)} {
+      sqlite3BtreeSeekCount
+    }
+    {!defined(SQLITE_OMIT_SHARED_CACHE)} {
+      sqlite3BtreeConnectionCount sqlite3BtreeEnter sqlite3BtreeEnterAll
+      sqlite3BtreeEnterCursor sqlite3BtreeSharable
+    }
+    {!defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE} {
+      sqlite3BtreeHoldsAllMutexes sqlite3BtreeHoldsMutex sqlite3BtreeLeave
+      sqlite3BtreeLeaveAll sqlite3BtreeLeaveCursor sqlite3SchemaMutexHeld
+    }
+  }
+  # test1.c links sqlite3WalTrace by its public test instrumentation name.
+  set skiprename {
+    disable_simulated_io_errors enable_simulated_io_errors
+    sqlite3WalTrace
+  }
+  foreach {condition names} $conditionalrenames {
+    set skiprename [concat $skiprename $names]
+  }
   # Open the rename scope: the external renames from btree_orig_prefix.h, the
   # three btree type tags that prolly_btree.c redefines with a different layout,
   # and the two file-local statics that collide with prolly_btree.c.
@@ -476,6 +494,13 @@ proc emit_doltlite_storage_block {} {
     puts $out $line
   }
   close $pin
+  foreach {condition names} $conditionalrenames {
+    puts $out "#if $condition"
+    foreach nm $names {
+      puts $out "#define $nm orig_$nm"
+    }
+    puts $out "#endif"
+  }
   foreach nm {Btree BtShared BtCursor sqlite3SharedCacheList
               saveAllCursors saveCursorPosition} {
     puts $out "#define $nm orig_$nm"
@@ -534,6 +559,13 @@ proc emit_doltlite_storage_block {} {
   # Close the rename scope so later files bind the unprefixed names.
   foreach nm $prefixnames {
     puts $out "#undef $nm"
+  }
+  foreach {condition names} $conditionalrenames {
+    puts $out "#if $condition"
+    foreach nm $names {
+      puts $out "#undef $nm"
+    }
+    puts $out "#endif"
   }
   puts $out "#ifdef SQLITE_TEST"
   puts $out "#undef disable_simulated_io_errors"

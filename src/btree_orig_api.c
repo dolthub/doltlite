@@ -60,7 +60,14 @@ int origBtreeClearTable(void *p, int i, i64 *pn){ return orig_sqlite3BtreeClearT
 void origBtreeGetMeta(void *p, int i, u32 *pv){ orig_sqlite3BtreeGetMeta(B(p),i,pv); }
 int origBtreeUpdateMeta(void *p, int i, u32 v){ return orig_sqlite3BtreeUpdateMeta(B(p),i,v); }
 int origBtreeSchemaLocked(void *p){ return orig_sqlite3BtreeSchemaLocked(B(p)); }
-int origBtreeLockTable(void *p, int t, u8 w){ return orig_sqlite3BtreeLockTable(B(p),t,w); }
+int origBtreeLockTable(void *p, int t, u8 w){
+#ifndef SQLITE_OMIT_SHARED_CACHE
+  return orig_sqlite3BtreeLockTable(B(p),t,w);
+#else
+  (void)p; (void)t; (void)w;
+  return SQLITE_OK;
+#endif
+}
 
 Schema *origBtreeSchema(void *p, int nBytes, void(*xFree)(void*)){
   return orig_sqlite3BtreeSchema(B(p), nBytes, xFree);
@@ -140,8 +147,20 @@ int origBtreeCursorIsValidNN(void *pCur){
 int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey){
   return orig_sqlite3BtreeTransferRow(C(pDest), C(pSrc), iKey);
 }
-void origBtreeEnterAll(sqlite3 *db){ orig_sqlite3BtreeEnterAll(db); }
-void origBtreeLeaveAll(sqlite3 *db){ orig_sqlite3BtreeLeaveAll(db); }
+void origBtreeEnterAll(sqlite3 *db){
+#ifndef SQLITE_OMIT_SHARED_CACHE
+  orig_sqlite3BtreeEnterAll(db);
+#else
+  (void)db;
+#endif
+}
+void origBtreeLeaveAll(sqlite3 *db){
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
+  orig_sqlite3BtreeLeaveAll(db);
+#else
+  (void)db;
+#endif
+}
 int origBtreeIsEmpty(void *pCur, int *pRes){
   return orig_sqlite3BtreeIsEmpty(C(pCur), pRes);
 }
@@ -157,8 +176,20 @@ void origBtreeCursorHint(void *pCur, unsigned int mask, ...){
 }
 
 int origBtreeCursorSize(void){ return orig_sqlite3BtreeCursorSize(); }
-void origBtreeEnter(void *p){ orig_sqlite3BtreeEnter(B(p)); }
-void origBtreeLeave(void *p){ orig_sqlite3BtreeLeave(B(p)); }
+void origBtreeEnter(void *p){
+#ifndef SQLITE_OMIT_SHARED_CACHE
+  orig_sqlite3BtreeEnter(B(p));
+#else
+  (void)p;
+#endif
+}
+void origBtreeLeave(void *p){
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
+  orig_sqlite3BtreeLeave(B(p));
+#else
+  (void)p;
+#endif
+}
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
 
 /* Probe failures normally mean "not a legacy sqlite file" (the chunk-store
