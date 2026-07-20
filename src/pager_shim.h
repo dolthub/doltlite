@@ -59,4 +59,8 @@ void sqlite3PagerCacheStat(Pager*, int, int, u64*);
 int sqlite3PagerIsMemdb(Pager*);
 int sqlite3PagerLockingMode(Pager*, int);
 
+#if defined(SQLITE_USE_SEH) && !defined(SQLITE_OMIT_WAL)
+int sqlite3PagerWalSystemErrno(Pager*);
+#endif
+
 #endif
