@@ -25,6 +25,7 @@ static void usage(const char *prog){
     "  --auth-keys DIR Require a bearer credential; authorized public keys are\n"
     "                  <kid>.jwk files in DIR\n"
     "  --audience AUD  Expected JWT audience (default: none)\n"
+    "  --timeout-ms MS Connection I/O timeout (default: 30000)\n"
     "  -h              Show this help\n"
     "\n"
     "Example:\n"
@@ -59,6 +60,8 @@ int main(int argc, char **argv){
       o.authKeysDir = argv[++i];
     }else if( strcmp(argv[i], "--audience")==0 && i+1<argc ){
       o.audience = argv[++i];
+    }else if( strcmp(argv[i], "--timeout-ms")==0 && i+1<argc ){
+      o.timeoutMs = atoi(argv[++i]);
     }else if( strcmp(argv[i], "-h")==0 || strcmp(argv[i], "--help")==0 ){
       usage(argv[0]);
       return 0;
@@ -78,6 +81,10 @@ int main(int argc, char **argv){
   }
   if( (o.certFile!=0) != (o.keyFile!=0) ){
     fprintf(stderr, "Error: --cert and --key must be given together\n");
+    return 1;
+  }
+  if( o.timeoutMs<0 ){
+    fprintf(stderr, "Error: --timeout-ms must not be negative\n");
     return 1;
   }
 

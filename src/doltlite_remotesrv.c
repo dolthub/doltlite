@@ -23,12 +23,36 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #include <pthread.h>
 #include <errno.h>
 
+/* Bound resource use while keeping any one slow client off the accept loop. */
+#define SERVER_WORKERS 4
+#define SERVER_QUEUE_SIZE 16
+#define SERVER_DEFAULT_TIMEOUT_MS 30000
+
+typedef struct DoltliteWorkerArg DoltliteWorkerArg;
+
+struct DoltliteWorkerArg {
+  DoltliteServer *pSrv;
+  int index;
+};
+
 struct DoltliteServer {
   int listenFd;
   int port;
-  volatile int running;
+  int running;
   char *zDir;
   pthread_t thread;
+  pthread_t workers[SERVER_WORKERS];
+  DoltliteWorkerArg workerArgs[SERVER_WORKERS];
+  int nWorkers;
+  pthread_mutex_t mutex;
+  pthread_cond_t workReady;
+  int mutexInit;
+  int condInit;
+  int queue[SERVER_QUEUE_SIZE];
+  int queueHead;
+  int nQueue;
+  int activeFd[SERVER_WORKERS];
+  int timeoutMs;
 
   DoltliteTlsServer *tls;
   char *authKeysDir;
@@ -709,6 +733,101 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
 
 static void serverCleanup(DoltliteServer *pSrv);
 
+static void *serverWorkerEntry(void *pArg){
+  DoltliteWorkerArg *pWorker = (DoltliteWorkerArg*)pArg;
+  DoltliteServer *pSrv = pWorker->pSrv;
+
+  for(;;){
+    DoltliteConn *conn;
+    int clientFd;
+
+    pthread_mutex_lock(&pSrv->mutex);
+    while( pSrv->nQueue==0 && pSrv->running ){
+      pthread_cond_wait(&pSrv->workReady, &pSrv->mutex);
+    }
+    if( pSrv->nQueue==0 ){
+      pthread_mutex_unlock(&pSrv->mutex);
+      break;
+    }
+    clientFd = pSrv->queue[pSrv->queueHead];
+    pSrv->queueHead = (pSrv->queueHead + 1) % SERVER_QUEUE_SIZE;
+    pSrv->nQueue--;
+    pSrv->activeFd[pWorker->index] = clientFd;
+    pthread_mutex_unlock(&pSrv->mutex);
+
+    conn = pSrv->tls ? doltliteConnServerAccept(pSrv->tls, clientFd)
+                     : doltliteConnFromFd(clientFd);
+    if( conn ){
+      handleRequest(pSrv, conn);
+      doltliteConnClose(conn);
+    }
+
+    pthread_mutex_lock(&pSrv->mutex);
+    pSrv->activeFd[pWorker->index] = -1;
+    pthread_mutex_unlock(&pSrv->mutex);
+  }
+  return 0;
+}
+
+static int serverStartWorkers(DoltliteServer *pSrv){
+  int i;
+  for(i=0; i<SERVER_WORKERS; i++){
+    pSrv->workerArgs[i].pSrv = pSrv;
+    pSrv->workerArgs[i].index = i;
+    if( pthread_create(&pSrv->workers[i], 0, serverWorkerEntry,
+                       &pSrv->workerArgs[i])!=0 ){
+      pthread_mutex_lock(&pSrv->mutex);
+      pSrv->running = 0;
+      pthread_cond_broadcast(&pSrv->workReady);
+      pthread_mutex_unlock(&pSrv->mutex);
+      while( pSrv->nWorkers>0 ){
+        pthread_join(pSrv->workers[--pSrv->nWorkers], 0);
+      }
+      return SQLITE_ERROR;
+    }
+    pSrv->nWorkers++;
+  }
+  return SQLITE_OK;
+}
+
+static void serverRequestStop(DoltliteServer *pSrv){
+  int i;
+  pthread_mutex_lock(&pSrv->mutex);
+  pSrv->running = 0;
+  while( pSrv->nQueue>0 ){
+    int fd = pSrv->queue[pSrv->queueHead];
+    pSrv->queueHead = (pSrv->queueHead + 1) % SERVER_QUEUE_SIZE;
+    pSrv->nQueue--;
+    doltliteShutdownSocket(fd);
+    doltliteCloseSocket(fd);
+  }
+  /* Workers close active sockets. shutdown() wakes their blocking I/O without
+  ** risking descriptor reuse between this thread and the owning worker. */
+  for(i=0; i<pSrv->nWorkers; i++){
+    if( pSrv->activeFd[i]>=0 ){
+      doltliteShutdownSocket(pSrv->activeFd[i]);
+    }
+  }
+  pthread_cond_broadcast(&pSrv->workReady);
+  pthread_mutex_unlock(&pSrv->mutex);
+}
+
+static void serverJoinWorkers(DoltliteServer *pSrv){
+  int i;
+  for(i=0; i<pSrv->nWorkers; i++){
+    pthread_join(pSrv->workers[i], 0);
+  }
+  pSrv->nWorkers = 0;
+}
+
+static int serverIsRunning(DoltliteServer *pSrv){
+  int running;
+  pthread_mutex_lock(&pSrv->mutex);
+  running = pSrv->running;
+  pthread_mutex_unlock(&pSrv->mutex);
+  return running;
+}
+
 static char *dupStr(const char *z){
   int n;
   char *s;
@@ -724,10 +843,21 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
   socklen_t addrLen;
   struct in_addr bindIn;
   int opt = 1;
+  int i;
   const char *zBindAddr = o->zBindAddr;
 
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
+  pSrv->timeoutMs = o->timeoutMs>0 ? o->timeoutMs
+                                   : SERVER_DEFAULT_TIMEOUT_MS;
+  for(i=0; i<SERVER_WORKERS; i++) pSrv->activeFd[i] = -1;
+  if( pthread_mutex_init(&pSrv->mutex, 0)!=0 ) return SQLITE_ERROR;
+  pSrv->mutexInit = 1;
+  if( pthread_cond_init(&pSrv->workReady, 0)!=0 ){
+    serverCleanup(pSrv);
+    return SQLITE_ERROR;
+  }
+  pSrv->condInit = 1;
 
   if( zBindAddr==0 || zBindAddr[0]=='\0' ){
     zBindAddr = "127.0.0.1";
@@ -788,30 +918,41 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
   }
 
   pSrv->running = 1;
+  if( serverStartWorkers(pSrv)!=SQLITE_OK ){
+    serverCleanup(pSrv);
+    return SQLITE_ERROR;
+  }
   return SQLITE_OK;
 }
 
 static void serverLoop(DoltliteServer *pSrv){
-  while( pSrv->running ){
+  while( serverIsRunning(pSrv) ){
     doltlite_pollfd pfd;
     int clientFd;
-    DoltliteConn *conn;
 
     pfd.fd = pSrv->listenFd;
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    if( doltlitePoll(&pfd, 1, 1000) <= 0 ) continue;
+    if( doltlitePoll(&pfd, 1, 100) <= 0 ) continue;
 
     clientFd = (int)accept(pSrv->listenFd, NULL, NULL);
     if( clientFd < 0 ) continue;
+    if( doltliteSocketSetTimeout(clientFd, pSrv->timeoutMs)!=0 ){
+      doltliteCloseSocket(clientFd);
+      continue;
+    }
 
-    conn = pSrv->tls ? doltliteConnServerAccept(pSrv->tls, clientFd)
-                     : doltliteConnFromFd(clientFd);
-    if( !conn ) continue;
-
-    handleRequest(pSrv, conn);
-    doltliteConnClose(conn);
+    pthread_mutex_lock(&pSrv->mutex);
+    if( !pSrv->running || pSrv->nQueue==SERVER_QUEUE_SIZE ){
+      pthread_mutex_unlock(&pSrv->mutex);
+      doltliteCloseSocket(clientFd);
+      continue;
+    }
+    pSrv->queue[(pSrv->queueHead + pSrv->nQueue) % SERVER_QUEUE_SIZE] = clientFd;
+    pSrv->nQueue++;
+    pthread_cond_signal(&pSrv->workReady);
+    pthread_mutex_unlock(&pSrv->mutex);
   }
 }
 
@@ -830,6 +971,14 @@ static void serverCleanup(DoltliteServer *pSrv){
   pSrv->authKeysDir = 0;
   sqlite3_free(pSrv->audience);
   pSrv->audience = 0;
+  if( pSrv->condInit ){
+    pthread_cond_destroy(&pSrv->workReady);
+    pSrv->condInit = 0;
+  }
+  if( pSrv->mutexInit ){
+    pthread_mutex_destroy(&pSrv->mutex);
+    pSrv->mutexInit = 0;
+  }
 }
 
 int doltliteServeOpts(const DoltliteServeOpts *o){
@@ -840,6 +989,8 @@ int doltliteServeOpts(const DoltliteServeOpts *o){
   if( rc!=SQLITE_OK ) return rc;
 
   serverLoop(&server);
+  serverRequestStop(&server);
+  serverJoinWorkers(&server);
   serverCleanup(&server);
   return SQLITE_OK;
 }
@@ -856,7 +1007,6 @@ int doltliteServe(const char *zDir, int port, const char *zBindAddr){
 static void *serverThreadEntry(void *pArg){
   DoltliteServer *pSrv = (DoltliteServer*)pArg;
   serverLoop(pSrv);
-  serverCleanup(pSrv);
   return 0;
 }
 
@@ -874,6 +1024,8 @@ DoltliteServer *doltliteServeAsyncOpts(const DoltliteServeOpts *o){
   }
 
   if( pthread_create(&pSrv->thread, 0, serverThreadEntry, pSrv)!=0 ){
+    serverRequestStop(pSrv);
+    serverJoinWorkers(pSrv);
     serverCleanup(pSrv);
     sqlite3_free(pSrv);
     return 0;
@@ -894,13 +1046,10 @@ DoltliteServer *doltliteServeAsync(const char *zDir, int port,
 
 void doltliteServerStop(DoltliteServer *pServer){
   if( !pServer ) return;
-  pServer->running = 0;
-
-  if( pServer->listenFd >= 0 ){
-    doltliteCloseSocket(pServer->listenFd);
-    pServer->listenFd = -1;
-  }
+  serverRequestStop(pServer);
   pthread_join(pServer->thread, 0);
+  serverJoinWorkers(pServer);
+  serverCleanup(pServer);
   sqlite3_free(pServer);
 }
 

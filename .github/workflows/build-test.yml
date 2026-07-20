@@ -382,6 +382,7 @@ jobs:
         bash ../test/http_remote_content_length_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_concurrency_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_stall_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
@@ -419,6 +420,11 @@ jobs:
     - name: HTTP remote concurrency tests
       if: matrix.platform != 'windows'
       run: cd build && bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote stalled client tests
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/remotesrv_stall_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote partial failure tests
