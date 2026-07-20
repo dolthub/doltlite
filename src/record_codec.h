@@ -55,10 +55,6 @@ void doltliteResultUserCol(sqlite3_context *ctx,
                            i64 intKey,
                            int iDeclaredCol);
 
-int doltliteBindField(sqlite3_stmt *pStmt, int iParam,
-                      const u8 *pData, int nData,
-                      int serialType, int offset);
-
 int doltliteFieldValuesEqual(int aType, const u8 *pA, int nA, int aOff,
                              int bType, const u8 *pB, int nB, int bOff);
 

@@ -1460,6 +1460,80 @@ SELECT dolt_merge('feature');
 "SELECT GROUP_CONCAT(CONCAT(a, ':', b) ORDER BY a SEPARATOR ',') FROM t"
 
 echo ""
+echo "--- Dual ADD COLUMN with concurrent row changes ---"
+
+# Both branches add a disjoint column; the row-level changes on each side must
+# still merge (edits to shared columns, deletes, and each side's new-column
+# values), and a true same-cell edit must still conflict. A naive "take ours +
+# backfill added columns" would silently drop theirs' shared-column edits and
+# deletes.
+CADD_BASE="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES (1, 'one'), (5, 'five'), (9, 'nine');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+"
+
+oracle_error_poststate "dual_addcol_theirs_edit_and_delete" "
+$CADD_BASE
+UPDATE t SET a = 'five-theirs' WHERE id = 5;
+DELETE FROM t WHERE id = 9;
+ALTER TABLE t ADD COLUMN c TEXT;
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b TEXT;
+SELECT dolt_commit('-Am', 'main_addcol');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(id || ':' || coalesce(a,'~'), ',') FROM (SELECT id, a FROM t ORDER BY id)" \
+"SELECT GROUP_CONCAT(CONCAT(id, ':', coalesce(a,'~')) ORDER BY id SEPARATOR ',') FROM t"
+
+oracle_error_poststate "dual_addcol_each_sets_own_new_col_same_row" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+ALTER TABLE t ADD COLUMN feat_col INT;
+UPDATE t SET feat_col = 2 WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN main_col INT;
+UPDATE t SET main_col = 1 WHERE id = 1;
+SELECT dolt_commit('-Am', 'main_change');
+SELECT dolt_merge('feature');
+" "SELECT id || '|' || v || '|' || coalesce(main_col,'~') || '|' || coalesce(feat_col,'~') FROM t" \
+"SELECT CONCAT(id, '|', v, '|', coalesce(main_col,'~'), '|', coalesce(feat_col,'~')) FROM t"
+
+oracle_error_poststate "dual_addcol_theirs_adds_row_with_new_col" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES (1, 'one');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+ALTER TABLE t ADD COLUMN c TEXT;
+INSERT INTO t VALUES (2, 'two', 'c2');
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b TEXT;
+SELECT dolt_commit('-Am', 'main_addcol');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(id || ':' || coalesce(a,'~') || ':' || coalesce(c,'~'), ',') FROM (SELECT id, a, c FROM t ORDER BY id)" \
+"SELECT GROUP_CONCAT(CONCAT(id, ':', coalesce(a,'~'), ':', coalesce(c,'~')) ORDER BY id SEPARATOR ',') FROM t"
+
+oracle_error "dual_addcol_same_cell_conflict" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES (1, 'one');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+ALTER TABLE t ADD COLUMN c TEXT;
+UPDATE t SET a = 'theirs-a' WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b TEXT;
+UPDATE t SET a = 'ours-a' WHERE id = 1;
+SELECT dolt_commit('-Am', 'main_change');
+SELECT dolt_merge('feature');
+"
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"

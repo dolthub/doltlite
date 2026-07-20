@@ -550,4 +550,33 @@ run_test "schema_merge_many_rows_score_col" \
   "1" "$DB"
 rm -f "$DB"
 
+# Both branches ADD a disjoint column while theirs also edits a shared column
+# and deletes a row. The row-level changes must survive the schema merge --
+# taking ours wholesale and backfilling only the added columns silently drops
+# theirs' edit to id=5 and deletion of id=9.
+DB=/tmp/test_dual_addcol_rows_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES(1,'one'),(5,'five'),(9,'nine');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET a='five-theirs' WHERE id=5;
+DELETE FROM t WHERE id=9;
+ALTER TABLE t ADD COLUMN c TEXT;
+UPDATE t SET c='cval' WHERE id=1;
+SELECT dolt_commit('-Am','feat_change');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b TEXT;
+SELECT dolt_commit('-Am','main_addcol');
+EOF
+run_test_match "dual_addcol_rows_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "dual_addcol_rows_theirs_edit_kept" "SELECT a FROM t WHERE id=5;" "five-theirs" "$DB"
+run_test "dual_addcol_rows_theirs_delete_kept" "SELECT count(*) FROM t WHERE id=9;" "0" "$DB"
+run_test "dual_addcol_rows_count" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "dual_addcol_rows_both_cols" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name IN ('b','c');" "2" "$DB"
+run_test "dual_addcol_rows_theirs_newcol_val" "SELECT c FROM t WHERE id=1;" "cval" "$DB"
+run_test "dual_addcol_rows_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 dltest_finish

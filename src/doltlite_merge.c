@@ -10,6 +10,7 @@
 #include "prolly_three_way_merge.h"
 #include "prolly_mutmap.h"
 #include "prolly_mutate.h"
+#include "prolly_cursor.h"
 #include "prolly_cache.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
@@ -358,61 +359,41 @@ static u8 *tryCellMerge(
 
   {
     MergeWinner *winners;
+    /* A field beyond a record's stored width is a trailing NULL (SQLite omits
+    ** them), semantically identical to an explicit NULL field. Treating "absent"
+    ** and "explicit NULL" uniformly lets the per-cell merge span records of
+    ** different widths -- e.g. a dual ADD COLUMN merge where each side's row
+    ** carries a different number of columns. */
+    static const RecField kNullField = { 0, 0, 0 };
+    int nEmit = 0;
 
     winners = sqlite3_malloc(nfMax * (int)sizeof(*winners));
     if(!winners) goto fail;
 
     for(i=0; i<nfMax; i++){
-      int baseHas = (i < nfBase);
-      int oursHas = (i < nfOurs);
-      int theirsHas = (i < nfTheirs);
+      RecField *fB = (i<nfBase)   ? &aBase[i]   : (RecField*)&kNullField;
+      RecField *fO = (i<nfOurs)   ? &aOurs[i]   : (RecField*)&kNullField;
+      RecField *fT = (i<nfTheirs) ? &aTheirs[i] : (RecField*)&kNullField;
+      int oursChanged   = fieldEquals(pBase, fB, pOurs, fO)!=0;
+      int theirsChanged = fieldEquals(pBase, fB, pTheirs, fT)!=0;
 
-      if(!baseHas && oursHas && !theirsHas){
+      if(!theirsChanged){
 
-        winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
-      }else if(!baseHas && !oursHas && theirsHas){
+        winners[i].pRec = pOurs; winners[i].pField = fO;
+      }else if(!oursChanged){
 
-        winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
-      }else if(!baseHas && oursHas && theirsHas){
+        winners[i].pRec = pTheirs; winners[i].pField = fT;
+      }else if(fieldEquals(pOurs, fO, pTheirs, fT)==0){
 
-        if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
-          winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
-        }else{
-          sqlite3_free(winners); goto fail;
-        }
-      }else if(baseHas && oursHas && theirsHas){
-
-        int oursChanged = fieldEquals(pBase, &aBase[i], pOurs, &aOurs[i]);
-        int theirsChanged = fieldEquals(pBase, &aBase[i], pTheirs, &aTheirs[i]);
-        if(!oursChanged && !theirsChanged){
-
-          winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
-        }else if(oursChanged && !theirsChanged){
-
-          winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
-        }else if(!oursChanged && theirsChanged){
-
-          winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
-        }else{
-
-          if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
-            winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
-          }else{
-            sqlite3_free(winners); goto fail;
-          }
-        }
-      }else if(baseHas && oursHas && !theirsHas){
-
-        winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
-      }else if(baseHas && !oursHas && theirsHas){
-
-        winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
+        winners[i].pRec = pOurs; winners[i].pField = fO;
       }else{
         sqlite3_free(winners); goto fail;
       }
+      if( winners[i].pField->st != 0 ) nEmit = i+1;
     }
 
-    result = buildMergedRecord(winners, nfMax, pnMerged);
+    /* Drop trailing NULLs so the merged row re-encodes in canonical form. */
+    result = buildMergedRecord(winners, nEmit, pnMerged);
     sqlite3_free(winners);
   }
 
@@ -1113,6 +1094,142 @@ schema_merge_cleanup:
     { int j; for(j=0;j<nAdd;j++) sqlite3_free(azAdd[j]); }
     sqlite3_free(azAdd);
   }
+  return rc;
+}
+
+/* Rewrite every record in theirs' table root from theirs' column order into
+** the merged column order (ours' columns, then theirs' added columns), keyed
+** by column name. A merged column absent from a their-record is emitted as
+** NULL; trailing NULLs are dropped so an unchanged row re-encodes identically
+** to the ancestor's. This lets the positional cell-level three-way merge run
+** across a dual ADD COLUMN divergence: without it, theirs' added-column value
+** would be read at the wrong ordinal. Records are content-addressed and rebuilt
+** through the canonical doltliteBuildRecord, so the tree stays deterministic. */
+static int normalizeTheirsToMergedLayout(
+  sqlite3 *db,
+  const ProllyHash *pTheirsRoot,
+  u8 flags,
+  const char *zOursSql,
+  const char *zTheirsSql,
+  ProllyHash *pOutRoot
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *cache = doltliteGetCache(db);
+  ParsedColumn *aOurs = 0, *aTheirs = 0;
+  int nOurs = 0, nTheirs = 0;
+  int *aMap = 0;
+  int nMerged;
+  ProllyMutMap mm;
+  int mmInit = 0;
+  ProllyCursor cur;
+  int curInit = 0;
+  int isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
+  int rc, res, j;
+
+  memset(pOutRoot, 0, sizeof(*pOutRoot));
+  rc = parseColumns(zOursSql, &aOurs, &nOurs);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = parseColumns(zTheirsSql, &aTheirs, &nTheirs);
+  if( rc!=SQLITE_OK ){ freeColumns(aOurs, nOurs); return rc; }
+
+  nMerged = nOurs;
+  aMap = sqlite3_malloc((nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
+  if( !aMap ){ rc = SQLITE_NOMEM; goto done; }
+  for(j=0; j<nTheirs; j++){
+    int oi, found = -1;
+    for(oi=0; oi<nOurs; oi++){
+      if( aOurs[oi].zName && aTheirs[j].zName
+       && strcmp(aOurs[oi].zName, aTheirs[j].zName)==0 ){ found = oi; break; }
+    }
+    aMap[j] = (found>=0) ? found : nMerged++;
+  }
+  if( nMerged > DOLTLITE_MAX_RECORD_FIELDS ){ rc = SQLITE_ERROR; goto done; }
+
+  rc = prollyMutMapInit(&mm, (u8)isIntKey);
+  if( rc!=SQLITE_OK ) goto done;
+  mmInit = 1;
+
+  prollyCursorInit(&cur, cs, cache, pTheirsRoot, flags);
+  curInit = 1;
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK ) goto done;
+
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0; int nVal = 0;
+    const u8 *pKey = 0; int nKey = 0; i64 intKey = 0;
+    DoltliteRecordInfo info;
+    DoltliteSerialValue aMem[DOLTLITE_MAX_RECORD_FIELDS];
+    int nEmit = 0, k;
+    u8 *pNew = 0; int nNew = 0;
+
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( isIntKey ){
+      intKey = prollyCursorIntKey(&cur);
+    }else{
+      prollyCursorKey(&cur, &pKey, &nKey);
+    }
+
+    doltliteParseRecord(pVal, nVal, &info);
+    for(k=0; k<nMerged; k++){
+      memset(&aMem[k], 0, sizeof(aMem[k]));
+      aMem[k].eType = SQLITE_NULL;
+    }
+    for(j=0; j<info.nField && j<nTheirs; j++){
+      int tgt = aMap[j];
+      int st = info.aType[j];
+      const u8 *body = pVal + info.aOffset[j];
+      DoltliteSerialValue *m = &aMem[tgt];
+      if( st==0 ){
+        m->eType = SQLITE_NULL;
+      }else if( dlSerialIsInt(st) ){
+        m->eType = SQLITE_INTEGER;
+        if( st==8 ) m->i = 0;
+        else if( st==9 ) m->i = 1;
+        else m->i = dlReadIntBytes(body, dlSerialTypeLen((u64)st));
+      }else if( st==7 ){
+        u64 bits = (u64)dlReadIntBytes(body, 8);
+        double d;
+        memcpy(&d, &bits, sizeof(d));
+        m->eType = SQLITE_FLOAT;
+        m->r = d;
+      }else if( st>=12 ){
+        m->eType = (st & 1) ? SQLITE_TEXT : SQLITE_BLOB;
+        m->p = body;
+        m->n = dlSerialTypeLen((u64)st);
+      }
+      if( m->eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
+    }
+
+    if( nEmit>0 ){
+      pNew = doltliteBuildRecord(aMem, nEmit, &nNew);
+      if( !pNew ){ rc = SQLITE_NOMEM; goto done; }
+    }
+    rc = prollyMutMapInsert(&mm, pKey, nKey, intKey, pNew, nNew);
+    sqlite3_free(pNew);
+    if( rc!=SQLITE_OK ) goto done;
+
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) goto done;
+  }
+
+  {
+    ProllyMutator mut;
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = cs;
+    mut.pCache = cache;
+    memset(&mut.oldRoot, 0, sizeof(mut.oldRoot));
+    mut.pEdits = &mm;
+    mut.flags = flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) memcpy(pOutRoot, &mut.newRoot, sizeof(ProllyHash));
+  }
+
+done:
+  if( curInit ) prollyCursorClose(&cur);
+  if( mmInit ) prollyMutMapFree(&mm);
+  sqlite3_free(aMap);
+  freeColumns(aOurs, nOurs);
+  freeColumns(aTheirs, nTheirs);
   return rc;
 }
 
@@ -1906,6 +2023,9 @@ do_merge_entry:
             &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
         int bNamedSchemaObject = (!zName && zSchemaMergeName && zSchemaMergeName[0]);
         int skipRowMerge = 0;
+        int bDualAddColMerge = 0;
+        ProllyHash theirsNormRoot;
+        const ProllyHash *pMergeTheirsRoot = &theirsEntry->root;
 
         if( zSchemaMergeName && zSchemaMergeName[0] ){
           ourSchemaChanged = ourSchemaChanged || schemaEntryChangedByName(
@@ -1922,7 +2042,28 @@ do_merge_entry:
             db, zSchemaMergeName, pCatAnc, pCatOurs, pCatTheirs,
             ppSchemaActions, pnSchemaActions, &skipRowMerge, pzErrMsg);
           if( rc!=SQLITE_OK ) return rc;
-          if( skipRowMerge ){
+          if( skipRowMerge && zName ){
+            /* Both branches added columns compatibly. The post-merge ALTER
+            ** evolves ours' schema to include theirs' columns; the rows still
+            ** need a real three-way merge so theirs' deletes and edits to
+            ** shared columns survive and genuine conflicts are raised. Remap
+            ** theirs' records into the merged column order, then fall through
+            ** to the normal row-merge path against that normalized root. */
+            SchemaEntry *ourSE = findSchemaEntry(aOursSchema, nOursSchema, zName);
+            SchemaEntry *theirSE = findSchemaEntry(aTheirsSchema, nTheirsSchema, zName);
+            if( ourSE && ourSE->zSql && theirSE && theirSE->zSql ){
+              rc = normalizeTheirsToMergedLayout(db, &theirsEntry->root,
+                                                 aOurs[i].flags,
+                                                 ourSE->zSql, theirSE->zSql,
+                                                 &theirsNormRoot);
+              if( rc!=SQLITE_OK ) return rc;
+              pMergeTheirsRoot = &theirsNormRoot;
+              bDualAddColMerge = 1;
+              skipRowMerge = 0;
+            }else{
+              aMerged[(*pnMerged)++] = aOurs[i];
+            }
+          }else if( skipRowMerge ){
             aMerged[(*pnMerged)++] = aOurs[i];
           }
         }
@@ -1945,7 +2086,7 @@ do_merge_entry:
         }
 
         if( !skipRowMerge ){
-          if( oursChanged && theirsChanged ){
+          if( bDualAddColMerge || (oursChanged && theirsChanged) ){
 
             ProllyHash mergedTableRoot;
             int nConflicts = 0;
@@ -2005,7 +2146,7 @@ do_merge_entry:
             }
 
             rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
-                                &theirsEntry->root, aOurs[i].flags,
+                                pMergeTheirsRoot, aOurs[i].flags,
                                 &mergedTableRoot, &nConflicts, &aConflictRows,
                                 aIdxInfo, nIdxInfo);
 
