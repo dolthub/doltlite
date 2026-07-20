@@ -56,6 +56,13 @@ static void check_bool(const char *name, int cond) {
   }
 }
 
+static int fileExists(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  fclose(f);
+  return 1;
+}
+
 static char *decodeSegZ(const char *seg, size_t seglen, size_t *outlen) {
   char *z = (char *)malloc(seglen + 1);
   unsigned char *raw = NULL;
@@ -242,9 +249,65 @@ int main(int argc, char **argv) {
 
   {
     const char *dir = (argc > 1) ? argv[1] : NULL;
+    const struct {
+      const char *name;
+      const char *kid;
+    } invalid[] = {
+        {"parent traversal KID rejected", "../victim"},
+        {"Windows traversal KID rejected", "..\\victim"},
+        {"dot KID rejected", "."},
+        {"empty KID rejected", ""},
+        {"drive-relative KID rejected", "C:credential"},
+        {"uppercase KID rejected",
+         "7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbarS"},
+        {"non-canonical final base32 bits rejected",
+         "7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbart"}};
+    unsigned char pub[DOLTLITE_PUBKEY_LEN];
+    DoltliteCreds *loaded = NULL;
+    char *json = doltliteCredsToJwk(c);
+    char *outside;
+    FILE *f;
+    size_t i;
+    size_t n = strlen(dir) + strlen("/../victim.jwk") + 1;
+
+    outside = (char *)malloc(n);
+    snprintf(outside, n, "%s/../victim.jwk", dir);
+    f = fopen(outside, "wb");
+    if (f && json) fwrite(json, 1, strlen(json), f);
+    if (f) fclose(f);
+
+    check_bool("creds load rejects parent traversal",
+               doltliteCredsLoad(dir, "../victim", &loaded) != 0);
+    check_bool("public-key load rejects parent traversal",
+               doltliteCredsLoadPubKey(dir, "../victim", pub) != 0);
+    check_bool("creds remove rejects parent traversal",
+               doltliteCredsRemove(dir, "../victim") != 0);
+    check_bool("traversal rejection preserves outside file", fileExists(outside));
+    for (i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+      check_bool(invalid[i].name,
+                 doltliteCredsRemove(dir, invalid[i].kid) != 0);
+    }
+
+    doltliteCredsFree(loaded);
+    free(json);
+    free(outside);
+  }
+
+  {
+    const char *dir = (argc > 1) ? argv[1] : NULL;
     char *kid = doltliteCredsKid(c);
     char **kids = NULL;
     int n = 0, i, found = 0;
+    char *invalidPath;
+    FILE *invalidFile;
+
+    invalidPath = (char *)malloc(strlen(dir) + strlen("/not-a-kid.jwk") + 1);
+    sprintf(invalidPath, "%s/not-a-kid.jwk", dir);
+    invalidFile = fopen(invalidPath, "wb");
+    if (invalidFile) {
+      fputs("{}", invalidFile);
+      fclose(invalidFile);
+    }
 
     if (doltliteCredsList(dir, &kids, &n) != 0) {
       failures++;
@@ -254,7 +317,15 @@ int main(int argc, char **argv) {
         if (kid && strcmp(kids[i], kid) == 0) found = 1;
       }
       check_bool("creds list includes the saved kid", found);
+      check_bool("creds list excludes non-canonical filenames", n == 1);
       doltliteCredsFreeList(kids, n);
+    }
+
+    {
+      DoltliteCreds *loaded = NULL;
+      check_bool("default load ignores non-canonical filenames",
+                 doltliteCredsLoadDefault(dir, &loaded) == 0);
+      doltliteCredsFree(loaded);
     }
 
     if (doltliteCredsRemove(dir, kid) != 0) {
@@ -269,8 +340,11 @@ int main(int argc, char **argv) {
         if (kid && strcmp(kids[i], kid) == 0) found = 1;
       }
       check_bool("creds remove deletes the kid", !found);
+      check_bool("creds list remains empty with invalid filenames", n == 0);
       doltliteCredsFreeList(kids, n);
     }
+    remove(invalidPath);
+    free(invalidPath);
     free(kid);
   }
 

@@ -456,9 +456,26 @@ static int mkdirp(const char *path) {
   return 0;
 }
 
+static int credsKidValid(const char *kid) {
+  const size_t nKid = (DOLTLITE_KID_RAW_LEN * 8 + 4) / 5;
+  size_t i;
+  if (!kid) return 0;
+  for (i = 0; i < nKid; i++) {
+    const char *p;
+    if (!kid[i]) return 0;
+    p = strchr(B32_ALPHABET, kid[i]);
+    if (!p) return 0;
+    if (i == nKid - 1 && ((p - B32_ALPHABET) & 1) != 0) return 0;
+  }
+  return kid[nKid] == '\0';
+}
+
 static char *credsFilePath(const char *dir, const char *kid) {
-  size_t n = strlen(dir) + 1 + strlen(kid) + strlen(".jwk") + 1;
-  char *path = (char *)malloc(n);
+  size_t n;
+  char *path;
+  if (!credsKidValid(kid)) return NULL;
+  n = strlen(dir) + 1 + strlen(kid) + strlen(".jwk") + 1;
+  path = (char *)malloc(n);
   if (!path) return NULL;
   snprintf(path, n, "%s/%s.jwk", dir, kid);
   return path;
@@ -630,13 +647,19 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
   while ((name = dirNext(&it)) != NULL) {
     size_t n = strlen(name);
     if (n > 4 && strcmp(name + n - 4, ".jwk") == 0) {
+      char *candidate = (char *)malloc(n - 4 + 1);
+      if (!candidate) continue;
+      memcpy(candidate, name, n - 4);
+      candidate[n - 4] = '\0';
+      if (!credsKidValid(candidate)) {
+        free(candidate);
+        continue;
+      }
       count++;
       if (count == 1) {
-        kid = (char *)malloc(n - 4 + 1);
-        if (kid) {
-          memcpy(kid, name, n - 4);
-          kid[n - 4] = '\0';
-        }
+        kid = candidate;
+      } else {
+        free(candidate);
       }
     }
   }
@@ -673,17 +696,24 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
     size_t ln = strlen(name);
     char *kid;
     if (!(ln > 4 && strcmp(name + ln - 4, ".jwk") == 0)) continue;
-    if (cnt == cap) {
-      int nc = cap ? cap * 2 : 8;
-      char **na = (char **)realloc(arr, (size_t)nc * sizeof(char *));
-      if (!na) goto oom;
-      arr = na;
-      cap = nc;
-    }
     kid = (char *)malloc(ln - 4 + 1);
     if (!kid) goto oom;
     memcpy(kid, name, ln - 4);
     kid[ln - 4] = '\0';
+    if (!credsKidValid(kid)) {
+      free(kid);
+      continue;
+    }
+    if (cnt == cap) {
+      int nc = cap ? cap * 2 : 8;
+      char **na = (char **)realloc(arr, (size_t)nc * sizeof(char *));
+      if (!na) {
+        free(kid);
+        goto oom;
+      }
+      arr = na;
+      cap = nc;
+    }
     arr[cnt++] = kid;
   }
   dirClose(&it);

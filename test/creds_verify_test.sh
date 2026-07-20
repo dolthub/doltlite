@@ -10,7 +10,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 BIN="$TMP/creds_verify_kat"
-mkdir -p "$TMP/authkeys" "$TMP/empty"
+mkdir -p "$TMP/authkeys" "$TMP/empty" "$TMP/outside"
 
 echo "=== doltlite credential-verify KAT ==="
 "$CC" -O2 -Wall \
@@ -32,4 +32,4 @@ echo "=== doltlite credential-verify KAT ==="
   exit 1
 }
 
-"$BIN" "$TMP/authkeys" "$TMP/empty"
+"$BIN" "$TMP/authkeys" "$TMP/empty" "$TMP/outside"
