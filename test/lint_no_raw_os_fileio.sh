@@ -27,7 +27,14 @@ raw_matches() {
   rg -n "$INCLUDE_RE" "${FILES[@]}" 2>/dev/null || true
 }
 
+# Credentials and entropy are OS-owned sidecar configuration, not database
+# storage. This module also needs OS APIs to enforce private-file modes.
+# doltlite_gc.c and chunk_store.c include unistd.h only for crash-test _exit().
+# doltlite_net.h uses Unix descriptors for sockets, not database files.
 raw_matches \
+  | grep -Ev '^src/doltlite_creds\.c:' \
+  | grep -Ev '^src/(doltlite_gc|chunk_store)\.c:[0-9]+:#include <unistd\.h>' \
+  | grep -Ev '^src/doltlite_net\.h:[0-9]+:#include <unistd\.h>' \
   | grep -Ev '^src/doltlite_remotesrv\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_http_remote\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remote\.c:[0-9]+:.*\bwrite[[:space:]]*\(' \
