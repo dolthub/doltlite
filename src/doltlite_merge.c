@@ -2613,7 +2613,14 @@ int doltliteMergeCatalogs(
     for(k=0; k<nMerged; k++){
       if( aMerged[k].zName ){
         char *z = sqlite3_mprintf("%s", aMerged[k].zName);
-        if( !z ){ rc = SQLITE_NOMEM; goto merge_cleanup; }
+        if( !z ){
+          /* Entries not yet re-duped still alias aOurs; null them so cleanup
+          ** frees each aliased name once (via aOurs), never twice. */
+          int j;
+          for(j=k; j<nMerged; j++) aMerged[j].zName = 0;
+          rc = SQLITE_NOMEM;
+          goto merge_cleanup;
+        }
         aMerged[k].zName = z;
       }
     }

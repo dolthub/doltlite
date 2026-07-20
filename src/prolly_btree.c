@@ -4338,7 +4338,7 @@ static int countIntKeysUpTo(
 
   prollyCursorInit(&cur, &pBt->store, &pBt->cache, pRoot, flags);
   rc = prollyCursorSeekInt(&cur, intKey, &res);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   if( cur.eState!=PROLLY_CURSOR_VALID ){
     prollyCursorClose(&cur);
     *pCount = 0;
@@ -4457,7 +4457,7 @@ static int countBlobKeysBefore(
 
   prollyCursorInit(&cur, &pBt->store, &pBt->cache, pRoot, flags);
   rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   if( cur.eState!=PROLLY_CURSOR_VALID ){
     prollyCursorClose(&cur);
     *pCount = 0;

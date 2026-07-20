@@ -232,9 +232,9 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
     if( cs ){
       rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
       if( rc==SQLITE_OK ){
-        chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
+        rc = chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
         sqlite3_free(wCatData);
-        if( prollyHashCompare(&headCatHash, &workingCatHash)!=0 ){
+        if( rc==SQLITE_OK && prollyHashCompare(&headCatHash, &workingCatHash)!=0 ){
           return 1;
         }
       }
