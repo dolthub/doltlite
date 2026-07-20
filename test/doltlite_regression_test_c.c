@@ -7849,7 +7849,80 @@ static void run_incrblob_chunked_and_multihandle(void){
   removeDbFiles(dbpath);
 }
 
+/* The refs blob is untrusted (it comes from a .db file or a remote fetch).
+** Each section reads a u32 count and allocates count*sizeof(struct); the count
+** must be bounded by the smallest possible on-disk entry and the allocation
+** sized with a 64-bit product, or a crafted count wraps a 32-bit size into a
+** tiny allocation that the fill loop then overruns. This verifies a valid blob
+** round-trips and that oversized counts are rejected as corrupt rather than
+** trusted. (The wrap itself needs a >256MB input, beyond this corpus's and the
+** fuzzer's size budget, so it is prevented by construction here.) */
+static void run_refs_deserialize_overflow_guard(void){
+  printf("=== Refs Deserialize Overflow Guard Test ===\n\n");
+
+  {
+    u8 buf[128];
+    u8 *p = buf;
+    ChunkStore cs;
+    int n, rc;
+    *p++ = 7;                                 /* version */
+    CS_WRITE_U32(p, 4); p += 4;               /* default branch name length */
+    memcpy(p, "main", 4); p += 4;
+    CS_WRITE_U32(p, 1); p += 4;               /* nBranches */
+    CS_WRITE_U32(p, 4); p += 4;               /* branch name length */
+    memcpy(p, "feat", 4); p += 4;
+    memset(p, 0xAB, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;  /* commit hash */
+    memset(p, 0xCD, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;  /* working set */
+    CS_WRITE_U32(p, 0); p += 4;               /* nTags */
+    CS_WRITE_U32(p, 0); p += 4;               /* nRemotes */
+    CS_WRITE_U32(p, 0); p += 4;               /* nTracking */
+    CS_WRITE_U32(p, 0); p += 4;               /* nSequences */
+    n = (int)(p - buf);
+
+    memset(&cs, 0, sizeof(cs));
+    rc = csDeserializeRefs(&cs, buf, n);
+    check("refs_roundtrip_ok", rc==SQLITE_OK);
+    check("refs_roundtrip_default_branch",
+          cs.refs.zDefaultBranch && strcmp(cs.refs.zDefaultBranch, "main")==0);
+    check("refs_roundtrip_branch_count", cs.refs.nBranches==1);
+    check("refs_roundtrip_branch_name",
+          cs.refs.nBranches==1 && cs.refs.aBranches[0].zName
+          && strcmp(cs.refs.aBranches[0].zName, "feat")==0);
+    csFreeRefsState(&cs);
+  }
+
+  {
+    u8 buf[16];
+    u8 *p = buf;
+    ChunkStore cs;
+    int rc;
+    *p++ = 7;
+    CS_WRITE_U32(p, 0); p += 4;               /* empty default branch name */
+    CS_WRITE_U32(p, 0x10000000); p += 4;      /* 268M branches, tiny blob */
+    memset(&cs, 0, sizeof(cs));
+    rc = csDeserializeRefs(&cs, buf, (int)(p - buf));
+    check("refs_oversized_branches_rejected", rc==SQLITE_CORRUPT);
+    csFreeRefsState(&cs);
+  }
+
+  {
+    u8 buf[24];
+    u8 *p = buf;
+    ChunkStore cs;
+    int rc;
+    *p++ = 7;
+    CS_WRITE_U32(p, 0); p += 4;               /* default branch name length */
+    CS_WRITE_U32(p, 0); p += 4;               /* nBranches = 0 */
+    CS_WRITE_U32(p, 0x10000000); p += 4;      /* oversized nTags */
+    memset(&cs, 0, sizeof(cs));
+    rc = csDeserializeRefs(&cs, buf, (int)(p - buf));
+    check("refs_oversized_tags_rejected", rc==SQLITE_CORRUPT);
+    csFreeRefsState(&cs);
+  }
+}
+
 static const RegressionCase aCases[] = {
+  { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
