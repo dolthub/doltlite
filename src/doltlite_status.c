@@ -9,6 +9,8 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "doltlite_name_index.h"
+#include <stddef.h>
 #include "doltlite_ignore.h"
 #include "doltlite_record.h"
 #include "prolly_cursor.h"
@@ -23,12 +25,6 @@ struct StatusRow {
   const char *zStatus;
 };
 
-typedef struct StatusNameSlot StatusNameSlot;
-struct StatusNameSlot {
-  const char *zName;
-  int iEntry;
-};
-
 typedef struct StatusNumberSlot StatusNumberSlot;
 struct StatusNumberSlot {
   Pgno iTable;
@@ -39,7 +35,7 @@ typedef struct StatusCatalogIndex StatusCatalogIndex;
 struct StatusCatalogIndex {
   struct TableEntry *aEntry;
   int nEntry;
-  StatusNameSlot *aNameSlot;
+  DoltliteNameIndex nameIdx;
   StatusNumberSlot *aNumberSlot;
   int nSlot;
 };
@@ -67,16 +63,6 @@ static void statusFreeRows(DoltliteStatusCursor *pCur){
 static const char *statusSchema =
   "CREATE TABLE x(table_name TEXT, staged INTEGER, status TEXT)";
 
-static u32 statusStringHash(const char *z){
-  u32 h = 2166136261u;
-  while( z && *z ){
-    h ^= (unsigned char)*z;
-    h *= 16777619u;
-    z++;
-  }
-  return h;
-}
-
 static u32 statusNumberHash(Pgno iTable){
   return ((u32)iTable * 2654435761u);
 }
@@ -88,42 +74,29 @@ static int statusCatalogIndexInit(
 ){
   int i;
   int nSlot = 16;
+  int rc;
 
   memset(pIdx, 0, sizeof(*pIdx));
   pIdx->aEntry = aEntry;
   pIdx->nEntry = nEntry;
+  rc = doltliteNameIndexInit(&pIdx->nameIdx, aEntry, nEntry,
+                             (int)sizeof(struct TableEntry),
+                             (int)offsetof(struct TableEntry, zName));
+  if( rc!=SQLITE_OK ) return rc;
   if( nEntry<=0 ) return SQLITE_OK;
 
   while( nSlot < nEntry*2 ) nSlot *= 2;
-  pIdx->aNameSlot = sqlite3_malloc(nSlot * (int)sizeof(StatusNameSlot));
   pIdx->aNumberSlot = sqlite3_malloc(nSlot * (int)sizeof(StatusNumberSlot));
-  if( !pIdx->aNameSlot || !pIdx->aNumberSlot ){
-    sqlite3_free(pIdx->aNameSlot);
-    sqlite3_free(pIdx->aNumberSlot);
+  if( !pIdx->aNumberSlot ){
+    doltliteNameIndexFree(&pIdx->nameIdx);
     memset(pIdx, 0, sizeof(*pIdx));
     return SQLITE_NOMEM;
   }
-  memset(pIdx->aNameSlot, 0, nSlot * (int)sizeof(StatusNameSlot));
   memset(pIdx->aNumberSlot, 0, nSlot * (int)sizeof(StatusNumberSlot));
   pIdx->nSlot = nSlot;
 
   for(i=0; i<nEntry; i++){
-    u32 slot;
-    if( aEntry[i].zName ){
-      slot = statusStringHash(aEntry[i].zName) & (u32)(nSlot - 1);
-      while( pIdx->aNameSlot[slot].zName ){
-        if( strcmp(pIdx->aNameSlot[slot].zName, aEntry[i].zName)==0 ){
-          break;
-        }
-        slot = (slot + 1) & (u32)(nSlot - 1);
-      }
-      if( !pIdx->aNameSlot[slot].zName ){
-        pIdx->aNameSlot[slot].zName = aEntry[i].zName;
-        pIdx->aNameSlot[slot].iEntry = i + 1;
-      }
-    }
-
-    slot = statusNumberHash(aEntry[i].iTable) & (u32)(nSlot - 1);
+    u32 slot = statusNumberHash(aEntry[i].iTable) & (u32)(nSlot - 1);
     while( pIdx->aNumberSlot[slot].iEntry ){
       if( pIdx->aNumberSlot[slot].iTable==aEntry[i].iTable ){
         break;
@@ -139,7 +112,7 @@ static int statusCatalogIndexInit(
 }
 
 static void statusCatalogIndexFree(StatusCatalogIndex *pIdx){
-  sqlite3_free(pIdx->aNameSlot);
+  doltliteNameIndexFree(&pIdx->nameIdx);
   sqlite3_free(pIdx->aNumberSlot);
   memset(pIdx, 0, sizeof(*pIdx));
 }
@@ -148,19 +121,8 @@ static struct TableEntry *statusCatalogFindName(
   const StatusCatalogIndex *pIdx,
   const char *zName
 ){
-  u32 slot;
-  int i;
-  if( !zName || pIdx->nSlot==0 ) return 0;
-  slot = statusStringHash(zName) & (u32)(pIdx->nSlot - 1);
-  for(i=0; i<pIdx->nSlot; i++){
-    StatusNameSlot *pSlot = &pIdx->aNameSlot[slot];
-    if( !pSlot->zName ) return 0;
-    if( strcmp(pSlot->zName, zName)==0 ){
-      return &pIdx->aEntry[pSlot->iEntry - 1];
-    }
-    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
-  }
-  return 0;
+  int r = doltliteNameIndexFind(&pIdx->nameIdx, zName);
+  return r<0 ? 0 : &pIdx->aEntry[r];
 }
 
 static struct TableEntry *statusCatalogFindNumber(

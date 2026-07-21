@@ -10,6 +10,8 @@
 
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_name_index.h"
+#include <stddef.h>
 #include <string.h>
 #include <time.h>
 
@@ -142,87 +144,28 @@ static const char *diffSchema =
 #define DIFF_COL_SCHEMA_CHANGE 6
 #define DIFF_COL_TABLE_NAME    7
 
-typedef struct DiffNameSlot DiffNameSlot;
-struct DiffNameSlot {
-  const char *zName;
-  int iEntry;
-};
-
-typedef struct DiffNameIndex DiffNameIndex;
-struct DiffNameIndex {
-  struct TableEntry *aEntry;
-  DiffNameSlot *aSlot;
-  int nSlot;
-};
-
-static u32 diffStringHash(const char *z){
-  u32 h = 2166136261u;
-  while( z && *z ){
-    h ^= (unsigned char)*z;
-    h *= 16777619u;
-    z++;
-  }
-  return h;
-}
+typedef DoltliteNameIndex DiffNameIndex;
 
 static int diffNameIndexInit(
   DiffNameIndex *pIdx,
   struct TableEntry *aEntry,
   int nEntry
 ){
-  int i;
-  int nSlot = 16;
-
-  memset(pIdx, 0, sizeof(*pIdx));
-  pIdx->aEntry = aEntry;
-  if( nEntry<=0 ) return SQLITE_OK;
-
-  while( nSlot < nEntry*2 ) nSlot *= 2;
-  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(DiffNameSlot));
-  if( !pIdx->aSlot ) return SQLITE_NOMEM;
-  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(DiffNameSlot));
-  pIdx->nSlot = nSlot;
-
-  for(i=0; i<nEntry; i++){
-    u32 slot;
-    if( !aEntry[i].zName ) continue;
-    slot = diffStringHash(aEntry[i].zName) & (u32)(nSlot - 1);
-    while( pIdx->aSlot[slot].zName ){
-      if( strcmp(pIdx->aSlot[slot].zName, aEntry[i].zName)==0 ){
-        break;
-      }
-      slot = (slot + 1) & (u32)(nSlot - 1);
-    }
-    if( !pIdx->aSlot[slot].zName ){
-      pIdx->aSlot[slot].zName = aEntry[i].zName;
-      pIdx->aSlot[slot].iEntry = i + 1;
-    }
-  }
-  return SQLITE_OK;
+  return doltliteNameIndexInit(pIdx, aEntry, nEntry,
+                               (int)sizeof(struct TableEntry),
+                               (int)offsetof(struct TableEntry, zName));
 }
 
 static void diffNameIndexFree(DiffNameIndex *pIdx){
-  sqlite3_free(pIdx->aSlot);
-  memset(pIdx, 0, sizeof(*pIdx));
+  doltliteNameIndexFree(pIdx);
 }
 
 static struct TableEntry *diffNameIndexFind(
   const DiffNameIndex *pIdx,
   const char *zName
 ){
-  u32 slot;
-  int i;
-  if( !zName || pIdx->nSlot==0 ) return 0;
-  slot = diffStringHash(zName) & (u32)(pIdx->nSlot - 1);
-  for(i=0; i<pIdx->nSlot; i++){
-    DiffNameSlot *pSlot = &pIdx->aSlot[slot];
-    if( !pSlot->zName ) return 0;
-    if( strcmp(pSlot->zName, zName)==0 ){
-      return &pIdx->aEntry[pSlot->iEntry - 1];
-    }
-    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
-  }
-  return 0;
+  int r = doltliteNameIndexFind(pIdx, zName);
+  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
 static void freeBatch(DoltliteDiffCursor *pCur){
