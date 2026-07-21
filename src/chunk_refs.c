@@ -253,12 +253,16 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   memcpy(cs->refs.zDefaultBranch, bufCur, defLen); cs->refs.zDefaultBranch[defLen]=0; bufCur+=defLen;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   nBranches = (int)CS_READ_U32(bufCur); bufCur+=4;
-  if( nBranches<0 || nBranches>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
+  /* Bound the count by the smallest on-disk entry (4-byte name length + a
+  ** commit hash = 24 bytes) so a crafted count cannot exceed what the blob
+  ** could hold, and size the allocation with a 64-bit product so
+  ** count*sizeof(struct) cannot wrap a 32-bit int into a tiny allocation. */
+  if( nBranches<0 || nBranches>(int)(data+nData-bufCur)/(4+PROLLY_HASH_SIZE) ) return SQLITE_CORRUPT;
   csFreeBranches(cs);
   if( nBranches>0 ){
-    cs->refs.aBranches = sqlite3_malloc(nBranches*(int)sizeof(struct BranchRef));
+    cs->refs.aBranches = sqlite3_malloc64((sqlite3_int64)nBranches*(sqlite3_int64)sizeof(struct BranchRef));
     if(!cs->refs.aBranches) return SQLITE_NOMEM;
-    memset(cs->refs.aBranches, 0, nBranches*(int)sizeof(struct BranchRef));
+    memset(cs->refs.aBranches, 0, (size_t)nBranches*sizeof(struct BranchRef));
     /* Count the whole zeroed array up front (here and below): a parse
     ** failure mid-entry must leave already-allocated fields visible to
     ** csFreeBranches, or a truncated blob leaks them. */
@@ -281,11 +285,13 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   csFreeTags(cs);
   if( bufCur+4<=data+nData ){
     nTags = (int)CS_READ_U32(bufCur); bufCur+=4;
-    if( nTags<0 || nTags>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
+    /* Minimum tag entry: name len + commit hash + tagger/email/message lens
+    ** + timestamp = 4 + PROLLY_HASH_SIZE + 4 + 4 + 8 + 4. */
+    if( nTags<0 || nTags>(int)(data+nData-bufCur)/(24+PROLLY_HASH_SIZE) ) return SQLITE_CORRUPT;
     if( nTags>0 ){
-      cs->refs.aTags = sqlite3_malloc(nTags*(int)sizeof(struct TagRef));
+      cs->refs.aTags = sqlite3_malloc64((sqlite3_int64)nTags*(sqlite3_int64)sizeof(struct TagRef));
       if(!cs->refs.aTags) return SQLITE_NOMEM;
-      memset(cs->refs.aTags, 0, nTags*(int)sizeof(struct TagRef));
+      memset(cs->refs.aTags, 0, (size_t)nTags*sizeof(struct TagRef));
       cs->refs.nTags = nTags;
       for(i=0;i<nTags;i++){
         int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
@@ -330,11 +336,12 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   csFreeTracking(cs);
   if( bufCur+4<=data+nData ){
     int nRemotes = (int)CS_READ_U32(bufCur); bufCur+=4;
-    if( nRemotes<0 || nRemotes>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
+    /* Minimum remote entry: name len + url len = 8 bytes. */
+    if( nRemotes<0 || nRemotes>(int)(data+nData-bufCur)/8 ) return SQLITE_CORRUPT;
     if( nRemotes>0 ){
-      cs->refs.aRemotes = sqlite3_malloc(nRemotes*(int)sizeof(struct RemoteRef));
+      cs->refs.aRemotes = sqlite3_malloc64((sqlite3_int64)nRemotes*(sqlite3_int64)sizeof(struct RemoteRef));
       if(!cs->refs.aRemotes) return SQLITE_NOMEM;
-      memset(cs->refs.aRemotes, 0, nRemotes*(int)sizeof(struct RemoteRef));
+      memset(cs->refs.aRemotes, 0, (size_t)nRemotes*sizeof(struct RemoteRef));
       cs->refs.nRemotes = nRemotes;
       for(i=0;i<nRemotes;i++){
         int nameLen, urlLen;
@@ -355,11 +362,12 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
     }
     if( bufCur+4<=data+nData ){
       int nTracking = (int)CS_READ_U32(bufCur); bufCur+=4;
-      if( nTracking<0 || nTracking>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
+      /* Minimum tracking entry: remote len + branch len + commit hash. */
+      if( nTracking<0 || nTracking>(int)(data+nData-bufCur)/(8+PROLLY_HASH_SIZE) ) return SQLITE_CORRUPT;
       if( nTracking>0 ){
-        cs->refs.aTracking = sqlite3_malloc(nTracking*(int)sizeof(struct TrackingBranch));
+        cs->refs.aTracking = sqlite3_malloc64((sqlite3_int64)nTracking*(sqlite3_int64)sizeof(struct TrackingBranch));
         if(!cs->refs.aTracking) return SQLITE_NOMEM;
-        memset(cs->refs.aTracking, 0, nTracking*(int)sizeof(struct TrackingBranch));
+        memset(cs->refs.aTracking, 0, (size_t)nTracking*sizeof(struct TrackingBranch));
       cs->refs.nTracking = nTracking;
         for(i=0;i<nTracking;i++){
           int remoteLen, branchLen;
@@ -388,9 +396,9 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
         return SQLITE_CORRUPT;
       }
       if( nSequences>0 ){
-        cs->refs.aSequences = sqlite3_malloc(nSequences*(int)sizeof(SequenceRef));
+        cs->refs.aSequences = sqlite3_malloc64((sqlite3_int64)nSequences*(sqlite3_int64)sizeof(SequenceRef));
         if(!cs->refs.aSequences) return SQLITE_NOMEM;
-        memset(cs->refs.aSequences, 0, nSequences*(int)sizeof(SequenceRef));
+        memset(cs->refs.aSequences, 0, (size_t)nSequences*sizeof(SequenceRef));
       cs->refs.nSequences = nSequences;
         for(i=0;i<nSequences;i++){
           int nameLen;
