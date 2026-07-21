@@ -988,7 +988,8 @@ int doltliteConflictsRegister(sqlite3 *db){
   int rc;
   rc = sqlite3_create_module(db, "dolt_conflicts", &conflictsModule, 0);
   if( rc==SQLITE_OK )
-    rc = sqlite3_create_function(db, "dolt_conflicts_resolve", -1, SQLITE_UTF8, 0,
+    rc = sqlite3_create_function(db, "dolt_conflicts_resolve", -1,
+                                  DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                   conflictsResolveFunc, 0, 0);
 
   if( rc==SQLITE_OK )

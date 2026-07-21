@@ -21,6 +21,9 @@ typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 #define DOLTLITE_RANGE_TWO_DOT   2
 #define DOLTLITE_RANGE_THREE_DOT 3
 
+/* Repository commands must not execute from persistent schema objects. */
+#define DOLTLITE_COMMAND_FUNC_FLAGS (SQLITE_UTF8 | SQLITE_DIRECTONLY)
+
 static SQLITE_INLINE int doltliteSplitRevisionRange(
   const char *zSpec,
   char **pzLeft,
