@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "sqlite3.h"
@@ -104,6 +105,9 @@ static sqlite3_int64 file_size_or_negative(const char *path){
   return (sqlite3_int64)st.st_size;
 }
 
+static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase);
+static void removeDbFiles(const char *path);
+
 static int backup_db(sqlite3 *src, sqlite3 *dest){
   sqlite3_backup *pBackup;
   int rc;
@@ -176,6 +180,66 @@ static void run_create_collation_unsupported(void){
   check("builtin_collation_still_works",
         strcmp(queryScalarText(db, "SELECT 'a'='A' COLLATE NOCASE"), "1")==0);
   sqlite3_close(db);
+}
+
+typedef struct SerializeMutexProbe SerializeMutexProbe;
+struct SerializeMutexProbe {
+  sqlite3 *db;
+  int rc;
+};
+
+static void *trySerializeConnectionMutex(void *pArg){
+  SerializeMutexProbe *p = (SerializeMutexProbe*)pArg;
+  sqlite3_mutex *pMutex = sqlite3_db_mutex(p->db);
+  p->rc = sqlite3_mutex_try(pMutex);
+  if( p->rc==SQLITE_OK ) sqlite3_mutex_leave(pMutex);
+  return 0;
+}
+
+static void run_serialize_unsupported_releases_mutex(void){
+  char path[256];
+  sqlite3 *db = 0;
+  sqlite3_int64 nData = 0;
+  unsigned char *pData;
+  SerializeMutexProbe probe;
+  pthread_t thread;
+  int threadStarted = 0;
+  int rc;
+
+  make_dbpath(path, sizeof(path), "doltlite_serialize_mutex");
+  removeDbFiles(path);
+  rc = sqlite3_open_v2(path, &db,
+      SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX, 0);
+  check("serialize_mutex_open", rc==SQLITE_OK);
+  if( db==0 ) return;
+
+  check("serialize_mutex_setup",
+        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+  pData = sqlite3_serialize(db, "main", &nData, 0);
+  check("serialize_mutex_unsupported", pData==0 && nData==-1);
+  sqlite3_free(pData);
+
+  probe.db = db;
+  probe.rc = SQLITE_ERROR;
+  rc = pthread_create(&thread, 0, trySerializeConnectionMutex, &probe);
+  check("serialize_mutex_thread_create", rc==0);
+  if( rc==0 ){
+    threadStarted = 1;
+    rc = pthread_join(thread, 0);
+    check("serialize_mutex_thread_join", rc==0);
+    check("serialize_mutex_released", probe.rc==SQLITE_OK);
+  }
+
+  /* Keep a failing build clean enough to finish the test process. If the
+  ** worker observed SQLITE_BUSY, this thread owns the leaked recursive
+  ** connection-mutex entry made by sqlite3_serialize(). */
+  if( threadStarted && probe.rc==SQLITE_BUSY ){
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+  }
+  check("serialize_mutex_connection_usable",
+        execSql(db, "INSERT INTO t VALUES(1);")==SQLITE_OK);
+  sqlite3_close(db);
+  removeDbFiles(path);
 }
 
 static void run_memory_readonly_open(void){
@@ -8083,6 +8147,7 @@ static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
+  { "serialize_unsupported_releases_mutex", "Serialize Unsupported Releases Mutex Test", run_serialize_unsupported_releases_mutex },
   { "memory_readonly_open", "Memory Read-Only Open Test", run_memory_readonly_open },
   { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
