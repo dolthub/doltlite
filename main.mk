@@ -2683,6 +2683,7 @@ DOLTLITE_C_TESTS = \
 	prepared_stmt_reuse_test$(T.exe) \
 	catalog_serialize_determinism_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
+	prolly_hashset_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
 	remotesrv_init_failure_test$(T.exe) \
@@ -2760,6 +2761,14 @@ three_way_diff_test$(T.exe): $(TOP)/test/three_way_diff_test.c $(LIBOBJS0)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/three_way_diff_test.c $(LIBOBJS0) \
 		-lz -lpthread -lm
+
+# prolly_hashset_test includes prolly_hashset.h (which pulls sqliteInt.h via
+# prolly_hash.h), so it needs the same defines as three_way_diff_test; the
+# hashset entry points are exported, so it links the static archive.
+prolly_hashset_test$(T.exe): $(TOP)/test/prolly_hashset_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/prolly_hashset_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
 
 # oom_dolt_fault_test installs a wrapper allocator that fails the Nth
 # malloc, then sweeps N across a series of dolt_* operations. Forks

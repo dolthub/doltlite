@@ -216,16 +216,19 @@ int csMergeIndex(
   ChunkIndexEntry **ppMerged,
   int *pnMerged
 ){
-  int nTotal = cs->index.nIndex + cs->staging.nPending;
+  i64 nTotal64 = (i64)cs->index.nIndex + (i64)cs->staging.nPending;
+  int nTotal;
   ChunkIndexEntry *aMerged;
   int idxPos, pendPos, outPos;
 
   *ppMerged = 0;
   *pnMerged = 0;
-  if( nTotal == 0 ) return SQLITE_OK;
+  if( nTotal64 == 0 ) return SQLITE_OK;
+  if( nTotal64 > INT_MAX/(int)sizeof(ChunkIndexEntry) ) return SQLITE_TOOBIG;
+  nTotal = (int)nTotal64;
 
-  aMerged = (ChunkIndexEntry *)sqlite3_malloc(
-    nTotal * (int)sizeof(ChunkIndexEntry)
+  aMerged = (ChunkIndexEntry *)sqlite3_malloc64(
+    (sqlite3_uint64)nTotal * sizeof(ChunkIndexEntry)
   );
   if( aMerged == 0 ) return SQLITE_NOMEM;
 
