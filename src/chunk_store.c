@@ -934,7 +934,11 @@ int chunkStoreAddTagFull(
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
   int i = findTagIdx(cs, zName);
   if( i<0 ) return SQLITE_NOTFOUND;
+  /* Free every owned field, not just zName, before the swap-remove. */
   sqlite3_free(cs->refs.aTags[i].zName);
+  sqlite3_free(cs->refs.aTags[i].zTagger);
+  sqlite3_free(cs->refs.aTags[i].zEmail);
+  sqlite3_free(cs->refs.aTags[i].zMessage);
   cs->refs.aTags[i] = cs->refs.aTags[cs->refs.nTags-1];
   cs->refs.nTags--;
   return SQLITE_OK;
