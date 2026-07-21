@@ -389,6 +389,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     char **azNames = 0;
     int nNames = 0;
     int i;
+    char *zUrlOwned;
 
     rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
     if( rc!=SQLITE_OK ){
@@ -400,10 +401,20 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     pRemote->xClose(pRemote);
     pRemote = 0;
 
+    /* zUrl points into cs->refs.aRemotes; each doltliteFetch below can reload
+    ** refs and reallocate that array, so own a copy for the loop. */
+    zUrlOwned = sqlite3_mprintf("%s", zUrl);
+    if( !zUrlOwned ){
+      doltliteFreeStringArray(azNames, nNames);
+      sqlite3_result_error_nomem(ctx);
+      return;
+    }
+
     for(i=0; i<nNames; i++){
-      DoltliteRemote *pBrRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
+      DoltliteRemote *pBrRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrlOwned);
       if( !pBrRemote ){
         doltliteFreeStringArray(azNames, nNames);
+        sqlite3_free(zUrlOwned);
         doltliteVcResultError(ctx, db, "failed to open remote (URL must start with file:// or http://)");
         return;
       }
@@ -411,12 +422,14 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       pBrRemote->xClose(pBrRemote);
       if( rc!=SQLITE_OK ){
         doltliteFreeStringArray(azNames, nNames);
+        sqlite3_free(zUrlOwned);
         (void)doltliteVcSealSavepointError(db);
         remoteSqlResultError(ctx, rc, "fetch failed");
         return;
       }
     }
     doltliteFreeStringArray(azNames, nNames);
+    sqlite3_free(zUrlOwned);
   }
 
   if( pRemote ) pRemote->xClose(pRemote);

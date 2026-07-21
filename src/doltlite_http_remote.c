@@ -144,6 +144,21 @@ static int readUntilEof(HttpConn *conn, u8 **ppOut, int *pnOut){
     nUsed += (i64)n;
   }
 
+  /* Callers scan the response as a C string (e.g. atoi on Content-Length), so
+  ** guarantee a trailing NUL. The growth loop keeps slack in practice, but a
+  ** buffer filled exactly to nAlloc would otherwise leave the parse to run off
+  ** the end. */
+  if( nUsed >= nAlloc ){
+    u8 *pNew = sqlite3_realloc64(pBuf, nUsed + 1);
+    if( !pNew ){
+      sqlite3_free(pBuf);
+      return SQLITE_NOMEM;
+    }
+    pBuf = pNew;
+    nAlloc = nUsed + 1;
+  }
+  pBuf[nUsed] = 0;
+
   *ppOut = pBuf;
   *pnOut = (int)nUsed;
   return SQLITE_OK;
