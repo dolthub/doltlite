@@ -11,17 +11,19 @@ static u32 prollyHashSetSlotIndex(const ProllyHash *h, int nSlots){
 }
 
 int prollyHashSetInit(ProllyHashSet *hs, int nCapacity){
-  int n = 256;
-  while( n < nCapacity*2 ) n *= 2;
-  hs->aSlots = sqlite3_malloc(n * sizeof(ProllyHash));
-  hs->aUsed = sqlite3_malloc(n);
+  i64 n = 256;
+  i64 want = (i64)nCapacity * 2;
+  while( n < want ) n *= 2;
+  if( n > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ) return SQLITE_NOMEM;
+  hs->aSlots = sqlite3_malloc64((sqlite3_uint64)n * sizeof(ProllyHash));
+  hs->aUsed = sqlite3_malloc64((sqlite3_uint64)n);
   if( !hs->aSlots || !hs->aUsed ){
     sqlite3_free(hs->aSlots);
     sqlite3_free(hs->aUsed);
     return SQLITE_NOMEM;
   }
-  memset(hs->aUsed, 0, n);
-  hs->nSlots = n;
+  memset(hs->aUsed, 0, (size_t)n);
+  hs->nSlots = (int)n;
   hs->nUsed = 0;
   return SQLITE_OK;
 }
@@ -71,16 +73,17 @@ int prollyHashSetAdd(ProllyHashSet *hs, const ProllyHash *h){
 static int prollyHashSetGrow(ProllyHashSet *hs){
   ProllyHashSet newHs;
   int i, rc;
-  int newSize = hs->nSlots * 2;
-  newHs.aSlots = sqlite3_malloc(newSize * sizeof(ProllyHash));
-  newHs.aUsed = sqlite3_malloc(newSize);
+  i64 newSize = (i64)hs->nSlots * 2;
+  if( newSize > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ) return SQLITE_NOMEM;
+  newHs.aSlots = sqlite3_malloc64((sqlite3_uint64)newSize * sizeof(ProllyHash));
+  newHs.aUsed = sqlite3_malloc64((sqlite3_uint64)newSize);
   if( !newHs.aSlots || !newHs.aUsed ){
     sqlite3_free(newHs.aSlots);
     sqlite3_free(newHs.aUsed);
     return SQLITE_NOMEM;
   }
-  memset(newHs.aUsed, 0, newSize);
-  newHs.nSlots = newSize;
+  memset(newHs.aUsed, 0, (size_t)newSize);
+  newHs.nSlots = (int)newSize;
   newHs.nUsed = 0;
   for(i=0; i<hs->nSlots; i++){
     if( hs->aUsed[i] ){

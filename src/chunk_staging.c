@@ -248,41 +248,46 @@ int csSearchRecent(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
 
 int csGrowPending(ChunkStore *cs){
   if( cs->staging.nPending >= cs->staging.nPendingAlloc ){
-    int nNew = cs->staging.nPendingAlloc ? cs->staging.nPendingAlloc * 2 : CS_INIT_PENDING_ALLOC;
-    ChunkIndexEntry *aNew = (ChunkIndexEntry *)sqlite3_realloc(
-      cs->staging.aPending, nNew * (int)sizeof(ChunkIndexEntry)
-    );
+    i64 nNew = cs->staging.nPendingAlloc ? (i64)cs->staging.nPendingAlloc * 2
+                                         : CS_INIT_PENDING_ALLOC;
+    ChunkIndexEntry *aNew;
     i64 *aNewZ;
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(ChunkIndexEntry) ) return SQLITE_NOMEM;
+    aNew = (ChunkIndexEntry *)sqlite3_realloc64(
+      cs->staging.aPending, (sqlite3_uint64)nNew * sizeof(ChunkIndexEntry)
+    );
     if( aNew == 0 ) return SQLITE_NOMEM;
     cs->staging.aPending = aNew;
-    aNewZ = (i64 *)sqlite3_realloc(
-      cs->staging.aPendingZeroTail, nNew * (int)sizeof(i64)
+    aNewZ = (i64 *)sqlite3_realloc64(
+      cs->staging.aPendingZeroTail, (sqlite3_uint64)nNew * sizeof(i64)
     );
     if( aNewZ == 0 ) return SQLITE_NOMEM;
     cs->staging.aPendingZeroTail = aNewZ;
-    cs->staging.nPendingAlloc = nNew;
+    cs->staging.nPendingAlloc = (int)nNew;
   }
   return SQLITE_OK;
 }
 
 int csGrowRecent(ChunkStore *cs, int nAdd){
-  int nNeed = cs->staging.nRecent + nAdd;
+  i64 nNeed = (i64)cs->staging.nRecent + nAdd;
   if( nNeed > cs->staging.nRecentAlloc ){
-    int nNew = cs->staging.nRecentAlloc ? cs->staging.nRecentAlloc * 2 : CS_INIT_PENDING_ALLOC;
+    i64 nNew = cs->staging.nRecentAlloc ? (i64)cs->staging.nRecentAlloc * 2
+                                        : CS_INIT_PENDING_ALLOC;
     ChunkIndexEntry *aNew;
     i64 *aNewZ;
     while( nNew < nNeed ) nNew *= 2;
-    aNew = (ChunkIndexEntry *)sqlite3_realloc(
-      cs->staging.aRecent, nNew * (int)sizeof(ChunkIndexEntry)
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(ChunkIndexEntry) ) return SQLITE_NOMEM;
+    aNew = (ChunkIndexEntry *)sqlite3_realloc64(
+      cs->staging.aRecent, (sqlite3_uint64)nNew * sizeof(ChunkIndexEntry)
     );
     if( aNew == 0 ) return SQLITE_NOMEM;
     cs->staging.aRecent = aNew;
-    aNewZ = (i64 *)sqlite3_realloc(
-      cs->staging.aRecentZeroTail, nNew * (int)sizeof(i64)
+    aNewZ = (i64 *)sqlite3_realloc64(
+      cs->staging.aRecentZeroTail, (sqlite3_uint64)nNew * sizeof(i64)
     );
     if( aNewZ == 0 ) return SQLITE_NOMEM;
     cs->staging.aRecentZeroTail = aNewZ;
-    cs->staging.nRecentAlloc = nNew;
+    cs->staging.nRecentAlloc = (int)nNew;
   }
   return SQLITE_OK;
 }
