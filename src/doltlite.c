@@ -11,6 +11,8 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_name_index.h"
+#include <stddef.h>
 #include "doltlite_ignore.h"
 
 #include <string.h>
@@ -821,87 +823,31 @@ static struct TableEntry *addFindEntryByName(
   return 0;
 }
 
-typedef struct AddNameSlot AddNameSlot;
-struct AddNameSlot {
-  int iEntry;
-};
-
-typedef struct AddNameIndex AddNameIndex;
-struct AddNameIndex {
-  struct TableEntry *aEntry;
-  AddNameSlot *aSlot;
-  int nSlot;
-};
-
-static u32 addNameHash(const char *z){
-  u32 h = 2166136261u;
-  while( z && *z ){
-    h ^= (unsigned char)*z;
-    h *= 16777619u;
-    z++;
-  }
-  return h;
-}
+/* Catalog name->entry index over the shared DoltliteNameIndex, which reads
+** names through the live array so it survives dolt_commit -A rewriting entry
+** names in place. */
+typedef DoltliteNameIndex AddNameIndex;
 
 static int addNameIndexInit(
   AddNameIndex *pIdx,
   struct TableEntry *aEntry,
   int nEntry
 ){
-  int nSlot = 16;
-  int i;
-
-  memset(pIdx, 0, sizeof(*pIdx));
-  pIdx->aEntry = aEntry;
-  if( nEntry<=0 ) return SQLITE_OK;
-  while( nSlot < nEntry*2 ) nSlot *= 2;
-  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(AddNameSlot));
-  if( !pIdx->aSlot ) return SQLITE_NOMEM;
-  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(AddNameSlot));
-  pIdx->nSlot = nSlot;
-
-  for(i=0; i<nEntry; i++){
-    u32 slot;
-    if( !aEntry[i].zName ) continue;
-    slot = addNameHash(aEntry[i].zName) & (u32)(nSlot - 1);
-    while( pIdx->aSlot[slot].iEntry ){
-      if( strcmp(aEntry[pIdx->aSlot[slot].iEntry - 1].zName, aEntry[i].zName)==0 ){
-        break;
-      }
-      slot = (slot + 1) & (u32)(nSlot - 1);
-    }
-    if( !pIdx->aSlot[slot].iEntry ){
-      pIdx->aSlot[slot].iEntry = i + 1;
-    }
-  }
-  return SQLITE_OK;
+  return doltliteNameIndexInit(pIdx, aEntry, nEntry,
+                               (int)sizeof(struct TableEntry),
+                               (int)offsetof(struct TableEntry, zName));
 }
 
 static void addNameIndexFree(AddNameIndex *pIdx){
-  sqlite3_free(pIdx->aSlot);
-  memset(pIdx, 0, sizeof(*pIdx));
+  doltliteNameIndexFree(pIdx);
 }
 
 static struct TableEntry *addNameIndexFind(
   const AddNameIndex *pIdx,
   const char *zName
 ){
-  u32 slot;
-  int i;
-  if( !zName || pIdx->nSlot==0 ) return 0;
-  slot = addNameHash(zName) & (u32)(pIdx->nSlot - 1);
-  for(i=0; i<pIdx->nSlot; i++){
-    AddNameSlot *pSlot = &pIdx->aSlot[slot];
-    /* Compare through aEntry, not a cached pointer: the caller replaces
-    ** entry names while the index is live (dolt_commit -A), and a cached
-    ** pointer dangled after the old name was freed. */
-    if( !pSlot->iEntry ) return 0;
-    if( strcmp(pIdx->aEntry[pSlot->iEntry - 1].zName, zName)==0 ){
-      return &pIdx->aEntry[pSlot->iEntry - 1];
-    }
-    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
-  }
-  return 0;
+  int r = doltliteNameIndexFind(pIdx, zName);
+  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
 static void addAlignStagedEntriesToWorking(

@@ -11,6 +11,8 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_name_index.h"
+#include <stddef.h>
 #include <string.h>
 
 static int dsLoadColNames(sqlite3 *db,
@@ -246,30 +248,10 @@ struct DsFilterCtx {
 
 static void dsFilterCtxClear(DsFilterCtx *pCtx);
 
-typedef struct DsNameSlot DsNameSlot;
-typedef struct DsNameIndex DsNameIndex;
-struct DsNameSlot {
-  const char *zName;
-  struct TableEntry *pEntry;
-};
-struct DsNameIndex {
-  DsNameSlot *aSlot;
-  int nSlot;
-};
-
-static u32 dsNameHash(const char *zName){
-  u32 h = 2166136261u;
-  while( *zName ){
-    h ^= (u8)*zName++;
-    h *= 16777619u;
-  }
-  return h;
-}
+typedef DoltliteNameIndex DsNameIndex;
 
 static void dsNameIndexClear(DsNameIndex *pIdx){
-  sqlite3_free(pIdx->aSlot);
-  pIdx->aSlot = 0;
-  pIdx->nSlot = 0;
+  doltliteNameIndexFree(pIdx);
 }
 
 static int dsNameIndexInit(
@@ -277,43 +259,17 @@ static int dsNameIndexInit(
   struct TableEntry *aCat,
   int nCat
 ){
-  int nSlot = 8;
-  int i;
-  memset(pIdx, 0, sizeof(*pIdx));
-  while( nSlot < nCat*2 ) nSlot *= 2;
-  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(DsNameSlot));
-  if( !pIdx->aSlot ) return SQLITE_NOMEM;
-  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(DsNameSlot));
-  pIdx->nSlot = nSlot;
-  for(i=0; i<nCat; i++){
-    const char *zName = aCat[i].zName;
-    u32 h;
-    if( !zName ) continue;
-    h = dsNameHash(zName) & (u32)(nSlot-1);
-    while( pIdx->aSlot[h].zName ){
-      if( strcmp(pIdx->aSlot[h].zName, zName)==0 ) break;
-      h = (h + 1) & (u32)(nSlot-1);
-    }
-    pIdx->aSlot[h].zName = zName;
-    pIdx->aSlot[h].pEntry = &aCat[i];
-  }
-  return SQLITE_OK;
+  return doltliteNameIndexInit(pIdx, aCat, nCat,
+                               (int)sizeof(struct TableEntry),
+                               (int)offsetof(struct TableEntry, zName));
 }
 
 static struct TableEntry *dsNameIndexFind(
   const DsNameIndex *pIdx,
   const char *zName
 ){
-  u32 h;
-  if( !zName || !pIdx->aSlot || pIdx->nSlot<=0 ) return 0;
-  h = dsNameHash(zName) & (u32)(pIdx->nSlot-1);
-  while( pIdx->aSlot[h].zName ){
-    if( strcmp(pIdx->aSlot[h].zName, zName)==0 ){
-      return pIdx->aSlot[h].pEntry;
-    }
-    h = (h + 1) & (u32)(pIdx->nSlot-1);
-  }
-  return 0;
+  int r = doltliteNameIndexFind(pIdx, zName);
+  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
 static int dsResolveCatHash(sqlite3 *db, const char *zRef,

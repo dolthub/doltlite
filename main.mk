@@ -629,6 +629,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_ancestor.h $(TOP)/src/doltlite_chunk_walk.h \
     $(TOP)/src/doltlite_commit.h $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
+    $(TOP)/src/doltlite_name_index.h \
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
     $(TOP)/src/doltlite_creds.h $(TOP)/src/doltlite_net.h $(TOP)/src/doltlite_tls.h \
     $(TOP)/src/doltlite_vtab_util.h \

@@ -9,6 +9,8 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_name_index.h"
+#include <stddef.h>
 #include <string.h>
 
 typedef struct SchemaDiffRow SchemaDiffRow;
@@ -334,47 +336,11 @@ SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
   return 0;
 }
 
-typedef struct SdSchemaSlot SdSchemaSlot;
-typedef struct SdSchemaIndex SdSchemaIndex;
-typedef struct SdTableSlot SdTableSlot;
-typedef struct SdTableIndex SdTableIndex;
-
-struct SdSchemaSlot {
-  const char *zName;
-  SchemaEntry *pEntry;
-};
-struct SdSchemaIndex {
-  SdSchemaSlot *aSlot;
-  int nSlot;
-};
-struct SdTableSlot {
-  const char *zName;
-  struct TableEntry *pEntry;
-};
-struct SdTableIndex {
-  SdTableSlot *aSlot;
-  int nSlot;
-};
-
-static u32 sdNameHash(const char *zName){
-  u32 h = 2166136261u;
-  while( *zName ){
-    h ^= (u8)*zName++;
-    h *= 16777619u;
-  }
-  return h;
-}
-
-static int sdIndexSlotCount(int nEntry){
-  int nSlot = 8;
-  while( nSlot < nEntry*2 ) nSlot *= 2;
-  return nSlot;
-}
+typedef DoltliteNameIndex SdSchemaIndex;
+typedef DoltliteNameIndex SdTableIndex;
 
 static void sdSchemaIndexClear(SdSchemaIndex *pIdx){
-  sqlite3_free(pIdx->aSlot);
-  pIdx->aSlot = 0;
-  pIdx->nSlot = 0;
+  doltliteNameIndexFree(pIdx);
 }
 
 static int sdSchemaIndexInit(
@@ -382,48 +348,21 @@ static int sdSchemaIndexInit(
   SchemaEntry *aSchema,
   int nSchema
 ){
-  int nSlot = sdIndexSlotCount(nSchema);
-  int i;
-  memset(pIdx, 0, sizeof(*pIdx));
-  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(SdSchemaSlot));
-  if( !pIdx->aSlot ) return SQLITE_NOMEM;
-  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(SdSchemaSlot));
-  pIdx->nSlot = nSlot;
-  for(i=0; i<nSchema; i++){
-    const char *zName = aSchema[i].zName;
-    u32 h;
-    if( !zName ) continue;
-    h = sdNameHash(zName) & (u32)(nSlot-1);
-    while( pIdx->aSlot[h].zName ){
-      if( strcmp(pIdx->aSlot[h].zName, zName)==0 ) break;
-      h = (h + 1) & (u32)(nSlot-1);
-    }
-    pIdx->aSlot[h].zName = zName;
-    pIdx->aSlot[h].pEntry = &aSchema[i];
-  }
-  return SQLITE_OK;
+  return doltliteNameIndexInit(pIdx, aSchema, nSchema,
+                               (int)sizeof(SchemaEntry),
+                               (int)offsetof(SchemaEntry, zName));
 }
 
 static SchemaEntry *sdSchemaIndexFind(
   const SdSchemaIndex *pIdx,
   const char *zName
 ){
-  u32 h;
-  if( !zName || !pIdx->aSlot || pIdx->nSlot<=0 ) return 0;
-  h = sdNameHash(zName) & (u32)(pIdx->nSlot-1);
-  while( pIdx->aSlot[h].zName ){
-    if( strcmp(pIdx->aSlot[h].zName, zName)==0 ){
-      return pIdx->aSlot[h].pEntry;
-    }
-    h = (h + 1) & (u32)(pIdx->nSlot-1);
-  }
-  return 0;
+  int r = doltliteNameIndexFind(pIdx, zName);
+  return r<0 ? 0 : (SchemaEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
 static void sdTableIndexClear(SdTableIndex *pIdx){
-  sqlite3_free(pIdx->aSlot);
-  pIdx->aSlot = 0;
-  pIdx->nSlot = 0;
+  doltliteNameIndexFree(pIdx);
 }
 
 static int sdTableIndexInit(
@@ -431,42 +370,17 @@ static int sdTableIndexInit(
   struct TableEntry *aTable,
   int nTable
 ){
-  int nSlot = sdIndexSlotCount(nTable);
-  int i;
-  memset(pIdx, 0, sizeof(*pIdx));
-  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(SdTableSlot));
-  if( !pIdx->aSlot ) return SQLITE_NOMEM;
-  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(SdTableSlot));
-  pIdx->nSlot = nSlot;
-  for(i=0; i<nTable; i++){
-    const char *zName = aTable[i].zName;
-    u32 h;
-    if( !zName ) continue;
-    h = sdNameHash(zName) & (u32)(nSlot-1);
-    while( pIdx->aSlot[h].zName ){
-      if( strcmp(pIdx->aSlot[h].zName, zName)==0 ) break;
-      h = (h + 1) & (u32)(nSlot-1);
-    }
-    pIdx->aSlot[h].zName = zName;
-    pIdx->aSlot[h].pEntry = &aTable[i];
-  }
-  return SQLITE_OK;
+  return doltliteNameIndexInit(pIdx, aTable, nTable,
+                               (int)sizeof(struct TableEntry),
+                               (int)offsetof(struct TableEntry, zName));
 }
 
 static struct TableEntry *sdTableIndexFind(
   const SdTableIndex *pIdx,
   const char *zName
 ){
-  u32 h;
-  if( !zName || !pIdx->aSlot || pIdx->nSlot<=0 ) return 0;
-  h = sdNameHash(zName) & (u32)(pIdx->nSlot-1);
-  while( pIdx->aSlot[h].zName ){
-    if( strcmp(pIdx->aSlot[h].zName, zName)==0 ){
-      return pIdx->aSlot[h].pEntry;
-    }
-    h = (h + 1) & (u32)(pIdx->nSlot-1);
-  }
-  return 0;
+  int r = doltliteNameIndexFind(pIdx, zName);
+  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
 static int computeSchemaDiff(
