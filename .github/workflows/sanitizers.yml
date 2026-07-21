@@ -199,6 +199,11 @@ jobs:
         ./threadtest4 --multithread 6
 
     - name: Run threadtest5 shared-database workers
+      env:
+        # ThreadSanitizer slows execution ~10x, so the test's default 2s busy
+        # timeout is easily exceeded under 8-worker write contention, spuriously
+        # failing the p1/p2 consistency check. Give writers room to make progress.
+        THREADTEST5_BUSY_MS: "60000"
       run: |
         cd build
         rm -f /tmp/doltlite-threadtest5.db
