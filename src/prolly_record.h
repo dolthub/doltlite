@@ -2,6 +2,7 @@
 #ifndef SQLITE_PROLLY_RECORD_H
 #define SQLITE_PROLLY_RECORD_H
 
+#include <limits.h>
 #include "sqliteInt.h"
 
 /*
@@ -32,9 +33,14 @@ static inline int dlReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
 
 static inline int dlSerialTypeLen(u64 st){
   static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
+  u64 n;
   if( st <= 6 ) return aLen[st];
   if( st == 7 ) return 8;
-  if( st >= 12 ) return (int)(st - 12) / 2;
+  if( st >= 12 ){
+    n = (st - 12) / 2;
+    if( n > (u64)INT_MAX ) return -1;
+    return (int)n;
+  }
   return 0;
 }
 
