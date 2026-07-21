@@ -10,6 +10,7 @@ GATING=(
   sql_transaction_test
   invariant_test
   three_way_diff_test
+  clone_error_code_test
   prolly_hashset_test
   concurrent_stress_test
   vc_concurrency_test

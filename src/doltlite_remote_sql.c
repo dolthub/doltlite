@@ -660,8 +660,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltliteClone(cs, pRemote);
   pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                              "clone failed");
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, "clone failed");
     return;
   }
 
