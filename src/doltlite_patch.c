@@ -894,8 +894,10 @@ static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
     patchAppendValue(pStr,&newV);
   }
   if( nSet==0 ){
-    sqlite3_str_reset(pStr);
-    return SQLITE_OK;
+    rc = sqlite3_str_errcode(pStr);
+    zSql = sqlite3_str_finish(pStr);
+    sqlite3_free(zSql);
+    return rc;
   }
   patchAppendWhere(pStr,pFrom,pOld,nOld,intKey);
   zSql = sqlite3_str_finish(pStr);
