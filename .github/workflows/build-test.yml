@@ -102,6 +102,32 @@ jobs:
           ext/wasm/jswasm/*
           ext/wasm/sqlite-wasm-*.zip
 
+  development-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build development test configurations
+      run: |
+        cd build
+        make DOLTLITE_PROLLY=1 testfixture
+        ./testfixture ../test/testrunner.tcl --buildonly --jobs 2 mdevtest
+
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}

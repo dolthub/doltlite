@@ -844,10 +844,12 @@ int sqlite3PagerCloseWal(Pager *pPager, sqlite3 *db){
 }
 #endif
 
+#ifndef SQLITE_OMIT_SHARED_CACHE
 int sqlite3_enable_shared_cache(int enable){
   (void)enable;
   return SQLITE_OK;
 }
+#endif
 
 sqlite3_file *sqlite3_database_file_object(const char *zName){
   (void)zName;
