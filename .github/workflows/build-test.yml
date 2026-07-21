@@ -104,7 +104,7 @@ jobs:
 
   development-builds:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -131,7 +131,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 45
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
