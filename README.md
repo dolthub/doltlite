@@ -349,6 +349,20 @@ SELECT * FROM dolt_diff_summary('v1.0', 'HEAD');
 -- Schema-level diff (tables, views, indexes)
 SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
 
+-- Turn a diff into ordered, executable SQLite statements. The result has
+-- Dolt's statement_order, from_commit_hash, to_commit_hash, table_name,
+-- diff_type, and statement columns. Schema changes that SQLite cannot express
+-- with ALTER TABLE are emitted as an ordered table rebuild.
+SELECT * FROM dolt_patch('v1.0', 'v2.0');
+SELECT * FROM dolt_patch('v1.0', 'v2.0', 'users');
+SELECT * FROM dolt_patch('v1.0..v2.0');
+SELECT * FROM dolt_patch('main...feature', 'users');
+
+-- Generate only data statements; numbering is compacted just as in Dolt.
+SELECT statement FROM dolt_patch('HEAD', 'WORKING')
+ WHERE diff_type = 'data'
+ ORDER BY statement_order;
+
 -- Row-level history for a single table: every INSERT / UPDATE / DELETE
 -- that was ever committed, with real per-column to_/from_ pairs plus
 -- commit metadata and a diff_type. One virtual table per user table,
