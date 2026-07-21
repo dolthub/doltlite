@@ -7941,7 +7941,99 @@ static void run_refs_deserialize_overflow_guard(void){
   }
 }
 
+static void run_directonly_dolt_functions(void){
+  static const char *zCommandNames =
+    "'dolt_add','dolt_branch','dolt_checkout','dolt_cherry_pick',"
+    "'dolt_clone','dolt_commit','dolt_config','dolt_conflicts_resolve',"
+    "'dolt_connect_branch','dolt_creds','dolt_creds_new',"
+    "'dolt_default_branch','dolt_fetch','dolt_gc','dolt_merge','dolt_pull',"
+    "'dolt_push','dolt_rebase','dolt_remote','dolt_reset','dolt_revert',"
+    "'dolt_tag','doltlite_internal_materialize_default_column'";
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char *zSql;
+  const char *zResult;
+  int rc;
+
+  printf("=== Direct-Only Dolt Functions Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_directonly_dolt_functions");
+  removeDbFiles(dbpath);
+  check("directonly_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  zSql = sqlite3_mprintf(
+    "SELECT count(*) || '|' || coalesce(sum((flags & %d)!=0),0) "
+    "FROM pragma_function_list WHERE name IN (%s)",
+    SQLITE_DIRECTONLY, zCommandNames);
+  check("directonly_flags_query_allocated", zSql!=0);
+  if( zSql ){
+    zResult = queryScalarText(db, zSql);
+    check("all_command_functions_are_directonly",
+          strcmp(zResult, "23|23")==0);
+    sqlite3_free(zSql);
+  }
+
+  zSql = sqlite3_mprintf(
+    "SELECT count(*) FROM pragma_function_list "
+    "WHERE name IN ('active_branch','dolt_version','dolt_merge_base',"
+    "'dolt_hashof','dolt_hashof_table','dolt_hashof_db',"
+    "'dolt_hashof_catalog') AND (flags & %d)!=0",
+    SQLITE_DIRECTONLY);
+  check("readonly_flags_query_allocated", zSql!=0);
+  if( zSql ){
+    zResult = queryScalarText(db, zSql);
+    check("readonly_functions_are_not_directonly", strcmp(zResult, "0")==0);
+    sqlite3_free(zSql);
+  }
+
+  rc = execSql(db,
+    "CREATE TABLE direct_t(id INTEGER PRIMARY KEY, value TEXT);"
+    "INSERT INTO direct_t VALUES(1,'one');"
+    "SELECT dolt_config('user.name','Direct Only Test');"
+    "SELECT dolt_config('user.email','direct@example.com');"
+    "SELECT dolt_commit('-A','-m','direct call');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_tag('v1');"
+    "SELECT dolt_remote('add','origin','file:///tmp/direct-only-unused');"
+    "SELECT dolt_remote('remove','origin');");
+  check("direct_command_calls_still_work", rc==SQLITE_OK);
+  zResult = queryScalarText(db, "SELECT dolt_gc()");
+  check("direct_gc_call_still_works", strstr(zResult, "ERROR:")==0);
+
+  rc = execSql(db,
+    "CREATE VIEW allowed_dolt_view AS "
+    "SELECT dolt_version() AS version, active_branch() AS branch;");
+  check("readonly_dolt_view_created", rc==SQLITE_OK);
+  zResult = queryScalarText(db, "SELECT branch FROM allowed_dolt_view");
+  check("readonly_dolt_view_works", strcmp(zResult, "main")==0);
+
+  rc = execSql(db, "CREATE VIEW blocked_dolt_view AS SELECT dolt_gc()");
+  check("directonly_view_created", rc==SQLITE_OK);
+  zResult = queryScalarText(db, "SELECT * FROM blocked_dolt_view");
+  check("directonly_view_rejected",
+        strstr(zResult, "unsafe use of dolt_gc()")!=0);
+
+  rc = execSql(db,
+    "CREATE TABLE trigger_t(id INTEGER PRIMARY KEY);"
+    "CREATE TRIGGER blocked_dolt_trigger AFTER INSERT ON trigger_t BEGIN "
+    "SELECT dolt_branch('trigger-branch'); END;");
+  check("directonly_trigger_created", rc==SQLITE_OK);
+  rc = execSqlSilent(db, "INSERT INTO trigger_t VALUES(1)");
+  check("directonly_trigger_rejected", rc==SQLITE_ERROR
+        && strstr(sqlite3_errmsg(db), "unsafe use of dolt_branch()")!=0);
+  check("directonly_trigger_statement_rolled_back",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM trigger_t"), "0")==0);
+  check("directonly_trigger_had_no_branch_side_effect",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='trigger-branch'"),
+          "0")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
+  { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },

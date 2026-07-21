@@ -287,7 +287,9 @@ static sqlite3_module tagModule = {
 
 int doltliteTagRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_function(db, "dolt_tag", -1, SQLITE_UTF8, 0, doltTagFunc, 0, 0);
+  rc = sqlite3_create_function(db, "dolt_tag", -1,
+                               DOLTLITE_COMMAND_FUNC_FLAGS, 0,
+                               doltTagFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_tags", &tagModule, 0);
   return rc;
 }

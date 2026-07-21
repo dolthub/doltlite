@@ -5660,29 +5660,38 @@ static int doltliteMaybeSeedRepo(sqlite3 *db){
 
 int doltliteRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_function(db, "dolt_commit", -1, SQLITE_UTF8, 0,
+  rc = sqlite3_create_function(db, "dolt_commit", -1,
+                               DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                doltliteCommitFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_add", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_add", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteAddFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_reset", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_reset", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteResetFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_merge", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_merge", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteMergeFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_cherry_pick", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_cherry_pick", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteCherryPickFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_revert", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_revert", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteRevertFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_rebase", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_rebase", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteRebaseFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_config", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteConfigFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_version", 0, SQLITE_UTF8, 0,
                                                    doltliteVersionFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_default_branch", -1, SQLITE_UTF8, 0,
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_default_branch", -1,
+                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteDefaultBranchFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db,
                                                    "doltlite_internal_materialize_default_column",
-                                                   3, SQLITE_UTF8, 0,
+                                                   3, DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                                    doltliteInternalMaterializeDefaultColumnFunc,
                                                    0, 0);
   if( rc!=SQLITE_OK ) return rc;

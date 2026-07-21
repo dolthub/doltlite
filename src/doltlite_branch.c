@@ -1700,10 +1700,16 @@ static sqlite3_module brMod = {
 
 int doltliteBranchRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_function(db, "dolt_branch", -1, SQLITE_UTF8, 0, doltBranchFunc, 0, 0);
-  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_checkout", -1, SQLITE_UTF8, 0, doltCheckoutFunc, 0, 0);
+  rc = sqlite3_create_function(db, "dolt_branch", -1,
+                               DOLTLITE_COMMAND_FUNC_FLAGS, 0,
+                               doltBranchFunc, 0, 0);
+  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_checkout", -1,
+                                                  DOLTLITE_COMMAND_FUNC_FLAGS,
+                                                  0, doltCheckoutFunc, 0, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "active_branch", 0, SQLITE_UTF8, 0, activeBranchFunc, 0, 0);
-  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_connect_branch", 1, SQLITE_UTF8, 0, doltConnectBranchFunc, 0, 0);
+  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_connect_branch", 1,
+                                                  DOLTLITE_COMMAND_FUNC_FLAGS,
+                                                  0, doltConnectBranchFunc, 0, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_module(db, "dolt_branches", &brMod, 0);
   return rc;
 }

@@ -1059,7 +1059,8 @@ int doltliteGcCompact(sqlite3 *db){
 }
 
 int doltliteGcRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_gc", 0, SQLITE_UTF8, 0,
+  return sqlite3_create_function(db, "dolt_gc", 0,
+                                  DOLTLITE_COMMAND_FUNC_FLAGS, 0,
                                   doltliteGcFunc, 0, 0);
 }
 
