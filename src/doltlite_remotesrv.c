@@ -863,11 +863,15 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
     zBindAddr = "127.0.0.1";
   }
   if( inet_pton(AF_INET, zBindAddr, &bindIn)!=1 ){
+    serverCleanup(pSrv);
     return SQLITE_ERROR;
   }
 
   pSrv->zDir = dupStr(o->zDir);
-  if( !pSrv->zDir ) return SQLITE_NOMEM;
+  if( !pSrv->zDir ){
+    serverCleanup(pSrv);
+    return SQLITE_NOMEM;
+  }
 
   if( o->authKeysDir && o->authKeysDir[0] ){
     pSrv->authKeysDir = dupStr(o->authKeysDir);
@@ -979,6 +983,25 @@ static void serverCleanup(DoltliteServer *pSrv){
     pthread_mutex_destroy(&pSrv->mutex);
     pSrv->mutexInit = 0;
   }
+}
+
+int doltliteRemoteSrvInitForTest(
+  const DoltliteServeOpts *o,
+  int *pMutexInit,
+  int *pCondInit
+){
+  DoltliteServer server;
+  int rc;
+
+  rc = serverInit(&server, o);
+  *pMutexInit = server.mutexInit;
+  *pCondInit = server.condInit;
+  if( rc==SQLITE_OK ){
+    serverRequestStop(&server);
+    serverJoinWorkers(&server);
+  }
+  serverCleanup(&server);
+  return rc;
 }
 
 int doltliteServeOpts(const DoltliteServeOpts *o){

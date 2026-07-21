@@ -2685,6 +2685,7 @@ DOLTLITE_C_TESTS = \
 	three_way_diff_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
+	remotesrv_init_failure_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe)
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
@@ -2729,6 +2730,10 @@ sequence_reload_test$(T.exe): $(TOP)/test/sequence_reload_test.c libdoltlite$(T.
 
 chunk_store_fork_lock_test$(T.exe): $(TOP)/test/chunk_store_fork_lock_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/chunk_store_fork_lock_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+remotesrv_init_failure_test$(T.exe): $(TOP)/test/remotesrv_init_failure_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/remotesrv_init_failure_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 invariant_test$(T.exe): $(TOP)/test/invariant_test.c libdoltlite$(T.lib)
