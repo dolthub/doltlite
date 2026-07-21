@@ -2537,12 +2537,32 @@ static void run_record_decode_corruption(void){
   static const u8 badRecord[] = {
     0x05, 0x01
   };
+  DoltliteRecordInfo info;
   char *z;
+  int rc;
 
   printf("=== Record Decode Corruption Test ===\n\n");
   z = doltliteDecodeRecord(badRecord, (int)sizeof(badRecord));
   check("corrupt_record_decodes_to_null", z==0);
   sqlite3_free(z);
+
+  check("decode_null_record_rejected", doltliteDecodeRecord(0, 1)==0);
+  check("decode_zero_length_record_rejected",
+        doltliteDecodeRecord(badRecord, 0)==0);
+  check("decode_negative_length_record_rejected",
+        doltliteDecodeRecord(badRecord, -1)==0);
+
+  memset(&info, 0xff, sizeof(info));
+  rc = doltliteParseRecordStrict(0, 1, &info);
+  check("parse_null_record_rejected", rc==SQLITE_CORRUPT && info.nField==0);
+  memset(&info, 0xff, sizeof(info));
+  rc = doltliteParseRecordStrict(badRecord, 0, &info);
+  check("parse_zero_length_record_rejected",
+        rc==SQLITE_CORRUPT && info.nField==0);
+  memset(&info, 0xff, sizeof(info));
+  rc = doltliteParseRecordStrict(badRecord, -1, &info);
+  check("parse_negative_length_record_rejected",
+        rc==SQLITE_CORRUPT && info.nField==0);
 }
 
 static void run_sortkey_two_numeric_roundtrip(void){
