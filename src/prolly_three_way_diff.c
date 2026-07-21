@@ -176,6 +176,9 @@ int prollyThreeWayDiff(
   int rcL, rcR;
   int rc = SQLITE_OK;
 
+  memset(&iterL, 0, sizeof(iterL));
+  memset(&iterR, 0, sizeof(iterR));
+
   rcL = prollyDiffIterOpen(&iterL, pStore, pCache,
                            pAncestorRoot, pOursRoot, flags);
   if( rcL!=SQLITE_OK ){
