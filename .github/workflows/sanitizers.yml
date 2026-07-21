@@ -7,7 +7,7 @@ on:
 jobs:
   asan-ubsan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v4
@@ -15,6 +15,12 @@ jobs:
     - name: Install dependencies
       run: |
         bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+
+    - name: Install Dolt
+      run: |
+        curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz \
+          | sudo tar -xz -C /usr/local --strip-components=1
+        dolt version
 
     - name: Configure
       run: |
@@ -55,30 +61,29 @@ jobs:
         echo "LSAN_OPTIONS=suppressions=$GITHUB_WORKSPACE/.github/lsan.supp:print_suppressions=0" >> $GITHUB_ENV
         echo "UBSAN_OPTIONS=abort_on_error=1:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
 
-    # Run the oracle suite (the most bug-productive subset of
-    # our tests). The testfixture and external-integration tests
-    # are skipped — they take too long under ASan and aren't where
-    # prolly-side UB lives.
-    - name: Oracle tests (savepoints + rollbacks)
-      run: cd build && bash ../test/oracle_savepoints_test.sh ./doltlite ./sqlite3
+    # Keep this in lockstep with the normal oracle-tests job. Globbing the
+    # suites makes every new oracle sanitizer-covered automatically instead
+    # of relying on a hand-maintained subset that can silently drift.
+    - name: SQL oracle tests (vs stock SQLite and Dolt)
+      run: |
+        cd build
+        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
+        bash ../test/oracle_import_test.sh ./doltlite dolt || exit 1
+        for f in ../test/oracle_*_test.sh; do
+          [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue
+          echo "--- $(basename "$f") ---"
+          bash "$f" ./doltlite ./sqlite3 || exit 1
+        done
+      timeout-minutes: 15
 
-    - name: Oracle tests (foreign keys)
-      run: cd build && bash ../test/oracle_foreign_keys_test.sh ./doltlite ./sqlite3
-
-    - name: Oracle tests (UPSERT / INSERT OR)
-      run: cd build && bash ../test/oracle_upsert_test.sh ./doltlite ./sqlite3
-
-    - name: Oracle tests (generated columns)
-      run: cd build && bash ../test/oracle_generated_columns_test.sh ./doltlite ./sqlite3
-
-    - name: Oracle tests (WITHOUT ROWID)
-      run: cd build && bash ../test/oracle_without_rowid_test.sh ./doltlite ./sqlite3
-
-    - name: Oracle tests (SQL triggers)
-      run: cd build && bash ../test/oracle_triggers_test.sh ./doltlite ./sqlite3
-
-    - name: SQL oracle tests
-      run: cd build && bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
+    - name: Version control oracle tests (vs Dolt)
+      run: |
+        cd build
+        for f in ../test/vc_oracle_*_test.sh; do
+          echo "--- $(basename "$f") ---"
+          bash "$f" ./doltlite dolt || exit 1
+        done
+      timeout-minutes: 25
 
     - name: Correctness regression tests
       run: cd build && bash ../test/correctness_test.sh ./doltlite
@@ -134,7 +139,7 @@ jobs:
 
   tsan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     env:
       TSAN_CFLAGS: -O1 -g -fsanitize=thread -fno-omit-frame-pointer
@@ -168,6 +173,18 @@ jobs:
         clang $TSAN_CFLAGS -I. -I../src \
           -o threadtest4 ../test/threadtest4.c sqlite3.c \
           $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+        clang $TSAN_CFLAGS -I. -I../src \
+          -o threadtest5 ../test/threadtest5.c sqlite3.c \
+          $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+
+    - name: Build DoltLite remote server with TSan
+      run: |
+        cd build
+        make \
+          CC=clang \
+          CFLAGS="$TSAN_CFLAGS" \
+          LDFLAGS="$TSAN_LDFLAGS" \
+          doltlite doltlite-remotesrv
 
     - name: Run threadtest4 serialized
       run: |
@@ -180,6 +197,24 @@ jobs:
         cd build
         rm -f tt4-test1.db tt4-test2.db tt4-test3.db
         ./threadtest4 --multithread 6
+
+    - name: Run threadtest5 shared-database workers
+      env:
+        # ThreadSanitizer slows execution ~10x, so the test's default 2s busy
+        # timeout is easily exceeded under 8-worker write contention, spuriously
+        # failing the p1/p2 consistency check. Give writers room to make progress.
+        THREADTEST5_BUSY_MS: "60000"
+      run: |
+        cd build
+        rm -f /tmp/doltlite-threadtest5.db
+        ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
+
+    - name: Run HTTP remote concurrency under TSan
+      run: |
+        cd build
+        bash ../test/remotesrv_http_concurrency_test.sh \
+          ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 10
 
   no-dead-code:
     runs-on: ubuntu-latest

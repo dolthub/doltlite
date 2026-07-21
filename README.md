@@ -1014,6 +1014,9 @@ bash ../test/vc_oracle_workspace_test.sh ./doltlite dolt
 A separate CI job builds the same suite with
 `-fsanitize=address,undefined` and runs every oracle under ASan/UBSan to
 catch memory and undefined-behavior bugs before they reach master.
+The sanitizer workflow also runs SQLite's shared-connection and
+shared-database thread tests plus Doltlite's concurrent HTTP remote suite
+under TSan.
 
 ### SQL Logic Test Suite
 

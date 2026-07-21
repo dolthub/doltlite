@@ -158,7 +158,10 @@ static void *worker(void *pArg){
 
   rc = sqlite3_open(zDbName, &db);
   error_out(rc, "sqlite3_open", __LINE__);
-  sqlite3_busy_timeout(db, 2000);
+  {
+    const char *zBusyMs = getenv("THREADTEST5_BUSY_MS");
+    sqlite3_busy_timeout(db, zBusyMs ? atoi(zBusyMs) : 2000);
+  }
 
   while( 1 ){
     sqlite3_stmt *q1;
