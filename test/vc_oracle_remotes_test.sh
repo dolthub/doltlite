@@ -65,7 +65,7 @@ oracle_error() {
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
@@ -97,7 +97,7 @@ oracle_savepoint_remote_poststate() {
   dt_v=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT v FROM t WHERE id=1;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
   dt_remotes=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT coalesce(group_concat(name, ','), '') FROM dolt_remotes;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_v" = "$dt_v" ] && [ "$dl_remotes" = "$dt_remotes" ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" && [ "$dl_v" = "$dt_v" ] && [ "$dl_remotes" = "$dt_remotes" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
@@ -127,7 +127,7 @@ oracle_savepoint_clone_poststate() {
   dt_rc=$?
   dt_post=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "$query" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"\r')
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_post" = "$dt_post" ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" && [ "$dl_post" = "$dt_post" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))

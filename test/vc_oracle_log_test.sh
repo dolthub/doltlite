@@ -147,7 +147,7 @@ oracle_commit_error_poststate() {
       | normalize_commit_relations
   )
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_out" = "$dt_out" ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" && [ "$dl_out" = "$dt_out" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))

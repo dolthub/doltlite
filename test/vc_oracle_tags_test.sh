@@ -79,7 +79,7 @@ oracle_savepoint_tag_poststate() {
   dt_v=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT v FROM t WHERE id=1;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
   dt_tags=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT coalesce(group_concat(tag_name, ','), '') FROM dolt_tags;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_v" = "$dt_v" ] && [ "$dl_tags" = "$dt_tags" ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" && [ "$dl_v" = "$dt_v" ] && [ "$dl_tags" = "$dt_tags" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))

@@ -119,7 +119,7 @@ oracle_error() {
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
