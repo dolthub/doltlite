@@ -80,6 +80,7 @@ extern int doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteRegisterBlameTables(sqlite3 *db);
 extern int doltliteRefreshConstraintViolationTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
+extern int doltlitePatchRegister(sqlite3 *db);
 extern int doltliteRemoteSqlRegister(sqlite3 *db);
 
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
@@ -5767,6 +5768,7 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteRegisterHistoryTables(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteRegisterBlameTables(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteSchemaDiffRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltlitePatchRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteSchemasRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteDiffStatRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteRemoteSqlRegister(db))!=SQLITE_OK ) return rc;
