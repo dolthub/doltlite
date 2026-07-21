@@ -99,6 +99,20 @@ jobs:
           bash ../test/$s.sh ./doltlite || exit 1
         done
 
+    # Ref-mutation, GC, and remote clone/pull paths deserialize the refs blob
+    # and rewrite refs/chunks — memory-management code (the refs int-overflow
+    # and the cursor-pin / merge-cleanup fixes lived here) that the oracle and
+    # read-vtab suites above never exercise under ASan. Kept to fast,
+    # self-contained suites (no server, no external Dolt) to stay in budget.
+    - name: VC ref-mutation + remote suites
+      run: |
+        cd build
+        for s in doltlite_branch doltlite_default_branch doltlite_tag \
+                 doltlite_gc remote_test; do
+          echo "=== $s ==="
+          bash ../test/$s.sh ./doltlite || exit 1
+        done
+
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     # Reuses the objects built above; only the archive and link are new.
