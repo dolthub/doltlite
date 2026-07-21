@@ -155,17 +155,19 @@ static int checkInvariants(sqlite3 *db, const char *context){
   }
 
   {
-    const char *branch = queryScalarText(db, "SELECT active_branch()");
+    const char *branch;
+    char sql[512];
+    int cnt;
+    branch = queryScalarText(db, "SELECT active_branch()");
     snprintf(label, sizeof(label), "%s: active_branch() non-empty", context);
     if( !branch || strlen(branch)==0 || strncmp(branch,"ERROR",5)==0 ){
       check(label, 0); violations++;
     }else{
       check(label, 1);
 
-      char sql[512];
       snprintf(sql, sizeof(sql),
         "SELECT count(*) FROM dolt_branches WHERE name='%s'", branch);
-      int cnt = queryScalarInt(db, sql);
+      cnt = queryScalarInt(db, sql);
       snprintf(label, sizeof(label),
         "%s: active_branch '%s' exists in dolt_branches", context, branch);
       if( cnt!=1 ){
@@ -186,8 +188,9 @@ static int checkInvariants(sqlite3 *db, const char *context){
         const char *tname = (const char*)sqlite3_column_text(stmt, 0);
         if( tname ){
           char sql[512];
+          int cnt;
           snprintf(sql, sizeof(sql), "SELECT count(*) FROM \"%s\"", tname);
-          int cnt = queryScalarInt(db, sql);
+          cnt = queryScalarInt(db, sql);
           snprintf(label, sizeof(label),
             "%s: table '%s' is queryable", context, tname);
           if( cnt < 0 ){
@@ -409,6 +412,7 @@ static void test_sequential_commits(void){
 static void test_schema_change(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_schema.db";
+  const char *r;
 
   printf("--- Test 6: Schema change on branch ---\n");
   removeDb(dbpath);
@@ -431,7 +435,7 @@ static void test_schema_change(void){
   checkInvariants(db, "schema_main_after");
   checkCleanStatus(db, "schema_main_after");
 
-  const char *r = queryScalarText(db, "SELECT age FROM t1");
+  r = queryScalarText(db, "SELECT age FROM t1");
   check("main_no_age_column", strncmp(r, "ERROR", 5)==0);
 
   sqlite3_close(db);
@@ -708,6 +712,7 @@ static void test_large_table(void){
 static void test_drop_table(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_drop.db";
+  const char *r;
 
   printf("--- Test 15: Drop table ---\n");
   removeDb(dbpath);
@@ -726,7 +731,7 @@ static void test_drop_table(void){
   checkInvariants(db, "after_drop");
   checkCleanStatus(db, "after_drop");
 
-  const char *r = queryScalarText(db, "SELECT count(*) FROM t2");
+  r = queryScalarText(db, "SELECT count(*) FROM t2");
   check("t2_gone", strncmp(r, "ERROR", 5)==0);
 
   sqlite3_close(db);
@@ -765,6 +770,8 @@ static void test_staging(void){
 static void test_reset_to_hash(void){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_inv_resethash.db";
+  const char *h;
+  char hash1[64];
 
   printf("--- Test 17: Reset to specific commit hash ---\n");
   removeDb(dbpath);
@@ -775,8 +782,7 @@ static void test_reset_to_hash(void){
   execSql(db, "INSERT INTO t1 VALUES(1, 'v1')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'c1')");
 
-  const char *h = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
-  char hash1[64];
+  h = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(hash1, sizeof(hash1), "%s", h);
 
   execSql(db, "INSERT INTO t1 VALUES(2, 'v2')");

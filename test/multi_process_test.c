@@ -19,6 +19,20 @@ static void check(const char *name, int condition){
   }
 }
 
+/* glibc fortify marks these results warn_unused_result. A failed sync pipe
+** means the test cannot run meaningfully, so fail the process immediately. */
+static void mpPipe(int aFd[2]){
+  if( pipe(aFd)!=0 ){ perror("pipe"); _exit(1); }
+}
+
+static void mpWrite(int fd, const char *zByte){
+  if( write(fd,zByte,1)!=1 ) _exit(1);
+}
+
+static void mpRead(int fd, char *pValue){
+  if( read(fd,pValue,1)!=1 ) _exit(1);
+}
+
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -233,7 +247,7 @@ static void test_gc_during_read(void){
     sqlite3_close(db);
   }
 
-  pipe(pipefd);
+  mpPipe(pipefd);
 
   pid = fork();
   if( pid==0 ){
@@ -244,7 +258,7 @@ static void test_gc_during_read(void){
 
     queryScalarText(db, "SELECT count(*) FROM t");
 
-    write(pipefd[1], "R", 1);
+    mpWrite(pipefd[1], "R");
     close(pipefd[1]);
 
     sleep(3);
@@ -261,7 +275,7 @@ static void test_gc_during_read(void){
     char buf;
     sqlite3 *db = 0;
     close(pipefd[1]);
-    read(pipefd[0], &buf, 1); /* Wait for child's signal */
+    mpRead(pipefd[0], &buf); /* Wait for child's signal */
     close(pipefd[0]);
 
     sqlite3_open(path, &db);
@@ -292,7 +306,7 @@ static void test_gc_blocked_by_writer(void){
   printf("--- Test 5: GC blocked by concurrent writer ---\n");
   setup_db(path);
 
-  pipe(pipefd);
+  mpPipe(pipefd);
 
   pid = fork();
   if( pid==0 ){
@@ -302,7 +316,7 @@ static void test_gc_blocked_by_writer(void){
     execSql(db, "BEGIN");
     execSql(db, "INSERT INTO t VALUES(2, 'blocking')");
 
-    write(pipefd[1], "W", 1);
+    mpWrite(pipefd[1], "W");
     close(pipefd[1]);
 
     sleep(2);
@@ -316,7 +330,7 @@ static void test_gc_blocked_by_writer(void){
     sqlite3 *db = 0;
     const char *r;
     close(pipefd[1]);
-    read(pipefd[0], &buf, 1);
+    mpRead(pipefd[0], &buf);
     close(pipefd[0]);
 
     sqlite3_open(path, &db);
@@ -354,7 +368,7 @@ static void test_cross_process_commit_conflict(void){
 
   setup_db(stalePath);
 
-  pipe(pipefd);
+  mpPipe(pipefd);
 
   pid = fork();
   if( pid==0 ){
@@ -365,7 +379,7 @@ static void test_cross_process_commit_conflict(void){
     execSql(db, "INSERT INTO t VALUES(2, 'child')");
     queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
 
-    write(pipefd[1], "C", 1);
+    mpWrite(pipefd[1], "C");
     close(pipefd[1]);
     sqlite3_close(db);
     _exit(0);
@@ -379,7 +393,7 @@ static void test_cross_process_commit_conflict(void){
     sqlite3_open(stalePath, &db);
 
     close(pipefd[1]);
-    read(pipefd[0], &buf, 1);
+    mpRead(pipefd[0], &buf);
     close(pipefd[0]);
     waitpid(pid, &status, 0);
 
@@ -506,8 +520,8 @@ static void test_many_process_commit_contention(void){
   }
 
   for(i=0; i<N_WORKERS; i++){
-    pipe(ready[i]);
-    pipe(go[i]);
+    mpPipe(ready[i]);
+    mpPipe(go[i]);
     pids[i] = fork();
     if( pids[i]==0 ){
       int rc;

@@ -247,8 +247,9 @@ static void test_diff_table_reuse(void){
   execSql(db, "INSERT INTO t VALUES(2, 20)");
   {
     int n1 = step_int(pDiff);
+    int n2;
     execSql(db, "SELECT dolt_commit('-A','-m','c2')");
-    int n2 = step_int(pDiff);
+    n2 = step_int(pDiff);
     check("diff_reuse: pass 2 more rows after working", n1 > 0);
     check("diff_reuse: pass 3 committed", n2 > 0);
   }
@@ -392,8 +393,8 @@ static void test_rapid_interleave(void){
 
     if( i % 5 == 0 ){
       char msg[32];
-      snprintf(msg, sizeof(msg), "batch_%d", i/5);
       char sql[128];
+      snprintf(msg, sizeof(msg), "batch_%d", i/5);
       snprintf(sql, sizeof(sql),
                "SELECT dolt_commit('-A','-m','%s')", msg);
       execSql(db, sql);

@@ -21,6 +21,20 @@ static void check(const char *name, int condition){
   }
 }
 
+/* glibc fortify marks these results warn_unused_result. A failed sync pipe
+** means the test cannot run meaningfully, so fail the process immediately. */
+static void mpPipe(int aFd[2]){
+  if( pipe(aFd)!=0 ){ perror("pipe"); _exit(1); }
+}
+
+static void mpWrite(int fd, const char *zByte){
+  if( write(fd,zByte,1)!=1 ) _exit(1);
+}
+
+static void mpRead(int fd, char *pValue){
+  if( read(fd,pValue,1)!=1 ) _exit(1);
+}
+
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -189,7 +203,7 @@ static void test_gc_blocked_then_retries(void){
 
   printf("--- Test 2: GC blocked by writer, retries after commit ---\n");
   setup_db_with_rows(path, 50);
-  pipe(pipefd);
+  mpPipe(pipefd);
 
   pid = fork();
   if( pid==0 ){
@@ -199,7 +213,7 @@ static void test_gc_blocked_then_retries(void){
     sqlite3_busy_timeout(db, 5000);
     execSql(db, "BEGIN");
     execSql(db, "INSERT INTO t VALUES(9999, 'pending')");
-    write(pipefd[1], "B", 1);
+    mpWrite(pipefd[1], "B");
     close(pipefd[1]);
     sleep(1);
     execSql(db, "COMMIT");
@@ -213,7 +227,7 @@ static void test_gc_blocked_then_retries(void){
     char buf;
     const char *r;
     close(pipefd[1]);
-    read(pipefd[0], &buf, 1);
+    mpRead(pipefd[0], &buf);
     close(pipefd[0]);
 
     sqlite3_open(path, &db);
@@ -252,7 +266,7 @@ static void test_gc_waits_for_busy_writer(void){
 
   printf("--- Test 2b: GC waits for busy writer ---\n");
   setup_db_with_rows(path, 50);
-  pipe(pipefd);
+  mpPipe(pipefd);
 
   pid = fork();
   if( pid==0 ){
@@ -262,7 +276,7 @@ static void test_gc_waits_for_busy_writer(void){
     sqlite3_busy_timeout(db, 5000);
     execSql(db, "BEGIN");
     execSql(db, "INSERT INTO t VALUES(9998, 'pending_wait')");
-    write(pipefd[1], "B", 1);
+    mpWrite(pipefd[1], "B");
     close(pipefd[1]);
     sleep(1);
     execSql(db, "COMMIT");
@@ -276,7 +290,7 @@ static void test_gc_waits_for_busy_writer(void){
     char buf;
     const char *r;
     close(pipefd[1]);
-    read(pipefd[0], &buf, 1);
+    mpRead(pipefd[0], &buf);
     close(pipefd[0]);
 
     sqlite3_open(path, &db);
@@ -376,7 +390,7 @@ static void test_reader_iterator_during_gc(void){
   printf("--- Test 4: SELECT iterator open during dolt_gc() ---\n");
   setup_db_with_rows(path, 100);
   make_garbage(path, 40);
-  pipe(pipefd_go);
+  mpPipe(pipefd_go);
 
   pid = fork();
   if( pid==0 ){
@@ -385,7 +399,7 @@ static void test_reader_iterator_during_gc(void){
     const char *r;
     close(pipefd_go[1]);
 
-    read(pipefd_go[0], &buf, 1);
+    mpRead(pipefd_go[0], &buf);
     close(pipefd_go[0]);
 
     sqlite3_open(path, &db);
@@ -413,7 +427,7 @@ static void test_reader_iterator_during_gc(void){
       if( rc==SQLITE_ROW ) rowCount++;
     }
 
-    write(pipefd_go[1], "G", 1);
+    mpWrite(pipefd_go[1], "G");
     close(pipefd_go[1]);
 
     usleep(150000);
@@ -551,7 +565,7 @@ static void test_gc_vs_merge(void){
     sqlite3_close(db);
   }
 
-  pipe(pipefd);
+  mpPipe(pipefd);
 
   pid = fork();
   if( pid==0 ){
@@ -560,7 +574,7 @@ static void test_gc_vs_merge(void){
     close(pipefd[0]);
     sqlite3_open(path, &db);
     sqlite3_busy_timeout(db, 30000);
-    write(pipefd[1], "M", 1);
+    mpWrite(pipefd[1], "M");
     close(pipefd[1]);
     r = callWithRetry(db, "SELECT dolt_merge('feat')", 200);
     sqlite3_close(db);
@@ -572,7 +586,7 @@ static void test_gc_vs_merge(void){
     char buf;
     const char *r;
     close(pipefd[1]);
-    read(pipefd[0], &buf, 1);
+    mpRead(pipefd[0], &buf);
     close(pipefd[0]);
     sqlite3_open(path, &db);
     sqlite3_busy_timeout(db, 30000);
@@ -874,8 +888,8 @@ static void test_concurrent_staging_then_gc(void){
 
   printf("--- Test 11: Cross-process staged data vs dolt_gc() ---\n");
   setup_db_with_rows(path, 50);
-  pipe(pipefd_stage);
-  pipe(pipefd_gc);
+  mpPipe(pipefd_stage);
+  mpPipe(pipefd_gc);
 
   pid = fork();
   if( pid==0 ){
@@ -892,10 +906,10 @@ static void test_concurrent_staging_then_gc(void){
     r = callWithRetry(db, "SELECT dolt_add('-A')", 200);
     if( looks_like_lock_busy(r) ){ sqlite3_close(db); _exit(2); }
 
-    write(pipefd_stage[1], "S", 1);
+    mpWrite(pipefd_stage[1], "S");
     close(pipefd_stage[1]);
 
-    read(pipefd_gc[0], &buf, 1);
+    mpRead(pipefd_gc[0], &buf);
     close(pipefd_gc[0]);
 
     r = callWithRetry(db, "SELECT dolt_commit('-m','staged commit')", 200);
@@ -910,7 +924,7 @@ static void test_concurrent_staging_then_gc(void){
     close(pipefd_stage[1]);
     close(pipefd_gc[0]);
 
-    read(pipefd_stage[0], &buf, 1);
+    mpRead(pipefd_stage[0], &buf);
     close(pipefd_stage[0]);
 
     sqlite3_open(path, &db);
@@ -919,7 +933,7 @@ static void test_concurrent_staging_then_gc(void){
     check("staging_gc_parent_gc_ok", !looks_like_lock_busy(r));
     sqlite3_close(db);
 
-    write(pipefd_gc[1], "G", 1);
+    mpWrite(pipefd_gc[1], "G");
     close(pipefd_gc[1]);
   }
 
