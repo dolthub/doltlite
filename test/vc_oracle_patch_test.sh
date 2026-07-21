@@ -43,7 +43,7 @@ oracle_data() {
 }
 
 oracle_shape() {
-  local name="$1" setup="$2" args="$3" projection="$4"
+  local name="$1" setup="$2" args="$3" projection="$4" where="${5:-1}"
   local dir="$TMPROOT/$name"
   local dl_out dt_out dolt_setup
   mkdir -p "$dir/dl" "$dir/dt"
@@ -51,7 +51,7 @@ oracle_shape() {
     {
       printf '%s\n' "$setup"
       printf "%s\n" ".mode list" ".separator |" \
-        "SELECT 'P',$projection FROM dolt_patch($args);"
+        "SELECT 'P',$projection FROM dolt_patch($args) WHERE $where;"
     } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | grep '^P|' || true
   )
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -60,7 +60,7 @@ oracle_shape() {
     vc_oracle_init_repo
     {
       printf '%s\n' "$dolt_setup"
-      printf "%s\n" "SELECT concat('P|',concat_ws('|',$projection)) FROM dolt_patch($args);"
+      printf "%s\n" "SELECT concat('P|',concat_ws('|',$projection)) FROM dolt_patch($args) WHERE $where;"
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | grep '^P|' || true
   )
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
@@ -91,6 +91,63 @@ oracle_error() {
   fi
 }
 
+# Apply both directions of a generated patch and compare a caller-supplied
+# schema+data fingerprint. setup must create tags named base and target.
+apply_bidirectional() {
+  local name="$1" setup="$2" fingerprint_sql="$3"
+  local dir="$TMPROOT/apply_$name"
+  local db="$TMPROOT/apply_$name/forward.db"
+  local reverse_db="$TMPROOT/apply_$name/reverse.db"
+  local base_fingerprint target_fingerprint actual
+  mkdir -p "$dir"
+  if ! printf '%s\n' "$setup" | "$DOLTLITE" "$db" \
+      >"$dir/setup.out" 2>"$dir/setup.err"; then
+    vc_oracle_assert_match "${name}_setup" \
+      "setup failed: $(cat "$dir/setup.err")" "setup succeeded"
+    return
+  fi
+  if ! printf '%s\n' "$setup" | "$DOLTLITE" "$reverse_db" \
+      >"$dir/reverse_setup.out" 2>"$dir/reverse_setup.err"; then
+    vc_oracle_assert_match "${name}_reverse_setup" \
+      "setup failed: $(cat "$dir/reverse_setup.err")" "setup succeeded"
+    return
+  fi
+  if ! "$DOLTLITE" "$db" \
+      "SELECT statement FROM dolt_patch('base','target');" \
+      >"$dir/forward.sql" 2>"$dir/forward.err"; then
+    vc_oracle_assert_match "${name}_forward_generation" \
+      "generation failed: $(cat "$dir/forward.err")" "generation succeeded"
+    return
+  fi
+  if ! "$DOLTLITE" "$db" \
+      "SELECT statement FROM dolt_patch('target','base');" \
+      >"$dir/reverse.sql" 2>"$dir/reverse.err"; then
+    vc_oracle_assert_match "${name}_reverse_generation" \
+      "generation failed: $(cat "$dir/reverse.err")" "generation succeeded"
+    return
+  fi
+
+  target_fingerprint=$("$DOLTLITE" "$db" "$fingerprint_sql" 2>"$dir/target.err")
+  "$DOLTLITE" "$db" "SELECT dolt_reset('--hard','base');" >/dev/null
+  base_fingerprint=$("$DOLTLITE" "$db" "$fingerprint_sql" 2>"$dir/base.err")
+
+  if "$DOLTLITE" "$db" <"$dir/forward.sql" >"$dir/forward.out" 2>"$dir/forward_apply.err"; then
+    actual=$("$DOLTLITE" "$db" "$fingerprint_sql" 2>"$dir/forward_actual.err")
+  else
+    actual="apply failed: $(cat "$dir/forward_apply.err")"
+  fi
+  vc_oracle_assert_match "${name}_forward" "$actual" "$target_fingerprint"
+
+  if "$DOLTLITE" "$reverse_db" <"$dir/reverse.sql" \
+      >"$dir/reverse.out" 2>"$dir/reverse_apply.err"; then
+    actual=$("$DOLTLITE" "$reverse_db" "$fingerprint_sql" \
+      2>"$dir/reverse_actual.err")
+  else
+    actual="apply failed: $(cat "$dir/reverse_apply.err")"
+  fi
+  vc_oracle_assert_match "${name}_reverse" "$actual" "$base_fingerprint"
+}
+
 basic_setup="
 CREATE TABLE t(pk INTEGER PRIMARY KEY, c1 TEXT, n INTEGER);
 INSERT INTO t VALUES (1,'one',10),(2,'two',20),(4,NULL,40);
@@ -105,6 +162,14 @@ oracle_data reverse_insert_update_delete "$basic_setup" "'HEAD','HEAD~1'" "diff_
 oracle_data two_dot_range "$basic_setup" "'HEAD~1..HEAD'" "diff_type='data'"
 oracle_data range_with_table "$basic_setup" "'HEAD~1..HEAD','t'" "diff_type='data'"
 oracle_data explicit_table "$basic_setup" "'HEAD~1','HEAD','t'" "diff_type='data'"
+oracle_data case_insensitive_table "$basic_setup" "'HEAD~1','HEAD','T'" \
+  "diff_type='data'"
+oracle_shape data_filter_count "$basic_setup" "'HEAD~1','HEAD'" "count(*)" \
+  "diff_type='data'"
+oracle_shape schema_filter_count "$basic_setup" "'HEAD~1','HEAD'" "count(*)" \
+  "diff_type='schema'"
+oracle_shape unknown_filter_empty "$basic_setup" "'HEAD~1','HEAD'" "count(*)" \
+  "diff_type='unknown'"
 
 oracle_data multi_table_order "
 CREATE TABLE z(pk INTEGER PRIMARY KEY, v TEXT);
@@ -171,6 +236,95 @@ UPDATE t SET v='main' WHERE pk=1;
 SELECT dolt_commit('-A','-m','main');
 " "'feature...main'" "diff_type='data'"
 
+# This matrix is ported from Dolt's "using branch refs different ways" patch
+# test. It checks explicit, two-dot, and both three-dot directions against a
+# divergent history with simultaneous schema and row changes.
+branch_matrix_setup="
+CREATE TABLE t(pk INTEGER PRIMARY KEY, c1 TEXT, c2 TEXT);
+INSERT INTO t VALUES(1,'one','two');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('branch1');
+INSERT INTO t VALUES(2,'main','row');
+SELECT dolt_commit('-A','-m','main change');
+CREATE TABLE newtable(pk INTEGER PRIMARY KEY);
+INSERT INTO newtable VALUES(1),(2);
+SELECT dolt_commit('-A','-m','main table');
+SELECT dolt_checkout('branch1');
+ALTER TABLE t DROP COLUMN c2;
+DELETE FROM t WHERE pk=1;
+INSERT INTO t VALUES(3,'branch');
+SELECT dolt_commit('-A','-m','branch change');
+"
+oracle_data branch_explicit_main_to_branch "$branch_matrix_setup" \
+  "'main','branch1'" "diff_type='data'"
+oracle_data branch_two_dot_main_to_branch "$branch_matrix_setup" \
+  "'main..branch1'" "diff_type='data'"
+oracle_data branch_explicit_reverse "$branch_matrix_setup" \
+  "'branch1','main'" "diff_type='data'"
+oracle_data branch_two_dot_reverse "$branch_matrix_setup" \
+  "'branch1..main'" "diff_type='data'"
+oracle_data branch_three_dot_to_branch "$branch_matrix_setup" \
+  "'main...branch1'" "diff_type='data'"
+oracle_data branch_three_dot_to_main "$branch_matrix_setup" \
+  "'branch1...main'" "diff_type='data'"
+
+# Dolt accepts both the old and new names as a filter for a rename, including
+# when the renamed table also receives new data in the same revision.
+rename_oracle_setup="
+CREATE TABLE t1(a INTEGER PRIMARY KEY, b INTEGER);
+INSERT INTO t1 VALUES(1,2);
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t1 RENAME TO t2;
+INSERT INTO t2 VALUES(3,4);
+SELECT dolt_commit('-A','-m','renamed');
+"
+oracle_data rename_filter_new_name "$rename_oracle_setup" \
+  "'HEAD~1','HEAD','t2'" "diff_type='data'"
+oracle_data rename_filter_old_name "$rename_oracle_setup" \
+  "'HEAD~1..HEAD','t1'" "diff_type='data'"
+
+# HEAD/STAGED/WORKING are independently addressable in either direction.
+workspace_matrix_setup="
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','base');
+UPDATE t SET v='staged' WHERE pk=1;
+SELECT dolt_add('t');
+UPDATE t SET v='working' WHERE pk=1;
+"
+oracle_data head_to_staged "$workspace_matrix_setup" \
+  "'HEAD','STAGED'" "diff_type='data'"
+oracle_data staged_to_working "$workspace_matrix_setup" \
+  "'STAGED','WORKING'" "diff_type='data'"
+oracle_data working_to_staged "$workspace_matrix_setup" \
+  "'WORKING','STAGED'" "diff_type='data'"
+oracle_shape working_to_working_empty "$workspace_matrix_setup" \
+  "'WORKING','WORKING'" "count(*)"
+oracle_shape staged_to_staged_empty "$workspace_matrix_setup" \
+  "'STAGED..STAGED'" "count(*)"
+
+# Exercise enough ordered changes to span many prolly chunks. Exact normalized
+# statements are still compared to Dolt, so this checks both diff iteration
+# across internal nodes and globally stable statement ordering.
+scale_setup="CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);"
+scale_values=""
+for i in $(seq 1 400); do
+  [ -n "$scale_values" ] && scale_values="$scale_values,"
+  scale_values="${scale_values}($i,'value$i')"
+done
+scale_setup="$scale_setup INSERT INTO t VALUES $scale_values;
+SELECT dolt_commit('-A','-m','base');
+UPDATE t SET v=concat('changed',pk) WHERE pk%10=0;
+DELETE FROM t WHERE pk%10=1;"
+scale_values=""
+for i in $(seq 401 450); do
+  [ -n "$scale_values" ] && scale_values="$scale_values,"
+  scale_values="${scale_values}($i,'value$i')"
+done
+scale_setup="$scale_setup INSERT INTO t VALUES $scale_values;
+SELECT dolt_commit('-A','-m','target');"
+oracle_data multi_chunk_ordering "$scale_setup" "'HEAD~1','HEAD'" "diff_type='data'"
+
 error_setup="
 CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
 SELECT dolt_commit('-A','-m','base');
@@ -182,6 +336,22 @@ oracle_error one_non_range_argument "$error_setup" "SELECT * FROM dolt_patch('t'
 oracle_error bad_from_ref "$error_setup" "SELECT * FROM dolt_patch('missing-ref','HEAD','t');"
 oracle_error bad_to_ref "$error_setup" "SELECT * FROM dolt_patch('HEAD','missing-ref','t');"
 oracle_error missing_table "$error_setup" "SELECT * FROM dolt_patch('HEAD~1','HEAD','missing_table');"
+oracle_error empty_range_right "$error_setup" "SELECT * FROM dolt_patch('HEAD~1..');"
+oracle_error empty_range_left "$error_setup" "SELECT * FROM dolt_patch('..HEAD');"
+oracle_error four_arguments "$error_setup" \
+  "SELECT * FROM dolt_patch('HEAD~1','HEAD','t','extra');"
+oracle_error null_arguments "$error_setup" \
+  "SELECT * FROM dolt_patch(NULL,NULL,NULL);"
+oracle_error numeric_from_ref "$error_setup" \
+  "SELECT * FROM dolt_patch(123,'HEAD','t');"
+oracle_error numeric_to_ref "$error_setup" \
+  "SELECT * FROM dolt_patch('HEAD~1',123,'t');"
+oracle_error numeric_table "$error_setup" \
+  "SELECT * FROM dolt_patch('HEAD~1','HEAD',123);"
+oracle_error bad_range_from_ref "$error_setup" \
+  "SELECT * FROM dolt_patch('missing-ref..HEAD','t');"
+oracle_error bad_range_to_ref "$error_setup" \
+  "SELECT * FROM dolt_patch('HEAD~1..missing-ref','t');"
 
 # SQLite-specific verification: generate a schema+data patch, reset to the
 # source revision, execute every statement, and compare the target fingerprint.
@@ -294,6 +464,268 @@ else
   actual_fingerprint="apply failed: $(cat "$columns_dir/apply.err")"
 fi
 vc_oracle_assert_match apply_column_rename_drop_add "$actual_fingerprint" "$target_fingerprint"
+
+# Bidirectional application matrix. These cases target record layouts and DDL
+# interactions that simple statement comparison cannot validate.
+apply_bidirectional table_add_drop_multi_table "
+CREATE TABLE common(pk INTEGER PRIMARY KEY,v TEXT);
+CREATE TABLE old_table(pk INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO common VALUES(1,'base');
+INSERT INTO old_table VALUES(1,'old-a'),(2,'old-b');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+DROP TABLE old_table;
+CREATE TABLE new_table(pk INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO new_table VALUES(10,'new-a'),(20,'new-b');
+UPDATE common SET v='target' WHERE pk=1;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(name||':'||sql,';') FROM (
+  SELECT name,sql FROM sqlite_master
+  WHERE type='table' AND name NOT LIKE 'dolt_%' AND name NOT LIKE 'sqlite_%'
+  ORDER BY name
+);
+SELECT count(*) FROM dolt_diff('base','WORKING');
+SELECT count(*) FROM dolt_diff('target','WORKING');
+"
+
+apply_bidirectional without_rowid_pk_only "
+CREATE TABLE t(a TEXT,b INTEGER,PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO t VALUES('a',1),('b',2),('c',3);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+DELETE FROM t WHERE a='b' AND b=2;
+INSERT INTO t VALUES('d',4);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(a||':'||b,',') FROM (SELECT * FROM t ORDER BY a,b);
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional keyless_rowid_reuse "
+CREATE TABLE t(a TEXT,b INTEGER);
+INSERT INTO t VALUES('same',1),('same',1),('keep',2);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+UPDATE t SET b=9 WHERE rowid=1;
+DELETE FROM t WHERE rowid=2;
+INSERT INTO t VALUES('new',3);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(rowid||':'||a||':'||b,',') FROM (SELECT rowid,* FROM t ORDER BY rowid);
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional keyless_rowid_alias_shadow "
+CREATE TABLE t(rowid TEXT,v INTEGER);
+INSERT INTO t(rowid,v) VALUES('declared-a',1),('declared-b',2);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+UPDATE t SET v=11 WHERE _rowid_=1;
+DELETE FROM t WHERE _rowid_=2;
+INSERT INTO t(rowid,v) VALUES('declared-c',3);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(_rowid_||':'||rowid||':'||v,',') FROM (SELECT _rowid_,* FROM t ORDER BY _rowid_);
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional blob_composite_primary_key "
+CREATE TABLE t(k BLOB,s TEXT,v BLOB,n REAL,PRIMARY KEY(k,s)) WITHOUT ROWID;
+INSERT INTO t VALUES(x'00ff','a',x'01',1.25),(x'10','b',x'02',-4.5);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+UPDATE t SET v=x'abcdef',n=3.141592653589793 WHERE k=x'00ff' AND s='a';
+DELETE FROM t WHERE k=x'10' AND s='b';
+INSERT INTO t VALUES(x'80','quote''s',x'00ff10',0.0);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(hex(k)||':'||hex(s)||':'||hex(v)||':'||printf('%.17g',n),',')
+  FROM (SELECT * FROM t ORDER BY k,s);
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional generated_columns "
+CREATE TABLE t(
+  pk INTEGER PRIMARY KEY,
+  a INTEGER,
+  doubled INTEGER GENERATED ALWAYS AS (a*2) VIRTUAL,
+  shifted INTEGER GENERATED ALWAYS AS (a+3) STORED
+);
+INSERT INTO t(pk,a) VALUES(1,5),(2,7);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+UPDATE t SET a=11 WHERE pk=1;
+DELETE FROM t WHERE pk=2;
+INSERT INTO t(pk,a) VALUES(3,13);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(pk||':'||a||':'||doubled||':'||shifted,',') FROM (SELECT * FROM t ORDER BY pk);
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional strict_schema_replacement "
+CREATE TABLE t(pk INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO t VALUES(1,'one'),(2,'two');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+CREATE TABLE t_new(
+  pk INTEGER PRIMARY KEY,
+  v TEXT,
+  n INTEGER NOT NULL DEFAULT 7 CHECK(n>0)
+) STRICT;
+INSERT INTO t_new(pk,v) SELECT pk,v FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+UPDATE t SET v='uno',n=8 WHERE pk=1;
+INSERT INTO t(pk,v,n) VALUES(3,'three',9);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT dolt_hashof_table('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional primary_key_replacement "
+CREATE TABLE t(a TEXT PRIMARY KEY,b INTEGER,v TEXT);
+INSERT INTO t VALUES('a',1,'one'),('b',2,'two');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+CREATE TABLE t_new(a TEXT,b INTEGER,v TEXT,PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+UPDATE t SET v='uno' WHERE a='a' AND b=1;
+DELETE FROM t WHERE a='b' AND b=2;
+INSERT INTO t VALUES('c',3,'three');
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT dolt_hashof_table('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional integer_to_text_primary_key "
+CREATE TABLE t(pk INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO t VALUES(1,'one'),(2,'two');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+CREATE TABLE t_new(pk TEXT PRIMARY KEY,v TEXT);
+INSERT INTO t_new SELECT CAST(pk AS TEXT),v FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+UPDATE t SET v='uno' WHERE pk='1';
+DELETE FROM t WHERE pk='2';
+INSERT INTO t VALUES('03','three');
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT dolt_hashof_table('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional index_matrix "
+CREATE TABLE t(pk INTEGER PRIMARY KEY,a INTEGER,b TEXT);
+INSERT INTO t VALUES(1,10,'one'),(2,20,'two'),(3,30,'three');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+CREATE UNIQUE INDEX ux_t_a ON t(a);
+CREATE INDEX ix_t_expr ON t(lower(b));
+CREATE INDEX ix_t_partial ON t(b) WHERE a>=20;
+UPDATE t SET b='TWO' WHERE pk=2;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(pk||':'||a||':'||b,',') FROM (SELECT * FROM t ORDER BY pk);
+SELECT group_concat(name||':'||sql,';') FROM (SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='t' ORDER BY name);
+"
+
+apply_bidirectional trigger_side_effects "
+CREATE TABLE audit(msg TEXT);
+CREATE TABLE t(pk INTEGER PRIMARY KEY,v INTEGER);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+CREATE TRIGGER tr_t_insert AFTER INSERT ON t BEGIN
+  UPDATE t SET v=v+1 WHERE pk=new.pk;
+  INSERT INTO audit VALUES('insert:'||new.pk);
+END;
+INSERT INTO t VALUES(2,10);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(pk||':'||v,',') FROM (SELECT * FROM t ORDER BY pk);
+SELECT group_concat(msg,',') FROM (SELECT * FROM audit ORDER BY msg);
+SELECT sql FROM sqlite_master WHERE name='tr_t_insert';
+"
+
+apply_bidirectional unchanged_trigger_side_effects "
+CREATE TABLE z_audit(msg TEXT);
+CREATE TABLE a_source(pk INTEGER PRIMARY KEY,v INTEGER);
+CREATE TRIGGER tr_source_insert AFTER INSERT ON a_source BEGIN
+  UPDATE a_source SET v=v+1 WHERE pk=new.pk;
+  INSERT INTO z_audit VALUES('insert:'||new.pk);
+END;
+INSERT INTO a_source VALUES(1,10);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+INSERT INTO a_source VALUES(2,20);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(pk||':'||v,',') FROM (SELECT * FROM a_source ORDER BY pk);
+SELECT group_concat(msg,',') FROM (SELECT * FROM z_audit ORDER BY msg);
+SELECT sql FROM sqlite_master WHERE name='tr_source_insert';
+"
+
+apply_bidirectional foreign_key_rebuild "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(id INTEGER PRIMARY KEY,name TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY,parent_id INTEGER);
+INSERT INTO parent VALUES(1,'one'),(2,'two');
+INSERT INTO child VALUES(10,1),(20,2);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+CREATE TABLE child_new(
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER NOT NULL REFERENCES parent(id) ON DELETE CASCADE
+);
+INSERT INTO child_new SELECT * FROM child;
+DROP TABLE child;
+ALTER TABLE child_new RENAME TO child;
+UPDATE parent SET name='uno' WHERE id=1;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+PRAGMA foreign_keys=ON;
+SELECT group_concat(id||':'||name,',') FROM (SELECT * FROM parent ORDER BY id);
+SELECT group_concat(id||':'||parent_id,',') FROM (SELECT * FROM child ORDER BY id);
+SELECT count(*) FROM pragma_foreign_key_check;
+SELECT sql FROM sqlite_master WHERE name='child';
+"
+
+apply_bidirectional rebuild_temp_name_collision "
+CREATE TABLE __doltlite_patch_1(pk INTEGER PRIMARY KEY,v TEXT);
+CREATE TABLE t(pk INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO __doltlite_patch_1 VALUES(1,'reserved');
+INSERT INTO t VALUES(1,'one');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+ALTER TABLE t ADD COLUMN n INTEGER DEFAULT 7;
+UPDATE t SET n=8 WHERE pk=1;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(pk||':'||v,',') FROM __doltlite_patch_1;
+SELECT group_concat(pk||':'||v||':'||n,',') FROM t;
+SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);
+"
 
 echo ""
 echo "=== dolt_patch oracle results: $pass passed, $fail failed ==="
