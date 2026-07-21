@@ -130,6 +130,40 @@ static int readExact(DoltliteConn *fd, u8 *pBuf, int nBytes){
   return 0;
 }
 
+static int headerNameEquals(
+  const char *zName,
+  int nName,
+  const char *zExpected
+){
+  int nExpected = (int)strlen(zExpected);
+  return nName==nExpected
+      && sqlite3_strnicmp(zName, zExpected, nExpected)==0;
+}
+
+static int parseContentLength(
+  const char *zValue,
+  const char *zEnd,
+  int *pnValue
+){
+  i64 nValue = 0;
+  const char *p = zValue;
+
+  while( p<zEnd && (*p==' ' || *p=='\t') ) p++;
+  while( zEnd>p && (zEnd[-1]==' ' || zEnd[-1]=='\t') ) zEnd--;
+  if( p==zEnd ) return -1;
+
+  while( p<zEnd ){
+    int digit;
+    if( *p<'0' || *p>'9' ) return -1;
+    digit = *p - '0';
+    if( nValue>(MAX_REQUEST_BYTES-digit)/10 ) return -2;
+    nValue = nValue*10 + digit;
+    p++;
+  }
+  *pnValue = (int)nValue;
+  return 0;
+}
+
 static int parseRequest(
   DoltliteConn *fd,
   char *zMethod, int nMethodMax,
@@ -141,6 +175,8 @@ static int parseRequest(
   int nBuf = 0;
   int headerEnd = 0;
   int contentLength = 0;
+  int seenContentLength = 0;
+  int seenAuthorization = 0;
   char *p;
 
   *ppBody = 0;
@@ -183,49 +219,51 @@ static int parseRequest(
     p = pSpace + 1;
   }
 
-  {
-    const char *zCL = "Content-Length:";
-    int nCL = (int)strlen(zCL);
-    char *pLine = strstr(aBuf, zCL);
-    if( !pLine ){
+  p = strstr(aBuf, "\r\n");
+  if( !p ) return -1;
+  p += 2;
+  while( p[0]!='\r' || p[1]!='\n' ){
+    char *pEnd = strstr(p, "\r\n");
+    char *pColon;
+    char *pValue;
+    char *pValueEnd;
+    int nName;
+    int i;
 
-      zCL = "content-length:";
-      pLine = strstr(aBuf, zCL);
+    if( !pEnd ) return -1;
+    pColon = (char*)memchr(p, ':', (size_t)(pEnd - p));
+    if( !pColon || pColon==p ) return -1;
+    nName = (int)(pColon - p);
+    for(i=0; i<nName; i++){
+      if( p[i]==' ' || p[i]=='\t' ) return -1;
     }
-    if( pLine ){
-      pLine += nCL;
-      while( *pLine==' ' || *pLine=='\t' ) pLine++;
-      contentLength = atoi(pLine);
-    }
-  }
+    pValue = pColon + 1;
+    pValueEnd = pEnd;
 
-  if( zAuth && nAuthMax>0 ){
-    const char *zH = "Authorization:";
-    char *pLine = strstr(aBuf, zH);
-    if( !pLine ){
-      zH = "authorization:";
-      pLine = strstr(aBuf, zH);
-    }
-    if( pLine ){
-      char *pEnd;
+    if( headerNameEquals(p, nName, "Content-Length") ){
+      int rc;
+      if( seenContentLength ) return -1;
+      seenContentLength = 1;
+      rc = parseContentLength(pValue, pValueEnd, &contentLength);
+      if( rc!=0 ) return rc;
+    }else if( headerNameEquals(p, nName, "Transfer-Encoding") ){
+      /* Chunked request bodies are not implemented. Reject the request
+      ** instead of treating its first chunk as another HTTP request. */
+      return -1;
+    }else if( zAuth && nAuthMax>0
+           && headerNameEquals(p, nName, "Authorization") ){
       int len;
-      pLine += (int)strlen("Authorization:");
-      while( *pLine==' ' || *pLine=='\t' ) pLine++;
-      pEnd = pLine;
-      while( *pEnd && *pEnd!='\r' && *pEnd!='\n' ) pEnd++;
-      len = (int)(pEnd - pLine);
+      if( seenAuthorization ) return -1;
+      seenAuthorization = 1;
+      while( pValue<pValueEnd && (*pValue==' ' || *pValue=='\t') ) pValue++;
+      while( pValueEnd>pValue
+          && (pValueEnd[-1]==' ' || pValueEnd[-1]=='\t') ) pValueEnd--;
+      len = (int)(pValueEnd - pValue);
       if( len >= nAuthMax ) len = nAuthMax - 1;
-      memcpy(zAuth, pLine, len);
+      memcpy(zAuth, pValue, len);
       zAuth[len] = '\0';
     }
-  }
-
-  /* Reject negative (e.g. integer overflow from atoi) or oversized bodies.
-  ** A hostile peer could send Content-Length: 2147483647 and OOM the host;
-  ** -2 signals the caller to return HTTP 413.
-  */
-  if( contentLength < 0 || contentLength > MAX_REQUEST_BYTES ){
-    return -2;
+    p = pEnd + 2;
   }
 
   if( contentLength > 0 ){
