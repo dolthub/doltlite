@@ -287,6 +287,23 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_col_again');
 " "HEAD~3" "HEAD" "" "EXPECT_EMPTY"
 
+# Positive control for the net-zero range above: the same multi-commit span,
+# stopped one commit early (before the drop), must show the column add. This
+# proves the empty full-range result is a genuine net-zero, not a range-walk
+# that silently returns nothing over spans deeper than one commit.
+oracle "net_addcol_dropcol_midrange_shows_add" "
+$SEED
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+UPDATE t SET extra = 'x' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'populate');
+ALTER TABLE t DROP COLUMN extra;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_col_again');
+" "HEAD~3" "HEAD~1"
+
 oracle "multiple_alters_single_commit" "
 $SEED
 ALTER TABLE t ADD COLUMN a TEXT;
