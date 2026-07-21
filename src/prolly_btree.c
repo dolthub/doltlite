@@ -2977,12 +2977,13 @@ static int serializeUnpackedRecordBuffer(
 ){
   int nField = pRec->nField;
   Mem *aMem = pRec->aMem;
-  u32 nData = 0;
+  i64 nData = 0;
   u32 aType[MAX_RECORD_FIELDS];
   u32 aLen[MAX_RECORD_FIELDS];
   int i;
   u8 *pOut;
   int nHdr, nTotal;
+  i64 nTotal64;
 
   if( nField > MAX_RECORD_FIELDS ) nField = MAX_RECORD_FIELDS;
 
@@ -2995,7 +2996,9 @@ static int serializeUnpackedRecordBuffer(
   for(i=0; i<nField; i++) nHdr += sqlite3VarintLen(aType[i]);
   if( nHdr > MAX_ONEBYTE_HEADER ) nHdr++;
 
-  nTotal = nHdr + (int)nData;
+  nTotal64 = (i64)nHdr + nData;
+  if( nTotal64 > 0x7fffffff ) return SQLITE_TOOBIG;
+  nTotal = (int)nTotal64;
   if( *pnAlloc < nTotal ){
     u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
     if( !pNew ) return SQLITE_NOMEM;
