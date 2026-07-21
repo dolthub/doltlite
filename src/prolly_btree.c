@@ -2683,7 +2683,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
       return SQLITE_NOTFOUND;
     }
 
-    iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+    iTable = (Pgno)getU32LE(q);
     pTE = findTable(pBtree, iTable);
     if( !pTE ){
       sqlite3_free(buf);
@@ -2808,7 +2808,7 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       catFree(&catNew);
       return SQLITE_CORRUPT;
     }
-    iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+    iTable = (Pgno)getU32LE(q);
     q += 4;
     flags = *q++;
     pTE = catAdd(&catNew, iTable, flags);
@@ -6135,7 +6135,7 @@ static int restoreFromCommitted(Btree *p){
             rc = SQLITE_CORRUPT;
             break;
           }
-          iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+          iTable = (Pgno)getU32LE(q);
           pTE = &p->cat.a[i];
           if( pTE->iTable!=iTable ){
             rc = SQLITE_NOTFOUND;
@@ -11095,7 +11095,7 @@ int doltliteLoadTableRootById(
       sqlite3_free(data);
       return SQLITE_CORRUPT;
     }
-    entryTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+    entryTable = (Pgno)getU32LE(q);
     q += CAT_ENTRY_ITABLE_SIZE;
     flags = *q++;
     memcpy(root.data, q, PROLLY_HASH_SIZE);
