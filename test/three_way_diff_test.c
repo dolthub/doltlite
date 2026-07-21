@@ -920,6 +920,41 @@ static void test_sorted_output(void){
   printf("  test_sorted_output passed\n");
 }
 
+static void poisonStack(void){
+  volatile u8 buf[8192];
+  memset((void*)buf, 0xEF, sizeof(buf));
+}
+
+static void test_open_failure_cleanup(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash bogus, theirs;
+  int rc;
+  const char *path = "/tmp/test_3wd_openfail";
+
+  rc = openTestStore(&cs, &cache, path);
+  check("open_fail: open", rc==SQLITE_OK);
+
+  {
+    i64 keys[] = {1};
+    const char *vals[] = {"x"};
+    rc = buildTree(&cs, &cache, keys, vals, 1, &theirs);
+    check("open_fail: build theirs", rc==SQLITE_OK);
+  }
+
+  memset(&bogus, 0xAB, sizeof(bogus));
+
+  resetChanges();
+  poisonStack();
+  rc = prollyThreeWayDiff(&cs, &cache, &bogus, &bogus, &theirs,
+                          PROLLY_NODE_INTKEY, collectCallback, 0);
+  check("open_fail: diff returns error", rc!=SQLITE_OK);
+  check("open_fail: no changes emitted", nChanges==0);
+
+  closeTestStore(&cs, &cache, path);
+  printf("  test_open_failure_cleanup passed\n");
+}
+
 int main(void){
   sqlite3_initialize();
   printf("Three-way diff engine unit tests\n");
@@ -943,6 +978,7 @@ int main(void){
   test_conflict_add();
   test_many_rows();
   test_sorted_output();
+  test_open_failure_cleanup();
 
   printf("\n%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
