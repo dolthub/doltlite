@@ -925,6 +925,8 @@ static int dssAppendTableChange(
   int schemaChange;
   const char *zDiffType;
 
+  if( !pFromEntry && !pToEntry ) return SQLITE_OK;
+
   if( pFromEntry && pToEntry ){
     int rootsDiffer = prollyHashCompare(&pFromEntry->root, &pToEntry->root)!=0;
     int schemasDiffer = prollyHashCompare(&pFromEntry->schemaHash,

@@ -44,6 +44,10 @@ run_test "diff_summary_between_commits" \
   "SELECT data_change || '|' || schema_change FROM dolt_diff_summary((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "1|0" "$DB"
 
+run_test "diff_summary_no_such_table" \
+  "SELECT count(*) FROM dolt_diff_summary('main','main','nonexistent');" \
+  "0" "$DB"
+
 run_test "diff_no_such_table" \
   "SELECT count(*) FROM dolt_diff WHERE table_name='nonexistent';" \
   "0" "$DB"
