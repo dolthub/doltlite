@@ -541,10 +541,33 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  rc = chunkStoreUpdateBranch(cs, zBranch, &trackingCommit);
+  /* Advance and persist the branch under the graph lock, first re-confirming
+  ** the branch's authoritative on-disk tip still matches the one the
+  ** fast-forward was computed from. Holding the lock across the confirm and
+  ** the persist keeps a peer from committing to zBranch in between, which
+  ** would otherwise be clobbered (lost update). */
+  rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                              "failed to update branch");
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
+    return;
+  }
+  {
+    ProllyHash diskTip;
+    int found = 0;
+    rc = chunkStoreReadDiskBranchTip(cs, zBranch, &diskTip, &found);
+    if( rc==SQLITE_OK && found && prollyHashCompare(&diskTip, &localCommit)!=0 ){
+      rc = SQLITE_BUSY;
+    }
+  }
+  if( rc==SQLITE_OK ) rc = chunkStoreUpdateBranch(cs, zBranch, &trackingCommit);
+  if( rc==SQLITE_OK ) rc = doltliteRemotePersistRefs(cs);
+  chunkStoreUnlock(cs);
+  if( rc!=SQLITE_OK ){
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+      rc==SQLITE_BUSY
+        ? "pull conflict: another connection committed to this branch. "
+          "Please retry."
+        : "failed to update branch");
     return;
   }
 
@@ -555,12 +578,6 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
                                 "failed to update working tree from branch");
       return;
     }
-  }
-
-  rc = doltliteRemotePersistRefs(cs);
-  if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
-    return;
   }
   doltliteTxnStateClear(&savedState);
   rc = doltliteVcSealBranchStyleTxn(db);
