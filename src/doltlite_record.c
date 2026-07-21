@@ -144,8 +144,8 @@ static int recBufAppend(RecBuf *b, const char *z, int n){
 }
 
 char *doltliteDecodeRecord(const u8 *pData, int nData){
-  const u8 *p = pData;
-  const u8 *pEnd = pData + nData;
+  const u8 *p;
+  const u8 *pEnd;
   u64 hdrSize;
   int hdrBytes;
   const u8 *pHdrEnd;
@@ -155,6 +155,8 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
   int rc = SQLITE_OK;
 
   if( !pData || nData < 1 ) return 0;
+  p = pData;
+  pEnd = pData + nData;
 
   memset(&buf, 0, sizeof(buf));
 
@@ -344,14 +346,16 @@ int doltliteParseRecordStrict(
   int nData,
   DoltliteRecordInfo *pInfo
 ){
-  const u8 *p = pData;
-  const u8 *pEnd = pData + nData;
+  const u8 *p;
+  const u8 *pEnd;
   u64 hdrSize;
   int hdrBytes, off;
   const u8 *pHdrEnd;
 
   memset(pInfo, 0, sizeof(*pInfo));
   if( !pData || nData < 1 ) return SQLITE_CORRUPT;
+  p = pData;
+  pEnd = pData + nData;
 
   hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
   if( hdrBytes<=0 ) return SQLITE_CORRUPT;
