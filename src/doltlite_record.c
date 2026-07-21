@@ -204,9 +204,9 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
       rc = recBufAppend(&buf, tmp, -1);
       pBody += 8;
     }else if( st>=12 && (st&1)==0 ){
-      int len = ((int)st - 12) / 2;
+      int len = dlSerialTypeLen(st);
       int i;
-      if( len<0 || pBody + len > pEnd ){ rc = SQLITE_CORRUPT; break; }
+      if( len<0 || len>(int)(pEnd-pBody) ){ rc = SQLITE_CORRUPT; break; }
       rc = recBufAppend(&buf, "x'", 2);
       for(i=0; rc==SQLITE_OK && i<len; i++){
         char hex[3];
@@ -216,8 +216,8 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
       if( rc==SQLITE_OK ) rc = recBufAppend(&buf, "'", 1);
       pBody += len;
     }else if( st>=13 && (st&1)==1 ){
-      int len = ((int)st - 13) / 2;
-      if( len<0 || pBody + len > pEnd ){ rc = SQLITE_CORRUPT; break; }
+      int len = dlSerialTypeLen(st);
+      if( len<0 || len>(int)(pEnd-pBody) ){ rc = SQLITE_CORRUPT; break; }
       rc = recBufAppend(&buf, (const char*)pBody, len);
       pBody += len;
     }else{
@@ -359,7 +359,7 @@ int doltliteParseRecordStrict(
 
   hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
   if( hdrBytes<=0 ) return SQLITE_CORRUPT;
-  if( (int)hdrSize < hdrBytes || (int)hdrSize > nData ) return SQLITE_CORRUPT;
+  if( hdrSize < (u64)hdrBytes || hdrSize > (u64)nData ) return SQLITE_CORRUPT;
   p += hdrBytes;
   pHdrEnd = pData + (int)hdrSize;
   off = (int)hdrSize;
@@ -370,12 +370,12 @@ int doltliteParseRecordStrict(
     int nField;
     int nSerial;
     if( stBytes<=0 ) return SQLITE_CORRUPT;
-    if( st==10 || st==11 ) return SQLITE_CORRUPT;
+    if( st==10 || st==11 || st>(u64)INT_MAX ) return SQLITE_CORRUPT;
     nField = pInfo->nField;
     if( nField >= DOLTLITE_MAX_RECORD_FIELDS ) return SQLITE_CORRUPT;
     p += stBytes;
     nSerial = dlSerialTypeLen(st);
-    if( off > nData - nSerial ) return SQLITE_CORRUPT;
+    if( nSerial<0 || nSerial>nData-off ) return SQLITE_CORRUPT;
     pInfo->aType[nField] = (int)st;
     pInfo->aOffset[nField] = off;
     off += nSerial;

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "sqlite3.h"
@@ -2537,6 +2538,17 @@ static void run_record_decode_corruption(void){
   static const u8 badRecord[] = {
     0x05, 0x01
   };
+  static const u8 serialTypeOverflow[] = {
+    0x06, 0x90, 0x80, 0x80, 0x80, 0x0e, 0x00
+  };
+  static const u8 headerSizeOverflow[] = {
+    0x90, 0x80, 0x80, 0x80, 0x06, 0x08
+  };
+  static const u8 maxVarintSerialType[] = {
+    0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+  };
+  static const u8 validBlob[] = { 0x02, 0x0e, 0x2a };
+  static const u8 validText[] = { 0x02, 0x0f, 0x78 };
   DoltliteRecordInfo info;
   char *z;
   int rc;
@@ -2563,6 +2575,39 @@ static void run_record_decode_corruption(void){
   rc = doltliteParseRecordStrict(badRecord, -1, &info);
   check("parse_negative_length_record_rejected",
         rc==SQLITE_CORRUPT && info.nField==0);
+
+  check("oversized_serial_type_is_corrupt",
+        doltliteParseRecordStrict(serialTypeOverflow,
+          (int)sizeof(serialTypeOverflow), &info)==SQLITE_CORRUPT);
+  z = doltliteDecodeRecord(serialTypeOverflow,
+                           (int)sizeof(serialTypeOverflow));
+  check("oversized_serial_type_does_not_decode", z==0);
+  sqlite3_free(z);
+
+  check("oversized_header_size_is_corrupt",
+        doltliteParseRecordStrict(headerSizeOverflow,
+          (int)sizeof(headerSizeOverflow), &info)==SQLITE_CORRUPT);
+  z = doltliteDecodeRecord(headerSizeOverflow,
+                           (int)sizeof(headerSizeOverflow));
+  check("oversized_header_size_does_not_decode", z==0);
+  sqlite3_free(z);
+
+  check("maximum_varint_serial_type_is_corrupt",
+        doltliteParseRecordStrict(maxVarintSerialType,
+          (int)sizeof(maxVarintSerialType), &info)==SQLITE_CORRUPT);
+  check("largest_serial_payload_length_fits",
+        dlSerialTypeLen((u64)INT_MAX * 2 + 12)==INT_MAX);
+  check("oversized_serial_payload_length_is_rejected",
+        dlSerialTypeLen((u64)INT_MAX * 2 + 14)<0);
+
+  check("neighboring_blob_record_is_valid",
+        doltliteParseRecordStrict(validBlob,
+          (int)sizeof(validBlob), &info)==SQLITE_OK
+        && info.nField==1 && info.aType[0]==14 && info.aOffset[0]==2);
+  check("neighboring_text_record_is_valid",
+        doltliteParseRecordStrict(validText,
+          (int)sizeof(validText), &info)==SQLITE_OK
+        && info.nField==1 && info.aType[0]==15 && info.aOffset[0]==2);
 }
 
 static void run_sortkey_two_numeric_roundtrip(void){
