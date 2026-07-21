@@ -2682,6 +2682,7 @@ DOLTLITE_C_TESTS = \
 	corruption_test$(T.exe) \
 	prepared_stmt_reuse_test$(T.exe) \
 	catalog_serialize_determinism_test$(T.exe) \
+	clone_error_code_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
 	prolly_hashset_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
@@ -2691,6 +2692,10 @@ DOLTLITE_C_TESTS = \
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/ancestor_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+clone_error_code_test$(T.exe): $(TOP)/test/clone_error_code_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/clone_error_code_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 sql_transaction_test$(T.exe): $(TOP)/test/sql_transaction_test.c libdoltlite$(T.lib)
