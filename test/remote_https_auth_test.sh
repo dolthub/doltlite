@@ -3,6 +3,8 @@ set -u
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+CC="${CC:-cc}"
 TMP=$(mktemp -d)
 SRV_PID=""
 cleanup() {
@@ -136,6 +138,45 @@ clone_rows=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/bigclone.db" "SELECT
 check "large clone round-trips 2000 rows" "2000" "$clone_rows"
 clone_hash=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/bigclone.db" "SELECT dolt_hashof_table('blobs');" 2>&1)
 check "clone table hash matches source (chunks intact)" "$src_hash" "$clone_hash"
+
+echo "=== 7. Authorization header names are case-insensitive and exact ==="
+DOLTLITE_EXTRA_LIBS=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcrypt -lcrypt32";; esac
+"$CC" -O2 -Wall \
+  -I "$HERE/src" -I "$HERE/ext/ed25519" \
+  "$HERE/test/creds_token.c" \
+  "$HERE/src/doltlite_creds.c" \
+  "$HERE/ext/ed25519/fe.c" \
+  "$HERE/ext/ed25519/ge.c" \
+  "$HERE/ext/ed25519/sc.c" \
+  "$HERE/ext/ed25519/sha512.c" \
+  "$HERE/ext/ed25519/keypair.c" \
+  "$HERE/ext/ed25519/sign.c" \
+  "$HERE/ext/ed25519/verify.c" \
+  "$HERE/ext/ed25519/add_scalar.c" \
+  $DOLTLITE_EXTRA_LIBS \
+  -o "$TMP/creds_token" 2>"$TMP/token_build.err" || {
+  echo "FAIL: bearer-token test helper did not build"
+  cat "$TMP/token_build.err"
+  exit 1
+}
+token=$("$TMP/creds_token" "$TMP/cc" localhost) || {
+  echo "FAIL: bearer-token test helper failed"
+  exit 1
+}
+
+tls_request() {
+  local header_name="$1"
+  printf 'GET /repo.db/refs HTTP/1.1\r\nHost: localhost\r\n%s: Bearer %s\r\nConnection: close\r\n\r\n' \
+    "$header_name" "$token" | \
+    openssl s_client -quiet -connect "localhost:$PORT" -servername localhost \
+      -CAfile "$TMP/cert.pem" 2>/dev/null || true
+}
+
+result=$(tls_request "aUtHoRiZaTiOn" | sed -n '1s/.* \([0-9][0-9][0-9]\) .*/\1/p')
+check "mixed-case Authorization is accepted" "200" "$result"
+result=$(tls_request "X-Authorization" | sed -n '1s/.* \([0-9][0-9][0-9]\) .*/\1/p')
+check "X-Authorization is not treated as Authorization" "401" "$result"
 
 echo ""
 echo "======================================="

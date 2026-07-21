@@ -81,6 +81,84 @@ restart_server_same_port() {
 mkdir -p "$TMP/srv"
 start_server
 
+echo "--- 0. request header parsing ---"
+result=$(python3 - "$SRV_PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+
+def exchange(request):
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.sendall(request)
+        sock.shutdown(socket.SHUT_WR)
+        response = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except ConnectionResetError:
+                break
+            if not chunk:
+                break
+            response += chunk
+    head, _, body = response.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    status = lines[0].split(b" ", 2)[1].decode("ascii")
+    headers = {}
+    for line in lines[1:]:
+        if b":" in line:
+            name, value = line.split(b":", 1)
+            headers[name.strip().lower()] = value.strip()
+    return status, int(headers.get(b"content-length", b"0")), len(body)
+
+mixed = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"cOnTeNt-LeNgTh: 20\r\n\r\n" + b"x" * 20
+)
+prefixed = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"X-Content-Length: 20\r\n\r\n"
+)
+duplicate = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Length: 0\r\n"
+    b"content-length: 0\r\n\r\n"
+)
+malformed = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Length: 1x\r\n\r\n"
+)
+oversized = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Length: 999999999999999999999999\r\n\r\n"
+)
+chunked = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Transfer-Encoding: chunked\r\n\r\n"
+)
+
+print(f"mixed={mixed[0]}|{mixed[1]}|{mixed[2]}")
+print(f"prefixed={prefixed[0]}|{prefixed[1]}|{prefixed[2]}")
+print(f"duplicate={duplicate[0]}")
+print(f"malformed={malformed[0]}")
+print(f"oversized={oversized[0]}")
+print(f"chunked={chunked[0]}")
+PY
+)
+check "header names are case-insensitive and exact" \
+"mixed=200|1|1
+prefixed=200|0|0
+duplicate=400
+malformed=400
+oversized=413
+chunked=400" "$result"
+
 cat >"$TMP/proxy.py" <<'PY'
 import re
 import socket
