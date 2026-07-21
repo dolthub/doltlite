@@ -129,7 +129,7 @@ oracle_error() {
   run_dt "$dir/dt" "$branch" "$query" >/dev/null 2>>"$dir/dt.err"
   dt_rc=$?
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
     pass=$((pass+1))
   else
     fail=$((fail+1))

@@ -65,7 +65,7 @@ SET @@dolt_allow_commit_conflicts = 1;
 $dolt_setup"
   dt_rc=$?
 
-  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
