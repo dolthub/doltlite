@@ -798,7 +798,7 @@ unsigned char *sqlite3_serialize(
   ** than crashing or returning a zero-filled buffer. */
   {
     extern int pagerShimIsShim(const Pager*);
-    if( pagerShimIsShim(sqlite3BtreePager(pBt)) ) return 0;
+    if( pagerShimIsShim(sqlite3BtreePager(pBt)) ) goto serialize_out;
   }
 #endif
   szPage = sqlite3BtreeGetPageSize(pBt);
