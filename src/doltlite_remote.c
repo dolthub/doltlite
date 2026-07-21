@@ -90,13 +90,19 @@ static int remoteCollectRootsFromRefsBlob(
 
   {
     int nBr, nTg;
+    i64 nAlloc64;
     const BranchRef *aBr;
     const TagRef *aTg;
     refsTableGetBranches(&refsView.refs, &nBr, &aBr);
     refsTableGetTags(&refsView.refs, &nTg, &aTg);
-    nAlloc = nBr + nTg + 1;
+    nAlloc64 = (i64)nBr + (i64)nTg + 1;
+    if( nAlloc64 > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
+      chunkStoreClose(&refsView);
+      return SQLITE_CORRUPT;
+    }
+    nAlloc = (int)nAlloc64;
     if( nAlloc>0 ){
-      aRoots = sqlite3_malloc(nAlloc * (int)sizeof(ProllyHash));
+      aRoots = sqlite3_malloc64((sqlite3_uint64)nAlloc * sizeof(ProllyHash));
       if( !aRoots ){
         chunkStoreClose(&refsView);
         return SQLITE_NOMEM;
