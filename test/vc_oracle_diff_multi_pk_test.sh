@@ -385,6 +385,27 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_merge('feat');
 " "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;" "EXPECT_EMPTY"
 
+# Positive control for the empty history above: the merge must actually bring
+# table u onto main. Assert its row is present post-merge, so the empty
+# dolt_history_u is Dolt's merge-history semantics on a real table, not a
+# silently-skipped replay or a table that never arrived.
+oracle "k_merge_replay_multi_pk_data_present" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT CONCAT('R|', a, '|', b, '|', v) FROM u ORDER BY a, b;"
+
 oracle "k_cherrypick_replay_multi_pk_history" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
