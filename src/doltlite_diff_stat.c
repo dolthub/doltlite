@@ -291,7 +291,8 @@ static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
 
 static int dsComputeTableStats(
   sqlite3 *db,
-  const char *zTableName,
+  const char *zFromName,
+  const char *zToName,
   const ProllyHash *pFromCatHash,
   const ProllyHash *pToCatHash,
   struct TableEntry *pFromEntry,
@@ -331,15 +332,15 @@ static int dsComputeTableStats(
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
   if( hasFrom ){
-    rc = dsLoadCreateSql(db, pFromCatHash, zTableName, &zFromSql);
+    rc = dsLoadCreateSql(db, pFromCatHash, zFromName, &zFromSql);
     if( rc!=SQLITE_OK ) return rc;
-    rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
+    rc = dsLoadColNames(db, pFromCatHash, zFromName, &azFromCols, &nFromCols);
     if( rc!=SQLITE_OK ) goto done;
   }
   if( hasTo ){
-    rc = dsLoadCreateSql(db, pToCatHash, zTableName, &zToSql);
+    rc = dsLoadCreateSql(db, pToCatHash, zToName, &zToSql);
     if( rc!=SQLITE_OK ) goto done;
-    rc = dsLoadColNames(db, pToCatHash, zTableName, &azToCols, &nToCols);
+    rc = dsLoadColNames(db, pToCatHash, zToName, &azToCols, &nToCols);
     if( rc!=SQLITE_OK ){
       goto done;
     }
@@ -423,7 +424,8 @@ static int dsComputeTableStats(
     cellsDel = (i64)oldCount * nFromCols;
   }
 
-  pOut->zTableName     = sqlite3_mprintf("%s", zTableName);
+  pOut->zTableName     = sqlite3_mprintf("%s",
+                             (hasTo && zToName) ? zToName : zFromName);
   pOut->schemaChanged  = schemaChanged;
   pOut->rowsAdded      = rowsAdd;
   pOut->rowsDeleted    = rowsDel;
@@ -680,6 +682,24 @@ static int dsTableNameMatchesFilter(const DsFilterCtx *pCtx, const char *zName){
   return !pCtx->zTblFilter || strcmp(zName, pCtx->zTblFilter)==0;
 }
 
+/* pRef is present in one root but its name is absent from the other. If the
+** same table (same iTable) is present in aOther under a different name, and
+** that name is likewise absent from pRef's own side (pRefSideIdx), the pair is
+** a rename: return the counterpart. A name that still exists on both sides is
+** a coincidental reuse, not a rename, so it is rejected. */
+static struct TableEntry *dsRenamePartner(
+  struct TableEntry *aOther, int nOther,
+  const struct TableEntry *pRef,
+  DsNameIndex *pRefSideIdx
+){
+  struct TableEntry *p;
+  if( !pRef ) return 0;
+  p = doltliteFindTableByNumber(aOther, nOther, pRef->iTable);
+  if( !p || !p->zName ) return 0;
+  if( dsNameIndexFind(pRefSideIdx, p->zName) ) return 0;
+  return p;
+}
+
 static int dstAdvance(DstCursor *c, sqlite3 *db){
   DsFilterCtx *pCtx = &c->fctx;
   int rc;
@@ -700,13 +720,36 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
     }else{
       pFromEntry = dsNameIndexFind(&c->fromIdx, zName);
       pToEntry = dsNameIndexFind(&c->toIdx, zName);
+      if( pFromEntry && !pToEntry ){
+        struct TableEntry *pRen =
+            dsRenamePartner(c->aToCat, c->nToCat, pFromEntry, &c->fromIdx);
+        if( pRen ){
+          rc = dsComputeTableStats(db, zName, pRen->zName,
+                                   &pCtx->fromCat, &pCtx->toCat,
+                                   pFromEntry, pRen, &row);
+          if( rc!=SQLITE_OK ){ sqlite3_free(row.zTableName); return rc; }
+          if( row.zTableName
+           && (row.rowsAdded || row.rowsDeleted || row.rowsModified
+            || row.cellsAdded || row.cellsDeleted || row.cellsModified) ){
+            c->row = row;
+            c->hasRow = 1;
+            return SQLITE_OK;
+          }
+          sqlite3_free(row.zTableName);
+          continue;
+        }
+      }else if( !pFromEntry && pToEntry
+             && dsRenamePartner(c->aFromCat, c->nFromCat, pToEntry,
+                                &c->toIdx) ){
+        continue;
+      }
     }
     if( pFromEntry && pToEntry
      && prollyHashCompare(&pFromEntry->root, &pToEntry->root)==0
      && prollyHashCompare(&pFromEntry->schemaHash, &pToEntry->schemaHash)==0 ){
       continue;
     }
-    rc = dsComputeTableStats(db, zName, &pCtx->fromCat, &pCtx->toCat,
+    rc = dsComputeTableStats(db, zName, zName, &pCtx->fromCat, &pCtx->toCat,
                              pFromEntry, pToEntry, &row);
     if( rc!=SQLITE_OK ){
       sqlite3_free(row.zTableName);
@@ -972,6 +1015,22 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
     }else{
       pFromEntry = dsNameIndexFind(&c->fromIdx, zName);
       pToEntry = dsNameIndexFind(&c->toIdx, zName);
+      if( pFromEntry && !pToEntry ){
+        struct TableEntry *pRen =
+            dsRenamePartner(c->aToCat, c->nToCat, pFromEntry, &c->fromIdx);
+        if( pRen ){
+          int dataChange =
+              prollyHashCompare(&pFromEntry->root, &pRen->root)!=0;
+          rc = dssSetRow(c, pFromEntry->zName, pRen->zName, "renamed",
+                         dataChange, 1);
+          if( rc!=SQLITE_OK ) return rc;
+          return SQLITE_OK;
+        }
+      }else if( !pFromEntry && pToEntry
+             && dsRenamePartner(c->aFromCat, c->nFromCat, pToEntry,
+                                &c->toIdx) ){
+        continue;
+      }
     }
     rc = dssAppendTableChange(c, db, zName, pFromEntry, pToEntry);
     if( rc!=SQLITE_OK ) return rc;
