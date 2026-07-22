@@ -3,9 +3,11 @@
 set -u
 
 DOLTLITE="${1:-./doltlite}"
+DOLT="${2:-dolt}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -13,49 +15,137 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-dl() {
-  local db="$1" sql="$2" tag="$3"
-  "$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$tag.err"
-}
-
 dl_setup() {
   local db="$1" tag="$2"
-  "$DOLTLITE" "$db" >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
-}
+  local sql dt_sql repo dl_rc dt_rc
+  sql=$(cat)
+  repo=$(dt_repo_for_db "$db")
+  mkdir -p "$repo"
+  if [ ! -d "$repo/.dolt" ]; then
+    (cd "$repo" && vc_oracle_init_repo)
+  fi
 
-dl_errors() {
-  local db="$1" sql="$2" tag="$3"
-  "$DOLTLITE" "$db" "$sql" >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
-  grep -qiE 'error|Error|conflict' "$TMPROOT/$tag.out" "$TMPROOT/$tag.err" 2>/dev/null
-}
+  printf '%s\n' "$sql" | "$DOLTLITE" "$db" \
+    >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
+  dl_rc=$?
+  dt_sql=$(printf '%s\n' "$sql" | schema_sql_for_dolt)
+  (cd "$repo" && printf '%s\n' "$dt_sql" | "$DOLT" sql -c) \
+    >"$TMPROOT/$tag.dt.out" 2>"$TMPROOT/$tag.dt.err"
+  dt_rc=$?
 
-expect_eq() {
-  local name="$1" want="$2" got="$3"
-  if [ "$want" = "$got" ]; then pass_name "$name"
-  else
-    fail_name "$name"
-    echo "    want: |$want|"
-    echo "    got:  |$got|"
+  if output_is_error "$dl_rc" "$TMPROOT/$tag.out" "$TMPROOT/$tag.err" \
+     || output_is_error "$dt_rc" "$TMPROOT/$tag.dt.out" "$TMPROOT/$tag.dt.err"; then
+    fail_name "${tag}_setup"
+    echo "    setup failed: doltlite rc=$dl_rc, dolt rc=$dt_rc"
+    echo "    doltlite stderr: $(head -2 "$TMPROOT/$tag.err")"
+    echo "    dolt stderr: $(head -2 "$TMPROOT/$tag.dt.err")"
   fi
 }
 
-expect_merge_ok() {
-  local name="$1" db="$2"
-  if dl_errors "$db" "SELECT dolt_merge('feat');" "$name"; then
-    fail_name "$name"
-    echo "    merge errored: $(cat $TMPROOT/$name.out $TMPROOT/$name.err 2>/dev/null | head -3)"
+dt_repo_for_db() {
+  local db="$1" base
+  base=$(basename "$db")
+  printf '%s/dolt_%s\n' "$TMPROOT" "${base%.db}"
+}
+
+schema_sql_for_dolt() {
+  local sql
+  sql=$(cat)
+  vc_oracle_translate_for_dolt "$sql" \
+    | sed -E 's/DROP INDEX ([a-zA-Z0-9_]+);/DROP INDEX \1 ON t;/g'
+}
+
+output_is_error() {
+  local rc="$1" out="$2" err="$3"
+  [ "$rc" -ne 0 ] || grep -qiE '(^|[^a-z])(error|failed)([ :]|$)' "$out" "$err" 2>/dev/null
+}
+
+run_merge_outcome() {
+  local engine="$1" db="$2" tag="$3"
+  local rc repo
+  if [ "$engine" = "doltlite" ]; then
+    "$DOLTLITE" "$db" "SELECT dolt_merge('feat');" \
+      >"$TMPROOT/$tag.dl.out" 2>"$TMPROOT/$tag.dl.err"
+    rc=$?
+    if output_is_error "$rc" "$TMPROOT/$tag.dl.out" "$TMPROOT/$tag.dl.err"; then
+      printf 'conflict\n'
+    else
+      printf 'ok\n'
+    fi
   else
-    pass_name "$name"
+    repo=$(dt_repo_for_db "$db")
+    (cd "$repo" && "$DOLT" sql -r csv -q "CALL dolt_merge('feat');") \
+      >"$TMPROOT/$tag.dt.out" 2>"$TMPROOT/$tag.dt.err"
+    rc=$?
+    if output_is_error "$rc" "$TMPROOT/$tag.dt.out" "$TMPROOT/$tag.dt.err" \
+       || tail -n +2 "$TMPROOT/$tag.dt.out" | grep -qi 'conflict'; then
+      printf 'conflict\n'
+    else
+      printf 'ok\n'
+    fi
   fi
 }
 
-expect_merge_conflict() {
-  local name="$1" db="$2"
-  if dl_errors "$db" "SELECT dolt_merge('feat');" "$name"; then
+expect_merge_outcome() {
+  local name="$1" db="$2" want="$3" dl_got dt_got
+  dl_got=$(run_merge_outcome doltlite "$db" "$name")
+  dt_got=$(run_merge_outcome dolt "$db" "$name")
+  if [ "$dl_got" = "$want" ] && [ "$dt_got" = "$want" ]; then
     pass_name "$name"
   else
     fail_name "$name"
-    echo "    merge succeeded but expected conflict"
+    echo "    expected $want; doltlite=$dl_got dolt=$dt_got"
+    echo "    doltlite: $(cat "$TMPROOT/$name.dl.out" "$TMPROOT/$name.dl.err" 2>/dev/null | head -2)"
+    echo "    dolt: $(cat "$TMPROOT/$name.dt.out" "$TMPROOT/$name.dt.err" 2>/dev/null | head -2)"
+  fi
+}
+
+expect_merge_ok() { expect_merge_outcome "$1" "$2" ok; }
+expect_merge_conflict() { expect_merge_outcome "$1" "$2" conflict; }
+
+run_dual_command_outcome() {
+  local name="$1" db="$2" dl_sql="$3" dt_sql="$4" want="$5"
+  local repo dl_rc dt_rc dl_got=ok dt_got=ok
+  repo=$(dt_repo_for_db "$db")
+  printf '%s\n' "$dl_sql" | "$DOLTLITE" "$db" \
+    >"$TMPROOT/$name.dl.out" 2>"$TMPROOT/$name.dl.err"
+  dl_rc=$?
+  (cd "$repo" && printf '%s\n' "$dt_sql" | "$DOLT" sql) \
+    >"$TMPROOT/$name.dt.out" 2>"$TMPROOT/$name.dt.err"
+  dt_rc=$?
+  if output_is_error "$dl_rc" "$TMPROOT/$name.dl.out" "$TMPROOT/$name.dl.err"; then dl_got=error; fi
+  if output_is_error "$dt_rc" "$TMPROOT/$name.dt.out" "$TMPROOT/$name.dt.err"; then dt_got=error; fi
+  if [ "$dl_got" = "$want" ] && [ "$dt_got" = "$want" ]; then
+    pass_name "$name"
+  else
+    fail_name "$name"
+    echo "    expected $want; doltlite=$dl_got dolt=$dt_got"
+  fi
+}
+
+query_doltlite_scalar() {
+  "$DOLTLITE" "$1" "$2" 2>"$TMPROOT/$3.dl.query.err" | tr -d '\r"'
+}
+
+query_dolt_scalar() {
+  local repo
+  repo=$(dt_repo_for_db "$1")
+  (cd "$repo" && "$DOLT" sql -r csv -q "$2") \
+    2>"$TMPROOT/$3.dt.query.err" | tail -n +2 | tr -d '\r"'
+}
+
+expect_dual_value() {
+  local name="$1" db="$2" want="$3" dl_sql="$4" dt_sql="$5"
+  local dl_got dt_got
+  dl_got=$(query_doltlite_scalar "$db" "$dl_sql" "$name")
+  dt_got=$(query_dolt_scalar "$db" "$dt_sql" "$name")
+  if [ "$dl_got" = "$want" ] && [ "$dt_got" = "$want" ]; then
+    pass_name "$name"
+  else
+    fail_name "$name"
+    echo "    expected: |$want|"
+    echo "    doltlite: |$dl_got|"
+    echo "    dolt:     |$dt_got|"
   fi
 }
 
@@ -101,28 +191,49 @@ CREATE TABLE newtbl(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_commit('-Am','main_add');
 SQL
 expect_merge_conflict "table_both_add_different" "$DB"
-expect_eq "schema_conflicts_columns" \
-  "table_name|base_schema|our_schema|their_schema|description" \
-  "$(dl "$DB" "SELECT group_concat(name, '|') FROM (SELECT name FROM pragma_table_info('dolt_schema_conflicts') ORDER BY cid);" "t2_columns")"
-expect_eq "schema_conflicts_autocommit_rollback" "0|0|0" \
-  "$(dl "$DB" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" "t2_autocommit")"
-cat <<'SQL' | dl_setup "$DB" "t2_transaction"
-BEGIN;
-SELECT dolt_merge('feat');
-COMMIT;
+expect_dual_value "schema_conflicts_autocommit_rollback" "$DB" "0|0|0" \
+  "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
+  "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
+
+DB="$TMPROOT/sc1.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "sc1"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_commit('-Am','feat_schema');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN extra INTEGER;
+SELECT dolt_commit('-Am','main_schema');
 SQL
-expect_eq "schema_conflicts_transaction_state" "1|1|0|1" \
-  "$(dl "$DB" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" "t2_state")"
-expect_eq "schema_conflicts_schema_rows" "newtbl|1|1|1" \
-  "$(dl "$DB" "SELECT table_name || '|' || (base_schema='<deleted>') || '|' || (our_schema LIKE 'CREATE TABLE newtbl%') || '|' || (their_schema LIKE 'CREATE TABLE newtbl%') FROM dolt_schema_conflicts;" "t2_rows")"
-if dl_errors "$DB" "SELECT dolt_conflicts_resolve('--ours','newtbl');" "t2_resolve"; then
-  pass_name "schema_conflicts_resolve_refused"
-else
-  fail_name "schema_conflicts_resolve_refused"
-fi
-dl "$DB" "SELECT dolt_merge('--abort');" "t2_abort" >/dev/null
-expect_eq "schema_conflicts_abort_clears" "0|0|0" \
-  "$(dl "$DB" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" "t2_cleared")"
+expect_merge_conflict "schema_conflict_existing_column_autocommit" "$DB"
+expect_dual_value "schema_conflicts_existing_autocommit_rollback" "$DB" "0|0|0" \
+  "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
+  "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
+printf '%s\n' "BEGIN; SELECT dolt_merge('feat'); COMMIT;" \
+  | "$DOLTLITE" "$DB" >"$TMPROOT/schema_conflicts_persist.dl.out" \
+      2>"$TMPROOT/schema_conflicts_persist.dl.err" || true
+DT_T2=$(dt_repo_for_db "$DB")
+(cd "$DT_T2" && printf '%s\n' \
+  "SET @@dolt_allow_commit_conflicts=1; SET autocommit=0; CALL dolt_merge('feat'); COMMIT;" \
+  | "$DOLT" sql -c) >"$TMPROOT/schema_conflicts_persist.dt.out" \
+      2>"$TMPROOT/schema_conflicts_persist.dt.err" || true
+expect_dual_value "schema_conflicts_transaction_state" "$DB" "1|1|0|1" \
+  "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
+  "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
+expect_dual_value "schema_conflicts_schema_rows" "$DB" "t|1|1|1" \
+  "SELECT table_name || '|' || (base_schema LIKE '%CREATE TABLE%') || '|' || (our_schema LIKE '%extra%') || '|' || (their_schema LIKE '%extra%') FROM dolt_schema_conflicts;" \
+  "SELECT CONCAT(table_name, '|', base_schema LIKE '%CREATE TABLE%', '|', our_schema LIKE '%extra%', '|', their_schema LIKE '%extra%') FROM dolt_schema_conflicts;"
+run_dual_command_outcome "schema_conflicts_resolve_refused" "$DB" \
+  "SELECT dolt_conflicts_resolve('--ours','t');" \
+  "CALL dolt_conflicts_resolve('--ours','t');" error
+run_dual_command_outcome "schema_conflicts_abort" "$DB" \
+  "SELECT dolt_merge('--abort');" "CALL dolt_merge('--abort');" ok
+expect_dual_value "schema_conflicts_abort_clears" "$DB" "0|0|0" \
+  "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
+  "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
 
 DB="$TMPROOT/t3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t3"
@@ -262,8 +373,8 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-Am','main_insert');
 SQL
 expect_merge_ok "col_one_adds" "$DB"
-W=$(dl "$DB" "SELECT w FROM t WHERE id=2;" "c5_check")
-expect_eq "col_one_adds_default_filled" "0" "$W"
+expect_dual_value "col_one_adds_default_filled" "$DB" "0" \
+  "SELECT w FROM t WHERE id=2;" "SELECT w FROM t WHERE id=2;"
 
 echo ""
 
@@ -279,12 +390,12 @@ SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
 SELECT dolt_checkout('feat');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','feat_add_fk');
 SELECT dolt_checkout('main');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_add_fk');
 SQL
@@ -302,12 +413,12 @@ SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
 SELECT dolt_checkout('feat');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','feat_add_fk_parent');
 SELECT dolt_checkout('main');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent2(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent2(id));
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_add_fk_parent2');
 SQL
@@ -319,7 +430,7 @@ echo "--- Indexes ---"
 
 DB="$TMPROOT/ix1.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix1"
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64));
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
@@ -334,7 +445,7 @@ expect_merge_ok "idx_both_add_identical" "$DB"
 
 DB="$TMPROOT/ix2.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix2"
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), w INT);
 INSERT INTO t VALUES(1,'a',10);
 SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
@@ -349,7 +460,7 @@ expect_merge_conflict "idx_both_add_different" "$DB"
 
 DB="$TMPROOT/ix3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix3"
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64));
 CREATE INDEX idx_v ON t(v);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','ancestor');
@@ -421,8 +532,9 @@ ALTER TABLE t ADD COLUMN x TEXT DEFAULT '';
 SELECT dolt_commit('-Am','main_add_x');
 SQL
 expect_merge_ok "table_both_add_different_columns" "$DB"
-COLS=$(dl "$DB" "PRAGMA table_info(t);" "t6_cols" | wc -l | tr -d ' ')
-expect_eq "table_both_add_different_columns_col_count" "4" "$COLS"
+expect_dual_value "table_both_add_different_columns_col_count" "$DB" "4" \
+  "SELECT count(*) FROM pragma_table_info('t');" \
+  "SELECT count(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
 
 DB="$TMPROOT/t7.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t7"
@@ -522,7 +634,7 @@ echo "--- Foreign Keys (additional) ---"
 DB="$TMPROOT/fk3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk3"
 CREATE TABLE parent(id INTEGER PRIMARY KEY);
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO parent VALUES(1);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','ancestor');
@@ -543,14 +655,14 @@ expect_merge_ok "fk_both_delete" "$DB"
 DB="$TMPROOT/fk4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk4"
 CREATE TABLE parent(id INTEGER PRIMARY KEY);
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO parent VALUES(1);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
 SELECT dolt_checkout('feat');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id) ON DELETE CASCADE);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','feat_modify_fk');
 SELECT dolt_checkout('main');
@@ -559,24 +671,27 @@ CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_drop_fk');
 SQL
-expect_merge_conflict "fk_modify_vs_delete" "$DB"
+expect_merge_ok "fk_modify_vs_delete" "$DB"
+expect_dual_value "fk_modify_vs_delete_keeps_delete" "$DB" "0" \
+  "SELECT count(*) FROM pragma_foreign_key_list('child');" \
+  "SELECT count(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='child' AND referenced_table_name IS NOT NULL;"
 
 DB="$TMPROOT/fk5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk5"
 CREATE TABLE parent(id INTEGER PRIMARY KEY);
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO parent VALUES(1);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
 SELECT dolt_checkout('feat');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id) ON DELETE CASCADE);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','feat_add_cascade');
 SELECT dolt_checkout('main');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id) ON DELETE CASCADE);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_add_cascade');
 SQL
@@ -585,23 +700,47 @@ expect_merge_ok "fk_both_modify_identical" "$DB"
 DB="$TMPROOT/fk6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk6"
 CREATE TABLE parent(id INTEGER PRIMARY KEY);
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
 INSERT INTO parent VALUES(1);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','ancestor');
 SELECT dolt_branch('feat');
 SELECT dolt_checkout('feat');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id) ON DELETE CASCADE);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','feat_cascade');
 SELECT dolt_checkout('main');
 DROP TABLE child;
-CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id) ON DELETE SET NULL);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE SET NULL);
 INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_setnull');
 SQL
 expect_merge_conflict "fk_both_modify_differently" "$DB"
+
+DB="$TMPROOT/fk7.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "fk7"
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
+INSERT INTO parent VALUES(1);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE child;
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','feat_drop_fk');
+SELECT dolt_checkout('main');
+DROP TABLE child;
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','main_modify_fk');
+SQL
+expect_merge_ok "fk_delete_vs_modify_reverse" "$DB"
+expect_dual_value "fk_delete_vs_modify_reverse_keeps_delete" "$DB" "0" \
+  "SELECT count(*) FROM pragma_foreign_key_list('child');" \
+  "SELECT count(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='child' AND referenced_table_name IS NOT NULL;"
 
 echo ""
 
@@ -609,7 +748,7 @@ echo "--- Indexes (additional) ---"
 
 DB="$TMPROOT/ix4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix4"
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), w INT);
 CREATE INDEX idx_v ON t(v);
 INSERT INTO t VALUES(1,'a',10);
 SELECT dolt_commit('-Am','ancestor');
@@ -622,11 +761,14 @@ SELECT dolt_checkout('main');
 DROP INDEX idx_v;
 SELECT dolt_commit('-Am','main_drop_idx');
 SQL
-expect_merge_conflict "idx_modify_vs_delete" "$DB"
+expect_merge_ok "idx_modify_vs_delete" "$DB"
+expect_dual_value "idx_modify_vs_delete_keeps_modify" "$DB" "2" \
+  "SELECT count(*) FROM pragma_index_info('idx_v');" \
+  "SELECT count(*) FROM information_schema.statistics WHERE table_schema=database() AND table_name='t' AND index_name='idx_v';"
 
 DB="$TMPROOT/ix5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix5"
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), w INT);
 CREATE INDEX idx_v ON t(v);
 INSERT INTO t VALUES(1,'a',10);
 SELECT dolt_commit('-Am','ancestor');
@@ -644,7 +786,7 @@ expect_merge_ok "idx_both_modify_identical" "$DB"
 
 DB="$TMPROOT/ix6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix6"
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), w INT);
 CREATE INDEX idx_v ON t(v);
 INSERT INTO t VALUES(1,'a',10);
 SELECT dolt_commit('-Am','ancestor');
@@ -659,6 +801,26 @@ CREATE INDEX idx_v ON t(w);
 SELECT dolt_commit('-Am','main_idx_w');
 SQL
 expect_merge_conflict "idx_both_modify_differently" "$DB"
+
+DB="$TMPROOT/ix7.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ix7"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), w INT);
+CREATE INDEX idx_v ON t(v);
+INSERT INTO t VALUES(1,'a',10);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP INDEX idx_v;
+SELECT dolt_commit('-Am','feat_drop_idx');
+SELECT dolt_checkout('main');
+DROP INDEX idx_v;
+CREATE INDEX idx_v ON t(v, w);
+SELECT dolt_commit('-Am','main_modify_idx');
+SQL
+expect_merge_ok "idx_delete_vs_modify_reverse" "$DB"
+expect_dual_value "idx_delete_vs_modify_reverse_keeps_modify" "$DB" "2" \
+  "SELECT count(*) FROM pragma_index_info('idx_v');" \
+  "SELECT count(*) FROM information_schema.statistics WHERE table_schema=database() AND table_name='t' AND index_name='idx_v';"
 
 echo ""
 
@@ -700,7 +862,10 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
 SELECT dolt_commit('-Am','main_drop_check');
 SQL
-expect_merge_conflict "check_modify_vs_delete" "$DB"
+expect_merge_ok "check_modify_vs_delete" "$DB"
+expect_dual_value "check_modify_vs_delete_keeps_modify" "$DB" "1" \
+  "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CHECK(v > 5)%';" \
+  "SELECT count(*) FROM information_schema.check_constraints WHERE check_clause LIKE '%> 5%';"
 
 DB="$TMPROOT/ck5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck5"
@@ -739,6 +904,28 @@ INSERT INTO t VALUES(1,10);
 SELECT dolt_commit('-Am','main_check_ge0');
 SQL
 expect_merge_conflict "check_both_modify_differently" "$DB"
+
+DB="$TMPROOT/ck7.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck7"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','feat_drop_check');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 5));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','main_modify_check');
+SQL
+expect_merge_ok "check_delete_vs_modify_reverse" "$DB"
+expect_dual_value "check_delete_vs_modify_reverse_keeps_modify" "$DB" "1" \
+  "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CHECK(v > 5)%';" \
+  "SELECT count(*) FROM information_schema.check_constraints WHERE check_clause LIKE '%> 5%';"
 
 echo ""
 echo "======================================="
