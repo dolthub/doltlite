@@ -699,6 +699,34 @@ $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 "
 
+oracle_summary "summary_staged_change" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+"
+
+oracle_summary "summary_staged_then_working" "
+$SEED
+UPDATE t SET v = 50 WHERE id = 1;
+SELECT dolt_add('-A');
+UPDATE t SET v = 99 WHERE id = 1;
+"
+
+oracle_summary "summary_staged_and_working_split_tables" "
+$SEED
+CREATE TABLE u(id INT PRIMARY KEY, x INT);
+INSERT INTO u VALUES (1, 1);
+SELECT dolt_add('-A');
+UPDATE t SET v = 99 WHERE id = 1;
+"
+
+oracle_summary "summary_staged_new_table" "
+$SEED
+CREATE TABLE w(id INT PRIMARY KEY, x INT);
+INSERT INTO w VALUES (1, 1);
+SELECT dolt_add('-A');
+"
+
 oracle_summary "summary_merge_replay_add_table_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');

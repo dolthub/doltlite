@@ -121,6 +121,7 @@ struct DoltliteDiffCursor {
   int hasRow;
   i64 iRowid;
   int singleCommit;
+  int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING only, 2=STAGED only */
 };
 
 static const char *diffSchema =
@@ -441,60 +442,84 @@ diff_done:
   return rc;
 }
 
-static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
-  ProllyHash headCat, workCat;
-  struct TableEntry *aHead = 0, *aWork = 0;
-  int nHead = 0, nWork = 0;
+/* Emit batch rows for the changed tables between two catalogs, labelling each
+** with zLabel ("WORKING" or "STAGED"). No rows when the catalogs match. */
+static int computeCatalogPairBatch(
+  DoltliteDiffCursor *pCur, sqlite3 *db,
+  const ProllyHash *pChildCat, const ProllyHash *pParentCat,
+  const char *zLabel
+){
+  struct TableEntry *aChild = 0, *aParent = 0;
+  int nChild = 0, nParent = 0;
   int rc;
-  static const char zWorkingHex[] = "WORKING";
   char zHexBuf[PROLLY_HASH_SIZE*2+1];
 
+  if( prollyHashCompare(pChildCat, pParentCat)==0 ) return SQLITE_OK;
+
+  memset(zHexBuf, 0, sizeof(zHexBuf));
+  sqlite3_snprintf(sizeof(zHexBuf), zHexBuf, "%s", zLabel);
+
+  if( pCur->zFilterTable && strcmp(pCur->zFilterTable, "dolt_schemas")!=0 ){
+    return diffFilteredTableRoots(pCur, db, pChildCat, pParentCat, zHexBuf, 0);
+  }
+
+  rc = doltliteLoadCatalog(db, pParentCat, &aParent, &nParent, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, pChildCat, &aChild, &nChild, 0);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeCatalog(aParent, nParent);
+    return rc;
+  }
+
+  {
+    SchemaEntry *aChildRows = 0, *aParentRows = 0;
+    int nChildRows = 0, nParentRows = 0;
+    rc = loadIndexSchemaRows(db, pChildCat, &aChildRows, &nChildRows);
+    if( rc==SQLITE_OK ){
+      rc = loadIndexSchemaRows(db, pParentCat, &aParentRows, &nParentRows);
+    }
+    if( rc==SQLITE_OK ){
+      rc = diffCatalogPair(pCur, db, aChild, nChild, aParent, nParent,
+                           aChildRows, nChildRows, aParentRows, nParentRows,
+                           zHexBuf, 0);
+    }
+    freeSchemaEntries(aChildRows, nChildRows);
+    freeSchemaEntries(aParentRows, nParentRows);
+  }
+
+  doltliteFreeCatalog(aParent, nParent);
+  doltliteFreeCatalog(aChild, nChild);
+  return rc;
+}
+
+/* The uncommitted diff, mirroring Dolt's dolt_diff: a STAGED row per table
+** where the staged catalog differs from HEAD, and a WORKING row per table
+** where the working set differs from staged. pseudoFilter narrows this to one
+** label when the query constrains commit_hash. */
+static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
+  ProllyHash headCat, stagedCat, workCat;
+  int rc;
+
   memset(&headCat, 0, sizeof(headCat));
+  memset(&stagedCat, 0, sizeof(stagedCat));
   memset(&workCat, 0, sizeof(workCat));
 
   rc = doltliteGetHeadCatalogHash(db, &headCat);
   if( rc!=SQLITE_OK ) return SQLITE_OK;
+  doltliteGetSessionStaged(db, &stagedCat);
+  if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
   rc = doltliteFlushCatalogToHash(db, &workCat);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( prollyHashCompare(&headCat, &workCat)==0 ) return SQLITE_OK;
-
-  if( pCur->zFilterTable && strcmp(pCur->zFilterTable, "dolt_schemas")!=0 ){
-    memset(zHexBuf, 0, sizeof(zHexBuf));
-    memcpy(zHexBuf, zWorkingHex, sizeof(zWorkingHex));
-    return diffFilteredTableRoots(pCur, db, &workCat, &headCat, zHexBuf, 0);
+  if( pCur->pseudoFilter!=1 ){
+    rc = computeCatalogPairBatch(pCur, db, &stagedCat, &headCat, "STAGED");
+    if( rc!=SQLITE_OK ) return rc;
   }
-
-  rc = doltliteLoadCatalog(db, &headCat, &aHead, &nHead, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, &workCat, &aWork, &nWork, 0);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeCatalog(aHead, nHead);
-    return rc;
+  if( pCur->pseudoFilter!=2 ){
+    rc = computeCatalogPairBatch(pCur, db, &workCat, &stagedCat, "WORKING");
+    if( rc!=SQLITE_OK ) return rc;
   }
-
-  memset(zHexBuf, 0, sizeof(zHexBuf));
-  memcpy(zHexBuf, zWorkingHex, sizeof(zWorkingHex));
-
-  {
-    SchemaEntry *aWorkRows = 0, *aHeadRows = 0;
-    int nWorkRows = 0, nHeadRows = 0;
-    rc = loadIndexSchemaRows(db, &workCat, &aWorkRows, &nWorkRows);
-    if( rc==SQLITE_OK ){
-      rc = loadIndexSchemaRows(db, &headCat, &aHeadRows, &nHeadRows);
-    }
-    if( rc==SQLITE_OK ){
-      rc = diffCatalogPair(pCur, db, aWork, nWork, aHead, nHead,
-                           aWorkRows, nWorkRows, aHeadRows, nHeadRows,
-                           zHexBuf, 0);
-    }
-    freeSchemaEntries(aWorkRows, nWorkRows);
-    freeSchemaEntries(aHeadRows, nHeadRows);
-  }
-
-  doltliteFreeCatalog(aHead, nHead);
-  doltliteFreeCatalog(aWork, nWork);
-  return rc;
+  return SQLITE_OK;
 }
 
 static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
@@ -632,6 +657,7 @@ static void diffCursorReset(DoltliteDiffCursor *pCur){
   pCur->phase = 0;
   pCur->hasRow = 0;
   pCur->iRowid = 0;
+  pCur->pseudoFilter = 0;
 }
 
 static int diffConnect(sqlite3 *db, void *pAux, int argc,
@@ -732,6 +758,10 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     if( zHashArg ){
       if( strcmp(zHashArg, "WORKING")==0 ){
         workingOnly = 1;
+        pCur->pseudoFilter = 1;
+      }else if( strcmp(zHashArg, "STAGED")==0 ){
+        workingOnly = 1;
+        pCur->pseudoFilter = 2;
       }else if( doltliteHexToHash(zHashArg, &startHash)==SQLITE_OK
                 && !prollyHashIsEmpty(&startHash) ){
         useStart = 1;
