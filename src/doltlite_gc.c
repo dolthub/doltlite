@@ -77,7 +77,7 @@ static const char *gcChunkTypeName(DoltliteChunkType type){
 
 static int gcQueueInit(GcQueue *q){
   q->nAlloc = 256;
-  q->aItems = sqlite3_malloc(q->nAlloc * sizeof(GcQueueItem));
+  q->aItems = sqlite3_malloc(q->nAlloc * (int)sizeof(GcQueueItem));
   if( !q->aItems ) return SQLITE_NOMEM;
   q->nItems = 0;
   q->iHead = 0;
@@ -101,11 +101,15 @@ static int gcQueuePush(
 ){
   if( prollyHashIsEmpty(h) ) return SQLITE_OK;
   if( q->nItems >= q->nAlloc ){
-    int newAlloc = q->nAlloc * 2;
-    GcQueueItem *aNew = sqlite3_realloc(q->aItems, newAlloc * sizeof(GcQueueItem));
+    i64 nNew = q->nAlloc ? (i64)q->nAlloc * 2 : (i64)256;
+    GcQueueItem *aNew;
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(GcQueueItem) ) return SQLITE_NOMEM;
+    aNew = (GcQueueItem*)sqlite3_realloc(
+      q->aItems, (int)(nNew * (i64)sizeof(GcQueueItem))
+    );
     if( !aNew ) return SQLITE_NOMEM;
     q->aItems = aNew;
-    q->nAlloc = newAlloc;
+    q->nAlloc = (int)nNew;
   }
   memcpy(&q->aItems[q->nItems].hash, h, sizeof(ProllyHash));
   if( pParent ){
