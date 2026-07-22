@@ -4,6 +4,13 @@
 
 /* B-tree lifecycle, dispatch tables, metadata, and public API shims. */
 
+static void btreeClearCatalogCache(Btree *p){
+  sqlite3_free(p->pCatalogCache);
+  p->pCatalogCache = 0;
+  p->nCatalogCache = 0;
+  memset(&p->catalogCacheHash, 0, sizeof(p->catalogCacheHash));
+}
+
 static int registerDoltiteFunctions(sqlite3 *db);
 
 
@@ -30,7 +37,7 @@ i64 prollyBtreeSyntheticPageCount(Btree *p){
   return n;
 }
 
-i64 prollyBtreePendingPageEstimate(Btree *p, i64 nLimit){
+static i64 prollyBtreePendingPageEstimate(Btree *p, i64 nLimit){
   i64 nBytes = 0;
   i64 nInsert = 0;
   i64 nBytePages;

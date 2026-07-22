@@ -4,6 +4,20 @@
 
 /* Mutation maps, inserts, deletes, transfers, and incremental blobs. */
 
+static int keyInfoHasLossyCollation(const KeyInfo *pKeyInfo){
+  int i;
+  if( !pKeyInfo ) return 0;
+  for(i=0; i<pKeyInfo->nAllField; i++){
+    const CollSeq *pColl = pKeyInfo->aColl[i];
+    if( !pColl || !pColl->zName ) continue;
+    if( sqlite3StrICmp(pColl->zName, "NOCASE")==0
+     || sqlite3StrICmp(pColl->zName, "RTRIM")==0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int applyMutMapToTableRoot(
   BtShared *pBt,
   struct TableEntry *pTE,
@@ -1371,9 +1385,9 @@ int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
     const u8 *pVal;
     int nVal;
     int nAvail;
-    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
     if( nAvail<nVal ){
-      return cursorCurrentTreeValueCopy(pCur, offset, amt, pBuf);
+      return prollyBtreeCursorCurrentTreeValueCopy(pCur, offset, amt, pBuf);
     }
   }
 

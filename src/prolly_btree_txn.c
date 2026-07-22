@@ -4,6 +4,19 @@
 
 /* Transactions, savepoints, commit, rollback, and mutation flushing. */
 
+static void btreeTakeCatalogCache(Btree *p, u8 **ppData, int nData,
+                                  const ProllyHash *pHash){
+  sqlite3_free(p->pCatalogCache);
+  p->pCatalogCache = *ppData;
+  *ppData = 0;
+  p->nCatalogCache = nData;
+  if( pHash ){
+    p->catalogCacheHash = *pHash;
+  }else{
+    memset(&p->catalogCacheHash, 0, sizeof(p->catalogCacheHash));
+  }
+}
+
 static int findSavepointTableIndexInArray(
   SavepointTableEntry*, int, Pgno
 );
@@ -1058,7 +1071,7 @@ int restoreFromCommitted(Btree *p){
             rc = SQLITE_CORRUPT;
             break;
           }
-          iTable = (Pgno)getU32LE(q);
+          iTable = (Pgno)prollyBtreeGetU32LE(q);
           pTE = &p->cat.a[i];
           if( pTE->iTable!=iTable ){
             rc = SQLITE_NOTFOUND;

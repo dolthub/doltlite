@@ -4,6 +4,179 @@
 
 /* Cursor navigation, seeking, comparison, and payload access. */
 
+static int keyInfoHasUnsupportedCollation(
+  const KeyInfo *pKeyInfo,
+  int nField
+){
+  int i;
+  if( !pKeyInfo ) return 0;
+  if( nField<=0 || nField>pKeyInfo->nAllField ){
+    nField = pKeyInfo->nAllField;
+  }
+  for(i=0; i<nField; i++){
+    const CollSeq *pColl = pKeyInfo->aColl[i];
+    if( !pColl || !pColl->zName ) continue;
+    if( sqlite3StrICmp(pColl->zName, "BINARY")!=0
+     && sqlite3StrICmp(pColl->zName, "NOCASE")!=0
+     && sqlite3StrICmp(pColl->zName, "RTRIM")!=0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static SQLITE_INLINE void cursorCurrentTreeValue(
+  BtCursor *pCur,
+  const u8 **ppData,
+  int *pnData
+){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  ProllyNode *pNode = &pLeaf->node;
+  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+  u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
+  *ppData = pNode->pValData + off0;
+  *pnData = (int)(off1 - off0);
+}
+
+void prollyBtreeCursorCurrentTreeValueSpan(
+  BtCursor *pCur,
+  const u8 **ppData,
+  int *pnData,
+  int *pnAvail
+){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  ProllyNode *pNode = &pLeaf->node;
+  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  prollyNodeValueSpan(pNode, i, ppData, pnData, pnAvail);
+}
+
+int prollyBtreeCursorCurrentTreeValueCopy(
+  BtCursor *pCur,
+  u32 offset,
+  u32 amt,
+  void *pBuf
+){
+  const u8 *pData;
+  int nData;
+  int nAvail;
+  prollyBtreeCursorCurrentTreeValueSpan(pCur, &pData, &nData, &nAvail);
+  if( (i64)offset + (i64)amt > (i64)nData ){
+    return SQLITE_CORRUPT_BKPT;
+  }
+  if( amt>0 ){
+    u32 nPrefix = offset < (u32)nAvail ? (u32)nAvail - offset : 0;
+    if( nPrefix>amt ) nPrefix = amt;
+    if( nPrefix>0 ) memcpy(pBuf, pData + offset, nPrefix);
+    if( nPrefix<amt ) memset((u8*)pBuf + nPrefix, 0, amt - nPrefix);
+  }
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  ProllyNode *pNode = &pLeaf->node;
+  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  const u8 *p = pNode->pKeyData + i*8;
+  assert( (pNode->flags & PROLLY_NODE_INTKEY)!=0 );
+  return ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40)
+       | ((u64)p[3]<<32) | ((u64)p[4]<<24) | ((u64)p[5]<<16)
+       | ((u64)p[6]<<8) | (u64)p[7];
+}
+
+static SQLITE_INLINE i64 cursorCurrentTreeIntKey(BtCursor *pCur){
+  u64 u = cursorCurrentTreeKeyPrefixInt(pCur);
+  return (i64)(u ^ ((u64)1 << 63));
+}
+
+static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
+  if( pCur->curIntKey ){
+    const u8 *pVal; int nVal; int nAvail;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nVal > 0 && nAvail==nVal ){
+      pCur->pCachedPayload = (u8*)pVal;
+      pCur->nCachedPayload = nVal;
+      pCur->cachedPayloadOwned = 0;
+    }
+  }
+}
+
+static int isDegenerateSchemaPayload(const u8 *pVal, int nVal){
+  return nVal==6
+      && pVal
+      && pVal[0]==6
+      && pVal[1]==0
+      && pVal[2]==0
+      && pVal[3]==0
+      && pVal[4]==0
+      && pVal[5]==0;
+}
+
+static int cursorOnDegenerateSchemaRow(BtCursor *pCur, int *pIsDegenerate){
+  const u8 *pVal;
+  int nVal;
+  int rc;
+  *pIsDegenerate = 0;
+  if( pCur->pgnoRoot!=1 || !pCur->curIntKey ) return SQLITE_OK;
+  if( pCur->eState!=CURSOR_VALID ) return SQLITE_OK;
+  rc = getCursorPayload(pCur, &pVal, &nVal);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !pVal || nVal<=0 ){
+    *pIsDegenerate = 1;
+    return SQLITE_OK;
+  }
+  if( pCur->pBtree->bFilterSchemaPlaceholders
+   && isDegenerateSchemaPayload(pVal, nVal) ){
+    *pIsDegenerate = 1;
+  }
+  return SQLITE_OK;
+}
+
+static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
+  int rc = SQLITE_OK;
+  int isDegenerate = 0;
+  if( pRes ) *pRes = 0;
+  while( pCur->eState==CURSOR_VALID ){
+    rc = cursorOnDegenerateSchemaRow(pCur, &isDegenerate);
+    if( rc!=SQLITE_OK || !isDegenerate ) break;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    rc = dir>=0 ? prollyBtCursorNext(pCur, 0) : prollyBtCursorPrevious(pCur, 0);
+    if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) break;
+    if( pCur->eState==CURSOR_INVALID ){
+      if( pRes ) *pRes = 1;
+      rc = SQLITE_OK;
+      break;
+    }
+  }
+  return rc;
+}
+
+static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
+  const u8 *pVal; int nVal;
+  CLEAR_CACHED_PAYLOAD(pCur);
+  cursorCurrentTreeValue(pCur, &pVal, &nVal);
+  if( nVal > 0 ){
+    pCur->pCachedPayload = (u8*)pVal;
+    pCur->nCachedPayload = nVal;
+    pCur->cachedPayloadOwned = 0;
+  }
+}
+
+static SQLITE_INLINE int prollyCursorNextFastLeaf(ProllyCursor *pCur){
+  ProllyCursorLevel *pLevel = &pCur->aLevel[pCur->iLevel];
+  ProllyCacheEntry *pLeaf = pLevel->pEntry;
+  assert( pCur->eState==PROLLY_CURSOR_VALID );
+  if( pLevel->idx < pLeaf->node.nItems - 1 ){
+    pLevel->idx++;
+    return SQLITE_OK;
+  }
+  return prollyCursorNext(pCur);
+}
+
 int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
   int rc;
   struct TableEntry *pTE;
@@ -2098,7 +2271,7 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
 
   if( pCur->curIntKey ){
     int nAvail;
-    cursorCurrentTreeValueSpan(pCur, ppData, pnData, &nAvail);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, ppData, pnData, &nAvail);
     if( nAvail<*pnData ){
       int rc = cacheCursorPayloadZeroTail(pCur, *ppData, nAvail,
                                           (i64)*pnData - nAvail);
@@ -2160,7 +2333,7 @@ u32 prollyBtCursorPayloadSize(BtCursor *pCur){
     const u8 *pVal;
     int nVal;
     int nAvail;
-    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
     if( nAvail<nVal ){
       return (u32)nVal;
     }
@@ -2226,9 +2399,9 @@ int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
     const u8 *pVal;
     int nVal;
     int nAvail;
-    cursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
     if( nAvail<nVal ){
-      return cursorCurrentTreeValueCopy(pCur, offset, amt, pBuf);
+      return prollyBtreeCursorCurrentTreeValueCopy(pCur, offset, amt, pBuf);
     }
   }
   rc = getCursorPayload(pCur, &pData, &nData);
@@ -2279,7 +2452,7 @@ const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
     int nLogical;
     int nAvail;
-    cursorCurrentTreeValueSpan(pCur, &pData, &nLogical, &nAvail);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pData, &nLogical, &nAvail);
     if( nAvail<nLogical ){
       if( pAmt ) *pAmt = (u32)nAvail;
       return (const void*)pData;

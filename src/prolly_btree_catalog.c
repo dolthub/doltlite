@@ -4,6 +4,34 @@
 
 /* Catalog serialization, schema metadata, and schema invalidation. */
 
+u32 prollyBtreeGetU32LE(const u8 *p){
+  return ((u32)p[0]) | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
+}
+
+static void putU32LE(u8 *p, u32 v){
+  p[0] = (u8)v;
+  p[1] = (u8)(v>>8);
+  p[2] = (u8)(v>>16);
+  p[3] = (u8)(v>>24);
+}
+
+static int btreeSchemaIndex(Btree *pBtree){
+  sqlite3 *db;
+  int i;
+  if( !pBtree || !(db = pBtree->db) ) return -1;
+  for(i=0; i<db->nDb; i++){
+    if( db->aDb[i].pBt==pBtree ) return i;
+  }
+  return -1;
+}
+
+static const char *btreeSchemaName(Btree *pBtree){
+  sqlite3 *db = pBtree ? pBtree->db : 0;
+  int iDb = btreeSchemaIndex(pBtree);
+  if( !db || iDb<0 || iDb>=db->nDb ) return "main";
+  return db->aDb[iDb].zDbSName ? db->aDb[iDb].zDbSName : "main";
+}
+
 void catRemove(Catalog *cat, Pgno iTable){
   int i;
   for(i=0; i<cat->n; i++){
@@ -1429,7 +1457,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
       return SQLITE_NOTFOUND;
     }
 
-    iTable = (Pgno)getU32LE(q);
+    iTable = (Pgno)prollyBtreeGetU32LE(q);
     pTE = findTable(pBtree, iTable);
     if( !pTE ){
       sqlite3_free(buf);
@@ -1526,8 +1554,8 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   aMetaNew[BTREE_INCR_VACUUM] = pBtree->aMeta[BTREE_INCR_VACUUM];
   aMetaNew[BTREE_APPLICATION_ID] = pBtree->aMeta[BTREE_APPLICATION_ID];
   if( iFormat==CATALOG_FORMAT_V5 ){
-    aMetaNew[BTREE_USER_VERSION] = getU32LE(data + CAT_HEADER_SIZE_V3);
-    aMetaNew[BTREE_APPLICATION_ID] = getU32LE(data + CAT_HEADER_SIZE_V3 + 4);
+    aMetaNew[BTREE_USER_VERSION] = prollyBtreeGetU32LE(data + CAT_HEADER_SIZE_V3);
+    aMetaNew[BTREE_APPLICATION_ID] = prollyBtreeGetU32LE(data + CAT_HEADER_SIZE_V3 + 4);
   }
 
   {
@@ -1554,7 +1582,7 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       catFree(&catNew);
       return SQLITE_CORRUPT;
     }
-    iTable = (Pgno)getU32LE(q);
+    iTable = (Pgno)prollyBtreeGetU32LE(q);
     q += 4;
     flags = *q++;
     pTE = catAdd(&catNew, iTable, flags);
@@ -1867,7 +1895,7 @@ int doltliteLoadTableRootById(
       sqlite3_free(data);
       return SQLITE_CORRUPT;
     }
-    entryTable = (Pgno)getU32LE(q);
+    entryTable = (Pgno)prollyBtreeGetU32LE(q);
     q += CAT_ENTRY_ITABLE_SIZE;
     flags = *q++;
     memcpy(root.data, q, PROLLY_HASH_SIZE);
