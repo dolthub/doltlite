@@ -34,6 +34,7 @@ static const char *btreeSchemaName(Btree *pBtree){
 
 void catRemove(Catalog *cat, Pgno iTable){
   int i;
+  assert( cat!=0 );
   for(i=0; i<cat->n; i++){
     if( cat->a[i].iTable==iTable ){
       sqlite3_free(cat->a[i].zName);
@@ -48,6 +49,11 @@ void catRemove(Catalog *cat, Pgno iTable){
                 (cat->n-i-1)*(int)sizeof(struct TableEntry));
       }
       cat->n--;
+#ifndef NDEBUG
+      for(i=1; i<cat->n; i++){
+        assert( cat->a[i-1].iTable < cat->a[i].iTable );
+      }
+#endif
       return;
     }
   }
@@ -55,6 +61,7 @@ void catRemove(Catalog *cat, Pgno iTable){
 
 void catFree(Catalog *cat){
   int k;
+  assert( cat!=0 );
   for(k=0; k<cat->n; k++){
     sqlite3_free(cat->a[k].zName);
     if( cat->a[k].pPending ){
@@ -71,12 +78,14 @@ void catFree(Catalog *cat){
 }
 
 void invalidateSchema(Btree *pBtree){
+  assert( pBtree!=0 );
   if( pBtree->pSchema && pBtree->xFreeSchema ){
     pBtree->xFreeSchema(pBtree->pSchema);
   }
 }
 
 void resetConnectionSchema(Btree *pBtree){
+  assert( pBtree!=0 );
   invalidateSchema(pBtree);
   if( pBtree->db ){
     sqlite3ExpirePreparedStatements(pBtree->db, 0);
@@ -157,7 +166,9 @@ void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
 }
 
 void refreshCursorRoot(BtCursor *pCur){
-  struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  struct TableEntry *pTE;
+  PROLLY_ASSERT_CURSOR_OWNED(pCur);
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( pTE ){
     pCur->pCur.root = pTE->root;
   }
@@ -1515,12 +1526,15 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
 }
 
 int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
+  assert( pBtree!=0 && ppOut!=0 && pnOut!=0 );
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, 0, ppOut, pnOut);
 }
 
 int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
   int rc;
+  assert( pBtree!=0 && ppOut!=0 && pnOut!=0 );
+  PROLLY_ASSERT_WRITE_TXN(pBtree);
   rc = serializeCatalogPatchRoots(pBtree, ppOut, pnOut);
   if( rc==SQLITE_OK ) return SQLITE_OK;
   if( rc!=SQLITE_NOTFOUND ) return rc;
@@ -1528,6 +1542,7 @@ int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
 }
 
 void initDefaultMeta(Btree *pBtree){
+  assert( pBtree!=0 );
   memset(pBtree->aMeta, 0, sizeof(pBtree->aMeta));
   pBtree->aMeta[BTREE_FILE_FORMAT] = 4;
   pBtree->aMeta[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
@@ -1541,6 +1556,8 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   Catalog catNew;
   u32 aMetaNew[16];
 
+  assert( pBtree!=0 );
+  assert( data!=0 || nData==0 );
   {
     const u8 *pEntries;
     if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries) ){
@@ -2059,6 +2076,7 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   int nData = 0;
   int rc;
 
+  assert( catHash!=0 );
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;

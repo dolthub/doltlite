@@ -217,6 +217,8 @@ static int ensureSavepointTablesCaptured(
 
 int ensureStatementSavepointsCaptured(Btree *pBtree){
   int i;
+  assert( pBtree!=0 );
+  assert( pBtree->nSavepoint==0 || pBtree->aSavepointTables!=0 );
   for(i=0; i<pBtree->nSavepoint; i++){
     struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
     if( pState->bStatement && !pState->bTablesCaptured ){
@@ -229,6 +231,8 @@ int ensureStatementSavepointsCaptured(Btree *pBtree){
 
 static void pushSavepointOnMutMaps(Btree *pBtree, int level){
   int k;
+  assert( pBtree!=0 );
+  assert( level>=0 );
   for(k=0; k<pBtree->cat.n; k++){
     ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapPushSavepoint(pMap, level);
@@ -387,6 +391,7 @@ int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
   if( !ppFlushMap ) return SQLITE_MISUSE;
   *ppFlushMap = 0;
   if( !pBtree || !ppPending || !*ppPending ) return SQLITE_OK;
+  assert( pBtree->inTrans==TRANS_WRITE );
   pPending = *ppPending;
   *ppFlushMap = pPending;
   if( pBtree->nSavepoint <= 0 ) return SQLITE_OK;
@@ -608,6 +613,8 @@ static int restoreTablesFromSavepoint(
 int pushSavepoint(Btree *pBtree, int bStatement){
   struct SavepointTableState *pState;
 
+  assert( pBtree!=0 );
+  PROLLY_ASSERT_WRITE_TXN(pBtree);
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     i64 nNew = pBtree->nSavepointAlloc
                  ? (i64)pBtree->nSavepointAlloc * 2 : (i64)8;
@@ -648,6 +655,7 @@ int pushSavepoint(Btree *pBtree, int bStatement){
 
   pBtree->nSavepoint++;
   pushSavepointOnMutMaps(pBtree, pBtree->nSavepoint);
+  assert( pBtree->nSavepoint<=pBtree->nSavepointAlloc );
   return SQLITE_OK;
 }
 
@@ -751,7 +759,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
     p->inTrans = TRANS_WRITE;
     p->inTransaction = TRANS_WRITE;
-    assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
+    PROLLY_ASSERT_GRAPH_LOCKED(pBt);
   } else {
     if( p->inTrans==TRANS_NONE ){
       p->inTrans = TRANS_READ;
@@ -801,8 +809,7 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
   if( p->inTrans==TRANS_WRITE ){
-    assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
-    assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
+    PROLLY_ASSERT_GRAPH_LOCKED(pBt);
     rc = flushAllPending(p, pBt, 0);
     if( rc!=SQLITE_OK ){
       chunkStoreRollback(&pBt->store);
@@ -1028,6 +1035,7 @@ int sqlite3BtreeCommit(Btree *p){
 }
 
 int restoreFromCommitted(Btree *p){
+  assert( p!=0 && p->pBt!=0 );
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
     if( p->bCatalogDropped ){
       /* A prior OOM rollback dropped the catalog. Installing the default
@@ -1154,8 +1162,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
   if( p->inTrans==TRANS_WRITE ){
-    assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
-    assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
+    PROLLY_ASSERT_GRAPH_LOCKED(pBt);
     /* Read cursors survive write-only rollback by reseeking the restored tree.
     ** Write cursors, and all cursors after schema changes, are faulted.
     ** Either way detach the cursor's pending-edit map alias before
@@ -1356,8 +1363,7 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   const char *zBr = p->zBranch ? p->zBranch : "main";
   int rc;
 
-  assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
-  assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
+  PROLLY_ASSERT_GRAPH_LOCKED(pBt);
 
   rc = serializeCatalog(p, &catData, &nCatData);
   if( rc==SQLITE_OK ){

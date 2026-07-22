@@ -419,8 +419,8 @@ int flushMutMap(BtCursor *pCur){
   int captured;
   int rc;
 
-  assert( pCur!=0 && pCur->pBtree!=0 && pCur->pBt!=0 );
-  assert( pCur->pBtree->inTrans==TRANS_WRITE );
+  PROLLY_ASSERT_CURSOR_OWNED(pCur);
+  PROLLY_ASSERT_WRITE_TXN(pCur->pBtree);
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ){
     return SQLITE_INTERNAL;
@@ -462,7 +462,10 @@ int flushPendingForTable(
   int captured = 0;
   int rc;
 
+  assert( pBtree!=0 && pBt!=0 );
+  assert( pBtree->pBt==pBt );
   if( !pTE || !pTE->pPending ) return SQLITE_OK;
+  PROLLY_ASSERT_WRITE_TXN(pBtree);
   pMap = (ProllyMutMap*)pTE->pPending;
   if( prollyMutMapIsEmpty(pMap) ) return SQLITE_OK;
 
@@ -978,9 +981,11 @@ int flushIfNeeded(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
 
+  PROLLY_ASSERT_CURSOR_OWNED(pCur);
   if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
     return SQLITE_OK;
   }
+  PROLLY_ASSERT_WRITE_TXN(pCur->pBtree);
 
   {
     BtCursor *p;
@@ -1035,7 +1040,8 @@ int flushAllPending(Btree *pBtree, BtShared *pBt, Pgno iTable){
   int rc;
 
   assert( pBtree!=0 && pBt!=0 );
-  assert( pBtree->inTrans==TRANS_WRITE );
+  assert( pBtree->pBt==pBt );
+  PROLLY_ASSERT_WRITE_TXN(pBtree);
   for(p = pBt->pCursor; p; p = p->pNext){
     if( p->pBtree==pBtree && (iTable==0 || p->pgnoRoot==iTable) ){
       rc = flushIfNeeded(p);

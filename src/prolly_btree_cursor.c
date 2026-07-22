@@ -493,6 +493,8 @@ done:
 
 
 static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
+  assert( pCur!=0 && e!=0 );
+  assert( pCur->pCur.eState==PROLLY_CURSOR_VALID );
   if( pCur->curIntKey ){
     u64 tk = cursorCurrentTreeKeyPrefixInt(pCur);
     u64 ek = e->keyPrefix;
@@ -511,7 +513,11 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
 }
 
 static int mergeScan(BtCursor *pCur, int dir, int *pRes){
+  assert( pCur!=0 );
+  assert( pCur->pMutMap!=0 );
+  assert( dir==1 || dir==-1 );
   if( pCur->mmPhysActive ){
+    assert( pCur->mmPhysIdx>=0 && pCur->mmPhysIdx<pCur->pMutMap->nEntries );
     pCur->mmIdx = prollyMutMapOrderIndexFromEntry(
         pCur->pMutMap, &pCur->pMutMap->aEntries[pCur->mmPhysIdx]);
     pCur->mmPhysIdx = -1;
@@ -574,7 +580,10 @@ static int ensureCursorMutMapOrder(BtCursor *pCur){
 
 static int cursorNormalizeMmPhys(BtCursor *pCur){
   if( pCur->mmPhysActive ){
-    int rc = ensureCursorMutMapOrder(pCur);
+    int rc;
+    assert( pCur->pMutMap!=0 );
+    assert( pCur->mmPhysIdx>=0 && pCur->mmPhysIdx<pCur->pMutMap->nEntries );
+    rc = ensureCursorMutMapOrder(pCur);
     if( rc!=SQLITE_OK ) return rc;
     pCur->mmIdx = prollyMutMapOrderIndexFromEntry(
         pCur->pMutMap, &pCur->pMutMap->aEntries[pCur->mmPhysIdx]);
@@ -588,6 +597,8 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   int rc;
   int res = 0;
   if( !pCur->deferredTreeSeek ) return SQLITE_OK;
+  assert( pCur->mmActive );
+  assert( pCur->pMutMap!=0 );
   pCur->deferredTreeSeek = 0;
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);

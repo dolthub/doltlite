@@ -270,7 +270,10 @@ const struct BtCursorOps origCursorVtOps = {
 };
 
 struct TableEntry *catFind(Catalog *cat, Pgno iTable){
-  int lo = 0, hi = cat->n - 1;
+  int lo = 0, hi;
+  assert( cat!=0 );
+  assert( cat->n==0 || cat->a!=0 );
+  hi = cat->n - 1;
   while( lo<=hi ){
     int mid = lo + (hi - lo) / 2;
     Pgno midTable = cat->a[mid].iTable;
@@ -288,6 +291,7 @@ struct TableEntry *catFind(Catalog *cat, Pgno iTable){
 struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
   struct TableEntry *pEntry;
 
+  assert( cat!=0 );
   pEntry = catFind(cat, iTable);
   if( pEntry ){
     pEntry->flags = flags;
@@ -325,6 +329,15 @@ struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
   pEntry->iTable = iTable;
   pEntry->flags = flags;
   cat->n++;
+  assert( cat->n<=cat->nAlloc );
+#ifndef NDEBUG
+  {
+    int i;
+    for(i=1; i<cat->n; i++){
+      assert( cat->a[i-1].iTable < cat->a[i].iTable );
+    }
+  }
+#endif
 
   return pEntry;
 }
@@ -333,6 +346,8 @@ struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
 int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
                           BtCursor *pExcept){
   BtCursor *p;
+  assert( pBtree!=0 && pBt!=0 );
+  assert( pBtree->pBt==pBt );
   for(p=pBt->pCursor; p; p=p->pNext){
     if( p->pBtree==pBtree
      && p!=pExcept
@@ -340,6 +355,9 @@ int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
       if( p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT ){
         int rc = saveCursorPosition(p);
         if( rc!=SQLITE_OK ) return rc;
+        assert( p->eState==CURSOR_REQUIRESEEK
+             || p->eState==CURSOR_INVALID
+             || p->eState==CURSOR_FAULT );
       }
     }
   }
@@ -1042,9 +1060,11 @@ int prollyBtreeCreateTable(Btree *p, Pgno *piTable, int flags){
   struct TableEntry *pTE;
   Pgno iTable;
 
+  assert( p!=0 && piTable!=0 );
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
+  PROLLY_ASSERT_GRAPH_LOCKED(p->pBt);
 
   {
     int rc = ensureStatementSavepointsCaptured(p);

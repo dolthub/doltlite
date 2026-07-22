@@ -116,6 +116,20 @@ u32 prollyBtreeGetU32LE(const u8 *p);
   (pCsr)->cachedPayloadOwned = 0; \
 }while(0)
 
+#define PROLLY_ASSERT_WRITE_TXN(p) \
+  assert( (p)!=0 && (p)->inTrans==TRANS_WRITE )
+
+#define PROLLY_ASSERT_GRAPH_LOCKED(pBt) do{ \
+  assert( (pBt)!=0 ); \
+  assert( (pBt)->store.isMemory \
+       || ((pBt)->store.pGraphLockFile!=0 && (pBt)->store.lockDepth>0) ); \
+}while(0)
+
+#define PROLLY_ASSERT_CURSOR_OWNED(pCur) do{ \
+  assert( (pCur)!=0 && (pCur)->pBtree!=0 && (pCur)->pBt!=0 ); \
+  assert( (pCur)->pBtree->pBt==(pCur)->pBt ); \
+}while(0)
+
 #define CLEAR_CACHED_SEEK_KEY(pCur) do{ \
   (pCur)->nSeekSortKey = 0; \
   (pCur)->nSeekKeyField = 0; \
