@@ -157,6 +157,35 @@ int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
   return doltliteCommitCatalogHash(db, &commitHash, pCatHash);
 }
 
+int doltliteRefIsWorking(const char *zRef){
+  return zRef && sqlite3_stricmp(zRef, "WORKING")==0;
+}
+
+int doltliteRefIsStaged(const char *zRef){
+  return zRef && sqlite3_stricmp(zRef, "STAGED")==0;
+}
+
+int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
+                                     ProllyHash *pCatHash){
+  if( !zRef ){
+    return doltliteGetHeadCatalogHash(db, pCatHash);
+  }
+  if( doltliteRefIsWorking(zRef) ){
+    if( doltliteHasUncommittedChanges(db) ){
+      return doltliteFlushCatalogToHash(db, pCatHash);
+    }
+    return doltliteGetPersistedWorkingCatalogHash(db, pCatHash);
+  }
+  if( doltliteRefIsStaged(zRef) ){
+    doltliteGetSessionStaged(db, pCatHash);
+    if( prollyHashIsEmpty(pCatHash) ){
+      return doltliteGetHeadCatalogHash(db, pCatHash);
+    }
+    return SQLITE_OK;
+  }
+  return doltliteRefToCatalogHash(db, zRef, pCatHash);
+}
+
 static const char hexchars[] = "0123456789abcdef";
 
 void doltliteHashToHex(const ProllyHash *h, char *buf){
