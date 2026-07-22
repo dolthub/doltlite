@@ -101,6 +101,28 @@ CREATE TABLE newtbl(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_commit('-Am','main_add');
 SQL
 expect_merge_conflict "table_both_add_different" "$DB"
+expect_eq "schema_conflicts_columns" \
+  "table_name|base_schema|our_schema|their_schema|description" \
+  "$(dl "$DB" "SELECT group_concat(name, '|') FROM (SELECT name FROM pragma_table_info('dolt_schema_conflicts') ORDER BY cid);" "t2_columns")"
+expect_eq "schema_conflicts_autocommit_rollback" "0|0|0" \
+  "$(dl "$DB" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" "t2_autocommit")"
+cat <<'SQL' | dl_setup "$DB" "t2_transaction"
+BEGIN;
+SELECT dolt_merge('feat');
+COMMIT;
+SQL
+expect_eq "schema_conflicts_transaction_state" "1|1|0|1" \
+  "$(dl "$DB" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" "t2_state")"
+expect_eq "schema_conflicts_schema_rows" "newtbl|1|1|1" \
+  "$(dl "$DB" "SELECT table_name || '|' || (base_schema='<deleted>') || '|' || (our_schema LIKE 'CREATE TABLE newtbl%') || '|' || (their_schema LIKE 'CREATE TABLE newtbl%') FROM dolt_schema_conflicts;" "t2_rows")"
+if dl_errors "$DB" "SELECT dolt_conflicts_resolve('--ours','newtbl');" "t2_resolve"; then
+  pass_name "schema_conflicts_resolve_refused"
+else
+  fail_name "schema_conflicts_resolve_refused"
+fi
+dl "$DB" "SELECT dolt_merge('--abort');" "t2_abort" >/dev/null
+expect_eq "schema_conflicts_abort_clears" "0|0|0" \
+  "$(dl "$DB" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" "t2_cleared")"
 
 DB="$TMPROOT/t3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t3"

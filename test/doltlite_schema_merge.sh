@@ -439,6 +439,54 @@ SELECT dolt_commit('-A','-m','feat adds extra TEXT');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "schema_merge_same_col_diff_type" "SELECT dolt_merge('feat');" "schema conflict|conflict|Error" "$DB"
+run_test "schema_merge_autocommit_schema_conflicts_empty" \
+  "SELECT count(*) FROM dolt_schema_conflicts;" "0" "$DB"
+run_test "schema_merge_autocommit_conflicts_empty" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_schema_conflicts_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_commit('-Am','feat schema');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN extra INTEGER;
+SELECT dolt_commit('-Am','main schema');
+BEGIN;
+SELECT dolt_merge('feat');
+COMMIT;
+EOF
+
+run_test "schema_conflicts_columns" \
+  "SELECT group_concat(name, '|') FROM (SELECT name FROM pragma_table_info('dolt_schema_conflicts') ORDER BY cid);" \
+  "table_name|base_schema|our_schema|their_schema|description" "$DB"
+run_test "schema_conflicts_summary" \
+  "SELECT \"table\" || '|' || num_conflicts FROM dolt_conflicts;" \
+  "t|0" "$DB"
+run_test "schema_conflicts_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status WHERE status='schema conflict';" \
+  "t|0|schema conflict" "$DB"
+run_test "schema_conflicts_row" \
+  "SELECT table_name || '|' || (base_schema LIKE 'CREATE TABLE t%') || '|' || (our_schema LIKE '%extra INTEGER%') || '|' || (their_schema LIKE '%extra TEXT%') || '|' || description FROM dolt_schema_conflicts;" \
+  "t|1|1|1|both branches add column 'extra' with different definitions" "$DB"
+run_test_match "schema_conflicts_resolve_refused" \
+  "SELECT dolt_conflicts_resolve('--ours','t');" \
+  "Unable to automatically resolve schema conflicts|Error" "$DB"
+run_test_match "schema_conflicts_commit_refused" \
+  "SELECT dolt_commit('-Am','must fail');" \
+  "unresolved schema conflicts|Error" "$DB"
+run_test "schema_conflicts_persist_reopen" \
+  "SELECT count(*) FROM dolt_schema_conflicts;" "1" "$DB"
+run_test_match "schema_conflicts_abort" \
+  "SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB"
+run_test "schema_conflicts_abort_clears" \
+  "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
+  "0|0|0" "$DB"
 rm -f "$DB"
 
 DB=/tmp/test_schema_merge13_$$.db; rm -f "$DB"

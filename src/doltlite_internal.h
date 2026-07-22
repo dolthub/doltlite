@@ -980,6 +980,11 @@ int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     const char **azTouched, int nTouched,
     ProllyHash *pNewRoot);
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
+int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
+    const char *zOurSql, const char *zTheirSql, char **pzDetail);
+int doltliteSessionHasSchemaConflicts(sqlite3 *db);
+int doltliteForEachSchemaConflict(sqlite3 *db,
+    int (*xConflict)(void*, const char*), void *pCtx);
 
 static SQLITE_INLINE int doltliteAppendQuotedIdent(sqlite3_str *pStr,
                                                    const char *zName){

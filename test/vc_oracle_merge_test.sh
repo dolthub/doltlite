@@ -1062,6 +1062,68 @@ ROLLBACK;
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT v FROM t WHERE id = 1)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT v FROM t WHERE id = 1))"
 
+oracle_error_poststate "merge_schema_conflict_autocommit_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN c TEXT;
+SELECT dolt_commit('-Am', 'feature schema');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c INTEGER;
+SELECT dolt_commit('-Am', 'main schema');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' ||
+          (SELECT count(*) FROM dolt_conflicts) || '|' ||
+          (SELECT count(*) FROM dolt_status WHERE status = 'schema conflict')" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_status WHERE status = 'schema conflict'))"
+
+oracle_same_session "merge_schema_conflict_in_session" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN c TEXT;
+SELECT dolt_commit('-Am', 'feature schema');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c INTEGER;
+SELECT dolt_commit('-Am', 'main schema');
+BEGIN;
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM dolt_schema_conflicts) || char(9) ||
+          (SELECT count(*) FROM dolt_conflicts) || char(9) ||
+          (SELECT coalesce(sum(num_conflicts), -1) FROM dolt_conflicts) || char(9) ||
+          (SELECT count(*) FROM dolt_status WHERE status = 'schema conflict');" \
+"SELECT CONCAT('Q', char(9),
+               (SELECT COUNT(*) FROM dolt_schema_conflicts), char(9),
+               (SELECT COUNT(*) FROM dolt_conflicts), char(9),
+               (SELECT COALESCE(SUM(num_conflicts), -1) FROM dolt_conflicts), char(9),
+               (SELECT COUNT(*) FROM dolt_status WHERE status = 'schema conflict'));"
+
+oracle_same_session "merge_schema_conflict_ours_deleted" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN c INTEGER;
+SELECT dolt_commit('-Am', 'feature schema');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+SELECT dolt_commit('-Am', 'main drop');
+BEGIN;
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM dolt_schema_conflicts) || char(9) ||
+          (SELECT count(*) FROM dolt_conflicts) || char(9) ||
+          (SELECT count(*) FROM dolt_status WHERE status = 'schema conflict') || char(9) ||
+          (SELECT our_schema FROM dolt_schema_conflicts);" \
+"SELECT CONCAT('Q', char(9),
+               (SELECT COUNT(*) FROM dolt_schema_conflicts), char(9),
+               (SELECT COUNT(*) FROM dolt_conflicts), char(9),
+               (SELECT COUNT(*) FROM dolt_status WHERE status = 'schema conflict'), char(9),
+               (SELECT our_schema FROM dolt_schema_conflicts));"
+
 oracle_error_poststate "merge_constraint_violation_txn_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1, 1, 'base1'), (2, 2, 'base2');
