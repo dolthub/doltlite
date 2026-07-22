@@ -31,11 +31,20 @@ static SQLITE_INLINE void cursorCurrentTreeValue(
   int *pnData
 ){
   ProllyCursor *pProllyCur = &pCur->pCur;
-  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
-  ProllyNode *pNode = &pLeaf->node;
-  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
-  u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
-  u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
+  ProllyCacheEntry *pLeaf;
+  ProllyNode *pNode;
+  int i;
+  u32 off0, off1;
+  assert( pCur!=0 );
+  assert( pProllyCur->eState==PROLLY_CURSOR_VALID );
+  assert( pProllyCur->iLevel>=0 && pProllyCur->iLevel<PROLLY_CURSOR_MAX_DEPTH );
+  pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  assert( pLeaf!=0 );
+  pNode = &pLeaf->node;
+  i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  assert( i>=0 && i<(int)pNode->nItems );
+  off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+  off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *ppData = pNode->pValData + off0;
   *pnData = (int)(off1 - off0);
 }
@@ -47,9 +56,17 @@ void prollyBtreeCursorCurrentTreeValueSpan(
   int *pnAvail
 ){
   ProllyCursor *pProllyCur = &pCur->pCur;
-  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
-  ProllyNode *pNode = &pLeaf->node;
-  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  ProllyCacheEntry *pLeaf;
+  ProllyNode *pNode;
+  int i;
+  assert( pCur!=0 );
+  assert( pProllyCur->eState==PROLLY_CURSOR_VALID );
+  assert( pProllyCur->iLevel>=0 && pProllyCur->iLevel<PROLLY_CURSOR_MAX_DEPTH );
+  pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  assert( pLeaf!=0 );
+  pNode = &pLeaf->node;
+  i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  assert( i>=0 && i<(int)pNode->nItems );
   prollyNodeValueSpan(pNode, i, ppData, pnData, pnAvail);
 }
 
@@ -77,10 +94,18 @@ int prollyBtreeCursorCurrentTreeValueCopy(
 
 static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
   ProllyCursor *pProllyCur = &pCur->pCur;
-  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
-  ProllyNode *pNode = &pLeaf->node;
-  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
-  const u8 *p = pNode->pKeyData + i*8;
+  ProllyCacheEntry *pLeaf;
+  ProllyNode *pNode;
+  int i;
+  const u8 *p;
+  assert( pCur!=0 );
+  assert( pProllyCur->eState==PROLLY_CURSOR_VALID );
+  pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  assert( pLeaf!=0 );
+  pNode = &pLeaf->node;
+  i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  assert( i>=0 && i<(int)pNode->nItems );
+  p = pNode->pKeyData + i*8;
   assert( (pNode->flags & PROLLY_NODE_INTKEY)!=0 );
   return ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40)
        | ((u64)p[3]<<32) | ((u64)p[4]<<24) | ((u64)p[5]<<16)
@@ -2223,6 +2248,8 @@ static int cursorPayloadFault(
 int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   *ppData = 0;
   *pnData = 0;
+  assert( pCur!=0 );
+  assert( pCur->eState!=CURSOR_FAULT );
 
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     *ppData = pCur->pCachedPayload;

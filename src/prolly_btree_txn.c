@@ -751,6 +751,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
     p->inTrans = TRANS_WRITE;
     p->inTransaction = TRANS_WRITE;
+    assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
   } else {
     if( p->inTrans==TRANS_NONE ){
       p->inTrans = TRANS_READ;
@@ -800,6 +801,8 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
   if( p->inTrans==TRANS_WRITE ){
+    assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
+    assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
     rc = flushAllPending(p, pBt, 0);
     if( rc!=SQLITE_OK ){
       chunkStoreRollback(&pBt->store);
@@ -944,6 +947,8 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->bMasterRootChangedTxn = 0;
 
       btreeTakeCatalogCache(p, &catData, nCatData, &catHash);
+      assert( p->nCatalogCache==nCatData );
+      assert( prollyHashCompare(&p->catalogCacheHash, &catHash)==0 );
       sqlite3_free(catData);
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
