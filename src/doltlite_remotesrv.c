@@ -116,9 +116,39 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 
 #define MAX_HEADER_SIZE 4096
 
-/* Request caps for an unauthenticated protocol. */
-#define MAX_CHUNK_BYTES   (64 * 1024 * 1024)   /* 64 MiB single chunk */
-#define MAX_REQUEST_BYTES (128 * 1024 * 1024)  /* 128 MiB total body */
+/* Request/response caps for an unauthenticated protocol. Response cap matches
+** the client-side HTTP_RESP_MAX_BYTES in doltlite_http_remote.c so a batch
+** get-chunks cannot force the server to materialize an unbounded reply. */
+#define MAX_CHUNK_BYTES    (64 * 1024 * 1024)   /* 64 MiB single chunk */
+#define MAX_REQUEST_BYTES  (128 * 1024 * 1024)  /* 128 MiB total body */
+#define MAX_RESPONSE_BYTES MAX_REQUEST_BYTES    /* 128 MiB total reply */
+
+/* Grow *pp to at least need bytes, capped at MAX_RESPONSE_BYTES. Uses
+** sqlite3_realloc64 so sizes above 2 GiB-on-int truncation never under-alloc.
+** Returns SQLITE_OK, SQLITE_NOMEM, or SQLITE_TOOBIG. */
+static int remoteSrvGrowBuf(u8 **pp, i64 *pnAlloc, i64 need){
+  i64 nNew;
+  u8 *pTmp;
+
+  if( need<0 || need>MAX_RESPONSE_BYTES ) return SQLITE_TOOBIG;
+  if( need<=*pnAlloc ) return SQLITE_OK;
+
+  nNew = *pnAlloc>0 ? *pnAlloc : (i64)4096;
+  while( nNew<need ){
+    if( nNew > MAX_RESPONSE_BYTES/2 ){
+      nNew = MAX_RESPONSE_BYTES;
+      break;
+    }
+    nNew *= 2;
+  }
+  if( nNew<need ) return SQLITE_TOOBIG;
+
+  pTmp = (u8*)sqlite3_realloc64(*pp, (sqlite3_uint64)nNew);
+  if( !pTmp ) return SQLITE_NOMEM;
+  *pp = pTmp;
+  *pnAlloc = nNew;
+  return SQLITE_OK;
+}
 
 static int readExact(DoltliteConn *fd, u8 *pBuf, int nBytes){
   int nRead = 0;
@@ -359,12 +389,13 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
     return;
   }
 
-  aResult = (u8*)sqlite3_malloc(nHashes);
+  /* nHashes is bounded by MAX_REQUEST_BYTES / PROLLY_HASH_SIZE. */
+  aResult = (u8*)sqlite3_malloc64((sqlite3_uint64)nHashes);
   if( !aResult ){
     sendError(fd);
     return;
   }
-  memset(aResult, 0, nHashes);
+  memset(aResult, 0, (size_t)nHashes);
   if( !pStore ){
     sendOk(fd, aResult, nHashes);
     sqlite3_free(aResult);
@@ -384,7 +415,8 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
 
 /* Batched read: body is N concatenated hashes; reply is the framed form
 ** httpGetChunks parses -- per requested hash, a 4-byte big-endian length then
-** that many payload bytes, with length 0xFFFFFFFF marking an absent chunk. */
+** that many payload bytes, with length 0xFFFFFFFF marking an absent chunk.
+** Total reply size is capped at MAX_RESPONSE_BYTES (413 if exceeded). */
 static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
                             const u8 *pBody, int nBody){
   int nHashes, i, rc;
@@ -401,8 +433,11 @@ static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
     const ProllyHash *pHash = (const ProllyHash*)(pBody + (i * PROLLY_HASH_SIZE));
     u8 *pData = 0;
     int nData = 0;
+    int bPresent = 0;
     u32 len;
     i64 need;
+    i64 add;
+    int growRc;
 
     rc = pStore ? chunkStoreGet(pStore, pHash, &pData, &nData) : SQLITE_NOTFOUND;
     if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
@@ -411,35 +446,43 @@ static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
       sendError(fd);
       return;
     }
-    len = (rc==SQLITE_NOTFOUND) ? 0xFFFFFFFFu : (u32)nData;
+    bPresent = (rc==SQLITE_OK);
+    len = bPresent ? (u32)nData : 0xFFFFFFFFu;
 
-    need = nOut + 4 + (rc==SQLITE_OK ? nData : 0);
-    if( need > nAlloc ){
-      i64 nNew = nAlloc ? nAlloc*2 : 4096;
-      u8 *pTmp;
-      while( nNew < need ) nNew *= 2;
-      pTmp = sqlite3_realloc(pOut, (int)nNew);
-      if( !pTmp ){
-        sqlite3_free(pData);
-        sqlite3_free(pOut);
-        sendError(fd);
-        return;
-      }
-      pOut = pTmp;
-      nAlloc = nNew;
+    add = 4 + (bPresent ? (i64)nData : 0);
+    if( add<0 || nOut > MAX_RESPONSE_BYTES - add ){
+      sqlite3_free(pData);
+      sqlite3_free(pOut);
+      sendPayloadTooLarge(fd);
+      return;
+    }
+    need = nOut + add;
+    growRc = remoteSrvGrowBuf(&pOut, &nAlloc, need);
+    if( growRc==SQLITE_TOOBIG ){
+      sqlite3_free(pData);
+      sqlite3_free(pOut);
+      sendPayloadTooLarge(fd);
+      return;
+    }
+    if( growRc!=SQLITE_OK ){
+      sqlite3_free(pData);
+      sqlite3_free(pOut);
+      sendError(fd);
+      return;
     }
 
     pOut[nOut++] = (u8)(len >> 24);
     pOut[nOut++] = (u8)(len >> 16);
     pOut[nOut++] = (u8)(len >> 8);
     pOut[nOut++] = (u8)len;
-    if( rc==SQLITE_OK ){
+    if( bPresent && nData>0 ){
       memcpy(pOut + nOut, pData, nData);
       nOut += nData;
     }
     sqlite3_free(pData);
   }
 
+  /* nOut is bounded by MAX_RESPONSE_BYTES which fits in a positive int. */
   sendOk(fd, pOut, (int)nOut);
   sqlite3_free(pOut);
 }
@@ -467,6 +510,11 @@ static void handleGetChunk(ChunkStore *pStore, DoltliteConn *fd, const char *zHe
   }
   if( rc!=SQLITE_OK ){
     sendError(fd);
+    return;
+  }
+  if( nData<0 || (i64)nData>MAX_RESPONSE_BYTES ){
+    sqlite3_free(pData);
+    sendPayloadTooLarge(fd);
     return;
   }
 
