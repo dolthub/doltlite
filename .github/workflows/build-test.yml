@@ -106,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CFLAGS: -Werror
+      CFLAGS: -O2 -g -Werror
 
     steps:
     - uses: actions/checkout@v4
@@ -135,7 +135,7 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 20
     env:
-      CFLAGS: -Werror
+      CFLAGS: -O2 -g -Werror
     strategy:
       fail-fast: false
       matrix:
