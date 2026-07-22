@@ -104,6 +104,25 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 INSERT INTO t VALUES (99, 99);
 " "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD', 'WORKING');"
 
+echo "--- STAGED ref ---"
+
+oracle "slice_head_to_staged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+" "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD', 'STAGED');"
+
+oracle "slice_staged_to_working" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+UPDATE t SET v = 50 WHERE id = 1;
+SELECT dolt_add('-A');
+INSERT INTO t VALUES (2, 2);
+" "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('STAGED', 'WORKING');"
+
 echo "--- no diff (same ref both sides) ---"
 
 oracle "slice_no_change" "$SETUP_LINEAR" \

@@ -670,18 +670,10 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
   db = sqlite3_context_db_handle(ctx);
 
   if( argc==0 ){
-    if( doltliteHasUncommittedChanges(db) ){
-      rc = doltliteFlushCatalogToHash(db, &catHash);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error(ctx, "dolt_hashof_catalog: catalog flush failed", -1);
-        return;
-      }
-    }else{
-      rc = doltliteGetPersistedWorkingCatalogHash(db, &catHash);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error(ctx, "dolt_hashof_catalog: persisted catalog read failed", -1);
-        return;
-      }
+    rc = doltliteResolveCatalogHashForRef(db, "WORKING", &catHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "dolt_hashof_catalog: working catalog read failed", -1);
+      return;
     }
   }else{
     if( hashofResolveRefCatalog(ctx, db, argv[0], "dolt_hashof_catalog", &catHash) ) return;

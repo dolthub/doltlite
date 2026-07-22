@@ -272,27 +272,6 @@ static struct TableEntry *dsNameIndexFind(
   return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
-static int dsResolveCatHash(sqlite3 *db, const char *zRef,
-                            ProllyHash *pOut){
-  if( zRef ){
-    if( strcmp(zRef, "WORKING")==0 ){
-      if( doltliteHasUncommittedChanges(db) ){
-        return doltliteFlushCatalogToHash(db, pOut);
-      }
-      return doltliteGetPersistedWorkingCatalogHash(db, pOut);
-    }
-    if( strcmp(zRef, "STAGED")==0 ){
-      doltliteGetSessionStaged(db, pOut);
-      if( prollyHashIsEmpty(pOut) ){
-        return doltliteGetHeadCatalogHash(db, pOut);
-      }
-      return SQLITE_OK;
-    }
-    return doltliteRefToCatalogHash(db, zRef, pOut);
-  }
-  return doltliteGetHeadCatalogHash(db, pOut);
-}
-
 static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
   if( (idxNum & 3)!=3 ){
     sqlite3_free(pVtab->zErrMsg);
@@ -671,9 +650,9 @@ static int dsFilterInit(
     pCtx->zTblFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
   }
 
-  rc = dsResolveCatHash(db, pCtx->zFromRef, &pCtx->fromCat);
+  rc = doltliteResolveCatalogHashForRef(db, pCtx->zFromRef, &pCtx->fromCat);
   if( rc!=SQLITE_OK ) return rc;
-  rc = dsResolveCatHash(db, pCtx->zToRef, &pCtx->toCat);
+  rc = doltliteResolveCatalogHashForRef(db, pCtx->zToRef, &pCtx->toCat);
   if( rc!=SQLITE_OK ) return rc;
   if( pCtx->zTblFilter ){
     pCtx->azNames = sqlite3_malloc((int)sizeof(char*));

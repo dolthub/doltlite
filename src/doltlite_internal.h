@@ -833,6 +833,16 @@ int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
 int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
                              ProllyHash *pCatHash);
 
+/* True when zRef names the working set / staged pseudo-refs. */
+int doltliteRefIsWorking(const char *zRef);
+int doltliteRefIsStaged(const char *zRef);
+
+/* Resolve any ref -- a commit/branch/tag, the WORKING or STAGED pseudo-refs,
+** or NULL for HEAD -- to its catalog hash. WORKING reflects uncommitted
+** in-session edits; STAGED falls back to HEAD when nothing is staged. */
+int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
+                                     ProllyHash *pCatHash);
+
 int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
                              const sqlite3_module *pModule);
 
