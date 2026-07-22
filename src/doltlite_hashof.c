@@ -600,7 +600,7 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
   }
   zTable = (const char*)sqlite3_value_text(argv[0]);
   if( !zTable || !*zTable ){
-    sqlite3_result_null(ctx);
+    sqlite3_result_error(ctx, "dolt_hashof_table: table not found", -1);
     return;
   }
   db = sqlite3_context_db_handle(ctx);
@@ -617,7 +617,7 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
 
   rc = hashofTableInCatalog(db, &catHash, zTable, hex);
   if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_null(ctx);
+    sqlite3_result_error(ctx, "dolt_hashof_table: table not found", -1);
     return;
   }
   if( rc!=SQLITE_OK ){
