@@ -451,6 +451,72 @@ SELECT dolt_commit('-m', 'add_u');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='main_check' LIMIT 1));
 " "HEAD~1" "HEAD"
 
+echo "--- summary across pk shapes: composite and keyless ---"
+
+oracle_summary "summary_composite_pk_modify" "
+CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES(1,1,10),(1,2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v=99 WHERE a=1 AND b=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_summary "summary_composite_pk_schema_and_data" "
+CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES(1,1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t ADD COLUMN w INT DEFAULT 0;
+INSERT INTO t VALUES(2,2,20,5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_summary "summary_composite_pk_filter_one_table" "
+CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a,b));
+CREATE TABLE s(a INT, b INT, v INT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES(1,1,10);
+INSERT INTO s VALUES(1,1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v=99 WHERE a=1;
+UPDATE s SET v=88 WHERE a=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "t"
+
+oracle_summary "summary_keyless_insert" "
+CREATE TABLE t(a INT, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_summary "summary_keyless_delete" "
+CREATE TABLE t(a INT, v INT);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DELETE FROM t WHERE a=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_summary "summary_keyless_modify" "
+CREATE TABLE t(a INT, v INT);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v=99 WHERE a=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
