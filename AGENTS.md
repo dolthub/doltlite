@@ -31,8 +31,19 @@ SQLite, which is public domain.
   header. Match the surrounding file — do not add one.
 - No issue or PR numbers in code comments; those references belong in commit
   messages and PR descriptions.
-- The comment bar is high. Keep only load-bearing comments and strip filler —
-  over-commenting makes the code worse.
+
+## Comments: minimal by default
+
+**Do not add explanatory comments.** The comment bar in this codebase is very
+high — aim for effectively none. Only keep a comment that is *load-bearing*:
+one that captures a non-obvious invariant, a subtle correctness reason, or a
+"why it must be this way" that the code cannot express on its own. Everything
+else — restating what the code does, section banners, narration of obvious
+steps, TODO chatter — makes the code worse and must be stripped.
+
+Agents over-comment by default; consciously resist it. Write code that reads
+like the surrounding DoltLite source (which is nearly comment-free), and when
+in doubt, leave the comment out.
 
 ## Build
 
