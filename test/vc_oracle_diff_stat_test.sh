@@ -325,6 +325,39 @@ SELECT dolt_merge('feature');
 
 echo "--- schema churn ---"
 
+oracle_both "rename_pure" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO u;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
+
+oracle_both "rename_plus_data" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO u;
+UPDATE u SET v = 99 WHERE id = 1;
+INSERT INTO u VALUES(3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "rename_composite_pk" "
+CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES(1, 1, 10), (1, 2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO u;
+UPDATE u SET v = 99 WHERE a = 1 AND b = 2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
 oracle_both "rename_then_recreate_same_name_family" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10);
