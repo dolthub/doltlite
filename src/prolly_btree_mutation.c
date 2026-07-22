@@ -26,6 +26,7 @@ int applyMutMapToTableRoot(
   ProllyMutator mut;
   int rc;
 
+  assert( pBt!=0 && pTE!=0 && pMap!=0 );
   memset(&mut, 0, sizeof(mut));
   mut.pStore = &pBt->store;
   mut.pCache = &pBt->cache;
@@ -329,9 +330,14 @@ void clearMergeCursorState(BtCursor *pCur){
 }
 
 ProllyMutMapEntry *currentMutMapEntry(BtCursor *pCur){
+  assert( pCur!=0 );
+  assert( pCur->mmActive );
+  assert( pCur->pMutMap!=0 );
   if( pCur->mmPhysActive ){
+    assert( pCur->mmPhysIdx>=0 && pCur->mmPhysIdx<pCur->pMutMap->nEntries );
     return &pCur->pMutMap->aEntries[pCur->mmPhysIdx];
   }
+  assert( pCur->mmIdx>=0 );
   return prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
 }
 
@@ -346,7 +352,10 @@ SQLITE_INLINE ProllyMutMapEntry *orderedMutMapEntryAt(
 }
 
 void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
-  ProllyMutMapEntry *pEntry = &pCur->pMutMap->aEntries[physIdx];
+  ProllyMutMapEntry *pEntry;
+  assert( pCur!=0 && pCur->pMutMap!=0 );
+  assert( physIdx>=0 && physIdx<pCur->pMutMap->nEntries );
+  pEntry = &pCur->pMutMap->aEntries[physIdx];
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->mmIdx = -1;
   pCur->mmPhysIdx = physIdx;
@@ -365,7 +374,10 @@ void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
 }
 
 static void setCursorToMutMapMissingEntryPhys(BtCursor *pCur, int physIdx){
-  ProllyMutMapEntry *pEntry = &pCur->pMutMap->aEntries[physIdx];
+  ProllyMutMapEntry *pEntry;
+  assert( pCur!=0 && pCur->pMutMap!=0 );
+  assert( physIdx>=0 && physIdx<pCur->pMutMap->nEntries );
+  pEntry = &pCur->pMutMap->aEntries[physIdx];
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->mmIdx = -1;
   pCur->mmPhysIdx = physIdx;
@@ -407,6 +419,8 @@ int flushMutMap(BtCursor *pCur){
   int captured;
   int rc;
 
+  assert( pCur!=0 && pCur->pBtree!=0 && pCur->pBt!=0 );
+  assert( pCur->pBtree->inTrans==TRANS_WRITE );
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ){
     return SQLITE_INTERNAL;
@@ -499,6 +513,7 @@ static int syncSavepoints(BtCursor *pCur){
 void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap){
   BtCursor *p;
+  assert( pBtree!=0 && pBt!=0 );
   for(p = pBt->pCursor; p; p = p->pNext){
     if( p->pBtree==pBtree && p->pgnoRoot==iTable ){
       p->pMutMap = pNewMap;
@@ -516,6 +531,8 @@ int ensureMutMap(BtCursor *pCur){
   struct TableEntry *pTE;
   ProllyMutMap *pMap;
 
+  assert( pCur!=0 && pCur->pBtree!=0 );
+  assert( pCur->curFlags & BTCF_WriteFlag );
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ) return SQLITE_INTERNAL;
 
@@ -528,6 +545,7 @@ int ensureMutMap(BtCursor *pCur){
       pExisting->currentSavepointLevel = pCur->pBtree->nSavepoint;
     }
     pCur->pMutMap = pExisting;
+    assert( pCur->pMutMap==pTE->pPending );
     return SQLITE_OK;
   }
 
@@ -543,10 +561,12 @@ int ensureMutMap(BtCursor *pCur){
   }
   pTE->pPending = pMap;
   refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pMap);
+  assert( pCur->pMutMap==pMap );
   return SQLITE_OK;
 }
 
 int saveCursorPosition(BtCursor *pCur){
+  assert( pCur!=0 );
   if( pCur->eState!=CURSOR_VALID && pCur->eState!=CURSOR_SKIPNEXT ){
     return SQLITE_OK;
   }
@@ -609,6 +629,7 @@ int saveCursorPosition(BtCursor *pCur){
   pCur->deferredTreeSeek = 0;
 
   pCur->eState = CURSOR_REQUIRESEEK;
+  assert( pCur->pCur.eState!=PROLLY_CURSOR_VALID );
   return SQLITE_OK;
 }
 
@@ -672,6 +693,7 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   int rc = SQLITE_OK;
   int res = 0;
 
+  assert( pCur!=0 );
   if( pCur->eState!=CURSOR_REQUIRESEEK ){
     if( pDifferentRow ) *pDifferentRow = 0;
     return SQLITE_OK;
@@ -1012,6 +1034,8 @@ int flushAllPending(Btree *pBtree, BtShared *pBt, Pgno iTable){
   BtCursor *p;
   int rc;
 
+  assert( pBtree!=0 && pBt!=0 );
+  assert( pBtree->inTrans==TRANS_WRITE );
   for(p = pBt->pCursor; p; p = p->pNext){
     if( p->pBtree==pBtree && (iTable==0 || p->pgnoRoot==iTable) ){
       rc = flushIfNeeded(p);

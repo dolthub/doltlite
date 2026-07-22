@@ -116,12 +116,15 @@ int rollbackNeedsSchemaReset(Btree *pBtree){
 
 void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   BtCursor *p;
+  assert( pBt!=0 );
   for(p=pBt->pCursor; p; p=p->pNext){
     if( iTable==0 || p->pgnoRoot==iTable ){
       p->eState = CURSOR_FAULT;
       p->skipNext = errCode;
       p->mmActive = 0;
-
+      p->mmPhysActive = 0;
+      p->mmIdx = -1;
+      p->mmPhysIdx = -1;
       prollyCursorReleaseAll(&p->pCur);
     }
   }
@@ -146,6 +149,9 @@ void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
     p->eState = CURSOR_FAULT;
     p->skipNext = SQLITE_ABORT;
     p->mmActive = 0;
+    p->mmPhysActive = 0;
+    p->mmIdx = -1;
+    p->mmPhysIdx = -1;
     prollyCursorReleaseAll(&p->pCur);
   }
 }
