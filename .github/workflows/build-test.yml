@@ -316,6 +316,11 @@ jobs:
       run: cd build && bash ../test/chunk_distribution_test.sh ./doltlite
       timeout-minutes: 5
 
+    - name: Chunker boundary golden
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/chunker_boundary_golden.sh ./doltlite
+      timeout-minutes: 5
+
     - name: Multi-table test
       if: matrix.platform != 'windows'
       run: cd build && bash ../test/multi_table_test.sh ./doltlite --quick
@@ -385,6 +390,7 @@ jobs:
         cd build
         bash ../test/large_scale_test.sh ./doltlite --quick
         bash ../test/chunk_distribution_test.sh ./doltlite
+        bash ../test/chunker_boundary_golden.sh ./doltlite
         bash ../test/multi_table_test.sh ./doltlite --quick
         bash ../test/diff_test.sh ./doltlite
         bash ../test/config_test.sh ./doltlite

@@ -42,6 +42,7 @@ doltlite_gc_session_state.sh
 doltlite_vacuum.sh
 doltlite_structural.sh
 chunk_physical_dups_test.sh
+chunker_boundary_golden.sh
 doltlite_savepoint.sh
 doltlite_rollback_durability.sh
 doltlite_delete_or.sh
@@ -124,6 +125,7 @@ doltlite_rollback_durability.sh
 doltlite_unique_index_delete.sh
 doltlite_storage_locking.sh
 chunk_physical_dups_test.sh
+chunker_boundary_golden.sh
 doltlite_open_sqlite_file.sh
 doltlite_comparison.sh
 doltlite_merge_ignore_corners.sh
