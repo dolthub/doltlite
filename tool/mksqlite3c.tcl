@@ -245,7 +245,7 @@ if {$doltlite} {
     prolly_cache.h prolly_check.h prolly_chunk_walk.h prolly_chunker.h prolly_cursor.h
     prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
     prolly_mutmap.h prolly_node.h prolly_record.h prolly_three_way_diff.h
-    prolly_three_way_merge.h prolly_xxhash.h
+    prolly_three_way_merge.h prolly_xxhash.h prolly_btree_int.h
     doltlite_ancestor.h doltlite_chunk_walk.h doltlite_commit.h
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
     doltlite_name_index.h
@@ -611,7 +611,9 @@ proc emit_doltlite_engine_block {} {
     chunk_store.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
     prolly_cursor.c prolly_mutmap.c prolly_chunker.c prolly_mutate.c prolly_check.c
     prolly_diff.c prolly_three_way_diff.c prolly_three_way_merge.c
-    prolly_btree.c pager_shim.c sortkey.c
+    prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c
+    prolly_btree_mutation.c prolly_btree_orig.c prolly_btree_state.c
+    prolly_btree_txn.c pager_shim.c sortkey.c
     doltlite.c doltlite_commit.c doltlite_ref.c doltlite_log.c
     doltlite_commit_ancestors.c doltlite_status.c doltlite_diff.c doltlite_diff_table.c
     doltlite_workspace.c
