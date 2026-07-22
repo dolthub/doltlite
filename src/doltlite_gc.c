@@ -493,8 +493,14 @@ static int gcBuildCompactedIndex(
     }
   }
 
-  aNewIndex = sqlite3_malloc((kept ? kept : 1) * (int)sizeof(ChunkIndexEntry));
-  if( !aNewIndex ) return SQLITE_NOMEM;
+  {
+    i64 nEntries = kept ? (i64)kept : 1;
+    if( nEntries > (i64)0x7fffffff/(i64)sizeof(ChunkIndexEntry) ){
+      return SQLITE_NOMEM;
+    }
+    aNewIndex = sqlite3_malloc((int)(nEntries * (i64)sizeof(ChunkIndexEntry)));
+    if( !aNewIndex ) return SQLITE_NOMEM;
+  }
 
   {
     int nIdx; const ChunkIndexEntry *aIdx;
@@ -631,8 +637,14 @@ static int gcRewriteFile(
   csSerializeManifest(&manifestCs, manifest);
   csManifestSeal(manifest);
 
-  aNewIndex = sqlite3_malloc((kept ? kept : 1) * (int)sizeof(ChunkIndexEntry));
-  if( !aNewIndex ) return SQLITE_NOMEM;
+  {
+    i64 nEntries = kept ? (i64)kept : 1;
+    if( nEntries > (i64)0x7fffffff/(i64)sizeof(ChunkIndexEntry) ){
+      return SQLITE_NOMEM;
+    }
+    aNewIndex = sqlite3_malloc((int)(nEntries * (i64)sizeof(ChunkIndexEntry)));
+    if( !aNewIndex ) return SQLITE_NOMEM;
+  }
 
   zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
   if( !zRaw ){
