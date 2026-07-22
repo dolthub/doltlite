@@ -10,6 +10,8 @@ struct ConflictTableInfo {
   char *zName;
   int nConflicts;
   DoltliteConflictRow *aRows;
+  char **azSchemaObjects;
+  int nSchemaObjects;
 };
 
 static void freeConflictTable(ConflictTableInfo *pTable);
@@ -161,9 +163,13 @@ static int loadAllConflicts(
       rc = SQLITE_CORRUPT; goto conflicts_cleanup;
     }
     aTables[i].nConflicts = nc;
-    aTables[i].aRows = sqlite3_malloc64((sqlite3_uint64)nc * sizeof(DoltliteConflictRow));
-    if( !aTables[i].aRows ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
-    memset(aTables[i].aRows, 0, (sqlite3_uint64)nc * sizeof(DoltliteConflictRow));
+    if( nc>0 ){
+      aTables[i].aRows = sqlite3_malloc64(
+          (sqlite3_uint64)nc * sizeof(DoltliteConflictRow));
+      if( !aTables[i].aRows ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+      memset(aTables[i].aRows, 0,
+             (sqlite3_uint64)nc * sizeof(DoltliteConflictRow));
+    }
 
     for(j=0; j<nc; j++){
       DoltliteConflictRow *cr = &aTables[i].aRows[j];
@@ -182,6 +188,43 @@ static int loadAllConflicts(
 conflicts_cleanup:
   freeConflictTables(aTables, nTables);
   sqlite3_free(data);
+  return rc;
+}
+
+int doltliteSessionHasSchemaConflicts(sqlite3 *db){
+  ConflictTableInfo *aTables = 0;
+  int nTables = 0;
+  int i;
+  int rc = loadAllConflicts(db, doltliteGetChunkStore(db),
+                            &aTables, &nTables);
+  if( rc!=SQLITE_OK ) return 0;
+  for(i=0; i<nTables; i++){
+    if( aTables[i].nConflicts==0 ){
+      freeConflictTables(aTables, nTables);
+      return 1;
+    }
+  }
+  freeConflictTables(aTables, nTables);
+  return 0;
+}
+
+int doltliteForEachSchemaConflict(
+  sqlite3 *db,
+  int (*xConflict)(void*, const char*),
+  void *pCtx
+){
+  ConflictTableInfo *aTables = 0;
+  int nTables = 0;
+  int i;
+  int rc = loadAllConflicts(db, doltliteGetChunkStore(db),
+                            &aTables, &nTables);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<nTables && rc==SQLITE_OK; i++){
+    if( aTables[i].nConflicts==0 ){
+      rc = xConflict(pCtx, aTables[i].zName);
+    }
+  }
+  freeConflictTables(aTables, nTables);
   return rc;
 }
 
@@ -274,6 +317,10 @@ static void freeConflictTable(ConflictTableInfo *pTable){
   for(j=0; j<pTable->nConflicts; j++){
     freeConflictRow(&pTable->aRows[j]);
   }
+  for(j=0; j<pTable->nSchemaObjects; j++){
+    sqlite3_free(pTable->azSchemaObjects[j]);
+  }
+  sqlite3_free(pTable->azSchemaObjects);
   sqlite3_free(pTable->aRows);
   sqlite3_free(pTable->zName);
   memset(pTable, 0, sizeof(*pTable));
@@ -576,6 +623,28 @@ static int cfClose(sqlite3_vtab_cursor *cur){
   freeConflictTables(c->aTables, c->nTables);
   sqlite3_free(c); return SQLITE_OK;
 }
+
+/* Dolt lists a schema conflict in dolt_conflicts only when the conflicted
+** table exists in the working root.  A conflict whose "ours" side deleted
+** the table remains visible in dolt_schema_conflicts and dolt_status. */
+static void cfPruneDeletedSchemaConflicts(sqlite3 *db, ConflictsCur *c){
+  int i;
+  int nOut = 0;
+  for(i=0; i<c->nTables; i++){
+    ConflictTableInfo *p = &c->aTables[i];
+    if( p->nConflicts==0 && sqlite3FindTable(db, p->zName, 0)==0 ){
+      freeConflictTable(p);
+      continue;
+    }
+    if( nOut!=i ){
+      c->aTables[nOut] = c->aTables[i];
+      memset(&c->aTables[i], 0, sizeof(c->aTables[i]));
+    }
+    nOut++;
+  }
+  c->nTables = nOut;
+}
+
 static int cfFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlite3_value **v){
   ConflictsCur *c=(ConflictsCur*)cur;
   ConflictsVtab *vt=(ConflictsVtab*)cur->pVtab;
@@ -593,7 +662,8 @@ static int cfFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlit
     rc = loadConflictTable(vt->db, doltliteGetChunkStore(vt->db),
                            zTable, &table, &found);
     if( rc!=SQLITE_OK ) return rc;
-    if( found ){
+    if( found && (table.nConflicts!=0
+                  || sqlite3FindTable(vt->db, table.zName, 0)!=0) ){
       c->aTables = sqlite3_malloc(sizeof(*c->aTables));
       if( !c->aTables ){
         freeConflictTable(&table);
@@ -601,10 +671,15 @@ static int cfFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlit
       }
       c->aTables[0] = table;
       c->nTables = 1;
+    }else if( found ){
+      freeConflictTable(&table);
     }
     return SQLITE_OK;
   }
-  return loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
+  rc = loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db),
+                        &c->aTables, &c->nTables);
+  if( rc==SQLITE_OK ) cfPruneDeletedSchemaConflicts(vt->db, c);
+  return rc;
 }
 static int cfNext(sqlite3_vtab_cursor *cur){ ((ConflictsCur*)cur)->iRow++; return SQLITE_OK; }
 static int cfEof(sqlite3_vtab_cursor *cur){ ConflictsCur *c=(ConflictsCur*)cur; return c->iRow>=c->nTables; }
@@ -626,6 +701,346 @@ static int cfBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
 static sqlite3_module conflictsModule = {
   0,0,cfConnect,cfBestIndex,doltliteVtabDisconnect,0,cfOpen,cfClose,cfFilter,cfNext,cfEof,
   cfColumn,cfRowid,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+typedef struct SchemaConflictRow SchemaConflictRow;
+struct SchemaConflictRow {
+  char *zTable;
+  char *zBase;
+  char *zOurs;
+  char *zTheirs;
+  char *zDescription;
+};
+
+typedef struct SchemaConflictsVtab SchemaConflictsVtab;
+struct SchemaConflictsVtab { sqlite3_vtab base; sqlite3 *db; };
+
+typedef struct SchemaConflictsCur SchemaConflictsCur;
+struct SchemaConflictsCur {
+  sqlite3_vtab_cursor base;
+  SchemaConflictRow *aRows;
+  int nRows;
+  int iRow;
+};
+
+static void schemaConflictsFreeRows(SchemaConflictsCur *pCur){
+  int i;
+  for(i=0; i<pCur->nRows; i++){
+    sqlite3_free(pCur->aRows[i].zTable);
+    sqlite3_free(pCur->aRows[i].zBase);
+    sqlite3_free(pCur->aRows[i].zOurs);
+    sqlite3_free(pCur->aRows[i].zTheirs);
+    sqlite3_free(pCur->aRows[i].zDescription);
+  }
+  sqlite3_free(pCur->aRows);
+  pCur->aRows = 0;
+  pCur->nRows = 0;
+  pCur->iRow = 0;
+}
+
+static int schemaEntrySame(const SchemaEntry *pA, const SchemaEntry *pB){
+  if( !pA && !pB ) return 1;
+  if( !pA || !pB ) return 0;
+  if( sqlite3_stricmp(pA->zType ? pA->zType : "",
+                      pB->zType ? pB->zType : "")!=0 ) return 0;
+  if( sqlite3_stricmp(pA->zTblName ? pA->zTblName : "",
+                      pB->zTblName ? pB->zTblName : "")!=0 ) return 0;
+  if( (pA->zSql==0)!=(pB->zSql==0) ) return 0;
+  return !pA->zSql || strcmp(pA->zSql, pB->zSql)==0;
+}
+
+static SchemaEntry *schemaTableEntry(
+  SchemaEntry *aSchema,
+  int nSchema,
+  const char *zTable
+){
+  SchemaEntry *p = findSchemaEntry(aSchema, nSchema, zTable);
+  if( p && p->zType && strcmp(p->zType, "table")==0 ) return p;
+  return 0;
+}
+
+static char *schemaConflictSql(
+  SchemaEntry *aSchema,
+  int nSchema,
+  const char *zTable
+){
+  SchemaEntry *pTable = schemaTableEntry(aSchema, nSchema, zTable);
+  sqlite3_str *pStr = sqlite3_str_new(0);
+  int i;
+  int nAdded = 0;
+  char *z;
+
+  if( !pStr ) return 0;
+  if( pTable && pTable->zSql ){
+    sqlite3_str_appendall(pStr, pTable->zSql);
+    nAdded++;
+  }
+  for(i=0; i<nSchema; i++){
+    SchemaEntry *p = &aSchema[i];
+    if( !p->zSql || !p->zType || !p->zName ) continue;
+    if( strcmp(p->zType, "index")==0 && p->zTblName
+     && sqlite3_stricmp(p->zTblName, zTable)==0 ){
+      if( nAdded ) sqlite3_str_appendall(pStr, ";\n");
+      sqlite3_str_appendall(pStr, p->zSql);
+      nAdded++;
+    }
+  }
+  if( nAdded==0 ){
+    SchemaEntry *p = findSchemaEntry(aSchema, nSchema, zTable);
+    if( p && p->zSql ){
+      sqlite3_str_appendall(pStr, p->zSql);
+      nAdded++;
+    }
+  }
+  if( nAdded==0 ) sqlite3_str_appendall(pStr, "<deleted>");
+  z = sqlite3_str_finish(pStr);
+  return z;
+}
+
+static char *schemaConflictIndexDescription(
+  SchemaEntry *aBase, int nBase,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zTable
+){
+  int side, i;
+  for(side=0; side<3; side++){
+    SchemaEntry *a = side==0 ? aBase : (side==1 ? aOurs : aTheirs);
+    int n = side==0 ? nBase : (side==1 ? nOurs : nTheirs);
+    for(i=0; i<n; i++){
+      SchemaEntry *pBase;
+      SchemaEntry *pOurs;
+      SchemaEntry *pTheirs;
+      int oursChanged;
+      int theirsChanged;
+      if( !a[i].zType || strcmp(a[i].zType, "index")!=0
+       || !a[i].zName || !a[i].zTblName
+       || sqlite3_stricmp(a[i].zTblName, zTable)!=0 ){
+        continue;
+      }
+      pBase = findSchemaEntry(aBase, nBase, a[i].zName);
+      pOurs = findSchemaEntry(aOurs, nOurs, a[i].zName);
+      pTheirs = findSchemaEntry(aTheirs, nTheirs, a[i].zName);
+      oursChanged = !schemaEntrySame(pBase, pOurs);
+      theirsChanged = !schemaEntrySame(pBase, pTheirs);
+      if( !oursChanged || !theirsChanged || schemaEntrySame(pOurs, pTheirs) ){
+        continue;
+      }
+      if( !pBase ){
+        return sqlite3_mprintf(
+            "both branches added index '%s' with different definitions",
+            a[i].zName);
+      }
+      if( !pOurs || !pTheirs ){
+        return sqlite3_mprintf(
+            "index '%s' modified on one branch and deleted on the other",
+            a[i].zName);
+      }
+      return sqlite3_mprintf(
+          "both branches modified index '%s' differently", a[i].zName);
+    }
+  }
+  return 0;
+}
+
+static char *schemaConflictDescription(
+  SchemaEntry *aBase, int nBase,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zTable,
+  const char *zBase,
+  const char *zOurs,
+  const char *zTheirs
+){
+  SchemaEntry *pBase = schemaTableEntry(aBase, nBase, zTable);
+  SchemaEntry *pOurs = schemaTableEntry(aOurs, nOurs, zTable);
+  SchemaEntry *pTheirs = schemaTableEntry(aTheirs, nTheirs, zTable);
+  char *zDetail = 0;
+  int rc;
+
+  if( !pBase && pOurs && pTheirs ){
+    return sqlite3_mprintf(
+        "table '%s' added on both branches with different definitions", zTable);
+  }
+  if( pBase && (!pOurs || !pTheirs) ){
+    const char *zSurvivor = pOurs ? zOurs : zTheirs;
+    const char *zKind = strcmp(zBase, zSurvivor)==0
+        ? "data modification" : "schema modification";
+    return sqlite3_mprintf("cannot merge a table deletion with %s", zKind);
+  }
+  if( pBase && pOurs && pTheirs ){
+    rc = doltliteTableSchemaConflictDetail(pBase->zSql, pOurs->zSql,
+                                           pTheirs->zSql, &zDetail);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zDetail);
+      return 0;
+    }
+    if( zDetail ) return zDetail;
+  }
+  zDetail = schemaConflictIndexDescription(
+      aBase, nBase, aOurs, nOurs, aTheirs, nTheirs, zTable);
+  if( zDetail ) return zDetail;
+  return sqlite3_mprintf("incompatible schema changes for table '%s'", zTable);
+}
+
+static int schemaConflictsLoadRows(SchemaConflictsCur *pCur, sqlite3 *db){
+  ConflictTableInfo *aTables = 0;
+  int nTables = 0;
+  ProllyHash ourHead, theirHead, ancestorHash;
+  DoltliteCommit ourCommit, theirCommit, ancestorCommit;
+  SchemaEntry *aBase = 0, *aOurs = 0, *aTheirs = 0;
+  int nBase = 0, nOurs = 0, nTheirs = 0;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  u8 isMerging = 0;
+  int i, nSchemaRows = 0;
+  int rc;
+
+  memset(&ourCommit, 0, sizeof(ourCommit));
+  memset(&theirCommit, 0, sizeof(theirCommit));
+  memset(&ancestorCommit, 0, sizeof(ancestorCommit));
+  doltliteGetSessionMergeState(db, &isMerging, &theirHead, 0);
+  if( !isMerging || prollyHashIsEmpty(&theirHead) ) return SQLITE_OK;
+  rc = loadAllConflicts(db, cs, &aTables, &nTables);
+  if( rc!=SQLITE_OK ) goto done;
+  for(i=0; i<nTables; i++){
+    if( aTables[i].nConflicts==0 ) nSchemaRows++;
+  }
+  if( nSchemaRows==0 ) goto done;
+
+  doltliteGetSessionHead(db, &ourHead);
+  rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = doltliteLoadCommit(db, &ancestorHash, &ancestorCommit);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = loadSchemaFromCatalog(db, cs, pCache, &ancestorCommit.catalogHash,
+                             &aBase, &nBase);
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, &ourCommit.catalogHash,
+                               &aOurs, &nOurs);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, &theirCommit.catalogHash,
+                               &aTheirs, &nTheirs);
+  }
+  if( rc!=SQLITE_OK ) goto done;
+
+  pCur->aRows = sqlite3_malloc(nSchemaRows*(int)sizeof(SchemaConflictRow));
+  if( !pCur->aRows ){ rc = SQLITE_NOMEM; goto done; }
+  memset(pCur->aRows, 0, nSchemaRows*(int)sizeof(SchemaConflictRow));
+  for(i=0; i<nTables; i++){
+    SchemaConflictRow *pRow;
+    if( aTables[i].nConflicts!=0 ) continue;
+    pRow = &pCur->aRows[pCur->nRows];
+    pCur->nRows++;
+    pRow->zTable = sqlite3_mprintf("%s", aTables[i].zName);
+    pRow->zBase = schemaConflictSql(aBase, nBase, aTables[i].zName);
+    pRow->zOurs = schemaConflictSql(aOurs, nOurs, aTables[i].zName);
+    pRow->zTheirs = schemaConflictSql(aTheirs, nTheirs, aTables[i].zName);
+    if( !pRow->zTable || !pRow->zBase || !pRow->zOurs || !pRow->zTheirs ){
+      rc = SQLITE_NOMEM;
+      goto done;
+    }
+    pRow->zDescription = schemaConflictDescription(
+        aBase, nBase, aOurs, nOurs, aTheirs, nTheirs,
+        aTables[i].zName, pRow->zBase, pRow->zOurs, pRow->zTheirs);
+    if( !pRow->zDescription ){ rc = SQLITE_NOMEM; goto done; }
+  }
+
+done:
+  freeConflictTables(aTables, nTables);
+  freeSchemaEntries(aBase, nBase);
+  freeSchemaEntries(aOurs, nOurs);
+  freeSchemaEntries(aTheirs, nTheirs);
+  doltliteCommitClear(&ourCommit);
+  doltliteCommitClear(&theirCommit);
+  doltliteCommitClear(&ancestorCommit);
+  if( rc!=SQLITE_OK ) schemaConflictsFreeRows(pCur);
+  return rc;
+}
+
+static int scConnect(sqlite3 *db, void *pAux, int argc,
+    const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  SchemaConflictsVtab *p;
+  int rc;
+  (void)pAux; (void)argc; (void)argv; (void)pzErr;
+  rc = doltliteVtabConnectSimple(db,
+      "CREATE TABLE x(table_name TEXT PRIMARY KEY, base_schema TEXT, "
+      "our_schema TEXT, their_schema TEXT, description TEXT)",
+      sizeof(*p), ppVtab);
+  if( rc==SQLITE_OK ){
+    p = (SchemaConflictsVtab*)*ppVtab;
+    p->db = db;
+  }
+  return rc;
+}
+
+static int scOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
+  (void)pVtab;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(SchemaConflictsCur));
+}
+
+static int scClose(sqlite3_vtab_cursor *pCursor){
+  SchemaConflictsCur *pCur = (SchemaConflictsCur*)pCursor;
+  schemaConflictsFreeRows(pCur);
+  sqlite3_free(pCur);
+  return SQLITE_OK;
+}
+
+static int scFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
+    const char *idxStr, int argc, sqlite3_value **argv){
+  SchemaConflictsCur *pCur = (SchemaConflictsCur*)pCursor;
+  SchemaConflictsVtab *pVtab = (SchemaConflictsVtab*)pCursor->pVtab;
+  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  schemaConflictsFreeRows(pCur);
+  return schemaConflictsLoadRows(pCur, pVtab->db);
+}
+
+static int scNext(sqlite3_vtab_cursor *pCursor){
+  ((SchemaConflictsCur*)pCursor)->iRow++;
+  return SQLITE_OK;
+}
+
+static int scEof(sqlite3_vtab_cursor *pCursor){
+  SchemaConflictsCur *pCur = (SchemaConflictsCur*)pCursor;
+  return pCur->iRow>=pCur->nRows;
+}
+
+static int scColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int iCol){
+  SchemaConflictsCur *pCur = (SchemaConflictsCur*)pCursor;
+  SchemaConflictRow *pRow;
+  if( pCur->iRow>=pCur->nRows ) return SQLITE_OK;
+  pRow = &pCur->aRows[pCur->iRow];
+  switch( iCol ){
+    case 0: sqlite3_result_text(ctx, pRow->zTable, -1, SQLITE_TRANSIENT); break;
+    case 1: sqlite3_result_text(ctx, pRow->zBase, -1, SQLITE_TRANSIENT); break;
+    case 2: sqlite3_result_text(ctx, pRow->zOurs, -1, SQLITE_TRANSIENT); break;
+    case 3: sqlite3_result_text(ctx, pRow->zTheirs, -1, SQLITE_TRANSIENT); break;
+    case 4: sqlite3_result_text(ctx, pRow->zDescription, -1, SQLITE_TRANSIENT); break;
+  }
+  return SQLITE_OK;
+}
+
+static int scRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
+  *pRowid = ((SchemaConflictsCur*)pCursor)->iRow + 1;
+  return SQLITE_OK;
+}
+
+static int scBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  (void)pVtab;
+  pInfo->estimatedCost = 10.0;
+  pInfo->estimatedRows = 4;
+  return SQLITE_OK;
+}
+
+static sqlite3_module schemaConflictsModule = {
+  0,0,scConnect,scBestIndex,doltliteVtabDisconnect,0,
+  scOpen,scClose,scFilter,scNext,scEof,scColumn,scRowid,
+  0,0,0,0,0,0,0,0,0,0,0,0
 };
 
 typedef struct CfRowVtab CfRowVtab;
@@ -937,6 +1352,22 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   zTable = (const char*)sqlite3_value_text(argv[1]);
   if(!zMode||!zTable){ sqlite3_result_error(ctx,"invalid args",-1); return; }
 
+  rc = loadConflictTable(db, cs, zTable, &table, &found);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  if( found && table.nConflicts==0 ){
+    freeConflictTable(&table);
+    sqlite3_result_error(ctx,
+      "Unable to automatically resolve schema conflicts since data changes "
+      "may not have been fully merged yet. Abort this merge, align the "
+      "schemas on one side, then rerun the merge.", -1);
+    return;
+  }
+  freeConflictTable(&table);
+  found = 0;
+
   if( strcmp(zMode,"--ours")==0 ){
     rc = removeConflictTableFromCatalog(db, cs, zTable, &found);
     if( rc!=SQLITE_OK ){
@@ -987,6 +1418,9 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
 int doltliteConflictsRegister(sqlite3 *db){
   int rc;
   rc = sqlite3_create_module(db, "dolt_conflicts", &conflictsModule, 0);
+  if( rc==SQLITE_OK )
+    rc = sqlite3_create_module(db, "dolt_schema_conflicts",
+                               &schemaConflictsModule, 0);
   if( rc==SQLITE_OK )
     rc = sqlite3_create_function(db, "dolt_conflicts_resolve", -1,
                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,

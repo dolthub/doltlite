@@ -2361,6 +2361,13 @@ static void doltliteCommitFunc(
     if( rc!=SQLITE_OK ) return;
   }
 
+  if( doltliteSessionHasSchemaConflicts(db) ){
+    sqlite3_result_error(context,
+      "cannot commit: unresolved schema conflicts. Abort the merge, align "
+      "the schemas on one side, then rerun the merge.", -1);
+    return;
+  }
+
   {
     ProllyHash cfHash;
     doltliteGetSessionConflictsCatalog(db, &cfHash);
@@ -3357,6 +3364,12 @@ static void doltliteMergeFunc(
       return;
     }
     sqlite3_free(zMergeErr);
+
+    if( nMergeConflicts>0 ){
+      ProllyHash conflictsHash;
+      doltliteGetSessionConflictsCatalog(db, &conflictsHash);
+      doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+    }
 
     rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
     if( rc==SQLITE_BUSY ){

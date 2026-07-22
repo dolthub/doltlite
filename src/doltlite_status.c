@@ -323,6 +323,27 @@ static int statusRowExists(
   return 0;
 }
 
+typedef struct StatusSchemaConflictCtx StatusSchemaConflictCtx;
+struct StatusSchemaConflictCtx {
+  DoltliteStatusCursor *pCur;
+  const char *zFilter;
+};
+
+static int statusAddSchemaConflict(void *pArg, const char *zTable){
+  StatusSchemaConflictCtx *p = (StatusSchemaConflictCtx*)pArg;
+  int i;
+  if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
+  for(i=0; i<p->pCur->nRows; i++){
+    if( p->pCur->aRows[i].zName
+     && sqlite3_stricmp(p->pCur->aRows[i].zName, zTable)==0 ){
+      p->pCur->aRows[i].staged = 0;
+      p->pCur->aRows[i].zStatus = "schema conflict";
+      return SQLITE_OK;
+    }
+  }
+  return addRow(p->pCur, zTable, 0, "schema conflict");
+}
+
 static int statusMaybeAddParentSchemaChange(
   DoltliteStatusCursor *pCur,
   const char *zParent,
@@ -1005,6 +1026,12 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   }
 
 status_done:
+  if( rc==SQLITE_OK && iStagedOnly!=1 ){
+    StatusSchemaConflictCtx ctx;
+    ctx.pCur = pCur;
+    ctx.zFilter = zTableFilter;
+    rc = doltliteForEachSchemaConflict(db, statusAddSchemaConflict, &ctx);
+  }
   if( headLoaded ) doltliteFreeCatalog(aHead, nHead);
   if( stagedLoaded ) doltliteFreeCatalog(aStaged, nStaged);
   if( workingLoaded ) doltliteFreeCatalog(aWorking, nWorking);
