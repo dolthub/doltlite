@@ -167,8 +167,10 @@ print(\"SELECT dolt_commit('-A','-m','init');\")
 echo "  Setup: 1M rows committed"
 
 python3 -c "
+print('BEGIN;')
 for i in range(10):
     print(f'UPDATE t SET v=\"changed_{i}\" WHERE id={i};')
+print('COMMIT;')
 print(\"SELECT dolt_commit('-A','-m','10 changes');\")
 " | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
 
@@ -184,9 +186,12 @@ DIFF_10_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt
   't');" | $DOLTLITE "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_10_COUNT changes; expected nonzero on large tables)"
 
+echo "  Applying 1000 changes..."
 python3 -c "
+print('BEGIN;')
 for i in range(100, 1100):
     print(f'UPDATE t SET v=\"changed2_{i}\" WHERE id={i};')
+print('COMMIT;')
 print(\"SELECT dolt_commit('-A','-m','1000 changes');\")
 " | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
 
