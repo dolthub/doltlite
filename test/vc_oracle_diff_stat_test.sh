@@ -517,6 +517,51 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+echo "--- working set / staged refs ---"
+
+WS_BASE="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+"
+
+oracle_both "ws_head_working_modify" "
+$WS_BASE
+UPDATE t SET v = 99 WHERE id = 1;
+" "HEAD" "WORKING"
+
+oracle_both "ws_head_working_insert" "
+$WS_BASE
+INSERT INTO t VALUES(3, 30);
+" "HEAD" "WORKING"
+
+oracle_both "ws_head_working_delete" "
+$WS_BASE
+DELETE FROM t WHERE id = 2;
+" "HEAD" "WORKING"
+
+oracle_both "ws_head_working_add_column" "
+$WS_BASE
+ALTER TABLE t ADD COLUMN w INT;
+UPDATE t SET w = 7 WHERE id = 1;
+" "HEAD" "WORKING"
+
+oracle_both "ws_head_working_no_change" "$WS_BASE" "HEAD" "WORKING" "" "EXPECT_EMPTY"
+
+oracle_both "ws_head_staged" "
+$WS_BASE
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+" "HEAD" "STAGED"
+
+oracle_both "ws_staged_working_partial" "
+$WS_BASE
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+INSERT INTO t VALUES(3, 30);
+" "STAGED" "WORKING"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

@@ -275,6 +275,19 @@ static struct TableEntry *dsNameIndexFind(
 static int dsResolveCatHash(sqlite3 *db, const char *zRef,
                             ProllyHash *pOut){
   if( zRef ){
+    if( strcmp(zRef, "WORKING")==0 ){
+      if( doltliteHasUncommittedChanges(db) ){
+        return doltliteFlushCatalogToHash(db, pOut);
+      }
+      return doltliteGetPersistedWorkingCatalogHash(db, pOut);
+    }
+    if( strcmp(zRef, "STAGED")==0 ){
+      doltliteGetSessionStaged(db, pOut);
+      if( prollyHashIsEmpty(pOut) ){
+        return doltliteGetHeadCatalogHash(db, pOut);
+      }
+      return SQLITE_OK;
+    }
     return doltliteRefToCatalogHash(db, zRef, pOut);
   }
   return doltliteGetHeadCatalogHash(db, pOut);
