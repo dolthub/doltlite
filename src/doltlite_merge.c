@@ -970,108 +970,316 @@ static ParsedColumn *findColumn(ParsedColumn *aCols, int nCols, const char *zNam
 #define SCHEMA_MERGE_OURS    1
 #define SCHEMA_MERGE_THEIRS  2
 
-static const char *schemaSqlFindKeyword(
-  const char *zSql,
-  const char *zKeyword
+#define SCHEMA_IR_OTHER 0
+#define SCHEMA_IR_FK    1
+#define SCHEMA_IR_CHECK 2
+
+typedef struct SchemaIr SchemaIr;
+struct SchemaIr {
+  ParsedColumn *aCols;
+  int nCols;
+  char *zFkSig;
+  char *zCheckSig;
+  int hasFk;
+  int hasCheck;
+};
+
+static const char *schemaFindToken(
+  const char *z,
+  const char *zEnd,
+  const char *zKw,
+  int nKw
 ){
-  int nKeyword = (int)strlen(zKeyword);
-  const char *z = zSql;
-  while( z && *z ){
-    if( (int)strlen(z)>=nKeyword
-     && (z==zSql || (!sqlite3Isalnum((u8)z[-1]) && z[-1]!='_'))
-     && sqlite3_strnicmp(z, zKeyword, nKeyword)==0
-     && !sqlite3Isalnum((u8)z[nKeyword]) && z[nKeyword]!='_' ){
-      return z;
+  const char *p = z;
+  if( !z || !zEnd || zEnd<=z || nKw<=0 ) return 0;
+  while( p<zEnd ){
+    if( *p=='\'' || *p=='"' ){
+      char q = *p++;
+      while( p<zEnd ){
+        if( *p==q ){
+          p++;
+          if( p<zEnd && *p==q ){ p++; continue; }
+          break;
+        }
+        p++;
+      }
+      continue;
     }
-    z++;
+    if( (p==z || (!sqlite3Isalnum((u8)p[-1]) && p[-1]!='_'))
+     && (zEnd - p)>=nKw
+     && sqlite3_strnicmp(p, zKw, nKw)==0
+     && (p+nKw>=zEnd
+         || (!sqlite3Isalnum((u8)p[nKw]) && p[nKw]!='_')) ){
+      return p;
+    }
+    p++;
   }
   return 0;
 }
 
-static int schemaSqlHasKeyword(const char *zSql, const char *zKeyword){
-  return schemaSqlFindKeyword(zSql, zKeyword)!=0;
+static int schemaAppendSig(char **pzSig, const char *zText, int nText){
+  char *zNew;
+  int nOld = *pzSig ? (int)strlen(*pzSig) : 0;
+  if( nText<0 ) nText = (int)strlen(zText);
+  if( nText<=0 ) return SQLITE_OK;
+  zNew = sqlite3_realloc(*pzSig, nOld + nText + 2);
+  if( !zNew ) return SQLITE_NOMEM;
+  if( nOld ) zNew[nOld++] = '\n';
+  memcpy(zNew + nOld, zText, nText);
+  zNew[nOld + nText] = 0;
+  *pzSig = zNew;
+  return SQLITE_OK;
 }
 
-/* Return a column definition with CHECK(...) clauses removed. This is used
-** only to recognize Dolt's constraint-level modify-versus-delete rule; the
-** original SQL from the winning side is retained in the merged catalog. */
+static int schemaConstraintKind(const char *s, int len){
+  const char *p = s;
+  const char *e = s + len;
+  while( p<e && isspace((unsigned char)*p) ) p++;
+  if( (e-p)>=10 && sqlite3_strnicmp(p, "CONSTRAINT", 10)==0
+   && (e-p==10 || isspace((unsigned char)p[10])) ){
+    p += 10;
+    while( p<e && isspace((unsigned char)*p) ) p++;
+    if( p<e && (*p=='"' || *p=='`' || *p=='[') ){
+      char cOpen = *p;
+      char cClose = cOpen=='[' ? ']' : cOpen;
+      p++;
+      while( p<e ){
+        if( *p==cClose ){
+          p++;
+          if( p<e && *p==cClose ){ p++; continue; }
+          break;
+        }
+        p++;
+      }
+    }else{
+      while( p<e && !isspace((unsigned char)*p) && *p!='(' ) p++;
+    }
+    while( p<e && isspace((unsigned char)*p) ) p++;
+  }
+  if( (e-p)>=11 && sqlite3_strnicmp(p, "FOREIGN KEY", 11)==0
+   && (e-p==11 || !sqlite3Isalnum((u8)p[11])) ){
+    return SCHEMA_IR_FK;
+  }
+  if( (e-p)>=5 && sqlite3_strnicmp(p, "CHECK", 5)==0
+   && (e-p==5 || p[5]=='(' || isspace((unsigned char)p[5])) ){
+    return SCHEMA_IR_CHECK;
+  }
+  if( schemaFindToken(p, e, "REFERENCES", 10) ) return SCHEMA_IR_FK;
+  if( schemaFindToken(p, e, "CHECK", 5) ) return SCHEMA_IR_CHECK;
+  return SCHEMA_IR_OTHER;
+}
+
 static char *schemaColumnWithoutChecks(const char *zDef){
   int n = (int)strlen(zDef);
   char *zOut = sqlite3_malloc(n + 1);
   const char *z = zDef;
+  const char *zEnd = zDef + n;
   char *zWrite = zOut;
   if( !zOut ) return 0;
-  while( *z ){
-    if( (int)strlen(z)>=5
-     && (z==zDef || (!sqlite3Isalnum((u8)z[-1]) && z[-1]!='_'))
-     && sqlite3_strnicmp(z, "CHECK", 5)==0
-     && !sqlite3Isalnum((u8)z[5]) && z[5]!='_' ){
-      const char *zNext = z + 5;
-      int depth = 0;
-      while( isspace((unsigned char)*zNext) ) zNext++;
-      if( *zNext=='(' ){
-        do{
-          if( *zNext=='(' ) depth++;
-          else if( *zNext==')' ) depth--;
-          zNext++;
-        }while( *zNext && depth>0 );
-        z = zNext;
-        continue;
-      }
+  while( z<zEnd ){
+    const char *zKw = schemaFindToken(z, zEnd, "CHECK", 5);
+    if( !zKw ){
+      memcpy(zWrite, z, (size_t)(zEnd - z));
+      zWrite += (zEnd - z);
+      break;
     }
-    *zWrite++ = *z++;
+    if( zKw>z ){
+      memcpy(zWrite, z, (size_t)(zKw - z));
+      zWrite += (zKw - z);
+    }
+    z = zKw + 5;
+    while( z<zEnd && isspace((unsigned char)*z) ) z++;
+    if( z<zEnd && *z=='(' ){
+      int depth = 0;
+      do{
+        if( *z=='(' ) depth++;
+        else if( *z==')' ) depth--;
+        z++;
+      }while( z<zEnd && depth>0 );
+    }
   }
   while( zWrite>zOut && isspace((unsigned char)zWrite[-1]) ) zWrite--;
   *zWrite = 0;
   return zOut;
 }
 
-static int schemaColumnsSame(
-  const char *zLeftSql,
-  const char *zRightSql,
+static void schemaIrClear(SchemaIr *pIr){
+  freeColumns(pIr->aCols, pIr->nCols);
+  sqlite3_free(pIr->zFkSig);
+  sqlite3_free(pIr->zCheckSig);
+  memset(pIr, 0, sizeof(*pIr));
+}
+
+static int schemaIrNoteColumnConstraints(SchemaIr *pIr, const char *zDef){
+  const char *zEnd = zDef + strlen(zDef);
+  const char *zFk = schemaFindToken(zDef, zEnd, "REFERENCES", 10);
+  const char *zCk = zDef;
+  int rc;
+  if( zFk ){
+    pIr->hasFk = 1;
+    rc = schemaAppendSig(&pIr->zFkSig, zFk, (int)(zEnd - zFk));
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  while( (zCk = schemaFindToken(zCk, zEnd, "CHECK", 5))!=0 ){
+    const char *zStart = zCk;
+    const char *z = zCk + 5;
+    pIr->hasCheck = 1;
+    while( z<zEnd && isspace((unsigned char)*z) ) z++;
+    if( z<zEnd && *z=='(' ){
+      int depth = 0;
+      do{
+        if( *z=='(' ) depth++;
+        else if( *z==')' ) depth--;
+        z++;
+      }while( z<zEnd && depth>0 );
+    }
+    rc = schemaAppendSig(&pIr->zCheckSig, zStart, (int)(z - zStart));
+    if( rc!=SQLITE_OK ) return rc;
+    zCk = z;
+  }
+  return SQLITE_OK;
+}
+
+static int schemaIrBuild(const char *zSql, SchemaIr *pIr){
+  const char *p, *pEnd;
+  int depth;
+  const char *segStart;
+  int rc = SQLITE_OK;
+  int nAlloc = 0;
+
+  memset(pIr, 0, sizeof(*pIr));
+  if( !zSql ) return SQLITE_OK;
+
+  p = zSql;
+  while( *p && *p!='(' ) p++;
+  if( *p!='(' ) return SQLITE_CORRUPT;
+  p++;
+
+  pEnd = p;
+  depth = 1;
+  while( *pEnd && depth>0 ){
+    if( *pEnd=='(' ) depth++;
+    else if( *pEnd==')' ) depth--;
+    pEnd++;
+  }
+  if( depth!=0 ) return SQLITE_CORRUPT;
+  pEnd--;
+
+  segStart = p;
+  depth = 0;
+  while( p<=pEnd && rc==SQLITE_OK ){
+    if( p==pEnd || (*p==',' && depth==0) ){
+      const char *s = segStart;
+      const char *e = p;
+      int len;
+
+      while( s<e && isspace((unsigned char)*s) ) s++;
+      while( e>s && isspace((unsigned char)*(e-1)) ) e--;
+      len = (int)(e - s);
+      if( len>0 ){
+        if( doltliteSegmentIsTableConstraint(s, len) ){
+          int kind = schemaConstraintKind(s, len);
+          if( kind==SCHEMA_IR_FK ){
+            pIr->hasFk = 1;
+            rc = schemaAppendSig(&pIr->zFkSig, s, len);
+          }else if( kind==SCHEMA_IR_CHECK ){
+            pIr->hasCheck = 1;
+            rc = schemaAppendSig(&pIr->zCheckSig, s, len);
+          }
+        }else{
+          char *zTrimmed = sqlite3_malloc(len + 1);
+          char *zName = 0;
+          const char *nameStart = s;
+          const char *nameEnd = nameStart;
+          if( !zTrimmed ){ rc = SQLITE_NOMEM; break; }
+          memcpy(zTrimmed, s, len);
+          zTrimmed[len] = 0;
+
+          if( *nameStart=='"' || *nameStart=='`' || *nameStart=='[' ){
+            rc = parseQuotedIdentifier(nameStart, e, &nameEnd, &zName);
+          }else{
+            int nameLen;
+            while( nameEnd<e && !isspace((unsigned char)*nameEnd)
+                && *nameEnd!='(' && *nameEnd!=',' ) nameEnd++;
+            nameLen = (int)(nameEnd - nameStart);
+            zName = sqlite3_malloc(nameLen + 1);
+            if( !zName ) rc = SQLITE_NOMEM;
+            else{
+              memcpy(zName, nameStart, nameLen);
+              zName[nameLen] = 0;
+            }
+          }
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(zTrimmed);
+            sqlite3_free(zName);
+            break;
+          }
+          { int ci; for(ci=0; zName[ci]; ci++){
+              zName[ci] = (char)tolower((unsigned char)zName[ci]);
+            }
+          }
+          if( nameEnd<=nameStart ){
+            sqlite3_free(zName);
+            sqlite3_free(zTrimmed);
+            rc = SQLITE_CORRUPT;
+            break;
+          }
+          rc = DOLTLITE_GROW_ARRAY(&pIr->aCols, &nAlloc, pIr->nCols+1, 8);
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(zName);
+            sqlite3_free(zTrimmed);
+            break;
+          }
+          pIr->aCols[pIr->nCols].zName = zName;
+          pIr->aCols[pIr->nCols].zDef = zTrimmed;
+          pIr->nCols++;
+          rc = schemaIrNoteColumnConstraints(pIr, zTrimmed);
+        }
+      }
+      segStart = p + 1;
+    }else if( *p=='(' ){
+      depth++;
+    }else if( *p==')' ){
+      depth--;
+    }
+    p++;
+  }
+
+  if( rc!=SQLITE_OK ) schemaIrClear(pIr);
+  return rc;
+}
+
+static int schemaIrColumnsSame(
+  const SchemaIr *pLeft,
+  const SchemaIr *pRight,
   int ignoreChecks,
   int *pSame
 ){
-  ParsedColumn *aLeft = 0, *aRight = 0;
-  int nLeft = 0, nRight = 0;
-  int i, rc;
+  int i;
   *pSame = 0;
-  rc = parseColumns(zLeftSql, &aLeft, &nLeft);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = parseColumns(zRightSql, &aRight, &nRight);
-  if( rc!=SQLITE_OK ){
-    freeColumns(aLeft, nLeft);
-    return rc;
-  }
-  if( nLeft==nRight ){
-    *pSame = 1;
-    for(i=0; i<nLeft; i++){
-      ParsedColumn *pRight = findColumn(aRight, nRight, aLeft[i].zName);
-      if( !pRight ){
-        *pSame = 0;
-        break;
-      }
-      if( ignoreChecks ){
-        char *zLeft = schemaColumnWithoutChecks(aLeft[i].zDef);
-        char *zRight = schemaColumnWithoutChecks(pRight->zDef);
-        if( !zLeft || !zRight ){
-          sqlite3_free(zLeft);
-          sqlite3_free(zRight);
-          freeColumns(aLeft, nLeft);
-          freeColumns(aRight, nRight);
-          return SQLITE_NOMEM;
-        }
-        if( strcmp(zLeft, zRight)!=0 ) *pSame = 0;
+  if( pLeft->nCols!=pRight->nCols ) return SQLITE_OK;
+  *pSame = 1;
+  for(i=0; i<pLeft->nCols; i++){
+    ParsedColumn *pRightCol = findColumn(
+      pRight->aCols, pRight->nCols, pLeft->aCols[i].zName
+    );
+    if( !pRightCol ){ *pSame = 0; break; }
+    if( ignoreChecks ){
+      char *zLeft = schemaColumnWithoutChecks(pLeft->aCols[i].zDef);
+      char *zRight = schemaColumnWithoutChecks(pRightCol->zDef);
+      if( !zLeft || !zRight ){
         sqlite3_free(zLeft);
         sqlite3_free(zRight);
-      }else if( strcmp(aLeft[i].zDef, pRight->zDef)!=0 ){
-        *pSame = 0;
+        return SQLITE_NOMEM;
       }
-      if( !*pSame ) break;
+      if( strcmp(zLeft, zRight)!=0 ) *pSame = 0;
+      sqlite3_free(zLeft);
+      sqlite3_free(zRight);
+    }else if( strcmp(pLeft->aCols[i].zDef, pRightCol->zDef)!=0 ){
+      *pSame = 0;
     }
+    if( !*pSame ) break;
   }
-  freeColumns(aLeft, nLeft);
-  freeColumns(aRight, nRight);
   return SQLITE_OK;
 }
 
@@ -1081,63 +1289,61 @@ static int schemaConstraintModifyDeleteChoice(
   const char *zTheirsSql,
   int *pChoice
 ){
-  int ancHas, oursHas, theirsHas;
+  SchemaIr anc, ours, theirs;
   int sameAO = 0, sameAT = 0, sameOT = 0;
   int survivorSame = 0;
   int rc;
   *pChoice = SCHEMA_MERGE_DEFAULT;
 
-  ancHas = schemaSqlHasKeyword(zAncSql, "REFERENCES");
-  oursHas = schemaSqlHasKeyword(zOursSql, "REFERENCES");
-  theirsHas = schemaSqlHasKeyword(zTheirsSql, "REFERENCES");
-  if( ancHas && oursHas!=theirsHas
-   && schemaSqlHasKeyword(zAncSql, "CHECK")
-        ==schemaSqlHasKeyword(zOursSql, "CHECK")
-   && schemaSqlHasKeyword(zAncSql, "CHECK")
-        ==schemaSqlHasKeyword(zTheirsSql, "CHECK") ){
-    rc = schemaColumnsSame(zAncSql, zOursSql, 0, &sameAO);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = schemaColumnsSame(zAncSql, zTheirsSql, 0, &sameAT);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = schemaColumnsSame(zOursSql, zTheirsSql, 0, &sameOT);
-    if( rc!=SQLITE_OK ) return rc;
-    if( sameAO && sameAT && sameOT ){
-      const char *zAncFk = schemaSqlFindKeyword(zAncSql, "REFERENCES");
-      const char *zSurvivorFk = schemaSqlFindKeyword(
-          oursHas ? zOursSql : zTheirsSql, "REFERENCES");
-      if( !zAncFk || !zSurvivorFk || strcmp(zAncFk, zSurvivorFk)==0 ){
-        return SQLITE_OK;
+  rc = schemaIrBuild(zAncSql, &anc);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = schemaIrBuild(zOursSql, &ours);
+  if( rc!=SQLITE_OK ){ schemaIrClear(&anc); return rc; }
+  rc = schemaIrBuild(zTheirsSql, &theirs);
+  if( rc!=SQLITE_OK ){
+    schemaIrClear(&anc);
+    schemaIrClear(&ours);
+    return rc;
+  }
+
+  if( anc.hasFk && ours.hasFk!=theirs.hasFk
+   && anc.hasCheck==ours.hasCheck && anc.hasCheck==theirs.hasCheck ){
+    rc = schemaIrColumnsSame(&anc, &ours, 0, &sameAO);
+    if( rc==SQLITE_OK ) rc = schemaIrColumnsSame(&anc, &theirs, 0, &sameAT);
+    if( rc==SQLITE_OK ) rc = schemaIrColumnsSame(&ours, &theirs, 0, &sameOT);
+    if( rc==SQLITE_OK && sameAO && sameAT && sameOT ){
+      const SchemaIr *pSurv = ours.hasFk ? &ours : &theirs;
+      const char *zAncFk = anc.zFkSig ? anc.zFkSig : "";
+      const char *zSurvFk = pSurv->zFkSig ? pSurv->zFkSig : "";
+      if( strcmp(zAncFk, zSurvFk)!=0 ){
+        *pChoice = ours.hasFk ? SCHEMA_MERGE_THEIRS : SCHEMA_MERGE_OURS;
       }
-      /* Dolt resolves a foreign-key modify-versus-delete in favor of the
-      ** deletion, independently of merge direction. */
-      *pChoice = oursHas ? SCHEMA_MERGE_THEIRS : SCHEMA_MERGE_OURS;
+      schemaIrClear(&anc);
+      schemaIrClear(&ours);
+      schemaIrClear(&theirs);
       return SQLITE_OK;
     }
   }
 
-  ancHas = schemaSqlHasKeyword(zAncSql, "CHECK");
-  oursHas = schemaSqlHasKeyword(zOursSql, "CHECK");
-  theirsHas = schemaSqlHasKeyword(zTheirsSql, "CHECK");
-  if( ancHas && oursHas!=theirsHas
-   && schemaSqlHasKeyword(zAncSql, "REFERENCES")
-        ==schemaSqlHasKeyword(zOursSql, "REFERENCES")
-   && schemaSqlHasKeyword(zAncSql, "REFERENCES")
-        ==schemaSqlHasKeyword(zTheirsSql, "REFERENCES") ){
-    rc = schemaColumnsSame(zAncSql, zOursSql, 1, &sameAO);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = schemaColumnsSame(zAncSql, zTheirsSql, 1, &sameAT);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = schemaColumnsSame(zOursSql, zTheirsSql, 1, &sameOT);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = schemaColumnsSame(zAncSql, oursHas ? zOursSql : zTheirsSql,
-                           0, &survivorSame);
-    if( rc!=SQLITE_OK ) return rc;
-    if( sameAO && sameAT && sameOT && !survivorSame ){
-      /* CHECK constraint modification wins over deletion in Dolt. */
-      *pChoice = oursHas ? SCHEMA_MERGE_OURS : SCHEMA_MERGE_THEIRS;
+  if( rc==SQLITE_OK
+   && anc.hasCheck && ours.hasCheck!=theirs.hasCheck
+   && anc.hasFk==ours.hasFk && anc.hasFk==theirs.hasFk ){
+    rc = schemaIrColumnsSame(&anc, &ours, 1, &sameAO);
+    if( rc==SQLITE_OK ) rc = schemaIrColumnsSame(&anc, &theirs, 1, &sameAT);
+    if( rc==SQLITE_OK ) rc = schemaIrColumnsSame(&ours, &theirs, 1, &sameOT);
+    if( rc==SQLITE_OK ){
+      const SchemaIr *pSurv = ours.hasCheck ? &ours : &theirs;
+      rc = schemaIrColumnsSame(&anc, pSurv, 0, &survivorSame);
+    }
+    if( rc==SQLITE_OK && sameAO && sameAT && sameOT && !survivorSame ){
+      *pChoice = ours.hasCheck ? SCHEMA_MERGE_OURS : SCHEMA_MERGE_THEIRS;
     }
   }
-  return SQLITE_OK;
+
+  schemaIrClear(&anc);
+  schemaIrClear(&ours);
+  schemaIrClear(&theirs);
+  return rc;
 }
 
 static int trySchemaColumnMerge(
