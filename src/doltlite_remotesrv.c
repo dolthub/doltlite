@@ -547,10 +547,16 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
   return rc;
 }
 
-static int remoteSrvApplyRefs(ChunkStore *pStore, const u8 *pBody, int nBody){
+static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
+                              int bForce, const u8 *pBody, int nBody){
   int rc;
 
   if( nBody<=0 ) return SQLITE_ERROR;
+  rc = doltliteValidateScopedRefsUpdate(pStore, pBody, nBody, zBranch, bForce);
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(pStore);
+    return rc;
+  }
   rc = chunkStoreInstallRefsBlob(pStore, pBody, nBody);
   if( rc!=SQLITE_OK ){
     chunkStoreRollback(pStore);
@@ -562,6 +568,8 @@ static int remoteSrvApplyRefs(ChunkStore *pStore, const u8 *pBody, int nBody){
 static int remoteSrvApplyRefsIf(
   ChunkStore *pStore,
   const ProllyHash *pExpectedRefsHash,
+  const char *zBranch,
+  int bForce,
   const u8 *pBody,
   int nBody
 ){
@@ -573,21 +581,49 @@ static int remoteSrvApplyRefsIf(
     chunkStoreUnlock(pStore);
     return SQLITE_BUSY;
   }
-  rc = remoteSrvApplyRefs(pStore, pBody, nBody);
+  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody);
   chunkStoreUnlock(pStore);
   return rc;
 }
 
+/* Parse the [u16 branchLen][branch][u8 force] scope prefix a push prepends to
+** the refs body. On success *pzBranch is an owned string the caller frees, and
+** the rest output points at the remainder (refs blob, or expectedHash+blob). */
+static int remoteSrvParseRefsPrefix(
+  const u8 *pBody, int nBody,
+  char **pzBranch, int *pbForce, const u8 **ppRest, int *pnRest
+){
+  int nBranch;
+  *pzBranch = 0;
+  if( nBody < 3 ) return SQLITE_ERROR;
+  nBranch = pBody[0] | (pBody[1] << 8);
+  if( 2 + nBranch + 1 > nBody ) return SQLITE_ERROR;
+  *pzBranch = sqlite3_mprintf("%.*s", nBranch, (const char*)pBody + 2);
+  if( !*pzBranch ) return SQLITE_NOMEM;
+  *pbForce = pBody[2 + nBranch] ? 1 : 0;
+  *ppRest = pBody + 2 + nBranch + 1;
+  *pnRest = nBody - (2 + nBranch + 1);
+  return SQLITE_OK;
+}
+
 static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
                           const u8 *pBody, int nBody){
+  char *zBranch = 0;
+  int bForce = 0;
+  const u8 *pRest = 0;
+  int nRest = 0;
   int rc;
 
-  if( nBody<=0 ){
+  rc = remoteSrvParseRefsPrefix(pBody, nBody, &zBranch, &bForce,
+                                &pRest, &nRest);
+  if( rc!=SQLITE_OK || nRest<=0 ){
+    sqlite3_free(zBranch);
     sendBadRequest(fd);
     return;
   }
 
-  rc = remoteSrvApplyRefs(pStore, pBody, nBody);
+  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pRest, nRest);
+  sqlite3_free(zBranch);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
@@ -599,17 +635,25 @@ static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
 static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
                             const u8 *pBody, int nBody){
   ProllyHash expectedRefsHash;
+  char *zBranch = 0;
+  int bForce = 0;
+  const u8 *pRest = 0;
+  int nRest = 0;
   int rc;
 
-  if( nBody<=PROLLY_HASH_SIZE ){
+  rc = remoteSrvParseRefsPrefix(pBody, nBody, &zBranch, &bForce,
+                                &pRest, &nRest);
+  if( rc!=SQLITE_OK || nRest<=PROLLY_HASH_SIZE ){
+    sqlite3_free(zBranch);
     sendBadRequest(fd);
     return;
   }
-  memcpy(expectedRefsHash.data, pBody, PROLLY_HASH_SIZE);
+  memcpy(expectedRefsHash.data, pRest, PROLLY_HASH_SIZE);
 
-  rc = remoteSrvApplyRefsIf(pStore, &expectedRefsHash,
-                            pBody + PROLLY_HASH_SIZE,
-                            nBody - PROLLY_HASH_SIZE);
+  rc = remoteSrvApplyRefsIf(pStore, &expectedRefsHash, zBranch, bForce,
+                            pRest + PROLLY_HASH_SIZE,
+                            nRest - PROLLY_HASH_SIZE);
+  sqlite3_free(zBranch);
   if( rc==SQLITE_BUSY ){
     sendConflict(fd);
     return;
@@ -629,7 +673,16 @@ int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore){
 int doltliteRemoteSrvApplyRefsForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
 ){
-  return remoteSrvApplyRefs(pStore, pBody, nBody);
+  /* Exercises the install/rollback path only; scope validation is covered
+  ** separately. */
+  int rc;
+  if( nBody<=0 ) return SQLITE_ERROR;
+  rc = chunkStoreInstallRefsBlob(pStore, pBody, nBody);
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(pStore);
+    return rc;
+  }
+  return remoteSrvCommitPending(pStore);
 }
 
 static void handleCommit(ChunkStore *pStore, DoltliteConn *fd){

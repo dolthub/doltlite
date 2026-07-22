@@ -333,14 +333,20 @@ static int fsGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   return rc;
 }
 
-static int fsSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
+static int fsSetRefs(DoltliteRemote *pRemote, const char *zBranch, int bForce,
+                     const u8 *pData, int nData){
   FsRemote *p = (FsRemote*)pRemote;
+  int rc = doltliteValidateScopedRefsUpdate(&p->store, pData, nData,
+                                            zBranch, bForce);
+  if( rc!=SQLITE_OK ) return rc;
   return chunkStoreInstallRefsBlob(&p->store, pData, nData);
 }
 
 static int fsSetRefsIf(
   DoltliteRemote *pRemote,
   const ProllyHash *pExpectedRefsHash,
+  const char *zBranch,
+  int bForce,
   const u8 *pData,
   int nData
 ){
@@ -360,7 +366,7 @@ static int fsSetRefsIf(
     p->lockedForCas = 0;
     return SQLITE_BUSY;
   }
-  rc = fsSetRefs(pRemote, pData, nData);
+  rc = fsSetRefs(pRemote, zBranch, bForce, pData, nData);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(&p->store);
     p->lockedForCas = 0;
@@ -419,14 +425,20 @@ struct LocalAsRemote {
   ChunkStore *pStore;
 };
 
-static int localSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
+static int localSetRefs(DoltliteRemote *pRemote, const char *zBranch,
+                        int bForce, const u8 *pData, int nData){
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
+  int rc = doltliteValidateScopedRefsUpdate(p->pStore, pData, nData,
+                                            zBranch, bForce);
+  if( rc!=SQLITE_OK ) return rc;
   return chunkStoreInstallRefsBlob(p->pStore, pData, nData);
 }
 
 static int localSetRefsIf(
   DoltliteRemote *pRemote,
   const ProllyHash *pExpectedRefsHash,
+  const char *zBranch,
+  int bForce,
   const u8 *pData,
   int nData
 ){
@@ -440,7 +452,7 @@ static int localSetRefsIf(
   if( prollyHashCompare(refsTableGetHash(&p->pStore->refs), &expected)!=0 ){
     return SQLITE_BUSY;
   }
-  return localSetRefs(pRemote, pData, nData);
+  return localSetRefs(pRemote, zBranch, bForce, pData, nData);
 }
 
 static int localCommit(DoltliteRemote *pRemote){
@@ -549,6 +561,98 @@ static int syncIsAncestor(
   prollyHashSetFree(&visited);
   syncQueueFree(&queue);
   return found;
+}
+
+int doltliteValidateScopedRefsUpdate(
+  ChunkStore *pStore,
+  const u8 *pBlob,
+  int nBlob,
+  const char *zBranch,
+  int bForce
+){
+  ChunkStore inc;
+  const BranchRef *aCur = 0, *aInc = 0;
+  const TagRef *aCurTag = 0, *aIncTag = 0;
+  int nCur = 0, nInc = 0, nCurTag = 0, nIncTag = 0;
+  const BranchRef *curB = 0, *incB = 0;
+  int rc;
+  int i, j;
+
+  if( !zBranch || !zBranch[0] ) return SQLITE_MISUSE;
+  memset(&inc, 0, sizeof(inc));
+  rc = csDeserializeRefsIntoTemp(&inc, pBlob, nBlob);
+  if( rc!=SQLITE_OK ){
+    csFreeRefsState(&inc);
+    return rc;
+  }
+
+  refsTableGetBranches(&pStore->refs, &nCur, &aCur);
+  refsTableGetBranches(&inc.refs, &nInc, &aInc);
+  refsTableGetTags(&pStore->refs, &nCurTag, &aCurTag);
+  refsTableGetTags(&inc.refs, &nIncTag, &aIncTag);
+
+  /* Every current branch other than the one being pushed must survive
+  ** unchanged: same name present, same commit. Blocks rewrite and delete. */
+  for(i=0; i<nCur; i++){
+    if( strcmp(aCur[i].zName, zBranch)==0 ) continue;
+    for(j=0; j<nInc; j++){
+      if( strcmp(aInc[j].zName, aCur[i].zName)==0 ) break;
+    }
+    if( j>=nInc
+     || prollyHashCompare(&aInc[j].commitHash, &aCur[i].commitHash)!=0 ){
+      rc = SQLITE_CONSTRAINT;
+      goto done;
+    }
+  }
+
+  /* The push may not introduce any branch other than the one declared. */
+  for(j=0; j<nInc; j++){
+    if( strcmp(aInc[j].zName, zBranch)==0 ) continue;
+    for(i=0; i<nCur; i++){
+      if( strcmp(aCur[i].zName, aInc[j].zName)==0 ) break;
+    }
+    if( i>=nCur ){
+      rc = SQLITE_CONSTRAINT;
+      goto done;
+    }
+  }
+
+  /* Tags are immutable over push: identical set, identical targets. */
+  if( nCurTag!=nIncTag ){
+    rc = SQLITE_CONSTRAINT;
+    goto done;
+  }
+  for(i=0; i<nCurTag; i++){
+    for(j=0; j<nIncTag; j++){
+      if( strcmp(aCurTag[i].zName, aIncTag[j].zName)==0 ) break;
+    }
+    if( j>=nIncTag
+     || prollyHashCompare(&aIncTag[j].commitHash, &aCurTag[i].commitHash)!=0 ){
+      rc = SQLITE_CONSTRAINT;
+      goto done;
+    }
+  }
+
+  /* The declared branch may be created freely, but an existing branch may only
+  ** move as a fast-forward unless the push is forced. */
+  for(i=0; i<nCur; i++){
+    if( strcmp(aCur[i].zName, zBranch)==0 ){ curB = &aCur[i]; break; }
+  }
+  for(j=0; j<nInc; j++){
+    if( strcmp(aInc[j].zName, zBranch)==0 ){ incB = &aInc[j]; break; }
+  }
+  if( !bForce && curB && incB
+   && prollyHashCompare(&curB->commitHash, &incB->commitHash)!=0 ){
+    int anc = syncIsAncestor(pStore, &curB->commitHash, &incB->commitHash);
+    if( anc<0 ){ rc = SQLITE_NOMEM; goto done; }
+    if( anc==0 ){ rc = SQLITE_CONSTRAINT; goto done; }
+  }
+
+  rc = SQLITE_OK;
+
+done:
+  csFreeRefsState(&inc);
+  return rc;
 }
 
 static int remoteSequencesWouldAdvance(
@@ -719,9 +823,10 @@ int doltlitePush(
       if( rc!=SQLITE_OK ) return rc;
 
       if( pRemote->xSetRefsIf ){
-        rc = pRemote->xSetRefsIf(pRemote, &expectedRefsHash, newRefs, nNewRefs);
+        rc = pRemote->xSetRefsIf(pRemote, &expectedRefsHash, zBranch, bForce,
+                                 newRefs, nNewRefs);
       }else{
-        rc = pRemote->xSetRefs(pRemote, newRefs, nNewRefs);
+        rc = pRemote->xSetRefs(pRemote, zBranch, bForce, newRefs, nNewRefs);
       }
       sqlite3_free(newRefs);
       if( rc!=SQLITE_OK ) return rc;

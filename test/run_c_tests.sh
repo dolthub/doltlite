@@ -12,6 +12,7 @@ GATING=(
   three_way_diff_test
   clone_error_code_test
   prolly_hashset_test
+  scoped_refs_push_test
   concurrent_stress_test
   vc_concurrency_test
   vc_ref_mutation_stress_test
