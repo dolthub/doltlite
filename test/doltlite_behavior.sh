@@ -261,7 +261,7 @@ SELECT dolt_commit('-A','-m','add w INTEGER');" | $DOLTLITE "$DB/b1" > /dev/null
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "schema_merge_same_col_diff_type" \
   "SELECT dolt_merge('b1');" \
-  "schema conflict" "$DB"
+  "Merge conflict detected.*dolt_schema_conflicts" "$DB"
 
 rm -f "$DB"
 
