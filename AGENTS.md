@@ -96,6 +96,17 @@ conformance bugs. When comparing against Dolt, only **row-level semantics** must
 match; do not file conformance issues over the vtable/function shape or column
 naming.
 
+### Dolt is the reference implementation
+
+[Dolt](https://github.com/dolthub/dolt) is the authority on **what** every
+version-control operation should do. When a behavior is ambiguous, when
+DoltLite and Dolt disagree, or when implementing a new VC surface, **read the
+Dolt source** (Go) to determine the correct semantics — result shape, diff/
+merge/conflict rules, `dolt_*` system-table columns, error conditions — and
+match it. It's the reference for the oracle suites and for the engine itself.
+Dolt may be checked out locally as a sibling of this repo; otherwise consult it
+on GitHub.
+
 ## Testing
 
 Several independent layers. A change under `src/` should run the relevant ones;
