@@ -57,12 +57,13 @@ static int execSql(sqlite3 *db, const char *sql){
 static int corrupt_bytes(const char *path, off_t offset,
                          const void *data, size_t len){
   int fd = open(path, O_WRONLY);
+  ssize_t w;
   if( fd < 0 ) return -1;
   if( lseek(fd, offset, SEEK_SET) != offset ){
     close(fd);
     return -1;
   }
-  ssize_t w = write(fd, data, len);
+  w = write(fd, data, len);
   close(fd);
   return (w == (ssize_t)len) ? 0 : -1;
 }
@@ -326,13 +327,14 @@ static int open_fails_or_errors(const char *path){
 
 static void test_truncate_mid_manifest(void){
   const char *dbpath = "/tmp/test_corr_trunc_manifest.db";
+  int err;
 
   printf("--- Test 1: Truncate mid-manifest (100 bytes) ---\n");
 
   check("create_good_1", create_good_db(dbpath)==0);
   check("truncate_1", truncate_file(dbpath, 100)==0);
 
-  int err = open_fails_or_errors(dbpath);
+  err = open_fails_or_errors(dbpath);
   check("truncated_manifest_detected", err==1);
 
   removeDb(dbpath);
@@ -341,6 +343,7 @@ static void test_truncate_mid_manifest(void){
 static void test_truncate_mid_wal(void){
   const char *dbpath = "/tmp/test_corr_trunc_wal.db";
   const char *goodpath = "/tmp/test_corr_trunc_wal_good.db";
+  off_t sz;
 
   printf("--- Test 2: Truncate mid-WAL ---\n");
 
@@ -348,7 +351,7 @@ static void test_truncate_mid_wal(void){
 
   copy_file(dbpath, goodpath);
 
-  off_t sz = file_size(dbpath);
+  sz = file_size(dbpath);
   check("file_has_data_2", sz > MANIFEST_SIZE);
 
   if( sz > MANIFEST_SIZE + 50 ){
@@ -369,16 +372,17 @@ static void test_truncate_mid_wal(void){
 
 static void test_zero_manifest(void){
   const char *dbpath = "/tmp/test_corr_zero_manifest.db";
+  unsigned char zeros[MANIFEST_SIZE];
+  int err;
 
   printf("--- Test 3: Zero out entire manifest ---\n");
 
   check("create_good_3", create_good_db(dbpath)==0);
 
-  unsigned char zeros[MANIFEST_SIZE];
   memset(zeros, 0, sizeof(zeros));
   check("corrupt_3", corrupt_bytes(dbpath, 0, zeros, MANIFEST_SIZE)==0);
 
-  int err = open_fails_or_errors(dbpath);
+  err = open_fails_or_errors(dbpath);
   check("zeroed_manifest_detected", err==1);
 
   removeDb(dbpath);
@@ -386,6 +390,7 @@ static void test_zero_manifest(void){
 
 static void test_corrupt_chunk_data(void){
   const char *dbpath = "/tmp/test_corr_chunk.db";
+  off_t sz;
 
   printf("--- Test 4: Corrupt chunk data ---\n");
 
@@ -405,15 +410,16 @@ static void test_corrupt_chunk_data(void){
     sqlite3_close(db);
   }
 
-  off_t sz = file_size(dbpath);
+  sz = file_size(dbpath);
   check("file_large_enough_4", sz > MANIFEST_SIZE + 200);
 
   {
     unsigned char garbage[128];
+    off_t target;
     int i;
     srand(12345);
     for( i=0; i<128; i++ ) garbage[i] = (unsigned char)(rand() & 0xFF);
-    off_t target = MANIFEST_SIZE + (sz - MANIFEST_SIZE) / 3;
+    target = MANIFEST_SIZE + (sz - MANIFEST_SIZE) / 3;
     check("corrupt_4",
       corrupt_bytes(dbpath, target, garbage, sizeof(garbage))==0);
   }
@@ -440,13 +446,14 @@ static void test_corrupt_chunk_data(void){
 
 static void test_truncate_past_manifest(void){
   const char *dbpath = "/tmp/test_corr_just_manifest.db";
+  int err;
 
   printf("--- Test 5: Truncate to just past manifest ---\n");
 
   check("create_good_5", create_good_db(dbpath)==0);
   check("truncate_5", truncate_file(dbpath, MANIFEST_SIZE + 1)==0);
 
-  int err = open_and_probe(dbpath);
+  err = open_and_probe(dbpath);
   check("truncated_past_manifest_detected", err==1);
 
   removeDb(dbpath);
@@ -454,12 +461,12 @@ static void test_truncate_past_manifest(void){
 
 static void test_zero_refs_hash(void){
   const char *dbpath = "/tmp/test_corr_refs.db";
+  unsigned char zeros[20];
 
   printf("--- Test 6: Zero out refs hash (compacted DB) ---\n");
 
   check("create_compacted_6", create_compacted_db(dbpath)==0);
 
-  unsigned char zeros[20];
   memset(zeros, 0, sizeof(zeros));
   check("corrupt_6", corrupt_bytes(dbpath, 104, zeros, sizeof(zeros))==0);
 
@@ -481,22 +488,25 @@ static void test_zero_refs_hash(void){
 
 static void test_append_garbage(void){
   const char *dbpath = "/tmp/test_corr_append.db";
+  off_t sz;
 
   printf("--- Test 7: Append garbage after WAL ---\n");
 
   check("create_good_7", create_good_db(dbpath)==0);
 
-  off_t sz = file_size(dbpath);
+  sz = file_size(dbpath);
 
   {
     int fd = open(dbpath, O_WRONLY|O_APPEND);
     check("open_for_append_7", fd >= 0);
     if( fd >= 0 ){
       unsigned char garbage[1024];
+      ssize_t nWrite;
       int i;
       srand(99999);
       for( i=0; i<1024; i++ ) garbage[i] = (unsigned char)(rand() & 0xFF);
-      write(fd, garbage, sizeof(garbage));
+      nWrite = write(fd, garbage, sizeof(garbage));
+      check("append_garbage_write_7", nWrite==(ssize_t)sizeof(garbage));
       close(fd);
     }
   }
@@ -537,10 +547,11 @@ static void test_empty_file(void){
     int rc = sqlite3_open(dbpath, &db);
     check("empty_open_ok", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
+      const char *branch;
       rc = execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY)");
       check("empty_create_table", rc==SQLITE_OK);
 
-      const char *branch = queryScalarText(db, "SELECT active_branch()");
+      branch = queryScalarText(db, "SELECT active_branch()");
       check("empty_has_branch",
         branch && strlen(branch)>0 && strncmp(branch, "ERROR", 5)!=0);
     }
@@ -577,12 +588,13 @@ static void test_manifest_only(void){
 
 static void test_corrupt_wal_tag(void){
   const char *dbpath = "/tmp/test_corr_wal_tag.db";
+  off_t sz;
 
   printf("--- Test 10: Corrupt WAL tag byte ---\n");
 
   check("create_good_10", create_good_db(dbpath)==0);
 
-  off_t sz = file_size(dbpath);
+  sz = file_size(dbpath);
 
   if( sz > MANIFEST_SIZE + 100 ){
     off_t wal_pos = sz / 2 + 50;
@@ -722,16 +734,19 @@ static void test_corrupt_final_committed_wal_chunk_detected(void){
 
 static void test_wrong_file_size_in_manifest(void){
   const char *dbpath = "/tmp/test_corr_filesize.db";
+  unsigned char bad_offset[8] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
+  };
+  int err;
 
   printf("--- Test 14: Wrong file size in manifest ---\n");
 
   check("create_good_14", create_good_db(dbpath)==0);
 
-  unsigned char bad_offset[8] = { 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00 };
   check("corrupt_14",
     corrupt_bytes(dbpath, 84, bad_offset, sizeof(bad_offset))==0);
 
-  int err = open_and_probe(dbpath);
+  err = open_and_probe(dbpath);
   check("wrong_wal_offset_detected", err==1);
 
   removeDb(dbpath);
@@ -739,16 +754,17 @@ static void test_wrong_file_size_in_manifest(void){
 
 static void test_corrupt_magic(void){
   const char *dbpath = "/tmp/test_corr_magic.db";
+  unsigned char bad_magic[4] = { 0x00, 0x00, 0x00, 0x00 };
+  int err;
 
   printf("--- Test 15: Corrupt magic number ---\n");
 
   check("create_good_13", create_good_db(dbpath)==0);
 
-  unsigned char bad_magic[4] = { 0x00, 0x00, 0x00, 0x00 };
   check("corrupt_13",
     corrupt_bytes(dbpath, 0, bad_magic, sizeof(bad_magic))==0);
 
-  int err = open_fails_or_errors(dbpath);
+  err = open_fails_or_errors(dbpath);
   check("bad_magic_detected", err==1);
 
   removeDb(dbpath);
@@ -756,16 +772,17 @@ static void test_corrupt_magic(void){
 
 static void test_corrupt_version(void){
   const char *dbpath = "/tmp/test_corr_version.db";
+  unsigned char bad_ver[4] = { 0xFF, 0x00, 0x00, 0x00 };
+  int err;
 
   printf("--- Test 16: Corrupt version number ---\n");
 
   check("create_good_14", create_good_db(dbpath)==0);
 
-  unsigned char bad_ver[4] = { 0xFF, 0x00, 0x00, 0x00 };
   check("corrupt_14",
     corrupt_bytes(dbpath, 4, bad_ver, sizeof(bad_ver))==0);
 
-  int err = open_fails_or_errors(dbpath);
+  err = open_fails_or_errors(dbpath);
   check("bad_version_detected", err==1);
 
   removeDb(dbpath);
@@ -773,12 +790,12 @@ static void test_corrupt_version(void){
 
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
+  unsigned char bad_hash[20];
 
   printf("--- Test 17: Corrupt former head_commit bytes (compacted) ---\n");
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
 
-  unsigned char bad_hash[20];
   memset(bad_hash, 0xCD, sizeof(bad_hash));
   check("corrupt_15",
     corrupt_bytes(dbpath, 64, bad_hash, sizeof(bad_hash))==0);
@@ -808,12 +825,12 @@ static void test_corrupt_head_commit(void){
 
 static void test_corrupt_chunk_count(void){
   const char *dbpath = "/tmp/test_corr_chunkcount.db";
+  unsigned char huge_count[4] = { 0xFF, 0xFF, 0xFF, 0x7F };
 
   printf("--- Test 18: Corrupt chunk_count field (compacted) ---\n");
 
   check("create_compacted_16", create_compacted_db(dbpath)==0);
 
-  unsigned char huge_count[4] = { 0xFF, 0xFF, 0xFF, 0x7F };
   check("corrupt_16",
     corrupt_bytes(dbpath, 28, huge_count, sizeof(huge_count))==0);
 
@@ -824,6 +841,10 @@ static void test_corrupt_chunk_count(void){
 
 static void test_corrupt_index_offset(void){
   const char *dbpath = "/tmp/test_corr_idxoff.db";
+  unsigned char bad_idx[8] = {
+    0xFF, 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00
+  };
+  int err;
 
   printf("--- Test 19: Corrupt index_offset ---\n");
 
@@ -838,11 +859,10 @@ static void test_corrupt_index_offset(void){
     sqlite3_close(db);
   }
 
-  unsigned char bad_idx[8] = { 0xFF, 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00 };
   check("corrupt_17",
     corrupt_bytes(dbpath, 32, bad_idx, sizeof(bad_idx))==0);
 
-  int err = open_and_probe(dbpath);
+  err = open_and_probe(dbpath);
   check("bad_index_offset_detected", err==1);
 
   removeDb(dbpath);

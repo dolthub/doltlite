@@ -50,8 +50,9 @@ int main(){
   sqlite3 *db = 0;
   const char *dbpath = "/tmp/test_ancestor.db";
   int rc;
-  const char *main_head, *feature_head, *ancestor;
+  const char *main_head, *feature_head, *ancestor, *c2_hash;
   char main_head_buf[128], feature_head_buf[128], merge_head_buf[128];
+  char c2_hash_buf[128];
 
   remove(dbpath);
   remove("/tmp/test_ancestor.db-chunks");
@@ -68,8 +69,7 @@ int main(){
   execSql(db, "SELECT dolt_add('-A')");
   execSql(db, "SELECT dolt_commit('-m', 'C2: add row 2')");
 
-  const char *c2_hash = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
-  char c2_hash_buf[128];
+  c2_hash = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(c2_hash_buf, sizeof(c2_hash_buf), "%s", c2_hash);
 
   execSql(db, "SELECT dolt_branch('feature')");

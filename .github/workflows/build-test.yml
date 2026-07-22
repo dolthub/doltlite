@@ -105,6 +105,8 @@ jobs:
   development-builds:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CFLAGS: -O2 -g -Werror
 
     steps:
     - uses: actions/checkout@v4
@@ -132,6 +134,8 @@ jobs:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 20
+    env:
+      CFLAGS: -O2 -g -Werror
     strategy:
       fail-fast: false
       matrix:
@@ -479,10 +483,10 @@ jobs:
       run: |
         cd build
         # Quickstart
-        gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+        gcc $CFLAGS -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
         ./quickstart
         # Concurrent branch test
-        cc -g -O0 -I. -I../src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
+        cc $CFLAGS -g -O0 -I. -I../src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
           -o concurrent_branch_test ../test/concurrent_branch_test.c \
           libsqlite3.a -lz -lpthread -lm
         ./concurrent_branch_test
@@ -491,7 +495,7 @@ jobs:
       if: matrix.platform != 'windows'
       run: |
         cd build
-        gcc -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
+        gcc $CFLAGS -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
           libdoltlite.a -lz -lpthread -lm
         ./concurrent_write_test
 
@@ -499,7 +503,7 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         cd build
-        cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
+        cc $CFLAGS -I. -o crash_recovery_test ../test/crash_recovery_test.c \
           libdoltlite.a -lz -lpthread -lm
         ./crash_recovery_test
       timeout-minutes: 10
@@ -508,7 +512,7 @@ jobs:
       if: matrix.platform != 'windows'
       run: |
         cd build
-        gcc -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
+        gcc $CFLAGS -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
           libdoltlite.a -lz -lpthread -lm
         ./prepared_stmt_reuse_test
 
@@ -520,7 +524,7 @@ jobs:
 
     # Wires the previously-orphan C tests into CI. All tests in
     # test/run_c_tests.sh are gating and must pass.
-    - name: Orphan C tests
+    - name: Warning-free orphan C tests
       if: matrix.platform == 'ubuntu'
       run: cd build && make c-tests
       timeout-minutes: 15
