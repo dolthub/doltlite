@@ -4,122 +4,156 @@ Guidance for AI coding agents working in this repository.
 
 ## Project nature
 
-SQLite is a self-contained, serverless SQL database engine written in C. The
-source is **public domain** — no copyright or license header should ever be
-added to any file. The blessing comment that appears at the top of each source
-file is intentional and should be preserved unchanged.
+DoltLite is a fork of SQLite that replaces the B-tree storage engine with a
+content-addressed [prolly tree](https://docs.dolthub.com/architecture/storage-engine/prolly-tree),
+giving a SQL database Git-like version control (branch / commit / merge / diff)
+while staying embeddable as a single library. Everything **above** SQLite's
+`btree.h` interface — tokenizer, parser, planner, VDBE — is upstream SQLite and
+is left untouched. Everything **below** it — the pager and on-disk format — is
+replaced by a prolly-tree engine backed by a single-file, content-addressed
+chunk store.
 
-SQLite does not accept pull requests without prior agreement and/or
-accompanying legal paperwork that places the pull request in the public domain.
-However, the human SQLite developers will review a concise and well-written
-pull request as a proof-of-concept prior to reimplementing the changes
-themselves.
+DoltLite is developed on **Git** and hosted on **GitHub**
+(<https://github.com/dolthub/doltlite>). Unlike upstream SQLite, it **uses
+pull requests** and **accepts agentic contributions** — opening PRs is the
+normal workflow (see *PR / git workflow* below).
 
-SQLite does not accept agentic code.  However the project
-will accept agentic bug reports that include a reproducible test case.
-Patches or pull requests demonstrating a possible fix, for documentation
-purposes, are welcomed.
+### Licensing and file headers
 
-SQLite uses the [Fossil](https://fossil-scm.org/) for version control,
-not Git.  The canonical repository is at <https://sqlite.org/src>.
+DoltLite is licensed **Apache-2.0** (`LICENSE.md`). This differs from upstream
+SQLite, which is public domain.
+
+- **Upstream SQLite files** (`src/btree.c`, `src/vdbe.c`, `src/where*.c`, …)
+  keep their public-domain "blessing" comment. Preserve it unchanged; never add
+  a license header to them.
+- **DoltLite source** (`src/doltlite_*.c`, `src/prolly_*.c`, `src/chunk_*.c`,
+  all guarded by `#ifdef DOLTLITE_PROLLY`) carries **no** per-file license
+  header. Match the surrounding file — do not add one.
+- No issue or PR numbers in code comments; those references belong in commit
+  messages and PR descriptions.
+- The comment bar is high. Keep only load-bearing comments and strip filler —
+  over-commenting makes the code worse.
 
 ## Build
 
-The configure script uses [autosetup](https://msteveb.github.io/autosetup/),
-not GNU Autoconf.
+The build uses [autosetup](https://msteveb.github.io/autosetup/) from a
+separate `build/` directory.
 
 ```bash
-apt install gcc make tcl-dev   # prerequisites (Debian/Ubuntu)
-
-./configure --dev              # debug build
-make sqlite3                   # CLI shell
-make sqlite3d                  # Debugging variant of the CLI shell
-make sqlite3.c                 # amalgamation (single-file distribution form)
-make testfixture               # test runner binary (requires tcl-dev)
-make tclextension-install      # install TCL extension before running tests
+cd build
+../configure
+make doltlite                    # CLI shell — the prolly engine (default)
+make doltlite-lib                # libdoltlite.a + .so/.dylib + doltlite.h
+make DOLTLITE_PROLLY=0 sqlite3   # stock SQLite, for oracle/perf comparison
 ```
+
+- On macOS with Homebrew, link needs `LIBRARY_PATH=/opt/homebrew/lib`.
+- The test harness runs **`build/doltlite`**. Rebuild `build/` after any `src/`
+  change or you validate a stale engine. A repo-root `./doltlite` or `./sqlite3`
+  built over the prolly `.o` files is DoltLite-in-disguise; to get *real* stock
+  SQLite for comparison, build with `DOLTLITE_PROLLY=0` in a clean directory.
+- `make lint` runs the layering and raw-file-I/O guards over `src/`.
+
+## Source layout
+
+- **Upstream SQLite core** — `src/*.c` (parser, planner, `vdbe.c`, `where*.c`,
+  …), untouched above `btree.h`. Master header `src/sqliteInt.h`.
+- **Storage engine** — `src/prolly_*.c` (prolly-tree node, cursor, mutmap,
+  diff, three-way merge, chunker, cache, hashing) and `src/chunk_*.c`
+  (content-addressed chunk store, WAL, refs, staging, file format).
+- **Version-control surfaces** — `src/doltlite_*.c`, roughly one file per
+  feature: `doltlite_commit`, `doltlite_branch` (branch/checkout/rebase),
+  `doltlite_merge` (+ `doltlite_merge_constraints`), `doltlite_diff` /
+  `doltlite_diff_stat` / `doltlite_diff_table`, `doltlite_log`,
+  `doltlite_history`, `doltlite_blame`, `doltlite_tag`, `doltlite_conflicts`,
+  `doltlite_constraint_violations`, `doltlite_schemas` / `doltlite_schema_diff`,
+  `doltlite_patch`, `doltlite_status`, `doltlite_workspace`, `doltlite_ignore`,
+  `doltlite_hashof`, `doltlite_gc`, `doltlite_remote` / `doltlite_http_remote` /
+  `doltlite_remotesrv`. Internal header: `src/doltlite_internal.h`; surfaces are
+  registered in `src/doltlite.c`.
+
+## The version-control surface (vtables + functions)
+
+DoltLite exposes version control as SQLite **virtual tables** (system tables:
+`dolt_log`, `dolt_diff`, `dolt_diff_<table>`, `dolt_conflicts`,
+`dolt_constraint_violations`, `dolt_status`, …) and **scalar functions / TVFs**
+(`SELECT dolt_commit(...)`, `SELECT dolt_merge(...)`, `SELECT dolt_branch(...)`).
+Dolt exposes the same operations as stored procedures (`CALL dolt_commit(...)`).
+
+**This vtable form, and DoltLite-flavored column names, are intentional** — not
+conformance bugs. When comparing against Dolt, only **row-level semantics** must
+match; do not file conformance issues over the vtable/function shape or column
+naming.
 
 ## Testing
 
-Tests are TCL scripts run through the `testfixture` enhanced interpreter.
+Several independent layers. A change under `src/` should run the relevant ones;
+`dolt` on `PATH` is required for the oracle suites.
 
-```bash
-# From the build directory:
-./testfixture test/main.test   # single test file
-test/testrunner.tcl            # quick suite
-test/testrunner.tcl full       # full suite
-test/testrunner.tcl fts5%      # pattern match
+- **`test/run_doltlite_tests.sh`** — DoltLite-native shell suites
+  (`doltlite_*.sh`) covering branch/commit/diff/merge/checkout/etc. behavior and
+  parity. Runs `build/doltlite`. This layer is separate from the regression and
+  C tests and catches branch / default-branch / parity bugs they miss —
+  **always run it for version-control changes.**
+- **`test/vc_oracle_*_test.sh`** — Dolt oracle suites: run identical SQL against
+  DoltLite (`SELECT dolt_x`) and real Dolt (`CALL dolt_x`) and diff the
+  normalized output. Invoke as `bash test/vc_oracle_X_test.sh build/doltlite dolt`.
+  CI auto-runs anything matching `vc_oracle_*_test.sh` / `oracle_*_test.sh`, so a
+  new suite with that name needs no wiring. Compare semantics, not vtable shape.
+- **Regression buckets** — `test/regression-buckets/*.txt` list the inherited
+  and ported upstream `*.test` files gated via `testfixture`. `testfixture` is
+  built **with** `SQLITE_TEST` (the CLI is not), so don't `#ifdef SQLITE_TEST`-
+  guard a correctness fix, and verify fixes in `testfixture`, not only the CLI.
+  Every `doltlite_*.test` suite must appear in a bucket or
+  `test/lint_orphaned_suites.sh` fails.
+- **`test/run_c_tests.sh`** — C unit tests (concurrency, crash recovery,
+  serialize determinism, chunk-store locking, …).
+- **`test/run_sqllogictest.sh`** — at **full pass / 100% parity**.
+  `test/known_sqllogictest_divergences.txt` is **empty and must stay empty**: a
+  new divergence means fix the engine, never add a known-divergence entry.
 
-# Check for failures:
-grep '!' testrunner.log
-```
+Rules that override convenience:
 
-`make devtest` is the fastest way to run a representative subset. Always run
-at least `devtest` after any change to `src/`.
+- **Never delete a test or disable a check.** If a test or assertion fails, fix
+  the change, not the guardrail.
+- For an observable bug, prove the fix with a **fail-before / pass-after** test
+  (fails on the unfixed engine, passes with the fix). Latent/defensive fixes may
+  legitimately have no such test.
+- When local validation would take more than ~15 min, push a PR and let CI run
+  the buckets/corpus/suites in parallel; spot-check locally. The perf-ceiling
+  jobs (int/text/blob/composite-PK) are the only flaky CI — every other job is
+  deterministic, so a red non-perf job is a real signal.
 
-## Architecture
+## PR / git workflow
 
-SQL text → **tokenizer** (`tokenize.c`) → **parser** (`parse.y` / Lemon) →
-**code generator** (`build.c`, `select.c`, `insert.c`, `update.c`, `delete.c`,
-`expr.c`) → **optimizer** (`where*.c`) → **VDBE** (`vdbe.c`) → **B-Tree**
-(`btree.c`) → **Pager** (`pager.c`) → **WAL** (`wal.c`) → **VFS**
-(`os_unix.c`, `os_win.c`).
+- Branch off a **freshly pulled `master`**; open the PR **against `master`**.
+  Do not stack PRs — a stacked branch leaves commits dangling when its base
+  merges first; rebase onto `master` instead.
+- **Stage by explicit path** (`git add src/foo.c test/bar.sh`). `git add -A` /
+  `git add .` sweep in hundreds of untracked build artifacts (`*.o`, `tsrc/*.c`,
+  `./doltlite`, `./sqlite3`, `testfixture`).
+- Commit or push only when asked. End commit messages and PR bodies with the
+  trailers the harness expects.
 
-The master internal header is `src/sqliteInt.h`. Major subsystems have private
-headers: `vdbeInt.h`, `btreeInt.h`, `whereInt.h`. The public API is defined in
-`src/sqlite.h.in` (template) which generates `sqlite3.h`.
+## Version-control correctness invariants
 
-## Do not edit generated files
+Subtle rules that are easy to break silently — hold them when touching VC code:
 
-These files are produced by scripts and must not be edited by hand:
+- **Re-confirm under the lock.** Multi-step ops (merge / cherry-pick / revert /
+  pull) must re-read HEAD under the lock immediately before advancing a ref, or
+  they clobber a concurrent peer.
+- **Scoped ref installs.** A pushed ref update must go through the scoped-refs
+  validator (only the declared branch may change); never install a pushed blob
+  wholesale. Clone install is unscoped by design.
+- **Canonical catalog.** Schema commits adopt the canonical catalog; the live
+  catalog must always equal the persisted one. Constructed catalog arrays
+  (staging / merge / `-am`) adopt the single master root paired by `iTable==1`,
+  never by name.
+- **Ref resolution** for commit / branch / `HEAD` / `WORKING` / `STAGED` goes
+  through `doltliteResolveCatalogHashForRef` — reuse it, don't re-derive.
 
-| File | Regenerate with |
-|---|---|
-| `sqlite3.h` | `tool/mksqlite3h.tcl` |
-| `parse.c`, `parse.h` | build lemon (`tool/lemon.c`) then run on `src/parse.y` |
-| `opcodes.h` | `tool/mkopcodeh.tcl` (reads `src/vdbe.c`) |
-| `opcodes.c` | `tool/mkopcodec.tcl` (reads `opcodes.h`) |
-| `keywordhash.h` | `tool/mkkeywordhash.c` |
-| `pragma.h` | `tool/mkpragmatab.tcl` |
-| `sqlite3.c` | `tool/mksqlite3c.tcl` (the amalgamation) |
+## Move fast
 
-Editing rules:
-- To add a PRAGMA: edit `tool/mkpragmatab.tcl`, then regenerate `pragma.h`.
-- To add a VDBE opcode: add the `case OP_Xxx:` handler in `src/vdbe.c`; the
-  opcode number and name are extracted automatically by `mkopcodeh.tcl`.
-- To change the SQL grammar: edit `src/parse.y`, not `parse.c`.
-
-## Coding conventions
-
-- C89/C99 compatible C only. No C++, no STL, no exceptions, no VLAs.
-- All memory allocation goes through `sqlite3Malloc` / `sqlite3_malloc64`
-  (never raw `malloc`). The `sqlite3MallocZero` variant zero-initializes.
-- Integer widths: use `i64` (`sqlite3_int64`) for 64-bit values, `u32`/`u64`
-  for unsigned. Avoid bare `long` or `int` for values that could exceed 2G.
-- Error propagation: functions return `SQLITE_OK` (0) on success and a
-  `SQLITE_*` error code on failure. Many routines also set `db->mallocFailed`
-  on OOM, allowing deferred error checking.
-- Assert liberally for invariants that must hold in correct code; use
-  `ALWAYS(x)` / `NEVER(x)` for conditions that are logically always
-  true/false but that the compiler cannot prove.
-
-## Extensions (`ext/`)
-
-Extensions are compiled separately from the core and are not part of the
-amalgamation by default (except where explicitly included). Major subsystems:
-
-- `ext/fts5/` — Full-Text Search 5 (current)
-- `ext/rtree/` — R-Tree spatial indexing
-- `ext/session/` — Changesets and sessions
-- `ext/recover/` — Database file recovery
-- `ext/misc/` — Single-file utility extensions (many included in the CLI)
-- `ext/qrf/` — Query Result Formatter utility library
-
-## Useful references
-
-- Architecture: <https://sqlite.org/arch.html>
-- File format: <https://sqlite.org/fileformat2.html>
-- VDBE opcodes: <https://sqlite.org/opcode.html>
-- Query planner: <https://sqlite.org/optoverview.html>
-- Lemon parser generator: <https://sqlite.org/doc/trunk/doc/lemon.html>
-- Compile-time options: <https://sqlite.org/compile.html>
+Format stability, concurrency-contract documentation, and external integration
+tests are currently deprioritized — the project is not ready to lock those down.
+Prefer fixing the engine and proving it with tests over documenting constraints.
