@@ -15,8 +15,12 @@ struct DoltliteRemote {
   int (*xGetChunks)(DoltliteRemote*, const ProllyHash *aHash, int nHash,
                     u8 **apData, int *anData);
   int (*xGetRefs)(DoltliteRemote*, u8**, int*);
-  int (*xSetRefs)(DoltliteRemote*, const u8*, int);
-  int (*xSetRefsIf)(DoltliteRemote*, const ProllyHash*, const u8*, int);
+  /* zBranch/bForce declare the intended push scope so the receiver can reject
+  ** any refs change outside that branch and enforce fast-forward. */
+  int (*xSetRefs)(DoltliteRemote*, const char *zBranch, int bForce,
+                  const u8*, int);
+  int (*xSetRefsIf)(DoltliteRemote*, const ProllyHash*, const char *zBranch,
+                    int bForce, const u8*, int);
   int (*xCommit)(DoltliteRemote*);
   void (*xClose)(DoltliteRemote*);
 };
@@ -36,6 +40,14 @@ int doltliteSyncChunks(
 
 int doltlitePush(ChunkStore *pLocal, DoltliteRemote *pRemote,
                  const char *zBranch, int bForce);
+
+/* Enforce that a pushed refs blob only creates/advances zBranch (fast-forward
+** unless bForce) and leaves every other branch and tag byte-identical to
+** pStore's current refs. Returns SQLITE_OK if allowed, SQLITE_CONSTRAINT if
+** out of scope or a non-fast-forward without force. */
+int doltliteValidateScopedRefsUpdate(ChunkStore *pStore, const u8 *pBlob,
+                                     int nBlob, const char *zBranch,
+                                     int bForce);
 
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);

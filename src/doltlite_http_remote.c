@@ -37,6 +37,8 @@ struct HttpRemote {
   int nPendingRefs;
   ProllyHash expectedRefsHash;
   u8 hasExpectedRefsHash;
+  char *zPushBranch;
+  int bPushForce;
 };
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
@@ -530,13 +532,18 @@ static int httpGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   return SQLITE_OK;
 }
 
-static int httpSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
+static int httpSetRefs(DoltliteRemote *pRemote, const char *zBranch,
+                       int bForce, const u8 *pData, int nData){
   HttpRemote *p = (HttpRemote*)pRemote;
 
   sqlite3_free(p->pPendingRefs);
   p->pPendingRefs = 0;
   p->nPendingRefs = 0;
   p->hasExpectedRefsHash = 0;
+  sqlite3_free(p->zPushBranch);
+  p->zPushBranch = zBranch ? sqlite3_mprintf("%s", zBranch) : 0;
+  if( zBranch && !p->zPushBranch ) return SQLITE_NOMEM;
+  p->bPushForce = bForce;
 
   if( pData && nData > 0 ){
     p->pPendingRefs = sqlite3_malloc(nData);
@@ -550,11 +557,13 @@ static int httpSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
 static int httpSetRefsIf(
   DoltliteRemote *pRemote,
   const ProllyHash *pExpectedRefsHash,
+  const char *zBranch,
+  int bForce,
   const u8 *pData,
   int nData
 ){
   HttpRemote *p = (HttpRemote*)pRemote;
-  int rc = httpSetRefs(pRemote, pData, nData);
+  int rc = httpSetRefs(pRemote, zBranch, bForce, pData, nData);
   if( rc!=SQLITE_OK ) return rc;
   if( pExpectedRefsHash ){
     memcpy(&p->expectedRefsHash, pExpectedRefsHash, sizeof(ProllyHash));
@@ -587,27 +596,34 @@ static int httpCommit(DoltliteRemote *pRemote){
   }
 
   if( p->pPendingRefs && p->nPendingRefs > 0 ){
+    /* Body: [u16 branchLen][branch][u8 force] then, for refs-if, the expected
+    ** refs hash, then the refs blob. The prefix declares the push scope so the
+    ** server can reject changes to any other ref. */
+    int nBranch = p->zPushBranch ? (int)strlen(p->zPushBranch) : 0;
+    int nHashPart = p->hasExpectedRefsHash ? PROLLY_HASH_SIZE : 0;
+    int nReq = 2 + nBranch + 1 + nHashPart + p->nPendingRefs;
+    u8 *pReq;
+    int off = 0;
+
     pResp = 0; nResp = 0; status = 0;
     zPath = buildPath(p, p->hasExpectedRefsHash ? "/refs-if" : "/refs");
     if( !zPath ) return SQLITE_NOMEM;
-
-    if( p->hasExpectedRefsHash ){
-      u8 *pReq = sqlite3_malloc(PROLLY_HASH_SIZE + p->nPendingRefs);
-      if( !pReq ){
-        sqlite3_free(zPath);
-        return SQLITE_NOMEM;
-      }
-      memcpy(pReq, p->expectedRefsHash.data, PROLLY_HASH_SIZE);
-      memcpy(pReq + PROLLY_HASH_SIZE, p->pPendingRefs, p->nPendingRefs);
-      rc = httpRequest(p, "PUT", zPath,
-                       pReq, PROLLY_HASH_SIZE + p->nPendingRefs,
-                       &status, &pResp, &nResp);
-      sqlite3_free(pReq);
-    }else{
-      rc = httpRequest(p, "PUT", zPath,
-                       p->pPendingRefs, p->nPendingRefs,
-                       &status, &pResp, &nResp);
+    pReq = sqlite3_malloc(nReq);
+    if( !pReq ){
+      sqlite3_free(zPath);
+      return SQLITE_NOMEM;
     }
+    pReq[off++] = (u8)(nBranch & 0xff);
+    pReq[off++] = (u8)((nBranch >> 8) & 0xff);
+    if( nBranch>0 ){ memcpy(pReq+off, p->zPushBranch, nBranch); off += nBranch; }
+    pReq[off++] = (u8)(p->bPushForce ? 1 : 0);
+    if( nHashPart ){
+      memcpy(pReq+off, p->expectedRefsHash.data, PROLLY_HASH_SIZE);
+      off += PROLLY_HASH_SIZE;
+    }
+    memcpy(pReq+off, p->pPendingRefs, p->nPendingRefs);
+    rc = httpRequest(p, "PUT", zPath, pReq, nReq, &status, &pResp, &nResp);
+    sqlite3_free(pReq);
     sqlite3_free(zPath);
     sqlite3_free(pResp);
     if( rc != SQLITE_OK ) return rc;
@@ -637,6 +653,8 @@ static int httpCommit(DoltliteRemote *pRemote){
   sqlite3_free(p->pPendingRefs);
   p->pPendingRefs = 0;
   p->nPendingRefs = 0;
+  sqlite3_free(p->zPushBranch);
+  p->zPushBranch = 0;
 
   return SQLITE_OK;
 }
@@ -651,6 +669,7 @@ static void httpClose(DoltliteRemote *pRemote){
   sqlite3_free(p->zBasePath);
   sqlite3_free(p->pUploadBuf);
   sqlite3_free(p->pPendingRefs);
+  sqlite3_free(p->zPushBranch);
   sqlite3_free(p);
 }
 
