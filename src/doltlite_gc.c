@@ -101,8 +101,6 @@ static int gcQueuePush(
 ){
   if( prollyHashIsEmpty(h) ) return SQLITE_OK;
   if( q->nItems >= q->nAlloc ){
-    /* Same overflow pattern as doltliteCommitQueueEnqueue: double in i64,
-    ** refuse if the byte size would not fit a positive int realloc. */
     i64 nNew = q->nAlloc ? (i64)q->nAlloc * 2 : (i64)256;
     GcQueueItem *aNew;
     if( nNew > (i64)0x7fffffff/(i64)sizeof(GcQueueItem) ) return SQLITE_NOMEM;
