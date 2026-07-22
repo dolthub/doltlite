@@ -58,12 +58,12 @@ oracle_both_error() {
 echo "=== Version Control Oracle Tests: dolt_hashof* error parity ==="
 echo ""
 
-echo "--- bogus refs must error (not silently NULL) ---"
+echo "--- invalid refs and tables must error (not silently NULL) ---"
 
 oracle_both_error "hashof_bogus"            "SELECT dolt_hashof('not_a_real_branch');"
 oracle_both_error "hashof_empty_string"     "SELECT dolt_hashof('');"
-oracle_both_error "hashof_table_bogus_ref"  "SELECT dolt_hashof_table('t', 'not_a_real_branch');"
-oracle_both_error "hashof_db_bogus_ref"     "SELECT dolt_hashof_db('not_a_real_branch');"
+oracle_both_error "hashof_table_missing"    "SELECT dolt_hashof_table('not_a_real_table');"
+oracle_both_error "hashof_table_empty"      "SELECT dolt_hashof_table('');"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

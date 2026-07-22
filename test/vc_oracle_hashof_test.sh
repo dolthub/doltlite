@@ -3,76 +3,132 @@
 set -u
 
 DOLTLITE="${1:-./doltlite}"
+DOLT="${2:-dolt}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
+
+setup_pair() {
+  local name="$1" setup="$2"
+  local dl_db="$TMPROOT/$name.db" dt_repo="$TMPROOT/$name.dolt" dt_setup
+  local dl_rc dt_rc
+  rm -f "$dl_db"
+  mkdir -p "$dt_repo"
+  printf "%s\n" "$setup" \
+    | "$DOLTLITE" "$dl_db" >/dev/null 2>"$TMPROOT/$name.dl.setup.err"
+  dl_rc=$?
+  (
+    cd "$dt_repo" || exit 1
+    vc_oracle_init_repo
+    dt_setup=$(vc_oracle_translate_for_dolt "$setup")
+    printf "%s\n" "$dt_setup" \
+      | "$DOLT" sql -c >/dev/null 2>"$TMPROOT/$name.dt.setup.err"
+  )
+  dt_rc=$?
+  [ "$dl_rc" -eq 0 ] && [ "$dt_rc" -eq 0 ] \
+    && ! grep -qiE '(^|[^a-z])(error|failed)([ :]|$)' \
+      "$TMPROOT/$name.dl.setup.err" "$TMPROOT/$name.dt.setup.err" 2>/dev/null
+}
+
+query_pair() {
+  local name="$1" query="$2"
+  local dl dt
+  dl=$("$DOLTLITE" "$TMPROOT/$name.db" "$query" \
+    2>>"$TMPROOT/$name.dl.query.err" | tr -d '\r"')
+  dt=$(cd "$TMPROOT/$name.dolt" \
+    && "$DOLT" sql -r csv -q "$query" \
+      2>>"$TMPROOT/$name.dt.query.err" | tail -n +2 | tr -d '\r"')
+  printf '%s|%s\n' "$dl" "$dt"
+}
+
+query_pair_separate() {
+  local name="$1" dl_query="$2" dt_query="$3"
+  local dl dt
+  dl=$("$DOLTLITE" "$TMPROOT/$name.db" "$dl_query" \
+    2>>"$TMPROOT/$name.dl.query.err" | tr -d '\r"')
+  dt=$(cd "$TMPROOT/$name.dolt" \
+    && "$DOLT" sql -r csv -q "$dt_query" \
+      2>>"$TMPROOT/$name.dt.query.err" | tail -n +2 | tr -d '\r"')
+  printf '%s|%s\n' "$dl" "$dt"
+}
 
 run_hash() {
   local name="$1" setup="$2" query="$3"
-  local db="$TMPROOT/$name.db"
-  rm -f "$db"
-  printf "%s\n" "$setup" \
-    | "$DOLTLITE" "$db" >/dev/null 2>"$TMPROOT/$name.setup.err"
-  "$DOLTLITE" "$db" "$query" 2>"$TMPROOT/$name.query.err"
+  if ! setup_pair "$name" "$setup"; then
+    printf '|\n'
+    return
+  fi
+  query_pair "$name" "$query"
 }
 
 run_hash_on() {
-  local db="$1" query="$2"
-  "$DOLTLITE" "$db" "$query" 2>>"$TMPROOT/shared.err"
+  query_pair "$1" "$2"
+}
+
+exec_pair() {
+  local name="$1" sql="$2" dt_sql
+  printf '%s\n' "$sql" | "$DOLTLITE" "$TMPROOT/$name.db" \
+    >/dev/null 2>>"$TMPROOT/$name.dl.exec.err"
+  dt_sql=$(vc_oracle_translate_for_dolt "$sql")
+  (cd "$TMPROOT/$name.dolt" && printf '%s\n' "$dt_sql" | "$DOLT" sql -c) \
+    >/dev/null 2>>"$TMPROOT/$name.dt.exec.err"
+}
+
+pair_dl() { printf '%s\n' "${1%%|*}"; }
+pair_dt() { printf '%s\n' "${1#*|}"; }
+
+fail_pair() {
+  local name="$1" detail="$2" a="$3" b="${4:-}"
+  fail=$((fail+1))
+  FAILED_NAMES="$FAILED_NAMES $name"
+  echo "  FAIL: $name ($detail)"
+  echo "    doltlite: $(pair_dl "$a") ${b:+vs $(pair_dl "$b")}"
+  echo "    dolt:     $(pair_dt "$a") ${b:+vs $(pair_dt "$b")}"
 }
 
 same() {
-  local name="$1" a="$2" b="$3"
-  if [ -z "$a" ] || [ -z "$b" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (empty hash)"
-    echo "    a=|$a|"
-    echo "    b=|$b|"
+  local name="$1" a="$2" b="$3" ad bd at bt
+  ad=$(pair_dl "$a"); bd=$(pair_dl "$b")
+  at=$(pair_dt "$a"); bt=$(pair_dt "$b")
+  if [ -z "$ad" ] || [ -z "$bd" ] || [ -z "$at" ] || [ -z "$bt" ]; then
+    fail_pair "$name" "empty hash" "$a" "$b"
     return
   fi
-  if [ "$a" = "$b" ]; then
+  if [ "$ad" = "$bd" ] && [ "$at" = "$bt" ]; then
     pass=$((pass+1))
     echo "  PASS: $name"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    a=$a"
-    echo "    b=$b"
+    fail_pair "$name" "expected equality within each engine" "$a" "$b"
   fi
 }
 
 different() {
-  local name="$1" a="$2" b="$3"
-  if [ -z "$a" ] || [ -z "$b" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (empty hash)"
+  local name="$1" a="$2" b="$3" ad bd at bt
+  ad=$(pair_dl "$a"); bd=$(pair_dl "$b")
+  at=$(pair_dt "$a"); bt=$(pair_dt "$b")
+  if [ -z "$ad" ] || [ -z "$bd" ] || [ -z "$at" ] || [ -z "$bt" ]; then
+    fail_pair "$name" "empty hash" "$a" "$b"
     return
   fi
-  if [ "$a" != "$b" ]; then
+  if [ "$ad" != "$bd" ] && [ "$at" != "$bt" ]; then
     pass=$((pass+1))
     echo "  PASS: $name"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (hashes equal but should differ)"
-    echo "    a=$a"
+    fail_pair "$name" "expected inequality within each engine" "$a" "$b"
   fi
 }
 
 shape() {
-  local name="$1" h="$2"
-  if echo "$h" | grep -qE '^[0-9a-f]{40}$'; then
+  local name="$1" h="$2" dl dt
+  dl=$(pair_dl "$h"); dt=$(pair_dt "$h")
+  if echo "$dl" | grep -qE '^[0-9a-f]{40}$' \
+     && echo "$dt" | grep -qE '^[0-9a-v]{32}$'; then
     pass=$((pass+1))
     echo "  PASS: $name"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (bad shape)"
-    echo "    h=|$h|"
+    fail_pair "$name" "unexpected engine-specific hash shape" "$h"
   fi
 }
 
@@ -187,12 +243,12 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_c2');
 "
 
-DB="$TMPROOT/cross_branch.db"
-rm -f "$DB"
-printf "%s\n" "$BRANCH_CONVERGE" | "$DOLTLITE" "$DB" >/dev/null 2>"$TMPROOT/cross.err"
+DB="cross_branch"
+setup_pair "$DB" "$BRANCH_CONVERGE"
 
-H_MAIN_T=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t', 'main');")
-H_FEAT_T=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t', 'feat');")
+H_MAIN_T=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
+exec_pair "$DB" "SELECT dolt_checkout('feat');"
+H_FEAT_T=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 same "cross_branch_table_hash_equal" "$H_MAIN_T" "$H_FEAT_T"
 
 H_MAIN_COMMIT=$(run_hash_on "$DB" "SELECT dolt_hashof('main');")
@@ -212,15 +268,14 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'two_tables');
 "
 
-DB="$TMPROOT/two_tables.db"
-rm -f "$DB"
-printf "%s\n" "$TWO_TABLES" | "$DOLTLITE" "$DB" >/dev/null 2>"$TMPROOT/two.err"
+DB="two_tables"
+setup_pair "$DB" "$TWO_TABLES"
 
 HT_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 HU_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('u');")
 HDB_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
 
-"$DOLTLITE" "$DB" "INSERT INTO u VALUES (2, 'y'); SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'bump_u');" >/dev/null 2>>"$TMPROOT/two.err"
+exec_pair "$DB" "INSERT INTO u VALUES (2, 'y'); SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'bump_u');"
 
 HT_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 HU_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_table('u');")
@@ -241,9 +296,8 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'reopen');
 "
 
-DB="$TMPROOT/reopen.db"
-rm -f "$DB"
-printf "%s\n" "$REOPEN_SEED" | "$DOLTLITE" "$DB" >/dev/null 2>"$TMPROOT/reopen.err"
+DB="reopen"
+setup_pair "$DB" "$REOPEN_SEED"
 
 H_OPEN1=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 H_OPEN2=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
@@ -304,7 +358,7 @@ echo ""
 echo "--- 7b. Equivalent DDL histories converge ---"
 
 DDL_DIRECT="
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), n INTEGER, extra TEXT DEFAULT 'seed');
 CREATE INDEX idx_t_v ON t(v);
 CREATE INDEX idx_t_n ON t(n);
 INSERT INTO t VALUES (1, 'one', 10, 'seed'), (2, 'two', 20, 'seed');
@@ -313,7 +367,7 @@ SELECT dolt_commit('-m', 'direct');
 "
 
 DDL_ALTER="
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), n INTEGER);
 INSERT INTO t VALUES (1, 'one', 10), (2, 'two', 20);
 ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
 CREATE INDEX idx_t_v ON t(v);
@@ -324,9 +378,9 @@ SELECT dolt_commit('-m', 'alter');
 "
 
 DDL_RECREATE="
-CREATE TABLE t_old(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+CREATE TABLE t_old(id INTEGER PRIMARY KEY, v VARCHAR(64), n INTEGER);
 INSERT INTO t_old VALUES (1, 'one', 10), (2, 'two', 20);
-CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(64), n INTEGER, extra TEXT DEFAULT 'seed');
 INSERT INTO t SELECT id, v, n, 'seed' FROM t_old;
 CREATE INDEX idx_t_v ON t(v);
 CREATE INDEX idx_t_n ON t(n);
@@ -343,7 +397,40 @@ same "ddl_direct_vs_recreate_table_hash" "$H_DDL_DIRECT" "$H_DDL_RECREATE"
 
 echo ""
 
-echo "--- 8. Ref resolution ---"
+echo "--- 8. Working, staged, and committed roots ---"
+
+WORKING_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+"
+
+DB="working_roots"
+setup_pair "$DB" "$WORKING_SEED"
+H_T_COMMITTED=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
+H_DB_COMMITTED=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
+H_HEAD_COMMITTED=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
+
+exec_pair "$DB" "INSERT INTO t VALUES (2, 'b');"
+H_T_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
+H_DB_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
+H_HEAD_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
+different "working_change_updates_table_hash" "$H_T_COMMITTED" "$H_T_WORKING"
+different "working_change_updates_db_hash" "$H_DB_COMMITTED" "$H_DB_WORKING"
+same "working_change_does_not_move_HEAD" "$H_HEAD_COMMITTED" "$H_HEAD_WORKING"
+
+exec_pair "$DB" "SELECT dolt_add('-A');"
+H_T_STAGED=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
+H_DB_STAGED=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
+H_HEAD_STAGED=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
+same "staging_keeps_working_table_hash" "$H_T_WORKING" "$H_T_STAGED"
+same "staging_keeps_working_db_hash" "$H_DB_WORKING" "$H_DB_STAGED"
+same "staging_does_not_move_HEAD" "$H_HEAD_COMMITTED" "$H_HEAD_STAGED"
+
+echo ""
+
+echo "--- 9. Ref resolution ---"
 
 REF_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -355,9 +442,8 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 "
 
-DB="$TMPROOT/refs.db"
-rm -f "$DB"
-printf "%s\n" "$REF_SEED" | "$DOLTLITE" "$DB" >/dev/null 2>"$TMPROOT/refs.err"
+DB="refs"
+setup_pair "$DB" "$REF_SEED"
 
 H_MAIN=$(run_hash_on "$DB" "SELECT dolt_hashof('main');")
 H_HEAD=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
@@ -367,12 +453,14 @@ shape "main_hash_shape" "$H_MAIN"
 H_HEAD_PARENT=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD~1');")
 different "HEAD_differs_from_HEAD_parent" "$H_HEAD" "$H_HEAD_PARENT"
 
-H_ID_OUT=$(run_hash_on "$DB" "SELECT dolt_hashof('$H_HEAD');")
+H_ID_OUT=$(query_pair_separate "$DB" \
+  "SELECT dolt_hashof('$(pair_dl "$H_HEAD")');" \
+  "SELECT dolt_hashof('$(pair_dt "$H_HEAD")');")
 same "commit_hash_is_identity_on_hashof" "$H_HEAD" "$H_ID_OUT"
 
 echo ""
 
-echo "--- 9. Dolt shape conformance ---"
+echo "--- 10. Engine-specific shape conformance ---"
 
 SHAPE_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
