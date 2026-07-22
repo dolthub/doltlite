@@ -596,7 +596,9 @@ endif
 PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
-              prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
+              prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
+              prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_mutation.o \
+              prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
@@ -633,6 +635,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
     $(TOP)/src/doltlite_creds.h $(TOP)/src/doltlite_net.h $(TOP)/src/doltlite_tls.h \
     $(TOP)/src/doltlite_vtab_util.h \
+    $(TOP)/src/prolly_btree_int.h \
     $(TOP)/src/btree_orig_prefix.h $(TOP)/src/btree_orig_api.h $(TOP)/src/btree_orig_api.c \
     $(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3_portable.c \
     $(TOP)/ext/blake3/blake3_dispatch.c $(TOP)/ext/blake3/blake3.h \
@@ -829,6 +832,13 @@ SRC += \
   $(TOP)/src/prolly_three_way_merge.c \
   $(TOP)/src/prolly_three_way_merge.h \
   $(TOP)/src/prolly_btree.c \
+  $(TOP)/src/prolly_btree_catalog.c \
+  $(TOP)/src/prolly_btree_cursor.c \
+  $(TOP)/src/prolly_btree_mutation.c \
+  $(TOP)/src/prolly_btree_orig.c \
+  $(TOP)/src/prolly_btree_state.c \
+  $(TOP)/src/prolly_btree_txn.c \
+  $(TOP)/src/prolly_btree_int.h \
   $(TOP)/src/pager_shim.c \
   $(TOP)/src/pager_shim.h \
   $(TOP)/src/sortkey.c \
@@ -1495,8 +1505,26 @@ prolly_three_way_diff.o:	$(TOP)/src/prolly_three_way_diff.c $(DEPS_OBJ_COMMON)
 prolly_three_way_merge.o:	$(TOP)/src/prolly_three_way_merge.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_three_way_merge.c
 
-prolly_btree.o:	$(TOP)/src/prolly_btree.c $(DEPS_OBJ_COMMON)
+prolly_btree.o:	$(TOP)/src/prolly_btree.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree.c
+
+prolly_btree_catalog.o:	$(TOP)/src/prolly_btree_catalog.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_catalog.c
+
+prolly_btree_cursor.o:	$(TOP)/src/prolly_btree_cursor.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_cursor.c
+
+prolly_btree_mutation.o:	$(TOP)/src/prolly_btree_mutation.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_mutation.c
+
+prolly_btree_orig.o:	$(TOP)/src/prolly_btree_orig.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_orig.c
+
+prolly_btree_state.o:	$(TOP)/src/prolly_btree_state.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_state.c
+
+prolly_btree_txn.o:	$(TOP)/src/prolly_btree_txn.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_txn.c
 
 pager_shim.o:	$(TOP)/src/pager_shim.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/pager_shim.c

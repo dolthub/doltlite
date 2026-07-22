@@ -9,6 +9,16 @@ lint() {
   echo "LINT: $1"
 }
 
+# Keep the Prolly B-tree implementation split into reviewable units. The
+# private header is intentionally excluded because it contains shared types.
+for f in "$SRCDIR"/prolly_btree*.c; do
+  [ -f "$f" ] || continue
+  nline=$(wc -l < "$f" | tr -d ' ')
+  if [ "$nline" -gt 3000 ]; then
+    lint "$f:$nline lines — Prolly B-tree modules must stay at or below 3000 lines"
+  fi
+done
+
 for f in "$SRCDIR"/prolly_*.c; do
   while IFS= read -r line; do
     lint "$f:$line — prolly layer must not include doltlite headers"

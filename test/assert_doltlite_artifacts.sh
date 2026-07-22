@@ -90,10 +90,14 @@ if [ "${DOLTLITE_CHECK_SHARED:-1}" != 0 ]; then
 fi
 
 if [ "${DOLTLITE_CHECK_AMALGAMATION:-1}" != 0 ] && [ -f ./sqlite3.c ]; then
-  if ! grep -q 'Begin file prolly_btree.c' sqlite3.c; then
-    echo "sqlite3.c: missing prolly_btree.c marker; this looks like stock SQLite" >&2
-    exit 1
-  fi
+  for source in prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c \
+                prolly_btree_mutation.c prolly_btree_orig.c \
+                prolly_btree_state.c prolly_btree_txn.c; do
+    if ! grep -q "Begin file $source" sqlite3.c; then
+      echo "sqlite3.c: missing $source marker; amalgamation is incomplete" >&2
+      exit 1
+    fi
+  done
   "$cc_bin" "${probe_cflags[@]}" -I. "$probe_c" ./sqlite3.c "${probe_libs[@]}" -o "$probe_dir/amalgamation"
   check_value "sqlite3.c amalgamation" "$("$probe_dir/amalgamation")"
 fi
