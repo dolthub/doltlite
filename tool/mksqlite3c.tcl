@@ -164,6 +164,16 @@ if {$doltlite} {
 #endif
 #ifndef DOLTLITE_VERSION
 # define DOLTLITE_VERSION "doltlite-amalgamation"
+#endif
+
+/* DOLTLITE_AMALGAMATION_WINSOCK2_EARLY
+** windows.h includes the obsolete winsock.h unless Winsock 2 has already
+** been selected.  The doltlite networking sources are emitted late in the
+** amalgamation, after SQLite's Windows VFS has included windows.h, so select
+** Winsock 2 before any amalgamated source headers are processed. */
+#ifdef _WIN32
+# include <winsock2.h>
+# include <ws2tcpip.h>
 #endif}
 }
 

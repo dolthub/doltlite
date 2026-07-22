@@ -416,6 +416,7 @@ jobs:
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+        bash ../test/amalgamation_windows_source_test.sh ./sqlite3.c
         REMOTESRV=./doltlite-remotesrv.exe bash ../test/amalgamation_http_remote_test.sh .
       timeout-minutes: 20
 

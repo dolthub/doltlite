@@ -598,16 +598,14 @@ jobs:
         version="${VERSION#v}"
 
         if gh api "repos/dolthub/doltlite-node/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
-          echo "doltlite-node ${VERSION} already exists; skipping"
-          exit 0
-        fi
+          echo "doltlite-node ${VERSION} already exists; not pushing the tag again"
+        else
+          gh repo clone dolthub/doltlite-node doltlite-node
+          cd doltlite-node
+          git checkout main
+          git pull --ff-only origin main
 
-        gh repo clone dolthub/doltlite-node doltlite-node
-        cd doltlite-node
-        git checkout main
-        git pull --ff-only origin main
-
-        node <<'NODE'
+          node <<'NODE'
         const fs = require("fs");
         const version = process.env.VERSION.slice(1);
         for (const file of ["package.json", "package-lock.json"]) {
@@ -620,14 +618,15 @@ jobs:
         }
         NODE
 
-        if ! git diff --quiet; then
-          git add package.json package-lock.json
-          git commit -m "Bump version to ${version} to match doltlite ${VERSION}"
-          git push origin main
-        fi
+          if ! git diff --quiet; then
+            git add package.json package-lock.json
+            git commit -m "Bump version to ${version} to match doltlite ${VERSION}"
+            git push origin main
+          fi
 
-        git tag "${VERSION}"
-        git push origin "${VERSION}"
+          git tag "${VERSION}"
+          git push origin "${VERSION}"
+        fi
 
     - name: Release doltlite-python
       run: |
@@ -682,6 +681,51 @@ jobs:
 
         git tag "${VERSION}"
         git push origin "${VERSION}"
+
+    - name: Wait for doltlite-node npm publication
+      timeout-minutes: 45
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+        run_id=""
+
+        for attempt in $(seq 1 30); do
+          run_id=$(gh run list \
+            --repo dolthub/doltlite-node \
+            --workflow publish.yml \
+            --event push \
+            --branch "${VERSION}" \
+            --limit 10 \
+            --json databaseId,headBranch \
+            --jq "map(select(.headBranch == \"${VERSION}\"))[0].databaseId // empty")
+          [ -n "$run_id" ] && break
+          echo "Waiting for doltlite-node ${VERSION} publish workflow to start..."
+          sleep 10
+        done
+
+        if [ -z "$run_id" ]; then
+          echo "No doltlite-node publish workflow found for ${VERSION}"
+          exit 1
+        fi
+
+        echo "Watching doltlite-node publish run ${run_id}"
+        gh run watch "$run_id" \
+          --repo dolthub/doltlite-node \
+          --exit-status \
+          --interval 15
+
+        for attempt in $(seq 1 20); do
+          published=$(npm view "@dolthub/doltlite@${version}" version 2>/dev/null || true)
+          if [ "$published" = "$version" ]; then
+            echo "@dolthub/doltlite ${version} is available from npm"
+            exit 0
+          fi
+          echo "Waiting for npm registry propagation of ${version}..."
+          sleep 10
+        done
+
+        echo "doltlite-node workflow succeeded, but npm does not report ${version}"
+        exit 1
 
   # ── Publish WASM package to npm ──────────────────────────
   # Unlike the node/python bindings (which live in their own repos and are
