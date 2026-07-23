@@ -196,6 +196,42 @@ result=$(run_sql "SELECT count(*) FROM t INDEXED BY ie WHERE e>=0; PRAGMA integr
 check "merge_index_schema" "3
 ok" "$result"
 
+# Both branches change disjoint rows of a table carrying a NOCASE and a
+# DESC secondary index, so the three-way row merge maintains those indexes
+# inline. Their sort keys must honor the real collation and sort order, or
+# theirs-applied index entries become unreachable by probe and mis-ordered
+# by scan while the table scan stays correct.
+scenario "divergent merge maintains NOCASE and DESC secondary indexes"
+newdb
+run_sql "CREATE TABLE m(id INTEGER PRIMARY KEY, tx TEXT COLLATE NOCASE, n INTEGER);
+CREATE INDEX mtx ON m(tx);
+CREATE INDEX mn ON m(n DESC);
+INSERT INTO m VALUES(1,'aaa',10),(2,'bbb',20),(3,'ccc',30),(4,'ddd',40);
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');" "$DB" > /dev/null
+run_sql "UPDATE m SET tx='MAIN1',n=15 WHERE id=1; UPDATE m SET tx='MAIN2',n=5 WHERE id=2; SELECT dolt_commit('-am','main-side');" "$DB" > /dev/null
+run_sql "SELECT dolt_checkout('side'); UPDATE m SET tx='SIDE3',n=35 WHERE id=3; UPDATE m SET tx='SIDE4',n=45 WHERE id=4; SELECT dolt_commit('-am','side-side'); SELECT dolt_checkout('main');" "$DB" > /dev/null
+run_sql "SELECT dolt_merge('side');" "$DB" > /dev/null
+result=$(run_sql "SELECT count(*) FROM m INDEXED BY mtx WHERE tx='side3';
+SELECT count(*) FROM m NOT INDEXED WHERE tx='side3';
+SELECT count(*) FROM m INDEXED BY mtx WHERE tx='main1';
+SELECT group_concat(n) FROM (SELECT n FROM m INDEXED BY mn ORDER BY n DESC);
+SELECT group_concat(n) FROM (SELECT n FROM m NOT INDEXED ORDER BY n DESC);
+PRAGMA integrity_check;" "$DB")
+check "merge_nocase_desc_live" "1
+1
+1
+45,35,15,5
+45,35,15,5
+ok" "$result"
+result=$(run_sql "SELECT dolt_reset('--hard');
+SELECT count(*) FROM m INDEXED BY mtx WHERE tx='side3';
+SELECT group_concat(n) FROM (SELECT n FROM m INDEXED BY mn ORDER BY n DESC);
+PRAGMA integrity_check;" "$DB")
+check "merge_nocase_desc_head" "0
+1
+45,35,15,5
+ok" "$result"
+
 # ── cherry-pick / revert ──────────────────────────────────────────
 scenario "cherry-pick an index-touching commit"
 newdb
