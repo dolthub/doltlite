@@ -1089,30 +1089,6 @@ rowid rowid-4.5  # sqlite_search_count metric; joined row result (4) matches sto
 # DoltLite lets the write/release complete, so the following rollback/transaction
 # labels see different savepoint state.
 select2 select2-3.3  # sqlite_search_count metric; SELECT f1 WHERE f2==2000 returns 1000 on both
-# trans-9.*: the ".5" labels assert sqlite_fullsync_count/sqlite_sync_count > 0 —
-# SQLite-pager fsync instrumentation that doltlite's prolly backend never drives
-# (counters stay 0); ".6" asserts journal_mode=delete vs doltlite's wal. The actual
-# rollback-integrity tests (.1/.2: signature unchanged after BEGIN;DELETE;INSERT;ROLLBACK)
-# were reproduced and pass byte-identically — committed state is correctly restored.
-trans trans-9.10.5-2112
-trans trans-9.12.5-2544
-trans trans-9.14.5-3089
-trans trans-9.16.5-3802
-trans trans-9.18.5-4593
-trans trans-9.2.5-1024
-trans trans-9.20.5-5551
-trans trans-9.22.5-6736
-trans trans-9.24.5-8156
-trans trans-9.26.5-9897
-trans trans-9.28.5-11982
-trans trans-9.30.5-14544
-trans trans-9.32.5-17576
-trans trans-9.34.5-21225
-trans trans-9.36.5-25685
-trans trans-9.38.5-30883
-trans trans-9.4.5-1224
-trans trans-9.6.5-1480
-trans trans-9.8.5-1766
 # trigger1-6.*: assert the unordered scan order of sqlite_master rows. After
 # DROP TABLE t1 leaves a rowid gap, doltlite compacts schema rowids (t2,v1) while
 # stock keeps original rowids (v1,t2), so the rows come back in a different order.
@@ -4641,29 +4617,9 @@ autovacuum autovacuum-9.5  # file_pages: chunk-store size, no page reclamation
 
 # ── avtrans ──
 # avtrans is trans.test under auto_vacuum=full (now an accepted no-op, so
-# the old setup-cascade entries are gone). Remaining: the read-back probe
-# and the fullsync counter — the chunk store commits through its own sync
-# path, so the stock pager fullsync instrumentation counter stays 0.
+# the old setup-cascade entries are gone). Remaining: only the auto_vacuum
+# read-back probe.
 avtrans avtrans-1.0.1  # PRAGMA auto_vacuum reads back 0, not 1
-avtrans avtrans-9.2.5-1024  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.4.5-1224  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.6.5-1480  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.8.5-1766  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.10.5-2112  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.12.5-2544  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.14.5-3089  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.16.5-3802  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.18.5-4593  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.20.5-5551  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.22.5-6736  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.24.5-8156  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.26.5-9897  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.28.5-11982  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.30.5-14544  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.32.5-17576  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.34.5-21225  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.36.5-25685  # sqlite_fullsync_count stays 0 (chunk-store sync path)
-avtrans avtrans-9.38.5-30883  # sqlite_fullsync_count stays 0 (chunk-store sync path)
 
 # corrupt8 pokes stock pointer-map page bytes by offset. DoltLite's chunk-store
 # file does not use SQLite pointer-map pages, so the raw write is not a valid
