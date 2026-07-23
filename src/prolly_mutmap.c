@@ -580,10 +580,10 @@ int prollyMutMapInsert(
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pVal, int nVal
 ){
-  assert( mm!=0 );
-  assert( nKey>=0 && nVal>=0 );
   int found = 0, idx = 0, rc, phys = -1;
   u8 keyBuf[8];
+  assert( mm!=0 );
+  assert( nKey>=0 && nVal>=0 );
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
   if( mm->keepSorted || !mm->orderDirty ){
