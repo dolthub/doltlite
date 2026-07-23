@@ -168,6 +168,11 @@ oracle_both_error "head_tilde3_caret2" "$MERGED" "HEAD~3^2"
 oracle_both_error "head_tilde1_caret2" "$MERGED" "HEAD~1^2"
 oracle_both_error "nonmerge_branch_caret2" "$MERGED" "feat^2"
 
+# A long operator chain walks past the root and must error cleanly. The
+# resolver applies operators iteratively; the earlier recursive form used
+# O(depth) stack and O(depth^2) transient memory on inputs like this.
+oracle_both_error "head_many_carets" "$MERGED" "HEAD$(printf '^%.0s' $(seq 1 64))"
+
 echo ""
 echo "--- F4: LCA must be deterministic on criss-cross merge ---"
 
