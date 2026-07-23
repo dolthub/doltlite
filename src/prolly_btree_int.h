@@ -17,6 +17,7 @@
 #include "prolly_chunk_walk.h"
 #include "pager_shim.h"
 #include "doltlite_commit.h"
+#include "doltlite_catalog_types.h"
 #include "record_codec.h"
 #include "sortkey.h"
 #include "btree_orig_api.h"
@@ -49,18 +50,6 @@ int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
                               char **pzSql);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
-struct TableEntry;
-typedef struct SchemaEntry SchemaEntry;
-#ifndef DOLTLITE_SCHEMAENTRY_DEFINED
-#define DOLTLITE_SCHEMAENTRY_DEFINED
-struct SchemaEntry {
-  char *zName;
-  char *zTblName;
-  char *zSql;
-  char *zType;
-  Pgno iRootpage;
-};
-#endif
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
   sqlite3 *db,
   struct TableEntry *aTables,
@@ -150,24 +139,6 @@ u32 prollyBtreeGetU32LE(const u8 *p);
 #endif
 
 #define PROLLY_MAX_RECORD_SIZE ((sqlite3_int64)(1024*1024*1024))
-
-#ifndef DOLTLITE_TABLEENTRY_DEFINED
-#define DOLTLITE_TABLEENTRY_DEFINED
-struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
-  u8 pendingFlushSeekEdits;
-  u8 appendSeekFloorValid;
-  i64 appendSeekFloor;
-  ProllyHash appendSeekRoot;
-  u8 tableRootKnown;
-  u8 isTableRoot;
-  char *zName;
-  ProllyMutMap *pPending;
-};
-#endif
 
 typedef struct Catalog Catalog;
 struct Catalog {
