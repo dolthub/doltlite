@@ -319,6 +319,11 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_U32(aBuf + CS_MANIFEST_MAGIC_OFF, CHUNK_STORE_MAGIC);
   CS_WRITE_U32(aBuf + CS_MANIFEST_VERSION_OFF, CHUNK_STORE_VERSION);
 
+  /* Chunk count and index size are stored as u32, so the on-disk format caps
+  ** the store at ~4 billion chunks and a 4 GiB index. Truncating either here
+  ** would silently corrupt the manifest, so assert the values fit. */
+  assert( cs->index.nChunks>=0 && (u64)cs->index.nChunks<=0xffffffffu );
+  assert( cs->index.nIndexSize>=0 && (u64)cs->index.nIndexSize<=0xffffffffu );
   CS_WRITE_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF, (u32)cs->index.nChunks);
   CS_WRITE_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF, cs->index.iIndexOffset);
   CS_WRITE_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF, (u32)cs->index.nIndexSize);

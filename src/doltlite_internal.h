@@ -1048,6 +1048,11 @@ struct DoltliteConflictRow {
 };
 
 typedef struct DoltliteConflictTable DoltliteConflictTable;
+/* nConflicts==0 is an overloaded sentinel: such an entry is a schema-conflict
+** table (schema differs across the merge; its objects live in azSchemaObjects
+** and aRows is unused), not an empty data-conflict table. Data conflicts always
+** carry nConflicts>0 with aRows populated, so a zero-conflict table must never
+** be treated as "no conflicts here." */
 struct DoltliteConflictTable {
   char *zName;
   int nConflicts;

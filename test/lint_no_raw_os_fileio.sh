@@ -8,6 +8,14 @@ TMPFILE=$(mktemp)
 trap "rm -f $TMPFILE" EXIT
 
 cd "$ROOT" || exit 2
+
+if ! command -v rg >/dev/null 2>&1; then
+  echo "lint_no_raw_os_fileio: ripgrep (rg) is required but not found" >&2
+  echo "  install ripgrep or run this lint on a host that has it; refusing to" >&2
+  echo "  pass vacuously without the tool that performs the scan." >&2
+  exit 2
+fi
+
 shopt -s nullglob
 
 FILES=(
