@@ -886,6 +886,14 @@ int doltliteReportConstraintViolations(
 int doltliteDetectPostMergeConstraintViolations(
   sqlite3 *db, const ProllyHash *pAncCatHash, int *pnViolations
 );
+int doltliteDetectConstraintViolationsFiltered(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  const char **azTables,
+  int nTables,
+  int *pnViolations
+);
+int doltliteVerifyConstraintsRegister(sqlite3 *db);
 int doltliteRefreshAndConfirmHead(
   sqlite3 *db, ChunkStore *cs, const ProllyHash *pExpectedHead
 );
@@ -950,13 +958,18 @@ int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);
 void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 
-/* Post-merge constraint detectors (defined in doltlite_merge_constraints.c). */
+/* Post-merge / verify constraint detectors (doltlite_merge_constraints.c).
+** azTables/nTables optionally restrict which tables are scanned; nTables<=0
+** means all user tables. */
 int doltliteDetectMergeFkViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
-                                    char **pzErrMsg, int *pnFound);
+                                    char **pzErrMsg, int *pnFound,
+                                    const char **azTables, int nTables);
 int doltliteDetectMergeUniqueViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
-                                        char **pzErrMsg, int *pnFound);
+                                        char **pzErrMsg, int *pnFound,
+                                        const char **azTables, int nTables);
 int doltliteDetectMergeCheckViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
-                                       char **pzErrMsg, int *pnFound);
+                                       char **pzErrMsg, int *pnFound,
+                                       const char **azTables, int nTables);
 
 int doltliteConstraintViolationBatchBegin(sqlite3 *db);
 int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);

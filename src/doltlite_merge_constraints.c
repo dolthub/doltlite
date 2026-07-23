@@ -131,6 +131,21 @@ static int catalogTableChanged(
       doltliteFindTableByName(aCur, nCur, zTable));
 }
 
+
+static int cvTableAllowed(
+  const char *zTable,
+  const char **azTables,
+  int nTables
+){
+  int i;
+  if( !zTable ) return 0;
+  if( nTables<=0 || !azTables ) return 1;
+  for(i=0; i<nTables; i++){
+    if( azTables[i] && sqlite3_stricmp(azTables[i], zTable)==0 ) return 1;
+  }
+  return 0;
+}
+
 static int loadAncestorAndCurrentCatalogs(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -1048,7 +1063,9 @@ int doltliteDetectMergeUniqueViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   char **pzErrMsg,
-  int *pnFound
+  int *pnFound,
+  const char **azTables,
+  int nTables
 ){
   sqlite3_stmt *pTbls = 0;
   struct TableEntry *aAnc = 0;
@@ -1084,6 +1101,10 @@ int doltliteDetectMergeUniqueViolations(
     if( !zTableRaw ) continue;
     zTable = sqlite3_mprintf("%s", zTableRaw);
     if( !zTable ){ rc = SQLITE_NOMEM; break; }
+    if( !cvTableAllowed(zTable, azTables, nTables) ){
+      sqlite3_free(zTable);
+      continue;
+    }
     if( !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable) ){
       sqlite3_free(zTable);
       continue;
@@ -1268,7 +1289,9 @@ int doltliteDetectMergeCheckViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   char **pzErrMsg,
-  int *pnFound
+  int *pnFound,
+  const char **azTables,
+  int nTables
 ){
   sqlite3_stmt *pTbls = 0;
   struct TableEntry *aAnc = 0;
@@ -1311,6 +1334,11 @@ int doltliteDetectMergeCheckViolations(
       sqlite3_free(zSql);
       rc = SQLITE_NOMEM;
       break;
+    }
+    if( !cvTableAllowed(zTable, azTables, nTables) ){
+      sqlite3_free(zTable);
+      sqlite3_free(zSql);
+      continue;
     }
     if( !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable) ){
       sqlite3_free(zTable);
@@ -1576,7 +1604,9 @@ int doltliteDetectMergeFkViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   char **pzErrMsg,
-  int *pnFound
+  int *pnFound,
+  const char **azTables,
+  int nTables
 ){
   sqlite3_stmt *pTbls = 0;
   struct TableEntry *aAnc = 0;
@@ -1623,6 +1653,10 @@ int doltliteDetectMergeFkViolations(
     if( !zTableRaw ) continue;
     zTable = sqlite3_mprintf("%s", zTableRaw);
     if( !zTable ){ rc = SQLITE_NOMEM; break; }
+    if( !cvTableAllowed(zTable, azTables, nTables) ){
+      sqlite3_free(zTable);
+      continue;
+    }
     childChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable);
     memset(&childPk, 0, sizeof(childPk));
     hasRowid = tableHasRowid(db, zTable);

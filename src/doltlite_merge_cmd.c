@@ -454,15 +454,18 @@ static void doltliteMergeFunc(
     int vrc = doltliteConstraintViolationBatchBegin(db);
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
-                                            &zDetectErrMsg, &nViolations);
+                                            &zDetectErrMsg, &nViolations,
+                                            0, 0);
     }
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash,
-                                                &zDetectErrMsg, &nUnique);
+                                                &zDetectErrMsg, &nUnique,
+                                                0, 0);
     }
     if( vrc == SQLITE_OK ){
       vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash,
-                                               &zDetectErrMsg, &nCheck);
+                                               &zDetectErrMsg, &nCheck,
+                                               0, 0);
     }
     {
       int erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);

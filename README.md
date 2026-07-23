@@ -621,6 +621,29 @@ stays unique. `dolt_commit` refuses to proceed while any row
 remains in `dolt_constraint_violations_*`; pass `--force` to
 bypass the guard.
 
+#### Verify Constraints
+
+`dolt_verify_constraints` re-scans the working set (or the whole
+database) and writes any foreign-key, unique-index, or CHECK
+violations into `dolt_constraint_violations_*`. It returns `1` if
+any violations were found, else `0`.
+
+```sql
+-- Working-set changes vs HEAD only (default)
+SELECT dolt_verify_constraints();
+-- 0 or 1
+
+-- Every row (ignore HEAD; equivalent to Dolt --all)
+SELECT dolt_verify_constraints('--all');
+
+-- Restrict to named tables
+SELECT dolt_verify_constraints('child');
+SELECT dolt_verify_constraints('--all', 'child', 'other');
+
+-- Report without persisting into dolt_constraint_violations
+SELECT dolt_verify_constraints('--all', '--output-only');
+```
+
 #### Cherry-Pick
 
 Apply the changes from a specific commit onto the current branch:
