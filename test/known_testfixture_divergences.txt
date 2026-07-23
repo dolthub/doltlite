@@ -6125,10 +6125,8 @@ mmap1 mmap1-6.2  # mmap_size reads back 0 / mmap stats 0
 # multiplex VFS over a chunk store: journal_mode is not configurable on
 # doltlite-format databases (dominant failure: the multiplex tests set
 # journal_mode=delete/truncate per cycle), multiplex chunk-boundary and
-# size/journal-shape expectations differ, and 1.9.2 surfaces residual
-# SQLITE_MISUSE warnings from the wrapper open path. The native
-# initialized-wrapper contract is covered by doltlite_recover_vfs_wrappers.
-multiplex multiplex-1.9.2
+# size/journal-shape expectations differ. The native initialized-wrapper
+# contract is covered by doltlite_recover_vfs_wrappers.
 multiplex multiplex-2.1.3
 multiplex multiplex-2.2.3
 multiplex multiplex-2.4.4
@@ -6228,7 +6226,6 @@ multiplex multiplex-2.6.2.6436.off
 multiplex multiplex-2.6.2.6855.off
 multiplex multiplex-2.6.2.7274.off
 multiplex multiplex-2.6.2.7693.off
-multiplex multiplex-2.7.3
 multiplex multiplex-3.1.2
 multiplex multiplex-3.2.1a
 
