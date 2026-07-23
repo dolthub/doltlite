@@ -107,6 +107,35 @@ def expect_closed(s):
         pass
     s.close()
 
+def expect_dribble_closed(prefix):
+    # Dribble bytes slower than the total request deadline but faster than the
+    # per-recv timeout, so every recv succeeds yet the connection must still be
+    # cut. Without a total deadline this pins a worker indefinitely.
+    s = socket.create_connection(("127.0.0.1", port), timeout=2)
+    s.sendall(prefix)
+    start = time.monotonic()
+    closed_at = None
+    for _ in range(20):
+        try:
+            s.sendall(b"X")
+        except OSError:
+            closed_at = time.monotonic() - start
+            break
+        s.settimeout(1.0)
+        try:
+            if s.recv(4096) == b"":
+                closed_at = time.monotonic() - start
+                break
+        except socket.timeout:
+            pass
+        except OSError:
+            closed_at = time.monotonic() - start
+            break
+        time.sleep(0.5)
+    s.close()
+    assert closed_at is not None, "server never cut the dribbling client"
+    assert closed_at < 8, closed_at
+
 header = connect(b"G")
 body = connect(
     b"POST /repo.db/chunks HTTP/1.1\r\n"
@@ -117,6 +146,16 @@ expect_closed(header)
 expect_closed(body)
 print("  PASS: partial headers and bodies do not block healthy requests")
 print("  PASS: plaintext read deadlines close stalled clients")
+
+# A never-ending header, one byte at a time.
+expect_dribble_closed(b"GET /repo.db/roo")
+# A body that never reaches its declared Content-Length.
+expect_dribble_closed(
+    b"POST /repo.db/chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\nContent-Length: 100000\r\n\r\n"
+)
+healthy_request()
+print("  PASS: dribbling header and body clients are cut by the request deadline")
 PY
 stop_server_with_stalled_clients "$PORT"
 
