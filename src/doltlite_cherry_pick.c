@@ -69,7 +69,7 @@ int applyMergedCatalogAndCommit(
   int *pnConflicts,
   char *hexBuf
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
+  ChunkStore *cs;
   DoltliteTxnState savedState;
   ProllyHash mergedCatHash;
   ProllyHash liveMergedCatHash;
@@ -80,6 +80,10 @@ int applyMergedCatalogAndCommit(
   const char *zOpLabel;
   int rc;
 
+  assert( db!=0 && context!=0 );
+  assert( ancCatHash!=0 && ourCatHash!=0 && theirCatHash!=0 );
+  assert( ourHead!=0 && zMessage!=0 && pnConflicts!=0 );
+  cs = doltliteGetChunkStore(db);
   memset(&savedState, 0, sizeof(savedState));
   if( hexBuf ) hexBuf[0] = '\0';
   bPreferOurMaster = (sqlite3_strnicmp(zMessage, "Revert", 6)==0);

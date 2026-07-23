@@ -55,6 +55,8 @@ static int doltliteRebaseCollectReplaySet(
   int upstreamInit = 0;
   int visitedInit = 0;
   int i, j;
+  assert( db!=0 && pHeadHash!=0 && pUpstreamHash!=0 );
+  assert( paReplay!=0 && pnReplay!=0 );
 
   *paReplay = 0;
   *pnReplay = 0;
@@ -173,8 +175,8 @@ static int doltliteRebaseLinearReplay(
   const char *zUpstream,
   char **pzFinalMessage
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
+  ChunkStore *cs;
+  int sealTopLevel;
   ProllyHash upstreamHash, headHash;
   ProllyHash *aReplay = 0;
   int nReplay = 0;
@@ -185,6 +187,9 @@ static int doltliteRebaseLinearReplay(
   int i;
   char *zFailedMsg = 0;
   int bConflict = 0;
+  assert( db!=0 && context!=0 && zUpstream!=0 && pzFinalMessage!=0 );
+  cs = doltliteGetChunkStore(db);
+  sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
 
   *pzFinalMessage = 0;
   memset(&saved, 0, sizeof(saved));

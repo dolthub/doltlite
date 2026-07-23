@@ -44,13 +44,13 @@ int mergeFastForward(
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead
 ){
-  assert( db!=0 && cs!=0 && pOurHead!=0 && pTheirHead!=0 );
   DoltliteCommit theirCommit;
   DoltliteTxnState savedState;
   int graphLocked = 0;
   int rc;
   char hx[PROLLY_HASH_SIZE*2+1];
 
+  assert( db!=0 && cs!=0 && pOurHead!=0 && pTheirHead!=0 );
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&savedState, 0, sizeof(savedState));
 

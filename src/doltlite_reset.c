@@ -331,6 +331,8 @@ static void doltliteResetFunc(
   u8 isMerging = 0;
   int bSucceeded = 0;
 
+  assert( context!=0 );
+  assert( argc>=0 );
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto reset_cleanup;

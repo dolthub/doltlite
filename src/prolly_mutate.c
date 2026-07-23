@@ -1337,6 +1337,7 @@ replace_batch_cleanup:
 int prollyMutateFlush(ProllyMutator *pMut){
   int rc;
 
+  assert( pMut!=0 && pMut->pEdits!=0 && pMut->pStore!=0 );
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
     return SQLITE_OK;
