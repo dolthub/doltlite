@@ -1709,9 +1709,12 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   rc = flushDeferredEdits(pBtree, pBt);
   if( rc!=SQLITE_OK ) return rc;
 
-  {
-    extern void doltliteUpdateSchemaHashes(sqlite3 *db);
-    doltliteUpdateSchemaHashes(db);
+  /* A new connection starts with only the runtime sqlite_master entry.
+  ** Repository seeding runs before that schema can be queried, and there
+  ** are no user-table hashes to refresh in that state. */
+  if( pBtree->cat.n>1 ){
+    rc = doltliteUpdateSchemaHashes(db);
+    if( rc!=SQLITE_OK ) return rc;
   }
   return serializeCatalog(db->aDb[0].pBt, ppOut, pnOut);
 }

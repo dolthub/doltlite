@@ -27,7 +27,6 @@ typedef unsigned char u8;
 typedef unsigned int Pgno;
 
 extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 extern int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore);
 extern int doltliteRemoteSrvApplyRefsForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
@@ -1041,7 +1040,8 @@ static void run_savepoint_catalog_restore(void){
 
   memset(&fakeHash, 0x5a, sizeof(fakeHash));
   check("savepoint_begin", execSql(db, "SAVEPOINT sp;")==SQLITE_OK);
-  doltliteSetTableSchemaHash(db, iTable, &fakeHash);
+  check("set_fake_schema_hash",
+      doltliteSetTableSchemaHash(db, iTable, &fakeHash)==SQLITE_OK);
   check("rollback_to", execSql(db, "ROLLBACK TO sp;")==SQLITE_OK);
   check("release_sp", execSql(db, "RELEASE sp;")==SQLITE_OK);
 
@@ -1152,6 +1152,108 @@ static void run_session_string_setter_oom(void){
       strcmp(queryScalarText(
           db, "SELECT dolt_config('user.email')"),
           "original@example.com")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static int denySchemaMasterRead(
+  void *pCtx,
+  int action,
+  const char *zArg1,
+  const char *zArg2,
+  const char *zDb,
+  const char *zTrigger
+){
+  (void)pCtx;
+  (void)zArg2;
+  (void)zDb;
+  (void)zTrigger;
+  if( action==SQLITE_READ && zArg1
+   && strcmp(zArg1, "sqlite_master")==0 ){
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+static void run_schema_hash_error_propagation(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash fakeHash;
+  const char *zResult;
+  int nLogBefore;
+
+  printf("=== Schema Hash Error Propagation Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_schema_hash_error_propagation");
+  removeDbFiles(dbpath);
+
+  check("schema_hash_open_db", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("schema_hash_create_base", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  check("schema_hash_commit_base",
+      strlen(queryScalarText(
+          db, "SELECT dolt_commit('-A', '-m', 'base')"))==40);
+
+  check("schema_hash_set_authorizer",
+      sqlite3_set_authorizer(db, denySchemaMasterRead, 0)==SQLITE_OK);
+  check("schema_hash_prepare_error_propagated",
+      doltliteUpdateSchemaHashes(db)==SQLITE_AUTH);
+  check("schema_hash_clear_authorizer",
+      sqlite3_set_authorizer(db, 0, 0)==SQLITE_OK);
+
+  memset(&fakeHash, 0x5a, sizeof(fakeHash));
+  check("schema_hash_missing_table_reported",
+      doltliteSetTableSchemaHash(
+          db, (Pgno)0x7ffffffe, &fakeHash)==SQLITE_NOTFOUND);
+
+  check("schema_hash_create_virtual_table", execSql(db,
+      "CREATE VIRTUAL TABLE docs USING fts5(body);")==SQLITE_OK);
+  check("schema_hash_virtual_root_ignored",
+      doltliteUpdateSchemaHashes(db)==SQLITE_OK);
+  check("schema_hash_commit_virtual_table",
+      strlen(queryScalarText(
+          db, "SELECT dolt_commit('-A', '-m', 'virtual table')"))==40);
+
+  check("schema_hash_alter_table", execSql(db,
+      "ALTER TABLE t ADD COLUMN extra TEXT;")==SQLITE_OK);
+  nLogBefore = atoi(queryScalarText(db, "SELECT count(*) FROM dolt_log"));
+
+  gRegressionFaultCode = 954;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  zResult = queryScalarText(
+      db, "SELECT dolt_commit('-A', '-m', 'schema change')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("schema_hash_canonicalization_failure_injected",
+      gRegressionFaultHits==1);
+  check("schema_hash_commit_reports_refresh_failure",
+      strstr(zResult, "ERROR:")!=0);
+  check("schema_hash_failed_commit_does_not_advance_log",
+      atoi(queryScalarText(db, "SELECT count(*) FROM dolt_log"))==nLogBefore);
+  check("schema_hash_failed_commit_keeps_ddl",
+      strcmp(queryScalarText(db,
+          "SELECT count(*) FROM pragma_table_info('t') "
+          "WHERE name='extra'"), "1")==0);
+
+  check("schema_hash_retry_commit_succeeds",
+      strlen(queryScalarText(
+          db, "SELECT dolt_commit('-A', '-m', 'schema change')"))==40);
+  check("schema_hash_retry_records_schema_diff",
+      strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD','t')"),
+          "1")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("schema_hash_reopen_db", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  check("schema_hash_reopen_has_column",
+      strcmp(queryScalarText(db,
+          "SELECT count(*) FROM pragma_table_info('t') "
+          "WHERE name='extra'"), "1")==0);
 
   sqlite3_close(db);
   removeDbFiles(dbpath);
@@ -8472,6 +8574,7 @@ static const RegressionCase aCases[] = {
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
   { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore },
   { "session_string_setter_oom", "Session String Setter OOM Test", run_session_string_setter_oom },
+  { "schema_hash_error_propagation", "Schema Hash Error Propagation Test", run_schema_hash_error_propagation },
   { "refs_blob_corruption", "Refs Blob Corruption Test", run_refs_blob_corruption },
   { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },

@@ -1528,17 +1528,20 @@ void sqlite3BtreeIncrblobCursor(BtCursor *pCur){
 #endif
 
 
-void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
+int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   Btree *pBtree;
   int i;
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pH ){
+    return SQLITE_MISUSE;
+  }
   pBtree = db->aDb[0].pBt;
   for(i=0; i<pBtree->cat.n; i++){
     if( pBtree->cat.a[i].iTable==iTable ){
       memcpy(&pBtree->cat.a[i].schemaHash, pH, sizeof(ProllyHash));
-      return;
+      return SQLITE_OK;
     }
   }
+  return SQLITE_NOTFOUND;
 }
 
 /* Declared in doltlite_internal.h. Forward-declared here because that

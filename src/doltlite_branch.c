@@ -839,7 +839,11 @@ static void doltConnectBranchFunc(
   sqlite3_result_int(ctx, 0);
 }
 
-int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
+static int checkoutBranchForRebase(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pKnownOldCatHash
+){
   ChunkStore *cs = doltliteGetChunkStore(db);
   CheckoutMutationCtx m;
   char *zCurrentBranch = 0;
@@ -853,10 +857,14 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ) return SQLITE_NOMEM;
 
-  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zCurrentBranch);
-    return rc;
+  if( pKnownOldCatHash ){
+    memcpy(&m.oldCatHash, pKnownOldCatHash, sizeof(ProllyHash));
+  }else{
+    rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      return rc;
+    }
   }
 
   m.haveOldState = 1;
@@ -876,6 +884,19 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   }
   sqlite3_free(zCurrentBranch);
   return rc;
+}
+
+int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
+  return checkoutBranchForRebase(db, zBranch, 0);
+}
+
+int doltliteCheckoutBranchForRebaseWithOldCatalog(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pOldCatHash
+){
+  if( !pOldCatHash ) return SQLITE_MISUSE;
+  return checkoutBranchForRebase(db, zBranch, pOldCatHash);
 }
 
 /* A restored table's indexes must follow it: named indexes present only in

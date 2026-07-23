@@ -956,7 +956,8 @@ int doltliteRegisterBlameTables(sqlite3 *db);
 int doltliteRegisterAtTables(sqlite3 *db);
 int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);
-void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
+int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
+int doltliteUpdateSchemaHashes(sqlite3 *db);
 
 /* Post-merge / verify constraint detectors (doltlite_merge_constraints.c).
 ** azTables/nTables optionally restrict which tables are scanned; nTables<=0
@@ -1126,6 +1127,11 @@ int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCat
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
 int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
+int doltliteCheckoutBranchForRebaseWithOldCatalog(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pOldCatHash
+);
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
 int doltliteVcSealActiveSavepoints(sqlite3 *db);
 int doltliteVcSealSavepointError(sqlite3 *db);
