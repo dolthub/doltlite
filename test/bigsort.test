@@ -24,10 +24,27 @@ set testprefix bigsort
 # memory.  Make sure the host has at least 8GB available before running
 # this test.
 #
+# Prefer MemAvailable (free's last column on modern Linux) over total
+# RAM: GHA runners advertise 16GB total while concurrent jobs leave far
+# less free, and CREATE INDEX over 300k*10KB blobs then fails as
+# bigsort-1.1 instead of thrashing. Fall back to total when the
+# available column is missing.
+#
 # Update: https://sqlite.org/src/info/7c96a56 adds assert() statements
 # that make this test too slow to run with SQLITE_DEBUG builds.
 #
-if {[catch {exec free | grep Mem:} out] || [lindex $out 1]<8000000} {
+set bigsort_skip 1
+if {![catch {exec free | grep Mem:} out]} {
+  # free Mem: total used free shared buff/cache available  (KiB)
+  set total [lindex $out 1]
+  set avail [lindex $out 6]
+  if {$avail ne "" && [string is integer -strict $avail]} {
+    if {$avail >= 8000000} { set bigsort_skip 0 }
+  } elseif {$total ne "" && [string is integer -strict $total]} {
+    if {$total >= 8000000} { set bigsort_skip 0 }
+  }
+}
+if {$bigsort_skip} {
   finish_test
   return
 }

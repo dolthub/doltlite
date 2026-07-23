@@ -149,8 +149,8 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
     ** a shorthand for HEAD and must fail like any unknown ref). */
     rc = doltliteResolveBaseRef(db, zRef, pCommit);
   }else if( base_len==0 ){
-    /* The ref is nothing but operators (e.g. "^", "~2"): the base is HEAD. */
-    rc = doltliteResolveBaseRef(db, "HEAD", pCommit);
+    /* Parent-walk operators require an explicit base ref. */
+    rc = SQLITE_ERROR;
   }else{
     base_buf = sqlite3_malloc(base_len + 1);
     if( !base_buf ) return SQLITE_NOMEM;
