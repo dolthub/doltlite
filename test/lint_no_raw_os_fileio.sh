@@ -8,6 +8,14 @@ TMPFILE=$(mktemp)
 trap "rm -f $TMPFILE" EXIT
 
 cd "$ROOT" || exit 2
+
+if ! command -v rg >/dev/null 2>&1; then
+  echo "lint_no_raw_os_fileio: ripgrep (rg) is required but not found" >&2
+  echo "  install ripgrep or run this lint on a host that has it; refusing to" >&2
+  echo "  pass vacuously without the tool that performs the scan." >&2
+  exit 2
+fi
+
 shopt -s nullglob
 
 FILES=(
@@ -30,11 +38,13 @@ raw_matches() {
 # Credentials and entropy are OS-owned sidecar configuration, not database
 # storage. This module also needs OS APIs to enforce private-file modes.
 # doltlite_gc.c and chunk_store.c include unistd.h only for crash-test _exit().
-# doltlite_net.h uses Unix descriptors for sockets, not database files.
+# doltlite_net.h uses Unix descriptors for sockets, not database files; it
+# needs fcntl (and <fcntl.h>) only to toggle O_NONBLOCK on a socket fd.
 raw_matches \
   | grep -Ev '^src/doltlite_creds\.c:' \
   | grep -Ev '^src/(doltlite_gc|chunk_store)\.c:[0-9]+:#include <unistd\.h>' \
-  | grep -Ev '^src/doltlite_net\.h:[0-9]+:#include <unistd\.h>' \
+  | grep -Ev '^src/doltlite_net\.h:[0-9]+:#include <(unistd|fcntl)\.h>' \
+  | grep -Ev '^src/doltlite_net\.h:[0-9]+:.*\bfcntl[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remotesrv\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_http_remote\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remote\.c:[0-9]+:.*\bwrite[[:space:]]*\(' \
