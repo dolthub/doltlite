@@ -39,9 +39,19 @@ struct ParsedColumn {
   char *zDef;
 };
 
+typedef DoltliteConflictTable MergeConflictTable;
+
 #define SCHEMA_MERGE_DEFAULT 0
 #define SCHEMA_MERGE_OURS    1
 #define SCHEMA_MERGE_THEIRS  2
+
+typedef struct SchemaRootpageRemap SchemaRootpageRemap;
+struct SchemaRootpageRemap {
+  Pgno oldPg;
+  Pgno newPg;
+};
+
+/* ── rows (doltlite_merge_rows.c) ─────────────────────────────────────── */
 
 int canFastMerge(
   sqlite3 *db,
@@ -62,6 +72,8 @@ int mergeTableRows(
   int nIndexes
 );
 
+/* ── schema IR (doltlite_merge_schema.c) ──────────────────────────────── */
+
 int parseColumns(
   const char *zSql,
   ParsedColumn **ppCols, int *pnCols
@@ -75,6 +87,146 @@ int trySchemaColumnMerge(
   char ***ppAddCols, int *pnAddCols,
   int *pSchemaChoice,
   char **pzErrDetail
+);
+
+/* ── catalog helpers shared with pass1 (doltlite_merge.c) ────────────── */
+
+void freeConflictRows(DoltliteConflictRow *aRows, int nRows);
+void freeAddedColumns(char **azCols, int nCols);
+
+int appendConflictTable(
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  const char *zName,
+  int nConflicts,
+  DoltliteConflictRow *aConflictRows
+);
+
+int appendSchemaConflict(
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  const char *zTable,
+  const char *zObject,
+  int *pAddedTable
+);
+
+int recordSchemaAddColumns(
+  SchemaMergeAction **ppSchemaActions,
+  int *pnSchemaActions,
+  const char *zName,
+  char **azAddCols,
+  int nAddCols
+);
+
+int schemaEntryChangedByName(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aSide, int nSide,
+  const char *zName
+);
+
+int hasSchemaConflictObject(
+  MergeConflictTable *aConflictTables,
+  int nConflictTables,
+  const char *zObject
+);
+
+int hasSchemaConflictTable(
+  MergeConflictTable *aConflictTables,
+  int nConflictTables,
+  const char *zTable
+);
+
+int hasAnySchemaConflict(
+  MergeConflictTable *aConflictTables,
+  int nConflictTables
+);
+
+int replayDropsDisjointSchemaObject(
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema
+);
+
+SchemaEntry *findSchemaEntryByRootpage(
+  SchemaEntry *aSchema,
+  int nSchema,
+  Pgno iRootpage
+);
+
+struct TableEntry *findCatalogEntryBySchemaObject(
+  struct TableEntry *aCat,
+  int nCat,
+  SchemaEntry *aSchema,
+  int nSchema,
+  const char *zType,
+  const char *zName,
+  const char *zTblName
+);
+
+int normalizeTheirsToMergedLayout(
+  sqlite3 *db,
+  const ProllyHash *pTheirsRoot,
+  u8 flags,
+  const char *zOursSql,
+  const char *zTheirsSql,
+  ProllyHash *pOutRoot
+);
+
+int tryResolveSchemaDivergence(
+  sqlite3 *db,
+  const char *zName,
+  const ProllyHash *pCatAnc,
+  const ProllyHash *pCatOurs,
+  const ProllyHash *pCatTheirs,
+  SchemaMergeAction **ppSchemaActions,
+  int *pnSchemaActions,
+  int *pSkipRowMerge,
+  int *pSchemaChoice,
+  char **pzErrMsg
+);
+
+/* ── pass1 (doltlite_merge_pass1.c) ───────────────────────────────────── */
+
+int mergeAppendReindexName(char ***paz, int *pn, const char *zName);
+
+int mergeCatalogPass1(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  struct TableEntry *aMerged, int *pnMerged,
+  MergeConflictTable **ppConflictTables, int *pnConflictTables,
+  int *pTotalConflicts,
+  char **pzErrMsg,
+  const ProllyHash *pCatAnc,
+  const ProllyHash *pCatOurs,
+  const ProllyHash *pCatTheirs,
+  SchemaMergeAction **ppSchemaActions, int *pnSchemaActions,
+  int bDisjointSchemaChanges,
+  int bPreferOurMaster,
+  char ***pazReindex, int *pnReindex
+);
+
+/* ── pass2 (doltlite_merge_pass2.c) ───────────────────────────────────── */
+
+int mergeCatalogPass2(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  struct TableEntry *aMerged, int *pnMerged,
+  Pgno *piNextMerged,
+  int bDisjointSchemaChanges,
+  MergeConflictTable *aConflictTables,
+  int nConflictTables,
+  SchemaRootpageRemap **ppaRemap,
+  int *pnRemap,
+  char ***pazReindex,
+  int *pnReindex
 );
 
 #endif /* DOLTLITE_MERGE_INT_H */
