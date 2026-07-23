@@ -1047,7 +1047,7 @@ int doltliteSerializeConflicts(ChunkStore *cs,
                                DoltliteConflictTable *aTables,
                                int nTables, ProllyHash *pHash);
 
-/* Index key construction helpers (see doltlite_merge.c). Exposed for
+/* Index key construction helpers (see doltlite_merge_rows.c). Exposed for
 ** dolt_conflicts_resolve --theirs to maintain secondary indexes when
 ** writing theirs's row directly via the raw-row mutation path. */
 void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
