@@ -497,12 +497,18 @@ static int rebaseReadPlan(sqlite3 *db, RebasePlanRow **paPlan, int *pnPlan){
         (const char*)sqlite3_column_text(pStmt, 3));
     if( !r->zAction || !r->zCommitMessage ){
       rc = SQLITE_NOMEM;
+      sqlite3_free(r->zAction);
+      sqlite3_free(r->zCommitMessage);
       goto fail;
     }
     nPlan++;
+    if( sqlite3FaultSim(951) ){
+      rc = SQLITE_IOERR;
+      break;
+    }
   }
+  if( rc!=SQLITE_DONE ) goto fail;
   sqlite3_finalize(pStmt);
-  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
 
   *paPlan = aPlan;
   *pnPlan = nPlan;
@@ -527,6 +533,7 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   int rc;
 
   if( !cs || !zBranch || !zBranch[0] ) return SQLITE_ERROR;
+  if( sqlite3FaultSim(952) ) return SQLITE_IOERR;
   rc = chunkStoreFindBranch(cs, zBranch, &headHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
@@ -765,54 +772,93 @@ static int rebaseDeleteWorkingBranchRefs(sqlite3 *db, ChunkStore *cs, void *pArg
   return chunkStoreDeleteBranch(cs, zWorkingBranch);
 }
 
-static void rebaseDiscardWorkingBranch(
+static void rebaseKeepFirstError(int *pRc, int rc){
+  if( *pRc==SQLITE_OK && rc!=SQLITE_OK ) *pRc = rc;
+}
+
+static void rebaseResultRecoveryFailure(sqlite3_context *context, int rc){
+  sqlite3_result_error(context,
+    "rebase recovery failed — pre-rebase state may not have been fully restored",
+    -1);
+  sqlite3_result_error_code(context, rc);
+}
+
+static int rebaseDiscardWorkingBranch(
   sqlite3 *db,
   const char *zOrigBranch,
   const char *zWorkingBranch
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc = SQLITE_OK;
+  int rc2;
 
-  (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  rc2 = sqlite3FaultSim(953) ? SQLITE_IOERR :
+      sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  rebaseKeepFirstError(&rc, rc2);
   doltliteClearSessionRebaseState(db);
-  (void)doltlitePersistWorkingSet(db);
+  rc2 = doltlitePersistWorkingSet(db);
+  rebaseKeepFirstError(&rc, rc2);
 
   if( zOrigBranch && zOrigBranch[0] ){
-    if( doltliteCheckoutBranchForRebase(db, zOrigBranch)!=SQLITE_OK ){
-      (void)rebaseRestoreBranchState(db, zOrigBranch);
+    rc2 = doltliteCheckoutBranchForRebase(db, zOrigBranch);
+    if( rc2!=SQLITE_OK ){
+      rc2 = rebaseRestoreBranchState(db, zOrigBranch);
+      rebaseKeepFirstError(&rc, rc2);
     }
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
-    (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
-    (void)chunkStoreSerializeRefs(cs);
-    (void)chunkStoreCommit(cs);
-    (void)doltlitePersistWorkingSet(db);
+    rc2 = chunkStoreDeleteBranch(cs, zWorkingBranch);
+    if( rc2==SQLITE_NOTFOUND ) rc2 = SQLITE_OK;
+    rebaseKeepFirstError(&rc, rc2);
+    rc2 = chunkStoreSerializeRefs(cs);
+    rebaseKeepFirstError(&rc, rc2);
+    if( rc2==SQLITE_OK ){
+      rc2 = chunkStoreCommit(cs);
+      rebaseKeepFirstError(&rc, rc2);
+    }
+    rc2 = doltlitePersistWorkingSet(db);
+    rebaseKeepFirstError(&rc, rc2);
   }
+  return rc;
 }
 
-static void rebaseAbortConflictedContinue(
+static int rebaseAbortConflictedContinue(
   sqlite3 *db,
   const char *zOrigBranch,
   const char *zReturnBranch,
   const char *zWorkingBranch
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc = SQLITE_OK;
+  int rc2;
 
-  (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  rc2 = sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  rebaseKeepFirstError(&rc, rc2);
   doltliteClearSessionRebaseState(db);
   doltliteClearSessionMergeState(db);
   if( zOrigBranch && zOrigBranch[0] ){
-    (void)rebaseRestoreBranchState(db, zOrigBranch);
+    rc2 = rebaseRestoreBranchState(db, zOrigBranch);
+    rebaseKeepFirstError(&rc, rc2);
     doltliteClearSessionRebaseState(db);
   }
   if( cs && zReturnBranch && zReturnBranch[0] ){
-    (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    rebaseKeepFirstError(&rc, rc2);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
-    (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
-    (void)chunkStoreSerializeRefs(cs);
-    (void)chunkStoreCommit(cs);
-    (void)doltlitePersistWorkingSet(db);
+    rc2 = chunkStoreDeleteBranch(cs, zWorkingBranch);
+    if( rc2==SQLITE_NOTFOUND ) rc2 = SQLITE_OK;
+    rebaseKeepFirstError(&rc, rc2);
+    rc2 = chunkStoreSerializeRefs(cs);
+    rebaseKeepFirstError(&rc, rc2);
+    if( rc2==SQLITE_OK ){
+      rc2 = chunkStoreCommit(cs);
+      rebaseKeepFirstError(&rc, rc2);
+    }
+    rc2 = doltlitePersistWorkingSet(db);
+    rebaseKeepFirstError(&rc, rc2);
   }
+  return rc;
 }
 
 static void doltliteRebaseInteractiveStart(
@@ -954,7 +1000,11 @@ static void doltliteRebaseInteractiveStart(
 
 fail:
   if( bWorkingBranchCreated ){
-    rebaseDiscardWorkingBranch(db, zOrig, zWorking);
+    int recoveryRc = rebaseDiscardWorkingBranch(db, zOrig, zWorking);
+    if( recoveryRc!=SQLITE_OK ){
+      rc = recoveryRc;
+      zFailMsg = 0;
+    }
   }
   sqlite3_free(zOrig);
   sqlite3_free(zReturnBranch);
@@ -979,6 +1029,7 @@ static void doltliteRebaseInteractiveAbort(
   char *zOrigBranch = 0;
   char *zWorking = 0;
   int rc;
+  int rc2;
 
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0,
                                 &zOrigBranchConst, &zReturnBranchConst);
@@ -997,32 +1048,21 @@ static void doltliteRebaseInteractiveAbort(
     return;
   }
 
-  rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
+  rc = rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
   if( cs && zReturnBranch && zReturnBranch[0] ){
-    rc = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zReturnBranch);
-      sqlite3_free(zWorking);
-      sqlite3_free(zOrigBranch);
-      sqlite3_result_error_code(context, rc);
-      return;
-    }
+    rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    rebaseKeepFirstError(&rc, rc2);
   }
-  rc = doltlitePersistWorkingSet(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zReturnBranch);
-    sqlite3_free(zWorking);
-    sqlite3_free(zOrigBranch);
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
+  rc2 = doltlitePersistWorkingSet(db);
+  rebaseKeepFirstError(&rc, rc2);
 
-  rc = doltliteVcSealBranchStyleTxn(db);
+  rc2 = doltliteVcSealBranchStyleTxn(db);
+  rebaseKeepFirstError(&rc, rc2);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     sqlite3_free(zOrigBranch);
-    sqlite3_result_error_code(context, rc);
+    rebaseResultRecoveryFailure(context, rc);
     return;
   }
 
@@ -1046,6 +1086,8 @@ static void doltliteRebaseInteractiveContinue(
   RebasePlanRow *aPlan = 0;
   int nPlan = 0;
   int rc;
+  int rc2;
+  int recoveryRc;
   int i;
   int bPlanDropped = 0;
   int bSkipConstraintDetect = (!db->autoCommit || db->pSavepoint!=0);
@@ -1169,29 +1211,47 @@ static void doltliteRebaseInteractiveContinue(
 
 abort_err_conflict:
   rebaseFreePlan(aPlan, nPlan);
-  rebaseAbortConflictedContinue(db, zOrigBranch, zReturnBranch, zWorking);
+  recoveryRc = rebaseAbortConflictedContinue(
+      db, zOrigBranch, zReturnBranch, zWorking);
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
   }
   sqlite3_free(zOrigBranch);
   sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);
-  sqlite3_result_error(context,
-    "data conflicts from rebase — rebase has been aborted", -1);
+  if( recoveryRc!=SQLITE_OK ){
+    rebaseResultRecoveryFailure(context, recoveryRc);
+  }else{
+    sqlite3_result_error(context,
+      "data conflicts from rebase — rebase has been aborted", -1);
+  }
   return;
 
 abort_err:
   rebaseFreePlan(aPlan, nPlan);
-  if( bPlanDropped ){
-    rebaseDiscardWorkingBranch(db, zOrigBranch ? zOrigBranch : "main", zWorking);
-    if( cs && zReturnBranch && zReturnBranch[0] ){
-      (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
-    }
+  if( !bPlanDropped ){
+    sqlite3_free(zOrigBranch);
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_result_error(context, "rebase failed", -1);
+    return;
+  }
+  recoveryRc = SQLITE_OK;
+  recoveryRc = rebaseDiscardWorkingBranch(
+      db, zOrigBranch ? zOrigBranch : "main", zWorking);
+  if( cs && zReturnBranch && zReturnBranch[0] ){
+    rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    rebaseKeepFirstError(&recoveryRc, rc2);
   }
   sqlite3_free(zOrigBranch);
   sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);
-  sqlite3_result_error(context, "rebase failed — branch restored to pre-rebase state", -1);
+  if( recoveryRc!=SQLITE_OK ){
+    rebaseResultRecoveryFailure(context, recoveryRc);
+  }else{
+    sqlite3_result_error(context,
+      "rebase failed — branch restored to pre-rebase state", -1);
+  }
   return;
 
 abort_err_silent:

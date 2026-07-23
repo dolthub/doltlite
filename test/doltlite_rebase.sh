@@ -53,7 +53,7 @@ run_test_match "invalid_plan_continue_errors" \
   "SELECT dolt_rebase('-i', 'main');
    UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';
    SELECT dolt_rebase('--continue');" \
-  "rebase failed — branch restored to pre-rebase state|no rebase in progress" \
+  "rebase failed|no rebase in progress" \
   "$DB"
 run_test "invalid_plan_branch_preserved" \
   "SELECT active_branch();" \

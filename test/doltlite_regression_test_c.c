@@ -5770,6 +5770,134 @@ static void run_rebase_temp_shadow_ignored(void){
   removeDbFiles(dbpath);
 }
 
+static void run_rebase_plan_read_error_is_not_partial(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Rebase Plan Read Error Is Not Partial Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_plan_read_error");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_plan_read_error", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_plan_read_error", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_commit('-A', '-m', 'f1');"
+    "INSERT INTO t VALUES (3, 3);"
+    "SELECT dolt_commit('-A', '-m', 'f2');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (10, 10);"
+    "SELECT dolt_commit('-A', '-m', 'm1');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  check("start_interactive_rebase_for_plan_read_error",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started")!=0);
+
+  gRegressionFaultCode = 951;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("rebase_plan_read_error_was_injected", gRegressionFaultHits==1);
+  check("rebase_plan_read_error_is_returned",
+        strstr(res, "ERROR: rebase failed")!=0);
+  check("rebase_plan_read_error_does_not_claim_restoration",
+        strstr(res, "branch restored to pre-rebase state")==0);
+  check("rebase_plan_read_error_keeps_working_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"),
+               "dolt_rebase_feat")==0);
+  check("rebase_plan_read_error_keeps_full_plan",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
+  check("rebase_plan_read_error_can_abort",
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"),
+               "Interactive rebase aborted")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_rebase_recovery_failure_is_reported(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Rebase Recovery Failure Is Reported Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_recovery_failure");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_recovery_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_recovery_failure", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "UPDATE t SET v=2 WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'f1');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v=3 WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'm1');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  check("start_interactive_rebase_for_recovery_failure",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started")!=0);
+
+  gRegressionFaultCode = 952;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("rebase_recovery_failure_was_injected", gRegressionFaultHits==1);
+  check("rebase_recovery_failure_is_returned",
+        strstr(res, "ERROR: rebase recovery failed")!=0);
+  check("rebase_recovery_failure_does_not_claim_restoration",
+        strstr(res, "branch restored to pre-rebase state")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_abort_recovery_failure",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_abort_recovery_failure", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_commit('-A', '-m', 'f1');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (3, 3);"
+    "SELECT dolt_commit('-A', '-m', 'm1');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  check("start_interactive_rebase_for_abort_recovery_failure",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started")!=0);
+
+  gRegressionFaultCode = 953;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_rebase('--abort')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("rebase_abort_recovery_failure_was_injected", gRegressionFaultHits==1);
+  check("rebase_abort_recovery_failure_is_returned",
+        strstr(res, "ERROR: rebase recovery failed")!=0);
+  check("rebase_abort_recovery_failure_does_not_report_success",
+        strstr(res, "Interactive rebase aborted")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_continue_conflict_abort_restores_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -8335,6 +8463,8 @@ static const RegressionCase aCases[] = {
   { "merge_abort_after_reopen_restores_durable_state", "Merge Abort After Reopen Restores Durable State Test", run_merge_abort_after_reopen_restores_durable_state },
   { "rebase_continue_without_active_preserves_durable_state", "Rebase Continue Without Active Preserves Durable State Test", run_rebase_continue_without_active_preserves_durable_state },
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
+  { "rebase_plan_read_error_is_not_partial", "Rebase Plan Read Error Is Not Partial Test", run_rebase_plan_read_error_is_not_partial },
+  { "rebase_recovery_failure_is_reported", "Rebase Recovery Failure Is Reported Test", run_rebase_recovery_failure_is_reported },
   { "rebase_continue_conflict_abort_restores_durable_state", "Rebase Continue Conflict Abort Restores Durable State Test", run_rebase_continue_conflict_abort_restores_durable_state },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
