@@ -207,6 +207,7 @@ static int csCanonicalFilename(
 }
 
 static int csSyncFile(ChunkStore *cs){
+  if( cs->noSync ) return SQLITE_OK;
   return sqlite3OsSync(cs->file.pFile,
                        cs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
 }

@@ -922,6 +922,8 @@ int sqlite3BtreeSetMmapLimit(Btree *p, sqlite3_int64 szMmap){
 int prollyBtreeSetPagerFlags(Btree *p, unsigned pgFlags){
   if( p && p->pBt ){
     p->pBt->store.fullFsync = (pgFlags & PAGER_FULLFSYNC) ? 1 : 0;
+    p->pBt->store.noSync =
+        (pgFlags & PAGER_SYNCHRONOUS_MASK)==PAGER_SYNCHRONOUS_OFF;
   }
   return SQLITE_OK;
 }

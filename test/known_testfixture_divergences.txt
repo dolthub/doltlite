@@ -1649,22 +1649,20 @@ io io-5.4  # VFS I/O op-count / file-size; chunk store has a different I/O model
 io io-5.5  # VFS I/O op-count / file-size; chunk store has a different I/O model
 
 # sync — asserts the number of fsync calls (sqlite_sync_count). DoltLite syncs the
-# chunk store differently, so the count differs. Internal I/O-counter divergence.
+# chunk store differently, so the on/full counts differ. Internal I/O-counter
+# divergence. (synchronous=OFF now skips the sync and matches stock.)
 sync sync-1.1  # fsync count differs: chunk store I/O model
 sync sync-1.2  # fsync count differs: chunk store I/O model
 sync sync-1.3  # fsync count differs: chunk store I/O model
-sync sync-1.4  # fsync count differs: chunk store I/O model
 
 # sync2 — fsync-count variants (sqlite_sync_count under different journal/sync
 # settings). Same internal I/O-counter divergence as sync.
 sync2 sync2-1.1  # fsync count differs: chunk store I/O model
 sync2 sync2-1.2.3  # fsync count differs: chunk store I/O model
-sync2 sync2-1.3.3  # fsync count differs: chunk store I/O model
 sync2 sync2-1.4.3  # fsync count differs: chunk store I/O model
 sync2 sync2-1.6  # fsync count differs: chunk store I/O model
 sync2 sync2-1.8.3  # fsync count differs: chunk store I/O model
 sync2 sync2-1.9  # fsync count differs: chunk store I/O model
-sync2 sync2-1.10.3  # fsync count differs: chunk store I/O model
 
 # multiplex4 — the multiplex VFS splits a database across numbered files
 # (name.001, ...). DoltLite uses its own chunk store, not the multiplex VFS, so
@@ -4454,10 +4452,8 @@ sysfault sysfault-2.2-vfsfault-transient.56
 sysfault sysfault-3-vfsfault-persistent.1
 sysfault sysfault-3-vfsfault-persistent.2
 sysfault sysfault-3-vfsfault-persistent.3
-sysfault sysfault-3-vfsfault-persistent.4
 sysfault sysfault-3-vfsfault-transient.1
 sysfault sysfault-3-vfsfault-transient.3
-sysfault sysfault-3-vfsfault-transient.4
 
 # MVCC: no reader-blocks-writer / exclusive-blocks-reader lock errors
 tclsqlite tcl-10.18
