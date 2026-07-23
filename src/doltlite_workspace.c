@@ -563,9 +563,29 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   int newStaged;
   (void)pRowid;
   if( argc==1 ){
-    pBase->zErrMsg = sqlite3_mprintf(
-        "DELETE from dolt_workspace_%s is not yet supported", p->zTableName);
-    return SQLITE_CONSTRAINT;
+    const u8 *pVal;
+    int nVal;
+    r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]));
+    if( !r ){
+      pBase->zErrMsg = sqlite3_mprintf("workspace row is no longer available");
+      return SQLITE_ABORT;
+    }
+    if( r->staged ){
+      pBase->zErrMsg = sqlite3_mprintf(
+          "cannot delete staged rows from workspace");
+      return SQLITE_ERROR;
+    }
+    /* Discard unstaged working edit: restore staged/HEAD side for this PK. */
+    if( r->diffType==PROLLY_DIFF_ADD ){
+      pVal = 0;
+      nVal = 0;
+    }else{
+      pVal = r->pOldVal;
+      nVal = r->nOldVal;
+    }
+    return doltliteApplyRawRowMutation(p->db, p->zTableName,
+                                       r->pKey, r->nKey, r->intKey,
+                                       pVal, nVal);
   }
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
     pBase->zErrMsg = sqlite3_mprintf(

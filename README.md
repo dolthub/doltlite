@@ -306,8 +306,9 @@ UPDATE dolt_workspace_ratings
 SELECT dolt_commit('-m', 'accept higher-confidence edits');
 ```
 
-`DELETE FROM dolt_workspace_<table>` and row-level staging on tables with
-secondary indexes are not implemented yet.
+`DELETE FROM dolt_workspace_<table>` discards unstaged working-set edits
+(restores the staged/HEAD side of those rows). Staged workspace rows cannot
+be deleted; unstage them first.
 
 #### Ignoring Tables (`dolt_ignore`)
 
