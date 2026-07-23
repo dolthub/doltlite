@@ -61,28 +61,40 @@ static int serializeViolations(
   ConstraintViolationTable *aTables, int nTables,
   ProllyHash *pHash
 ){
-  int sz = 4 + 2;
+  sqlite3_int64 sz = 4 + 2;
   int i, j, rc;
   u8 *buf;
   DlByteWriter w;
 
+  if( nTables<0 || nTables>0xffff ) return SQLITE_TOOBIG;
+  if( nTables>0 && !aTables ) return SQLITE_CORRUPT;
   for(i=0; i<nTables; i++){
-    int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
-    sz += 2 + nl + 4;
+    size_t nName = aTables[i].zName ? strlen(aTables[i].zName) : 0;
+    int nl;
+    if( nName>0xffff || aTables[i].nRows<0 ) return SQLITE_TOOBIG;
+    if( aTables[i].nRows>0 && !aTables[i].aRows ) return SQLITE_CORRUPT;
+    nl = (int)nName;
+    rc = dlAddSize(&sz, 2 + nl + 4);
+    if( rc!=SQLITE_OK ) return rc;
     for(j=0; j<aTables[i].nRows; j++){
-      int ni = aTables[i].aRows[j].zInfo
-             ? (int)strlen(aTables[i].aRows[j].zInfo) : 0;
-      sz += 1
-          + 4 + aTables[i].aRows[j].nKey
-          + 8
-          + 4 + aTables[i].aRows[j].nVal
-          + 4 + ni;
+      ConstraintViolationRow *r = &aTables[i].aRows[j];
+      size_t nInfo = r->zInfo ? strlen(r->zInfo) : 0;
+      if( r->nKey<0 || r->nVal<0 ) return SQLITE_CORRUPT;
+      if( (r->nKey>0 && !r->pKey) || (r->nVal>0 && !r->pVal) ){
+        return SQLITE_CORRUPT;
+      }
+      if( nInfo>INT_MAX ) return SQLITE_TOOBIG;
+      rc = dlAddSize(&sz, 21);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, r->nKey);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, r->nVal);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, (sqlite3_int64)nInfo);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
-  buf = sqlite3_malloc(sz);
+  buf = sqlite3_malloc64((sqlite3_uint64)sz);
   if( !buf ) return SQLITE_NOMEM;
-  w.p = buf;
+  dlWriterInit(&w, buf, (int)sz);
 
   dlWriteFramedHeader(&w, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION, nTables);
 
@@ -101,7 +113,11 @@ static int serializeViolations(
     }
   }
 
-  rc = chunkStorePut(cs, buf, (int)(w.p-buf), pHash);
+  if( w.err || w.p!=w.end ){
+    sqlite3_free(buf);
+    return SQLITE_CORRUPT;
+  }
+  rc = chunkStorePut(cs, buf, (int)sz, pHash);
   sqlite3_free(buf);
   return rc;
 }
@@ -380,7 +396,7 @@ static int deleteViolationRowFromCatalog(
     goto delete_violation_done;
   }
 
-  w.p = out;
+  dlWriterInit(&w, out, nData);
   dlWriteFramedHeader(&w, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION, 0);
 
   for(i=0; i<nTables; i++){
@@ -439,8 +455,9 @@ static int deleteViolationRowFromCatalog(
         w.p = pOutTableStart;
       }else{
         DlByteWriter cw;
-        cw.p = pCountOut;
+        dlWriterInit(&cw, pCountOut, 4);
         dlWriteU32(&cw, nKeep);
+        assert( !cw.err );
         nOutTables++;
       }
     }else{
@@ -454,20 +471,23 @@ static int deleteViolationRowFromCatalog(
       assert( !isMatch );
       {
         int nCopy = (int)(rd.p - pTableStart);
-        memcpy(w.p, pTableStart, nCopy);
-        w.p += nCopy;
+        dlWriteBytes(&w, pTableStart, nCopy);
         nOutTables++;
       }
     }
     sqlite3_free(zName);
   }
 
-  if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto delete_violation_done; }
+  if( rd.err || rd.p != rd.end || w.err ){
+    rc = SQLITE_CORRUPT;
+    goto delete_violation_done;
+  }
   if( deleted ){
     DlByteWriter hw;
-    hw.p = out;
+    dlWriterInit(&hw, out, 6);
     dlWriteFramedHeader(&hw, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
                         nOutTables);
+    assert( !hw.err );
     rc = storeViolationBytes(db, cs, out, (int)(w.p - out), nOutTables);
   }
 
