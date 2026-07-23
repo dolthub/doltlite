@@ -54,6 +54,39 @@ oracle() {
   fi
 }
 
+# Both engines must reject the script with a clean non-crash error.
+oracle_error() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_err"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+
+  local dolt_setup
+  dolt_setup=$(echo "$setup" | translate_for_dolt)
+  local dt_rc
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    if [ -s "$dir/dl.err" ]; then
+      echo "    doltlite err:"; sed 's/^/      /' "$dir/dl.err"
+    fi
+    if [ -s "$dir/dt.err" ]; then
+      echo "    dolt err:"; sed 's/^/      /' "$dir/dt.err"
+    fi
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_workspace tables ==="
 echo ""
 
@@ -485,6 +518,89 @@ UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id IN (1,2);
 SELECT dolt_commit('-m','range');
 " "SELECT CONCAT('R|RNG|', id, '|', v) FROM t WHERE v BETWEEN 15 AND 30 ORDER BY v, id;"
 
+# --- DELETE FROM dolt_workspace_* (discard unstaged working edits) ---
+
+oracle "workspace_delete_discards_insert" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+SELECT dolt_commit('-A','-m','seed empty');
+INSERT INTO t VALUES(42,42),(43,43);
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+" "SELECT CONCAT('R|DATA|', id, '|', val) FROM t ORDER BY id;
+SELECT CONCAT('R|WS|', staged, '|', diff_type, '|', IFNULL(to_id,''), '|', IFNULL(to_val,''))
+  FROM dolt_workspace_t ORDER BY to_id;"
+
+oracle "workspace_delete_restores_removed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(42,42),(43,43);
+SELECT dolt_commit('-A','-m','seed');
+DELETE FROM t;
+DELETE FROM dolt_workspace_t WHERE from_id=42;
+" "SELECT CONCAT('R|DATA|', id, '|', val) FROM t ORDER BY id;
+SELECT CONCAT('R|WS|', staged, '|', diff_type, '|', IFNULL(from_id,''), '|', IFNULL(from_val,''))
+  FROM dolt_workspace_t ORDER BY from_id;"
+
+oracle "workspace_delete_reverts_modify" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(42,42),(43,43);
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET val=val*2;
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+" "SELECT CONCAT('R|DATA|', id, '|', val) FROM t ORDER BY id;
+SELECT CONCAT('R|WS|', staged, '|', diff_type, '|', to_id, '|', to_val, '|', from_val)
+  FROM dolt_workspace_t ORDER BY to_id;"
+
+oracle "workspace_delete_after_unstage" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+SELECT dolt_commit('-A','-m','seed empty');
+INSERT INTO t VALUES(42,42),(43,43);
+SELECT dolt_add('t');
+UPDATE dolt_workspace_t SET staged=FALSE WHERE to_id=42;
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+" "SELECT CONCAT('R|DATA|', id, '|', val) FROM t ORDER BY id;
+SELECT CONCAT('R|WS|', staged, '|', diff_type, '|', to_id, '|', to_val)
+  FROM dolt_workspace_t ORDER BY to_id;"
+
+oracle "workspace_delete_all_unstaged_modifies" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET val=val+1;
+DELETE FROM dolt_workspace_t;
+" "SELECT CONCAT('R|DATA|', id, '|', val) FROM t ORDER BY id;
+SELECT CONCAT('R|WS|', count(*)) FROM dolt_workspace_t;"
+
+oracle "workspace_delete_index_reverts_modify" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx_t_v ON t(v);
+INSERT INTO t VALUES(1,1),(2,2);
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET v=99 WHERE id=1;
+DELETE FROM dolt_workspace_t WHERE to_id=1;
+" "SELECT CONCAT('R|DATA|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('R|IDX_OLD|', id, '|', v) FROM t WHERE v=1 ORDER BY id;
+SELECT CONCAT('R|IDX_NEW|', id, '|', v) FROM t WHERE v=99 ORDER BY id;
+SELECT CONCAT('R|WS|', count(*)) FROM dolt_workspace_t;"
+
+oracle "workspace_delete_mixed_keep_other_types" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET val=200 WHERE id=2;
+DELETE FROM t WHERE id=3;
+INSERT INTO t VALUES(5,50);
+DELETE FROM dolt_workspace_t WHERE diff_type='modified';
+" "SELECT CONCAT('R|DATA|', id, '|', val) FROM t ORDER BY id;
+SELECT CONCAT('R|WS|', staged, '|', diff_type, '|', IFNULL(to_id,''), '|', IFNULL(from_id,''))
+  FROM dolt_workspace_t
+ ORDER BY diff_type, IFNULL(to_id, from_id);"
+
+oracle_error "workspace_delete_staged_rejected" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+SELECT dolt_commit('-A','-m','seed empty');
+INSERT INTO t VALUES(42,42);
+SELECT dolt_add('t');
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

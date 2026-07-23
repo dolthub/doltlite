@@ -91,4 +91,99 @@ else
   dltest_fail "workspace_indexed_nocase_query" "ci=[$nc_ci]"
 fi
 
+DEL_DB=/tmp/doltlite_workspace_delete_$$.db
+rm -rf "$DEL_DB"
+trap 'rm -rf "$DB"; rm -rf "$IDX_DB"; rm -rf "$NC_DB"; rm -rf "$DEL_DB"' EXIT
+
+# Discard unstaged insert
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+SELECT dolt_commit('-A','-m','seed empty');
+INSERT INTO t VALUES(42,42),(43,43);
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+" "$DEL_DB" >/dev/null
+run_test "workspace_delete_discards_insert_data" \
+  "SELECT id || '|' || val FROM t ORDER BY id;" "43|43" "$DEL_DB"
+run_test "workspace_delete_discards_insert_ws" \
+  "SELECT count(*) || '|' || group_concat(to_id) FROM dolt_workspace_t;" \
+  "1|43" "$DEL_DB"
+
+# Discard unstaged delete (restore row)
+rm -rf "$DEL_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(42,42),(43,43);
+SELECT dolt_commit('-A','-m','seed');
+DELETE FROM t;
+DELETE FROM dolt_workspace_t WHERE from_id=42;
+" "$DEL_DB" >/dev/null
+run_test "workspace_delete_restores_removed_row" \
+  "SELECT id || '|' || val FROM t ORDER BY id;" "42|42" "$DEL_DB"
+run_test "workspace_delete_restores_ws_remaining" \
+  "SELECT count(*) || '|' || group_concat(from_id) FROM dolt_workspace_t;" \
+  "1|43" "$DEL_DB"
+
+# Discard unstaged modify
+rm -rf "$DEL_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(42,42),(43,43);
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET val=val*2;
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+" "$DEL_DB" >/dev/null
+run_test "workspace_delete_reverts_modify" \
+  "SELECT id || '|' || val FROM t ORDER BY id;" $'42|42\n43|86' "$DEL_DB"
+
+# Cannot delete staged rows
+rm -rf "$DEL_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+SELECT dolt_commit('-A','-m','seed');
+INSERT INTO t VALUES(42,42);
+SELECT dolt_add('t');
+" "$DEL_DB" >/dev/null
+if "$DOLTLITE" "$DEL_DB" "DELETE FROM dolt_workspace_t WHERE id=1;" \
+     >/tmp/doltlite_ws_del.out 2>/tmp/doltlite_ws_del.err; then
+  dltest_fail "workspace_delete_staged_rejected" "expected error, got success"
+else
+  if grep -qi 'cannot delete staged' /tmp/doltlite_ws_del.err; then
+    dltest_pass
+  else
+    dltest_fail "workspace_delete_staged_rejected" "$(cat /tmp/doltlite_ws_del.err)"
+  fi
+fi
+
+# Discard after unstage
+rm -rf "$DEL_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+SELECT dolt_commit('-A','-m','seed');
+INSERT INTO t VALUES(42,42),(43,43);
+SELECT dolt_add('t');
+UPDATE dolt_workspace_t SET staged=FALSE WHERE to_id=42;
+DELETE FROM dolt_workspace_t WHERE to_id=42;
+" "$DEL_DB" >/dev/null
+run_test "workspace_delete_after_unstage" \
+  "SELECT id || '|' || val FROM t ORDER BY id;" "43|43" "$DEL_DB"
+run_test "workspace_delete_after_unstage_staged_remains" \
+  "SELECT staged || '|' || to_id FROM dolt_workspace_t;" "1|43" "$DEL_DB"
+
+# Secondary indexes stay consistent when discarding a modify
+rm -rf "$DEL_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx_t_v ON t(v);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET v=2;
+DELETE FROM dolt_workspace_t WHERE to_id=1;
+" "$DEL_DB" >/dev/null
+run_test "workspace_delete_index_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DEL_DB"
+run_test "workspace_delete_index_query_old" \
+  "SELECT id FROM t WHERE v=1;" "1" "$DEL_DB"
+run_test "workspace_delete_index_query_new" \
+  "SELECT id FROM t WHERE v=2;" "" "$DEL_DB"
+
 dltest_finish
