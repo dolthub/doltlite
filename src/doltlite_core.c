@@ -137,16 +137,20 @@ int doltliteRefreshAndConfirmHead(
   return SQLITE_OK;
 }
 
-int doltliteHasUncommittedChanges(sqlite3 *db){
+int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty){
   ProllyHash headCatHash, stagedHash, workingCatHash;
   u8 *wCatData = 0; int nWCat = 0;
   int rc;
 
+  if( !db || !pDirty ) return SQLITE_MISUSE;
+  *pDirty = 0;
+
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-  if( rc!=SQLITE_OK ) return 0;
+  if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&headCatHash) ){
     sqlite3_stmt *pStmt = 0;
-    int hasUserTables = 0;
+    int stepRc;
+    int finalizeRc;
     rc = sqlite3_prepare_v2(db,
       "SELECT 1 FROM sqlite_master "
       "WHERE type='table' "
@@ -154,32 +158,42 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
       "AND name NOT LIKE 'dolt_%' "
       "LIMIT 1",
       -1, &pStmt, 0);
-    if( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
-      hasUserTables = 1;
+    if( rc!=SQLITE_OK ) return rc;
+    stepRc = sqlite3_step(pStmt);
+    if( stepRc==SQLITE_ROW ){
+      *pDirty = 1;
+      rc = SQLITE_OK;
+    }else if( stepRc==SQLITE_DONE ){
+      rc = SQLITE_OK;
+    }else{
+      rc = stepRc;
     }
-    sqlite3_finalize(pStmt);
-    return hasUserTables;
+    finalizeRc = sqlite3_finalize(pStmt);
+    return rc==SQLITE_OK ? finalizeRc : rc;
   }
 
   doltliteGetSessionStaged(db, &stagedHash);
   if( !prollyHashIsEmpty(&stagedHash)
    && prollyHashCompare(&headCatHash, &stagedHash)!=0 ){
-    return 1;
+    *pDirty = 1;
+    return SQLITE_OK;
   }
 
   {
     ChunkStore *cs = doltliteGetChunkStore(db);
-    if( cs ){
-      rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
-      if( rc==SQLITE_OK ){
-        rc = chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
-        sqlite3_free(wCatData);
-        if( rc==SQLITE_OK && prollyHashCompare(&headCatHash, &workingCatHash)!=0 ){
-          return 1;
-        }
-      }
+    if( !cs ) return SQLITE_ERROR;
+    rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(wCatData);
+      return rc;
     }
-    return 0;
+    rc = chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
+    sqlite3_free(wCatData);
+    if( rc!=SQLITE_OK ) return rc;
+    if( prollyHashCompare(&headCatHash, &workingCatHash)!=0 ){
+      *pDirty = 1;
+    }
+    return SQLITE_OK;
   }
 }
 

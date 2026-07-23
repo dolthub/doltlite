@@ -160,6 +160,7 @@ static void doltliteMergeFunc(
   int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit, ancCommit;
   int graphLocked = 0;
+  int dirty = 0;
   int rc, i;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
@@ -244,7 +245,12 @@ static void doltliteMergeFunc(
     return;
   }
 
-  if( doltliteHasUncommittedChanges(db) ){
+  rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  if( dirty ){
     sqlite3_result_error(context,
       "uncommitted changes \xe2\x80\x94 commit or reset before merging", -1);
     return;

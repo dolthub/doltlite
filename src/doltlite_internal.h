@@ -964,7 +964,7 @@ int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
 int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
                                  ProllyHash *pSchemaHash);
-int doltliteHasUncommittedChanges(sqlite3 *db);
+int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty);
 void doltliteTxnStateClear(DoltliteTxnState *p);
 int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p);
 int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p);

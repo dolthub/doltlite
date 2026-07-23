@@ -445,6 +445,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   const char *zBranch;
   ProllyHash trackingCommit, localCommit;
   DoltliteTxnState savedState;
+  int dirty = 0;
   int rc;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
@@ -547,11 +548,17 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0
-   && doltliteHasUncommittedChanges(db) ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                              "cannot pull with uncommitted changes");
-    return;
+  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
+    rc = doltliteHasUncommittedChanges(db, &dirty);
+    if( rc!=SQLITE_OK ){
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
+      return;
+    }
+    if( dirty ){
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                                "cannot pull with uncommitted changes");
+      return;
+    }
   }
 
   /* Advance and persist the branch under the graph lock, first re-confirming
@@ -607,6 +614,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteRemote *pRemote = 0;
   const char *zUrl;
   DoltliteTxnState savedState;
+  int dirty = 0;
   int rc;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
@@ -626,7 +634,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
   memset(&savedState, 0, sizeof(savedState));
 
-  if( doltliteHasUncommittedChanges(db) ){
+  rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  if( dirty ){
     doltliteVcResultError(ctx, db,
       "database has uncommitted changes — clone into a fresh database");
     return;

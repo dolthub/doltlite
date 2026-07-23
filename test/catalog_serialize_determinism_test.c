@@ -8,17 +8,21 @@
 ** unstable dirty flags.
 **
 ** For every context below, a clean tree must also serialize to a hash the
-** engine itself considers clean (doltliteHasUncommittedChanges == 0).
+** engine itself considers clean (doltliteHasUncommittedChanges reports
+** SQLITE_OK and dirty == 0).
 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "prolly_hash.h"
 
 extern int doltliteFlushAndSerializeCatalog(sqlite3 *db,
                                             unsigned char **ppOut, int *pnOut);
-extern int doltliteHasUncommittedChanges(sqlite3 *db);
+extern int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty);
+extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
+extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 
 static int nPass = 0;
 static int nFail = 0;
@@ -167,7 +171,11 @@ int main(int argc, char **argv){
 
     snprintf(zLabel, sizeof(zLabel), "clean_tree_not_dirty[%s]",
              aCtx[i].zName);
-    check(zLabel, doltliteHasUncommittedChanges(db)==0);
+    {
+      int dirty = 0;
+      rc = doltliteHasUncommittedChanges(db, &dirty);
+      check(zLabel, rc==SQLITE_OK && dirty==0);
+    }
 
     sqlite3_close(db);
 
@@ -191,7 +199,24 @@ int main(int argc, char **argv){
       sqlite3_free(pAfter);
     }
     snprintf(zLabel, sizeof(zLabel), "reopen_not_dirty[%s]", aCtx[i].zName);
-    check(zLabel, doltliteHasUncommittedChanges(db)==0);
+    {
+      int dirty = 0;
+      rc = doltliteHasUncommittedChanges(db, &dirty);
+      check(zLabel, rc==SQLITE_OK && dirty==0);
+    }
+    {
+      ProllyHash savedHead;
+      ProllyHash missingHead;
+      int dirty = 1;
+      memset(&missingHead, 0xa5, sizeof(missingHead));
+      doltliteGetSessionHead(db, &savedHead);
+      doltliteSetSessionHead(db, &missingHead);
+      rc = doltliteHasUncommittedChanges(db, &dirty);
+      snprintf(zLabel, sizeof(zLabel), "missing_head_error[%s]",
+               aCtx[i].zName);
+      check(zLabel, rc==SQLITE_NOTFOUND && dirty==0);
+      doltliteSetSessionHead(db, &savedHead);
+    }
     sqlite3_close(db);
   }
   sqlite3_free(aRef);
