@@ -19,13 +19,34 @@ for f in "$SRCDIR"/prolly_btree*.c; do
   fi
 done
 
-# Keep doltlite merge split into reviewable units (rows / schema / catalog).
-for f in "$SRCDIR"/doltlite_merge.c "$SRCDIR"/doltlite_merge_rows.c \
-         "$SRCDIR"/doltlite_merge_schema.c; do
-  [ -f "$f" ] || continue
+# Keep doltlite merge split into reviewable units. The core catalog/rows/
+# schema/pass1 modules must exist (so a re-monolith can't drop a file and
+# still pass by only checking what remains) and stay under 1500 lines.
+# Command and constraints modules get a higher but still finite cap.
+for f in \
+  "$SRCDIR"/doltlite_merge.c \
+  "$SRCDIR"/doltlite_merge_pass1.c \
+  "$SRCDIR"/doltlite_merge_rows.c \
+  "$SRCDIR"/doltlite_merge_schema.c
+do
+  if [ ! -f "$f" ]; then
+    lint "$f: missing — doltlite merge must stay split (catalog/pass1/rows/schema)"
+    continue
+  fi
   nline=$(wc -l < "$f" | tr -d ' ')
-  if [ "$nline" -gt 2500 ]; then
-    lint "$f:$nline lines — doltlite merge modules must stay at or below 2500 lines"
+  if [ "$nline" -gt 1500 ]; then
+    lint "$f:$nline lines — doltlite merge core modules must stay at or below 1500 lines"
+  fi
+done
+
+for f in "$SRCDIR"/doltlite_merge_cmd.c "$SRCDIR"/doltlite_merge_constraints.c; do
+  if [ ! -f "$f" ]; then
+    lint "$f: missing — expected doltlite merge command/constraints module"
+    continue
+  fi
+  nline=$(wc -l < "$f" | tr -d ' ')
+  if [ "$nline" -gt 2000 ]; then
+    lint "$f:$nline lines — doltlite merge cmd/constraints must stay at or below 2000 lines"
   fi
 done
 
