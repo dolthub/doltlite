@@ -2765,7 +2765,7 @@ DOLTLITE_C_TESTS = \
 	sql_transaction_test$(T.exe) \
 	cross_branch_test$(T.exe) \
 	concurrent_stress_test$(T.exe) \
-	cursor_merge_stress_test$(T.exe) \
+	prolly_txn_stress_test$(T.exe) \
 	vc_concurrency_test$(T.exe) \
 	vc_ref_mutation_stress_test$(T.exe) \
 	multi_process_test$(T.exe) \
@@ -2806,8 +2806,8 @@ concurrent_stress_test$(T.exe): $(TOP)/test/concurrent_stress_test.c libdoltlite
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_stress_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
-cursor_merge_stress_test$(T.exe): $(TOP)/test/cursor_merge_stress_test.c libdoltlite$(T.lib)
-	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/cursor_merge_stress_test.c \
+prolly_txn_stress_test$(T.exe): $(TOP)/test/prolly_txn_stress_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/prolly_txn_stress_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 vc_concurrency_test$(T.exe): $(TOP)/test/vc_concurrency_test.c libdoltlite$(T.lib)
