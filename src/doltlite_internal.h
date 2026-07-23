@@ -8,13 +8,13 @@
 #include "doltlite_commit.h"
 #include "doltlite_name_index.h"
 #include "chunk_store.h"
+#include "doltlite_catalog_types.h"
 #include <time.h>
 #include <ctype.h>
 #include <limits.h>
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
-typedef struct SchemaEntry SchemaEntry;
 typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
 typedef struct DoltliteCommitQueue DoltliteCommitQueue;
@@ -209,29 +209,6 @@ static SQLITE_INLINE u64 doltliteFnv1aStr(u64 h, const char *z){
 static SQLITE_INLINE u64 doltliteFnv1aSep(u64 h){
   return h * DOLTLITE_FNV1A_PRIME;
 }
-
-/* Catalog entry. This layout is shared with prolly_btree.c (which owns the
-** catalog load/serialize routines); both definitions are guarded so a single
-** translation unit (the amalgamation) emits it once. The version-control code
-** here uses only the leading fields; the prolly engine uses the rest. */
-typedef struct ProllyMutMap ProllyMutMap;
-#ifndef DOLTLITE_TABLEENTRY_DEFINED
-#define DOLTLITE_TABLEENTRY_DEFINED
-struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
-  u8 pendingFlushSeekEdits;
-  u8 appendSeekFloorValid;
-  i64 appendSeekFloor;
-  ProllyHash appendSeekRoot;
-  u8 tableRootKnown;
-  u8 isTableRoot;
-  char *zName;
-  ProllyMutMap *pPending;
-};
-#endif
 
 struct DoltliteTxnState {
   ProllyHash refsHash;
@@ -1160,17 +1137,6 @@ const char *doltliteGetAuthorName(sqlite3 *db);
 int doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 int doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
-
-#ifndef DOLTLITE_SCHEMAENTRY_DEFINED
-#define DOLTLITE_SCHEMAENTRY_DEFINED
-struct SchemaEntry {
-  char *zName;
-  char *zTblName;
-  char *zSql;
-  char *zType;
-  Pgno iRootpage;
-};
-#endif
 
 int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                           const ProllyHash *pCatHash,

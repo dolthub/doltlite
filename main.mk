@@ -629,7 +629,8 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/chunk_file.h $(TOP)/src/chunk_index.h $(TOP)/src/chunk_refs.h \
     $(TOP)/src/chunk_staging.h $(TOP)/src/chunk_wal.h \
     $(TOP)/src/doltlite_ancestor.h $(TOP)/src/doltlite_chunk_walk.h \
-    $(TOP)/src/doltlite_commit.h $(TOP)/src/doltlite_constraint_violations.h \
+    $(TOP)/src/doltlite_catalog_types.h $(TOP)/src/doltlite_commit.h \
+    $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
     $(TOP)/src/doltlite_merge_int.h $(TOP)/src/doltlite_parse.h \
     $(TOP)/src/doltlite_name_index.h \
@@ -1080,6 +1081,7 @@ HDR = \
    sqlite_cfg.h
 # Prolly tree engine headers
 HDR += \
+   $(TOP)/src/doltlite_catalog_types.h \
    $(TOP)/src/prolly_hash.h \
    $(TOP)/src/prolly_xxhash.h \
    $(TOP)/src/prolly_node.h \
