@@ -19,6 +19,16 @@ for f in "$SRCDIR"/prolly_btree*.c; do
   fi
 done
 
+# Keep doltlite merge split into reviewable units (rows / schema / catalog).
+for f in "$SRCDIR"/doltlite_merge.c "$SRCDIR"/doltlite_merge_rows.c \
+         "$SRCDIR"/doltlite_merge_schema.c; do
+  [ -f "$f" ] || continue
+  nline=$(wc -l < "$f" | tr -d ' ')
+  if [ "$nline" -gt 2500 ]; then
+    lint "$f:$nline lines — doltlite merge modules must stay at or below 2500 lines"
+  fi
+done
+
 for f in "$SRCDIR"/prolly_*.c; do
   while IFS= read -r line; do
     lint "$f:$line — prolly layer must not include doltlite headers"
