@@ -189,19 +189,13 @@ static int batchAppend(DoltliteDiffCursor *pCur,
                        const char *zTableName,
                        const DoltliteCommit *pCommit,
                        u8 dataChange, u8 schemaChange){
-  DiffSummaryRow *aNew, *r;
-  int nNew;
+  DiffSummaryRow *r;
+  int rc;
   if( pCur->zFilterTable && strcmp(pCur->zFilterTable, zTableName)!=0 ){
     return SQLITE_OK;
   }
-  if( pCur->nBatch>=pCur->nBatchAlloc ){
-    nNew = pCur->nBatchAlloc ? pCur->nBatchAlloc*2 : 16;
-    aNew = sqlite3_realloc(pCur->aBatch,
-                           nNew*(int)sizeof(DiffSummaryRow));
-    if( !aNew ) return SQLITE_NOMEM;
-    pCur->aBatch = aNew;
-    pCur->nBatchAlloc = nNew;
-  }
+  rc = DOLTLITE_GROW_ARRAY(&pCur->aBatch, &pCur->nBatchAlloc, pCur->nBatch+1, 16);
+  if( rc!=SQLITE_OK ) return rc;
   r = &pCur->aBatch[pCur->nBatch];
   memset(r, 0, sizeof(*r));
   memcpy(r->zCommitHex, zCommitHex, PROLLY_HASH_SIZE*2+1);

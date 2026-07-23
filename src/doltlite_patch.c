@@ -90,15 +90,10 @@ static int patchAppendRow(
   const char *zSql
 ){
   PatchRow *p;
+  int rc;
   if( !zSql || !zSql[0] ) return SQLITE_OK;
-  if( pCur->nRow>=pCur->nAlloc ){
-    int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 32;
-    PatchRow *aNew = sqlite3_realloc64(pCur->aRow,
-                                      (sqlite3_uint64)nNew*sizeof(PatchRow));
-    if( !aNew ) return SQLITE_NOMEM;
-    pCur->aRow = aNew;
-    pCur->nAlloc = nNew;
-  }
+  rc = DOLTLITE_GROW_ARRAY(&pCur->aRow, &pCur->nAlloc, pCur->nRow+1, 32);
+  if( rc!=SQLITE_OK ) return rc;
   p = &pCur->aRow[pCur->nRow];
   memset(p, 0, sizeof(*p));
   p->zTable = sqlite3_mprintf("%s", zTable ? zTable : "");

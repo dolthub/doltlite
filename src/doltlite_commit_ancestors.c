@@ -148,17 +148,10 @@ static int caNext(sqlite3_vtab_cursor *pCursor){
 }
 
 static int caEnqueue(CommitAncestorsCursor *pCur, const ProllyHash *p){
+  int rc;
   if( prollyHashIsEmpty(p) ) return SQLITE_OK;
-  if( pCur->qTail >= pCur->qAlloc ){
-    i64 nNew = pCur->qAlloc ? (i64)pCur->qAlloc * 2 : (i64)16;
-    ProllyHash *tmp;
-    if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ) return SQLITE_NOMEM;
-    tmp = sqlite3_realloc(pCur->aQueue,
-                          (int)(nNew * (i64)sizeof(ProllyHash)));
-    if( !tmp ) return SQLITE_NOMEM;
-    pCur->aQueue = tmp;
-    pCur->qAlloc = (int)nNew;
-  }
+  rc = DOLTLITE_GROW_ARRAY(&pCur->aQueue, &pCur->qAlloc, pCur->qTail+1, 16);
+  if( rc!=SQLITE_OK ) return rc;
   pCur->aQueue[pCur->qTail++] = *p;
   return SQLITE_OK;
 }

@@ -170,16 +170,9 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
 
 static int addRow(DoltliteStatusCursor *pCur, const char *zName,
                   int staged, const char *zStatus){
-  StatusRow *aNew;
   StatusRow *pRow;
-  int nNew;
-  if( pCur->nRows>=pCur->nRowsAlloc ){
-    nNew = pCur->nRowsAlloc ? pCur->nRowsAlloc*2 : 16;
-    aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(StatusRow));
-    if( !aNew ) return SQLITE_NOMEM;
-    pCur->aRows = aNew;
-    pCur->nRowsAlloc = nNew;
-  }
+  int rc = DOLTLITE_GROW_ARRAY(&pCur->aRows, &pCur->nRowsAlloc, pCur->nRows+1, 16);
+  if( rc!=SQLITE_OK ) return rc;
   pRow = &pCur->aRows[pCur->nRows];
   pRow->zName = sqlite3_mprintf("%s", zName);
   if( !pRow->zName ) return SQLITE_NOMEM;
