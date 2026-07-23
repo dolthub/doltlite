@@ -60,24 +60,17 @@ static int appendSchemaEntry(
   char *zType,
   Pgno iRootpage
 ){
-  SchemaEntry *aEntries = *paEntries;
+  SchemaEntry *aEntries;
   int nEntries = *pnEntries;
-  int nAlloc = *pnAlloc;
-  if( nEntries >= nAlloc ){
-    int nNew = nAlloc ? nAlloc*2 : 16;
-    SchemaEntry *aNew = sqlite3_realloc(aEntries, nNew*(int)sizeof(SchemaEntry));
-    if( !aNew ) return SQLITE_NOMEM;
-    aEntries = aNew;
-    nAlloc = nNew;
-  }
+  int rc = DOLTLITE_GROW_ARRAY(paEntries, pnAlloc, nEntries+1, 16);
+  if( rc!=SQLITE_OK ) return rc;
+  aEntries = *paEntries;
   aEntries[nEntries].zName = zName;
   aEntries[nEntries].zTblName = zTblName;
   aEntries[nEntries].zSql = zSql;
   aEntries[nEntries].zType = zType;
   aEntries[nEntries].iRootpage = iRootpage;
-  *paEntries = aEntries;
   *pnEntries = nEntries + 1;
-  *pnAlloc = nAlloc;
   return SQLITE_OK;
 }
 
@@ -89,13 +82,8 @@ static int appendSchemaDiffRow(
   const char *zToSql
 ){
   SchemaDiffRow *r;
-  if( pCur->nRows >= pCur->nAlloc ){
-    int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
-    SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
-    if( !aNew ) return SQLITE_NOMEM;
-    pCur->aRows = aNew;
-    pCur->nAlloc = nNew;
-  }
+  int rc = DOLTLITE_GROW_ARRAY(&pCur->aRows, &pCur->nAlloc, pCur->nRows+1, 16);
+  if( rc!=SQLITE_OK ) return rc;
   r = &pCur->aRows[pCur->nRows];
   memset(r, 0, sizeof(*r));
   r->zFromName = sqlite3_mprintf("%s", zFromName ? zFromName : "");
