@@ -22,6 +22,7 @@ struct HttpRemote {
   char *zHost;
   int port;
   int useTls;
+  int timeoutMs;
   char *zBasePath;
 
 #ifdef DOLTLITE_HAVE_AUTH
@@ -42,10 +43,11 @@ struct HttpRemote {
 };
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
+#define HTTP_TIMEOUT_MS 30000
 
 #ifdef DOLTLITE_HAVE_AUTH
 typedef DoltliteConn HttpConn;
-#define httpConnOpen(H,P,T) doltliteConnOpen((H),(P),(T))
+#define httpConnOpen(H,P,T,M) doltliteConnOpenTimeout((H),(P),(T),(M))
 #define httpConnWriteAll(C,B,N) doltliteConnWriteAll((C),(B),(N))
 #define httpConnRead(C,B,N) doltliteConnRead((C),(B),(N))
 #define httpConnClose(C) doltliteConnClose((C))
@@ -53,32 +55,30 @@ typedef DoltliteConn HttpConn;
 typedef struct HttpConn HttpConn;
 struct HttpConn {
   int fd;
+  i64 deadlineMs;
 };
 
-static HttpConn *httpConnOpen(const char *zHost, int port, int useTls){
-  struct addrinfo hints;
-  struct addrinfo *pRes = 0;
-  struct addrinfo *pAi;
+static int httpConnApplyDeadline(HttpConn *pConn){
+  i64 remaining = pConn->deadlineMs - doltliteMonotonicMs();
+  if( remaining<=0 ) return 1;
+  if( remaining>0x7fffffff ) remaining = 0x7fffffff;
+  return doltliteSocketSetTimeout(pConn->fd, (int)remaining);
+}
+
+static HttpConn *httpConnOpen(
+  const char *zHost,
+  int port,
+  int useTls,
+  int timeoutMs
+){
   char zPort[16];
-  int fd = -1;
+  i64 deadlineMs = doltliteMonotonicMs() + timeoutMs;
+  int fd;
   HttpConn *pConn;
 
   if( useTls ) return 0;
-  if( doltliteNetInit()!=0 ) return 0;
   sqlite3_snprintf(sizeof(zPort), zPort, "%d", port);
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  if( getaddrinfo(zHost, zPort, &hints, &pRes)!=0 ) return 0;
-
-  for(pAi=pRes; pAi; pAi=pAi->ai_next){
-    fd = (int)socket(pAi->ai_family, pAi->ai_socktype, pAi->ai_protocol);
-    if( fd<0 ) continue;
-    if( connect(fd, pAi->ai_addr, (int)pAi->ai_addrlen)==0 ) break;
-    doltliteCloseSocket(fd);
-    fd = -1;
-  }
-  freeaddrinfo(pRes);
+  fd = doltliteTcpConnect(zHost, zPort, timeoutMs);
   if( fd<0 ) return 0;
 
   pConn = sqlite3_malloc(sizeof(HttpConn));
@@ -87,6 +87,12 @@ static HttpConn *httpConnOpen(const char *zHost, int port, int useTls){
     return 0;
   }
   pConn->fd = fd;
+  pConn->deadlineMs = deadlineMs;
+  if( httpConnApplyDeadline(pConn)!=0 ){
+    doltliteCloseSocket(fd);
+    sqlite3_free(pConn);
+    return 0;
+  }
   return pConn;
 }
 
@@ -94,7 +100,9 @@ static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
   const char *z = (const char*)pBuf;
   int nSent = 0;
   while( nSent<nBuf ){
-    int n = send(pConn->fd, z+nSent, nBuf-nSent, 0);
+    int n;
+    if( httpConnApplyDeadline(pConn)!=0 ) return 1;
+    n = send(pConn->fd, z+nSent, nBuf-nSent, 0);
     if( n<=0 ) return 1;
     nSent += n;
   }
@@ -102,6 +110,7 @@ static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
 }
 
 static int httpConnRead(HttpConn *pConn, void *pBuf, int nBuf){
+  if( httpConnApplyDeadline(pConn)!=0 ) return -1;
   return recv(pConn->fd, (char*)pBuf, nBuf, 0);
 }
 
@@ -185,7 +194,7 @@ static int httpRequest(
   *ppResp = 0;
   *pnResp = 0;
 
-  conn = httpConnOpen(p->zHost, p->port, p->useTls);
+  conn = httpConnOpen(p->zHost, p->port, p->useTls, p->timeoutMs);
   if( !conn ) return SQLITE_ERROR;
 
 #ifdef DOLTLITE_HAVE_AUTH
@@ -710,6 +719,9 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   int useTls;
   int nUserPath;
   int nBasePath;
+  const char *zTimeout;
+  char *zTimeoutEnd = 0;
+  long timeoutMs;
 
   if( !zUrl ) return 0;
 
@@ -772,6 +784,17 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->zHost[nHost] = 0;
 
   p->port = port;
+  timeoutMs = HTTP_TIMEOUT_MS;
+  zTimeout = getenv("DOLTLITE_HTTP_TIMEOUT_MS");
+  if( zTimeout && zTimeout[0] ){
+    errno = 0;
+    timeoutMs = strtol(zTimeout, &zTimeoutEnd, 10);
+    if( errno!=0 || zTimeoutEnd==zTimeout || zTimeoutEnd[0]!=0
+     || timeoutMs<=0 || timeoutMs>0x7fffffff ){
+      timeoutMs = HTTP_TIMEOUT_MS;
+    }
+  }
+  p->timeoutMs = (int)timeoutMs;
 
   nBasePath = nUserPath;
   if( nBasePath <= 0 ){

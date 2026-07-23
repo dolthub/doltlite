@@ -20,6 +20,7 @@
 struct DoltliteConn {
   int useTls;
   int ownsConf;
+  long long deadlineMs;
   mbedtls_net_context net;
 
   mbedtls_ssl_context ssl;
@@ -44,6 +45,15 @@ static void configureSocket(int fd) {
 #else
   (void)fd;
 #endif
+}
+
+static int connApplyDeadline(DoltliteConn *c) {
+  long long remaining;
+  if (c->deadlineMs == 0) return 0;
+  remaining = c->deadlineMs - doltliteMonotonicMs();
+  if (remaining <= 0) return 1;
+  if (remaining > 0x7fffffff) remaining = 0x7fffffff;
+  return doltliteSocketSetTimeout(c->net.fd, (int)remaining);
 }
 
 static int connSend(void *pCtx, const unsigned char *pBuf, size_t nBuf) {
@@ -109,7 +119,12 @@ static int loadTrustRoots(mbedtls_x509_crt *ca) {
 #endif
 }
 
-DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
+DoltliteConn *doltliteConnOpenTimeout(
+  const char *host,
+  int port,
+  int useTls,
+  int timeoutMs
+) {
   DoltliteConn *c = (DoltliteConn *)calloc(1, sizeof(*c));
   char portstr[16];
   int ret;
@@ -117,13 +132,16 @@ DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
   if (!c) return NULL;
   c->useTls = useTls;
   c->ownsConf = 1;
+  if (timeoutMs > 0) {
+    c->deadlineMs = doltliteMonotonicMs() + timeoutMs;
+  }
   mbedtls_net_init(&c->net);
 
   snprintf(portstr, sizeof(portstr), "%d", port);
-  if (mbedtls_net_connect(&c->net, host, portstr, MBEDTLS_NET_PROTO_TCP) != 0) {
-    goto fail_net;
-  }
+  c->net.fd = doltliteTcpConnect(host, portstr, timeoutMs);
+  if (c->net.fd < 0) goto fail_net;
   configureSocket(c->net.fd);
+  if (connApplyDeadline(c) != 0) goto fail_net;
   if (!useTls) {
     return c;
   }
@@ -157,6 +175,7 @@ DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
   mbedtls_ssl_set_bio(&c->ssl, &c->net, connSend, mbedtls_net_recv, NULL);
 
   do {
+    if (connApplyDeadline(c) != 0) goto fail_tls;
     ret = mbedtls_ssl_handshake(&c->ssl);
   } while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
   if (ret != 0) goto fail_tls;
@@ -176,11 +195,16 @@ fail_net:
   return NULL;
 }
 
+DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
+  return doltliteConnOpenTimeout(host, port, useTls, 0);
+}
+
 int doltliteConnWriteAll(DoltliteConn *c, const void *buf, int nbuf) {
   const unsigned char *p = (const unsigned char *)buf;
   int off = 0;
   while (off < nbuf) {
     int n;
+    if (connApplyDeadline(c) != 0) return 1;
     if (c->useTls) {
       n = mbedtls_ssl_write(&c->ssl, p + off, (size_t)(nbuf - off));
     } else {
@@ -196,6 +220,7 @@ int doltliteConnWriteAll(DoltliteConn *c, const void *buf, int nbuf) {
 int doltliteConnRead(DoltliteConn *c, void *buf, int nbuf) {
   int n;
   for (;;) {
+    if (connApplyDeadline(c) != 0) return -1;
     if (c->useTls) {
       n = mbedtls_ssl_read(&c->ssl, (unsigned char *)buf, (size_t)nbuf);
     } else {

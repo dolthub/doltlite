@@ -10,6 +10,12 @@ extern "C" {
 typedef struct DoltliteConn DoltliteConn;
 
 DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls);
+DoltliteConn *doltliteConnOpenTimeout(
+  const char *host,
+  int port,
+  int useTls,
+  int timeoutMs
+);
 
 typedef struct DoltliteTlsServer DoltliteTlsServer;
 
