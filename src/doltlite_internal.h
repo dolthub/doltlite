@@ -956,6 +956,16 @@ int mergeFastForward(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
   const ProllyHash *pOurHead, const ProllyHash *pTheirHead
 );
+/* Merge zBranch/zRef into the current session HEAD. Sets a SQL result on
+** context (commit hash, "Already up to date", or error). Returns SQLITE_OK
+** only when a non-error result was produced. */
+int doltliteMergeRef(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const char *zBranch,
+  const char *zMessage,
+  int noFastForward
+);
 
 int doltliteAddRegister(sqlite3 *db);
 int doltliteCommitCmdRegister(sqlite3 *db);

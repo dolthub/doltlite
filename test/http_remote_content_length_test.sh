@@ -29,6 +29,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if "$REMOTESRV" -p 12x "$TMP/srv" >"$TMP/bad-cli.out" 2>&1 \
+ || ! grep -q "invalid port" "$TMP/bad-cli.out"; then
+  echo "FAIL: server accepted a malformed CLI port"
+  exit 1
+fi
+if "$REMOTESRV" --timeout-ms 999999999999 "$TMP/srv" \
+    >"$TMP/bad-timeout.out" 2>&1 \
+ || ! grep -q "invalid timeout" "$TMP/bad-timeout.out"; then
+  echo "FAIL: server accepted an overflowing CLI timeout"
+  exit 1
+fi
+echo "remote server checked CLI numbers: PASS"
+
 mkdir -p "$TMP/srv"
 "$REMOTESRV" -p 0 --bind 127.0.0.1 "$TMP/srv" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
@@ -53,6 +66,39 @@ import sys
 
 upstream_port = int(sys.argv[1])
 marker = sys.argv[2]
+mode_path = sys.argv[3]
+
+def response_mode():
+    try:
+        with open(mode_path, "r") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+def alter_response(response, mode):
+    head, sep, body = response.partition(b"\r\n\r\n")
+    if not sep:
+        return response
+    lines = head.split(b"\r\n")
+    length_index = next(
+        (i for i, line in enumerate(lines)
+         if line.lower().startswith(b"content-length:")),
+        None,
+    )
+    if length_index is None:
+        return response
+    length = len(body)
+    if mode == "invalid":
+        lines[length_index] = f"Content-Length: {length}x".encode()
+    elif mode == "duplicate":
+        lines.insert(length_index + 1, f"Content-Length: {length}".encode())
+    elif mode == "overflow":
+        lines[length_index] = b"Content-Length: 999999999999999999999999"
+    elif mode == "truncated":
+        lines[length_index] = f"Content-Length: {length + 1}".encode()
+    elif mode == "transfer":
+        lines.append(b"Transfer-Encoding: chunked")
+    return b"\r\n".join(lines) + sep + body
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -95,11 +141,16 @@ class Handler(socketserver.BaseRequestHandler):
         with socket.create_connection(("127.0.0.1", upstream_port), timeout=5) as s:
             s.sendall(head + b"\r\n\r\n" + body)
             s.shutdown(socket.SHUT_WR)
+            response = b""
             while True:
                 chunk = s.recv(65536)
                 if not chunk:
                     break
-                self.request.sendall(chunk)
+                response += chunk
+        mode = response_mode()
+        if mode and path.endswith("/refs"):
+            response = alter_response(response, mode)
+        self.request.sendall(response)
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
@@ -109,7 +160,9 @@ with Server(("127.0.0.1", 0), Handler) as srv:
     srv.serve_forever()
 PY
 
-python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/commit-content-length-ok" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
+: >"$TMP/response-mode"
+python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/commit-content-length-ok" \
+  "$TMP/response-mode" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
 PROXY_PID=$!
 
 PROXY_PORT=""
@@ -142,5 +195,24 @@ if [ ! -f "$TMP/commit-content-length-ok" ]; then
   echo "FAIL: proxy did not observe Content-Length: 0 on POST /commit"
   exit 1
 fi
+
+bad_url="http://127.0.0.1:${PROXY_PORT}junk/repo.db"
+if "$DOLTLITE" "$TMP/bad-port.db" "SELECT dolt_clone('$bad_url');" \
+    >"$TMP/bad-port.out" 2>&1; then
+  echo "FAIL: URL port with trailing characters was accepted"
+  exit 1
+fi
+echo "http remote checked URL port: PASS"
+
+for mode in invalid duplicate overflow truncated transfer; do
+  printf '%s\n' "$mode" >"$TMP/response-mode"
+  if "$DOLTLITE" "$TMP/bad-response-$mode.db" \
+      "SELECT dolt_clone('$URL');" >"$TMP/bad-response-$mode.out" 2>&1; then
+    echo "FAIL: malformed $mode response framing was accepted"
+    exit 1
+  fi
+done
+: >"$TMP/response-mode"
+echo "http remote strict response framing: PASS"
 
 echo "http remote empty POST Content-Length: PASS"

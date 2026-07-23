@@ -600,7 +600,7 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
               doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
-              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
+              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_hashof.o \
               doltlite_constraint_violations.o doltlite_verify_constraints.o \
@@ -631,7 +631,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_ancestor.h $(TOP)/src/doltlite_chunk_walk.h \
     $(TOP)/src/doltlite_commit.h $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
-    $(TOP)/src/doltlite_merge_int.h \
+    $(TOP)/src/doltlite_merge_int.h $(TOP)/src/doltlite_parse.h \
     $(TOP)/src/doltlite_name_index.h \
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
     $(TOP)/src/doltlite_creds.h $(TOP)/src/doltlite_net.h $(TOP)/src/doltlite_tls.h \
@@ -653,6 +653,8 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_status.c $(TOP)/src/doltlite_diff.c $(TOP)/src/doltlite_diff_table.c $(TOP)/src/doltlite_workspace.c \
     $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
     $(TOP)/src/doltlite_merge.c \
+    $(TOP)/src/doltlite_merge_pass1.c \
+    $(TOP)/src/doltlite_merge_pass2.c \
     $(TOP)/src/doltlite_merge_rows.c \
     $(TOP)/src/doltlite_merge_schema.c \
     $(TOP)/src/doltlite_conflicts.c $(TOP)/src/doltlite_gc.c $(TOP)/src/doltlite_chunk_walk.c \
@@ -1399,7 +1401,8 @@ prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON) \
 prolly_xxhash.o:	$(TOP)/src/prolly_xxhash.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_xxhash.c
 
-doltlite_creds.o:	$(TOP)/src/doltlite_creds.c $(DEPS_OBJ_COMMON) \
+doltlite_creds.o:	$(TOP)/src/doltlite_creds.c \
+		$(TOP)/src/doltlite_parse.h $(DEPS_OBJ_COMMON) \
 		$(TOP)/ext/ed25519/ed25519.h
 	$(T.cc.sqlite) -I$(TOP)/ext/ed25519 -c $(TOP)/src/doltlite_creds.c
 
@@ -1603,7 +1606,8 @@ doltlite_commit_ancestors.o:	$(TOP)/src/doltlite_commit_ancestors.c $(DEPS_OBJ_C
 doltlite_status.o:	$(TOP)/src/doltlite_status.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_status.c
 
-doltlite_ref.o:	$(TOP)/src/doltlite_ref.c $(DEPS_OBJ_COMMON)
+doltlite_ref.o:	$(TOP)/src/doltlite_ref.c \
+		$(TOP)/src/doltlite_parse.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_ref.c
 
 doltlite_diff.o:	$(TOP)/src/doltlite_diff.c $(DEPS_OBJ_COMMON)
@@ -1678,6 +1682,12 @@ doltlite_merge_constraints.o:	$(TOP)/src/doltlite_merge_constraints.c $(DEPS_OBJ
 doltlite_merge.o:	$(TOP)/src/doltlite_merge.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge.c
 
+doltlite_merge_pass1.o:	$(TOP)/src/doltlite_merge_pass1.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_pass1.c
+
+doltlite_merge_pass2.o:	$(TOP)/src/doltlite_merge_pass2.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_pass2.c
+
 doltlite_merge_rows.o:	$(TOP)/src/doltlite_merge_rows.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_rows.c
 
@@ -1690,10 +1700,12 @@ doltlite_remote.o:	$(TOP)/src/doltlite_remote.c $(DEPS_OBJ_COMMON)
 doltlite_remote_sql.o:	$(TOP)/src/doltlite_remote_sql.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_remote_sql.c
 
-doltlite_http_remote.o:	$(TOP)/src/doltlite_http_remote.c $(DEPS_OBJ_COMMON)
+doltlite_http_remote.o:	$(TOP)/src/doltlite_http_remote.c \
+		$(TOP)/src/doltlite_parse.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_http_remote.c
 
-doltlite_remotesrv.o:	$(TOP)/src/doltlite_remotesrv.c $(DEPS_OBJ_COMMON)
+doltlite_remotesrv.o:	$(TOP)/src/doltlite_remotesrv.c \
+		$(TOP)/src/doltlite_parse.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_remotesrv.c
 
 build.o:	$(TOP)/src/build.c $(DEPS_OBJ_COMMON)
@@ -2933,7 +2945,8 @@ all: doltlite-lib
 #
 # doltlite-remotesrv: standalone HTTP server for serving doltlite databases.
 #
-doltlite-remotesrv$(T.exe):	$(TOP)/src/remotesrv_main.c $(LIBOBJS0)
+doltlite-remotesrv$(T.exe):	$(TOP)/src/remotesrv_main.c \
+		$(TOP)/src/doltlite_parse.h $(LIBOBJS0)
 	$(T.link) -o $@ $(TOP)/src/remotesrv_main.c $(LIBOBJS0) \
 		$(LDFLAGS.libsqlite3)
 all: doltlite-remotesrv$(T.exe)

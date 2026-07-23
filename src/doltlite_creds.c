@@ -1,9 +1,11 @@
 #include "doltlite_creds.h"
+#include "doltlite_parse.h"
 
 #include "ed25519.h"
 #include "sha512.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -348,12 +350,19 @@ static int jsonFindLong(const char *json, const char *key, long *out) {
     const char *kstart = p + 1;
     if (strncmp(kstart, key, keylen) == 0 && kstart[keylen] == '"') {
       const char *q = kstart + keylen + 1;
-      char *end;
-      long v;
+      const char *end;
+      uint64_t v;
       while (*q == ' ' || *q == ':' || *q == '\t') q++;
-      v = strtol(q, &end, 10);
-      if (end == q) return 0;
-      *out = v;
+      end = q;
+      while (*end >= '0' && *end <= '9') end++;
+      if (doltliteParseDecimal(q, end, LONG_MAX, &v) !=
+          DOLTLITE_DECIMAL_OK) {
+        return 0;
+      }
+      q = end;
+      while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') q++;
+      if (*q != ',' && *q != '}') return 0;
+      *out = (long)v;
       return 1;
     }
     p = kstart;

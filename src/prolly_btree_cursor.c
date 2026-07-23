@@ -869,9 +869,9 @@ int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   return pCur->pCurOps->xLast(pCur, pRes);
 }
 
-int prollyBtCursorNext(BtCursor *pCur, int flags){
+static int prollyBtCursorStepPrologue(BtCursor *pCur, int dir, int *pImmediate){
   int rc;
-  (void)flags;
+  *pImmediate = 1;
   CLEAR_CACHED_PAYLOAD(pCur);
 
   rc = prollyCursorCheckInterrupt(pCur);
@@ -897,95 +897,101 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
 
   if( pCur->eState==CURSOR_SKIPNEXT ){
     pCur->eState = CURSOR_VALID;
-    if( pCur->skipNext>0 ){
+    if( (dir>0) ? (pCur->skipNext>0) : (pCur->skipNext<0) ){
       pCur->skipNext = 0;
       return SQLITE_OK;
     }
     pCur->skipNext = 0;
   }
 
-  if( !pCur->mmActive && pCur->pMutMap==0 ){
-    rc = prollyCursorNextFastLeaf(&pCur->pCur);
-    if( rc==SQLITE_OK ){
-      if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-        pCur->eState = CURSOR_VALID;
-        if( pCur->curIntKey ){
-          cacheCurrentTreePayloadIfIntKey(pCur);
-        }else{
-          cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-        }
-      } else {
-        pCur->eState = CURSOR_INVALID;
-        return SQLITE_DONE;
-      }
+  *pImmediate = 0;
+  return SQLITE_OK;
+}
+
+static void prollyCursorClassifyMergeSrc(BtCursor *pCur, int idx){
+  if( idx >= 0 && idx < pCur->pMutMap->nEntries
+   && prollyCursorIsValid(&pCur->pCur)
+   && mergeCompare(pCur, prollyMutMapEntryAt(pCur->pMutMap, idx))==0 ){
+    pCur->mergeSrc = MERGE_SRC_BOTH;
+  }else if( !prollyCursorIsValid(&pCur->pCur) ){
+    pCur->mergeSrc = MERGE_SRC_MUT;
+  }else{
+    pCur->mergeSrc = MERGE_SRC_TREE;
+  }
+}
+
+static int prollyCursorApplyMergeStep(BtCursor *pCur, int dir){
+  int rc = dir>0 ? mergeStepForward(pCur) : mergeStepBackward(pCur);
+  if( rc==SQLITE_DONE ){
+    pCur->eState = CURSOR_INVALID;
+  }else if( rc==SQLITE_OK ){
+    pCur->eState = CURSOR_VALID;
+  }
+  return rc;
+}
+
+/* Fold a raw tree-step rc into cursor state. The tree step signals end-of-data
+** through eState, never by returning SQLITE_DONE, so returning SQLITE_DONE here
+** unambiguously means "went invalid" and lets callers skip the trailing
+** curFlags clear exactly as the open-coded versions did. */
+static int prollyCursorFinishTreeStep(BtCursor *pCur, int rc){
+  if( rc!=SQLITE_OK ) return rc;
+  if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+    pCur->eState = CURSOR_VALID;
+    if( pCur->curIntKey ){
+      cacheCurrentTreePayloadIfIntKey(pCur);
+    }else{
+      cacheCurrentTreeStoredPayloadNonIntKey(pCur);
     }
+    return SQLITE_OK;
+  }
+  pCur->eState = CURSOR_INVALID;
+  return SQLITE_DONE;
+}
+
+int prollyBtCursorNext(BtCursor *pCur, int flags){
+  int rc, immediate;
+  (void)flags;
+
+  rc = prollyBtCursorStepPrologue(pCur, 1, &immediate);
+  if( immediate ) return rc;
+
+  if( !pCur->mmActive && pCur->pMutMap==0 ){
+    rc = prollyCursorFinishTreeStep(pCur, prollyCursorNextFastLeaf(&pCur->pCur));
+    if( rc==SQLITE_DONE ) return rc;
     pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
     return rc;
   }
 
   if( pCur->mmActive ){
-    rc = mergeStepForward(pCur);
-    if( rc==SQLITE_DONE ){
-      pCur->eState = CURSOR_INVALID;
-    }else if( rc==SQLITE_OK ){
-      pCur->eState = CURSOR_VALID;
-    }
-  }else{
-
-    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-      ProllyMutMapIter it;
-      rc = ensureCursorMutMapOrder(pCur);
-      if( rc!=SQLITE_OK ) return rc;
-      if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
-        rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
-                                  prollyCursorIntKey(&pCur->pCur));
-      }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
-        const u8 *pK; int nK;
-        prollyCursorKey(&pCur->pCur, &pK, &nK);
-        rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
-      }else if( pCur->eState==CURSOR_VALID ){
-        rc = seedMutMapIterFromCursor(pCur, &it);
-        if( rc==SQLITE_NOTFOUND ){
-          rc = prollyMutMapIterFirst(&it, pCur->pMutMap);
-        }
-      }else{
+    rc = prollyCursorApplyMergeStep(pCur, 1);
+  }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    ProllyMutMapIter it;
+    rc = ensureCursorMutMapOrder(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+      rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
+                                prollyCursorIntKey(&pCur->pCur));
+    }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+      const u8 *pK; int nK;
+      prollyCursorKey(&pCur->pCur, &pK, &nK);
+      rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
+    }else if( pCur->eState==CURSOR_VALID ){
+      rc = seedMutMapIterFromCursor(pCur, &it);
+      if( rc==SQLITE_NOTFOUND ){
         rc = prollyMutMapIterFirst(&it, pCur->pMutMap);
       }
-      if( rc!=SQLITE_OK ) return rc;
-      pCur->mmIdx = it.idx;
-      pCur->mmActive = 1;
-
-      if( it.idx >= 0 && it.idx < pCur->pMutMap->nEntries
-       && prollyCursorIsValid(&pCur->pCur)
-       && mergeCompare(pCur, prollyMutMapEntryAt(pCur->pMutMap, it.idx))==0 ){
-        pCur->mergeSrc = MERGE_SRC_BOTH;
-      }else if( !prollyCursorIsValid(&pCur->pCur) ){
-        pCur->mergeSrc = MERGE_SRC_MUT;
-      }else{
-        pCur->mergeSrc = MERGE_SRC_TREE;
-      }
-      rc = mergeStepForward(pCur);
-      if( rc==SQLITE_DONE ){
-        pCur->eState = CURSOR_INVALID;
-      }else if( rc==SQLITE_OK ){
-        pCur->eState = CURSOR_VALID;
-      }
     }else{
-      rc = prollyCursorNextFastLeaf(&pCur->pCur);
-      if( rc==SQLITE_OK ){
-        if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-          pCur->eState = CURSOR_VALID;
-          if( pCur->curIntKey ){
-            cacheCurrentTreePayloadIfIntKey(pCur);
-          }else{
-            cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-          }
-        } else {
-          pCur->eState = CURSOR_INVALID;
-          return SQLITE_DONE;
-        }
-      }
+      rc = prollyMutMapIterFirst(&it, pCur->pMutMap);
     }
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->mmIdx = it.idx;
+    pCur->mmActive = 1;
+    prollyCursorClassifyMergeSrc(pCur, it.idx);
+    rc = prollyCursorApplyMergeStep(pCur, 1);
+  }else{
+    rc = prollyCursorFinishTreeStep(pCur, prollyCursorNextFastLeaf(&pCur->pCur));
+    if( rc==SQLITE_DONE ) return rc;
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
   if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
@@ -1002,116 +1008,57 @@ int sqlite3BtreeNext(BtCursor *pCur, int flags){
 }
 
 int prollyBtCursorPrevious(BtCursor *pCur, int flags){
-  int rc;
+  int rc, immediate;
   (void)flags;
-  CLEAR_CACHED_PAYLOAD(pCur);
 
-  rc = prollyCursorCheckInterrupt(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  if( pCur->eState==CURSOR_INVALID ){
-    return SQLITE_DONE;
-  }
-
-  if( pCur->eState==CURSOR_FAULT ){
-    return pCur->skipNext;
-  }
-
-  if( pCur->eState==CURSOR_REQUIRESEEK ){
-    rc = restoreCursorPosition(pCur, 0);
-    if( rc!=SQLITE_OK ) return rc;
-    if( pCur->eState==CURSOR_INVALID ){
-      return SQLITE_DONE;
-    }
-  }
-
-  if( pCur->eState==CURSOR_SKIPNEXT ){
-    pCur->eState = CURSOR_VALID;
-    if( pCur->skipNext<0 ){
-      pCur->skipNext = 0;
-      return SQLITE_OK;
-    }
-    pCur->skipNext = 0;
-  }
+  rc = prollyBtCursorStepPrologue(pCur, -1, &immediate);
+  if( immediate ) return rc;
 
   if( pCur->mmActive ){
-    rc = mergeStepBackward(pCur);
-    if( rc==SQLITE_DONE ){
-      pCur->eState = CURSOR_INVALID;
-    }else if( rc==SQLITE_OK ){
-      pCur->eState = CURSOR_VALID;
-    }
-  }else{
-    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-      ProllyMutMapIter it;
-      rc = ensureCursorMutMapOrder(pCur);
+    rc = prollyCursorApplyMergeStep(pCur, -1);
+  }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    ProllyMutMapIter it;
+    rc = ensureCursorMutMapOrder(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+      rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
+                                prollyCursorIntKey(&pCur->pCur));
       if( rc!=SQLITE_OK ) return rc;
-      if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
-        rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
-                                  prollyCursorIntKey(&pCur->pCur));
-        if( rc!=SQLITE_OK ) return rc;
-        if( it.idx >= pCur->pMutMap->nEntries
-         || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
-         || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
-        ){
-          it.idx--;
-        }
-      }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
-        const u8 *pK; int nK;
-        prollyCursorKey(&pCur->pCur, &pK, &nK);
-        rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
-        if( rc!=SQLITE_OK ) return rc;
-        if( it.idx >= pCur->pMutMap->nEntries
-         || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
-         || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
-        ){
-          it.idx--;
-        }
-      }else if( pCur->eState==CURSOR_VALID ){
-        rc = seedMutMapIterFromCursor(pCur, &it);
-        if( rc==SQLITE_NOTFOUND ){
-          rc = prollyMutMapIterLast(&it, pCur->pMutMap);
-        }else if( rc==SQLITE_OK ){
-          it.idx--;
-        }
-      }else{
+      if( it.idx >= pCur->pMutMap->nEntries
+       || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
+       || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
+      ){
+        it.idx--;
+      }
+    }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+      const u8 *pK; int nK;
+      prollyCursorKey(&pCur->pCur, &pK, &nK);
+      rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
+      if( rc!=SQLITE_OK ) return rc;
+      if( it.idx >= pCur->pMutMap->nEntries
+       || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
+       || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
+      ){
+        it.idx--;
+      }
+    }else if( pCur->eState==CURSOR_VALID ){
+      rc = seedMutMapIterFromCursor(pCur, &it);
+      if( rc==SQLITE_NOTFOUND ){
         rc = prollyMutMapIterLast(&it, pCur->pMutMap);
-      }
-      if( rc!=SQLITE_OK ) return rc;
-      pCur->mmIdx = it.idx;
-      pCur->mmActive = 1;
-
-      if( it.idx >= 0 && it.idx < pCur->pMutMap->nEntries
-       && prollyCursorIsValid(&pCur->pCur)
-       && mergeCompare(pCur, prollyMutMapEntryAt(pCur->pMutMap, it.idx))==0 ){
-        pCur->mergeSrc = MERGE_SRC_BOTH;
-      }else if( !prollyCursorIsValid(&pCur->pCur) ){
-        pCur->mergeSrc = MERGE_SRC_MUT;
-      }else{
-        pCur->mergeSrc = MERGE_SRC_TREE;
-      }
-      rc = mergeStepBackward(pCur);
-      if( rc==SQLITE_DONE ){
-        pCur->eState = CURSOR_INVALID;
       }else if( rc==SQLITE_OK ){
-        pCur->eState = CURSOR_VALID;
+        it.idx--;
       }
     }else{
-      rc = prollyCursorPrev(&pCur->pCur);
-      if( rc==SQLITE_OK ){
-        if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-          pCur->eState = CURSOR_VALID;
-          if( pCur->curIntKey ){
-            cacheCurrentTreePayloadIfIntKey(pCur);
-          }else{
-            cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-          }
-        } else {
-          pCur->eState = CURSOR_INVALID;
-          return SQLITE_DONE;
-        }
-      }
+      rc = prollyMutMapIterLast(&it, pCur->pMutMap);
     }
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->mmIdx = it.idx;
+    pCur->mmActive = 1;
+    prollyCursorClassifyMergeSrc(pCur, it.idx);
+    rc = prollyCursorApplyMergeStep(pCur, -1);
+  }else{
+    rc = prollyCursorFinishTreeStep(pCur, prollyCursorPrev(&pCur->pCur));
+    if( rc==SQLITE_DONE ) return rc;
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
   if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
