@@ -123,59 +123,64 @@ static int doltliteWalkFirstParent(
 
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int len, j, n, rc;
-  int suffix_pos = -1;
-  char suffix_op = 0;
+  int len, base_len, i, rc;
   char *base_buf = 0;
 
   if( !zRef || !cs ) return SQLITE_ERROR;
 
+  /* A ref may carry a suffix of ~N / ^N parent-walk operators. Peel that
+  ** suffix off right-to-left to find the base ref, then apply the operators
+  ** left-to-right. This is iterative on purpose: recursing once per operator
+  ** let a long "^^^..." argument exhaust the stack. */
   len = (int)strlen(zRef);
-  for(j=len-1; j>=0; j--){
-    if( zRef[j]=='~' || zRef[j]=='^' ){
-      int k, allDigits = 1;
-      for(k=j+1; k<len; k++){
-        if( zRef[k]<'0' || zRef[k]>'9' ){ allDigits = 0; break; }
-      }
-      if( allDigits ){
-        suffix_pos = j;
-        suffix_op = zRef[j];
-      }
+  base_len = len;
+  for(;;){
+    int q = base_len;
+    while( q>0 && zRef[q-1]>='0' && zRef[q-1]<='9' ) q--;
+    if( q>0 && (zRef[q-1]=='~' || zRef[q-1]=='^') ){
+      base_len = q-1;
+    }else{
       break;
     }
   }
 
-  if( suffix_pos<0 ){
-    return doltliteResolveBaseRef(db, zRef, pCommit);
-  }
-
-  if( suffix_pos==len-1 ){
-    n = 1;
-  }else{
-    n = atoi(zRef + suffix_pos + 1);
-    if( n<0 ) return SQLITE_ERROR;
-    if( n==0 && suffix_op=='^' ) return SQLITE_ERROR;
-  }
-
-  if( suffix_pos==0 ){
+  if( base_len==len ){
+    /* No operator suffix: resolve the ref as-is (including "", which is not
+    ** a shorthand for HEAD and must fail like any unknown ref). */
+    rc = doltliteResolveBaseRef(db, zRef, pCommit);
+  }else if( base_len==0 ){
+    /* The ref is nothing but operators (e.g. "^", "~2"): the base is HEAD. */
     rc = doltliteResolveBaseRef(db, "HEAD", pCommit);
   }else{
-    base_buf = sqlite3_malloc(suffix_pos + 1);
+    base_buf = sqlite3_malloc(base_len + 1);
     if( !base_buf ) return SQLITE_NOMEM;
-    memcpy(base_buf, zRef, suffix_pos);
-    base_buf[suffix_pos] = '\0';
-    rc = doltliteResolveRef(db, base_buf, pCommit);
+    memcpy(base_buf, zRef, base_len);
+    base_buf[base_len] = '\0';
+    rc = doltliteResolveBaseRef(db, base_buf, pCommit);
     sqlite3_free(base_buf);
   }
-
   if( rc!=SQLITE_OK ) return rc;
 
-  if( suffix_op=='~' ){
-    rc = doltliteWalkFirstParent(db, pCommit, n);
-  }else{
-    rc = doltliteSelectParent(db, pCommit, n-1);
+  for(i=base_len; i<len; ){
+    char op = zRef[i++];
+    int d = i;
+    int n;
+    while( i<len && zRef[i]>='0' && zRef[i]<='9' ) i++;
+    if( i==d ){
+      n = 1;
+    }else{
+      n = atoi(zRef + d);
+      if( n<0 ) return SQLITE_ERROR;
+      if( n==0 && op=='^' ) return SQLITE_ERROR;
+    }
+    if( op=='~' ){
+      rc = doltliteWalkFirstParent(db, pCommit, n);
+    }else{
+      rc = doltliteSelectParent(db, pCommit, n-1);
+    }
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_ERROR;
+    if( rc!=SQLITE_OK ) return rc;
   }
-  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_ERROR;
   return rc;
 }
 
