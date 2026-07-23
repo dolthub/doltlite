@@ -26,6 +26,7 @@ int btreeLoadWorkingSetBlob(
   int rc;
   u8 version;
 
+  assert( cs!=0 && zBranch!=0 );
   if( pWorkingCat ) memset(pWorkingCat, 0, sizeof(ProllyHash));
   if( pWorkingCommit ) memset(pWorkingCommit, 0, sizeof(ProllyHash));
   if( pStaged ) memset(pStaged, 0, sizeof(ProllyHash));
@@ -268,6 +269,7 @@ int btreeWriteWorkingState(
   u8 isRebasing = 0;
   int rc;
 
+  assert( cs!=0 && zBranch!=0 && pCatHash!=0 && pCommitHash!=0 );
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &stagedCatalog, &isMerging,
                                &mergeCommitHash, &conflictsCatalogHash,
                                &isRebasing, &preRebaseCat, &rebaseOnto,
@@ -305,7 +307,7 @@ int btreeReloadBranchWorkingStateInto(
   int bLoadCatalog,
   ProllyHash *pLoadedCatHash
 ){
-  BtShared *pBt = p->pBt;
+  BtShared *pBt;
   ProllyHash catHash;
   ProllyHash workingCommitHash;
   ProllyHash stagedCatalog;
@@ -316,12 +318,16 @@ int btreeReloadBranchWorkingStateInto(
   ProllyHash constraintViolationsHash;
   char *zRebaseOrigBranch = 0;
   char *zRebaseReturnBranch = 0;
-  const char *zBr = p->zBranch ? p->zBranch : "main";
+  const char *zBr;
   u8 isMerging = 0;
   u8 isRebasing = 0;
-  int hadUserCatalog = p->cat.n > 1;
+  int hadUserCatalog;
   int rc;
 
+  assert( p!=0 && p->pBt!=0 );
+  pBt = p->pBt;
+  zBr = p->zBranch ? p->zBranch : "main";
+  hadUserCatalog = p->cat.n > 1;
   memset(&catHash, 0, sizeof(catHash));
   memset(&workingCommitHash, 0, sizeof(workingCommitHash));
   memset(&stagedCatalog, 0, sizeof(stagedCatalog));
@@ -407,6 +413,7 @@ int btreeReloadBranchWorkingStateInto(
 }
 
 void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
+  assert( p!=0 );
   if( pCatHash ){
     p->committedCatalogHash = *pCatHash;
   }
@@ -419,6 +426,7 @@ void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
 }
 
 void btreeBumpExternalDataVersion(Btree *p){
+  assert( p!=0 && p->pBt!=0 );
   if( p->pBt->pPagerShim ){
     p->pBt->pPagerShim->iDataVersion++;
   }else{
@@ -427,6 +435,7 @@ void btreeBumpExternalDataVersion(Btree *p){
 }
 
 void btreeBumpLocalDataVersion(Btree *p){
+  assert( p!=0 && p->pBt!=0 );
   if( p->pBt->pPagerShim ){
     p->pBt->pPagerShim->iDataVersion++;
     p->iBDataVersion--;
@@ -436,7 +445,9 @@ void btreeBumpLocalDataVersion(Btree *p){
 }
 
 void btreeMarkWorkingStateChanged(Btree *p, int bLocal){
-  BtShared *pBt = p->pBt;
+  BtShared *pBt;
+  assert( p!=0 && p->pBt!=0 );
+  pBt = p->pBt;
   pBt->iWorkingStateVersion++;
   if( pBt->iWorkingStateVersion==0 ){
     pBt->iWorkingStateVersion = 1;
@@ -447,12 +458,15 @@ void btreeMarkWorkingStateChanged(Btree *p, int bLocal){
   }else{
     btreeBumpExternalDataVersion(p);
   }
+  assert( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion );
 }
 
 int btreeRefreshSharedWorkingState(Btree *p){
-  BtShared *pBt = p->pBt;
+  BtShared *pBt;
   ProllyHash loadedCatHash;
   int rc;
+  assert( p!=0 && p->pBt!=0 );
+  pBt = p->pBt;
   if( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion ){
     return SQLITE_OK;
   }
@@ -467,13 +481,18 @@ int btreeRefreshSharedWorkingState(Btree *p){
 }
 
 int btreeRefreshFromDisk(Btree *p){
-  BtShared *pBt = p->pBt;
+  BtShared *pBt;
   int bChanged = 0;
-  u8 snapshotPinned = pBt->store.snapshotPinned;
-  int bAutocommitBoundary = p->inTrans==TRANS_NONE
-    && p->db && p->db->autoCommit && !p->db->pSavepoint;
+  u8 snapshotPinned;
+  int bAutocommitBoundary;
   ProllyHash loadedCatHash;
   int rc;
+
+  assert( p!=0 && p->pBt!=0 );
+  pBt = p->pBt;
+  snapshotPinned = pBt->store.snapshotPinned;
+  bAutocommitBoundary = p->inTrans==TRANS_NONE
+    && p->db && p->db->autoCommit && !p->db->pSavepoint;
 
   if( bAutocommitBoundary ){
     pBt->store.snapshotPinned = 0;
@@ -507,6 +526,7 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
 void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;
+    assert( zBranch!=0 );
     sqlite3_free(p->zBranch);
     p->zBranch = sqlite3_mprintf("%s", zBranch);
   }
