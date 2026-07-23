@@ -142,18 +142,14 @@ static int doltliteApplyMergeSchemaActions(
   return rc;
 }
 
-static void doltliteMergeFunc(
+int doltliteMergeRef(
+  sqlite3 *db,
   sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
+  const char *zBranch,
+  const char *zMessage,
+  int noFastForward
 ){
-  sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *zBranch = 0;
-  const char *zMessage = 0;
-  int isAbort = 0;
-  int noFastForward = 0;
-  u8 isMerging = 0;
   ProllyHash ourHead, theirHead, ancestorHash;
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
   DoltliteTxnState savedState;
@@ -161,127 +157,76 @@ static void doltliteMergeFunc(
   DoltliteCommit ourCommit, theirCommit, ancCommit;
   int graphLocked = 0;
   int dirty = 0;
-  int rc, i;
+  int rc;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&ancCommit, 0, sizeof(ancCommit));
   memset(&savedState, 0, sizeof(savedState));
 
-  if( !cs ){ sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1); return; }
-  if( argc<1 ){ sqlite3_result_error(context, "usage: dolt_merge('branch')", -1); return; }
-
-  for(i=0; i<argc; i++){
-    const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( !arg ) continue;
-    if( strcmp(arg, "--abort")==0 ){
-      isAbort = 1;
-    }else if( strcmp(arg, "--no-ff")==0 ){
-      noFastForward = 1;
-    }else if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
-      if( i+1<argc ){
-        zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      }else{
-        sqlite3_result_error(context, "-m requires a message", -1);
-        return;
-      }
-    }else if( arg[0]=='-' ){
-      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
-      if( zErr ){
-        sqlite3_result_error(context, zErr, -1);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(context);
-      }
-      return;
-    }else if( !zBranch ){
-      zBranch = arg;
-    }else{
-      sqlite3_result_error(context, "too many positional arguments to dolt_merge", -1);
-      return;
-    }
-  }
-
-  if( isAbort ){
-    if( zBranch || zMessage || noFastForward ){
-      sqlite3_result_error(context,
-        "--abort does not take other arguments", -1);
-      return;
-    }
-    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-    if( !isMerging ){
-      sqlite3_result_error(context, "no merge in progress", -1);
-      return;
-    }
-    rc = mergeAbortInPlace(db);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
-      return;
-    }
-
-    sqlite3_result_int(context, 0);
-    return;
+  if( !cs ){
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+    return SQLITE_ERROR;
   }
 
   if( !zBranch ){
     sqlite3_result_error(context, "branch name required", -1);
-    return;
+    return SQLITE_ERROR;
   }
 
   doltliteGetSessionHead(db, &ourHead);
   if( prollyHashIsEmpty(&ourHead) ){
     sqlite3_result_error(context, "no commits on current branch", -1);
-    return;
+    return SQLITE_ERROR;
   }
 
   rc = doltliteResolveRef(db, zBranch, &theirHead);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&theirHead) ){
     sqlite3_result_error(context, "merge source not found", -1);
-    return;
+    return SQLITE_ERROR;
   }
 
   if( prollyHashCompare(&ourHead, &theirHead)==0 ){
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
-    return;
+    return SQLITE_OK;
   }
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
-    return;
+    return SQLITE_ERROR;
   }
   if( dirty ){
     sqlite3_result_error(context,
       "uncommitted changes \xe2\x80\x94 commit or reset before merging", -1);
-    return;
+    return SQLITE_ERROR;
   }
 
   rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&ancestorHash) ){
     sqlite3_result_error(context, "no common ancestor found", -1);
-    return;
+    return SQLITE_ERROR;
   }
 
   if( prollyHashCompare(&ancestorHash, &theirHead)==0 ){
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
-    return;
+    return SQLITE_OK;
   }
 
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
-    rc = mergeFastForward(db, context, cs, &ourHead, &theirHead);
-    return;
+    return mergeFastForward(db, context, cs, &ourHead, &theirHead);
   }
 
   rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return; }
+  if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return SQLITE_ERROR; }
   memcpy(&ourCatHash, &ourCommit.catalogHash, sizeof(ProllyHash));
 
   rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
-  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "failed to load their commit", -1); return; }
+  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "failed to load their commit", -1); return SQLITE_ERROR; }
   memcpy(&theirCatHash, &theirCommit.catalogHash, sizeof(ProllyHash));
 
   rc = doltliteLoadCommit(db, &ancestorHash, &ancCommit);
-  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "failed to load ancestor", -1); return; }
+  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "failed to load ancestor", -1); return SQLITE_ERROR; }
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
 
@@ -290,7 +235,7 @@ static void doltliteMergeFunc(
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context, rc);
-    return;
+    return SQLITE_ERROR;
   }
 
   rc = doltliteSaveTxnState(db, &savedState);
@@ -298,7 +243,7 @@ static void doltliteMergeFunc(
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context, rc);
-    return;
+    return SQLITE_ERROR;
   }
 
   {
@@ -323,7 +268,7 @@ static void doltliteMergeFunc(
       doltliteTxnStateClear(&savedState);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       doltliteFreeNameList(azReindex, nReindex);
-      return;
+      return SQLITE_ERROR;
     }
     sqlite3_free(zMergeErr);
 
@@ -338,7 +283,7 @@ static void doltliteMergeFunc(
         freeSchemaMergeActions(aSchemaActions, nSchemaActions);
         doltliteFreeNameList(azReindex, nReindex);
         sqlite3_result_error_code(context, rc);
-        return;
+        return SQLITE_ERROR;
       }
     }
 
@@ -352,7 +297,7 @@ static void doltliteMergeFunc(
       sqlite3_result_error(context,
         "merge conflict: another connection committed to this branch. Please retry your transaction.",
         -1);
-      return;
+      return SQLITE_ERROR;
     }
     if( rc!=SQLITE_OK ){
       doltliteTxnStateClear(&savedState);
@@ -361,7 +306,7 @@ static void doltliteMergeFunc(
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       doltliteFreeNameList(azReindex, nReindex);
       sqlite3_result_error_code(context, rc);
-      return;
+      return SQLITE_ERROR;
     }
     graphLocked = 1;
 
@@ -377,7 +322,7 @@ static void doltliteMergeFunc(
       doltliteFreeNameList(azReindex, nReindex);
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
+      return SQLITE_ERROR;
     }
 
     /* Indexes adopted from the other branch carry only that branch's
@@ -397,7 +342,7 @@ static void doltliteMergeFunc(
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
+      return SQLITE_ERROR;
     }
 
     if( nSchemaActions > 0 ){
@@ -412,7 +357,7 @@ static void doltliteMergeFunc(
         }
         sqlite3_result_error_code(context,
             doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-        return;
+        return SQLITE_ERROR;
       }
     }else{
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
@@ -455,7 +400,7 @@ static void doltliteMergeFunc(
       }
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
+      return SQLITE_ERROR;
     }
   }
 
@@ -497,7 +442,7 @@ static void doltliteMergeFunc(
         sqlite3_result_error_code(context,
             doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
       }
-      return;
+      return SQLITE_ERROR;
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
@@ -564,12 +509,12 @@ static void doltliteMergeFunc(
         if( rc!=SQLITE_OK ){
           sqlite3_result_error_code(context,
               doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-          return;
+          return SQLITE_ERROR;
         }
         doltliteTxnStateClear(&savedState);
         break;
       }
-      return;
+      return SQLITE_ERROR;
     }
   }
 
@@ -584,7 +529,7 @@ static void doltliteMergeFunc(
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
       }
-      return;
+      return SQLITE_ERROR;
     case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
       rc = doltliteRestoreTxnState(db, &savedState);
       if( rc==SQLITE_OK ){
@@ -607,16 +552,16 @@ static void doltliteMergeFunc(
           nMergeConflicts);
         sqlite3_result_error(context, msg, -1);
       }
-      return;
+      return SQLITE_ERROR;
     case DOLTLITE_VC_TXN_PLAIN:
       rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context,
             doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-        return;
+        return SQLITE_ERROR;
       }
       doltliteTxnStateClear(&savedState);
-      break;
+      return SQLITE_ERROR;
     }
   }else{
     ProllyHash commitHash;
@@ -627,7 +572,7 @@ static void doltliteMergeFunc(
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
+      return SQLITE_ERROR;
     }
 
     if( zMessage && zMessage[0] ){
@@ -640,7 +585,7 @@ static void doltliteMergeFunc(
         msg, NULL, NULL, &theirHead, 1, &commitHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to create merge commit", -1);
-      return;
+      return SQLITE_ERROR;
     }
 
     /* Re-confirm under the lock right before advancing; the merge's first
@@ -651,12 +596,12 @@ static void doltliteMergeFunc(
         "merge conflict: another connection committed to this branch. Please retry your transaction.",
         -1);
       doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
-      return;
+      return SQLITE_ERROR;
     }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
+      return SQLITE_ERROR;
     }
     graphLocked = 1;
 
@@ -668,18 +613,96 @@ static void doltliteMergeFunc(
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
+      return SQLITE_ERROR;
     }
     rc = doltliteVcSealActiveSavepoints(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
-      return;
+      return SQLITE_ERROR;
     }
     doltliteTxnStateClear(&savedState);
 
     doltliteHashToHex(&commitHash, hexBuf);
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+    return SQLITE_OK;
   }
+  return SQLITE_OK;
+}
+
+static void doltliteMergeFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  const char *zBranch = 0;
+  const char *zMessage = 0;
+  int isAbort = 0;
+  int noFastForward = 0;
+  u8 isMerging = 0;
+  int rc, i;
+
+  if( !doltliteGetChunkStore(db) ){
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+    return;
+  }
+  if( argc<1 ){
+    sqlite3_result_error(context, "usage: dolt_merge('branch')", -1);
+    return;
+  }
+
+  for(i=0; i<argc; i++){
+    const char *arg = (const char*)sqlite3_value_text(argv[i]);
+    if( !arg ) continue;
+    if( strcmp(arg, "--abort")==0 ){
+      isAbort = 1;
+    }else if( strcmp(arg, "--no-ff")==0 ){
+      noFastForward = 1;
+    }else if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
+      if( i+1<argc ){
+        zMessage = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "-m requires a message", -1);
+        return;
+      }
+    }else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
+    }else if( !zBranch ){
+      zBranch = arg;
+    }else{
+      sqlite3_result_error(context, "too many positional arguments to dolt_merge", -1);
+      return;
+    }
+  }
+
+  if( isAbort ){
+    if( zBranch || zMessage || noFastForward ){
+      sqlite3_result_error(context,
+        "--abort does not take other arguments", -1);
+      return;
+    }
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( !isMerging ){
+      sqlite3_result_error(context, "no merge in progress", -1);
+      return;
+    }
+    rc = mergeAbortInPlace(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+    sqlite3_result_int(context, 0);
+    return;
+  }
+
+  (void)doltliteMergeRef(db, context, zBranch, zMessage, noFastForward);
 }
 
 
