@@ -110,6 +110,26 @@ INSERT INTO t VALUES (2, 1, 'x');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'C3');
 " "SELECT CONCAT('BL|', a, '-', b, '|', message) FROM dolt_blame_t ORDER BY a, b;"
 
+echo "--- all-column PK (empty value record; row lives in the key) ---"
+
+oracle "all_column_pk_int" "
+CREATE TABLE t(a INTEGER, b INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES (1, 1), (1, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'C1');
+INSERT INTO t VALUES (2, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'C2');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'C3');
+" "SELECT CONCAT('BL|', a, '-', b, '|', message) FROM dolt_blame_t ORDER BY a, b;"
+
+oracle "all_column_pk_text" "
+CREATE TABLE t(a VARCHAR(16), b VARCHAR(16), PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('p', 'q'), ('p', 'r');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'C1');
+INSERT INTO t VALUES ('s', 't');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'C2');
+" "SELECT CONCAT('BL|', a, '-', b, '|', message) FROM dolt_blame_t ORDER BY a, b;"
+
 echo "--- NULL values ---"
 
 oracle "null_values" "

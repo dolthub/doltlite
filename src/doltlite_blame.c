@@ -272,6 +272,15 @@ static int blameCollectLiveRows(
       if( !r->pCurVal ){ prollyCursorClose(&cur); return SQLITE_NOMEM; }
       memcpy(r->pCurVal, pVal, nVal);
       r->nCurVal = nVal;
+    }else if( r->pKey && r->nKey>0 ){
+      /* All-column-PK rows store an empty value; the row lives in the sort
+      ** key. Rebuild the record so PK columns render and ancestor comparison
+      ** sees real data instead of matching every empty value. */
+      BlameVtab *v = (BlameVtab*)pCur->base.pVtab;
+      rc = doltliteRecordFromClusteredKey(v->db, v->zTableName,
+                                          r->pKey, r->nKey,
+                                          &r->pCurVal, &r->nCurVal);
+      if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
     }
 
     pCur->nRows++;
@@ -289,13 +298,15 @@ static int blameSeekRowInTree(
   u8 flags,
   const BlameRow *pRow,
   const u8 **ppVal,
-  int *pnVal
+  int *pnVal,
+  int *pFound
 ){
   ProllyCursor cur;
   int res, rc;
 
   *ppVal = 0;
   *pnVal = 0;
+  *pFound = 0;
 
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
@@ -312,6 +323,7 @@ static int blameSeekRowInTree(
     return SQLITE_OK;
   }
 
+  *pFound = 1;
   prollyCursorValue(&cur, ppVal, pnVal);
   prollyCursorClose(&cur);
   return SQLITE_OK;
@@ -424,6 +436,10 @@ static int blameCompareAgainstRef(
     BlameRow *r = &pCur->aRows[i];
     const u8 *pRefVal = 0;
     int nRefVal = 0;
+    int refFound = 0;
+    u8 *pRefRebuilt = 0;
+    const u8 *pRefEff;
+    int nRefEff;
     if( r->blamed ) continue;
 
     if( haveRef ){
@@ -437,20 +453,38 @@ static int blameCompareAgainstRef(
           refCurValid = prollyCursorIsValid(&refCur);
         }
         if( refCurValid && cmp==0 ){
+          refFound = 1;
           prollyCursorValue(&refCur, &pRefVal, &nRefVal);
         }
       }else{
         rc = blameSeekRowInTree(cs, pCache, &refRoot, refFlags, r,
-                                &pRefVal, &nRefVal);
+                                &pRefVal, &nRefVal, &refFound);
         if( rc!=SQLITE_OK ) goto blame_compare_done;
       }
     }
 
-    if( !blameRowValueEqual(r->pCurVal, r->nCurVal, pRefVal, nRefVal) ){
-      rc = blameAssign(r, pCommitHash, pCommit);
+    /* A matched all-column-PK row stores an empty value in the ref too, so
+    ** rebuild it from the key like the live side; otherwise the reconstructed
+    ** live record would compare unequal to the empty ref and look changed.
+    ** An absent ref row keeps an empty value here and stays a real change. */
+    pRefEff = pRefVal;
+    nRefEff = nRefVal;
+    if( refFound && !(pRefVal && nRefVal>0)
+     && !(refFlags & PROLLY_NODE_INTKEY) && r->pKey && r->nKey>0 ){
+      int nR = 0;
+      rc = doltliteRecordFromClusteredKey(db, zTableName, r->pKey, r->nKey,
+                                          &pRefRebuilt, &nR);
       if( rc!=SQLITE_OK ) goto blame_compare_done;
+      pRefEff = pRefRebuilt;
+      nRefEff = nR;
+    }
+
+    if( !blameRowValueEqual(r->pCurVal, r->nCurVal, pRefEff, nRefEff) ){
+      rc = blameAssign(r, pCommitHash, pCommit);
+      if( rc!=SQLITE_OK ){ sqlite3_free(pRefRebuilt); goto blame_compare_done; }
       pCur->nUnresolved--;
     }
+    sqlite3_free(pRefRebuilt);
   }
 
 blame_compare_done:
