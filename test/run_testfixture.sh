@@ -158,6 +158,9 @@ for test in "$@"; do
     if [ "$n_unexpected" -gt 0 ]; then
       echo "FAIL: $test — unexpected failures:"
       echo "$unexpected" | sed 's/^/    /'
+      echo "  --- last testfixture output ---"
+      echo "$out" | tail -n 40 | sed 's/^/  | /'
+      echo "  --- end testfixture output ---"
       while IFS= read -r name; do
         [ -z "$name" ] && continue
         unexpected_failure_lines="$unexpected_failure_lines"$'\n'"  $test $name"
