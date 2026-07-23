@@ -261,8 +261,7 @@ jobs:
   sqlite-regression:
     name: sqlite-regression-${{ matrix.bucket }}
     runs-on: ubuntu-latest
-    # core-sql includes bigsort (~4–10 min under PROLLY_CHECK); keep headroom.
-    timeout-minutes: 25
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
