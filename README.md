@@ -1001,6 +1001,56 @@ bash ../test/doltlite_merge.sh           # Three-way merge
 bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 ```
 
+### Source Coverage
+
+CI builds the non-amalgamated engine once with LLVM source-coverage
+instrumentation. The existing Linux correctness jobs consume that build and
+run the complete SQLite Tcl regression buckets, differential oracles,
+deterministic shell suites, and deterministic C suites. Each parallel job
+uploads a small pool of raw profiles; a final job merges them and publishes
+line, branch, and function coverage for the DoltLite-owned `src/`
+implementation files.
+
+Timing and scale gates, concurrency and fault stress, sanitizers, and
+platform-specific jobs keep their optimized or specialized builds. They do not
+contribute profiles. macOS and Windows still run their platform checks, but
+deterministic Linux correctness tests are not repeated outside the
+instrumented jobs.
+
+The source-coverage summary is informational; no floor is currently set. Its
+artifact contains an HTML report, aggregate summary, per-file TSV, merged LLVM
+profile, and LCOV data. To produce a local report with Clang, LLVM tools, and
+Dolt:
+
+```bash
+mkdir build-coverage
+cd build-coverage
+CC=clang \
+  CFLAGS="-O1 -g -fprofile-instr-generate -fcoverage-mapping" \
+  LDFLAGS="-fprofile-instr-generate" \
+  ../configure
+make -j2 DOLTLITE_PROLLY_CHECK=1 \
+  doltlite doltlite-remotesrv doltlite-lib testfixture \
+  doltlite-c-tests-build doltlite-regression-test-c-build
+make DOLTLITE_PROLLY=0 sqlite3
+cd ..
+mkdir -p coverage-profiles
+export LLVM_PROFILE_FILE="$PWD/coverage-profiles/%8m.profraw"
+export DOLTLITE_REGRESSION_PREBUILT=1
+DOLTLITE_BUILD_DIR="$PWD/build-coverage" \
+  DOLTLITE_SUITE_SET=coverage \
+  bash test/run_doltlite_tests.sh
+bash test/run_c_tests.sh build-coverage coverage
+# Run the Tcl regression buckets and differential oracles as in test.yml.
+bash test/source_coverage_report.sh \
+  build-coverage coverage-profiles coverage-report
+```
+
+The report command accepts optional percentage floors through
+`DOLTLITE_COVERAGE_MIN_LINES`, `DOLTLITE_COVERAGE_MIN_BRANCHES`, and
+`DOLTLITE_COVERAGE_MIN_FUNCTIONS`. They are intentionally unset until the
+informational baseline is stable enough to ratchet.
+
 ### Differential Oracle Tests
 
 Doltlite ships a suite of differential oracle tests that run the same SQL

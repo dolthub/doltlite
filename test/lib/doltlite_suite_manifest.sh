@@ -94,6 +94,27 @@ review_regression_test.sh
 EOF
 }
 
+doltlite_timing_suites() {
+  cat <<'EOF'
+large_merge_test.sh
+doltlite_diff_stat_scale.sh
+doltlite_branch_gc_stress.sh
+doltlite_perf.sh
+doltlite_count_perf.sh
+doltlite_gc_scale.sh
+EOF
+}
+
+doltlite_coverage_suites() {
+  local excluded
+  excluded="$(doltlite_timing_suites)"
+  while IFS= read -r suite; do
+    if ! grep -Fqx "$suite" <<<"$excluded"; then
+      echo "$suite"
+    fi
+  done < <(doltlite_all_suites)
+}
+
 doltlite_windows_suites() {
   cat <<'EOF'
 doltlite_parity.sh

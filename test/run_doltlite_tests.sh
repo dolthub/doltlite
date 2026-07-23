@@ -21,7 +21,16 @@ if [ ! -x "$BUILD_DIR/doltlite" ]; then
 fi
 
 TESTS=()
-while IFS= read -r line; do TESTS+=("$line"); done < <(doltlite_all_suites)
+case "${DOLTLITE_SUITE_SET:-all}" in
+  all) suite_manifest=doltlite_all_suites ;;
+  coverage) suite_manifest=doltlite_coverage_suites ;;
+  timing) suite_manifest=doltlite_timing_suites ;;
+  *)
+    echo "ERROR: unknown DOLTLITE_SUITE_SET: $DOLTLITE_SUITE_SET"
+    exit 1
+    ;;
+esac
+while IFS= read -r line; do TESTS+=("$line"); done < <("$suite_manifest")
 
 total_pass=0
 total_fail=0
