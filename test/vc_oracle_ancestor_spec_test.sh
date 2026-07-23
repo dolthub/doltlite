@@ -34,12 +34,15 @@ dolt_repo_setup() {
   )
 }
 
-oracle_ok_and_in_set() {
-  local name="$1" setup="$2" ref="$3" valid_set="$4"
+oracle_refs_equal() {
+  local name="$1" setup="$2" ref="$3" expected="$4"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl"
 
-  local dl_query="SELECT dolt_hashof('$ref');"
+  local dl_query="SELECT CASE
+    WHEN dolt_hashof('$ref') = dolt_hashof('$expected') THEN 'REF_OK'
+    ELSE 'REF_WRONG'
+  END AS result;"
   run_dl_query "$dir/dl/db" "$(printf '%s\n%s\n' "$setup" "$dl_query")" "$dir/dl.out" "$dir/dl.err"
   local dl_rc=$?
 
@@ -49,28 +52,21 @@ oracle_ok_and_in_set() {
   run_dt_query "$dir/dt" "$dl_query" "$dir/dt.out" "$dir/dt.err"
   local dt_rc=$?
 
-  local dl_hash
-  dl_hash=$(tail -n 1 "$dir/dl.out" | tr -d '\r')
-  local dt_hash
-  dt_hash=$(grep -oE '[0-9a-z]{32,64}' "$dir/dt.out" | tail -n 1)
-
   if [ "$dl_rc" -ne 0 ] || [ "$dt_rc" -ne 0 ]; then
     fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
     echo "  FAIL: $name (expected both to succeed; dl_rc=$dl_rc dt_rc=$dt_rc)"
+    echo "    doltlite stderr: $(cat "$dir/dl.err" 2>/dev/null)"
+    echo "    dolt stderr:     $(cat "$dir/dt.err" 2>/dev/null)"
     return
   fi
-  local dl_ok=0 dt_ok=0
-  for cand in $valid_set; do
-    [ "$dl_hash" = "$cand" ] && dl_ok=1
-    [ "$dt_hash" = "$cand" ] && dt_ok=1
-  done
-  if [ "$dl_ok" = 1 ] && [ "$dt_ok" = 1 ]; then
+
+  if grep -q '^REF_OK$' "$dir/dl.out" && grep -q 'REF_OK' "$dir/dt.out"; then
     pass=$((pass+1))
   else
     fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (hashes not in valid set: $valid_set)"
-    echo "    doltlite: $dl_hash"
-    echo "    dolt:     $dt_hash"
+    echo "  FAIL: $name (expected $ref to resolve to $expected)"
+    echo "    doltlite output: $(cat "$dir/dl.out" 2>/dev/null)"
+    echo "    dolt output:     $(cat "$dir/dt.out" 2>/dev/null)"
   fi
 }
 
@@ -99,37 +95,6 @@ oracle_both_error() {
   fi
 }
 
-oracle_both_ok() {
-  local name="$1" setup="$2" ref="$3"
-  local dir="$TMPROOT/${name}_ok"
-  mkdir -p "$dir/dl"
-
-  local dl_query="SELECT dolt_hashof('$ref');"
-  run_dl_query "$dir/dl/db" "$(printf '%s\n%s\n' "$setup" "$dl_query")" "$dir/dl.out" "$dir/dl.err"
-  local dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  dolt_repo_setup "$dir/dt" "$dolt_setup"
-  run_dt_query "$dir/dt" "$dl_query" "$dir/dt.out" "$dir/dt.err"
-  local dt_rc=$?
-
-  local dl_hash
-  dl_hash=$(tail -n 1 "$dir/dl.out" | tr -d '\r')
-  local dt_hash
-  dt_hash=$(grep -oE '[0-9a-z]{32,64}' "$dir/dt.out" | tail -n 1)
-
-  if [ "$dl_rc" -eq 0 ] && [ "$dt_rc" -eq 0 ] && [ -n "$dl_hash" ] && [ -n "$dt_hash" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to succeed with non-empty hashes)"
-    echo "    dl_rc=$dl_rc dt_rc=$dt_rc"
-    echo "    doltlite hash: |$dl_hash|"
-    echo "    dolt hash:     |$dt_hash|"
-  fi
-}
-
 echo "=== Version Control Oracle Tests: ancestor spec (F4 LCA + F9 composed refs) ==="
 echo ""
 
@@ -140,33 +105,43 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('base');
 SELECT dolt_checkout('-b', 'feat');
 INSERT INTO t VALUES (10, 100);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat_c1');
+SELECT dolt_tag('feat_tip', 'HEAD');
 SELECT dolt_checkout('main');
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_c2');
+SELECT dolt_branch('main_premerge');
 SELECT dolt_merge('feat');
 "
 
-oracle_both_ok "head"           "$MERGED" "HEAD"
-oracle_both_ok "main"           "$MERGED" "main"
-oracle_both_ok "head_tilde"     "$MERGED" "HEAD~"
-oracle_both_ok "head_caret"     "$MERGED" "HEAD^"
-oracle_both_ok "head_tilde_1"   "$MERGED" "HEAD~1"
-oracle_both_ok "head_caret_1"   "$MERGED" "HEAD^1"
-oracle_both_ok "head_caret_2"   "$MERGED" "HEAD^2"
-oracle_both_ok "head_double_tilde" "$MERGED" "HEAD~~"
-oracle_both_ok "head_double_caret" "$MERGED" "HEAD^^"
-oracle_both_ok "head_caret2_tilde1" "$MERGED" "HEAD^2~1"
-oracle_both_ok "head_tilde_0"       "$MERGED" "HEAD~0"
+oracle_refs_equal "head"           "$MERGED" "HEAD" "main"
+oracle_refs_equal "main"           "$MERGED" "main" "HEAD"
+oracle_refs_equal "head_tilde"     "$MERGED" "HEAD~" "main_premerge"
+oracle_refs_equal "head_caret"     "$MERGED" "HEAD^" "main_premerge"
+oracle_refs_equal "head_tilde_1"   "$MERGED" "HEAD~1" "main_premerge"
+oracle_refs_equal "head_caret_1"   "$MERGED" "HEAD^1" "main_premerge"
+oracle_refs_equal "head_caret_2"   "$MERGED" "HEAD^2" "feat"
+oracle_refs_equal "head_double_tilde" "$MERGED" "HEAD~~" "base"
+oracle_refs_equal "head_double_caret" "$MERGED" "HEAD^^" "base"
+oracle_refs_equal "head_caret2_tilde1" "$MERGED" "HEAD^2~1" "base"
+oracle_refs_equal "head_tilde1_caret1" "$MERGED" "HEAD~1^1" "base"
+oracle_refs_equal "head_tilde_0"       "$MERGED" "HEAD~0" "HEAD"
+oracle_refs_equal "branch_tilde_1"     "$MERGED" "feat~1" "base"
+oracle_refs_equal "tag_tilde_1"        "$MERGED" "feat_tip~1" "base"
 
 oracle_both_error "head_caret_0"   "$MERGED" "HEAD^0"
 oracle_both_error "head_tilde3_caret2" "$MERGED" "HEAD~3^2"
 oracle_both_error "head_tilde1_caret2" "$MERGED" "HEAD~1^2"
 oracle_both_error "nonmerge_branch_caret2" "$MERGED" "feat^2"
+oracle_both_error "bare_tilde" "$MERGED" "~"
+oracle_both_error "bare_tilde_1" "$MERGED" "~1"
+oracle_both_error "bare_caret" "$MERGED" "^"
+oracle_both_error "bare_caret_1" "$MERGED" "^1"
 
 # A long operator chain walks past the root and must error cleanly. The
 # resolver applies operators iteratively; the earlier recursive form used
