@@ -586,15 +586,19 @@ void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged){
 ** captureSavepointSessionState when a level is pushed, and levels push
 ** lazily at write time. Mutating this state is a write: push any pending
 ** levels first so ROLLBACK TO restores the pre-mutation values. */
-static void sessionStateSyncSavepoints(Btree *p){
-  if( p->inTrans==TRANS_WRITE ) syncBtreeSavepoints(p);
+static int sessionStateSyncSavepoints(Btree *p){
+  if( p->inTrans==TRANS_WRITE ) return syncBtreeSavepoints(p);
+  return SQLITE_OK;
 }
 
-void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged){
+int doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
-    sessionStateSyncSavepoints(db->aDb[0].pBt);
-    memcpy(&db->aDb[0].pBt->vc.stagedCatalog, pStaged, sizeof(ProllyHash));
+    Btree *p = db->aDb[0].pBt;
+    int rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&p->vc.stagedCatalog, pStaged, sizeof(ProllyHash));
   }
+  return SQLITE_OK;
 }
 
 void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,
@@ -612,22 +616,24 @@ void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,
   }
 }
 
-void doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
-                                   const ProllyHash *pMergeCommit,
-                                   const ProllyHash *pConflictsCatalog){
+int doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
+                                  const ProllyHash *pMergeCommit,
+                                  const ProllyHash *pConflictsCatalog){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;
-    sessionStateSyncSavepoints(p);
+    int rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
     p->vc.isMerging = isMerging;
     if( pMergeCommit ) memcpy(&p->vc.mergeCommitHash, pMergeCommit, sizeof(ProllyHash));
     else memset(&p->vc.mergeCommitHash, 0, sizeof(ProllyHash));
     if( pConflictsCatalog ) memcpy(&p->vc.conflictsCatalogHash, pConflictsCatalog, sizeof(ProllyHash));
     else memset(&p->vc.conflictsCatalogHash, 0, sizeof(ProllyHash));
   }
+  return SQLITE_OK;
 }
 
-void doltliteClearSessionMergeState(sqlite3 *db){
-  doltliteSetSessionMergeState(db, 0, 0, 0);
+int doltliteClearSessionMergeState(sqlite3 *db){
+  return doltliteSetSessionMergeState(db, 0, 0, 0);
 }
 
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
@@ -651,28 +657,48 @@ void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
   }
 }
 
-void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
-                                    const ProllyHash *pPreRebaseCat,
-                                    const ProllyHash *pRebaseOnto,
-                                    const char *zOrigBranch,
-                                    const char *zReturnBranch){
+int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
+                                   const ProllyHash *pPreRebaseCat,
+                                   const ProllyHash *pRebaseOnto,
+                                   const char *zOrigBranch,
+                                   const char *zReturnBranch){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;
-    sessionStateSyncSavepoints(p);
+    char *zNewOrigBranch = 0;
+    char *zNewReturnBranch = 0;
+    int rc;
+    if( zOrigBranch ){
+      zNewOrigBranch = sqlite3_mprintf("%s", zOrigBranch);
+      if( !zNewOrigBranch ) return SQLITE_NOMEM;
+    }
+    if( zReturnBranch ){
+      zNewReturnBranch = sqlite3_mprintf("%s", zReturnBranch);
+      if( !zNewReturnBranch ){
+        sqlite3_free(zNewOrigBranch);
+        return SQLITE_NOMEM;
+      }
+    }
+    rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zNewOrigBranch);
+      sqlite3_free(zNewReturnBranch);
+      return rc;
+    }
     p->isRebasing = isRebasing;
     if( pPreRebaseCat ) memcpy(&p->preRebaseWorkingCat, pPreRebaseCat, sizeof(ProllyHash));
     else memset(&p->preRebaseWorkingCat, 0, sizeof(ProllyHash));
     if( pRebaseOnto ) memcpy(&p->rebaseOntoCommit, pRebaseOnto, sizeof(ProllyHash));
     else memset(&p->rebaseOntoCommit, 0, sizeof(ProllyHash));
     sqlite3_free(p->zRebaseOrigBranch);
-    p->zRebaseOrigBranch = zOrigBranch ? sqlite3_mprintf("%s", zOrigBranch) : 0;
+    p->zRebaseOrigBranch = zNewOrigBranch;
     sqlite3_free(p->zRebaseReturnBranch);
-    p->zRebaseReturnBranch = zReturnBranch ? sqlite3_mprintf("%s", zReturnBranch) : 0;
+    p->zRebaseReturnBranch = zNewReturnBranch;
   }
+  return SQLITE_OK;
 }
 
-void doltliteClearSessionRebaseState(sqlite3 *db){
-  doltliteSetSessionRebaseState(db, 0, 0, 0, 0, 0);
+int doltliteClearSessionRebaseState(sqlite3 *db){
+  return doltliteSetSessionRebaseState(db, 0, 0, 0, 0, 0);
 }
 
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
@@ -712,10 +738,14 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   }
 }
 
-void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
+int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
-    memcpy(&db->aDb[0].pBt->vc.conflictsCatalogHash, pHash, sizeof(ProllyHash));
+    Btree *p = db->aDb[0].pBt;
+    int rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&p->vc.conflictsCatalogHash, pHash, sizeof(ProllyHash));
   }
+  return SQLITE_OK;
 }
 
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash){
@@ -741,12 +771,16 @@ int doltliteGetSessionTableRoot(
   return SQLITE_OK;
 }
 
-void doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash){
+int doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash){
   static const ProllyHash emptyHash = {{0}};
   if( db && db->nDb>0 && db->aDb[0].pBt ){
-    memcpy(&db->aDb[0].pBt->vc.constraintViolationsHash,
+    Btree *p = db->aDb[0].pBt;
+    int rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&p->vc.constraintViolationsHash,
            pHash ? pHash : &emptyHash, sizeof(ProllyHash));
   }
+  return SQLITE_OK;
 }
 
 int doltliteSessionHasConstraintViolations(sqlite3 *db){

@@ -362,20 +362,21 @@ static int storeConflictBytes(
 ){
   int rc;
   DoltliteVcTxnMode mode;
-  extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
-  extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) return rc;
   if( nTables==0 ){
-    doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
+    rc = doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
   }else{
     ProllyHash newHash;
     rc = chunkStorePut(cs, pData, nData, &newHash);
     if( rc!=SQLITE_OK ) return rc;
-    doltliteSetSessionConflictsCatalog(db, &newHash);
-    doltliteSetSessionMergeState(db, 1, 0, &newHash);
+    rc = doltliteSetSessionConflictsCatalog(db, &newHash);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSetSessionMergeState(db, 1, 0, &newHash);
+    }
   }
+  if( rc!=SQLITE_OK ) return rc;
   mode = doltliteVcTxnMode(db);
   if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     rc = doltlitePersistWorkingSet(db);

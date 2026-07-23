@@ -77,13 +77,17 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
 
   doltliteSetSessionBranch(db, p->zSessionBranch);
   doltliteSetSessionHead(db, &p->sessionHead);
-  doltliteSetSessionStaged(db, &p->sessionStaged);
-  doltliteSetSessionMergeState(db, p->sessionIsMerging,
-                               &p->sessionMergeCommit,
-                               &p->sessionConflictsCatalog);
-  doltliteSetSessionConstraintViolationsCatalog(
-      db, &p->sessionConstraintViolationsCatalog);
-  return SQLITE_OK;
+  rc = doltliteSetSessionStaged(db, &p->sessionStaged);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionMergeState(db, p->sessionIsMerging,
+                                      &p->sessionMergeCommit,
+                                      &p->sessionConflictsCatalog);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionConstraintViolationsCatalog(
+        db, &p->sessionConstraintViolationsCatalog);
+  }
+  return rc;
 }
 
 int doltliteRestoreTxnStateOnFailure(
@@ -456,7 +460,10 @@ int doltliteAdvanceBranch(
   }
 
   doltliteSetSessionHead(db, pNewHead);
-  doltliteSetSessionStaged(db, pCatalogHash);
+  rc = doltliteSetSessionStaged(db, pCatalogHash);
+  if( rc!=SQLITE_OK ){
+    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
+  }
   if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
     rc = doltliteSwitchCatalog(db, pWorkingCatHash);
   }else{
@@ -681,10 +688,12 @@ int doltliteRollbackAutocommitConflict(
   sqlite3RollbackAll(db, SQLITE_OK);
   rc = doltliteRestoreTxnState(db, pSaved);
   if( rc==SQLITE_OK ){
-    doltliteSetSessionMergeState(db, pSaved->sessionIsMerging,
-                                 &pSaved->sessionMergeCommit,
-                                 &pSaved->sessionConflictsCatalog);
-    doltliteSetSessionConstraintViolationsCatalog(
+    rc = doltliteSetSessionMergeState(db, pSaved->sessionIsMerging,
+                                      &pSaved->sessionMergeCommit,
+                                      &pSaved->sessionConflictsCatalog);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionConstraintViolationsCatalog(
         db, &pSaved->sessionConstraintViolationsCatalog);
   }
   doltliteTxnStateClear(pSaved);

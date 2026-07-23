@@ -618,21 +618,27 @@ static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
                                 &p->zSavedRebaseReturnBranch);
 }
 
-static void checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
+static int checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
+  int rc;
   doltliteSetSessionBranch(db, p->zCurrentBranch);
   doltliteSetSessionHead(db, &p->savedSessionHead);
-  doltliteSetSessionStaged(db, &p->savedSessionStaged);
-  doltliteSetSessionMergeState(db, p->savedIsMerging,
-                               &p->savedMergeCommit,
-                               &p->savedConflictsCatalog);
-  doltliteSetSessionRebaseState(db, p->savedIsRebasing,
-                                &p->savedPreRebaseCat,
-                                &p->savedRebaseOnto,
-                                p->zSavedRebaseOrigBranch,
-                                p->zSavedRebaseReturnBranch);
-  if( p->haveOldState ){
-    doltliteSwitchCatalog(db, &p->oldCatHash);
+  rc = doltliteSetSessionRebaseState(db, p->savedIsRebasing,
+                                     &p->savedPreRebaseCat,
+                                     &p->savedRebaseOnto,
+                                     p->zSavedRebaseOrigBranch,
+                                     p->zSavedRebaseReturnBranch);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionStaged(db, &p->savedSessionStaged);
   }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionMergeState(db, p->savedIsMerging,
+                                      &p->savedMergeCommit,
+                                      &p->savedConflictsCatalog);
+  }
+  if( rc==SQLITE_OK && p->haveOldState ){
+    rc = doltliteSwitchCatalog(db, &p->oldCatHash);
+  }
+  return rc;
 }
 
 static int checkoutRestoreDurableState(
@@ -673,7 +679,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     ProllyHash staged;
     doltliteGetSessionStaged(db, &staged);
     if( prollyHashIsEmpty(&staged) ){
-      doltliteSetSessionStaged(db, &p->targetCatHash);
+      rc = doltliteSetSessionStaged(db, &p->targetCatHash);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
@@ -689,7 +696,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
     if( rc!=SQLITE_OK ){
-      checkoutRestoreSession(db, p);
+      int restoreRc = checkoutRestoreSession(db, p);
+      if( restoreRc!=SQLITE_OK ) rc = restoreRc;
       return rc;
     }
   }
@@ -698,7 +706,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     rc = doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
                                           &p->targetCatHash, &p->targetCommit);
     if( rc!=SQLITE_OK ){
-      checkoutRestoreSession(db, p);
+      int restoreRc = checkoutRestoreSession(db, p);
+      if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     }
   }
   return rc;
@@ -793,18 +802,20 @@ static void doltConnectBranchFunc(
     ProllyHash staged;
     doltliteGetSessionStaged(db, &staged);
     if( prollyHashIsEmpty(&staged) ){
-      doltliteSetSessionStaged(db, &targetCatHash);
+      rc = doltliteSetSessionStaged(db, &targetCatHash);
     }
   }
   if( rc!=SQLITE_OK ){
-    checkoutRestoreSession(db, &m);
+    int restoreRc = checkoutRestoreSession(db, &m);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     sqlite3_free(zCurrentBranch);
     sqlite3_result_error_code(ctx, rc);
     return;
   }
   rc = refreshBranchScopedTables(db);
   if( rc!=SQLITE_OK ){
-    checkoutRestoreSession(db, &m);
+    int restoreRc = checkoutRestoreSession(db, &m);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     sqlite3_free(zCurrentBranch);
     sqlite3_result_error_code(ctx, rc);
     return;
@@ -841,10 +852,11 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
 
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
   if( rc!=SQLITE_OK ){
-    checkoutRestoreSession(db, &m);
+    int restoreRc = checkoutRestoreSession(db, &m);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     {
-      int restoreRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
-      if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+      int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
+      if( durableRc!=SQLITE_OK ) rc = durableRc;
     }
   }
   sqlite3_free(zCurrentBranch);
@@ -1236,7 +1248,7 @@ static int doltliteCheckoutTables(
       rc = doltliteSwitchCatalog(db, &newWorkingHash);
     }
     if( rc==SQLITE_OK && zSourceRef ){
-      doltliteSetSessionStaged(db, &newWorkingHash);
+      rc = doltliteSetSessionStaged(db, &newWorkingHash);
     }
     if( rc==SQLITE_OK ){
       rc = doltlitePersistWorkingSet(db);
@@ -1367,10 +1379,11 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   m.zCurrentBranch = zCurrentBranch;
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
   if( rc!=SQLITE_OK ){
-    checkoutRestoreSession(db, &m);
+    int restoreRc = checkoutRestoreSession(db, &m);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     {
-      int restoreRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
-      if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+      int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
+      if( durableRc!=SQLITE_OK ) rc = durableRc;
     }
   }
   sqlite3_free(zCurrentBranch);
@@ -1398,10 +1411,11 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       m.zCurrentBranch = zCurrentBranch;
       rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
       if( rc!=SQLITE_OK ){
-        checkoutRestoreSession(db, &m);
+        int restoreRc = checkoutRestoreSession(db, &m);
+        if( restoreRc!=SQLITE_OK ) rc = restoreRc;
         {
-          int restoreRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
-          if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+          int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
+          if( durableRc!=SQLITE_OK ) rc = durableRc;
         }
       }
       sqlite3_free(zCurrentBranch);

@@ -1074,29 +1074,29 @@ void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
-void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
+int doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
 void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,
                                   ProllyHash *pMergeCommit,
                                   ProllyHash *pConflictsCatalog);
-void doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
-                                  const ProllyHash *pMergeCommit,
-                                  const ProllyHash *pConflictsCatalog);
-void doltliteClearSessionMergeState(sqlite3 *db);
+int doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
+                                 const ProllyHash *pMergeCommit,
+                                 const ProllyHash *pConflictsCatalog);
+int doltliteClearSessionMergeState(sqlite3 *db);
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                    ProllyHash *pPreRebaseCat,
                                    ProllyHash *pRebaseOnto,
                                    const char **pzOrigBranch,
                                    const char **pzReturnBranch);
-void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
-                                   const ProllyHash *pPreRebaseCat,
-                                   const ProllyHash *pRebaseOnto,
-                                   const char *zOrigBranch,
-                                   const char *zReturnBranch);
-void doltliteClearSessionRebaseState(sqlite3 *db);
+int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
+                                  const ProllyHash *pPreRebaseCat,
+                                  const ProllyHash *pRebaseOnto,
+                                  const char *zOrigBranch,
+                                  const char *zReturnBranch);
+int doltliteClearSessionRebaseState(sqlite3 *db);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
-void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
+int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
-void doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash);
+int doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSessionHasConstraintViolations(sqlite3 *db);
 int doltliteSeedSessionHashes(sqlite3 *db, ChunkStore *cs,
                               int (*xPush)(void*, const ProllyHash*),

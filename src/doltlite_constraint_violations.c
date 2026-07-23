@@ -323,18 +323,20 @@ static int storeUpdatedViolations(
   ConstraintViolationTable *aTables, int nTables
 ){
   int totalRows = 0;
+  int rc;
   int i;
   for(i=0; i<nTables; i++) totalRows += aTables[i].nRows;
 
   if( totalRows==0 ){
     static const ProllyHash emptyHash = {{0}};
-    doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+    rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
   }else{
     ProllyHash newHash;
-    int rc = serializeViolations(cs, aTables, nTables, &newHash);
+    rc = serializeViolations(cs, aTables, nTables, &newHash);
     if( rc!=SQLITE_OK ) return rc;
-    doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
+    rc = doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
   }
+  if( rc!=SQLITE_OK ) return rc;
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     return doltlitePersistWorkingSet(db);
   }
@@ -348,15 +350,17 @@ static int storeViolationBytes(
   int nData,
   int nTables
 ){
+  int rc;
   if( nTables==0 ){
     static const ProllyHash emptyHash = {{0}};
-    doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+    rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
   }else{
     ProllyHash newHash;
-    int rc = chunkStorePut(cs, pData, nData, &newHash);
+    rc = chunkStorePut(cs, pData, nData, &newHash);
     if( rc!=SQLITE_OK ) return rc;
-    doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
+    rc = doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
   }
+  if( rc!=SQLITE_OK ) return rc;
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     return doltlitePersistWorkingSet(db);
   }
@@ -613,7 +617,8 @@ int doltliteAppendConstraintViolation(
 
 int doltliteClearAllConstraintViolations(sqlite3 *db){
   static const ProllyHash emptyHash = {{0}};
-  doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  int rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  if( rc!=SQLITE_OK ) return rc;
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     return doltlitePersistWorkingSet(db);
   }

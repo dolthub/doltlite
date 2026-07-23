@@ -257,8 +257,11 @@ static int doltliteRebaseLinearReplay(
     goto rollback;
   }
   doltliteSetSessionHead(db, &upstreamHash);
-  doltliteSetSessionStaged(db, &upstreamCommit.catalogHash);
-  rc = doltliteAdvanceBranch(db, &upstreamHash, &upstreamCommit.catalogHash, 0);
+  rc = doltliteSetSessionStaged(db, &upstreamCommit.catalogHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteAdvanceBranch(
+        db, &upstreamHash, &upstreamCommit.catalogHash, 0);
+  }
   doltliteCommitClear(&upstreamCommit);
   memset(&upstreamCommit, 0, sizeof(upstreamCommit));
   if( rc!=SQLITE_OK ) goto rollback;
@@ -557,12 +560,14 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   }
   doltliteSetSessionBranch(db, zBranch);
   doltliteSetSessionHead(db, &headHash);
-  doltliteSetSessionStaged(db, &headCommit.catalogHash);
-  doltliteClearSessionMergeState(db);
+  rc = doltliteSetSessionStaged(db, &headCommit.catalogHash);
+  if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
   memset(&emptyHash, 0, sizeof(emptyHash));
-  doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  }
   doltliteCommitClear(&headCommit);
-  return SQLITE_OK;
+  return rc;
 }
 
 static int rebaseCreateAndPopulatePlanTable(
@@ -680,8 +685,8 @@ static int rebaseAdvanceWorkingBranch(
   if( rc!=SQLITE_OK ) return rc;
 
   doltliteSetSessionHead(db, pNewHead);
-  doltliteSetSessionStaged(db, pCatalogHash);
-  rc = doltliteSwitchCatalog(db, pCatalogHash);
+  rc = doltliteSetSessionStaged(db, pCatalogHash);
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCatalogHash);
   if( rc!=SQLITE_OK ) return rc;
 
   return doltlitePersistWorkingSetWithHash(db, 0);
@@ -744,7 +749,7 @@ static int rebaseReplayPlanGroup(
       rc = doltliteSwitchCatalog(db, pCurCat);
     }
     if( rc==SQLITE_OK ){
-      doltliteSetSessionStaged(db, pCurCat);
+      rc = doltliteSetSessionStaged(db, pCurCat);
     }
     if( rc==SQLITE_OK ){
       rc = rebaseAdvanceWorkingBranch(db, &newCommit, pCurCat);
@@ -807,7 +812,8 @@ static int rebaseDiscardWorkingBranch(
   rc2 = sqlite3FaultSim(953) ? SQLITE_IOERR :
       sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
   rebaseKeepFirstError(&rc, rc2);
-  doltliteClearSessionRebaseState(db);
+  rc2 = doltliteClearSessionRebaseState(db);
+  rebaseKeepFirstError(&rc, rc2);
   rc2 = doltlitePersistWorkingSet(db);
   rebaseKeepFirstError(&rc, rc2);
 
@@ -846,12 +852,15 @@ static int rebaseAbortConflictedContinue(
 
   rc2 = sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
   rebaseKeepFirstError(&rc, rc2);
-  doltliteClearSessionRebaseState(db);
-  doltliteClearSessionMergeState(db);
+  rc2 = doltliteClearSessionRebaseState(db);
+  rebaseKeepFirstError(&rc, rc2);
+  rc2 = doltliteClearSessionMergeState(db);
+  rebaseKeepFirstError(&rc, rc2);
   if( zOrigBranch && zOrigBranch[0] ){
     rc2 = rebaseRestoreBranchState(db, zOrigBranch);
     rebaseKeepFirstError(&rc, rc2);
-    doltliteClearSessionRebaseState(db);
+    rc2 = doltliteClearSessionRebaseState(db);
+    rebaseKeepFirstError(&rc, rc2);
   }
   if( cs && zReturnBranch && zReturnBranch[0] ){
     rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
@@ -993,9 +1002,9 @@ static void doltliteRebaseInteractiveStart(
     goto fail;
   }
 
-  doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
-                                zOrig, zReturnBranch);
-  rc = doltlitePersistWorkingSet(db);
+  rc = doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
+                                     zOrig, zReturnBranch);
+  if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto fail;
   rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ) goto fail;
@@ -1200,8 +1209,8 @@ static void doltliteRebaseInteractiveContinue(
   rc = doltliteMutateRefs(db, rebaseFinalizeContinueRefs, &refsCtx);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  doltliteClearSessionRebaseState(db);
-  rc = doltlitePersistWorkingSet(db);
+  rc = doltliteClearSessionRebaseState(db);
+  if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = doltliteCheckoutBranchForRebase(db, zOrigBranch);
