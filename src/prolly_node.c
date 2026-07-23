@@ -17,7 +17,7 @@ int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
   u16 count;
   int nOffsets;
   int minSize;
-  int expectedSize;
+  i64 expectedSize;
   u32 totalKeyBytes;
   u32 totalValBytes;
   const u8 *pCur;
@@ -82,15 +82,18 @@ int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
   pNode->pKeyData = pCur;
 
   totalKeyBytes = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[count]);
+  totalValBytes = PROLLY_GET_U32((const u8*)&pNode->aValOff[count]);
+  if( totalKeyBytes > (u32)nData || totalValBytes > (u32)nData ){
+    return SQLITE_CORRUPT;
+  }
+
   pNode->pValData = pCur + totalKeyBytes;
 
-  totalValBytes = PROLLY_GET_U32((const u8*)&pNode->aValOff[count]);
-  expectedSize = minSize + (int)totalKeyBytes + (int)totalValBytes;
+  expectedSize = (i64)minSize + totalKeyBytes + totalValBytes;
   if( hasCounts ){
-    expectedSize += (int)count * 8;
+    expectedSize += (i64)count * 8;
   }
-  if( totalKeyBytes > (u32)nData || totalValBytes > (u32)nData
-   || expectedSize != nData ){
+  if( expectedSize != nData ){
     return SQLITE_CORRUPT;
   }
   if( nDataPhys<nData ){
