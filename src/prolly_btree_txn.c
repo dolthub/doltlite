@@ -109,10 +109,23 @@ static int captureSavepointCatalogSnapshot(
   return SQLITE_OK;
 }
 
-static void captureSavepointSessionState(
+static int captureSavepointSessionState(
   Btree *pBtree,
   struct SavepointTableState *pState
 ){
+  char *zOrigBranch = 0;
+  char *zReturnBranch = 0;
+  if( pBtree->zRebaseOrigBranch ){
+    zOrigBranch = sqlite3_mprintf("%s", pBtree->zRebaseOrigBranch);
+    if( !zOrigBranch ) return SQLITE_NOMEM;
+  }
+  if( pBtree->zRebaseReturnBranch ){
+    zReturnBranch = sqlite3_mprintf("%s", pBtree->zRebaseReturnBranch);
+    if( !zReturnBranch ){
+      sqlite3_free(zOrigBranch);
+      return SQLITE_NOMEM;
+    }
+  }
   pState->iNextTable = pBtree->cat.iNextTable;
   pState->iLargestRootPage = pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE];
   memcpy(pState->aMeta, pBtree->aMeta, sizeof(pState->aMeta));
@@ -120,12 +133,9 @@ static void captureSavepointSessionState(
   pState->isRebasing = pBtree->isRebasing;
   pState->preRebaseWorkingCat = pBtree->preRebaseWorkingCat;
   pState->rebaseOntoCommit = pBtree->rebaseOntoCommit;
-  sqlite3_free(pState->zRebaseOrigBranch);
-  pState->zRebaseOrigBranch = pBtree->zRebaseOrigBranch
-      ? sqlite3_mprintf("%s", pBtree->zRebaseOrigBranch) : 0;
-  sqlite3_free(pState->zRebaseReturnBranch);
-  pState->zRebaseReturnBranch = pBtree->zRebaseReturnBranch
-      ? sqlite3_mprintf("%s", pBtree->zRebaseReturnBranch) : 0;
+  pState->zRebaseOrigBranch = zOrigBranch;
+  pState->zRebaseReturnBranch = zReturnBranch;
+  return SQLITE_OK;
 }
 
 static void restoreSavepointSessionState(
@@ -139,11 +149,11 @@ static void restoreSavepointSessionState(
   pBtree->preRebaseWorkingCat = pState->preRebaseWorkingCat;
   pBtree->rebaseOntoCommit = pState->rebaseOntoCommit;
   sqlite3_free(pBtree->zRebaseOrigBranch);
-  pBtree->zRebaseOrigBranch = pState->zRebaseOrigBranch
-      ? sqlite3_mprintf("%s", pState->zRebaseOrigBranch) : 0;
+  pBtree->zRebaseOrigBranch = pState->zRebaseOrigBranch;
+  pState->zRebaseOrigBranch = 0;
   sqlite3_free(pBtree->zRebaseReturnBranch);
-  pBtree->zRebaseReturnBranch = pState->zRebaseReturnBranch
-      ? sqlite3_mprintf("%s", pState->zRebaseReturnBranch) : 0;
+  pBtree->zRebaseReturnBranch = pState->zRebaseReturnBranch;
+  pState->zRebaseReturnBranch = 0;
 }
 
 static int captureSavepointTables(
@@ -600,6 +610,7 @@ static int restoreTablesFromSavepoint(
 
 int pushSavepoint(Btree *pBtree, int bStatement){
   struct SavepointTableState *pState;
+  int rc;
 
   assert( pBtree!=0 );
   PROLLY_ASSERT_WRITE_TXN(pBtree);
@@ -635,10 +646,17 @@ int pushSavepoint(Btree *pBtree, int bStatement){
   memset(&pState->rebaseOntoCommit, 0, sizeof(pState->rebaseOntoCommit));
   pState->zRebaseOrigBranch = 0;
   pState->zRebaseReturnBranch = 0;
-  captureSavepointSessionState(pBtree, pState);
+  rc = captureSavepointSessionState(pBtree, pState);
+  if( rc!=SQLITE_OK ){
+    freeSavepointTables(pState);
+    return rc;
+  }
   if( !bStatement ){
-    int rc = captureSavepointTables(pBtree, pState);
-    if( rc!=SQLITE_OK ) return rc;
+    rc = captureSavepointTables(pBtree, pState);
+    if( rc!=SQLITE_OK ){
+      freeSavepointTables(pState);
+      return rc;
+    }
   }
 
   pBtree->nSavepoint++;

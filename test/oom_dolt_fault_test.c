@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "sqlite3.h"
+#include "doltlite_internal.h"
 
 #ifndef MAX_FAIL_N
 # define MAX_FAIL_N 500
@@ -147,6 +148,10 @@ static int setupBase(sqlite3 *db){
 }
 
 typedef int (*OpFn)(sqlite3 *db);
+typedef int (*OpSetupFn)(sqlite3 *db);
+
+static ProllyHash gSavepointPreRebase;
+static ProllyHash gSavepointRebaseOnto;
 
 static int verifyLatestCommitMetadata(sqlite3 *db){
   sqlite3_stmt *stmt = 0;
@@ -233,19 +238,101 @@ static int opDiffTable(sqlite3 *db){
     "SELECT to_a, to_b, diff_type FROM dolt_diff_t LIMIT 16");
 }
 
+static int setupSavepointState(sqlite3 *db){
+  int rc;
+  rc = doltliteGetHeadCatalogHash(db, &gSavepointPreRebase);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteGetSessionHead(db, &gSavepointRebaseOnto);
+  return doltliteSetSessionRebaseState(db, 1, &gSavepointPreRebase,
+                                       &gSavepointRebaseOnto, "main", "main");
+}
+
+static int opSavepointState(sqlite3 *db){
+  ProllyHash stagedBefore;
+  ProllyHash stagedAfter;
+  ProllyHash preRebase;
+  ProllyHash rebaseOnto;
+  const char *zOrig = 0;
+  const char *zReturn = 0;
+  u8 isRebasing = 0;
+  int stateRestored;
+  int rc;
+
+  doltliteGetSessionStaged(db, &stagedBefore);
+  rc = execSilent(db, "INSERT INTO t VALUES(4,'four')");
+  if( rc ) return rc;
+  rc = execSilent(db, "BEGIN IMMEDIATE; SAVEPOINT state_sp");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  rc = execSilent(db, "ROLLBACK TO state_sp");
+  if( rc ) return rc;
+
+  doltliteGetSessionStaged(db, &stagedAfter);
+  doltliteGetSessionRebaseState(db, &isRebasing, &preRebase, &rebaseOnto,
+                               &zOrig, &zReturn);
+  stateRestored =
+      memcmp(&stagedAfter, &stagedBefore, sizeof(stagedAfter))==0
+   && isRebasing
+   && memcmp(&preRebase, &gSavepointPreRebase, sizeof(preRebase))==0
+   && memcmp(&rebaseOnto, &gSavepointRebaseOnto, sizeof(rebaseOnto))==0
+   && zOrig && strcmp(zOrig, "main")==0
+   && zReturn && strcmp(zReturn, "main")==0;
+  (void)execSilent(db, "ROLLBACK");
+  return stateRestored ? SQLITE_OK : SQLITE_CORRUPT;
+}
+
+static int opRebaseStateSet(sqlite3 *db){
+  ProllyHash newPreRebase;
+  ProllyHash newRebaseOnto;
+  ProllyHash actualPreRebase;
+  ProllyHash actualRebaseOnto;
+  const char *zOrig = 0;
+  const char *zReturn = 0;
+  u8 isRebasing = 0;
+  int rc;
+  int stateValid;
+
+  memset(&newPreRebase, 0x91, sizeof(newPreRebase));
+  memset(&newRebaseOnto, 0x92, sizeof(newRebaseOnto));
+  rc = doltliteSetSessionRebaseState(db, 1, &newPreRebase, &newRebaseOnto,
+                                     "new-orig", "new-return");
+  doltliteGetSessionRebaseState(db, &isRebasing, &actualPreRebase,
+                               &actualRebaseOnto, &zOrig, &zReturn);
+  if( rc==SQLITE_OK ){
+    stateValid = isRebasing
+      && memcmp(&actualPreRebase, &newPreRebase, sizeof(newPreRebase))==0
+      && memcmp(&actualRebaseOnto, &newRebaseOnto, sizeof(newRebaseOnto))==0
+      && zOrig && strcmp(zOrig, "new-orig")==0
+      && zReturn && strcmp(zReturn, "new-return")==0;
+  }else{
+    stateValid = isRebasing
+      && memcmp(&actualPreRebase, &gSavepointPreRebase,
+                sizeof(gSavepointPreRebase))==0
+      && memcmp(&actualRebaseOnto, &gSavepointRebaseOnto,
+                sizeof(gSavepointRebaseOnto))==0
+      && zOrig && strcmp(zOrig, "main")==0
+      && zReturn && strcmp(zReturn, "main")==0;
+  }
+  return stateValid ? rc : SQLITE_CORRUPT;
+}
+
 typedef struct OpEntry {
   const char *name;
   OpFn fn;
+  OpSetupFn setup;
 } OpEntry;
 
 static OpEntry kOps[] = {
-  { "dolt_commit",       opCommit },
-  { "dolt_branch_create", opBranchCreate },
-  { "dolt_branch_delete", opBranchDelete },
-  { "dolt_checkout",     opCheckout },
-  { "dolt_log_scan",     opLogScan },
-  { "dolt_merge",        opMerge },
-  { "dolt_diff_table",   opDiffTable },
+  { "dolt_commit",         opCommit, 0 },
+  { "dolt_branch_create",  opBranchCreate, 0 },
+  { "dolt_branch_delete",  opBranchDelete, 0 },
+  { "dolt_checkout",       opCheckout, 0 },
+  { "dolt_log_scan",       opLogScan, 0 },
+  { "dolt_merge",          opMerge, 0 },
+  { "dolt_diff_table",     opDiffTable, 0 },
+  { "savepoint_vc_state",  opSavepointState, setupSavepointState },
+  { "rebase_state_set",    opRebaseStateSet, setupSavepointState },
 };
 #define N_OPS (int)(sizeof(kOps)/sizeof(kOps[0]))
 
@@ -275,6 +362,14 @@ static int childRunOp(OpEntry *op, long long failAt){
     sqlite3_close(db);
     cleanupFiles(kDbBase);
     return CHILD_BUG;
+  }
+  if( op->setup ){
+    rc = op->setup(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_close(db);
+      cleanupFiles(kDbBase);
+      return CHILD_BUG;
+    }
   }
   resetOom(failAt);
   orc = op->fn(db);
@@ -366,7 +461,7 @@ int main(void){
   {
     int totalBugs = 0;
     int i;
-    printf("OOM fault-injection sweep across %d dolt_* ops, MAX_FAIL_N=%d\n",
+    printf("OOM fault-injection sweep across %d operations, MAX_FAIL_N=%d\n",
            N_OPS, MAX_FAIL_N);
     for( i=0; i<N_OPS; i++ ){
       int opBugs;

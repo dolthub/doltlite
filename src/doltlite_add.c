@@ -210,7 +210,7 @@ static int addWriteStagedCatalog(
   }
   sqlite3_free(buf);
   if( rc==SQLITE_OK ){
-    doltliteSetSessionStaged(db, &newStagedHash);
+    rc = doltliteSetSessionStaged(db, &newStagedHash);
   }
   return rc;
 }
@@ -363,8 +363,7 @@ static int addStageAllTables(
   }
 
   if( useWorkingHash ){
-    doltliteSetSessionStaged(db, pWorkingHash);
-    rc = SQLITE_OK;
+    rc = doltliteSetSessionStaged(db, pWorkingHash);
   }else{
     addAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
     rc = addWriteStagedCatalog(db, cs, aNew, nNew);
@@ -913,9 +912,9 @@ static int doltliteStageArgsAndPersist(
 
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ){
-    doltliteSetSessionStaged(db, &savedStaged);
+    int restoreRc = doltliteSetSessionStaged(db, &savedStaged);
     sqlite3_result_error_code(context, rc);
-    return rc;
+    return restoreRc==SQLITE_OK ? rc : restoreRc;
   }
   return SQLITE_OK;
 }

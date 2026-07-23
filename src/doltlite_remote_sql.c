@@ -138,7 +138,7 @@ static int remoteSqlResetSessionToCommit(
   rc = doltliteHardReset(db, &catHash);
   if( rc==SQLITE_OK ){
     doltliteSetSessionHead(db, pCommitHash);
-    doltliteSetSessionStaged(db, &catHash);
+    rc = doltliteSetSessionStaged(db, &catHash);
   }
   return rc;
 }

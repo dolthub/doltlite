@@ -491,7 +491,7 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     }
     sqlite3_free(buf);
     if( rc==SQLITE_OK ){
-      doltliteSetSessionStaged(db, &newStagedHash);
+      rc = doltliteSetSessionStaged(db, &newStagedHash);
     }
   }
 
@@ -710,7 +710,11 @@ static void doltliteCommitFunc(
       sqlite3_result_error(context, "failed to flush", -1);
       return;
     }
-    doltliteSetSessionStaged(db, &catalogHash);
+    rc = doltliteSetSessionStaged(db, &catalogHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
   }else if( addModifiedOnly ){
     rc = doltliteCommitStageModifiedOnly(db, context);
     if( rc!=SQLITE_OK ) return;
@@ -751,7 +755,11 @@ static void doltliteCommitFunc(
         ProllyHash refreshedCat;
         (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
         if( doltliteFlushCatalogToHash(db, &refreshedCat)==SQLITE_OK ){
-          doltliteSetSessionStaged(db, &refreshedCat);
+          rc = doltliteSetSessionStaged(db, &refreshedCat);
+          if( rc!=SQLITE_OK ){
+            sqlite3_result_error_code(context, rc);
+            return;
+          }
         }
       }
     }
@@ -819,7 +827,11 @@ static void doltliteCommitFunc(
     u8 wasMerging = 0;
     doltliteGetSessionMergeState(db, &wasMerging, 0, 0);
     if( wasMerging ){
-      doltliteClearSessionMergeState(db);
+      rc = doltliteClearSessionMergeState(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+        return;
+      }
     }
   }
 

@@ -134,9 +134,11 @@ int applyMergedCatalogAndCommit(
   }
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  doltliteSetSessionStaged(db, &liveMergedCatHash);
-  rc = doltliteUpdateBranchWorkingState(db,
-      doltliteGetSessionBranch(db), &liveMergedCatHash, NULL);
+  rc = doltliteSetSessionStaged(db, &liveMergedCatHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteUpdateBranchWorkingState(db,
+        doltliteGetSessionBranch(db), &liveMergedCatHash, NULL);
+  }
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   if( graphLocked ){
@@ -183,14 +185,19 @@ int applyMergedCatalogAndCommit(
         if( rc==SQLITE_OK ){
           doltliteSetSessionBranch(db, savedState.zSessionBranch);
           doltliteSetSessionHead(db, &savedState.sessionHead);
-          doltliteSetSessionStaged(db, &savedState.sessionStaged);
-          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
-                                       &savedState.sessionMergeCommit,
-                                       &savedState.sessionConflictsCatalog);
-          {
-            extern int doltliteClearAllConstraintViolations(sqlite3*);
-            doltliteClearAllConstraintViolations(db);
-          }
+          rc = doltliteSetSessionStaged(db, &savedState.sessionStaged);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteSetSessionMergeState(
+              db, savedState.sessionIsMerging,
+              &savedState.sessionMergeCommit,
+              &savedState.sessionConflictsCatalog);
+        }
+        if( rc==SQLITE_OK ){
+          extern int doltliteClearAllConstraintViolations(sqlite3*);
+          rc = doltliteClearAllConstraintViolations(db);
+        }
+        if( rc==SQLITE_OK ){
           rc = doltlitePersistWorkingSet(db);
         }
         doltliteTxnStateClear(&savedState);

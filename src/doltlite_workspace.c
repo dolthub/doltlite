@@ -567,7 +567,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   if( rc==SQLITE_OK ) rc = chunkStorePut(cs, pCatBuf, nCatBuf, &newCat);
   sqlite3_free(pCatBuf);
   doltliteFreeCatalog(aTables, nTables);
-  if( rc==SQLITE_OK ) doltliteSetSessionStaged(db, &newCat);
+  if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &newCat);
   return rc;
 }
 

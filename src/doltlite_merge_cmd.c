@@ -24,15 +24,15 @@ int mergeAbortInPlace(sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteHardReset(db, &headCatHash);
   if( rc!=SQLITE_OK ) return rc;
-  doltliteSetSessionStaged(db, &headCatHash);
-  doltliteClearSessionMergeState(db);
-  {
+  rc = doltliteSetSessionStaged(db, &headCatHash);
+  if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
+  if( rc==SQLITE_OK ){
     extern int doltliteClearAllConstraintViolations(sqlite3*);
-  if( doltliteSessionHasConstraintViolations(db) ){
-      doltliteClearAllConstraintViolations(db);
+    if( doltliteSessionHasConstraintViolations(db) ){
+      rc = doltliteClearAllConstraintViolations(db);
     }
   }
-  rc = doltlitePersistWorkingSet(db);
+  if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) return rc;
   return doltliteVcSealActiveSavepoints(db);
 }
@@ -324,7 +324,16 @@ static void doltliteMergeFunc(
     if( nMergeConflicts>0 ){
       ProllyHash conflictsHash;
       doltliteGetSessionConflictsCatalog(db, &conflictsHash);
-      doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+      rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&ourCommit);
+        doltliteCommitClear(&theirCommit);
+        doltliteTxnStateClear(&savedState);
+        freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+        doltliteFreeNameList(azReindex, nReindex);
+        sqlite3_result_error_code(context, rc);
+        return;
+      }
     }
 
     rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
@@ -427,7 +436,9 @@ static void doltliteMergeFunc(
       rc = doltlitePrimeSchemaCache(db);
     }
     if( rc==SQLITE_OK ){
-      doltliteSetSessionStaged(db, &mergedCatHash);
+      rc = doltliteSetSessionStaged(db, &mergedCatHash);
+    }
+    if( rc==SQLITE_OK ){
       rc = doltliteUpdateBranchWorkingState(db,
           doltliteGetSessionBranch(db), &mergedCatHash, NULL);
     }
@@ -487,12 +498,19 @@ static void doltliteMergeFunc(
         if( rc==SQLITE_OK ){
           doltliteSetSessionBranch(db, savedState.zSessionBranch);
           doltliteSetSessionHead(db, &savedState.sessionHead);
-          doltliteSetSessionStaged(db, &savedState.sessionStaged);
-          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
-                                       &savedState.sessionMergeCommit,
-                                       &savedState.sessionConflictsCatalog);
-          doltliteSetSessionConstraintViolationsCatalog(
+          rc = doltliteSetSessionStaged(db, &savedState.sessionStaged);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteSetSessionMergeState(
+              db, savedState.sessionIsMerging,
+              &savedState.sessionMergeCommit,
+              &savedState.sessionConflictsCatalog);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteSetSessionConstraintViolationsCatalog(
               db, &savedState.sessionConstraintViolationsCatalog);
+        }
+        if( rc==SQLITE_OK ){
           rc = doltlitePersistWorkingSet(db);
         }
         doltliteTxnStateClear(&savedState);
@@ -507,10 +525,13 @@ static void doltliteMergeFunc(
       case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
         rc = doltliteRestoreTxnState(db, &savedState);
         if( rc==SQLITE_OK ){
-          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
-                                       &savedState.sessionMergeCommit,
-                                       &savedState.sessionConflictsCatalog);
-          doltliteSetSessionConstraintViolationsCatalog(
+          rc = doltliteSetSessionMergeState(
+              db, savedState.sessionIsMerging,
+              &savedState.sessionMergeCommit,
+              &savedState.sessionConflictsCatalog);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteSetSessionConstraintViolationsCatalog(
               db, &savedState.sessionConstraintViolationsCatalog);
         }
         doltliteTxnStateClear(&savedState);
@@ -556,10 +577,13 @@ static void doltliteMergeFunc(
     case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
       rc = doltliteRestoreTxnState(db, &savedState);
       if( rc==SQLITE_OK ){
-        doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
-                                     &savedState.sessionMergeCommit,
-                                     &savedState.sessionConflictsCatalog);
-        doltliteSetSessionConstraintViolationsCatalog(
+        rc = doltliteSetSessionMergeState(
+            db, savedState.sessionIsMerging,
+            &savedState.sessionMergeCommit,
+            &savedState.sessionConflictsCatalog);
+      }
+      if( rc==SQLITE_OK ){
+        rc = doltliteSetSessionConstraintViolationsCatalog(
             db, &savedState.sessionConstraintViolationsCatalog);
       }
       doltliteTxnStateClear(&savedState);
@@ -588,7 +612,12 @@ static void doltliteMergeFunc(
     char hexBuf[PROLLY_HASH_SIZE*2+1];
     char msg[256];
 
-    doltliteSetSessionStaged(db, &mergedCatHash);
+    rc = doltliteSetSessionStaged(db, &mergedCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+      return;
+    }
 
     if( zMessage && zMessage[0] ){
       sqlite3_snprintf(sizeof(msg), msg, "%s", zMessage);

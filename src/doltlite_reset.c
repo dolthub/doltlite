@@ -139,7 +139,7 @@ static int resetStageNamedPaths(
     }
     sqlite3_free(buf);
     if( rc==SQLITE_OK ){
-      doltliteSetSessionStaged(db, &newStagedHash);
+      rc = doltliteSetSessionStaged(db, &newStagedHash);
     }
   }
 
@@ -475,7 +475,11 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
 
-    doltliteClearSessionMergeState(db);
+    rc = doltliteClearSessionMergeState(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
   }else{
     rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
@@ -485,7 +489,11 @@ static void doltliteResetFunc(
   }
 
   if( !isSoft ){
-    doltliteSetSessionStaged(db, &targetCatHash);
+    rc = doltliteSetSessionStaged(db, &targetCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
   }
 
   if( isHard ){
@@ -519,17 +527,21 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
 
-    doltliteClearSessionMergeState(db);
+    rc = doltliteClearSessionMergeState(db);
 
-    {
+    if( rc==SQLITE_OK ){
       extern int doltliteClearAllConstraintViolations(sqlite3*);
       if( doltliteSessionHasConstraintViolations(db) ){
-        doltliteClearAllConstraintViolations(db);
+        rc = doltliteClearAllConstraintViolations(db);
       }
     }
 
-    doltliteSetSessionStaged(db, &origStagedAfterReset);
-    rc = doltlitePersistWorkingSet(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSetSessionStaged(db, &origStagedAfterReset);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltlitePersistWorkingSet(db);
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
