@@ -879,7 +879,21 @@ int sqlite3BtreeNewDb(Btree *p){
 }
 
 int prollyBtreeSetCacheSize(Btree *p, int mxPage){
-  (void)p; (void)mxPage;
+  i64 nEntry;
+  if( !p || !p->pBt ) return SQLITE_OK;
+  if( mxPage>0 ){
+    nEntry = mxPage;
+  }else{
+    /* Negative cache_size is a KiB budget. Map it to node-cache entries via
+    ** the page size, mirroring how the stock pager turns KiB into pages. */
+    u32 pgsz = p->pBt->pageSize>0 ? p->pBt->pageSize : PROLLY_DEFAULT_PAGE_SIZE;
+    nEntry = (-(i64)mxPage * 1024) / pgsz;
+  }
+  /* cache_size only grows the node cache. The stock default (-2000) and
+  ** memory-shrink requests must not drop it below the engine's baseline,
+  ** which the prolly backend relies on for its aggressive node caching. */
+  if( nEntry < PROLLY_DEFAULT_CACHE_SIZE ) nEntry = PROLLY_DEFAULT_CACHE_SIZE;
+  p->pBt->cache.nCapacity = (int)nEntry;
   return SQLITE_OK;
 }
 int sqlite3BtreeSetCacheSize(Btree *p, int mxPage){
