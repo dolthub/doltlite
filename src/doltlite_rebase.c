@@ -1217,7 +1217,12 @@ static void doltliteRebaseInteractiveContinue(
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  rc = doltliteCheckoutBranchForRebase(db, zOrigBranch);
+  /* curCat is already the exact flushed catalog installed by the replay and
+  ** persisted above. Under a caller savepoint, the live SQLite schema is
+  ** transitional until checkout completes, so do not re-prepare and
+  ** re-serialize it merely to capture the branch being discarded. */
+  rc = doltliteCheckoutBranchForRebaseWithOldCatalog(
+      db, zOrigBranch, &curCat);
   if( rc!=SQLITE_OK ) goto abort_err;
   rc = doltliteMutateRefs(db, rebaseDeleteWorkingBranchRefs, zWorking);
   if( rc!=SQLITE_OK ) goto abort_err;

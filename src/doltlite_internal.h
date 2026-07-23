@@ -1114,6 +1114,11 @@ int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCat
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
 int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
+int doltliteCheckoutBranchForRebaseWithOldCatalog(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pOldCatHash
+);
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
 int doltliteVcSealActiveSavepoints(sqlite3 *db);
 int doltliteVcSealSavepointError(sqlite3 *db);
