@@ -8,13 +8,13 @@
 #include "doltlite_commit.h"
 #include "doltlite_creds.h"
 #include "doltlite_net.h"
+#include "doltlite_parse.h"
 #ifdef DOLTLITE_HAVE_AUTH
 #include "doltlite_tls.h"
 #endif
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
 
 typedef struct HttpRemote HttpRemote;
 struct HttpRemote {
@@ -44,6 +44,16 @@ struct HttpRemote {
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
 #define HTTP_TIMEOUT_MS 30000
+
+static int httpHeaderNameEquals(
+  const u8 *zName,
+  int nName,
+  const char *zExpected
+){
+  int nExpected = (int)strlen(zExpected);
+  return nName==nExpected
+      && sqlite3_strnicmp((const char*)zName, zExpected, nExpected)==0;
+}
 
 #ifdef DOLTLITE_HAVE_AUTH
 typedef DoltliteConn HttpConn;
@@ -246,61 +256,109 @@ static int httpRequest(
   if( rc != SQLITE_OK ) return rc;
 
   {
-    int i;
-    int statusStart = -1;
-    for(i=0; i<nRaw-3; i++){
-      if( pRaw[i]==' ' && statusStart<0 ){
-        statusStart = i + 1;
-      }else if( statusStart>=0 && (pRaw[i]==' ' || pRaw[i]=='\r') ){
-
-        char aBuf[4];
-        int len = i - statusStart;
-        if( len>=1 && len<=3 ){
-          memcpy(aBuf, pRaw+statusStart, len);
-          aBuf[len] = 0;
-          *pStatus = atoi(aBuf);
-        }
-        break;
-      }
-    }
-  }
-
-  {
-    int i;
+    int i = 0;
     int bodyStart = -1;
     int contentLength = -1;
+    int seenContentLength = 0;
+    int seenTransferEncoding = 0;
+    int statusStart;
+    int statusEnd;
+    uint64_t value;
 
-    for(i=0; i<nRaw-3; i++){
+    while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
+    if( i>=nRaw || pRaw[i]!=' ' ){
+      sqlite3_free(pRaw);
+      return SQLITE_PROTOCOL;
+    }
+    statusStart = ++i;
+    while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
+    statusEnd = i;
+    if( statusEnd-statusStart!=3
+     || doltliteParseDecimal(
+          (const char*)pRaw+statusStart, (const char*)pRaw+statusEnd,
+          999, &value)!=DOLTLITE_DECIMAL_OK
+     || value<100 ){
+      sqlite3_free(pRaw);
+      return SQLITE_PROTOCOL;
+    }
+    *pStatus = (int)value;
 
-      if( (i==0 || pRaw[i-1]=='\n') &&
-          nRaw-i > 16 &&
-          (pRaw[i]=='C' || pRaw[i]=='c') ){
+    while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
+    if( i+1>=nRaw ){
+      sqlite3_free(pRaw);
+      return SQLITE_PROTOCOL;
+    }
+    i += 2;
+    while( i<nRaw ){
+      int lineStart = i;
+      int lineEnd;
+      int colon;
+      int valueStart;
+      int valueEnd;
+      int parseRc;
 
-        if( sqlite3_strnicmp((const char*)pRaw+i, "Content-Length:", 15)==0 ){
-          contentLength = atoi((const char*)pRaw+i+15);
-        }
-      }
-      if( pRaw[i]=='\r' && pRaw[i+1]=='\n' && pRaw[i+2]=='\r' && pRaw[i+3]=='\n' ){
-        bodyStart = i + 4;
+      if( i+1<nRaw && pRaw[i]=='\r' && pRaw[i+1]=='\n' ){
+        bodyStart = i + 2;
         break;
+      }
+      while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
+      if( i+1>=nRaw ){
+        sqlite3_free(pRaw);
+        return SQLITE_PROTOCOL;
+      }
+      lineEnd = i;
+      i += 2;
+
+      colon = lineStart;
+      while( colon<lineEnd && pRaw[colon]!=':' ) colon++;
+      if( colon==lineStart || colon==lineEnd ) continue;
+
+      valueStart = colon + 1;
+      while( valueStart<lineEnd
+          && (pRaw[valueStart]==' ' || pRaw[valueStart]=='\t') ){
+        valueStart++;
+      }
+      valueEnd = lineEnd;
+      while( valueEnd>valueStart
+          && (pRaw[valueEnd-1]==' ' || pRaw[valueEnd-1]=='\t') ){
+        valueEnd--;
+      }
+
+      if( httpHeaderNameEquals(
+            pRaw+lineStart, colon-lineStart, "Content-Length") ){
+        if( seenContentLength ){
+          sqlite3_free(pRaw);
+          return SQLITE_PROTOCOL;
+        }
+        seenContentLength = 1;
+        parseRc = doltliteParseDecimal(
+            (const char*)pRaw+valueStart, (const char*)pRaw+valueEnd,
+            (uint64_t)HTTP_RESP_MAX_BYTES, &value);
+        if( parseRc!=DOLTLITE_DECIMAL_OK ){
+          sqlite3_free(pRaw);
+          return parseRc==DOLTLITE_DECIMAL_RANGE
+               ? SQLITE_TOOBIG : SQLITE_PROTOCOL;
+        }
+        contentLength = (int)value;
+      }else if( httpHeaderNameEquals(
+                   pRaw+lineStart, colon-lineStart, "Transfer-Encoding") ){
+        seenTransferEncoding = 1;
       }
     }
 
-    if( bodyStart < 0 ){
-
+    if( bodyStart<0 || seenTransferEncoding ){
       sqlite3_free(pRaw);
-      return SQLITE_OK;
+      return SQLITE_PROTOCOL;
     }
 
     {
       int nAvail = nRaw - bodyStart;
-      int nCopy;
-      if( contentLength >= 0 && contentLength <= nAvail ){
-        nCopy = contentLength;
-      }else{
-        nCopy = nAvail;
+      int nCopy = contentLength>=0 ? contentLength : nAvail;
+      if( contentLength>=0 && contentLength!=nAvail ){
+        sqlite3_free(pRaw);
+        return SQLITE_PROTOCOL;
       }
-      if( nCopy > 0 ){
+      if( nCopy>0 ){
         *ppResp = sqlite3_malloc(nCopy);
         if( !*ppResp ){
           sqlite3_free(pRaw);
@@ -720,8 +778,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   int nUserPath;
   int nBasePath;
   const char *zTimeout;
-  char *zTimeoutEnd = 0;
-  long timeoutMs;
+  uint64_t timeoutMs;
 
   if( !zUrl ) return 0;
 
@@ -749,11 +806,16 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
     while( *c && *c != ':' && *c != '/' ) c++;
     nHost = (int)(c - zHostStart);
     if( *c == ':' ){
+      uint64_t value;
       zPortStart = c + 1;
       c = zPortStart;
       while( *c && *c != '/' ) c++;
-      port = atoi(zPortStart);
-      if( port <= 0 ) port = useTls ? 443 : 80;
+      if( doltliteParseDecimal(zPortStart, c, 65535, &value)
+          !=DOLTLITE_DECIMAL_OK
+       || value==0 ){
+        return 0;
+      }
+      port = (int)value;
       if( *c == '/' ) zPathStart = c;
     }else if( *c == '/' ){
       zPathStart = c;
@@ -787,10 +849,10 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   timeoutMs = HTTP_TIMEOUT_MS;
   zTimeout = getenv("DOLTLITE_HTTP_TIMEOUT_MS");
   if( zTimeout && zTimeout[0] ){
-    errno = 0;
-    timeoutMs = strtol(zTimeout, &zTimeoutEnd, 10);
-    if( errno!=0 || zTimeoutEnd==zTimeout || zTimeoutEnd[0]!=0
-     || timeoutMs<=0 || timeoutMs>0x7fffffff ){
+    if( doltliteParseDecimal(
+          zTimeout, zTimeout+strlen(zTimeout), 0x7fffffff, &timeoutMs)
+          !=DOLTLITE_DECIMAL_OK
+     || timeoutMs==0 ){
       timeoutMs = HTTP_TIMEOUT_MS;
     }
   }

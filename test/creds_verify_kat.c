@@ -30,7 +30,11 @@ static char *encodeRaw(const unsigned char *p, size_t n) {
   return z;
 }
 
-static char *tokenForKid(const DoltliteCreds *c, const char *kid) {
+static char *tokenForKid(
+  const DoltliteCreds *c,
+  const char *kid,
+  const char *exp
+) {
   char *header = NULL, *claims = NULL, *h64 = NULL, *c64 = NULL;
   char *input = NULL, *s64 = NULL, *token = NULL;
   unsigned char sig[DOLTLITE_SIG_LEN];
@@ -42,14 +46,14 @@ static char *tokenForKid(const DoltliteCreds *c, const char *kid) {
   snprintf(header, n,
            "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"2023.01\"}",
            kid);
-  n = strlen(kid) * 2 + strlen(AUD) + 160;
+  n = strlen(kid) * 2 + strlen(AUD) + strlen(exp) + 160;
   claims = (char *)malloc(n);
   if (!claims) goto done;
   snprintf(claims, n,
            "{\"iss\":\"dolt-client.dolthub.com\","
            "\"sub\":\"doltClientCredentials/%s\",\"aud\":\"%s\","
-           "\"iat\":%ld,\"exp\":%ld}",
-           kid, AUD, IAT, IAT + 30);
+           "\"iat\":%ld,\"exp\":%s}",
+           kid, AUD, IAT, exp);
   h64 = encodeRaw((const unsigned char *)header, strlen(header));
   c64 = encodeRaw((const unsigned char *)claims, strlen(claims));
   if (!h64 || !c64) goto done;
@@ -82,6 +86,7 @@ int main(int argc, char **argv) {
   DoltliteCreds *c = NULL;
   char *jwt = NULL, *kid = NULL, *kidOut = NULL;
   char *bearer = NULL, *tampered = NULL;
+  char *invalidExp = NULL, *overflowExp = NULL;
   int i;
 
   for (i = 0; i < 32; i++) seed[i] = (unsigned char)i;
@@ -125,6 +130,15 @@ int main(int argc, char **argv) {
   check("malformed token rejected",
         doltliteCredsVerifyBearer("not-a-jwt", AUD, authDir, MID, NULL) != 0);
 
+  invalidExp = tokenForKid(c, kid, "1700000030x");
+  check("signed token with trailing exp text rejected",
+        invalidExp &&
+        doltliteCredsVerifyBearer(invalidExp, AUD, authDir, MID, NULL) != 0);
+  overflowExp = tokenForKid(c, kid, "999999999999999999999999");
+  check("signed token with overflowing exp rejected",
+        overflowExp &&
+        doltliteCredsVerifyBearer(overflowExp, AUD, authDir, MID, NULL) != 0);
+
   tampered = (char *)malloc(strlen(jwt) + 1);
   strcpy(tampered, jwt);
   {
@@ -142,7 +156,7 @@ int main(int argc, char **argv) {
           doltliteCredsSave(c, outsideDir) == 0);
     traversalKid = (char *)malloc(n);
     snprintf(traversalKid, n, "../outside/%s", kid);
-    traversalJwt = tokenForKid(c, traversalKid);
+    traversalJwt = tokenForKid(c, traversalKid, "1700000030");
     check("signed token cannot traverse auth-key directory",
           traversalJwt &&
               doltliteCredsVerifyBearer(traversalJwt, AUD, authDir, MID, NULL) != 0);
@@ -154,6 +168,8 @@ int main(int argc, char **argv) {
   free(kid);
   free(bearer);
   free(tampered);
+  free(invalidExp);
+  free(overflowExp);
   doltliteCredsFree(c);
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "OK", failures);

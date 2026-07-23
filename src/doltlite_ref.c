@@ -6,6 +6,7 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "doltlite_parse.h"
 
 static int doltliteValidateCommitHash(
   sqlite3 *db,
@@ -169,8 +170,12 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
     if( i==d ){
       n = 1;
     }else{
-      n = atoi(zRef + d);
-      if( n<0 ) return SQLITE_ERROR;
+      uint64_t value;
+      if( doltliteParseDecimal(zRef+d, zRef+i, 0x7fffffff, &value)
+          !=DOLTLITE_DECIMAL_OK ){
+        return SQLITE_ERROR;
+      }
+      n = (int)value;
       if( n==0 && op=='^' ) return SQLITE_ERROR;
     }
     if( op=='~' ){

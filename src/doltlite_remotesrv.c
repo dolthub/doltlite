@@ -9,6 +9,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_tls.h"
 #include "doltlite_creds.h"
+#include "doltlite_parse.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -194,21 +195,15 @@ static int parseContentLength(
   const char *zEnd,
   int *pnValue
 ){
-  i64 nValue = 0;
   const char *p = zValue;
+  uint64_t nValue;
+  int rc;
 
   while( p<zEnd && (*p==' ' || *p=='\t') ) p++;
   while( zEnd>p && (zEnd[-1]==' ' || zEnd[-1]=='\t') ) zEnd--;
-  if( p==zEnd ) return -1;
-
-  while( p<zEnd ){
-    int digit;
-    if( *p<'0' || *p>'9' ) return -1;
-    digit = *p - '0';
-    if( nValue>(MAX_REQUEST_BYTES-digit)/10 ) return -2;
-    nValue = nValue*10 + digit;
-    p++;
-  }
+  rc = doltliteParseDecimal(p, zEnd, MAX_REQUEST_BYTES, &nValue);
+  if( rc==DOLTLITE_DECIMAL_RANGE ) return -2;
+  if( rc!=DOLTLITE_DECIMAL_OK ) return -1;
   *pnValue = (int)nValue;
   return 0;
 }

@@ -9,6 +9,7 @@
 #include <unistd.h>
 #endif
 #include "doltlite_remotesrv.h"
+#include "doltlite_parse.h"
 
 static void usage(const char *prog){
   fprintf(stderr,
@@ -49,7 +50,14 @@ int main(int argc, char **argv){
 
   for(i=1; i<argc; i++){
     if( strcmp(argv[i], "-p")==0 && i+1<argc ){
-      o.port = atoi(argv[++i]);
+      uint64_t value;
+      const char *z = argv[++i];
+      if( doltliteParseDecimal(z, z+strlen(z), 65535, &value)
+          !=DOLTLITE_DECIMAL_OK ){
+        fprintf(stderr, "Error: invalid port: %s\n", z);
+        return 1;
+      }
+      o.port = (int)value;
     }else if( strcmp(argv[i], "--bind")==0 && i+1<argc ){
       o.zBindAddr = argv[++i];
     }else if( strcmp(argv[i], "--cert")==0 && i+1<argc ){
@@ -61,7 +69,14 @@ int main(int argc, char **argv){
     }else if( strcmp(argv[i], "--audience")==0 && i+1<argc ){
       o.audience = argv[++i];
     }else if( strcmp(argv[i], "--timeout-ms")==0 && i+1<argc ){
-      o.timeoutMs = atoi(argv[++i]);
+      uint64_t value;
+      const char *z = argv[++i];
+      if( doltliteParseDecimal(z, z+strlen(z), 0x7fffffff, &value)
+          !=DOLTLITE_DECIMAL_OK ){
+        fprintf(stderr, "Error: invalid timeout: %s\n", z);
+        return 1;
+      }
+      o.timeoutMs = (int)value;
     }else if( strcmp(argv[i], "-h")==0 || strcmp(argv[i], "--help")==0 ){
       usage(argv[0]);
       return 0;
@@ -83,11 +98,6 @@ int main(int argc, char **argv){
     fprintf(stderr, "Error: --cert and --key must be given together\n");
     return 1;
   }
-  if( o.timeoutMs<0 ){
-    fprintf(stderr, "Error: --timeout-ms must not be negative\n");
-    return 1;
-  }
-
   signal(SIGINT, onSignal);
   signal(SIGTERM, onSignal);
 
