@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "sqlite3.h"
+#include "doltlite_commit.h"
 #include "doltlite_internal.h"
 
 #ifndef MAX_FAIL_N
@@ -116,6 +117,51 @@ static int runQuerySilent(sqlite3 *db, const char *sql){
   frc = sqlite3_finalize(stmt);
   if( rc==SQLITE_DONE ) return frc;
   return rc;
+}
+
+static int querySingleInt(sqlite3 *db, const char *sql, int *pValue){
+  sqlite3_stmt *stmt = 0;
+  int rc;
+  int frc;
+  rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_step(stmt);
+  if( rc==SQLITE_ROW ){
+    *pValue = sqlite3_column_int(stmt, 0);
+    rc = sqlite3_step(stmt)==SQLITE_DONE ? SQLITE_OK : SQLITE_CORRUPT;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_CORRUPT;
+  }
+  frc = sqlite3_finalize(stmt);
+  return rc==SQLITE_OK ? frc : rc;
+}
+
+static int querySingleText(
+  sqlite3 *db,
+  const char *sql,
+  char *zOut,
+  int nOut
+){
+  sqlite3_stmt *stmt = 0;
+  const unsigned char *zValue;
+  int rc;
+  int frc;
+  rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_step(stmt);
+  if( rc==SQLITE_ROW ){
+    zValue = sqlite3_column_text(stmt, 0);
+    if( !zValue || sqlite3_column_bytes(stmt, 0)>=nOut ){
+      rc = SQLITE_CORRUPT;
+    }else{
+      memcpy(zOut, zValue, (size_t)sqlite3_column_bytes(stmt, 0)+1);
+      rc = sqlite3_step(stmt)==SQLITE_DONE ? SQLITE_OK : SQLITE_CORRUPT;
+    }
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_CORRUPT;
+  }
+  frc = sqlite3_finalize(stmt);
+  return rc==SQLITE_OK ? frc : rc;
 }
 
 static void cleanupFiles(const char *base){
@@ -321,18 +367,32 @@ typedef struct OpEntry {
   const char *name;
   OpFn fn;
   OpSetupFn setup;
+  const char *zOptionalBranch;
+  int iOptionalRow;
+  const char *zOptionalValue;
+  const char *zOptionalHeadMessage;
+  int allowRebaseState;
 } OpEntry;
 
 static OpEntry kOps[] = {
-  { "dolt_commit",         opCommit, 0 },
-  { "dolt_branch_create",  opBranchCreate, 0 },
-  { "dolt_branch_delete",  opBranchDelete, 0 },
-  { "dolt_checkout",       opCheckout, 0 },
-  { "dolt_log_scan",       opLogScan, 0 },
-  { "dolt_merge",          opMerge, 0 },
-  { "dolt_diff_table",     opDiffTable, 0 },
-  { "savepoint_vc_state",  opSavepointState, setupSavepointState },
-  { "rebase_state_set",    opRebaseStateSet, setupSavepointState },
+  { "dolt_commit",         opCommit, 0,
+    0, 4, "four", "iter", 0 },
+  { "dolt_branch_create",  opBranchCreate, 0,
+    "br_iter", 0, 0, 0, 0 },
+  { "dolt_branch_delete",  opBranchDelete, 0,
+    "br_del", 0, 0, 0, 0 },
+  { "dolt_checkout",       opCheckout, 0,
+    "br_co", 0, 0, 0, 0 },
+  { "dolt_log_scan",       opLogScan, 0,
+    0, 0, 0, 0, 0 },
+  { "dolt_merge",          opMerge, 0,
+    "br_merge", 99, "merge-branch", "for-merge", 0 },
+  { "dolt_diff_table",     opDiffTable, 0,
+    0, 50, "diffed", 0, 0 },
+  { "savepoint_vc_state",  opSavepointState, setupSavepointState,
+    0, 4, "four", 0, 1 },
+  { "rebase_state_set",    opRebaseStateSet, setupSavepointState,
+    0, 0, 0, 0, 1 },
 };
 #define N_OPS (int)(sizeof(kOps)/sizeof(kOps[0]))
 
@@ -342,11 +402,267 @@ static const char *kDbBase = "/tmp/test_oom_dolt.db";
 #define CHILD_ERR_OK 1
 #define CHILD_BUG 2
 
+static int verifyCatalogHash(sqlite3 *db, const ProllyHash *pHash){
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  int rc;
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_CORRUPT;
+  rc = doltliteLoadCatalog(db, pHash, &aTables, &nTables, 0);
+  if( rc==SQLITE_OK && nTables<1 ) rc = SQLITE_CORRUPT;
+  doltliteFreeCatalog(aTables, nTables);
+  return rc;
+}
+
+static int verifyCommitHash(sqlite3 *db, const ProllyHash *pHash){
+  DoltliteCommit c;
+  int rc;
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_CORRUPT;
+  memset(&c, 0, sizeof(c));
+  rc = doltliteLoadCommit(db, pHash, &c);
+  if( rc==SQLITE_OK ){
+    if( !c.zName || !c.zName[0]
+     || !c.zEmail || !c.zEmail[0]
+     || !c.zMessage || !c.zMessage[0] ){
+      rc = SQLITE_CORRUPT;
+    }else{
+      rc = verifyCatalogHash(db, &c.catalogHash);
+    }
+  }
+  doltliteCommitClear(&c);
+  return rc;
+}
+
+static int verifyReopenedState(
+  sqlite3 *db,
+  const OpEntry *op,
+  const char **pzInvariant
+){
+  ProllyHash head;
+  ProllyHash staged;
+  ProllyHash mergeCommit;
+  ProllyHash conflictsCatalog;
+  ProllyHash preRebaseCatalog;
+  ProllyHash rebaseOnto;
+  const char *zOrig = 0;
+  const char *zReturn = 0;
+  sqlite3_stmt *stmt = 0;
+  char zText[128];
+  char *zSql = 0;
+  u8 isMerging = 0;
+  u8 isRebasing = 0;
+  int n;
+  int rc;
+  int frc;
+
+#define VERIFY_INVARIANT(label, expression) \
+  do{ \
+    rc = (expression); \
+    if( rc!=SQLITE_OK ){ \
+      *pzInvariant = (label); \
+      goto verify_done; \
+    } \
+  }while(0)
+
+  if( !sqlite3_get_autocommit(db) ){
+    *pzInvariant = "reopen autocommit";
+    return SQLITE_CORRUPT;
+  }
+
+  VERIFY_INVARIANT("integrity_check",
+      querySingleText(db, "PRAGMA integrity_check", zText, sizeof(zText)));
+  if( strcmp(zText, "ok")!=0 ){
+    *pzInvariant = "integrity_check result";
+    return SQLITE_CORRUPT;
+  }
+
+  VERIFY_INVARIANT("active branch",
+      querySingleText(db, "SELECT active_branch()", zText, sizeof(zText)));
+  if( strcmp(zText, "main")!=0 ){
+    *pzInvariant = "active branch is main";
+    return SQLITE_CORRUPT;
+  }
+
+  zSql = sqlite3_mprintf(
+      "SELECT count(*) FROM dolt_branches "
+      "WHERE name NOT IN ('main',%Q) "
+      "OR name IS NULL OR name='' OR length(hash)!=40 "
+      "OR latest_committer IS NULL OR latest_committer='' "
+      "OR latest_committer_email IS NULL OR latest_committer_email='' "
+      "OR latest_commit_message IS NULL OR latest_commit_message=''",
+      op->zOptionalBranch ? op->zOptionalBranch : "main");
+  if( !zSql ){
+    *pzInvariant = "branch invariant SQL allocation";
+    return SQLITE_NOMEM;
+  }
+  rc = querySingleInt(db, zSql, &n);
+  sqlite3_free(zSql);
+  zSql = 0;
+  if( rc!=SQLITE_OK || n!=0 ){
+    *pzInvariant = "branch refs and metadata";
+    return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
+  }
+  VERIFY_INVARIANT("main branch count",
+      querySingleInt(db,
+        "SELECT count(*) FROM dolt_branches WHERE name='main'", &n));
+  if( n!=1 ){
+    *pzInvariant = "exactly one main branch";
+    return SQLITE_CORRUPT;
+  }
+  VERIFY_INVARIANT("HEAD/main equality",
+      querySingleInt(db,
+        "SELECT count(*) FROM dolt_branches "
+        "WHERE name='main' AND hash=dolt_hashof('HEAD')", &n));
+  if( n!=1 ){
+    *pzInvariant = "HEAD equals main";
+    return SQLITE_CORRUPT;
+  }
+
+  doltliteGetSessionHead(db, &head);
+  VERIFY_INVARIANT("HEAD commit graph", verifyCommitHash(db, &head));
+  doltliteGetSessionStaged(db, &staged);
+  VERIFY_INVARIANT("staged catalog", verifyCatalogHash(db, &staged));
+
+  VERIFY_INVARIANT("log metadata scan",
+      querySingleInt(db,
+        "SELECT count(*) FROM dolt_log "
+        "WHERE length(commit_hash)!=40 "
+        "OR committer IS NULL OR committer='' "
+        "OR message IS NULL OR message='' "
+        "OR (message!='Initialize data repository' "
+        "    AND (email IS NULL OR email=''))", &n));
+  if( n!=0 ){
+    *pzInvariant = "complete log metadata";
+    return SQLITE_CORRUPT;
+  }
+  VERIFY_INVARIANT("log head message",
+      querySingleText(db,
+        "SELECT message FROM dolt_log LIMIT 1", zText, sizeof(zText)));
+  if( strcmp(zText, "base")!=0
+   && (!op->zOptionalHeadMessage
+       || strcmp(zText, op->zOptionalHeadMessage)!=0) ){
+    *pzInvariant = "allowed HEAD message";
+    return SQLITE_CORRUPT;
+  }
+
+  VERIFY_INVARIANT("base working rows",
+      querySingleInt(db,
+        "SELECT count(*) FROM t WHERE "
+        "(a=1 AND b='one') OR "
+        "(a=2 AND b='two') OR "
+        "(a=3 AND b='three')", &n));
+  if( n!=3 ){
+    *pzInvariant = "base working rows preserved";
+    return SQLITE_CORRUPT;
+  }
+  if( op->iOptionalRow>0 ){
+    zSql = sqlite3_mprintf(
+        "SELECT count(*) FROM t WHERE NOT ("
+        "(a=1 AND b='one') OR "
+        "(a=2 AND b='two') OR "
+        "(a=3 AND b='three') OR "
+        "(a=%d AND b=%Q))",
+        op->iOptionalRow, op->zOptionalValue);
+  }else{
+    zSql = sqlite3_mprintf(
+        "SELECT count(*) FROM t WHERE NOT ("
+        "(a=1 AND b='one') OR "
+        "(a=2 AND b='two') OR "
+        "(a=3 AND b='three'))");
+  }
+  if( !zSql ){
+    *pzInvariant = "row invariant SQL allocation";
+    return SQLITE_NOMEM;
+  }
+  rc = querySingleInt(db, zSql, &n);
+  sqlite3_free(zSql);
+  zSql = 0;
+  if( rc!=SQLITE_OK || n!=0 ){
+    *pzInvariant = "only complete working rows";
+    return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
+  }
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT table_name,staged,status FROM dolt_status", -1, &stmt, 0);
+  if( rc!=SQLITE_OK ){
+    *pzInvariant = "status prepare";
+    goto verify_done;
+  }
+  n = 0;
+  while( (rc = sqlite3_step(stmt))==SQLITE_ROW ){
+    const char *zTable = (const char*)sqlite3_column_text(stmt, 0);
+    const char *zStatus = (const char*)sqlite3_column_text(stmt, 2);
+    int stagedValue = sqlite3_column_int(stmt, 1);
+    if( !zTable || strcmp(zTable, "t")!=0
+     || (stagedValue!=0 && stagedValue!=1)
+     || !zStatus || strcmp(zStatus, "modified")!=0 ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    n++;
+    if( n>2 ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+  }
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  frc = sqlite3_finalize(stmt);
+  stmt = 0;
+  if( rc==SQLITE_OK ) rc = frc;
+  if( rc!=SQLITE_OK ){
+    *pzInvariant = "coherent staged/working status";
+    goto verify_done;
+  }
+
+  VERIFY_INVARIANT("conflict rows",
+      querySingleInt(db, "SELECT count(*) FROM dolt_conflicts", &n));
+  if( n!=0 ){
+    *pzInvariant = "no merge conflict rows";
+    return SQLITE_CORRUPT;
+  }
+  VERIFY_INVARIANT("constraint violation rows",
+      querySingleInt(db,
+        "SELECT count(*) FROM dolt_constraint_violations", &n));
+  if( n!=0 ){
+    *pzInvariant = "no constraint violation rows";
+    return SQLITE_CORRUPT;
+  }
+
+  doltliteGetSessionMergeState(db, &isMerging,
+                               &mergeCommit, &conflictsCatalog);
+  if( isMerging ){
+    *pzInvariant = "no merge state after fast-forward/error";
+    return SQLITE_CORRUPT;
+  }
+  doltliteGetSessionRebaseState(db, &isRebasing,
+      &preRebaseCatalog, &rebaseOnto, &zOrig, &zReturn);
+  if( isRebasing ){
+    if( !op->allowRebaseState || !zOrig || !zOrig[0]
+     || !zReturn || !zReturn[0] ){
+      *pzInvariant = "coherent rebase strings";
+      return SQLITE_CORRUPT;
+    }
+    VERIFY_INVARIANT("pre-rebase catalog",
+        verifyCatalogHash(db, &preRebaseCatalog));
+    VERIFY_INVARIANT("rebase-onto commit",
+        verifyCommitHash(db, &rebaseOnto));
+  }
+
+  rc = SQLITE_OK;
+verify_done:
+  sqlite3_finalize(stmt);
+  sqlite3_free(zSql);
+  return rc;
+#undef VERIFY_INVARIANT
+}
+
 static int childRunOp(OpEntry *op, long long failAt){
   sqlite3 *db = 0;
+  sqlite3 *verifyDb = 0;
+  const char *zInvariant = 0;
   int rc;
   int orc;
   int crc;
+  int vrc;
   long long triggered;
   long long ncall;
   cleanupFiles(kDbBase);
@@ -377,15 +693,47 @@ static int childRunOp(OpEntry *op, long long failAt){
   ncall = gOom.nCall;
   disableOom();
   crc = sqlite3_close(db);
-  cleanupFiles(kDbBase);
   if( !isAcceptableErr(orc) ){
     fprintf(stderr, "  BUG[%s,N=%lld]: op rc=%d (not acceptable). triggered=%lld nCall=%lld closeRc=%d\n",
             op->name, failAt, orc, triggered, ncall, crc);
+    cleanupFiles(kDbBase);
     return CHILD_BUG;
   }
-  if( !isAcceptableErr(crc) && crc!=SQLITE_OK ){
+  if( !triggered && orc!=SQLITE_OK ){
+    fprintf(stderr, "  BUG[%s,N=%lld]: op rc=%d without injected OOM. nCall=%lld closeRc=%d\n",
+            op->name, failAt, orc, ncall, crc);
+    cleanupFiles(kDbBase);
+    return CHILD_BUG;
+  }
+  if( crc!=SQLITE_OK ){
     fprintf(stderr, "  BUG[%s,N=%lld]: close rc=%d after op rc=%d\n",
             op->name, failAt, crc, orc);
+    cleanupFiles(kDbBase);
+    return CHILD_BUG;
+  }
+  rc = sqlite3_open(kDbBase, &verifyDb);
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "  BUG[%s,N=%lld]: reopen rc=%d after op rc=%d\n",
+            op->name, failAt, rc, orc);
+    if( verifyDb ) sqlite3_close(verifyDb);
+    cleanupFiles(kDbBase);
+    return CHILD_BUG;
+  }
+  vrc = verifyReopenedState(verifyDb, op, &zInvariant);
+  crc = sqlite3_close(verifyDb);
+  cleanupFiles(kDbBase);
+  if( vrc!=SQLITE_OK ){
+    fprintf(stderr,
+        "  BUG[%s,N=%lld]: reopen invariant \"%s\" rc=%d "
+        "after op rc=%d triggered=%lld nCall=%lld\n",
+        op->name, failAt, zInvariant ? zInvariant : "unknown",
+        vrc, orc, triggered, ncall);
+    return CHILD_BUG;
+  }
+  if( crc!=SQLITE_OK ){
+    fprintf(stderr,
+        "  BUG[%s,N=%lld]: verification close rc=%d after op rc=%d\n",
+        op->name, failAt, crc, orc);
     return CHILD_BUG;
   }
   if( orc!=SQLITE_OK && triggered ){
