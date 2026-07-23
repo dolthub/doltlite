@@ -2794,6 +2794,7 @@ do_merge_entry:
                                                     pIdx->zName);
                         if( rc!=SQLITE_OK ){
                           sqlite3_free(aIdxInfo);
+                          sqlite3_free(aPatches);
                           return rc;
                         }
                         continue;
@@ -2810,6 +2811,12 @@ do_merge_entry:
                         nIdxInfo++;
                       }
                     }
+                  }else{
+                    /* Proceeding here would merge the table's rows but leave
+                    ** its secondary indexes stale, then return success. Fail
+                    ** the merge instead of committing a corrupt result. */
+                    sqlite3_free(aPatches);
+                    return SQLITE_NOMEM;
                   }
                 }
               }
