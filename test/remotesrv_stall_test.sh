@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP: python3 not available"
   exit 0
 fi
-if [ ! -x "$REMOTESRV" ]; then
-  echo "SKIP: doltlite-remotesrv binary not found ($REMOTESRV)"
+if [ ! -x "$DOLTLITE" ] || [ ! -x "$REMOTESRV" ]; then
+  echo "SKIP: doltlite/doltlite-remotesrv binaries not found ($DOLTLITE, $REMOTESRV)"
   exit 0
 fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-remotesrv-stall.XXXXXX")"
 SRV_PID=""
 CLIENT_PID=""
+BLACKHOLE_PID=""
 cleanup() {
+  [ -n "$BLACKHOLE_PID" ] && { kill "$BLACKHOLE_PID" 2>/dev/null || true; wait "$BLACKHOLE_PID" 2>/dev/null || true; }
   [ -n "$CLIENT_PID" ] && { kill "$CLIENT_PID" 2>/dev/null || true; wait "$CLIENT_PID" 2>/dev/null || true; }
   [ -n "$SRV_PID" ] && { kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
   rm -rf "$TMP"
@@ -75,6 +78,79 @@ PY
   CLIENT_PID=""
   echo "  PASS: shutdown interrupts active and queued stalled clients"
 }
+
+echo "=== stalled remote server ==="
+python3 - "$TMP/blackhole.port" <<'PY' &
+import socket
+import sys
+import time
+
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", 0))
+server.listen(1)
+with open(sys.argv[1], "w") as f:
+    f.write(str(server.getsockname()[1]))
+
+conn, _ = server.accept()
+request = b""
+while b"\r\n\r\n" not in request:
+    data = conn.recv(4096)
+    if not data:
+        break
+    request += data
+
+response = b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n" + b"x" * 20
+for byte in response:
+    try:
+        conn.sendall(bytes([byte]))
+    except OSError:
+        break
+    time.sleep(0.2)
+conn.close()
+server.close()
+PY
+BLACKHOLE_PID=$!
+
+BLACKHOLE_PORT=""
+for _ in $(seq 1 50); do
+  BLACKHOLE_PORT="$(cat "$TMP/blackhole.port" 2>/dev/null || true)"
+  [ -n "$BLACKHOLE_PORT" ] && break
+  sleep 0.1
+done
+if [ -z "$BLACKHOLE_PORT" ]; then
+  echo "FAIL: stalled remote did not start"
+  exit 1
+fi
+
+python3 - "$DOLTLITE" "$TMP/client.db" "$BLACKHOLE_PORT" <<'PY'
+import os
+import subprocess
+import sys
+import time
+
+env = os.environ.copy()
+env["DOLTLITE_HTTP_TIMEOUT_MS"] = "750"
+url = "http://127.0.0.1:{}/repo.db".format(sys.argv[3])
+start = time.monotonic()
+try:
+    result = subprocess.run(
+        [sys.argv[1], sys.argv[2], "SELECT dolt_clone('{}');".format(url)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=4,
+    )
+except subprocess.TimeoutExpired as exc:
+    raise AssertionError("HTTP remote client ignored its deadline") from exc
+elapsed = time.monotonic() - start
+assert result.returncode != 0, result.stdout
+assert 0.3 < elapsed < 3.0, elapsed
+print("  PASS: HTTP remote client cuts a dribbling response at its deadline")
+PY
+kill "$BLACKHOLE_PID" 2>/dev/null || true
+wait "$BLACKHOLE_PID" 2>/dev/null || true
+BLACKHOLE_PID=""
 
 echo "=== plaintext stalled clients ==="
 start_server "$TMP/plain.log"

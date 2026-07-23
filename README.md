@@ -785,6 +785,8 @@ Start serving a directory of databases:
 HTTPS clients verify the server certificate and hostname using the system
 trust store. Set `DOLTLITE_CA_FILE` for a private CA. Client credentials live
 in `~/.doltlite/creds` and can be created with `SELECT dolt_creds_new();`.
+HTTP and HTTPS requests have a 30-second deadline by default. Set
+`DOLTLITE_HTTP_TIMEOUT_MS` to a positive number of milliseconds to tune it.
 
 Every `.db` file in that directory becomes accessible at
 `http://host:8080/filename.db` or its configured HTTPS URL. The server supports
