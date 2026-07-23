@@ -206,6 +206,11 @@ static int csCanonicalFilename(
   return rc;
 }
 
+static int csSyncFile(ChunkStore *cs){
+  return sqlite3OsSync(cs->file.pFile,
+                       cs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
+}
+
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
@@ -217,7 +222,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
     rc = sqlite3OsFileSize(cs->file.pFile, &sizeNow);
   }
   if( rc==SQLITE_OK && sizeNow==origFileSize ){
-    (void)sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
+    (void)csSyncFile(cs);
     return SQLITE_OK;
   }
 
@@ -232,7 +237,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
     rc = sqlite3OsFileSize(cs->file.pFile, &sizeNow);
   }
   if( rc==SQLITE_OK && sizeNow==origFileSize ){
-    (void)sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
+    (void)csSyncFile(cs);
     return SQLITE_OK;
   }
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
@@ -686,7 +691,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
 
   rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), markerStart);
   if( rc==SQLITE_OK ){
-    rc = sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
+    rc = csSyncFile(cs);
   }
   if( rc==SQLITE_OK ){
     cs->file.iFileSize = markerNext;
@@ -2012,7 +2017,7 @@ static int csCommitToFile(ChunkStore *cs){
   }
 
   CRASH_CHECK_WRITE();
-  rc = sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
+  rc = csSyncFile(cs);
 
 #ifdef SQLITE_TEST
   }
