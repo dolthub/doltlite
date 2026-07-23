@@ -133,7 +133,8 @@ static int remoteSqlResetSessionToCommit(
   if( rc!=SQLITE_OK ) return rc;
 
   if( zBranch ){
-    doltliteSetSessionBranch(db, zBranch);
+    rc = doltliteSetSessionBranch(db, zBranch);
+    if( rc!=SQLITE_OK ) return rc;
   }
   rc = doltliteHardReset(db, &catHash);
   if( rc==SQLITE_OK ){

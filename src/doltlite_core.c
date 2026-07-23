@@ -75,7 +75,8 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   rc = doltliteSwitchCatalog(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  doltliteSetSessionBranch(db, p->zSessionBranch);
+  rc = doltliteSetSessionBranch(db, p->zSessionBranch);
+  if( rc!=SQLITE_OK ) return rc;
   doltliteSetSessionHead(db, &p->sessionHead);
   rc = doltliteSetSessionStaged(db, &p->sessionStaged);
   if( rc==SQLITE_OK ){

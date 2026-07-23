@@ -427,6 +427,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     case MODE_MOVE: {
       BranchMoveCtx m;
       int renamingCurrent;
+      char *zPreparedBranch = 0;
       if( nPositional>2 ){
         branchError(ctx, hadSavepoint, "too many arguments");
         return;
@@ -443,14 +444,23 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
       renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
+      if( renamingCurrent ){
+        rc = doltlitePrepareSessionBranch(db, m.zDest, &zPreparedBranch);
+        if( rc!=SQLITE_OK ){
+          branchErrorCode(ctx, hadSavepoint, rc);
+          return;
+        }
+      }
       rc = doltliteMutateRefs(db, mutateBranchMove, &m);
       if( rc!=SQLITE_OK ){
+        sqlite3_free(zPreparedBranch);
         branchNamedResultError(ctx, hadSavepoint, rc,
           "source branch not found", "destination already exists");
         return;
       }
       if( renamingCurrent ){
-        doltliteSetSessionBranch(db, m.zDest);
+        assert( zPreparedBranch!=0 );
+        doltliteInstallPreparedSessionBranch(db, zPreparedBranch);
       }
       break;
     }
@@ -620,13 +630,15 @@ static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
 
 static int checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
   int rc;
-  doltliteSetSessionBranch(db, p->zCurrentBranch);
-  doltliteSetSessionHead(db, &p->savedSessionHead);
-  rc = doltliteSetSessionRebaseState(db, p->savedIsRebasing,
-                                     &p->savedPreRebaseCat,
-                                     &p->savedRebaseOnto,
-                                     p->zSavedRebaseOrigBranch,
-                                     p->zSavedRebaseReturnBranch);
+  rc = doltliteSetSessionBranch(db, p->zCurrentBranch);
+  if( rc==SQLITE_OK ){
+    doltliteSetSessionHead(db, &p->savedSessionHead);
+    rc = doltliteSetSessionRebaseState(db, p->savedIsRebasing,
+                                       &p->savedPreRebaseCat,
+                                       &p->savedRebaseOnto,
+                                       p->zSavedRebaseOrigBranch,
+                                       p->zSavedRebaseReturnBranch);
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionStaged(db, &p->savedSessionStaged);
   }
@@ -669,7 +681,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
                             &p->targetCommit, &p->targetCatHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  doltliteSetSessionBranch(db, p->zTargetBranch);
+  rc = doltliteSetSessionBranch(db, p->zTargetBranch);
+  if( rc!=SQLITE_OK ) return rc;
   doltliteSetSessionHead(db, &p->targetCommit);
 
   rc = doltliteLoadWorkingSet(db, p->zTargetBranch);
@@ -795,9 +808,11 @@ static void doltConnectBranchFunc(
     return;
   }
 
-  doltliteSetSessionBranch(db, zBranch);
-  doltliteSetSessionHead(db, &targetCommit);
-  rc = doltliteLoadWorkingSet(db, zBranch);
+  rc = doltliteSetSessionBranch(db, zBranch);
+  if( rc==SQLITE_OK ){
+    doltliteSetSessionHead(db, &targetCommit);
+    rc = doltliteLoadWorkingSet(db, zBranch);
+  }
   if( rc==SQLITE_OK ){
     ProllyHash staged;
     doltliteGetSessionStaged(db, &staged);
@@ -1457,6 +1472,11 @@ checkout_done:
   }
   if( rc==SQLITE_BUSY ){
     doltliteVcResultError(ctx, db, "database is locked by another connection");
+    return;
+  }
+  if( rc==SQLITE_NOMEM ){
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error_nomem(ctx);
     return;
   }
   if( rc!=SQLITE_OK ){

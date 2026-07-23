@@ -502,7 +502,9 @@ static void doltliteMergeFunc(
       case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
         rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
         if( rc==SQLITE_OK ){
-          doltliteSetSessionBranch(db, savedState.zSessionBranch);
+          rc = doltliteSetSessionBranch(db, savedState.zSessionBranch);
+        }
+        if( rc==SQLITE_OK ){
           doltliteSetSessionHead(db, &savedState.sessionHead);
           rc = doltliteSetSessionStaged(db, &savedState.sessionStaged);
         }

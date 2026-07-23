@@ -1070,7 +1070,10 @@ int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
 int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr);
 
 const char *doltliteGetSessionBranch(sqlite3 *db);
-void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
+int doltlitePrepareSessionBranch(sqlite3 *db, const char *zBranch,
+                                 char **pzPrepared);
+void doltliteInstallPreparedSessionBranch(sqlite3 *db, char *zPrepared);
+int doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
@@ -1120,9 +1123,9 @@ typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg);
 
 const char *doltliteGetAuthorName(sqlite3 *db);
-void doltliteSetAuthorName(sqlite3 *db, const char *zName);
+int doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
-void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
+int doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
 #ifndef DOLTLITE_SCHEMAENTRY_DEFINED
 #define DOLTLITE_SCHEMAENTRY_DEFINED
