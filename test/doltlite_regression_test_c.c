@@ -1055,6 +1055,108 @@ static void run_savepoint_catalog_restore(void){
   sqlite3_close(db);
 }
 
+static void run_session_string_setter_oom(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Session String Setter OOM Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_session_string_setter_oom");
+  removeDbFiles(dbpath);
+
+  check("session_string_open_db", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("session_string_create_base", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1, 'main');")==SQLITE_OK);
+  check("session_string_commit_base",
+      strlen(queryScalarText(
+          db, "SELECT dolt_commit('-A', '-m', 'base')"))==40);
+  check("session_string_create_feature",
+      execSql(db, "SELECT dolt_branch('feature')")==SQLITE_OK);
+  check("session_string_checkout_feature",
+      execSql(db, "SELECT dolt_checkout('feature')")==SQLITE_OK);
+  check("session_string_update_feature",
+      execSql(db, "UPDATE t SET v='feature' WHERE id=1")==SQLITE_OK);
+  check("session_string_commit_feature",
+      strlen(queryScalarText(
+          db, "SELECT dolt_commit('-A', '-m', 'feature')"))==40);
+  check("session_string_checkout_main",
+      execSql(db, "SELECT dolt_checkout('main')")==SQLITE_OK);
+  check("session_string_main_value_before_fault",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+
+  gRegressionFaultCode = 955;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = execSqlSilent(db, "SELECT dolt_checkout('feature')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("session_branch_oom_injected", gRegressionFaultHits==1);
+  check("session_branch_oom_reported", rc==SQLITE_NOMEM);
+  check("session_branch_preserved_after_oom",
+      strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
+  check("session_catalog_preserved_after_branch_oom",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+  check("session_branch_retry_succeeds",
+      execSql(db, "SELECT dolt_checkout('feature')")==SQLITE_OK);
+  check("session_branch_retry_loads_feature",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "feature")==0);
+
+  gRegressionFaultCode = 955;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = execSqlSilent(db,
+      "SELECT dolt_branch('-m', 'feature', 'renamed')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("session_branch_rename_oom_injected", gRegressionFaultHits==1);
+  check("session_branch_rename_oom_reported", rc==SQLITE_NOMEM);
+  check("session_branch_rename_preserves_active_branch",
+      strcmp(queryScalarText(db, "SELECT active_branch()"), "feature")==0);
+  check("session_branch_rename_preserves_refs",
+      strcmp(queryScalarText(db,
+          "SELECT "
+          "(SELECT count(*) FROM dolt_branches WHERE name='feature') || ',' || "
+          "(SELECT count(*) FROM dolt_branches WHERE name='renamed')"),
+          "1,0")==0);
+
+  check("session_author_name_seed", execSql(db,
+      "SELECT dolt_config('user.name', 'Original Name')")==SQLITE_OK);
+  gRegressionFaultCode = 955;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = execSqlSilent(db,
+      "SELECT dolt_config('user.name', 'Replacement Name')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("session_author_name_oom_injected", gRegressionFaultHits==1);
+  check("session_author_name_oom_reported", rc==SQLITE_NOMEM);
+  check("session_author_name_preserved",
+      strcmp(queryScalarText(
+          db, "SELECT dolt_config('user.name')"), "Original Name")==0);
+
+  check("session_author_email_seed", execSql(db,
+      "SELECT dolt_config('user.email', 'original@example.com')")==SQLITE_OK);
+  gRegressionFaultCode = 955;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = execSqlSilent(db,
+      "SELECT dolt_config('user.email', 'replacement@example.com')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("session_author_email_oom_injected", gRegressionFaultHits==1);
+  check("session_author_email_oom_reported", rc==SQLITE_NOMEM);
+  check("session_author_email_preserved",
+      strcmp(queryScalarText(
+          db, "SELECT dolt_config('user.email')"),
+          "original@example.com")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_refs_blob_corruption(void){
   ChunkStore cs;
   ChunkStore cs2;
@@ -8369,6 +8471,7 @@ static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
   { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore },
+  { "session_string_setter_oom", "Session String Setter OOM Test", run_session_string_setter_oom },
   { "refs_blob_corruption", "Refs Blob Corruption Test", run_refs_blob_corruption },
   { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },

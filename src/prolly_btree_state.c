@@ -519,13 +519,55 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
   return "main";
 }
 
-void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
-  if( db && db->nDb>0 && db->aDb[0].pBt ){
-    Btree *p = db->aDb[0].pBt;
-    assert( zBranch!=0 );
-    sqlite3_free(p->zBranch);
-    p->zBranch = sqlite3_mprintf("%s", zBranch);
+static int replaceSessionString(char **pzDest, const char *zValue){
+  char *zNew = 0;
+  if( zValue ){
+    if( sqlite3FaultSim(955) ) return SQLITE_NOMEM;
+    zNew = sqlite3_mprintf("%s", zValue);
+    if( !zNew ) return SQLITE_NOMEM;
   }
+  sqlite3_free(*pzDest);
+  *pzDest = zNew;
+  return SQLITE_OK;
+}
+
+int doltlitePrepareSessionBranch(
+  sqlite3 *db,
+  const char *zBranch,
+  char **pzPrepared
+){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt
+   || !zBranch || !pzPrepared ){
+    return SQLITE_MISUSE;
+  }
+  *pzPrepared = 0;
+  if( strcmp(doltliteGetSessionBranch(db), zBranch)==0 ){
+    return SQLITE_OK;
+  }
+  if( sqlite3FaultSim(955) ) return SQLITE_NOMEM;
+  *pzPrepared = sqlite3_mprintf("%s", zBranch);
+  return *pzPrepared ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+void doltliteInstallPreparedSessionBranch(
+  sqlite3 *db,
+  char *zPrepared
+){
+  Btree *p;
+  assert( db!=0 && db->nDb>0 && db->aDb[0].pBt!=0 );
+  assert( zPrepared!=0 );
+  p = db->aDb[0].pBt;
+  sqlite3_free(p->zBranch);
+  p->zBranch = zPrepared;
+}
+
+int doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
+  char *zPrepared = 0;
+  int rc = doltlitePrepareSessionBranch(db, zBranch, &zPrepared);
+  if( rc==SQLITE_OK && zPrepared ){
+    doltliteInstallPreparedSessionBranch(db, zPrepared);
+  }
+  return rc;
 }
 
 const char *doltliteGetAuthorName(sqlite3 *db){
@@ -536,12 +578,17 @@ const char *doltliteGetAuthorName(sqlite3 *db){
   return "doltlite";
 }
 
-void doltliteSetAuthorName(sqlite3 *db, const char *zName){
-  if( db && db->nDb>0 && db->aDb[0].pBt ){
-    Btree *p = db->aDb[0].pBt;
-    sqlite3_free(p->zAuthorName);
-    p->zAuthorName = zName ? sqlite3_mprintf("%s", zName) : 0;
+int doltliteSetAuthorName(sqlite3 *db, const char *zName){
+  Btree *p;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ){
+    return SQLITE_MISUSE;
   }
+  p = db->aDb[0].pBt;
+  if( (p->zAuthorName==0 && zName==0)
+   || (p->zAuthorName && zName && strcmp(p->zAuthorName, zName)==0) ){
+    return SQLITE_OK;
+  }
+  return replaceSessionString(&p->zAuthorName, zName);
 }
 
 const char *doltliteGetAuthorEmail(sqlite3 *db){
@@ -552,12 +599,17 @@ const char *doltliteGetAuthorEmail(sqlite3 *db){
   return "";
 }
 
-void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail){
-  if( db && db->nDb>0 && db->aDb[0].pBt ){
-    Btree *p = db->aDb[0].pBt;
-    sqlite3_free(p->zAuthorEmail);
-    p->zAuthorEmail = zEmail ? sqlite3_mprintf("%s", zEmail) : 0;
+int doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail){
+  Btree *p;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ){
+    return SQLITE_MISUSE;
   }
+  p = db->aDb[0].pBt;
+  if( (p->zAuthorEmail==0 && zEmail==0)
+   || (p->zAuthorEmail && zEmail && strcmp(p->zAuthorEmail, zEmail)==0) ){
+    return SQLITE_OK;
+  }
+  return replaceSessionString(&p->zAuthorEmail, zEmail);
 }
 
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead){

@@ -48,16 +48,23 @@ static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value
     }
   }else{
 
+    int eValType = sqlite3_value_type(argv[1]);
     const char *zVal = (const char*)sqlite3_value_text(argv[1]);
+    int rc;
+    if( !zVal && eValType!=SQLITE_NULL ){
+      sqlite3_result_error_nomem(context);
+      return;
+    }
     if( strcmp(zKey, "user.name")==0 ){
-      doltliteSetAuthorName(db, zVal);
-      sqlite3_result_int(context, 0);
+      rc = doltliteSetAuthorName(db, zVal);
     }else if( strcmp(zKey, "user.email")==0 ){
-      doltliteSetAuthorEmail(db, zVal);
-      sqlite3_result_int(context, 0);
+      rc = doltliteSetAuthorEmail(db, zVal);
     }else{
       sqlite3_result_error(context, "unknown config key (valid: user.name, user.email)", -1);
+      return;
     }
+    if( rc==SQLITE_OK ) sqlite3_result_int(context, 0);
+    else sqlite3_result_error_code(context, rc);
   }
 }
 

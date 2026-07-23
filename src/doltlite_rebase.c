@@ -558,7 +558,11 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
     doltliteCommitClear(&headCommit);
     return rc;
   }
-  doltliteSetSessionBranch(db, zBranch);
+  rc = doltliteSetSessionBranch(db, zBranch);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&headCommit);
+    return rc;
+  }
   doltliteSetSessionHead(db, &headHash);
   rc = doltliteSetSessionStaged(db, &headCommit.catalogHash);
   if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
