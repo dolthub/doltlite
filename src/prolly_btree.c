@@ -740,16 +740,16 @@ int sqlite3BtreeOpen(
     }else{
       memset(&p->headCommit, 0, sizeof(ProllyHash));
     }
-    p->stagedCatalog = stagedCatalog;
-    p->isMerging = isMerging;
-    p->mergeCommitHash = mergeCommitHash;
-    p->conflictsCatalogHash = conflictsCatalogHash;
+    p->vc.stagedCatalog = stagedCatalog;
+    p->vc.isMerging = isMerging;
+    p->vc.mergeCommitHash = mergeCommitHash;
+    p->vc.conflictsCatalogHash = conflictsCatalogHash;
     p->isRebasing = isRebasing;
     p->preRebaseWorkingCat = preRebaseCat;
     p->rebaseOntoCommit = rebaseOnto;
     p->zRebaseOrigBranch = zRebaseOrigBranch;
     p->zRebaseReturnBranch = zRebaseReturnBranch;
-    p->constraintViolationsHash = constraintViolationsHash;
+    p->vc.constraintViolationsHash = constraintViolationsHash;
   }
 
   p->cat.iNextTable = 2;
@@ -1779,11 +1779,11 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
       rc = integrityCheckChunkGraph(&ctx, &aTk[i].commitHash);
     }
   }
-  if( rc==SQLITE_OK && p->isMerging ){
-    rc = integrityCheckChunkGraph(&ctx, &p->mergeCommitHash);
+  if( rc==SQLITE_OK && p->vc.isMerging ){
+    rc = integrityCheckChunkGraph(&ctx, &p->vc.mergeCommitHash);
   }
   if( rc==SQLITE_OK ){
-    rc = integrityCheckChunkGraph(&ctx, &p->conflictsCatalogHash);
+    rc = integrityCheckChunkGraph(&ctx, &p->vc.conflictsCatalogHash);
   }
 
   prollyHashSetFree(&ctx.seen);

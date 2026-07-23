@@ -302,6 +302,17 @@ struct BtCursorOps {
   int (*xCursorIsValidNN)(BtCursor*);
 };
 
+/* Working-set version-control state, tracked live, mirrored at commit, and
+** snapshotted per savepoint. Grouped so a new field is added once and the
+** three copies stay in sync. In-memory only; persisted field-by-field. */
+typedef struct DoltVcState {
+  ProllyHash stagedCatalog;
+  u8 isMerging;
+  ProllyHash mergeCommitHash;
+  ProllyHash conflictsCatalogHash;
+  ProllyHash constraintViolationsHash;
+} DoltVcState;
+
 struct Btree {
   sqlite3 *db;
   BtShared *pBt;
@@ -345,11 +356,7 @@ struct Btree {
     int nTables;
     Pgno iNextTable;
     Pgno iLargestRootPage;
-    ProllyHash stagedCatalog;
-    u8 isMerging;
-    ProllyHash mergeCommitHash;
-    ProllyHash conflictsCatalogHash;
-    ProllyHash constraintViolationsHash;
+    DoltVcState vc;
     u8 isRebasing;
     ProllyHash preRebaseWorkingCat;
     ProllyHash rebaseOntoCommit;
@@ -359,11 +366,7 @@ struct Btree {
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
-  ProllyHash committedStagedCatalog;
-  u8 committedIsMerging;
-  ProllyHash committedMergeCommitHash;
-  ProllyHash committedConflictsCatalogHash;
-  ProllyHash committedConstraintViolationsHash;
+  DoltVcState committedVc;
   u32 committedAMeta[16];
   ProllyHash catalogCacheHash;
   u8 *pCatalogCache;
@@ -373,10 +376,7 @@ struct Btree {
   char *zAuthorName;
   char *zAuthorEmail;
   ProllyHash headCommit;
-  ProllyHash stagedCatalog;
-  u8 isMerging;
-  ProllyHash mergeCommitHash;
-  ProllyHash conflictsCatalogHash;
+  DoltVcState vc;
 
   u8 isRebasing;
   ProllyHash preRebaseWorkingCat;
@@ -384,7 +384,6 @@ struct Btree {
   char *zRebaseOrigBranch;
   char *zRebaseReturnBranch;
 
-  ProllyHash constraintViolationsHash;
   /* Transient: a constraint-violation batch open across a merge detection
   ** pass, so appends accumulate in memory and persist once. Owned by
   ** doltlite_constraint_violations.c. */

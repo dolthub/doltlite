@@ -59,11 +59,7 @@ void freeSavepointTables(struct SavepointTableState *pState){
     sqlite3_free(pState->aTables);
     pState->aTables = 0;
   }
-  memset(&pState->stagedCatalog, 0, sizeof(pState->stagedCatalog));
-  pState->isMerging = 0;
-  memset(&pState->mergeCommitHash, 0, sizeof(pState->mergeCommitHash));
-  memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
-  memset(&pState->constraintViolationsHash, 0, sizeof(pState->constraintViolationsHash));
+  memset(&pState->vc, 0, sizeof(pState->vc));
   pState->isRebasing = 0;
   pState->bSchemaChangedTxn = 0;
   pState->bMasterRootChangedTxn = 0;
@@ -120,11 +116,7 @@ static void captureSavepointSessionState(
   pState->iNextTable = pBtree->cat.iNextTable;
   pState->iLargestRootPage = pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE];
   memcpy(pState->aMeta, pBtree->aMeta, sizeof(pState->aMeta));
-  pState->stagedCatalog = pBtree->stagedCatalog;
-  pState->isMerging = pBtree->isMerging;
-  pState->mergeCommitHash = pBtree->mergeCommitHash;
-  pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
-  pState->constraintViolationsHash = pBtree->constraintViolationsHash;
+  pState->vc = pBtree->vc;
   pState->isRebasing = pBtree->isRebasing;
   pState->preRebaseWorkingCat = pBtree->preRebaseWorkingCat;
   pState->rebaseOntoCommit = pBtree->rebaseOntoCommit;
@@ -140,11 +132,7 @@ static void restoreSavepointSessionState(
   Btree *pBtree,
   struct SavepointTableState *pState
 ){
-  pBtree->stagedCatalog = pState->stagedCatalog;
-  pBtree->isMerging = pState->isMerging;
-  pBtree->mergeCommitHash = pState->mergeCommitHash;
-  pBtree->conflictsCatalogHash = pState->conflictsCatalogHash;
-  pBtree->constraintViolationsHash = pState->constraintViolationsHash;
+  pBtree->vc = pState->vc;
   memcpy(pBtree->aMeta, pState->aMeta, sizeof(pBtree->aMeta));
   pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = pState->iLargestRootPage;
   pBtree->isRebasing = pState->isRebasing;
@@ -837,15 +825,15 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
         const char *zBr = p->zBranch ? p->zBranch : "main";
         rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
                                       &p->headCommit,
-                                      &p->stagedCatalog, p->isMerging,
-                                      &p->mergeCommitHash,
-                                      &p->conflictsCatalogHash,
+                                      &p->vc.stagedCatalog, p->vc.isMerging,
+                                      &p->vc.mergeCommitHash,
+                                      &p->vc.conflictsCatalogHash,
                                       p->isRebasing,
                                       &p->preRebaseWorkingCat,
                                       &p->rebaseOntoCommit,
                                       p->zRebaseOrigBranch,
                                       p->zRebaseReturnBranch,
-                                      &p->constraintViolationsHash);
+                                      &p->vc.constraintViolationsHash);
         if( rc!=SQLITE_OK ){
           sqlite3_free(catData);
           chunkStoreRollback(&pBt->store);
@@ -910,11 +898,7 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
       p->committedCatalogHash = catHash;
-      p->committedStagedCatalog = p->stagedCatalog;
-      p->committedIsMerging = p->isMerging;
-      p->committedMergeCommitHash = p->mergeCommitHash;
-      p->committedConflictsCatalogHash = p->conflictsCatalogHash;
-      p->committedConstraintViolationsHash = p->constraintViolationsHash;
+      p->committedVc = p->vc;
       memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
       btreeMarkWorkingStateChanged(p, 1);
       if( bReloadSchema ){
@@ -1141,11 +1125,7 @@ int restoreFromCommitted(Btree *p){
     }
     if( rc!=SQLITE_OK ) return rc;
   }
-  p->stagedCatalog = p->committedStagedCatalog;
-  p->isMerging = p->committedIsMerging;
-  p->mergeCommitHash = p->committedMergeCommitHash;
-  p->conflictsCatalogHash = p->committedConflictsCatalogHash;
-  p->constraintViolationsHash = p->committedConstraintViolationsHash;
+  p->vc = p->committedVc;
   memcpy(p->aMeta, p->committedAMeta, sizeof(p->aMeta));
   return SQLITE_OK;
 }
@@ -1244,12 +1224,12 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       prollyHashCompute(catData, nCatData, &catHash);
 
       btreeFillWorkingSetBlob(wsBuf, &catHash, &p->headCommit,
-                              &p->stagedCatalog, p->isMerging,
-                              &p->mergeCommitHash, &p->conflictsCatalogHash,
+                              &p->vc.stagedCatalog, p->vc.isMerging,
+                              &p->vc.mergeCommitHash, &p->vc.conflictsCatalogHash,
                               p->isRebasing, &p->preRebaseWorkingCat,
                               &p->rebaseOntoCommit,
                               p->zRebaseOrigBranch, p->zRebaseReturnBranch,
-                              &p->constraintViolationsHash);
+                              &p->vc.constraintViolationsHash);
       prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
 
       if( chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &wsHashOnDisk)
@@ -1262,15 +1242,15 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
         if( rc==SQLITE_OK ){
           rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
-                                        &p->headCommit, &p->stagedCatalog,
-                                        p->isMerging, &p->mergeCommitHash,
-                                        &p->conflictsCatalogHash,
+                                        &p->headCommit, &p->vc.stagedCatalog,
+                                        p->vc.isMerging, &p->vc.mergeCommitHash,
+                                        &p->vc.conflictsCatalogHash,
                                         p->isRebasing,
                                         &p->preRebaseWorkingCat,
                                         &p->rebaseOntoCommit,
                                         p->zRebaseOrigBranch,
                                         p->zRebaseReturnBranch,
-                                        &p->constraintViolationsHash);
+                                        &p->vc.constraintViolationsHash);
         }
         if( rc==SQLITE_OK ){
           rc = chunkStoreSerializeRefs(&pBt->store);
@@ -1372,15 +1352,15 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   sqlite3_free(catData);
   if( rc!=SQLITE_OK ) return rc;
   rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
-                                &p->headCommit, &p->stagedCatalog,
-                                p->isMerging, &p->mergeCommitHash,
-                                &p->conflictsCatalogHash,
+                                &p->headCommit, &p->vc.stagedCatalog,
+                                p->vc.isMerging, &p->vc.mergeCommitHash,
+                                &p->vc.conflictsCatalogHash,
                                 p->isRebasing,
                                 &p->preRebaseWorkingCat,
                                 &p->rebaseOntoCommit,
                                 p->zRebaseOrigBranch,
                                 p->zRebaseReturnBranch,
-                                &p->constraintViolationsHash);
+                                &p->vc.constraintViolationsHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStoreSerializeRefs(&pBt->store);
   if( rc!=SQLITE_OK ) return rc;

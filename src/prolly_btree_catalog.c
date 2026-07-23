@@ -2135,10 +2135,10 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     return rc;
   }
 
-  oldStagedCatalog = pBtree->stagedCatalog;
-  oldIsMerging = pBtree->isMerging;
-  oldMergeCommitHash = pBtree->mergeCommitHash;
-  oldConflictsCatalogHash = pBtree->conflictsCatalogHash;
+  oldStagedCatalog = pBtree->vc.stagedCatalog;
+  oldIsMerging = pBtree->vc.isMerging;
+  oldMergeCommitHash = pBtree->vc.mergeCommitHash;
+  oldConflictsCatalogHash = pBtree->vc.conflictsCatalogHash;
 
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
@@ -2150,10 +2150,10 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
       rc = deserializeCatalog(pBtree, oldCatData, nOldCatData);
     }
     sqlite3_free(oldCatData);
-    pBtree->stagedCatalog = oldStagedCatalog;
-    pBtree->isMerging = oldIsMerging;
-    pBtree->mergeCommitHash = oldMergeCommitHash;
-    pBtree->conflictsCatalogHash = oldConflictsCatalogHash;
+    pBtree->vc.stagedCatalog = oldStagedCatalog;
+    pBtree->vc.isMerging = oldIsMerging;
+    pBtree->vc.mergeCommitHash = oldMergeCommitHash;
+    pBtree->vc.conflictsCatalogHash = oldConflictsCatalogHash;
     return rc;
   }
 
@@ -2167,7 +2167,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     invalidateSchema(pBtree);
   }
 
-  memcpy(&pBtree->stagedCatalog, catHash, sizeof(ProllyHash));
+  memcpy(&pBtree->vc.stagedCatalog, catHash, sizeof(ProllyHash));
 
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
@@ -2189,10 +2189,10 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
         return rc;
       }
     }
-    pBtree->stagedCatalog = oldStagedCatalog;
-    pBtree->isMerging = oldIsMerging;
-    pBtree->mergeCommitHash = oldMergeCommitHash;
-    pBtree->conflictsCatalogHash = oldConflictsCatalogHash;
+    pBtree->vc.stagedCatalog = oldStagedCatalog;
+    pBtree->vc.isMerging = oldIsMerging;
+    pBtree->vc.mergeCommitHash = oldMergeCommitHash;
+    pBtree->vc.conflictsCatalogHash = oldConflictsCatalogHash;
     if( pBtree->db ){
       sqlite3ExpirePreparedStatements(pBtree->db, 0);
       sqlite3ResetAllSchemasOfConnection(pBtree->db);
