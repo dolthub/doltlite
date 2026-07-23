@@ -516,9 +516,14 @@ static int doltliteCommitCreateObject(
 ){
   ProllyHash parentHash;
   char *zParsedName = 0, *zParsedEmail = 0;
-  const char *zMessage = opts->zMessage;
-  const char *zAuthor = opts->zAuthor;
+  const char *zMessage;
+  const char *zAuthor;
   int rc;
+
+  assert( db!=0 && context!=0 && opts!=0 );
+  assert( pCatalogHash!=0 && pCommitHashOut!=0 );
+  zMessage = opts->zMessage;
+  zAuthor = opts->zAuthor;
   doltliteGetSessionHead(db, &parentHash);
 
   if( opts->amend ){

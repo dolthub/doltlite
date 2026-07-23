@@ -1100,6 +1100,7 @@ static char *schemaColumnWithoutChecks(const char *zDef){
 }
 
 static void schemaIrClear(SchemaIr *pIr){
+  assert( pIr!=0 );
   freeColumns(pIr->aCols, pIr->nCols);
   sqlite3_free(pIr->zFkSig);
   sqlite3_free(pIr->zCheckSig);
@@ -1107,10 +1108,14 @@ static void schemaIrClear(SchemaIr *pIr){
 }
 
 static int schemaIrNoteColumnConstraints(SchemaIr *pIr, const char *zDef){
-  const char *zEnd = zDef + strlen(zDef);
-  const char *zFk = schemaFindToken(zDef, zEnd, "REFERENCES", 10);
-  const char *zCk = zDef;
+  const char *zEnd;
+  const char *zFk;
+  const char *zCk;
   int rc;
+  assert( pIr!=0 && zDef!=0 );
+  zEnd = zDef + strlen(zDef);
+  zFk = schemaFindToken(zDef, zEnd, "REFERENCES", 10);
+  zCk = zDef;
   if( zFk ){
     pIr->hasFk = 1;
     rc = schemaAppendSig(&pIr->zFkSig, zFk, (int)(zEnd - zFk));
@@ -1142,6 +1147,7 @@ static int schemaIrBuild(const char *zSql, SchemaIr *pIr){
   const char *segStart;
   int rc = SQLITE_OK;
   int nAlloc = 0;
+  assert( pIr!=0 );
 
   memset(pIr, 0, sizeof(*pIr));
   if( !zSql ) return SQLITE_OK;
@@ -3354,6 +3360,7 @@ int doltliteMergeCatalogs(
   MergeConflictTable *aConflictTables = 0;
   int nConflictTables = 0;
 
+  assert( db!=0 && ancestor!=0 && ours!=0 && theirs!=0 && pMergedHash!=0 );
   rc = loadMergeCatalogs(db, ancestor, ours, theirs,
                          &aAnc, &nAnc, &iNextAnc,
                          &aOurs, &nOurs, &iNextOurs,

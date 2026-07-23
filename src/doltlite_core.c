@@ -19,13 +19,16 @@
 #include <time.h>
 
 void doltliteTxnStateClear(DoltliteTxnState *p){
+  assert( p!=0 );
   sqlite3_free(p->zSessionBranch);
   memset(p, 0, sizeof(*p));
 }
 
 int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
-  ChunkStore *cs = doltliteGetChunkStore(db);
+  ChunkStore *cs;
   int rc;
+  assert( db!=0 && p!=0 );
+  cs = doltliteGetChunkStore(db);
 
   memset(p, 0, sizeof(*p));
   if( !cs ) return SQLITE_ERROR;
@@ -53,8 +56,11 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
 }
 
 int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
-  ChunkStore *cs = doltliteGetChunkStore(db);
+  ChunkStore *cs;
   int rc;
+  assert( db!=0 && p!=0 );
+  assert( p->zSessionBranch!=0 );
+  cs = doltliteGetChunkStore(db);
 
   if( !cs ) return SQLITE_ERROR;
 
@@ -99,6 +105,7 @@ int doltliteRefreshAndConfirmHead(
   ProllyHash branchTip;
   int found = 0;
   int rc;
+  assert( db!=0 && cs!=0 && pExpectedHead!=0 );
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
@@ -355,11 +362,16 @@ int doltliteCreateAndStoreCommitWithTime(
   i64 explicitTimestamp,
   ProllyHash *pCommitHash
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
+  ChunkStore *cs;
   DoltliteCommit c;
   u8 *commitData = 0;
   int nCommitData = 0;
   int rc, i;
+  assert( db!=0 && pParent!=0 && pCatalog!=0 && pCommitHash!=0 );
+  assert( nExtraParents>=0 );
+  assert( nExtraParents==0 || aExtraParents!=0 );
+  cs = doltliteGetChunkStore(db);
+  assert( cs!=0 );
 
   memset(&c, 0, sizeof(c));
   memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
@@ -391,10 +403,15 @@ int doltliteAdvanceBranch(
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *branch = doltliteGetSessionBranch(db);
+  ChunkStore *cs;
+  const char *branch;
   DoltliteTxnState saved;
   int rc;
+  assert( db!=0 && pNewHead!=0 && pCatalogHash!=0 );
+  cs = doltliteGetChunkStore(db);
+  assert( cs!=0 );
+  branch = doltliteGetSessionBranch(db);
+  assert( branch!=0 && branch[0]!=0 );
 
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
@@ -539,6 +556,8 @@ int doltliteDetectPostMergeConstraintViolations(
 }
 
 int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
+  assert( db!=0 );
+  assert( db->nSavepoint>=0 );
   return db->pSavepoint!=0 && db->nSavepoint==0;
 }
 

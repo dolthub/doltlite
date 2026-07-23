@@ -10,21 +10,32 @@
 #include <limits.h>
 
 void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry **par){
+  assert( idx!=0 && pn!=0 && par!=0 );
+  assert( idx->nIndex>=0 );
+  assert( idx->nIndex==0 || idx->aIndex!=0 );
   *pn = idx->nIndex;
   *par = idx->aIndex;
 }
 
 int chunkIndexCount(const ChunkIndex *idx){
+  assert( idx!=0 );
+  assert( idx->nIndex>=0 );
   return idx->nIndex;
 }
 
 void chunkIndexSetMetadata(ChunkIndex *idx, int nChunks, i64 iOffset, i64 nSize){
+  assert( idx!=0 );
+  assert( nChunks>=0 );
+  assert( iOffset>=0 && nSize>=0 );
   idx->nChunks = nChunks;
   idx->iIndexOffset = iOffset;
   idx->nIndexSize = nSize;
 }
 
 void chunkIndexReplaceEntries(ChunkIndex *idx, ChunkIndexEntry *aNew, int nNew){
+  assert( idx!=0 );
+  assert( nNew>=0 );
+  assert( nNew==0 || aNew!=0 );
   csReleaseIndexBuf(idx->aIndex, idx->aIndexMmapBase, idx->aIndexMmapSize);
   idx->aIndex = aNew;
   idx->nIndex = nNew;
@@ -46,6 +57,9 @@ int csSearchIndex(
 ){
   int lo = 0;
   int hi = nIdx - 1;
+  assert( pHash!=0 );
+  assert( nIdx>=0 );
+  assert( nIdx==0 || aIdx!=0 );
   while( lo <= hi ){
     int mid = lo + (hi - lo) / 2;
     int cmp = prollyHashCompare(&aIdx[mid].hash, pHash);

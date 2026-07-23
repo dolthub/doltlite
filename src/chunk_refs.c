@@ -8,6 +8,8 @@
 int csFindNamedRef(const void *aBase, int n, int stride, const char *zName){
   const char *p = (const char*)aBase;
   int i;
+  assert( n>=0 && stride>0 );
+  assert( n==0 || aBase!=0 );
   if( !zName ) return -1;
   for(i=0; i<n; i++){
     const char *zHave = *(const char *const*)(p + (size_t)i*stride);
@@ -17,7 +19,10 @@ int csFindNamedRef(const void *aBase, int n, int stride, const char *zName){
 }
 
 int csRefArrayGrow(void **paBase, int n, int stride){
-  void *aNew = sqlite3_realloc(*paBase, (n+1)*stride);
+  void *aNew;
+  assert( paBase!=0 );
+  assert( n>=0 && stride>0 );
+  aNew = sqlite3_realloc(*paBase, (n+1)*stride);
   if( !aNew ) return SQLITE_NOMEM;
   *paBase = aNew;
   memset((char*)aNew + (size_t)n*stride, 0, stride);
@@ -25,26 +30,41 @@ int csRefArrayGrow(void **paBase, int n, int stride){
 }
 
 void refsTableGetBranches(const RefsTable *rt, int *pn, const BranchRef **par){
+  assert( rt!=0 && pn!=0 && par!=0 );
+  assert( rt->nBranches>=0 );
+  assert( rt->nBranches==0 || rt->aBranches!=0 );
   *pn = rt->nBranches;
   *par = rt->aBranches;
 }
 
 void refsTableGetTags(const RefsTable *rt, int *pn, const TagRef **par){
+  assert( rt!=0 && pn!=0 && par!=0 );
+  assert( rt->nTags>=0 );
+  assert( rt->nTags==0 || rt->aTags!=0 );
   *pn = rt->nTags;
   *par = rt->aTags;
 }
 
 void refsTableGetRemotes(const RefsTable *rt, int *pn, const RemoteRef **par){
+  assert( rt!=0 && pn!=0 && par!=0 );
+  assert( rt->nRemotes>=0 );
+  assert( rt->nRemotes==0 || rt->aRemotes!=0 );
   *pn = rt->nRemotes;
   *par = rt->aRemotes;
 }
 
 void refsTableGetTracking(const RefsTable *rt, int *pn, const TrackingBranch **par){
+  assert( rt!=0 && pn!=0 && par!=0 );
+  assert( rt->nTracking>=0 );
+  assert( rt->nTracking==0 || rt->aTracking!=0 );
   *pn = rt->nTracking;
   *par = rt->aTracking;
 }
 
 void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par){
+  assert( rt!=0 && pn!=0 && par!=0 );
+  assert( rt->nSequences>=0 );
+  assert( rt->nSequences==0 || rt->aSequences!=0 );
   *pn = rt->nSequences;
   *par = rt->aSequences;
 }
@@ -72,6 +92,7 @@ int refsTableRemoteCount(const RefsTable *rt){
 }
 
 void refsTableSetHash(RefsTable *rt, const ProllyHash *h){
+  assert( rt!=0 && h!=0 );
   memcpy(&rt->refsHash, h, sizeof(ProllyHash));
 }
 

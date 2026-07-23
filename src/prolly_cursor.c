@@ -266,9 +266,14 @@ int prollyCursorNext(ProllyCursor *cur){
   int level;
   ProllyCacheEntry *pNode;
 
+  assert( cur!=0 );
   assert( cur->eState==PROLLY_CURSOR_VALID );
+  assert( cur->iLevel>=0 && cur->iLevel<PROLLY_CURSOR_MAX_DEPTH );
 
   pLeaf = cur->aLevel[cur->iLevel].pEntry;
+  assert( pLeaf!=0 );
+  assert( cur->aLevel[cur->iLevel].idx>=0
+       && cur->aLevel[cur->iLevel].idx<(int)pLeaf->node.nItems );
   if( cur->aLevel[cur->iLevel].idx < pLeaf->node.nItems - 1 ){
     cur->aLevel[cur->iLevel].idx++;
     return SQLITE_OK;

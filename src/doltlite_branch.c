@@ -816,6 +816,7 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   char *zCurrentBranch = 0;
   int rc;
 
+  assert( db!=0 && zBranch!=0 && zBranch[0]!=0 );
   if( !cs || !zBranch || branchNameEmpty(zBranch) ) return SQLITE_ERROR;
   memset(&m, 0, sizeof(m));
 

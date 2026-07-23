@@ -479,9 +479,9 @@ static int wsApplyRowToIndex(
 }
 
 static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
-  sqlite3 *db = p->db;
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
+  sqlite3 *db;
+  ChunkStore *cs;
+  ProllyCache *pCache;
   ProllyHash headHash, headCat, stagedCat, newRoot, newCat;
   struct TableEntry *aTables = 0;
   int nTables = 0;
@@ -490,16 +490,32 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   u8 *pCatBuf = 0;
   int nCatBuf = 0;
   int rc;
+  const u8 *pHeadVal;
+  int nHeadVal;
+  const u8 *pWorkVal;
+  int nWorkVal;
+  const u8 *pSrc;
+  int nSrc;
+  const u8 *pTgt;
+  int nTgt;
+
+  assert( p!=0 && r!=0 );
+  assert( p->zTableName!=0 );
+  assert( makeStaged==0 || makeStaged==1 );
+  assert( r->staged==0 || r->staged==1 );
+  db = p->db;
+  cs = doltliteGetChunkStore(db);
+  pCache = doltliteGetCache(db);
 
   /* Staging rewrites data by PK and secondary indexes by old/new index key. */
-  const u8 *pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
-  int        nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
-  const u8 *pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;
-  int        nWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->nNewVal;
-  const u8 *pSrc = makeStaged ? pHeadVal : pWorkVal;
-  int        nSrc = makeStaged ? nHeadVal : nWorkVal;
-  const u8 *pTgt = makeStaged ? pWorkVal : pHeadVal;
-  int        nTgt = makeStaged ? nWorkVal : nHeadVal;
+  pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
+  nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
+  pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;
+  nWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->nNewVal;
+  pSrc = makeStaged ? pHeadVal : pWorkVal;
+  nSrc = makeStaged ? nHeadVal : nWorkVal;
+  pTgt = makeStaged ? pWorkVal : pHeadVal;
+  nTgt = makeStaged ? nWorkVal : nHeadVal;
 
   if( !cs || !pCache ) return SQLITE_ERROR;
   doltliteGetSessionHead(db, &headHash);
@@ -561,6 +577,8 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   WorkspaceVtab *p = (WorkspaceVtab*)pBase;
   WorkspaceRow *r;
   int newStaged;
+  assert( pBase!=0 && argv!=0 );
+  assert( p->db!=0 && p->zTableName!=0 );
   (void)pRowid;
   if( argc==1 ){
     const u8 *pVal;

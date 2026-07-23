@@ -9,22 +9,31 @@
 #include <string.h>
 
 i64 walStateGetOffset(const WalState *w){
+  assert( w!=0 );
+  assert( w->iWalOffset>=0 );
   return w->iWalOffset;
 }
 
 i64 walStateGetDataSize(const WalState *w){
+  assert( w!=0 );
+  assert( w->nWalData>=0 );
   return w->nWalData;
 }
 
 void walStateSetOffset(WalState *w, i64 iOffset){
+  assert( w!=0 );
+  assert( iOffset>=0 );
   w->iWalOffset = iOffset;
 }
 
 void walStateSetDataSize(WalState *w, i64 nData){
+  assert( w!=0 );
+  assert( nData>=0 );
   w->nWalData = nData;
 }
 
 static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
+  assert( cs!=0 && pSaved!=0 );
   memset(pSaved, 0, sizeof(*pSaved));
   pSaved->aIndex = cs->index.aIndex;
   pSaved->nIndex = cs->index.nIndex;
@@ -214,14 +223,17 @@ int csReplayWal(ChunkStore *cs){
   i64 resumePos = 0;
   int damageAction = 0;
   int sawMidStream = 0;
-  int nPendingBefore = cs->staging.nPending;
-  int nRootedPending = cs->staging.nPending;
+  int nPendingBefore;
+  int nRootedPending;
   int nRootRecordsSeen = 0;
   int sawDamage = 0;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
   int rc = SQLITE_OK;
 
+  assert( cs!=0 );
+  nPendingBefore = cs->staging.nPending;
+  nRootedPending = cs->staging.nPending;
   memset(&tmpRefs, 0, sizeof(tmpRefs));
 
   if( cs->wal.iWalOffset <= 0 || !cs->file.pFile ) return SQLITE_OK;
