@@ -2492,6 +2492,38 @@ static int tryResolveSchemaDivergence(
   return SQLITE_OK;
 }
 
+static int mergeAppendReindexName(char ***paz, int *pn, const char *zName){
+  char **azNew;
+  char *zDup;
+  if( !paz ) return SQLITE_OK;
+  azNew = sqlite3_realloc(*paz, (*pn+1)*(int)sizeof(char*));
+  if( !azNew ) return SQLITE_NOMEM;
+  *paz = azNew;
+  zDup = sqlite3_mprintf("%s", zName);
+  if( !zDup ) return SQLITE_NOMEM;
+  (*paz)[(*pn)++] = zDup;
+  return SQLITE_OK;
+}
+
+/* Inline row-merge index maintenance encodes sort keys with a BINARY/ASC
+** KeyInfo. Indexes whose key columns fold case/space (NOCASE, RTRIM) or sort
+** DESC need the real collation and order, so rebuild them canonically over the
+** merged table via the post-merge REINDEX instead. */
+static int mergeIndexNeedsRebuild(Index *pIdx){
+  int k;
+  for(k=0; k<pIdx->nKeyCol; k++){
+    const char *zColl = pIdx->azColl ? pIdx->azColl[k] : 0;
+    if( zColl
+     && (sqlite3StrICmp(zColl,"NOCASE")==0 || sqlite3StrICmp(zColl,"RTRIM")==0) ){
+      return 1;
+    }
+    if( pIdx->aSortOrder && (pIdx->aSortOrder[k] & KEYINFO_ORDER_DESC) ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static int mergeCatalogPass1(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -2509,7 +2541,8 @@ static int mergeCatalogPass1(
   const ProllyHash *pCatTheirs,
   SchemaMergeAction **ppSchemaActions, int *pnSchemaActions,
   int bDisjointSchemaChanges,
-  int bPreferOurMaster
+  int bPreferOurMaster,
+  char ***pazReindex, int *pnReindex
 ){
   int i, rc = SQLITE_OK;
   int iTable1Idx = -1;
@@ -2765,6 +2798,15 @@ do_merge_entry:
                       struct TableEntry *oursIdx;
                       /* WITHOUT ROWID exposes the PK as the table root. */
                       if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ){
+                        continue;
+                      }
+                      if( mergeIndexNeedsRebuild(pIdx) ){
+                        rc = mergeAppendReindexName(pazReindex, pnReindex,
+                                                    pIdx->zName);
+                        if( rc!=SQLITE_OK ){
+                          sqlite3_free(aIdxInfo);
+                          return rc;
+                        }
                         continue;
                       }
                       oursIdx = doltliteFindTableByNumber(aOurs, nOurs, pIdx->tnum);
@@ -3047,7 +3089,7 @@ static int mergeCatalogPass2(
   char ***pazReindex,
   int *pnReindex
 ){
-  int i;
+  int i, rc = SQLITE_OK;
 
   for(i=0; i<nTheirs; i++){
     const char *zName = aTheirs[i].zName;
@@ -3101,16 +3143,8 @@ static int mergeCatalogPass2(
             /* The adopted tree covers only theirs' rows; ours' row changes
             ** never touched it. Record the index for a rebuild over the
             ** merged table once the merged catalog is live. */
-            if( pazReindex ){
-              char **azNew = sqlite3_realloc(*pazReindex,
-                  (*pnReindex+1)*(int)sizeof(char*));
-              char *zDup;
-              if( !azNew ) return SQLITE_NOMEM;
-              *pazReindex = azNew;
-              zDup = sqlite3_mprintf("%s", pTheirSe->zName);
-              if( !zDup ) return SQLITE_NOMEM;
-              (*pazReindex)[(*pnReindex)++] = zDup;
-            }
+            rc = mergeAppendReindexName(pazReindex, pnReindex, pTheirSe->zName);
+            if( rc!=SQLITE_OK ) return rc;
           }else if( schemaEntryChangedByName(
                         aAncSchema, nAncSchema,
                         aTheirsSchema, nTheirsSchema,
@@ -3140,16 +3174,8 @@ static int mergeCatalogPass2(
               *piNextMerged = newEntry.iTable + 1;
             }
             aMerged[(*pnMerged)++] = newEntry;
-            if( pazReindex ){
-              char **azNew = sqlite3_realloc(*pazReindex,
-                  (*pnReindex+1)*(int)sizeof(char*));
-              char *zDup;
-              if( !azNew ) return SQLITE_NOMEM;
-              *pazReindex = azNew;
-              zDup = sqlite3_mprintf("%s", pTheirSe->zName);
-              if( !zDup ) return SQLITE_NOMEM;
-              (*pazReindex)[(*pnReindex)++] = zDup;
-            }
+            rc = mergeAppendReindexName(pazReindex, pnReindex, pTheirSe->zName);
+            if( rc!=SQLITE_OK ) return rc;
           }else{
             /* An unmodified index does not override our explicit DROP. */
           }
@@ -3378,7 +3404,8 @@ int doltliteMergeCatalogs(
                           ancestor, ours, theirs,
                           ppActions, pnActions,
                           bDisjointSchemaChanges,
-                          bPreferOurMaster);
+                          bPreferOurMaster,
+                          pazReindex, pnReindex);
   if( rc!=SQLITE_OK ){
     int k;
     for(k=0; k<nMerged; k++) aMerged[k].zName = 0;
