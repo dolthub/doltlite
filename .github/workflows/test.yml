@@ -54,7 +54,7 @@ jobs:
         DOLTLITE_STRESS_SECONDS=480 ./concurrent_stress_test
       timeout-minutes: 9
 
-  cursor-merge-stress:
+  prolly-txn-stress:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -71,13 +71,13 @@ jobs:
           ../configure
         fi
 
-    - name: Build cursor merge stress
+    - name: Build prolly txn stress
       run: |
         cd build
-        make DOLTLITE_PROLLY_CHECK=1 cursor_merge_stress_test
+        make DOLTLITE_PROLLY_CHECK=1 prolly_txn_stress_test
       timeout-minutes: 5
 
-    - name: Run cursor merge stress (loop)
+    - name: Run prolly txn stress (loop)
       run: |
         cd build
         deadline=$((SECONDS + 300))
@@ -85,55 +85,14 @@ jobs:
         while [ "$SECONDS" -lt "$deadline" ]; do
           runs=$((runs + 1))
           if [ $((runs % 20)) -eq 0 ]; then
-            echo "cursor_merge_stress_test run ${runs}"
+            echo "prolly_txn_stress_test run ${runs}"
           fi
-          ./cursor_merge_stress_test > /tmp/cursor_merge_stress.out || {
-            cat /tmp/cursor_merge_stress.out
+          ./prolly_txn_stress_test > /tmp/prolly_txn_stress.out || {
+            cat /tmp/prolly_txn_stress.out
             exit 1
           }
         done
-        echo "completed ${runs} cursor_merge_stress_test runs"
-      timeout-minutes: 8
-
-  savepoint-txn-matrix:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build savepoint txn matrix
-      run: |
-        cd build
-        make DOLTLITE_PROLLY_CHECK=1 savepoint_txn_matrix_test
-      timeout-minutes: 5
-
-    - name: Run savepoint txn matrix (loop)
-      run: |
-        cd build
-        deadline=$((SECONDS + 300))
-        runs=0
-        while [ "$SECONDS" -lt "$deadline" ]; do
-          runs=$((runs + 1))
-          if [ $((runs % 20)) -eq 0 ]; then
-            echo "savepoint_txn_matrix_test run ${runs}"
-          fi
-          ./savepoint_txn_matrix_test > /tmp/savepoint_txn_matrix.out || {
-            cat /tmp/savepoint_txn_matrix.out
-            exit 1
-          }
-        done
-        echo "completed ${runs} savepoint_txn_matrix_test runs"
+        echo "completed ${runs} prolly_txn_stress_test runs"
       timeout-minutes: 8
 
   vc-concurrency-stress:
