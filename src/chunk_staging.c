@@ -13,11 +13,16 @@
 #define CS_RECENT_HT_MIN_COUNT 64
 
 void chunkStagingGetPending(const ChunkStaging *st, int *pn, const ChunkIndexEntry **par){
+  assert( st!=0 && pn!=0 && par!=0 );
+  assert( st->nPending>=0 && st->nPending<=st->nPendingAlloc );
   *pn = st->nPending;
   *par = st->aPending;
 }
 
 void chunkStagingGetRecent(const ChunkStaging *st, int *pn, const ChunkIndexEntry **par){
+  assert( st!=0 && pn!=0 && par!=0 );
+  assert( st->nRecent>=0 && st->nRecent<=st->nRecentAlloc );
+  assert( st->nRecentUncommitted>=0 && st->nRecentUncommitted<=st->nRecent );
   *pn = st->nRecent;
   *par = st->aRecent;
 }
@@ -141,6 +146,8 @@ static int csPendHTEnsure(ChunkStore *cs){
 
 int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
   int i; u32 b; int rc;
+  assert( cs!=0 && pHash!=0 && pIdx!=0 );
+  assert( cs->staging.nPending>=0 && cs->staging.nPending<=cs->staging.nPendingAlloc );
   *pIdx = -1;
   if( cs->staging.nPending==0 ) return SQLITE_OK;
   if( cs->staging.nPending < CS_PEND_HT_MIN_COUNT ){
@@ -213,6 +220,10 @@ static int csRecentHTEnsure(ChunkStore *cs){
 
 int csSearchRecent(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
   int i; u32 b; int rc;
+  assert( cs!=0 && pHash!=0 && pIdx!=0 );
+  assert( cs->staging.nRecent>=0 && cs->staging.nRecent<=cs->staging.nRecentAlloc );
+  assert( cs->staging.nRecentUncommitted>=0
+       && cs->staging.nRecentUncommitted<=cs->staging.nRecent );
   *pIdx = -1;
   if( cs->staging.nRecent==0 ) return SQLITE_OK;
   if( cs->staging.nRecent < CS_RECENT_HT_MIN_COUNT ){
@@ -247,6 +258,8 @@ int csSearchRecent(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
 }
 
 int csGrowPending(ChunkStore *cs){
+  assert( cs!=0 );
+  assert( cs->staging.nPending>=0 && cs->staging.nPending<=cs->staging.nPendingAlloc );
   if( cs->staging.nPending >= cs->staging.nPendingAlloc ){
     i64 nNew = cs->staging.nPendingAlloc ? (i64)cs->staging.nPendingAlloc * 2
                                          : CS_INIT_PENDING_ALLOC;
@@ -269,7 +282,11 @@ int csGrowPending(ChunkStore *cs){
 }
 
 int csGrowRecent(ChunkStore *cs, int nAdd){
-  i64 nNeed = (i64)cs->staging.nRecent + nAdd;
+  i64 nNeed;
+  assert( cs!=0 );
+  assert( nAdd>=0 );
+  assert( cs->staging.nRecent>=0 && cs->staging.nRecent<=cs->staging.nRecentAlloc );
+  nNeed = (i64)cs->staging.nRecent + nAdd;
   if( nNeed > cs->staging.nRecentAlloc ){
     i64 nNew = cs->staging.nRecentAlloc ? (i64)cs->staging.nRecentAlloc * 2
                                         : CS_INIT_PENDING_ALLOC;
@@ -293,7 +310,14 @@ int csGrowRecent(ChunkStore *cs, int nAdd){
 }
 
 int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
-  i64 nRequired = cs->staging.nWriteBuf + (i64)nNeeded;
+  i64 nRequired;
+  assert( cs!=0 );
+  assert( nNeeded>=0 );
+  assert( cs->staging.nWriteBuf>=0
+       && cs->staging.nWriteBuf<=cs->staging.nWriteBufAlloc );
+  assert( cs->staging.nCommittedWriteBuf>=0
+       && cs->staging.nCommittedWriteBuf<=cs->staging.nWriteBuf );
+  nRequired = cs->staging.nWriteBuf + (i64)nNeeded;
   if( nRequired > cs->staging.nWriteBufAlloc ){
     i64 nNew = cs->staging.nWriteBufAlloc ? cs->staging.nWriteBufAlloc : CS_INIT_WRITEBUF_SIZE;
     u8 *pNew;

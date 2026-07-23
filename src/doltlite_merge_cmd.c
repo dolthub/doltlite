@@ -44,6 +44,7 @@ int mergeFastForward(
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead
 ){
+  assert( db!=0 && cs!=0 && pOurHead!=0 && pTheirHead!=0 );
   DoltliteCommit theirCommit;
   DoltliteTxnState savedState;
   int graphLocked = 0;

@@ -479,9 +479,16 @@ static int wsApplyRowToIndex(
 }
 
 static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
-  sqlite3 *db = p->db;
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
+  sqlite3 *db;
+  ChunkStore *cs;
+  ProllyCache *pCache;
+  assert( p!=0 && r!=0 );
+  assert( p->zTableName!=0 );
+  assert( makeStaged==0 || makeStaged==1 );
+  assert( r->staged==0 || r->staged==1 );
+  db = p->db;
+  cs = doltliteGetChunkStore(db);
+  pCache = doltliteGetCache(db);
   ProllyHash headHash, headCat, stagedCat, newRoot, newCat;
   struct TableEntry *aTables = 0;
   int nTables = 0;
@@ -561,6 +568,8 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   WorkspaceVtab *p = (WorkspaceVtab*)pBase;
   WorkspaceRow *r;
   int newStaged;
+  assert( pBase!=0 && argv!=0 );
+  assert( p->db!=0 && p->zTableName!=0 );
   (void)pRowid;
   if( argc==1 ){
     pBase->zErrMsg = sqlite3_mprintf(

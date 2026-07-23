@@ -108,6 +108,9 @@ int addNameIndexInit(
   struct TableEntry *aEntry,
   int nEntry
 ){
+  assert( pIdx!=0 );
+  assert( nEntry>=0 );
+  assert( nEntry==0 || aEntry!=0 );
   return doltliteNameIndexInit(pIdx, aEntry, nEntry,
                                (int)sizeof(struct TableEntry),
                                (int)offsetof(struct TableEntry, zName));

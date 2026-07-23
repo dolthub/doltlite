@@ -47,6 +47,10 @@ static u64 keyPrefix64(const u8 *pKey, int nKey){
 }
 
 static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
+  assert( mm!=0 );
+  assert( mm->aEntries!=0 && mm->aOrder!=0 );
+  assert( idx>=0 && idx<mm->nEntries );
+  assert( mm->aOrder[idx]>=0 && mm->aOrder[idx]<mm->nEntries );
   return &mm->aEntries[mm->aOrder[idx]];
 }
 
@@ -462,6 +466,9 @@ static int rankEntryWithoutOrder(ProllyMutMap *mm, int phys){
 }
 
 static int ensureCapacity(ProllyMutMap *mm){
+  assert( mm!=0 );
+  assert( mm->nEntries>=0 && mm->nAlloc>=0 );
+  assert( mm->nEntries<=mm->nAlloc );
   if( mm->nEntries >= mm->nAlloc ){
     int nNew = mm->nAlloc ? mm->nAlloc * 2 : MUTMAP_INIT_CAP;
     ProllyMutMapEntry *aNew;
@@ -495,6 +502,9 @@ static int ensureCapacity(ProllyMutMap *mm){
 
 static void insertOrderEntry(ProllyMutMap *mm, int idx, int phys){
   int shifted = mm->nEntries - idx;
+  assert( mm!=0 );
+  assert( idx>=0 && idx<=mm->nEntries );
+  assert( phys>=0 && phys<=mm->nEntries );
   if( idx < mm->nEntries ){
     memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
             (mm->nEntries - idx) * sizeof(int));
@@ -570,6 +580,8 @@ int prollyMutMapInsert(
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pVal, int nVal
 ){
+  assert( mm!=0 );
+  assert( nKey>=0 && nVal>=0 );
   int found = 0, idx = 0, rc, phys = -1;
   u8 keyBuf[8];
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
@@ -980,6 +992,8 @@ int prollyMutMapFindRc(
 }
 
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
+  assert( mm!=0 );
+  assert( idx>=0 && idx<mm->nEntries );
   ensureOrder(mm);
   return entryAtOrder(mm, idx);
 }
@@ -1002,7 +1016,11 @@ int prollyMutMapResolveSortedPos(
 }
 
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry){
-  int phys = (int)(pEntry - mm->aEntries);
+  int phys;
+  assert( mm!=0 && pEntry!=0 );
+  assert( mm->aEntries!=0 );
+  phys = (int)(pEntry - mm->aEntries);
+  assert( phys>=0 && phys<mm->nEntries );
   if( mm->keepSorted ){
     int found = 0;
     int idx = bsearch_key(mm, pEntry->pKey, pEntry->nKey, &found);
@@ -1039,6 +1057,8 @@ int prollyMutMapIterValid(ProllyMutMapIter *it){
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
+  assert( it!=0 && it->pMap!=0 );
+  assert( prollyMutMapIterValid(it) );
   return entryAtOrder(it->pMap, it->idx);
 }
 

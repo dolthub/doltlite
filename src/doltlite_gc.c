@@ -99,6 +99,9 @@ static int gcQueuePush(
   int nParentItems,
   int iChild
 ){
+  assert( q!=0 && h!=0 );
+  assert( q->nItems>=0 && q->nItems<=q->nAlloc );
+  assert( q->iHead>=0 && q->iHead<=q->nItems );
   if( prollyHashIsEmpty(h) ) return SQLITE_OK;
   if( q->nItems >= q->nAlloc ){
     i64 nNew = q->nAlloc ? (i64)q->nAlloc * 2 : (i64)256;
@@ -127,6 +130,9 @@ static int gcQueuePush(
 }
 
 static int gcQueuePop(GcQueue *q, GcQueueItem *pItem){
+  assert( q!=0 && pItem!=0 );
+  assert( q->iHead>=0 && q->iHead<=q->nItems );
+  assert( q->nItems<=q->nAlloc );
   if( q->iHead >= q->nItems ) return 0;
   *pItem = q->aItems[q->iHead];
   q->iHead++;
