@@ -518,32 +518,26 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
     if( prollyHashCompare(&ancestor, &localCommit)!=0 ){
       char *zTrackingRef;
-      char *zSql;
-      char *zErr = 0;
       if( strcmp(zBranch, doltliteGetSessionBranch(db))!=0 ){
         remoteSqlRestoreAndReport(
           ctx, db, cs, &savedState, SQLITE_ERROR,
           "cannot pull non-current branch without fast-forward");
         return;
       }
+      /* Merge owns its own txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
       zTrackingRef = sqlite3_mprintf("%s/%s", zRemoteName, zBranch);
-      zSql = zTrackingRef
-          ? sqlite3_mprintf("SELECT dolt_merge(%Q)", zTrackingRef)
-          : 0;
-      sqlite3_free(zTrackingRef);
-      if( !zSql ){
+      if( !zTrackingRef ){
         sqlite3_result_error_nomem(ctx);
         return;
       }
-      rc = sqlite3_exec(db, zSql, 0, 0, &zErr);
-      sqlite3_free(zSql);
+      rc = doltliteMergeRef(db, ctx, zTrackingRef, 0, 0);
+      sqlite3_free(zTrackingRef);
       if( rc!=SQLITE_OK ){
-        remoteSqlResultError(ctx, rc, zErr ? zErr : "merge failed");
-        sqlite3_free(zErr);
+        /* doltliteMergeRef already set the error on ctx. */
         return;
       }
-      sqlite3_free(zErr);
+      /* Pull's public result is 0 on success, not the merge commit hash. */
       sqlite3_result_int(ctx, 0);
       return;
     }
