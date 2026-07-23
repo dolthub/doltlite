@@ -1353,13 +1353,7 @@ static void doltliteRebaseFunc(
   }
 
   if( zArg0[0]=='-' ){
-    char *zErr = sqlite3_mprintf("unknown option `%s`", zArg0);
-    if( zErr ){
-      sqlite3_result_error(context, zErr, -1);
-      sqlite3_free(zErr);
-    }else{
-      sqlite3_result_error_nomem(context);
-    }
+    doltliteCmdResultUnknownOption(context, zArg0);
     goto rebase_cleanup;
   }
   if( argc!=1 ){

@@ -69,9 +69,7 @@ int mergeFastForward(
   if( rc==SQLITE_BUSY ){
     doltliteTxnStateClear(&savedState);
     doltliteCommitClear(&theirCommit);
-    sqlite3_result_error(context,
-      "merge conflict: another connection committed to this branch. Please retry your transaction.",
-      -1);
+    doltliteCmdResultPeerBranchBusy(context, "merge");
     return rc;
   }
   if( rc!=SQLITE_OK ){
@@ -294,9 +292,7 @@ int doltliteMergeRef(
       doltliteCommitClear(&theirCommit);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       doltliteFreeNameList(azReindex, nReindex);
-      sqlite3_result_error(context,
-        "merge conflict: another connection committed to this branch. Please retry your transaction.",
-        -1);
+      doltliteCmdResultPeerBranchBusy(context, "merge");
       return SQLITE_ERROR;
     }
     if( rc!=SQLITE_OK ){
@@ -446,74 +442,14 @@ int doltliteMergeRef(
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
-      switch( doltliteVcTxnMode(db) ){
-      case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
-        rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionBranch(db, savedState.zSessionBranch);
-        }
-        if( rc==SQLITE_OK ){
-          doltliteSetSessionHead(db, &savedState.sessionHead);
-          rc = doltliteSetSessionStaged(db, &savedState.sessionStaged);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionMergeState(
-              db, savedState.sessionIsMerging,
-              &savedState.sessionMergeCommit,
-              &savedState.sessionConflictsCatalog);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionConstraintViolationsCatalog(
-              db, &savedState.sessionConstraintViolationsCatalog);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltlitePersistWorkingSet(db);
-        }
-        doltliteTxnStateClear(&savedState);
-        if( rc!=SQLITE_OK ){
-          sqlite3_result_error_code(context, rc);
-        }else{
-          sqlite3_result_error(context,
-            "Committing this transaction resulted in a working set with "
-            "constraint violations, transaction rolled back.", -1);
-        }
-        break;
-      case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-        rc = doltliteRestoreTxnState(db, &savedState);
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionMergeState(
-              db, savedState.sessionIsMerging,
-              &savedState.sessionMergeCommit,
-              &savedState.sessionConflictsCatalog);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionConstraintViolationsCatalog(
-              db, &savedState.sessionConstraintViolationsCatalog);
-        }
-        doltliteTxnStateClear(&savedState);
-        if( rc!=SQLITE_OK ){
-          sqlite3_result_error_code(context, rc);
-        }else{
-          sqlite3_result_error(context,
-            "Merge aborted: would have introduced constraint violations. "
-            "The merge and the would-be violations have been rolled back "
-            "with the enclosing savepoint, so dolt_constraint_violations "
-            "is empty. To inspect the violations, re-run the merge inside "
-            "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
-            "violations are preserved instead of rolled back.",
-            -1);
-        }
-        break;
-      case DOLTLITE_VC_TXN_PLAIN:
-        rc = doltliteReportConstraintViolations(db, context, "Merge");
-        if( rc!=SQLITE_OK ){
-          sqlite3_result_error_code(context,
-              doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-          return SQLITE_ERROR;
-        }
-        doltliteTxnStateClear(&savedState);
-        break;
-      }
+      (void)doltliteCmdFinishWithConstraintViolations(
+          db, context, &savedState, "Merge", 0,
+          "Merge aborted: would have introduced constraint violations. "
+          "The merge and the would-be violations have been rolled back "
+          "with the enclosing savepoint, so dolt_constraint_violations "
+          "is empty. To inspect the violations, re-run the merge inside "
+          "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
+          "violations are preserved instead of rolled back.");
       return SQLITE_ERROR;
     }
   }
@@ -523,46 +459,9 @@ int doltliteMergeRef(
       chunkStoreUnlock(cs);
       graphLocked = 0;
     }
-    switch( doltliteVcTxnMode(db) ){
-    case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
-      rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context, rc);
-      }
-      return SQLITE_ERROR;
-    case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-      rc = doltliteRestoreTxnState(db, &savedState);
-      if( rc==SQLITE_OK ){
-        rc = doltliteSetSessionMergeState(
-            db, savedState.sessionIsMerging,
-            &savedState.sessionMergeCommit,
-            &savedState.sessionConflictsCatalog);
-      }
-      if( rc==SQLITE_OK ){
-        rc = doltliteSetSessionConstraintViolationsCatalog(
-            db, &savedState.sessionConstraintViolationsCatalog);
-      }
-      doltliteTxnStateClear(&savedState);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context, rc);
-      }else{
-        char msg[256];
-        sqlite3_snprintf(sizeof(msg), msg,
-          "Merge has %d conflict(s). Resolve and then commit with dolt_commit.",
-          nMergeConflicts);
-        sqlite3_result_error(context, msg, -1);
-      }
-      return SQLITE_ERROR;
-    case DOLTLITE_VC_TXN_PLAIN:
-      rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context,
-            doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-        return SQLITE_ERROR;
-      }
-      doltliteTxnStateClear(&savedState);
-      return SQLITE_ERROR;
-    }
+    (void)doltliteCmdFinishWithConflicts(
+        db, context, &savedState, nMergeConflicts, "Merge", 0);
+    return SQLITE_ERROR;
   }else{
     ProllyHash commitHash;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -592,9 +491,7 @@ int doltliteMergeRef(
     ** confirm is staled by intervening lock-cycling SQL (ANALYZE, etc.). */
     rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
     if( rc==SQLITE_BUSY ){
-      sqlite3_result_error(context,
-        "merge conflict: another connection committed to this branch. Please retry your transaction.",
-        -1);
+      doltliteCmdResultPeerBranchBusy(context, "merge");
       doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
       return SQLITE_ERROR;
     }
@@ -659,20 +556,10 @@ static void doltliteMergeFunc(
     }else if( strcmp(arg, "--no-ff")==0 ){
       noFastForward = 1;
     }else if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
-      if( i+1<argc ){
-        zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      }else{
-        sqlite3_result_error(context, "-m requires a message", -1);
-        return;
-      }
+      zMessage = doltliteCmdTakeValueArg(context, argc, argv, &i, "message");
+      if( !zMessage ) return;
     }else if( arg[0]=='-' ){
-      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
-      if( zErr ){
-        sqlite3_result_error(context, zErr, -1);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(context);
-      }
+      doltliteCmdResultUnknownOption(context, arg);
       return;
     }else if( !zBranch ){
       zBranch = arg;

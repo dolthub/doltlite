@@ -877,6 +877,25 @@ int doltliteAdvanceBranch(
   const ProllyHash *pWorkingCatHash
 );
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
+/* Shared dolt_* command scaffolding (doltlite_cmd.c). */
+void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
+void doltliteCmdResultMissingOptionValue(
+  sqlite3_context *ctx, const char *zOptName
+);
+const char *doltliteCmdTakeValueArg(
+  sqlite3_context *ctx, int argc, sqlite3_value **argv, int *pI,
+  const char *zOptName
+);
+void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
+int doltliteCmdFinishWithConflicts(
+  sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
+  int nConflicts, const char *zOp, int bSealOnPlain
+);
+int doltliteCmdFinishWithConstraintViolations(
+  sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
+  const char *zOp, int bSealOnPlain, const char *zNestedMsg
+);
+
 int doltliteReportConflicts(
   sqlite3 *db, sqlite3_context *ctx, int nConflicts, const char *zOp
 );

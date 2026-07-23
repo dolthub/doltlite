@@ -253,13 +253,8 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     if( zOpt && strcmp(zOpt, "--force")==0 ){
       bForce = 1;
     }else{
-      char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
-      if( zErr ){
-        doltliteVcResultError(ctx, db, zErr);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(ctx);
-      }
+      (void)doltliteVcSealSavepointError(db);
+      doltliteCmdResultUnknownOption(ctx, zOpt);
       return;
     }
   }
@@ -578,11 +573,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( rc==SQLITE_OK ) rc = doltliteRemotePersistRefs(cs);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
-      rc==SQLITE_BUSY
-        ? "pull conflict: another connection committed to this branch. "
-          "Please retry."
-        : "failed to update branch");
+    if( rc==SQLITE_BUSY ){
+      doltliteCmdResultPeerBranchBusy(ctx, "pull");
+      (void)doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+    }else{
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+                                "failed to update branch");
+    }
     return;
   }
 

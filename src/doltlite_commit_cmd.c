@@ -100,49 +100,32 @@ static int doltliteCommitParseOptions(
           }else if( i+1<argc ){
             opts->zMessage = (const char*)sqlite3_value_text(argv[++i]);
           }else{
-            sqlite3_result_error(context, "no value for option `message'", -1);
+            doltliteCmdResultMissingOptionValue(context, "message");
             return SQLITE_ERROR;
           }
           break;
         }else{
-          char *zErr = sqlite3_mprintf("unknown option `-%c'", arg[j]);
-          if( zErr ){
-            sqlite3_result_error(context, zErr, -1);
-            sqlite3_free(zErr);
-          }else{
-            sqlite3_result_error_nomem(context);
-          }
+          char opt[3] = { '-', (char)arg[j], 0 };
+          doltliteCmdResultUnknownOption(context, opt);
           return SQLITE_ERROR;
         }
       }
     }else if( strcmp(arg, "-m")==0 ){
-      if( i+1<argc ){
-        opts->zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      }else{
-        sqlite3_result_error(context, "no value for option `message'", -1);
-        return SQLITE_ERROR;
-      }
+      opts->zMessage = doltliteCmdTakeValueArg(
+          context, argc, argv, &i, "message");
+      if( !opts->zMessage ) return SQLITE_ERROR;
     }else if( strcmp(arg, "--message")==0 ){
-      if( i+1<argc ){
-        opts->zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      }else{
-        sqlite3_result_error(context, "no value for option `message'", -1);
-        return SQLITE_ERROR;
-      }
+      opts->zMessage = doltliteCmdTakeValueArg(
+          context, argc, argv, &i, "message");
+      if( !opts->zMessage ) return SQLITE_ERROR;
     }else if( strcmp(arg, "--author")==0 ){
-      if( i+1<argc ){
-        opts->zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-      }else{
-        sqlite3_result_error(context, "no value for option `author'", -1);
-        return SQLITE_ERROR;
-      }
+      opts->zAuthor = doltliteCmdTakeValueArg(
+          context, argc, argv, &i, "author");
+      if( !opts->zAuthor ) return SQLITE_ERROR;
     }else if( strcmp(arg, "--date")==0 ){
-      if( i+1<argc ){
-        opts->zDate = (const char*)sqlite3_value_text(argv[++i]);
-      }else{
-        sqlite3_result_error(context, "no value for option `date'", -1);
-        return SQLITE_ERROR;
-      }
+      opts->zDate = doltliteCmdTakeValueArg(
+          context, argc, argv, &i, "date");
+      if( !opts->zDate ) return SQLITE_ERROR;
     }else if( strcmp(arg, "--amend")==0 ){
       opts->amend = 1;
     }else if( strcmp(arg, "--allow-empty")==0 ){
@@ -156,13 +139,7 @@ static int doltliteCommitParseOptions(
     }else if( strcmp(arg, "-a")==0 || strcmp(arg, "--all")==0 ){
       opts->addModifiedOnly = 1;
     }else if( arg[0]=='-' ){
-      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
-      if( zErr ){
-        sqlite3_result_error(context, zErr, -1);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(context);
-      }
+      doltliteCmdResultUnknownOption(context, arg);
       return SQLITE_ERROR;
     }else{
       char *zErr = sqlite3_mprintf(
@@ -813,9 +790,7 @@ static void doltliteCommitFunc(
 
   rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
   if( rc==SQLITE_BUSY ){
-    sqlite3_result_error(context,
-      "commit conflict: another connection committed to this branch. "
-      "Please retry your transaction.", -1);
+    doltliteCmdResultPeerBranchBusy(context, "commit");
     return;
   }
   if( rc!=SQLITE_OK ){

@@ -219,9 +219,7 @@ static void doltliteRevertFunc(
   doltliteCommitClear(&ourCommit);
 
   if( rc==SQLITE_BUSY ){
-    sqlite3_result_error(context,
-      "revert conflict: another connection committed to this branch. Please retry your transaction.",
-      -1);
+    doltliteCmdResultPeerBranchBusy(context, "revert");
     return;
   }
   if( rc!=SQLITE_OK ){

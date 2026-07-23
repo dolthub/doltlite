@@ -351,9 +351,7 @@ static void doltliteResetFunc(
     if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
     else if( strcmp(arg, "--soft")==0 ){ isSoft = 1; }
     else if( arg[0]=='-' ){
-      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
-      sqlite3_result_error(context, zErr ? zErr : "unknown option", -1);
-      sqlite3_free(zErr);
+      doltliteCmdResultUnknownOption(context, arg);
       sqlite3_free(azPaths);
       azPaths = 0;
       goto reset_cleanup;

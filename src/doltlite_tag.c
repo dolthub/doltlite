@@ -86,20 +86,14 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
     if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
-      if( i+1<argc ) zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      else{ doltliteVcResultError(ctx, db, "-m requires a message"); return; }
+      zMessage = doltliteCmdTakeValueArg(ctx, argc, argv, &i, "message");
+      if( !zMessage ){ tagSealSavepointError(ctx); return; }
     }else if( strcmp(arg, "--author")==0 ){
-      if( i+1<argc ) zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-      else{ doltliteVcResultError(ctx, db, "--author requires 'name <email>'"); return; }
+      zAuthor = doltliteCmdTakeValueArg(ctx, argc, argv, &i, "author");
+      if( !zAuthor ){ tagSealSavepointError(ctx); return; }
     }else if( arg[0]=='-' ){
-      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
-      if( zErr ){
-        tagSealSavepointError(ctx);
-        sqlite3_result_error(ctx, zErr, -1);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(ctx);
-      }
+      tagSealSavepointError(ctx);
+      doltliteCmdResultUnknownOption(ctx, arg);
       return;
     }else if( !zCommitRef ){
       zCommitRef = arg;
