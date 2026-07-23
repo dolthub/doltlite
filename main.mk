@@ -603,7 +603,7 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_hashof.o \
-              doltlite_constraint_violations.o \
+              doltlite_constraint_violations.o doltlite_verify_constraints.o \
               doltlite_merge_constraints.o \
               doltlite_dbpage.o \
               doltlite_remote.o doltlite_remote_sql.o \
@@ -660,6 +660,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_schema_diff.c $(TOP)/src/doltlite_patch.c $(TOP)/src/doltlite_schemas.c \
     $(TOP)/src/doltlite_diff_stat.c $(TOP)/src/doltlite_record.c $(TOP)/src/doltlite_ignore.c \
     $(TOP)/src/doltlite_hashof.c $(TOP)/src/doltlite_constraint_violations.c \
+    $(TOP)/src/doltlite_verify_constraints.c \
     $(TOP)/src/doltlite_merge_constraints.c $(TOP)/src/doltlite_dbpage.c \
     $(TOP)/src/doltlite_remote.c $(TOP)/src/doltlite_remote_sql.c \
     $(TOP)/src/doltlite_http_remote.c $(TOP)/src/doltlite_remotesrv.c
@@ -1664,6 +1665,9 @@ doltlite_hashof.o:	$(TOP)/src/doltlite_hashof.c $(DEPS_OBJ_COMMON)
 
 doltlite_constraint_violations.o:	$(TOP)/src/doltlite_constraint_violations.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_constraint_violations.c
+
+doltlite_verify_constraints.o:	$(TOP)/src/doltlite_verify_constraints.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_verify_constraints.c
 
 doltlite_merge_constraints.o:	$(TOP)/src/doltlite_merge_constraints.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints.c

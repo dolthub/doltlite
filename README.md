@@ -619,7 +619,7 @@ violations the loser (highest rowid) is evicted from the base
 table into the violations vtable so the remaining value
 stays unique. `dolt_commit` refuses to proceed while any row
 remains in `dolt_constraint_violations_*`; pass `--force` to
-bypass the guard.
+bypass the guard. Re-scan anytime with `SELECT dolt_verify_constraints([--all] [--output-only] [table...]);` (returns 0 or 1).
 
 #### Cherry-Pick
 

@@ -24,6 +24,7 @@ extern int doltlitePatchRegister(sqlite3 *db);
 extern int doltliteRemoteSqlRegister(sqlite3 *db);
 extern int doltliteHashofRegister(sqlite3 *db);
 extern int doltliteConstraintViolationsRegister(sqlite3 *db);
+extern int doltliteVerifyConstraintsRegister(sqlite3 *db);
 
 int doltliteRegister(sqlite3 *db){
   int rc;
@@ -56,6 +57,7 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteRemoteSqlRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteHashofRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteConstraintViolationsRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteVerifyConstraintsRegister(db))!=SQLITE_OK ) return rc;
   return doltliteMaybeSeedRepo(db);
 }
 

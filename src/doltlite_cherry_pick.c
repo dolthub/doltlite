@@ -155,15 +155,18 @@ int applyMergedCatalogAndCommit(
     rc = doltliteConstraintViolationBatchBegin(db);
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeFkViolations(db, ancCatHash,
-                                           &zDetectErrMsg, &nViolations);
+                                           &zDetectErrMsg, &nViolations,
+                                           0, 0);
     }
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeUniqueViolations(db, ancCatHash,
-                                               &zDetectErrMsg, &nUnique);
+                                               &zDetectErrMsg, &nUnique,
+                                               0, 0);
     }
     if( rc==SQLITE_OK ){
       rc = doltliteDetectMergeCheckViolations(db, ancCatHash,
-                                              &zDetectErrMsg, &nCheck);
+                                              &zDetectErrMsg, &nCheck,
+                                              0, 0);
     }
     {
       int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
