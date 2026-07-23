@@ -120,6 +120,27 @@ different() {
   fi
 }
 
+both_error() {
+  local name="$1" db="$2" query="$3"
+  local dl_rc dt_rc
+  "$DOLTLITE" "$TMPROOT/$db.db" "$query" \
+    >/dev/null 2>"$TMPROOT/$name.dl.err"
+  dl_rc=$?
+  (cd "$TMPROOT/$db.dolt" && "$DOLT" sql -q "$query") \
+    >/dev/null 2>"$TMPROOT/$name.dt.err"
+  dt_rc=$?
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+    pass=$((pass+1))
+    echo "  PASS: $name"
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both engines to reject the query)"
+    echo "    doltlite exit: $dl_rc"
+    echo "    dolt exit:     $dt_rc"
+  fi
+}
+
 shape() {
   local name="$1" h="$2" dl dt
   dl=$(pair_dl "$h"); dt=$(pair_dt "$h")
@@ -452,6 +473,9 @@ shape "main_hash_shape" "$H_MAIN"
 
 H_HEAD_PARENT=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD~1');")
 different "HEAD_differs_from_HEAD_parent" "$H_HEAD" "$H_HEAD_PARENT"
+
+both_error "oversized_parent_number_is_rejected" "$DB" \
+  "SELECT dolt_hashof('HEAD^4294967297');"
 
 H_ID_OUT=$(query_pair_separate "$DB" \
   "SELECT dolt_hashof('$(pair_dl "$H_HEAD")');" \
