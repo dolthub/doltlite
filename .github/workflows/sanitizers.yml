@@ -137,6 +137,89 @@ jobs:
           libdoltlite.a -lz -lpthread -lm
         ./doltlite_regression_test_c all
 
+  # Same ASan/UBSan coverage as the Linux job above, but on macOS/arm64 to
+  # catch platform-specific undefined behavior and memory bugs the Linux x86
+  # job can't. Apple's ASan has no leak detector, so detect_leaks/LSan is
+  # dropped here; the Linux job retains leak coverage. Dolt-dependent oracles
+  # are omitted (no macOS Dolt install) — the stock-SQLite oracles, native VC
+  # suites, and the C corpus exercise the same C paths under the sanitizers.
+  asan-ubsan-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      ASAN_CFLAGS: -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1
+      UBSAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: brew install tcl-tk
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        ../configure
+
+    - name: Build with ASan/UBSan
+      run: |
+        cd build
+        make \
+          CFLAGS="$ASAN_CFLAGS" \
+          LDFLAGS="-fsanitize=address,undefined" \
+          doltlite
+        make DOLTLITE_PROLLY=0 sqlite3
+
+    - name: SQL oracle tests (vs stock SQLite)
+      run: |
+        cd build
+        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
+        for f in ../test/oracle_*_test.sh; do
+          [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue
+          echo "--- $(basename "$f") ---"
+          bash "$f" ./doltlite ./sqlite3 || exit 1
+        done
+      timeout-minutes: 20
+
+    - name: Correctness regression tests
+      run: cd build && bash ../test/correctness_test.sh ./doltlite
+
+    - name: VC virtual-table read suites
+      run: |
+        cd build
+        for s in doltlite_at doltlite_history doltlite_diff doltlite_diff_table \
+                 doltlite_diff_table_range \
+                 doltlite_schema_diff doltlite_workspace doltlite_conflicts \
+                 doltlite_conflict_rows doltlite_comparison doltlite_merge; do
+          echo "=== $s ==="
+          bash ../test/$s.sh ./doltlite || exit 1
+        done
+
+    - name: VC ref-mutation + remote suites
+      run: |
+        cd build
+        for s in doltlite_branch doltlite_default_branch doltlite_tag \
+                 doltlite_gc remote_test; do
+          echo "=== $s ==="
+          bash ../test/$s.sh ./doltlite || exit 1
+        done
+
+    - name: C regression corpus (ASan/UBSan)
+      run: |
+        cd build
+        make \
+          CFLAGS="$ASAN_CFLAGS" \
+          LDFLAGS="-fsanitize=address,undefined" \
+          libdoltlite.a
+        cc $ASAN_CFLAGS \
+          -I. -I../src \
+          -o doltlite_regression_test_c ../test/doltlite_regression_test_c.c \
+          libdoltlite.a -lz -lpthread -lm
+        ./doltlite_regression_test_c all
+
   tsan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
