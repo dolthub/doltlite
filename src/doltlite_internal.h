@@ -948,7 +948,8 @@ int doltliteRegisterBlameTables(sqlite3 *db);
 int doltliteRegisterAtTables(sqlite3 *db);
 int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);
-void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
+int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
+int doltliteUpdateSchemaHashes(sqlite3 *db);
 
 /* Post-merge constraint detectors (defined in doltlite_merge_constraints.c). */
 int doltliteDetectMergeFkViolations(sqlite3 *db, const ProllyHash *pAncCatHash,

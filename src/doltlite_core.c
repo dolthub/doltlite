@@ -202,33 +202,61 @@ int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty){
   }
 }
 
-void doltliteUpdateSchemaHashes(sqlite3 *db){
+int doltliteUpdateSchemaHashes(sqlite3 *db){
   sqlite3_stmt *pStmt = 0;
+  int rc;
+  int rc2;
   /* One scan of sqlite_master covers every table and index; both key their
-  ** catalog entry by rootpage and canonicalize by their own name. */
-  if( sqlite3_prepare_v2(
-        db,
-        "SELECT name, rootpage, sql "
-        "FROM main.sqlite_master "
-        "WHERE type IN ('table','index') AND sql IS NOT NULL",
-        -1, &pStmt, 0
-      )==SQLITE_OK ){
-    while( sqlite3_step(pStmt)==SQLITE_ROW ){
-      const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
-      Pgno iRoot = (Pgno)sqlite3_column_int(pStmt, 1);
-      const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
-      if( zName && zCreate ){
-        ProllyHash h;
-        char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zName);
-        if( zCanon ){
-          prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
-          sqlite3_free(zCanon);
-          doltliteSetTableSchemaHash(db, iRoot, &h);
-        }
-      }
-    }
+  ** catalog entry by rootpage and canonicalize by their own name. Virtual
+  ** tables have rootpage zero and no corresponding catalog entry. */
+  if( !db ) return SQLITE_MISUSE;
+  rc = sqlite3_prepare_v2(
+      db,
+      "SELECT name, rootpage, sql "
+      "FROM main.sqlite_master "
+      "WHERE type IN ('table','index') AND sql IS NOT NULL AND rootpage>0",
+      -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
     sqlite3_finalize(pStmt);
+    return rc;
   }
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+    i64 iRoot = sqlite3_column_int64(pStmt, 1);
+    const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
+    ProllyHash h;
+    char *zCanon;
+    if( !zName || !zCreate ){
+      rc = db->mallocFailed ? SQLITE_NOMEM : SQLITE_CORRUPT;
+      break;
+    }
+    if( iRoot<=0 || iRoot>(i64)0xffffffff ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    if( sqlite3FaultSim(954) ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    zCanon = doltliteCanonicalizeSchemaSql(zCreate, zName);
+    if( !zCanon ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
+    sqlite3_free(zCanon);
+    rc = doltliteSetTableSchemaHash(db, (Pgno)iRoot, &h);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = SQLITE_CORRUPT;
+    }
+    if( rc!=SQLITE_OK ){
+      break;
+    }
+  }
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  rc2 = sqlite3_finalize(pStmt);
+  if( rc==SQLITE_OK ) rc = rc2;
+  return rc;
 }
 
 int doltliteLoadLiveSchemaSql(
