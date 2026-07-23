@@ -5,14 +5,7 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-typedef struct ConflictTableInfo ConflictTableInfo;
-struct ConflictTableInfo {
-  char *zName;
-  int nConflicts;
-  DoltliteConflictRow *aRows;
-  char **azSchemaObjects;
-  int nSchemaObjects;
-};
+typedef DoltliteConflictTable ConflictTableInfo;
 
 static void freeConflictTable(ConflictTableInfo *pTable);
 static void freeConflictTables(ConflictTableInfo *aTables, int nTables);
@@ -39,29 +32,50 @@ static void freeConflictRow(DoltliteConflictRow *pRow){
 
 int doltliteSerializeConflicts(
   ChunkStore *cs,
-  ConflictTableInfo *aTables, int nTables,
+  DoltliteConflictTable *aTables, int nTables,
   ProllyHash *pHash
 ){
-  int sz = 4 + 2;
+  sqlite3_int64 sz = 4 + 2;
   int i, j, rc;
   u8 *buf;
   DlByteWriter w;
 
+  if( nTables<0 || nTables>0xffff ) return SQLITE_TOOBIG;
+  if( nTables>0 && !aTables ) return SQLITE_CORRUPT;
   for(i=0; i<nTables; i++){
-    int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
-    sz += 2 + nl + 4;
+    size_t nName = aTables[i].zName ? strlen(aTables[i].zName) : 0;
+    int nl;
+    if( nName>0xffff || aTables[i].nConflicts<0 ) return SQLITE_TOOBIG;
+    if( aTables[i].nConflicts>0 && !aTables[i].aRows ) return SQLITE_CORRUPT;
+    nl = (int)nName;
+    rc = dlAddSize(&sz, 2 + nl + 4);
+    if( rc!=SQLITE_OK ) return rc;
     for(j=0; j<aTables[i].nConflicts; j++){
-      sz += 4 + aTables[i].aRows[j].nKey
-              + 8
-              + 4 + aTables[i].aRows[j].nBaseVal
-              + 4 + aTables[i].aRows[j].nOurVal
-              + 4 + aTables[i].aRows[j].nTheirVal;
+      DoltliteConflictRow *cr = &aTables[i].aRows[j];
+      if( cr->nKey<0 || cr->nBaseVal<0 || cr->nOurVal<0
+       || cr->nTheirVal<0
+      ){
+        return SQLITE_CORRUPT;
+      }
+      if( (cr->nKey>0 && !cr->pKey)
+       || (cr->nBaseVal>0 && !cr->pBaseVal)
+       || (cr->nOurVal>0 && !cr->pOurVal)
+       || (cr->nTheirVal>0 && !cr->pTheirVal)
+      ){
+        return SQLITE_CORRUPT;
+      }
+      rc = dlAddSize(&sz, 24);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, cr->nKey);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, cr->nBaseVal);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, cr->nOurVal);
+      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, cr->nTheirVal);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
-  buf = sqlite3_malloc(sz);
+  buf = sqlite3_malloc64((sqlite3_uint64)sz);
   if( !buf ) return SQLITE_NOMEM;
-  w.p = buf;
+  dlWriterInit(&w, buf, (int)sz);
 
   dlWriteFramedHeader(&w, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
                       DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION, nTables);
@@ -79,7 +93,12 @@ int doltliteSerializeConflicts(
     }
   }
 
-  rc = chunkStorePut(cs, buf, (int)(w.p-buf), pHash);
+  if( w.err || w.p!=w.end ){
+    sqlite3_free(buf);
+    return SQLITE_CORRUPT;
+  }
+  rc = sqlite3FaultSim(950) ? SQLITE_IOERR
+                            : chunkStorePut(cs, buf, (int)sz, pHash);
   sqlite3_free(buf);
   return rc;
 }
@@ -401,7 +420,7 @@ static int deleteConflictRowFromCatalog(
     goto delete_conflict_done;
   }
 
-  w.p = out;
+  dlWriterInit(&w, out, nData);
   dlWriteFramedHeader(&w, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
                       DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION, 0);
 
@@ -460,8 +479,9 @@ static int deleteConflictRowFromCatalog(
         w.p = pOutTableStart;
       }else{
         DlByteWriter cw;
-        cw.p = pCountOut;
+        dlWriterInit(&cw, pCountOut, 4);
         dlWriteU32(&cw, nKeep);
+        assert( !cw.err );
         nOutTables++;
       }
     }else{
@@ -475,21 +495,24 @@ static int deleteConflictRowFromCatalog(
       assert( !isMatch );
       {
         int nCopy = (int)(r.p - pTableStart);
-        memcpy(w.p, pTableStart, nCopy);
-        w.p += nCopy;
+        dlWriteBytes(&w, pTableStart, nCopy);
         nOutTables++;
       }
     }
     sqlite3_free(zName);
   }
 
-  if( r.err || r.p != r.end ){ rc = SQLITE_CORRUPT; goto delete_conflict_done; }
+  if( r.err || r.p != r.end || w.err ){
+    rc = SQLITE_CORRUPT;
+    goto delete_conflict_done;
+  }
   if( deleted ){
     DlByteWriter hw;
-    hw.p = out;
+    dlWriterInit(&hw, out, 6);
     dlWriteFramedHeader(&hw, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
                         DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION,
                         nOutTables);
+    assert( !hw.err );
     rc = storeConflictBytes(db, cs, out, (int)(w.p - out), nOutTables);
   }
 
@@ -534,7 +557,7 @@ static int removeConflictTableFromCatalog(
     goto remove_conflict_done;
   }
 
-  w.p = out;
+  dlWriterInit(&w, out, nData);
   dlWriteFramedHeader(&w, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
                       DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION, 0);
 
@@ -570,20 +593,23 @@ static int removeConflictTableFromCatalog(
       *pFound = 1;
     }else{
       int nCopy = (int)(r.p - pTableStart);
-      memcpy(w.p, pTableStart, nCopy);
-      w.p += nCopy;
+      dlWriteBytes(&w, pTableStart, nCopy);
       nOutTables++;
     }
     sqlite3_free(zName);
   }
 
-  if( r.err || r.p != r.end ){ rc = SQLITE_CORRUPT; goto remove_conflict_done; }
+  if( r.err || r.p != r.end || w.err ){
+    rc = SQLITE_CORRUPT;
+    goto remove_conflict_done;
+  }
   if( *pFound ){
     DlByteWriter hw;
-    hw.p = out;
+    dlWriterInit(&hw, out, 6);
     dlWriteFramedHeader(&hw, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
                         DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION,
                         nOutTables);
+    assert( !hw.err );
     rc = storeConflictBytes(db, cs, out, (int)(w.p - out), nOutTables);
   }
 

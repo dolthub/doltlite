@@ -18,10 +18,6 @@
 #include <string.h>
 #include <ctype.h>
 
-typedef struct ConflictTableInfo ConflictTableInfo;
-extern int doltliteSerializeConflicts(ChunkStore *cs, ConflictTableInfo *aTables,
-                                       int nTables, ProllyHash *pHash);
-
 typedef struct MergeIndexInfo MergeIndexInfo;
 struct MergeIndexInfo {
   Pgno iTable;
@@ -1665,14 +1661,7 @@ static int serializeMergedCatalog(
   return rc;
 }
 
-typedef struct MergeConflictTable MergeConflictTable;
-struct MergeConflictTable {
-  char *zName;
-  int nConflicts;
-  DoltliteConflictRow *aRows;
-  char **azSchemaObjects;
-  int nSchemaObjects;
-};
+typedef DoltliteConflictTable MergeConflictTable;
 
 static void freeConflictRows(DoltliteConflictRow *aRows, int nRows){
   int i;
@@ -3290,24 +3279,22 @@ static int allocMergedCatalogEntries(
   return *paMerged ? SQLITE_OK : SQLITE_NOMEM;
 }
 
-static void recordMergeConflicts(
+static int recordMergeConflicts(
   sqlite3 *db,
   MergeConflictTable *aConflictTables,
   int nConflictTables
 ){
   ProllyHash conflictsHash;
-  int rc2;
+  int rc;
 
-  rc2 = doltliteSerializeConflicts(
+  rc = doltliteSerializeConflicts(
       doltliteGetChunkStore(db),
-      (ConflictTableInfo*)aConflictTables, nConflictTables,
+      aConflictTables, nConflictTables,
       &conflictsHash);
-  if( rc2==SQLITE_OK ){
-    extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
-    extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
-    doltliteSetSessionConflictsCatalog(db, &conflictsHash);
-    doltliteSetSessionMergeState(db, 1, 0, &conflictsHash);
-  }
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteSetSessionConflictsCatalog(db, &conflictsHash);
+  doltliteSetSessionMergeState(db, 1, 0, &conflictsHash);
+  return SQLITE_OK;
 }
 
 int doltliteMergeCatalogs(
@@ -3424,11 +3411,11 @@ int doltliteMergeCatalogs(
 
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
                               aTheirsSchema, nTheirsSchema, pMergedHash);
-  if( pnConflicts ) *pnConflicts = totalConflicts;
 
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
-    recordMergeConflicts(db, aConflictTables, nConflictTables);
+    rc = recordMergeConflicts(db, aConflictTables, nConflictTables);
   }
+  if( pnConflicts && rc==SQLITE_OK ) *pnConflicts = totalConflicts;
 
 merge_cleanup:
   sqlite3_free(aRemap);

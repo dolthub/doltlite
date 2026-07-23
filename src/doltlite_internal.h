@@ -10,6 +10,7 @@
 #include "chunk_store.h"
 #include <time.h>
 #include <ctype.h>
+#include <limits.h>
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
@@ -736,29 +737,74 @@ static SQLITE_INLINE int dlReadU32Str(DlByteReader *r, char **pz){
   return SQLITE_OK;
 }
 
-typedef struct DlByteWriter { u8 *p; } DlByteWriter;
-static SQLITE_INLINE void dlWriteU8(DlByteWriter *w, u8 v){ *w->p++ = v; }
+static SQLITE_INLINE int dlAddSize(sqlite3_int64 *pnTotal, sqlite3_int64 nAdd){
+  if( nAdd<0 || nAdd>SQLITE_MAX_LENGTH
+   || *pnTotal<0 || *pnTotal>SQLITE_MAX_LENGTH-nAdd
+   || *pnTotal>INT_MAX-nAdd
+  ){
+    return SQLITE_TOOBIG;
+  }
+  *pnTotal += nAdd;
+  return SQLITE_OK;
+}
+
+typedef struct DlByteWriter {
+  u8 *p;
+  u8 *end;
+  int err;
+} DlByteWriter;
+static SQLITE_INLINE void dlWriterInit(DlByteWriter *w, u8 *p, int n){
+  w->p = p;
+  w->end = p + n;
+  w->err = 0;
+}
+static SQLITE_INLINE int dlWriterReserve(DlByteWriter *w, int n){
+  if( w->err || n<0 || (size_t)n>(size_t)(w->end-w->p) ){
+    w->err = 1;
+    return 0;
+  }
+  return 1;
+}
+static SQLITE_INLINE void dlWriteU8(DlByteWriter *w, u8 v){
+  if( dlWriterReserve(w, 1) ) *w->p++ = v;
+}
 static SQLITE_INLINE void dlWriteU16(DlByteWriter *w, int v){
-  w->p[0]=(u8)v; w->p[1]=(u8)(v>>8); w->p+=2;
+  if( dlWriterReserve(w, 2) ){
+    w->p[0]=(u8)v; w->p[1]=(u8)(v>>8); w->p+=2;
+  }
 }
 static SQLITE_INLINE void dlWriteU32(DlByteWriter *w, int v){
-  w->p[0]=(u8)v; w->p[1]=(u8)(v>>8); w->p[2]=(u8)(v>>16); w->p[3]=(u8)(v>>24);
-  w->p+=4;
+  if( dlWriterReserve(w, 4) ){
+    w->p[0]=(u8)v; w->p[1]=(u8)(v>>8); w->p[2]=(u8)(v>>16); w->p[3]=(u8)(v>>24);
+    w->p+=4;
+  }
 }
 static SQLITE_INLINE void dlWriteI64(DlByteWriter *w, i64 v){
   u64 k = (u64)v; int i;
-  for(i=0; i<8; i++) w->p[i] = (u8)(k >> (i*8));
-  w->p += 8;
+  if( dlWriterReserve(w, 8) ){
+    for(i=0; i<8; i++) w->p[i] = (u8)(k >> (i*8));
+    w->p += 8;
+  }
 }
 static SQLITE_INLINE void dlWriteU32Blob(DlByteWriter *w, const u8 *p, int n){
   dlWriteU32(w, n);
-  if( n>0 ) memcpy(w->p, p, n);
-  w->p += n;
+  if( dlWriterReserve(w, n) ){
+    if( n>0 ) memcpy(w->p, p, n);
+    w->p += n;
+  }
 }
 static SQLITE_INLINE void dlWriteU16Name(DlByteWriter *w, const char *z, int n){
   dlWriteU16(w, n);
-  if( n>0 ) memcpy(w->p, z, n);
-  w->p += n;
+  if( dlWriterReserve(w, n) ){
+    if( n>0 ) memcpy(w->p, z, n);
+    w->p += n;
+  }
+}
+static SQLITE_INLINE void dlWriteBytes(DlByteWriter *w, const u8 *p, int n){
+  if( dlWriterReserve(w, n) ){
+    if( n>0 ) memcpy(w->p, p, n);
+    w->p += n;
+  }
 }
 
 /* Magic (3 bytes) + version + a u16 table count: the framed header shared by
@@ -987,7 +1033,19 @@ struct DoltliteConflictRow {
   u8 *pTheirVal; int nTheirVal;
 };
 
+typedef struct DoltliteConflictTable DoltliteConflictTable;
+struct DoltliteConflictTable {
+  char *zName;
+  int nConflicts;
+  DoltliteConflictRow *aRows;
+  char **azSchemaObjects;
+  int nSchemaObjects;
+};
+
 void doltliteConflictRowFree(DoltliteConflictRow *pRow);
+int doltliteSerializeConflicts(ChunkStore *cs,
+                               DoltliteConflictTable *aTables,
+                               int nTables, ProllyHash *pHash);
 
 /* Index key construction helpers (see doltlite_merge.c). Exposed for
 ** dolt_conflicts_resolve --theirs to maintain secondary indexes when

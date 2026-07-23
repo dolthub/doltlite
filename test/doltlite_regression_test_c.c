@@ -616,6 +616,16 @@ static int gFailHits = 0;
 static int gFailFullPathnameHits = 0;
 static const char *gFullPathnameSuffix = 0;
 static char gRewrittenFullPath[512];
+static int gRegressionFaultCode = 0;
+static int gRegressionFaultHits = 0;
+
+static int regressionFaultCallback(int iCode){
+  if( iCode==gRegressionFaultCode ){
+    gRegressionFaultHits++;
+    return 1;
+  }
+  return 0;
+}
 
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
 static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut);
@@ -2151,6 +2161,84 @@ static void run_merge_persist_failure(void){
 
   sqlite3_close(db);
   removeDbFiles(dbpath);
+}
+
+static void run_merge_conflict_persist_failure(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  ProllyHash conflictHash;
+
+  printf("=== Merge Conflict Persist Failure Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_merge_conflict_persist_failure");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_merge_conflict_persist_failure",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_merge_conflict_persist_failure", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "UPDATE t SET v='main' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'main edit');"
+    "SELECT dolt_checkout('feature');"
+    "UPDATE t SET v='feature' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'feature edit');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  gRegressionFaultCode = 950;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_merge('feature')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("merge_conflict_persist_failure_was_injected",
+        gRegressionFaultHits==1);
+  check("merge_conflict_persist_failure_is_propagated",
+        strcmp(res, "ERROR: merge failed")==0);
+  doltliteGetSessionConflictsCatalog(db, &conflictHash);
+  check("merge_conflict_persist_failure_does_not_publish_hash",
+        prollyHashIsEmpty(&conflictHash));
+  check("merge_conflict_persist_failure_preserves_working_row",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_conflict_serializer_bounds(void){
+  ChunkStore cs;
+  DoltliteConflictTable table;
+  DoltliteConflictRow row;
+  ProllyHash hash;
+  DlByteWriter w;
+  u8 aBuf[5] = {0, 0, 0, 0, 0x5a};
+  int rc;
+
+  printf("=== Conflict Serializer Bounds Test ===\n\n");
+  memset(&cs, 0, sizeof(cs));
+  memset(&table, 0, sizeof(table));
+  memset(&row, 0, sizeof(row));
+  check("open_memory_store_for_conflict_serializer_bounds",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+
+  table.zName = "t";
+  table.nConflicts = 1;
+  table.aRows = &row;
+  row.pKey = aBuf;
+  row.nKey = INT_MAX;
+  rc = doltliteSerializeConflicts(&cs, &table, 1, &hash);
+  check("conflict_serializer_rejects_size_overflow", rc==SQLITE_TOOBIG);
+
+  dlWriterInit(&w, aBuf, 4);
+  dlWriteU32(&w, 1);
+  dlWriteU8(&w, 2);
+  check("byte_writer_reports_overflow", w.err!=0);
+  check("byte_writer_preserves_canary", aBuf[4]==0x5a);
+
+  chunkStoreClose(&cs);
 }
 
 static void run_merge_conflict_surfaces_error_and_rollback_clears_durable_state(void){
@@ -8174,6 +8262,8 @@ static const RegressionCase aCases[] = {
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "blame_deep_history_scan", "Blame Deep History Scan Test", run_blame_deep_history_scan },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
+  { "merge_conflict_persist_failure", "Merge Conflict Persist Failure Test", run_merge_conflict_persist_failure },
+  { "conflict_serializer_bounds", "Conflict Serializer Bounds Test", run_conflict_serializer_bounds },
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
   { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
