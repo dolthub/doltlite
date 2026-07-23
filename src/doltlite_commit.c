@@ -169,11 +169,15 @@ int doltliteRefIsStaged(const char *zRef){
 
 int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
                                      ProllyHash *pCatHash){
+  int dirty;
+  int rc;
   if( !zRef ){
     return doltliteGetHeadCatalogHash(db, pCatHash);
   }
   if( doltliteRefIsWorking(zRef) ){
-    if( doltliteHasUncommittedChanges(db) ){
+    rc = doltliteHasUncommittedChanges(db, &dirty);
+    if( rc!=SQLITE_OK ) return rc;
+    if( dirty ){
       return doltliteFlushCatalogToHash(db, pCatHash);
     }
     return doltliteGetPersistedWorkingCatalogHash(db, pCatHash);

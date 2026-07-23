@@ -185,6 +185,7 @@ static int doltliteRebaseLinearReplay(
   int savedInit = 0;
   int rc;
   int i;
+  int dirty = 0;
   char *zFailedMsg = 0;
   int bConflict = 0;
   assert( db!=0 && context!=0 && zUpstream!=0 && pzFinalMessage!=0 );
@@ -195,7 +196,13 @@ static int doltliteRebaseLinearReplay(
   memset(&saved, 0, sizeof(saved));
   memset(&upstreamCommit, 0, sizeof(upstreamCommit));
 
-  if( doltliteHasUncommittedChanges(db) ){
+  rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
+    return rc;
+  }
+  if( dirty ){
     sqlite3_result_error(context,
       "cannot start a rebase with uncommitted changes", -1);
     if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
@@ -880,6 +887,7 @@ static void doltliteRebaseInteractiveStart(
   ProllyHash *aReplay = 0;
   int nReplay = 0;
   int rc;
+  int dirty = 0;
   u8 curIsRebasing = 0;
   int bWorkingBranchCreated = 0;
   const char *zFailMsg = 0;
@@ -899,7 +907,12 @@ static void doltliteRebaseInteractiveStart(
     return;
   }
 
-  if( doltliteHasUncommittedChanges(db) ){
+  rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  if( dirty ){
     sqlite3_result_error(context,
       "cannot start a rebase with uncommitted changes", -1);
     return;

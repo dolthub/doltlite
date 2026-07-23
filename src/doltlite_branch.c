@@ -585,10 +585,13 @@ struct CheckoutMutationCtx {
 ** (falling back to HEAD). Returns an error code; callers handle reporting. */
 static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
                                      ProllyHash *pOldCatHash){
-  if( doltliteHasUncommittedChanges(db) ){
+  int dirty;
+  int rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ) return rc;
+  if( dirty ){
     u8 *oldCatData = 0;
     int nOldCat = 0;
-    int rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
+    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
     if( rc!=SQLITE_OK ) return rc;
     rc = chunkStorePut(cs, oldCatData, nOldCat, pOldCatHash);
     sqlite3_free(oldCatData);
@@ -1559,8 +1562,7 @@ static int brIsDirty(
   *pDirty = 0;
 
   if( strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
-    *pDirty = doltliteHasUncommittedChanges(db) ? 1 : 0;
-    return SQLITE_OK;
+    return doltliteHasUncommittedChanges(db, pDirty);
   }
   if( prollyHashIsEmpty(&br->workingSetHash) ){
     return SQLITE_OK;

@@ -299,6 +299,7 @@ static void doltliteCherryPickFunc(
   ProllyHash pickHash, ourHead;
   DoltliteCommit pickCommit, parentCommit, ourCommit;
   int nConflicts = 0;
+  int dirty = 0;
   int rc;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
 
@@ -323,7 +324,12 @@ static void doltliteCherryPickFunc(
     return;
   }
 
-  if( doltliteHasUncommittedChanges(db) ){
+  rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  if( dirty ){
     sqlite3_result_error(context,
       "cannot cherry-pick with uncommitted changes", -1);
     return;
