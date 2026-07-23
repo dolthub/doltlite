@@ -95,6 +95,47 @@ jobs:
         echo "completed ${runs} cursor_merge_stress_test runs"
       timeout-minutes: 8
 
+  savepoint-txn-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build savepoint txn matrix
+      run: |
+        cd build
+        make DOLTLITE_PROLLY_CHECK=1 savepoint_txn_matrix_test
+      timeout-minutes: 5
+
+    - name: Run savepoint txn matrix (loop)
+      run: |
+        cd build
+        deadline=$((SECONDS + 300))
+        runs=0
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          runs=$((runs + 1))
+          if [ $((runs % 20)) -eq 0 ]; then
+            echo "savepoint_txn_matrix_test run ${runs}"
+          fi
+          ./savepoint_txn_matrix_test > /tmp/savepoint_txn_matrix.out || {
+            cat /tmp/savepoint_txn_matrix.out
+            exit 1
+          }
+        done
+        echo "completed ${runs} savepoint_txn_matrix_test runs"
+      timeout-minutes: 8
+
   vc-concurrency-stress:
     runs-on: ubuntu-latest
     timeout-minutes: 20

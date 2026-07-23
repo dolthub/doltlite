@@ -16,6 +16,7 @@ GATING=(
   scoped_refs_push_test
   concurrent_stress_test
   cursor_merge_stress_test
+  savepoint_txn_matrix_test
   vc_concurrency_test
   vc_ref_mutation_stress_test
   multi_process_test
