@@ -28,6 +28,7 @@ GATING=(
   sequence_reload_test
   chunk_store_fork_lock_test
   remotesrv_init_failure_test
+  commit_deserialize_test
 )
 
 run_one() {

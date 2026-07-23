@@ -112,6 +112,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   c->zName[nName] = 0;
   p += nName;
 
+  if( p + 2 > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   nEmail = DLC_GET_U16(p); p += 2;
   if( p + nEmail > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   c->zEmail = sqlite3_malloc(nEmail + 1);
@@ -120,6 +121,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   c->zEmail[nEmail] = 0;
   p += nEmail;
 
+  if( p + 2 > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   nMsg = DLC_GET_U16(p); p += 2;
   if( p + nMsg > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   c->zMessage = sqlite3_malloc(nMsg + 1);

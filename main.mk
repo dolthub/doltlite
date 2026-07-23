@@ -2752,6 +2752,7 @@ DOLTLITE_C_TESTS = \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
 	remotesrv_init_failure_test$(T.exe) \
+	commit_deserialize_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe)
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
@@ -2804,6 +2805,14 @@ chunk_store_fork_lock_test$(T.exe): $(TOP)/test/chunk_store_fork_lock_test.c lib
 
 remotesrv_init_failure_test$(T.exe): $(TOP)/test/remotesrv_init_failure_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/remotesrv_init_failure_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+# commit_deserialize_test includes doltlite_commit.h (which pulls sqliteInt.h),
+# so it needs the DoltLite defines; the deserializer is an exported entry point,
+# so it links the static archive.
+commit_deserialize_test$(T.exe): $(TOP)/test/commit_deserialize_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/commit_deserialize_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 invariant_test$(T.exe): $(TOP)/test/invariant_test.c libdoltlite$(T.lib)
