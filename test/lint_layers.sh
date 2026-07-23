@@ -20,17 +20,18 @@ for f in "$SRCDIR"/prolly_btree*.c; do
 done
 
 # Keep doltlite merge split into reviewable units. The core catalog/rows/
-# schema/pass1 modules must exist (so a re-monolith can't drop a file and
-# still pass by only checking what remains) and stay under 1500 lines.
+# schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file
+# and still pass by only checking what remains) and stay under 1500 lines.
 # Command and constraints modules get a higher but still finite cap.
 for f in \
   "$SRCDIR"/doltlite_merge.c \
   "$SRCDIR"/doltlite_merge_pass1.c \
+  "$SRCDIR"/doltlite_merge_pass2.c \
   "$SRCDIR"/doltlite_merge_rows.c \
   "$SRCDIR"/doltlite_merge_schema.c
 do
   if [ ! -f "$f" ]; then
-    lint "$f: missing — doltlite merge must stay split (catalog/pass1/rows/schema)"
+    lint "$f: missing — doltlite merge must stay split (catalog/pass1/pass2/rows/schema)"
     continue
   fi
   nline=$(wc -l < "$f" | tr -d ' ')

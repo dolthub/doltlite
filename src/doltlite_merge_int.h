@@ -45,6 +45,12 @@ typedef DoltliteConflictTable MergeConflictTable;
 #define SCHEMA_MERGE_OURS    1
 #define SCHEMA_MERGE_THEIRS  2
 
+typedef struct SchemaRootpageRemap SchemaRootpageRemap;
+struct SchemaRootpageRemap {
+  Pgno oldPg;
+  Pgno newPg;
+};
+
 /* ── rows (doltlite_merge_rows.c) ─────────────────────────────────────── */
 
 int canFastMerge(
@@ -201,6 +207,26 @@ int mergeCatalogPass1(
   int bDisjointSchemaChanges,
   int bPreferOurMaster,
   char ***pazReindex, int *pnReindex
+);
+
+/* ── pass2 (doltlite_merge_pass2.c) ───────────────────────────────────── */
+
+int mergeCatalogPass2(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  struct TableEntry *aMerged, int *pnMerged,
+  Pgno *piNextMerged,
+  int bDisjointSchemaChanges,
+  MergeConflictTable *aConflictTables,
+  int nConflictTables,
+  SchemaRootpageRemap **ppaRemap,
+  int *pnRemap,
+  char ***pazReindex,
+  int *pnReindex
 );
 
 #endif /* DOLTLITE_MERGE_INT_H */
