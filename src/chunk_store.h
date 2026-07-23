@@ -165,6 +165,7 @@ struct ChunkStore {
   u8 readOnly;
   u8 isMemory;
   u8 fullFsync;           /* PRAGMA fullfsync: syncs use SQLITE_SYNC_FULL */
+  u8 noSync;              /* PRAGMA synchronous=OFF: skip durability syncs */
   u8 snapshotPinned;
   u8 corruptMidStream;    /* WAL replay found mid-stream damage; chunk reads
                           ** and commits fail SQLITE_CORRUPT, but open itself
