@@ -6,6 +6,7 @@
 #include "prolly_hash.h"
 #include "prolly_hashset.h"
 #include "doltlite_commit.h"
+#include "doltlite_name_index.h"
 #include "chunk_store.h"
 #include <time.h>
 #include <ctype.h>
@@ -799,6 +800,109 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+int doltlitePrepareCatalogForPersistence(sqlite3 *db);
+int doltliteCreateAndStoreCommit(
+  sqlite3 *db,
+  const ProllyHash *pParent,
+  const ProllyHash *pCatalog,
+  const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
+  const ProllyHash *aExtraParents,
+  int nExtraParents,
+  ProllyHash *pCommitHash
+);
+int doltliteCreateAndStoreCommitWithTime(
+  sqlite3 *db,
+  const ProllyHash *pParent,
+  const ProllyHash *pCatalog,
+  const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
+  const ProllyHash *aExtraParents,
+  int nExtraParents,
+  i64 explicitTimestamp,
+  ProllyHash *pCommitHash
+);
+int doltliteAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+);
+int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
+int doltliteReportConflicts(
+  sqlite3 *db, sqlite3_context *ctx, int nConflicts, const char *zOp
+);
+int doltliteReportConstraintViolations(
+  sqlite3 *db, sqlite3_context *ctx, const char *zOp
+);
+int doltliteDetectPostMergeConstraintViolations(
+  sqlite3 *db, const ProllyHash *pAncCatHash, int *pnViolations
+);
+int doltliteRefreshAndConfirmHead(
+  sqlite3 *db, ChunkStore *cs, const ProllyHash *pExpectedHead
+);
+int doltliteRestoreTxnStateOnFailure(
+  sqlite3 *db, DoltliteTxnState *pSaved, int opRc
+);
+int doltlitePrimeSchemaCache(sqlite3 *db);
+void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx);
+int doltliteRollbackAutocommitConflict(
+  sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved
+);
+int doltliteSavepointIsTopLevelTxn(sqlite3 *db);
+int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db);
+int doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(sqlite3 *db);
+
+typedef DoltliteNameIndex AddNameIndex;
+int addNameIndexInit(
+  AddNameIndex *pIdx, struct TableEntry *aEntry, int nEntry
+);
+void addNameIndexFree(AddNameIndex *pIdx);
+struct TableEntry *addNameIndexFind(
+  const AddNameIndex *pIdx, const char *zName
+);
+int amTableStagedByName(
+  struct TableEntry *aStaged, int nStaged, const char *zTbl
+);
+void addRemoveIndexEntriesOfTable(
+  struct TableEntry *aStaged, int *pnStaged,
+  SchemaEntry *aStagedSchema, int nStagedSchema, const char *zTable
+);
+int addAppendIndexEntriesOfTable(
+  sqlite3_context *context,
+  struct TableEntry **paStaged, int *pnStaged,
+  struct TableEntry *aWorking, int nWorking,
+  SchemaEntry *aWorkSchema, int nWorkSchema,
+  const char *zTable
+);
+
+int mergeAbortInPlace(sqlite3 *db);
+int mergeFastForward(
+  sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
+  const ProllyHash *pOurHead, const ProllyHash *pTheirHead
+);
+
+int doltliteAddRegister(sqlite3 *db);
+int doltliteCommitCmdRegister(sqlite3 *db);
+int doltliteResetRegister(sqlite3 *db);
+int doltliteMergeCmdRegister(sqlite3 *db);
+int doltliteCherryPickRegister(sqlite3 *db);
+int doltliteRevertRegister(sqlite3 *db);
+int doltliteRebaseRegister(sqlite3 *db);
+int doltliteConfigRegister(sqlite3 *db);
+int doltliteMaybeSeedRepo(sqlite3 *db);
+
+int doltliteRegisterConflictTables(sqlite3 *db);
+int doltliteRegisterDiffTables(sqlite3 *db);
+int doltliteRegisterWorkspaceTables(sqlite3 *db);
+int doltliteRegisterHistoryTables(sqlite3 *db);
+int doltliteRegisterBlameTables(sqlite3 *db);
+int doltliteRegisterAtTables(sqlite3 *db);
+int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash);
+int doltliteRefreshConstraintViolationTables(sqlite3 *db);
+void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 
 /* Post-merge constraint detectors (defined in doltlite_merge_constraints.c). */
 int doltliteDetectMergeFkViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
@@ -827,6 +931,28 @@ int doltliteFindAncestor(sqlite3 *db, const ProllyHash *pCommit1,
 typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
                        DoltliteCommit *pCommit);
+int doltliteLoadFirstParentCommit(
+  sqlite3 *db, const DoltliteCommit *pCommit, DoltliteCommit *pParentCommit
+);
+int doltliteLoadHeadAndParentedCommit(
+  sqlite3 *db,
+  const ProllyHash *pTargetHash,
+  ProllyHash *pOurHead,
+  DoltliteCommit *pTargetCommit,
+  DoltliteCommit *pParentCommit,
+  DoltliteCommit *pOurCommit
+);
+int applyMergedCatalogAndCommit(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const ProllyHash *ancCatHash,
+  const ProllyHash *ourCatHash,
+  const ProllyHash *theirCatHash,
+  const ProllyHash *ourHead,
+  const char *zMessage,
+  int *pnConflicts,
+  char *hexBuf
+);
 
 int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
                               ProllyHash *pCatHash);

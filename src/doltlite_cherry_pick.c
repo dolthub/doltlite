@@ -1,0 +1,414 @@
+#ifdef DOLTLITE_PROLLY
+
+#include "sqliteInt.h"
+#include "prolly_hash.h"
+#include "prolly_hashset.h"
+#include "chunk_store.h"
+#include "prolly_cursor.h"
+#include "prolly_cache.h"
+#include "prolly_diff.h"
+#include "doltlite_commit.h"
+#include "doltlite_record.h"
+#include "doltlite_internal.h"
+#include "doltlite_name_index.h"
+#include <stddef.h>
+#include "doltlite_ignore.h"
+
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+
+int doltliteLoadFirstParentCommit(
+  sqlite3 *db,
+  const DoltliteCommit *pCommit,
+  DoltliteCommit *pParentCommit
+){
+  const ProllyHash *pParent = doltliteCommitParentHash(pCommit, 0);
+  if( !pParent || prollyHashIsEmpty(pParent) ){
+    return SQLITE_EMPTY;
+  }
+  return doltliteLoadCommit(db, pParent, pParentCommit);
+}
+
+int doltliteLoadHeadAndParentedCommit(
+  sqlite3 *db,
+  const ProllyHash *pTargetHash,
+  ProllyHash *pOurHead,
+  DoltliteCommit *pTargetCommit,
+  DoltliteCommit *pParentCommit,
+  DoltliteCommit *pOurCommit
+){
+  int rc = doltliteLoadCommit(db, pTargetHash, pTargetCommit);
+  if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+
+  if( doltliteCommitParentCount(pTargetCommit)==0 ){
+    return SQLITE_EMPTY;
+  }
+
+  rc = doltliteLoadFirstParentCommit(db, pTargetCommit, pParentCommit);
+  if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+
+  doltliteGetSessionHead(db, pOurHead);
+  if( prollyHashIsEmpty(pOurHead) ){
+    return SQLITE_DONE;
+  }
+
+  rc = doltliteLoadCommit(db, pOurHead, pOurCommit);
+  if( rc!=SQLITE_OK ) return SQLITE_ABORT;
+  return SQLITE_OK;
+}
+
+int applyMergedCatalogAndCommit(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const ProllyHash *ancCatHash,
+  const ProllyHash *ourCatHash,
+  const ProllyHash *theirCatHash,
+  const ProllyHash *ourHead,
+  const char *zMessage,
+  int *pnConflicts,
+  char *hexBuf
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteTxnState savedState;
+  ProllyHash mergedCatHash;
+  ProllyHash liveMergedCatHash;
+  ProllyHash commitHash;
+  char *zMergeErr = 0;
+  int graphLocked = 0;
+  int bPreferOurMaster;
+  const char *zOpLabel;
+  int rc;
+
+  memset(&savedState, 0, sizeof(savedState));
+  if( hexBuf ) hexBuf[0] = '\0';
+  bPreferOurMaster = (sqlite3_strnicmp(zMessage, "Revert", 6)==0);
+  zOpLabel = bPreferOurMaster ? "Revert" : "Cherry-pick";
+
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteSaveTxnState(db, &savedState);
+  if( rc!=SQLITE_OK ) return rc;
+
+  {
+    char **azReindex = 0;
+    int nReindex = 0;
+    rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
+                                &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
+                                bPreferOurMaster, &azReindex, &nReindex);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zMergeErr);
+      doltliteTxnStateClear(&savedState);
+      doltliteFreeNameList(azReindex, nReindex);
+      return rc;
+    }
+    sqlite3_free(zMergeErr);
+
+    rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
+    if( rc!=SQLITE_OK ){
+      doltliteTxnStateClear(&savedState);
+      doltliteFreeNameList(azReindex, nReindex);
+      return rc;
+    }
+    graphLocked = 1;
+
+    rc = doltliteSwitchCatalog(db, &mergedCatHash);
+    if( rc==SQLITE_OK ){
+      rc = doltlitePrimeSchemaCache(db);
+    }
+    if( rc==SQLITE_OK && nReindex>0 ){
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
+    }
+    doltliteFreeNameList(azReindex, nReindex);
+    if( rc!=SQLITE_OK ) goto apply_rollback;
+  }
+
+  rc = doltliteFlushCatalogToHash(db, &liveMergedCatHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSwitchCatalog(db, &liveMergedCatHash);
+  }
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  doltliteSetSessionStaged(db, &liveMergedCatHash);
+  rc = doltliteUpdateBranchWorkingState(db,
+      doltliteGetSessionBranch(db), &liveMergedCatHash, NULL);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+    graphLocked = 0;
+  }
+
+  {
+    int nViolations = 0;
+    int nUnique = 0;
+    int nCheck = 0;
+    char *zDetectErrMsg = 0;
+
+    rc = doltliteConstraintViolationBatchBegin(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeFkViolations(db, ancCatHash,
+                                           &zDetectErrMsg, &nViolations);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeUniqueViolations(db, ancCatHash,
+                                               &zDetectErrMsg, &nUnique);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeCheckViolations(db, ancCatHash,
+                                              &zDetectErrMsg, &nCheck);
+    }
+    {
+      int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+      if( rc==SQLITE_OK ) rc = erc;
+    }
+    if( rc!=SQLITE_OK ){
+      if( zDetectErrMsg ){
+        sqlite3_result_error(context, zDetectErrMsg, -1);
+        sqlite3_free(zDetectErrMsg);
+      }
+      goto apply_rollback;
+    }
+    sqlite3_free(zDetectErrMsg);
+
+    if( nViolations + nUnique + nCheck > 0 ){
+      switch( doltliteVcTxnMode(db) ){
+      case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
+        rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionBranch(db, savedState.zSessionBranch);
+          doltliteSetSessionHead(db, &savedState.sessionHead);
+          doltliteSetSessionStaged(db, &savedState.sessionStaged);
+          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                       &savedState.sessionMergeCommit,
+                                       &savedState.sessionConflictsCatalog);
+          {
+            extern int doltliteClearAllConstraintViolations(sqlite3*);
+            doltliteClearAllConstraintViolations(db);
+          }
+          rc = doltlitePersistWorkingSet(db);
+        }
+        doltliteTxnStateClear(&savedState);
+        if( rc!=SQLITE_OK ){
+          return rc;
+        }
+        sqlite3_result_error(context,
+          "Committing this transaction resulted in a working set with "
+          "constraint violations, transaction rolled back.", -1);
+        break;
+      case DOLTLITE_VC_TXN_PLAIN:
+        rc = doltliteReportConstraintViolations(db, context, zOpLabel);
+        if( rc!=SQLITE_OK ) goto apply_rollback;
+        rc = doltliteVcSealActiveSavepoints(db);
+        if( rc!=SQLITE_OK ) goto apply_rollback;
+        doltliteTxnStateClear(&savedState);
+        break;
+      case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
+        rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+        if( rc!=SQLITE_OK ) return rc;
+        sqlite3_result_error(context,
+          "Merge aborted: would have introduced constraint violations. "
+          "The merge and the would-be violations have been rolled back "
+          "with the enclosing savepoint, so dolt_constraint_violations "
+          "is empty. Re-run the merge in autocommit mode (outside a "
+          "transaction) to inspect the violations in "
+          "dolt_constraint_violations.",
+          -1);
+        break;
+      }
+      return SQLITE_OK;
+    }
+  }
+
+  if( *pnConflicts > 0 ){
+    if( graphLocked ){
+      chunkStoreUnlock(cs);
+      graphLocked = 0;
+    }
+    switch( doltliteVcTxnMode(db) ){
+    case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
+      rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
+      if( rc!=SQLITE_OK ) return rc;
+      return SQLITE_OK;
+    case DOLTLITE_VC_TXN_PLAIN:
+      rc = doltliteReportConflicts(db, context, *pnConflicts, zOpLabel);
+      if( rc!=SQLITE_OK ) goto apply_rollback;
+      rc = doltliteVcSealActiveSavepoints(db);
+      if( rc!=SQLITE_OK ) goto apply_rollback;
+      doltliteTxnStateClear(&savedState);
+      return SQLITE_OK;
+    case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
+      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+      if( rc!=SQLITE_OK ) return rc;
+      {
+        char msg[256];
+        sqlite3_snprintf(sizeof(msg), msg,
+          "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
+          zOpLabel, *pnConflicts);
+        sqlite3_result_error(context, msg, -1);
+      }
+      return SQLITE_OK;
+    }
+  }
+
+  rc = doltliteCreateAndStoreCommit(db, ourHead, &liveMergedCatHash,
+      zMessage, NULL, NULL, NULL, 0, &commitHash);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  /* Re-confirm under the lock right before advancing; the first confirm is
+  ** staled by intervening lock-cycling SQL. */
+  rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+  graphLocked = 1;
+
+  rc = doltliteAdvanceBranch(db, &commitHash, &liveMergedCatHash, 0);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  rc = doltliteVcSealActiveSavepoints(db);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+  }
+  doltliteTxnStateClear(&savedState);
+  doltliteHashToHex(&commitHash, hexBuf);
+  return SQLITE_OK;
+
+apply_rollback:
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+  }
+  {
+    return doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+  }
+}
+
+static void doltliteCherryPickFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zRef;
+  ProllyHash pickHash, ourHead;
+  DoltliteCommit pickCommit, parentCommit, ourCommit;
+  int nConflicts = 0;
+  int rc;
+  char hexBuf[PROLLY_HASH_SIZE*2+1];
+
+  memset(&pickCommit, 0, sizeof(pickCommit));
+  memset(&parentCommit, 0, sizeof(parentCommit));
+  memset(&ourCommit, 0, sizeof(ourCommit));
+
+  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( argc<1 ){
+    sqlite3_result_error(context, "usage: dolt_cherry_pick('commit_hash')", -1);
+    return;
+  }
+  if( argc>1 ){
+    sqlite3_result_error(context,
+      "cherry-picking multiple commits is not supported yet.", -1);
+    return;
+  }
+
+  zRef = (const char*)sqlite3_value_text(argv[0]);
+  if( !zRef ){
+    sqlite3_result_error(context, "commit hash required", -1);
+    return;
+  }
+
+  if( doltliteHasUncommittedChanges(db) ){
+    sqlite3_result_error(context,
+      "cannot cherry-pick with uncommitted changes", -1);
+    return;
+  }
+
+  rc = doltliteResolveRef(db,zRef, &pickHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "invalid commit hash", -1);
+    return;
+  }
+  rc = doltliteLoadHeadAndParentedCommit(
+    db, &pickHash,
+    &ourHead, &pickCommit, &parentCommit, &ourCommit
+  );
+  if( rc==SQLITE_NOTFOUND ){
+    doltliteCommitClear(&pickCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "commit not found", -1);
+    return;
+  }
+  if( rc==SQLITE_EMPTY ){
+    doltliteCommitClear(&pickCommit);
+    sqlite3_result_error(context, "cannot cherry-pick the initial commit", -1);
+    return;
+  }
+  if( rc==SQLITE_DONE ){
+    doltliteCommitClear(&pickCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "no commits on current branch", -1);
+    return;
+  }
+  if( rc==SQLITE_ABORT ){
+    doltliteCommitClear(&pickCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "failed to load HEAD commit", -1);
+    return;
+  }
+
+  {
+    const char *zMsg = pickCommit.zMessage;
+    char fallback[256];
+    if( !zMsg || !*zMsg ){
+      sqlite3_snprintf(sizeof(fallback), fallback, "cherry-pick of %s", zRef);
+      zMsg = fallback;
+    }
+
+    rc = applyMergedCatalogAndCommit(db, context,
+        &parentCommit.catalogHash, &ourCommit.catalogHash,
+        &pickCommit.catalogHash, &ourHead, zMsg, &nConflicts, hexBuf);
+  }
+
+  doltliteCommitClear(&pickCommit);
+  doltliteCommitClear(&parentCommit);
+  doltliteCommitClear(&ourCommit);
+
+  if( rc==SQLITE_BUSY ){
+    sqlite3_result_error(context,
+      "cherry-pick conflict: another connection committed to this branch. Please retry your transaction.",
+      -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
+    sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
+    sqlite3_free(zMsg);
+    return;
+  }
+
+  if( nConflicts > 0 ){
+    char *zMsg = sqlite3_mprintf(
+        "cherry-pick of %s resulted in %d conflict(s); "
+        "resolve in dolt_conflicts then dolt_commit to finish", zRef, nConflicts);
+    if( zMsg ){
+      sqlite3_result_error(context, zMsg, -1);
+      sqlite3_free(zMsg);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
+    return;
+  }else if( hexBuf[0] ){
+    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+  }
+}
+
+
+int doltliteCherryPickRegister(sqlite3 *db){
+  return sqlite3_create_function(db, "dolt_cherry_pick", -1,
+                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
+                                 doltliteCherryPickFunc, 0, 0);
+}
+
+#endif
