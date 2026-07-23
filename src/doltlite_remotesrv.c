@@ -123,6 +123,20 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 #define MAX_REQUEST_BYTES  (128 * 1024 * 1024)  /* 128 MiB total body */
 #define MAX_RESPONSE_BYTES MAX_REQUEST_BYTES    /* 128 MiB total reply */
 
+/* Per-request read deadlines. The per-recv socket timeout only bounds a
+** single recv, so a client dribbling one byte per recv could pin a worker
+** for MAX_HEADER_SIZE * timeout. The whole header must arrive within one
+** timeout window; the body gets that same grace then must sustain
+** BODY_MIN_RATE, which aborts a slow-loris while allowing a genuinely slow
+** large upload. */
+#define SERVER_BODY_MIN_RATE     (64 * 1024)
+
+static i64 monotonicMs(void){
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (i64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 /* Grow *pp to at least need bytes, capped at MAX_RESPONSE_BYTES. Uses
 ** sqlite3_realloc64 so sizes above 2 GiB-on-int truncation never under-alloc.
 ** Returns SQLITE_OK, SQLITE_NOMEM, or SQLITE_TOOBIG. */
@@ -150,12 +164,17 @@ static int remoteSrvGrowBuf(u8 **pp, i64 *pnAlloc, i64 need){
   return SQLITE_OK;
 }
 
-static int readExact(DoltliteConn *fd, u8 *pBuf, int nBytes){
+static int readExact(DoltliteConn *fd, u8 *pBuf, int nBytes,
+                     i64 startMs, int graceMs){
   int nRead = 0;
   while( nRead < nBytes ){
     int n = doltliteConnRead(fd, pBuf + nRead, nBytes - nRead);
     if( n <= 0 ) return -1;
     nRead += n;
+    if( monotonicMs() - startMs
+        > graceMs + (i64)nRead * 1000 / SERVER_BODY_MIN_RATE ){
+      return -1;
+    }
   }
   return 0;
 }
@@ -199,7 +218,8 @@ static int parseRequest(
   char *zMethod, int nMethodMax,
   char *zPath, int nPathMax,
   char *zAuth, int nAuthMax,
-  u8 **ppBody, int *pnBody
+  u8 **ppBody, int *pnBody,
+  int timeoutMs
 ){
   char aBuf[MAX_HEADER_SIZE];
   int nBuf = 0;
@@ -207,6 +227,7 @@ static int parseRequest(
   int contentLength = 0;
   int seenContentLength = 0;
   int seenAuthorization = 0;
+  i64 startMs = monotonicMs();
   char *p;
 
   *ppBody = 0;
@@ -216,6 +237,7 @@ static int parseRequest(
   while( nBuf < MAX_HEADER_SIZE-1 ){
     int n = doltliteConnRead(fd, &aBuf[nBuf], 1);
     if( n <= 0 ) return -1;
+    if( monotonicMs() - startMs > timeoutMs ) return -1;
     nBuf++;
     if( nBuf>=4
      && aBuf[nBuf-4]=='\r' && aBuf[nBuf-3]=='\n'
@@ -299,7 +321,7 @@ static int parseRequest(
   if( contentLength > 0 ){
     u8 *pBody = (u8*)sqlite3_malloc(contentLength);
     if( !pBody ) return -1;
-    if( readExact(fd, pBody, contentLength)!=0 ){
+    if( readExact(fd, pBody, contentLength, monotonicMs(), timeoutMs)!=0 ){
       sqlite3_free(pBody);
       return -1;
     }
@@ -765,7 +787,8 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
 
   rc = parseRequest(fd, zMethod, sizeof(zMethod),
                     zPath, sizeof(zPath),
-                    zAuth, sizeof(zAuth), &pBody, &nBody);
+                    zAuth, sizeof(zAuth), &pBody, &nBody,
+                    pSrv->timeoutMs);
   if( rc!=0 ){
     if( rc==-2 ){
       sendPayloadTooLarge(fd);
