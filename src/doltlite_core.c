@@ -518,42 +518,6 @@ int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
   return doltliteSaveWorkingSet(db);
 }
 
-int doltliteReportConflicts(
-  sqlite3 *db,
-  sqlite3_context *ctx,
-  int nConflicts,
-  const char *zOp
-){
-  char msg[256];
-  int rc;
-  rc = doltliteRegisterConflictTables(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltlitePersistOrSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  sqlite3_snprintf(sizeof(msg), msg,
-    "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
-    zOp, nConflicts);
-  sqlite3_result_error(ctx, msg, -1);
-  return SQLITE_OK;
-}
-
-int doltliteReportConstraintViolations(
-  sqlite3 *db,
-  sqlite3_context *ctx,
-  const char *zOp
-){
-  char msg[256];
-  int rc;
-  rc = doltlitePersistOrSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  sqlite3_snprintf(sizeof(msg), msg,
-    "%s resulted in constraint violations. Resolve the rows in "
-    "dolt_constraint_violations and then commit with dolt_commit.",
-    zOp);
-  sqlite3_result_error(ctx, msg, -1);
-  return SQLITE_OK;
-}
-
 int doltliteDetectPostMergeConstraintViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -709,45 +673,5 @@ int doltlitePrimeSchemaCache(sqlite3 *db){
   sqlite3_finalize(pStmt);
   return rc;
 }
-
-void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
-  sqlite3_result_error(ctx,
-    "Merge conflict detected, @autocommit transaction rolled back. "
-    "@autocommit must be disabled so that merge conflicts can be "
-    "resolved using the dolt_conflicts and dolt_schema_conflicts "
-    "tables before manually committing the transaction. "
-    "Alternatively, to commit transactions with merge conflicts, set "
-    "@@dolt_allow_commit_conflicts = 1",
-    -1);
-}
-
-int doltliteRollbackAutocommitConflict(
-  sqlite3 *db,
-  sqlite3_context *ctx,
-  DoltliteTxnState *pSaved
-){
-  int rc;
-  int hadTopLevelSavepoint = db->pSavepoint!=0 && db->nSavepoint==0;
-  sqlite3RollbackAll(db, SQLITE_OK);
-  rc = doltliteRestoreTxnState(db, pSaved);
-  if( rc==SQLITE_OK ){
-    rc = doltliteSetSessionMergeState(db, pSaved->sessionIsMerging,
-                                      &pSaved->sessionMergeCommit,
-                                      &pSaved->sessionConflictsCatalog);
-  }
-  if( rc==SQLITE_OK ){
-    rc = doltliteSetSessionConstraintViolationsCatalog(
-        db, &pSaved->sessionConstraintViolationsCatalog);
-  }
-  doltliteTxnStateClear(pSaved);
-  if( rc==SQLITE_OK && hadTopLevelSavepoint ){
-    rc = doltliteVcSealTopLevelSavepointTxn(db);
-  }
-  if( rc==SQLITE_OK ){
-    doltliteReportAutocommitConflictRollback(ctx);
-  }
-  return rc;
-}
-
 
 #endif

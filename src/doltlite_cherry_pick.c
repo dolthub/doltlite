@@ -182,58 +182,14 @@ int applyMergedCatalogAndCommit(
     sqlite3_free(zDetectErrMsg);
 
     if( nViolations + nUnique + nCheck > 0 ){
-      switch( doltliteVcTxnMode(db) ){
-      case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
-        rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionBranch(db, savedState.zSessionBranch);
-        }
-        if( rc==SQLITE_OK ){
-          doltliteSetSessionHead(db, &savedState.sessionHead);
-          rc = doltliteSetSessionStaged(db, &savedState.sessionStaged);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltliteSetSessionMergeState(
-              db, savedState.sessionIsMerging,
-              &savedState.sessionMergeCommit,
-              &savedState.sessionConflictsCatalog);
-        }
-        if( rc==SQLITE_OK ){
-          extern int doltliteClearAllConstraintViolations(sqlite3*);
-          rc = doltliteClearAllConstraintViolations(db);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltlitePersistWorkingSet(db);
-        }
-        doltliteTxnStateClear(&savedState);
-        if( rc!=SQLITE_OK ){
-          return rc;
-        }
-        sqlite3_result_error(context,
-          "Committing this transaction resulted in a working set with "
-          "constraint violations, transaction rolled back.", -1);
-        break;
-      case DOLTLITE_VC_TXN_PLAIN:
-        rc = doltliteReportConstraintViolations(db, context, zOpLabel);
-        if( rc!=SQLITE_OK ) goto apply_rollback;
-        rc = doltliteVcSealActiveSavepoints(db);
-        if( rc!=SQLITE_OK ) goto apply_rollback;
-        doltliteTxnStateClear(&savedState);
-        break;
-      case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-        rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
-        if( rc!=SQLITE_OK ) return rc;
-        sqlite3_result_error(context,
+      return doltliteCmdFinishWithConstraintViolations(
+          db, context, &savedState, zOpLabel, 1,
           "Merge aborted: would have introduced constraint violations. "
           "The merge and the would-be violations have been rolled back "
           "with the enclosing savepoint, so dolt_constraint_violations "
           "is empty. Re-run the merge in autocommit mode (outside a "
           "transaction) to inspect the violations in "
-          "dolt_constraint_violations.",
-          -1);
-        break;
-      }
-      return SQLITE_OK;
+          "dolt_constraint_violations.");
     }
   }
 
@@ -242,30 +198,8 @@ int applyMergedCatalogAndCommit(
       chunkStoreUnlock(cs);
       graphLocked = 0;
     }
-    switch( doltliteVcTxnMode(db) ){
-    case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
-      rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
-      if( rc!=SQLITE_OK ) return rc;
-      return SQLITE_OK;
-    case DOLTLITE_VC_TXN_PLAIN:
-      rc = doltliteReportConflicts(db, context, *pnConflicts, zOpLabel);
-      if( rc!=SQLITE_OK ) goto apply_rollback;
-      rc = doltliteVcSealActiveSavepoints(db);
-      if( rc!=SQLITE_OK ) goto apply_rollback;
-      doltliteTxnStateClear(&savedState);
-      return SQLITE_OK;
-    case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
-      if( rc!=SQLITE_OK ) return rc;
-      {
-        char msg[256];
-        sqlite3_snprintf(sizeof(msg), msg,
-          "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
-          zOpLabel, *pnConflicts);
-        sqlite3_result_error(context, msg, -1);
-      }
-      return SQLITE_OK;
-    }
+    return doltliteCmdFinishWithConflicts(
+        db, context, &savedState, *pnConflicts, zOpLabel, 1);
   }
 
   rc = doltliteCreateAndStoreCommit(db, ourHead, &liveMergedCatHash,
@@ -398,9 +332,7 @@ static void doltliteCherryPickFunc(
   doltliteCommitClear(&ourCommit);
 
   if( rc==SQLITE_BUSY ){
-    sqlite3_result_error(context,
-      "cherry-pick conflict: another connection committed to this branch. Please retry your transaction.",
-      -1);
+    doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
     return;
   }
   if( rc!=SQLITE_OK ){

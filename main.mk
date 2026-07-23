@@ -599,7 +599,7 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
-              doltlite.o doltlite_core.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
+              doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_hashof.o \
@@ -644,7 +644,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/prolly_hashset.c $(TOP)/src/prolly_check.c \
     $(TOP)/src/chunk_wal.c $(TOP)/src/chunk_refs.c $(TOP)/src/chunk_index.c \
     $(TOP)/src/chunk_staging.c $(TOP)/src/chunk_file.c \
-    $(TOP)/src/doltlite.c $(TOP)/src/doltlite_core.c $(TOP)/src/doltlite_add.c \
+    $(TOP)/src/doltlite.c $(TOP)/src/doltlite_core.c $(TOP)/src/doltlite_cmd.c $(TOP)/src/doltlite_add.c \
     $(TOP)/src/doltlite_commit_cmd.c $(TOP)/src/doltlite_reset.c \
     $(TOP)/src/doltlite_merge_cmd.c $(TOP)/src/doltlite_cherry_pick.c \
     $(TOP)/src/doltlite_revert.c $(TOP)/src/doltlite_rebase.c \
@@ -1563,6 +1563,9 @@ doltlite.o:	$(TOP)/src/doltlite.c $(DEPS_OBJ_COMMON)
 
 doltlite_core.o:	$(TOP)/src/doltlite_core.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_core.c
+
+doltlite_cmd.o:	$(TOP)/src/doltlite_cmd.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_cmd.c
 
 doltlite_add.o:	$(TOP)/src/doltlite_add.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_add.c
