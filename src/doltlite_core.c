@@ -378,8 +378,20 @@ int doltliteCreateAndStoreCommitWithTime(
   memcpy(&c.catalogHash, pCatalog, sizeof(ProllyHash));
   c.timestamp = explicitTimestamp ? explicitTimestamp : (i64)time(0);
   c.zName  = sqlite3_mprintf("%s", zAuthorName  ? zAuthorName  : doltliteGetAuthorName(db));
+  if( c.zName==0 ){
+    rc = SQLITE_NOMEM;
+    goto create_commit_done;
+  }
   c.zEmail = sqlite3_mprintf("%s", zAuthorEmail ? zAuthorEmail : doltliteGetAuthorEmail(db));
-  c.zMessage = sqlite3_mprintf("%s", zMessage);
+  if( c.zEmail==0 ){
+    rc = SQLITE_NOMEM;
+    goto create_commit_done;
+  }
+  c.zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
+  if( c.zMessage==0 ){
+    rc = SQLITE_NOMEM;
+    goto create_commit_done;
+  }
 
   if( nExtraParents > 0 && aExtraParents ){
     c.aParents[0] = *pParent;
@@ -392,6 +404,7 @@ int doltliteCreateAndStoreCommitWithTime(
 
   rc = doltliteCommitSerialize(&c, &commitData, &nCommitData);
   if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, pCommitHash);
+create_commit_done:
   sqlite3_free(commitData);
   doltliteCommitClear(&c);
   return rc;

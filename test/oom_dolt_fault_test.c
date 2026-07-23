@@ -132,6 +132,10 @@ static void cleanupFiles(const char *base){
 
 static int setupBase(sqlite3 *db){
   int rc;
+  rc = execSilent(db,
+      "SELECT dolt_config('user.name','oom-author'),"
+      "       dolt_config('user.email','oom@example.com')");
+  if( rc ) return rc;
   rc = execSilent(db, "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT)");
   if( rc ) return rc;
   rc = execSilent(db, "INSERT INTO t VALUES(1,'one'),(2,'two'),(3,'three')");
@@ -144,6 +148,33 @@ static int setupBase(sqlite3 *db){
 
 typedef int (*OpFn)(sqlite3 *db);
 
+static int verifyLatestCommitMetadata(sqlite3 *db){
+  sqlite3_stmt *stmt = 0;
+  const char *zName;
+  const char *zEmail;
+  const char *zMessage;
+  int rc;
+  int frc;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT committer,email,message FROM dolt_log LIMIT 1",
+      -1, &stmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_step(stmt);
+  if( rc==SQLITE_ROW ){
+    zName = (const char*)sqlite3_column_text(stmt, 0);
+    zEmail = (const char*)sqlite3_column_text(stmt, 1);
+    zMessage = (const char*)sqlite3_column_text(stmt, 2);
+    rc = zName && strcmp(zName, "oom-author")==0
+      && zEmail && strcmp(zEmail, "oom@example.com")==0
+      && zMessage && strcmp(zMessage, "iter")==0
+      ? SQLITE_OK : SQLITE_CORRUPT;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_CORRUPT;
+  }
+  frc = sqlite3_finalize(stmt);
+  return rc==SQLITE_OK ? frc : rc;
+}
+
 static int opCommit(sqlite3 *db){
   int rc;
   rc = execSilent(db, "INSERT INTO t VALUES(4,'four')");
@@ -151,7 +182,8 @@ static int opCommit(sqlite3 *db){
   rc = execSilent(db, "SELECT dolt_add('-A')");
   if( rc ) return rc;
   rc = execSilent(db, "SELECT dolt_commit('-m','iter')");
-  return rc;
+  if( rc ) return rc;
+  return verifyLatestCommitMetadata(db);
 }
 
 static int opBranchCreate(sqlite3 *db){
