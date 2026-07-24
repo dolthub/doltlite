@@ -595,7 +595,7 @@ endif
 
 PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
-              chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
+              chunk_store.o chunk_store_lock.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
@@ -643,7 +643,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/ext/blake3/blake3_dispatch.c $(TOP)/ext/blake3/blake3.h \
     $(TOP)/ext/blake3/blake3_impl.h \
     $(TOP)/src/prolly_hashset.c $(TOP)/src/prolly_check.c \
-    $(TOP)/src/chunk_wal.c $(TOP)/src/chunk_refs.c $(TOP)/src/chunk_index.c \
+    $(TOP)/src/chunk_store_lock.c $(TOP)/src/chunk_wal.c $(TOP)/src/chunk_refs.c $(TOP)/src/chunk_index.c \
     $(TOP)/src/chunk_staging.c $(TOP)/src/chunk_file.c \
     $(TOP)/src/doltlite.c $(TOP)/src/doltlite_core.c $(TOP)/src/doltlite_cmd.c $(TOP)/src/doltlite_add.c \
     $(TOP)/src/doltlite_commit_cmd.c $(TOP)/src/doltlite_reset.c \
@@ -1481,6 +1481,9 @@ prolly_cache.o:	$(TOP)/src/prolly_cache.c $(DEPS_OBJ_COMMON)
 
 chunk_store.o:	$(TOP)/src/chunk_store.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_store.c
+
+chunk_store_lock.o:	$(TOP)/src/chunk_store_lock.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/chunk_store_lock.c
 
 chunk_wal.o:	$(TOP)/src/chunk_wal.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_wal.c
