@@ -822,7 +822,20 @@ jobs:
         ./testfixture ../test/testrunner.tcl \
           --buildonly --jobs 4 mdevtest
 
-    - name: Build assert-enabled dirty-check probe
+  assert-build:
+    name: assert-enabled
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Build dirty-check probe
       env:
         CFLAGS: -g -O0 -Werror
       run: |
