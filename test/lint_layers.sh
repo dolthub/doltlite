@@ -31,6 +31,15 @@ else
   fi
 fi
 
+if [ ! -f "$SRCDIR/prolly_btree_cursor_payload.c" ]; then
+  lint "$SRCDIR/prolly_btree_cursor_payload.c: missing — prolly cursor payload must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_payload.c" | tr -d ' ')
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_payload.c:$nline lines — prolly_btree_cursor_payload.c must stay at or below 1500 lines"
+  fi
+fi
+
 
 # Keep doltlite merge split into reviewable units. The core catalog/rows/
 # schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file

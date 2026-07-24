@@ -726,6 +726,7 @@ int saveCursorPosition(BtCursor*);
 int restoreCursorPosition(BtCursor*, int*);
 int countTreeEntries(Btree*, Pgno, i64*);
 int sortKeyFromUnpackedForCount(BtCursor*, UnpackedRecord*, u8**, int*, int*);
+int materializeDeferredMergedSeekBackward(BtCursor *pCur);
 int tableEntryIsTableRoot(Btree*, struct TableEntry*, int*);
 void clearMergeCursorState(BtCursor*);
 int prollyCursorCheckInterrupt(BtCursor*);
@@ -738,5 +739,80 @@ ChunkStore *doltliteGetChunkStore(sqlite3*);
 BtShared *doltliteGetBtShared(sqlite3*);
 ProllyCache *doltliteGetCache(sqlite3*);
 int doltliteRegister(sqlite3*);
+
+
+/* Cursor payload helpers shared across cursor TUs (static inline). */
+static SQLITE_INLINE void cursorCurrentTreeValue(
+  BtCursor *pCur,
+  const u8 **ppData,
+  int *pnData
+){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf;
+  ProllyNode *pNode;
+  int i;
+  u32 off0, off1;
+  assert( pCur!=0 );
+  assert( pProllyCur->eState==PROLLY_CURSOR_VALID );
+  assert( pProllyCur->iLevel>=0 && pProllyCur->iLevel<PROLLY_CURSOR_MAX_DEPTH );
+  pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  assert( pLeaf!=0 );
+  pNode = &pLeaf->node;
+  i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  assert( i>=0 && i<(int)pNode->nItems );
+  off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+  off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
+  *ppData = pNode->pValData + off0;
+  *pnData = (int)(off1 - off0);
+}
+
+static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf;
+  ProllyNode *pNode;
+  int i;
+  const u8 *p;
+  assert( pCur!=0 );
+  assert( pProllyCur->eState==PROLLY_CURSOR_VALID );
+  pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  assert( pLeaf!=0 );
+  pNode = &pLeaf->node;
+  i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  assert( i>=0 && i<(int)pNode->nItems );
+  p = pNode->pKeyData + i*8;
+  assert( (pNode->flags & PROLLY_NODE_INTKEY)!=0 );
+  return ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40)
+       | ((u64)p[3]<<32) | ((u64)p[4]<<24) | ((u64)p[5]<<16)
+       | ((u64)p[6]<<8) | (u64)p[7];
+}
+
+static SQLITE_INLINE i64 cursorCurrentTreeIntKey(BtCursor *pCur){
+  u64 u = cursorCurrentTreeKeyPrefixInt(pCur);
+  return (i64)(u ^ ((u64)1 << 63));
+}
+
+static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
+  if( pCur->curIntKey ){
+    const u8 *pVal; int nVal; int nAvail;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nVal > 0 && nAvail==nVal ){
+      pCur->pCachedPayload = (u8*)pVal;
+      pCur->nCachedPayload = nVal;
+      pCur->cachedPayloadOwned = 0;
+    }
+  }
+}
+
+static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
+  const u8 *pVal; int nVal;
+  CLEAR_CACHED_PAYLOAD(pCur);
+  cursorCurrentTreeValue(pCur, &pVal, &nVal);
+  if( nVal > 0 ){
+    pCur->pCachedPayload = (u8*)pVal;
+    pCur->nCachedPayload = nVal;
+    pCur->cachedPayloadOwned = 0;
+  }
+}
 
 #endif /* PROLLY_BTREE_INT_H */
