@@ -386,4 +386,26 @@ run_test_match "rebase_replay_u_to_stmt" \
 
 rm -f "$DB"
 
+# WORKING / STAGED pseudo-refs must resolve like the other dolt_* surfaces.
+# Before the catalog-aware resolver fix, schema_diff only accepted commit refs,
+# so HEAD/WORKING (and HEAD..WORKING, HEAD/STAGED) errored with
+# "to_ref 'WORKING' could not be resolved".
+DB=/tmp/test_sd_working_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "CREATE TABLE w(id INTEGER PRIMARY KEY, x TEXT);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "working_count" "SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING');" "1" "$DB"
+run_test "working_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD','WORKING');" "w" "$DB"
+run_test "working_from_empty" "SELECT length(from_table_name) FROM dolt_schema_diff('HEAD','WORKING');" "0" "$DB"
+run_test "working_range_count" "SELECT count(*) FROM dolt_schema_diff('HEAD..WORKING');" "1" "$DB"
+run_test "working_self_empty" "SELECT count(*) FROM dolt_schema_diff('WORKING','WORKING');" "0" "$DB"
+
+echo "SELECT dolt_add('-A');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "staged_count" "SELECT count(*) FROM dolt_schema_diff('HEAD','STAGED');" "1" "$DB"
+run_test "staged_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD','STAGED');" "w" "$DB"
+
+rm -f "$DB"
+
 dltest_finish

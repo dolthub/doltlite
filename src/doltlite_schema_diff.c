@@ -733,22 +733,11 @@ static int sdResolveOne(
   const char *zWhich,
   ProllyHash *pCatHash
 ){
-  ProllyHash commitHash;
-  int rc;
-
-  rc = doltliteResolveRef(db, zRef, &commitHash);
+  int rc = doltliteResolveCatalogHashForRef(db, zRef, pCatHash);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pVtab->zErrMsg);
     pVtab->zErrMsg = sqlite3_mprintf(
       "dolt_schema_diff: %s '%s' could not be resolved", zWhich, zRef);
-    return SQLITE_ERROR;
-  }
-  rc = doltliteCommitCatalogHash(db, &commitHash, pCatHash);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pVtab->zErrMsg);
-    pVtab->zErrMsg = sqlite3_mprintf(
-      "dolt_schema_diff: %s '%s' resolved to a hash but the "
-      "commit could not be loaded", zWhich, zRef);
     return SQLITE_ERROR;
   }
   return SQLITE_OK;
@@ -829,8 +818,8 @@ static int sdParseArgs(
         return SQLITE_NOMEM;
       }
 
-      rc = doltliteResolveRef(db, zRangeFrom, &probe);
-      if( rc==SQLITE_OK ) rc = doltliteResolveRef(db, zRangeTo, &probe);
+      rc = doltliteResolveCatalogHashForRef(db, zRangeFrom, &probe);
+      if( rc==SQLITE_OK ) rc = doltliteResolveCatalogHashForRef(db, zRangeTo, &probe);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zRangeFrom);
         sqlite3_free(zRangeTo);
