@@ -19,26 +19,56 @@ dl_is_ci() {
 # legitimately matches nothing would otherwise abort the caller mid-run -- the
 # exact silent failure this file exists to prevent.
 
-# Newest mtime across the engine sources, as a bare epoch second. Empty when the
-# sources are not reachable (a prebuilt artifact directory), which is a "cannot
-# tell" answer, never a "looks fine" answer.
-dl_newest_source_epoch() {
-  local repo_root="$1" newest=""
-  if [ -d "$repo_root/src" ]; then
-    newest=$( { find "$repo_root/src" -maxdepth 1 -type f \
-                    \( -name '*.c' -o -name '*.h' \) -exec stat -f '%m' {} + 2>/dev/null \
-                || find "$repo_root/src" -maxdepth 1 -type f \
-                    \( -name '*.c' -o -name '*.h' \) -printf '%T@\n' 2>/dev/null; } \
-              | cut -d. -f1 | sort -n | tail -1 || true )
-  fi
-  printf '%s' "$newest"
-  return 0
+# GNU and BSD stat spell mtime differently *and* each accepts the other's flag
+# with an unrelated meaning instead of failing: GNU `stat -f` reports the
+# filesystem, not the file, and happily succeeds printing non-numeric text. So a
+# plain `||` chain silently yields garbage that later dies in a numeric compare,
+# leaving staleness undetectable on one platform. Validate the value; never trust
+# the exit status.
+dl_is_epoch() {
+  case "${1:-}" in
+    '' | *[!0-9]* ) return 1 ;;
+    * ) return 0 ;;
+  esac
 }
 
 dl_file_epoch() {
   local e=""
-  e=$(stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || true)
+  e=$(stat -c '%Y' "$1" 2>/dev/null || true)
+  dl_is_epoch "$e" || e=$(stat -f '%m' "$1" 2>/dev/null || true)
+  dl_is_epoch "$e" || e=""
   printf '%s' "$e"
+  return 0
+}
+
+# Newest mtime across the engine sources, as a bare epoch second. Empty when the
+# sources are not reachable (a prebuilt artifact directory), which is a "cannot
+# tell" answer, never a "looks fine" answer.
+dl_newest_source_epoch() {
+  local repo_root="$1" newest="" f e
+  [ -d "$repo_root/src" ] || { printf ''; return 0; }
+  # Fast path, keeping only all-digit lines so a find/stat spelling that
+  # "succeeds" with prose contributes nothing rather than a bogus maximum.
+  newest=$( { find "$repo_root/src" -maxdepth 1 -type f \
+                  \( -name '*.c' -o -name '*.h' \) -printf '%T@\n' 2>/dev/null \
+              || find "$repo_root/src" -maxdepth 1 -type f \
+                  \( -name '*.c' -o -name '*.h' \) -exec stat -f '%m' {} + 2>/dev/null; } \
+            | cut -d. -f1 \
+            | grep -xE '[0-9]+' \
+            | sort -n | tail -1 || true )
+  # Whether find's and stat's flavours happen to agree is not something to bet
+  # the guard on, so fall back to the portable per-file query.
+  if ! dl_is_epoch "$newest"; then
+    newest=""
+    for f in "$repo_root"/src/*.c "$repo_root"/src/*.h; do
+      [ -f "$f" ] || continue
+      e=$(dl_file_epoch "$f")
+      dl_is_epoch "$e" || continue
+      if [ -z "$newest" ] || [ "$e" -gt "$newest" ]; then newest="$e"; fi
+    done
+  fi
+  dl_is_epoch "$newest" || newest=""
+  printf '%s' "$newest"
   return 0
 }
 

@@ -61,6 +61,41 @@ probe "stale_unknown_artifact_is_not_stale" \
 probe "flags_ok_when_archive_absent" \
   'dl_check_archive_flags /nonexistent/libx.a "-g" && printf ok' 'ok'
 
+probe "non_numeric_is_not_an_epoch" \
+  'if dl_is_epoch "  File: \"x\"  ID: 10a0"; then printf accepted; else printf rejected; fi' \
+  'rejected'
+
+# The contract is a bare epoch, not merely non-empty output. GNU and BSD stat
+# each accept the other's mtime flag with an unrelated meaning and exit 0, so a
+# helper that trusts exit status returns filesystem prose here -- which then dies
+# in the numeric compare and silently reports every artifact as fresh.
+probe "file_epoch_is_numeric" \
+  "e=\$(dl_file_epoch '$HERE/lib/build_artifacts.sh')
+   if dl_is_epoch \"\$e\"; then printf numeric; else printf \"got[\$e]\"; fi" \
+  'numeric'
+
+probe "source_epoch_is_numeric" \
+  "e=\$(dl_newest_source_epoch '$REPO_ROOT')
+   if dl_is_epoch \"\$e\"; then printf numeric; else printf \"got[\$e]\"; fi" \
+  'numeric'
+
+# End to end: a backdated file must actually be reported stale. This is the probe
+# that fails outright when the epoch plumbing is broken, since a comparison
+# against non-numeric text errors out and reads as "not stale".
+probe "backdated_file_is_detected_stale" \
+  'f=$(mktemp); touch -t 200001010000 "$f"
+   s=$(dl_newest_source_epoch "'"$REPO_ROOT"'")
+   if dl_artifact_is_stale "$f" "$s"; then printf stale; else printf missed; fi
+   rm -f "$f"' \
+  'stale'
+
+probe "future_file_is_not_stale" \
+  'f=$(mktemp); touch -t 203001010000 "$f"
+   s=$(dl_newest_source_epoch "'"$REPO_ROOT"'")
+   if dl_artifact_is_stale "$f" "$s"; then printf stale; else printf fresh; fi
+   rm -f "$f"' \
+  'fresh'
+
 # An archive with no sanitizer symbols is the common case, and the one whose
 # empty grep result previously killed the caller.
 if [ -f "$BUILD_DIR/libdoltlite.a" ]; then
