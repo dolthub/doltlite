@@ -139,7 +139,9 @@ Several independent layers. A change under `src/` should run the relevant ones;
   Every `doltlite_*.test` suite must appear in a bucket or
   `test/lint_orphaned_suites.sh` fails.
 - **`test/run_c_tests.sh`** — C unit tests (concurrency, crash recovery,
-  serialize determinism, chunk-store locking, …).
+  serialize determinism, chunk-store locking, …). Builds the tests it gates when
+  run against a build directory, and reports *not built* and *stale* separately
+  from *failed*, so a skipped or out-of-date binary can never read as a pass.
 - **`test/run_sqllogictest.sh`** — at **full pass / 100% parity**.
   `test/known_sqllogictest_divergences.txt` is **empty and must stay empty**: a
   new divergence means fix the engine, never add a known-divergence entry.

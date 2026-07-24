@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+# Guards against validating a build that is not the one you think you built.
+# CI is immune -- it builds from a clean checkout and hands binaries to the test
+# phase -- so these checks exist for local runs, where a stale binary silently
+# reports a pass for code that no longer exists.
+
+# Every query here reports "unknown" as empty output with status 0, never a
+# non-zero status: callers run under `set -euo pipefail`, where a grep that
+# legitimately matches nothing would otherwise abort the caller mid-run -- the
+# exact silent failure this file exists to prevent.
+
+# Newest mtime across the engine sources, as a bare epoch second. Empty when the
+# sources are not reachable (a prebuilt artifact directory), which is a "cannot
+# tell" answer, never a "looks fine" answer.
+dl_newest_source_epoch() {
+  local repo_root="$1" newest=""
+  if [ -d "$repo_root/src" ]; then
+    newest=$( { find "$repo_root/src" -maxdepth 1 -type f \
+                    \( -name '*.c' -o -name '*.h' \) -exec stat -f '%m' {} + 2>/dev/null \
+                || find "$repo_root/src" -maxdepth 1 -type f \
+                    \( -name '*.c' -o -name '*.h' \) -printf '%T@\n' 2>/dev/null; } \
+              | cut -d. -f1 | sort -n | tail -1 || true )
+  fi
+  printf '%s' "$newest"
+  return 0
+}
+
+dl_file_epoch() {
+  local e=""
+  e=$(stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || true)
+  printf '%s' "$e"
+  return 0
+}
+
+# 0 when the artifact predates the newest engine source. Unknown ages are not
+# stale: a check that cannot run must not invent a verdict.
+dl_artifact_is_stale() {
+  local artifact="$1" src_epoch="$2"
+  [ -n "$src_epoch" ] || return 1
+  local art_epoch
+  art_epoch=$(dl_file_epoch "$artifact")
+  [ -n "$art_epoch" ] || return 1
+  [ "$art_epoch" -lt "$src_epoch" ]
+}
+
+dl_stale_hint() {
+  echo "  Rebuild before trusting these results:"
+  echo "    cd ${1:-build} && make doltlite-c-tests-build"
+}
+
+# Sanitizer runtimes an archive expects its final link to provide. A test
+# compiled without matching -fsanitize flags fails with hundreds of undefined
+# __asan_*/__ubsan_* symbols, which reads as a code error rather than the build
+# mismatch it is. Reported as -fsanitize= names, not __xsan_ symbol prefixes, so
+# the remedy can be pasted as-is.
+dl_archive_sanitizers() {
+  local archive="$1" out=""
+  if [ -f "$archive" ] && command -v nm >/dev/null 2>&1; then
+    out=$( nm -u "$archive" 2>/dev/null \
+           | grep -oE '_*__(asan|ubsan|tsan|msan)_' \
+           | sed -E 's/_*__([a-z]+)_/\1/' \
+           | sort -u \
+           | sed -e 's/^asan$/address/' -e 's/^ubsan$/undefined/' \
+                 -e 's/^tsan$/thread/'  -e 's/^msan$/memory/' \
+           | paste -sd, - || true )
+  fi
+  printf '%s' "$out"
+  return 0
+}
+
+# Fail early, and say which side to fix, when the archive was built with
+# sanitizers the caller's flags do not ask for.
+dl_check_archive_flags() {
+  local archive="$1" flags="${2:-}"
+  local sans
+  sans=$(dl_archive_sanitizers "$archive")
+  [ -n "$sans" ] || return 0
+  case "$flags" in
+    *-fsanitize*) return 0 ;;
+  esac
+  echo "ERROR: stale build, not a code failure." >&2
+  echo "       $archive was built with -fsanitize=$sans but the current CFLAGS" >&2
+  echo "       enable no sanitizer, so this link fails with hundreds of" >&2
+  echo "       undefined sanitizer symbols. Pick one:" >&2
+  echo "         make libdoltlite.a                              # clean archive" >&2
+  echo "         CFLAGS=\"-g -fsanitize=$sans\" <this script>   # match it" >&2
+  return 1
+}

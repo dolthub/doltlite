@@ -2,8 +2,20 @@
 
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/build_artifacts.sh"
+
 BUILD_DIR="${1:-.}"
 SUITE_SET="${2:-all}"
+BUILD_MODE="${DOLTLITE_C_TESTS_BUILD:-auto}"
+case "${3:-}" in
+  --build)    BUILD_MODE=always ;;
+  --no-build) BUILD_MODE=never ;;
+  "")         ;;
+  *) echo "ERROR: unknown option: $3"; exit 2 ;;
+esac
+
 cd "$BUILD_DIR" || { echo "Build dir $BUILD_DIR not found"; exit 2; }
 
 COVERAGE_TESTS=(
@@ -46,14 +58,57 @@ case "$SUITE_SET" in
     ;;
 esac
 
+# Build what we gate on. CI's test phase unpacks a binaries-only artifact with no
+# Makefile, so "auto" builds locally and stays out of the way there -- the point
+# is that a developer running this never silently validates last week's binaries.
+did_build=0
+if [ "$BUILD_MODE" != never ] && [ -f Makefile ]; then
+  echo "=== building gated C tests (make doltlite-c-tests-build) ==="
+  if make doltlite-c-tests-build; then
+    did_build=1
+  else
+    echo
+    echo "ERROR: could not build the gated C tests; results below would describe" >&2
+    echo "       whatever binaries happen to be lying around. Fix the build first." >&2
+    exit 2
+  fi
+  echo
+elif [ "$BUILD_MODE" = always ]; then
+  echo "ERROR: --build requested but no Makefile in $(pwd)" >&2
+  exit 2
+fi
+
+# Only meaningful when we did not just build: a stale binary is the failure mode
+# that reports a pass for code that no longer exists.
+src_epoch=""
+if [ "$did_build" -eq 0 ]; then
+  src_epoch=$(dl_newest_source_epoch "$REPO_ROOT" || true)
+fi
+
+passed=0
+failed=0
+notbuilt=0
+stale=0
+FAILED_NAMES=""
+NOTBUILT_NAMES=""
+STALE_NAMES=""
+
 run_one() {
   local name="$1"
   local kind="$2"
   local exe="./$name"
 
   if [ ! -x "$exe" ]; then
-    echo "MISSING: $exe (not built)"
-    return 1
+    echo "NOT BUILT: $exe"
+    notbuilt=$((notbuilt + 1))
+    NOTBUILT_NAMES="$NOTBUILT_NAMES $name"
+    return
+  fi
+
+  if [ -n "$src_epoch" ] && dl_artifact_is_stale "$exe" "$src_epoch"; then
+    echo "STALE: $exe predates src/ -- running it anyway, result is not trustworthy"
+    stale=$((stale + 1))
+    STALE_NAMES="$STALE_NAMES $name"
   fi
 
   echo "============================================================"
@@ -62,27 +117,64 @@ run_one() {
   "$exe"
   local ec=$?
   echo "[$kind] $name exited with $ec"
-  return $ec
+  if [ "$ec" -eq 0 ]; then
+    passed=$((passed + 1))
+  else
+    failed=$((failed + 1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+  fi
 }
 
-gating_failures=0
-
 for t in "${GATING[@]}"; do
-  if ! run_one "$t" GATING; then
-    gating_failures=$((gating_failures + 1))
-  fi
+  run_one "$t" GATING
 done
 
 echo
 echo "============================================================"
 echo "Summary"
 echo "============================================================"
-echo "GATING failures        : $gating_failures / ${#GATING[@]}"
+echo "gated     : ${#GATING[@]}"
+echo "passed    : $passed"
+echo "failed    : $failed"
+echo "not built : $notbuilt"
+[ "$stale" -ne 0 ] && echo "stale     : $stale"
 
-if [ "$gating_failures" -ne 0 ]; then
-  echo "FAIL: $gating_failures gating tests failed"
-  exit 1
+rc=0
+if [ "$failed" -ne 0 ]; then
+  echo
+  echo "FAIL: $failed test(s) failed:$FAILED_NAMES"
+  rc=1
+fi
+if [ "$notbuilt" -ne 0 ]; then
+  echo
+  echo "FAIL: $notbuilt test(s) never ran because they are not built:$NOTBUILT_NAMES"
+  echo "      A test that did not run is not a test that passed."
+  if [ -f Makefile ]; then
+    echo "      Build them: make doltlite-c-tests-build"
+  else
+    echo "      This looks like a prebuilt artifact directory; the build that"
+    echo "      produced it did not include these targets."
+  fi
+  rc=1
+fi
+if [ "$stale" -ne 0 ]; then
+  echo
+  echo "FAIL: $stale binary(ies) predate src/ and cannot be trusted:$STALE_NAMES"
+  if [ -f Makefile ]; then
+    dl_stale_hint "$(pwd)"
+  else
+    echo "      This directory has no Makefile, so these came from elsewhere;"
+    echo "      rebuild them from current sources before believing the result."
+  fi
+  rc=1
 fi
 
-echo "OK: all gating tests passed"
-exit 0
+if [ "$rc" -eq 0 ]; then
+  echo
+  if [ "$did_build" -eq 1 ]; then
+    echo "OK: all $passed gated tests built, ran, and passed"
+  else
+    echo "OK: all $passed gated tests ran and passed (prebuilt, not rebuilt here)"
+  fi
+fi
+exit $rc
