@@ -58,6 +58,10 @@ done
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
+if [ $((pass + fail)) -eq 0 ]; then
+  echo "ERROR: no oracle cases executed (sourced feature suite is empty or missing)"
+  exit 1
+fi
 if [ "$fail" -gt 0 ]; then
   echo "Failures:$FAILED_NAMES"
   exit 1
