@@ -277,6 +277,11 @@ jobs:
         perl ../../test/patch_sqllogictest.pl \
           < src/sqllogictest.c > src/sqllogictest.c.patched
         mv src/sqllogictest.c.patched src/sqllogictest.c
+        # unixODBC declares SQLGetData's indicator as SQLLEN*. The pinned
+        # upstream source still uses the 32-bit SQLINTEGER typedef.
+        grep -q 'SQLINTEGER indicator' src/slt_odbc3.c
+        perl -pi -e 's/SQLINTEGER indicator/SQLLEN indicator/g' \
+          src/slt_odbc3.c
         cd src
         gcc -Werror -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
           -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c
