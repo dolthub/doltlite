@@ -9,27 +9,33 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcry
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-BIN="$TMP/creds_verify_kat"
+BIN="${DOLTLITE_CREDS_VERIFY_BIN:-$TMP/creds_verify_kat}"
 mkdir -p "$TMP/authkeys" "$TMP/empty" "$TMP/outside"
 
 echo "=== doltlite credential-verify KAT ==="
-"$CC" -O2 -Wall \
-  -I "$HERE/src" -I "$HERE/ext/ed25519" \
-  "$HERE/test/creds_verify_kat.c" \
-  "$HERE/src/doltlite_creds.c" \
-  "$HERE/ext/ed25519/fe.c" \
-  "$HERE/ext/ed25519/ge.c" \
-  "$HERE/ext/ed25519/sc.c" \
-  "$HERE/ext/ed25519/sha512.c" \
-  "$HERE/ext/ed25519/keypair.c" \
-  "$HERE/ext/ed25519/sign.c" \
-  "$HERE/ext/ed25519/verify.c" \
-  "$HERE/ext/ed25519/add_scalar.c" \
-  $DOLTLITE_EXTRA_LIBS \
-  -o "$BIN" 2>"$TMP/build.err" || {
-  echo "  build failed:"
-  cat "$TMP/build.err"
+if [ -z "${DOLTLITE_CREDS_VERIFY_BIN:-}" ]; then
+  "$CC" -O2 -Wall \
+    -I "$HERE/src" -I "$HERE/ext/ed25519" \
+    "$HERE/test/creds_verify_kat.c" \
+    "$HERE/src/doltlite_creds.c" \
+    "$HERE/ext/ed25519/fe.c" \
+    "$HERE/ext/ed25519/ge.c" \
+    "$HERE/ext/ed25519/sc.c" \
+    "$HERE/ext/ed25519/sha512.c" \
+    "$HERE/ext/ed25519/keypair.c" \
+    "$HERE/ext/ed25519/sign.c" \
+    "$HERE/ext/ed25519/verify.c" \
+    "$HERE/ext/ed25519/add_scalar.c" \
+    $DOLTLITE_EXTRA_LIBS \
+    -o "$BIN" 2>"$TMP/build.err" || {
+    echo "  build failed:"
+    cat "$TMP/build.err"
+    exit 1
+  }
+fi
+if [ ! -x "$BIN" ]; then
+  echo "credential verify binary not found at $BIN"
   exit 1
-}
+fi
 
 "$BIN" "$TMP/authkeys" "$TMP/empty" "$TMP/outside"

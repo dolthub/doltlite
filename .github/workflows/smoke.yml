@@ -1,7 +1,7 @@
 name: Smoke
 
 on:
-  pull_request:
+  workflow_call:
 
 jobs:
   vc-fuzz:
@@ -13,21 +13,19 @@ jobs:
 
     - name: Install dependencies
       run: |
-        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev python3
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev python3
 
-    - name: Configure
-      run: |
-        mkdir -p build-vc-fuzz && cd build-vc-fuzz
-        ../configure
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
 
-    - name: Build DoltLite
-      run: |
-        cd build-vc-fuzz
-        make DOLTLITE_PROLLY_CHECK=1 doltlite
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
 
     - name: Run stateful version-control fuzzer
       run: |
-        cd build-vc-fuzz
+        cd build
         DOLTLITE_VC_STATEFUL_SECONDS=600 bash ../test/vc_stateful_fuzzer.sh ./doltlite
       timeout-minutes: 12
 
@@ -43,28 +41,30 @@ jobs:
 
     - name: Install dependencies
       run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev libtommath-dev build-essential zlib1g-dev clang
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev
+
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
+
+    - name: Download crash build
+      uses: actions/download-artifact@v4
+      with:
+        name: crash-build
+
+    - name: Download libFuzzer build
+      uses: actions/download-artifact@v4
+      with:
+        name: fuzz-build
+
+    - name: Extract prebuilt binaries
+      run: |
+        tar -xzf checked-build-ubuntu.tar.gz
+        tar -xzf crash-build.tar.gz
+        tar -xzf fuzz-build.tar.gz
 
     # ── 1) crash-sqlite ──────────────────────────────────────────────
-    - name: Configure SQLITE_TEST build (build-crash)
-      run: |
-        mkdir -p build-crash && cd build-crash
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
-        else
-          ../configure
-        fi
-
-    - name: Build crash-test binaries
-      run: |
-        cd build-crash
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        . "$TCL_CONFIG"
-        make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
-          OPTS="$TCL_INCLUDE_SPEC" \
-          libdoltlite.a doltlite-crashtest crash_recovery_test_sqlite_test
-
     - name: Native crash recovery test (SQLITE_TEST)
       run: |
         cd build-crash
@@ -76,58 +76,12 @@ jobs:
         bash ../test/crash_injection_test.sh ./doltlite-crashtest
 
     # ── 2) history-independence ──────────────────────────────────────
-    - name: Configure history-independence build (build)
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite for history-independence
-      run: |
-        cd build
-        make doltlite
-
     - name: History independence tests
       run: |
         cd build
         bash ../test/history_independence_test.sh ./doltlite
 
     # ── 3) fuzz-replaywal ────────────────────────────────────────────
-    - name: Configure libFuzzer build (build-fuzz)
-      run: |
-        mkdir -p build-fuzz && cd build-fuzz
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
-        else
-          ../configure
-        fi
-
-    - name: Build libdoltlite.a with libFuzzer + ASan
-      run: |
-        cd build-fuzz
-        make CC=clang \
-          CFLAGS="-O1 -g -fsanitize=fuzzer-no-link,address -fno-omit-frame-pointer -fno-sanitize-recover=address" \
-          LDFLAGS="-fsanitize=fuzzer-no-link,address" \
-          libdoltlite.a
-
-    - name: Compile fuzz harnesses
-      run: |
-        for target in fuzz_replaywal fuzz_prolly_node fuzz_deserialize_refs fuzz_read_index fuzz_deserialize_catalog; do
-          clang -O1 -g \
-            -fsanitize=fuzzer,address -fno-omit-frame-pointer -fno-sanitize-recover=address \
-            -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
-            -I"$GITHUB_WORKSPACE/build-fuzz" -I"$GITHUB_WORKSPACE/src" \
-            -o "$GITHUB_WORKSPACE/build-fuzz/$target" \
-            "$GITHUB_WORKSPACE/test/$target.c" \
-            "$GITHUB_WORKSPACE/build-fuzz/libdoltlite.a" \
-            -lz -lpthread
-        done
-
     - name: Run csReplayWal fuzzer (1m)
       env:
         ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0

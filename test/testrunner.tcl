@@ -1578,6 +1578,12 @@ proc add_devtest_jobs {lBld patternlist} {
   global TRG
 
   foreach b $lBld {
+    if {$TRG(config)!="" && [lsearch -exact [split $TRG(config) ,] $b]<0} {
+      continue
+    }
+    if {[lsearch -exact [split $TRG(omitconfig) ,] $b]>=0} {
+      continue
+    }
     set bld [add_build_job $b $TRG(testfixture)]
     add_tcl_jobs $bld veryquick $patternlist SHELL
     add_fuzztest_jobs $b $patternlist

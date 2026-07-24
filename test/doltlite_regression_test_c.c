@@ -7015,10 +7015,10 @@ static int mutmapAssertMatchesModel(
   ProllyMutMap *pMap,
   const MutMapModel *pModel
 ){
-  (void)zLabel;
   int ok = 1;
   int i;
   ProllyMutMapIter it;
+  (void)zLabel;
   if( prollyMutMapCount(pMap)!=pModel->n ){
     return 0;
   }

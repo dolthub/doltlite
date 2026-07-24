@@ -28,8 +28,6 @@ static void check_str(const char *name, const char *got, const char *want) {
   }
 }
 
-static const char *SEED_HEX =
-    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 static const char *PUB_HEX =
     "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8";
 static const char *MSG = "doltlite auth";
