@@ -50,6 +50,15 @@ else
   fi
 fi
 
+if [ ! -f "$SRCDIR/doltlite_checkout.c" ]; then
+  lint "$SRCDIR/doltlite_checkout.c: missing — doltlite checkout must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/doltlite_checkout.c" | tr -d ' ')
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/doltlite_checkout.c:$nline lines — doltlite_checkout.c must stay at or below 1500 lines"
+  fi
+fi
+
 # chunk_store split: require lock module; cap at 1200.
 if [ ! -f "$SRCDIR/chunk_store_lock.c" ]; then
   lint "$SRCDIR/chunk_store_lock.c: missing — chunk_store lock must stay split"
