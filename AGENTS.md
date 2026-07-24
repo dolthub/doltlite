@@ -119,6 +119,20 @@ unprompted:
   state at the same time. The shelve/switch/unshelve dance has nothing to solve
   here. See [Dolt Worktrees](https://www.dolthub.com/blog/2026-07-23-worktrees/).
 
+- **CLI-parity wrappers around plain SQL** — `dolt_rm`, `dolt_mv`, and anything
+  else whose whole job is to spell a statement SQL already has. These exist in
+  Dolt so its subcommands have a server-side equivalent: `dolt_rm`'s own source
+  calls itself "the stored procedure for the cli command dolt rm", and `dolt mv`
+  is a CLI command that builds `DROP TABLE` / rename SQL — `dolt_mv` is not even
+  a Dolt procedure. DoltLite has no subcommand CLI to be compatible with, so
+  `DROP TABLE` and `ALTER TABLE … RENAME TO` are the surface.
+
+- **`dolt_docs`, `dolt_query_catalog`** — DoltHub-specific storage, not engine
+  behavior: `dolt_docs` holds `README.md` / `LICENSE.md` and
+  `dolt_query_catalog` holds saved queries, both so DoltHub can display them.
+  Nothing local reads either. Worth revisiting if pushing to DoltHub lands, and
+  not before.
+
 ### Dolt is the reference implementation
 
 [Dolt](https://github.com/dolthub/dolt) is the authority on **what** every
