@@ -2,6 +2,7 @@
 
 import argparse
 import dataclasses
+import json
 import pathlib
 import sys
 from collections import defaultdict
@@ -32,6 +33,35 @@ class Result:
         return self.candidate_us - self.baseline_us
 
 
+@dataclasses.dataclass(frozen=True)
+class AttemptHistory:
+    suite: str
+    failures: tuple
+
+    @property
+    def confirmed_failures(self):
+        if len(self.failures) != 3:
+            return frozenset()
+        return frozenset.intersection(*self.failures)
+
+
+def validate_gate_id(path, line_number, suite, value):
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{path}:{line_number}: invalid gate identifier")
+    expected_lengths = {"individual": 4, "section": 3, "suite": 2}
+    kind = value[0]
+    if kind not in expected_lengths or len(value) != expected_lengths[kind]:
+        raise ValueError(f"{path}:{line_number}: invalid gate identifier")
+    if not all(isinstance(part, str) and part for part in value):
+        raise ValueError(f"{path}:{line_number}: invalid gate identifier")
+    if value[1] != suite:
+        raise ValueError(
+            f"{path}:{line_number}: gate suite {value[1]} "
+            f"does not match history suite {suite}"
+        )
+    return tuple(value)
+
+
 def parse_attempt_history(spec):
     if "=" not in spec:
         raise ValueError(f"attempt history must be SUITE=PATH: {spec}")
@@ -39,19 +69,29 @@ def parse_attempt_history(spec):
     if not suite or not path_text:
         raise ValueError(f"attempt history must be SUITE=PATH: {spec}")
     path = pathlib.Path(path_text)
-    statuses = []
+    failures = []
     with path.open(encoding="utf-8") as source:
         header = source.readline().rstrip("\n")
-        if header != "attempt\tstatus":
+        if header != f"suite\t{suite}":
+            recorded_suite = (
+                header.split("\t", 1)[1] if "\t" in header else ""
+            )
+            raise ValueError(
+                f"{path}: history suite {recorded_suite or '<missing>'} "
+                f"does not match requested suite {suite}"
+            )
+        columns_header = source.readline().rstrip("\n")
+        if columns_header != "attempt\tstatus\tfailed_gates":
             raise ValueError(f"{path}: invalid attempt history header")
-        for line_number, line in enumerate(source, 2):
+        for line_number, line in enumerate(source, 3):
             columns = line.rstrip("\n").split("\t")
-            if len(columns) != 2:
+            if len(columns) != 3:
                 raise ValueError(
-                    f"{path}:{line_number}: expected attempt and status"
+                    f"{path}:{line_number}: expected attempt, status, "
+                    "and failed gates"
                 )
-            attempt, status = columns
-            if attempt != str(len(statuses) + 1):
+            attempt, status, gates_text = columns
+            if attempt != str(len(failures) + 1):
                 raise ValueError(
                     f"{path}:{line_number}: attempts must be consecutive"
                 )
@@ -59,19 +99,48 @@ def parse_attempt_history(spec):
                 raise ValueError(
                     f"{path}:{line_number}: invalid status {status}"
                 )
-            statuses.append(status)
-    if not statuses:
+            try:
+                gates_json = json.loads(gates_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"{path}:{line_number}: invalid failed-gates JSON"
+                ) from exc
+            if not isinstance(gates_json, list):
+                raise ValueError(
+                    f"{path}:{line_number}: failed gates must be a list"
+                )
+            validated_gates = [
+                validate_gate_id(path, line_number, suite, value)
+                for value in gates_json
+            ]
+            gates = frozenset(validated_gates)
+            if len(gates) != len(validated_gates):
+                raise ValueError(
+                    f"{path}:{line_number}: duplicate failed gate"
+                )
+            expected_status = "regression" if gates else "pass"
+            if status != expected_status:
+                raise ValueError(
+                    f"{path}:{line_number}: status does not match failed gates"
+                )
+            failures.append(gates)
+    if not failures:
         raise ValueError(f"{path}: no benchmark attempts")
-    if statuses[-1] == "pass":
-        if any(status != "regression" for status in statuses[:-1]):
-            raise ValueError(f"{path}: pass must end the attempt history")
-    elif len(statuses) != 3 or any(
-        status != "regression" for status in statuses
-    ):
+    if len(failures) > 3:
+        raise ValueError(f"{path}: at most three attempts are allowed")
+
+    candidates = failures[0]
+    for attempt, gates in enumerate(failures[1:], 2):
+        if not candidates:
+            raise ValueError(
+                f"{path}: attempt {attempt} follows a resolved history"
+            )
+        candidates = candidates.intersection(gates)
+    if candidates and len(failures) < 3:
         raise ValueError(
-            f"{path}: final regression requires three consecutive failures"
+            f"{path}: possible regression requires three attempts"
         )
-    return suite, statuses
+    return suite, AttemptHistory(suite, tuple(failures))
 
 
 def parse_input(spec):
@@ -236,7 +305,24 @@ def analyze(
     }
 
 
-def validate_retry_confirmation(results, analysis, attempt_histories):
+def failure_ids(analysis, include_overall=True):
+    failures = {
+        ("individual", suite, section, test)
+        for suite, section, test in analysis["individual_failures"]
+    }
+    failures.update(
+        ("section", suite, section)
+        for suite, section in analysis["section_failures"]
+    )
+    failures.update(
+        ("suite", suite) for suite in analysis["suite_failures"]
+    )
+    if include_overall and analysis["overall_failed"]:
+        failures.add(("overall",))
+    return failures
+
+
+def apply_retry_confirmation(results, analysis, attempt_histories):
     result_suites = {result.suite for result in results}
     history_suites = set(attempt_histories)
     if result_suites != history_suites:
@@ -252,29 +338,78 @@ def validate_retry_confirmation(results, analysis, attempt_histories):
             + "; ".join(details)
             + ")"
         )
+    for suite, history in attempt_histories.items():
+        if history.suite != suite:
+            raise ValueError(
+                f"history suite {history.suite} does not match "
+                f"requested suite {suite}"
+            )
 
-    failed_suites = {
-        suite for suite, _section, _test in analysis["individual_failures"]
+    confirmed = set()
+    for history in attempt_histories.values():
+        confirmed.update(history.confirmed_failures)
+
+    observed = failure_ids(analysis, include_overall=False)
+    inconsistent = sorted(confirmed - observed)
+    if inconsistent:
+        raise ValueError(
+            "confirmed gates do not match final benchmark results: "
+            + ", ".join(format_gate_id(gate) for gate in inconsistent)
+        )
+
+    individual_failures = {
+        key
+        for key in analysis["individual_failures"]
+        if ("individual", *key) in confirmed
     }
-    failed_suites.update(
-        suite for suite, _section in analysis["section_failures"]
+    section_failures = {
+        key
+        for key in analysis["section_failures"]
+        if ("section", *key) in confirmed
+    }
+    suite_failures = {
+        key
+        for key in analysis["suite_failures"]
+        if ("suite", key) in confirmed
+    }
+
+    confirmed_analysis = dict(analysis)
+    confirmed_analysis.update(
+        {
+            "failed": bool(
+                individual_failures
+                or section_failures
+                or suite_failures
+            ),
+            "individual_failures": individual_failures,
+            "section_failures": section_failures,
+            "suite_failures": suite_failures,
+            # Overall fan-in is measured once. In practice its 15% gate is
+            # dominated by the per-suite aggregate gates, which are retried.
+            "overall_failed": False,
+            "observed_individual_failures": analysis[
+                "individual_failures"
+            ],
+            "observed_section_failures": analysis["section_failures"],
+            "observed_suite_failures": analysis["suite_failures"],
+            "observed_overall_failed": analysis["overall_failed"],
+            "confirmed_failure_ids": frozenset(confirmed),
+        }
     )
-    failed_suites.update(analysis["suite_failures"])
-    confirmed_suites = {
-        suite
-        for suite, statuses in attempt_histories.items()
-        if statuses[-1] == "regression"
-    }
-    unconfirmed = sorted(failed_suites - confirmed_suites)
-    if unconfirmed:
-        raise ValueError(
-            "benchmark regression lacks three-failure confirmation: "
-            + ", ".join(unconfirmed)
-        )
-    if analysis["overall_failed"] and not confirmed_suites:
-        raise ValueError(
-            "overall benchmark regression lacks three-failure confirmation"
-        )
+    return confirmed_analysis
+
+
+def format_gate_id(gate):
+    kind = gate[0]
+    if kind == "individual":
+        return f"individual `{gate[1]} / {gate[2]} / {gate[3]}`"
+    if kind == "section":
+        return f"section `{gate[1]} / {gate[2]}`"
+    if kind == "suite":
+        return f"suite `{gate[1]}`"
+    if kind == "overall":
+        return "overall aggregate"
+    raise ValueError(f"unknown gate kind: {kind}")
 
 
 def render(
@@ -292,14 +427,19 @@ def render(
     for result in results:
         suites[result.suite].append(result)
 
-    status = "PASS" if not analysis["failed"] else "FAIL"
+    gate_status = "PASS" if not analysis["failed"] else "FAIL"
+    failed_gates = analysis.get(
+        "confirmed_failure_ids",
+        frozenset(failure_ids(analysis)),
+    )
     lines = [
         "<!-- benchmark:relative -->",
         "## DoltLite performance vs PR base",
         "",
         f"- **Baseline:** `{baseline_ref}`",
         f"- **Candidate:** `{candidate_ref}`",
-        f"- **Overall:** {format_ratio(analysis['overall_ratio'])} — **{status}**",
+        f"- **Overall ratio:** {format_ratio(analysis['overall_ratio'])}",
+        f"- **Gate result:** **{gate_status}**",
         (
             f"- **Gates:** individual > {individual_ratio:.2f}x with more "
             f"than {format_time(min_delta_us)} regression; section, suite, "
@@ -311,20 +451,31 @@ def render(
             f"- **{suite} individual gate:** > {ratio:.2f}x with more than "
             f"{format_time(delta)} regression"
         )
+    if failed_gates:
+        lines.extend(["- **Confirmed failed gates:**"])
+        lines.extend(
+            f"    - {format_gate_id(gate)}"
+            for gate in sorted(failed_gates)
+        )
+    else:
+        lines.append("- **Confirmed failed gates:** none")
+
     retried = []
-    for suite, statuses in sorted((attempt_histories or {}).items()):
-        if len(statuses) == 1:
+    for suite, history in sorted((attempt_histories or {}).items()):
+        attempt_count = len(history.failures)
+        if attempt_count == 1:
             continue
-        if statuses[-1] == "pass":
+        confirmed_count = len(history.confirmed_failures)
+        if confirmed_count:
             retried.append(
-                f"{suite} passed attempt {len(statuses)} after "
-                f"{len(statuses) - 1} transient gate "
-                f"{'failure' if len(statuses) == 2 else 'failures'}"
+                f"{suite} confirmed {confirmed_count} exact "
+                f"{'gate' if confirmed_count == 1 else 'gates'} "
+                f"in {attempt_count} attempts"
             )
         else:
             retried.append(
-                f"{suite} exceeded its gate in {len(statuses)} "
-                "consecutive attempts"
+                f"{suite} cleared after {attempt_count} attempts; "
+                "no gate failed every time"
             )
     lines.append(
         "- **Automatic retries:** "
@@ -340,7 +491,15 @@ def render(
     for suite in sorted(suites):
         group = suites[suite]
         ratio = analysis["suite_ratios"][suite]
-        suite_status = "FAIL" if suite in analysis["suite_failures"] else "PASS"
+        if suite in analysis["suite_failures"]:
+            suite_status = "FAIL"
+        elif suite in analysis.get(
+            "observed_suite_failures",
+            analysis["suite_failures"],
+        ):
+            suite_status = "TRANSIENT"
+        else:
+            suite_status = "PASS"
         baseline_total = (
             sum(result.baseline_us for result in group)
             if all(result.valid for result in group)
@@ -371,11 +530,15 @@ def render(
         )
         for result in suites[suite]:
             key = (result.suite, result.section, result.test)
-            row_status = (
-                "FAIL"
-                if key in analysis["individual_failures"]
-                else "PASS"
-            )
+            if key in analysis["individual_failures"]:
+                row_status = "FAIL"
+            elif key in analysis.get(
+                "observed_individual_failures",
+                analysis["individual_failures"],
+            ):
+                row_status = "TRANSIENT"
+            else:
+                row_status = "PASS"
             delta = format_delta(result.delta_us)
             lines.append(
                 f"| {result.section} | `{result.test}` | "
@@ -389,7 +552,8 @@ def render(
         lines.extend(
             [
                 "",
-                "**FAILED:** Candidate performance exceeded a regression gate.",
+                "**FAILED:** Candidate performance exceeded the confirmed "
+                "regression gates listed above.",
             ]
         )
     else:
@@ -502,7 +666,7 @@ def main(argv=None):
     )
     if attempt_histories:
         try:
-            validate_retry_confirmation(
+            analysis = apply_retry_confirmation(
                 results,
                 analysis,
                 attempt_histories,
