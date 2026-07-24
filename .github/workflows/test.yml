@@ -309,9 +309,19 @@ jobs:
           /tmp/sqllogictest/test
 
   oracle-tests:
+    name: oracle-tests-${{ matrix.bucket }}
     needs: coverage-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        bucket:
+          - refs-workspace
+          - diff-history-data
+          - merge-replay-schema
+          - remotes-recovery
+          - sql
 
     steps:
     - uses: actions/checkout@v4
@@ -337,16 +347,22 @@ jobs:
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
 
+    - name: Check oracle bucket manifests
+      run: bash test/check_oracle_buckets.sh
+
     - name: Version control oracle tests (vs Dolt)
+      if: matrix.bucket != 'sql'
       run: |
         cd build-coverage
-        for f in ../test/vc_oracle_*_test.sh; do
-          echo "--- $(basename $f) ---"
-          bash "$f" ./doltlite dolt || exit 1
-        done
-      timeout-minutes: 20
+        while IFS= read -r oracle; do
+          [ -z "$oracle" ] && continue
+          echo "--- $oracle ---"
+          bash "../test/$oracle" ./doltlite dolt || exit 1
+        done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
+      timeout-minutes: 18
 
     - name: SQL oracle tests (vs stock SQLite)
+      if: matrix.bucket == 'sql'
       run: |
         cd build-coverage
         bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3-stock || exit 1
@@ -362,7 +378,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-oracles
+        name: coverage-profile-oracles-${{ matrix.bucket }}
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
