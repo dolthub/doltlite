@@ -652,7 +652,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_config.c $(TOP)/src/doltlite_commit.c $(TOP)/src/doltlite_ref.c \
     $(TOP)/src/doltlite_log.c $(TOP)/src/doltlite_commit_ancestors.c \
     $(TOP)/src/doltlite_status.c $(TOP)/src/doltlite_diff.c $(TOP)/src/doltlite_diff_table.c $(TOP)/src/doltlite_workspace.c \
-    $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
+    $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_branches.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
     $(TOP)/src/doltlite_merge.c \
     $(TOP)/src/doltlite_merge_pass1.c \
     $(TOP)/src/doltlite_merge_pass2.c \
