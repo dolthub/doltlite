@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 /* Chunk-store commit/rollback path. */
 
@@ -17,10 +18,12 @@ static int csCrashWriteInjectionActive(void){
 #endif
 }
 
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
 static int csReloadInjectionActive(void){
   const char *zEnv = getenv("DOLTLITE_RELOAD_INJECT");
   return zEnv && atoi(zEnv)>0;
 }
+#endif
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
