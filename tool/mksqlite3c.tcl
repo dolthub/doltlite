@@ -241,7 +241,7 @@ set available_hdr(sqlite3session.h) 0
 if {$doltlite} {
   foreach hdr {
     blake3.h blake3_impl.h btree_orig_api.h btree_orig_prefix.h pager_shim.h record_codec.h sortkey.h
-    chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_wal.h
+    chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_store_int.h chunk_wal.h
     prolly_cache.h prolly_check.h prolly_chunk_walk.h prolly_chunker.h prolly_cursor.h
     prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
     prolly_mutmap.h prolly_node.h prolly_record.h prolly_three_way_diff.h
@@ -608,10 +608,11 @@ proc emit_doltlite_engine_block {} {
   foreach f {
     prolly_hash.c prolly_xxhash.c blake3.c blake3_portable.c blake3_dispatch.c
     prolly_hashset.c prolly_node.c prolly_cache.c
-    chunk_store.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
+    chunk_store.c chunk_store_lock.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
     prolly_cursor.c prolly_mutmap.c prolly_chunker.c prolly_mutate.c prolly_check.c
     prolly_diff.c prolly_three_way_diff.c prolly_three_way_merge.c
     prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c
+    prolly_btree_cursor_payload.c
     prolly_btree_cursor_count.c
     prolly_btree_mutation.c prolly_btree_orig.c prolly_btree_state.c
     prolly_btree_txn.c pager_shim.c sortkey.c
@@ -621,7 +622,7 @@ proc emit_doltlite_engine_block {} {
     doltlite_commit.c doltlite_ref.c doltlite_log.c
     doltlite_commit_ancestors.c doltlite_status.c doltlite_merge_status.c doltlite_diff.c doltlite_diff_table.c
     doltlite_workspace.c
-    doltlite_branch.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c doltlite_merge_pass1.c doltlite_merge_pass2.c doltlite_merge_rows.c doltlite_merge_schema.c
+    doltlite_branch.c doltlite_branches.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c doltlite_merge_pass1.c doltlite_merge_pass2.c doltlite_merge_rows.c doltlite_merge_schema.c
     doltlite_conflicts.c doltlite_gc.c doltlite_chunk_walk.c
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c doltlite_patch.c
     doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c

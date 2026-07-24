@@ -1,0 +1,293 @@
+name: Nightly performance
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Paired repetitions for each sysbench-style workload
+        required: false
+        default: "21"
+      vc-runs:
+        description: Repetitions for each version-control benchmark
+        required: false
+        default: "15"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-performance
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir build-nightly
+        cd build-nightly
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build DoltLite and SQLite benchmark binaries
+      run: |
+        cd build-nightly
+        set -o pipefail
+        {
+          make -j2 doltlite doltlite-lib
+          cc -O2 -Werror -I. -I../src \
+            -o bench_timer_doltlite ../test/sysbench_timer.c \
+            libdoltlite.a -lpthread -lz -lm
+          make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
+          cc -O2 -Werror -I. -I../src \
+            -o bench_timer_sqlite ../test/sysbench_timer.c \
+            sqlite3.o -lpthread -lz -lm
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in nightly benchmark build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf nightly-benchmark-build.tar.gz build-nightly
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-benchmark-build
+        path: nightly-benchmark-build.tar.gz
+        retention-days: 1
+
+  sysbench:
+    name: ${{ matrix.suite.name }}-keys
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: int
+            script: sysbench_compare.sh
+          - name: textpk
+            script: sysbench_compare_textpk.sh
+          - name: blobpk
+            script: sysbench_compare_blobpk.sh
+          - name: compositepk
+            script: sysbench_compare_compositepk.sh
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download nightly benchmark build
+      uses: actions/download-artifact@v4
+      with:
+        name: nightly-benchmark-build
+
+    - name: Extract nightly benchmark build
+      run: tar -xzf nightly-benchmark-build.tar.gz
+
+    - name: Run absolute benchmark
+      id: benchmark
+      env:
+        BENCH_RUNS: ${{ github.event.inputs.runs || '21' }}
+        BENCH_AC_WRITE_RUNS: ${{ github.event.inputs.runs || '21' }}
+      run: |
+        results="$RUNNER_TEMP/nightly-results"
+        mkdir -p "$results"
+        set +e
+        (
+          cd build-nightly
+          BENCH_RESULTS_OUTPUT="$results/${{ matrix.suite.name }}.tsv" \
+            BENCH_SAMPLES_OUTPUT="$results/${{ matrix.suite.name }}-samples.tsv" \
+            bash "../test/${{ matrix.suite.script }}"
+        ) > "$results/${{ matrix.suite.name }}.md" \
+          2> "$results/${{ matrix.suite.name }}.stderr"
+        bench_rc=$?
+        set -e
+        echo "$bench_rc" > "$results/${{ matrix.suite.name }}.status"
+        cat "$results/${{ matrix.suite.name }}.md"
+        cat "$results/${{ matrix.suite.name }}.stderr" >&2
+        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
+
+    - name: Upload nightly measurements
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-performance-${{ matrix.suite.name }}
+        path: ${{ runner.temp }}/nightly-results
+        retention-days: 30
+
+    - name: Enforce absolute ceiling
+      if: always()
+      run: |
+        rc="${{ steps.benchmark.outputs.bench_rc }}"
+        if [ -z "$rc" ]; then rc=1; fi
+        exit "$rc"
+
+  version-control:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download nightly benchmark build
+      uses: actions/download-artifact@v4
+      with:
+        name: nightly-benchmark-build
+
+    - name: Extract nightly benchmark build
+      run: tar -xzf nightly-benchmark-build.tar.gz
+
+    - name: Run absolute version-control benchmark
+      id: benchmark
+      env:
+        VC_PERF_RUNS: ${{ github.event.inputs.vc-runs || '15' }}
+      run: |
+        results="$RUNNER_TEMP/nightly-results"
+        mkdir -p "$results"
+        set +e
+        (
+          cd build-nightly
+          VC_PERF_RESULTS_OUTPUT="$results/vc.tsv" \
+            VC_PERF_SAMPLES_OUTPUT="$results/vc-samples.tsv" \
+            bash ../test/vc_perf_ceiling.sh ./doltlite
+        ) > "$results/vc.md" 2> "$results/vc.stderr"
+        bench_rc=$?
+        set -e
+        echo "$bench_rc" > "$results/vc.status"
+        cat "$results/vc.md"
+        cat "$results/vc.stderr" >&2
+        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
+
+    - name: Upload nightly measurements
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-performance-vc
+        path: ${{ runner.temp }}/nightly-results
+        retention-days: 30
+
+    - name: Enforce absolute ceiling
+      if: always()
+      run: |
+        rc="${{ steps.benchmark.outputs.bench_rc }}"
+        if [ -z "$rc" ]; then rc=1; fi
+        exit "$rc"
+
+  report:
+    if: always()
+    needs:
+      - sysbench
+      - version-control
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download nightly measurements
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        pattern: nightly-performance-*
+        path: nightly-results
+        merge-multiple: true
+
+    - name: Compose nightly report
+      id: report
+      run: |
+        summary="$RUNNER_TEMP/nightly-performance.md"
+        issue_body="$RUNNER_TEMP/nightly-performance-failure.md"
+        suites="int textpk blobpk compositepk vc"
+        failed=0
+        {
+          echo "## Nightly DoltLite performance"
+          echo ""
+          echo "Absolute SQLite multipliers and version-control latency ceilings."
+          echo ""
+        } > "$summary"
+        {
+          echo "Nightly performance exceeded one or more absolute ceilings."
+          echo ""
+        } > "$issue_body"
+
+        for suite in $suites; do
+          status_file="nightly-results/$suite.status"
+          report_file="nightly-results/$suite.md"
+          stderr_file="nightly-results/$suite.stderr"
+          status=1
+          if [ -s "$status_file" ]; then
+            status=$(cat "$status_file")
+          fi
+          if [ -s "$report_file" ]; then
+            cat "$report_file" >> "$summary"
+            echo "" >> "$summary"
+          else
+            echo "**${suite}: missing report**" >> "$summary"
+            echo "" >> "$summary"
+          fi
+          if [ "$status" != "0" ]; then
+            failed=1
+            {
+              echo "### ${suite}"
+              echo ""
+              if [ -s "$stderr_file" ]; then
+                echo '```text'
+                tail -n 80 "$stderr_file"
+                echo '```'
+              else
+                echo "Benchmark did not produce diagnostic output."
+              fi
+              echo ""
+            } >> "$issue_body"
+          fi
+        done
+
+        cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+        cp "$summary" nightly-results/summary.md
+        cp "$issue_body" nightly-results/failure.md
+        echo "failed=$failed" >> "$GITHUB_OUTPUT"
+        echo "summary=$summary" >> "$GITHUB_OUTPUT"
+        echo "issue_body=$issue_body" >> "$GITHUB_OUTPUT"
+
+    - name: Upload combined nightly report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-performance-report
+        path: nightly-results
+        retention-days: 30
+
+    - name: Report regression as GitHub issue
+      if: steps.report.outputs.failed == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-performance-regression
+        title: "Nightly performance regression"
+        body-file: ${{ steps.report.outputs.issue_body }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        label-description: Nightly absolute performance ceiling failure
+
+    - name: Fail when a ceiling regressed
+      if: steps.report.outputs.failed == '1'
+      run: exit 1
