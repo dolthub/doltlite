@@ -597,7 +597,7 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o chunk_store_lock.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
-              prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
+              prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_payload.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
               doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o doltlite_merge_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_branches.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
@@ -847,6 +847,7 @@ SRC += \
   $(TOP)/src/prolly_btree.c \
   $(TOP)/src/prolly_btree_catalog.c \
   $(TOP)/src/prolly_btree_cursor.c \
+  $(TOP)/src/prolly_btree_cursor_payload.c \
   $(TOP)/src/prolly_btree_cursor_count.c \
   $(TOP)/src/prolly_btree_mutation.c \
   $(TOP)/src/prolly_btree_orig.c \
@@ -1535,6 +1536,10 @@ prolly_btree_cursor.o:	$(TOP)/src/prolly_btree_cursor.c $(TOP)/src/prolly_btree_
 
 prolly_btree_cursor_count.o:$(TOP)/src/prolly_btree_cursor_count.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_cursor_count.c
+
+prolly_btree_cursor_payload.o:	$(TOP)/src/prolly_btree_cursor_payload.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_cursor_payload.c
+
 
 prolly_btree_mutation.o:	$(TOP)/src/prolly_btree_mutation.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_mutation.c

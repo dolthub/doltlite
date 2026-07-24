@@ -612,6 +612,7 @@ proc emit_doltlite_engine_block {} {
     prolly_cursor.c prolly_mutmap.c prolly_chunker.c prolly_mutate.c prolly_check.c
     prolly_diff.c prolly_three_way_diff.c prolly_three_way_merge.c
     prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c
+    prolly_btree_cursor_payload.c
     prolly_btree_cursor_count.c
     prolly_btree_mutation.c prolly_btree_orig.c prolly_btree_state.c
     prolly_btree_txn.c pager_shim.c sortkey.c
