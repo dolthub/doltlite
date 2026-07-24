@@ -473,6 +473,10 @@ jobs:
     - name: Deterministic shell tests
       if: matrix.suite == 'shell'
       run: |
+        # The parity suite needs the stock reference at ./sqlite3. Keep that
+        # alias local to this job so Tcl regression tests do not discover and
+        # run external-shell suites that the prior testfixture-only build skipped.
+        ln -s sqlite3-stock build-coverage/sqlite3
         DOLTLITE_BUILD_DIR="$PWD/build-coverage" \
           DOLTLITE_SUITE_SET=coverage \
           bash test/run_doltlite_tests.sh
