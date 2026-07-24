@@ -1,0 +1,171 @@
+name: Nightly fuzz
+
+# Runs the on-disk-format libFuzzer harnesses for hours each night — far
+# longer than the 1-minute per-PR smoke run — to actually explore the input
+# space. Silent when clean; on a crash it uploads the reproducers and
+# opens/updates a per-target `fuzz-crash-<target>` issue via the shared
+# report-failure-issue action (GitHub then emails repo watchers).
+#
+# One matrix job per target so each gets its own time budget (a single job
+# caps at GitHub's 6-hour limit, so the five can't be serialized). Starts at
+# 1 hour per target and can be raised later. The discovered corpus is cached
+# per target, so each night compounds on the inputs earlier runs found instead
+# of restarting from the committed seeds.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Seconds to run each target
+        required: false
+        default: "3600"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    # Starts at 1h/target (the `duration` input); the timeout is left with
+    # headroom so the run time can be raised later — up to GitHub's 6h job
+    # ceiling — without touching this value.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - replaywal
+          - prolly_node
+          - deserialize_refs
+          - read_index
+          - deserialize_catalog
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev clang
+
+    - name: Configure libFuzzer build (build-fuzz)
+      run: |
+        mkdir -p build-fuzz && cd build-fuzz
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build libdoltlite.a with libFuzzer + ASan
+      run: |
+        cd build-fuzz
+        make CC=clang \
+          CFLAGS="-O1 -g -fsanitize=fuzzer-no-link,address -fno-omit-frame-pointer -fno-sanitize-recover=address" \
+          LDFLAGS="-fsanitize=fuzzer-no-link,address" \
+          libdoltlite.a
+
+    - name: Compile ${{ matrix.target }} harness
+      run: |
+        clang -O1 -g \
+          -fsanitize=fuzzer,address -fno-omit-frame-pointer -fno-sanitize-recover=address \
+          -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+          -I"$GITHUB_WORKSPACE/build-fuzz" -I"$GITHUB_WORKSPACE/src" \
+          -o "$GITHUB_WORKSPACE/build-fuzz/fuzz_${{ matrix.target }}" \
+          "$GITHUB_WORKSPACE/test/fuzz_${{ matrix.target }}.c" \
+          "$GITHUB_WORKSPACE/build-fuzz/libdoltlite.a" \
+          -lz -lpthread
+
+    # Carry the corpus forward between nights. The key is unique per run (so
+    # each run saves a fresh, larger corpus) and restore-keys grabs the most
+    # recent prior corpus for this target as the starting point.
+    - name: Restore/seed corpus
+      uses: actions/cache@v4
+      with:
+        path: test/fuzz-corpus/${{ matrix.target }}
+        key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+        restore-keys: |
+          fuzz-corpus-${{ matrix.target }}-
+
+    - name: Run ${{ matrix.target }} fuzzer
+      id: fuzz
+      env:
+        ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
+        DURATION: ${{ github.event.inputs.duration || '3600' }}
+      run: |
+        set -uo pipefail
+        WS="$GITHUB_WORKSPACE"
+        outdir="$WS/fuzz-artifacts/${{ matrix.target }}"
+        mkdir -p "$outdir"
+        if "$WS/build-fuzz/fuzz_${{ matrix.target }}" \
+             "$WS/test/fuzz-corpus/${{ matrix.target }}" \
+             -max_total_time="$DURATION" \
+             -timeout=25 \
+             -rss_limit_mb=2048 \
+             -artifact_prefix="$outdir/" \
+             -print_final_stats=1 > "$outdir/run.log" 2>&1; then
+          echo "crashed=" >> "$GITHUB_OUTPUT"
+          echo "clean."
+        else
+          echo "crashed=1" >> "$GITHUB_OUTPUT"
+          echo "CRASH in ${{ matrix.target }}"
+        fi
+        tail -n 30 "$outdir/run.log" || true
+
+    - name: Compose crash report
+      if: steps.fuzz.outputs.crashed == '1'
+      run: |
+        set -euo pipefail
+        WS="$GITHUB_WORKSPACE"
+        BODY="$RUNNER_TEMP/fuzz-body.md"
+        target="${{ matrix.target }}"
+        {
+          echo "Nightly fuzzing crashed in **${target}**."
+          echo ""
+          echo "Reproducer inputs are attached as the \`fuzz-crashes-${target}\` artifact on the run."
+          echo "Reproduce locally with \`bash test/run_fuzz.sh ${target} <reproducer-file>\`."
+          echo ""
+          echo '```'
+          tail -n 40 "$WS/fuzz-artifacts/$target/run.log" 2>/dev/null || echo "(no log)"
+          echo '```'
+          echo ""
+          for f in "$WS/fuzz-artifacts/$target"/crash-* "$WS/fuzz-artifacts/$target"/leak-* "$WS/fuzz-artifacts/$target"/timeout-*; do
+            [ -f "$f" ] || continue
+            echo "Reproducer \`$(basename "$f")\` (base64):"
+            echo '```'
+            base64 < "$f"
+            echo '```'
+            echo ""
+          done
+        } > "$BODY"
+        cat "$BODY"
+
+    - name: Upload crash artifacts
+      if: steps.fuzz.outputs.crashed == '1'
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-crashes-${{ matrix.target }}
+        path: |
+          fuzz-artifacts/${{ matrix.target }}/crash-*
+          fuzz-artifacts/${{ matrix.target }}/leak-*
+          fuzz-artifacts/${{ matrix.target }}/timeout-*
+          fuzz-artifacts/${{ matrix.target }}/run.log
+        if-no-files-found: warn
+
+    - name: Report crash as GitHub issue
+      if: steps.fuzz.outputs.crashed == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: fuzz-crash-${{ matrix.target }}
+        title: "Nightly fuzz crash: ${{ matrix.target }}"
+        body-file: ${{ runner.temp }}/fuzz-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Fail the job if the target crashed
+      if: steps.fuzz.outputs.crashed == '1'
+      run: |
+        echo "::error::fuzz crash in ${{ matrix.target }}"
+        exit 1

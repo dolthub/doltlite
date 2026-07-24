@@ -1,0 +1,85 @@
+name: Report failure as GitHub issue
+description: >
+  Shared building block for continuous (scheduled) test jobs that should be
+  silent when they pass and cut a GitHub issue when they fail. Call it only
+  from an `if: failure()` (or explicit failure-condition) step. It keeps one
+  open issue per label: it creates the issue if none is open, otherwise it
+  comments on the existing one, so repeated failures append to a single triage
+  thread instead of spamming. It never closes issues — a human closes after
+  fixing. GitHub emails repo watchers on the create/comment, which is the
+  notification path.
+
+inputs:
+  label:
+    description: >
+      Label identifying this check's tracking issue. One open issue is kept per
+      label, so give each continuous job its own stable label.
+    required: true
+  title:
+    description: Title used when the tracking issue has to be created.
+    required: true
+  body-file:
+    description: Path to a Markdown file with the failure details.
+    required: true
+  token:
+    description: "Token with `issues: write` (normally `secrets.GITHUB_TOKEN`)."
+    required: true
+  label-color:
+    description: Hex color (no leading '#') used if the label must be created.
+    required: false
+    default: "d73a4a"
+  label-description:
+    description: Description used if the label must be created.
+    required: false
+    default: "Automated failure report from a continuous test job"
+
+runs:
+  using: composite
+  steps:
+    - name: Compose issue body with run context
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -f "${{ inputs.body-file }}" ]; then
+          echo "::error::report-failure-issue: body-file '${{ inputs.body-file }}' not found"
+          exit 1
+        fi
+        RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        {
+          echo "- **Workflow:** \`${GITHUB_WORKFLOW}\`"
+          echo "- **Run:** ${RUN_URL}"
+          echo "- **Commit:** \`${GITHUB_SHA}\`"
+          echo "- **Ref:** \`${GITHUB_REF_NAME}\`"
+          echo ""
+          cat "${{ inputs.body-file }}"
+        } > "${RUNNER_TEMP}/report-failure-issue-body.md"
+
+    - name: Ensure label exists
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        gh label create "${{ inputs.label }}" \
+          --description "${{ inputs.label-description }}" \
+          --color "${{ inputs.label-color }}" \
+          --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true
+
+    - name: Create or update tracking issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        BODY="${RUNNER_TEMP}/report-failure-issue-body.md"
+        NUM=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+          --label "${{ inputs.label }}" --json number --jq '.[0].number // empty')
+        if [ -n "$NUM" ]; then
+          echo "Appending to existing issue #${NUM}"
+          gh issue comment "$NUM" --repo "${GITHUB_REPOSITORY}" --body-file "$BODY"
+        else
+          echo "Opening new tracking issue"
+          gh issue create --repo "${GITHUB_REPOSITORY}" \
+            --title "${{ inputs.title }}" \
+            --label "${{ inputs.label }}" \
+            --body-file "$BODY"
+        fi
