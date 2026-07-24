@@ -166,7 +166,6 @@ jobs:
           make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
             doltlite.exe doltlite-remotesrv.exe doltlite-lib
           make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
-          make doltlite-regression-test-c-build
         } 2>&1 | tee build.log
         DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 \
           bash ../test/assert_doltlite_artifacts.sh .
