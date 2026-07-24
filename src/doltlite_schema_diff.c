@@ -819,11 +819,22 @@ static int sdParseArgs(
       }
 
       rc = doltliteResolveCatalogHashForRef(db, zRangeFrom, &probe);
-      if( rc==SQLITE_OK ) rc = doltliteResolveCatalogHashForRef(db, zRangeTo, &probe);
+      if( rc==SQLITE_OK ){
+        rc = doltliteResolveCatalogHashForRef(db, zRangeTo, &probe);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(pVtab->zErrMsg);
+          pVtab->zErrMsg = sqlite3_mprintf(
+            "dolt_schema_diff: to_ref '%s' could not be resolved", zRangeTo);
+        }
+      }else{
+        sqlite3_free(pVtab->zErrMsg);
+        pVtab->zErrMsg = sqlite3_mprintf(
+          "dolt_schema_diff: from_ref '%s' could not be resolved", zRangeFrom);
+      }
       if( rc!=SQLITE_OK ){
         sqlite3_free(zRangeFrom);
         sqlite3_free(zRangeTo);
-        return rc;
+        return SQLITE_ERROR;
       }
 
       zFromRef = zRangeFrom;

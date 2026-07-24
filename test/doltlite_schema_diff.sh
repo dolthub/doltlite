@@ -61,6 +61,14 @@ run_test_match "bad_to_ref_errors" \
 run_test_match "bad_single_arg_errors" \
   "SELECT count(*) FROM dolt_schema_diff('definitely_not_a_ref');" \
   "Error" "$DB"
+# A malformed range endpoint must name the unresolvable ref, not emit a
+# generic error, matching the two-arg form.
+run_test_match "bad_range_from_names_endpoint" \
+  "SELECT count(*) FROM dolt_schema_diff('does-not-exist..HEAD');" \
+  "from_ref 'does-not-exist' could not be resolved" "$DB"
+run_test_match "bad_range_to_names_endpoint" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD..does-not-exist');" \
+  "to_ref 'does-not-exist' could not be resolved" "$DB"
 
 rm -f "$DB"
 
