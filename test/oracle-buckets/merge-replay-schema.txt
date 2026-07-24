@@ -5,6 +5,7 @@ vc_oracle_constraint_violations_test.sh
 vc_oracle_constraints_triggers_replay_test.sh
 vc_oracle_fk_merge_test.sh
 vc_oracle_merge_base_test.sh
+vc_oracle_merge_status_test.sh
 vc_oracle_merge_test.sh
 vc_oracle_pk_shapes_conflicts_test.sh
 vc_oracle_rebase_test.sh
