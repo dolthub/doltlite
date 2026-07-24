@@ -17,6 +17,8 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 
 if [ "${DOLTLITE_REGRESSION_PREBUILT:-0}" != "1" ]; then
+  source "$script_dir/lib/build_artifacts.sh"
+  dl_check_archive_flags "$build_dir/libdoltlite.a" "${CFLAGS:-"-g"}"
   "${CC:-cc}" ${CFLAGS:-"-g"} -I"$build_dir" -I"$repo_root/src" \
     -o "$build_dir/doltlite_regression_test_c" \
     "$repo_root/test/doltlite_regression_test_c.c" "$build_dir/libdoltlite.a" \
