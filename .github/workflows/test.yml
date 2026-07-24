@@ -467,6 +467,8 @@ jobs:
         path: coverage-profiles
 
     - name: Generate source coverage report
+      env:
+        DOLTLITE_COVERAGE_MIN_LINES: 80
       run: |
         bash test/source_coverage_report.sh \
           build-coverage coverage-profiles coverage-report

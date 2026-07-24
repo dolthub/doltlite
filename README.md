@@ -1031,11 +1031,11 @@ artifacts. They do not contribute profiles. macOS and Windows still run their
 platform checks, but deterministic Linux correctness tests are not repeated
 outside the instrumented jobs.
 
-The aggregate source-coverage percentages are informational; no percentage
-floor is currently set. CI updates a single coverage comment on the pull
-request. Its linked artifact contains an HTML report, aggregate summary,
-per-file TSV, merged LLVM profile, and LCOV data. To produce a local report
-with Clang, LLVM tools, and Dolt:
+CI requires aggregate line coverage of at least 80%. Aggregate branch and
+function coverage remain informational. CI updates a single coverage comment
+on the pull request. Its linked artifact contains an HTML report, aggregate
+summary, per-file TSV, merged LLVM profile, and LCOV data. To produce a local
+report with Clang, LLVM tools, and Dolt:
 
 ```bash
 mkdir build-coverage
@@ -1063,8 +1063,8 @@ bash test/source_coverage_report.sh \
 
 The report command accepts optional percentage floors through
 `DOLTLITE_COVERAGE_MIN_LINES`, `DOLTLITE_COVERAGE_MIN_BRANCHES`, and
-`DOLTLITE_COVERAGE_MIN_FUNCTIONS`. They are intentionally unset until the
-informational baseline is stable enough to ratchet.
+`DOLTLITE_COVERAGE_MIN_FUNCTIONS`. Pull-request CI sets the line floor to 80;
+the other floors remain unset.
 
 ### Differential Oracle Tests
 
