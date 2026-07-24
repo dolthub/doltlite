@@ -5,7 +5,6 @@
 #include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
 #ifdef SQLITE_CRASH_TEST
-#include <unistd.h>
 #endif
 
 
