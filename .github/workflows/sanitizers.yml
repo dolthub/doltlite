@@ -5,8 +5,16 @@ on:
 
 jobs:
   asan-ubsan:
+    name: asan-ubsan-${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - oracles
+          - native
+          - c-regression
 
     steps:
     - uses: actions/checkout@v4
@@ -16,6 +24,7 @@ jobs:
         bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
 
     - name: Install Dolt
+      if: matrix.suite == 'oracles'
       run: |
         curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz \
           | sudo tar -xz -C /usr/local --strip-components=1
@@ -44,6 +53,7 @@ jobs:
     # suites makes every new oracle sanitizer-covered automatically instead
     # of relying on a hand-maintained subset that can silently drift.
     - name: SQL oracle tests (vs stock SQLite and Dolt)
+      if: matrix.suite == 'oracles'
       run: |
         cd build
         bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
@@ -56,6 +66,7 @@ jobs:
       timeout-minutes: 15
 
     - name: Version control oracle tests (vs Dolt)
+      if: matrix.suite == 'oracles'
       run: |
         cd build
         for f in ../test/vc_oracle_*_test.sh; do
@@ -65,6 +76,7 @@ jobs:
       timeout-minutes: 25
 
     - name: Correctness regression tests
+      if: matrix.suite == 'native'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
 
     # Version-control virtual tables decode stored values and rebuild rows
@@ -73,6 +85,7 @@ jobs:
     # here). The oracle suites above are stock-SQL semantics and the C
     # corpus is C-API level; neither exercises these SQL vtab read paths.
     - name: VC virtual-table read suites
+      if: matrix.suite == 'native'
       run: |
         cd build
         for s in doltlite_at doltlite_history doltlite_diff doltlite_diff_table \
@@ -89,6 +102,7 @@ jobs:
     # read-vtab suites above never exercise under ASan. Kept to fast,
     # self-contained suites (no server, no external Dolt) to stay in budget.
     - name: VC ref-mutation + remote suites
+      if: matrix.suite == 'native'
       run: |
         cd build
         for s in doltlite_branch doltlite_default_branch doltlite_tag \
@@ -100,6 +114,7 @@ jobs:
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     - name: C regression corpus (ASan/UBSan)
+      if: matrix.suite == 'c-regression'
       run: cd build && ./doltlite_regression_test_c all
 
   # Same ASan/UBSan coverage as the Linux job above, but on macOS/arm64 to

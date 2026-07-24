@@ -1012,6 +1012,9 @@ assert-enabled development configurations. The second phase starts only after
 every build is green and runs all tests against those immutable artifacts.
 This avoids recompiling the same engine in each test shard and prevents test
 jobs from consuming a partially successful build set.
+Independent development configurations and sanitizer surfaces are sharded by
+purpose so the complete pull-request workflow remains within its 20-minute
+wall-clock budget without reducing coverage.
 
 The LLVM job builds the non-amalgamated engine once with source-coverage
 instrumentation. The existing Linux correctness jobs consume that artifact and

@@ -289,7 +289,6 @@ jobs:
 
   sqllogictest-build:
     name: sqllogictest
-    needs: checked
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -299,15 +298,19 @@ jobs:
     - name: Install dependencies
       run: |
         bash .github/scripts/install-apt-deps.sh \
-          build-essential fossil unixodbc-dev
+          build-essential fossil tcl-dev unixodbc-dev zlib1g-dev
 
-    - name: Download checked Linux build
-      uses: actions/download-artifact@v4
-      with:
-        name: checked-build-ubuntu
-
-    - name: Extract checked Linux build
-      run: tar -xzf checked-build-ubuntu.tar.gz
+    - name: Generate DoltLite amalgamation
+      run: |
+        mkdir -p build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
 
     - name: Build sqllogictest runners
       run: |
@@ -778,7 +781,8 @@ jobs:
           mkdir -p ci-wasm-runtime
           cp -a ext/wasm/jswasm/. ci-wasm-runtime/
           make -C ext/wasm dist
-          cp -a ci-wasm-runtime/. ext/wasm/jswasm/
+          rm -rf ext/wasm/jswasm
+          mv ci-wasm-runtime ext/wasm/jswasm
         } 2>&1 | tee wasm-build.log
         if grep -E "warning:" wasm-build.log; then
           echo "::error::compiler warnings in wasm build"
