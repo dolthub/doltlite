@@ -1703,11 +1703,17 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  rc = flushAllPending(pBtree, pBt, 0);
-  if( rc!=SQLITE_OK ) return rc;
+  /* flushAllPending / flushDeferredEdits require a write transaction
+  ** (PROLLY_ASSERT_WRITE_TXN). Read-side callers such as the dirty-state
+  ** check in doltliteHasUncommittedChanges only need a consistent catalog
+  ** snapshot; outside a write txn there are no pending maps to flush. */
+  if( pBtree->inTrans==TRANS_WRITE ){
+    rc = flushAllPending(pBtree, pBt, 0);
+    if( rc!=SQLITE_OK ) return rc;
 
-  rc = flushDeferredEdits(pBtree, pBt);
-  if( rc!=SQLITE_OK ) return rc;
+    rc = flushDeferredEdits(pBtree, pBt);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   /* A new connection starts with only the runtime sqlite_master entry.
   ** Repository seeding runs before that schema can be queried, and there
