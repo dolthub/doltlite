@@ -48,6 +48,8 @@ jobs:
           build-coverage/doltlite_regression_test_c \
           build-coverage/sqlite3 \
           build-coverage/testfixture \
+          build-coverage/prolly_hash.o \
+          build-coverage/blake3*.o \
           build-coverage/*_test \
           coverage-artifact/build-coverage/
         llvm-strip --strip-debug coverage-artifact/build-coverage/*
@@ -437,6 +439,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      CC: clang
+      CFLAGS: -O1 -g -fprofile-instr-generate -fcoverage-mapping
+      LDFLAGS: -fprofile-instr-generate
       DOLTLITE_REGRESSION_PREBUILT: 1
     strategy:
       fail-fast: false
@@ -449,7 +454,7 @@ jobs:
     - name: Install dependencies
       run: |
         bash .github/scripts/install-apt-deps.sh \
-          build-essential zlib1g-dev
+          build-essential clang zlib1g-dev
 
     - name: Download instrumented build
       uses: actions/download-artifact@v4
