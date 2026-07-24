@@ -128,7 +128,35 @@ jobs:
       run: |
         cd build
         make DOLTLITE_PROLLY=1 testfixture
+        # --buildonly: compile All-Debug / All-O0 only. Asserts are live in
+        # All-Debug, but no tests run here — see the smoke step below.
         ./testfixture ../test/testrunner.tcl --buildonly --jobs 2 mdevtest
+
+    # Release CI uses -DNDEBUG, so PROLLY_ASSERT_* and other assert() checks
+    # are compiled out. Catch write-txn / dirty-check contract bugs that only
+    # abort when asserts are live (e.g. read-side catalog serialize).
+    - name: Assert-enabled dirty-check smoke
+      env:
+        # Job-level CFLAGS is -O2; force a true debug compile line.
+        CFLAGS: -g -O0 -Werror
+      run: |
+        mkdir -p build-assert && cd build-assert
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-debug --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure --with-debug
+        fi
+        if grep -E 'T\.cc \+= .* -DNDEBUG' Makefile; then
+          echo "::error::assert-enabled configure still sets -DNDEBUG"
+          exit 1
+        fi
+        if ! grep -E 'T\.cc \+= .* -DSQLITE_DEBUG=1' Makefile; then
+          echo "::error::assert-enabled configure did not set -DSQLITE_DEBUG=1"
+          exit 1
+        fi
+        make -j"$(nproc)" DOLTLITE_PROLLY=1 catalog_serialize_determinism_test
+        ./catalog_serialize_determinism_test
 
   build-and-test:
     name: ${{ matrix.platform }}
