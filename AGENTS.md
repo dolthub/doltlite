@@ -152,9 +152,7 @@ Rules that override convenience:
   (fails on the unfixed engine, passes with the fix). Latent/defensive fixes may
   legitimately have no such test.
 - When local validation would take more than ~15 min, push a PR and let CI run
-  the buckets/corpus/suites in parallel; spot-check locally. The perf-ceiling
-  jobs (int/text/blob/composite-PK) are the only flaky CI — every other job is
-  deterministic, so a red non-perf job is a real signal.
+  the buckets/corpus/suites in parallel; spot-check locally.
 
 ## PR / git workflow
 
