@@ -68,7 +68,12 @@ oracle() {
 
   local dl_script="$setup"
   local dt_script
+  # Dolt gates the two unfinished-merge outcomes behind separate session vars:
+  # conflicts on dolt_allow_commit_conflicts, constraint violations on
+  # dolt_force_transaction_commit. DoltLite's equivalent for both is running the
+  # merge in an explicit transaction.
   dt_script="SET @@dolt_allow_commit_conflicts=1;
+SET @@dolt_force_transaction_commit=1;
 $(vc_oracle_translate_for_dolt "$setup")"
   if [ -n "$merge" ]; then
     # `after` runs inside DoltLite's transaction: an autocommit merge that
@@ -190,6 +195,19 @@ SELECT dolt_checkout('main');
 UPDATE t SET v = 'ours' WHERE id = 1;
 SELECT dolt_commit('-Am', 'ours');" "feature" \
 "SELECT dolt_conflicts_resolve('--ours', 't');"
+
+# A merge stopped only by constraint violations, with no row conflict anywhere,
+# is still an unfinished merge on both engines.
+oracle "cv_only_merge_is_merging" "CREATE TABLE t(id INT PRIMARY KEY, v INT UNIQUE);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 99);
+SELECT dolt_commit('-Am', 'theirs');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 99);
+SELECT dolt_commit('-Am', 'ours');" "feature"
 
 # A merge already recorded stays reported after the conflict is left in place
 # and a second, unrelated table is changed on top of it.

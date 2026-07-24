@@ -123,6 +123,50 @@ run_test "source_falls_back_to_hash" \
   "SELECT source || '|' || source_commit FROM dolt_merge_status;" \
   "$MID_HASH|$MID_HASH" "$DB10"
 
+# A merge stopped only by constraint violations -- no row conflict anywhere -- is
+# still an unfinished merge, so it must report as one.
+mk_cv_only_merge() {
+  local db="$1"
+  rm -f "$db"
+  echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT UNIQUE); INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$db" > /dev/null 2>&1
+  echo "INSERT INTO t VALUES(2,99); SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$db/src" > /dev/null 2>&1
+  echo "INSERT INTO t VALUES(3,99); SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$db" > /dev/null 2>&1
+}
+
+DB12=/tmp/test_ms_cvonly_$$.db
+mk_cv_only_merge "$DB12"
+echo "BEGIN; SELECT dolt_merge('src'); COMMIT;" | $DOLTLITE "$DB12" > /dev/null 2>&1
+run_test "cv_only_merge_is_merging" "$MS" \
+  "1|src|$(echo "SELECT dolt_hashof('src');" | $DOLTLITE "$DB12" 2>/dev/null | tail -1)|refs/heads/main|t" "$DB12"
+run_test "cv_only_merge_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB12"
+run_test "cv_only_merge_has_violations" \
+  "SELECT \"table\" || ':' || num_violations FROM dolt_constraint_violations;" "t:2" "$DB12"
+
+# The three ways out of a merge all clear it, constraint violations included.
+DB13=/tmp/test_ms_cvabort_$$.db
+mk_cv_only_merge "$DB13"
+echo "BEGIN; SELECT dolt_merge('src'); COMMIT;" | $DOLTLITE "$DB13" > /dev/null 2>&1
+echo "SELECT dolt_merge('--abort');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+run_test "cv_only_cleared_by_abort" "$MS" "0|~|~|~|~" "$DB13"
+
+DB14=/tmp/test_ms_cvreset_$$.db
+mk_cv_only_merge "$DB14"
+echo "BEGIN; SELECT dolt_merge('src'); COMMIT;" | $DOLTLITE "$DB14" > /dev/null 2>&1
+echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+run_test "cv_only_cleared_by_reset" "$MS" "0|~|~|~|~" "$DB14"
+
+DB15=/tmp/test_ms_cvresolve_$$.db
+mk_cv_only_merge "$DB15"
+echo "BEGIN; SELECT dolt_merge('src'); COMMIT;" | $DOLTLITE "$DB15" > /dev/null 2>&1
+echo "BEGIN; DELETE FROM dolt_constraint_violations_t; SELECT dolt_commit('-Am','resolved');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test "cv_only_cleared_by_resolve_commit" "$MS" "0|~|~|~|~" "$DB15"
+
+# An autocommit merge rolls back whole, violations and merge state together.
+DB16=/tmp/test_ms_cvauto_$$.db
+mk_cv_only_merge "$DB16"
+echo "SELECT dolt_merge('src');" | $DOLTLITE "$DB16" > /dev/null 2>&1
+run_test "cv_only_autocommit_rolled_back" "$MS" "0|~|~|~|~" "$DB16"
+
 # A merge still open after every conflict was resolved reports an empty
 # unmerged_tables, not NULL and not an error.
 DB11=/tmp/test_ms_resolved_$$.db; rm -f "$DB11"
@@ -139,5 +183,6 @@ run_test_match "read_only" \
   "INSERT INTO dolt_merge_status VALUES(1,'a','b','c','d');" \
   "may not be modified" "$DB"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" \
+  "$DB12" "$DB13" "$DB14" "$DB15" "$DB16"
 dltest_finish
