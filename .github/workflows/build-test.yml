@@ -445,37 +445,37 @@ jobs:
       timeout-minutes: 5
 
     - name: Remote HTTPS + credential auth tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote Content-Length test
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote lifecycle test (strict proxy)
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote concurrency tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote stalled client tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_stall_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote partial failure tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote force push tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 

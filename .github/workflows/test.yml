@@ -525,8 +525,58 @@ jobs:
         if-no-files-found: warn
         retention-days: 1
 
+  coverage-remotes:
+    needs: coverage-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential openssl python3 zlib1g-dev
+
+    - name: Download instrumented build
+      uses: actions/download-artifact@v4
+      with:
+        name: coverage-build
+
+    - name: Extract instrumented build
+      run: |
+        tar -xzf coverage-build.tar.gz
+        mkdir -p "$RUNNER_TEMP/coverage-profiles"
+        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
+
+    - name: Credential, TLS, and HTTP remote tests
+      run: |
+        cd build-coverage
+        bash ../test/creds_path_test.sh ./doltlite
+        bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_stall_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
+
+    - name: Upload remote coverage profiles
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-profile-remotes
+        path: ${{ runner.temp }}/coverage-profiles
+        if-no-files-found: warn
+        retention-days: 1
+
   source-coverage:
-    needs: [coverage-build, oracle-tests, sqlite-regression, coverage-native]
+    needs:
+      - coverage-build
+      - oracle-tests
+      - sqlite-regression
+      - coverage-native
+      - coverage-remotes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

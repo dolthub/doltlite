@@ -1006,10 +1006,11 @@ bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 CI builds the non-amalgamated engine once with LLVM source-coverage
 instrumentation. The existing Linux correctness jobs consume that build and
 run the complete SQLite Tcl regression buckets, differential oracles,
-deterministic shell suites, and deterministic C suites. Each parallel job
-uploads a small pool of raw profiles; a final job merges them and publishes
-line, branch, and function coverage for the DoltLite-owned `src/`
-implementation files.
+deterministic shell and C suites, and the credential/TLS/HTTP remote
+integration suites. Each parallel job uploads a small pool of raw profiles; a
+final job merges them and publishes line, branch, and function coverage for
+the DoltLite-owned `src/` implementation files. The workflow fails if an owned
+source file with executable lines receives zero line coverage.
 
 Timing and scale gates, concurrency and fault stress, sanitizers, and
 platform-specific jobs keep their optimized or specialized builds. They do not
@@ -1017,10 +1018,11 @@ contribute profiles. macOS and Windows still run their platform checks, but
 deterministic Linux correctness tests are not repeated outside the
 instrumented jobs.
 
-The source-coverage summary is informational; no floor is currently set. Its
-artifact contains an HTML report, aggregate summary, per-file TSV, merged LLVM
-profile, and LCOV data. To produce a local report with Clang, LLVM tools, and
-Dolt:
+The aggregate source-coverage percentages are informational; no percentage
+floor is currently set. CI updates a single coverage comment on the pull
+request. Its linked artifact contains an HTML report, aggregate summary,
+per-file TSV, merged LLVM profile, and LCOV data. To produce a local report
+with Clang, LLVM tools, and Dolt:
 
 ```bash
 mkdir build-coverage

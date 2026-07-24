@@ -132,6 +132,15 @@ if [ "$source_count" -eq 0 ]; then
   exit 1
 fi
 
+zero_line_files="$(
+  awk -F '\t' 'NR>1 && $3>0 && $2==0 { print $1 }' "$REPORT_TSV"
+)"
+if [ -n "$zero_line_files" ]; then
+  echo "ERROR: DoltLite source files with zero covered lines:"
+  echo "$zero_line_files"
+  exit 1
+fi
+
 percent() {
   awk -v covered="$1" -v total="$2" 'BEGIN {
     if( total==0 ){ printf "-" }
