@@ -248,7 +248,7 @@ if {$doltlite} {
     prolly_three_way_merge.h prolly_xxhash.h prolly_btree_int.h
     doltlite_ancestor.h doltlite_catalog_types.h doltlite_chunk_walk.h doltlite_commit.h
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
-    doltlite_merge_int.h doltlite_name_index.h doltlite_parse.h
+    doltlite_branch_int.h doltlite_merge_int.h doltlite_name_index.h doltlite_parse.h
     doltlite_record.h doltlite_remote.h doltlite_remotesrv.h doltlite_vtab_util.h
     doltlite_creds.h doltlite_net.h doltlite_tls.h
   } {

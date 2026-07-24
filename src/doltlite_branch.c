@@ -1,6 +1,7 @@
 
 #ifdef DOLTLITE_PROLLY
 
+#include "doltlite_branch_int.h"
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
@@ -18,15 +19,7 @@ static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3_result_text(ctx, doltliteGetSessionBranch(db), -1, SQLITE_TRANSIENT);
 }
 
-typedef struct BranchMutationCtx BranchMutationCtx;
-struct BranchMutationCtx {
-  const char *zName;
-  ProllyHash head;
-  int isDelete;
-  int force;
-};
-
-static int branchNameEmpty(const char *zName){
+int branchNameEmpty(const char *zName){
   return zName==0 || zName[0]==0;
 }
 
@@ -58,7 +51,7 @@ static void branchNamedResultError(
   doltliteRefResultError(ctx, rc, zNotFound, zExists);
 }
 
-static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
+int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
 
   if( p->isDelete ){
