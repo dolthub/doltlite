@@ -110,3 +110,13 @@ else
   echo "lint_layers: $NFAIL violation(s) found"
   exit 1
 fi
+
+# chunk_store split: require lock module; cap at 1200.
+if [ ! -f "$SRCDIR/chunk_store_lock.c" ]; then
+  lint "$SRCDIR/chunk_store_lock.c: missing — chunk_store lock must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/chunk_store_lock.c" | tr -d ' ')
+  if [ "$nline" -gt 1200 ]; then
+    lint "$SRCDIR/chunk_store_lock.c:$nline lines — chunk_store_lock.c must stay at or below 1200 lines"
+  fi
+fi
