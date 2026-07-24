@@ -78,6 +78,15 @@ else
   fi
 fi
 
+if [ ! -f "$SRCDIR/chunk_store_commit.c" ]; then
+  lint "$SRCDIR/chunk_store_commit.c: missing — chunk_store commit must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/chunk_store_commit.c" | tr -d ' ')
+  if [ "$nline" -gt 1200 ]; then
+    lint "$SRCDIR/chunk_store_commit.c:$nline lines — chunk_store_commit.c must stay at or below 1200 lines"
+  fi
+fi
+
 # Keep doltlite merge split into reviewable units. The core catalog/rows/
 # schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file
 # and still pass by only checking what remains) and stay under 1500 lines.

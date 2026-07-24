@@ -31,6 +31,11 @@ int csReloadFromDisk(ChunkStore *cs);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
 int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize);
 int csDiskStateMatchesMemory(ChunkStore *cs);
+int csOpenFile(sqlite3_vfs *pVfs, const char *zPath, sqlite3_file **ppFile,
+               int flags, int *pOutFlags);
+int csSyncFile(ChunkStore *cs);
+void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size);
+void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 
 #endif /* CHUNK_STORE_INT_H */
 
