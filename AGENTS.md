@@ -106,6 +106,19 @@ conformance bugs. When comparing against Dolt, only **row-level semantics** must
 match; do not file conformance issues over the vtable/function shape or column
 naming.
 
+### Surfaces deliberately not implemented
+
+Absent on purpose, so don't file them as parity gaps or implement them
+unprompted:
+
+- **`dolt_stash`** — not on the roadmap. Stashing exists because git binds one
+  working tree to a clone, so switching branches forces you to shelve
+  uncommitted work first. DoltLite gives every branch its own working set:
+  `dolt_checkout` between dirty branches neither refuses nor carries changes
+  over, and connections addressing `db/branch` hold independent uncommitted
+  state at the same time. The shelve/switch/unshelve dance has nothing to solve
+  here. See [Dolt Worktrees](https://www.dolthub.com/blog/2026-07-23-worktrees/).
+
 ### Dolt is the reference implementation
 
 [Dolt](https://github.com/dolthub/dolt) is the authority on **what** every

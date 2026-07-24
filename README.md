@@ -912,6 +912,10 @@ never corrupt another branch's reads. Writes and commit-graph mutations
 are serialized through an exclusive file-level lock (matching SQLite's
 standard behavior); reads are concurrent.
 
+Uncommitted work belongs to the branch, not the connection: checking out a
+dirty branch neither refuses nor carries changes over. Hence no `dolt_stash` —
+there is no single working tree to free up.
+
 ## Performance
 
 The latest automated DoltLite-versus-SQLite measurements are published in the
