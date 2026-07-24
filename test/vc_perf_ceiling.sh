@@ -60,6 +60,11 @@ run_sql_file() {
   "$FIXTURE_DOLTLITE" "$db" < "$file" >/dev/null
 }
 
+remove_sample_db() {
+  local db="$1"
+  rm -f "$db" "$db-lock" "$db-wal" "$db-shm" "$db-journal"
+}
+
 cte() {
   echo "WITH RECURSIVE c(i) AS (SELECT $1 UNION ALL SELECT i+1 FROM c WHERE i<$2)"
 }
@@ -280,6 +285,13 @@ bench_sql() {
         "$name" "$r" "$candidate_us" >> "$SAMPLES_FILE"
     fi
     candidate_vals+=("$candidate_us")
+    remove_sample_db "$candidate_db"
+    rm -f "$out" "$err"
+    if [ -n "$VC_PERF_BASELINE" ]; then
+      remove_sample_db "$baseline_db"
+      rm -f "$TMPDIR/${name}_baseline_${r}.out" \
+        "$TMPDIR/${name}_baseline_${r}.err"
+    fi
   done
 
   local candidate_median baseline_median ratio status

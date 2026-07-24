@@ -294,6 +294,29 @@ def render(
     return "\n".join(lines)
 
 
+def render_provenance_failure(
+    baseline_ref,
+    candidate_ref,
+    expected_baseline_ref,
+    expected_candidate_ref,
+):
+    return "\n".join(
+        [
+            "<!-- benchmark:relative -->",
+            "## DoltLite performance vs PR base",
+            "",
+            "**FAILED:** benchmark revision provenance does not match "
+            "the workflow inputs.",
+            "",
+            "| Revision | Packaged | Expected |",
+            "|---|---|---|",
+            f"| Baseline | `{baseline_ref}` | `{expected_baseline_ref}` |",
+            f"| Candidate | `{candidate_ref}` | `{expected_candidate_ref}` |",
+            "",
+        ]
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Compare paired DoltLite benchmark medians"
@@ -306,6 +329,8 @@ def main(argv=None):
     )
     parser.add_argument("--baseline-ref", required=True)
     parser.add_argument("--candidate-ref", required=True)
+    parser.add_argument("--expected-baseline-ref", required=True)
+    parser.add_argument("--expected-candidate-ref", required=True)
     parser.add_argument("--individual-ratio", type=float, default=1.25)
     parser.add_argument("--aggregate-ratio", type=float, default=1.15)
     parser.add_argument("--min-delta-us", type=int, default=5000)
@@ -318,6 +343,20 @@ def main(argv=None):
     )
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+
+    if (
+        args.baseline_ref != args.expected_baseline_ref
+        or args.candidate_ref != args.expected_candidate_ref
+    ):
+        report = render_provenance_failure(
+            args.baseline_ref,
+            args.candidate_ref,
+            args.expected_baseline_ref,
+            args.expected_candidate_ref,
+        )
+        pathlib.Path(args.output).write_text(report, encoding="utf-8")
+        print(report, end="")
+        return 1
 
     try:
         results = []

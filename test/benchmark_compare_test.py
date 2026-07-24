@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import contextlib
 import importlib.util
+import io
 import pathlib
 import tempfile
 import unittest
@@ -106,6 +108,36 @@ class BenchmarkCompareTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_rejects_swapped_revision_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            timings = directory / "result.tsv"
+            report = directory / "report.md"
+            timings.write_text(
+                "reads\tpoint\t100\t110\n", encoding="utf-8"
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = benchmark_compare.main(
+                    [
+                        "--input",
+                        f"int={timings}",
+                        "--baseline-ref",
+                        "candidate-sha",
+                        "--candidate-ref",
+                        "baseline-sha",
+                        "--expected-baseline-ref",
+                        "baseline-sha",
+                        "--expected-candidate-ref",
+                        "candidate-sha",
+                        "--output",
+                        str(report),
+                    ]
+                )
+            output = report.read_text(encoding="utf-8")
+        self.assertEqual(rc, 1)
+        self.assertIn("revision provenance", output)
+        self.assertIn("| Baseline | `candidate-sha` | `baseline-sha` |", output)
 
 
 if __name__ == "__main__":
