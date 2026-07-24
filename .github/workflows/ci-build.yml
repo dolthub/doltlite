@@ -28,7 +28,7 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         bash .github/scripts/install-apt-deps.sh \
-          build-essential fossil tcl-dev unixodbc-dev zlib1g-dev
+          build-essential fossil ripgrep tcl-dev unixodbc-dev zlib1g-dev
 
     - name: Install Windows build dependencies
       if: matrix.platform == 'windows'
@@ -46,6 +46,7 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.23'
+        cache: false
 
     - name: Configure Unix build
       if: matrix.platform != 'windows'
@@ -680,6 +681,7 @@ jobs:
     timeout-minutes: 20
     env:
       EMSDK_VERSION: 3.1.74
+      EMCC_CFLAGS: -Wno-limited-postlink-optimizations
       WABT_VERSION: 1.0.36
 
     steps:
@@ -733,9 +735,7 @@ jobs:
           ../configure
           make doltlite
           cd ..
-          make -C ext/wasm \
-            emcc_opt='-Oz -Wno-limited-postlink-optimizations' \
-            fiddle npm dist
+          make -C ext/wasm fiddle npm dist
         } 2>&1 | tee wasm-build.log
         if grep -E "warning:" wasm-build.log; then
           echo "::error::compiler warnings in wasm build"
