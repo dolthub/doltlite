@@ -716,6 +716,7 @@ int saveAllCursors(Btree*, BtShared*, Pgno, BtCursor*);
 int saveCursorPosition(BtCursor*);
 int restoreCursorPosition(BtCursor*, int*);
 int countTreeEntries(Btree*, Pgno, i64*);
+int sortKeyFromUnpackedForCount(BtCursor*, UnpackedRecord*, u8**, int*, int*);
 int tableEntryIsTableRoot(Btree*, struct TableEntry*, int*);
 void clearMergeCursorState(BtCursor*);
 int prollyCursorCheckInterrupt(BtCursor*);
