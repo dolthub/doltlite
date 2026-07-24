@@ -608,7 +608,7 @@ proc emit_doltlite_engine_block {} {
   foreach f {
     prolly_hash.c prolly_xxhash.c blake3.c blake3_portable.c blake3_dispatch.c
     prolly_hashset.c prolly_node.c prolly_cache.c
-    chunk_store.c chunk_store_lock.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
+    chunk_store.c chunk_store_lock.c chunk_store_refs_api.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
     prolly_cursor.c prolly_mutmap.c prolly_chunker.c prolly_mutate.c prolly_check.c
     prolly_diff.c prolly_three_way_diff.c prolly_three_way_merge.c
     prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c

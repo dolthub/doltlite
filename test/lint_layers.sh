@@ -130,3 +130,12 @@ else
     lint "$SRCDIR/chunk_store_lock.c:$nline lines — chunk_store_lock.c must stay at or below 1200 lines"
   fi
 fi
+
+if [ ! -f "$SRCDIR/chunk_store_refs_api.c" ]; then
+  lint "$SRCDIR/chunk_store_refs_api.c: missing — chunk_store refs api must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/chunk_store_refs_api.c" | tr -d ' ')
+  if [ "$nline" -gt 1200 ]; then
+    lint "$SRCDIR/chunk_store_refs_api.c:$nline lines — chunk_store_refs_api.c must stay at or below 1200 lines"
+  fi
+fi
