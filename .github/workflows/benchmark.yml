@@ -1,7 +1,7 @@
 name: Benchmark
 
 on:
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,28 +19,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+    - name: Download optimized build
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-build
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite and stock SQLite
-      run: |
-        cd build
-        make doltlite
-        make doltlite-lib
-        cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
-        make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-        cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
+    - name: Extract optimized build
+      run: tar -xzf benchmark-build.tar.gz
 
     - name: Run benchmark
       id: bench
@@ -140,28 +125,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+    - name: Download optimized build
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-build
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite and stock SQLite
-      run: |
-        cd build
-        make doltlite
-        make doltlite-lib
-        cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
-        make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-        cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
+    - name: Extract optimized build
+      run: tar -xzf benchmark-build.tar.gz
 
     - name: Run benchmark
       id: bench
@@ -235,24 +205,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+    - name: Download optimized build
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-build
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite
-      run: |
-        cd build
-        make doltlite
+    - name: Extract optimized build
+      run: tar -xzf benchmark-build.tar.gz
 
     - name: Run version-control performance benchmarks
       id: bench

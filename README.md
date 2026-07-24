@@ -1003,8 +1003,21 @@ bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 
 ### Source Coverage
 
-CI builds the non-amalgamated engine once with LLVM source-coverage
-instrumentation. The existing Linux correctness jobs consume that build and
+Pull-request CI has two global phases. The first phase builds every binary and
+generated source needed by the suite, rejects compiler warnings, and publishes
+short-lived artifacts. It includes checked Linux, macOS, and Windows builds;
+LLVM coverage; optimized benchmarks; ASan/UBSan and TSan; crash-test and
+libFuzzer targets; WebAssembly; historical compatibility references; and
+assert-enabled development configurations. The second phase starts only after
+every build is green and runs all tests against those immutable artifacts.
+This avoids recompiling the same engine in each test shard and prevents test
+jobs from consuming a partially successful build set.
+Independent development configurations and sanitizer surfaces are sharded by
+purpose so the complete pull-request workflow remains within its 20-minute
+wall-clock budget without reducing coverage.
+
+The LLVM job builds the non-amalgamated engine once with source-coverage
+instrumentation. The existing Linux correctness jobs consume that artifact and
 run the complete SQLite Tcl regression buckets, differential oracles,
 deterministic shell and C suites, and the credential/TLS/HTTP remote
 integration suites. Each parallel job uploads a small pool of raw profiles; a
@@ -1013,10 +1026,10 @@ the DoltLite-owned `src/` implementation files. The workflow fails if an owned
 source file with executable lines receives zero line coverage.
 
 Timing and scale gates, concurrency and fault stress, sanitizers, and
-platform-specific jobs keep their optimized or specialized builds. They do not
-contribute profiles. macOS and Windows still run their platform checks, but
-deterministic Linux correctness tests are not repeated outside the
-instrumented jobs.
+platform-specific jobs consume their optimized or specialized phase-one
+artifacts. They do not contribute profiles. macOS and Windows still run their
+platform checks, but deterministic Linux correctness tests are not repeated
+outside the instrumented jobs.
 
 The aggregate source-coverage percentages are informational; no percentage
 floor is currently set. CI updates a single coverage comment on the pull
