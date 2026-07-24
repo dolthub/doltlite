@@ -106,7 +106,9 @@ jobs:
 
   relative-report:
     name: relative-performance-gate
-    if: always()
+    # Still publish diagnostics when a producer fails, but do not turn a
+    # cancelled workflow into a misleading missing-results failure.
+    if: ${{ always() && !cancelled() }}
     needs:
       - sysbench-relative
       - vc-relative
