@@ -117,7 +117,7 @@ jobs:
     - name: Configure
       run: |
         mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname $TCL_CONFIG)
         else
@@ -205,7 +205,7 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname $TCL_CONFIG)
         else
@@ -318,17 +318,22 @@ jobs:
     # -- Doltlite feature tests ------------------------------
 
     - name: Doltlite feature tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
+    - name: Doltlite timing and scale tests
+      if: matrix.platform == 'ubuntu'
+      run: cd build && DOLTLITE_SUITE_SET=timing bash ../test/run_doltlite_tests.sh
+      timeout-minutes: 20
+
     - name: Correctness regression tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
       timeout-minutes: 10
 
     - name: Index operation tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/index_test.sh ./doltlite
       timeout-minutes: 5
 
@@ -355,17 +360,17 @@ jobs:
       timeout-minutes: 5
 
     - name: Diff tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/diff_test.sh ./doltlite
       timeout-minutes: 10
 
     - name: Config tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/config_test.sh ./doltlite
       timeout-minutes: 2
 
     - name: BLAKE3 known-answer test
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 2
 
@@ -468,37 +473,37 @@ jobs:
       timeout-minutes: 5
 
     - name: Remote HTTPS + credential auth tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote Content-Length test
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote lifecycle test (strict proxy)
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote concurrency tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote stalled client tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_stall_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote partial failure tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote force push tests
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
@@ -544,7 +549,7 @@ jobs:
       timeout-minutes: 10
 
     - name: Prepared statement reuse test
-      if: matrix.platform != 'windows'
+      if: matrix.platform == 'macos'
       run: |
         cd build
         gcc $CFLAGS -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
@@ -557,11 +562,12 @@ jobs:
       run: cd build && bash ../test/run_doltlite_regression_case.sh all_except=backup_safety
       timeout-minutes: 15
 
-    # Wires the previously-orphan C tests into CI. All tests in
-    # test/run_c_tests.sh are gating and must pass.
-    - name: Warning-free orphan C tests
+    - name: Warning-free specialized C tests
       if: matrix.platform == 'ubuntu'
-      run: cd build && make c-tests
+      run: |
+        cd build
+        make doltlite-c-tests-build
+        bash ../test/run_c_tests.sh . specialized
       timeout-minutes: 15
 
     - name: Python integration test

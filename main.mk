@@ -2754,8 +2754,8 @@ crash_recovery_test_sqlite_test$(T.exe): $(T.tcl.env.sh) has_tclsh85 $(TOP)/test
 #
 # These adversarial C tests live under test/ but were historically not built
 # or run by any CI job. They link directly against libdoltlite.a and call into
-# the SQLite C API. Several of them surface real bugs on master; see
-# test/run_c_tests.sh for the gating-vs-non-blocking split.
+# the SQLite C API. See test/run_c_tests.sh for the deterministic coverage and
+# specialized stress split.
 #
 # All of these share a simple compile recipe: link against the static
 # libdoltlite.a, with -lz/-lpthread/-lm.
@@ -2906,11 +2906,16 @@ oom_dolt_fault_test$(T.exe): $(TOP)/test/oom_dolt_fault_test.c libdoltlite$(T.li
 
 doltlite-c-tests-build: $(DOLTLITE_C_TESTS)
 
-# Run all orphan C tests via the gating-aware runner script. The script
-# decides which failures gate CI and which are reported but tolerated
-# (because the failure was preexisting at the time the test was wired in).
-# To make a tolerated test gating, move it out of the EXPECTED_FAIL set in
-# test/run_c_tests.sh after fixing the underlying bug.
+doltlite_regression_test_c$(T.exe): $(TOP)/test/doltlite_regression_test_c.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ \
+		$(TOP)/test/doltlite_regression_test_c.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+doltlite-regression-test-c-build: doltlite_regression_test_c$(T.exe)
+
+# Run all orphan C tests via the suite-aware runner script. CI invokes the
+# deterministic coverage and specialized stress sets separately; this target
+# remains the convenient local entry point for both sets.
 c-tests: doltlite-c-tests-build
 	bash $(TOP)/test/run_c_tests.sh .
 

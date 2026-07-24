@@ -440,7 +440,7 @@ jobs:
     - name: Configure
       run: |
         mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname $TCL_CONFIG)
         else
@@ -495,7 +495,7 @@ jobs:
     - name: Configure
       run: |
         mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname $TCL_CONFIG)
         else

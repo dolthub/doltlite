@@ -101,10 +101,16 @@ EOF
 
 echo "=== BLAKE3 KAT (vendored) ==="
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-cc -O2 "$TMP/blake3_kat.c" \
-   prolly_hash.o blake3*.o \
+blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
+for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
+  if [ -f "$object" ]; then
+    blake_objects+=("$object")
+  fi
+done
+"${CC:-cc}" ${CFLAGS:-"-O2"} "$TMP/blake3_kat.c" \
+   prolly_hash.o "${blake_objects[@]}" \
    -I "$HERE/src" -I "$HERE/ext/blake3" -DDOLTLITE_PROLLY=1 \
-   -lm \
+   ${LDFLAGS:-} -lm \
    -o "$TMP/blake3_kat" 2>"$TMP/build.err" || {
     echo "  build failed:"
     cat "$TMP/build.err"

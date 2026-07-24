@@ -3,9 +3,10 @@
 set -u
 
 BUILD_DIR="${1:-.}"
+SUITE_SET="${2:-all}"
 cd "$BUILD_DIR" || { echo "Build dir $BUILD_DIR not found"; exit 2; }
 
-GATING=(
+COVERAGE_TESTS=(
   ancestor_test
   sql_transaction_test
   invariant_test
@@ -14,6 +15,16 @@ GATING=(
   prolly_hashset_test
   prolly_chunker_boundary_test
   scoped_refs_push_test
+  cross_branch_test
+  corruption_test
+  prepared_stmt_reuse_test
+  catalog_serialize_determinism_test
+  sequence_reload_test
+  remotesrv_init_failure_test
+  commit_deserialize_test
+)
+
+SPECIALIZED_TESTS=(
   concurrent_stress_test
   prolly_txn_stress_test
   vc_concurrency_test
@@ -22,15 +33,18 @@ GATING=(
   multi_process_gc_test
   multi_process_merge_rebase_test
   oom_dolt_fault_test
-  cross_branch_test
-  corruption_test
-  prepared_stmt_reuse_test
-  catalog_serialize_determinism_test
-  sequence_reload_test
   chunk_store_fork_lock_test
-  remotesrv_init_failure_test
-  commit_deserialize_test
 )
+
+case "$SUITE_SET" in
+  all) GATING=("${COVERAGE_TESTS[@]}" "${SPECIALIZED_TESTS[@]}") ;;
+  coverage) GATING=("${COVERAGE_TESTS[@]}") ;;
+  specialized) GATING=("${SPECIALIZED_TESTS[@]}") ;;
+  *)
+    echo "ERROR: unknown C suite set: $SUITE_SET"
+    exit 2
+    ;;
+esac
 
 run_one() {
   local name="$1"

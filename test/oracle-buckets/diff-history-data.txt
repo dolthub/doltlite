@@ -1,0 +1,15 @@
+vc_oracle_at_test.sh
+vc_oracle_autoinc_test.sh
+vc_oracle_blame_test.sh
+vc_oracle_diff_multi_pk_test.sh
+vc_oracle_diff_stat_test.sh
+vc_oracle_diff_test.sh
+vc_oracle_diff_tvf_test.sh
+vc_oracle_history_test.sh
+vc_oracle_patch_test.sh
+vc_oracle_pk_edge_values_test.sh
+vc_oracle_pk_only_tables_test.sh
+vc_oracle_pk_shapes_scale_test.sh
+vc_oracle_pk_shapes_table_ops_test.sh
+vc_oracle_pk_shapes_vc_ops_test.sh
+vc_oracle_schema_diff_test.sh

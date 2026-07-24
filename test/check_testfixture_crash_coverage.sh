@@ -76,7 +76,9 @@ while read -r source kind target; do
       if [ ! -f "$SCRIPT_DIR/$target.c" ]; then
         echo "ERROR: $source maps to missing C test test/$target.c"
         FAIL=1
-      elif ! sed -n '/^GATING=(/,/^)/p' "$SCRIPT_DIR/run_c_tests.sh" \
+      elif ! sed -n -E \
+          '/^(COVERAGE_TESTS|SPECIALIZED_TESTS)=\(/,/^\)/p' \
+          "$SCRIPT_DIR/run_c_tests.sh" \
           | grep -Eq "^[[:space:]]*$target[[:space:]]*$"; then
         echo "ERROR: $source maps to C test $target, but it is not gating"
         FAIL=1

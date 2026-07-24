@@ -49,7 +49,7 @@ jobs:
     - name: Configure SQLITE_TEST build (build-crash)
       run: |
         mkdir -p build-crash && cd build-crash
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname "$TCL_CONFIG")
         else
@@ -59,7 +59,7 @@ jobs:
     - name: Build crash-test binaries
       run: |
         cd build-crash
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         . "$TCL_CONFIG"
         make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
           OPTS="$TCL_INCLUDE_SPEC" \
@@ -79,7 +79,7 @@ jobs:
     - name: Configure history-independence build (build)
       run: |
         mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname "$TCL_CONFIG")
         else
@@ -100,7 +100,7 @@ jobs:
     - name: Configure libFuzzer build (build-fuzz)
       run: |
         mkdir -p build-fuzz && cd build-fuzz
-        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname "$TCL_CONFIG")
         else

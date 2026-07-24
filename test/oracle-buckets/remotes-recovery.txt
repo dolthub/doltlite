@@ -1,0 +1,6 @@
+vc_oracle_error_recovery_test.sh
+vc_oracle_feature_interaction_test.sh
+vc_oracle_fetch_pull_convergence_test.sh
+vc_oracle_model_test.sh
+vc_oracle_push_default_branch_test.sh
+vc_oracle_remotes_test.sh
