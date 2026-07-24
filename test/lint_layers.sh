@@ -40,6 +40,15 @@ else
   fi
 fi
 
+if [ ! -f "$SRCDIR/prolly_btree_cursor_seek.c" ]; then
+  lint "$SRCDIR/prolly_btree_cursor_seek.c: missing — prolly cursor seek must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_seek.c" | tr -d ' ')
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_seek.c:$nline lines — prolly_btree_cursor_seek.c must stay at or below 1500 lines"
+  fi
+fi
+
 # Branch/checkout split: require doltlite_branches.c; cap at 1500.
 if [ ! -f "$SRCDIR/doltlite_branches.c" ]; then
   lint "$SRCDIR/doltlite_branches.c: missing — dolt_branches vtab must stay split"
