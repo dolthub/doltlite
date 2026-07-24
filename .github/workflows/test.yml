@@ -393,7 +393,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bucket: [core-sql, ddl-schema, storage, fault-fuzz, fts, ported]
+        bucket:
+          - core-sql
+          - ddl-schema
+          - storage
+          - fault-fuzz
+          - fts3
+          - fts4-core
+          - fts4-merge
+          - ported
     steps:
     - uses: actions/checkout@v4
 
@@ -419,13 +427,14 @@ jobs:
     # "ported" bucket holds doltlite-native rewrites of gated divergences
     # (#1313): zero-divergence files asserting the intent the upstream
     # entries lost. Every file belongs to:
-    # core-sql, ddl-schema, storage, fault-fuzz, fts. A file must appear in
-    # exactly one bucket; the guard below enforces it. Nondeterministic-class
-    # files (thread*, walcrash*, writecrash, wal*fault) stay excluded, same
-    # rationale as the crash.test exclusion. fts3.test is also excluded: it
-    # is the permutations suite-runner that re-sources the fts3 family
-    # inline (pure double coverage of files already in the fts bucket), and
-    # its inlined OOM sections fail load-sensitively.
+    # core-sql, ddl-schema, storage, fault-fuzz, fts3, fts4-core,
+    # fts4-merge. A file must appear in exactly one bucket; the guard below
+    # enforces it. Nondeterministic-class files (thread*, walcrash*,
+    # writecrash, wal*fault) stay excluded, same rationale as the crash.test
+    # exclusion. fts3.test is also excluded: it is the permutations
+    # suite-runner that re-sources the fts3 family inline (pure double
+    # coverage of files already in the FTS buckets), and its inlined OOM
+    # sections fail load-sensitively.
     - name: Check regression coverage manifests
       run: |
         dups=$(cat test/regression-buckets/*.txt | sort | uniq -d)
@@ -520,6 +529,10 @@ jobs:
     needs: [coverage-build, oracle-tests, sqlite-regression, coverage-native]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
 
     steps:
     - uses: actions/checkout@v4
@@ -547,6 +560,68 @@ jobs:
         bash test/source_coverage_report.sh \
           build-coverage coverage-profiles coverage-report
         cat coverage-report/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment PR with source coverage
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync(
+            'coverage-report/summary.md',
+            'utf8'
+          );
+          const marker = '<!-- coverage:source -->';
+          const runUrl = [
+            context.serverUrl,
+            context.repo.owner,
+            context.repo.repo,
+            'actions',
+            'runs',
+            context.runId,
+          ].join('/');
+          const body = [
+            marker,
+            summary.trim(),
+            '',
+            `[Download HTML and LCOV artifacts from this workflow run.](${runUrl})`,
+          ].join('\n');
+
+          if (!context.issue.number) {
+            console.log('No PR context — skipping coverage comment');
+            return;
+          }
+
+          const comments = await github.paginate(
+            github.rest.issues.listComments,
+            {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            }
+          );
+          const existing = comments.find(comment =>
+            comment.body.includes(marker)
+          );
+          const target = {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          };
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              ...target,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              ...target,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
 
     - name: Upload source coverage report
       uses: actions/upload-artifact@v4
