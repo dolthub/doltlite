@@ -337,8 +337,9 @@ static void test_04_two_commits_kill_after_second(void){
 
   {
     sqlite3 *db = 0;
+    int nLog;
     sqlite3_open(dbpath, &db);
-    int nLog = exec_user_commit_count(db);
+    nLog = exec_user_commit_count(db);
     check("test_04: at least commit-1 present", nLog>=1);
     if( nLog>=2 ){
       int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
@@ -392,8 +393,9 @@ static void test_05_kill_during_second_commit(void){
     check("test_05: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
+      int hasStable;
       check("test_05: at least stable-commit present", nLog>=1);
-      int hasStable = queryScalarInt(db,
+      hasStable = queryScalarInt(db,
         "SELECT count(*) FROM t WHERE val='stable'", -1);
       check("test_05: stable row survives crash", hasStable==1);
     }
@@ -437,8 +439,9 @@ static void test_06_reopen_then_crash(void){
   verify_consistency(dbpath, "test_06");
   {
     sqlite3 *db = 0;
+    int hasFirst;
     sqlite3_open(dbpath, &db);
-    int hasFirst = queryScalarInt(db,
+    hasFirst = queryScalarInt(db,
       "SELECT count(*) FROM t WHERE val='persisted'", -1);
     check("test_06: first commit data survives", hasFirst==1);
     sqlite3_close(db);
@@ -533,6 +536,7 @@ static void test_08_branch_crash(void){
     check("test_08: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       sqlite3_stmt *stmt = 0;
+      int nLog;
       rc = sqlite3_prepare_v2(db,
         "SELECT name, hash FROM dolt_branches", -1, &stmt, 0);
       check("test_08: branches queryable", rc==SQLITE_OK);
@@ -546,7 +550,7 @@ static void test_08_branch_crash(void){
       }
       sqlite3_finalize(stmt);
 
-      int nLog = exec_user_commit_count(db);
+      nLog = exec_user_commit_count(db);
       check("test_08: dolt_log consistent", nLog>=0);
     }
     sqlite3_close(db);
@@ -640,11 +644,11 @@ static void test_11_increasing_data_kill(void){
   if( pid==0 ){
     sqlite3 *db = 0;
     int i, j;
+    int row_id = 1;
     char sql[256];
     sqlite3_open(dbpath, &db);
     execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT)");
 
-    int row_id = 1;
     for( i=1; i<=5; i++ ){
       for( j=0; j<i*10; j++ ){
         snprintf(sql, sizeof(sql),
@@ -728,8 +732,9 @@ static void test_12_gc_crash(void){
     check("test_12: db opens after GC crash", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
+      int nLog;
       check("test_12: table queryable after GC crash", cnt>=0);
-      int nLog = exec_user_commit_count(db);
+      nLog = exec_user_commit_count(db);
       check("test_12: dolt_log works after GC crash", nLog>=1);
     }
     sqlite3_close(db);
@@ -816,8 +821,9 @@ static void test_14_gc_with_branches_crash(void){
   verify_consistency(dbpath, "test_14");
   {
     sqlite3 *db = 0;
+    int nBranch;
     sqlite3_open(dbpath, &db);
-    int nBranch = queryScalarInt(db,
+    nBranch = queryScalarInt(db,
       "SELECT count(*) FROM dolt_branches", -1);
     check("test_14: both branches survive GC crash", nBranch==2);
     sqlite3_close(db);
@@ -1146,8 +1152,9 @@ static void test_21_drop_table_crash(void){
     check("test_21: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       int cnt_t = queryScalarInt(db, "SELECT count(*) FROM t", -1);
+      int cnt_t2;
       check("test_21: table t exists", cnt_t==1);
-      int cnt_t2 = queryScalarInt(db, "SELECT count(*) FROM t2", -2);
+      cnt_t2 = queryScalarInt(db, "SELECT count(*) FROM t2", -2);
       check("test_21: t2 state consistent",
             cnt_t2==1 || cnt_t2==-2);
     }
@@ -1196,9 +1203,10 @@ static void test_22_multi_table_commit_crash(void){
         int allOk = 1;
         for( i=1; i<=10; i++ ){
           char sql[128];
+          int cnt;
           snprintf(sql, sizeof(sql),
                    "SELECT count(*) FROM t%d", i);
-          int cnt = queryScalarInt(db, sql, -1);
+          cnt = queryScalarInt(db, sql, -1);
           if( cnt!=1 ) allOk = 0;
         }
         check("test_22: all 10 tables present if committed", allOk);
@@ -1250,8 +1258,9 @@ static void test_23_merge_crash(void){
   verify_consistency(dbpath, "test_23");
   {
     sqlite3 *db = 0;
+    int cnt;
     sqlite3_open(dbpath, &db);
-    int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
+    cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
     check("test_23: row count is 1 or 2",
           cnt==1 || cnt==2);
     sqlite3_close(db);
@@ -1316,8 +1325,9 @@ static void test_24_repeated_crash_cycles(void){
 
   {
     sqlite3 *db = 0;
+    int hasSeed;
     sqlite3_open(dbpath, &db);
-    int hasSeed = queryScalarInt(db,
+    hasSeed = queryScalarInt(db,
       "SELECT count(*) FROM t WHERE val='seed'", -1);
     check("test_24: seed row always present", hasSeed==1);
     sqlite3_close(db);
@@ -1350,10 +1360,12 @@ static void test_25_tag_crash(void){
   verify_consistency(dbpath, "test_25");
   {
     sqlite3 *db = 0;
+    int nLog;
+    int cnt;
     sqlite3_open(dbpath, &db);
-    int nLog = exec_user_commit_count(db);
+    nLog = exec_user_commit_count(db);
     check("test_25: commit present", nLog>=1);
-    int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
+    cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
     check("test_25: data intact", cnt==1);
     sqlite3_close(db);
   }
@@ -1398,8 +1410,9 @@ static void test_26_blob_data_crash(void){
       check("test_26: commit atomic (0 or 1)", nLog==0 || nLog==1);
       if( nLog==1 ){
         int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
+        int blobLen;
         check("test_26: all 50 blob rows if committed", cnt==50);
-        int blobLen = queryScalarInt(db,
+        blobLen = queryScalarInt(db,
           "SELECT length(data) FROM t WHERE id=0", -1);
         check("test_26: blob data intact", blobLen==1024);
       }
@@ -1443,10 +1456,12 @@ static void test_27_uncommitted_changes_crash(void){
 
   {
     sqlite3 *db = 0;
+    int nLog;
+    int committed;
     sqlite3_open(dbpath, &db);
-    int nLog = exec_user_commit_count(db);
+    nLog = exec_user_commit_count(db);
     check("test_27: only baseline commit", nLog==1);
-    int committed = queryScalarInt(db,
+    committed = queryScalarInt(db,
       "SELECT count(*) FROM t WHERE val='committed'", -1);
     check("test_27: committed data present", committed==1);
     sqlite3_close(db);
@@ -1544,8 +1559,9 @@ static void test_29_gc_after_many_commits(void){
     check("test_29: db opens after GC crash", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
+      int cnt;
       check("test_29: all 10 commits present", nLog==10);
-      int cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
+      cnt = queryScalarInt(db, "SELECT count(*) FROM t", -1);
       check("test_29: all 10 rows present", cnt==10);
     }
     sqlite3_close(db);

@@ -39,7 +39,7 @@ jobs:
 
     - name: Install macOS build dependencies
       if: matrix.platform == 'macos'
-      run: brew install tcl-tk
+      run: brew install ripgrep tcl-tk
 
     - name: Install Go toolchain
       if: matrix.platform == 'ubuntu'
@@ -101,10 +101,10 @@ jobs:
         set -o pipefail
         {
           make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
-          cc $CFLAGS -I. -I../src \
+          cc $CFLAGS -Wno-comment -I. -I../src \
             -o threadtest4 ../test/threadtest4.c sqlite3.c \
             -ldl -lpthread -lm -lz
-          cc $CFLAGS -I. -I../src \
+          cc $CFLAGS -Wno-comment -I. -I../src \
             -o threadtest5 ../test/threadtest5.c sqlite3.c \
             -ldl -lpthread -lm -lz
           gcc $CFLAGS -o quickstart \
@@ -286,7 +286,8 @@ jobs:
           sqllogictest.c md5.o sqlite3.o -lpthread -lm -lodbc
         cp ../../sqlite3.c sqlite3.c
         cp ../../sqlite3.h sqlite3.h
-        gcc -Werror -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=1 \
+        gcc -Werror -Wno-comment -g -O2 \
+          -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=1 \
           -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c \
           -o sqlite3-doltlite.o
         gcc -Werror -g -O2 -o sqllogictest-doltlite \
@@ -315,7 +316,7 @@ jobs:
     timeout-minutes: 20
     env:
       CC: clang
-      CFLAGS: -O1 -g -Werror -fprofile-instr-generate -fcoverage-mapping
+      CFLAGS: -O1 -g -Werror -Wno-comment -fprofile-instr-generate -fcoverage-mapping
       LDFLAGS: -fprofile-instr-generate
 
     steps:
@@ -447,10 +448,12 @@ jobs:
         include:
           - platform: ubuntu
             runs-on: ubuntu-latest
+            warning-flags: ''
           - platform: macos
             runs-on: macos-latest
+            warning-flags: -Wno-deprecated-declarations
     env:
-      ASAN_CFLAGS: -O1 -g -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+      ASAN_CFLAGS: -O1 -g -Werror ${{ matrix.warning-flags }} -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
       ASAN_LDFLAGS: -fsanitize=address,undefined
 
     steps:
@@ -515,7 +518,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      TSAN_CFLAGS: -O1 -g -Werror -fsanitize=thread -fno-omit-frame-pointer
+      TSAN_CFLAGS: -O1 -g -Werror -Wno-comment -fsanitize=thread -fno-omit-frame-pointer
       TSAN_LDFLAGS: -fsanitize=thread
 
     steps:
@@ -730,7 +733,9 @@ jobs:
           ../configure
           make doltlite
           cd ..
-          make -C ext/wasm fiddle npm dist
+          make -C ext/wasm \
+            emcc_opt='-Oz -Wno-limited-postlink-optimizations' \
+            fiddle npm dist
         } 2>&1 | tee wasm-build.log
         if grep -E "warning:" wasm-build.log; then
           echo "::error::compiler warnings in wasm build"
