@@ -28,7 +28,7 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         bash .github/scripts/install-apt-deps.sh \
-          build-essential fossil ripgrep tcl-dev unixodbc-dev zlib1g-dev
+          build-essential ripgrep tcl-dev zlib1g-dev
 
     - name: Install Windows build dependencies
       if: matrix.platform == 'windows'
@@ -166,6 +166,10 @@ jobs:
           make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
             doltlite.exe doltlite-remotesrv.exe doltlite-lib
           make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+          cc $CFLAGS -I. -I../src \
+            -o doltlite_regression_test_c \
+            ../test/doltlite_regression_test_c.c libdoltlite.a \
+            -lz -lpthread -lm -lws2_32 -lbcrypt -lcrypt32
         } 2>&1 | tee build.log
         DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 \
           bash ../test/assert_doltlite_artifacts.sh .
@@ -267,8 +271,45 @@ jobs:
           exit 1
         fi
 
+    - name: Package checked build
+      if: matrix.platform != 'windows'
+      run: tar -czf checked-build-${{ matrix.platform }}.tar.gz build
+
+    - name: Package checked Windows build
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: tar -czf checked-build-windows.tar.gz build
+
+    - name: Upload checked build
+      uses: actions/upload-artifact@v4
+      with:
+        name: checked-build-${{ matrix.platform }}
+        path: checked-build-${{ matrix.platform }}.tar.gz
+        retention-days: 1
+
+  sqllogictest-build:
+    name: sqllogictest
+    needs: checked
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential fossil unixodbc-dev
+
+    - name: Download checked Linux build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
+
+    - name: Extract checked Linux build
+      run: tar -xzf checked-build-ubuntu.tar.gz
+
     - name: Build sqllogictest runners
-      if: matrix.platform == 'ubuntu'
       run: |
         fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
         mkdir -p build/sqllogictest
@@ -299,20 +340,14 @@ jobs:
           sqllogictest.c md5.o sqlite3-doltlite.o \
           -lpthread -lm -lz -lodbc
 
-    - name: Package checked build
-      if: matrix.platform != 'windows'
-      run: tar -czf checked-build-${{ matrix.platform }}.tar.gz build
+    - name: Package
+      run: tar -czf sqllogictest-build.tar.gz build/sqllogictest
 
-    - name: Package checked Windows build
-      if: matrix.platform == 'windows'
-      shell: msys2 {0}
-      run: tar -czf checked-build-windows.tar.gz build
-
-    - name: Upload checked build
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: checked-build-${{ matrix.platform }}
-        path: checked-build-${{ matrix.platform }}.tar.gz
+        name: sqllogictest-build
+        path: sqllogictest-build.tar.gz
         retention-days: 1
 
   coverage-build:
@@ -739,7 +774,11 @@ jobs:
           ../configure
           make doltlite
           cd ..
-          make -C ext/wasm fiddle npm dist
+          make -C ext/wasm fiddle npm
+          mkdir -p ci-wasm-runtime
+          cp -a ext/wasm/jswasm/. ci-wasm-runtime/
+          make -C ext/wasm dist
+          cp -a ci-wasm-runtime/. ext/wasm/jswasm/
         } 2>&1 | tee wasm-build.log
         if grep -E "warning:" wasm-build.log; then
           echo "::error::compiler warnings in wasm build"
@@ -799,9 +838,15 @@ jobs:
         retention-days: 1
 
   development-builds:
-    name: development-configurations
+    name: development-${{ matrix.configuration }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - All-Debug
+          - All-O0
     env:
       CFLAGS: -O2 -g -Werror
 
@@ -829,7 +874,8 @@ jobs:
         cd build
         make DOLTLITE_PROLLY=1 testfixture
         ./testfixture ../test/testrunner.tcl \
-          --buildonly --jobs 4 mdevtest
+          --buildonly --jobs 4 \
+          --config ${{ matrix.configuration }} mdevtest
 
   assert-build:
     name: assert-enabled

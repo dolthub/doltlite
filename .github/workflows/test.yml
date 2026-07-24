@@ -158,13 +158,13 @@ jobs:
     - name: Install dependencies
       run: bash .github/scripts/install-apt-deps.sh zlib1g-dev unixodbc
 
-    - name: Download checked build
+    - name: Download sqllogictest build
       uses: actions/download-artifact@v4
       with:
-        name: checked-build-ubuntu
+        name: sqllogictest-build
 
-    - name: Extract checked build
-      run: tar -xzf checked-build-ubuntu.tar.gz
+    - name: Extract sqllogictest build
+      run: tar -xzf sqllogictest-build.tar.gz
 
     - name: Run full sqllogictest suite
       run: |
