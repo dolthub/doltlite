@@ -914,6 +914,9 @@ standard behavior); reads are concurrent.
 
 ## Performance
 
+The latest automated DoltLite-versus-SQLite measurements are published in the
+[nightly performance report](performance-report.md).
+
 ### Sysbench OLTP Benchmarks: Doltlite vs SQLite
 
 Doltlite retains SQLite's SQL engine and C API while replacing its storage
@@ -929,12 +932,15 @@ a section, suite, or overall runtime regresses by more than 15% and 5ms.
 Short, process-startup-bound version-control operations use a 50% and 25ms
 individual gate; their aggregate still uses the 15% suite gate.
 
-A scheduled nightly workflow runs longer, higher-sample comparisons against
-stock SQLite and enforces the absolute multiplier ceilings. It also runs the
-version-control latency ceilings with additional repetitions. A regression
-opens or updates a `nightly-performance-regression` issue, while every run
-publishes raw samples and a combined report. The per-release SQLite comparison
-is still published with each release on the
+A scheduled workflow starts nightly at 09:30 UTC, after the nightly fuzzing
+window. Four parallel workers run 55 paired samples per SQL workload against
+stock SQLite, while the version-control latency suite runs 101 samples per
+benchmark. A regression opens or updates a
+`nightly-performance-regression` issue. Each structurally complete run also
+publishes raw samples as 30-day artifacts and opens a rolling, reviewable PR
+for `performance-report.md`; the next run safely merges the prior report before
+opening its own. The per-release SQLite comparison is still published with
+each release on the
 [GitHub releases page](https://github.com/dolthub/doltlite/releases).
 
 ### Algorithmic Complexity

@@ -2,21 +2,22 @@ name: Nightly performance
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '30 9 * * *'
   workflow_dispatch:
     inputs:
       runs:
         description: Paired repetitions for each sysbench-style workload
         required: false
-        default: "21"
+        default: "55"
       vc-runs:
         description: Repetitions for each version-control benchmark
         required: false
-        default: "15"
+        default: "101"
 
 permissions:
-  contents: read
+  contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: nightly-performance
@@ -79,7 +80,7 @@ jobs:
     name: ${{ matrix.suite.name }}-keys
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -107,11 +108,12 @@ jobs:
     - name: Run absolute benchmark
       id: benchmark
       env:
-        BENCH_RUNS: ${{ github.event.inputs.runs || '21' }}
-        BENCH_AC_WRITE_RUNS: ${{ github.event.inputs.runs || '21' }}
+        BENCH_RUNS: ${{ github.event.inputs.runs || '55' }}
+        BENCH_AC_WRITE_RUNS: ${{ github.event.inputs.runs || '55' }}
       run: |
         results="$RUNNER_TEMP/nightly-results"
         mkdir -p "$results"
+        started_at=$(date +%s)
         set +e
         (
           cd build-nightly
@@ -122,7 +124,10 @@ jobs:
           2> "$results/${{ matrix.suite.name }}.stderr"
         bench_rc=$?
         set -e
+        finished_at=$(date +%s)
         echo "$bench_rc" > "$results/${{ matrix.suite.name }}.status"
+        echo "$((finished_at - started_at))" \
+          > "$results/${{ matrix.suite.name }}.duration"
         cat "$results/${{ matrix.suite.name }}.md"
         cat "$results/${{ matrix.suite.name }}.stderr" >&2
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
@@ -145,7 +150,7 @@ jobs:
   version-control:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 150
 
     steps:
     - uses: actions/checkout@v4
@@ -161,10 +166,11 @@ jobs:
     - name: Run absolute version-control benchmark
       id: benchmark
       env:
-        VC_PERF_RUNS: ${{ github.event.inputs.vc-runs || '15' }}
+        VC_PERF_RUNS: ${{ github.event.inputs.vc-runs || '101' }}
       run: |
         results="$RUNNER_TEMP/nightly-results"
         mkdir -p "$results"
+        started_at=$(date +%s)
         set +e
         (
           cd build-nightly
@@ -174,7 +180,9 @@ jobs:
         ) > "$results/vc.md" 2> "$results/vc.stderr"
         bench_rc=$?
         set -e
+        finished_at=$(date +%s)
         echo "$bench_rc" > "$results/vc.status"
+        echo "$((finished_at - started_at))" > "$results/vc.duration"
         cat "$results/vc.md"
         cat "$results/vc.stderr" >&2
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
@@ -195,7 +203,7 @@ jobs:
         exit "$rc"
 
   report:
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs:
       - sysbench
       - version-control
@@ -204,6 +212,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
 
     - name: Download nightly measurements
       continue-on-error: true
@@ -213,38 +223,34 @@ jobs:
         path: nightly-results
         merge-multiple: true
 
+    - name: Test report generation and publication guards
+      run: |
+        python3 test/nightly_performance_report_test.py
+        python3 test/publish_performance_report_test.py
+
     - name: Compose nightly report
       id: report
       run: |
-        summary="$RUNNER_TEMP/nightly-performance.md"
+        summary="$RUNNER_TEMP/performance-report.md"
         issue_body="$RUNNER_TEMP/nightly-performance-failure.md"
+        generator_stderr="$RUNNER_TEMP/performance-report.stderr"
         suites="int textpk blobpk compositepk vc"
         failed=0
+        valid=1
+        generated_at=$(date -u '+%Y-%m-%d %H:%M UTC')
+        generated_date=$(date -u '+%Y-%m-%d')
+        run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
         {
-          echo "## Nightly DoltLite performance"
-          echo ""
-          echo "Absolute SQLite multipliers and version-control latency ceilings."
-          echo ""
-        } > "$summary"
-        {
-          echo "Nightly performance exceeded one or more absolute ceilings."
+          echo "Nightly performance failed or produced incomplete results."
           echo ""
         } > "$issue_body"
 
         for suite in $suites; do
           status_file="nightly-results/$suite.status"
-          report_file="nightly-results/$suite.md"
           stderr_file="nightly-results/$suite.stderr"
           status=1
           if [ -s "$status_file" ]; then
             status=$(cat "$status_file")
-          fi
-          if [ -s "$report_file" ]; then
-            cat "$report_file" >> "$summary"
-            echo "" >> "$summary"
-          else
-            echo "**${suite}: missing report**" >> "$summary"
-            echo "" >> "$summary"
           fi
           if [ "$status" != "0" ]; then
             failed=1
@@ -263,12 +269,46 @@ jobs:
           fi
         done
 
+        set +e
+        python3 test/nightly_performance_report.py \
+          --results-dir nightly-results \
+          --commit "$GITHUB_SHA" \
+          --run-url "$run_url" \
+          --generated-at "$generated_at" \
+          --runner "${ImageOS:-ubuntu-latest} ${ImageVersion:-}" \
+          --output "$summary" \
+          2> "$generator_stderr"
+        generator_rc=$?
+        set -e
+        if [ "$generator_rc" -ne 0 ]; then
+          valid=0
+          failed=1
+          {
+            echo "### Report generation"
+            echo ""
+            echo '```text'
+            cat "$generator_stderr"
+            echo '```'
+          } >> "$issue_body"
+          {
+            echo "## Nightly DoltLite performance"
+            echo ""
+            echo "**FAILED:** unable to generate the checked-in report."
+            echo ""
+            echo '```text'
+            cat "$generator_stderr"
+            echo '```'
+          } > "$summary"
+        fi
+
         cat "$summary" >> "$GITHUB_STEP_SUMMARY"
-        cp "$summary" nightly-results/summary.md
+        cp "$summary" nightly-results/performance-report.md
         cp "$issue_body" nightly-results/failure.md
         echo "failed=$failed" >> "$GITHUB_OUTPUT"
-        echo "summary=$summary" >> "$GITHUB_OUTPUT"
+        echo "valid=$valid" >> "$GITHUB_OUTPUT"
+        echo "report=$summary" >> "$GITHUB_OUTPUT"
         echo "issue_body=$issue_body" >> "$GITHUB_OUTPUT"
+        echo "generated_date=$generated_date" >> "$GITHUB_OUTPUT"
 
     - name: Upload combined nightly report
       if: always()
@@ -279,7 +319,10 @@ jobs:
         retention-days: 30
 
     - name: Report regression as GitHub issue
-      if: steps.report.outputs.failed == '1'
+      if: >-
+        ${{ always() &&
+            github.ref == 'refs/heads/master' &&
+            steps.report.outputs.failed == '1' }}
       uses: ./.github/actions/report-failure-issue
       with:
         label: nightly-performance-regression
@@ -288,6 +331,24 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         label-description: Nightly absolute performance ceiling failure
 
+    - name: Publish rolling performance report PR
+      if: >-
+        ${{ always() &&
+            github.ref == 'refs/heads/master' &&
+            steps.report.outputs.valid == '1' }}
+      env:
+        GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+        PERFORMANCE_REPORT_REVIEWER: ${{ vars.PERFORMANCE_REPORT_REVIEWER }}
+      run: |
+        python3 tool/publish-performance-report.py \
+          --report "${{ steps.report.outputs.report }}" \
+          --repository "$GITHUB_REPOSITORY" \
+          --run-id "$GITHUB_RUN_ID" \
+          --run-attempt "$GITHUB_RUN_ATTEMPT" \
+          --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+          --generated-date "${{ steps.report.outputs.generated_date }}" \
+          --reviewer "$PERFORMANCE_REPORT_REVIEWER"
+
     - name: Fail when a ceiling regressed
-      if: steps.report.outputs.failed == '1'
+      if: ${{ always() && steps.report.outputs.failed == '1' }}
       run: exit 1

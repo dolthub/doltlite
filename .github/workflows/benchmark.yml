@@ -160,6 +160,11 @@ jobs:
         else
           baseline=$(cat benchmark-baseline-sha)
           candidate=$(cat benchmark-candidate-sha)
+          expected_candidate=$(git rev-parse HEAD)
+          expected_baseline="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$expected_baseline" ]; then
+            expected_baseline="$baseline"
+          fi
           set +e
           python3 test/benchmark_compare.py \
             --input "int=benchmark-results/int.tsv" \
@@ -169,6 +174,8 @@ jobs:
             --input "vc=benchmark-results/vc.tsv" \
             --baseline-ref "$baseline" \
             --candidate-ref "$candidate" \
+            --expected-baseline-ref "$expected_baseline" \
+            --expected-candidate-ref "$expected_candidate" \
             --individual-ratio 1.25 \
             --aggregate-ratio 1.15 \
             --min-delta-us 5000 \
