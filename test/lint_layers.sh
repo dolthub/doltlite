@@ -19,6 +19,19 @@ for f in "$SRCDIR"/prolly_btree*.c; do
   fi
 done
 
+# Cursor count extraction: require the split file. Cap only the extracted
+# module at 1500 for now; the parent cursor file is tightened after
+# payload/seek extractions land.
+if [ ! -f "$SRCDIR/prolly_btree_cursor_count.c" ]; then
+  lint "$SRCDIR/prolly_btree_cursor_count.c: missing — prolly cursor count must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_count.c" | tr -d ' ')
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_count.c:$nline lines — prolly_btree_cursor_count.c must stay at or below 1500 lines"
+  fi
+fi
+
+
 # Keep doltlite merge split into reviewable units. The core catalog/rows/
 # schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file
 # and still pass by only checking what remains) and stay under 1500 lines.
