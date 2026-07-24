@@ -37,6 +37,24 @@ static char *zDbName = 0;
 /* True for debugging */
 static int eVerbose = 0;
 
+/* Default busy timeout (ms). Contended multi-writer runs on slower
+** storage (CI, prolly) easily exceed 2s and spuriously leave work
+** unfinished when workers treat BUSY as "no tasks left". Override with
+** THREADTEST5_BUSY_MS. */
+#ifndef THREADTEST5_DEFAULT_BUSY_MS
+# define THREADTEST5_DEFAULT_BUSY_MS 30000
+#endif
+
+/* How long to sleep between claim/work retries under BUSY/LOCKED. */
+#ifndef THREADTEST5_RETRY_SLEEP_MS
+# define THREADTEST5_RETRY_SLEEP_MS 10
+#endif
+
+/* Cap on retries for a single statement after the busy timeout fires. */
+#ifndef THREADTEST5_MAX_RETRIES
+# define THREADTEST5_MAX_RETRIES 100
+#endif
+
 /* If rc is not SQLITE_OK, then print an error message and stop
 ** the test.
 */
@@ -45,6 +63,11 @@ static void error_out(int rc, const char *zCtx, int lineno){
     fprintf(stderr, "error %d at %d in \"%s\"\n", rc, lineno, zCtx);
     exit(-1);
   }
+}
+
+static int is_busy_rc(int rc){
+  return rc==SQLITE_BUSY || rc==SQLITE_LOCKED
+      || rc==SQLITE_BUSY_RECOVERY || rc==SQLITE_BUSY_SNAPSHOT;
 }
 
 #if 0
@@ -84,6 +107,59 @@ static int exec(
   }
   sqlite3_free(zSql);
   return rc;
+}
+
+/* Like exec(), but retries on BUSY/LOCKED and aborts on any other error.
+** Workers previously ignored failed inserts/deletes, so a single busy
+** write left p1/p2 inconsistent and the final EXCEPT checks failed.
+*/
+static void exec_ok(
+  sqlite3 *db,
+  const char *zId,
+  int lineno,
+  const char *zFormat,
+  ...
+){
+  int rc = SQLITE_ERROR;
+  int i;
+  char *zSql;
+  va_list ap;
+
+  va_start(ap, zFormat);
+  zSql = sqlite3_vmprintf(zFormat, ap);
+  va_end(ap);
+  if( !zSql ){
+    fprintf(stderr, "%s:%d: out of memory formatting SQL\n", zId, lineno);
+    exit(-1);
+  }
+
+  for(i=0; i<THREADTEST5_MAX_RETRIES; i++){
+    if( eVerbose ){
+      printf("%s:%d: [%s]%s\n", zId, lineno, zSql,
+             i ? " (retry)" : "");
+      fflush(stdout);
+    }
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    if( rc==SQLITE_OK ){
+      sqlite3_free(zSql);
+      return;
+    }
+    if( !is_busy_rc(rc) ){
+      fprintf(stderr, "%s:%d: ERROR %d - %s\n  SQL: %s\n",
+              zId, lineno, rc, sqlite3_errmsg(db), zSql);
+      sqlite3_free(zSql);
+      exit(-1);
+    }
+    if( eVerbose ){
+      printf("%s:%d: busy/locked (%d), retry %d\n", zId, lineno, rc, i+1);
+      fflush(stdout);
+    }
+    sqlite3_sleep(THREADTEST5_RETRY_SLEEP_MS + i);
+  }
+  fprintf(stderr, "%s:%d: ERROR %d after %d retries - %s\n  SQL: %s\n",
+          zId, lineno, rc, THREADTEST5_MAX_RETRIES, sqlite3_errmsg(db), zSql);
+  sqlite3_free(zSql);
+  exit(-1);
 }
 
 /* Generate a perpared statement from the input SQL
@@ -160,28 +236,55 @@ static void *worker(void *pArg){
   error_out(rc, "sqlite3_open", __LINE__);
   {
     const char *zBusyMs = getenv("THREADTEST5_BUSY_MS");
-    sqlite3_busy_timeout(db, zBusyMs ? atoi(zBusyMs) : 2000);
+    int ms = zBusyMs ? atoi(zBusyMs) : THREADTEST5_DEFAULT_BUSY_MS;
+    if( ms<0 ) ms = THREADTEST5_DEFAULT_BUSY_MS;
+    sqlite3_busy_timeout(db, ms);
   }
 
   while( 1 ){
     sqlite3_stmt *q1;
     int tid = -1;
-    q1 = prepare(db, zName, __LINE__,
-            "UPDATE task SET doneby=%Q"
-            " WHERE tid=(SELECT tid FROM task WHERE doneby IS NULL LIMIT 1)"
-            "RETURNING tid", zName
-    );
-    if( sqlite3_step(q1)==SQLITE_ROW ){
-      tid = sqlite3_column_int(q1,0);
+    int rcStep;
+    int iRetry;
+
+    /* Claim one unfinished task. BUSY used to look like "no work left",
+    ** so workers exited early while tasks remained unclaimed. */
+    for(iRetry=0; ; iRetry++){
+      q1 = prepare(db, zName, __LINE__,
+              "UPDATE task SET doneby=%Q"
+              " WHERE tid=(SELECT tid FROM task WHERE doneby IS NULL LIMIT 1)"
+              "RETURNING tid", zName
+      );
+      rcStep = sqlite3_step(q1);
+      if( rcStep==SQLITE_ROW ){
+        tid = sqlite3_column_int(q1,0);
+        sqlite3_finalize(q1);
+        break;
+      }
+      sqlite3_finalize(q1);
+      if( rcStep==SQLITE_DONE ){
+        tid = -1;
+        break;
+      }
+      if( is_busy_rc(rcStep) && iRetry<THREADTEST5_MAX_RETRIES ){
+        if( eVerbose ){
+          printf("%s: claim busy (%d), retry %d\n", zName, rcStep, iRetry+1);
+          fflush(stdout);
+        }
+        sqlite3_sleep(THREADTEST5_RETRY_SLEEP_MS + iRetry);
+        continue;
+      }
+      fprintf(stderr, "%s: ERROR claiming task: %d - %s\n",
+              zName, rcStep, sqlite3_errmsg(db));
+      exit(-1);
     }
-    sqlite3_finalize(q1);
     if( tid<0 ) break;
     if( eVerbose ){
       printf("%s: starting task %d\n", zName, tid);
       fflush(stdout);
     }
     if( tid==1 ){
-      exec(db, zName, __LINE__,
+      exec_ok(db, zName, __LINE__,
          "CREATE TABLE IF NOT EXISTS p1(x INTEGER PRIMARY KEY);"
       );
     }else if( tid>=2 && tid<=51 ){
@@ -191,12 +294,12 @@ static void *worker(void *pArg){
       b = a+200;
       for(i=a; i<b; i++){
         if( isPrime(i) ){
-          exec(db, zName, __LINE__,
+          exec_ok(db, zName, __LINE__,
               "INSERT INTO p1(x) VALUES(%d)", i);
         }
       }
     }else if( tid==52 ){
-      exec(db, zName, __LINE__,
+      exec_ok(db, zName, __LINE__,
          "BEGIN IMMEDIATE;"
          "CREATE TABLE IF NOT EXISTS p2(x INTEGER PRIMARY KEY);"
          "WITH RECURSIVE"
@@ -210,7 +313,7 @@ static void *worker(void *pArg){
       a = (tid-53)*10 + 2;
       b = a+9;
       for(i=a; i<=b; i++){
-        exec(db, zName, __LINE__,
+        exec_ok(db, zName, __LINE__,
           "DELETE FROM p2 WHERE x>%d AND (x %% %d)==0", i, i);
       }
     }

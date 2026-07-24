@@ -143,6 +143,10 @@ jobs:
         ./threadtest4 --multithread 6
 
     - name: Run threadtest5
+      env:
+        # Match sanitizers.yml: multi-writer prolly runs on shared CI hosts
+        # can exceed a short busy timeout and leave p1/p2 inconsistent.
+        THREADTEST5_BUSY_MS: "60000"
       run: |
         cd build
         rm -f /tmp/doltlite-threadtest5.db
