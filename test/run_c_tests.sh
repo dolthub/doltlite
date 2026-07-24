@@ -58,10 +58,13 @@ case "$SUITE_SET" in
     ;;
 esac
 
-# Build what we gate on. CI's test phase unpacks a binaries-only artifact with no
-# Makefile, so "auto" builds locally and stays out of the way there -- the point
-# is that a developer running this never silently validates last week's binaries.
+# Build what we gate on, so a developer running this never silently validates
+# last week's binaries. Skipped under CI, where the build phase already produced
+# these and the extracted tree's mtimes would force a pointless full rebuild.
 did_build=0
+if [ "$BUILD_MODE" = auto ] && dl_is_ci; then
+  BUILD_MODE=never
+fi
 if [ "$BUILD_MODE" != never ] && [ -f Makefile ]; then
   echo "=== building gated C tests (make doltlite-c-tests-build) ==="
   if make doltlite-c-tests-build; then
@@ -78,11 +81,11 @@ elif [ "$BUILD_MODE" = always ]; then
   exit 2
 fi
 
-# Only meaningful when we did not just build: a stale binary is the failure mode
-# that reports a pass for code that no longer exists.
+# Only meaningful when we did not just build, and only off CI: a stale binary is
+# the failure mode that reports a pass for code that no longer exists.
 src_epoch=""
-if [ "$did_build" -eq 0 ]; then
-  src_epoch=$(dl_newest_source_epoch "$REPO_ROOT" || true)
+if [ "$did_build" -eq 0 ] && ! dl_is_ci; then
+  src_epoch=$(dl_newest_source_epoch "$REPO_ROOT")
 fi
 
 passed=0

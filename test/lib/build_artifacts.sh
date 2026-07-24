@@ -5,6 +5,15 @@
 # phase -- so these checks exist for local runs, where a stale binary silently
 # reports a pass for code that no longer exists.
 
+# Both guards are local-only, and not merely as an optimisation: CI's test phase
+# untars a build directory whose mtimes predate its own fresh checkout, so every
+# artifact there looks stale and every make target looks out of date. Applying
+# either guard would mean a guaranteed false positive and a full rebuild in a
+# phase whose whole point is not to build.
+dl_is_ci() {
+  [ -n "${CI:-}" ]
+}
+
 # Every query here reports "unknown" as empty output with status 0, never a
 # non-zero status: callers run under `set -euo pipefail`, where a grep that
 # legitimately matches nothing would otherwise abort the caller mid-run -- the

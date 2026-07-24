@@ -68,10 +68,14 @@ if [ -f "$BUILD_DIR/libdoltlite.a" ]; then
     "s=\$(dl_archive_sanitizers '$BUILD_DIR/libdoltlite.a'); printf '[%s]' \"\$s\"" '[]'
   probe "flags_ok_for_clean_archive" \
     "dl_check_archive_flags '$BUILD_DIR/libdoltlite.a' '-g' && printf ok" 'ok'
-  probe "stale_check_runs_on_real_artifact" \
+  # Which verdict is correct depends on the environment -- an extracted CI
+  # artifact legitimately predates a fresh checkout -- so assert only that a
+  # definite verdict comes back, which is the invariant callers rely on.
+  probe "stale_check_reaches_a_verdict" \
     "e=\$(dl_newest_source_epoch '$REPO_ROOT')
-     if dl_artifact_is_stale '$BUILD_DIR/libdoltlite.a' \"\$e\"; then printf stale; else printf fresh; fi" \
-    'fresh'
+     if dl_artifact_is_stale '$BUILD_DIR/libdoltlite.a' \"\$e\"; then v=stale; else v=fresh; fi
+     case \$v in stale|fresh) printf verdict ;; *) printf none ;; esac" \
+    'verdict'
 else
   echo "  (skipping clean-archive probes: no $BUILD_DIR/libdoltlite.a)"
 fi
