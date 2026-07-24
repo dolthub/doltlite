@@ -632,7 +632,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_catalog_types.h $(TOP)/src/doltlite_commit.h \
     $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
-    $(TOP)/src/doltlite_merge_int.h $(TOP)/src/doltlite_parse.h \
+    $(TOP)/src/doltlite_branch_int.h $(TOP)/src/doltlite_merge_int.h $(TOP)/src/doltlite_parse.h \
     $(TOP)/src/doltlite_name_index.h \
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
     $(TOP)/src/doltlite_creds.h $(TOP)/src/doltlite_net.h $(TOP)/src/doltlite_tls.h \
@@ -1615,7 +1615,7 @@ doltlite_ref.o:	$(TOP)/src/doltlite_ref.c \
 doltlite_diff.o:	$(TOP)/src/doltlite_diff.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff.c
 
-doltlite_branch.o:	$(TOP)/src/doltlite_branch.c $(DEPS_OBJ_COMMON)
+doltlite_branch.o:	$(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_branch_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_branch.c
 
 doltlite_tag.o:	$(TOP)/src/doltlite_tag.c $(DEPS_OBJ_COMMON)
