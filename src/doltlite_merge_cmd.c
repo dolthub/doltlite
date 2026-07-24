@@ -274,6 +274,9 @@ int doltliteMergeRef(
       ProllyHash conflictsHash;
       doltliteGetSessionConflictsCatalog(db, &conflictsHash);
       rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+      /* Caching the spec only sharpens dolt_merge_status.source, which falls
+      ** back to the branch at theirHead, so losing it must not fail the merge. */
+      (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
       if( rc!=SQLITE_OK ){
         doltliteCommitClear(&ourCommit);
         doltliteCommitClear(&theirCommit);
@@ -442,6 +445,19 @@ int doltliteMergeRef(
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
+      /* A merge stopped by constraint violations is as unfinished as one
+      ** stopped by conflicts: the caller has to resolve
+      ** dolt_constraint_violations and commit. Record the merge so
+      ** dolt_merge_status reports it, before the finish path persists the
+      ** working set. Redundant when conflicts already set it, and the
+      ** autocommit/nested-savepoint modes inside the finish call roll it back
+      ** with the rest of the merge. */
+      ProllyHash cvConflictsHash;
+      doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
+      if( doltliteSetSessionMergeState(db, 1, &theirHead,
+                                      &cvConflictsHash)==SQLITE_OK ){
+        (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
+      }
       (void)doltliteCmdFinishWithConstraintViolations(
           db, context, &savedState, "Merge", 0,
           "Merge aborted: would have introduced constraint violations. "

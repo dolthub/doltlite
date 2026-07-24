@@ -619,7 +619,7 @@ proc emit_doltlite_engine_block {} {
     doltlite_reset.c doltlite_merge_cmd.c doltlite_cherry_pick.c
     doltlite_revert.c doltlite_rebase.c doltlite_config.c
     doltlite_commit.c doltlite_ref.c doltlite_log.c
-    doltlite_commit_ancestors.c doltlite_status.c doltlite_diff.c doltlite_diff_table.c
+    doltlite_commit_ancestors.c doltlite_status.c doltlite_merge_status.c doltlite_diff.c doltlite_diff_table.c
     doltlite_workspace.c
     doltlite_branch.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c doltlite_merge_pass1.c doltlite_merge_pass2.c doltlite_merge_rows.c doltlite_merge_schema.c
     doltlite_conflicts.c doltlite_gc.c doltlite_chunk_walk.c

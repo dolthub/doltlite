@@ -13,6 +13,7 @@ doltlite_default_branch.sh
 doltlite_connect_branch.sh
 doltlite_tag.sh
 doltlite_merge.sh
+doltlite_merge_status.sh
 doltlite_merge_index_conflict.sh
 doltlite_index_vc_matrix.sh
 doltlite_stats_merge.sh
@@ -125,6 +126,7 @@ doltlite_branch.sh
 doltlite_open_branch.sh
 doltlite_tag.sh
 doltlite_merge.sh
+doltlite_merge_status.sh
 doltlite_conflicts.sh
 doltlite_diff_table.sh
 doltlite_diff_table_range.sh

@@ -1110,6 +1110,10 @@ int doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
                                  const ProllyHash *pMergeCommit,
                                  const ProllyHash *pConflictsCatalog);
 int doltliteClearSessionMergeState(sqlite3 *db);
+int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
+                                      const ProllyHash *pMergeCommit);
+const char *doltliteGetSessionMergeSourceSpec(sqlite3 *db,
+                                              const ProllyHash *pMergeCommit);
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                    ProllyHash *pPreRebaseCat,
                                    ProllyHash *pRebaseOnto,

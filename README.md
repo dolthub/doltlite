@@ -558,6 +558,22 @@ SELECT dolt_merge('feature');
 -- Returns commit hash (clean merge), or "Merge completed with N conflict(s)"
 ```
 
+#### Merge Status
+
+Always one row. When nothing is merging, `is_merging` is 0 and the rest is NULL.
+
+```sql
+SELECT * FROM dolt_merge_status;
+-- is_merging | source  | source_commit | target          | unmerged_tables
+-- 1          | feature | 0f470f8440... | refs/heads/main | orders, users
+```
+
+`unmerged_tables` is the name-ordered union of tables with data conflicts,
+constraint violations, or schema conflicts. Merge state lives in the working
+set, so a connection that did not run the merge still reports it — but it
+recovers `source` from the branch pointing at the merge commit, falling back to
+the hash when none matches.
+
 #### Conflicts
 
 View and resolve merge conflicts:
