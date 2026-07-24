@@ -9,264 +9,243 @@ permissions:
   pull-requests: write
 
 jobs:
-  int-keys:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    env:
-      BENCH_RUNS: 5
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Download optimized build
-      uses: actions/download-artifact@v4
-      with:
-        name: benchmark-build
-
-    - name: Extract optimized build
-      run: tar -xzf benchmark-build.tar.gz
-
-    - name: Run benchmark
-      id: bench
-      run: |
-        cd build
-        # Capture script exit code separately from the output capture.
-        # Piping to `tee` would mask a ceiling-check failure (tee always
-        # exits 0), letting the job report green on a regression. Stash
-        # the rc and propagate it after the PR-comment step has run, so
-        # results are still visible on a failing run.
-        set +e
-        BENCH_SECTION_MODE=full bash ../test/sysbench_compare.sh > /tmp/bench_results.md
-        bench_rc=$?
-        set -e
-        cat /tmp/bench_results.md
-        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
-
-    - name: Comment PR with results
-      continue-on-error: true
-      uses: actions/github-script@v7
-      with:
-        script: |
-          // Read from file so the multi-line markdown (and any backticks /
-          // template-literal-unsafe chars in it) never has to round-trip
-          // through YAML scalars or JS template-literal parsing.
-          const fs = require('fs');
-          const body = fs.readFileSync('/tmp/bench_results.md', 'utf8');
-
-          if (!context.issue.number) {
-            console.log('No PR context (push event) — skipping comment');
-            return;
-          }
-
-          // Find existing classic benchmark comment
-          const comments = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-          const botComment = comments.data.find(c =>
-            c.body.includes('<!-- benchmark:classic -->') ||
-            c.body.includes('## Sysbench-Style Benchmark: Doltlite vs SQLite')
-          );
-
-          if (botComment) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: botComment.id,
-              body: body,
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body,
-            });
-          }
-
-    - name: Enforce ceiling
-      run: |
-        rc="${{ steps.bench.outputs.bench_rc }}"
-        if [ "$rc" != "0" ]; then
-          echo "Benchmark exceeded performance ceiling (rc=$rc)" >&2
-          exit "$rc"
-        fi
-
-  # Runs non-INTKEY sysbench variants as separate matrix jobs. At 100k rows
-  # each suite is large enough that running all three serially risks hitting
-  # the job timeout before benchmark results can be posted.
-  non-int-keys:
+  sysbench-relative:
     name: ${{ matrix.suite.name }}-keys
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     strategy:
       fail-fast: false
       matrix:
         suite:
+          - name: int
+            script: sysbench_compare.sh
           - name: textpk
             script: sysbench_compare_textpk.sh
-            output: /tmp/bench_textpk.md
-            marker: '<!-- benchmark:textpk -->'
           - name: blobpk
             script: sysbench_compare_blobpk.sh
-            output: /tmp/bench_blobpk.md
-            marker: '<!-- benchmark:blobpk -->'
           - name: compositepk
             script: sysbench_compare_compositepk.sh
-            output: /tmp/bench_compositepk.md
-            marker: '<!-- benchmark:compositepk -->'
-
-    env:
-      BENCH_RUNS: 5
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Download optimized build
+    - name: Download paired optimized build
       uses: actions/download-artifact@v4
       with:
         name: benchmark-build
 
-    - name: Extract optimized build
+    - name: Extract paired optimized build
       run: tar -xzf benchmark-build.tar.gz
 
-    - name: Run benchmark
-      id: bench
+    - name: Measure candidate against PR base
+      env:
+        BENCH_RUNS: 5
+        BENCH_AC_WRITE_RUNS: 9
+        BENCH_BASELINE_LABEL: PR base
+        BENCH_CANDIDATE_LABEL: PR candidate
+        BENCH_BASELINE_KIND: doltlite
+        BENCH_CANDIDATE_KIND: doltlite
+        BENCH_GATE_MODE: none
       run: |
-        cd build
-        # The script enforces the configured individual and average ceilings;
-        # capture rc separately so results are still posted on a failure.
-        set +e
-        bash ../test/${{ matrix.suite.script }} > "${{ matrix.suite.output }}"
-        bench_rc=$?
-        set -e
-        cat "${{ matrix.suite.output }}"
-        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
+        artifact="$GITHUB_WORKSPACE/benchmark-artifact"
+        results="$RUNNER_TEMP/benchmark-results"
+        mkdir -p "$results"
+        BENCH_BASELINE_BINARY="$artifact/baseline/doltlite" \
+          BENCH_CANDIDATE_BINARY="$artifact/candidate/doltlite" \
+          BENCH_BASELINE_TIMER="$artifact/baseline/bench_timer_doltlite" \
+          BENCH_CANDIDATE_TIMER="$artifact/candidate/bench_timer_doltlite" \
+          BENCH_RESULTS_OUTPUT="$results/${{ matrix.suite.name }}.tsv" \
+          BENCH_SAMPLES_OUTPUT="$results/${{ matrix.suite.name }}-samples.tsv" \
+          bash "test/${{ matrix.suite.script }}" \
+          > "$results/${{ matrix.suite.name }}.md"
+        cat "$results/${{ matrix.suite.name }}.md"
 
-    - name: Comment PR with results
-      continue-on-error: true
-      uses: actions/github-script@v7
+    - name: Upload paired measurements
+      uses: actions/upload-artifact@v4
       with:
-        script: |
-          // Read from file so the multi-line markdown (and any backticks /
-          // template-literal-unsafe chars in it) never has to round-trip
-          // through YAML scalars or JS template-literal parsing.
-          const fs = require('fs');
-          const body = fs.readFileSync('${{ matrix.suite.output }}', 'utf8');
+        name: benchmark-result-${{ matrix.suite.name }}
+        path: ${{ runner.temp }}/benchmark-results
+        retention-days: 14
 
-          if (!context.issue.number) {
-            console.log('No PR context (push event) — skipping comment');
-            return;
-          }
-
-          const marker = '${{ matrix.suite.marker }}';
-          const comments = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-          const botComment = comments.data.find(c => c.body.includes(marker));
-
-          if (botComment) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: botComment.id,
-              body: body,
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body,
-            });
-          }
-
-    - name: Enforce ceiling
-      run: |
-        rc="${{ steps.bench.outputs.bench_rc }}"
-        if [ "$rc" != "0" ]; then
-          echo "Benchmark exceeded performance ceiling (rc=$rc)" >&2
-          exit "$rc"
-        fi
-
-  vc-perf:
-    name: version-control-perf
+  vc-relative:
+    name: version-control
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    env:
-      VC_PERF_RUNS: 3
-
     steps:
     - uses: actions/checkout@v4
 
-    - name: Download optimized build
+    - name: Download paired optimized build
       uses: actions/download-artifact@v4
       with:
         name: benchmark-build
 
-    - name: Extract optimized build
+    - name: Extract paired optimized build
       run: tar -xzf benchmark-build.tar.gz
 
-    - name: Run version-control performance benchmarks
-      id: bench
+    - name: Measure candidate against PR base
+      env:
+        VC_PERF_RUNS: 5
+        VC_PERF_BASELINE_LABEL: PR base
+        VC_PERF_CANDIDATE_LABEL: PR candidate
       run: |
-        cd build
-        # Capture rc separately so benchmark output is still posted when
-        # a ceiling fails.
-        set +e
-        bash ../test/vc_perf_ceiling.sh ./doltlite > /tmp/bench_vc_perf.md
-        bench_rc=$?
-        set -e
-        cat /tmp/bench_vc_perf.md
-        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
+        artifact="$GITHUB_WORKSPACE/benchmark-artifact"
+        results="$RUNNER_TEMP/benchmark-results"
+        mkdir -p "$results"
+        VC_PERF_BASELINE="$artifact/baseline/doltlite" \
+          VC_PERF_RESULTS_OUTPUT="$results/vc.tsv" \
+          VC_PERF_SAMPLES_OUTPUT="$results/vc-samples.tsv" \
+          bash test/vc_perf_ceiling.sh "$artifact/candidate/doltlite" \
+          > "$results/vc.md"
+        cat "$results/vc.md"
 
-    - name: Comment PR with results
+    - name: Upload paired measurements
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-result-vc
+        path: ${{ runner.temp }}/benchmark-results
+        retention-days: 14
+
+  relative-report:
+    name: relative-performance-gate
+    if: always()
+    needs:
+      - sysbench-relative
+      - vc-relative
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download paired measurements
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        pattern: benchmark-result-*
+        path: benchmark-results
+        merge-multiple: true
+
+    - name: Download paired build metadata
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-build
+
+    - name: Extract paired build metadata
+      run: tar -xzf benchmark-build.tar.gz
+
+    - name: Test relative comparison policy
+      run: python3 test/benchmark_compare_test.py
+
+    - name: Generate relative performance report
+      id: report
+      run: |
+        report="$RUNNER_TEMP/benchmark-relative.md"
+        required="int textpk blobpk compositepk vc"
+        missing=""
+        for suite in $required; do
+          if [ ! -s "benchmark-results/$suite.tsv" ]; then
+            missing="$missing $suite"
+          fi
+        done
+
+        if [ -n "$missing" ]; then
+          {
+            echo '<!-- benchmark:relative -->'
+            echo '## DoltLite performance vs PR base'
+            echo ''
+            echo "**FAILED:** missing benchmark results:${missing}"
+          } > "$report"
+          report_rc=1
+        else
+          baseline=$(cat benchmark-artifact/baseline-sha)
+          candidate=$(cat benchmark-artifact/candidate-sha)
+          set +e
+          python3 test/benchmark_compare.py \
+            --input "int=benchmark-results/int.tsv" \
+            --input "textpk=benchmark-results/textpk.tsv" \
+            --input "blobpk=benchmark-results/blobpk.tsv" \
+            --input "compositepk=benchmark-results/compositepk.tsv" \
+            --input "vc=benchmark-results/vc.tsv" \
+            --baseline-ref "$baseline" \
+            --candidate-ref "$candidate" \
+            --individual-ratio 1.25 \
+            --aggregate-ratio 1.15 \
+            --min-delta-us 5000 \
+            --suite-individual "vc=1.50:25000" \
+            --output "$report"
+          report_rc=$?
+          set -e
+          if [ ! -s "$report" ]; then
+            {
+              echo '<!-- benchmark:relative -->'
+              echo '## DoltLite performance vs PR base'
+              echo ''
+              echo '**FAILED:** unable to generate the benchmark comparison.'
+            } > "$report"
+            report_rc=1
+          fi
+        fi
+        cat "$report"
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        cp "$report" benchmark-results/summary.md
+        echo "report_rc=$report_rc" >> "$GITHUB_OUTPUT"
+
+    - name: Comment PR with relative performance
+      if: always()
       continue-on-error: true
       uses: actions/github-script@v7
       with:
         script: |
           const fs = require('fs');
-          const body = fs.readFileSync('/tmp/bench_vc_perf.md', 'utf8');
-
-          if (!context.issue.number) {
-            console.log('No PR context (push event) — skipping comment');
+          const path = 'benchmark-results/summary.md';
+          if (!fs.existsSync(path) || !context.issue.number) {
+            console.log('No report or PR context — skipping comment');
             return;
           }
-
-          const marker = '<!-- benchmark:vc-perf -->';
-          const comments = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-          const botComment = comments.data.find(c => c.body.includes(marker));
-
-          if (botComment) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: botComment.id,
-              body: body,
-            });
-          } else {
-            await github.rest.issues.createComment({
+          const body = fs.readFileSync(path, 'utf8');
+          const marker = '<!-- benchmark:relative -->';
+          const comments = await github.paginate(
+            github.rest.issues.listComments,
+            {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: body,
+              per_page: 100,
+            }
+          );
+          const existing = comments.find(comment =>
+            comment.body.includes(marker)
+          );
+          const target = {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          };
+          if (existing) {
+            await github.rest.issues.updateComment({
+              ...target,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              ...target,
+              issue_number: context.issue.number,
+              body,
             });
           }
 
-    - name: Enforce ceiling
+    - name: Upload relative performance report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: doltlite-relative-performance
+        path: benchmark-results
+        retention-days: 14
+
+    - name: Enforce relative performance gate
+      if: always()
       run: |
-        rc="${{ steps.bench.outputs.bench_rc }}"
-        if [ "$rc" != "0" ]; then
-          echo "Version-control benchmark exceeded performance ceiling (rc=$rc)" >&2
-          exit "$rc"
-        fi
+        rc="${{ steps.report.outputs.report_rc }}"
+        if [ -z "$rc" ]; then rc=1; fi
+        exit "$rc"

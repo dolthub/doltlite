@@ -434,7 +434,14 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Check out candidate
+      uses: actions/checkout@v4
+
+    - name: Check out PR base
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+        path: benchmark-base
 
     - name: Install dependencies
       run: |
@@ -443,28 +450,34 @@ jobs:
 
     - name: Configure
       run: |
-        mkdir -p build
-        cd build
         TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
-        else
-          ../configure
-        fi
+        for source in . benchmark-base; do
+          mkdir -p "$source/build"
+          if [ -n "$TCL_CONFIG" ]; then
+            (cd "$source/build" && ../configure --with-tcl=$(dirname "$TCL_CONFIG"))
+          else
+            (cd "$source/build" && ../configure)
+          fi
+        done
 
     - name: Build
       run: |
-        cd build
         set -o pipefail
         {
-          make -j2 doltlite doltlite-lib
-          cc -O2 -Werror -I. -I../src \
-            -o bench_timer_doltlite ../test/sysbench_timer.c \
-            libdoltlite.a -lpthread -lz -lm
-          make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-          cc -O2 -Werror -I. -I../src \
-            -o bench_timer_sqlite ../test/sysbench_timer.c \
-            sqlite3.o -lpthread -lz -lm
+          (
+            cd build
+            make -j2 doltlite doltlite-lib
+            cc -O2 -Werror -I. -I../src \
+              -o bench_timer_doltlite ../test/sysbench_timer.c \
+              libdoltlite.a -lpthread -lz -lm
+          )
+          (
+            cd benchmark-base/build
+            make -j2 doltlite doltlite-lib
+            cc -O2 -Werror -I. -I../src \
+              -o bench_timer_doltlite ../test/sysbench_timer.c \
+              libdoltlite.a -lpthread -lz -lm
+          )
         } 2>&1 | tee build.log
         if grep -E "warning:" build.log; then
           echo "::error::compiler warnings in optimized build"
@@ -472,7 +485,13 @@ jobs:
         fi
 
     - name: Package
-      run: tar -czf benchmark-build.tar.gz build
+      run: |
+        mkdir benchmark-artifact
+        mv build benchmark-artifact/candidate
+        mv benchmark-base/build benchmark-artifact/baseline
+        git rev-parse HEAD > benchmark-artifact/candidate-sha
+        git -C benchmark-base rev-parse HEAD > benchmark-artifact/baseline-sha
+        tar -czf benchmark-build.tar.gz benchmark-artifact
 
     - name: Upload
       uses: actions/upload-artifact@v4

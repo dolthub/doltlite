@@ -903,12 +903,22 @@ standard behavior); reads are concurrent.
 Doltlite retains SQLite's SQL engine and C API while replacing its storage
 engine, so the natural question is: what does version control cost?
 
-Every PR runs sysbench-style benchmarks comparing doltlite against stock SQLite:
-the int-key suite in [`test/sysbench_compare.sh`](test/sysbench_compare.sh), plus
-TEXT, BLOB, and composite-primary-key variants. CI enforces a 2.5x ceiling on
-individual read/write ratios and a 2x ceiling on section averages, with wider
-autocommit-write ceilings for expected durability variance. The per-release
-numbers are published with each release on the
+Every PR builds the exact PR base and candidate with the same optimized
+toolchain, then runs paired sysbench-style benchmarks on the same runners. The
+int-key suite in [`test/sysbench_compare.sh`](test/sysbench_compare.sh) runs
+alongside TEXT, BLOB, and composite-primary-key variants. Baseline and candidate
+execution order alternates on each repetition to reduce host-load bias. CI
+fails when an individual workload regresses by more than 25% and 5ms, or when
+a section, suite, or overall runtime regresses by more than 15% and 5ms.
+Short, process-startup-bound version-control operations use a 50% and 25ms
+individual gate; their aggregate still uses the 15% suite gate.
+
+A scheduled nightly workflow runs longer, higher-sample comparisons against
+stock SQLite and enforces the absolute multiplier ceilings. It also runs the
+version-control latency ceilings with additional repetitions. A regression
+opens or updates a `nightly-performance-regression` issue, while every run
+publishes raw samples and a combined report. The per-release SQLite comparison
+is still published with each release on the
 [GitHub releases page](https://github.com/dolthub/doltlite/releases).
 
 ### Algorithmic Complexity

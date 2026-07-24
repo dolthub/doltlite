@@ -9,6 +9,14 @@ if [ ! -x "$DOLTLITE" ]; then
   echo "doltlite binary not found: $DOLTLITE" >&2
   exit 1
 fi
+VC_PERF_BASELINE="${VC_PERF_BASELINE:-}"
+if [ -n "$VC_PERF_BASELINE" ] && [ ! -x "$VC_PERF_BASELINE" ]; then
+  echo "baseline doltlite binary not found: $VC_PERF_BASELINE" >&2
+  exit 1
+fi
+FIXTURE_DOLTLITE="${VC_PERF_BASELINE:-$DOLTLITE}"
+VC_PERF_BASELINE_LABEL="${VC_PERF_BASELINE_LABEL:-PR base}"
+VC_PERF_CANDIDATE_LABEL="${VC_PERF_CANDIDATE_LABEL:-PR candidate}"
 
 RUNS=${VC_PERF_RUNS:-3}
 TABLES=${VC_PERF_TABLES:-800}
@@ -20,15 +28,19 @@ MERGE_ROWS=${VC_PERF_MERGE_ROWS:-100000}
 MERGE_CHANGE_ROWS=${VC_PERF_MERGE_CHANGE_ROWS:-2000}
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
+RESULTS_FILE="$TMPDIR/vc_results.tsv"
+SAMPLES_FILE="$TMPDIR/vc_samples.tsv"
+: > "$RESULTS_FILE"
+printf 'section\ttest\trun\tbaseline_us\tcandidate_us\n' > "$SAMPLES_FILE"
 
-ms_now() {
+us_now() {
   python3 - <<'PYEOF'
 import time
-print(int(time.time() * 1000))
+print(time.monotonic_ns() // 1000)
 PYEOF
 }
 
-median_ms() {
+median_us() {
   python3 - "$@" <<'PYEOF'
 import sys
 vals = sorted(int(v) for v in sys.argv[1:])
@@ -39,13 +51,13 @@ PYEOF
 run_sql() {
   local db="$1"
   local sql="$2"
-  printf '%s\n' "$sql" | "$DOLTLITE" "$db" >/dev/null
+  printf '%s\n' "$sql" | "$FIXTURE_DOLTLITE" "$db" >/dev/null
 }
 
 run_sql_file() {
   local db="$1"
   local file="$2"
-  "$DOLTLITE" "$db" < "$file" >/dev/null
+  "$FIXTURE_DOLTLITE" "$db" < "$file" >/dev/null
 }
 
 cte() {
@@ -190,43 +202,105 @@ prepare_fixtures() {
 failures=0
 rows=""
 
+time_sql() {
+  local binary="$1"
+  local db="$2"
+  local sql="$3"
+  local out="$4"
+  local err="$5"
+  local allow_error="$6"
+  local start end rc
+  start=$(us_now)
+  set +e
+  printf '%s\n' "$sql" | "$binary" "$db" >"$out" 2>"$err"
+  rc=$?
+  set -e
+  end=$(us_now)
+  if [ "$rc" -ne 0 ] && [ "$allow_error" != "1" ]; then
+    cat "$err" >&2
+    return "$rc"
+  fi
+  echo $((end-start))
+}
+
 bench_sql() {
   local name="$1"
   local seed="$2"
   local sql="$3"
   local ceiling="$4"
   local allow_error="${5:-0}"
-  local vals=()
-  local db start end elapsed out err
+  local candidate_vals=()
+  local baseline_vals=()
+  local candidate_db baseline_db candidate_us baseline_us out err
 
   for ((r=1; r<=RUNS; r++)); do
-    db="$TMPDIR/${name}_${r}.db"
-    cp "$seed" "$db"
-    out="$TMPDIR/${name}_${r}.out"
-    err="$TMPDIR/${name}_${r}.err"
-    start=$(ms_now)
-    if ! printf '%s\n' "$sql" | "$DOLTLITE" "$db" >"$out" 2>"$err"; then
-      if [ "$allow_error" = "1" ]; then
-        :
+    candidate_db="$TMPDIR/${name}_candidate_${r}.db"
+    cp "$seed" "$candidate_db"
+    out="$TMPDIR/${name}_candidate_${r}.out"
+    err="$TMPDIR/${name}_candidate_${r}.err"
+
+    if [ -n "$VC_PERF_BASELINE" ]; then
+      baseline_db="$TMPDIR/${name}_baseline_${r}.db"
+      cp "$seed" "$baseline_db"
+      if [ $((r % 2)) -eq 1 ]; then
+        if ! baseline_us=$(time_sql "$VC_PERF_BASELINE" "$baseline_db" \
+            "$sql" "$TMPDIR/${name}_baseline_${r}.out" \
+            "$TMPDIR/${name}_baseline_${r}.err" "$allow_error"); then
+          echo "Baseline benchmark $name failed on run $r" >&2
+          return 1
+        fi
+        if ! candidate_us=$(time_sql "$DOLTLITE" "$candidate_db" \
+            "$sql" "$out" "$err" "$allow_error"); then
+          echo "Candidate benchmark $name failed on run $r" >&2
+          return 1
+        fi
       else
-        echo "Benchmark $name failed on run $r:" >&2
-        cat "$err" >&2
+        if ! candidate_us=$(time_sql "$DOLTLITE" "$candidate_db" \
+            "$sql" "$out" "$err" "$allow_error"); then
+          echo "Candidate benchmark $name failed on run $r" >&2
+          return 1
+        fi
+        if ! baseline_us=$(time_sql "$VC_PERF_BASELINE" "$baseline_db" \
+            "$sql" "$TMPDIR/${name}_baseline_${r}.out" \
+            "$TMPDIR/${name}_baseline_${r}.err" "$allow_error"); then
+          echo "Baseline benchmark $name failed on run $r" >&2
+          return 1
+        fi
+      fi
+      baseline_vals+=("$baseline_us")
+      printf 'vc\t%s\t%d\t%s\t%s\n' \
+        "$name" "$r" "$baseline_us" "$candidate_us" >> "$SAMPLES_FILE"
+    else
+      if ! candidate_us=$(time_sql "$DOLTLITE" "$candidate_db" \
+          "$sql" "$out" "$err" "$allow_error"); then
+        echo "Benchmark $name failed on run $r" >&2
         return 1
       fi
+      printf 'vc\t%s\t%d\t0\t%s\n' \
+        "$name" "$r" "$candidate_us" >> "$SAMPLES_FILE"
     fi
-    end=$(ms_now)
-    elapsed=$((end-start))
-    vals+=("$elapsed")
+    candidate_vals+=("$candidate_us")
   done
 
-  local median
-  median=$(median_ms "${vals[@]}")
-  local status="PASS"
-  if [ "$median" -gt "$ceiling" ]; then
-    status="FAIL"
-    failures=$((failures+1))
+  local candidate_median baseline_median ratio status
+  candidate_median=$(median_us "${candidate_vals[@]}")
+  if [ -n "$VC_PERF_BASELINE" ]; then
+    baseline_median=$(median_us "${baseline_vals[@]}")
+    ratio=$(python3 -c \
+      "print(f'{$candidate_median/$baseline_median:.3f}')")
+    rows="${rows}| $name | $(python3 -c "print(f'{$baseline_median/1000:.2f}')") | $(python3 -c "print(f'{$candidate_median/1000:.2f}')") | ${ratio}x |\n"
+    printf 'vc\t%s\t%s\t%s\n' \
+      "$name" "$baseline_median" "$candidate_median" >> "$RESULTS_FILE"
+  else
+    status="PASS"
+    if [ "$candidate_median" -gt $((ceiling * 1000)) ]; then
+      status="FAIL"
+      failures=$((failures+1))
+    fi
+    rows="${rows}| $name | $(python3 -c "print(f'{$candidate_median/1000:.2f}')") | $ceiling | $status |\n"
+    printf 'vc\t%s\t%d\t%s\n' \
+      "$name" "$((ceiling * 1000))" "$candidate_median" >> "$RESULTS_FILE"
   fi
-  rows="${rows}| $name | $median | $ceiling | $status |\n"
 }
 
 prepare_fixtures
@@ -258,7 +332,29 @@ bench_sql "merge_data_conflicts" "$MERGE_CONFLICT_DB" \
 bench_sql "merge_data_conflicts_with_resolve" "$MERGE_CONFLICT_DB" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT count(*) FROM dolt_conflicts; ROLLBACK;" 250 1
 
-cat <<EOF
+if [ -n "${VC_PERF_RESULTS_OUTPUT:-}" ]; then
+  mkdir -p "$(dirname "$VC_PERF_RESULTS_OUTPUT")"
+  cp "$RESULTS_FILE" "$VC_PERF_RESULTS_OUTPUT"
+fi
+if [ -n "${VC_PERF_SAMPLES_OUTPUT:-}" ]; then
+  mkdir -p "$(dirname "$VC_PERF_SAMPLES_OUTPUT")"
+  cp "$SAMPLES_FILE" "$VC_PERF_SAMPLES_OUTPUT"
+fi
+
+if [ -n "$VC_PERF_BASELINE" ]; then
+  cat <<EOF
+<!-- benchmark:vc-perf -->
+## Version-Control Performance: $VC_PERF_CANDIDATE_LABEL vs $VC_PERF_BASELINE_LABEL
+
+Runs: median of $RUNS paired executions per benchmark, excluding fixture setup.
+Execution order alternates between baseline and candidate on each repetition.
+
+| Benchmark | $VC_PERF_BASELINE_LABEL median ms | $VC_PERF_CANDIDATE_LABEL median ms | Ratio |
+|---|---:|---:|---:|
+$(printf "%b" "$rows")
+EOF
+else
+  cat <<EOF
 <!-- benchmark:vc-perf -->
 ## Version-Control Performance Ceilings
 
@@ -275,8 +371,9 @@ rows per side.
 |---|---:|---:|---|
 $(printf "%b" "$rows")
 EOF
+fi
 
-if [ "$failures" -ne 0 ]; then
+if [ -z "$VC_PERF_BASELINE" ] && [ "$failures" -ne 0 ]; then
   echo "$failures version-control benchmark(s) exceeded their ceiling." >&2
   exit 1
 fi
