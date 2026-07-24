@@ -48,7 +48,34 @@ fi
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-cp "$SRC"/*.c "$SRC"/*.h "$WORK"/ 2>/dev/null
+
+# An unverified fixture is the same defect this whole file exists to prevent: a
+# partial copy still lints clean, so every behavioural assertion below would pass
+# while proving nothing. Abort loudly rather than report coverage we do not have.
+setup_failed() {
+  echo "SETUP FAILED: $1" >&2
+  echo "  The behavioural checks below would pass against an incomplete fixture" >&2
+  echo "  and prove nothing, so this is an error rather than a test failure." >&2
+  exit 2
+}
+
+cp_err="$WORK/.cp.err"
+if ! cp "$SRC"/*.c "$SRC"/*.h "$WORK"/ 2>"$cp_err"; then
+  setup_failed "could not copy src/ into $WORK:
+$(sed 's/^/    /' "$cp_err")"
+fi
+rm -f "$cp_err"
+
+# cp can also return 0 having copied less than asked, so compare counts instead
+# of trusting the status alone.
+want=$(ls "$SRC"/*.c "$SRC"/*.h 2>/dev/null | wc -l | tr -d ' ')
+got=$(ls "$WORK"/*.c "$WORK"/*.h 2>/dev/null | wc -l | tr -d ' ')
+if [ "$want" -eq 0 ]; then
+  setup_failed "no .c/.h files found in $SRC"
+fi
+if [ "$got" -ne "$want" ]; then
+  setup_failed "fixture is incomplete: copied $got of $want files from $SRC"
+fi
 
 expect_clean() {
   local name="$1" out
