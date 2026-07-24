@@ -31,6 +31,16 @@ else
   fi
 fi
 
+# Branch/checkout split: require doltlite_branches.c; cap at 1500.
+if [ ! -f "$SRCDIR/doltlite_branches.c" ]; then
+  lint "$SRCDIR/doltlite_branches.c: missing — dolt_branches vtab must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/doltlite_branches.c" | tr -d ' ')
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/doltlite_branches.c:$nline lines — doltlite_branches.c must stay at or below 1500 lines"
+  fi
+fi
+
 
 # Keep doltlite merge split into reviewable units. The core catalog/rows/
 # schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file
