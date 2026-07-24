@@ -595,12 +595,12 @@ endif
 
 PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
-              chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
+              chunk_store.o chunk_store_lock.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_payload.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
               doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o doltlite_merge_status.o \
-              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
+              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_branches.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_hashof.o \
               doltlite_constraint_violations.o doltlite_verify_constraints.o \
@@ -643,7 +643,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/ext/blake3/blake3_dispatch.c $(TOP)/ext/blake3/blake3.h \
     $(TOP)/ext/blake3/blake3_impl.h \
     $(TOP)/src/prolly_hashset.c $(TOP)/src/prolly_check.c \
-    $(TOP)/src/chunk_wal.c $(TOP)/src/chunk_refs.c $(TOP)/src/chunk_index.c \
+    $(TOP)/src/chunk_store_lock.c $(TOP)/src/chunk_wal.c $(TOP)/src/chunk_refs.c $(TOP)/src/chunk_index.c \
     $(TOP)/src/chunk_staging.c $(TOP)/src/chunk_file.c \
     $(TOP)/src/doltlite.c $(TOP)/src/doltlite_core.c $(TOP)/src/doltlite_cmd.c $(TOP)/src/doltlite_add.c \
     $(TOP)/src/doltlite_commit_cmd.c $(TOP)/src/doltlite_reset.c \
@@ -652,7 +652,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_config.c $(TOP)/src/doltlite_commit.c $(TOP)/src/doltlite_ref.c \
     $(TOP)/src/doltlite_log.c $(TOP)/src/doltlite_commit_ancestors.c \
     $(TOP)/src/doltlite_status.c $(TOP)/src/doltlite_diff.c $(TOP)/src/doltlite_diff_table.c $(TOP)/src/doltlite_workspace.c \
-    $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
+    $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_branches.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
     $(TOP)/src/doltlite_merge.c \
     $(TOP)/src/doltlite_merge_pass1.c \
     $(TOP)/src/doltlite_merge_pass2.c \
@@ -1483,6 +1483,9 @@ prolly_cache.o:	$(TOP)/src/prolly_cache.c $(DEPS_OBJ_COMMON)
 chunk_store.o:	$(TOP)/src/chunk_store.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_store.c
 
+chunk_store_lock.o:	$(TOP)/src/chunk_store_lock.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/chunk_store_lock.c
+
 chunk_wal.o:	$(TOP)/src/chunk_wal.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_wal.c
 
@@ -1628,6 +1631,9 @@ doltlite_diff.o:	$(TOP)/src/doltlite_diff.c $(DEPS_OBJ_COMMON)
 
 doltlite_branch.o:	$(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_branch_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_branch.c
+
+doltlite_branches.o:	$(TOP)/src/doltlite_branches.c $(TOP)/src/doltlite_branch_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_branches.c
 
 doltlite_tag.o:	$(TOP)/src/doltlite_tag.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_tag.c

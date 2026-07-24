@@ -20,4 +20,17 @@ typedef sqlite3_file *CsFileLock;
 #define CS_WRITEBUF_RETAIN_MAX (64*1024)
 #define CS_PENDING_DRAIN_LIMIT (64*1024*1024)
 
+
+int csFileLockHeld(sqlite3_file *pFile);
+int csFileLock(sqlite3_vfs *pVfs, const char *path,
+               sqlite3_file **ppFile, char **pzName);
+void csFileUnlock(sqlite3_file *pFile, char **pzName);
+int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
+                 sqlite3_file **ppFile, char **pzName);
+int csReloadFromDisk(ChunkStore *cs);
+int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
+int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize);
+int csDiskStateMatchesMemory(ChunkStore *cs);
+
 #endif /* CHUNK_STORE_INT_H */
+

@@ -608,7 +608,7 @@ proc emit_doltlite_engine_block {} {
   foreach f {
     prolly_hash.c prolly_xxhash.c blake3.c blake3_portable.c blake3_dispatch.c
     prolly_hashset.c prolly_node.c prolly_cache.c
-    chunk_store.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
+    chunk_store.c chunk_store_lock.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
     prolly_cursor.c prolly_mutmap.c prolly_chunker.c prolly_mutate.c prolly_check.c
     prolly_diff.c prolly_three_way_diff.c prolly_three_way_merge.c
     prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c
@@ -622,7 +622,7 @@ proc emit_doltlite_engine_block {} {
     doltlite_commit.c doltlite_ref.c doltlite_log.c
     doltlite_commit_ancestors.c doltlite_status.c doltlite_merge_status.c doltlite_diff.c doltlite_diff_table.c
     doltlite_workspace.c
-    doltlite_branch.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c doltlite_merge_pass1.c doltlite_merge_pass2.c doltlite_merge_rows.c doltlite_merge_schema.c
+    doltlite_branch.c doltlite_branches.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c doltlite_merge_pass1.c doltlite_merge_pass2.c doltlite_merge_rows.c doltlite_merge_schema.c
     doltlite_conflicts.c doltlite_gc.c doltlite_chunk_walk.c
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c doltlite_patch.c
     doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c

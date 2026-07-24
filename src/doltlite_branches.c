@@ -1,0 +1,255 @@
+#ifdef DOLTLITE_PROLLY
+
+#include "doltlite_branch_int.h"
+#include "doltlite_vtab_util.h"
+#include "doltlite_commit.h"
+#include "chunk_store.h"
+#include "prolly_hash.h"
+#include "doltlite_internal.h"
+#include <string.h>
+
+
+typedef struct BrVtab BrVtab;
+struct BrVtab { sqlite3_vtab base; sqlite3 *db; };
+typedef struct BrCur BrCur;
+struct BrCur {
+  sqlite3_vtab_cursor base;
+  int iRow;
+  int bSingle;
+  int iSingle;
+  int iCommitRow;
+  DoltliteCommit commit;
+};
+
+static void brClearCommit(BrCur *c){
+  doltliteCommitClear(&c->commit);
+  c->iCommitRow = -1;
+}
+
+static int brConnect(sqlite3 *db, void *pAux, int argc,
+    const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  BrVtab *p; int rc;
+  (void)pAux; (void)argc; (void)argv; (void)pzErr;
+  rc = doltliteVtabConnectSimple(db,
+    "CREATE TABLE x("
+      "name TEXT, "
+      "hash TEXT, "
+      "latest_committer TEXT, "
+      "latest_committer_email TEXT, "
+      "latest_commit_date TEXT, "
+      "latest_commit_message TEXT, "
+      "remote TEXT, "
+      "branch TEXT, "
+      "dirty INTEGER"
+    ")",
+    sizeof(*p), ppVtab);
+  if( rc!=SQLITE_OK ) return rc;
+  p = (BrVtab*)*ppVtab;
+  p->db = db;
+  return SQLITE_OK;
+}
+static int brOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
+  int rc;
+  BrCur *c;
+  (void)v;
+  rc = doltliteVtabOpenCursor(pp, sizeof(BrCur));
+  if( rc!=SQLITE_OK ) return rc;
+  c = (BrCur*)*pp;
+  c->iCommitRow = -1;
+  return SQLITE_OK;
+}
+static int brClose(sqlite3_vtab_cursor *cur){
+  BrCur *c = (BrCur*)cur;
+  brClearCommit(c);
+  sqlite3_free(c);
+  return SQLITE_OK;
+}
+static int brFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
+  BrVtab *pVtab = (BrVtab*)c->pVtab;
+  BrCur *pCur = (BrCur*)c;
+  (void)s;
+  (void)a;
+  brClearCommit(pCur);
+  pCur->iRow = 0;
+  pCur->bSingle = 0;
+  pCur->iSingle = -1;
+  if( n==1 ){
+    ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+    const char *zName = (const char*)sqlite3_value_text(v[0]);
+    pCur->bSingle = 1;
+    pCur->iSingle = cs ? csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
+                                        (int)sizeof(BranchRef), zName) : -1;
+    pCur->iRow = pCur->iSingle;
+  }
+  return SQLITE_OK;
+}
+static int brNext(sqlite3_vtab_cursor *c){
+  brClearCommit((BrCur*)c);
+  ((BrCur*)c)->iRow++;
+  return SQLITE_OK;
+}
+static int brEof(sqlite3_vtab_cursor *c){
+  BrVtab *v = (BrVtab*)c->pVtab;
+  BrCur *pCur = (BrCur*)c;
+  ChunkStore *cs = doltliteGetChunkStore(v->db);
+  if( !cs ) return 1;
+  if( pCur->bSingle ) return pCur->iSingle<0 || pCur->iRow!=pCur->iSingle;
+  return pCur->iRow >= refsTableBranchCount(&cs->refs);
+}
+
+static int brIsDirty(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const BranchRef *br,
+  int *pDirty
+){
+  ProllyHash stagedCat;
+  ProllyHash commitCat;
+  u8 *wsData = 0;
+  int nWsData = 0;
+  int rc;
+
+  *pDirty = 0;
+
+  if( strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
+    return doltliteHasUncommittedChanges(db, pDirty);
+  }
+  if( prollyHashIsEmpty(&br->workingSetHash) ){
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreGet(cs, &br->workingSetHash, &wsData, &nWsData);
+  if( rc!=SQLITE_OK || !wsData || nWsData < WS_TOTAL_SIZE || wsData[0] != WS_FORMAT_VERSION ){
+    sqlite3_free(wsData);
+    return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
+  }
+  memcpy(stagedCat.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+  sqlite3_free(wsData);
+
+  if( prollyHashIsEmpty(&stagedCat) ){
+    return SQLITE_OK;
+  }
+
+  if( prollyHashIsEmpty(&br->commitHash) ){
+    *pDirty = 1;
+    return SQLITE_OK;
+  }
+  rc = doltliteCommitCatalogHash(db, &br->commitHash, &commitCat);
+  if( rc==SQLITE_OK ){
+    *pDirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
+  }
+  return rc;
+}
+
+static int brLoadCommit(
+  BrVtab *v,
+  BrCur *c,
+  const BranchRef *br,
+  DoltliteCommit **ppCommit
+){
+  int rc;
+  if( c->iCommitRow==c->iRow ){
+    *ppCommit = &c->commit;
+    return SQLITE_OK;
+  }
+  brClearCommit(c);
+  rc = doltliteLoadCommit(v->db, &br->commitHash, &c->commit);
+  if( rc!=SQLITE_OK ){
+    brClearCommit(c);
+    return rc;
+  }
+  c->iCommitRow = c->iRow;
+  *ppCommit = &c->commit;
+  return SQLITE_OK;
+}
+
+static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
+  BrVtab *v = (BrVtab*)c->pVtab;
+  BrCur *pCur = (BrCur*)c;
+  ChunkStore *cs = doltliteGetChunkStore(v->db);
+  const BranchRef *br;
+  int nBr;
+  const BranchRef *aBr;
+  if(!cs) return SQLITE_OK;
+  refsTableGetBranches(&cs->refs, &nBr, &aBr);
+  br = &aBr[((BrCur*)c)->iRow];
+
+  switch(col){
+    case 0:
+      sqlite3_result_text(ctx, br->zName, -1, SQLITE_TRANSIENT);
+      return SQLITE_OK;
+    case 1: {
+      char h[PROLLY_HASH_SIZE*2+1];
+      doltliteHashToHex(&br->commitHash, h);
+      sqlite3_result_text(ctx, h, -1, SQLITE_TRANSIENT);
+      return SQLITE_OK;
+    }
+    case 6: case 7:
+
+      sqlite3_result_text(ctx, "", -1, SQLITE_STATIC);
+      return SQLITE_OK;
+    case 8: {
+      int dirty = 0;
+      int rc = brIsDirty(v->db, cs, br, &dirty);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return rc;
+      }
+      sqlite3_result_int(ctx, dirty);
+      return SQLITE_OK;
+    }
+  }
+
+  {
+    DoltliteCommit *cm;
+    int rc;
+    /* An unborn branch (materialized by a first write on a ref-less default
+    ** branch, e.g. after pushing only a feature branch into a new database)
+    ** has the all-zero head: there is no commit to describe. */
+    if( prollyHashIsEmpty(&br->commitHash) ){
+      sqlite3_result_null(ctx);
+      return SQLITE_OK;
+    }
+    rc = brLoadCommit(v, pCur, br, &cm);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return rc;
+    }
+    switch(col){
+      case 2:
+        sqlite3_result_text(ctx, cm->zName ? cm->zName : "",
+                            -1, SQLITE_TRANSIENT);
+        break;
+      case 3:
+        sqlite3_result_text(ctx, cm->zEmail ? cm->zEmail : "",
+                            -1, SQLITE_TRANSIENT);
+        break;
+      case 4: {
+        doltliteResultTimestamp(ctx, cm->timestamp);
+        break;
+      }
+      case 5:
+        sqlite3_result_text(ctx, cm->zMessage ? cm->zMessage : "",
+                            -1, SQLITE_TRANSIENT);
+        break;
+    }
+  }
+  return SQLITE_OK;
+}
+static int brRowid(sqlite3_vtab_cursor *c, sqlite3_int64 *r){
+  *r=((BrCur*)c)->iRow; return SQLITE_OK;
+}
+static int brBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
+  (void)v;
+  p->estimatedCost=10;
+  p->estimatedRows=5;
+  return doltliteBestIndexEq(p, 0);
+}
+sqlite3_module doltliteBranchesModule = {
+  0,0,brConnect,brBestIndex,doltliteVtabDisconnect,0,
+  brOpen,brClose,brFilter,brNext,brEof,brColumn,brRowid,
+  0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+
+#endif
