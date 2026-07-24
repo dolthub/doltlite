@@ -906,6 +906,35 @@ filter_check() {
 filter_check "filter_by_index_name" "idx" "ROW|~|idx"
 filter_check "filter_by_owning_table" "t" ""
 
+echo "--- WORKING / STAGED pseudo-refs ---"
+
+oracle "working_added_table" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+" "HEAD" "WORKING"
+
+oracle "working_dropped_table" "
+$SEED
+DROP TABLE t;
+" "HEAD" "WORKING"
+
+oracle "working_no_change" "
+$SEED
+" "HEAD" "WORKING" "" "EXPECT_EMPTY"
+
+oracle "staged_added_table" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_add('-A');
+" "HEAD" "STAGED"
+
+oracle "staged_to_working" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_add('-A');
+CREATE TABLE w2(id INTEGER PRIMARY KEY);
+" "STAGED" "WORKING"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

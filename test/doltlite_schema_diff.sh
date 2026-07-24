@@ -61,6 +61,14 @@ run_test_match "bad_to_ref_errors" \
 run_test_match "bad_single_arg_errors" \
   "SELECT count(*) FROM dolt_schema_diff('definitely_not_a_ref');" \
   "Error" "$DB"
+# A malformed range endpoint must name the unresolvable ref, not emit a
+# generic error, matching the two-arg form.
+run_test_match "bad_range_from_names_endpoint" \
+  "SELECT count(*) FROM dolt_schema_diff('does-not-exist..HEAD');" \
+  "from_ref 'does-not-exist' could not be resolved" "$DB"
+run_test_match "bad_range_to_names_endpoint" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD..does-not-exist');" \
+  "to_ref 'does-not-exist' could not be resolved" "$DB"
 
 rm -f "$DB"
 
@@ -383,6 +391,28 @@ run_test "rebase_replay_u_count" \
 run_test_match "rebase_replay_u_to_stmt" \
   "SELECT to_create_statement FROM dolt_schema_diff('main','feat','u');" \
   "CREATE TABLE u.*w TEXT" "$DB"
+
+rm -f "$DB"
+
+# WORKING / STAGED pseudo-refs must resolve like the other dolt_* surfaces.
+# Before the catalog-aware resolver fix, schema_diff only accepted commit refs,
+# so HEAD/WORKING (and HEAD..WORKING, HEAD/STAGED) errored with
+# "to_ref 'WORKING' could not be resolved".
+DB=/tmp/test_sd_working_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "CREATE TABLE w(id INTEGER PRIMARY KEY, x TEXT);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "working_count" "SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING');" "1" "$DB"
+run_test "working_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD','WORKING');" "w" "$DB"
+run_test "working_from_empty" "SELECT length(from_table_name) FROM dolt_schema_diff('HEAD','WORKING');" "0" "$DB"
+run_test "working_range_count" "SELECT count(*) FROM dolt_schema_diff('HEAD..WORKING');" "1" "$DB"
+run_test "working_self_empty" "SELECT count(*) FROM dolt_schema_diff('WORKING','WORKING');" "0" "$DB"
+
+echo "SELECT dolt_add('-A');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "staged_count" "SELECT count(*) FROM dolt_schema_diff('HEAD','STAGED');" "1" "$DB"
+run_test "staged_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD','STAGED');" "w" "$DB"
 
 rm -f "$DB"
 
