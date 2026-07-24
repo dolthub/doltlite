@@ -486,12 +486,12 @@ jobs:
 
     - name: Package
       run: |
-        mkdir benchmark-artifact
-        mv build benchmark-artifact/candidate
-        mv benchmark-base/build benchmark-artifact/baseline
-        git rev-parse HEAD > benchmark-artifact/candidate-sha
-        git -C benchmark-base rev-parse HEAD > benchmark-artifact/baseline-sha
-        tar -czf benchmark-build.tar.gz benchmark-artifact
+        mv benchmark-base/build benchmark-baseline
+        git rev-parse HEAD > benchmark-candidate-sha
+        git -C benchmark-base rev-parse HEAD > benchmark-baseline-sha
+        tar -czf benchmark-build.tar.gz \
+          build benchmark-baseline \
+          benchmark-candidate-sha benchmark-baseline-sha
 
     - name: Upload
       uses: actions/upload-artifact@v4

@@ -47,13 +47,12 @@ jobs:
         BENCH_CANDIDATE_KIND: doltlite
         BENCH_GATE_MODE: none
       run: |
-        artifact="$GITHUB_WORKSPACE/benchmark-artifact"
         results="$RUNNER_TEMP/benchmark-results"
         mkdir -p "$results"
-        BENCH_BASELINE_BINARY="$artifact/baseline/doltlite" \
-          BENCH_CANDIDATE_BINARY="$artifact/candidate/doltlite" \
-          BENCH_BASELINE_TIMER="$artifact/baseline/bench_timer_doltlite" \
-          BENCH_CANDIDATE_TIMER="$artifact/candidate/bench_timer_doltlite" \
+        BENCH_BASELINE_BINARY="$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
+          BENCH_CANDIDATE_BINARY="$GITHUB_WORKSPACE/build/doltlite" \
+          BENCH_BASELINE_TIMER="$GITHUB_WORKSPACE/benchmark-baseline/bench_timer_doltlite" \
+          BENCH_CANDIDATE_TIMER="$GITHUB_WORKSPACE/build/bench_timer_doltlite" \
           BENCH_RESULTS_OUTPUT="$results/${{ matrix.suite.name }}.tsv" \
           BENCH_SAMPLES_OUTPUT="$results/${{ matrix.suite.name }}-samples.tsv" \
           bash "test/${{ matrix.suite.script }}" \
@@ -89,13 +88,12 @@ jobs:
         VC_PERF_BASELINE_LABEL: PR base
         VC_PERF_CANDIDATE_LABEL: PR candidate
       run: |
-        artifact="$GITHUB_WORKSPACE/benchmark-artifact"
         results="$RUNNER_TEMP/benchmark-results"
         mkdir -p "$results"
-        VC_PERF_BASELINE="$artifact/baseline/doltlite" \
+        VC_PERF_BASELINE="$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
           VC_PERF_RESULTS_OUTPUT="$results/vc.tsv" \
           VC_PERF_SAMPLES_OUTPUT="$results/vc-samples.tsv" \
-          bash test/vc_perf_ceiling.sh "$artifact/candidate/doltlite" \
+          bash test/vc_perf_ceiling.sh "$GITHUB_WORKSPACE/build/doltlite" \
           > "$results/vc.md"
         cat "$results/vc.md"
 
@@ -158,8 +156,8 @@ jobs:
           } > "$report"
           report_rc=1
         else
-          baseline=$(cat benchmark-artifact/baseline-sha)
-          candidate=$(cat benchmark-artifact/candidate-sha)
+          baseline=$(cat benchmark-baseline-sha)
+          candidate=$(cat benchmark-candidate-sha)
           set +e
           python3 test/benchmark_compare.py \
             --input "int=benchmark-results/int.tsv" \
