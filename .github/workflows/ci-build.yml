@@ -1,0 +1,849 @@
+name: CI Build
+
+on:
+  workflow_call:
+
+jobs:
+  checked:
+    name: checked-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    env:
+      CFLAGS: -O2 -g -Werror
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: ubuntu
+            runs-on: ubuntu-latest
+          - platform: windows
+            runs-on: windows-latest
+          - platform: macos
+            runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Linux build dependencies
+      if: matrix.platform == 'ubuntu'
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential fossil tcl-dev unixodbc-dev zlib1g-dev
+
+    - name: Install Windows build dependencies
+      if: matrix.platform == 'windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl openssl
+
+    - name: Install macOS build dependencies
+      if: matrix.platform == 'macos'
+      run: brew install tcl-tk
+
+    - name: Install Go toolchain
+      if: matrix.platform == 'ubuntu'
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Configure Unix build
+      if: matrix.platform != 'windows'
+      run: |
+        mkdir -p build
+        cd build
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+          ../configure
+        else
+          TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+          if [ -n "$TCL_CONFIG" ]; then
+            ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+          else
+            ../configure
+          fi
+        fi
+
+    - name: Configure Windows build
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        mkdir -p build
+        cd build
+        ../configure
+
+    - name: Build checked Unix binaries
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make -j2 DOLTLITE_PROLLY_CHECK=1 \
+            doltlite doltlite-remotesrv doltlite-lib
+          make DOLTLITE_PROLLY=0 sqlite3
+          make libsqlite3.a USE_AMALGAMATION=0
+          make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 \
+            sqlite3.c sqlite3.h
+        } 2>&1 | tee build.log
+        DOLTLITE_CHECK_AMALGAMATION=0 \
+          bash ../test/assert_doltlite_artifacts.sh .
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in checked build"
+          exit 1
+        fi
+        make lint
+
+    - name: Build Linux-only test binaries
+      if: matrix.platform == 'ubuntu'
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
+          cc $CFLAGS -I. -I../src \
+            -o threadtest4 ../test/threadtest4.c sqlite3.c \
+            -ldl -lpthread -lm -lz
+          cc $CFLAGS -I. -I../src \
+            -o threadtest5 ../test/threadtest5.c sqlite3.c \
+            -ldl -lpthread -lm -lz
+          gcc $CFLAGS -o quickstart \
+            ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+          cc $CFLAGS -O0 -I. -I../src \
+            -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
+            -o concurrent_branch_test ../test/concurrent_branch_test.c \
+            libsqlite3.a -lz -lpthread -lm
+          gcc $CFLAGS -O0 -I. \
+            -o concurrent_write_test ../test/concurrent_write_test.c \
+            libdoltlite.a -lz -lpthread -lm
+          cc $CFLAGS -I. \
+            -o crash_recovery_test ../test/crash_recovery_test.c \
+            libdoltlite.a -lz -lpthread -lm
+          (
+            cd ../examples/go
+            CGO_CFLAGS="-I../../build" \
+              CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
+              go build -tags libsqlite3 -o ../../build/go_quickstart .
+          )
+        } 2>&1 | tee -a build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in checked build"
+          exit 1
+        fi
+
+    - name: Build macOS-only test binaries
+      if: matrix.platform == 'macos'
+      run: |
+        cd build
+        set -o pipefail
+        {
+          gcc $CFLAGS -o quickstart \
+            ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+          cc $CFLAGS -O0 -I. -I../src \
+            -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
+            -o concurrent_branch_test ../test/concurrent_branch_test.c \
+            libsqlite3.a -lz -lpthread -lm
+          gcc $CFLAGS -O0 -I. \
+            -o concurrent_write_test ../test/concurrent_write_test.c \
+            libdoltlite.a -lz -lpthread -lm
+          gcc $CFLAGS -O0 -I. \
+            -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
+            libdoltlite.a -lz -lpthread -lm
+        } 2>&1 | tee -a build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in checked build"
+          exit 1
+        fi
+
+    - name: Build Windows binaries
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
+            doltlite.exe doltlite-remotesrv.exe doltlite-lib
+          make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+          make doltlite-regression-test-c-build
+        } 2>&1 | tee build.log
+        DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 \
+          bash ../test/assert_doltlite_artifacts.sh .
+        cp -f "$(command -v sqlite3)" sqlite3
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in checked build"
+          exit 1
+        fi
+
+    - name: Build standalone Unix test probes
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        set -o pipefail
+        {
+          cc $CFLAGS -Wall \
+            -I../src -I../ext/ed25519 \
+            ../test/doltlite_creds_kat.c ../src/doltlite_creds.c \
+            ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+            ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+            ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+            ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+            -o creds_kat
+          cc $CFLAGS -Wall \
+            -I../src -I../ext/ed25519 \
+            ../test/creds_verify_kat.c ../src/doltlite_creds.c \
+            ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+            ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+            ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+            ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+            -o creds_verify_kat
+          cc $CFLAGS -I../src -I../ext/mbedtls/include \
+            ../test/doltlite_tls_test_main.c ../src/doltlite_tls.c \
+            ../ext/mbedtls/library/*.c \
+            -o tls_test
+          blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
+          for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
+            [ ! -f "$object" ] || blake_objects+=("$object")
+          done
+          cc $CFLAGS ../test/blake3_kat.c \
+            prolly_hash.o "${blake_objects[@]}" \
+            -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
+            -lm -o blake3_kat
+          probe_libs=(-lz -lpthread -lm)
+          if [ "${{ matrix.platform }}" = "ubuntu" ]; then
+            probe_libs+=(-ldl)
+          fi
+          cc $CFLAGS -Wno-comment -I. \
+            ../test/amalgamation_http_probe.c sqlite3.c \
+            "${probe_libs[@]}" -o amalgamation_http_probe
+        } 2>&1 | tee -a build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in standalone probes"
+          exit 1
+        fi
+
+    - name: Build standalone Windows test probes
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        set -o pipefail
+        {
+          cc $CFLAGS -Wall \
+            -I../src -I../ext/ed25519 \
+            ../test/doltlite_creds_kat.c ../src/doltlite_creds.c \
+            ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+            ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+            ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+            ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+            -lws2_32 -lbcrypt -lcrypt32 -o creds_kat.exe
+          cc $CFLAGS -Wall \
+            -I../src -I../ext/ed25519 \
+            ../test/creds_verify_kat.c ../src/doltlite_creds.c \
+            ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+            ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+            ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+            ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+            -lws2_32 -lbcrypt -lcrypt32 -o creds_verify_kat.exe
+          cc $CFLAGS -I../src -I../ext/mbedtls/include \
+            ../test/doltlite_tls_test_main.c ../src/doltlite_tls.c \
+            ../ext/mbedtls/library/*.c \
+            -lws2_32 -lbcrypt -lcrypt32 -o tls_test.exe
+          blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
+          for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
+            [ ! -f "$object" ] || blake_objects+=("$object")
+          done
+          cc $CFLAGS ../test/blake3_kat.c \
+            prolly_hash.o "${blake_objects[@]}" \
+            -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
+            -lm -o blake3_kat.exe
+          cc $CFLAGS -Wno-comment -I. \
+            ../test/amalgamation_http_probe.c sqlite3.c \
+            -lz -lpthread -lm -lws2_32 -lbcrypt -lcrypt32 \
+            -o amalgamation_http_probe.exe
+        } 2>&1 | tee -a build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in standalone probes"
+          exit 1
+        fi
+
+    - name: Build sqllogictest runners
+      if: matrix.platform == 'ubuntu'
+      run: |
+        fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
+        mkdir -p build/sqllogictest
+        cd build/sqllogictest
+        fossil open /tmp/sqllogictest.fossil db57eba95d7c412bb413da5480c8be24109a8faf
+        perl ../../test/patch_sqllogictest.pl \
+          < src/sqllogictest.c > src/sqllogictest.c.patched
+        mv src/sqllogictest.c.patched src/sqllogictest.c
+        cd src
+        gcc -Werror -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+          -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c
+        gcc -Werror -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+          -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
+        gcc -Werror -g -O2 -o sqllogictest-stock \
+          sqllogictest.c md5.o sqlite3.o -lpthread -lm -lodbc
+        cp ../../sqlite3.c sqlite3.c
+        cp ../../sqlite3.h sqlite3.h
+        gcc -Werror -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=1 \
+          -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c \
+          -o sqlite3-doltlite.o
+        gcc -Werror -g -O2 -o sqllogictest-doltlite \
+          sqllogictest.c md5.o sqlite3-doltlite.o \
+          -lpthread -lm -lz -lodbc
+
+    - name: Package checked build
+      if: matrix.platform != 'windows'
+      run: tar -czf checked-build-${{ matrix.platform }}.tar.gz build
+
+    - name: Package checked Windows build
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: tar -czf checked-build-windows.tar.gz build
+
+    - name: Upload checked build
+      uses: actions/upload-artifact@v4
+      with:
+        name: checked-build-${{ matrix.platform }}
+        path: checked-build-${{ matrix.platform }}.tar.gz
+        retention-days: 1
+
+  coverage-build:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CC: clang
+      CFLAGS: -O1 -g -Werror -fprofile-instr-generate -fcoverage-mapping
+      LDFLAGS: -fprofile-instr-generate
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential clang llvm tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build-coverage
+        cd build-coverage
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build
+      run: |
+        cd build-coverage
+        set -o pipefail
+        {
+          make -j2 DOLTLITE_PROLLY_CHECK=1 \
+            doltlite doltlite-remotesrv doltlite-lib testfixture \
+            doltlite-c-tests-build doltlite-regression-test-c-build
+          make DOLTLITE_PROLLY=0 sqlite3
+          blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
+          for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
+            [ ! -f "$object" ] || blake_objects+=("$object")
+          done
+          clang $CFLAGS ../test/blake3_kat.c \
+            prolly_hash.o "${blake_objects[@]}" \
+            -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
+            $LDFLAGS -lm -o blake3_kat_test
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in coverage build"
+          exit 1
+        fi
+        find . -type f -name '*.profraw' -delete
+
+    - name: Package
+      run: |
+        mkdir -p coverage-artifact/build-coverage
+        cp build-coverage/doltlite \
+          build-coverage/doltlite-remotesrv \
+          build-coverage/doltlite_regression_test_c \
+          build-coverage/testfixture \
+          build-coverage/prolly_hash.o \
+          build-coverage/blake3*.o \
+          build-coverage/*_test \
+          coverage-artifact/build-coverage/
+        cp build-coverage/sqlite3 \
+          coverage-artifact/build-coverage/sqlite3-stock
+        llvm-strip --strip-debug coverage-artifact/build-coverage/*
+        tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-build
+        path: coverage-build.tar.gz
+        retention-days: 1
+
+  benchmark-build:
+    name: optimized-benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make -j2 doltlite doltlite-lib
+          cc -O2 -Werror -I. -I../src \
+            -o bench_timer_doltlite ../test/sysbench_timer.c \
+            libdoltlite.a -lpthread -lz -lm
+          make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
+          cc -O2 -Werror -I. -I../src \
+            -o bench_timer_sqlite ../test/sysbench_timer.c \
+            sqlite3.o -lpthread -lz -lm
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in optimized build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf benchmark-build.tar.gz build
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-build
+        path: benchmark-build.tar.gz
+        retention-days: 1
+
+  asan-ubsan-build:
+    name: asan-ubsan-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: ubuntu
+            runs-on: ubuntu-latest
+          - platform: macos
+            runs-on: macos-latest
+    env:
+      ASAN_CFLAGS: -O1 -g -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+      ASAN_LDFLAGS: -fsanitize=address,undefined
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Linux dependencies
+      if: matrix.platform == 'ubuntu'
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Install macOS dependencies
+      if: matrix.platform == 'macos'
+      run: brew install tcl-tk
+
+    - name: Configure
+      run: |
+        mkdir -p build
+        cd build
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+          ../configure
+        else
+          TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+          if [ -n "$TCL_CONFIG" ]; then
+            ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+          else
+            ../configure
+          fi
+        fi
+
+    - name: Build
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
+            doltlite libdoltlite.a
+          make DOLTLITE_PROLLY=0 sqlite3
+          cc $ASAN_CFLAGS -I. -I../src \
+            -o doltlite_regression_test_c \
+            ../test/doltlite_regression_test_c.c \
+            libdoltlite.a $ASAN_LDFLAGS -lz -lpthread -lm
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in sanitizer build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf asan-ubsan-${{ matrix.platform }}.tar.gz build
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: asan-ubsan-${{ matrix.platform }}
+        path: asan-ubsan-${{ matrix.platform }}.tar.gz
+        retention-days: 1
+
+  tsan-build:
+    name: tsan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TSAN_CFLAGS: -O1 -g -Werror -fsanitize=thread -fno-omit-frame-pointer
+      TSAN_LDFLAGS: -fsanitize=thread
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential clang zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build
+        cd build
+        CC=clang ../configure
+
+    - name: Build
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
+            sqlite3.c sqlite3.h
+          clang $TSAN_CFLAGS -I. -I../src \
+            -o threadtest4 ../test/threadtest4.c sqlite3.c \
+            $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+          clang $TSAN_CFLAGS -I. -I../src \
+            -o threadtest5 ../test/threadtest5.c sqlite3.c \
+            $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+          make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
+            doltlite doltlite-remotesrv
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in TSan build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf tsan-build.tar.gz build
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: tsan-build
+        path: tsan-build.tar.gz
+        retention-days: 1
+
+  crash-build:
+    name: crash
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential libtommath-dev tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build-crash
+        cd build-crash
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build
+      run: |
+        cd build-crash
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        . "$TCL_CONFIG"
+        set -o pipefail
+        make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
+          OPTS="$TCL_INCLUDE_SPEC" \
+          libdoltlite.a doltlite-crashtest crash_recovery_test_sqlite_test \
+          2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in crash-test build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf crash-build.tar.gz build-crash
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: crash-build
+        path: crash-build.tar.gz
+        retention-days: 1
+
+  fuzz-build:
+    name: libfuzzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FUZZ_CFLAGS: -O1 -g -Werror -fsanitize=fuzzer-no-link,address -fno-omit-frame-pointer -fno-sanitize-recover=address
+      FUZZ_LDFLAGS: -fsanitize=fuzzer-no-link,address
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential clang tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build-fuzz
+        cd build-fuzz
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build
+      run: |
+        cd build-fuzz
+        set -o pipefail
+        {
+          make CC=clang CFLAGS="$FUZZ_CFLAGS" LDFLAGS="$FUZZ_LDFLAGS" \
+            libdoltlite.a
+          for target in fuzz_replaywal fuzz_prolly_node fuzz_deserialize_refs fuzz_read_index fuzz_deserialize_catalog; do
+            clang -O1 -g -Werror \
+              -fsanitize=fuzzer,address -fno-omit-frame-pointer \
+              -fno-sanitize-recover=address \
+              -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+              -I. -I../src \
+              -o "$target" "../test/$target.c" libdoltlite.a \
+              -lz -lpthread
+          done
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in libFuzzer build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf fuzz-build.tar.gz build-fuzz
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-build
+        path: fuzz-build.tar.gz
+        retention-days: 1
+
+  wasm-build:
+    name: wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EMSDK_VERSION: 3.1.74
+      WABT_VERSION: 1.0.36
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache Emscripten SDK
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/emsdk
+        key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+
+    - name: Install Emscripten SDK
+      run: |
+        EMSDK_DIR="${RUNNER_TOOL_CACHE}/emsdk"
+        if [ ! -d "$EMSDK_DIR/.git" ]; then
+          rm -rf "$EMSDK_DIR"
+          git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+        fi
+        cd "$EMSDK_DIR"
+        git fetch --tags --quiet
+        ./emsdk install "$EMSDK_VERSION"
+        ./emsdk activate "$EMSDK_VERSION"
+        echo "EMSDK=$EMSDK_DIR" >> "$GITHUB_ENV"
+
+    - name: Cache WABT
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/wabt-${{ env.WABT_VERSION }}
+        key: wabt-${{ runner.os }}-${{ env.WABT_VERSION }}
+
+    - name: Install WABT
+      run: |
+        WABT_DIR="${RUNNER_TOOL_CACHE}/wabt-${WABT_VERSION}"
+        if [ ! -x "$WABT_DIR/bin/wasm-strip" ]; then
+          rm -rf "$WABT_DIR"
+          mkdir -p "$WABT_DIR"
+          curl -fsSL "https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/wabt-${WABT_VERSION}-ubuntu-20.04.tar.gz" \
+            | tar -xz --strip-components=1 -C "$WABT_DIR"
+        fi
+        echo "$WABT_DIR/bin" >> "$GITHUB_PATH"
+
+    - name: Build
+      run: |
+        source "$EMSDK/emsdk_env.sh"
+        set -o pipefail
+        {
+          ./configure
+          make sqlite3.c sqlite3.h sqlite3ext.h
+          mkdir -p build
+          cd build
+          ../configure
+          make doltlite
+          cd ..
+          make -C ext/wasm fiddle npm dist
+        } 2>&1 | tee wasm-build.log
+        if grep -E "warning:" wasm-build.log; then
+          echo "::error::compiler warnings in wasm build"
+          exit 1
+        fi
+
+    - name: Package
+      run: |
+        tar -czf ci-wasm-build.tar.gz \
+          build/doltlite \
+          ext/wasm/jswasm \
+          ext/wasm/sqlite-wasm-*.zip
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-wasm-build
+        path: ci-wasm-build.tar.gz
+        retention-days: 1
+
+  compat-build:
+    name: compatibility-references
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Cache old-version binaries
+      uses: actions/cache@v4
+      with:
+        path: .compat-cache
+        key: compat-bins-${{ runner.os }}-${{ github.base_ref || github.ref_name }}
+        restore-keys: |
+          compat-bins-${{ runner.os }}-
+
+    - name: Build compatibility references
+      run: |
+        DOLTLITE_COMPAT_JOBS=4 \
+          bash test/doltlite_compat_test.sh --build-only
+
+    - name: Package
+      run: tar -czf compat-build.tar.gz .compat-cache
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: compat-build
+        path: compat-build.tar.gz
+        retention-days: 1
+
+  development-builds:
+    name: development-configurations
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CFLAGS: -O2 -g -Werror
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Compile development configurations
+      run: |
+        cd build
+        make DOLTLITE_PROLLY=1 testfixture
+        ./testfixture ../test/testrunner.tcl \
+          --buildonly --jobs 4 mdevtest
+
+  no-dead-code:
+    name: no-dead-code
+    needs: checked
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: No orphaned test suites
+      run: bash test/lint_orphaned_suites.sh
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
+
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
+
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
+
+    - name: Dead-code gate
+      run: bash test/dead_code_check.sh

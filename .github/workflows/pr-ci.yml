@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  build:
+    name: Build all binaries
+    uses: ./.github/workflows/ci-build.yml
+
+  build-test:
+    name: Build-Test
+    needs: build
+    uses: ./.github/workflows/build-test.yml
+
+  test-suite:
+    name: Test Suite
+    needs: build
+    uses: ./.github/workflows/test.yml
+
+  sanitizers:
+    name: Sanitizers
+    needs: build
+    uses: ./.github/workflows/sanitizers.yml
+
+  smoke:
+    name: Smoke
+    needs: build
+    uses: ./.github/workflows/smoke.yml
+
+  benchmark:
+    name: Benchmark
+    needs: build
+    uses: ./.github/workflows/benchmark.yml

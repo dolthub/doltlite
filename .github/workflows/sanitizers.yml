@@ -1,8 +1,7 @@
 name: Sanitizers
 
 on:
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   asan-ubsan:
@@ -22,33 +21,13 @@ jobs:
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
+    - name: Download ASan/UBSan build
+      uses: actions/download-artifact@v4
+      with:
+        name: asan-ubsan-ubuntu
 
-    # Build doltlite + the stock sqlite3 shell oracle target with
-    # ASan + UBSan. `-fno-sanitize-recover=all` turns every sanitizer
-    # finding into an immediate abort so the test suite cannot
-    # silently paper over a new one. `-fno-omit-frame-pointer` keeps
-    # backtraces readable; `-O1` is the usual sanitizer-friendly
-    # compromise between speed and accurate error location.
-    - name: Build with ASan/UBSan
-      run: |
-        cd build
-        make \
-          CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
-          LDFLAGS="-fsanitize=address,undefined" \
-          doltlite
-        # Build true stock sqlite3 (without the prolly engine swap)
-        # so the SQL oracle compares against upstream behavior, not
-        # against another doltlite build.
-        make DOLTLITE_PROLLY=0 sqlite3
+    - name: Extract ASan/UBSan build
+      run: tar -xzf asan-ubsan-ubuntu.tar.gz
 
     # ASan options: log to stderr, abort on error, leak detection
     # on. A suppressions file (build/lsan.supp) is created right
@@ -120,22 +99,8 @@ jobs:
 
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
-    # Reuses the objects built above; only the archive and link are new.
-    # No stdbuf here: its LD_PRELOAD loads ahead of the ASan runtime and
-    # aborts the process. Buffered stdout is lost if LSan exits nonzero,
-    # but the sanitizer report itself goes to unbuffered stderr.
     - name: C regression corpus (ASan/UBSan)
-      run: |
-        cd build
-        make \
-          CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
-          LDFLAGS="-fsanitize=address,undefined" \
-          libdoltlite.a
-        cc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all \
-          -I. -I../src \
-          -o doltlite_regression_test_c ../test/doltlite_regression_test_c.c \
-          libdoltlite.a -lz -lpthread -lm
-        ./doltlite_regression_test_c all
+      run: cd build && ./doltlite_regression_test_c all
 
   # Same ASan/UBSan coverage as the Linux job above, but on macOS/arm64 to
   # catch platform-specific undefined behavior and memory bugs the Linux x86
@@ -155,23 +120,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: brew install tcl-tk
+    - name: Download ASan/UBSan build
+      uses: actions/download-artifact@v4
+      with:
+        name: asan-ubsan-macos
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
-        ../configure
-
-    - name: Build with ASan/UBSan
-      run: |
-        cd build
-        make \
-          CFLAGS="$ASAN_CFLAGS" \
-          LDFLAGS="-fsanitize=address,undefined" \
-          doltlite
-        make DOLTLITE_PROLLY=0 sqlite3
+    - name: Extract ASan/UBSan build
+      run: tar -xzf asan-ubsan-macos.tar.gz
 
     - name: SQL oracle tests (vs stock SQLite)
       run: |
@@ -208,17 +163,7 @@ jobs:
         done
 
     - name: C regression corpus (ASan/UBSan)
-      run: |
-        cd build
-        make \
-          CFLAGS="$ASAN_CFLAGS" \
-          LDFLAGS="-fsanitize=address,undefined" \
-          libdoltlite.a
-        cc $ASAN_CFLAGS \
-          -I. -I../src \
-          -o doltlite_regression_test_c ../test/doltlite_regression_test_c.c \
-          libdoltlite.a -lz -lpthread -lm
-        ./doltlite_regression_test_c all
+      run: cd build && ./doltlite_regression_test_c all
 
   tsan:
     runs-on: ubuntu-latest
@@ -234,40 +179,15 @@ jobs:
 
     - name: Install dependencies
       run: |
-        bash .github/scripts/install-apt-deps.sh clang build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        CC=clang ../configure
+    - name: Download TSan build
+      uses: actions/download-artifact@v4
+      with:
+        name: tsan-build
 
-    - name: Build DoltLite amalgamation with TSan
-      run: |
-        cd build
-        make \
-          CC=clang \
-          CFLAGS="$TSAN_CFLAGS" \
-          LDFLAGS="$TSAN_LDFLAGS" \
-          sqlite3.c sqlite3.h
-
-    - name: Build pthread stress tests
-      run: |
-        cd build
-        clang $TSAN_CFLAGS -I. -I../src \
-          -o threadtest4 ../test/threadtest4.c sqlite3.c \
-          $TSAN_LDFLAGS -ldl -lpthread -lm -lz
-        clang $TSAN_CFLAGS -I. -I../src \
-          -o threadtest5 ../test/threadtest5.c sqlite3.c \
-          $TSAN_LDFLAGS -ldl -lpthread -lm -lz
-
-    - name: Build DoltLite remote server with TSan
-      run: |
-        cd build
-        make \
-          CC=clang \
-          CFLAGS="$TSAN_CFLAGS" \
-          LDFLAGS="$TSAN_LDFLAGS" \
-          doltlite doltlite-remotesrv
+    - name: Extract TSan build
+      run: tar -xzf tsan-build.tar.gz
 
     - name: Run threadtest4 serialized
       run: |
@@ -298,36 +218,3 @@ jobs:
         bash ../test/remotesrv_http_concurrency_test.sh \
           ./doltlite ./doltlite-remotesrv
       timeout-minutes: 10
-
-  no-dead-code:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-    - uses: actions/checkout@v4
-
-    # Fast structural check (no build): every test suite must actually run.
-    - name: No orphaned test suites
-      run: bash test/lint_orphaned_suites.sh
-
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
-
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    # The gate compiles the doltlite sources with -fsyntax-only, so it only
-    # needs the generated headers, not a full build.
-    - name: Generate headers
-      run: cd build && make doltlite.h sqlite3.h parse.h opcodes.h keywordhash.h
-
-    - name: Dead-code gate
-      run: bash test/dead_code_check.sh

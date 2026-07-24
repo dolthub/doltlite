@@ -1,5 +1,11 @@
 #!/bin/bash
 
+MODE=test
+if [ "${1:-}" = "--build-only" ]; then
+  MODE=build-only
+  shift
+fi
+
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -17,10 +23,12 @@ ok()   { echo "PASS: $1"; pass=$((pass+1)); }
 bad()  { echo "FAIL: $1"; fail=$((fail+1)); }
 check(){ if [ "$2" = "0" ]; then ok "$1"; else bad "$1${3:+ — $3}"; fi; }
 
-DOLTLITE="$(cd "$(dirname "$DOLTLITE")" && pwd)/$(basename "$DOLTLITE")"
-if [ ! -x "$DOLTLITE" ]; then
-  echo "ERROR: current doltlite binary not found: $DOLTLITE"
-  exit 1
+if [ "$MODE" = "test" ]; then
+  DOLTLITE="$(cd "$(dirname "$DOLTLITE")" && pwd)/$(basename "$DOLTLITE")"
+  if [ ! -x "$DOLTLITE" ]; then
+    echo "ERROR: current doltlite binary not found: $DOLTLITE"
+    exit 1
+  fi
 fi
 if ! git -C "$REPO_ROOT" rev-parse v0.11.0 >/dev/null 2>&1; then
   echo "ERROR: git tags unavailable (shallow clone?); fetch tags first:"
@@ -92,6 +100,10 @@ build_old() {  # build_old <tag> -> echoes binary path, rc!=0 on failure
   local tag="$1"
   local bin="$CACHE_DIR/$tag/doltlite"
   if [ -x "$bin" ]; then echo "$bin"; return 0; fi
+  if [ "${DOLTLITE_COMPAT_PREBUILT:-0}" = "1" ]; then
+    echo "ERROR: prebuilt compatibility binary missing: $bin" >&2
+    return 1
+  fi
   local wt="$CACHE_DIR/src-$tag"
   mkdir -p "$CACHE_DIR/$tag"
   rm -rf "$wt"
@@ -200,6 +212,18 @@ fi
 echo "current: $cur_desc (series $cur_series, chunk store v$cur_csv)"
 echo "tags: $TAGS"
 echo
+
+if [ "$MODE" = "build-only" ]; then
+  for tag in $TAGS; do
+    echo "-- $tag: building compatibility binary"
+    if ! build_old "$tag" >/dev/null; then
+      echo "ERROR: failed to build $tag (see $CACHE_DIR/$tag/build.log)"
+      exit 1
+    fi
+  done
+  echo "Built all compatibility binaries."
+  exit 0
+fi
 
 for tag in $TAGS; do
   old_sig=$(format_signature "$tag")

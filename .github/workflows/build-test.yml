@@ -1,76 +1,23 @@
 name: Build-Test
 
 on:
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      EMSDK_VERSION: 3.1.74
-      WABT_VERSION: 1.0.36
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Cache Emscripten SDK
-      uses: actions/cache@v4
+    - name: Download wasm build
+      uses: actions/download-artifact@v4
       with:
-        path: ${{ runner.tool_cache }}/emsdk
-        key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+        name: ci-wasm-build
 
-    - name: Install Emscripten SDK
-      run: |
-        EMSDK_DIR="${RUNNER_TOOL_CACHE}/emsdk"
-        if [ ! -d "$EMSDK_DIR/.git" ]; then
-          rm -rf "$EMSDK_DIR"
-          git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
-        fi
-        cd "$EMSDK_DIR"
-        git fetch --tags --quiet
-        ./emsdk install "$EMSDK_VERSION"
-        ./emsdk activate "$EMSDK_VERSION"
-        echo "EMSDK=$EMSDK_DIR" >> "$GITHUB_ENV"
-
-    - name: Cache WABT
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.tool_cache }}/wabt-${{ env.WABT_VERSION }}
-        key: wabt-${{ runner.os }}-${{ env.WABT_VERSION }}
-
-    - name: Install WABT
-      run: |
-        WABT_DIR="${RUNNER_TOOL_CACHE}/wabt-${WABT_VERSION}"
-        if [ ! -x "$WABT_DIR/bin/wasm-strip" ]; then
-          rm -rf "$WABT_DIR"
-          mkdir -p "$WABT_DIR"
-          curl -fsSL "https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/wabt-${WABT_VERSION}-ubuntu-20.04.tar.gz" \
-            | tar -xz --strip-components=1 -C "$WABT_DIR"
-        fi
-        echo "$WABT_DIR/bin" >> "$GITHUB_PATH"
-
-    - name: Configure
-      run: |
-        source "$EMSDK/emsdk_env.sh"
-        ./configure
-
-    - name: Build generated SQLite files
-      run: |
-        make sqlite3.c sqlite3.h sqlite3ext.h
-
-    - name: Build native DoltLite
-      run: |
-        mkdir -p build
-        cd build
-        ../configure
-        make doltlite
-
-    - name: Build DoltLite wasm targets
-      run: |
-        source "$EMSDK/emsdk_env.sh"
-        make -C ext/wasm fiddle npm
+    - name: Extract wasm build
+      run: tar -xzf ci-wasm-build.tar.gz
 
     - name: Smoke test DoltLite wasm runtime
       run: |
@@ -89,11 +36,6 @@ jobs:
         chmod +x packaging/npm/assemble.sh packaging/npm/test-package.sh
         bash packaging/npm/test-package.sh
 
-    - name: Build wasm distribution zip
-      run: |
-        source "$EMSDK/emsdk_env.sh"
-        make -C ext/wasm dist
-
     - name: Upload wasm artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -102,50 +44,30 @@ jobs:
           ext/wasm/jswasm/*
           ext/wasm/sqlite-wasm-*.zip
 
-  development-builds:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      CFLAGS: -O2 -g -Werror
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
-
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build development test configurations
-      run: |
-        cd build
-        make DOLTLITE_PROLLY=1 testfixture
-        ./testfixture ../test/testrunner.tcl --buildonly --jobs 2 mdevtest
-
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 20
     env:
       CFLAGS: -O2 -g -Werror
+      DOLTLITE_AMALG_HTTP_PROBE: ${{ github.workspace }}/build/amalgamation_http_probe${{ matrix.exe }}
+      DOLTLITE_BLAKE3_KAT_BIN: ${{ github.workspace }}/build/blake3_kat${{ matrix.exe }}
+      DOLTLITE_CREDS_KAT_BIN: ${{ github.workspace }}/build/creds_kat${{ matrix.exe }}
+      DOLTLITE_CREDS_VERIFY_BIN: ${{ github.workspace }}/build/creds_verify_kat${{ matrix.exe }}
+      DOLTLITE_TLS_TEST_BIN: ${{ github.workspace }}/build/tls_test${{ matrix.exe }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: ubuntu
             runs-on: ubuntu-latest
+            exe: ''
           - platform: windows
             runs-on: windows-latest
+            exe: .exe
           - platform: macos
             runs-on: macos-latest
+            exe: ''
 
     steps:
     - uses: actions/checkout@v4
@@ -164,7 +86,7 @@ jobs:
 
     - name: Install dependencies (macOS)
       if: matrix.platform == 'macos'
-      run: brew install tcl-tk ripgrep
+      run: brew install ripgrep
 
     - name: Install Dolt
       if: matrix.platform == 'ubuntu'
@@ -173,65 +95,19 @@ jobs:
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
 
-    - name: Configure
-      if: matrix.platform == 'ubuntu'
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-${{ matrix.platform }}
 
-    - name: Configure Windows
+    - name: Extract checked build
+      if: matrix.platform != 'windows'
+      run: tar -xzf checked-build-${{ matrix.platform }}.tar.gz
+
+    - name: Extract checked Windows build
       if: matrix.platform == 'windows'
       shell: msys2 {0}
-      run: |
-        mkdir -p build && cd build
-        ../configure
-
-    - name: Configure (macOS)
-      if: matrix.platform == 'macos'
-      run: |
-        mkdir -p build && cd build
-        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
-        ../configure
-
-    - name: Build
-      if: matrix.platform != 'windows'
-      run: |
-        cd build
-        set -o pipefail
-        {
-          make DOLTLITE_PROLLY_CHECK=1 doltlite
-          make DOLTLITE_PROLLY_CHECK=1 doltlite-remotesrv
-          make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
-          # doltlite_parity.sh compares against the package-built stock
-          # SQLite CLI instead of whatever sqlite3 the runner image provides.
-          make DOLTLITE_PROLLY=0 sqlite3
-          # Stock SQLite lib for concurrent_branch_test
-          make libsqlite3.a USE_AMALGAMATION=0
-        } 2>&1 | tee build.log
-        DOLTLITE_CHECK_AMALGAMATION=0 bash ../test/assert_doltlite_artifacts.sh .
-        if grep -E "warning:" build.log; then
-          echo "::error::compiler warnings in the build (see above); the build must be warning-free"
-          exit 1
-        fi
-
-    - name: Build Windows
-      if: matrix.platform == 'windows'
-      shell: msys2 {0}
-      run: |
-        cd build
-        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-remotesrv.exe doltlite-lib
-        DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 bash ../test/assert_doltlite_artifacts.sh .
-        cp -f "$(command -v sqlite3)" sqlite3
-
-    - name: Lint
-      if: matrix.platform != 'windows'
-      run: cd build && make lint
-      timeout-minutes: 1
+      run: tar -xzf checked-build-windows.tar.gz
 
     - name: Basic smoke tests
       if: matrix.platform != 'windows'
@@ -426,7 +302,6 @@ jobs:
         bash ../test/remotesrv_stall_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
-        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
         bash ../test/amalgamation_windows_source_test.sh ./sqlite3.c
         REMOTESRV=./doltlite-remotesrv.exe bash ../test/amalgamation_http_remote_test.sh .
       timeout-minutes: 20
@@ -483,8 +358,6 @@ jobs:
       if: matrix.platform != 'windows'
       run: |
         cd build
-        rm -f sqlite3.c .target_source
-        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
         bash ../test/amalgamation_http_remote_test.sh .
       timeout-minutes: 5
 
@@ -494,29 +367,19 @@ jobs:
       if: matrix.platform != 'windows'
       run: |
         cd build
-        # Quickstart
-        gcc $CFLAGS -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
         ./quickstart
-        # Concurrent branch test
-        cc $CFLAGS -g -O0 -I. -I../src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
-          -o concurrent_branch_test ../test/concurrent_branch_test.c \
-          libsqlite3.a -lz -lpthread -lm
         ./concurrent_branch_test
 
     - name: Concurrent write test
       if: matrix.platform != 'windows'
       run: |
         cd build
-        gcc $CFLAGS -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
-          libdoltlite.a -lz -lpthread -lm
         ./concurrent_write_test
 
     - name: Native crash recovery test
       if: matrix.platform == 'ubuntu'
       run: |
         cd build
-        cc $CFLAGS -I. -o crash_recovery_test ../test/crash_recovery_test.c \
-          libdoltlite.a -lz -lpthread -lm
         ./crash_recovery_test
       timeout-minutes: 10
 
@@ -524,13 +387,13 @@ jobs:
       if: matrix.platform == 'macos'
       run: |
         cd build
-        gcc $CFLAGS -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
-          libdoltlite.a -lz -lpthread -lm
         ./prepared_stmt_reuse_test
 
     - name: Windows native C regression tests
       if: matrix.platform == 'windows'
       shell: msys2 {0}
+      env:
+        DOLTLITE_REGRESSION_PREBUILT: 1
       run: cd build && bash ../test/run_doltlite_regression_case.sh all_except=backup_safety
       timeout-minutes: 15
 
@@ -538,7 +401,6 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         cd build
-        make doltlite-c-tests-build
         bash ../test/run_c_tests.sh . specialized
       timeout-minutes: 15
 
@@ -548,12 +410,4 @@ jobs:
 
     - name: Go integration test
       if: matrix.platform == 'ubuntu'
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23'
-    - if: matrix.platform == 'ubuntu'
-      run: |
-        cd examples/go
-        CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
-          go build -tags libsqlite3 -o quickstart .
-        ./quickstart
+      run: build/go_quickstart

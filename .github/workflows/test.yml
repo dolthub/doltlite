@@ -1,85 +1,24 @@
 name: Test Suite
 
 on:
-  pull_request:
+  workflow_call:
 
 jobs:
-  coverage-build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      CC: clang
-      CFLAGS: -O1 -g -fprofile-instr-generate -fcoverage-mapping
-      LDFLAGS: -fprofile-instr-generate
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh \
-          build-essential clang llvm tcl-dev zlib1g-dev
-
-    - name: Configure instrumented build
-      run: |
-        mkdir -p build-coverage
-        cd build-coverage
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
-        else
-          ../configure
-        fi
-
-    - name: Build shared coverage targets
-      run: |
-        cd build-coverage
-        make -j2 DOLTLITE_PROLLY_CHECK=1 \
-          doltlite doltlite-remotesrv doltlite-lib testfixture \
-          doltlite-c-tests-build doltlite-regression-test-c-build
-        make DOLTLITE_PROLLY=0 sqlite3
-        find . -type f -name '*.profraw' -delete
-
-    - name: Package instrumented build
-      run: |
-        mkdir -p coverage-artifact/build-coverage
-        cp build-coverage/doltlite \
-          build-coverage/doltlite-remotesrv \
-          build-coverage/doltlite_regression_test_c \
-          build-coverage/testfixture \
-          build-coverage/prolly_hash.o \
-          build-coverage/blake3*.o \
-          build-coverage/*_test \
-          coverage-artifact/build-coverage/
-        cp build-coverage/sqlite3 \
-          coverage-artifact/build-coverage/sqlite3-stock
-        llvm-strip --strip-debug coverage-artifact/build-coverage/*
-        tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
-
-    - name: Upload instrumented build
-      uses: actions/upload-artifact@v4
-      with:
-        name: coverage-build
-        path: coverage-build.tar.gz
-        retention-days: 1
-
   scaling:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+    - name: Download optimized build
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-build
 
-    # Plain build: DOLTLITE_PROLLY_CHECK adds a full-tree walk to every
-    # commit, which swamps the curves this suite gates on.
-    - name: Build
+    - name: Extract optimized build
       run: |
-        mkdir -p build-plain && cd build-plain
-        ../configure
-        make doltlite
+        tar -xzf benchmark-build.tar.gz
+        mv build build-plain
 
     - name: Scaling curves
       run: bash test/doltlite_scaling.sh build-plain/doltlite
@@ -91,21 +30,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
 
-    - name: Build concurrency stress
-      run: |
-        cd build
-        make DOLTLITE_PROLLY_CHECK=1 concurrent_stress_test
-      timeout-minutes: 5
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
 
     - name: Run concurrency stress
       run: |
@@ -120,21 +51,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
 
-    - name: Build prolly txn stress
-      run: |
-        cd build
-        make DOLTLITE_PROLLY_CHECK=1 prolly_txn_stress_test
-      timeout-minutes: 5
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
 
     - name: Run prolly txn stress (loop)
       run: |
@@ -161,22 +84,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
 
-    - name: Build version-control concurrency stress
-      run: |
-        cd build
-        make DOLTLITE_PROLLY_CHECK=1 vc_concurrency_test
-        make DOLTLITE_PROLLY_CHECK=1 vc_ref_mutation_stress_test
-      timeout-minutes: 5
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
 
     - name: Run version-control concurrency stress
       run: |
@@ -206,27 +120,15 @@ jobs:
 
     - name: Install dependencies
       run: |
-        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev
 
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        ../configure
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
 
-    - name: Build DoltLite amalgamation
-      run: |
-        cd build
-        make sqlite3.c sqlite3.h
-
-    - name: Build pthread stress tests
-      run: |
-        cd build
-        cc -O2 -g -I. -I../src \
-          -o threadtest4 ../test/threadtest4.c sqlite3.c \
-          -ldl -lpthread -lm -lz
-        cc -O2 -g -I. -I../src \
-          -o threadtest5 ../test/threadtest5.c sqlite3.c \
-          -ldl -lpthread -lm -lz
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
 
     - name: Run threadtest4 serialized
       run: |
@@ -254,63 +156,25 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev tcl-dev fossil unixodbc-dev
+      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev unixodbc
 
-    - name: Build doltlite amalgamation
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-        make sqlite3.c sqlite3.h
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-ubuntu
 
-    - name: Clone sqllogictest (official SQLite Fossil repo)
-      run: |
-        fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
-        mkdir -p /tmp/sqllogictest && cd /tmp/sqllogictest
-        # Pin to a fixed check-in so query-record line numbers (the keys of the
-        # per-assertion divergence list) stay stable across runs.
-        fossil open /tmp/sqllogictest.fossil db57eba95d7c412bb413da5480c8be24109a8faf
-        # Make the runner emit a "!DIVERGE <query-line>" token per divergent
-        # query record (both runners are built from this patched source).
-        perl "$GITHUB_WORKSPACE/test/patch_sqllogictest.pl" < src/sqllogictest.c > src/sqllogictest.c.patched
-        mv src/sqllogictest.c.patched src/sqllogictest.c
-
-    - name: Build stock sqllogictest C runner (reference)
-      run: |
-        cd /tmp/sqllogictest/src
-        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
-          -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c
-        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
-          -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
-        gcc -g -O2 -o sqllogictest-stock sqllogictest.c md5.o sqlite3.o -lpthread -lm -lodbc
-
-    - name: Build sqllogictest C runner with doltlite
-      run: |
-        cd /tmp/sqllogictest/src
-        # Replace bundled SQLite amalgamation with doltlite's
-        cp $GITHUB_WORKSPACE/build/sqlite3.c sqlite3.c
-        cp $GITHUB_WORKSPACE/build/sqlite3.h sqlite3.h
-        # doltlite's amalgamation has the prolly storage engine baked in, which
-        # needs a threadsafe build (THREADSAFE=0 turns btree-mutex entry points
-        # into no-op macros the engine's orig/shim split can't reconcile).
-        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=1 \
-          -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
-        gcc -g -O2 -o sqllogictest-doltlite sqllogictest.c md5.o sqlite3.o -lpthread -lm -lz -lodbc
+    - name: Extract checked build
+      run: tar -xzf checked-build-ubuntu.tar.gz
 
     - name: Run full sqllogictest suite
       run: |
         bash test/run_sqllogictest.sh \
-          /tmp/sqllogictest/src/sqllogictest-doltlite \
-          /tmp/sqllogictest/src/sqllogictest-stock \
-          /tmp/sqllogictest/test
+          build/sqllogictest/src/sqllogictest-doltlite \
+          build/sqllogictest/src/sqllogictest-stock \
+          build/sqllogictest/test
 
   oracle-tests:
     name: oracle-tests-${{ matrix.bucket }}
-    needs: coverage-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -385,7 +249,6 @@ jobs:
 
   sqlite-regression:
     name: sqlite-regression-${{ matrix.bucket }}
-    needs: coverage-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -407,7 +270,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
 
     - name: Download instrumented build
       uses: actions/download-artifact@v4
@@ -463,7 +326,6 @@ jobs:
 
   coverage-native:
     name: coverage-native-${{ matrix.suite }}
-    needs: coverage-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -471,6 +333,7 @@ jobs:
       CFLAGS: -O1 -g -fprofile-instr-generate -fcoverage-mapping
       LDFLAGS: -fprofile-instr-generate
       DOLTLITE_REGRESSION_PREBUILT: 1
+      DOLTLITE_BLAKE3_KAT_BIN: ${{ github.workspace }}/build-coverage/blake3_kat_test
     strategy:
       fail-fast: false
       matrix:
@@ -526,7 +389,6 @@ jobs:
         retention-days: 1
 
   coverage-remotes:
-    needs: coverage-build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -572,7 +434,6 @@ jobs:
 
   source-coverage:
     needs:
-      - coverage-build
       - oracle-tests
       - sqlite-regression
       - coverage-native
@@ -696,26 +557,22 @@ jobs:
       run: |
         bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
 
-    - name: Cache old-version binaries
-      uses: actions/cache@v4
+    - name: Download checked build
+      uses: actions/download-artifact@v4
       with:
-        path: .compat-cache
-        key: compat-bins-${{ runner.os }}-${{ github.base_ref || github.ref_name }}
-        restore-keys: |
-          compat-bins-${{ runner.os }}-
+        name: checked-build-ubuntu
 
-    - name: Configure
+    - name: Download compatibility references
+      uses: actions/download-artifact@v4
+      with:
+        name: compat-build
+
+    - name: Extract prebuilt binaries
       run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite
-      run: cd build && make -j4 doltlite
+        tar -xzf checked-build-ubuntu.tar.gz
+        tar -xzf compat-build.tar.gz
 
     - name: Cross-version compatibility tests
+      env:
+        DOLTLITE_COMPAT_PREBUILT: 1
       run: bash test/doltlite_compat_test.sh build/doltlite
