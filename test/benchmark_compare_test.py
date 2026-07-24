@@ -109,6 +109,115 @@ class BenchmarkCompareTest(unittest.TestCase):
             ],
         )
 
+    def test_parses_three_consecutive_regressions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "attempts.tsv"
+            path.write_text(
+                "attempt\tstatus\n"
+                "1\tregression\n"
+                "2\tregression\n"
+                "3\tregression\n",
+                encoding="utf-8",
+            )
+            suite, statuses = benchmark_compare.parse_attempt_history(
+                f"int={path}"
+            )
+        self.assertEqual(suite, "int")
+        self.assertEqual(
+            statuses,
+            ["regression", "regression", "regression"],
+        )
+
+    def test_rejects_unconfirmed_final_regression(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "attempts.tsv"
+            path.write_text(
+                "attempt\tstatus\n1\tregression\n2\tregression\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires three consecutive failures",
+            ):
+                benchmark_compare.parse_attempt_history(f"int={path}")
+
+    def test_report_describes_transient_retry(self):
+        results = [result("point", 100_000, 101_000)]
+        analysis = self.analyze(results)
+        report = benchmark_compare.render(
+            results,
+            analysis,
+            "base",
+            "candidate",
+            1.25,
+            1.15,
+            5000,
+            attempt_histories={"int": ["regression", "pass"]},
+        )
+        self.assertIn(
+            "int passed attempt 2 after 1 transient gate failure",
+            report,
+        )
+
+    def test_main_accepts_attempt_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            timings = directory / "result.tsv"
+            attempts = directory / "attempts.tsv"
+            report = directory / "report.md"
+            timings.write_text(
+                "reads\tpoint\t100000\t101000\n",
+                encoding="utf-8",
+            )
+            attempts.write_text(
+                "attempt\tstatus\n1\tregression\n2\tpass\n",
+                encoding="utf-8",
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = benchmark_compare.main(
+                    [
+                        "--input",
+                        f"int={timings}",
+                        "--attempt-history",
+                        f"int={attempts}",
+                        "--baseline-ref",
+                        "base",
+                        "--candidate-ref",
+                        "candidate",
+                        "--expected-baseline-ref",
+                        "base",
+                        "--expected-candidate-ref",
+                        "candidate",
+                        "--output",
+                        str(report),
+                    ]
+                )
+            output = report.read_text(encoding="utf-8")
+        self.assertEqual(rc, 0)
+        self.assertIn("int passed attempt 2", output)
+
+    def test_rejects_regression_without_three_failed_attempts(self):
+        results = [result("point", 100_000, 140_000)]
+        analysis = self.analyze(results)
+        with self.assertRaisesRegex(
+            ValueError,
+            "lacks three-failure confirmation",
+        ):
+            benchmark_compare.validate_retry_confirmation(
+                results,
+                analysis,
+                {"int": ["pass"]},
+            )
+
+    def test_accepts_regression_after_three_failed_attempts(self):
+        results = [result("point", 100_000, 140_000)]
+        analysis = self.analyze(results)
+        benchmark_compare.validate_retry_confirmation(
+            results,
+            analysis,
+            {"int": ["regression", "regression", "regression"]},
+        )
+
     def test_rejects_swapped_revision_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = pathlib.Path(directory)

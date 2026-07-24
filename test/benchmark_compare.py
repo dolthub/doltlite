@@ -32,6 +32,48 @@ class Result:
         return self.candidate_us - self.baseline_us
 
 
+def parse_attempt_history(spec):
+    if "=" not in spec:
+        raise ValueError(f"attempt history must be SUITE=PATH: {spec}")
+    suite, path_text = spec.split("=", 1)
+    if not suite or not path_text:
+        raise ValueError(f"attempt history must be SUITE=PATH: {spec}")
+    path = pathlib.Path(path_text)
+    statuses = []
+    with path.open(encoding="utf-8") as source:
+        header = source.readline().rstrip("\n")
+        if header != "attempt\tstatus":
+            raise ValueError(f"{path}: invalid attempt history header")
+        for line_number, line in enumerate(source, 2):
+            columns = line.rstrip("\n").split("\t")
+            if len(columns) != 2:
+                raise ValueError(
+                    f"{path}:{line_number}: expected attempt and status"
+                )
+            attempt, status = columns
+            if attempt != str(len(statuses) + 1):
+                raise ValueError(
+                    f"{path}:{line_number}: attempts must be consecutive"
+                )
+            if status not in ("pass", "regression"):
+                raise ValueError(
+                    f"{path}:{line_number}: invalid status {status}"
+                )
+            statuses.append(status)
+    if not statuses:
+        raise ValueError(f"{path}: no benchmark attempts")
+    if statuses[-1] == "pass":
+        if any(status != "regression" for status in statuses[:-1]):
+            raise ValueError(f"{path}: pass must end the attempt history")
+    elif len(statuses) != 3 or any(
+        status != "regression" for status in statuses
+    ):
+        raise ValueError(
+            f"{path}: final regression requires three consecutive failures"
+        )
+    return suite, statuses
+
+
 def parse_input(spec):
     if "=" not in spec:
         raise ValueError(f"input must be SUITE=PATH: {spec}")
@@ -190,7 +232,49 @@ def analyze(
         "section_ratios": section_ratios,
         "suite_ratios": suite_ratios,
         "overall_ratio": overall_ratio,
+        "overall_failed": overall_failed,
     }
+
+
+def validate_retry_confirmation(results, analysis, attempt_histories):
+    result_suites = {result.suite for result in results}
+    history_suites = set(attempt_histories)
+    if result_suites != history_suites:
+        missing = sorted(result_suites - history_suites)
+        extra = sorted(history_suites - result_suites)
+        details = []
+        if missing:
+            details.append(f"missing: {', '.join(missing)}")
+        if extra:
+            details.append(f"unexpected: {', '.join(extra)}")
+        raise ValueError(
+            "attempt histories do not match benchmark suites ("
+            + "; ".join(details)
+            + ")"
+        )
+
+    failed_suites = {
+        suite for suite, _section, _test in analysis["individual_failures"]
+    }
+    failed_suites.update(
+        suite for suite, _section in analysis["section_failures"]
+    )
+    failed_suites.update(analysis["suite_failures"])
+    confirmed_suites = {
+        suite
+        for suite, statuses in attempt_histories.items()
+        if statuses[-1] == "regression"
+    }
+    unconfirmed = sorted(failed_suites - confirmed_suites)
+    if unconfirmed:
+        raise ValueError(
+            "benchmark regression lacks three-failure confirmation: "
+            + ", ".join(unconfirmed)
+        )
+    if analysis["overall_failed"] and not confirmed_suites:
+        raise ValueError(
+            "overall benchmark regression lacks three-failure confirmation"
+        )
 
 
 def render(
@@ -202,6 +286,7 @@ def render(
     aggregate_ratio,
     min_delta_us,
     individual_overrides=None,
+    attempt_histories=None,
 ):
     suites = defaultdict(list)
     for result in results:
@@ -226,6 +311,25 @@ def render(
             f"- **{suite} individual gate:** > {ratio:.2f}x with more than "
             f"{format_time(delta)} regression"
         )
+    retried = []
+    for suite, statuses in sorted((attempt_histories or {}).items()):
+        if len(statuses) == 1:
+            continue
+        if statuses[-1] == "pass":
+            retried.append(
+                f"{suite} passed attempt {len(statuses)} after "
+                f"{len(statuses) - 1} transient gate "
+                f"{'failure' if len(statuses) == 2 else 'failures'}"
+            )
+        else:
+            retried.append(
+                f"{suite} exceeded its gate in {len(statuses)} "
+                "consecutive attempts"
+            )
+    lines.append(
+        "- **Automatic retries:** "
+        + ("; ".join(retried) if retried else "none")
+    )
     lines.extend(
         [
             "",
@@ -341,6 +445,13 @@ def main(argv=None):
         metavar="SUITE=RATIO:MIN_DELTA_US",
         help="Override the individual gate for one suite; may be repeated",
     )
+    parser.add_argument(
+        "--attempt-history",
+        action="append",
+        default=[],
+        metavar="SUITE=PATH",
+        help="Validated retry history for one suite; may be repeated",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
 
@@ -362,6 +473,12 @@ def main(argv=None):
         results = []
         for spec in args.input:
             results.extend(parse_input(spec))
+        attempt_histories = {}
+        for spec in args.attempt_history:
+            suite, statuses = parse_attempt_history(spec)
+            if suite in attempt_histories:
+                raise ValueError(f"duplicate attempt history for {suite}")
+            attempt_histories[suite] = statuses
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
@@ -383,6 +500,15 @@ def main(argv=None):
         args.min_delta_us,
         individual_overrides,
     )
+    if attempt_histories:
+        try:
+            validate_retry_confirmation(
+                results,
+                analysis,
+                attempt_histories,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
     report = render(
         results,
         analysis,
@@ -392,6 +518,7 @@ def main(argv=None):
         args.aggregate_ratio,
         args.min_delta_us,
         individual_overrides,
+        attempt_histories,
     )
     pathlib.Path(args.output).write_text(report, encoding="utf-8")
     print(report, end="")

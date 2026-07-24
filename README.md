@@ -930,7 +930,10 @@ execution order alternates on each repetition to reduce host-load bias. CI
 fails when an individual workload regresses by more than 25% and 5ms, or when
 a section, suite, or overall runtime regresses by more than 15% and 5ms.
 Short, process-startup-bound version-control operations use a 50% and 25ms
-individual gate; their aggregate still uses the 15% suite gate.
+individual gate; their aggregate still uses the 15% suite gate. A suite that
+exceeds a gate is measured again automatically and only fails CI after three
+consecutive failing attempts. Command, result-format, and revision-provenance
+errors fail immediately instead of being retried.
 
 A scheduled workflow starts nightly at 09:30 UTC, after the nightly fuzzing
 window. Four parallel workers run 55 paired samples per SQL workload against

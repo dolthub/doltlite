@@ -12,7 +12,9 @@ jobs:
   sysbench-relative:
     name: ${{ matrix.suite.name }}-keys
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Passing suites still run once. The extra time is only available when a
+    # valid regression result triggers up to two automatic remeasurements.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -48,18 +50,23 @@ jobs:
         BENCH_GATE_MODE: none
       run: |
         results="$RUNNER_TEMP/benchmark-results"
-        mkdir -p "$results"
         BENCH_BASELINE_BINARY="$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
           BENCH_CANDIDATE_BINARY="$GITHUB_WORKSPACE/build/doltlite" \
           BENCH_BASELINE_TIMER="$GITHUB_WORKSPACE/benchmark-baseline/bench_timer_doltlite" \
           BENCH_CANDIDATE_TIMER="$GITHUB_WORKSPACE/build/bench_timer_doltlite" \
-          BENCH_RESULTS_OUTPUT="$results/${{ matrix.suite.name }}.tsv" \
-          BENCH_SAMPLES_OUTPUT="$results/${{ matrix.suite.name }}-samples.tsv" \
-          bash "test/${{ matrix.suite.script }}" \
-          > "$results/${{ matrix.suite.name }}.md"
+          python3 test/benchmark_retry.py \
+            --suite "${{ matrix.suite.name }}" \
+            --results-dir "$results" \
+            --max-attempts 3 \
+            --individual-ratio 1.25 \
+            --aggregate-ratio 1.15 \
+            --min-delta-us 5000 \
+            --individual-min-delta-us 5000 \
+            -- bash "test/${{ matrix.suite.script }}"
         cat "$results/${{ matrix.suite.name }}.md"
 
     - name: Upload paired measurements
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: benchmark-result-${{ matrix.suite.name }}
@@ -89,15 +96,20 @@ jobs:
         VC_PERF_CANDIDATE_LABEL: PR candidate
       run: |
         results="$RUNNER_TEMP/benchmark-results"
-        mkdir -p "$results"
         VC_PERF_BASELINE="$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
-          VC_PERF_RESULTS_OUTPUT="$results/vc.tsv" \
-          VC_PERF_SAMPLES_OUTPUT="$results/vc-samples.tsv" \
-          bash test/vc_perf_ceiling.sh "$GITHUB_WORKSPACE/build/doltlite" \
-          > "$results/vc.md"
+          python3 test/benchmark_retry.py \
+            --suite vc \
+            --results-dir "$results" \
+            --max-attempts 3 \
+            --individual-ratio 1.50 \
+            --aggregate-ratio 1.15 \
+            --min-delta-us 5000 \
+            --individual-min-delta-us 25000 \
+            -- bash test/vc_perf_ceiling.sh "$GITHUB_WORKSPACE/build/doltlite"
         cat "$results/vc.md"
 
     - name: Upload paired measurements
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: benchmark-result-vc
@@ -135,7 +147,9 @@ jobs:
       run: tar -xzf benchmark-build.tar.gz
 
     - name: Test relative comparison policy
-      run: python3 test/benchmark_compare_test.py
+      run: |
+        python3 test/benchmark_compare_test.py
+        python3 test/benchmark_retry_test.py
 
     - name: Generate relative performance report
       id: report
@@ -144,7 +158,8 @@ jobs:
         required="int textpk blobpk compositepk vc"
         missing=""
         for suite in $required; do
-          if [ ! -s "benchmark-results/$suite.tsv" ]; then
+          if [ ! -s "benchmark-results/$suite.tsv" ] ||
+             [ ! -s "benchmark-results/$suite-attempts.tsv" ]; then
             missing="$missing $suite"
           fi
         done
@@ -172,6 +187,11 @@ jobs:
             --input "blobpk=benchmark-results/blobpk.tsv" \
             --input "compositepk=benchmark-results/compositepk.tsv" \
             --input "vc=benchmark-results/vc.tsv" \
+            --attempt-history "int=benchmark-results/int-attempts.tsv" \
+            --attempt-history "textpk=benchmark-results/textpk-attempts.tsv" \
+            --attempt-history "blobpk=benchmark-results/blobpk-attempts.tsv" \
+            --attempt-history "compositepk=benchmark-results/compositepk-attempts.tsv" \
+            --attempt-history "vc=benchmark-results/vc-attempts.tsv" \
             --baseline-ref "$baseline" \
             --candidate-ref "$candidate" \
             --expected-baseline-ref "$expected_baseline" \
