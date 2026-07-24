@@ -2,14 +2,8 @@
 
 #ifdef DOLTLITE_PROLLY
 
-#include "chunk_store.h"
-#include "prolly_hash.h"
-#include "prolly_encoding.h"
+#include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <limits.h>
 #ifdef SQLITE_CRASH_TEST
 #include <unistd.h>
 #endif
@@ -91,10 +85,6 @@ static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
   return csFileLock(pVfs, path, ppFile, pzName);
 }
 
-typedef sqlite3_file *CsFileLock;
-# define CS_FILE_LOCK_INIT 0
-# define CS_GRAPH_LOCK(cs) ((cs)->pGraphLockFile)
-
 static int csReloadFromDisk(ChunkStore *cs);
 
 static int csCrashWriteInjectionActive(void){
@@ -114,9 +104,6 @@ static int csReloadInjectionActive(void){
 }
 #endif
 
-#define CS_RECENT_FAST_PATH_MAX 16384
-#define CS_WRITEBUF_RETAIN_MAX (64*1024)
-#define CS_PENDING_DRAIN_LIMIT (64*1024*1024)
 
 static i64 csPendingDrainLimit(void){
 #if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)

@@ -828,6 +828,7 @@ SRC += \
   $(TOP)/src/prolly_cache.h \
   $(TOP)/src/chunk_store.c \
   $(TOP)/src/chunk_store.h \
+  $(TOP)/src/chunk_store_int.h \
   $(TOP)/src/prolly_cursor.c \
   $(TOP)/src/prolly_cursor.h \
   $(TOP)/src/prolly_mutmap.c \
