@@ -241,7 +241,7 @@ set available_hdr(sqlite3session.h) 0
 if {$doltlite} {
   foreach hdr {
     blake3.h blake3_impl.h btree_orig_api.h btree_orig_prefix.h pager_shim.h record_codec.h sortkey.h
-    chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_wal.h
+    chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_store_int.h chunk_wal.h
     prolly_cache.h prolly_check.h prolly_chunk_walk.h prolly_chunker.h prolly_cursor.h
     prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
     prolly_mutmap.h prolly_node.h prolly_record.h prolly_three_way_diff.h
