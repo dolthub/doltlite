@@ -688,6 +688,36 @@ int doltliteClearSessionMergeState(sqlite3 *db){
   return doltliteSetSessionMergeState(db, 0, 0, 0);
 }
 
+int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
+                                      const ProllyHash *pMergeCommit){
+  Btree *p;
+  char *zNew = 0;
+  if( !db || db->nDb<=0 || db->aDb[0].pBt==0 ) return SQLITE_OK;
+  p = db->aDb[0].pBt;
+  if( zSpec && pMergeCommit ){
+    zNew = sqlite3_mprintf("%s", zSpec);
+    if( !zNew ) return SQLITE_NOMEM;
+  }
+  sqlite3_free(p->zMergeSourceSpec);
+  p->zMergeSourceSpec = zNew;
+  if( zNew ){
+    memcpy(&p->mergeSourceSpecCommit, pMergeCommit, sizeof(ProllyHash));
+  }else{
+    memset(&p->mergeSourceSpecCommit, 0, sizeof(ProllyHash));
+  }
+  return SQLITE_OK;
+}
+
+const char *doltliteGetSessionMergeSourceSpec(sqlite3 *db,
+                                              const ProllyHash *pMergeCommit){
+  Btree *p;
+  if( !db || db->nDb<=0 || db->aDb[0].pBt==0 || !pMergeCommit ) return 0;
+  p = db->aDb[0].pBt;
+  if( !p->zMergeSourceSpec ) return 0;
+  if( prollyHashCompare(&p->mergeSourceSpecCommit, pMergeCommit)!=0 ) return 0;
+  return p->zMergeSourceSpec;
+}
+
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                     ProllyHash *pPreRebaseCat,
                                     ProllyHash *pRebaseOnto,

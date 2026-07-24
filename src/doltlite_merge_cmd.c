@@ -274,6 +274,9 @@ int doltliteMergeRef(
       ProllyHash conflictsHash;
       doltliteGetSessionConflictsCatalog(db, &conflictsHash);
       rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+      /* Caching the spec only sharpens dolt_merge_status.source, which falls
+      ** back to the branch at theirHead, so losing it must not fail the merge. */
+      (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
       if( rc!=SQLITE_OK ){
         doltliteCommitClear(&ourCommit);
         doltliteCommitClear(&theirCommit);

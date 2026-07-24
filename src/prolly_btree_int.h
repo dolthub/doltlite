@@ -361,6 +361,15 @@ struct Btree {
   ** doltlite_constraint_violations.c. */
   void *pCvBatch;
 
+  /* Transient: the ref spec the caller passed to dolt_merge, reported as
+  ** dolt_merge_status.source. Not part of the persisted working set, so it is
+  ** only valid while mergeSourceSpecCommit still equals the merge commit that
+  ** produced it -- pairing them makes a savepoint rollback, a branch switch or
+  ** a second merge unable to hand back a spec belonging to a different merge.
+  ** Owned by doltlite_merge_status.c. */
+  char *zMergeSourceSpec;
+  ProllyHash mergeSourceSpecCommit;
+
   const struct BtreeOps *pOps;
   void *pOrigBtree;
 };

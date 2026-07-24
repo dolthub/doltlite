@@ -6,6 +6,7 @@
 extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteCommitAncestorsRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
+extern int doltliteMergeStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
 extern int doltliteSchemasRegister(sqlite3 *db);
 extern int doltliteDiffStatRegister(sqlite3 *db);
@@ -39,6 +40,7 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteLogRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteCommitAncestorsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteStatusRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteMergeStatusRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteDiffRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteBranchRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteTagRegister(db))!=SQLITE_OK ) return rc;

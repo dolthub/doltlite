@@ -599,7 +599,7 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
-              doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
+              doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o doltlite_merge_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_hashof.o \
@@ -662,6 +662,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_history.c $(TOP)/src/doltlite_at.c $(TOP)/src/doltlite_blame.c \
     $(TOP)/src/doltlite_schema_diff.c $(TOP)/src/doltlite_patch.c $(TOP)/src/doltlite_schemas.c \
     $(TOP)/src/doltlite_diff_stat.c $(TOP)/src/doltlite_record.c $(TOP)/src/doltlite_ignore.c \
+    $(TOP)/src/doltlite_merge_status.c \
     $(TOP)/src/doltlite_hashof.c $(TOP)/src/doltlite_constraint_violations.c \
     $(TOP)/src/doltlite_verify_constraints.c \
     $(TOP)/src/doltlite_merge_constraints.c $(TOP)/src/doltlite_dbpage.c \
@@ -1650,6 +1651,9 @@ doltlite_blame.o:	$(TOP)/src/doltlite_blame.c $(DEPS_OBJ_COMMON)
 
 doltlite_schema_diff.o:	$(TOP)/src/doltlite_schema_diff.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_schema_diff.c
+
+doltlite_merge_status.o:	$(TOP)/src/doltlite_merge_status.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_status.c
 
 doltlite_patch.o:	$(TOP)/src/doltlite_patch.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_patch.c
