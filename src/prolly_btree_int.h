@@ -791,28 +791,4 @@ static SQLITE_INLINE i64 cursorCurrentTreeIntKey(BtCursor *pCur){
   return (i64)(u ^ ((u64)1 << 63));
 }
 
-static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
-  if( pCur->curIntKey ){
-    const u8 *pVal; int nVal; int nAvail;
-    CLEAR_CACHED_PAYLOAD(pCur);
-    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
-    if( nVal > 0 && nAvail==nVal ){
-      pCur->pCachedPayload = (u8*)pVal;
-      pCur->nCachedPayload = nVal;
-      pCur->cachedPayloadOwned = 0;
-    }
-  }
-}
-
-static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
-  const u8 *pVal; int nVal;
-  CLEAR_CACHED_PAYLOAD(pCur);
-  cursorCurrentTreeValue(pCur, &pVal, &nVal);
-  if( nVal > 0 ){
-    pCur->pCachedPayload = (u8*)pVal;
-    pCur->nCachedPayload = nVal;
-    pCur->cachedPayloadOwned = 0;
-  }
-}
-
 #endif /* PROLLY_BTREE_INT_H */

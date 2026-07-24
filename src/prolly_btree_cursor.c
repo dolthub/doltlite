@@ -4,6 +4,31 @@
 
 /* Cursor navigation, seeking, comparison, and payload access. */
 
+static void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
+  if( pCur->curIntKey ){
+    const u8 *pVal; int nVal; int nAvail;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+    if( nVal > 0 && nAvail==nVal ){
+      pCur->pCachedPayload = (u8*)pVal;
+      pCur->nCachedPayload = nVal;
+      pCur->cachedPayloadOwned = 0;
+    }
+  }
+}
+
+static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
+  const u8 *pVal; int nVal;
+  CLEAR_CACHED_PAYLOAD(pCur);
+  cursorCurrentTreeValue(pCur, &pVal, &nVal);
+  if( nVal > 0 ){
+    pCur->pCachedPayload = (u8*)pVal;
+    pCur->nCachedPayload = nVal;
+    pCur->cachedPayloadOwned = 0;
+  }
+}
+
+
 static int keyInfoHasUnsupportedCollation(
   const KeyInfo *pKeyInfo,
   int nField
