@@ -44,6 +44,24 @@ jobs:
           ext/wasm/jswasm/*
           ext/wasm/sqlite-wasm-*.zip
 
+  development-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download development build
+      uses: actions/download-artifact@v4
+      with:
+        name: development-build
+
+    - name: Extract development build
+      run: tar -xzf development-build.tar.gz
+
+    - name: Assert-enabled dirty-check smoke
+      run: build-assert/catalog_serialize_determinism_test
+
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}

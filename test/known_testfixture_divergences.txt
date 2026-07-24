@@ -2079,7 +2079,7 @@ backup_malloc backup_malloc-1.transient.3  # OOM fault-point shift + harness cas
 backup_malloc backup_malloc-1.transient.4  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.5  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.6  # OOM fault-point shift + harness cascade
-backup_malloc backup_malloc-1.transient.33  # OOM fault-point shift + harness cascade
+backup_malloc backup_malloc-1.transient.35  # OOM fault-point shift + harness cascade (+SHARED graph lock)
 backup_malloc backup_malloc-1.persistent.0  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.1  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.2  # OOM fault-point shift + harness cascade
@@ -2486,8 +2486,6 @@ symlink symlink-2.2.7  # opens through renamed/symlinked paths succeed (deferred
 symlink symlink-4.2.2  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-4.3.2  # opens through renamed/symlinked paths succeed (deferred open)
 symlink symlink-4.4.2  # opens through renamed/symlinked paths succeed (deferred open)
-syscall syscall-5.1.5  # fault-injected syscall lock state differs with chunk-store locking
-syscall syscall-5.1.7  # fault-injected syscall lock state differs with chunk-store locking
 syscall syscall-7.2  # fault-injected syscall error text; chunk-store file size
 syscall syscall-7.3  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.1  # fault-injected syscall error text; chunk-store file size
@@ -6343,22 +6341,22 @@ vacuum3 vacuum3-ioerr-4.31.3 @linux
 # fkey_malloc-6.*  divergent value at the terminal (no-fault) iteration is the
 # rowid-on-PK divergence surfacing, not a fault shift; the 7.* entries are
 # swallowed OOMs reported as success with final state verified intact.
-fkey_malloc fkey_malloc-6.transient.69
-fkey_malloc fkey_malloc-6.persistent.69
-fkey_malloc fkey_malloc-7.transient.200
+fkey_malloc fkey_malloc-6.transient.70  # +1 OOM index from SHARED-before-EXCLUSIVE graph lock
+fkey_malloc fkey_malloc-6.persistent.70
 fkey_malloc fkey_malloc-7.transient.201
 fkey_malloc fkey_malloc-7.transient.202
-fkey_malloc fkey_malloc-7.transient.485  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-fkey_malloc fkey_malloc-7.transient.486  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+fkey_malloc fkey_malloc-7.transient.203
 fkey_malloc fkey_malloc-7.transient.487  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+fkey_malloc fkey_malloc-7.transient.488  # +SHARED graph lock step shifts OOM indices
+fkey_malloc fkey_malloc-7.transient.489
 vtab_err vtab_err-1.3.3
-vtab_err vtab_err-2.transient.714
-vtab_err vtab_err-2.transient.737
+vtab_err vtab_err-2.transient.715  # +SHARED graph lock step shifts OOM indices
 vtab_err vtab_err-2.transient.738
-vtab_err vtab_err-2.persistent.737
+vtab_err vtab_err-2.transient.739
 vtab_err vtab_err-2.persistent.738
-vtab_err vtab_err-3-oom-transient.437
+vtab_err vtab_err-2.persistent.739
 vtab_err vtab_err-3-oom-transient.438
+vtab_err vtab_err-3-oom-transient.439
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"

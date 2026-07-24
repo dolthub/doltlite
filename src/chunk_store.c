@@ -53,8 +53,16 @@ static int csFileLock(sqlite3_vfs *pVfs, const char *path,
     sqlite3_free(zLock);
     return rc;
   }
-  rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
+  /* SQLite's unix VFS asserts the lock ladder under SQLITE_DEBUG: from
+  ** NO_LOCK the only legal step is SHARED, then escalate. Jumping straight
+  ** to EXCLUSIVE works with NDEBUG but aborts debug builds (e.g. assert
+  ** smoke in development-builds). */
+  rc = sqlite3OsLock(pFile, SQLITE_LOCK_SHARED);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
+  }
   if( rc!=SQLITE_OK ){
+    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
     sqlite3OsCloseFree(pFile);
     sqlite3_free(zLock);
     return rc;
