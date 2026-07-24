@@ -31,6 +31,15 @@ else
   fi
 fi
 
+if [ ! -f "$SRCDIR/prolly_btree_cursor_payload.c" ]; then
+  lint "$SRCDIR/prolly_btree_cursor_payload.c: missing — prolly cursor payload must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_payload.c" | tr -d ' ')
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_payload.c:$nline lines — prolly_btree_cursor_payload.c must stay at or below 1500 lines"
+  fi
+fi
+
 # Branch/checkout split: require doltlite_branches.c; cap at 1500.
 if [ ! -f "$SRCDIR/doltlite_branches.c" ]; then
   lint "$SRCDIR/doltlite_branches.c: missing — dolt_branches vtab must stay split"
@@ -50,6 +59,15 @@ else
   fi
 fi
 
+# chunk_store split: require lock module; cap at 1200.
+if [ ! -f "$SRCDIR/chunk_store_lock.c" ]; then
+  lint "$SRCDIR/chunk_store_lock.c: missing — chunk_store lock must stay split"
+else
+  nline=$(wc -l < "$SRCDIR/chunk_store_lock.c" | tr -d ' ')
+  if [ "$nline" -gt 1200 ]; then
+    lint "$SRCDIR/chunk_store_lock.c:$nline lines — chunk_store_lock.c must stay at or below 1200 lines"
+  fi
+fi
 
 # Keep doltlite merge split into reviewable units. The core catalog/rows/
 # schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file
@@ -128,14 +146,4 @@ else
   echo ""
   echo "lint_layers: $NFAIL violation(s) found"
   exit 1
-fi
-
-# chunk_store split: require lock module; cap at 1200.
-if [ ! -f "$SRCDIR/chunk_store_lock.c" ]; then
-  lint "$SRCDIR/chunk_store_lock.c: missing — chunk_store lock must stay split"
-else
-  nline=$(wc -l < "$SRCDIR/chunk_store_lock.c" | tr -d ' ')
-  if [ "$nline" -gt 1200 ]; then
-    lint "$SRCDIR/chunk_store_lock.c:$nline lines — chunk_store_lock.c must stay at or below 1200 lines"
-  fi
 fi
