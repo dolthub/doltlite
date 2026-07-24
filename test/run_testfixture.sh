@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 CRASH_FILE="${CRASH_FILE:-$SCRIPT_DIR/known_testfixture_crashes.txt}"
 HOST_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+TEST_VARIANT="${TESTFIXTURE_VARIANT:-default}"
 case "$HOST_OS" in
   linux*) HOST_OS=linux ;;
   darwin*) HOST_OS=darwin ;;
@@ -37,12 +38,22 @@ run_with_timeout() {
 expected_for() {
   local file="$1"
   [ -f "$DIVERGENCE_FILE" ] || return 0
-  awk -v f="$file" -v host_os="$HOST_OS" '
+  awk -v f="$file" -v host_os="$HOST_OS" -v test_variant="$TEST_VARIANT" '
     {
       sub(/#.*/, "")
       gsub(/^[ \t]+|[ \t]+$/, "")
       if ($0 == "") next
-      if (NF >= 3 && $3 ~ /^@/ && substr($3, 2) != host_os) next
+      for (i = 3; i <= NF; i++) {
+        if ($i !~ /^@/) continue
+        qualifier = substr($i, 2)
+        if (qualifier == "coverage") {
+          if (test_variant != "coverage") next
+        } else if (qualifier == "no-coverage") {
+          if (test_variant == "coverage") next
+        } else if (qualifier != host_os) {
+          next
+        }
+      }
       if ($1 == f) print $2
     }
   ' "$DIVERGENCE_FILE"

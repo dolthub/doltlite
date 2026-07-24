@@ -46,12 +46,13 @@ jobs:
         cp build-coverage/doltlite \
           build-coverage/doltlite-remotesrv \
           build-coverage/doltlite_regression_test_c \
-          build-coverage/sqlite3 \
           build-coverage/testfixture \
           build-coverage/prolly_hash.o \
           build-coverage/blake3*.o \
           build-coverage/*_test \
           coverage-artifact/build-coverage/
+        cp build-coverage/sqlite3 \
+          coverage-artifact/build-coverage/sqlite3-stock
         llvm-strip --strip-debug coverage-artifact/build-coverage/*
         tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
 
@@ -348,12 +349,12 @@ jobs:
     - name: SQL oracle tests (vs stock SQLite)
       run: |
         cd build-coverage
-        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
+        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3-stock || exit 1
         bash ../test/oracle_import_test.sh ./doltlite dolt || exit 1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename $f)" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename $f) ---"
-          bash "$f" ./doltlite ./sqlite3 || exit 1
+          bash "$f" ./doltlite ./sqlite3-stock || exit 1
         done
       timeout-minutes: 10
 
@@ -371,6 +372,8 @@ jobs:
     needs: coverage-build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      TESTFIXTURE_VARIANT: coverage
     strategy:
       fail-fast: false
       matrix:

@@ -1,6 +1,7 @@
 # Known divergences from upstream sqlite testfixture
 #
-# Format: <test_file> <test_name> [@linux|@darwin|@windows]  # reason (optional)
+# Format: <test_file> <test_name> [qualifiers...]  # reason (optional)
+# Qualifiers: @linux, @darwin, @windows, @coverage, @no-coverage
 #
 # These tests fail when run by run_testfixture.sh against doltlite's
 # testfixture build, but the failures are not bugs — they're cases
@@ -37,7 +38,7 @@
 # the entry.
 
 # ── storage corruption probes ──
-corrupt corrupt-3.3 @linux  # raw byte-flips land on CTLD manifest/hash bytes; linux trips one extra corruption guard
+corrupt corrupt-3.3 @linux @no-coverage  # raw byte-flips land on CTLD manifest/hash bytes; non-coverage linux trips one extra corruption guard
 corrupt corrupt-3.4  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
 corrupt corrupt-3.5  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
 corrupt corrupt-3.6  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
