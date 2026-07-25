@@ -14,6 +14,8 @@ SPEC = importlib.util.spec_from_file_location("benchmark_compare", MODULE_PATH)
 benchmark_compare = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(benchmark_compare)
 
+PRODUCER_ID = "producer-current"
+
 
 def result(name, baseline, candidate, section="reads"):
     return benchmark_compare.Result(
@@ -25,15 +27,20 @@ def result(name, baseline, candidate, section="reads"):
     )
 
 
-def attempt_history(suite, attempts):
+def attempt_history(suite, attempts, producer_id=PRODUCER_ID):
     return benchmark_compare.AttemptHistory(
         suite,
+        producer_id,
         tuple(frozenset(gates) for gates in attempts),
     )
 
 
-def history_text(suite, attempts):
-    lines = [f"suite\t{suite}", "attempt\tstatus\tfailed_gates"]
+def history_text(suite, attempts, producer_id=PRODUCER_ID):
+    lines = [
+        f"suite\t{suite}",
+        f"producer_id\t{producer_id}",
+        "attempt\tstatus\tfailed_gates",
+    ]
     for number, gates in enumerate(attempts, 1):
         status = "regression" if gates else "pass"
         encoded = json.dumps(
@@ -42,6 +49,23 @@ def history_text(suite, attempts):
         )
         lines.append(f"{number}\t{status}\t{encoded}")
     return "\n".join(lines) + "\n"
+
+
+def result_text(suite, body, producer_id=PRODUCER_ID):
+    return (
+        f"# suite\t{suite}\n"
+        f"# producer_id\t{producer_id}\n"
+        f"{body}"
+    )
+
+
+def result_metadata(suite="int", producer_id=PRODUCER_ID):
+    return {
+        suite: {
+            "suite": suite,
+            "producer_id": producer_id,
+        }
+    }
 
 
 class BenchmarkCompareTest(unittest.TestCase):
@@ -280,7 +304,10 @@ class BenchmarkCompareTest(unittest.TestCase):
             attempts = directory / "attempts.tsv"
             report = directory / "report.md"
             timings.write_text(
-                "reads\tpoint\t100000\t101000\n",
+                result_text(
+                    "int",
+                    "reads\tpoint\t100000\t101000\n",
+                ),
                 encoding="utf-8",
             )
             attempts.write_text(
@@ -316,6 +343,51 @@ class BenchmarkCompareTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("int cleared after 2 attempts", output)
 
+    def test_main_rejects_ito_stale_history_reproduction(self):
+        gate = ("individual", "int", "reads", "point")
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            timings = directory / "current-result.tsv"
+            attempts = directory / "stale-attempts.tsv"
+            report = directory / "report.md"
+            timings.write_text(
+                result_text(
+                    "int",
+                    "reads\tpoint\t100000\t140000\n",
+                    producer_id="current-run",
+                ),
+                encoding="utf-8",
+            )
+            attempts.write_text(
+                history_text(
+                    "int",
+                    [{gate}, {gate}, {gate}],
+                    producer_id="stale-run",
+                ),
+                encoding="utf-8",
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    benchmark_compare.main(
+                        [
+                            "--input",
+                            f"int={timings}",
+                            "--attempt-history",
+                            f"int={attempts}",
+                            "--baseline-ref",
+                            "base",
+                            "--candidate-ref",
+                            "candidate",
+                            "--expected-baseline-ref",
+                            "base",
+                            "--expected-candidate-ref",
+                            "candidate",
+                            "--output",
+                            str(report),
+                        ]
+                    )
+        self.assertEqual(raised.exception.code, 2)
+
     def test_filters_regression_without_exact_confirmation(self):
         results = [result("point", 100_000, 140_000)]
         analysis = self.analyze(results)
@@ -323,6 +395,7 @@ class BenchmarkCompareTest(unittest.TestCase):
             results,
             analysis,
             {"int": attempt_history("int", [set()])},
+            result_metadata(),
         )
         self.assertFalse(confirmed["failed"])
         self.assertEqual(confirmed["individual_failures"], set())
@@ -335,6 +408,7 @@ class BenchmarkCompareTest(unittest.TestCase):
             results,
             analysis,
             {"int": attempt_history("int", [{gate}, {gate}, {gate}])},
+            result_metadata(),
         )
         self.assertTrue(confirmed["failed"])
         self.assertEqual(confirmed["confirmed_failure_ids"], {gate})
@@ -351,6 +425,7 @@ class BenchmarkCompareTest(unittest.TestCase):
                 results,
                 analysis,
                 {"int": attempt_history("int", [{gate}, {gate}, {gate}])},
+                result_metadata(),
             )
 
     def test_rejects_direct_history_with_mismatched_suite(self):
@@ -364,6 +439,27 @@ class BenchmarkCompareTest(unittest.TestCase):
                 results,
                 analysis,
                 {"int": attempt_history("vc", [set()])},
+                result_metadata(),
+            )
+
+    def test_rejects_stale_history_producer(self):
+        results = [result("point", 100_000, 101_000)]
+        analysis = self.analyze(results)
+        with self.assertRaisesRegex(
+            ValueError,
+            "result/history producer mismatch for int",
+        ):
+            benchmark_compare.apply_retry_confirmation(
+                results,
+                analysis,
+                {
+                    "int": attempt_history(
+                        "int",
+                        [set()],
+                        producer_id="stale-run",
+                    )
+                },
+                result_metadata(producer_id="current-run"),
             )
 
     def test_report_lists_confirmed_failed_gate_separately_from_overall(self):
@@ -381,6 +477,7 @@ class BenchmarkCompareTest(unittest.TestCase):
             results,
             raw,
             {"int": attempt_history("int", [gates, gates, gates])},
+            result_metadata(),
         )
         report = benchmark_compare.render(
             results,

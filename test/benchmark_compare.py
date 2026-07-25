@@ -36,6 +36,7 @@ class Result:
 @dataclasses.dataclass(frozen=True)
 class AttemptHistory:
     suite: str
+    producer_id: str
     failures: tuple
 
     @property
@@ -80,10 +81,16 @@ def parse_attempt_history(spec):
                 f"{path}: history suite {recorded_suite or '<missing>'} "
                 f"does not match requested suite {suite}"
             )
+        producer_header = source.readline().rstrip("\n")
+        if not producer_header.startswith("producer_id\t"):
+            raise ValueError(f"{path}: missing producer identity")
+        producer_id = producer_header.split("\t", 1)[1]
+        if not producer_id:
+            raise ValueError(f"{path}: missing producer identity")
         columns_header = source.readline().rstrip("\n")
         if columns_header != "attempt\tstatus\tfailed_gates":
             raise ValueError(f"{path}: invalid attempt history header")
-        for line_number, line in enumerate(source, 3):
+        for line_number, line in enumerate(source, 4):
             columns = line.rstrip("\n").split("\t")
             if len(columns) != 3:
                 raise ValueError(
@@ -140,10 +147,10 @@ def parse_attempt_history(spec):
         raise ValueError(
             f"{path}: possible regression requires three attempts"
         )
-    return suite, AttemptHistory(suite, tuple(failures))
+    return suite, AttemptHistory(suite, producer_id, tuple(failures))
 
 
-def parse_input(spec):
+def parse_input_artifact(spec):
     if "=" not in spec:
         raise ValueError(f"input must be SUITE=PATH: {spec}")
     suite, path_text = spec.split("=", 1)
@@ -152,8 +159,29 @@ def parse_input(spec):
     path = pathlib.Path(path_text)
     results = []
     seen = set()
+    metadata = {}
     with path.open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
+            if line.startswith("# "):
+                if results:
+                    raise ValueError(
+                        f"{path}:{line_number}: metadata follows results"
+                    )
+                columns = line[2:].rstrip("\n").split("\t", 1)
+                if len(columns) != 2 or columns[0] not in (
+                    "suite",
+                    "producer_id",
+                ):
+                    raise ValueError(
+                        f"{path}:{line_number}: invalid result metadata"
+                    )
+                key, value = columns
+                if key in metadata or not value:
+                    raise ValueError(
+                        f"{path}:{line_number}: invalid result metadata"
+                    )
+                metadata[key] = value
+                continue
             columns = line.rstrip("\n").split("\t")
             if len(columns) != 4:
                 raise ValueError(
@@ -184,6 +212,16 @@ def parse_input(spec):
             )
     if not results:
         raise ValueError(f"{path}: no benchmark results")
+    if "suite" in metadata and metadata["suite"] != suite:
+        raise ValueError(
+            f"{path}: result suite {metadata['suite']} "
+            f"does not match requested suite {suite}"
+        )
+    return results, metadata
+
+
+def parse_input(spec):
+    results, _metadata = parse_input_artifact(spec)
     return results
 
 
@@ -322,7 +360,12 @@ def failure_ids(analysis, include_overall=True):
     return failures
 
 
-def apply_retry_confirmation(results, analysis, attempt_histories):
+def apply_retry_confirmation(
+    results,
+    analysis,
+    attempt_histories,
+    result_metadata,
+):
     result_suites = {result.suite for result in results}
     history_suites = set(attempt_histories)
     if result_suites != history_suites:
@@ -343,6 +386,21 @@ def apply_retry_confirmation(results, analysis, attempt_histories):
             raise ValueError(
                 f"history suite {history.suite} does not match "
                 f"requested suite {suite}"
+            )
+        metadata = result_metadata.get(suite, {})
+        if metadata.get("suite") != suite:
+            raise ValueError(
+                f"result for {suite} is missing matching suite identity"
+            )
+        producer_id = metadata.get("producer_id")
+        if not producer_id:
+            raise ValueError(
+                f"result for {suite} is missing producer identity"
+            )
+        if producer_id != history.producer_id:
+            raise ValueError(
+                f"result/history producer mismatch for {suite}: "
+                f"{producer_id} != {history.producer_id}"
             )
 
     confirmed = set()
@@ -635,8 +693,14 @@ def main(argv=None):
 
     try:
         results = []
+        result_metadata = {}
         for spec in args.input:
-            results.extend(parse_input(spec))
+            parsed, metadata = parse_input_artifact(spec)
+            suite = parsed[0].suite
+            if suite in result_metadata:
+                raise ValueError(f"duplicate benchmark input for {suite}")
+            results.extend(parsed)
+            result_metadata[suite] = metadata
         attempt_histories = {}
         for spec in args.attempt_history:
             suite, statuses = parse_attempt_history(spec)
@@ -670,6 +734,7 @@ def main(argv=None):
                 results,
                 analysis,
                 attempt_histories,
+                result_metadata,
             )
         except ValueError as exc:
             parser.error(str(exc))

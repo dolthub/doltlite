@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
+import contextlib
 import importlib.util
+import io
 import pathlib
+import shutil
 import tempfile
 import types
 import unittest
@@ -11,6 +14,8 @@ MODULE_PATH = pathlib.Path(__file__).with_name("benchmark_retry.py")
 SPEC = importlib.util.spec_from_file_location("benchmark_retry", MODULE_PATH)
 benchmark_retry = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(benchmark_retry)
+
+PRODUCER_ID = "producer-current"
 
 
 class FakeRunner:
@@ -62,6 +67,7 @@ class BenchmarkRetryTest(unittest.TestCase):
             5000,
             5000,
             runner,
+            PRODUCER_ID,
         )
         return rc, runner
 
@@ -74,6 +80,7 @@ class BenchmarkRetryTest(unittest.TestCase):
         self.assertEqual(
             history,
             "suite\tint\n"
+            f"producer_id\t{PRODUCER_ID}\n"
             "attempt\tstatus\tfailed_gates\n"
             "1\tpass\t[]\n",
         )
@@ -91,7 +98,12 @@ class BenchmarkRetryTest(unittest.TestCase):
         self.assertEqual(runner.calls, 2)
         self.assertIn("1\tregression\t", history)
         self.assertIn("2\tpass\t[]\n", history)
-        self.assertEqual(result, "reads\tpoint\t100000\t101000\n")
+        self.assertEqual(
+            result,
+            "# suite\tint\n"
+            f"# producer_id\t{PRODUCER_ID}\n"
+            "reads\tpoint\t100000\t101000\n",
+        )
 
     def test_three_regressions_promote_final_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -117,7 +129,12 @@ class BenchmarkRetryTest(unittest.TestCase):
             ("individual", "int", "reads", "point"),
             parsed.confirmed_failures,
         )
-        self.assertEqual(result, "reads\tpoint\t100000\t150000\n")
+        self.assertEqual(
+            result,
+            "# suite\tint\n"
+            f"# producer_id\t{PRODUCER_ID}\n"
+            "reads\tpoint\t100000\t150000\n",
+        )
 
     def test_rotating_individual_failures_stop_without_confirmation(self):
         steady = ("reads", "steady", 1_000_000, 1_000_000)
@@ -157,6 +174,7 @@ class BenchmarkRetryTest(unittest.TestCase):
         self.assertEqual(
             history,
             "suite\tint\n"
+            f"producer_id\t{PRODUCER_ID}\n"
             "attempt\tstatus\tfailed_gates\n"
             "1\tcommand_error\t[]\n",
         )
@@ -187,6 +205,66 @@ class BenchmarkRetryTest(unittest.TestCase):
             )
         self.assertEqual(rc, 2)
         self.assertEqual(runner.calls, 1)
+
+    def test_promotion_copy_failure_leaves_no_canonical_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            attempt = directory / "attempt"
+            results = directory / "results"
+            attempt.mkdir()
+            results.mkdir()
+            (attempt / "int.tsv").write_text(
+                "reads\tpoint\t100\t101\n",
+                encoding="utf-8",
+            )
+            (attempt / "int-samples.tsv").write_text(
+                "section\ttest\trun\tbaseline_us\tcandidate_us\n"
+                "reads\tpoint\t1\t100\t101\n",
+                encoding="utf-8",
+            )
+            (attempt / "int.md").write_text(
+                "benchmark report\n",
+                encoding="utf-8",
+            )
+
+            def fail_on_markdown(source, destination):
+                if pathlib.Path(source).suffix == ".md":
+                    raise FileNotFoundError("injected markdown copy failure")
+                return shutil.copy2(source, destination)
+
+            with self.assertRaisesRegex(
+                FileNotFoundError,
+                "injected markdown copy failure",
+            ):
+                benchmark_retry.promote_attempt(
+                    attempt,
+                    results,
+                    "int",
+                    PRODUCER_ID,
+                    copy_function=fail_on_markdown,
+                )
+
+            self.assertEqual(list(results.iterdir()), [])
+            self.assertTrue((attempt / "int.tsv").is_file())
+            self.assertTrue((attempt / "int-samples.tsv").is_file())
+            self.assertTrue((attempt / "int.md").is_file())
+
+    def test_live_log_identifies_attempts_gates_and_elapsed_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc, runner = self.run_retry(
+                    directory,
+                    [(100_000, 140_000), (100_000, 101_000)],
+                )
+            log = output.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertEqual(runner.calls, 2)
+        self.assertIn("int: starting attempt 1/3", log)
+        self.assertIn("int: starting attempt 2/3", log)
+        self.assertIn("failed gates: individual `int / reads / point`", log)
+        self.assertIn("s cumulative)", log)
+        self.assertIn("no exact gate failed on every attempt", log)
 
 
 if __name__ == "__main__":
