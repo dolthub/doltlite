@@ -176,6 +176,40 @@ run_test "multi_b2_count" \
 run_test "multi_b2_new_row" \
   "SELECT val FROM t WHERE id=2;" "b2_new" "$DB/b2"
 
+
+# The property that makes dolt_stash unnecessary, and the reason README and
+# AGENTS.md say so: uncommitted work belongs to the branch, so checking out a
+# dirty branch neither refuses nor drags changes across. If this ever regresses,
+# those docs become wrong and stash starts to look necessary again.
+DBS=/tmp/test_ws_nostash_$$.db; rm -f "$DBS"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');" | $DOLTLITE "$DBS" > /dev/null 2>&1
+
+# Dirty both branches, committing neither.
+echo "UPDATE t SET val='wip-feature'; INSERT INTO t VALUES(9,'scratch');" \
+  | $DOLTLITE "$DBS/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(5,'wip-main');" | $DOLTLITE "$DBS" > /dev/null 2>&1
+
+run_test "nostash_dirty_branches_are_independent_main" \
+  "SELECT group_concat(id||'='||val) FROM t;" "1=base,5=wip-main" "$DBS"
+run_test "nostash_dirty_branches_are_independent_feature" \
+  "SELECT group_concat(id||'='||val) FROM t;" "1=wip-feature,9=scratch" "$DBS/feature"
+
+# A single session checking out a dirty branch and back: no refusal, no bleed.
+run_test_lastline "nostash_checkout_dirty_keeps_each_working_set" \
+  "SELECT dolt_checkout('feature');
+   SELECT 'f:'||group_concat(id||'='||val) FROM t;
+   SELECT dolt_checkout('main');
+   SELECT 'm:'||group_concat(id||'='||val) FROM t;" \
+  "m:1=base,5=wip-main" "$DBS"
+run_test_match "nostash_checkout_dirty_is_not_refused" \
+  "SELECT dolt_checkout('feature'); SELECT group_concat(id||'='||val) FROM t;" \
+  "1=wip-feature,9=scratch" "$DBS"
+
+rm -f "$DBS"
+
 rm -f "$DB"
 
 dltest_finish
