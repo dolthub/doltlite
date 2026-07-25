@@ -80,6 +80,12 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("Median paired-ratio MAD", report)
         self.assertIn("Version-control latency", report)
         self.assertIn("50.0%", report)
+        self.assertFalse(
+            any(
+                line.endswith((" ", "\t"))
+                for line in report.splitlines()
+            )
+        )
 
     def test_failed_status_marks_overall_report_failed(self):
         with tempfile.TemporaryDirectory() as temporary:

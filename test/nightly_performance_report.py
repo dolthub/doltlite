@@ -284,11 +284,15 @@ def render_report(suites, commit, run_url, generated_at, runner):
     lines = [
         "# DoltLite Performance Report",
         "",
-        f"> Nightly result: **{overall}**  ",
-        f"> Generated: {generated_at}  ",
+        f"> Nightly result: **{overall}**",
+        ">",
+        f"> Generated: {generated_at}",
+        ">",
         f"> Commit: [`{commit}`]"
-        f"(https://github.com/dolthub/doltlite/commit/{commit})  ",
-        f"> Runner: {runner}  ",
+        f"(https://github.com/dolthub/doltlite/commit/{commit})",
+        ">",
+        f"> Runner: {runner}",
+        ">",
         f"> [GitHub Actions run]({run_url})",
         "",
         "This report compares optimized DoltLite against stock SQLite on the "
