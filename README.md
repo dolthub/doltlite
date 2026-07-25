@@ -932,8 +932,10 @@ a section, suite, or overall runtime regresses by more than 15% and 5ms.
 Short, process-startup-bound version-control operations use a 50% and 25ms
 individual gate; their aggregate still uses the 15% suite gate. A suite that
 exceeds a gate is measured again automatically and only fails CI after three
-consecutive failing attempts. Command, result-format, and revision-provenance
-errors fail immediately instead of being retried.
+consecutive failures of the same individual, section, or suite gate. Different
+metrics failing on later attempts do not confirm the original regression.
+Command, result-format, and revision-provenance errors fail immediately instead
+of being retried.
 
 A scheduled workflow starts nightly at 09:30 UTC, after the nightly fuzzing
 window. Four parallel workers run 55 paired samples per SQL workload against

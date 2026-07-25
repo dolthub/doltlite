@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import pathlib
 import shutil
@@ -10,12 +11,14 @@ import sys
 import benchmark_compare
 
 
-def write_history(path, statuses):
-    lines = ["attempt\tstatus"]
-    lines.extend(
-        f"{attempt}\t{status}"
-        for attempt, status in enumerate(statuses, 1)
-    )
+def write_history(path, suite, records):
+    lines = [f"suite\t{suite}", "attempt\tstatus\tfailed_gates"]
+    for attempt, (status, failures) in enumerate(records, 1):
+        encoded = json.dumps(
+            [list(gate) for gate in sorted(failures)],
+            separators=(",", ":"),
+        )
+        lines.append(f"{attempt}\t{status}\t{encoded}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -40,7 +43,8 @@ def run_with_retries(
     attempts_dir = results_dir / "attempts"
     history_path = results_dir / f"{suite}-attempts.tsv"
     results_dir.mkdir(parents=True, exist_ok=True)
-    statuses = []
+    records = []
+    candidates = None
 
     for attempt in range(1, max_attempts + 1):
         attempt_dir = attempts_dir / f"attempt-{attempt}"
@@ -68,8 +72,8 @@ def run_with_retries(
             )
 
         if completed.returncode:
-            statuses.append("command_error")
-            write_history(history_path, statuses)
+            records.append(("command_error", frozenset()))
+            write_history(history_path, suite, records)
             print(
                 f"{suite} attempt {attempt}/{max_attempts}: "
                 f"command failed with exit code {completed.returncode}",
@@ -84,8 +88,8 @@ def run_with_retries(
             if not path.is_file() or path.stat().st_size == 0
         ]
         if missing:
-            statuses.append("invalid_result")
-            write_history(history_path, statuses)
+            records.append(("invalid_result", frozenset()))
+            write_history(history_path, suite, records)
             print(
                 f"{suite} attempt {attempt}/{max_attempts}: "
                 f"missing result files: {', '.join(missing)}",
@@ -98,8 +102,8 @@ def run_with_retries(
                 f"{suite}={result_path}"
             )
         except (OSError, ValueError) as exc:
-            statuses.append("invalid_result")
-            write_history(history_path, statuses)
+            records.append(("invalid_result", frozenset()))
+            write_history(history_path, suite, records)
             print(
                 f"{suite} attempt {attempt}/{max_attempts}: {exc}",
                 file=sys.stderr,
@@ -125,20 +129,38 @@ def run_with_retries(
         )
         gate_path.write_text(report, encoding="utf-8")
 
-        status = "regression" if analysis["failed"] else "pass"
-        statuses.append(status)
-        write_history(history_path, statuses)
-        if status == "pass":
-            promote_attempt(attempt_dir, results_dir, suite)
-            print(
-                f"{suite} attempt {attempt}/{max_attempts}: passed"
+        failures = frozenset(
+            benchmark_compare.failure_ids(
+                analysis,
+                include_overall=False,
             )
+        )
+        status = "regression" if failures else "pass"
+        records.append((status, failures))
+        write_history(history_path, suite, records)
+
+        if candidates is None:
+            candidates = failures
+        else:
+            candidates = candidates.intersection(failures)
+
+        if not candidates:
+            promote_attempt(attempt_dir, results_dir, suite)
+            if attempt == 1 and not failures:
+                print(f"{suite} attempt {attempt}/{max_attempts}: passed")
+            else:
+                print(
+                    f"{suite} attempt {attempt}/{max_attempts}: "
+                    "no exact gate remains unbroken"
+                )
             return 0
 
         if attempt < max_attempts:
             print(
                 f"{suite} attempt {attempt}/{max_attempts}: "
-                "performance gate exceeded; retrying"
+                f"{len(candidates)} exact performance "
+                f"{'gate remains' if len(candidates) == 1 else 'gates remain'}; "
+                "retrying"
             )
             continue
 
@@ -147,7 +169,9 @@ def run_with_retries(
         promote_attempt(attempt_dir, results_dir, suite)
         print(
             f"{suite} attempt {attempt}/{max_attempts}: "
-            "performance gate exceeded in all attempts"
+            f"{len(candidates)} exact performance "
+            f"{'gate exceeded' if len(candidates) == 1 else 'gates exceeded'} "
+            "in all attempts"
         )
         return 0
 

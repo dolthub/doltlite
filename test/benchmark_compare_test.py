@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import pathlib
 import tempfile
 import unittest
@@ -22,6 +23,25 @@ def result(name, baseline, candidate, section="reads"):
         baseline_us=baseline,
         candidate_us=candidate,
     )
+
+
+def attempt_history(suite, attempts):
+    return benchmark_compare.AttemptHistory(
+        suite,
+        tuple(frozenset(gates) for gates in attempts),
+    )
+
+
+def history_text(suite, attempts):
+    lines = [f"suite\t{suite}", "attempt\tstatus\tfailed_gates"]
+    for number, gates in enumerate(attempts, 1):
+        status = "regression" if gates else "pass"
+        encoded = json.dumps(
+            [list(gate) for gate in sorted(gates)],
+            separators=(",", ":"),
+        )
+        lines.append(f"{number}\t{status}\t{encoded}")
+    return "\n".join(lines) + "\n"
 
 
 class BenchmarkCompareTest(unittest.TestCase):
@@ -113,33 +133,119 @@ class BenchmarkCompareTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "attempts.tsv"
             path.write_text(
-                "attempt\tstatus\n"
-                "1\tregression\n"
-                "2\tregression\n"
-                "3\tregression\n",
+                history_text(
+                    "int",
+                    [
+                        {("individual", "int", "reads", "point")},
+                        {("individual", "int", "reads", "point")},
+                        {("individual", "int", "reads", "point")},
+                    ],
+                ),
                 encoding="utf-8",
             )
-            suite, statuses = benchmark_compare.parse_attempt_history(
+            suite, history = benchmark_compare.parse_attempt_history(
                 f"int={path}"
             )
         self.assertEqual(suite, "int")
         self.assertEqual(
-            statuses,
-            ["regression", "regression", "regression"],
+            history.confirmed_failures,
+            {("individual", "int", "reads", "point")},
         )
 
-    def test_rejects_unconfirmed_final_regression(self):
+    def test_rotating_failures_have_no_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "attempts.tsv"
             path.write_text(
-                "attempt\tstatus\n1\tregression\n2\tregression\n",
+                history_text(
+                    "int",
+                    [
+                        {("individual", "int", "reads", "one")},
+                        {("individual", "int", "reads", "two")},
+                    ],
+                ),
+                encoding="utf-8",
+            )
+            _suite, history = benchmark_compare.parse_attempt_history(
+                f"int={path}"
+            )
+        self.assertEqual(history.confirmed_failures, frozenset())
+
+    def test_confirmation_is_three_way_gate_intersection(self):
+        gate_a = ("individual", "int", "reads", "one")
+        gate_b = ("individual", "int", "reads", "two")
+        gate_c = ("individual", "int", "reads", "three")
+        history = attempt_history(
+            "int",
+            [
+                {gate_a, gate_b},
+                {gate_b, gate_c},
+                {gate_a, gate_b, gate_c},
+            ],
+        )
+        self.assertEqual(history.confirmed_failures, {gate_b})
+
+    def test_rejects_two_attempt_history_with_live_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "attempts.tsv"
+            gate = ("individual", "int", "reads", "point")
+            path.write_text(
+                history_text("int", [{gate}, {gate}]),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
                 ValueError,
-                "requires three consecutive failures",
+                "possible regression requires three attempts",
             ):
                 benchmark_compare.parse_attempt_history(f"int={path}")
+
+    def test_rejects_history_with_mismatched_embedded_suite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "int-attempts.tsv"
+            path.write_text(
+                history_text("int", [set()]),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "history suite int does not match requested suite vc",
+            ):
+                benchmark_compare.parse_attempt_history(f"vc={path}")
+
+    def test_main_rejects_ito_mismatched_history_reproduction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            timings = directory / "vc.tsv"
+            attempts = directory / "int-attempts.tsv"
+            report = directory / "report.md"
+            timings.write_text(
+                "vc\tstatus\t100000\t101000\n",
+                encoding="utf-8",
+            )
+            attempts.write_text(
+                history_text("int", [set()]),
+                encoding="utf-8",
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    benchmark_compare.main(
+                        [
+                            "--input",
+                            f"vc={timings}",
+                            "--attempt-history",
+                            f"vc={attempts}",
+                            "--baseline-ref",
+                            "base",
+                            "--candidate-ref",
+                            "candidate",
+                            "--expected-baseline-ref",
+                            "base",
+                            "--expected-candidate-ref",
+                            "candidate",
+                            "--output",
+                            str(report),
+                        ]
+                    )
+        self.assertEqual(raised.exception.code, 2)
 
     def test_report_describes_transient_retry(self):
         results = [result("point", 100_000, 101_000)]
@@ -152,10 +258,18 @@ class BenchmarkCompareTest(unittest.TestCase):
             1.25,
             1.15,
             5000,
-            attempt_histories={"int": ["regression", "pass"]},
+            attempt_histories={
+                "int": attempt_history(
+                    "int",
+                    [
+                        {("individual", "int", "reads", "point")},
+                        set(),
+                    ],
+                )
+            },
         )
         self.assertIn(
-            "int passed attempt 2 after 1 transient gate failure",
+            "int cleared after 2 attempts; no gate failed every time",
             report,
         )
 
@@ -170,7 +284,13 @@ class BenchmarkCompareTest(unittest.TestCase):
                 encoding="utf-8",
             )
             attempts.write_text(
-                "attempt\tstatus\n1\tregression\n2\tpass\n",
+                history_text(
+                    "int",
+                    [
+                        {("individual", "int", "reads", "point")},
+                        set(),
+                    ],
+                ),
                 encoding="utf-8",
             )
             with contextlib.redirect_stdout(io.StringIO()):
@@ -194,28 +314,95 @@ class BenchmarkCompareTest(unittest.TestCase):
                 )
             output = report.read_text(encoding="utf-8")
         self.assertEqual(rc, 0)
-        self.assertIn("int passed attempt 2", output)
+        self.assertIn("int cleared after 2 attempts", output)
 
-    def test_rejects_regression_without_three_failed_attempts(self):
+    def test_filters_regression_without_exact_confirmation(self):
         results = [result("point", 100_000, 140_000)]
+        analysis = self.analyze(results)
+        confirmed = benchmark_compare.apply_retry_confirmation(
+            results,
+            analysis,
+            {"int": attempt_history("int", [set()])},
+        )
+        self.assertFalse(confirmed["failed"])
+        self.assertEqual(confirmed["individual_failures"], set())
+
+    def test_accepts_same_gate_after_three_failed_attempts(self):
+        results = [result("point", 100_000, 140_000)]
+        analysis = self.analyze(results)
+        gate = ("individual", "int", "reads", "point")
+        confirmed = benchmark_compare.apply_retry_confirmation(
+            results,
+            analysis,
+            {"int": attempt_history("int", [{gate}, {gate}, {gate}])},
+        )
+        self.assertTrue(confirmed["failed"])
+        self.assertEqual(confirmed["confirmed_failure_ids"], {gate})
+
+    def test_rejects_confirmed_gate_absent_from_final_results(self):
+        results = [result("point", 100_000, 101_000)]
+        analysis = self.analyze(results)
+        gate = ("individual", "int", "reads", "point")
+        with self.assertRaisesRegex(
+            ValueError,
+            "confirmed gates do not match final benchmark results",
+        ):
+            benchmark_compare.apply_retry_confirmation(
+                results,
+                analysis,
+                {"int": attempt_history("int", [{gate}, {gate}, {gate}])},
+            )
+
+    def test_rejects_direct_history_with_mismatched_suite(self):
+        results = [result("point", 100_000, 101_000)]
         analysis = self.analyze(results)
         with self.assertRaisesRegex(
             ValueError,
-            "lacks three-failure confirmation",
+            "history suite vc does not match requested suite int",
         ):
-            benchmark_compare.validate_retry_confirmation(
+            benchmark_compare.apply_retry_confirmation(
                 results,
                 analysis,
-                {"int": ["pass"]},
+                {"int": attempt_history("vc", [set()])},
             )
 
-    def test_accepts_regression_after_three_failed_attempts(self):
-        results = [result("point", 100_000, 140_000)]
-        analysis = self.analyze(results)
-        benchmark_compare.validate_retry_confirmation(
+    def test_report_lists_confirmed_failed_gate_separately_from_overall(self):
+        results = [
+            result("point", 100_000, 140_000),
+            result("other", 100_000, 140_000),
+            result("steady", 1_000_000, 1_000_000),
+        ]
+        raw = self.analyze(results)
+        gates = {
+            ("individual", "int", "reads", "point"),
+            ("individual", "int", "reads", "other"),
+        }
+        analysis = benchmark_compare.apply_retry_confirmation(
+            results,
+            raw,
+            {"int": attempt_history("int", [gates, gates, gates])},
+        )
+        report = benchmark_compare.render(
             results,
             analysis,
-            {"int": ["regression", "regression", "regression"]},
+            "base",
+            "candidate",
+            1.25,
+            1.15,
+            5000,
+            attempt_histories={
+                "int": attempt_history("int", [gates, gates, gates])
+            },
+        )
+        self.assertIn("**Overall ratio:** 1.067x", report)
+        self.assertIn("**Gate result:** **FAIL**", report)
+        self.assertIn(
+            "individual `int / reads / point`",
+            report,
+        )
+        self.assertIn(
+            "individual `int / reads / other`",
+            report,
         )
 
     def test_rejects_swapped_revision_provenance(self):
