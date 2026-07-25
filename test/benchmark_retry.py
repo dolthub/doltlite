@@ -52,6 +52,7 @@ def promote_attempt(
         )
 
     staged = []
+    backups = []
     promoted = []
     try:
         for source in sources:
@@ -69,15 +70,43 @@ def promote_attempt(
                 copy_function(source, temporary)
             staged.append((temporary, destination))
 
+        for _temporary, destination in staged:
+            if destination.exists():
+                backup = results_dir / (
+                    f".{destination.name}.{producer_id}.backup"
+                )
+                replace_function(destination, backup)
+                backups.append((backup, destination))
+
         for temporary, destination in staged:
             replace_function(temporary, destination)
             promoted.append(destination)
-    except Exception:
+    except Exception as promotion_error:
+        rollback_errors = []
+        for destination in reversed(promoted):
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as exc:
+                rollback_errors.append(exc)
+        for backup, destination in reversed(backups):
+            try:
+                replace_function(backup, destination)
+            except OSError as exc:
+                rollback_errors.append(exc)
         for temporary, _destination in staged:
-            temporary.unlink(missing_ok=True)
-        for destination in promoted:
-            destination.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as exc:
+                rollback_errors.append(exc)
+        if rollback_errors:
+            raise OSError(
+                "benchmark artifact promotion and rollback failed: "
+                + "; ".join(str(exc) for exc in rollback_errors)
+            ) from promotion_error
         raise
+    else:
+        for backup, _destination in backups:
+            backup.unlink(missing_ok=True)
 
 
 def run_with_retries(

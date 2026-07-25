@@ -249,6 +249,69 @@ class BenchmarkRetryTest(unittest.TestCase):
             self.assertTrue((attempt / "int-samples.tsv").is_file())
             self.assertTrue((attempt / "int.md").is_file())
 
+    def test_promotion_replace_failure_restores_canonical_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            attempt = directory / "attempt"
+            results = directory / "results"
+            attempt.mkdir()
+            results.mkdir()
+            new_contents = {
+                "int.tsv": "reads\tpoint\t100\t101\n",
+                "int-samples.tsv": (
+                    "section\ttest\trun\tbaseline_us\tcandidate_us\n"
+                    "reads\tpoint\t1\t100\t101\n"
+                ),
+                "int.md": "new benchmark report\n",
+            }
+            old_contents = {
+                "int.tsv": "old result\n",
+                "int-samples.tsv": "old samples\n",
+                "int.md": "old benchmark report\n",
+            }
+            for name, contents in new_contents.items():
+                (attempt / name).write_text(contents, encoding="utf-8")
+            for name, contents in old_contents.items():
+                (results / name).write_text(contents, encoding="utf-8")
+
+            failed = False
+
+            def fail_once_during_exposure(source, destination):
+                nonlocal failed
+                source = pathlib.Path(source)
+                destination = pathlib.Path(destination)
+                if (
+                    not failed
+                    and source.name.endswith(".staged")
+                    and destination.name == "int-samples.tsv"
+                ):
+                    failed = True
+                    raise OSError("injected replacement failure")
+                return source.replace(destination)
+
+            with self.assertRaisesRegex(
+                OSError,
+                "injected replacement failure",
+            ):
+                benchmark_retry.promote_attempt(
+                    attempt,
+                    results,
+                    "int",
+                    PRODUCER_ID,
+                    replace_function=fail_once_during_exposure,
+                )
+
+            self.assertTrue(failed)
+            self.assertEqual(
+                {
+                    path.name: path.read_text(encoding="utf-8")
+                    for path in results.iterdir()
+                },
+                old_contents,
+            )
+            for name in new_contents:
+                self.assertTrue((attempt / name).is_file())
+
     def test_live_log_identifies_attempts_gates_and_elapsed_time(self):
         with tempfile.TemporaryDirectory() as directory:
             output = io.StringIO()
