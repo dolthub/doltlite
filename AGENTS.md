@@ -127,6 +127,15 @@ unprompted:
   a Dolt procedure. DoltLite has no subcommand CLI to be compatible with, so
   `DROP TABLE` and `ALTER TABLE … RENAME TO` are the surface.
 
+- **`dolt_statistics`** — DoltLite already has branch-specific table statistics;
+  they are spelled `ANALYZE` and `sqlite_stat1`. Dolt keeps stats in a separate
+  branch-keyed database that is never merged, because it maintains them
+  automatically — continuously regenerated derived data cannot sit in the commit
+  graph. SQLite produces statistics only when the user asks, so `sqlite_stat1` is
+  an ordinary versioned table: per-branch for free, and it commits, diffs and
+  merges with everything else. Keeping it accurate is the user's call, same as
+  `ANALYZE` anywhere else.
+
 - **`dolt_docs`, `dolt_query_catalog`** — DoltHub-specific storage, not engine
   behavior: `dolt_docs` holds `README.md` / `LICENSE.md` and
   `dolt_query_catalog` holds saved queries, both so DoltHub can display them.
