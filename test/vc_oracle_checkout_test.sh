@@ -1109,6 +1109,26 @@ SELECT dolt_checkout('main', 't');
 " "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT b FROM t WHERE a = 1);" \
 "SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT b FROM t WHERE a = 1));"
 
+# ROLLBACK does not revert dolt_checkout: the session stays on the branch it
+# checked out, and later writes land there. Reported once as state corruption
+# because dolt_default_branch() still says "main" -- that is the repo default,
+# not the session branch. Dolt behaves the same way, so this pins the parity and
+# keeps someone from "fixing" it into a divergence.
+oracle "checkout_survives_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 'feature_wip');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 'main_wip');
+BEGIN;
+SELECT dolt_checkout('feature');
+ROLLBACK;
+"
+
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
