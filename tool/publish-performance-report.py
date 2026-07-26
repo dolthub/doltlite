@@ -41,6 +41,15 @@ def gh_json(arguments):
         raise PublishError(f"invalid gh JSON for: {' '.join(arguments)}") from exc
 
 
+def report_login():
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        return "github-actions[bot]"
+    login = command(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+    if not login:
+        raise PublishError("unable to determine report bot login")
+    return login
+
+
 def validate_previous_pr(pr, current_login):
     author = (pr.get("author") or {}).get("login")
     if author != current_login:
@@ -131,9 +140,7 @@ def publish_report(args):
     if not os.environ.get("GH_TOKEN"):
         raise PublishError("GH_TOKEN is required")
 
-    login = command(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
-    if not login:
-        raise PublishError("unable to determine report bot login")
+    login = report_login()
     command(["gh", "auth", "setup-git"])
 
     merged = merge_previous_report(args.repository, login)
