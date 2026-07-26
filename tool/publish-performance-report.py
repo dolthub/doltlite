@@ -43,7 +43,8 @@ def gh_json(arguments):
 
 def report_login():
     if os.environ.get("GITHUB_ACTIONS") == "true":
-        return "github-actions[bot]"
+        # gh renders GitHub App authors with an "app/" prefix.
+        return "app/github-actions"
     login = command(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
     if not login:
         raise PublishError("unable to determine report bot login")

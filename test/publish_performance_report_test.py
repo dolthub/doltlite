@@ -39,7 +39,7 @@ class PublishPerformanceReportTest(unittest.TestCase):
         ):
             self.assertEqual(
                 publisher.report_login(),
-                "github-actions[bot]",
+                "app/github-actions",
             )
         command.assert_not_called()
 
