@@ -13,6 +13,10 @@ on:
         description: Repetitions for each version-control benchmark
         required: false
         default: "101"
+      source_run_id:
+        description: Existing nightly run ID to republish without benchmarking
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -25,6 +29,7 @@ concurrency:
 
 jobs:
   build:
+    if: ${{ !inputs.source_run_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -222,6 +227,9 @@ jobs:
         pattern: nightly-performance-*
         path: nightly-results
         merge-multiple: true
+        repository: ${{ github.repository }}
+        run-id: ${{ inputs.source_run_id || github.run_id }}
+        github-token: ${{ github.token }}
 
     - name: Test report generation and publication guards
       run: |
@@ -230,6 +238,9 @@ jobs:
 
     - name: Compose nightly report
       id: report
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_RUN_ID: ${{ inputs.source_run_id }}
       run: |
         summary="$RUNNER_TEMP/performance-report.md"
         issue_body="$RUNNER_TEMP/nightly-performance-failure.md"
@@ -239,7 +250,29 @@ jobs:
         valid=1
         generated_at=$(date -u '+%Y-%m-%d %H:%M UTC')
         generated_date=$(date -u '+%Y-%m-%d')
+        report_commit="$GITHUB_SHA"
         run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        if [ -n "$SOURCE_RUN_ID" ]; then
+          source_name=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
+            --jq '.name')
+          source_branch=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
+            --jq '.head_branch')
+          if [ "$source_name" != "Nightly performance" ] ||
+             [ "$source_branch" != "master" ]; then
+            echo "::error::source run must be a master Nightly performance run"
+            exit 1
+          fi
+          report_commit=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
+            --jq '.head_sha')
+          source_created_at=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
+            --jq '.created_at')
+          generated_date=$(date -u -d "$source_created_at" '+%Y-%m-%d')
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"
+        fi
         {
           echo "Nightly performance failed or produced incomplete results."
           echo ""
@@ -272,7 +305,7 @@ jobs:
         set +e
         python3 test/nightly_performance_report.py \
           --results-dir nightly-results \
-          --commit "$GITHUB_SHA" \
+          --commit "$report_commit" \
           --run-url "$run_url" \
           --generated-at "$generated_at" \
           --runner "${ImageOS:-ubuntu-latest} ${ImageVersion:-}" \
@@ -309,6 +342,7 @@ jobs:
         echo "report=$summary" >> "$GITHUB_OUTPUT"
         echo "issue_body=$issue_body" >> "$GITHUB_OUTPUT"
         echo "generated_date=$generated_date" >> "$GITHUB_OUTPUT"
+        echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
 
     - name: Upload combined nightly report
       if: always()
@@ -334,10 +368,11 @@ jobs:
     - name: Publish rolling performance report PR
       if: >-
         ${{ always() &&
-            github.ref == 'refs/heads/master' &&
+            (github.ref == 'refs/heads/master' ||
+             inputs.source_run_id != '') &&
             steps.report.outputs.valid == '1' }}
       env:
-        GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+        GH_TOKEN: ${{ github.token }}
         PERFORMANCE_REPORT_REVIEWER: ${{ vars.PERFORMANCE_REPORT_REVIEWER }}
       run: |
         python3 tool/publish-performance-report.py \
@@ -345,7 +380,7 @@ jobs:
           --repository "$GITHUB_REPOSITORY" \
           --run-id "$GITHUB_RUN_ID" \
           --run-attempt "$GITHUB_RUN_ATTEMPT" \
-          --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+          --run-url "${{ steps.report.outputs.run_url }}" \
           --generated-date "${{ steps.report.outputs.generated_date }}" \
           --reviewer "$PERFORMANCE_REPORT_REVIEWER"
 

@@ -41,6 +41,16 @@ def gh_json(arguments):
         raise PublishError(f"invalid gh JSON for: {' '.join(arguments)}") from exc
 
 
+def report_login():
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # gh renders GitHub App authors with an "app/" prefix.
+        return "app/github-actions"
+    login = command(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+    if not login:
+        raise PublishError("unable to determine report bot login")
+    return login
+
+
 def validate_previous_pr(pr, current_login):
     author = (pr.get("author") or {}).get("login")
     if author != current_login:
@@ -67,7 +77,7 @@ def validate_previous_pr(pr, current_login):
 
 
 def merge_previous_report(repository, current_login):
-    existing = gh_json(
+    open_pull_requests = gh_json(
         [
             "pr",
             "list",
@@ -75,12 +85,17 @@ def merge_previous_report(repository, current_login):
             repository,
             "--state",
             "open",
-            "--label",
-            LABEL,
+            "--limit",
+            "100",
             "--json",
-            "number",
+            "number,headRefName",
         ]
     )
+    existing = [
+        pr
+        for pr in open_pull_requests
+        if pr.get("headRefName", "").startswith(BRANCH_PREFIX)
+    ]
     if len(existing) > 1:
         numbers = ", ".join(f"#{pr['number']}" for pr in existing)
         raise PublishError(
@@ -126,9 +141,7 @@ def publish_report(args):
     if not os.environ.get("GH_TOKEN"):
         raise PublishError("GH_TOKEN is required")
 
-    login = command(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
-    if not login:
-        raise PublishError("unable to determine report bot login")
+    login = report_login()
     command(["gh", "auth", "setup-git"])
 
     merged = merge_previous_report(args.repository, login)
@@ -161,7 +174,18 @@ def publish_report(args):
             f"Update nightly performance report ({args.generated_date})",
         ]
     )
-    command(["git", "push", "origin", f"HEAD:refs/heads/{branch}"])
+    # This branch is uniquely owned by one workflow run and attempt. Force
+    # updating it makes a failed publication safe to rerun after its first
+    # attempt pushed the commit but failed before creating the PR.
+    command(
+        [
+            "git",
+            "push",
+            "--force",
+            "origin",
+            f"HEAD:refs/heads/{branch}",
+        ]
+    )
 
     command(
         [
@@ -199,13 +223,29 @@ def publish_report(args):
         f"Nightly performance report — {args.generated_date}",
         "--body",
         body,
-        "--label",
-        LABEL,
     ]
     url = command(create).stdout.strip()
     if not url:
         raise PublishError("gh pr create did not return a PR URL")
     print(f"Created {url}")
+    label = command(
+        [
+            "gh",
+            "pr",
+            "edit",
+            url,
+            "--repo",
+            args.repository,
+            "--add-label",
+            LABEL,
+        ],
+        check=False,
+    )
+    if label.returncode:
+        print(
+            f"warning: unable to add label {LABEL}",
+            file=sys.stderr,
+        )
     if args.reviewer:
         review = command(
             [
