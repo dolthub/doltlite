@@ -755,8 +755,15 @@ static void httpResolveCreds(HttpRemote *p){
   }
   if( cred ){
     const char *aud = getenv("DOLT_OVERRIDE_GRPC_JWT_AUDIENCE");
-    if( !aud || !*aud ) aud = p->zHost;
-    p->zAudience = sqlite3_mprintf("%s", aud);
+    if( aud && *aud ){
+      p->zAudience = sqlite3_mprintf("%s", aud);
+    }else if( strncmp(p->zHost, "doltliteremoteapi.", 18)==0 ){
+      /* reuse the doltremoteapi audience for doltlite repositories on dolthub
+      ** DOLT_OVERRIDE_GRPC_JWT_AUDIENCE overrides this. */
+      p->zAudience = sqlite3_mprintf("doltremoteapi.%s", p->zHost + 18);
+    }else{
+      p->zAudience = sqlite3_mprintf("%s", p->zHost);
+    }
     if( p->zAudience ){
       p->cred = cred;
     }else{
