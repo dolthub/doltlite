@@ -18,6 +18,9 @@ printf '%s\n' \
   'gamma # exits before the summary' > "$CRASHES"
 
 RATCHET="$TMP_DIR/ratchet"
+RATCHET_SEED="$TMP_DIR/ratchet-seed"
+printf '%s\n' 'gates 3' 'intentional 1' 'unsupported 1' 'harness 1' \
+  'engine-gap 0' > "$RATCHET_SEED"
 
 # Baseline matching the 3-gate fixture below, so ratchet cases can move it
 # without disturbing the format cases.
@@ -145,5 +148,18 @@ expect_failure "an empty ratchet baseline"
 printf '%s\n' 'gates lots' 'intentional 1' 'unsupported 1' 'harness 1' \
   'engine-gap 0' > "$RATCHET"
 expect_failure "a non-numeric ratchet baseline"
+
+# A name listed twice used to yield a multiline value that failed every numeric
+# comparison without recording a failure, so the ratchet reported holding while
+# enforcing nothing. Each duplicated name is covered because the guard is in the
+# shared lookup, and a per-name typo would slip past a single case.
+for dup in gates intentional unsupported harness engine-gap; do
+  {
+    printf '%s\n' 'gates 3' 'intentional 1' 'unsupported 1' 'harness 1' \
+      'engine-gap 0'
+    grep -E "^$dup " "$RATCHET_SEED"
+  } > "$RATCHET"
+  expect_failure "a ratchet baseline listing '$dup' twice"
+done
 
 echo "OK: testfixture exception inventory checker self-test"
