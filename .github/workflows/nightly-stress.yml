@@ -1,0 +1,379 @@
+name: Nightly stress
+
+# Multi-hour soaks for rare races and stateful VC bugs. Separate from
+# Nightly fuzz: that job is libFuzzer+ASan on on-disk-format harnesses with
+# a corpus cache. This builds ordinary checked binaries and runs the CLI/C
+# stress harnesses that already gate PRs at much shorter budgets.
+#
+# Silent when clean; on failure opens/updates a sticky per-suite tracking
+# issue via report-failure-issue (GitHub then emails repo watchers).
+
+on:
+  schedule:
+    # One hour after Nightly fuzz (05:00 UTC) so the two long nightlies
+    # do not contend for the same runners at the same minute.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      vc_seconds:
+        description: Seconds for the stateful VC fuzzer soak
+        required: false
+        default: "7200"
+      concurrent_seconds:
+        description: Wall-clock seconds for concurrent stress loops (split across harnesses)
+        required: false
+        default: "7200"
+      multiproc_seconds:
+        description: Wall-clock seconds for multi-process stress loops (split across harnesses)
+        required: false
+        default: "7200"
+      multiproc_commit_ops:
+        description: DOLTLITE_MP_COMMIT_OPS for multi_process_test
+        required: false
+        default: "2000"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-stress
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev python3
+
+    - name: Configure
+      run: |
+        mkdir build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build checked binaries and stress harnesses
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make -j2 DOLTLITE_PROLLY_CHECK=1 \
+            doltlite doltlite-lib
+          make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in nightly stress build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf nightly-stress-build.tar.gz build
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-stress-build
+        path: nightly-stress-build.tar.gz
+        retention-days: 1
+
+  stress:
+    name: ${{ matrix.suite }}
+    needs: build
+    runs-on: ubuntu-latest
+    # Default budgets are 2h; leave headroom under GitHub's 6h job ceiling
+    # so workflow_dispatch can raise durations without editing this value.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - vc-fuzzer
+          - concurrent
+          - multi-process
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev python3
+
+    - name: Download build
+      uses: actions/download-artifact@v4
+      with:
+        name: nightly-stress-build
+
+    - name: Extract build
+      run: tar -xzf nightly-stress-build.tar.gz
+
+    - name: Resolve soak budgets
+      id: budget
+      run: |
+        set -euo pipefail
+        vc="${{ github.event.inputs.vc_seconds || '7200' }}"
+        concurrent="${{ github.event.inputs.concurrent_seconds || '7200' }}"
+        multiproc="${{ github.event.inputs.multiproc_seconds || '7200' }}"
+        mp_ops="${{ github.event.inputs.multiproc_commit_ops || '2000' }}"
+        echo "vc_seconds=$vc" >> "$GITHUB_OUTPUT"
+        echo "concurrent_seconds=$concurrent" >> "$GITHUB_OUTPUT"
+        echo "multiproc_seconds=$multiproc" >> "$GITHUB_OUTPUT"
+        echo "multiproc_commit_ops=$mp_ops" >> "$GITHUB_OUTPUT"
+        echo "Budgets: vc=${vc}s concurrent=${concurrent}s multiproc=${multiproc}s mp_ops=${mp_ops}"
+
+    - name: Run ${{ matrix.suite }} soak
+      id: soak
+      env:
+        SUITE: ${{ matrix.suite }}
+        VC_SECONDS: ${{ steps.budget.outputs.vc_seconds }}
+        CONCURRENT_SECONDS: ${{ steps.budget.outputs.concurrent_seconds }}
+        MULTIPROC_SECONDS: ${{ steps.budget.outputs.multiproc_seconds }}
+        MULTIPROC_COMMIT_OPS: ${{ steps.budget.outputs.multiproc_commit_ops }}
+      run: |
+        set -uo pipefail
+        WS="$GITHUB_WORKSPACE"
+        outdir="$WS/stress-artifacts/$SUITE"
+        mkdir -p "$outdir"
+        log="$outdir/run.log"
+        rc=0
+
+        cd "$WS/build"
+
+        case "$SUITE" in
+          vc-fuzzer)
+            # Smoke gates at 600s; nightly soaks for hours to hit rare
+            # merge/reset/gc interleavings the model checker cares about.
+            echo "=== stateful VC fuzzer (${VC_SECONDS}s) ===" | tee "$log"
+            if ! DOLTLITE_VC_STATEFUL_SECONDS="$VC_SECONDS" \
+                 bash ../test/vc_stateful_fuzzer.sh ./doltlite \
+                 >>"$log" 2>&1; then
+              rc=1
+            fi
+            ;;
+
+          concurrent)
+            # PR budgets: concurrent_stress 480s, prolly_txn loop 300s,
+            # vc_concurrency loop 480s. Split the nightly wall-clock
+            # budget ~50/25/25 across the same harnesses.
+            total="$CONCURRENT_SECONDS"
+            s_concurrent=$(( total * 50 / 100 ))
+            s_prolly=$(( total * 25 / 100 ))
+            s_vc=$(( total - s_concurrent - s_prolly ))
+            {
+              echo "=== concurrent suite total=${total}s"
+              echo "    concurrent_stress=${s_concurrent}s"
+              echo "    prolly_txn_loop=${s_prolly}s"
+              echo "    vc_concurrency_loop=${s_vc}s"
+            } | tee "$log"
+
+            echo "--- concurrent_stress_test ---" | tee -a "$log"
+            if ! DOLTLITE_STRESS_SECONDS="$s_concurrent" \
+                 ./concurrent_stress_test >>"$log" 2>&1; then
+              rc=1
+            fi
+
+            if [ "$rc" -eq 0 ]; then
+              echo "--- prolly_txn_stress_test (loop ${s_prolly}s) ---" | tee -a "$log"
+              deadline=$((SECONDS + s_prolly))
+              runs=0
+              while [ "$SECONDS" -lt "$deadline" ]; do
+                runs=$((runs + 1))
+                if [ $((runs % 50)) -eq 0 ]; then
+                  echo "prolly_txn_stress_test run ${runs}" | tee -a "$log"
+                fi
+                if ! ./prolly_txn_stress_test >>"$log" 2>&1; then
+                  rc=1
+                  break
+                fi
+              done
+              echo "completed ${runs} prolly_txn_stress_test runs" | tee -a "$log"
+            fi
+
+            if [ "$rc" -eq 0 ]; then
+              echo "--- vc_concurrency_test (loop ${s_vc}s) ---" | tee -a "$log"
+              deadline=$((SECONDS + s_vc))
+              runs=0
+              while [ "$SECONDS" -lt "$deadline" ]; do
+                runs=$((runs + 1))
+                if [ $((runs % 100)) -eq 0 ]; then
+                  echo "vc_concurrency_test run ${runs}" | tee -a "$log"
+                fi
+                if ! ./vc_concurrency_test >>"$log" 2>&1; then
+                  rc=1
+                  break
+                fi
+              done
+              echo "completed ${runs} vc_concurrency_test runs" | tee -a "$log"
+            fi
+
+            if [ "$rc" -eq 0 ]; then
+              echo "--- vc_ref_mutation_stress_test ---" | tee -a "$log"
+              if ! ./vc_ref_mutation_stress_test >>"$log" 2>&1; then
+                rc=1
+              fi
+            fi
+            ;;
+
+          multi-process)
+            # multi_process_* only appear as one-shot specialized C tests
+            # in PR CI. Loop them for hours; raise commit-ops so the
+            # contention test spends more time under load per iteration.
+            total="$MULTIPROC_SECONDS"
+            s_commit=$(( total * 40 / 100 ))
+            s_gc=$(( total * 30 / 100 ))
+            s_merge=$(( total - s_commit - s_gc ))
+            {
+              echo "=== multi-process suite total=${total}s"
+              echo "    multi_process_test loop=${s_commit}s ops=${MULTIPROC_COMMIT_OPS}"
+              echo "    multi_process_gc_test loop=${s_gc}s"
+              echo "    multi_process_merge_rebase_test loop=${s_merge}s"
+            } | tee "$log"
+
+            echo "--- multi_process_test (loop ${s_commit}s) ---" | tee -a "$log"
+            deadline=$((SECONDS + s_commit))
+            runs=0
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              runs=$((runs + 1))
+              if [ $((runs % 10)) -eq 0 ]; then
+                echo "multi_process_test run ${runs}" | tee -a "$log"
+              fi
+              if ! DOLTLITE_MP_COMMIT_OPS="$MULTIPROC_COMMIT_OPS" \
+                   ./multi_process_test >>"$log" 2>&1; then
+                rc=1
+                break
+              fi
+            done
+            echo "completed ${runs} multi_process_test runs" | tee -a "$log"
+
+            if [ "$rc" -eq 0 ]; then
+              echo "--- multi_process_gc_test (loop ${s_gc}s) ---" | tee -a "$log"
+              deadline=$((SECONDS + s_gc))
+              runs=0
+              while [ "$SECONDS" -lt "$deadline" ]; do
+                runs=$((runs + 1))
+                if [ $((runs % 5)) -eq 0 ]; then
+                  echo "multi_process_gc_test run ${runs}" | tee -a "$log"
+                fi
+                if ! ./multi_process_gc_test >>"$log" 2>&1; then
+                  rc=1
+                  break
+                fi
+              done
+              echo "completed ${runs} multi_process_gc_test runs" | tee -a "$log"
+            fi
+
+            if [ "$rc" -eq 0 ]; then
+              echo "--- multi_process_merge_rebase_test (loop ${s_merge}s) ---" | tee -a "$log"
+              deadline=$((SECONDS + s_merge))
+              runs=0
+              while [ "$SECONDS" -lt "$deadline" ]; do
+                runs=$((runs + 1))
+                if [ $((runs % 5)) -eq 0 ]; then
+                  echo "multi_process_merge_rebase_test run ${runs}" | tee -a "$log"
+                fi
+                if ! ./multi_process_merge_rebase_test >>"$log" 2>&1; then
+                  rc=1
+                  break
+                fi
+              done
+              echo "completed ${runs} multi_process_merge_rebase_test runs" | tee -a "$log"
+            fi
+            ;;
+
+          *)
+            echo "::error::unknown suite: $SUITE" | tee "$log"
+            rc=1
+            ;;
+        esac
+
+        tail -n 40 "$log" || true
+        if [ "$rc" -eq 0 ]; then
+          echo "failed=" >> "$GITHUB_OUTPUT"
+          echo "clean."
+        else
+          echo "failed=1" >> "$GITHUB_OUTPUT"
+          echo "FAIL in $SUITE"
+        fi
+
+    - name: Compose failure report
+      if: steps.soak.outputs.failed == '1'
+      run: |
+        set -euo pipefail
+        WS="$GITHUB_WORKSPACE"
+        suite="${{ matrix.suite }}"
+        BODY="$RUNNER_TEMP/stress-body.md"
+        {
+          echo "Nightly stress soak failed in **${suite}**."
+          echo ""
+          echo "Full log is attached as the \`nightly-stress-${suite}\` artifact on the run."
+          echo ""
+          echo "Reproduce locally after a checked build:"
+          case "$suite" in
+            vc-fuzzer)
+              echo '```bash'
+              echo "cd build"
+              echo "DOLTLITE_VC_STATEFUL_SECONDS=600 bash ../test/vc_stateful_fuzzer.sh ./doltlite"
+              echo '```'
+              ;;
+            concurrent)
+              echo '```bash'
+              echo "cd build"
+              echo "DOLTLITE_STRESS_SECONDS=480 ./concurrent_stress_test"
+              echo "./prolly_txn_stress_test"
+              echo "./vc_concurrency_test"
+              echo "./vc_ref_mutation_stress_test"
+              echo '```'
+              ;;
+            multi-process)
+              echo '```bash'
+              echo "cd build"
+              echo "DOLTLITE_MP_COMMIT_OPS=2000 ./multi_process_test"
+              echo "./multi_process_gc_test"
+              echo "./multi_process_merge_rebase_test"
+              echo '```'
+              ;;
+          esac
+          echo ""
+          echo "Last 80 lines of the soak log:"
+          echo ""
+          echo '```'
+          tail -n 80 "$WS/stress-artifacts/$suite/run.log" 2>/dev/null || echo "(no log)"
+          echo '```'
+        } > "$BODY"
+        cat "$BODY"
+
+    - name: Upload soak log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-stress-${{ matrix.suite }}
+        path: stress-artifacts/${{ matrix.suite }}/
+        if-no-files-found: warn
+        retention-days: 14
+
+    - name: Report failure as GitHub issue
+      if: steps.soak.outputs.failed == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-stress-${{ matrix.suite }}
+        title: "Nightly stress failure: ${{ matrix.suite }}"
+        body-file: ${{ runner.temp }}/stress-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
+        label-description: Nightly multi-hour stress soak failure
+
+    - name: Fail the job if the soak failed
+      if: steps.soak.outputs.failed == '1'
+      run: |
+        echo "::error::nightly stress failure in ${{ matrix.suite }}"
+        exit 1
