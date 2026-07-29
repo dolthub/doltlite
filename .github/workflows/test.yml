@@ -309,6 +309,7 @@ jobs:
           echo "::error::files in more than one regression bucket:"; echo "$dups"; exit 1
         fi
         bash test/check_testfixture_crash_coverage.sh
+        bash test/check_testfixture_exception_inventory.sh
 
     - name: SQLite regression tests - ${{ matrix.bucket }}
       run: |

@@ -10,6 +10,8 @@
 # entry the moment a fix makes the file complete. Files that cannot be
 # bucket-enforced must have continuously gated replacement coverage in
 # known_testfixture_crash_coverage.txt. CI rejects missing or stale mappings.
+# Suite dispositions and issue links are enforced by
+# known_testfixture_exception_inventory.txt.
 # Reasons some files cannot be bucket-enforced include:
 #   malloc, backup_ioerr -- complete at the tester error cap with a summary
 #     line, so the gate would report them as fixed crashes; their failure
