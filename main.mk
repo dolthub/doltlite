@@ -3027,12 +3027,36 @@ doltlite-remotesrv$(T.exe):	$(TOP)/src/remotesrv_main.c \
 		$(LDFLAGS.libsqlite3)
 all: doltlite-remotesrv$(T.exe)
 
+# The Linux shared library carries SONAME libdoltlite.so.0, so that is the name
+# a consumer resolves at runtime, not libdoltlite.so. Install it under the
+# SONAME with the unversioned developer link beside it -- the same split the deb
+# makes between libdoltlite0 and libdoltlite-dev. Darwin's install_name is the
+# unversioned dylib, so there the suffix is empty and no link is made.
+#
+# Installing straight to the SONAME, rather than installing libdoltlite.so and
+# renaming it, keeps this idempotent and never unlinks a working library before
+# its replacement exists: a rename over the previous install would leave nothing
+# behind if it failed, and re-running the install would rename the dev symlink
+# onto its own target.
+libdoltlite.soname.suffix = $(if $(filter .so,$(T.dll)),.0,)
+
 install-doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll) $(install-dir.lib)
 	$(INSTALL.noexec) libdoltlite$(T.lib) "$(install-dir.lib)"
-	$(INSTALL) libdoltlite$(T.dll) "$(install-dir.lib)"
+	$(INSTALL) libdoltlite$(T.dll) \
+		"$(install-dir.lib)/libdoltlite$(T.dll)$(libdoltlite.soname.suffix)"
+	$(if $(libdoltlite.soname.suffix),ln -sf libdoltlite$(T.dll)$(libdoltlite.soname.suffix) "$(install-dir.lib)/libdoltlite$(T.dll)")
 
-install-shell-0: doltlite$(T.exe) $(install-dir.bin)
-	$(INSTALL) doltlite$(T.exe) "$(install-dir.bin)"
+# The headers README tells embedders to include: doltlite.h for the SQLite C
+# API under our name, doltlite_remotesrv.h for doltliteServeAsync et al. The
+# deb and Homebrew packages install exactly these two; a source install has to
+# provide the same names or "#include <doltlite.h>" only works from a package.
+install-doltlite-headers: doltlite.h $(install-dir.include)
+	$(INSTALL.noexec) doltlite.h "$(TOP)/src/doltlite_remotesrv.h" \
+		"$(install-dir.include)"
+install: install-doltlite-headers
+
+install-shell-0: doltlite$(T.exe) doltlite-remotesrv$(T.exe) $(install-dir.bin)
+	$(INSTALL) doltlite$(T.exe) doltlite-remotesrv$(T.exe) "$(install-dir.bin)"
 install-shell-1:
 install: install-shell-$(HAVE_WASI_SDK) install-doltlite-lib
 
