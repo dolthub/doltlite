@@ -6238,6 +6238,62 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
   removeDbFiles(dbpath);
 }
 
+static void run_rebase_concurrent_peer_commit_is_preserved(void){
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  sqlite3 *db3 = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Rebase Concurrent Peer Commit Preservation Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_concurrent_peer_commit_is_preserved");
+  removeDbFiles(dbpath);
+
+  check("open_db1_for_rebase_concurrent_peer", open_db(dbpath, &db1)==SQLITE_OK);
+  check("setup_repo_for_rebase_concurrent_peer", execSql(db1,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "SELECT dolt_checkout('-b','feat');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_commit('-A','-m','feat');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES(3,'main');"
+    "SELECT dolt_commit('-A','-m','main');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  check("start_rebase_before_peer_commit",
+        strstr(queryScalarText(db1, "SELECT dolt_rebase('-i','main')"),
+               "interactive rebase started")!=0);
+
+  check("open_db2_for_rebase_concurrent_peer", open_db(dbpath, &db2)==SQLITE_OK);
+  check("checkout_feat_for_rebase_concurrent_peer",
+        strcmp(queryScalarText(db2, "SELECT dolt_checkout('feat')"), "0")==0);
+  check("commit_rebase_concurrent_peer", execSql(db2,
+    "INSERT INTO t VALUES(4,'peer');"
+    "SELECT dolt_commit('-A','-m','peer');")==SQLITE_OK);
+
+  res = queryScalarText(db1, "SELECT dolt_rebase('--continue')");
+  check("rebase_rejects_concurrent_peer_commit", strstr(res, "ERROR:")!=0);
+
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+
+  check("open_db3_after_rebase_concurrent_peer", open_db(dbpath, &db3)==SQLITE_OK);
+  check("checkout_feat_after_rebase_concurrent_peer",
+        strcmp(queryScalarText(db3, "SELECT dolt_checkout('feat')"), "0")==0);
+  check("rebase_concurrent_peer_row_is_preserved",
+        strcmp(queryScalarText(db3, "SELECT v FROM t WHERE id=4"), "peer")==0);
+  check("rebase_concurrent_peer_remains_head",
+        strcmp(queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1"), "peer")==0);
+  check("rebase_concurrent_working_branch_removed",
+        strcmp(queryScalarText(db3,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"), "0")==0);
+
+  sqlite3_close(db3);
+  removeDbFiles(dbpath);
+}
+
 static void run_branch_copy_existing_dest_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -8745,6 +8801,7 @@ static const RegressionCase aCases[] = {
   { "rebase_plan_read_error_is_not_partial", "Rebase Plan Read Error Is Not Partial Test", run_rebase_plan_read_error_is_not_partial },
   { "rebase_recovery_failure_is_reported", "Rebase Recovery Failure Is Reported Test", run_rebase_recovery_failure_is_reported },
   { "rebase_continue_conflict_abort_restores_durable_state", "Rebase Continue Conflict Abort Restores Durable State Test", run_rebase_continue_conflict_abort_restores_durable_state },
+  { "rebase_concurrent_peer_commit_is_preserved", "Rebase Concurrent Peer Commit Preservation Test", run_rebase_concurrent_peer_commit_is_preserved },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
