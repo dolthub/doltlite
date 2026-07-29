@@ -117,16 +117,36 @@ do
   fi
 done
 
-for f in "$SRCDIR"/doltlite_merge_cmd.c "$SRCDIR"/doltlite_merge_constraints.c; do
+if [ ! -f "$SRCDIR"/doltlite_merge_cmd.c ]; then
+  lint "$SRCDIR/doltlite_merge_cmd.c: missing — expected doltlite merge command module"
+else
+  nline=$(wc -l < "$SRCDIR"/doltlite_merge_cmd.c | tr -d ' ')
+  if [ "$nline" -gt 2000 ]; then
+    lint "$SRCDIR/doltlite_merge_cmd.c:$nline lines — doltlite merge cmd must stay at or below 2000 lines"
+  fi
+fi
+
+# Constraint detectors: require the FK/unique/CHECK split so the monolith
+# cannot return. Cap shared helpers + each detector at 1500.
+for f in \
+  "$SRCDIR"/doltlite_merge_constraints.c \
+  "$SRCDIR"/doltlite_merge_constraints_unique.c \
+  "$SRCDIR"/doltlite_merge_constraints_check.c \
+  "$SRCDIR"/doltlite_merge_constraints_fk.c
+do
   if [ ! -f "$f" ]; then
-    lint "$f: missing — expected doltlite merge command/constraints module"
+    lint "$f: missing — doltlite merge constraints must stay split (shared/unique/check/fk)"
     continue
   fi
   nline=$(wc -l < "$f" | tr -d ' ')
-  if [ "$nline" -gt 2000 ]; then
-    lint "$f:$nline lines — doltlite merge cmd/constraints must stay at or below 2000 lines"
+  if [ "$nline" -gt 1500 ]; then
+    lint "$f:$nline lines — doltlite merge constraint modules must stay at or below 1500 lines"
   fi
 done
+
+if [ ! -f "$SRCDIR"/doltlite_merge_constraints_int.h ]; then
+  lint "$SRCDIR/doltlite_merge_constraints_int.h: missing — merge constraints private header"
+fi
 
 for f in "$SRCDIR"/prolly_*.c; do
   while IFS= read -r line; do

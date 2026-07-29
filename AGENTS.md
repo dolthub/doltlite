@@ -82,7 +82,8 @@ make DOLTLITE_PROLLY=0 sqlite3   # stock SQLite, for oracle/perf comparison
   (branch/checkout), `doltlite_merge` (catalog orchestration in
   `doltlite_merge`, pass1/pass2 in `doltlite_merge_pass1` /
   `doltlite_merge_pass2`, rows in `doltlite_merge_rows`, schema IR in
-  `doltlite_merge_schema`, plus `doltlite_merge_constraints`),
+  `doltlite_merge_schema`, plus constraint detectors in
+  `doltlite_merge_constraints` / `_unique` / `_check` / `_fk`),
   `doltlite_diff` / `doltlite_diff_stat` /
   `doltlite_diff_table`, `doltlite_log`, `doltlite_history`, `doltlite_blame`,
   `doltlite_tag`, `doltlite_conflicts`, `doltlite_constraint_violations` /

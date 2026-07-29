@@ -609,6 +609,9 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               doltlite_ignore.o doltlite_hashof.o \
               doltlite_constraint_violations.o doltlite_verify_constraints.o \
               doltlite_merge_constraints.o \
+              doltlite_merge_constraints_unique.o \
+              doltlite_merge_constraints_check.o \
+              doltlite_merge_constraints_fk.o \
               doltlite_dbpage.o \
               doltlite_remote.o doltlite_remote_sql.o \
               doltlite_http_remote.o doltlite_remotesrv.o
@@ -636,7 +639,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_catalog_types.h $(TOP)/src/doltlite_commit.h \
     $(TOP)/src/doltlite_constraint_violations.h \
     $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
-    $(TOP)/src/doltlite_branch_int.h $(TOP)/src/doltlite_merge_int.h $(TOP)/src/doltlite_parse.h \
+    $(TOP)/src/doltlite_branch_int.h $(TOP)/src/doltlite_merge_int.h $(TOP)/src/doltlite_merge_constraints_int.h $(TOP)/src/doltlite_parse.h \
     $(TOP)/src/doltlite_name_index.h \
     $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
     $(TOP)/src/doltlite_creds.h $(TOP)/src/doltlite_net.h $(TOP)/src/doltlite_tls.h \
@@ -669,7 +672,11 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/doltlite_merge_status.c \
     $(TOP)/src/doltlite_hashof.c $(TOP)/src/doltlite_constraint_violations.c \
     $(TOP)/src/doltlite_verify_constraints.c \
-    $(TOP)/src/doltlite_merge_constraints.c $(TOP)/src/doltlite_dbpage.c \
+    $(TOP)/src/doltlite_merge_constraints.c \
+    $(TOP)/src/doltlite_merge_constraints_unique.c \
+    $(TOP)/src/doltlite_merge_constraints_check.c \
+    $(TOP)/src/doltlite_merge_constraints_fk.c \
+    $(TOP)/src/doltlite_dbpage.c \
     $(TOP)/src/doltlite_remote.c $(TOP)/src/doltlite_remote_sql.c \
     $(TOP)/src/doltlite_http_remote.c $(TOP)/src/doltlite_remotesrv.c
   ifeq ($(DOLTLITE_PROLLY_CHECK),1)
@@ -1715,8 +1722,17 @@ doltlite_constraint_violations.o:	$(TOP)/src/doltlite_constraint_violations.c $(
 doltlite_verify_constraints.o:	$(TOP)/src/doltlite_verify_constraints.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_verify_constraints.c
 
-doltlite_merge_constraints.o:	$(TOP)/src/doltlite_merge_constraints.c $(DEPS_OBJ_COMMON)
+doltlite_merge_constraints.o:	$(TOP)/src/doltlite_merge_constraints.c $(TOP)/src/doltlite_merge_constraints_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints.c
+
+doltlite_merge_constraints_unique.o:	$(TOP)/src/doltlite_merge_constraints_unique.c $(TOP)/src/doltlite_merge_constraints_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints_unique.c
+
+doltlite_merge_constraints_check.o:	$(TOP)/src/doltlite_merge_constraints_check.c $(TOP)/src/doltlite_merge_constraints_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints_check.c
+
+doltlite_merge_constraints_fk.o:	$(TOP)/src/doltlite_merge_constraints_fk.c $(TOP)/src/doltlite_merge_constraints_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints_fk.c
 
 doltlite_merge.o:	$(TOP)/src/doltlite_merge.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge.c
