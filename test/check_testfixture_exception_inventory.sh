@@ -130,11 +130,27 @@ if [ ! -f "$RATCHET_FILE" ]; then
   exit 1
 fi
 
+# Exactly one line per name. Printing every match let a duplicated name yield a
+# multiline value that then failed every numeric comparison without recording a
+# failure, so the ratchet reported that it held while enforcing nothing.
 ratchet_for() {
   awk -v want="$1" '
-    { sub(/#.*/, ""); if (NF >= 2 && $1 == want) { print $2; found = 1 } }
-    END { if (!found) print "missing" }
+    { sub(/#.*/, ""); if (NF >= 2 && $1 == want) { value = $2; n++ } }
+    END {
+      if (n == 0) { print "missing"; exit }
+      if (n > 1) { print "duplicate"; exit }
+      print value
+    }
   ' "$RATCHET_FILE"
+}
+
+# Whole-string test. grep -E '^[0-9]+$' matches line by line, so it accepts a
+# multiline value on the strength of its first line.
+is_count() {
+  case "$1" in
+    '' | *[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 RATCHET_FAIL=0
@@ -144,7 +160,10 @@ check_ratchet() {
   if [ "$baseline" = "missing" ]; then
     echo "ERROR: ratchet baseline has no '$name' line"
     RATCHET_FAIL=1
-  elif ! printf '%s' "$baseline" | grep -qE '^[0-9]+$'; then
+  elif [ "$baseline" = "duplicate" ]; then
+    echo "ERROR: ratchet baseline lists '$name' more than once"
+    RATCHET_FAIL=1
+  elif ! is_count "$baseline"; then
     echo "ERROR: ratchet baseline for '$name' is not a number: $baseline"
     RATCHET_FAIL=1
   elif [ "$actual" -gt "$baseline" ]; then

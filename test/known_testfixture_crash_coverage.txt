@@ -1,19 +1,28 @@
 # Deterministic coverage for crash-listed testfixture files that cannot run in
 # a regression bucket. Format:
 #
-#   <excluded-test> <testfixture|c-test|workflow-script> <replacement>
+#   <excluded-test> <testfixture|c-test|workflow-script> <replacement> <case>
 #
 # Multiple replacements may cover distinct behavior from one excluded file.
+#
+# <case> anchors the mapping to the specific case inside the replacement, so
+# naming a file that no longer covers the behavior fails instead of passing on
+# the strength of its name. The checker resolves it to a line and prints
+# file:line; it must match exactly one case, and it is resolved rather than
+# pinned so that editing a replacement above the case does not invalidate it.
+# Resolution per kind: `do_*test <case>` for testfixture, a function definition
+# or kOps[] entry for c-test, a `--- ... ---` section or function for
+# workflow-script.
 
-backup_ioerr testfixture doltlite_recover_backup_fault # backup/restore OOM and persistent I/O errors
-corrupt4 c-test corruption_test # malformed chunk data, metadata, indexes, and truncated writes
-crash8 workflow-script crash_injection_test.sh # first and later commit crash durability
-ioerr2 testfixture doltlite_recover_shared_ioerr # persistent I/O errors preserve writer and peer state
-malloc testfixture doltlite_recover_savepointfault # OOM during savepoint rollback and release
-malloc c-test oom_dolt_fault_test # fork-isolated OOM sweeps over Dolt operations
-malloc3 testfixture doltlite_recover_postcommit_oom # OOM result agrees with durable statement state
-malloc3 c-test oom_dolt_fault_test # prepare, execute, and version-control allocation failures
-pagerfault testfixture doltlite_recover_cacheflush_oom # OOM during dirty-cache flush and merged scans
-pagerfault testfixture doltlite_recover_savepointfault # OOM while restoring transaction state
-pagerfault2 testfixture doltlite_recover_cacheflush_oom # large dirty-state OOM and rollback integrity
-pagerfault2 testfixture doltlite_recover_postcommit_oom # durable state remains consistent after OOM
+backup_ioerr testfixture doltlite_recover_backup_fault 1.1 # backup/restore OOM and persistent I/O errors
+corrupt4 c-test corruption_test test_corrupt_chunk_data # malformed chunk data, metadata, indexes, and truncated writes
+crash8 workflow-script crash_injection_test.sh 1 # first and later commit crash durability
+ioerr2 testfixture doltlite_recover_shared_ioerr 1.1 # persistent I/O errors preserve writer and peer state
+malloc testfixture doltlite_recover_savepointfault 1 # OOM during savepoint rollback and release
+malloc c-test oom_dolt_fault_test dolt_commit # fork-isolated OOM sweeps over Dolt operations
+malloc3 testfixture doltlite_recover_postcommit_oom 1.1 # OOM result agrees with durable statement state
+malloc3 c-test oom_dolt_fault_test savepoint_vc_state # prepare, execute, and version-control allocation failures
+pagerfault testfixture doltlite_recover_cacheflush_oom 1.1 # OOM during dirty-cache flush and merged scans
+pagerfault testfixture doltlite_recover_savepointfault 2 # OOM while restoring transaction state
+pagerfault2 testfixture doltlite_recover_cacheflush_oom 1.2 # large dirty-state OOM and rollback integrity
+pagerfault2 testfixture doltlite_recover_postcommit_oom 1.1 # durable state remains consistent after OOM
