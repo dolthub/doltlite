@@ -183,6 +183,7 @@ static int doltliteRebaseLinearReplay(
   DoltliteTxnState saved;
   DoltliteCommit upstreamCommit;
   int savedInit = 0;
+  int graphLocked = 0;
   int rc;
   int i;
   int dirty = 0;
@@ -259,8 +260,16 @@ static int doltliteRebaseLinearReplay(
   doltliteSetSessionHead(db, &upstreamHash);
   rc = doltliteSetSessionStaged(db, &upstreamCommit.catalogHash);
   if( rc==SQLITE_OK ){
+    rc = doltliteRefreshAndConfirmHead(db, cs, &headHash);
+    if( rc==SQLITE_OK ) graphLocked = 1;
+  }
+  if( rc==SQLITE_OK ){
     rc = doltliteAdvanceBranch(
         db, &upstreamHash, &upstreamCommit.catalogHash, 0);
+  }
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+    graphLocked = 0;
   }
   doltliteCommitClear(&upstreamCommit);
   memset(&upstreamCommit, 0, sizeof(upstreamCommit));
@@ -327,6 +336,7 @@ static int doltliteRebaseLinearReplay(
   return SQLITE_OK;
 
 rollback:
+  if( graphLocked ) chunkStoreUnlock(cs);
   if( savedInit ){
     (void)doltliteRestoreTxnStateOnFailure(db, &saved, rc);
   }
@@ -771,14 +781,21 @@ typedef struct RebaseFinalizeRefsCtx RebaseFinalizeRefsCtx;
 struct RebaseFinalizeRefsCtx {
   const char *zOrigBranch;
   const char *zWorkingBranch;
+  const ProllyHash *pExpectedOrigHead;
   const ProllyHash *pCurHead;
   const ProllyHash *pCurCat;
 };
 
 static int rebaseFinalizeContinueRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   RebaseFinalizeRefsCtx *p = (RebaseFinalizeRefsCtx*)pArg;
+  ProllyHash origHead;
   int rc;
   UNUSED_PARAMETER(db);
+  rc = chunkStoreFindBranch(cs, p->zOrigBranch, &origHead);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(&origHead, p->pExpectedOrigHead)!=0 ){
+    return SQLITE_BUSY;
+  }
   rc = chunkStoreUpdateBranch(cs, p->zOrigBranch, p->pCurHead);
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStoreWriteBranchWorkingCatalog(cs, p->zOrigBranch,
@@ -1006,7 +1023,7 @@ static void doltliteRebaseInteractiveStart(
     goto fail;
   }
 
-  rc = doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
+  rc = doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &headHash,
                                      zOrig, zReturnBranch);
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto fail;
@@ -1124,13 +1141,15 @@ static void doltliteRebaseInteractiveContinue(
   int bSkipConstraintDetect = (!db->autoCommit || db->pSavepoint!=0);
   ProllyHash curCat;
   ProllyHash curHead;
+  ProllyHash expectedOrigHead;
   RebaseFinalizeRefsCtx refsCtx;
   char *zPlanErr = 0;
 
   memset(&curCat, 0, sizeof(curCat));
   memset(&curHead, 0, sizeof(curHead));
+  memset(&expectedOrigHead, 0, sizeof(expectedOrigHead));
 
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0,
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, &expectedOrigHead,
                                 &zOrigBranchConst, &zReturnBranchConst);
   if( !isRebasing || !zOrigBranchConst || !zReturnBranchConst ){
     sqlite3_result_error(context, "no rebase in progress", -1);
@@ -1208,6 +1227,7 @@ static void doltliteRebaseInteractiveContinue(
   memset(&refsCtx, 0, sizeof(refsCtx));
   refsCtx.zOrigBranch = zOrigBranch;
   refsCtx.zWorkingBranch = zWorking;
+  refsCtx.pExpectedOrigHead = &expectedOrigHead;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
   rc = doltliteMutateRefs(db, rebaseFinalizeContinueRefs, &refsCtx);
