@@ -367,6 +367,10 @@ SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('main', 'feat', 'u');"
 
 echo "--- Group K: replay history on multi-col PK table additions ---"
+# Previously EXPECT_EMPTY + a query that selected non-existent
+# dolt_history_u.message (issue #839). Both engines now return history
+# rows for the table added via merge/cherry-pick/rebase atop a structural
+# change on the receiver; assert parity with message joined from dolt_log.
 
 oracle "k_merge_replay_multi_pk_history" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -383,12 +387,9 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_merge('feat');
-" "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;" "EXPECT_EMPTY"
+" "SELECT CONCAT('R|', h.a, '|', h.b, '|', h.v, '|', IFNULL(l.message,'')) FROM dolt_history_u h LEFT JOIN dolt_log l ON l.commit_hash = h.commit_hash ORDER BY h.a, h.b, IFNULL(l.message,'');"
 
-# Positive control for the empty history above: the merge must actually bring
-# table u onto main. Assert its row is present post-merge, so the empty
-# dolt_history_u is Dolt's merge-history semantics on a real table, not a
-# silently-skipped replay or a table that never arrived.
+# Positive control: the merge must actually bring table u onto main.
 oracle "k_merge_replay_multi_pk_data_present" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
@@ -421,7 +422,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_cherry_pick('feat');
-" "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;" "EXPECT_EMPTY"
+" "SELECT CONCAT('R|', h.a, '|', h.b, '|', h.v, '|', IFNULL(l.message,'')) FROM dolt_history_u h LEFT JOIN dolt_log l ON l.commit_hash = h.commit_hash ORDER BY h.a, h.b, IFNULL(l.message,'');"
 
 oracle "k_rebase_replay_multi_pk_history" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -439,7 +440,7 @@ ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
-" "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;" "EXPECT_EMPTY"
+" "SELECT CONCAT('R|', h.a, '|', h.b, '|', h.v, '|', IFNULL(l.message,'')) FROM dolt_history_u h LEFT JOIN dolt_log l ON l.commit_hash = h.commit_hash ORDER BY h.a, h.b, IFNULL(l.message,'');"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
