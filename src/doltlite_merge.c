@@ -46,7 +46,10 @@ int normalizeTheirsToMergedLayout(
     int oi, found = -1;
     for(oi=0; oi<nOurs; oi++){
       if( aOurs[oi].zName && aTheirs[j].zName
-       && strcmp(aOurs[oi].zName, aTheirs[j].zName)==0 ){ found = oi; break; }
+       && sqlite3_stricmp(aOurs[oi].zName, aTheirs[j].zName)==0 ){
+        found = oi;
+        break;
+      }
     }
     aMap[j] = (found>=0) ? found : nMerged++;
   }
