@@ -404,6 +404,43 @@ run_test "schema_merge_diff_cols_count" \
   "2" "$DB"
 rm -f "$DB"
 
+# Dual ADD COLUMN on a table whose shared columns use mixed-case spellings in
+# CREATE TABLE. normalizeTheirsToMergedLayout must match those names
+# case-insensitively (same contract as schema findColumn) so theirs' edits to
+# shared columns are not treated as a new ordinal.
+DB=/tmp/test_schema_merge_dual_add_case_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, Name TEXT, Score INT);
+INSERT INTO t VALUES(1, 'alice', 10), (2, 'bob', 20);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_checkout('-b', 'feat');
+ALTER TABLE t ADD COLUMN FeatNote TEXT;
+UPDATE t SET Name = 'ALICE', Score = 11, FeatNote = 'f1' WHERE id = 1;
+DELETE FROM t WHERE id = 2;
+SELECT dolt_commit('-Am', 'feat dual-add side');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN MainNote TEXT;
+UPDATE t SET MainNote = 'm1' WHERE id = 1;
+SELECT dolt_commit('-Am', 'main dual-add side');
+EOF
+
+run_test_match "schema_merge_dual_add_case_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+run_test "schema_merge_dual_add_case_name" \
+  "SELECT Name FROM t WHERE id=1;" "ALICE" "$DB"
+run_test "schema_merge_dual_add_case_score" \
+  "SELECT Score FROM t WHERE id=1;" "11" "$DB"
+run_test "schema_merge_dual_add_case_featnote" \
+  "SELECT FeatNote FROM t WHERE id=1;" "f1" "$DB"
+run_test "schema_merge_dual_add_case_mainnote" \
+  "SELECT MainNote FROM t WHERE id=1;" "m1" "$DB"
+run_test "schema_merge_dual_add_case_deleted" \
+  "SELECT count(*) FROM t WHERE id=2;" "0" "$DB"
+run_test "schema_merge_dual_add_case_cols" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name IN ('FeatNote','MainNote');" \
+  "2" "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_schema_merge11_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
