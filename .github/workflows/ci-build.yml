@@ -95,6 +95,11 @@ jobs:
         fi
         make lint
 
+    - name: Install layout
+      if: matrix.platform != 'windows'
+      run: bash test/install_layout_test.sh build
+      timeout-minutes: 10
+
     - name: Build Linux-only test binaries
       if: matrix.platform == 'ubuntu'
       run: |

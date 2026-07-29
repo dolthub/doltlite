@@ -169,6 +169,22 @@ gcc -o myapp myapp.c -I/path/to/build libdoltlite.a -lpthread -lz
 gcc -o myapp myapp.c -I/path/to/build -L/path/to/build -ldoltlite -lpthread -lz
 ```
 
+`make install` places the same `doltlite.h`, `doltlite_remotesrv.h`,
+`libdoltlite.a`, `libdoltlite.{so,dylib}`, `doltlite` and `doltlite-remotesrv`
+that the release packages do. Installed under the default `/usr/local` prefix,
+those are already on the compiler's search path:
+
+```bash
+sudo make install                       # honours --prefix and DESTDIR
+gcc -o myapp myapp.c -ldoltlite -lpthread -lz
+```
+
+Being a SQLite fork, `make install` additionally installs SQLite's own
+`sqlite3.h`, `libsqlite3.*`, `sqlite3.pc` and man page — built from this tree,
+so they are DoltLite under SQLite's name. The release packages deliberately
+ship none of those, to avoid colliding with a system SQLite. Pass
+`--prefix` somewhere private if that matters to you.
+
 The API is the standard [SQLite C API](https://sqlite.org/cintro.html) —
 `sqlite3_open`, `sqlite3_exec`, `sqlite3_prepare_v2`, etc. Dolt features are
 called as SQL functions (`dolt_commit`, `dolt_branch`, `dolt_merge`, ...) and
