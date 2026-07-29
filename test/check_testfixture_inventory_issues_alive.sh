@@ -25,10 +25,10 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 0
 fi
 
-# Unique issue numbers only: the 78 issue-bearing rows share a handful of
-# issues, so this is a few API calls rather than one per row.
+# Unique issue numbers only: thousands of gates share a handful of issues, so
+# this is a few API calls rather than one per gate.
 numbers=$(awk '
-  { sub(/#.*/, ""); if (NF >= 3 && $3 != "-") print $3 }
+  { sub(/#.*/, ""); if (NF >= 4 && $4 != "-") print $4 }
 ' "$INVENTORY_FILE" | sed 's|.*/||' | sort -un)
 
 if [ -z "$numbers" ]; then
@@ -36,23 +36,32 @@ if [ -z "$numbers" ]; then
   exit 0
 fi
 
+# One issue can justify four figures' worth of gates, so report the count and a
+# handful of examples rather than every gate.
+cited_by() {
+  awk -v n="$1" '
+    { sub(/#.*/, ""); if (NF >= 4 && $4 ~ ("/" n "$")) print $1 " " $2 }
+  ' "$INVENTORY_FILE" | awk '
+    { total++; if (total <= 3) printf "%s%s", (total > 1 ? ", " : ""), $0 }
+    END { printf " (%d gate%s)", total, (total == 1 ? "" : "s") }
+  '
+}
+
 fail=0
 alive=0
 for n in $numbers; do
   state=$(gh issue view "$n" --json state -q .state 2>/dev/null || echo "")
-  suites=$(awk -v n="$n" '
-    { sub(/#.*/, ""); if (NF >= 3 && $3 ~ ("/" n "$")) printf "%s ", $1 }
-  ' "$INVENTORY_FILE")
   case "$state" in
     OPEN)
       alive=$((alive + 1))
       ;;
     CLOSED)
-      echo "ERROR: #$n is CLOSED but still justifies: $suites"
+      echo "ERROR: #$n is CLOSED but still justifies: $(cited_by "$n")"
       fail=1
       ;;
     *)
-      echo "ERROR: #$n could not be resolved (missing, or the API failed): $suites"
+      echo "ERROR: #$n did not resolve (missing, or the API failed):" \
+           "$(cited_by "$n")"
       fail=1
       ;;
   esac

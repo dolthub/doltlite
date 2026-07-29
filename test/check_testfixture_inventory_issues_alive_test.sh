@@ -36,24 +36,24 @@ expect_failure() {
 B=https://github.com/dolthub/doltlite/issues
 
 printf '%s\n' \
-  "alpha intentional -" \
-  "beta unsupported $B/100" \
-  "gamma intentional $B/100" > "$INVENTORY"
+  "alpha alpha-1 intentional -" \
+  "beta beta-1 unsupported $B/100" \
+  "gamma gamma-1 intentional $B/100" > "$INVENTORY"
 run_check
 
 printf '%s\n' \
-  "alpha intentional -" \
-  "beta unsupported $B/200" > "$INVENTORY"
+  "alpha alpha-1 intentional -" \
+  "beta beta-1 unsupported $B/200" > "$INVENTORY"
 expect_failure "a closed issue"
 
 printf '%s\n' \
-  "alpha intentional -" \
-  "beta unsupported $B/999" > "$INVENTORY"
+  "alpha alpha-1 intentional -" \
+  "beta beta-1 unsupported $B/999" > "$INVENTORY"
 expect_failure "an unresolvable issue"
 
 printf '%s\n' \
-  "alpha intentional -" \
-  "gamma intentional $B/200" > "$INVENTORY"
+  "alpha alpha-1 intentional -" \
+  "gamma gamma-1 intentional $B/200" > "$INVENTORY"
 expect_failure "a closed issue cited by an intentional row"
 
 echo "OK: testfixture inventory issue-liveness self-test"
