@@ -1,0 +1,13 @@
+# Ceiling on testfixture exceptions. check_testfixture_exception_inventory.sh
+# fails if any count moves in either direction: growing means more of upstream's
+# suite is excluded from CI, and shrinking must be recorded here or the gain
+# silently drifts back later.
+#
+# Counts are per gate -- one divergent assertion, or one expected crash.
+# Lowering a number is the point. Raising one is a deliberate act that belongs
+# in a PR description.
+gates 5375
+intentional 3990
+unsupported 1305
+harness 16
+engine-gap 64

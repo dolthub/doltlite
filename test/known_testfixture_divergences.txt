@@ -10,9 +10,9 @@
 #
 # Background: doltlite keys user-table rows in its prolly tree by the
 # user's primary key columns rather than by sqlite's auto-allocated
-# rowid (since #358), because rowid is allocation-order-dependent and
-# therefore history-dependent — a hard incompatibility with the Dolt
-# model where two branches that independently insert identical rows
+# rowid (since #358, tracked as #1840), because rowid is allocation-order-
+# dependent and therefore history-dependent — a hard incompatibility with
+# the Dolt model where two branches that independently insert identical rows
 # must produce identical row identities. Tests that rely on rowid
 # behavior in any of these forms produce different (but correct under
 # doltlite's model) results:
@@ -35,8 +35,9 @@
 # The runner (test/run_testfixture.sh) enforces strict equality:
 # every entry here MUST still actually fail, and any actual failure
 # NOT listed here is a regression. If you fix one of these, remove
-# the entry. Suite dispositions and issue links are enforced by
-# known_testfixture_exception_inventory.txt.
+# the entry. Per-gate dispositions and issue links are enforced by
+# known_testfixture_exception_inventory.txt; the gate counts are ratcheted
+# by known_testfixture_exception_ratchet.txt.
 
 # ── storage corruption probes ──
 corrupt corrupt-3.3 @linux @no-coverage  # raw byte-flips land on CTLD manifest/hash bytes; non-coverage linux trips one extra corruption guard

@@ -1,0 +1,76 @@
+name: Testfixture inventory issue liveness
+
+# Runs weekly and resolves every DoltLite issue cited by an `unsupported` or
+# `engine-gap` row in test/known_testfixture_exception_inventory.txt. PR CI
+# validates those URLs offline, which can only check their shape -- and shape
+# alone let 67 of 78 rows go on citing closed issues. Failing here means a
+# justification has rotted: the issue was closed (possibly because the
+# limitation was fixed, in which case the exception should go) or it no longer
+# exists.
+#
+# Scheduled rather than per-PR because it needs the GitHub API and a network
+# blip must not redden an unrelated pull request. Silent on pass; on failure it
+# opens or updates an issue via the shared report-failure-issue action.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  issue-liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out doltlite
+        uses: actions/checkout@v4
+
+      - name: Resolve inventory issue references
+        id: liveness
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          if bash test/check_testfixture_inventory_issues_alive.sh \
+               2>&1 | tee "$RUNNER_TEMP/liveness.txt"; then
+            echo "stale=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compose report body
+        if: steps.liveness.outputs.stale == '1'
+        run: |
+          {
+            echo "A row in \`test/known_testfixture_exception_inventory.txt\`"
+            echo "cites a DoltLite issue that is closed or missing, so the"
+            echo "listed testfixture suites no longer have a live"
+            echo "justification for being excepted."
+            echo
+            echo "For each one: reopen the issue, file one that describes the"
+            echo "limitation as it stands now and repoint the row, or — if the"
+            echo "limitation is gone — drop the exception and let the suite run."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/liveness.txt"
+            echo '```'
+            echo
+            echo "[Workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          } > "$RUNNER_TEMP/liveness-body.md"
+
+      - name: Report stale justifications
+        if: steps.liveness.outputs.stale == '1'
+        uses: ./.github/actions/report-failure-issue
+        with:
+          label: testfixture-inventory-stale
+          title: "Testfixture exception inventory cites a closed issue"
+          body-file: ${{ runner.temp }}/liveness-body.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail the job if a justification is stale
+        if: steps.liveness.outputs.stale == '1'
+        run: exit 1
