@@ -271,7 +271,7 @@ capi3 capi3-3.3 intentional -
 capi3 capi3-3.4 intentional -
 capi3 capi3-4.3 intentional -
 capi3 capi3-4.4 intentional -
-capi3 capi3-8.3 intentional https://github.com/dolthub/doltlite/issues/1846
+capi3 capi3-8.3 intentional -
 capi3b capi3b-1.4 intentional -
 capi3b capi3b-1.5.1 intentional -
 capi3b capi3b-1.5.2 intentional -
@@ -498,11 +498,11 @@ corruptL corruptL-18.0 intentional -
 corruptL corruptL-18.1 intentional -
 corruptL corruptL-19.0 intentional -
 corruptL corruptL-19.2 intentional -
-corruptL corruptL-19.4 intentional https://github.com/dolthub/doltlite/issues/1846
+corruptL corruptL-19.4 intentional -
 corruptL corruptL-2.0 intentional -
 corruptL corruptL-2.1 intentional -
 corruptL corruptL-2.2 intentional -
-corruptL corruptL-3.1 intentional https://github.com/dolthub/doltlite/issues/1846
+corruptL corruptL-3.1 intentional -
 corruptL corruptL-4.0 intentional -
 corruptL corruptL-4.1 intentional -
 corruptL corruptL-5.0 intentional -
@@ -1646,7 +1646,7 @@ fkey2 fkey2-14.2.2.2 intentional https://github.com/dolthub/doltlite/issues/1840
 fkey2 fkey2-5.2 intentional https://github.com/dolthub/doltlite/issues/1840
 fkey2 fkey2-5.3 intentional https://github.com/dolthub/doltlite/issues/1840
 fkey2 fkey2-5.4 intentional https://github.com/dolthub/doltlite/issues/1840
-fkey6 fkey6-6.3 intentional https://github.com/dolthub/doltlite/issues/1846
+fkey6 fkey6-6.3 intentional -
 fkey_malloc fkey_malloc-6.persistent.70 intentional -
 fkey_malloc fkey_malloc-6.transient.70 intentional -
 fkey_malloc fkey_malloc-7.transient.201 intentional -
