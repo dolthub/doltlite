@@ -785,10 +785,12 @@ SELECT dolt_pull('origin', 'main');
 ##### Remote Server (`doltlite-remotesrv`)
 
 > [!WARNING]
-> Plain HTTP remotes are unencrypted and unauthenticated. The server binds to
-> `127.0.0.1` by default; use `--cert`, `--key`, and `--auth-keys` before
-> exposing it to a network, or place it behind a reverse proxy that provides
-> equivalent TLS and authentication.
+> The server binds to `127.0.0.1` by default. Bound anywhere else, it warns at
+> startup about each protection left unconfigured: `--cert`/`--key` for TLS, and
+> `--auth-keys` for authentication. These are independent — TLS encrypts but does
+> not authenticate, and without `--auth-keys` every client that can reach the port
+> may read the served databases *and push to them*. Configure both, or place the
+> server behind a reverse proxy that provides equivalent TLS and authentication.
 
 Doltlite includes a standalone HTTP server for serving databases over the
 network. Build it alongside doltlite:

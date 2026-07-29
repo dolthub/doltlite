@@ -316,6 +316,7 @@ jobs:
         cd build
         bash ../test/http_remote_content_length_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_bind_warning_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_concurrency_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_stall_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
@@ -350,6 +351,11 @@ jobs:
     - name: HTTP remote lifecycle test (strict proxy)
       if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: Remotesrv bind warning tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_bind_warning_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: HTTP remote concurrency tests
