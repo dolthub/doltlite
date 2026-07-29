@@ -277,6 +277,33 @@ static int opMerge(sqlite3 *db){
   return execSilent(db, "SELECT dolt_merge('br_merge')");
 }
 
+/* Divergent three-way merge: both sides insert rows so catalog pass1/pass2
+** and row merge run. Setup leaves main ready to merge feat. */
+static int setupThreeWayMerge(sqlite3 *db){
+  int rc;
+  rc = execSilent(db, "SELECT dolt_branch('feat')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_checkout('feat')");
+  if( rc ) return rc;
+  rc = execSilent(db, "INSERT INTO t VALUES(20,'feat')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_commit('-m','feat-side')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_checkout('main')");
+  if( rc ) return rc;
+  rc = execSilent(db, "INSERT INTO t VALUES(10,'main')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  return execSilent(db, "SELECT dolt_commit('-m','main-side')");
+}
+
+static int opThreeWayMerge(sqlite3 *db){
+  return execSilent(db, "SELECT dolt_merge('feat')");
+}
+
 static int opDiffTable(sqlite3 *db){
   int rc = execSilent(db, "INSERT INTO t VALUES(50,'diffed')");
   if( rc ) return rc;
@@ -370,29 +397,36 @@ typedef struct OpEntry {
   const char *zOptionalBranch;
   int iOptionalRow;
   const char *zOptionalValue;
+  int iOptionalRow2;
+  const char *zOptionalValue2;
   const char *zOptionalHeadMessage;
+  const char *zOptionalHeadMessage2;
   int allowRebaseState;
 } OpEntry;
 
 static OpEntry kOps[] = {
   { "dolt_commit",         opCommit, 0,
-    0, 4, "four", "iter", 0 },
+    0, 4, "four", 0, 0, "iter", 0, 0 },
   { "dolt_branch_create",  opBranchCreate, 0,
-    "br_iter", 0, 0, 0, 0 },
+    "br_iter", 0, 0, 0, 0, 0, 0, 0 },
   { "dolt_branch_delete",  opBranchDelete, 0,
-    "br_del", 0, 0, 0, 0 },
+    "br_del", 0, 0, 0, 0, 0, 0, 0 },
   { "dolt_checkout",       opCheckout, 0,
-    "br_co", 0, 0, 0, 0 },
+    "br_co", 0, 0, 0, 0, 0, 0, 0 },
   { "dolt_log_scan",       opLogScan, 0,
-    0, 0, 0, 0, 0 },
+    0, 0, 0, 0, 0, 0, 0, 0 },
   { "dolt_merge",          opMerge, 0,
-    "br_merge", 99, "merge-branch", "for-merge", 0 },
+    "br_merge", 99, "merge-branch", 0, 0, "for-merge", 0, 0 },
+  /* Setup leaves HEAD at main-side; success advances to the merge commit. */
+  { "dolt_three_way_merge", opThreeWayMerge, setupThreeWayMerge,
+    "feat", 10, "main", 20, "feat",
+    "Merge branch 'feat' into main", "main-side", 0 },
   { "dolt_diff_table",     opDiffTable, 0,
-    0, 50, "diffed", 0, 0 },
+    0, 50, "diffed", 0, 0, 0, 0, 0 },
   { "savepoint_vc_state",  opSavepointState, setupSavepointState,
-    0, 4, "four", 0, 1 },
+    0, 4, "four", 0, 0, 0, 0, 1 },
   { "rebase_state_set",    opRebaseStateSet, setupSavepointState,
-    0, 0, 0, 0, 1 },
+    0, 0, 0, 0, 0, 0, 0, 1 },
 };
 #define N_OPS (int)(sizeof(kOps)/sizeof(kOps[0]))
 
@@ -539,7 +573,9 @@ static int verifyReopenedState(
         "SELECT message FROM dolt_log LIMIT 1", zText, sizeof(zText)));
   if( strcmp(zText, "base")!=0
    && (!op->zOptionalHeadMessage
-       || strcmp(zText, op->zOptionalHeadMessage)!=0) ){
+       || strcmp(zText, op->zOptionalHeadMessage)!=0)
+   && (!op->zOptionalHeadMessage2
+       || strcmp(zText, op->zOptionalHeadMessage2)!=0) ){
     *pzInvariant = "allowed HEAD message";
     return SQLITE_CORRUPT;
   }
@@ -554,7 +590,17 @@ static int verifyReopenedState(
     *pzInvariant = "base working rows preserved";
     return SQLITE_CORRUPT;
   }
-  if( op->iOptionalRow>0 ){
+  if( op->iOptionalRow>0 && op->iOptionalRow2>0 ){
+    zSql = sqlite3_mprintf(
+        "SELECT count(*) FROM t WHERE NOT ("
+        "(a=1 AND b='one') OR "
+        "(a=2 AND b='two') OR "
+        "(a=3 AND b='three') OR "
+        "(a=%d AND b=%Q) OR "
+        "(a=%d AND b=%Q))",
+        op->iOptionalRow, op->zOptionalValue,
+        op->iOptionalRow2, op->zOptionalValue2);
+  }else if( op->iOptionalRow>0 ){
     zSql = sqlite3_mprintf(
         "SELECT count(*) FROM t WHERE NOT ("
         "(a=1 AND b='one') OR "
