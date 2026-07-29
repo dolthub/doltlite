@@ -1043,12 +1043,27 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
     if( !pSrv->tls ){ serverCleanup(pSrv); return SQLITE_ERROR; }
   }
 
-  if( bindIn.s_addr != htonl(INADDR_LOOPBACK) && pSrv->tls==0 ){
-    fprintf(stderr,
-      "WARNING: doltlite-remotesrv bound to %s without TLS — traffic is "
-      "unencrypted and unauthenticated. Use --cert/--key/--auth-keys, or "
-      "only do this on trusted networks or behind a reverse proxy.\n",
-      zBindAddr);
+  /* Loopback is all of 127/8, not just 127.0.0.1 — Linux routes the whole
+  ** range locally. Report the two exposures separately: TLS covers only
+  ** confidentiality, and warning about authentication when --auth-keys is set
+  ** trains operators to ignore the warning that matters. Authentication is the
+  ** graver of the two, because an unauthenticated write request opens the
+  ** store READWRITE|CREATE, so a reachable client can push as well as read. */
+  if( (ntohl(bindIn.s_addr) >> 24) != 127 ){
+    if( pSrv->tls==0 ){
+      fprintf(stderr,
+        "WARNING: doltlite-remotesrv bound to %s without TLS — traffic is "
+        "unencrypted. Use --cert/--key, or only do this on trusted networks "
+        "or behind a reverse proxy.\n",
+        zBindAddr);
+    }
+    if( pSrv->authKeysDir==0 ){
+      fprintf(stderr,
+        "WARNING: doltlite-remotesrv bound to %s without authentication — "
+        "anyone who can reach it may read these databases and push to them. "
+        "Use --auth-keys DIR, or bind 127.0.0.1 to stay local.\n",
+        zBindAddr);
+    }
   }
 
   if( doltliteNetInit()!=0 ){ serverCleanup(pSrv); return SQLITE_ERROR; }

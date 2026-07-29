@@ -423,6 +423,7 @@ jobs:
         bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_bind_warning_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_stall_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
