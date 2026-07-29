@@ -4,6 +4,20 @@
 echo "=== Doltlite writable_schema catalog poke tests ==="
 echo ""
 
+# Default CLI must honor PRAGMA writable_schema without a prior
+# `.dbconfig defensive off` (see issue #1846 — not a prolly no-op).
+DB=/tmp/test_dl_writable_schema_pragma_$$.db; rm -f "$DB"
+run_test "writable_schema_default_off" \
+  "PRAGMA writable_schema;" \
+  "0" "$DB"
+run_test "writable_schema_on_roundtrip" \
+  "PRAGMA writable_schema=ON; PRAGMA writable_schema;" \
+  "1" "$DB"
+run_test "writable_schema_off_roundtrip" \
+  "PRAGMA writable_schema=ON; PRAGMA writable_schema=OFF; PRAGMA writable_schema;" \
+  "0" "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_dl_writable_schema_root_$$.db; rm -f "$DB"
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
 CREATE TABLE t1(oid INTEGER PRIMARY KEY, a INT);
