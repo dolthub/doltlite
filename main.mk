@@ -307,6 +307,7 @@ all:	lint doltlite$(T.exe)
 lint:
 	@bash $(TOP)/test/lint_layers.sh $(TOP)/src
 	@bash $(TOP)/test/lint_no_raw_os_fileio.sh $(TOP)/src
+	@bash $(TOP)/test/lint_export_filters.sh $(TOP)/src
 	@bash $(TOP)/test/lint_layers_selftest.sh
 
 ########################################################################
@@ -2980,9 +2981,20 @@ LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),
 libdoltlite.comma := ,
 LDFLAGS.libdoltlite.soname = $(if $(filter .so,$(T.dll)),-Wl$(libdoltlite.comma)-soname$(libdoltlite.comma)libdoltlite.so.0,)
 
-libdoltlite$(T.dll):	$(LIBOBJS0)
+# Restrict the shared library's export table to sqlite3_* plus DoltLite's
+# documented embedding entry points. Unfiltered, the link also exports every
+# cross-file prolly/chunk/doltlite helper and all of vendored mbedtls, BLAKE3
+# and ed25519, which collides with a host that links any of those itself.
+# The static archive is deliberately unfiltered: the C unit tests link it and
+# call internals directly.
+libdoltlite.exports.file = $(if $(filter .so,$(T.dll)),$(TOP)/src/libdoltlite.map,$(if $(filter .dylib,$(T.dll)),$(TOP)/src/libdoltlite.sym,))
+libdoltlite.exports.flag = $(if $(filter .so,$(T.dll)),--version-script,$(if $(filter .dylib,$(T.dll)),-exported_symbols_list,))
+LDFLAGS.libdoltlite.exports = $(if $(libdoltlite.exports.file),-Wl$(libdoltlite.comma)$(libdoltlite.exports.flag)$(libdoltlite.comma)$(libdoltlite.exports.file),)
+
+libdoltlite$(T.dll):	$(LIBOBJS0) $(libdoltlite.exports.file)
 	$(T.link.shared) -o $@ $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
-		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname)
+		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname) \
+		$(LDFLAGS.libdoltlite.exports)
 	$(if $(filter .so,$(T.dll)),ln -sf libdoltlite$(T.dll) libdoltlite$(T.dll).0)
 
 doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll) doltlite.h

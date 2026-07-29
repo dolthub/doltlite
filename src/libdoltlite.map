@@ -1,0 +1,19 @@
+/* Export filter for libdoltlite.so (GNU ld / lld version script).
+**
+** Upstream SQLite ships one amalgamated translation unit, so every helper is
+** static and nothing but the public API is global. DoltLite is split across
+** ~84 files whose cross-file helpers must be extern, and it statically links
+** vendored mbedtls, BLAKE3 and ed25519. Without this filter the shared library
+** exports all of that -- so a host application that links mbedtls or BLAKE3
+** itself collides with ours, or silently interposes one implementation on the
+** other.
+**
+** Keep in sync with libdoltlite.sym, the Mach-O form of the same list.
+*/
+{
+  global:
+    sqlite3_*;
+    doltliteServe*;
+  local:
+    *;
+};
