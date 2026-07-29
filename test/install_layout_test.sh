@@ -25,8 +25,14 @@ ok()   { echo "  PASS: $1"; pass=$((pass+1)); }
 bad()  { echo "  FAIL: $1"; fail=$((fail+1)); }
 have() { if [ -e "$2" ]; then ok "$1"; else bad "$1 (missing $2)"; fi; }
 
+# USE_AMALGAMATION=0 because `install` pulls in install-lib -> libsqlite3.a,
+# which by default recompiles the generated sqlite3.c. That amalgamation's
+# "Begin file" banners sit inside block comments, so a caller with -Werror in
+# CFLAGS (CI does) dies on -Wcomment -- unrelated to install layout, and the
+# objects the non-amalgamated build needs are already present.
 echo "=== staging make install ==="
-if ! ( cd "$BUILD_DIR" && make install DESTDIR="$TMP/stage" ) >"$TMP/install.log" 2>&1; then
+if ! ( cd "$BUILD_DIR" && make install USE_AMALGAMATION=0 DESTDIR="$TMP/stage" ) \
+     >"$TMP/install.log" 2>&1; then
   echo "FAIL: make install failed"
   tail -30 "$TMP/install.log"
   exit 1
