@@ -1529,6 +1529,72 @@ static void run_remote_refs_corruption(void){
   removeDbFiles(clonePath);
 }
 
+static void run_fetch_preserves_concurrent_local_refs(void){
+  sqlite3 *remoteDb = 0;
+  sqlite3 *localDb1 = 0;
+  sqlite3 *localDb2 = 0;
+  sqlite3 *localDb3 = 0;
+  char remotePath[256];
+  char localPath[256];
+  char sql[1024];
+  char remoteHead[128];
+
+  printf("=== Fetch Preserves Concurrent Local Refs Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath),
+              "test_fetch_preserves_concurrent_local_refs_remote");
+  make_dbpath(localPath, sizeof(localPath),
+              "test_fetch_preserves_concurrent_local_refs_local");
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+
+  check("open_remote_for_concurrent_fetch",
+        open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("setup_remote_for_concurrent_fetch", execSql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
+
+  check("open_local1_for_concurrent_fetch",
+        open_db(localPath, &localDb1)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_for_concurrent_fetch", execSql(localDb1, sql)==SQLITE_OK);
+  check("pin_local1_before_concurrent_fetch", execSql(localDb1,
+    "BEGIN;"
+    "SELECT count(*) FROM dolt_branches;")==SQLITE_OK);
+
+  check("open_local2_for_concurrent_fetch",
+        open_db(localPath, &localDb2)==SQLITE_OK);
+  check("create_peer_branch_during_fetch",
+        strcmp(queryScalarText(localDb2,
+          "SELECT dolt_branch('peer_keep')"), "0")==0);
+
+  check("advance_remote_for_concurrent_fetch", execSql(remoteDb,
+    "INSERT INTO t VALUES(2,'remote');"
+    "SELECT dolt_commit('-A','-m','remote');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(remoteHead), remoteHead, "%s",
+                   queryScalarText(remoteDb, "SELECT dolt_hashof('HEAD')"));
+  check("fetch_with_stale_local_refs",
+        strcmp(queryScalarText(localDb1,
+          "SELECT dolt_fetch('origin','main')"), "0")==0);
+
+  sqlite3_close(localDb2);
+  sqlite3_close(localDb1);
+  sqlite3_close(remoteDb);
+
+  check("reopen_after_concurrent_fetch",
+        open_db(localPath, &localDb3)==SQLITE_OK);
+  check("fetch_preserves_peer_branch",
+        strcmp(queryScalarText(localDb3,
+          "SELECT count(*) FROM dolt_branches WHERE name='peer_keep'"), "1")==0);
+  check("fetch_updates_tracking_branch",
+        strcmp(queryScalarText(localDb3,
+          "SELECT dolt_hashof('origin/main')"), remoteHead)==0);
+
+  sqlite3_close(localDb3);
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+}
+
 static void run_chunk_walk_corruption(void){
   static const u8 badCatalog[] = {
     'D','L','C','T',
@@ -8587,6 +8653,7 @@ static const RegressionCase aCases[] = {
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
   { "status_many_table_renames", "Status Many Table Renames Test", run_status_many_table_renames },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
+  { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
