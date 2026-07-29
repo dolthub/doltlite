@@ -992,6 +992,17 @@ int doltlitePersistWorkingSet(sqlite3 *db){
   return doltlitePersistWorkingSetWithHash(db, 0);
 }
 
+void doltliteAdoptRollbackBaseline(
+  sqlite3 *db,
+  const ProllyHash *pCatalogHash
+){
+  Btree *pBtree;
+  if( !db || db->nDb<=0 || !pCatalogHash ) return;
+  pBtree = db->aDb[0].pBt;
+  if( !pBtree ) return;
+  btreeStoreCommittedFromCurrent(pBtree, pCatalogHash);
+}
+
 int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;

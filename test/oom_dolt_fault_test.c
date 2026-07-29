@@ -304,6 +304,37 @@ static int opThreeWayMerge(sqlite3 *db){
   return execSilent(db, "SELECT dolt_merge('feat')");
 }
 
+static int setupLinearRebase(sqlite3 *db){
+  int rc;
+  rc = execSilent(db, "SELECT dolt_checkout('-b','feat')");
+  if( rc ) return rc;
+  rc = execSilent(db, "INSERT INTO t VALUES(4,'feat-one')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_commit('-m','feat-one')");
+  if( rc ) return rc;
+  rc = execSilent(db, "INSERT INTO t VALUES(6,'feat-two')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_commit('-m','feat-two')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_checkout('main')");
+  if( rc ) return rc;
+  rc = execSilent(db, "INSERT INTO t VALUES(5,'main')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_commit('-m','main')");
+  if( rc ) return rc;
+  return execSilent(db, "SELECT dolt_checkout('feat')");
+}
+
+static int opLinearRebase(sqlite3 *db){
+  return execSilent(db, "SELECT dolt_rebase('main')");
+}
+
 static int opDiffTable(sqlite3 *db){
   int rc = execSilent(db, "INSERT INTO t VALUES(50,'diffed')");
   if( rc ) return rc;
@@ -402,6 +433,10 @@ typedef struct OpEntry {
   const char *zOptionalHeadMessage;
   const char *zOptionalHeadMessage2;
   int allowRebaseState;
+  const char *zActiveBranch;
+  const char *zStateInvariantSql;
+  int iOptionalRow3;
+  const char *zOptionalValue3;
 } OpEntry;
 
 static OpEntry kOps[] = {
@@ -421,6 +456,14 @@ static OpEntry kOps[] = {
   { "dolt_three_way_merge", opThreeWayMerge, setupThreeWayMerge,
     "feat", 10, "main", 20, "feat",
     "Merge branch 'feat' into main", "main-side", 0 },
+  { "dolt_rebase_linear",   opLinearRebase, setupLinearRebase,
+    "feat", 4, "feat-one", 5, "main", "feat-two", 0, 0, "feat",
+    "SELECT "
+      "EXISTS(SELECT 1 FROM t WHERE a=4 AND b='feat-one') AND "
+      "EXISTS(SELECT 1 FROM t WHERE a=6 AND b='feat-two') AND "
+      "((EXISTS(SELECT 1 FROM t WHERE a=5 AND b='main')) OR "
+       "(NOT EXISTS(SELECT 1 FROM t WHERE a=5))) AND "
+      "NOT EXISTS(SELECT 1 FROM dolt_status)", 6, "feat-two" },
   { "dolt_diff_table",     opDiffTable, 0,
     0, 50, "diffed", 0, 0, 0, 0, 0 },
   { "savepoint_vc_state",  opSavepointState, setupSavepointState,
@@ -509,10 +552,25 @@ static int verifyReopenedState(
     return SQLITE_CORRUPT;
   }
 
+  if( op->zActiveBranch ){
+    zSql = sqlite3_mprintf("SELECT dolt_checkout(%Q)", op->zActiveBranch);
+    if( !zSql ){
+      *pzInvariant = "verify branch SQL allocation";
+      return SQLITE_NOMEM;
+    }
+    rc = execSilent(db, zSql);
+    sqlite3_free(zSql);
+    zSql = 0;
+    if( rc!=SQLITE_OK ){
+      *pzInvariant = "verify branch checkout";
+      return rc;
+    }
+  }
+
   VERIFY_INVARIANT("active branch",
       querySingleText(db, "SELECT active_branch()", zText, sizeof(zText)));
-  if( strcmp(zText, "main")!=0 ){
-    *pzInvariant = "active branch is main";
+  if( strcmp(zText, op->zActiveBranch ? op->zActiveBranch : "main")!=0 ){
+    *pzInvariant = "active branch";
     return SQLITE_CORRUPT;
   }
 
@@ -542,12 +600,23 @@ static int verifyReopenedState(
     *pzInvariant = "exactly one main branch";
     return SQLITE_CORRUPT;
   }
-  VERIFY_INVARIANT("HEAD/main equality",
-      querySingleInt(db,
-        "SELECT count(*) FROM dolt_branches "
-        "WHERE name='main' AND hash=dolt_hashof('HEAD')", &n));
+  zSql = sqlite3_mprintf(
+      "SELECT count(*) FROM dolt_branches "
+      "WHERE name=%Q AND hash=dolt_hashof('HEAD')",
+      op->zActiveBranch ? op->zActiveBranch : "main");
+  if( !zSql ){
+    *pzInvariant = "HEAD/branch SQL allocation";
+    return SQLITE_NOMEM;
+  }
+  rc = querySingleInt(db, zSql, &n);
+  sqlite3_free(zSql);
+  zSql = 0;
+  if( rc!=SQLITE_OK ){
+    *pzInvariant = "HEAD/branch equality query";
+    return rc;
+  }
   if( n!=1 ){
-    *pzInvariant = "HEAD equals main";
+    *pzInvariant = "HEAD equals active branch";
     return SQLITE_CORRUPT;
   }
 
@@ -590,7 +659,19 @@ static int verifyReopenedState(
     *pzInvariant = "base working rows preserved";
     return SQLITE_CORRUPT;
   }
-  if( op->iOptionalRow>0 && op->iOptionalRow2>0 ){
+  if( op->iOptionalRow>0 && op->iOptionalRow2>0 && op->iOptionalRow3>0 ){
+    zSql = sqlite3_mprintf(
+        "SELECT count(*) FROM t WHERE NOT ("
+        "(a=1 AND b='one') OR "
+        "(a=2 AND b='two') OR "
+        "(a=3 AND b='three') OR "
+        "(a=%d AND b=%Q) OR "
+        "(a=%d AND b=%Q) OR "
+        "(a=%d AND b=%Q))",
+        op->iOptionalRow, op->zOptionalValue,
+        op->iOptionalRow2, op->zOptionalValue2,
+        op->iOptionalRow3, op->zOptionalValue3);
+  }else if( op->iOptionalRow>0 && op->iOptionalRow2>0 ){
     zSql = sqlite3_mprintf(
         "SELECT count(*) FROM t WHERE NOT ("
         "(a=1 AND b='one') OR "
@@ -625,6 +706,15 @@ static int verifyReopenedState(
   if( rc!=SQLITE_OK || n!=0 ){
     *pzInvariant = "only complete working rows";
     return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
+  }
+
+  if( op->zStateInvariantSql ){
+    VERIFY_INVARIANT("complete operation state",
+        querySingleInt(db, op->zStateInvariantSql, &n));
+    if( n!=1 ){
+      *pzInvariant = "complete operation state";
+      return SQLITE_CORRUPT;
+    }
   }
 
   rc = sqlite3_prepare_v2(db,
@@ -766,16 +856,36 @@ static int childRunOp(OpEntry *op, long long failAt){
     return CHILD_BUG;
   }
   vrc = verifyReopenedState(verifyDb, op, &zInvariant);
-  crc = sqlite3_close(verifyDb);
-  cleanupFiles(kDbBase);
   if( vrc!=SQLITE_OK ){
+    char zHeadMessage[128] = "";
+    int nRow4 = -1;
+    int nRow5 = -1;
+    int nRow6 = -1;
+    int nStatus = -1;
+    (void)querySingleText(verifyDb,
+        "SELECT message FROM dolt_log LIMIT 1",
+        zHeadMessage, sizeof(zHeadMessage));
+    (void)querySingleInt(verifyDb,
+        "SELECT count(*) FROM t WHERE a=4", &nRow4);
+    (void)querySingleInt(verifyDb,
+        "SELECT count(*) FROM t WHERE a=5", &nRow5);
+    (void)querySingleInt(verifyDb,
+        "SELECT count(*) FROM t WHERE a=6", &nRow6);
+    (void)querySingleInt(verifyDb,
+        "SELECT count(*) FROM dolt_status", &nStatus);
     fprintf(stderr,
         "  BUG[%s,N=%lld]: reopen invariant \"%s\" rc=%d "
-        "after op rc=%d triggered=%lld nCall=%lld\n",
+        "after op rc=%d triggered=%lld nCall=%lld "
+        "head=%s rows=%d/%d/%d status=%d\n",
         op->name, failAt, zInvariant ? zInvariant : "unknown",
-        vrc, orc, triggered, ncall);
+        vrc, orc, triggered, ncall, zHeadMessage,
+        nRow4, nRow5, nRow6, nStatus);
+    sqlite3_close(verifyDb);
+    cleanupFiles(kDbBase);
     return CHILD_BUG;
   }
+  crc = sqlite3_close(verifyDb);
+  cleanupFiles(kDbBase);
   if( crc!=SQLITE_OK ){
     fprintf(stderr,
         "  BUG[%s,N=%lld]: verification close rc=%d after op rc=%d\n",
@@ -793,13 +903,19 @@ static int sweepOp(OpEntry *op){
   int nOk = 0;
   int nErrOk = 0;
   long long nMax = MAX_FAIL_N;
+  long long nStart = 1;
   long long n;
+  const char *zFailAt = getenv("OOM_DOLT_FAIL_AT");
   pid_t pid;
   pid_t r;
   int status;
   fflush(stdout);
   fflush(stderr);
-  for( n=1; n<=nMax; n++ ){
+  if( zFailAt && zFailAt[0] ){
+    nStart = strtoll(zFailAt, 0, 10);
+    nMax = nStart;
+  }
+  for( n=nStart; n<=nMax; n++ ){
     pid = fork();
     if( pid<0 ){
       fprintf(stderr, "  fork failed at N=%lld\n", n);
@@ -833,13 +949,14 @@ static int sweepOp(OpEntry *op){
       }
     }
   }
-  printf("  [%s] swept N=1..%lld, ok=%d, errOk=%d, bugs=%d\n",
-         op->name, n-1, nOk, nErrOk, opBugs);
+  printf("  [%s] swept N=%lld..%lld, ok=%d, errOk=%d, bugs=%d\n",
+         op->name, nStart, n-1, nOk, nErrOk, opBugs);
   fflush(stdout);
   return opBugs;
 }
 
 int main(void){
+  const char *zOnlyOp = getenv("OOM_DOLT_OP");
   int rc = installOomAllocator();
   if( rc!=SQLITE_OK ){
     fprintf(stderr, "Failed to install OOM allocator: rc=%d\n", rc);
@@ -859,6 +976,7 @@ int main(void){
            N_OPS, MAX_FAIL_N);
     for( i=0; i<N_OPS; i++ ){
       int opBugs;
+      if( zOnlyOp && strcmp(zOnlyOp, kOps[i].name)!=0 ) continue;
       printf("[%d/%d] sweeping op: %s\n", i+1, N_OPS, kOps[i].name);
       opBugs = sweepOp(&kOps[i]);
       if( opBugs>0 ){
