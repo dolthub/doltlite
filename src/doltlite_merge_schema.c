@@ -207,14 +207,142 @@ void freeColumns(ParsedColumn *aCols, int nCols){
   sqlite3_free(aCols);
 }
 
-static ParsedColumn *findColumn(ParsedColumn *aCols, int nCols, const char *zName){
+int parsedColumnIndexByName(
+  ParsedColumn *aCols,
+  int nCols,
+  const char *zName
+){
   int i;
   for(i=0; i<nCols; i++){
-    if( aCols[i].zName && sqlite3_stricmp(aCols[i].zName, zName)==0 ){
-      return &aCols[i];
+    if( aCols[i].zName && zName
+     && sqlite3_stricmp(aCols[i].zName, zName)==0 ){
+      return i;
     }
   }
-  return 0;
+  return -1;
+}
+
+static ParsedColumn *findColumn(ParsedColumn *aCols, int nCols, const char *zName){
+  int i = parsedColumnIndexByName(aCols, nCols, zName);
+  return i>=0 ? &aCols[i] : 0;
+}
+
+static const char *schemaColumnDefinitionTail(const char *zDef){
+  const char *p = zDef;
+  char close = 0;
+
+  while( *p && isspace((unsigned char)*p) ) p++;
+  if( *p=='"' || *p=='`' || *p=='[' ){
+    close = *p=='[' ? ']' : *p;
+    p++;
+    while( *p ){
+      if( *p==close ){
+        p++;
+        if( *p==close ){
+          p++;
+          continue;
+        }
+        break;
+      }
+      p++;
+    }
+  }else{
+    while( *p && !isspace((unsigned char)*p) && *p!='(' && *p!=',' ) p++;
+  }
+  while( *p && isspace((unsigned char)*p) ) p++;
+  return p;
+}
+
+int parsedColumnDefinitionsMatch(
+  const ParsedColumn *pA,
+  const ParsedColumn *pB
+){
+  return sqlite3_stricmp(schemaColumnDefinitionTail(pA->zDef),
+                         schemaColumnDefinitionTail(pB->zDef))==0;
+}
+
+static const char *schemaFindToken(
+  const char *z,
+  const char *zEnd,
+  const char *zKw,
+  int nKw
+);
+
+static const char *schemaGeneratedTailStart(const char *zDef){
+  const char *zEnd = zDef + strlen(zDef);
+  const char *zGenerated;
+  const char *zAs;
+  const char *p;
+
+  zGenerated = schemaFindToken(zDef, zEnd, "GENERATED", 9);
+  if( zGenerated ){
+    p = zGenerated + 9;
+    while( p<zEnd && isspace((unsigned char)*p) ) p++;
+    if( zEnd-p>=6 && sqlite3_strnicmp(p, "ALWAYS", 6)==0 ){
+      p += 6;
+      while( p<zEnd && isspace((unsigned char)*p) ) p++;
+    }
+    if( zEnd-p<2 || sqlite3_strnicmp(p, "AS", 2)!=0 ) return 0;
+    zAs = p;
+  }else{
+    zAs = schemaFindToken(zDef, zEnd, "AS", 2);
+    if( !zAs ) return 0;
+  }
+
+  p = zAs + 2;
+  while( p<zEnd && isspace((unsigned char)*p) ) p++;
+  if( p>=zEnd || *p!='(' ) return 0;
+  {
+    int depth = 0;
+    char quote = 0;
+    do{
+      if( quote ){
+        if( *p==quote ){
+          if( p+1<zEnd && p[1]==quote ){
+            p += 2;
+            continue;
+          }
+          quote = 0;
+        }
+      }else if( *p=='\'' || *p=='"' || *p=='`' || *p=='[' ){
+        quote = *p=='[' ? ']' : *p;
+      }else if( *p=='(' ){
+        depth++;
+      }else if( *p==')' ){
+        depth--;
+      }
+      p++;
+    }while( p<zEnd && depth>0 );
+    if( depth!=0 ) return 0;
+  }
+  while( p<zEnd && isspace((unsigned char)*p) ) p++;
+  if( zEnd-p>=7 && sqlite3_strnicmp(p, "VIRTUAL", 7)==0 ){
+    p += 7;
+  }else if( zEnd-p>=6 && sqlite3_strnicmp(p, "STORED", 6)==0 ){
+    p += 6;
+  }
+  while( p<zEnd && isspace((unsigned char)*p) ) p++;
+  return p==zEnd ? (zGenerated ? zGenerated : zAs) : 0;
+}
+
+static int schemaColumnsMergeEquivalent(
+  const char *zOurs,
+  const char *zTheirs
+){
+  const char *zOurTail;
+  const char *zTheirTail;
+  int nOurs;
+  int nTheirs;
+
+  if( strcmp(zOurs, zTheirs)==0 ) return 1;
+  zOurTail = schemaGeneratedTailStart(zOurs);
+  zTheirTail = schemaGeneratedTailStart(zTheirs);
+  if( !zOurTail && !zTheirTail ) return 0;
+  nOurs = zOurTail ? (int)(zOurTail-zOurs) : (int)strlen(zOurs);
+  nTheirs = zTheirTail ? (int)(zTheirTail-zTheirs) : (int)strlen(zTheirs);
+  while( nOurs>0 && isspace((unsigned char)zOurs[nOurs-1]) ) nOurs--;
+  while( nTheirs>0 && isspace((unsigned char)zTheirs[nTheirs-1]) ) nTheirs--;
+  return nOurs==nTheirs && sqlite3_strnicmp(zOurs, zTheirs, nOurs)==0;
 }
 
 
@@ -241,8 +369,9 @@ static const char *schemaFindToken(
   const char *p = z;
   if( !z || !zEnd || zEnd<=z || nKw<=0 ) return 0;
   while( p<zEnd ){
-    if( *p=='\'' || *p=='"' ){
-      char q = *p++;
+    if( *p=='\'' || *p=='"' || *p=='`' || *p=='[' ){
+      char q = *p=='[' ? ']' : *p;
+      p++;
       while( p<zEnd ){
         if( *p==q ){
           p++;
@@ -606,6 +735,7 @@ int trySchemaColumnMerge(
   const char *zTheirsSql,
   char ***ppAddCols, int *pnAddCols,
   int *pSchemaChoice,
+  int *pResolvedDivergence,
   char **pzErrDetail
 ){
   ParsedColumn *aAnc=0, *aOurs=0, *aTheirs=0;
@@ -618,6 +748,7 @@ int trySchemaColumnMerge(
   *ppAddCols = 0;
   *pnAddCols = 0;
   *pSchemaChoice = SCHEMA_MERGE_DEFAULT;
+  *pResolvedDivergence = 0;
 
   rc = schemaConstraintModifyDeleteChoice(
       zAncSql, zOursSql, zTheirsSql, pSchemaChoice);
@@ -637,12 +768,33 @@ int trySchemaColumnMerge(
       ParsedColumn *ourCol = findColumn(aOurs, nOurs, aTheirs[i].zName);
       if( ourCol ){
 
-        if( strcmp(ourCol->zDef, aTheirs[i].zDef)!=0 ){
+        if( !schemaColumnsMergeEquivalent(ourCol->zDef, aTheirs[i].zDef) ){
 
           if( pzErrDetail ){
             *pzErrDetail = sqlite3_mprintf(
               "both branches add column '%s' with different definitions",
               aTheirs[i].zName);
+          }
+          rc = SQLITE_ERROR;
+          goto schema_merge_cleanup;
+        }
+        if( strcmp(ourCol->zDef, aTheirs[i].zDef)!=0 ){
+          *pResolvedDivergence = 1;
+        }
+
+      }else if( i<nAnc
+             && sqlite3_stricmp(aTheirs[i].zName, aAnc[i].zName)!=0
+             && !findColumn(aTheirs, nTheirs, aAnc[i].zName)
+             && parsedColumnDefinitionsMatch(&aTheirs[i], &aAnc[i]) ){
+        ParsedColumn *ourAncestor = findColumn(
+            aOurs, nOurs, aAnc[i].zName);
+        if( ourAncestor && strcmp(ourAncestor->zDef, aAnc[i].zDef)==0 ){
+          *pSchemaChoice = SCHEMA_MERGE_THEIRS;
+        }else{
+          if( pzErrDetail ){
+            *pzErrDetail = sqlite3_mprintf(
+              "column '%s' renamed on one branch and modified on another",
+              aAnc[i].zName);
           }
           rc = SQLITE_ERROR;
           goto schema_merge_cleanup;
@@ -717,9 +869,28 @@ int trySchemaColumnMerge(
 
   }
 
-  if( nAdd > 0 ){
-    *pSchemaChoice = SCHEMA_MERGE_DEFAULT;
+  if( *pSchemaChoice==SCHEMA_MERGE_THEIRS ){
+    int j;
+    for(j=0; j<nAdd; j++) sqlite3_free(azAdd[j]);
+    sqlite3_free(azAdd);
+    azAdd = 0;
+    nAdd = 0;
+    nAddAlloc = 0;
+    for(i=0; i<nOurs; i++){
+      if( !findColumn(aAnc, nAnc, aOurs[i].zName)
+       && !findColumn(aTheirs, nTheirs, aOurs[i].zName) ){
+        rc = DOLTLITE_GROW_ARRAY(&azAdd, &nAddAlloc, nAdd+1, 4);
+        if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
+        azAdd[nAdd] = sqlite3_mprintf("%s", aOurs[i].zDef);
+        if( !azAdd[nAdd] ){
+          rc = SQLITE_NOMEM;
+          goto schema_merge_cleanup;
+        }
+        nAdd++;
+      }
+    }
   }
+
   *ppAddCols = azAdd;
   *pnAddCols = nAdd;
   azAdd = 0; nAdd = 0;
@@ -744,12 +915,14 @@ int doltliteTableSchemaConflictDetail(
   char **azAdd = 0;
   int nAdd = 0;
   int schemaChoice = SCHEMA_MERGE_DEFAULT;
+  int resolvedDivergence = 0;
   int i, rc;
 
   *pzDetail = 0;
   if( !zAncestorSql || !zOurSql || !zTheirSql ) return SQLITE_OK;
   rc = trySchemaColumnMerge(zAncestorSql, zOurSql, zTheirSql,
-                            &azAdd, &nAdd, &schemaChoice, pzDetail);
+                            &azAdd, &nAdd, &schemaChoice,
+                            &resolvedDivergence, pzDetail);
   for(i=0; i<nAdd; i++) sqlite3_free(azAdd[i]);
   sqlite3_free(azAdd);
   if( rc==SQLITE_ERROR ) return SQLITE_OK;

@@ -446,9 +446,11 @@ static int mergePass1BothSides(
       SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
       SchemaEntry *theirSE = findSchemaEntry(
           c->aTheirsSchema, c->nTheirsSchema, zName);
-      if( ourSE && ourSE->zSql && theirSE && theirSE->zSql ){
+      SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+      if( ancSE && ancSE->zSql && ourSE && ourSE->zSql
+       && theirSE && theirSE->zSql ){
         rc = normalizeTheirsToMergedLayout(c->db, &theirsEntry->root,
-                                           c->aOurs[iOurs].flags,
+                                           c->aOurs[iOurs].flags, ancSE->zSql,
                                            ourSE->zSql, theirSE->zSql,
                                            &theirsNormRoot);
         if( rc!=SQLITE_OK ) return rc;

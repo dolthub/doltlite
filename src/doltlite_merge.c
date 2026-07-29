@@ -5,8 +5,8 @@
 /* Catalog three-way merge: table roots, schema objects, conflicts, reindex. */
 
 /* Rewrite every record in theirs' table root from theirs' column order into
-** the merged column order (ours' columns, then theirs' added columns), keyed
-** by column name. A merged column absent from a their-record is emitted as
+** the merged column order (ours' columns, then theirs' added columns), using
+** the ancestor to retain renamed-column identity. A missing field is emitted as
 ** NULL; trailing NULLs are dropped so an unchanged row re-encodes identically
 ** to the ancestor's. This lets the positional cell-level three-way merge run
 ** across a dual ADD COLUMN divergence: without it, theirs' added-column value
@@ -16,14 +16,15 @@ int normalizeTheirsToMergedLayout(
   sqlite3 *db,
   const ProllyHash *pTheirsRoot,
   u8 flags,
+  const char *zAncSql,
   const char *zOursSql,
   const char *zTheirsSql,
   ProllyHash *pOutRoot
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *cache = doltliteGetCache(db);
-  ParsedColumn *aOurs = 0, *aTheirs = 0;
-  int nOurs = 0, nTheirs = 0;
+  ParsedColumn *aAnc = 0, *aOurs = 0, *aTheirs = 0;
+  int nAnc = 0, nOurs = 0, nTheirs = 0;
   int *aMap = 0;
   int nMerged;
   ProllyMutMap mm;
@@ -34,21 +35,41 @@ int normalizeTheirsToMergedLayout(
   int rc, res, j;
 
   memset(pOutRoot, 0, sizeof(*pOutRoot));
-  rc = parseColumns(zOursSql, &aOurs, &nOurs);
+  rc = parseColumns(zAncSql, &aAnc, &nAnc);
   if( rc!=SQLITE_OK ) return rc;
+  rc = parseColumns(zOursSql, &aOurs, &nOurs);
+  if( rc!=SQLITE_OK ){ freeColumns(aAnc, nAnc); return rc; }
   rc = parseColumns(zTheirsSql, &aTheirs, &nTheirs);
-  if( rc!=SQLITE_OK ){ freeColumns(aOurs, nOurs); return rc; }
+  if( rc!=SQLITE_OK ){
+    freeColumns(aAnc, nAnc);
+    freeColumns(aOurs, nOurs);
+    return rc;
+  }
 
   nMerged = nOurs;
   aMap = sqlite3_malloc((nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
   if( !aMap ){ rc = SQLITE_NOMEM; goto done; }
   for(j=0; j<nTheirs; j++){
-    int oi, found = -1;
-    for(oi=0; oi<nOurs; oi++){
-      if( aOurs[oi].zName && aTheirs[j].zName
-       && sqlite3_stricmp(aOurs[oi].zName, aTheirs[j].zName)==0 ){
-        found = oi;
-        break;
+    int found = parsedColumnIndexByName(
+        aOurs, nOurs, aTheirs[j].zName);
+    if( found<0 ){
+      int ai = parsedColumnIndexByName(
+          aAnc, nAnc, aTheirs[j].zName);
+      if( ai<0 && j<nAnc
+       && sqlite3_stricmp(aTheirs[j].zName, aAnc[j].zName)!=0
+       && parsedColumnIndexByName(aTheirs, nTheirs, aAnc[j].zName)<0
+       && parsedColumnDefinitionsMatch(&aTheirs[j], &aAnc[j]) ){
+        ai = j;
+      }
+      if( ai>=0 ){
+        found = parsedColumnIndexByName(
+            aOurs, nOurs, aAnc[ai].zName);
+        if( found<0 && ai<nOurs
+         && sqlite3_stricmp(aOurs[ai].zName, aAnc[ai].zName)!=0
+         && parsedColumnIndexByName(aOurs, nOurs, aAnc[ai].zName)<0
+         && parsedColumnDefinitionsMatch(&aOurs[ai], &aAnc[ai]) ){
+          found = ai;
+        }
       }
     }
     aMap[j] = (found>=0) ? found : nMerged++;
@@ -138,6 +159,7 @@ done:
   if( curInit ) prollyCursorClose(&cur);
   if( mmInit ) prollyMutMapFree(&mm);
   sqlite3_free(aMap);
+  freeColumns(aAnc, nAnc);
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);
   return rc;
@@ -903,6 +925,7 @@ int tryResolveSchemaDivergence(
   char **azAddCols = 0;
   int nAddCols = 0;
   int schemaChoice = SCHEMA_MERGE_DEFAULT;
+  int resolvedDivergence = 0;
   char *zSchemaErr = 0;
   int rc;
 
@@ -923,7 +946,8 @@ int tryResolveSchemaDivergence(
    && theirSchEntry && theirSchEntry->zSql ){
     rc = trySchemaColumnMerge(
       ancSchEntry->zSql, ourSchEntry->zSql, theirSchEntry->zSql,
-      &azAddCols, &nAddCols, &schemaChoice, &zSchemaErr);
+      &azAddCols, &nAddCols, &schemaChoice,
+      &resolvedDivergence, &zSchemaErr);
   }else{
     rc = SQLITE_ERROR;
     zSchemaErr = sqlite3_mprintf("cannot load schemas for merge");
@@ -954,12 +978,23 @@ int tryResolveSchemaDivergence(
   if( schemaChoice!=SCHEMA_MERGE_DEFAULT ){
     if( ppSchemaActions && pnSchemaActions ){
       rc = recordSchemaAddColumns(ppSchemaActions, pnSchemaActions, zName,
-                                  0, 0);
-      if( rc!=SQLITE_OK ) return rc;
+                                  azAddCols, nAddCols);
+      if( rc!=SQLITE_OK ){
+        freeAddedColumns(azAddCols, nAddCols);
+        return rc;
+      }
+      azAddCols = 0;
+      nAddCols = 0;
     }
     *pSchemaChoice = schemaChoice;
     freeAddedColumns(azAddCols, nAddCols);
     return SQLITE_OK;
+  }
+
+  if( nAddCols==0 && resolvedDivergence
+   && ppSchemaActions && pnSchemaActions ){
+    rc = recordSchemaAddColumns(ppSchemaActions, pnSchemaActions, zName, 0, 0);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   if( nAddCols>0 ){
