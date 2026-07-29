@@ -309,6 +309,8 @@ lint:
 	@bash $(TOP)/test/lint_no_raw_os_fileio.sh $(TOP)/src
 	@bash $(TOP)/test/lint_export_filters.sh $(TOP)/src
 	@bash $(TOP)/test/lint_layers_selftest.sh
+	@bash $(TOP)/test/check_testfixture_exception_inventory.sh
+	@bash $(TOP)/test/check_testfixture_exception_inventory_test.sh
 
 ########################################################################
 ########################################################################

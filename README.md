@@ -995,6 +995,11 @@ The TCL suite is gated in two layers:
 - Remaining inherited-file gaps are tracked in
   [`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt)
   and [`test/known_testfixture_crashes.txt`](test/known_testfixture_crashes.txt).
+  Every affected suite has a disposition in
+  [`test/known_testfixture_exception_inventory.txt`](test/known_testfixture_exception_inventory.txt):
+  `intentional` storage-model behavior, an `unsupported` SQLite surface, a
+  test-`harness` incompatibility, or an unresolved `engine-gap`. Unsupported
+  surfaces and engine gaps must carry a DoltLite issue URL.
   The dominant classes are doltlite's **rowid / primary-key identity** semantics
   (non-INTEGER primary key tables are stored as PK-keyed WITHOUT ROWID tables),
   raw SQLite page-format probes (`hexio_write`, file-format bytes,
@@ -1006,10 +1011,12 @@ The TCL suite is gated in two layers:
 `test/run_testfixture.sh` enforces these lists **bidirectionally**: every actual
 failure/crash must be listed, and every listed entry must still fail/crash. That
 catches both new regressions and stale allowlist entries. The lists are still an
-audit backlog rather than proof of correctness: suspicious entries should get a
-reproducible GitHub issue, native regression coverage, or a precise comment
-explaining why the divergence is intentional. CI runs the bucket sweep on every
-PR in [`.github/workflows/test.yml`](.github/workflows/test.yml).
+audit backlog rather than proof of correctness: per-assertion comments retain
+the detailed rationale, while
+`test/check_testfixture_exception_inventory.sh` rejects missing, duplicate, or
+stale suite dispositions and missing issue links for potentially fixable
+categories. CI runs both checks and the bucket sweep on every PR in
+[`.github/workflows/test.yml`](.github/workflows/test.yml).
 
 To rerun the gated buckets locally:
 
