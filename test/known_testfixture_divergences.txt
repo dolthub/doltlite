@@ -38,6 +38,12 @@
 # the entry. Per-gate dispositions and issue links are enforced by
 # known_testfixture_exception_inventory.txt; the gate counts are ratcheted
 # by known_testfixture_exception_ratchet.txt.
+#
+# Many entries below are downstream of PRAGMAs that DoltLite accepts and then
+# ignores -- journal_mode, auto_vacuum, secure_delete, journal_size_limit,
+# mmap_size, writable_schema -- plus the synthetic page_count/freelist_count/
+# schema_version values. That whole class is described once in #1846 rather than
+# restated per suite; gates naming one of those PRAGMAs cite it.
 
 # ── storage corruption probes ──
 corrupt corrupt-3.3 @linux @no-coverage  # raw byte-flips land on CTLD manifest/hash bytes; non-coverage linux trips one extra corruption guard
