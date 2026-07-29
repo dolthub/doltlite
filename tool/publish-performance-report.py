@@ -125,7 +125,7 @@ def merge_previous_report(repository, current_login):
             str(number),
             "--repo",
             repository,
-            "--squash",
+            "--merge",
             "--delete-branch",
             "--match-head-commit",
             pr["headRefOid"],
