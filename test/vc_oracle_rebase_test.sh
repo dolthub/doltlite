@@ -108,13 +108,15 @@ oracle_error_reopen() {
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dolt_query
+  dolt_query=$(vc_oracle_translate_for_dolt "$query")
   local dt_rc
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
   local dt_out
   (
     cd "$dir/dt" || exit 1
-    printf "%s\n" "$query" | "$DOLT" sql -c -r csv 2>"$dir/dt.post.err"
+    printf "%s\n" "$dolt_query" | "$DOLT" sql -c -r csv 2>"$dir/dt.post.err"
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^LOG|')
 
@@ -550,6 +552,30 @@ $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
+
+oracle_error_reopen "interactive_continue_rejects_moved_source_tip" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 'feat');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat');
+SELECT dolt_branch('peer', 'feat');
+SELECT dolt_checkout('peer');
+INSERT INTO t VALUES (4, 'peer');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'peer');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 'main');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_branch('-f', 'feat', 'peer');
+SELECT dolt_rebase('--continue');
+" "
+SELECT dolt_checkout('feat');
+SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 4;
+SELECT CONCAT('LOG|L|', message) FROM dolt_log LIMIT 1;
+"
 
 oracle "interactive_drop_one" "
 $INTERACTIVE_SETUP
