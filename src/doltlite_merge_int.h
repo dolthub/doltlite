@@ -79,6 +79,15 @@ int parseColumns(
   ParsedColumn **ppCols, int *pnCols
 );
 void freeColumns(ParsedColumn *aCols, int nCols);
+int parsedColumnIndexByName(
+  ParsedColumn *aCols,
+  int nCols,
+  const char *zName
+);
+int parsedColumnDefinitionsMatch(
+  const ParsedColumn *pA,
+  const ParsedColumn *pB
+);
 
 int trySchemaColumnMerge(
   const char *zAncSql,
@@ -86,6 +95,7 @@ int trySchemaColumnMerge(
   const char *zTheirsSql,
   char ***ppAddCols, int *pnAddCols,
   int *pSchemaChoice,
+  int *pResolvedDivergence,
   char **pzErrDetail
 );
 
@@ -166,6 +176,7 @@ int normalizeTheirsToMergedLayout(
   sqlite3 *db,
   const ProllyHash *pTheirsRoot,
   u8 flags,
+  const char *zAncSql,
   const char *zOursSql,
   const char *zTheirsSql,
   ProllyHash *pOutRoot

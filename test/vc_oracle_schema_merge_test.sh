@@ -936,6 +936,188 @@ expect_dual_value "check_delete_vs_modify_reverse_keeps_modify" "$DB" "1" \
   "SELECT count(*) FROM information_schema.check_constraints WHERE check_clause LIKE '%> 5%';"
 
 echo ""
+echo "--- Generated Columns ---"
+
+DB="$TMPROOT/gc1.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc1"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a) VALUES(2,7);
+SELECT dolt_commit('-Am','feat_generated');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,11);
+SELECT dolt_commit('-Am','main_row');
+SQL
+expect_merge_ok "generated_add_vs_insert" "$DB"
+expect_dual_value "generated_add_vs_insert_values" "$DB" "1:5:10,2:7:14,3:11:22" \
+  "SELECT group_concat(id || ':' || a || ':' || doubled, ',') FROM (SELECT id,a,doubled FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', a, ':', doubled) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/gc2.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc2"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a) VALUES(2,7);
+SELECT dolt_commit('-Am','feat_generated');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a) VALUES(3,11);
+SELECT dolt_commit('-Am','main_generated');
+SQL
+expect_merge_ok "generated_both_add_identical" "$DB"
+expect_dual_value "generated_both_add_identical_values" "$DB" "1:10,2:14,3:22" \
+  "SELECT group_concat(id || ':' || doubled, ',') FROM (SELECT id,doubled FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', doubled) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/gc3.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc3"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN computed INT AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a) VALUES(2,7);
+SELECT dolt_commit('-Am','feat_generated');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN computed INT GENERATED ALWAYS AS (a * 3) VIRTUAL;
+INSERT INTO t(id,a) VALUES(3,11);
+SELECT dolt_commit('-Am','main_generated');
+SQL
+expect_merge_ok "generated_both_add_different_expression_ours_wins" "$DB"
+expect_dual_value "generated_both_add_different_expression_ours_value" "$DB" \
+  "1:15,2:21,3:33" \
+  "SELECT group_concat(id || ':' || computed, ',') FROM (SELECT id,computed FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', computed) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/gc4.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc4"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+SELECT dolt_commit('-Am','feat_doubled');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN tripled INT GENERATED ALWAYS AS (a * 3) VIRTUAL;
+SELECT dolt_commit('-Am','main_tripled');
+SQL
+expect_merge_ok "generated_both_add_different_columns" "$DB"
+expect_dual_value "generated_both_add_different_columns_values" "$DB" "10|15" \
+  "SELECT doubled || '|' || tripled FROM t WHERE id=1;" \
+  "SELECT CONCAT(doubled, '|', tripled) FROM t WHERE id=1;"
+
+DB="$TMPROOT/gc5.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc5"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+CREATE INDEX idx_doubled ON t(doubled);
+INSERT INTO t(id,a) VALUES(2,7);
+SELECT dolt_commit('-Am','feat_generated_index');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,11);
+SELECT dolt_commit('-Am','main_row');
+SQL
+expect_merge_ok "generated_index_vs_insert" "$DB"
+expect_dual_value "generated_index_vs_insert_seek" "$DB" "2" \
+  "SELECT id FROM t WHERE doubled=14;" \
+  "SELECT id FROM t WHERE doubled=14;"
+
+DB="$TMPROOT/gc6.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc6"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, label TEXT);
+INSERT INTO t VALUES(1,5,'one');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a,label) VALUES(2,7,'two');
+SELECT dolt_commit('-Am','feat_generated');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN label TO note;
+INSERT INTO t(id,a,note) VALUES(3,11,'three');
+SELECT dolt_commit('-Am','main_rename_unrelated');
+SQL
+expect_merge_ok "generated_add_vs_unrelated_rename" "$DB"
+expect_dual_value "generated_add_vs_unrelated_rename_values" "$DB" \
+  "1:one:10,2:two:14,3:three:22" \
+  "SELECT group_concat(id || ':' || note || ':' || doubled, ',') FROM (SELECT id,note,doubled FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', note, ':', doubled) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/gc6r.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc6r"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, label TEXT);
+INSERT INTO t VALUES(1,5,'one');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN label TO note;
+INSERT INTO t(id,a,note) VALUES(2,7,'two');
+SELECT dolt_commit('-Am','feat_rename_unrelated');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a,label) VALUES(3,11,'three');
+SELECT dolt_commit('-Am','main_generated');
+SQL
+expect_merge_ok "generated_add_vs_unrelated_rename_reverse" "$DB"
+expect_dual_value "generated_add_vs_unrelated_rename_reverse_values" "$DB" \
+  "1:one:10,2:two:14,3:three:22" \
+  "SELECT group_concat(id || ':' || note || ':' || doubled, ',') FROM (SELECT id,note,doubled FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', note, ':', doubled) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/gc7.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc7"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN x INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+SELECT dolt_commit('-Am','feat_generated');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN x INT;
+SELECT dolt_commit('-Am','main_plain');
+SQL
+expect_merge_ok "generated_vs_plain_ours_plain" "$DB"
+expect_dual_value "generated_vs_plain_ours_plain_value" "$DB" "null" \
+  "SELECT CASE WHEN x IS NULL THEN 'null' ELSE CAST(x AS TEXT) END FROM t WHERE id=1;" \
+  "SELECT CASE WHEN x IS NULL THEN 'null' ELSE CAST(x AS CHAR) END FROM t WHERE id=1;"
+
+DB="$TMPROOT/gc8.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "gc8"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,5);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN x INT;
+INSERT INTO t(id,a,x) VALUES(2,7,99);
+SELECT dolt_commit('-Am','feat_plain');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN x INT GENERATED ALWAYS AS (a * 2) VIRTUAL;
+INSERT INTO t(id,a) VALUES(3,11);
+SELECT dolt_commit('-Am','main_generated');
+SQL
+expect_merge_ok "generated_vs_plain_ours_generated" "$DB"
+expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
+  "1:10,2:14,3:22" \
+  "SELECT group_concat(id || ':' || x, ',') FROM (SELECT id,x FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', x) ORDER BY id SEPARATOR ',') FROM t;"
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
