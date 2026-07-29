@@ -58,6 +58,42 @@ int doltliteLoadHeadAndParentedCommit(
   return SQLITE_OK;
 }
 
+typedef struct ApplyAbortRefsCtx ApplyAbortRefsCtx;
+struct ApplyAbortRefsCtx {
+  const char *zBranch;
+  const ProllyHash *pExpectedHead;
+  const ProllyHash *pCatalog;
+};
+
+static int applyAbortRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
+  ApplyAbortRefsCtx *p = (ApplyAbortRefsCtx*)pArg;
+  ProllyHash head;
+  int rc;
+  rc = chunkStoreFindBranch(cs, p->zBranch, &head);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(&head, p->pExpectedHead)!=0 ) return SQLITE_OK;
+  return doltliteUpdateBranchWorkingState(
+      db, p->zBranch, p->pCatalog, p->pExpectedHead);
+}
+
+static int applyRestoreOriginalBranch(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pHead,
+  const ProllyHash *pCatalog,
+  int opRc
+){
+  ApplyAbortRefsCtx ctx;
+  int rc;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.zBranch = zBranch;
+  ctx.pExpectedHead = pHead;
+  ctx.pCatalog = pCatalog;
+  rc = doltliteMutateRefs(db, applyAbortRefs, &ctx);
+  if( db->autoCommit ) doltliteAdoptRollbackBaseline(db, pCatalog);
+  return rc==SQLITE_OK ? opRc : rc;
+}
+
 int applyMergedCatalogAndCommit(
   sqlite3 *db,
   sqlite3_context *context,
@@ -78,6 +114,7 @@ int applyMergedCatalogAndCommit(
   int graphLocked = 0;
   int bPreferOurMaster;
   const char *zOpLabel;
+  const char *zBranch;
   int rc;
 
   assert( db!=0 && context!=0 );
@@ -88,12 +125,19 @@ int applyMergedCatalogAndCommit(
   if( hexBuf ) hexBuf[0] = '\0';
   bPreferOurMaster = (sqlite3_strnicmp(zMessage, "Revert", 6)==0);
   zOpLabel = bPreferOurMaster ? "Revert" : "Cherry-pick";
+  zBranch = doltliteGetSessionBranch(db);
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    return applyRestoreOriginalBranch(
+        db, zBranch, ourHead, ourCatHash, rc);
+  }
 
   rc = doltliteSaveTxnState(db, &savedState);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    return applyRestoreOriginalBranch(
+        db, zBranch, ourHead, ourCatHash, rc);
+  }
 
   {
     char **azReindex = 0;

@@ -335,6 +335,23 @@ static int opLinearRebase(sqlite3 *db){
   return execSilent(db, "SELECT dolt_rebase('main')");
 }
 
+static int setupCherryPick(sqlite3 *db){
+  int rc;
+  rc = execSilent(db, "SELECT dolt_checkout('-b','feat')");
+  if( rc ) return rc;
+  rc = execSilent(db, "INSERT INTO t VALUES(4,'picked')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_add('-A')");
+  if( rc ) return rc;
+  rc = execSilent(db, "SELECT dolt_commit('-m','pick-one')");
+  if( rc ) return rc;
+  return execSilent(db, "SELECT dolt_checkout('main')");
+}
+
+static int opCherryPick(sqlite3 *db){
+  return execSilent(db, "SELECT dolt_cherry_pick('feat')");
+}
+
 static int opDiffTable(sqlite3 *db){
   int rc = execSilent(db, "INSERT INTO t VALUES(50,'diffed')");
   if( rc ) return rc;
@@ -464,6 +481,14 @@ static OpEntry kOps[] = {
       "((EXISTS(SELECT 1 FROM t WHERE a=5 AND b='main')) OR "
        "(NOT EXISTS(SELECT 1 FROM t WHERE a=5))) AND "
       "NOT EXISTS(SELECT 1 FROM dolt_status)", 6, "feat-two" },
+  { "dolt_cherry_pick",     opCherryPick, setupCherryPick,
+    "feat", 4, "picked", 0, 0, "pick-one", 0, 0, 0,
+    "SELECT ("
+      "(message='base' AND NOT EXISTS(SELECT 1 FROM t WHERE a=4)) OR "
+      "(message='pick-one' AND EXISTS("
+        "SELECT 1 FROM t WHERE a=4 AND b='picked'))"
+      ") AND NOT EXISTS(SELECT 1 FROM dolt_status) "
+    "FROM dolt_log LIMIT 1", 0, 0 },
   { "dolt_diff_table",     opDiffTable, 0,
     0, 50, "diffed", 0, 0, 0, 0, 0 },
   { "savepoint_vc_state",  opSavepointState, setupSavepointState,
