@@ -67,7 +67,11 @@ if [ "$QUICK" = "1" ]; then
   N1_CLONE_MAX=15
   N1_COMMIT_MAX=15
   N10=0
+  N100=0
 else
+  # Full mode is for Nightly scale (not PR). Ceilings are absolute wall-clock
+  # seconds on an optimized (non-PROLLY_CHECK) binary; 10x row counts get
+  # roughly 10x insert/commit/clone budgets.
   echo "=== FULL MODE ==="
   N1=1000000
   N1_INSERT_MAX=30
@@ -79,6 +83,10 @@ else
   N10_INSERT_MAX=120
   N10_COMMIT_MAX=60
   N10_CLONE_MAX=60
+  N100=100000000
+  N100_INSERT_MAX=1200
+  N100_COMMIT_MAX=600
+  N100_CLONE_MAX=600
 fi
 
 echo ""
@@ -240,8 +248,9 @@ check "10M diff count" "10" "$result"
 echo ""
 echo "--- 16. Clone 10M ---"
 t0=$(ts)
-"$DB" "$TMPDIR/10m.db" "SELECT dolt_remote('add','origin','file://$TMPDIR/10m_remote'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
-"$DB" "$TMPDIR/10m_clone" "SELECT dolt_clone('file://$TMPDIR/10m_remote');" > /dev/null 2>&1
+remote_uri=$(file_uri "$TMPDIR/10m_remote")
+"$DB" "$TMPDIR/10m.db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
+"$DB" "$TMPDIR/10m_clone" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
 check_time "clone 10M" "$elapsed" "$N10_CLONE_MAX"
@@ -258,6 +267,76 @@ check "10M near-end" "row_9000000" "$result"
 
 m10_size=$(stat -f%z "$TMPDIR/10m.db" 2>/dev/null || stat -c%s "$TMPDIR/10m.db" 2>/dev/null)
 echo "  10M database: $((m10_size / 1048576))MB"
+
+# Drop 10M artifacts before the 100M tier so runner disk is not holding
+# two multi-GB trees plus clones at once.
+rm -rf "$TMPDIR/10m.db" "$TMPDIR/10m.db-wal" "$TMPDIR/10m.db-lock" \
+       "$TMPDIR/10m_clone" "$TMPDIR/10m_remote" 2>/dev/null || true
+fi
+
+if [ "$N100" -gt 0 ]; then
+echo ""
+echo "══════════════════════════════════════"
+echo "  100M-row test"
+echo "══════════════════════════════════════"
+
+echo ""
+echo "--- 18. Insert 100M rows ---"
+"$DB" "$TMPDIR/100m.db" "CREATE TABLE huge(id INTEGER PRIMARY KEY, name TEXT, val INTEGER);" > /dev/null 2>&1
+t0=$(ts)
+batch_insert "$TMPDIR/100m.db" "huge" "$N100" "x, 'row_'||x, x%1000"
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+check_time "insert 100M" "$elapsed" "$N100_INSERT_MAX"
+
+result=$("$DB" "$TMPDIR/100m.db" "SELECT count(*) FROM huge;")
+check "100M count" "$N100" "$result"
+
+echo ""
+echo "--- 19. Commit 100M ---"
+t0=$(ts)
+"$DB" "$TMPDIR/100m.db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','100M');" > /dev/null 2>&1
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+check_time "commit 100M" "$elapsed" "$N100_COMMIT_MAX"
+
+echo ""
+echo "--- 20. Update + diff 10 rows in 100M ---"
+t0=$(ts)
+result=$("$DB" "$TMPDIR/100m.db" "
+UPDATE huge SET val=val+1 WHERE id<=10;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','update 10 rows');
+SELECT count(*) FROM dolt_diff_huge WHERE diff_type='modified';" 2>/dev/null | tail -1)
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+# Point update of 10 rows should stay near-constant vs tree height; leave
+# headroom over the 10M 30s budget without going linear in N.
+check_time "update+diff 10 rows in 100M" "$elapsed" 60
+check "100M diff count" "10" "$result"
+
+echo ""
+echo "--- 21. Clone 100M ---"
+t0=$(ts)
+remote_uri=$(file_uri "$TMPDIR/100m_remote")
+"$DB" "$TMPDIR/100m.db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
+"$DB" "$TMPDIR/100m_clone" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+check_time "clone 100M" "$elapsed" "$N100_CLONE_MAX"
+
+result=$("$DB" "$TMPDIR/100m_clone" "SELECT count(*) FROM huge;")
+check "100M clone count" "$N100" "$result"
+
+echo ""
+echo "--- 22. Point lookups 100M ---"
+result=$("$DB" "$TMPDIR/100m.db" "SELECT name FROM huge WHERE id=50000000;")
+check "100M midpoint" "row_50000000" "$result"
+result=$("$DB" "$TMPDIR/100m.db" "SELECT name FROM huge WHERE id=90000000;")
+check "100M near-end" "row_90000000" "$result"
+
+m100_size=$(stat -f%z "$TMPDIR/100m.db" 2>/dev/null || stat -c%s "$TMPDIR/100m.db" 2>/dev/null)
+echo "  100M database: $((m100_size / 1048576))MB"
 fi
 
 echo ""

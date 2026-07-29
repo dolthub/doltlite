@@ -1,0 +1,184 @@
+name: Nightly scale
+
+# Full large_scale_test (1M + 10M + 100M) with the script's strict
+# wall-clock ceilings. PR only runs --quick (100K). Separate from
+# Nightly stress (race soaks on checked builds) and Nightly performance
+# (sysbench vs SQLite): this is correctness + absolute latency at
+# multi-million row size on an optimized binary (PROLLY_CHECK would
+# inflate commit cost and defeat the time gates).
+#
+# Silent when clean; on failure opens/updates a sticky tracking issue
+# via report-failure-issue.
+
+on:
+  schedule:
+    # After Nightly stress (06:00 UTC); before Nightly performance (09:30).
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-scale
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build optimized doltlite (no PROLLY_CHECK)
+      run: |
+        cd build
+        set -o pipefail
+        {
+          # Plain optimized build: time gates in large_scale_test.sh are
+          # meaningless under DOLTLITE_PROLLY_CHECK (full-tree walk per commit).
+          make -j2 doltlite
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in nightly scale build"
+          exit 1
+        fi
+        test -x ./doltlite
+
+    - name: Package
+      run: tar -czf nightly-scale-build.tar.gz build
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-scale-build
+        path: nightly-scale-build.tar.gz
+        retention-days: 1
+
+  large-full:
+    name: large-scale-full
+    needs: build
+    runs-on: ubuntu-latest
+    # Full mode: 1M suite + 10M + 100M insert/commit/diff/clone.
+    # 100M insert ceiling alone is 20m; clone/commit add more. Stay under
+    # GitHub's 6h job limit with headroom for cold runners / disk pressure.
+    timeout-minutes: 360
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev
+
+    - name: Free runner disk before large DBs
+      run: |
+        # 100M + clone can need tens of GB; reclaim common GHA bloat first.
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+          /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+        df -h
+
+    - name: Download build
+      uses: actions/download-artifact@v4
+      with:
+        name: nightly-scale-build
+
+    - name: Extract build
+      run: tar -xzf nightly-scale-build.tar.gz
+
+    - name: Run full large_scale_test (1M + 10M + 100M, strict time gates)
+      id: scale
+      run: |
+        set -uo pipefail
+        WS="$GITHUB_WORKSPACE"
+        outdir="$WS/scale-artifacts/large-full"
+        mkdir -p "$outdir"
+        log="$outdir/run.log"
+
+        echo "=== nightly scale: large_scale_test.sh full mode ===" | tee "$log"
+        echo "Binary: $WS/build/doltlite" | tee -a "$log"
+        df -h | tee -a "$log"
+        "$WS/build/doltlite" -version 2>&1 | tee -a "$log" || true
+
+        # No --quick: N1=1M, N10=10M, N100=100M with hard second ceilings.
+        if bash "$WS/test/large_scale_test.sh" "$WS/build/doltlite" \
+             >>"$log" 2>&1; then
+          echo "failed=" >> "$GITHUB_OUTPUT"
+          echo "clean."
+          tail -n 40 "$log" || true
+        else
+          echo "failed=1" >> "$GITHUB_OUTPUT"
+          echo "FAIL: large_scale_test full mode"
+          tail -n 80 "$log" || true
+        fi
+
+    - name: Compose failure report
+      if: steps.scale.outputs.failed == '1'
+      run: |
+        set -euo pipefail
+        WS="$GITHUB_WORKSPACE"
+        BODY="$RUNNER_TEMP/scale-body.md"
+        {
+          echo "Nightly full **large_scale_test** failed (1M + 10M + 100M, strict wall-clock ceilings)."
+          echo ""
+          echo "PR only runs \`bash test/large_scale_test.sh ./doltlite --quick\` (100K)."
+          echo "This job runs full mode with no \`--quick\`."
+          echo ""
+          echo "Full log is the \`nightly-scale-large-full\` artifact on the run."
+          echo ""
+          echo "Reproduce locally (optimized build, not PROLLY_CHECK; needs disk for 100M + clone):"
+          echo '```bash'
+          echo "mkdir -p build && cd build && ../configure && make -j\$(nproc) doltlite"
+          echo "bash ../test/large_scale_test.sh ./doltlite"
+          echo '```'
+          echo ""
+          echo "Last 100 lines of the run log:"
+          echo ""
+          echo '```'
+          tail -n 100 "$WS/scale-artifacts/large-full/run.log" 2>/dev/null || echo "(no log)"
+          echo '```'
+        } > "$BODY"
+        cat "$BODY"
+
+    - name: Upload scale log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-scale-large-full
+        path: scale-artifacts/large-full/
+        if-no-files-found: warn
+        retention-days: 14
+
+    - name: Report failure as GitHub issue
+      if: steps.scale.outputs.failed == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-scale-large-full
+        title: "Nightly scale failure: large_scale full (1M+10M+100M)"
+        body-file: ${{ runner.temp }}/scale-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
+        label-description: Nightly full large_scale_test (1M+10M+100M) failure
+
+    - name: Fail the job if scale failed
+      if: steps.scale.outputs.failed == '1'
+      run: |
+        echo "::error::nightly scale failure in large_scale_test full mode"
+        exit 1
