@@ -969,11 +969,20 @@ int doltliteSaveWorkingSet(sqlite3 *db){
 
 int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  Btree *p;
   int rc;
 
   if( !cs ) return SQLITE_ERROR;
   rc = doltliteSaveWorkingSetWithHash(db, pWorkingCatHash);
   if( rc!=SQLITE_OK ) return rc;
+  /* Saving keeps the working set in the pending chunk set, which is where an
+  ** unresolved conflict is allowed to live; committing is what would make it
+  ** durable, and DoltLite never persists conflicts. Callers reach here from
+  ** paths that persist as a side effect before diagnosing the conflict
+  ** themselves -- dolt_commit's staging, for one -- so this stays silent and
+  ** leaves the refusal to that caller and to commit phase one. */
+  p = (db && db->nDb>0) ? db->aDb[0].pBt : 0;
+  if( p && !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ) return SQLITE_OK;
   rc = chunkStoreSerializeRefs(cs);
   if( rc!=SQLITE_OK ) return rc;
   return chunkStoreCommit(cs);

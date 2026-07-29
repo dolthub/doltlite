@@ -462,28 +462,35 @@ SELECT dolt_merge('feat');
 COMMIT;
 EOF
 
+# Conflicts are never committed, so the merge and every inspection of it have to
+# share one session; sc() re-runs the merge and discards it afterwards.
+sc() { printf "BEGIN;\nSELECT dolt_merge('feat');\n%s\nROLLBACK;\n" "$1"; }
+
 run_test "schema_conflicts_columns" \
   "SELECT group_concat(name, '|') FROM (SELECT name FROM pragma_table_info('dolt_schema_conflicts') ORDER BY cid);" \
   "table_name|base_schema|our_schema|their_schema|description" "$DB"
-run_test "schema_conflicts_summary" \
-  "SELECT \"table\" || '|' || num_conflicts FROM dolt_conflicts;" \
+run_test_lastline "schema_conflicts_summary" \
+  "$(sc "SELECT \"table\" || '|' || num_conflicts FROM dolt_conflicts;")" \
   "t|0" "$DB"
-run_test "schema_conflicts_status" \
-  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status WHERE status='schema conflict';" \
+run_test_lastline "schema_conflicts_status" \
+  "$(sc "SELECT table_name || '|' || staged || '|' || status FROM dolt_status WHERE status='schema conflict';")" \
   "t|0|schema conflict" "$DB"
-run_test "schema_conflicts_row" \
-  "SELECT table_name || '|' || (base_schema LIKE 'CREATE TABLE t%') || '|' || (our_schema LIKE '%extra INTEGER%') || '|' || (their_schema LIKE '%extra TEXT%') || '|' || description FROM dolt_schema_conflicts;" \
+run_test_lastline "schema_conflicts_row" \
+  "$(sc "SELECT table_name || '|' || (base_schema LIKE 'CREATE TABLE t%') || '|' || (our_schema LIKE '%extra INTEGER%') || '|' || (their_schema LIKE '%extra TEXT%') || '|' || description FROM dolt_schema_conflicts;")" \
   "t|1|1|1|both branches add column 'extra' with different definitions" "$DB"
 run_test_match "schema_conflicts_resolve_refused" \
-  "SELECT dolt_conflicts_resolve('--ours','t');" \
+  "$(sc "SELECT dolt_conflicts_resolve('--ours','t');")" \
   "Unable to automatically resolve schema conflicts|Error" "$DB"
 run_test_match "schema_conflicts_commit_refused" \
-  "SELECT dolt_commit('-Am','must fail');" \
+  "$(sc "SELECT dolt_commit('-Am','must fail');")" \
   "unresolved schema conflicts|Error" "$DB"
-run_test "schema_conflicts_persist_reopen" \
-  "SELECT count(*) FROM dolt_schema_conflicts;" "1" "$DB"
+
+# The COMMIT in the setup above was refused, so nothing conflicted reached disk.
+run_test "schema_conflicts_not_persisted" \
+  "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts);" \
+  "0|0" "$DB"
 run_test_match "schema_conflicts_abort" \
-  "SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB"
+  "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB"
 run_test "schema_conflicts_abort_clears" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
   "0|0|0" "$DB"

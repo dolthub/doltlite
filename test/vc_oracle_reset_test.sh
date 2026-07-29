@@ -735,7 +735,7 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SELECT dolt_reset();
-" "Merge conflict detected"
+" "(Merge conflict detected|cannot merge: conflicts detected)"
 
 oracle_error_match "reset_soft_during_merge_conflict" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -753,7 +753,7 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SELECT dolt_reset('--soft');
-" "Merge conflict detected"
+" "(Merge conflict detected|cannot merge: conflicts detected)"
 
 echo "--- savepoint parity ---"
 

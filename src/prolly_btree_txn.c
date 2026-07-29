@@ -787,8 +787,33 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   return p->pOps->xBeginTrans(p, wrFlag, pSchemaVersion);
 }
 
+/* DoltLite never persists a conflicted working set: unresolved conflicts are
+** inspectable inside the transaction that produced them and nowhere else. Phase
+** one is the only commit phase permitted to fail, so the veto belongs here --
+** phase two would already have written the working-set blob. A non-empty
+** conflicts catalog is the same predicate dolt_commit refuses on, and it covers
+** schema conflicts too, since those live in that catalog as zero-conflict
+** entries.
+**
+** Only the caller's own commit is refused. The dolt_* commands run inner SQL
+** while conflicts are legitimately present -- dolt_commit's -A staging, for one --
+** and those inner statements commit too; vetoing them would mask each command's
+** own diagnosis with a bare "constraint failed". nVdbeExec counts nested
+** VdbeExec calls, so it is >1 exactly when this commit belongs to a statement
+** running inside a SQL function. */
 int prollyBtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
-  (void)p; (void)zSuperJrnl;
+  (void)zSuperJrnl;
+  if( !p || p->inTrans!=TRANS_WRITE ) return SQLITE_OK;
+  if( p->pBt && p->pBt->inCatalogSerialize ) return SQLITE_OK;
+  if( p->db->nVdbeExec>1 ) return SQLITE_OK;
+  if( !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ){
+    /* The halt path in vdbeaux discards this message, so the actionable
+    ** wording lives in the dolt_merge error the caller already saw; this code
+    ** is the backstop that makes the refusal unconditional. */
+    sqlite3ErrorWithMsg(p->db, SQLITE_CONSTRAINT,
+      "cannot merge: unresolved conflicts cannot be committed");
+    return SQLITE_CONSTRAINT;
+  }
   return SQLITE_OK;
 }
 int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
@@ -911,6 +936,21 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           prollyCursorReleaseAll(&pC->pCur);
         }
       }
+    }
+
+    /* Phase one already refused the caller's own commit when conflicts are
+    ** unresolved, so reaching here with a non-empty conflicts catalog means this
+    ** is a statement commit nested inside a dolt_* command -- dolt_commit's
+    ** staging, typically. Those must not be failed, or the command's own
+    ** diagnosis is replaced by a bare "constraint failed", but they must not
+    ** make the conflict durable either. Leaving the batch pending satisfies
+    ** both: the chunks stay in the pending set exactly as an in-transaction save
+    ** leaves them, and only a later conflict-free commit flushes them. */
+    if( !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ){
+      chunkStoreUnlock(&pBt->store);
+      pBt->store.snapshotPinned = 0;
+      p->inTrans = TRANS_READ;
+      return SQLITE_OK;
     }
 
     rc = chunkStoreCommit(&pBt->store);

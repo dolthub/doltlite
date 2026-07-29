@@ -388,11 +388,10 @@ static void doltliteResetFunc(
     sqlite3_free(azPaths);
     azPaths = 0;
     sqlite3_result_error(context,
-      "Merge conflict detected, transaction rolled back. "
-      "Merge conflicts must be resolved using the dolt_conflicts and "
-      "dolt_schema_conflicts tables before committing a transaction. "
-      "To commit transactions with merge conflicts, set "
-      "@@dolt_allow_commit_conflicts = 1", -1);
+      "cannot merge: conflicts detected, transaction rolled back. "
+      "Resolve conflicts via dolt_conflicts and dolt_schema_conflicts with "
+      "dolt_conflicts_resolve(), then commit with dolt_commit(). Conflicts are "
+      "never committed as conflicts", -1);
     goto reset_cleanup;
   }
 

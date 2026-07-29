@@ -206,6 +206,16 @@ Rules that override convenience:
 
 ## Version-control correctness invariants
 
+- **Conflicts are never persisted.** A conflicted merge lives only in the
+  transaction that produced it: `COMMIT` is refused while any conflict remains,
+  an autocommit merge that conflicts is rolled back whole, and the persist path
+  declines to make a conflicted working set durable. Nothing conflicted reaches
+  disk, so no later connection inherits a merge to finish. Dolt allows this
+  behind `@@dolt_allow_commit_conflicts`, which DoltLite does not implement, so
+  conflict *persistence* is a deliberate divergence — compare in-transaction
+  behaviour against Dolt, not what survives a commit. Constraint violations are
+  unaffected and still persist.
+
 Subtle rules that are easy to break silently — hold them when touching VC code:
 
 - **Re-confirm under the lock.** Multi-step ops (merge / cherry-pick / revert /

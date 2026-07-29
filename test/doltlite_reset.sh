@@ -204,11 +204,11 @@ run_test_match "merge_conflicts_present_before_reset_guard" \
 
 run_test_match "no_arg_reset_rejected_during_merge_conflict" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_reset(); SELECT 'GC2|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
-  "Merge conflict detected" "$DB8"
+  "cannot merge: conflicts detected" "$DB8"
 
 run_test_match "soft_reset_rejected_during_merge_conflict" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_reset('--soft'); SELECT 'GS|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
-  "Merge conflict detected" "$DB8"
+  "cannot merge: conflicts detected" "$DB8"
 
 run_test_match "reset_guard_preserves_conflicts" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_reset('--soft'); SELECT 'GP|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \

@@ -603,6 +603,13 @@ SELECT dolt_commit('-A', '-m', 'msg');
 -- Error: "cannot commit: unresolved merge conflicts"
 ```
 
+Conflicts are never persisted as conflicts. They live only in the transaction
+that produced them, so inspect and resolve them there; `COMMIT` is refused while
+any remain, and an autocommit merge that conflicts is rolled back whole. Either
+way nothing conflicted reaches disk, and no later connection inherits a merge to
+finish. Dolt differs here — it can commit a working set holding conflicts — so
+this is a deliberate divergence, not a gap.
+
 #### Constraint Violations on Merge
 
 Merges apply cell-by-cell at the prolly layer and don't run

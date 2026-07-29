@@ -3677,7 +3677,10 @@ static void run_begin_write_refreshes_working_set_metadata(void){
     "SELECT dolt_add('-A');")==SQLITE_OK);
   doltliteGetSessionStaged(db1, &stagedExpected);
   memset(&mergeExpected, 0x55, sizeof(mergeExpected));
-  memset(&conflictsExpected, 0x66, sizeof(conflictsExpected));
+  /* The conflicts catalog stays empty: a non-empty one is never written to disk,
+  ** so no connection can refresh one from disk and a distinctive value here would
+  ** simply never arrive. The merge flag and merge commit still prove the refresh. */
+  memset(&conflictsExpected, 0, sizeof(conflictsExpected));
   doltliteSetSessionMergeState(db1, 1, &mergeExpected, &conflictsExpected);
   check("persist_merge_state_for_begin_write_refresh",
         persist_working_set(db1)==SQLITE_OK);
@@ -3695,7 +3698,7 @@ static void run_begin_write_refreshes_working_set_metadata(void){
   check("begin_write_refreshes_merge_flag", isMergingAfter==1);
   check("begin_write_refreshes_merge_commit",
         memcmp(&mergeAfter, &mergeExpected, sizeof(ProllyHash))==0);
-  check("begin_write_refreshes_conflicts_catalog",
+  check("begin_write_refreshes_conflicts_catalog_empty",
         memcmp(&conflictsAfter, &conflictsExpected, sizeof(ProllyHash))==0);
   check("rollback_begin_write_refresh_txn", execSql(db2, "ROLLBACK;")==SQLITE_OK);
 
@@ -4406,7 +4409,10 @@ static void run_btree_commit_failure_transactional(void){
   check("begin_write_txn", execSql(db, "BEGIN; INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   memset(&dummyStaged, 0x71, sizeof(dummyStaged));
   memset(&dummyMerge, 0x72, sizeof(dummyMerge));
-  memset(&dummyConflicts, 0x73, sizeof(dummyConflicts));
+  /* Empty, so the commit gets far enough to hit the injected write failure:
+  ** unresolved conflicts are refused before any write is attempted. The staged
+  ** and merge-commit values below still carry the restoration check. */
+  memset(&dummyConflicts, 0, sizeof(dummyConflicts));
   doltliteSetSessionStaged(db, &dummyStaged);
   doltliteSetSessionMergeState(db, 1, &dummyMerge, &dummyConflicts);
 

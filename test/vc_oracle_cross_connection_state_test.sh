@@ -205,105 +205,17 @@ paired_branch_query "branches" "side_connection_recovers_its_working_set" "side"
    SELECT CONCAT('Q|status|', table_name, '|', status) FROM dolt_status;"
 
 echo ""
-echo "--- conflict handoff and partial resolution ---"
-
-setup_pair "resolve" "
-CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
-CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
-INSERT INTO a VALUES(1, 10);
-INSERT INTO b VALUES(1, 20);
-SELECT dolt_commit('-A', '-m', 'base');
-SELECT dolt_branch('feature');
-SELECT dolt_checkout('feature');
-UPDATE a SET v=100 WHERE id=1;
-UPDATE b SET v=200 WHERE id=1;
-SELECT dolt_commit('-A', '-m', 'feature');
-SELECT dolt_checkout('main');
-UPDATE a SET v=1000 WHERE id=1;
-UPDATE b SET v=2000 WHERE id=1;
-SELECT dolt_commit('-A', '-m', 'main');
-"
-
-# Connection A persists a conflicted merge transaction.
-dl_exec_conflicting_merge "resolve" "
-BEGIN;
-SELECT dolt_merge('feature');
-COMMIT;
-"
-dt_exec "resolve" "
-SET @@autocommit=0;
-SET @@dolt_allow_commit_conflicts=1;
-CALL dolt_merge('feature');
-COMMIT;
-"
-
-# Connection B recovers the conflict summary and row payload.
-paired_query "resolve" "conflicts_visible_to_next_connection" \
-  "SELECT 'Q|summary|' || \"table\" || '|' || num_conflicts FROM dolt_conflicts ORDER BY \"table\";
-   SELECT 'Q|a|' || base_v || '|' || our_v || '|' || their_v FROM dolt_conflicts_a;
-   SELECT 'Q|b|' || base_v || '|' || our_v || '|' || their_v FROM dolt_conflicts_b;" \
-  "SELECT CONCAT('Q|summary|', \`table\`, '|', num_conflicts) FROM dolt_conflicts ORDER BY \`table\`;
-   SELECT CONCAT('Q|a|', base_v, '|', our_v, '|', their_v) FROM dolt_conflicts_a;
-   SELECT CONCAT('Q|b|', base_v, '|', our_v, '|', their_v) FROM dolt_conflicts_b;"
-
-# Connection B resolves one table.  Connection C sees the partial resolution
-# while the other table remains conflicted.
-dl_exec "resolve" "SELECT dolt_conflicts_resolve('--ours', 'a');"
-dt_exec "resolve" "CALL dolt_conflicts_resolve('--ours', 'a');"
-paired_query "resolve" "partial_resolution_visible_to_next_connection" \
-  "SELECT 'Q|summary|' || \"table\" || '|' || num_conflicts FROM dolt_conflicts ORDER BY \"table\";
-   SELECT 'Q|a-value|' || v FROM a WHERE id=1;
-   SELECT 'Q|b|' || base_v || '|' || our_v || '|' || their_v FROM dolt_conflicts_b;" \
-  "SELECT CONCAT('Q|summary|', \`table\`, '|', num_conflicts) FROM dolt_conflicts ORDER BY \`table\`;
-   SELECT CONCAT('Q|a-value|', v) FROM a WHERE id=1;
-   SELECT CONCAT('Q|b|', base_v, '|', our_v, '|', their_v) FROM dolt_conflicts_b;"
-
-# Connection C resolves the final table with the other side.  Connection D
-# sees both choices and no remaining conflicts.
-dl_exec "resolve" "SELECT dolt_conflicts_resolve('--theirs', 'b');"
-dt_exec "resolve" "CALL dolt_conflicts_resolve('--theirs', 'b');"
-paired_query "resolve" "completed_resolution_visible_to_next_connection" \
-  "SELECT 'Q|a-value|' || v FROM a WHERE id=1;
-   SELECT 'Q|b-value|' || v FROM b WHERE id=1;
-   SELECT 'Q|conflict-count|' || count(*) FROM dolt_conflicts;" \
-  "SELECT CONCAT('Q|a-value|', v) FROM a WHERE id=1;
-   SELECT CONCAT('Q|b-value|', v) FROM b WHERE id=1;
-   SELECT CONCAT('Q|conflict-count|', count(*)) FROM dolt_conflicts;"
-
-echo ""
-echo "--- abort handoff ---"
-
-setup_pair "abort" "
-CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
-INSERT INTO t VALUES(1, 10);
-SELECT dolt_commit('-A', '-m', 'base');
-SELECT dolt_branch('feature');
-SELECT dolt_checkout('feature');
-UPDATE t SET v=100 WHERE id=1;
-SELECT dolt_commit('-A', '-m', 'feature');
-SELECT dolt_checkout('main');
-UPDATE t SET v=1000 WHERE id=1;
-SELECT dolt_commit('-A', '-m', 'main');
-"
-dl_exec_conflicting_merge "abort" "BEGIN; SELECT dolt_merge('feature'); COMMIT;"
-dt_exec "abort" "
-SET @@autocommit=0;
-SET @@dolt_allow_commit_conflicts=1;
-CALL dolt_merge('feature');
-COMMIT;
-"
-
-# A later connection aborts the recovered merge, and another connection sees
-# the exact pre-merge working state restored.
-dl_exec "abort" "SELECT dolt_merge('--abort');"
-dt_exec "abort" "CALL dolt_merge('--abort');"
-paired_query "abort" "aborted_conflict_cleanup_visible_to_next_connection" \
-  "SELECT 'Q|row|' || v FROM t WHERE id=1;
-   SELECT 'Q|conflict-count|' || count(*) FROM dolt_conflicts;
-   SELECT 'Q|status-count|' || count(*) FROM dolt_status;" \
-  "SELECT CONCAT('Q|row|', v) FROM t WHERE id=1;
-   SELECT CONCAT('Q|conflict-count|', count(*)) FROM dolt_conflicts;
-   SELECT CONCAT('Q|status-count|', count(*)) FROM dolt_status;"
+# Conflict handoff is deliberately not compared here. Dolt can commit a
+# transaction holding unresolved conflicts, so its conflicts outlive the
+# connection that made them and can be inspected, partially resolved and
+# aborted from later ones. DoltLite refuses that commit outright -- a conflict
+# never reaches disk -- so there is no shared behaviour for an oracle to diff.
+# The DoltLite contract is asserted directly instead:
+#   test/doltlite_merge_status.sh  conflict_commit_is_refused,
+#                                  conflict_does_not_outlive_transaction
+#   test/doltlite_conflicts.sh     in-transaction inspect/resolve/abort
+# Everything above this point -- working and staged handoff, branch-local
+# working sets -- is unaffected and still compared against Dolt.
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

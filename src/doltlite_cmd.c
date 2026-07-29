@@ -104,12 +104,10 @@ int doltliteReportConstraintViolations(
 
 void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
   sqlite3_result_error(ctx,
-    "Merge conflict detected, @autocommit transaction rolled back. "
-    "@autocommit must be disabled so that merge conflicts can be "
-    "resolved using the dolt_conflicts and dolt_schema_conflicts "
-    "tables before manually committing the transaction. "
-    "Alternatively, to commit transactions with merge conflicts, set "
-    "@@dolt_allow_commit_conflicts = 1",
+    "cannot merge: conflicts detected, autocommit transaction rolled back. "
+    "Run the merge inside BEGIN/COMMIT to inspect dolt_conflicts and "
+    "dolt_schema_conflicts, resolve with dolt_conflicts_resolve(), then commit "
+    "with dolt_commit(). Conflicts are never committed as conflicts",
     -1);
 }
 
