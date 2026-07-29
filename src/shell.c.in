@@ -5304,7 +5304,21 @@ static void open_db(ShellState *p, int openFlags){
     {
       int testmode_on = ShellHasFlag(p,SHFLG_TestingMode);
       sqlite3_db_config(p->db, SQLITE_DBCONFIG_TRUSTED_SCHEMA, testmode_on,0);
+#ifdef DOLTLITE_PROLLY
+      /* Upstream shell turns DEFENSIVE on unless --unsafe-testing. Under
+      ** defensive mode, PRAGMA writable_schema=ON is a silent no-op (the
+      ** WriteSchema bit cannot be set), so the CLI always reports 0 and
+      ** looks broken next to stock sqlite3 CLIs that leave defensive off.
+      ** Keep defensive off by default; --safe and `.dbconfig defensive on`
+      ** still enable it, and --unsafe-testing still forces it off. */
+      if( testmode_on ){
+        sqlite3_db_config(p->db, SQLITE_DBCONFIG_DEFENSIVE, 0, 0);
+      }else if( p->bSafeModePersist ){
+        sqlite3_db_config(p->db, SQLITE_DBCONFIG_DEFENSIVE, 1, 0);
+      }
+#else
       sqlite3_db_config(p->db, SQLITE_DBCONFIG_DEFENSIVE, !testmode_on,0);
+#endif
     }
 
 #ifndef SQLITE_OMIT_LOAD_EXTENSION
