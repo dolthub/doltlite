@@ -346,18 +346,10 @@ static void doltliteCherryPickFunc(
     return;
   }
 
-  if( nConflicts > 0 ){
-    char *zMsg = sqlite3_mprintf(
-        "cherry-pick of %s resulted in %d conflict(s); "
-        "resolve in dolt_conflicts then dolt_commit to finish", zRef, nConflicts);
-    if( zMsg ){
-      sqlite3_result_error(context, zMsg, -1);
-      sqlite3_free(zMsg);
-    }else{
-      sqlite3_result_error_nomem(context);
-    }
-    return;
-  }else if( hexBuf[0] ){
+  /* Conflict / CV finish helpers already set the context error (including the
+  ** combined conflicts+CVs message). Do not overwrite it here. */
+  if( nConflicts > 0 ) return;
+  if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
 }
