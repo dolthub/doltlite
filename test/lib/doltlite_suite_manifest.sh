@@ -16,6 +16,7 @@ doltlite_tag.sh
 doltlite_merge.sh
 doltlite_merge_status.sh
 doltlite_merge_index_conflict.sh
+doltlite_merge_nocase_reindex.sh
 doltlite_index_vc_matrix.sh
 doltlite_stats_merge.sh
 large_merge_test.sh

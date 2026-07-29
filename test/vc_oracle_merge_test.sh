@@ -1595,6 +1595,25 @@ SELECT dolt_commit('-Am', 'main_change');
 SELECT dolt_merge('feature');
 "
 
+# Mixed-case shared columns in the ancestor CREATE TABLE: dual ADD COLUMN must
+# still three-way merge row edits/deletes (column-name remap is case-insensitive).
+oracle_error_poststate "dual_addcol_mixed_case_shared_cols" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, Name TEXT, Score INT);
+INSERT INTO t VALUES (1, 'alice', 10), (2, 'bob', 20);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+ALTER TABLE t ADD COLUMN FeatNote TEXT;
+UPDATE t SET Name = 'ALICE', Score = 11, FeatNote = 'f1' WHERE id = 1;
+DELETE FROM t WHERE id = 2;
+SELECT dolt_commit('-Am', 'feat_change');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN MainNote TEXT;
+UPDATE t SET MainNote = 'm1' WHERE id = 1;
+SELECT dolt_commit('-Am', 'main_change');
+SELECT dolt_merge('feature');
+" "SELECT id || '|' || Name || '|' || Score || '|' || coalesce(MainNote,'~') || '|' || coalesce(FeatNote,'~') FROM t" \
+"SELECT CONCAT(id, '|', Name, '|', Score, '|', coalesce(MainNote,'~'), '|', coalesce(FeatNote,'~')) FROM t"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
