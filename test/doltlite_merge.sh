@@ -172,6 +172,65 @@ run_test "constraint_violation_no_conflicts" "SELECT count(*) FROM dolt_conflict
 run_test "constraint_violation_no_violations" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11"
 run_test "constraint_violation_state_restored" "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id);" "1:9:main1,2:2:base2" "$DB11"
 
+# Same-cell data conflict plus a unique CV on the same merge. The finish path
+# used to report only constraint violations and return early, so callers never
+# saw that dolt_conflicts was also populated under BEGIN/COMMIT.
+DB11B=/tmp/test_merge11b_$$.db; rm -f "$DB11B"
+cat <<'EOF' | $DOLTLITE "$DB11B" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES(1,1,'base'),(2,2,'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='feat' WHERE id=1;
+UPDATE t SET u=9 WHERE id=2;
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main', u=9 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+EOF
+run_test_match "conflict_and_cv_autocommit_msg" \
+  "SELECT dolt_merge('feat');" \
+  "conflict.*constraint violations|constraint violations.*conflict|rolled back" \
+  "$DB11B"
+run_test "conflict_and_cv_autocommit_clean_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB11B"
+run_test "conflict_and_cv_autocommit_clean_cvs" \
+  "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11B"
+
+DB11C=/tmp/test_merge11c_$$.db; rm -f "$DB11C"
+cat <<'EOF' | $DOLTLITE "$DB11C" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES(1,1,'base'),(2,2,'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='feat' WHERE id=1;
+UPDATE t SET u=9 WHERE id=2;
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main', u=9 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+EOF
+TX_BOTH=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_conflicts) || '|' ||
+  (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+  (SELECT is_merging FROM dolt_merge_status);
+ROLLBACK;" | $DOLTLITE "$DB11C" 2>&1)
+echo "$TX_BOTH" | grep -E 'conflict\(s\) and constraint violations' >/dev/null
+if [ $? -eq 0 ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: conflict_and_cv_tx_message\n  expected message containing 'conflict(s) and constraint violations'\n  got:\n$TX_BOTH"
+fi
+TX_BOTH_COUNTS=$(echo "$TX_BOTH" | grep '^TX|')
+if [ "$TX_BOTH_COUNTS" = "TX|1|1|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: conflict_and_cv_tx_persists_both\n  expected: TX|1|1|1\n  got:      $TX_BOTH_COUNTS"
+fi
+
 DB12=/tmp/test_merge12_$$.db; rm -f "$DB12"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT); INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB12" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET u=9, v='feat2' WHERE id=2; SELECT dolt_commit('-A','-m','feat_unique');" | $DOLTLITE "$DB12" > /dev/null 2>&1

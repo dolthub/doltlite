@@ -451,21 +451,27 @@ int doltliteMergeRef(
       ** dolt_merge_status reports it, before the finish path persists the
       ** working set. Redundant when conflicts already set it, and the
       ** autocommit/nested-savepoint modes inside the finish call roll it back
-      ** with the rest of the merge. */
+      ** with the rest of the merge. When row/schema conflicts are also
+      ** present, report both so the caller does not miss dolt_conflicts. */
       ProllyHash cvConflictsHash;
       doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
       if( doltliteSetSessionMergeState(db, 1, &theirHead,
                                       &cvConflictsHash)==SQLITE_OK ){
         (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
       }
-      (void)doltliteCmdFinishWithConstraintViolations(
-          db, context, &savedState, "Merge", 0,
-          "Merge aborted: would have introduced constraint violations. "
-          "The merge and the would-be violations have been rolled back "
-          "with the enclosing savepoint, so dolt_constraint_violations "
-          "is empty. To inspect the violations, re-run the merge inside "
-          "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
-          "violations are preserved instead of rolled back.");
+      if( nMergeConflicts>0 ){
+        (void)doltliteCmdFinishWithConflictsAndConstraintViolations(
+            db, context, &savedState, nMergeConflicts, "Merge", 0, 0);
+      }else{
+        (void)doltliteCmdFinishWithConstraintViolations(
+            db, context, &savedState, "Merge", 0,
+            "Merge aborted: would have introduced constraint violations. "
+            "The merge and the would-be violations have been rolled back "
+            "with the enclosing savepoint, so dolt_constraint_violations "
+            "is empty. To inspect the violations, re-run the merge inside "
+            "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
+            "violations are preserved instead of rolled back.");
+      }
       return SQLITE_ERROR;
     }
   }
