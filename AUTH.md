@@ -1,128 +1,98 @@
-# doltlite remote authentication — design
+# DoltLite remote authentication
 
-Adds DoltHub-compatible authentication to doltlite's HTTP sync so pushes/pulls
-against hosted DoltHub (and DoltLab) can authenticate as a user. Wire-compatible
-with `dolt login` credentials: the same ed25519 key format, the same JWT, and the
-same DoltHub credentials page.
+DoltLite's HTTP sync supports authenticated HTTPS remotes, including hosted
+DoltHub and DoltLab. It is wire-compatible with `dolt login` credentials: the
+same Ed25519 key format, JWT contract, and DoltHub credentials page.
 
-## How dolt auth works (the contract we must match)
+## Dolt authentication contract
 
-DoltHub authenticates every remote request with a short-lived **bearer JWT** signed
-by the user's ed25519 private key; the matching public key is registered to the
+DoltHub authenticates each remote request with a short-lived bearer JWT signed
+by the user's Ed25519 private key. The matching public key is registered to the
 account. The server (`ld`, `go/libraries/remoteauth`) verifies:
 
-- **Key:** ed25519. `kid = base32(sha512_224(pubkey))` using alphabet
-  `0123456789abcdefghijklmnopqrstuv` (no padding, 45 chars). **SHA-512/224 is a
-  distinct variant** (its own FIPS-180-4 IVs — *not* a truncation of SHA-512); the
-  DoltHub site re-derives the same `kid` from the approved public key, so we must
-  compute it identically.
+- **Key:** Ed25519. `kid = base32(sha512_224(pubkey))` using alphabet
+  `0123456789abcdefghijklmnopqrstuv` with no padding. SHA-512/224 uses its own
+  FIPS-180-4 initialization vectors; it is not truncated SHA-512.
 - **JWT header:** `{"alg":"EdDSA","kid":"<kid>","dolt_token_version":"2023.01"}`
-- **JWT claims:** `iss:"dolt-client.dolthub.com"`, `sub:"doltClientCredentials/<kid>"`,
-  `aud:["<remote-api audience>"]`, `iat:<now>`, `exp:<now+30s>`
-- **Transport:** `Authorization: Bearer <jwt>`, regenerated per request (30s expiry).
+- **JWT claims:** `iss:"dolt-client.dolthub.com"`,
+  `sub:"doltClientCredentials/<kid>"`, `aud:["<remote-api audience>"]`,
+  `iat:<now>`, and `exp:<now+30s>`.
+- **Transport:** `Authorization: Bearer <jwt>`, regenerated for each request.
 
-`aud` must equal the server's expected audience (the remote host, e.g.
-`doltremoteapi.dolthub.com`; dev `doltremoteapi.awsdev.ld-corp.com`), overridable —
-mirrors dolt's `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE`.
+The audience normally equals the remote host. A
+`doltliteremoteapi.<suffix>` host uses `doltremoteapi.<suffix>` to match
+DoltHub's existing audience. `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE` overrides both.
 
-## Decisions
+## Credential interface
 
-1. **TLS:** vendor a small TLS library (see "Library choices"). A bearer JWT over
-   plaintext leaks the token, and hosted DoltHub is HTTPS-only, so `https://` support
-   is required, not optional.
-2. **Credential store:** a separate `~/.doltlite/creds/` directory (not shared with
-   `~/.dolt/creds`). One JWK file per key: `~/.doltlite/creds/<kid>.jwk`, mode 0600,
-   dolt-compatible JWK: `{"kty":"OKP","crv":"Ed25519","x":<b64url pub>,"d":<b64url priv>}`.
-3. **Interface:** SQL functions (matching `dolt_push`/`dolt_remote`), backed by a C
-   credential API. doltlite is the SQLite shell — it has no subcommand CLI — so there
-   is deliberately **no** `doltlite login` argv command.
-4. **Login flow:** manual key-add, no polling. `dolt_creds_new()` prints the public key
-   and an approval URL; the user adds it on DoltHub; the next push just works. No
-   `WhoAmI`/gRPC and **no `ld`-side change** — this is entirely doltlite-repo work.
+Credentials use a separate `~/.doltlite/creds/` store rather than
+`~/.dolt/creds`. Each key is a mode-0600 JWK file named `<kid>.jwk`:
 
-## Interface
-
-SQL functions (registered in `src/doltlite_remote_sql.c`):
-
-- `dolt_creds_new()` — generate an ed25519 keypair, store it, and return a result
-  with the public key and the approval URL:
-  `https://dolthub.com/settings/credentials#<base32(pubkey)>` (the page reads the key
-  from the `#fragment`). The user copies/opens it and adds the key on DoltHub.
-- `dolt_creds()` / `dolt_creds('list')` — list stored keys and their `kid`.
-- `dolt_creds('rm', '<kid>')` — delete a key. (optional first cut)
-- `dolt_config('remotes.default_host' | 'creds.login_url' | 'remotes.audience', …)` —
-  reuse the existing `dolt_config` function for endpoint/audience settings; also honor
-  env overrides (`DOLTLITE_CREDS_DIR`, `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE`).
-
-`dolt_push`/`dolt_fetch`/`dolt_clone` gain auth automatically: they resolve the
-credential for the remote's host and sign a bearer JWT per request. If no key is
-approved yet, the request returns 401/permission-denied — clear feedback, no polling.
-
-C API (new `src/doltlite_creds.h`), used by the SQL layer and by embedders
-(doltlite-node, etc.) that supply credentials without a shell:
-
-```c
-typedef struct DoltliteCreds DoltliteCreds;
-int   doltliteCredsGenerate(DoltliteCreds **out);                       // new ed25519 key
-int   doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out);
-int   doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out);   // single/most-recent key
-int   doltliteCredsSave(const DoltliteCreds *, const char *dir);        // writes <kid>.jwk 0600
-const char *doltliteCredsKid(const DoltliteCreds *);                    // base32(sha512_224(pub))
-char *doltliteCredsPubKeyB32(const DoltliteCreds *);                    // for the approval URL
-int   doltliteCredsBearerToken(const DoltliteCreds *, const char *audience, char **jwtOut);
-void  doltliteCredsFree(DoltliteCreds *);
-
-// Attach auth to a remote (per-request signing; token regenerated at 30s expiry):
-void  doltliteRemoteSetCreds(DoltliteRemote *, const DoltliteCreds *, const char *audience);
-// Or supply a raw bearer token directly (embedders that mint their own):
-void  doltliteRemoteSetBearerToken(DoltliteRemote *, const char *token);
+```json
+{"kty":"OKP","crv":"Ed25519","x":"<base64url-public-key>","d":"<base64url-seed>"}
 ```
 
-## Components / where they live
+DoltLite exposes credential management through SQL because it is an embeddable
+SQLite library and shell, not a subcommand-oriented CLI:
 
-| Piece | Location | Notes |
-|---|---|---|
-| ed25519 (keygen/sign) + SHA-512 | `ext/ed25519/` (vendored) | Mirrors `ext/blake3/`. |
-| SHA-512/224 (for `kid`) | `src/doltlite_creds.c` | SHA-512 core + FIPS-180-4 /224 IVs, 28-byte output. |
-| base64url + base32(dolt alphabet) | `src/doltlite_creds.c` | Small, self-contained. |
-| JWK read/write, creds store | `src/doltlite_creds.c/.h` | `~/.doltlite/creds/<kid>.jwk`, 0600. |
-| JWT assembler (EdDSA) | `src/doltlite_creds.c` | Exact header/claims above; tiny JSON writer. |
-| TLS client (`https://`) | `ext/<tls>/` + `src/doltlite_http_remote.c` | New; replaces raw socket when scheme is https. |
-| `Authorization: Bearer` header | `src/doltlite_http_remote.c` | Extend `httpRequest()` + `HttpRemote`; sign per request. |
-| Credential threading | `src/doltlite_remote_sql.c`, `doltliteHttpRemoteOpen` | Resolve creds by remote host; attach to remote. |
-| SQL functions | `src/doltlite_remote_sql.c` | `dolt_creds_new` / `dolt_creds`, registered in `doltliteRemoteSqlRegister`. |
+```sql
+SELECT dolt_creds_new();
+SELECT dolt_creds();
+SELECT dolt_creds('list');
+SELECT dolt_creds('rm', '<kid>');
+```
 
-## Library choices (last low-level decisions)
+`dolt_creds_new()` stores a key and returns its ID, public key, and DoltHub
+approval URL. After the user approves that key, `dolt_push`, `dolt_fetch`,
+`dolt_pull`, and `dolt_clone` authenticate automatically. HTTPS remotes load
+the selected credential and generate a new JWT for each request.
 
-- **ed25519:** vendor a compact public-domain implementation (e.g. `orlp/ed25519`,
-  which bundles its own SHA-512) into `ext/ed25519/`, matching the `ext/blake3` pattern.
-  Do **not** rely on the TLS lib for Ed25519 (support is inconsistent).
-- **TLS:** **BearSSL** (recommended) — small, MIT, allocation-free, built for
-  embedding; ship a CA-bundle converted to BearSSL trust anchors for chain validation.
-  Alternative: **mbedTLS** — larger but easier X.509/CA handling if BearSSL cert wiring
-  proves fiddly.
+The following environment variables customize credential and TLS behavior:
 
-## Staged implementation (each step independently testable)
+| Variable | Purpose |
+|---|---|
+| `DOLTLITE_CREDS_DIR` | Override the credential directory. |
+| `DOLTLITE_CREDS_KID` | Select a credential instead of the default key. |
+| `DOLTLITE_LOGIN_URL` | Override the URL returned by `dolt_creds_new()`. |
+| `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE` | Override the JWT audience. |
+| `DOLTLITE_CA_FILE` | Use a specific CA bundle, including a private CA. |
 
-1. **Crypto + creds foundation** (no networking): vendor ed25519; implement
-   SHA-512/224, base64url, base32; `DoltliteCreds` generate/save/load; `kid` and
-   pubkey-b32 derivation; JWK read/write. **Tests:** KAT for `kid` derivation and JWT
-   header/claims; ed25519 sign→verify round-trip; cross-check a `kid` against dolt's
-   algorithm for a fixed pubkey.
-2. **JWT signer:** `doltliteCredsBearerToken` producing the exact EdDSA token.
-   **Test:** verify a doltlite-signed token with the ed25519 public key (and, ideally,
-   cross-verify in Go with go-jose to prove wire-compat with `ld`).
-3. **TLS transport:** vendor the TLS lib; add `https://` to the HTTP client with cert
-   validation. **Test:** GET against a known HTTPS host.
-4. **Auth threading:** `Authorization: Bearer` per request; resolve creds by host in
-   `doltliteHttpRemoteOpen` and push/fetch/clone.
-5. **SQL functions:** `dolt_creds_new` / `dolt_creds`; wire config/audience.
-6. **End-to-end:** push/pull a doltlite db to dev DoltHub with an approved key.
+Without `DOLTLITE_CA_FILE`, HTTPS uses the operating system trust store and
+verifies the server certificate and hostname.
 
-## Testing note
+## Implementation
 
-doltlite already has a KAT harness pattern (`test/blake3_kat_test.sh`). Add an analogous
-`test/creds_kat_test.sh` for `kid` derivation and JWT structure. The strongest
-compatibility check is cross-verifying a doltlite-signed JWT in Go against `ld`'s
-`remoteauth` expectations (ed25519 pubkey, issuer/audience/subject, `dolt_token_version`
-header) — this can live in the `doltlite-go` module.
+| Piece | Location |
+|---|---|
+| Ed25519 key generation, signing, and verification | `ext/ed25519/` |
+| SHA-512/224, encodings, JWK storage, JWT signing and verification | `src/doltlite_creds.c` |
+| Public credential API | `src/doltlite_creds.h` |
+| TLS client and server over vendored mbedTLS | `ext/mbedtls/`, `src/doltlite_tls.c` |
+| HTTPS requests and per-request bearer tokens | `src/doltlite_http_remote.c` |
+| SQL credential functions and remote operations | `src/doltlite_remote_sql.c` |
+| Server-side bearer verification | `src/doltlite_remotesrv.c` |
+
+The credential API supports key generation, deterministic construction from a
+seed, save/load/list/remove operations, JWT creation, and bearer verification.
+Remote credential selection is internal to the HTTPS transport; embedders use
+the same remote operations rather than attaching credentials through a
+separate remote-setter API.
+
+The TLS implementation uses vendored **mbedTLS** for client and server
+connections, certificate-chain validation, hostname verification, system trust
+store loading, and private-CA overrides. Ed25519 remains a separate vendored
+dependency so JWT compatibility does not depend on TLS-library Ed25519 support.
+
+## Tests
+
+- `test/creds_kat_test.sh` covers key derivation, encoding, deterministic JWTs,
+  signing, JWK persistence, listing, removal, and path validation.
+- `test/creds_verify_test.sh` covers bearer verification, claims, signatures,
+  authorized-key lookup, and rejection paths.
+- `test/tls_test.sh` covers TLS connection and certificate validation against
+  the system trust store and an untrusted CA.
+- `test/remote_https_auth_test.sh` exercises authenticated HTTPS push and clone,
+  missing and unauthorized credentials, incorrect CAs, plaintext compatibility,
+  multi-chunk transfer, and Authorization-header parsing.
+- `test/creds_path_test.sh` covers the SQL credential lifecycle and configured
+  credential directory.

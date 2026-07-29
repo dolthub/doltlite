@@ -662,7 +662,8 @@ SELECT dolt_cherry_pick('abc123...');
 
 Cherry-pick works by computing the diff between the target commit and its
 parent, then applying that diff to the current HEAD as a three-way merge.
-Conflicts are handled the same way as `dolt_merge`.
+Conflicts are handled the same way as `dolt_merge`. Each call accepts exactly
+one commit; commit ranges and multi-commit cherry-picks are not supported.
 
 #### Rebase
 
