@@ -82,21 +82,23 @@ run_test_lastline "integrity_ok_with_102_byte_merge_commit" \
 db_rm "$DB"
 
 # The conflicts ("DLC") and constraint-violations ("DCV") blobs lead with
-# 'D' == CATALOG_FORMAT_V3, so an unresolved merge conflict in the working
-# set made the walker read them as catalogs with an absurd table count and
-# fail the mark phase the same way. Committing the conflicted transaction
-# persists the conflict, so the blob stays reachable across connections.
-run_test_match "gc_ok_with_unresolved_conflict" \
-  "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
-   INSERT INTO t VALUES (1,'base');
+# 'D' == CATALOG_FORMAT_V3, so a leftover one in the working set made the walker
+# read it as a catalog with an absurd table count and fail the mark phase. A
+# conflict can no longer reach disk at all -- COMMIT refuses while any remain --
+# so the walker can never meet a DLC blob and the hazard is now exercised through
+# the violations blob, which is still committable and still leads with 'D'.
+run_test_match "gc_ok_with_unresolved_violation" \
+  "CREATE TABLE parent(id INTEGER PRIMARY KEY);
+   CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT REFERENCES parent(id));
+   INSERT INTO parent VALUES (1);
    SELECT dolt_commit('-A','-m','seed') IS NOT NULL;
    SELECT dolt_branch('feat');
-   UPDATE t SET v='ours' WHERE k=1;
-   SELECT dolt_commit('-A','-m','ours') IS NOT NULL;
    SELECT dolt_checkout('feat');
-   UPDATE t SET v='theirs' WHERE k=1;
-   SELECT dolt_commit('-A','-m','theirs') IS NOT NULL;
+   INSERT INTO child VALUES (11,1);
+   SELECT dolt_commit('-A','-m','child') IS NOT NULL;
    SELECT dolt_checkout('main');
+   DELETE FROM parent WHERE id=1;
+   SELECT dolt_commit('-A','-m','drop parent') IS NOT NULL;
    BEGIN;
    SELECT dolt_merge('feat');
    COMMIT;
@@ -104,13 +106,13 @@ run_test_match "gc_ok_with_unresolved_conflict" \
   "chunks removed" \
   "$DB"
 
-run_test_lastline "integrity_ok_with_unresolved_conflict" \
+run_test_lastline "integrity_ok_with_unresolved_violation" \
   "PRAGMA integrity_check;" \
   "ok" \
   "$DB"
 
-run_test_lastline "conflict_survives_gc" \
-  "SELECT count(*) FROM dolt_conflicts;" \
+run_test_lastline "violation_survives_gc" \
+  "SELECT count(*) FROM dolt_constraint_violations;" \
   "1" \
   "$DB"
 

@@ -58,9 +58,11 @@ coalesce(unmerged_tables,'~')) FROM dolt_merge_status"
 # merged into. Cross-connection persistence is covered by
 # test/doltlite_merge_status.sh.
 #
-# DoltLite needs an explicit transaction for a conflicted merge to survive;
-# Dolt needs dolt_allow_commit_conflicts for the same reason. That difference is
-# in the harness, not in dolt_merge_status, so each side gets its own wrapper.
+# A conflicted merge is never committable in DoltLite, so the status has to be
+# read inside the transaction that produced it. Dolt would let the commit through
+# behind dolt_allow_commit_conflicts, but reading in-session gives the same answer
+# there, so both sides are compared at the same point and the projection is part
+# of the script rather than a follow-up connection.
 oracle() {
   local name="$1" setup="$2" merge="${3:-}" after="${4:-}"
   local dir="$TMPROOT/$name"
@@ -83,14 +85,21 @@ $(vc_oracle_translate_for_dolt "$setup")"
 BEGIN;
 SELECT dolt_merge('$merge');
 $after
-COMMIT;"
+$DL_PROJECT;
+ROLLBACK;"
     dt_script="$dt_script
 CALL dolt_merge('$merge');
-$(vc_oracle_translate_for_dolt "$after")"
+$(vc_oracle_translate_for_dolt "$after")
+$DT_PROJECT;"
+  else
+    dl_script="$dl_script
+$DL_PROJECT;"
+    dt_script="$dt_script
+$DT_PROJECT;"
   fi
 
   local dl_out
-  dl_out=$(printf '%s\n.headers off\n.mode list\n%s;\n' "$dl_script" "$DL_PROJECT" \
+  dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_script" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -F '|' \
            | tail -1 \
@@ -99,8 +108,7 @@ $(vc_oracle_translate_for_dolt "$after")"
   (
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    printf '%s\n%s;\n' "$dt_script" "$DT_PROJECT" \
-      | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    printf '%s\n' "$dt_script" | "$DOLT" sql -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
   local dt_out

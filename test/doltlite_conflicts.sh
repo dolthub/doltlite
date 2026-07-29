@@ -129,7 +129,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,
 echo "SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET name='A' WHERE id=1; UPDATE t SET name='B' WHERE id=2; UPDATE t SET name='C' WHERE id=3; SELECT dolt_commit('-A','-m','other');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET name='a2' WHERE id=1; UPDATE t SET name='b2' WHERE id=2; UPDATE t SET name='c2' WHERE id=3; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 
-run_test_match "multi_row_conflict" "SELECT dolt_merge('other');" "Merge conflict detected" "$DB8"
+run_test_match "multi_row_conflict" "SELECT dolt_merge('other');" "cannot merge: conflicts detected" "$DB8"
 run_test_match "multi_row_conflict_count" \
   "BEGIN; SELECT dolt_merge('other'); SELECT 'MRC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
   "^MRC\\|3$" "$DB8"

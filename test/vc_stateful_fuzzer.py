@@ -191,7 +191,9 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         "SELECT dolt_merge(%s);" % sql_quote(source),
         "merge_%s_into_%s" % (source, target),
         timeout=30,
-        allowed_errors=("Merge conflict detected",),
+        # An autocommit merge that conflicts is rolled back whole, so the model
+        # below still matches: the target keeps the state it had before.
+        allowed_errors=("cannot merge: conflicts detected",),
     )
     merged = query_rows(doltlite, db_path, target)
     model[target]["working"] = dict(merged)
