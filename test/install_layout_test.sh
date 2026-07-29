@@ -30,11 +30,25 @@ have() { if [ -e "$2" ]; then ok "$1"; else bad "$1 (missing $2)"; fi; }
 # "Begin file" banners sit inside block comments, so a caller with -Werror in
 # CFLAGS (CI does) dies on -Wcomment -- unrelated to install layout, and the
 # objects the non-amalgamated build needs are already present.
+stage_install() {
+  ( cd "$BUILD_DIR" && make install USE_AMALGAMATION=0 DESTDIR="$TMP/stage" )
+}
+
 echo "=== staging make install ==="
-if ! ( cd "$BUILD_DIR" && make install USE_AMALGAMATION=0 DESTDIR="$TMP/stage" ) \
-     >"$TMP/install.log" 2>&1; then
+if ! stage_install >"$TMP/install.log" 2>&1; then
   echo "FAIL: make install failed"
   tail -30 "$TMP/install.log"
+  exit 1
+fi
+
+# Install a second time over the first. Installing into a populated prefix is
+# the normal case (upgrades), and it is where a rename-based SONAME install
+# breaks: the dev symlink gets renamed onto its own target and the library stops
+# loading. A single install on a fresh runner would never show it.
+echo "=== staging make install again, over the first ==="
+if ! stage_install >"$TMP/install2.log" 2>&1; then
+  echo "FAIL: second make install failed"
+  tail -30 "$TMP/install2.log"
   exit 1
 fi
 
