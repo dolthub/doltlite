@@ -182,6 +182,10 @@ int applyMergedCatalogAndCommit(
     sqlite3_free(zDetectErrMsg);
 
     if( nViolations + nUnique + nCheck > 0 ){
+      if( *pnConflicts > 0 ){
+        return doltliteCmdFinishWithConflictsAndConstraintViolations(
+            db, context, &savedState, *pnConflicts, zOpLabel, 1, 0);
+      }
       return doltliteCmdFinishWithConstraintViolations(
           db, context, &savedState, zOpLabel, 1,
           "Merge aborted: would have introduced constraint violations. "

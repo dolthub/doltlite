@@ -872,12 +872,20 @@ int doltliteCmdFinishWithConstraintViolations(
   sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
   const char *zOp, int bSealOnPlain, const char *zNestedMsg
 );
+int doltliteCmdFinishWithConflictsAndConstraintViolations(
+  sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
+  int nConflicts, const char *zOp, int bSealOnPlain,
+  const char *zNestedMsg
+);
 
 int doltliteReportConflicts(
   sqlite3 *db, sqlite3_context *ctx, int nConflicts, const char *zOp
 );
 int doltliteReportConstraintViolations(
   sqlite3 *db, sqlite3_context *ctx, const char *zOp
+);
+int doltliteReportConflictsAndConstraintViolations(
+  sqlite3 *db, sqlite3_context *ctx, int nConflicts, const char *zOp
 );
 int doltliteDetectPostMergeConstraintViolations(
   sqlite3 *db, const ProllyHash *pAncCatHash, int *pnViolations
