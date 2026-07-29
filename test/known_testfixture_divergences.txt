@@ -10,9 +10,9 @@
 #
 # Background: doltlite keys user-table rows in its prolly tree by the
 # user's primary key columns rather than by sqlite's auto-allocated
-# rowid (since #358), because rowid is allocation-order-dependent and
-# therefore history-dependent — a hard incompatibility with the Dolt
-# model where two branches that independently insert identical rows
+# rowid (since #358, tracked as #1840), because rowid is allocation-order-
+# dependent and therefore history-dependent — a hard incompatibility with
+# the Dolt model where two branches that independently insert identical rows
 # must produce identical row identities. Tests that rely on rowid
 # behavior in any of these forms produce different (but correct under
 # doltlite's model) results:

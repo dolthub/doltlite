@@ -42,8 +42,12 @@ if ! awk '
              FILENAME, NR, $2
       bad = 1
     }
-    if (!actionable && $3 != "-") {
-      printf "%s:%d: %s must use - instead of an issue URL\n",
+    # intentional/harness rows carry no work item, but they may still cite the
+    # issue that documents the limitation -- rowid keying, for one, explains a
+    # large share of the list and previously had nowhere to be attributed. Field
+    # 3 stays either "-" or a well-formed DoltLite issue URL.
+    if (!actionable && $3 != "-" && !issue) {
+      printf "%s:%d: %s must use - or a DoltLite issue URL\n",
              FILENAME, NR, $2
       bad = 1
     }

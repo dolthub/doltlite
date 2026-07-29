@@ -310,6 +310,8 @@ jobs:
         fi
         bash test/check_testfixture_crash_coverage.sh
         bash test/check_testfixture_exception_inventory.sh
+        bash test/check_testfixture_exception_inventory_test.sh
+        bash test/check_testfixture_inventory_issues_alive_test.sh
 
     - name: SQLite regression tests - ${{ matrix.bucket }}
       run: |

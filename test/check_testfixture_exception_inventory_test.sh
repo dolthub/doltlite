@@ -72,4 +72,16 @@ printf '%s\n' \
   'gamma harness -' > "$INVENTORY"
 expect_failure "an unknown category"
 
+printf '%s\n' \
+  'alpha intentional https://github.com/dolthub/doltlite/issues/42' \
+  'beta unsupported https://github.com/dolthub/doltlite/issues/42' \
+  'gamma harness https://github.com/dolthub/doltlite/issues/42' > "$INVENTORY"
+run_check
+
+printf '%s\n' \
+  'alpha intentional https://example.com/42' \
+  'beta unsupported https://github.com/dolthub/doltlite/issues/42' \
+  'gamma harness -' > "$INVENTORY"
+expect_failure "a non-DoltLite rationale URL on an intentional surface"
+
 echo "OK: testfixture exception inventory checker self-test"
