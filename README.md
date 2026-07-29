@@ -146,6 +146,13 @@ Dolt functions included.
 Loadable-extension authors use `doltliteext.h` (the rebranded `sqlite3ext.h`,
 shipped in the amalgamation zip alongside `doltlite.c`/`doltlite.h`).
 
+The shared library exports only `sqlite3_*` and the `doltliteServe*` entry
+points from `doltlite_remotesrv.h`. Everything else — the prolly, chunk-store
+and `doltlite*` internals, and statically linked mbedtls, BLAKE3 and ed25519 —
+is hidden, so linking `libdoltlite` cannot collide with a host's own copy of
+those libraries. The static archive is deliberately unfiltered for tests and
+tooling that need the internals.
+
 ```bash
 cd build
 ../configure

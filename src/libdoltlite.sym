@@ -1,0 +1,5 @@
+# Export filter for libdoltlite.dylib (ld64 -exported_symbols_list).
+# Mach-O form of src/libdoltlite.map; keep the two in sync. See that file for
+# why the filter exists. Names carry the Mach-O leading underscore.
+_sqlite3_*
+_doltliteServe*

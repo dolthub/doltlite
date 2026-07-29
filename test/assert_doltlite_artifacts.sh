@@ -89,6 +89,40 @@ if [ "${DOLTLITE_CHECK_SHARED:-1}" != 0 ]; then
   fi
 fi
 
+# Hold the shared library to the export filter in src/libdoltlite.map (ELF) and
+# src/libdoltlite.sym (Mach-O); see those files for why it exists.
+if [ "${DOLTLITE_CHECK_EXPORTS:-1}" != 0 ] && command -v nm >/dev/null 2>&1; then
+  shared=""
+  for cand in ./libdoltlite.so ./libdoltlite.dylib; do
+    if [ -f "$cand" ]; then shared="$cand"; fi
+  done
+  if [ -n "$shared" ]; then
+    case "$(uname -s)" in
+      Darwin) exported=$(nm -gU "$shared" | awk 'NF>=2{print $NF}' | sed 's/^_//') ;;
+      *)      exported=$(nm -D --defined-only "$shared" | awk 'NF>=2{print $NF}') ;;
+    esac
+    # _init/_fini/__bss_start/_edata/_end are defined by the linker itself,
+    # after version-script processing, so `local: *` cannot hide them.
+    leaked=$(printf '%s\n' "$exported" \
+             | grep -vE '^(sqlite3_|doltliteServe)' \
+             | grep -vE '^(_init|_fini|__bss_start|_edata|_end)$' \
+             | sort -u || true)
+    if [ -n "$leaked" ]; then
+      n=$(printf '%s\n' "$leaked" | wc -l | tr -d ' ')
+      echo "libdoltlite exports: $n symbol(s) outside sqlite3_*/doltliteServe*" >&2
+      # awk rather than head: head closes the pipe early, which under pipefail
+      # surfaces as a broken-pipe error instead of this diagnostic.
+      printf '%s\n' "$leaked" \
+        | awk 'NR<=20{print "  " $0} END{if(NR>20) print "  ... and " NR-20 " more"}' >&2
+      echo "Widen src/libdoltlite.map and src/libdoltlite.sym only for genuinely" >&2
+      echo "public API; otherwise the new symbol belongs behind the filter." >&2
+      exit 1
+    fi
+    n=$(printf '%s\n' "$exported" | sort -u | wc -l | tr -d ' ')
+    echo "libdoltlite exports: $n symbols, all public API"
+  fi
+fi
+
 if [ "${DOLTLITE_CHECK_AMALGAMATION:-1}" != 0 ] && [ -f ./sqlite3.c ]; then
   for source in prolly_btree.c prolly_btree_catalog.c prolly_btree_cursor.c \
                 prolly_btree_mutation.c prolly_btree_orig.c \
