@@ -670,8 +670,6 @@ misc7 misc7-13  # same echo-on-clustered class (huge xBestIndex cost)
 misc7 misc7-15.2  # DELETE ... WHERE rowid on a PK-clustered table: no rowid column
 misc7 misc7-22.3  # read-only journal dir: stock cannot journal so the write fails; sidecar-free commit succeeds
 misc7 misc7-22.4  # same: SQLITE_OK, not SQLITE_READONLY_ROLLBACK
-misc7 misc7-23.3  # read-only db dir: CANTOPEN at write time vs stock's READONLY message
-misc7 misc7-23.4  # same: SQLITE_CANTOPEN, not SQLITE_READONLY_DIRECTORY
 # CHECK-constraint error text echoes the schema expression. doltlite regenerates
 # CREATE TABLE/INDEX SQL from its structural catalog on schema reload, collapsing
 # the original whitespace, so the multi-line CHECK error diverges from stock's

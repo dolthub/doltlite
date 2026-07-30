@@ -223,9 +223,12 @@ if {$::tcl_platform(platform) eq "unix"} {
   do_execsql_test 9.2 {
     SELECT * FROM t1;
   } {1 2}
+  # Stock misc7-23.3: RO parent dir → SQLITE_READONLY_DIRECTORY /
+  # "attempt to write a readonly database" (graph-lock sidecar create,
+  # same as stock journal/WAL create in a non-writable directory).
   do_catchsql_test 9.3 {
     INSERT INTO t1 VALUES(3, 4);
-  } {1 {unable to open database file}}
+  } {1 {attempt to write a readonly database}}
   do_test 9.4 {
     db close
     sqlite3 db tst/test.db
