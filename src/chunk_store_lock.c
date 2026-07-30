@@ -12,6 +12,10 @@ int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
 }
 
+int csFileLockPromote(sqlite3_file *pFile){
+  return sqlite3OsLock(pFile, SQLITE_LOCK_RESERVED);
+}
+
 static char *csLockPath(const char *path){
   const char *zBase = strrchr(path, '/');
   int nDir = 0;
@@ -110,7 +114,7 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path,
   ** smoke in development-builds). */
   rc = sqlite3OsLock(pFile, SQLITE_LOCK_SHARED);
   if( rc==SQLITE_OK ){
-    rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
+    rc = csFileLockPromote(pFile);
   }
   if( rc!=SQLITE_OK ){
     sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);

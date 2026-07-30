@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sqlite3.h"
-#include "chunk_store.h"
+#include "chunk_store_int.h"
 
 #ifndef _WIN32
 # include <unistd.h>
@@ -119,8 +119,58 @@ static void test_fork_child_does_not_keep_parent_lock(void){
 #endif
 }
 
+static void test_graph_lock_promotion_has_one_winner(void){
+#ifdef _WIN32
+  check("graph_lock_promotion_skipped_on_windows", 1);
+#else
+  char zPath[] = "/tmp/test_chunk_store_lock_promotion\0";
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  sqlite3_file *pFile1 = 0;
+  sqlite3_file *pFile2 = 0;
+  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+            | SQLITE_OPEN_MAIN_DB;
+  int rc1;
+  int rc2;
+
+  printf("--- graph lock promotion has one winner ---\n");
+  check("graph_lock_promotion_has_vfs", pVfs!=0);
+  if( !pVfs ) return;
+  sqlite3OsDelete(pVfs, zPath, 0);
+
+  rc1 = sqlite3OsOpenMalloc(pVfs, zPath, &pFile1, flags, 0);
+  rc2 = sqlite3OsOpenMalloc(pVfs, zPath, &pFile2, flags, 0);
+  check("graph_lock_promotion_open_first", rc1==SQLITE_OK);
+  check("graph_lock_promotion_open_second", rc2==SQLITE_OK);
+  if( rc1!=SQLITE_OK || rc2!=SQLITE_OK ) goto done;
+
+  rc1 = sqlite3OsLock(pFile1, SQLITE_LOCK_SHARED);
+  rc2 = sqlite3OsLock(pFile2, SQLITE_LOCK_SHARED);
+  check("graph_lock_promotion_share_first", rc1==SQLITE_OK);
+  check("graph_lock_promotion_share_second", rc2==SQLITE_OK);
+  if( rc1!=SQLITE_OK || rc2!=SQLITE_OK ) goto done;
+
+  rc1 = csFileLockPromote(pFile1);
+  rc2 = csFileLockPromote(pFile2);
+  check("graph_lock_promotion_single_winner",
+        (rc1==SQLITE_OK && rc2==SQLITE_BUSY)
+     || (rc1==SQLITE_BUSY && rc2==SQLITE_OK));
+
+done:
+  if( pFile1 ){
+    sqlite3OsUnlock(pFile1, SQLITE_LOCK_NONE);
+    sqlite3OsCloseFree(pFile1);
+  }
+  if( pFile2 ){
+    sqlite3OsUnlock(pFile2, SQLITE_LOCK_NONE);
+    sqlite3OsCloseFree(pFile2);
+  }
+  sqlite3OsDelete(pVfs, zPath, 0);
+#endif
+}
+
 int main(void){
   test_fork_child_does_not_keep_parent_lock();
+  test_graph_lock_promotion_has_one_winner();
 
   printf("\n");
   printf("chunk_store_fork_lock_test: %d passed, %d failed\n", nPass, nFail);
