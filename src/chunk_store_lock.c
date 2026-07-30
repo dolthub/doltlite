@@ -25,6 +25,50 @@ static char *csLockPath(const char *path){
   return sqlite3_mprintf("%.*s.%s-lock", nDir, path, zBase);
 }
 
+/* Classify the directory that will hold the graph-lock sidecar for zPath.
+** Sets *pExists and *pWritable. A missing directory must not be treated as
+** "not writable" — that would turn CANTOPEN (ENOENT) into READONLY_DIRECTORY
+** and break clone of a file:// URL under a nonexistent parent. */
+static int csDirectoryAccess(
+  sqlite3_vfs *pVfs,
+  const char *zPath,
+  int *pExists,
+  int *pWritable
+){
+  const char *zSlash;
+  const char *zDirPath = 0;
+  char *zDir = 0;
+  int exists = 0;
+  int canWrite = 0;
+  int rc;
+
+  *pExists = 0;
+  *pWritable = 0;
+  if( !pVfs || !zPath ) return SQLITE_OK;
+  zSlash = strrchr(zPath, '/');
+  if( !zSlash ){
+    zDirPath = ".";
+  }else if( zSlash==zPath ){
+    zDirPath = "/";
+  }else{
+    int nDir = (int)(zSlash - zPath);
+    zDir = (char*)sqlite3_malloc(nDir + 1);
+    if( !zDir ) return SQLITE_NOMEM;
+    memcpy(zDir, zPath, (size_t)nDir);
+    zDir[nDir] = 0;
+    zDirPath = zDir;
+  }
+  rc = sqlite3OsAccess(pVfs, zDirPath, SQLITE_ACCESS_EXISTS, &exists);
+  if( rc==SQLITE_OK && exists ){
+    rc = sqlite3OsAccess(pVfs, zDirPath, SQLITE_ACCESS_READWRITE, &canWrite);
+  }
+  sqlite3_free(zDir);
+  if( rc!=SQLITE_OK ) return rc;
+  *pExists = exists;
+  *pWritable = canWrite;
+  return SQLITE_OK;
+}
+
 int csFileLock(sqlite3_vfs *pVfs, const char *path,
                       sqlite3_file **ppFile, char **pzName){
   char *zRaw = csLockPath(path);
@@ -44,7 +88,20 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path,
   if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
   if( rc!=SQLITE_OK ){
+    int exists = 0;
+    int canWrite = 0;
+    int rcDir = csDirectoryAccess(pVfs, path, &exists, &canWrite);
     sqlite3_free(zLock);
+    /* The graph lock is a sidecar create in the DB directory — the same
+    ** dependency stock SQLite has on creating -journal/-wal. When the
+    ** directory exists but is not writable, report READONLY_DIRECTORY so
+    ** the primary code is SQLITE_READONLY with stock's "attempt to write a
+    ** readonly database" message (misc7-23). Missing parents stay as the
+    ** original open error (typically CANTOPEN), matching stock EACCES vs
+    ** ENOENT handling for new journals. */
+    if( rcDir==SQLITE_OK && exists && !canWrite ){
+      return SQLITE_READONLY_DIRECTORY;
+    }
     return rc;
   }
   /* SQLite's unix VFS asserts the lock ladder under SQLITE_DEBUG: from

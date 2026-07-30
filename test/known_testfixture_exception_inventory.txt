@@ -3363,8 +3363,6 @@ misc7 misc7-13 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-15.2 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-22.3 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-22.4 intentional https://github.com/dolthub/doltlite/issues/1840
-misc7 misc7-23.3 intentional https://github.com/dolthub/doltlite/issues/1840
-misc7 misc7-23.4 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-5 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-7.0 intentional https://github.com/dolthub/doltlite/issues/1840
 mjournal mjournal-2.1 intentional -
