@@ -432,6 +432,61 @@ int chunkStoreOpen(
       chunkStoreClose(cs);
       return SQLITE_CANTOPEN;
     }
+    /* Fail early when the parent directory is missing so sqlite3_open
+    ** returns SQLITE_CANTOPEN like stock SQLite, instead of succeeding
+    ** with an empty connection that only fails on first write. Probe the
+    ** parent rather than creating the file: WASM/node VFSes can reject
+    ** eager CREATE while still supporting the usual first-write open.
+    **
+    ** Parent is OK if either ACCESS_READWRITE or ACCESS_EXISTS reports
+    ** success. Neither alone is portable:
+    **   - Windows ACCESS_EXISTS treats zero-length objects as missing, and
+    **     directories report size zero — so EXISTS alone CANTOPEN's every
+    **     new DB under a real parent.
+    **   - Some WASM/node VFSes reject ACCESS_READWRITE on directories that
+    **     still pass EXISTS (and reject eager CREATE), so READWRITE alone
+    **     breaks opens that only EXISTS can green-light.
+    **
+    ** Access failures (IOERR from faultsim, etc.) are treated as
+    ** inconclusive — fall through to deferred open rather than
+    ** promoting a probe error into open failure. Only a definitive
+    ** "parent is absent" answer becomes CANTOPEN. */
+    {
+      const char *zPath = cs->file.zFilename;
+      const char *zSlash = strrchr(zPath, '/');
+      int parentOk = 1;
+#ifdef _WIN32
+      {
+        const char *zB = strrchr(zPath, '\\');
+        if( zB && (!zSlash || zB>zSlash) ) zSlash = zB;
+      }
+#endif
+      if( zSlash && zSlash!=zPath ){
+        int nDir = (int)(zSlash - zPath);
+        int canWrite = 0;
+        int exists = 0;
+        char *zDir = (char*)sqlite3_malloc(nDir + 1);
+        if( !zDir ){
+          chunkStoreClose(cs);
+          return SQLITE_NOMEM;
+        }
+        memcpy(zDir, zPath, (size_t)nDir);
+        zDir[nDir] = 0;
+        rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_READWRITE, &canWrite);
+        if( rc==SQLITE_OK && !canWrite ){
+          rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_EXISTS, &exists);
+        }
+        sqlite3_free(zDir);
+        if( rc==SQLITE_OK ){
+          parentOk = canWrite || exists;
+          if( !parentOk ){
+            chunkStoreClose(cs);
+            return SQLITE_CANTOPEN;
+          }
+        }
+        /* rc!=OK: probe inconclusive (e.g. ioerr fault injection) — defer. */
+      }
+    }
     cs->index.nChunks = 0;
     cs->index.iIndexOffset = 0;
     cs->index.nIndexSize = 0;

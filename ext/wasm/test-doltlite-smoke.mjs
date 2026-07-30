@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -19,10 +18,10 @@ const sqlite3 = await sqlite3InitModule({
   locateFile: (name)=> name === 'sqlite3.wasm' ? wasmPath : name,
   wasmBinary: fs.readFileSync(wasmPath)
 });
-const dbFile = path.join(
-  fs.mkdtempSync(path.join(os.tmpdir(), 'doltlite-wasm-')),
-  'smoke.db'
-);
+/* MEMFS root path (same class as test-doltlite-write-e2e.mjs). A host
+ * os.tmpdir() path is invisible to the wasm VFS parent probe and fails
+ * CANTOPEN after missing-parent open matching. */
+const dbFile = '/doltlite-wasm-smoke.db';
 const db = new sqlite3.oo1.DB(dbFile, 'c');
 
 function fail(msg){

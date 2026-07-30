@@ -121,8 +121,9 @@ attach2 attach2-4.8.1 intentional https://github.com/dolthub/doltlite/issues/184
 attach2 attach2-4.8.2 intentional https://github.com/dolthub/doltlite/issues/1846
 attach2 attach2-4.9.1 intentional https://github.com/dolthub/doltlite/issues/1846
 attach2 attach2-4.9.2 intentional https://github.com/dolthub/doltlite/issues/1846
-attach3 attach3-11.0 intentional -
-attach3 attach3-11.1 intentional -
+attachmalloc attachmalloc-1.transient.1381 unsupported https://github.com/dolthub/doltlite/issues/1839
+attachmalloc attachmalloc-1.transient.472 unsupported https://github.com/dolthub/doltlite/issues/1839
+attachmalloc attachmalloc-1.transient.892 unsupported https://github.com/dolthub/doltlite/issues/1839
 autoinc autoinc-1.2 intentional https://github.com/dolthub/doltlite/issues/1852
 autoinc autoinc-1.6 intentional -
 autoindex3 autoindex3-310 intentional -
@@ -269,10 +270,6 @@ cachespill cachespill-1.4 intentional -
 cachespill cachespill-1.5 intentional -
 capi2 capi2-6.5 intentional -
 capi3 capi3-11.3.4 intentional https://github.com/dolthub/doltlite/issues/1846
-capi3 capi3-3.3 intentional -
-capi3 capi3-3.4 intentional -
-capi3 capi3-4.3 intentional -
-capi3 capi3-4.4 intentional -
 capi3 capi3-8.3 intentional https://github.com/dolthub/doltlite/issues/1852
 capi3b capi3b-1.4 intentional -
 capi3b capi3b-1.5.1 intentional -
@@ -287,10 +284,6 @@ capi3b capi3b-2.9 intentional -
 capi3c capi3-11.3.4 intentional https://github.com/dolthub/doltlite/issues/1846
 capi3c capi3c-18.3 intentional -
 capi3c capi3c-18.4 intentional -
-capi3c capi3c-3.3 intentional -
-capi3c capi3c-3.4 intentional -
-capi3c capi3c-4.3 intentional -
-capi3c capi3c-4.4 intentional -
 capi3c capi3c-8.3 intentional https://github.com/dolthub/doltlite/issues/1852
 cffault cffault-2.1-cantopen-persistent.1 intentional -
 cffault cffault-2.1-cantopen-transient.1 intentional -
@@ -3294,6 +3287,7 @@ malloc * harness -
 malloc3 * harness -
 mallocAll * harness -
 mallocK mallocK-6.0 intentional -
+mallocD mallocD-4.transient.107 unsupported https://github.com/dolthub/doltlite/issues/1839
 memdb memdb-6.12 intentional https://github.com/dolthub/doltlite/issues/1840
 memdb memdb-9.1 intentional https://github.com/dolthub/doltlite/issues/1840
 memdb1 * unsupported https://github.com/dolthub/doltlite/issues/1839
@@ -3577,7 +3571,6 @@ nolock nolock-4.3 intentional -
 notnull notnull-6.5 intentional -
 numcast numcast-utf16be.0 intentional -
 numcast numcast-utf16le.0 intentional -
-oserror oserror-1.3.1 intentional -
 oserror oserror-1.3.2 intentional -
 oserror oserror-2.1.1 intentional -
 oserror oserror-2.1.2 intentional -

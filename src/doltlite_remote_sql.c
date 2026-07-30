@@ -670,8 +670,20 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                              "failed to open remote (URL must start with file:// or http://)");
+    /* openRemoteByUrl returns NULL for both bad schemes and open failures.
+    ** A file:// or http(s):// URL that fails to open is CANTOPEN (e.g. a
+    ** missing parent directory), not a scheme error. */
+    int openRc = SQLITE_ERROR;
+    const char *zMsg =
+      "failed to open remote (URL must start with file:// or http://)";
+    if( zUrl
+     && (strncmp(zUrl, "file://", 7)==0
+      || strncmp(zUrl, "http://", 7)==0
+      || strncmp(zUrl, "https://", 8)==0) ){
+      openRc = SQLITE_CANTOPEN;
+      zMsg = "failed to open remote";
+    }
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, openRc, zMsg);
     return;
   }
 

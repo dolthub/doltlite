@@ -427,15 +427,14 @@ do_test doltlite_recover_locking_1-9.4 {
   db2 close
 } {}
 
+# Missing parent: stock-compatible CANTOPEN at open (no deferred phantom).
 do_test doltlite_recover_locking_1-10.1 {
   set dbh [sqlite3_open /bogus/path/rloc1.db {}]
   list [sqlite3_errcode $dbh] [sqlite3_errmsg $dbh]
-} {SQLITE_OK {not an error}}
+} {SQLITE_CANTOPEN {unable to open database file}}
 do_test doltlite_recover_locking_1-10.2 {
   sqlite3_close $dbh
-  sqlite3 dbb /bogus/path/rloc1.db
-  set rc [catch {dbb eval {CREATE TABLE z(a)}} msg]
-  dbb close
+  set rc [catch {sqlite3 dbb /bogus/path/rloc1.db} msg]
   list $rc $msg
 } {1 {unable to open database file}}
 do_test doltlite_recover_locking_1-10.3 {
