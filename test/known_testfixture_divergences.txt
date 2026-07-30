@@ -3709,7 +3709,7 @@ e_uri e_uri-1.8
 # log-all-xOpens repro): for relative paths it re-opens the resolved
 # absolute path with no URI parameter block, so the recorded open has the
 # right file but empty params (3.2/3.3); for absolute paths the recorded
-# open is the eager ".{db}-lock" sidecar (4.2-4.5, 12.x, 13.x), so both the
+# open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the
 # filename and the parameter list differ.
 e_uri e_uri-3.2
 e_uri e_uri-3.3
@@ -3717,7 +3717,6 @@ e_uri e_uri-4.1
 e_uri e_uri-4.2
 e_uri e_uri-4.3
 e_uri e_uri-4.4
-e_uri e_uri-4.5
 e_uri e_uri-12.1
 e_uri e_uri-12.2
 e_uri e_uri-13.1

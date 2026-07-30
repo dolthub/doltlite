@@ -1338,7 +1338,6 @@ e_uri e_uri-4.1 intentional -
 e_uri e_uri-4.2 intentional -
 e_uri e_uri-4.3 intentional -
 e_uri e_uri-4.4 intentional -
-e_uri e_uri-4.5 intentional -
 e_vacuum e_vacuum-1.1.1.3 intentional https://github.com/dolthub/doltlite/issues/1840
 e_vacuum e_vacuum-1.1.1.5 intentional https://github.com/dolthub/doltlite/issues/1840
 e_vacuum e_vacuum-1.1.2.5 intentional https://github.com/dolthub/doltlite/issues/1840
