@@ -2427,7 +2427,7 @@ nolock nolock-3.2  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-3.12  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.1  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.3  # VFS xLock call counts differ under chunk-store locking
-pager4 pager4-1.3  # rename-while-open: commit goes BY PATH, creating a fresh db at the original path (silent fork)
+pager4 pager4-1.3  # rename-while-open: the reload reopens by path with OPEN_CREATE, so the vacated path is recreated empty and adopted -- the write is not refused
 pager4 pager4-1.4  # rename-while-open: commit goes BY PATH, creating a fresh db at the original path (silent fork)
 pager4 pager4-1.7  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
 pager4 pager4-1.8  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
