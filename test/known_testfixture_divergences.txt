@@ -1958,7 +1958,6 @@ memdb memdb-9.1  # rowid on composite-PK (WITHOUT ROWID) table; auto_vacuum reje
 memjournal memjournal-1.0  # journal_mode pragma rejected + cascade
 mmapcorrupt mmapcorrupt-2.1  # mmap stock-page corruption: offset misses chunk-store structures
 mmapwarm mmapwarm-1.0  # PRAGMA page_count: chunk store has no SQLite page count
-oserror oserror-1.3.2  # missing-parent open fails via Access probe, so stock open() error-log line is empty
 oserror oserror-2.1.1  # no -wal sidecar to unlink; error log stays empty
 oserror oserror-2.1.2  # no -wal sidecar to unlink; error log stays empty
 pager3 pager3-1.1.1  # journal-file existence probes; journal_mode rejected
