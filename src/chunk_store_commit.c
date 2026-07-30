@@ -9,6 +9,13 @@
 
 /* Chunk-store commit/rollback path. */
 
+static int csFileHasMovedNoFault(ChunkStore *cs){
+  int bMoved = 0;
+  if( cs->file.pFile==0 ) return 0;
+  sqlite3OsFileControlHint(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+  return bMoved;
+}
+
 static int csCrashWriteInjectionActive(void){
 #ifdef SQLITE_TEST
   const char *zEnv = getenv("DOLTLITE_CRASH_WRITE");
@@ -510,6 +517,10 @@ int chunkStoreCommit(ChunkStore *cs){
       cs->refs.refsHash = savedRefsHash;
     }
     acquiredLock = 1;
+  }
+  if( cs->movedReadOnly || (!acquiredLock && csFileHasMovedNoFault(cs)) ){
+    if( acquiredLock ) chunkStoreUnlock(cs);
+    return SQLITE_READONLY;
   }
   rc = csCommitToFile(cs);
   if( acquiredLock ) chunkStoreUnlock(cs);
