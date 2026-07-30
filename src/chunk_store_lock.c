@@ -178,6 +178,25 @@ void chunkStoreUnlock(ChunkStore *cs){
   }
 }
 
+/* True when the file this handle holds has moved out from under us and nothing
+** took its place. GC replaces the store atomically, which keeps the path
+** populated throughout, so a vacant path distinguishes "renamed or unlinked
+** away" from "upgraded beneath us". */
+int csMovedFileIsGone(ChunkStore *cs){
+  int bMoved = 0, exists = 0;
+  if( cs->isMemory || cs->file.pFile==0 ) return 0;
+  if( cs->file.zFilename==0 || cs->file.zFilename[0]==0 ) return 0;
+  if( sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
+                           &bMoved)!=SQLITE_OK || !bMoved ){
+    return 0;
+  }
+  if( sqlite3OsAccess(cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_ACCESS_EXISTS, &exists)!=SQLITE_OK ){
+    return 0;
+  }
+  return !exists;
+}
+
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   int bMoved = 0;
   int rc;
@@ -205,9 +224,20 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
   if( rc!=SQLITE_OK ) return rc;
   if( bMoved ){
+    /* Nothing at the path means renamed or unlinked away, not GC's atomic
+    ** replace. Reporting a change would reload by path; keep the handle we hold
+    ** so reads continue to see the database. Nothing is latched, so renaming the
+    ** file back resumes normal operation. */
+    if( csMovedFileIsGone(cs) ){
+      cs->movedReadOnly = 1;
+      *pChanged = 0;
+      return SQLITE_OK;
+    }
+    cs->movedReadOnly = 0;
     *pChanged = 1;
     return SQLITE_OK;
   }
+  cs->movedReadOnly = 0;
 
   {
     i64 fileSize = 0;
@@ -277,8 +307,11 @@ int csReloadFromDisk(ChunkStore *cs){
   if( cs->staging.nRecentUncommitted > 0 ){
     return SQLITE_BUSY_SNAPSHOT;
   }
+  /* No OPEN_CREATE: a reload re-derives state from the path, so allowing it to
+  ** create means a vacated path is fabricated as an empty store and then adopted
+  ** over the live one. Reopening must fail instead. */
   rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
   /* Reload must not replace a writable store with a fallback read-only one. */

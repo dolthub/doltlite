@@ -486,7 +486,7 @@ int chunkStoreCommit(ChunkStore *cs){
 
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
-  if( cs->readOnly ) return SQLITE_READONLY;
+  if( cs->readOnly || cs->movedReadOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( !csFileLockHeld(CS_GRAPH_LOCK(cs)) && cs->file.zFilename ){
     preserveRefs = cs->staging.nPending > 0

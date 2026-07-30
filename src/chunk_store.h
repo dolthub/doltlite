@@ -163,6 +163,14 @@ struct ChunkStore {
   ChunkStaging staging;
 
   u8 readOnly;
+
+  /* Set while the file this handle opened has been renamed or unlinked away and
+
+  ** nothing replaced it: writes are refused, reads keep serving the open handle.
+
+  ** Re-evaluated on every refresh, so restoring the file restores writability. */
+
+  u8 movedReadOnly;
   u8 isMemory;
   u8 fullFsync;           /* PRAGMA fullfsync: syncs use SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip durability syncs */
