@@ -173,25 +173,97 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
   sqlite3_result_int(ctx, 0);
 }
 
+/* Write the seed commit into cs and point its default branch at it.
+**
+** Deliberately store-scoped rather than going through doltliteCreateAndStoreCommit
+** and doltliteAdvanceBranch: those resolve the store from aDb[0], so they can only
+** ever seed the connection's main database. */
+static int doltliteSeedStore(sqlite3 *db, ChunkStore *cs, const char *zBranch){
+  DoltliteCommit c;
+  ProllyHash seedHash;
+  u8 *aData = 0;
+  int nData = 0;
+  int rc;
+
+  memset(&c, 0, sizeof(c));
+  c.timestamp = (i64)time(0);
+  c.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
+  c.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
+  c.zMessage = sqlite3_mprintf("Initialize data repository");
+  if( c.zName==0 || c.zEmail==0 || c.zMessage==0 ){
+    doltliteCommitClear(&c);
+    return SQLITE_NOMEM;
+  }
+
+  rc = doltliteCommitSerialize(&c, &aData, &nData);
+  if( rc==SQLITE_OK ) rc = chunkStorePut(cs, aData, nData, &seedHash);
+  sqlite3_free(aData);
+  doltliteCommitClear(&c);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( chunkStoreFindBranch(cs, zBranch, 0)==SQLITE_OK ){
+    return chunkStoreUpdateBranch(cs, zBranch, &seedHash);
+  }
+  rc = chunkStoreAddBranch(cs, zBranch, &seedHash);
+  if( rc==SQLITE_OK ) rc = chunkStoreSetDefaultBranch(cs, zBranch);
+  return rc;
+}
+
+/* Whether cs still needs a seed: either it has no branches at all, or its default
+** branch exists while naming no commit. The second case is the repair — the
+** working-set persist path creates a missing default branch pointing at the empty
+** hash, leaving a database holding data with no history, and the old
+** any-branch-at-all test then declined to fix it for the rest of its life. Any
+** other populated repo is left alone, so a database whose branches simply don't
+** include the recorded default is never handed a fabricated one. */
+static int doltliteStoreNeedsSeed(ChunkStore *cs, const char **pzBranch){
+  const char *zBranch = chunkStoreGetDefaultBranch(cs);
+  ProllyHash tip;
+
+  *pzBranch = zBranch;
+  if( zBranch==0 || zBranch[0]==0 ) return 0;
+  if( refsTableBranchCount(&cs->refs)==0 ) return 1;
+  return chunkStoreFindBranch(cs, zBranch, &tip)==SQLITE_OK
+      && prollyHashIsEmpty(&tip);
+}
+
 int doltliteMaybeSeedRepo(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch;
   ProllyHash emptyParent;
   ProllyHash emptyCatalog;
   ProllyHash seedHash;
   int rc;
 
   if( !cs ) return SQLITE_OK;
-  if( refsTableBranchCount(&cs->refs) > 0 ) return SQLITE_OK;
   if( sqlite3_db_readonly(db, "main")==1 ) return SQLITE_OK;
+  if( !doltliteStoreNeedsSeed(cs, &zBranch) ) return SQLITE_OK;
 
   memset(&emptyParent, 0, sizeof(emptyParent));
   memset(&emptyCatalog, 0, sizeof(emptyCatalog));
 
+  /* The main database seeds through AdvanceBranch, which also sets the session
+  ** head and staged hashes, switches the catalog and persists the working set. */
   rc = doltliteCreateAndStoreCommit(db, &emptyParent, &emptyCatalog,
       "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
   if( rc!=SQLITE_OK ) return rc;
 
   return doltliteAdvanceBranch(db, &seedHash, &emptyCatalog, 0);
+}
+
+/* An attached database has no session head, staged hash or catalog of its own, so
+** it cannot go through AdvanceBranch; its working set is still created by the
+** first persist, which now finds the branch already naming a commit. */
+int doltliteSeedAttachedDb(sqlite3 *db, int iDb){
+  ChunkStore *cs;
+  const char *zBranch;
+
+  if( db==0 || iDb<=0 || iDb>=db->nDb ) return SQLITE_OK;
+  cs = doltliteGetChunkStoreForDb(db, iDb);
+  if( cs==0 || cs->readOnly ) return SQLITE_OK;
+  if( sqlite3_db_readonly(db, db->aDb[iDb].zDbSName)==1 ) return SQLITE_OK;
+  if( !doltliteStoreNeedsSeed(cs, &zBranch) ) return SQLITE_OK;
+  return doltliteSeedStore(db, cs, zBranch);
 }
 
 int doltliteConfigRegister(sqlite3 *db){

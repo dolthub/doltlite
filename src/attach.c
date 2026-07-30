@@ -245,6 +245,18 @@ static void attachFunc(
 #endif
     if( !REOPEN_AS_MEMDB(db) ){
       rc = sqlite3Init(db, &zErrDyn);
+#ifdef DOLTLITE_PROLLY
+      /* Seed the newly attached database. doltliteMaybeSeedRepo only ever reaches
+      ** aDb[0], so without this the attached database's default branch is created
+      ** by its first working-set persist pointing at the empty hash: data with no
+      ** history, and no later chance to repair it. Reported through rc so a
+      ** failure runs the same teardown as a failed sqlite3Init instead of leaving
+      ** the database attached behind an error. */
+      if( rc==SQLITE_OK ){
+        extern int doltliteSeedAttachedDb(sqlite3*, int);
+        rc = doltliteSeedAttachedDb(db, db->nDb - 1);
+      }
+#endif
     }
     sqlite3BtreeLeaveAll(db);
     assert( zErrDyn==0 || rc!=SQLITE_OK );
@@ -270,7 +282,7 @@ static void attachFunc(
     }
     goto attach_error;
   }
-  
+
   return;
 
 attach_error:

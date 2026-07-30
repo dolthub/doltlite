@@ -805,6 +805,7 @@ static SQLITE_INLINE int dlReadFramedHeader(DlByteReader *r, u8 m0, u8 m1,
 }
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+ChunkStore *doltliteGetChunkStoreForDb(sqlite3 *db, int iDb);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 int doltliteIsStockSqliteDb(sqlite3 *db);
 void doltliteInvalidateWorkingState(sqlite3 *db);
@@ -961,6 +962,7 @@ int doltliteRevertRegister(sqlite3 *db);
 int doltliteRebaseRegister(sqlite3 *db);
 int doltliteConfigRegister(sqlite3 *db);
 int doltliteMaybeSeedRepo(sqlite3 *db);
+int doltliteSeedAttachedDb(sqlite3 *db, int iDb);
 
 int doltliteRegisterConflictTables(sqlite3 *db);
 int doltliteRegisterDiffTables(sqlite3 *db);

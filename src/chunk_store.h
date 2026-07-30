@@ -164,13 +164,17 @@ struct ChunkStore {
 
   u8 readOnly;
 
-  /* Set while the file this handle opened has been renamed or unlinked away and
-
-  ** nothing replaced it: writes are refused, reads keep serving the open handle.
-
-  ** Re-evaluated on every refresh, so restoring the file restores writability. */
-
+  /* Set while the file this handle opened is no longer the file at its path and
+  ** the one there cannot be shown to be this database: writes are refused, reads
+  ** keep serving the open handle. Re-evaluated on every refresh, so restoring the
+  ** file restores writability. */
   u8 movedReadOnly;
+
+  /* One-shot: adopt whatever file is now at the path on the next refresh. Only an
+  ** operation that installed a database there itself may set this -- a backup
+  ** destination is replaced with unrelated content on purpose, which the
+  ** moved-file check would otherwise refuse as a foreign file. */
+  u8 adoptReplacement;
   u8 isMemory;
   u8 fullFsync;           /* PRAGMA fullfsync: syncs use SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip durability syncs */

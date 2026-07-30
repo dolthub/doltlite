@@ -739,6 +739,7 @@ int unpackedRecordCanUseIntSortKey(BtCursor*, UnpackedRecord*, int);
 int sortKeyFromUnpackedIntRecordBuffer(UnpackedRecord*, int, u8**, int*, int*);
 int prollyInvokeBusyHandler(BtShared*);
 ChunkStore *doltliteGetChunkStore(sqlite3*);
+ChunkStore *doltliteGetChunkStoreForDb(sqlite3*, int);
 BtShared *doltliteGetBtShared(sqlite3*);
 ProllyCache *doltliteGetCache(sqlite3*);
 int doltliteRegister(sqlite3*);

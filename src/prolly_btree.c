@@ -1974,13 +1974,17 @@ static void doltiteEngineFunc(
   sqlite3_result_text(context, zEngine, -1, SQLITE_STATIC);
 }
 
-ChunkStore *doltliteGetChunkStore(sqlite3 *db){
-  if( db && db->nDb>0 && db->aDb[0].pBt ){
-    Btree *pBt = db->aDb[0].pBt;
+ChunkStore *doltliteGetChunkStoreForDb(sqlite3 *db, int iDb){
+  if( db && iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt ){
+    Btree *pBt = db->aDb[iDb].pBt;
     if( sqlite3BtreeUsesOrig(pBt) ) return 0;
     return &pBt->pBt->store;
   }
   return 0;
+}
+
+ChunkStore *doltliteGetChunkStore(sqlite3 *db){
+  return doltliteGetChunkStoreForDb(db, 0);
 }
 
 BtShared *doltliteGetBtShared(sqlite3 *db){
