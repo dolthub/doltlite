@@ -4285,8 +4285,6 @@ strict2 strict2-3.0 intentional -
 subjournal subjournal-2.1 intentional -
 superlock * intentional -
 swarmvtab swarmvtab-2.3 intentional -
-symlink symlink-1.1.2 intentional -
-symlink symlink-1.1.4 intentional -
 symlink symlink-2.1.2 intentional -
 symlink symlink-2.1.4 intentional -
 symlink symlink-2.1.7 intentional -

@@ -74,7 +74,8 @@ int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
 static int csCanonicalFilename(
   sqlite3_vfs *pVfs,
   const char *zFilename,
-  char **pzOut
+  char **pzOut,
+  int flags
 ){
   int nPath;
   int rc;
@@ -100,7 +101,16 @@ static int csCanonicalFilename(
     }
   }
 #endif
-  if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
+  /* Match stock pagerOpen: FullPathname returns OK_SYMLINK when the path
+  ** traverses a symlink; SQLITE_OPEN_NOFOLLOW must refuse that open. */
+  if( rc==SQLITE_OK_SYMLINK ){
+    if( flags & SQLITE_OPEN_NOFOLLOW ){
+      sqlite3_free(zFull);
+      return SQLITE_CANTOPEN_SYMLINK;
+    }
+    rc = SQLITE_OK;
+  }
+  if( rc==SQLITE_OK ){
     rc = chunkStoreDupFilenameDoubleNul(zFull, pzOut);
     sqlite3_free(zFull);
     return rc;
@@ -288,7 +298,7 @@ int chunkStoreOpen(
     return SQLITE_CANTOPEN;
   }
 
-  rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename);
+  rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename, flags);
   if( rc!=SQLITE_OK ){
     chunkStoreClose(cs);
     return rc;
@@ -316,7 +326,8 @@ int chunkStoreOpen(
     /* Honor SQLITE_OPEN_READONLY even when the file is writable. */
     int wantReadOnly = (flags & SQLITE_OPEN_READONLY)!=0;
     int openFlags = (wantReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE)
-                  | SQLITE_OPEN_MAIN_DB;
+                  | SQLITE_OPEN_MAIN_DB
+                  | (flags & SQLITE_OPEN_NOFOLLOW);
     int outFlags = 0;
     rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
@@ -325,7 +336,8 @@ int chunkStoreOpen(
         chunkStoreClose(cs);
         return rc;
       }
-      openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
+      openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB
+                | (flags & SQLITE_OPEN_NOFOLLOW);
       rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
       if( rc != SQLITE_OK ){
         chunkStoreClose(cs);
