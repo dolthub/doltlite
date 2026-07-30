@@ -19,6 +19,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 cat > "$TMP/nofollow.c" <<'EOF'
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
 
@@ -26,8 +28,10 @@ int main(void){
   sqlite3 *db = 0;
   int rc;
   char realp[512], linkp[512];
-  snprintf(realp, sizeof(realp), "%s/real.db", getenv("DL_TMP"));
-  snprintf(linkp, sizeof(linkp), "%s/link.db", getenv("DL_TMP"));
+  const char *tmp = getenv("DL_TMP");
+  if( !tmp || !tmp[0] ){ fprintf(stderr, "DL_TMP not set\n"); return 1; }
+  snprintf(realp, sizeof(realp), "%s/real.db", tmp);
+  snprintf(linkp, sizeof(linkp), "%s/link.db", tmp);
   unlink(realp); unlink(linkp);
 
   rc = sqlite3_open(realp, &db);
