@@ -173,11 +173,11 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
       "VACUUM INTO is not supported for doltlite databases");
     return SQLITE_ERROR;
   }
-  if( !db->autoCommit ){
-    sqlite3SetString(pzErrMsg, db,
-      "cannot VACUUM from within a transaction");
-    return SQLITE_ERROR;
-  }
+  /* Prolly VACUUM is a GC bridge, not stock page rewrite. Do not reject open
+  ** transactions here: doltliteGcCompactWithPhase treats !autoCommit, held
+  ** graph lock, and uncommitted staging as a successful no-op (checkpoint-
+  ** driven compaction uses the same contract). Stock's "cannot VACUUM from
+  ** within a transaction" applies only to the page-vacuum path below. */
   {
     const char *zPhase = 0;
     int rcGc = doltliteGcCompactWithPhase(db, &zPhase);
