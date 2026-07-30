@@ -239,23 +239,33 @@ void chunkStoreUnlock(ChunkStore *cs){
   }
 }
 
-/* True when the file this handle holds has moved out from under us and nothing
-** took its place. GC replaces the store atomically, which keeps the path
-** populated throughout, so a vacant path distinguishes "renamed or unlinked
-** away" from "upgraded beneath us". */
-int csMovedFileIsGone(ChunkStore *cs){
-  int bMoved = 0, exists = 0;
-  if( cs->isMemory || cs->file.pFile==0 ) return 0;
-  if( cs->file.zFilename==0 || cs->file.zFilename[0]==0 ) return 0;
-  if( sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
-                           &bMoved)!=SQLITE_OK || !bMoved ){
-    return 0;
-  }
-  if( sqlite3OsAccess(cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_ACCESS_EXISTS, &exists)!=SQLITE_OK ){
-    return 0;
-  }
-  return !exists;
+/* Whether the file this handle opened has been renamed or unlinked away with
+** nothing taking its place. The caller has already established that the VFS
+** reports it moved; GC replaces the store atomically, which keeps the path
+** populated throughout, so a vacant path is what separates "moved out from under
+** us" from "upgraded beneath us".
+**
+** Never written means never moved: the VFS reports moved whenever it cannot
+** resolve the path at all, so a store whose file is still to be created -- a fresh
+** database, or a backup target before its first write -- is indistinguishable
+** from one renamed away unless this handle has already seen the file on disk.
+**
+** Returns an error rather than a verdict when the existence check itself fails:
+** an I/O error is not evidence about where the database went. */
+static int csMovedFileGone(ChunkStore *cs, int *pGone){
+  int exists = 0;
+  int rc;
+
+  *pGone = 0;
+  if( cs->isMemory || cs->file.pFile==0 ) return SQLITE_OK;
+  if( cs->file.zFilename==0 || cs->file.zFilename[0]==0 ) return SQLITE_OK;
+  if( cs->file.iFileSize<=0 ) return SQLITE_OK;
+
+  rc = sqlite3OsAccess(cs->file.pVfs, cs->file.zFilename,
+                       SQLITE_ACCESS_EXISTS, &exists);
+  if( rc!=SQLITE_OK ) return rc;
+  *pGone = !exists;
+  return SQLITE_OK;
 }
 
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
@@ -289,7 +299,10 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     ** replace. Reporting a change would reload by path; keep the handle we hold
     ** so reads continue to see the database. Nothing is latched, so renaming the
     ** file back resumes normal operation. */
-    if( csMovedFileIsGone(cs) ){
+    int bGone = 0;
+    rc = csMovedFileGone(cs, &bGone);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bGone ){
       cs->movedReadOnly = 1;
       *pChanged = 0;
       return SQLITE_OK;

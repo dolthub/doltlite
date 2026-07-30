@@ -2066,8 +2066,6 @@ backup_malloc backup_malloc-1.transient.4  # OOM fault-point shift + harness cas
 backup_malloc backup_malloc-1.transient.5  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.6  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.35  # OOM fault-point shift + harness cascade (+SHARED graph lock)
-backup_malloc backup_malloc-1.transient.66  # OOM fault-point shift + harness cascade
-backup_malloc backup_malloc-1.transient.67  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.0  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.1  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.2  # OOM fault-point shift + harness cascade

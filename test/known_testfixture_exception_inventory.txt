@@ -200,8 +200,6 @@ backup_malloc backup_malloc-1.transient.1 unsupported https://github.com/dolthub
 backup_malloc backup_malloc-1.transient.2 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.3 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.35 unsupported https://github.com/dolthub/doltlite/issues/1839
-backup_malloc backup_malloc-1.transient.66 unsupported https://github.com/dolthub/doltlite/issues/1839
-backup_malloc backup_malloc-1.transient.67 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.4 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.5 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.6 unsupported https://github.com/dolthub/doltlite/issues/1839
