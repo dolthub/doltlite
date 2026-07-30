@@ -646,8 +646,6 @@ without_rowid7 without_rowid7-3.6
 # review in https://github.com/dolthub/doltlite/issues/1119
 # ---------------------------------------------------------------------------
 attach attach-10.2
-attach attach-8.1
-attach attach-8.2
 attach attach-8.3
 attach attach-8.4
 attach attach-2.10  # canonical adoption: sqlite_master row order after schema commit
@@ -1937,7 +1935,6 @@ corruptG corruptG-1.2  # stock header corruption: store rejects differently or m
 corruptG corruptG-1.3  # stock header corruption: store rejects differently or misses the offset
 corruptG corruptG-1.4  # stock header corruption: store rejects differently or misses the offset
 corruptG corruptG-2.1  # stock header corruption: store rejects differently or misses the offset
-corruptH corruptH-2.2  # stock-page corruption injection; offset misses + harness footgun cascade
 corruptH corruptH-2.3  # stock-page corruption injection; offset misses + harness footgun cascade
 corruptJ corruptJ-2.2  # stock-page corruption injection; hexio dump reads chunk-store bytes
 incrblob3 incrblob3-7.2  # stock schema-cookie poke at offsets 40/24 corrupts the checksummed store
@@ -2047,7 +2044,6 @@ backup2 backup2-5  # backup format/file hash and error-text differ; in-memory ba
 backup2 backup2-6  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-7  # backup format/file hash and error-text differ; in-memory backup rejected
 backup2 backup2-11  # backup format/file hash and error-text differ; in-memory backup rejected
-backup2 backup2-12  # backup format/file hash and error-text differ; in-memory backup rejected
 backup4 backup4-1.1  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-2.2  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-2.3  # chunk-store file sizes; in-memory doltlite backup rejected
@@ -2472,8 +2468,6 @@ symlink symlink-2.2.7  # no -journal/-wal sidecars; journal_mode fixed at wal
 symlink symlink-4.2.2  # no -journal/-wal sidecars; journal_mode fixed at wal
 symlink symlink-4.3.2  # no -journal/-wal sidecars; journal_mode fixed at wal
 symlink symlink-4.4.2  # no -journal/-wal sidecars; journal_mode fixed at wal
-syscall syscall-7.2  # fault-injected syscall error text; chunk-store file size
-syscall syscall-7.3  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.1  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.3  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.4.1  # fault-injected syscall error text; chunk-store file size
@@ -4615,14 +4609,8 @@ corrupt8 corrupt8-2.1024.6
 # or never land at all so the read returns the intact row (1.9.2).
 corruptB corruptB-1.6.2
 corruptB corruptB-1.7.2
-corruptB corruptB-1.8.1
 corruptB corruptB-1.8.2
-corruptB corruptB-1.9.1
-corruptB corruptB-1.9.2
-corruptB corruptB-2.1.1
 corruptB corruptB-2.1.2
-corruptB corruptB-3.1.1
-corruptB corruptB-3.1.2
 
 # createtab: raw-format file-size compare; the doltlite chunk file is not
 # sized in 1024-byte pages and does not grow with auto_vacuum pointer-map
@@ -6415,3 +6403,30 @@ sysfault sysfault-2.2-vfsfault-transient.103
 sysfault sysfault-2.2-vfsfault-transient.104
 sysfault sysfault-2.2-vfsfault-transient.105
 sysfault sysfault-2.2-vfsfault-transient.106
+
+# crash4: first-commit sector trash; reopen surfaces NOTADB (was crash)
+crash4 crash4-1.1.2  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor
+crash4 crash4-1.1.3  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor
+# filefmt: stock SQLite page-header format probes (was crash on eager open)
+filefmt filefmt-1.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.4  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.512.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.512.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.1024.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.1024.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.2048.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.2048.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.4096.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.4096.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.8192.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.8192.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.16384.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.16384.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.32768.1  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.5.32768.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.6  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.7  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-1.8  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-2.1.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-2.1.6  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+filefmt filefmt-2.2.2  # SQLite page-header/format bytes; CTLD chunk store has no stock file format

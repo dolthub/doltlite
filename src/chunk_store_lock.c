@@ -371,6 +371,13 @@ int csReloadFromDisk(ChunkStore *cs){
                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
+  /* Deferred NOTADB opens succeed for stock open timing, but a reload must
+  ** not adopt a short/garbage file over a live store. */
+  if( tmp.notADatabase ){
+    chunkStoreClose(&tmp);
+    return SQLITE_NOTADB;
+  }
+
   /* Reload must not replace a writable store with a fallback read-only one. */
   if( tmp.readOnly && !cs->readOnly ){
     chunkStoreClose(&tmp);

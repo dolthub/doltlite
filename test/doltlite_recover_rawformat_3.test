@@ -444,7 +444,7 @@ do_test doltlite_recover_rawformat_3-6.3 {
   set rc [db errorcode]
   forcedelete testnotdb.db
   list $r $rc [db one {SELECT 1}]
-} {{1 {unable to open database: testnotdb.db}} 10 1}
+} {{1 {file is not a database}} 26 1}
 do_test doltlite_recover_rawformat_3-6.4 {
   forcedelete testex.db
   sqlite3 dbex testex.db
