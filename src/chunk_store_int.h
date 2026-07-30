@@ -28,7 +28,6 @@ int csFileLockPromote(sqlite3_file *pFile);
 void csFileUnlock(sqlite3_file *pFile, char **pzName);
 int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
                  sqlite3_file **ppFile, char **pzName);
-int csMovedFileIsGone(ChunkStore *cs);
 int csReloadFromDisk(ChunkStore *cs);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
 int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize);
