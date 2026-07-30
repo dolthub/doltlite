@@ -68,13 +68,14 @@ rm -f "/tmp/test_vac_into_target_$$.db"
 db_rm "$DB"
 
 echo ""
-echo "--- VACUUM inside explicit transaction is refused ---"
+echo "--- VACUUM inside explicit transaction is a GC no-op ---"
 
 DB=/tmp/test_vac_txn_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1);" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "vacuum_in_txn_rejected" \
-  "BEGIN; VACUUM;" \
-  "cannot VACUUM from within a transaction" "$DB"
+# Prolly VACUUM bridges to GC; open transactions skip compaction (SQLITE_OK).
+run_test "vacuum_in_txn_noop" \
+  "BEGIN; VACUUM; SELECT count(*) FROM t; COMMIT;" \
+  "1" "$DB"
 db_rm "$DB"
 
 echo ""

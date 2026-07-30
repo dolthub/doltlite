@@ -4623,6 +4623,8 @@ e_vacuum e_vacuum-1.3.3.2  # page_size/page_count pair
 e_vacuum e_vacuum-2.1.8  # VACUUM INTO-style size comparison: file not rebuilt smaller
 e_vacuum e_vacuum-3.1.2  # VACUUM-as-gc does not renumber free rowids (stock expectation predates rowid preservation)
 e_vacuum e_vacuum-3.1.6  # VACUUM INTO is not supported for doltlite databases (intentional error)
+e_vacuum e_vacuum-3.2.1.2  # prolly VACUUM is GC: open transaction is SQLITE_OK no-op, not stock refuse
+e_vacuum e_vacuum-3.2.1.6  # prolly VACUUM is GC: open savepoint/txn is SQLITE_OK no-op, not stock refuse
 e_vacuum e_vacuum-3.2.2.1  # "cannot VACUUM - SQL statements in progress" never raised (gc path skips the nVdbeActive check)
 e_vacuum e_vacuum-3.3.1  # PRAGMA auto_vacuum reads back 0 (accepted as no-op)
 e_vacuum e_vacuum-3.3.2.1  # file size after auto_vacuum=FULL deletes: no reclamation
@@ -6222,6 +6224,7 @@ shared3 shared3-2.8
 # ── vacuum ──
 # VACUUM on doltlite format runs the chunk-store GC (dolt_gc) instead of
 # rebuilding page images, so stock page-layout side effects don't apply.
+vacuum vacuum-2.1.1  # prolly VACUUM is GC: open transaction is SQLITE_OK no-op, not stock refuse
 vacuum vacuum-5.1    # INSERT NULL into `int primary key` errors: doltlite PK tables enforce NOT NULL where stock's rowid-table quirk allows it
 vacuum vacuum-7.1    # PRAGMA freelist_count is 0 — no freelist on a chunk store
 vacuum vacuum-7.6    # PRAGMA auto_vacuum reads back 0 after set (accepted as no-op, mode not persisted)
