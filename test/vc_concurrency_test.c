@@ -8,7 +8,9 @@
 
 #define N_WORKERS 2
 #define N_COMMITS_PER_WORKER 6
-#define N_OPERATION_ATTEMPTS 400
+/* CI multi-process runs can hold the graph lock across a full commit;
+** budget enough wall time for peer contention (was 400*5ms ~= 2s). */
+#define N_OPERATION_ATTEMPTS 1200
 
 static int nPass = 0;
 static int nFail = 0;
@@ -87,7 +89,7 @@ static int execSql(sqlite3 *db, const char *sql){
 
 static int execSqlWithRetry(sqlite3 *db, const char *sql){
   int attempt;
-  for( attempt=0; attempt<400; attempt++ ){
+  for( attempt=0; attempt<N_OPERATION_ATTEMPTS; attempt++ ){
     char *err = 0;
     int rc = sqlite3_exec(db, sql, 0, 0, &err);
     if( rc==SQLITE_OK ){
@@ -96,12 +98,12 @@ static int execSqlWithRetry(sqlite3 *db, const char *sql){
     }
     if( rc==SQLITE_ERROR && isRetryableMsg(err ? err : sqlite3_errmsg(db)) ){
       sqlite3_free(err);
-      sqlite3_sleep(5);
+      sqlite3_sleep(10);
       continue;
     }
     sqlite3_free(err);
     if( !isRetryableRc(rc) ) return rc;
-    sqlite3_sleep(5);
+    sqlite3_sleep(10);
   }
   return SQLITE_BUSY;
 }
@@ -109,12 +111,12 @@ static int execSqlWithRetry(sqlite3 *db, const char *sql){
 static int queryTextWithRetry(sqlite3 *db, const char *sql, char *out, int nOut){
   int attempt;
   out[0] = 0;
-  for( attempt=0; attempt<400; attempt++ ){
+  for( attempt=0; attempt<N_OPERATION_ATTEMPTS; attempt++ ){
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if( rc!=SQLITE_OK ){
       if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
-        sqlite3_sleep(5);
+        sqlite3_sleep(10);
         continue;
       }
       snprintf(out, nOut, "ERROR: %s", sqlite3_errmsg(db));
@@ -136,7 +138,7 @@ static int queryTextWithRetry(sqlite3 *db, const char *sql, char *out, int nOut)
       snprintf(out, nOut, "STEP_ERR(%d)", rc);
       return rc;
     }
-    sqlite3_sleep(5);
+    sqlite3_sleep(10);
   }
   snprintf(out, nOut, "BUSY");
   return SQLITE_BUSY;
@@ -155,7 +157,7 @@ static int queryCommitWithRetry(sqlite3 *db, const char *sql, char *out, int nOu
         return rc;
       }
       if( isRetryableRc(rc) || isRetryableMsg(msg) ){
-        sqlite3_sleep(5);
+        sqlite3_sleep(10);
         continue;
       }
       snprintf(out, nOut, "ERROR: %s", msg);
@@ -178,7 +180,7 @@ static int queryCommitWithRetry(sqlite3 *db, const char *sql, char *out, int nOu
       return rc;
     }
     if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
-      sqlite3_sleep(5);
+      sqlite3_sleep(10);
       continue;
     }
     snprintf(out, nOut, "%s", sqlite3_errmsg(db));
@@ -280,7 +282,7 @@ static int runWorker(const char *path, int worker){
         rc = queryIntWithRetry(db, sql, &branchCount);
         if( rc!=SQLITE_OK ){
           if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
-            sqlite3_sleep(5);
+            sqlite3_sleep(10);
             rc = reopenDb(path, &db);
             if( rc!=SQLITE_OK ) return 11;
             continue;
@@ -288,7 +290,7 @@ static int runWorker(const char *path, int worker){
           goto worker_error;
         }
         if( branchCount<i ){
-          sqlite3_sleep(5);
+          sqlite3_sleep(10);
           rc = reopenDb(path, &db);
           if( rc!=SQLITE_OK ) return 11;
           continue;
@@ -300,7 +302,7 @@ static int runWorker(const char *path, int worker){
         rc = queryIntWithRetry(db, sql, &branchCount);
         if( rc!=SQLITE_OK ){
           if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
-            sqlite3_sleep(5);
+            sqlite3_sleep(10);
             rc = reopenDb(path, &db);
             if( rc!=SQLITE_OK ) return 11;
             continue;
@@ -308,7 +310,7 @@ static int runWorker(const char *path, int worker){
           goto worker_error;
         }
         if( branchCount<i ){
-          sqlite3_sleep(5);
+          sqlite3_sleep(10);
           rc = reopenDb(path, &db);
           if( rc!=SQLITE_OK ) return 11;
           continue;
@@ -317,13 +319,13 @@ static int runWorker(const char *path, int worker){
         break;
       }
       if( isCommitConflictMsg(buf) || isCleanWorkingTreeMsg(buf) ){
-        sqlite3_sleep(5);
+        sqlite3_sleep(10);
         rc = reopenDb(path, &db);
         if( rc!=SQLITE_OK ) return 11;
         continue;
       }
       if( rc==SQLITE_BUSY || rc==SQLITE_LOCKED || rc==SQLITE_SCHEMA ){
-        sqlite3_sleep(5);
+        sqlite3_sleep(10);
         rc = reopenDb(path, &db);
         if( rc!=SQLITE_OK ) return 11;
         continue;
