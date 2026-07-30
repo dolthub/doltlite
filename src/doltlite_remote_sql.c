@@ -912,7 +912,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
     if( n==0 ){
-      sqlite3_result_text(ctx, "no credentials; run dolt_creds_new()", -1,
+      sqlite3_result_text(ctx, "no credentials; run SELECT dolt_creds_new()", -1,
                           SQLITE_STATIC);
       doltliteCredsFreeList(kids, n);
       return;
@@ -950,7 +950,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }else{
     doltliteVcResultError(ctx, db,
-        "usage: dolt_creds(['list'] | 'rm', <kid>); use dolt_creds_new() to create");
+        "usage: dolt_creds(['list'] | 'rm', <kid>); use SELECT dolt_creds_new() to create");
   }
 }
 #endif /* DOLTLITE_HAVE_AUTH */
