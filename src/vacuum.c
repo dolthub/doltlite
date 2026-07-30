@@ -173,11 +173,11 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
       "VACUUM INTO is not supported for doltlite databases");
     return SQLITE_ERROR;
   }
-  if( !db->autoCommit ){
-    sqlite3SetString(pzErrMsg, db,
-      "cannot VACUUM from within a transaction");
-    return SQLITE_ERROR;
-  }
+  /* Prolly VACUUM is a GC bridge, not stock page rewrite. Do not reject open
+  ** transactions here: doltliteGcCompactWithPhase treats !autoCommit, held
+  ** graph lock, and uncommitted staging as a successful no-op (checkpoint-
+  ** driven compaction uses the same contract). Stock's "cannot VACUUM from
+  ** within a transaction" applies only to the page-vacuum path below. */
   {
     const char *zPhase = 0;
     int rcGc = doltliteGcCompactWithPhase(db, &zPhase);
@@ -185,6 +185,12 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
       if( rcGc==SQLITE_NOMEM || rcGc==SQLITE_IOERR_NOMEM ){
         sqlite3SetString(pzErrMsg, db, "out of memory");
       }else if( rcGc==SQLITE_FULL ){
+        sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
+      }else if( (rcGc & 0xff)==SQLITE_IOERR ){
+        /* Stock VACUUM surfaces "disk I/O error" (etc.), not a GC phase
+        ** label. faultsim harnesses accept {1 {disk I/O error}} as a
+        ** valid injected-IO outcome (pagerfault3-1). Keep phase text for
+        ** non-IO failures and for the dolt_gc() SQL function. */
         sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
       }else{
         sqlite3SetString(pzErrMsg, db, zPhase ? zPhase : sqlite3ErrStr(rcGc));
