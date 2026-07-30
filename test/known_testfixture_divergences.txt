@@ -2483,17 +2483,15 @@ shared8 shared8-1.4  # shared-cache schema sharing premise inapplicable
 shared8 shared8-1.5  # shared-cache schema sharing premise inapplicable
 shared8 shared8-1.6  # shared-cache schema sharing premise inapplicable
 shared8 shared8-1.7  # shared-cache schema sharing premise inapplicable
-symlink symlink-1.1.2  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-1.1.4  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.1.2  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.1.4  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.1.7  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.2.2  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.2.4  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-2.2.7  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-4.2.2  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-4.3.2  # opens through renamed/symlinked paths succeed (deferred open)
-symlink symlink-4.4.2  # opens through renamed/symlinked paths succeed (deferred open)
+symlink symlink-2.1.2  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-2.1.4  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-2.1.7  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-2.2.2  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-2.2.4  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-2.2.7  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-4.2.2  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-4.3.2  # no -journal/-wal sidecars; journal_mode fixed at wal
+symlink symlink-4.4.2  # no -journal/-wal sidecars; journal_mode fixed at wal
 syscall syscall-7.2  # fault-injected syscall error text; chunk-store file size
 syscall syscall-7.3  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.1  # fault-injected syscall error text; chunk-store file size

@@ -70,6 +70,7 @@ doltlite_attach_sqlite.sh
 doltlite_dbpage.sh
 doltlite_arm_correctness.sh
 doltlite_open_sqlite_file.sh
+doltlite_open_nofollow.sh
 doltlite_comparison.sh
 doltlite_pragma_auto_vacuum.sh
 doltlite_pragma_encoding.sh
