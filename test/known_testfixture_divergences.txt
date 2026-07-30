@@ -661,7 +661,7 @@ lock4 lock4-1.1  # raw file-size metric: chunk files are not 2048-byte page file
 
 # misc7 (14.x plan-shape block ifcapable-gated; 6.1 exhausts fds quickly on
 # CI's default nofile limit -- high-fd machines need `ulimit -n 256` locally).
-misc7 misc7-5  # bogus-path open: doltlite defers the open error (SQLITE_OK) vs stock CANTOPEN
+misc7 misc7-5  # journal path is a directory (mydir-journal/): stock fails CREATE; doltlite has no -journal sidecar
 misc7 misc7-7.0  # shared-cache read expects "database is locked"; MVCC snapshot read proceeds
 misc7 misc7-10  # echo vtab over a PK-clustered backing table; doltlite-correct behavior in doltlite_recover_misc7 1.x
 misc7 misc7-11  # same echo-on-clustered class
@@ -1230,20 +1230,12 @@ tkt-f3e5abed55 tkt-f3e5abed55-2.5
 # open-timing, locking, and catalog level (not row data). Recovered into the
 # gated suite after the capi3-7.x raw file-format block was gated out and the
 # prollyBtreeRollback use-after-free was fixed.
-capi3 capi3-3.3    # bogus-path open: doltlite defers the open error (SQLITE_OK) vs stock SQLITE_CANTOPEN
-capi3 capi3-3.4    # same: errmsg "not an error" vs "unable to open database file"
-capi3 capi3-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
-capi3 capi3-4.4    # same (utf16 errmsg)
 capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
 # capi3c is the sqlite3_prepare_v2 mirror of capi3; its raw file-format block
 # (capi3c-7.x) is gated with ifcapable !doltlite like capi3's, which lets the
 # remaining 294 tests run. Same divergence classes as capi3 plus the MVCC
 # locking model.
-capi3c capi3c-3.3    # bogus-path open: doltlite defers the open error (SQLITE_OK) vs stock SQLITE_CANTOPEN
-capi3c capi3c-3.4    # same: errmsg "not an error" vs "unable to open database file"
-capi3c capi3c-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
-capi3c capi3c-4.4    # same (utf16 errmsg)
 capi3c capi3c-8.3    # all-NULL sqlite_master row tolerated at schema load; stock refuses ("malformed database schema")
 capi3c capi3-11.3.4  # upstream misnamed test inside capi3c.test; PRAGMA lock_status reports doltlite's locking model
 capi3c capi3c-18.3   # BEGIN EXCLUSIVE on a 2nd connection does not block an MVCC snapshot reader (SQLITE_ROW vs SQLITE_BUSY)
@@ -1857,12 +1849,13 @@ attach2 attach2-4.11.2  # PRAGMA lock_status: doltlite locking model
 attach2 attach2-4.12    # PRAGMA lock_status: doltlite locking model
 attach2 attach2-4.15    # PRAGMA lock_status: doltlite locking model
 
-# attach3-11.x — ATTACH of a path in a nonexistent directory: stock fails at
-# open, doltlite defers (no file is created; the first write properly errors
-# "unable to open database file" — verified). 11.1 cascades: the name from
-# 11.0's successful ATTACH is still in use.
-attach3 attach3-11.0  # deferred open: ATTACH succeeds, write errors later (verified)
-attach3 attach3-11.1  # cascade: aux name still attached after 11.0
+
+# Parent-dir Access probe adds allocations on multi-component open/ATTACH
+# paths, shifting OOM fault indices (same #1859 brittleness as backup_malloc).
+attachmalloc attachmalloc-1.transient.472  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.892  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.1381  # OOM fault-point shift (parent probe)
+mallocD mallocD-4.transient.107  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
@@ -1979,8 +1972,7 @@ memdb memdb-9.1  # rowid on composite-PK (WITHOUT ROWID) table; auto_vacuum reje
 memjournal memjournal-1.0  # journal_mode pragma rejected + cascade
 mmapcorrupt mmapcorrupt-2.1  # mmap stock-page corruption: offset misses chunk-store structures
 mmapwarm mmapwarm-1.0  # PRAGMA page_count: chunk store has no SQLite page count
-oserror oserror-1.3.1  # deferred open: connect to a missing path succeeds; reads see an empty db; first write fails loudly
-oserror oserror-1.3.2  # deferred open: connect to a missing path succeeds; reads see an empty db; first write fails loudly
+oserror oserror-1.3.2  # missing-parent open fails via Access probe, so stock open() error-log line is empty
 oserror oserror-2.1.1  # no -wal sidecar to unlink; error log stays empty
 oserror oserror-2.1.2  # no -wal sidecar to unlink; error log stays empty
 pager3 pager3-1.1.1  # journal-file existence probes; journal_mode rejected

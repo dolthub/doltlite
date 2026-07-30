@@ -370,8 +370,10 @@ check "clone into non-empty errors" "1" "$(echo "$result" | grep -c 'not empty')
 result=$("$DB" "$TMPDIR/err.db" "SELECT dolt_clone('/no/scheme');" 2>&1)
 check "clone without scheme errors" "1" "$(echo "$result" | grep -c 'file://')"
 
+# Missing parent fails at remote open (CANTOPEN / "failed to open remote"),
+# not later in doltliteClone ("clone failed").
 result=$("$DB" "$TMPDIR/err2.db" "SELECT dolt_clone('file:///nonexistent/path.db');" 2>&1)
-check "clone nonexistent file errors" "1" "$(echo "$result" | grep -c 'clone failed')"
+check "clone nonexistent file errors" "1" "$(echo "$result" | grep -cE 'failed to open remote|clone failed')"
 
 echo "=== 17. Empty table push/clone ==="
 "$DB" "$TMPDIR/empty_src.db" <<ENDSQL

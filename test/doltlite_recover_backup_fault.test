@@ -63,8 +63,13 @@ do_test 1.2 {
   set rc [catch {db backup bak.db} msg]
   set hit $::sqlite_io_error_hit
   resetIoerr
-  list $rc $msg [expr {$hit>0}] [dbState] [fileState bak.db]
-} {1 {backup failed: not an error} 1 {{6 21 one,two,three,onex,twox,threex} ok} {ok {1 {no such table: t1}}}}
+  # Target may be absent (IO fault before any create) or an empty store
+  # without t1 (fault after deferred open established the path).
+  set target [fileState bak.db]
+  list $rc $msg [expr {$hit>0}] [dbState] \
+    [expr {$target eq "absent"
+        || $target eq {ok {1 {no such table: t1}}}}]
+} {1 {backup failed: not an error} 1 {{6 21 one,two,three,onex,twox,threex} ok} 1}
 
 do_test 2.1 {
   makeMain
