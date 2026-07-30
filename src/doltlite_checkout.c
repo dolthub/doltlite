@@ -1131,7 +1131,11 @@ checkout_done:
     return;
   }
   if( rc==SQLITE_BUSY ){
-    doltliteVcResultError(ctx, db, "database is locked by another connection");
+    /* Keep SQLITE_BUSY (not ERROR) so clients and busy_timeout/retry loops
+    ** treat peer lock contention as retryable, not a hard failure. */
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error(ctx, "database is locked by another connection", -1);
+    sqlite3_result_error_code(ctx, SQLITE_BUSY);
     return;
   }
   if( rc==SQLITE_NOMEM ){

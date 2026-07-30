@@ -1338,7 +1338,6 @@ e_uri e_uri-4.1 intentional -
 e_uri e_uri-4.2 intentional -
 e_uri e_uri-4.3 intentional -
 e_uri e_uri-4.4 intentional -
-e_uri e_uri-4.5 intentional -
 e_vacuum e_vacuum-1.1.1.3 intentional https://github.com/dolthub/doltlite/issues/1840
 e_vacuum e_vacuum-1.1.1.5 intentional https://github.com/dolthub/doltlite/issues/1840
 e_vacuum e_vacuum-1.1.2.5 intentional https://github.com/dolthub/doltlite/issues/1840
@@ -3581,7 +3580,6 @@ nolock nolock-4.3 intentional -
 notnull notnull-6.5 intentional -
 numcast numcast-utf16be.0 intentional -
 numcast numcast-utf16le.0 intentional -
-oserror oserror-1.3.2 intentional -
 oserror oserror-2.1.1 intentional -
 oserror oserror-2.1.2 intentional -
 pager1 * intentional -

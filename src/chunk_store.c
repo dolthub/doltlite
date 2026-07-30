@@ -496,6 +496,16 @@ int chunkStoreOpen(
         if( rc==SQLITE_OK ){
           parentOk = canWrite || exists;
           if( !parentOk ){
+            /* Parent is missing: still attempt OsOpen so the host VFS logs the
+            ** create-path failure like stock. oserror-1.3.2 expects a VFS log
+            ** line naming the failed create-path syscall. Access alone never
+            ** hits that log path. Create cannot succeed without a parent. */
+            sqlite3_file *pProbe = 0;
+            int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                          | SQLITE_OPEN_MAIN_DB
+                          | (flags & SQLITE_OPEN_NOFOLLOW);
+            (void)csOpenFile(pVfs, cs->file.zFilename, &pProbe, openFlags, 0);
+            if( pProbe ) sqlite3OsCloseFree(pProbe);
             chunkStoreClose(cs);
             return SQLITE_CANTOPEN;
           }
