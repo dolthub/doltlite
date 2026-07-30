@@ -161,13 +161,17 @@ do_test doltlite_recover_pragma_output-3.1 {
   forcedelete testerr.db
   forcecopy testdup.db testerr.db
   hexio_write testerr.db 0 [string repeat aa 32]
-  set rc [catch {sqlite3 dberr testerr.db} msg]
+  # Open succeeds (stock lazy validation); first use is NOTADB.
+  set rc [catch {
+    sqlite3 dberr testerr.db
+    dberr eval {SELECT 1}
+  } msg]
   catch {dberr close}
   list $rc $msg
 } {1 {file is not a database}}
 do_catchsql_test doltlite_recover_pragma_output-3.2 {
   ATTACH 'testerr.db' AS bad
-} {1 {unable to open database: testerr.db}}
+} {1 {file is not a database}}
 do_test doltlite_recover_pragma_output-3.2b {
   execsql {
     PRAGMA integrity_check;

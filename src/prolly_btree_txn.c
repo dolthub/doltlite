@@ -674,6 +674,10 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
 
+  /* Garbage/short files open successfully (stock timing) but any first
+  ** use — read or write — is SQLITE_NOTADB without rewriting the file. */
+  if( pBt->store.notADatabase ) return SQLITE_NOTADB;
+
   if( p->inTrans==TRANS_WRITE ){
     return SQLITE_OK;
   }

@@ -152,7 +152,7 @@ do_test doltlite_recover_rawformat_2-3.4 {
   set data [read $fd]
   close $fd
   list $rc $data
-} {{1 {disk I/O error}} SQ}
+} {{1 {file is not a database}} SQ}
 
 do_test doltlite_recover_rawformat_2-3.5 {
   rf2_garbage_file test.db "SQL"
@@ -166,7 +166,7 @@ do_test doltlite_recover_rawformat_2-3.5 {
   set data [read $fd]
   close $fd
   list $rc $data
-} {{1 {disk I/O error}} SQL}
+} {{1 {file is not a database}} SQL}
 
 do_test doltlite_recover_rawformat_2-3.6 {
   forcedelete test.db
@@ -429,7 +429,7 @@ do_test doltlite_recover_rawformat_2-6.5 {
   rf2_garbage_file rf2bug.db "This is not a valid database file"
   set rc [catch {db backup rf2bug.db} msg]
   list $rc $msg [execsql {SELECT count(*) FROM t2}]
-} {1 {cannot open target database: disk I/O error} 16}
+} {1 {backup failed: file is not a database} 16}
 
 do_test doltlite_recover_rawformat_2-6.6 {
   set rc [catch {db backup aux1 rf2bu3.db} msg]
@@ -439,7 +439,7 @@ do_test doltlite_recover_rawformat_2-6.6 {
 do_test doltlite_recover_rawformat_2-6.7 {
   set rc [catch {db restore rf2bug.db} msg]
   list $rc $msg [execsql {SELECT count(*) FROM t2}]
-} {1 {cannot open source database: disk I/O error} 16}
+} {1 {restore failed: file is not a database} 16}
 
 do_test doltlite_recover_rawformat_2-6.8 {
   set rc [catch {db restore aux1 rf2bu1.db} msg]
@@ -702,7 +702,7 @@ do_test doltlite_recover_rawformat_2-18.1 {
   forcedelete test.db
   sqlite3 db test.db
   list $rc $data
-} {{1 {disk I/O error}} {This is not really a database
+} {{1 {file is not a database}} {This is not really a database
 }}
 
 ifcapable fts3 {

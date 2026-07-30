@@ -492,6 +492,7 @@ int chunkStoreCommit(ChunkStore *cs){
   SavedRefsState savedRefs;
 
   memset(&savedRefs, 0, sizeof(savedRefs));
+  if( cs->notADatabase ) return SQLITE_NOTADB;
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
   if( cs->readOnly || cs->movedReadOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);

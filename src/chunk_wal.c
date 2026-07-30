@@ -110,6 +110,7 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->wal.recoveredMidStream = pSrc->wal.recoveredMidStream;
   pDst->wal.cleanCloseMarker = pSrc->wal.cleanCloseMarker;
   pDst->corruptMidStream = pSrc->corruptMidStream;
+  pDst->notADatabase = pSrc->notADatabase;
   REFS_OWNED_COPY(pDst->refs, pSrc->refs);
 
   pSrc->file.pFile = 0;

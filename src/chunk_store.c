@@ -179,6 +179,11 @@ static int csReadManifest(ChunkStore *cs){
   int rc;
 
   rc = sqlite3OsRead(cs->file.pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
+  /* A short file cannot hold a chunk-store header. Stock SQLite maps the same
+  ** class (garbage / truncated open) to SQLITE_NOTADB ("file is not a
+  ** database") rather than a bare IOERR_SHORT_READ / "disk I/O error" — see
+  ** misc5-4.1 / ticket #1370. */
+  if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_NOTADB;
   if( rc != SQLITE_OK ) return rc;
 
   magic = CS_READ_U32(aBuf + CS_MANIFEST_MAGIC_OFF);
@@ -387,6 +392,17 @@ int chunkStoreOpen(
           return SQLITE_OK;
         }
       }
+    }
+    /* Stock defers NOTADB until first use (sqlite3_open succeeds; CREATE
+    ** fails with "file is not a database"). Keep the garbage bytes intact. */
+    if( rc==SQLITE_NOTADB ){
+      cs->notADatabase = 1;
+      cs->index.nChunks = 0;
+      cs->index.iIndexOffset = 0;
+      cs->index.nIndexSize = 0;
+      cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+      csMarkRefsCommitted(cs);
+      return SQLITE_OK;
     }
     if( rc != SQLITE_OK ){
       chunkStoreClose(cs);
@@ -637,6 +653,7 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   int idx = -1;
   int rc;
   *pHas = 0;
+  if( cs->notADatabase ) return SQLITE_NOTADB;
   if( csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash) >= 0 ){
     *pHas = 1;
     return SQLITE_OK;
@@ -665,6 +682,7 @@ int chunkStoreGet(
   *ppData = 0;
   *pnData = 0;
 
+  if( cs->notADatabase ) return SQLITE_NOTADB;
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
 
   rc = csSearchPending(cs, hash, &idx);
@@ -785,6 +803,7 @@ int chunkStoreGetSparse(
   *ppData = 0;
   *pnData = 0;
   *pnDataPhys = 0;
+  if( cs->notADatabase ) return SQLITE_NOTADB;
 
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
 
@@ -983,6 +1002,7 @@ int chunkStorePut(
   int rc;
   ProllyHash h;
 
+  if( cs->notADatabase ) return SQLITE_NOTADB;
   prollyHashCompute(pData, nData, &h);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
@@ -1036,6 +1056,7 @@ int chunkStorePutSparse(
   i64 nTotal64 = (i64)nPrefix + nZeroTail;
   int nData;
 
+  if( cs->notADatabase ) return SQLITE_NOTADB;
   if( nPrefix<0 || nZeroTail<0 || nTotal64 > (i64)0x7fffffff ){
     return SQLITE_TOOBIG;
   }
