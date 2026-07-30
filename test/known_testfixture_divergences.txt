@@ -1410,17 +1410,6 @@ without_rowid5 without_rowid5-5.5  # WITHOUT-ROWID PK is implicitly NOT NULL (#1
 # indexes with a custom collation (same class as collate3/collate4). Feature gap.
 window6 window6-3.1  # index with user-defined collation unsupported
 
-# main — main-2.0 writes garbage ("hi!") to test.db then expects sqlite3_open to
-# SUCCEED (stock opens lazily, defers validation). DoltLite validates the chunk
-# store manifest eagerly at open, so a non-chunk-store file fails to open with a
-# disk I/O error. Eager-open-validation divergence.
-main main-2.0  # eager chunk-store validation at open; stock opens lazily
-
-# misc5 — misc5-4.1 writes "This is not really a database" to test.db then
-# expects "file is not a database" on first access. DoltLite's eager chunk-store
-# open reports "disk I/O error" for the unparseable file instead. Not-a-database
-# detection message differs (no SQLite header to inspect).
-misc5 misc5-4.1  # not-a-database open error message differs (chunk store, not a SQLite file)
 
 # misc1 — misc1-14.2b expects test.db-journal to exist during an open write
 # transaction. DoltLite uses a chunk store, not a rollback journal, so no

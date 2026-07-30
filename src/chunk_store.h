@@ -179,6 +179,10 @@ struct ChunkStore {
                           ** and commits fail SQLITE_CORRUPT, but open itself
                           ** succeeds (stock surfaces corruption on first
                           ** access, never from sqlite3_open) */
+  u8 notADatabase;        /* Header is missing/wrong magic (short file or
+                          ** garbage). Open succeeds like stock; first access
+                          ** returns SQLITE_NOTADB without overwriting the
+                          ** file (ticket #1370 / misc5-4.1). */
   sqlite3_file *pGraphLockFile;
   char *pGraphLockName;        /* owned name kept alive for pGraphLockFile (xOpen contract) */
   sqlite3_mutex *pLockMutex;

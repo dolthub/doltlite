@@ -979,6 +979,12 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
     sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "destination database is not backed by a file");
     return 0;
   }
+  /* Do not raw-copy over (or from) a short/garbage file that stock would
+  ** refuse with SQLITE_NOTADB — ticket #1370 / misc5-4.1. */
+  if( srcCs->notADatabase || destCs->notADatabase ){
+    sqlite3ErrorWithMsg(pDest, SQLITE_NOTADB, "file is not a database");
+    return 0;
+  }
   if( doltliteBackupSameFile(chunkFileGetVfs(&srcCs->file),
                              chunkFileGetFilename(&srcCs->file),
                              chunkFileGetVfs(&destCs->file),

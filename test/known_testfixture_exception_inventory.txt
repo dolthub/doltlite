@@ -3282,7 +3282,6 @@ lock3 lock3-4.1 intentional -
 lock4 lock4-1.1 intentional -
 lock5 * intentional -
 lock7 lock7-1.6 intentional https://github.com/dolthub/doltlite/issues/1846
-main main-2.0 intentional -
 malloc * harness -
 malloc3 * harness -
 mallocAll * harness -
@@ -3349,7 +3348,6 @@ minmax3 minmax3-4.5 intentional -
 minmax3 minmax3-4.6 intentional -
 misc1 misc1-14.2b intentional -
 misc4 misc4-7.1 intentional -
-misc5 misc5-4.1 intentional -
 misc7 misc7-10 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-11 intentional https://github.com/dolthub/doltlite/issues/1840
 misc7 misc7-12.64.3 intentional https://github.com/dolthub/doltlite/issues/1840

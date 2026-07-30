@@ -24,6 +24,12 @@ proc rdI64 {file off} {
 }
 proc openCorrupt {file} {
   if {[catch {sqlite3 dbc $file} msg]} { return $msg }
+  # Stock (and doltlite after deferred NOTADB) succeed at open; first use
+  # surfaces the error. Probe with a trivial statement.
+  if {[catch {dbc eval {SELECT 1}} msg]} {
+    catch {dbc close}
+    return $msg
+  }
   catch {dbc close}
   return opened
 }
@@ -209,7 +215,7 @@ do_test doltlite_recover_corruption-2.12 {
   chan truncate $f 100
   close $f
   openCorrupt rcor.db
-} {disk I/O error}
+} {file is not a database}
 
 do_test doltlite_recover_corruption-2.13 {
   file copy -force rch2.db rcor.db
