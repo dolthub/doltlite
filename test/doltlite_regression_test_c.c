@@ -4507,6 +4507,48 @@ static void run_btree_commit_failure_transactional(void){
   removeDbFiles(dbpath);
 }
 
+static void run_commit_rejects_renamed_database(void){
+#ifndef _WIN32
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char renamedPath[320];
+  int rc;
+
+  printf("=== Commit Rejects Renamed Database Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_commit_rejects_renamed_database");
+  sqlite3_snprintf(sizeof(renamedPath), renamedPath, "%s-renamed", dbpath);
+  removeDbFiles(dbpath);
+  removeDbFiles(renamedPath);
+
+  check("renamed_commit_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("renamed_commit_setup", execSql(db,
+    "CREATE TABLE t1(a,b,c);"
+    "INSERT INTO t1 VALUES(673,'stone','philips');"
+    "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
+  check("renamed_commit_stage", execSql(db,
+    "BEGIN;"
+    "UPDATE t1 SET b='staged';")==SQLITE_OK);
+  check("renamed_commit_rename", rename(dbpath, renamedPath)==0);
+
+  rc = execSqlSilent(db, "COMMIT;");
+  check("renamed_commit_readonly", rc==SQLITE_READONLY);
+  check("renamed_commit_autocommit_restored", sqlite3_get_autocommit(db)==1);
+  check("renamed_commit_connection_rolled_back",
+        strcmp(queryScalarText(db, "SELECT b FROM t1 WHERE a=673"), "stone")==0);
+  sqlite3_close(db);
+  db = 0;
+
+  check("renamed_commit_reopen", open_db(renamedPath, &db)==SQLITE_OK);
+  check("renamed_commit_row_not_durable",
+        strcmp(queryScalarText(db, "SELECT b FROM t1 WHERE a=673"), "stone")==0);
+  check("renamed_commit_status_not_durable",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+  removeDbFiles(renamedPath);
+#endif
+}
+
 static void run_savepoint_restores_session_metadata(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -8766,6 +8808,7 @@ static const RegressionCase aCases[] = {
   { "table_moveto_mutmap_exact_keeps_iteration_aligned", "Table Moveto MutMap Exact Keeps Iteration Aligned Test", run_table_moveto_mutmap_exact_keeps_iteration_aligned },
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
+  { "commit_rejects_renamed_database", "Commit Rejects Renamed Database Test", run_commit_rejects_renamed_database },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
