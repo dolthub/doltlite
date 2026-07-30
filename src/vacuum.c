@@ -186,6 +186,12 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
         sqlite3SetString(pzErrMsg, db, "out of memory");
       }else if( rcGc==SQLITE_FULL ){
         sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
+      }else if( (rcGc & 0xff)==SQLITE_IOERR ){
+        /* Stock VACUUM surfaces "disk I/O error" (etc.), not a GC phase
+        ** label. faultsim harnesses accept {1 {disk I/O error}} as a
+        ** valid injected-IO outcome (pagerfault3-1). Keep phase text for
+        ** non-IO failures and for the dolt_gc() SQL function. */
+        sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
       }else{
         sqlite3SetString(pzErrMsg, db, zPhase ? zPhase : sqlite3ErrStr(rcGc));
       }

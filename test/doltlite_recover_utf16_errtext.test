@@ -95,7 +95,7 @@ do_test doltlite_recover_utf16_errtext-4.0 {
   faultsim_save_and_close
 } {}
 
-set ::gc_errors_seen 0
+set ::io_errors_seen 0
 set ::gc_allowed [list \
   {0 {}} \
   {1 {failed to acquire lock for gc}} \
@@ -114,7 +114,12 @@ for {set i 1} {$i<=25} {incr i} {
     set ::sqlite_io_error_hit 0
     set ::sqlite_io_error_hardhit 0
     set res [list $rc $msg]
-    if {[string match {1 {gc * phase failed}} $res]} { incr ::gc_errors_seen }
+    # VACUUM maps to dolt_gc; IO faults surface as stock "disk I/O error"
+    # (not a phase label). Count injected-IO failures for the coverage assert.
+    if {$res eq {1 {disk I/O error}}
+        || [string match {1 {gc * phase failed}} $res]} {
+      incr ::io_errors_seen
+    }
     list \
       [expr {[lsearch -exact $::gc_allowed $res]>=0 ? "allowed" : $res}] \
       [execsql {SELECT count(*), length(x) FROM t1}] \
@@ -123,7 +128,7 @@ for {set i 1} {$i<=25} {incr i} {
 }
 
 do_test doltlite_recover_utf16_errtext-4.26 {
-  expr {$::gc_errors_seen > 0}
+  expr {$::io_errors_seen > 0}
 } {1}
 
 do_test doltlite_recover_utf16_errtext-4.27 {
@@ -164,6 +169,6 @@ do_test doltlite_recover_utf16_errtext-4.28 {
   list $rc $msg [string match SQLITE_IOERR* $errcode] \
        [string match SQLITE_IOERR* $xerrcode] \
        [execsql {PRAGMA integrity_check}]
-} {1 {gc sweep phase failed} 1 1 ok}
+} {1 {disk I/O error} 1 1 ok}
 
 finish_test
