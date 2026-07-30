@@ -2076,6 +2076,9 @@ backup4 backup4-2.4  # chunk-store file sizes; in-memory doltlite backup rejecte
 backup4 backup4-3.2  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-3.3  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-3.4  # chunk-store file sizes; in-memory doltlite backup rejected
+# backup_malloc: the indices below are fault-sweep positions, not stable
+# identities. Any change to the allocation sequence moves them, so this block
+# has to be re-derived rather than trusted -- tracked as #1859.
 # backup_malloc: raw sqlite3_backup_step page-copy fault points do not line up
 # with DoltLite's supported Tcl backup path. Native coverage in
 # doltlite_recover_backup_fault asserts clean OOM failure at the Tcl backup
@@ -2088,6 +2091,8 @@ backup_malloc backup_malloc-1.transient.4  # OOM fault-point shift + harness cas
 backup_malloc backup_malloc-1.transient.5  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.6  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.transient.35  # OOM fault-point shift + harness cascade (+SHARED graph lock)
+backup_malloc backup_malloc-1.transient.66  # OOM fault-point shift + harness cascade
+backup_malloc backup_malloc-1.transient.67  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.0  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.1  # OOM fault-point shift + harness cascade
 backup_malloc backup_malloc-1.persistent.2  # OOM fault-point shift + harness cascade
@@ -2427,13 +2432,9 @@ nolock nolock-3.2  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-3.12  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.1  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.3  # VFS xLock call counts differ under chunk-store locking
-pager4 pager4-1.3  # rename-while-open: the reload reopens by path with OPEN_CREATE, so the vacated path is recreated empty and adopted -- the write is not refused
 pager4 pager4-1.4  # rename-while-open: commit goes BY PATH, creating a fresh db at the original path (silent fork)
 pager4 pager4-1.7  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
 pager4 pager4-1.8  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
-pager4 pager4-1.9  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
-pager4 pager4-1.10  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
-pager4 pager4-1.11  # journal_mode rejection aborts the catchsql batch; rename behavior never reached
 resetdb resetdb-100  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-110  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-200  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ

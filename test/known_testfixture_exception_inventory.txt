@@ -202,6 +202,8 @@ backup_malloc backup_malloc-1.transient.1 unsupported https://github.com/dolthub
 backup_malloc backup_malloc-1.transient.2 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.3 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.35 unsupported https://github.com/dolthub/doltlite/issues/1839
+backup_malloc backup_malloc-1.transient.66 unsupported https://github.com/dolthub/doltlite/issues/1839
+backup_malloc backup_malloc-1.transient.67 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.4 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.5 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup_malloc backup_malloc-1.transient.6 unsupported https://github.com/dolthub/doltlite/issues/1839
@@ -3588,13 +3590,9 @@ pager2 pager2-3.1 intentional -
 pager3 pager3-1.1.1 intentional https://github.com/dolthub/doltlite/issues/1846
 pager3 pager3-1.4.2 intentional https://github.com/dolthub/doltlite/issues/1846
 pager3 pager3-1.5.2 intentional https://github.com/dolthub/doltlite/issues/1846
-pager4 pager4-1.10 engine-gap https://github.com/dolthub/doltlite/issues/1853
-pager4 pager4-1.11 engine-gap https://github.com/dolthub/doltlite/issues/1853
-pager4 pager4-1.3 engine-gap https://github.com/dolthub/doltlite/issues/1853
 pager4 pager4-1.4 engine-gap https://github.com/dolthub/doltlite/issues/1853
 pager4 pager4-1.7 intentional https://github.com/dolthub/doltlite/issues/1846
 pager4 pager4-1.8 intentional https://github.com/dolthub/doltlite/issues/1846
-pager4 pager4-1.9 engine-gap https://github.com/dolthub/doltlite/issues/1853
 pagerfault * harness -
 pagerfault2 * harness -
 pagerfault3 pagerfault3-1-ioerr-transient.1 intentional -
