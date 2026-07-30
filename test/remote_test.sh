@@ -407,6 +407,35 @@ check "clone 500 rows returns 0" "0" "$result"
 result=$("$DB" "$TMPDIR/large_clone.db" "SELECT count(*) FROM big;")
 check "clone has 500 rows" "500" "$result"
 
+echo "=== 18b. Large transfers drain below the heap limit ==="
+"$DB" "$TMPDIR/drain_src.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER);
+WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<4000000)
+INSERT INTO t SELECT x, 'row_'||x, x%1000 FROM c;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','4M');
+SELECT dolt_remote('add','origin','$R/drain_remote.db');
+.quit
+ENDSQL
+if result=$("$DB" "$TMPDIR/drain_src.db" \
+  "PRAGMA hard_heap_limit=134217728; SELECT dolt_push('origin','main');" 2>&1); then
+  actual=0
+else
+  actual=1
+fi
+check "large push stays below heap limit" "0" "$actual"
+
+if result=$("$DB" "$TMPDIR/drain_clone.db" \
+  "PRAGMA hard_heap_limit=134217728; SELECT dolt_clone('$R/drain_remote.db');" 2>&1); then
+  actual=0
+else
+  actual=1
+fi
+check "large clone stays below heap limit" "0" "$actual"
+
+result=$("$DB" "$TMPDIR/drain_clone.db" "SELECT count(*) FROM t;")
+check "large bounded clone has all rows" "4000000" "$result"
+
 echo "=== 19. Push to second remote ==="
 "$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','mirror','$R/mirror.db'); SELECT dolt_push('mirror','main');" > /dev/null
 src_head=$("$DB" "$TMPDIR/src.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")

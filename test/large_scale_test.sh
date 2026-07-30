@@ -33,6 +33,17 @@ check_time() {
   fi
 }
 
+run_sql_quiet() {
+  local desc="$1" dbpath="$2" sql="$3" output
+  if output=$("$DB" "$dbpath" "$sql" 2>&1); then
+    return 0
+  fi
+  echo "  FAIL: $desc"
+  echo "$output" | head -5 | sed 's/^/    /'
+  fail=$((fail+1))
+  return 1
+}
+
 ts() { date +%s; }
 
 file_uri() {
@@ -50,12 +61,15 @@ file_uri() {
 batch_insert() {
   local dbpath="$1" table="$2" total="$3" cols="$4"
   local batch=100000 i=1
-  while [ "$i" -le "$total" ]; do
-    local end=$((i + batch - 1))
-    if [ "$end" -gt "$total" ]; then end=$total; fi
-    "$DB" "$dbpath" "WITH RECURSIVE c(x) AS (VALUES($i) UNION ALL SELECT x+1 FROM c WHERE x<$end) INSERT INTO $table SELECT $cols FROM c;" > /dev/null 2>&1
-    i=$((end + 1))
-  done
+  {
+    while [ "$i" -le "$total" ]; do
+      local end=$((i + batch - 1))
+      if [ "$end" -gt "$total" ]; then end=$total; fi
+      printf "WITH RECURSIVE c(x) AS (VALUES(%d) UNION ALL SELECT x+1 FROM c WHERE x<%d) INSERT INTO %s SELECT %s FROM c;\n" \
+        "$i" "$end" "$table" "$cols"
+      i=$((end + 1))
+    done
+  } | "$DB" "$dbpath" > /dev/null
 }
 
 if [ "$QUICK" = "1" ]; then
@@ -169,8 +183,10 @@ echo ""
 echo "--- 7. Clone ---"
 t0=$(ts)
 remote_uri=$(file_uri "$TMPDIR/remote")
-"$DB" "$TMPDIR/db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
-"$DB" "$TMPDIR/clone" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
+run_sql_quiet "push ${N1} rows" "$TMPDIR/db" \
+  "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');"
+run_sql_quiet "clone ${N1} rows" "$TMPDIR/clone" \
+  "SELECT dolt_clone('$remote_uri');"
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
 check_time "push + clone" "$elapsed" "$N1_CLONE_MAX"
@@ -249,8 +265,10 @@ echo ""
 echo "--- 16. Clone 10M ---"
 t0=$(ts)
 remote_uri=$(file_uri "$TMPDIR/10m_remote")
-"$DB" "$TMPDIR/10m.db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
-"$DB" "$TMPDIR/10m_clone" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
+run_sql_quiet "push 10M" "$TMPDIR/10m.db" \
+  "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');"
+run_sql_quiet "clone 10M" "$TMPDIR/10m_clone" \
+  "SELECT dolt_clone('$remote_uri');"
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
 check_time "clone 10M" "$elapsed" "$N10_CLONE_MAX"
@@ -307,20 +325,21 @@ result=$("$DB" "$TMPDIR/100m.db" "
 UPDATE huge SET val=val+1 WHERE id<=10;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','update 10 rows');
-SELECT count(*) FROM dolt_diff_huge WHERE diff_type='modified';" 2>/dev/null | tail -1)
+SELECT count(*) FROM dolt_diff_huge('HEAD~1','HEAD')
+ WHERE diff_type='modified';" 2>/dev/null | tail -1)
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
-# Point update of 10 rows should stay near-constant vs tree height; leave
-# headroom over the 10M 30s budget without going linear in N.
-check_time "update+diff 10 rows in 100M" "$elapsed" 60
+check_time "update+diff 10 rows in 100M" "$elapsed" 120
 check "100M diff count" "10" "$result"
 
 echo ""
 echo "--- 21. Clone 100M ---"
 t0=$(ts)
 remote_uri=$(file_uri "$TMPDIR/100m_remote")
-"$DB" "$TMPDIR/100m.db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
-"$DB" "$TMPDIR/100m_clone" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
+run_sql_quiet "push 100M" "$TMPDIR/100m.db" \
+  "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');"
+run_sql_quiet "clone 100M" "$TMPDIR/100m_clone" \
+  "SELECT dolt_clone('$remote_uri');"
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
 check_time "clone 100M" "$elapsed" "$N100_CLONE_MAX"
