@@ -96,6 +96,8 @@ class PublishPerformanceReportTest(unittest.TestCase):
             "dolthub/doltlite", "report-bot"
         )
         self.assertEqual(merged, 42)
+        # Repo merge policy forbids squash; publisher uses a regular merge
+        # commit (see 42e9d4fed). Do not re-assert --squash here.
         command.assert_called_once_with(
             [
                 "gh",
@@ -104,7 +106,7 @@ class PublishPerformanceReportTest(unittest.TestCase):
                 "42",
                 "--repo",
                 "dolthub/doltlite",
-                "--squash",
+                "--merge",
                 "--delete-branch",
                 "--match-head-commit",
                 "abcdef123456",
