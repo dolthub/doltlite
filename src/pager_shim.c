@@ -888,24 +888,35 @@ static int doltliteBackupSameFile(
   sqlite3_vfs *pSrcVfs,
   const char *zSrcFile,
   sqlite3_vfs *pDestVfs,
-  const char *zDestFile
+  const char *zDestFile,
+  int *pRc
 ){
   char *zSrcFull = 0;
   char *zDestFull = 0;
   int nSrc;
   int nDest;
+  int rc;
   int same = strcmp(zSrcFile, zDestFile)==0;
 
+  *pRc = SQLITE_OK;
   if( pSrcVfs!=pDestVfs ) return same;
   nSrc = pSrcVfs->mxPathname + 1;
   nDest = pDestVfs->mxPathname + 1;
   zSrcFull = sqlite3_malloc(nSrc);
   zDestFull = sqlite3_malloc(nDest);
-  if( !zSrcFull || !zDestFull ) goto backup_same_file_done;
-  if( sqlite3OsFullPathname(pSrcVfs, zSrcFile, nSrc, zSrcFull)!=SQLITE_OK ){
+  if( !zSrcFull || !zDestFull ){
+    *pRc = SQLITE_NOMEM;
     goto backup_same_file_done;
   }
-  if( sqlite3OsFullPathname(pDestVfs, zDestFile, nDest, zDestFull)!=SQLITE_OK ){
+  rc = sqlite3OsFullPathname(pSrcVfs, zSrcFile, nSrc, zSrcFull);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsFullPathname(pDestVfs, zDestFile, nDest, zDestFull);
+  }
+  if( rc!=SQLITE_OK ){
+    /* Answering from the raw names would let an allocation or path failure
+    ** silently misclassify two spellings of one file as distinct databases
+    ** and start a self-overwriting backup. */
+    *pRc = rc;
     goto backup_same_file_done;
   }
   same = strcmp(zSrcFull, zDestFull)==0;
@@ -985,17 +996,32 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
     sqlite3ErrorWithMsg(pDest, SQLITE_NOTADB, "file is not a database");
     return 0;
   }
-  if( doltliteBackupSameFile(chunkFileGetVfs(&srcCs->file),
-                             chunkFileGetFilename(&srcCs->file),
-                             chunkFileGetVfs(&destCs->file),
-                             chunkFileGetFilename(&destCs->file)) ){
-    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
-                        "source and destination are the same database");
-    return 0;
+  {
+    int sameRc = SQLITE_OK;
+    int same = doltliteBackupSameFile(chunkFileGetVfs(&srcCs->file),
+                                      chunkFileGetFilename(&srcCs->file),
+                                      chunkFileGetVfs(&destCs->file),
+                                      chunkFileGetFilename(&destCs->file),
+                                      &sameRc);
+    if( sameRc!=SQLITE_OK ){
+      /* Stock backup_init surfaces OOM as plain SQLITE_NOMEM; keep that
+      ** contract when the allocation failed inside the OS layer. */
+      if( sameRc==SQLITE_IOERR_NOMEM ) sameRc = SQLITE_NOMEM;
+      sqlite3Error(pDest, sameRc);
+      return 0;
+    }
+    if( same ){
+      sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
+                          "source and destination are the same database");
+      return 0;
+    }
   }
 
   p = (DoltliteBackup*)sqlite3_malloc(sizeof(DoltliteBackup));
-  if( !p ) return 0;
+  if( !p ){
+    sqlite3Error(pDest, SQLITE_NOMEM);
+    return 0;
+  }
   memset(p, 0, sizeof(*p));
 
   p->pSrcDb = pSrc;
@@ -1008,6 +1034,7 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
   if( chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&srcCs->file),
                                      &p->zSrcFile)!=SQLITE_OK ){
     sqlite3_free(p);
+    sqlite3Error(pDest, SQLITE_NOMEM);
     return 0;
   }
   p->zDestFile = sqlite3_mprintf("%s", chunkFileGetFilename(&destCs->file));
@@ -1015,6 +1042,7 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
     sqlite3_free(p->zSrcFile);
     sqlite3_free(p->zDestFile);
     sqlite3_free(p);
+    sqlite3Error(pDest, SQLITE_NOMEM);
     return 0;
   }
 
@@ -1080,7 +1108,12 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     sqlite3_free(zTmpRaw);
     if( rc!=SQLITE_OK ) goto backup_step_done;
   }
-  (void)sqlite3OsDelete(p->pDestVfs, zTmpFile, 0);
+  /* Clearing a stale tmp file may legitimately find nothing to delete, but
+  ** any other failure would surface as a confusing EXCLUSIVE-open error (or
+  ** silently consume an injected fault), so propagate it here. */
+  rc = sqlite3OsDelete(p->pDestVfs, zTmpFile, 0);
+  if( rc==SQLITE_IOERR_DELETE_NOENT ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ) goto backup_step_done;
 
   openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE
             | SQLITE_OPEN_MAIN_DB;

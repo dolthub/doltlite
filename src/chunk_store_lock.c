@@ -417,7 +417,9 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
                             &pTmpLock, &zTmpLockName);
     if( lockRc==SQLITE_OK ){
       rc = csReplayWalRange(cs, cs->wal.nWalData);
-      if( !haveLock ) csFileUnlock(pTmpLock, &zTmpLockName);
+      if( rc!=SQLITE_OK && !haveLock ){
+        csFileUnlock(pTmpLock, &zTmpLockName);
+      }
       if( rc==SQLITE_OK ){
         /* Mirror the open path: adopted refs are the committed disk state
         ** (a stale committedRefsHash would make the next commit's
@@ -426,6 +428,20 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
         ** store. */
         csMarkRefsCommitted(cs);
         if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
+        /* Same crash-garbage reclaim as the reload path: a rewound torn
+        ** tail would re-trip the size check on every refresh. Best-effort,
+        ** so its allocations must not read as swallowed OOM under fault
+        ** injection. */
+        if( !cs->corruptMidStream ){
+          i64 physSize = 0;
+          sqlite3BeginBenignMalloc();
+          if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
+           && physSize > cs->file.iFileSize ){
+            (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+          }
+          sqlite3EndBenignMalloc();
+        }
+        if( !haveLock ) csFileUnlock(pTmpLock, &zTmpLockName);
         *pChanged = 1;
         return SQLITE_OK;
       }
@@ -511,6 +527,25 @@ int csReloadFromDisk(ChunkStore *cs){
   csFreeReloadState(&saved);
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
+
+  /* A torn-tail recovery rewinds the logical EOF in memory only, and the
+  ** physical crash garbage past it re-trips the external-change size check
+  ** on every lock acquisition, turning each write transaction into another
+  ** full reload and replay. Under the graph lock nothing can be appending,
+  ** so bytes past the freshly replayed boundary are dead — reclaim them.
+  ** The reclaim is a pure optimization and every failure inside it is a
+  ** silent no-op, so its allocations must not read as swallowed OOM under
+  ** fault injection. */
+  if( !cs->readOnly && !cs->corruptMidStream
+   && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+    i64 physSize = 0;
+    sqlite3BeginBenignMalloc();
+    if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
+     && physSize > cs->file.iFileSize ){
+      (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+    }
+    sqlite3EndBenignMalloc();
+  }
 
   return SQLITE_OK;
 }
