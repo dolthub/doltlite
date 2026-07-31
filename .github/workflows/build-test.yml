@@ -210,6 +210,17 @@ jobs:
       run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
       timeout-minutes: 5
 
+    - name: Growth-axis scaling gates
+      if: matrix.platform != 'windows'
+      # Ratio gates: per-operation cost vs history size (multi-writer
+      # refresh, open latency, commit depth). Ratios, not absolute times,
+      # so runner load moves both sides of each gate. Links the driver
+      # against the libdoltlite.a already in the checked-build artifact —
+      # no make here, which could rebuild artifact objects against fresh
+      # checkout mtimes.
+      run: bash test/growth_axis_test.sh build --quick
+      timeout-minutes: 10
+
     - name: Chunk size distribution
       if: matrix.platform != 'windows'
       run: cd build && bash ../test/chunk_distribution_test.sh ./doltlite
