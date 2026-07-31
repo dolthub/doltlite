@@ -404,50 +404,39 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
    && cs->staging.nRecentUncommitted==0
    && prollyHashCompare(&cs->refs.refsHash,
                         &cs->refs.committedRefsHash)==0 ){
-    /* The replay must not read a writer's in-flight append as a torn tail,
-    ** so it runs under the graph lock; a caller without it takes the lock
-    ** just for the replay. A busy lock falls through to the reload, which
-    ** has always run unserialized here and settles on the last sealed
-    ** root either way. */
-    int haveLock = csFileLockHeld(CS_GRAPH_LOCK(cs));
-    sqlite3_file *pTmpLock = 0;
-    char *zTmpLockName = 0;
-    int lockRc = haveLock ? SQLITE_OK
-               : csFileLock(cs->file.pVfs, cs->file.zFilename,
-                            &pTmpLock, &zTmpLockName);
-    if( lockRc==SQLITE_OK ){
-      rc = csReplayWalRange(cs, cs->wal.nWalData);
-      if( rc!=SQLITE_OK && !haveLock ){
-        csFileUnlock(pTmpLock, &zTmpLockName);
-      }
-      if( rc==SQLITE_OK ){
-        /* Mirror the open path: adopted refs are the committed disk state
-        ** (a stale committedRefsHash would make the next commit's
-        ** preserve-refs dance restore pre-replay refs over them), and tail
-        ** damage below a sealing root's durability watermark poisons the
-        ** store. */
-        csMarkRefsCommitted(cs);
-        if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
-        /* Same crash-garbage reclaim as the reload path: a rewound torn
-        ** tail would re-trip the size check on every refresh. Best-effort,
-        ** so its allocations must not read as swallowed OOM under fault
-        ** injection. */
-        if( !cs->corruptMidStream ){
-          i64 physSize = 0;
-          sqlite3BeginBenignMalloc();
-          if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
-           && physSize > cs->file.iFileSize ){
-            (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
-          }
-          sqlite3EndBenignMalloc();
+    /* The reload this replaces has always read the file unserialized
+    ** here; the replay has the same exposure and the same resolution (a
+    ** writer's in-flight bytes parse as a torn tail, the boundary rewinds
+    ** no lower than the already-committed startPos, and the next refresh
+    ** picks up the completed batch). Errors roll the state back and
+    ** propagate rather than falling through to the reload, which would
+    ** consume an injected fault and re-derive the same verdict anyway. */
+    rc = csReplayWalRange(cs, cs->wal.nWalData);
+    if( rc==SQLITE_OK ){
+      /* Mirror the open path: adopted refs are the committed disk state
+      ** (a stale committedRefsHash would make the next commit's
+      ** preserve-refs dance restore pre-replay refs over them), and tail
+      ** damage below a sealing root's durability watermark poisons the
+      ** store. */
+      csMarkRefsCommitted(cs);
+      if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
+      /* Same crash-garbage reclaim as the reload path when the caller
+      ** holds the graph lock: a rewound torn tail would re-trip the size
+      ** check on every refresh. Best-effort, so its allocations must not
+      ** read as swallowed OOM under fault injection. */
+      if( !cs->corruptMidStream && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+        i64 physSize = 0;
+        sqlite3BeginBenignMalloc();
+        if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
+         && physSize > cs->file.iFileSize ){
+          (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
         }
-        if( !haveLock ) csFileUnlock(pTmpLock, &zTmpLockName);
-        *pChanged = 1;
-        return SQLITE_OK;
+        sqlite3EndBenignMalloc();
       }
+      *pChanged = 1;
+      return SQLITE_OK;
     }
-    /* Fall through: the full reload re-derives everything from disk and
-    ** gives the authoritative verdict on whatever the tail replay hit. */
+    return rc;
   }
 
   rc = csReloadFromDisk(cs);
