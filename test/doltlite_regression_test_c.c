@@ -4619,6 +4619,66 @@ static void run_attached_database_seed_and_repair(void){
   removeDbFiles(auxPath);
 }
 
+static void run_write_rejects_foreign_database_at_path(void){
+#ifndef _WIN32
+  sqlite3 *db = 0;
+  sqlite3 *foreign = 0;
+  char dbpath[256];
+  char renamedPath[320];
+  int rc;
+
+  printf("=== Write Rejects Foreign Database At Path Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_write_rejects_foreign_database");
+  sqlite3_snprintf(sizeof(renamedPath), renamedPath, "%s-renamed", dbpath);
+  removeDbFiles(dbpath);
+  removeDbFiles(renamedPath);
+
+  check("foreign_path_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("foreign_path_setup", execSql(db,
+    "CREATE TABLE t1(a,b,c);"
+    "INSERT INTO t1 VALUES(673,'stone','philips');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "UPDATE t1 SET b='dirty';")==SQLITE_OK);
+  check("foreign_path_rename", rename(dbpath, renamedPath)==0);
+
+  check("foreign_path_open_stranger", open_db(dbpath, &foreign)==SQLITE_OK);
+  check("foreign_path_seed_stranger",
+        execSql(foreign, "CREATE TABLE t2(x,y,z);")==SQLITE_OK);
+  sqlite3_close(foreign);
+  foreign = 0;
+
+  check("foreign_path_read_keeps_own_store",
+        strcmp(queryScalarText(db, "SELECT b FROM t1 WHERE a=673"), "dirty")==0);
+  rc = execSqlSilent(db, "UPDATE t1 SET b='after';");
+  check("foreign_path_write_readonly", rc==SQLITE_READONLY);
+  /* The VC write path force-refreshes before advancing the ref; it must refuse
+  ** the same way instead of reloading by path and adopting the stranger. */
+  rc = execSqlSilent(db, "SELECT dolt_commit('-A','-m','vc');");
+  check("foreign_path_vc_commit_readonly", rc==SQLITE_READONLY);
+  check("foreign_path_read_survives_refusals",
+        strcmp(queryScalarText(db, "SELECT b FROM t1 WHERE a=673"), "dirty")==0);
+  check("foreign_path_own_schema_retained",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE name='t2'"), "0")==0);
+  sqlite3_close(db);
+  db = 0;
+
+  check("foreign_path_reopen_own_store", open_db(renamedPath, &db)==SQLITE_OK);
+  check("foreign_path_own_store_unmodified",
+        strcmp(queryScalarText(db, "SELECT b FROM t1 WHERE a=673"), "dirty")==0);
+  sqlite3_close(db);
+  db = 0;
+
+  check("foreign_path_reopen_stranger", open_db(dbpath, &foreign)==SQLITE_OK);
+  check("foreign_path_stranger_unmodified",
+        strcmp(queryScalarText(foreign,
+          "SELECT count(*) FROM sqlite_master WHERE name='t1'"), "0")==0);
+  sqlite3_close(foreign);
+  removeDbFiles(dbpath);
+  removeDbFiles(renamedPath);
+#endif
+}
+
 static void run_savepoint_restores_session_metadata(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -8879,6 +8939,7 @@ static const RegressionCase aCases[] = {
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "commit_rejects_renamed_database", "Commit Rejects Renamed Database Test", run_commit_rejects_renamed_database },
+  { "write_rejects_foreign_database_at_path", "Write Rejects Foreign Database At Path Test", run_write_rejects_foreign_database_at_path },
   { "attached_database_seed_and_repair", "Attached Database Seed And Repair Test", run_attached_database_seed_and_repair },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },

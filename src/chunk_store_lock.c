@@ -239,33 +239,66 @@ void chunkStoreUnlock(ChunkStore *cs){
   }
 }
 
-/* Whether the file this handle opened has been renamed or unlinked away with
-** nothing taking its place. The caller has already established that the VFS
-** reports it moved; GC replaces the store atomically, which keeps the path
-** populated throughout, so a vacant path is what separates "moved out from under
-** us" from "upgraded beneath us".
+static int csStoreHasAnyBranchTip(ChunkStore *pCand, const RefsTable *rt,
+                                  int *pHas){
+  int i;
+  *pHas = 0;
+  for(i=0; i<rt->nBranches; i++){
+    const ProllyHash *pTip = &rt->aBranches[i].commitHash;
+    int rc, has = 0;
+    if( prollyHashIsEmpty(pTip) ) continue;
+    rc = chunkStoreHas(pCand, pTip, &has);
+    if( rc!=SQLITE_OK ) return rc;
+    if( has ){
+      *pHas = 1;
+      return SQLITE_OK;
+    }
+  }
+  return SQLITE_OK;
+}
+
+/* Whether the file now at this handle's path is provably the database this handle
+** opened. Upstream makes any moved file read-only for good; GC is DoltLite's one
+** legitimate reason for the path to hold a different file, and a GC replacement,
+** a rename and a vacant path are indistinguishable from the outside. So require
+** proof: the candidate holds a branch tip of ours. GC preserves every commit
+** reachable from the refs it sweeps under and our tip stays an ancestor of
+** whatever the branch has since become, so this survives an arbitrarily stale
+** handle -- the contract gc_tip_survival_test pins. No proof leaves the upstream
+** verdict in place.
+**
+** Working-set roots cannot be the proof: a peer advancing the working set makes
+** GC sweep the one we remember, so a live database fails its own test.
 **
 ** Never written means never moved: the VFS reports moved whenever it cannot
-** resolve the path at all, so a store whose file is still to be created -- a fresh
-** database, or a backup target before its first write -- is indistinguishable
-** from one renamed away unless this handle has already seen the file on disk.
-**
-** Returns an error rather than a verdict when the existence check itself fails:
-** an I/O error is not evidence about where the database went. */
-static int csMovedFileGone(ChunkStore *cs, int *pGone){
-  int exists = 0;
+** resolve the path at all, so a store whose file is still to be created -- a
+** fresh database, or a backup target before its first write -- is
+** indistinguishable from one renamed away. */
+static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
+  ChunkStore cand;
   int rc;
 
-  *pGone = 0;
+  *pIsOurs = 0;
   if( cs->isMemory || cs->file.pFile==0 ) return SQLITE_OK;
   if( cs->file.zFilename==0 || cs->file.zFilename[0]==0 ) return SQLITE_OK;
-  if( cs->file.iFileSize<=0 ) return SQLITE_OK;
+  if( cs->file.iFileSize<=0 ){
+    *pIsOurs = 1;
+    return SQLITE_OK;
+  }
 
-  rc = sqlite3OsAccess(cs->file.pVfs, cs->file.zFilename,
-                       SQLITE_ACCESS_EXISTS, &exists);
-  if( rc!=SQLITE_OK ) return rc;
-  *pGone = !exists;
-  return SQLITE_OK;
+  rc = chunkStoreOpen(&cand, cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
+  if( rc==SQLITE_OK ){
+    rc = csStoreHasAnyBranchTip(&cand, &cs->refs, pIsOurs);
+    chunkStoreClose(&cand);
+  }
+  if( rc!=SQLITE_OK ){
+    /* Only OOM is inconclusive; every other failure to read the candidate --
+    ** vacant path, unreadable, not a database -- is simply a failed proof. */
+    *pIsOurs = 0;
+    if( rc!=SQLITE_NOMEM && rc!=SQLITE_IOERR_NOMEM ) rc = SQLITE_OK;
+  }
+  return rc;
 }
 
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
@@ -295,14 +328,13 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
   if( rc!=SQLITE_OK ) return rc;
   if( bMoved ){
-    /* Nothing at the path means renamed or unlinked away, not GC's atomic
-    ** replace. Reporting a change would reload by path; keep the handle we hold
-    ** so reads continue to see the database. Nothing is latched, so renaming the
-    ** file back resumes normal operation. */
-    int bGone = 0;
-    rc = csMovedFileGone(cs, &bGone);
+    int bOurs = 0;
+    rc = csMovedFileIsOurs(cs, &bOurs);
     if( rc!=SQLITE_OK ) return rc;
-    if( bGone ){
+    if( !bOurs ){
+      /* Reporting a change would reload by path and adopt whatever is there.
+      ** Reads keep serving the open handle; nothing is latched, so moving the
+      ** file back resumes normal operation. */
       cs->movedReadOnly = 1;
       *pChanged = 0;
       return SQLITE_OK;
@@ -362,6 +394,12 @@ int chunkStoreForceRefresh(ChunkStore *cs){
   int rc;
   int wasPinned;
   if( cs->isMemory ) return SQLITE_OK;
+  /* The refresh the moved-file check declined, refused for the reason it
+  ** declined it: reloading by path here would adopt the foreign store while the
+  ** caller's catalog stays ours, and every caller is on a write path. A peer's
+  ** gc never latches this -- our tips survive its sweep -- so the only handles
+  ** refused are ones whose file genuinely is not at their path. */
+  if( cs->movedReadOnly ) return SQLITE_READONLY;
   /* Only the outermost lock holder reloads; a reentrant (inner) holder runs
   ** under the outer scope's already-current view, so a multi-step VC op that
   ** holds the lock across sub-operations keeps the in-memory state it builds. */
