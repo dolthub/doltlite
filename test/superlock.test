@@ -17,6 +17,11 @@ source $testdir/lock_common.tcl
 set testprefix superlock
 do_not_use_codec
 
+ifcapable doltlite {
+  finish_test
+  return
+}
+
 # Test organization:
 #
 #   1.*: Test superlock on a rollback database. Test that once the db is

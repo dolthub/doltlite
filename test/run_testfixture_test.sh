@@ -8,7 +8,7 @@ TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 mkdir "$TMP_DIR/build"
-touch "$TMP_DIR/crashes"
+touch "$TMP_DIR/terminations"
 
 cat > "$TMP_DIR/build/testfixture" <<'EOF'
 #!/usr/bin/env bash
@@ -28,6 +28,32 @@ case "$1" in
   *extra.test)
     names="extra-1.transient.41 extra-1.transient.99 extra-2.1"
     ;;
+  *tcl_abort.test)
+    echo "tcl_abort-1.0... Ok"
+    echo './testfixture: stable failure' >&2
+    exit 1
+    ;;
+  *signal.test)
+    echo "signal-1.0... Ok"
+    kill -SEGV $$
+    ;;
+  *timeout.test)
+    echo "timeout-1.0... Ok"
+    sleep 5
+    ;;
+  *sanitizer.test)
+    echo "sanitizer-1.0... Ok"
+    echo 'ERROR: AddressSanitizer: heap-use-after-free' >&2
+    echo './testfixture: stable failure' >&2
+    exit 1
+    ;;
+  *clean_exit.test)
+    exit 0
+    ;;
+  *summary_exit.test)
+    echo '0 errors out of 1 tests'
+    exit 2
+    ;;
 esac
 count=$(wc -w <<< "$names" | tr -d ' ')
 echo "$count errors out of 10 tests"
@@ -36,17 +62,19 @@ EOF
 chmod +x "$TMP_DIR/build/testfixture"
 
 run_case() {
+  local timeout="${2:-10}"
   (
     cd "$TMP_DIR/build"
     DIVERGENCE_FILE="$TMP_DIR/divergences" \
-      CRASH_FILE="$TMP_DIR/crashes" \
-      bash "$RUNNER" self-test 10 "$1"
-  ) >/dev/null 2>&1
+      TERMINATION_FILE="$TMP_DIR/terminations" \
+      bash "$RUNNER" self-test "$timeout" "$1"
+  ) >"$TMP_DIR/run.out" 2>&1
 }
 
 expect_pass() {
   if ! run_case "$1"; then
     echo "ERROR: runner rejected $2"
+    cat "$TMP_DIR/run.out"
     exit 1
   fi
 }
@@ -54,6 +82,7 @@ expect_pass() {
 expect_failure() {
   if run_case "$1"; then
     echo "ERROR: runner accepted $2"
+    cat "$TMP_DIR/run.out"
     exit 1
   fi
 }
@@ -84,5 +113,51 @@ printf '%s\n' \
   'shifted shifted-1.transient.41' \
   'shifted shifted-1.transient.99' > "$TMP_DIR/divergences"
 expect_failure shifted "shifted exact gates"
+
+stable_hash=$(printf '%s' 'stable failure' | {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum
+  else
+    shasum -a 256
+  fi
+} | awk '{print $1}')
+empty_hash=0000000000000000000000000000000000000000000000000000000000000000
+: > "$TMP_DIR/divergences"
+
+printf '%s\n' "tcl_abort tcl-error tcl_abort-1.0 $stable_hash" > "$TMP_DIR/terminations"
+expect_pass tcl_abort "an exact Tcl termination contract"
+
+printf '%s\n' "tcl_abort tcl-error tcl_abort-0.9 $stable_hash" > "$TMP_DIR/terminations"
+expect_failure tcl_abort "a changed last completed test"
+
+printf '%s\n' "tcl_abort tcl-error tcl_abort-1.0 $empty_hash" > "$TMP_DIR/terminations"
+expect_failure tcl_abort "a changed Tcl diagnostic"
+
+printf '%s\n' 'signal signal-11 signal-1.0 -' > "$TMP_DIR/terminations"
+expect_pass signal "an exact signal termination contract"
+
+printf '%s\n' "signal tcl-error signal-1.0 $stable_hash" > "$TMP_DIR/terminations"
+expect_failure signal "a signal classified as a Tcl error"
+
+printf '%s\n' "timeout tcl-error timeout-1.0 $stable_hash" > "$TMP_DIR/terminations"
+if run_case timeout 1; then
+  echo "ERROR: runner accepted a timeout"
+  exit 1
+fi
+
+printf '%s\n' "sanitizer tcl-error sanitizer-1.0 $stable_hash" > "$TMP_DIR/terminations"
+expect_failure sanitizer "a sanitizer finding"
+
+printf '%s\n' 'clean_exit clean-exit - -' > "$TMP_DIR/terminations"
+expect_pass clean_exit "an exact clean early exit"
+
+printf '%s\n' 'two clean-exit - -' > "$TMP_DIR/terminations"
+expect_failure two "a stale termination contract"
+
+: > "$TMP_DIR/terminations"
+expect_failure summary_exit "a nonstandard exit after the summary"
+
+printf '%s\n' 'timeout timeout timeout-1.0 -' > "$TMP_DIR/terminations"
+expect_failure timeout "a contract that permits timeouts"
 
 echo "OK: testfixture runner self-test"

@@ -15,6 +15,11 @@ source $testdir/tester.tcl
 source $testdir/wal_common.tcl
 set testprefix e_walauto
 
+ifcapable doltlite {
+  finish_test
+  return
+}
+
 # Do not run this test on OpenBSD, as it depends on read() and mmap both
 # accessing the same coherent view of the "test.db-shm" file. This doesn't
 # work on OpenBSD.

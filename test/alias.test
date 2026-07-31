@@ -20,6 +20,7 @@ source $testdir/tester.tcl
 
 # Aliases are currently evaluated twice.  We might try to change this
 # in the future.  But not now.
+finish_test
 return
 
 # A procedure to return a sequence of increasing integers.

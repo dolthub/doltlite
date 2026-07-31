@@ -416,12 +416,401 @@ static int scanTreeForCustomCollation(
   return rc;
 }
 
+/* Build the sort-key probe for an index moveto; caches on pCur. */
+static int indexMovetoBuildSeekKey(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  int *pnSeekKeyField,
+  int *pnSortKey,
+  u8 **ppSortKey,
+  int *pExactMutMapKey
+){
+  int nSeekKeyField = 0;
+  int nSortKey = 0;
+  int nSerKey = 0;
+  int rc;
+
+  *pExactMutMapKey = 0;
+  if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
+    nSeekKeyField = (int)pIdxKey->nField;
+  }
+  /* Table-root range seeks must ignore probe fields beyond the PK. */
+  if( pCur->isTableRoot && pCur->pKeyInfo
+   && pIdxKey->default_rc != 0
+   && pIdxKey->nField > pCur->pKeyInfo->nKeyField
+   && (nSeekKeyField==0 || nSeekKeyField > pCur->pKeyInfo->nKeyField) ){
+    nSeekKeyField = pCur->pKeyInfo->nKeyField;
+  }
+  if( unpackedRecordCanUseIntSortKey(
+          pCur, pIdxKey,
+          nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
+    rc = sortKeyFromUnpackedIntRecordBuffer(
+        pIdxKey, nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField,
+        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+  }else{
+    rc = sortKeyFromMemPrefixCollBuffer(
+        pIdxKey->aMem, (int)pIdxKey->nField, nSeekKeyField,
+        pCur->pKeyInfo,
+        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = serializeUnpackedRecordBuffer(
+          pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = sortKeyFromRecordPrefixCollBuffer(
+          pCur->pSeekRecord, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    }
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  *ppSortKey = pCur->pSeekSortKey;
+  *pnSortKey = nSortKey;
+  *pnSeekKeyField = nSeekKeyField;
+  pCur->nSeekSortKey = nSortKey;
+  pCur->nSeekKeyField = nSeekKeyField;
+  if( pCur->pKeyInfo
+   && nSeekKeyField == pCur->pKeyInfo->nKeyField
+   && pCur->isTableRoot ){
+    *pExactMutMapKey = 1;
+  }
+  return SQLITE_OK;
+}
+
+/* Exact full-key probe against cursor + pending mutmaps. *pDone is set when
+** the seek is fully resolved (hit or hard error already returned). */
+static int indexMovetoExactMutMap(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  const u8 *pSortKey,
+  int nSortKey,
+  int exactMutMapKey,
+  int *pRes,
+  int *pDone
+){
+  struct TableEntry *pTE;
+  ProllyMutMap *pPending;
+  ProllyMutMapEntry *pEntry = 0;
+  int rc;
+
+  *pDone = 0;
+  if( !pCur->pKeyInfo
+   || !(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
+    return SQLITE_OK;
+  }
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+      if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
+      setCursorToMutMapEntryPhys(
+          pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+      /* The tree side is still wherever the last operation left it. A
+      ** later step must re-seek it to this key before merging, or it
+      ** feeds stale entries into the merge scan. */
+      pCur->deferredTreeSeek = 1;
+      *pRes = 0;
+      pIdxKey->eqSeen = 1;
+      *pDone = 1;
+      return SQLITE_OK;
+    }
+  }
+  if( pPending && pPending!=pCur->pMutMap
+   && !prollyMutMapIsEmpty(pPending) ){
+    rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+      if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
+      pCur->pMutMap = pPending;
+      setCursorToMutMapEntryPhys(
+          pCur, (int)(pEntry - pPending->aEntries));
+      pCur->deferredTreeSeek = 1;
+      *pRes = 0;
+      pIdxKey->eqSeen = 1;
+      *pDone = 1;
+      return SQLITE_OK;
+    }
+  }
+  return SQLITE_OK;
+}
+
+/* Unsupported-collation full scan of mutmaps + tree. *pDone when resolved. */
+static int indexMovetoCustomCollation(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  int nSeekKeyField,
+  int exactMutMapKey,
+  int *pRes,
+  int *pDone
+){
+  struct TableEntry *pTE;
+  ProllyMutMap *pPending;
+  ProllyMutMapEntry *pEntry = 0;
+  int cmp = 0;
+  int treeFound = 0;
+  int rc;
+
+  *pDone = 0;
+  if( !pCur->pKeyInfo
+   || !(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
+   || !keyInfoHasUnsupportedCollation(
+          pCur->pKeyInfo,
+          nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
+    return SQLITE_OK;
+  }
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+
+  rc = scanMutMapForCustomCollation(
+      pCur, (ProllyMutMap*)pCur->pMutMap, pIdxKey, &pEntry, &cmp);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pEntry ){
+    setCursorToMutMapEntryPhys(
+        pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+    *pRes = cmp;
+    pIdxKey->eqSeen = 1;
+    *pDone = 1;
+    return SQLITE_OK;
+  }
+
+  if( pPending && pPending!=pCur->pMutMap ){
+    rc = scanMutMapForCustomCollation(
+        pCur, pPending, pIdxKey, &pEntry, &cmp);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pEntry ){
+      const u8 *pVal = pEntry->pVal;
+      int nVal = pEntry->nVal;
+      if( nVal==0 ){
+        rc = cacheCursorPayloadReconstructed(
+            pCur, pEntry->pKey, pEntry->nKey);
+      }else{
+        rc = cacheCursorPayloadCopy(pCur, pVal, nVal);
+      }
+      if( rc!=SQLITE_OK ) return rc;
+      pCur->eState = CURSOR_VALID;
+      *pRes = cmp;
+      pIdxKey->eqSeen = 1;
+      *pDone = 1;
+      return SQLITE_OK;
+    }
+  }
+
+  rc = scanTreeForCustomCollation(pCur, pIdxKey, &treeFound, &cmp);
+  if( rc!=SQLITE_OK ) return rc;
+  if( treeFound ){
+    pCur->eState = CURSOR_VALID;
+    cacheCurrentTreeStoredPayloadNonIntKey(pCur);
+    *pRes = cmp;
+    pIdxKey->eqSeen = 1;
+    *pDone = 1;
+  }
+  return SQLITE_OK;
+}
+
+/* After a non-exact tree seek, scan forward for the first live match /
+** successor, skipping mutmap-delete-masked rows. */
+static int indexMovetoScanTreeLeaf(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  const u8 *pSortKey,
+  int nSortKey,
+  int nSeekKeyField,
+  int *pTreeFound,
+  int *pTreeCmp
+){
+  int rc = SQLITE_OK;
+  int iLevel;
+  ProllyCacheEntry *pLeaf;
+  int lo;
+  int nItems;
+  int bestIdx = -1;
+  int bestCmp = 0;
+  u8 *pRecBuf;
+  int nRecBufAlloc;
+  int i;
+
+  if( pCur->pCur.eState!=PROLLY_CURSOR_VALID ) return SQLITE_OK;
+
+  iLevel = pCur->pCur.iLevel;
+  pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
+  lo = pCur->pCur.aLevel[iLevel].idx;
+  nItems = pLeaf->node.nItems;
+  pRecBuf = pCur->pMovetoRec;
+  nRecBufAlloc = pCur->nMovetoRecAlloc;
+
+  for(;;){
+    for( i = lo; i < nItems; i++ ){
+      const u8 *pSK; int nSK;
+      const u8 *pVal; int nVal;
+      int recCmp;
+      prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
+
+      {
+        int cmpLen = nSK < nSortKey ? nSK : nSortKey;
+        int prefixCmp = memcmp(pSK, pSortKey, cmpLen);
+        if( prefixCmp > 0 ){
+          if( bestIdx < 0 ){
+            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+              ProllyMutMapEntry *mmE = 0;
+              rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+              if( rc!=SQLITE_OK ) break;
+              if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+                /* Delete-masked row past the seek key: the next live row
+                ** is still the positioning answer, so keep scanning. */
+                continue;
+              }
+            }
+            bestIdx = i;
+            if( nSeekKeyField>0 ){
+              pIdxKey->eqSeen = 0;
+              bestCmp = 1;
+            }else{
+              const u8 *pVal2; int nVal2;
+              prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
+              if( nVal2==0 ){
+                rc = recordFromSortKeyBufferColl(
+                    pSK, nSK, pCur->pKeyInfo,
+                    &pRecBuf, &nRecBufAlloc, &nVal2);
+                if( rc!=SQLITE_OK ) break;
+                pVal2 = pRecBuf;
+              }
+              pIdxKey->eqSeen = 0;
+              bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
+            }
+          }
+          break;
+        }
+        if( nSeekKeyField>0 && prefixCmp==0 && nSK>=nSortKey ){
+          if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+            ProllyMutMapEntry *mmE = 0;
+            rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+            if( rc!=SQLITE_OK ) break;
+            if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+              continue;
+            }
+          }
+          pIdxKey->eqSeen = 1;
+          bestIdx = i;
+          bestCmp = pIdxKey->default_rc;
+          *pTreeFound = 1;
+          *pTreeCmp = bestCmp;
+          if( pIdxKey->default_rc < 0 ){
+            continue;
+          }
+          break;
+        }
+      }
+      prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
+      if( nVal==0 ){
+        rc = recordFromSortKeyBufferColl(
+            pSK, nSK, pCur->pKeyInfo, &pRecBuf, &nRecBufAlloc, &nVal);
+        if( rc!=SQLITE_OK ) break;
+        pVal = pRecBuf;
+      }
+      pIdxKey->eqSeen = 0;
+      recCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+
+      if( recCmp==0 || pIdxKey->eqSeen ){
+        if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+          ProllyMutMapEntry *mmE = 0;
+          rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+          if( rc!=SQLITE_OK ) break;
+          if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+            continue;
+          }
+        }
+        bestIdx = i;
+        bestCmp = recCmp;
+        *pTreeFound = 1;
+        *pTreeCmp = recCmp;
+        break;
+      }else if( recCmp > 0 ){
+        if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+          ProllyMutMapEntry *mmE = 0;
+          rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+          if( rc!=SQLITE_OK ) break;
+          if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+            continue;
+          }
+        }
+        if( bestIdx < 0 ){
+          bestIdx = i;
+          bestCmp = recCmp;
+        }
+      }
+    }
+    if( rc!=SQLITE_OK || *pTreeFound || bestIdx>=0 ) break;
+    if( !(pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)) ) break;
+    /* Everything from the seek point through the end of this leaf was
+    ** delete-masked; the first live row may sit in a later leaf. */
+    if( nItems>0 ) pCur->pCur.aLevel[pCur->pCur.iLevel].idx = nItems-1;
+    rc = prollyCursorNext(&pCur->pCur);
+    if( rc!=SQLITE_OK ) break;
+    if( pCur->pCur.eState!=PROLLY_CURSOR_VALID ) break;
+    iLevel = pCur->pCur.iLevel;
+    pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
+    nItems = pLeaf->node.nItems;
+    lo = 0;
+  }
+  pCur->pMovetoRec = pRecBuf;
+  pCur->nMovetoRecAlloc = nRecBufAlloc;
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( *pTreeFound ){
+    pCur->pCur.aLevel[iLevel].idx = bestIdx;
+  }else if( bestIdx >= 0 ){
+    pCur->pCur.aLevel[iLevel].idx = bestIdx;
+    *pTreeCmp = bestCmp;
+    *pTreeFound = 1;
+  }
+  return SQLITE_OK;
+}
+
+/* Exact tree hit (not delete-masked). *pDone when resolved. */
+static int indexMovetoExactTreeHit(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  const u8 *pSortKey,
+  int nSortKey,
+  int exactMutMapKey,
+  int *pRes,
+  int *pDone
+){
+  int seekRes = 0;
+  int rc;
+
+  *pDone = 0;
+  rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &seekRes);
+  if( rc!=SQLITE_OK ) return rc;
+  if( seekRes==0
+   && pCur->pCur.eState==PROLLY_CURSOR_VALID
+   && pCur->pKeyInfo
+   && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
+    int isDeleted = 0;
+    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+      ProllyMutMapEntry *mmE = 0;
+      rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &mmE);
+      if( rc!=SQLITE_OK ) return rc;
+      if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+    }
+    if( !isDeleted ){
+      *pRes = 0;
+      pIdxKey->eqSeen = 1;
+      pCur->eState = CURSOR_VALID;
+      cacheCurrentTreeStoredPayloadNonIntKey(pCur);
+      *pDone = 1;
+    }
+  }
+  return SQLITE_OK;
+}
+
 int prollyBtCursorIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
   int *pRes
 ){
   int rc;
+  int done = 0;
 
   assert( !pCur->curIntKey );
 
@@ -442,322 +831,32 @@ int prollyBtCursorIndexMoveto(
     ProllyMutMapEntry *mutE = 0;
     int mutFromCursorMap = 0;
     int exactMutMapKey = 0;
-
-    u8 *pSerKey = 0;
-    int nSerKey = 0;
     u8 *pSortKey = 0;
     int nSortKey = 0;
     int nSeekKeyField = 0;
-    if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
-      nSeekKeyField = (int)pIdxKey->nField;
-    }
-    /* Table-root range seeks must ignore probe fields beyond the PK. */
-    if( pCur->isTableRoot && pCur->pKeyInfo
-     && pIdxKey->default_rc != 0
-     && pIdxKey->nField > pCur->pKeyInfo->nKeyField
-     && (nSeekKeyField==0 || nSeekKeyField > pCur->pKeyInfo->nKeyField) ){
-      nSeekKeyField = pCur->pKeyInfo->nKeyField;
-    }
-    if( unpackedRecordCanUseIntSortKey(
-            pCur, pIdxKey,
-            nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
-      rc = sortKeyFromUnpackedIntRecordBuffer(
-          pIdxKey, nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField,
-          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
-    }else{
-      rc = sortKeyFromMemPrefixCollBuffer(
-          pIdxKey->aMem, (int)pIdxKey->nField, nSeekKeyField,
-          pCur->pKeyInfo,
-          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
-      if( rc==SQLITE_NOTFOUND ){
-        rc = serializeUnpackedRecordBuffer(
-            pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
-        if( rc!=SQLITE_OK ) return rc;
-        pSerKey = pCur->pSeekRecord;
-        rc = sortKeyFromRecordPrefixCollBuffer(
-            pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
-            &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
-      }
-    }
+
+    rc = indexMovetoBuildSeekKey(
+        pCur, pIdxKey, &nSeekKeyField, &nSortKey, &pSortKey, &exactMutMapKey);
     if( rc!=SQLITE_OK ) return rc;
-    pSortKey = pCur->pSeekSortKey;
-    pCur->nSeekSortKey = nSortKey;
-    pCur->nSeekKeyField = nSeekKeyField;
 
-    if( pCur->pKeyInfo
-     && nSeekKeyField == pCur->pKeyInfo->nKeyField ){
-      if( pCur->isTableRoot ){
-        exactMutMapKey = 1;
-      }
-    }
+    rc = indexMovetoCustomCollation(
+        pCur, pIdxKey, nSeekKeyField, exactMutMapKey, pRes, &done);
+    if( rc!=SQLITE_OK || done ) return rc;
 
-    if( pCur->pKeyInfo
-     && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
-     && keyInfoHasUnsupportedCollation(
-          pCur->pKeyInfo,
-          nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
-      struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-      ProllyMutMap *pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
-      ProllyMutMapEntry *pEntry = 0;
-      int cmp = 0;
-      int treeFound = 0;
+    rc = indexMovetoExactMutMap(
+        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey, pRes, &done);
+    if( rc!=SQLITE_OK || done ) return rc;
 
-      rc = scanMutMapForCustomCollation(
-          pCur, (ProllyMutMap*)pCur->pMutMap, pIdxKey, &pEntry, &cmp);
-      if( rc!=SQLITE_OK ) return rc;
-      if( pEntry ){
-        setCursorToMutMapEntryPhys(
-            pCur, (int)(pEntry - pCur->pMutMap->aEntries));
-        *pRes = cmp;
-        pIdxKey->eqSeen = 1;
-        return SQLITE_OK;
-      }
-
-      if( pPending && pPending!=pCur->pMutMap ){
-        rc = scanMutMapForCustomCollation(
-            pCur, pPending, pIdxKey, &pEntry, &cmp);
-        if( rc!=SQLITE_OK ) return rc;
-        if( pEntry ){
-          const u8 *pVal = pEntry->pVal;
-          int nVal = pEntry->nVal;
-          if( nVal==0 ){
-            rc = cacheCursorPayloadReconstructed(
-                pCur, pEntry->pKey, pEntry->nKey);
-          }else{
-            rc = cacheCursorPayloadCopy(pCur, pVal, nVal);
-          }
-          if( rc!=SQLITE_OK ) return rc;
-          pCur->eState = CURSOR_VALID;
-          *pRes = cmp;
-          pIdxKey->eqSeen = 1;
-          return SQLITE_OK;
-        }
-      }
-
-      rc = scanTreeForCustomCollation(pCur, pIdxKey, &treeFound, &cmp);
-      if( rc!=SQLITE_OK ) return rc;
-      if( treeFound ){
-        pCur->eState = CURSOR_VALID;
-        cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-        *pRes = cmp;
-        pIdxKey->eqSeen = 1;
-        return SQLITE_OK;
-      }
-    }
-
-    if( pCur->pKeyInfo
-     && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
-      struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-      ProllyMutMap *pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
-      ProllyMutMapEntry *pEntry = 0;
-      if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-        rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
-        if( rc!=SQLITE_OK ) return rc;
-        if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-          if( pCur->isPinned ){
-            return SQLITE_CONSTRAINT_PINNED;
-          }
-          setCursorToMutMapEntryPhys(
-              pCur, (int)(pEntry - pCur->pMutMap->aEntries));
-          /* The tree side is still wherever the last operation left it. A
-          ** later step must re-seek it to this key before merging, or it
-          ** feeds stale entries into the merge scan. */
-          pCur->deferredTreeSeek = 1;
-          *pRes = 0;
-          pIdxKey->eqSeen = 1;
-          return SQLITE_OK;
-        }
-      }
-      if( pPending && pPending!=pCur->pMutMap
-       && !prollyMutMapIsEmpty(pPending) ){
-        rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
-        if( rc!=SQLITE_OK ) return rc;
-        if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-          if( pCur->isPinned ){
-            return SQLITE_CONSTRAINT_PINNED;
-          }
-          pCur->pMutMap = pPending;
-          setCursorToMutMapEntryPhys(
-              pCur, (int)(pEntry - pPending->aEntries));
-          pCur->deferredTreeSeek = 1;
-          *pRes = 0;
-          pIdxKey->eqSeen = 1;
-          return SQLITE_OK;
-        }
-      }
-    }
-
-    {
-      int seekRes = 0;
-      rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &seekRes);
-      if( rc==SQLITE_OK
-       && seekRes==0
-       && pCur->pCur.eState==PROLLY_CURSOR_VALID
-       && pCur->pKeyInfo
-       && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
-        int isDeleted = 0;
-        if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-          ProllyMutMapEntry *mmE = 0;
-          rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &mmE);
-          if( rc!=SQLITE_OK ) return rc;
-          if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
-        }
-        if( !isDeleted ){
-          *pRes = 0;
-          pIdxKey->eqSeen = 1;
-          pCur->eState = CURSOR_VALID;
-          cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-          return SQLITE_OK;
-        }
-      }
-    }
+    rc = indexMovetoExactTreeHit(
+        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey, pRes, &done);
+    if( rc!=SQLITE_OK || done ) return rc;
     /* A failed tree seek must not fall through to the mut-map merge below:
     ** that path resets rc and reports "row not found" for what was really
     ** an I/O or allocation failure. */
+    rc = indexMovetoScanTreeLeaf(
+        pCur, pIdxKey, pSortKey, nSortKey, nSeekKeyField,
+        &treeFound, &treeCmp);
     if( rc!=SQLITE_OK ) return rc;
-    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      int iLevel = pCur->pCur.iLevel;
-      ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
-      int lo = pCur->pCur.aLevel[iLevel].idx;
-      int nItems = pLeaf->node.nItems;
-
-      int bestIdx = -1;
-      int bestCmp = 0;
-      {
-        u8 *pRecBuf = pCur->pMovetoRec;
-        int nRecBufAlloc = pCur->nMovetoRecAlloc;
-        int i;
-
-       for(;;){
-        for( i = lo; i < nItems; i++ ){
-          const u8 *pSK; int nSK;
-          const u8 *pVal; int nVal;
-          int recCmp;
-          prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
-
-          {
-            int cmpLen = nSK < nSortKey ? nSK : nSortKey;
-            int prefixCmp = memcmp(pSK, pSortKey, cmpLen);
-            if( prefixCmp > 0 ){
-              if( bestIdx < 0 ){
-                if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-                  ProllyMutMapEntry *mmE = 0;
-                  rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
-                  if( rc!=SQLITE_OK ) break;
-                  if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-                    /* Delete-masked row past the seek key: the next live row
-                    ** is still the positioning answer, so keep scanning. */
-                    continue;
-                  }
-                }
-                bestIdx = i;
-                if( nSeekKeyField>0 ){
-                  pIdxKey->eqSeen = 0;
-                  bestCmp = 1;
-                }else{
-                  const u8 *pVal2; int nVal2;
-                  prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
-                  if( nVal2==0 ){
-                    rc = recordFromSortKeyBufferColl(
-                        pSK, nSK, pCur->pKeyInfo,
-                        &pRecBuf, &nRecBufAlloc, &nVal2);
-                    if( rc!=SQLITE_OK ) break;
-                    pVal2 = pRecBuf;
-                  }
-                  pIdxKey->eqSeen = 0;
-                  bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
-                }
-              }
-              break;
-            }
-            if( nSeekKeyField>0 && prefixCmp==0 && nSK>=nSortKey ){
-              if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-                ProllyMutMapEntry *mmE = 0;
-                rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
-                if( rc!=SQLITE_OK ) break;
-                if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-                  continue;
-                }
-              }
-              pIdxKey->eqSeen = 1;
-              bestIdx = i;
-              bestCmp = pIdxKey->default_rc;
-              treeFound = 1;
-              treeCmp = bestCmp;
-              if( pIdxKey->default_rc < 0 ){
-                continue;
-              }
-              break;
-            }
-          }
-          prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
-          if( nVal==0 ){
-            rc = recordFromSortKeyBufferColl(
-                pSK, nSK, pCur->pKeyInfo, &pRecBuf, &nRecBufAlloc, &nVal);
-            if( rc!=SQLITE_OK ) break;
-            pVal = pRecBuf;
-          }
-          pIdxKey->eqSeen = 0;
-          recCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
-
-          if( recCmp==0 || pIdxKey->eqSeen ){
-            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-              ProllyMutMapEntry *mmE = 0;
-              rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
-              if( rc!=SQLITE_OK ) break;
-              if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-                continue;
-              }
-            }
-            bestIdx = i;
-            bestCmp = recCmp;
-            treeFound = 1;
-            treeCmp = recCmp;
-            break;
-          } else if( recCmp > 0 ){
-            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-              ProllyMutMapEntry *mmE = 0;
-              rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
-              if( rc!=SQLITE_OK ) break;
-              if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-                continue;
-              }
-            }
-            if( bestIdx < 0 ){
-              bestIdx = i;
-              bestCmp = recCmp;
-            }
-          }
-        }
-        if( rc!=SQLITE_OK || treeFound || bestIdx>=0 ) break;
-        if( !(pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)) ) break;
-        /* Everything from the seek point through the end of this leaf was
-        ** delete-masked; the first live row may sit in a later leaf. */
-        if( nItems>0 ) pCur->pCur.aLevel[pCur->pCur.iLevel].idx = nItems-1;
-        rc = prollyCursorNext(&pCur->pCur);
-        if( rc!=SQLITE_OK ) break;
-        if( pCur->pCur.eState!=PROLLY_CURSOR_VALID ) break;
-        iLevel = pCur->pCur.iLevel;
-        pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
-        nItems = pLeaf->node.nItems;
-        lo = 0;
-       }
-        pCur->pMovetoRec = pRecBuf;
-        pCur->nMovetoRecAlloc = nRecBufAlloc;
-        if( rc!=SQLITE_OK ) return rc;
-      }
-
-      if( treeFound ){
-
-        pCur->pCur.aLevel[iLevel].idx = bestIdx;
-      } else if( bestIdx >= 0 ){
-
-        pCur->pCur.aLevel[iLevel].idx = bestIdx;
-        treeCmp = bestCmp;
-        treeFound = 1;
-      }
-
-    }
 
     {
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
