@@ -3599,7 +3599,7 @@ pager2 pager2-3.1 intentional -
 pager3 pager3-1.1.1 intentional https://github.com/dolthub/doltlite/issues/1846
 pager3 pager3-1.4.2 intentional https://github.com/dolthub/doltlite/issues/1846
 pager3 pager3-1.5.2 intentional https://github.com/dolthub/doltlite/issues/1846
-pager4 pager4-1.4 engine-gap https://github.com/dolthub/doltlite/issues/1853
+pager4 pager4-1.4 engine-gap https://github.com/dolthub/doltlite/issues/1884
 pager4 pager4-1.7 intentional https://github.com/dolthub/doltlite/issues/1846
 pager4 pager4-1.8 intentional https://github.com/dolthub/doltlite/issues/1846
 pagerfault * harness -
