@@ -311,11 +311,24 @@ int doltliteLoadLiveSchemaSql(
   return rc;
 }
 
-int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
+int doltliteMutateRefsExpected(
+  sqlite3 *db,
+  const DoltliteBranchExpectation *aExpected,
+  int nExpected,
+  DoltliteRefsMutation xMutate,
+  void *pArg
+){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  ChunkStoreRefsSnapshot snapshot;
+  int haveSnapshot = 0;
+  int i;
   int rc;
 
-  if( !cs ) return SQLITE_ERROR;
+  memset(&snapshot, 0, sizeof(snapshot));
+
+  if( !cs || !xMutate || nExpected<0 || (nExpected>0 && !aExpected) ){
+    return SQLITE_MISUSE;
+  }
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
@@ -330,14 +343,43 @@ int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
     return rc;
   }
 
-  rc = xMutate(db, cs, pArg);
+  rc = chunkStoreSnapshotRefs(cs, &snapshot);
+  if( rc==SQLITE_OK ) haveSnapshot = 1;
+  for(i=0; rc==SQLITE_OK && i<nExpected; i++){
+    ProllyHash tip;
+    int found = 0;
+    rc = chunkStoreReadDiskBranchTip(
+        cs, aExpected[i].zBranch, &tip, &found);
+    if( rc==SQLITE_OK ){
+      if( aExpected[i].pTip ){
+        if( !found || prollyHashCompare(&tip, aExpected[i].pTip)!=0 ){
+          rc = SQLITE_BUSY;
+        }
+      }else if( found ){
+        rc = SQLITE_BUSY;
+      }
+    }
+  }
+
+  if( rc==SQLITE_OK ) rc = xMutate(db, cs, pArg);
   if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefs(cs);
     if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
   }
+  if( haveSnapshot ){
+    if( rc==SQLITE_OK ){
+      chunkStoreDiscardRefsSnapshot(&snapshot);
+    }else{
+      chunkStoreRestoreRefsSnapshot(cs, &snapshot);
+    }
+  }
 
   chunkStoreUnlock(cs);
   return rc;
+}
+
+int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
+  return doltliteMutateRefsExpected(db, 0, 0, xMutate, pArg);
 }
 
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
@@ -587,6 +629,25 @@ int doltliteAdvanceBranch(
 
   doltliteTxnStateClear(&saved);
   return SQLITE_OK;
+}
+
+int doltliteCompareAndAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pExpectedHead,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+  if( !cs ) return SQLITE_ERROR;
+  rc = doltliteRefreshAndConfirmHead(db, cs, pExpectedHead);
+  if( rc==SQLITE_OK ){
+    rc = doltliteAdvanceBranch(
+        db, pNewHead, pCatalogHash, pWorkingCatHash);
+    chunkStoreUnlock(cs);
+  }
+  return rc;
 }
 
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db){

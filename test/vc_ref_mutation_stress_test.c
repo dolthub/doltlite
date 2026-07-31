@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "doltlite_internal.h"
 
 #define N_WORKERS 3
 #define N_ROUNDS 4
@@ -434,6 +435,77 @@ static void runDefaultRenameStress(void){
   cleanupDb(path);
 }
 
+typedef struct FailingMutationCtx FailingMutationCtx;
+struct FailingMutationCtx {
+  const char *zBranch;
+  ProllyHash head;
+};
+
+static int failAfterBranchAdd(sqlite3 *db, ChunkStore *cs, void *pArg){
+  FailingMutationCtx *p = (FailingMutationCtx*)pArg;
+  int rc;
+  (void)db;
+  rc = chunkStoreAddBranch(cs, p->zBranch, &p->head);
+  return rc==SQLITE_OK ? SQLITE_IOERR : rc;
+}
+
+static int addMutationBranch(sqlite3 *db, ChunkStore *cs, void *pArg){
+  FailingMutationCtx *p = (FailingMutationCtx*)pArg;
+  (void)db;
+  return chunkStoreAddBranch(cs, p->zBranch, &p->head);
+}
+
+static void runAtomicMutationTests(void){
+  const char *path = "/tmp/test_vc_atomic_mutation.db";
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  FailingMutationCtx mutation;
+  DoltliteBranchExpectation expected;
+  int count = 0;
+  int rc;
+
+  check("atomic_mutation_setup", setupDb(path)==SQLITE_OK);
+  check("atomic_mutation_open_first", sqlite3_open(path, &db1)==SQLITE_OK);
+  sqlite3_busy_timeout(db1, 5000);
+  doltliteGetSessionHead(db1, &mutation.head);
+  mutation.zBranch = "rollback_probe";
+  rc = doltliteMutateRefs(db1, failAfterBranchAdd, &mutation);
+  check("atomic_mutation_surfaces_callback_failure", rc==SQLITE_IOERR);
+  check("atomic_mutation_restores_in_memory_refs",
+        queryIntWithRetry(db1,
+          "SELECT count(*) FROM dolt_branches WHERE name='rollback_probe'",
+          &count)==SQLITE_OK && count==0);
+  sqlite3_close(db1);
+  db1 = 0;
+  check("atomic_mutation_reopen_first", sqlite3_open(path, &db1)==SQLITE_OK);
+  check("atomic_mutation_failure_not_persisted",
+        queryIntWithRetry(db1,
+          "SELECT count(*) FROM dolt_branches WHERE name='rollback_probe'",
+          &count)==SQLITE_OK && count==0);
+
+  check("atomic_mutation_open_peer", sqlite3_open(path, &db2)==SQLITE_OK);
+  sqlite3_busy_timeout(db1, 5000);
+  sqlite3_busy_timeout(db2, 5000);
+  doltliteGetSessionHead(db1, &mutation.head);
+  check("atomic_mutation_peer_insert",
+        execSql(db2, "INSERT INTO ref_rows VALUES(99, 99, 99)")==SQLITE_OK);
+  check("atomic_mutation_peer_commit",
+        execSql(db2, "SELECT dolt_commit('-A','-m','peer advance')")==SQLITE_OK);
+  mutation.zBranch = "cas_probe";
+  expected.zBranch = "main";
+  expected.pTip = &mutation.head;
+  rc = doltliteMutateRefsExpected(
+      db1, &expected, 1, addMutationBranch, &mutation);
+  check("atomic_mutation_rejects_stale_expected_tip", rc==SQLITE_BUSY);
+  check("atomic_mutation_rejected_ref_absent",
+        queryIntWithRetry(db1,
+          "SELECT count(*) FROM dolt_branches WHERE name='cas_probe'",
+          &count)==SQLITE_OK && count==0);
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+  cleanupDb(path);
+}
+
 int main(void){
   const char *path = "/tmp/test_vc_ref_mutation_stress.db";
   pid_t pids[N_WORKERS];
@@ -461,6 +533,7 @@ int main(void){
   verifyFinalState(path);
   cleanupDb(path);
   runDefaultRenameStress();
+  runAtomicMutationTests();
 
   printf("\nResults: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass+nFail);

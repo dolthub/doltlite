@@ -46,7 +46,6 @@ int mergeFastForward(
 ){
   DoltliteCommit theirCommit;
   DoltliteTxnState savedState;
-  int graphLocked = 0;
   int rc;
   char hx[PROLLY_HASH_SIZE*2+1];
 
@@ -65,31 +64,18 @@ int mergeFastForward(
     sqlite3_result_error_code(context, rc);
     return rc;
   }
-  rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
-  if( rc==SQLITE_BUSY ){
-    doltliteTxnStateClear(&savedState);
-    doltliteCommitClear(&theirCommit);
-    doltliteCmdResultPeerBranchBusy(context, "merge");
-    return rc;
-  }
-  if( rc!=SQLITE_OK ){
-    doltliteTxnStateClear(&savedState);
-    doltliteCommitClear(&theirCommit);
-    sqlite3_result_error_code(context, rc);
-    return rc;
-  }
-  graphLocked = 1;
   rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
   if( rc==SQLITE_OK ){
     rc = doltliteUpdateBranchWorkingState(db, doltliteGetSessionBranch(db),
                                           &theirCommit.catalogHash, NULL);
   }
   if( rc==SQLITE_OK ){
-    rc = doltliteAdvanceBranch(db, pTheirHead, &theirCommit.catalogHash, 0);
+    rc = doltliteCompareAndAdvanceBranch(
+        db, pOurHead, pTheirHead, &theirCommit.catalogHash, 0);
   }
-  if( graphLocked ) chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&theirCommit);
+    if( rc==SQLITE_BUSY ) doltliteCmdResultPeerBranchBusy(context, "merge");
     sqlite3_result_error_code(context,
         doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
     return rc;
@@ -509,25 +495,12 @@ int doltliteMergeRef(
       return SQLITE_ERROR;
     }
 
-    /* Re-confirm under the lock right before advancing; the merge's first
-    ** confirm is staled by intervening lock-cycling SQL (ANALYZE, etc.). */
-    rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
+    rc = doltliteCompareAndAdvanceBranch(
+        db, &ourHead, &commitHash, &mergedCatHash, 0);
     if( rc==SQLITE_BUSY ){
       doltliteCmdResultPeerBranchBusy(context, "merge");
       doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
       return SQLITE_ERROR;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return SQLITE_ERROR;
-    }
-    graphLocked = 1;
-
-    rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash, 0);
-    if( graphLocked ){
-      chunkStoreUnlock(cs);
-      graphLocked = 0;
     }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,

@@ -254,13 +254,8 @@ int applyMergedCatalogAndCommit(
       zMessage, NULL, NULL, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  /* Re-confirm under the lock right before advancing; the first confirm is
-  ** staled by intervening lock-cycling SQL. */
-  rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
-  if( rc!=SQLITE_OK ) goto apply_rollback;
-  graphLocked = 1;
-
-  rc = doltliteAdvanceBranch(db, &commitHash, &liveMergedCatHash, 0);
+  rc = doltliteCompareAndAdvanceBranch(
+      db, ourHead, &commitHash, &liveMergedCatHash, 0);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteVcSealActiveSavepoints(db);

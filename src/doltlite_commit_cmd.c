@@ -589,6 +589,7 @@ static void doltliteCommitFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCommitOptions opts;
+  DoltliteTxnState mutationState;
   const char *zMessage, *zDate;
   int addAll, addModifiedOnly, amend, allowEmpty, skipEmpty, force;
   ProllyHash commitHash;
@@ -597,6 +598,8 @@ static void doltliteCommitFunc(
   char hexBuf[PROLLY_HASH_SIZE*2+1];
   int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
   int rc;
+
+  memset(&mutationState, 0, sizeof(mutationState));
 
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
@@ -787,12 +790,7 @@ static void doltliteCommitFunc(
   if( rc!=SQLITE_OK ) return;
 
   doltliteGetSessionHead(db, &sessionHeadBeforeLock);
-
-  rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
-  if( rc==SQLITE_BUSY ){
-    doltliteCmdResultPeerBranchBusy(context, "commit");
-    return;
-  }
+  rc = doltliteSaveTxnState(db, &mutationState);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
@@ -804,7 +802,8 @@ static void doltliteCommitFunc(
     if( wasMerging ){
       rc = doltliteClearSessionMergeState(db);
       if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context, rc);
+        sqlite3_result_error_code(context,
+            doltliteRestoreTxnStateOnFailure(db, &mutationState, rc));
         return;
       }
     }
@@ -821,14 +820,22 @@ static void doltliteCommitFunc(
     ProllyHash workingCatHash;
     rc = doltliteFlushCatalogToHash(db, &workingCatHash);
     if( rc==SQLITE_OK ){
-      rc = doltliteAdvanceBranch(db, &commitHash, &catalogHash, &workingCatHash);
+      rc = doltliteCompareAndAdvanceBranch(
+          db, &sessionHeadBeforeLock, &commitHash, &catalogHash,
+          &workingCatHash);
     }
   }
-  chunkStoreUnlock(cs);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
+  if( rc==SQLITE_BUSY ){
+    rc = doltliteRestoreTxnStateOnFailure(db, &mutationState, rc);
+    doltliteCmdResultPeerBranchBusy(context, "commit");
     return;
   }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, &mutationState, rc));
+    return;
+  }
+  doltliteTxnStateClear(&mutationState);
 
   doltliteHashToHex(&commitHash, hexBuf);
 

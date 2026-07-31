@@ -386,7 +386,13 @@ static int doltliteRebaseLinearReplay(
   createCtx.zWorkingBranch = zWorking;
   createCtx.pHead = &upstreamHash;
   createCtx.pCatalog = &upstreamCommit.catalogHash;
-  rc = doltliteMutateRefs(db, rebaseCreateWorkingBranchRefs, &createCtx);
+  {
+    DoltliteBranchExpectation expected;
+    expected.zBranch = zWorking;
+    expected.pTip = 0;
+    rc = doltliteMutateRefsExpected(
+        db, &expected, 1, rebaseCreateWorkingBranchRefs, &createCtx);
+  }
   if( rc==SQLITE_OK ) workingCreated = 1;
   doltliteCommitClear(&upstreamCommit);
   memset(&upstreamCommit, 0, sizeof(upstreamCommit));
@@ -460,7 +466,15 @@ static int doltliteRebaseLinearReplay(
   refsCtx.pExpectedOrigHead = &headHash;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
-  rc = doltliteMutateRefs(db, rebaseFinalizeLinearRefs, &refsCtx);
+  {
+    DoltliteBranchExpectation expected[2];
+    expected[0].zBranch = zOrig;
+    expected[0].pTip = &headHash;
+    expected[1].zBranch = zWorking;
+    expected[1].pTip = &curHead;
+    rc = doltliteMutateRefsExpected(
+        db, expected, 2, rebaseFinalizeLinearRefs, &refsCtx);
+  }
   if( rc!=SQLITE_OK ) goto rollback;
   workingCreated = 0;
 
@@ -1389,7 +1403,15 @@ static void doltliteRebaseInteractiveContinue(
   refsCtx.pExpectedOrigHead = &expectedOrigHead;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
-  rc = doltliteMutateRefs(db, rebaseFinalizeContinueRefs, &refsCtx);
+  {
+    DoltliteBranchExpectation expected[2];
+    expected[0].zBranch = zOrigBranch;
+    expected[0].pTip = &expectedOrigHead;
+    expected[1].zBranch = zWorking;
+    expected[1].pTip = &curHead;
+    rc = doltliteMutateRefsExpected(
+        db, expected, 2, rebaseFinalizeContinueRefs, &refsCtx);
+  }
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = doltliteClearSessionRebaseState(db);
