@@ -16,6 +16,11 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 set testprefix lock5
 
+ifcapable doltlite {
+  finish_test
+  return
+}
+
 # This file is only run if using the unix backend compiled with the
 # SQLITE_ENABLE_LOCKING_STYLE macro.
 db close

@@ -432,6 +432,20 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3_result_int(ctx, 0);
 }
 
+typedef struct PullAdvanceCtx PullAdvanceCtx;
+struct PullAdvanceCtx {
+  const char *zBranch;
+  ProllyHash newTip;
+  int isCreate;
+};
+
+static int mutatePullAdvance(sqlite3 *db, ChunkStore *cs, void *pArg){
+  PullAdvanceCtx *p = (PullAdvanceCtx*)pArg;
+  (void)db;
+  if( p->isCreate ) return chunkStoreAddBranch(cs, p->zBranch, &p->newTip);
+  return chunkStoreUpdateBranch(cs, p->zBranch, &p->newTip);
+}
+
 static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -489,14 +503,29 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   rc = chunkStoreFindBranch(cs, zBranch, &localCommit);
   if( rc!=SQLITE_OK ){
-
-    rc = chunkStoreAddBranch(cs, zBranch, &trackingCommit);
+    /* Create and persist the local branch atomically: mutating the
+    ** in-memory refs outside the lock would either be clobbered by the
+    ** lock-time refresh of a later ref write or linger unpersisted. */
+    DoltliteBranchExpectation exp;
+    PullAdvanceCtx adv;
+    exp.zBranch = zBranch;
+    exp.pTip = 0;
+    adv.zBranch = zBranch;
+    adv.newTip = trackingCommit;
+    adv.isCreate = 1;
+    rc = doltliteMutateRefsExpected(db, &exp, 1, mutatePullAdvance, &adv);
+    if( rc==SQLITE_BUSY ){
+      doltliteCmdResultPeerBranchBusy(ctx, "pull");
+      (void)doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+      return;
+    }
     if( rc!=SQLITE_OK ){
       remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                                 "failed to create local branch");
       return;
     }
-    localCommit = trackingCommit;
+    remoteSqlClearAndSucceed(ctx, &savedState);
+    return;
   }
 
   if( prollyHashCompare(&localCommit, &trackingCommit)==0 ){
@@ -551,27 +580,22 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  /* Advance and persist the branch under the graph lock, first re-confirming
-  ** the branch's authoritative on-disk tip still matches the one the
-  ** fast-forward was computed from. Holding the lock across the confirm and
-  ** the persist keeps a peer from committing to zBranch in between, which
-  ** would otherwise be clobbered (lost update). */
-  rc = chunkStoreLockAndRefresh(cs);
-  if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
-    return;
-  }
+  /* Advance and persist the branch through the atomic ref-mutation helper:
+  ** it force-refreshes under the graph lock before serializing the whole
+  ** refs blob (the lock-time size heuristic can miss a peer commit, and a
+  ** stale view here would clobber the peer's ref change), CAS-checks the
+  ** branch's authoritative on-disk tip against the one the fast-forward
+  ** was computed from, and restores the refs snapshot on failure. */
   {
-    ProllyHash diskTip;
-    int found = 0;
-    rc = chunkStoreReadDiskBranchTip(cs, zBranch, &diskTip, &found);
-    if( rc==SQLITE_OK && found && prollyHashCompare(&diskTip, &localCommit)!=0 ){
-      rc = SQLITE_BUSY;
-    }
+    DoltliteBranchExpectation exp;
+    PullAdvanceCtx adv;
+    exp.zBranch = zBranch;
+    exp.pTip = &localCommit;
+    adv.zBranch = zBranch;
+    adv.newTip = trackingCommit;
+    adv.isCreate = 0;
+    rc = doltliteMutateRefsExpected(db, &exp, 1, mutatePullAdvance, &adv);
   }
-  if( rc==SQLITE_OK ) rc = chunkStoreUpdateBranch(cs, zBranch, &trackingCommit);
-  if( rc==SQLITE_OK ) rc = doltliteRemotePersistRefs(cs);
-  chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     if( rc==SQLITE_BUSY ){
       doltliteCmdResultPeerBranchBusy(ctx, "pull");

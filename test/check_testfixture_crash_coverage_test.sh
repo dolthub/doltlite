@@ -21,7 +21,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 CRASHES="$TMP_DIR/crashes"
 COVERAGE="$TMP_DIR/coverage"
 BUCKETS="$TMP_DIR/buckets"
+TERMINATIONS="$TMP_DIR/terminations"
 mkdir -p "$BUCKETS"
+touch "$TERMINATIONS"
 
 # Replacements are resolved against the real test/ tree, so the fixtures name
 # real replacements and real cases. That also means this fails if one of those
@@ -36,7 +38,7 @@ printf '%s\n' 'malloc # excluded, needs replacement coverage' > "$CRASHES"
 printf '%s\n' 'somethingelse' "$REPLACEMENT" > "$BUCKETS/bucket.txt"
 
 run_check() {
-  bash "$CHECKER" "$CRASHES" "$COVERAGE" "$BUCKETS" 2>&1
+  bash "$CHECKER" "$CRASHES" "$COVERAGE" "$BUCKETS" "$TERMINATIONS" 2>&1
 }
 
 expect_ok() {
@@ -92,6 +94,23 @@ expect_reason "a duplicate mapping" "duplicate coverage mappings"
 : > "$COVERAGE"
 expect_reason "an excluded crash test with no coverage" \
   "without replacement coverage"
+
+printf '%s\n' 'malloc' > "$BUCKETS/bucket.txt"
+: > "$COVERAGE"
+expect_reason "a bucketed crash test with no termination contract" \
+  "without termination contracts"
+
+printf '%s\n' 'malloc tcl-error malloc-1.0 0000000000000000000000000000000000000000000000000000000000000000' \
+  > "$TERMINATIONS"
+expect_ok "a bucketed crash test with a termination contract"
+
+printf '%s\n' 'notacrash tcl-error notacrash-1.0 0000000000000000000000000000000000000000000000000000000000000000' \
+  > "$TERMINATIONS"
+expect_reason "a termination contract outside the crash inventory" \
+  "outside the crash inventory"
+
+: > "$TERMINATIONS"
+printf '%s\n' 'somethingelse' "$REPLACEMENT" > "$BUCKETS/bucket.txt"
 
 printf '%s\n' \
   "malloc testfixture $REPLACEMENT 1 # real" \

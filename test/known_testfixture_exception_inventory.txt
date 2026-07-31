@@ -9,7 +9,6 @@
 # Per gate rather than per suite: a suite-level label blankets every assertion
 # in the file, and real bugs have hidden behind a plausible one (#1155, #1156,
 # #1157). Recategorising a single assertion has to be expressible.
-alias * harness -
 alter alter-1.2 intentional https://github.com/dolthub/doltlite/issues/1840
 alter alter-1.5 intentional https://github.com/dolthub/doltlite/issues/1840
 alter alter-1.6 intentional https://github.com/dolthub/doltlite/issues/1840
@@ -175,7 +174,6 @@ autovacuum2 autovacuum2-1.20 intentional https://github.com/dolthub/doltlite/iss
 autovacuum2 autovacuum2-1.3 intentional https://github.com/dolthub/doltlite/issues/1846
 autovacuum2 autovacuum2-1.4 intentional https://github.com/dolthub/doltlite/issues/1846
 avtrans avtrans-1.0.1 intentional https://github.com/dolthub/doltlite/issues/1846
-backup * unsupported https://github.com/dolthub/doltlite/issues/1839
 backup2 backup2-11 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup2 backup2-4 unsupported https://github.com/dolthub/doltlite/issues/1839
 backup2 backup2-5 unsupported https://github.com/dolthub/doltlite/issues/1839
@@ -369,7 +367,6 @@ collate9 collate9-4.2 intentional -
 collate9 collate9-4.5 intentional -
 colmeta colmeta-5.1 intentional -
 colmeta colmeta-5.2 intentional -
-corrupt * intentional -
 corrupt corrupt-3.3 intentional -
 corrupt corrupt-3.4 intentional -
 corrupt corrupt-3.5 intentional -
@@ -377,7 +374,6 @@ corrupt corrupt-3.6 intentional -
 corrupt corrupt-5.2 intentional -
 corrupt corrupt-8.1 intentional -
 corrupt corrupt-8.2 intentional -
-corrupt2 * intentional https://github.com/dolthub/doltlite/issues/1846
 corrupt4 * harness -
 corrupt6 corrupt6-1.1 intentional -
 corrupt6 corrupt6-1.2 intentional -
@@ -392,7 +388,6 @@ corrupt7 corrupt7-1.2 intentional -
 corrupt7 corrupt7-2.1 intentional -
 corrupt7 corrupt7-2.2 intentional -
 corrupt8 corrupt8-2.1024.6 intentional -
-corrupt9 * intentional -
 corruptA corruptA-2.1 intentional -
 corruptA corruptA-2.2 intentional -
 corruptA corruptA-2.3 intentional -
@@ -401,7 +396,6 @@ corruptB corruptB-1.6.2 intentional -
 corruptB corruptB-1.7.2 intentional -
 corruptB corruptB-1.8.2 intentional -
 corruptB corruptB-2.1.2 intentional -
-corruptC * intentional -
 corruptD corruptD-1.1.1 intentional -
 corruptD corruptD-1.1.2 intentional -
 corruptE corruptE-2.1 intentional -
@@ -435,7 +429,6 @@ corruptG corruptG-1.3 intentional -
 corruptG corruptG-1.4 intentional -
 corruptG corruptG-2.1 intentional -
 corruptH corruptH-2.3 intentional -
-corruptI * intentional -
 corruptJ corruptJ-2.2 intentional -
 corruptK corruptK-1.1 intentional https://github.com/dolthub/doltlite/issues/1846
 corruptK corruptK-1.2 intentional -
@@ -1016,7 +1009,6 @@ dbpage dbpage-640 unsupported https://github.com/dolthub/doltlite/issues/947
 dbpage dbpage-710 unsupported https://github.com/dolthub/doltlite/issues/947
 dbpage dbpage-810 unsupported https://github.com/dolthub/doltlite/issues/947
 dbpage dbpage-820 unsupported https://github.com/dolthub/doltlite/issues/947
-dbpagefault * unsupported https://github.com/dolthub/doltlite/issues/1836
 dbstatus * intentional -
 dbstatus2 dbstatus2-1.1 intentional -
 dbstatus2 dbstatus2-1.2 intentional -
@@ -1372,7 +1364,6 @@ e_wal e_wal-4.1.4 unsupported https://github.com/dolthub/doltlite/issues/1836
 e_wal e_wal-4.2.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 e_wal e_wal-4.2.3 unsupported https://github.com/dolthub/doltlite/issues/1836
 e_wal e_wal-4.3 unsupported https://github.com/dolthub/doltlite/issues/1836
-e_walauto * unsupported https://github.com/dolthub/doltlite/issues/1836
 e_walckpt e_walckpt-1.1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 e_walckpt e_walckpt-1.1.3 unsupported https://github.com/dolthub/doltlite/issues/1836
 e_walckpt e_walckpt-1.1.4 unsupported https://github.com/dolthub/doltlite/issues/1836
@@ -3287,17 +3278,13 @@ lock2 lock2-1.7 intentional -
 lock2 lock2-1.8 intentional -
 lock3 lock3-4.1 intentional -
 lock4 lock4-1.1 intentional -
-lock5 * intentional -
 lock7 lock7-1.6 intentional https://github.com/dolthub/doltlite/issues/1846
 malloc * harness -
 malloc3 * harness -
-mallocAll * harness -
 mallocK mallocK-6.0 intentional -
 mallocD mallocD-4.transient.107 unsupported https://github.com/dolthub/doltlite/issues/1839
 memdb memdb-6.12 intentional https://github.com/dolthub/doltlite/issues/1840
 memdb memdb-9.1 intentional https://github.com/dolthub/doltlite/issues/1840
-memdb1 * unsupported https://github.com/dolthub/doltlite/issues/1839
-memdb2 * unsupported https://github.com/dolthub/doltlite/issues/1839
 memjournal memjournal-1.0 intentional https://github.com/dolthub/doltlite/issues/1846
 memjournal2 memjournal2-1.0 intentional https://github.com/dolthub/doltlite/issues/1846
 memsubsys1 memsubsys1-2.3 intentional -
@@ -3578,7 +3565,6 @@ numcast numcast-utf16be.0 intentional -
 numcast numcast-utf16le.0 intentional -
 oserror oserror-2.1.1 intentional -
 oserror oserror-2.1.2 intentional -
-pager1 * intentional -
 pager2 pager2-2.1 intentional https://github.com/dolthub/doltlite/issues/1846
 pager2 pager2-2.2 intentional -
 pager2 pager2-3.1 intentional -
@@ -3614,7 +3600,6 @@ pagesize pagesize-3.3 intentional https://github.com/dolthub/doltlite/issues/184
 pcache2 pcache2-1.2 intentional -
 pcache2 pcache2-1.3 intentional -
 pcache2 pcache2-1.4 intentional -
-pendingrace * intentional -
 pragma pragma-1.10 intentional -
 pragma pragma-1.11.1 intentional -
 pragma pragma-1.11.2 intentional -
@@ -3700,7 +3685,6 @@ pragma3 pragma3-420 intentional -
 pragma3 pragma3-430 intentional -
 pragma4 pragma4-6.2 intentional -
 pragma6 pragma6-1.0 intentional -
-qrf04 * harness -
 quota quota-2.1.2 intentional -
 quota quota-2.1.3 intentional -
 quota quota-2.1.5 intentional -
@@ -4019,7 +4003,6 @@ shared_err shared_ioerr-2.179.cleanup.1 unsupported https://github.com/dolthub/d
 shared_err shared_ioerr-2.180.cleanup.1 unsupported https://github.com/dolthub/doltlite/issues/1837
 shared_err shared_ioerr-2.181.cleanup.1 unsupported https://github.com/dolthub/doltlite/issues/1837
 sharedlock sharedlock-2.4 unsupported https://github.com/dolthub/doltlite/issues/1837
-shmlock * unsupported https://github.com/dolthub/doltlite/issues/1836
 shortread1 shortread1-1.2 intentional -
 shrink shrink-1.1 intentional -
 shrink shrink-1.2 intentional -
@@ -4263,7 +4246,6 @@ statfault statfault-1-shmerr-transient.1 intentional -
 strict2 strict2-2.0 intentional -
 strict2 strict2-3.0 intentional -
 subjournal subjournal-2.1 intentional -
-superlock * intentional -
 swarmvtab swarmvtab-2.3 intentional -
 symlink symlink-2.1.2 intentional -
 symlink symlink-2.1.4 intentional -
@@ -4694,9 +4676,6 @@ vtab_shared vtab_shared-1.8.3 unsupported https://github.com/dolthub/doltlite/is
 vtab_shared vtab_shared-1.8.5 unsupported https://github.com/dolthub/doltlite/issues/1837
 vtabdrop vtabdrop-2.2 intentional -
 vtabdrop vtabdrop-2.3 intentional -
-wal * unsupported https://github.com/dolthub/doltlite/issues/1836
-wal2 * unsupported https://github.com/dolthub/doltlite/issues/1836
-wal3 * unsupported https://github.com/dolthub/doltlite/issues/1836
 wal4 wal4-2-cantopen-persistent.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 wal4 wal4-2-cantopen-transient.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 wal4 wal4-2-full.1 unsupported https://github.com/dolthub/doltlite/issues/1836
@@ -5162,7 +5141,6 @@ wal5 wal5-pragma-5.2.5 unsupported https://github.com/dolthub/doltlite/issues/18
 wal5 wal5-pragma-5.2.6 unsupported https://github.com/dolthub/doltlite/issues/1836
 wal5 wal5-pragma-5.2.8 unsupported https://github.com/dolthub/doltlite/issues/1836
 wal5 wal5-pragma-5.2.9 unsupported https://github.com/dolthub/doltlite/issues/1836
-wal6 * unsupported https://github.com/dolthub/doltlite/issues/1836
 wal64k wal64k-1.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 wal64k wal64k-1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 wal7 wal7-1.0 unsupported https://github.com/dolthub/doltlite/issues/1836
@@ -5206,7 +5184,6 @@ walbak walbak-4.1.5 unsupported https://github.com/dolthub/doltlite/issues/1836
 walbak walbak-4.1.7 unsupported https://github.com/dolthub/doltlite/issues/1836
 walbak walbak-4.2.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 walbak walbak-4.3.3 unsupported https://github.com/dolthub/doltlite/issues/1836
-walbig * intentional https://github.com/dolthub/doltlite/issues/1840
 walckptnoop walckptnoop-1.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 walckptnoop walckptnoop-1.10 unsupported https://github.com/dolthub/doltlite/issues/1836
 walckptnoop walckptnoop-1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
@@ -5217,8 +5194,6 @@ walckptnoop walckptnoop-1.6 unsupported https://github.com/dolthub/doltlite/issu
 walckptnoop walckptnoop-1.7 unsupported https://github.com/dolthub/doltlite/issues/1836
 walckptnoop walckptnoop-1.8 unsupported https://github.com/dolthub/doltlite/issues/1836
 walckptnoop walckptnoop-1.9 unsupported https://github.com/dolthub/doltlite/issues/1836
-walcksum * unsupported https://github.com/dolthub/doltlite/issues/1836
-walfault * unsupported https://github.com/dolthub/doltlite/issues/1836
 walhook walhook-1.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 walhook walhook-1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 walhook walhook-1.3 unsupported https://github.com/dolthub/doltlite/issues/1836
@@ -5264,8 +5239,6 @@ walmode walmode-8.3 unsupported https://github.com/dolthub/doltlite/issues/1836
 walmode walmode-8.4 unsupported https://github.com/dolthub/doltlite/issues/1836
 walmode walmode-8.7 unsupported https://github.com/dolthub/doltlite/issues/1836
 walmode walmode-8.9 unsupported https://github.com/dolthub/doltlite/issues/1836
-walnoshm * unsupported https://github.com/dolthub/doltlite/issues/1836
-waloverwrite * unsupported https://github.com/dolthub/doltlite/issues/1836
 walpersist walpersist-1.0 unsupported https://github.com/dolthub/doltlite/issues/1836
 walpersist walpersist-1.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 walpersist walpersist-1.11 unsupported https://github.com/dolthub/doltlite/issues/1836
@@ -5290,18 +5263,12 @@ walrestart walrestart-1.0 unsupported https://github.com/dolthub/doltlite/issues
 walrestart walrestart-1.1 unsupported https://github.com/dolthub/doltlite/issues/1836
 walrestart walrestart-1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 walrestart walrestart-1.4 unsupported https://github.com/dolthub/doltlite/issues/1836
-walro * unsupported https://github.com/dolthub/doltlite/issues/1836
-walro2 * unsupported https://github.com/dolthub/doltlite/issues/1836
 walseh1 walseh1-6-seh.1 unsupported https://github.com/dolthub/doltlite/issues/1836
-walsetlk * unsupported https://github.com/dolthub/doltlite/issues/1836
 walsetlk_recover walsetlk_recover-1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 walsetlk_recover walsetlk_recover-1.3 unsupported https://github.com/dolthub/doltlite/issues/1836
 walsetlk_recover walsetlk_recover-1.5.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 walshared walshared-1.2 unsupported https://github.com/dolthub/doltlite/issues/1836
 walshared walshared-1.3 unsupported https://github.com/dolthub/doltlite/issues/1836
-walslow * unsupported https://github.com/dolthub/doltlite/issues/1836
-walthread * harness -
-walvfs * unsupported https://github.com/dolthub/doltlite/issues/1836
 where where-1.1.1 intentional https://github.com/dolthub/doltlite/issues/1840
 where where-5.1 intentional https://github.com/dolthub/doltlite/issues/1840
 where where-5.5 intentional https://github.com/dolthub/doltlite/issues/1840
@@ -5323,10 +5290,6 @@ whereL whereL-110 intentional -
 whereL whereL-120 intentional -
 whereL whereL-121 intentional -
 whereL whereL-122 intentional -
-win32heap * harness -
-win32lock * harness -
-win32longpath * harness -
-win32nolock * harness -
 window1 window1-10.7 intentional https://github.com/dolthub/doltlite/issues/1840
 window1 window1-10.8 intentional https://github.com/dolthub/doltlite/issues/1840
 window6 window6-3.1 intentional -

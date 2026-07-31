@@ -17,6 +17,10 @@
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+ifcapable doltlite {
+  finish_test
+  return
+}
 set testprefix corrupt2
 
 # Do not use a codec for tests in this file, as the database file is

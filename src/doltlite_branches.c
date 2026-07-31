@@ -15,8 +15,13 @@ typedef struct BrCur BrCur;
 struct BrCur {
   sqlite3_vtab_cursor base;
   int iRow;
-  int bSingle;
-  int iSingle;
+  /* Cursor-owned copy of the branches visible at xFilter time. A VC
+  ** function evaluated in the same statement mutates and reallocates the
+  ** live cs->refs arrays mid-scan, so rows must never be served from
+  ** them. Commit metadata is still loaded lazily by hash; commits are
+  ** immutable, so those lookups cannot go stale. */
+  int nRows;
+  BranchRef *aSnap;
   int iCommitRow;
   DoltliteCommit commit;
 };
@@ -24,6 +29,37 @@ struct BrCur {
 static void brClearCommit(BrCur *c){
   doltliteCommitClear(&c->commit);
   c->iCommitRow = -1;
+}
+
+static void brCurClearSnapshot(BrCur *c){
+  int i;
+  for(i=0; i<c->nRows; i++){
+    sqlite3_free(c->aSnap[i].zName);
+  }
+  sqlite3_free(c->aSnap);
+  c->aSnap = 0;
+  c->nRows = 0;
+  c->iRow = 0;
+}
+
+static int brCurSnapshot(BrCur *c, const BranchRef *aBr, int nBr){
+  int i;
+  brCurClearSnapshot(c);
+  if( nBr<=0 ) return SQLITE_OK;
+  c->aSnap = (BranchRef*)sqlite3_malloc64(
+      (sqlite3_uint64)nBr*sizeof(BranchRef));
+  if( !c->aSnap ) return SQLITE_NOMEM;
+  memset(c->aSnap, 0, (size_t)nBr*sizeof(BranchRef));
+  for(i=0; i<nBr; i++){
+    c->nRows = i+1;
+    c->aSnap[i] = aBr[i];
+    c->aSnap[i].zName = sqlite3_mprintf("%s", aBr[i].zName ? aBr[i].zName : "");
+    if( !c->aSnap[i].zName ){
+      brCurClearSnapshot(c);
+      return SQLITE_NOMEM;
+    }
+  }
+  return SQLITE_OK;
 }
 
 static int brConnect(sqlite3 *db, void *pAux, int argc,
@@ -61,27 +97,31 @@ static int brOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
 static int brClose(sqlite3_vtab_cursor *cur){
   BrCur *c = (BrCur*)cur;
   brClearCommit(c);
+  brCurClearSnapshot(c);
   sqlite3_free(c);
   return SQLITE_OK;
 }
 static int brFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
   BrVtab *pVtab = (BrVtab*)c->pVtab;
   BrCur *pCur = (BrCur*)c;
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  int nBr = 0;
+  const BranchRef *aBr = 0;
   (void)s;
   (void)a;
   brClearCommit(pCur);
-  pCur->iRow = 0;
-  pCur->bSingle = 0;
-  pCur->iSingle = -1;
+  brCurClearSnapshot(pCur);
+  if( !cs ) return SQLITE_OK;
+  refsTableGetBranches(&cs->refs, &nBr, &aBr);
   if( n==1 ){
-    ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
     const char *zName = (const char*)sqlite3_value_text(v[0]);
-    pCur->bSingle = 1;
-    pCur->iSingle = cs ? csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
-                                        (int)sizeof(BranchRef), zName) : -1;
-    pCur->iRow = pCur->iSingle;
+    int i = csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
+                           (int)sizeof(BranchRef), zName);
+    if( i<0 ) return SQLITE_OK;
+    aBr += i;
+    nBr = 1;
   }
-  return SQLITE_OK;
+  return brCurSnapshot(pCur, aBr, nBr);
 }
 static int brNext(sqlite3_vtab_cursor *c){
   brClearCommit((BrCur*)c);
@@ -89,12 +129,8 @@ static int brNext(sqlite3_vtab_cursor *c){
   return SQLITE_OK;
 }
 static int brEof(sqlite3_vtab_cursor *c){
-  BrVtab *v = (BrVtab*)c->pVtab;
   BrCur *pCur = (BrCur*)c;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
-  if( !cs ) return 1;
-  if( pCur->bSingle ) return pCur->iSingle<0 || pCur->iRow!=pCur->iSingle;
-  return pCur->iRow >= refsTableBranchCount(&cs->refs);
+  return pCur->iRow >= pCur->nRows;
 }
 
 static int brIsDirty(
@@ -168,11 +204,9 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   BrCur *pCur = (BrCur*)c;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
   const BranchRef *br;
-  int nBr;
-  const BranchRef *aBr;
   if(!cs) return SQLITE_OK;
-  refsTableGetBranches(&cs->refs, &nBr, &aBr);
-  br = &aBr[((BrCur*)c)->iRow];
+  if( pCur->iRow >= pCur->nRows ) return SQLITE_OK;
+  br = &pCur->aSnap[pCur->iRow];
 
   switch(col){
     case 0:

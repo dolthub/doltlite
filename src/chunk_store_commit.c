@@ -109,11 +109,233 @@ static int csCommitToMemory(ChunkStore *cs){
   return SQLITE_OK;
 }
 
+/* Open/lock the store file, resolve logical EOF, and sector-align the
+** next commit batch. On entry *pLockFd / *pzLockName are zeroed by the
+** caller when the graph lock is already held. */
+static int csCommitResolveAppendPoint(
+  ChunkStore *cs,
+  int hadFile,
+  int lockHeld,
+  CsFileLock *pLockFd,
+  char **pzLockName,
+  i64 *pFileSize,
+  i64 *pOrigFileSize,
+  i64 *pDurableTo,
+  i64 *pBatchStart,
+  int *pSectorSize
+){
+  int rc = SQLITE_OK;
+  i64 fileSize = 0;
+  i64 physFileSize = -1;
+  int sectorSize = 1;
+
+  if( cs->file.pFile == 0 ){
+    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                  | SQLITE_OPEN_MAIN_DB;
+    rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
+    if( rc != SQLITE_OK ){
+      return (rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM) ? rc : SQLITE_CANTOPEN;
+    }
+  }
+
+  if( !lockHeld ){
+    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, pLockFd, pzLockName);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  if( lockHeld && hadFile ){
+    fileSize = cs->file.iFileSize;
+  }else{
+    rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
+    if( rc != SQLITE_OK ) return rc;
+    physFileSize = fileSize;
+  }
+
+  if( hadFile && !lockHeld ){
+    int bMoved = 0;
+    int rc2 = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
+                                   &bMoved);
+    if( rc2==SQLITE_OK && bMoved ){
+      rc = csReloadFromDiskPreservingLocalRefs(cs);
+      if( rc != SQLITE_OK ) return rc;
+      fileSize = cs->file.iFileSize;
+    }
+  }
+
+  if( fileSize > cs->file.iFileSize && hadFile ){
+    rc = csReloadFromDiskPreservingLocalRefs(cs);
+    if( rc != SQLITE_OK ) return rc;
+    fileSize = cs->file.iFileSize;
+  }
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+  if( hadFile && cs->staging.nRecentUncommitted>0 && csReloadInjectionActive() ){
+    static int csReloadInjected = 0;
+    if( !csReloadInjected ){
+      csReloadInjected = 1;
+      rc = csReloadFromDiskPreservingLocalRefs(cs);
+      if( rc != SQLITE_OK ) return rc;
+      fileSize = cs->file.iFileSize;
+    }
+  }
+#endif
+  /* Append at logical EOF and truncate crash garbage beyond it. */
+  if( hadFile && cs->file.iFileSize > fileSize ){
+    fileSize = cs->file.iFileSize;
+  }
+  if( physFileSize > fileSize ){
+    (void)sqlite3OsTruncate(cs->file.pFile, fileSize);
+  }
+
+  /* On non-atomic media, isolate commit batches on fresh sectors. */
+  if( (cs->file.pFile->pMethods->xDeviceCharacteristics(cs->file.pFile)
+       & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
+    sectorSize = cs->file.pFile->pMethods->xSectorSize(cs->file.pFile);
+    if( sectorSize < 512 ) sectorSize = 512;
+    if( sectorSize > 65536 ) sectorSize = 65536;
+  }
+  *pFileSize = fileSize;
+  *pOrigFileSize = fileSize;
+  *pDurableTo = fileSize > 0 ? fileSize : (i64)CHUNK_MANIFEST_SIZE;
+  *pBatchStart = *pDurableTo;
+  if( fileSize > 0 && sectorSize > 1 && (*pBatchStart % sectorSize)!=0 ){
+    *pBatchStart += sectorSize - 1;
+    *pBatchStart -= *pBatchStart % sectorSize;
+  }
+  *pSectorSize = sectorSize;
+  return SQLITE_OK;
+}
+
+/* Build the on-disk index plan for pending chunks (offsets + merge/recent). */
+static int csCommitPlanPendingIndex(
+  ChunkStore *cs,
+  i64 batchStart,
+  int crashWriteActive,
+  ChunkIndexEntry *aSmallCommittedPending,
+  int nSmallCommittedPending,
+  ChunkIndexEntry **paCommittedPending,
+  ChunkIndexEntry **paMergePending,
+  ChunkIndexEntry **paMerged,
+  int *pnMerged,
+  int *pUseRecent
+){
+  ChunkStore mergeView;
+  i64 filePos = batchStart;
+  i64 appendBytes = 0;
+  int i;
+
+  *paCommittedPending = 0;
+  *paMergePending = 0;
+  *paMerged = 0;
+  *pnMerged = 0;
+  *pUseRecent = 0;
+  if( cs->staging.nPending <= 0 ) return SQLITE_OK;
+
+  for( i = 0; i < cs->staging.nPending; i++ ){
+    i64 recBytes = (i64)CS_WAL_CHUNK_HDR_SIZE
+                 + (i64)cs->staging.aPending[i].size;
+    if( appendBytes > LARGEST_INT64 - recBytes ) return SQLITE_TOOBIG;
+    appendBytes += recBytes;
+  }
+  if( cs->wal.nWalData > LARGEST_INT64 - appendBytes ) return SQLITE_TOOBIG;
+
+  if( cs->staging.nPending <= nSmallCommittedPending ){
+    *paCommittedPending = aSmallCommittedPending;
+  }else{
+    *paCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
+      cs->staging.nPending * (int)sizeof(ChunkIndexEntry)
+    );
+    if( !*paCommittedPending ) return SQLITE_NOMEM;
+  }
+
+  for( i = 0; i < cs->staging.nPending; i++ ){
+    ChunkIndexEntry *pSrc = &cs->staging.aPending[i];
+    (*paCommittedPending)[i] = *pSrc;
+    (*paCommittedPending)[i].offset = filePos + CS_WAL_CHUNK_LEN_OFF;
+    filePos += (i64)CS_WAL_CHUNK_HDR_SIZE + (i64)pSrc->size;
+  }
+
+  *pUseRecent = !crashWriteActive
+             && cs->staging.nPending <= 32
+             && cs->staging.nRecent + cs->staging.nPending
+                  <= CS_RECENT_FAST_PATH_MAX;
+  if( *pUseRecent ){
+    return csGrowRecent(cs, cs->staging.nPending);
+  }
+
+  if( cs->staging.nRecent > 0 ){
+    *paMergePending = (ChunkIndexEntry*)sqlite3_malloc(
+      (cs->staging.nRecent + cs->staging.nPending) * (int)sizeof(ChunkIndexEntry)
+    );
+    if( !*paMergePending ) return SQLITE_NOMEM;
+    memcpy(*paMergePending, cs->staging.aRecent,
+           cs->staging.nRecent * sizeof(ChunkIndexEntry));
+    memcpy(*paMergePending + cs->staging.nRecent, *paCommittedPending,
+           cs->staging.nPending * sizeof(ChunkIndexEntry));
+    mergeView = *cs;
+    mergeView.staging.aPending = *paMergePending;
+    mergeView.staging.nPending = cs->staging.nRecent + cs->staging.nPending;
+  }else{
+    mergeView = *cs;
+    mergeView.staging.aPending = *paCommittedPending;
+    mergeView.staging.nPending = cs->staging.nPending;
+  }
+  return csMergeIndex(&mergeView, paMerged, pnMerged);
+}
+
+/* Install the committed index view and clear staging after a successful sync. */
+static void csCommitPublishStaging(
+  ChunkStore *cs,
+  int useRecent,
+  ChunkIndexEntry *aCommittedPending,
+  ChunkIndexEntry *aMerged,
+  int nMerged
+){
+  int i;
+
+  if( cs->staging.nPending > 0 ){
+    if( useRecent ){
+      memcpy(cs->staging.aRecent + cs->staging.nRecent, aCommittedPending,
+             cs->staging.nPending * sizeof(ChunkIndexEntry));
+      for( i=0; i<cs->staging.nPending; i++ ){
+        cs->staging.aRecentZeroTail[cs->staging.nRecent+i] =
+          cs->staging.aPendingZeroTail[i];
+      }
+      cs->staging.nRecent += cs->staging.nPending;
+      sqlite3_free(aMerged);
+    }else{
+      csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
+      cs->index.aIndex = aMerged;
+      cs->index.nIndex = nMerged;
+      cs->index.aIndexMmapBase = 0;
+      cs->index.aIndexMmapSize = 0;
+      cs->staging.nRecent = 0;
+      if( cs->staging.aRecentZeroTail ){
+        memset(cs->staging.aRecentZeroTail, 0,
+               cs->staging.nRecentAlloc * sizeof(i64));
+      }
+      csRecentHTClear(cs);
+    }
+  }else{
+    sqlite3_free(aMerged);
+  }
+
+  cs->staging.nRecentUncommitted = 0;
+  cs->staging.iUncommittedStart = 0;
+  cs->staging.nWriteBuf = 0;
+  if( cs->staging.nWriteBufAlloc > CS_WRITEBUF_RETAIN_MAX ){
+    sqlite3_free(cs->staging.pWriteBuf);
+    cs->staging.pWriteBuf = 0;
+    cs->staging.nWriteBufAlloc = 0;
+  }
+  cs->staging.nPending = 0;
+  csPendHTReset(cs);
+  csMarkRefsCommitted(cs);
+}
+
 static int csCommitToFile(ChunkStore *cs){
   int rc;
   int i;
   i64 fileSize = 0;
-  i64 physFileSize = -1;
   i64 origFileSize = 0;
   i64 writeOff = 0;
   i64 durableTo = 0;
@@ -132,151 +354,22 @@ static int csCommitToFile(ChunkStore *cs){
   int useRecent = 0;
   int crashWriteActive = csCrashWriteInjectionActive();
 
-  if( cs->file.pFile == 0 ){
-    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-                  | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
-    if( rc != SQLITE_OK ){
-      return (rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM) ? rc : SQLITE_CANTOPEN;
-    }
+  rc = csCommitResolveAppendPoint(
+      cs, hadFile, lockHeld, &lockFd, &lockName,
+      &fileSize, &origFileSize, &durableTo, &batchStart, &sectorSize);
+  if( rc!=SQLITE_OK ){
+    /* Open-before-lock failures never held a commit lock; unlock is a no-op
+    ** when lockHeld or when the lock was never acquired. */
+    if( !lockHeld ) csFileUnlock(lockFd, &lockName);
+    return rc;
   }
 
-  if( lockHeld ){
-    lockFd = CS_FILE_LOCK_INIT;
-  }else{
-    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd, &lockName);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
-  if( lockHeld && hadFile ){
-    fileSize = cs->file.iFileSize;
-  }else{
-    rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
-    if( rc != SQLITE_OK ) goto commit_done;
-    physFileSize = fileSize;
-  }
-
-  if( hadFile && !lockHeld ){
-    int bMoved = 0;
-    int rc2 = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
-                                   &bMoved);
-    if( rc2==SQLITE_OK && bMoved ){
-      rc = csReloadFromDiskPreservingLocalRefs(cs);
-      if( rc != SQLITE_OK ) goto commit_done;
-      fileSize = cs->file.iFileSize;
-    }
-  }
-
-  if( fileSize > cs->file.iFileSize && hadFile ){
-    rc = csReloadFromDiskPreservingLocalRefs(cs);
-    if( rc != SQLITE_OK ) goto commit_done;
-    fileSize = cs->file.iFileSize;
-  }
-#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
-  if( hadFile && cs->staging.nRecentUncommitted>0 && csReloadInjectionActive() ){
-    static int csReloadInjected = 0;
-    if( !csReloadInjected ){
-      csReloadInjected = 1;
-      rc = csReloadFromDiskPreservingLocalRefs(cs);
-      if( rc != SQLITE_OK ) goto commit_done;
-      fileSize = cs->file.iFileSize;
-    }
-  }
-#endif
-  /* Append at logical EOF and truncate crash garbage beyond it. */
-  if( hadFile && cs->file.iFileSize > fileSize ){
-    fileSize = cs->file.iFileSize;
-  }
-  if( physFileSize > fileSize ){
-    (void)sqlite3OsTruncate(cs->file.pFile, fileSize);
-  }
-  origFileSize = fileSize;
-
-  /* On non-atomic media, isolate commit batches on fresh sectors. */
-  if( (cs->file.pFile->pMethods->xDeviceCharacteristics(cs->file.pFile)
-       & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
-    sectorSize = cs->file.pFile->pMethods->xSectorSize(cs->file.pFile);
-    if( sectorSize < 512 ) sectorSize = 512;
-    if( sectorSize > 65536 ) sectorSize = 65536;
-  }
-  durableTo = fileSize > 0 ? fileSize : (i64)CHUNK_MANIFEST_SIZE;
-  batchStart = durableTo;
-  if( fileSize > 0 && sectorSize > 1 && (batchStart % sectorSize)!=0 ){
-    batchStart += sectorSize - 1;
-    batchStart -= batchStart % sectorSize;
-  }
-
-  if( cs->staging.nPending > 0 ){
-    ChunkStore mergeView;
-    i64 filePos = batchStart;
-    i64 appendBytes = 0;
-
-    for( i = 0; i < cs->staging.nPending; i++ ){
-      i64 recBytes = (i64)CS_WAL_CHUNK_HDR_SIZE
-                   + (i64)cs->staging.aPending[i].size;
-      if( appendBytes > LARGEST_INT64 - recBytes ){
-        rc = SQLITE_TOOBIG;
-        goto commit_done;
-      }
-      appendBytes += recBytes;
-    }
-    if( cs->wal.nWalData > LARGEST_INT64 - appendBytes ){
-      rc = SQLITE_TOOBIG;
-      goto commit_done;
-    }
-
-    if( cs->staging.nPending <= (int)(sizeof(aSmallCommittedPending)
-                                    / sizeof(aSmallCommittedPending[0])) ){
-      aCommittedPending = aSmallCommittedPending;
-    }else{
-      aCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
-        cs->staging.nPending * (int)sizeof(ChunkIndexEntry)
-      );
-      if( !aCommittedPending ){
-        rc = SQLITE_NOMEM;
-        goto commit_done;
-      }
-    }
-
-    for( i = 0; i < cs->staging.nPending; i++ ){
-      ChunkIndexEntry *pSrc = &cs->staging.aPending[i];
-      aCommittedPending[i] = *pSrc;
-      aCommittedPending[i].offset = filePos + CS_WAL_CHUNK_LEN_OFF;
-      filePos += (i64)CS_WAL_CHUNK_HDR_SIZE + (i64)pSrc->size;
-    }
-
-    useRecent = !crashWriteActive
-             && cs->staging.nPending <= 32
-             && cs->staging.nRecent + cs->staging.nPending
-                  <= CS_RECENT_FAST_PATH_MAX;
-    if( useRecent ){
-      rc = csGrowRecent(cs, cs->staging.nPending);
-      if( rc!=SQLITE_OK ) goto commit_done;
-    }else{
-      if( cs->staging.nRecent > 0 ){
-        aMergePending = (ChunkIndexEntry*)sqlite3_malloc(
-          (cs->staging.nRecent + cs->staging.nPending) * (int)sizeof(ChunkIndexEntry)
-        );
-        if( !aMergePending ){
-          rc = SQLITE_NOMEM;
-          goto commit_done;
-        }
-        memcpy(aMergePending, cs->staging.aRecent,
-               cs->staging.nRecent * sizeof(ChunkIndexEntry));
-        memcpy(aMergePending + cs->staging.nRecent, aCommittedPending,
-               cs->staging.nPending * sizeof(ChunkIndexEntry));
-        mergeView = *cs;
-        mergeView.staging.aPending = aMergePending;
-        mergeView.staging.nPending = cs->staging.nRecent + cs->staging.nPending;
-      }else{
-        mergeView = *cs;
-        mergeView.staging.aPending = aCommittedPending;
-        mergeView.staging.nPending = cs->staging.nPending;
-      }
-      rc = csMergeIndex(&mergeView, &aMerged, &nMerged);
-      if( rc!=SQLITE_OK ) goto commit_done;
-    }
-  }
+  rc = csCommitPlanPendingIndex(
+      cs, batchStart, crashWriteActive,
+      aSmallCommittedPending,
+      (int)(sizeof(aSmallCommittedPending)/sizeof(aSmallCommittedPending[0])),
+      &aCommittedPending, &aMergePending, &aMerged, &nMerged, &useRecent);
+  if( rc!=SQLITE_OK ) goto commit_done;
 
 #ifdef SQLITE_TEST
   {
@@ -448,49 +541,11 @@ commit_done:
     return rc;
   }
 
-  if( cs->staging.nPending > 0 ){
-    if( useRecent ){
-      memcpy(cs->staging.aRecent + cs->staging.nRecent, aCommittedPending,
-             cs->staging.nPending * sizeof(ChunkIndexEntry));
-      for( i=0; i<cs->staging.nPending; i++ ){
-        cs->staging.aRecentZeroTail[cs->staging.nRecent+i] =
-          cs->staging.aPendingZeroTail[i];
-      }
-      cs->staging.nRecent += cs->staging.nPending;
-      sqlite3_free(aMerged);
-    }else{
-      csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
-      cs->index.aIndex = aMerged;
-      cs->index.nIndex = nMerged;
-      cs->index.aIndexMmapBase = 0;
-      cs->index.aIndexMmapSize = 0;
-      cs->staging.nRecent = 0;
-      if( cs->staging.aRecentZeroTail ){
-        memset(cs->staging.aRecentZeroTail, 0,
-               cs->staging.nRecentAlloc * sizeof(i64));
-      }
-      csRecentHTClear(cs);
-    }
-  }else{
-    sqlite3_free(aMerged);
-  }
+  csCommitPublishStaging(cs, useRecent, aCommittedPending, aMerged, nMerged);
   if( aCommittedPending!=aSmallCommittedPending ){
     sqlite3_free(aCommittedPending);
   }
   sqlite3_free(aMergePending);
-
-  cs->staging.nRecentUncommitted = 0;
-  cs->staging.iUncommittedStart = 0;
-  cs->staging.nWriteBuf = 0;
-  if( cs->staging.nWriteBufAlloc > CS_WRITEBUF_RETAIN_MAX ){
-    sqlite3_free(cs->staging.pWriteBuf);
-    cs->staging.pWriteBuf = 0;
-    cs->staging.nWriteBufAlloc = 0;
-  }
-  cs->staging.nPending = 0;
-  csPendHTReset(cs);
-  csMarkRefsCommitted(cs);
-
   return SQLITE_OK;
 }
 

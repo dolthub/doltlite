@@ -115,7 +115,7 @@ static int backup_db(sqlite3 *src, sqlite3 *dest){
   pBackup = sqlite3_backup_init(dest, "main", src, "main");
   if( pBackup==0 ) return sqlite3_errcode(dest);
 
-  rc = sqlite3_backup_step(pBackup, -1);
+  rc = sqlite3_backup_step(pBackup, 1);
   rcFinish = sqlite3_backup_finish(pBackup);
   if( rc==SQLITE_DONE ) rc = rcFinish;
   return rc;
@@ -341,7 +341,7 @@ static void run_backup_safety(void){
     "WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1200) "
     "INSERT INTO t SELECT x, printf('big-%04d', x) FROM c;");
   check("backup_safety_seed_big", rc==SQLITE_OK);
-  check("backup_safety_copy_big", backup_db(srcBig, dest)==SQLITE_OK);
+  check("backup_safety_copy_big_one_step", backup_db(srcBig, dest)==SQLITE_OK);
   check("backup_safety_dest_big_visible",
         strcmp(queryScalarText(dest, "SELECT count(*) FROM t"), "1200")==0);
 
@@ -1838,6 +1838,80 @@ static void run_pull_persist_failure(void){
   check("pull_failure_persists_remote_after_reopen",
     strcmp(queryScalarText(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
+  sqlite3_close(localDb);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
+}
+
+/* Pulling a branch that does not exist locally used to add it to the
+** in-memory refs outside the graph lock and never serialize it: the
+** branch answered queries for the rest of the session and silently
+** vanished on reopen (a later unrelated ref write could also clobber or
+** accidentally persist it). The create must go through the atomic
+** ref-mutation helper like every other ref write. */
+static void run_pull_new_branch_persists(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  sqlite3 *remoteClientDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char remoteClientPath[256];
+  char sql[1024];
+  const char *res;
+
+  printf("=== Pull New Branch Persists Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_pull_new_branch_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_pull_new_branch_remote");
+  make_dbpath(remoteClientPath, sizeof(remoteClientPath),
+              "test_pull_new_branch_client");
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
+
+  check("open_local_db", open_db(localPath, &localDb)==SQLITE_OK);
+  check("open_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_remote('add','origin','file://%s');"
+    "SELECT dolt_push('origin','main','--force');",
+    remotePath);
+  check("setup_local_and_push", execSql(localDb, sql)==SQLITE_OK);
+
+  check("open_remote_client_db",
+        open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_remote_into_client", execSql(remoteClientDb, sql)==SQLITE_OK);
+  check("client_creates_feature", execSql(remoteClientDb,
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m','feature work');"
+    "SELECT dolt_push('origin','feature');")==SQLITE_OK);
+
+  res = queryScalarText(localDb, "SELECT dolt_pull('origin','feature')");
+  check("pull_new_branch_succeeds", strstr(res, "ERROR:")==0);
+  check("pulled_branch_visible_in_session",
+    strcmp(queryScalarText(localDb,
+      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+
+  sqlite3_close(localDb);
+  localDb = 0;
+  check("reopen_local_after_pull", open_db(localPath, &localDb)==SQLITE_OK);
+  check("pulled_branch_persisted_across_reopen",
+    strcmp(queryScalarText(localDb,
+      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("pulled_branch_checkout_works", execSql(localDb,
+    "SELECT dolt_checkout('feature')")==SQLITE_OK);
+  check("pulled_branch_rows_present",
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(remoteClientDb);
+  sqlite3_close(remoteDb);
   sqlite3_close(localDb);
   removeDbFiles(localPath);
   removeDbFiles(remotePath);
@@ -8861,7 +8935,75 @@ static void run_directonly_dolt_functions(void){
   removeDbFiles(dbpath);
 }
 
+/* A VC function evaluated in the same statement as a dolt_tags or
+** dolt_branches scan mutates and reallocates the live refs arrays the
+** cursors used to read rows from — the scan ended early against the
+** shrinking live count and the stale index read freed memory. The cursors
+** must serve rows from a snapshot taken at xFilter. */
+static void run_refs_vtab_snapshot_stability(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Refs Vtab Snapshot Stability Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_vtab_snapshot");
+  removeDbFiles(dbpath);
+  check("snapshot_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  rc = execSql(db,
+    "SELECT dolt_config('user.name','snap'),"
+    "       dolt_config('user.email','snap@example.com');"
+    "CREATE TABLE t(a INTEGER PRIMARY KEY);"
+    "INSERT INTO t VALUES(1);"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m','base');"
+    "SELECT dolt_tag('tag_a'), dolt_tag('tag_b'), dolt_tag('tag_c');");
+  check("snapshot_setup", rc==SQLITE_OK);
+
+  /* Deleting each tag while scanning must still visit every tag that was
+  ** visible when the scan started, and delete all of them. A subquery
+  ** would let the planner prune the side-effecting column, so step the
+  ** scan directly. */
+  {
+    sqlite3_stmt *pStmt = 0;
+    int nRows = 0;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT tag_name, dolt_tag('-d', tag_name) FROM dolt_tags",
+        -1, &pStmt, 0);
+    check("tags_scan_prepared", rc==SQLITE_OK);
+    while( sqlite3_step(pStmt)==SQLITE_ROW ) nRows++;
+    check("tags_scan_finalized", sqlite3_finalize(pStmt)==SQLITE_OK);
+    check("tags_scan_sees_snapshot", nRows==3);
+  }
+  check("tags_all_deleted",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_tags"), "0")==0);
+
+  rc = execSql(db,
+    "SELECT dolt_branch('br_a'), dolt_branch('br_b'), dolt_branch('br_c')");
+  check("snapshot_branches_created", rc==SQLITE_OK);
+  {
+    sqlite3_stmt *pStmt = 0;
+    int nRows = 0;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT name, CASE WHEN name<>'main'"
+        " THEN dolt_branch('-D', name) END FROM dolt_branches",
+        -1, &pStmt, 0);
+    check("branches_scan_prepared", rc==SQLITE_OK);
+    while( sqlite3_step(pStmt)==SQLITE_ROW ) nRows++;
+    check("branches_scan_finalized", sqlite3_finalize(pStmt)==SQLITE_OK);
+    check("branches_scan_sees_snapshot", nRows==4);
+  }
+  check("branches_all_deleted",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"),
+               "1")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
+  { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
@@ -8887,6 +9029,7 @@ static const RegressionCase aCases[] = {
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
+  { "pull_new_branch_persists", "Pull New Branch Persists Test", run_pull_new_branch_persists },
   { "pull_dirty_working_set_fails", "Pull Dirty Working Set Fails Test", run_pull_dirty_working_set_fails },
   { "pull_staged_changes_fails", "Pull Staged Changes Fails Test", run_pull_staged_changes_fails },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },

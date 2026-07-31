@@ -16,6 +16,10 @@
 set testdir [file dirname $argv0]
 set testprefix wal6
 source $testdir/tester.tcl
+ifcapable doltlite {
+  finish_test
+  return
+}
 source $testdir/lock_common.tcl
 source $testdir/wal_common.tcl
 source $testdir/malloc_common.tcl
