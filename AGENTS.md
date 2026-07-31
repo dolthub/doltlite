@@ -253,21 +253,23 @@ conflict durability, update the TSV and keep the multiproc C suites green
 The version-control correctness invariants above remain load-bearing for
 implementors even when a claim is also listed in the contract.
 
-## Storage format epoch
+## Storage format version
 
-**Epoch 1** is the beta freeze (`DOLTLITE_STORAGE_EPOCH`, `CHUNK_STORE_VERSION`,
-WS write format, catalog write format). User-facing rules live in the README
-**Storage Format** section; claims and evidence in
-`test/storage_format_contract.tsv` and golden files under
-`test/format-corpus/epoch1/`.
+Chunk-store version **12** is the beta format freeze. User-facing rules live in
+the README **Storage Format** section; claims and evidence live in
+`test/storage_format_contract.tsv`, and the golden file lives under
+`test/format-corpus/v12/`.
 
-Bumping the epoch (or any write-path format constant that defines it) requires:
+Bumping `CHUNK_STORE_VERSION` requires:
+
 1. README Storage Format update
-2. New or updated `test/format-corpus/` entry and MANIFEST
+2. A new `test/format-corpus/` entry and MANIFEST
 3. `storage_format_contract.tsv` evidence update
-4. Explicit open/upgrade policy for older epochs (open-only, migrate, or refuse)
+4. Explicit open/upgrade policy for version 12 (open-only, migrate, or refuse)
 
-Do not silently reinterpret a foreign `CHUNK_STORE_VERSION`.
+Any incompatible change to a nested write format, including working sets,
+catalogs, refs, commits, prolly nodes, or key encoding, must bump
+`CHUNK_STORE_VERSION`. Do not silently reinterpret another version.
 
 ## Move fast
 

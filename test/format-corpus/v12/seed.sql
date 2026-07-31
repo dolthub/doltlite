@@ -1,0 +1,14 @@
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, v INT);
+CREATE INDEX idx_name ON t(name);
+CREATE TABLE keyed(a TEXT, b BLOB, v REAL, PRIMARY KEY(a, b));
+CREATE TABLE seq(id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT);
+INSERT INTO t VALUES(1, 'alpha', 10), (2, 'beta', 20);
+INSERT INTO keyed VALUES('a', x'00ff', 1.5), ('b', x'1020', -2.25);
+INSERT INTO seq(note) VALUES('first');
+SELECT dolt_commit('-A', '-m', 'v12 seed');
+SELECT dolt_tag('v12-seed');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO t VALUES(3, 'gamma', 30);
+INSERT INTO keyed VALUES('c', x'ff00', 3.75);
+SELECT dolt_commit('-A', '-m', 'v12 feature');
+SELECT dolt_checkout('main');

@@ -1060,40 +1060,39 @@ tags. Stock SQLite files are still detected and opened for ordinary SQL (see
 [Using Existing SQLite Databases](#using-existing-sqlite-databases)); version
 control requires a DoltLite-format file.
 
-### Storage epoch 1 (beta freeze)
+### Frozen format version 12 (beta)
 
-**Epoch 1** is the on-disk format frozen for the DoltLite beta. Builds of this
-line write and open:
+Chunk-store version **12** is the on-disk format frozen for the DoltLite beta.
+Version 12 includes every nested format written into the store, including:
 
 | Layer | Constant | Value |
 |---|---|---|
 | Chunk-store header | `CHUNK_STORE_VERSION` | **12** |
-| Storage epoch id | `DOLTLITE_STORAGE_EPOCH` | **1** |
 | Working-set blob | `WS_FORMAT_VERSION` | **v5** |
 | Catalog entries | `CATALOG_FORMAT_V5` | **0x46** |
+| Refs blob | refs serializer | **v7** |
+| Commit blob | `DOLTLITE_COMMIT_V2` | **v2** |
 
-- **Writers** always emit epoch 1 (the constants above).
-- **Readers** open files whose chunk-store header version equals
-  `CHUNK_STORE_VERSION`. A different version returns `SQLITE_NOTADB` and is
-  logged as an incompatible doltlite build — there is no silent reinterpretation
-  and no automatic rewrite on open.
-- Working-set blobs and catalogs written under older in-epoch minor layouts
-  that this tree still parses (WS v2–v5, catalog v3–v5) remain readable when
-  embedded in an epoch-1 store; new writes use WS v5 and catalog v5.
-- Bumping `CHUNK_STORE_VERSION`, the write-path WS/catalog format, or
-  `DOLTLITE_STORAGE_EPOCH` is a **new epoch**. That requires: updating this
-  section, adding a corpus entry under
-  [`test/format-corpus/`](test/format-corpus/), updating
+- **Writers** stamp version 12 and emit the nested formats above.
+- **Readers** require an exact `CHUNK_STORE_VERSION` match. A different version
+  returns `SQLITE_NOTADB`; there is no silent reinterpretation or automatic
+  rewrite on open.
+- Every file produced by a beta or later version-12 release remains readable
+  and writable by later version-12 builds. An incompatible change to any nested
+  format requires a `CHUNK_STORE_VERSION` bump even when that format has its own
+  marker.
+- Bumping `CHUNK_STORE_VERSION` requires updating this section, adding a corpus
+  entry under [`test/format-corpus/`](test/format-corpus/), updating
   [`test/storage_format_contract.tsv`](test/storage_format_contract.tsv), and
-  documenting whether older epochs are open-only, upgraded on first write, or
-  refused.
+  documenting whether version 12 is open-only, migrated, or refused.
 
-Golden epoch-1 files live in
-[`test/format-corpus/epoch1/`](test/format-corpus/epoch1/). The machine-readable
+The frozen version-12 file and its generation recipe live in
+[`test/format-corpus/v12/`](test/format-corpus/v12/). The machine-readable
 contract is
 [`test/storage_format_contract.tsv`](test/storage_format_contract.tsv); CI runs
 [`test/storage_format_contract_test.sh`](test/storage_format_contract_test.sh)
-to open the corpus, reject version skew, and keep evidence needles live.
+to verify the fixture, read and extend it, run GC, reject other header versions,
+and keep evidence needles live.
 
 ## Performance
 

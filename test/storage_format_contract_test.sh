@@ -8,13 +8,14 @@ DOLTLITE="${1:-./doltlite}"
 source "$SCRIPT_DIR/lib/doltlite_test_common.sh"
 
 CONTRACT="$SCRIPT_DIR/storage_format_contract.tsv"
-CORPUS_DIR="$SCRIPT_DIR/format-corpus/epoch1"
+CORPUS_DIR="$SCRIPT_DIR/format-corpus/v12"
 CORPUS_DB="$CORPUS_DIR/seed.db"
 CORPUS_MANIFEST="$CORPUS_DIR/MANIFEST"
+CORPUS_RECIPE="$CORPUS_DIR/seed.sql"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "=== Storage format contract (epoch 1) ==="
+echo "=== Storage format contract (version 12) ==="
 
 header="$(head -n 1 "$CONTRACT")"
 if [[ "$header" != $'id\tstatus\tevidence\tcontract' ]]; then
@@ -50,100 +51,141 @@ while IFS=$'\t' read -r id status evidence contract; do
   done
 done < <(tail -n +2 "$CONTRACT")
 
-if [[ ! -f "$CORPUS_DB" || ! -f "$CORPUS_MANIFEST" ]]; then
-  dltest_fail "corpus_present" "  missing $CORPUS_DB or MANIFEST"
+if [[ ! -f "$CORPUS_DB" || ! -f "$CORPUS_MANIFEST" || ! -f "$CORPUS_RECIPE" ]]; then
+  dltest_fail "corpus_present" "  missing version 12 corpus artifact"
   dltest_finish
   exit 1
 fi
 dltest_pass
 
-# Header: magic 0x444C5443 (LE bytes CTLD) + version 12
-if python3 -c "
-import sys
-b=open('$CORPUS_DB','rb').read(8)
-sys.exit(0 if int.from_bytes(b[:4],'little')==0x444C5443
-              and int.from_bytes(b[4:8],'little')==12 else 1)
-"; then
+expected_sha="$(sed -n 's/^sha256=//p' "$CORPUS_MANIFEST")"
+actual_sha="$(python3 -c "import hashlib; print(hashlib.sha256(open('$CORPUS_DB','rb').read()).hexdigest())")"
+if [[ -n "$expected_sha" && "$actual_sha" = "$expected_sha" ]]; then
   dltest_pass
 else
-  dltest_fail "corpus_has_dltc_magic" "  header is not DLTC v12"
+  dltest_fail "corpus_v12_checksum" "  expected $expected_sha, got $actual_sha"
 fi
 
-# MANIFEST must match compiled constants
 hdr_ver="$(python3 -c "
 import re
 h=open('$REPO_ROOT/src/chunk_store.h').read()
 print(re.search(r'#define CHUNK_STORE_VERSION\s+(\d+)', h).group(1))
 ")"
-man_ver="$(grep -E '^chunk_store_version=' "$CORPUS_MANIFEST" | cut -d= -f2)"
-if [[ "$hdr_ver" = "$man_ver" ]]; then
+man_ver="$(sed -n 's/^chunk_store_version=//p' "$CORPUS_MANIFEST")"
+if [[ "$hdr_ver" = "12" && "$man_ver" = "12" ]]; then
   dltest_pass
 else
-  dltest_fail "manifest_matches_header" "  header=$hdr_ver manifest=$man_ver"
+  dltest_fail "manifest_matches_header" "  source=$hdr_ver manifest=$man_ver"
 fi
 
-# Open golden corpus (copy so checkout does not dirty the committed corpus).
-OPEN_DB="$TMP/open_seed.db"
-cp "$CORPUS_DB" "$OPEN_DB"
-run_test "corpus_epoch1_row_count" \
-  "SELECT count(*) FROM t;" "2" "$OPEN_DB"
-run_test "corpus_epoch1_log" \
-  "SELECT count(*) FROM dolt_log;" "2" "$OPEN_DB"
-run_test "corpus_epoch1_feature_branch" \
-  "SELECT count(*) FROM dolt_branches WHERE name='feature';" "1" "$OPEN_DB"
-run_test "corpus_epoch1_feature_rows" \
-  "SELECT dolt_checkout('feature'); SELECT count(*) FROM t;" "0
-3" "$OPEN_DB"
-
-# Version skew: patch header version, expect NOTADB / cannot open productively
-patch_version() {
-  local src="$1" dst="$2" ver="$3"
-  python3 -c "
-import shutil
-shutil.copyfile('$src', '$dst')
-with open('$dst', 'r+b') as f:
-    f.seek(4)
-    f.write(int('$ver').to_bytes(4, 'little'))
-"
-}
-
-expect_notadb() {
-  local name="$1" db="$2"
-  local err
-  err="$("$DOLTLITE" "$db" "SELECT count(*) FROM t;" 2>&1)" || true
-  if echo "$err" | grep -qiE 'not a database|NOTADB|file is not a database|unsupported|incompatible|unable to open'; then
-    dltest_pass
-  elif echo "$err" | grep -qE '^[0-9]+$' && [[ "$(echo "$err" | tail -1)" = "2" ]]; then
-    dltest_fail "$name" "  opened skewed DB successfully: $err"
-  else
-    # Any hard failure to read user data counts as refuse
-    if echo "$err" | grep -qiE 'error|Error|unable|fail'; then
-      dltest_pass
-    else
-      dltest_fail "$name" "  expected NOTADB-class failure, got: $err"
-    fi
-  fi
-}
-
-patch_version "$CORPUS_DB" "$TMP/v13.db" 13
-expect_notadb "skew_version_13_notadb" "$TMP/v13.db"
-
-patch_version "$CORPUS_DB" "$TMP/v11.db" 11
-expect_notadb "skew_version_11_notadb" "$TMP/v11.db"
-
-# Fresh write still stamps epoch-1 header
-FRESH="$TMP/fresh.db"
-rm -f "$FRESH"
-"$DOLTLITE" "$FRESH" "CREATE TABLE x(i INT PRIMARY KEY); SELECT dolt_commit('-Am', 'fresh');" >/dev/null 2>&1
 if python3 -c "
 import sys
-b=open('$FRESH','rb').read(8)
-sys.exit(0 if int.from_bytes(b[:4],'little')==0x444C5443
+b=open('$CORPUS_DB','rb').read(8)
+sys.exit(0 if len(b)==8
+              and int.from_bytes(b[:4],'little')==0x444C5443
               and int.from_bytes(b[4:8],'little')==12 else 1)
 "; then
   dltest_pass
 else
-  dltest_fail "fresh_write_epoch1_header" "  fresh DB header is not epoch 1"
+  dltest_fail "corpus_v12_header" "  corpus header is not chunk-store version 12"
+fi
+
+OPEN_DB="$TMP/open_seed.db"
+cp "$CORPUS_DB" "$OPEN_DB"
+run_test "corpus_v12_main_rows" \
+  "SELECT group_concat(id || ':' || name || ':' || v, ',') FROM t ORDER BY id;" \
+  "1:alpha:10,2:beta:20" "$OPEN_DB"
+run_test "corpus_v12_index_rows" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY idx_name ORDER BY name);" \
+  "1,2" "$OPEN_DB"
+run_test "corpus_v12_composite_blob_rows" \
+  "SELECT group_concat(a || ':' || hex(b) || ':' || v, ',') FROM (SELECT * FROM keyed ORDER BY a, b);" \
+  "a:00FF:1.5,b:1020:-2.25" "$OPEN_DB"
+run_test "corpus_v12_schema" \
+  "SELECT sql FROM sqlite_schema WHERE name='idx_name';" \
+  "CREATE INDEX idx_name ON t(name)" "$OPEN_DB"
+run_test "corpus_v12_sequence" \
+  "SELECT seq FROM sqlite_sequence WHERE name='seq';" "1" "$OPEN_DB"
+run_test "corpus_v12_integrity" \
+  "PRAGMA integrity_check;" "ok" "$OPEN_DB"
+run_test "corpus_v12_log" \
+  "SELECT count(*) FROM dolt_log;" "2" "$OPEN_DB"
+run_test "corpus_v12_feature_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='feature';" "1" "$OPEN_DB"
+run_test "corpus_v12_tag" \
+  "SELECT count(*) FROM dolt_tags WHERE tag_name='v12-seed';" "1" "$OPEN_DB"
+run_test "corpus_v12_feature_rows" \
+  "SELECT dolt_checkout('feature'); SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;" \
+  "0
+3
+3" "$OPEN_DB"
+
+WRITE_DB="$TMP/write_seed.db"
+cp "$CORPUS_DB" "$WRITE_DB"
+run_test "corpus_v12_write_commit" \
+  "INSERT INTO t VALUES(4, 'delta', 40); SELECT length(dolt_commit('-A', '-m', 'extend v12'));" \
+  "40" "$WRITE_DB"
+run_test "corpus_v12_reopen_after_write" \
+  "SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;" \
+  "3
+3" "$WRITE_DB"
+run_test_match "corpus_v12_gc" \
+  "SELECT dolt_gc();" "chunks removed" "$WRITE_DB"
+run_test "corpus_v12_post_gc_rows" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY idx_name ORDER BY name); SELECT count(*) FROM dolt_log;" \
+  "1,2,4
+3" "$WRITE_DB"
+
+patch_u32() {
+  local src="$1" dst="$2" off="$3" value="$4"
+  python3 -c "
+import shutil
+shutil.copyfile('$src', '$dst')
+with open('$dst', 'r+b') as f:
+    f.seek(int('$off'))
+    f.write(int('$value', 0).to_bytes(4, 'little'))
+"
+}
+
+expect_exact_notadb() {
+  local name="$1" db="$2"
+  local err status
+  err="$("$DOLTLITE" "$db" "SELECT count(*) FROM t;" 2>&1)"
+  status=$?
+  if [[ "$status" -eq 1 \
+     && "$err" = *"file is not a database (26)"* \
+     && "$err" != *"AddressSanitizer"* \
+     && "$err" != *"UndefinedBehaviorSanitizer"* \
+     && "$err" != *"Segmentation fault"* \
+     && "$err" != *"timed out"* ]]; then
+    dltest_pass
+  else
+    dltest_fail "$name" "  expected normal SQLITE_NOTADB exit, status=$status output=$err"
+  fi
+}
+
+patch_u32 "$CORPUS_DB" "$TMP/v13.db" 4 13
+expect_exact_notadb "skew_version_13_notadb" "$TMP/v13.db"
+
+patch_u32 "$CORPUS_DB" "$TMP/v11.db" 4 11
+expect_exact_notadb "skew_version_11_notadb" "$TMP/v11.db"
+
+patch_u32 "$CORPUS_DB" "$TMP/bad_magic.db" 0 0x01234567
+expect_exact_notadb "skew_magic_notadb" "$TMP/bad_magic.db"
+
+FRESH="$TMP/fresh.db"
+fresh_out="$("$DOLTLITE" "$FRESH" "CREATE TABLE x(i INT PRIMARY KEY); SELECT length(dolt_commit('-Am', 'fresh'));" 2>&1)"
+fresh_status=$?
+if [[ "$fresh_status" -eq 0 && "$fresh_out" = "40" ]] && python3 -c "
+import sys
+b=open('$FRESH','rb').read(8)
+sys.exit(0 if len(b)==8
+              and int.from_bytes(b[:4],'little')==0x444C5443
+              and int.from_bytes(b[4:8],'little')==12 else 1)
+"; then
+  dltest_pass
+else
+  dltest_fail "fresh_write_v12_header" "  fresh write failed or did not stamp version 12"
 fi
 
 dltest_finish
