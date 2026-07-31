@@ -748,3 +748,5 @@ do_test 1.0 {
   }
   expr {$res eq $::expected}
 } {1}
+
+finish_test

@@ -1,0 +1,13 @@
+# Exact contracts for suites that end before the testfixture summary.
+# Format: <suite> <class> <last-completed-test> <diagnostic-sha256> [qualifiers]
+# A dash records no completed test or no Tcl diagnostic. Timeouts and sanitizer
+# findings cannot be contracted.
+
+alter2      tcl-error alter2-7.5                       4c26a046706108eaf30767e03e7268327cc28720e0a4317a6d68e30cff7256b5 # invalid command name "db"
+btreefault  tcl-error btreefault-1-pre1                78f0fbb0205d331a8af7e9c69cb3227aafed64e33a5c706cfceeb51f884c0188 # (1) no such table: t1
+dbstatus    tcl-error dbstatus-2.0-7.c                 626a6906e6b85181c9b3134356dd04e7d32b3b26909b62a6b4205830aad72993 # vtable constructor failed: t2
+incrblob    tcl-error incrblob-2.0.3                   a418452946c9dbdb6d98dc92f9ffa386fb2722727ba00cdaaa42216d358a1b40 # can't read "::fragment": no such variable
+malloc3     tcl-error -                                e3cf49e6aa1ac767f8e72982faa261d9ff65b0ef3f81d0b56ade815eb7bac678 @darwin # Unreported malloc() failure
+multiplex2  tcl-error multiplex-1.1.3                  8a7cdb7757d56e9e16210f4d8692beb5e9f000e14c41119126bc03adb8e118cf # attempt to write a readonly database
+pagerfault  signal-11 pagerfault-15-full.1             - @darwin # SIGSEGV
+vtab1       tcl-error vtab1-5-7                        f01a2140ca0800424bb4b513a5f538188b15513efa9b0e8df18788880a783edd # vtable constructor failed: et1

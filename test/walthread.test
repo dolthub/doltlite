@@ -16,6 +16,10 @@
 set testdir [file dirname $argv0]
 
 source $testdir/tester.tcl
+ifcapable doltlite {
+  finish_test
+  return
+}
 source $testdir/lock_common.tcl
 if {[run_thread_tests]==0} { finish_test ; return }
 ifcapable !wal             { finish_test ; return }

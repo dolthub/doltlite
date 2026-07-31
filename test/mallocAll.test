@@ -28,6 +28,10 @@ while {[set arg [lshift argv]] != ""} {
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+ifcapable doltlite {
+  finish_test
+  return
+}
 rename finish_test really_finish_test
 proc finish_test {} {}
 set G(isquick) 1

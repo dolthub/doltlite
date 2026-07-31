@@ -11,10 +11,13 @@
 # This file implements regression tests for SQLite library.
 #
 
-if {$tcl_platform(os) ne "Windows NT"} return
-
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+
+if {$tcl_platform(os) ne "Windows NT"} {
+  finish_test
+  return
+}
 set testprefix win32nolock
 
 do_test win32nolock-1.0 {
