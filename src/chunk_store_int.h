@@ -37,5 +37,6 @@ int csOpenFile(sqlite3_vfs *pVfs, const char *zPath, sqlite3_file **ppFile,
 int csSyncFile(ChunkStore *cs);
 void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
+int csManifestHashStateOffsetless(const u8 *aBuf);
 
 #endif /* CHUNK_STORE_INT_H */
