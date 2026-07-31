@@ -1547,13 +1547,17 @@ int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
 /* Declared in doltlite_internal.h. Forward-declared here because that
 ** header redefines TableEntry/SchemaEntry in a shape incompatible with
 ** this file's local definitions, so we can't just include it. */
-extern int doltliteBuildIndexSortKey(
-  const u8 *pRec, int nRec,
-  const i16 *aiColumn, int nIdxCol,
-  KeyInfo *pKeyInfo,
+extern int doltliteIndexApplyRowDelta(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  ProllyHash *pIdxRoot,
+  u8 idxFlags,
+  Index *pIdx,
   int iPKey, i64 intKey,
   const u8 *pTreeKey, int nTreeKey,
-  u8 **ppKey, int *pnKey
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
 );
 
 /* Read the current value bytes at (pKey/intKey) in the table's prolly
@@ -1591,75 +1595,6 @@ static int readRowValue(
     }
   }
   prollyCursorClose(&cur);
-  return rc;
-}
-
-/* Mutate one secondary index: delete the old key (if pOldVal is set)
-** and insert the new key (if pNewVal is set). Used by the raw-row
-** mutation path so dolt_conflicts_resolve --theirs (and any future
-** caller) keeps secondary indexes consistent with the table. */
-static int mutateSecondaryIndex(
-  BtShared *pBt,
-  struct TableEntry *pIdxTE,
-  Index *pIdx,
-  int iPKey,
-  i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
-){
-  ProllyMutMap mm;
-  ProllyMutator mut;
-  u8 *pOldKey = 0, *pNewKey = 0;
-  int nOldKey = 0, nNewKey = 0;
-  int rc;
-
-  rc = prollyMutMapInit(&mm, 0);
-  if( rc!=SQLITE_OK ) return rc;
-
-  if( pOldVal && nOldVal>0 ){
-    rc = doltliteBuildIndexSortKey(pOldVal, nOldVal,
-                                   pIdx->aiColumn, pIdx->nKeyCol, 0,
-                                   iPKey, intKey,
-                                   pTreeKey, nTreeKey,
-                                   &pOldKey, &nOldKey);
-    if( rc==SQLITE_OK ){
-      rc = prollyMutMapDelete(&mm, pOldKey, nOldKey, 0);
-    }
-    sqlite3_free(pOldKey);
-    if( rc!=SQLITE_OK ){
-      prollyMutMapFree(&mm);
-      return rc;
-    }
-  }
-  if( pNewVal && nNewVal>0 ){
-    rc = doltliteBuildIndexSortKey(pNewVal, nNewVal,
-                                   pIdx->aiColumn, pIdx->nKeyCol, 0,
-                                   iPKey, intKey,
-                                   pTreeKey, nTreeKey,
-                                   &pNewKey, &nNewKey);
-    if( rc==SQLITE_OK ){
-      rc = prollyMutMapInsert(&mm, pNewKey, nNewKey, 0, 0, 0);
-    }
-    sqlite3_free(pNewKey);
-    if( rc!=SQLITE_OK ){
-      prollyMutMapFree(&mm);
-      return rc;
-    }
-  }
-
-  memset(&mut, 0, sizeof(mut));
-  mut.pStore = &pBt->store;
-  mut.pCache = &pBt->cache;
-  memcpy(&mut.oldRoot, &pIdxTE->root, sizeof(ProllyHash));
-  mut.pEdits = &mm;
-  mut.flags = pIdxTE->flags;
-
-  rc = prollyMutateFlush(&mut);
-  if( rc==SQLITE_OK ){
-    memcpy(&pIdxTE->root, &mut.newRoot, sizeof(ProllyHash));
-  }
-  prollyMutMapFree(&mm);
   return rc;
 }
 
@@ -1748,7 +1683,8 @@ int doltliteApplyRawRowMutation(
 
   /* Update secondary indexes (delete old key, insert new). pOldVal can
   ** be NULL when this is an insert of a fresh PK; pVal is NULL when
-  ** this is a delete. */
+  ** this is a delete. Uses the shared KeyInfo-aware path so NOCASE/RTRIM
+  ** match VDBE-encoded index trees. */
   if( rc==SQLITE_OK && pTab && pTab->pIndex
    && (pOldVal || (pVal && nVal>0)) ){
     Index *pIdx;
@@ -1767,9 +1703,10 @@ int doltliteApplyRawRowMutation(
         }
       }
       if( !pIdxTE ) continue;
-      rc = mutateSecondaryIndex(pBt, pIdxTE, pIdx, iPKey, intKey,
-                                pKey, nKey,
-                                pOldVal, nOldVal, pVal, nVal);
+      rc = doltliteIndexApplyRowDelta(
+          db, &pBt->store, &pBt->cache, &pIdxTE->root, pIdxTE->flags,
+          pIdx, iPKey, intKey, pKey, nKey,
+          pOldVal, nOldVal, pVal, nVal);
     }
   }
 

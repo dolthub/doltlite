@@ -18,26 +18,6 @@ int mergeAppendReindexName(char ***paz, int *pn, const char *zName){
   return SQLITE_OK;
 }
 
-/* Inline row-merge index maintenance encodes sort keys with a BINARY/ASC
-** KeyInfo. Indexes whose key columns fold case/space (NOCASE, RTRIM) or sort
-** DESC need the real collation and order, so rebuild them canonically over the
-** merged table via the post-merge REINDEX instead. */
-static int mergeIndexNeedsRebuild(Index *pIdx){
-  int k;
-  for(k=0; k<pIdx->nKeyCol; k++){
-    const char *zColl = pIdx->azColl ? pIdx->azColl[k] : 0;
-    if( zColl
-     && (sqlite3StrICmp(zColl,"NOCASE")==0 || sqlite3StrICmp(zColl,"RTRIM")==0) ){
-      return 1;
-    }
-    if( pIdx->aSortOrder && (pIdx->aSortOrder[k] & KEYINFO_ORDER_DESC) ){
-      return 1;
-    }
-  }
-  return 0;
-}
-
-
 typedef struct IndexMergePatch IndexMergePatch;
 struct IndexMergePatch {
   Pgno iTable;
@@ -91,8 +71,21 @@ static int mergePass1NoteSchemaConflict(
   return SQLITE_OK;
 }
 
-/* Build secondary-index merge descriptors for a named table. Indexes that
-** need real collation/order go on the reindex list instead. */
+/* Free KeyInfo refs owned by collectIndexes before freeing the array. */
+static void mergePass1FreeIdxInfo(MergeIndexInfo *aIdxInfo, int nIdxInfo){
+  int i;
+  if( !aIdxInfo ) return;
+  for(i=0; i<nIdxInfo; i++){
+    if( aIdxInfo[i].pKeyInfo ){
+      sqlite3KeyInfoUnref(aIdxInfo[i].pKeyInfo);
+      aIdxInfo[i].pKeyInfo = 0;
+    }
+  }
+  sqlite3_free(aIdxInfo);
+}
+
+/* Build secondary-index merge descriptors for a named table. Every secondary
+** index is patched inline with a real KeyInfo (NOCASE/RTRIM/DESC included). */
 static int mergePass1CollectIndexes(
   MergePass1Ctx *c,
   const char *zName,
@@ -126,14 +119,6 @@ static int mergePass1CollectIndexes(
   for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
     struct TableEntry *oursIdx;
     if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
-    if( mergeIndexNeedsRebuild(pIdx) ){
-      rc = mergeAppendReindexName(c->pazReindex, c->pnReindex, pIdx->zName);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aIdxInfo);
-        return rc;
-      }
-      continue;
-    }
     oursIdx = doltliteFindTableByNumber(c->aOurs, c->nOurs, pIdx->tnum);
     if( oursIdx ){
       MergeIndexInfo *mi = &aIdxInfo[nIdxInfo];
@@ -141,7 +126,11 @@ static int mergePass1CollectIndexes(
       memcpy(&mi->oursRoot, &oursIdx->root, sizeof(ProllyHash));
       mi->nColumn = pIdx->nKeyCol;
       mi->aiColumn = pIdx->aiColumn;
-      mi->pKeyInfo = 0;
+      mi->pKeyInfo = doltliteKeyInfoOfIndex(c->db, pIdx);
+      if( !mi->pKeyInfo ){
+        mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
+        return SQLITE_NOMEM;
+      }
       mi->iPKey = pTab->iPKey;
       nIdxInfo++;
     }
@@ -149,7 +138,7 @@ static int mergePass1CollectIndexes(
 
   *paIdxInfo = aIdxInfo;
   *pnIdxInfo = nIdxInfo;
-  return SQLITE_OK;
+  return rc;
 }
 
 static int mergePass1RecordIndexPatches(
@@ -205,7 +194,7 @@ static int mergePass1MergeTableData(
       &pAnc->root, &pOurs->root, pTheirsRoot,
       pOurs->flags, &mergedTableRoot, &handled);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(aIdxInfo);
+      mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
       return rc;
     }
   }
@@ -216,13 +205,13 @@ static int mergePass1MergeTableData(
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(aIdxInfo);
+      mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
       return rc;
     }
   }
 
   rc = mergePass1RecordIndexPatches(c, aIdxInfo, nIdxInfo);
-  sqlite3_free(aIdxInfo);
+  mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
   if( rc!=SQLITE_OK ) return rc;
 
   {
