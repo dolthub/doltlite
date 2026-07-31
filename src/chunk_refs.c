@@ -83,10 +83,6 @@ int refsTableBranchCount(const RefsTable *rt){
   return rt->nBranches;
 }
 
-int refsTableTagCount(const RefsTable *rt){
-  return rt->nTags;
-}
-
 int refsTableRemoteCount(const RefsTable *rt){
   return rt->nRemotes;
 }
