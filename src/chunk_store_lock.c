@@ -462,6 +462,25 @@ int csReloadFromDisk(ChunkStore *cs){
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
 
+  /* A torn-tail recovery rewinds the logical EOF in memory only, and the
+  ** physical crash garbage past it re-trips the external-change size check
+  ** on every lock acquisition, turning each write transaction into another
+  ** full reload and replay. Under the graph lock nothing can be appending,
+  ** so bytes past the freshly replayed boundary are dead — reclaim them.
+  ** The reclaim is a pure optimization and every failure inside it is a
+  ** silent no-op, so its allocations must not read as swallowed OOM under
+  ** fault injection. */
+  if( !cs->readOnly && !cs->corruptMidStream
+   && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+    i64 physSize = 0;
+    sqlite3BeginBenignMalloc();
+    if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
+     && physSize > cs->file.iFileSize ){
+      (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+    }
+    sqlite3EndBenignMalloc();
+  }
+
   return SQLITE_OK;
 }
 
