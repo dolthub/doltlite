@@ -1005,33 +1005,35 @@ the lock before advancing a branch tip.
 
 For a DoltLite-format main database, the concurrency contract is:
 
-- **Per-connection branch state.** Each connection holds its own active
-  branch, HEAD, and uncommitted working set (see
-  [Per-Session Branching](#per-session-branching-architecture)). Two
-  connections may sit on different branches of the same file at once.
+- **Per-connection branch selection.** Each connection holds its own active
+  branch and session view of HEAD and staging (see
+  [Per-Session Branching](#per-session-branching-architecture)). The
+  uncommitted working set belongs to the branch, so another connection that
+  selects that branch recovers it. Two connections may sit on different
+  branches of the same file at once.
 - **One durable writer at a time.** A connection that holds an explicit write
   transaction owns the graph lock. A peer that tries to begin a concurrent
   write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
   commits or rolls back. After the lock is free, the peer can retry
   successfully.
-- **Snapshot pin under a write transaction.** While a write transaction is
-  open, the connection pins the chunk-store snapshot it opened. If the
-  on-disk store advanced under a peer (or the snapshot would otherwise be
-  invalidated), further work surfaces `SQLITE_BUSY_SNAPSHOT` rather than
-  silently mixing catalogs.
-- **Readers stay live.** Concurrent readers can open the same file, see
-  already-committed data, and keep scanning while another process commits or
-  runs GC. They do not block writers indefinitely and do not create SQLite
-  `-wal`/`-shm` sidecars.
+- **Snapshot-safe write upgrades.** A transaction that has established a read
+  snapshot cannot upgrade to a writer after a peer advances the store; the
+  upgrade returns `SQLITE_BUSY_SNAPSHOT` instead of mixing catalogs. Once a
+  write transaction begins, it holds the graph lock and pins its snapshot
+  until commit or rollback.
+- **Readers stay live.** A reader can see already-committed data while another
+  process holds an uncommitted write. An open iterator completes safely while
+  another process runs GC. Readers do not create SQLite `-wal`/`-shm`
+  sidecars.
 - **Multi-process commits are CAS-safe.** A process that races `dolt_commit`
   against a peer either wins a clean tip advance or loses with a busy /
   conflict outcome. The loser's stale tip must not clobber the winner's
-  commit. Sequential multiproc commits both land; forked writers end with a
-  consistent table, index, and log.
-- **VC ops re-confirm HEAD under the lock.** Merge, cherry-pick, revert, pull,
-  and similar multi-step commands re-read the branch tip under the graph lock
-  immediately before advancing the ref (`doltliteRefreshAndConfirmHead`). A
-  peer commit in the middle yields `SQLITE_BUSY` instead of a lost update.
+  commit. Sequential multiproc commits both land; forked SQL transaction
+  writers leave consistent table and index state.
+- **VC ops re-confirm HEAD under the lock.** Merge, cherry-pick, and revert use
+  locked compare-and-advance; pull and rebase use operation-specific locked
+  branch expectations. A peer commit between planning and ref update yields
+  `SQLITE_BUSY` instead of a lost update.
 - **GC cooperates with writers.** `dolt_gc` / `VACUUM` may be deferred or
   report busy while a writer holds the graph lock; after the writer finishes,
   GC completes without dropping reachable data. Multiproc GC-vs-commit and
