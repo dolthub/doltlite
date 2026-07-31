@@ -10,11 +10,12 @@ giving Git-like version control on a SQL database. The parser, planner, and
 VDBE stay upstream-derived above SQLite's `btree.h` seam; below it, a
 single-file chunk store backs prolly trees instead of SQLite pages.
 
-[Why DoltLite?](https://www.dolthub.com/blog/2026-04-27-why-doltlite/) Embeds
-in any language for local-first [Dolt](https://github.com/dolthub/dolt/) use
-cases. More on the
-[DoltHub blog](https://www.dolthub.com/blog/?tags=doltlite)
-([origin story](https://www.dolthub.com/blog/2026-03-24-a-week-in-gas-town/)).
+[Why DoltLite?](https://www.dolthub.com/blog/2026-04-27-why-doltlite/) DoltLite
+can be embedded in any language enabling local-first use cases for [Dolt](https://github.com/dolthub/dolt/).
+
+You can read more about DoltLite, including its 
+[origin story](https://www.dolthub.com/blog/2026-03-24-a-week-in-gas-town/), 
+on the [DoltHub blog](https://www.dolthub.com/blog/?tags=doltlite).
 
 ## Install
 
