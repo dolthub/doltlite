@@ -53,6 +53,7 @@ int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit)
 ** size-coincident rewrite, force the slow path). */
 int csDiskStateMatchesMemory(ChunkStore *cs){
   int bMoved = 0;
+  int hashState;
   i64 contentEnd;
   i64 physSize = 0;
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
@@ -71,8 +72,13 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
                     contentEnd - (i64)sizeof(aRoot))!=SQLITE_OK ){
     return 0;
   }
+  hashState = csManifestHashState(aRoot+1,
+                                  contentEnd - (i64)sizeof(aRoot));
+  if( hashState==CS_MANIFEST_HASH_BAD ){
+    hashState = csManifestHashStateOffsetless(aRoot+1);
+  }
   return aRoot[0]==CS_WAL_TAG_ROOT
-      && csManifestHashState(aRoot+1)==CS_MANIFEST_HASH_OK
+      && hashState==CS_MANIFEST_HASH_OK
       && memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
                 cs->refs.refsHash.data, PROLLY_HASH_SIZE)==0;
 }

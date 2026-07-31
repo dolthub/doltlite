@@ -3,6 +3,7 @@
 
 #include "chunk_wal.h"
 #include "chunk_store.h"
+#include "chunk_store_int.h"
 #include "chunk_staging.h"
 #include "chunk_file.h"
 #include "../ext/blake3/blake3.h"
@@ -192,7 +193,7 @@ static int csWalResolveDamage(
         rc = sqlite3OsRead(cs->file.pFile, m, CHUNK_MANIFEST_SIZE,
                            cs->wal.iWalOffset + cand + 1);
         if( rc != SQLITE_OK ) return rc;
-        state = csManifestHashState(m);
+        state = csManifestHashState(m, cs->wal.iWalOffset + cand);
         if( state==CS_MANIFEST_HASH_OK ){
           i64 durableTo = CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF);
           i64 batchStart = CS_READ_I64(m + CS_MANIFEST_BATCH_START_OFF);
@@ -207,11 +208,6 @@ static int csWalResolveDamage(
             return SQLITE_OK;
           }
           /* A root of the damaged batch itself; keep scanning. */
-        }else if( state==CS_MANIFEST_HASH_LEGACY
-               && cand + 1 + CHUNK_MANIFEST_SIZE < walSize ){
-          cs->wal.recoveredMidStream = 1;
-          *pAction = CS_DAMAGE_MIDSTREAM;
-          return SQLITE_OK;
         }
       }
     }
@@ -385,7 +381,13 @@ int csReplayWal(ChunkStore *cs){
                          CHUNK_MANIFEST_SIZE - (CS_WAL_CHUNK_HDR_SIZE - 1),
                          cs->wal.iWalOffset + pos);
       if( rc != SQLITE_OK ) goto replay_error;
-      hashState = csManifestHashState(m);
+      hashState = csManifestHashState(m, cs->wal.iWalOffset + recPos);
+      /* Offsetless v12 seals are safe only at a sequentially parsed boundary;
+      ** damage scans must require an offset-bound seal. */
+      if( hashState==CS_MANIFEST_HASH_BAD
+       && csManifestHashStateOffsetless(m)==CS_MANIFEST_HASH_OK ){
+        hashState = CS_MANIFEST_HASH_OK;
+      }
       if( CS_READ_U32(m) != CHUNK_STORE_MAGIC
        || hashState == CS_MANIFEST_HASH_BAD ){
         sqlite3_log(SQLITE_NOTICE,

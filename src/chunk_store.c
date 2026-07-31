@@ -146,16 +146,27 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memcpy(aBuf + CS_MANIFEST_REFS_HASH_OFF, cs->refs.refsHash.data, PROLLY_HASH_SIZE);
 }
 
-void csManifestSeal(u8 *aBuf){
+static void csManifestHashOffset(blake3_hasher *pHasher, i64 iOffset){
+  u8 aOffset[8];
+  CS_WRITE_I64(aOffset, iOffset);
+  blake3_hasher_update(pHasher, aOffset, sizeof(aOffset));
+}
+
+void csManifestSeal(u8 *aBuf, i64 iOffset){
   blake3_hasher hasher;
   memset(aBuf + CS_MANIFEST_SELF_HASH_OFF, 0, PROLLY_HASH_SIZE);
   blake3_hasher_init(&hasher);
   blake3_hasher_update(&hasher, aBuf, CHUNK_MANIFEST_SIZE);
+  csManifestHashOffset(&hasher, iOffset);
   blake3_hasher_finalize(&hasher, aBuf + CS_MANIFEST_SELF_HASH_OFF,
                          PROLLY_HASH_SIZE);
 }
 
-int csManifestHashState(const u8 *aBuf){
+static int csManifestHashStateImpl(
+  const u8 *aBuf,
+  i64 iOffset,
+  int bindOffset
+){
   blake3_hasher hasher;
   u8 aCopy[CHUNK_MANIFEST_SIZE];
   u8 aHash[PROLLY_HASH_SIZE];
@@ -168,9 +179,18 @@ int csManifestHashState(const u8 *aBuf){
   memset(aCopy + CS_MANIFEST_SELF_HASH_OFF, 0, PROLLY_HASH_SIZE);
   blake3_hasher_init(&hasher);
   blake3_hasher_update(&hasher, aCopy, CHUNK_MANIFEST_SIZE);
+  if( bindOffset ) csManifestHashOffset(&hasher, iOffset);
   blake3_hasher_finalize(&hasher, aHash, PROLLY_HASH_SIZE);
   return memcmp(aHash, aBuf + CS_MANIFEST_SELF_HASH_OFF, PROLLY_HASH_SIZE)==0
        ? CS_MANIFEST_HASH_OK : CS_MANIFEST_HASH_BAD;
+}
+
+int csManifestHashState(const u8 *aBuf, i64 iOffset){
+  return csManifestHashStateImpl(aBuf, iOffset, 1);
+}
+
+int csManifestHashStateOffsetless(const u8 *aBuf){
+  return csManifestHashStateImpl(aBuf, 0, 0);
 }
 
 static int csReadManifest(ChunkStore *cs){
@@ -232,11 +252,7 @@ static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
         if( q + i + 1 + CHUNK_MANIFEST_SIZE > fileSize ) continue;
         rc = sqlite3OsRead(cs->file.pFile, m, CHUNK_MANIFEST_SIZE, q + i + 1);
         if( rc != SQLITE_OK ) return rc;
-        state = csManifestHashState(m);
-        if( state==CS_MANIFEST_HASH_LEGACY ){
-          *pEverCommitted = 1;
-          return SQLITE_OK;
-        }
+        state = csManifestHashState(m, q + i);
         if( state==CS_MANIFEST_HASH_OK ){
           if( CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF) > CHUNK_MANIFEST_SIZE ){
             *pEverCommitted = 1;
@@ -590,7 +606,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, markerStart);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, markerNext);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, markerStart);
-  csManifestSeal(rootRec + 1);
+  csManifestSeal(rootRec + 1, markerStart);
 
   rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), markerStart);
   if( rc==SQLITE_OK ){
@@ -933,7 +949,7 @@ static int csDrainPendingToWal(ChunkStore *cs){
     u8 manifest[CHUNK_MANIFEST_SIZE];
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
-    csManifestSeal(manifest);
+    csManifestSeal(manifest, 0);
     rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
     if( rc!=SQLITE_OK ) return rc;
     writeOff = CHUNK_MANIFEST_SIZE;

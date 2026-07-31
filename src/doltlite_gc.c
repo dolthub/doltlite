@@ -641,7 +641,7 @@ static int gcRewriteFile(
                         CHUNK_MANIFEST_SIZE + nDataBytes, indexSize);
   walStateSetOffset(&manifestCs.wal, finalSize);
   csSerializeManifest(&manifestCs, manifest);
-  csManifestSeal(manifest);
+  csManifestSeal(manifest, 0);
 
   {
     i64 nEntries = kept ? (i64)kept : 1;
