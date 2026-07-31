@@ -46,13 +46,17 @@
 # restated per suite; gates naming one of those PRAGMAs cite it.
 
 # ── storage corruption probes ──
-corrupt corrupt-3.3 @linux @no-coverage  # raw byte-flips land on CTLD manifest/hash bytes; non-coverage linux trips one extra corruption guard
-corrupt corrupt-3.4  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
-corrupt corrupt-3.5  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
-corrupt corrupt-3.6  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
-corrupt corrupt-5.2  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
-corrupt corrupt-8.1  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
-corrupt corrupt-8.2  # raw byte-flips land on CTLD manifest/hash bytes, not sqlite btree cells
+# Stock hexio byte-flips assume a contiguous SQLite page file (btree cells,
+# freelist, headers). On a chunk-store repo the same offsets hit CTLD
+# manifest/hash/journal bytes. Architectural — not a missing integrity
+# detector, and not message-parity work if the store reports differently.
+corrupt corrupt-3.3 @linux @no-coverage  # hexio lands on CTLD bytes, not btree cells; non-coverage linux extra guard
+corrupt corrupt-3.4  # hexio lands on CTLD bytes, not btree cells (architectural)
+corrupt corrupt-3.5  # hexio lands on CTLD bytes, not btree cells (architectural)
+corrupt corrupt-3.6  # hexio lands on CTLD bytes, not btree cells (architectural)
+corrupt corrupt-5.2  # hexio lands on CTLD bytes, not btree cells (architectural)
+corrupt corrupt-8.1  # hexio lands on CTLD bytes, not btree cells (architectural)
+corrupt corrupt-8.2  # hexio lands on CTLD bytes, not btree cells (architectural)
 
 # ── canonical adoption (per-entry class) ──
 altercol altercol-1.13.4  # canonical adoption: canonicalized SQL text after schema commit
@@ -304,32 +308,34 @@ pragma pragma-1.9.2
 pragma pragma-14.1
 pragma pragma-14.2
 pragma pragma-14.2uc
-# pragma-3.*: integrity_check corruption injection. The hexio pokes damage
-# chunk-store WAL bytes, so DoltLite reports a repository-level integrity
-# failure instead of stock btree page/index diagnostics; some later cases are
-# cascades of the poisoned attached database state.
-pragma pragma-3.10
-pragma pragma-3.11
-pragma pragma-3.12
-pragma pragma-3.13
-pragma pragma-3.14
-pragma pragma-3.15
-pragma pragma-3.16
-pragma pragma-3.17
-pragma pragma-3.18
-pragma pragma-3.2
-pragma pragma-3.3
-pragma pragma-3.4
-pragma pragma-3.5
-pragma pragma-3.6b
-pragma pragma-3.6c
-pragma pragma-3.7
-pragma pragma-3.8
-pragma pragma-3.8.1
-pragma pragma-3.8.2
-pragma pragma-3.9a
-pragma pragma-3.9b
-pragma pragma-3.9c
+# pragma-3.*: integrity_check via hexio pokes into stock page/index layout.
+# On DoltLite the same writes damage chunk-store WAL/manifest bytes, so
+# integrity reports repository/chunk-graph failure (often generic) rather
+# than stock btree page/index diagnostics ("Tree N page M ..."). Stock
+# Tree/page/cell text is page-format-only — not a small message-parity fix.
+# Later cases cascade from the poisoned attached-db state.
+pragma pragma-3.10  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.11  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.12  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.13  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.14  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.15  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.16  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.17  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.18  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.2  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.3  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.4  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.5  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.6b  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.6c  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.7  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.8  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.8.1  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.8.2  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.9a  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.9b  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
+pragma pragma-3.9c  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
 pragma pragma-4.6
 pragma pragma-6.2.2
 pragma pragma-6.8
@@ -1937,18 +1943,34 @@ corrupt7 corrupt7-1.1  # SQLite page-file size probe; no page layout (architectu
 corrupt7 corrupt7-1.2  # SQLite header page_size@16 probe; no page layout (architectural)
 corrupt7 corrupt7-2.1  # stock Tree/page/cell offset text unmatchable on prolly integrity (not message parity)
 corrupt7 corrupt7-2.2  # stock Tree/page/cell offset text unmatchable on prolly integrity (not message parity)
-corruptA corruptA-2.1  # stock header corruption at offsets the chunk store does not use
-corruptA corruptA-2.2  # stock header corruption at offsets the chunk store does not use
-corruptA corruptA-2.3  # stock header corruption at offsets the chunk store does not use
-corruptA corruptA-2.4  # stock header corruption at offsets the chunk store does not use
-corruptD corruptD-1.1.1  # stock cell-pointer corruption not applicable to chunk store
-corruptD corruptD-1.1.2  # stock cell-pointer corruption not applicable to chunk store
-corruptG corruptG-1.2  # stock header corruption: store rejects differently or misses the offset
-corruptG corruptG-1.3  # stock header corruption: store rejects differently or misses the offset
-corruptG corruptG-1.4  # stock header corruption: store rejects differently or misses the offset
-corruptG corruptG-2.1  # stock header corruption: store rejects differently or misses the offset
-corruptH corruptH-2.3  # stock-page corruption injection; offset misses + harness footgun cascade
-corruptJ corruptJ-2.2  # stock-page corruption injection; hexio dump reads chunk-store bytes
+# corruptA — stock DB-header field pokes (read-format@19, payload fractions
+# @21-23). Expects "file is not a database". Chunk-store files do not use
+# those SQLite header fields at those offsets; pokes miss logical format
+# checks. Architectural — not a missing NOTADB detector to "wire up."
+corruptA corruptA-2.1  # SQLite header field poke (read format); no page-header layout (architectural)
+corruptA corruptA-2.2  # SQLite header field poke (max payload frac); no page-header layout (architectural)
+corruptA corruptA-2.3  # SQLite header field poke (min payload frac); no page-header layout (architectural)
+corruptA corruptA-2.4  # SQLite header field poke (min leaf frac); no page-header layout (architectural)
+# corruptD — stock cell-pointer / oversize-cell buffer bounds on page images.
+# No SQLite cell pointers in the chunk store. Architectural.
+corruptD corruptD-1.1.1  # stock cell-pointer poke; no page cells (architectural)
+corruptD corruptD-1.1.2  # stock cell-pointer poke; no page cells (architectural)
+# corruptG — hexio corrupts index payload header-size / serial_type at
+# page-relative offsets (idxroot*page_size - 15). Stock expects "database
+# disk image is malformed" on SELECT/integrity_check. Those offsets are not
+# index record headers in the chunk store, so the poke is not the stock
+# corruption. Do not re-triage as "make malformed message match."
+corruptG corruptG-1.2  # stock index payload-header poke at page offset; not a chunk-store record (architectural)
+corruptG corruptG-1.3  # stock index payload-header poke at page offset; not a chunk-store record (architectural)
+corruptG corruptG-1.4  # stock index payload-header poke at page offset; not a chunk-store record (architectural)
+corruptG corruptG-2.1  # stock serial_type overflow poke at page offset; not a chunk-store record (architectural)
+# corruptH — stock freelist-trunk / child-page pointer pokes by page number.
+# Offsets miss chunk-store structures; cascades include harness footguns.
+# Architectural page-layout test, not a freelist bug.
+corruptH corruptH-2.3  # stock freelist/child-page poke by page number; no page freelist (architectural)
+# corruptJ — stock WITHOUT ROWID page-image child-pointer poke + hexio dump
+# of page bytes. Chunk-store file bytes are not btree page images.
+corruptJ corruptJ-2.2  # stock page-image child-pointer poke/hexio; no page layout (architectural)
 incrblob3 incrblob3-7.2  # stock schema-cookie poke at offsets 40/24 corrupts the checksummed store
 incrblobfault incrblobfault-3-ioerr-persistent.2  # IO-fault point shift under fault injection
 incrblobfault incrblobfault-3-ioerr-persistent.3  # IO-fault point shift under fault injection
@@ -2096,91 +2118,114 @@ busy2 busy2-3.1.2  # snapshot read instead of SQLITE_BUSY; busy handler correctl
 busy2 busy2-3.1.3  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 busy2 busy2-3.2.2  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 busy2 busy2-3.2.3  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
-corrupt6 corrupt6-1.1  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.2  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.5.1  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.5.2  # stock freelist/page corruption: offsets land outside chunk-store structures
-corrupt6 corrupt6-1.8.3  # stock's restore-byte write is fresh mid-stream corruption in the chunk store; read errors malformed instead of succeeding
-corrupt6 corrupt6-1.8.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
-corrupt6 corrupt6-1.9.3  # stock's restore-byte write is fresh mid-stream corruption in the chunk store; read errors malformed instead of succeeding
-corrupt6 corrupt6-1.9.4  # stock restores the original byte; in the chunk store the same write is fresh mid-stream corruption, so integrity_check errors instead of ok
-corruptE corruptE-2.1  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-2.2  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-2.3  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-2.4  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.1  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.2  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.3  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.4  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.5  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.6  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.7  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.8  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.9  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.10  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.11  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.12  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.13  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptE corruptE-3.14  # cell-order poke: chunk store reports repository-level integrity failure instead of stock page-order detail
-corruptK corruptK-1.1  # PRAGMA page_count synthetic chunk-page accounting
-corruptK corruptK-1.2  # stock freelist corruption; sqlite_dbpage writes rejected
-corruptK corruptK-1.3  # cascade of the 1.2 raw poke: the damaged batch has no later durable root, so recovery rolls back to the prior commit boundary and t1 is absent
-corruptK corruptK-2.1  # PRAGMA page_count synthetic chunk-page accounting
-corruptK corruptK-2.2  # stock freelist corruption; sqlite_dbpage writes rejected
-corruptK corruptK-3.2  # stock freelist corruption; sqlite_dbpage writes rejected
-corruptK corruptK-3.3  # stock freelist corruption; sqlite_dbpage writes rejected
-corruptL corruptL-1.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-1.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-1.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-1.3  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-1.4  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-2.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-2.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-2.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-3.1  # writable_schema index-SQL poke tolerated instead of malformed; row-by-row INSERT..SELECT keeps unrelated indexes consistent
-corruptL corruptL-4.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-4.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-5.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-5.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-5.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-5.3  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-6.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-6.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-7.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-7.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-8.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-8.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-9.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-9.3  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-10.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-10.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-11.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-11.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-12.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-12.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-13.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-13.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-14.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-14.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-14.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-15.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-15.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-15.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-16.1  # SQL rootpage swap honored; doltlite's own integrity_check flags it (detection point differs)
-corruptL corruptL-17.2  # file physically truncated to 2048 bytes; reported as disk I/O error instead of malformed
-corruptL corruptL-18.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-18.1  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-19.0  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-19.2  # stock index-page corruption: store rejects at schema level
-corruptL corruptL-19.4  # writable_schema index rewrite tolerated; store stays self-consistent (verified)
-corruptN corruptN-1.0  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-1.1  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-2.0  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-6.1  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-6.3  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-7.1  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-7.2  # MEMDB page-image deserialize unsupported; corruption reported differently
-corruptN corruptN-7.3  # MEMDB page-image deserialize unsupported; corruption reported differently
+# corrupt6 — stock freelist trunk/leaf page corruption by hard-coded page
+# offsets. 1.1/1.2/1.5.*: probes assume page-file freelist layout (offsets
+# miss chunk-store). 1.8/1.9: stock "restore original byte" undoes a page
+# poke; on a chunk store the restore write is a *new* mid-stream corruption
+# of content-addressed bytes, so reads/integrity fail instead of recovering.
+# Architectural storage-format class — not freelist product work.
+corrupt6 corrupt6-1.1  # stock freelist/page offset probe; no page freelist (architectural)
+corrupt6 corrupt6-1.2  # stock freelist/page offset probe; no page freelist (architectural)
+corrupt6 corrupt6-1.5.1  # stock freelist/page offset probe; no page freelist (architectural)
+corrupt6 corrupt6-1.5.2  # stock freelist/page offset probe; no page freelist (architectural)
+corrupt6 corrupt6-1.8.3  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
+corrupt6 corrupt6-1.8.4  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
+corrupt6 corrupt6-1.9.3  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
+corrupt6 corrupt6-1.9.4  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
+# corruptE — stock rowid/cell *order* corruption on btree page images.
+# integrity_check expects /out of order/ (page-layout cell ordering).
+# Chunk-store pokes are not cell-order mutations; when integrity fails it is
+# repository/chunk-graph level, never stock page-order text. Same class as
+# corrupt7 — do not re-triage as message parity for "out of order."
+corruptE corruptE-2.1  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-2.2  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-2.3  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-2.4  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.1  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.2  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.3  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.4  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.5  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.6  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.7  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.8  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.9  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.10  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.11  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.12  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.13  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+corruptE corruptE-3.14  # stock page cell-order /out of order/; unmatchable on prolly (not message parity)
+# corruptK — freelist corruption via sqlite_dbpage page writes + page_count.
+# dbpage writes are rejected (no SQLite pages); page_count is synthetic.
+# Architectural — not a freelist implementation gap.
+corruptK corruptK-1.1  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
+corruptK corruptK-1.2  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
+corruptK corruptK-1.3  # cascade of 1.2: damaged batch has no durable root; recovery drops t1 (architectural)
+corruptK corruptK-2.1  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
+corruptK corruptK-2.2  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
+corruptK corruptK-3.2  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
+corruptK corruptK-3.3  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
+# corruptL — stock index-page / rootpage corruption and writable_schema SQL
+# pokes against page-layout assumptions. Most cases never form stock
+# page-level corruption on the chunk store (schema-level reject or no-op).
+# 16.1: rootpage swap in SQL is honored as catalog text; integrity flags it
+# at a different layer than stock page checks — not "wire detection earlier."
+# 17.2: truncate to 2048 bytes → disk I/O vs stock malformed (format class).
+corruptL corruptL-1.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-1.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-1.2  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-1.3  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-1.4  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-2.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-2.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-2.2  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-3.1  # writable_schema index-SQL poke tolerated; store stays consistent (verified intentional)
+corruptL corruptL-4.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-4.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-5.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-5.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-5.2  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-5.3  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-6.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-6.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-7.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-7.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-8.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-8.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-9.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-9.3  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-10.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-10.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-11.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-11.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-12.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-12.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-13.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-13.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-14.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-14.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-14.2  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-15.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-15.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-15.2  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-16.1  # SQL rootpage swap: integrity flags at chunk/catalog layer, not stock page check (architectural)
+corruptL corruptL-17.2  # truncate to 2048 → disk I/O vs stock malformed (format class, not message parity)
+corruptL corruptL-18.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-18.1  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-19.0  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-19.2  # stock index-page corruption; no page index layout (architectural)
+corruptL corruptL-19.4  # writable_schema index rewrite tolerated; store stays self-consistent (verified intentional)
+# corruptN — stock MEMDB deserialize of raw SQLite page images, then corrupt.
+# DoltLite MEMDB is prolly/chunk-backed; page-image deserialize is unsupported.
+# Failure text cannot match stock page-corruption paths. Architectural.
+corruptN corruptN-1.0  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-1.1  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-2.0  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-6.1  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-6.3  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-7.1  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-7.2  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+corruptN corruptN-7.3  # MEMDB page-image deserialize unsupported (architectural, not message parity)
 dbstatus2 dbstatus2-1.1  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.2  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.3  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
@@ -2585,14 +2630,18 @@ walprotocol walprotocol-2.8  # WAL locking protocol: recovery-lock contention no
 
 # -- feature-gap sweep final (#1208): fault-saturated heavies; failure sets
 # captured per-file, classes as recorded.
-corruptF corruptF-1.2  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.3  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.4  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-1.6  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.2  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.3  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.4  # stock-page corruption injection: offsets land outside chunk-store structures
-corruptF corruptF-2.6  # stock-page corruption injection: offsets land outside chunk-store structures
+# corruptF — stock freelist/page-layout probes (file size == N*1024, freelist
+# header fields, freelist trunk pokes that alias leaf pages). Chunk-store
+# files are not multi-page freelist images. Architectural — not sizing polish
+# and not freelist product work.
+corruptF corruptF-1.2  # SQLite multi-page file-size probe; no page freelist layout (architectural)
+corruptF corruptF-1.3  # SQLite freelist-header hexio probe; no page freelist layout (architectural)
+corruptF corruptF-1.4  # SQLite freelist-trunk hexio probe; no page freelist layout (architectural)
+corruptF corruptF-1.6  # freelist poke aliases leaf page; no page freelist (architectural)
+corruptF corruptF-2.2  # SQLite multi-page file-size probe; no page freelist layout (architectural)
+corruptF corruptF-2.3  # SQLite freelist-header hexio probe; no page freelist layout (architectural)
+corruptF corruptF-2.4  # SQLite freelist-trunk hexio probe; no page freelist layout (architectural)
+corruptF corruptF-2.6  # freelist poke aliases leaf page; no page freelist (architectural)
 memjournal2 memjournal2-1.0  # in-memory journal premise: journal_mode fixed, sidecar absent
 # mallocG-1 closes and reopens an empty database under malloc fault injection.
 # DoltLite's lazy chunk-store open avoids the stock early allocation/failure
@@ -3780,12 +3829,12 @@ fts3ao fts3ao-2.4  # canonical adoption: sqlite_master row order after schema co
 # fts3corrupt4 sections from 5.0 on (except 6.*) each deserialize a raw
 # stock-format corrupt db image (decode_hexdb); prolly MEMDB rejects the
 # format ("unable to set MEMDB content") and the rest of the section
-# cascades to "no such table". 6.0 inserts NULL into the %_segdir
-# composite PK — a rowid-table quirk doltlite's WITHOUT-ROWID conversion
-# rejects with NOT NULL.
-fts3corrupt4 fts3corrupt4-5.0
-fts3corrupt4 fts3corrupt4-5.1
-fts3corrupt4 fts3corrupt4-6.0
+# cascades to "no such table". Architectural page-image class — not FTS
+# message parity. 6.0 inserts NULL into the %_segdir composite PK — a
+# rowid-table quirk doltlite's WITHOUT-ROWID conversion rejects with NOT NULL.
+fts3corrupt4 fts3corrupt4-5.0  # stock hexdb deserialize; prolly MEMDB (architectural)
+fts3corrupt4 fts3corrupt4-5.1  # cascade of hexdb deserialize reject (architectural)
+fts3corrupt4 fts3corrupt4-6.0  # NULL into %_segdir composite PK; WITHOUT ROWID NOT NULL (intentional)
 fts3corrupt4 fts3corrupt4-7.0
 fts3corrupt4 fts3corrupt4-7.1
 fts3corrupt4 fts3corrupt4-8.0
@@ -3881,16 +3930,17 @@ fts3corrupt4 fts3corrupt4-53.1
 fts3corrupt4 fts3corrupt4-54.0
 fts3corrupt4 fts3corrupt4-54.1
 
-# raw stock-format hexdb images cannot deserialize into prolly MEMDB
-fts3corrupt7 fts3corrupt7-1.0
-fts3corrupt7 fts3corrupt7-1.1
-fts3corrupt7 fts3corrupt7-2.1
+# fts3corrupt7 / fts3fuzz001 — stock hexdb page images deserialize into a
+# MEMDB. DoltLite MEMDB is prolly/chunk-backed; raw SQLite page dumps cannot
+# load. Architectural format class — not FTS message parity.
+fts3corrupt7 fts3corrupt7-1.0  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
+fts3corrupt7 fts3corrupt7-1.1  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
+fts3corrupt7 fts3corrupt7-2.1  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
 
-# raw stock-format hexdb images cannot deserialize into prolly MEMDB
-fts3fuzz001 fts3fuzz001-100
-fts3fuzz001 fts3fuzz001-110
-fts3fuzz001 fts3fuzz001-120
-fts3fuzz001 fts3fuzz001-121
+fts3fuzz001 fts3fuzz001-100  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
+fts3fuzz001 fts3fuzz001-110  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
+fts3fuzz001 fts3fuzz001-120  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
+fts3fuzz001 fts3fuzz001-121  # stock hexdb page-image deserialize; prolly MEMDB (architectural)
 
 # shared-cache table locks are not surfaced by prolly storage: reads and
 # writes proceed where stock expects "database table is locked"
@@ -4588,21 +4638,21 @@ autovacuum autovacuum-9.5  # file_pages: chunk-store size, no page reclamation
 # read-back probe.
 avtrans avtrans-1.0.1  # PRAGMA auto_vacuum reads back 0, not 1
 
-# corrupt8 pokes stock pointer-map page bytes by offset. DoltLite's chunk-store
-# file does not use SQLite pointer-map pages, so the raw write is not a valid
-# corruption of DoltLite's logical b-tree.
-corrupt8 corrupt8-2.1024.6
+# corrupt8 — stock pointer-map page byte pokes (auto_vacuum ptrmap).
+# Chunk-store files have no SQLite pointer-map pages; the raw write is not
+# logical btree corruption. Architectural — not an autovacuum/ptrmap gap to
+# implement for test parity.
+corrupt8 corrupt8-2.1024.6  # stock ptrmap page poke; no pointer-map pages (architectural)
 
-# corruptB pokes stock b-tree page structures by offset. On a chunk-store
-# file the offsets read back garbage: .1 steps that compute child-page
-# offsets from in-file values die with tcl "integer value too large to
-# represent" (1.8.1/1.9.1), pokes land in places the store rejects
-# differently ("no such table: t1" instead of "malformed", 2.1.2),
-# or never land at all so the read returns the intact row (1.9.2).
-corruptB corruptB-1.6.2
-corruptB corruptB-1.7.2
-corruptB corruptB-1.8.2
-corruptB corruptB-2.1.2
+# corruptB — stock btree loop / child-page pointer pokes by page offset.
+# On a chunk-store file offsets read back garbage: tcl "integer value too
+# large" when computing child pages, "no such table" instead of malformed,
+# or intact rows when the poke never hits a logical structure. Architectural
+# page-layout class — not "make malformed message match."
+corruptB corruptB-1.6.2  # stock btree child/loop poke by page offset (architectural)
+corruptB corruptB-1.7.2  # stock btree child/loop poke by page offset (architectural)
+corruptB corruptB-1.8.2  # stock btree child/loop poke by page offset (architectural)
+corruptB corruptB-2.1.2  # stock btree child/loop poke by page offset (architectural)
 
 # createtab: raw-format file-size compare; the doltlite chunk file is not
 # sized in 1024-byte pages and does not grow with auto_vacuum pointer-map
