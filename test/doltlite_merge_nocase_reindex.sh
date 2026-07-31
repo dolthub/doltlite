@@ -1,8 +1,8 @@
 #!/bin/bash
-# NOCASE secondary indexes skip inline mutmap patching during three-way row
-# merge (mergeIndexNeedsRebuild) and are rebuilt via REINDEX after the merged
-# catalog is live. This suite checks that the post-merge index matches a full
-# rebuild: same INDEXED BY results before/after REINDEX, and after drop+recreate.
+# NOCASE secondary indexes are patched inline during three-way merge with a
+# real KeyInfo (same path as conflicts resolve / workspace). This suite checks
+# that the post-merge index matches a full rebuild: same INDEXED BY results
+# before/after REINDEX, and after drop+recreate.
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite Merge NOCASE Index Reindex Property ==="
@@ -75,7 +75,7 @@ fi
 
 run_test_lastline "nocase_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 
-# DESC + NOCASE also takes the rebuild path (mergeIndexNeedsRebuild).
+# DESC + NOCASE also uses KeyInfo-aware inline index patching.
 DB2=/tmp/test_merge_nocase_desc_$$.db
 rm -f "$DB2"
 cat <<'EOF' | $DOLTLITE "$DB2" > /dev/null 2>&1

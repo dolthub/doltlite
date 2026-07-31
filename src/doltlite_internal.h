@@ -15,6 +15,7 @@
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
+typedef struct ProllyMutMap ProllyMutMap;
 typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
 typedef struct DoltliteCommitQueue DoltliteCommitQueue;
@@ -853,6 +854,13 @@ int doltliteAdvanceBranch(
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash
 );
+int doltliteCompareAndAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pExpectedHead,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+);
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
 /* Shared dolt_* command scaffolding (doltlite_cmd.c). */
 void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
@@ -1082,17 +1090,33 @@ int doltliteSerializeConflicts(ChunkStore *cs,
                                DoltliteConflictTable *aTables,
                                int nTables, ProllyHash *pHash);
 
-/* Index key construction helpers (see doltlite_merge_rows.c). Exposed for
-** dolt_conflicts_resolve --theirs to maintain secondary indexes when
-** writing theirs's row directly via the raw-row mutation path. */
+/* Index key construction helpers (see doltlite_merge_rows.c). Shared by
+** merge, dolt_conflicts_resolve, and workspace so secondary indexes stay
+** consistent with VDBE (including NOCASE/RTRIM/DESC). */
 void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
 void doltliteIpkWriteBE(u8 *p, i64 v, int n);
-int doltliteBuildIndexSortKey(const u8 *pRec, int nRec,
-                              const i16 *aiColumn, int nIdxCol,
-                              KeyInfo *pKeyInfo,
-                              int iPKey, i64 intKey,
-                              const u8 *pTreeKey, int nTreeKey,
-                              u8 **ppKey, int *pnKey);
+KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
+int doltliteIndexMutMapRowDelta(
+  ProllyMutMap *pMap,
+  const i16 *aiColumn, int nIdxCol,
+  KeyInfo *pKeyInfo,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+);
+int doltliteIndexApplyRowDelta(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  ProllyHash *pIdxRoot,
+  u8 idxFlags,
+  Index *pIdx,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+);
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
@@ -1165,6 +1189,18 @@ void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg);
 int doltliteVcSealBranchStyleTxn(sqlite3 *db);
 
 typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);
+typedef struct DoltliteBranchExpectation DoltliteBranchExpectation;
+struct DoltliteBranchExpectation {
+  const char *zBranch;
+  const ProllyHash *pTip;
+};
+int doltliteMutateRefsExpected(
+  sqlite3 *db,
+  const DoltliteBranchExpectation *aExpected,
+  int nExpected,
+  DoltliteRefsMutation xMutate,
+  void *pArg
+);
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg);
 
 const char *doltliteGetAuthorName(sqlite3 *db);

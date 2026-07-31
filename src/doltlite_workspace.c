@@ -441,41 +441,15 @@ static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
 
 /* Apply one row's old/new records to one secondary-index root. */
 static int wsApplyRowToIndex(
+  sqlite3 *db,
   ChunkStore *cs, ProllyCache *pCache,
   struct TableEntry *idxEntry, Index *pIdx, int iPKey,
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pSrc, int nSrc, const u8 *pTgt, int nTgt
 ){
-  ProllyHash root = idxEntry->root;
-  int rc = SQLITE_OK;
-  if( pSrc ){
-    u8 *pIK = 0; int nIK = 0;
-    ProllyHash next;
-    rc = doltliteBuildIndexSortKey(pSrc, nSrc, pIdx->aiColumn, pIdx->nKeyCol,
-                                   0, iPKey, intKey, pKey, nKey, &pIK, &nIK);
-    if( rc==SQLITE_OK ){
-      rc = prollyMutateDelete(cs, pCache, &root, idxEntry->flags,
-                              pIK, nIK, 0, &next);
-      sqlite3_free(pIK);
-      if( rc==SQLITE_OK ) root = next;
-    }
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  if( pTgt ){
-    u8 *pIK = 0; int nIK = 0;
-    ProllyHash next;
-    rc = doltliteBuildIndexSortKey(pTgt, nTgt, pIdx->aiColumn, pIdx->nKeyCol,
-                                   0, iPKey, intKey, pKey, nKey, &pIK, &nIK);
-    if( rc==SQLITE_OK ){
-      rc = prollyMutateInsert(cs, pCache, &root, idxEntry->flags,
-                              pIK, nIK, 0, 0, 0, &next);
-      sqlite3_free(pIK);
-      if( rc==SQLITE_OK ) root = next;
-    }
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  idxEntry->root = root;
-  return SQLITE_OK;
+  return doltliteIndexApplyRowDelta(
+      db, cs, pCache, &idxEntry->root, idxEntry->flags, pIdx,
+      iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt);
 }
 
 static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
@@ -556,7 +530,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
       if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
       idxEntry = doltliteFindTableByNumber(aTables, nTables, pIdx->tnum);
       if( !idxEntry ) continue;
-      rc = wsApplyRowToIndex(cs, pCache, idxEntry, pIdx, pTab->iPKey,
+      rc = wsApplyRowToIndex(db, cs, pCache, idxEntry, pIdx, pTab->iPKey,
                              r->pKey, r->nKey, r->intKey,
                              pSrc, nSrc, pTgt, nTgt);
     }

@@ -969,6 +969,106 @@ static void test_crash_garbage_truncated_on_write(void){
   removeDb(dbpath);
 }
 
+/* Body offset of the first WAL chunk record whose declared length matches. */
+static off_t wal_chunk_body_offset_by_len(const char *path, unsigned int want){
+  long long walOffset = read_i64_le_at(path, 84);
+  off_t sz = file_size(path);
+  off_t pos;
+  if( walOffset < MANIFEST_SIZE || sz <= (off_t)walOffset ) return -1;
+  pos = (off_t)walOffset;
+  while( pos < sz ){
+    unsigned char tag = 0;
+    if( read_bytes(path, pos, &tag, 1)!=0 ) return -1;
+    pos++;
+    if( tag==0x01 ){
+      unsigned int len;
+      if( pos + 24 > sz ) return -1;
+      len = read_u32_le_at(path, pos + 20);
+      if( len==0xffffffffu || pos + 24 + (off_t)len > sz ) return -1;
+      if( len==want ) return pos + 24;
+      pos += 24 + (off_t)len;
+    }else if( tag==0x02 ){
+      if( pos + MANIFEST_SIZE > sz ) return -1;
+      pos += MANIFEST_SIZE;
+    }else{
+      return -1;
+    }
+  }
+  return -1;
+}
+
+static void test_damage_far_before_sealing_root_poisons(void){
+  const char *dbpath = "/tmp/test_corr_scan_window.db";
+  ChunkStore cs;
+  ProllyHash h1, h2, h3;
+  unsigned char small1[32], small3[32];
+  unsigned char bad = 0xA5;
+  /* Larger than any bounded damage-scan window, so this batch's sealing
+  ** root — and the next batch's — lie more than 64MB past the damage. */
+  const unsigned int bigLen = 70u*1024u*1024u;
+  unsigned char *big;
+  off_t bodyOff;
+  int rc;
+
+  printf("--- Test 23: Damage far before its sealing root poisons ---\n");
+
+  removeDb(dbpath);
+  memset(small1, 0x11, sizeof(small1));
+  memset(small3, 0x33, sizeof(small3));
+  big = sqlite3_malloc64(bigLen);
+  check("scan_window_alloc", big!=0);
+  if( !big ) return;
+  {
+    unsigned int x = 0x9e3779b9u, i;
+    for(i=0; i<bigLen; i++){
+      x ^= x<<13; x ^= x>>17; x ^= x<<5;
+      big[i] = (unsigned char)x;
+    }
+  }
+
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  check("scan_window_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_free(big); return; }
+
+  check("scan_window_put1",
+    chunkStorePut(&cs, small1, sizeof(small1), &h1)==SQLITE_OK);
+  check("scan_window_commit1", chunkStoreCommit(&cs)==SQLITE_OK);
+  check("scan_window_put_big",
+    chunkStorePut(&cs, big, (int)bigLen, &h2)==SQLITE_OK);
+  check("scan_window_commit2", chunkStoreCommit(&cs)==SQLITE_OK);
+  check("scan_window_put3",
+    chunkStorePut(&cs, small3, sizeof(small3), &h3)==SQLITE_OK);
+  check("scan_window_commit3", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreClose(&cs);
+  sqlite3_free(big);
+
+  bodyOff = wal_chunk_body_offset_by_len(dbpath, bigLen);
+  check("scan_window_find_big_body", bodyOff > 0);
+  if( bodyOff > 0 ){
+    check("scan_window_corrupt", corrupt_bytes(dbpath, bodyOff, &bad, 1)==0);
+  }
+
+  /* The sealed roots of batches 2 and 3 prove the damaged bytes sit below
+  ** committed data. A bounded scan that misses them would call this a torn
+  ** tail and silently rewind both committed batches; the store must be
+  ** poisoned instead. */
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("scan_window_reopen", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    u8 *pData = 0;
+    int nData = 0;
+    check("scan_window_poisoned", cs.corruptMidStream);
+    rc = chunkStoreGet(&cs, &h1, &pData, &nData);
+    check("scan_window_no_silent_rewind", rc==SQLITE_CORRUPT);
+    sqlite3_free(pData);
+    chunkStoreClose(&cs);
+  }
+
+  removeDb(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -993,6 +1093,7 @@ int main(void){
   test_corrupt_index_offset();
   test_corrupt_index_entry_offset();
   test_corrupt_index_order();
+  test_damage_far_before_sealing_root_poisons();
   test_crash_garbage_truncated_on_write();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",

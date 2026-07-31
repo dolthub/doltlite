@@ -255,6 +255,19 @@ int chunkStoreInstallRefsBlob(ChunkStore *cs, const u8 *data, int nData);
 
 int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut);
 
+typedef struct ChunkStoreRefsSnapshot ChunkStoreRefsSnapshot;
+struct ChunkStoreRefsSnapshot {
+  SavedRefsState state;
+  ProllyHash refsHash;
+  ProllyHash committedRefsHash;
+};
+int chunkStoreSnapshotRefs(ChunkStore *cs, ChunkStoreRefsSnapshot *pSnapshot);
+void chunkStoreRestoreRefsSnapshot(
+  ChunkStore *cs,
+  ChunkStoreRefsSnapshot *pSnapshot
+);
+void chunkStoreDiscardRefsSnapshot(ChunkStoreRefsSnapshot *pSnapshot);
+
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult);
 
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas);
