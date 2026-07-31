@@ -22,14 +22,66 @@ void doltliteIpkWriteBE(u8 *p, i64 v, int n){
   for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
 }
 
-/* Build index keys from row records; substitute intkey for IPK ghosts. */
-int doltliteBuildIndexSortKey(
+/* KeyInfo for Index without a Parse context. Matches sqlite3KeyInfoOfIndex
+** collations/sort flags so VC raw-row paths encode the same sort keys as VDBE. */
+KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx){
+  int i;
+  int nCol;
+  int nKey;
+  KeyInfo *pKey;
+
+  if( !db || !pIdx ) return 0;
+  nCol = pIdx->nColumn;
+  nKey = pIdx->nKeyCol;
+  if( pIdx->uniqNotNull ){
+    pKey = sqlite3KeyInfoAlloc(db, nKey, nCol - nKey);
+  }else{
+    pKey = sqlite3KeyInfoAlloc(db, nCol, 0);
+  }
+  if( !pKey ) return 0;
+  for(i=0; i<nCol; i++){
+    const char *zColl = pIdx->azColl ? pIdx->azColl[i] : 0;
+    if( !zColl || zColl==sqlite3StrBINARY
+     || sqlite3StrICmp(zColl, "BINARY")==0 ){
+      pKey->aColl[i] = 0;
+    }else{
+      pKey->aColl[i] = sqlite3FindCollSeq(db, ENC(db), zColl, 0);
+    }
+    pKey->aSortFlags[i] = pIdx->aSortOrder ? pIdx->aSortOrder[i] : 0;
+  }
+  return pKey;
+}
+
+static int indexKeyInfoNeedsPayload(
+  const KeyInfo *pKeyInfo,
+  const u8 *pIdxRec,
+  int nIdxRec
+){
+  int i;
+  if( pKeyInfo ){
+    if( pKeyInfo->nKeyField < pKeyInfo->nAllField ) return 1;
+    for(i=0; i<pKeyInfo->nAllField; i++){
+      const CollSeq *pColl = pKeyInfo->aColl[i];
+      if( pColl && pColl->zName
+       && (sqlite3StrICmp(pColl->zName, "NOCASE")==0
+        || sqlite3StrICmp(pColl->zName, "RTRIM")==0) ){
+        return 1;
+      }
+    }
+  }
+  return sortKeyRecordNeedsPayload(pIdxRec, nIdxRec, 0);
+}
+
+/* Build index sort key (+ optional index-record payload) from a table row. */
+static int doltliteBuildIndexEntry(
   const u8 *pRec, int nRec,
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
   int iPKey, i64 intKey,
   const u8 *pTreeKey, int nTreeKey,
-  u8 **ppKey, int *pnKey
+  u8 **ppSortKey, int *pnSortKey,
+  u8 **ppIdxRec, int *pnIdxRec,
+  int *pStorePayload
 ){
   DoltliteRecordInfo info;
   u8 *pIdxRec = 0;
@@ -37,7 +89,14 @@ int doltliteBuildIndexSortKey(
   u32 ipkType = 0;
   u32 ipkLen = 0;
   int useIpk = 0;
+  int storePayload = 0;
   int rc;
+
+  if( ppSortKey ) *ppSortKey = 0;
+  if( pnSortKey ) *pnSortKey = 0;
+  if( ppIdxRec ) *ppIdxRec = 0;
+  if( pnIdxRec ) *pnIdxRec = 0;
+  if( pStorePayload ) *pStorePayload = 0;
 
   doltliteParseRecord(pRec, nRec, &info);
   if( info.nField==0 ) return SQLITE_CORRUPT;
@@ -141,22 +200,131 @@ int doltliteBuildIndexSortKey(
     sqlite3_free(aUsed);
   }
 
+  storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
   rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
-                                    ppKey, pnKey);
-  sqlite3_free(pIdxRec);
+                                    ppSortKey, pnSortKey);
   /* WITHOUT ROWID secondary indexes suffix the table-tree key. */
   if( rc==SQLITE_OK && iPKey<0 && pTreeKey && nTreeKey>0 ){
-    u8 *pCombined = sqlite3_realloc(*ppKey, *pnKey + nTreeKey);
+    u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
     if( !pCombined ){
-      sqlite3_free(*ppKey);
-      *ppKey = 0;
-      *pnKey = 0;
+      sqlite3_free(*ppSortKey);
+      *ppSortKey = 0;
+      *pnSortKey = 0;
+      sqlite3_free(pIdxRec);
       return SQLITE_NOMEM;
     }
-    memcpy(pCombined + *pnKey, pTreeKey, nTreeKey);
-    *ppKey = pCombined;
-    *pnKey += nTreeKey;
+    memcpy(pCombined + *pnSortKey, pTreeKey, nTreeKey);
+    *ppSortKey = pCombined;
+    *pnSortKey += nTreeKey;
   }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pIdxRec);
+    return rc;
+  }
+  if( pStorePayload ) *pStorePayload = storePayload;
+  if( storePayload && ppIdxRec ){
+    *ppIdxRec = pIdxRec;
+    if( pnIdxRec ) *pnIdxRec = nIdxRec;
+  }else{
+    sqlite3_free(pIdxRec);
+  }
+  return SQLITE_OK;
+}
+
+/* Apply old/new table-row values to one secondary-index mutmap. Shared by
+** merge, conflicts resolve, and workspace so NOCASE/RTRIM/DESC match VDBE. */
+int doltliteIndexMutMapRowDelta(
+  ProllyMutMap *pMap,
+  const i16 *aiColumn, int nIdxCol,
+  KeyInfo *pKeyInfo,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+){
+  int rc = SQLITE_OK;
+
+  if( !pMap ) return SQLITE_MISUSE;
+
+  if( pOldVal && nOldVal>0 ){
+    u8 *pSK = 0;
+    int nSK = 0;
+    rc = doltliteBuildIndexEntry(
+        pOldVal, nOldVal, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
+        pTreeKey, nTreeKey, &pSK, &nSK, 0, 0, 0);
+    if( rc==SQLITE_OK ){
+      rc = prollyMutMapDelete(pMap, pSK, nSK, 0);
+    }
+    sqlite3_free(pSK);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  if( pNewVal && nNewVal>0 ){
+    u8 *pSK = 0;
+    u8 *pRec = 0;
+    int nSK = 0, nRec = 0, store = 0;
+    rc = doltliteBuildIndexEntry(
+        pNewVal, nNewVal, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
+        pTreeKey, nTreeKey, &pSK, &nSK, &pRec, &nRec, &store);
+    if( rc==SQLITE_OK ){
+      if( store ){
+        rc = prollyMutMapInsert(pMap, pSK, nSK, 0, pRec, nRec);
+      }else{
+        rc = prollyMutMapInsert(pMap, pSK, nSK, 0, 0, 0);
+      }
+    }
+    sqlite3_free(pSK);
+    sqlite3_free(pRec);
+  }
+  return rc;
+}
+
+int doltliteIndexApplyRowDelta(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  ProllyHash *pIdxRoot,
+  u8 idxFlags,
+  Index *pIdx,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+){
+  KeyInfo *pKeyInfo = 0;
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  int rc;
+
+  if( !cs || !cache || !pIdxRoot || !pIdx ) return SQLITE_MISUSE;
+  if( (!pOldVal || nOldVal<=0) && (!pNewVal || nNewVal<=0) ) return SQLITE_OK;
+
+  pKeyInfo = doltliteKeyInfoOfIndex(db, pIdx);
+  if( !pKeyInfo ) return SQLITE_NOMEM;
+
+  rc = prollyMutMapInit(&mm, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3KeyInfoUnref(pKeyInfo);
+    return rc;
+  }
+
+  rc = doltliteIndexMutMapRowDelta(
+      &mm, pIdx->aiColumn, pIdx->nKeyCol, pKeyInfo,
+      iPKey, intKey, pTreeKey, nTreeKey,
+      pOldVal, nOldVal, pNewVal, nNewVal);
+  if( rc==SQLITE_OK && !prollyMutMapIsEmpty(&mm) ){
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = cs;
+    mut.pCache = cache;
+    mut.oldRoot = *pIdxRoot;
+    mut.pEdits = &mm;
+    mut.flags = idxFlags ? idxFlags : (u8)PROLLY_NODE_BLOBKEY;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) *pIdxRoot = mut.newRoot;
+  }
+
+  prollyMutMapFree(&mm);
+  sqlite3KeyInfoUnref(pKeyInfo);
   return rc;
 }
 
@@ -400,16 +568,11 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
        && pChange->pTheirVal && pChange->nTheirVal>0 ){
         int ix;
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-          u8 *pIK = 0; int nIK = 0;
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = doltliteBuildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
-                                 mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                 mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                                 &pIK, &nIK);
-          if( rc==SQLITE_OK ){
-            rc = prollyMutMapInsert(mi->pEdits, pIK, nIK, 0, 0, 0);
-            sqlite3_free(pIK);
-          }
+          rc = doltliteIndexMutMapRowDelta(
+              mi->pEdits, mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+              mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
+              0, 0, pChange->pTheirVal, pChange->nTheirVal);
         }
       }
       break;
@@ -423,29 +586,11 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         int ix;
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          if( pChange->pBaseVal && pChange->nBaseVal>0 ){
-            u8 *pOK = 0; int nOK = 0;
-            rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
-                                   mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                   mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                                   &pOK, &nOK);
-            if( rc==SQLITE_OK ){
-              rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
-              sqlite3_free(pOK);
-            }
-          }
-          if( rc==SQLITE_OK
-           && pChange->pTheirVal && pChange->nTheirVal>0 ){
-            u8 *pNK = 0; int nNK = 0;
-            rc = doltliteBuildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
-                                   mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                   mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                                   &pNK, &nNK);
-            if( rc==SQLITE_OK ){
-              rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0, 0, 0);
-              sqlite3_free(pNK);
-            }
-          }
+          rc = doltliteIndexMutMapRowDelta(
+              mi->pEdits, mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+              mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
+              pChange->pBaseVal, pChange->nBaseVal,
+              pChange->pTheirVal, pChange->nTheirVal);
         }
       }
       break;
@@ -458,16 +603,11 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
        && pChange->pBaseVal && pChange->nBaseVal>0 ){
         int ix;
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-          u8 *pIK = 0; int nIK = 0;
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
-                                 mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                 mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                                 &pIK, &nIK);
-          if( rc==SQLITE_OK ){
-            rc = prollyMutMapDelete(mi->pEdits, pIK, nIK, 0);
-            sqlite3_free(pIK);
-          }
+          rc = doltliteIndexMutMapRowDelta(
+              mi->pEdits, mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+              mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
+              pChange->pBaseVal, pChange->nBaseVal, 0, 0);
         }
       }
       break;
@@ -499,28 +639,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           int ix;
           for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
             MergeIndexInfo *mi = &ctx->aIndexes[ix];
-            if( pChange->pBaseVal && pChange->nBaseVal>0 ){
-              u8 *pOK = 0; int nOK = 0;
-              rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
-                                     mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                     mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                                     &pOK, &nOK);
-              if( rc==SQLITE_OK ){
-                rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
-                sqlite3_free(pOK);
-              }
-            }
-            if( rc==SQLITE_OK ){
-              u8 *pNK = 0; int nNK = 0;
-              rc = doltliteBuildIndexSortKey(pMerged, nMerged,
-                                     mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                     mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                                     &pNK, &nNK);
-              if( rc==SQLITE_OK ){
-                rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0, 0, 0);
-                sqlite3_free(pNK);
-              }
-            }
+            rc = doltliteIndexMutMapRowDelta(
+                mi->pEdits, mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
+                pChange->pBaseVal, pChange->nBaseVal, pMerged, nMerged);
           }
         }
         sqlite3_free(pMerged);
