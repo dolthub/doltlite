@@ -126,6 +126,196 @@ static int doltliteApplyMergeSchemaActions(
   return rc;
 }
 
+/* Load ours/theirs/ancestor commit catalogs for a three-way merge. */
+static int mergeRefLoadCatalogs(
+  sqlite3 *db,
+  const ProllyHash *pOurHead,
+  const ProllyHash *pTheirHead,
+  const ProllyHash *pAncestorHash,
+  DoltliteCommit *pOurCommit,
+  DoltliteCommit *pTheirCommit,
+  ProllyHash *pOurCat,
+  ProllyHash *pTheirCat,
+  ProllyHash *pAncCat,
+  const char **pzFail
+){
+  DoltliteCommit ancCommit;
+  int rc;
+
+  memset(&ancCommit, 0, sizeof(ancCommit));
+  *pzFail = 0;
+  rc = doltliteLoadCommit(db, pOurHead, pOurCommit);
+  if( rc!=SQLITE_OK ){ *pzFail = "failed to load our commit"; return rc; }
+  *pOurCat = pOurCommit->catalogHash;
+
+  rc = doltliteLoadCommit(db, pTheirHead, pTheirCommit);
+  if( rc!=SQLITE_OK ){ *pzFail = "failed to load their commit"; return rc; }
+  *pTheirCat = pTheirCommit->catalogHash;
+
+  rc = doltliteLoadCommit(db, pAncestorHash, &ancCommit);
+  if( rc!=SQLITE_OK ){ *pzFail = "failed to load ancestor"; return rc; }
+  *pAncCat = ancCommit.catalogHash;
+  doltliteCommitClear(&ancCommit);
+  return SQLITE_OK;
+}
+
+/* After catalogs are merged: reindex, schema actions, flush/stage roots. */
+static int mergeRefInstallMergedCatalog(
+  sqlite3 *db,
+  const ProllyHash *pAncCat,
+  const ProllyHash *pTheirCat,
+  ProllyHash *pMergedCat,
+  int nMergeConflicts,
+  SchemaMergeAction **paSchemaActions,
+  int *pnSchemaActions,
+  char ***pazReindex,
+  int *pnReindex
+){
+  int rc;
+
+  /* Indexes adopted from the other branch carry only that branch's
+  ** rows; rebuild them over the merged tables while the merged catalog
+  ** is live so the flush below captures correct roots. */
+  if( *pnReindex>0 ){
+    rc = doltliteReindexNamedIndexes(db, *pazReindex, *pnReindex);
+  }else{
+    rc = SQLITE_OK;
+  }
+  doltliteFreeNameList(*pazReindex, *pnReindex);
+  *pazReindex = 0;
+  *pnReindex = 0;
+  if( rc!=SQLITE_OK ){
+    freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
+    *paSchemaActions = 0;
+    *pnSchemaActions = 0;
+    return rc;
+  }
+
+  if( *pnSchemaActions > 0 ){
+    rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
+                                         *paSchemaActions, *pnSchemaActions,
+                                         pMergedCat);
+  }
+  freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
+  *paSchemaActions = 0;
+  *pnSchemaActions = 0;
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Regenerate stats after a clean merge; stat rows are derived data. */
+  if( nMergeConflicts==0 ){
+    sqlite3_stmt *pProbe = 0;
+    int hasStat1 = 0;
+    if( sqlite3_prepare_v2(db,
+        "SELECT 1 FROM main.sqlite_master "
+        "WHERE type='table' AND name='sqlite_stat1' LIMIT 1",
+        -1, &pProbe, 0)==SQLITE_OK ){
+      if( sqlite3_step(pProbe)==SQLITE_ROW ) hasStat1 = 1;
+      sqlite3_finalize(pProbe);
+    }
+    if( hasStat1 ){
+      (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
+    }
+  }
+
+  rc = doltliteFlushCatalogToHash(db, pMergedCat);
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pMergedCat);
+  if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
+  if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, pMergedCat);
+  if( rc==SQLITE_OK ){
+    rc = doltliteUpdateBranchWorkingState(db,
+        doltliteGetSessionBranch(db), pMergedCat, NULL);
+  }
+  return rc;
+}
+
+/* Run post-merge constraint detectors. On SQLITE_OK, *pnViolations is the
+** total CV count; *pzErr may own a detector error string. */
+static int mergeRefDetectConstraintViolations(
+  sqlite3 *db,
+  const ProllyHash *pAncCat,
+  int *pnViolations,
+  char **pzErr
+){
+  int nFk = 0, nUnique = 0, nCheck = 0;
+  int vrc;
+  int erc;
+
+  *pnViolations = 0;
+  *pzErr = 0;
+  vrc = doltliteConstraintViolationBatchBegin(db);
+  if( vrc==SQLITE_OK ){
+    vrc = doltliteDetectMergeFkViolations(db, pAncCat, pzErr, &nFk, 0, 0);
+  }
+  if( vrc==SQLITE_OK ){
+    vrc = doltliteDetectMergeUniqueViolations(db, pAncCat, pzErr, &nUnique, 0, 0);
+  }
+  if( vrc==SQLITE_OK ){
+    vrc = doltliteDetectMergeCheckViolations(db, pAncCat, pzErr, &nCheck, 0, 0);
+  }
+  erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
+  if( vrc==SQLITE_OK ) vrc = erc;
+  if( vrc==SQLITE_OK ) *pnViolations = nFk + nUnique + nCheck;
+  return vrc;
+}
+
+static int mergeRefCreateMergeCommit(
+  sqlite3 *db,
+  sqlite3_context *context,
+  DoltliteTxnState *pSaved,
+  const ProllyHash *pOurHead,
+  const ProllyHash *pTheirHead,
+  const ProllyHash *pMergedCat,
+  const char *zBranch,
+  const char *zMessage
+){
+  ProllyHash commitHash;
+  char hexBuf[PROLLY_HASH_SIZE*2+1];
+  char msg[256];
+  int rc;
+
+  rc = doltliteSetSessionStaged(db, pMergedCat);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+    return SQLITE_ERROR;
+  }
+
+  if( zMessage && zMessage[0] ){
+    sqlite3_snprintf(sizeof(msg), msg, "%s", zMessage);
+  }else{
+    snprintf(msg, sizeof(msg), "Merge branch '%s' into %s",
+             zBranch, doltliteGetSessionBranch(db));
+  }
+  rc = doltliteCreateAndStoreCommit(db, pOurHead, pMergedCat,
+      msg, NULL, NULL, pTheirHead, 1, &commitHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to create merge commit", -1);
+    return SQLITE_ERROR;
+  }
+
+  rc = doltliteCompareAndAdvanceBranch(
+      db, pOurHead, &commitHash, pMergedCat, 0);
+  if( rc==SQLITE_BUSY ){
+    doltliteCmdResultPeerBranchBusy(context, "merge");
+    doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    return SQLITE_ERROR;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+    return SQLITE_ERROR;
+  }
+  rc = doltliteVcSealActiveSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return SQLITE_ERROR;
+  }
+  doltliteTxnStateClear(pSaved);
+  doltliteHashToHex(&commitHash, hexBuf);
+  sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+  return SQLITE_OK;
+}
+
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
@@ -138,21 +328,30 @@ int doltliteMergeRef(
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
-  DoltliteCommit ourCommit, theirCommit, ancCommit;
+  DoltliteCommit ourCommit, theirCommit;
   int graphLocked = 0;
   int dirty = 0;
   int rc;
+  int bHaveSaved = 0;
+  int bPeerBusy = 0;
+  int bRestoreOnFail = 0;
+  const char *zFail = 0;
+  char *zOwnedErr = 0;
+  SchemaMergeAction *aSchemaActions = 0;
+  int nSchemaActions = 0;
+  char **azReindex = 0;
+  int nReindex = 0;
+  int nViolations = 0;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
   memset(&theirCommit, 0, sizeof(theirCommit));
-  memset(&ancCommit, 0, sizeof(ancCommit));
   memset(&savedState, 0, sizeof(savedState));
+  memset(&mergedCatHash, 0, sizeof(mergedCatHash));
 
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     return SQLITE_ERROR;
   }
-
   if( !zBranch ){
     sqlite3_result_error(context, "branch name required", -1);
     return SQLITE_ERROR;
@@ -201,324 +400,146 @@ int doltliteMergeRef(
     return mergeFastForward(db, context, cs, &ourHead, &theirHead);
   }
 
-  rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return SQLITE_ERROR; }
-  memcpy(&ourCatHash, &ourCommit.catalogHash, sizeof(ProllyHash));
-
-  rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
-  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "failed to load their commit", -1); return SQLITE_ERROR; }
-  memcpy(&theirCatHash, &theirCommit.catalogHash, sizeof(ProllyHash));
-
-  rc = doltliteLoadCommit(db, &ancestorHash, &ancCommit);
-  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "failed to load ancestor", -1); return SQLITE_ERROR; }
-  memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
-  doltliteCommitClear(&ancCommit);
+  rc = mergeRefLoadCatalogs(db, &ourHead, &theirHead, &ancestorHash,
+                            &ourCommit, &theirCommit,
+                            &ourCatHash, &theirCatHash, &ancCatHash, &zFail);
+  if( rc!=SQLITE_OK ) goto merge_fail;
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&ourCommit);
-    doltliteCommitClear(&theirCommit);
-    sqlite3_result_error_code(context, rc);
-    return SQLITE_ERROR;
-  }
+  if( rc!=SQLITE_OK ) goto merge_fail;
 
   rc = doltliteSaveTxnState(db, &savedState);
+  if( rc!=SQLITE_OK ) goto merge_fail;
+  bHaveSaved = 1;
+
+  rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
+                              &mergedCatHash, &nMergeConflicts, &zOwnedErr,
+                              &aSchemaActions, &nSchemaActions, 0,
+                              &azReindex, &nReindex);
   if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&ourCommit);
-    doltliteCommitClear(&theirCommit);
-    sqlite3_result_error_code(context, rc);
-    return SQLITE_ERROR;
+    if( !zOwnedErr ) zFail = "merge failed";
+    /* Catalog merge never mutated the live catalog; drop the snapshot. */
+    goto merge_fail;
+  }
+  sqlite3_free(zOwnedErr);
+  zOwnedErr = 0;
+
+  if( nMergeConflicts>0 ){
+    ProllyHash conflictsHash;
+    doltliteGetSessionConflictsCatalog(db, &conflictsHash);
+    rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+    /* Caching the spec only sharpens dolt_merge_status.source, which falls
+    ** back to the branch at theirHead, so losing it must not fail the merge. */
+    (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
+    if( rc!=SQLITE_OK ) goto merge_fail;
   }
 
-  {
-    char *zMergeErr = 0;
-    SchemaMergeAction *aSchemaActions = 0;
-    int nSchemaActions = 0;
-    char **azReindex = 0;
-    int nReindex = 0;
-    rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
-                                &mergedCatHash, &nMergeConflicts, &zMergeErr,
-                                &aSchemaActions, &nSchemaActions, 0,
-                                &azReindex, &nReindex);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&ourCommit);
-      doltliteCommitClear(&theirCommit);
-      if( zMergeErr ){
-        sqlite3_result_error(context, zMergeErr, -1);
-        sqlite3_free(zMergeErr);
-      }else{
-        sqlite3_result_error(context, "merge failed", -1);
-      }
-      doltliteTxnStateClear(&savedState);
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      doltliteFreeNameList(azReindex, nReindex);
-      return SQLITE_ERROR;
-    }
-    sqlite3_free(zMergeErr);
+  rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
+  if( rc==SQLITE_BUSY ){
+    bPeerBusy = 1;
+    goto merge_fail;
+  }
+  if( rc!=SQLITE_OK ) goto merge_fail;
+  graphLocked = 1;
 
-    if( nMergeConflicts>0 ){
-      ProllyHash conflictsHash;
-      doltliteGetSessionConflictsCatalog(db, &conflictsHash);
-      rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
-      /* Caching the spec only sharpens dolt_merge_status.source, which falls
-      ** back to the branch at theirHead, so losing it must not fail the merge. */
-      (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&ourCommit);
-        doltliteCommitClear(&theirCommit);
-        doltliteTxnStateClear(&savedState);
-        freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-        doltliteFreeNameList(azReindex, nReindex);
-        sqlite3_result_error_code(context, rc);
-        return SQLITE_ERROR;
-      }
-    }
+  rc = doltliteSwitchCatalog(db, &mergedCatHash);
+  doltliteCommitClear(&ourCommit);
+  doltliteCommitClear(&theirCommit);
+  if( rc!=SQLITE_OK ){
+    bRestoreOnFail = 1;
+    goto merge_fail;
+  }
 
-    rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
-    if( rc==SQLITE_BUSY ){
-      doltliteTxnStateClear(&savedState);
-      doltliteCommitClear(&ourCommit);
-      doltliteCommitClear(&theirCommit);
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      doltliteFreeNameList(azReindex, nReindex);
-      doltliteCmdResultPeerBranchBusy(context, "merge");
-      return SQLITE_ERROR;
-    }
-    if( rc!=SQLITE_OK ){
-      doltliteTxnStateClear(&savedState);
-      doltliteCommitClear(&ourCommit);
-      doltliteCommitClear(&theirCommit);
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      doltliteFreeNameList(azReindex, nReindex);
-      sqlite3_result_error_code(context, rc);
-      return SQLITE_ERROR;
-    }
-    graphLocked = 1;
-
-    rc = doltliteSwitchCatalog(db, &mergedCatHash);
-    doltliteCommitClear(&ourCommit);
-    doltliteCommitClear(&theirCommit);
-    if( rc!=SQLITE_OK ){
-      if( graphLocked ){
-        chunkStoreUnlock(cs);
-        graphLocked = 0;
-      }
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      doltliteFreeNameList(azReindex, nReindex);
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return SQLITE_ERROR;
-    }
-
-    /* Indexes adopted from the other branch carry only that branch's
-    ** rows; rebuild them over the merged tables while the merged catalog
-    ** is live so the flush below captures correct roots. */
-    if( nReindex>0 ){
-      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
-    }
-    doltliteFreeNameList(azReindex, nReindex);
-    azReindex = 0;
-    nReindex = 0;
-    if( rc!=SQLITE_OK ){
-      if( graphLocked ){
-        chunkStoreUnlock(cs);
-        graphLocked = 0;
-      }
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return SQLITE_ERROR;
-    }
-
-    if( nSchemaActions > 0 ){
-      rc = doltliteApplyMergeSchemaActions(db, &ancCatHash, &theirCatHash,
-                                           aSchemaActions, nSchemaActions,
-                                           &mergedCatHash);
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      if( rc!=SQLITE_OK ){
-        if( graphLocked ){
-          chunkStoreUnlock(cs);
-          graphLocked = 0;
-        }
-        sqlite3_result_error_code(context,
-            doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-        return SQLITE_ERROR;
-      }
-    }else{
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-    }
-
-    /* Regenerate stats after a clean merge; stat rows are derived data. */
-    if( nMergeConflicts==0 ){
-      sqlite3_stmt *pProbe = 0;
-      int hasStat1 = 0;
-      if( sqlite3_prepare_v2(db,
-          "SELECT 1 FROM main.sqlite_master "
-          "WHERE type='table' AND name='sqlite_stat1' LIMIT 1",
-          -1, &pProbe, 0)==SQLITE_OK ){
-        if( sqlite3_step(pProbe)==SQLITE_ROW ) hasStat1 = 1;
-        sqlite3_finalize(pProbe);
-      }
-      if( hasStat1 ){
-        (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
-      }
-    }
-
-    rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
-    if( rc==SQLITE_OK ){
-      rc = doltliteSwitchCatalog(db, &mergedCatHash);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltlitePrimeSchemaCache(db);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteSetSessionStaged(db, &mergedCatHash);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteUpdateBranchWorkingState(db,
-          doltliteGetSessionBranch(db), &mergedCatHash, NULL);
-    }
-    if( rc!=SQLITE_OK ){
-      if( graphLocked ){
-        chunkStoreUnlock(cs);
-        graphLocked = 0;
-      }
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return SQLITE_ERROR;
-    }
+  rc = mergeRefInstallMergedCatalog(db, &ancCatHash, &theirCatHash,
+                                    &mergedCatHash, nMergeConflicts,
+                                    &aSchemaActions, &nSchemaActions,
+                                    &azReindex, &nReindex);
+  if( rc!=SQLITE_OK ){
+    bRestoreOnFail = 1;
+    goto merge_fail;
   }
 
   if( graphLocked ){
     chunkStoreUnlock(cs);
     graphLocked = 0;
   }
-  {
-    int nViolations = 0;
-    int nUnique = 0;
-    int nCheck = 0;
-    char *zDetectErrMsg = 0;
-    int vrc = doltliteConstraintViolationBatchBegin(db);
-    if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
-                                            &zDetectErrMsg, &nViolations,
-                                            0, 0);
+
+  rc = mergeRefDetectConstraintViolations(
+      db, &ancCatHash, &nViolations, &zOwnedErr);
+  if( rc!=SQLITE_OK ){
+    bRestoreOnFail = 1;
+    goto merge_fail;
+  }
+  if( nViolations > 0 ){
+    /* A merge stopped by constraint violations is as unfinished as one
+    ** stopped by conflicts: the caller has to resolve
+    ** dolt_constraint_violations and commit. Record the merge so
+    ** dolt_merge_status reports it, before the finish path persists the
+    ** working set. Redundant when conflicts already set it, and the
+    ** autocommit/nested-savepoint modes inside the finish call roll it back
+    ** with the rest of the merge. When row/schema conflicts are also
+    ** present, report both so the caller does not miss dolt_conflicts. */
+    ProllyHash cvConflictsHash;
+    doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
+    if( doltliteSetSessionMergeState(db, 1, &theirHead,
+                                    &cvConflictsHash)==SQLITE_OK ){
+      (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
     }
-    if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash,
-                                                &zDetectErrMsg, &nUnique,
-                                                0, 0);
+    if( nMergeConflicts>0 ){
+      (void)doltliteCmdFinishWithConflictsAndConstraintViolations(
+          db, context, &savedState, nMergeConflicts, "Merge", 0, 0);
+    }else{
+      (void)doltliteCmdFinishWithConstraintViolations(
+          db, context, &savedState, "Merge", 0,
+          "Merge aborted: would have introduced constraint violations. "
+          "The merge and the would-be violations have been rolled back "
+          "with the enclosing savepoint, so dolt_constraint_violations "
+          "is empty. To inspect the violations, re-run the merge inside "
+          "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
+          "violations are preserved instead of rolled back.");
     }
-    if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash,
-                                               &zDetectErrMsg, &nCheck,
-                                               0, 0);
-    }
-    {
-      int erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
-      if( vrc==SQLITE_OK ) vrc = erc;
-    }
-    if( vrc != SQLITE_OK ){
-      if( zDetectErrMsg ){
-        sqlite3_result_error(context, zDetectErrMsg, -1);
-        sqlite3_free(zDetectErrMsg);
-        doltliteRestoreTxnStateOnFailure(db, &savedState, vrc);
-      }else{
-        sqlite3_result_error_code(context,
-            doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
-      }
-      return SQLITE_ERROR;
-    }
-    sqlite3_free(zDetectErrMsg);
-    if( nViolations + nUnique + nCheck > 0 ){
-      /* A merge stopped by constraint violations is as unfinished as one
-      ** stopped by conflicts: the caller has to resolve
-      ** dolt_constraint_violations and commit. Record the merge so
-      ** dolt_merge_status reports it, before the finish path persists the
-      ** working set. Redundant when conflicts already set it, and the
-      ** autocommit/nested-savepoint modes inside the finish call roll it back
-      ** with the rest of the merge. When row/schema conflicts are also
-      ** present, report both so the caller does not miss dolt_conflicts. */
-      ProllyHash cvConflictsHash;
-      doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
-      if( doltliteSetSessionMergeState(db, 1, &theirHead,
-                                      &cvConflictsHash)==SQLITE_OK ){
-        (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
-      }
-      if( nMergeConflicts>0 ){
-        (void)doltliteCmdFinishWithConflictsAndConstraintViolations(
-            db, context, &savedState, nMergeConflicts, "Merge", 0, 0);
-      }else{
-        (void)doltliteCmdFinishWithConstraintViolations(
-            db, context, &savedState, "Merge", 0,
-            "Merge aborted: would have introduced constraint violations. "
-            "The merge and the would-be violations have been rolled back "
-            "with the enclosing savepoint, so dolt_constraint_violations "
-            "is empty. To inspect the violations, re-run the merge inside "
-            "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
-            "violations are preserved instead of rolled back.");
-      }
-      return SQLITE_ERROR;
-    }
+    bHaveSaved = 0;
+    return SQLITE_ERROR;
   }
 
   if( nMergeConflicts > 0 ){
-    if( graphLocked ){
-      chunkStoreUnlock(cs);
-      graphLocked = 0;
-    }
     (void)doltliteCmdFinishWithConflicts(
         db, context, &savedState, nMergeConflicts, "Merge", 0);
+    bHaveSaved = 0;
     return SQLITE_ERROR;
-  }else{
-    ProllyHash commitHash;
-    char hexBuf[PROLLY_HASH_SIZE*2+1];
-    char msg[256];
-
-    rc = doltliteSetSessionStaged(db, &mergedCatHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return SQLITE_ERROR;
-    }
-
-    if( zMessage && zMessage[0] ){
-      sqlite3_snprintf(sizeof(msg), msg, "%s", zMessage);
-    }else{
-      snprintf(msg, sizeof(msg), "Merge branch '%s' into %s",
-               zBranch, doltliteGetSessionBranch(db));
-    }
-    rc = doltliteCreateAndStoreCommit(db, &ourHead, &mergedCatHash,
-        msg, NULL, NULL, &theirHead, 1, &commitHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "failed to create merge commit", -1);
-      return SQLITE_ERROR;
-    }
-
-    rc = doltliteCompareAndAdvanceBranch(
-        db, &ourHead, &commitHash, &mergedCatHash, 0);
-    if( rc==SQLITE_BUSY ){
-      doltliteCmdResultPeerBranchBusy(context, "merge");
-      doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
-      return SQLITE_ERROR;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return SQLITE_ERROR;
-    }
-    rc = doltliteVcSealActiveSavepoints(db);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
-      return SQLITE_ERROR;
-    }
-    doltliteTxnStateClear(&savedState);
-
-    doltliteHashToHex(&commitHash, hexBuf);
-    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
-    return SQLITE_OK;
   }
-  return SQLITE_OK;
+
+  return mergeRefCreateMergeCommit(
+      db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
+      zBranch, zMessage);
+
+merge_fail:
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+    graphLocked = 0;
+  }
+  freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+  doltliteFreeNameList(azReindex, nReindex);
+  doltliteCommitClear(&ourCommit);
+  doltliteCommitClear(&theirCommit);
+  if( bHaveSaved ){
+    if( bRestoreOnFail ){
+      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+    }else{
+      doltliteTxnStateClear(&savedState);
+    }
+  }
+  if( bPeerBusy ){
+    doltliteCmdResultPeerBranchBusy(context, "merge");
+  }else if( zOwnedErr ){
+    sqlite3_result_error(context, zOwnedErr, -1);
+  }else if( zFail ){
+    sqlite3_result_error(context, zFail, -1);
+  }else{
+    sqlite3_result_error_code(context, rc);
+  }
+  sqlite3_free(zOwnedErr);
+  return SQLITE_ERROR;
 }
 
 static void doltliteMergeFunc(
