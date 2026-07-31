@@ -222,7 +222,6 @@ static int csCommitPlanPendingIndex(
   i64 filePos = batchStart;
   i64 appendBytes = 0;
   int i;
-  int rc = SQLITE_OK;
 
   *paCommittedPending = 0;
   *paMergePending = 0;
