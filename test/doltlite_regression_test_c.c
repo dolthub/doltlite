@@ -1844,6 +1844,80 @@ static void run_pull_persist_failure(void){
   removeDbFiles(remoteClientPath);
 }
 
+/* Pulling a branch that does not exist locally used to add it to the
+** in-memory refs outside the graph lock and never serialize it: the
+** branch answered queries for the rest of the session and silently
+** vanished on reopen (a later unrelated ref write could also clobber or
+** accidentally persist it). The create must go through the atomic
+** ref-mutation helper like every other ref write. */
+static void run_pull_new_branch_persists(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  sqlite3 *remoteClientDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char remoteClientPath[256];
+  char sql[1024];
+  const char *res;
+
+  printf("=== Pull New Branch Persists Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_pull_new_branch_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_pull_new_branch_remote");
+  make_dbpath(remoteClientPath, sizeof(remoteClientPath),
+              "test_pull_new_branch_client");
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
+
+  check("open_local_db", open_db(localPath, &localDb)==SQLITE_OK);
+  check("open_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_remote('add','origin','file://%s');"
+    "SELECT dolt_push('origin','main','--force');",
+    remotePath);
+  check("setup_local_and_push", execSql(localDb, sql)==SQLITE_OK);
+
+  check("open_remote_client_db",
+        open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_remote_into_client", execSql(remoteClientDb, sql)==SQLITE_OK);
+  check("client_creates_feature", execSql(remoteClientDb,
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m','feature work');"
+    "SELECT dolt_push('origin','feature');")==SQLITE_OK);
+
+  res = queryScalarText(localDb, "SELECT dolt_pull('origin','feature')");
+  check("pull_new_branch_succeeds", strstr(res, "ERROR:")==0);
+  check("pulled_branch_visible_in_session",
+    strcmp(queryScalarText(localDb,
+      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+
+  sqlite3_close(localDb);
+  localDb = 0;
+  check("reopen_local_after_pull", open_db(localPath, &localDb)==SQLITE_OK);
+  check("pulled_branch_persisted_across_reopen",
+    strcmp(queryScalarText(localDb,
+      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("pulled_branch_checkout_works", execSql(localDb,
+    "SELECT dolt_checkout('feature')")==SQLITE_OK);
+  check("pulled_branch_rows_present",
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(remoteClientDb);
+  sqlite3_close(remoteDb);
+  sqlite3_close(localDb);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
+}
+
 static void run_pull_dirty_working_set_fails(void){
   sqlite3 *localDb = 0;
   sqlite3 *remoteDb = 0;
@@ -8887,6 +8961,7 @@ static const RegressionCase aCases[] = {
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
+  { "pull_new_branch_persists", "Pull New Branch Persists Test", run_pull_new_branch_persists },
   { "pull_dirty_working_set_fails", "Pull Dirty Working Set Fails Test", run_pull_dirty_working_set_fails },
   { "pull_staged_changes_fails", "Pull Staged Changes Fails Test", run_pull_staged_changes_fails },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
