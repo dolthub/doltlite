@@ -1,0 +1,12 @@
+# DoltLite chunk-store version 12 (beta freeze)
+chunk_store_magic=0x444C5443
+chunk_store_version=12
+working_set_format=v5
+catalog_format=v5
+catalog_format_byte=0x46
+refs_format=v7
+commit_format=v2
+writer_commit=59668be1435d4d5ff10c60ce807993623eb8215c
+sha256=3f017cc2a0faf8c12aa0e3f6f4c877f8d6cd94221816f29e0bfcb623535548b7
+recipe=seed.sql
+file=seed.db

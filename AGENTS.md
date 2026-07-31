@@ -253,8 +253,26 @@ conflict durability, update the TSV and keep the multiproc C suites green
 The version-control correctness invariants above remain load-bearing for
 implementors even when a claim is also listed in the contract.
 
+## Storage format version
+
+Chunk-store version **12** is the beta format freeze. User-facing rules live in
+the README **Storage Format** section; claims and evidence live in
+`test/storage_format_contract.tsv`, and the golden file lives under
+`test/format-corpus/v12/`.
+
+Bumping `CHUNK_STORE_VERSION` requires:
+
+1. README Storage Format update
+2. A new `test/format-corpus/` entry and MANIFEST
+3. `storage_format_contract.tsv` evidence update
+4. Explicit open/upgrade policy for version 12 (open-only, migrate, or refuse)
+
+Any incompatible change to a nested write format, including working sets,
+catalogs, refs, commits, prolly nodes, or key encoding, must bump
+`CHUNK_STORE_VERSION`. Do not silently reinterpret another version.
+
 ## Move fast
 
-Format stability and external integration tests are currently deprioritized —
-the project is not ready to lock those down. Prefer fixing the engine and
-proving it with tests over documenting constraints that are not yet stable.
+External integration tests and remaining pre-beta docs freezes are deprioritized
+when they are not on the beta path. Prefer fixing the engine and proving it with
+tests; format and concurrency contracts that already ship must stay accurate.

@@ -1,0 +1,12 @@
+id	status	evidence	contract
+format.version	frozen	src/chunk_store.h#CHUNK_STORE_VERSION 12,test/format-corpus/v12/MANIFEST#chunk_store_version=12	The DoltLite beta chunk-store format version is 12
+format.ws_write	frozen	src/prolly_btree_state.c#buf[0] = WS_FORMAT_VERSION,test/doltlite_regression_test_c.c#storage_v12_working_set_is_v5	Version 12 writers emit working-set format v5
+format.catalog_write	frozen	src/prolly_btree_catalog.c#*q++ = CATALOG_FORMAT_V5,test/doltlite_regression_test_c.c#storage_v12_catalog_is_v5	Version 12 writers emit catalog format v5
+format.refs_write	frozen	src/chunk_store_refs_api.c#*bufCur++ = 7,test/doltlite_regression_test_c.c#storage_v12_refs_are_v7	Version 12 writers emit refs format v7
+format.commit_write	frozen	src/doltlite_commit.c#*p++ = DOLTLITE_COMMIT_V2,test/doltlite_regression_test_c.c#storage_v12_commit_is_v2	Version 12 writers emit commit format v2
+open.exact_version	adapted	test/storage_format_contract_test.sh#skew_version_13_notadb,test/storage_format_contract_test.sh#skew_version_11_notadb,test/doltlite_regression_test_c.c#storage_v12_v13_returns_exact_notadb,test/doltlite_regression_test_c.c#storage_v12_v11_returns_exact_notadb	Header versions other than 12 fail normally with SQLITE_NOTADB
+open.magic	adapted	test/storage_format_contract_test.sh#skew_magic_notadb,test/doltlite_regression_test_c.c#storage_v12_bad_magic_returns_exact_notadb	A wrong chunk-store magic fails normally with SQLITE_NOTADB
+corpus.v12_identity	frozen	test/storage_format_contract_test.sh#corpus_v12_checksum,test/format-corpus/v12/MANIFEST#recipe=seed.sql	The frozen version 12 corpus has a checked checksum and generation recipe
+corpus.v12_read	adapted	test/storage_format_contract_test.sh#corpus_v12_main_rows,test/storage_format_contract_test.sh#corpus_v12_index_rows,test/storage_format_contract_test.sh#corpus_v12_integrity	The frozen version 12 corpus preserves rows secondary indexes schema and integrity
+corpus.v12_refs	adapted	test/storage_format_contract_test.sh#corpus_v12_feature_branch,test/storage_format_contract_test.sh#corpus_v12_tag,test/storage_format_contract_test.sh#corpus_v12_feature_rows	The frozen version 12 corpus preserves commit branch and tag refs
+corpus.v12_write_forward	adapted	test/storage_format_contract_test.sh#corpus_v12_write_commit,test/storage_format_contract_test.sh#corpus_v12_post_gc_rows	A current version 12 writer can extend commit reopen and garbage-collect the frozen corpus

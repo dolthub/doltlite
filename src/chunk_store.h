@@ -71,8 +71,9 @@
 **     between are an unwritten gap that replay resumes across.
 **   NEXT_OFF: absolute offset where the writer puts the next batch (the
 **     sector-aligned end of this one). Replay skips the gap unread.
-**   SELF_HASH: hash of the manifest with this field zeroed. A root whose
-**     stored hash is nonzero and wrong is damage, not a commit point. */
+**   SELF_HASH: hash of the manifest with this field zeroed, followed by the
+**     root record's absolute file offset. A root whose stored hash is nonzero
+**     and wrong is damage, not a commit point. */
 #define CS_MANIFEST_DURABLE_TO_OFF   44
 #define CS_MANIFEST_NEXT_OFF_OFF     52
 #define CS_MANIFEST_BATCH_START_OFF  60
@@ -198,8 +199,8 @@ struct ChunkStore {
   int checkpointActive;
 };
 
-void csManifestSeal(u8 *aBuf);
-int csManifestHashState(const u8 *aBuf);
+void csManifestSeal(u8 *aBuf, i64 iOffset);
+int csManifestHashState(const u8 *aBuf, i64 iOffset);
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
                    const char *zFilename, int flags);

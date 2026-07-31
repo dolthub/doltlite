@@ -9002,8 +9002,150 @@ static void run_refs_vtab_snapshot_stability(void){
   removeDbFiles(dbpath);
 }
 
+static int storageFormatWriteU32(const char *zPath, long iOff, unsigned int v){
+  unsigned char a[4];
+  FILE *f;
+  size_t n;
+  a[0] = (unsigned char)v;
+  a[1] = (unsigned char)(v >> 8);
+  a[2] = (unsigned char)(v >> 16);
+  a[3] = (unsigned char)(v >> 24);
+  f = fopen(zPath, "r+b");
+  if( !f ) return 0;
+  if( fseek(f, iOff, SEEK_SET)!=0 ){
+    fclose(f);
+    return 0;
+  }
+  n = fwrite(a, 1, sizeof(a), f);
+  if( fclose(f)!=0 ) return 0;
+  return n==sizeof(a);
+}
+
+static int storageFormatReadHeader(
+  const char *zPath,
+  unsigned int *pMagic,
+  unsigned int *pVersion
+){
+  unsigned char a[8];
+  FILE *f;
+  size_t n;
+  f = fopen(zPath, "rb");
+  if( !f ) return 0;
+  n = fread(a, 1, sizeof(a), f);
+  fclose(f);
+  if( n!=sizeof(a) ) return 0;
+  *pMagic = (unsigned int)a[0]
+          | (unsigned int)a[1] << 8
+          | (unsigned int)a[2] << 16
+          | (unsigned int)a[3] << 24;
+  *pVersion = (unsigned int)a[4]
+            | (unsigned int)a[5] << 8
+            | (unsigned int)a[6] << 16
+            | (unsigned int)a[7] << 24;
+  return 1;
+}
+
+static void storageFormatCheckNotadb(
+  const char *zPath,
+  const char *zOpenCheck,
+  const char *zRcCheck
+){
+  sqlite3 *db = 0;
+  int rc;
+  rc = sqlite3_open(zPath, &db);
+  check(zOpenCheck, rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = execSqlSilent(db, "SELECT count(*) FROM t");
+    check(zRcCheck, rc==SQLITE_NOTADB
+                        && sqlite3_extended_errcode(db)==SQLITE_NOTADB);
+  }
+  sqlite3_close(db);
+}
+
+static void run_storage_format_v12(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  ProllyHash wsHash;
+  ProllyHash headHash;
+  DoltliteCommit commit;
+  unsigned char *pData = 0;
+  int nData = 0;
+  int rc;
+  unsigned int magic = 0;
+  unsigned int version = 0;
+  char dbpath[256];
+
+  printf("=== Storage Format Version 12 Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_storage_format_v12");
+  removeDbFiles(dbpath);
+  memset(&commit, 0, sizeof(commit));
+
+  check("storage_v12_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("storage_v12_setup", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "CREATE INDEX idx_v ON t(v);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'v12');")==SQLITE_OK);
+  cs = doltliteGetChunkStore(db);
+  check("storage_v12_chunk_store", cs!=0);
+
+  rc = chunkStoreGetBranchWorkingSet(cs, "main", &wsHash);
+  if( rc==SQLITE_OK ) rc = chunkStoreGet(cs, &wsHash, &pData, &nData);
+  check("storage_v12_working_set_is_v5",
+        rc==SQLITE_OK && nData>0 && pData[0]==WS_FORMAT_VERSION_V5);
+  sqlite3_free(pData);
+  pData = 0;
+  nData = 0;
+
+  doltliteGetSessionHead(db, &headHash);
+  rc = doltliteLoadCommit(db, &headHash, &commit);
+  if( rc==SQLITE_OK ) rc = chunkStoreGet(cs, &commit.catalogHash, &pData, &nData);
+  check("storage_v12_catalog_is_v5",
+        rc==SQLITE_OK && nData>0 && pData[0]==CATALOG_FORMAT_V5);
+  sqlite3_free(pData);
+  pData = 0;
+  nData = 0;
+
+  rc = chunkStoreGet(cs, &headHash, &pData, &nData);
+  check("storage_v12_commit_is_v2",
+        rc==SQLITE_OK && nData>0 && pData[0]==DOLTLITE_COMMIT_V2);
+  sqlite3_free(pData);
+  pData = 0;
+  nData = 0;
+
+  rc = chunkStoreSerializeRefsToBlob(cs, &pData, &nData);
+  check("storage_v12_refs_are_v7",
+        rc==SQLITE_OK && nData>0 && pData[0]==7);
+  sqlite3_free(pData);
+  doltliteCommitClear(&commit);
+
+  sqlite3_close(db);
+  db = 0;
+  check("storage_v12_header_read",
+        storageFormatReadHeader(dbpath, &magic, &version));
+  check("storage_v12_header_magic", magic==CHUNK_STORE_MAGIC);
+  check("storage_v12_header_version", version==CHUNK_STORE_VERSION);
+
+  check("storage_v12_patch_v13", storageFormatWriteU32(dbpath, 4, 13));
+  storageFormatCheckNotadb(dbpath, "storage_v12_v13_open",
+                          "storage_v12_v13_returns_exact_notadb");
+
+  check("storage_v12_patch_v11", storageFormatWriteU32(dbpath, 4, 11));
+  storageFormatCheckNotadb(dbpath, "storage_v12_v11_open",
+                          "storage_v12_v11_returns_exact_notadb");
+
+  check("storage_v12_restore_version", storageFormatWriteU32(dbpath, 4, 12));
+  check("storage_v12_patch_magic",
+        storageFormatWriteU32(dbpath, 0, 0x01234567));
+  storageFormatCheckNotadb(dbpath, "storage_v12_bad_magic_open",
+                          "storage_v12_bad_magic_returns_exact_notadb");
+
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
+  { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },

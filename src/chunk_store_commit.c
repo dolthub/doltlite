@@ -393,7 +393,7 @@ static int csCommitToFile(ChunkStore *cs){
     u8 manifest[CHUNK_MANIFEST_SIZE];
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
-    csManifestSeal(manifest);
+    csManifestSeal(manifest, 0);
     CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
     if( rc != SQLITE_OK ) goto commit_done;
@@ -502,7 +502,7 @@ static int csCommitToFile(ChunkStore *cs){
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, durableTo);
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, nextOff);
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, batchStart);
-    csManifestSeal(rootRec + 1);
+    csManifestSeal(rootRec + 1, writeOff);
     CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
     if( rc != SQLITE_OK ) goto commit_done;

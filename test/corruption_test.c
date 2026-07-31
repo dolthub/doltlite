@@ -1162,6 +1162,23 @@ static void test_peer_append_refresh_visibility(void){
   removeDb(dbpath);
 }
 
+static void test_root_seal_binds_file_offset(void){
+  unsigned char manifest[CHUNK_MANIFEST_SIZE];
+  const long long rootOffset = 4096;
+
+  printf("--- Test 25: Root seal binds file offset ---\n");
+
+  memset(manifest, 0, sizeof(manifest));
+  CS_WRITE_U32(manifest + CS_MANIFEST_MAGIC_OFF, CHUNK_STORE_MAGIC);
+  CS_WRITE_U32(manifest + CS_MANIFEST_VERSION_OFF, CHUNK_STORE_VERSION);
+  csManifestSeal(manifest, rootOffset);
+
+  check("root_seal_valid_at_record_offset",
+        csManifestHashState(manifest, rootOffset)==CS_MANIFEST_HASH_OK);
+  check("root_seal_rejects_root_shaped_blob",
+        csManifestHashState(manifest, rootOffset + 1)==CS_MANIFEST_HASH_BAD);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -1189,6 +1206,7 @@ int main(void){
   test_damage_far_before_sealing_root_poisons();
   test_crash_garbage_truncated_on_write();
   test_peer_append_refresh_visibility();
+  test_root_seal_binds_file_offset();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
