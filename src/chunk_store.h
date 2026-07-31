@@ -171,6 +171,12 @@ struct ChunkStore {
   ** Re-evaluated on every refresh, so restoring the file restores writability. */
 
   u8 movedReadOnly;
+
+  /* One-shot: adopt whatever file is now at the path on the next refresh. Only an
+  ** operation that installed a database there itself may set this -- a backup
+  ** destination is replaced with unrelated content on purpose, which no external
+  ** change detection can be expected to bless. */
+  u8 adoptReplacement;
   u8 isMemory;
   u8 fullFsync;           /* PRAGMA fullfsync: syncs use SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip durability syncs */

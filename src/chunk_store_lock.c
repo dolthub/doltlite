@@ -336,6 +336,17 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   *pChanged = 0;
+  /* The caller installed a database at this path itself, so adopt it whatever it
+  ** holds -- external-change detection has no basis to bless foreign content, and
+  ** a pinned snapshot has nothing left to pin. */
+  if( cs->adoptReplacement ){
+    cs->adoptReplacement = 0;
+    cs->movedReadOnly = 0;
+    rc = csReloadFromDisk(cs);
+    if( rc!=SQLITE_OK ) return rc;
+    *pChanged = 1;
+    return SQLITE_OK;
+  }
   if( cs->snapshotPinned ) return SQLITE_OK;
   rc = csDetectExternalChanges(cs, &bChanged);
   if( rc!=SQLITE_OK ) return rc;
