@@ -8935,7 +8935,75 @@ static void run_directonly_dolt_functions(void){
   removeDbFiles(dbpath);
 }
 
+/* A VC function evaluated in the same statement as a dolt_tags or
+** dolt_branches scan mutates and reallocates the live refs arrays the
+** cursors used to read rows from — the scan ended early against the
+** shrinking live count and the stale index read freed memory. The cursors
+** must serve rows from a snapshot taken at xFilter. */
+static void run_refs_vtab_snapshot_stability(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Refs Vtab Snapshot Stability Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_vtab_snapshot");
+  removeDbFiles(dbpath);
+  check("snapshot_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  rc = execSql(db,
+    "SELECT dolt_config('user.name','snap'),"
+    "       dolt_config('user.email','snap@example.com');"
+    "CREATE TABLE t(a INTEGER PRIMARY KEY);"
+    "INSERT INTO t VALUES(1);"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m','base');"
+    "SELECT dolt_tag('tag_a'), dolt_tag('tag_b'), dolt_tag('tag_c');");
+  check("snapshot_setup", rc==SQLITE_OK);
+
+  /* Deleting each tag while scanning must still visit every tag that was
+  ** visible when the scan started, and delete all of them. A subquery
+  ** would let the planner prune the side-effecting column, so step the
+  ** scan directly. */
+  {
+    sqlite3_stmt *pStmt = 0;
+    int nRows = 0;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT tag_name, dolt_tag('-d', tag_name) FROM dolt_tags",
+        -1, &pStmt, 0);
+    check("tags_scan_prepared", rc==SQLITE_OK);
+    while( sqlite3_step(pStmt)==SQLITE_ROW ) nRows++;
+    check("tags_scan_finalized", sqlite3_finalize(pStmt)==SQLITE_OK);
+    check("tags_scan_sees_snapshot", nRows==3);
+  }
+  check("tags_all_deleted",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_tags"), "0")==0);
+
+  rc = execSql(db,
+    "SELECT dolt_branch('br_a'), dolt_branch('br_b'), dolt_branch('br_c')");
+  check("snapshot_branches_created", rc==SQLITE_OK);
+  {
+    sqlite3_stmt *pStmt = 0;
+    int nRows = 0;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT name, CASE WHEN name<>'main'"
+        " THEN dolt_branch('-D', name) END FROM dolt_branches",
+        -1, &pStmt, 0);
+    check("branches_scan_prepared", rc==SQLITE_OK);
+    while( sqlite3_step(pStmt)==SQLITE_ROW ) nRows++;
+    check("branches_scan_finalized", sqlite3_finalize(pStmt)==SQLITE_OK);
+    check("branches_scan_sees_snapshot", nRows==4);
+  }
+  check("branches_all_deleted",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"),
+               "1")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
+  { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },

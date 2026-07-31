@@ -165,7 +165,64 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 typedef struct TagVtab TagVtab;
 struct TagVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct TagCur TagCur;
-struct TagCur { sqlite3_vtab_cursor base; int iRow; int bSingle; int iSingle; };
+struct TagCur {
+  sqlite3_vtab_cursor base;
+  int iRow;
+  /* Cursor-owned copy of the tags visible at xFilter time. A dolt_tag()
+  ** call evaluated in the same statement mutates and reallocates the live
+  ** cs->refs arrays mid-scan, so rows must never be served from them. */
+  int nRows;
+  TagRef *aSnap;
+};
+
+static void tagCurClearSnapshot(TagCur *pCur){
+  int i;
+  for(i=0; i<pCur->nRows; i++){
+    sqlite3_free(pCur->aSnap[i].zName);
+    sqlite3_free(pCur->aSnap[i].zTagger);
+    sqlite3_free(pCur->aSnap[i].zEmail);
+    sqlite3_free(pCur->aSnap[i].zMessage);
+  }
+  sqlite3_free(pCur->aSnap);
+  pCur->aSnap = 0;
+  pCur->nRows = 0;
+  pCur->iRow = 0;
+}
+
+static int tagCurSnapshot(TagCur *pCur, const TagRef *aTg, int nTg){
+  int i;
+  tagCurClearSnapshot(pCur);
+  if( nTg<=0 ) return SQLITE_OK;
+  pCur->aSnap = (TagRef*)sqlite3_malloc64((sqlite3_uint64)nTg*sizeof(TagRef));
+  if( !pCur->aSnap ) return SQLITE_NOMEM;
+  memset(pCur->aSnap, 0, (size_t)nTg*sizeof(TagRef));
+  for(i=0; i<nTg; i++){
+    TagRef *pDst = &pCur->aSnap[i];
+    const TagRef *pSrc = &aTg[i];
+    pCur->nRows = i+1;
+    pDst->commitHash = pSrc->commitHash;
+    pDst->timestamp = pSrc->timestamp;
+    pDst->zName = sqlite3_mprintf("%s", pSrc->zName ? pSrc->zName : "");
+    pDst->zTagger = pSrc->zTagger ? sqlite3_mprintf("%s", pSrc->zTagger) : 0;
+    pDst->zEmail = pSrc->zEmail ? sqlite3_mprintf("%s", pSrc->zEmail) : 0;
+    pDst->zMessage = pSrc->zMessage ? sqlite3_mprintf("%s", pSrc->zMessage) : 0;
+    if( !pDst->zName
+     || (pSrc->zTagger && !pDst->zTagger)
+     || (pSrc->zEmail && !pDst->zEmail)
+     || (pSrc->zMessage && !pDst->zMessage) ){
+      tagCurClearSnapshot(pCur);
+      return SQLITE_NOMEM;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int tagClose(sqlite3_vtab_cursor *pCursor){
+  TagCur *pCur = (TagCur*)pCursor;
+  tagCurClearSnapshot(pCur);
+  sqlite3_free(pCur);
+  return SQLITE_OK;
+}
 
 static int tagConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -198,41 +255,36 @@ static int tagFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     const char *idxStr, int argc, sqlite3_value **argv){
   TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
   TagCur *pCur = (TagCur*)pCursor;
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  int nTg = 0;
+  const TagRef *aTg = 0;
   (void)idxStr;
-  pCur->iRow = 0;
-  pCur->bSingle = 0;
-  pCur->iSingle = -1;
+  tagCurClearSnapshot(pCur);
+  if( !cs ) return SQLITE_OK;
+  refsTableGetTags(&cs->refs, &nTg, &aTg);
   if( idxNum==1 && argc==1 ){
-    ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
     const char *zName = (const char*)sqlite3_value_text(argv[0]);
-    pCur->bSingle = 1;
-    pCur->iSingle = cs ? csFindNamedRef(cs->refs.aTags, cs->refs.nTags,
-                                        (int)sizeof(TagRef), zName) : -1;
-    pCur->iRow = pCur->iSingle;
+    int i = csFindNamedRef(cs->refs.aTags, cs->refs.nTags,
+                           (int)sizeof(TagRef), zName);
+    if( i<0 ) return SQLITE_OK;
+    aTg += i;
+    nTg = 1;
   }
-  return SQLITE_OK;
+  return tagCurSnapshot(pCur, aTg, nTg);
 }
 static int tagNext(sqlite3_vtab_cursor *pCursor){
   ((TagCur*)pCursor)->iRow++;
   return SQLITE_OK;
 }
 static int tagEof(sqlite3_vtab_cursor *pCursor){
-  TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
   TagCur *pCur = (TagCur*)pCursor;
-  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  if( !cs ) return 1;
-  if( pCur->bSingle ) return pCur->iSingle<0 || pCur->iRow!=pCur->iSingle;
-  return pCur->iRow >= refsTableTagCount(&cs->refs);
+  return pCur->iRow >= pCur->nRows;
 }
 static int tagColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col){
-  TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
-  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  TagCur *pCur = (TagCur*)pCursor;
   const TagRef *t;
-  int nTg;
-  const TagRef *aTg;
-  if( !cs ) return SQLITE_OK;
-  refsTableGetTags(&cs->refs, &nTg, &aTg);
-  t = &aTg[((TagCur*)pCursor)->iRow];
+  if( pCur->iRow >= pCur->nRows ) return SQLITE_OK;
+  t = &pCur->aSnap[pCur->iRow];
   switch(col){
     case 0:
       sqlite3_result_text(ctx, t->zName, -1, SQLITE_TRANSIENT);
@@ -275,7 +327,7 @@ static int tagBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
 static sqlite3_module tagModule = {
   0,0,tagConnect,tagBestIndex,doltliteVtabDisconnect,0,
-  tagOpen,doltliteVtabClose,tagFilter,tagNext,tagEof,tagColumn,tagRowid,
+  tagOpen,tagClose,tagFilter,tagNext,tagEof,tagColumn,tagRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
