@@ -185,6 +185,110 @@ static int readUntilEof(HttpConn *conn, u8 **ppOut, int *pnOut){
   return SQLITE_OK;
 }
 
+static int httpParseResponse(
+  const u8 *pRaw,
+  int nRaw,
+  int *pStatus,
+  u8 **ppResp,
+  int *pnResp
+){
+  int i = 0;
+  int bodyStart = -1;
+  int contentLength = -1;
+  int seenContentLength = 0;
+  int seenTransferEncoding = 0;
+  int statusStart;
+  int statusEnd;
+  uint64_t value;
+
+  *pStatus = 0;
+  *ppResp = 0;
+  *pnResp = 0;
+
+  while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
+  if( i>=nRaw || pRaw[i]!=' ' ) return SQLITE_PROTOCOL;
+  statusStart = ++i;
+  while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
+  statusEnd = i;
+  if( statusEnd-statusStart!=3
+   || doltliteParseDecimal(
+        (const char*)pRaw+statusStart, (const char*)pRaw+statusEnd,
+        999, &value)!=DOLTLITE_DECIMAL_OK
+   || value<100 ){
+    return SQLITE_PROTOCOL;
+  }
+  *pStatus = (int)value;
+
+  while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
+  if( i+1>=nRaw ) return SQLITE_PROTOCOL;
+  i += 2;
+  while( i<nRaw ){
+    int lineStart = i;
+    int lineEnd;
+    int colon;
+    int valueStart;
+    int valueEnd;
+    int parseRc;
+
+    if( i+1<nRaw && pRaw[i]=='\r' && pRaw[i+1]=='\n' ){
+      bodyStart = i + 2;
+      break;
+    }
+    while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
+    if( i+1>=nRaw ) return SQLITE_PROTOCOL;
+    lineEnd = i;
+    i += 2;
+
+    colon = lineStart;
+    while( colon<lineEnd && pRaw[colon]!=':' ) colon++;
+    if( colon==lineStart || colon==lineEnd ) continue;
+
+    valueStart = colon + 1;
+    while( valueStart<lineEnd
+        && (pRaw[valueStart]==' ' || pRaw[valueStart]=='\t') ){
+      valueStart++;
+    }
+    valueEnd = lineEnd;
+    while( valueEnd>valueStart
+        && (pRaw[valueEnd-1]==' ' || pRaw[valueEnd-1]=='\t') ){
+      valueEnd--;
+    }
+
+    if( httpHeaderNameEquals(
+          pRaw+lineStart, colon-lineStart, "Content-Length") ){
+      if( seenContentLength ) return SQLITE_PROTOCOL;
+      seenContentLength = 1;
+      parseRc = doltliteParseDecimal(
+          (const char*)pRaw+valueStart, (const char*)pRaw+valueEnd,
+          (uint64_t)HTTP_RESP_MAX_BYTES, &value);
+      if( parseRc!=DOLTLITE_DECIMAL_OK ){
+        return parseRc==DOLTLITE_DECIMAL_RANGE
+             ? SQLITE_TOOBIG : SQLITE_PROTOCOL;
+      }
+      contentLength = (int)value;
+    }else if( httpHeaderNameEquals(
+                 pRaw+lineStart, colon-lineStart, "Transfer-Encoding") ){
+      seenTransferEncoding = 1;
+    }
+  }
+
+  if( bodyStart<0 || seenTransferEncoding ) return SQLITE_PROTOCOL;
+
+  {
+    int nAvail = nRaw - bodyStart;
+    int nCopy = contentLength>=0 ? contentLength : nAvail;
+    if( contentLength>=0 && contentLength!=nAvail ) return SQLITE_PROTOCOL;
+    if( nCopy>0 ){
+      *ppResp = sqlite3_malloc(nCopy);
+      if( !*ppResp ) return SQLITE_NOMEM;
+      memcpy(*ppResp, pRaw + bodyStart, nCopy);
+      *pnResp = nCopy;
+    }
+  }
+
+  return SQLITE_OK;
+}
+
 static int httpRequest(
   HttpRemote *p,
   const char *zMethod,
@@ -254,124 +358,9 @@ static int httpRequest(
   rc = readUntilEof(conn, &pRaw, &nRaw);
   httpConnClose(conn);
   if( rc != SQLITE_OK ) return rc;
-
-  {
-    int i = 0;
-    int bodyStart = -1;
-    int contentLength = -1;
-    int seenContentLength = 0;
-    int seenTransferEncoding = 0;
-    int statusStart;
-    int statusEnd;
-    uint64_t value;
-
-    while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
-    if( i>=nRaw || pRaw[i]!=' ' ){
-      sqlite3_free(pRaw);
-      return SQLITE_PROTOCOL;
-    }
-    statusStart = ++i;
-    while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
-    statusEnd = i;
-    if( statusEnd-statusStart!=3
-     || doltliteParseDecimal(
-          (const char*)pRaw+statusStart, (const char*)pRaw+statusEnd,
-          999, &value)!=DOLTLITE_DECIMAL_OK
-     || value<100 ){
-      sqlite3_free(pRaw);
-      return SQLITE_PROTOCOL;
-    }
-    *pStatus = (int)value;
-
-    while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
-    if( i+1>=nRaw ){
-      sqlite3_free(pRaw);
-      return SQLITE_PROTOCOL;
-    }
-    i += 2;
-    while( i<nRaw ){
-      int lineStart = i;
-      int lineEnd;
-      int colon;
-      int valueStart;
-      int valueEnd;
-      int parseRc;
-
-      if( i+1<nRaw && pRaw[i]=='\r' && pRaw[i+1]=='\n' ){
-        bodyStart = i + 2;
-        break;
-      }
-      while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
-      if( i+1>=nRaw ){
-        sqlite3_free(pRaw);
-        return SQLITE_PROTOCOL;
-      }
-      lineEnd = i;
-      i += 2;
-
-      colon = lineStart;
-      while( colon<lineEnd && pRaw[colon]!=':' ) colon++;
-      if( colon==lineStart || colon==lineEnd ) continue;
-
-      valueStart = colon + 1;
-      while( valueStart<lineEnd
-          && (pRaw[valueStart]==' ' || pRaw[valueStart]=='\t') ){
-        valueStart++;
-      }
-      valueEnd = lineEnd;
-      while( valueEnd>valueStart
-          && (pRaw[valueEnd-1]==' ' || pRaw[valueEnd-1]=='\t') ){
-        valueEnd--;
-      }
-
-      if( httpHeaderNameEquals(
-            pRaw+lineStart, colon-lineStart, "Content-Length") ){
-        if( seenContentLength ){
-          sqlite3_free(pRaw);
-          return SQLITE_PROTOCOL;
-        }
-        seenContentLength = 1;
-        parseRc = doltliteParseDecimal(
-            (const char*)pRaw+valueStart, (const char*)pRaw+valueEnd,
-            (uint64_t)HTTP_RESP_MAX_BYTES, &value);
-        if( parseRc!=DOLTLITE_DECIMAL_OK ){
-          sqlite3_free(pRaw);
-          return parseRc==DOLTLITE_DECIMAL_RANGE
-               ? SQLITE_TOOBIG : SQLITE_PROTOCOL;
-        }
-        contentLength = (int)value;
-      }else if( httpHeaderNameEquals(
-                   pRaw+lineStart, colon-lineStart, "Transfer-Encoding") ){
-        seenTransferEncoding = 1;
-      }
-    }
-
-    if( bodyStart<0 || seenTransferEncoding ){
-      sqlite3_free(pRaw);
-      return SQLITE_PROTOCOL;
-    }
-
-    {
-      int nAvail = nRaw - bodyStart;
-      int nCopy = contentLength>=0 ? contentLength : nAvail;
-      if( contentLength>=0 && contentLength!=nAvail ){
-        sqlite3_free(pRaw);
-        return SQLITE_PROTOCOL;
-      }
-      if( nCopy>0 ){
-        *ppResp = sqlite3_malloc(nCopy);
-        if( !*ppResp ){
-          sqlite3_free(pRaw);
-          return SQLITE_NOMEM;
-        }
-        memcpy(*ppResp, pRaw + bodyStart, nCopy);
-        *pnResp = nCopy;
-      }
-    }
-    sqlite3_free(pRaw);
-  }
-
-  return SQLITE_OK;
+  rc = httpParseResponse(pRaw, nRaw, pStatus, ppResp, pnResp);
+  sqlite3_free(pRaw);
+  return rc;
 }
 
 static int uploadBufAppend(HttpRemote *p, const u8 *pData, int nData){
@@ -508,6 +497,58 @@ static int httpPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
   return rc;
 }
 
+static int httpParseChunkBatch(
+  const u8 *pResp,
+  int nResp,
+  int nHash,
+  u8 **apData,
+  int *anData
+){
+  i64 poff = 0;
+  int rc = SQLITE_OK;
+  int i;
+
+  for(i=0; i<nHash; i++){ apData[i] = 0; anData[i] = 0; }
+  for(i=0; i<nHash; i++){
+    u32 len;
+    if( poff + 4 > nResp ){ rc = SQLITE_ERROR; break; }
+    len = ((u32)pResp[poff] << 24) | ((u32)pResp[poff+1] << 16)
+        | ((u32)pResp[poff+2] << 8) | (u32)pResp[poff+3];
+    poff += 4;
+    if( len == 0xFFFFFFFFu ) continue;
+    if( poff + (i64)len > nResp ){ rc = SQLITE_ERROR; break; }
+    apData[i] = sqlite3_malloc(len ? (int)len : 1);
+    if( !apData[i] ){ rc = SQLITE_NOMEM; break; }
+    memcpy(apData[i], pResp + poff, len);
+    anData[i] = (int)len;
+    poff += len;
+  }
+  return rc;
+}
+
+int doltliteHttpParseResponseForTest(
+  const u8 *pRaw,
+  int nRaw,
+  int nHash
+){
+  u8 *apData[64];
+  int anData[64];
+  u8 *pResp = 0;
+  int nResp = 0;
+  int status = 0;
+  int rc;
+  int i;
+
+  if( nHash<0 || nHash>64 ) return SQLITE_MISUSE;
+  rc = httpParseResponse(pRaw, nRaw, &status, &pResp, &nResp);
+  if( rc==SQLITE_OK && status==200 ){
+    rc = httpParseChunkBatch(pResp, nResp, nHash, apData, anData);
+    for(i=0; i<nHash; i++) sqlite3_free(apData[i]);
+  }
+  sqlite3_free(pResp);
+  return rc;
+}
+
 /* Batched fetch: POST the concatenated hashes to /get-chunks and parse the
 ** framed reply (per requested hash: a 4-byte big-endian length then that many
 ** payload bytes; length 0xFFFFFFFF marks an absent chunk). One round trip
@@ -522,7 +563,6 @@ static int httpGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   int status = 0;
   int rc;
   int i;
-  i64 poff;
 
   for(i=0; i<nHash; i++){ apData[i] = 0; anData[i] = 0; }
   if( nHash <= 0 ) return SQLITE_OK;
@@ -542,23 +582,7 @@ static int httpGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   sqlite3_free(pReq);
   if( rc != SQLITE_OK ){ sqlite3_free(pResp); return rc; }
   if( status != 200 ){ sqlite3_free(pResp); return SQLITE_ERROR; }
-
-  poff = 0;
-  for(i=0; i<nHash; i++){
-    u32 len;
-    if( poff + 4 > nResp ){ rc = SQLITE_ERROR; break; }
-    len = ((u32)pResp[poff] << 24) | ((u32)pResp[poff+1] << 16)
-        | ((u32)pResp[poff+2] << 8) | (u32)pResp[poff+3];
-    poff += 4;
-    if( len == 0xFFFFFFFFu ) continue;            /* absent */
-    if( poff + (i64)len > nResp ){ rc = SQLITE_ERROR; break; }
-    apData[i] = sqlite3_malloc(len ? (int)len : 1);
-    if( !apData[i] ){ rc = SQLITE_NOMEM; break; }
-    memcpy(apData[i], pResp + poff, len);
-    anData[i] = (int)len;
-    poff += len;
-  }
-
+  rc = httpParseChunkBatch(pResp, nResp, nHash, apData, anData);
   sqlite3_free(pResp);
   return rc;   /* caller frees any apData[i] set before an error */
 }
