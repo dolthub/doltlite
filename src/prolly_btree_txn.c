@@ -825,6 +825,206 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
   return p->pOps->xCommitPhaseOne(p, zSuperJrnl);
 }
 
+/* Drop graph lock + snapshot pin after a write-txn commit attempt. */
+static void commitPhaseTwoReleaseGraph(BtShared *pBt){
+  chunkStoreUnlock(&pBt->store);
+  pBt->store.snapshotPinned = 0;
+}
+
+/* Abort a write commit that has not yet published: free catalog bytes,
+** roll back the store, release the graph. Optional reload catalog is freed. */
+static void commitPhaseTwoAbort(
+  BtShared *pBt,
+  u8 **ppCatData,
+  Btree *pReload,
+  int *pbHaveReload
+){
+  if( pbHaveReload && *pbHaveReload && pReload ){
+    catFree(&pReload->cat);
+    *pbHaveReload = 0;
+  }
+  if( ppCatData ){
+    sqlite3_free(*ppCatData);
+    *ppCatData = 0;
+  }
+  chunkStoreRollback(&pBt->store);
+  commitPhaseTwoReleaseGraph(pBt);
+}
+
+/* Serialize working catalog + working-set blob + refs for a write commit. */
+static int commitPhaseTwoStageCatalog(
+  Btree *p,
+  BtShared *pBt,
+  u8 **ppCatData,
+  int *pnCatData,
+  ProllyHash *pCatHash
+){
+  int rc;
+  const char *zBr;
+
+  pBt->inCatalogSerialize = 1;
+  rc = serializeCatalogForCommit(p, ppCatData, pnCatData);
+  pBt->inCatalogSerialize = 0;
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(&pBt->store, *ppCatData, *pnCatData, pCatHash);
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  zBr = p->zBranch ? p->zBranch : "main";
+  rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, pCatHash,
+                                &p->headCommit,
+                                &p->vc.stagedCatalog, p->vc.isMerging,
+                                &p->vc.mergeCommitHash,
+                                &p->vc.conflictsCatalogHash,
+                                p->isRebasing,
+                                &p->preRebaseWorkingCat,
+                                &p->rebaseOntoCommit,
+                                p->zRebaseOrigBranch,
+                                p->zRebaseReturnBranch,
+                                &p->vc.constraintViolationsHash);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStoreSerializeRefs(&pBt->store);
+}
+
+/* Deserialize the about-to-commit catalog and freeze peer cursors before
+** a schema-changing publish. */
+static int commitPhaseTwoPrepSchemaReload(
+  Btree *p,
+  BtShared *pBt,
+  const u8 *catData,
+  int nCatData,
+  Btree *pReload,
+  u32 *pNativeSchemaCookie
+){
+  BtCursor *pC;
+  int rc;
+
+  *pNativeSchemaCookie = p->aMeta[BTREE_SCHEMA_VERSION];
+  memcpy(pReload->aMeta, p->aMeta, sizeof(pReload->aMeta));
+  rc = deserializeCatalog(pReload, catData, nCatData);
+  if( rc!=SQLITE_OK ){
+    catFree(&pReload->cat);
+    return rc;
+  }
+  /* Save this handle's live cursors before refreshing the schema root. */
+  for(pC = pBt->pCursor; pC; pC = pC->pNext){
+    if( pC->pBtree==p ){
+      if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
+       && saveCursorPosition(pC)!=SQLITE_OK ){
+        pC->eState = CURSOR_FAULT;
+        pC->skipNext = SQLITE_ABORT;
+        prollyCursorReleaseAll(&pC->pCur);
+      }
+      pC->pMutMap = 0;
+      pC->mmActive = 0;
+      pC->mmPhysActive = 0;
+      pC->deferredTreeSeek = 0;
+      pC->mmIdx = -1;
+      pC->mmPhysIdx = -1;
+    }else{
+      pC->eState = CURSOR_FAULT;
+      pC->skipNext = SQLITE_ABORT;
+      pC->mmActive = 0;
+      prollyCursorReleaseAll(&pC->pCur);
+    }
+  }
+  return SQLITE_OK;
+}
+
+static void commitPhaseTwoAdoptReloadedCatalog(
+  Btree *p,
+  BtShared *pBt,
+  Btree *pReload,
+  int *pbHaveReload,
+  u32 nativeSchemaCookie
+){
+  BtCursor *pC;
+
+  if( *pbHaveReload ){
+    btreeFreeCatalogTables(p);
+    p->cat = pReload->cat;
+    memcpy(p->aMeta, pReload->aMeta, sizeof(p->aMeta));
+    /* sqlite already bumped its cookie for this DDL; keep the stock
+    ** value instead of the reload's hash-derived one so in-session
+    ** cookie semantics stay stock (writes stick, DDL increments). */
+    p->aMeta[BTREE_SCHEMA_VERSION] = nativeSchemaCookie;
+    memset(&pReload->cat, 0, sizeof(pReload->cat));
+    *pbHaveReload = 0;
+  }
+  /* A saved cursor whose table vanished in the reload would re-seek a
+  ** stale root; fault it. */
+  for(pC = pBt->pCursor; pC; pC = pC->pNext){
+    if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
+     && findTable(p, pC->pgnoRoot)==0 ){
+      pC->eState = CURSOR_FAULT;
+      pC->skipNext = SQLITE_ABORT;
+    }
+  }
+  invalidateSchema(p);
+  if( p->db ){
+    /* Hard expiry: canonical renumbering can move rootpages compiled
+    ** into running statements (tkt-c694113d5). */
+    sqlite3ExpirePreparedStatements(p->db, 1);
+    sqlite3ResetAllSchemasOfConnection(p->db);
+  }
+}
+
+static void commitPhaseTwoEndWriteTxn(Btree *p){
+  p->inTrans = TRANS_NONE;
+  p->inTransaction = TRANS_NONE;
+  btreeDiscardAllSavepoints(p);
+  p->bSchemaChangedTxn = 0;
+  p->bMasterRootChangedTxn = 0;
+}
+
+/* After chunkStoreCommit failed: restore pre-commit state or drop the
+** catalog if restore itself fails. Always releases the graph. */
+static int commitPhaseTwoFailRestore(
+  Btree *p,
+  BtShared *pBt,
+  int commitRc,
+  u8 **ppCatData,
+  Btree *pReload,
+  int *pbHaveReload
+){
+  int rc2;
+
+  if( *pbHaveReload ){
+    catFree(&pReload->cat);
+    *pbHaveReload = 0;
+  }
+  sqlite3_free(*ppCatData);
+  *ppCatData = 0;
+  rc2 = restoreFromCommitted(p);
+  if( rc2!=SQLITE_OK ){
+    /* Same shape as the rollback path: the restore OOM'd, but the
+    ** transaction must end with the partial state discarded, or the
+    ** next statement's autocommit publishes it. */
+    btreeFreeCatalogTables(p);
+    memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
+    p->bCatalogDropped = 1;
+    p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+    resetConnectionSchema(p);
+    chunkStoreRollback(&pBt->store);
+    commitPhaseTwoEndWriteTxn(p);
+    commitPhaseTwoReleaseGraph(pBt);
+    /* Preserve the original commit error; restore failure is secondary. */
+    return commitRc;
+  }
+  {
+    BtCursor *pC;
+    for(pC = pBt->pCursor; pC; pC = pC->pNext){
+      if( pC->pBtree==p && pC->pMutMap ) prollyMutMapClear(pC->pMutMap);
+    }
+  }
+  invalidateCursors(pBt, 0, commitRc);
+  resetConnectionSchema(p);
+  chunkStoreRollback(&pBt->store);
+  commitPhaseTwoEndWriteTxn(p);
+  commitPhaseTwoReleaseGraph(pBt);
+  return commitRc;
+}
+
 int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
@@ -843,224 +1043,81 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   ** recursing into a stack overflow. */
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
-  if( p->inTrans==TRANS_WRITE ){
-    PROLLY_ASSERT_GRAPH_LOCKED(pBt);
-    rc = flushAllPending(p, pBt, 0);
-    if( rc!=SQLITE_OK ){
-      chunkStoreRollback(&pBt->store);
-      chunkStoreUnlock(&pBt->store);
-      pBt->store.snapshotPinned = 0;
-      return rc;
-    }
-
-    {
-      pBt->inCatalogSerialize = 1;
-      rc = serializeCatalogForCommit(p, &catData, &nCatData);
-      pBt->inCatalogSerialize = 0;
-      if( rc==SQLITE_OK ){
-        rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
-      }
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(catData);
-        chunkStoreRollback(&pBt->store);
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
-        return rc;
-      }
-
-      {
-        const char *zBr = p->zBranch ? p->zBranch : "main";
-        rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
-                                      &p->headCommit,
-                                      &p->vc.stagedCatalog, p->vc.isMerging,
-                                      &p->vc.mergeCommitHash,
-                                      &p->vc.conflictsCatalogHash,
-                                      p->isRebasing,
-                                      &p->preRebaseWorkingCat,
-                                      &p->rebaseOntoCommit,
-                                      p->zRebaseOrigBranch,
-                                      p->zRebaseReturnBranch,
-                                      &p->vc.constraintViolationsHash);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(catData);
-          chunkStoreRollback(&pBt->store);
-          chunkStoreUnlock(&pBt->store);
-          pBt->store.snapshotPinned = 0;
-          return rc;
-        }
-        rc = chunkStoreSerializeRefs(&pBt->store);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(catData);
-          chunkStoreRollback(&pBt->store);
-          chunkStoreUnlock(&pBt->store);
-          pBt->store.snapshotPinned = 0;
-          return rc;
-        }
-      }
-    }
-
-    /* A schema-changing commit adopts the canonical catalog wholesale --
-    ** including the canonical master root, so the live view and the
-    ** persisted form never diverge (rowid bindings, rootpages, and row
-    ** order all match what any reload would see). */
-    bReloadSchema = p->bSchemaChangedTxn;
-    if( bReloadSchema ){
-      BtCursor *pC;
-      nativeSchemaCookie = p->aMeta[BTREE_SCHEMA_VERSION];
-      memcpy(reloadBtree.aMeta, p->aMeta, sizeof(reloadBtree.aMeta));
-      rc = deserializeCatalog(&reloadBtree, catData, nCatData);
-      if( rc!=SQLITE_OK ){
-        catFree(&reloadBtree.cat);
-        sqlite3_free(catData);
-        chunkStoreRollback(&pBt->store);
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
-        return rc;
-      }
-      bHaveReloadCatalog = 1;
-      /* Save this handle's live cursors before refreshing the schema root. */
-      for(pC = pBt->pCursor; pC; pC = pC->pNext){
-        if( pC->pBtree==p ){
-          if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
-           && saveCursorPosition(pC)!=SQLITE_OK ){
-            pC->eState = CURSOR_FAULT;
-            pC->skipNext = SQLITE_ABORT;
-            prollyCursorReleaseAll(&pC->pCur);
-          }
-          pC->pMutMap = 0;
-          pC->mmActive = 0;
-          pC->mmPhysActive = 0;
-          pC->deferredTreeSeek = 0;
-          pC->mmIdx = -1;
-          pC->mmPhysIdx = -1;
-        }else{
-          pC->eState = CURSOR_FAULT;
-          pC->skipNext = SQLITE_ABORT;
-          pC->mmActive = 0;
-          prollyCursorReleaseAll(&pC->pCur);
-        }
-      }
-    }
-
-    /* Phase one already refused the caller's own commit when conflicts are
-    ** unresolved, so reaching here with a non-empty conflicts catalog means this
-    ** is a statement commit nested inside a dolt_* command -- dolt_commit's
-    ** staging, typically. Those must not be failed, or the command's own
-    ** diagnosis is replaced by a bare "constraint failed", but they must not
-    ** make the conflict durable either. Leaving the batch pending satisfies
-    ** both: the chunks stay in the pending set exactly as an in-transaction save
-    ** leaves them, and only a later conflict-free commit flushes them. */
-    if( !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ){
-      chunkStoreUnlock(&pBt->store);
-      pBt->store.snapshotPinned = 0;
-      p->inTrans = TRANS_READ;
-      return SQLITE_OK;
-    }
-
-    rc = chunkStoreCommit(&pBt->store);
-    if( rc==SQLITE_OK ){
-      p->committedCatalogHash = catHash;
-      p->committedVc = p->vc;
-      memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
-      btreeMarkWorkingStateChanged(p, 1);
-      if( bReloadSchema ){
-        BtCursor *pC;
-        if( bHaveReloadCatalog ){
-          btreeFreeCatalogTables(p);
-          p->cat = reloadBtree.cat;
-          memcpy(p->aMeta, reloadBtree.aMeta, sizeof(p->aMeta));
-          /* sqlite already bumped its cookie for this DDL; keep the stock
-          ** value instead of the reload's hash-derived one so in-session
-          ** cookie semantics stay stock (writes stick, DDL increments). */
-          p->aMeta[BTREE_SCHEMA_VERSION] = nativeSchemaCookie;
-          memset(&reloadBtree.cat, 0, sizeof(reloadBtree.cat));
-          bHaveReloadCatalog = 0;
-        }
-        /* A saved cursor whose table vanished in the reload would re-seek a
-        ** stale root; fault it. */
-        for(pC = pBt->pCursor; pC; pC = pC->pNext){
-          if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
-           && findTable(p, pC->pgnoRoot)==0 ){
-            pC->eState = CURSOR_FAULT;
-            pC->skipNext = SQLITE_ABORT;
-          }
-        }
-        invalidateSchema(p);
-        if( p->db ){
-          /* Hard expiry: canonical renumbering can move rootpages compiled
-          ** into running statements (tkt-c694113d5). */
-          sqlite3ExpirePreparedStatements(p->db, 1);
-          sqlite3ResetAllSchemasOfConnection(p->db);
-        }
-      }
-      p->inTrans = TRANS_NONE;
-      p->inTransaction = TRANS_NONE;
-      btreeDiscardAllSavepoints(p);
-      p->bSchemaChangedTxn = 0;
-      p->bMasterRootChangedTxn = 0;
-
-      btreeTakeCatalogCache(p, &catData, nCatData, &catHash);
-      assert( p->nCatalogCache==nCatData );
-      assert( prollyHashCompare(&p->catalogCacheHash, &catHash)==0 );
-      sqlite3_free(catData);
-      chunkStoreUnlock(&pBt->store);
-      pBt->store.snapshotPinned = 0;
-    }else{
-      int rc2;
-      if( bHaveReloadCatalog ){
-        catFree(&reloadBtree.cat);
-        bHaveReloadCatalog = 0;
-      }
-      sqlite3_free(catData);
-      rc2 = restoreFromCommitted(p);
-      if( rc2!=SQLITE_OK ){
-        /* Same shape as the rollback path: the restore OOM'd, but the
-        ** transaction must end with the partial state discarded, or the
-        ** next statement's autocommit publishes it. */
-        btreeFreeCatalogTables(p);
-        memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
-        p->bCatalogDropped = 1;
-        p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
-        resetConnectionSchema(p);
-        chunkStoreRollback(&pBt->store);
-        p->inTrans = TRANS_NONE;
-        p->inTransaction = TRANS_NONE;
-        btreeDiscardAllSavepoints(p);
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
-        /* Preserve the original commit error; restore failure is secondary. */
-        return rc;
-      }
-      {
-        BtCursor *pC;
-        for(pC = pBt->pCursor; pC; pC = pC->pNext){
-          if( pC->pBtree==p && pC->pMutMap ) prollyMutMapClear(pC->pMutMap);
-        }
-      }
-      invalidateCursors(pBt, 0, rc);
-      resetConnectionSchema(p);
-      chunkStoreRollback(&pBt->store);
-      p->inTrans = TRANS_NONE;
-      p->inTransaction = TRANS_NONE;
-      btreeDiscardAllSavepoints(p);
-      p->bSchemaChangedTxn = 0;
-      p->bMasterRootChangedTxn = 0;
-      chunkStoreUnlock(&pBt->store);
-      pBt->store.snapshotPinned = 0;
-    }
+  if( p->inTrans!=TRANS_WRITE ){
+    commitPhaseTwoEndWriteTxn(p);
+    commitPhaseTwoReleaseGraph(pBt);
     return rc;
   }
 
-  p->inTrans = TRANS_NONE;
-  p->inTransaction = TRANS_NONE;
-  p->bSchemaChangedTxn = 0;
-  p->bMasterRootChangedTxn = 0;
-  btreeDiscardAllSavepoints(p);
+  PROLLY_ASSERT_GRAPH_LOCKED(pBt);
+  rc = flushAllPending(p, pBt, 0);
+  if( rc!=SQLITE_OK ){
+    commitPhaseTwoAbort(pBt, 0, 0, 0);
+    return rc;
+  }
 
-  chunkStoreUnlock(&pBt->store);
-  pBt->store.snapshotPinned = 0;
+  rc = commitPhaseTwoStageCatalog(p, pBt, &catData, &nCatData, &catHash);
+  if( rc!=SQLITE_OK ){
+    commitPhaseTwoAbort(pBt, &catData, 0, 0);
+    return rc;
+  }
 
-  return rc;
+  /* A schema-changing commit adopts the canonical catalog wholesale --
+  ** including the canonical master root, so the live view and the
+  ** persisted form never diverge (rowid bindings, rootpages, and row
+  ** order all match what any reload would see). */
+  bReloadSchema = p->bSchemaChangedTxn;
+  if( bReloadSchema ){
+    rc = commitPhaseTwoPrepSchemaReload(
+        p, pBt, catData, nCatData, &reloadBtree, &nativeSchemaCookie);
+    if( rc!=SQLITE_OK ){
+      commitPhaseTwoAbort(pBt, &catData, 0, 0);
+      return rc;
+    }
+    bHaveReloadCatalog = 1;
+  }
+
+  /* Phase one already refused the caller's own commit when conflicts are
+  ** unresolved, so reaching here with a non-empty conflicts catalog means this
+  ** is a statement commit nested inside a dolt_* command -- dolt_commit's
+  ** staging, typically. Those must not be failed, or the command's own
+  ** diagnosis is replaced by a bare "constraint failed", but they must not
+  ** make the conflict durable either. Leaving the batch pending satisfies
+  ** both: the chunks stay in the pending set exactly as an in-transaction save
+  ** leaves them, and only a later conflict-free commit flushes them. */
+  if( !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ){
+    if( bHaveReloadCatalog ){
+      catFree(&reloadBtree.cat);
+      bHaveReloadCatalog = 0;
+    }
+    sqlite3_free(catData);
+    commitPhaseTwoReleaseGraph(pBt);
+    p->inTrans = TRANS_READ;
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreCommit(&pBt->store);
+  if( rc!=SQLITE_OK ){
+    return commitPhaseTwoFailRestore(
+        p, pBt, rc, &catData, &reloadBtree, &bHaveReloadCatalog);
+  }
+
+  p->committedCatalogHash = catHash;
+  p->committedVc = p->vc;
+  memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
+  btreeMarkWorkingStateChanged(p, 1);
+  if( bReloadSchema ){
+    commitPhaseTwoAdoptReloadedCatalog(
+        p, pBt, &reloadBtree, &bHaveReloadCatalog, nativeSchemaCookie);
+  }
+  commitPhaseTwoEndWriteTxn(p);
+
+  btreeTakeCatalogCache(p, &catData, nCatData, &catHash);
+  assert( p->nCatalogCache==nCatData );
+  assert( prollyHashCompare(&p->catalogCacheHash, &catHash)==0 );
+  sqlite3_free(catData);
+  commitPhaseTwoReleaseGraph(pBt);
+  return SQLITE_OK;
 }
 int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
   if( !p ) return SQLITE_OK;
