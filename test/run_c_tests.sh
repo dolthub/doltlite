@@ -29,6 +29,7 @@ COVERAGE_TESTS=(
   scoped_refs_push_test
   cross_branch_test
   corruption_test
+  gc_tip_survival_test
   prepared_stmt_reuse_test
   catalog_serialize_determinism_test
   sequence_reload_test
