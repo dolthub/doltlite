@@ -616,7 +616,8 @@ jobs:
             -o threadtest5 ../test/threadtest5.c sqlite3.c \
             $TSAN_LDFLAGS -ldl -lpthread -lm -lz
           make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
-            doltlite doltlite-remotesrv
+            doltlite doltlite-remotesrv vc_concurrency_test \
+            vc_ref_mutation_stress_test
         } 2>&1 | tee build.log
         if grep -E "warning:" build.log; then
           echo "::error::compiler warnings in TSan build"
