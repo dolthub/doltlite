@@ -44,7 +44,9 @@ if ! awk '
       printf "%s:%d: invalid suite name: %s\n", FILENAME, NR, $1
       bad = 1
     }
-    if ($2 != "*" && $2 !~ /^[A-Za-z0-9_.()-]+$/) {
+    exact = ($2 ~ /^[A-Za-z0-9_.()-]+$/)
+    counted = ($2 ~ /^[A-Za-z0-9_.()-]+[.][*][{][1-9][0-9]*[}]$/)
+    if ($2 != "*" && !exact && !counted) {
       printf "%s:%d: invalid gate: %s\n", FILENAME, NR, $2
       bad = 1
     }
@@ -68,6 +70,67 @@ if ! awk '
   }
   END { exit bad }
 ' "$INVENTORY_FILE"; then
+  exit 1
+fi
+
+if ! awk '
+  function is_counted(g) {
+    return g ~ /^[A-Za-z0-9_.()-]+[.][*][{][1-9][0-9]*[}]$/
+  }
+  function counted_prefix(g, p) {
+    p = g
+    sub(/[.][*][{][1-9][0-9]*[}]$/, "", p)
+    return p "."
+  }
+  {
+    sub(/#.*/, "")
+    if (NF == 0) next
+    if (NF < 2) {
+      printf "%s:%d: expected at least 2 fields\n", FILENAME, NR
+      bad = 1
+      next
+    }
+    exact = ($2 ~ /^[A-Za-z0-9_.()-]+$/)
+    counted = is_counted($2)
+    if (!exact && !counted) {
+      printf "%s:%d: invalid gate: %s\n", FILENAME, NR, $2
+      bad = 1
+    }
+    for (i = 3; i <= NF; i++) {
+      if ($i != "@linux" && $i != "@darwin" && $i != "@windows" &&
+          $i != "@coverage" && $i != "@no-coverage") {
+        printf "%s:%d: invalid qualifier: %s\n", FILENAME, NR, $i
+        bad = 1
+      }
+    }
+    suite[++n] = $1
+    gate[n] = $2
+    if (counted) counted_gate[++n_counted] = n
+  }
+  END {
+    for (k = 1; k <= n_counted; k++) {
+      i = counted_gate[k]
+      p = counted_prefix(gate[i])
+      for (j = 1; j <= n; j++) {
+        if (i == j) continue
+        if (suite[i] != suite[j]) continue
+        if (is_counted(gate[j])) {
+          if (j < i) continue
+          q = counted_prefix(gate[j])
+          overlap = (index(p, q) == 1 || index(q, p) == 1)
+        } else {
+          overlap = (index(gate[j], p) == 1)
+        }
+        if (overlap) {
+          printf "%s: overlapping gates for %s: %s and %s\n",
+                 FILENAME, suite[i], gate[i], gate[j]
+          bad = 1
+        }
+      }
+    }
+    exit bad
+  }
+' "$DIVERGENCE_FILE"; then
   exit 1
 fi
 
@@ -107,10 +170,31 @@ report_set "stale inventory entries" "$TMP_DIR/stale"
 
 [ "$FAIL" -eq 0 ] || exit 1
 
-TOTAL=$(wc -l < "$TMP_DIR/inventory" | tr -d ' ')
+TOTAL=$(awk '
+  function weight(g, n) {
+    if (g ~ /[.][*][{][1-9][0-9]*[}]$/) {
+      n = g
+      sub(/^.*[.][*][{]/, "", n)
+      sub(/[}]$/, "", n)
+      return n + 0
+    }
+    return 1
+  }
+  { sub(/#.*/, ""); if (NF) n += weight($2) }
+  END { print n + 0 }
+' "$INVENTORY_FILE")
 counts_for() {
   awk -v want="$1" '
-    { sub(/#.*/, ""); if (NF && $3 == want) n++ }
+    function weight(g, n) {
+      if (g ~ /[.][*][{][1-9][0-9]*[}]$/) {
+        n = g
+        sub(/^.*[.][*][{]/, "", n)
+        sub(/[}]$/, "", n)
+        return n + 0
+      }
+      return 1
+    }
+    { sub(/#.*/, ""); if (NF && $3 == want) n += weight($2) }
     END { print n + 0 }
   ' "$INVENTORY_FILE"
 }

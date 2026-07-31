@@ -122,6 +122,37 @@ printf '%s\n' \
   'gamma * harness -' > "$INVENTORY"
 expect_failure "one gate of a suite left without a disposition"
 
+# Counted patterns retain their represented assertion count in the ratchet.
+printf '%s\n' \
+  'alpha alpha-1.transient.*{2}' \
+  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
+printf '%s\n' \
+  'alpha alpha-1.transient.*{2} intentional -' \
+  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
+  'gamma * harness -' > "$INVENTORY"
+write_ratchet 4 2 1 1 0
+run_check
+
+printf '%s\n' \
+  'alpha alpha-1.transient.*{0}' \
+  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
+printf '%s\n' \
+  'alpha alpha-1.transient.*{0} intentional -' \
+  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
+  'gamma * harness -' > "$INVENTORY"
+expect_failure "a zero-count pattern"
+
+printf '%s\n' \
+  'alpha alpha-1.transient.*{2}' \
+  'alpha alpha-1.transient.7' \
+  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
+printf '%s\n' \
+  'alpha alpha-1.transient.*{2} intentional -' \
+  'alpha alpha-1.transient.7 intentional -' \
+  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
+  'gamma * harness -' > "$INVENTORY"
+expect_failure "overlapping exact and counted gates"
+
 # Back to the 3-gate fixture for the ratchet cases.
 printf '%s\n' \
   'alpha alpha-1' \

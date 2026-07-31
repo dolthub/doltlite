@@ -88,6 +88,17 @@ count_lines() {
   fi
 }
 
+parse_counted_pattern() {
+  COUNTED_PREFIX=""
+  COUNTED_EXPECTED=0
+  if [[ "$1" =~ ^(.+)\.\*\{([1-9][0-9]*)\}$ ]]; then
+    COUNTED_PREFIX="${BASH_REMATCH[1]}."
+    COUNTED_EXPECTED="${BASH_REMATCH[2]}"
+    return 0
+  fi
+  return 1
+}
+
 total_pass=0
 total_fail_known=0
 total_fail_unexpected=0
@@ -98,7 +109,7 @@ unexpected_failure_lines=""
 unused_lines=""
 
 for test in "$@"; do
-  expected="$(expected_for "$test")"
+  expected_specs="$(expected_for "$test")"
   out=$(run_with_timeout "$TIMEOUT" ./testfixture ../test/${test}.test 2>&1) || true
 
   done_line=$(echo "$out" | grep "errors out of" | head -1)
@@ -115,7 +126,7 @@ for test in "$@"; do
     continue
   fi
 
-  if is_crash_expected "$test" && [ -z "$expected" ]; then
+  if is_crash_expected "$test" && [ -z "$expected_specs" ]; then
     echo "FIXED CRASH: $test (was on crash list, now produces summary — remove from $CRASH_FILE)"
     total_unexpected_clean=$((total_unexpected_clean + 1))
     unused_lines="$unused_lines"$'\n'"  $test (crash list)"
@@ -124,6 +135,45 @@ for test in "$@"; do
   actual=""
   if [ -n "$fail_line" ]; then
     actual=$(echo "$fail_line" | sed 's/^!Failures on these tests://' | tr ' ' '\n' | grep -v '^$' || true)
+  fi
+
+  expected=""
+  exact_expected=""
+  fixed=""
+  n_expected_total=0
+  if [ -n "$expected_specs" ]; then
+    while IFS= read -r spec; do
+      [ -z "$spec" ] && continue
+      if parse_counted_pattern "$spec"; then
+        matches=""
+        while IFS= read -r name; do
+          [ -z "$name" ] && continue
+          if [[ "$name" == "$COUNTED_PREFIX"* ]]; then
+            matches="$matches"$'\n'"$name"
+          fi
+        done <<< "$actual"
+        matches="$(echo "$matches" | grep -v '^$' || true)"
+        n_matches=$(count_lines "$matches")
+        n_expected_total=$((n_expected_total + COUNTED_EXPECTED))
+        if [ "$n_matches" -eq "$COUNTED_EXPECTED" ]; then
+          expected="$expected"$'\n'"$matches"
+        else
+          fixed="$fixed"$'\n'"$spec (expected $COUNTED_EXPECTED matches, got $n_matches)"
+        fi
+      else
+        n_expected_total=$((n_expected_total + 1))
+        expected="$expected"$'\n'"$spec"
+        exact_expected="$exact_expected"$'\n'"$spec"
+      fi
+    done <<< "$expected_specs"
+  fi
+  expected="$(echo "$expected" | grep -v '^$' || true)"
+  exact_expected="$(echo "$exact_expected" | grep -v '^$' || true)"
+  duplicate_expected=$(echo "$expected" | sort | uniq -d | grep -v '^$' || true)
+  if [ -n "$duplicate_expected" ]; then
+    while IFS= read -r name; do
+      fixed="$fixed"$'\n'"overlapping expected gates: $name"
+    done <<< "$duplicate_expected"
   fi
 
   unexpected=""
@@ -137,18 +187,16 @@ for test in "$@"; do
   fi
   unexpected="$(echo "$unexpected" | grep -v '^$' || true)"
 
-  fixed=""
-  if [ -n "$expected" ]; then
+  if [ -n "$exact_expected" ]; then
     while IFS= read -r name; do
       [ -z "$name" ] && continue
       if ! is_in_set "$name" "$actual"; then
         fixed="$fixed"$'\n'"$name"
       fi
-    done <<< "$expected"
+    done <<< "$exact_expected"
   fi
   fixed="$(echo "$fixed" | grep -v '^$' || true)"
 
-  n_expected_total=$(count_lines "$expected")
   n_actual_total=$(count_lines "$actual")
   n_unexpected=$(count_lines "$unexpected")
   n_fixed=$(count_lines "$fixed")
@@ -178,7 +226,7 @@ for test in "$@"; do
       done <<< "$unexpected"
     fi
     if [ "$n_fixed" -gt 0 ]; then
-      echo "FIXED: $test — these entries no longer fail and should be removed from $DIVERGENCE_FILE:"
+      echo "MISMATCH: $test — these entries no longer match and should be updated in $DIVERGENCE_FILE:"
       echo "$fixed" | sed 's/^/    /'
       while IFS= read -r name; do
         [ -z "$name" ] && continue
@@ -200,9 +248,9 @@ if [ "$total_fail_unexpected" -gt 0 ] || [ "$total_unexpected_crashes" -gt 0 ]; 
   exit 1
 fi
 if [ "$total_unused" -gt 0 ] || [ "$total_unexpected_clean" -gt 0 ]; then
-  echo "  fixed entries (remove from list):  $((total_unused + total_unexpected_clean))"
-  echo "  fixed entry list:$unused_lines"
-  echo "::error::$LABEL: $((total_unused + total_unexpected_clean)) entry/entries should be removed from divergence/crash list"
+  echo "  stale/mismatched entries:          $((total_unused + total_unexpected_clean))"
+  echo "  stale/mismatched entry list:$unused_lines"
+  echo "::error::$LABEL: $((total_unused + total_unexpected_clean)) entry/entries should be updated or removed from divergence/crash list"
   exit 1
 fi
 exit 0
