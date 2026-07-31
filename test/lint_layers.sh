@@ -185,6 +185,15 @@ for f in "$SRCDIR"/doltlite_*.c; do
   fi
 done
 
+for f in "$SRCDIR"/doltlite_*.c; do
+  case "$f" in
+    "$SRCDIR/doltlite_core.c"|"$SRCDIR/doltlite_config.c") continue ;;
+  esac
+  while IFS= read -r line; do
+    lint "$f:$line — branch advances must use doltliteCompareAndAdvanceBranch()"
+  done < <(grep -n 'doltliteAdvanceBranch[[:space:]]*(' "$f")
+done
+
 NFAIL=$(wc -l < "$TMPFILE" | tr -d ' ')
 if [ "$NFAIL" -eq 0 ]; then
   echo "lint_layers: all checks passed"

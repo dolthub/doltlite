@@ -488,5 +488,51 @@ int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   return csSerializeRefsBlob(cs, ppOut, pnOut);
 }
 
+int chunkStoreSnapshotRefs(ChunkStore *cs, ChunkStoreRefsSnapshot *pSnapshot){
+  u8 *pRefs = 0;
+  int nRefs = 0;
+  int rc;
+
+  memset(pSnapshot, 0, sizeof(*pSnapshot));
+  rc = csSerializeRefsBlob(cs, &pRefs, &nRefs);
+  if( rc!=SQLITE_OK ) return rc;
+  pSnapshot->refsHash = cs->refs.refsHash;
+  pSnapshot->committedRefsHash = cs->refs.committedRefsHash;
+  csDetachSavedRefsState(cs, &pSnapshot->state);
+  rc = csReplaceRefsStateFromBlob(cs, pRefs, nRefs, 0);
+  sqlite3_free(pRefs);
+  if( rc!=SQLITE_OK ){
+    csRestoreSavedRefsState(cs, &pSnapshot->state);
+    REFS_OWNED_CLEAR(pSnapshot->state);
+    cs->refs.refsHash = pSnapshot->refsHash;
+    cs->refs.committedRefsHash = pSnapshot->committedRefsHash;
+    cs->bRefsStale = 0;
+    memset(pSnapshot, 0, sizeof(*pSnapshot));
+    return rc;
+  }
+  cs->refs.refsHash = pSnapshot->refsHash;
+  cs->refs.committedRefsHash = pSnapshot->committedRefsHash;
+  cs->bRefsStale = 0;
+  return SQLITE_OK;
+}
+
+void chunkStoreRestoreRefsSnapshot(
+  ChunkStore *cs,
+  ChunkStoreRefsSnapshot *pSnapshot
+){
+  csFreeRefsState(cs);
+  csRestoreSavedRefsState(cs, &pSnapshot->state);
+  REFS_OWNED_CLEAR(pSnapshot->state);
+  cs->refs.refsHash = pSnapshot->refsHash;
+  cs->refs.committedRefsHash = pSnapshot->committedRefsHash;
+  cs->bRefsStale = 0;
+  memset(pSnapshot, 0, sizeof(*pSnapshot));
+}
+
+void chunkStoreDiscardRefsSnapshot(ChunkStoreRefsSnapshot *pSnapshot){
+  csFreeSavedRefsState(&pSnapshot->state);
+  memset(pSnapshot, 0, sizeof(*pSnapshot));
+}
+
 
 #endif

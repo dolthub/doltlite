@@ -853,6 +853,13 @@ int doltliteAdvanceBranch(
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash
 );
+int doltliteCompareAndAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pExpectedHead,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+);
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
 /* Shared dolt_* command scaffolding (doltlite_cmd.c). */
 void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
@@ -1165,6 +1172,18 @@ void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg);
 int doltliteVcSealBranchStyleTxn(sqlite3 *db);
 
 typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);
+typedef struct DoltliteBranchExpectation DoltliteBranchExpectation;
+struct DoltliteBranchExpectation {
+  const char *zBranch;
+  const ProllyHash *pTip;
+};
+int doltliteMutateRefsExpected(
+  sqlite3 *db,
+  const DoltliteBranchExpectation *aExpected,
+  int nExpected,
+  DoltliteRefsMutation xMutate,
+  void *pArg
+);
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg);
 
 const char *doltliteGetAuthorName(sqlite3 *db);
