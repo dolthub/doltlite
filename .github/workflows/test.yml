@@ -21,7 +21,9 @@ jobs:
         mv build build-plain
 
     - name: Scaling curves
-      run: bash test/doltlite_scaling.sh build-plain/doltlite
+      run: |
+        bash test/doltlite_scaling.sh --self-test
+        bash test/doltlite_scaling.sh build-plain/doltlite
 
   concurrency-stress:
     runs-on: ubuntu-latest
