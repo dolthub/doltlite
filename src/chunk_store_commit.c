@@ -385,6 +385,16 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
+  /* Mid-transaction drains appended chunk bodies without a sync, but the
+  ** root record below declares everything before this batch durable, and
+  ** recovery poisons the store when damage lands below durableTo. The
+  ** drained bytes must reach disk before a root record can claim them. */
+  if( cs->staging.nRecentUncommitted > 0 ){
+    CRASH_CHECK_WRITE();
+    rc = csSyncFile(cs);
+    if( rc != SQLITE_OK ) goto commit_done;
+  }
+
   /* The root record is the commit point for the append-only chunk store. */
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];

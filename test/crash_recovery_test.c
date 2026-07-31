@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include "sqlite3.h"
+#include "chunk_store.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -1596,6 +1597,255 @@ static void test_30_crash_on_open(void){
 }
 
 
+/*
+** Test 31 support: a wrapper VFS that tracks which written byte ranges have
+** not yet been covered by an fsync. Every sealed root record carries a
+** durableTo watermark; recovery poisons the store when damage lands below
+** it, so a root record written while bytes below its watermark are still
+** unsynced is a durability-contract violation (a crash mid-final-fsync can
+** persist the root but tear the unsynced bytes, falsely poisoning a store
+** whose previous commit was intact).
+*/
+
+typedef struct DuraRange DuraRange;
+struct DuraRange { sqlite3_int64 off; sqlite3_int64 len; };
+
+typedef struct DuraFile DuraFile;
+struct DuraFile {
+  sqlite3_file base;
+  sqlite3_file *pReal;
+  int isMain;
+  DuraRange *aUnsynced;
+  int nUnsynced;
+  int nAlloc;
+};
+
+static sqlite3_vfs gDuraVfs;
+static sqlite3_vfs *gDuraBase = 0;
+static int gDuraViolations = 0;
+static int gDuraRootsSeen = 0;
+
+static int duraClose(sqlite3_file *pFile){
+  DuraFile *p = (DuraFile*)pFile;
+  sqlite3_free(p->aUnsynced);
+  p->aUnsynced = 0;
+  return p->pReal->pMethods->xClose(p->pReal);
+}
+
+static int duraRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOfst){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xRead(p->pReal, zBuf, iAmt, iOfst);
+}
+
+static int duraWrite(sqlite3_file *pFile, const void *zBuf, int iAmt,
+                     sqlite3_int64 iOfst){
+  DuraFile *p = (DuraFile*)pFile;
+  int rc = p->pReal->pMethods->xWrite(p->pReal, zBuf, iAmt, iOfst);
+  if( rc!=SQLITE_OK || !p->isMain ) return rc;
+  if( iAmt==1+CHUNK_MANIFEST_SIZE
+   && ((const unsigned char*)zBuf)[0]==CS_WAL_TAG_ROOT
+   && CS_READ_U32((const unsigned char*)zBuf+1)==CHUNK_STORE_MAGIC ){
+    sqlite3_int64 durableTo =
+      CS_READ_I64((const unsigned char*)zBuf+1+CS_MANIFEST_DURABLE_TO_OFF);
+    int i;
+    gDuraRootsSeen++;
+    /* The manifest header below CHUNK_MANIFEST_SIZE is outside the WAL
+    ** region durableTo protects; only WAL bytes count. */
+    for(i=0; i<p->nUnsynced; i++){
+      if( p->aUnsynced[i].off < durableTo
+       && p->aUnsynced[i].off + p->aUnsynced[i].len > CHUNK_MANIFEST_SIZE ){
+        gDuraViolations++;
+        break;
+      }
+    }
+  }
+  if( p->nUnsynced==p->nAlloc ){
+    int nNew = p->nAlloc ? p->nAlloc*2 : 64;
+    DuraRange *aNew = sqlite3_realloc(p->aUnsynced,
+                                      nNew*(int)sizeof(DuraRange));
+    if( !aNew ) return SQLITE_NOMEM;
+    p->aUnsynced = aNew;
+    p->nAlloc = nNew;
+  }
+  p->aUnsynced[p->nUnsynced].off = iOfst;
+  p->aUnsynced[p->nUnsynced].len = iAmt;
+  p->nUnsynced++;
+  return SQLITE_OK;
+}
+
+static int duraTruncate(sqlite3_file *pFile, sqlite3_int64 size){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xTruncate(p->pReal, size);
+}
+
+static int duraSync(sqlite3_file *pFile, int flags){
+  DuraFile *p = (DuraFile*)pFile;
+  int rc = p->pReal->pMethods->xSync(p->pReal, flags);
+  if( rc==SQLITE_OK ) p->nUnsynced = 0;
+  return rc;
+}
+
+static int duraFileSize(sqlite3_file *pFile, sqlite3_int64 *pSize){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xFileSize(p->pReal, pSize);
+}
+
+static int duraLock(sqlite3_file *pFile, int eLock){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xLock(p->pReal, eLock);
+}
+
+static int duraUnlock(sqlite3_file *pFile, int eLock){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xUnlock(p->pReal, eLock);
+}
+
+static int duraCheckReservedLock(sqlite3_file *pFile, int *pResOut){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xCheckReservedLock(p->pReal, pResOut);
+}
+
+static int duraFileControl(sqlite3_file *pFile, int op, void *pArg){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xFileControl(p->pReal, op, pArg);
+}
+
+static int duraSectorSize(sqlite3_file *pFile){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xSectorSize(p->pReal);
+}
+
+static int duraDeviceCharacteristics(sqlite3_file *pFile){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xDeviceCharacteristics(p->pReal);
+}
+
+static int duraShmMap(sqlite3_file *pFile, int iPg, int pgsz, int bExtend,
+                      void volatile **pp){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xShmMap(p->pReal, iPg, pgsz, bExtend, pp);
+}
+
+static int duraShmLock(sqlite3_file *pFile, int offset, int n, int flags){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xShmLock(p->pReal, offset, n, flags);
+}
+
+static void duraShmBarrier(sqlite3_file *pFile){
+  DuraFile *p = (DuraFile*)pFile;
+  p->pReal->pMethods->xShmBarrier(p->pReal);
+}
+
+static int duraShmUnmap(sqlite3_file *pFile, int deleteFlag){
+  DuraFile *p = (DuraFile*)pFile;
+  return p->pReal->pMethods->xShmUnmap(p->pReal, deleteFlag);
+}
+
+static int duraFetch(sqlite3_file *pFile, sqlite3_int64 iOfst, int iAmt,
+                     void **pp){
+  DuraFile *p = (DuraFile*)pFile;
+  if( p->pReal->pMethods->iVersion<3 || p->pReal->pMethods->xFetch==0 ){
+    *pp = 0;
+    return SQLITE_OK;
+  }
+  return p->pReal->pMethods->xFetch(p->pReal, iOfst, iAmt, pp);
+}
+
+static int duraUnfetch(sqlite3_file *pFile, sqlite3_int64 iOfst, void *pPage){
+  DuraFile *p = (DuraFile*)pFile;
+  if( p->pReal->pMethods->iVersion<3 || p->pReal->pMethods->xUnfetch==0 ){
+    return SQLITE_OK;
+  }
+  return p->pReal->pMethods->xUnfetch(p->pReal, iOfst, pPage);
+}
+
+static const sqlite3_io_methods gDuraIoMethods = {
+  3,
+  duraClose,
+  duraRead,
+  duraWrite,
+  duraTruncate,
+  duraSync,
+  duraFileSize,
+  duraLock,
+  duraUnlock,
+  duraCheckReservedLock,
+  duraFileControl,
+  duraSectorSize,
+  duraDeviceCharacteristics,
+  duraShmMap,
+  duraShmLock,
+  duraShmBarrier,
+  duraShmUnmap,
+  duraFetch,
+  duraUnfetch
+};
+
+static int duraOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
+                    int flags, int *pOutFlags){
+  DuraFile *p = (DuraFile*)pFile;
+  sqlite3_file *pReal = (sqlite3_file*)&p[1];
+  int rc;
+  int nName = zName ? (int)strlen(zName) : 0;
+  int isGcTmp = nName>=7 && strcmp(zName+nName-7, "-gc-tmp")==0;
+  int isLock = nName>=5 && strcmp(zName+nName-5, "-lock")==0;
+
+  memset(p, 0, sizeof(*p));
+  rc = gDuraBase->xOpen(gDuraBase, zName, pReal, flags, pOutFlags);
+  if( rc!=SQLITE_OK ) return rc;
+  p->pReal = pReal;
+  p->isMain = (flags & SQLITE_OPEN_MAIN_DB)!=0 && !isGcTmp && !isLock;
+  p->base.pMethods = &gDuraIoMethods;
+  return SQLITE_OK;
+}
+
+static int duraRegister(void){
+  if( gDuraBase ) return SQLITE_OK;
+  gDuraBase = sqlite3_vfs_find(0);
+  if( !gDuraBase ) return SQLITE_ERROR;
+  gDuraVfs = *gDuraBase;
+  gDuraVfs.zName = "dura-track";
+  gDuraVfs.szOsFile = (int)sizeof(DuraFile) + gDuraBase->szOsFile;
+  gDuraVfs.xOpen = duraOpen;
+  return sqlite3_vfs_register(&gDuraVfs, 0);
+}
+
+static void test_31_drain_durability_watermark(void){
+  const char *dbpath = fresh_db();
+  sqlite3 *db = 0;
+  int rc;
+
+  printf("--- Test 31: drained WAL bytes synced before durableTo claims them ---\n");
+
+  if( duraRegister()!=SQLITE_OK ){
+    check("test_31: tracking vfs registered", 0);
+    return;
+  }
+  /* Force mid-transaction drains at a tiny threshold so the multi-drain
+  ** commit shape is exercised without writing 64MB. */
+  setenv("DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT", "8192", 1);
+
+  rc = sqlite3_open_v2(dbpath, &db,
+                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE, "dura-track");
+  check("test_31: db opens on tracking vfs", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    execSql(db, "CREATE TABLE t31(a INTEGER PRIMARY KEY, b BLOB)");
+    execSql(db, "BEGIN");
+    execSql(db,
+      "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<200) "
+      "INSERT INTO t31 SELECT x, randomblob(2000) FROM c");
+    execSql(db, "COMMIT");
+    queryScalarText(db, "SELECT dolt_commit('-A', '-m', 't31')");
+    check("test_31: root records observed", gDuraRootsSeen>0);
+    check("test_31: no unsynced WAL bytes below durableTo", gDuraViolations==0);
+    check("test_31: rows committed",
+          queryScalarInt(db, "SELECT count(*) FROM t31", -1)==200);
+  }
+  sqlite3_close(db);
+  unsetenv("DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT");
+  removeDbFiles(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Crash Recovery Tests ===\n\n");
 
@@ -1633,6 +1883,7 @@ int main(void){
   test_28_rapid_small_commits();
   test_29_gc_after_many_commits();
   test_30_crash_on_open();
+  test_31_drain_durability_watermark();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
          nPass, nFail, nPass+nFail);
