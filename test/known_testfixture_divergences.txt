@@ -2089,12 +2089,6 @@ backup4 backup4-2.4  # chunk-store file sizes; in-memory doltlite backup rejecte
 backup4 backup4-3.2  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-3.3  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-3.4  # chunk-store file sizes; in-memory doltlite backup rejected
-# backup_malloc: raw sqlite3_backup_step page-copy fault points do not line up
-# with DoltLite's supported Tcl backup path. Native coverage in
-# doltlite_recover_backup_fault asserts clean OOM failure at the Tcl backup
-# entry point, source usability, and absent/valid target state.
-backup_malloc backup_malloc-1.transient.*{8}  # OOM fault-point shift + harness cascade
-backup_malloc backup_malloc-1.persistent.*{7}  # OOM fault-point shift + harness cascade
 busy2 busy2-2.1.2  # wal_checkpoint counters zero; checkpoint mode rejected
 busy2 busy2-2.1.3  # wal_checkpoint counters zero; checkpoint mode rejected
 busy2 busy2-2.1.4  # wal_checkpoint counters zero; checkpoint mode rejected
