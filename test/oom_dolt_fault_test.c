@@ -503,6 +503,7 @@ static const char *kDbBase = "/tmp/test_oom_dolt.db";
 #define CHILD_OK 0
 #define CHILD_ERR_OK 1
 #define CHILD_BUG 2
+#define CHILD_SWEPT 3
 
 static int verifyCatalogHash(sqlite3 *db, const ProllyHash *pHash){
   struct TableEntry *aTables = 0;
@@ -980,6 +981,185 @@ static int sweepOp(OpEntry *op){
   return opBugs;
 }
 
+/* A merge that fails while creating the merge commit must restore the
+** pre-merge session on the SAME connection: the merged catalog is already
+** live and staged at that point, so without the restore a plain
+** dolt_commit retry records the merged rows as a single-parent commit and
+** theirHead vanishes from ancestry. The reopen-based verification above
+** cannot see this — the residue lives in the failing connection. */
+static int childMergeRestoreCase(long long failAt){
+  sqlite3 *db = 0;
+  char zText[128];
+  int orc;
+  int rc;
+  int n;
+  int triggered;
+  int bug = 0;
+
+  cleanupFiles(kDbBase);
+  disableOom();
+  if( sqlite3_open(kDbBase, &db)!=SQLITE_OK
+   || setupBase(db)!=SQLITE_OK
+   || setupThreeWayMerge(db)!=SQLITE_OK ){
+    if( db ) sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    return CHILD_BUG;
+  }
+
+  /* Measure mode: count the merge's allocations without failing any, so
+  ** the parent can aim the sweep at the tail where the merge commit is
+  ** created and the branch advanced. */
+  if( failAt<=0 ){
+    char zPath[512];
+    FILE *f;
+    resetOom(0);
+    orc = execSilent(db, "SELECT dolt_merge('feat')");
+    n = (int)gOom.nCall;
+    disableOom();
+    sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    if( orc!=SQLITE_OK ) return CHILD_BUG;
+    snprintf(zPath, sizeof(zPath), "%s.ncall", kDbBase);
+    f = fopen(zPath, "w");
+    if( !f ) return CHILD_BUG;
+    fprintf(f, "%d\n", n);
+    fclose(f);
+    return CHILD_OK;
+  }
+
+  resetOom(failAt);
+  orc = execSilent(db, "SELECT dolt_merge('feat')");
+  triggered = gOom.triggered;
+  disableOom();
+
+  if( !triggered ){
+    sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    if( orc!=SQLITE_OK ){
+      fprintf(stderr,
+          "  BUG[merge_restore,N=%lld]: merge rc=%d without injected OOM\n",
+          failAt, orc);
+      return CHILD_BUG;
+    }
+    return CHILD_SWEPT;
+  }
+
+  if( orc!=SQLITE_OK ){
+    if( !isAcceptableErr(orc) ){
+      fprintf(stderr,
+          "  BUG[merge_restore,N=%lld]: merge rc=%d (not acceptable)\n",
+          failAt, orc);
+      bug = 1;
+    }
+    rc = querySingleInt(db, "SELECT count(*) FROM dolt_status", &n);
+    if( rc!=SQLITE_OK || n!=0 ){
+      fprintf(stderr,
+          "  BUG[merge_restore,N=%lld]: failed merge left dolt_status "
+          "rows (rc=%d n=%d)\n", failAt, rc, n);
+      bug = 1;
+    }
+    rc = querySingleInt(db, "SELECT EXISTS(SELECT 1 FROM t WHERE a=20)", &n);
+    if( rc!=SQLITE_OK || n!=0 ){
+      fprintf(stderr,
+          "  BUG[merge_restore,N=%lld]: failed merge left theirs rows in "
+          "the working tree (rc=%d n=%d)\n", failAt, rc, n);
+      bug = 1;
+    }
+    rc = querySingleText(db, "SELECT message FROM dolt_log LIMIT 1",
+                         zText, sizeof(zText));
+    if( rc!=SQLITE_OK || strcmp(zText, "main-side")!=0 ){
+      fprintf(stderr,
+          "  BUG[merge_restore,N=%lld]: failed merge moved HEAD "
+          "(rc=%d msg=%s)\n", failAt, rc, zText);
+      bug = 1;
+    }
+  }
+
+  sqlite3_close(db);
+  cleanupFiles(kDbBase);
+  if( bug ) return CHILD_BUG;
+  return orc==SQLITE_OK ? CHILD_OK : CHILD_ERR_OK;
+}
+
+static int runMergeRestoreChild(long long failAt){
+  pid_t pid;
+  int status = 0;
+  fflush(stdout);
+  fflush(stderr);
+  pid = fork();
+  if( pid<0 ){
+    fprintf(stderr, "  fork failed at N=%lld\n", failAt);
+    return -1;
+  }
+  if( pid==0 ){
+    int rc = childMergeRestoreCase(failAt);
+    fflush(stdout);
+    fflush(stderr);
+    _exit(rc);
+  }
+  if( waitpid(pid, &status, 0)<0 ){
+    fprintf(stderr, "  waitpid failed at N=%lld\n", failAt);
+    return -1;
+  }
+  if( WIFSIGNALED(status) ){
+    fprintf(stderr, "  BUG[merge_restore,N=%lld]: child killed by signal %d\n",
+            failAt, WTERMSIG(status));
+    return CHILD_BUG;
+  }
+  return WIFEXITED(status) ? WEXITSTATUS(status) : CHILD_BUG;
+}
+
+static int sweepMergeRestore(void){
+  int opBugs = 0;
+  int nOk = 0;
+  int nErrOk = 0;
+  long long nStart;
+  long long nEnd;
+  long long nTotal = 0;
+  long long n;
+
+  /* The commit-creation and branch-advance code this sweep exists to cover
+  ** sits at the end of the merge's allocation sequence, far past a
+  ** front-anchored MAX_FAIL_N window. Count the full merge once, then
+  ** sweep a window anchored at the tail. */
+  if( runMergeRestoreChild(0)!=CHILD_OK ){
+    fprintf(stderr, "  BUG[merge_restore]: allocation measure run failed\n");
+    return 1;
+  }
+  {
+    char zPath[512];
+    FILE *f;
+    snprintf(zPath, sizeof(zPath), "%s.ncall", kDbBase);
+    f = fopen(zPath, "r");
+    if( !f || fscanf(f, "%lld", &nTotal)!=1 || nTotal<=0 ){
+      if( f ) fclose(f);
+      fprintf(stderr, "  BUG[merge_restore]: bad allocation count\n");
+      return 1;
+    }
+    fclose(f);
+    remove(zPath);
+  }
+  nEnd = nTotal + 2;
+  nStart = nTotal > MAX_FAIL_N ? nTotal - (MAX_FAIL_N - 3) : 1;
+
+  for( n=nStart; n<=nEnd; n++ ){
+    int ec = runMergeRestoreChild(n);
+    if( ec<0 ) return 1;
+    if( ec==CHILD_BUG ){
+      opBugs++;
+    }else if( ec==CHILD_ERR_OK ){
+      nErrOk++;
+    }else{
+      nOk++;
+    }
+  }
+  printf("  [merge_commit_restore] swept N=%lld..%lld of %lld, "
+         "ok=%d, errOk=%d, bugs=%d\n",
+         nStart, nEnd, nTotal, nOk, nErrOk, opBugs);
+  fflush(stdout);
+  return opBugs;
+}
+
 int main(void){
   const char *zOnlyOp = getenv("OOM_DOLT_OP");
   int rc = installOomAllocator();
@@ -1010,6 +1190,17 @@ int main(void){
         nPass++;
       }
       totalBugs += opBugs;
+    }
+    if( !zOnlyOp || strcmp(zOnlyOp, "merge_commit_restore")==0 ){
+      int mergeBugs;
+      printf("[extra] sweeping op: merge_commit_restore\n");
+      mergeBugs = sweepMergeRestore();
+      if( mergeBugs>0 ){
+        nFail++;
+      }else{
+        nPass++;
+      }
+      totalBugs += mergeBugs;
     }
     printf("\n%d ops passed, %d ops surfaced bugs\n", nPass, nFail);
     printf("Total fault-iterations that surfaced bugs: %d\n", totalBugs);

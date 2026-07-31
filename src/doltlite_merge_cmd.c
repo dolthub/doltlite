@@ -289,6 +289,10 @@ static int mergeRefCreateMergeCommit(
   rc = doltliteCreateAndStoreCommit(db, pOurHead, pMergedCat,
       msg, NULL, NULL, pTheirHead, 1, &commitHash);
   if( rc!=SQLITE_OK ){
+    /* The merged catalog is already live and staged; leaving it in place
+    ** lets a retry with plain dolt_commit record the merged data as a
+    ** single-parent commit, silently dropping theirHead from ancestry. */
+    (void)doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
     sqlite3_result_error(context, "failed to create merge commit", -1);
     return SQLITE_ERROR;
   }
