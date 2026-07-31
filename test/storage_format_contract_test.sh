@@ -59,7 +59,9 @@ fi
 dltest_pass
 
 expected_sha="$(sed -n 's/^sha256=//p' "$CORPUS_MANIFEST")"
-actual_sha="$(python3 -c "import hashlib; print(hashlib.sha256(open('$CORPUS_DB','rb').read()).hexdigest())")"
+actual_sha="$(python3 -c \
+  "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
+  "$CORPUS_DB")"
 if [[ -n "$expected_sha" && "$actual_sha" = "$expected_sha" ]]; then
   dltest_pass
 else
@@ -67,10 +69,10 @@ else
 fi
 
 hdr_ver="$(python3 -c "
-import re
-h=open('$REPO_ROOT/src/chunk_store.h').read()
+import re,sys
+h=open(sys.argv[1]).read()
 print(re.search(r'#define CHUNK_STORE_VERSION\s+(\d+)', h).group(1))
-")"
+" "$REPO_ROOT/src/chunk_store.h")"
 man_ver="$(sed -n 's/^chunk_store_version=//p' "$CORPUS_MANIFEST")"
 if [[ "$hdr_ver" = "12" && "$man_ver" = "12" ]]; then
   dltest_pass
@@ -80,11 +82,11 @@ fi
 
 if python3 -c "
 import sys
-b=open('$CORPUS_DB','rb').read(8)
+b=open(sys.argv[1],'rb').read(8)
 sys.exit(0 if len(b)==8
               and int.from_bytes(b[:4],'little')==0x444C5443
               and int.from_bytes(b[4:8],'little')==12 else 1)
-"; then
+" "$CORPUS_DB"; then
   dltest_pass
 else
   dltest_fail "corpus_v12_header" "  corpus header is not chunk-store version 12"
@@ -139,12 +141,13 @@ run_test "corpus_v12_post_gc_rows" \
 patch_u32() {
   local src="$1" dst="$2" off="$3" value="$4"
   python3 -c "
-import shutil
-shutil.copyfile('$src', '$dst')
-with open('$dst', 'r+b') as f:
-    f.seek(int('$off'))
-    f.write(int('$value', 0).to_bytes(4, 'little'))
-"
+import shutil,sys
+src,dst,off,value=sys.argv[1:]
+shutil.copyfile(src, dst)
+with open(dst, 'r+b') as f:
+    f.seek(int(off))
+    f.write(int(value, 0).to_bytes(4, 'little'))
+" "$src" "$dst" "$off" "$value"
 }
 
 expect_exact_notadb() {
@@ -178,11 +181,11 @@ fresh_out="$("$DOLTLITE" "$FRESH" "CREATE TABLE x(i INT PRIMARY KEY); SELECT len
 fresh_status=$?
 if [[ "$fresh_status" -eq 0 && "$fresh_out" = "40" ]] && python3 -c "
 import sys
-b=open('$FRESH','rb').read(8)
+b=open(sys.argv[1],'rb').read(8)
 sys.exit(0 if len(b)==8
               and int.from_bytes(b[:4],'little')==0x444C5443
               and int.from_bytes(b[4:8],'little')==12 else 1)
-"; then
+" "$FRESH"; then
   dltest_pass
 else
   dltest_fail "fresh_write_v12_header" "  fresh write failed or did not stamp version 12"
