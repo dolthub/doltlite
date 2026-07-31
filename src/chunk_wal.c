@@ -131,7 +131,8 @@ void csFreeReloadState(ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
 }
 
-/* Cap recovery scans; valid writer gaps are sector-bounded. */
+/* Cap the zero-tail probe; valid writer gaps are sector-bounded, so a
+** legitimate preallocated tail never hides data past this window. */
 #define CS_WAL_SCAN_MAX (64*1024*1024)
 
 /* True if the WAL region from pos to walSize is zero as far as the scan
@@ -169,7 +170,11 @@ static int csWalResolveDamage(
   i64 q = damagePos + 1;
   i64 last = walSize - 5;
   i64 damageAbs = cs->wal.iWalOffset + damagePos;
-  if( last > damagePos + CS_WAL_SCAN_MAX ) last = damagePos + CS_WAL_SCAN_MAX;
+  /* The scan must reach the end of the WAL: a single batch can span far
+  ** more than any fixed window (drains plus large chunks), and a sealed
+  ** root past a capped window proves the damaged region was committed.
+  ** Stopping early would default that case to TORN, silently rewinding
+  ** committed batches that the next append then overwrites. */
   *pAction = CS_DAMAGE_TORN;
   *pResume = 0;
   while( q <= last ){
