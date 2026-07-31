@@ -67,7 +67,10 @@ static void csReleaseReplayState(
     csReleaseIndexBuf(pSaved->aIndex, pSaved->aIndexMmapBase,
                        pSaved->aIndexMmapSize);
   }
-  csFreeSavedRefsState(&pSaved->refs);
+  /* The saved refs pointers are never freed here: either the replay adopted
+  ** a new refs state (the old arrays were freed inline before adoption) or
+  ** the live store still owns them. Tail replays run on stores with
+  ** populated refs, where freeing the snapshot would be a double free. */
   memset(pSaved, 0, sizeof(*pSaved));
 }
 
@@ -221,11 +224,23 @@ static int csWalResolveDamage(
   return SQLITE_OK;
 }
 
-int csReplayWal(ChunkStore *cs){
+/* Replay WAL records from startPos (an offset relative to iWalOffset) to
+** the end of the file, folding new chunks and root records into the
+** current in-memory state. A full recovery replay passes 0 with fresh
+** state; a refresh after a peer append passes the committed boundary
+** (nWalData) so only the new tail is read and hashed, instead of paying a
+** full reopen that replays everything since the last gc. */
+int csReplayWalRange(ChunkStore *cs, i64 startPos){
   i64 walSize;
   ChunkStoreReplayState saved;
+  ProllyHash refsHashBefore;
+  int nChunksBefore;
+  i64 nWalDataBefore;
+  i64 iFileSizeBefore;
+  u8 cleanCloseBefore;
+  u8 recoveredMidStreamBefore;
   i64 pos;
-  i64 lastBoundary = 0;
+  i64 lastBoundary = startPos;
   i64 resumePos = 0;
   int damageAction = 0;
   int sawMidStream = 0;
@@ -251,6 +266,7 @@ int csReplayWal(ChunkStore *cs){
     walSize = fileSize - cs->wal.iWalOffset;
     cs->file.iFileSize = fileSize;
   }
+  if( startPos>0 && walSize<=startPos ) return SQLITE_OK;
   if( walSize <= 0 ){
     /* Without a WAL tail, chunk_count must describe the compacted index. */
     if( cs->index.nIndex > 0 && cs->index.nChunks != cs->index.nIndex ){
@@ -264,11 +280,20 @@ int csReplayWal(ChunkStore *cs){
   }
 
   csCaptureReplayState(cs, &saved);
+  /* A range replay mutates the live store; a failure must put back every
+  ** scalar the loop touches, not just the captured pointers (the fresh-open
+  ** caller discards the whole store on error and never noticed). */
+  refsHashBefore = cs->refs.refsHash;
+  nChunksBefore = cs->index.nChunks;
+  nWalDataBefore = cs->wal.nWalData;
+  iFileSizeBefore = cs->file.iFileSize;
+  cleanCloseBefore = cs->wal.cleanCloseMarker;
+  recoveredMidStreamBefore = cs->wal.recoveredMidStream;
 
   cs->wal.nWalData = walSize;
   cs->wal.cleanCloseMarker = 0;
 
-  pos = 0;
+  pos = startPos;
   while( pos < walSize ){
     u8 aPrefix[CS_WAL_CHUNK_HDR_SIZE];
     u8 tag = 0;
@@ -353,6 +378,16 @@ int csReplayWal(ChunkStore *cs){
       {
         int existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex, &hash);
         ChunkIndexEntry *e = 0;
+        /* A tail replay runs with the committed recent list still live;
+        ** admitting a hash it already holds would put two entries for one
+        ** chunk into gc's stream and brick the store at the next open. */
+        if( existing < 0 && cs->staging.nRecent > 0 ){
+          int idxRecent = -1;
+          if( csSearchRecent(cs, &hash, &idxRecent)==SQLITE_OK
+           && idxRecent>=0 ){
+            existing = idxRecent;
+          }
+        }
         if( existing < 0 ){
           rc = csGrowPending(cs);
           if( rc != SQLITE_OK ) goto replay_error;
@@ -448,8 +483,11 @@ int csReplayWal(ChunkStore *cs){
   /* Do not let damaged initial WAL bytes masquerade as a fresh empty store.
   ** A legitimate preallocated tail reaches the zero-tail case without setting
   ** sawDamage; once non-zero WAL bytes are malformed, the file is corrupt even
-  ** if no root manifest can be replayed. */
-  if( sawDamage
+  ** if no root manifest can be replayed. Full replays only: a tail replay
+  ** knows committed data precedes startPos, so tail damage with no sealing
+  ** root is an ordinary torn tail. */
+  if( startPos == 0
+   && sawDamage
    && nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->index.nIndex == 0 ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
@@ -466,7 +504,8 @@ int csReplayWal(ChunkStore *cs){
 
   cs->staging.nPending = nRootedPending;
 
-  if( nRootRecordsSeen == 0
+  if( startPos == 0
+   && nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->index.nIndex == 0
    && !sawMidStream && !cs->wal.recoveredMidStream ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
@@ -486,7 +525,10 @@ int csReplayWal(ChunkStore *cs){
     csPendHTClear(cs);
   }
 
-  if( !prollyHashIsEmpty(&cs->refs.refsHash) ){
+  /* A tail replay that saw no new root leaves refsHash untouched, and the
+  ** blob is content-addressed, so the in-memory refs are already current. */
+  if( !prollyHashIsEmpty(&cs->refs.refsHash)
+   && (startPos==0 || nRootRecordsSeen>0) ){
     u8 *refsData = 0;
     int nRefsData = 0;
     int rc2 = chunkStoreGet(cs, &cs->refs.refsHash, &refsData, &nRefsData);
@@ -504,12 +546,18 @@ int csReplayWal(ChunkStore *cs){
     }
   }
   if( haveTmpRefs ){
+    /* Validate the incoming refs before the point of no return: once the
+    ** live arrays are freed, the saved snapshot's pointers are dead and
+    ** the error path must not restore them. */
+    rc = csEnsureDefaultBranch(&tmpRefs);
+    if( rc!=SQLITE_OK ) goto replay_error;
     csFreeRefsState(cs);
     csAdoptRefsState(cs, &tmpRefs);
     haveTmpRefs = 0;
+  }else{
+    rc = csEnsureDefaultBranch(cs);
+    if( rc!=SQLITE_OK ) goto replay_error;
   }
-  rc = csEnsureDefaultBranch(cs);
-  if( rc!=SQLITE_OK ) goto replay_error;
 
   csReleaseReplayState(cs, &saved);
   return SQLITE_OK;
@@ -517,7 +565,17 @@ int csReplayWal(ChunkStore *cs){
 replay_error:
   if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
   csRollbackReplayState(cs, &saved, nPendingBefore);
+  cs->refs.refsHash = refsHashBefore;
+  cs->index.nChunks = nChunksBefore;
+  cs->wal.nWalData = nWalDataBefore;
+  cs->file.iFileSize = iFileSizeBefore;
+  cs->wal.cleanCloseMarker = cleanCloseBefore;
+  cs->wal.recoveredMidStream = recoveredMidStreamBefore;
   return rc;
+}
+
+int csReplayWal(ChunkStore *cs){
+  return csReplayWalRange(cs, 0);
 }
 
 #endif

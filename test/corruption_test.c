@@ -1008,6 +1008,99 @@ static void test_damage_far_before_sealing_root_poisons(void){
   removeDb(dbpath);
 }
 
+/* A refresh after a peer append absorbs the new tail without a full
+** reload. The observable contract is identical either way: new chunks,
+** roots, and refs become visible; a torn tail past the last root is
+** rewound; repeated increments keep working. */
+static void test_peer_append_refresh_visibility(void){
+  const char *dbpath = "/tmp/test_corr_tail_refresh.db";
+  ChunkStore csA, csB;
+  ProllyHash h1, h2, h3, tip;
+  unsigned char blob1[64], blob2[64], blob3[64];
+  u8 *pData = 0;
+  int nData = 0;
+  int found;
+  int rc;
+
+  printf("--- Test 24: Peer append visible through refresh ---\n");
+
+  removeDb(dbpath);
+  memset(blob1, 0x41, sizeof(blob1));
+  memset(blob2, 0x42, sizeof(blob2));
+  memset(blob3, 0x43, sizeof(blob3));
+
+  check("tail_open_a", chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
+      ==SQLITE_OK);
+  check("tail_a_put1", chunkStorePut(&csA, blob1, sizeof(blob1), &h1)
+      ==SQLITE_OK);
+  check("tail_a_commit1", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  check("tail_open_b", chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+
+  /* Peer B commits a chunk and a branch; A's next lock-time refresh must
+  ** surface both. */
+  check("tail_b_lock", chunkStoreLockAndRefresh(&csB)==SQLITE_OK);
+  check("tail_b_put2", chunkStorePut(&csB, blob2, sizeof(blob2), &h2)
+      ==SQLITE_OK);
+  check("tail_b_branch", chunkStoreAddBranch(&csB, "peer_br", &h2)==SQLITE_OK);
+  check("tail_b_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
+  check("tail_b_commit", chunkStoreCommit(&csB)==SQLITE_OK);
+  chunkStoreUnlock(&csB);
+
+  check("tail_a_refresh1", chunkStoreLockAndRefresh(&csA)==SQLITE_OK);
+  rc = chunkStoreGet(&csA, &h2, &pData, &nData);
+  check("tail_a_sees_peer_chunk",
+      rc==SQLITE_OK && nData==(int)sizeof(blob2)
+      && pData && memcmp(pData, blob2, sizeof(blob2))==0);
+  sqlite3_free(pData);
+  pData = 0;
+  check("tail_a_sees_peer_branch",
+      chunkStoreFindBranch(&csA, "peer_br", &tip)==SQLITE_OK
+      && prollyHashCompare(&tip, &h2)==0);
+  chunkStoreUnlock(&csA);
+
+  /* Second increment through the same handle. */
+  check("tail_b_lock2", chunkStoreLockAndRefresh(&csB)==SQLITE_OK);
+  check("tail_b_put3", chunkStorePut(&csB, blob3, sizeof(blob3), &h3)
+      ==SQLITE_OK);
+  check("tail_b_commit3", chunkStoreCommit(&csB)==SQLITE_OK);
+  chunkStoreUnlock(&csB);
+
+  /* A crashed peer's torn tail past the last root must rewind, not fail
+  ** the refresh or hide the committed data before it. */
+  {
+    int fd = open(dbpath, O_WRONLY|O_APPEND);
+    unsigned char junk[512];
+    memset(junk, 0xA7, sizeof(junk));
+    check("tail_junk_appended",
+        fd>=0 && write(fd, junk, sizeof(junk))==(ssize_t)sizeof(junk));
+    if( fd>=0 ) close(fd);
+  }
+
+  check("tail_a_refresh2", chunkStoreLockAndRefresh(&csA)==SQLITE_OK);
+  rc = chunkStoreGet(&csA, &h3, &pData, &nData);
+  check("tail_a_sees_second_chunk",
+      rc==SQLITE_OK && nData==(int)sizeof(blob3)
+      && pData && memcmp(pData, blob3, sizeof(blob3))==0);
+  sqlite3_free(pData);
+  pData = 0;
+  rc = chunkStoreGet(&csA, &h1, &pData, &nData);
+  check("tail_a_keeps_own_chunk", rc==SQLITE_OK && nData==(int)sizeof(blob1));
+  sqlite3_free(pData);
+  pData = 0;
+  found = 0;
+  check("tail_a_boundary_rewound",
+      chunkStoreReadDiskBranchTip(&csA, "peer_br", &tip, &found)==SQLITE_OK
+      && found && prollyHashCompare(&tip, &h2)==0);
+  chunkStoreUnlock(&csA);
+
+  chunkStoreClose(&csB);
+  chunkStoreClose(&csA);
+  removeDb(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -1033,6 +1126,7 @@ int main(void){
   test_corrupt_index_entry_offset();
   test_corrupt_index_order();
   test_damage_far_before_sealing_root_poisons();
+  test_peer_append_refresh_visibility();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);

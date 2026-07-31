@@ -41,6 +41,10 @@ void walStateSetDataSize(WalState *w, i64 nData);
 
 struct ChunkStore;
 int csReplayWal(struct ChunkStore *cs);
+/* Replay only WAL records at offsets >= startPos (relative to iWalOffset)
+** on top of the current in-memory state; csReplayWal is startPos==0 with
+** fresh state. */
+int csReplayWalRange(struct ChunkStore *cs, i64 startPos);
 void csCaptureReloadState(struct ChunkStore *cs, ChunkStoreReloadState *pSaved);
 void csFreeReloadState(ChunkStoreReloadState *pSaved);
 void csAdoptOpenedStoreState(struct ChunkStore *pDst, struct ChunkStore *pSrc);

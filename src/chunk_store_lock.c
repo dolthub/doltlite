@@ -301,11 +301,16 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   return rc;
 }
 
-static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
+/* pGrewOnly (optional) is set when the only detected change is the file
+** growing in place — the append-only case a tail replay can absorb without
+** a full reload. */
+static int csDetectExternalChanges(ChunkStore *cs, int *pChanged,
+                                   int *pGrewOnly){
   int bMoved = 0;
   int rc;
 
   *pChanged = 0;
+  if( pGrewOnly ) *pGrewOnly = 0;
   if( cs->isMemory ) return SQLITE_OK;
 
   if( cs->file.pFile==0 ){
@@ -351,18 +356,20 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     if( rc!=SQLITE_OK ) return rc;
     if( fileSize > cs->file.iFileSize ){
       *pChanged = 1;
+      if( pGrewOnly ) *pGrewOnly = 1;
     }
   }
   return SQLITE_OK;
 }
 
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
-  return csDetectExternalChanges(cs, pChanged);
+  return csDetectExternalChanges(cs, pChanged, 0);
 }
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
+  int bGrewOnly = 0;
   if( cs->isMemory ){
     *pChanged = 0;
     return SQLITE_OK;
@@ -380,9 +387,52 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   if( cs->snapshotPinned ) return SQLITE_OK;
-  rc = csDetectExternalChanges(cs, &bChanged);
+  rc = csDetectExternalChanges(cs, &bChanged, &bGrewOnly);
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
+
+  /* A peer append to this append-only store only needs the new tail
+  ** replayed on top of the current state. The full reload — a reopen that
+  ** replays and re-hashes every WAL byte since the last gc — stays for
+  ** moved/replaced files and for any state a tail replay cannot absorb, so
+  ** its cost is no longer paid per write transaction per peer commit. */
+  if( bGrewOnly
+   && cs->file.pFile
+   && !cs->corruptMidStream
+   && !cs->readOnly
+   && cs->staging.nPending==0
+   && cs->staging.nRecentUncommitted==0
+   && prollyHashCompare(&cs->refs.refsHash,
+                        &cs->refs.committedRefsHash)==0 ){
+    /* The replay must not read a writer's in-flight append as a torn tail,
+    ** so it runs under the graph lock; a caller without it takes the lock
+    ** just for the replay. A busy lock falls through to the reload, which
+    ** has always run unserialized here and settles on the last sealed
+    ** root either way. */
+    int haveLock = csFileLockHeld(CS_GRAPH_LOCK(cs));
+    sqlite3_file *pTmpLock = 0;
+    char *zTmpLockName = 0;
+    int lockRc = haveLock ? SQLITE_OK
+               : csFileLock(cs->file.pVfs, cs->file.zFilename,
+                            &pTmpLock, &zTmpLockName);
+    if( lockRc==SQLITE_OK ){
+      rc = csReplayWalRange(cs, cs->wal.nWalData);
+      if( !haveLock ) csFileUnlock(pTmpLock, &zTmpLockName);
+      if( rc==SQLITE_OK ){
+        /* Mirror the open path: adopted refs are the committed disk state
+        ** (a stale committedRefsHash would make the next commit's
+        ** preserve-refs dance restore pre-replay refs over them), and tail
+        ** damage below a sealing root's durability watermark poisons the
+        ** store. */
+        csMarkRefsCommitted(cs);
+        if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
+        *pChanged = 1;
+        return SQLITE_OK;
+      }
+    }
+    /* Fall through: the full reload re-derives everything from disk and
+    ** gives the authoritative verdict on whatever the tail replay hit. */
+  }
 
   rc = csReloadFromDisk(cs);
   if( rc!=SQLITE_OK ) return rc;
