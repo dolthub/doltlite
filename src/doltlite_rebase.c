@@ -472,6 +472,7 @@ static int doltliteRebaseLinearReplay(
     expected[0].pTip = &headHash;
     expected[1].zBranch = zWorking;
     expected[1].pTip = &curHead;
+    doltliteTestCrashFinalize("rebase");
     rc = doltliteMutateRefsExpected(
         db, expected, 2, rebaseFinalizeLinearRefs, &refsCtx);
   }
@@ -1409,6 +1410,7 @@ static void doltliteRebaseInteractiveContinue(
     expected[0].pTip = &expectedOrigHead;
     expected[1].zBranch = zWorking;
     expected[1].pTip = &curHead;
+    doltliteTestCrashFinalize("rebase");
     rc = doltliteMutateRefsExpected(
         db, expected, 2, rebaseFinalizeContinueRefs, &refsCtx);
   }
