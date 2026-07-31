@@ -908,6 +908,67 @@ static void test_corrupt_index_order(void){
 }
 
 
+static void test_crash_garbage_truncated_on_write(void){
+  const char *dbpath = "/tmp/test_corr_garbage_reclaim.db";
+  off_t szWithGarbage;
+  int rc;
+
+  printf("--- Test 23: Crash garbage reclaimed by next write ---\n");
+
+  check("create_good_23", create_good_db(dbpath)==0);
+
+  /* A crash tail much larger than anything the next transaction appends,
+  ** so overwrite-in-place cannot mask a missing truncation. */
+  {
+    int fd = open(dbpath, O_WRONLY|O_APPEND);
+    check("open_for_append_23", fd >= 0);
+    if( fd >= 0 ){
+      unsigned char garbage[4096];
+      int i;
+      memset(garbage, 0xAA, sizeof(garbage));
+      for( i=0; i<64; i++ ){
+        if( write(fd, garbage, sizeof(garbage))!=(ssize_t)sizeof(garbage) ){
+          break;
+        }
+      }
+      check("append_garbage_23", i==64);
+      close(fd);
+    }
+  }
+  szWithGarbage = file_size(dbpath);
+  check("garbage_present_23", szWithGarbage > 0);
+
+  /* Recovery rewinds the logical EOF past the garbage; the first write
+  ** transaction reloads under the graph lock and must reclaim the dead
+  ** physical tail, otherwise every later write transaction reloads and
+  ** replays the whole WAL again. */
+  {
+    sqlite3 *db = 0;
+    rc = sqlite3_open(dbpath, &db);
+    check("reopen_after_garbage_23", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("write_after_garbage_23",
+        execSql(db, "INSERT INTO t1 VALUES(6, 'zeta')")==SQLITE_OK);
+    }
+    if( db ) sqlite3_close(db);
+  }
+
+  check("crash_garbage_truncated_23", file_size(dbpath) < szWithGarbage);
+
+  {
+    sqlite3 *db = 0;
+    rc = sqlite3_open(dbpath, &db);
+    check("reopen_after_truncate_23", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
+      check("rows_intact_after_truncate_23", strcmp(r, "6")==0);
+    }
+    if( db ) sqlite3_close(db);
+  }
+
+  removeDb(dbpath);
+}
+
 /* Body offset of the first WAL chunk record whose declared length matches. */
 static off_t wal_chunk_body_offset_by_len(const char *path, unsigned int want){
   long long walOffset = read_i64_le_at(path, 84);
@@ -1033,6 +1094,7 @@ int main(void){
   test_corrupt_index_entry_offset();
   test_corrupt_index_order();
   test_damage_far_before_sealing_root_poisons();
+  test_crash_garbage_truncated_on_write();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
