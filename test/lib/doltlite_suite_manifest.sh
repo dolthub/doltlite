@@ -5,6 +5,7 @@ doltlite_all_suites() {
 build_artifacts_guard_test.sh
 sqlite_compatibility_contract_test.sh
 concurrency_contract_test.sh
+storage_format_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
 doltlite_staging.sh
@@ -129,6 +130,7 @@ doltlite_windows_suites() {
 build_artifacts_guard_test.sh
 sqlite_compatibility_contract_test.sh
 concurrency_contract_test.sh
+storage_format_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
 doltlite_staging.sh
