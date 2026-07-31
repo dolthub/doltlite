@@ -3,6 +3,8 @@
 doltlite_all_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
+sqlite_compatibility_contract_test.sh
+concurrency_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
 doltlite_staging.sh
@@ -125,6 +127,8 @@ doltlite_coverage_suites() {
 doltlite_windows_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
+sqlite_compatibility_contract_test.sh
+concurrency_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
 doltlite_staging.sh
