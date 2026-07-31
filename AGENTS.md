@@ -7,11 +7,17 @@ Guidance for AI coding agents working in this repository.
 DoltLite is a fork of SQLite that replaces the B-tree storage engine with a
 content-addressed [prolly tree](https://docs.dolthub.com/architecture/storage-engine/prolly-tree),
 giving a SQL database Git-like version control (branch / commit / merge / diff)
-while staying embeddable as a single library. Everything **above** SQLite's
-`btree.h` interface — tokenizer, parser, planner, VDBE — is upstream SQLite and
-is left untouched. Everything **below** it — the pager and on-disk format — is
-replaced by a prolly-tree engine backed by a single-file, content-addressed
-chunk store.
+while staying embeddable as a single library. SQLite's `btree.h` interface is
+the architectural seam: the tokenizer, parser, planner, and VDBE remain
+upstream-derived, while a DoltLite-format primary database replaces SQLite's
+B-tree, pager, and on-disk format with a prolly-tree engine backed by a
+single-file, content-addressed chunk store.
+
+The `btree.h` seam is not a do-not-edit boundary. Changes to upstream-derived
+code above it are allowed when DoltLite integration or correctness requires
+them, but they must be narrowly scoped and guarded by `DOLTLITE_PROLLY` so a
+`DOLTLITE_PROLLY=0` build retains stock SQLite behavior. Prefer solving a
+storage-engine concern below the seam when the interface permits it.
 
 DoltLite is developed on **Git** and hosted on **GitHub**
 (<https://github.com/dolthub/doltlite>). Unlike upstream SQLite, it **uses
@@ -67,8 +73,10 @@ make DOLTLITE_PROLLY=0 sqlite3   # stock SQLite, for oracle/perf comparison
 
 ## Source layout
 
-- **Upstream SQLite core** — `src/*.c` (parser, planner, `vdbe.c`, `where*.c`,
-  …), untouched above `btree.h`. Master header `src/sqliteInt.h`.
+- **Upstream-derived SQLite core** — `src/*.c` (parser, planner, `vdbe.c`,
+  `where*.c`, …), kept close to upstream above `btree.h`; DoltLite-specific
+  changes there are guarded by `DOLTLITE_PROLLY`. Master header
+  `src/sqliteInt.h`.
 - **Storage engine** — `src/prolly_*.c` (prolly-tree node, cursor, mutmap,
   diff, three-way merge, chunker, cache, hashing) and `src/chunk_*.c`
   (content-addressed chunk store, WAL, refs, staging, file format).

@@ -6,10 +6,11 @@
 
 A SQLite fork that replaces the B-tree storage engine with a content-addressed
 [prolly tree](https://docs.dolthub.com/architecture/storage-engine/prolly-tree),
-enabling Git-like version control on a SQL database. Everything
-above SQLite's `btree.h` interface (VDBE, query planner, parser) is untouched.
-Everything below it -- the pager and on-disk format -- is replaced with a
-prolly tree engine backed by a single-file content-addressed chunk store.
+enabling Git-like version control on a SQL database. SQLite's `btree.h`
+interface is the architectural seam: the parser, query planner, and VDBE remain
+upstream-derived and are kept close to upstream, while a DoltLite-format
+primary database replaces SQLite's B-tree, pager, and on-disk format with a
+prolly-tree engine backed by a single-file, content-addressed chunk store.
 
 [Why DoltLite?](https://www.dolthub.com/blog/2026-04-27-why-doltlite/) DoltLite
 can be embedded in any language enabling local-first use cases for [Dolt](https://github.com/dolthub/dolt/).
@@ -57,7 +58,9 @@ Download `doltlite-tools-win-x64-<ver>.zip` from
 
 ## Bindings
 
-Language-specific wrappers around `libdoltlite`. Each one exposes the full `sqlite3_*` C API plus the dolt version-control functions.
+Language-specific wrappers around `libdoltlite`. Each one exposes the bundled
+SQLite version's public `sqlite3_*` API surface plus the Dolt version-control
+functions, subject to the [storage-engine exceptions](#sqlite-compatibility).
 
 | Language | Distribution | Source |
 |---|---|---|
@@ -135,13 +138,15 @@ make -C ext/wasm dist
 
 ## Using as a C Library
 
-Doltlite exposes the full SQLite C API (`sqlite3_open`, `sqlite3_exec`,
-`sqlite3_prepare_v2`, ...) through `doltlite.h`. Existing C programs port
-by changing `#include "sqlite3.h"` to `#include <doltlite.h>` and linking
-against `libdoltlite` instead of `libsqlite3` — no other source changes —
-to get version control. The build produces `libdoltlite.a` (static) and
-`libdoltlite.dylib`/`.so` (shared) with the full prolly tree engine and all
-Dolt functions included.
+Doltlite exposes the bundled SQLite version's public C API declarations
+(`sqlite3_open`, `sqlite3_exec`, `sqlite3_prepare_v2`, ...) through
+`doltlite.h`, and exports the same `sqlite3_*` symbol names. C programs using
+supported interfaces generally port by changing `#include "sqlite3.h"` to
+`#include <doltlite.h>` and linking against `libdoltlite` instead of
+`libsqlite3`. APIs coupled to SQLite's pager, page format, or journaling have
+documented differences. The build produces `libdoltlite.a` (static) and
+`libdoltlite.dylib`/`.so` (shared) with the prolly-tree engine and all Dolt
+functions included.
 
 Loadable-extension authors use `doltliteext.h` (the rebranded `sqlite3ext.h`,
 shipped in the amalgamation zip alongside `doltlite.c`/`doltlite.h`).
@@ -185,11 +190,12 @@ so they are DoltLite under SQLite's name. The release packages deliberately
 ship none of those, to avoid colliding with a system SQLite. Pass
 `--prefix` somewhere private if that matters to you.
 
-The API is the standard [SQLite C API](https://sqlite.org/cintro.html) —
+The API uses the standard [SQLite C API](https://sqlite.org/cintro.html) names —
 `sqlite3_open`, `sqlite3_exec`, `sqlite3_prepare_v2`, etc. Dolt features are
 called as SQL functions (`dolt_commit`, `dolt_branch`, `dolt_merge`, ...) and
 virtual tables (`dolt_log`, `dolt_diff_<table>`, `dolt_workspace_<table>`,
-`dolt_history_<table>`, ...).
+`dolt_history_<table>`, ...). Storage-specific differences are listed under
+[SQLite Compatibility](#sqlite-compatibility).
 
 ### Quickstart Examples
 
@@ -948,6 +954,46 @@ standard behavior); reads are concurrent.
 Uncommitted work belongs to the branch, not the connection: checking out a
 dirty branch neither refuses nor carries changes over. Hence no `dolt_stash` —
 there is no single working tree to free up.
+
+## SQLite Compatibility
+
+DoltLite targets SQLite SQL semantics and uses the bundled SQLite version's
+public C declarations and `sqlite3_*` symbol names. That is API-surface
+compatibility, not a claim that storage-coupled APIs keep SQLite pager or file
+format semantics.
+
+For a DoltLite-format main database, the compatibility contract is:
+
+- DoltLite uses its own on-disk format. Standard SQLite files are detected and
+  routed to SQLite's original B-tree engine, but Dolt version-control features
+  are available only on DoltLite-format databases.
+- No SQLite rollback-journal, WAL, or shared-memory sidecar is created.
+  `PRAGMA journal_mode` reports `wal` as a compatibility value and ignores
+  requests to change it. A passive WAL checkpoint is a no-op; other checkpoint
+  modes are rejected.
+- `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
+  `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
+  collection instead of rebuilding SQLite pages.
+- Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
+  `PRAGMA encoding` at `UTF-8`.
+- The built-in `BINARY`, `NOCASE`, and `RTRIM` collations are supported.
+  `sqlite3_create_collation*` returns `SQLITE_ERROR` because persisted prolly
+  sort keys cannot depend on application callbacks.
+- A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key and has
+  no separate `rowid` column.
+- `sqlite3_backup_step()` copies a file-backed DoltLite main database as one
+  operation; its page-count argument is not incremental. Backing up an
+  in-memory or non-main DoltLite database is unsupported.
+- `sqlite3_serialize()` does not expose a DoltLite-format main database as a
+  SQLite page image; it returns `NULL` and sets the size output to `-1`.
+
+The machine-readable contract and its test mapping live in
+[`test/sqlite_compatibility_contract.tsv`](test/sqlite_compatibility_contract.tsv).
+The inherited-suite backlog is tracked separately in
+[`test/known_testfixture_exception_inventory.txt`](test/known_testfixture_exception_inventory.txt),
+with exact assertions in
+[`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt).
+Entries classified as `engine-gap` are bugs to fix, not compatibility promises.
 
 ## Performance
 

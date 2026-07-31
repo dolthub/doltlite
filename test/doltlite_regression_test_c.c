@@ -115,7 +115,7 @@ static int backup_db(sqlite3 *src, sqlite3 *dest){
   pBackup = sqlite3_backup_init(dest, "main", src, "main");
   if( pBackup==0 ) return sqlite3_errcode(dest);
 
-  rc = sqlite3_backup_step(pBackup, -1);
+  rc = sqlite3_backup_step(pBackup, 1);
   rcFinish = sqlite3_backup_finish(pBackup);
   if( rc==SQLITE_DONE ) rc = rcFinish;
   return rc;
@@ -341,7 +341,7 @@ static void run_backup_safety(void){
     "WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1200) "
     "INSERT INTO t SELECT x, printf('big-%04d', x) FROM c;");
   check("backup_safety_seed_big", rc==SQLITE_OK);
-  check("backup_safety_copy_big", backup_db(srcBig, dest)==SQLITE_OK);
+  check("backup_safety_copy_big_one_step", backup_db(srcBig, dest)==SQLITE_OK);
   check("backup_safety_dest_big_visible",
         strcmp(queryScalarText(dest, "SELECT count(*) FROM t"), "1200")==0);
 
