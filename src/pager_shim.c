@@ -1134,7 +1134,7 @@ backup_step_done:
   }
 
   if( rc == SQLITE_OK ){
-    destCs->file.iFileSize = -1;
+    destCs->adoptReplacement = 1;
     rc = chunkStoreLockAndRefresh(destCs);
     if( rc==SQLITE_OK ){
       /* The chunk store now reflects the renamed file. Force the
