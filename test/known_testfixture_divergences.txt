@@ -1921,10 +1921,22 @@ busy busy-2.1  # snapshot concurrency: reader does not block the commit, busy ha
 busy busy-2.2  # snapshot concurrency: reader does not block the commit, busy handler never fires
 busy busy-3.5  # snapshot concurrency: reader does not block the commit, busy handler never fires
 busy busy-3.7  # snapshot concurrency: reader does not block the commit, busy handler never fires
-corrupt7 corrupt7-1.1  # stock-page corruption injection: offsets land outside chunk-store structures
-corrupt7 corrupt7-1.2  # stock-page corruption injection: offsets land outside chunk-store structures
-corrupt7 corrupt7-2.1  # cell-offset poke IS detected; generic "integrity check failed" vs stock's detailed wording
-corrupt7 corrupt7-2.2  # cell-offset poke IS detected; generic "integrity check failed" vs stock's detailed wording
+# corrupt7 — stock btree cell-offset corruption (test/corrupt7.test). Architectural;
+# do not re-triage as small message-parity or file-size polish.
+# 1.1/1.2: assert SQLite single-file page layout (file size == 2*1024 after load;
+#   hexio page_size field at header offset 16). Chunk-store repos are not a
+#   contiguous page image, so these probes cannot match. Not a sizing bug.
+# 2.1/2.2: hexio_write pokes a hard-coded cell-pointer byte (file offset 1062);
+#   stock integrity_check expects Tree/page/cell text, e.g.
+#   "Tree 2 page 2 cell 15: Offset N out of range lo..hi". DoltLite has no
+#   SQLite page/cell layout (prolly + content-addressed chunks); integrity
+#   reports generic "integrity check failed" from the chunk-graph check
+#   (prolly_btree.c). Stock Tree/page/cell wording is page-format-only and
+#   unmatchable even with richer prolly diagnostics — not a wording fix.
+corrupt7 corrupt7-1.1  # SQLite page-file size probe; no page layout (architectural, not sizing)
+corrupt7 corrupt7-1.2  # SQLite header page_size@16 probe; no page layout (architectural)
+corrupt7 corrupt7-2.1  # stock Tree/page/cell offset text unmatchable on prolly integrity (not message parity)
+corrupt7 corrupt7-2.2  # stock Tree/page/cell offset text unmatchable on prolly integrity (not message parity)
 corruptA corruptA-2.1  # stock header corruption at offsets the chunk store does not use
 corruptA corruptA-2.2  # stock header corruption at offsets the chunk store does not use
 corruptA corruptA-2.3  # stock header corruption at offsets the chunk store does not use
