@@ -499,12 +499,14 @@ int sqlite3BtreeOpen(
   BtShared *pBt = 0;
   int rc = SQLITE_OK;
   int useOrig;
+  int hasMainBtree;
   u8 poisonAfterOpen = 0;
   char *zStoreFilename = 0;
   const char *zBranchFromPath = 0;
   const char *zOpenFilename = zFilename;
 
   *ppBtree = 0;
+  hasMainBtree = db && db->nDb>0 && db->aDb[0].pBt!=0;
 
   useOrig = !zFilename || zFilename[0]=='\0'
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
@@ -790,6 +792,21 @@ int sqlite3BtreeOpen(
   }
 
   pBt->store.corruptMidStream = poisonAfterOpen;
+  if( hasMainBtree
+   && !pBt->store.notADatabase
+   && !pBt->store.corruptMidStream ){
+    ProllyHash seedHash;
+    int seeded = 0;
+    rc = doltliteSeedStoreIfNeeded(db, &pBt->store, p->zBranch,
+                                    &seedHash, &seeded);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zStoreFilename);
+      sqlite3BtreeClose(p);
+      return rc;
+    }
+    if( seeded ) p->headCommit = seedHash;
+  }
+
   *ppBtree = p;
 
   rc = registerDoltiteFunctions(db);

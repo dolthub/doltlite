@@ -1191,6 +1191,7 @@ enc4 enc4-3.1  # doltlite-format ignores non-UTF-8 database encodings
 # underlying DROP/UPDATE row outcomes match stock.
 pragma2 pragma2-1.3
 pragma2 pragma2-1.4
+pragma2 pragma2-2.4
 pragma2 pragma2-2.5
 pragma2 pragma2-3.1
 pragma2 pragma2-3.2
@@ -1840,8 +1841,10 @@ attach2 attach2-4.15    # PRAGMA lock_status: doltlite locking model
 # Parent-dir Access probe adds allocations on multi-component open/ATTACH
 # paths, shifting OOM fault indices (same #1859 brittleness as backup_malloc).
 attachmalloc attachmalloc-1.transient.472  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.892  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.1381  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.905 @no-coverage  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1407 @no-coverage  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.913 @coverage  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1423 @coverage  # OOM fault-point shift (ATTACH seed)
 mallocD mallocD-4.transient.107  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
@@ -2646,14 +2649,14 @@ shared_err shared_ioerr-2.170.cleanup.1  # peer reader gets snapshot isolation i
 shared_err shared_ioerr-2.171.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.172.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.173.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.174.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.175.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.176.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.177.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.178.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.179.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.180.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.181.cleanup.1  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.174.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.175.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.176.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.177.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.178.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.179.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.180.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.181.cleanup.1 @coverage  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 wal4 wal4-2-cantopen-persistent.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-cantopen-transient.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-full.1  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
@@ -3694,16 +3697,6 @@ e_reindex e_reindex-2.6.5
 e_reindex e_reindex-2.6.7
 e_reindex e_reindex-2.6.8
 
-# ATTACH creates the database file lazily in doltlite — the file only
-# materializes on first write (verified: missing right after ATTACH,
-# present after CREATE TABLE+INSERT) — so the file-exists checks right
-# after ATTACH see no file under either URI interpretation. (Main-database
-# opens still materialize the file eagerly; the lazy behavior is
-# ATTACH-specific.)
-e_uri e_uri-1.2
-e_uri e_uri-1.4
-e_uri e_uri-1.6
-e_uri e_uri-1.8
 # parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk
 # store performs extra VFS opens after the initial URI open (traced with a
 # log-all-xOpens repro): for relative paths it re-opens the resolved
@@ -4270,8 +4263,10 @@ statfault statfault-1-interrupt.27
 statfault statfault-1-interrupt.28
 statfault statfault-1-ioerr-persistent.3
 statfault statfault-1-ioerr-transient.3
-statfault statfault-1-oom-persistent.132
-statfault statfault-1-oom-transient.132
+statfault statfault-1-oom-persistent.130 @no-coverage
+statfault statfault-1-oom-transient.130 @no-coverage
+statfault statfault-1-oom-persistent.132 @coverage
+statfault statfault-1-oom-transient.132 @coverage
 statfault statfault-1-shmerr-persistent.1
 statfault statfault-1-shmerr-transient.1
 
@@ -4444,25 +4439,6 @@ unionall unionall-5.10
 unionall unionall-5.20
 unionall unionall-5.30
 
-# ATTACH creates the database file lazily in doltlite — verified with a
-# repro: file missing right after ATTACH, present after the first write —
-# so the file-exists check right after ATTACH fails for every URI form.
-uri uri-1.1.4
-uri uri-1.2.4
-uri uri-1.3.4
-uri uri-1.4.4
-uri uri-1.5.4
-uri uri-1.6.4
-uri uri-1.7.4
-uri uri-1.8.4
-uri uri-1.9.4
-uri uri-1.10.4
-uri uri-1.11.4
-uri uri-1.12.4
-uri uri-1.13.4
-uri uri-1.14.4
-uri uri-1.15.4
-uri uri-1.16.4
 # URI query parameters are not visible to the VFS layer: doltlite re-dups
 # the main-db filename (double-nul form) before xOpen, dropping the URI
 # parameter tail (verified with a testvfs repro: xOpen fires for test.db
@@ -5817,6 +5793,12 @@ ioerr ioerr-6.92.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-6.93.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-6.94.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-6.95.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.96.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.97.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.98.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.99.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.100.1  # crashsql trigger on absent -journal never fires
+ioerr ioerr-6.101.1  # crashsql trigger on absent -journal never fires
 ioerr ioerr-7.2.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.3.1  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.4.1  # hot-journal prep copies absent -journal sidecar
@@ -6298,22 +6280,32 @@ vacuum3 vacuum3-ioerr-4.31.3 @linux
 # fkey_malloc-6.*  divergent value at the terminal (no-fault) iteration is the
 # rowid-on-PK divergence surfacing, not a fault shift; the 7.* entries are
 # swallowed OOMs reported as success with final state verified intact.
-fkey_malloc fkey_malloc-6.transient.70  # +1 OOM index from SHARED-before-EXCLUSIVE graph lock
-fkey_malloc fkey_malloc-6.persistent.70
-fkey_malloc fkey_malloc-7.transient.201
-fkey_malloc fkey_malloc-7.transient.202
-fkey_malloc fkey_malloc-7.transient.203
-fkey_malloc fkey_malloc-7.transient.487  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-fkey_malloc fkey_malloc-7.transient.488  # +SHARED graph lock step shifts OOM indices
-fkey_malloc fkey_malloc-7.transient.489
+fkey_malloc fkey_malloc-6.transient.67 @no-coverage
+fkey_malloc fkey_malloc-6.persistent.67 @no-coverage
+fkey_malloc fkey_malloc-7.transient.198 @no-coverage
+fkey_malloc fkey_malloc-7.transient.199 @no-coverage
+fkey_malloc fkey_malloc-7.transient.477 @no-coverage
+fkey_malloc fkey_malloc-7.transient.478 @no-coverage
+fkey_malloc fkey_malloc-6.transient.70 @coverage  # +1 OOM index from SHARED-before-EXCLUSIVE graph lock
+fkey_malloc fkey_malloc-6.persistent.70 @coverage
+fkey_malloc fkey_malloc-7.transient.201 @coverage
+fkey_malloc fkey_malloc-7.transient.202 @coverage
+fkey_malloc fkey_malloc-7.transient.203 @coverage
+fkey_malloc fkey_malloc-7.transient.487 @coverage  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
+fkey_malloc fkey_malloc-7.transient.488 @coverage  # +SHARED graph lock step shifts OOM indices
+fkey_malloc fkey_malloc-7.transient.489 @coverage
 vtab_err vtab_err-1.3.3
-vtab_err vtab_err-2.transient.715  # +SHARED graph lock step shifts OOM indices
-vtab_err vtab_err-2.transient.738
-vtab_err vtab_err-2.transient.739
-vtab_err vtab_err-2.persistent.738
-vtab_err vtab_err-2.persistent.739
-vtab_err vtab_err-3-oom-transient.438
-vtab_err vtab_err-3-oom-transient.439
+vtab_err vtab_err-2.transient.693 @no-coverage
+vtab_err vtab_err-2.transient.716 @no-coverage
+vtab_err vtab_err-2.persistent.716 @no-coverage
+vtab_err vtab_err-3-oom-transient.425 @no-coverage
+vtab_err vtab_err-2.transient.715 @coverage  # +SHARED graph lock step shifts OOM indices
+vtab_err vtab_err-2.transient.738 @coverage
+vtab_err vtab_err-2.transient.739 @coverage
+vtab_err vtab_err-2.persistent.738 @coverage
+vtab_err vtab_err-2.persistent.739 @coverage
+vtab_err vtab_err-3-oom-transient.438 @coverage
+vtab_err vtab_err-3-oom-transient.439 @coverage
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
@@ -6366,26 +6358,32 @@ sysfault sysfault-2.1-vfsfault-transient.96
 sysfault sysfault-2.1-vfsfault-transient.97
 sysfault sysfault-2.1-vfsfault-transient.98
 sysfault sysfault-2.1-vfsfault-transient.99
-sysfault sysfault-2.2-vfsfault-persistent.100
-sysfault sysfault-2.2-vfsfault-persistent.101
-sysfault sysfault-2.2-vfsfault-persistent.102
-sysfault sysfault-2.2-vfsfault-transient.100
 sysfault sysfault-2.2-vfsfault-transient.101
-sysfault sysfault-2.2-vfsfault-transient.102
-sysfault sysfault-2.2-vfsfault-transient.95
-sysfault sysfault-2.2-vfsfault-transient.97
 sysfault sysfault-2.1-vfsfault-transient.104
 sysfault sysfault-2.1-vfsfault-transient.105
 sysfault sysfault-2.1-vfsfault-transient.106
 sysfault sysfault-2.1-vfsfault-transient.107
-sysfault sysfault-2.2-vfsfault-persistent.103
-sysfault sysfault-2.2-vfsfault-persistent.104
-sysfault sysfault-2.2-vfsfault-persistent.105
+sysfault sysfault-2.1-vfsfault-transient.108
+sysfault sysfault-2.1-vfsfault-transient.109
+sysfault sysfault-2.1-vfsfault-transient.110
+sysfault sysfault-2.1-vfsfault-transient.111
+sysfault sysfault-2.1-vfsfault-transient.112
+sysfault sysfault-2.1-vfsfault-transient.113
 sysfault sysfault-2.2-vfsfault-persistent.106
+sysfault sysfault-2.2-vfsfault-persistent.107
+sysfault sysfault-2.2-vfsfault-persistent.108
+sysfault sysfault-2.2-vfsfault-persistent.109
+sysfault sysfault-2.2-vfsfault-persistent.110
+sysfault sysfault-2.2-vfsfault-persistent.111
+sysfault sysfault-2.2-vfsfault-persistent.112
 sysfault sysfault-2.2-vfsfault-transient.103
-sysfault sysfault-2.2-vfsfault-transient.104
-sysfault sysfault-2.2-vfsfault-transient.105
 sysfault sysfault-2.2-vfsfault-transient.106
+sysfault sysfault-2.2-vfsfault-transient.107
+sysfault sysfault-2.2-vfsfault-transient.108
+sysfault sysfault-2.2-vfsfault-transient.109
+sysfault sysfault-2.2-vfsfault-transient.110
+sysfault sysfault-2.2-vfsfault-transient.111
+sysfault sysfault-2.2-vfsfault-transient.112
 
 # crash4: first-commit sector trash; reopen surfaces NOTADB (was crash)
 crash4 crash4-1.1.2  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor

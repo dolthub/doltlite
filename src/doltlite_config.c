@@ -175,14 +175,30 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
 
 int doltliteMaybeSeedRepo(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch;
   ProllyHash emptyParent;
   ProllyHash emptyCatalog;
   ProllyHash seedHash;
+  ProllyHash tip;
+  int seeded = 0;
   int rc;
 
   if( !cs ) return SQLITE_OK;
-  if( refsTableBranchCount(&cs->refs) > 0 ) return SQLITE_OK;
   if( sqlite3_db_readonly(db, "main")==1 ) return SQLITE_OK;
+  if( refsTableBranchCount(&cs->refs)>0 ){
+    zBranch = chunkStoreGetDefaultBranch(cs);
+    if( !zBranch
+     || chunkStoreFindBranch(cs, zBranch, &tip)!=SQLITE_OK
+     || !prollyHashIsEmpty(&tip) ){
+      return SQLITE_OK;
+    }
+    rc = doltliteSeedStoreIfNeeded(db, cs, zBranch, &seedHash, &seeded);
+    if( rc==SQLITE_OK && seeded
+     && strcmp(doltliteGetSessionBranch(db), zBranch)==0 ){
+      doltliteSetSessionHead(db, &seedHash);
+    }
+    return rc;
+  }
 
   memset(&emptyParent, 0, sizeof(emptyParent));
   memset(&emptyCatalog, 0, sizeof(emptyCatalog));

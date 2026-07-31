@@ -4549,6 +4549,76 @@ static void run_commit_rejects_renamed_database(void){
 #endif
 }
 
+static void run_attached_database_seed_and_repair(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  ProllyHash tip;
+  ProllyHash empty;
+  char mainPath[256];
+  char auxPath[256];
+  char *sql;
+  int rc;
+
+  printf("=== Attached Database Seed And Repair Test ===\n\n");
+  make_dbpath(mainPath, sizeof(mainPath), "test_attached_seed_main");
+  make_dbpath(auxPath, sizeof(auxPath), "test_attached_seed_aux");
+  removeDbFiles(mainPath);
+  removeDbFiles(auxPath);
+
+  check("attached_seed_open_main", open_db(mainPath, &db)==SQLITE_OK);
+  sql = sqlite3_mprintf(
+      "ATTACH %Q AS aux;"
+      "CREATE TABLE aux.t2(y INTEGER);"
+      "INSERT INTO aux.t2 VALUES(7);", auxPath);
+  check("attached_seed_sql_alloc", sql!=0);
+  check("attached_seed_create_data", sql && execSql(db, sql)==SQLITE_OK);
+  sqlite3_free(sql);
+  sqlite3_close(db);
+  db = 0;
+
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), auxPath,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("attached_seed_open_raw", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){
+    removeDbFiles(mainPath);
+    removeDbFiles(auxPath);
+    return;
+  }
+  memset(&tip, 0, sizeof(tip));
+  check("attached_seed_branch_exists",
+        rc==SQLITE_OK && chunkStoreFindBranch(&cs, "main", &tip)==SQLITE_OK);
+  check("attached_seed_branch_nonzero", !prollyHashIsEmpty(&tip));
+
+  memset(&empty, 0, sizeof(empty));
+  check("attached_seed_lock_raw", chunkStoreLockAndRefresh(&cs)==SQLITE_OK);
+  check("attached_seed_zero_tip",
+        chunkStoreUpdateBranch(&cs, "main", &empty)==SQLITE_OK);
+  check("attached_seed_serialize_zero_tip",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("attached_seed_commit_zero_tip", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreUnlock(&cs);
+  chunkStoreClose(&cs);
+
+  check("attached_seed_reopen_for_repair", open_db(auxPath, &db)==SQLITE_OK);
+  check("attached_seed_repair_keeps_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(y) FROM t2"), "7")==0);
+  check("attached_seed_repair_creates_log",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "1")==0);
+  check("attached_seed_repair_keeps_dirty_table",
+        strcmp(queryScalarText(db,
+          "SELECT status||'|'||staged FROM dolt_status WHERE table_name='t2'"),
+          "new table|0")==0);
+  check("attached_seed_commit_after_repair",
+        execSql(db, "SELECT dolt_commit('-A','-m','after repair');")==SQLITE_OK);
+  check("attached_seed_history_after_repair",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+  check("attached_seed_rows_after_commit",
+        strcmp(queryScalarText(db, "SELECT group_concat(y) FROM t2"), "7")==0);
+  sqlite3_close(db);
+  removeDbFiles(mainPath);
+  removeDbFiles(auxPath);
+}
+
 static void run_savepoint_restores_session_metadata(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -8809,6 +8879,7 @@ static const RegressionCase aCases[] = {
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "commit_rejects_renamed_database", "Commit Rejects Renamed Database Test", run_commit_rejects_renamed_database },
+  { "attached_database_seed_and_repair", "Attached Database Seed And Repair Test", run_attached_database_seed_and_repair },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },

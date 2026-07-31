@@ -742,6 +742,8 @@ ChunkStore *doltliteGetChunkStore(sqlite3*);
 BtShared *doltliteGetBtShared(sqlite3*);
 ProllyCache *doltliteGetCache(sqlite3*);
 int doltliteRegister(sqlite3*);
+int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
+                              ProllyHash*, int*);
 
 
 /* Cursor payload helpers shared across cursor TUs (static inline). */
