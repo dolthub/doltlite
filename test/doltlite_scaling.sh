@@ -8,6 +8,30 @@
 # full-tree walk to every commit). CI builds a plain binary for this suite.
 set -uo pipefail
 
+median3() {
+  local a="$1" b="$2" c="$3" t
+  if [ "$a" -gt "$b" ]; then t="$a"; a="$b"; b="$t"; fi
+  if [ "$b" -gt "$c" ]; then t="$b"; b="$c"; c="$t"; fi
+  if [ "$a" -gt "$b" ]; then t="$a"; a="$b"; b="$t"; fi
+  echo "$b"
+}
+
+if [ "${1:-}" = "--self-test" ]; then
+  failures=0
+  for case in "1000 100 1000 1000" "100 100 100 1000" "500 1000 100 500"; do
+    read -r expected a b c <<< "$case"
+    actual=$(median3 "$a" "$b" "$c")
+    if [ "$actual" != "$expected" ]; then
+      echo "FAIL: median3 $a $b $c (expected $expected, got $actual)"
+      failures=$((failures+1))
+    fi
+  done
+  if [ "$failures" -eq 0 ]; then
+    echo "PASS: scaling sample policy"
+  fi
+  exit "$failures"
+fi
+
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 if [ ! -x "$DOLTLITE" ]; then
   echo "doltlite binary not found: $DOLTLITE" >&2
@@ -115,7 +139,7 @@ seed_rows() {
 # WAL; nominal growth is ~3x from residual per-session bookkeeping. Shared
 # CI hosts still spike a single 200-commit block (seen 8.0x vs a hard 6x
 # cut), so the gate sits at SESSION_OP_GATE headroom and the deep sample
-# is min-of-two. Ops issued through fresh sessions still pay an open-time
+# is median-of-three. Ops issued through fresh sessions still pay an open-time
 # WAL replay that only a user-driven gc folds away.
 COMMIT_GROWTH_GATE=8
 SESSION_OP_GATE=8
@@ -149,34 +173,35 @@ echo "  depth 200:   ${block1}ms/block ($((block1 / BLOCK))ms/commit) log=${log1
 for b in 1 2 3 4; do
   commit_block "$DBA" $(( b * BLOCK )) "$BLOCK" > /dev/null
 done
-# Min of two deep 200-commit blocks: a single sample can spike on shared CI
-# (seen 2228ms/277ms = 8.0x against a hard 6x cut with one sample).
+# Median of three deep blocks tolerates one scheduler spike without allowing
+# one fast outlier to hide two slow samples.
 block6a=$(commit_block "$DBA" $(( 5 * BLOCK )) "$BLOCK")
 block6b=$(commit_block "$DBA" $(( 6 * BLOCK )) "$BLOCK")
-block6=$(( block6a < block6b ? block6a : block6b ))
+block6c=$(commit_block "$DBA" $(( 7 * BLOCK )) "$BLOCK")
+block6=$(median3 "$block6a" "$block6b" "$block6c")
 read -r log6 co6 mg6 <<< "$(depth_ops side2)"
-echo "  depth ~1400: ${block6}ms/block ($((block6 / BLOCK))ms/commit) log=${log6}ms checkout=${co6}ms merge=${mg6}ms [samples ${block6a}ms, ${block6b}ms]"
+echo "  depth ~1600: ${block6}ms/block ($((block6 / BLOCK))ms/commit) log=${log6}ms checkout=${co6}ms merge=${mg6}ms [samples ${block6a}ms, ${block6b}ms, ${block6c}ms; median ${block6}ms]"
 
-check_ratio "per-commit growth, depth ~1400 vs 200" "$block6" "$block1" "$COMMIT_GROWTH_GATE"
-check_ratio "dolt_log full walk, depth ~1400 vs 200" "$log6" "$log1" "$SESSION_OP_GATE"
-check_ratio "checkout old commit, depth ~1400 vs 200" "$co6" "$co1" "$SESSION_OP_GATE"
-check_ratio "merge across divergence, depth ~1400 vs 200" "$mg6" "$mg1" "$SESSION_OP_GATE"
+check_ratio "per-commit growth, depth ~1600 vs 200" "$block6" "$block1" "$COMMIT_GROWTH_GATE"
+check_ratio "dolt_log full walk, depth ~1600 vs 200" "$log6" "$log1" "$SESSION_OP_GATE"
+check_ratio "checkout old commit, depth ~1600 vs 200" "$co6" "$co1" "$SESSION_OP_GATE"
+check_ratio "merge across divergence, depth ~1600 vs 200" "$mg6" "$mg1" "$SESSION_OP_GATE"
 check_eq "merged rows visible" "1|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE id=2 AND v=1;")"
 
 gc_ms=$(run_ms "$DBA" "SELECT dolt_gc();")
 echo "  dolt_gc: ${gc_ms}ms"
-# Min of two 50-commit samples: a single cold sample can sit just over 3x
-# on shared CI hosts (seen 3.4x–12x flakes with a 3x gate).
-postgc1=$(commit_block "$DBA" 1400 50)
-postgc2=$(commit_block "$DBA" 1450 50)
-postgc=$(( postgc1 < postgc2 ? postgc1 : postgc2 ))
+# Median of three tolerates one cold sample without accepting one fast outlier.
+postgc1=$(commit_block "$DBA" 1600 50)
+postgc2=$(commit_block "$DBA" 1650 50)
+postgc3=$(commit_block "$DBA" 1700 50)
+postgc=$(median3 "$postgc1" "$postgc2" "$postgc3")
 postgc_scaled=$(( postgc * BLOCK / 50 ))
-echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit) [samples ${postgc1}ms, ${postgc2}ms]"
+echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit) [samples ${postgc1}ms, ${postgc2}ms, ${postgc3}ms; median ${postgc}ms]"
 # Align with COMMIT_GROWTH_GATE headroom rather than a brittle 3x wall-clock cut.
 check_ratio "post-gc commit cost vs shallow-history cost" "$postgc_scaled" "$block1" "$COMMIT_GROWTH_GATE"
-# every one of the 1500 single-row commits must have landed exactly once
-# (1400 depth build + 50 + 50 post-gc samples)
-check_eq "commit increments all applied" "1500" "$(query "$DBA" "SELECT sum(v) FROM t;")"
+# every one of the 1750 single-row commits must have landed exactly once
+# (1600 depth build + 50 + 50 + 50 post-gc samples)
+check_eq "commit increments all applied" "1750" "$(query "$DBA" "SELECT sum(v) FROM t;")"
 
 echo ""
 echo "══════════════════════════════════════"
