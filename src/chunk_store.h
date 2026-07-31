@@ -12,7 +12,13 @@
 #include "chunk_file.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
+/* Storage epoch 1 is the DoltLite beta freeze: chunk-store header version,
+** working-set blob version, and catalog entry format written by this tree.
+** Bumping any of these is a new epoch — update the README Storage Format
+** section, test/format-corpus/, and test/storage_format_contract.tsv, and
+** ship an explicit upgrade policy. See also DOLTLITE_STORAGE_EPOCH. */
 #define CHUNK_STORE_VERSION 12
+#define DOLTLITE_STORAGE_EPOCH 1
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32
 

@@ -1,0 +1,11 @@
+id	status	evidence	contract
+epoch.id	frozen	src/chunk_store.h#DOLTLITE_STORAGE_EPOCH 1,test/format-corpus/epoch1/MANIFEST#epoch=1	Storage epoch 1 is the beta freeze identifier for this on-disk generation
+epoch.chunk_version	frozen	src/chunk_store.h#CHUNK_STORE_VERSION 12,test/format-corpus/epoch1/MANIFEST#chunk_store_version=12	Epoch 1 chunk-store header version is 12
+epoch.ws_write	frozen	src/chunk_store.h#WS_FORMAT_VERSION    WS_FORMAT_VERSION_V5,test/format-corpus/epoch1/MANIFEST#working_set_format=v5	Epoch 1 writers emit working-set format v5
+epoch.catalog_write	frozen	src/chunk_store.h#CATALOG_FORMAT_V5       0x46,test/format-corpus/epoch1/MANIFEST#catalog_format=v5	Epoch 1 writers emit catalog format v5
+open.exact_version	adapted	src/chunk_store.c#version != CHUNK_STORE_VERSION,src/chunk_store.c#this build refuses to open it to prevent corruption	A chunk-store header version other than CHUNK_STORE_VERSION returns SQLITE_NOTADB
+open.magic	adapted	src/chunk_store.c#magic != CHUNK_STORE_MAGIC,test/storage_format_contract_test.sh#corpus_has_dltc_magic	Wrong or missing DLTC magic is not a DoltLite database (SQLITE_NOTADB)
+corpus.epoch1_open	adapted	test/storage_format_contract_test.sh#corpus_epoch1_row_count,test/storage_format_contract_test.sh#corpus_epoch1_log	The committed epoch1 golden file opens and serves committed rows and log history
+corpus.epoch1_branch	adapted	test/storage_format_contract_test.sh#corpus_epoch1_feature_branch	The epoch1 golden file retains the feature branch tip created at freeze time
+skew.version_bump_refused	adapted	test/storage_format_contract_test.sh#skew_version_13_notadb	Mutating the header version byte to an unknown value refuses open with NOTADB
+skew.version_old_refused	adapted	test/storage_format_contract_test.sh#skew_version_11_notadb	Mutating the header version to a prior number refuses open with NOTADB (no silent downgrade path)

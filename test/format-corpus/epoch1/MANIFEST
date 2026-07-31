@@ -1,0 +1,10 @@
+# DoltLite storage epoch 1 (beta freeze)
+# Written by the build that freezes these constants. Open-only for older
+# minor builds of the same epoch; refuse different CHUNK_STORE_VERSION.
+epoch=1
+chunk_store_magic=0x444C5443
+chunk_store_version=12
+working_set_format=v5
+catalog_format=v5
+catalog_format_byte=0x46
+file=seed.db
