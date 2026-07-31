@@ -961,6 +961,8 @@ int doltliteRevertRegister(sqlite3 *db);
 int doltliteRebaseRegister(sqlite3 *db);
 int doltliteConfigRegister(sqlite3 *db);
 int doltliteMaybeSeedRepo(sqlite3 *db);
+int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
+                              ProllyHash*, int*);
 
 int doltliteRegisterConflictTables(sqlite3 *db);
 int doltliteRegisterDiffTables(sqlite3 *db);

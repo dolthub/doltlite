@@ -229,10 +229,6 @@ int btreeStoreWorkingSetBlob(
   if( rc != SQLITE_OK ) return rc;
   rc = chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);
   if( rc == SQLITE_NOTFOUND ){
-    /* A freshly attached doltlite db is never seeded — doltliteMaybeSeedRepo
-    ** only runs for the main db — so its default branch doesn't exist. Create
-    ** it on first persist (pointing at the current head, empty if uncommitted)
-    ** so this and later writes succeed instead of failing SQLITE_NOTFOUND. */
     rc = chunkStoreAddBranch(cs, zBranch, pWorkingCommit);
     if( rc == SQLITE_OK ){
       rc = chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);

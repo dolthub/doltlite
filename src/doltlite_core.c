@@ -369,8 +369,9 @@ void freeSchemaMergeActions(SchemaMergeAction *a, int n){
   sqlite3_free(a);
 }
 
-int doltliteCreateAndStoreCommitWithTime(
+static int doltliteCreateAndStoreCommitOnStore(
   sqlite3 *db,
+  ChunkStore *cs,
   const ProllyHash *pParent,
   const ProllyHash *pCatalog,
   const char *zMessage,
@@ -397,8 +398,9 @@ int doltliteCreateAndStoreCommit(
       zAuthorName, zAuthorEmail, aExtraParents, nExtraParents, 0, pCommitHash);
 }
 
-int doltliteCreateAndStoreCommitWithTime(
+static int doltliteCreateAndStoreCommitOnStore(
   sqlite3 *db,
+  ChunkStore *cs,
   const ProllyHash *pParent,
   const ProllyHash *pCatalog,
   const char *zMessage,
@@ -409,16 +411,13 @@ int doltliteCreateAndStoreCommitWithTime(
   i64 explicitTimestamp,
   ProllyHash *pCommitHash
 ){
-  ChunkStore *cs;
   DoltliteCommit c;
   u8 *commitData = 0;
   int nCommitData = 0;
   int rc, i;
-  assert( db!=0 && pParent!=0 && pCatalog!=0 && pCommitHash!=0 );
+  assert( db!=0 && cs!=0 && pParent!=0 && pCatalog!=0 && pCommitHash!=0 );
   assert( nExtraParents>=0 );
   assert( nExtraParents==0 || aExtraParents!=0 );
-  cs = doltliteGetChunkStore(db);
-  assert( cs!=0 );
 
   memset(&c, 0, sizeof(c));
   memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
@@ -454,6 +453,85 @@ int doltliteCreateAndStoreCommitWithTime(
 create_commit_done:
   sqlite3_free(commitData);
   doltliteCommitClear(&c);
+  return rc;
+}
+
+int doltliteCreateAndStoreCommitWithTime(
+  sqlite3 *db,
+  const ProllyHash *pParent,
+  const ProllyHash *pCatalog,
+  const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
+  const ProllyHash *aExtraParents,
+  int nExtraParents,
+  i64 explicitTimestamp,
+  ProllyHash *pCommitHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  assert( cs!=0 );
+  return doltliteCreateAndStoreCommitOnStore(db, cs, pParent, pCatalog,
+      zMessage, zAuthorName, zAuthorEmail, aExtraParents, nExtraParents,
+      explicitTimestamp, pCommitHash);
+}
+
+int doltliteSeedStoreIfNeeded(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zBranch,
+  ProllyHash *pSeedHash,
+  int *pSeeded
+){
+  ProllyHash tip;
+  ProllyHash empty;
+  int nBranches;
+  int rc;
+
+  *pSeeded = 0;
+  if( cs->readOnly ) return SQLITE_OK;
+  nBranches = refsTableBranchCount(&cs->refs);
+  if( nBranches>1 ) return SQLITE_OK;
+  if( nBranches>0 ){
+    rc = chunkStoreFindBranch(cs, zBranch, &tip);
+    if( rc!=SQLITE_OK || !prollyHashIsEmpty(&tip) ){
+      return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
+    }
+  }
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+
+  nBranches = refsTableBranchCount(&cs->refs);
+  if( nBranches>1 ){
+    chunkStoreUnlock(cs);
+    return SQLITE_OK;
+  }
+  if( nBranches>0 ){
+    rc = chunkStoreFindBranch(cs, zBranch, &tip);
+    if( rc!=SQLITE_OK || !prollyHashIsEmpty(&tip) ){
+      chunkStoreUnlock(cs);
+      return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
+    }
+  }
+
+  memset(&empty, 0, sizeof(empty));
+  rc = doltliteCreateAndStoreCommitOnStore(db, cs, &empty, &empty,
+      "Initialize data repository", 0, 0, 0, 0, 0, pSeedHash);
+  if( rc==SQLITE_OK ){
+    if( nBranches==0 ){
+      rc = chunkStoreAddBranch(cs, zBranch, pSeedHash);
+      if( rc==SQLITE_OK ) rc = chunkStoreSetDefaultBranch(cs, zBranch);
+    }else{
+      rc = chunkStoreUpdateBranch(cs, zBranch, pSeedHash);
+    }
+  }
+  if( rc==SQLITE_OK ) rc = chunkStoreSerializeRefs(cs);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  if( rc==SQLITE_OK ){
+    *pSeeded = 1;
+  }else{
+    chunkStoreRollback(cs);
+  }
+  chunkStoreUnlock(cs);
   return rc;
 }
 
