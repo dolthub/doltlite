@@ -995,6 +995,60 @@ with exact assertions in
 [`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt).
 Entries classified as `engine-gap` are bugs to fix, not compatibility promises.
 
+## Concurrency
+
+DoltLite supports multiple connections and processes on one database file, but
+it is not a free-for-all multi-writer server. Coordination is explicit: a
+**graph lock** sidecar serializes durable writers, write transactions pin a
+chunk-store snapshot, and multi-step version-control ops re-check HEAD under
+the lock before advancing a branch tip.
+
+For a DoltLite-format main database, the concurrency contract is:
+
+- **Per-connection branch state.** Each connection holds its own active
+  branch, HEAD, and uncommitted working set (see
+  [Per-Session Branching](#per-session-branching-architecture)). Two
+  connections may sit on different branches of the same file at once.
+- **One durable writer at a time.** A connection that holds an explicit write
+  transaction owns the graph lock. A peer that tries to begin a concurrent
+  write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
+  commits or rolls back. After the lock is free, the peer can retry
+  successfully.
+- **Snapshot pin under a write transaction.** While a write transaction is
+  open, the connection pins the chunk-store snapshot it opened. If the
+  on-disk store advanced under a peer (or the snapshot would otherwise be
+  invalidated), further work surfaces `SQLITE_BUSY_SNAPSHOT` rather than
+  silently mixing catalogs.
+- **Readers stay live.** Concurrent readers can open the same file, see
+  already-committed data, and keep scanning while another process commits or
+  runs GC. They do not block writers indefinitely and do not create SQLite
+  `-wal`/`-shm` sidecars.
+- **Multi-process commits are CAS-safe.** A process that races `dolt_commit`
+  against a peer either wins a clean tip advance or loses with a busy /
+  conflict outcome. The loser's stale tip must not clobber the winner's
+  commit. Sequential multiproc commits both land; forked writers end with a
+  consistent table, index, and log.
+- **VC ops re-confirm HEAD under the lock.** Merge, cherry-pick, revert, pull,
+  and similar multi-step commands re-read the branch tip under the graph lock
+  immediately before advancing the ref (`doltliteRefreshAndConfirmHead`). A
+  peer commit in the middle yields `SQLITE_BUSY` instead of a lost update.
+- **GC cooperates with writers.** `dolt_gc` / `VACUUM` may be deferred or
+  report busy while a writer holds the graph lock; after the writer finishes,
+  GC completes without dropping reachable data. Multiproc GC-vs-commit and
+  GC-vs-GC races leave committed rows intact.
+- **Conflicts are never durable.** A conflicted merge exists only inside the
+  transaction that produced it. Commit is refused while conflicts remain;
+  nothing conflicted is left on disk for a later connection to inherit.
+  Constraint violations still persist (see Conflicts under Dolt Features).
+
+The machine-readable contract and its test mapping live in
+[`test/concurrency_contract.tsv`](test/concurrency_contract.tsv). Multiproc and
+multi-connection C harnesses (`multi_process_*`, `concurrent_*`) are the
+behavioral oracles; the contract test asserts that every claim still points at
+a real check or source needle. Nightly stress soaks those harnesses for hours;
+PR CI runs them at shorter budgets via `test/run_c_tests.sh` and
+`build-test`.
+
 ## Performance
 
 The latest automated DoltLite-versus-SQLite measurements are published in the

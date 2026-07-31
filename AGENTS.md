@@ -240,8 +240,21 @@ Subtle rules that are easy to break silently — hold them when touching VC code
 - **Ref resolution** for commit / branch / `HEAD` / `WORKING` / `STAGED` goes
   through `doltliteResolveCatalogHashForRef` — reuse it, don't re-derive.
 
+## Concurrency contract
+
+User-facing concurrency guarantees and the multiproc/multi-connection oracles
+that pin them live in the README **Concurrency** section and
+`test/concurrency_contract.tsv`. `test/concurrency_contract_test.sh` fails if a
+claim loses its evidence needle. When changing graph lock, snapshot pin,
+`doltliteRefreshAndConfirmHead`, multiproc harnesses, or conflict durability,
+update the TSV and keep the multiproc C suites green (`multi_process_*`,
+`concurrent_*` via `test/run_c_tests.sh`).
+
+The version-control correctness invariants above remain load-bearing for
+implementors even when a claim is also listed in the contract.
+
 ## Move fast
 
-Format stability, concurrency-contract documentation, and external integration
-tests are currently deprioritized — the project is not ready to lock those down.
-Prefer fixing the engine and proving it with tests over documenting constraints.
+Format stability and external integration tests are currently deprioritized —
+the project is not ready to lock those down. Prefer fixing the engine and
+proving it with tests over documenting constraints that are not yet stable.
