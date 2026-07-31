@@ -227,6 +227,12 @@ jobs:
         rm -f /tmp/doltlite-threadtest5.db
         ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
+    - name: Run version-control concurrency under TSan
+      run: |
+        cd build
+        ./vc_concurrency_test
+        ./vc_ref_mutation_stress_test
+
     - name: Run HTTP remote concurrency under TSan
       run: |
         cd build
