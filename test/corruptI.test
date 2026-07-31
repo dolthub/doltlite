@@ -12,6 +12,10 @@
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+ifcapable doltlite {
+  finish_test
+  return
+}
 set testprefix corruptI
 
 if {[permutation]=="mmap"} {

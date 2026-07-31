@@ -15,10 +15,13 @@
 # TESTRUNNER: slow
 #
 
-if {$tcl_platform(platform) ne "windows"} return
-
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+
+if {$tcl_platform(platform) ne "windows"} {
+  finish_test
+  return
+}
 
 set testprefix win32lock
 

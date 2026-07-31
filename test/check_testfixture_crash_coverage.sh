@@ -7,6 +7,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CRASH_FILE="${1:-$SCRIPT_DIR/known_testfixture_crashes.txt}"
 COVERAGE_FILE="${2:-$SCRIPT_DIR/known_testfixture_crash_coverage.txt}"
 BUCKET_DIR="${3:-$SCRIPT_DIR/regression-buckets}"
+TERMINATION_FILE="${4:-$SCRIPT_DIR/known_testfixture_terminations.txt}"
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -31,6 +32,17 @@ awk '
 ' "$BUCKET_DIR"/*.txt | sort -u > "$TMP_DIR/bucketed"
 
 comm -23 "$TMP_DIR/crashes" "$TMP_DIR/bucketed" > "$TMP_DIR/excluded"
+comm -12 "$TMP_DIR/crashes" "$TMP_DIR/bucketed" > "$TMP_DIR/bucketed_crashes"
+
+awk '
+  { sub(/#.*/, ""); if (NF) print $1 }
+' "$TERMINATION_FILE" | sort -u > "$TMP_DIR/contracts"
+
+comm -23 "$TMP_DIR/bucketed_crashes" "$TMP_DIR/contracts" \
+  > "$TMP_DIR/missing_contracts"
+comm -13 "$TMP_DIR/crashes" "$TMP_DIR/contracts" > "$TMP_DIR/stale_contracts"
+report_set "bucketed crash entries without termination contracts" "$TMP_DIR/missing_contracts"
+report_set "termination contracts for tests outside the crash inventory" "$TMP_DIR/stale_contracts"
 
 if ! awk '
   {
