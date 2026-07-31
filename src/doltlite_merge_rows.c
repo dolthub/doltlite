@@ -231,20 +231,6 @@ static int doltliteBuildIndexEntry(
   return SQLITE_OK;
 }
 
-/* Build index keys from row records; substitute intkey for IPK ghosts. */
-int doltliteBuildIndexSortKey(
-  const u8 *pRec, int nRec,
-  const i16 *aiColumn, int nIdxCol,
-  KeyInfo *pKeyInfo,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  u8 **ppKey, int *pnKey
-){
-  return doltliteBuildIndexEntry(
-      pRec, nRec, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
-      pTreeKey, nTreeKey, ppKey, pnKey, 0, 0, 0);
-}
-
 /* Apply old/new table-row values to one secondary-index mutmap. Shared by
 ** merge, conflicts resolve, and workspace so NOCASE/RTRIM/DESC match VDBE. */
 int doltliteIndexMutMapRowDelta(
