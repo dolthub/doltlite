@@ -498,6 +498,110 @@ SchemaEntry *findSchemaEntryByRootpage(
   return 0;
 }
 
+static int mergeTableSchemaBodiesSame(
+  const SchemaEntry *pA,
+  const SchemaEntry *pB
+){
+  const char *zA;
+  const char *zB;
+  if( !pA || !pA->zType || !pA->zSql
+   || !pB || !pB->zType || !pB->zSql
+   || strcmp(pA->zType, "table")!=0
+   || strcmp(pB->zType, "table")!=0 ){
+    return 0;
+  }
+  zA = strchr(pA->zSql, '(');
+  zB = strchr(pB->zSql, '(');
+  return zA && zB && strcmp(zA, zB)==0;
+}
+
+static int mergeRenameNamesExclusive(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aDropped, int nDropped,
+  struct TableEntry *aRenamed, int nRenamed,
+  const char *zOld,
+  const char *zNew
+){
+  return !doltliteFindTableByName(aRenamed, nRenamed, zOld)
+      && !doltliteFindTableByName(aAnc, nAnc, zNew)
+      && !doltliteFindTableByName(aDropped, nDropped, zOld)
+      && !doltliteFindTableByName(aDropped, nDropped, zNew);
+}
+
+int mergeTableRenameOtherDrop(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aDropped, int nDropped,
+  struct TableEntry *aRenamed, int nRenamed,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aRenamedSchema, int nRenamedSchema,
+  struct TableEntry *pRenamed
+){
+  struct TableEntry *pAnc;
+  SchemaEntry *pAncSe;
+  SchemaEntry *pRenamedSe;
+  int i;
+
+  if( !pRenamed || !pRenamed->zName || pRenamed->iTable<=1 ) return 0;
+  pAnc = doltliteFindTableByNumber(aAnc, nAnc, pRenamed->iTable);
+  pAncSe = pAnc ? findSchemaEntryByRootpage(
+      aAncSchema, nAncSchema, pAnc->iTable) : 0;
+  pRenamedSe = findSchemaEntryByRootpage(
+      aRenamedSchema, nRenamedSchema, pRenamed->iTable);
+  if( !pRenamedSe || !pRenamedSe->zType
+   || strcmp(pRenamedSe->zType, "table")!=0 ) return 0;
+  if( !pAnc || !pAnc->zName
+   || strcmp(pAnc->zName, pRenamed->zName)==0
+   || prollyHashCompare(&pAnc->root, &pRenamed->root)!=0
+   || !mergeTableSchemaBodiesSame(pAncSe, pRenamedSe) ){
+    pAnc = 0;
+    pAncSe = 0;
+  }
+  if( pAnc && !mergeRenameNamesExclusive(
+        aAnc, nAnc, aDropped, nDropped, aRenamed, nRenamed,
+        pAnc->zName, pRenamed->zName) ){
+    pAnc = 0;
+    pAncSe = 0;
+  }
+  if( !pAnc ){
+    for(i=0; i<nRenamedSchema; i++){
+      SchemaEntry *pAncIdx;
+      SchemaEntry *pCandidate;
+      struct TableEntry *pCandidateEntry;
+      if( !aRenamedSchema[i].zType || !aRenamedSchema[i].zName
+       || !aRenamedSchema[i].zTblName
+       || strcmp(aRenamedSchema[i].zType, "index")!=0
+       || sqlite3_stricmp(aRenamedSchema[i].zTblName,
+                          pRenamed->zName)!=0 ){
+        continue;
+      }
+      pAncIdx = findSchemaEntry(
+          aAncSchema, nAncSchema, aRenamedSchema[i].zName);
+      if( !pAncIdx || !pAncIdx->zType || !pAncIdx->zTblName
+       || strcmp(pAncIdx->zType, "index")!=0
+       || sqlite3_stricmp(pAncIdx->zTblName, pRenamed->zName)==0 ){
+        continue;
+      }
+      pCandidate = findSchemaEntry(
+          aAncSchema, nAncSchema, pAncIdx->zTblName);
+      if( !mergeTableSchemaBodiesSame(pCandidate, pRenamedSe) ){
+        continue;
+      }
+      pCandidateEntry = doltliteFindTableByName(
+          aAnc, nAnc, pCandidate->zName);
+      if( pCandidateEntry
+       && mergeRenameNamesExclusive(
+            aAnc, nAnc, aDropped, nDropped, aRenamed, nRenamed,
+            pCandidate->zName, pRenamed->zName) ){
+        pAnc = pCandidateEntry;
+        pAncSe = pCandidate;
+        break;
+      }
+    }
+  }
+  if( !pAnc || !pAncSe ) return 0;
+  return 1;
+}
+
 struct TableEntry *findCatalogEntryBySchemaObject(
   struct TableEntry *aCat,
   int nCat,
@@ -830,6 +934,10 @@ static int rebuildDisjointSchemaRows(
     Pgno iRootpage;
     if( !pSe->zName || !pSe->zType ) continue;
     if( strcmp(pSe->zType, "index")!=0 ) continue;
+    if( !pSe->zTblName
+     || !doltliteFindTableByName(aMerged, nMerged, pSe->zTblName) ){
+      continue;
+    }
     if( hasSchemaConflictObject(aConflictTables, nConflictTables, pSe->zName)
      || hasSchemaConflictTable(aConflictTables, nConflictTables,
                                pSe->zTblName) ){

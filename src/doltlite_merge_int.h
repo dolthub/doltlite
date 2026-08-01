@@ -162,6 +162,15 @@ SchemaEntry *findSchemaEntryByRootpage(
   Pgno iRootpage
 );
 
+int mergeTableRenameOtherDrop(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aDropped, int nDropped,
+  struct TableEntry *aRenamed, int nRenamed,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aRenamedSchema, int nRenamedSchema,
+  struct TableEntry *pRenamed
+);
+
 struct TableEntry *findCatalogEntryBySchemaObject(
   struct TableEntry *aCat,
   int nCat,
