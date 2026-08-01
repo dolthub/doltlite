@@ -17,6 +17,8 @@ def db_for_branch(db_path, branch):
 
 
 def run_sql(doltlite, db_path, sql, label, timeout=20, allowed_errors=()):
+    if os.environ.get("DOLTLITE_VC_STATEFUL_TRACE") == "1":
+        print("TRACE %s db=%s sql=%r" % (label, db_path, sql), file=sys.stderr, flush=True)
     p = subprocess.run(
         [doltlite, db_path],
         input=sql,
@@ -480,7 +482,7 @@ def revert_branch(doltlite, db_path, branch, model, step):
             "revert_log_count",
         )
     )
-    if count < 2:
+    if count < 3:
         return
     run_sql(
         doltlite,
