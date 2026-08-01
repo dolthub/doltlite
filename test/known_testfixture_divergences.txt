@@ -1038,6 +1038,34 @@ date date-20.1
 date date-20.2
 date date-20.3
 date date-20.4
+# date-21/22: new "weekday ±N" / "end of ..." coverage. Cascades from the
+# date-14 hexio page poke that poisons the shared test.db (same intentional
+# raw-page-format divergence as date-15..20). The modifiers themselves work
+# on a clean DoltLite database.
+date date-21.1
+date date-21.2
+date date-21.3
+date date-21.4
+date date-21.5
+date date-21.6
+date date-21.7
+date date-21.8
+date date-21.9
+date date-21.10
+date date-21.11
+date date-21.12
+date date-21.13
+date date-21.14
+date date-21.15
+date date-21.16
+date date-21.17
+date date-22.1
+date date-22.2
+date date-22.3
+date date-22.4
+date date-22.5
+date date-22.6
+date date-22.7
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
@@ -1928,6 +1956,15 @@ autovacuum2 autovacuum2-1.4  # auto_vacuum pragma rejected; freelist/page metric
 autovacuum2 autovacuum2-1.20  # auto_vacuum pragma rejected; freelist/page metrics + cascade
 backup5 backup5-1.3  # backup proceeds without the destination-in-use refusal; result verified correct
 backup5 backup5-1.4  # backup proceeds without the destination-in-use refusal; result verified correct
+# backup5-2/3: backup across non-main / attached schemas and DETACH mid-step.
+# DoltLite file-copy backup is main-DB only; non-main init fails with a
+# doltlite-specific message and DETACH mid-backup is unsupported.
+backup5 backup5-2.3
+backup5 backup5-2.4
+backup5 backup5-3.2
+backup5 backup5-3.3
+backup5 backup5-3.4
+backup5 backup5-3.5
 busy busy-2.1  # snapshot concurrency: reader does not block the commit, busy handler never fires
 busy busy-2.2  # snapshot concurrency: reader does not block the commit, busy handler never fires
 busy busy-3.5  # snapshot concurrency: reader does not block the commit, busy handler never fires
@@ -4022,6 +4059,38 @@ misc4 misc4-7.1
 # commits each chunk store through its internal WAL and never uses the
 # super-journal protocol, so no *mj* file is opened.
 mjournal mjournal-2.1
+# mjournal-4: hot-journal recovery expects super-journal files to be
+# deleted/retained per stock rollback-journal rules. DoltLite has no
+# rollback journal or super-journal, so file-exists probes after open fail.
+mjournal mjournal-4.1.0.2
+mjournal mjournal-4.1.1.2
+mjournal mjournal-4.2.0.2
+mjournal mjournal-4.2.1.2
+mjournal mjournal-4.3.0.2
+mjournal mjournal-4.3.1.1
+mjournal mjournal-4.3.1.2
+mjournal mjournal-4.4.0.2
+mjournal mjournal-4.4.1.2
+mjournal mjournal-4.5.0.2
+mjournal mjournal-4.5.1.2
+mjournal mjournal-4.6.0.2
+mjournal mjournal-4.6.1.2
+mjournal mjournal-4.7.0.2
+mjournal mjournal-4.7.1.2
+mjournal mjournal-4.8.0.2
+mjournal mjournal-4.8.1.1
+mjournal mjournal-4.8.1.2
+mjournal mjournal-4.9.0.2
+mjournal mjournal-4.9.1.1
+mjournal mjournal-4.9.1.2
+mjournal mjournal-4.10.0.2
+mjournal mjournal-4.10.1.2
+mjournal mjournal-4.11.0.2
+mjournal mjournal-4.11.1.2
+mjournal mjournal-4.12.0.2
+mjournal mjournal-4.12.1.2
+mjournal mjournal-4.13.0.2
+mjournal mjournal-4.13.1.2
 
 # ── mutex1 ──
 # The per-mode mutex inventory differs from stock in all three
@@ -6330,12 +6399,16 @@ fkey_malloc fkey_malloc-7.transient.477 @no-coverage
 fkey_malloc fkey_malloc-7.transient.478 @no-coverage
 fkey_malloc fkey_malloc-6.transient.70 @coverage  # +1 OOM index from SHARED-before-EXCLUSIVE graph lock
 fkey_malloc fkey_malloc-6.persistent.70 @coverage
+# fkey_malloc-7.* coverage indices re-derived after SQLite upstream merge
+# (allocation count shift from new core paths). Terminal no-fault values still
+# surface the intentional rowid-on-PK divergence; mid-sweep hits are swallowed
+# OOMs with final state intact.
+fkey_malloc fkey_malloc-7.transient.200 @coverage
 fkey_malloc fkey_malloc-7.transient.201 @coverage
 fkey_malloc fkey_malloc-7.transient.202 @coverage
-fkey_malloc fkey_malloc-7.transient.203 @coverage
-fkey_malloc fkey_malloc-7.transient.487 @coverage  # injection point shifted by close-marker benign-marking and OOM propagation fixes (ubuntu-runner IDs)
-fkey_malloc fkey_malloc-7.transient.488 @coverage  # +SHARED graph lock step shifts OOM indices
-fkey_malloc fkey_malloc-7.transient.489 @coverage
+fkey_malloc fkey_malloc-7.transient.485 @coverage
+fkey_malloc fkey_malloc-7.transient.486 @coverage
+fkey_malloc fkey_malloc-7.transient.487 @coverage
 vtab_err vtab_err-1.3.3
 vtab_err vtab_err-2.transient.693 @no-coverage
 vtab_err vtab_err-2.transient.716 @no-coverage
