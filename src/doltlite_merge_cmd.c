@@ -297,6 +297,7 @@ static int mergeRefCreateMergeCommit(
     return SQLITE_ERROR;
   }
 
+  doltliteTestCrashFinalize("merge");
   rc = doltliteCompareAndAdvanceBranch(
       db, pOurHead, &commitHash, pMergedCat, 0);
   if( rc==SQLITE_BUSY ){

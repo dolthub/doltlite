@@ -892,6 +892,7 @@ int doltlitePush(
     }
   }
 
+  doltliteTestCrashFinalize("push");
   rc = pRemote->xCommit(pRemote);
 
   return rc;
