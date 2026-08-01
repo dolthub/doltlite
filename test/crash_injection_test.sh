@@ -588,6 +588,111 @@ for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
 done
 
 echo ""
+echo "--- Scenario 12: Crash at merge ref finalize ---"
+
+DB12="$TMPROOT/s12_merge.db"
+"$DOLTLITE" "$DB12" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main');
+SELECT dolt_commit('-Am','main');
+SQL
+S12_HEAD=$("$DOLTLITE" "$DB12" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+DOLTLITE_CRASH_FINALIZE=merge "$DOLTLITE" "$DB12" \
+  "SELECT dolt_merge('feat');" >/dev/null 2>&1
+S12_RC=$?
+S12_AFTER=$("$DOLTLITE" "$DB12" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+S12_COUNT=$("$DOLTLITE" "$DB12" "SELECT count(*) FROM t;" 2>/dev/null)
+if [ "$S12_RC" = "99" ] && [ "$S12_AFTER" = "$S12_HEAD" ] && [ "$S12_COUNT" = "2" ]; then
+  pass_name "s12_merge_finalize_keeps_old_tip"
+else
+  fail_name "s12_merge_finalize_keeps_old_tip"
+  echo "    rc=$S12_RC head=$S12_AFTER/$S12_HEAD count=$S12_COUNT"
+fi
+"$DOLTLITE" "$DB12" "SELECT dolt_merge('feat');" >/dev/null 2>&1
+S12_RETRY=$("$DOLTLITE" "$DB12" "SELECT count(*) FROM t;" 2>/dev/null)
+if [ "$S12_RETRY" = "3" ]; then
+  pass_name "s12_merge_finalize_retry"
+else
+  fail_name "s12_merge_finalize_retry"
+  echo "    count=$S12_RETRY"
+fi
+
+echo ""
+echo "--- Scenario 13: Crash at rebase ref finalize ---"
+
+DB13="$TMPROOT/s13_rebase.db"
+"$DOLTLITE" "$DB13" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main');
+SELECT dolt_commit('-Am','main');
+SQL
+S13_HEAD=$("$DOLTLITE" "$DB13/feat" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+DOLTLITE_CRASH_FINALIZE=rebase "$DOLTLITE" "$DB13/feat" \
+  "SELECT dolt_rebase('main');" >/dev/null 2>&1
+S13_RC=$?
+S13_AFTER=$("$DOLTLITE" "$DB13/feat" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+S13_COUNT=$("$DOLTLITE" "$DB13/feat" "SELECT count(*) FROM t;" 2>/dev/null)
+S13_WORK=$("$DOLTLITE" "$DB13/feat" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" 2>/dev/null)
+if [ "$S13_RC" = "99" ] && [ "$S13_AFTER" = "$S13_HEAD" ] && [ "$S13_COUNT" = "2" ] && [ "$S13_WORK" = "1" ]; then
+  pass_name "s13_rebase_finalize_keeps_old_tip"
+else
+  fail_name "s13_rebase_finalize_keeps_old_tip"
+  echo "    rc=$S13_RC head=$S13_AFTER/$S13_HEAD count=$S13_COUNT work=$S13_WORK"
+fi
+"$DOLTLITE" "$DB13/feat" \
+  "SELECT dolt_branch('-D','dolt_rebase_feat');" >/dev/null 2>&1
+"$DOLTLITE" "$DB13/feat" "SELECT dolt_rebase('main');" >/dev/null 2>&1
+S13_RETRY=$("$DOLTLITE" "$DB13/feat" "SELECT count(*) FROM t;" 2>/dev/null)
+if [ "$S13_RETRY" = "3" ]; then
+  pass_name "s13_rebase_finalize_retry"
+else
+  fail_name "s13_rebase_finalize_retry"
+  echo "    count=$S13_RETRY"
+fi
+
+echo ""
+echo "--- Scenario 14: Crash at push ref finalize ---"
+
+REMOTE14="$TMPROOT/s14_remote.db"
+LOCAL14="$TMPROOT/s14_local.db"
+"$DOLTLITE" "$REMOTE14" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-Am','base');" >/dev/null 2>&1
+"$DOLTLITE" "$LOCAL14" "SELECT dolt_clone('file://$REMOTE14'); UPDATE t SET v='next' WHERE id=1; SELECT dolt_commit('-Am','next');" >/dev/null 2>&1
+S14_OLD=$("$DOLTLITE" "$REMOTE14" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+S14_NEW=$("$DOLTLITE" "$LOCAL14" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+DOLTLITE_CRASH_FINALIZE=push "$DOLTLITE" "$LOCAL14" \
+  "SELECT dolt_push('origin','main');" >/dev/null 2>&1
+S14_RC=$?
+S14_AFTER=$("$DOLTLITE" "$REMOTE14" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+if [ "$S14_RC" = "99" ] && [ "$S14_AFTER" = "$S14_OLD" ]; then
+  pass_name "s14_push_finalize_keeps_old_tip"
+else
+  fail_name "s14_push_finalize_keeps_old_tip"
+  echo "    rc=$S14_RC head=$S14_AFTER/$S14_OLD"
+fi
+"$DOLTLITE" "$LOCAL14" "SELECT dolt_push('origin','main');" >/dev/null 2>&1
+S14_RETRY=$("$DOLTLITE" "$REMOTE14" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+if [ "$S14_RETRY" = "$S14_NEW" ]; then
+  pass_name "s14_push_finalize_retry"
+else
+  fail_name "s14_push_finalize_retry"
+  echo "    head=$S14_RETRY/$S14_NEW"
+fi
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="

@@ -15,8 +15,18 @@
 #include "doltlite_ignore.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 #include <time.h>
+
+void doltliteTestCrashFinalize(const char *zOperation){
+#ifdef SQLITE_TEST
+  const char *zCrash = getenv("DOLTLITE_CRASH_FINALIZE");
+  if( zCrash && strcmp(zCrash, zOperation)==0 ) _Exit(99);
+#else
+  UNUSED_PARAMETER(zOperation);
+#endif
+}
 
 void doltliteTxnStateClear(DoltliteTxnState *p){
   assert( p!=0 );

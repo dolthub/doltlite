@@ -152,6 +152,61 @@ EOF
 out=$("$DOLTLITE" "$DB" "SELECT id || '|' || v FROM t INDEXED BY iv WHERE v > 0 ORDER BY v;")
 check "delmod_iv_one_row" "1|3" "$out"
 
+DB="$TMPROOT/index_vs_table_drop.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE keep(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+CREATE INDEX iv ON t(v);
+SELECT dolt_commit('-A','-m','main-index');
+EOF
+"$DOLTLITE" "$DB/feat" <<'EOF' >/dev/null 2>&1
+DROP TABLE t;
+CREATE TABLE added(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','feat-drop');
+EOF
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null | tail -1
+BEGIN;
+SELECT dolt_merge('feat');
+SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' ||
+       (SELECT count(*) FROM dolt_status WHERE status='schema conflict') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='t') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='added');
+ROLLBACK;
+EOF
+)
+check "added_index_vs_table_drop_conflicts" "1|1|1|1" "$out"
+
+DB="$TMPROOT/table_drop_vs_index.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE keep(id INTEGER PRIMARY KEY);
+CREATE TABLE obsolete(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+DROP TABLE t;
+CREATE TABLE added(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','main-drop');
+EOF
+"$DOLTLITE" "$DB/feat" <<'EOF' >/dev/null 2>&1
+DROP TABLE obsolete;
+CREATE INDEX iv ON t(v);
+SELECT dolt_commit('-A','-m','feat-index');
+EOF
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null | tail -1
+BEGIN;
+SELECT dolt_merge('feat');
+SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' ||
+       (SELECT count(*) FROM dolt_status WHERE status='schema conflict') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='t') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='added') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='obsolete');
+ROLLBACK;
+EOF
+)
+check "table_drop_vs_added_index_conflicts" "1|1|0|1|0" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
