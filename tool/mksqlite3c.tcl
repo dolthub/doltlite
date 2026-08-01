@@ -606,7 +606,13 @@ proc emit_doltlite_engine_block {} {
   puts $out "#ifndef BLAKE3_USE_NEON"
   puts $out "#define BLAKE3_USE_NEON 0"
   puts $out "#endif"
-  foreach f {
+  # The emission list below is ordered deliberately (definitions before
+  # users), so it stays hand-written rather than globbed. main.mk copies
+  # every doltlite/prolly/chunk source into tsrc by wildcard, though, so
+  # the two can drift: the guard after the loop fails the build when a
+  # copied source is never emitted, instead of letting it go missing from
+  # the amalgamation and surface later as an undefined symbol.
+  set doltlite_emitted {
     prolly_hash.c prolly_xxhash.c blake3.c blake3_portable.c blake3_dispatch.c
     prolly_hashset.c prolly_node.c prolly_cache.c
     chunk_store.c chunk_store_lock.c chunk_store_refs_api.c chunk_store_commit.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
@@ -631,8 +637,27 @@ proc emit_doltlite_engine_block {} {
     doltlite_hashof.c doltlite_constraint_violations.c doltlite_verify_constraints.c doltlite_merge_constraints.c doltlite_merge_constraints_unique.c doltlite_merge_constraints_check.c doltlite_merge_constraints_fk.c
     doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c
     doltlite_remotesrv.c
-  } {
+  }
+  foreach f $doltlite_emitted {
     copy_file $srcdir/$f
+  }
+  set doltlite_unemitted {}
+  foreach path [lsort [concat \
+      [glob -nocomplain $srcdir/doltlite*.c] \
+      [glob -nocomplain $srcdir/prolly_*.c] \
+      [glob -nocomplain $srcdir/chunk_*.c]]] {
+    set base [file tail $path]
+    if {[lsearch -exact $doltlite_emitted $base]<0} {
+      lappend doltlite_unemitted $base
+    }
+  }
+  if {[llength $doltlite_unemitted]>0} {
+    puts stderr "mksqlite3c: doltlite sources copied into tsrc but never\
+emitted into the amalgamation: $doltlite_unemitted"
+    puts stderr "Add them to the emission list in tool/mksqlite3c.tcl (in\
+dependency order), or exclude them from DOLTLITE_EXTRA_TSRC in doltlite.mk\
+if they are compiled separately."
+    exit 1
   }
   section_comment "doltlite: END prolly engine + version-control layer"
 }
