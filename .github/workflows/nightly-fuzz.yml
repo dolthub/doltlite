@@ -7,7 +7,7 @@ name: Nightly fuzz
 # report-failure-issue action (GitHub then emails repo watchers).
 #
 # One matrix job per target so each gets its own time budget (a single job
-# caps at GitHub's 6-hour limit, so the five can't be serialized). Starts at
+# caps at GitHub's 6-hour limit, so the six can't be serialized). Starts at
 # 1 hour per target and can be raised later. The discovered corpus is cached
 # per target, so each night compounds on the inputs earlier runs found instead
 # of restarting from the committed seeds.
@@ -42,6 +42,7 @@ jobs:
           - deserialize_refs
           - read_index
           - deserialize_catalog
+          - wire_response
 
     steps:
     - uses: actions/checkout@v4

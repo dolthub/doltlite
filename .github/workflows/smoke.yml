@@ -137,6 +137,17 @@ jobs:
           -rss_limit_mb=2048 \
           -print_final_stats=1
 
+    - name: Run wire response fuzzer (1m)
+      env:
+        ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
+      run: |
+        "$GITHUB_WORKSPACE/build-fuzz/fuzz_wire_response" \
+          "$GITHUB_WORKSPACE/test/fuzz-corpus/wire_response" \
+          -max_total_time=60 \
+          -timeout=10 \
+          -rss_limit_mb=2048 \
+          -print_final_stats=1
+
     - name: Upload fuzz crash artifacts
       if: failure()
       uses: actions/upload-artifact@v4
