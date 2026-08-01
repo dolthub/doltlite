@@ -4,9 +4,12 @@
 ** meaningful on shared CI hosts.
 **
 **   A. multi-writer refresh: two connections on separate branches
-**      alternate single-row commits after a seeded history; each commit
-**      makes the peer's next refresh see a grown file. Cost must not
-**      scale with the seeded WAL (the incremental tail replay axis).
+**      alternate single-row commits; each commit makes the peer's next
+**      refresh see a grown file. Cost is compared between a gc'd store
+**      and one whose WAL carries a long update-commit history AT THE
+**      SAME TABLE SIZE, so per-commit verification cost (checked builds
+**      walk the tree on every commit) cancels out of the ratio and only
+**      the refresh replay differs (the incremental tail replay axis).
 **   B. open latency: fresh open + first query against the same seeded
 **      histories. Replay is linear in WAL today, so linear growth is
 **      tolerated and superlinear growth fails; after dolt_gc the WAL is
@@ -23,7 +26,7 @@
 #include <sys/time.h>
 #include "sqlite3.h"
 
-#define RATIO_A_MAX 3.0   /* refresh cost vs 5x seeded history */
+#define RATIO_A_MAX 3.0   /* refresh cost: wal-heavy vs gc'd, same rows */
 #define RATIO_B_MAX 12.0  /* open cost vs 5x seeded history (linear ~5x) */
 #define RATIO_B_GC_MAX 1.5 /* post-gc open vs pre-gc open */
 #define RATIO_C_MAX 3.0   /* late commits vs early commits */
@@ -170,12 +173,52 @@ int main(int argc, char **argv){
   seedDb(small, seed);
   seedDb(large, seed*5);
 
-  /* A: multi-writer refresh */
-  aS = alternatingCost(small, seed, rounds);
-  aL = alternatingCost(large, seed*5, rounds);
-  printf("A multi-writer refresh: %.1f ms/commit @%d rows, "
-         "%.1f ms/commit @%d rows\n", aS, seed, aL, seed*5);
-  gate("refresh_cost_flat_vs_history", aL/(aS>0.05?aS:0.05), RATIO_A_MAX);
+  /* A: multi-writer refresh, same table size, different WAL. The gc'd
+  ** store starts with an empty WAL; the other carries nWalCommits of
+  ** single-row updates (no table growth) accumulated since its gc. */
+  {
+    char gcd[512];
+    char walheavy[512];
+    sqlite3 *w;
+    /* A handful of bulk-update commits, each rewriting a large slice of
+    ** the table: the WAL gains tens of megabytes while the commit graph
+    ** gains almost no depth, so checked builds (which walk the tree and
+    ** the graph on every commit) pay the same fixed cost on both stores
+    ** and only an O(WAL) refresh replay separates them. */
+    int nWalCommits = 4;
+    int i;
+    snprintf(gcd, sizeof(gcd), "%s/growth_gcd.db", dir);
+    snprintf(walheavy, sizeof(walheavy), "%s/growth_walheavy.db", dir);
+    remove(gcd);
+    remove(walheavy);
+    snprintf(sql, sizeof(sql), "%s/.growth_gcd.db-lock", dir);
+    remove(sql);
+    snprintf(sql, sizeof(sql), "%s/.growth_walheavy.db-lock", dir);
+    remove(sql);
+    seedDb(gcd, seed);
+    seedDb(walheavy, seed);
+
+    db = openDb(gcd);
+    x(db, "SELECT dolt_gc()");
+    sqlite3_close(db);
+
+    w = openDb(walheavy);
+    for(i=0; i<nWalCommits; i++){
+      snprintf(sql, sizeof(sql),
+        "UPDATE t SET v=randomblob(2000) WHERE id<=%d;"
+        "SELECT dolt_commit('-Am','w%d');", seed/2, i);
+      x(w, sql);
+    }
+    sqlite3_close(w);
+
+    aS = alternatingCost(gcd, seed, rounds);
+    aL = alternatingCost(walheavy, seed, rounds);
+    printf("A multi-writer refresh: %.1f ms/commit gc'd, "
+           "%.1f ms/commit with a %d-bulk-commit WAL (both %d rows)\n",
+           aS, aL, nWalCommits, seed);
+    gate("refresh_cost_flat_vs_history", aL/(aS>0.05?aS:0.05), RATIO_A_MAX);
+    remove(walheavy);
+  }
 
   /* B: open latency, pre- and post-gc (on the large db) */
   oS = openCost3(small);
