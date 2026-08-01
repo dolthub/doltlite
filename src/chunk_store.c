@@ -553,7 +553,6 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   int sectorSize = 1;
   int rc;
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
-  char *lockName = 0;
   int lockHeld;
 
   if( cs->isMemory || cs->readOnly || cs->corruptMidStream ){
@@ -574,7 +573,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
 
   lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
   if( !lockHeld ){
-    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd, &lockName);
+    rc = csGraphLockAcquire(cs, &lockFd);
     if( rc!=SQLITE_OK ) return;
   }
 
@@ -622,7 +621,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   }
 
 done:
-  if( !lockHeld ) csFileUnlock(lockFd, &lockName);
+  if( !lockHeld ) csGraphLockRelease(cs, lockFd);
 }
 
 int chunkStoreClose(ChunkStore *cs){
@@ -633,6 +632,7 @@ int chunkStoreClose(ChunkStore *cs){
   csWriteCleanCloseMarker(cs);
   sqlite3EndBenignMalloc();
   chunkStoreUnlock(cs);
+  csGraphLockCloseCache(cs);
   if( cs->file.pFile ){
     csCloseFile(cs->file.pFile);
     cs->file.pFile = 0;

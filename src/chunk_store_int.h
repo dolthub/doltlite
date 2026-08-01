@@ -22,12 +22,13 @@ typedef sqlite3_file *CsFileLock;
 
 
 int csFileLockHeld(sqlite3_file *pFile);
+int csGraphLockAcquire(struct ChunkStore *cs, sqlite3_file **ppFile);
+void csGraphLockRelease(struct ChunkStore *cs, sqlite3_file *pFile);
+void csGraphLockCloseCache(struct ChunkStore *cs);
 int csFileLock(sqlite3_vfs *pVfs, const char *path,
                sqlite3_file **ppFile, char **pzName);
 int csFileLockPromote(sqlite3_file *pFile);
 void csFileUnlock(sqlite3_file *pFile, char **pzName);
-int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
-                 sqlite3_file **ppFile, char **pzName);
 int csReloadFromDisk(ChunkStore *cs);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
 int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize);

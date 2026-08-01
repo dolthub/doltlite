@@ -73,6 +73,19 @@ static int csDirectoryAccess(
   return SQLITE_OK;
 }
 
+/* Lock an already-open sidecar handle. Split out of csFileLock so a cached
+** handle can be re-locked without paying for another open. */
+static int csFileLockHandle(sqlite3_file *pFile){
+  /* SQLite's unix VFS asserts the lock ladder under SQLITE_DEBUG: from
+  ** NO_LOCK the only legal step is SHARED, then escalate. Jumping straight
+  ** to EXCLUSIVE works with NDEBUG but aborts debug builds (e.g. assert
+  ** smoke in development-builds). */
+  int rc = sqlite3OsLock(pFile, SQLITE_LOCK_SHARED);
+  if( rc==SQLITE_OK ) rc = csFileLockPromote(pFile);
+  if( rc!=SQLITE_OK ) sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+  return rc;
+}
+
 int csFileLock(sqlite3_vfs *pVfs, const char *path,
                       sqlite3_file **ppFile, char **pzName){
   char *zRaw = csLockPath(path);
@@ -108,16 +121,8 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path,
     }
     return rc;
   }
-  /* SQLite's unix VFS asserts the lock ladder under SQLITE_DEBUG: from
-  ** NO_LOCK the only legal step is SHARED, then escalate. Jumping straight
-  ** to EXCLUSIVE works with NDEBUG but aborts debug builds (e.g. assert
-  ** smoke in development-builds). */
-  rc = sqlite3OsLock(pFile, SQLITE_LOCK_SHARED);
-  if( rc==SQLITE_OK ){
-    rc = csFileLockPromote(pFile);
-  }
+  rc = csFileLockHandle(pFile);
   if( rc!=SQLITE_OK ){
-    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
     sqlite3OsCloseFree(pFile);
     sqlite3_free(zLock);
     return rc;
@@ -141,9 +146,65 @@ void csFileUnlock(sqlite3_file *pFile, char **pzName){
   }
 }
 
-int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
-                        sqlite3_file **ppFile, char **pzName){
-  return csFileLock(pVfs, path, ppFile, pzName);
+/* Close the cached sidecar handle. The caller must not hold the lock. */
+void csGraphLockCloseCache(ChunkStore *cs){
+  if( cs->pLockCacheFile ){
+    sqlite3OsCloseFree(cs->pLockCacheFile);
+    cs->pLockCacheFile = 0;
+  }
+  sqlite3_free(cs->pLockCacheName);
+  cs->pLockCacheName = 0;
+}
+
+/* Acquire the graph lock, reusing the cached sidecar handle when possible.
+** *ppFile is the locked handle; it is owned by the cache, so the caller
+** releases it with csGraphLockRelease rather than closing it. */
+int csGraphLockAcquire(ChunkStore *cs, sqlite3_file **ppFile){
+  int rc;
+
+  *ppFile = 0;
+  if( cs->pLockCacheFile ){
+    /* The sidecar can be deleted or replaced out from under a live handle
+    ** (a stale lock file cleaned up by hand, say). Locking a vanished inode
+    ** would exclude nobody, so revalidate — a stat, against the ~18us the
+    ** open it replaces would cost. */
+    int bMoved = 0;
+    if( sqlite3OsFileControl(cs->pLockCacheFile, SQLITE_FCNTL_HAS_MOVED,
+                             &bMoved)!=SQLITE_OK || bMoved ){
+      csGraphLockCloseCache(cs);
+    }
+  }
+  if( cs->pLockCacheFile ){
+    rc = csFileLockHandle(cs->pLockCacheFile);
+    if( rc==SQLITE_OK ){
+      *ppFile = cs->pLockCacheFile;
+      return SQLITE_OK;
+    }
+    /* A busy peer is the common case and must stay SQLITE_BUSY; only drop
+    ** the cache when the handle itself looks unusable. */
+    if( rc!=SQLITE_BUSY ) csGraphLockCloseCache(cs);
+    return rc;
+  }
+  rc = csFileLock(cs->file.pVfs, cs->file.zFilename,
+                  &cs->pLockCacheFile, &cs->pLockCacheName);
+  if( rc!=SQLITE_OK ){
+    cs->pLockCacheFile = 0;
+    cs->pLockCacheName = 0;
+    return rc;
+  }
+  *ppFile = cs->pLockCacheFile;
+  return SQLITE_OK;
+}
+
+/* Release the graph lock but keep the sidecar handle open for reuse. */
+void csGraphLockRelease(ChunkStore *cs, sqlite3_file *pFile){
+  if( !pFile ) return;
+  if( pFile==cs->pLockCacheFile ){
+    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+  }else{
+    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+    sqlite3OsCloseFree(pFile);
+  }
 }
 
 
@@ -204,14 +265,14 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_ERROR;
   }
-  rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
+  rc = csGraphLockAcquire(cs, &CS_GRAPH_LOCK(cs));
   if( rc!=SQLITE_OK ){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return rc;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
-    csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
+    csGraphLockRelease(cs, CS_GRAPH_LOCK(cs));
     CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return rc;
@@ -229,12 +290,12 @@ void chunkStoreUnlock(ChunkStore *cs){
   if( cs->lockDepth > 0 ){
     cs->lockDepth--;
     if( cs->lockDepth == 0 && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
-      csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
+      csGraphLockRelease(cs, CS_GRAPH_LOCK(cs));
       CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     }
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
   }else if( csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
-    csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
+    csGraphLockRelease(cs, CS_GRAPH_LOCK(cs));
     CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   }
 }

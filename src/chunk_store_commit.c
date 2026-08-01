@@ -110,14 +110,13 @@ static int csCommitToMemory(ChunkStore *cs){
 }
 
 /* Open/lock the store file, resolve logical EOF, and sector-align the
-** next commit batch. On entry *pLockFd / *pzLockName are zeroed by the
-** caller when the graph lock is already held. */
+** next commit batch. *pLockFd is left zeroed when the graph lock is
+** already held; otherwise it receives the cache-owned locked handle. */
 static int csCommitResolveAppendPoint(
   ChunkStore *cs,
   int hadFile,
   int lockHeld,
   CsFileLock *pLockFd,
-  char **pzLockName,
   i64 *pFileSize,
   i64 *pOrigFileSize,
   i64 *pDurableTo,
@@ -139,7 +138,7 @@ static int csCommitResolveAppendPoint(
   }
 
   if( !lockHeld ){
-    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, pLockFd, pzLockName);
+    rc = csGraphLockAcquire(cs, pLockFd);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -343,7 +342,6 @@ static int csCommitToFile(ChunkStore *cs){
   i64 contentEnd = 0;
   int sectorSize = 1;
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
-  char *lockName = 0;
   int hadFile = (cs->file.pFile != 0);
   int lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
   ChunkIndexEntry *aCommittedPending = 0;
@@ -355,12 +353,12 @@ static int csCommitToFile(ChunkStore *cs){
   int crashWriteActive = csCrashWriteInjectionActive();
 
   rc = csCommitResolveAppendPoint(
-      cs, hadFile, lockHeld, &lockFd, &lockName,
+      cs, hadFile, lockHeld, &lockFd,
       &fileSize, &origFileSize, &durableTo, &batchStart, &sectorSize);
   if( rc!=SQLITE_OK ){
     /* Open-before-lock failures never held a commit lock; unlock is a no-op
     ** when lockHeld or when the lock was never acquired. */
-    if( !lockHeld ) csFileUnlock(lockFd, &lockName);
+    if( !lockHeld ) csGraphLockRelease(cs, lockFd);
     return rc;
   }
 
@@ -526,7 +524,7 @@ static int csCommitToFile(ChunkStore *cs){
   cs->wal.cleanCloseMarker = 0;
 
 commit_done:
-  csFileUnlock(lockFd, &lockName);
+  if( !lockHeld ) csGraphLockRelease(cs, lockFd);
 
   if( rc != SQLITE_OK ){
     if( cs->file.pFile && writeOff > origFileSize ){

@@ -192,6 +192,13 @@ struct ChunkStore {
                           ** file (ticket #1370 / misc5-4.1). */
   sqlite3_file *pGraphLockFile;
   char *pGraphLockName;        /* owned name kept alive for pGraphLockFile (xOpen contract) */
+  /* The graph-lock sidecar stays open across acquisitions: opening it was
+  ** ~30% of autocommit CPU (roughly five opens per single-row commit), and
+  ** a POSIX lock/unlock on a handle already open costs a fraction of that.
+  ** pGraphLockFile aliases this handle while the lock is held and is NULL
+  ** when it is not, so hold-checks are unchanged. */
+  sqlite3_file *pLockCacheFile;
+  char *pLockCacheName;
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 
