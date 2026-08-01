@@ -34,10 +34,17 @@ int mergeCatalogPass2(
           aTheirsSchema, nTheirsSchema, aTheirs[i].iTable);
       if( pTheirSe && pTheirSe->zName && pTheirSe->zType
        && strcmp(pTheirSe->zType, "index")==0 ){
+        struct TableEntry *pTheirTable = doltliteFindTableByName(
+            aTheirs, nTheirs, pTheirSe->zTblName);
         if( hasSchemaConflictObject(aConflictTables, nConflictTables,
                                     pTheirSe->zName)
          || hasSchemaConflictTable(aConflictTables, nConflictTables,
-                                   pTheirSe->zTblName) ){
+                                   pTheirSe->zTblName)
+         || !pTheirTable
+         || mergeTableRenameOtherDrop(
+              aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+              aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema,
+              pTheirTable) ){
           continue;
         }
         oursEntry = findCatalogEntryBySchemaObject(
@@ -170,6 +177,12 @@ int mergeCatalogPass2(
     }
 
     if( hasSchemaConflictObject(aConflictTables, nConflictTables, zName) ){
+      continue;
+    }
+    if( mergeTableRenameOtherDrop(
+          aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+          aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema,
+          &aTheirs[i]) ){
       continue;
     }
     oursEntry = doltliteFindTableByName(aOurs, nOurs, zName);

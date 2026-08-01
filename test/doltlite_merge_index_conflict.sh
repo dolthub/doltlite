@@ -238,6 +238,33 @@ EOF
 )
 check "source_index_on_conflicted_table_is_not_adopted" "2|0|1" "$out"
 
+DB="$TMPROOT/rename_vs_drop.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE first(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX iv ON t(v);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+DROP TABLE first;
+ALTER TABLE t RENAME TO renamed;
+SELECT dolt_commit('-A','-m','rename');
+EOF
+"$DOLTLITE" "$DB/feat" <<'EOF' >/dev/null 2>&1
+DROP TABLE t;
+CREATE TABLE replacement(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','drop-add');
+EOF
+out=$("$DOLTLITE" "$DB/feat" "SELECT dolt_cherry_pick('main');" 2>/dev/null)
+rc=$?
+check "rename_vs_drop_cherry_pick_succeeds" "0" "$rc"
+out=$("$DOLTLITE" "$DB/feat" \
+  "SELECT group_concat(name, ',') FROM sqlite_schema WHERE name IN ('first','t','renamed','iv','replacement') ORDER BY name;")
+check "rename_vs_drop_keeps_current_schema" "replacement" "$out"
+out=$("$DOLTLITE" "$DB/feat" \
+  "SELECT (SELECT count(*) FROM dolt_status) || '|' || (SELECT message FROM dolt_log LIMIT 1);")
+check "rename_vs_drop_is_clean_commit" "0|rename" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then

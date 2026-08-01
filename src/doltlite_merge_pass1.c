@@ -45,6 +45,7 @@ struct MergePass1Ctx {
   SchemaMergeAction **ppSchemaActions; int *pnSchemaActions;
   int bDisjointSchemaChanges;
   int bPreferOurMaster;
+  int bTheirsRenameOursDrop;
   char ***pazReindex; int *pnReindex;
   IndexMergePatch *aPatches;
   int nPatches;
@@ -538,6 +539,14 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
 
     if( c->aTheirs[i].iTable<=1 ) continue;
     if( zObject ){
+      if( mergeTableRenameOtherDrop(
+            c->aAnc, c->nAnc, c->aOurs, c->nOurs,
+            c->aTheirs, c->nTheirs,
+            c->aAncSchema, c->nAncSchema,
+            c->aTheirsSchema, c->nTheirsSchema, &c->aTheirs[i]) ){
+        c->bTheirsRenameOursDrop = 1;
+        continue;
+      }
       pAncEntry = doltliteFindTableByName(c->aAnc, c->nAnc, zObject);
       pOurEntry = doltliteFindTableByName(c->aOurs, c->nOurs, zObject);
       if( pAncEntry ){
@@ -596,7 +605,8 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
   hasSchemaActions = (c->ppSchemaActions && c->pnSchemaActions
                       && *c->pnSchemaActions > 0);
   bPreferOurMasterHere = hasAnySchemaConflict(
-      *c->ppConflictTables, *c->pnConflictTables) || (c->bPreferOurMaster
+      *c->ppConflictTables, *c->pnConflictTables)
+      || c->bTheirsRenameOursDrop || (c->bPreferOurMaster
       && replayDropsDisjointSchemaObject(c->aAncSchema, c->nAncSchema,
                                          c->aTheirsSchema, c->nTheirsSchema));
 
