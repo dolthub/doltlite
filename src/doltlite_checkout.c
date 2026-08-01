@@ -327,15 +327,6 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   rc = doltliteLoadWorkingSet(db, p->zTargetBranch);
   if( rc!=SQLITE_OK ) return rc;
 
-  {
-    ProllyHash staged;
-    doltliteGetSessionStaged(db, &staged);
-    if( prollyHashIsEmpty(&staged) ){
-      rc = doltliteSetSessionStaged(db, &p->targetCatHash);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
-
   rc = refreshBranchScopedTables(db);
   if( rc!=SQLITE_OK ) return rc;
 
