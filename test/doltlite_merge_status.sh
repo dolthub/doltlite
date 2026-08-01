@@ -184,6 +184,29 @@ mk_cv_only_merge "$DB16"
 echo "SELECT dolt_merge('src');" | $DOLTLITE "$DB16" > /dev/null 2>&1
 run_test "cv_only_autocommit_rolled_back" "$MS" "0|~|~|~|~" "$DB16"
 
+DB17=/tmp/test_ms_schema_auto_$$.db; rm -f "$DB17"
+echo "CREATE TABLE indexed(id INTEGER PRIMARY KEY, payload TEXT);
+      CREATE TABLE dropped(id INTEGER PRIMARY KEY, payload TEXT);
+      CREATE TABLE renamed(id INTEGER PRIMARY KEY, payload TEXT);
+      CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+      INSERT INTO kv VALUES(1,'base');
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('src');
+      ALTER TABLE dropped ADD COLUMN ours TEXT;
+      INSERT INTO kv VALUES(2,'ours');
+      SELECT dolt_commit('-Am','target');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+echo "CREATE INDEX indexed_payload ON indexed(payload);
+      DROP TABLE dropped;
+      ALTER TABLE renamed RENAME TO renamed_src;
+      INSERT INTO kv VALUES(3,'theirs');
+      SELECT dolt_commit('-Am','source');" | $DOLTLITE "$DB17/src" > /dev/null 2>&1
+echo "SELECT dolt_merge('src');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+run_test "schema_conflict_autocommit_rolled_back" "$MS" "0|~|~|~|~" "$DB17"
+run_test "schema_conflict_autocommit_status_clean" \
+  "SELECT count(*) FROM dolt_status;" "0" "$DB17"
+run_test "schema_conflict_autocommit_reset_succeeds" \
+  "SELECT dolt_reset('--soft');" "0" "$DB17"
+
 # A merge still open after every conflict was resolved reports an empty
 # unmerged_tables, not NULL and not an error.
 DB11=/tmp/test_ms_resolved_$$.db; rm -f "$DB11"
@@ -201,5 +224,5 @@ run_test_match "read_only" \
   "may not be modified" "$DB"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" \
-  "$DB12" "$DB13" "$DB14" "$DB15" "$DB16"
+  "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
 dltest_finish
