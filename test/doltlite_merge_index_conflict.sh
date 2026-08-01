@@ -207,6 +207,37 @@ EOF
 )
 check "table_drop_vs_added_index_conflicts" "1|1|0|1|0" "$out"
 
+DB="$TMPROOT/index_on_conflicted_add.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1 TEXT);
+CREATE TABLE kv(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('src');
+CREATE TABLE ours_only(id INTEGER PRIMARY KEY, payload TEXT, c2 TEXT);
+CREATE TABLE shared_name(id INTEGER PRIMARY KEY, payload TEXT, c3 TEXT);
+CREATE INDEX idx_t ON t(payload);
+CREATE INDEX idx_ours_1 ON shared_name(payload);
+CREATE INDEX idx_ours_2 ON shared_name(payload);
+SELECT dolt_commit('-A','-m','ours');
+EOF
+"$DOLTLITE" "$DB/src" <<'EOF' >/dev/null 2>&1
+DROP TABLE t;
+CREATE TABLE shared_name(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE theirs_only(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE INDEX idx_theirs ON shared_name(payload);
+SELECT dolt_commit('-A','-m','theirs');
+EOF
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null | tail -1
+BEGIN;
+SELECT dolt_merge('src');
+SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='idx_theirs') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='idx_t');
+ROLLBACK;
+EOF
+)
+check "source_index_on_conflicted_table_is_not_adopted" "2|0|1" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
