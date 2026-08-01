@@ -150,6 +150,9 @@ int doltliteRollbackAutocommitConflict(
     rc = doltliteSetSessionConstraintViolationsCatalog(
         db, &pSaved->sessionConstraintViolationsCatalog);
   }
+  if( rc==SQLITE_OK ){
+    rc = doltlitePersistWorkingSet(db);
+  }
   doltliteTxnStateClear(pSaved);
   if( rc==SQLITE_OK && hadTopLevelSavepoint ){
     rc = doltliteVcSealTopLevelSavepointTxn(db);
