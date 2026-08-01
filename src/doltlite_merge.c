@@ -350,6 +350,9 @@ static int preDetectIndexSchemaConflicts(
       SchemaEntry *pAnc;
       SchemaEntry *pOurs;
       SchemaEntry *pTheirs;
+      SchemaEntry *pAncTable;
+      SchemaEntry *pOursTable;
+      SchemaEntry *pTheirsTable;
       const char *zTable;
       int oursChanged;
       int theirsChanged;
@@ -373,6 +376,25 @@ static int preDetectIndexSchemaConflicts(
       pTheirs = findSchemaEntry(aTheirs, nTheirs, a[i].zName);
       oursChanged = !mergeSchemaEntriesSame(pAnc, pOurs);
       theirsChanged = !mergeSchemaEntriesSame(pAnc, pTheirs);
+      zTable = pOurs && pOurs->zTblName ? pOurs->zTblName
+             : (pTheirs && pTheirs->zTblName ? pTheirs->zTblName
+             : (pAnc && pAnc->zTblName ? pAnc->zTblName : a[i].zName));
+      pAncTable = findSchemaEntry(aAnc, nAnc, zTable);
+      pOursTable = findSchemaEntry(aOurs, nOurs, zTable);
+      pTheirsTable = findSchemaEntry(aTheirs, nTheirs, zTable);
+      if( pAncTable && pAncTable->zType
+       && strcmp(pAncTable->zType, "table")==0
+       && ((pOursTable && !pTheirsTable && oursChanged)
+        || (!pOursTable && pTheirsTable && theirsChanged)) ){
+        rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                                  zTable, zTable, &addedSchemaTable);
+        if( rc!=SQLITE_OK ) return rc;
+        if( addedSchemaTable ) (*pTotalConflicts)++;
+        rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                                  zTable, a[i].zName, &addedSchemaTable);
+        if( rc!=SQLITE_OK ) return rc;
+        continue;
+      }
       if( !oursChanged || !theirsChanged
        || mergeSchemaEntriesSame(pOurs, pTheirs) ){
         continue;
@@ -380,9 +402,6 @@ static int preDetectIndexSchemaConflicts(
       /* Dolt keeps the modified index definition when the other branch
       ** drops that index. Only competing surviving definitions conflict. */
       if( pAnc && (!pOurs || !pTheirs) ) continue;
-      zTable = pOurs && pOurs->zTblName ? pOurs->zTblName
-             : (pTheirs && pTheirs->zTblName ? pTheirs->zTblName
-                                             : a[i].zName);
       rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
                                 zTable, a[i].zName, &addedSchemaTable);
       if( rc!=SQLITE_OK ) return rc;
@@ -811,6 +830,11 @@ static int rebuildDisjointSchemaRows(
     Pgno iRootpage;
     if( !pSe->zName || !pSe->zType ) continue;
     if( strcmp(pSe->zType, "index")!=0 ) continue;
+    if( hasSchemaConflictObject(aConflictTables, nConflictTables, pSe->zName)
+     || hasSchemaConflictTable(aConflictTables, nConflictTables,
+                               pSe->zTblName) ){
+      continue;
+    }
     if( !schemaEntryChangedByName(aAncSchema, nAncSchema,
                                   aTheirsSchema, nTheirsSchema,
                                   pSe->zName) ){
