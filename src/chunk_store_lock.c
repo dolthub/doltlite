@@ -169,10 +169,17 @@ int csGraphLockAcquire(ChunkStore *cs, sqlite3_file **ppFile){
     ** would exclude nobody, so revalidate — a stat, against the ~18us the
     ** open it replaces would cost. */
     int bMoved = 0;
-    if( sqlite3OsFileControl(cs->pLockCacheFile, SQLITE_FCNTL_HAS_MOVED,
-                             &bMoved)!=SQLITE_OK || bMoved ){
-      csGraphLockCloseCache(cs);
+    int rcMoved = sqlite3OsFileControl(cs->pLockCacheFile,
+                                       SQLITE_FCNTL_HAS_MOVED, &bMoved);
+    if( rcMoved==SQLITE_NOTFOUND ){
+      /* VFS does not implement the check; the handle stays usable. */
+      bMoved = 0;
+    }else if( rcMoved!=SQLITE_OK ){
+      /* Reinterpreting a failed check as "moved" would reopen and succeed,
+      ** consuming an injected fault without ever reporting it. */
+      return rcMoved;
     }
+    if( bMoved ) csGraphLockCloseCache(cs);
   }
   if( cs->pLockCacheFile ){
     rc = csFileLockHandle(cs->pLockCacheFile);
