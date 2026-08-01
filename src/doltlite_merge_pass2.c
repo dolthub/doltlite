@@ -35,7 +35,9 @@ int mergeCatalogPass2(
       if( pTheirSe && pTheirSe->zName && pTheirSe->zType
        && strcmp(pTheirSe->zType, "index")==0 ){
         if( hasSchemaConflictObject(aConflictTables, nConflictTables,
-                                    pTheirSe->zName) ){
+                                    pTheirSe->zName)
+         || hasSchemaConflictTable(aConflictTables, nConflictTables,
+                                   pTheirSe->zTblName) ){
           continue;
         }
         oursEntry = findCatalogEntryBySchemaObject(
