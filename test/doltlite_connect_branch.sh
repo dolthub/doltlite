@@ -105,6 +105,11 @@ setup_db "$DB"
 res=$("$DOLTLITE" "$DB" "SELECT dolt_connect_branch('feat'); SELECT dolt_branch('-d','feat');" 2>&1)
 check_match "connect_then_delete_current_branch_errors" "cannot delete" "$res"
 
+setup_db "$DB"
+"$DOLTLITE" "$DB" "SELECT dolt_connect_branch('feat'); INSERT INTO t VALUES(3,'unstaged');" >/dev/null
+res=$("$DOLTLITE" "$DB" "SELECT dolt_connect_branch('feat'); SELECT staged FROM dolt_status WHERE table_name='t';")
+check_eq "reconnect_preserves_unstaged_state" $'0\n0' "$res"
+
 rm -f "$DB"
 
 echo ""

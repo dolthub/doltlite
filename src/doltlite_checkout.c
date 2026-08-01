@@ -452,13 +452,6 @@ void doltConnectBranchFunc(
     doltliteSetSessionHead(db, &targetCommit);
     rc = doltliteLoadWorkingSet(db, zBranch);
   }
-  if( rc==SQLITE_OK ){
-    ProllyHash staged;
-    doltliteGetSessionStaged(db, &staged);
-    if( prollyHashIsEmpty(&staged) ){
-      rc = doltliteSetSessionStaged(db, &targetCatHash);
-    }
-  }
   if( rc!=SQLITE_OK ){
     int restoreRc = checkoutRestoreSession(db, &m);
     if( restoreRc!=SQLITE_OK ) rc = restoreRc;
