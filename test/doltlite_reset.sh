@@ -268,6 +268,23 @@ run_test "hard_reset_untracked_status" \
 run_test "hard_reset_untracked_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB11"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+DB12=/tmp/test_reset12_$$.db; rm -f "$DB12"
+$DOLTLITE "$DB12" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX idx ON t(v);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','base');
+DELETE FROM t;
+INSERT INTO t VALUES(2,'replacement');
+ALTER TABLE t RENAME TO u;
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_drops_tracked_rename" \
+  "SELECT group_concat(name || ':' || tbl_name, '|') FROM sqlite_schema WHERE name IN ('idx','t','u') ORDER BY name;" \
+  "t:t|idx:t" "$DB12"
+run_test "hard_reset_tracked_rename_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB12"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12"
 
 dltest_finish

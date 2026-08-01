@@ -160,7 +160,9 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   ProllyHash *pTargetCatHash
 ){
   struct TableEntry *aHead = 0;
+  SchemaEntry *aTargetSchema = 0;
   int nHead = 0;
+  int nTargetSchema = 0;
   int nUntracked = 0;
   char **azUntracked = 0;
   sqlite3_stmt *pStmt = 0;
@@ -170,8 +172,11 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   rc = doltliteLoadCatalog(db, pPreResetHeadCatHash, &aHead, &nHead, 0);
   if( rc==SQLITE_OK ){
     rc = sqlite3_prepare_v2(db,
-        "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+        "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' "
+        "AND m.name NOT LIKE 'sqlite_%' AND m.name NOT LIKE 'dolt_%' "
+        "AND NOT EXISTS (SELECT 1 FROM dolt_status AS s "
+        "WHERE s.status='renamed' AND "
+        "substr(s.table_name, -(length(m.name)+4))=' -> ' || m.name)",
         -1, &pStmt, 0);
   }
   if( rc==SQLITE_OK ){
@@ -193,6 +198,36 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
         azUntracked[nUntracked++] = sqlite3_mprintf("%s", zName);
       }
     }
+    sqlite3_finalize(pStmt);
+    pStmt = 0;
+  }
+
+  if( rc==SQLITE_OK && nUntracked>0 ){
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pTargetCatHash,
+                               &aTargetSchema, &nTargetSchema);
+  }
+  if( rc==SQLITE_OK && nUntracked>0 ){
+    int nKeep = 0;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
+        -1, &pStmt, 0);
+    for(j=0; rc==SQLITE_OK && j<nUntracked; j++){
+      int keep = 1;
+      sqlite3_bind_text(pStmt, 1, azUntracked[j], -1, SQLITE_STATIC);
+      while( keep && sqlite3_step(pStmt)==SQLITE_ROW ){
+        const char *zIdx = (const char*)sqlite3_column_text(pStmt, 0);
+        if( zIdx && findSchemaEntry(aTargetSchema, nTargetSchema, zIdx) ){
+          keep = 0;
+        }
+      }
+      sqlite3_reset(pStmt);
+      if( keep ){
+        azUntracked[nKeep++] = azUntracked[j];
+      }else{
+        sqlite3_free(azUntracked[j]);
+      }
+    }
+    nUntracked = nKeep;
     sqlite3_finalize(pStmt);
     pStmt = 0;
   }
@@ -305,6 +340,7 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
   sqlite3_free(azUntracked);
   doltliteFreeCatalog(aHead, nHead);
+  freeSchemaEntries(aTargetSchema, nTargetSchema);
   return rc;
 }
 
