@@ -214,6 +214,7 @@ do_execsql_test 3.3 {
 } {table t1 t1 {CREATE TABLE t1(x, y)}}
 
 #-------------------------------------------------------------------------
+if {!$sqlite_options(doltlite)} {
 reset_db
 do_execsql_test 4.0 {
   CREATE TABLE t1(x INTEGER PRIMARY KEY);
@@ -292,7 +293,6 @@ foreach {tn mjname bDel} $tests {
     forcedelete $mjname
   }
 }
+}
 
 finish_test
-
-

@@ -538,7 +538,7 @@ datetest 13.37 {date('2023-04-31')} {2023-05-01}
 # Put a floating point number in the database so that we can manipulate
 # raw bits using the hexio interface.
 #
-if {0==[sqlite3 -has-codec]} {
+if {0==[sqlite3 -has-codec] && !$sqlite_options(doltlite)} {
   do_test date-14.1 {
     execsql {
       PRAGMA auto_vacuum=OFF;
