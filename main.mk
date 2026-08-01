@@ -1288,8 +1288,12 @@ T.link.tcl = $(T.tcl.env.source); $(T.link)
 # files are automatically generated.  This target takes care of
 # all that automatic generation.
 #
-.target_source: $(MAKE_SANITY_CHECK) $(SRC) $(TOP)/tool/vdbe-compress.tcl \
-    fts5.c $(B.tclsh)
+# DOLTLITE_EXTRA_TSRC is copied into tsrc below, so it must also be a
+# prerequisite: without it, editing a doltlite/prolly/chunk source leaves
+# the amalgamation stale, and every amalgamation consumer (testfixture
+# above all) silently tests the previously generated engine.
+.target_source: $(MAKE_SANITY_CHECK) $(SRC) $(DOLTLITE_EXTRA_TSRC) \
+    $(TOP)/tool/vdbe-compress.tcl fts5.c $(B.tclsh)
 	rm -rf tsrc
 	mkdir tsrc
 	cp -f $(SRC) tsrc
