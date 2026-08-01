@@ -265,6 +265,34 @@ out=$("$DOLTLITE" "$DB/feat" \
   "SELECT (SELECT count(*) FROM dolt_status) || '|' || (SELECT message FROM dolt_log LIMIT 1);")
 check "rename_vs_drop_is_clean_commit" "0|rename" "$out"
 
+DB="$TMPROOT/index_drop_vs_parent_rename.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE dropme(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX iv ON t(v);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+DROP TABLE dropme;
+ALTER TABLE t RENAME TO renamed;
+SELECT dolt_commit('-A','-m','drop-and-rename');
+EOF
+"$DOLTLITE" "$DB/feat" <<'EOF' >/dev/null 2>&1
+DROP INDEX iv;
+SELECT dolt_commit('-A','-m','drop-index');
+EOF
+out=$("$DOLTLITE" "$DB/feat" <<'EOF' 2>/dev/null | tail -1
+BEGIN;
+SELECT dolt_cherry_pick('main');
+SELECT (SELECT count(*) FROM dolt_status WHERE status='schema conflict') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='t') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='renamed') || '|' ||
+       (SELECT count(*) FROM sqlite_schema WHERE name='iv');
+ROLLBACK;
+EOF
+)
+check "index_drop_vs_parent_rename_conflicts" "1|1|0|0" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
