@@ -3081,10 +3081,8 @@ static Select *isCandidateForInOpt(const Expr *pX){
   if( ExprHasProperty(pX, EP_VarSelect)  ) return 0;  /* Correlated subq */
   p = pX->x.pSelect;
   if( p->pPrior ) return 0;              /* Not a compound SELECT */
-  if( p->selFlags & (SF_Distinct|SF_Aggregate) ){
-    testcase( (p->selFlags & (SF_Distinct|SF_Aggregate))==SF_Distinct );
-    testcase( (p->selFlags & (SF_Distinct|SF_Aggregate))==SF_Aggregate );
-    return 0; /* No DISTINCT keyword and no aggregate functions */
+  if( p->selFlags & SF_Aggregate ){
+    return 0; /* No GROUP BY keyword or aggregate functions */
   }
   assert( p->pGroupBy==0 );              /* Has no GROUP BY clause */
   if( p->pLimit ) return 0;              /* Has no LIMIT clause */
@@ -3693,6 +3691,8 @@ void sqlite3CodeRhsOfIN(
   }
 #endif
   pKeyInfo = sqlite3KeyInfoAlloc(pParse->db, nVal, 1);
+  assert( pKeyInfo!=0 || pParse->nErr );
+  if( pKeyInfo==0 ) return;
 
   if( ExprUseXSelect(pExpr) ){
     /* Case 1:     expr IN (SELECT ...)
@@ -3717,6 +3717,19 @@ void sqlite3CodeRhsOfIN(
       sqlite3SelectDestInit(&dest, SRT_Set, iTab);
       dest.zAffSdst = exprINAffinity(pParse, pExpr);
       pSelect->iLimit = 0;
+      assert( pEList!=0 );
+      assert( pEList->nExpr>0 );
+      assert( sqlite3KeyInfoIsWriteable(pKeyInfo) );
+      for(i=0; i<nVal; i++){
+        Expr *p = sqlite3VectorFieldSubexpr(pLeft, i);
+        CollSeq *pColl;
+        pKeyInfo->aColl[i] = pColl = sqlite3BinaryCompareCollSeq(
+            pParse, p, pEList->a[i].pExpr
+        );
+        if( !sqlite3IsBinary(pColl) ){
+          allowBloom = 0;  /* tag-202607231411 */
+        }
+      }
       if( addrOnce
        && allowBloom
        && OptimizationEnabled(pParse->db, SQLITE_BloomFilter)
@@ -3725,9 +3738,10 @@ void sqlite3CodeRhsOfIN(
         addrBloom = sqlite3VdbeAddOp2(v, OP_Blob, 10000, regBloom);
         VdbeComment((v, "Bloom filter"));
         dest.iSDParm2 = regBloom;
+        sqlite3VdbeChangeP4(v, addr, (void *)pKeyInfo, P4_KEYINFO);
+        pKeyInfo = 0;
       }
       testcase( pSelect->selFlags & SF_Distinct );
-      testcase( pKeyInfo==0 ); /* Caused by OOM in sqlite3KeyInfoAlloc() */
       pCopy = sqlite3SelectDup(pParse->db, pSelect, 0);
       rc = pParse->db->mallocFailed ? 1 :sqlite3Select(pParse, pCopy, &dest);
       sqlite3SelectDelete(pParse->db, pCopy);
@@ -3744,16 +3758,6 @@ void sqlite3CodeRhsOfIN(
       if( rc ){
         sqlite3KeyInfoUnref(pKeyInfo);
         return;
-      }
-      assert( pKeyInfo!=0 ); /* OOM will cause exit after sqlite3Select() */
-      assert( pEList!=0 );
-      assert( pEList->nExpr>0 );
-      assert( sqlite3KeyInfoIsWriteable(pKeyInfo) );
-      for(i=0; i<nVal; i++){
-        Expr *p = sqlite3VectorFieldSubexpr(pLeft, i);
-        pKeyInfo->aColl[i] = sqlite3BinaryCompareCollSeq(
-            pParse, p, pEList->a[i].pExpr
-        );
       }
     }
   }else if( ALWAYS(pExpr->x.pList!=0) ){
@@ -3775,10 +3779,9 @@ void sqlite3CodeRhsOfIN(
     }else if( affinity==SQLITE_AFF_REAL ){
       affinity = SQLITE_AFF_NUMERIC;
     }
-    if( pKeyInfo ){
-      assert( sqlite3KeyInfoIsWriteable(pKeyInfo) );
-      pKeyInfo->aColl[0] = sqlite3ExprCollSeq(pParse, pExpr->pLeft);
-    }
+    assert( pKeyInfo!=0 );
+    assert( sqlite3KeyInfoIsWriteable(pKeyInfo) );
+    pKeyInfo->aColl[0] = sqlite3ExprCollSeq(pParse, pExpr->pLeft);
 
     /* Loop through each expression in <exprlist>. */
     r1 = sqlite3GetTempReg(pParse);
@@ -4163,13 +4166,28 @@ static void sqlite3ExprCodeIN(
     ** we need to reorder the LHS values to be in index order.  Run Affinity
     ** before reordering the columns, so that the affinity is correct.
     */
-    sqlite3VdbeAddOp4(v, OP_Affinity, rLhs, nVector, 0, zAff, nVector);
+    if( nVector==1 ){
+      char aff = zAff[0];
+      if( aff>=SQLITE_AFF_TEXT && aff!=sqlite3ExprAffinity(pLeft) ){
+        /* The OP_Affinity below may change the value. In this case, create a
+        ** copy of rLhs to run OP_Affinity on, in case the original register
+        ** is used again (e.g. if it is TK_AGG_COLUMN).  */
+        int rTmp = sqlite3GetTempReg(pParse);
+        sqlite3VdbeAddOp3(v, OP_Copy, rLhs, rTmp, 0);
+        rLhs = rTmp;
+        sqlite3VdbeAddOp4(v, OP_Affinity, rLhs, 1, 0, zAff, 1);
+      }
+    }else{
+      sqlite3VdbeAddOp4(v, OP_Affinity, rLhs, nVector, 0, zAff, nVector);
+    }
+
     for(i=0; i<nVector && aiMap[i]==i; i++){} /* Are LHS fields reordered? */
     if( i!=nVector ){
       /* Need to reorder the LHS fields according to aiMap */
       int rLhsOrig = rLhs;
       rLhs = sqlite3GetTempRange(pParse, nVector);
       for(i=0; i<nVector; i++){
+        testcase( aiMap[i]!=i );
         sqlite3VdbeAddOp3(v, OP_Copy, rLhsOrig+i, rLhs+aiMap[i], 0);
       }
       sqlite3ReleaseTempReg(pParse, rLhsOrig);
@@ -4190,7 +4208,8 @@ static void sqlite3ExprCodeIN(
     Expr *p = sqlite3VectorFieldSubexpr(pExpr->pLeft, i);
     if( pParse->nErr ) goto sqlite3ExprCodeIN_oom_error;
     if( sqlite3ExprCanBeNull(p) ){
-      sqlite3VdbeAddOp2(v, OP_IsNull, rLhs+i, destStep2);
+      testcase( aiMap[i]!=i );
+      sqlite3VdbeAddOp2(v, OP_IsNull, rLhs+aiMap[i], destStep2);
       VdbeCoverage(v);
     }
   }
@@ -4264,9 +4283,19 @@ static void sqlite3ExprCodeIN(
     CollSeq *pColl;
     int r3 = sqlite3GetTempReg(pParse);
     p = sqlite3VectorFieldSubexpr(pLeft, i);
-    pColl = sqlite3ExprCollSeq(pParse, p);
-    sqlite3VdbeAddOp3(v, OP_Column, iTab, i, r3);
-    sqlite3VdbeAddOp4(v, OP_Ne, rLhs+i, destNotNull, r3,
+    if( ExprUseXSelect(pExpr) ){
+      Expr *pRhs = pExpr->x.pSelect->pEList->a[i].pExpr;
+      pColl = sqlite3BinaryCompareCollSeq(pParse, p, pRhs);
+    }else{
+      /* If the RHS of the IN(...) expression are scalar expressions, do
+      ** not consider their collation sequences. The documentation says
+      ** "The collating sequence used for expressions of the form "x IN (y, z,
+      ** ...)" is the collating sequence of x.".  */
+      pColl = sqlite3ExprCollSeq(pParse, p);
+    }
+    testcase( aiMap[i]!=i );
+    sqlite3VdbeAddOp3(v, OP_Column, iTab, aiMap[i], r3);
+    sqlite3VdbeAddOp4(v, OP_Ne, rLhs+aiMap[i], destNotNull, r3,
                       (void*)pColl, P4_COLLSEQ);
     VdbeCoverage(v);
     sqlite3ReleaseTempReg(pParse, r3);
@@ -4723,7 +4752,7 @@ static int exprNodeCanReturnSubtype(Walker *pWalker, Expr *pExpr){
   }
   assert( ExprUseXList(pExpr) );
   db = pWalker->pParse->db;
-  n = ALWAYS(pExpr->x.pList) ? pExpr->x.pList->nExpr : 0;
+  n = pExpr->x.pList ? pExpr->x.pList->nExpr : 0;
   pDef = sqlite3FindFunction(db, pExpr->u.zToken, n, ENC(db), 0);
   if( NEVER(pDef==0) || (pDef->funcFlags & SQLITE_RESULT_SUBTYPE)!=0 ){
     pWalker->eCode = 1;
@@ -5372,7 +5401,12 @@ expr_code_doover:
         pDef = sqlite3FindFunction(db, "unknown", nFarg, enc, 0);
       }
 #endif
-      if( pDef==0 || pDef->xFinalize!=0 ){
+      if( pDef==0
+       || pDef->xFinalize!=0
+       || ((pDef->funcFlags & SQLITE_FUNC_INTERNAL)!=0 &&
+           !pParse->nested &&
+           (db->mDbFlags & DBFLAG_InternalFunc)==0)
+      ){
         sqlite3ErrorMsg(pParse, "unknown function: %#T()", pExpr);
         break;
       }

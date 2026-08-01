@@ -187,10 +187,9 @@ ignored, depending on the value of eStyle.
 
 ### 2.4 Show Column Names (bTitles)
 
-The sqlite3_qrf_spec.bTitles field can be either QRF_SW_Auto,
-QRF_SW_On, or QRF_SW_Off.  Those three constants also have shorter
-alternative spellings: QRF_Auto, QRF_No, and
-QRF_Yes.
+The sqlite3_qrf_spec.bTitles field can be one of QRF_SW_Auto,
+QRF_SW_On, QRF_SW_Off, or QRF_Always.  The first three constants also
+have shorter alternative spellings: QRF_Auto, QRF_No, and QRF_Yes.
 
 > ~~~
 #define QRF_SW_Auto     0 /* Let QRF choose the best value */
@@ -199,11 +198,16 @@ QRF_Yes.
 #define QRF_Auto        0 /* Alternate spelling for QRF_SW_Auto and others */
 #define QRF_No          1 /* Alternate spelling for QRF_SW_Off */
 #define QRF_Yes         2 /* Alternate spelling for QRF_SW_On */
+#define QRF_Always      3 /* Always try to show column names */
 ~~~
 
-If the value is QRF_Yes, then column names appear in the output.
+If the value is QRF_Yes, then column names appear in the output when
+there are one or more rows of output.
 If the value is QRF_No, column names are omitted.  If the
 value is QRF_Auto, then an appropriate default is chosen.
+The value QRF_Always is like QRF_Yes except that the output might
+still show column headers even if the number of result rows is zero,
+depending on eStyle.
 
 ### 2.5 Control Character Escapes (eEsc)
 
@@ -594,6 +598,12 @@ not applicable to xRender because title values come from the
 sqlite3_column_name() interface not from sqlite3_column_value(),
 and so that names of columns are never processed by xRender.
 
+### 2.18 Show Row Counts On Query Output (bRowCount)
+
+If the value of bRowCount is QRF_Yes, then an extra line of text
+of the form "(N rows)" might be appended to the end of query output,
+depending on eStyle.
+
 ## 3.0 The `sqlite3_format_query_result()` Interface
 
 Invoke the `sqlite3_format_query_result(P,S,E)` interface to run
@@ -623,7 +633,7 @@ The following output modes are currently defined:
 #define QRF_STYLE_Csv       4 /* Comma-separated-value */
 #define QRF_STYLE_Eqp       5 /* Format EXPLAIN QUERY PLAN output */
 #define QRF_STYLE_Explain   6 /* EXPLAIN output */
-#define QRF_STYLE_Html      7 /* Generate an XHTML table */
+#define QRF_STYLE_Html      7 /* Generate HTML-style <tr><td> output */
 #define QRF_STYLE_Insert    8 /* Generate SQL "insert" statements */
 #define QRF_STYLE_Json      9 /* Output is a list of JSON objects */
 #define QRF_STYLE_JObject  10 /* Independent JSON objects for each row */
@@ -714,7 +724,7 @@ with hard-coded values for some of the sqlite3_qrf_spec settings:
 </table>
 
 The **Html** style generates HTML table content, just without
-the `<TABLE>..</TABLE>` around the outside.
+the `<table>..</table>` around the outside.
 
 The **Insert** style generates a series of SQL "INSERT" statements
 that will inserts the data that is output into a table whose name is defined

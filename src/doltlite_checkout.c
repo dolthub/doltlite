@@ -331,7 +331,13 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     ProllyHash staged;
     doltliteGetSessionStaged(db, &staged);
     if( prollyHashIsEmpty(&staged) ){
-      rc = doltliteSetSessionStaged(db, &p->targetCatHash);
+      if( prollyHashIsEmpty(&p->targetCommit) ){
+        memcpy(&staged, &p->targetCatHash, sizeof(staged));
+      }else{
+        rc = doltliteCommitCatalogHash(db, &p->targetCommit, &staged);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+      rc = doltliteSetSessionStaged(db, &staged);
       if( rc!=SQLITE_OK ) return rc;
     }
   }

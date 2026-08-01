@@ -210,6 +210,27 @@ run_test_match "nostash_checkout_dirty_is_not_refused" \
 
 rm -f "$DBS"
 
+DBS=/tmp/test_ws_checkout_stage_$$.db; rm -f "$DBS"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');" | $DOLTLITE "$DBS" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,'dirty');" | $DOLTLITE "$DBS/feature" > /dev/null 2>&1
+
+run_test "checkout_target_dirty_change_starts_unstaged" \
+  "SELECT staged FROM dolt_status WHERE table_name='t';" "0" "$DBS/feature"
+echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DBS" > /dev/null 2>&1
+run_test "checkout_target_dirty_change_stays_unstaged" \
+  "SELECT staged FROM dolt_status WHERE table_name='t';" "0" "$DBS/feature"
+run_test_match "checkout_target_dirty_change_not_committable" \
+  "SELECT dolt_commit('-m','must not commit');" "nothing to commit" "$DBS/feature"
+run_test "checkout_target_head_stays_unchanged" \
+  "SELECT count(*) FROM dolt_at_t('HEAD');" "1" "$DBS/feature"
+run_test "checkout_target_working_change_survives" \
+  "SELECT count(*) FROM t;" "2" "$DBS/feature"
+
+rm -f "$DBS"
+
 rm -f "$DB"
 
 dltest_finish

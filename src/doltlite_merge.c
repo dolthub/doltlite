@@ -353,6 +353,7 @@ static int preDetectIndexSchemaConflicts(
       SchemaEntry *pAncTable;
       SchemaEntry *pOursTable;
       SchemaEntry *pTheirsTable;
+      SchemaEntry *pRenamedTable;
       const char *zTable;
       int oursChanged;
       int theirsChanged;
@@ -376,6 +377,36 @@ static int preDetectIndexSchemaConflicts(
       pTheirs = findSchemaEntry(aTheirs, nTheirs, a[i].zName);
       oursChanged = !mergeSchemaEntriesSame(pAnc, pOurs);
       theirsChanged = !mergeSchemaEntriesSame(pAnc, pTheirs);
+      if( pAnc && pAnc->zTblName && !pOurs
+       && pTheirs && pTheirs->zTblName
+       && sqlite3_stricmp(pAnc->zTblName, pTheirs->zTblName)!=0 ){
+        pAncTable = findSchemaEntry(aAnc, nAnc, pAnc->zTblName);
+        pOursTable = findSchemaEntry(aOurs, nOurs, pAnc->zTblName);
+        pTheirsTable = findSchemaEntry(aTheirs, nTheirs, pAnc->zTblName);
+        pRenamedTable = findSchemaEntry(aTheirs, nTheirs,
+                                        pTheirs->zTblName);
+        if( pAncTable && pAncTable->zType
+         && strcmp(pAncTable->zType, "table")==0
+         && pOursTable && !pTheirsTable
+         && pRenamedTable && pRenamedTable->zType
+         && strcmp(pRenamedTable->zType, "table")==0
+         && !findSchemaEntry(aAnc, nAnc, pTheirs->zTblName) ){
+          rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                                    pAnc->zTblName, pAnc->zTblName,
+                                    &addedSchemaTable);
+          if( rc!=SQLITE_OK ) return rc;
+          if( addedSchemaTable ) (*pTotalConflicts)++;
+          rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                                    pAnc->zTblName, pTheirs->zTblName,
+                                    &addedSchemaTable);
+          if( rc!=SQLITE_OK ) return rc;
+          rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                                    pAnc->zTblName, a[i].zName,
+                                    &addedSchemaTable);
+          if( rc!=SQLITE_OK ) return rc;
+          continue;
+        }
+      }
       zTable = pOurs && pOurs->zTblName ? pOurs->zTblName
              : (pTheirs && pTheirs->zTblName ? pTheirs->zTblName
              : (pAnc && pAnc->zTblName ? pAnc->zTblName : a[i].zName));
@@ -948,7 +979,8 @@ static int rebuildDisjointSchemaRows(
                                   pSe->zName) ){
       continue;
     }
-    if( schemaEntryChangedByName(aAncSchema, nAncSchema,
+    if( findSchemaEntry(aOursSchema, nOursSchema, pSe->zName)
+     && schemaEntryChangedByName(aAncSchema, nAncSchema,
                                  aOursSchema, nOursSchema,
                                  pSe->zName) ){
       continue;

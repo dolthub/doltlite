@@ -70,6 +70,7 @@ static SQLITE_NOINLINE void lockTable(
 
   assert( pToplevel->nTableLock < 0x7fff0000 );
   nBytes = sizeof(TableLock) * (pToplevel->nTableLock+1);
+  if( pToplevel->nTableLock==0 ) pToplevel->aTableLock = 0;
   pToplevel->aTableLock =
       sqlite3DbReallocOrFree(pToplevel->db, pToplevel->aTableLock, nBytes);
   if( pToplevel->aTableLock ){
@@ -236,7 +237,7 @@ void sqlite3FinishCoding(Parse *pParse){
 
     /* Initialize any AUTOINCREMENT data structures required.
     */
-    if( pParse->pAinc ) sqlite3AutoincrementBegin(pParse);
+    if( pParse->usesAinc ) sqlite3AutoincrementBegin(pParse);
 
     /* Code constant expressions that were factored out of inner loops. 
     */
@@ -269,7 +270,7 @@ void sqlite3FinishCoding(Parse *pParse){
   if( pParse->nErr==0 ){
     /* A minimum of one cursor is required if autoincrement is used
     *  See ticket [a696379c1f08866] */
-    assert( pParse->pAinc==0 || pParse->nTab>0 );
+    assert( pParse->usesAinc==0 || pParse->nTab>0 );
     sqlite3VdbeMakeReady(v, pParse);
     pParse->rc = SQLITE_DONE;
   }else{
@@ -2256,6 +2257,23 @@ static int resizeIndexObject(Parse *pParse, Index *pIdx, int N){
 }
 
 /*
+** Return true if the index pIdx can support a Bloom filter on its
+** first N columns.  Specifically, return true if all of the first N
+** columns have the BINARY collating sequence or no collating sequence
+** at all, and return false if there are any non-BINARY collating
+** seqeuences on any of the first N columns.  tag-202607231411
+*/
+int sqlite3IndexBloomable(const Index *pIdx, int N){
+  int i;
+  assert( pIdx!=0 );
+  assert( N <= pIdx->nColumn );
+  for(i=0; i<N; i++){
+    if( sqlite3StrICmp(pIdx->azColl[i],"BINARY")!=0 ) return 0;
+  }
+  return 1;
+}
+
+/*
 ** Estimate the total row width for a table.
 */
 static void estimateTableWidth(Table *pTab){
@@ -2606,14 +2624,11 @@ void sqlite3MarkAllShadowTablesOf(sqlite3 *db, Table *pTab){
 /*
 ** Return true if zName is a shadow table name in the current database
 ** connection.
-**
-** zName is temporarily modified while this routine is running, but is
-** restored to its original value prior to this routine returning.
 */
 int sqlite3ShadowTableName(sqlite3 *db, const char *zName){
   const char *zTail;            /* Pointer to the last "_" in zName */
   Table *pTab;                  /* Table that zName is a shadow of */
-  char *zCopy;
+  char *zCopy;                  /* Transient copy of zName after last "_" */
   zTail = strrchr(zName, '_');
   if( zTail==0 ) return 0;
   zCopy = sqlite3DbStrNDup(db, zName, (int)(zTail-zName));
@@ -4223,8 +4238,9 @@ void sqlite3CreateIndex(
       if( sqlite3FindIndex(db, zName, pDb->zDbSName)!=0 ){
         if( !ifNotExist ){
           sqlite3ErrorMsg(pParse, "index %s already exists", zName);
+        }else if( db->init.busy ){
+          sqlite3ErrorMsg(pParse,"");  /* corruptSchema() will do the error */
         }else{
-          assert( !db->init.busy );
           sqlite3CodeVerifySchema(pParse, iDb);
           sqlite3ForceNotReadOnly(pParse);
         }

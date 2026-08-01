@@ -691,6 +691,10 @@ static Mem *out2Prerelease(Vdbe *p, VdbeOp *pOp){
 /*
 ** Compute a bloom filter hash using pOp->p4.i registers from aMem[] beginning
 ** with pOp->p3.  Return the hash.
+**
+** IMPORTANT RESTRICTION (tag-202607231411):  This hash is only valid if the
+** collating sequence for TEXT is BINARY. Hence, Bloom filters that use this
+** hash will not work for look-ups that use any other collating sequence.
 */
 static u64 filterHash(const Mem *aMem, const Op *pOp){
   int i, mx;
@@ -703,11 +707,28 @@ static u64 filterHash(const Mem *aMem, const Op *pOp){
       h += p->u.i;
     }else if( p->flags & MEM_Real ){
       h += sqlite3VdbeIntValue(p);
-    }else if( p->flags & (MEM_Str|MEM_Blob) ){
-      /* All strings have the same hash and all blobs have the same hash,
-      ** though, at least, those hashes are different from each other and
-      ** from NULL. */
-      h += 4093 + (p->flags & (MEM_Str|MEM_Blob));
+    }else if( p->flags & MEM_Str ){
+      u64 x;
+      h += p->n;
+      if( p->n >= sizeof(x) ){
+        memcpy(&x, p->z, sizeof(x));
+        h += x;
+        memcpy(&x, p->z + p->n - sizeof(x), sizeof(x));
+        h += x;
+      }else{
+        x = 0;
+        memcpy(&x, p->z, p->n);
+        h += x;
+      }
+    }else if( p->flags & MEM_Blob ){
+      int n = p->n;
+      u64 x = 0;
+      if( n ){
+        memcpy(&x, p->z, MIN(n, sizeof(x)));
+        h += x;
+      }
+      h += n;
+      if( p->flags & MEM_Zero ) h += p->u.nZero;
     }
   }
   return h;
@@ -5853,7 +5874,7 @@ case OP_SeekRowid: {        /* jump0, in3, ncycle */
   VdbeCursor *pC;
   BtCursor *pCrsr;
   int res;
-  u64 iKey;
+  i64 iKey;
 
   pIn3 = &aMem[pOp->p3];
   testcase( pIn3->flags & MEM_Int );
@@ -5867,9 +5888,19 @@ case OP_SeekRowid: {        /* jump0, in3, ncycle */
     ** changing the datatype of pIn3, however, as it is used by other
     ** parts of the prepared statement. */
     Mem x = pIn3[0];
-    applyAffinity(&x, SQLITE_AFF_NUMERIC, encoding);
-    if( (x.flags & MEM_Int)==0 ) goto jump_to_p2;
-    iKey = x.u.i;
+    if( x.flags & MEM_Str ){
+      applyNumericAffinity(&x, 1);
+    }
+    if( x.flags & MEM_Int ){
+      iKey = x.u.i;
+    }else
+    if( (x.flags & MEM_Real)==0
+     || x.u.r < -9223372036854775808.0
+     || x.u.r > 9223372036854775807.0
+     || (double)(iKey = sqlite3RealToI64(x.u.r))!=x.u.r
+    ){
+      goto jump_to_p2;
+    }
     goto notExistsWithKey;
   }
   /* Fall through into OP_NotExists */
@@ -7130,6 +7161,11 @@ case OP_IdxRowid: {           /* out2, ncycle */
       assert( pTabCur->eCurType==CURTYPE_BTREE );
       assert( pTabCur->uc.pCursor!=0 );
       assert( pTabCur->isTable );
+#if defined(SQLITE_ENABLE_CURSOR_HINTS) && defined(SQLITE_DEBUG)
+      assert( 
+          sqlite3BtreeCursorHintTblCsr(pC->uc.pCursor)==pTabCur->uc.pCursor 
+      );
+#endif
       pTabCur->nullRow = 0;
       pTabCur->movetoTarget = rowid;
       pTabCur->deferredMoveto = 1;
@@ -7920,7 +7956,7 @@ case OP_Program: {        /* jump0 */
 
   if( p->nFrame>=db->aLimit[SQLITE_LIMIT_TRIGGER_DEPTH] ){
     rc = SQLITE_ERROR;
-    sqlite3VdbeError(p, "too many levels of trigger recursion");
+    sqlite3VdbeError(p, "triggers nested too deep");
     goto abort_due_to_error;
   }
 
@@ -9600,23 +9636,37 @@ case OP_Init: {          /* jump0 */
 }
 
 #ifdef SQLITE_ENABLE_CURSOR_HINTS
-/* Opcode: CursorHint P1 * * P4 *
+/* Opcode: CursorHint P1 * P3 P4 *
 **
-** Provide a hint to cursor P1 that it only needs to return rows that
-** satisfy the Expr in P4.  TK_REGISTER terms in the P4 expression refer
-** to values currently held in registers.  TK_COLUMN terms in the P4
+** Provide a hint to cursor P1. 
+**
+** If P4 is of type P4_EXPR, then the hint is that the cursor need only return
+** rows that satisfy the Expr in P4. TK_REGISTER terms in the P4 expression
+** refer to values currently held in registers.  TK_COLUMN terms in the P4
 ** expression refer to columns in the b-tree to which cursor P1 is pointing.
+** P3 is ignore in this case.
+**
+** Or, if P4 is P4_NOTUSED, then the hint is that cursor P1 is an index cursor
+** used to drive table cursor P3. In other words, that this VM may execute
+** OP_DeferredSeek instructions to lazily position P3 based on current 
+** position of P1.
 */
 case OP_CursorHint: {
   VdbeCursor *pC;
+  pC = p->apCsr[pOp->p1];
 
   assert( pOp->p1>=0 && pOp->p1<p->nCursor );
-  assert( pOp->p4type==P4_EXPR );
-  pC = p->apCsr[pOp->p1];
+
   if( pC ){
     assert( pC->eCurType==CURTYPE_BTREE );
-    sqlite3BtreeCursorHint(pC->uc.pCursor, BTREE_HINT_RANGE,
-                           pOp->p4.pExpr, aMem);
+    if( pOp->p4type==P4_EXPR ){
+      sqlite3BtreeCursorHint(pC->uc.pCursor, BTREE_HINT_RANGE,
+          pOp->p4.pExpr, aMem);
+    }else if( p->apCsr[pOp->p3] ){
+      sqlite3BtreeCursorHint(
+          pC->uc.pCursor, BTREE_HINT_TABLECURSOR, p->apCsr[pOp->p3]->uc.pCursor
+      );
+    }
   }
   break;
 }
