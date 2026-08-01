@@ -293,6 +293,67 @@ EOF
 )
 check "index_drop_vs_parent_rename_conflicts" "1|1|0|0" "$out"
 
+DB="$TMPROOT/index_retarget_to_divergent_rename.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE a(id INTEGER PRIMARY KEY, payload TEXT, n INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, payload TEXT, n INT);
+CREATE INDEX i1 ON b(payload);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE a RENAME TO ours_a;
+DROP TABLE b;
+SELECT dolt_commit('-A','-m','ours');
+EOF
+"$DOLTLITE" "$DB/feat" <<'EOF' >/dev/null 2>&1
+ALTER TABLE a RENAME TO theirs_a;
+ALTER TABLE theirs_a ADD COLUMN extra TEXT;
+DROP TABLE b;
+CREATE INDEX i1 ON theirs_a(payload);
+CREATE INDEX i2 ON theirs_a(payload);
+SELECT dolt_commit('-A','-m','theirs');
+EOF
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null | tail -1
+BEGIN;
+SELECT dolt_merge('feat');
+SELECT (SELECT coalesce(sum(num_conflicts),0) FROM dolt_conflicts) || '|' ||
+       (SELECT group_concat(name, ',') FROM
+          (SELECT name FROM sqlite_schema
+           WHERE name IN ('ours_a','theirs_a','i1','i2') ORDER BY name));
+ROLLBACK;
+EOF
+)
+check "retarget_to_divergent_rename_keeps_index_catalog_valid" \
+  "3|i1,i2,ours_a,theirs_a" "$out"
+
+DB="$TMPROOT/index_on_excluded_rename.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE a(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE c(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE INDEX ic ON c(payload);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE a RENAME TO ours_a;
+DROP INDEX ic;
+SELECT dolt_commit('-A','-m','ours');
+EOF
+"$DOLTLITE" "$DB/feat" <<'EOF' >/dev/null 2>&1
+ALTER TABLE a RENAME TO theirs_a;
+DROP TABLE c;
+CREATE INDEX ic ON theirs_a(payload);
+CREATE INDEX incoming_new ON theirs_a(payload);
+SELECT dolt_commit('-A','-m','theirs');
+EOF
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null | tail -1
+BEGIN;
+SELECT dolt_merge('feat');
+SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' ||
+       (SELECT group_concat(name, ',') FROM
+          (SELECT name FROM sqlite_schema ORDER BY name));
+ROLLBACK;
+EOF
+)
+check "index_on_excluded_rename_is_not_adopted" "1|c,ours_a" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then

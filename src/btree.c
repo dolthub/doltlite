@@ -1005,24 +1005,41 @@ int sqlite3BtreeCursorRestore(BtCursor *pCur, int *pDifferentRow){
 void sqlite3BtreeCursorHint(BtCursor *pCur, int eHintType, ...){
   /* Used only by system that substitute their own storage engine */
 #ifdef SQLITE_DEBUG
-  if( ALWAYS(eHintType==BTREE_HINT_RANGE) ){
-    va_list ap;
+  va_list ap;
+  va_start(ap, eHintType);
+  if( eHintType==BTREE_HINT_RANGE ){
     Expr *pExpr;
     Walker w;
     memset(&w, 0, sizeof(w));
     w.xExprCallback = sqlite3CursorRangeHintExprCheck;
-    va_start(ap, eHintType);
     pExpr = va_arg(ap, Expr*);
     w.u.aMem = va_arg(ap, Mem*);
-    va_end(ap);
     assert( pExpr!=0 );
     assert( w.u.aMem!=0 );
     sqlite3WalkExpr(&w, pExpr);
+  }else if( ALWAYS(eHintType==BTREE_HINT_TABLECURSOR) ){
+    BtCursor *pCsr = va_arg(ap, BtCursor*);
+    assert( pCur->pCursorHintTableCursor==0 
+         || pCur->pCursorHintTableCursor==pCsr
+    );
+    assert( pCsr->pKeyInfo==0 || CORRUPT_DB );
+    pCur->pCursorHintTableCursor = pCsr;
   }
+  va_end(ap);
 #endif /* SQLITE_DEBUG */
 }
 #endif /* SQLITE_ENABLE_CURSOR_HINTS */
 
+#if defined(SQLITE_ENABLE_CURSOR_HINTS) && defined(SQLITE_DEBUG)
+/*
+** Return the pointer configured via the BTREE_HINT_TABLECURSOR hint on
+** cursor pCsr. This is used from OP_DeferredSeek to assert() that the
+** index cursor has been correctly configured with the table cursor.
+*/
+BtCursor *sqlite3BtreeCursorHintTblCsr(BtCursor *pCsr){
+  return pCsr->pCursorHintTableCursor;
+}
+#endif
 
 /*
 ** Provide flag hints to the cursor.
@@ -2148,8 +2165,15 @@ static int btreeComputeFreeSpace(MemPage *pPage){
       }
       next = get2byte(&data[pc]);
       size = get2byte(&data[pc+2]);
+      if( size<4 && sqlite3FaultSim(422)==SQLITE_OK ){
+        /* Minimum freeblock size is 4.  Enable fault-sim 422 to disable this
+        ** check to reach interesting error stats.  However, disabling this
+        ** check can cause assertion faults due to min-heap overflow.  All
+        ** fault-sims are for testing use only, but this one especially so. */
+        return SQLITE_CORRUPT_PAGE(pPage);
+      }
       nFree = nFree + size;
-      if( next<=pc+size+3 ) break;
+      if( next<pc+size+4 ) break;
       pc = next;
     }
     if( next>0 ){
@@ -5989,14 +6013,14 @@ static int indexCellCompare(
     /* This branch runs if the record-size field of the cell is a
     ** single byte varint and the record fits entirely on the main
     ** b-tree page.  */
-    testcase( pCell+nCell+1==pPage->aDataEnd );
+    if( pCell + nCell >= pPage->aDataEnd ) return 99;
     c = xRecordCompare(nCell, (void*)&pCell[1], pIdxKey);
   }else if( !(pCell[1] & 0x80)
     && (nCell = ((nCell&0x7f)<<7) + pCell[1])<=pPage->maxLocal
   ){
     /* The record-size field is a 2 byte varint and the record
     ** fits entirely on the main b-tree page.  */
-    testcase( pCell+nCell+2==pPage->aDataEnd );
+    if( pCell + nCell >= pPage->aDataEnd ) return 99;
     c = xRecordCompare(nCell, (void*)&pCell[2], pIdxKey);
   }else{
     /* If the record extends into overflow pages, do not attempt
@@ -6158,14 +6182,17 @@ bypass_moveto_root:
         /* This branch runs if the record-size field of the cell is a
         ** single byte varint and the record fits entirely on the main
         ** b-tree page.  */
-        testcase( pCell+nCell+1==pPage->aDataEnd );
+        if( pCell + nCell >= pPage->aDataEnd ){
+          rc = SQLITE_CORRUPT_PAGE(pPage);
+          goto moveto_index_finish;
+        }
         c = xRecordCompare(nCell, (void*)&pCell[1], pIdxKey);
       }else if( !(pCell[1] & 0x80)
         && (nCell = ((nCell&0x7f)<<7) + pCell[1])<=pPage->maxLocal
+        && pCell + nCell < pPage->aDataEnd
       ){
         /* The record-size field is a 2 byte varint and the record
         ** fits entirely on the main b-tree page.  */
-        testcase( pCell+nCell+2==pPage->aDataEnd );
         c = xRecordCompare(nCell, (void*)&pCell[2], pIdxKey);
       }else{
         /* The record flows over onto one or more overflow pages. In
@@ -11050,6 +11077,11 @@ static int checkTreePage(
       doCoverageCheck = 0;
       continue;
     }
+    if( info.nPayload && info.pPayload[0]<2 ){
+      checkAppendMsg(pCheck, "Bad cell header size");
+      doCoverageCheck = 0;
+      continue;
+    }
 
     /* Check for integer primary key out of range */
     if( pPage->intKey ){
@@ -11091,6 +11123,7 @@ static int checkTreePage(
       }
     }else{
       /* Populate the coverage-checking heap for leaf pages */
+      assert( heap!=0 && heap[0] < pCheck->mxHeap );
       btreeHeapInsert(heap, (pc<<16)|(pc+info.nSize-1));
     }
   }
@@ -11110,6 +11143,7 @@ static int checkTreePage(
         u32 size;
         pc = get2byteAligned(&data[cellStart+i*2]);
         size = pPage->xCellSize(pPage, &data[pc]);
+        assert( heap!=0 && heap[0] < pCheck->mxHeap );
         btreeHeapInsert(heap, (pc<<16)|(pc+size-1));
       }
     }
@@ -11126,6 +11160,7 @@ static int checkTreePage(
       assert( (u32)i<=usableSize-4 ); /* Enforced by btreeComputeFreeSpace() */
       size = get2byte(&data[i+2]);
       assert( (u32)(i+size)<=usableSize ); /* due to btreeComputeFreeSpace() */
+      assert( heap!=0 && heap[0] < pCheck->mxHeap );
       btreeHeapInsert(heap, (((u32)i)<<16)|(i+size-1));
       /* EVIDENCE-OF: R-58208-19414 The first 2 bytes of a freeblock are a
       ** big-endian integer which is the offset in the b-tree page of the next
@@ -11260,6 +11295,9 @@ int sqlite3BtreeIntegrityCheck(
     goto integrity_ck_cleanup;
   }
   sCheck.heap = (u32*)sqlite3PageMalloc( pBt->pageSize );
+#ifdef SQLITE_DEBUG
+  sCheck.mxHeap = pBt->pageSize/4 - 1;
+#endif
   if( sCheck.heap==0 ){
     checkOom(&sCheck);
     goto integrity_ck_cleanup;

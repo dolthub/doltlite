@@ -2568,7 +2568,7 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
   ////////////////////////////////////////////////////////////////////////
     .t({
       name: 'virtual table #1: eponymous w/ manual exception handling',
-      predicate: (sqlite3)=>(!!sqlite3.capi.sqlite3_vtab || "Missing vtab support"),
+      predicate: (sqlite3)=>(!!sqlite3.vtab || "Missing vtab support"),
       test: function(sqlite3){
         const VT = sqlite3.vtab;
         const tmplCols = Object.assign(Object.create(null),{
@@ -2777,7 +2777,7 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
   ////////////////////////////////////////////////////////////////////////
     .t({
       name: 'virtual table #2: non-eponymous w/ automated exception wrapping',
-      predicate: (sqlite3)=>!!sqlite3.capi.sqlite3_vtab || "Missing vtab support",
+      predicate: (sqlite3)=>!!sqlite3.vtab || "Missing vtab support",
       test: function(sqlite3){
         const VT = sqlite3.vtab;
         const tmplCols = Object.assign(Object.create(null),{
@@ -2999,13 +2999,23 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
     .t('Close db', function(){
       T.assert(this.db).assert(wasm.isPtr(this.db.pointer));
       //wasm.sqlite3__wasm_db_reset(this.db); // will leak virtual tables!
+      const strayStmt = this.db.prepare("select 1");
+      T.assert( strayStmt.pointer );
       this.db.close();
-      T.assert(!this.db.pointer);
+      T.assert(!this.db.pointer)
+        .assert(!strayStmt.pointer, "Stmt should have been finalized");
     })
   ;/* end of oo1 checks */
 
   ////////////////////////////////////////////////////////////////////////
   T.g('kvvfs')
+//#if omit-kvvfs
+    .t({
+      name: 'kvvfs',
+      predicate: ()=>'kvvfs disabled by omit-kvvfs',
+      test: ()=>{}
+    })
+//#else
     .t({
       name: 'kvvfs v1 API availability',
       test: function(sqlite3){
@@ -3029,7 +3039,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
                         'estimateSize', 'clear'] ){
           T.assert( k[n] instanceof Function );
         }
-
         if( 0 ){
           const scope = wasm.scopedAllocPush();
           try{
@@ -3064,10 +3073,10 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
         const JDb = sqlite3.oo1.JsStorageDb;
         const pVfs = capi.sqlite3_vfs_find('kvvfs');
         T.assert(looksLikePtr(pVfs));
-        let x = sqlite3.kvvfs.internal.storageForZClass('session');
-        T.assert( 0 === x.files.length )
-          .assert( globalThis.sessionStorage===x.storage )
-          .assert( 'kvvfs-session-' === x.keyPrefix );
+        const pStorage = sqlite3.kvvfs.internal.storageForZClass('session');
+        T.assert( 0 === pStorage.files.length )
+          .assert( globalThis.sessionStorage===pStorage.storage )
+          .assert( 'kvvfs-session-' === pStorage.keyPrefix );
         const filename = this.kvvfsDbFile = 'session';
         const unlink = this.kvvfsUnlink = ()=>sqlite3.kvvfs.clear(filename);
         unlink();
@@ -3085,9 +3094,30 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           db.exec('insert into kvvfs(a) values(4),(5),(6)');
           T.assert(6 === db.selectValue('select count(*) from kvvfs'));
         }finally{
-          if( db ) db.close();
+          if( db ){
+            db.close();
+            db = null;
+          }
         }
         //console.debug("sessionStorage",globalThis.sessionStorage);
+        const corruptJrnl = [
+          /* Test that it recovers properly from a bad journal:
+             https://sqlite.org/bugs/forumpost/20e208fe172cae4f */
+          pStorage.keyPrefix+'jrnl',
+          'cb d9d505f920a163d7ffffffffdeadbeef000000010000020000001000'
+        ];
+        sessionStorage.setItem(...corruptJrnl);
+        //console.debug("sessionStorage",globalThis.sessionStorage);
+        T.assert( corruptJrnl[1] === sessionStorage.getItem(corruptJrnl[0]) );
+        try{
+          db = new JDb(filename);
+          T.assert(6 === db.selectValue('select count(*) from kvvfs'));
+          db.exec('insert into kvvfs(a) values(7),(8),(9)');
+          T.assert(9 === db.selectValue('select count(*) from kvvfs'));
+          T.assert( corruptJrnl[1] !== sessionStorage.getItem(corruptJrnl[0]) );
+        }finally{
+          if( db ) db.close();
+        }
       }
     }/*kvvfs sanity checks*/)
     .t({
@@ -3125,7 +3155,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           (new JDb(name)).close();
           T.assert( sqlite3.kvvfs.unlink(name) );
         }
-
         sqlite3.kvvfs.clear(filename);
         let db = new JDb(filename);
         const sqlSetup = [
@@ -3155,7 +3184,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           };
           T.assert(3 === db.selectValue('select count(*) from kvvfs'));
           close();
-
           const exportDb = sqlite3.kvvfs.export;
           db = new JDb(filename);
           db.exec('insert into kvvfs(a) values(4),(5),(6)');
@@ -3166,7 +3194,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
             .assert( exp?.pages?.length > 0, "Missing db pages" );
           console.debug("kvvfs to Object:",exp);
           close();
-
           const dbFileRaw = 'file:new-storage?vfs=kvvfs&delete-on-close=1';
           db = new DB({
             filename: dbFileRaw,
@@ -3179,7 +3206,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           debug("kvvfs to Object:",exportDb(dbFilename));
           const n = sqlite3.kvvfs.estimateSize( dbFilename );
           T.assert( n>0, "Db size count failed" );
-
           if( 1 ){
             // Concurrent open of that same name uses the same storage
             const x = new JDb(dbFilename);
@@ -3218,7 +3244,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           'insert into kvvfs(a) values(1),(2),(3)'
         ];
         const sqlCount = 'select count(*) from kvvfs';
-
         try {
           const exportDb = sqlite3.kvvfs.export;
           const dbFileRaw = 'file:'+filename+'?vfs=kvvfs&delete-on-close=1';
@@ -3226,7 +3251,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           db = new DB(dbFileRaw);
           db.exec(sqlSetup);
           T.assert(3 === db.selectValue(sqlCount));
-
           duo = new JDb(filename);
           duo.exec('insert into kvvfs(a) values(4),(5),(6)');
           T.assert(6 === db.selectValue(sqlCount));
@@ -3245,10 +3269,8 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
             try{ddb.selectValue('select a from kvvfs')}
             finally{ddb.close()}
           }, /.*no such table: kvvfs.*/);
-
           T.assert( kvvfs.unlink(filename) )
             .assert( !kvvfs.exists(filename) );
-
           const importDb = sqlite3.kvvfs.import;
           duo = new JDb(dbFileRaw);
           T.mustThrowMatching(()=>importDb(exp,true), /.*in use.*/);
@@ -3268,10 +3290,8 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
             .assert(expectRows === duo.selectValue(sqlCount),
                     "Unexpected row count after rollback");
           duo.close();
-
           T.assert( kvvfs.unlink(filename) )
             .assert( !kvvfs.exists(filename) );
-
           importDb(exp, true);
           db = new JDb({
             filename,
@@ -3305,7 +3325,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
                    "Unexpected record count.");
           q1.finalize();
           q2.finalize();
-
           if( 1 ){
             debug("Begin vacuum/page size test...");
             const defaultPageSize = 1024 * 8 /* build-time default */;
@@ -3353,7 +3372,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           }else{
             expectRows = 6;
           }
-
           db.close();
           duo.close();
           T.assert( kvvfs.unlink(exp.name) )
@@ -3364,7 +3382,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
           //debug("column count after export",db.selectValue(sqlCount));
           T.assert(expectRows === db.selectValue(sqlCount),
                    "Unexpected record count.");
-
           /*
             TODO: more advanced concurrent use tests, e.g. looping
             over a query in one connection while writing from
@@ -3381,7 +3398,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
         }
       }
     }/*concurrent transient kvvfs*/)
-
     .t({
       name: 'kvvfs listeners (experiment)',
       test: function(sqlite3){
@@ -3413,7 +3429,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
               throw e;
             }
           };
-
           const listener = {
             storage: filename,
             reserve: true,
@@ -3494,7 +3509,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
               }
             }
           };
-
           kvvfs.listen(listener);
           const dbFileRaw = 'file:'+filename+'?vfs=kvvfs&delete-on-close=1';
           const expOpt = {
@@ -3563,7 +3577,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
         }
       }
     })/*kvvfs listeners */
-
     .t({
       name: 'kvvfs vtab',
       predicate: (sqlite3)=>!!sqlite3.kvvfs.create_module,
@@ -3593,7 +3606,6 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
         }
       }
     })/* kvvfs vtab */
-
 //#if enable-see
     .t({
       name: 'kvvfs SEE encryption in sessionStorage',
@@ -3609,6 +3621,7 @@ globalThis.sqlite3InitModule = sqlite3InitModule;
       }
     })/*kvvfs with SEE*/
 //#/if enable-see
+//#/if kvvfs
   ;/* end kvvfs tests */
 
   ////////////////////////////////////////////////////////////////////////

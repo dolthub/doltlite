@@ -2433,15 +2433,37 @@ static int getWhitespace(const u8 *z){
 /*
 ** Argument z points into the body of a constraint - specifically the 
 ** second token of the constraint definition.  For a named constraint,
-** z points to the first token past the CONSTRAINT keyword.  For an
-** unnamed NOT NULL constraint, z points to the first byte past the NOT
+** z points to the second token of the constraint definition. For an 
+** unnamed NOT NULL constraint, z points to the first byte past the NOT 
 ** keyword.
+**
+** Argument eTok may be the token value of the first token of the constraint
+** (e.g. TK_CHECK or TK_REFERENCES) or zero. If it is either TK_REFERENCES
+** or TK_FOREIGN, special parsing is enabled to find the end of the foreign-key
+** constraint definition.
 **
 ** Return the number of bytes until the end of the constraint. 
 */
-static int getConstraint(const u8 *z){
+static int getConstraint(const u8 *z, int eTok){
   int iOff = 0;
   int t = 0;
+
+#ifndef SQLITE_OMIT_FOREIGN_KEY
+  if( eTok==TK_FOREIGN ){
+    /* For a FOREIGN KEY constraint, use getConstraint() to parse everything
+    ** up to the REFERENCES keyword. Then getConstraintToken() to consume
+    ** the TK_REFERENCES token itself. Then fall through to the special
+    ** handling for TK_REFERENCES below.  */
+    iOff = getConstraint(z, 0);
+    iOff += getConstraintToken(&z[iOff], &eTok);
+  }
+
+  if( eTok==TK_REFERENCES ){
+    /* REFERENCES is followed by a table name. Gobble this up here in
+    ** case the table name is a fallback token like TK_GENERATED. */
+    iOff += getConstraintToken(&z[iOff], &t);
+  }
+#endif
 
   /* Now, the current constraint proceeds until the next occurence of one 
   ** of the following tokens: 
@@ -2614,11 +2636,11 @@ static void dropConstraintFunc(
           t = TK_CHECK;
         }else{
           iOff += nTok;
-          iOff += getConstraint(&zSql[iOff]);
+          iOff += getConstraint(&zSql[iOff], t);
         }
 
         if( cmp==0 || (iNotNull>=0 && t==TK_NOT) ){
-          if( t!=TK_NOT && t!=TK_CHECK ){
+          if( t!=TK_NOT && t!=TK_CHECK && t!=TK_REFERENCES && t!=TK_FOREIGN ){
             errorMPrintf(ctx, "constraint may not be dropped: %s", zCons);
             return;
           }
@@ -2627,7 +2649,7 @@ static void dropConstraintFunc(
         }
 
       }else if( t==TK_NOT && iNotNull==ii ){
-        iEnd = iOff + getConstraint(&zSql[iOff]);
+        iEnd = iOff + getConstraint(&zSql[iOff], 0);
         break;
       }else if( t==TK_RP || t==TK_ILLEGAL ){
         iEnd = -1;
@@ -2685,9 +2707,8 @@ static void addConstraintFunc(
   int iCol = sqlite3_value_int(argv[2]);
   int iOff = 0;
   int ii;
-  char *zNew = 0;
+  sqlite3_str *pNew;
   int t = 0;
-  sqlite3 *db;
   UNUSED_PARAMETER(NotUsed);
 
   if( skipCreateTable(ctx, zSql, &iOff) ) return;
@@ -2707,13 +2728,11 @@ static void addConstraintFunc(
 
   iOff += getWhitespace(&zSql[iOff]);
 
-  db = sqlite3_context_db_handle(ctx);
-  if( iCol<0 ){
-    zNew = sqlite3MPrintf(db, "%.*s, %s%s", iOff, zSql, zCons, &zSql[iOff]);
-  }else{
-    zNew = sqlite3MPrintf(db, "%.*s %s%s", iOff, zSql, zCons, &zSql[iOff]);
-  }
-  sqlite3_result_text(ctx, zNew, -1, SQLITE_DYNAMIC);
+  pNew = sqlite3_str_new(sqlite3_context_db_handle(ctx));
+  sqlite3_str_append(pNew, (const char*)zSql, iOff);
+  if( iCol<0 ) sqlite3_str_append(pNew, ",", 1);
+  sqlite3_str_appendf(pNew, " %s%s", zCons, &zSql[iOff]);
+  sqlite3_result_str(ctx, pNew, SQLITE_FINISH);
 }
 
 /*

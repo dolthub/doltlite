@@ -883,6 +883,7 @@ static Fts5Data *fts5DataRead(Fts5Index *p, i64 iRowid){
       pRet = (Fts5Data*)sqlite3_malloc64(nAlloc);
       if( pRet ){
         pRet->nn = nByte;
+        pRet->szLeaf = 0;
         aOut = pRet->p = (u8*)pRet + szData;
       }else{
         rc = SQLITE_NOMEM;
@@ -895,10 +896,8 @@ static Fts5Data *fts5DataRead(Fts5Index *p, i64 iRowid){
         sqlite3_free(pRet);
         pRet = 0;
       }else{
-        /* TODO1: Fix this */
         pRet->p[nByte] = 0x00;
         pRet->p[nByte+1] = 0x00;
-        pRet->szLeaf = fts5GetU16(&pRet->p[2]);
       }
     }
     p->rc = rc;
@@ -919,9 +918,17 @@ static void fts5DataRelease(Fts5Data *pData){
   sqlite3_free(pData);
 }
 
+/*
+** Read a leaf-page record. This is similar to fts5DataRead(), except that
+** it fills in the Fts5Data.szLeaf value before returning.
+*/
 static Fts5Data *fts5LeafRead(Fts5Index *p, i64 iRowid){
   Fts5Data *pRet = fts5DataRead(p, iRowid);
   if( pRet ){
+    assert( pRet->szLeaf==0 );
+    if( pRet->nn>=4 ){
+      pRet->szLeaf = fts5GetU16(&pRet->p[2]);
+    }
     if( pRet->szLeaf<4 || pRet->szLeaf>pRet->nn ){
       FTS5_CORRUPT_ROWID(p, iRowid);
       fts5DataRelease(pRet);
@@ -1166,7 +1173,7 @@ static int fts5StructureDecode(
         i += fts5GetVarint32(&pData[i], nTotal);
         if( nTotal<pLvl->nMerge ) rc = FTS5_CORRUPT;
         pLvl->aSeg = (Fts5StructureSegment*)sqlite3Fts5MallocZero(&rc, 
-            nTotal * sizeof(Fts5StructureSegment)
+            (i64)nTotal * sizeof(Fts5StructureSegment)
         );
         nSegment -= nTotal;
       }
@@ -1695,6 +1702,7 @@ static int fts5DlidxLvlPrev(Fts5DlidxLvl *pLvl){
     pLvl->bEof = 1;
   }else{
     u8 *a = pLvl->pData->p;
+    int nn = pLvl->pData->nn;
 
     pLvl->iOff = 0;
     fts5DlidxLvlNext(pLvl);
@@ -1703,7 +1711,7 @@ static int fts5DlidxLvlPrev(Fts5DlidxLvl *pLvl){
       int ii = pLvl->iOff;
       u64 delta = 0;
 
-      while( a[ii]==0 ){
+      while( ii<nn && a[ii]==0 ){
         nZero++;
         ii++;
       }
@@ -2122,7 +2130,7 @@ static void fts5SegIterReverseNewPage(Fts5Index *p, Fts5SegIter *pIter){
   while( p->rc==SQLITE_OK && pIter->iLeafPgno>pIter->iTermLeafPgno ){
     Fts5Data *pNew;
     pIter->iLeafPgno--;
-    pNew = fts5DataRead(p, FTS5_SEGMENT_ROWID(
+    pNew = fts5LeafRead(p, FTS5_SEGMENT_ROWID(
           pIter->pSeg->iSegid, pIter->iLeafPgno
     ));
     if( pNew ){
@@ -2831,6 +2839,10 @@ static void fts5SegIterNextInit(
 
     pIter->iPgidxOff = pIter->pLeaf->szLeaf;
     pIter->iPgidxOff += fts5GetVarint32(&a[pIter->iPgidxOff], iTermOff);
+    if( iTermOff > pIter->pLeaf->szLeaf ){
+      p->rc = FTS5_CORRUPT;
+      return;
+    }
     pIter->iLeafOffset = iTermOff;
     fts5SegIterLoadTerm(p, pIter, 0);
     fts5SegIterLoadNPos(p, pIter);
@@ -3556,8 +3568,7 @@ static void fts5PoslistFilterCallback(
 
     do {
       while( i<nChunk && pChunk[i]!=0x01 ){
-        while( pChunk[i] & 0x80 ) i++;
-        i++;
+        fts5IndexSkipVarint(pChunk, i);
       }
       if( pCtx->eState ){
         fts5BufferSafeAppendBlob(pCtx->pBuf, &pChunk[iStart], i-iStart);
@@ -5158,7 +5169,7 @@ static void fts5SecureDeleteOverflow(
     int iNext = 0;
     u8 *aPg = 0;
 
-    pLeaf = fts5DataRead(p, iRowid);
+    pLeaf = fts5LeafRead(p, iRowid);
     if( pLeaf==0 ) break;
     aPg = pLeaf->p;
 
@@ -5166,7 +5177,7 @@ static void fts5SecureDeleteOverflow(
     if( iNext!=0 ){
       *pbLastInDoclist = 0;
     }
-    if( iNext==0 && pLeaf->szLeaf!=pLeaf->nn ){
+    if( iNext==0 && pLeaf->szLeaf<pLeaf->nn ){
       fts5GetVarint32(&aPg[pLeaf->szLeaf], iNext);
     }
 
@@ -5300,6 +5311,11 @@ static void fts5DoSecureDelete(
       iStart = pSeg->iTermLeafOffset;
     }else{
       iStart = fts5GetU16(&aPg[0]);
+    }
+    if( iStart>nPg ){
+      FTS5_CORRUPT_IDX(p);
+      sqlite3_free(aIdx);
+      return;
     }
 
     iSOP = iStart + fts5GetVarint(&aPg[iStart], &iDelta);
@@ -5448,7 +5464,7 @@ static void fts5DoSecureDelete(
     /* The entry being removed may be the only position list in
     ** its doclist. */
     for(iPgno=pSeg->iLeafPgno-1; iPgno>pSeg->iTermLeafPgno; iPgno-- ){
-      Fts5Data *pPg = fts5DataRead(p, FTS5_SEGMENT_ROWID(iSegid, iPgno));
+      Fts5Data *pPg = fts5LeafRead(p, FTS5_SEGMENT_ROWID(iSegid, iPgno));
       int bEmpty = (pPg && pPg->nn==4);
       fts5DataRelease(pPg);
       if( bEmpty==0 ) break;
@@ -5456,7 +5472,7 @@ static void fts5DoSecureDelete(
 
     if( iPgno==pSeg->iTermLeafPgno ){
       i64 iId = FTS5_SEGMENT_ROWID(iSegid, pSeg->iTermLeafPgno);
-      Fts5Data *pTerm = fts5DataRead(p, iId);
+      Fts5Data *pTerm = fts5LeafRead(p, iId);
       if( pTerm && pTerm->szLeaf==pSeg->iTermLeafOffset ){
         u8 *aTermIdx = &pTerm->p[pTerm->szLeaf];
         int nTermIdx = pTerm->nn - pTerm->szLeaf;
@@ -7986,8 +8002,8 @@ static void fts5IndexTombstoneRebuild(
 ){
   const int MINSLOT = 32;
   int nSlotPerPage = MAX(MINSLOT, (p->pConfig->pgsz - 8) / szKey);
-  int nSlot = 0;                  /* Number of slots in each output page */
-  int nOut = 0;
+  i64 nSlot = 0;                  /* Number of slots in each output page */
+  i64 nOut = 0;
 
   /* Figure out how many output pages (nOut) and how many slots per 
   ** page (nSlot).  There are three possibilities: 
@@ -8012,23 +8028,26 @@ static void fts5IndexTombstoneRebuild(
     nSlot = MINSLOT;
   }else if( pSeg->nPgTombstone==1 ){
     /* Case 2. */
-    int nElem = (int)fts5GetU32(&pData1->p[4]);
+    u32 nElem = fts5GetU32(&pData1->p[4]);
     assert( pData1 && iPg1==0 );
-    nOut = 1;
-    nSlot = MAX(nElem*4, MINSLOT);
-    if( nSlot>nSlotPerPage ) nOut = 0; 
+    if( nElem>((u32)nSlotPerPage/4) ){
+      nOut = 0;
+    }else{
+      nOut = 1;
+      nSlot = MAX((i64)nElem*4, MINSLOT);
+    }
   }
   if( nOut==0 ){
     /* Case 3. */
-    nOut = (pSeg->nPgTombstone * 2 + 1);
+    nOut = ((i64)pSeg->nPgTombstone * 2 + 1);
     nSlot = nSlotPerPage;
   }
 
   /* Allocate the required array and output pages */
   while( 1 ){
     int res = 0;
-    int ii = 0;
-    int szPage = 0;
+    i64 ii = 0;
+    i64 szPage = 0;
     Fts5Data **apOut = 0;
 
     /* Allocate space for the new hash table */
@@ -8405,7 +8424,7 @@ static void fts5IndexIntegrityCheckEmpty(
   /* Now check that the iter.nEmpty leaves following the current leaf
   ** (a) exist and (b) contain no terms. */
   for(i=iFirst; p->rc==SQLITE_OK && i<=iLast; i++){
-    Fts5Data *pLeaf = fts5DataRead(p, FTS5_SEGMENT_ROWID(pSeg->iSegid, i));
+    Fts5Data *pLeaf = fts5LeafRead(p, FTS5_SEGMENT_ROWID(pSeg->iSegid, i));
     if( pLeaf ){
       if( !fts5LeafIsTermless(pLeaf)
        || (i>=iNoRowid && 0!=fts5LeafFirstRowidOff(pLeaf))
@@ -8533,9 +8552,13 @@ static void fts5IndexIntegrityCheckSegment(
         FTS5_CORRUPT_ROWID(p, iRow);
       }else{
         iOff += fts5GetVarint32(&pLeaf->p[iOff], nTerm);
-        res = fts5Memcmp(&pLeaf->p[iOff], zIdxTerm, MIN(nTerm, nIdxTerm));
-        if( res==0 ) res = nTerm - nIdxTerm;
-        if( res<0 ) FTS5_CORRUPT_ROWID(p, iRow);
+        if( (i64)iOff+(i64)nTerm>(i64)pLeaf->szLeaf ){
+          FTS5_CORRUPT_ROWID(p, iRow);
+        }else{
+          res = fts5Memcmp(&pLeaf->p[iOff], zIdxTerm, MIN(nTerm, nIdxTerm));
+          if( res==0 ) res = nTerm - nIdxTerm;
+          if( res<0 ) FTS5_CORRUPT_ROWID(p, iRow);
+        }
       }
 
       fts5IntegrityCheckPgidx(p, iRow, pLeaf);
@@ -8566,7 +8589,7 @@ static void fts5IndexIntegrityCheckSegment(
         /* Check any rowid-less pages that occur before the current leaf. */
         for(iPg=iPrevLeaf+1; iPg<fts5DlidxIterPgno(pDlidx); iPg++){
           iKey = FTS5_SEGMENT_ROWID(iSegid, iPg);
-          pLeaf = fts5DataRead(p, iKey);
+          pLeaf = fts5LeafRead(p, iKey);
           if( pLeaf ){
             if( fts5LeafFirstRowidOff(pLeaf)!=0 ) FTS5_CORRUPT_ROWID(p, iKey);
             fts5DataRelease(pLeaf);
@@ -8577,7 +8600,7 @@ static void fts5IndexIntegrityCheckSegment(
         /* Check that the leaf page indicated by the iterator really does
         ** contain the rowid suggested by the same. */
         iKey = FTS5_SEGMENT_ROWID(iSegid, iPrevLeaf);
-        pLeaf = fts5DataRead(p, iKey);
+        pLeaf = fts5LeafRead(p, iKey);
         if( pLeaf ){
           i64 iRowid;
           int iRowidOff = fts5LeafFirstRowidOff(pLeaf);
