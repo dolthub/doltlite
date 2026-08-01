@@ -38,9 +38,13 @@ int mergeCatalogPass2(
             aTheirs, nTheirs, pTheirSe->zTblName);
         if( hasSchemaConflictObject(aConflictTables, nConflictTables,
                                     pTheirSe->zName)
+         || hasSchemaConflictObject(aConflictTables, nConflictTables,
+                                    pTheirSe->zTblName)
          || hasSchemaConflictTable(aConflictTables, nConflictTables,
                                    pTheirSe->zTblName)
          || !pTheirTable
+         || !doltliteFindTableByName(aMerged, *pnMerged,
+                                     pTheirSe->zTblName)
          || mergeTableRenameOtherDrop(
               aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
               aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema,

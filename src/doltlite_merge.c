@@ -979,7 +979,8 @@ static int rebuildDisjointSchemaRows(
                                   pSe->zName) ){
       continue;
     }
-    if( schemaEntryChangedByName(aAncSchema, nAncSchema,
+    if( findSchemaEntry(aOursSchema, nOursSchema, pSe->zName)
+     && schemaEntryChangedByName(aAncSchema, nAncSchema,
                                  aOursSchema, nOursSchema,
                                  pSe->zName) ){
       continue;
