@@ -28,10 +28,9 @@ SQLITE_EXTENSION_INIT1
 # include <stdio.h>
 # include <stdlib.h>
 # include <assert.h>
-# define ALWAYS(X)  1
-# define NEVER(X)   0
   typedef unsigned char u8;
   typedef unsigned short u16;
+  typedef sqlite3_int64 i64;
 #endif
 #include <ctype.h>
 
@@ -192,7 +191,7 @@ static const unsigned char className[] = ".ABCDHLRMY9 ?";
 ** Return NULL if memory allocation fails.  
 */
 static unsigned char *phoneticHash(const unsigned char *zIn, int nIn){
-  unsigned char *zOut = sqlite3_malloc64( nIn + 1 );
+  unsigned char *zOut = sqlite3_malloc64( (i64)nIn + 1 );
   int i;
   int nOut = 0;
   char cPrev = 0x77;
@@ -422,7 +421,7 @@ static int editdist1(const char *zA, const char *zB, int *pnMatch){
   if( nB<(sizeof(mStack)*4)/(sizeof(mStack[0])*5) ){
     m = mStack;
   }else{
-    m = toFree = sqlite3_malloc64( (nB+1)*5LL*sizeof(m[0])/4 );
+    m = toFree = sqlite3_malloc64( ((i64)nB+1)*5LL*sizeof(m[0])/4 );
     if( m==0 ) return -3;
   }
   cx = (char*)&m[nB+1];
@@ -591,6 +590,7 @@ static const EditDist3Lang editDist3Lang = { 0, 100, 100, 150, 0 };
 ** Complete configuration
 */
 struct EditDist3Config {
+  int nRef;              /* Reference counter.  Free when zero */
   int nLang;             /* Number of language IDs.  Size of a[] */
   EditDist3Lang *a;      /* One for each distinct language ID */
 };
@@ -655,12 +655,19 @@ static void editDist3ConfigClear(EditDist3Config *p){
     }
   }
   sqlite3_free(p->a);
-  memset(p, 0, sizeof(*p));
+  p->nLang = 0;
+  p->a = 0;
 }
 static void editDist3ConfigDelete(void *pIn){
-  EditDist3Config *p = (EditDist3Config*)pIn;
-  editDist3ConfigClear(p);
-  sqlite3_free(p);
+  if( pIn ){
+    EditDist3Config *p = (EditDist3Config*)pIn;
+    assert( p->nRef>=1 );
+    p->nRef--;
+    if( p->nRef==0 ){
+      editDist3ConfigClear(p);
+      sqlite3_free(p);
+    }
+  }
 }
 
 /* Compare the FROM values of two EditDist3Cost objects, for sorting.
@@ -772,7 +779,7 @@ static int editDist3ConfigLoad(
     if( iCost>=10000 ) continue;  /* Costs above 10K are considered infinite */
     if( pLang==0 || iLang!=iLangPrev ){
       EditDist3Lang *pNew;
-      pNew = sqlite3_realloc64(p->a, (p->nLang+1)*sizeof(p->a[0]));
+      pNew = sqlite3_realloc64(p->a, ((i64)p->nLang+1)*sizeof(p->a[0]));
       if( pNew==0 ){ rc = SQLITE_NOMEM; break; }
       p->a = pNew;
       pLang = &p->a[p->nLang];
@@ -906,7 +913,7 @@ static EditDist3FromString *editDist3FromStringNew(
 
   if( z==0 ) return 0;
   if( n<0 ) n = (int)strlen(z);
-  pStr = sqlite3_malloc64( sizeof(*pStr) + sizeof(pStr->a[0])*n + n + 1 );
+  pStr = sqlite3_malloc64( sizeof(*pStr) + sizeof(pStr->a[0])*n + (i64)n + 1 );
   if( pStr==0 ) return 0;
   pStr->a = (EditDist3From*)&pStr[1];
   memset(pStr->a, 0, sizeof(pStr->a[0])*n);
@@ -932,13 +939,13 @@ static EditDist3FromString *editDist3FromStringNew(
       if( matchFrom(p, z+i, n-i)==0 ) continue;
       if( p->nTo==0 ){
         apNew = sqlite3_realloc64(pFrom->apDel,
-                                sizeof(*apNew)*(pFrom->nDel+1));
+                                sizeof(*apNew)*((i64)pFrom->nDel+1));
         if( apNew==0 ) break;
         pFrom->apDel = apNew;
         apNew[pFrom->nDel++] = p;
       }else{
         apNew = sqlite3_realloc64(pFrom->apSubst,
-                                sizeof(*apNew)*(pFrom->nSubst+1));
+                                sizeof(*apNew)*((i64)pFrom->nSubst+1));
         if( apNew==0 ) break;
         pFrom->apSubst = apNew;
         apNew[pFrom->nSubst++] = p;
@@ -1221,21 +1228,23 @@ static int editDist3Install(sqlite3 *db){
   EditDist3Config *pConfig = sqlite3_malloc64( sizeof(*pConfig) );
   if( pConfig==0 ) return SQLITE_NOMEM;
   memset(pConfig, 0, sizeof(*pConfig));
+  pConfig->nRef = 2;
   rc = sqlite3_create_function_v2(db, "editdist3",
               2, SQLITE_UTF8|SQLITE_DETERMINISTIC, pConfig,
-              editDist3SqlFunc, 0, 0, 0);
+              editDist3SqlFunc, 0, 0, editDist3ConfigDelete);
   if( rc==SQLITE_OK ){
+    pConfig->nRef++;
     rc = sqlite3_create_function_v2(db, "editdist3",
                 3, SQLITE_UTF8|SQLITE_DETERMINISTIC, pConfig,
-                editDist3SqlFunc, 0, 0, 0);
+                editDist3SqlFunc, 0, 0, editDist3ConfigDelete);
   }
   if( rc==SQLITE_OK ){
+    pConfig->nRef++;
     rc = sqlite3_create_function_v2(db, "editdist3",
                 1, SQLITE_UTF8|SQLITE_DETERMINISTIC, pConfig,
                 editDist3SqlFunc, 0, 0, editDist3ConfigDelete);
-  }else{
-    sqlite3_free(pConfig);
   }
+  editDist3ConfigDelete(pConfig);
   return rc;
 }
 /* End configurable cost unicode edit distance routines
@@ -1269,7 +1278,7 @@ static int utf8Read(const unsigned char *z, int n, int *pSize){
 
   /* All callers to this routine (in the current implementation)
   ** always have n>0. */
-  if( NEVER(n==0) ){
+  if( n==0 ){
     c = i = 0;
   }else{
     c = z[0];
@@ -1721,9 +1730,9 @@ static const Transliteration *spellfixFindTranslit(int c, int *pxTop){
 */
 static unsigned char *transliterate(const unsigned char *zIn, int nIn){
 #ifdef SQLITE_SPELLFIX_5BYTE_MAPPINGS
-  unsigned char *zOut = sqlite3_malloc64( nIn*5 + 1 );
+  unsigned char *zOut = sqlite3_malloc64( (i64)nIn*5 + 1 );
 #else
-  unsigned char *zOut = sqlite3_malloc64( nIn*4 + 1 );
+  unsigned char *zOut = sqlite3_malloc64( (i64)nIn*4 + 1 );
 #endif
   int c, sz, nOut;
   if( zOut==0 ) return 0;
@@ -2019,13 +2028,13 @@ static char *spellfix1Dequote(const char *zIn){
   zOut = sqlite3_mprintf("%s", zIn);
   if( zOut==0 ) return 0;
   i = (int)strlen(zOut);
-#if 0  /* The parser will never leave spaces at the end */
+  /* The parser should never leave spaces at the end, but we'll
+  ** remove them just in case. */
   while( i>0 && isspace(zOut[i-1]) ){ i--; }
-#endif
   zOut[i] = 0;
   c = zOut[0];
   if( c=='\'' || c=='"' ){
-    for(i=1, j=0; ALWAYS(zOut[i]); i++){
+    for(i=1, j=0; zOut[i]; i++){
       zOut[j++] = zOut[i];
       if( zOut[i]==c ){
         if( zOut[i+1]==c ){
@@ -2066,7 +2075,7 @@ static int spellfix1Init(
   int i;
 
   nDbName = (int)strlen(zDbName);
-  pNew = sqlite3_malloc64( sizeof(*pNew) + nDbName + 1);
+  pNew = sqlite3_malloc64( sizeof(*pNew) + (i64)nDbName + 1);
   if( pNew==0 ){
     rc = SQLITE_NOMEM;
   }else{
@@ -2557,6 +2566,7 @@ static int spellfix1FilterForMatch(
     p->pConfig3 = sqlite3_malloc64( sizeof(p->pConfig3[0]) );
     if( p->pConfig3==0 ) return SQLITE_NOMEM;
     memset(p->pConfig3, 0, sizeof(p->pConfig3[0]));
+    p->pConfig3->nRef = 1;
     rc = editDist3ConfigLoad(p->pConfig3, p->db, p->zCostTable);
     if( rc ) return rc;
   }
@@ -2603,7 +2613,7 @@ static int spellfix1FilterForMatch(
     goto filter_exit;
   }
   nPattern = (int)strlen(zPattern);
-  if( zPattern[nPattern-1]=='*' ) nPattern--;
+  if( nPattern>0 && zPattern[nPattern-1]=='*' ) nPattern--;
   zSql = sqlite3_mprintf(
      "SELECT id, word, rank, coalesce(k1,word)"
      "  FROM \"%w\".\"%w_vocab\""

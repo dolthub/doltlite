@@ -18,14 +18,14 @@
 
   Documentation home page: https://sqlite.org/wasm
 */
-//#if omit-kvvfs
+//#if target:node or omit-kvvfs
 globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   /* These are JS plumbing, not part of the public API */
   delete sqlite3.capi.sqlite3_kvvfs_methods;
   delete sqlite3.capi.KVVfsFile;
-}
+});
 //#else
-//#@ policy error
+//#@ push policy error
 //#savepoint begin
 //#define kvvfs-v2-added-in "3.52.0"
 
@@ -753,15 +753,10 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
                   wasm.cstrToJs(zKey), nV, jV, store);
           }
           const zV = cache.memBuffer(0);
-          //if( !zV ) return -3 /*OOM*/;
           const heap = wasm.heap8();
-          let i;
-          for(i = 0; i < nV; ++i){
-            heap[wasm.ptr.add(zV,i)] = jV.codePointAt(i) & 0xFF;
+          for (let i = 0; i < nV; ++i) {
+            heap[wasm.ptr.add(zBuf, i)] = jV.codePointAt(i) & 0xff;
           }
-          heap.copyWithin(
-            Number(zBuf), Number(zV), wasm.ptr.addn(zV, i)
-          );
           heap[wasm.ptr.add(zBuf, nV)] = 0;
           return nBuf;
         }catch(e){
@@ -811,10 +806,6 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       xOpen: function(pProtoVfs,zName,pProtoFile,flags,pOutFlags){
         cache.popError();
         let zToFree /* alloc()'d memory for temp db name */;
-        if( 0 ){
-          /* tester1.js makes it a lot further if we do this. */
-          flags |= capi.SQLITE_OPEN_CREATE;
-        }
         try{
           if( !zName ){
             zToFree = wasm.allocCString(""+pProtoFile+"."
@@ -2099,4 +2090,5 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
 
 })/*globalThis.sqlite3ApiBootstrap.initializers*/;
 //#savepoint rollback
-//#/if not omit-kvvfs
+//#@ pop policy
+//#/if kvvfs disabled

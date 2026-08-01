@@ -212,6 +212,16 @@ b.cp = $(call b.mkdir@); \
   echo '$(logtag.$(1)) $(emo.disk) $(2) ==> $3'; \
   cp -f -p $(2) $(3) || exit
 
+# D.common = flags to use for all $(bin.c-pp) invocations. These must
+# be passed before any input file names because c-pp's args are
+# processed in their given order.
+#
+# Maintenance reminder: we cannot include -@policy=error here because
+# of the @sqlite3.wasm@ placeholders in JS files, which trigger an
+# error before we get to handle that filename juggling. Most JS files
+# defensively set a file-local @policy.
+D.common =
+
 #
 # $(call b.c-pp.shcmd,LOGTAG,src,dest,-Dx=y...)
 #
@@ -225,7 +235,9 @@ b.cp = $(call b.mkdir@); \
 define b.c-pp.shcmd
 $(call b.mkdir@); \
 $(call b.echo,$(1),$(emo.disk)$(emo.lock)[$(3)] $(4)); \
-rm -f $(3); $(bin.c-pp) -o $(3) $(4) $(2) || exit; \
+rm -f $(3); \
+if [ x1 = x$(loud.if) ]; then set -x; fi; \
+$(bin.c-pp) -o $(3) $(D.common) $(4) $(2) || exit; \
 chmod -w $(3)
 endef
 
@@ -238,7 +250,7 @@ endef
 define b.c-pp.target
 $(3): $$(MAKEFILE_LIST) $$(bin.c-pp) $(2)
 	@$$(call b.mkdir@)
-	@$$(call b.c-pp.shcmd,$(1),$(2),$(3),$(4) $$(b.c-pp.target.flags))
+	@$$(call b.c-pp.shcmd,$(1),$(2),$(3),$(4))
 CLEAN_FILES += $(3)
 endef
 
@@ -307,19 +319,20 @@ endif
 # Set up sqlite3.c and sqlite3.h...
 #
 # To build with SEE (https://sqlite.org/see), either put sqlite3-see.c
-# in $(dir.top) or pass sqlite3.c=PATH_TO_sqlite3-see.c to the $(MAKE)
-# invocation. Note that only encryption modules with no 3rd-party
+# in $(dir.top) or pass sqlite3.c=/path/to/sqlite3-see.c to the
+# $(MAKE) invocation. Only encryption modules with no 3rd-party
 # dependencies will currently work here: AES256-OFB, AES128-OFB, and
 # AES128-CCM. Not coincidentally, those 3 modules are included in the
-# sqlite3-see.c bundle. Note, however, that distributing an SEE build
-# of the WASM on a public site is in violation of the SEE license
-# because it effectively provides a usable copy of the SEE build to
-# all visitors.
+# sqlite3-see.c bundle. However, distributing an SEE build of the WASM
+# on a public site is in violation of the SEE license because it
+# effectively provides a usable copy of the SEE build to all visitors.
+# Its use is permitted within the intranet of an SEE licensee, but use
+# on networks accessible to non-licensees is in violation.
 #
 # A custom sqlite3.c must not have any spaces in its name.
-# $(sqlite3.canonical.c) must point to the sqlite3.c in
-# the sqlite3 canonical source tree, as that source file
-# is required for certain utility and test code.
+# $(sqlite3.canonical.c) must point to the sqlite3.c in the sqlite3
+# canonical source tree, as that source file is required for certain
+# utility and test code.
 #
 sqlite3.canonical.c = $(dir.top)/sqlite3.c
 sqlite3.c ?= $(firstword $(wildcard $(dir.top)/sqlite3-see.c) $(sqlite3.canonical.c))
@@ -379,6 +392,7 @@ else
     SQLITE_C_IS_SEE = 0
   else
     SQLITE_C_IS_SEE = 1
+    D.common += -Denable-see
     $(info $(emo.lock)$(emo.lock)$(emo.lock) This is an SEE build $(emo.lock)$(emo.lock)$(emo.lock))
   endif
 endif
@@ -583,7 +597,19 @@ endif
 #
 # Changing this may require a clean rebuild. It also might not work.
 #
+# A value of 1 is required for the base64.wasm=1 build, as this custom
+# instantiator is where we embed the base64-encoded WASM files.
+#
+# 2026-07: it's been deployed almost a year now and the only issues
+# with it were in npm-/node-specific builds, where we now
+# automatically disable it.
 WASM_CUSTOM_INSTANTIATE = 1
+
+ifeq (0,$(WASM_CUSTOM_INSTANTIATE))
+ifeq (1,$(base64.wasm))
+  $(error base64.wasm=1 is incompatible with WASM_CUSTOM_INSTANTIATE=0)
+endif
+endif
 
 #
 # $(bin.c-pp): a minimal text file preprocessor. Like C's but much
@@ -609,13 +635,14 @@ WASM_CUSTOM_INSTANTIATE = 1
 #
 # c-pp-lite.c was written specifically for the sqlite project's
 # JavaScript builds but is maintained as a standalone project:
-# https://fossil.wanderinghorse.net/r/c-pp
+# https://fossil.wanderinghorse.net/r/c-pp. It has since been vastly
+# extended, largely reimplemented, and has dropped the "lite" suffix.
 #
 # The SQLITE_... build flags used here have NO EFFECT on the JS/WASM
 # build. They are solely for use with $(bin.c-pp) itself.
 #
 # -D... flags which should be included in all invocations should be
-# appended to $(b.c-pp.target.flags).
+# appended to $(D.common).
 #
 bin.c-pp = ./c-pp
 # NB: $(dir.top)/sqlite3.c is the doltlite amalgamation (DOLTLITE_PROLLY baked
@@ -632,13 +659,35 @@ $(bin.c-pp): libcmpp.c $(sqlite3.c) $(MAKEFILE)
 		'-DCMPP_DEFAULT_DELIM="//#"' -DCMPP_MAIN -DCMPP_OMIT_D_MODULE \
 		-DCMPP_OMIT_D_PIPE -lz -lpthread -lm
 DISTCLEAN_FILES += $(bin.c-pp)
-b.c-pp.target.flags ?=
-ifeq (1,$(SQLITE_C_IS_SEE))
-  b.c-pp.target.flags += -Denable-see
-endif
-api.oo1 ?= 1
-ifeq (0,$(api.oo1))
-  b.c-pp.target.flags += -Domit-oo1
+
+ifeq (0,$(MAKING_CLEAN))
+  # omit-api="feature names..." disables various features by name.
+  # Recognized names are:
+  #
+  #   kvvfs oo1 opfs opfs-sahpool opfs-wl vtab worker1
+  #
+  # The name "OPFS" is shorthand for all of the OPFS VFSes. For-nodejs
+  # builds filter out OPFS from within the OPFS-using files so OPFS is
+  # implied for those builds.
+  #
+  # The name "ALL" is shorthand for all of the above names.
+  D.omit =
+  ifneq (,$(omit-api))
+    # Translate omit-api="X Y" into -Domit-X...
+    Xomit-api := $(subst ALL,kvvfs oo1 OPFS worker1,$(omit-api))
+    Xomit-api := $(subst OPFS,opfs opfs-sahpool opfs-wl,$(Xomit-api))
+    Xomit-api := $(sort $(Xomit-api))
+    #$(foreach X,$(Xomit-api),$(eval D.omit += -Domit-$(X)))
+    D.omit = $(patsubst %,-Domit-%,$(Xomit-api))
+  endif
+  ifneq (,$(D.omit))
+    D.common += $(D.omit)
+    achtung = $(emo.megaphone) WARNING $(emo.megaphone)
+    $(info $(achtung): *******************************************************************)
+    $(info $(achtung): Be sure to do 'make clean' before using custom omit-api flags.)
+    $(info $(achtung): Omit flags: $(D.omit))
+    $(info $(achtung): *******************************************************************)
+  endif
 endif
 
 #
@@ -656,7 +705,11 @@ ifeq (1,$(DOLTLITE_WASM))
 endif
 # emcc.WASM_BIGINT = 1 for BigInt (C int64) support, else 0.  The API
 # disables certain features if BigInt is not enabled and such builds
-# _are not tested_ on any regular basis.
+# _are not tested_ on any regular basis. Update 2026-07: Browsers old
+# enough to not have BigInt probably won't otherwise run the WASM
+# build (and we've never had direct access to such a browser to test
+# on). i.e. non-BigInt builds are effectively unnecessary and can be
+# safely removed at some point.
 emcc.WASM_BIGINT ?= 1
 emcc.MEMORY64 ?= 0
 #
@@ -1411,7 +1464,7 @@ $(eval $(call gen-st64,speedtest1-worker.js,speedtest1-worker-64bit.js))
 # 1) Load sqlite3 in the main UI thread of a conventional script.
 # 2) Load sqlite3 in a conventional Worker thread.
 # 3) Load sqlite3 as an ES6 module (ESM) in the main thread.
-# 4) Load sqlite3 as an ESM worker. (Not all browsers support this.)
+# 4) Load sqlite3 as an ESM worker.
 #
 # To that end, we require two separate builds of tester1.js:
 #
@@ -1428,7 +1481,7 @@ $(eval $(call gen-st64,speedtest1-worker.js,speedtest1-worker-64bit.js))
 #
 define gen-tester1.js
 # $1 = build name to have a dep on
-# $2 = suffix for tester1SUFFIX JS
+# $2 = suffix for tester1${2} JS
 # $3 = $(bin.c-pp) flags
 $(call b.c-pp.target,test,tester1.c-pp.js,tester1$(2),$(3))
 tester1$(2): $(sqlite3.ext.js) $(out.$(1).wasm)
@@ -1731,7 +1784,7 @@ sqlite3-node.mjs \
 npm: $(sqlite3.canonical.c)
 	@echo "$(emo.cleanup) Forcing a clean rebuild to ensure consistent optimization flags."
 	$(MAKE) clean
-	$(MAKE) -e "emcc_opt=-Oz $(emcc-opt-extra)" $(npm_files)
+	$(MAKE) -e "emcc_opt=-Oz $(emcc-opt-extra)" "omit-api=$(omit-api)" $(npm_files)
 	@if grep -q "__dirname" $(dir.dout)/sqlite3-node.mjs; then \
 	  python3 -c "from pathlib import Path; p = Path('$(dir.dout)/sqlite3-node.mjs'); s = p.read_text(); s = s.replace(\"__dirname + '/'\", \"new URL('.', import.meta.url).href\"); p.write_text(s)"; \
 	fi

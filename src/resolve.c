@@ -754,7 +754,7 @@ static int lookupName(
   ** cnt>1 means there were two or more matches.
   **
   ** cnt==0 is always an error.  cnt>1 is often an error, but might
-  ** be multiple matches for a NATURAL LEFT JOIN or a LEFT JOIN USING.
+  ** be multiple matches for a NATURAL OUTER JOIN or a OUTER JOIN USING.
   */
   assert( pFJMatch==0 || cnt>0 );
   assert( !ExprHasProperty(pExpr, EP_xIsSelect|EP_IntValue) );
@@ -837,9 +837,20 @@ lookupname_end:
   if( cnt==1 ){
     assert( pNC!=0 );
 #ifndef SQLITE_OMIT_AUTHORIZATION
-    if( db->xAuth && (pExpr->op==TK_COLUMN || pExpr->op==TK_TRIGGER) ){
-      sqlite3AuthRead(pParse, pExpr, pSchema, pNC->pSrcList);
-    }
+    if( db->xAuth ){
+      if( pFJMatch ){
+        assert( pExpr->op==TK_FUNCTION );
+        assert( sqlite3_stricmp(pExpr->u.zToken,"coalesce")==0 );
+        assert( pExpr->x.pList==pFJMatch );
+        assert( pFJMatch->nExpr>0 );
+        for(i=0; i<pFJMatch->nExpr; i++){
+          assert( pFJMatch->a[i].pExpr->op==TK_COLUMN );
+          sqlite3AuthRead(pParse,pFJMatch->a[i].pExpr,pSchema,pNC->pSrcList);
+        }
+      }else if( pExpr->op==TK_COLUMN || pExpr->op==TK_TRIGGER ){
+        sqlite3AuthRead(pParse, pExpr, pSchema, pNC->pSrcList);
+      }
+    } 
 #endif
     /* Increment the nRef value on all name contexts from TopNC up to
     ** the point where the name matched. */
@@ -952,11 +963,20 @@ static SQLITE_NOINLINE void resolveSetExprSubtypeArg(ExprList *pList){
   nn = pList ? pList->nExpr : 0;
   for(ii=0; ii<nn; ii++){
     Expr *pExpr = pList->a[ii].pExpr;
-    ExprSetProperty(pExpr, EP_SubtArg);
-    if( pExpr->op==TK_SELECT ){
-      assert( ExprUseXSelect(pExpr) );
-      assert( pExpr->x.pSelect!=0 );
-      resolveSetExprSubtypeArg(pExpr->x.pSelect->pEList);
+    while( 1 /*exit-by-break*/ ){
+      ExprSetProperty(pExpr, EP_SubtArg);
+      if( pExpr->op==TK_SELECT ){
+        assert( ExprUseXSelect(pExpr) );
+        assert( pExpr->x.pSelect!=0 );
+        resolveSetExprSubtypeArg(pExpr->x.pSelect->pEList);
+        break;
+      }
+      if( pExpr->op==TK_UPLUS ){
+        pExpr = pExpr->pLeft;
+        assert( pExpr!=0 );
+      }else{
+        break;
+      }
     }
   }
 }
