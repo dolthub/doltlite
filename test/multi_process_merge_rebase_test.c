@@ -158,7 +158,7 @@ static void seed_feature_branch(const char *path, const char *branch,
 
 static void test_concurrent_mergers_into_main(void){
   const char *path = "/tmp/test_concurrent_mergers.db";
-  const int N_MERGERS = 3;
+  const int N_MERGERS = 8;
   const int N_PER = 10;
   pid_t pids[8];
   int i, status;

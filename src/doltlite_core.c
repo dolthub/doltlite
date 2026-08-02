@@ -587,24 +587,21 @@ int doltliteSeedStoreIfNeeded(
   return rc;
 }
 
-int doltliteAdvanceBranch(
+static int doltliteAdvanceBranchWithState(
   sqlite3 *db,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash,
-  const ProllyHash *pWorkingCatHash
+  const ProllyHash *pWorkingCatHash,
+  DoltliteTxnState *pSaved
 ){
   ChunkStore *cs;
   const char *branch;
-  DoltliteTxnState saved;
   int rc;
   assert( db!=0 && pNewHead!=0 && pCatalogHash!=0 );
   cs = doltliteGetChunkStore(db);
   assert( cs!=0 );
   branch = doltliteGetSessionBranch(db);
   assert( branch!=0 && branch[0]!=0 );
-
-  rc = doltliteSaveTxnState(db, &saved);
-  if( rc!=SQLITE_OK ) return rc;
 
   if( refsTableBranchCount(&cs->refs)==0 ){
     rc = chunkStoreAddBranch(cs, branch, pNewHead);
@@ -615,13 +612,13 @@ int doltliteAdvanceBranch(
     rc = chunkStoreUpdateBranch(cs, branch, pNewHead);
   }
   if( rc!=SQLITE_OK ){
-    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
+    return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
   }
 
   doltliteSetSessionHead(db, pNewHead);
   rc = doltliteSetSessionStaged(db, pCatalogHash);
   if( rc!=SQLITE_OK ){
-    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
+    return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
   }
   if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
     rc = doltliteSwitchCatalog(db, pWorkingCatHash);
@@ -629,16 +626,31 @@ int doltliteAdvanceBranch(
     rc = doltliteSwitchCatalog(db, pCatalogHash);
   }
   if( rc!=SQLITE_OK ){
-    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
+    return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
   }
 
   rc = doltlitePersistWorkingSetWithHash(db, pWorkingCatHash);
   if( rc!=SQLITE_OK ){
-    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
+    return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
   }
 
-  doltliteTxnStateClear(&saved);
+  doltliteTxnStateClear(pSaved);
   return SQLITE_OK;
+}
+
+int doltliteAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+){
+  DoltliteTxnState saved;
+  int rc;
+
+  rc = doltliteSaveTxnState(db, &saved);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteAdvanceBranchWithState(
+      db, pNewHead, pCatalogHash, pWorkingCatHash, &saved);
 }
 
 int doltliteCompareAndAdvanceBranch(
@@ -649,13 +661,19 @@ int doltliteCompareAndAdvanceBranch(
   const ProllyHash *pWorkingCatHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteTxnState saved;
   int rc;
   if( !cs ) return SQLITE_ERROR;
+  rc = doltliteSaveTxnState(db, &saved);
+  if( rc!=SQLITE_OK ) return rc;
   rc = doltliteRefreshAndConfirmHead(db, cs, pExpectedHead);
   if( rc==SQLITE_OK ){
-    rc = doltliteAdvanceBranch(
-        db, pNewHead, pCatalogHash, pWorkingCatHash);
+    rc = doltliteAdvanceBranchWithState(
+        db, pNewHead, pCatalogHash, pWorkingCatHash, &saved);
+    assert( cs->lockDepth>0 );
     chunkStoreUnlock(cs);
+  }else{
+    doltliteTxnStateClear(&saved);
   }
   return rc;
 }
