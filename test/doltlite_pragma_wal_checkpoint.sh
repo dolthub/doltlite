@@ -46,6 +46,54 @@ done
 
 db_rm "$DB"
 
+echo ""
+echo "--- checkpoint compacts the named database only ---"
+
+# Checkpoint bridges to GC, so aiming it at the wrong store rewrites a file the
+# caller never named. Both databases carry reclaimable chunks so either one
+# shrinking is visible.
+MAIN=/tmp/test_wc_main_$$.db; db_rm "$MAIN"
+AUX=/tmp/test_wc_aux_$$.db;  db_rm "$AUX"
+for D in "$MAIN" "$AUX"; do
+  $DOLTLITE "$D" "CREATE TABLE big(a INTEGER PRIMARY KEY, b TEXT);
+WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000)
+  INSERT INTO big SELECT i, 'padding-data-'||i FROM c;
+DELETE FROM big WHERE a%2=0;" > /dev/null 2>&1
+done
+
+main_before=$(wc -c < "$MAIN"); aux_before=$(wc -c < "$AUX")
+$DOLTLITE "$MAIN" "ATTACH '$AUX' AS aux; PRAGMA aux.wal_checkpoint;" > /dev/null 2>&1
+main_after=$(wc -c < "$MAIN"); aux_after=$(wc -c < "$AUX")
+
+run_test_eq "wc_aux_leaves_main_untouched" "$main_after" "$main_before"
+if [ "$aux_after" -lt "$aux_before" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: wc_aux_compacts_aux\n  aux size $aux_before -> $aux_after (expected shrink)"
+fi
+run_test_eq "wc_aux_rows_intact" \
+  "$($DOLTLITE "$AUX" "SELECT count(*) FROM big;" 2>&1)" "2000"
+
+db_rm "$MAIN"; db_rm "$AUX"
+
+# The main-named form must still compact main.
+DB=/tmp/test_wc_selfmain_$$.db; db_rm "$DB"
+$DOLTLITE "$DB" "CREATE TABLE big(a INTEGER PRIMARY KEY, b TEXT);
+WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000)
+  INSERT INTO big SELECT i, 'padding-data-'||i FROM c;
+DELETE FROM big WHERE a%2=0;" > /dev/null 2>&1
+before=$(wc -c < "$DB")
+$DOLTLITE "$DB" "PRAGMA main.wal_checkpoint;" > /dev/null 2>&1
+after=$(wc -c < "$DB")
+if [ "$after" -lt "$before" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: wc_main_still_compacts\n  main size $before -> $after (expected shrink)"
+fi
+db_rm "$DB"
+
 if [ -x "$SQLITE3" ]; then
   echo ""
   echo "--- stock-SQLite file via orig route ---"
