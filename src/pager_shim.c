@@ -928,6 +928,10 @@ backup_same_file_done:
 
 typedef struct DoltliteBackup DoltliteBackup;
 struct DoltliteBackup {
+  /* Non-zero when both databases are legacy: every entry point forwards to the
+  ** stock page copier. Wrapping rather than returning its handle directly keeps
+  ** one object type flowing through the public API. */
+  sqlite3_backup *pOrig;
   sqlite3 *pSrcDb;
   sqlite3 *pDestDb;
   char *zSrcFile;
@@ -937,6 +941,11 @@ struct DoltliteBackup {
   int done;
   int rc;
 };
+
+extern int orig_sqlite3_backup_step(sqlite3_backup*, int);
+extern int orig_sqlite3_backup_finish(sqlite3_backup*);
+extern int orig_sqlite3_backup_remaining(sqlite3_backup*);
+extern int orig_sqlite3_backup_pagecount(sqlite3_backup*);
 
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
                                      sqlite3 *pSrc, const char *zSrcDb){
@@ -960,18 +969,42 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
     return 0;
   }
 
-  if( iSrc != 0 || iDest != 0 ){
-    /* The original backup engine can only run when neither side is a
-    ** doltlite-format btree; otherwise it would push SQLite pages through
-    ** the prolly pager shim. */
-    if( !sqlite3BtreeIsDoltliteFormat(pSrc->aDb[iSrc].pBt)
-     && !sqlite3BtreeIsDoltliteFormat(pDest->aDb[iDest].pBt)
-    ){
-      return orig_sqlite3_backup_init(pDest, zDestDb, pSrc, zSrcDb);
+  /* Two legacy databases are copied page by page by the stock engine, whichever
+  ** schema each is attached as. The doltlite path below raw-copies a whole
+  ** chunk-store file, so it needs both sides to be doltlite-format. */
+  if( !sqlite3BtreeIsDoltliteFormat(pSrc->aDb[iSrc].pBt)
+   && !sqlite3BtreeIsDoltliteFormat(pDest->aDb[iDest].pBt)
+  ){
+    sqlite3_backup *pOrig = orig_sqlite3_backup_init(pDest, zDestDb,
+                                                     pSrc, zSrcDb);
+    if( !pOrig ) return 0;
+    p = (DoltliteBackup*)sqlite3_malloc(sizeof(DoltliteBackup));
+    if( !p ){
+      (void)orig_sqlite3_backup_finish(pOrig);
+      sqlite3Error(pDest, SQLITE_NOMEM);
+      return 0;
     }
+    memset(p, 0, sizeof(*p));
+    p->pOrig = pOrig;
+    return (sqlite3_backup*)p;
+  }
+
+  if( iSrc != 0 || iDest != 0 ){
     sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
         "backup of non-main databases is not supported on doltlite-format "
         "databases");
+    return 0;
+  }
+
+  /* Only one side is doltlite-format: the page copier cannot write a chunk
+  ** store, and the raw copy would leave the other side's handle pointing at a
+  ** file of the wrong format. */
+  if( !sqlite3BtreeIsDoltliteFormat(pSrc->aDb[iSrc].pBt)
+   || !sqlite3BtreeIsDoltliteFormat(pDest->aDb[iDest].pBt)
+  ){
+    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
+        "cannot backup between a legacy SQLite database and a doltlite "
+        "database");
     return 0;
   }
 
@@ -1062,6 +1095,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   int destLocked = 0;
   (void)nPage;
 
+  if( p && p->pOrig ) return orig_sqlite3_backup_step(p->pOrig, nPage);
   if( !p ) return SQLITE_DONE;
   if( p->done ) return SQLITE_DONE;
   if( p->rc!=SQLITE_OK ) return p->rc;
@@ -1191,6 +1225,11 @@ int sqlite3_backup_finish(sqlite3_backup *pBackup){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
   int rc;
   if( !p ) return SQLITE_OK;
+  if( p->pOrig ){
+    rc = orig_sqlite3_backup_finish(p->pOrig);
+    sqlite3_free(p);
+    return rc;
+  }
   rc = p->rc;
   sqlite3_free(p->zSrcFile);
   sqlite3_free(p->zDestFile);
@@ -1200,12 +1239,14 @@ int sqlite3_backup_finish(sqlite3_backup *pBackup){
 
 int sqlite3_backup_remaining(sqlite3_backup *pBackup){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
+  if( p && p->pOrig ) return orig_sqlite3_backup_remaining(p->pOrig);
   if( !p ) return 0;
   return p->done ? 0 : 1;
 }
 
 int sqlite3_backup_pagecount(sqlite3_backup *pBackup){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
+  if( p && p->pOrig ) return orig_sqlite3_backup_pagecount(p->pOrig);
   if( !p ) return 0;
   return 1;
 }

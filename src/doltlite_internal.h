@@ -806,8 +806,10 @@ static SQLITE_INLINE int dlReadFramedHeader(DlByteReader *r, u8 m0, u8 m1,
 }
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+ChunkStore *doltliteBtreeChunkStore(Btree *p);
 int doltliteGcCompactStoreWithPhase(sqlite3 *db, ChunkStore *cs, const char **pzPhase);
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);
+int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 int doltliteIsStockSqliteDb(sqlite3 *db);
 void doltliteInvalidateWorkingState(sqlite3 *db);

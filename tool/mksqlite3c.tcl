@@ -527,16 +527,18 @@ proc emit_doltlite_storage_block {} {
   puts $out "#define disable_simulated_io_errors orig_disable_simulated_io_errors"
   puts $out "#define enable_simulated_io_errors orig_enable_simulated_io_errors"
   puts $out "#endif"
-  # The stock backup.c is NOT included in the amalgamation: it is the one orig
-  # source that reaches into struct Db.pBt expecting the stock Btree layout,
-  # which can't coexist with prolly's struct Db in a single translation unit.
-  # Backup of doltlite-format databases goes through pager_shim.c's own
-  # implementation; backup of ATTACH'd stock databases (which would need the
-  # orig engine) is unsupported in the single-file build. Provide the orig_
-  # backup symbols the orig pager/btree and pager_shim.c reference as stubs.
-  puts $out "SQLITE_PRIVATE void orig_sqlite3BackupRestart(sqlite3_backup *p){ (void)p; }"
-  puts $out "SQLITE_PRIVATE void orig_sqlite3BackupUpdate(sqlite3_backup *p, Pgno x, const u8 *y){ (void)p; (void)x; (void)y; }"
-  puts $out "sqlite3_backup *orig_sqlite3_backup_init(sqlite3 *d, const char *zd, sqlite3 *s, const char *zs){ (void)d; (void)zd; (void)s; (void)zs; return 0; }"
+  # The stock backup.c is emitted with the orig bodies below. Its one reference
+  # to struct Db.pBt (findBtree) would read prolly's Db through the stock Btree
+  # layout, so DOLTLITE_ORIG_BACKUP redirects it through doltliteBtreeOrigPtr(),
+  # which is defined outside this rename scope and returns the stock btree that
+  # a legacy database's doltlite wrapper delegates to.
+  puts $out "#define DOLTLITE_ORIG_BACKUP 1"
+  # pager.c calls the backup hooks, but their sqliteInt.h prototypes were
+  # inlined before this rename scope opened, so the prefixed names are still
+  # undeclared here. Re-emit the two inside the scope, where the macros above
+  # turn them into orig_*.
+  puts $out "void sqlite3BackupRestart(sqlite3_backup *);"
+  puts $out "void sqlite3BackupUpdate(sqlite3_backup *, Pgno, const u8 *);"
   # Re-inline the prefixed prototypes the orig bodies need. These headers were
   # already inlined unprefixed earlier (via sqliteInt.h), so #undef their include
   # guards to force re-processing; the rename macros above turn the re-emitted
@@ -561,7 +563,7 @@ proc emit_doltlite_storage_block {} {
   # The orig storage bodies plus the orig_* bridge (btree_orig_api.c, which also
   # relies on the prefix + stock btreeInt.h structs and exports the unprefixed
   # origBtree* wrappers that prolly_btree.c calls).
-  foreach f {pager.c wal.c btmutex.c btree.c btree_orig_api.c} {
+  foreach f {pager.c wal.c btmutex.c btree.c backup.c btree_orig_api.c} {
     copy_file $srcdir/$f
   }
   # btree.c defines restoreCursorPosition() as an internal function-like macro
@@ -583,6 +585,7 @@ proc emit_doltlite_storage_block {} {
   puts $out "#undef disable_simulated_io_errors"
   puts $out "#undef enable_simulated_io_errors"
   puts $out "#endif"
+  puts $out "#undef DOLTLITE_ORIG_BACKUP"
   section_comment "doltlite: END orig_* storage engine block"
 }
 

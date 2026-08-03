@@ -235,6 +235,12 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   return SQLITE_OK;
 }
 
+#ifndef SQLITE_OMIT_VACUUM
+int origBtreeCopyFile(void *pTo, void *pFrom){
+  return orig_sqlite3BtreeCopyFile(B(pTo), B(pFrom));
+}
+#endif
+
 int origBtreeIntegrityCheck(
   sqlite3 *db, void *p, Pgno *aRoot, sqlite3_value *aCnt,
   int nRoot, int mxErr, int *pnErr, char **pzOut
