@@ -537,8 +537,8 @@ proc emit_doltlite_storage_block {} {
   # inlined before this rename scope opened, so the prefixed names are still
   # undeclared here. Re-emit the two inside the scope, where the macros above
   # turn them into orig_*.
-  puts $out "void sqlite3BackupRestart(sqlite3_backup *);"
-  puts $out "void sqlite3BackupUpdate(sqlite3_backup *, Pgno, const u8 *);"
+  puts $out "SQLITE_PRIVATE void sqlite3BackupRestart(sqlite3_backup *);"
+  puts $out "SQLITE_PRIVATE void sqlite3BackupUpdate(sqlite3_backup *, Pgno, const u8 *);"
   # Re-inline the prefixed prototypes the orig bodies need. These headers were
   # already inlined unprefixed earlier (via sqliteInt.h), so #undef their include
   # guards to force re-processing; the rename macros above turn the re-emitted
