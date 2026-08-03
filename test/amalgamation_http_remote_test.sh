@@ -18,7 +18,13 @@ fi
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-amalg-http.XXXXXX")"
 srv_pid=""
 cleanup() {
-  [ -n "$srv_pid" ] && kill "$srv_pid" 2>/dev/null || true
+  # Wait for exit so cached open DB handles are released before rm (Windows
+  # returns "Device or resource busy" if the process still holds the file).
+  if [ -n "$srv_pid" ]; then
+    kill "$srv_pid" 2>/dev/null || true
+    wait "$srv_pid" 2>/dev/null || true
+    srv_pid=""
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
