@@ -16,6 +16,7 @@ if [ -z "${DOLTLITE_CREDS_KAT_BIN:-}" ]; then
   "$CC" -O2 -Wall \
     -I "$HERE/src" -I "$HERE/ext/ed25519" \
     "$HERE/test/doltlite_creds_kat.c" \
+    "$HERE/test/sqlite3_alloc_stub.c" \
     "$HERE/src/doltlite_creds.c" \
     "$HERE/ext/ed25519/fe.c" \
     "$HERE/ext/ed25519/ge.c" \

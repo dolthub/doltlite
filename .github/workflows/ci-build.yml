@@ -192,7 +192,8 @@ jobs:
         {
           cc $CFLAGS -Wall \
             -I../src -I../ext/ed25519 \
-            ../test/doltlite_creds_kat.c ../src/doltlite_creds.c \
+            ../test/doltlite_creds_kat.c ../test/sqlite3_alloc_stub.c \
+            ../src/doltlite_creds.c \
             ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
             ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
             ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
@@ -200,14 +201,16 @@ jobs:
             -o creds_kat
           cc $CFLAGS -Wall \
             -I../src -I../ext/ed25519 \
-            ../test/creds_verify_kat.c ../src/doltlite_creds.c \
+            ../test/creds_verify_kat.c ../test/sqlite3_alloc_stub.c \
+            ../src/doltlite_creds.c \
             ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
             ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
             ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
             ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
             -o creds_verify_kat
           cc $CFLAGS -I../src -I../ext/mbedtls/include \
-            ../test/doltlite_tls_test_main.c ../src/doltlite_tls.c \
+            ../test/doltlite_tls_test_main.c ../test/sqlite3_alloc_stub.c \
+            ../src/doltlite_tls.c \
             ../ext/mbedtls/library/*.c \
             -o tls_test
           blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
@@ -240,7 +243,8 @@ jobs:
         {
           cc $CFLAGS -Wall \
             -I../src -I../ext/ed25519 \
-            ../test/doltlite_creds_kat.c ../src/doltlite_creds.c \
+            ../test/doltlite_creds_kat.c ../test/sqlite3_alloc_stub.c \
+            ../src/doltlite_creds.c \
             ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
             ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
             ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
@@ -248,14 +252,16 @@ jobs:
             -lws2_32 -lbcrypt -lcrypt32 -o creds_kat.exe
           cc $CFLAGS -Wall \
             -I../src -I../ext/ed25519 \
-            ../test/creds_verify_kat.c ../src/doltlite_creds.c \
+            ../test/creds_verify_kat.c ../test/sqlite3_alloc_stub.c \
+            ../src/doltlite_creds.c \
             ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
             ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
             ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
             ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
             -lws2_32 -lbcrypt -lcrypt32 -o creds_verify_kat.exe
           cc $CFLAGS -I../src -I../ext/mbedtls/include \
-            ../test/doltlite_tls_test_main.c ../src/doltlite_tls.c \
+            ../test/doltlite_tls_test_main.c ../test/sqlite3_alloc_stub.c \
+            ../src/doltlite_tls.c \
             ../ext/mbedtls/library/*.c \
             -lws2_32 -lbcrypt -lcrypt32 -o tls_test.exe
           blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)

@@ -23,6 +23,21 @@
 #include <unistd.h>
 #endif
 
+void *sqlite3_malloc(int);
+void *sqlite3_realloc(void*, int);
+void sqlite3_free(void*);
+
+static char *dlStrDup(const char *s){
+  size_t n;
+  char *z;
+  if( !s ) return 0;
+  n = strlen(s) + 1;
+  if( n > (size_t)0x7fffffff ) return 0;
+  z = (char*)sqlite3_malloc((int)n);
+  if( z ) memcpy(z, s, n);
+  return z;
+}
+
 struct DoltliteCreds {
   unsigned char seed[DOLTLITE_SEED_LEN];
   unsigned char pub[DOLTLITE_PUBKEY_LEN];
@@ -54,7 +69,7 @@ static const char B32_ALPHABET[] = "0123456789abcdefghijklmnopqrstuv";
 
 char *doltliteBase32Encode(const unsigned char *in, size_t inlen) {
   size_t outlen = (inlen * 8 + 4) / 5;
-  char *out = (char *)malloc(outlen + 1);
+  char *out = (char *)sqlite3_malloc(outlen + 1);
   size_t oi = 0;
   uint32_t buf = 0;
   int bits = 0;
@@ -81,7 +96,7 @@ static const char B64URL_ALPHABET[] =
 
 char *doltliteBase64UrlEncode(const unsigned char *in, size_t inlen) {
   size_t outlen = ((inlen + 2) / 3) * 4;
-  char *out = (char *)malloc(outlen + 1);
+  char *out = (char *)sqlite3_malloc(outlen + 1);
   size_t i = 0, o = 0;
 
   if (!out) return NULL;
@@ -128,7 +143,7 @@ int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen)
 
   if (inlen % 4 == 1) return 1;
   cap = inlen / 4 * 3 + 3;
-  buf = (unsigned char *)malloc(cap ? cap : 1);
+  buf = (unsigned char *)sqlite3_malloc(cap ? cap : 1);
   if (!buf) return 1;
 
   for (i = 0; i < inlen; i++) {
@@ -137,7 +152,7 @@ int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen)
     if (c == '=') break;
     v = b64urlVal(c);
     if (v < 0) {
-      free(buf);
+      sqlite3_free(buf);
       return 1;
     }
     acc = (acc << 6) | (uint32_t)v;
@@ -178,8 +193,9 @@ static int randomBytes(unsigned char *p, size_t n) {
 
 int doltliteCredsFromSeed(const unsigned char seed[DOLTLITE_SEED_LEN],
                           DoltliteCreds **out) {
-  DoltliteCreds *c = (DoltliteCreds *)calloc(1, sizeof(*c));
+  DoltliteCreds *c = (DoltliteCreds *)sqlite3_malloc((int)sizeof(*c));
   if (!c) return 1;
+  memset(c, 0, sizeof(*c));
   memcpy(c->seed, seed, DOLTLITE_SEED_LEN);
   ed25519_create_keypair(c->pub, c->expanded, c->seed);
   *out = c;
@@ -198,7 +214,7 @@ int doltliteCredsGenerate(DoltliteCreds **out) {
 void doltliteCredsFree(DoltliteCreds *c) {
   if (!c) return;
   memset(c, 0, sizeof(*c));
-  free(c);
+  sqlite3_free(c);
 }
 
 const unsigned char *doltliteCredsPubKey(const DoltliteCreds *c) { return c->pub; }
@@ -245,14 +261,14 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
   if (!kid) goto done;
 
   hn = strlen(kid) + 96;
-  header = (char *)malloc(hn);
+  header = (char *)sqlite3_malloc(hn);
   if (!header) goto done;
   snprintf(header, hn,
            "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"%s\"}",
            kid, JWT_TOKEN_VERSION);
 
   cn = strlen(kid) + strlen(audience) + 160;
-  claims = (char *)malloc(cn);
+  claims = (char *)sqlite3_malloc(cn);
   if (!claims) goto done;
   snprintf(claims, cn,
            "{\"iss\":\"%s\",\"sub\":\"%s%s\",\"aud\":\"%s\",\"iat\":%ld,\"exp\":%ld}",
@@ -264,7 +280,7 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
   if (!h64 || !c64) goto done;
 
   need = strlen(h64) + 1 + strlen(c64) + 1;
-  input = (char *)malloc(need);
+  input = (char *)sqlite3_malloc(need);
   if (!input) goto done;
   snprintf(input, need, "%s.%s", h64, c64);
 
@@ -273,7 +289,7 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
   if (!sig64) goto done;
 
   need = strlen(input) + 1 + strlen(sig64) + 1;
-  token = (char *)malloc(need);
+  token = (char *)sqlite3_malloc(need);
   if (!token) goto done;
   snprintf(token, need, "%s.%s", input, sig64);
 
@@ -282,14 +298,14 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
   rc = 0;
 
 done:
-  free(kid);
-  free(header);
-  free(claims);
-  free(h64);
-  free(c64);
-  free(sig64);
-  free(input);
-  free(token);
+  sqlite3_free(kid);
+  sqlite3_free(header);
+  sqlite3_free(claims);
+  sqlite3_free(h64);
+  sqlite3_free(c64);
+  sqlite3_free(sig64);
+  sqlite3_free(input);
+  sqlite3_free(token);
   return rc;
 }
 
@@ -304,15 +320,15 @@ char *doltliteCredsToJwk(const DoltliteCreds *c) {
   char *json = NULL;
   if (x && d) {
     size_t n = strlen(x) + strlen(d) + 64;
-    json = (char *)malloc(n);
+    json = (char *)sqlite3_malloc(n);
     if (json) {
       snprintf(json, n,
                "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"%s\",\"d\":\"%s\"}",
                x, d);
     }
   }
-  free(x);
-  free(d);
+  sqlite3_free(x);
+  sqlite3_free(d);
   return json;
 }
 
@@ -331,7 +347,7 @@ static char *jsonFindString(const char *json, const char *key) {
       if (!vend) return NULL;
       {
         size_t vlen = (size_t)(vend - q);
-        char *v = (char *)malloc(vlen + 1);
+        char *v = (char *)sqlite3_malloc(vlen + 1);
         if (!v) return NULL;
         memcpy(v, q, vlen);
         v[vlen] = '\0';
@@ -371,7 +387,7 @@ static int jsonFindLong(const char *json, const char *key, long *out) {
 }
 
 static char *decodeSegZ(const char *seg, size_t seglen) {
-  char *z = (char *)malloc(seglen + 1);
+  char *z = (char *)sqlite3_malloc(seglen + 1);
   unsigned char *raw = NULL;
   size_t rawlen = 0;
   char *s = NULL;
@@ -379,14 +395,14 @@ static char *decodeSegZ(const char *seg, size_t seglen) {
   memcpy(z, seg, seglen);
   z[seglen] = '\0';
   if (doltliteBase64UrlDecode(z, &raw, &rawlen) == 0) {
-    s = (char *)malloc(rawlen + 1);
+    s = (char *)sqlite3_malloc(rawlen + 1);
     if (s) {
       memcpy(s, raw, rawlen);
       s[rawlen] = '\0';
     }
   }
-  free(z);
-  free(raw);
+  sqlite3_free(z);
+  sqlite3_free(raw);
   return s;
 }
 
@@ -404,9 +420,9 @@ int doltliteCredsFromJwk(const char *json, DoltliteCreds **out) {
 done:
   if (seed) {
     memset(seed, 0, seedlen);
-    free(seed);
+    sqlite3_free(seed);
   }
-  free(dstr);
+  sqlite3_free(dstr);
   return rc;
 }
 
@@ -415,7 +431,7 @@ char *doltliteCredsDir(void) {
   const char *home;
   char *dir;
   if (override && *override) {
-    return strdup(override);
+    return dlStrDup(override);
   }
   home = getenv("HOME");
 #ifdef _WIN32
@@ -425,7 +441,7 @@ char *doltliteCredsDir(void) {
   if (!home || !*home) return NULL;
   {
     size_t n = strlen(home) + strlen("/.doltlite/creds") + 1;
-    dir = (char *)malloc(n);
+    dir = (char *)sqlite3_malloc(n);
     if (!dir) return NULL;
     snprintf(dir, n, "%s/.doltlite/creds", home);
   }
@@ -441,7 +457,7 @@ static int makeDir(const char *path) {
 }
 
 static int mkdirp(const char *path) {
-  char *tmp = strdup(path);
+  char *tmp = dlStrDup(path);
   size_t len, i;
   if (!tmp) return 1;
   len = strlen(tmp);
@@ -451,17 +467,17 @@ static int mkdirp(const char *path) {
       tmp[i] = '\0';
       /* Skip a Windows drive prefix like "C:" which cannot be created. */
       if (tmp[i - 1] != ':' && makeDir(tmp) != 0 && errno != EEXIST) {
-        free(tmp);
+        sqlite3_free(tmp);
         return 1;
       }
       tmp[i] = sep;
     }
   }
   if (makeDir(tmp) != 0 && errno != EEXIST) {
-    free(tmp);
+    sqlite3_free(tmp);
     return 1;
   }
-  free(tmp);
+  sqlite3_free(tmp);
   return 0;
 }
 
@@ -484,7 +500,7 @@ static char *credsFilePath(const char *dir, const char *kid) {
   char *path;
   if (!credsKidValid(kid)) return NULL;
   n = strlen(dir) + 1 + strlen(kid) + strlen(".jwk") + 1;
-  path = (char *)malloc(n);
+  path = (char *)sqlite3_malloc(n);
   if (!path) return NULL;
   snprintf(path, n, "%s/%s.jwk", dir, kid);
   return path;
@@ -541,10 +557,10 @@ int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
   rc = 0;
 
 done:
-  free(json);
-  free(path);
-  free(kid);
-  free(owned);
+  sqlite3_free(json);
+  sqlite3_free(path);
+  sqlite3_free(kid);
+  sqlite3_free(owned);
   return rc;
 }
 
@@ -570,7 +586,7 @@ int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out) {
   sz = ftell(f);
   if (sz < 0 || sz > 1 << 20) goto done;
   if (fseek(f, 0, SEEK_SET) != 0) goto done;
-  json = (char *)malloc((size_t)sz + 1);
+  json = (char *)sqlite3_malloc((size_t)sz + 1);
   if (!json) goto done;
   if (fread(json, 1, (size_t)sz, f) != (size_t)sz) goto done;
   json[sz] = '\0';
@@ -581,10 +597,10 @@ done:
   if (f) fclose(f);
   if (json) {
     memset(json, 0, json ? strlen(json) : 0);
-    free(json);
+    sqlite3_free(json);
   }
-  free(path);
-  free(owned);
+  sqlite3_free(path);
+  sqlite3_free(owned);
   return rc;
 }
 
@@ -602,11 +618,11 @@ typedef struct DirIter {
 static int dirOpen(DirIter *it, const char *dir) {
 #ifdef _WIN32
   size_t n = strlen(dir) + 3;
-  char *pat = (char *)malloc(n);
+  char *pat = (char *)sqlite3_malloc(n);
   if (!pat) return 1;
   snprintf(pat, n, "%s\\*", dir);
   it->h = FindFirstFileA(pat, &it->fd);
-  free(pat);
+  sqlite3_free(pat);
   if (it->h == INVALID_HANDLE_VALUE) return 1;
   it->first = 1;
   return 0;
@@ -650,25 +666,25 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
   }
   if (!dir) return 1;
   if (dirOpen(&it, dir)) {
-    free(owned);
+    sqlite3_free(owned);
     return 1;
   }
   while ((name = dirNext(&it)) != NULL) {
     size_t n = strlen(name);
     if (n > 4 && strcmp(name + n - 4, ".jwk") == 0) {
-      char *candidate = (char *)malloc(n - 4 + 1);
+      char *candidate = (char *)sqlite3_malloc(n - 4 + 1);
       if (!candidate) continue;
       memcpy(candidate, name, n - 4);
       candidate[n - 4] = '\0';
       if (!credsKidValid(candidate)) {
-        free(candidate);
+        sqlite3_free(candidate);
         continue;
       }
       count++;
       if (count == 1) {
         kid = candidate;
       } else {
-        free(candidate);
+        sqlite3_free(candidate);
       }
     }
   }
@@ -677,8 +693,8 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
   if (count == 1 && kid) {
     rc = doltliteCredsLoad(dir, kid, out);
   }
-  free(kid);
-  free(owned);
+  sqlite3_free(kid);
+  sqlite3_free(owned);
   return rc;
 }
 
@@ -698,26 +714,26 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
   if (!dir) return 1;
 
   if (dirOpen(&it, dir)) {
-    free(owned);
+    sqlite3_free(owned);
     return 0;
   }
   while ((name = dirNext(&it)) != NULL) {
     size_t ln = strlen(name);
     char *kid;
     if (!(ln > 4 && strcmp(name + ln - 4, ".jwk") == 0)) continue;
-    kid = (char *)malloc(ln - 4 + 1);
+    kid = (char *)sqlite3_malloc(ln - 4 + 1);
     if (!kid) goto oom;
     memcpy(kid, name, ln - 4);
     kid[ln - 4] = '\0';
     if (!credsKidValid(kid)) {
-      free(kid);
+      sqlite3_free(kid);
       continue;
     }
     if (cnt == cap) {
       int nc = cap ? cap * 2 : 8;
-      char **na = (char **)realloc(arr, (size_t)nc * sizeof(char *));
+      char **na = (char **)sqlite3_realloc(arr, (size_t)nc * sizeof(char *));
       if (!na) {
-        free(kid);
+        sqlite3_free(kid);
         goto oom;
       }
       arr = na;
@@ -726,14 +742,14 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
     arr[cnt++] = kid;
   }
   dirClose(&it);
-  free(owned);
+  sqlite3_free(owned);
   *out = arr;
   *n = cnt;
   return 0;
 
 oom:
   dirClose(&it);
-  free(owned);
+  sqlite3_free(owned);
   doltliteCredsFreeList(arr, cnt);
   return 1;
 }
@@ -741,8 +757,8 @@ oom:
 void doltliteCredsFreeList(char **list, int n) {
   int i;
   if (!list) return;
-  for (i = 0; i < n; i++) free(list[i]);
-  free(list);
+  for (i = 0; i < n; i++) sqlite3_free(list[i]);
+  sqlite3_free(list);
 }
 
 int doltliteCredsRemove(const char *dir, const char *kid) {
@@ -756,12 +772,12 @@ int doltliteCredsRemove(const char *dir, const char *kid) {
   if (!dir) return 1;
   path = credsFilePath(dir, kid);
   if (!path) {
-    free(owned);
+    sqlite3_free(owned);
     return 1;
   }
   rc = (remove(path) == 0) ? 0 : 1;
-  free(path);
-  free(owned);
+  sqlite3_free(path);
+  sqlite3_free(owned);
   return rc;
 }
 
@@ -791,7 +807,7 @@ int doltliteCredsLoadPubKey(const char *dir, const char *kid,
   sz = ftell(f);
   if (sz < 0 || sz > 1 << 20) goto done;
   if (fseek(f, 0, SEEK_SET) != 0) goto done;
-  json = (char *)malloc((size_t)sz + 1);
+  json = (char *)sqlite3_malloc((size_t)sz + 1);
   if (!json) goto done;
   if (fread(json, 1, (size_t)sz, f) != (size_t)sz) goto done;
   json[sz] = '\0';
@@ -805,11 +821,11 @@ int doltliteCredsLoadPubKey(const char *dir, const char *kid,
 
 done:
   if (f) fclose(f);
-  free(json);
-  free(path);
-  free(owned);
-  free(xstr);
-  free(raw);
+  sqlite3_free(json);
+  sqlite3_free(path);
+  sqlite3_free(owned);
+  sqlite3_free(xstr);
+  sqlite3_free(raw);
   return rc;
 }
 
@@ -856,7 +872,7 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
 
   if (doltliteCredsLoadPubKey(authKeysDir, kid, pub) != 0) goto done;
 
-  sigStr = (char *)malloc(strlen(dot2 + 1) + 1);
+  sigStr = (char *)sqlite3_malloc(strlen(dot2 + 1) + 1);
   if (!sigStr) goto done;
   strcpy(sigStr, dot2 + 1);
   if (doltliteBase64UrlDecode(sigStr, &sig, &siglen)) goto done;
@@ -870,7 +886,7 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   aud = jsonFindString(claims, "aud");
   if (!iss || strcmp(iss, JWT_ISSUER_EXPECTED) != 0) goto done;
 
-  expectSub = (char *)malloc(strlen(JWT_SUBJECT_PREFIX_V) + strlen(kid) + 1);
+  expectSub = (char *)sqlite3_malloc(strlen(JWT_SUBJECT_PREFIX_V) + strlen(kid) + 1);
   if (!expectSub) goto done;
   strcpy(expectSub, JWT_SUBJECT_PREFIX_V);
   strcat(expectSub, kid);
@@ -890,16 +906,16 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   }
 
 done:
-  free(hdr);
-  free(claims);
-  free(alg);
-  free(ver);
-  free(kid);
-  free(iss);
-  free(sub);
-  free(aud);
-  free(expectSub);
-  free(sigStr);
-  free(sig);
+  sqlite3_free(hdr);
+  sqlite3_free(claims);
+  sqlite3_free(alg);
+  sqlite3_free(ver);
+  sqlite3_free(kid);
+  sqlite3_free(iss);
+  sqlite3_free(sub);
+  sqlite3_free(aud);
+  sqlite3_free(expectSub);
+  sqlite3_free(sigStr);
+  sqlite3_free(sig);
   return rc;
 }

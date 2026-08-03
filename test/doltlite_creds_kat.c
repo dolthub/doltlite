@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+void sqlite3_free(void*);
+
 static int failures = 0;
 
 static void hexenc(const unsigned char *p, size_t n, char *out) {
@@ -78,7 +80,7 @@ static char *decodeSegZ(const char *seg, size_t seglen, size_t *outlen) {
     }
   }
   free(z);
-  free(raw);
+  sqlite3_free(raw);
   return s;
 }
 
@@ -129,8 +131,8 @@ int main(int argc, char **argv) {
     char *pubb32 = doltliteCredsPubKeyB32(c);
     check_str("kid = base32(sha512_224(pub))", kid, KID);
     check_str("pubkey base32 (approval URL fragment)", pubb32, PUBB32);
-    free(kid);
-    free(pubb32);
+    sqlite3_free(kid);
+    sqlite3_free(pubb32);
   }
 
   {
@@ -162,10 +164,10 @@ int main(int argc, char **argv) {
         failures++;
         printf("  FAIL  base64url decode round-trip\n");
       }
-      free(dec);
+      sqlite3_free(dec);
     }
-    free(x);
-    free(d);
+    sqlite3_free(x);
+    sqlite3_free(d);
   }
 
   {
@@ -183,10 +185,10 @@ int main(int argc, char **argv) {
         failures++;
         printf("  FAIL  JWK round-trip (mismatch)\n");
       }
-      free(k1);
-      free(k2);
+      sqlite3_free(k1);
+      sqlite3_free(k2);
     }
-    free(json);
+    sqlite3_free(json);
   }
 
   {
@@ -221,7 +223,7 @@ int main(int argc, char **argv) {
         free(cls);
         free(sig);
       }
-      free(jwt);
+      sqlite3_free(jwt);
     }
   }
 
@@ -242,7 +244,7 @@ int main(int argc, char **argv) {
       printf("  PASS  creds save/load by kid\n");
     }
     doltliteCredsFree(loaded);
-    free(kid);
+    sqlite3_free(kid);
   }
 
   {
@@ -287,7 +289,7 @@ int main(int argc, char **argv) {
     }
 
     doltliteCredsFree(loaded);
-    free(json);
+    sqlite3_free(json);
     free(outside);
   }
 
@@ -343,7 +345,7 @@ int main(int argc, char **argv) {
     }
     remove(invalidPath);
     free(invalidPath);
-    free(kid);
+    sqlite3_free(kid);
   }
 
   doltliteCredsFree(c);

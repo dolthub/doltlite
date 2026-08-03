@@ -17,6 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+void *sqlite3_malloc(int);
+void sqlite3_free(void*);
+
 struct DoltliteConn {
   int useTls;
   int ownsConf;
@@ -125,11 +128,12 @@ DoltliteConn *doltliteConnOpenTimeout(
   int useTls,
   int timeoutMs
 ) {
-  DoltliteConn *c = (DoltliteConn *)calloc(1, sizeof(*c));
+  DoltliteConn *c = (DoltliteConn *)sqlite3_malloc((int)sizeof(*c));
   char portstr[16];
   int ret;
 
   if (!c) return NULL;
+  memset(c, 0, sizeof(*c));
   c->useTls = useTls;
   c->ownsConf = 1;
   if (timeoutMs > 0) {
@@ -191,7 +195,7 @@ fail_tls:
   mbedtls_entropy_free(&c->entropy);
 fail_net:
   mbedtls_net_free(&c->net);
-  free(c);
+  sqlite3_free(c);
   return NULL;
 }
 
@@ -248,12 +252,13 @@ void doltliteConnClose(DoltliteConn *c) {
     }
   }
   mbedtls_net_free(&c->net);
-  free(c);
+  sqlite3_free(c);
 }
 
 DoltliteTlsServer *doltliteTlsServerNew(const char *certFile, const char *keyFile) {
-  DoltliteTlsServer *s = (DoltliteTlsServer *)calloc(1, sizeof(*s));
+  DoltliteTlsServer *s = (DoltliteTlsServer *)sqlite3_malloc((int)sizeof(*s));
   if (!s) return NULL;
+  memset(s, 0, sizeof(*s));
 
   mbedtls_x509_crt_init(&s->cert);
   mbedtls_pk_init(&s->key);
@@ -295,16 +300,17 @@ void doltliteTlsServerFree(DoltliteTlsServer *s) {
   mbedtls_pk_free(&s->key);
   mbedtls_ctr_drbg_free(&s->drbg);
   mbedtls_entropy_free(&s->entropy);
-  free(s);
+  sqlite3_free(s);
 }
 
 DoltliteConn *doltliteConnServerAccept(DoltliteTlsServer *s, int clientFd) {
-  DoltliteConn *c = (DoltliteConn *)calloc(1, sizeof(*c));
+  DoltliteConn *c = (DoltliteConn *)sqlite3_malloc((int)sizeof(*c));
   int ret;
   if (!c) {
     doltliteCloseSocket(clientFd);
     return NULL;
   }
+  memset(c, 0, sizeof(*c));
   c->useTls = 1;
   c->ownsConf = 0;
   mbedtls_net_init(&c->net);
@@ -323,16 +329,17 @@ DoltliteConn *doltliteConnServerAccept(DoltliteTlsServer *s, int clientFd) {
 fail:
   mbedtls_ssl_free(&c->ssl);
   mbedtls_net_free(&c->net);
-  free(c);
+  sqlite3_free(c);
   return NULL;
 }
 
 DoltliteConn *doltliteConnFromFd(int clientFd) {
-  DoltliteConn *c = (DoltliteConn *)calloc(1, sizeof(*c));
+  DoltliteConn *c = (DoltliteConn *)sqlite3_malloc((int)sizeof(*c));
   if (!c) {
     doltliteCloseSocket(clientFd);
     return NULL;
   }
+  memset(c, 0, sizeof(*c));
   c->useTls = 0;
   c->ownsConf = 0;
   mbedtls_net_init(&c->net);

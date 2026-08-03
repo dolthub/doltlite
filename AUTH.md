@@ -74,9 +74,11 @@ verifies the server certificate and hostname.
 
 The credential API supports key generation, deterministic construction from a
 seed, save/load/list/remove operations, JWT creation, and bearer verification.
-Remote credential selection is internal to the HTTPS transport; embedders use
-the same remote operations rather than attaching credentials through a
-separate remote-setter API.
+Heap results use SQLite's allocator (`sqlite3_malloc`); free them with
+`sqlite3_free` (or `doltliteCredsFree` / `doltliteCredsFreeList`). Remote
+credential selection is internal to the HTTPS transport; embedders use the
+same remote operations rather than attaching credentials through a separate
+remote-setter API.
 
 The TLS implementation uses vendored **mbedTLS** for client and server
 connections, certificate-chain validation, hostname verification, system trust
