@@ -8,21 +8,31 @@
 # full-tree walk to every commit). CI builds a plain binary for this suite.
 set -uo pipefail
 
-median3() {
-  local a="$1" b="$2" c="$3" t
-  if [ "$a" -gt "$b" ]; then t="$a"; a="$b"; b="$t"; fi
-  if [ "$b" -gt "$c" ]; then t="$b"; b="$c"; c="$t"; fi
-  if [ "$a" -gt "$b" ]; then t="$a"; a="$b"; b="$t"; fi
-  echo "$b"
+median5() {
+  local values=("$@") i j t
+  for (( i=1; i<5; i++ )); do
+    t="${values[$i]}"
+    j=$i
+    while [ "$j" -gt 0 ] && [ "${values[$((j-1))]}" -gt "$t" ]; do
+      values[$j]="${values[$((j-1))]}"
+      j=$((j-1))
+    done
+    values[$j]="$t"
+  done
+  echo "${values[2]}"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
   failures=0
-  for case in "1000 100 1000 1000" "100 100 100 1000" "500 1000 100 500"; do
-    read -r expected a b c <<< "$case"
-    actual=$(median3 "$a" "$b" "$c")
+  for case in \
+    "1000 100 1000 1000 1000 1000" \
+    "100 100 100 100 1000 1000" \
+    "500 1000 100 500 750 500" \
+    "3 5 4 3 2 1"; do
+    read -r expected a b c d e <<< "$case"
+    actual=$(median5 "$a" "$b" "$c" "$d" "$e")
     if [ "$actual" != "$expected" ]; then
-      echo "FAIL: median3 $a $b $c (expected $expected, got $actual)"
+      echo "FAIL: median5 $a $b $c $d $e (expected $expected, got $actual)"
       failures=$((failures+1))
     fi
   done
@@ -93,14 +103,14 @@ run_ms() {
   echo $(( t1 - t0 ))
 }
 
-# min-of-3 timing to shed scheduler noise
-run_ms_min3() {
-  local best=999999999 t
-  for _ in 1 2 3; do
+# Median-of-five tolerates two scheduler outliers in either direction.
+run_ms_median5() {
+  local samples=() t
+  for _ in 1 2 3 4 5; do
     t=$(run_ms "$@")
-    if [ "$t" -lt "$best" ]; then best=$t; fi
+    samples+=("$t")
   done
-  echo "$best"
+  median5 "${samples[@]}"
 }
 
 query() {
@@ -139,7 +149,7 @@ seed_rows() {
 # WAL; nominal growth is ~3x from residual per-session bookkeeping. Shared
 # CI hosts still spike a single 200-commit block (seen 8.0x vs a hard 6x
 # cut), so the gate sits at SESSION_OP_GATE headroom and the deep sample
-# is median-of-three. Ops issued through fresh sessions still pay an open-time
+# is median-of-five. Ops issued through fresh sessions still pay an open-time
 # WAL replay that only a user-driven gc folds away.
 COMMIT_GROWTH_GATE=8
 SESSION_OP_GATE=8
@@ -159,7 +169,7 @@ depth_ops() {
   # echoes "log_ms checkout_ms merge_ms" for the current depth
   local side="$1"
   local lg co mg
-  lg=$(run_ms_min3 "$DBA" "SELECT count(*) FROM dolt_log;")
+  lg=$(run_ms_median5 "$DBA" "SELECT count(*) FROM dolt_log;")
   co=$(run_ms "$DBA" "SELECT dolt_checkout('anchor');")
   co=$(( co + $(run_ms "$DBA" "SELECT dolt_checkout('main');") ))
   mg=$(run_ms "$DBA" "SELECT dolt_merge('$side');")
@@ -173,35 +183,39 @@ echo "  depth 200:   ${block1}ms/block ($((block1 / BLOCK))ms/commit) log=${log1
 for b in 1 2 3 4; do
   commit_block "$DBA" $(( b * BLOCK )) "$BLOCK" > /dev/null
 done
-# Median of three deep blocks tolerates one scheduler spike without allowing
-# one fast outlier to hide two slow samples.
-block6a=$(commit_block "$DBA" $(( 5 * BLOCK )) "$BLOCK")
-block6b=$(commit_block "$DBA" $(( 6 * BLOCK )) "$BLOCK")
-block6c=$(commit_block "$DBA" $(( 7 * BLOCK )) "$BLOCK")
-block6=$(median3 "$block6a" "$block6b" "$block6c")
-read -r log6 co6 mg6 <<< "$(depth_ops side2)"
-echo "  depth ~1600: ${block6}ms/block ($((block6 / BLOCK))ms/commit) log=${log6}ms checkout=${co6}ms merge=${mg6}ms [samples ${block6a}ms, ${block6b}ms, ${block6c}ms; median ${block6}ms]"
+# Median of five deep blocks tolerates two scheduler spikes without allowing
+# two fast outliers to hide three slow samples.
+deep1=$(commit_block "$DBA" $(( 5 * BLOCK )) "$BLOCK")
+deep2=$(commit_block "$DBA" $(( 6 * BLOCK )) "$BLOCK")
+deep3=$(commit_block "$DBA" $(( 7 * BLOCK )) "$BLOCK")
+deep4=$(commit_block "$DBA" $(( 8 * BLOCK )) "$BLOCK")
+deep5=$(commit_block "$DBA" $(( 9 * BLOCK )) "$BLOCK")
+deep=$(median5 "$deep1" "$deep2" "$deep3" "$deep4" "$deep5")
+read -r log_deep co_deep mg_deep <<< "$(depth_ops side2)"
+echo "  depth ~2000: ${deep}ms/block ($((deep / BLOCK))ms/commit) log=${log_deep}ms checkout=${co_deep}ms merge=${mg_deep}ms [samples ${deep1}ms, ${deep2}ms, ${deep3}ms, ${deep4}ms, ${deep5}ms; median ${deep}ms]"
 
-check_ratio "per-commit growth, depth ~1600 vs 200" "$block6" "$block1" "$COMMIT_GROWTH_GATE"
-check_ratio "dolt_log full walk, depth ~1600 vs 200" "$log6" "$log1" "$SESSION_OP_GATE"
-check_ratio "checkout old commit, depth ~1600 vs 200" "$co6" "$co1" "$SESSION_OP_GATE"
-check_ratio "merge across divergence, depth ~1600 vs 200" "$mg6" "$mg1" "$SESSION_OP_GATE"
+check_ratio "per-commit growth, depth ~2000 vs 200" "$deep" "$block1" "$COMMIT_GROWTH_GATE"
+check_ratio "dolt_log full walk, depth ~2000 vs 200" "$log_deep" "$log1" "$SESSION_OP_GATE"
+check_ratio "checkout old commit, depth ~2000 vs 200" "$co_deep" "$co1" "$SESSION_OP_GATE"
+check_ratio "merge across divergence, depth ~2000 vs 200" "$mg_deep" "$mg1" "$SESSION_OP_GATE"
 check_eq "merged rows visible" "1|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE id=2 AND v=1;")"
 
 gc_ms=$(run_ms "$DBA" "SELECT dolt_gc();")
 echo "  dolt_gc: ${gc_ms}ms"
-# Median of three tolerates one cold sample without accepting one fast outlier.
-postgc1=$(commit_block "$DBA" 1600 50)
-postgc2=$(commit_block "$DBA" 1650 50)
-postgc3=$(commit_block "$DBA" 1700 50)
-postgc=$(median3 "$postgc1" "$postgc2" "$postgc3")
+# Median of five tolerates two cold samples without accepting two fast outliers.
+postgc1=$(commit_block "$DBA" 2000 50)
+postgc2=$(commit_block "$DBA" 2050 50)
+postgc3=$(commit_block "$DBA" 2100 50)
+postgc4=$(commit_block "$DBA" 2150 50)
+postgc5=$(commit_block "$DBA" 2200 50)
+postgc=$(median5 "$postgc1" "$postgc2" "$postgc3" "$postgc4" "$postgc5")
 postgc_scaled=$(( postgc * BLOCK / 50 ))
-echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit) [samples ${postgc1}ms, ${postgc2}ms, ${postgc3}ms; median ${postgc}ms]"
+echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit) [samples ${postgc1}ms, ${postgc2}ms, ${postgc3}ms, ${postgc4}ms, ${postgc5}ms; median ${postgc}ms]"
 # Align with COMMIT_GROWTH_GATE headroom rather than a brittle 3x wall-clock cut.
 check_ratio "post-gc commit cost vs shallow-history cost" "$postgc_scaled" "$block1" "$COMMIT_GROWTH_GATE"
-# every one of the 1750 single-row commits must have landed exactly once
-# (1600 depth build + 50 + 50 + 50 post-gc samples)
-check_eq "commit increments all applied" "1750" "$(query "$DBA" "SELECT sum(v) FROM t;")"
+# every one of the 2250 single-row commits must have landed exactly once
+# (2000 depth build + five 50-commit post-gc samples)
+check_eq "commit increments all applied" "2250" "$(query "$DBA" "SELECT sum(v) FROM t;")"
 
 echo ""
 echo "══════════════════════════════════════"
@@ -217,27 +231,27 @@ for idx in 0 1 2 3; do
   "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
   T_GC[$idx]=$(run_ms "$db" "SELECT dolt_gc();")
 
-  T_OPEN[$idx]=$(run_ms_min3 "$db" "SELECT 1;")
+  T_OPEN[$idx]=$(run_ms_median5 "$db" "SELECT 1;")
 
   lookups=""
   for (( k=0; k<400; k++ )); do
     lookups+="SELECT val FROM t WHERE id=$(( (k * 997) % n + 1 ));"
   done
-  T_LOOKUP[$idx]=$(run_ms_min3 "$db" "$lookups")
+  T_LOOKUP[$idx]=$(run_ms_median5 "$db" "$lookups")
 
   lo=$(( n / 2 ))
-  T_COMMIT[$idx]=$(run_ms_min3 "$db" \
+  T_COMMIT[$idx]=$(run_ms_median5 "$db" \
     "UPDATE t SET val=val+1 WHERE id BETWEEN $lo AND $(( lo + 499 )); SELECT dolt_commit('-am','delta');")
 
-  T_SCAN[$idx]=$(run_ms_min3 "$db" "SELECT count(*) FROM t WHERE val >= 0;")
+  T_SCAN[$idx]=$(run_ms_median5 "$db" "SELECT count(*) FROM t WHERE val >= 0;")
 
   # Correctness at scale, one full pass: row count, key-set integrity
   # (sum of ids has a closed form), value integrity (seed val=id%1000 plus
-  # the three min-of-3 delta commits above), and per-row content (name and
+  # the five median-of-5 delta commits above), and per-row content (name and
   # pad are pure functions of id, so any lost/duplicated/corrupted row or
   # chunk-boundary bug shows up).
   sum_id=$(( n * (n + 1) / 2 ))
-  sum_val=$(( n / 1000 * 499500 + 1500 ))
+  sum_val=$(( n / 1000 * 499500 + 2500 ))
   check_eq "content verify at N=$n" "$n|$sum_id|$sum_val|0" \
     "$(query "$db" "SELECT count(*)||'|'||sum(id)||'|'||sum(val)||'|'||sum(name <> 'row_'||id OR pad <> printf('%032d',id)) FROM t;")"
 
@@ -284,8 +298,8 @@ DBC="$TMPDIR/blob"
 "$DOLTLITE" "$DBC" "CREATE TABLE b(id INTEGER PRIMARY KEY, data BLOB); SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
 b_small=$(run_ms "$DBC" "INSERT INTO b VALUES(1, randomblob(1048576)); SELECT dolt_commit('-am','small');")
 b_big=$(run_ms "$DBC" "INSERT INTO b VALUES(2, randomblob(16777216)); SELECT dolt_commit('-am','big');")
-r_small=$(run_ms_min3 "$DBC" "SELECT length(data) FROM b WHERE id=1;")
-r_big=$(run_ms_min3 "$DBC" "SELECT length(data) FROM b WHERE id=2;")
+r_small=$(run_ms_median5 "$DBC" "SELECT length(data) FROM b WHERE id=1;")
+r_big=$(run_ms_median5 "$DBC" "SELECT length(data) FROM b WHERE id=2;")
 echo "  insert+commit: 1MB=${b_small}ms 16MB=${b_big}ms; read: 1MB=${r_small}ms 16MB=${r_big}ms"
 check_eq "blob roundtrip lengths" "1048576|16777216" "$(query "$DBC" "SELECT group_concat(length(data),'|') FROM b ORDER BY id;")"
 # 16x the bytes; ~linear expected, gate at 3x headroom over linear
