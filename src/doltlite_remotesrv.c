@@ -153,11 +153,6 @@ static void sendBadRequest(DoltliteConn *fd){
                       "bad request");
 }
 
-static void sendError(DoltliteConn *fd){
-  sendStructuredError(fd, 500, "Internal Server Error", "error", SQLITE_ERROR,
-                      "internal error");
-}
-
 static void sendSqliteError(DoltliteConn *fd, int rc){
   switch( rc ){
     case SQLITE_BUSY:
@@ -210,10 +205,6 @@ static void sendSqliteError(DoltliteConn *fd, int rc){
 static void sendPayloadTooLarge(DoltliteConn *fd){
   sendStructuredError(fd, 413, "Payload Too Large", "toobig", SQLITE_TOOBIG,
                       "payload too large");
-}
-
-static void sendConflict(DoltliteConn *fd){
-  sendSqliteError(fd, SQLITE_BUSY);
 }
 
 static void sendUnauthorized(DoltliteConn *fd){
