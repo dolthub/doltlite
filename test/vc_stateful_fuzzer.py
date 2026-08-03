@@ -305,7 +305,10 @@ def reset_branch(doltlite, db_path, branch, model, hard):
                 % (branch, committed, working)
             )
         model[branch]["working"] = dict(committed)
-    model[branch]["staged"] = dict(committed)
+        model[branch]["staged"] = dict(committed)
+    # --soft without a ref moves nothing: Dolt leaves the working set AND the
+    # staged set exactly as they were, so the model must too. Only a mixed reset
+    # (no flag) unstages, and this fuzzer does not exercise that form.
 
 
 def create_branch(doltlite, db_path, branches, model, rng, name, via_checkout):

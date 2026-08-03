@@ -171,7 +171,7 @@ SELECT dolt_add('-A');
 SELECT dolt_reset();
 "
 
-oracle "reset_soft_no_ref_unstages_all" "
+oracle "reset_soft_no_ref_keeps_staged" "
 $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
