@@ -384,6 +384,24 @@ expect_merge_ok "col_one_adds" "$DB"
 expect_dual_value "col_one_adds_default_filled" "$DB" "0" \
   "SELECT w FROM t WHERE id=2;" "SELECT w FROM t WHERE id=2;"
 
+DB="$TMPROOT/ccase.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ccase"
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN same_col TEXT;
+SELECT dolt_commit('-Am','feat_add_text');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN same_col text;
+SELECT dolt_commit('-Am','main_add_text');
+SQL
+expect_merge_ok "col_both_add_equivalent_type_case" "$DB"
+expect_dual_value "col_both_add_equivalent_type_case_once" "$DB" "1" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='same_col';" \
+  "SELECT count(*) FROM information_schema.columns WHERE table_schema=database() AND table_name='t' AND column_name='same_col';"
+
 echo ""
 
 echo "--- Foreign Keys ---"
@@ -750,6 +768,52 @@ expect_dual_value "fk_delete_vs_modify_reverse_keeps_delete" "$DB" "0" \
   "SELECT count(*) FROM pragma_foreign_key_list('child');" \
   "SELECT count(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='child' AND referenced_table_name IS NOT NULL;"
 
+DB="$TMPROOT/fk8.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "fk8"
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
+INSERT INTO parent VALUES(1);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE child;
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','feat_drop_fk');
+SELECT dolt_checkout('main');
+ALTER TABLE child ADD COLUMN main_col TEXT DEFAULT 'seed';
+UPDATE child SET main_col='main' WHERE id=1;
+SELECT dolt_commit('-Am','main_add_column');
+SQL
+expect_merge_ok "fk_delete_vs_column_add" "$DB"
+expect_dual_value "fk_delete_vs_column_add_composes" "$DB" "0|main" \
+  "SELECT (SELECT count(*) FROM pragma_foreign_key_list('child')) || '|' || main_col FROM child WHERE id=1;" \
+  "SELECT CONCAT((SELECT count(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='child' AND referenced_table_name IS NOT NULL), '|', main_col) FROM child WHERE id=1;"
+
+DB="$TMPROOT/fk9.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "fk9"
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id));
+INSERT INTO parent VALUES(1);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE child ADD COLUMN feat_col TEXT DEFAULT 'seed';
+UPDATE child SET feat_col='feat' WHERE id=1;
+SELECT dolt_commit('-Am','feat_add_column');
+SELECT dolt_checkout('main');
+DROP TABLE child;
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER);
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-Am','main_drop_fk');
+SQL
+expect_merge_ok "fk_delete_vs_column_add_reverse" "$DB"
+expect_dual_value "fk_delete_vs_column_add_reverse_composes" "$DB" "0|feat" \
+  "SELECT (SELECT count(*) FROM pragma_foreign_key_list('child')) || '|' || feat_col FROM child WHERE id=1;" \
+  "SELECT CONCAT((SELECT count(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='child' AND referenced_table_name IS NOT NULL), '|', feat_col) FROM child WHERE id=1;"
+
 echo ""
 
 echo "--- Indexes (additional) ---"
@@ -934,6 +998,48 @@ expect_merge_ok "check_delete_vs_modify_reverse" "$DB"
 expect_dual_value "check_delete_vs_modify_reverse_keeps_modify" "$DB" "1" \
   "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CHECK(v > 5)%';" \
   "SELECT count(*) FROM information_schema.check_constraints WHERE check_clause LIKE '%> 5%';"
+
+DB="$TMPROOT/ck8.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck8"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','feat_drop_check');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN main_col TEXT DEFAULT 'seed';
+UPDATE t SET main_col='main' WHERE id=1;
+SELECT dolt_commit('-Am','main_add_column');
+SQL
+expect_merge_ok "check_delete_vs_column_add" "$DB"
+expect_dual_value "check_delete_vs_column_add_composes" "$DB" "0|main" \
+  "SELECT (SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CHECK%') || '|' || main_col FROM t WHERE id=1;" \
+  "SELECT CONCAT((SELECT count(*) FROM information_schema.check_constraints), '|', main_col) FROM t WHERE id=1;"
+
+DB="$TMPROOT/ck9.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck9"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN feat_col TEXT DEFAULT 'seed';
+UPDATE t SET feat_col='feat' WHERE id=1;
+SELECT dolt_commit('-Am','feat_add_column');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','main_drop_check');
+SQL
+expect_merge_ok "check_delete_vs_column_add_reverse" "$DB"
+expect_dual_value "check_delete_vs_column_add_reverse_composes" "$DB" "0|feat" \
+  "SELECT (SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CHECK%') || '|' || feat_col FROM t WHERE id=1;" \
+  "SELECT CONCAT((SELECT count(*) FROM information_schema.check_constraints), '|', feat_col) FROM t WHERE id=1;"
 
 echo ""
 echo "--- Generated Columns ---"
