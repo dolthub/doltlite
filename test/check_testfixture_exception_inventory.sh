@@ -162,6 +162,27 @@ awk '{ sub(/#.*/, ""); if (NF) printf "%s *\n", $1 }' \
 sort -o "$TMP_DIR/gates" "$TMP_DIR/gates"
 uniq -d "$TMP_DIR/gates" > "$TMP_DIR/dup_gates"
 
+# A crash row gates the whole suite, so per-assertion gates for the same suite
+# are covered twice and would double-count against the ratchet.
+if ! awk '
+  {
+    if ($2 == "*") star[$1] = 1; else exact[$1] = 1
+  }
+  END {
+    for (s in star) {
+      if (s in exact) {
+        printf "%s is gated at suite level and per assertion\n", s
+        bad = 1
+      }
+    }
+    exit bad
+  }
+' "$TMP_DIR/gates" > "$TMP_DIR/overlap"; then
+  echo "ERROR: overlapping suite-level and per-assertion gates:"
+  sed 's/^/  /' "$TMP_DIR/overlap" | head -20
+  exit 1
+fi
+
 if [ -s "$TMP_DIR/dup_gates" ]; then
   echo "ERROR: duplicate gates in the divergence/crash lists:"
   sed 's/^/  /' "$TMP_DIR/dup_gates" | head -20
@@ -213,6 +234,34 @@ echo "OK: $TOTAL testfixture gates classified (intentional=$INTENTIONAL" \
 # back up later.
 if [ ! -f "$RATCHET_FILE" ]; then
   echo "ERROR: missing ratchet baseline: $RATCHET_FILE"
+  exit 1
+fi
+
+# Reject a malformed baseline outright. ratchet_for() below ignores anything it
+# does not recognize, so a stray or mis-typed line would otherwise sit in the
+# file unnoticed while appearing to be enforced.
+if ! awk '
+  {
+    sub(/#.*/, "")
+    if (NF == 0) next
+    if (NF != 2) {
+      printf "%s:%d: expected \"<name> <count>\", found %d field(s)\n",
+             FILENAME, NR, NF
+      bad = 1
+      next
+    }
+    if ($1 != "gates" && $1 != "intentional" && $1 != "unsupported" &&
+        $1 != "harness" && $1 != "engine-gap") {
+      printf "%s:%d: unknown ratchet name: %s\n", FILENAME, NR, $1
+      bad = 1
+    }
+    if ($2 !~ /^[0-9]+$/) {
+      printf "%s:%d: not a count: %s\n", FILENAME, NR, $2
+      bad = 1
+    }
+  }
+  END { exit bad }
+' "$RATCHET_FILE"; then
   exit 1
 fi
 

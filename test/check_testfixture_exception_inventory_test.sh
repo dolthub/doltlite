@@ -175,6 +175,20 @@ printf '%s\n' 'gates lots' 'intentional 1' 'unsupported 1' 'harness 1' \
   'engine-gap 0' > "$RATCHET"
 expect_failure "a non-numeric ratchet baseline"
 
+# ratchet_for() ignores anything it does not recognize, so a malformed line would
+# otherwise sit in the file looking enforced.
+printf '%s\n' 'gates 3' 'stray' 'intentional 1' 'unsupported 1' 'harness 1' \
+  'engine-gap 0' > "$RATCHET"
+expect_failure "a stray one-field ratchet line"
+
+printf '%s\n' 'gates 3 extra' 'intentional 1' 'unsupported 1' 'harness 1' \
+  'engine-gap 0' > "$RATCHET"
+expect_failure "a ratchet line with a trailing extra field"
+
+printf '%s\n' 'gates 3' 'bogusname 1' 'intentional 1' 'unsupported 1' \
+  'harness 1' 'engine-gap 0' > "$RATCHET"
+expect_failure "an unknown ratchet name"
+
 # A name listed twice used to yield a multiline value that failed every numeric
 # comparison without recording a failure, so the ratchet reported holding while
 # enforcing nothing. Each duplicated name is covered because the guard is in the
