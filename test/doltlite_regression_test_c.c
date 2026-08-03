@@ -1259,11 +1259,25 @@ static void run_schema_hash_error_propagation(void){
   removeDbFiles(dbpath);
 }
 
+static int countChunkChild(void *pCtx, const ProllyHash *pHash){
+  int *pCount = (int*)pCtx;
+  (void)pHash;
+  (*pCount)++;
+  return SQLITE_OK;
+}
+
 static void run_refs_blob_corruption(void){
   ChunkStore cs;
   ChunkStore cs2;
+  ProllyHash commitHash;
+  ProllyHash workingSetHash;
   u8 *pBlob = 0;
+  u8 *pTrailing = 0;
+  u8 shortBlob[13];
   int nBlob = 0;
+  int allTruncationsCorrupt = 1;
+  int nChildren = 0;
+  int i;
   int rc;
 
   printf("=== Refs Blob Corruption Test ===\n\n");
@@ -1276,31 +1290,64 @@ static void run_refs_blob_corruption(void){
 
   check("set_default_branch",
         chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
-  cs.refs.aBranches = sqlite3_malloc(sizeof(*cs.refs.aBranches));
-  check("alloc_branch_ref", cs.refs.aBranches!=0);
-  if( cs.refs.aBranches ){
-    memset(cs.refs.aBranches, 0, sizeof(*cs.refs.aBranches));
-    cs.refs.nBranches = 1;
-    cs.refs.aBranches[0].zName = sqlite3_mprintf("main");
-    check("alloc_branch_name", cs.refs.aBranches[0].zName!=0);
-  }
-
-  cs.refs.aTags = sqlite3_malloc(sizeof(*cs.refs.aTags));
-  check("alloc_tag_ref", cs.refs.aTags!=0);
-  if( cs.refs.aTags ){
-    memset(cs.refs.aTags, 0, sizeof(*cs.refs.aTags));
-    cs.refs.nTags = 1;
-    cs.refs.aTags[0].zName = sqlite3_mprintf("v1");
-    check("alloc_tag_name", cs.refs.aTags[0].zName!=0);
-  }
+  memset(&commitHash, 0x11, sizeof(commitHash));
+  memset(&workingSetHash, 0x22, sizeof(workingSetHash));
+  check("add_branch_ref",
+        chunkStoreAddBranch(&cs, "main", &commitHash)==SQLITE_OK);
+  check("set_branch_working_set",
+        chunkStoreSetBranchWorkingSet(
+          &cs, "main", &workingSetHash)==SQLITE_OK);
+  check("add_tag_ref",
+        chunkStoreAddTagFull(&cs, "v1", &commitHash, "A", "a@b", 42,
+                             "tag message")==SQLITE_OK);
+  check("add_remote_ref",
+        chunkStoreAddRemote(&cs, "origin", "file:///tmp/origin")==SQLITE_OK);
+  check("add_tracking_ref",
+        chunkStoreUpdateTracking(
+          &cs, "origin", "main", &commitHash)==SQLITE_OK);
+  check("add_sequence_ref",
+        chunkStoreBumpSequence(&cs, "items", 99)==SQLITE_OK);
 
   check("serialize_refs_blob",
         chunkStoreSerializeRefsToBlob(&cs, &pBlob, &nBlob)==SQLITE_OK);
   check("refs_blob_has_tag_payload", nBlob>0);
 
-  rc = chunkStoreLoadRefsFromBlob(&cs2, pBlob, nBlob-20);
-  check("truncated_blob_returns_corrupt", rc==SQLITE_CORRUPT);
+  rc = chunkStoreLoadRefsFromBlob(&cs2, pBlob, nBlob);
+  check("complete_refs_blob_loads", rc==SQLITE_OK);
+  check("complete_refs_blob_preserves_sections",
+        cs2.refs.nBranches==1 && cs2.refs.nTags==1
+        && cs2.refs.nRemotes==1 && cs2.refs.nTracking==1
+        && cs2.refs.nSequences==1);
+  check("complete_refs_blob_preserves_sequence",
+        refsTableGetSequence(&cs2.refs, "items")==99);
+  rc = doltliteEnumerateChunkChildren(
+      pBlob, nBlob, countChunkChild, &nChildren);
+  check("refs_walker_uses_complete_decoder",
+        rc==SQLITE_OK && nChildren==4);
 
+  for(i=0; i<nBlob; i++){
+    rc = chunkStoreLoadRefsFromBlob(&cs2, pBlob, i);
+    if( rc!=SQLITE_CORRUPT ) allTruncationsCorrupt = 0;
+  }
+  check("every_truncated_blob_returns_corrupt", allTruncationsCorrupt);
+
+  shortBlob[0] = 7;
+  CS_WRITE_U32(shortBlob+1, 4);
+  memcpy(shortBlob+5, "main", 4);
+  CS_WRITE_U32(shortBlob+9, 0);
+  rc = chunkStoreLoadRefsFromBlob(&cs2, shortBlob, sizeof(shortBlob));
+  check("missing_v7_sections_return_corrupt", rc==SQLITE_CORRUPT);
+
+  pTrailing = sqlite3_malloc(nBlob+1);
+  check("grow_refs_blob_for_trailing_byte", pTrailing!=0);
+  if( pTrailing ){
+    memcpy(pTrailing, pBlob, nBlob);
+    pTrailing[nBlob] = 0;
+    rc = chunkStoreLoadRefsFromBlob(&cs2, pTrailing, nBlob+1);
+    check("trailing_refs_byte_returns_corrupt", rc==SQLITE_CORRUPT);
+  }
+
+  sqlite3_free(pTrailing);
   sqlite3_free(pBlob);
   chunkStoreClose(&cs2);
   chunkStoreClose(&cs);
