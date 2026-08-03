@@ -4,197 +4,37 @@
 
 /* CREATE TABLE SQL parsing, schema IR, and column-level schema merge. */
 
-static int parseQuotedIdentifier(
-  const char *z,
-  const char *zEnd,
-  const char **ppEnd,
-  char **pzName
-){
-  char cOpen, cClose;
-  const char *p;
-  int nOut = 0;
-  char *zName;
+#define SCHEMA_IR_OTHER 0
+#define SCHEMA_IR_FK    1
+#define SCHEMA_IR_CHECK 2
 
-  *ppEnd = z;
-  *pzName = 0;
-  if( z>=zEnd ) return SQLITE_CORRUPT;
+typedef struct SchemaIr SchemaIr;
+struct SchemaIr {
+  ParsedColumn *aCols;
+  int nCols;
+  char *zFkSig;
+  char *zCheckSig;
+  int hasFk;
+  int hasCheck;
+};
 
-  cOpen = *z;
-  cClose = cOpen=='[' ? ']' : cOpen;
-  p = z + 1;
-  while( p<zEnd ){
-    if( *p==cClose ){
-      if( p+1<zEnd && p[1]==cClose ){
-        nOut++;
-        p += 2;
-        continue;
-      }
-      break;
-    }
-    nOut++;
-    p++;
-  }
-  if( p>=zEnd || *p!=cClose ) return SQLITE_CORRUPT;
-
-  zName = sqlite3_malloc(nOut + 1);
-  if( !zName ) return SQLITE_NOMEM;
-
-  p = z + 1;
-  nOut = 0;
-  while( p<zEnd && *p!=cClose ){
-    if( p+1<zEnd && p[0]==cClose && p[1]==cClose ){
-      zName[nOut++] = cClose;
-      p += 2;
-    }else{
-      zName[nOut++] = *p++;
-    }
-  }
-  zName[nOut] = 0;
-  *ppEnd = p + 1;
-  *pzName = zName;
-  return SQLITE_OK;
-}
+static int schemaIrBuild(const char *zSql, SchemaIr *pIr);
 
 int parseColumns(
   const char *zSql,
   ParsedColumn **ppCols, int *pnCols
 ){
-  const char *p, *pEnd;
-  int depth;
-  const char *segStart;
-  ParsedColumn *aCols = 0;
-  int nCols = 0, nAlloc = 0;
+  SchemaIr ir;
+  int rc;
 
   *ppCols = 0;
   *pnCols = 0;
-
-  if( !zSql ) return SQLITE_OK;
-
-  p = zSql;
-  while( *p && *p!='(' ) p++;
-  if( *p!='(' ) return SQLITE_CORRUPT;
-  p++;
-
-  pEnd = p;
-  depth = 1;
-  while( *pEnd && depth>0 ){
-    if( *pEnd=='(' ) depth++;
-    else if( *pEnd==')' ) depth--;
-    pEnd++;
-  }
-  if( depth!=0 ) return SQLITE_CORRUPT;
-  pEnd--;
-
-  segStart = p;
-  depth = 0;
-  while( p <= pEnd ){
-    if( p==pEnd || (*p==',' && depth==0) ){
-
-      const char *s = segStart;
-      const char *e = (p==pEnd) ? p : p;
-      char *zTrimmed;
-      int len;
-
-      while( s<e && isspace((unsigned char)*s) ) s++;
-      while( e>s && isspace((unsigned char)*(e-1)) ) e--;
-
-      len = (int)(e - s);
-      if( len > 0 ){
-
-        int isConstraint = doltliteSegmentIsTableConstraint(s, len);
-
-        if( !isConstraint ){
-
-          zTrimmed = sqlite3_malloc(len + 1);
-          if( !zTrimmed ){
-
-            { int ci; for(ci=0;ci<nCols;ci++){
-              sqlite3_free(aCols[ci].zName);
-              sqlite3_free(aCols[ci].zDef);
-            }}
-            sqlite3_free(aCols);
-            return SQLITE_NOMEM;
-          }
-          memcpy(zTrimmed, s, len);
-          zTrimmed[len] = 0;
-
-          {
-            char *zName;
-            const char *nameStart = s;
-            const char *nameEnd = nameStart;
-            int nameLen;
-            int rc;
-
-            if( *nameStart=='"' || *nameStart=='`' || *nameStart=='[' ){
-              rc = parseQuotedIdentifier(nameStart, e, &nameEnd, &zName);
-              if( rc!=SQLITE_OK ){
-                sqlite3_free(zTrimmed);
-                { int ci; for(ci=0;ci<nCols;ci++){
-                  sqlite3_free(aCols[ci].zName);
-                  sqlite3_free(aCols[ci].zDef);
-                }}
-                sqlite3_free(aCols);
-                return rc;
-              }
-            }else{
-              while( nameEnd<e && !isspace((unsigned char)*nameEnd)
-                  && *nameEnd!='(' && *nameEnd!=',' ) nameEnd++;
-              nameLen = (int)(nameEnd - nameStart);
-              zName = sqlite3_malloc(nameLen + 1);
-              if( !zName ){
-                sqlite3_free(zTrimmed);
-                { int ci; for(ci=0;ci<nCols;ci++){
-                  sqlite3_free(aCols[ci].zName);
-                  sqlite3_free(aCols[ci].zDef);
-                }}
-                sqlite3_free(aCols);
-                return SQLITE_NOMEM;
-              }
-              memcpy(zName, nameStart, nameLen);
-              zName[nameLen] = 0;
-            }
-
-            { int ci; for(ci=0;zName[ci];ci++) zName[ci]=(char)tolower((unsigned char)zName[ci]); }
-
-            if( nameEnd<=nameStart ){
-              sqlite3_free(zName);
-              sqlite3_free(zTrimmed);
-              { int ci; for(ci=0;ci<nCols;ci++){
-                sqlite3_free(aCols[ci].zName);
-                sqlite3_free(aCols[ci].zDef);
-              }}
-              sqlite3_free(aCols);
-              return SQLITE_CORRUPT;
-            }
-
-            if( DOLTLITE_GROW_ARRAY(&aCols, &nAlloc, nCols+1, 8)!=SQLITE_OK ){
-              sqlite3_free(zName);
-              sqlite3_free(zTrimmed);
-              { int ci; for(ci=0;ci<nCols;ci++){
-                sqlite3_free(aCols[ci].zName);
-                sqlite3_free(aCols[ci].zDef);
-              }}
-              sqlite3_free(aCols);
-              return SQLITE_NOMEM;
-            }
-            aCols[nCols].zName = zName;
-            aCols[nCols].zDef = zTrimmed;
-            nCols++;
-          }
-        }
-      }
-
-      segStart = p + 1;
-    }else if( *p=='(' ){
-      depth++;
-    }else if( *p==')' ){
-      depth--;
-    }
-    p++;
-  }
-
-  *ppCols = aCols;
-  *pnCols = nCols;
+  rc = schemaIrBuild(zSql, &ir);
+  if( rc!=SQLITE_OK ) return rc;
+  *ppCols = ir.aCols;
+  *pnCols = ir.nCols;
+  sqlite3_free(ir.zFkSig);
+  sqlite3_free(ir.zCheckSig);
   return SQLITE_OK;
 }
 
@@ -227,30 +67,95 @@ static ParsedColumn *findColumn(ParsedColumn *aCols, int nCols, const char *zNam
   return i>=0 ? &aCols[i] : 0;
 }
 
-static const char *schemaColumnDefinitionTail(const char *zDef){
-  const char *p = zDef;
-  char close = 0;
+static int schemaGetToken(
+  const char *z,
+  const char *zEnd,
+  int *pType,
+  int *pnToken
+){
+  i64 n;
+  if( z>=zEnd ) return SQLITE_CORRUPT;
+  n = sqlite3GetToken((const u8*)z, pType);
+  if( n<=0 || n>zEnd-z || *pType==TK_ILLEGAL ) return SQLITE_CORRUPT;
+  *pnToken = (int)n;
+  return SQLITE_OK;
+}
 
-  while( *p && isspace((unsigned char)*p) ) p++;
-  if( *p=='"' || *p=='`' || *p=='[' ){
-    close = *p=='[' ? ']' : *p;
-    p++;
-    while( *p ){
-      if( *p==close ){
-        p++;
-        if( *p==close ){
-          p++;
-          continue;
-        }
-        break;
-      }
-      p++;
+static int schemaNextSignificantToken(
+  const char *z,
+  const char *zEnd,
+  const char **pzToken,
+  int *pType,
+  int *pnToken
+){
+  int rc;
+  while( z<zEnd ){
+    rc = schemaGetToken(z, zEnd, pType, pnToken);
+    if( rc!=SQLITE_OK ) return rc;
+    if( *pType!=TK_SPACE && *pType!=TK_COMMENT ){
+      *pzToken = z;
+      return SQLITE_OK;
     }
-  }else{
-    while( *p && !isspace((unsigned char)*p) && *p!='(' && *p!=',' ) p++;
+    z += *pnToken;
   }
-  while( *p && isspace((unsigned char)*p) ) p++;
-  return p;
+  return SQLITE_CORRUPT;
+}
+
+static const char *schemaSkipTrivia(const char *z, const char *zEnd){
+  int type, n;
+  while( z<zEnd && schemaGetToken(z, zEnd, &type, &n)==SQLITE_OK
+      && (type==TK_SPACE || type==TK_COMMENT) ){
+    z += n;
+  }
+  return z;
+}
+
+static int schemaSkipParenthesized(
+  const char *z,
+  const char *zEnd,
+  const char **pzAfter
+){
+  int depth = 0;
+  while( z<zEnd ){
+    int type, n;
+    int rc = schemaGetToken(z, zEnd, &type, &n);
+    if( rc!=SQLITE_OK ) return rc;
+    if( type==TK_LP ){
+      depth++;
+    }else if( type==TK_RP ){
+      if( --depth==0 ){
+        *pzAfter = z + n;
+        return SQLITE_OK;
+      }
+      if( depth<0 ) return SQLITE_CORRUPT;
+    }
+    z += n;
+  }
+  return SQLITE_CORRUPT;
+}
+
+static int schemaSegmentIsTableConstraint(
+  const char *s,
+  const char *e,
+  int *pIsConstraint
+){
+  const char *zToken;
+  int type, n;
+  int rc = schemaNextSignificantToken(s, e, &zToken, &type, &n);
+  if( rc!=SQLITE_OK ) return rc;
+  *pIsConstraint = type==TK_PRIMARY || type==TK_UNIQUE || type==TK_CHECK
+                || type==TK_FOREIGN || type==TK_CONSTRAINT;
+  return SQLITE_OK;
+}
+
+static const char *schemaColumnDefinitionTail(const char *zDef){
+  const char *zEnd = zDef + strlen(zDef);
+  const char *zToken = zDef;
+  int type, n;
+  if( schemaNextSignificantToken(zDef, zEnd, &zToken, &type, &n)!=SQLITE_OK ){
+    return zEnd;
+  }
+  return schemaSkipTrivia(zToken + n, zEnd);
 }
 
 int parsedColumnDefinitionsMatch(
@@ -268,60 +173,47 @@ static const char *schemaFindToken(
   int nKw
 );
 
+static int schemaTokenTextIs(const char *z, int n, const char *zText){
+  int nText = (int)strlen(zText);
+  return n==nText && sqlite3_strnicmp(z, zText, n)==0;
+}
+
 static const char *schemaGeneratedTailStart(const char *zDef){
   const char *zEnd = zDef + strlen(zDef);
   const char *zGenerated;
   const char *zAs;
   const char *p;
+  int type, n;
 
   zGenerated = schemaFindToken(zDef, zEnd, "GENERATED", 9);
   if( zGenerated ){
-    p = zGenerated + 9;
-    while( p<zEnd && isspace((unsigned char)*p) ) p++;
-    if( zEnd-p>=6 && sqlite3_strnicmp(p, "ALWAYS", 6)==0 ){
-      p += 6;
-      while( p<zEnd && isspace((unsigned char)*p) ) p++;
+    if( schemaGetToken(zGenerated, zEnd, &type, &n)!=SQLITE_OK ) return 0;
+    p = schemaSkipTrivia(zGenerated + n, zEnd);
+    if( p<zEnd && schemaGetToken(p, zEnd, &type, &n)==SQLITE_OK
+     && type==TK_ALWAYS ){
+      p = schemaSkipTrivia(p + n, zEnd);
     }
-    if( zEnd-p<2 || sqlite3_strnicmp(p, "AS", 2)!=0 ) return 0;
+    if( p>=zEnd || schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK
+     || type!=TK_AS ) return 0;
     zAs = p;
   }else{
     zAs = schemaFindToken(zDef, zEnd, "AS", 2);
     if( !zAs ) return 0;
   }
 
-  p = zAs + 2;
-  while( p<zEnd && isspace((unsigned char)*p) ) p++;
-  if( p>=zEnd || *p!='(' ) return 0;
-  {
-    int depth = 0;
-    char quote = 0;
-    do{
-      if( quote ){
-        if( *p==quote ){
-          if( p+1<zEnd && p[1]==quote ){
-            p += 2;
-            continue;
-          }
-          quote = 0;
-        }
-      }else if( *p=='\'' || *p=='"' || *p=='`' || *p=='[' ){
-        quote = *p=='[' ? ']' : *p;
-      }else if( *p=='(' ){
-        depth++;
-      }else if( *p==')' ){
-        depth--;
-      }
-      p++;
-    }while( p<zEnd && depth>0 );
-    if( depth!=0 ) return 0;
+  if( schemaGetToken(zAs, zEnd, &type, &n)!=SQLITE_OK ) return 0;
+  p = schemaSkipTrivia(zAs + n, zEnd);
+  if( p>=zEnd || schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK
+   || type!=TK_LP ) return 0;
+  if( schemaSkipParenthesized(p, zEnd, &p)!=SQLITE_OK ) return 0;
+  p = schemaSkipTrivia(p, zEnd);
+  if( p<zEnd ){
+    if( schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK ) return 0;
+    if( type==TK_VIRTUAL || schemaTokenTextIs(p, n, "STORED") ){
+      p += n;
+    }
   }
-  while( p<zEnd && isspace((unsigned char)*p) ) p++;
-  if( zEnd-p>=7 && sqlite3_strnicmp(p, "VIRTUAL", 7)==0 ){
-    p += 7;
-  }else if( zEnd-p>=6 && sqlite3_strnicmp(p, "STORED", 6)==0 ){
-    p += 6;
-  }
-  while( p<zEnd && isspace((unsigned char)*p) ) p++;
+  p = schemaSkipTrivia(p, zEnd);
   return p==zEnd ? (zGenerated ? zGenerated : zAs) : 0;
 }
 
@@ -345,21 +237,6 @@ static int schemaColumnsMergeEquivalent(
   return nOurs==nTheirs && sqlite3_strnicmp(zOurs, zTheirs, nOurs)==0;
 }
 
-
-#define SCHEMA_IR_OTHER 0
-#define SCHEMA_IR_FK    1
-#define SCHEMA_IR_CHECK 2
-
-typedef struct SchemaIr SchemaIr;
-struct SchemaIr {
-  ParsedColumn *aCols;
-  int nCols;
-  char *zFkSig;
-  char *zCheckSig;
-  int hasFk;
-  int hasCheck;
-};
-
 static const char *schemaFindToken(
   const char *z,
   const char *zEnd,
@@ -369,27 +246,13 @@ static const char *schemaFindToken(
   const char *p = z;
   if( !z || !zEnd || zEnd<=z || nKw<=0 ) return 0;
   while( p<zEnd ){
-    if( *p=='\'' || *p=='"' || *p=='`' || *p=='[' ){
-      char q = *p=='[' ? ']' : *p;
-      p++;
-      while( p<zEnd ){
-        if( *p==q ){
-          p++;
-          if( p<zEnd && *p==q ){ p++; continue; }
-          break;
-        }
-        p++;
-      }
-      continue;
-    }
-    if( (p==z || (!sqlite3Isalnum((u8)p[-1]) && p[-1]!='_'))
-     && (zEnd - p)>=nKw
-     && sqlite3_strnicmp(p, zKw, nKw)==0
-     && (p+nKw>=zEnd
-         || (!sqlite3Isalnum((u8)p[nKw]) && p[nKw]!='_')) ){
+    int type, n;
+    if( schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK ) return 0;
+    if( type!=TK_STRING && type!=TK_BLOB && type!=TK_COMMENT
+     && type!=TK_SPACE && n==nKw && sqlite3_strnicmp(p, zKw, nKw)==0 ){
       return p;
     }
-    p++;
+    p += n;
   }
   return 0;
 }
@@ -409,38 +272,22 @@ static int schemaAppendSig(char **pzSig, const char *zText, int nText){
 }
 
 static int schemaConstraintKind(const char *s, int len){
-  const char *p = s;
   const char *e = s + len;
-  while( p<e && isspace((unsigned char)*p) ) p++;
-  if( (e-p)>=10 && sqlite3_strnicmp(p, "CONSTRAINT", 10)==0
-   && (e-p==10 || isspace((unsigned char)p[10])) ){
-    p += 10;
-    while( p<e && isspace((unsigned char)*p) ) p++;
-    if( p<e && (*p=='"' || *p=='`' || *p=='[') ){
-      char cOpen = *p;
-      char cClose = cOpen=='[' ? ']' : cOpen;
-      p++;
-      while( p<e ){
-        if( *p==cClose ){
-          p++;
-          if( p<e && *p==cClose ){ p++; continue; }
-          break;
-        }
-        p++;
-      }
-    }else{
-      while( p<e && !isspace((unsigned char)*p) && *p!='(' ) p++;
+  const char *p;
+  int type, n;
+  if( schemaNextSignificantToken(s, e, &p, &type, &n)!=SQLITE_OK ){
+    return SCHEMA_IR_OTHER;
+  }
+  if( type==TK_CONSTRAINT ){
+    if( schemaNextSignificantToken(p+n, e, &p, &type, &n)!=SQLITE_OK ){
+      return SCHEMA_IR_OTHER;
     }
-    while( p<e && isspace((unsigned char)*p) ) p++;
+    if( schemaNextSignificantToken(p+n, e, &p, &type, &n)!=SQLITE_OK ){
+      return SCHEMA_IR_OTHER;
+    }
   }
-  if( (e-p)>=11 && sqlite3_strnicmp(p, "FOREIGN KEY", 11)==0
-   && (e-p==11 || !sqlite3Isalnum((u8)p[11])) ){
-    return SCHEMA_IR_FK;
-  }
-  if( (e-p)>=5 && sqlite3_strnicmp(p, "CHECK", 5)==0
-   && (e-p==5 || p[5]=='(' || isspace((unsigned char)p[5])) ){
-    return SCHEMA_IR_CHECK;
-  }
+  if( type==TK_FOREIGN ) return SCHEMA_IR_FK;
+  if( type==TK_CHECK ) return SCHEMA_IR_CHECK;
   if( schemaFindToken(p, e, "REFERENCES", 10) ) return SCHEMA_IR_FK;
   if( schemaFindToken(p, e, "CHECK", 5) ) return SCHEMA_IR_CHECK;
   return SCHEMA_IR_OTHER;
@@ -465,14 +312,15 @@ static char *schemaColumnWithoutChecks(const char *zDef){
       zWrite += (zKw - z);
     }
     z = zKw + 5;
-    while( z<zEnd && isspace((unsigned char)*z) ) z++;
-    if( z<zEnd && *z=='(' ){
-      int depth = 0;
-      do{
-        if( *z=='(' ) depth++;
-        else if( *z==')' ) depth--;
-        z++;
-      }while( z<zEnd && depth>0 );
+    z = schemaSkipTrivia(z, zEnd);
+    if( z<zEnd ){
+      int type, nToken;
+      const char *zAfter;
+      if( schemaGetToken(z, zEnd, &type, &nToken)==SQLITE_OK
+       && type==TK_LP
+       && schemaSkipParenthesized(z, zEnd, &zAfter)==SQLITE_OK ){
+        z = zAfter;
+      }
     }
   }
   while( zWrite>zOut && isspace((unsigned char)zWrite[-1]) ) zWrite--;
@@ -506,14 +354,17 @@ static int schemaIrNoteColumnConstraints(SchemaIr *pIr, const char *zDef){
     const char *zStart = zCk;
     const char *z = zCk + 5;
     pIr->hasCheck = 1;
-    while( z<zEnd && isspace((unsigned char)*z) ) z++;
-    if( z<zEnd && *z=='(' ){
-      int depth = 0;
-      do{
-        if( *z=='(' ) depth++;
-        else if( *z==')' ) depth--;
-        z++;
-      }while( z<zEnd && depth>0 );
+    z = schemaSkipTrivia(z, zEnd);
+    if( z<zEnd ){
+      int type, nToken;
+      const char *zAfter;
+      rc = schemaGetToken(z, zEnd, &type, &nToken);
+      if( rc!=SQLITE_OK ) return rc;
+      if( type==TK_LP ){
+        rc = schemaSkipParenthesized(z, zEnd, &zAfter);
+        if( rc!=SQLITE_OK ) return rc;
+        z = zAfter;
+      }
     }
     rc = schemaAppendSig(&pIr->zCheckSig, zStart, (int)(z - zStart));
     if( rc!=SQLITE_OK ) return rc;
@@ -522,113 +373,128 @@ static int schemaIrNoteColumnConstraints(SchemaIr *pIr, const char *zDef){
   return SQLITE_OK;
 }
 
+static int schemaIrAddSegment(
+  SchemaIr *pIr,
+  int *pnAlloc,
+  const char *s,
+  const char *e
+){
+  const char *zNameToken;
+  char *zDef;
+  char *zName;
+  int isConstraint;
+  int nameType;
+  int nName;
+  int len;
+  int rc;
+  int i;
+
+  while( s<e && isspace((unsigned char)*s) ) s++;
+  while( e>s && isspace((unsigned char)e[-1]) ) e--;
+  if( s==e ) return SQLITE_OK;
+  rc = schemaSegmentIsTableConstraint(s, e, &isConstraint);
+  if( rc!=SQLITE_OK ) return rc;
+  len = (int)(e - s);
+  if( isConstraint ){
+    int kind = schemaConstraintKind(s, len);
+    if( kind==SCHEMA_IR_FK ){
+      pIr->hasFk = 1;
+      return schemaAppendSig(&pIr->zFkSig, s, len);
+    }
+    if( kind==SCHEMA_IR_CHECK ){
+      pIr->hasCheck = 1;
+      return schemaAppendSig(&pIr->zCheckSig, s, len);
+    }
+    return SQLITE_OK;
+  }
+
+  rc = schemaNextSignificantToken(
+      s, e, &zNameToken, &nameType, &nName);
+  if( rc!=SQLITE_OK ) return rc;
+  zDef = sqlite3_malloc(len + 1);
+  zName = sqlite3_malloc(nName + 1);
+  if( !zDef || !zName ){
+    sqlite3_free(zDef);
+    sqlite3_free(zName);
+    return SQLITE_NOMEM;
+  }
+  memcpy(zDef, s, len);
+  zDef[len] = 0;
+  memcpy(zName, zNameToken, nName);
+  zName[nName] = 0;
+  sqlite3Dequote(zName);
+  for(i=0; zName[i]; i++){
+    zName[i] = (char)tolower((unsigned char)zName[i]);
+  }
+  rc = DOLTLITE_GROW_ARRAY(&pIr->aCols, pnAlloc, pIr->nCols+1, 8);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zDef);
+    sqlite3_free(zName);
+    return rc;
+  }
+  pIr->aCols[pIr->nCols].zName = zName;
+  pIr->aCols[pIr->nCols].zDef = zDef;
+  pIr->nCols++;
+  return schemaIrNoteColumnConstraints(pIr, zDef);
+}
+
 static int schemaIrBuild(const char *zSql, SchemaIr *pIr){
-  const char *p, *pEnd;
-  int depth;
+  const char *p;
+  const char *zEnd;
   const char *segStart;
-  int rc = SQLITE_OK;
+  int depth = 0;
   int nAlloc = 0;
+  int rc;
   assert( pIr!=0 );
 
   memset(pIr, 0, sizeof(*pIr));
   if( !zSql ) return SQLITE_OK;
-
   p = zSql;
-  while( *p && *p!='(' ) p++;
-  if( *p!='(' ) return SQLITE_CORRUPT;
-  p++;
-
-  pEnd = p;
-  depth = 1;
-  while( *pEnd && depth>0 ){
-    if( *pEnd=='(' ) depth++;
-    else if( *pEnd==')' ) depth--;
-    pEnd++;
+  zEnd = zSql + strlen(zSql);
+  while( p<zEnd ){
+    int type, n;
+    rc = schemaGetToken(p, zEnd, &type, &n);
+    if( rc!=SQLITE_OK ) goto schema_ir_build_error;
+    p += n;
+    if( type==TK_LP ){
+      depth = 1;
+      break;
+    }
   }
-  if( depth!=0 ) return SQLITE_CORRUPT;
-  pEnd--;
+  if( depth==0 ){
+    rc = SQLITE_CORRUPT;
+    goto schema_ir_build_error;
+  }
 
   segStart = p;
-  depth = 0;
-  while( p<=pEnd && rc==SQLITE_OK ){
-    if( p==pEnd || (*p==',' && depth==0) ){
-      const char *s = segStart;
-      const char *e = p;
-      int len;
-
-      while( s<e && isspace((unsigned char)*s) ) s++;
-      while( e>s && isspace((unsigned char)*(e-1)) ) e--;
-      len = (int)(e - s);
-      if( len>0 ){
-        if( doltliteSegmentIsTableConstraint(s, len) ){
-          int kind = schemaConstraintKind(s, len);
-          if( kind==SCHEMA_IR_FK ){
-            pIr->hasFk = 1;
-            rc = schemaAppendSig(&pIr->zFkSig, s, len);
-          }else if( kind==SCHEMA_IR_CHECK ){
-            pIr->hasCheck = 1;
-            rc = schemaAppendSig(&pIr->zCheckSig, s, len);
-          }
-        }else{
-          char *zTrimmed = sqlite3_malloc(len + 1);
-          char *zName = 0;
-          const char *nameStart = s;
-          const char *nameEnd = nameStart;
-          if( !zTrimmed ){ rc = SQLITE_NOMEM; break; }
-          memcpy(zTrimmed, s, len);
-          zTrimmed[len] = 0;
-
-          if( *nameStart=='"' || *nameStart=='`' || *nameStart=='[' ){
-            rc = parseQuotedIdentifier(nameStart, e, &nameEnd, &zName);
-          }else{
-            int nameLen;
-            while( nameEnd<e && !isspace((unsigned char)*nameEnd)
-                && *nameEnd!='(' && *nameEnd!=',' ) nameEnd++;
-            nameLen = (int)(nameEnd - nameStart);
-            zName = sqlite3_malloc(nameLen + 1);
-            if( !zName ) rc = SQLITE_NOMEM;
-            else{
-              memcpy(zName, nameStart, nameLen);
-              zName[nameLen] = 0;
-            }
-          }
-          if( rc!=SQLITE_OK ){
-            sqlite3_free(zTrimmed);
-            sqlite3_free(zName);
-            break;
-          }
-          { int ci; for(ci=0; zName[ci]; ci++){
-              zName[ci] = (char)tolower((unsigned char)zName[ci]);
-            }
-          }
-          if( nameEnd<=nameStart ){
-            sqlite3_free(zName);
-            sqlite3_free(zTrimmed);
-            rc = SQLITE_CORRUPT;
-            break;
-          }
-          rc = DOLTLITE_GROW_ARRAY(&pIr->aCols, &nAlloc, pIr->nCols+1, 8);
-          if( rc!=SQLITE_OK ){
-            sqlite3_free(zName);
-            sqlite3_free(zTrimmed);
-            break;
-          }
-          pIr->aCols[pIr->nCols].zName = zName;
-          pIr->aCols[pIr->nCols].zDef = zTrimmed;
-          pIr->nCols++;
-          rc = schemaIrNoteColumnConstraints(pIr, zTrimmed);
-        }
-      }
-      segStart = p + 1;
-    }else if( *p=='(' ){
+  while( p<zEnd ){
+    int type, n;
+    rc = schemaGetToken(p, zEnd, &type, &n);
+    if( rc!=SQLITE_OK ) goto schema_ir_build_error;
+    if( type==TK_LP ){
       depth++;
-    }else if( *p==')' ){
+    }else if( type==TK_RP ){
       depth--;
+      if( depth==0 ){
+        rc = schemaIrAddSegment(pIr, &nAlloc, segStart, p);
+        if( rc!=SQLITE_OK ) goto schema_ir_build_error;
+        return SQLITE_OK;
+      }
+      if( depth<0 ){
+        rc = SQLITE_CORRUPT;
+        goto schema_ir_build_error;
+      }
+    }else if( type==TK_COMMA && depth==1 ){
+      rc = schemaIrAddSegment(pIr, &nAlloc, segStart, p);
+      if( rc!=SQLITE_OK ) goto schema_ir_build_error;
+      segStart = p + n;
     }
-    p++;
+    p += n;
   }
+  rc = SQLITE_CORRUPT;
 
-  if( rc!=SQLITE_OK ) schemaIrClear(pIr);
+schema_ir_build_error:
+  schemaIrClear(pIr);
   return rc;
 }
 

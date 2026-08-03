@@ -671,4 +671,62 @@ run_test "dual_addcol_rows_theirs_newcol_val" "SELECT c FROM t WHERE id=1;" "cva
 run_test "dual_addcol_rows_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_schema_tokenizer_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t_default(id INTEGER PRIMARY KEY, v TEXT DEFAULT ')');
+CREATE TABLE t_check(id INTEGER PRIMARY KEY, v TEXT CHECK(v <> ')' AND v <> ','));
+CREATE TABLE t_generated(id INTEGER PRIMARY KEY, v TEXT, g TEXT AS (v || '),(') VIRTUAL);
+CREATE TABLE t_identifier(id INTEGER PRIMARY KEY, "odd,)name" TEXT);
+CREATE TABLE t_comment(
+  id INTEGER PRIMARY KEY,
+  /* ), punctuation */ v TEXT
+);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t_default ADD COLUMN feat_col TEXT;
+ALTER TABLE t_check ADD COLUMN feat_col TEXT;
+ALTER TABLE t_generated ADD COLUMN feat_col TEXT;
+ALTER TABLE t_identifier ADD COLUMN feat_col TEXT;
+ALTER TABLE t_comment ADD COLUMN feat_col TEXT;
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+ALTER TABLE t_default ADD COLUMN main_col TEXT;
+ALTER TABLE t_check ADD COLUMN main_col TEXT;
+ALTER TABLE t_generated ADD COLUMN main_col TEXT;
+ALTER TABLE t_identifier ADD COLUMN main_col TEXT;
+ALTER TABLE t_comment ADD COLUMN main_col TEXT;
+SELECT dolt_commit('-Am','main');
+EOF
+run_test_match "schema_tokenizer_merge_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "schema_tokenizer_default" \
+  "SELECT count(*) FROM pragma_table_xinfo('t_default') WHERE name IN ('main_col','feat_col');" \
+  "2" "$DB"
+run_test "schema_tokenizer_default_value" \
+  "INSERT INTO t_default(id) VALUES(1); SELECT v FROM t_default;" \
+  ")" "$DB"
+run_test "schema_tokenizer_check" \
+  "SELECT count(*) FROM pragma_table_xinfo('t_check') WHERE name IN ('main_col','feat_col');" \
+  "2" "$DB"
+run_test_match "schema_tokenizer_check_value" \
+  "INSERT INTO t_check(id,v) VALUES(1,')');" \
+  "CHECK constraint failed" "$DB"
+run_test "schema_tokenizer_generated" \
+  "SELECT count(*) FROM pragma_table_xinfo('t_generated') WHERE name IN ('main_col','feat_col');" \
+  "2" "$DB"
+run_test "schema_tokenizer_generated_value" \
+  "INSERT INTO t_generated(id,v) VALUES(1,'x'); SELECT g FROM t_generated;" \
+  "x),(" "$DB"
+run_test "schema_tokenizer_identifier" \
+  "SELECT count(*) FROM pragma_table_xinfo('t_identifier') WHERE name IN ('main_col','feat_col');" \
+  "2" "$DB"
+run_test "schema_tokenizer_identifier_name" \
+  "SELECT count(*) FROM pragma_table_xinfo('t_identifier') WHERE name='odd,)name';" \
+  "1" "$DB"
+run_test "schema_tokenizer_comment" \
+  "SELECT count(*) FROM pragma_table_xinfo('t_comment') WHERE name IN ('main_col','feat_col');" \
+  "2" "$DB"
+rm -f "$DB"
+
 dltest_finish
