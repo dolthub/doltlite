@@ -19,6 +19,7 @@
 #define BLAME_IDX_PK_GT 0x08
 #define BLAME_IDX_PK_LT 0x10
 #define BLAME_IDX_PK_ANY (BLAME_IDX_PK_EQ|BLAME_IDX_PK_GE|BLAME_IDX_PK_LE|BLAME_IDX_PK_GT|BLAME_IDX_PK_LT)
+#define BLAME_METADATA_COLUMNS 5
 
 typedef struct BlameRow BlameRow;
 struct BlameRow {
@@ -69,6 +70,23 @@ struct BlamePkTmp {
   int isIntegerType;
 };
 
+static int blameGrowPkTmp(
+  BlamePkTmp **paTmp,
+  int *pnAlloc,
+  int nLimit
+){
+  BlamePkTmp *aNew;
+  int nNew;
+  if( *pnAlloc>=nLimit ) return SQLITE_TOOBIG;
+  nNew = *pnAlloc ? *pnAlloc * 2 : 8;
+  if( nNew>nLimit ) nNew = nLimit;
+  aNew = sqlite3_realloc64(*paTmp, (sqlite3_uint64)nNew * sizeof(*aNew));
+  if( !aNew ) return SQLITE_NOMEM;
+  *paTmp = aNew;
+  *pnAlloc = nNew;
+  return SQLITE_OK;
+}
+
 static int blameLoadPkColumns(
   sqlite3 *db,
   const char *zTable,
@@ -84,8 +102,11 @@ static int blameLoadPkColumns(
   char **azNames = 0;
   int *aCid = 0;
   int intPkCid = -1;
-  BlamePkTmp tmp[64];
+  BlamePkTmp *aTmp = 0;
   int nTmp = 0;
+  int nTmpAlloc = 0;
+  int nColumnLimit;
+  int finalizeRc;
   int i, j;
 
   *pazNames = 0;
@@ -99,35 +120,47 @@ static int blameLoadPkColumns(
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) return rc;
 
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  nColumnLimit = sqlite3_limit(db, SQLITE_LIMIT_COLUMN, -1);
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     int cid = sqlite3_column_int(pStmt, 0);
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     int pkPos = sqlite3_column_int(pStmt, 5);
     if( pkPos <= 0 ) continue;
-    if( nTmp >= (int)(sizeof(tmp)/sizeof(tmp[0])) ) continue;
-    tmp[nTmp].cid = cid;
-    tmp[nTmp].zName = sqlite3_mprintf("%s", zName ? zName : "");
-    tmp[nTmp].pkPos = pkPos;
-    tmp[nTmp].isIntegerType =
+    if( nTmp>=nTmpAlloc ){
+      rc = blameGrowPkTmp(&aTmp, &nTmpAlloc, nColumnLimit);
+      if( rc!=SQLITE_OK ) break;
+    }
+    aTmp[nTmp].cid = cid;
+    aTmp[nTmp].zName = sqlite3_mprintf("%s", zName ? zName : "");
+    aTmp[nTmp].pkPos = pkPos;
+    aTmp[nTmp].isIntegerType =
         zType && sqlite3_stricmp(zType, "INTEGER")==0;
-    if( !tmp[nTmp].zName ){ rc = SQLITE_NOMEM; break; }
+    if( !aTmp[nTmp].zName ){ rc = SQLITE_NOMEM; break; }
     nTmp++;
   }
-  sqlite3_finalize(pStmt);
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  finalizeRc = sqlite3_finalize(pStmt);
+  if( rc==SQLITE_OK ) rc = finalizeRc;
+  if( rc==SQLITE_OK
+   && (nColumnLimit<BLAME_METADATA_COLUMNS
+       || nTmp>nColumnLimit-BLAME_METADATA_COLUMNS) ){
+    rc = SQLITE_TOOBIG;
+  }
   if( rc!=SQLITE_OK ){
-    for(i=0; i<nTmp; i++) sqlite3_free(tmp[i].zName);
+    for(i=0; i<nTmp; i++) sqlite3_free(aTmp[i].zName);
+    sqlite3_free(aTmp);
     return rc;
   }
 
   for(i=1; i<nTmp; i++){
-    BlamePkTmp t = tmp[i];
+    BlamePkTmp t = aTmp[i];
     j = i - 1;
-    while( j>=0 && tmp[j].pkPos > t.pkPos ){
-      tmp[j+1] = tmp[j];
+    while( j>=0 && aTmp[j].pkPos > t.pkPos ){
+      aTmp[j+1] = aTmp[j];
       j--;
     }
-    tmp[j+1] = t;
+    aTmp[j+1] = t;
   }
 
   if( nTmp > 0 ){
@@ -136,19 +169,21 @@ static int blameLoadPkColumns(
     if( !azNames || !aCid ){
       sqlite3_free(azNames);
       sqlite3_free(aCid);
-      for(i=0; i<nTmp; i++) sqlite3_free(tmp[i].zName);
+      for(i=0; i<nTmp; i++) sqlite3_free(aTmp[i].zName);
+      sqlite3_free(aTmp);
       return SQLITE_NOMEM;
     }
   }
   for(i=0; i<nTmp; i++){
-    azNames[i] = tmp[i].zName;
-    aCid[i] = tmp[i].cid;
+    azNames[i] = aTmp[i].zName;
+    aCid[i] = aTmp[i].cid;
     n++;
   }
 
-  if( nTmp == 1 && tmp[0].isIntegerType ){
-    intPkCid = tmp[0].cid;
+  if( nTmp == 1 && aTmp[0].isIntegerType ){
+    intPkCid = aTmp[0].cid;
   }
+  sqlite3_free(aTmp);
 
   *pazNames = azNames;
   *paColIdx = aCid;
@@ -666,7 +701,14 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
                           &v->intPkCid);
   if( rc!=SQLITE_OK ){
     if( pzErr ){
-      *pzErr = sqlite3_mprintf("dolt_blame_%s: failed to read schema", v->zTableName);
+      if( rc==SQLITE_TOOBIG ){
+        *pzErr = sqlite3_mprintf(
+            "dolt_blame_%s: output schema exceeds column limit",
+            v->zTableName);
+      }else{
+        *pzErr = sqlite3_mprintf(
+            "dolt_blame_%s: failed to read schema", v->zTableName);
+      }
     }
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
