@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_merge_constraints_int.h"
+#include "vdbeInt.h"
 
 static int appendUniqueViolationByRowid(
   sqlite3 *db,
@@ -102,186 +103,470 @@ static int appendUniqueViolationByPk(
   return rc;
 }
 
-static int uniqueIndexRowHasNull(sqlite3_stmt *pScan, int colFirst, int colLast){
+static int uniqueIndexRecordHasNull(UnpackedRecord *pRecord, int nKeyCol){
   int i;
-  for(i=colFirst; i<colLast; i++){
-    if( sqlite3_column_type(pScan, i) == SQLITE_NULL ) return 1;
+  for(i=0; i<nKeyCol; i++){
+    if( sqlite3_value_type((sqlite3_value*)&pRecord->aMem[i])==SQLITE_NULL ){
+      return 1;
+    }
   }
   return 0;
+}
+
+static KeyInfo *uniqueIndexKeyInfo(sqlite3 *db, Index *pIdx, int *pRc){
+  Parse sParse;
+  KeyInfo *pKeyInfo;
+
+  sqlite3ParseObjectInit(&sParse, db);
+  pKeyInfo = sqlite3KeyInfoOfIndex(&sParse, pIdx);
+  *pRc = sParse.rc;
+  if( !pKeyInfo && *pRc==SQLITE_OK ) *pRc = SQLITE_NOMEM;
+  sqlite3ParseObjectReset(&sParse);
+  return pKeyInfo;
+}
+
+typedef struct UniqueIndexEntry UniqueIndexEntry;
+struct UniqueIndexEntry {
+  u8 *pKey;
+  int nKey;
+  u8 *pPk;
+  int nPk;
+  sqlite3_int64 rowid;
+  UnpackedRecord *pUnpacked;
+};
+
+static int uniqueValueFromRecord(
+  const u8 *pRecord,
+  int nRecord,
+  const DoltliteRecordInfo *pInfo,
+  int iField,
+  DoltliteSerialValue *pValue
+){
+  int st;
+  int off;
+  int n;
+
+  memset(pValue, 0, sizeof(*pValue));
+  if( iField<0 || iField>=pInfo->nField ) return SQLITE_CORRUPT;
+  st = pInfo->aType[iField];
+  off = pInfo->aOffset[iField];
+  n = dlSerialTypeLen((u64)st);
+  if( n<0 || off<0 || off>nRecord-n ) return SQLITE_CORRUPT;
+  if( st==0 ){
+    pValue->eType = SQLITE_NULL;
+  }else if( st==8 || st==9 || (st>=1 && st<=6) ){
+    pValue->eType = SQLITE_INTEGER;
+    pValue->i = st==8 ? 0 : st==9 ? 1 : dlReadIntBytes(pRecord + off, n);
+  }else if( st==7 ){
+    u64 bits = 0;
+    int i;
+    pValue->eType = SQLITE_FLOAT;
+    for(i=0; i<8; i++) bits = (bits<<8) | pRecord[off+i];
+    memcpy(&pValue->r, &bits, 8);
+  }else if( st>=13 && (st&1)==1 ){
+    pValue->eType = SQLITE_TEXT;
+    pValue->p = pRecord + off;
+    pValue->n = n;
+  }else if( st>=12 && (st&1)==0 ){
+    pValue->eType = SQLITE_BLOB;
+    pValue->p = pRecord + off;
+    pValue->n = n;
+  }else{
+    return SQLITE_CORRUPT;
+  }
+  return SQLITE_OK;
+}
+
+static int uniqueRecordFromTableRow(
+  const u8 *pRecord,
+  int nRecord,
+  const DoltliteRecordInfo *pInfo,
+  const DoltliteColInfo *pCols,
+  Index *pIdx,
+  int nField,
+  u8 **ppOut,
+  int *pnOut,
+  int *pHasNull
+){
+  DoltliteSerialValue *aValue;
+  int i;
+  int rc = SQLITE_OK;
+
+  *ppOut = 0;
+  *pnOut = 0;
+  if( pHasNull ) *pHasNull = 0;
+  aValue = sqlite3_malloc64(
+      (sqlite3_int64)nField * sizeof(DoltliteSerialValue));
+  if( !aValue ) return SQLITE_NOMEM;
+  memset(aValue, 0, (size_t)nField * sizeof(DoltliteSerialValue));
+  for(i=0; i<nField; i++){
+    int iColumn = pIdx->aiColumn[i];
+    int iRecord;
+    if( iColumn<0 || iColumn>=pCols->nCol ){
+      rc = SQLITE_NOTFOUND;
+      break;
+    }
+    iRecord = pCols->aColToRec[iColumn];
+    rc = uniqueValueFromRecord(
+        pRecord, nRecord, pInfo, iRecord, &aValue[i]);
+    if( rc!=SQLITE_OK ) break;
+    if( pHasNull && aValue[i].eType==SQLITE_NULL ) *pHasNull = 1;
+  }
+  if( rc==SQLITE_OK ){
+    *ppOut = doltliteBuildRecord(aValue, nField, pnOut);
+    if( !*ppOut ) rc = SQLITE_NOMEM;
+  }
+  sqlite3_free(aValue);
+  return rc;
+}
+
+static void uniqueIndexEntriesFree(
+  sqlite3 *db,
+  UniqueIndexEntry *aEntry,
+  int nEntry
+){
+  int i;
+  for(i=0; i<nEntry; i++){
+    sqlite3_free(aEntry[i].pKey);
+    sqlite3_free(aEntry[i].pPk);
+    sqlite3DbFree(db, aEntry[i].pUnpacked);
+  }
+  sqlite3_free(aEntry);
+}
+
+static int uniqueIndexEntryCompare(
+  UniqueIndexEntry *pLeft,
+  UniqueIndexEntry *pRight,
+  int *pCmp
+){
+  pRight->pUnpacked->errCode = 0;
+  *pCmp = sqlite3VdbeRecordCompare(
+      pLeft->nKey, pLeft->pKey, pRight->pUnpacked);
+  return pRight->pUnpacked->errCode;
+}
+
+static int uniqueIndexEntriesSort(
+  UniqueIndexEntry *aEntry,
+  int nEntry
+){
+  UniqueIndexEntry *aTmp;
+  UniqueIndexEntry *aSrc = aEntry;
+  UniqueIndexEntry *aDst;
+  int width;
+  int rc = SQLITE_OK;
+
+  if( nEntry<2 ) return SQLITE_OK;
+  aTmp = sqlite3_malloc64(
+      (sqlite3_int64)nEntry * sizeof(UniqueIndexEntry));
+  if( !aTmp ) return SQLITE_NOMEM;
+  aDst = aTmp;
+  for(width=1; width<nEntry && rc==SQLITE_OK; width*=2){
+    int left;
+    for(left=0; left<nEntry; left+=width*2){
+      int mid = left + width;
+      int right = mid + width;
+      int i = left;
+      int j;
+      int out = left;
+      if( mid>nEntry ) mid = nEntry;
+      if( right>nEntry ) right = nEntry;
+      j = mid;
+      while( i<mid && j<right ){
+        int cmp;
+        rc = uniqueIndexEntryCompare(&aSrc[i], &aSrc[j], &cmp);
+        if( rc!=SQLITE_OK ) break;
+        aDst[out++] = cmp<=0 ? aSrc[i++] : aSrc[j++];
+      }
+      while( rc==SQLITE_OK && i<mid ) aDst[out++] = aSrc[i++];
+      while( rc==SQLITE_OK && j<right ) aDst[out++] = aSrc[j++];
+      if( rc!=SQLITE_OK ) break;
+    }
+    if( rc==SQLITE_OK ){
+      UniqueIndexEntry *aSwap = aSrc;
+      aSrc = aDst;
+      aDst = aSwap;
+    }
+    if( width>nEntry/2 ) break;
+  }
+  if( rc==SQLITE_OK && aSrc!=aEntry ){
+    memcpy(aEntry, aSrc, (size_t)nEntry * sizeof(UniqueIndexEntry));
+  }
+  sqlite3_free(aTmp);
+  return rc;
 }
 
 static int detectUniqueViolationsForIndex(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
   const char *zTable,
-  const char *zIndexName,
+  Index *pIdx,
   const char *zCols,
-  char **pzErrMsg,
   int *pnFound
 ){
   sqlite3_stmt *pScan = 0;
-  char *zQuery;
-  char *zWinnerKey = 0;
-  sqlite3_int64 winnerRowid = 0;
+  KeyInfo *pKeyInfo = 0;
+  UniqueIndexEntry *aEntry = 0;
+  char *zQuery = 0;
+  int nEntry = 0;
+  int nAlloc = 0;
   int winnerHandled = 0;
   int rc;
-  (void)pzErrMsg;
+  int i;
 
+  pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
+  if( !pKeyInfo ) goto unique_done;
   zQuery = sqlite3_mprintf(
-    "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED ORDER BY %s, rowid",
-    zCols, zTable, zCols);
-  if( !zQuery ) return SQLITE_NOMEM;
+      "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED", zCols, zTable);
+  if( !zQuery ){ rc = SQLITE_NOMEM; goto unique_done; }
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pScan, 0);
-  sqlite3_free(zQuery);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto unique_done;
 
-  while( (rc = sqlite3_step(pScan)) == SQLITE_ROW ){
-    sqlite3_int64 rowid = sqlite3_column_int64(pScan, 0);
-    int nc = sqlite3_column_count(pScan);
-    int i;
-    sqlite3_str *pS;
-    char *zRowKey;
-    int isDup;
+  while( (rc = sqlite3_step(pScan))==SQLITE_ROW ){
+    UniqueIndexEntry entry;
 
-    if( uniqueIndexRowHasNull(pScan, 1, nc) ) continue;
-
-    pS = sqlite3_str_new(0);
-    for(i=1; i<nc; i++){
-      const char *zV = (const char*)sqlite3_column_text(pScan, i);
-      sqlite3_str_appendf(pS, "%s%Q", i>1?"|":"", zV ? zV : "");
+    memset(&entry, 0, sizeof(entry));
+    entry.rowid = sqlite3_column_int64(pScan, 0);
+    entry.pKey = buildRecordFromStmtCols(
+        pScan, 1, pIdx->nKeyCol, &entry.nKey);
+    if( !entry.pKey ){ rc = SQLITE_NOMEM; break; }
+    entry.pUnpacked = sqlite3VdbeAllocUnpackedRecord(pKeyInfo);
+    if( !entry.pUnpacked ){
+      sqlite3_free(entry.pKey);
+      rc = SQLITE_NOMEM;
+      break;
     }
-    zRowKey = sqlite3_str_finish(pS);
-    if( !zRowKey ){ rc = SQLITE_NOMEM; break; }
-
-    isDup = zWinnerKey && strcmp(zWinnerKey, zRowKey)==0;
-    if( !isDup ){
-      sqlite3_free(zWinnerKey);
-      zWinnerKey = zRowKey;
-      winnerRowid = rowid;
-      winnerHandled = 0;
+    memset(entry.pUnpacked->aMem, 0,
+           sizeof(Mem) * (size_t)(pKeyInfo->nKeyField + 1));
+    sqlite3VdbeRecordUnpack(entry.nKey, entry.pKey, entry.pUnpacked);
+    if( entry.pUnpacked->nField < pIdx->nKeyCol ){
+      sqlite3_free(entry.pKey);
+      sqlite3DbFree(db, entry.pUnpacked);
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    entry.pUnpacked->nField = pIdx->nKeyCol;
+    if( uniqueIndexRecordHasNull(entry.pUnpacked, pIdx->nKeyCol) ){
+      sqlite3_free(entry.pKey);
+      sqlite3DbFree(db, entry.pUnpacked);
       continue;
     }
-    sqlite3_free(zRowKey);
-
-    if( !winnerHandled ){
-      int appended = 0;
-      rc = appendUniqueViolationByRowid(db, aAnc, nAnc, zTable, zIndexName,
-                                        zCols, winnerRowid, &appended);
-      if( rc != SQLITE_OK ) break;
-      if( appended && pnFound ) (*pnFound)++;
-      winnerHandled = 1;
+    if( nEntry==nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 64;
+      UniqueIndexEntry *aNew;
+      if( nNew<nAlloc || nNew>0x7fffffff/(int)sizeof(UniqueIndexEntry) ){
+        sqlite3_free(entry.pKey);
+        sqlite3DbFree(db, entry.pUnpacked);
+        rc = SQLITE_TOOBIG;
+        break;
+      }
+      aNew = sqlite3_realloc64(
+          aEntry, (sqlite3_int64)nNew * sizeof(UniqueIndexEntry));
+      if( !aNew ){
+        sqlite3_free(entry.pKey);
+        sqlite3DbFree(db, entry.pUnpacked);
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      aEntry = aNew;
+      nAlloc = nNew;
     }
+    aEntry[nEntry++] = entry;
+  }
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ) goto unique_done;
+  rc = uniqueIndexEntriesSort(aEntry, nEntry);
+  if( rc!=SQLITE_OK ) goto unique_done;
 
-    {
+  for(i=1; i<nEntry && rc==SQLITE_OK; i++){
+    int cmp;
+    rc = uniqueIndexEntryCompare(&aEntry[i-1], &aEntry[i], &cmp);
+    if( rc==SQLITE_OK && cmp==0 ){
       int appended = 0;
-      rc = appendUniqueViolationByRowid(db, aAnc, nAnc, zTable, zIndexName,
-                                        zCols, rowid, &appended);
-      if( rc != SQLITE_OK ) break;
+      if( !winnerHandled ){
+        rc = appendUniqueViolationByRowid(
+            db, aAnc, nAnc, zTable, pIdx->zName, zCols,
+            aEntry[i-1].rowid, &appended);
+        if( rc!=SQLITE_OK ) break;
+        if( appended && pnFound ) (*pnFound)++;
+        winnerHandled = 1;
+      }
+      appended = 0;
+      rc = appendUniqueViolationByRowid(
+          db, aAnc, nAnc, zTable, pIdx->zName, zCols,
+          aEntry[i].rowid, &appended);
+      if( rc!=SQLITE_OK ) break;
       if( appended && pnFound ) (*pnFound)++;
+    }else{
+      winnerHandled = 0;
     }
   }
-  sqlite3_free(zWinnerKey);
-  if( rc == SQLITE_DONE ) rc = SQLITE_OK;
+
+unique_done:
   sqlite3_finalize(pScan);
+  sqlite3_free(zQuery);
+  uniqueIndexEntriesFree(db, aEntry, nEntry);
+  sqlite3KeyInfoUnref(pKeyInfo);
   return rc;
 }
 
 static int detectUniqueViolationsForIndexWithoutRowid(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *pCurrent,
   const char *zTable,
-  const char *zIndexName,
+  Index *pIdx,
   const char *zCols,
   const MergePkInfo *pPk,
   int *pnFound
 ){
-  sqlite3_stmt *pScan = 0;
-  sqlite3_str *pSql = 0;
-  char *zQuery = 0;
-  char *zWinnerKey = 0;
-  u8 *pWinnerPkRec = 0;
-  int nWinnerPkRec = 0;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  Index *pPkIdx = sqlite3PrimaryKeyIndex(pIdx->pTable);
+  KeyInfo *pKeyInfo = 0;
+  DoltliteColInfo cols;
+  ProllyCursor cursor;
+  UniqueIndexEntry *aEntry = 0;
+  int nEntry = 0;
+  int nAlloc = 0;
+  int cursorOpen = 0;
   int winnerHandled = 0;
   int rc;
+  int res = 0;
+  int i;
 
-  pSql = sqlite3_str_new(0);
-  sqlite3_str_appendf(pSql,
-      "SELECT %s, %s FROM main.\"%w\" NOT INDEXED ORDER BY %s, %s",
-      zCols, pPk->zPkCols, zTable, zCols, pPk->zPkCols);
-  zQuery = sqlite3_str_finish(pSql);
-  if( !zQuery ) return SQLITE_NOMEM;
-  rc = sqlite3_prepare_v2(db, zQuery, -1, &pScan, 0);
-  sqlite3_free(zQuery);
-  if( rc!=SQLITE_OK ) return rc;
+  memset(&cols, 0, sizeof(cols));
+  if( !cs || !pCache || !pCurrent || !pPkIdx ) return SQLITE_ERROR;
+  rc = doltliteGetColumnNames(db, zTable, &cols);
+  if( rc!=SQLITE_OK ) goto without_rowid_done;
+  pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
+  if( !pKeyInfo ) goto without_rowid_done;
+  if( prollyHashIsEmpty(&pCurrent->root) ) goto without_rowid_done;
 
-  while( (rc = sqlite3_step(pScan)) == SQLITE_ROW ){
-    int nc = sqlite3_column_count(pScan);
-    int nDupKeyCol = nc - pPk->nPk;
-    sqlite3_str *pS;
-    char *zRowKey = 0;
-    int i, isDup;
+  prollyCursorInit(
+      &cursor, cs, pCache, &pCurrent->root, pCurrent->flags);
+  cursorOpen = 1;
+  rc = prollyCursorFirst(&cursor, &res);
+  while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cursor) ){
+    const u8 *pKey = 0;
+    const u8 *pValue = 0;
+    const u8 *pRecord;
+    u8 *pOwnedRecord = 0;
+    int nKey = 0;
+    int nValue = 0;
+    int nRecord;
+    DoltliteRecordInfo info;
+    UniqueIndexEntry entry;
+    int hasNull = 0;
 
-    if( uniqueIndexRowHasNull(pScan, 0, nDupKeyCol) ) continue;
-
-    pS = sqlite3_str_new(0);
-    for(i=0; i<nDupKeyCol; i++){
-      const char *zV = (const char*)sqlite3_column_text(pScan, i);
-      sqlite3_str_appendf(pS, "%s%Q", i>0?"|":"", zV ? zV : "");
+    memset(&entry, 0, sizeof(entry));
+    prollyCursorKey(&cursor, &pKey, &nKey);
+    prollyCursorValue(&cursor, &pValue, &nValue);
+    pRecord = pValue;
+    nRecord = nValue;
+    if( nRecord<=0 ){
+      rc = doltliteRecordFromClusteredKey(
+          db, zTable, pKey, nKey, &pOwnedRecord, &nRecord);
+      if( rc!=SQLITE_OK ) break;
+      pRecord = pOwnedRecord;
     }
-    zRowKey = sqlite3_str_finish(pS);
-    if( !zRowKey ){ rc = SQLITE_NOMEM; break; }
-
-    isDup = zWinnerKey && strcmp(zWinnerKey, zRowKey)==0;
-    if( !isDup ){
-      u8 *pPkRec = 0;
-      int nPkRec = 0;
-      pPkRec = buildRecordFromStmtCols(pScan, nDupKeyCol, pPk->nPk, &nPkRec);
-      if( !pPkRec ){
-        sqlite3_free(zRowKey);
+    rc = doltliteParseRecordStrict(pRecord, nRecord, &info);
+    if( rc==SQLITE_OK ){
+      rc = uniqueRecordFromTableRow(
+          pRecord, nRecord, &info, &cols, pIdx, pIdx->nKeyCol,
+          &entry.pKey, &entry.nKey, &hasNull);
+    }
+    if( rc==SQLITE_OK && !hasNull ){
+      rc = uniqueRecordFromTableRow(
+          pRecord, nRecord, &info, &cols, pPkIdx, pPkIdx->nKeyCol,
+          &entry.pPk, &entry.nPk, 0);
+    }
+    sqlite3_free(pOwnedRecord);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(entry.pKey);
+      sqlite3_free(entry.pPk);
+      break;
+    }
+    if( !hasNull ){
+      entry.pUnpacked = sqlite3VdbeAllocUnpackedRecord(pKeyInfo);
+      if( !entry.pUnpacked ){
+        sqlite3_free(entry.pKey);
+        sqlite3_free(entry.pPk);
         rc = SQLITE_NOMEM;
         break;
       }
-      sqlite3_free(zWinnerKey);
-      sqlite3_free(pWinnerPkRec);
-      zWinnerKey = zRowKey;
-      pWinnerPkRec = pPkRec;
-      nWinnerPkRec = nPkRec;
-      winnerHandled = 0;
-      continue;
-    }
-    sqlite3_free(zRowKey);
-
-    {
-      u8 *pPkRec = 0; int nPkRec = 0;
-      pPkRec = buildRecordFromStmtCols(pScan, nDupKeyCol, pPk->nPk, &nPkRec);
-      if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
-      if( !winnerHandled ){
-        int appended = 0;
-        rc = appendUniqueViolationByPk(db, aAnc, nAnc, zTable, zIndexName,
-                                       zCols, pPk, pWinnerPkRec, nWinnerPkRec,
-                                       &appended);
-        if( rc != SQLITE_OK ){
-          sqlite3_free(pPkRec);
+      memset(entry.pUnpacked->aMem, 0,
+             sizeof(Mem) * (size_t)(pKeyInfo->nKeyField + 1));
+      sqlite3VdbeRecordUnpack(entry.nKey, entry.pKey, entry.pUnpacked);
+      if( entry.pUnpacked->nField<pIdx->nKeyCol ){
+        sqlite3_free(entry.pKey);
+        sqlite3_free(entry.pPk);
+        sqlite3DbFree(db, entry.pUnpacked);
+        rc = SQLITE_CORRUPT;
+        break;
+      }
+      entry.pUnpacked->nField = pIdx->nKeyCol;
+      if( nEntry==nAlloc ){
+        int nNew = nAlloc ? nAlloc*2 : 64;
+        UniqueIndexEntry *aNew;
+        if( nNew<nAlloc || nNew>0x7fffffff/(int)sizeof(UniqueIndexEntry) ){
+          sqlite3_free(entry.pKey);
+          sqlite3_free(entry.pPk);
+          sqlite3DbFree(db, entry.pUnpacked);
+          rc = SQLITE_TOOBIG;
           break;
         }
+        aNew = sqlite3_realloc64(
+            aEntry, (sqlite3_int64)nNew * sizeof(UniqueIndexEntry));
+        if( !aNew ){
+          sqlite3_free(entry.pKey);
+          sqlite3_free(entry.pPk);
+          sqlite3DbFree(db, entry.pUnpacked);
+          rc = SQLITE_NOMEM;
+          break;
+        }
+        aEntry = aNew;
+        nAlloc = nNew;
+      }
+      aEntry[nEntry++] = entry;
+    }else{
+      sqlite3_free(entry.pKey);
+    }
+    rc = prollyCursorNext(&cursor);
+  }
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ) goto without_rowid_done;
+  rc = uniqueIndexEntriesSort(aEntry, nEntry);
+  if( rc!=SQLITE_OK ) goto without_rowid_done;
+
+  for(i=1; i<nEntry && rc==SQLITE_OK; i++){
+    int cmp;
+    rc = uniqueIndexEntryCompare(&aEntry[i-1], &aEntry[i], &cmp);
+    if( rc==SQLITE_OK && cmp==0 ){
+      int appended = 0;
+      if( !winnerHandled ){
+        rc = appendUniqueViolationByPk(
+            db, aAnc, nAnc, zTable, pIdx->zName, zCols, pPk,
+            aEntry[i-1].pPk, aEntry[i-1].nPk, &appended);
+        if( rc!=SQLITE_OK ) break;
         if( appended && pnFound ) (*pnFound)++;
         winnerHandled = 1;
       }
-      {
-        int appended = 0;
-        rc = appendUniqueViolationByPk(db, aAnc, nAnc, zTable, zIndexName,
-                                       zCols, pPk, pPkRec, nPkRec, &appended);
-        sqlite3_free(pPkRec);
-        if( rc != SQLITE_OK ) break;
-        if( appended && pnFound ) (*pnFound)++;
-      }
+      appended = 0;
+      rc = appendUniqueViolationByPk(
+          db, aAnc, nAnc, zTable, pIdx->zName, zCols, pPk,
+          aEntry[i].pPk, aEntry[i].nPk, &appended);
+      if( rc!=SQLITE_OK ) break;
+      if( appended && pnFound ) (*pnFound)++;
+    }else{
+      winnerHandled = 0;
     }
   }
 
-  sqlite3_free(zWinnerKey);
-  sqlite3_free(pWinnerPkRec);
-  if( rc == SQLITE_DONE ) rc = SQLITE_OK;
-  sqlite3_finalize(pScan);
+without_rowid_done:
+  if( cursorOpen ) prollyCursorClose(&cursor);
+  uniqueIndexEntriesFree(db, aEntry, nEntry);
+  doltliteFreeColInfo(&cols);
+  sqlite3KeyInfoUnref(pKeyInfo);
   return rc;
 }
 
@@ -300,6 +585,7 @@ int doltliteDetectMergeUniqueViolations(
   int nCur = 0;
   int rc;
 
+  (void)pzErrMsg;
   if( pnFound ) *pnFound = 0;
 
   rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
@@ -360,11 +646,11 @@ int doltliteDetectMergeUniqueViolations(
       const char *zIdxRaw;
       const char *zOrigin;
       char *zIdx;
-      char *zColsQ;
-      sqlite3_stmt *pCols = 0;
+      Index *pIdx;
       sqlite3_str *pColList;
       char *zColList;
-      int idxRc;
+      int i;
+      int supported = 1;
 
       if( !unique ) continue;
       zIdxRaw = (const char*)sqlite3_column_text(pIdxList, 1);
@@ -375,33 +661,35 @@ int doltliteDetectMergeUniqueViolations(
 
       zIdx = sqlite3_mprintf("%s", zIdxRaw);
       if( !zIdx ) break;
-      zColsQ = sqlite3_mprintf("PRAGMA main.index_xinfo(%Q)", zIdx);
-      if( !zColsQ ){ sqlite3_free(zIdx); break; }
-      idxRc = sqlite3_prepare_v2(db, zColsQ, -1, &pCols, 0);
-      sqlite3_free(zColsQ);
-      if( idxRc != SQLITE_OK ){ sqlite3_free(zIdx); continue; }
+      pIdx = sqlite3FindIndex(db, zIdx, "main");
+      if( !pIdx ){
+        sqlite3_free(zIdx);
+        rc = SQLITE_CORRUPT;
+        break;
+      }
 
       pColList = sqlite3_str_new(0);
-      while( sqlite3_step(pCols) == SQLITE_ROW ){
-        int cno = sqlite3_column_int(pCols, 1);
-        int isKey = sqlite3_column_int(pCols, 5);
-        const char *zCol = (const char*)sqlite3_column_text(pCols, 2);
-        if( cno < 0 || !zCol || !isKey ) continue;
-        if( sqlite3_str_length(pColList) > 0 ){
-          sqlite3_str_appendall(pColList, ", ");
+      for(i=0; i<pIdx->nKeyCol; i++){
+        int cno = pIdx->aiColumn[i];
+        if( i>0 ) sqlite3_str_appendall(pColList, ", ");
+        if( cno>=0 && cno<pIdx->pTable->nCol ){
+          sqlite3_str_appendf(
+              pColList, "\"%w\"", pIdx->pTable->aCol[cno].zCnName);
+        }else{
+          supported = 0;
+          sqlite3_str_appendall(pColList, "null");
         }
-        sqlite3_str_appendf(pColList, "\"%w\"", zCol);
       }
-      sqlite3_finalize(pCols);
       zColList = sqlite3_str_finish(pColList);
-      if( zColList && *zColList ){
+      if( supported && zColList && *zColList ){
         if( hasRowid ){
-          rc = detectUniqueViolationsForIndex(db, aAnc, nAnc, zTable,
-                                               zIdx, zColList, pzErrMsg,
-                                               pnFound);
+          rc = detectUniqueViolationsForIndex(
+              db, aAnc, nAnc, zTable, pIdx, zColList, pnFound);
         }else{
           rc = detectUniqueViolationsForIndexWithoutRowid(
-              db, aAnc, nAnc, zTable, zIdx, zColList, &pkInfo, pnFound);
+              db, aAnc, nAnc,
+              doltliteFindTableByName(aCur, nCur, zTable),
+              zTable, pIdx, zColList, &pkInfo, pnFound);
         }
       }
       sqlite3_free(zColList);

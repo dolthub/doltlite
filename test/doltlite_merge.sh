@@ -246,6 +246,59 @@ else
   ERRORS="$ERRORS\nFAIL: constraint_violation_merge_tx_persists\n  expected: TX|0|1|1:9:main1,2:9:feat2\n  got:      $TX_OUT"
 fi
 
+DB11D=/tmp/test_merge11d_$$.db; rm -f "$DB11D"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u TEXT COLLATE NOCASE UNIQUE);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'a'); SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(1,'A'); SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB11D" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t'),0) || '|' ||
+       COALESCE((SELECT group_concat(id, ',') FROM (SELECT id FROM dolt_constraint_violations_t ORDER BY id)),'');
+ROLLBACK;" | $DOLTLITE "$DB11D" 2>&1 | grep '^TX|')
+if [ "$TX_OUT" = "TX|1|2|1,2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: constraint_violation_nocase_unique\n  expected: TX|1|2|1,2\n  got:      $TX_OUT"
+fi
+
+DB11E=/tmp/test_merge11e_$$.db; rm -f "$DB11E"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u BLOB UNIQUE);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,x'410042'); SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(1,x'4100'); SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB11E" > /dev/null 2>&1
+run_test_match "constraint_violation_blob_prefix_merge" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB11E"
+run_test "constraint_violation_blob_prefix_rows" \
+  "SELECT group_concat(hex(u), ',') FROM (SELECT u FROM t ORDER BY id);" \
+  "4100,410042" "$DB11E"
+
+DB11F=/tmp/test_merge11f_$$.db; rm -f "$DB11F"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, u TEXT COLLATE NOCASE UNIQUE) WITHOUT ROWID;
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');
+INSERT INTO t VALUES('two','a'); SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES('one','A'); SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB11F" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t'),0) || '|' ||
+       COALESCE((SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_constraint_violations_t ORDER BY pk)),'');
+ROLLBACK;" | $DOLTLITE "$DB11F" 2>&1 | grep '^TX|')
+if [ "$TX_OUT" = "TX|1|2|one,two" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: constraint_violation_nocase_unique_without_rowid\n  expected: TX|1|2|one,two\n  got:      $TX_OUT"
+fi
+
 DB13=/tmp/test_merge13_$$.db; rm -f "$DB13"
 echo "CREATE TABLE anchor(id INTEGER PRIMARY KEY); INSERT INTO anchor VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB13" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO feat_tbl VALUES(1,'f'); SELECT dolt_commit('-A','-m','feat_add_table');" | $DOLTLITE "$DB13" > /dev/null 2>&1
@@ -379,5 +432,5 @@ run_test "many_fk_violations_autocommit_rolled_back" \
 run_test "many_fk_violations_parent_restored" \
   "SELECT count(*) FROM parent;" "0" "$DB23"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23"
 dltest_finish
