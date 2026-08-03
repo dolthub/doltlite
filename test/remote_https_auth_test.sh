@@ -8,7 +8,11 @@ CC="${CC:-cc}"
 TMP=$(mktemp -d)
 SRV_PID=""
 cleanup() {
-  [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null
+  if [ -n "$SRV_PID" ]; then
+    kill "$SRV_PID" 2>/dev/null || true
+    wait "$SRV_PID" 2>/dev/null || true
+    SRV_PID=""
+  fi
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -115,7 +119,8 @@ if [ -n "$PORT2" ]; then
 else
   echo "  SKIP: plaintext server did not start"
 fi
-kill "$SRV2_PID" 2>/dev/null
+kill "$SRV2_PID" 2>/dev/null || true
+wait "$SRV2_PID" 2>/dev/null || true
 
 echo "=== 6. Multi-chunk clone integrity (batched /get-chunks) ==="
 # Enough rows with blob payloads to span many chunks, so the pull fans out
