@@ -914,8 +914,8 @@ static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     doltliteVcResultError(ctx, db, "out of memory");
   }
 
-  free(kid);
-  free(pub);
+  sqlite3_free(kid);
+  sqlite3_free(pub);
   doltliteCredsFree(cred);
 }
 

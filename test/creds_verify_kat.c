@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+void sqlite3_free(void*);
+
 static int failures = 0;
 
 static void check(const char *name, int ok) {
@@ -71,10 +73,10 @@ static char *tokenForKid(
 done:
   free(header);
   free(claims);
-  free(h64);
-  free(c64);
+  sqlite3_free(h64);
+  sqlite3_free(c64);
   free(input);
-  free(s64);
+  sqlite3_free(s64);
   return token;
 }
 
@@ -110,7 +112,7 @@ int main(int argc, char **argv) {
   check("valid token accepted",
         doltliteCredsVerifyBearer(jwt, AUD, authDir, MID, &kidOut) == 0);
   check("kidOut matches", kidOut && kid && strcmp(kidOut, kid) == 0);
-  free(kidOut);
+  sqlite3_free(kidOut);
 
   bearer = (char *)malloc(strlen(jwt) + 8);
   sprintf(bearer, "Bearer %s", jwt);
@@ -164,8 +166,8 @@ int main(int argc, char **argv) {
     free(traversalJwt);
   }
 
-  free(jwt);
-  free(kid);
+  sqlite3_free(jwt);
+  sqlite3_free(kid);
   free(bearer);
   free(tampered);
   free(invalidExp);

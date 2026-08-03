@@ -145,6 +145,7 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcry
 "$CC" -O2 -Wall \
   -I "$HERE/src" -I "$HERE/ext/ed25519" \
   "$HERE/test/creds_token.c" \
+  "$HERE/test/sqlite3_alloc_stub.c" \
   "$HERE/src/doltlite_creds.c" \
   "$HERE/ext/ed25519/fe.c" \
   "$HERE/ext/ed25519/ge.c" \

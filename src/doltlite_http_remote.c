@@ -317,7 +317,7 @@ static int httpRequest(
     if( doltliteCredsBearerToken(p->cred, p->zAudience, &jwt)==0 && jwt ){
       zAuth = sqlite3_mprintf("Authorization: Bearer %s\r\n", jwt);
     }
-    if( jwt ) free(jwt);
+    if( jwt ) sqlite3_free(jwt);
   }
 #endif
 
@@ -775,7 +775,7 @@ static void httpResolveCreds(HttpRemote *p){
     }else{
       doltliteCredsLoadDefault(dir, &cred);
     }
-    free(dir);
+    sqlite3_free(dir);
   }
   if( cred ){
     const char *aud = getenv("DOLT_OVERRIDE_GRPC_JWT_AUDIENCE");

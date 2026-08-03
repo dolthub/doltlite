@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+void sqlite3_free(void*);
+
 int main(int argc, char **argv) {
   DoltliteCreds *cred = NULL;
   char *jwt = NULL;
@@ -22,7 +24,7 @@ int main(int argc, char **argv) {
   }
 
   puts(jwt);
-  free(jwt);
+  sqlite3_free(jwt);
   doltliteCredsFree(cred);
   return 0;
 }

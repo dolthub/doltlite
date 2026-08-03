@@ -22,6 +22,9 @@ extern "C" {
 
 typedef struct DoltliteCreds DoltliteCreds;
 
+/* Heap results from this API use sqlite3_malloc; free them with sqlite3_free
+** (or doltliteCredsFree / doltliteCredsFreeList for structured objects). */
+
 void doltliteSha512_224(const unsigned char *in, size_t inlen,
                         unsigned char out[DOLTLITE_KID_RAW_LEN]);
 

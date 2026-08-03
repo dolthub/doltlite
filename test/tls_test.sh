@@ -23,6 +23,7 @@ BIN="${DOLTLITE_TLS_TEST_BIN:-$TMP/tls_test}"
 if [ -z "${DOLTLITE_TLS_TEST_BIN:-}" ]; then
   "$CC" -O2 -I "$HERE/src" -I "$HERE/ext/mbedtls/include" \
     "$HERE/test/doltlite_tls_test_main.c" \
+    "$HERE/test/sqlite3_alloc_stub.c" \
     "$HERE/src/doltlite_tls.c" \
     "$HERE"/ext/mbedtls/library/*.c \
     $DOLTLITE_EXTRA_LIBS \
