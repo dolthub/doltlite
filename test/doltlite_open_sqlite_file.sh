@@ -292,7 +292,11 @@ echo "--- maintenance: VACUUM ---"
 # than bridging to GC (which has no chunk store to compact).
 seed_big() {
   rm -f "$1"
-  $SQLITE3 "$1" "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  # auto_vacuum has to be set before the first table, and the platform sqlite3
+  # may compile it on by default (the macOS runner does), which reclaims the
+  # deleted pages immediately and leaves nothing for VACUUM to do.
+  $SQLITE3 "$1" "PRAGMA auto_vacuum=NONE;
+CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
 WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<20000)
   INSERT INTO t SELECT i, 'pad-'||i FROM c;
 DELETE FROM t WHERE a>$2;"
@@ -305,8 +309,14 @@ dl_all "VACUUM;" "$DB" >/dev/null
 $SQLITE3 "$REF" "VACUUM;" >/dev/null 2>&1
 want_eq "M1_vacuum_matches_stock_size" \
   "$(wc -c < "$DB" | tr -d ' ')" "$(wc -c < "$REF" | tr -d ' ')"
-want_eq "M1b_vacuum_shrank" \
-  "$([ "$(wc -c < "$DB")" -lt "$before" ] && echo yes || echo no)" "yes"
+# Whether anything was reclaimable depends on how the file was seeded, so take
+# stock's own result as the expectation rather than hard-coding a shrink.
+if [ "$(wc -c < "$REF")" -lt "$before" ]; then
+  want_eq "M1b_vacuum_shrank_like_stock" \
+    "$([ "$(wc -c < "$DB")" -lt "$before" ] && echo yes || echo no)" "yes"
+else
+  skip "M1b_vacuum_shrank_like_stock" "nothing reclaimable: stock did not shrink it either"
+fi
 want_eq "M1c_vacuum_rows_intact" "$(sq_last "SELECT count(*) FROM t;" "$DB")" "100"
 want_eq "M1d_vacuum_integrity" "$(sq_last "PRAGMA integrity_check;" "$DB")" "ok"
 want_eq "M1e_vacuum_still_stock_format" "$(head -c 15 "$DB")" "SQLite format 3"
