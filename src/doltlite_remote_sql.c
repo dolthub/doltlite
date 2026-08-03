@@ -280,12 +280,14 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltlitePush(cs, pRemote, zBranch, bForce);
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
-    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+    char *zOwned;
+    if( !zMsg && rc==SQLITE_ERROR ){
+      zMsg = "push failed (not a fast-forward?)";
+    }
+    zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
     pRemote->xClose(pRemote);
     (void)doltliteVcSealSavepointError(db);
-    remoteSqlResultError(ctx, rc,
-      zOwned ? zOwned
-      : (rc==SQLITE_ERROR ? "push failed" : 0));
+    remoteSqlResultError(ctx, rc, zOwned);
     sqlite3_free(zOwned);
     return;
   }
