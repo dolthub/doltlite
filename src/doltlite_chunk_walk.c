@@ -5,6 +5,7 @@
 #include "prolly_hash.h"
 #include "prolly_node.h"
 #include "chunk_store.h"
+#include "chunk_refs.h"
 #include "doltlite_commit.h"
 #include "doltlite_chunk_walk.h"
 
@@ -243,143 +244,9 @@ static int enumerateRefsChildren(
   DoltliteChildCb xChild,
   void *ctx
 ){
-  const u8 *p = data;
-  const u8 *pEnd = data + nData;
-  int version;
-  int defLen;
-  int nBranches;
-  int nTags;
-  int nRemotes;
-  int nTracking;
-  int i;
-  ProllyHash h;
-  int rc = SQLITE_OK;
-
-  if( nData < 5 ) return SQLITE_CORRUPT;
-  version = *p++;
-  if( version!=7 ) return SQLITE_CORRUPT;
-  if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-  defLen = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-  p += 4;
-  if( defLen < 0 || p + defLen > pEnd ) return SQLITE_CORRUPT;
-  p += defLen;
-
-  if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-  nBranches = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-  p += 4;
-  if( nBranches < 0 || nBranches > 100000 ) return SQLITE_CORRUPT;
-  for(i=0; i<nBranches && rc==SQLITE_OK; i++){
-    int nameLen;
-    if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-    nameLen = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( nameLen < 0 || p + nameLen + PROLLY_HASH_SIZE > pEnd ) return SQLITE_CORRUPT;
-    p += nameLen;
-    memcpy(h.data, p, PROLLY_HASH_SIZE);
-    p += PROLLY_HASH_SIZE;
-    rc = xChild(ctx, &h);
-    if( rc!=SQLITE_OK ) break;
-    if( p + PROLLY_HASH_SIZE > pEnd ) return SQLITE_CORRUPT;
-    memcpy(h.data, p, PROLLY_HASH_SIZE);
-    p += PROLLY_HASH_SIZE;
-    rc = xChild(ctx, &h);
-  }
+  int rc = csDecodeRefsV7(data, nData, 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
-
-  if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-  nTags = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-  p += 4;
-  if( nTags < 0 || nTags > 100000 ) return SQLITE_CORRUPT;
-  for(i=0; i<nTags && rc==SQLITE_OK; i++){
-    int nameLen;
-    if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-    nameLen = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( nameLen < 0 || p + nameLen + PROLLY_HASH_SIZE > pEnd ) return SQLITE_CORRUPT;
-    p += nameLen;
-    memcpy(h.data, p, PROLLY_HASH_SIZE);
-    p += PROLLY_HASH_SIZE;
-    rc = xChild(ctx, &h);
-    if( rc!=SQLITE_OK ) break;
-    {
-      int n;
-      if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-      n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-      p += 4;
-      if( n < 0 || p + n > pEnd ) return SQLITE_CORRUPT;
-      p += n;
-      if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-      n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-      p += 4;
-      if( n < 0 || p + n > pEnd ) return SQLITE_CORRUPT;
-      p += n;
-      if( p + 8 > pEnd ) return SQLITE_CORRUPT;
-      p += 8;
-      if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-      n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-      p += 4;
-      if( n < 0 || p + n > pEnd ) return SQLITE_CORRUPT;
-      p += n;
-    }
-  }
-  if( rc!=SQLITE_OK ) return rc;
-
-  if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-  nRemotes = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-  p += 4;
-  if( nRemotes < 0 || nRemotes > 100000 ) return SQLITE_CORRUPT;
-  for(i=0; i<nRemotes; i++){
-    int n;
-    if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( n < 0 || p + n > pEnd ) return SQLITE_CORRUPT;
-    p += n;
-    if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( n < 0 || p + n > pEnd ) return SQLITE_CORRUPT;
-    p += n;
-  }
-
-  if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-  nTracking = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-  p += 4;
-  if( nTracking < 0 || nTracking > 100000 ) return SQLITE_CORRUPT;
-  for(i=0; i<nTracking && rc==SQLITE_OK; i++){
-    int n;
-    if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( n < 0 || p + n > pEnd ) return SQLITE_CORRUPT;
-    p += n;
-    if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-    n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( n < 0 || p + n + PROLLY_HASH_SIZE > pEnd ) return SQLITE_CORRUPT;
-    p += n;
-    memcpy(h.data, p, PROLLY_HASH_SIZE);
-    p += PROLLY_HASH_SIZE;
-    rc = xChild(ctx, &h);
-  }
-  if( rc!=SQLITE_OK ) return rc;
-
-  /* SequenceRef section (v7+): name + i64 seq, no chunk references. */
-  if( p + 4 <= pEnd ){
-    int nSequences = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-    p += 4;
-    if( nSequences < 0 || nSequences > 100000 ) return SQLITE_CORRUPT;
-    for(i=0; i<nSequences; i++){
-      int n;
-      if( p + 4 > pEnd ) return SQLITE_CORRUPT;
-      n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-      p += 4;
-      if( n < 0 || p + n + 8 > pEnd ) return SQLITE_CORRUPT;
-      p += n + 8;
-    }
-  }
-  if( p != pEnd ) return SQLITE_CORRUPT;
-  return SQLITE_OK;
+  return csDecodeRefsV7(data, nData, 0, xChild, ctx);
 }
 
 int doltliteEnumerateChunkChildren(

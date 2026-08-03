@@ -3,6 +3,7 @@
 
 #include "chunk_refs.h"
 #include "chunk_store.h"
+#include <limits.h>
 #include <string.h>
 
 int csFindNamedRef(const void *aBase, int n, int stride, const char *zName){
@@ -250,197 +251,241 @@ int csEnsureDefaultBranch(ChunkStore *cs){
   return SQLITE_OK;
 }
 
+typedef struct CsRefsReader CsRefsReader;
+struct CsRefsReader {
+  const u8 *p;
+  int n;
+};
+
+static int refsTake(CsRefsReader *pReader, int n, const u8 **ppData){
+  if( n<0 || n>pReader->n ) return SQLITE_CORRUPT;
+  if( ppData ) *ppData = pReader->p;
+  pReader->p += n;
+  pReader->n -= n;
+  return SQLITE_OK;
+}
+
+static int refsReadU32(CsRefsReader *pReader, int *pValue){
+  const u8 *p;
+  u32 value;
+  int rc = refsTake(pReader, 4, &p);
+  if( rc!=SQLITE_OK ) return rc;
+  value = CS_READ_U32(p);
+  if( value>INT_MAX ) return SQLITE_CORRUPT;
+  *pValue = (int)value;
+  return SQLITE_OK;
+}
+
+static int refsReadCount(CsRefsReader *pReader, int nMin, int *pCount){
+  int rc = refsReadU32(pReader, pCount);
+  if( rc!=SQLITE_OK ) return rc;
+  if( *pCount>pReader->n/nMin ) return SQLITE_CORRUPT;
+  return SQLITE_OK;
+}
+
+static int refsReadString(CsRefsReader *pReader, char **pzOut){
+  const u8 *p;
+  char *z;
+  int n;
+  int rc = refsReadU32(pReader, &n);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = refsTake(pReader, n, &p);
+  if( rc!=SQLITE_OK || !pzOut ) return rc;
+  z = sqlite3_malloc64((sqlite3_uint64)n + 1);
+  if( !z ) return SQLITE_NOMEM;
+  memcpy(z, p, n);
+  z[n] = 0;
+  *pzOut = z;
+  return SQLITE_OK;
+}
+
+static int refsReadHash(
+  CsRefsReader *pReader,
+  ProllyHash *pHash,
+  CsRefsHashCb xHash,
+  void *pCtx
+){
+  const u8 *p;
+  ProllyHash hash;
+  int rc = refsTake(pReader, PROLLY_HASH_SIZE, &p);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(hash.data, p, PROLLY_HASH_SIZE);
+  if( pHash ) *pHash = hash;
+  return xHash ? xHash(pCtx, &hash) : SQLITE_OK;
+}
+
+static int refsReadI64(CsRefsReader *pReader, i64 *pValue){
+  const u8 *p;
+  int rc = refsTake(pReader, 8, &p);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pValue ) *pValue = CS_READ_I64(p);
+  return SQLITE_OK;
+}
+
+static int refsAllocArray(void **ppArray, int n, sqlite3_uint64 nElem){
+  sqlite3_uint64 nByte;
+  if( n==0 ) return SQLITE_OK;
+  nByte = (sqlite3_uint64)n * nElem;
+  *ppArray = sqlite3_malloc64(nByte);
+  if( !*ppArray ) return SQLITE_NOMEM;
+  memset(*ppArray, 0, (size_t)nByte);
+  return SQLITE_OK;
+}
+
+int csDecodeRefsV7(
+  const u8 *data,
+  int nData,
+  RefsTable *pRefs,
+  CsRefsHashCb xHash,
+  void *pCtx
+){
+  CsRefsReader reader;
+  const u8 *pVersion;
+  int nBranches;
+  int nTags;
+  int nRemotes;
+  int nTracking;
+  int nSequences;
+  int i;
+  int rc;
+
+  if( !data || nData<0 ) return SQLITE_CORRUPT;
+  reader.p = data;
+  reader.n = nData;
+  rc = refsTake(&reader, 1, &pVersion);
+  if( rc!=SQLITE_OK || pVersion[0]!=7 ) return SQLITE_CORRUPT;
+  rc = refsReadString(&reader, pRefs ? &pRefs->zDefaultBranch : 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = refsReadCount(&reader, 4 + 2*PROLLY_HASH_SIZE, &nBranches);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRefs ){
+    rc = refsAllocArray((void**)&pRefs->aBranches, nBranches,
+                        sizeof(BranchRef));
+    if( rc!=SQLITE_OK ) return rc;
+    pRefs->nBranches = nBranches;
+  }
+  for(i=0; i<nBranches; i++){
+    BranchRef *pBranch = pRefs ? &pRefs->aBranches[i] : 0;
+    rc = refsReadString(&reader, pBranch ? &pBranch->zName : 0);
+    if( rc==SQLITE_OK ){
+      rc = refsReadHash(&reader, pBranch ? &pBranch->commitHash : 0,
+                        xHash, pCtx);
+    }
+    if( rc==SQLITE_OK ){
+      rc = refsReadHash(&reader, pBranch ? &pBranch->workingSetHash : 0,
+                        xHash, pCtx);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  rc = refsReadCount(&reader, 24 + PROLLY_HASH_SIZE, &nTags);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRefs ){
+    rc = refsAllocArray((void**)&pRefs->aTags, nTags, sizeof(TagRef));
+    if( rc!=SQLITE_OK ) return rc;
+    pRefs->nTags = nTags;
+  }
+  for(i=0; i<nTags; i++){
+    TagRef *pTag = pRefs ? &pRefs->aTags[i] : 0;
+    rc = refsReadString(&reader, pTag ? &pTag->zName : 0);
+    if( rc==SQLITE_OK ){
+      rc = refsReadHash(&reader, pTag ? &pTag->commitHash : 0,
+                        xHash, pCtx);
+    }
+    if( rc==SQLITE_OK ){
+      rc = refsReadString(&reader, pTag ? &pTag->zTagger : 0);
+    }
+    if( rc==SQLITE_OK ){
+      rc = refsReadString(&reader, pTag ? &pTag->zEmail : 0);
+    }
+    if( rc==SQLITE_OK ){
+      rc = refsReadI64(&reader, pTag ? &pTag->timestamp : 0);
+    }
+    if( rc==SQLITE_OK ){
+      rc = refsReadString(&reader, pTag ? &pTag->zMessage : 0);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  rc = refsReadCount(&reader, 8, &nRemotes);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRefs ){
+    rc = refsAllocArray((void**)&pRefs->aRemotes, nRemotes,
+                        sizeof(RemoteRef));
+    if( rc!=SQLITE_OK ) return rc;
+    pRefs->nRemotes = nRemotes;
+  }
+  for(i=0; i<nRemotes; i++){
+    RemoteRef *pRemote = pRefs ? &pRefs->aRemotes[i] : 0;
+    rc = refsReadString(&reader, pRemote ? &pRemote->zName : 0);
+    if( rc==SQLITE_OK ){
+      rc = refsReadString(&reader, pRemote ? &pRemote->zUrl : 0);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  rc = refsReadCount(&reader, 8 + PROLLY_HASH_SIZE, &nTracking);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRefs ){
+    rc = refsAllocArray((void**)&pRefs->aTracking, nTracking,
+                        sizeof(TrackingBranch));
+    if( rc!=SQLITE_OK ) return rc;
+    pRefs->nTracking = nTracking;
+  }
+  for(i=0; i<nTracking; i++){
+    TrackingBranch *pTracking = pRefs ? &pRefs->aTracking[i] : 0;
+    rc = refsReadString(&reader, pTracking ? &pTracking->zRemote : 0);
+    if( rc==SQLITE_OK ){
+      rc = refsReadString(&reader, pTracking ? &pTracking->zBranch : 0);
+    }
+    if( rc==SQLITE_OK ){
+      rc = refsReadHash(&reader, pTracking ? &pTracking->commitHash : 0,
+                        xHash, pCtx);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  rc = refsReadCount(&reader, 12, &nSequences);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRefs ){
+    rc = refsAllocArray((void**)&pRefs->aSequences, nSequences,
+                        sizeof(SequenceRef));
+    if( rc!=SQLITE_OK ) return rc;
+    pRefs->nSequences = nSequences;
+  }
+  for(i=0; i<nSequences; i++){
+    SequenceRef *pSequence = pRefs ? &pRefs->aSequences[i] : 0;
+    rc = refsReadString(&reader,
+                        pSequence ? &pSequence->zTableName : 0);
+    if( rc==SQLITE_OK ){
+      rc = refsReadI64(&reader, pSequence ? &pSequence->iSeq : 0);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return reader.n==0 ? SQLITE_OK : SQLITE_CORRUPT;
+}
+
 int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
-  const u8 *bufCur = data;
-  int defLen, nBranches, nTags, i;
-  u8 version;
-  if( nData<5 ) return SQLITE_CORRUPT;
-  version = *bufCur++;
-  /* v7 added the SequenceRef section (shared AUTOINCREMENT counters).
-  ** 0.11.0 dropped support for older formats; rebuild from scratch on
-  ** older databases. */
-  if( version!=7 ) return SQLITE_CORRUPT;
-  if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
-  defLen = (int)CS_READ_U32(bufCur); bufCur+=4;
-  if( defLen<0 ) return SQLITE_CORRUPT;
-  if( bufCur+defLen>data+nData ) return SQLITE_CORRUPT;
-  sqlite3_free(cs->refs.zDefaultBranch);
-  cs->refs.zDefaultBranch = sqlite3_malloc(defLen+1);
-  if(!cs->refs.zDefaultBranch) return SQLITE_NOMEM;
-  memcpy(cs->refs.zDefaultBranch, bufCur, defLen); cs->refs.zDefaultBranch[defLen]=0; bufCur+=defLen;
-  if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
-  nBranches = (int)CS_READ_U32(bufCur); bufCur+=4;
-  /* Bound the count by the smallest on-disk entry (4-byte name length + a
-  ** commit hash = 24 bytes) so a crafted count cannot exceed what the blob
-  ** could hold, and size the allocation with a 64-bit product so
-  ** count*sizeof(struct) cannot wrap a 32-bit int into a tiny allocation. */
-  if( nBranches<0 || nBranches>(int)(data+nData-bufCur)/(4+PROLLY_HASH_SIZE) ) return SQLITE_CORRUPT;
-  csFreeBranches(cs);
-  if( nBranches>0 ){
-    cs->refs.aBranches = sqlite3_malloc64((sqlite3_int64)nBranches*(sqlite3_int64)sizeof(struct BranchRef));
-    if(!cs->refs.aBranches) return SQLITE_NOMEM;
-    memset(cs->refs.aBranches, 0, (size_t)nBranches*sizeof(struct BranchRef));
-    /* Count the whole zeroed array up front (here and below): a parse
-    ** failure mid-entry must leave already-allocated fields visible to
-    ** csFreeBranches, or a truncated blob leaks them. */
-    cs->refs.nBranches = nBranches;
-    for(i=0;i<nBranches;i++){
-      int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-      nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-      if( nameLen<0 ) return SQLITE_CORRUPT;
-      if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
-      cs->refs.aBranches[i].zName=sqlite3_malloc(nameLen+1);
-      if(!cs->refs.aBranches[i].zName) return SQLITE_NOMEM;
-      memcpy(cs->refs.aBranches[i].zName,bufCur,nameLen); cs->refs.aBranches[i].zName[nameLen]=0; bufCur+=nameLen;
-      memcpy(cs->refs.aBranches[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-      if( bufCur+PROLLY_HASH_SIZE<=data+nData ){
-        memcpy(cs->refs.aBranches[i].workingSetHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-      }
-    }
+  ChunkStore tmp;
+  int rc;
+  memset(&tmp, 0, sizeof(tmp));
+  rc = csDecodeRefsV7(data, nData, &tmp.refs, 0, 0);
+  if( rc!=SQLITE_OK ){
+    csFreeRefsState(&tmp);
+    return rc;
   }
-
-  csFreeTags(cs);
-  if( bufCur+4<=data+nData ){
-    nTags = (int)CS_READ_U32(bufCur); bufCur+=4;
-    /* Minimum tag entry: name len + commit hash + tagger/email/message lens
-    ** + timestamp = 4 + PROLLY_HASH_SIZE + 4 + 4 + 8 + 4. */
-    if( nTags<0 || nTags>(int)(data+nData-bufCur)/(24+PROLLY_HASH_SIZE) ) return SQLITE_CORRUPT;
-    if( nTags>0 ){
-      cs->refs.aTags = sqlite3_malloc64((sqlite3_int64)nTags*(sqlite3_int64)sizeof(struct TagRef));
-      if(!cs->refs.aTags) return SQLITE_NOMEM;
-      memset(cs->refs.aTags, 0, (size_t)nTags*sizeof(struct TagRef));
-      cs->refs.nTags = nTags;
-      for(i=0;i<nTags;i++){
-        int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-        nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-        if( nameLen<0 ) return SQLITE_CORRUPT;
-        if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
-        cs->refs.aTags[i].zName=sqlite3_malloc(nameLen+1);
-        if(!cs->refs.aTags[i].zName) return SQLITE_NOMEM;
-        memcpy(cs->refs.aTags[i].zName,bufCur,nameLen); cs->refs.aTags[i].zName[nameLen]=0; bufCur+=nameLen;
-        memcpy(cs->refs.aTags[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-        {
-          int taggerLen, emailLen, messageLen;
-          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-          taggerLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-          if( taggerLen<0 ) return SQLITE_CORRUPT;
-          if(bufCur+taggerLen>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aTags[i].zTagger=sqlite3_malloc(taggerLen+1);
-          if(!cs->refs.aTags[i].zTagger) return SQLITE_NOMEM;
-          memcpy(cs->refs.aTags[i].zTagger,bufCur,taggerLen); cs->refs.aTags[i].zTagger[taggerLen]=0; bufCur+=taggerLen;
-          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-          emailLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-          if( emailLen<0 ) return SQLITE_CORRUPT;
-          if(bufCur+emailLen>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aTags[i].zEmail=sqlite3_malloc(emailLen+1);
-          if(!cs->refs.aTags[i].zEmail) return SQLITE_NOMEM;
-          memcpy(cs->refs.aTags[i].zEmail,bufCur,emailLen); cs->refs.aTags[i].zEmail[emailLen]=0; bufCur+=emailLen;
-          if(bufCur+8>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aTags[i].timestamp=CS_READ_I64(bufCur); bufCur+=8;
-          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-          messageLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-          if( messageLen<0 ) return SQLITE_CORRUPT;
-          if(bufCur+messageLen>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aTags[i].zMessage=sqlite3_malloc(messageLen+1);
-          if(!cs->refs.aTags[i].zMessage) return SQLITE_NOMEM;
-          memcpy(cs->refs.aTags[i].zMessage,bufCur,messageLen); cs->refs.aTags[i].zMessage[messageLen]=0; bufCur+=messageLen;
-        }
-      }
-    }
-  }
-
-  csFreeRemotes(cs);
-  csFreeTracking(cs);
-  if( bufCur+4<=data+nData ){
-    int nRemotes = (int)CS_READ_U32(bufCur); bufCur+=4;
-    /* Minimum remote entry: name len + url len = 8 bytes. */
-    if( nRemotes<0 || nRemotes>(int)(data+nData-bufCur)/8 ) return SQLITE_CORRUPT;
-    if( nRemotes>0 ){
-      cs->refs.aRemotes = sqlite3_malloc64((sqlite3_int64)nRemotes*(sqlite3_int64)sizeof(struct RemoteRef));
-      if(!cs->refs.aRemotes) return SQLITE_NOMEM;
-      memset(cs->refs.aRemotes, 0, (size_t)nRemotes*sizeof(struct RemoteRef));
-      cs->refs.nRemotes = nRemotes;
-      for(i=0;i<nRemotes;i++){
-        int nameLen, urlLen;
-        if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-        nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-        if( nameLen<0 ) return SQLITE_CORRUPT;
-        if(bufCur+nameLen+4>data+nData) return SQLITE_CORRUPT;
-        cs->refs.aRemotes[i].zName=sqlite3_malloc(nameLen+1);
-        if(!cs->refs.aRemotes[i].zName) return SQLITE_NOMEM;
-        memcpy(cs->refs.aRemotes[i].zName,bufCur,nameLen); cs->refs.aRemotes[i].zName[nameLen]=0; bufCur+=nameLen;
-        urlLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-        if( urlLen<0 ) return SQLITE_CORRUPT;
-        if(bufCur+urlLen>data+nData) return SQLITE_CORRUPT;
-        cs->refs.aRemotes[i].zUrl=sqlite3_malloc(urlLen+1);
-        if(!cs->refs.aRemotes[i].zUrl) return SQLITE_NOMEM;
-        memcpy(cs->refs.aRemotes[i].zUrl,bufCur,urlLen); cs->refs.aRemotes[i].zUrl[urlLen]=0; bufCur+=urlLen;
-      }
-    }
-    if( bufCur+4<=data+nData ){
-      int nTracking = (int)CS_READ_U32(bufCur); bufCur+=4;
-      /* Minimum tracking entry: remote len + branch len + commit hash. */
-      if( nTracking<0 || nTracking>(int)(data+nData-bufCur)/(8+PROLLY_HASH_SIZE) ) return SQLITE_CORRUPT;
-      if( nTracking>0 ){
-        cs->refs.aTracking = sqlite3_malloc64((sqlite3_int64)nTracking*(sqlite3_int64)sizeof(struct TrackingBranch));
-        if(!cs->refs.aTracking) return SQLITE_NOMEM;
-        memset(cs->refs.aTracking, 0, (size_t)nTracking*sizeof(struct TrackingBranch));
-      cs->refs.nTracking = nTracking;
-        for(i=0;i<nTracking;i++){
-          int remoteLen, branchLen;
-          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-          remoteLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-          if( remoteLen<0 ) return SQLITE_CORRUPT;
-          if(bufCur+remoteLen+4>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aTracking[i].zRemote=sqlite3_malloc(remoteLen+1);
-          if(!cs->refs.aTracking[i].zRemote) return SQLITE_NOMEM;
-          memcpy(cs->refs.aTracking[i].zRemote,bufCur,remoteLen); cs->refs.aTracking[i].zRemote[remoteLen]=0; bufCur+=remoteLen;
-          branchLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-          if( branchLen<0 ) return SQLITE_CORRUPT;
-          if(bufCur+branchLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aTracking[i].zBranch=sqlite3_malloc(branchLen+1);
-          if(!cs->refs.aTracking[i].zBranch) return SQLITE_NOMEM;
-          memcpy(cs->refs.aTracking[i].zBranch,bufCur,branchLen); cs->refs.aTracking[i].zBranch[branchLen]=0; bufCur+=branchLen;
-          memcpy(cs->refs.aTracking[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-        }
-      }
-    }
-    csFreeSequences(cs);
-    if( bufCur+4<=data+nData ){
-      int nSequences = (int)CS_READ_U32(bufCur); bufCur+=4;
-      if( nSequences<0
-       || nSequences>(int)(data+nData-bufCur)/(4+8) ){
-        return SQLITE_CORRUPT;
-      }
-      if( nSequences>0 ){
-        cs->refs.aSequences = sqlite3_malloc64((sqlite3_int64)nSequences*(sqlite3_int64)sizeof(SequenceRef));
-        if(!cs->refs.aSequences) return SQLITE_NOMEM;
-        memset(cs->refs.aSequences, 0, (size_t)nSequences*sizeof(SequenceRef));
-      cs->refs.nSequences = nSequences;
-        for(i=0;i<nSequences;i++){
-          int nameLen;
-          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
-          nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
-          if( nameLen<0 ) return SQLITE_CORRUPT;
-          if(bufCur+nameLen+8>data+nData) return SQLITE_CORRUPT;
-          cs->refs.aSequences[i].zTableName=sqlite3_malloc(nameLen+1);
-          if(!cs->refs.aSequences[i].zTableName) return SQLITE_NOMEM;
-          memcpy(cs->refs.aSequences[i].zTableName,bufCur,nameLen);
-          cs->refs.aSequences[i].zTableName[nameLen]=0;
-          bufCur+=nameLen;
-          cs->refs.aSequences[i].iSeq=CS_READ_I64(bufCur);
-          bufCur+=8;
-        }
-      }
-    }
-  }
-
+  csFreeRefsState(cs);
+  csAdoptRefsState(cs, &tmp);
   return SQLITE_OK;
 }
 
 int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData){
+  int rc;
   memset(pTmp, 0, sizeof(*pTmp));
-  return csDeserializeRefs(pTmp, data, nData);
+  rc = csDecodeRefsV7(data, nData, &pTmp->refs, 0, 0);
+  if( rc!=SQLITE_OK ) csFreeRefsState(pTmp);
+  return rc;
 }
 
 void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){

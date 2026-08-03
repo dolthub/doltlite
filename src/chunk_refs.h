@@ -11,6 +11,7 @@ typedef struct RemoteRef RemoteRef;
 typedef struct TrackingBranch TrackingBranch;
 typedef struct SequenceRef SequenceRef;
 typedef struct RefsTable RefsTable;
+typedef int (*CsRefsHashCb)(void *ctx, const ProllyHash *pHash);
 
 struct BranchRef {
   char *zName;
@@ -158,5 +159,7 @@ void csRestoreCommittedRefsHash(struct ChunkStore *cs);
 void csDetachSavedRefsState(struct ChunkStore *cs, SavedRefsState *pSaved);
 int csDeserializeRefs(struct ChunkStore *cs, const u8 *data, int nData);
 int csDeserializeRefsIntoTemp(struct ChunkStore *pTmp, const u8 *data, int nData);
+int csDecodeRefsV7(const u8 *data, int nData, RefsTable *pRefs,
+                   CsRefsHashCb xHash, void *pCtx);
 
 #endif
