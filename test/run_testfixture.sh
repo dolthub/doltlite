@@ -11,6 +11,9 @@ ulimit -Sn 1024 2>/dev/null || true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 TERMINATION_FILE="${TERMINATION_FILE:-$SCRIPT_DIR/known_testfixture_terminations.txt}"
+# Only used to point at the other gates when an entry goes stale.
+INVENTORY_FILE="${INVENTORY_FILE:-$SCRIPT_DIR/known_testfixture_exception_inventory.txt}"
+RATCHET_FILE="${RATCHET_FILE:-$SCRIPT_DIR/known_testfixture_exception_ratchet.txt}"
 HOST_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
 TEST_VARIANT="${TESTFIXTURE_VARIANT:-default}"
 case "$HOST_OS" in
@@ -462,7 +465,28 @@ fi
 if [ "$total_unused" -gt 0 ] || [ "$total_unexpected_clean" -gt 0 ]; then
   echo "  stale/mismatched entries:          $((total_unused + total_unexpected_clean))"
   echo "  stale/mismatched entry list:$unused_lines"
-  echo "::error::$LABEL: $((total_unused + total_unexpected_clean)) entry/entries should be updated or removed from divergence/termination list"
+  echo
+  echo "  A recovered assertion is recorded in three places, and each is gated"
+  echo "  separately -- fixing only this one just moves the failure to \`make lint\`."
+  echo "  For every entry listed above:"
+  echo
+  echo "    1. test/$(basename "$DIVERGENCE_FILE")"
+  echo "       (or test/$(basename "$TERMINATION_FILE") for one that terminated)"
+  echo "       Delete the entry. Match on the first two fields: lines may carry a"
+  echo "       trailing '# comment' that a whole-line match will miss."
+  echo "    2. test/$(basename "$INVENTORY_FILE")"
+  echo "       Delete the same entry, which additionally carries a classification."
+  echo "    3. test/$(basename "$RATCHET_FILE")"
+  echo "       Lower the affected counts. Re-run the command in step 4; it prints"
+  echo "       the exact numbers to use."
+  echo "    4. Confirm with: make lint"
+  echo
+  echo "  Before deleting, check the entry genuinely passes now. An assertion that"
+  echo "  errored out or never ran is absent from the failure list without passing,"
+  echo "  and belongs in the termination list instead. The per-test 'Ok' line is the"
+  echo "  proof; this run's authoritative failure set is the '!Failures on these"
+  echo "  tests:' line for each test."
+  echo "::error::$LABEL: $((total_unused + total_unexpected_clean)) entry/entries should be updated or removed -- see the three files listed above"
   exit 1
 fi
 exit 0
