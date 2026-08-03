@@ -359,8 +359,11 @@ want_eq "M5_backup_to_new_file_is_stock_format" "$(head -c 15 "$DST" 2>/dev/null
 want_eq "M5b_backup_to_new_file_rows" "$(sq_last "SELECT count(*) FROM t;" "$DST")" "250"
 want_eq "M5c_backup_to_new_file_integrity" "$(sq_last "PRAGMA integrity_check;" "$DST")" "ok"
 
-# Paths carrying URI delimiters must survive the escaping.
-SRC=$TMP/b4src.db; DST="$TMP/od#d?name.db"
+# Paths carrying URI delimiters must survive the escaping. '?' is left out:
+# it is a reserved character in Windows filenames, so the file could not be
+# created there at all. '#' ends a URI path and '%' introduces an escape, which
+# is the pair that actually exercises the encoder.
+SRC=$TMP/b4src.db; DST="$TMP/od#d%name.db"
 seed_big "$SRC" 11; rm -f "$DST"
 printf '.backup %s\n' "$DST" | $DOLTLITE "$SRC" >/dev/null 2>&1
 want_eq "M6_backup_path_with_uri_delimiters" "$(sq_last "SELECT count(*) FROM t;" "$DST")" "11"
