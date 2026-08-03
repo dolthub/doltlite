@@ -681,11 +681,12 @@ For a DoltLite-format main database, the compatibility contract is:
 
 The machine-readable contract and its test mapping live in
 [`test/sqlite_compatibility_contract.tsv`](test/sqlite_compatibility_contract.tsv).
-The inherited-suite backlog is tracked separately in
-[`test/known_testfixture_exception_inventory.txt`](test/known_testfixture_exception_inventory.txt),
-with exact assertions in
-[`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt).
-Entries classified as `engine-gap` are bugs to fix, not compatibility promises.
+The inherited-suite backlog lives with the assertions it gates, in
+[`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt):
+each line names one assertion and carries its disposition as
+`class=intentional|unsupported|harness|engine-gap`, plus `issue=<number>` where
+one is required. Gates classified as `engine-gap` are bugs to fix, not
+compatibility promises.
 
 ## Concurrency
 
@@ -838,8 +839,9 @@ CI wiring, coverage floors, and full bucket lists are in
 
 Inherited TCL allowlists:
 [`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt),
-[`test/known_testfixture_crashes.txt`](test/known_testfixture_crashes.txt),
-[`test/known_testfixture_exception_inventory.txt`](test/known_testfixture_exception_inventory.txt).
+[`test/known_testfixture_crashes.txt`](test/known_testfixture_crashes.txt).
+Both carry a `class=` disposition per gate; the totals are pinned by
+[`test/known_testfixture_exception_ratchet.txt`](test/known_testfixture_exception_ratchet.txt).
 
 ## Architecture
 

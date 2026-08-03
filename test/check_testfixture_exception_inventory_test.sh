@@ -9,13 +9,6 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 DIVERGENCES="$TMP_DIR/divergences"
 CRASHES="$TMP_DIR/crashes"
-INVENTORY="$TMP_DIR/inventory"
-
-printf '%s\n' \
-  'alpha alpha-1' \
-  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
-printf '%s\n' \
-  'gamma # exits before the summary' > "$CRASHES"
 
 RATCHET="$TMP_DIR/ratchet"
 RATCHET_SEED="$TMP_DIR/ratchet-seed"
@@ -34,9 +27,20 @@ write_ratchet() {
 }
 write_ratchet
 
+# One intentional divergence, one unsupported divergence carrying a platform
+# qualifier, one harness crash row.
+write_fixture() {
+  printf '%s\n' \
+    'alpha alpha-1 class=intentional' \
+    'beta beta-1 @linux class=unsupported issue=42  # platform case' \
+    > "$DIVERGENCES"
+  printf '%s\n' \
+    'gamma class=harness  # exits before the summary' > "$CRASHES"
+}
+write_fixture
+
 run_check() {
-  bash "$CHECKER" "$INVENTORY" "$DIVERGENCES" "$CRASHES" "$RATCHET" \
-    >/dev/null 2>&1
+  bash "$CHECKER" "$DIVERGENCES" "$CRASHES" "$RATCHET" >/dev/null 2>&1
 }
 
 expect_failure() {
@@ -47,120 +51,111 @@ expect_failure() {
   fi
 }
 
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
 run_check
 
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "a missing disposition"
-
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' \
-  'stale stale-1 intentional -' > "$INVENTORY"
-expect_failure "a stale disposition"
-
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'alpha alpha-1 harness -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "a duplicate disposition"
-
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'beta beta-1 unsupported -' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "an unsupported surface without an issue"
-
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'beta beta-1 engine-gap https://example.com/42' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "a non-DoltLite issue URL"
-
-printf '%s\n' \
-  'alpha alpha-1 unknown -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "an unknown category"
-
-printf '%s\n' \
-  'alpha alpha-1 intentional https://github.com/dolthub/doltlite/issues/42' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness https://github.com/dolthub/doltlite/issues/42' > "$INVENTORY"
-run_check
-
-printf '%s\n' \
-  'alpha alpha-1 intentional https://example.com/42' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "a non-DoltLite rationale URL on an intentional surface"
-
-# Gates are keyed individually, so one assertion in a file can be dispositioned
-# differently from its neighbours -- the whole point of moving off suite keys.
+# A gate without a disposition is a malformed line rather than a set difference
+# against a second list. There is no "stale disposition" case left to test: a
+# disposition cannot outlive its gate once it is a field on the gate.
 printf '%s\n' \
   'alpha alpha-1' \
-  'alpha alpha-2' \
-  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'alpha alpha-2 engine-gap https://github.com/dolthub/doltlite/issues/42' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
-write_ratchet 4 1 1 1 1
-run_check
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "a gate with no class="
+write_fixture
 
 printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
-expect_failure "one gate of a suite left without a disposition"
+  'alpha alpha-1 class=intentional class=harness' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "two class= fields on one gate"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 class=intentional' \
+  'alpha alpha-1 class=harness' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "a duplicated gate"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 class=intentional' \
+  'beta beta-1 @linux class=unsupported' > "$DIVERGENCES"
+expect_failure "an unsupported surface without an issue"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 class=intentional' \
+  'beta beta-1 @linux class=engine-gap issue=https://example.com/42' \
+  > "$DIVERGENCES"
+expect_failure "an issue= that is not a DoltLite issue number"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 class=intentional' \
+  'beta beta-1 @linux class=unsupported issue=42 issue=43' > "$DIVERGENCES"
+expect_failure "two issue= fields on one gate"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 class=unknown' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "an unknown category"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 class=intentional bogus=1' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "an unrecognized field"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 @nosuchplatform class=intentional' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "an unknown qualifier"
+write_fixture
+
+# A crash row is keyed by suite alone, so its disposition sits in field 2.
+printf '%s\n' 'gamma  # no class' > "$CRASHES"
+expect_failure "a crash row with no class="
+write_fixture
+
+# intentional and harness may cite the issue documenting the limitation.
+printf '%s\n' \
+  'alpha alpha-1 class=intentional issue=42' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+printf '%s\n' 'gamma class=harness issue=42' > "$CRASHES"
+run_check
+write_fixture
+
+# Gates are keyed individually, so one assertion in a file can be dispositioned
+# differently from its neighbours -- the whole point of keying per gate.
+printf '%s\n' \
+  'alpha alpha-1 class=intentional' \
+  'alpha alpha-2 class=engine-gap issue=42' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+write_ratchet 4 1 1 1 1
+run_check
+write_fixture
+write_ratchet
 
 # Counted patterns retain their represented assertion count in the ratchet.
 printf '%s\n' \
-  'alpha alpha-1.transient.*{2}' \
-  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
-printf '%s\n' \
-  'alpha alpha-1.transient.*{2} intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
+  'alpha alpha-1.transient.*{2} class=intentional' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 write_ratchet 4 2 1 1 0
 run_check
 
 printf '%s\n' \
-  'alpha alpha-1.transient.*{0}' \
-  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
-printf '%s\n' \
-  'alpha alpha-1.transient.*{0} intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
+  'alpha alpha-1.transient.*{0} class=intentional' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "a zero-count pattern"
 
 printf '%s\n' \
-  'alpha alpha-1.transient.*{2}' \
-  'alpha alpha-1.transient.7' \
-  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
-printf '%s\n' \
-  'alpha alpha-1.transient.*{2} intentional -' \
-  'alpha alpha-1.transient.7 intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
+  'alpha alpha-1.transient.*{2} class=intentional' \
+  'alpha alpha-1.transient.7 class=intentional' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "overlapping exact and counted gates"
 
 # Back to the 3-gate fixture for the ratchet cases.
-printf '%s\n' \
-  'alpha alpha-1' \
-  'beta beta-1 @linux # platform case' > "$DIVERGENCES"
-printf '%s\n' \
-  'alpha alpha-1 intentional -' \
-  'beta beta-1 unsupported https://github.com/dolthub/doltlite/issues/42' \
-  'gamma * harness -' > "$INVENTORY"
+write_fixture
 write_ratchet
 run_check
 
