@@ -559,10 +559,15 @@ int sqlite3BtreeOpen(
   ** It selects the engine for a database being created and is ignored once the
   ** file has content, so it can never reinterpret an existing chunk store; a
   ** file that already holds stock pages is detected below anyway.
-  ** Only reached for real database filenames: the cases above short-circuit
-  ** every transient name, so zFilename came through sqlite3ParseUri and carries
-  ** the terminator the URI scan needs. */
-  if( !useOrig ){
+  **
+  ** Gated on SQLITE_OPEN_MAIN_DB because sqlite3_uri_parameter() is only
+  ** defined on a name sqlite3ParseUri() built: it resolves the name through
+  ** databaseName(), which reads zName[-1] through zName[-4] to walk back over
+  ** the URI's key/value pairs. Handed a plain string that is merely nul
+  ** terminated, it reads before the buffer. Main and ATTACH are the only opens
+  ** whose names come from ParseUri; every other caller reaches here with a name
+  ** it built itself. */
+  if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
     const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
     if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
       int hasContent = 1;
