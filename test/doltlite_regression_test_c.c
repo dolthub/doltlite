@@ -2518,6 +2518,90 @@ static void run_blame_deep_history_scan(void){
   removeDbFiles(dbpath);
 }
 
+static char *blameWidePkSql(
+  sqlite3 *db,
+  const char *zTable,
+  int nCols,
+  int insertRow
+){
+  sqlite3_str *pSql = sqlite3_str_new(db);
+  int i;
+  if( !pSql ) return 0;
+  sqlite3_str_appendf(pSql, "CREATE TABLE \"%w\"(", zTable);
+  for(i=1; i<=nCols; i++){
+    sqlite3_str_appendf(pSql, "%sc%d INTEGER", i==1 ? "" : ",", i);
+  }
+  sqlite3_str_appendall(pSql, ",PRIMARY KEY(");
+  for(i=1; i<=nCols; i++){
+    sqlite3_str_appendf(pSql, "%sc%d", i==1 ? "" : ",", i);
+  }
+  sqlite3_str_appendall(pSql, "));");
+  if( insertRow ){
+    sqlite3_str_appendf(pSql, "INSERT INTO \"%w\" VALUES(", zTable);
+    for(i=1; i<=nCols; i++){
+      sqlite3_str_appendf(pSql, "%s%d", i==1 ? "" : ",", i);
+    }
+    sqlite3_str_appendall(pSql, ");");
+  }
+  return sqlite3_str_finish(pSql);
+}
+
+static void run_blame_wide_primary_key(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pStmt = 0;
+  char dbpath[256];
+  char *zSql;
+  int nLimit;
+  int rc;
+
+  printf("=== Blame Wide Primary Key Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blame_wide_primary_key");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_blame_wide_primary_key",
+        open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  zSql = blameWidePkSql(db, "wide65", 65, 1);
+  check("build_65_column_primary_key_sql", zSql!=0);
+  if( zSql ){
+    check("create_65_column_primary_key", execSql(db, zSql)==SQLITE_OK);
+    sqlite3_free(zSql);
+  }
+  check("commit_65_column_primary_key", execSql(db,
+        "SELECT dolt_commit('-Am', 'wide primary key');")==SQLITE_OK);
+  check("blame_65_column_schema_complete",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM pragma_table_info('dolt_blame_wide65');"),
+          "70")==0);
+  check("blame_65_column_row_complete",
+        strcmp(queryScalarText(db,
+          "SELECT c65 || '|' || message FROM dolt_blame_wide65;"),
+          "65|wide primary key")==0);
+
+  nLimit = sqlite3_limit(db, SQLITE_LIMIT_COLUMN, -1);
+  zSql = blameWidePkSql(db, "widemax", nLimit, 0);
+  check("build_max_column_primary_key_sql", zSql!=0);
+  if( zSql ){
+    check("create_max_column_primary_key", execSql(db, zSql)==SQLITE_OK);
+    sqlite3_free(zSql);
+  }
+  check("commit_max_column_primary_key", execSql(db,
+        "SELECT dolt_commit('-Am', 'maximum primary key');")==SQLITE_OK);
+  check("max_column_primary_key_is_complete",
+        atoi(queryScalarText(db,
+          "SELECT count(*) FROM pragma_table_info('widemax');"))==nLimit);
+  rc = sqlite3_prepare_v2(db,
+      "SELECT count(*) FROM dolt_blame_widemax;", -1, &pStmt, 0);
+  check("blame_max_column_primary_key_fails_explicitly", rc==SQLITE_TOOBIG);
+  check("blame_max_column_primary_key_reports_limit",
+        strstr(sqlite3_errmsg(db), "column limit")!=0);
+  sqlite3_finalize(pStmt);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_merge_persist_failure(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -9228,6 +9312,7 @@ static const RegressionCase aCases[] = {
   { "commit_am_many_tables", "Commit -am Many Tables Test", run_commit_am_many_tables },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "blame_deep_history_scan", "Blame Deep History Scan Test", run_blame_deep_history_scan },
+  { "blame_wide_primary_key", "Blame Wide Primary Key Test", run_blame_wide_primary_key },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_persist_failure", "Merge Conflict Persist Failure Test", run_merge_conflict_persist_failure },
   { "conflict_serializer_bounds", "Conflict Serializer Bounds Test", run_conflict_serializer_bounds },
