@@ -321,8 +321,7 @@ static DbPage *shimPagerLookup(Pager *p, Pgno pgno){
 }
 
 #ifndef SQLITE_OMIT_WAL
-extern int doltliteGcCompact(sqlite3 *db);
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+extern int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);
 
 #ifdef SQLITE_TEST
 static int shimPagerCheckpointTestWrites(Pager *p, sqlite3 *db){
@@ -355,7 +354,7 @@ static int shimPagerCheckpointTestWrites(Pager *p, sqlite3 *db){
 
 static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
                                int *pnLog, int *pnCkpt){
-  ChunkStore *pCs = db ? doltliteGetChunkStore(db) : 0;
+  ChunkStore *pCs = (ChunkStore*)SHIM(p)->pStore;
   int rc = SQLITE_OK;
   (void)eMode;
   if( pnLog ) *pnLog = 0;
@@ -370,8 +369,8 @@ static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
 #else
   (void)p;
 #endif
-  if( rc==SQLITE_OK && db ){
-    rc = doltliteGcCompact(db);
+  if( rc==SQLITE_OK && db && pCs ){
+    rc = doltliteGcCompactStore(db, pCs);
   }
   if( pCs ) pCs->checkpointActive = 0;
   if( rc!=SQLITE_OK ) return rc;

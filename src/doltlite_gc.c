@@ -1058,8 +1058,15 @@ static void doltliteGcFunc(
   sqlite3_result_text(context, result, -1, SQLITE_TRANSIENT);
 }
 
-int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
-  ChunkStore *cs = doltliteGetChunkStore(db);
+/* Compaction is always aimed at one specific store. gcMarkReachable seeds
+** every root from cs itself, and doltliteSeedSessionHashes walks all of db's
+** btrees but keeps only those sharing cs, so a store reached through an
+** ATTACH is marked from its own refs and its own session state. */
+int doltliteGcCompactStoreWithPhase(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char **pzPhase
+){
   int nKept = 0, nRemoved = 0;
 
   if( !cs ) return SQLITE_OK;
@@ -1075,9 +1082,13 @@ int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
   return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0, 0, 0, 0);
 }
 
-int doltliteGcCompact(sqlite3 *db){
+int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs){
   const char *zPhase = 0;
-  return doltliteGcCompactWithPhase(db, &zPhase);
+  return doltliteGcCompactStoreWithPhase(db, cs, &zPhase);
+}
+
+int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
+  return doltliteGcCompactStoreWithPhase(db, doltliteGetChunkStore(db), pzPhase);
 }
 
 int doltliteGcRegister(sqlite3 *db){
