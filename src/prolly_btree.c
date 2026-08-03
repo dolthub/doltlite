@@ -2011,10 +2011,13 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   int i;
 
   /* A legacy VACUUM copies stock pages between two orig btrees; only the prolly
-  ** path below has a catalog to rebuild. */
+  ** path below has a catalog to rebuild. The bridge lives in backup.c, which is
+  ** compiled out with the rest of VACUUM, so the delegation goes with it. */
+#ifndef SQLITE_OMIT_VACUUM
   if( pTo->pOrigBtree && pFrom->pOrigBtree ){
     return origBtreeCopyFile(pTo->pOrigBtree, pFrom->pOrigBtree);
   }
+#endif
 
   invalidateCursors(pTo->pBt, 0, SQLITE_ABORT);
 

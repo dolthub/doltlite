@@ -266,6 +266,33 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   /* pMain is orig-format here (the prolly branch returned above), so the vacuum
   ** target must be opened by the same engine to receive its pages. */
   db->mDbFlags |= DBFLAG_VacuumOrig;
+  /* Stock reports a non-empty target as "output file already exists" from the
+  ** size check below, which it reaches because its ATTACH of the target is
+  ** deferred. Opening a database is eager here, so a target holding anything
+  ** that is not a database fails the ATTACH first and reports that instead.
+  ** Take the size decision before the open so the message matches. */
+  if( pOut ){
+    int exists = 0;
+    if( sqlite3OsAccess(db->pVfs, zOut, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+     && exists
+    ){
+      sqlite3_file *pProbe = 0;
+      int probeFlags = 0;
+      i64 probeSz = 0;
+      if( sqlite3OsOpenMalloc(db->pVfs, zOut, &pProbe,
+                              SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                              &probeFlags)==SQLITE_OK ){
+        int probeRc = sqlite3OsFileSize(pProbe, &probeSz);
+        sqlite3OsCloseFree(pProbe);
+        if( probeRc!=SQLITE_OK || probeSz>0 ){
+          db->mDbFlags &= ~(u32)DBFLAG_VacuumOrig;
+          sqlite3SetString(pzErrMsg, db, "output file already exists");
+          rc = SQLITE_ERROR;
+          goto end_of_vacuum;
+        }
+      }
+    }
+  }
 #endif
   rc = execSqlF(db, pzErrMsg, "ATTACH %Q AS %s", zOut, zDbVacuum);
 #ifdef DOLTLITE_PROLLY
