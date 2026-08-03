@@ -1,7 +1,7 @@
 name: Testfixture inventory issue liveness
 
 # Runs weekly and resolves every DoltLite issue cited by an `unsupported` or
-# `engine-gap` row in test/known_testfixture_exception_inventory.txt. PR CI
+# `engine-gap` gate in the divergence and crash lists. PR CI
 # validates those URLs offline, which can only check their shape -- and shape
 # alone let 67 of 78 rows go on citing closed issues. Failing here means a
 # justification has rotted: the issue was closed (possibly because the
@@ -46,7 +46,7 @@ jobs:
         if: steps.liveness.outputs.stale == '1'
         run: |
           {
-            echo "A row in \`test/known_testfixture_exception_inventory.txt\`"
+            echo "A gate in \`test/known_testfixture_divergences.txt\`"
             echo "cites a DoltLite issue that is closed or missing, so the"
             echo "listed testfixture suites no longer have a live"
             echo "justification for being excepted."

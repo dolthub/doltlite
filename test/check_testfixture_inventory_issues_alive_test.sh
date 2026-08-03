@@ -12,7 +12,9 @@ CHECKER="$SCRIPT_DIR/check_testfixture_inventory_issues_alive.sh"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-INVENTORY="$TMP_DIR/inventory"
+DIVERGENCES="$TMP_DIR/divergences"
+CRASHES="$TMP_DIR/crashes"
+: > "$CRASHES"
 mkdir -p "$TMP_DIR/bin"
 cat > "$TMP_DIR/bin/gh" <<'SHIM'
 #!/bin/sh
@@ -27,33 +29,38 @@ SHIM
 chmod +x "$TMP_DIR/bin/gh"
 export PATH="$TMP_DIR/bin:$PATH"
 
-run_check() { bash "$CHECKER" "$INVENTORY" >/dev/null 2>&1; }
+run_check() { bash "$CHECKER" "$DIVERGENCES" "$CRASHES" >/dev/null 2>&1; }
 
 expect_failure() {
   if run_check; then echo "ERROR: checker accepted $1"; exit 1; fi
 }
 
-B=https://github.com/dolthub/doltlite/issues
-
 printf '%s\n' \
-  "alpha alpha-1 intentional -" \
-  "beta beta-1 unsupported $B/100" \
-  "gamma gamma-1 intentional $B/100" > "$INVENTORY"
+  "alpha alpha-1 class=intentional" \
+  "beta beta-1 class=unsupported issue=100" \
+  "gamma gamma-1 class=intentional issue=100" > "$DIVERGENCES"
 run_check
 
 printf '%s\n' \
-  "alpha alpha-1 intentional -" \
-  "beta beta-1 unsupported $B/200" > "$INVENTORY"
+  "alpha alpha-1 class=intentional" \
+  "beta beta-1 class=unsupported issue=200" > "$DIVERGENCES"
 expect_failure "a closed issue"
 
 printf '%s\n' \
-  "alpha alpha-1 intentional -" \
-  "beta beta-1 unsupported $B/999" > "$INVENTORY"
+  "alpha alpha-1 class=intentional" \
+  "beta beta-1 class=unsupported issue=999" > "$DIVERGENCES"
 expect_failure "an unresolvable issue"
 
 printf '%s\n' \
-  "alpha alpha-1 intentional -" \
-  "gamma gamma-1 intentional $B/200" > "$INVENTORY"
-expect_failure "a closed issue cited by an intentional row"
+  "alpha alpha-1 class=intentional" \
+  "gamma gamma-1 class=intentional issue=200" > "$DIVERGENCES"
+expect_failure "a closed issue cited by an intentional gate"
+
+# A crash row is keyed by suite alone, so its issue= sits in field 2 and the
+# gate is reported as "suite *".
+printf '%s\n' "alpha alpha-1 class=intentional" > "$DIVERGENCES"
+printf '%s\n' "delta class=engine-gap issue=200" > "$CRASHES"
+expect_failure "a closed issue cited by a crash row"
+: > "$CRASHES"
 
 echo "OK: testfixture inventory issue-liveness self-test"

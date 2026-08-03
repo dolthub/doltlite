@@ -11,6 +11,8 @@ ulimit -Sn 1024 2>/dev/null || true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 TERMINATION_FILE="${TERMINATION_FILE:-$SCRIPT_DIR/known_testfixture_terminations.txt}"
+# Only used to point at the ratchet when an entry goes stale.
+RATCHET_FILE="${RATCHET_FILE:-$SCRIPT_DIR/known_testfixture_exception_ratchet.txt}"
 HOST_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
 TEST_VARIANT="${TESTFIXTURE_VARIANT:-default}"
 case "$HOST_OS" in
@@ -462,7 +464,24 @@ fi
 if [ "$total_unused" -gt 0 ] || [ "$total_unexpected_clean" -gt 0 ]; then
   echo "  stale/mismatched entries:          $((total_unused + total_unexpected_clean))"
   echo "  stale/mismatched entry list:$unused_lines"
-  echo "::error::$LABEL: $((total_unused + total_unexpected_clean)) entry/entries should be updated or removed from divergence/termination list"
+  echo
+  echo "  For every entry listed above:"
+  echo
+  echo "    1. Delete its line from test/$(basename "$DIVERGENCE_FILE")"
+  echo "       (or test/$(basename "$TERMINATION_FILE") if it terminated). The"
+  echo "       disposition rides on that line, so there is nothing else to remove."
+  echo "       Match on the first two fields: lines carry class= and often a"
+  echo "       trailing comment that a whole-line match will miss."
+  echo "    2. Lower the affected counts in"
+  echo "       test/$(basename "$RATCHET_FILE"). Step 3 prints the exact numbers."
+  echo "    3. Confirm with: make lint"
+  echo
+  echo "  Before deleting, check the entry genuinely passes now. An assertion that"
+  echo "  errored out or never ran is absent from the failure list without passing,"
+  echo "  and belongs in the termination list instead. A per-test Ok line is the"
+  echo "  proof; the authoritative failure set for a test is its line beginning"
+  echo "  !Failures on these tests:"
+  echo "::error::$LABEL: $((total_unused + total_unexpected_clean)) entry/entries should be updated or removed -- see the guidance above"
   exit 1
 fi
 exit 0

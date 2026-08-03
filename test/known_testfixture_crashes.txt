@@ -3,17 +3,17 @@
 # in known_testfixture_terminations.txt. Unbucketed suites require replacement
 # coverage in known_testfixture_crash_coverage.txt.
 
-alter2       # raw file-format setup prevents the db command from opening
-backup_ioerr # cap-truncated page-copy fault sequence; unbucketed
-btreefault   # rowid setup failure cascades into the fault simulator
-corrupt4     # raw-offset outcome varies by build; unbucketed
-crash8       # crash-simulation timing is nondeterministic; unbucketed
-dbstatus     # echo-vtab cleanup after schema reset
-incrblob     # rowid assumption on a primary-key table
-ioerr2       # exceeds the per-file timeout; unbucketed
-malloc       # cap-truncated OOM fault sequence; unbucketed
-malloc3      # unstable OOM fault-point set; unbucketed
-multiplex2   # incompatible multiplex VFS setup
-pagerfault   # unstable OOM fault-point set; unbucketed
-pagerfault2  # unstable OOM fault-point set; unbucketed
-vtab1        # echo-vtab cleanup after schema reset
+alter2 class=intentional  # raw file-format setup prevents the db command from opening
+backup_ioerr class=harness  # cap-truncated page-copy fault sequence; unbucketed
+btreefault class=intentional issue=1840  # rowid setup failure cascades into the fault simulator
+corrupt4 class=harness  # raw-offset outcome varies by build; unbucketed
+crash8 class=harness  # crash-simulation timing is nondeterministic; unbucketed
+dbstatus class=intentional  # echo-vtab cleanup after schema reset
+incrblob class=intentional issue=1840  # rowid assumption on a primary-key table
+ioerr2 class=harness  # exceeds the per-file timeout; unbucketed
+malloc class=harness  # cap-truncated OOM fault sequence; unbucketed
+malloc3 class=harness  # unstable OOM fault-point set; unbucketed
+multiplex2 class=intentional  # incompatible multiplex VFS setup
+pagerfault class=harness  # unstable OOM fault-point set; unbucketed
+pagerfault2 class=harness  # unstable OOM fault-point set; unbucketed
+vtab1 class=intentional  # echo-vtab cleanup after schema reset
