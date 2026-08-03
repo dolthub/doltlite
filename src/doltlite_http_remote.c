@@ -40,10 +40,173 @@ struct HttpRemote {
   u8 hasExpectedRefsHash;
   char *zPushBranch;
   int bPushForce;
+  char *zLastError;
 };
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
 #define HTTP_TIMEOUT_MS 30000
+
+static void httpClearLastError(HttpRemote *p){
+  sqlite3_free(p->zLastError);
+  p->zLastError = 0;
+}
+
+static void httpSetLastError(HttpRemote *p, const char *zMsg){
+  httpClearLastError(p);
+  if( zMsg && zMsg[0] ){
+    p->zLastError = sqlite3_mprintf("%s", zMsg);
+  }
+}
+
+/* Extract a JSON string value for "key" from a flat object body. */
+static char *httpJsonStringField(const u8 *p, int n, const char *zKey){
+  char zNeedle[64];
+  int nNeedle;
+  int i;
+  if( !p || n<=0 || !zKey ) return 0;
+  sqlite3_snprintf(sizeof(zNeedle), zNeedle, "\"%s\"", zKey);
+  nNeedle = (int)strlen(zNeedle);
+  for(i=0; i+nNeedle<n; i++){
+    int j, k, start, end;
+    if( memcmp(p+i, zNeedle, (size_t)nNeedle)!=0 ) continue;
+    j = i + nNeedle;
+    while( j<n && (p[j]==' ' || p[j]=='\t' || p[j]=='\r' || p[j]=='\n') ) j++;
+    if( j>=n || p[j]!=':' ) continue;
+    j++;
+    while( j<n && (p[j]==' ' || p[j]=='\t' || p[j]=='\r' || p[j]=='\n') ) j++;
+    if( j>=n || p[j]!='"' ) continue;
+    start = ++j;
+    while( j<n && p[j]!='"' ){
+      if( p[j]=='\\' ) j++;
+      j++;
+    }
+    if( j>=n ) return 0;
+    end = j;
+    {
+      char *z = sqlite3_malloc(end - start + 1);
+      if( !z ) return 0;
+      /* Bodies we emit are plain ASCII without escapes. */
+      for(k=0; k<end-start; k++) z[k] = (char)p[start+k];
+      z[end-start] = 0;
+      return z;
+    }
+  }
+  return 0;
+}
+
+static int httpJsonIntField(const u8 *p, int n, const char *zKey, int *pOut){
+  char zNeedle[64];
+  int nNeedle;
+  int i;
+  if( !p || n<=0 || !zKey || !pOut ) return 0;
+  sqlite3_snprintf(sizeof(zNeedle), zNeedle, "\"%s\"", zKey);
+  nNeedle = (int)strlen(zNeedle);
+  for(i=0; i+nNeedle<n; i++){
+    int j;
+    uint64_t value;
+    int neg = 0;
+    if( memcmp(p+i, zNeedle, (size_t)nNeedle)!=0 ) continue;
+    j = i + nNeedle;
+    while( j<n && (p[j]==' ' || p[j]=='\t' || p[j]=='\r' || p[j]=='\n') ) j++;
+    if( j>=n || p[j]!=':' ) continue;
+    j++;
+    while( j<n && (p[j]==' ' || p[j]=='\t' || p[j]=='\r' || p[j]=='\n') ) j++;
+    if( j<n && p[j]=='-' ){ neg = 1; j++; }
+    if( j>=n || p[j]<'0' || p[j]>'9' ) continue;
+    {
+      int k = j;
+      while( k<n && p[k]>='0' && p[k]<='9' ) k++;
+      if( doltliteParseDecimal((const char*)p+j, (const char*)p+k,
+                              0x7fffffff, &value)!=DOLTLITE_DECIMAL_OK ){
+        return 0;
+      }
+      *pOut = neg ? -(int)value : (int)value;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* Map HTTP status (+ optional structured body) to an SQLite result code and
+** stash a message for xErrMsg. */
+static int httpMapError(
+  HttpRemote *p,
+  int status,
+  const u8 *pResp,
+  int nResp
+){
+  char *zCode = 0;
+  char *zMsg = 0;
+  int sqliteRc = 0;
+  int hasSqlite = 0;
+  int rc;
+
+  httpClearLastError(p);
+  if( pResp && nResp>0 && pResp[0]=='{' ){
+    zCode = httpJsonStringField(pResp, nResp, "code");
+    zMsg = httpJsonStringField(pResp, nResp, "message");
+    hasSqlite = httpJsonIntField(pResp, nResp, "sqlite", &sqliteRc);
+  }
+
+  if( zMsg ){
+    httpSetLastError(p, zMsg);
+  }else if( pResp && nResp>0 && pResp[0]!='{' ){
+    /* Plain-text body from older servers. */
+    char *zPlain = sqlite3_malloc(nResp + 1);
+    if( zPlain ){
+      memcpy(zPlain, pResp, (size_t)nResp);
+      zPlain[nResp] = 0;
+      while( nResp>0 && (zPlain[nResp-1]=='\n' || zPlain[nResp-1]=='\r') ){
+        zPlain[--nResp] = 0;
+      }
+      if( zPlain[0] ) httpSetLastError(p, zPlain);
+      sqlite3_free(zPlain);
+    }
+  }
+
+  if( status==409
+   || (zCode && strcmp(zCode, "refs_changed")==0)
+   || (hasSqlite && sqliteRc==SQLITE_BUSY) ){
+    rc = SQLITE_BUSY;
+    if( !p->zLastError ){
+      httpSetLastError(p, "remote refs changed; pull and retry");
+    }
+  }else if( status==401
+         || (zCode && strcmp(zCode, "unauthorized")==0)
+         || (hasSqlite && sqliteRc==SQLITE_AUTH) ){
+    rc = SQLITE_AUTH;
+    if( !p->zLastError ) httpSetLastError(p, "unauthorized");
+  }else if( status==404
+         || (zCode && strcmp(zCode, "not_found")==0)
+         || (hasSqlite && sqliteRc==SQLITE_NOTFOUND) ){
+    rc = SQLITE_NOTFOUND;
+    if( !p->zLastError ) httpSetLastError(p, "not found");
+  }else if( status==413
+         || (zCode && strcmp(zCode, "toobig")==0)
+         || (hasSqlite && sqliteRc==SQLITE_TOOBIG) ){
+    rc = SQLITE_TOOBIG;
+    if( !p->zLastError ) httpSetLastError(p, "payload too large");
+  }else if( (zCode && strcmp(zCode, "non_ff")==0)
+         || (hasSqlite && sqliteRc==SQLITE_CONSTRAINT) ){
+    rc = SQLITE_CONSTRAINT;
+    if( !p->zLastError ){
+      httpSetLastError(p,
+        "not a fast-forward of the remote branch (use force to overwrite)");
+    }
+  }else if( hasSqlite && sqliteRc!=0 ){
+    rc = sqliteRc;
+  }else if( status>=500 ){
+    rc = SQLITE_IOERR;
+    if( !p->zLastError ) httpSetLastError(p, "remote server error");
+  }else{
+    rc = SQLITE_ERROR;
+    if( !p->zLastError ) httpSetLastError(p, "remote request failed");
+  }
+
+  sqlite3_free(zCode);
+  sqlite3_free(zMsg);
+  return rc;
+}
 
 static int httpHeaderNameEquals(
   const u8 *zName,
@@ -307,9 +470,13 @@ static int httpRequest(
   *pStatus = 0;
   *ppResp = 0;
   *pnResp = 0;
+  httpClearLastError(p);
 
   conn = httpConnOpen(p->zHost, p->port, p->useTls, p->timeoutMs);
-  if( !conn ) return SQLITE_ERROR;
+  if( !conn ){
+    httpSetLastError(p, "could not connect to remote");
+    return SQLITE_ERROR;
+  }
 
 #ifdef DOLTLITE_HAVE_AUTH
   if( p->useTls && p->cred ){
@@ -418,10 +585,14 @@ static int httpHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   sqlite3_free(pReqBody);
   sqlite3_free(zPath);
 
-  if( rc != SQLITE_OK ) return rc;
-  if( status != 200 ){
+  if( rc != SQLITE_OK ){
     sqlite3_free(pResp);
-    return SQLITE_ERROR;
+    return rc;
+  }
+  if( status != 200 ){
+    rc = httpMapError(p, status, pResp, nResp);
+    sqlite3_free(pResp);
+    return rc;
   }
 
   if( nResp >= nHash ){
@@ -463,13 +634,10 @@ static int httpGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
     sqlite3_free(pResp);
     return rc;
   }
-  if( status == 404 ){
-    sqlite3_free(pResp);
-    return SQLITE_NOTFOUND;
-  }
   if( status != 200 ){
+    rc = httpMapError(p, status, pResp, nResp);
     sqlite3_free(pResp);
-    return SQLITE_ERROR;
+    return rc;
   }
 
   *ppData = pResp;
@@ -581,7 +749,11 @@ static int httpGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   sqlite3_free(zPath);
   sqlite3_free(pReq);
   if( rc != SQLITE_OK ){ sqlite3_free(pResp); return rc; }
-  if( status != 200 ){ sqlite3_free(pResp); return SQLITE_ERROR; }
+  if( status != 200 ){
+    rc = httpMapError(p, status, pResp, nResp);
+    sqlite3_free(pResp);
+    return rc;
+  }
   rc = httpParseChunkBatch(pResp, nResp, nHash, apData, anData);
   sqlite3_free(pResp);
   return rc;   /* caller frees any apData[i] set before an error */
@@ -609,13 +781,10 @@ static int httpGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
     sqlite3_free(pResp);
     return rc;
   }
-  if( status == 404 ){
-    sqlite3_free(pResp);
-    return SQLITE_NOTFOUND;
-  }
   if( status != 200 ){
+    rc = httpMapError(p, status, pResp, nResp);
     sqlite3_free(pResp);
-    return SQLITE_ERROR;
+    return rc;
   }
 
   *ppData = pResp;
@@ -681,9 +850,16 @@ static int httpCommit(DoltliteRemote *pRemote){
                      p->pUploadBuf, (int)p->nUploadBuf,
                      &status, &pResp, &nResp);
     sqlite3_free(zPath);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(pResp);
+      return rc;
+    }
+    if( status != 200 && status != 204 ){
+      rc = httpMapError(p, status, pResp, nResp);
+      sqlite3_free(pResp);
+      return rc;
+    }
     sqlite3_free(pResp);
-    if( rc != SQLITE_OK ) return rc;
-    if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
 
   if( p->pPendingRefs && p->nPendingRefs > 0 ){
@@ -716,10 +892,16 @@ static int httpCommit(DoltliteRemote *pRemote){
     rc = httpRequest(p, "PUT", zPath, pReq, nReq, &status, &pResp, &nResp);
     sqlite3_free(pReq);
     sqlite3_free(zPath);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(pResp);
+      return rc;
+    }
+    if( status != 200 && status != 204 ){
+      rc = httpMapError(p, status, pResp, nResp);
+      sqlite3_free(pResp);
+      return rc;
+    }
     sqlite3_free(pResp);
-    if( rc != SQLITE_OK ) return rc;
-    if( status == 409 ) return SQLITE_BUSY;
-    if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
 
   {
@@ -730,9 +912,16 @@ static int httpCommit(DoltliteRemote *pRemote){
     rc = httpRequest(p, "POST", zPath,
                      0, 0, &status, &pResp, &nResp);
     sqlite3_free(zPath);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(pResp);
+      return rc;
+    }
+    if( status != 200 && status != 204 ){
+      rc = httpMapError(p, status, pResp, nResp);
+      sqlite3_free(pResp);
+      return rc;
+    }
     sqlite3_free(pResp);
-    if( rc != SQLITE_OK ) return rc;
-    if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
 
   sqlite3_free(p->pUploadBuf);
@@ -750,6 +939,11 @@ static int httpCommit(DoltliteRemote *pRemote){
   return SQLITE_OK;
 }
 
+static const char *httpErrMsg(DoltliteRemote *pRemote){
+  HttpRemote *p = (HttpRemote*)pRemote;
+  return p->zLastError;
+}
+
 static void httpClose(DoltliteRemote *pRemote){
   HttpRemote *p = (HttpRemote*)pRemote;
 #ifdef DOLTLITE_HAVE_AUTH
@@ -761,6 +955,7 @@ static void httpClose(DoltliteRemote *pRemote){
   sqlite3_free(p->pUploadBuf);
   sqlite3_free(p->pPendingRefs);
   sqlite3_free(p->zPushBranch);
+  httpClearLastError(p);
   sqlite3_free(p);
 }
 
@@ -921,6 +1116,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->base.xSetRefsIf = httpSetRefsIf;
   p->base.xCommit = httpCommit;
   p->base.xClose = httpClose;
+  p->base.xErrMsg = httpErrMsg;
 
   return &p->base;
 }

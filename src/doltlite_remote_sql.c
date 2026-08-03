@@ -51,6 +51,21 @@ static void remoteSqlResultError(
   }
 }
 
+static const char *remoteSqlRemoteMsg(DoltliteRemote *pRemote, int rc){
+  const char *z;
+  if( pRemote && pRemote->xErrMsg ){
+    z = pRemote->xErrMsg(pRemote);
+    if( z && z[0] ) return z;
+  }
+  if( rc==SQLITE_BUSY ) return "push failed (remote refs changed)";
+  if( rc==SQLITE_CONSTRAINT ){
+    return "not a fast-forward of the remote branch (use force to overwrite)";
+  }
+  if( rc==SQLITE_AUTH ) return "remote unauthorized";
+  if( rc==SQLITE_TOOBIG ) return "remote payload too large";
+  return 0;
+}
+
 static void remoteSqlRestoreAndReport(
   sqlite3_context *ctx,
   sqlite3 *db,
@@ -263,15 +278,18 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
 
   rc = doltlitePush(cs, pRemote, zBranch, bForce);
-  pRemote->xClose(pRemote);
-
   if( rc!=SQLITE_OK ){
+    const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+    pRemote->xClose(pRemote);
     (void)doltliteVcSealSavepointError(db);
     remoteSqlResultError(ctx, rc,
-      rc==SQLITE_BUSY ? "push failed (remote refs changed)"
-      : rc==SQLITE_ERROR ? "push failed (not a fast-forward?)" : 0);
+      zOwned ? zOwned
+      : (rc==SQLITE_ERROR ? "push failed" : 0));
+    sqlite3_free(zOwned);
     return;
   }
+  pRemote->xClose(pRemote);
   sqlite3_result_int(ctx, 0);
 }
 
@@ -374,10 +392,14 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
     rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
     if( rc!=SQLITE_OK ){
+      const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+      char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
       pRemote->xClose(pRemote);
       (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
-        rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0);
+        zOwned ? zOwned
+        : (rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0));
+      sqlite3_free(zOwned);
       return;
     }
   }else{
@@ -415,14 +437,18 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         return;
       }
       rc = doltliteFetch(cs, pBrRemote, zRemoteName, azNames[i]);
-      pBrRemote->xClose(pBrRemote);
       if( rc!=SQLITE_OK ){
+        const char *zMsg = remoteSqlRemoteMsg(pBrRemote, rc);
+        char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+        pBrRemote->xClose(pBrRemote);
         doltliteFreeStringArray(azNames, nNames);
         sqlite3_free(zUrlOwned);
         (void)doltliteVcSealSavepointError(db);
-        remoteSqlResultError(ctx, rc, "fetch failed");
+        remoteSqlResultError(ctx, rc, zOwned ? zOwned : "fetch failed");
+        sqlite3_free(zOwned);
         return;
       }
+      pBrRemote->xClose(pBrRemote);
     }
     doltliteFreeStringArray(azNames, nNames);
     sqlite3_free(zUrlOwned);
@@ -712,11 +738,16 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   rc = doltliteClone(cs, pRemote);
-  pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, "clone failed");
+    const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+    pRemote->xClose(pRemote);
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+                              zOwned ? zOwned : "clone failed");
+    sqlite3_free(zOwned);
     return;
   }
+  pRemote->xClose(pRemote);
 
   rc = chunkStoreAddRemote(cs, "origin", zUrl);
   if( rc!=SQLITE_OK ){
