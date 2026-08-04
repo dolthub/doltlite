@@ -158,25 +158,40 @@ echo "════════════════════════�
 echo "  Segment A: cost vs history depth"
 echo "══════════════════════════════════════"
 DBA="$TMPDIR/depth"
-"$DOLTLITE" "$DBA" "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER); CREATE TABLE s(id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO s VALUES(1,0),(2,0);" > /dev/null 2>&1
+"$DOLTLITE" "$DBA" "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER); CREATE TABLE s(id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO s VALUES(1,0),(2,0),(3,0),(4,0),(5,0),(6,0);" > /dev/null 2>&1
 seed_rows "$DBA" 10000 "x, 0"
 "$DOLTLITE" "$DBA" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed'); SELECT dolt_branch('anchor');" > /dev/null 2>&1
 
-# side branches off the seed commit for merge timing (disjoint rows: no conflicts)
-"$DOLTLITE" "$DBA" "SELECT dolt_branch('side1'); SELECT dolt_branch('side2'); SELECT dolt_checkout('side1'); UPDATE s SET v=1 WHERE id=1; SELECT dolt_commit('-am','side1'); SELECT dolt_checkout('side2'); UPDATE s SET v=1 WHERE id=2; SELECT dolt_commit('-am','side2'); SELECT dolt_checkout('main');" > /dev/null 2>&1
+# Side branches off the seed commit for merge timing, on disjoint rows so none
+# of them conflict. Three per depth because a branch can only be merged once and
+# one sample of a merge is mostly runner jitter.
+sides_sql=""
+row=0
+for side in side1a side1b side1c side2a side2b side2c; do
+  row=$((row + 1))
+  sides_sql="$sides_sql SELECT dolt_branch('$side'); SELECT dolt_checkout('$side'); UPDATE s SET v=1 WHERE id=$row; SELECT dolt_commit('-am','$side'); SELECT dolt_checkout('main');"
+done
+"$DOLTLITE" "$DBA" "$sides_sql" > /dev/null 2>&1
+
+median3() {
+  printf '%s\n%s\n%s\n' "$1" "$2" "$3" | sort -n | awk 'NR==2{print; exit}'
+}
 
 depth_ops() {
   # echoes "log_ms checkout_ms merge_ms" for the current depth
-  local side="$1"
-  local lg co mg
+  local prefix="$1"
+  local lg co m1 m2 m3 mg
   lg=$(run_ms_median5 "$DBA" "SELECT count(*) FROM dolt_log;")
-  # Checkout leaves no trace, so it samples like the walk above does.
-  co=$(run_ms_median5 "$DBA" "SELECT dolt_checkout('anchor');")
-  co=$(( co + $(run_ms_median5 "$DBA" "SELECT dolt_checkout('main');") ))
-  # Merge stays a single sample: each side branch can only be merged once, and
-  # merging successive ones would measure against a main that has moved on.
-  # Making this a median needs one side branch per sample at each depth.
-  mg=$(run_ms "$DBA" "SELECT dolt_merge('$side');")
+  # Both checkouts in one session per sample. run_ms starts a fresh session on
+  # whatever branch the db is left on, so measuring them separately made every
+  # sample after the first a no-op: cheap and stable, but no longer a checkout.
+  co=$(run_ms_median5 "$DBA" \
+       "SELECT dolt_checkout('anchor'); SELECT dolt_checkout('main');")
+  # One branch per sample, since merging the same one twice is a no-op.
+  m1=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}a');")
+  m2=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}b');")
+  m3=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}c');")
+  mg=$(median3 "$m1" "$m2" "$m3")
   echo "$lg $co $mg"
 }
 
@@ -202,7 +217,7 @@ check_ratio "per-commit growth, depth ~2000 vs 200" "$deep" "$block1" "$COMMIT_G
 check_ratio "dolt_log full walk, depth ~2000 vs 200" "$log_deep" "$log1" "$SESSION_OP_GATE"
 check_ratio "checkout old commit, depth ~2000 vs 200" "$co_deep" "$co1" "$SESSION_OP_GATE"
 check_ratio "merge across divergence, depth ~2000 vs 200" "$mg_deep" "$mg1" "$SESSION_OP_GATE"
-check_eq "merged rows visible" "1|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE id=2 AND v=1;")"
+check_eq "merged rows visible" "6|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE v=1;")"
 
 gc_ms=$(run_ms "$DBA" "SELECT dolt_gc();")
 echo "  dolt_gc: ${gc_ms}ms"
