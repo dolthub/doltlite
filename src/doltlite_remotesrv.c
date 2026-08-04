@@ -485,18 +485,28 @@ static int isSafeDbName(const char *zDbName){
   return 1;
 }
 
+static int remoteSrvResolveRoot(ChunkStore *pStore, ProllyHash *pRoot){
+  const char *zDef = chunkStoreGetDefaultBranch(pStore);
+  int rc = zDef ? chunkStoreFindBranch(pStore, zDef, pRoot) : SQLITE_NOTFOUND;
+  if( rc==SQLITE_NOTFOUND && refsTableBranchCount(&pStore->refs)==0 ){
+    memset(pRoot, 0, sizeof(*pRoot));
+    return SQLITE_OK;
+  }
+  return rc==SQLITE_NOTFOUND ? SQLITE_CORRUPT : rc;
+}
+
+int doltliteRemoteSrvResolveRootForTest(
+  ChunkStore *pStore,
+  ProllyHash *pRoot
+){
+  return remoteSrvResolveRoot(pStore, pRoot);
+}
+
 static void handleGetRoot(ChunkStore *pStore, DoltliteConn *fd){
   ProllyHash root;
-  const char *zDef = chunkStoreGetDefaultBranch(pStore);
-  int rc = zDef ? chunkStoreFindBranch(pStore, zDef, &root) : SQLITE_NOTFOUND;
-  if( rc==SQLITE_OK ){
-    sendOk(fd, root.data, PROLLY_HASH_SIZE);
-  }else if( rc==SQLITE_NOTFOUND ){
-    memset(&root, 0, sizeof(root));
-    sendOk(fd, root.data, PROLLY_HASH_SIZE);
-  }else{
-    sendSqliteError(fd, rc);
-  }
+  int rc = remoteSrvResolveRoot(pStore, &root);
+  if( rc==SQLITE_OK ) sendOk(fd, root.data, PROLLY_HASH_SIZE);
+  else sendSqliteError(fd, rc);
 }
 
 static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
