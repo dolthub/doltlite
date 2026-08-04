@@ -197,6 +197,8 @@ int doltliteSyncChunks(
   ProllyHashSet seen;
   ProllyHash aBatch[SYNC_BATCH_SIZE];
   u8 aPresent[SYNC_BATCH_SIZE];
+  int bFirstBatch = 1;
+  int bResumeScan = 0;
   int rc, i;
 
   rc = syncQueueInit(&queue);
@@ -225,40 +227,58 @@ int doltliteSyncChunks(
 
     rc = pDst->xHasChunks(pDst, aBatch, nBatch, aPresent);
     if( rc!=SQLITE_OK ) break;
+    if( bFirstBatch && pDst->bResumePartialPuts ){
+      bResumeScan = 1;
+      for(i=0; i<nBatch; i++){
+        if( !aPresent[i] ){
+          bResumeScan = 0;
+          break;
+        }
+      }
+    }
+    bFirstBatch = 0;
 
-    /* Collect the chunks the destination is missing, then fetch them from the
-    ** source. A source that provides xGetChunks pulls the whole batch in one
-    ** round trip; otherwise fall back to one fetch per chunk. */
+    /* A resumed partial put may have persisted a parent before its missing
+    ** descendants. Scan below present roots in that case. */
     {
-      ProllyHash aMissing[SYNC_BATCH_SIZE];
-      int nMissing = 0;
+      ProllyHash aFetch[SYNC_BATCH_SIZE];
+      u8 aPut[SYNC_BATCH_SIZE];
+      int nFetch = 0;
 
       for(i=0; i<nBatch; i++){
-        if( !aPresent[i] ) aMissing[nMissing++] = aBatch[i];
+        if( !aPresent[i] || bResumeScan ){
+          aFetch[nFetch] = aBatch[i];
+          aPut[nFetch] = !aPresent[i];
+          nFetch++;
+        }
       }
-      if( nMissing==0 ) continue;
+      if( nFetch==0 ) continue;
 
       if( pSrc->xGetChunks ){
         u8 *apData[SYNC_BATCH_SIZE];
         int anData[SYNC_BATCH_SIZE];
 
-        memset(apData, 0, sizeof(apData[0]) * nMissing);
-        rc = pSrc->xGetChunks(pSrc, aMissing, nMissing, apData, anData);
-        for(i=0; i<nMissing && rc==SQLITE_OK; i++){
+        memset(apData, 0, sizeof(apData[0]) * nFetch);
+        rc = pSrc->xGetChunks(pSrc, aFetch, nFetch, apData, anData);
+        for(i=0; i<nFetch && rc==SQLITE_OK; i++){
           if( !apData[i] ){ rc = SQLITE_NOTFOUND; break; }
-          rc = pDst->xPutChunk(pDst, &aMissing[i], apData[i], anData[i]);
+          if( aPut[i] ){
+            rc = pDst->xPutChunk(pDst, &aFetch[i], apData[i], anData[i]);
+          }
           if( rc==SQLITE_OK ){
             rc = syncEnqueueChildren(apData[i], anData[i], &queue, &seen);
           }
         }
-        for(i=0; i<nMissing; i++) sqlite3_free(apData[i]);
+        for(i=0; i<nFetch; i++) sqlite3_free(apData[i]);
       }else{
-        for(i=0; i<nMissing && rc==SQLITE_OK; i++){
+        for(i=0; i<nFetch && rc==SQLITE_OK; i++){
           u8 *data = 0;
           int nData = 0;
-          rc = pSrc->xGetChunk(pSrc, &aMissing[i], &data, &nData);
+          rc = pSrc->xGetChunk(pSrc, &aFetch[i], &data, &nData);
           if( rc!=SQLITE_OK ) break;
-          rc = pDst->xPutChunk(pDst, &aMissing[i], data, nData);
+          if( aPut[i] ){
+            rc = pDst->xPutChunk(pDst, &aFetch[i], data, nData);
+          }
           if( rc==SQLITE_OK ){
             rc = syncEnqueueChildren(data, nData, &queue, &seen);
           }

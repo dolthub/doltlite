@@ -45,6 +45,7 @@ struct RemoteDbHandle {
   ChunkStore store;
   int bOpen;
   int bWritable;
+  int nReservations;
   i64 lastUseMs;
   pthread_mutex_t mu;
   int muInit;
@@ -487,11 +488,14 @@ static int isSafeDbName(const char *zDbName){
 static void handleGetRoot(ChunkStore *pStore, DoltliteConn *fd){
   ProllyHash root;
   const char *zDef = chunkStoreGetDefaultBranch(pStore);
-  if( zDef && chunkStoreFindBranch(pStore, zDef, &root)==SQLITE_OK ){
+  int rc = zDef ? chunkStoreFindBranch(pStore, zDef, &root) : SQLITE_NOTFOUND;
+  if( rc==SQLITE_OK ){
     sendOk(fd, root.data, PROLLY_HASH_SIZE);
-  }else{
+  }else if( rc==SQLITE_NOTFOUND ){
     memset(&root, 0, sizeof(root));
     sendOk(fd, root.data, PROLLY_HASH_SIZE);
+  }else{
+    sendSqliteError(fd, rc);
   }
 }
 
@@ -872,6 +876,28 @@ static void remoteDbHandleCloseStore(RemoteDbHandle *h){
   }
 }
 
+static int remoteDbHandleOpenStore(
+  RemoteDbHandle *h,
+  const char *zPath,
+  int bWritable
+){
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  int flags;
+  int rc;
+
+  if( !pVfs ) return SQLITE_ERROR;
+  flags = bWritable
+        ? (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
+        : (SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
+  memset(&h->store, 0, sizeof(h->store));
+  rc = chunkStoreOpen(&h->store, pVfs, zPath, flags);
+  if( rc==SQLITE_OK ){
+    h->bOpen = 1;
+    h->bWritable = bWritable ? 1 : 0;
+  }
+  return rc;
+}
+
 static void remoteDbHandleFree(RemoteDbHandle *h){
   if( !h ) return;
   remoteDbHandleCloseStore(h);
@@ -904,6 +930,7 @@ static void remoteDbCacheEvictOne(DoltliteServer *pSrv){
   i64 bestAge = 0;
 
   for(h=pSrv->pDbCache; h; pPrev=h, h=h->pNext){
+    if( h->nReservations>0 ) continue;
     if( pthread_mutex_trylock(&h->mu)!=0 ) continue;
     if( !pBest || h->lastUseMs < bestAge ){
       if( pBest ) pthread_mutex_unlock(&pBest->mu);
@@ -931,8 +958,6 @@ static int remoteDbAcquire(
   RemoteDbHandle **ppOut
 ){
   RemoteDbHandle *h = 0;
-  sqlite3_vfs *pVfs;
-  int flags;
   int rc;
 
   *ppOut = 0;
@@ -964,6 +989,7 @@ static int remoteDbAcquire(
     pSrv->pDbCache = h;
     pSrv->nDbCache++;
   }
+  h->nReservations++;
   pthread_mutex_unlock(&pSrv->mutex);
 
   pthread_mutex_lock(&h->mu);
@@ -980,52 +1006,30 @@ static int remoteDbAcquire(
   }
 
   if( !h->bOpen ){
-    pVfs = sqlite3_vfs_find(0);
-    if( !pVfs ){
-      pthread_mutex_unlock(&h->mu);
-      return SQLITE_ERROR;
-    }
-    flags = bWritable
-          ? (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
-          : (SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
-    memset(&h->store, 0, sizeof(h->store));
-    rc = chunkStoreOpen(&h->store, pVfs, zPath, flags);
-    if( rc!=SQLITE_OK ){
-      pthread_mutex_unlock(&h->mu);
-      return rc;
-    }
-    h->bOpen = 1;
-    h->bWritable = bWritable ? 1 : 0;
+    rc = remoteDbHandleOpenStore(h, zPath, bWritable);
+    if( rc!=SQLITE_OK ) goto acquire_error;
   }else{
     int changed = 0;
     rc = chunkStoreRefreshIfChanged(&h->store, &changed);
-    if( rc!=SQLITE_OK ){
-      /* Stale open handle (e.g. replaced file): reopen once. */
+    if( rc!=SQLITE_OK || h->store.movedReadOnly ){
       remoteDbHandleCloseStore(h);
-      pVfs = sqlite3_vfs_find(0);
-      if( !pVfs ){
-        pthread_mutex_unlock(&h->mu);
-        return SQLITE_ERROR;
-      }
-      flags = bWritable
-            ? (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
-            : (SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
-      memset(&h->store, 0, sizeof(h->store));
-      rc = chunkStoreOpen(&h->store, pVfs, zPath, flags);
-      if( rc!=SQLITE_OK ){
-        pthread_mutex_unlock(&h->mu);
-        return rc;
-      }
-      h->bOpen = 1;
-      h->bWritable = bWritable ? 1 : 0;
+      rc = remoteDbHandleOpenStore(h, zPath, bWritable);
+      if( rc!=SQLITE_OK ) goto acquire_error;
     }
   }
 
   *ppOut = h;
   return SQLITE_OK;
+
+acquire_error:
+  pthread_mutex_unlock(&h->mu);
+  pthread_mutex_lock(&pSrv->mutex);
+  h->nReservations--;
+  pthread_mutex_unlock(&pSrv->mutex);
+  return rc;
 }
 
-static void remoteDbRelease(RemoteDbHandle *h){
+static void remoteDbRelease(DoltliteServer *pSrv, RemoteDbHandle *h){
   if( !h ) return;
   /* Leave the store open for the next request; only drop the exclusive lock. */
   if( h->bOpen
@@ -1033,6 +1037,9 @@ static void remoteDbRelease(RemoteDbHandle *h){
     chunkStoreRollback(&h->store);
   }
   pthread_mutex_unlock(&h->mu);
+  pthread_mutex_lock(&pSrv->mutex);
+  h->nReservations--;
+  pthread_mutex_unlock(&pSrv->mutex);
 }
 
 static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
@@ -1154,7 +1161,7 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
     sendBadRequest(fd);
   }
 
-  remoteDbRelease(pHandle);
+  remoteDbRelease(pSrv, pHandle);
   sqlite3_free(pBody);
 }
 

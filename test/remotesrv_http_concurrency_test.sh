@@ -217,6 +217,35 @@ check "branch_b fetch and checkout sees its row" "0
 0
 1" "$("$DOLTLITE" "$TMP/check_branches.db" "SELECT dolt_checkout('main'); SELECT dolt_fetch('origin','branch_b'); SELECT dolt_checkout('-b','local_b','origin/branch_b'); SELECT count(*) FROM t WHERE id=200;" 2>&1 | tail -3)"
 
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    echo "=== live replacement and recovery ==="
+    "$DOLTLITE" "$TMP/replacement.db" <<'SQL' >/dev/null
+CREATE TABLE replacement(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO replacement VALUES(1,'new generation');
+SELECT dolt_commit('-A','-m','replacement');
+SQL
+    mv "$TMP/replacement.db" "$TMP/srv/repo.db"
+    result=$("$DOLTLITE" "$TMP/replacement_clone.db" \
+      "SELECT dolt_clone('$URL'); SELECT v FROM replacement;" 2>&1)
+    check "cached server adopts a valid replacement" "0
+new generation" "$result"
+
+    mv "$TMP/srv/repo.db" "$TMP/restored.db"
+    printf 'damaged' >"$TMP/srv/repo.db"
+    result=$("$DOLTLITE" "$TMP/damaged_clone.db" \
+      "SELECT dolt_clone('$URL');" 2>&1 || true)
+    check_match "damaged replacement returns an error" \
+      "ERROR|Error|error|malformed|format|failed" "$result"
+    mv "$TMP/restored.db" "$TMP/srv/repo.db"
+    result=$("$DOLTLITE" "$TMP/recovered_clone.db" \
+      "SELECT dolt_clone('$URL'); SELECT v FROM replacement;" 2>&1)
+    check "cached server recovers after file restoration" "0
+new generation" "$result"
+    ;;
+esac
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
