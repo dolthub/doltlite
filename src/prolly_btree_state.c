@@ -165,6 +165,7 @@ int btreeLoadBranchState(
   ProllyHash committedCatalog;
   ProllyHash headCommit;
   ProllyHash workingCommit;
+  int useWorkingState;
   int rc;
 
   assert( cs!=0 && zBranch!=0 && pState!=0 );
@@ -173,7 +174,7 @@ int btreeLoadBranchState(
   memset(&headCommit, 0, sizeof(headCommit));
   memset(&workingCommit, 0, sizeof(workingCommit));
 
-  rc = btreeLoadBranchHeadCatalog(cs, zBranch, &committedCatalog, &headCommit);
+  rc = chunkStoreFindBranch(cs, zBranch, &headCommit);
   if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 
@@ -188,12 +189,17 @@ int btreeLoadBranchState(
     btreeClearBranchState(pState);
     return rc;
   }
-  if( rc==SQLITE_NOTFOUND
-   || (prollyHashCompare(&workingCommit, &headCommit)!=0
-       && !(bSeedRepair && prollyHashIsEmpty(&headCommit))) ){
+  useWorkingState = rc==SQLITE_OK
+    && (prollyHashCompare(&workingCommit, &headCommit)==0
+        || (bSeedRepair && prollyHashIsEmpty(&headCommit)));
+  if( !useWorkingState ){
     btreeClearBranchState(pState);
-    pState->catalog = committedCatalog;
-  }else if( prollyHashIsEmpty(&pState->catalog) ){
+  }
+  if( !useWorkingState || prollyHashIsEmpty(&pState->catalog) ){
+    if( !prollyHashIsEmpty(&headCommit) ){
+      rc = btreeLoadBranchHeadCatalog(cs, zBranch, &committedCatalog, 0);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     pState->catalog = committedCatalog;
   }
   pState->headCommit = headCommit;
