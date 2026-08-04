@@ -65,9 +65,14 @@ cat >"$TMP/proxy.py" <<'PY'
 import socket
 import socketserver
 import sys
+import threading
 
 upstream_port = int(sys.argv[1])
 fail_path_file = sys.argv[2]
+forwarded_path = sys.argv[3]
+failure_lock = threading.Lock()
+failure_control = ""
+failure_count = 0
 
 def current_fail_path():
     try:
@@ -75,6 +80,28 @@ def current_fail_path():
             return f.read().strip()
     except OSError:
         return ""
+
+def should_fail(path):
+    global failure_control, failure_count
+    control = current_fail_path()
+    with failure_lock:
+        if control != failure_control:
+            failure_control = control
+            failure_count = 0
+        if not control:
+            return False
+        target, separator, ordinal = control.rpartition("|")
+        if not separator or not ordinal.isdigit():
+            return path.endswith(control)
+        if not path.endswith(target):
+            return False
+        failure_count += 1
+        return failure_count == int(ordinal)
+
+def record_forward(method, path):
+    with failure_lock:
+        with open(forwarded_path, "a") as f:
+            f.write(f"{method} {path}\n")
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -105,15 +132,15 @@ class Handler(socketserver.BaseRequestHandler):
                 return
             body += chunk
 
-        fail_path = current_fail_path()
-        if fail_path and path.endswith(fail_path):
+        if should_fail(path):
             self.request.sendall(
                 b"HTTP/1.1 503 Service Unavailable\r\n"
                 b"Content-Length: 0\r\nConnection: close\r\n\r\n"
             )
             return
 
-        with socket.create_connection(("127.0.0.1", upstream_port), timeout=10) as s:
+        record_forward(method, path)
+        with socket.create_connection(("127.0.0.1", upstream_port), timeout=60) as s:
             s.sendall(head + b"\r\n\r\n" + body)
             s.shutdown(socket.SHUT_WR)
             while True:
@@ -132,7 +159,8 @@ with Server(("127.0.0.1", 0), Handler) as srv:
 PY
 
 : >"$TMP/fail_path"
-python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/fail_path" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
+: >"$TMP/forwarded.log"
+python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/fail_path" "$TMP/forwarded.log" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
 PROXY_PID=$!
 PROXY_PORT=""
 for _ in $(seq 1 50); do
@@ -200,6 +228,29 @@ result=$("$DB" "$TMP/clone_after_commit_retry.db" "SELECT dolt_clone('$URL'); SE
 check "remote publishes retried commit push" "0
 $commit_fail_head
 3" "$result"
+
+echo "=== push more than 128 MiB with a failed second chunk batch ==="
+"$DB" "$A" <<'SQL' >/dev/null
+CREATE TABLE large_payload(id INTEGER PRIMARY KEY, payload BLOB);
+WITH RECURSIVE seq(i) AS (
+  VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<8704
+) INSERT INTO large_payload SELECT i, randomblob(16384) FROM seq;
+SELECT dolt_commit('-A','-m','large payload');
+SQL
+before=$(grep -c 'POST .*/chunks' "$TMP/forwarded.log" || true)
+printf '/chunks|2\n' >"$TMP/fail_path"
+result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
+check_match "push reports second chunk batch failure" "ERROR|Error|error|failed" "$result"
+after=$(grep -c 'POST .*/chunks' "$TMP/forwarded.log" || true)
+check "first chunk batch was acknowledged before failure" "1" "$((after-before))"
+printf '\n' >"$TMP/fail_path"
+result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
+check "retry after partial chunk upload succeeds" "0" "$result"
+after_retry=$(grep -c 'POST .*/chunks' "$TMP/forwarded.log" || true)
+check_match "retry uses multiple bounded chunk batches" "^[4-9]$|^[1-9][0-9]+$" "$((after_retry-after))"
+result=$("$DB" "$TMP/clone_large.db" "SELECT dolt_clone('$URL'); SELECT count(*),sum(length(payload)) FROM large_payload;" 2>&1)
+check "clone reads the greater-than-128-MiB push" "0
+8704|142606336" "$result"
 
 echo ""
 echo "======================================="

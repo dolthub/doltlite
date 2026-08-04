@@ -44,6 +44,7 @@ struct HttpRemote {
 };
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
+#define HTTP_UPLOAD_BATCH_MAX ((i64)32 * 1024 * 1024)
 #define HTTP_TIMEOUT_MS 30000
 
 static void httpClearLastError(HttpRemote *p){
@@ -460,7 +461,7 @@ static int httpRequest(
   HttpRemote *p,
   const char *zMethod,
   const char *zPath,
-  const u8 *pBody, int nBody,
+  const u8 *pBody, i64 nBody,
   int *pStatus,
   u8 **ppResp, int *pnResp
 ){
@@ -497,7 +498,7 @@ static int httpRequest(
       "%s %s HTTP/1.1\r\n"
       "Host: %s\r\n"
       "%s"
-      "Content-Length: %d\r\n"
+      "Content-Length: %lld\r\n"
       "Content-Type: application/octet-stream\r\n"
       "Connection: close\r\n"
       "\r\n",
@@ -520,9 +521,15 @@ static int httpRequest(
   sqlite3_free(zHdr);
   if( rc != SQLITE_OK ){ httpConnClose(conn); return rc; }
   if( pBody && nBody > 0 ){
-    if( httpConnWriteAll(conn, pBody, nBody) ){
-      httpConnClose(conn);
-      return SQLITE_IOERR;
+    i64 off = 0;
+    while( off<nBody ){
+      i64 nRemain = nBody - off;
+      int nWrite = nRemain>0x7fffffff ? 0x7fffffff : (int)nRemain;
+      if( httpConnWriteAll(conn, pBody+off, nWrite) ){
+        httpConnClose(conn);
+        return SQLITE_IOERR;
+      }
+      off += nWrite;
     }
   }
 
@@ -558,6 +565,27 @@ static char *buildPath(HttpRemote *p, const char *zSuffix){
     memcpy(z + nBase, zSuffix, nSuffix + 1);
   }
   return z;
+}
+
+static int httpFlushUploadBatch(HttpRemote *p){
+  char *zPath;
+  int status = 0;
+  u8 *pResp = 0;
+  int nResp = 0;
+  int rc;
+
+  if( p->nUploadBuf==0 ) return SQLITE_OK;
+  zPath = buildPath(p, "/chunks");
+  if( !zPath ) return SQLITE_NOMEM;
+  rc = httpRequest(p, "POST", zPath, p->pUploadBuf, p->nUploadBuf,
+                   &status, &pResp, &nResp);
+  sqlite3_free(zPath);
+  if( rc==SQLITE_OK && status!=200 && status!=204 ){
+    rc = httpMapError(p, status, pResp, nResp);
+  }
+  sqlite3_free(pResp);
+  if( rc==SQLITE_OK ) p->nUploadBuf = 0;
+  return rc;
 }
 
 static int httpHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
@@ -653,19 +681,35 @@ static int httpPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
                         const u8 *pData, int nData){
   HttpRemote *p = (HttpRemote*)pRemote;
   u8 aLen[4];
+  i64 nRecord;
+  i64 nSaved;
   int rc;
 
+  if( nData<0 ) return SQLITE_CORRUPT;
+  nRecord = PROLLY_HASH_SIZE + 4 + (i64)nData;
+  if( p->nUploadBuf>0
+   && p->nUploadBuf + nRecord > HTTP_UPLOAD_BATCH_MAX ){
+    rc = httpFlushUploadBatch(p);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  nSaved = p->nUploadBuf;
+
   rc = uploadBufAppend(p, pHash->data, PROLLY_HASH_SIZE);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc != SQLITE_OK ) goto put_error;
 
   aLen[0] = (u8)(nData & 0xff);
   aLen[1] = (u8)((nData >> 8) & 0xff);
   aLen[2] = (u8)((nData >> 16) & 0xff);
   aLen[3] = (u8)((nData >> 24) & 0xff);
   rc = uploadBufAppend(p, aLen, 4);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc != SQLITE_OK ) goto put_error;
 
   rc = uploadBufAppend(p, pData, nData);
+  if( rc != SQLITE_OK ) goto put_error;
+  return SQLITE_OK;
+
+put_error:
+  p->nUploadBuf = nSaved;
   return rc;
 }
 
@@ -846,25 +890,8 @@ static int httpCommit(DoltliteRemote *pRemote){
   int rc;
   char *zPath;
 
-  if( p->pUploadBuf && p->nUploadBuf > 0 ){
-    zPath = buildPath(p, "/chunks");
-    if( !zPath ) return SQLITE_NOMEM;
-
-    rc = httpRequest(p, "POST", zPath,
-                     p->pUploadBuf, (int)p->nUploadBuf,
-                     &status, &pResp, &nResp);
-    sqlite3_free(zPath);
-    if( rc != SQLITE_OK ){
-      sqlite3_free(pResp);
-      return rc;
-    }
-    if( status != 200 && status != 204 ){
-      rc = httpMapError(p, status, pResp, nResp);
-      sqlite3_free(pResp);
-      return rc;
-    }
-    sqlite3_free(pResp);
-  }
+  rc = httpFlushUploadBatch(p);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( p->pPendingRefs && p->nPendingRefs > 0 ){
     /* Body: [u16 branchLen][branch][u8 force] then, for refs-if, the expected
@@ -1121,6 +1148,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->base.xCommit = httpCommit;
   p->base.xClose = httpClose;
   p->base.xErrMsg = httpErrMsg;
+  p->base.bResumePartialPuts = 1;
 
   return &p->base;
 }
