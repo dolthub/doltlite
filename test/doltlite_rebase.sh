@@ -99,7 +99,70 @@ run_test "start_failure_temp_branch_removed" \
   "0" \
   "$DB2"
 
-rm -f "$DB" "$DB2"
+# An interactive rebase mirrors its working set onto the branch a reopen would
+# land on, and clears that branch when it finishes. Rebase only refuses to
+# start over a dirty *current* branch, so uncommitted work on the other branch
+# used to be destroyed. The two controls establish that neither a plain
+# checkout roundtrip nor a non-interactive rebase ever did this.
+seed_dirty_main() {
+  rm -f "$1"
+  cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(10,'f1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'m1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1');
+INSERT INTO t VALUES(99,'row99');
+SQL
+}
+
+DB3=/tmp/test_rebase_dirty_$$.db
+seed_dirty_main "$DB3"
+run_test "interactive_rebase_keeps_other_branch_uncommitted_work" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   SELECT dolt_rebase('--continue');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';" \
+  "0
+interactive rebase started on branch dolt_rebase_feat; adjust the rebase plan in the dolt_rebase table, then continue rebasing by calling dolt_rebase('--continue')
+Successfully rebased and updated refs/heads/feat
+0
+1" \
+  "$DB3"
+
+seed_dirty_main "$DB3"
+run_test_match "interactive_rebase_abort_keeps_other_branch_uncommitted_work" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   SELECT dolt_rebase('--abort');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';" \
+  "^1$" \
+  "$DB3"
+
+seed_dirty_main "$DB3"
+run_test_match "checkout_roundtrip_keeps_uncommitted_work" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';" \
+  "^1$" \
+  "$DB3"
+
+seed_dirty_main "$DB3"
+run_test_match "noninteractive_rebase_keeps_other_branch_uncommitted_work" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('main');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';" \
+  "^1$" \
+  "$DB3"
+
+rm -f "$DB" "$DB2" "$DB3"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

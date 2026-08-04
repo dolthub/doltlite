@@ -104,6 +104,43 @@ static int rebaseRestoreReturnBranchWorkingState(
   doltliteCommitClear(&c);
   return rc;
 }
+/* True if zBranch holds working-set changes its head commit does not. An
+** interactive rebase mirrors its working set onto the return branch so a
+** reopen can resume, and clears that branch at the end -- both of which
+** destroy uncommitted work, so a dirty branch must not be adopted as the
+** mirror target. Rebase already refuses to start with a dirty current branch;
+** the return branch is a different one and has no such guarantee. */
+static int rebaseBranchHasUncommittedWork(
+  sqlite3 *db,
+  const char *zBranch,
+  int *pDirty
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommit c;
+  ProllyHash headHash, wsCat, wsCommit;
+  int rc;
+
+  *pDirty = 0;
+  if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
+  rc = chunkStoreFindBranch(cs, zBranch, &headHash);
+  if( rc!=SQLITE_OK ) return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
+  memset(&wsCat, 0, sizeof(wsCat));
+  memset(&wsCommit, 0, sizeof(wsCommit));
+  if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCat, &wsCommit)
+        !=SQLITE_OK ){
+    return SQLITE_OK;
+  }
+  memset(&c, 0, sizeof(c));
+  rc = doltliteLoadCommit(db, &headHash, &c);
+  if( rc==SQLITE_OK
+   && prollyHashCompare(&wsCommit, &headHash)==0
+   && prollyHashCompare(&wsCat, &c.catalogHash)!=0 ){
+    *pDirty = 1;
+  }
+  doltliteCommitClear(&c);
+  return rc;
+}
+
 static int doltliteRebaseCollectReplaySet(
   sqlite3 *db,
   const ProllyHash *pHeadHash,
@@ -1169,6 +1206,17 @@ static void doltliteRebaseInteractiveStart(
       sqlite3_result_error(context,
         "rebase working branch already exists", -1);
       return;
+    }
+  }
+
+  {
+    int dirty = 0;
+    rc = rebaseBranchHasUncommittedWork(db, zReturnBranch, &dirty);
+    if( rc!=SQLITE_OK ) goto fail;
+    if( dirty ){
+      /* Empty disables both the mirror and the end-of-rebase clear. The rebase
+      ** still runs; only resuming it after a reopen is given up. */
+      zReturnBranch[0] = 0;
     }
   }
 
