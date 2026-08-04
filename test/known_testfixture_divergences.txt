@@ -58,7 +58,7 @@
 # freelist, headers). On a chunk-store repo the same offsets hit CTLD
 # manifest/hash/journal bytes. Architectural — not a missing integrity
 # detector, and not message-parity work if the store reports differently.
-corrupt corrupt-3.3 @linux @no-coverage class=intentional  # hexio lands on CTLD bytes, not btree cells; non-coverage linux extra guard
+corrupt corrupt-3.3 @linux class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural, as 3.4/3.5); linux-only but not variant-specific
 corrupt corrupt-3.4 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-3.5 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-3.6 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
