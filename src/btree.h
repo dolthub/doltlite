@@ -343,6 +343,9 @@ int sqlite3BtreeIsEmpty(BtCursor *pCur, int *pRes);
 int sqlite3BtreeLast(BtCursor*, int *pRes);
 int sqlite3BtreeNext(BtCursor*, int flags);
 int sqlite3BtreeEof(BtCursor*);
+#ifdef DOLTLITE_PROLLY
+int doltliteBtreeCursorFaultCode(BtCursor*);
+#endif
 int sqlite3BtreePrevious(BtCursor*, int flags);
 i64 sqlite3BtreeIntegerKey(BtCursor*);
 void sqlite3BtreeCursorPin(BtCursor*);

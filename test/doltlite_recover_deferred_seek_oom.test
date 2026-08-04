@@ -1,0 +1,72 @@
+# A failed deferred merged-seek must not be reported as end of data.
+#
+# A moveto miss defers positioning the merged base-map+mutmap cursor, leaving
+# the work to whichever accessor runs next. prollyBtCursorEof() is one of them,
+# and it has no error channel: when positioning fails it faults the cursor and
+# answers 1. OP_SeekLT and friends call it only to distinguish a negative
+# comparison result from an empty table, so the fault read as "no rows" and the
+# statement ended with SQLITE_OK having returned nothing.
+#
+# Each fault iteration below must either fail cleanly or return exactly the
+# correct rows. An empty or short result counts as a failure.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_deferred_seek_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE k(a INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO k VALUES(10, 'ten');
+  INSERT INTO k VALUES(20, 'twenty');
+  INSERT INTO k VALUES(30, 'thirty');
+  INSERT INTO k VALUES(40, 'forty');
+}
+faultsim_save_and_close
+
+# Backward seek whose target key is absent, over a mutmap holding an insert and
+# a delete, so the seek misses and positioning is deferred to the accessors.
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+      DELETE FROM k WHERE a=30;
+      INSERT INTO k VALUES(25, 'twentyfive');
+  }
+} -body {
+  set out [list]
+  db eval { SELECT a, b FROM k WHERE a <= 35 ORDER BY a DESC } {
+    lappend out $a $b
+  }
+  set out
+} -test {
+  faultsim_test_result {0 {25 twentyfive 20 twenty 10 ten}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+# Same shape reaching the payload accessors through a blob value, so a
+# truncated fetch is visible as a wrong length rather than a wrong key.
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+      UPDATE k SET b = 'x' WHERE a=20;
+      INSERT INTO k VALUES(35, 'thirtyfive');
+  }
+} -body {
+  set out [list]
+  db eval { SELECT a, length(b) FROM k WHERE a <= 38 ORDER BY a DESC } {
+    lappend out $a [set {} $length(b)]
+  }
+  set out
+} -test {
+  faultsim_test_result {0 {35 10 30 6 20 1 10 3}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+finish_test

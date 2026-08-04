@@ -4,6 +4,7 @@
 #define BTREE_ORIG_PREFIX_H
 
 #define sqlite3SchemaMutexHeld orig_sqlite3SchemaMutexHeld
+#define doltliteBtreeCursorFaultCode orig_doltliteBtreeCursorFaultCode
 
 #define sqlite3BtreeBeginStmt orig_sqlite3BtreeBeginStmt
 #define sqlite3BtreeBeginTrans orig_sqlite3BtreeBeginTrans

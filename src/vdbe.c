@@ -3023,6 +3023,10 @@ case OP_Offset: {          /* out3 */
       if( rc ) goto abort_due_to_error;
     }
     if( sqlite3BtreeEof(pC->uc.pCursor) ){
+#ifdef DOLTLITE_PROLLY
+      rc = doltliteBtreeCursorFaultCode(pC->uc.pCursor);
+      if( rc ) goto abort_due_to_error;
+#endif
       sqlite3VdbeMemSetNull(pOut);
     }else{
       sqlite3VdbeMemSetInt64(pOut, sqlite3BtreeOffset(pC->uc.pCursor));
@@ -4109,6 +4113,11 @@ case OP_CountIndexRange: {    /* out2 */
       }
       if( rc ) goto abort_due_to_error;
     }
+#ifdef DOLTLITE_PROLLY
+    /* Leaving the loop on a faulted cursor would undercount silently. */
+    rc = doltliteBtreeCursorFaultCode(pCrsr);
+    if( rc ) goto abort_due_to_error;
+#endif
   }else if( rc ){
     goto abort_due_to_error;
   }
@@ -5376,6 +5385,13 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
       ** see if this is the case.
       */
       res = sqlite3BtreeEof(pC->uc.pCursor);
+#ifdef DOLTLITE_PROLLY
+      /* A deferred merged-seek that failed reports EOF, so without this the
+      ** seek would read the failure as an empty table and the statement would
+      ** end cleanly with no rows. */
+      rc = doltliteBtreeCursorFaultCode(pC->uc.pCursor);
+      if( rc ) goto abort_due_to_error;
+#endif
     }
   }
 seek_not_found:
