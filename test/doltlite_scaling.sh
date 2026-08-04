@@ -170,8 +170,12 @@ depth_ops() {
   local side="$1"
   local lg co mg
   lg=$(run_ms_median5 "$DBA" "SELECT count(*) FROM dolt_log;")
-  co=$(run_ms "$DBA" "SELECT dolt_checkout('anchor');")
-  co=$(( co + $(run_ms "$DBA" "SELECT dolt_checkout('main');") ))
+  # Checkout leaves no trace, so it samples like the walk above does.
+  co=$(run_ms_median5 "$DBA" "SELECT dolt_checkout('anchor');")
+  co=$(( co + $(run_ms_median5 "$DBA" "SELECT dolt_checkout('main');") ))
+  # Merge stays a single sample: each side branch can only be merged once, and
+  # merging successive ones would measure against a main that has moved on.
+  # Making this a median needs one side branch per sample at each depth.
   mg=$(run_ms "$DBA" "SELECT dolt_merge('$side');")
   echo "$lg $co $mg"
 }

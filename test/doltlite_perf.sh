@@ -13,6 +13,32 @@ time_ms() {
   echo $((end - start))
 }
 
+# Median of n samples. A single-op timing is mostly process start and db open,
+# so one sample measures runner jitter as much as the operation; the SELECT
+# cases below already loop 100 times for the same reason. Median rather than
+# mean so one stalled sample cannot carry the result.
+time_ms_median() {
+  local n="$1"; shift
+  local i
+  local times=""
+  for i in $(seq 1 "$n"); do
+    times="$times$(time_ms "$@")"$'\n'
+  done
+  printf '%s' "$times" | grep -v '^$' | sort -n | awk -v n="$n" 'NR==int((n+1)/2){print; exit}'
+}
+
+# DELETE consumes the row it measures, so each sample needs its own. Ids count
+# down from base, which the fixtures populate densely from 0.
+time_ms_median_delete() {
+  local n="$1" db="$2" base="$3"
+  local i
+  local times=""
+  for i in $(seq 1 "$n"); do
+    times="$times$(time_ms "echo 'DELETE FROM t WHERE id=$((base - i));' | $DOLTLITE '$db'")"$'\n'
+  done
+  printf '%s' "$times" | grep -v '^$' | sort -n | awk -v n="$n" 'NR==int((n+1)/2){print; exit}'
+}
+
 assert_ratio() {
   local name="$1" small="$2" large="$3" max_ratio="$4"
   local raw_small="$small"
@@ -97,13 +123,13 @@ assert_ratio "select_100k_to_1m" "$T_SEL_100K" "$T_SEL_1M" 10
 echo ""
 echo "--- Single-row UPDATE ---"
 
-T_UPD_1K=$(time_ms "echo 'UPDATE t SET v=\"updated\" WHERE id=500;' | $DOLTLITE '$DB_1K'")
+T_UPD_1K=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=500;' | $DOLTLITE '$DB_1K'")
 echo "  1K: ${T_UPD_1K}ms"
 
-T_UPD_100K=$(time_ms "echo 'UPDATE t SET v=\"updated\" WHERE id=50000;' | $DOLTLITE '$DB_100K'")
+T_UPD_100K=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=50000;' | $DOLTLITE '$DB_100K'")
 echo "  100K: ${T_UPD_100K}ms"
 
-T_UPD_1M=$(time_ms "echo 'UPDATE t SET v=\"updated\" WHERE id=500000;' | $DOLTLITE '$DB_1M'")
+T_UPD_1M=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=500000;' | $DOLTLITE '$DB_1M'")
 echo "  1M: ${T_UPD_1M}ms"
 
 assert_ratio "update_1k_to_100k" "$T_UPD_1K" "$T_UPD_100K" 10
@@ -112,13 +138,13 @@ assert_ratio "update_100k_to_1m" "$T_UPD_100K" "$T_UPD_1M" 10
 echo ""
 echo "--- Single-row DELETE ---"
 
-T_DEL_1K=$(time_ms "echo 'DELETE FROM t WHERE id=999;' | $DOLTLITE '$DB_1K'")
+T_DEL_1K=$(time_ms_median_delete 5 "$DB_1K" 999)
 echo "  1K: ${T_DEL_1K}ms"
 
-T_DEL_100K=$(time_ms "echo 'DELETE FROM t WHERE id=99999;' | $DOLTLITE '$DB_100K'")
+T_DEL_100K=$(time_ms_median_delete 5 "$DB_100K" 99999)
 echo "  100K: ${T_DEL_100K}ms"
 
-T_DEL_1M=$(time_ms "echo 'DELETE FROM t WHERE id=999999;' | $DOLTLITE '$DB_1M'")
+T_DEL_1M=$(time_ms_median_delete 5 "$DB_1M" 999999)
 echo "  1M: ${T_DEL_1M}ms"
 
 assert_ratio "delete_1k_to_100k" "$T_DEL_1K" "$T_DEL_100K" 10
@@ -134,13 +160,13 @@ UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_100K" > /dev/null 2>&1
 echo "SELECT dolt_commit('-A','-m','baseline');
 UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_1M" > /dev/null 2>&1
 
-T_DIFF_1K=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1K'")
+T_DIFF_1K=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1K'")
 echo "  1K: ${T_DIFF_1K}ms"
 
-T_DIFF_100K=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_100K'")
+T_DIFF_100K=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_100K'")
 echo "  100K: ${T_DIFF_100K}ms"
 
-T_DIFF_1M=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1M'")
+T_DIFF_1M=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1M'")
 echo "  1M: ${T_DIFF_1M}ms"
 
 assert_ratio "diff_1k_to_100k" "$T_DIFF_1K" "$T_DIFF_100K" 10
