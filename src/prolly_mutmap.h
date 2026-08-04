@@ -107,7 +107,7 @@ int prollyMutMapResolveSortedPos(
   int *pIdx, int *pFound
 );
 
-ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx);
+int prollyMutMapEntryAt(ProllyMutMap *mm, int idx, ProllyMutMapEntry **ppEntry);
 
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry);
 

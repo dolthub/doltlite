@@ -991,11 +991,18 @@ int prollyMutMapFindRc(
   return SQLITE_OK;
 }
 
-ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
+int prollyMutMapEntryAt(
+  ProllyMutMap *mm,
+  int idx,
+  ProllyMutMapEntry **ppEntry
+){
+  int rc;
   assert( mm!=0 );
   assert( idx>=0 && idx<mm->nEntries );
-  ensureOrder(mm);
-  return entryAtOrder(mm, idx);
+  rc = ensureOrder(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  *ppEntry = entryAtOrder(mm, idx);
+  return SQLITE_OK;
 }
 
 int prollyMutMapResolveSortedPos(
@@ -1029,6 +1036,7 @@ int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry)
   if( !mm->keepSorted && mm->orderDirty ){
     return rankEntryWithoutOrder(mm, phys);
   }
+  /* Both branches that can fail returned above, so this only refreshes aPos. */
   ensureOrder(mm);
   return mm->aPos[phys];
 }

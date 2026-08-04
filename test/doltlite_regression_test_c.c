@@ -7539,7 +7539,10 @@ static int mutmapAssertMatchesModel(
     ok = ok && pEntry->op==pModel->a[i].op;
     ok = ok && ((pEntry->op==PROLLY_EDIT_DELETE)
              || (pEntry->nVal==(int)sizeof(int) && memcmp(pEntry->pVal, &pModel->a[i].val, sizeof(int))==0));
-    ok = ok && prollyMutMapEntryAt(pMap, i)==pEntry;
+    {
+      ProllyMutMapEntry *pAt = 0;
+      ok = ok && prollyMutMapEntryAt(pMap, i, &pAt)==SQLITE_OK && pAt==pEntry;
+    }
     ok = ok && prollyMutMapOrderIndexFromEntry(pMap, pEntry)==i;
     rc = prollyMutMapFindRc(pMap, 0, 0, pModel->a[i].key, &pFind);
     ok = ok && rc==SQLITE_OK;

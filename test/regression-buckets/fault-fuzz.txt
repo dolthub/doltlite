@@ -89,3 +89,4 @@ windowfault
 zeroblobfault
 zipfilefault
 doltlite_recover_commit_fail_cursor
+doltlite_recover_mutmap_order_oom
