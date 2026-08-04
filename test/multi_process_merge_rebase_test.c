@@ -155,6 +155,55 @@ static void seed_feature_branch(const char *path, const char *branch,
   sqlite3_close(db);
 }
 
+static int commitMainRowWithRetry(const char *path, int iRow){
+  int att;
+  for(att=0; att<150; att++){
+    sqlite3 *db = 0;
+    const char *r;
+    char sql[128];
+    int rc;
+
+    rc = sqlite3_open(path, &db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_close(db);
+      usleep(8000);
+      continue;
+    }
+    sqlite3_busy_timeout(db, 1000);
+    r = queryScalarText(db, "SELECT dolt_checkout('main')");
+    if( looks_like_lock_busy(r) ){
+      sqlite3_close(db);
+      usleep(8000);
+      continue;
+    }
+    snprintf(sql, sizeof(sql),
+             "INSERT OR IGNORE INTO t VALUES(%d, 'mc_%d')", 500+iRow, iRow);
+    rc = execSql(db, sql);
+    if( rc==SQLITE_BUSY || rc==SQLITE_LOCKED ){
+      sqlite3_close(db);
+      usleep(8000);
+      continue;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_close(db);
+      return 1;
+    }
+    snprintf(sql, sizeof(sql), "SELECT dolt_commit('-A','-m','mc_%d')", iRow);
+    r = queryScalarText(db, sql);
+    if( is_commit_hash(r) ){
+      sqlite3_close(db);
+      return 0;
+    }
+    if( !looks_like_commit_conflict(r) && !looks_like_lock_busy(r) ){
+      sqlite3_close(db);
+      return 1;
+    }
+    sqlite3_close(db);
+    usleep(8000);
+  }
+  return 1;
+}
+
 
 static void test_concurrent_mergers_into_main(void){
   const char *path = "/tmp/test_concurrent_mergers.db";
@@ -221,31 +270,11 @@ static void test_merge_racing_target_commits(void){
 
   writer = fork();
   if( writer==0 ){
-    sqlite3 *db = 0;
     int i, fails = 0;
-    sqlite3_open(path, &db);
-    sqlite3_busy_timeout(db, 1000);
     for(i=0; i<N_MAIN_COMMITS; i++){
-      char sql[128];
-      const char *r;
-      int att, committed = 0;
-      if( looks_like_lock_busy(queryScalarText(db, "SELECT dolt_checkout('main')")) ){
-        usleep(10000); continue;
-      }
-      snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'mc_%d')", 500+i, i);
-      if( execSql(db, sql)!=SQLITE_OK ){ fails++; continue; }
-      snprintf(sql, sizeof(sql), "SELECT dolt_commit('-A','-m','mc_%d')", i);
-      for(att=0; att<150 && !committed; att++){
-        r = queryScalarText(db, sql);
-        if( is_commit_hash(r) ){ committed = 1; break; }
-        if( looks_like_commit_conflict(r) || looks_like_lock_busy(r) ){
-          usleep(8000); continue;
-        }
-        fails++; break;   /* only a hard, non-retryable result is a failure */
-      }
+      if( commitMainRowWithRetry(path, i)!=0 ) fails++;
       usleep(15000);
     }
-    sqlite3_close(db);
     _exit(fails>0 ? 1 : 0);
   }
 
