@@ -259,11 +259,16 @@ static int findMatchingMutMapEntry(
                                     &lo, &found);
 
   while( rc==SQLITE_OK && lo < pMap->nEntries ){
-    ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pMap, lo);
-    const u8 *pRec = pEntry->pVal;
-    int nRec = pEntry->nVal;
+    ProllyMutMapEntry *pEntry;
+    const u8 *pRec;
+    int nRec;
     int cmpLen;
     int prefixCmp;
+
+    rc = prollyMutMapEntryAt(pMap, lo, &pEntry);
+    if( rc!=SQLITE_OK ) break;
+    pRec = pEntry->pVal;
+    nRec = pEntry->nVal;
 
     if( pMap->isIntKey ){
       lo++;
@@ -1008,8 +1013,8 @@ int cachedSeekKeyMatchesCurrent(BtCursor *pCur){
   }
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
-    if( !e ) return 0;
+    ProllyMutMapEntry *e;
+    if( currentMutMapEntry(pCur, &e)!=SQLITE_OK || !e ) return 0;
     pKey = e->pKey;
     nKey = e->nKey;
   }else if( prollyCursorIsValid(&pCur->pCur) ){
@@ -1038,7 +1043,9 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
     if( !e ) return SQLITE_NOTFOUND;
     pKey = e->pKey;
     nKey = e->nKey;

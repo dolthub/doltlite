@@ -474,7 +474,7 @@ int prollyBtreeCheckMaxPageCount(Btree *p);
 int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
                                int nData, i64 nZeroTail);
 u32 prollySerialTypeLen(u32 serialType);
-ProllyMutMapEntry *currentMutMapEntry(BtCursor *pCur);
+int currentMutMapEntry(BtCursor *pCur, ProllyMutMapEntry **ppEntry);
 void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx);
 const char *findTableNumberName(sqlite3 *db, Pgno iTable);
 int cachedSeekKeyMatchesCurrent(BtCursor *pCur);
@@ -734,7 +734,7 @@ void clearMergeCursorState(BtCursor*);
 int mergeLast(BtCursor *pCur, int *pRes);
 int prollyCursorCheckInterrupt(BtCursor*);
 int advanceTreeCursor(BtCursor*, int);
-ProllyMutMapEntry *orderedMutMapEntryAt(ProllyMutMap*, int);
+int orderedMutMapEntryAt(ProllyMutMap*, int, ProllyMutMapEntry**);
 int unpackedRecordCanUseIntSortKey(BtCursor*, UnpackedRecord*, int);
 int sortKeyFromUnpackedIntRecordBuffer(UnpackedRecord*, int, u8**, int*, int*);
 int prollyInvokeBusyHandler(BtShared*);

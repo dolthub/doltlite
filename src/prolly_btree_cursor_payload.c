@@ -66,7 +66,14 @@ i64 prollyBtCursorIntegerKey(BtCursor *pCur){
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    return prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
+    return prollyMutMapEntryIntKey(e);
   }
   if( pCur->pCur.eState!=PROLLY_CURSOR_VALID
    && (pCur->curFlags & BTCF_ValidNKey) ){
@@ -114,7 +121,11 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    ProllyMutMapEntry *e;
+    int rcEntry = currentMutMapEntry(pCur, &e);
+    if( rcEntry!=SQLITE_OK ){
+      return cursorPayloadFault(pCur, rcEntry, ppData, pnData);
+    }
     if( pCur->curIntKey ){
       if( e->nZeroTail > 0 ){
         int rc = cacheCursorPayloadZeroTail(pCur, e->pVal, e->nVal,
@@ -210,7 +221,13 @@ u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   }
   if( pCur->curIntKey && pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
     /* Answer from the pending row before consulting the tree. The tree cursor
     ** may still be valid for MERGE_SRC_BOTH, but its value is stale. */
     return (u32)((i64)e->nVal + e->nZeroTail);
@@ -269,7 +286,9 @@ int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   if( pCur->curIntKey
    && pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    ProllyMutMapEntry *e;
+    rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
     if( e && e->nZeroTail>0 ){
       return copyZeroTailPayload(e, offset, amt, pBuf);
     }
@@ -332,7 +351,13 @@ const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( pCur->curIntKey
    && pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
     if( e && e->nZeroTail>0 && e->nVal>0 ){
       if( pAmt ) *pAmt = (u32)e->nVal;
       return (const void*)e->pVal;

@@ -139,7 +139,8 @@ static int mergeScan(BtCursor *pCur, int dir, int *pRes){
       if( pRes ) *pRes = 0;
       return SQLITE_OK;
     }
-    e = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+    rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
+    if( rc!=SQLITE_OK ) return rc;
     if( !treeOk ){
       if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx += dir; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
@@ -205,7 +206,9 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   if( pCur->curIntKey ){
     rc = prollyCursorSeekInt(&pCur->pCur, pCur->cachedIntKey, &res);
   }else{
-    ProllyMutMapEntry *e = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+    ProllyMutMapEntry *e;
+    rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
+    if( rc!=SQLITE_OK ) return rc;
     rc = prollyCursorSeekBlob(&pCur->pCur, e->pKey, e->nKey, &res);
   }
   if( rc!=SQLITE_OK ) return rc;
@@ -507,16 +510,23 @@ static int prollyBtCursorStepPrologue(BtCursor *pCur, int dir, int *pImmediate){
   return SQLITE_OK;
 }
 
-static void prollyCursorClassifyMergeSrc(BtCursor *pCur, int idx){
+static int prollyCursorClassifyMergeSrc(BtCursor *pCur, int idx){
+  int both = 0;
   if( idx >= 0 && idx < pCur->pMutMap->nEntries
-   && prollyCursorIsValid(&pCur->pCur)
-   && mergeCompare(pCur, prollyMutMapEntryAt(pCur->pMutMap, idx))==0 ){
+   && prollyCursorIsValid(&pCur->pCur) ){
+    ProllyMutMapEntry *e;
+    int rc = prollyMutMapEntryAt(pCur->pMutMap, idx, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    both = mergeCompare(pCur, e)==0;
+  }
+  if( both ){
     pCur->mergeSrc = MERGE_SRC_BOTH;
   }else if( !prollyCursorIsValid(&pCur->pCur) ){
     pCur->mergeSrc = MERGE_SRC_MUT;
   }else{
     pCur->mergeSrc = MERGE_SRC_TREE;
   }
+  return SQLITE_OK;
 }
 
 static int prollyCursorApplyMergeStep(BtCursor *pCur, int dir){
@@ -586,7 +596,8 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
     if( rc!=SQLITE_OK ) return rc;
     pCur->mmIdx = it.idx;
     pCur->mmActive = 1;
-    prollyCursorClassifyMergeSrc(pCur, it.idx);
+    rc = prollyCursorClassifyMergeSrc(pCur, it.idx);
+    if( rc!=SQLITE_OK ) return rc;
     rc = prollyCursorApplyMergeStep(pCur, 1);
   }else{
     rc = prollyCursorFinishTreeStep(pCur, prollyCursorNextFastLeaf(&pCur->pCur));
@@ -623,22 +634,26 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
                                 prollyCursorIntKey(&pCur->pCur));
       if( rc!=SQLITE_OK ) return rc;
-      if( it.idx >= pCur->pMutMap->nEntries
-       || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
-       || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
-      ){
+      if( it.idx >= pCur->pMutMap->nEntries ){
         it.idx--;
+      }else{
+        ProllyMutMapEntry *e;
+        rc = orderedMutMapEntryAt(pCur->pMutMap, it.idx, &e);
+        if( rc!=SQLITE_OK ) return rc;
+        if( mergeCompare(pCur, e)>=0 || e->op==PROLLY_EDIT_DELETE ) it.idx--;
       }
     }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
       const u8 *pK; int nK;
       prollyCursorKey(&pCur->pCur, &pK, &nK);
       rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
       if( rc!=SQLITE_OK ) return rc;
-      if( it.idx >= pCur->pMutMap->nEntries
-       || mergeCompare(pCur, orderedMutMapEntryAt(pCur->pMutMap, it.idx))>=0
-       || orderedMutMapEntryAt(pCur->pMutMap, it.idx)->op==PROLLY_EDIT_DELETE
-      ){
+      if( it.idx >= pCur->pMutMap->nEntries ){
         it.idx--;
+      }else{
+        ProllyMutMapEntry *e;
+        rc = orderedMutMapEntryAt(pCur->pMutMap, it.idx, &e);
+        if( rc!=SQLITE_OK ) return rc;
+        if( mergeCompare(pCur, e)>=0 || e->op==PROLLY_EDIT_DELETE ) it.idx--;
       }
     }else if( pCur->eState==CURSOR_VALID ){
       rc = seedMutMapIterFromCursor(pCur, &it);
@@ -653,7 +668,8 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
     if( rc!=SQLITE_OK ) return rc;
     pCur->mmIdx = it.idx;
     pCur->mmActive = 1;
-    prollyCursorClassifyMergeSrc(pCur, it.idx);
+    rc = prollyCursorClassifyMergeSrc(pCur, it.idx);
+    if( rc!=SQLITE_OK ) return rc;
     rc = prollyCursorApplyMergeStep(pCur, -1);
   }else{
     rc = prollyCursorFinishTreeStep(pCur, prollyCursorPrev(&pCur->pCur));
@@ -733,7 +749,9 @@ int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
     if( !e ) return SQLITE_NOTFOUND;
     pKey = e->pKey;
     nKey = e->nKey;

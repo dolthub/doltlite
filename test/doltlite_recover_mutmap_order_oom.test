@@ -1,0 +1,74 @@
+# Pending edits that arrived out of key order must sort or fail, never both.
+#
+# An unsorted pending set has to be sorted before it can be read in key order,
+# and that sort allocates, so it can fail under memory pressure. This drives
+# both shapes -- an ordered scan and a keyed seek -- so the sort runs and, on
+# the iterations where it fails, the failure has to reach the caller instead of
+# resolving indexes through the pre-sort ordering.
+#
+# Each fault iteration must either fail cleanly or return exactly the correct
+# rows. A right-sized result carrying wrong pairings counts as a failure.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_mutmap_order_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO t VALUES(100, 'hundred');
+  INSERT INTO t VALUES(200, 'twohundred');
+}
+faultsim_save_and_close
+
+# Descending inserts leave appendSorted clear and orderDirty set, so the first
+# ordered read has to sort, and the sort has to allocate.
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+      INSERT INTO t VALUES(90, 'ninety');
+      INSERT INTO t VALUES(70, 'seventy');
+      INSERT INTO t VALUES(80, 'eighty');
+      INSERT INTO t VALUES(60, 'sixty');
+      INSERT INTO t VALUES(50, 'fifty');
+  }
+} -body {
+  set out [list]
+  db eval { SELECT a, b FROM t ORDER BY a } { lappend out $a $b }
+  set out
+} -test {
+  faultsim_test_result {0 {50 fifty 60 sixty 70 seventy 80 eighty 90 ninety 100 hundred 200 twohundred}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+# Same unsorted pending set, reached through a keyed seek rather than a scan,
+# so a stale mapping shows up as the wrong value for a known key.
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+      INSERT INTO t VALUES(95, 'ninetyfive');
+      INSERT INTO t VALUES(75, 'seventyfive');
+      INSERT INTO t VALUES(85, 'eightyfive');
+      INSERT INTO t VALUES(65, 'sixtyfive');
+  }
+} -body {
+  set out [list]
+  db eval { SELECT b FROM t WHERE a=75 } { lappend out $b }
+  db eval { SELECT b FROM t WHERE a=85 } { lappend out $b }
+  db eval { SELECT a FROM t WHERE a>=65 AND a<=95 ORDER BY a DESC } {
+    lappend out $a
+  }
+  set out
+} -test {
+  faultsim_test_result {0 {seventyfive eightyfive 95 85 75 65}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+finish_test
