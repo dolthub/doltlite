@@ -3201,6 +3201,55 @@ static void run_gc_rewrite_failure(void){
   removeDbFiles(dbpath);
 }
 
+/* The header-size varint is part of the header it measures, so adding it can
+** push the size across a varint width. With 127 single-byte type codes the
+** header reaches 128, which no longer fits the one byte that was reserved for
+** it; the record was then built one byte short and would not parse back. */
+static void run_record_header_varint_boundary(void){
+  static const int aField[] = { 125, 126, 127, 128, 129, 253, 254, 255 };
+  int k;
+
+  for(k=0; k<(int)(sizeof(aField)/sizeof(aField[0])); k++){
+    int nField = aField[k];
+    DoltliteSerialValue *aMem;
+    DoltliteRecordInfo info;
+    u8 *pRec;
+    int nRec = 0;
+    int i;
+    int ok;
+    char zName[128];
+
+    aMem = sqlite3_malloc((int)sizeof(*aMem) * nField);
+    if( !aMem ){
+      check("record_header_boundary_alloc", 0);
+      return;
+    }
+    for(i=0; i<nField; i++){
+      memset(&aMem[i], 0, sizeof(aMem[i]));
+      aMem[i].eType = SQLITE_INTEGER;
+      /* 2..127 all encode as serial type 1: one header byte, one body byte.
+      ** 128 would need type 2, which would change the header arithmetic. */
+      aMem[i].i = (i % 126) + 2;
+    }
+
+    pRec = doltliteBuildRecord(aMem, nField, &nRec);
+    memset(&info, 0, sizeof(info));
+    ok = pRec!=0
+      && doltliteParseRecordStrict(pRec, nRec, &info)==SQLITE_OK
+      && info.nField==nField;
+    if( ok ){
+      for(i=0; i<nField; i++){
+        if( info.aType[i]!=1 ){ ok = 0; break; }
+      }
+    }
+    sqlite3_snprintf((int)sizeof(zName), zName,
+                     "record_header_varint_boundary_%d_fields", nField);
+    check(zName, ok);
+    sqlite3_free(pRec);
+    sqlite3_free(aMem);
+  }
+}
+
 static void run_record_decode_corruption(void){
   static const u8 badRecord[] = {
     0x05, 0x01
@@ -9418,6 +9467,7 @@ static const RegressionCase aCases[] = {
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
+  { "record_header_varint_boundary", "Record Header Varint Boundary Test", run_record_header_varint_boundary },
   { "sortkey_two_numeric_roundtrip", "Sortkey Two Numeric Roundtrip Test", run_sortkey_two_numeric_roundtrip },
   { "sortkey_numeric_text_roundtrip", "Sortkey Numeric Text Roundtrip Test", run_sortkey_numeric_text_roundtrip },
   { "sortkey_numeric_blob_roundtrip", "Sortkey Numeric Blob Roundtrip Test", run_sortkey_numeric_blob_roundtrip },
