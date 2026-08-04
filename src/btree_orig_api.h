@@ -92,4 +92,8 @@ int origBtreeIntegrityCheck(sqlite3 *db, void *p, Pgno *aRoot,
 int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
                           int *pIsSqliteFile);
 
+#ifndef SQLITE_OMIT_VACUUM
+int origBtreeCopyFile(void *pTo, void *pFrom);
+#endif
+
 #endif

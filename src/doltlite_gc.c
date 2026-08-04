@@ -1087,8 +1087,10 @@ int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs){
   return doltliteGcCompactStoreWithPhase(db, cs, &zPhase);
 }
 
-int doltliteGcCompactWithPhase(sqlite3 *db, const char **pzPhase){
-  return doltliteGcCompactStoreWithPhase(db, doltliteGetChunkStore(db), pzPhase);
+int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase){
+  if( !db || iDb<0 || iDb>=db->nDb ) return SQLITE_OK;
+  return doltliteGcCompactStoreWithPhase(
+      db, doltliteBtreeChunkStore(db->aDb[iDb].pBt), pzPhase);
 }
 
 int doltliteGcRegister(sqlite3 *db){

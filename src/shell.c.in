@@ -10006,6 +10006,52 @@ static void parseDotCmdArgs(const char *zLine, ShellState *p){
 **
 ** Return 1 on error, 2 to exit, and 0 otherwise.
 */
+#ifdef DOLTLITE_PROLLY
+/* True when the connection's main database is a stock SQLite file rather than a
+** doltlite chunk store. */
+static int doltliteShellDbIsStock(sqlite3 *db){
+  sqlite3_stmt *pStmt = 0;
+  int bStock = 0;
+  if( db==0 ) return 0;
+  if( sqlite3_prepare_v2(db, "SELECT doltlite_engine()", -1, &pStmt, 0)
+        ==SQLITE_OK
+   && sqlite3_step(pStmt)==SQLITE_ROW
+  ){
+    const char *z = (const char*)sqlite3_column_text(pStmt, 0);
+    bStock = z!=0 && strcmp(z, "orig")==0;
+  }
+  sqlite3_finalize(pStmt);
+  return bStock;
+}
+
+/* "path" -> "file:path?doltlite_engine=sqlite", escaping the three characters
+** that would otherwise terminate or corrupt the path component. */
+static char *doltliteShellStockUri(const char *zFile){
+  char *zEsc;
+  char *zUri;
+  int i, j, nExtra = 0;
+  for(i=0; zFile[i]; i++){
+    if( zFile[i]=='%' || zFile[i]=='?' || zFile[i]=='#' ) nExtra += 2;
+  }
+  zEsc = sqlite3_malloc64((sqlite3_int64)i + nExtra + 1);
+  if( zEsc==0 ) return 0;
+  for(i=j=0; zFile[i]; i++){
+    if( zFile[i]=='%' || zFile[i]=='?' || zFile[i]=='#' ){
+      static const char hex[] = "0123456789ABCDEF";
+      zEsc[j++] = '%';
+      zEsc[j++] = hex[(zFile[i]>>4) & 0xf];
+      zEsc[j++] = hex[zFile[i] & 0xf];
+    }else{
+      zEsc[j++] = zFile[i];
+    }
+  }
+  zEsc[j] = 0;
+  zUri = sqlite3_mprintf("file:%s?doltlite_engine=sqlite", zEsc);
+  sqlite3_free(zEsc);
+  return zUri;
+}
+#endif
+
 static int do_meta_command(const char *zLine, ShellState *p){
   int nArg;
   int n, c;
@@ -10099,6 +10145,23 @@ static int do_meta_command(const char *zLine, ShellState *p){
       return 1;
     }
     if( zDb==0 ) zDb = "main";
+#ifdef DOLTLITE_PROLLY
+    /* A backup is a page copy, so a legacy source needs a destination that
+    ** holds stock pages. Left alone, a new file is created as a chunk store and
+    ** the copy is refused, so ask for the stock engine explicitly. */
+    open_db(p, 0);
+    if( doltliteShellDbIsStock(p->db) ){
+      char *zUri = doltliteShellStockUri(zDestFile);
+      if( zUri==0 ){
+        cli_printf(stderr,"Error: out of memory\n");
+        return 1;
+      }
+      rc = sqlite3_open_v2(zUri, &pDest,
+                    SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_URI,
+                    zVfs);
+      sqlite3_free(zUri);
+    }else
+#endif
     rc = sqlite3_open_v2(zDestFile, &pDest,
                   SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE, zVfs);
     if( rc!=SQLITE_OK ){

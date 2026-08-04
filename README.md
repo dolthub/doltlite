@@ -640,6 +640,24 @@ CREATE TABLE local_events AS SELECT * FROM ops.events;
 DETACH DATABASE ops;
 ```
 
+Auto-detect reads an existing file's header, so it cannot classify a file that
+does not exist yet: a database created by DoltLite is DoltLite-format. To create
+a stock SQLite file instead, open it with `doltlite_engine=sqlite`:
+
+```
+doltlite 'file:/path/to/new.sqlite?doltlite_engine=sqlite'
+```
+
+The parameter selects the engine for a database being created and is ignored
+once the file has content, so it can never reinterpret an existing database.
+`.backup` and `VACUUM INTO` apply it for you when the source is a stock file, so
+their output is a stock file too.
+
+`VACUUM` on a stock database rewrites pages as SQLite does; on a DoltLite
+database it garbage-collects unreachable chunks. `.backup`/`.restore` and
+`sqlite3_backup_*` work within either format, but not between them — there is no
+defined conversion, so a mixed pair is refused rather than half-copied.
+
 ## Per-Session Branching Architecture
 
 Each connection selects a branch independently and recovers that branch's

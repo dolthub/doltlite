@@ -1900,6 +1900,9 @@ struct sqlite3 {
 #define DBFLAG_SchemaKnownOk  0x0010  /* Schema is known to be valid */
 #define DBFLAG_InternalFunc   0x0020  /* Allow use of internal functions */
 #define DBFLAG_EncodingFixed  0x0040  /* No longer possible to change enc. */
+#ifdef DOLTLITE_PROLLY
+#define DBFLAG_VacuumOrig     0x0080  /* Open the VACUUM target as orig-format */
+#endif
 
 /*
 ** Bits of the sqlite3.dbOptFlags field that are used by the
@@ -5715,6 +5718,7 @@ void sqlite3VtabMakeWritable(Parse*,Table*);
 #ifdef DOLTLITE_PROLLY
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
 int doltliteBtreeCaptureStatement(void*);
+void *doltliteBtreeOrigPtr(void*);
 #endif
 void sqlite3VtabBeginParse(Parse*, Token*, Token*, Token*, int);
 void sqlite3VtabFinishParse(Parse*, Token*);

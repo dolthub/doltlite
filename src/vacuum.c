@@ -167,37 +167,41 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
 
 
 #ifdef DOLTLITE_PROLLY
-  extern int doltliteGcCompactWithPhase(sqlite3*, const char**);
-  if( pOut ){
-    sqlite3SetString(pzErrMsg, db,
-      "VACUUM INTO is not supported for doltlite databases");
-    return SQLITE_ERROR;
-  }
-  /* Prolly VACUUM is a GC bridge, not stock page rewrite. Do not reject open
-  ** transactions here: doltliteGcCompactWithPhase treats !autoCommit, held
-  ** graph lock, and uncommitted staging as a successful no-op (checkpoint-
-  ** driven compaction uses the same contract). Stock's "cannot VACUUM from
-  ** within a transaction" applies only to the page-vacuum path below. */
-  {
-    const char *zPhase = 0;
-    int rcGc = doltliteGcCompactWithPhase(db, &zPhase);
-    if( rcGc!=SQLITE_OK ){
-      if( rcGc==SQLITE_NOMEM || rcGc==SQLITE_IOERR_NOMEM ){
-        sqlite3SetString(pzErrMsg, db, "out of memory");
-      }else if( rcGc==SQLITE_FULL ){
-        sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
-      }else if( (rcGc & 0xff)==SQLITE_IOERR ){
-        /* Stock VACUUM surfaces "disk I/O error" (etc.), not a GC phase
-        ** label. faultsim harnesses accept {1 {disk I/O error}} as a
-        ** valid injected-IO outcome (pagerfault3-1). Keep phase text for
-        ** non-IO failures and for the dolt_gc() SQL function. */
-        sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
-      }else{
-        sqlite3SetString(pzErrMsg, db, zPhase ? zPhase : sqlite3ErrStr(rcGc));
-      }
-      return rcGc;
+  /* Only the database named by iDb picks the engine: a legacy stock-format file
+  ** falls through to the page-vacuum path below even in a doltlite build. */
+  if( sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt) ){
+    extern int doltliteGcCompactDbWithPhase(sqlite3*, int, const char**);
+    if( pOut ){
+      sqlite3SetString(pzErrMsg, db,
+        "VACUUM INTO is not supported for doltlite databases");
+      return SQLITE_ERROR;
     }
-    return SQLITE_OK;
+    /* Prolly VACUUM is a GC bridge, not stock page rewrite. Do not reject open
+    ** transactions here: doltliteGcCompactDbWithPhase treats !autoCommit, held
+    ** graph lock, and uncommitted staging as a successful no-op (checkpoint-
+    ** driven compaction uses the same contract). Stock's "cannot VACUUM from
+    ** within a transaction" applies only to the page-vacuum path below. */
+    {
+      const char *zPhase = 0;
+      int rcGc = doltliteGcCompactDbWithPhase(db, iDb, &zPhase);
+      if( rcGc!=SQLITE_OK ){
+        if( rcGc==SQLITE_NOMEM || rcGc==SQLITE_IOERR_NOMEM ){
+          sqlite3SetString(pzErrMsg, db, "out of memory");
+        }else if( rcGc==SQLITE_FULL ){
+          sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
+        }else if( (rcGc & 0xff)==SQLITE_IOERR ){
+          /* Stock VACUUM surfaces "disk I/O error" (etc.), not a GC phase
+          ** label. faultsim harnesses accept {1 {disk I/O error}} as a
+          ** valid injected-IO outcome (pagerfault3-1). Keep phase text for
+          ** non-IO failures and for the dolt_gc() SQL function. */
+          sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcGc));
+        }else{
+          sqlite3SetString(pzErrMsg, db, zPhase ? zPhase : sqlite3ErrStr(rcGc));
+        }
+        return rcGc;
+      }
+      return SQLITE_OK;
+    }
   }
 #endif
 
@@ -258,7 +262,42 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   sqlite3_randomness(sizeof(iRandom),&iRandom);
   sqlite3_snprintf(sizeof(zDbVacuum), zDbVacuum, "vacuum_%016llx", iRandom);
   nDb = db->nDb;
+#ifdef DOLTLITE_PROLLY
+  /* pMain is orig-format here (the prolly branch returned above), so the vacuum
+  ** target must be opened by the same engine to receive its pages. */
+  db->mDbFlags |= DBFLAG_VacuumOrig;
+  /* Stock reports a non-empty target as "output file already exists" from the
+  ** size check below, which it reaches because its ATTACH of the target is
+  ** deferred. Opening a database is eager here, so a target holding anything
+  ** that is not a database fails the ATTACH first and reports that instead.
+  ** Take the size decision before the open so the message matches. */
+  if( pOut ){
+    int exists = 0;
+    if( sqlite3OsAccess(db->pVfs, zOut, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+     && exists
+    ){
+      sqlite3_file *pProbe = 0;
+      int probeFlags = 0;
+      i64 probeSz = 0;
+      if( sqlite3OsOpenMalloc(db->pVfs, zOut, &pProbe,
+                              SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                              &probeFlags)==SQLITE_OK ){
+        int probeRc = sqlite3OsFileSize(pProbe, &probeSz);
+        sqlite3OsCloseFree(pProbe);
+        if( probeRc!=SQLITE_OK || probeSz>0 ){
+          db->mDbFlags &= ~(u32)DBFLAG_VacuumOrig;
+          sqlite3SetString(pzErrMsg, db, "output file already exists");
+          rc = SQLITE_ERROR;
+          goto end_of_vacuum;
+        }
+      }
+    }
+  }
+#endif
   rc = execSqlF(db, pzErrMsg, "ATTACH %Q AS %s", zOut, zDbVacuum);
+#ifdef DOLTLITE_PROLLY
+  db->mDbFlags &= ~(u32)DBFLAG_VacuumOrig;
+#endif
   db->openFlags = saved_openFlags;
   if( rc!=SQLITE_OK ) goto end_of_vacuum;
   assert( (db->nDb-1)==nDb );

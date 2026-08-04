@@ -487,6 +487,44 @@ static int doltliteResolveOpenBranchPath(
   return SQLITE_OK;
 }
 
+/* True when zFilename names a file that already holds bytes. Used to keep the
+** doltlite_engine URI knob from reinterpreting an existing database. */
+static int doltliteFileHasContent(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  int *pHasContent
+){
+  sqlite3_file *pFile = 0;
+  int exists = 0;
+  int outFlags = 0;
+  i64 sz = 0;
+  int rc;
+
+  *pHasContent = 0;
+  if( !pVfs ){
+    pVfs = sqlite3_vfs_find(0);
+    if( !pVfs ) return SQLITE_OK;
+  }
+  rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !exists ) return SQLITE_OK;
+
+  rc = sqlite3OsOpenMalloc(pVfs, zFilename, &pFile,
+                           SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                           &outFlags);
+  if( rc!=SQLITE_OK ){
+    if( pFile ) sqlite3OsCloseFree(pFile);
+    /* Unreadable is not "empty": leave the knob inactive. */
+    *pHasContent = 1;
+    return SQLITE_OK;
+  }
+  rc = sqlite3OsFileSize(pFile, &sz);
+  sqlite3OsCloseFree(pFile);
+  if( rc!=SQLITE_OK ) return rc;
+  *pHasContent = sz>0;
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeOpen(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -511,7 +549,33 @@ int sqlite3BtreeOpen(
   useOrig = !zFilename || zFilename[0]=='\0'
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
-   || (vfsFlags & SQLITE_OPEN_TEMP_DB);
+   || (vfsFlags & SQLITE_OPEN_TEMP_DB)
+   /* VACUUM copies pages, so its target must use the same engine as the legacy
+   ** database being vacuumed rather than defaulting to prolly. */
+   || (db && (db->mDbFlags & DBFLAG_VacuumOrig)!=0);
+  /* A caller creating a file it intends to hold stock pages -- a backup or
+  ** VACUUM INTO target for a legacy database -- asks for the stock engine with
+  ** doltlite_engine=sqlite, since a new file otherwise becomes a chunk store.
+  ** It selects the engine for a database being created and is ignored once the
+  ** file has content, so it can never reinterpret an existing chunk store; a
+  ** file that already holds stock pages is detected below anyway.
+  **
+  ** Gated on SQLITE_OPEN_MAIN_DB because sqlite3_uri_parameter() is only
+  ** defined on a name sqlite3ParseUri() built: it resolves the name through
+  ** databaseName(), which reads zName[-1] through zName[-4] to walk back over
+  ** the URI's key/value pairs. Handed a plain string that is merely nul
+  ** terminated, it reads before the buffer. Main and ATTACH are the only opens
+  ** whose names come from ParseUri; every other caller reaches here with a name
+  ** it built itself. */
+  if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
+    const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
+    if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
+      int hasContent = 1;
+      rc = doltliteFileHasContent(pVfs, zFilename, &hasContent);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !hasContent ) useOrig = 1;
+    }
+  }
   if( !useOrig ){
     rc = doltliteResolveOpenBranchPath(pVfs, zFilename, &zStoreFilename,
                                        &zBranchFromPath);
@@ -823,6 +887,17 @@ int sqlite3BtreeOpen(
 
 int sqlite3BtreeUsesOrig(Btree *p){
   return p && p->pOps==&origBtreeVtOps;
+}
+
+/* db->aDb[].pBt always holds a doltlite Btree; for a legacy database that
+** wrapper delegates to a stock btree. The orig page copier is compiled against
+** the stock layout and needs that inner pointer, so it resolves schema names
+** through here rather than reading Db.pBt directly. Returns 0 for a
+** doltlite-format database, which the copier reports as "not a database". */
+void *doltliteBtreeOrigPtr(void *pBtree){
+  Btree *p = (Btree*)pBtree;
+  if( !sqlite3BtreeUsesOrig(p) ) return 0;
+  return p->pOrigBtree;
 }
 
 int prollyBtreeClose(Btree *p){
@@ -1935,6 +2010,15 @@ integrity_done:
 int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   int i;
 
+  /* A legacy VACUUM copies stock pages between two orig btrees; only the prolly
+  ** path below has a catalog to rebuild. The bridge lives in backup.c, which is
+  ** compiled out with the rest of VACUUM, so the delegation goes with it. */
+#ifndef SQLITE_OMIT_VACUUM
+  if( pTo->pOrigBtree && pFrom->pOrigBtree ){
+    return origBtreeCopyFile(pTo->pOrigBtree, pFrom->pOrigBtree);
+  }
+#endif
+
   invalidateCursors(pTo->pBt, 0, SQLITE_ABORT);
 
   catFree(&pTo->cat);
@@ -1989,6 +2073,14 @@ static void doltiteEngineFunc(
     zEngine = "orig";
   }
   sqlite3_result_text(context, zEngine, -1, SQLITE_STATIC);
+}
+
+/* The store behind one specific btree. Maintenance operations act on the
+** database they were given, so they resolve their store from its Btree rather
+** than from db->aDb[0]. */
+ChunkStore *doltliteBtreeChunkStore(Btree *p){
+  if( !p || !sqlite3BtreeIsDoltliteFormat(p) || !p->pBt ) return 0;
+  return &p->pBt->store;
 }
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db){
