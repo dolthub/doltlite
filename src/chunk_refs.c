@@ -283,20 +283,32 @@ static int refsReadCount(CsRefsReader *pReader, int nMin, int *pCount){
   return SQLITE_OK;
 }
 
-static int refsReadString(CsRefsReader *pReader, char **pzOut){
+static int refsReadStringView(
+  CsRefsReader *pReader,
+  char **pzOut,
+  const u8 **ppView,
+  int *pnView
+){
   const u8 *p;
   char *z;
   int n;
   int rc = refsReadU32(pReader, &n);
   if( rc!=SQLITE_OK ) return rc;
   rc = refsTake(pReader, n, &p);
-  if( rc!=SQLITE_OK || !pzOut ) return rc;
+  if( rc!=SQLITE_OK ) return rc;
+  if( ppView ) *ppView = p;
+  if( pnView ) *pnView = n;
+  if( !pzOut ) return SQLITE_OK;
   z = sqlite3_malloc64((sqlite3_uint64)n + 1);
   if( !z ) return SQLITE_NOMEM;
   memcpy(z, p, n);
   z[n] = 0;
   *pzOut = z;
   return SQLITE_OK;
+}
+
+static int refsReadString(CsRefsReader *pReader, char **pzOut){
+  return refsReadStringView(pReader, pzOut, 0, 0);
 }
 
 static int refsReadHash(
@@ -341,11 +353,14 @@ int csDecodeRefsV7(
 ){
   CsRefsReader reader;
   const u8 *pVersion;
+  const u8 *pDefaultBranch;
+  int nDefaultBranch;
   int nBranches;
   int nTags;
   int nRemotes;
   int nTracking;
   int nSequences;
+  int hasDefaultBranch = 0;
   int i;
   int rc;
 
@@ -354,7 +369,9 @@ int csDecodeRefsV7(
   reader.n = nData;
   rc = refsTake(&reader, 1, &pVersion);
   if( rc!=SQLITE_OK || pVersion[0]!=7 ) return SQLITE_CORRUPT;
-  rc = refsReadString(&reader, pRefs ? &pRefs->zDefaultBranch : 0);
+  rc = refsReadStringView(&reader,
+      pRefs ? &pRefs->zDefaultBranch : 0,
+      &pDefaultBranch, &nDefaultBranch);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = refsReadCount(&reader, 4 + 2*PROLLY_HASH_SIZE, &nBranches);
@@ -367,7 +384,15 @@ int csDecodeRefsV7(
   }
   for(i=0; i<nBranches; i++){
     BranchRef *pBranch = pRefs ? &pRefs->aBranches[i] : 0;
-    rc = refsReadString(&reader, pBranch ? &pBranch->zName : 0);
+    const u8 *pBranchName;
+    int nBranchName;
+    rc = refsReadStringView(&reader, pBranch ? &pBranch->zName : 0,
+                            &pBranchName, &nBranchName);
+    if( rc==SQLITE_OK
+     && nBranchName==nDefaultBranch
+     && memcmp(pBranchName, pDefaultBranch, nBranchName)==0 ){
+      hasDefaultBranch = 1;
+    }
     if( rc==SQLITE_OK ){
       rc = refsReadHash(&reader, pBranch ? &pBranch->commitHash : 0,
                         xHash, pCtx);
@@ -378,6 +403,7 @@ int csDecodeRefsV7(
     }
     if( rc!=SQLITE_OK ) return rc;
   }
+  if( nBranches>0 && !hasDefaultBranch ) return SQLITE_CORRUPT;
 
   rc = refsReadCount(&reader, 24 + PROLLY_HASH_SIZE, &nTags);
   if( rc!=SQLITE_OK ) return rc;

@@ -31,6 +31,9 @@ extern int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore);
 extern int doltliteRemoteSrvApplyRefsForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
 );
+extern int doltliteRemoteSrvResolveRootForTest(
+  ChunkStore *pStore, ProllyHash *pRoot
+);
 
 static int nPass = 0;
 static int nFail = 0;
@@ -1269,12 +1272,18 @@ static int countChunkChild(void *pCtx, const ProllyHash *pHash){
 static void run_refs_blob_corruption(void){
   ChunkStore cs;
   ChunkStore cs2;
+  ChunkStore branchless;
   ProllyHash commitHash;
+  ProllyHash rootHash;
   ProllyHash workingSetHash;
   u8 *pBlob = 0;
+  u8 *pMissingDefault = 0;
+  u8 *pBranchless = 0;
   u8 *pTrailing = 0;
   u8 shortBlob[13];
   int nBlob = 0;
+  int nMissingDefault = 0;
+  int nBranchless = 0;
   int allTruncationsCorrupt = 1;
   int nChildren = 0;
   int i;
@@ -1287,6 +1296,8 @@ static void run_refs_blob_corruption(void){
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
   check("open_mem_store_2",
         chunkStoreOpen(&cs2, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("open_mem_store_branchless",
+        chunkStoreOpen(&branchless, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
 
   check("set_default_branch",
         chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
@@ -1325,6 +1336,32 @@ static void run_refs_blob_corruption(void){
   check("refs_walker_uses_complete_decoder",
         rc==SQLITE_OK && nChildren==4);
 
+  check("set_missing_default_branch",
+        chunkStoreSetDefaultBranch(&cs, "missing")==SQLITE_OK);
+  rc = doltliteRemoteSrvResolveRootForTest(&cs, &rootHash);
+  check("missing_default_branch_root_returns_corrupt", rc==SQLITE_CORRUPT);
+  check("serialize_missing_default_branch",
+        chunkStoreSerializeRefsToBlob(
+          &cs, &pMissingDefault, &nMissingDefault)==SQLITE_OK);
+  check("restore_default_branch",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  rc = chunkStoreLoadRefsFromBlob(
+      &cs2, pMissingDefault, nMissingDefault);
+  check("missing_default_branch_returns_corrupt", rc==SQLITE_CORRUPT);
+  rc = doltliteEnumerateChunkChildren(
+      pMissingDefault, nMissingDefault, 0, 0);
+  check("refs_walker_rejects_missing_default_branch", rc==SQLITE_CORRUPT);
+
+  check("serialize_branchless_refs",
+        chunkStoreSerializeRefsToBlob(
+          &branchless, &pBranchless, &nBranchless)==SQLITE_OK);
+  rc = doltliteRemoteSrvResolveRootForTest(&branchless, &rootHash);
+  check("branchless_root_is_empty",
+        rc==SQLITE_OK && prollyHashIsEmpty(&rootHash));
+  rc = chunkStoreLoadRefsFromBlob(&cs2, pBranchless, nBranchless);
+  check("branchless_refs_blob_loads",
+        rc==SQLITE_OK && refsTableBranchCount(&cs2.refs)==0);
+
   for(i=0; i<nBlob; i++){
     rc = chunkStoreLoadRefsFromBlob(&cs2, pBlob, i);
     if( rc!=SQLITE_CORRUPT ) allTruncationsCorrupt = 0;
@@ -1348,7 +1385,10 @@ static void run_refs_blob_corruption(void){
   }
 
   sqlite3_free(pTrailing);
+  sqlite3_free(pBranchless);
+  sqlite3_free(pMissingDefault);
   sqlite3_free(pBlob);
+  chunkStoreClose(&branchless);
   chunkStoreClose(&cs2);
   chunkStoreClose(&cs);
 }
@@ -8927,7 +8967,7 @@ static void run_refs_deserialize_overflow_guard(void){
     memcpy(p, "main", 4); p += 4;
     CS_WRITE_U32(p, 1); p += 4;               /* nBranches */
     CS_WRITE_U32(p, 4); p += 4;               /* branch name length */
-    memcpy(p, "feat", 4); p += 4;
+    memcpy(p, "main", 4); p += 4;
     memset(p, 0xAB, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;  /* commit hash */
     memset(p, 0xCD, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;  /* working set */
     CS_WRITE_U32(p, 0); p += 4;               /* nTags */
@@ -8944,7 +8984,7 @@ static void run_refs_deserialize_overflow_guard(void){
     check("refs_roundtrip_branch_count", cs.refs.nBranches==1);
     check("refs_roundtrip_branch_name",
           cs.refs.nBranches==1 && cs.refs.aBranches[0].zName
-          && strcmp(cs.refs.aBranches[0].zName, "feat")==0);
+          && strcmp(cs.refs.aBranches[0].zName, "main")==0);
     csFreeRefsState(&cs);
   }
 
