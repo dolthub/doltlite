@@ -162,7 +162,45 @@ run_test_match "noninteractive_rebase_keeps_other_branch_uncommitted_work" \
   "^1$" \
   "$DB3"
 
-rm -f "$DB" "$DB2" "$DB3"
+# An unrecognised plan verb used to report a bare "rebase failed", which reads
+# as though the rebase had been rolled back. It is not: the plan and working
+# branch are deliberately kept so the action can be corrected and --continue
+# retried, so the error has to name what was wrong.
+DB4=/tmp/test_rebase_verb_$$.db
+seed_verb_repo() {
+  rm -f "$1"
+  cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1');
+SELECT dolt_checkout('main');
+SQL
+}
+
+seed_verb_repo "$DB4"
+run_test_match "unknown_plan_action_names_the_action" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   UPDATE dolt_rebase SET action='oops';
+   SELECT dolt_rebase('--continue');" \
+  'unknown rebase action "oops": expected pick, reword, squash, fixup or drop' \
+  "$DB4"
+
+seed_verb_repo "$DB4"
+run_test_match "unknown_plan_action_stays_resumable" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   UPDATE dolt_rebase SET action='oops';
+   SELECT dolt_rebase('--continue');
+   UPDATE dolt_rebase SET action='pick';
+   SELECT dolt_rebase('--continue');" \
+  "Successfully rebased and updated refs/heads/feat" \
+  "$DB4"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
