@@ -284,6 +284,49 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('--amend', '-m', 'amended with row 2');
 "
 
+# Amending a merge must keep every parent. Dropping all but the first takes the
+# merged branch out of ancestry, so the log loses a commit and a later merge of
+# the same branch is no longer a no-op.
+oracle "commit_amend_merge_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_checkout('-b', 'side');
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'side1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main1');
+SELECT dolt_merge('side');
+SELECT dolt_commit('--amend', '-m', 'amended merge');
+"
+
+oracle_query "commit_amend_merge_keeps_parents" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_checkout('-b', 'side');
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'side1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main1');
+SELECT dolt_merge('side');
+SELECT dolt_commit('--amend', '-m', 'amended merge');
+" \
+"SELECT 'R|parents|' || count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash=(SELECT dolt_hashof('HEAD'))
+ UNION ALL SELECT 'R|log|' || count(*) FROM dolt_log;" \
+"SELECT CONCAT('R|parents|', count(*)) FROM dolt_commit_ancestors
+   WHERE commit_hash=hashof('HEAD')
+ UNION ALL SELECT CONCAT('R|log|', count(*)) FROM dolt_log;"
+
 echo "--- skip / allow empty ---"
 
 oracle "commit_allow_empty_no_changes" "
