@@ -1,0 +1,51 @@
+# A failed commit must not touch a cursor's pending-edit map after freeing it.
+#
+# commitPhaseTwoFailRestore() called restoreFromCommitted(), which frees the
+# per-table pending maps, and then cleared each cursor's pMutMap -- an alias of
+# the map just freed. Flushing leaves the map allocated (flushMutMap ends with
+# prollyMutMapClear, and flushPendingForTable returns early once it is empty),
+# so any write transaction holding an open cursor reached the failure path with
+# a live alias. AddressSanitizer reported heap-use-after-free in
+# prollyMutMapClear, freed one call earlier in the same function.
+#
+# The cursor here is a partially stepped SELECT, which is what keeps an entry on
+# pBt->pCursor across the COMMIT. Without an ASan build this exercises the path
+# and asserts the database stays usable; under ASan it is the actual detector.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_recover_commit_fail_cursor
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO t VALUES(1,'one');
+  INSERT INTO t VALUES(2,'two');
+}
+
+do_test 1.1 {
+  set errors [list]
+  for {set iFail 1} {$iFail <= 400} {incr iFail} {
+    catchsql ROLLBACK
+    execsql BEGIN
+    catchsql {INSERT INTO t VALUES(3,'three')}
+    catchsql {UPDATE t SET b='mut' WHERE a=1}
+
+    # Leave a cursor open over the pending edits across the COMMIT.
+    set stmt [sqlite3_prepare_v2 db {SELECT a, b FROM t ORDER BY a} -1 tail]
+    sqlite3_step $stmt
+
+    sqlite3_memdebug_fail $iFail -repeat 0
+    catchsql COMMIT
+    sqlite3_memdebug_fail -1
+    catch { sqlite3_finalize $stmt }
+    catchsql ROLLBACK
+
+    # Whatever the injected failure did, the row set must still be readable.
+    set rc [catchsql {SELECT count(*) FROM t}]
+    if {[lindex $rc 0]!=0} { lappend errors "iFail=$iFail read failed: $rc" }
+  }
+  set errors
+} {}
+
+finish_test
