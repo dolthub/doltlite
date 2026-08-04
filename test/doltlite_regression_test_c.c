@@ -4100,6 +4100,58 @@ static void run_open_rejects_corrupt_working_set(void){
   removeDbFiles(dbpath);
 }
 
+static void run_open_ignores_stale_working_set(void){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  sqlite3 *db3 = 0;
+  ChunkStore cs;
+  ProllyHash staleWorkingSet;
+  char dbpath[256];
+
+  printf("=== Open Ignores Stale Working Set Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_open_ignores_stale_working_set");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_stale_working_set", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_stale_working_set", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A', '-m', 'first');")==SQLITE_OK);
+  check("capture_stale_working_set",
+        chunkStoreGetBranchWorkingSet(doltliteGetChunkStore(db), "main",
+                                      &staleWorkingSet)==SQLITE_OK);
+  check("open_peer_before_head_advance", open_db(dbpath, &db2)==SQLITE_OK);
+  check("advance_head_past_stale_working_set", execSql(db,
+    "INSERT INTO t VALUES(2,'two');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  check("open_store_to_restore_stale_working_set",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("restore_stale_working_set",
+        chunkStoreSetBranchWorkingSet(&cs, "main", &staleWorkingSet)==SQLITE_OK);
+  check("serialize_stale_working_set_refs",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_stale_working_set_refs", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreClose(&cs);
+
+  check("peer_refresh_follows_head_past_stale_working_set",
+        strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "2")==0);
+  sqlite3_close(db2);
+
+  check("reopen_db_with_stale_working_set", open_db(dbpath, &db3)==SQLITE_OK);
+  check("head_retains_second_commit",
+        strcmp(queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1"),
+               "second")==0);
+  check("live_catalog_follows_head_past_stale_working_set",
+        strcmp(queryScalarText(db3, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(db3);
+  removeDbFiles(dbpath);
+}
+
 static void run_diff_stat_requires_refs(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -9390,6 +9442,7 @@ static const RegressionCase aCases[] = {
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
+  { "open_ignores_stale_working_set", "Open Ignores Stale Working Set Test", run_open_ignores_stale_working_set },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
   { "diff_stat_wide_modified_rows", "Diff Stat Wide Modified Rows Test", run_diff_stat_wide_modified_rows },
   { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },

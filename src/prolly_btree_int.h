@@ -691,6 +691,23 @@ extern const struct BtCursorOps prollyCursorOps;
 extern const struct BtCursorOps origCursorVtOps;
 
 int btreeLoadBranchHeadCatalog(ChunkStore*, const char*, ProllyHash*, ProllyHash*);
+typedef struct BtreeBranchState BtreeBranchState;
+struct BtreeBranchState {
+  ProllyHash catalog;
+  ProllyHash headCommit;
+  ProllyHash stagedCatalog;
+  ProllyHash mergeCommit;
+  ProllyHash conflictsCatalog;
+  ProllyHash preRebaseCatalog;
+  ProllyHash rebaseOnto;
+  ProllyHash constraintViolations;
+  char *zRebaseOrigBranch;
+  char *zRebaseReturnBranch;
+  u8 isMerging;
+  u8 isRebasing;
+};
+int btreeLoadBranchState(ChunkStore*, const char*, int, BtreeBranchState*);
+void btreeClearBranchState(BtreeBranchState*);
 int btreeLoadWorkingSetBlob(ChunkStore*, const char*, ProllyHash*, ProllyHash*,
                             ProllyHash*, u8*, ProllyHash*, ProllyHash*, u8*,
                             ProllyHash*, ProllyHash*, char**, char**, ProllyHash*);
