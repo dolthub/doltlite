@@ -154,6 +154,33 @@ printf '%s\n' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "overlapping exact and counted gates"
 
+# unstable marks a gate whose assertion does not fail every run. It is enforced
+# in neither direction, so it has to cite the issue tracking the cause, and it
+# only means anything per assertion -- a whole-file marker is what it replaces.
+printf '%s\n' \
+  'alpha alpha-1 unstable class=harness issue=42' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+write_ratchet 3 0 1 2 0
+run_check
+write_fixture
+write_ratchet
+
+printf '%s\n' \
+  'alpha alpha-1 unstable class=harness' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "an unstable gate without an issue"
+write_fixture
+
+printf '%s\n' \
+  'alpha alpha-1 unstable unstable class=harness issue=42' \
+  'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "two unstable fields on one gate"
+write_fixture
+
+printf '%s\n' 'gamma unstable class=harness issue=42' > "$CRASHES"
+expect_failure "unstable on a crash row, which is keyed per file"
+write_fixture
+
 # Back to the 3-gate fixture for the ratchet cases.
 write_fixture
 write_ratchet
