@@ -78,16 +78,32 @@ struct DoltliteServer {
   int nDbCache;
 };
 
-static void sendResponse(DoltliteConn *fd, int status, const char *zStatus,
-                         const u8 *pBody, int nBody){
-  char zHeader[256];
+static void sendResponseEx(
+  DoltliteConn *fd,
+  int status,
+  const char *zStatus,
+  const char *zContentType,
+  const u8 *pBody,
+  int nBody
+){
+  char zHeader[384];
   int nHeader;
-  sqlite3_snprintf(sizeof(zHeader), zHeader,
-    "HTTP/1.1 %d %s\r\n"
-    "Content-Length: %d\r\n"
-    "Connection: close\r\n"
-    "\r\n",
-    status, zStatus, nBody);
+  if( zContentType && zContentType[0] ){
+    sqlite3_snprintf(sizeof(zHeader), zHeader,
+      "HTTP/1.1 %d %s\r\n"
+      "Content-Type: %s\r\n"
+      "Content-Length: %d\r\n"
+      "Connection: close\r\n"
+      "\r\n",
+      status, zStatus, zContentType, nBody);
+  }else{
+    sqlite3_snprintf(sizeof(zHeader), zHeader,
+      "HTTP/1.1 %d %s\r\n"
+      "Content-Length: %d\r\n"
+      "Connection: close\r\n"
+      "\r\n",
+      status, zStatus, nBody);
+  }
   nHeader = (int)strlen(zHeader);
   if( doltliteConnWriteAll(fd, zHeader, nHeader)!=0 ) return;
   if( pBody && nBody>0 ){
@@ -95,34 +111,105 @@ static void sendResponse(DoltliteConn *fd, int status, const char *zStatus,
   }
 }
 
+static void sendResponse(DoltliteConn *fd, int status, const char *zStatus,
+                         const u8 *pBody, int nBody){
+  sendResponseEx(fd, status, zStatus, 0, pBody, nBody);
+}
+
 static void sendOk(DoltliteConn *fd, const u8 *pBody, int nBody){
   sendResponse(fd, 200, "OK", pBody, nBody);
 }
 
+/* Structured error body: {"code":"...","sqlite":N,"message":"..."}.
+** Clients parse "message" for humans and "code"/"sqlite" for recovery. */
+static void sendStructuredError(
+  DoltliteConn *fd,
+  int httpStatus,
+  const char *zHttpReason,
+  const char *zCode,
+  int sqliteRc,
+  const char *zMessage
+){
+  char zBody[512];
+  int nBody;
+  const char *zMsg = zMessage && zMessage[0] ? zMessage : "error";
+  const char *zC = zCode && zCode[0] ? zCode : "error";
+  /* Keep body simple ASCII so no JSON escaping is required for known strings. */
+  sqlite3_snprintf(sizeof(zBody), zBody,
+    "{\"code\":\"%s\",\"sqlite\":%d,\"message\":\"%s\"}",
+    zC, sqliteRc, zMsg);
+  nBody = (int)strlen(zBody);
+  sendResponseEx(fd, httpStatus, zHttpReason, "application/json",
+                 (const u8*)zBody, nBody);
+}
+
 static void sendNotFound(DoltliteConn *fd){
-  sendResponse(fd, 404, "Not Found", (const u8*)"Not Found", 9);
+  sendStructuredError(fd, 404, "Not Found", "not_found", SQLITE_NOTFOUND,
+                      "not found");
 }
 
 static void sendBadRequest(DoltliteConn *fd){
-  sendResponse(fd, 400, "Bad Request", (const u8*)"Bad Request", 11);
+  sendStructuredError(fd, 400, "Bad Request", "bad_request", SQLITE_ERROR,
+                      "bad request");
 }
 
-static void sendError(DoltliteConn *fd){
-  sendResponse(fd, 500, "Internal Server Error",
-               (const u8*)"Internal Server Error", 21);
+static void sendSqliteError(DoltliteConn *fd, int rc){
+  switch( rc ){
+    case SQLITE_BUSY:
+      sendStructuredError(fd, 409, "Conflict", "refs_changed", rc,
+                          "remote refs changed; pull and retry");
+      return;
+    case SQLITE_CONSTRAINT:
+      sendStructuredError(fd, 400, "Bad Request", "non_ff", rc,
+                          "not a fast-forward of the remote branch "
+                          "(use force to overwrite)");
+      return;
+    case SQLITE_NOMEM:
+      sendStructuredError(fd, 500, "Internal Server Error", "nomem", rc,
+                          "out of memory");
+      return;
+    case SQLITE_READONLY:
+      sendStructuredError(fd, 500, "Internal Server Error", "readonly", rc,
+                          "database is read-only");
+      return;
+    case SQLITE_CORRUPT:
+      sendStructuredError(fd, 500, "Internal Server Error", "corrupt", rc,
+                          "database is corrupt");
+      return;
+    case SQLITE_NOTADB:
+      sendStructuredError(fd, 500, "Internal Server Error", "notadb", rc,
+                          "file is not a database");
+      return;
+    case SQLITE_IOERR:
+      sendStructuredError(fd, 500, "Internal Server Error", "io", rc,
+                          "I/O error");
+      return;
+    case SQLITE_TOOBIG:
+      sendStructuredError(fd, 413, "Payload Too Large", "toobig", rc,
+                          "payload too large");
+      return;
+    case SQLITE_AUTH:
+      sendStructuredError(fd, 401, "Unauthorized", "unauthorized", rc,
+                          "unauthorized");
+      return;
+    case SQLITE_NOTFOUND:
+      sendNotFound(fd);
+      return;
+    default:
+      sendStructuredError(fd, 500, "Internal Server Error", "error",
+                          rc ? rc : SQLITE_ERROR, "internal error");
+      return;
+  }
 }
 
 static void sendPayloadTooLarge(DoltliteConn *fd){
-  sendResponse(fd, 413, "Payload Too Large",
-               (const u8*)"Payload Too Large", 17);
-}
-
-static void sendConflict(DoltliteConn *fd){
-  sendResponse(fd, 409, "Conflict", (const u8*)"Conflict", 8);
+  sendStructuredError(fd, 413, "Payload Too Large", "toobig", SQLITE_TOOBIG,
+                      "payload too large");
 }
 
 static void sendUnauthorized(DoltliteConn *fd){
-  sendResponse(fd, 401, "Unauthorized", (const u8*)"Unauthorized", 12);
+  sendStructuredError(fd, 401, "Unauthorized", "unauthorized", SQLITE_AUTH,
+                      "unauthorized");
 }
 
 static int remoteSrvCommitPending(ChunkStore *pStore){
@@ -427,7 +514,7 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
   /* nHashes is bounded by MAX_REQUEST_BYTES / PROLLY_HASH_SIZE. */
   aResult = (u8*)sqlite3_malloc64((sqlite3_uint64)nHashes);
   if( !aResult ){
-    sendError(fd);
+    sendSqliteError(fd, SQLITE_NOMEM);
     return;
   }
   memset(aResult, 0, (size_t)nHashes);
@@ -441,7 +528,7 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
                          nHashes, aResult);
   if( rc!=SQLITE_OK ){
     sqlite3_free(aResult);
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
   sendOk(fd, aResult, nHashes);
@@ -478,7 +565,7 @@ static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
     if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
       sqlite3_free(pData);
       sqlite3_free(pOut);
-      sendError(fd);
+      sendSqliteError(fd, rc);
       return;
     }
     bPresent = (rc==SQLITE_OK);
@@ -502,7 +589,7 @@ static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
     if( growRc!=SQLITE_OK ){
       sqlite3_free(pData);
       sqlite3_free(pOut);
-      sendError(fd);
+      sendSqliteError(fd, growRc);
       return;
     }
 
@@ -544,7 +631,7 @@ static void handleGetChunk(ChunkStore *pStore, DoltliteConn *fd, const char *zHe
     return;
   }
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
   if( nData<0 || (i64)nData>MAX_RESPONSE_BYTES ){
@@ -584,7 +671,7 @@ static void handlePostChunks(ChunkStore *pStore, DoltliteConn *fd,
     rc = chunkStorePut(pStore, pBody + offset, (int)len, &hash);
     if( rc!=SQLITE_OK ){
       chunkStoreRollback(pStore);
-      sendError(fd);
+      sendSqliteError(fd, rc);
       return;
     }
     offset += (int)len;
@@ -592,7 +679,7 @@ static void handlePostChunks(ChunkStore *pStore, DoltliteConn *fd,
 
   rc = remoteSrvCommitPending(pStore);
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
 
@@ -615,7 +702,7 @@ static void handleGetRefs(ChunkStore *pStore, DoltliteConn *fd){
     return;
   }
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
 
@@ -708,7 +795,7 @@ static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
   rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pRest, nRest);
   sqlite3_free(zBranch);
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
 
@@ -737,12 +824,8 @@ static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
                             pRest + PROLLY_HASH_SIZE,
                             nRest - PROLLY_HASH_SIZE);
   sqlite3_free(zBranch);
-  if( rc==SQLITE_BUSY ){
-    sendConflict(fd);
-    return;
-  }
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
 
@@ -773,7 +856,7 @@ static void handleCommit(ChunkStore *pStore, DoltliteConn *fd){
 
   rc = remoteSrvPersistRefs(pStore);
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     return;
   }
 
@@ -1014,7 +1097,7 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
   pVfs = sqlite3_vfs_find(0);
   rc = pVfs->xAccess(pVfs, zDbPath, SQLITE_ACCESS_EXISTS, &exists);
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     sqlite3_free(pBody);
     return;
   }
@@ -1031,7 +1114,7 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
 
   rc = remoteDbAcquire(pSrv, zDbPath, !isReadOnlyEndpoint, &pHandle);
   if( rc!=SQLITE_OK ){
-    sendError(fd);
+    sendSqliteError(fd, rc);
     sqlite3_free(pBody);
     return;
   }

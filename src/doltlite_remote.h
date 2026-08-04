@@ -23,6 +23,9 @@ struct DoltliteRemote {
                     int bForce, const u8*, int);
   int (*xCommit)(DoltliteRemote*);
   void (*xClose)(DoltliteRemote*);
+  /* Optional. Last human-readable error from a remote op, or NULL. Lifetime
+  ** is until the next op or xClose. */
+  const char *(*xErrMsg)(DoltliteRemote*);
 };
 
 static inline int doltliteRemotePersistRefs(ChunkStore *cs){

@@ -783,7 +783,7 @@ int doltlitePush(
         int isAnc = syncIsAncestor(pLocal, &remoteCommit, &localCommit);
         if( isAnc <= 0 ){
           sqlite3_free(refsData);
-          return isAnc<0 ? SQLITE_NOMEM : SQLITE_ERROR;
+          return isAnc<0 ? SQLITE_NOMEM : SQLITE_CONSTRAINT;
         }
       }
     }
