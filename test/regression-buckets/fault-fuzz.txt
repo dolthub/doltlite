@@ -90,3 +90,4 @@ zeroblobfault
 zipfilefault
 doltlite_recover_commit_fail_cursor
 doltlite_recover_mutmap_order_oom
+doltlite_recover_deferred_seek_oom

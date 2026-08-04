@@ -697,6 +697,16 @@ int prollyBtCursorEof(BtCursor *pCur){
   }
   return (pCur->eState!=CURSOR_VALID);
 }
+
+/* Whether the EOF just reported means end-of-data or a failed deferred seek.
+** Orig cursors surface their own faults through the stock paths, so they
+** always answer SQLITE_OK. */
+int doltliteBtreeCursorFaultCode(BtCursor *pCur){
+  if( !pCur || pCur->pCurOps!=&prollyCursorOps ) return SQLITE_OK;
+  if( pCur->eState!=CURSOR_FAULT ) return SQLITE_OK;
+  return pCur->skipNext ? pCur->skipNext : SQLITE_ERROR;
+}
+
 int sqlite3BtreeEof(BtCursor *pCur){
   if( !pCur ) return 1;
   return pCur->pCurOps->xEof(pCur);
