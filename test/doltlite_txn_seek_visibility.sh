@@ -169,4 +169,57 @@ run_test "fts4_langid_rebuild_preserves_partitions" \
 
 db_rm "$DB"
 
+# A join of three or more tables emits OP_IfEmpty for the third and later
+# loops, which breaks out of the whole join when the table is empty. Answering
+# that from the persisted root alone dropped rows written earlier in the same
+# transaction, because they are still in the pending map.
+DB=/tmp/test_txn_ifempty_$$.db; db_rm "$DB"
+
+run_test "join_sees_table_populated_only_in_this_txn" \
+  "CREATE TABLE t1(a INTEGER PRIMARY KEY);
+   CREATE TABLE t2(a INTEGER PRIMARY KEY);
+   CREATE TABLE t3(a INTEGER PRIMARY KEY);
+   INSERT INTO t1 VALUES (1);
+   INSERT INTO t2 VALUES (1);
+   BEGIN;
+   INSERT INTO t3 VALUES (1);
+   SELECT count(*) FROM t1, t2, t3;
+   SELECT count(*) FROM t3, t1, t2;
+   COMMIT;
+   SELECT count(*) FROM t1, t2, t3;" \
+  "1
+1
+1" \
+  "$DB"
+
+db_rm "$DB"
+
+# The optimization must still fire for a table that really is empty, and a
+# table emptied inside the transaction must still join to nothing.
+DB=/tmp/test_txn_ifempty_neg_$$.db; db_rm "$DB"
+
+run_test "join_still_empty_for_empty_and_emptied_tables" \
+  "CREATE TABLE t1(a INTEGER PRIMARY KEY);
+   CREATE TABLE t2(a INTEGER PRIMARY KEY);
+   CREATE TABLE e(a INTEGER PRIMARY KEY);
+   CREATE TABLE d(a INTEGER PRIMARY KEY);
+   INSERT INTO t1 VALUES (1);
+   INSERT INTO t2 VALUES (1);
+   INSERT INTO d VALUES (1);
+   SELECT count(*) FROM t1, t2, e;
+   BEGIN;
+   DELETE FROM d;
+   SELECT count(*) FROM t1, t2, d;
+   INSERT INTO e VALUES (9);
+   SELECT count(*) FROM t1, t2, e;
+   ROLLBACK;
+   SELECT count(*) FROM t1, t2, e;" \
+  "0
+0
+1
+0" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish

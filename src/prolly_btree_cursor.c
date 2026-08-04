@@ -691,9 +691,19 @@ int prollyBtCursorIsEmpty(BtCursor *pCur, int *pRes){
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ){
     *pRes = 1;
-  } else {
-    *pRes = prollyHashIsEmpty(&pTE->root) ? 1 : 0;
+    return SQLITE_OK;
   }
+  /* Rows written in this transaction sit in the pending map until it drains,
+  ** so a table whose persisted root is still empty is not necessarily empty.
+  ** Answering from the root alone made OP_IfEmpty break out of a join over a
+  ** table that had rows.
+  **
+  ** A non-empty map counts as non-empty even if every entry is a tombstone.
+  ** Erring that way only forgoes the optimization, while erring the other way
+  ** drops rows, and it keeps this O(1): OP_IfEmpty sits inside the enclosing
+  ** loops, so it re-runs per outer row and cannot afford to scan the map. */
+  *pRes = (prollyHashIsEmpty(&pTE->root)
+        && (pTE->pPending==0 || prollyMutMapIsEmpty(pTE->pPending))) ? 1 : 0;
   return SQLITE_OK;
 }
 int sqlite3BtreeIsEmpty(BtCursor *pCur, int *pRes){
