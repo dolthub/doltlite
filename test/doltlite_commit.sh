@@ -415,7 +415,28 @@ PRAGMA integrity_check;"   "0
 0
 ok" "$DB13"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
+DB14=/tmp/test_dolt_staged_untracked_$$.db; rm -f "$DB14"
+
+run_test_match "staged_untracked_setup"   "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO kv VALUES(1,'base');
+SELECT dolt_commit('-Am','base');"   "^[0-9a-f]{40}$" "$DB14"
+
+run_test_match "staged_untracked_commit"   "CREATE TABLE aux(id INTEGER PRIMARY KEY);
+INSERT INTO kv VALUES(2,'next');
+SELECT dolt_add('kv');
+SELECT dolt_commit('-m','staged');"   "[0-9a-f]{40}$" "$DB14"
+
+run_test "staged_untracked_head_reopens"   "SELECT dolt_reset('--hard');
+SELECT group_concat(id) FROM kv;
+SELECT group_concat(name,'|') FROM (
+  SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name
+);
+PRAGMA integrity_check;"   "0
+1,2
+aux|kv
+ok" "$DB14"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

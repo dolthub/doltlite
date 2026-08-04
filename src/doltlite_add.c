@@ -737,6 +737,7 @@ static int addStageNamedTables(
       if( aWorking[j].iTable==iTable ){
         int k;
         int updated = 0;
+        updateMaster = 1;
         for(k=0; k<nStaged; k++){
           int nameMatch = aStaged[k].zName && aWorking[j].zName
             && strcmp(aStaged[k].zName, aWorking[j].zName)==0;
@@ -765,8 +766,6 @@ static int addStageNamedTables(
             }
           }
           if( nameMatch || unnamedRootMatch || renameRootMatch ){
-            int schemaChanged =
-              prollyHashCompare(&aStaged[k].schemaHash, &aWorking[j].schemaHash)!=0;
             int nameChanged =
               (!aStaged[k].zName) != (!aWorking[j].zName)
               || (aStaged[k].zName && aWorking[j].zName
@@ -788,15 +787,11 @@ static int addStageNamedTables(
             sqlite3_free(aStaged[k].zName);
             aStaged[k] = aWorking[j];
             aStaged[k].zName = zDup;
-            if( schemaChanged || nameChanged ){
-              updateMaster = 1;
-            }
             updated = 1;
             break;
           }
         }
         if( !updated ){
-          updateMaster = 1;
           rc = addAppendTableEntry(context, &aStaged, &nStaged, &aWorking[j]);
           if( rc!=SQLITE_OK ){
             ADDNAMED_FREE_ALL();
