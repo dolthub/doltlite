@@ -492,6 +492,8 @@ static int doltliteCommitCreateObject(
   ProllyHash *pCommitHashOut
 ){
   ProllyHash parentHash;
+  ProllyHash aExtraParents[DOLTLITE_MAX_PARENTS];
+  int nExtraParents = 0;
   char *zParsedName = 0, *zParsedEmail = 0;
   const char *zMessage;
   const char *zAuthor;
@@ -536,6 +538,19 @@ static int doltliteCommitCreateObject(
       }
       memcpy(&parentHash, pParent, sizeof(ProllyHash));
     }
+    /* Carry the remaining parents. Amending a merge with only its first parent
+    ** drops the merged branch out of ancestry, so later merge bases are
+    ** computed against a history that no longer records the merge. */
+    {
+      int nParent = doltliteCommitParentCount(&headCommit);
+      int i;
+      for(i=1; i<nParent && nExtraParents<DOLTLITE_MAX_PARENTS-1; i++){
+        const ProllyHash *pExtra = doltliteCommitParentHash(&headCommit, i);
+        if( pExtra && !prollyHashIsEmpty(pExtra) ){
+          memcpy(&aExtraParents[nExtraParents++], pExtra, sizeof(ProllyHash));
+        }
+      }
+    }
     if( !zMessage || !*zMessage ){
       zMessage = sqlite3_mprintf("%s",
           headCommit.zMessage ? headCommit.zMessage : "");
@@ -570,8 +585,8 @@ static int doltliteCommitCreateObject(
   }
 
   rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, pCatalogHash,
-      zMessage, zParsedName, zParsedEmail, 0, 0, opts->explicitTimestamp,
-      pCommitHashOut);
+      zMessage, zParsedName, zParsedEmail, aExtraParents, nExtraParents,
+      opts->explicitTimestamp, pCommitHashOut);
   sqlite3_free(zParsedName);
   sqlite3_free(zParsedEmail);
   if( rc!=SQLITE_OK ){
