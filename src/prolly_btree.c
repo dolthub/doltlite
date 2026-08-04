@@ -699,31 +699,12 @@ int sqlite3BtreeOpen(
   p->aMeta[BTREE_APPLICATION_ID] = 0;
 
   {
-    ProllyHash catHash;
-    ProllyHash workingCommit;
-    ProllyHash stagedCatalog;
-    ProllyHash mergeCommitHash;
-    ProllyHash conflictsCatalogHash;
+    BtreeBranchState state;
     ProllyHash branchCommit;
-    ProllyHash preRebaseCat;
-    ProllyHash rebaseOnto;
-    ProllyHash constraintViolationsHash;
-    char *zRebaseOrigBranch = 0;
-    char *zRebaseReturnBranch = 0;
-    u8 isRebasing = 0;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
       chunkStoreGetDefaultBranch(&pBt->store);
-    u8 isMerging = 0;
     if( !zDef ) zDef = "main";
-    memset(&catHash, 0, sizeof(catHash));
-    memset(&workingCommit, 0, sizeof(workingCommit));
-    memset(&stagedCatalog, 0, sizeof(stagedCatalog));
-    memset(&mergeCommitHash, 0, sizeof(mergeCommitHash));
-    memset(&conflictsCatalogHash, 0, sizeof(conflictsCatalogHash));
     memset(&branchCommit, 0, sizeof(branchCommit));
-    memset(&preRebaseCat, 0, sizeof(preRebaseCat));
-    memset(&rebaseOnto, 0, sizeof(rebaseOnto));
-    memset(&constraintViolationsHash, 0, sizeof(constraintViolationsHash));
     if( zBranchFromPath
      && chunkStoreFindBranch(&pBt->store, zDef, &branchCommit)!=SQLITE_OK ){
       sqlite3ErrorWithMsg(db, SQLITE_ERROR, "unable to select branch \"%s\"",
@@ -736,15 +717,7 @@ int sqlite3BtreeOpen(
       sqlite3_free(p);
       return SQLITE_ERROR;
     }
-    rc = btreeLoadWorkingSetBlob(&pBt->store, zDef, &catHash, &workingCommit,
-                                 &stagedCatalog, &isMerging,
-                                 &mergeCommitHash, &conflictsCatalogHash,
-                                 &isRebasing, &preRebaseCat, &rebaseOnto,
-                                 &zRebaseOrigBranch, &zRebaseReturnBranch,
-                                 &constraintViolationsHash);
-    if( rc==SQLITE_NOTFOUND ){
-      rc = SQLITE_OK;
-    }
+    rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
     if( rc!=SQLITE_OK ){
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
@@ -754,29 +727,15 @@ int sqlite3BtreeOpen(
       sqlite3_free(p);
       return rc;
     }
-    if( prollyHashIsEmpty(&catHash) ){
-      rc = btreeLoadBranchHeadCatalog(&pBt->store, zDef, &catHash, 0);
-      if( rc==SQLITE_NOTFOUND ){
-        rc = SQLITE_OK;
-      }
-      if( rc!=SQLITE_OK ){
-        pagerShimDestroy(pBt->pPagerShim);
-        prollyCacheFree(&pBt->cache);
-        chunkStoreClose(&pBt->store);
-        sqlite3_free(zStoreFilename);
-        sqlite3_free(pBt);
-        sqlite3_free(p);
-        return rc;
-      }
-    }
-    if( !prollyHashIsEmpty(&catHash) ){
+    if( !prollyHashIsEmpty(&state.catalog) ){
       u8 *catData = 0;
       int nCatData = 0;
-      rc = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
+      rc = chunkStoreGet(&pBt->store, &state.catalog, &catData, &nCatData);
       if( rc==SQLITE_OK && catData ){
         rc = deserializeCatalog(p, catData, nCatData);
         sqlite3_free(catData);
         if( rc!=SQLITE_OK ){
+          btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
           chunkStoreClose(&pBt->store);
@@ -788,6 +747,7 @@ int sqlite3BtreeOpen(
       }else{
         sqlite3_free(catData);
         if( rc!=SQLITE_OK ){
+          btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
           chunkStoreClose(&pBt->store);
@@ -799,23 +759,17 @@ int sqlite3BtreeOpen(
       }
     }
 
-    if( chunkStoreFindBranch(&pBt->store, zDef, &branchCommit)==SQLITE_OK ){
-      memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
-    }else if( !prollyHashIsEmpty(&workingCommit) ){
-      memcpy(&p->headCommit, &workingCommit, sizeof(ProllyHash));
-    }else{
-      memset(&p->headCommit, 0, sizeof(ProllyHash));
-    }
-    p->vc.stagedCatalog = stagedCatalog;
-    p->vc.isMerging = isMerging;
-    p->vc.mergeCommitHash = mergeCommitHash;
-    p->vc.conflictsCatalogHash = conflictsCatalogHash;
-    p->isRebasing = isRebasing;
-    p->preRebaseWorkingCat = preRebaseCat;
-    p->rebaseOntoCommit = rebaseOnto;
-    p->zRebaseOrigBranch = zRebaseOrigBranch;
-    p->zRebaseReturnBranch = zRebaseReturnBranch;
-    p->vc.constraintViolationsHash = constraintViolationsHash;
+    p->headCommit = state.headCommit;
+    p->vc.stagedCatalog = state.stagedCatalog;
+    p->vc.isMerging = state.isMerging;
+    p->vc.mergeCommitHash = state.mergeCommit;
+    p->vc.conflictsCatalogHash = state.conflictsCatalog;
+    p->isRebasing = state.isRebasing;
+    p->preRebaseWorkingCat = state.preRebaseCatalog;
+    p->rebaseOntoCommit = state.rebaseOnto;
+    p->zRebaseOrigBranch = state.zRebaseOrigBranch;
+    p->zRebaseReturnBranch = state.zRebaseReturnBranch;
+    p->vc.constraintViolationsHash = state.constraintViolations;
   }
 
   p->cat.iNextTable = 2;
