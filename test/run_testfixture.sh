@@ -85,6 +85,36 @@ expected_for() {
   ' "$DIVERGENCE_FILE"
 }
 
+# Gates whose assertion does not fail every run. They are still gated when they
+# fail, but passing must not be reported as a stale entry: the outcome varies,
+# so neither result is news. Kept per assertion rather than per file so the rest
+# of the suite stays enforced.
+unstable_for() {
+  local file="$1"
+  [ -f "$DIVERGENCE_FILE" ] || return 0
+  awk -v f="$file" -v host_os="$HOST_OS" -v test_variant="$TEST_VARIANT" '
+    {
+      sub(/#.*/, "")
+      gsub(/^[ \t]+|[ \t]+$/, "")
+      if ($0 == "") next
+      is_unstable = 0
+      for (i = 3; i <= NF; i++) {
+        if ($i == "unstable") { is_unstable = 1; continue }
+        if ($i !~ /^@/) continue
+        qualifier = substr($i, 2)
+        if (qualifier == "coverage") {
+          if (test_variant != "coverage") next
+        } else if (qualifier == "no-coverage") {
+          if (test_variant == "coverage") next
+        } else if (qualifier != host_os) {
+          next
+        }
+      }
+      if ($1 == f && is_unstable) print $2
+    }
+  ' "$DIVERGENCE_FILE"
+}
+
 termination_contracts_for() {
   local file="$1"
   [ -f "$TERMINATION_FILE" ] || return 0
@@ -401,10 +431,12 @@ for test in "$@"; do
   fi
   unexpected="$(echo "$unexpected" | grep -v '^$' || true)"
 
+  unstable_expected="$(unstable_for "$test")"
   if [ -n "$exact_expected" ]; then
     while IFS= read -r name; do
       [ -z "$name" ] && continue
       if ! is_in_set "$name" "$actual"; then
+        is_in_set "$name" "$unstable_expected" && continue
         fixed="$fixed"$'\n'"$name"
       fi
     done <<< "$exact_expected"

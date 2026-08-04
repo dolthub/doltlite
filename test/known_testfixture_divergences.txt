@@ -4,6 +4,11 @@
 # Qualifiers: @linux, @darwin, @windows, @coverage, @no-coverage
 # A counted gate ending in .*{N} matches exactly N failures with that prefix.
 # Index movement passes; adding or resolving a failure does not.
+# `unstable` marks an assertion whose outcome varies between runs on the same
+# commit: it stays gated when it fails and is not reported stale when it passes.
+# It requires issue=<number> because it is enforced in neither direction, so
+# only an open investigation keeps it from becoming a permanent blind spot.
+# Prefer it to crash-listing the whole file, which drops every other assertion.
 #
 # These tests fail when run by run_testfixture.sh against doltlite's
 # testfixture build, but the failures are not bugs — they're cases
@@ -58,7 +63,7 @@
 # freelist, headers). On a chunk-store repo the same offsets hit CTLD
 # manifest/hash/journal bytes. Architectural — not a missing integrity
 # detector, and not message-parity work if the store reports differently.
-corrupt corrupt-3.3 @linux class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural, as 3.4/3.5); linux-only but not variant-specific
+corrupt corrupt-3.3 @linux unstable class=harness issue=1963  # outcome varies run to run on identical commits (4 of 6 observed runs passed); fixture is deterministic, cause unknown
 corrupt corrupt-3.4 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-3.5 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-3.6 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)

@@ -114,6 +114,30 @@ printf '%s\n' \
   'shifted shifted-1.transient.99' > "$TMP_DIR/divergences"
 expect_failure shifted "shifted exact gates"
 
+# An unstable gate is enforced in neither direction: the assertion may fail (it
+# is gated) or pass (not reported stale). one.test fails only one of the two
+# gated names, which without the marker is a stale entry.
+printf '%s\n' \
+  'one one-1.transient.41' \
+  'one one-1.transient.99' > "$TMP_DIR/divergences"
+expect_failure one "a gate whose assertion stopped failing"
+
+printf '%s\n' \
+  'one one-1.transient.41' \
+  'one one-1.transient.99 unstable class=harness issue=42' > "$TMP_DIR/divergences"
+expect_pass one "an unstable gate whose assertion passed this run"
+
+printf '%s\n' \
+  'one one-1.transient.41 unstable class=harness issue=42' > "$TMP_DIR/divergences"
+expect_pass one "an unstable gate whose assertion failed this run"
+
+# The marker suppresses staleness, not unexpected failures: an ungated failure
+# beside an unstable gate is still a red.
+printf '%s\n' \
+  'extra extra-1.transient.41 unstable class=harness issue=42' \
+  'extra extra-1.transient.99' > "$TMP_DIR/divergences"
+expect_failure extra "an ungated failure beside an unstable gate"
+
 stable_hash=$(printf '%s' 'stable failure' | {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum

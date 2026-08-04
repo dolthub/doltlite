@@ -2,6 +2,15 @@
 # not authorize a passing result; run_testfixture.sh requires the exact contract
 # in known_testfixture_terminations.txt. Unbucketed suites require replacement
 # coverage in known_testfixture_crash_coverage.txt.
+#
+# This is for files that cannot produce a comparable failure list at all -- they
+# abort, time out, or their fault sweep is capped. It is NOT the place for a
+# flaky assertion: an assertion whose outcome varies between runs is marked
+# `unstable` on its own line in known_testfixture_divergences.txt, which leaves
+# the rest of the file enforced. Quarantining a whole suite to quiet one
+# assertion costs every other assertion in it. Several reasons below say
+# "unstable"; they mean the file does not complete, not that a known assertion
+# flaps -- verified for malloc3, which produces no summary line at all.
 
 alter2 class=intentional  # raw file-format setup prevents the db command from opening
 backup_ioerr class=harness  # cap-truncated page-copy fault sequence; unbucketed

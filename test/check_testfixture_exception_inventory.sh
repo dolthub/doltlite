@@ -59,6 +59,7 @@ validate_records() {
       issue = ""
       nclass = 0
       nissue = 0
+      nunstable = 0
       for (i = nkey + 1; i <= NF; i++) {
         if ($i ~ /^@/) {
           if ($i != "@linux" && $i != "@darwin" && $i != "@windows" &&
@@ -68,6 +69,7 @@ validate_records() {
           }
           continue
         }
+        if ($i == "unstable") { nunstable++; continue }
         if ($i ~ /^class=/) { nclass++; category = substr($i, 7); continue }
         if ($i ~ /^issue=/) { nissue++; issue = substr($i, 7); continue }
         printf "%s:%d: unrecognized field: %s\n", FILENAME, NR, $i
@@ -99,6 +101,22 @@ validate_records() {
       # limitation, but are not required to.
       if ((category == "unsupported" || category == "engine-gap") && !nissue) {
         printf "%s:%d: %s requires issue=<number>\n", FILENAME, NR, category
+        bad = 1
+      }
+      if (nunstable > 1) {
+        printf "%s:%d: expected at most one unstable, found %d\n",
+               FILENAME, NR, nunstable
+        bad = 1
+      }
+      # An entry whose outcome varies is enforced in neither direction, so it
+      # needs somewhere the investigation is tracked.
+      if (nunstable && !nissue) {
+        printf "%s:%d: unstable requires issue=<number>\n", FILENAME, NR
+        bad = 1
+      }
+      if (nunstable && nkey != 2) {
+        printf "%s:%d: unstable applies per assertion, not per file\n",
+               FILENAME, NR
         bad = 1
       }
     }
