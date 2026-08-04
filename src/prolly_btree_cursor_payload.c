@@ -45,11 +45,21 @@ int prollyBtreeCursorCurrentTreeValueCopy(
   return SQLITE_OK;
 }
 
+/* These accessors have no error channel, so a failed deferred-seek
+** materialization has to be recorded on the cursor instead: fault it and stash
+** the code in skipNext, the way prollyBtCursorEof() does, so the next cursor
+** operation returns the real error. Returning a zero key or an empty payload
+** without faulting reports a row that was never read -- an OOM or interrupt
+** during positioning became wrong data under SQLITE_OK. */
 i64 prollyBtCursorIntegerKey(BtCursor *pCur){
-  if( pCur->deferredMergedSeek
-   && (materializeDeferredMergedSeekBackward(pCur)
-       || pCur->eState!=CURSOR_VALID) ){
-    return 0;
+  if( pCur->deferredMergedSeek ){
+    int rc = materializeDeferredMergedSeekBackward(pCur);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
+    if( pCur->eState!=CURSOR_VALID ) return 0;
   }
   assert( pCur->eState==CURSOR_VALID );
   assert( pCur->curIntKey );
@@ -185,10 +195,14 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
 u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   const u8 *pData;
   int nData;
-  if( pCur->deferredMergedSeek
-   && (materializeDeferredMergedSeekBackward(pCur)
-       || pCur->eState!=CURSOR_VALID) ){
-    return 0;
+  if( pCur->deferredMergedSeek ){
+    int rc = materializeDeferredMergedSeekBackward(pCur);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
+    if( pCur->eState!=CURSOR_VALID ) return 0;
   }
   assert( pCur->eState==CURSOR_VALID );
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
@@ -297,11 +311,18 @@ const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   const u8 *pData;
   int nData;
 
-  if( pCur->deferredMergedSeek
-   && (materializeDeferredMergedSeekBackward(pCur)
-       || pCur->eState!=CURSOR_VALID) ){
-    if( pAmt ) *pAmt = 0;
-    return 0;
+  if( pCur->deferredMergedSeek ){
+    int rc = materializeDeferredMergedSeekBackward(pCur);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      if( pAmt ) *pAmt = 0;
+      return 0;
+    }
+    if( pCur->eState!=CURSOR_VALID ){
+      if( pAmt ) *pAmt = 0;
+      return 0;
+    }
   }
   assert( pCur->eState==CURSOR_VALID );
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
