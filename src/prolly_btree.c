@@ -825,6 +825,17 @@ int sqlite3BtreeUsesOrig(Btree *p){
   return p && p->pOps==&origBtreeVtOps;
 }
 
+/* db->aDb[].pBt always holds a doltlite Btree; for a legacy database that
+** wrapper delegates to a stock btree. The orig page copier is compiled against
+** the stock layout and needs that inner pointer, so it resolves schema names
+** through here rather than reading Db.pBt directly. Returns 0 for a
+** doltlite-format database, which the copier reports as "not a database". */
+void *doltliteBtreeOrigPtr(void *pBtree){
+  Btree *p = (Btree*)pBtree;
+  if( !sqlite3BtreeUsesOrig(p) ) return 0;
+  return p->pOrigBtree;
+}
+
 int prollyBtreeClose(Btree *p){
   BtShared *pBt;
 

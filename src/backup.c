@@ -105,7 +105,11 @@ static Btree *findBtree(sqlite3 *pErrorDb, sqlite3 *pDb, const char *zDb){
     return 0;
   }
 
+#ifdef DOLTLITE_ORIG_BACKUP
+  return (Btree*)doltliteBtreeOrigPtr((void*)pDb->aDb[i].pBt);
+#else
   return pDb->aDb[i].pBt;
+#endif
 }
 
 /*
