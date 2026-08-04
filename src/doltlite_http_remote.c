@@ -171,11 +171,15 @@ static int httpMapError(
     if( !p->zLastError ){
       httpSetLastError(p, "remote refs changed; pull and retry");
     }
-  }else if( status==401
-         || (zCode && strcmp(zCode, "unauthorized")==0)
+  }else if( status==401 || status==403
+         || (zCode && (strcmp(zCode, "unauthorized")==0
+                    || strcmp(zCode, "forbidden")==0))
          || (hasSqlite && sqliteRc==SQLITE_AUTH) ){
+    /* 403 (forbidden) is an auth failure too; SQLite has no separate authz code. */
     rc = SQLITE_AUTH;
-    if( !p->zLastError ) httpSetLastError(p, "unauthorized");
+    if( !p->zLastError ){
+      httpSetLastError(p, status==403 ? "forbidden" : "unauthorized");
+    }
   }else if( status==404
          || (zCode && strcmp(zCode, "not_found")==0)
          || (hasSqlite && sqliteRc==SQLITE_NOTFOUND) ){
