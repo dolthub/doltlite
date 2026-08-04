@@ -995,6 +995,24 @@ static int commitPhaseTwoFailRestore(
   }
   sqlite3_free(*ppCatData);
   *ppCatData = 0;
+  /* Detach the cursors' pending-edit map aliases before restoreFromCommitted()
+  ** frees the maps -- explicitly on the catalog-cache path, and via catFree on
+  ** the reload path. Only null the alias: catFree owns the map, so touching it
+  ** after the free is the use-after-free being avoided, and a prior savepoint
+  ** rollback may already have freed the one a cursor points at. ensureMutMap
+  ** re-aliases on reuse. Same shape as prollyBtreeRollback(). */
+  {
+    BtCursor *pC;
+    for(pC = pBt->pCursor; pC; pC = pC->pNext){
+      if( pC->pBtree!=p || pC->pMutMap==0 ) continue;
+      pC->pMutMap = 0;
+      pC->mmActive = 0;
+      pC->mmPhysActive = 0;
+      pC->deferredTreeSeek = 0;
+      pC->mmIdx = -1;
+      pC->mmPhysIdx = -1;
+    }
+  }
   rc2 = restoreFromCommitted(p);
   if( rc2!=SQLITE_OK ){
     /* Same shape as the rollback path: the restore OOM'd, but the
@@ -1010,12 +1028,6 @@ static int commitPhaseTwoFailRestore(
     commitPhaseTwoReleaseGraph(pBt);
     /* Preserve the original commit error; restore failure is secondary. */
     return commitRc;
-  }
-  {
-    BtCursor *pC;
-    for(pC = pBt->pCursor; pC; pC = pC->pNext){
-      if( pC->pBtree==p && pC->pMutMap ) prollyMutMapClear(pC->pMutMap);
-    }
   }
   invalidateCursors(pBt, 0, commitRc);
   resetConnectionSchema(p);
