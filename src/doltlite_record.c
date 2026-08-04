@@ -579,7 +579,15 @@ u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut)
     hdrSize += sqlite3VarintLen(aType[i]);
     bodySize += (int)aLen[i];
   }
-  hdrSize += sqlite3VarintLen(hdrSize);
+  /* Adding the header-size varint can push the size across a varint width, so
+  ** re-check: 127 one-byte type codes need a two-byte size, not one. Stock does
+  ** the same in sqlite3VdbeMakeRecord, as do the sibling encoders by reserving
+  ** the byte up front and bumping past MAX_ONEBYTE_HEADER. */
+  {
+    int nVarint = sqlite3VarintLen(hdrSize);
+    hdrSize += nVarint;
+    if( nVarint < sqlite3VarintLen(hdrSize) ) hdrSize++;
+  }
 
   pOut = sqlite3_malloc(hdrSize + bodySize);
   if( !pOut ){
