@@ -1,0 +1,57 @@
+# A merge that reports failure must not leave a merge in progress.
+#
+# doltliteSetSessionMergeState marks the session as merging as soon as the
+# catalog merge reports conflicts, which happens before the head is
+# re-confirmed under the lock. Any failure after that point -- a peer having
+# advanced the branch, or an allocation failing -- took an exit that only
+# discarded the saved state instead of restoring it, so isMerging stayed set
+# with a conflicts catalog while the caller was told the merge did not happen.
+# The next merge then refuses because one is already in progress, leaving
+# dolt_merge('--abort') as the only way out.
+#
+# The invariant does not depend on why the merge failed: if it failed, there is
+# no merge in progress.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_merge_state
+
+do_test 1.0 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-A','-m','base');
+    SELECT dolt_checkout('-b','feat');
+    UPDATE t SET v='theirs' WHERE id=1;
+    SELECT dolt_commit('-A','-m','feat');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v='ours' WHERE id=1;
+    SELECT dolt_commit('-A','-m','main');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+# Conflicting merge in autocommit: it always reports failure and always rolls
+# back, so is_merging must read 0 on every iteration.
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  set mrc [catch { db eval { SELECT dolt_merge('feat') } } mmsg]
+  set merging [db one {
+    SELECT count(*) FROM dolt_merge_status WHERE is_merging=1
+  }]
+  if {$mrc && $merging} {
+    error "merge reported failure but left is_merging=$merging"
+  }
+  list $mrc $merging
+} -test {
+  faultsim_test_result {0 {1 0}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+finish_test
