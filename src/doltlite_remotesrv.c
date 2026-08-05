@@ -658,15 +658,24 @@ static void handleGetChunk(ChunkStore *pStore, DoltliteConn *fd, const char *zHe
   sqlite3_free(pData);
 }
 
-static void handlePostChunks(ChunkStore *pStore, DoltliteConn *fd,
-                             const u8 *pBody, int nBody){
+static int remoteSrvStoreChunkBatch(
+  ChunkStore *pStore,
+  const u8 *pBody,
+  int nBody
+){
   int offset = 0;
   int rc;
 
-  while( offset + PROLLY_HASH_SIZE + 4 <= nBody ){
+  while( offset<nBody ){
     u32 len;
-    ProllyHash hash;
+    ProllyHash declared;
+    ProllyHash computed;
 
+    if( nBody-offset < PROLLY_HASH_SIZE+4 ){
+      rc = SQLITE_PROTOCOL;
+      goto store_error;
+    }
+    memcpy(declared.data, pBody+offset, PROLLY_HASH_SIZE);
     offset += PROLLY_HASH_SIZE;
 
     len = (u32)pBody[offset]
@@ -675,23 +684,36 @@ static void handlePostChunks(ChunkStore *pStore, DoltliteConn *fd,
         | ((u32)pBody[offset+3] << 24);
     offset += 4;
 
-    /* Compare as unsigned and cap single-chunk memory use. */
     if( len > (u32)MAX_CHUNK_BYTES
      || len > (u32)(nBody - offset) ){
-      sendBadRequest(fd);
-      return;
+      rc = SQLITE_PROTOCOL;
+      goto store_error;
     }
 
-    rc = chunkStorePut(pStore, pBody + offset, (int)len, &hash);
-    if( rc!=SQLITE_OK ){
-      chunkStoreRollback(pStore);
-      sendSqliteError(fd, rc);
-      return;
+    prollyHashCompute(pBody+offset, (int)len, &computed);
+    if( prollyHashCompare(&declared, &computed)!=0 ){
+      rc = SQLITE_PROTOCOL;
+      goto store_error;
     }
+    rc = chunkStorePut(pStore, pBody+offset, (int)len, 0);
+    if( rc!=SQLITE_OK ) goto store_error;
     offset += (int)len;
   }
 
-  rc = remoteSrvCommitPending(pStore);
+  return remoteSrvCommitPending(pStore);
+
+store_error:
+  chunkStoreRollback(pStore);
+  return rc;
+}
+
+static void handlePostChunks(ChunkStore *pStore, DoltliteConn *fd,
+                             const u8 *pBody, int nBody){
+  int rc = remoteSrvStoreChunkBatch(pStore, pBody, nBody);
+  if( rc==SQLITE_PROTOCOL ){
+    sendBadRequest(fd);
+    return;
+  }
   if( rc!=SQLITE_OK ){
     sendSqliteError(fd, rc);
     return;
@@ -737,6 +759,9 @@ static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
 
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = doltliteValidateScopedRefsUpdate(pStore, pBody, nBody, zBranch, bForce);
+  if( rc==SQLITE_OK ){
+    rc = doltliteValidateRefsTargetGraph(pStore, pBody, nBody, zBranch);
+  }
   if( rc!=SQLITE_OK ){
     chunkStoreRollback(pStore);
     return rc;
@@ -848,6 +873,12 @@ static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
 
 int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore){
   return remoteSrvCommitPending(pStore);
+}
+
+int doltliteRemoteSrvStoreChunkBatchForTest(
+  ChunkStore *pStore, const u8 *pBody, int nBody
+){
+  return remoteSrvStoreChunkBatch(pStore, pBody, nBody);
 }
 
 int doltliteRemoteSrvApplyRefsForTest(
