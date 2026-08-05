@@ -30,6 +30,19 @@ typedef char chunk_index_entry_size_check[
 ];
 #endif
 
+int chunkStoreValidateWorkingSetBlob(const u8 *data, int nData){
+  int nExpected;
+  if( !data || nData<1 ) return SQLITE_CORRUPT;
+  switch( data[0] ){
+    case WS_FORMAT_VERSION_V2: nExpected = WS_TOTAL_SIZE_V2; break;
+    case WS_FORMAT_VERSION_V3: nExpected = WS_TOTAL_SIZE_V3; break;
+    case WS_FORMAT_VERSION_V4: nExpected = WS_TOTAL_SIZE_V4; break;
+    case WS_FORMAT_VERSION_V5: nExpected = WS_TOTAL_SIZE; break;
+    default: return SQLITE_CORRUPT;
+  }
+  return nData==nExpected ? SQLITE_OK : SQLITE_CORRUPT;
+}
+
 
 int csOpenFile(
   sqlite3_vfs *pVfs,

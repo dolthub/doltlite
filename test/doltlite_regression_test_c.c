@@ -36,6 +36,9 @@ extern int doltliteRemoteSrvApplyRefsForTest(
 extern int doltliteRemoteSrvResolveRootForTest(
   ChunkStore *pStore, ProllyHash *pRoot
 );
+extern int btreeReadWorkingCatalog(
+  ChunkStore*, const char*, ProllyHash*, ProllyHash*
+);
 
 static int nPass = 0;
 static int nFail = 0;
@@ -4235,9 +4238,11 @@ static void run_open_rejects_corrupt_working_set(void){
   int stmtRc;
   ProllyHash badHash;
   int rc;
-  static const unsigned char badBlob[] = { 0x01, 0x02, 0x03, 0x04 };
+  unsigned char badBlob[WS_TOTAL_SIZE-1];
 
   printf("=== Open Rejects Corrupt Working Set Test ===\n\n");
+  memset(badBlob, 0, sizeof(badBlob));
+  badBlob[0] = WS_FORMAT_VERSION_V5;
   make_dbpath(dbpath, sizeof(dbpath), "test_open_rejects_corrupt_working_set");
   removeDbFiles(dbpath);
 
@@ -4267,6 +4272,59 @@ static void run_open_rejects_corrupt_working_set(void){
         rc==SQLITE_CORRUPT || stmtRc==SQLITE_CORRUPT);
   if( db2 ) sqlite3_close(db2);
   removeDbFiles(dbpath);
+}
+
+static int loadWorkingSetBytes(const u8 *data, int nData){
+  ChunkStore cs;
+  ProllyHash emptyHash;
+  ProllyHash wsHash;
+  int rc;
+
+  memset(&cs, 0, sizeof(cs));
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0);
+  if( rc==SQLITE_OK ) rc = chunkStorePut(&cs, data, nData, &wsHash);
+  if( rc==SQLITE_OK ) rc = chunkStoreAddBranch(&cs, "main", &emptyHash);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSetBranchWorkingSet(&cs, "main", &wsHash);
+  }
+  if( rc==SQLITE_OK ){
+    rc = btreeReadWorkingCatalog(&cs, "main", 0, 0);
+  }
+  chunkStoreClose(&cs);
+  return rc;
+}
+
+static void run_working_set_blob_size_validation(void){
+  static const struct {
+    int version;
+    int size;
+  } aCase[] = {
+    { WS_FORMAT_VERSION_V2, WS_TOTAL_SIZE_V2 },
+    { WS_FORMAT_VERSION_V3, WS_TOTAL_SIZE_V3 },
+    { WS_FORMAT_VERSION_V4, WS_TOTAL_SIZE_V4 },
+    { WS_FORMAT_VERSION_V5, WS_TOTAL_SIZE }
+  };
+  u8 data[WS_TOTAL_SIZE+1];
+  int i;
+
+  printf("=== Working Set Blob Size Validation Test ===\n\n");
+  for(i=0; i<(int)(sizeof(aCase)/sizeof(aCase[0])); i++){
+    char zName[80];
+    memset(data, 0, sizeof(data));
+    data[0] = (u8)aCase[i].version;
+    sqlite3_snprintf(sizeof(zName), zName,
+                     "working_set_v%d_exact_size", aCase[i].version);
+    check(zName, loadWorkingSetBytes(data, aCase[i].size)==SQLITE_OK);
+    sqlite3_snprintf(sizeof(zName), zName,
+                     "working_set_v%d_short_rejected", aCase[i].version);
+    check(zName,
+          loadWorkingSetBytes(data, aCase[i].size-1)==SQLITE_CORRUPT);
+    sqlite3_snprintf(sizeof(zName), zName,
+                     "working_set_v%d_trailing_rejected", aCase[i].version);
+    check(zName,
+          loadWorkingSetBytes(data, aCase[i].size+1)==SQLITE_CORRUPT);
+  }
 }
 
 static void run_open_ignores_stale_working_set(void){
@@ -9614,6 +9672,7 @@ static const RegressionCase aCases[] = {
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
+  { "working_set_blob_size_validation", "Working Set Blob Size Validation Test", run_working_set_blob_size_validation },
   { "open_ignores_stale_working_set", "Open Ignores Stale Working Set Test", run_open_ignores_stale_working_set },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
   { "diff_stat_wide_modified_rows", "Diff Stat Wide Modified Rows Test", run_diff_stat_wide_modified_rows },

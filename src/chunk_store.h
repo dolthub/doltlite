@@ -116,6 +116,8 @@
 #define WS_CONSTRAINT_VIOLATIONS_OFF (WS_REBASE_RETURN_BRANCH_OFF + WS_REBASE_BRANCH_LEN)
 #define WS_TOTAL_SIZE       (WS_CONSTRAINT_VIOLATIONS_OFF + PROLLY_HASH_SIZE)
 
+int chunkStoreValidateWorkingSetBlob(const u8 *data, int nData);
+
 #define CATALOG_FORMAT_V3       0x44
 #define CATALOG_FORMAT_V4       0x45
 #define CATALOG_FORMAT_V5       0x46
