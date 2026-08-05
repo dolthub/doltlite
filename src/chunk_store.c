@@ -231,13 +231,43 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  /* Header seals are advisory; WAL root seals are load-bearing. */
+  /* Every writer seals this header, so a mismatch means its bytes changed
+  ** under us. Trusting them is not merely a bad read: a WAL offset pointing
+  ** into the data region makes replay call live chunk bytes a torn tail and
+  ** rewind the logical EOF, and the next write-lock acquisition truncates the
+  ** file there. Failing closed keeps a still-readable file readable. */
+  {
+    /* Headers written before seals were bound to file offsets hash the bytes
+    ** alone, so accept that form too -- same fallback the tail-root check in
+    ** chunk_store_refs_api.c makes. */
+    int sealState = csManifestHashState(aBuf, 0);
+    if( sealState==CS_MANIFEST_HASH_BAD ){
+      sealState = csManifestHashStateOffsetless(aBuf);
+    }
+    if( sealState==CS_MANIFEST_HASH_BAD ){
+      sqlite3_log(SQLITE_CORRUPT,
+        "doltlite: chunk store header failed its seal; refusing to open so "
+        "the file stays recoverable");
+      return SQLITE_CORRUPT;
+    }
+  }
+
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
 
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
+
+  /* Sealing started long after the current format version, so headers with an
+  ** all-zero self hash are legitimate and reach here unverified. Bound the one
+  ** field that drives the destructive path so those files are covered too. */
+  if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
+  if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
+  if( cs->index.iIndexOffset>0
+   && cs->wal.iWalOffset < cs->index.iIndexOffset + cs->index.nIndexSize ){
+    return SQLITE_CORRUPT;
+  }
 
   return SQLITE_OK;
 }
@@ -394,7 +424,10 @@ int chunkStoreOpen(
     }
 
     rc = csReadManifest(cs);
-    if( (rc==SQLITE_NOTADB || rc==SQLITE_CORRUPT)
+    /* NOTADB only: a header that still identifies as a chunk store but fails
+    ** its seal or bounds is damaged data, not a crashed creation, and this
+    ** recovery ends in truncating the file to zero. */
+    if( rc==SQLITE_NOTADB
      && (flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly ){
       /* Recover only proven first-commit crashes to an empty database. */
       int everCommitted = 1;

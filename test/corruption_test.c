@@ -791,10 +791,12 @@ static void test_corrupt_version(void){
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
   unsigned char bad_hash[20];
+  off_t before;
 
   printf("--- Test 17: Corrupt former head_commit bytes (compacted) ---\n");
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
+  before = file_size(dbpath);
 
   memset(bad_hash, 0xCD, sizeof(bad_hash));
   check("corrupt_15",
@@ -815,7 +817,12 @@ static void test_corrupt_head_commit(void){
           strncmp(b, "ERROR", 5)!=0 && atoi(b) >= 1);
       }
     }else{
+      /* These bytes sit inside the sealed header, so the store now refuses the
+      ** open rather than running on fields it cannot vouch for. Refusing is
+      ** only an improvement if the file survives it. */
       check("corrupt_head_commit_no_crash", 1);
+      check("corrupt_head_refusal_leaves_file_intact",
+            file_size(dbpath)==before);
     }
     if( db ) sqlite3_close(db);
   }
@@ -1086,6 +1093,113 @@ static void test_root_seal_binds_file_offset(void){
         csManifestHashState(manifest, rootOffset + 1)==CS_MANIFEST_HASH_BAD);
 }
 
+/* Open, then write. The destructive reclaim fires on write-lock acquisition,
+** not on open, so a read-only probe would not reach it. */
+static int open_write_and_probe(const char *path){
+  sqlite3 *db = 0;
+  int errSeen = 0;
+  int rc = sqlite3_open(path, &db);
+  if( rc!=SQLITE_OK ){
+    if( db ) sqlite3_close(db);
+    return 1;
+  }
+  if( execSql(db, "INSERT INTO t1 VALUES(99, 'probe')")!=SQLITE_OK ) errSeen = 1;
+  if( execSql(db, "SELECT count(*) FROM t1")!=SQLITE_OK ) errSeen = 1;
+  sqlite3_close(db);
+  return errSeen;
+}
+
+static const char *rowCountOf(const char *path){
+  sqlite3 *db = 0;
+  static char buf[64];
+  const char *res;
+  if( sqlite3_open(path, &db)!=SQLITE_OK ){
+    if( db ) sqlite3_close(db);
+    snprintf(buf, sizeof(buf), "OPENFAIL");
+    return buf;
+  }
+  res = queryScalarText(db, "SELECT count(*) FROM t1");
+  snprintf(buf, sizeof(buf), "%s", res);
+  sqlite3_close(db);
+  return buf;
+}
+
+/* A compacted store is manifest | data | index with an empty WAL, so lowering
+** the WAL offset aims replay straight at live chunk bytes. Replay reads them
+** as WAL records, calls the tail torn, and rewinds the logical EOF; the next
+** write-lock acquisition then reclaims those "dead" bytes and takes the index
+** and the whole data region with them. The damage is one header field and the
+** rows are still readable, so failing closed keeps a recoverable file
+** recoverable instead of destroying it on the next write. */
+static void test_header_seal_detects_tampered_wal_offset(void){
+  const char *dbpath = "/tmp/test_corr_hdrseal.db";
+  unsigned char buf[8];
+  off_t before, after;
+
+  printf("--- Test 26: Header seal detects a tampered WAL offset ---\n");
+
+  check("create_compacted_26", create_compacted_db(dbpath)==0);
+  before = file_size(dbpath);
+  check("rows_before_26", strcmp(rowCountOf(dbpath), "5")==0);
+
+  CS_WRITE_I64(buf, (long long)(MANIFEST_SIZE + 32));
+  check("corrupt_26",
+        corrupt_bytes(dbpath, CS_MANIFEST_WAL_OFFSET_OFF, buf, sizeof(buf))==0);
+
+  check("tampered_wal_offset_detected", open_write_and_probe(dbpath)==1);
+
+  after = file_size(dbpath);
+  check("tampered_wal_offset_does_not_truncate", after==before);
+
+  removeDb(dbpath);
+}
+
+/* The seal only started being written well after CHUNK_STORE_VERSION reached
+** its current value, so version-current files carrying an all-zero self hash
+** are in the field and must keep opening. */
+static void test_unsealed_header_still_opens(void){
+  const char *dbpath = "/tmp/test_corr_legacyhdr.db";
+  unsigned char zeros[PROLLY_HASH_SIZE];
+
+  printf("--- Test 27: Unsealed (legacy) header still opens ---\n");
+
+  check("create_compacted_27", create_compacted_db(dbpath)==0);
+  memset(zeros, 0, sizeof(zeros));
+  check("unseal_27",
+        corrupt_bytes(dbpath, CS_MANIFEST_SELF_HASH_OFF, zeros,
+                      sizeof(zeros))==0);
+
+  check("unsealed_header_opens_clean", open_write_and_probe(dbpath)==0);
+  removeDb(dbpath);
+}
+
+/* An unsealed header has no seal to check, so its WAL offset is bounds-checked
+** on its own -- otherwise legacy files keep the destructive path. */
+static void test_unsealed_header_bounds_checks_wal_offset(void){
+  const char *dbpath = "/tmp/test_corr_legacybounds.db";
+  unsigned char zeros[PROLLY_HASH_SIZE];
+  unsigned char buf[8];
+  off_t before, after;
+
+  printf("--- Test 28: Unsealed header bounds-checks its WAL offset ---\n");
+
+  check("create_compacted_28", create_compacted_db(dbpath)==0);
+  before = file_size(dbpath);
+  memset(zeros, 0, sizeof(zeros));
+  check("unseal_28",
+        corrupt_bytes(dbpath, CS_MANIFEST_SELF_HASH_OFF, zeros,
+                      sizeof(zeros))==0);
+  CS_WRITE_I64(buf, (long long)(MANIFEST_SIZE + 32));
+  check("corrupt_28",
+        corrupt_bytes(dbpath, CS_MANIFEST_WAL_OFFSET_OFF, buf, sizeof(buf))==0);
+
+  check("unsealed_bad_wal_offset_detected", open_write_and_probe(dbpath)==1);
+  after = file_size(dbpath);
+  check("unsealed_bad_wal_offset_does_not_truncate", after==before);
+
+  removeDb(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -1113,6 +1227,9 @@ int main(void){
   test_damage_far_before_sealing_root_poisons();
   test_crash_garbage_truncated_on_write();
   test_root_seal_binds_file_offset();
+  test_header_seal_detects_tampered_wal_offset();
+  test_unsealed_header_still_opens();
+  test_unsealed_header_bounds_checks_wal_offset();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
