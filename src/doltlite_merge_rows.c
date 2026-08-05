@@ -642,7 +642,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             rc = doltliteIndexMutMapRowDelta(
                 mi->pEdits, mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                 mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
-                pChange->pBaseVal, pChange->nBaseVal, pMerged, nMerged);
+                pChange->pOurVal, pChange->nOurVal, pMerged, nMerged);
           }
         }
         sqlite3_free(pMerged);
