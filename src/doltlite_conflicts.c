@@ -373,7 +373,7 @@ static int storeConflictBytes(
     if( rc!=SQLITE_OK ) return rc;
     rc = doltliteSetSessionConflictsCatalog(db, &newHash);
     if( rc==SQLITE_OK ){
-      rc = doltliteSetSessionMergeState(db, 1, 0, &newHash);
+      rc = doltliteSetSessionMergeConflicts(db, &newHash);
     }
   }
   if( rc!=SQLITE_OK ) return rc;

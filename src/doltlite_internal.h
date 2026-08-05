@@ -1148,6 +1148,7 @@ int doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
                                  const ProllyHash *pMergeCommit,
                                  const ProllyHash *pConflictsCatalog);
 int doltliteClearSessionMergeState(sqlite3 *db);
+int doltliteSetSessionMergeConflicts(sqlite3 *db, const ProllyHash *pConflicts);
 int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
                                       const ProllyHash *pMergeCommit);
 const char *doltliteGetSessionMergeSourceSpec(sqlite3 *db,
