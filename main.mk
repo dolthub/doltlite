@@ -2695,6 +2695,7 @@ DOLTLITE_C_TESTS = \
 	prolly_hashset_test$(T.exe) \
 	prolly_chunker_boundary_test$(T.exe) \
 	scoped_refs_push_test$(T.exe) \
+	remote_chunk_integrity_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
 	remotesrv_init_failure_test$(T.exe) \
@@ -2813,6 +2814,11 @@ prolly_chunker_boundary_test$(T.exe): $(TOP)/test/prolly_chunker_boundary_test.c
 scoped_refs_push_test$(T.exe): $(TOP)/test/scoped_refs_push_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/scoped_refs_push_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+remote_chunk_integrity_test$(T.exe): $(TOP)/test/remote_chunk_integrity_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/remote_chunk_integrity_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 # oom_dolt_fault_test installs a wrapper allocator that fails the Nth

@@ -53,6 +53,9 @@ int doltliteValidateScopedRefsUpdate(ChunkStore *pStore, const u8 *pBlob,
                                      int nBlob, const char *zBranch,
                                      int bForce);
 
+int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
+                                    int nBlob, const char *zBranch);
+
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);
 

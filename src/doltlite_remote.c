@@ -185,6 +185,75 @@ static int syncEnqueueChildren(
   return doltliteEnumerateChunkChildren(data, nData, syncChildCb, &ctx);
 }
 
+static int remoteValidateGraph(
+  ChunkStore *pStore,
+  const ProllyHash *aRoots,
+  int nRoots
+){
+  SyncQueue queue;
+  ProllyHashSet seen;
+  ProllyHash hash;
+  int rc;
+  int i;
+
+  rc = syncQueueInit(&queue);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyHashSetInit(&seen, 256);
+  if( rc!=SQLITE_OK ){
+    syncQueueFree(&queue);
+    return rc;
+  }
+  for(i=0; i<nRoots && rc==SQLITE_OK; i++){
+    if( !prollyHashIsEmpty(&aRoots[i])
+     && !prollyHashSetContains(&seen, &aRoots[i]) ){
+      rc = prollyHashSetAdd(&seen, &aRoots[i]);
+      if( rc==SQLITE_OK ) rc = syncQueuePush(&queue, &aRoots[i]);
+    }
+  }
+  while( rc==SQLITE_OK && syncQueuePop(&queue, &hash) ){
+    u8 *pData = 0;
+    int nData = 0;
+    rc = chunkStoreGet(pStore, &hash, &pData, &nData);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_CORRUPT;
+    if( rc==SQLITE_OK ){
+      rc = syncEnqueueChildren(pData, nData, &queue, &seen);
+    }
+    sqlite3_free(pData);
+  }
+  prollyHashSetFree(&seen);
+  syncQueueFree(&queue);
+  return rc;
+}
+
+int doltliteValidateRefsTargetGraph(
+  ChunkStore *pStore,
+  const u8 *pBlob,
+  int nBlob,
+  const char *zBranch
+){
+  ChunkStore refsView;
+  ProllyHash aRoots[2];
+  const BranchRef *aBranch;
+  int nBranch;
+  int rc;
+  int i;
+
+  rc = remoteLoadRefsView(pBlob, nBlob, &refsView);
+  if( rc!=SQLITE_OK ) return rc;
+  refsTableGetBranches(&refsView.refs, &nBranch, &aBranch);
+  rc = SQLITE_NOTFOUND;
+  for(i=0; i<nBranch; i++){
+    if( strcmp(aBranch[i].zName, zBranch)==0 ){
+      aRoots[0] = aBranch[i].commitHash;
+      aRoots[1] = aBranch[i].workingSetHash;
+      rc = remoteValidateGraph(pStore, aRoots, 2);
+      break;
+    }
+  }
+  chunkStoreClose(&refsView);
+  return rc;
+}
+
 #define SYNC_BATCH_SIZE 256
 
 /* A fetched chunk must hash to the address it was requested under. Without this
@@ -342,9 +411,9 @@ static int remoteGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
 static int remotePutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
                           const u8 *pData, int nData){
   ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
-  ProllyHash computed;
-  (void)pHash;
-  return chunkStorePut(pStore, pData, nData, &computed);
+  int rc = syncVerifyFetchedChunk(pHash, pData, nData);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStorePut(pStore, pData, nData, 0);
 }
 
 static int remoteHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
@@ -404,6 +473,9 @@ static int fsSetRefs(DoltliteRemote *pRemote, const char *zBranch, int bForce,
   FsRemote *p = (FsRemote*)pRemote;
   int rc = doltliteValidateScopedRefsUpdate(&p->store, pData, nData,
                                             zBranch, bForce);
+  if( rc==SQLITE_OK ){
+    rc = doltliteValidateRefsTargetGraph(&p->store, pData, nData, zBranch);
+  }
   if( rc!=SQLITE_OK ) return rc;
   return chunkStoreInstallRefsBlob(&p->store, pData, nData);
 }
@@ -523,6 +595,9 @@ static int localSetRefs(DoltliteRemote *pRemote, const char *zBranch,
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
   int rc = doltliteValidateScopedRefsUpdate(p->pStore, pData, nData,
                                             zBranch, bForce);
+  if( rc==SQLITE_OK ){
+    rc = doltliteValidateRefsTargetGraph(p->pStore, pData, nData, zBranch);
+  }
   if( rc!=SQLITE_OK ) return rc;
   return chunkStoreInstallRefsBlob(p->pStore, pData, nData);
 }
