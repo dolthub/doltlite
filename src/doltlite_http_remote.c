@@ -627,14 +627,20 @@ static int httpHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
     return rc;
   }
 
-  if( nResp >= nHash ){
-    memcpy(aResult, pResp, nHash);
-  }else{
-
-    int i;
-    if( nResp > 0 ) memcpy(aResult, pResp, nResp);
-    for(i=nResp; i<nHash; i++) aResult[i] = 0;
+  if( nResp!=nHash ){
+    sqlite3_free(pResp);
+    return SQLITE_PROTOCOL;
   }
+  {
+    int i;
+    for(i=0; i<nHash; i++){
+      if( pResp[i]>1 ){
+        sqlite3_free(pResp);
+        return SQLITE_PROTOCOL;
+      }
+    }
+  }
+  memcpy(aResult, pResp, nHash);
   sqlite3_free(pResp);
   return SQLITE_OK;
 }
