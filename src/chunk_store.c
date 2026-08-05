@@ -231,27 +231,6 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  /* Every writer seals this header, so a mismatch means its bytes changed
-  ** under us. Trusting them is not merely a bad read: a WAL offset pointing
-  ** into the data region makes replay call live chunk bytes a torn tail and
-  ** rewind the logical EOF, and the next write-lock acquisition truncates the
-  ** file there. Failing closed keeps a still-readable file readable. */
-  {
-    /* Headers written before seals were bound to file offsets hash the bytes
-    ** alone, so accept that form too -- same fallback the tail-root check in
-    ** chunk_store_refs_api.c makes. */
-    int sealState = csManifestHashState(aBuf, 0);
-    if( sealState==CS_MANIFEST_HASH_BAD ){
-      sealState = csManifestHashStateOffsetless(aBuf);
-    }
-    if( sealState==CS_MANIFEST_HASH_BAD ){
-      sqlite3_log(SQLITE_CORRUPT,
-        "doltlite: chunk store header failed its seal; refusing to open so "
-        "the file stays recoverable");
-      return SQLITE_CORRUPT;
-    }
-  }
-
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
@@ -259,9 +238,16 @@ static int csReadManifest(ChunkStore *cs){
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
-  /* Sealing started long after the current format version, so headers with an
-  ** all-zero self hash are legitimate and reach here unverified. Bound the one
-  ** field that drives the destructive path so those files are covered too. */
+  /* A WAL offset below the data it is supposed to follow is the one header
+  ** value that turns damage into destruction: replay reads live chunk bytes as
+  ** WAL records, calls the tail torn, and rewinds the logical EOF, and the next
+  ** write-lock acquisition reclaims everything past it. Refusing the open keeps
+  ** a file whose rows are still readable readable.
+  **
+  ** The header carries a seal too, but it covers all 168 bytes including ones
+  ** no reader consults, so verifying it would reject files over damage that
+  ** cannot mislead anything. These bounds cover the harmful case on their own,
+  ** and cover pre-seal headers that no seal check could reach. */
   if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
   if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
   if( cs->index.iIndexOffset>0
@@ -424,8 +410,8 @@ int chunkStoreOpen(
     }
 
     rc = csReadManifest(cs);
-    /* NOTADB only: a header that still identifies as a chunk store but fails
-    ** its seal or bounds is damaged data, not a crashed creation, and this
+    /* NOTADB only: a header that still identifies as a chunk store but carries
+    ** impossible offsets is damaged data, not a crashed creation, and this
     ** recovery ends in truncating the file to zero. */
     if( rc==SQLITE_NOTADB
      && (flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly ){

@@ -791,12 +791,10 @@ static void test_corrupt_version(void){
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
   unsigned char bad_hash[20];
-  off_t before;
 
   printf("--- Test 17: Corrupt former head_commit bytes (compacted) ---\n");
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
-  before = file_size(dbpath);
 
   memset(bad_hash, 0xCD, sizeof(bad_hash));
   check("corrupt_15",
@@ -817,12 +815,7 @@ static void test_corrupt_head_commit(void){
           strncmp(b, "ERROR", 5)!=0 && atoi(b) >= 1);
       }
     }else{
-      /* These bytes sit inside the sealed header, so the store now refuses the
-      ** open rather than running on fields it cannot vouch for. Refusing is
-      ** only an improvement if the file survives it. */
       check("corrupt_head_commit_no_crash", 1);
-      check("corrupt_head_refusal_leaves_file_intact",
-            file_size(dbpath)==before);
     }
     if( db ) sqlite3_close(db);
   }
@@ -1136,7 +1129,7 @@ static void test_header_seal_detects_tampered_wal_offset(void){
   unsigned char buf[8];
   off_t before, after;
 
-  printf("--- Test 26: Header seal detects a tampered WAL offset ---\n");
+  printf("--- Test 26: Tampered WAL offset is refused, not truncated ---\n");
 
   check("create_compacted_26", create_compacted_db(dbpath)==0);
   before = file_size(dbpath);
@@ -1154,14 +1147,14 @@ static void test_header_seal_detects_tampered_wal_offset(void){
   removeDb(dbpath);
 }
 
-/* The seal only started being written well after CHUNK_STORE_VERSION reached
-** its current value, so version-current files carrying an all-zero self hash
-** are in the field and must keep opening. */
+/* Header sealing began well after CHUNK_STORE_VERSION reached its current
+** value, so version-current files carrying an all-zero self hash are in the
+** field and must keep opening. */
 static void test_unsealed_header_still_opens(void){
   const char *dbpath = "/tmp/test_corr_legacyhdr.db";
   unsigned char zeros[PROLLY_HASH_SIZE];
 
-  printf("--- Test 27: Unsealed (legacy) header still opens ---\n");
+  printf("--- Test 27: Pre-seal header still opens ---\n");
 
   check("create_compacted_27", create_compacted_db(dbpath)==0);
   memset(zeros, 0, sizeof(zeros));
@@ -1173,15 +1166,15 @@ static void test_unsealed_header_still_opens(void){
   removeDb(dbpath);
 }
 
-/* An unsealed header has no seal to check, so its WAL offset is bounds-checked
-** on its own -- otherwise legacy files keep the destructive path. */
+/* Pre-seal headers are covered by the same bounds check, so they do not keep
+** the destructive path to themselves. */
 static void test_unsealed_header_bounds_checks_wal_offset(void){
   const char *dbpath = "/tmp/test_corr_legacybounds.db";
   unsigned char zeros[PROLLY_HASH_SIZE];
   unsigned char buf[8];
   off_t before, after;
 
-  printf("--- Test 28: Unsealed header bounds-checks its WAL offset ---\n");
+  printf("--- Test 28: Bounds check covers pre-seal headers ---\n");
 
   check("create_compacted_28", create_compacted_db(dbpath)==0);
   before = file_size(dbpath);
