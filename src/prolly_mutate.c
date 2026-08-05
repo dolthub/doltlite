@@ -1063,6 +1063,7 @@ static int replaceBatchLeafNoRechunk(
   ProllyNodeBuilder b;
   int rc = SQLITE_OK;
   int changed = 0;
+  int sizeChanged = 0;
   int i;
 
   prollyNodeBuilderInit(&b, 0, pMut->flags);
@@ -1091,6 +1092,7 @@ static int replaceBatchLeafNoRechunk(
       rc = prollyNodeBuilderAdd(&b, pCurKey, nCurKey,
                                 pEd->pVal, pEd->nVal);
       changed = 1;
+      if( pEd->nVal!=nVal ) sizeChanged = 1;
       prollyMutMapIterNext(pIter);
     }else{
       rc = prollyNodeBuilderAdd(&b, pCurKey, nCurKey, pVal, nVal);
@@ -1107,7 +1109,16 @@ static int replaceBatchLeafNoRechunk(
   }
 
   if( changed ){
-    rc = writeBuilderNode(pMut->pStore, &b, pHash);
+    if( sizeChanged ){
+      /* A replacement of a different length moves every following entry, so the
+      ** boundaries this leaf was chunked at may no longer be the ones a fresh
+      ** build would pick. Validate and let the caller rechunk if they moved,
+      ** the way the single-edit path does -- writing regardless freezes a shape
+      ** that history independence says must not depend on how we got here. */
+      rc = finishAndWriteBuilderNode(pMut->pStore, &b, !isLast, pHash);
+    }else{
+      rc = writeBuilderNode(pMut->pStore, &b, pHash);
+    }
   }
   prollyNodeBuilderFree(&b);
   if( rc!=SQLITE_OK ) return rc;
