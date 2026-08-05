@@ -164,5 +164,14 @@ run_test "branch_from_first_parent_ref_persists_across_reopen" "SELECT count(*) 
 run_test "branch_from_second_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p2"
 run_test "branch_from_second_parent_hash_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_hash"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
+DB14=/tmp/test_branch14_$$.db; rm -f "$DB14"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feature'); SELECT dolt_checkout('feature'); UPDATE t SET v='working' WHERE id=1; SELECT dolt_checkout('main');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+run_test "inactive_branch_unstaged_changes_are_dirty" "SELECT dirty FROM dolt_branches WHERE name='feature';" "1" "$DB14"
+run_test "inactive_branch_peer_remains_clean" "SELECT dirty FROM dolt_branches WHERE name='main';" "0" "$DB14"
+echo "SELECT dolt_checkout('feature'); SELECT dolt_add('-A'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+run_test "inactive_branch_staged_changes_are_dirty" "SELECT dirty FROM dolt_branches WHERE name='feature';" "1" "$DB14"
+echo "SELECT dolt_checkout('feature'); SELECT dolt_commit('-m','feature change'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+run_test "inactive_branch_committed_changes_are_clean" "SELECT dirty FROM dolt_branches WHERE name='feature';" "0" "$DB14"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
 dltest_finish
