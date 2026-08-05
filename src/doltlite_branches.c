@@ -139,6 +139,7 @@ static int brIsDirty(
   const BranchRef *br,
   int *pDirty
 ){
+  ProllyHash workingCat;
   ProllyHash stagedCat;
   ProllyHash commitCat;
   u8 *wsData = 0;
@@ -159,20 +160,21 @@ static int brIsDirty(
     sqlite3_free(wsData);
     return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
   }
+  memcpy(workingCat.data, wsData + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
   memcpy(stagedCat.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
   sqlite3_free(wsData);
 
-  if( prollyHashIsEmpty(&stagedCat) ){
-    return SQLITE_OK;
-  }
-
   if( prollyHashIsEmpty(&br->commitHash) ){
-    *pDirty = 1;
+    *pDirty = !prollyHashIsEmpty(&workingCat)
+           || !prollyHashIsEmpty(&stagedCat);
     return SQLITE_OK;
   }
   rc = doltliteCommitCatalogHash(db, &br->commitHash, &commitCat);
   if( rc==SQLITE_OK ){
-    *pDirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
+    *pDirty = (!prollyHashIsEmpty(&workingCat)
+            && prollyHashCompare(&workingCat, &commitCat)!=0)
+           || (!prollyHashIsEmpty(&stagedCat)
+            && prollyHashCompare(&stagedCat, &commitCat)!=0);
   }
   return rc;
 }
