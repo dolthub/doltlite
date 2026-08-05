@@ -558,6 +558,29 @@ static int doltliteCommitCreateObject(
     doltliteCommitClear(&headCommit);
   }
 
+  /* A commit concluding a merge owes the merged branch a second parent, or the
+  ** merge leaves no trace in ancestry and later merge bases are computed
+  ** against a history that never recorded it. Only a real merge records a
+  ** source commit here: cherry-pick, revert, and rebase replay leave it empty
+  ** because their result is a single-parent commit. */
+  {
+    u8 isMerging = 0;
+    ProllyHash mergeCommit;
+    doltliteGetSessionMergeState(db, &isMerging, &mergeCommit, 0);
+    if( isMerging && !prollyHashIsEmpty(&mergeCommit)
+     && prollyHashCompare(&mergeCommit, &parentHash)!=0
+     && nExtraParents < DOLTLITE_MAX_PARENTS-1 ){
+      int i;
+      for(i=0; i<nExtraParents; i++){
+        if( prollyHashCompare(&aExtraParents[i], &mergeCommit)==0 ) break;
+      }
+      if( i>=nExtraParents ){
+        memcpy(&aExtraParents[nExtraParents++], &mergeCommit,
+               sizeof(ProllyHash));
+      }
+    }
+  }
+
   if( zAuthor ){
     const char *lt = strchr(zAuthor, '<');
     const char *gt = lt ? strchr(lt, '>') : 0;

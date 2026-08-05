@@ -1242,7 +1242,7 @@ static int recordMergeConflicts(
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteSetSessionConflictsCatalog(db, &conflictsHash);
   if( rc!=SQLITE_OK ) return rc;
-  return doltliteSetSessionMergeState(db, 1, 0, &conflictsHash);
+  return doltliteSetSessionMergeConflicts(db, &conflictsHash);
 }
 
 int doltliteMergeCatalogs(

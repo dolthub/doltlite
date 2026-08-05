@@ -230,6 +230,21 @@ SELECT dolt_checkout('main');
 UPDATE t SET v = 'ours' WHERE id = 1;
 SELECT dolt_commit('-Am', 'ours');" "feature"
 
+# Resolving part of a conflict must not blank the merge source. It is still the
+# same merge, status still has to name it, and the commit that concludes the
+# merge still owes the merged branch a second parent.
+oracle "source_survives_partial_conflict_resolution" "$BASE
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 'theirs' WHERE id = 1;
+UPDATE t SET v = 'theirs' WHERE id = 2;
+SELECT dolt_commit('-Am', 'theirs');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'ours' WHERE id = 1;
+UPDATE t SET v = 'ours' WHERE id = 2;
+SELECT dolt_commit('-Am', 'ours');" "feature" \
+"DELETE FROM dolt_conflicts_t WHERE our_id = 1;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

@@ -1614,6 +1614,72 @@ SELECT dolt_merge('feature');
 " "SELECT id || '|' || Name || '|' || Score || '|' || coalesce(MainNote,'~') || '|' || coalesce(FeatNote,'~') FROM t" \
 "SELECT CONCAT(id, '|', Name, '|', Score, '|', coalesce(MainNote,'~'), '|', coalesce(FeatNote,'~')) FROM t"
 
+# Concluding a conflicted merge with dolt_commit still has to record the merged
+# branch as a second parent. Without it the merged commits leave the log, and
+# every later merge base is computed against a history that never recorded the
+# merge -- so dolt_merge('feature') would replay work already merged.
+oracle "conflict_resolved_commit_keeps_merged_branch_in_log" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_checkout('-b', 'feature');
+UPDATE t SET v = 'theirs' WHERE id = 1;
+SELECT dolt_commit('-Am', 'feature edit');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'ours' WHERE id = 1;
+SELECT dolt_commit('-Am', 'main edit');
+BEGIN;
+SELECT dolt_merge('feature');
+SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT dolt_commit('-Am', 'resolved');
+COMMIT;
+"
+
+# Same shape through cherry-pick, which must stay a single-parent commit: the
+# picked branch is a source to resolve against, not a parent to record.
+oracle "conflict_resolved_cherry_pick_stays_single_parent" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_checkout('-b', 'feature');
+UPDATE t SET v = 'theirs' WHERE id = 1;
+SELECT dolt_commit('-Am', 'feature edit');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'ours' WHERE id = 1;
+SELECT dolt_commit('-Am', 'main edit');
+BEGIN;
+SELECT dolt_cherry_pick('feature');
+SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT dolt_commit('-Am', 'picked');
+COMMIT;
+"
+
+# The merged branch really is an ancestor afterwards, so re-merging it is a
+# no-op rather than a replay of work already merged.
+oracle_reopen_state "conflict_resolved_commit_makes_merged_branch_an_ancestor" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_checkout('-b', 'feature');
+UPDATE t SET v = 'theirs' WHERE id = 1;
+SELECT dolt_commit('-Am', 'feature edit');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'ours' WHERE id = 1;
+SELECT dolt_commit('-Am', 'main edit');
+BEGIN;
+SELECT dolt_merge('feature');
+SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT dolt_commit('-Am', 'resolved');
+COMMIT;
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM dolt_log WHERE message = 'feature edit') || char(9) ||
+          (SELECT count(*) FROM dolt_commit_ancestors
+             WHERE commit_hash = dolt_hashof('HEAD'));" \
+"SELECT CONCAT('Q', char(9),
+               (SELECT COUNT(*) FROM dolt_log WHERE message = 'feature edit'), char(9),
+               (SELECT COUNT(*) FROM dolt_commit_ancestors
+                  WHERE commit_hash = HASHOF('HEAD')));"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
