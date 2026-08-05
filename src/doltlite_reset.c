@@ -501,12 +501,21 @@ static void doltliteResetFunc(
     }
     graphLocked = 1;
 
-    doltliteSetSessionHead(db, &targetCommit);
+    /* Move the ref before the session head. There is no rollback on this path,
+    ** so the other order leaves the session reading a commit the branch was
+    ** never advanced to when the update fails. The update needs only the
+    ** session branch, so the order costs nothing.
+    **
+    ** This is the ordering only: reset --hard is not atomic against a failure
+    ** part way through, and dolt does not make it atomic either -- an explicit
+    ** ROLLBACK around CALL dolt_reset('--hard', ...) leaves HEAD moved -- so
+    ** there is no rollback contract here to hold up. */
     rc = chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
+    doltliteSetSessionHead(db, &targetCommit);
 
     rc = doltliteClearSessionMergeState(db);
     if( rc!=SQLITE_OK ){
