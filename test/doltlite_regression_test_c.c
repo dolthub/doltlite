@@ -22,6 +22,7 @@
 #include "prolly_mutmap.h"
 #include "vdbeInt.h"
 #include "sortkey.h"
+#include "doltlite_remote.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -3752,6 +3753,98 @@ static void run_memory_chunk_lookup_corruption(void){
   check("memory_lookup_corruption_returns_corrupt", rc==SQLITE_CORRUPT);
   sqlite3_free(pOut);
   chunkStoreClose(&cs);
+}
+
+/* A remote that answers every fetch with bytes that are not the chunk asked
+** for. doltliteSyncChunks must reject the payload rather than store it under
+** its own address -- which would leave the requested address absent -- and must
+** not walk it for children. */
+typedef struct LyingRemote LyingRemote;
+struct LyingRemote {
+  DoltliteRemote base;
+  int nServed;
+};
+
+/* Serves a well-formed leaf node, just not the one requested. Unparseable bytes
+** would not test anything: syncEnqueueChildren rejects those on its own. A
+** valid node at the wrong address is the case that used to pass silently. */
+static int lyingGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
+                         u8 **ppData, int *pnData){
+  LyingRemote *p = (LyingRemote*)pRemote;
+  ProllyNodeBuilder b;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+  (void)pHash;
+
+  prollyNodeBuilderInit(&b, 0, 0);
+  rc = prollyNodeBuilderAdd(&b, (const u8*)"k", 1, (const u8*)"v", 1);
+  if( rc==SQLITE_OK ) rc = prollyNodeBuilderFinish(&b, &pData, &nData);
+  prollyNodeBuilderFree(&b);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pData);
+    return rc;
+  }
+  *ppData = pData;
+  *pnData = nData;
+  p->nServed++;
+  return SQLITE_OK;
+}
+
+static int lyingHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
+                          int nHash, u8 *aResult){
+  int i;
+  (void)pRemote; (void)aHash;
+  for(i=0; i<nHash; i++) aResult[i] = 0;
+  return SQLITE_OK;
+}
+
+typedef struct CountingSink CountingSink;
+struct CountingSink {
+  DoltliteRemote base;
+  int nPut;
+};
+
+static int sinkPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
+                        const u8 *pData, int nData){
+  (void)pHash; (void)pData; (void)nData;
+  ((CountingSink*)pRemote)->nPut++;
+  return SQLITE_OK;
+}
+
+static int sinkHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
+                         int nHash, u8 *aResult){
+  int i;
+  (void)pRemote; (void)aHash;
+  for(i=0; i<nHash; i++) aResult[i] = 0;
+  return SQLITE_OK;
+}
+
+static void run_sync_rejects_wrong_chunk(void){
+  LyingRemote src;
+  CountingSink dst;
+  ProllyHash root;
+  int rc;
+
+  memset(&src, 0, sizeof(src));
+  src.base.xGetChunk = lyingGetChunk;
+  src.base.xHasChunks = lyingHasChunks;
+  memset(&dst, 0, sizeof(dst));
+  dst.base.xPutChunk = sinkPutChunk;
+  dst.base.xHasChunks = sinkHasChunks;
+
+  /* Any non-empty address the served payload will not hash to. */
+  memset(&root, 0, sizeof(root));
+  root.data[0] = 0xab;
+  root.data[1] = 0xcd;
+
+  rc = doltliteSyncChunks(&src.base, &dst.base, &root, 1);
+  /* The payload must not reach the store: writing it puts the content at its
+  ** own address and leaves the requested one absent, which only shows up much
+  ** later as a NOTFOUND on a ref that looks fine. */
+  check("sync_does_not_store_a_chunk_from_the_wrong_address", dst.nPut==0);
+  check("sync_reports_the_wrong_address_as_corrupt", rc!=SQLITE_OK);
+  check("sync_stopped_after_the_first_bad_chunk", src.nServed==1);
 }
 
 static void run_prolly_diff_record_corruption(void){
@@ -9467,6 +9560,7 @@ static const RegressionCase aCases[] = {
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
+  { "sync_rejects_wrong_chunk", "Sync Chunk Address Verification Test", run_sync_rejects_wrong_chunk },
   { "record_header_varint_boundary", "Record Header Varint Boundary Test", run_record_header_varint_boundary },
   { "sortkey_two_numeric_roundtrip", "Sortkey Two Numeric Roundtrip Test", run_sortkey_two_numeric_roundtrip },
   { "sortkey_numeric_text_roundtrip", "Sortkey Numeric Text Roundtrip Test", run_sortkey_numeric_text_roundtrip },

@@ -187,6 +187,23 @@ static int syncEnqueueChildren(
 
 #define SYNC_BATCH_SIZE 256
 
+/* A fetched chunk must hash to the address it was requested under. Without this
+** a remote serving the wrong bytes is stored under their own address, leaving
+** the requested one absent and surfacing much later as a confusing NOTFOUND --
+** and the payload is walked by syncEnqueueChildren either way, so unverified
+** content would steer the traversal. */
+static int syncVerifyFetchedChunk(
+  const ProllyHash *pWant,
+  const u8 *pData,
+  int nData
+){
+  ProllyHash computed;
+  if( !pData || nData<0 ) return SQLITE_CORRUPT;
+  prollyHashCompute(pData, nData, &computed);
+  if( prollyHashCompare(&computed, pWant)!=0 ) return SQLITE_CORRUPT;
+  return SQLITE_OK;
+}
+
 int doltliteSyncChunks(
   DoltliteRemote *pSrc,
   DoltliteRemote *pDst,
@@ -262,6 +279,8 @@ int doltliteSyncChunks(
         rc = pSrc->xGetChunks(pSrc, aFetch, nFetch, apData, anData);
         for(i=0; i<nFetch && rc==SQLITE_OK; i++){
           if( !apData[i] ){ rc = SQLITE_NOTFOUND; break; }
+          rc = syncVerifyFetchedChunk(&aFetch[i], apData[i], anData[i]);
+          if( rc!=SQLITE_OK ) break;
           if( aPut[i] ){
             rc = pDst->xPutChunk(pDst, &aFetch[i], apData[i], anData[i]);
           }
@@ -276,6 +295,11 @@ int doltliteSyncChunks(
           int nData = 0;
           rc = pSrc->xGetChunk(pSrc, &aFetch[i], &data, &nData);
           if( rc!=SQLITE_OK ) break;
+          rc = syncVerifyFetchedChunk(&aFetch[i], data, nData);
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(data);
+            break;
+          }
           if( aPut[i] ){
             rc = pDst->xPutChunk(pDst, &aFetch[i], data, nData);
           }
