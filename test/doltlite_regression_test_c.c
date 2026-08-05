@@ -8,6 +8,7 @@
 #include "sqlite3.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "chunk_refs.h"
 #include "doltlite_commit.h"
 #include "doltlite_chunk_walk.h"
 #include "doltlite_ancestor.h"
@@ -3249,6 +3250,32 @@ static void run_record_header_varint_boundary(void){
     sqlite3_free(pRec);
     sqlite3_free(aMem);
   }
+}
+
+/* csRefArrayGrow computed (n+1)*stride in int. At stride 72 and n 59652416 that
+** wraps to 6728 where the true size is 4294974024, so realloc succeeds with a
+** 6KB buffer and the zeroing memset writes 72 bytes at offset 4294973952. The
+** guard has to reject the request instead of allocating the wrapped size. */
+static void run_ref_array_grow_rejects_overflow(void){
+  void *aBase = 0;
+  int rc;
+
+  rc = csRefArrayGrow(&aBase, 59652416, 72);
+  check("ref_array_grow_rejects_wrapping_size", rc!=SQLITE_OK);
+  check("ref_array_grow_left_the_array_alone", aBase==0);
+
+  /* An ordinary growth still works. */
+  rc = csRefArrayGrow(&aBase, 0, 72);
+  check("ref_array_grow_still_grows", rc==SQLITE_OK && aBase!=0);
+  if( aBase ){
+    int i;
+    int allZero = 1;
+    for(i=0; i<72; i++){
+      if( ((unsigned char*)aBase)[i]!=0 ) allZero = 0;
+    }
+    check("ref_array_grow_zeroes_the_new_slot", allZero);
+  }
+  sqlite3_free(aBase);
 }
 
 static void run_record_decode_corruption(void){
@@ -9561,6 +9588,7 @@ static const RegressionCase aCases[] = {
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
   { "sync_rejects_wrong_chunk", "Sync Chunk Address Verification Test", run_sync_rejects_wrong_chunk },
+  { "ref_array_grow_overflow", "Ref Array Grow Overflow Test", run_ref_array_grow_rejects_overflow },
   { "record_header_varint_boundary", "Record Header Varint Boundary Test", run_record_header_varint_boundary },
   { "sortkey_two_numeric_roundtrip", "Sortkey Two Numeric Roundtrip Test", run_sortkey_two_numeric_roundtrip },
   { "sortkey_numeric_text_roundtrip", "Sortkey Numeric Text Roundtrip Test", run_sortkey_numeric_text_roundtrip },
