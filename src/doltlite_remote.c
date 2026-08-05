@@ -741,6 +741,115 @@ static int syncIsAncestor(
   return found;
 }
 
+static int scopedSameText(const char *zA, const char *zB){
+  return strcmp(zA ? zA : "", zB ? zB : "")==0;
+}
+
+/* Same fallback csSerializeRefsBlob applies, so an unset default and an
+** explicit "main" compare equal rather than reading as a repoint. */
+static const char *scopedDefaultBranch(const RefsTable *rt){
+  return rt->zDefaultBranch ? rt->zDefaultBranch : "main";
+}
+
+/* Refs lookups resolve a name to its first matching slot, so a duplicate name
+** is a shadow entry: unreachable through the refs API, invisible to a scope
+** check that compares first matches, yet carried forward by every later
+** reserialization. Every named section must be a set. */
+static int scopedNamesAreUnique(const void *aBase, int n, int stride){
+  const char *p = (const char*)aBase;
+  int i, j;
+  for(i=0; i<n; i++){
+    const char *zI = *(const char *const*)(p + (size_t)i*stride);
+    if( !zI ) return 0;
+    for(j=0; j<i; j++){
+      const char *zJ = *(const char *const*)(p + (size_t)j*stride);
+      if( zJ && strcmp(zJ, zI)==0 ) return 0;
+    }
+  }
+  return 1;
+}
+
+/* Tracking entries are keyed by the remote/branch pair, not the leading name. */
+static int scopedTrackingIsUnique(const TrackingBranch *a, int n){
+  int i, j;
+  for(i=0; i<n; i++){
+    if( !a[i].zRemote || !a[i].zBranch ) return 0;
+    for(j=0; j<i; j++){
+      if( scopedSameText(a[j].zRemote, a[i].zRemote)
+       && scopedSameText(a[j].zBranch, a[i].zBranch) ){
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+static int scopedTagsMatch(const TagRef *aCur, int nCur,
+                           const TagRef *aInc, int nInc){
+  int i, j;
+  if( nCur!=nInc ) return 0;
+  for(i=0; i<nCur; i++){
+    for(j=0; j<nInc; j++){
+      if( scopedSameText(aInc[j].zName, aCur[i].zName) ) break;
+    }
+    if( j>=nInc ) return 0;
+    if( prollyHashCompare(&aInc[j].commitHash, &aCur[i].commitHash)!=0 ) return 0;
+    if( aInc[j].timestamp!=aCur[i].timestamp ) return 0;
+    if( !scopedSameText(aInc[j].zTagger, aCur[i].zTagger)
+     || !scopedSameText(aInc[j].zEmail, aCur[i].zEmail)
+     || !scopedSameText(aInc[j].zMessage, aCur[i].zMessage) ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int scopedRemotesMatch(const RemoteRef *aCur, int nCur,
+                              const RemoteRef *aInc, int nInc){
+  int i, j;
+  if( nCur!=nInc ) return 0;
+  for(i=0; i<nCur; i++){
+    for(j=0; j<nInc; j++){
+      if( scopedSameText(aInc[j].zName, aCur[i].zName) ) break;
+    }
+    if( j>=nInc || !scopedSameText(aInc[j].zUrl, aCur[i].zUrl) ) return 0;
+  }
+  return 1;
+}
+
+static int scopedTrackingMatch(const TrackingBranch *aCur, int nCur,
+                               const TrackingBranch *aInc, int nInc){
+  int i, j;
+  if( nCur!=nInc ) return 0;
+  for(i=0; i<nCur; i++){
+    for(j=0; j<nInc; j++){
+      if( scopedSameText(aInc[j].zRemote, aCur[i].zRemote)
+       && scopedSameText(aInc[j].zBranch, aCur[i].zBranch) ){
+        break;
+      }
+    }
+    if( j>=nInc
+     || prollyHashCompare(&aInc[j].commitHash, &aCur[i].commitHash)!=0 ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* Push bumps the shared AUTOINCREMENT counters, so these may rise and gain
+** entries. Regressing or dropping one would hand out row ids already used. */
+static int scopedSequencesOnlyAdvance(const SequenceRef *aCur, int nCur,
+                                      const SequenceRef *aInc, int nInc){
+  int i, j;
+  for(i=0; i<nCur; i++){
+    for(j=0; j<nInc; j++){
+      if( scopedSameText(aInc[j].zTableName, aCur[i].zTableName) ) break;
+    }
+    if( j>=nInc || aInc[j].iSeq < aCur[i].iSeq ) return 0;
+  }
+  return 1;
+}
+
 int doltliteValidateScopedRefsUpdate(
   ChunkStore *pStore,
   const u8 *pBlob,
@@ -751,7 +860,12 @@ int doltliteValidateScopedRefsUpdate(
   ChunkStore inc;
   const BranchRef *aCur = 0, *aInc = 0;
   const TagRef *aCurTag = 0, *aIncTag = 0;
+  const RemoteRef *aCurRem = 0, *aIncRem = 0;
+  const TrackingBranch *aCurTrk = 0, *aIncTrk = 0;
+  const SequenceRef *aCurSeq = 0, *aIncSeq = 0;
   int nCur = 0, nInc = 0, nCurTag = 0, nIncTag = 0;
+  int nCurRem = 0, nIncRem = 0, nCurTrk = 0, nIncTrk = 0;
+  int nCurSeq = 0, nIncSeq = 0;
   const BranchRef *curB = 0, *incB = 0;
   int rc;
   int i, j;
@@ -768,16 +882,33 @@ int doltliteValidateScopedRefsUpdate(
   refsTableGetBranches(&inc.refs, &nInc, &aInc);
   refsTableGetTags(&pStore->refs, &nCurTag, &aCurTag);
   refsTableGetTags(&inc.refs, &nIncTag, &aIncTag);
+  refsTableGetRemotes(&pStore->refs, &nCurRem, &aCurRem);
+  refsTableGetRemotes(&inc.refs, &nIncRem, &aIncRem);
+  refsTableGetTracking(&pStore->refs, &nCurTrk, &aCurTrk);
+  refsTableGetTracking(&inc.refs, &nIncTrk, &aIncTrk);
+  refsTableGetSequences(&pStore->refs, &nCurSeq, &aCurSeq);
+  refsTableGetSequences(&inc.refs, &nIncSeq, &aIncSeq);
+
+  if( !scopedNamesAreUnique(aInc, nInc, (int)sizeof(BranchRef))
+   || !scopedNamesAreUnique(aIncTag, nIncTag, (int)sizeof(TagRef))
+   || !scopedNamesAreUnique(aIncRem, nIncRem, (int)sizeof(RemoteRef))
+   || !scopedNamesAreUnique(aIncSeq, nIncSeq, (int)sizeof(SequenceRef))
+   || !scopedTrackingIsUnique(aIncTrk, nIncTrk) ){
+    rc = SQLITE_CONSTRAINT;
+    goto done;
+  }
 
   /* Every current branch other than the one being pushed must survive
-  ** unchanged: same name present, same commit. Blocks rewrite and delete. */
+  ** unchanged: same name present, same commit and working set. Blocks rewrite
+  ** and delete. */
   for(i=0; i<nCur; i++){
     if( strcmp(aCur[i].zName, zBranch)==0 ) continue;
     for(j=0; j<nInc; j++){
       if( strcmp(aInc[j].zName, aCur[i].zName)==0 ) break;
     }
     if( j>=nInc
-     || prollyHashCompare(&aInc[j].commitHash, &aCur[i].commitHash)!=0 ){
+     || prollyHashCompare(&aInc[j].commitHash, &aCur[i].commitHash)!=0
+     || prollyHashCompare(&aInc[j].workingSetHash, &aCur[i].workingSetHash)!=0 ){
       rc = SQLITE_CONSTRAINT;
       goto done;
     }
@@ -795,20 +926,23 @@ int doltliteValidateScopedRefsUpdate(
     }
   }
 
-  /* Tags are immutable over push: identical set, identical targets. */
-  if( nCurTag!=nIncTag ){
+  /* Tags are immutable over push: identical set, identical targets, identical
+  ** annotations. Remotes and tracking are likewise none of a push's business. */
+  if( !scopedTagsMatch(aCurTag, nCurTag, aIncTag, nIncTag)
+   || !scopedRemotesMatch(aCurRem, nCurRem, aIncRem, nIncRem)
+   || !scopedTrackingMatch(aCurTrk, nCurTrk, aIncTrk, nIncTrk)
+   || !scopedSequencesOnlyAdvance(aCurSeq, nCurSeq, aIncSeq, nIncSeq) ){
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
-  for(i=0; i<nCurTag; i++){
-    for(j=0; j<nIncTag; j++){
-      if( strcmp(aCurTag[i].zName, aIncTag[j].zName)==0 ) break;
-    }
-    if( j>=nIncTag
-     || prollyHashCompare(&aIncTag[j].commitHash, &aCurTag[i].commitHash)!=0 ){
-      rc = SQLITE_CONSTRAINT;
-      goto done;
-    }
+
+  /* Whatever the default branch names is what a clone checks out and what
+  ** GET /root resolves, so a push may not repoint it. An empty target
+  ** legitimately adopts the pushed branch, the way doltlitePush seeds one. */
+  if( !scopedSameText(scopedDefaultBranch(&inc.refs),
+                      nCur==0 ? zBranch : scopedDefaultBranch(&pStore->refs)) ){
+    rc = SQLITE_CONSTRAINT;
+    goto done;
   }
 
   /* The declared branch may be created freely, but an existing branch may only
@@ -818,6 +952,12 @@ int doltliteValidateScopedRefsUpdate(
   }
   for(j=0; j<nInc; j++){
     if( strcmp(aInc[j].zName, zBranch)==0 ){ incB = &aInc[j]; break; }
+  }
+  /* A push creates or advances the declared branch, never deletes it. Omitting
+  ** it would otherwise skip the fast-forward gate below entirely. */
+  if( !incB ){
+    rc = SQLITE_CONSTRAINT;
+    goto done;
   }
   if( !bForce && curB && incB
    && prollyHashCompare(&curB->commitHash, &incB->commitHash)!=0 ){
