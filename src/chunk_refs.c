@@ -21,9 +21,17 @@ int csFindNamedRef(const void *aBase, int n, int stride, const char *zName){
 
 int csRefArrayGrow(void **paBase, int n, int stride){
   void *aNew;
+  i64 nByte;
   assert( paBase!=0 );
   assert( n>=0 && stride>0 );
-  aNew = sqlite3_realloc(*paBase, (n+1)*stride);
+  /* (n+1)*stride in int wraps once n is large enough, which hands realloc a
+  ** small size and leaves the memset below writing past the allocation. The
+  ** callers append one ref at a time, so reaching that needs tens of millions
+  ** of successful appends -- but the arithmetic should not be what stands
+  ** between us and it. */
+  nByte = ((i64)n + 1) * (i64)stride;
+  if( nByte > (i64)INT_MAX ) return SQLITE_TOOBIG;
+  aNew = sqlite3_realloc(*paBase, (int)nByte);
   if( !aNew ) return SQLITE_NOMEM;
   *paBase = aNew;
   memset((char*)aNew + (size_t)n*stride, 0, stride);
