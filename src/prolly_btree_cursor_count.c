@@ -187,20 +187,24 @@ int sortKeyFromUnpackedForCount(
   return rc;
 }
 
-static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut){
+/* Smallest key sorting above every key that has pKey as a prefix. Trailing
+** 0xff bytes must be dropped, not carried: keeping them yields a bound above
+** the true successor, which counts keys past the end of the range. */
+static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
   int i;
-  u8 *pOut = sqlite3_malloc(nKey);
-  if( !pOut ) return SQLITE_NOMEM;
-  memcpy(pOut, pKey, nKey);
-  for(i=nKey-1; i>=0; i--){
-    if( pOut[i]!=0xff ){
-      pOut[i]++;
-      *ppOut = pOut;
-      return SQLITE_OK;
-    }
+  u8 *pOut;
+  for(i=nKey-1; i>=0 && pKey[i]==0xff; i--){}
+  if( i<0 ){
+    *ppOut = 0;
+    *pnOut = 0;
+    return SQLITE_OK;
   }
-  sqlite3_free(pOut);
-  *ppOut = 0;
+  pOut = sqlite3_malloc(i+1);
+  if( !pOut ) return SQLITE_NOMEM;
+  memcpy(pOut, pKey, i+1);
+  pOut[i]++;
+  *ppOut = pOut;
+  *pnOut = i+1;
   return SQLITE_OK;
 }
 
@@ -251,6 +255,7 @@ static int countTreeBlobPrefixRange(
   u8 *pUpperNext = 0;
   int nLowerKey = 0;
   int nUpperKey = 0;
+  int nUpperNext = 0;
   int nLowerAlloc = 0;
   int nUpperAlloc = 0;
   i64 nLower = 0;
@@ -267,7 +272,7 @@ static int countTreeBlobPrefixRange(
   rc = sortKeyFromUnpackedForCount(
       pCur, pUpper, &pUpperKey, &nUpperAlloc, &nUpperKey);
   if( rc!=SQLITE_OK ) goto done;
-  rc = blobPrefixSuccessor(pUpperKey, nUpperKey, &pUpperNext);
+  rc = blobPrefixSuccessor(pUpperKey, nUpperKey, &pUpperNext, &nUpperNext);
   if( rc!=SQLITE_OK ) goto done;
 
   rc = countBlobKeysBefore(pCur->pBtree, &pTE->root, pTE->flags,
@@ -275,7 +280,7 @@ static int countTreeBlobPrefixRange(
   if( rc!=SQLITE_OK ) goto done;
   if( pUpperNext ){
     rc = countBlobKeysBefore(pCur->pBtree, &pTE->root, pTE->flags,
-                             pUpperNext, nUpperKey, &nUpper);
+                             pUpperNext, nUpperNext, &nUpper);
   }else{
     rc = countTreeEntries(pCur->pBtree, pCur->pgnoRoot, &nUpper);
   }
