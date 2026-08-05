@@ -6002,6 +6002,91 @@ SELECT a FROM t WHERE b=3;
 "
 
 echo ""
+echo "--- Category 123: Indexed COUNT(*) over key ranges ---"
+
+oracle "cat123_count_range_negative_ints" "
+CREATE TABLE t(x);
+CREATE INDEX i ON t(x);
+INSERT INTO t VALUES(-2),(-1),(-0.97),(0),(5);
+SELECT count(*) FROM t WHERE x BETWEEN -2 AND -1;
+SELECT group_concat(x) FROM t WHERE x BETWEEN -2 AND -1;
+"
+
+oracle "cat123_count_range_negative_reals" "
+CREATE TABLE t(x);
+CREATE INDEX i ON t(x);
+INSERT INTO t VALUES(-3.5),(-2.25),(-2.0),(-1.75),(-0.5),(0.5);
+SELECT count(*) FROM t WHERE x BETWEEN -3.5 AND -2.0;
+SELECT count(*) FROM t WHERE x BETWEEN -2.25 AND -1.75;
+SELECT count(*) FROM t WHERE x >= -3.5 AND x <= -0.5;
+"
+
+oracle "cat123_count_range_spanning_zero" "
+CREATE TABLE t(x);
+CREATE INDEX i ON t(x);
+WITH RECURSIVE c(x) AS (VALUES(-50) UNION ALL SELECT x+1 FROM c WHERE x<50)
+INSERT INTO t SELECT x FROM c;
+SELECT count(*) FROM t WHERE x BETWEEN -50 AND -1;
+SELECT count(*) FROM t WHERE x BETWEEN -10 AND 10;
+SELECT count(*) FROM t WHERE x BETWEEN -1 AND 0;
+SELECT count(*) FROM t WHERE x <= -1;
+"
+
+oracle "cat123_count_range_extreme_bounds" "
+CREATE TABLE t(x);
+CREATE INDEX i ON t(x);
+INSERT INTO t VALUES(-9223372036854775808),(-1),(0),(1),(9223372036854775807);
+SELECT count(*) FROM t WHERE x BETWEEN -9223372036854775808 AND -1;
+SELECT count(*) FROM t WHERE x BETWEEN 0 AND 9223372036854775807;
+SELECT count(*) FROM t WHERE x BETWEEN -9223372036854775808 AND 9223372036854775807;
+"
+
+oracle "cat123_count_range_composite_index" "
+CREATE TABLE t(a,b);
+CREATE INDEX i ON t(a,b);
+INSERT INTO t VALUES(-2,1),(-2,2),(-1,1),(-1,2),(-0.5,1),(0,1);
+SELECT count(*) FROM t WHERE a BETWEEN -2 AND -1;
+SELECT count(*) FROM t WHERE a = -1;
+SELECT count(*) FROM t WHERE a BETWEEN -2 AND -1 AND b = 1;
+"
+
+oracle "cat123_count_range_text_keys" "
+CREATE TABLE t(s TEXT);
+CREATE INDEX i ON t(s);
+INSERT INTO t VALUES('a'),('b'),('ba'),('bz'),('c'),('ca');
+SELECT count(*) FROM t WHERE s BETWEEN 'a' AND 'b';
+SELECT count(*) FROM t WHERE s BETWEEN 'b' AND 'c';
+SELECT count(*) FROM t WHERE s >= 'b' AND s < 'c';
+"
+
+oracle "cat123_count_range_blob_keys" "
+CREATE TABLE t(k BLOB);
+CREATE INDEX i ON t(k);
+INSERT INTO t VALUES(x'41'),(x'41ff'),(x'42'),(x'4200'),(x'42ff'),(x'43');
+SELECT count(*) FROM t WHERE k BETWEEN x'41' AND x'41ff';
+SELECT count(*) FROM t WHERE k BETWEEN x'42' AND x'42ff';
+SELECT count(*) FROM t WHERE k BETWEEN x'41ff' AND x'4200';
+"
+
+oracle "cat123_count_range_without_rowid" "
+CREATE TABLE t(pk INT PRIMARY KEY, v INT) WITHOUT ROWID;
+INSERT INTO t VALUES(-3,1),(-2,2),(-1,3),(0,4),(1,5);
+SELECT count(*) FROM t WHERE pk BETWEEN -3 AND -1;
+SELECT count(*) FROM t WHERE pk BETWEEN -1 AND 1;
+"
+
+oracle "cat123_count_range_after_mutation" "
+CREATE TABLE t(x);
+CREATE INDEX i ON t(x);
+INSERT INTO t VALUES(-4),(-3),(-2),(-1),(0);
+DELETE FROM t WHERE x = -3;
+UPDATE t SET x = -5 WHERE x = 0;
+SELECT count(*) FROM t WHERE x BETWEEN -5 AND -1;
+SELECT count(*) FROM t WHERE x BETWEEN -4 AND -2;
+SELECT group_concat(x) FROM (SELECT x FROM t ORDER BY x);
+"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"
