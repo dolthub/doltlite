@@ -354,6 +354,65 @@ EOF
 )
 check "index_on_excluded_rename_is_not_adopted" "1|c,ours_a" "$out"
 
+# A modify/modify change that touches disjoint columns merges cell-wise rather
+# than conflicting. The index delta for that merged row must be taken against
+# ours' row, since the index it patches is built over ours' root. Indexes
+# spanning both an ours-changed and a theirs-changed column are what expose a
+# base-keyed delete: it misses, and ours' entry survives beside the merged one.
+DB="$TMPROOT/cellmerge.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(pk INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
+CREATE INDEX iab ON t(a,b);
+CREATE INDEX iabc ON t(a,b,c);
+INSERT INTO t VALUES(1,'a0','b0','c0'),(2,'p0','q0','r0');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET b='b1' WHERE pk=1;
+UPDATE t SET b='q1' WHERE pk=2;
+SELECT dolt_commit('-A','-m','theirs');
+SELECT dolt_checkout('main');
+UPDATE t SET a='a1' WHERE pk=1;
+UPDATE t SET a='p1' WHERE pk=2;
+SELECT dolt_commit('-A','-m','ours');
+SELECT dolt_merge('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t NOT INDEXED ORDER BY pk);")
+check "cellmerge_table_scan_rows" "1:a1:b1 2:p1:q1" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
+check "cellmerge_composite_index_has_no_stale_entry" "1:a1:b1 2:p1:q1" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM (SELECT pk FROM t INDEXED BY iab WHERE a>='');")
+check "cellmerge_composite_index_count" "2" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b||':'||c,' ') FROM (SELECT pk,a,b,c FROM t INDEXED BY iabc WHERE a>='' ORDER BY a,b,c,pk);")
+check "cellmerge_three_col_index_has_no_stale_entry" "1:a1:b1:c0 2:p1:q1:r0" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT pk||':'||a||':'||b FROM t INDEXED BY iab WHERE a='a1';")
+check "cellmerge_index_seek_serves_merged_row_only" "1:a1:b1" "$out"
+
+PRE=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
+"$DOLTLITE" "$DB" "REINDEX iab;" >/dev/null 2>&1
+POST=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
+check "cellmerge_index_matches_full_rebuild" "$POST" "$PRE"
+
+# Same shape reached through cherry-pick and revert, which replay onto ours
+# through the identical row-merge path.
+DB="$TMPROOT/cellmerge_pick.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(pk INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX iab ON t(a,b);
+INSERT INTO t VALUES(1,'a0','b0');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET b='b1' WHERE pk=1;
+SELECT dolt_commit('-A','-m','theirs');
+SELECT dolt_checkout('main');
+UPDATE t SET a='a1' WHERE pk=1;
+SELECT dolt_commit('-A','-m','ours');
+SELECT dolt_cherry_pick('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t NOT INDEXED ORDER BY pk);")
+check "cherry_pick_cellmerge_table_scan_rows" "1:a1:b1" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
+check "cherry_pick_cellmerge_index_has_no_stale_entry" "1:a1:b1" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
