@@ -432,6 +432,12 @@ int doltliteMergeRef(
   if( nMergeConflicts>0 ){
     ProllyHash conflictsHash;
     doltliteGetSessionConflictsCatalog(db, &conflictsHash);
+    /* From here the session is marked as merging, so every later exit has to
+    ** restore the saved state rather than discard it. Discarding leaves
+    ** isMerging set with a conflicts catalog while the caller is told the merge
+    ** did not happen, and the next merge then refuses because one is already in
+    ** progress. */
+    bRestoreOnFail = 1;
     rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
     /* Caching the spec only sharpens dolt_merge_status.source, which falls
     ** back to the branch at theirHead, so losing it must not fail the merge. */
