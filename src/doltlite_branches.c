@@ -156,9 +156,12 @@ static int brIsDirty(
   }
 
   rc = chunkStoreGet(cs, &br->workingSetHash, &wsData, &nWsData);
-  if( rc!=SQLITE_OK || !wsData || nWsData < WS_TOTAL_SIZE || wsData[0] != WS_FORMAT_VERSION ){
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreValidateWorkingSetBlob(wsData, nWsData);
+  }
+  if( rc!=SQLITE_OK ){
     sqlite3_free(wsData);
-    return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
+    return rc;
   }
   memcpy(workingCat.data, wsData + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
   memcpy(stagedCat.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);

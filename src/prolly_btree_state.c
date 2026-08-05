@@ -45,18 +45,12 @@ int btreeLoadWorkingSetBlob(
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( !data || nData < WS_TOTAL_SIZE_V2 ){
+  rc = chunkStoreValidateWorkingSetBlob(data, nData);
+  if( rc!=SQLITE_OK ){
     sqlite3_free(data);
-    return SQLITE_CORRUPT;
+    return rc;
   }
   version = data[0];
-  if( version != WS_FORMAT_VERSION_V2
-   && version != WS_FORMAT_VERSION_V3
-   && version != WS_FORMAT_VERSION_V4
-   && version != WS_FORMAT_VERSION_V5 ){
-    sqlite3_free(data);
-    return SQLITE_CORRUPT;
-  }
 
   if( pWorkingCat ) memcpy(pWorkingCat->data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
   if( pWorkingCommit ) memcpy(pWorkingCommit->data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);

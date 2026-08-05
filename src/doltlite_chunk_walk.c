@@ -65,10 +65,7 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_CONSTRAINT_VIOLATIONS;
   }
 
-  if( (data[0] == WS_FORMAT_VERSION_V5 && nData == WS_TOTAL_SIZE)
-   || (data[0] == WS_FORMAT_VERSION_V4 && nData == WS_TOTAL_SIZE_V4)
-   || (data[0] == WS_FORMAT_VERSION_V3 && nData == WS_TOTAL_SIZE_V3)
-   || (data[0] == WS_FORMAT_VERSION_V2 && nData == WS_TOTAL_SIZE_V2) ){
+  if( chunkStoreValidateWorkingSetBlob(data, nData)==SQLITE_OK ){
     return CHUNK_WORKING_SET;
   }
 

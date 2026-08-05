@@ -88,6 +88,36 @@ static void testValidRoundTrip(void){
   sqlite3_free(buf);
 }
 
+static void testTrailingByte(void){
+  DoltliteCommit in;
+  u8 *buf = 0;
+  u8 *pNew;
+  int n = 0;
+  int rc;
+
+  memset(&in, 0, sizeof(in));
+  in.zName = "alice";
+  in.zEmail = "alice@example.com";
+  in.zMessage = "message";
+  rc = doltliteCommitSerialize(&in, &buf, &n);
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "FAIL trailing_byte: serialize rc=%d\n", rc);
+    failures++;
+    return;
+  }
+  pNew = sqlite3_realloc(buf, n + 1);
+  if( !pNew ){
+    fprintf(stderr, "FAIL trailing_byte: realloc\n");
+    failures++;
+    sqlite3_free(buf);
+    return;
+  }
+  buf = pNew;
+  buf[n] = 0;
+  expectCorrupt("trailing_byte", buf, n + 1);
+  sqlite3_free(buf);
+}
+
 int main(void){
   int H = PROLLY_HASH_SIZE;
   int nData = 16 + H;               /* minimum that clears the header check */
@@ -95,6 +125,7 @@ int main(void){
   int off;
 
   testValidRoundTrip();
+  testTrailingByte();
 
   /* Truncated after a non-empty name: the email length prefix would be read
   ** at data[nData]. */

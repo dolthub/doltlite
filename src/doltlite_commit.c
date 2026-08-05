@@ -128,6 +128,11 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   if( !c->zMessage ){ doltliteCommitClear(c); return SQLITE_NOMEM; }
   if( nMsg>0 ) memcpy(c->zMessage, p, nMsg);
   c->zMessage[nMsg] = 0;
+  p += nMsg;
+  if( p != data + nData ){
+    doltliteCommitClear(c);
+    return SQLITE_CORRUPT;
+  }
 
   return SQLITE_OK;
 }
