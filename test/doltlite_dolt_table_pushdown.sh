@@ -210,4 +210,91 @@ run_test "table_name_named_still_matches" \
 
 rm -f "$DB3"
 
+# An INTEGER PRIMARY KEY is a rowid alias only when the table has a rowid.
+# A WITHOUT ROWID table is clustered by its declared key instead, so reading
+# that column from the tree's integer key yields the raw key bytes as a number
+# and the pk constraints xBestIndex promised to apply are silently dropped.
+DB4=/tmp/test_pushdown_worid_$$.db
+rm -f "$DB4"
+echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO t VALUES(1,'one');
+INSERT INTO t VALUES(2,'two');
+INSERT INTO t VALUES(3,'three');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET v='TWO' WHERE pk=2;
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+
+run_test "worid_table_rows" \
+  "SELECT group_concat(pk || ':' || v, ' ') FROM (SELECT pk,v FROM t ORDER BY pk);" \
+  "1:one 2:TWO 3:three" "$DB4"
+run_test "worid_at_renders_pk" \
+  "SELECT group_concat(pk || ':' || v, ' ')
+     FROM (SELECT pk,v FROM dolt_at_t WHERE commit_ref='HEAD' ORDER BY pk);" \
+  "1:one 2:TWO 3:three" "$DB4"
+run_test "worid_at_pk_eq_selects_that_row" \
+  "SELECT group_concat(pk || ':' || v, ' ')
+     FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=2;" "2:TWO" "$DB4"
+run_test "worid_at_pk_eq_absent_is_empty" \
+  "SELECT count(*) FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=99;" "0" "$DB4"
+run_test "worid_history_renders_pk" \
+  "SELECT group_concat(pk || ':' || v, ' ')
+     FROM (SELECT pk,v FROM dolt_history_t ORDER BY pk, v);" \
+  "1:one 1:one 2:TWO 2:two 3:three 3:three" "$DB4"
+run_test "worid_history_pk_eq" \
+  "SELECT count(*) FROM dolt_history_t WHERE pk=2;" "2" "$DB4"
+run_test "worid_history_pk_range" \
+  "SELECT count(*) FROM dolt_history_t WHERE pk>=2;" "4" "$DB4"
+run_test "worid_blame_renders_pk" \
+  "SELECT group_concat(pk, ' ') FROM (SELECT pk FROM dolt_blame_t ORDER BY pk);" \
+  "1 2 3" "$DB4"
+run_test "worid_blame_pk_eq" \
+  "SELECT count(*) FROM dolt_blame_t WHERE pk=2;" "1" "$DB4"
+
+rm -f "$DB4"
+
+# A composite WITHOUT ROWID key has no single INTEGER column to mistake for a
+# rowid, so it already read correctly; keep it that way.
+DB4B=/tmp/test_pushdown_worid_comp_$$.db
+rm -f "$DB4B"
+echo "CREATE TABLE t(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO t VALUES(1,1,'x');
+INSERT INTO t VALUES(1,2,'y');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET v='Y' WHERE a=1 AND b=2;
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB4B" > /dev/null 2>&1
+
+run_test "worid_composite_at_renders_key" \
+  "SELECT group_concat(a || '/' || b || ':' || v, ' ')
+     FROM (SELECT a,b,v FROM dolt_at_t WHERE commit_ref='HEAD' ORDER BY a,b);" \
+  "1/1:x 1/2:Y" "$DB4B"
+run_test "worid_composite_blame_renders_key" \
+  "SELECT group_concat(a || '/' || b, ' ')
+     FROM (SELECT a,b FROM dolt_blame_t ORDER BY a,b);" "1/1 1/2" "$DB4B"
+
+rm -f "$DB4B"
+
+# The rowid table beside it must keep its pushdown: the fix narrows which
+# tables claim an alias, not whether the alias is used.
+DB5=/tmp/test_pushdown_rowid_$$.db
+rm -f "$DB5"
+echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'one');
+INSERT INTO t VALUES(2,'two');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET v='TWO' WHERE pk=2;
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+
+run_test_match "rowid_history_still_pushes_down" \
+  "EXPLAIN QUERY PLAN SELECT * FROM dolt_history_t WHERE pk=2;" \
+  "VIRTUAL TABLE INDEX [1-9]" "$DB5"
+run_test "rowid_at_renders_pk" \
+  "SELECT group_concat(pk || ':' || v, ' ')
+     FROM (SELECT pk,v FROM dolt_at_t WHERE commit_ref='HEAD' ORDER BY pk);" \
+  "1:one 2:TWO" "$DB5"
+run_test "rowid_blame_renders_pk" \
+  "SELECT group_concat(pk, ' ') FROM (SELECT pk FROM dolt_blame_t ORDER BY pk);" \
+  "1 2" "$DB5"
+
+rm -f "$DB5"
+
 dltest_finish

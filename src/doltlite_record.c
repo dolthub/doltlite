@@ -311,8 +311,14 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     return rc;
   }
 
+  /* iPkCol marks a rowid alias: readers render that column from the tree's
+  ** integer key and seek on it. A WITHOUT ROWID table is clustered by its
+  ** declared primary key and has no integer key to read, so treating its
+  ** INTEGER pk as an alias yields the raw key bytes as a number and silently
+  ** drops the pk constraints xBestIndex promised to apply. */
   if( nPkCols==1 && iCandidateAlias>=0 ){
-    ci->iPkCol = iCandidateAlias;
+    Table *pTab = sqlite3FindTable(db, zTable, "main");
+    if( pTab && HasRowid(pTab) ) ci->iPkCol = iCandidateAlias;
   }
 
   if( ci->nCol>0 ){
