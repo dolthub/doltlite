@@ -1193,6 +1193,40 @@ static void test_unsealed_header_bounds_checks_wal_offset(void){
   removeDb(dbpath);
 }
 
+/* iIndexOffset + nIndexSize in i64 can wrap for a crafted large offset. A
+** subtractive bounds check must still refuse a low WAL offset that aims at
+** live data, and must not truncate the file. */
+static void test_index_end_overflow_bounds_wal_offset(void){
+  const char *dbpath = "/tmp/test_corr_idxoverflow.db";
+  unsigned char buf[8];
+  unsigned char sizeBuf[4];
+  off_t before, after;
+
+  printf("--- Test 29: Overflow-shaped index end still refuses bad WAL ---\n");
+
+  check("create_compacted_29", create_compacted_db(dbpath)==0);
+  before = file_size(dbpath);
+  check("rows_before_29", strcmp(rowCountOf(dbpath), "5")==0);
+
+  /* Near i64 max so iIndexOffset + nIndexSize wraps if added naively. */
+  CS_WRITE_I64(buf, (long long)0x7fffffffffffffffLL);
+  check("corrupt_index_offset_29",
+        corrupt_bytes(dbpath, CS_MANIFEST_INDEX_OFFSET_OFF, buf, sizeof(buf))==0);
+  CS_WRITE_U32(sizeBuf, 1u);
+  check("corrupt_index_size_29",
+        corrupt_bytes(dbpath, CS_MANIFEST_INDEX_SIZE_OFF, sizeBuf,
+                      sizeof(sizeBuf))==0);
+  CS_WRITE_I64(buf, (long long)(MANIFEST_SIZE + 32));
+  check("corrupt_wal_offset_29",
+        corrupt_bytes(dbpath, CS_MANIFEST_WAL_OFFSET_OFF, buf, sizeof(buf))==0);
+
+  check("overflow_index_end_bad_wal_detected", open_write_and_probe(dbpath)==1);
+  after = file_size(dbpath);
+  check("overflow_index_end_does_not_truncate", after==before);
+
+  removeDb(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -1223,6 +1257,7 @@ int main(void){
   test_header_seal_detects_tampered_wal_offset();
   test_unsealed_header_still_opens();
   test_unsealed_header_bounds_checks_wal_offset();
+  test_index_end_overflow_bounds_wal_offset();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
