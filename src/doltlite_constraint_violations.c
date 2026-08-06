@@ -157,13 +157,11 @@ static int skipViolationRow(DlByteReader *rd){
   return skipViolationBlob(rd);
 }
 
-static int loadAllViolations(
-  sqlite3 *db,
-  ChunkStore *cs,
+static int deserializeAllViolations(
+  const u8 *data,
+  int nData,
   ConstraintViolationTable **ppTables, int *pnTables
 ){
-  ProllyHash hash;
-  u8 *data = 0; int nData = 0;
   DlByteReader rd;
   int nTables, i, j, rc;
   ConstraintViolationTable *aTables;
@@ -171,22 +169,16 @@ static int loadAllViolations(
   *ppTables = 0;
   *pnTables = 0;
 
-  doltliteGetSessionConstraintViolationsCatalog(db, &hash);
-  if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
-
-  rc = chunkStoreGet(cs, &hash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
+  if( !data || nData<(4+2) ) return SQLITE_CORRUPT;
 
   dlReaderInit(&rd, data, nData);
   if( dlReadFramedHeader(&rd, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
                          &nTables)!=SQLITE_OK ){
-    sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
 
   aTables = sqlite3_malloc(nTables ? nTables * (int)sizeof(*aTables) : 1);
-  if( !aTables ){ sqlite3_free(data); return SQLITE_NOMEM; }
+  if( !aTables ) return SQLITE_NOMEM;
   memset(aTables, 0, nTables ? nTables * (int)sizeof(*aTables) : 1);
 
   for(i=0; i<nTables; i++){
@@ -217,12 +209,41 @@ static int loadAllViolations(
 
   *ppTables = aTables;
   *pnTables = nTables;
-  sqlite3_free(data);
-  (void)db;
   return SQLITE_OK;
 
 fail:
   freeViolationTables(aTables, nTables);
+  return rc;
+}
+
+int doltliteDeserializeConstraintViolationsForTest(const u8 *data, int nData){
+  ConstraintViolationTable *aTables = 0;
+  int nTables = 0;
+  int rc = deserializeAllViolations(data, nData, &aTables, &nTables);
+  freeViolationTables(aTables, nTables);
+  return rc;
+}
+
+static int loadAllViolations(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ConstraintViolationTable **ppTables, int *pnTables
+){
+  ProllyHash hash;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  doltliteGetSessionConstraintViolationsCatalog(db, &hash);
+  if( prollyHashIsEmpty(&hash) ){
+    *ppTables = 0;
+    *pnTables = 0;
+    return SQLITE_OK;
+  }
+  rc = chunkStoreGet(cs, &hash, &data, &nData);
+  if( rc==SQLITE_OK ){
+    rc = deserializeAllViolations(data, nData, ppTables, pnTables);
+  }
   sqlite3_free(data);
   return rc;
 }

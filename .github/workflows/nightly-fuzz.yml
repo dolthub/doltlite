@@ -43,6 +43,10 @@ jobs:
           - read_index
           - deserialize_catalog
           - wire_response
+          - commit
+          - working_set
+          - conflicts
+          - constraint_violations
 
     steps:
     - uses: actions/checkout@v4

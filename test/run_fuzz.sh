@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ $# -lt 1 ]; then
   echo "usage: $0 <target> [libFuzzer args...]" >&2
-  echo "  target: replaywal | prolly_node | deserialize_refs | read_index | deserialize_catalog | wire_response" >&2
+  echo "  target: replaywal | prolly_node | deserialize_refs | read_index | deserialize_catalog | wire_response | commit | working_set | conflicts | constraint_violations" >&2
   exit 2
 fi
 
@@ -35,8 +35,12 @@ case "$target" in
     src="fuzz_wire_response.c"
     corpus="wire_response"
     ;;
+  commit|working_set|conflicts|constraint_violations)
+    src="fuzz_$target.c"
+    corpus="$target"
+    ;;
   *)
-    echo "ERROR: unknown target '$target' (expected: replaywal | prolly_node | deserialize_refs | read_index | deserialize_catalog | wire_response)" >&2
+    echo "ERROR: unknown target '$target'" >&2
     exit 2
     ;;
 esac
