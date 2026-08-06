@@ -8,6 +8,58 @@
 #include "doltlite_internal.h"
 #include "doltlite_parse.h"
 
+static int doltliteRefComponentEndsLock(const char *zStart, const char *zEnd){
+  return zEnd-zStart>=5 && memcmp(zEnd-5, ".lock", 5)==0;
+}
+
+int doltliteUserRefNameIsValid(const char *zName){
+  const unsigned char *z;
+  const char *zComponent;
+  int n, i;
+  int isHash = 1;
+
+  if( !zName || !zName[0] ) return 0;
+  if( strcmp(zName, "HEAD")==0 || strcmp(zName, "head")==0
+   || sqlite3_stricmp(zName, "WORKING")==0
+   || sqlite3_stricmp(zName, "STAGED")==0
+   || strcmp(zName, "-")==0 || strcmp(zName, "@")==0 ){
+    return 0;
+  }
+  n = (int)strlen(zName);
+  if( zName[0]=='/' || zName[n-1]=='/' || zName[n-1]=='.' ) return 0;
+  if( n==PROLLY_HASH_SIZE*2 ){
+    for(i=0; i<n; i++){
+      unsigned char c = (unsigned char)zName[i];
+      if( !((c>='0' && c<='9') || (c>='a' && c<='f')
+         || (c>='A' && c<='F')) ){
+        isHash = 0;
+        break;
+      }
+    }
+    if( isHash ) return 0;
+  }
+
+  zComponent = zName;
+  for(z=(const unsigned char*)zName; *z; z++){
+    unsigned char c = *z;
+    if( c<=0x20 || c>=0x7f || c==':' || c=='?' || c=='[' || c=='\\'
+     || c=='^' || c=='~' || c=='*' ){
+      return 0;
+    }
+    if( z==(const unsigned char*)zComponent && c=='.' ) return 0;
+    if( c=='.' && z[1]=='.' ) return 0;
+    if( c=='@' && z[1]=='{' ) return 0;
+    if( c=='/' ){
+      if( z==(const unsigned char*)zComponent
+       || doltliteRefComponentEndsLock(zComponent, (const char*)z) ){
+        return 0;
+      }
+      zComponent = (const char*)z + 1;
+    }
+  }
+  return !doltliteRefComponentEndsLock(zComponent, (const char*)z);
+}
+
 static int doltliteValidateCommitHash(
   sqlite3 *db,
   const ProllyHash *pHash

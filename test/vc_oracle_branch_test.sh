@@ -301,6 +301,38 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_branch('-f', 'feature');
 "
 
+oracle_with_rows "force_create_resets_destination_working_set" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_checkout('main');
+SELECT dolt_branch('-f', 'feature', 'HEAD');
+SELECT dolt_checkout('feature');
+"
+
+oracle_with_rows "force_copy_resets_destination_working_set" "
+$SEED
+SELECT dolt_branch('destination');
+SELECT dolt_checkout('destination');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_checkout('main');
+SELECT dolt_branch('-c', '-f', 'main', 'destination');
+SELECT dolt_checkout('destination');
+"
+
+oracle_with_rows "force_move_replaces_destination_working_set" "
+$SEED
+SELECT dolt_branch('destination');
+SELECT dolt_checkout('destination');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_checkout('main');
+SELECT dolt_branch('source');
+SELECT dolt_checkout('source');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_branch('-m', '-f', 'source', 'destination');
+"
+
 echo "--- explicit transaction parity ---"
 
 oracle_with_rows "branch_create_inside_txn_seals_row_state" "
@@ -368,6 +400,41 @@ $SEED
 SELECT dolt_branch('');
 "
 
+oracle_error "create_reserved_head" "
+$SEED
+SELECT dolt_branch('HEAD');
+"
+
+oracle_error "create_reserved_lower_head" "
+$SEED
+SELECT dolt_branch('head');
+"
+
+oracle_error "create_invalid_double_dot" "
+$SEED
+SELECT dolt_branch('bad..name');
+"
+
+oracle_error "create_invalid_dot_component" "
+$SEED
+SELECT dolt_branch('feature/.hidden');
+"
+
+oracle_error "create_invalid_lock_suffix" "
+$SEED
+SELECT dolt_branch('feature.lock');
+"
+
+oracle_error "create_invalid_space" "
+$SEED
+SELECT dolt_branch('bad name');
+"
+
+oracle_error "create_invalid_reflog_syntax" "
+$SEED
+SELECT dolt_branch('bad@{name}');
+"
+
 oracle_error "copy_empty_source" "
 $SEED
 SELECT dolt_branch('-c', '', 'dest');
@@ -378,6 +445,11 @@ $SEED
 SELECT dolt_branch('-c', 'main', '');
 "
 
+oracle_error "copy_invalid_dest" "
+$SEED
+SELECT dolt_branch('-c', 'main', 'bad..copy');
+"
+
 oracle_error "move_empty_source" "
 $SEED
 SELECT dolt_branch('-m', '', 'dest');
@@ -386,6 +458,12 @@ SELECT dolt_branch('-m', '', 'dest');
 oracle_error "move_empty_dest" "
 $SEED
 SELECT dolt_branch('-m', 'main', '');
+"
+
+oracle_error "move_invalid_dest" "
+$SEED
+SELECT dolt_branch('source');
+SELECT dolt_branch('-m', 'source', 'bad..move');
 "
 
 oracle_error "create_extra_arg" "

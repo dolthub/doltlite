@@ -39,6 +39,12 @@ run_test_match "tag_missing_commit" \
   "SELECT dolt_tag('badtag','0123456789abcdef0123456789abcdef01234567');" \
   "commit not found" "$DB"
 
+run_test_match "tag_empty_name" "SELECT dolt_tag('');" "invalid tag name" "$DB"
+run_test_match "tag_reserved_working" "SELECT dolt_tag('WORKING');" "invalid tag name" "$DB"
+run_test_match "tag_hash_name" \
+  "SELECT dolt_tag('0123456789012345678901234567890123456789');" \
+  "invalid tag name" "$DB"
+
 run_test "delete_tag" "SELECT dolt_tag('-d','v0.9');" "0" "$DB"
 run_test "delete_and_recreate_same_name" "SELECT dolt_tag('-d','parenttilde'); SELECT dolt_tag('parenttilde');" "0
 0" "$DB"

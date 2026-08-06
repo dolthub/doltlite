@@ -488,6 +488,18 @@ run_test_match "force_create_new_branch_allowed" \
   "SELECT dolt_branch('-f','brand_new');" \
   "^$|0" "$DB"
 
+run_test_match "reserved_working_branch_rejected" \
+  "SELECT dolt_branch('WORKING');" \
+  "invalid branch name" "$DB"
+
+run_test_match "reserved_staged_branch_rejected" \
+  "SELECT dolt_checkout('-b','staged');" \
+  "invalid branch name" "$DB"
+
+run_test_match "hash_branch_rejected" \
+  "SELECT dolt_branch('0123456789012345678901234567890123456789');" \
+  "invalid branch name" "$DB"
+
 db_rm "$DB"
 
 echo ""
