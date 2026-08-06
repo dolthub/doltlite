@@ -250,8 +250,11 @@ static int csReadManifest(ChunkStore *cs){
   ** and cover pre-seal headers that no seal check could reach. */
   if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
   if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
+  /* Compare without summing: a large iIndexOffset + nIndexSize can wrap i64
+  ** and accept a WAL offset that still sits inside live data. */
   if( cs->index.iIndexOffset>0
-   && cs->wal.iWalOffset < cs->index.iIndexOffset + cs->index.nIndexSize ){
+   && ( cs->wal.iWalOffset < cs->index.iIndexOffset
+     || cs->wal.iWalOffset - cs->index.iIndexOffset < cs->index.nIndexSize ) ){
     return SQLITE_CORRUPT;
   }
 
