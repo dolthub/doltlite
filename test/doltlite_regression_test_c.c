@@ -2488,7 +2488,6 @@ static void run_blame_all_parents_merge_base(void){
   DoltliteCommit b2Commit, mergeCommit;
   u8 *pCommitData = 0;
   int nCommitData = 0;
-  int rc;
   const char *res;
 
   printf("=== Blame All-Parents Merge Base Test ===\n\n");
@@ -2570,10 +2569,16 @@ static void run_blame_all_parents_merge_base(void){
           chunkStorePut(cs, pCommitData, nCommitData, &mergeHash)==SQLITE_OK);
     check("commit_octopus_commit_for_blame_all_parents",
           chunkStoreCommit(cs)==SQLITE_OK);
+    /* These are internal entry points whose production callers run inside
+    ** sqlite3_step, so they expect the connection mutex to be held.
+    ** doltliteSwitchCatalog resets connection schemas and unlocks the vtab
+    ** list, which asserts on it. */
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));
     doltliteSetSessionHead(db, &mergeHash);
     doltliteSetSessionStaged(db, &mergeCommit.catalogHash);
     check("switch_catalog_to_octopus_commit_for_blame_all_parents",
           doltliteSwitchCatalog(db, &mergeCommit.catalogHash)==SQLITE_OK);
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
   }
 
   res = queryScalarText(db, "SELECT message FROM dolt_blame_t WHERE id = 1;");
@@ -6387,7 +6392,11 @@ static void run_hard_reset_failure_restores_memory_state(void){
 
   gFailHits = 0;
   gFailWriteOnce = 1;
+  /* Production callers reach doltliteHardReset from inside sqlite3_step with
+  ** the connection mutex held; it resets connection schemas, which asserts. */
+  sqlite3_mutex_enter(sqlite3_db_mutex(db));
   rc = doltliteHardReset(db, &headCatHash);
+  sqlite3_mutex_leave(sqlite3_db_mutex(db));
   check("hard_reset_failure_injected", gFailHits>0);
   check("hard_reset_returns_error_on_commit_failure", rc!=SQLITE_OK);
   check("failed_hard_reset_preserves_memory_state",

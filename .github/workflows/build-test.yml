@@ -62,6 +62,11 @@ jobs:
     - name: Assert-enabled dirty-check smoke
       run: build-assert/catalog_serialize_determinism_test
 
+    # The regression suite is the only place most of these assertions are ever
+    # evaluated -- every other job builds with NDEBUG. It runs in a few seconds.
+    - name: Assert-enabled regression suite
+      run: build-assert/doltlite_regression_test_c all
+
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}

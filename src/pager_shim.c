@@ -947,8 +947,31 @@ extern int orig_sqlite3_backup_finish(sqlite3_backup*);
 extern int orig_sqlite3_backup_remaining(sqlite3_backup*);
 extern int orig_sqlite3_backup_pagecount(sqlite3_backup*);
 
+static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
+                                        sqlite3 *pSrc, const char *zSrcDb);
+
+/* Every failure path here reports through sqlite3ErrorWithMsg, which allocates
+** a Mem against pDest and writes db->pErr, and the body reads aDb[] on both
+** connections. Stock backup_init holds both mutexes across all of that; this
+** wrapper had none, so an assert build trips sqlite3DbMallocRawNN's
+** mutex-held check on the first such error and a threadsafe build races.
+** Connection mutexes are recursive, so the legacy delegation re-entering them
+** is safe. */
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
-                                     sqlite3 *pSrc, const char *zSrcDb){
+                                    sqlite3 *pSrc, const char *zSrcDb){
+  sqlite3_backup *pRet;
+  if( !pDest || !pSrc ) return 0;
+  sqlite3_mutex_enter(pSrc->mutex);
+  sqlite3_mutex_enter(pDest->mutex);
+  pRet = backupInitLocked(pDest, zDestDb, pSrc, zSrcDb);
+  sqlite3_mutex_leave(pDest->mutex);
+  sqlite3_mutex_leave(pSrc->mutex);
+  return pRet;
+}
+
+/* Runs with both connection mutexes held; see sqlite3_backup_init below. */
+static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
+                                        sqlite3 *pSrc, const char *zSrcDb){
   DoltliteBackup *p;
   ChunkStore *srcCs;
   ChunkStore *destCs;

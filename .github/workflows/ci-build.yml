@@ -946,12 +946,14 @@ jobs:
           exit 1
         fi
         make -j"$(nproc)" DOLTLITE_PROLLY=1 \
-          catalog_serialize_determinism_test
+          catalog_serialize_determinism_test \
+          doltlite-regression-test-c-build
 
     - name: Package
       run: |
         tar -czf development-build.tar.gz \
-          build-assert/catalog_serialize_determinism_test
+          build-assert/catalog_serialize_determinism_test \
+          build-assert/doltlite_regression_test_c
 
     - name: Upload
       uses: actions/upload-artifact@v4
