@@ -1037,12 +1037,32 @@ static void rebaseResultRecoveryFailure(sqlite3_context *context, int rc){
   sqlite3_result_error_code(context, rc);
 }
 
-/* Claim exclusive ownership of ending the active rebase. Under the graph lock,
-** reload durable working-set state for the current branch; if isRebasing is
-** already clear a peer won and this returns SQLITE_DONE. Otherwise clear the
-** flag, persist it under the same lock, drop dolt_rebase, and return SQLITE_OK
-** so only the winner continues cleanup. Callers must copy branch names out of
-** session state before claiming. */
+/* True when the temporary working branch is absent on disk (peer finished). */
+static int rebaseWorkingBranchGoneOnDisk(
+  ChunkStore *cs,
+  const char *zWorkingBranch
+){
+  ProllyHash tip;
+  int found = 0;
+  if( !cs || !zWorkingBranch || !zWorkingBranch[0] ) return 1;
+  if( chunkStoreForceRefresh(cs)!=SQLITE_OK ) return 0;
+  if( chunkStoreReadDiskBranchTip(cs, zWorkingBranch, &tip, &found)!=SQLITE_OK ){
+    return 0;
+  }
+  return !found;
+}
+
+/* Claim exclusive ownership of ending the active rebase.
+**
+** Returns SQLITE_DONE if durable isRebasing is already clear (peer won).
+** Returns SQLITE_OK after this connection clears isRebasing and drops the
+** plan table. Storage failures return an error without claiming success, and
+** without reporting "no rebase in progress" — callers must surface recovery
+** failure when the durable flag cannot be proven clear by a successful read.
+**
+** Drop the plan table before clearing isRebasing so a fault during DROP leaves
+** the durable flag set (fault 953 / recovery-failure regressions). Callers must
+** copy branch names out of session state before claiming. */
 static int rebaseClaimActiveEnd(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zBranch;
@@ -1053,6 +1073,28 @@ static int rebaseClaimActiveEnd(sqlite3 *db){
   if( !cs || !db ) return SQLITE_ERROR;
   zBranch = doltliteGetSessionBranch(db);
   if( !zBranch || !zBranch[0] ) zBranch = "main";
+
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  locked = 1;
+  rc = chunkStoreForceRefresh(cs);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  rc = doltliteLoadWorkingSet(db, zBranch);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  if( !isRebasing ){
+    rc = SQLITE_DONE;
+    goto claim_done;
+  }
+  /* Release before DROP: SQL may re-enter the store. isRebasing stays set
+  ** until after DROP so a storage fault during DROP is not mistaken for a
+  ** peer win. */
+  chunkStoreUnlock(cs);
+  locked = 0;
+
+  if( sqlite3FaultSim(953) ) return SQLITE_IOERR;
+  rc = sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
@@ -1077,11 +1119,7 @@ static int rebaseClaimActiveEnd(sqlite3 *db){
 
 claim_done:
   if( locked ) chunkStoreUnlock(cs);
-  if( rc==SQLITE_OK ){
-    int rcDrop = sqlite3FaultSim(953) ? SQLITE_IOERR :
-        sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
-    if( rcDrop!=SQLITE_OK ) rc = rcDrop;
-  }else if( rc==SQLITE_DONE ){
+  if( rc==SQLITE_DONE ){
     (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
   }
   return rc;
@@ -1114,14 +1152,17 @@ static int rebaseCleanupAfterClaim(
     rc2 = doltliteCheckoutBranchForRebase(db, zOrigBranch);
     if( rc2!=SQLITE_OK ){
       rc2 = rebaseRestoreBranchState(db, zOrigBranch);
-      rebaseKeepFirstError(&rc, rc2);
     }
+    if( rc2==SQLITE_BUSY || rc2==SQLITE_LOCKED ) rc2 = SQLITE_OK;
+    rebaseKeepFirstError(&rc, rc2);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
     rc2 = doltliteMutateRefs(db, rebaseDeleteWorkingBranchRefs,
                              (void*)zWorkingBranch);
+    if( rc2==SQLITE_BUSY || rc2==SQLITE_LOCKED ) rc2 = SQLITE_OK;
     rebaseKeepFirstError(&rc, rc2);
     rc2 = doltlitePersistWorkingSet(db);
+    if( rc2==SQLITE_BUSY || rc2==SQLITE_LOCKED ) rc2 = SQLITE_OK;
     rebaseKeepFirstError(&rc, rc2);
   }
   return rc;
@@ -1410,35 +1451,56 @@ static void doltliteRebaseInteractiveAbort(
     return;
   }
   if( rc!=SQLITE_OK ){
-    /* Claim hard-failed: if a peer already cleared durable rebase state,
-    ** report the lost race rather than a stuck recovery failure. */
-    u8 stillRebasing = 1;
-    const char *zBr = doltliteGetSessionBranch(db);
-    if( !zBr || !zBr[0] ) zBr = "main";
-    if( cs && chunkStoreForceRefresh(cs)==SQLITE_OK
-     && doltliteLoadWorkingSet(db, zBr)==SQLITE_OK ){
-      doltliteGetSessionRebaseState(db, &stillRebasing, 0, 0, 0, 0);
+    /* Storage/claim failure: only claim returns DONE when a successful
+    ** durable read proved isRebasing is clear. Any other error is recovery
+    ** failure (including fault-injected DROP after a partial attempt). */
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_free(zOrigBranch);
+    rebaseResultRecoveryFailure(context, rc);
+    return;
+  }
+
+  rc = rebaseCleanupAfterClaim(db, zOrigBranch, zWorking);
+  if( cs && zReturnBranch && zReturnBranch[0] ){
+    int rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    if( rc2!=SQLITE_OK
+     && ( rc2==SQLITE_BUSY || rc2==SQLITE_LOCKED
+       || rebaseWorkingBranchGoneOnDisk(cs, zWorking) ) ){
+      rc2 = SQLITE_OK;
+    }
+    rebaseKeepFirstError(&rc, rc2);
+  }
+  {
+    int rc2 = doltlitePersistWorkingSet(db);
+    if( rc2==SQLITE_BUSY || rc2==SQLITE_LOCKED ) rc2 = SQLITE_OK;
+    rebaseKeepFirstError(&rc, rc2);
+  }
+  {
+    int rc2 = doltliteVcSealBranchStyleTxn(db);
+    if( rc2==SQLITE_BUSY || rc2==SQLITE_LOCKED ) rc2 = SQLITE_OK;
+    rebaseKeepFirstError(&rc, rc2);
+  }
+  if( rc!=SQLITE_OK ){
+    /* After a successful claim, isRebasing is clear. Soft-succeed when the
+    ** failure looks like a concurrent --continue finishing the same work
+    ** (lock contention or temp branch already gone). Hard storage errors
+    ** still report recovery failed. */
+    if( rc==SQLITE_BUSY || rc==SQLITE_LOCKED
+     || rebaseWorkingBranchGoneOnDisk(cs, zWorking) ){
+      sqlite3_free(zReturnBranch);
+      sqlite3_free(zWorking);
+      sqlite3_free(zOrigBranch);
+      sqlite3_result_text(context, "Interactive rebase aborted", -1,
+                          SQLITE_STATIC);
+      return;
     }
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     sqlite3_free(zOrigBranch);
-    if( !stillRebasing ){
-      sqlite3_result_error(context, "no rebase in progress", -1);
-    }else{
-      rebaseResultRecoveryFailure(context, rc);
-    }
+    rebaseResultRecoveryFailure(context, rc);
     return;
   }
-
-  /* Claim succeeded: rebase is durably ended. Best-effort cleanup; a concurrent
-  ** --continue may already have finished the same work. Never report recovery
-  ** failed after a successful claim — that is the stuck dual-failure case. */
-  (void)rebaseCleanupAfterClaim(db, zOrigBranch, zWorking);
-  if( cs && zReturnBranch && zReturnBranch[0] ){
-    (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
-  }
-  (void)doltlitePersistWorkingSet(db);
-  (void)doltliteVcSealBranchStyleTxn(db);
 
   sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);
