@@ -161,4 +161,53 @@ run_test "nonint_history_filter_correct" \
 
 rm -f "$DB2"
 
+# A pushed-down constraint is omitted, so xFilter is the only thing standing
+# between a NULL bound and a wrong answer. Nothing compares true against NULL,
+# yet sqlite3_value_int64 reads one as 0 -- so the pk=0 row below is what makes
+# the difference between "matches nothing" and "matches by accident".
+DB3=/tmp/test_pushdown_null_$$.db
+rm -f "$DB3"
+echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'zero');
+INSERT INTO t VALUES(1,'one');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET v='changed' WHERE pk=1;
+SELECT dolt_commit('-A','-m','c2');
+UPDATE t SET v='dirty' WHERE pk=0;" | $DOLTLITE "$DB3" > /dev/null 2>&1
+
+run_test "null_pk_eq_at_empty" \
+  "SELECT count(*) FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=NULL;" "0" "$DB3"
+run_test "null_pk_eq_history_empty" \
+  "SELECT count(*) FROM dolt_history_t WHERE pk=NULL;" "0" "$DB3"
+run_test "null_pk_eq_blame_empty" \
+  "SELECT count(*) FROM dolt_blame_t WHERE pk=NULL;" "0" "$DB3"
+run_test "null_pk_ge_history_empty" \
+  "SELECT count(*) FROM dolt_history_t WHERE pk>=NULL;" "0" "$DB3"
+run_test "null_pk_le_history_empty" \
+  "SELECT count(*) FROM dolt_history_t WHERE pk<=NULL;" "0" "$DB3"
+run_test "null_table_name_diff_empty" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name=NULL;" "0" "$DB3"
+run_test "null_staged_status_empty" \
+  "SELECT count(*) FROM dolt_status WHERE staged=NULL;" "0" "$DB3"
+
+# The same shape a join produces, which is how this reaches real queries.
+run_test "null_join_history_empty" \
+  "WITH n(k) AS (SELECT NULL) SELECT count(*) FROM n JOIN dolt_history_t h ON h.pk=n.k;" \
+  "0" "$DB3"
+
+# Non-NULL bounds must keep working, including the pk=0 row that a NULL used
+# to collide with.
+run_test "pk_eq_zero_still_matches" \
+  "SELECT count(*) FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=0;" "1" "$DB3"
+run_test "pk_eq_one_still_matches" \
+  "SELECT count(*) FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=1;" "1" "$DB3"
+run_test "pk_ge_zero_still_matches" \
+  "SELECT count(*) FROM dolt_history_t WHERE pk>=0;" "4" "$DB3"
+run_test "staged_zero_still_matches" \
+  "SELECT count(*) FROM dolt_status WHERE staged=0;" "1" "$DB3"
+run_test "table_name_named_still_matches" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name='t';" "3" "$DB3"
+
+rm -f "$DB3"
+
 dltest_finish

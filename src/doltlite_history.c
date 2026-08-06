@@ -290,6 +290,7 @@ static int htFilter(sqlite3_vtab_cursor *cur,
       HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
       HIST_IDX_PK_GT, HIST_IDX_PK_LT,
       argc, argv, &c->pkRange);
+  if( c->pkRange.isEmpty ) return SQLITE_OK;
   if( idxNum & HIST_IDX_PK_EQ ){
     iArg = 1;
   }else{

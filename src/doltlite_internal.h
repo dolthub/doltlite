@@ -74,6 +74,7 @@ struct DoltlitePkRange {
   int hasPkHi;
   int pkLoStrict;
   int pkHiStrict;
+  int isEmpty;            /* A NULL bound: the scan can match nothing. */
 };
 
 struct DoltliteCommitQueue {
@@ -397,14 +398,25 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
   int iArg = 0;
   memset(pRange, 0, sizeof(*pRange));
 
+  /* No value compares true against NULL, so any NULL bound empties the scan.
+  ** sqlite3_value_int64 would read it as 0 and happily match the pk=0 row, and
+  ** xBestIndex omits these constraints, so nothing downstream rechecks them. */
   if( idxNum & idxEq ){
     if( iArg < argc ){
+      if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+        pRange->isEmpty = 1;
+        return;
+      }
       pRange->pkLo = sqlite3_value_int64(argv[iArg++]);
       pRange->hasPkLo = 1;
     }
   }else{
     if( idxNum & idxGe ){
       if( iArg < argc ){
+        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+          pRange->isEmpty = 1;
+          return;
+        }
         pRange->pkLo = sqlite3_value_int64(argv[iArg++]);
         pRange->hasPkLo = 1;
         pRange->pkLoStrict = 0;
@@ -412,7 +424,12 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
     }
     if( idxNum & idxGt ){
       if( iArg < argc ){
-        i64 v2 = sqlite3_value_int64(argv[iArg++]);
+        i64 v2;
+        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+          pRange->isEmpty = 1;
+          return;
+        }
+        v2 = sqlite3_value_int64(argv[iArg++]);
         if( !pRange->hasPkLo || v2 >= pRange->pkLo ){
           pRange->pkLo = v2;
           pRange->hasPkLo = 1;
@@ -422,6 +439,10 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
     }
     if( idxNum & idxLe ){
       if( iArg < argc ){
+        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+          pRange->isEmpty = 1;
+          return;
+        }
         pRange->pkHi = sqlite3_value_int64(argv[iArg++]);
         pRange->hasPkHi = 1;
         pRange->pkHiStrict = 0;
@@ -429,7 +450,12 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
     }
     if( idxNum & idxLt ){
       if( iArg < argc ){
-        i64 v2 = sqlite3_value_int64(argv[iArg++]);
+        i64 v2;
+        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+          pRange->isEmpty = 1;
+          return;
+        }
+        v2 = sqlite3_value_int64(argv[iArg++]);
         if( !pRange->hasPkHi || v2 <= pRange->pkHi ){
           pRange->pkHi = v2;
           pRange->hasPkHi = 1;
