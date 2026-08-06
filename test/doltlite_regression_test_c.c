@@ -9222,6 +9222,150 @@ static void run_prolly_cursor_empty_leaf_root(void){
   chunkStoreClose(&cs);
 }
 
+static void putU32le(u8 *p, u32 v){
+  p[0] = (u8)(v & 0xff);
+  p[1] = (u8)((v >> 8) & 0xff);
+  p[2] = (u8)((v >> 16) & 0xff);
+  p[3] = (u8)((v >> 24) & 0xff);
+}
+
+/* An internal node may not point at an empty leaf. Unchecked,
+** descendToExtremeLeaf sets idx to nItems-1 == -1 when walking right, and
+** prollyCursorNext/Prev then mark the cursor valid over a node whose key array
+** is a null pointer -- the next key read segfaults. prollyCursorFirst/Last
+** already refuse it, so only the step paths were exposed. */
+static void run_prolly_cursor_empty_leaf_under_internal(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyCursor cur;
+  ProllyHash leafFull, leafEmpty, rootHash;
+  u8 internalNode[8 + 24 + 2 + PROLLY_HASH_SIZE*2];
+  int rc, res = 99;
+  int n = 0;
+
+  static const u8 fullLeaf[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_BLOBKEY,
+    0,0,0,0,
+    1,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    'a',
+    'A'
+  };
+  static const u8 emptyLeaf[] = {
+    'D','O','N','P', 0, 0, 0, PROLLY_NODE_BLOBKEY
+  };
+
+  printf("=== Prolly Cursor Empty Leaf Under Internal Test ===\n\n");
+
+  check("empty_leaf_internal_open_store",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("empty_leaf_internal_init_cache", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("empty_leaf_internal_put_full",
+        chunkStorePut(&cs, fullLeaf, (int)sizeof(fullLeaf), &leafFull)==SQLITE_OK);
+  check("empty_leaf_internal_put_empty",
+        chunkStorePut(&cs, emptyLeaf, (int)sizeof(emptyLeaf), &leafEmpty)==SQLITE_OK);
+
+  memcpy(internalNode, "DONP", 4);            n = 4;
+  internalNode[n++] = 1;                      /* level 1 */
+  internalNode[n++] = 2;                      /* count lo */
+  internalNode[n++] = 0;                      /* count hi */
+  internalNode[n++] = PROLLY_NODE_BLOBKEY;
+  putU32le(internalNode + n, 0);  n += 4;     /* aKeyOff */
+  putU32le(internalNode + n, 1);  n += 4;
+  putU32le(internalNode + n, 2);  n += 4;
+  putU32le(internalNode + n, 0);  n += 4;     /* aValOff, hash-sized stride */
+  putU32le(internalNode + n, PROLLY_HASH_SIZE);      n += 4;
+  putU32le(internalNode + n, PROLLY_HASH_SIZE*2);    n += 4;
+  internalNode[n++] = 'a';
+  internalNode[n++] = 'b';
+  memcpy(internalNode + n, leafFull.data, PROLLY_HASH_SIZE);  n += PROLLY_HASH_SIZE;
+  memcpy(internalNode + n, leafEmpty.data, PROLLY_HASH_SIZE); n += PROLLY_HASH_SIZE;
+  check("empty_leaf_internal_node_size", n==(int)sizeof(internalNode));
+  check("empty_leaf_internal_put_root",
+        chunkStorePut(&cs, internalNode, n, &rootHash)==SQLITE_OK);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("empty_leaf_internal_first_ok", rc==SQLITE_OK);
+  check("empty_leaf_internal_first_valid", res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorNext(&cur);
+  check("empty_leaf_internal_next_reports_corrupt", rc==SQLITE_CORRUPT);
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorLast(&cur, &res);
+  check("empty_leaf_internal_last_reports_corrupt", rc==SQLITE_CORRUPT);
+  prollyCursorClose(&cur);
+
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
+/* Offsets must start at 0. Readers reach key data both through the offset
+** array and by striding from pKeyData (prollyNodeIntKey uses i*8), so a
+** nonzero first offset makes them read different bytes of the same node while
+** every other structural check still passes. */
+static void run_prolly_node_first_offset_validation(void){
+  ProllyNode node;
+
+  static const u8 keyOffStartsLate[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_INTKEY,
+    8,0,0,0,          /* aKeyOff[0] -- should be 0 */
+    16,0,0,0,         /* aKeyOff[1], stride 8 so the width check passes */
+    0,0,0,0,
+    1,0,0,0,
+    1,2,3,4,5,6,7,8,
+    9,10,11,12,13,14,15,16,
+    0x2a
+  };
+  static const u8 valOffStartsLate[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_INTKEY,
+    0,0,0,0,
+    8,0,0,0,
+    1,0,0,0,          /* aValOff[0] -- should be 0 */
+    2,0,0,0,
+    1,2,3,4,5,6,7,8,
+    0x2a, 0x2b
+  };
+  static const u8 bothStartAtZero[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_INTKEY,
+    0,0,0,0,
+    8,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    1,2,3,4,5,6,7,8,
+    0x2a
+  };
+
+  printf("=== Prolly Node First Offset Validation Test ===\n\n");
+
+  check("key_offsets_must_start_at_zero",
+        prollyNodeParse(&node, keyOffStartsLate,
+                        (int)sizeof(keyOffStartsLate))==SQLITE_CORRUPT);
+  check("val_offsets_must_start_at_zero",
+        prollyNodeParse(&node, valOffStartsLate,
+                        (int)sizeof(valOffStartsLate))==SQLITE_CORRUPT);
+  /* The same shape with well-formed offsets still parses, so the new check is
+  ** not just rejecting everything. */
+  check("zero_start_offsets_still_parse",
+        prollyNodeParse(&node, bothStartAtZero,
+                        (int)sizeof(bothStartAtZero))==SQLITE_OK);
+  check("zero_start_offsets_expose_one_item", node.nItems==1);
+}
+
 static void run_prolly_cursor_surfaces_corrupt_node(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -10044,6 +10188,8 @@ static const RegressionCase aCases[] = {
   { "prolly_blob_cursor_seek_past_max", "Prolly Blob Cursor Seek Past Max Test", run_prolly_blob_cursor_seek_past_max },
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node },
+  { "prolly_cursor_empty_leaf_under_internal", "Prolly Cursor Empty Leaf Under Internal Test", run_prolly_cursor_empty_leaf_under_internal },
+  { "prolly_node_first_offset_validation", "Prolly Node First Offset Validation Test", run_prolly_node_first_offset_validation },
   { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
