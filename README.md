@@ -745,6 +745,10 @@ For a DoltLite-format main database, the concurrency contract is:
   locked compare-and-advance; pull and rebase use operation-specific locked
   branch expectations. A peer commit between planning and ref update yields
   `SQLITE_BUSY` instead of a lost update.
+- **Remote ref installs are serialized.** HTTP pushes refresh the remote refs
+  under the graph lock before validating and installing either conditional or
+  plain ref updates. A stale push is rejected instead of replacing a peer's
+  ref update.
 - **GC cooperates with writers.** `dolt_gc` / `VACUUM` may be deferred or
   report busy while a writer holds the graph lock; after the writer finishes,
   GC completes without dropping reachable data. Multiproc GC-vs-commit and

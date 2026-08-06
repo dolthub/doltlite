@@ -33,6 +33,10 @@ extern int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore);
 extern int doltliteRemoteSrvApplyRefsForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
 );
+extern int doltliteRemoteSrvApplyScopedRefsForTest(
+  ChunkStore *pStore, const char *zBranch, int bForce,
+  const u8 *pBody, int nBody
+);
 extern int doltliteRemoteSrvResolveRootForTest(
   ChunkStore *pStore, ProllyHash *pRoot
 );
@@ -8521,6 +8525,85 @@ static void run_remotesrv_put_refs_failure_restores_state(void){
   removeDbFiles(dbpath);
 }
 
+static u8 *singleBranchRefsBlob(const char *zBranch, int *pnBlob){
+  ChunkStore refs;
+  ProllyHash emptyHash;
+  u8 *pBlob = 0;
+
+  memset(&refs, 0, sizeof(refs));
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  *pnBlob = 0;
+  if( chunkStoreSetDefaultBranch(&refs, zBranch)!=SQLITE_OK ) goto done;
+  if( chunkStoreAddBranch(&refs, zBranch, &emptyHash)!=SQLITE_OK ) goto done;
+  if( chunkStoreSerializeRefsToBlob(&refs, &pBlob, pnBlob)!=SQLITE_OK ){
+    pBlob = 0;
+  }
+done:
+  chunkStoreClose(&refs);
+  return pBlob;
+}
+
+static void run_remotesrv_plain_refs_refreshes_under_lock(void){
+  ChunkStore cs1;
+  ChunkStore cs2;
+  ChunkStore reopened;
+  ProllyHash foundHash;
+  u8 *pRefsA;
+  u8 *pRefsB;
+  char dbpath[256];
+  int nRefsA;
+  int nRefsB;
+  int rc;
+
+  printf("=== RemoteSrv Plain Refs Refreshes Under Lock Test ===\n\n");
+  memset(&cs1, 0, sizeof(cs1));
+  memset(&cs2, 0, sizeof(cs2));
+  memset(&reopened, 0, sizeof(reopened));
+  make_dbpath(dbpath, sizeof(dbpath), "test_remotesrv_plain_refs_lock");
+  removeDbFiles(dbpath);
+  pRefsA = singleBranchRefsBlob("branch_a", &nRefsA);
+  pRefsB = singleBranchRefsBlob("branch_b", &nRefsB);
+  check("plain_refs_serialize_branch_a", pRefsA!=0);
+  check("plain_refs_serialize_branch_b", pRefsB!=0);
+
+  check("plain_refs_open_store_1",
+        chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+          | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("plain_refs_open_stale_store_2",
+        chunkStoreOpen(&cs2, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+          | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+
+  rc = doltliteRemoteSrvApplyScopedRefsForTest(
+      &cs1, "branch_a", 0, pRefsA, nRefsA);
+  check("plain_refs_first_install_succeeds", rc==SQLITE_OK);
+  rc = doltliteRemoteSrvApplyScopedRefsForTest(
+      &cs2, "branch_b", 0, pRefsB, nRefsB);
+  check("plain_refs_stale_install_rejected", rc==SQLITE_CONSTRAINT);
+  check("plain_refs_stale_store_refreshes_branch_a",
+        chunkStoreFindBranch(&cs2, "branch_a", &foundHash)==SQLITE_OK);
+  check("plain_refs_stale_store_does_not_install_branch_b",
+        chunkStoreFindBranch(&cs2, "branch_b", &foundHash)!=SQLITE_OK);
+  rc = chunkStoreLockAndRefresh(&cs1);
+  check("plain_refs_failure_releases_graph_lock", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ) chunkStoreUnlock(&cs1);
+
+  chunkStoreClose(&cs2);
+  chunkStoreClose(&cs1);
+  check("plain_refs_reopen_store",
+        chunkStoreOpen(&reopened, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("plain_refs_reopen_keeps_branch_a",
+        chunkStoreFindBranch(&reopened, "branch_a", &foundHash)==SQLITE_OK);
+  check("plain_refs_reopen_has_no_branch_b",
+        chunkStoreFindBranch(&reopened, "branch_b", &foundHash)!=SQLITE_OK);
+  chunkStoreClose(&reopened);
+  sqlite3_free(pRefsA);
+  sqlite3_free(pRefsB);
+  removeDbFiles(dbpath);
+}
+
 static void run_remotesrv_chunk_commit_failure_clears_pending(void){
   ChunkStore cs;
   ChunkStore reopened;
@@ -9740,6 +9823,7 @@ static const RegressionCase aCases[] = {
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "chunk_store_full_pathname", "Chunk Store Uses VFS Full Pathname Test", run_chunk_store_uses_vfs_full_pathname },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
+  { "remotesrv_plain_refs_refreshes_under_lock", "RemoteSrv Plain Refs Refreshes Under Lock Test", run_remotesrv_plain_refs_refreshes_under_lock },
   { "remotesrv_chunk_commit_failure_clears_pending", "RemoteSrv Chunk Commit Failure Clears Pending Test", run_remotesrv_chunk_commit_failure_clears_pending },
   { "prolly_int_cursor_boundary", "Prolly Int Cursor Internal Boundary Test", run_prolly_int_cursor_seek_across_internal_boundary },
   { "prolly_int_cursor_seek_past_max", "Prolly Int Cursor Seek Past Max Test", run_prolly_int_cursor_seek_past_max },

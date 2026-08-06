@@ -753,8 +753,8 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
   return rc;
 }
 
-static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
-                              int bForce, const u8 *pBody, int nBody){
+static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
+                                    int bForce, const u8 *pBody, int nBody){
   int rc;
 
   if( nBody<=0 ) return SQLITE_ERROR;
@@ -774,6 +774,17 @@ static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
   return remoteSrvCommitPending(pStore);
 }
 
+static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
+                              int bForce, const u8 *pBody, int nBody){
+  int rc;
+  if( nBody<=0 ) return SQLITE_ERROR;
+  rc = chunkStoreLockAndRefresh(pStore);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody);
+  chunkStoreUnlock(pStore);
+  return rc;
+}
+
 static int remoteSrvApplyRefsIf(
   ChunkStore *pStore,
   const ProllyHash *pExpectedRefsHash,
@@ -790,7 +801,7 @@ static int remoteSrvApplyRefsIf(
     chunkStoreUnlock(pStore);
     return SQLITE_BUSY;
   }
-  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody);
+  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody);
   chunkStoreUnlock(pStore);
   return rc;
 }
@@ -879,6 +890,16 @@ int doltliteRemoteSrvStoreChunkBatchForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
 ){
   return remoteSrvStoreChunkBatch(pStore, pBody, nBody);
+}
+
+int doltliteRemoteSrvApplyScopedRefsForTest(
+  ChunkStore *pStore,
+  const char *zBranch,
+  int bForce,
+  const u8 *pBody,
+  int nBody
+){
+  return remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody);
 }
 
 int doltliteRemoteSrvApplyRefsForTest(
