@@ -9406,6 +9406,81 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   chunkStoreClose(&cs);
 }
 
+/* Incremental blob writes against a stock-format database. The wrapper
+** dispatches xPutData per cursor kind, and the legacy arm was a stub that
+** returned SQLITE_OK without touching the row, so sqlite3_blob_write reported
+** success and threw the bytes away. */
+static void run_incrblob_legacy_engine_write(void){
+  char dbpath[512];
+  char zUri[640];
+  sqlite3 *db = 0;
+  sqlite3_blob *pBlob = 0;
+  char buf[16];
+  int rc;
+
+  printf("=== Incrblob Legacy Engine Write Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_incrblob_legacy");
+  removeDbFiles(dbpath);
+
+  snprintf(zUri, sizeof(zUri), "file:%s?doltlite_engine=sqlite", dbpath);
+  rc = sqlite3_open_v2(zUri, &db,
+                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_URI,
+                       0);
+  check("incrblob_legacy_open", rc==SQLITE_OK);
+  if( !db ) return;
+  check("incrblob_legacy_engine_is_orig",
+        strcmp(queryScalarText(db, "SELECT doltlite_engine()"), "orig")==0);
+  check("incrblob_legacy_setup", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1, '0123456789');")==SQLITE_OK);
+
+  check("incrblob_legacy_blob_open",
+        sqlite3_blob_open(db, "main", "t", "v", 1, 1, &pBlob)==SQLITE_OK);
+  if( pBlob ){
+    check("incrblob_legacy_write_ok",
+          sqlite3_blob_write(pBlob, "WRITTEN!!!", 10, 0)==SQLITE_OK);
+    check("incrblob_legacy_blob_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
+  }
+
+  check("incrblob_legacy_write_landed",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"),
+               "WRITTEN!!!")==0);
+
+  /* And it is durable, not just visible to the writing connection. */
+  sqlite3_close(db);
+  db = 0;
+  rc = sqlite3_open_v2(zUri, &db, SQLITE_OPEN_READWRITE|SQLITE_OPEN_URI, 0);
+  check("incrblob_legacy_reopen", rc==SQLITE_OK);
+  if( db ){
+    check("incrblob_legacy_write_persisted",
+          strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"),
+                 "WRITTEN!!!")==0);
+  }
+
+  /* A partial overwrite must leave the rest of the value alone. */
+  pBlob = 0;
+  if( db && sqlite3_blob_open(db, "main", "t", "v", 1, 1, &pBlob)==SQLITE_OK ){
+    check("incrblob_legacy_partial_write",
+          sqlite3_blob_write(pBlob, "ZZ", 2, 4)==SQLITE_OK);
+    sqlite3_blob_close(pBlob);
+    check("incrblob_legacy_partial_result",
+          strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"),
+                 "WRITZZN!!!")==0);
+  }
+
+  memset(buf, 0, sizeof(buf));
+  pBlob = 0;
+  if( db && sqlite3_blob_open(db, "main", "t", "v", 1, 0, &pBlob)==SQLITE_OK ){
+    check("incrblob_legacy_readback",
+          sqlite3_blob_read(pBlob, buf, 10, 0)==SQLITE_OK
+          && memcmp(buf, "WRITZZN!!!", 10)==0);
+    sqlite3_blob_close(pBlob);
+  }
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_incrblob_chunked_and_multihandle(void){
   char dbpath[512];
   sqlite3 *db = 0;
@@ -10046,6 +10121,7 @@ static const RegressionCase aCases[] = {
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node },
   { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
+  { "incrblob_legacy_engine_write", "Incrblob Legacy Engine Write Test", run_incrblob_legacy_engine_write },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn }
 };

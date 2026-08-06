@@ -328,12 +328,13 @@ int origCursorPayloadCheckedVt(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   return origBtreePayloadChecked(pCur->pOrigCursor, offset, amt, pBuf);
 }
 int origCursorPutDataVt(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
-  (void)pCur; (void)offset; (void)amt; (void)pBuf;
-  return SQLITE_OK;
+  return origBtreePutData(pCur->pOrigCursor, offset, amt, pBuf);
 }
 void origCursorIncrblobCursorVt(BtCursor *pCur){
-  (void)pCur;
-
+  /* Marks the stock cursor as an incremental-blob cursor, which is how the
+  ** stock btree knows to reseek it rather than invalidate it when the row is
+  ** written. Dropping it left blob handles stale across writes. */
+  origBtreeIncrblobCursor(pCur->pOrigCursor);
 }
 #endif
 #ifndef NDEBUG

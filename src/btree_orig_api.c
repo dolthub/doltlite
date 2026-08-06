@@ -119,6 +119,14 @@ i64 origBtreeIntegerKey(void *pCur){ return orig_sqlite3BtreeIntegerKey(C(pCur))
 u32 origBtreePayloadChecked(void *pCur, u32 off, u32 amt, void *pBuf){
   return orig_sqlite3BtreePayloadChecked(C(pCur), off, amt, pBuf);
 }
+#ifndef SQLITE_OMIT_INCRBLOB
+int origBtreePutData(void *pCur, u32 off, u32 amt, void *pBuf){
+  return orig_sqlite3BtreePutData(C(pCur), off, amt, pBuf);
+}
+void origBtreeIncrblobCursor(void *pCur){
+  orig_sqlite3BtreeIncrblobCursor(C(pCur));
+}
+#endif
 int origBtreeCount(sqlite3 *db, void *pCur, i64 *pn){
   return orig_sqlite3BtreeCount(db, C(pCur), pn);
 }
