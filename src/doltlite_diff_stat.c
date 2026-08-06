@@ -803,6 +803,16 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   if( rc!=SQLITE_OK ) goto done;
   rc = doltliteLoadCatalog(db, &c->fctx.toCat, &c->aToCat, &c->nToCat, 0);
   if( rc!=SQLITE_OK ) goto done;
+  /* Match Dolt: a table filter must name a table present on at least one
+  ** side. Absent from both is "table not found", not an empty result. */
+  if( c->fctx.zTblFilter
+   && !doltliteFindTableByName(c->aFromCat, c->nFromCat, c->fctx.zTblFilter)
+   && !doltliteFindTableByName(c->aToCat, c->nToCat, c->fctx.zTblFilter) ){
+    sqlite3_free(v->base.zErrMsg);
+    v->base.zErrMsg = sqlite3_mprintf("table not found: %s", c->fctx.zTblFilter);
+    rc = SQLITE_ERROR;
+    goto done;
+  }
   if( !c->fctx.zTblFilter ){
     rc = dsNameIndexInit(&c->fromIdx, c->aFromCat, c->nFromCat);
     if( rc!=SQLITE_OK ) goto done;

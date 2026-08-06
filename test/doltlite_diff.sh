@@ -52,6 +52,11 @@ run_test "diff_no_such_table" \
   "SELECT count(*) FROM dolt_diff WHERE table_name='nonexistent';" \
   "0" "$DB"
 
+# Match Dolt: dolt_diff_stat errors when the filter names a table on neither side.
+run_test_match "diff_stat_no_such_table" \
+  "SELECT count(*) FROM dolt_diff_stat('main','main','nonexistent');" \
+  "table not found: nonexistent" "$DB"
+
 run_test_match "diff_bad_ref_errors" \
   "SELECT count(*) FROM dolt_diff_stat('definitely_not_a_ref', (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "Error" "$DB"
