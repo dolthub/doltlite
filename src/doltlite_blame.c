@@ -180,8 +180,11 @@ static int blameLoadPkColumns(
     n++;
   }
 
+  /* Only a rowid alias is served from the tree's integer key. A WITHOUT ROWID
+  ** table never sets intKey, so claiming the alias renders every pk as 0. */
   if( nTmp == 1 && aTmp[0].isIntegerType ){
-    intPkCid = aTmp[0].cid;
+    Table *pTab = sqlite3FindTable(db, zTable, "main");
+    if( pTab && HasRowid(pTab) ) intPkCid = aTmp[0].cid;
   }
   sqlite3_free(aTmp);
 
