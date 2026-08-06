@@ -1067,6 +1067,71 @@ static void run_savepoint_catalog_restore(void){
   sqlite3_close(db);
 }
 
+static void checkLabeled(const char *zLabel, const char *zWhat, int cond){
+  char zName[192];
+  snprintf(zName, sizeof(zName), "%s_%s", zLabel, zWhat);
+  check(zName, cond);
+}
+
+/* A rollback that fails while persisting the restored working set still has to
+** end the write transaction. It releases the graph lock on the way out, and
+** sqlite3RollbackAll throws the return code away, so a connection left at
+** TRANS_WRITE would let the next write short-circuit prollyBtreeBeginTrans and
+** mutate the store unlocked. */
+static void rollbackPersistFaultCase(int iFault, const char *zLabel){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zName[128];
+  int rc;
+
+  snprintf(zName, sizeof(zName), "test_rollback_persist_%d", iFault);
+  make_dbpath(dbpath, sizeof(dbpath), zName);
+  removeDbFiles(dbpath);
+  check("rollback_persist_open", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("rollback_persist_seed", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1, 'base');")==SQLITE_OK);
+  check("rollback_persist_commit",
+      strlen(queryScalarText(db, "SELECT dolt_commit('-A','-m','base')"))==40);
+
+  check("rollback_persist_begin", execSql(db, "BEGIN")==SQLITE_OK);
+  check("rollback_persist_write",
+      execSql(db, "INSERT INTO t VALUES(2, 'pending')")==SQLITE_OK);
+
+  gRegressionFaultCode = iFault;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = execSqlSilent(db, "ROLLBACK");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  (void)rc;
+
+  checkLabeled(zLabel, "fault_injected", gRegressionFaultHits>0);
+
+  /* The rolled-back row must not reappear, and the connection must still be
+  ** usable rather than wedged in a phantom transaction. */
+  checkLabeled(zLabel, "pending_row_discarded",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+  checkLabeled(zLabel, "writes_work_after_failed_rollback",
+      execSql(db, "INSERT INTO t VALUES(3, 'after')")==SQLITE_OK);
+  checkLabeled(zLabel, "post_rollback_commit_ok",
+      strlen(queryScalarText(db, "SELECT dolt_commit('-A','-m','after')"))==40);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_rollback_persist_failure_ends_txn(void){
+  printf("=== Rollback Persist Failure Ends Write Txn Test ===\n\n");
+  /* Only the serialize failure is reachable from a test: the persist chain
+  ** below it is skipped whenever the restored working set already matches the
+  ** one on disk, which it does after an ordinary rollback. Both failures leave
+  ** through the same teardown. */
+  rollbackPersistFaultCase(957, "rollback_serialize_fault");
+}
+
 static void run_session_string_setter_oom(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -9922,7 +9987,8 @@ static const RegressionCase aCases[] = {
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node },
   { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
-  { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle }
+  { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
+  { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn }
 };
 
 static int run_case_by_name(const char *zName){

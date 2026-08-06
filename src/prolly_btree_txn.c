@@ -1261,6 +1261,20 @@ int restoreFromCommitted(Btree *p){
   return SQLITE_OK;
 }
 
+/* Releasing the graph lock while inTrans still says TRANS_WRITE leaves the
+** connection believing it holds a write transaction it no longer has: the next
+** write short-circuits prollyBtreeBeginTrans and mutates the store with no
+** cross-process lock, so a concurrent peer's commit can be clobbered.
+** sqlite3RollbackAll discards the return code, so the state has to be sound
+** before returning it. Mirrors the restoreFromCommitted failure path. */
+static void rollbackAbandonWriteTxn(Btree *p, BtShared *pBt){
+  p->inTrans = TRANS_NONE;
+  p->inTransaction = TRANS_NONE;
+  btreeDiscardAllSavepoints(p);
+  chunkStoreUnlock(&pBt->store);
+  pBt->store.snapshotPinned = 0;
+}
+
 int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
@@ -1345,11 +1359,11 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       const char *zBr = p->zBranch ? p->zBranch : "main";
 
       pBt->inCatalogSerialize = 1;
-      rc = serializeCatalog(p, &catData, &nCatData);
+      rc = sqlite3FaultSim(957) ? SQLITE_NOMEM
+                                : serializeCatalog(p, &catData, &nCatData);
       pBt->inCatalogSerialize = 0;
       if( rc!=SQLITE_OK ){
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
+        rollbackAbandonWriteTxn(p, pBt);
         return rc;
       }
       prollyHashCompute(catData, nCatData, &catHash);
@@ -1392,8 +1406,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       }
       sqlite3_free(catData);
       if( rc!=SQLITE_OK ){
-        chunkStoreUnlock(&pBt->store);
-        pBt->store.snapshotPinned = 0;
+        rollbackAbandonWriteTxn(p, pBt);
         return rc;
       }
     }
