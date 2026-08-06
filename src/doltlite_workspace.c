@@ -22,15 +22,25 @@ struct WorkspaceRow {
   u8 *pNewVal; int nNewVal;
 };
 
+/* One scan's rows, shared between the cursor producing them and the table,
+** which keeps the latest set so xUpdate can resolve the rowids that scan
+** handed out. A plain buffer on the table could not do both: a second cursor
+** starting its own scan freed the array the first was still reading. */
+typedef struct WorkspaceRows WorkspaceRows;
+struct WorkspaceRows {
+  int nRef;
+  WorkspaceRow *a;
+  int n;
+  int nAlloc;
+};
+
 typedef struct WorkspaceVtab WorkspaceVtab;
 struct WorkspaceVtab {
   sqlite3_vtab base;
   sqlite3 *db;
   char *zTableName;
   DoltliteColInfo cols;
-  WorkspaceRow *aCache;
-  int nCache;
-  int nCacheAlloc;
+  WorkspaceRows *pLastRows;
 };
 
 typedef struct WorkspaceCursor WorkspaceCursor;
@@ -46,6 +56,7 @@ struct WorkspaceCursor {
   ProllyHash headRoot, stagedRoot, workingRoot;
   u8 stagedFlags, workingFlags;
   int stagedOnly;
+  WorkspaceRows *pRows;
 };
 
 static void wsFreeRows(WorkspaceRow *aRow, int nRow){
@@ -58,11 +69,19 @@ static void wsFreeRows(WorkspaceRow *aRow, int nRow){
   sqlite3_free(aRow);
 }
 
-static void wsClearCache(WorkspaceVtab *p){
-  wsFreeRows(p->aCache, p->nCache);
-  p->aCache = 0;
-  p->nCache = 0;
-  p->nCacheAlloc = 0;
+static WorkspaceRows *wsRowsNew(void){
+  WorkspaceRows *p = sqlite3_malloc(sizeof(*p));
+  if( !p ) return 0;
+  memset(p, 0, sizeof(*p));
+  p->nRef = 1;
+  return p;
+}
+
+static void wsRowsRelease(WorkspaceRows *p){
+  if( !p ) return;
+  if( --p->nRef > 0 ) return;
+  wsFreeRows(p->a, p->n);
+  sqlite3_free(p);
 }
 
 static char *wsBuildSchema(const DoltliteColInfo *ci){
@@ -92,17 +111,19 @@ static char *wsBuildSchema(const DoltliteColInfo *ci){
 }
 
 static int wsAppendRow(
-  WorkspaceVtab *pVtab,
+  WorkspaceCursor *c,
   int staged,
   u8 flags,
   const ProllyDiffChange *pChange
 ){
+  WorkspaceVtab *pVtab = (WorkspaceVtab*)c->base.pVtab;
+  WorkspaceRows *pRows = c->pRows;
   WorkspaceRow row;
   WorkspaceRow *aNew;
   int nNew;
 
   memset(&row, 0, sizeof(row));
-  row.rowid = pVtab->nCache + 1;
+  row.rowid = pRows->n + 1;
   row.staged = staged;
   row.diffType = pChange->type;
   row.flags = flags;
@@ -150,16 +171,15 @@ static int wsAppendRow(
       sqlite3_free(pRec);
     }
   }
-  if( pVtab->nCache>=pVtab->nCacheAlloc ){
-    nNew = pVtab->nCacheAlloc ? pVtab->nCacheAlloc*2 : 16;
-    aNew = sqlite3_realloc(pVtab->aCache,
-                           nNew*(int)sizeof(WorkspaceRow));
+  if( pRows->n>=pRows->nAlloc ){
+    nNew = pRows->nAlloc ? pRows->nAlloc*2 : 16;
+    aNew = sqlite3_realloc(pRows->a, nNew*(int)sizeof(WorkspaceRow));
     if( !aNew ) goto nomem;
-    pVtab->aCache = aNew;
-    pVtab->nCacheAlloc = nNew;
+    pRows->a = aNew;
+    pRows->nAlloc = nNew;
   }
-  pVtab->aCache[pVtab->nCache] = row;
-  pVtab->nCache++;
+  pRows->a[pRows->n] = row;
+  pRows->n++;
   return SQLITE_OK;
 
 nomem:
@@ -286,7 +306,7 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   ProllyDiffChange *pChange = 0;
   int rc;
 
-  if( c->iRow < pVtab->nCache ) return SQLITE_OK;
+  if( c->iRow < c->pRows->n ) return SQLITE_OK;
   while( !c->eof ){
     if( !c->iterOpen ){
       rc = wsOpenNextIter(c, pVtab);
@@ -294,7 +314,7 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
     }
     rc = prollyDiffIterStep(&c->iter, &pChange);
     if( rc==SQLITE_ROW && pChange ){
-      return wsAppendRow(pVtab, c->iterStaged, c->iterFlags, pChange);
+      return wsAppendRow(c, c->iterStaged, c->iterFlags, pChange);
     }
     if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ) return rc;
     wsCloseIter(c);
@@ -305,10 +325,8 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
 static int wsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   (void)pAux;
-  /* WorkspaceVtab has trailing aCache/nCache fields, but they start zeroed
-  ** and only fill in during xFilter, so the shared Connect (which inits the
-  ** common prefix and cleans up via the common disconnect on failure) is
-  ** safe here; wsDisconnect still frees the cache at teardown. */
+  /* pLastRows starts null, which the shared Connect guarantees, and only gets
+  ** set in xFilter; wsDisconnect drops the reference at teardown. */
   return doltliteVtabConnectUserTable(db, argc, argv, "dolt_workspace_",
                                       sizeof(WorkspaceVtab), wsBuildSchema,
                                       ppVtab, pzErr);
@@ -316,7 +334,8 @@ static int wsConnect(sqlite3 *db, void *pAux, int argc,
 
 static int wsDisconnect(sqlite3_vtab *pBase){
   WorkspaceVtab *p = (WorkspaceVtab*)pBase;
-  wsClearCache(p);
+  wsRowsRelease(p->pLastRows);
+  p->pLastRows = 0;
   doltliteFreeColInfo(&p->cols);
   sqlite3_free(p->zTableName);
   sqlite3_free(p);
@@ -355,7 +374,9 @@ static int wsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
 }
 
 static int wsClose(sqlite3_vtab_cursor *cur){
-  wsCloseIter((WorkspaceCursor*)cur);
+  WorkspaceCursor *c = (WorkspaceCursor*)cur;
+  wsCloseIter(c);
+  wsRowsRelease(c->pRows);
   sqlite3_free(cur);
   return SQLITE_OK;
 }
@@ -367,7 +388,12 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   int rc;
   (void)idxStr;
   wsCloseIter(c);
-  wsClearCache(p);
+  wsRowsRelease(c->pRows);
+  c->pRows = wsRowsNew();
+  if( !c->pRows ) return SQLITE_NOMEM;
+  wsRowsRelease(p->pLastRows);
+  p->pLastRows = c->pRows;
+  c->pRows->nRef++;
   c->iRow = 0;
   c->eof = 0;
   c->phase = 0;
@@ -396,14 +422,19 @@ static int wsNext(sqlite3_vtab_cursor *cur){
 
 static int wsEof(sqlite3_vtab_cursor *cur){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
-  return c->eof && c->iRow >= ((WorkspaceVtab*)cur->pVtab)->nCache;
+  return c->eof && (!c->pRows || c->iRow >= c->pRows->n);
 }
 
 static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
-  WorkspaceRow *r = &p->aCache[c->iRow];
+  WorkspaceRow *r;
   int nCols = p->cols.nCol;
+  if( !c->pRows || c->iRow<0 || c->iRow>=c->pRows->n ){
+    sqlite3_result_null(ctx);
+    return SQLITE_OK;
+  }
+  r = &c->pRows->a[c->iRow];
   if( col==0 ){
     sqlite3_result_int64(ctx, r->rowid);
   }else if( col==1 ){
@@ -426,14 +457,15 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
 static int wsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *pRowid){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
-  WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
-  *pRowid = p->aCache[c->iRow].rowid;
+  if( !c->pRows || c->iRow<0 || c->iRow>=c->pRows->n ) return SQLITE_ERROR;
+  *pRowid = c->pRows->a[c->iRow].rowid;
   return SQLITE_OK;
 }
 
 static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
-  if( rowid>=1 && rowid<=p->nCache ){
-    WorkspaceRow *r = &p->aCache[rowid - 1];
+  WorkspaceRows *pRows = p->pLastRows;
+  if( pRows && rowid>=1 && rowid<=pRows->n ){
+    WorkspaceRow *r = &pRows->a[rowid - 1];
     if( r->rowid==rowid ) return r;
   }
   return 0;

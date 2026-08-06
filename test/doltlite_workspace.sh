@@ -186,4 +186,47 @@ run_test "workspace_delete_index_query_old" \
 run_test "workspace_delete_index_query_new" \
   "SELECT id FROM t WHERE v=2;" "" "$DEL_DB"
 
+# Two cursors are open at once here. Rows used to accumulate on the table, so
+# the second xFilter freed the array the first was still indexing into: the
+# join returned extra rows carrying ids that were never assigned.
+MC_DB=/tmp/doltlite_workspace_multicursor_$$.db
+rm -rf "$MC_DB"
+dltest_run_sql "
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET v='x' WHERE pk=1;
+UPDATE t SET v='y' WHERE pk=2;
+UPDATE t SET v='z' WHERE pk=3;
+" "$MC_DB" >/dev/null
+
+run_test "workspace_single_cursor_rows" \
+  "SELECT count(*) FROM dolt_workspace_t;" "3" "$MC_DB"
+run_test "workspace_self_join_row_count" \
+  "SELECT count(*) FROM dolt_workspace_t a, dolt_workspace_t b;" "9" "$MC_DB"
+run_test "workspace_self_join_values_intact" \
+  "SELECT group_concat(a.id || ':' || coalesce(a.to_v,'~'), ' ')
+     FROM dolt_workspace_t a, dolt_workspace_t b;" \
+  "1:x 1:x 1:x 2:y 2:y 2:y 3:z 3:z 3:z" "$MC_DB"
+run_test "workspace_subquery_same_table" \
+  "SELECT count(*) FROM dolt_workspace_t
+     WHERE id IN (SELECT id FROM dolt_workspace_t);" "3" "$MC_DB"
+run_test "workspace_correlated_subquery" \
+  "SELECT count(*) FROM dolt_workspace_t a
+     WHERE EXISTS (SELECT 1 FROM dolt_workspace_t b WHERE b.id=a.id);" "3" "$MC_DB"
+
+# xUpdate has no cursor and resolves a rowid by replaying the scan, so it has
+# to replay the staged filter the rowid came from.
+run_test "workspace_stage_one_row" \
+  "UPDATE dolt_workspace_t SET staged=1 WHERE id=1;
+   SELECT group_concat(id || ':' || staged, ' ') FROM dolt_workspace_t;" \
+  "1:1 2:0 3:0" "$MC_DB"
+run_test "workspace_delete_via_filtered_rowid" \
+  "DELETE FROM dolt_workspace_t
+     WHERE id=(SELECT id FROM dolt_workspace_t WHERE staged=0 LIMIT 1);
+   SELECT group_concat(id || ':' || staged, ' ') FROM dolt_workspace_t;" \
+  "1:1 2:0" "$MC_DB"
+
+rm -rf "$MC_DB"
+
 dltest_finish
