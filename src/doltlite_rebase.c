@@ -183,7 +183,12 @@ static int doltliteRebaseCollectReplaySet(
     if( rc!=SQLITE_OK ) goto cleanup;
 
     memset(&c, 0, sizeof(c));
-    if( doltliteLoadCommit(db, &cur, &c)!=SQLITE_OK ) continue;
+    rc = sqlite3FaultSim(956) ? SQLITE_IOERR
+                              : doltliteLoadCommit(db, &cur, &c);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&c);
+      goto cleanup;
+    }
     for(i=0; i<doltliteCommitParentCount(&c); i++){
       const ProllyHash *pp = doltliteCommitParentHash(&c, i);
       if( !pp || prollyHashIsEmpty(pp) ) continue;

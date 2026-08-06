@@ -6798,6 +6798,94 @@ static void run_rebase_plan_read_error_is_not_partial(void){
   removeDbFiles(dbpath);
 }
 
+static void run_rebase_upstream_history_failure_is_atomic(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zFeatHead[128];
+  char zMainHead[128];
+  const char *res;
+  RepoStateSnapshot before;
+  RepoStateSnapshot after;
+  u8 isRebasing = 0;
+  int rc;
+
+  printf("=== Rebase Upstream History Failure Is Atomic Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_upstream_history_failure");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_upstream_history_failure",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_upstream_history_failure", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "SELECT dolt_checkout('-b','feat');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_commit('-A','-m','feat');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES(3,'main');"
+    "SELECT dolt_commit('-A','-m','main');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zFeatHead), zFeatHead, "%s",
+      queryScalarText(db, "SELECT hash FROM dolt_branches WHERE name='feat'"));
+  sqlite3_snprintf(sizeof(zMainHead), zMainHead, "%s",
+      queryScalarText(db, "SELECT hash FROM dolt_branches WHERE name='main'"));
+  capture_repo_state_snapshot(db, &before);
+
+  gRegressionFaultCode = 956;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_rebase('-i','main')");
+  rc = sqlite3_errcode(db);
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("rebase_upstream_history_failure_was_injected",
+        gRegressionFaultHits==1);
+  check("rebase_upstream_history_failure_is_returned",
+        rc==SQLITE_IOERR && strstr(res, "ERROR:")!=0);
+  capture_repo_state_snapshot(db, &after);
+  check("rebase_upstream_history_failure_preserves_session_state",
+        repo_state_snapshot_eq(&before, &after));
+  check("rebase_upstream_history_failure_creates_no_working_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches "
+          "WHERE name='dolt_rebase_feat'"), "0")==0);
+  check("rebase_upstream_history_failure_preserves_branch_count",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  check("rebase_upstream_history_failure_preserves_feat_head",
+        strcmp(queryScalarText(db,
+          "SELECT hash FROM dolt_branches WHERE name='feat'"), zFeatHead)==0);
+  check("rebase_upstream_history_failure_preserves_main_head",
+        strcmp(queryScalarText(db,
+          "SELECT hash FROM dolt_branches WHERE name='main'"), zMainHead)==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_db_after_rebase_upstream_history_failure",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_upstream_history_failure_persists_no_working_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches "
+          "WHERE name='dolt_rebase_feat'"), "0")==0);
+  check("rebase_upstream_history_failure_persists_no_plan",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master "
+          "WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  check("rebase_upstream_history_failure_persists_no_rebase_state",
+        isRebasing==0);
+  check("rebase_upstream_history_failure_persists_feat_head",
+        strcmp(queryScalarText(db,
+          "SELECT hash FROM dolt_branches WHERE name='feat'"), zFeatHead)==0);
+  check("rebase_upstream_history_failure_persists_main_head",
+        strcmp(queryScalarText(db,
+          "SELECT hash FROM dolt_branches WHERE name='main'"), zMainHead)==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_recovery_failure_is_reported(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -9801,6 +9889,7 @@ static const RegressionCase aCases[] = {
   { "rebase_continue_without_active_preserves_durable_state", "Rebase Continue Without Active Preserves Durable State Test", run_rebase_continue_without_active_preserves_durable_state },
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
   { "rebase_plan_read_error_is_not_partial", "Rebase Plan Read Error Is Not Partial Test", run_rebase_plan_read_error_is_not_partial },
+  { "rebase_upstream_history_failure_is_atomic", "Rebase Upstream History Failure Is Atomic Test", run_rebase_upstream_history_failure_is_atomic },
   { "rebase_recovery_failure_is_reported", "Rebase Recovery Failure Is Reported Test", run_rebase_recovery_failure_is_reported },
   { "rebase_continue_conflict_abort_restores_durable_state", "Rebase Continue Conflict Abort Restores Durable State Test", run_rebase_continue_conflict_abort_restores_durable_state },
   { "rebase_concurrent_peer_commit_is_preserved", "Rebase Concurrent Peer Commit Preservation Test", run_rebase_concurrent_peer_commit_is_preserved },
