@@ -4604,6 +4604,64 @@ static void run_diff_stat_surfaces_corrupt_root(void){
   removeDbFiles(dbpath);
 }
 
+static void run_diff_surfaces_read_errors(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash realHead;
+  ProllyHash missingHead;
+  const char *res;
+
+  printf("=== Diff Surfaces Read Errors Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_surfaces_read_errors");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_diff_read_errors", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_diff_read_errors", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+    "INSERT INTO t VALUES(1);"
+    "SELECT dolt_commit('-A', '-m', 'base');"
+    "CREATE VIEW v AS SELECT id FROM t;")==SQLITE_OK);
+
+  doltliteGetSessionHead(db, &realHead);
+  memset(&missingHead, 0x5a, sizeof(missingHead));
+  doltliteSetSessionHead(db, &missingHead);
+  res = queryScalarText(db,
+    "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING'");
+  check("diff_missing_head_returns_error", strstr(res, "ERROR:")!=0);
+  doltliteSetSessionHead(db, &realHead);
+
+  gRegressionFaultCode = 957;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db,
+    "SELECT count(*) FROM dolt_diff "
+    "WHERE commit_hash='WORKING' AND table_name='dolt_schemas'");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("diff_schema_diff_read_failure_injected", gRegressionFaultHits==1);
+  check("diff_schema_diff_read_failure_returned", strstr(res, "ERROR:")!=0);
+
+  gRegressionFaultCode = 958;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db,
+    "SELECT count(*) FROM dolt_diff "
+    "WHERE commit_hash='WORKING' AND table_name='dolt_schemas'");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("diff_schema_scan_failure_injected", gRegressionFaultHits==1);
+  check("diff_schema_scan_failure_returned", strstr(res, "ERROR:")!=0);
+
+  check("diff_schema_scan_retry_succeeds",
+    strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_diff "
+      "WHERE commit_hash='WORKING' AND table_name='dolt_schemas'"),
+      "1")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_truncated_wal_is_rejected(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -9849,6 +9907,7 @@ static const RegressionCase aCases[] = {
   { "diff_stat_wide_modified_rows", "Diff Stat Wide Modified Rows Test", run_diff_stat_wide_modified_rows },
   { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },
   { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
+  { "diff_surfaces_read_errors", "Diff Surfaces Read Errors Test", run_diff_surfaces_read_errors },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
   { "table_moveto_mutmap_exact_keeps_iteration_aligned", "Table Moveto MutMap Exact Keeps Iteration Aligned Test", run_table_moveto_mutmap_exact_keeps_iteration_aligned },
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },

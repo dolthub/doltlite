@@ -36,55 +36,68 @@ static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
 static int schemaHasViewOrTriggerDiff(sqlite3 *db,
                                       const ProllyHash *pOldRoot,
                                       const ProllyHash *pNewRoot,
-                                      u8 flags){
+                                      u8 flags,
+                                      int *pFound){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyDiffIter iter;
   ProllyDiffChange *pChange = 0;
   int rc;
-  int found = 0;
-  if( !cs || !pCache ) return 0;
-  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return 0;
-  rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags);
-  if( rc!=SQLITE_OK ) return 0;
-  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
+  *pFound = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return SQLITE_OK;
+  memset(&iter, 0, sizeof(iter));
+  rc = sqlite3FaultSim(957) ? SQLITE_IOERR :
+       prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags);
+  if( rc!=SQLITE_OK ){
+    prollyDiffIterClose(&iter);
+    return rc;
+  }
+  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW ){
+    if( !pChange ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
     if( schemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)
      || schemaRecordIsViewOrTrigger(pChange->pOldVal, pChange->nOldVal) ){
-      found = 1;
+      *pFound = 1;
+      rc = SQLITE_OK;
       break;
     }
   }
   prollyDiffIterClose(&iter);
-  return found;
+  return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 static int schemaHasAnyViewOrTrigger(sqlite3 *db,
                                      const ProllyHash *pRoot,
-                                     u8 flags){
+                                     u8 flags,
+                                     int *pFound){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyCursor cur;
   int rc, res;
-  int found = 0;
-  if( !cs || !pCache ) return 0;
-  if( prollyHashIsEmpty(pRoot) ) return 0;
+  *pFound = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &res);
+  rc = sqlite3FaultSim(958) ? SQLITE_IOERR : prollyCursorFirst(&cur, &res);
   if( rc!=SQLITE_OK || res ){
     prollyCursorClose(&cur);
-    return 0;
+    return rc;
   }
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
     prollyCursorValue(&cur, &pVal, &nVal);
     if( schemaRecordIsViewOrTrigger(pVal, nVal) ){
-      found = 1;
+      *pFound = 1;
       break;
     }
-    if( prollyCursorNext(&cur)!=SQLITE_OK ) break;
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
   }
   prollyCursorClose(&cur);
-  return found;
+  return rc;
 }
 
 typedef struct DiffSummaryRow DiffSummaryRow;
@@ -321,6 +334,9 @@ static int diffCatalogPairOne(
     const ProllyHash *pOldRoot;
     struct TableEntry *pNewMaster;
     struct TableEntry *pOldMaster;
+    int hasDiff;
+    int oldHas;
+    int rc;
 
     memset(&emptyRoot, 0, sizeof(emptyRoot));
     pNewMaster = doltliteFindTableByNumber(aChild, nChild, 1);
@@ -328,12 +344,14 @@ static int diffCatalogPairOne(
     if( !pNewMaster ) return SQLITE_OK;
 
     pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
-    if( schemaHasViewOrTriggerDiff(db, pOldRoot, &pNewMaster->root,
-                                   pNewMaster->flags) ){
-      u8 schemaChangeFlag =
-        schemaHasAnyViewOrTrigger(db, pOldRoot, pNewMaster->flags) ? 0 : 1;
+    rc = schemaHasViewOrTriggerDiff(db, pOldRoot, &pNewMaster->root,
+                                    pNewMaster->flags, &hasDiff);
+    if( rc!=SQLITE_OK ) return rc;
+    if( hasDiff ){
+      rc = schemaHasAnyViewOrTrigger(db, pOldRoot, pNewMaster->flags, &oldHas);
+      if( rc!=SQLITE_OK ) return rc;
       return batchAppend(pCur, zHex, "dolt_schemas", pCommit,
-                         1, schemaChangeFlag);
+                         1, oldHas ? 0 : 1);
     }
     return SQLITE_OK;
   }
@@ -391,17 +409,22 @@ static int diffCatalogPair(
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
+      int hasDiff;
+      int oldHas;
       /* Only the master entry carries schema rows; unnamed index entries
       ** are attributed to their tables through the row comparison below. */
       if( e->iTable!=1 ) continue;
       memset(&emptyRoot, 0, sizeof(emptyRoot));
       pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
       pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
-      if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
-        u8 schemaChangeFlag =
-          schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
+      rc = schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags,
+                                      &hasDiff);
+      if( rc!=SQLITE_OK ) goto diff_done;
+      if( hasDiff ){
+        rc = schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags, &oldHas);
+        if( rc!=SQLITE_OK ) goto diff_done;
         rc = batchAppend(pCur, zHex, "dolt_schemas", pCommit,
-                         1, schemaChangeFlag);
+                         1, oldHas ? 0 : 1);
         if( rc!=SQLITE_OK ) goto diff_done;
       }
       continue;
@@ -499,7 +522,7 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   memset(&workCat, 0, sizeof(workCat));
 
   rc = doltliteGetHeadCatalogHash(db, &headCat);
-  if( rc!=SQLITE_OK ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
   doltliteGetSessionStaged(db, &stagedCat);
   if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
   rc = doltliteFlushCatalogToHash(db, &workCat);
