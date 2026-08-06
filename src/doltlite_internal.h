@@ -1038,6 +1038,7 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p);
 int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p);
 
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
+int doltliteUserRefNameIsValid(const char *zName);
 int doltliteFindAncestor(sqlite3 *db, const ProllyHash *pCommit1,
                          const ProllyHash *pCommit2,
                          ProllyHash *pAncestor);

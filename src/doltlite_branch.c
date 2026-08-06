@@ -51,6 +51,17 @@ static void branchNamedResultError(
   doltliteRefResultError(ctx, rc, zNotFound, zExists);
 }
 
+static int resetBranchRef(sqlite3 *db, ChunkStore *cs, const char *zName,
+                          const ProllyHash *pCommit){
+  ProllyHash catalog;
+  int rc = doltliteCommitCatalogHash(db, pCommit, &catalog);
+  if( rc==SQLITE_OK ) rc = chunkStoreUpdateBranch(cs, zName, pCommit);
+  if( rc==SQLITE_OK ){
+    rc = doltliteWriteBranchCleanWorkingState(db, zName, &catalog, pCommit);
+  }
+  return rc;
+}
+
 int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
 
@@ -61,8 +72,9 @@ int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
     return chunkStoreDeleteBranch(cs, p->zName);
   }
 
+  if( !doltliteUserRefNameIsValid(p->zName) ) return SQLITE_CONSTRAINT;
   if( p->force && chunkStoreFindBranch(cs, p->zName, 0)==SQLITE_OK ){
-    return chunkStoreUpdateBranch(cs, p->zName, &p->head);
+    return resetBranchRef(db, cs, p->zName, &p->head);
   }
   return chunkStoreAddBranch(cs, p->zName, &p->head);
 }
@@ -82,10 +94,10 @@ static int mutateBranchCopy(sqlite3 *db, ChunkStore *cs, void *pArg){
 
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
+  if( !doltliteUserRefNameIsValid(p->zDest) ) return SQLITE_CONSTRAINT;
   if( p->force ){
-
     if( chunkStoreFindBranch(cs, p->zDest, 0)==SQLITE_OK ){
-      return chunkStoreUpdateBranch(cs, p->zDest, &srcCommit);
+      return resetBranchRef(db, cs, p->zDest, &srcCommit);
     }
   }
   return chunkStoreAddBranch(cs, p->zDest, &srcCommit);
@@ -95,6 +107,7 @@ typedef struct BranchMoveCtx BranchMoveCtx;
 struct BranchMoveCtx {
   const char *zSrc;
   const char *zDest;
+  int force;
 };
 
 static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
@@ -104,33 +117,33 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   int srcIsDefault;
   int rc;
   (void)db;
-
+  if( strcmp(p->zSrc, p->zDest)==0 ) return SQLITE_ERROR;
+  if( !doltliteUserRefNameIsValid(p->zDest) ) return SQLITE_CONSTRAINT;
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
   zDefault = chunkStoreGetDefaultBranch(cs);
   srcIsDefault = zDefault && strcmp(p->zSrc, zDefault)==0;
   rc = chunkStoreGetBranchWorkingSet(cs, p->zSrc, &srcWorkingSet);
   if( rc!=SQLITE_OK ) memset(&srcWorkingSet, 0, sizeof(srcWorkingSet));
-  rc = chunkStoreAddBranch(cs, p->zDest, &srcCommit);
+  rc = chunkStoreFindBranch(cs, p->zDest, 0);
+  if( rc==SQLITE_OK ){
+    if( !p->force ) return SQLITE_ERROR;
+    rc = chunkStoreUpdateBranch(cs, p->zDest, &srcCommit);
+  }else if( rc==SQLITE_NOTFOUND ){
+    rc = chunkStoreAddBranch(cs, p->zDest, &srcCommit);
+  }
   if( rc!=SQLITE_OK ) return rc;
-  if( !prollyHashIsEmpty(&srcWorkingSet) ){
-    rc = chunkStoreSetBranchWorkingSet(cs, p->zDest, &srcWorkingSet);
-    if( rc!=SQLITE_OK ){
-      chunkStoreDeleteBranch(cs, p->zDest);
-      return rc;
-    }
+  rc = chunkStoreSetBranchWorkingSet(cs, p->zDest, &srcWorkingSet);
+  if( rc!=SQLITE_OK ){
+    return rc;
   }
   if( srcIsDefault ){
     rc = chunkStoreSetDefaultBranch(cs, p->zDest);
     if( rc!=SQLITE_OK ){
-      chunkStoreDeleteBranch(cs, p->zDest);
       return rc;
     }
   }
   rc = chunkStoreDeleteBranch(cs, p->zSrc);
-  if( rc!=SQLITE_OK ){
-    chunkStoreDeleteBranch(cs, p->zDest);
-  }
   return rc;
 }
 
@@ -254,6 +267,16 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         branchError(ctx, hadSavepoint, "branch name required");
         return;
       }
+      if( !doltliteUserRefNameIsValid(aPositional[1]) ){
+        branchError(ctx, hadSavepoint, "invalid branch name");
+        return;
+      }
+      if( force
+       && strcmp(aPositional[1], doltliteGetSessionBranch(db))==0 ){
+        branchError(ctx, hadSavepoint,
+          "cannot force-update the current branch");
+        return;
+      }
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
@@ -283,9 +306,21 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         branchError(ctx, hadSavepoint, "branch name required");
         return;
       }
+      if( !doltliteUserRefNameIsValid(aPositional[1]) ){
+        branchError(ctx, hadSavepoint, "invalid branch name");
+        return;
+      }
+      if( force
+       && strcmp(aPositional[0], doltliteGetSessionBranch(db))!=0
+       && strcmp(aPositional[1], doltliteGetSessionBranch(db))==0 ){
+        branchError(ctx, hadSavepoint,
+          "cannot force-update the current branch");
+        return;
+      }
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
+      m.force = force;
       renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
       if( renamingCurrent ){
         rc = doltlitePrepareSessionBranch(db, m.zDest, &zPreparedBranch);
@@ -321,6 +356,9 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       zName = aPositional[0];
       if( branchNameEmpty(zName) ){
         branchError(ctx, hadSavepoint, "branch name required"); return;
+      }
+      if( !doltliteUserRefNameIsValid(zName) ){
+        branchError(ctx, hadSavepoint, "invalid branch name"); return;
       }
       zStart = nPositional>=2 ? aPositional[1] : 0;
       memset(&m, 0, sizeof(m));

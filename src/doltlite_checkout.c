@@ -970,6 +970,10 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     if( argc>3 ){ doltliteVcResultError(ctx, db, "too many arguments"); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
     if( branchNameEmpty(zBranch) ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
+    if( !doltliteUserRefNameIsValid(zBranch) ){
+      doltliteVcResultError(ctx, db, "invalid branch name");
+      return;
+    }
 
     if( argc>=3 ){
       const char *zStart = (const char*)sqlite3_value_text(argv[2]);

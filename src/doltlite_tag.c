@@ -29,6 +29,7 @@ static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   TagMutationCtx *p = (TagMutationCtx*)pArg;
   (void)db;
   if( p->isDelete ) return chunkStoreDeleteTag(cs, p->zName);
+  if( !doltliteUserRefNameIsValid(p->zName) ) return SQLITE_CONSTRAINT;
   return chunkStoreAddTagFull(cs, p->zName, &p->commitHash,
                               p->zTagger, p->zEmail,
                               p->timestamp, p->zMessage);
@@ -78,6 +79,11 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
     sqlite3_result_int(ctx, 0);
+    return;
+  }
+
+  if( !doltliteUserRefNameIsValid(arg0) ){
+    doltliteVcResultError(ctx, db, "invalid tag name");
     return;
   }
 
