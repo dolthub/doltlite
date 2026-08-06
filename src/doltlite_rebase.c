@@ -1382,7 +1382,6 @@ static void doltliteRebaseInteractiveAbort(
   char *zOrigBranch = 0;
   char *zWorking = 0;
   int rc;
-  int rc2;
 
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0,
                                 &zOrigBranchConst, &zReturnBranchConst);
