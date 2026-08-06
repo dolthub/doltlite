@@ -168,6 +168,7 @@ import sys
 upstream_port = int(sys.argv[1])
 violations_path = sys.argv[2]
 counts_path = sys.argv[3]
+response_mode_path = sys.argv[4]
 
 GET_RE = re.compile(r"^/[A-Za-z0-9._-]+\.db/(root|refs|chunk/[0-9a-fA-F]+)$")
 POST_RE = re.compile(r"^/[A-Za-z0-9._-]+\.db/(has-chunks|get-chunks|chunks|commit|refs)$")
@@ -181,6 +182,13 @@ def count(method, path):
     ep = path.rsplit("/", 1)[-1] if "/chunk/" not in path else "chunk"
     with open(counts_path, "a") as f:
         f.write(f"{method} {ep}\n")
+
+def response_mode():
+    try:
+        with open(response_mode_path, "r") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -236,6 +244,24 @@ class Handler(socketserver.BaseRequestHandler):
             violate(f"body longer than Content-Length: {method} {path}")
 
         count(method, path)
+        mode = response_mode()
+        if method == "POST" and path.endswith("/has-chunks") and mode:
+            nhash = nbody // 20
+            if mode == "short":
+                response = b"\x00" * max(0, nhash - 1)
+            elif mode == "long":
+                response = b"\x00" * (nhash + 1)
+            elif mode == "invalid":
+                response = b"\x02" * nhash
+            else:
+                response = b"\x00" * nhash
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Length: "
+                + str(len(response)).encode("ascii")
+                + b"\r\nConnection: close\r\n\r\n"
+                + response
+            )
+            return
         try:
             with socket.create_connection(("127.0.0.1", upstream_port), timeout=10) as s:
                 s.sendall(head + b"\r\n\r\n" + body)
@@ -271,7 +297,8 @@ PY
 
 : >"$TMP/violations.log"
 : >"$TMP/counts.log"
-python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/violations.log" "$TMP/counts.log" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
+: >"$TMP/response-mode"
+python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/violations.log" "$TMP/counts.log" "$TMP/response-mode" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
 PROXY_PID=$!
 PROXY_PORT=""
 for _ in $(seq 1 50); do
@@ -313,7 +340,24 @@ check "clone content and history match source" "$src_state" "$cln_state"
 result=$("$DB" "$B" "SELECT count(*) FROM users WHERE age>26;")
 check "clone index query works" "2" "$result"
 
-echo "--- 3. incremental push, fast-forward pull ---"
+echo "--- 3. malformed has-chunks responses stop push before refs update ---"
+"$DB" "$A" "INSERT INTO users VALUES(99,'protocol',99); SELECT dolt_commit('-am','protocol response');" >/dev/null
+for mode in short long invalid; do
+  before=$(grep -ac "PUT refs-if" "$TMP/counts.log")
+  printf '%s\n' "$mode" >"$TMP/response-mode"
+  result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
+  after=$(grep -ac "PUT refs-if" "$TMP/counts.log")
+  check_match "$mode has-chunks response is rejected" "ERROR|Error|error|protocol" "$result"
+  check "$mode has-chunks response stops before refs update" "$before" "$after"
+done
+: >"$TMP/response-mode"
+result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
+check "push succeeds after valid has-chunks response" "0" "$result"
+result=$("$DB" "$TMP/response-clone.db" "SELECT dolt_clone('$URL'); SELECT count(*) FROM users WHERE id=99;" 2>&1)
+check "successful retry publishes complete graph" "0
+1" "$result"
+
+echo "--- 4. incremental push, fast-forward pull ---"
 result=$("$DB" "$A" "UPDATE users SET age=31 WHERE id=1; SELECT dolt_commit('-am','bday');
 CREATE TABLE extra(k TEXT PRIMARY KEY, v TEXT); INSERT INTO extra VALUES('x','y');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','extra table'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
@@ -326,23 +370,23 @@ check "pull converges to source head with new data" "$a_head
 y
 31" "$b_head"
 
-echo "--- 4. no-op push uploads no chunks ---"
+echo "--- 5. no-op push uploads no chunks ---"
 before=$(grep -ac "POST chunks" "$TMP/counts.log")
 result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
 after=$(grep -ac "POST chunks" "$TMP/counts.log")
 check "no-op push returns 0" "0" "$result"
 check "no-op push posts no chunk payloads" "$before" "$after"
 
-echo "--- 5. branch push + fetch + checkout ---"
+echo "--- 6. branch push + fetch + checkout ---"
 result=$("$DB" "$A" "SELECT dolt_checkout('-b','feature'); INSERT INTO users VALUES(4,'dave',40); SELECT dolt_commit('-am','dave'); SELECT dolt_push('origin','feature'); SELECT dolt_checkout('main');" 2>&1 | grep -c "^0$")
 check "feature branch push steps all return 0" "3" "$result"
 result=$("$DB" "$B" "SELECT dolt_fetch('origin','feature'); SELECT dolt_checkout('-b','feature_local','origin/feature'); SELECT count(*) FROM users; SELECT dolt_checkout('main');" 2>&1)
 check "fetch + tracking checkout of pushed branch sees its rows" "0
 0
-4
+5
 0" "$result"
 
-echo "--- 6. divergent histories: pull merges ---"
+echo "--- 7. divergent histories: pull merges ---"
 result=$("$DB" "$A" "INSERT INTO users VALUES(5,'erin',22); SELECT dolt_commit('-am','erin'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
 check "A-side divergent push returns 0" "0" "$result"
 "$DB" "$B" "INSERT INTO users VALUES(6,'frank',50); SELECT dolt_commit('-am','frank');" >/dev/null 2>&1
@@ -355,7 +399,7 @@ check "merged push returns 0" "0" "$result"
 result=$("$DB" "$A" "SELECT dolt_pull('origin','main'); SELECT count(*) FROM users WHERE id IN (5,6);" 2>&1 | tail -1)
 check "both clients converge" "2" "$result"
 
-echo "--- 7. stale push rejected until pull ---"
+echo "--- 8. stale push rejected until pull ---"
 result=$("$DB" "$A" "UPDATE users SET age=23 WHERE id=5; SELECT dolt_commit('-am','a-side'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
 check "a-side push returns 0" "0" "$result"
 "$DB" "$B" "UPDATE users SET name='francis' WHERE id=6; SELECT dolt_commit('-am','b-side');" >/dev/null 2>&1
@@ -364,7 +408,7 @@ check_match "stale push is rejected" "reject|fetch|behind|fast|stale|ERROR|Error
 result=$("$DB" "$B" "SELECT dolt_pull('origin','main'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
 check "push succeeds after pull" "0" "$result"
 
-echo "--- 8. second database on the same server ---"
+echo "--- 9. second database on the same server ---"
 "$DB" "$TMP/c.db" "CREATE TABLE t(a INTEGER PRIMARY KEY); INSERT INTO t VALUES(42); SELECT dolt_commit('-Am','c1'); SELECT dolt_remote('add','origin','http://127.0.0.1:$PROXY_PORT/second.db'); SELECT dolt_push('origin','main');" >/dev/null 2>&1
 result=$("$DB" "$TMP/c2.db" "SELECT dolt_clone('http://127.0.0.1:$PROXY_PORT/second.db'); SELECT a FROM t;" 2>&1)
 check "second db pushes and clones independently" "0
@@ -374,7 +418,7 @@ result=$("$DB" "$TMP/c3.db" "SELECT dolt_clone('$URL'); SELECT count(*) FROM use
 check "first db unaffected by second" "0
 $origin_users" "$result"
 
-echo "--- 9. connection refused surfaces an error, local db intact ---"
+echo "--- 10. connection refused surfaces an error, local db intact ---"
 DEAD_PORT=1
 result=$("$DB" "$A" "SELECT dolt_remote('add','dead','http://127.0.0.1:$DEAD_PORT/x.db'); SELECT dolt_push('dead','main');" 2>&1)
 check_match "push to dead endpoint errors" "ERROR|Error|error|failed|refused" "$result"
@@ -383,7 +427,7 @@ result=$("$DB" "$A" "SELECT count(*) FROM users; SELECT dolt_remote('remove','de
 check "local db intact after failed push" "$a_users
 0" "$result"
 
-echo "--- 10. server death mid-stream: error now, success after restart ---"
+echo "--- 11. server death mid-stream: error now, success after restart ---"
 result=$("$DB" "$A" "SELECT dolt_pull('origin','main');" 2>&1 | tail -1)
 check "A syncs with origin before the outage" "0" "$result"
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null || true; SRV_PID=""
@@ -397,7 +441,7 @@ result=$("$DB" "$TMP/d.db" "SELECT dolt_clone('$URL'); SELECT sum(length(data)) 
 check "restarted server serves complete store" "0
 4194304" "$result"
 
-echo "--- 11. protocol conformance across the whole run ---"
+echo "--- 12. protocol conformance across the whole run ---"
 if [ -s "$TMP/violations.log" ]; then
   echo "  FAIL: HTTP protocol violations recorded:"
   sed 's/^/    /' "$TMP/violations.log" | head -10
