@@ -333,6 +333,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       AT_IDX_PK_EQ, AT_IDX_PK_GE, AT_IDX_PK_LE,
       AT_IDX_PK_GT, AT_IDX_PK_LT,
       argc-1, argv+1, &c->pkRange);
+  if( c->pkRange.isEmpty ) return SQLITE_OK;
 
   pBt=doltliteGetBtShared(db);
   if(!pBt) return SQLITE_OK;

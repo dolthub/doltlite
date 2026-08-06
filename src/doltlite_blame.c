@@ -802,6 +802,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
       BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
       BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
       argc, argv, &pkRange);
+  if( pkRange.isEmpty ) return SQLITE_OK;
 
   if( !cs || !pCache ) return SQLITE_OK;
 

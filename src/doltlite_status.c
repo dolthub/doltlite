@@ -940,6 +940,9 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   memset(&baseCatHash, 0, sizeof(baseCatHash));
   if( idxNum & STATUS_IDX_STAGED_EQ ){
     if( iArg>=argc ) return SQLITE_OK;
+    /* NULL reads as 0 through sqlite3_value_int, which would quietly become
+    ** "staged=0" for a constraint that can never be true. */
+    if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ) return SQLITE_OK;
     iStagedOnly = sqlite3_value_int(argv[iArg++]);
     if( iStagedOnly!=0 && iStagedOnly!=1 ) return SQLITE_OK;
   }

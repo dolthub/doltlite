@@ -768,7 +768,12 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   }
 
   if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
-    const char *z = (const char*)sqlite3_value_text(argv[argIdx++]);
+    const char *z;
+    /* A NULL name matches no table. Leaving the filter unset would read as
+    ** "no filter" and return every row, and xBestIndex omits the constraint
+    ** so nothing rechecks it. */
+    if( sqlite3_value_type(argv[argIdx])==SQLITE_NULL ) return SQLITE_OK;
+    z = (const char*)sqlite3_value_text(argv[argIdx++]);
     if( z ){
       pCur->zFilterTable = sqlite3_mprintf("%s", z);
       if( !pCur->zFilterTable ) return SQLITE_NOMEM;
