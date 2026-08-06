@@ -102,6 +102,35 @@ oracle_both() {
   oracle_summary "$@"
 }
 
+# Both engines must reject the script with a clean non-zero exit (not a crash).
+oracle_error() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_err"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_rc
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    echo "    doltlite err:"; sed 's/^/      /' "$dir/dl.err" 2>/dev/null
+    echo "    dolt err:"; sed 's/^/      /' "$dir/dt.err" 2>/dev/null
+  fi
+}
+
 SEED="
 CREATE TABLE t(id INT PRIMARY KEY, v INT, name VARCHAR(32));
 INSERT INTO t VALUES(1, 10, 'alice'), (2, 20, 'bob'), (3, 30, 'carol');
@@ -348,6 +377,54 @@ UPDATE u SET x = 'ALICE' WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD" "t"
+
+echo "--- missing table filter (match Dolt) ---"
+
+# dolt_diff_stat: filter naming a table on neither side is an error.
+oracle_error "diff_stat_missing_table" "
+$SEED
+SELECT * FROM dolt_diff_stat('HEAD', 'HEAD', 'doesnotexist');
+"
+
+oracle_error "diff_stat_missing_table_over_real_change" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT * FROM dolt_diff_stat('HEAD~1', 'HEAD', 'doesnotexist');
+"
+
+# After drop + empty commit, neither side has t under that name.
+oracle_error "diff_stat_filter_absent_on_both_sides" "
+$SEED
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop');
+SELECT dolt_commit('--allow-empty', '-m', 'empty after drop');
+SELECT * FROM dolt_diff_stat('HEAD~1', 'HEAD', 't');
+"
+
+oracle_error "diff_stat_bad_from_ref" "
+$SEED
+SELECT * FROM dolt_diff_stat('definitely_not_a_ref', 'HEAD', 't');
+"
+
+oracle_error "diff_stat_bad_to_ref" "
+$SEED
+SELECT * FROM dolt_diff_stat('HEAD', 'definitely_not_a_ref', 't');
+"
+
+# dolt_diff_summary: missing filter is empty success on both engines.
+oracle_summary "diff_summary_missing_table" "
+$SEED
+" "HEAD" "HEAD" "doesnotexist" "EXPECT_EMPTY"
+
+oracle_summary "diff_summary_missing_table_over_real_change" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "doesnotexist" "EXPECT_EMPTY"
 
 echo "--- ranges spanning multiple commits ---"
 
