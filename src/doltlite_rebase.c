@@ -1411,47 +1411,35 @@ static void doltliteRebaseInteractiveAbort(
     return;
   }
   if( rc!=SQLITE_OK ){
+    /* Claim hard-failed: if a peer already cleared durable rebase state,
+    ** report the lost race rather than a stuck recovery failure. */
+    u8 stillRebasing = 1;
+    const char *zBr = doltliteGetSessionBranch(db);
+    if( !zBr || !zBr[0] ) zBr = "main";
+    if( cs && chunkStoreForceRefresh(cs)==SQLITE_OK
+     && doltliteLoadWorkingSet(db, zBr)==SQLITE_OK ){
+      doltliteGetSessionRebaseState(db, &stillRebasing, 0, 0, 0, 0);
+    }
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     sqlite3_free(zOrigBranch);
-    rebaseResultRecoveryFailure(context, rc);
-    return;
-  }
-
-  rc = rebaseCleanupAfterClaim(db, zOrigBranch, zWorking);
-  if( cs && zReturnBranch && zReturnBranch[0] ){
-    rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
-    /* A concurrent --continue may already have finished; if the temporary
-    ** working branch is gone, treat restore failure as the peer winning. */
-    if( rc2!=SQLITE_OK
-     && zWorking && zWorking[0]
-     && chunkStoreFindBranch(cs, zWorking, 0)==SQLITE_NOTFOUND ){
-      rc2 = SQLITE_OK;
-    }
-    rebaseKeepFirstError(&rc, rc2);
-  }
-  rc2 = doltlitePersistWorkingSet(db);
-  rebaseKeepFirstError(&rc, rc2);
-
-  rc2 = doltliteVcSealBranchStyleTxn(db);
-  rebaseKeepFirstError(&rc, rc2);
-  if( rc!=SQLITE_OK ){
-    /* Peer finished cleanup after we claimed: report lost race, not a broken
-    ** recovery that leaves the user stuck. */
-    if( cs && zWorking && zWorking[0]
-     && chunkStoreFindBranch(cs, zWorking, 0)==SQLITE_NOTFOUND ){
-      sqlite3_free(zReturnBranch);
-      sqlite3_free(zWorking);
-      sqlite3_free(zOrigBranch);
+    if( !stillRebasing ){
       sqlite3_result_error(context, "no rebase in progress", -1);
-      return;
+    }else{
+      rebaseResultRecoveryFailure(context, rc);
     }
-    sqlite3_free(zReturnBranch);
-    sqlite3_free(zWorking);
-    sqlite3_free(zOrigBranch);
-    rebaseResultRecoveryFailure(context, rc);
     return;
   }
+
+  /* Claim succeeded: rebase is durably ended. Best-effort cleanup; a concurrent
+  ** --continue may already have finished the same work. Never report recovery
+  ** failed after a successful claim — that is the stuck dual-failure case. */
+  (void)rebaseCleanupAfterClaim(db, zOrigBranch, zWorking);
+  if( cs && zReturnBranch && zReturnBranch[0] ){
+    (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+  }
+  (void)doltlitePersistWorkingSet(db);
+  (void)doltliteVcSealBranchStyleTxn(db);
 
   sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);
