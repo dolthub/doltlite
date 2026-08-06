@@ -215,6 +215,73 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+# The case above gives the added column a value on the row it edits, which is
+# what kept it agreeing. A column that stays NULL on an otherwise-modified row
+# still counts as a modified cell.
+oracle_both "add_null_column_plus_update_same_row" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+UPDATE t SET v = v + 1 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "add_null_column_plus_update_all_rows" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+UPDATE t SET v = v + 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+echo "--- schema change: DROP COLUMN ---"
+
+# Dropped cells are reported by cells_deleted and must not also be counted as
+# modified, whether or not the dropped column held a value.
+# Stat only: dolt_diff_summary reports data_change=1 here where Dolt reports 0,
+# a separate pre-existing divergence in how a no-op column drop is classified.
+oracle_stat "drop_null_column_no_data_change" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
+INSERT INTO t VALUES(1, 10, NULL), (2, 20, NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN gone;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_valued_column_no_data_change" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
+INSERT INTO t VALUES(1, 10, 7), (2, 20, 8);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN gone;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_valued_column_plus_update" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
+INSERT INTO t VALUES(1, 10, 7), (2, 20, 8);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN gone;
+UPDATE t SET v = v + 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_null_column_plus_update" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
+INSERT INTO t VALUES(1, 10, NULL), (2, 20, NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN gone;
+UPDATE t SET v = v + 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
 echo "--- multi-table ---"
 
 oracle_both "two_tables_one_modified" "

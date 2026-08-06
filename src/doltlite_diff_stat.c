@@ -175,38 +175,59 @@ static int dsBuildColMap(
   return SQLITE_OK;
 }
 
-static int dsCountChangedCells(
+/* Two different questions, which the same walk answers.
+**
+** *pnDiffer is whether the row changed at all, and so whether it counts toward
+** rows_modified. Gaining or losing a column that held a value counts; gaining
+** or losing one that is NULL on both sides does not.
+**
+** *pnModified is cells_modified, which is narrower: a column the range added
+** counts whatever its value, and a column the range dropped never counts.
+** Those cells are already reported by cells_added and cells_deleted. */
+static void dsCountChangedCells(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
-  const DsColMap *pColMap
+  const DsColMap *pColMap,
+  int *pnDiffer,
+  int *pnModified
 ){
   DoltliteRecordInfo fromRi, toRi;
-  int i, changed = 0;
-  if( !pFromRec || !pToRec ) return 0;
+  int i;
+  int nDiffer = 0;
+  int nModified = 0;
+
+  *pnDiffer = 0;
+  *pnModified = 0;
+  if( !pFromRec || !pToRec ) return;
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
 
   for(i=0; i<pColMap->nTo; i++){
     int fromIdx = pColMap->aToFrom ? pColMap->aToFrom[i] : -1;
     if( fromIdx<0 ){
-
-      if( i<toRi.nField && toRi.aType[i]!=0 ) changed++;
+      /* A trailing NULL is not stored, so the field may be absent from the
+      ** record even though the column exists on the to side. */
+      nModified++;
+      if( i<toRi.nField && toRi.aType[i]!=0 ) nDiffer++;
       continue;
     }
     if( i>=toRi.nField || fromIdx>=fromRi.nField ) continue;
     if( !doltliteFieldValuesEqual(
             fromRi.aType[fromIdx], pFromRec, nFromRec, fromRi.aOffset[fromIdx],
             toRi.aType[i],         pToRec,   nToRec,   toRi.aOffset[i]) ){
-      changed++;
+      nDiffer++;
+      nModified++;
     }
   }
 
   for(i=0; i<pColMap->nFrom; i++){
     if( pColMap->aFromMatched && pColMap->aFromMatched[i] ) continue;
     if( i>=fromRi.nField ) continue;
-    if( fromRi.aType[i]!=0 ) changed++;
+    if( fromRi.aType[i]!=0 ) nDiffer++;
   }
-  return changed;
+
+  *pnDiffer = nDiffer;
+  *pnModified = nModified;
 }
 
 typedef struct DsStatRow DsStatRow;
@@ -380,13 +401,14 @@ static int dsComputeTableStats(
           cellsDel += nFromCols;
           break;
         case PROLLY_DIFF_MODIFY: {
-          int changed = dsCountChangedCells(
+          int nDiffer = 0, nModified = 0;
+          dsCountChangedCells(
               pChange->pOldVal, pChange->nOldVal,
               pChange->pNewVal, pChange->nNewVal,
-              &colMap);
-          if( changed>0 ){
+              &colMap, &nDiffer, &nModified);
+          if( nDiffer>0 ){
             rowsMod++;
-            cellsMod += changed;
+            cellsMod += nModified;
           }
           break;
         }
