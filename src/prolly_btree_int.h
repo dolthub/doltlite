@@ -484,7 +484,7 @@ int copyZeroTailPayload(ProllyMutMapEntry *e, u32 offset, u32 amt, void *pBuf);
 void btreeMarkWorkingStateChanged(Btree *p, int bLocal);
 int restoreFromCommitted(Btree *p);
 int rollbackNeedsSchemaReset(Btree *pBtree);
-void btreeFillWorkingSetBlob(
+int btreeFillWorkingSetBlob(
   u8 *buf,
   const ProllyHash *pWorkingCat,
   const ProllyHash *pWorkingCommit,

@@ -1201,6 +1201,16 @@ static void doltliteRebaseInteractiveStart(
     sqlite3_result_error_code(context, SQLITE_NOMEM);
     return;
   }
+  if( strlen(zOrig)>=WS_REBASE_BRANCH_LEN ){
+    sqlite3_free(zOrig);
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_free(aReplay);
+    sqlite3_result_error(context,
+      "cannot start interactive rebase: current branch name exceeds "
+      "the 63-byte persisted-state limit", -1);
+    return;
+  }
   {
     ProllyHash probe;
     if( chunkStoreFindBranch(cs, zWorking, &probe)==SQLITE_OK ){
@@ -1223,6 +1233,16 @@ static void doltliteRebaseInteractiveStart(
       ** still runs; only resuming it after a reopen is given up. */
       zReturnBranch[0] = 0;
     }
+  }
+  if( strlen(zReturnBranch)>=WS_REBASE_BRANCH_LEN ){
+    sqlite3_free(zOrig);
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_free(aReplay);
+    sqlite3_result_error(context,
+      "cannot start interactive rebase: default branch name exceeds "
+      "the 63-byte persisted-state limit", -1);
+    return;
   }
 
   rc = doltliteFlushCatalogToHash(db, &preRebaseCat);
