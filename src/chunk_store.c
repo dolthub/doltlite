@@ -231,13 +231,29 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  /* Header seals are advisory; WAL root seals are load-bearing. */
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
 
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
+
+  /* A WAL offset below the data it is supposed to follow is the one header
+  ** value that turns damage into destruction: replay reads live chunk bytes as
+  ** WAL records, calls the tail torn, and rewinds the logical EOF, and the next
+  ** write-lock acquisition reclaims everything past it. Refusing the open keeps
+  ** a file whose rows are still readable readable.
+  **
+  ** The header carries a seal too, but it covers all 168 bytes including ones
+  ** no reader consults, so verifying it would reject files over damage that
+  ** cannot mislead anything. These bounds cover the harmful case on their own,
+  ** and cover pre-seal headers that no seal check could reach. */
+  if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
+  if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
+  if( cs->index.iIndexOffset>0
+   && cs->wal.iWalOffset < cs->index.iIndexOffset + cs->index.nIndexSize ){
+    return SQLITE_CORRUPT;
+  }
 
   return SQLITE_OK;
 }
@@ -394,7 +410,10 @@ int chunkStoreOpen(
     }
 
     rc = csReadManifest(cs);
-    if( (rc==SQLITE_NOTADB || rc==SQLITE_CORRUPT)
+    /* NOTADB only: a header that still identifies as a chunk store but carries
+    ** impossible offsets is damaged data, not a crashed creation, and this
+    ** recovery ends in truncating the file to zero. */
+    if( rc==SQLITE_NOTADB
      && (flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly ){
       /* Recover only proven first-commit crashes to an empty database. */
       int everCommitted = 1;
