@@ -853,6 +853,10 @@ int doltliteSerializeCatalogEntriesForeignDomain(
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData);
+int doltliteDeserializeConflictsForTest(const u8 *data, int nData);
+int doltliteDeserializeConstraintViolationsForTest(
+  const u8 *data, int nData
+);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 int doltlitePrepareCatalogForPersistence(sqlite3 *db);
 int doltliteCreateAndStoreCommit(

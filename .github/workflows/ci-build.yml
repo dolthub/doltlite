@@ -723,7 +723,7 @@ jobs:
         {
           make CC=clang CFLAGS="$FUZZ_CFLAGS" LDFLAGS="$FUZZ_LDFLAGS" \
             libdoltlite.a
-          for target in fuzz_replaywal fuzz_prolly_node fuzz_deserialize_refs fuzz_read_index fuzz_deserialize_catalog fuzz_wire_response; do
+          for target in fuzz_replaywal fuzz_prolly_node fuzz_deserialize_refs fuzz_read_index fuzz_deserialize_catalog fuzz_wire_response fuzz_commit fuzz_working_set fuzz_conflicts fuzz_constraint_violations; do
             clang -O1 -g -Werror \
               -fsanitize=fuzzer,address -fno-omit-frame-pointer \
               -fno-sanitize-recover=address \

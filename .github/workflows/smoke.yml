@@ -148,6 +148,19 @@ jobs:
           -rss_limit_mb=2048 \
           -print_final_stats=1
 
+    - name: Run VC blob fuzzers (1m each)
+      env:
+        ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
+      run: |
+        for target in commit working_set conflicts constraint_violations; do
+          "$GITHUB_WORKSPACE/build-fuzz/fuzz_$target" \
+            "$GITHUB_WORKSPACE/test/fuzz-corpus/$target" \
+            -max_total_time=60 \
+            -timeout=10 \
+            -rss_limit_mb=2048 \
+            -print_final_stats=1
+        done
+
     - name: Upload fuzz crash artifacts
       if: failure()
       uses: actions/upload-artifact@v4

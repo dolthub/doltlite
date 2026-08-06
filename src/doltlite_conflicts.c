@@ -139,36 +139,29 @@ static int skipConflictRow(DlByteReader *r){
   return skipConflictBlob(r);
 }
 
-static int loadAllConflicts(
-  sqlite3 *db,
-  ChunkStore *cs,
+static int deserializeAllConflicts(
+  const u8 *data,
+  int nData,
   ConflictTableInfo **ppTables, int *pnTables
 ){
-  ProllyHash hash;
-  u8 *data = 0; int nData = 0;
-  extern void doltliteGetSessionConflictsCatalog(sqlite3*, ProllyHash*);
   DlByteReader r;
   int nTables, i, j, rc;
   ConflictTableInfo *aTables;
 
-  doltliteGetSessionConflictsCatalog(db, &hash);
-  if( prollyHashIsEmpty(&hash) ){ *ppTables = 0; *pnTables = 0; return SQLITE_OK; }
-
-  rc = chunkStoreGet(cs, &hash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
+  *ppTables = 0;
+  *pnTables = 0;
+  if( !data || nData<(4+2) ) return SQLITE_CORRUPT;
 
   dlReaderInit(&r, data, nData);
   if( dlReadFramedHeader(&r, DOLTLITE_CONFLICTS_MAGIC0, DOLTLITE_CONFLICTS_MAGIC1,
                          DOLTLITE_CONFLICTS_MAGIC2, DOLTLITE_CONFLICTS_VERSION,
                          &nTables)!=SQLITE_OK ){
-    sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
 
-  aTables = sqlite3_malloc(nTables * (int)sizeof(ConflictTableInfo));
-  if( !aTables ){ sqlite3_free(data); return SQLITE_NOMEM; }
-  memset(aTables, 0, nTables * (int)sizeof(ConflictTableInfo));
+  aTables = sqlite3_malloc(nTables ? nTables * (int)sizeof(ConflictTableInfo) : 1);
+  if( !aTables ) return SQLITE_NOMEM;
+  memset(aTables, 0, nTables ? nTables * (int)sizeof(ConflictTableInfo) : 1);
 
   for(i=0; i<nTables; i++){
     int nc;
@@ -201,11 +194,41 @@ static int loadAllConflicts(
 
   *ppTables = aTables;
   *pnTables = nTables;
-  sqlite3_free(data);
   return SQLITE_OK;
 
 conflicts_cleanup:
   freeConflictTables(aTables, nTables);
+  return rc;
+}
+
+int doltliteDeserializeConflictsForTest(const u8 *data, int nData){
+  ConflictTableInfo *aTables = 0;
+  int nTables = 0;
+  int rc = deserializeAllConflicts(data, nData, &aTables, &nTables);
+  freeConflictTables(aTables, nTables);
+  return rc;
+}
+
+static int loadAllConflicts(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ConflictTableInfo **ppTables, int *pnTables
+){
+  ProllyHash hash;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  doltliteGetSessionConflictsCatalog(db, &hash);
+  if( prollyHashIsEmpty(&hash) ){
+    *ppTables = 0;
+    *pnTables = 0;
+    return SQLITE_OK;
+  }
+  rc = chunkStoreGet(cs, &hash, &data, &nData);
+  if( rc==SQLITE_OK ){
+    rc = deserializeAllConflicts(data, nData, ppTables, pnTables);
+  }
   sqlite3_free(data);
   return rc;
 }
