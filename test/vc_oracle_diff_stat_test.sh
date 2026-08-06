@@ -238,9 +238,7 @@ echo "--- schema change: DROP COLUMN ---"
 
 # Dropped cells are reported by cells_deleted and must not also be counted as
 # modified, whether or not the dropped column held a value.
-# Stat only: dolt_diff_summary reports data_change=1 here where Dolt reports 0,
-# a separate pre-existing divergence in how a no-op column drop is classified.
-oracle_stat "drop_null_column_no_data_change" "
+oracle_both "drop_null_column_no_data_change" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
 INSERT INTO t VALUES(1, 10, NULL), (2, 20, NULL);
 SELECT dolt_add('-A');
@@ -278,6 +276,32 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'seed');
 ALTER TABLE t DROP COLUMN gone;
 UPDATE t SET v = v + 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+# A schema change rewrites every record, so the table root moves whether or not
+# any value did. data_change has to reflect the values, not the root.
+# Summary only: dolt_diff_stat emits an all-zero row for an in-place column
+# rename where Dolt emits none. Narrowing the emission gate to "no counters, no
+# row" is not the fix -- Dolt does emit that row when the table was recreated,
+# which diff_stat_revert_schema_change_with_later_added_table pins.
+oracle_summary "rename_column_no_data_change" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t RENAME COLUMN v TO w;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_valued_column_is_a_data_change" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
+INSERT INTO t VALUES(1, 10, 7), (2, 20, 8);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN gone;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"

@@ -969,6 +969,77 @@ static int dssSetRow(DssCursor *c, const char *zFrom, const char *zTo,
   return SQLITE_OK;
 }
 
+/* Records carry their column values, so any schema change rewrites every row
+** and moves the table root -- a dropped column that held only NULLs included.
+** The root alone therefore cannot answer whether data changed; walk the rows
+** and ask whether any value did. Only reached when the schema also changed,
+** so the ordinary data-only diff keeps its hash comparison. */
+static int dssDataActuallyChanged(
+  sqlite3 *db,
+  const DsFilterCtx *pCtx,
+  const char *zTableName,
+  struct TableEntry *pFromEntry,
+  struct TableEntry *pToEntry,
+  int *pChanged
+){
+  char **azFromCols = 0, **azToCols = 0;
+  int nFromCols = 0, nToCols = 0;
+  DsColMap colMap;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyDiffIter iter;
+  ProllyDiffChange *pChange = 0;
+  int changed = 0;
+  int iterOpen = 0;
+  u8 flags;
+  int rc;
+  int i;
+
+  memset(&colMap, 0, sizeof(colMap));
+  /* Anything unexpected falls back to the root comparison's answer. */
+  *pChanged = 1;
+  if( !cs || !pCache ) return SQLITE_OK;
+
+  rc = dsLoadColNames(db, &pCtx->fromCat, zTableName, &azFromCols, &nFromCols);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dsLoadColNames(db, &pCtx->toCat, zTableName, &azToCols, &nToCols);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dsBuildColMap(azFromCols, nFromCols, azToCols, nToCols, &colMap);
+  if( rc!=SQLITE_OK ) goto done;
+
+  flags = pFromEntry->flags ? pFromEntry->flags : pToEntry->flags;
+  rc = prollyDiffIterOpen(&iter, cs, pCache, &pFromEntry->root,
+                          &pToEntry->root, flags);
+  if( rc!=SQLITE_OK ) goto done;
+  iterOpen = 1;
+
+  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
+    int nDiffer = 0, nModified = 0;
+    if( pChange->type!=PROLLY_DIFF_MODIFY ){
+      changed = 1;
+      break;
+    }
+    dsCountChangedCells(pChange->pOldVal, pChange->nOldVal,
+                        pChange->pNewVal, pChange->nNewVal,
+                        &colMap, &nDiffer, &nModified);
+    if( nDiffer>0 ){
+      changed = 1;
+      break;
+    }
+  }
+  if( rc==SQLITE_ROW || rc==SQLITE_DONE ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ) *pChanged = changed;
+
+done:
+  if( iterOpen ) prollyDiffIterClose(&iter);
+  for(i=0; i<nFromCols; i++) sqlite3_free(azFromCols[i]);
+  sqlite3_free(azFromCols);
+  for(i=0; i<nToCols; i++) sqlite3_free(azToCols[i]);
+  sqlite3_free(azToCols);
+  dsFreeColMap(&colMap);
+  return rc;
+}
+
 static int dssAppendTableChange(
   DssCursor *c,
   sqlite3 *db,
@@ -989,6 +1060,11 @@ static int dssAppendTableChange(
     int schemasDiffer = prollyHashCompare(&pFromEntry->schemaHash,
                                           &pToEntry->schemaHash)!=0;
     if( !rootsDiffer && !schemasDiffer ) return SQLITE_OK;
+    if( rootsDiffer && schemasDiffer ){
+      rc = dssDataActuallyChanged(db, &c->fctx, zTableName,
+                                  pFromEntry, pToEntry, &rootsDiffer);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     return dssSetRow(c, zTableName, zTableName, "modified",
                      rootsDiffer, schemasDiffer);
   }
