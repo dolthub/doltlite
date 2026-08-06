@@ -666,7 +666,7 @@ static int doltliteValidateRebasePlanTable(sqlite3 *db, char **pzErr){
   if( rc!=SQLITE_OK ) return rc;
   if( state==DOLTLITE_REBASE_SCHEMA_OK ) return SQLITE_OK;
   if( state==DOLTLITE_REBASE_SCHEMA_ABSENT ){
-    if( pzErr ) *pzErr = sqlite3_mprintf("no rebase plan found");
+    if( pzErr ) *pzErr = sqlite3_mprintf("no rebase in progress");
     return SQLITE_NOTFOUND;
   }
   if( pzErr ){
@@ -1037,7 +1037,71 @@ static void rebaseResultRecoveryFailure(sqlite3_context *context, int rc){
   sqlite3_result_error_code(context, rc);
 }
 
-static int rebaseDiscardWorkingBranch(
+/* Claim exclusive ownership of ending the active rebase. Under the graph lock,
+** reload durable working-set state for the current branch; if isRebasing is
+** already clear a peer won and this returns SQLITE_DONE. Otherwise clear the
+** flag, persist it under the same lock, drop dolt_rebase, and return SQLITE_OK
+** so only the winner continues cleanup. Callers must copy branch names out of
+** session state before claiming. */
+static int rebaseClaimActiveEnd(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch;
+  u8 isRebasing = 0;
+  int rc;
+  int locked = 0;
+
+  if( !cs || !db ) return SQLITE_ERROR;
+  zBranch = doltliteGetSessionBranch(db);
+  if( !zBranch || !zBranch[0] ) zBranch = "main";
+
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  locked = 1;
+  rc = chunkStoreForceRefresh(cs);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  rc = doltliteLoadWorkingSet(db, zBranch);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  if( !isRebasing ){
+    rc = SQLITE_DONE;
+    goto claim_done;
+  }
+
+  rc = doltliteClearSessionRebaseState(db);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  rc = doltliteSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  rc = chunkStoreSerializeRefs(cs);
+  if( rc!=SQLITE_OK ) goto claim_done;
+  rc = chunkStoreCommit(cs);
+
+claim_done:
+  if( locked ) chunkStoreUnlock(cs);
+  if( rc==SQLITE_OK ){
+    int rcDrop = sqlite3FaultSim(953) ? SQLITE_IOERR :
+        sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+    if( rcDrop!=SQLITE_OK ) rc = rcDrop;
+  }else if( rc==SQLITE_DONE ){
+    (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  }
+  return rc;
+}
+
+static int rebaseClaimActiveEndRetry(sqlite3 *db){
+  int i;
+  int rc = SQLITE_BUSY;
+  for(i=0; i<40; i++){
+    rc = rebaseClaimActiveEnd(db);
+    if( rc!=SQLITE_BUSY ) return rc;
+    sqlite3_sleep(1);
+  }
+  return rc;
+}
+
+/* Checkout original branch and delete the temporary working branch. Idempotent
+** for a missing working branch. Assumes rebaseClaimActiveEnd already cleared
+** durable isRebasing / the plan table. */
+static int rebaseCleanupAfterClaim(
   sqlite3 *db,
   const char *zOrigBranch,
   const char *zWorkingBranch
@@ -1045,14 +1109,6 @@ static int rebaseDiscardWorkingBranch(
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc = SQLITE_OK;
   int rc2;
-
-  rc2 = sqlite3FaultSim(953) ? SQLITE_IOERR :
-      sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
-  rebaseKeepFirstError(&rc, rc2);
-  rc2 = doltliteClearSessionRebaseState(db);
-  rebaseKeepFirstError(&rc, rc2);
-  rc2 = doltlitePersistWorkingSet(db);
-  rebaseKeepFirstError(&rc, rc2);
 
   if( zOrigBranch && zOrigBranch[0] ){
     rc2 = doltliteCheckoutBranchForRebase(db, zOrigBranch);
@@ -1062,19 +1118,29 @@ static int rebaseDiscardWorkingBranch(
     }
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
-    rc2 = chunkStoreDeleteBranch(cs, zWorkingBranch);
-    if( rc2==SQLITE_NOTFOUND ) rc2 = SQLITE_OK;
+    rc2 = doltliteMutateRefs(db, rebaseDeleteWorkingBranchRefs,
+                             (void*)zWorkingBranch);
     rebaseKeepFirstError(&rc, rc2);
-    rc2 = chunkStoreSerializeRefs(cs);
-    rebaseKeepFirstError(&rc, rc2);
-    if( rc2==SQLITE_OK ){
-      rc2 = chunkStoreCommit(cs);
-      rebaseKeepFirstError(&rc, rc2);
-    }
     rc2 = doltlitePersistWorkingSet(db);
     rebaseKeepFirstError(&rc, rc2);
   }
   return rc;
+}
+
+static int rebaseDiscardWorkingBranch(
+  sqlite3 *db,
+  const char *zOrigBranch,
+  const char *zWorkingBranch
+){
+  int rc;
+
+  rc = rebaseClaimActiveEndRetry(db);
+  if( rc==SQLITE_DONE ){
+    /* Peer already claimed; still try idempotent cleanup. */
+    rc = SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  return rebaseCleanupAfterClaim(db, zOrigBranch, zWorkingBranch);
 }
 
 static int rebaseAbortConflictedContinue(
@@ -1087,10 +1153,8 @@ static int rebaseAbortConflictedContinue(
   int rc = SQLITE_OK;
   int rc2;
 
-  rc2 = sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
-  rebaseKeepFirstError(&rc, rc2);
-  rc2 = doltliteClearSessionRebaseState(db);
-  rebaseKeepFirstError(&rc, rc2);
+  rc2 = rebaseClaimActiveEndRetry(db);
+  if( rc2!=SQLITE_OK && rc2!=SQLITE_DONE ) rebaseKeepFirstError(&rc, rc2);
   rc2 = doltliteClearSessionMergeState(db);
   rebaseKeepFirstError(&rc, rc2);
   if( zOrigBranch && zOrigBranch[0] ){
@@ -1104,15 +1168,9 @@ static int rebaseAbortConflictedContinue(
     rebaseKeepFirstError(&rc, rc2);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
-    rc2 = chunkStoreDeleteBranch(cs, zWorkingBranch);
-    if( rc2==SQLITE_NOTFOUND ) rc2 = SQLITE_OK;
+    rc2 = doltliteMutateRefs(db, rebaseDeleteWorkingBranchRefs,
+                             (void*)zWorkingBranch);
     rebaseKeepFirstError(&rc, rc2);
-    rc2 = chunkStoreSerializeRefs(cs);
-    rebaseKeepFirstError(&rc, rc2);
-    if( rc2==SQLITE_OK ){
-      rc2 = chunkStoreCommit(cs);
-      rebaseKeepFirstError(&rc, rc2);
-    }
     rc2 = doltlitePersistWorkingSet(db);
     rebaseKeepFirstError(&rc, rc2);
   }
@@ -1343,9 +1401,33 @@ static void doltliteRebaseInteractiveAbort(
     return;
   }
 
-  rc = rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
+  /* Capture names before claim clears session rebase state. */
+  rc = rebaseClaimActiveEndRetry(db);
+  if( rc==SQLITE_DONE ){
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_free(zOrigBranch);
+    sqlite3_result_error(context, "no rebase in progress", -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_free(zOrigBranch);
+    rebaseResultRecoveryFailure(context, rc);
+    return;
+  }
+
+  rc = rebaseCleanupAfterClaim(db, zOrigBranch, zWorking);
   if( cs && zReturnBranch && zReturnBranch[0] ){
     rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    /* A concurrent --continue may already have finished; if the temporary
+    ** working branch is gone, treat restore failure as the peer winning. */
+    if( rc2!=SQLITE_OK
+     && zWorking && zWorking[0]
+     && chunkStoreFindBranch(cs, zWorking, 0)==SQLITE_NOTFOUND ){
+      rc2 = SQLITE_OK;
+    }
     rebaseKeepFirstError(&rc, rc2);
   }
   rc2 = doltlitePersistWorkingSet(db);
@@ -1354,6 +1436,16 @@ static void doltliteRebaseInteractiveAbort(
   rc2 = doltliteVcSealBranchStyleTxn(db);
   rebaseKeepFirstError(&rc, rc2);
   if( rc!=SQLITE_OK ){
+    /* Peer finished cleanup after we claimed: report lost race, not a broken
+    ** recovery that leaves the user stuck. */
+    if( cs && zWorking && zWorking[0]
+     && chunkStoreFindBranch(cs, zWorking, 0)==SQLITE_NOTFOUND ){
+      sqlite3_free(zReturnBranch);
+      sqlite3_free(zWorking);
+      sqlite3_free(zOrigBranch);
+      sqlite3_result_error(context, "no rebase in progress", -1);
+      return;
+    }
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     sqlite3_free(zOrigBranch);
@@ -1459,7 +1551,13 @@ static void doltliteRebaseInteractiveContinue(
     goto abort_err_silent;
   }
 
-  rc = sqlite3_exec(db, "DROP TABLE main.dolt_rebase", 0, 0, 0);
+  /* Claim before replaying so a concurrent --abort loses cleanly with
+  ** "no rebase in progress" instead of both failing mid-recovery. */
+  rc = rebaseClaimActiveEndRetry(db);
+  if( rc==SQLITE_DONE ){
+    sqlite3_result_error(context, "no rebase in progress", -1);
+    goto abort_err_silent;
+  }
   if( rc!=SQLITE_OK ) goto abort_err;
   bPlanDropped = 1;
 
@@ -1499,6 +1597,8 @@ static void doltliteRebaseInteractiveContinue(
   }
   if( rc!=SQLITE_OK ) goto abort_err;
 
+  /* Claim already cleared durable isRebasing; keep session clear and finish
+  ** checkout / working-branch deletion / return-branch restore. */
   rc = doltliteClearSessionRebaseState(db);
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
@@ -1563,7 +1663,17 @@ abort_err:
       db, zOrigBranch ? zOrigBranch : "main", zWorking);
   if( cs && zReturnBranch && zReturnBranch[0] ){
     rc2 = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+    if( rc2!=SQLITE_OK
+     && zWorking && zWorking[0]
+     && chunkStoreFindBranch(cs, zWorking, 0)==SQLITE_NOTFOUND ){
+      rc2 = SQLITE_OK;
+    }
     rebaseKeepFirstError(&recoveryRc, rc2);
+  }
+  if( recoveryRc!=SQLITE_OK
+   && cs && zWorking && zWorking[0]
+   && chunkStoreFindBranch(cs, zWorking, 0)==SQLITE_NOTFOUND ){
+    recoveryRc = SQLITE_OK;
   }
   sqlite3_free(zOrigBranch);
   sqlite3_free(zReturnBranch);

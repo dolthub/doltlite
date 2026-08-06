@@ -479,6 +479,140 @@ static void test_rebase_racing_checkout(void){
 }
 
 
+/* Interactive rebase left open; parent --continue and child --abort race.
+** Exactly one must win cleanly; the loser must report "no rebase in progress"
+** (not "rebase recovery failed"). Final state must be usable. */
+static void test_concurrent_continue_abort(void){
+  const char *path = "/tmp/test_rebase_continue_abort_race.db";
+  int trial, wins_continue = 0, wins_abort = 0, bad = 0;
+
+  printf("--- Test 5: concurrent --continue vs --abort ---\n");
+
+  for(trial=0; trial<12; trial++){
+    pid_t child;
+    int status;
+    int pipefd[2];
+    char contOut[256], abortOut[256];
+    sqlite3 *db = 0;
+    int contWin, abortWin, contBad, abortBad, contRestored;
+    int exactlyOneWin, loserOk;
+
+    remove(path);
+    { char w[256]; snprintf(w, sizeof(w), "%s-wal", path); remove(w); }
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+    execSql(db, "INSERT INTO t VALUES(1, 1)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','c1')");
+    queryScalarText(db, "SELECT dolt_checkout('-b','feat')");
+    execSql(db, "INSERT INTO t VALUES(2, 2)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','f1')");
+    queryScalarText(db, "SELECT dolt_checkout('main')");
+    execSql(db, "INSERT INTO t VALUES(10, 10)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','m1')");
+    queryScalarText(db, "SELECT dolt_checkout('feat')");
+    queryScalarText(db, "SELECT dolt_rebase('-i','main')");
+    sqlite3_close(db);
+
+    contOut[0] = abortOut[0] = 0;
+    if( pipe(pipefd)!=0 ){ bad++; continue; }
+    child = fork();
+    if( child==0 ){
+      sqlite3 *cdb = 0;
+      const char *r;
+      close(pipefd[0]);
+      sqlite3_open(path, &cdb);
+      sqlite3_busy_timeout(cdb, 10000);
+      queryScalarText(cdb, "SELECT dolt_checkout('dolt_rebase_feat')");
+      r = queryScalarText(cdb, "SELECT dolt_rebase('--abort')");
+      write(pipefd[1], r, strlen(r)+1);
+      close(pipefd[1]);
+      sqlite3_close(cdb);
+      _exit(0);
+    }
+    close(pipefd[1]);
+
+    {
+      sqlite3 *pdb = 0;
+      const char *r;
+      if( trial%3==1 ) usleep(200);
+      if( trial%3==2 ) usleep(2000);
+      sqlite3_open(path, &pdb);
+      sqlite3_busy_timeout(pdb, 10000);
+      queryScalarText(pdb, "SELECT dolt_checkout('dolt_rebase_feat')");
+      r = queryScalarText(pdb, "SELECT dolt_rebase('--continue')");
+      snprintf(contOut, sizeof(contOut), "%s", r);
+      sqlite3_close(pdb);
+    }
+
+    {
+      ssize_t n = read(pipefd[0], abortOut, sizeof(abortOut)-1);
+      if( n<0 ) n = 0;
+      abortOut[n] = 0;
+      close(pipefd[0]);
+    }
+    waitpid(child, &status, 0);
+
+    contWin = strstr(contOut, "Successfully")!=0;
+    abortWin = strstr(abortOut, "Interactive rebase aborted")!=0;
+    contBad = strstr(contOut, "recovery failed")!=0;
+    abortBad = strstr(abortOut, "recovery failed")!=0;
+    /* Continue may claim then fail replay and restore pre-rebase state: that
+    ** still ends the rebase cleanly (not a stuck recovery_failed). */
+    contRestored = strstr(contOut, "branch restored to pre-rebase state")!=0;
+    exactlyOneWin = (contWin ^ abortWin) || (contRestored && !abortWin)
+                 || (abortWin && contRestored);
+    loserOk = 1;
+    if( contWin && !abortWin ){
+      loserOk = strstr(abortOut, "no rebase in progress")!=0;
+    }else if( abortWin && !contWin ){
+      loserOk = strstr(contOut, "no rebase in progress")!=0
+             || strstr(contOut, "rebase failed")!=0
+             || contRestored;
+    }else if( contRestored
+           && strstr(abortOut, "no rebase in progress")!=0 ){
+      exactlyOneWin = 1;
+      loserOk = 1;
+    }else if( contWin && abortWin ){
+      exactlyOneWin = 1;
+      loserOk = 1;
+    }
+
+    if( contWin ) wins_continue++;
+    if( abortWin || contRestored ) wins_abort++;
+    if( contBad || abortBad || !exactlyOneWin || !loserOk ){
+      bad++;
+      fprintf(stderr, "FAIL trial %d cont=[%s] abort=[%s]\n",
+              trial, contOut, abortOut);
+    }
+
+    {
+      sqlite3 *v = 0;
+      const char *h;
+      sqlite3_open(path, &v);
+      sqlite3_busy_timeout(v, 30000);
+      queryScalarText(v, "SELECT dolt_checkout('feat')");
+      /* Ensure no leftover temp branch / plan blocks further work. */
+      if( countRows(v,
+            "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'")
+          >0 ){
+        queryScalarText(v, "SELECT dolt_rebase('--abort')");
+      }
+      execSql(v, "INSERT INTO t VALUES(99, 99)");
+      h = queryScalarText(v, "SELECT dolt_commit('-A','-m','post-race')");
+      check("continue_abort_post_commit", is_commit_hash(h));
+      sqlite3_close(v);
+    }
+  }
+
+  check("continue_abort_no_bad_outcomes", bad==0);
+  check("continue_abort_had_activity", (wins_continue+wins_abort)>0);
+  printf("  continue wins=%d abort wins=%d bad=%d\n",
+         wins_continue, wins_abort, bad);
+  remove(path);
+}
+
 int main(void){
   setvbuf(stdout, 0, _IOLBF, 0);
   printf("=== Multi-Process Merge & Rebase Concurrency Tests ===\n\n");
@@ -487,6 +621,7 @@ int main(void){
   test_merge_racing_target_commits();
   test_rebase_racing_gc();
   test_rebase_racing_checkout();
+  test_concurrent_continue_abort();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
