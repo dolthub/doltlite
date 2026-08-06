@@ -526,7 +526,16 @@ static void test_concurrent_continue_abort(void){
       sqlite3_busy_timeout(cdb, 10000);
       queryScalarText(cdb, "SELECT dolt_checkout('dolt_rebase_feat')");
       r = queryScalarText(cdb, "SELECT dolt_rebase('--abort')");
-      write(pipefd[1], r, strlen(r)+1);
+      {
+        size_t n = strlen(r)+1;
+        const char *p = r;
+        while( n>0 ){
+          ssize_t w = write(pipefd[1], p, n);
+          if( w<=0 ) break;
+          p += (size_t)w;
+          n -= (size_t)w;
+        }
+      }
       close(pipefd[1]);
       sqlite3_close(cdb);
       _exit(0);
