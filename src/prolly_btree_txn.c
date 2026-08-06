@@ -1354,13 +1354,21 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       }
       prollyHashCompute(catData, nCatData, &catHash);
 
-      btreeFillWorkingSetBlob(wsBuf, &catHash, &p->headCommit,
-                              &p->vc.stagedCatalog, p->vc.isMerging,
-                              &p->vc.mergeCommitHash, &p->vc.conflictsCatalogHash,
-                              p->isRebasing, &p->preRebaseWorkingCat,
-                              &p->rebaseOntoCommit,
-                              p->zRebaseOrigBranch, p->zRebaseReturnBranch,
-                              &p->vc.constraintViolationsHash);
+      rc = btreeFillWorkingSetBlob(wsBuf, &catHash, &p->headCommit,
+                                   &p->vc.stagedCatalog, p->vc.isMerging,
+                                   &p->vc.mergeCommitHash,
+                                   &p->vc.conflictsCatalogHash,
+                                   p->isRebasing, &p->preRebaseWorkingCat,
+                                   &p->rebaseOntoCommit,
+                                   p->zRebaseOrigBranch,
+                                   p->zRebaseReturnBranch,
+                                   &p->vc.constraintViolationsHash);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(catData);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
       prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
 
       if( chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &wsHashOnDisk)

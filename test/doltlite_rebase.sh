@@ -200,7 +200,109 @@ run_test_match "unknown_plan_action_stays_resumable" \
   "Successfully rebased and updated refs/heads/feat" \
   "$DB4"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4"
+BRANCH63=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+BRANCH64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+seed_rebase_name_repo() {
+  rm -f "$1"
+  "$DOLTLITE" "$1" >/dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
+SELECT dolt_checkout('-b','$2');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','feature');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','main');
+SQL
+}
+
+DB5=/tmp/test_rebase_name_continue_$$.db
+seed_rebase_name_repo "$DB5" "$BRANCH63"
+run_test_match "rebase_63_byte_branch_starts" \
+  "SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB5/$BRANCH63"
+run_test "rebase_63_byte_branch_continues_after_reopen" \
+  "SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT group_concat(id, ',') FROM t;" \
+  "Successfully rebased and updated refs/heads/$BRANCH63
+$BRANCH63
+1,2,3" \
+  "$DB5/dolt_rebase_$BRANCH63"
+
+DB6=/tmp/test_rebase_name_abort_$$.db
+seed_rebase_name_repo "$DB6" "$BRANCH63"
+run_test_match "rebase_63_byte_branch_starts_for_abort" \
+  "SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB6/$BRANCH63"
+run_test "rebase_63_byte_branch_aborts_after_reopen" \
+  "SELECT dolt_rebase('--abort');
+   SELECT active_branch();
+   SELECT group_concat(id, ',') FROM t;" \
+  "Interactive rebase aborted
+$BRANCH63
+1,2" \
+  "$DB6"
+
+DB7=/tmp/test_rebase_name_reject_$$.db
+seed_rebase_name_repo "$DB7" "$BRANCH64"
+run_test_match "rebase_64_byte_branch_rejected" \
+  "SELECT dolt_rebase('-i','main');" \
+  "current branch name exceeds the 63-byte persisted-state limit" \
+  "$DB7/$BRANCH64"
+run_test "rebase_64_byte_branch_rejection_is_atomic" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_$BRANCH64';
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase';" \
+  "0
+0" \
+  "$DB7"
+
+DB8=/tmp/test_rebase_return_name_$$.db
+seed_rebase_return_repo() {
+  rm -f "$1"
+  "$DOLTLITE" "$1" >/dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','feature');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','$2');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','upstream');
+SELECT dolt_default_branch('$2');
+SQL
+}
+
+seed_rebase_return_repo "$DB8" "$BRANCH63"
+run_test_match "rebase_63_byte_default_branch_starts" \
+  "SELECT dolt_rebase('-i','$BRANCH63');" \
+  "interactive rebase started" \
+  "$DB8/feat"
+run_test "rebase_63_byte_default_branch_aborts_after_reopen" \
+  "SELECT dolt_rebase('--abort'); SELECT active_branch();" \
+  "Interactive rebase aborted
+feat" \
+  "$DB8"
+
+seed_rebase_return_repo "$DB8" "$BRANCH64"
+run_test_match "rebase_64_byte_default_branch_rejected" \
+  "SELECT dolt_rebase('-i','$BRANCH64');" \
+  "default branch name exceeds the 63-byte persisted-state limit" \
+  "$DB8/feat"
+run_test "rebase_64_byte_default_branch_rejection_is_atomic" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase';" \
+  "0
+0" \
+  "$DB8"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

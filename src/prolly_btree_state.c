@@ -200,7 +200,7 @@ int btreeLoadBranchState(
   return SQLITE_OK;
 }
 
-void btreeFillWorkingSetBlob(
+int btreeFillWorkingSetBlob(
   u8 *buf,
   const ProllyHash *pWorkingCat,
   const ProllyHash *pWorkingCommit,
@@ -216,6 +216,13 @@ void btreeFillWorkingSetBlob(
   const ProllyHash *pConstraintViolations
 ){
   static const ProllyHash emptyHash = {{0}};
+  int nOrig = zRebaseOrigBranch ? (int)strlen(zRebaseOrigBranch) : 0;
+  int nReturn = zRebaseReturnBranch ? (int)strlen(zRebaseReturnBranch) : 0;
+
+  if( nOrig >= WS_REBASE_BRANCH_LEN
+   || nReturn >= WS_REBASE_BRANCH_LEN ){
+    return SQLITE_TOOBIG;
+  }
 
   memset(buf, 0, WS_TOTAL_SIZE);
   buf[0] = WS_FORMAT_VERSION;
@@ -236,18 +243,15 @@ void btreeFillWorkingSetBlob(
   memcpy(buf + WS_REBASE_ONTO_OFF,
          (pRebaseOnto ? pRebaseOnto : &emptyHash)->data, PROLLY_HASH_SIZE);
   if( zRebaseOrigBranch ){
-    int n = (int)strlen(zRebaseOrigBranch);
-    if( n > WS_REBASE_BRANCH_LEN - 1 ) n = WS_REBASE_BRANCH_LEN - 1;
-    memcpy(buf + WS_REBASE_BRANCH_OFF, zRebaseOrigBranch, n);
+    memcpy(buf + WS_REBASE_BRANCH_OFF, zRebaseOrigBranch, nOrig);
   }
   if( zRebaseReturnBranch ){
-    int n = (int)strlen(zRebaseReturnBranch);
-    if( n > WS_REBASE_BRANCH_LEN - 1 ) n = WS_REBASE_BRANCH_LEN - 1;
-    memcpy(buf + WS_REBASE_RETURN_BRANCH_OFF, zRebaseReturnBranch, n);
+    memcpy(buf + WS_REBASE_RETURN_BRANCH_OFF, zRebaseReturnBranch, nReturn);
   }
   memcpy(buf + WS_CONSTRAINT_VIOLATIONS_OFF,
          (pConstraintViolations ? pConstraintViolations : &emptyHash)->data,
          PROLLY_HASH_SIZE);
+  return SQLITE_OK;
 }
 
 int btreeStoreWorkingSetBlob(
@@ -270,11 +274,12 @@ int btreeStoreWorkingSetBlob(
   ProllyHash wsHash;
   int rc;
 
-  btreeFillWorkingSetBlob(buf, pWorkingCat, pWorkingCommit, pStaged,
-                          isMerging, pMergeCommit, pConflicts,
-                          isRebasing, pPreRebaseCat, pRebaseOnto,
-                          zRebaseOrigBranch, zRebaseReturnBranch,
-                          pConstraintViolations);
+  rc = btreeFillWorkingSetBlob(buf, pWorkingCat, pWorkingCommit, pStaged,
+                               isMerging, pMergeCommit, pConflicts,
+                               isRebasing, pPreRebaseCat, pRebaseOnto,
+                               zRebaseOrigBranch, zRebaseReturnBranch,
+                               pConstraintViolations);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(cs, buf, WS_TOTAL_SIZE, &wsHash);
   if( rc != SQLITE_OK ) return rc;
@@ -761,6 +766,10 @@ int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
     char *zNewOrigBranch = 0;
     char *zNewReturnBranch = 0;
     int rc;
+    if( (zOrigBranch && strlen(zOrigBranch)>=WS_REBASE_BRANCH_LEN)
+     || (zReturnBranch && strlen(zReturnBranch)>=WS_REBASE_BRANCH_LEN) ){
+      return SQLITE_TOOBIG;
+    }
     if( zOrigBranch ){
       zNewOrigBranch = sqlite3_mprintf("%s", zOrigBranch);
       if( !zNewOrigBranch ) return SQLITE_NOMEM;
