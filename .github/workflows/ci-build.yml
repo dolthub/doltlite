@@ -951,9 +951,16 @@ jobs:
 
     - name: Package
       run: |
+        sha256sum \
+          build-assert/catalog_serialize_determinism_test \
+          build-assert/doltlite_regression_test_c \
+          > build-assert/development-build.sha256
+        echo "$GITHUB_SHA" > build-assert/development-build.commit
         tar -czf development-build.tar.gz \
           build-assert/catalog_serialize_determinism_test \
-          build-assert/doltlite_regression_test_c
+          build-assert/doltlite_regression_test_c \
+          build-assert/development-build.sha256 \
+          build-assert/development-build.commit
 
     - name: Upload
       uses: actions/upload-artifact@v4
