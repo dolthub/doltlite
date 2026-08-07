@@ -636,18 +636,39 @@ static int checkoutReconcileVtabShadowIndexes(
   const char *zVtab
 ){
   Table *pTab = sqlite3FindTable(db, zVtab, "main");
+  char **azShadow = 0;
+  int nShadow = 0;
   int i, rc = SQLITE_OK;
+
   if( !pTab || !IsVirtual(pTab) ) return SQLITE_OK;
-  for(i=0; i<nSourceSchema && rc==SQLITE_OK; i++){
+
+  /* Collect the shadow names before reconciling anything: the reconcile
+  ** below runs DROP/CREATE INDEX, and that schema reset frees pTab out
+  ** from under sqlite3IsShadowTableOf. */
+  for(i=0; i<nSourceSchema; i++){
+    char **azNew;
+    char *zDup;
     if( !aSourceSchema[i].zName || !aSourceSchema[i].zType
      || strcmp(aSourceSchema[i].zType, "table")!=0
      || strcmp(aSourceSchema[i].zName, zVtab)==0
      || !sqlite3IsShadowTableOf(db, pTab, aSourceSchema[i].zName) ){
       continue;
     }
-    rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema,
-                                       aSourceSchema[i].zName);
+    azNew = sqlite3_realloc(azShadow, (nShadow+1)*(int)sizeof(char*));
+    zDup = azNew ? sqlite3_mprintf("%s", aSourceSchema[i].zName) : 0;
+    if( azNew ) azShadow = azNew;
+    if( !azNew || !zDup ){
+      doltliteFreeNameList(azShadow, nShadow);
+      return SQLITE_NOMEM;
+    }
+    azShadow[nShadow++] = zDup;
   }
+
+  for(i=0; i<nShadow && rc==SQLITE_OK; i++){
+    rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema,
+                                       azShadow[i]);
+  }
+  doltliteFreeNameList(azShadow, nShadow);
   return rc;
 }
 
