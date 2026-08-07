@@ -11,6 +11,9 @@
 
 #include <string.h>
 
+/* Strict on purpose: every length prefix is bounds-checked and the record has
+** to end exactly at nData. A V2 working set leads with the same tag byte, and
+** at one size the two are otherwise indistinguishable. */
 static int isCommitChunk(const u8 *data, int nData){
   const u8 *p = data;
   const u8 *pEnd = data + nData;
@@ -36,6 +39,21 @@ static int isCommitChunk(const u8 *data, int nData){
   return p == pEnd;
 }
 
+/* Chunk formats are told apart by a leading tag and a length, and two formats
+** can share both at some size: DOLTLITE_COMMIT_V2 and WS_FORMAT_VERSION_V2 are
+** each the byte 2, and a commit whose author, email and message total 46 bytes
+** serializes to exactly WS_TOTAL_SIZE_V2. The order below is therefore
+** load-bearing -- a check that can alias another has to either run first or be
+** strict enough to reject the impostor itself.
+**
+** Getting it wrong does not surface as a parse error. The walker keeps going
+** and reads the misread bytes as child hashes, so a healthy store reports
+** chunks it holds as missing, and the damage is permanent because the chunk is
+** history. Onset scales with commit rate, which makes it read as a concurrency
+** bug rather than a classification one.
+**
+** A new chunk format has to be checked against every existing tag and size,
+** not just the neighbouring ones. */
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
