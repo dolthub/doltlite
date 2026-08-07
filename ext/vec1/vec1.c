@@ -29,11 +29,17 @@
 #if defined(SQLITE_CORE) && !defined(VEC1_STATIC)
 # define VEC1_STATIC 1
 #endif
-/* doltlite: upstream vec1 is C99+ and mixes declarations with code; the
-** core build's -Wdeclaration-after-statement does not apply to it. */
+/* doltlite: upstream vec1 is C99+ and carries a few unused locals; the
+** core build's -Wdeclaration-after-statement and -Werror warning set do
+** not apply to vendored code. */
 #if defined(__GNUC__) || defined(__clang__)
 # pragma GCC diagnostic push
 # pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+# pragma GCC diagnostic ignored "-Wunused-variable"
+# pragma GCC diagnostic ignored "-Wunused-parameter"
+# pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+# pragma GCC diagnostic ignored "-Wunused-function"
+# pragma GCC diagnostic ignored "-Wsign-compare"
 #endif
 /* doltlite: sqliteInt.h typedefs i8 as signed char; vec1's plain-char i8
 ** collides inside the amalgamation. Rename vec1's for this section, and
