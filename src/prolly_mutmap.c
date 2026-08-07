@@ -21,7 +21,11 @@ static void prepKey(ProllyMutMap *mm,
                     i64 intKey, u8 buf[8]){
   if( !mm->isIntKey ) return;
   if( *ppKey != 0 && *pnKey > 0 ){
-    assert( intKey == 0 );
+    /* Callers may pass the encoded key together with the integer it encodes:
+    ** the three-way merge forwards both straight off a diff change. The
+    ** encoded key is what gets used, so only require that they agree. */
+    assert( intKey == 0
+         || (*pnKey==8 && prollyDecodeIntKey(*ppKey)==intKey) );
     return;
   }
   prollyEncodeIntKey(intKey, buf);

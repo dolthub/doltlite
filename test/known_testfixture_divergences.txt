@@ -1503,11 +1503,11 @@ attach2 attach2-4.15 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 
 # Parent-dir Access probe adds allocations on multi-component open/ATTACH
 # paths, shifting OOM fault indices (same #1859 brittleness as backup_malloc).
-attachmalloc attachmalloc-1.transient.472 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.905 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1407 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.913 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1423 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.473 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.906 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1408 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.914 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1424 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 mallocD mallocD-4.transient.107 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite

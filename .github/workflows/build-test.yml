@@ -59,8 +59,45 @@ jobs:
     - name: Extract development build
       run: tar -xzf development-build.tar.gz
 
+    # The binaries below decide a merge, so tie them to this checkout: the
+    # digests catch a truncated or substituted download, and the commit catches
+    # an artifact built from different source than the job is reporting on.
+    - name: Verify development build provenance
+      run: |
+        sha256sum -c build-assert/development-build.sha256
+        built_from=$(cat build-assert/development-build.commit)
+        if [ "$built_from" != "$GITHUB_SHA" ]; then
+          echo "::error::artifact built from $built_from, checkout is $GITHUB_SHA"
+          exit 1
+        fi
+
     - name: Assert-enabled dirty-check smoke
       run: build-assert/catalog_serialize_determinism_test
+
+    # The regression suite is the only place most of these assertions are ever
+    # evaluated -- every other job builds with NDEBUG. It runs in a few seconds.
+    # Unbuffered, because an assert abort does not flush stdio: with the default
+    # block buffering the log stops at a 4KiB boundary tens of cases before the
+    # one that actually died.
+    - name: Assert-enabled regression suite
+      run: |
+        ulimit -c unlimited
+        sudo sysctl -w kernel.core_pattern=core.%p >/dev/null 2>&1 || true
+        set +e
+        stdbuf -o0 -e0 build-assert/doltlite_regression_test_c all
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::assert-enabled regression suite failed (exit $rc)"
+          sudo apt-get install -y -qq gdb >/dev/null 2>&1 || true
+          core=$(ls -1 core.* 2>/dev/null | head -1)
+          if [ -n "$core" ] && command -v gdb >/dev/null 2>&1; then
+            gdb -batch -ex 'bt full' build-assert/doltlite_regression_test_c "$core" 2>&1 | head -120
+          else
+            echo "no core file captured"
+          fi
+          exit "$rc"
+        fi
 
   build-and-test:
     name: ${{ matrix.platform }}

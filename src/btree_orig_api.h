@@ -40,6 +40,10 @@ int origBtreeClearTable(void *p, int iTable, i64 *pnChange);
 void origBtreeGetMeta(void *p, int idx, u32 *pValue);
 int origBtreeUpdateMeta(void *p, int idx, u32 value);
 int origBtreeSchemaLocked(void *p);
+int origBtreeSharable(void *p);
+int origBtreeConnectionCount(void *p);
+void origBtreeEnterCursor(void *pCur);
+void origBtreeLeaveCursor(void *pCur);
 int origBtreeLockTable(void *p, int iTab, u8 isWriteLock);
 Schema *origBtreeSchema(void *p, int nBytes, void(*xFree)(void*));
 int origBtreeCursor(void *p, Pgno iTable, int wrFlag,

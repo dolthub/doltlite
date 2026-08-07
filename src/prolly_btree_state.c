@@ -321,7 +321,10 @@ int btreeWriteWorkingState(
   u8 isRebasing = 0;
   int rc;
 
-  assert( cs!=0 && zBranch!=0 && pCatHash!=0 && pCommitHash!=0 );
+  /* pCommitHash is passed straight through to btreeFillWorkingSetBlob, which
+  ** writes the empty hash for a null one. doltliteHardReset relies on that to
+  ** clear the working commit, so requiring it here only broke assert builds. */
+  assert( cs!=0 && zBranch!=0 && pCatHash!=0 );
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &stagedCatalog, &isMerging,
                                &mergeCommitHash, &conflictsCatalogHash,
                                &isRebasing, &preRebaseCat, &rebaseOnto,
