@@ -790,6 +790,10 @@ set flist {
 if {$enable_recover} {
   lappend flist sqlite3recover.c dbdata.c
 }
+if {$doltlite} {
+  # vec1 ships built into doltlite; stock amalgamations stay unchanged.
+  lappend flist vec1.c
+}
 foreach file $flist {
   if {$doltlite && [lsearch -exact {pager.c wal.c btmutex.c btree.c backup.c} $file]>=0} {
     # The stock storage engine is replaced by the prolly engine. Emit the
