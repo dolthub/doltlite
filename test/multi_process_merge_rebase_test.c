@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -84,6 +85,23 @@ static int countRows(sqlite3 *db, const char *sql){
     sqlite3_finalize(s);
   }
   return n;
+}
+
+static int writeSignal(int fd){
+  ssize_t n;
+  do {
+    n = write(fd, "X", 1);
+  }while( n<0 && errno==EINTR );
+  return n==1;
+}
+
+static int readSignal(int fd){
+  char signal;
+  ssize_t n;
+  do {
+    n = read(fd, &signal, 1);
+  }while( n<0 && errno==EINTR );
+  return n==1;
 }
 
 /* Commit conflict means a peer advanced main first; reopen and re-merge. Uses
@@ -528,14 +546,18 @@ static void test_concurrent_continue_abort(void){
     if( child==0 ){
       sqlite3 *cdb = 0;
       const char *r;
-      char signal;
       close(pipefd[0]);
       close(readyfd[0]);
       close(gofd[1]);
       sqlite3_open(branchPath, &cdb);
       sqlite3_busy_timeout(cdb, 10000);
-      (void)write(readyfd[1], "R", 1);
-      (void)read(gofd[0], &signal, 1);
+      if( !writeSignal(readyfd[1]) || !readSignal(gofd[0]) ){
+        close(pipefd[1]);
+        close(readyfd[1]);
+        close(gofd[0]);
+        sqlite3_close(cdb);
+        _exit(1);
+      }
       if( trial%3==2 ) usleep(2000);
       r = queryScalarText(cdb, "SELECT dolt_rebase('--abort')");
       {
@@ -561,14 +583,15 @@ static void test_concurrent_continue_abort(void){
     {
       sqlite3 *pdb = 0;
       const char *r;
-      char signal;
       sqlite3_open(branchPath, &pdb);
       sqlite3_busy_timeout(pdb, 10000);
-      (void)read(readyfd[0], &signal, 1);
-      (void)write(gofd[1], "G", 1);
-      if( trial%3==1 ) usleep(2000);
-      r = queryScalarText(pdb, "SELECT dolt_rebase('--continue')");
-      snprintf(contOut, sizeof(contOut), "%s", r);
+      if( !readSignal(readyfd[0]) || !writeSignal(gofd[1]) ){
+        snprintf(contOut, sizeof(contOut), "SYNC_ERR");
+      }else{
+        if( trial%3==1 ) usleep(2000);
+        r = queryScalarText(pdb, "SELECT dolt_rebase('--continue')");
+        snprintf(contOut, sizeof(contOut), "%s", r);
+      }
       sqlite3_close(pdb);
     }
     close(readyfd[0]);

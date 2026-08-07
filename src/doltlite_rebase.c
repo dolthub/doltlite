@@ -1042,6 +1042,42 @@ static void rebaseResultRecoveryFailure(sqlite3_context *context, int rc){
   sqlite3_result_error_code(context, rc);
 }
 
+static int rebaseReadActive(
+  sqlite3 *db,
+  const char *zWorkingBranch,
+  int *pActive
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  u8 isRebasing = 0;
+  int rc;
+
+  *pActive = 0;
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreForceRefresh(cs);
+  if( rc==SQLITE_OK ) rc = doltliteLoadWorkingSet(db, zWorkingBranch);
+  if( rc==SQLITE_OK ){
+    doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+    *pActive = isRebasing!=0;
+  }
+  chunkStoreUnlock(cs);
+  return rc;
+}
+
+static int rebaseReadActiveRetry(
+  sqlite3 *db,
+  const char *zWorkingBranch,
+  int *pActive
+){
+  int rc;
+  db->busyHandler.nBusy = 0;
+  do {
+    rc = rebaseReadActive(db, zWorkingBranch, pActive);
+  }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
+       && sqlite3InvokeBusyHandler(&db->busyHandler) );
+  return rc;
+}
+
 /* Claim exclusive ownership of ending the active rebase.
 **
 ** Returns SQLITE_DONE if durable isRebasing is already clear (peer won).
@@ -1531,6 +1567,8 @@ static void doltliteRebaseInteractiveContinue(
   int rc;
   int rc2;
   int recoveryRc;
+  int stateRc;
+  int rebaseActive = 1;
   int i;
   int bPlanDropped = 0;
   int bSkipConstraintDetect = (!db->autoCommit || db->pSavepoint!=0);
@@ -1725,10 +1763,12 @@ abort_err_conflict:
 abort_err:
   rebaseFreePlan(aPlan, nPlan);
   if( !bPlanDropped ){
+    stateRc = zWorking ?
+        rebaseReadActiveRetry(db, zWorking, &rebaseActive) : SQLITE_MISUSE;
     sqlite3_free(zOrigBranch);
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
-    if( rc==SQLITE_NOTFOUND ){
+    if( (stateRc==SQLITE_OK && !rebaseActive) || rc==SQLITE_NOTFOUND ){
       sqlite3_result_error(context, "no rebase in progress", -1);
     }else{
       sqlite3_result_error(context, "rebase failed", -1);
