@@ -172,27 +172,61 @@ INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad
 SELECT dolt_commit('-am','right, same bucket');" "$DB" > /dev/null
 # With codesize>0 the raw vectors never migrate out of %_base, so it
 # row-merges with full fidelity and the only conflicts are on derived
-# %_idx segments. Resolving with EITHER side and rebuilding from the
-# merged base recovers both branches' vectors — no source table needed.
+# %_idx segments. The merge absorbs those and rebuilds from the merged
+# base and stored model itself: no conflicts surface, and both branches'
+# vectors come out searchable.
 result=$(run_sql "SELECT dolt_checkout('left');
-BEGIN;
-SELECT dolt_merge('right');
-SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)>0
-  THEN dolt_conflicts_resolve('--ours', (SELECT \"table\" FROM dolt_conflicts LIMIT 1)) END;
-SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)>0
-  THEN dolt_conflicts_resolve('--ours', (SELECT \"table\" FROM dolt_conflicts LIMIT 1)) END;
+SELECT length(dolt_merge('right'))=40;
+SELECT count(*) FROM dolt_conflicts;
 SELECT (SELECT count(*) FROM t_base WHERE id IN (7001,8001))
-    || '|' || (SELECT count(*) FROM t_base WHERE length(vector)=32);
-INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
-SELECT length(dolt_commit('-Am','resolved + rebuilt'))=40;" "$DB" | tail -2)
-check "vec1_pq_base_authoritative" "2|602
-1" "$result"
+    || '|' || (SELECT count(*) FROM t_base WHERE length(vector)=32);" "$DB")
+check "vec1_pq_auto_merge" "0
+1
+0
+2|602" "$result"
 result=$(run_sql "SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k: 1, nprobe: 8}');
 SELECT rowid FROM t(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f', '{k: 1, nprobe: 8}');
+SELECT message FROM dolt_log LIMIT 1;
 PRAGMA integrity_check;" "$DB/left")
 check "vec1_pq_lossless_merge" "7001
 8001
+Merge branch 'right' into left
 ok" "$result"
+
+scenario "uncompressed configs still conflict loudly"
+newdb
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+INSERT INTO t(rowid, vector) VALUES (1, $V1);
+INSERT INTO t(cmd, arg) VALUES ('rebuild', '{index:\"flat\", distance:\"l2\"}');
+SELECT dolt_commit('-Am','flat built');
+SELECT dolt_checkout('-b','left'); INSERT INTO t(rowid, vector) VALUES (10, $V2);
+SELECT dolt_commit('-am','left');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO t(rowid, vector) VALUES (20, $V3);
+SELECT dolt_commit('-am','right');" "$DB" > /dev/null
+# Migrated bases hold bucket numbers, not vectors; auto-resolving here
+# would silently lose the discarded side's data, so the merge must not.
+result=$(run_sql "SELECT dolt_checkout('left'); SELECT dolt_merge('right');" "$DB" | grep -c "conflict")
+check "vec1_flat_guard_stays_loud" "1" "$result"
+
+scenario "a user-table conflict keeps every conflict manual"
+newdb
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES (1,'base');
+INSERT INTO t(rowid, vector) VALUES (1, $V1), (2, $V2);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','left');
+INSERT INTO t(rowid, vector) VALUES (10, $V3); UPDATE u SET v='left' WHERE id=1;
+SELECT dolt_commit('-am','left');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO t(rowid, vector) VALUES (20, $V4); UPDATE u SET v='right' WHERE id=1;
+SELECT dolt_commit('-am','right');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left');
+BEGIN;
+SELECT dolt_merge('right');
+SELECT count(*) FROM dolt_conflicts WHERE \"table\"='u';
+ROLLBACK;" "$DB" | grep -cE "^1$|conflict")
+check "vec1_mixed_conflicts_stay_manual" "2" "$result"
 
 scenario "rebuild is deterministic across insert orders"
 newdb

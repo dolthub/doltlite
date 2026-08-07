@@ -144,7 +144,7 @@ int applyMergedCatalogAndCommit(
     int nReindex = 0;
     rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
                                 &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
-                                bPreferOurMaster, &azReindex, &nReindex);
+                                bPreferOurMaster, &azReindex, &nReindex, 0, 0);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zMergeErr);
       doltliteTxnStateClear(&savedState);

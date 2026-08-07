@@ -1275,7 +1275,8 @@ int doltliteMergeCatalogs(sqlite3 *db,
     int *pnConflicts, char **pzErrMsg,
     SchemaMergeAction **ppActions, int *pnActions,
     int bPreferOurMaster,
-    char ***pazReindex, int *pnReindex);
+    char ***pazReindex, int *pnReindex,
+    char ***pazRebuildVtabs, int *pnRebuildVtabs);
 void doltliteFreeNameList(char **az, int n);
 int doltliteIndexSchemaRowsDifferForTable(SchemaEntry *aA, int nA,
     SchemaEntry *aB, int nB, const char *zTable);
