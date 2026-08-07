@@ -80,7 +80,7 @@ int mergeFastForward(
         doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
     return rc;
   }
-  rc = doltliteVcSealActiveSavepoints(db);
+  rc = doltliteVcSealEnclosingTxn(db);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context, rc);
@@ -310,7 +310,7 @@ static int mergeRefCreateMergeCommit(
         doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
     return SQLITE_ERROR;
   }
-  rc = doltliteVcSealActiveSavepoints(db);
+  rc = doltliteVcSealEnclosingTxn(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return SQLITE_ERROR;

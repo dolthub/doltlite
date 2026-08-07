@@ -800,6 +800,19 @@ int doltliteVcSealActiveSavepoints(sqlite3 *db){
   return rc;
 }
 
+/* End the enclosing SQL transaction after a ref advance, the same boundary
+** dolt_commit draws. Releasing savepoints alone leaves a plain BEGIN open,
+** and a later ROLLBACK then reverts the working set while the advanced ref
+** stays, splitting HEAD from the data. */
+int doltliteVcSealEnclosingTxn(sqlite3 *db){
+  if( !db->autoCommit
+   || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
+   || db->pSavepoint ){
+    return sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
+  return SQLITE_OK;
+}
+
 int doltliteVcSealSavepointError(sqlite3 *db){
   if( db->pSavepoint ){
     return doltliteVcSealActiveSavepoints(db);
