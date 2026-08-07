@@ -2796,6 +2796,11 @@ void sqlite3EndTable(
   **     bookkeeping etc. and don't have user PKs.
   **   - Stock SQLite btrees: their on-disk rowid table layout must be
   **     replayed exactly.
+  **   - A single-column PRIMARY KEY named "rowid": stock keeps such
+  **     tables in rowid form (the column shadows the alias), and
+  **     extensions like sqlite-vec rely on that shape for
+  **     sqlite3_blob_open, which refuses WITHOUT ROWID tables. The
+  **     cross-branch merge caveats of keyless tables apply.
   **
   ** Runs during sqlite_master replay (db->init.busy) as well as
   ** user-issued CREATE TABLE, because the stored CREATE TABLE statement
@@ -2814,7 +2819,11 @@ void sqlite3EndTable(
    && (p->tabFlags & TF_HasPrimaryKey)!=0
    && p->iPKey<0
    && (tabOpts & TF_WithoutRowid)==0 ){
-    tabOpts |= TF_WithoutRowid;
+    Index *pPk = sqlite3PrimaryKeyIndex(p);
+    if( !(pPk && pPk->nKeyCol==1 && pPk->aiColumn[0]>=0
+       && sqlite3StrICmp(p->aCol[pPk->aiColumn[0]].zCnName, "rowid")==0) ){
+      tabOpts |= TF_WithoutRowid;
+    }
   }
 
   /* Doltlite: dolt_ignore is a user-created system table whose

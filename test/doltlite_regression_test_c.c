@@ -9909,6 +9909,93 @@ static void run_incrblob_chunked_and_multihandle(void){
   removeDbFiles(dbpath);
 }
 
+/* A single-column PRIMARY KEY named "rowid" keeps stock rowid-table form
+** instead of the usual conversion to WITHOUT ROWID storage. sqlite-vec
+** declares its vector-chunk shadow tables exactly this way and then writes
+** them through sqlite3_blob_open, which refuses WITHOUT ROWID tables. The
+** PK becomes a real unique index on a rowid table — a shape prolly-side
+** index maintenance never saw before this exemption — so this also pins
+** uniqueness enforcement and index consistency across updates and commits. */
+static void run_rowid_named_pk_keeps_rowid_table(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3_blob *pBlob = 0;
+  char buf[32];
+  int rc;
+
+  printf("=== Rowid-Named PK Keeps Rowid Table Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rowid_named_pk");
+  removeDbFiles(dbpath);
+
+  rc = sqlite3_open(dbpath, &db);
+  check("rowid_pk_open", rc==SQLITE_OK);
+  if( !db ) return;
+  check("rowid_pk_setup", execSql(db,
+      "CREATE TABLE vc(rowid PRIMARY KEY, vectors BLOB NOT NULL);"
+      "INSERT INTO vc VALUES(1, zeroblob(16384));")==SQLITE_OK);
+
+  check("rowid_pk_blob_open",
+        sqlite3_blob_open(db, "main", "vc", "vectors", 1, 1, &pBlob)==SQLITE_OK);
+  if( pBlob ){
+    check("rowid_pk_blob_write",
+          sqlite3_blob_write(pBlob, "VECTORDATA", 10, 4096)==SQLITE_OK);
+    check("rowid_pk_blob_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
+    pBlob = 0;
+  }
+  check("rowid_pk_write_landed",
+        strcmp(queryScalarText(db,
+            "SELECT substr(vectors, 4097, 10) FROM vc WHERE rowid=1"),
+            "VECTORDATA")==0);
+
+  /* The PK is enforced through a real unique index, and that index is
+  ** maintained when the key column changes. */
+  check("rowid_pk_unique_enforced",
+        execSqlSilent(db, "INSERT INTO vc VALUES(1, x'00')")!=SQLITE_OK);
+  check("rowid_pk_index_exists",
+        strcmp(queryScalarText(db,
+            "SELECT count(*) FROM sqlite_master"
+            " WHERE name LIKE 'sqlite_autoindex_vc%'"), "1")==0);
+  check("rowid_pk_update_key", execSql(db,
+      "INSERT INTO vc VALUES(2, x'bb');"
+      "UPDATE vc SET rowid=7 WHERE rowid=2;")==SQLITE_OK);
+  check("rowid_pk_index_lookup",
+        strcmp(queryScalarText(db, "SELECT hex(vectors) FROM vc WHERE rowid=7"),
+               "BB")==0);
+  check("rowid_pk_integrity",
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+
+  /* The shape survives version control: commit, branch, and read the blob
+  ** back on the old branch. */
+  check("rowid_pk_commit",
+        execSql(db, "SELECT dolt_commit('-A','-m','vc rows')")==SQLITE_OK);
+  check("rowid_pk_branch",
+        execSql(db, "SELECT dolt_checkout('-b','old')")==SQLITE_OK);
+  check("rowid_pk_back_to_main",
+        execSql(db, "SELECT dolt_checkout('main')")==SQLITE_OK);
+  check("rowid_pk_mutate_main",
+        execSql(db, "DELETE FROM vc WHERE rowid=7;"
+                    "SELECT dolt_commit('-A','-m','drop 7')")==SQLITE_OK);
+  check("rowid_pk_old_branch",
+        execSql(db, "SELECT dolt_checkout('old')")==SQLITE_OK);
+  memset(buf, 0, sizeof(buf));
+  rc = sqlite3_blob_open(db, "main", "vc", "vectors", 1, 0, &pBlob);
+  check("rowid_pk_old_branch_blob_open", rc==SQLITE_OK);
+  if( pBlob ){
+    check("rowid_pk_old_branch_blob_read",
+          sqlite3_blob_read(pBlob, buf, 10, 4096)==SQLITE_OK
+          && memcmp(buf, "VECTORDATA", 10)==0);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+  check("rowid_pk_old_branch_rows",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM vc"), "2")==0);
+  check("rowid_pk_old_branch_integrity",
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 /* The refs blob is untrusted (it comes from a .db file or a remote fetch).
 ** Each section reads a u32 count and allocates count*sizeof(struct); the count
 ** must be bounded by the smallest possible on-disk entry and the allocation
@@ -10442,6 +10529,7 @@ static const RegressionCase aCases[] = {
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
   { "incrblob_legacy_engine_write", "Incrblob Legacy Engine Write Test", run_incrblob_legacy_engine_write },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
+  { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn }
 };
 
