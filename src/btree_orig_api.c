@@ -4,6 +4,7 @@
 #include "btree_orig_prefix.h"
 #include "sqliteInt.h"
 #include "btreeInt.h"
+#include "chunk_store.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -60,6 +61,36 @@ int origBtreeClearTable(void *p, int i, i64 *pn){ return orig_sqlite3BtreeClearT
 void origBtreeGetMeta(void *p, int i, u32 *pv){ orig_sqlite3BtreeGetMeta(B(p),i,pv); }
 int origBtreeUpdateMeta(void *p, int i, u32 v){ return orig_sqlite3BtreeUpdateMeta(B(p),i,v); }
 int origBtreeSchemaLocked(void *p){ return orig_sqlite3BtreeSchemaLocked(B(p)); }
+int origBtreeSharable(void *p){
+#ifndef SQLITE_OMIT_SHARED_CACHE
+  return orig_sqlite3BtreeSharable(B(p));
+#else
+  (void)p;
+  return 0;
+#endif
+}
+int origBtreeConnectionCount(void *p){
+#ifndef SQLITE_OMIT_SHARED_CACHE
+  return orig_sqlite3BtreeConnectionCount(B(p));
+#else
+  (void)p;
+  return 1;
+#endif
+}
+void origBtreeEnterCursor(void *pCur){
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
+  orig_sqlite3BtreeEnterCursor(C(pCur));
+#else
+  (void)pCur;
+#endif
+}
+void origBtreeLeaveCursor(void *pCur){
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
+  orig_sqlite3BtreeLeaveCursor(C(pCur));
+#else
+  (void)pCur;
+#endif
+}
 int origBtreeLockTable(void *p, int t, u8 w){
 #ifndef SQLITE_OMIT_SHARED_CACHE
   return orig_sqlite3BtreeLockTable(B(p),t,w);
@@ -209,6 +240,7 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   int exists = 0;
   int outFlags = 0;
   int rc;
+  char *zProbe = 0;
   u8 buf[16];
 
   *pIsSqliteFile = 0;
@@ -225,9 +257,15 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
 
-  rc = sqlite3OsOpenMalloc(pVfs, zFilename, &pFile,
+  /* SQLITE_OPEN_MAIN_DB puts this name under the VFS double-nul contract:
+  ** the URI scan walks past the first nul. Callers hand us plain strings. */
+  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zProbe);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3OsOpenMalloc(pVfs, zProbe, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);
+  sqlite3_free(zProbe);
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;

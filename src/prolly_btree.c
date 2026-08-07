@@ -498,6 +498,7 @@ static int doltliteFileHasContent(
   int exists = 0;
   int outFlags = 0;
   i64 sz = 0;
+  char *zDup = 0;
   int rc;
 
   *pHasContent = 0;
@@ -509,9 +510,15 @@ static int doltliteFileHasContent(
   if( rc!=SQLITE_OK ) return rc;
   if( !exists ) return SQLITE_OK;
 
-  rc = sqlite3OsOpenMalloc(pVfs, zFilename, &pFile,
+  /* zFilename is the ParseUri name, so its parameters live past the first nul
+  ** and only the double nul ends it. SQLITE_OPEN_MAIN_DB puts it under that
+  ** contract, so hand the VFS a plain copy rather than the parameter list. */
+  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);
+  sqlite3_free(zDup);
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
     /* Unreadable is not "empty": leave the knob inactive. */
@@ -1634,9 +1641,22 @@ void sqlite3BtreeEnterAll(sqlite3 *db){
     if( p ) p->pOps->xEnter(p);
   }}
 }
-int sqlite3BtreeSharable(Btree *p){ (void)p; return 0; }
-void sqlite3BtreeEnterCursor(BtCursor *pCur){ (void)pCur; }
-int sqlite3BtreeConnectionCount(Btree *p){ (void)p; return 1; }
+/* A prolly btree is never shared, so these answered for that case alone. A
+** legacy database delegates to a stock btree that can be sharable, and the
+** stock code then expects the whole protocol: answering 0 here suppressed the
+** OP_TableLock the code generator would otherwise emit, and the no-op cursor
+** mutex left that btree's cursors unguarded. */
+int sqlite3BtreeSharable(Btree *p){
+  void *pOrig = doltliteBtreeOrigPtr(p);
+  return pOrig ? origBtreeSharable(pOrig) : 0;
+}
+void sqlite3BtreeEnterCursor(BtCursor *pCur){
+  if( pCur && pCur->pOrigCursor ) origBtreeEnterCursor(pCur->pOrigCursor);
+}
+int sqlite3BtreeConnectionCount(Btree *p){
+  void *pOrig = doltliteBtreeOrigPtr(p);
+  return pOrig ? origBtreeConnectionCount(pOrig) : 1;
+}
 #endif
 
 void prollyBtreeLeave(Btree *p){ (void)p; }
@@ -1644,7 +1664,9 @@ void prollyBtreeLeave(Btree *p){ (void)p; }
 void sqlite3BtreeLeave(Btree *p){
   if( p ) p->pOps->xLeave(p);
 }
-void sqlite3BtreeLeaveCursor(BtCursor *pCur){ (void)pCur; }
+void sqlite3BtreeLeaveCursor(BtCursor *pCur){
+  if( pCur && pCur->pOrigCursor ) origBtreeLeaveCursor(pCur->pOrigCursor);
+}
 void sqlite3BtreeLeaveAll(sqlite3 *db){
   if( db ){ int i; for(i=0; i<db->nDb; i++){
     Btree *p = db->aDb[i].pBt;
