@@ -9294,11 +9294,34 @@ static void run_prolly_cursor_empty_leaf_under_internal(void){
   check("empty_leaf_internal_first_valid", res==0 && prollyCursorIsValid(&cur));
   rc = prollyCursorNext(&cur);
   check("empty_leaf_internal_next_reports_corrupt", rc==SQLITE_CORRUPT);
+  /* The error alone is not enough: the accessors gate on eState, so a cursor
+  ** left VALID here would happily read the empty child. */
+  check("empty_leaf_internal_next_leaves_cursor_unusable",
+        !prollyCursorIsValid(&cur));
   prollyCursorClose(&cur);
 
   prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
   rc = prollyCursorLast(&cur, &res);
   check("empty_leaf_internal_last_reports_corrupt", rc==SQLITE_CORRUPT);
+  check("empty_leaf_internal_last_leaves_cursor_unusable",
+        !prollyCursorIsValid(&cur));
+  prollyCursorClose(&cur);
+
+  /* Walking forward from the populated leaf must not expose a row from the
+  ** empty child, however the caller drives it. */
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("empty_leaf_internal_first_still_valid",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  if( prollyCursorIsValid(&cur) ){
+    const u8 *pKey = 0;
+    int nKey = 0;
+    prollyCursorKey(&cur, &pKey, &nKey);
+    check("empty_leaf_internal_first_key_is_the_real_row",
+          nKey==1 && pKey && pKey[0]=='a');
+  }
+  check("empty_leaf_internal_step_corrupts", prollyCursorNext(&cur)==SQLITE_CORRUPT);
+  check("empty_leaf_internal_no_row_after_step", !prollyCursorIsValid(&cur));
   prollyCursorClose(&cur);
 
   prollyCacheFree(&cache);
