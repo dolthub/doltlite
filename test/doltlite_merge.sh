@@ -432,5 +432,57 @@ run_test "many_fk_violations_autocommit_rolled_back" \
 run_test "many_fk_violations_parent_restored" \
   "SELECT count(*) FROM parent;" "0" "$DB23"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23"
+# A clean merge is a transaction boundary like dolt_commit: it seals the
+# enclosing BEGIN when it advances the ref. Leaving the transaction open let
+# a later ROLLBACK revert the working set while the advanced ref stayed,
+# splitting HEAD from the data.
+DB24=/tmp/test_merge24_$$.db; rm -f "$DB24"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,'c'); SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB24" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+ROLLBACK;
+SELECT 'TX|' || (SELECT message FROM dolt_log LIMIT 1) || '|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status);" | $DOLTLITE "$DB24" 2>&1)
+TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
+if [ "$TX_LINE" = "TX|Merge branch 'feat' into main|3|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: clean_merge_in_txn_seals\n  expected: TX|Merge branch 'feat' into main|3|0\n  got:      $TX_LINE"
+fi
+echo "$TX_OUT" | grep -q "cannot rollback - no transaction is active"
+if [ $? -eq 0 ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: clean_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
+fi
+
+DB25=/tmp/test_merge25_$$.db; rm -f "$DB25"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB25" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+ROLLBACK;
+SELECT 'TX|' || (SELECT message FROM dolt_log LIMIT 1) || '|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status);" | $DOLTLITE "$DB25" 2>&1)
+TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
+if [ "$TX_LINE" = "TX|feat|2|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: ff_merge_in_txn_seals\n  expected: TX|feat|2|0\n  got:      $TX_LINE"
+fi
+echo "$TX_OUT" | grep -q "cannot rollback - no transaction is active"
+if [ $? -eq 0 ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: ff_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
+fi
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
 dltest_finish
