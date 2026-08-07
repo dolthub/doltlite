@@ -318,31 +318,31 @@ bench_sql() {
 prepare_fixtures
 
 bench_sql "status_clean_many_tables" "$MANY_CLEAN" \
-  "SELECT count(*) FROM dolt_status;" 200
+  "SELECT count(*) FROM dolt_status;" 130
 bench_sql "status_dirty_many_tables" "$MANY_DATA" \
-  "SELECT count(*) FROM dolt_status;" 200
+  "SELECT count(*) FROM dolt_status;" 130
 bench_sql "diff_regular_working_one_table" "$MANY_DATA" \
-  "SELECT count(*) FROM dolt_diff_t0001 WHERE to_commit='WORKING';" 150
+  "SELECT count(*) FROM dolt_diff_t0001 WHERE to_commit='WORKING';" 120
 bench_sql "diff_regular_working_many_tables" "$MANY_DATA" \
-  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND data_change=1;" 200
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND data_change=1;" 140
 bench_sql "diff_stat_working_many_tables" "$MANY_DATA" \
-  "SELECT count(*), coalesce(sum(data_change),0) FROM dolt_diff WHERE commit_hash='WORKING';" 200
+  "SELECT count(*), coalesce(sum(data_change),0) FROM dolt_diff WHERE commit_hash='WORKING';" 140
 bench_sql "diff_schema_working_many_tables" "$MANY_SCHEMA" \
-  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND schema_change=1;" 200
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND schema_change=1;" 140
 bench_sql "branch_list_many_branches" "$BRANCH_DB" \
-  "SELECT count(*) FROM dolt_branches;" 100
+  "SELECT count(*) FROM dolt_branches;" 35
 bench_sql "branch_create_delete" "$BRANCH_DB" \
-  "SELECT dolt_branch('tmp_perf'); SELECT dolt_branch('-D','tmp_perf');" 100
+  "SELECT dolt_branch('tmp_perf'); SELECT dolt_branch('-D','tmp_perf');" 40
 bench_sql "checkout_branch_clean" "$CHECKOUT_DB" \
-  "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 200
+  "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 150
 bench_sql "merge_data_no_conflicts" "$MERGE_DATA_DB" \
-  "SELECT dolt_merge('feat');" 150
+  "SELECT dolt_merge('feat');" 50
 bench_sql "merge_schema_no_conflicts" "$MERGE_SCHEMA_DB" \
-  "SELECT dolt_merge('feat');" 100
+  "SELECT dolt_merge('feat');" 35
 bench_sql "merge_data_conflicts" "$MERGE_CONFLICT_DB" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT count(*) FROM dolt_conflicts_t; ROLLBACK;" 250 1
+  "BEGIN; SELECT dolt_merge('feat'); SELECT count(*) FROM dolt_conflicts_t; ROLLBACK;" 180 1
 bench_sql "merge_data_conflicts_with_resolve" "$MERGE_CONFLICT_DB" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT count(*) FROM dolt_conflicts; ROLLBACK;" 250 1
+  "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT count(*) FROM dolt_conflicts; ROLLBACK;" 180 1
 
 if [ -n "${VC_PERF_RESULTS_OUTPUT:-}" ]; then
   mkdir -p "$(dirname "$VC_PERF_RESULTS_OUTPUT")"

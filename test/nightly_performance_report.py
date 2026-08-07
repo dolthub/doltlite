@@ -312,8 +312,8 @@ def render_report(suites, commit, run_url, generated_at, runner):
     lines.extend(
         [
             "",
-            "The absolute ceiling is 2.5× per ordinary workload and 2.0× "
-            "for a section average. Durable autocommit writes use 10.0× "
+            "The absolute ceiling is 2.4× per ordinary workload and 1.95× "
+            "for a section average. Durable autocommit writes use 6.0× "
             "and 5.0× ceilings respectively.",
             "",
         ]
