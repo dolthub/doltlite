@@ -1720,8 +1720,9 @@ int doltliteApplyRawRowMutation(
       int j;
       /* WITHOUT ROWID tables expose the PK as a pseudo-INDEX whose
       ** tnum equals the table's own root. Mutating it like a
-      ** secondary index would overwrite the table tree. Skip. */
-      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
+      ** secondary index would overwrite the table tree. Skip. On rowid
+      ** tables the PK is a real unique index and must be maintained. */
+      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
       for(j=0; j<pBtree->cat.n; j++){
         if( pBtree->cat.a[j].iTable==(Pgno)pIdx->tnum ){
           pIdxTE = &pBtree->cat.a[j];

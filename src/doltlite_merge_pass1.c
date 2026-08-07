@@ -119,7 +119,9 @@ static int mergePass1CollectIndexes(
 
   for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
     struct TableEntry *oursIdx;
-    if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
+    /* On WITHOUT ROWID tables the PK pseudo-index is the table tree itself;
+    ** on rowid tables it is a real unique index that merges like any other. */
+    if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
     oursIdx = doltliteFindTableByNumber(c->aOurs, c->nOurs, pIdx->tnum);
     if( oursIdx ){
       MergeIndexInfo *mi = &aIdxInfo[nIdxInfo];

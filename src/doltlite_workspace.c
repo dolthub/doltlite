@@ -558,8 +558,9 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
       struct TableEntry *idxEntry;
       /* For WITHOUT ROWID tables the PK is exposed as a pseudo-index whose
-      ** root is the table tree itself; it is not a separate secondary index. */
-      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
+      ** root is the table tree itself; it is not a separate secondary index.
+      ** On rowid tables the PK is a real unique index and must be applied. */
+      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
       idxEntry = doltliteFindTableByNumber(aTables, nTables, pIdx->tnum);
       if( !idxEntry ) continue;
       rc = wsApplyRowToIndex(db, cs, pCache, idxEntry, pIdx, pTab->iPKey,
