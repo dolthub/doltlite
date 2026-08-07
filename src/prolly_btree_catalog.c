@@ -1638,6 +1638,11 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       pTE->tableRootKnown = 1;
       if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
         pTE->isTableRoot = 1;
+        /* Views, triggers and virtual tables all serialize with table number
+        ** zero, so several entries legitimately share one number and catAdd
+        ** hands each of them the same entry. Release the name the previous
+        ** one left here before taking ownership of a new one. */
+        sqlite3_free(pTE->zName);
         pTE->zName = sqlite3_malloc(nName+1);
         if( !pTE->zName ){
           catFree(&catNew);
@@ -1657,6 +1662,7 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
         return SQLITE_CORRUPT;
       }
       if( nLen>0 ){
+        sqlite3_free(pTE->zName);
         pTE->zName = sqlite3_malloc(nLen+1);
         if( pTE->zName ){
           memcpy(pTE->zName, q, nLen);

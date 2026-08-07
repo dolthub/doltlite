@@ -1852,6 +1852,23 @@ static void init_v3_catalog_blob(u8 *aCat, int nCat, u16 nName){
   }
 }
 
+/* Two named V3 entries, the second numbered iSecond. 48 bytes per entry:
+** iTable(4) flags(1) root(20) schemaHash(20) nameLen(2) name(1). */
+#define V3_TWO_ENTRY_CAT_SIZE 101
+static void init_v3_two_entry_catalog(u8 *aCat, u8 iSecond){
+  memset(aCat, 0, V3_TWO_ENTRY_CAT_SIZE);
+  aCat[0] = CATALOG_FORMAT_V3;
+  aCat[1] = 2;
+  aCat[5] = 2;
+  aCat[9] = BTREE_INTKEY;
+  aCat[50] = 1;
+  aCat[52] = 't';
+  aCat[53] = iSecond;
+  aCat[57] = BTREE_INTKEY;
+  aCat[98] = 1;
+  aCat[100] = 'u';
+}
+
 static void run_catalog_deserialize_corruption(void){
   sqlite3 *db = 0;
   ChunkStore *cs;
@@ -1862,6 +1879,8 @@ static void run_catalog_deserialize_corruption(void){
   u8 truncatedNameCat[52];
   u8 trailingCat[54];
   u8 missingNameLenCat[50];
+  u8 dupTableCat[V3_TWO_ENTRY_CAT_SIZE];
+  u8 distinctTableCat[V3_TWO_ENTRY_CAT_SIZE];
 
   printf("=== Catalog Deserialize Corruption Test ===\n\n");
 
@@ -1891,6 +1910,43 @@ static void run_catalog_deserialize_corruption(void){
         chunkStorePut(cs, missingNameLenCat, (int)sizeof(missingNameLenCat), &h)==SQLITE_OK);
   rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
   check("missing_name_len_catalog_rejected", rc==SQLITE_CORRUPT);
+  doltliteFreeCatalog(aTables, nTables);
+  aTables = 0; nTables = 0;
+
+  /* Two entries claiming the same table number, which is legitimate: views,
+  ** triggers and virtual tables all serialize as number zero. catAdd hands the
+  ** second entry the one the first already named, so the second name used to
+  ** overwrite a live pointer and strand it -- unbounded, since the blob picks
+  ** how many times to repeat. Reloading must not grow sqlite3's live total. */
+  init_v3_two_entry_catalog(dupTableCat, 2);
+  check("put_duplicate_itable_catalog",
+        chunkStorePut(cs, dupTableCat, (int)sizeof(dupTableCat), &h)==SQLITE_OK);
+  rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
+  check("duplicate_itable_catalog_loads", rc==SQLITE_OK);
+  check("duplicate_itable_collapses_to_one_entry", nTables==1);
+  doltliteFreeCatalog(aTables, nTables);
+  aTables = 0; nTables = 0;
+  {
+    sqlite3_int64 beforeBytes;
+    int iRepeat;
+    beforeBytes = sqlite3_memory_used();
+    for(iRepeat=0; iRepeat<64; iRepeat++){
+      rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
+      if( rc!=SQLITE_OK ) break;
+      doltliteFreeCatalog(aTables, nTables);
+      aTables = 0; nTables = 0;
+    }
+    check("duplicate_itable_reload_ok", rc==SQLITE_OK);
+    check("duplicate_itable_catalog_does_not_leak_names",
+          sqlite3_memory_used()==beforeBytes);
+  }
+
+  init_v3_two_entry_catalog(distinctTableCat, 3);
+  check("put_distinct_itable_catalog",
+        chunkStorePut(cs, distinctTableCat, (int)sizeof(distinctTableCat), &h)==SQLITE_OK);
+  rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
+  check("distinct_itable_catalog_accepted", rc==SQLITE_OK);
+  check("distinct_itable_catalog_has_both", nTables==2);
   doltliteFreeCatalog(aTables, nTables);
 
   sqlite3_close(db);
