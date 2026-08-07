@@ -1,8 +1,9 @@
 # Version-controlled vector search in doltlite: vec1 syntax, Dolt semantics
 
-Status: draft for review. Not yet implemented. All empirical claims below were
-verified on 2026-08-07 against doltlite master (with #2020–#2023) and vec1
-trunk v0.7, with stock SQLite 3.53.2 as the oracle.
+Status: Phase 1 implemented (this PR); Phases 2 and 3 are design. All
+empirical claims below were verified on 2026-08-07 against doltlite master
+(with #2020–#2023) and vec1 trunk check-in `ecb12ac26e` (v0.7), with stock
+SQLite 3.53.2 as the oracle.
 
 ## Directive
 
@@ -72,23 +73,39 @@ already has.
 
 ## Phased plan
 
-### Phase 1 — vendor vec1 (small, ships value immediately)
+### Phase 1 — vendor vec1 (implemented in this PR)
 
-Compile vec1 into doltlite the way fts5 is compiled in (`ext/vec1/`,
-`-DSQLITE_ENABLE_VEC1` style). No behavior changes. Users get vec1 syntax
-with per-branch versioned vector search today. Documented caveats: merge
-requires the rebuild workflow below; concurrent branch writes to a *built*
-index risk the loss mode in finding 3.
+vec1 is compiled into doltlite the way fts5 and rtree are: `ext/vec1/vec1.c`
+in the object builds, the MSVC build, and the doltlite amalgamation,
+registered per-connection in the built-in extension list under
+`DOLTLITE_PROLLY` (no enable flag, no `.load`; stock amalgamations are
+unchanged). Users get vec1 syntax with per-branch versioned vector search
+today. Documented caveats: merge requires the rebuild workflow below;
+concurrent branch writes to a *built* index risk the loss mode in finding 3.
 
-Also in this phase: a `vec1` section in `test/doltlite_vtab_vc_matrix.sh`
-(the battery already covers the generic vtab×VC surface; vec1 adds the
-trained-index and rebuild-workflow scenarios), and a determinism scenario
-(finding 2) so upstream vec1 changes that break determinism fail loudly
-when we re-vendor.
+The vendored file stays byte-identical to upstream outside fenced
+`doltlite:` blocks, which carry four things: the `VEC1_STATIC`/init glue,
+warning suppression for the strict `-Werror` CI flavors, amalgamation
+collision fixes (the `i8` typedef, a few helper macros), and one behavior
+fix — an **`xShadowName` implementation**. Upstream leaves that method
+unset, so `sqlite3IsShadowTableOf()` cannot recognize vec1's shadow tables
+and every by-name shadow carrier (staging, table-level checkout) silently
+skipped them; the vec1 suite caught this as a checkout that adopted
+nothing. Worth offering upstream.
+
+Tests landed as a dedicated suite, `test/doltlite_vec1_vc.sh` (a separate
+suite rather than a section in the vtab battery: vec1's train/rebuild
+workflows need fixtures the generic matrix doesn't have). It covers the VC
+surfaces plus the load-bearing properties: raw-base row-merge, the
+conflict + source-table-rebuild recovery from finding 3, the determinism
+of finding 2 (so upstream changes that break determinism fail loudly when
+we re-vendor), trained-model KNN, table-level checkout, clone/pull, gc,
+and drop/restore.
 
 Open question for this phase: vec1 is v0.7 and pre-amalgamation; upstream
-may still change the shadow schema. Vendoring pins a snapshot; re-vendoring
-is a deliberate, tested act (same as the Aug 1 upstream merge discipline).
+may still change the shadow schema. Vendoring pins check-in `ecb12ac26e`;
+re-vendoring is a deliberate, tested act (same as the Aug 1 upstream merge
+discipline), with the fenced blocks reapplied.
 
 ### Phase 2 — keep `%_base` authoritative (small patch, transforms the semantics)
 
@@ -139,7 +156,7 @@ zero surface drift, and vec1's segment design is already incremental-
 friendly on content-addressed storage. Revisit only if the raw-vector
 duplication or the rebuild-on-merge cost proves unacceptable at scale.
 
-## What doltlite infrastructure this leans on (all landed this week)
+## What doltlite infrastructure this leans on
 
 - #2020 rowid-shape exemption (not needed by vec1 itself, but keeps the
   extension ecosystem working), #2021 vtab schema rows through merge,
@@ -149,20 +166,22 @@ duplication or the rebuild-on-merge cost proves unacceptable at scale.
 
 ## Test plan
 
-- Battery: vec1 scenarios across every VC surface (Phase 1), including the
-  merge/resolve/rebuild recovery and the finding-3 loss case as a
-  *pinned-behavior* test (upgraded to a lossless assertion in Phase 2).
-- Determinism: insert-order permutation → identical `%_idx`/`%_meta`
-  bytes; recompact-after-noop → zero chunk growth.
-- Oracle: every divergence suspicion runs against stock SQLite + vec1
-  first (finding 1 was almost misfiled as doltlite corruption).
-- Fuzz: vec1 shadow blobs are untrusted on-disk inputs once vendored;
-  extend the fuzz-vc-blobs corpus with `%_idx`/`%_model` mutations.
+- `test/doltlite_vec1_vc.sh` (Phase 1, landed): vec1 across the VC
+  surfaces, the built-index conflict + source-table-rebuild recovery, and
+  insert-order determinism of `%_idx`/`%_meta`. The finding-3 loss case is
+  documented here rather than pinned as a test; Phase 2 turns the recovery
+  into a lossless assertion that no longer needs a source table.
+- Still open: recompact-after-noop → zero chunk growth as a suite check
+  (verified by hand); fuzzing — vec1 shadow blobs are untrusted on-disk
+  inputs once vendored, so the fuzz-vc-blobs corpus should grow
+  `%_idx`/`%_model` mutations.
+- Oracle discipline: every divergence suspicion runs against stock
+  SQLite + vec1 first (finding 1 was almost misfiled as doltlite
+  corruption).
 
 ## Recommendation
 
-Phase 1 and Phase 2 together are roughly a week of work and deliver
-billy's ask with real Dolt semantics: vec1 syntax, versioned + branchable
-vector search, lossless merges via deterministic rebuild, and structural
-sharing measured at ~5KB per vector per commit. Phase 3 is polish we can
-schedule on demand.
+Phase 1 (landed) plus Phase 2 deliver the ask with real Dolt semantics:
+vec1 syntax, versioned + branchable vector search, lossless merges via
+deterministic rebuild, and structural sharing measured at ~5KB per vector
+per commit. Phase 3 is polish to schedule on demand.
