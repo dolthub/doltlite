@@ -233,6 +233,23 @@ $BRANCH63
 1,2,3" \
   "$DB5/dolt_rebase_$BRANCH63"
 
+DB5_SHORT=/tmp/test_rebase_short_continue_$$.db
+seed_rebase_name_repo "$DB5_SHORT" "feat"
+run_test_match "rebase_short_branch_starts" \
+  "SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB5_SHORT/feat"
+run_test "rebase_short_branch_continues_after_reopen" \
+  "SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT group_concat(id, ',') FROM t;
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Successfully rebased and updated refs/heads/feat
+feat
+1,2,3
+0" \
+  "$DB5_SHORT/dolt_rebase_feat"
+
 DB6=/tmp/test_rebase_name_abort_$$.db
 seed_rebase_name_repo "$DB6" "$BRANCH63"
 run_test_match "rebase_63_byte_branch_starts_for_abort" \
@@ -302,7 +319,7 @@ run_test "rebase_64_byte_default_branch_rejection_is_atomic" \
 0" \
   "$DB8"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

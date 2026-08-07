@@ -492,9 +492,12 @@ static void test_concurrent_continue_abort(void){
     pid_t child;
     int status;
     int pipefd[2];
+    int readyfd[2];
+    int gofd[2];
     char contOut[256], abortOut[256];
+    char branchPath[320];
     sqlite3 *db = 0;
-    int contWin, abortWin, contBad, abortBad, contRestored;
+    int contWin, abortWin, contLost, abortLost;
     int exactlyOneWin, loserOk;
 
     remove(path);
@@ -514,17 +517,26 @@ static void test_concurrent_continue_abort(void){
     queryScalarText(db, "SELECT dolt_checkout('feat')");
     queryScalarText(db, "SELECT dolt_rebase('-i','main')");
     sqlite3_close(db);
+    snprintf(branchPath, sizeof(branchPath), "%s/dolt_rebase_feat", path);
 
     contOut[0] = abortOut[0] = 0;
-    if( pipe(pipefd)!=0 ){ bad++; continue; }
+    if( pipe(pipefd)!=0 || pipe(readyfd)!=0 || pipe(gofd)!=0 ){
+      bad++;
+      continue;
+    }
     child = fork();
     if( child==0 ){
       sqlite3 *cdb = 0;
       const char *r;
+      char signal;
       close(pipefd[0]);
-      sqlite3_open(path, &cdb);
+      close(readyfd[0]);
+      close(gofd[1]);
+      sqlite3_open(branchPath, &cdb);
       sqlite3_busy_timeout(cdb, 10000);
-      queryScalarText(cdb, "SELECT dolt_checkout('dolt_rebase_feat')");
+      (void)write(readyfd[1], "R", 1);
+      (void)read(gofd[0], &signal, 1);
+      if( trial%3==2 ) usleep(2000);
       r = queryScalarText(cdb, "SELECT dolt_rebase('--abort')");
       {
         size_t n = strlen(r)+1;
@@ -537,23 +549,30 @@ static void test_concurrent_continue_abort(void){
         }
       }
       close(pipefd[1]);
+      close(readyfd[1]);
+      close(gofd[0]);
       sqlite3_close(cdb);
       _exit(0);
     }
     close(pipefd[1]);
+    close(readyfd[1]);
+    close(gofd[0]);
 
     {
       sqlite3 *pdb = 0;
       const char *r;
-      if( trial%3==1 ) usleep(200);
-      if( trial%3==2 ) usleep(2000);
-      sqlite3_open(path, &pdb);
+      char signal;
+      sqlite3_open(branchPath, &pdb);
       sqlite3_busy_timeout(pdb, 10000);
-      queryScalarText(pdb, "SELECT dolt_checkout('dolt_rebase_feat')");
+      (void)read(readyfd[0], &signal, 1);
+      (void)write(gofd[1], "G", 1);
+      if( trial%3==1 ) usleep(2000);
       r = queryScalarText(pdb, "SELECT dolt_rebase('--continue')");
       snprintf(contOut, sizeof(contOut), "%s", r);
       sqlite3_close(pdb);
     }
+    close(readyfd[0]);
+    close(gofd[1]);
 
     {
       ssize_t n = read(pipefd[0], abortOut, sizeof(abortOut)-1);
@@ -565,32 +584,14 @@ static void test_concurrent_continue_abort(void){
 
     contWin = strstr(contOut, "Successfully")!=0;
     abortWin = strstr(abortOut, "Interactive rebase aborted")!=0;
-    contBad = strstr(contOut, "recovery failed")!=0;
-    abortBad = strstr(abortOut, "recovery failed")!=0;
-    /* Continue may claim then fail replay and restore pre-rebase state: that
-    ** still ends the rebase cleanly (not a stuck recovery_failed). */
-    contRestored = strstr(contOut, "branch restored to pre-rebase state")!=0;
-    exactlyOneWin = (contWin ^ abortWin) || (contRestored && !abortWin)
-                 || (abortWin && contRestored);
-    loserOk = 1;
-    if( contWin && !abortWin ){
-      loserOk = strstr(abortOut, "no rebase in progress")!=0;
-    }else if( abortWin && !contWin ){
-      loserOk = strstr(contOut, "no rebase in progress")!=0
-             || strstr(contOut, "rebase failed")!=0
-             || contRestored;
-    }else if( contRestored
-           && strstr(abortOut, "no rebase in progress")!=0 ){
-      exactlyOneWin = 1;
-      loserOk = 1;
-    }else if( contWin && abortWin ){
-      exactlyOneWin = 1;
-      loserOk = 1;
-    }
+    contLost = strstr(contOut, "no rebase in progress")!=0;
+    abortLost = strstr(abortOut, "no rebase in progress")!=0;
+    exactlyOneWin = contWin ^ abortWin;
+    loserOk = (contWin && abortLost) || (abortWin && contLost);
 
     if( contWin ) wins_continue++;
-    if( abortWin || contRestored ) wins_abort++;
-    if( contBad || abortBad || !exactlyOneWin || !loserOk ){
+    if( abortWin ) wins_abort++;
+    if( !exactlyOneWin || !loserOk ){
       bad++;
       fprintf(stderr, "FAIL trial %d cont=[%s] abort=[%s]\n",
               trial, contOut, abortOut);
@@ -599,14 +600,26 @@ static void test_concurrent_continue_abort(void){
     {
       sqlite3 *v = 0;
       const char *h;
+      int tempBranches;
+      int planTables;
+      int featRows;
+      int mainRows;
       sqlite3_open(path, &v);
       sqlite3_busy_timeout(v, 30000);
       queryScalarText(v, "SELECT dolt_checkout('feat')");
-      /* Ensure no leftover temp branch / plan blocks further work. */
-      if( countRows(v,
-            "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'")
-          >0 ){
-        queryScalarText(v, "SELECT dolt_rebase('--abort')");
+      tempBranches = countRows(v,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'");
+      planTables = countRows(v,
+          "SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase'");
+      featRows = countRows(v, "SELECT count(*) FROM t WHERE id=2");
+      mainRows = countRows(v, "SELECT count(*) FROM t WHERE id=10");
+      if( tempBranches!=0 || planTables!=0 || featRows!=1
+       || mainRows!=(contWin ? 1 : 0) ){
+        bad++;
+        fprintf(stderr,
+                "FAIL trial %d final temp=%d plan=%d feat=%d main=%d cont=[%s] abort=[%s]\n",
+                trial, tempBranches, planTables, featRows, mainRows,
+                contOut, abortOut);
       }
       execSql(v, "INSERT INTO t VALUES(99, 99)");
       h = queryScalarText(v, "SELECT dolt_commit('-A','-m','post-race')");
@@ -616,6 +629,7 @@ static void test_concurrent_continue_abort(void){
   }
 
   check("continue_abort_no_bad_outcomes", bad==0);
+  check("continue_abort_exactly_one_winner", wins_continue+wins_abort==12);
   check("continue_abort_had_activity", (wins_continue+wins_abort)>0);
   printf("  continue wins=%d abort wins=%d bad=%d\n",
          wins_continue, wins_abort, bad);
