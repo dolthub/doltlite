@@ -545,6 +545,7 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
          notify.o opcodes.o os.o os_kv.o os_unix.o os_win.o \
          pager.o parse.o pcache.o pcache1.o pragma.o prepare.o printf.o \
          random.o resolve.o rowset.o rtree.o \
+         vec1.o \
          sqlite3session.o select.o sqlite3rbu.o status.o stmt.o \
          table.o threads.o tokenize.o treeview.o trigger.o \
          update.o upsert.o utf.o util.o vacuum.o \
@@ -752,6 +753,8 @@ SRC += \
   $(TOP)/ext/rtree/rtree.h \
   $(TOP)/ext/rtree/rtree.c \
   $(TOP)/ext/rtree/geopoly.c
+SRC += \
+  $(TOP)/ext/vec1/vec1.c
 SRC += \
   $(TOP)/ext/session/sqlite3session.c \
   $(TOP)/ext/session/sqlite3session.h
@@ -3156,6 +3159,9 @@ fts3_write.o:	$(TOP)/ext/fts3/fts3_write.c $(DEPS_EXT_COMMON)
 
 rtree.o:	$(TOP)/ext/rtree/rtree.c $(DEPS_EXT_COMMON)
 	$(T.cc.extension) -c $(TOP)/ext/rtree/rtree.c
+
+vec1.o:	$(TOP)/ext/vec1/vec1.c $(DEPS_EXT_COMMON)
+	$(T.cc.extension) -c $(TOP)/ext/vec1/vec1.c
 
 sqlite3session.o:	$(TOP)/ext/session/sqlite3session.c $(DEPS_EXT_COMMON)
 	$(T.cc.extension) -c $(TOP)/ext/session/sqlite3session.c
