@@ -117,6 +117,13 @@ int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
     if( keyOff > totalKeyBytes || valOff > totalValBytes ){
       return SQLITE_CORRUPT;
     }
+    /* Both arrays must start at 0. Readers reach key data two ways -- through
+    ** these offsets, and by striding from pKeyData for fixed-width keys, as
+    ** prollyNodeIntKey does with i*8 -- and a nonzero first offset makes the
+    ** two disagree about the same node while every other check still passes. */
+    if( i==0 && (keyOff!=0 || valOff!=0) ){
+      return SQLITE_CORRUPT;
+    }
     if( i>0 ){
       u32 prevKeyOff = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i-1]);
       u32 prevValOff = PROLLY_GET_U32((const u8*)&pNode->aValOff[i-1]);

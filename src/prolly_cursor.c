@@ -154,6 +154,13 @@ static int descendToExtremeLeaf(ProllyCursor *cur, int bRight){
 
     rc = descendToChild(cur, idx, 0, &pChild);
     if( rc!=SQLITE_OK ) return rc;
+    /* The writer never puts an empty node under an internal one, and the
+    ** parser only accepts count==0 at level 0, so a child with no items is
+    ** corrupt. Unchecked, bRight sets idx to -1 and prollyCursorNext/Prev go
+    ** on to mark the cursor valid over a node that has no key array at all.
+    ** An empty root leaf is a different thing -- an empty table -- and never
+    ** reaches here, because the loop only runs once we descend. */
+    if( pChild->node.nItems==0 ) return SQLITE_CORRUPT;
     cur->aLevel[cur->iLevel].idx = bRight ? pChild->node.nItems - 1 : 0;
   }
   return SQLITE_OK;
