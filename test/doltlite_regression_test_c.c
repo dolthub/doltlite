@@ -1923,6 +1923,81 @@ static void run_ancestor_missing_start(void){
   removeDbFiles(dbpath);
 }
 
+static void run_ancestor_criss_cross_single_walk(void){
+  enum { CRISS_CROSS_DEPTH = 32 };
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zMessage[64];
+  DoltliteCommit rootCommit;
+  ProllyHash rootHash;
+  ProllyHash left;
+  ProllyHash right;
+  ProllyHash previousLeft;
+  ProllyHash previousRight;
+  ProllyHash ancestor;
+  int rc = SQLITE_OK;
+  int i;
+
+  printf("=== Ancestor Criss-Cross Single Walk Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_ancestor_criss_cross_single_walk");
+  removeDbFiles(dbpath);
+
+  check("open_criss_cross_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_criss_cross_repo", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'root');"
+    "SELECT dolt_commit('-A', '-m', 'root');")==SQLITE_OK);
+  doltliteGetSessionHead(db, &rootHash);
+  memset(&rootCommit, 0, sizeof(rootCommit));
+  check("load_criss_cross_root",
+        doltliteLoadCommit(db, &rootHash, &rootCommit)==SQLITE_OK);
+
+  rc = doltliteCreateAndStoreCommitWithTime(db, &rootHash,
+      &rootCommit.catalogHash, "left-0", "test", "test@example.com", 0, 0,
+      1000, &left);
+  if( rc==SQLITE_OK ){
+    rc = doltliteCreateAndStoreCommitWithTime(db, &rootHash,
+        &rootCommit.catalogHash, "right-0", "test", "test@example.com", 0, 0,
+        1001, &right);
+  }
+  for(i=1; rc==SQLITE_OK && i<=CRISS_CROSS_DEPTH; i++){
+    ProllyHash nextLeft;
+    ProllyHash nextRight;
+    previousLeft = left;
+    previousRight = right;
+    snprintf(zMessage, sizeof(zMessage), "left-%d", i);
+    rc = doltliteCreateAndStoreCommitWithTime(db, &previousLeft,
+        &rootCommit.catalogHash, zMessage, "test", "test@example.com",
+        &previousRight, 1, 1000 + i*2, &nextLeft);
+    if( rc==SQLITE_OK ){
+      snprintf(zMessage, sizeof(zMessage), "right-%d", i);
+      rc = doltliteCreateAndStoreCommitWithTime(db, &previousRight,
+          &rootCommit.catalogHash, zMessage, "test", "test@example.com",
+          &previousLeft, 1, 1001 + i*2, &nextRight);
+    }
+    left = nextLeft;
+    right = nextRight;
+  }
+  check("build_criss_cross_history", rc==SQLITE_OK);
+
+  gRegressionFaultCode = 959;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = doltliteFindAncestor(db, &left, &right, &ancestor);
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("find_criss_cross_ancestor", rc==SQLITE_OK);
+  check("criss_cross_ancestor_is_maximal",
+        prollyHashCompare(&ancestor, &previousLeft)==0 ||
+        prollyHashCompare(&ancestor, &previousRight)==0);
+  check("criss_cross_ancestor_loads_each_commit_once",
+        gRegressionFaultHits<=2 + 2*(CRISS_CROSS_DEPTH + 1));
+
+  doltliteCommitClear(&rootCommit);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_pull_persist_failure(void){
   sqlite3 *localDb = 0;
   sqlite3 *remoteDb = 0;
@@ -10167,6 +10242,7 @@ static const RegressionCase aCases[] = {
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
+  { "ancestor_criss_cross_single_walk", "Ancestor Criss-Cross Single Walk Test", run_ancestor_criss_cross_single_walk },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
   { "pull_new_branch_persists", "Pull New Branch Persists Test", run_pull_new_branch_persists },

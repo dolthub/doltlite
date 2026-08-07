@@ -5,248 +5,280 @@
 #include "doltlite_commit.h"
 #include "chunk_store.h"
 #include "doltlite_internal.h"
-#include "prolly_hashset.h"
 #include <string.h>
 
 static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
                             DoltliteCommit *pCommit){
   if( prollyHashIsEmpty(hash) ) return SQLITE_NOTFOUND;
+  (void)sqlite3FaultSim(959);
   return doltliteLoadCommit(db, hash, pCommit);
 }
 
-static int ancestorBfsCollect(
-  sqlite3 *db,
-  const ProllyHash *pStart,
-  ProllyHashSet *pVisited
-){
-  ProllyHash *queue = 0;
-  int qHead = 0, qTail = 0, qAlloc = 64;
-  ProllyHash current;
-  DoltliteCommit commit;
-  int rc = SQLITE_OK;
-  int i;
+typedef struct AncestorNode AncestorNode;
+typedef struct AncestorGraph AncestorGraph;
 
-  queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
-  if( !queue ) return SQLITE_NOMEM;
-  queue[qTail++] = *pStart;
+struct AncestorNode {
+  ProllyHash hash;
+  int aParent[DOLTLITE_MAX_PARENTS];
+  int nParent;
+  int aDistance[2];
+  int aOrder[2];
+  u8 redundant;
+};
 
-  while( qHead < qTail ){
-    current = queue[qHead++];
-    if( prollyHashIsEmpty(&current) ) continue;
-    if( prollyHashSetContains(pVisited, &current) ) continue;
-    rc = prollyHashSetAdd(pVisited, &current);
-    if( rc!=SQLITE_OK ) break;
-    memset(&commit, 0, sizeof(commit));
-    rc = loadCommitByHash(db, &current, &commit);
-    if( rc!=SQLITE_OK ) break;
-    for(i=0; i<doltliteCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-      if( !pParent ) continue;
-      if( qTail >= qAlloc ){
-        ProllyHash *q2;
-        qAlloc *= 2;
-        q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
-        if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; break; }
-        queue = q2;
-      }
-      queue[qTail++] = *pParent;
-    }
-    doltliteCommitClear(&commit);
-    if( rc!=SQLITE_OK ) break;
-  }
+struct AncestorGraph {
+  AncestorNode *aNode;
+  int nNode;
+  int nAlloc;
+  int *aSlot;
+  int nSlot;
+  int nUsed;
+};
 
-  sqlite3_free(queue);
-  return rc;
+static u32 ancestorHashSlot(const ProllyHash *pHash, int nSlot){
+  u32 v;
+  v = (u32)pHash->data[0] | ((u32)pHash->data[1] << 8) |
+      ((u32)pHash->data[2] << 16) | ((u32)pHash->data[3] << 24);
+  return v & (nSlot - 1);
 }
 
-static int ancestorMarkRedundant(
-  sqlite3 *db,
-  const ProllyHash *pStart,
-  ProllyHashSet *pCommon,
-  u8 *aRedundant,
-  int nCommon,
-  const ProllyHash *aCommon
+static int ancestorGraphInit(AncestorGraph *pGraph){
+  memset(pGraph, 0, sizeof(*pGraph));
+  pGraph->nSlot = 256;
+  pGraph->aSlot = sqlite3_malloc64(
+      (sqlite3_uint64)pGraph->nSlot * sizeof(int));
+  if( !pGraph->aSlot ) return SQLITE_NOMEM;
+  memset(pGraph->aSlot, 0, (size_t)pGraph->nSlot * sizeof(int));
+  return SQLITE_OK;
+}
+
+static void ancestorGraphClear(AncestorGraph *pGraph){
+  sqlite3_free(pGraph->aNode);
+  sqlite3_free(pGraph->aSlot);
+  memset(pGraph, 0, sizeof(*pGraph));
+}
+
+static int ancestorGraphFind(
+  const AncestorGraph *pGraph,
+  const ProllyHash *pHash
 ){
-  ProllyHash *queue = 0;
-  int qHead = 0, qTail = 0, qAlloc = 64;
-  ProllyHash current;
-  DoltliteCommit commit;
-  ProllyHashSet visited;
+  u32 iSlot = ancestorHashSlot(pHash, pGraph->nSlot);
+  int i;
+  for(i=0; i<pGraph->nSlot; i++){
+    int iNode = pGraph->aSlot[(iSlot + (u32)i) & (pGraph->nSlot - 1)];
+    if( iNode==0 ) return -1;
+    iNode--;
+    if( prollyHashCompare(&pGraph->aNode[iNode].hash, pHash)==0 ){
+      return iNode;
+    }
+  }
+  return -1;
+}
+
+static void ancestorGraphInsertSlot(
+  AncestorGraph *pGraph,
+  int *aSlot,
+  int nSlot,
+  int iNode
+){
+  u32 iSlot = ancestorHashSlot(&pGraph->aNode[iNode].hash, nSlot);
+  while( aSlot[iSlot]!=0 ) iSlot = (iSlot + 1) & (nSlot - 1);
+  aSlot[iSlot] = iNode + 1;
+}
+
+static int ancestorGraphGrowSlots(AncestorGraph *pGraph){
+  int *aSlot;
+  int nSlot;
+  int i;
+  if( pGraph->nSlot > 0x3fffffff ) return SQLITE_NOMEM;
+  nSlot = pGraph->nSlot * 2;
+  aSlot = sqlite3_malloc64((sqlite3_uint64)nSlot * sizeof(int));
+  if( !aSlot ) return SQLITE_NOMEM;
+  memset(aSlot, 0, (size_t)nSlot * sizeof(int));
+  for(i=0; i<pGraph->nNode; i++){
+    ancestorGraphInsertSlot(pGraph, aSlot, nSlot, i);
+  }
+  sqlite3_free(pGraph->aSlot);
+  pGraph->aSlot = aSlot;
+  pGraph->nSlot = nSlot;
+  return SQLITE_OK;
+}
+
+static int ancestorGraphAdd(
+  AncestorGraph *pGraph,
+  const ProllyHash *pHash,
+  int *pIndex
+){
+  AncestorNode *aNode;
+  int iNode;
+  int nAlloc;
   int rc;
-  int i;
 
-  rc = prollyHashSetInit(&visited, 64);
-  if( rc!=SQLITE_OK ) return rc;
-
-  queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
-  if( !queue ){ prollyHashSetFree(&visited); return SQLITE_NOMEM; }
-
-  memset(&commit, 0, sizeof(commit));
-  rc = loadCommitByHash(db, pStart, &commit);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(queue);
-    prollyHashSetFree(&visited);
-    return rc;
+  iNode = ancestorGraphFind(pGraph, pHash);
+  if( iNode>=0 ){
+    *pIndex = iNode;
+    return SQLITE_OK;
   }
-  for(i=0; i<doltliteCommitParentCount(&commit); i++){
-    const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-    if( !pParent ) continue;
-    queue[qTail++] = *pParent;
+  if( pGraph->nUsed >= pGraph->nSlot/2 ){
+    rc = ancestorGraphGrowSlots(pGraph);
+    if( rc!=SQLITE_OK ) return rc;
   }
-  doltliteCommitClear(&commit);
-
-  while( qHead < qTail ){
-    current = queue[qHead++];
-    if( prollyHashIsEmpty(&current) ) continue;
-    if( prollyHashSetContains(&visited, &current) ) continue;
-    rc = prollyHashSetAdd(&visited, &current);
-    if( rc!=SQLITE_OK ) break;
-    if( prollyHashSetContains(pCommon, &current) ){
-      int j;
-      for(j=0; j<nCommon; j++){
-        if( prollyHashCompare(&aCommon[j], &current)==0 ){
-          aRedundant[j] = 1;
-          break;
-        }
-      }
+  if( pGraph->nNode>=pGraph->nAlloc ){
+    nAlloc = pGraph->nAlloc ? pGraph->nAlloc * 2 : 64;
+    if( nAlloc<0 || (sqlite3_uint64)nAlloc >
+        (sqlite3_uint64)0x7fffffff/sizeof(AncestorNode) ){
+      return SQLITE_NOMEM;
     }
-    memset(&commit, 0, sizeof(commit));
-    rc = loadCommitByHash(db, &current, &commit);
-    if( rc!=SQLITE_OK ) break;
-    for(i=0; i<doltliteCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-      if( !pParent ) continue;
-      if( qTail >= qAlloc ){
-        ProllyHash *q2;
-        qAlloc *= 2;
-        q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
-        if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; break; }
-        queue = q2;
-      }
-      queue[qTail++] = *pParent;
-    }
-    doltliteCommitClear(&commit);
-    if( rc!=SQLITE_OK ) break;
+    aNode = sqlite3_realloc64(pGraph->aNode,
+        (sqlite3_uint64)nAlloc * sizeof(AncestorNode));
+    if( !aNode ) return SQLITE_NOMEM;
+    pGraph->aNode = aNode;
+    pGraph->nAlloc = nAlloc;
   }
-
-  sqlite3_free(queue);
-  prollyHashSetFree(&visited);
-  return rc;
+  iNode = pGraph->nNode++;
+  memset(&pGraph->aNode[iNode], 0, sizeof(AncestorNode));
+  pGraph->aNode[iNode].hash = *pHash;
+  pGraph->aNode[iNode].aDistance[0] = -1;
+  pGraph->aNode[iNode].aDistance[1] = -1;
+  pGraph->aNode[iNode].aOrder[0] = -1;
+  pGraph->aNode[iNode].aOrder[1] = -1;
+  ancestorGraphInsertSlot(pGraph, pGraph->aSlot, pGraph->nSlot, iNode);
+  pGraph->nUsed++;
+  *pIndex = iNode;
+  return SQLITE_OK;
 }
 
-static int ancestorBfsPosition(
+static int ancestorGraphBuild(
   sqlite3 *db,
-  const ProllyHash *pStart,
-  const ProllyHash *pTarget,
-  int *pDistance,
-  int *pOrder
-){
-  typedef struct AncestorQueueItem AncestorQueueItem;
-  struct AncestorQueueItem {
-    ProllyHash hash;
-    int distance;
-  };
-  AncestorQueueItem *queue = 0;
-  int qHead = 0, qTail = 0, qAlloc = 64;
-  DoltliteCommit commit;
-  ProllyHashSet visited;
-  int rc;
-  int order = 0;
-  int i;
-
-  *pDistance = 0x7fffffff;
-  *pOrder = 0x7fffffff;
-
-  rc = prollyHashSetInit(&visited, 64);
-  if( rc!=SQLITE_OK ) return rc;
-  queue = sqlite3_malloc(qAlloc * (int)sizeof(AncestorQueueItem));
-  if( !queue ){
-    prollyHashSetFree(&visited);
-    return SQLITE_NOMEM;
-  }
-
-  queue[qTail].hash = *pStart;
-  queue[qTail].distance = 0;
-  qTail++;
-
-  while( qHead < qTail ){
-    AncestorQueueItem item = queue[qHead++];
-    if( prollyHashIsEmpty(&item.hash) ) continue;
-    if( prollyHashSetContains(&visited, &item.hash) ) continue;
-    rc = prollyHashSetAdd(&visited, &item.hash);
-    if( rc!=SQLITE_OK ) break;
-
-    if( prollyHashCompare(&item.hash, pTarget)==0 ){
-      *pDistance = item.distance;
-      *pOrder = order;
-      break;
-    }
-    order++;
-
-    memset(&commit, 0, sizeof(commit));
-    rc = loadCommitByHash(db, &item.hash, &commit);
-    if( rc!=SQLITE_OK ) break;
-    for(i=0; i<doltliteCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-      if( !pParent ) continue;
-      if( qTail >= qAlloc ){
-        AncestorQueueItem *q2;
-        qAlloc *= 2;
-        q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(AncestorQueueItem));
-        if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; break; }
-        queue = q2;
-      }
-      queue[qTail].hash = *pParent;
-      queue[qTail].distance = item.distance + 1;
-      qTail++;
-    }
-    doltliteCommitClear(&commit);
-    if( rc!=SQLITE_OK ) break;
-  }
-
-  sqlite3_free(queue);
-  prollyHashSetFree(&visited);
-  return rc;
-}
-
-static int ancestorCompareCandidate(
-  sqlite3 *db,
-  const ProllyHash *commitHash1,
-  const ProllyHash *commitHash2,
+  AncestorGraph *pGraph,
   const ProllyHash *pLeft,
   const ProllyHash *pRight,
-  int *pCmp
+  int *pLeftIndex,
+  int *pRightIndex
 ){
-  int leftDist1, leftOrder1, leftDist2, leftOrder2;
-  int rightDist1, rightOrder1, rightDist2, rightOrder2;
-  int leftSum, rightSum;
+  DoltliteCommit commit;
   int rc;
+  int i;
 
-  rc = ancestorBfsPosition(db, commitHash1, pLeft, &leftDist1, &leftOrder1);
+  rc = ancestorGraphAdd(pGraph, pLeft, pLeftIndex);
   if( rc!=SQLITE_OK ) return rc;
-  rc = ancestorBfsPosition(db, commitHash2, pLeft, &leftDist2, &leftOrder2);
+  rc = ancestorGraphAdd(pGraph, pRight, pRightIndex);
   if( rc!=SQLITE_OK ) return rc;
-  rc = ancestorBfsPosition(db, commitHash1, pRight, &rightDist1, &rightOrder1);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = ancestorBfsPosition(db, commitHash2, pRight, &rightDist2, &rightOrder2);
-  if( rc!=SQLITE_OK ) return rc;
-
-  leftSum = leftDist1 + leftDist2;
-  rightSum = rightDist1 + rightDist2;
-  if( leftSum!=rightSum ){
-    *pCmp = leftSum<rightSum ? -1 : 1;
-  }else if( leftDist1!=rightDist1 ){
-    *pCmp = leftDist1<rightDist1 ? -1 : 1;
-  }else if( leftDist2!=rightDist2 ){
-    *pCmp = leftDist2<rightDist2 ? -1 : 1;
-  }else if( leftOrder1!=rightOrder1 ){
-    *pCmp = leftOrder1<rightOrder1 ? -1 : 1;
-  }else if( leftOrder2!=rightOrder2 ){
-    *pCmp = leftOrder2<rightOrder2 ? -1 : 1;
-  }else{
-    *pCmp = prollyHashCompare(pLeft, pRight);
+  for(i=0; i<pGraph->nNode; i++){
+    int j;
+    memset(&commit, 0, sizeof(commit));
+    rc = loadCommitByHash(db, &pGraph->aNode[i].hash, &commit);
+    if( rc!=SQLITE_OK ) return rc;
+    for(j=0; j<doltliteCommitParentCount(&commit); j++){
+      const ProllyHash *pParent = doltliteCommitParentHash(&commit, j);
+      int iParent;
+      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+      rc = ancestorGraphAdd(pGraph, pParent, &iParent);
+      if( rc!=SQLITE_OK ) break;
+      pGraph->aNode[i].aParent[pGraph->aNode[i].nParent++] = iParent;
+    }
+    doltliteCommitClear(&commit);
+    if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
+}
+
+static int ancestorGraphBfs(
+  AncestorGraph *pGraph,
+  int iStart,
+  int iSide
+){
+  int *aQueue;
+  int iHead = 0;
+  int iTail = 0;
+  int iOrder = 0;
+
+  aQueue = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode * sizeof(int));
+  if( !aQueue ) return SQLITE_NOMEM;
+  pGraph->aNode[iStart].aDistance[iSide] = 0;
+  aQueue[iTail++] = iStart;
+  while( iHead<iTail ){
+    AncestorNode *pNode = &pGraph->aNode[aQueue[iHead++]];
+    int i;
+    pNode->aOrder[iSide] = iOrder++;
+    for(i=0; i<pNode->nParent; i++){
+      AncestorNode *pParent = &pGraph->aNode[pNode->aParent[i]];
+      if( pParent->aDistance[iSide]<0 ){
+        pParent->aDistance[iSide] = pNode->aDistance[iSide] + 1;
+        aQueue[iTail++] = pNode->aParent[i];
+      }
+    }
+  }
+  sqlite3_free(aQueue);
+  return SQLITE_OK;
+}
+
+static int ancestorGraphMarkRedundant(AncestorGraph *pGraph){
+  int *aQueue;
+  u8 *aSeen;
+  int iHead = 0;
+  int iTail = 0;
+  int i;
+
+  aQueue = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode * sizeof(int));
+  aSeen = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode);
+  if( !aQueue || !aSeen ){
+    sqlite3_free(aSeen);
+    sqlite3_free(aQueue);
+    return SQLITE_NOMEM;
+  }
+  memset(aSeen, 0, (size_t)pGraph->nNode);
+  for(i=0; i<pGraph->nNode; i++){
+    AncestorNode *pNode = &pGraph->aNode[i];
+    int j;
+    if( pNode->aDistance[0]<0 || pNode->aDistance[1]<0 ) continue;
+    for(j=0; j<pNode->nParent; j++){
+      int iParent = pNode->aParent[j];
+      if( !aSeen[iParent] ){
+        aSeen[iParent] = 1;
+        aQueue[iTail++] = iParent;
+      }
+    }
+  }
+  while( iHead<iTail ){
+    AncestorNode *pNode = &pGraph->aNode[aQueue[iHead++]];
+    int j;
+    if( pNode->aDistance[0]>=0 && pNode->aDistance[1]>=0 ){
+      pNode->redundant = 1;
+    }
+    for(j=0; j<pNode->nParent; j++){
+      int iParent = pNode->aParent[j];
+      if( !aSeen[iParent] ){
+        aSeen[iParent] = 1;
+        aQueue[iTail++] = iParent;
+      }
+    }
+  }
+  sqlite3_free(aSeen);
+  sqlite3_free(aQueue);
+  return SQLITE_OK;
+}
+
+static int ancestorGraphCompareCandidate(
+  const AncestorNode *pLeft,
+  const AncestorNode *pRight
+){
+  i64 leftSum = (i64)pLeft->aDistance[0] + pLeft->aDistance[1];
+  i64 rightSum = (i64)pRight->aDistance[0] + pRight->aDistance[1];
+  if( leftSum!=rightSum ) return leftSum<rightSum ? -1 : 1;
+  if( pLeft->aDistance[0]!=pRight->aDistance[0] ){
+    return pLeft->aDistance[0]<pRight->aDistance[0] ? -1 : 1;
+  }
+  if( pLeft->aDistance[1]!=pRight->aDistance[1] ){
+    return pLeft->aDistance[1]<pRight->aDistance[1] ? -1 : 1;
+  }
+  if( pLeft->aOrder[0]!=pRight->aOrder[0] ){
+    return pLeft->aOrder[0]<pRight->aOrder[0] ? -1 : 1;
+  }
+  if( pLeft->aOrder[1]!=pRight->aOrder[1] ){
+    return pLeft->aOrder[1]<pRight->aOrder[1] ? -1 : 1;
+  }
+  return prollyHashCompare(&pLeft->hash, &pRight->hash);
 }
 
 int doltliteFindAncestor(
@@ -255,10 +287,10 @@ int doltliteFindAncestor(
   const ProllyHash *commitHash2,
   ProllyHash *pAncestor
 ){
-  ProllyHashSet anc1, anc2, common;
-  ProllyHash *aCommon = 0;
-  u8 *aRedundant = 0;
-  int nCommon = 0;
+  AncestorGraph graph;
+  int iLeft;
+  int iRight;
+  int iBest = -1;
   int i;
   int rc;
 
@@ -273,80 +305,36 @@ int doltliteFindAncestor(
     return SQLITE_OK;
   }
 
-  rc = prollyHashSetInit(&anc1, 64);
+  rc = ancestorGraphInit(&graph);
   if( rc!=SQLITE_OK ) return rc;
-  rc = prollyHashSetInit(&anc2, 64);
-  if( rc!=SQLITE_OK ){ prollyHashSetFree(&anc1); return rc; }
-  rc = prollyHashSetInit(&common, 64);
-  if( rc!=SQLITE_OK ){ prollyHashSetFree(&anc2); prollyHashSetFree(&anc1); return rc; }
-
-  rc = ancestorBfsCollect(db, commitHash1, &anc1);
+  rc = ancestorGraphBuild(db, &graph, commitHash1, commitHash2,
+                          &iLeft, &iRight);
   if( rc!=SQLITE_OK ) goto done;
-  rc = ancestorBfsCollect(db, commitHash2, &anc2);
+  rc = ancestorGraphBfs(&graph, iLeft, 0);
   if( rc!=SQLITE_OK ) goto done;
-
-  for(i=0; i<anc1.nSlots; i++){
-    if( anc1.aUsed[i] && prollyHashSetContains(&anc2, &anc1.aSlots[i]) ){
-      rc = prollyHashSetAdd(&common, &anc1.aSlots[i]);
-      if( rc!=SQLITE_OK ) goto done;
-      nCommon++;
+  rc = ancestorGraphBfs(&graph, iRight, 1);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = ancestorGraphMarkRedundant(&graph);
+  if( rc!=SQLITE_OK ) goto done;
+  for(i=0; i<graph.nNode; i++){
+    AncestorNode *pNode = &graph.aNode[i];
+    if( pNode->aDistance[0]<0 || pNode->aDistance[1]<0 || pNode->redundant ){
+      continue;
+    }
+    if( iBest<0 || ancestorGraphCompareCandidate(pNode,
+                                                 &graph.aNode[iBest])<0 ){
+      iBest = i;
     }
   }
-
-  if( nCommon==0 ){
+  if( iBest<0 ){
     rc = SQLITE_NOTFOUND;
-    goto done;
-  }
-
-  aCommon = sqlite3_malloc(nCommon * (int)sizeof(ProllyHash));
-  if( !aCommon ){ rc = SQLITE_NOMEM; goto done; }
-  aRedundant = sqlite3_malloc(nCommon);
-  if( !aRedundant ){ rc = SQLITE_NOMEM; goto done; }
-  memset(aRedundant, 0, nCommon);
-  {
-    int k = 0;
-    for(i=0; i<common.nSlots; i++){
-      if( common.aUsed[i] ){
-        aCommon[k++] = common.aSlots[i];
-      }
-    }
-  }
-
-  for(i=0; i<nCommon; i++){
-    if( aRedundant[i] ) continue;
-    rc = ancestorMarkRedundant(db, &aCommon[i], &common,
-                               aRedundant, nCommon, aCommon);
-    if( rc!=SQLITE_OK ) goto done;
-  }
-
-  {
-    int iBest = -1;
-    for(i=0; i<nCommon; i++){
-      int cmp;
-      if( aRedundant[i] ) continue;
-      if( iBest<0 ){
-        iBest = i;
-        continue;
-      }
-      rc = ancestorCompareCandidate(db, commitHash1, commitHash2,
-                                    &aCommon[i], &aCommon[iBest], &cmp);
-      if( rc!=SQLITE_OK ) goto done;
-      if( cmp<0 ) iBest = i;
-    }
-    if( iBest<0 ){
-      rc = SQLITE_NOTFOUND;
-    }else{
-      *pAncestor = aCommon[iBest];
-      rc = SQLITE_OK;
-    }
+  }else{
+    *pAncestor = graph.aNode[iBest].hash;
+    rc = SQLITE_OK;
   }
 
 done:
-  sqlite3_free(aRedundant);
-  sqlite3_free(aCommon);
-  prollyHashSetFree(&common);
-  prollyHashSetFree(&anc2);
-  prollyHashSetFree(&anc1);
+  ancestorGraphClear(&graph);
   return rc;
 }
 
