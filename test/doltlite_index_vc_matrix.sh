@@ -406,6 +406,56 @@ PRAGMA integrity_check;" "$DB")
 check "vtab_merge_drop_wins" "0
 ok" "$result"
 
+# ── table-level checkout of virtual tables ───────────────────────
+# Vtabs have no catalog entry (their storage is the shadow tables), so
+# name-based checkout must accept the vtab through its schema row and
+# swap the shadow entries the way staging carries them.
+scenario "table checkout discards working vtab changes"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');
+SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
+result=$(run_sql "INSERT INTO ft VALUES('two doc'); SELECT dolt_checkout('ft');
+SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+INSERT INTO ft(ft) VALUES('integrity-check'); SELECT 'ftok'; PRAGMA integrity_check;" "$DB")
+check "vtab_table_checkout_discard" "0
+1
+ftok
+ok" "$result"
+
+scenario "table checkout of a vtab from another branch"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+INSERT INTO ft VALUES('two doc'); INSERT INTO t VALUES(2,'s');
+SELECT dolt_commit('-am','side');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('side','ft');" "$DB" > /dev/null
+result=$(run_sql "SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+SELECT count(*) FROM t;
+INSERT INTO ft(ft) VALUES('integrity-check'); SELECT 'ftok'; PRAGMA integrity_check;" "$DB")
+check "vtab_table_checkout_from_branch" "2
+1
+ftok
+ok" "$result"
+
+scenario "table checkout restores a dropped vtab from history"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');
+CREATE VIRTUAL TABLE rt USING rtree(id, x1, x2); INSERT INTO rt VALUES(1, 0.0, 1.0);
+SELECT dolt_commit('-Am','base');
+DROP TABLE ft; DROP TABLE rt;
+SELECT dolt_commit('-Am','drop both');
+SELECT dolt_checkout('HEAD~1','ft','rt');" "$DB" > /dev/null
+result=$(run_sql "SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+SELECT rtreecheck('main','rt');
+INSERT INTO ft(ft) VALUES('integrity-check'); SELECT 'ftok'; PRAGMA integrity_check;" "$DB")
+check "vtab_table_checkout_restore_dropped" "1
+ok
+ftok
+ok" "$result"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
