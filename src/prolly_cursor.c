@@ -160,7 +160,15 @@ static int descendToExtremeLeaf(ProllyCursor *cur, int bRight){
     ** on to mark the cursor valid over a node that has no key array at all.
     ** An empty root leaf is a different thing -- an empty table -- and never
     ** reaches here, because the loop only runs once we descend. */
-    if( pChild->node.nItems==0 ) return SQLITE_CORRUPT;
+    if( pChild->node.nItems==0 ){
+      /* Returning the error is not enough on its own. prollyCursorNext/Prev
+      ** propagate it without touching eState, so a cursor that was VALID
+      ** before the step stays VALID, and the accessors only assert on eState
+      ** -- a later key or value read would land on this empty child. Drop the
+      ** half-built descent and mark the cursor unusable. */
+      prollyCursorReleaseAll(cur);
+      return SQLITE_CORRUPT;
+    }
     cur->aLevel[cur->iLevel].idx = bRight ? pChild->node.nItems - 1 : 0;
   }
   return SQLITE_OK;
