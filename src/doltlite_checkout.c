@@ -624,6 +624,54 @@ static int checkoutReconcileTableIndexes(
   return SQLITE_OK;
 }
 
+/* Named indexes on a virtual table's shadow tables need the same DDL
+** reconcile as the requested table's own indexes: the shadow-entry
+** adoption below only swaps storage roots, so a working-only index would
+** survive pointing at a tree that no longer matches the adopted rows, and
+** a source-only index would never be created. */
+static int checkoutReconcileVtabShadowIndexes(
+  sqlite3 *db,
+  SchemaEntry *aSourceSchema,
+  int nSourceSchema,
+  const char *zVtab
+){
+  Table *pTab = sqlite3FindTable(db, zVtab, "main");
+  char **azShadow = 0;
+  int nShadow = 0;
+  int i, rc = SQLITE_OK;
+
+  if( !pTab || !IsVirtual(pTab) ) return SQLITE_OK;
+
+  /* Collect the shadow names before reconciling anything: the reconcile
+  ** below runs DROP/CREATE INDEX, and that schema reset frees pTab out
+  ** from under sqlite3IsShadowTableOf. */
+  for(i=0; i<nSourceSchema; i++){
+    char **azNew;
+    char *zDup;
+    if( !aSourceSchema[i].zName || !aSourceSchema[i].zType
+     || strcmp(aSourceSchema[i].zType, "table")!=0
+     || strcmp(aSourceSchema[i].zName, zVtab)==0
+     || !sqlite3IsShadowTableOf(db, pTab, aSourceSchema[i].zName) ){
+      continue;
+    }
+    azNew = sqlite3_realloc(azShadow, (nShadow+1)*(int)sizeof(char*));
+    zDup = azNew ? sqlite3_mprintf("%s", aSourceSchema[i].zName) : 0;
+    if( azNew ) azShadow = azNew;
+    if( !azNew || !zDup ){
+      doltliteFreeNameList(azShadow, nShadow);
+      return SQLITE_NOMEM;
+    }
+    azShadow[nShadow++] = zDup;
+  }
+
+  for(i=0; i<nShadow && rc==SQLITE_OK; i++){
+    rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema,
+                                       azShadow[i]);
+  }
+  doltliteFreeNameList(azShadow, nShadow);
+  return rc;
+}
+
 /* Point the freshly flushed working catalog's index entries for zTable at
 ** the source's trees. Each side is resolved through its OWN schema rows
 ** (index entries are unnamed, so name-keyed overlays cannot see them), and
@@ -891,6 +939,9 @@ static int doltliteCheckoutTables(
     }
     if( aSchema[i].hasSource ){
       rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema, zName);
+      if( rc!=SQLITE_OK ) break;
+      rc = checkoutReconcileVtabShadowIndexes(db, aSourceSchema, nSourceSchema,
+                                              zName);
       if( rc!=SQLITE_OK ) break;
     }
   }

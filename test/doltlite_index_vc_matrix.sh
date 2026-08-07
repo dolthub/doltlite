@@ -440,6 +440,24 @@ check "vtab_table_checkout_from_branch" "2
 ftok
 ok" "$result"
 
+scenario "named indexes on shadow tables reconcile through vtab checkout"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');
+CREATE INDEX live_only ON ft_content(c0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','source');
+DROP INDEX live_only; CREATE INDEX source_only ON ft_content(c0);
+INSERT INTO ft VALUES('two doc');
+SELECT dolt_commit('-Am','source reindexed');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('source','ft');" "$DB" > /dev/null
+result=$(run_sql "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ft_content' ORDER BY name);
+SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+PRAGMA integrity_check;" "$DB")
+check "vtab_shadow_index_reconcile" "source_only
+2
+ok" "$result"
+
 scenario "table checkout restores a dropped vtab from history"
 newdb
 run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');
