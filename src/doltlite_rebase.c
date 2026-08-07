@@ -1230,11 +1230,8 @@ static int rebaseDiscardWorkingBranch(
   int rc;
 
   rc = rebaseClaimActiveEndRetry(db, zWorkingBranch);
-  if( rc==SQLITE_DONE ){
-    return SQLITE_OK;
-  }
-  if( rc!=SQLITE_OK ) return rc;
-  rc = rebaseDropPlan(db);
+  if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) return rc;
+  rc = rebaseRetryDbOp(db, rebaseDropPlan);
   if( rc!=SQLITE_OK ) return rc;
   return rebaseCleanupAfterClaim(db, zOrigBranch, zWorkingBranch);
 }
@@ -1412,6 +1409,7 @@ static void doltliteRebaseInteractiveStart(
   ** Committing it makes the reload re-read it instead. */
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  if( rc==SQLITE_OK && sqlite3FaultSim(960) ) rc = SQLITE_BUSY;
   if( rc!=SQLITE_OK ) goto fail;
   rc = doltliteCheckoutBranchForRebase(db, zWorking);
   if( rc!=SQLITE_OK ) goto fail;

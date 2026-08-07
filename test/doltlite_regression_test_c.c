@@ -7018,6 +7018,70 @@ static void run_rebase_upstream_history_failure_is_atomic(void){
   removeDbFiles(dbpath);
 }
 
+static void run_rebase_start_failure_cleans_working_branch(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+
+  printf("=== Rebase Start Failure Cleans Working Branch Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_start_failure_cleans_working_branch");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_start_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_start_failure", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "SELECT dolt_checkout('-b','feat');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_commit('-A','-m','feat');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES(3,'main');"
+    "SELECT dolt_commit('-A','-m','main');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+
+  gRegressionFaultCode = 960;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_rebase('-i','main')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("rebase_start_failure_was_injected", gRegressionFaultHits==1);
+  check("rebase_start_failure_is_returned", strstr(res, "ERROR:")!=0);
+  check("rebase_start_failure_restores_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_start_failure_removes_working_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches "
+          "WHERE name='dolt_rebase_feat'"), "0")==0);
+  check("rebase_start_failure_leaves_no_plan",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master "
+          "WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  check("rebase_start_failure_clears_rebase_state", isRebasing==0);
+  check("rebase_start_failure_allows_retry",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i','main')"),
+               "interactive rebase started")!=0);
+  check("rebase_start_failure_retry_can_abort",
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"),
+               "Interactive rebase aborted")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_db_after_rebase_start_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_start_failure_persists_no_working_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches "
+          "WHERE name='dolt_rebase_feat'"), "0")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_recovery_failure_is_reported(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -10265,6 +10329,7 @@ static const RegressionCase aCases[] = {
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
   { "rebase_plan_read_error_is_not_partial", "Rebase Plan Read Error Is Not Partial Test", run_rebase_plan_read_error_is_not_partial },
   { "rebase_upstream_history_failure_is_atomic", "Rebase Upstream History Failure Is Atomic Test", run_rebase_upstream_history_failure_is_atomic },
+  { "rebase_start_failure_cleans_working_branch", "Rebase Start Failure Cleans Working Branch Test", run_rebase_start_failure_cleans_working_branch },
   { "rebase_recovery_failure_is_reported", "Rebase Recovery Failure Is Reported Test", run_rebase_recovery_failure_is_reported },
   { "rebase_continue_conflict_abort_restores_durable_state", "Rebase Continue Conflict Abort Restores Durable State Test", run_rebase_continue_conflict_abort_restores_durable_state },
   { "rebase_concurrent_peer_commit_is_preserved", "Rebase Concurrent Peer Commit Preservation Test", run_rebase_concurrent_peer_commit_is_preserved },
