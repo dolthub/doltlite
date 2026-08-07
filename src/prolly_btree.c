@@ -515,18 +515,21 @@ static int doltliteFileHasContent(
   ** contract, so hand the VFS a plain copy rather than the parameter list. */
   rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
   if( rc!=SQLITE_OK ) return rc;
+  /* The handle keeps the name, not a copy of it, so zDup has to outlive the
+  ** close: unixClose logs pFile->zPath on the way out. */
   rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);
-  sqlite3_free(zDup);
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
+    sqlite3_free(zDup);
     /* Unreadable is not "empty": leave the knob inactive. */
     *pHasContent = 1;
     return SQLITE_OK;
   }
   rc = sqlite3OsFileSize(pFile, &sz);
   sqlite3OsCloseFree(pFile);
+  sqlite3_free(zDup);
   if( rc!=SQLITE_OK ) return rc;
   *pHasContent = sz>0;
   return SQLITE_OK;

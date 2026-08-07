@@ -262,18 +262,21 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   rc = chunkStoreDupFilenameDoubleNul(zFilename, &zProbe);
   if( rc!=SQLITE_OK ) return rc;
 
+  /* The handle keeps the name, not a copy of it, so zProbe has to outlive the
+  ** close: unixClose logs pFile->zPath on the way out. */
   rc = sqlite3OsOpenMalloc(pVfs, zProbe, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);
-  sqlite3_free(zProbe);
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
+    sqlite3_free(zProbe);
     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
     return SQLITE_OK;
   }
 
   rc = sqlite3OsRead(pFile, buf, sizeof(buf), 0);
   sqlite3OsCloseFree(pFile);
+  sqlite3_free(zProbe);
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   if( rc!=SQLITE_OK ) return SQLITE_OK;
 
