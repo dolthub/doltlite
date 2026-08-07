@@ -22,6 +22,7 @@ doltlite_merge_index_conflict.sh
 doltlite_merge_nocase_reindex.sh
 doltlite_index_row_delta.sh
 doltlite_index_vc_matrix.sh
+doltlite_vtab_vc_matrix.sh
 doltlite_stats_merge.sh
 large_merge_test.sh
 doltlite_conflicts.sh
