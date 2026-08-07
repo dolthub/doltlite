@@ -897,7 +897,12 @@ static int appendMergedAuxSchemaRow(
                            aConflictTables, nConflictTables,
                            zName);
   if( !pSe || !pSe->zType || !pSe->zName ) return SQLITE_OK;
-  if( strcmp(pSe->zType, "table")==0 || strcmp(pSe->zType, "index")==0 ){
+  /* Storage-backed tables are appended from the merged catalog entries and
+  ** indexes from the index passes. Virtual tables have no catalog entry —
+  ** their storage is the shadow tables — so their schema rows (type "table",
+  ** rootpage 0) ride with the storage-free objects here. */
+  if( strcmp(pSe->zType, "index")==0 ) return SQLITE_OK;
+  if( strcmp(pSe->zType, "table")==0 && pSe->iRootpage!=0 ){
     return SQLITE_OK;
   }
 

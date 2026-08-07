@@ -335,6 +335,77 @@ check "vtab_clone" "0
 2
 ok" "$result"
 
+# ── vtab schema rows through three-way merge ─────────────────────
+# Virtual tables have no catalog entry (their storage is the shadow
+# tables), so the merged sqlite_master rebuild must carry their schema
+# rows explicitly or every real merge silently drops the vtab.
+scenario "vtab survives clean three-way merge"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('base doc');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side'); INSERT INTO t VALUES(2,'s'); SELECT dolt_commit('-am','side');
+SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,'m'); SELECT dolt_commit('-am','main');
+SELECT dolt_merge('side');" "$DB" > /dev/null
+result=$(run_sql "SELECT count(*) FROM sqlite_master WHERE name='ft';
+SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+SELECT count(*) FROM t; PRAGMA integrity_check;" "$DB")
+check "vtab_clean_merge" "1
+1
+3
+ok" "$result"
+
+scenario "vtab survives conflicted merge and resolve"
+newdb
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('base doc');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side'); UPDATE t SET v='s' WHERE id=1; SELECT dolt_commit('-am','side');
+SELECT dolt_checkout('main'); UPDATE t SET v='m' WHERE id=1; SELECT dolt_commit('-am','main');" "$DB" > /dev/null
+result=$(run_sql "BEGIN;
+SELECT dolt_merge('side');
+SELECT count(*) FROM sqlite_master WHERE name='ft';
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT length(dolt_commit('-Am','resolved'))=40;
+SELECT count(*) FROM sqlite_master WHERE name='ft';" "$DB" | grep -v "^Error")
+check "vtab_conflicted_merge" "1
+0
+1
+1" "$result"
+result=$(run_sql "SELECT count(*) FROM sqlite_master WHERE name='ft';
+SELECT count(*) FROM ft WHERE ft MATCH 'doc'; PRAGMA integrity_check;" "$DB")
+check "vtab_conflicted_merge_reopen" "1
+1
+ok" "$result"
+
+scenario "vtab added on a branch is adopted by merge"
+newdb
+run_sql "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('side doc');
+SELECT dolt_commit('-Am','side adds ft');
+SELECT dolt_checkout('main'); INSERT INTO t VALUES(2,'m'); SELECT dolt_commit('-am','main');
+SELECT dolt_merge('side');" "$DB" > /dev/null
+result=$(run_sql "SELECT count(*) FROM sqlite_master WHERE name='ft';
+SELECT count(*) FROM ft WHERE ft MATCH 'doc'; PRAGMA integrity_check;" "$DB")
+check "vtab_merge_adopt" "1
+1
+ok" "$result"
+
+scenario "vtab dropped on a branch stays dropped after merge"
+newdb
+run_sql "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
+CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('doomed doc');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side'); DROP TABLE ft; SELECT dolt_commit('-Am','side drops ft');
+SELECT dolt_checkout('main'); INSERT INTO t VALUES(2,'m'); SELECT dolt_commit('-am','main');
+SELECT dolt_merge('side');" "$DB" > /dev/null
+result=$(run_sql "SELECT count(*) FROM sqlite_master WHERE name LIKE 'ft%';
+PRAGMA integrity_check;" "$DB")
+check "vtab_merge_drop_wins" "0
+ok" "$result"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
