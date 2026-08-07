@@ -661,6 +661,93 @@ static void checkoutAdoptSourceIndexRoots(
   }
 }
 
+/* Virtual tables persist through their shadow tables: a table-level
+** checkout of a vtab must swap the shadows' catalog entries, the same way
+** staging carries them. The vtab's own master row is schema-only and is
+** handled by the schema pass; when that pass rebuilt the vtab, the live
+** shadows are fresh trees whose table numbers must be kept while their
+** content roots adopt the source. */
+static int checkoutAdoptVtabShadows(
+  sqlite3 *db,
+  struct TableEntry **paWorking, int *pnWorking,
+  struct TableEntry *aSource, int nSource,
+  SchemaEntry *aWorkSchema, int nWorkSchema,
+  SchemaEntry *aSourceSchema, int nSourceSchema,
+  const char *zVtab,
+  int vtabRebuilt
+){
+  Table *pTab = sqlite3FindTable(db, zVtab, "main");
+  SchemaEntry *aList[2];
+  int aN[2];
+  int pass, i, j;
+
+  if( !pTab || !IsVirtual(pTab) ) return SQLITE_OK;
+  aList[0] = aSourceSchema; aN[0] = nSourceSchema;
+  aList[1] = aWorkSchema;   aN[1] = nWorkSchema;
+
+  for(pass=0; pass<2; pass++){
+    for(i=0; i<aN[pass]; i++){
+      const char *zName = aList[pass][i].zName;
+      int srcIdx = -1, workIdx = -1;
+      if( !zName || !aList[pass][i].zType
+       || strcmp(aList[pass][i].zType, "table")!=0
+       || strcmp(zName, zVtab)==0
+       || !sqlite3IsShadowTableOf(db, pTab, zName) ){
+        continue;
+      }
+      if( pass==1 && findSchemaEntry(aSourceSchema, nSourceSchema, zName) ){
+        continue;  /* already handled from the source list */
+      }
+      for(j=0; j<nSource; j++){
+        if( aSource[j].zName && strcmp(aSource[j].zName, zName)==0 ){
+          srcIdx = j; break;
+        }
+      }
+      for(j=0; j<*pnWorking; j++){
+        if( (*paWorking)[j].zName && strcmp((*paWorking)[j].zName, zName)==0 ){
+          workIdx = j; break;
+        }
+      }
+      if( srcIdx<0 && workIdx<0 ) continue;
+
+      if( srcIdx<0 ){
+        sqlite3_free((*paWorking)[workIdx].zName);
+        if( workIdx+1<*pnWorking ){
+          memmove(&(*paWorking)[workIdx], &(*paWorking)[workIdx+1],
+                  (*pnWorking-workIdx-1)*(int)sizeof(struct TableEntry));
+        }
+        (*pnWorking)--;
+      }else if( workIdx<0 ){
+        struct TableEntry *aNew = sqlite3_realloc(*paWorking,
+            (*pnWorking+1)*(int)sizeof(struct TableEntry));
+        char *zDup;
+        if( !aNew ) return SQLITE_NOMEM;
+        *paWorking = aNew;
+        zDup = sqlite3_mprintf("%s", zName);
+        if( !zDup ) return SQLITE_NOMEM;
+        (*paWorking)[*pnWorking] = aSource[srcIdx];
+        (*paWorking)[*pnWorking].zName = zDup;
+        (*pnWorking)++;
+      }else{
+        char *zDup = sqlite3_mprintf("%s", zName);
+        Pgno iCurrentTable = (*paWorking)[workIdx].iTable;
+        if( !zDup ) return SQLITE_NOMEM;
+        sqlite3_free((*paWorking)[workIdx].zName);
+        (*paWorking)[workIdx] = aSource[srcIdx];
+        if( vtabRebuilt ){
+          (*paWorking)[workIdx].iTable = iCurrentTable;
+        }
+        (*paWorking)[workIdx].zName = zDup;
+      }
+      checkoutAdoptSourceIndexRoots(*paWorking, *pnWorking,
+                                    aWorkSchema, nWorkSchema,
+                                    aSource, nSource,
+                                    aSourceSchema, nSourceSchema, zName);
+    }
+  }
+  return SQLITE_OK;
+}
+
 static int doltliteCheckoutTables(
   sqlite3 *db,
   const char *zSourceRef,
@@ -718,8 +805,26 @@ static int doltliteCheckoutTables(
         }
       }
       if( srcIdx<0 ){
-        doltliteFreeCatalog(aSource, nSource);
-        return SQLITE_NOTFOUND;
+        /* Virtual tables have no catalog entry — their storage is the
+        ** shadow tables — so a vtab name is validated against the source
+        ** schema instead. */
+        int hasVtab = 0;
+        char *zSql = 0;
+        rc = checkoutLoadSourceTableSql(db, aSource, nSource, zName,
+                                        &hasVtab, &zSql);
+        if( rc==SQLITE_OK && hasVtab && zSql
+         && sqlite3_strnicmp(zSql, "CREATE VIRTUAL", 14)!=0 ){
+          hasVtab = 0;
+        }
+        sqlite3_free(zSql);
+        if( rc!=SQLITE_OK ){
+          doltliteFreeCatalog(aSource, nSource);
+          return rc;
+        }
+        if( !hasVtab ){
+          doltliteFreeCatalog(aSource, nSource);
+          return SQLITE_NOTFOUND;
+        }
       }
     }
   }
@@ -832,6 +937,15 @@ static int doltliteCheckoutTables(
       if( aSchema[i].rebuilt && !aSchema[i].hasSource ){
         continue;
       }
+      /* A virtual table never has a catalog entry of its own; its schema
+      ** row was handled by the schema pass above and its content rides in
+      ** the shadow entries adopted below. */
+      if( (aSchema[i].hasSource && aSchema[i].zSourceSql
+           && sqlite3_strnicmp(aSchema[i].zSourceSql, "CREATE VIRTUAL", 14)==0)
+       || (aSchema[i].hasCurrent && aSchema[i].zCurrentSql
+           && sqlite3_strnicmp(aSchema[i].zCurrentSql, "CREATE VIRTUAL", 14)==0) ){
+        continue;
+      }
       freeSchemaEntries(aSourceSchema, nSourceSchema);
       checkoutSchemaInfoClear(aSchema, nNames);
       doltliteFreeCatalog(aWorking, nWorking);
@@ -908,6 +1022,19 @@ static int doltliteCheckoutTables(
                                   aWorkSchema, nWorkSchema,
                                   aSource, nSource,
                                   aSourceSchema, nSourceSchema, zName);
+    rc = checkoutAdoptVtabShadows(db, &aWorking, &nWorking,
+                                  aSource, nSource,
+                                  aWorkSchema, nWorkSchema,
+                                  aSourceSchema, nSourceSchema,
+                                  zName, aSchema[i].rebuilt);
+    if( rc!=SQLITE_OK ){
+      freeSchemaEntries(aSourceSchema, nSourceSchema);
+      freeSchemaEntries(aWorkSchema, nWorkSchema);
+      checkoutSchemaInfoClear(aSchema, nNames);
+      doltliteFreeCatalog(aWorking, nWorking);
+      doltliteFreeCatalog(aSource, nSource);
+      return rc;
+    }
   }
 
   {
