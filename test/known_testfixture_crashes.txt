@@ -16,6 +16,7 @@ alter2 class=intentional  # raw file-format setup prevents the db command from o
 backup_ioerr class=harness  # cap-truncated page-copy fault sequence; unbucketed
 btreefault class=intentional issue=1840  # rowid setup failure cascades into the fault simulator
 corrupt4 class=harness  # raw-offset outcome varies by build; unbucketed
+crash2 class=harness issue=2045  # commit is durable at a main-file sync, so a torn crash may recover the committed state; layout-dependent; unbucketed
 crash8 class=harness  # crash-simulation timing is nondeterministic; unbucketed
 dbstatus class=intentional  # echo-vtab cleanup after schema reset
 incrblob class=intentional issue=1840  # rowid assumption on a primary-key table
@@ -25,4 +26,5 @@ malloc3 class=harness  # unstable OOM fault-point set; unbucketed
 multiplex2 class=intentional  # incompatible multiplex VFS setup
 pagerfault class=harness  # unstable OOM fault-point set; unbucketed
 pagerfault2 class=harness  # unstable OOM fault-point set; unbucketed
+savepoint4 class=harness issue=2045  # commit is durable at a main-file sync, so a torn crash may recover the committed state; layout-dependent; unbucketed
 vtab1 class=intentional  # echo-vtab cleanup after schema reset

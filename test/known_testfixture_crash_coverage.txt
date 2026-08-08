@@ -16,6 +16,7 @@
 
 backup_ioerr testfixture doltlite_recover_backup_fault 1.1 # backup/restore OOM and persistent I/O errors
 corrupt4 c-test corruption_test test_corrupt_chunk_data # malformed chunk data, metadata, indexes, and truncated writes
+crash2 testfixture doltlite_recover_crash_commit 2.0 # sector-size crash sweep over random churn; either consistent outcome accepted
 crash8 workflow-script crash_injection_test.sh 1 # first and later commit crash durability
 ioerr2 testfixture doltlite_recover_shared_ioerr 1.1 # persistent I/O errors preserve writer and peer state
 malloc testfixture doltlite_recover_savepointfault 1 # OOM during savepoint rollback and release
@@ -26,3 +27,4 @@ pagerfault testfixture doltlite_recover_cacheflush_oom 1.1 # OOM during dirty-ca
 pagerfault testfixture doltlite_recover_savepointfault 2 # OOM while restoring transaction state
 pagerfault2 testfixture doltlite_recover_cacheflush_oom 1.2 # large dirty-state OOM and rollback integrity
 pagerfault2 testfixture doltlite_recover_postcommit_oom 1.1 # durable state remains consistent after OOM
+savepoint4 testfixture doltlite_recover_crash_commit 1.0 # nested-savepoint transaction crash sweep; either consistent outcome accepted

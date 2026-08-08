@@ -292,7 +292,6 @@ rowvalueA
 rowvaluevtab
 savepoint
 savepoint2
-savepoint4
 savepoint5
 savepoint7
 scanstatus
