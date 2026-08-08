@@ -265,7 +265,10 @@ static int materializeDeferredMergedSeek(BtCursor *pCur){
   if( rc!=SQLITE_OK ) return rc;
   if( res==0 ){
     pCur->eState = CURSOR_VALID;
-    if( pCur->mergeSrc!=MERGE_SRC_MUT ){
+    /* Only a pure tree landing may serve the tree payload: on a BOTH
+    ** landing the mut-map entry shadows the tree row, and getCursorPayload
+    ** consults the cached payload before the merge source. */
+    if( pCur->mergeSrc==MERGE_SRC_TREE ){
       cacheCurrentTreePayloadIfIntKey(pCur);
     }
   }else{
@@ -300,7 +303,7 @@ int materializeDeferredMergedSeekBackward(BtCursor *pCur){
   if( rc!=SQLITE_OK ) return rc;
   if( res==0 ){
     pCur->eState = CURSOR_VALID;
-    if( pCur->mergeSrc!=MERGE_SRC_MUT ){
+    if( pCur->mergeSrc==MERGE_SRC_TREE ){
       cacheCurrentTreePayloadIfIntKey(pCur);
     }
   }else{
