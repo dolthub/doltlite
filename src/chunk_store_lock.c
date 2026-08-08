@@ -16,6 +16,15 @@ int csFileLockPromote(sqlite3_file *pFile){
   return sqlite3OsLock(pFile, SQLITE_LOCK_RESERVED);
 }
 
+static int csFileRelock(sqlite3_file *pFile){
+  int rc;
+  if( !pFile ) return SQLITE_ERROR;
+  rc = sqlite3OsLock(pFile, SQLITE_LOCK_SHARED);
+  if( rc==SQLITE_OK ) rc = csFileLockPromote(pFile);
+  if( rc!=SQLITE_OK ) sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+  return rc;
+}
+
 static char *csLockPath(const char *path){
   const char *zBase = strrchr(path, '/');
   int nDir = 0;
@@ -112,12 +121,8 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path,
   ** NO_LOCK the only legal step is SHARED, then escalate. Jumping straight
   ** to EXCLUSIVE works with NDEBUG but aborts debug builds (e.g. assert
   ** smoke in development-builds). */
-  rc = sqlite3OsLock(pFile, SQLITE_LOCK_SHARED);
-  if( rc==SQLITE_OK ){
-    rc = csFileLockPromote(pFile);
-  }
+  rc = csFileRelock(pFile);
   if( rc!=SQLITE_OK ){
-    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
     sqlite3OsCloseFree(pFile);
     sqlite3_free(zLock);
     return rc;
@@ -130,9 +135,13 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path,
   return SQLITE_OK;
 }
 
+static void csFileUnlockKeepOpen(sqlite3_file *pFile){
+  if( pFile ) sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+}
+
 void csFileUnlock(sqlite3_file *pFile, char **pzName){
   if( pFile ){
-    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+    csFileUnlockKeepOpen(pFile);
     sqlite3OsCloseFree(pFile);
   }
   if( pzName ){
@@ -204,19 +213,24 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_ERROR;
   }
-  rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
-  if( rc!=SQLITE_OK ){
-    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
-    return rc;
+  if( csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+    rc = csFileRelock(CS_GRAPH_LOCK(cs));
+  }else{
+    rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename,
+                      &CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
   }
-  rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
-    csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
-    CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return rc;
   }
   cs->lockDepth = 1;
+  rc = chunkStoreRefreshIfChanged(cs, &changed);
+  if( rc!=SQLITE_OK ){
+    cs->lockDepth = 0;
+    csFileUnlockKeepOpen(CS_GRAPH_LOCK(cs));
+    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
+    return rc;
+  }
   if( pChanged ) *pChanged = changed;
   return SQLITE_OK;
 }
@@ -229,13 +243,9 @@ void chunkStoreUnlock(ChunkStore *cs){
   if( cs->lockDepth > 0 ){
     cs->lockDepth--;
     if( cs->lockDepth == 0 && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
-      csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
-      CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
+      csFileUnlockKeepOpen(CS_GRAPH_LOCK(cs));
     }
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
-  }else if( csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
-    csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
-    CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   }
 }
 
@@ -471,7 +481,7 @@ int csReloadFromDisk(ChunkStore *cs){
   ** silent no-op, so its allocations must not read as swallowed OOM under
   ** fault injection. */
   if( !cs->readOnly && !cs->corruptMidStream
-   && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+   && cs->lockDepth>0 ){
     i64 physSize = 0;
     sqlite3BeginBenignMalloc();
     if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
