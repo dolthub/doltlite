@@ -607,7 +607,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     return;
   }
 
-  lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
+  lockHeld = cs->lockDepth>0;
   if( !lockHeld ){
     rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd, &lockName);
     if( rc!=SQLITE_OK ) return;
@@ -668,6 +668,8 @@ int chunkStoreClose(ChunkStore *cs){
   csWriteCleanCloseMarker(cs);
   sqlite3EndBenignMalloc();
   chunkStoreUnlock(cs);
+  csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
+  CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   if( cs->file.pFile ){
     csCloseFile(cs->file.pFile);
     cs->file.pFile = 0;
@@ -961,7 +963,7 @@ static int csDrainPendingToWal(ChunkStore *cs){
   if( cs->staging.nPending==0 ){
     return SQLITE_OK;
   }
-  if( !csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+  if( cs->lockDepth<=0 ){
     return SQLITE_OK;
   }
 
