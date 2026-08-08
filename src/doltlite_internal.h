@@ -1068,6 +1068,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *ourCatHash,
   const ProllyHash *theirCatHash,
   const ProllyHash *ourHead,
+  const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
   int *pnConflicts,
   char *hexBuf

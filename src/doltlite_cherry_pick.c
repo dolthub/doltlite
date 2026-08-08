@@ -101,6 +101,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *ourCatHash,
   const ProllyHash *theirCatHash,
   const ProllyHash *ourHead,
+  const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
   int *pnConflicts,
   char *hexBuf
@@ -109,6 +110,8 @@ int applyMergedCatalogAndCommit(
   DoltliteTxnState savedState;
   ProllyHash mergedCatHash;
   ProllyHash liveMergedCatHash;
+  ProllyHash commitCatHash;
+  int commitSplit = 0;
   ProllyHash commitHash;
   char *zMergeErr = 0;
   int graphLocked = 0;
@@ -250,12 +253,41 @@ int applyMergedCatalogAndCommit(
         db, context, &savedState, *pnConflicts, zOpLabel, 1);
   }
 
-  rc = doltliteCreateAndStoreCommit(db, ourHead, &liveMergedCatHash,
+  /* The session merge folded the caller's uncommitted delta into
+  ** liveMergedCatHash so the working set keeps it. When the commit must be
+  ** based on pCommitOurCatHash instead (revert with unrelated dirty
+  ** changes), un-apply the delta for the commit only: a three-way with the
+  ** pre-op working catalog as base takes the dirty tables back to their
+  ** pCommitOurCatHash state and keeps the merge result everywhere else.
+  ** The caller's overlap gate keeps those table sets disjoint, so this
+  ** merge has nothing to conflict or reindex over. */
+  commitCatHash = liveMergedCatHash;
+  if( pCommitOurCatHash
+   && prollyHashCompare(pCommitOurCatHash, ourCatHash)!=0 ){
+    char **azReindexC = 0;
+    int nReindexC = 0;
+    int nCommitConflicts = 0;
+    char *zCErr = 0;
+    rc = doltliteMergeCatalogs(db, ourCatHash, &liveMergedCatHash,
+                               pCommitOurCatHash, &commitCatHash,
+                               &nCommitConflicts, &zCErr, 0, 0, 0,
+                               &azReindexC, &nReindexC, 0, 0);
+    sqlite3_free(zCErr);
+    doltliteFreeNameList(azReindexC, nReindexC);
+    if( rc==SQLITE_OK && (nCommitConflicts>0 || nReindexC>0) ){
+      rc = SQLITE_CONSTRAINT;
+    }
+    if( rc!=SQLITE_OK ) goto apply_rollback;
+    commitSplit = 1;
+  }
+
+  rc = doltliteCreateAndStoreCommit(db, ourHead, &commitCatHash,
       zMessage, NULL, NULL, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteCompareAndAdvanceBranch(
-      db, ourHead, &commitHash, &liveMergedCatHash, 0);
+      db, ourHead, &commitHash, &commitCatHash,
+      commitSplit ? &liveMergedCatHash : 0);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteVcSealActiveSavepoints(db);
@@ -367,7 +399,7 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, zMsg, &nConflicts, hexBuf);
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, &nConflicts, hexBuf);
   }
 
   doltliteCommitClear(&pickCommit);
