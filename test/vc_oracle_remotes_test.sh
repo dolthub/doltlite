@@ -234,8 +234,8 @@ SQL
   fi
 }
 
-oracle_fetch_checkout_tracking_poststate() {
-  local name="$1"
+oracle_checkout_tracking_poststate() {
+  local name="$1" fetch="${2:-FETCH}"
   local dir="$TMPROOT/${name}_fetch_checkout"
   local dl_remote_url="file://$dir/dl_remote.db"
   local dt_remote_dir="$dir/dt_remote"
@@ -265,12 +265,19 @@ SELECT dolt_clone('$dl_remote_url');
 SQL
   "$DOLTLITE" "$dir/dl_clone.db" <"$dir/dl_clone.sql" >/dev/null 2>"$dir/dl_clone.err"
 
+  local dl_fetch="SELECT dolt_fetch('origin', 'branchA');"
+  local dt_fetch="CALL dolt_fetch('origin', 'branchA');"
+  if [ "$fetch" = "NO_FETCH" ]; then
+    dl_fetch=""
+    dt_fetch=""
+  fi
+
   cat >"$dir/dl_test.sql" <<SQL
-SELECT dolt_fetch('origin', 'branchA');
+$dl_fetch
 SELECT dolt_checkout('-b', 'topic', 'origin/branchA');
 SQL
   vc_oracle_run_doltlite_script "$dir/dl_clone.db" "$dir/dl.out" "$dir/dl.err" "$(cat "$dir/dl_test.sql")"
-  dl_post=$(printf ".headers off\n.mode list\n.separator '\t'\nSELECT active_branch() || char(9) || count(*) FROM t;\n" \
+  dl_post=$(printf ".headers off\n.mode list\n.separator '\t'\nSELECT (dolt_hashof('origin/main') = dolt_hashof('main')) || char(9) || (dolt_hashof('origin/branchA') IS NOT NULL) || char(9) || active_branch() || char(9) || count(*) FROM t;\n" \
             | "$DOLTLITE" "$dir/dl_clone.db" 2>>"$dir/dl.err" \
             | tr -d '\r')
 
@@ -304,11 +311,11 @@ SQL
     "$DOLT" clone "file://$dt_remote_dir" dt_clone >/dev/null 2>&1
     cd dt_clone || exit 1
     cat >test.sql <<SQL
-CALL dolt_fetch('origin', 'branchA');
+$dt_fetch
 CALL dolt_checkout('-b', 'topic', 'origin/branchA');
 SQL
     "$DOLT" sql -c < test.sql >/dev/null 2>"$dir/dt.err"
-    dt_post=$("$DOLT" sql -r csv -q "SELECT concat(active_branch(), char(9), count(*)) FROM t;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '\"\r')
+    dt_post=$("$DOLT" sql -r csv -q "SELECT concat(dolt_hashof('origin/main') = dolt_hashof('main'), char(9), dolt_hashof('origin/branchA') IS NOT NULL, char(9), active_branch(), char(9), count(*)) FROM t;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '\"\r')
     printf "%s\n" "$dt_post" >"$dir/dt.post"
   )
   dt_post=$(cat "$dir/dt.post")
@@ -755,7 +762,8 @@ ROLLBACK TO sp1;
 " "SELECT active_branch();"
 
 oracle_nested_pull_rollback_poststate "pull_nested_savepoint_rollback_restores_state"
-oracle_fetch_checkout_tracking_poststate "fetch_then_checkout_remote_tracking_branch"
+oracle_checkout_tracking_poststate "clone_checkout_remote_tracking_branch" "NO_FETCH"
+oracle_checkout_tracking_poststate "fetch_then_checkout_remote_tracking_branch"
 oracle_fetch_ref_consumer_poststate \
   "fetch_then_bare_checkout_remote_tracking_branch" \
   "SELECT dolt_fetch('origin', 'branchA');
