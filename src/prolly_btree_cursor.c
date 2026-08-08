@@ -392,6 +392,60 @@ static int seedMutMapIterFromCursor(
   return SQLITE_NOTFOUND;
 }
 
+/* Resume a merged scan whose merge state a deferred write deactivated.
+** cachedIntKey is the logical position: the row the cursor sat on
+** (BTCF_ValidNKey) or the hole a delete left there (BTCF_DeleteKey). The
+** tree cursor is only a parking spot -- when the departed row was
+** mut-map-sourced it sits past every pending row between the key and the
+** next tree row, so seeding the step from it skips them. Re-seed both
+** sides strictly past the key and let mergeScan pick the next live row. */
+static int resumeDeactivatedMergedScan(BtCursor *pCur, int dir){
+  ProllyMutMapIter it;
+  i64 intKey = pCur->cachedIntKey;
+  int res = 0;
+  int rc;
+
+  refreshCursorRoot(pCur);
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyCursorSeekInt(&pCur->pCur, intKey, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyCursorIsValid(&pCur->pCur) && res*dir<=0 ){
+    rc = dir>0 ? prollyCursorNext(&pCur->pCur) : prollyCursorPrev(&pCur->pCur);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0, intKey);
+  if( rc!=SQLITE_OK ) return rc;
+  if( dir>0 ){
+    if( it.idx < pCur->pMutMap->nEntries ){
+      ProllyMutMapEntry *e;
+      rc = orderedMutMapEntryAt(pCur->pMutMap, it.idx, &e);
+      if( rc!=SQLITE_OK ) return rc;
+      if( prollyMutMapEntryIntKey(e)==intKey ) it.idx++;
+    }
+  }else{
+    it.idx--;
+  }
+  pCur->mmIdx = it.idx;
+  pCur->mmPhysIdx = -1;
+  pCur->mmPhysActive = 0;
+  pCur->mmActive = 1;
+  rc = mergeScan(pCur, dir, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( res ){
+    pCur->eState = CURSOR_INVALID;
+    return SQLITE_DONE;
+  }
+  pCur->eState = CURSOR_VALID;
+  /* Only a pure tree row may serve the tree payload: on a BOTH landing the
+  ** mut-map entry shadows the tree row, and getCursorPayload consults the
+  ** cached payload before the merge source. */
+  if( pCur->mergeSrc==MERGE_SRC_TREE ){
+    cacheCurrentTreePayloadIfIntKey(pCur);
+  }
+  return SQLITE_OK;
+}
+
 static int mergeFirst(BtCursor *pCur, int *pRes){
   int rc = ensureCursorMutMapOrder(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -577,6 +631,12 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
 
   if( pCur->mmActive ){
     rc = prollyCursorApplyMergeStep(pCur, 1);
+  }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
+         && pCur->curIntKey
+         && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey)) ){
+    rc = ensureCursorMutMapOrder(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = resumeDeactivatedMergedScan(pCur, 1);
   }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapIter it;
     rc = ensureCursorMutMapOrder(pCur);
@@ -629,6 +689,12 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
 
   if( pCur->mmActive ){
     rc = prollyCursorApplyMergeStep(pCur, -1);
+  }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
+         && pCur->curIntKey
+         && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey)) ){
+    rc = ensureCursorMutMapOrder(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = resumeDeactivatedMergedScan(pCur, -1);
   }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapIter it;
     rc = ensureCursorMutMapOrder(pCur);

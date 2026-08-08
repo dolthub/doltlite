@@ -253,4 +253,51 @@ run_test "join_still_empty_for_empty_and_emptied_tables" \
 
 db_rm "$DB"
 
+# A one-pass DELETE/UPDATE scan steps off each row it just wrote. When the
+# departed row was mut-map-sourced, the step must resume from that row's key:
+# the tree cursor is parked at the next committed row, and a step seeded from
+# it skips every pending row in between.
+DB=/tmp/test_txn_onepass_resume_$$.db; db_rm "$DB"
+
+run_test "onepass_delete_covers_pending_rows" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (10,'ten'),(20,'twenty');
+   BEGIN;
+   INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');
+   DELETE FROM t WHERE id < 3;
+   COMMIT;
+   SELECT group_concat(id) FROM t;" \
+  "3,4,5,10,20" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "onepass_update_covers_pending_rows" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (10,'ten'),(20,'twenty');
+   BEGIN;
+   INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c');
+   UPDATE t SET v='UPD' WHERE id < 4;
+   COMMIT;
+   SELECT group_concat(id||'='||v) FROM t;" \
+  "1=UPD,2=UPD,3=UPD,10=ten,20=twenty" \
+  "$DB"
+
+db_rm "$DB"
+
+# The step lands merged: pending rows interleave committed ones, and a
+# pending update shadowing a committed row must survive as the merged value.
+run_test "onepass_update_resume_lands_merged" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+   INSERT INTO t VALUES (13,130),(27,270);
+   BEGIN;
+   INSERT INTO t VALUES (10,1000);
+   UPDATE t SET v=v+1 WHERE id BETWEEN 7 AND 14;
+   COMMIT;
+   SELECT group_concat(id||'='||v) FROM t;" \
+  "10=1001,13=131,27=270" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
