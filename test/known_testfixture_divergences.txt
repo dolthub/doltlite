@@ -1464,8 +1464,8 @@ attach2 attach2-4.15 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 attachmalloc attachmalloc-1.transient.488 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 attachmalloc attachmalloc-1.transient.914 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 attachmalloc attachmalloc-1.transient.1409 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.920 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1421 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.922 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1425 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 mallocD mallocD-4.transient.107 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
@@ -4046,7 +4046,10 @@ sysfault sysfault-2.2-vfsfault-transient.50 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.51 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.52 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.54 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.99 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.102 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.103 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.102 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.103 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.104 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.105 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.104 class=intentional
