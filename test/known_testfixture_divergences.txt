@@ -1460,11 +1460,11 @@ attach2 attach2-4.15 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 # paths, shifting OOM fault indices (same #1859 brittleness as backup_malloc).
 # vec1's built-in registration adds ~25 allocations at connection open,
 # shifting every entry by +25.
-attachmalloc attachmalloc-1.transient.498 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.931 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1433 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.939 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1449 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.488 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.921 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1423 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.929 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1439 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 mallocD mallocD-4.transient.107 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
@@ -1927,8 +1927,6 @@ ioerr3 ioerr3-2.4.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.5.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.6.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.7.3 class=intentional  # IO-fault point shift
-ioerr3 ioerr3-2.8.3 class=intentional  # IO-fault point shift
-ioerr3 ioerr3-2.9.3 class=intentional  # IO-fault point shift
 journal2 journal2-1.1 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.2 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.5 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
@@ -4044,12 +4042,15 @@ sysfault sysfault-2.2-vfsfault-transient.45 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.46 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.47 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.48 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.49 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.50 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.51 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.52 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.53 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.54 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.56 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.99 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.104 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.105 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.104 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.105 class=intentional
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
@@ -5500,8 +5501,6 @@ ioerr ioerr-7.50.1 class=intentional  # hot-journal prep copies absent -journal 
 ioerr ioerr-7.51.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.52.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.53.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.54.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.55.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journal sidecar
 # ioerr-2 VACUUM gc-rewrite window: the injected error lands in a best-effort
 # finalization write gc deliberately consumes, so the statement succeeds after
@@ -6020,23 +6019,16 @@ sysfault sysfault-2.1-vfsfault-transient.108 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.109 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.110 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.111 class=intentional
-sysfault sysfault-2.1-vfsfault-transient.112 class=intentional
-sysfault sysfault-2.1-vfsfault-transient.113 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.106 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.107 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.108 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.109 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.110 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.111 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.112 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.103 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.106 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.107 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.108 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.109 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.110 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.111 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.112 class=intentional
 
 # crash4: first-commit sector trash; reopen surfaces NOTADB (was crash)
 crash4 crash4-1.1.2 class=intentional  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor

@@ -144,6 +144,10 @@ static SQLITE_INLINE int doltliteVtabConnectTable(
   }else{
     v->zTableName = sqlite3_mprintf("");
   }
+  if( !v->zTableName ){
+    doltliteVtabCommonDisconnect(&v->base);
+    return SQLITE_NOMEM;
+  }
 
   if( historical ){
     rc = doltliteLoadHistoricalTableColumns(db, v->zTableName,
