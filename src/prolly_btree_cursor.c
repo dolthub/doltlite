@@ -633,7 +633,11 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
     rc = prollyCursorApplyMergeStep(pCur, 1);
   }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
          && pCur->curIntKey
-         && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey)) ){
+         && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey))
+         && !(prollyCursorIsValid(&pCur->pCur)
+              && prollyCursorIntKey(&pCur->pCur)==pCur->cachedIntKey) ){
+    /* A tree cursor parked on the logical key seeds the fast branch below;
+    ** parked anywhere else it would skip the pending rows in between. */
     rc = ensureCursorMutMapOrder(pCur);
     if( rc!=SQLITE_OK ) return rc;
     rc = resumeDeactivatedMergedScan(pCur, 1);
@@ -691,7 +695,9 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
     rc = prollyCursorApplyMergeStep(pCur, -1);
   }else if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
          && pCur->curIntKey
-         && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey)) ){
+         && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey))
+         && !(prollyCursorIsValid(&pCur->pCur)
+              && prollyCursorIntKey(&pCur->pCur)==pCur->cachedIntKey) ){
     rc = ensureCursorMutMapOrder(pCur);
     if( rc!=SQLITE_OK ) return rc;
     rc = resumeDeactivatedMergedScan(pCur, -1);
