@@ -206,12 +206,20 @@ static void doltliteRevertFunc(
 
   {
     char msg[512];
+    /* Base the commit on HEAD, not the working catalog: the revert commit
+    ** must contain only the revert, while unrelated uncommitted changes
+    ** (the overlap gate above rejects related ones) stay in the working
+    ** set, matching Dolt. */
+    const ProllyHash *pCommitOurs =
+        prollyHashCompare(&liveOurCatalog, &ourCommit.catalogHash)!=0
+          ? &ourCommit.catalogHash : 0;
     sqlite3_snprintf(sizeof(msg), msg, "Revert \"%s\"",
                      revertCommit.zMessage ? revertCommit.zMessage : zRef);
 
     rc = applyMergedCatalogAndCommit(db, context,
         &revertCommit.catalogHash, &liveOurCatalog,
-        &parentCommit.catalogHash, &ourHead, msg, &nConflicts, hexBuf);
+        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg,
+        &nConflicts, hexBuf);
   }
 
   doltliteCommitClear(&revertCommit);

@@ -15,13 +15,19 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','add row');
 INSERT INTO meta VALUES(1,'side');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
+# Unstaged change to an unrelated table: revert succeeds, commits only the
+# revert, and the change stays in the working set (Dolt 2.2.2: dolt_status
+# keeps the table modified and no commit contains it).
 run_test_match "rv_dirty_unrelated_hash" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "rv_dirty_unrelated_t_reverted" "SELECT count(*) FROM t;" "0" "$DB"
 run_test "rv_dirty_unrelated_meta_kept" "SELECT note FROM meta WHERE id=1;" "side" "$DB"
-run_test "rv_dirty_unrelated_status_clean" \
-  "SELECT count(*) FROM dolt_status WHERE table_name='meta';" \
+run_test "rv_dirty_unrelated_meta_still_dirty" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='meta' AND staged=0;" \
+  "1" "$DB"
+run_test "rv_dirty_unrelated_commit_excludes_meta" \
+  "SELECT count(*) FROM dolt_at_meta WHERE commit_ref='HEAD';" \
   "0" "$DB"
 run_test "rv_dirty_unrelated_log_has_revert" \
   "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
