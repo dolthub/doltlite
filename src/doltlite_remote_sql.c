@@ -759,6 +759,22 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   {
+    int i;
+    int nBr;
+    const BranchRef *aBr;
+    refsTableGetBranches(&cs->refs, &nBr, &aBr);
+    for(i=0; i<nBr; i++){
+      rc = chunkStoreUpdateTracking(
+          cs, "origin", aBr[i].zName, &aBr[i].commitHash);
+      if( rc!=SQLITE_OK ){
+        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+                                  "failed to add origin tracking refs");
+        return;
+      }
+    }
+  }
+
+  {
     const char *zDefault = chunkStoreGetDefaultBranch(cs);
     ProllyHash branchCommit;
     int nBr;
