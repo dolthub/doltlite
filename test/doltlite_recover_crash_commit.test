@@ -1,0 +1,226 @@
+# Crash-recovery coverage replacing the bucketed savepoint4 and crash2 runs
+# (issue #2045). Those suites hard-code rollback-journal semantics: stock's
+# commit point (the journal delete) lies strictly after the last main-file
+# sync, and crashsql only crashes on syncs, so any simulated crash recovers
+# the pre-transaction state. DoltLite's commit point IS a sync of the main
+# file, so a crash during that sync may legitimately recover the committed
+# transaction — which state comes back depends on the exact WAL layout, and
+# any engine change reshuffles it. The checks here accept either consistent
+# outcome and reject everything else.
+#
+# The committed outcome for each iteration is learned from a no-crash probe
+# run of the same script from the same snapshot: the crash VFS seeds SQL
+# randomness deterministically, so the probe commits byte-for-byte the state
+# the crashed run would have committed.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_recover_crash_commit
+
+ifcapable !crashtest {
+  finish_test
+  return
+}
+
+proc read_state {sql} {
+  sqlite3 rdb test.db
+  set r [list [rdb eval $sql] [rdb eval {PRAGMA integrity_check}]]
+  rdb close
+  return $r
+}
+
+# Run one crash iteration from the current test.db state: learn the committed
+# outcome with a no-crash probe, restore, crash at $iDelay, and demand the
+# recovered state is the pre state or the committed state, always with a clean
+# integrity check. Returns [list <verdict> <crashed>]; test.db is left in the
+# recovered state.
+proc crash_iteration {iDelay sigsql extraargs body} {
+  forcedelete snap.db
+  file copy test.db snap.db
+
+  set probe [eval crashsql -delay 2000000 $extraargs -file test.db [list $body]]
+  set committed [read_state $sigsql]
+
+  forcedelete test.db test.db-lock
+  file copy snap.db test.db
+  set pre [read_state $sigsql]
+
+  set ret [eval crashsql -delay $iDelay $extraargs -file test.db [list $body]]
+  set crashed [lindex $ret 0]
+  set post [read_state $sigsql]
+
+  set okint [expr {[lindex $post 1] eq "ok"}]
+  set known [expr {[lindex $post 0] eq [lindex $pre 0]
+                || [lindex $post 0] eq [lindex $committed 0]}]
+  if {$okint && $known} {
+    set verdict ok
+  } else {
+    set verdict [list post $post pre $pre committed $committed probe $probe]
+  }
+  list $verdict $crashed
+}
+
+# Crash every sync of $body, then let one run complete; every recovery must
+# land on the pre or committed state. do_test bodies run at global scope, so
+# the iteration state rides in ::ci_* globals.
+proc crash_sweep {name sigsql extraargs body {maxdelay 30}} {
+  for {set iDelay 1; set crashed 1} {$crashed && $iDelay<=$maxdelay} {incr iDelay} {
+    set ::ci_delay $iDelay
+    set ::ci_sig $sigsql
+    set ::ci_extra $extraargs
+    set ::ci_body $body
+    do_test $name.$iDelay {
+      set r [crash_iteration $::ci_delay $::ci_sig $::ci_extra $::ci_body]
+      set ::crashed_cur [lindex $r 1]
+      lindex $r 0
+    } {ok}
+    set crashed $::crashed_cur
+  }
+}
+
+# Section 1: the savepoint4 shape — nested savepoints with rollbacks and
+# releases over large text rows, crashed at every sync of both the journal
+# sidecar path and the main file.
+
+do_test 1.0 {
+  catch {db close}
+  forcedelete test.db test.db-lock snap.db
+  sqlite3 db test.db
+  execsql {
+    PRAGMA cache_size=10;
+    BEGIN;
+    CREATE TABLE t1(x TEXT);
+    INSERT INTO t1 VALUES(randstr(10,400));
+    INSERT INTO t1 VALUES(randstr(10,400));
+    INSERT INTO t1 SELECT randstr(10,400) FROM t1;
+    INSERT INTO t1 SELECT randstr(10,400) FROM t1;
+    INSERT INTO t1 SELECT randstr(10,400) FROM t1;
+    INSERT INTO t1 SELECT randstr(10,400) FROM t1;
+    INSERT INTO t1 SELECT randstr(10,400) FROM t1;
+    INSERT INTO t1 SELECT randstr(10,400) FROM t1;
+    COMMIT;
+    SELECT count(*) FROM t1;
+  }
+} {128}
+db close
+
+set sp4_sig {SELECT count(*), md5sum(x) FROM t1}
+set sp4_body {
+  SAVEPOINT one;
+    INSERT INTO t1 SELECT * FROM t1 WHERE rowid<50;
+   ROLLBACK TO one;
+    INSERT INTO t1 SELECT * FROM t1 WHERE rowid<50;
+    SAVEPOINT two;
+      DELETE FROM t1 WHERE (random()%10)==0;
+      SAVEPOINT three;
+        DELETE FROM t1 WHERE (random()%10)==0;
+        SAVEPOINT four;
+          DELETE FROM t1 WHERE (random()%10)==0;
+    RELEASE two;
+    SAVEPOINT three;
+      UPDATE t1 SET x = randstr(10, 400) WHERE (rowid%12)==0;
+      SAVEPOINT four;
+        UPDATE t1 SET x = randstr(10, 400) WHERE (rowid%14)==0;
+     ROLLBACK TO three;
+      UPDATE t1 SET x = randstr(10, 400) WHERE (rowid%13)==0;
+    RELEASE three;
+  DELETE FROM t1 WHERE rowid > (
+    SELECT rowid FROM t1 ORDER BY rowid ASC LIMIT 1 OFFSET 128
+  );
+  RELEASE one;
+}
+
+for {set ii 1} {$ii<=4} {incr ii} {
+  crash_sweep 1.$ii.db $sp4_sig {} $sp4_body
+
+  sqlite3 db test.db
+  execsql {
+    DELETE FROM t1 WHERE random()%10==0;
+    INSERT INTO t1 SELECT randstr(10,10)||x FROM t1 WHERE random()%9==0;
+  }
+  db close
+}
+
+# The journal-sidecar variant: doltlite writes no rollback journal, so the
+# child usually completes and commits where stock would crash; the committed
+# arm of the acceptance covers exactly that.
+set ::sigsql_cur $sp4_sig
+set ::body_cur $sp4_body
+set ::extraargs_cur {}
+for {set iDelay 1} {$iDelay<=3} {incr iDelay} {
+  do_test 1.jrnl.$iDelay {
+    forcedelete snap.db
+    file copy test.db snap.db
+    set probe [crashsql -delay 2000000 -file test.db $::body_cur]
+    set committed [read_state $::sigsql_cur]
+    forcedelete test.db test.db-lock
+    file copy snap.db test.db
+    set pre [read_state $::sigsql_cur]
+    crashsql -delay $iDelay -file test.db-journal $::body_cur
+    set post [read_state $::sigsql_cur]
+    expr {[lindex $post 1] eq "ok"
+       && ([lindex $post 0] eq [lindex $pre 0]
+        || [lindex $post 0] eq [lindex $committed 0])}
+  } {1}
+}
+
+# Section 2: the crash2 shape — random insert/delete churn crashed at every
+# sync across simulated sector sizes, on both the journal sidecar path and
+# the main file.
+
+do_test 2.0 {
+  catch {db close}
+  forcedelete test.db test.db-lock snap.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE abc(a, b, c);
+  }
+  execsql BEGIN
+  for {set n 0} {$n < 500} {incr n} {
+    execsql "INSERT INTO abc VALUES($n, [expr 2*$n], [expr 3*$n])"
+  }
+  execsql {
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+  }
+  execsql COMMIT
+  execsql {SELECT count(*) FROM abc}
+} {2000}
+db close
+
+set c2_sig {SELECT count(*), md5sum(a), md5sum(b), md5sum(c) FROM abc}
+
+for {set i 1} {$i<=6} {incr i} {
+  set sector [expr 1024 * (1<<($i%4))]
+  set body "
+    BEGIN;
+    SELECT random() FROM abc LIMIT $i;
+    INSERT INTO abc SELECT randstr(10,10), 0, 0 FROM abc WHERE random()%2==0;
+    DELETE FROM abc WHERE random()%2!=0;
+    COMMIT;
+  "
+  set ::sigsql_cur $c2_sig
+  set ::body_cur $body
+  set ::extraargs_cur [list -blocksize $sector]
+  if {$i % 2} {
+    crash_sweep 2.$i.db $c2_sig $::extraargs_cur $body
+  } else {
+    do_test 2.$i.jrnl {
+      forcedelete snap.db
+      file copy test.db snap.db
+      set probe [eval crashsql -delay 2000000 $::extraargs_cur -file test.db [list $::body_cur]]
+      set committed [read_state $::sigsql_cur]
+      forcedelete test.db test.db-lock
+      file copy snap.db test.db
+      set pre [read_state $::sigsql_cur]
+      eval crashsql -delay 1 $::extraargs_cur -file test.db-journal [list $::body_cur]
+      set post [read_state $::sigsql_cur]
+      expr {[lindex $post 1] eq "ok"
+         && ([lindex $post 0] eq [lindex $pre 0]
+          || [lindex $post 0] eq [lindex $committed 0])}
+    } {1}
+  }
+}
+
+forcedelete snap.db
+finish_test

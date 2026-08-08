@@ -39,7 +39,7 @@ corruptK
 corruptL
 corruptM
 corruptN
-crash2
+doltlite_recover_crash_commit
 crash3
 crash4
 crash5
