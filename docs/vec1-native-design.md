@@ -1,6 +1,8 @@
 # Version-controlled vector search in doltlite: vec1 syntax, Dolt semantics
 
-Status: Phase 1 implemented (this PR); Phases 2 and 3 are design. All
+Status: Phases 1 and 2 done — Phase 1 shipped the vendored extension,
+Phase 2 turned out to be upstream behavior under PQ configurations,
+verified and pinned in the suite. Phase 3 is design. All
 empirical claims below were verified on 2026-08-07 against doltlite master
 (with #2020–#2023) and vec1 trunk check-in `ecb12ac26e` (v0.7), with stock
 SQLite 3.53.2 as the oracle.
@@ -44,10 +46,13 @@ Shadow layout (all ordinary rowid tables):
 
 Key behaviors, each verified against the stock oracle where marked:
 
-1. **`rebuild` migrates vectors out of `%_base`** (stock-identical). After
-   rebuild, `%_base.vector` holds 1-byte placeholders and the float data
-   lives only in `%_idx` segment blobs. Inserts into a built index migrate
-   immediately. `%_base` is *not* an authoritative store after rebuild.
+1. **`rebuild` migrates vectors out of `%_base` in uncompressed
+   configurations** (stock-identical). After rebuild, `%_base.vector`
+   holds the bucket number and the float data lives only in `%_idx`
+   segment blobs; inserts into a built index migrate immediately, and
+   `%_base` is *not* an authoritative store. With PQ compression
+   (`codesize > 0`) the raw vectors stay in `%_base` — the property
+   Phase 2 builds on.
 2. **Rebuild is deterministic.** Identical final content inserted in
    different orders produces byte-identical `%_idx`/`%_meta`. Combined with
    content-addressed chunk storage, a rebuild over unchanged data costs
@@ -80,8 +85,10 @@ in the object builds, the MSVC build, and the doltlite amalgamation,
 registered per-connection in the built-in extension list under
 `DOLTLITE_PROLLY` (no enable flag, no `.load`; stock amalgamations are
 unchanged). Users get vec1 syntax with per-branch versioned vector search
-today. Documented caveats: merge requires the rebuild workflow below;
-concurrent branch writes to a *built* index risk the loss mode in finding 3.
+today. Documented caveat: with *uncompressed* index configurations,
+merge requires the rebuild workflow below, and concurrent branch writes to
+a built index risk the loss mode in finding 3 — PQ configurations are
+exempt (see Phase 2).
 
 The vendored file stays byte-identical to upstream outside fenced
 `doltlite:` blocks, which carry four things: the `VEC1_STATIC`/init glue,
@@ -107,23 +114,25 @@ may still change the shadow schema. Vendoring pins check-in `ecb12ac26e`;
 re-vendoring is a deliberate, tested act (same as the Aug 1 upstream merge
 discipline), with the fenced blocks reapplied.
 
-### Phase 2 — keep `%_base` authoritative (small patch, transforms the semantics)
+### Phase 2 — keep `%_base` authoritative (achieved by configuration, no patch)
 
-A compile-time doltlite mode for vec1 (candidate name
-`VEC1_KEEP_BASE`): inserts write the raw vector to `%_base` *and* the
-index; rebuild reads from `%_base` and does not blank it. Storage cost:
-one extra copy of the raw vectors (~the size of the data itself; the index
-segments usually carry compressed PQ codes anyway when trained).
+The original plan here was a carried patch (`VEC1_KEEP_BASE`) forcing raw
+vectors to stay in `%_base`. Implementation reading made it moot: **vec1
+already keeps `%_base` authoritative whenever PQ compression is on**
+(`codesize > 0`). The vector-to-index migration only happens for
+uncompressed configurations, where the index segments store full vectors
+and `%_base` would be a duplicate; with PQ, the segments hold only codes,
+`%_base` retains the raw vectors (reranking needs them), and delete/update
+re-derive the bucket by quantizing against the model. Verified end to end
+on doltlite and pinned in the suite:
 
-What this buys, given the verified findings:
-
-- **Lossless merge, mechanically.** `%_base` row-merges (finding 3's clean
-  half). `%_idx`/`%_meta`/`%_config` conflicts become *resolvable by
-  either side + rebuild* with zero data loss, because base is always the
-  source of truth. The recovery is `dolt_conflicts_resolve(<either>);
-  INSERT INTO t(cmd,arg) VALUES('rebuild', <model>);` — deterministic
-  (finding 2), so both merge parents resolving identically converge to
-  identical indexes (history independence).
+- **Lossless merge, mechanically.** `%_base` row-merges with full vector
+  fidelity. Branch inserts landing in different buckets merge with *zero
+  conflicts* (disjoint segment rows). Same-bucket inserts conflict only on
+  the derived `%_idx` tail segment; resolving with **either** side and
+  rebuilding from the merged base recovers both branches' vectors — no
+  source table, no discipline. Rebuild determinism (finding 2) means both
+  merge parents resolving independently converge to identical indexes.
 - **Structural sharing.** Per-row base entries share across commits like
   any prolly table (finding 4: ~5KB per added vector, independent of
   corpus size). Index churn from rebuilds dedups to zero when unchanged.
@@ -131,10 +140,14 @@ What this buys, given the verified findings:
   both branches conflict in `%_base` — a real semantic conflict the user
   should resolve.
 
-Upstream angle: `keep_base` is a legitimate general feature (it is what
-makes vec1 backup/replication-friendly too). Worth offering upstream; until
-then it is a small carried patch (the migration happens in a handful of
-sites — insert path, rebuild reader, and the base-write of placeholders).
+**The guidance is therefore a configuration rule**: versioned vector
+tables should use trained PQ configurations (`codesize > 0`; training
+needs ≥512 vectors). Uncompressed configurations (`index:"flat"`, or
+`nbucket` without `codesize`) migrate vectors into the index and carry the
+finding-3 loss caveat — appropriate only for small corpora where the
+source-table drop-and-rebuild workflow is trivial anyway. A carried
+`VEC1_KEEP_BASE` patch decoupling keep-base from compression remains
+possible for those configs but is backlog, not a phase.
 
 ### Phase 3 (optional end-state) — merge-aware derived shadows
 
@@ -169,8 +182,8 @@ duplication or the rebuild-on-merge cost proves unacceptable at scale.
 - `test/doltlite_vec1_vc.sh` (Phase 1, landed): vec1 across the VC
   surfaces, the built-index conflict + source-table-rebuild recovery, and
   insert-order determinism of `%_idx`/`%_meta`. The finding-3 loss case is
-  documented here rather than pinned as a test; Phase 2 turns the recovery
-  into a lossless assertion that no longer needs a source table.
+  documented here rather than pinned as a test; the PQ scenarios pin the
+  lossless recovery that needs no source table.
 - Still open: recompact-after-noop → zero chunk growth as a suite check
   (verified by hand); fuzzing — vec1 shadow blobs are untrusted on-disk
   inputs once vendored, so the fuzz-vc-blobs corpus should grow
@@ -181,7 +194,9 @@ duplication or the rebuild-on-merge cost proves unacceptable at scale.
 
 ## Recommendation
 
-Phase 1 (landed) plus Phase 2 deliver the ask with real Dolt semantics:
-vec1 syntax, versioned + branchable vector search, lossless merges via
-deterministic rebuild, and structural sharing measured at ~5KB per vector
-per commit. Phase 3 is polish to schedule on demand.
+Phases 1 and 2 deliver the ask with real Dolt semantics: vec1 syntax,
+versioned + branchable vector search, lossless merges via deterministic
+rebuild under PQ configurations, and structural sharing measured at ~5KB
+per vector per commit. Tell users one rule — train with `codesize > 0` —
+and the versioning story has no asterisks. Phase 3 is polish to schedule
+on demand.

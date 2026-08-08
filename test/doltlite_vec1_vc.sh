@@ -147,6 +147,53 @@ check "vec1_source_rebuild_recovers_both" "10
 4
 ok" "$result"
 
+scenario "PQ config: base stays authoritative, merges are lossless"
+newdb
+python3 -c "
+import struct, random
+random.seed(3)
+with open('$TDIR/pq600.sql','w') as f:
+    for i in range(1, 601):
+        v = [random.uniform(-1,1) for _ in range(8)]
+        blob = ''.join(f'{b:02x}' for b in struct.pack('<8f', *v))
+        f.write(f\"INSERT INTO t(rowid, vector) VALUES ({i}, x'{blob}');\n\")
+"
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/pq600.sql
+CREATE TABLE m(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO m SELECT 1, vec1_train(vector, '{nbucket: 8, codesize: 4, distance: \"l2\"}') FROM t_base;
+INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
+SELECT dolt_commit('-Am','built PQ index');
+SELECT dolt_checkout('-b','left');
+INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+SELECT dolt_commit('-am','left');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+SELECT dolt_commit('-am','right, same bucket');" "$DB" > /dev/null
+# With codesize>0 the raw vectors never migrate out of %_base, so it
+# row-merges with full fidelity and the only conflicts are on derived
+# %_idx segments. Resolving with EITHER side and rebuilding from the
+# merged base recovers both branches' vectors — no source table needed.
+result=$(run_sql "SELECT dolt_checkout('left');
+BEGIN;
+SELECT dolt_merge('right');
+SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)>0
+  THEN dolt_conflicts_resolve('--ours', (SELECT \"table\" FROM dolt_conflicts LIMIT 1)) END;
+SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)>0
+  THEN dolt_conflicts_resolve('--ours', (SELECT \"table\" FROM dolt_conflicts LIMIT 1)) END;
+SELECT (SELECT count(*) FROM t_base WHERE id IN (7001,8001))
+    || '|' || (SELECT count(*) FROM t_base WHERE length(vector)=32);
+INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
+SELECT length(dolt_commit('-Am','resolved + rebuilt'))=40;" "$DB" | tail -2)
+check "vec1_pq_base_authoritative" "2|602
+1" "$result"
+result=$(run_sql "SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k: 1, nprobe: 8}');
+SELECT rowid FROM t(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f', '{k: 1, nprobe: 8}');
+PRAGMA integrity_check;" "$DB/left")
+check "vec1_pq_lossless_merge" "7001
+8001
+ok" "$result"
+
 scenario "rebuild is deterministic across insert orders"
 newdb
 DB2="$TDIR/det2.db"
