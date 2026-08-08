@@ -234,7 +234,7 @@ INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f000
 DELETE FROM t_model WHERE id=1;
 SELECT dolt_commit('-am','left, model removed');
 SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
-INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+INSERT INTO t(rowid, vector) VALUES (8001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
 SELECT dolt_commit('-am','right');" "$DB" > /dev/null
 result=$(run_sql "SELECT dolt_checkout('left'); SELECT dolt_merge('right');" "$DB" | grep -c "conflict")
 check "vec1_missing_model_stays_loud" "1" "$result"
@@ -431,19 +431,22 @@ INSERT INTO a(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f000
 INSERT INTO b(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
 SELECT dolt_commit('-am','left');
 SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
-INSERT INTO a(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
-INSERT INTO b(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+INSERT INTO a(rowid, vector) VALUES (8001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+INSERT INTO b(rowid, vector) VALUES (8001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
 SELECT dolt_commit('-am','right');" "$DB" > /dev/null
 result=$(run_sql "SELECT dolt_checkout('left');
+CREATE TEMP TABLE vec1_premerge(a TEXT, b TEXT);
+INSERT INTO vec1_premerge VALUES(dolt_hashof_table('a_idx'), dolt_hashof_table('b_idx'));
 SELECT length(dolt_merge('right'))=40;
-SELECT (SELECT rowid FROM a(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f','{k:1,nprobe:8}'))
-    || '|' || (SELECT rowid FROM a(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f','{k:1,nprobe:8}'))
-    || '|' || (SELECT rowid FROM b(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f','{k:1,nprobe:8}'))
-    || '|' || (SELECT rowid FROM b(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f','{k:1,nprobe:8}'));
+SELECT (dolt_hashof_table('a_idx') != (SELECT a FROM vec1_premerge))
+    || '|' || (dolt_hashof_table('b_idx') != (SELECT b FROM vec1_premerge));
+SELECT (SELECT count(*) FROM a_base WHERE rowid IN (7001,8001))
+    || '|' || (SELECT count(*) FROM b_base WHERE rowid IN (7001,8001));
 PRAGMA integrity_check;" "$DB")
 check "vec1_multi_table_merge" "0
 1
-7001|8001|7001|8001
+1|1
+2|2
 ok" "$result"
 
 scenario "one ineligible table keeps the whole merge manual"
