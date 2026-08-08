@@ -809,6 +809,34 @@ contract is
 to verify the fixture, read and extend it, run GC, reject other header versions,
 and keep evidence needles live.
 
+## Vector Search
+
+The SQLite team's [vec1](https://sqlite.org/vec1) vector ANN extension is
+built in — no extension loading — and vector tables are versioned like
+everything else: branch, diff, historical search, clone, and push.
+
+```sql
+CREATE VIRTUAL TABLE embeddings USING vec1(vector, category);
+INSERT INTO embeddings(rowid, vector, category) VALUES (1, :f32blob, 3);
+
+-- Train and build the index (PQ compression; needs >= 512 vectors)
+SELECT vec1_train(vector, '{nbucket: 64, codesize: 8, distance: "cos"}')
+  FROM embeddings_base;             -- returns a model blob
+INSERT INTO embeddings(cmd, arg) VALUES ('rebuild', :model);
+
+-- KNN with metadata filtering and exact reranking
+SELECT rowid FROM embeddings(:query, '{k: 100}')
+ WHERE category = 3
+ ORDER BY vec1_cos_distance(:query, vector) LIMIT 10;
+```
+
+Train with `codesize > 0` and concurrent branch writes to a built index
+merge automatically: the raw vectors merge row-by-row and the index
+rebuilds itself from the merged data, deterministically. Uncompressed
+indexes, mixed conflicts, and missing models surface explicit conflicts
+instead of losing data. Design notes and the verified merge semantics live
+in [docs/vec1-native-design.md](docs/vec1-native-design.md).
+
 ## Performance
 
 Nightly DoltLite-versus-SQLite numbers:
