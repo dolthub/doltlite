@@ -195,6 +195,77 @@ struct CatalogSerializeEntry {
   const char *zTblName;
 };
 
+typedef struct CatalogPgnoRef CatalogPgnoRef;
+struct CatalogPgnoRef {
+  Pgno iTable;
+  int iEntry;
+};
+
+typedef struct CatalogNameRef CatalogNameRef;
+struct CatalogNameRef {
+  const char *zName;
+  int iEntry;
+};
+
+#define CATALOG_INDEX_MIN_ENTRIES 32
+
+static int catalogNameRefCmp(const void *a, const void *b){
+  const CatalogNameRef *ea = (const CatalogNameRef*)a;
+  const CatalogNameRef *eb = (const CatalogNameRef*)b;
+  int c = strcmp(ea->zName, eb->zName);
+  return c ? c : ea->iEntry - eb->iEntry;
+}
+
+static int catalogNameRefFind(
+  CatalogNameRef *aRef,
+  int nRef,
+  struct TableEntry *aEntry,
+  int nEntry,
+  const char *zName
+){
+  int lo = 0;
+  int hi = nRef;
+  int i;
+  if( !zName ) return -1;
+  if( !aRef ){
+    for(i=0; i<nEntry; i++){
+      if( aEntry[i].zName && strcmp(aEntry[i].zName, zName)==0 ) return i;
+    }
+    return -1;
+  }
+  while( lo<hi ){
+    int mid = lo + (hi - lo) / 2;
+    if( strcmp(aRef[mid].zName, zName)<0 ){
+      lo = mid + 1;
+    }else{
+      hi = mid;
+    }
+  }
+  return lo<nRef && strcmp(aRef[lo].zName, zName)==0 ? aRef[lo].iEntry : -1;
+}
+
+static int catalogPgnoRefCmp(const void *a, const void *b){
+  const CatalogPgnoRef *ea = (const CatalogPgnoRef*)a;
+  const CatalogPgnoRef *eb = (const CatalogPgnoRef*)b;
+  if( ea->iTable < eb->iTable ) return -1;
+  if( ea->iTable > eb->iTable ) return 1;
+  return ea->iEntry - eb->iEntry;
+}
+
+static int catalogPgnoRefFind(CatalogPgnoRef *aRef, int nRef, Pgno iTable){
+  int lo = 0;
+  int hi = nRef;
+  while( lo<hi ){
+    int mid = lo + (hi - lo) / 2;
+    if( aRef[mid].iTable < iTable ){
+      lo = mid + 1;
+    }else{
+      hi = mid;
+    }
+  }
+  return lo<nRef && aRef[lo].iTable==iTable ? lo : -1;
+}
+
 static void freeCatalogEntryMeta(CatalogEntryMeta *aMeta, int nMeta){
   int i;
   for(i=0; i<nMeta; i++){
@@ -275,8 +346,9 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
   sqlite3 *db;
   Schema *pSchema;
   HashElem *k;
+  CatalogNameRef *aNameRef = 0;
   CatalogEntryMeta *aMeta = 0;
-  int nMeta = 0, nAlloc = 0, rc = SQLITE_OK, i;
+  int nNameRef = 0, nMeta = 0, nAlloc = 0, rc = SQLITE_OK, i;
   if( !pBtree || !(db = pBtree->db) || db->nDb<=0 ){
     *ppMeta = 0;
     *pnMeta = 0;
@@ -288,20 +360,26 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
     *pnMeta = 0;
     return SQLITE_OK;
   }
+  if( pBtree->cat.n>=CATALOG_INDEX_MIN_ENTRIES ){
+    aNameRef = sqlite3_malloc(pBtree->cat.n * (int)sizeof(CatalogNameRef));
+    if( !aNameRef ) return SQLITE_NOMEM;
+    for(i=0; i<pBtree->cat.n; i++){
+      if( !pBtree->cat.a[i].zName ) continue;
+      aNameRef[nNameRef].zName = pBtree->cat.a[i].zName;
+      aNameRef[nNameRef].iEntry = i;
+      nNameRef++;
+    }
+    qsort(aNameRef, nNameRef, sizeof(CatalogNameRef), catalogNameRefCmp);
+  }
   for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
     Table *pTab = (Table*)sqliteHashData(k);
     Index *pIdx;
     Pgno iTable = 0;
+    int iEntry;
     if( !pTab ) continue;
-    if( pBtree->cat.a ){
-      for(i=0; i<pBtree->cat.n; i++){
-        if( pBtree->cat.a[i].zName
-         && strcmp(pBtree->cat.a[i].zName, pTab->zName)==0 ){
-          iTable = pBtree->cat.a[i].iTable;
-          break;
-        }
-      }
-    }
+    iEntry = catalogNameRefFind(aNameRef, nNameRef, pBtree->cat.a,
+                                pBtree->cat.n, pTab->zName);
+    if( iEntry>=0 ) iTable = pBtree->cat.a[iEntry].iTable;
     if( iTable==0 ) iTable = pTab->tnum;
     if( iTable>1 ){
       rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iTable,
@@ -310,16 +388,9 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
     }
     for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
       Pgno iIndexTable = 0;
-      if( pBtree->cat.a ){
-        for(i=0; i<pBtree->cat.n; i++){
-          if( pBtree->cat.a[i].zName
-           && pIdx->zName
-           && strcmp(pBtree->cat.a[i].zName, pIdx->zName)==0 ){
-            iIndexTable = pBtree->cat.a[i].iTable;
-            break;
-          }
-        }
-      }
+      iEntry = catalogNameRefFind(aNameRef, nNameRef, pBtree->cat.a,
+                                  pBtree->cat.n, pIdx->zName);
+      if( iEntry>=0 ) iIndexTable = pBtree->cat.a[iEntry].iTable;
       if( iIndexTable==0 ) iIndexTable = pIdx->tnum;
       if( iIndexTable<=1 ) continue;
       if( iIndexTable==iTable ) continue;
@@ -335,6 +406,7 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
     aMeta[i].iPersistTable = 0;
   }
 done:
+  sqlite3_free(aNameRef);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
@@ -1063,6 +1135,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   sqlite3 *db;
   SchemaCatalogRow *aRows = 0;
   CatalogEntryMeta *aMeta = 0;
+  CatalogPgnoRef *aRowRef = 0;
   ProllyHash masterRoot;
   u8 masterFlags = 0;
   CatalogSerializeEntry *aSorted = 0;
@@ -1186,13 +1259,31 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     masterRoot = masterEntry.root;
   }
 
+  if( nRows>=CATALOG_INDEX_MIN_ENTRIES ){
+    aRowRef = sqlite3_malloc(nRows * (int)sizeof(CatalogPgnoRef));
+    if( !aRowRef ){
+      freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
+      return SQLITE_NOMEM;
+    }
+    for(i=0; i<nRows; i++){
+      aRowRef[i].iTable = aRows[i].oldPg;
+      aRowRef[i].iEntry = i;
+    }
+    qsort(aRowRef, nRows, sizeof(CatalogPgnoRef), catalogPgnoRefCmp);
+  }
+
   if( nMeta>0 ){
     Pgno iNextHidden = 2;
     for(i=0; i<nRows; i++){
       if( aRows[i].newPg >= iNextHidden ) iNextHidden = aRows[i].newPg + 1;
     }
     for(i=0; i<nMeta; i++){
-      if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
+      if( aRowRef
+        ? catalogPgnoRefFind(aRowRef, nRows, aMeta[i].iTable)>=0
+        : schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ){
+        continue;
+      }
       aMeta[i].iPersistTable = iNextHidden++;
     }
   }
@@ -1200,6 +1291,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   if( nTables > 0 ){
     aSorted = sqlite3_malloc(nTables * (int)sizeof(CatalogSerializeEntry));
     if( !aSorted ){
+      sqlite3_free(aRowRef);
       freeSchemaCatalogRows(aRows, nRows);
       freeCatalogEntryMeta(aMeta, nMeta);
       return SQLITE_NOMEM;
@@ -1228,24 +1320,46 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       ** a cross-domain collision and must be rejected. */
       {
         int bLiveCatalog = (aTables==pBtree->cat.a);
-        for(j=0; j<nRows; j++){
-          if( aRows[j].oldPg==aTables[i].iTable ){
-            if( !bLiveCatalog
-             && aTables[i].zName && aRows[j].zName
-             && strcmp(aRows[j].zName, aTables[i].zName)!=0 ){
-              continue;
+        /* Constructed arrays can mix numbering domains, and an
+        ** unnamed entry is always an index: a bare number match
+        ** against a table row is a cross-domain collision, not a
+        ** pairing. */
+        if( aRowRef ){
+          int iRef = catalogPgnoRefFind(aRowRef, nRows, aTables[i].iTable);
+          for(; iRef>=0 && iRef<nRows
+            && aRowRef[iRef].iTable==aTables[i].iTable; iRef++){
+            j = aRowRef[iRef].iEntry;
+            if( aRows[j].oldPg==aTables[i].iTable ){
+              if( !bLiveCatalog
+               && aTables[i].zName && aRows[j].zName
+               && strcmp(aRows[j].zName, aTables[i].zName)!=0 ){
+                continue;
+              }
+              if( !bLiveCatalog
+               && !aTables[i].zName
+               && aRows[j].zType && strcmp(aRows[j].zType, "index")!=0 ){
+                continue;
+              }
+              pRow = &aRows[j];
+              break;
             }
-            /* Constructed arrays can mix numbering domains, and an
-            ** unnamed entry is always an index: a bare number match
-            ** against a table row is a cross-domain collision, not a
-            ** pairing. */
-            if( !bLiveCatalog
-             && !aTables[i].zName
-             && aRows[j].zType && strcmp(aRows[j].zType, "index")!=0 ){
-              continue;
+          }
+        }else{
+          for(j=0; j<nRows; j++){
+            if( aRows[j].oldPg==aTables[i].iTable ){
+              if( !bLiveCatalog
+               && aTables[i].zName && aRows[j].zName
+               && strcmp(aRows[j].zName, aTables[i].zName)!=0 ){
+                continue;
+              }
+              if( !bLiveCatalog
+               && !aTables[i].zName
+               && aRows[j].zType && strcmp(aRows[j].zType, "index")!=0 ){
+                continue;
+              }
+              pRow = &aRows[j];
+              break;
             }
-            pRow = &aRows[j];
-            break;
           }
         }
       }
@@ -1278,7 +1392,10 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         }
       }
     }
+    sqlite3_free(aRowRef);
     qsort(aSorted, nTables, sizeof(CatalogSerializeEntry), catalogSerializeEntryCmp);
+  }else{
+    sqlite3_free(aRowRef);
   }
 
 #ifdef DOLTLITE_PROLLY_CHECK
