@@ -169,7 +169,9 @@ static int mergeRefInstallMergedCatalog(
   SchemaMergeAction **paSchemaActions,
   int *pnSchemaActions,
   char ***pazReindex,
-  int *pnReindex
+  int *pnReindex,
+  char ***pazRebuildVtabs,
+  int *pnRebuildVtabs
 ){
   int rc;
 
@@ -199,6 +201,31 @@ static int mergeRefInstallMergedCatalog(
   freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
   *paSchemaActions = 0;
   *pnSchemaActions = 0;
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Derived vtab shadows whose conflicts were absorbed by the catalog
+  ** merge: rebuild each owner from its merged %_base and stored model
+  ** while the merged catalog is live, so the flush below captures the
+  ** rebuilt shadow roots. The list is only ever populated on merges the
+  ** filter proved otherwise conflict-free. */
+  if( *pnRebuildVtabs>0 && nMergeConflicts==0 ){
+    int ri;
+    for(ri=0; ri<*pnRebuildVtabs && rc==SQLITE_OK; ri++){
+      char *zSql = sqlite3_mprintf(
+          "INSERT INTO \"%w\"(cmd, arg) VALUES('rebuild',"
+          " (SELECT val FROM \"%w_model\" WHERE id=1))",
+          (*pazRebuildVtabs)[ri], (*pazRebuildVtabs)[ri]);
+      if( !zSql ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      rc = sqlite3_exec(db, zSql, 0, 0, 0);
+      sqlite3_free(zSql);
+    }
+  }
+  doltliteFreeNameList(*pazRebuildVtabs, *pnRebuildVtabs);
+  *pazRebuildVtabs = 0;
+  *pnRebuildVtabs = 0;
   if( rc!=SQLITE_OK ) return rc;
 
   /* Regenerate stats after a clean merge; stat rows are derived data. */
@@ -346,6 +373,8 @@ int doltliteMergeRef(
   int nSchemaActions = 0;
   char **azReindex = 0;
   int nReindex = 0;
+  char **azRebuildVtabs = 0;
+  int nRebuildVtabs = 0;
   int nViolations = 0;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
@@ -420,7 +449,8 @@ int doltliteMergeRef(
   rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
                               &mergedCatHash, &nMergeConflicts, &zOwnedErr,
                               &aSchemaActions, &nSchemaActions, 0,
-                              &azReindex, &nReindex);
+                              &azReindex, &nReindex,
+                              &azRebuildVtabs, &nRebuildVtabs);
   if( rc!=SQLITE_OK ){
     if( !zOwnedErr ) zFail = "merge failed";
     /* Catalog merge never mutated the live catalog; drop the snapshot. */
@@ -464,7 +494,8 @@ int doltliteMergeRef(
   rc = mergeRefInstallMergedCatalog(db, &ancCatHash, &theirCatHash,
                                     &mergedCatHash, nMergeConflicts,
                                     &aSchemaActions, &nSchemaActions,
-                                    &azReindex, &nReindex);
+                                    &azReindex, &nReindex,
+                                    &azRebuildVtabs, &nRebuildVtabs);
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;
     goto merge_fail;
@@ -531,6 +562,7 @@ merge_fail:
   }
   freeSchemaMergeActions(aSchemaActions, nSchemaActions);
   doltliteFreeNameList(azReindex, nReindex);
+  doltliteFreeNameList(azRebuildVtabs, nRebuildVtabs);
   doltliteCommitClear(&ourCommit);
   doltliteCommitClear(&theirCommit);
   if( bHaveSaved ){

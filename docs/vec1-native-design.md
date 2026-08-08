@@ -1,8 +1,8 @@
 # Version-controlled vector search in doltlite: vec1 syntax, Dolt semantics
 
-Status: Phases 1 and 2 done — Phase 1 shipped the vendored extension,
-Phase 2 turned out to be upstream behavior under PQ configurations,
-verified and pinned in the suite. Phase 3 is design. All
+Status: all three phases done. Phase 1 shipped the vendored extension,
+Phase 2 turned out to be upstream behavior under PQ configurations, and
+Phase 3 made dolt_merge absorb derived-shadow conflicts itself. All
 empirical claims below were verified on 2026-08-07 against doltlite master
 (with #2020–#2023) and vec1 trunk check-in `ecb12ac26e` (v0.7), with stock
 SQLite 3.53.2 as the oracle.
@@ -149,18 +149,32 @@ source-table drop-and-rebuild workflow is trivial anyway. A carried
 `VEC1_KEEP_BASE` patch decoupling keep-base from compression remains
 possible for those configs but is backlog, not a phase.
 
-### Phase 3 (optional end-state) — merge-aware derived shadows
+### Phase 3 (implemented) — merge-aware derived shadows
 
-With Phase 2, the remaining friction is that users must resolve derived-
-table conflicts and run rebuild by hand after merges. Phase 3 teaches
-doltlite's merge that a vtab's derived shadows (`%_idx`, `%_meta`,
-`%_config`) can be auto-resolved (take either side) and queues a rebuild —
-making `dolt_merge` on vector tables fully automatic. This generalizes to
-FTS (`%_data` etc.) and is the doltlite answer to "index merge" without
-per-module merge code: **derived shadows merge by rebuild, authoritative
-shadows merge by row.** Requires a per-module declaration of which shadows
-are derived (a small registry keyed by module name, or an xShadowName-like
-extension method we define).
+`dolt_merge` now absorbs vec1 derived-shadow conflicts itself: when every
+conflict in a merge is a rebuildable vec1 shadow (`%_idx`, `%_meta`,
+`%_model`, `%_config`) of a table whose `%_base` still holds raw vectors,
+the merge keeps ours' rows (exactly what `--ours` resolution leaves),
+surfaces no conflicts, and rebuilds each owner from the merged base and
+stored model while the merged catalog is live — then commits as a clean
+merge. **Derived shadows merge by rebuild, authoritative shadows merge by
+row.**
+
+Deliberate guardrails, each pinned in the suite:
+
+- **Uncompressed builds stay loud.** Their `%_base` holds bucket numbers,
+  not vectors (finding 1), so auto-resolution would silently lose the
+  discarded side's data. The gate is `typeof(vector)` on the base rows.
+- **Any non-derived conflict disables the automation** for the whole
+  merge: a user-table conflict keeps every conflict, shadows included,
+  reported for manual resolution — today's semantics.
+- **Only `dolt_merge`.** Cherry-pick and rebase pass a null rebuild list
+  and keep loud conflicts, conservatively.
+
+The policy lives as a small registry in the merge (vec1 suffixes + the
+model-based rebuild statement). FTS could join later, but only for
+content-ful tables — contentless fts5 cannot rebuild — so it is not wired
+here.
 
 A full native reimplementation of vec1's interface over bespoke prolly
 trees (proximity-map style) is *not* proposed: Phase 2 already achieves
@@ -198,5 +212,5 @@ Phases 1 and 2 deliver the ask with real Dolt semantics: vec1 syntax,
 versioned + branchable vector search, lossless merges via deterministic
 rebuild under PQ configurations, and structural sharing measured at ~5KB
 per vector per commit. Tell users one rule — train with `codesize > 0` —
-and the versioning story has no asterisks. Phase 3 is polish to schedule
-on demand.
+and the versioning story has no asterisks — with Phase 3, `dolt_merge`
+on PQ vector tables needs no manual steps at all.

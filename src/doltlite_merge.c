@@ -1262,7 +1262,9 @@ int doltliteMergeCatalogs(
   int *pnActions,
   int bPreferOurMaster,
   char ***pazReindex,
-  int *pnReindex
+  int *pnReindex,
+  char ***pazRebuildVtabs,
+  int *pnRebuildVtabs
 ){
   struct TableEntry *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
@@ -1362,6 +1364,13 @@ int doltliteMergeCatalogs(
                                  aOursSchema, nOursSchema,
                                  aConflictTables, nConflictTables,
                                  aRemap, nRemap);
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
+
+  if( rc==SQLITE_OK && nConflictTables>0 && pazRebuildVtabs ){
+    rc = mergeFilterDerivedShadowConflicts(db,
+        aConflictTables, &nConflictTables, &totalConflicts,
+        pazRebuildVtabs, pnRebuildVtabs);
+  }
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
