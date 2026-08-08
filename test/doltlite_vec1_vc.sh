@@ -340,6 +340,220 @@ result=$(run_sql "SELECT rowid FROM t($V1, '{k: 1}'); PRAGMA integrity_check;" "
 check "vec1_drop_restore" "1
 ok" "$result"
 
+# ── second wave: divergence shapes and remaining VC surfaces ──────
+# Shared 600-vector fixtures for the PQ scenarios below (training needs
+# at least 512 vectors). gen600 <file> [table] [meta] writes inserts.
+gen600() {
+  python3 -c "
+import struct, random
+random.seed(3)
+tbl = '$2' or 't'
+meta = '$3' == 'meta'
+with open('$1','w') as f:
+    for i in range(1, 601):
+        v = [random.uniform(-1,1) for _ in range(8)]
+        blob = ''.join(f'{b:02x}' for b in struct.pack('<8f', *v))
+        if meta:
+            f.write(f\"INSERT INTO {tbl}(rowid, vector, c0) VALUES ({i}, x'{blob}', {i%7});\n\")
+        else:
+            f.write(f\"INSERT INTO {tbl}(rowid, vector) VALUES ({i}, x'{blob}');\n\")
+"
+}
+PQ_BUILD="CREATE TABLE m(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO m SELECT 1, vec1_train(vector, '{nbucket: 8, codesize: 4, distance: \"l2\"}') FROM t_base;
+INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));"
+
+scenario "deletes merge against inserts and survive the rebuild"
+newdb
+gen600 "$TDIR/w600.sql"
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/w600.sql
+$PQ_BUILD
+SELECT dolt_commit('-Am','built');
+SELECT dolt_checkout('-b','left');
+DELETE FROM t WHERE rowid = (SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k:1, nprobe:8}'));
+SELECT dolt_commit('-am','left deletes the target bucket neighbor');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+SELECT dolt_commit('-am','right inserts into that bucket');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left');
+SELECT length(dolt_merge('right'))=40;
+SELECT count(*) FROM t_base;
+SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k:1, nprobe:8}');
+PRAGMA integrity_check;" "$DB")
+check "vec1_delete_vs_insert_merge" "0
+1
+600
+7001
+ok" "$result"
+
+scenario "both branches retraining converges on ours' model"
+newdb
+gen600 "$TDIR/w600.sql"
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/w600.sql
+$PQ_BUILD
+SELECT dolt_commit('-Am','built');
+SELECT dolt_checkout('-b','left');
+INSERT INTO m SELECT 2, vec1_train(vector, '{nbucket: 4, codesize: 4, distance: \"l2\"}') FROM t_base;
+INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m WHERE id=2));
+SELECT dolt_commit('-am','left retrains nbucket=4');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO m SELECT 3, vec1_train(vector, '{nbucket: 16, codesize: 4, distance: \"l2\"}') FROM t_base;
+INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m WHERE id=3));
+SELECT dolt_commit('-am','right retrains nbucket=16');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left');
+SELECT length(dolt_merge('right'))=40;
+SELECT count(DISTINCT bucket) FROM t_idx;
+SELECT rowid FROM t((SELECT vector FROM t_base WHERE id=42), '{k:1, nprobe:16}');
+PRAGMA integrity_check;" "$DB")
+check "vec1_dual_retrain_ours_model" "0
+1
+4
+42
+ok" "$result"
+
+scenario "two vector tables rebuild in one merge"
+newdb
+gen600 "$TDIR/wa600.sql" a
+gen600 "$TDIR/wb600.sql" b
+run_sql "CREATE VIRTUAL TABLE a USING vec1(vector);
+CREATE VIRTUAL TABLE b USING vec1(vector);
+.read $TDIR/wa600.sql
+.read $TDIR/wb600.sql
+CREATE TABLE m(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO m SELECT 1, vec1_train(vector, '{nbucket: 8, codesize: 4, distance: \"l2\"}') FROM a_base;
+INSERT INTO a(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
+INSERT INTO b(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
+SELECT dolt_commit('-Am','two built tables');
+SELECT dolt_checkout('-b','left');
+INSERT INTO a(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+INSERT INTO b(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+SELECT dolt_commit('-am','left');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO a(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+INSERT INTO b(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+SELECT dolt_commit('-am','right');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left');
+SELECT length(dolt_merge('right'))=40;
+SELECT (SELECT rowid FROM a(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f','{k:1,nprobe:8}'))
+    || '|' || (SELECT rowid FROM a(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f','{k:1,nprobe:8}'))
+    || '|' || (SELECT rowid FROM b(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f','{k:1,nprobe:8}'))
+    || '|' || (SELECT rowid FROM b(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f','{k:1,nprobe:8}'));
+PRAGMA integrity_check;" "$DB")
+check "vec1_multi_table_merge" "0
+1
+7001|8001|7001|8001
+ok" "$result"
+
+scenario "one ineligible table keeps the whole merge manual"
+newdb
+gen600 "$TDIR/wa600.sql" a
+run_sql "CREATE VIRTUAL TABLE a USING vec1(vector);
+CREATE VIRTUAL TABLE f USING vec1(vector);
+.read $TDIR/wa600.sql
+CREATE TABLE m(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO m SELECT 1, vec1_train(vector, '{nbucket: 8, codesize: 4, distance: \"l2\"}') FROM a_base;
+INSERT INTO a(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
+INSERT INTO f(rowid, vector) VALUES (1, x'0000803f000000000000000000000000');
+INSERT INTO f(cmd, arg) VALUES ('rebuild', '{index:\"flat\", distance:\"l2\"}');
+SELECT dolt_commit('-Am','one PQ one flat');
+SELECT dolt_checkout('-b','left');
+INSERT INTO a(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+INSERT INTO f(rowid, vector) VALUES (10, x'000000000000803f0000000000000000');
+SELECT dolt_commit('-am','left');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO a(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+INSERT INTO f(rowid, vector) VALUES (20, x'00000000000000000000803f00000000');
+SELECT dolt_commit('-am','right');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left'); SELECT dolt_merge('right');" "$DB" | grep -c "conflict")
+check "vec1_mixed_eligibility_stays_loud" "1" "$result"
+
+scenario "cherry-pick and revert carry vector content"
+newdb
+gen600 "$TDIR/w600.sql"
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/w600.sql
+$PQ_BUILD
+SELECT dolt_commit('-Am','built');
+SELECT dolt_checkout('-b','side');
+INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+SELECT dolt_commit('-am','side adds 7001');
+SELECT dolt_checkout('main');" "$DB" > /dev/null
+result=$(run_sql "SELECT length(dolt_cherry_pick(dolt_hashof('side')))>0;
+SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k:1, nprobe:8}');
+SELECT length(dolt_revert('HEAD'))>0;
+SELECT count(*) FROM t_base;
+PRAGMA integrity_check;" "$DB")
+check "vec1_cherry_pick_revert" "1
+7001
+1
+600
+ok" "$result"
+
+scenario "a conflicting cherry-pick stays manual"
+newdb
+gen600 "$TDIR/w600.sql"
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/w600.sql
+$PQ_BUILD
+SELECT dolt_commit('-Am','built');
+SELECT dolt_checkout('-b','side');
+INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+SELECT dolt_commit('-am','side');
+SELECT dolt_checkout('main');
+INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+SELECT dolt_commit('-am','main same bucket');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_cherry_pick(dolt_hashof('side'));" "$DB" | grep -c "conflict")
+check "vec1_cherry_pick_conflict_stays_loud" "1" "$result"
+
+scenario "rebase replays vector commits"
+newdb
+gen600 "$TDIR/w600.sql"
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/w600.sql
+$PQ_BUILD
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','built');
+SELECT dolt_checkout('-b','side');
+INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+SELECT dolt_commit('-am','side vector');
+SELECT dolt_checkout('main');
+INSERT INTO u VALUES (1, 'main moved');
+SELECT dolt_commit('-am','main move');
+SELECT dolt_checkout('side');
+SELECT dolt_rebase('main');" "$DB" > /dev/null
+result=$(run_sql "SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k:1, nprobe:8}');
+SELECT v FROM u WHERE id=1;
+PRAGMA integrity_check;" "$DB/side")
+check "vec1_rebase" "7001
+main moved
+ok" "$result"
+
+scenario "metadata columns rebuild through the automatic merge"
+newdb
+gen600 "$TDIR/wm600.sql" t meta
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector, c0);
+.read $TDIR/wm600.sql
+$PQ_BUILD
+SELECT dolt_commit('-Am','built with meta');
+SELECT dolt_checkout('-b','left');
+INSERT INTO t(rowid, vector, c0) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', 3);
+SELECT dolt_commit('-am','left');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO t(rowid, vector, c0) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f', 5);
+SELECT dolt_commit('-am','right');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left');
+SELECT length(dolt_merge('right'))=40;
+SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f','{k:5, nprobe:8}') WHERE c0=3 LIMIT 1;
+SELECT rowid FROM t(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f','{k:5, nprobe:8}') WHERE c0=5 LIMIT 1;
+PRAGMA integrity_check;" "$DB")
+check "vec1_meta_columns_auto_merge" "0
+1
+7001
+8001
+ok" "$result"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
