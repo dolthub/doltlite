@@ -157,6 +157,37 @@ run_test "prefix_seek_sees_updated_row_value" \
 
 db_rm "$DB"
 
+# A deferred merged seek that lands on a row present in both the tree and
+# the pending mut map must serve the pending value: the mut-map entry
+# shadows the committed row.
+run_test "deferred_seek_lands_on_shadowed_row_reads_pending_value" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (12,'old'),(27,'far');
+   BEGIN;
+   UPDATE t SET v='new' WHERE id=12;
+   SELECT v FROM t WHERE id>5 AND id<20;
+   SELECT v FROM t WHERE id<20 ORDER BY id DESC LIMIT 1;
+   ROLLBACK;" \
+  "new
+new" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "second_range_update_sees_first_updates_value" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+   INSERT INTO t VALUES (12,120),(27,270);
+   BEGIN;
+   UPDATE t SET v=v+1 WHERE id>=6 AND id<=15;
+   UPDATE t SET v=v+1 WHERE id>=10 AND id<=17;
+   COMMIT;
+   SELECT id||'='||v FROM t;" \
+  "12=122
+27=270" \
+  "$DB"
+
+db_rm "$DB"
+
 run_test "fts4_langid_rebuild_preserves_partitions" \
   "CREATE VIRTUAL TABLE t2 USING fts4(x, languageid=l);
    INSERT INTO t2(docid, x, l) SELECT value, 'w' || value || ' common', value % 2 FROM generate_series(0,39);
