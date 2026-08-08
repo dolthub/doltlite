@@ -877,22 +877,12 @@ static void doltliteCommitFunc(
 
   doltliteHashToHex(&commitHash, hexBuf);
 
-  rc = doltliteRegisterDiffTables(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
   rc = doltliteRegisterWorkspaceTables(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
   }
-  rc = doltliteRegisterHistoryTables(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
-  rc = doltliteRegisterAtTablesForCatalog(db, &catalogHash);
+  rc = doltliteRegisterHistoricalTablesForCatalog(db, &catalogHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;

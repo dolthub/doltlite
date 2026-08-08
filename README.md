@@ -300,6 +300,8 @@ SELECT * FROM dolt_diff_users('HEAD~1', 'HEAD');
 SELECT * FROM dolt_diff_users('v1.0', 'WORKING');
 SELECT * FROM dolt_diff_users('main..feature');
 SELECT * FROM dolt_diff_users('main...feature');
+-- The table may exist only at one endpoint.
+SELECT * FROM dolt_diff_feature_only('main', 'feature');
 
 SELECT d.*
   FROM dolt_diff_users AS d
@@ -319,8 +321,15 @@ SELECT * FROM dolt_log('main..feature');
 Two per-table virtual tables for time travel:
 
 ```sql
--- Every version of every row across all commits
+-- Every version of every row in the current HEAD ancestry
 SELECT * FROM dolt_history_users WHERE id = 42;
+
+-- Start from another branch, tag, or commit
+SELECT * FROM dolt_history_users('feature') WHERE id = 42;
+
+-- Select one exact committed snapshot
+SELECT * FROM dolt_history_users
+ WHERE commit_hash = dolt_hashof('feature');
 
 -- The table as it existed at a specific commit / branch / tag
 SELECT * FROM dolt_at_users('abc123...');

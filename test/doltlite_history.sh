@@ -142,6 +142,21 @@ run_test "history_filter_second_parent_hash" "SELECT count(DISTINCT commit_hash)
 
 rm -f "$DB"
 
+DB=/tmp/test_hist_noncurrent_$$.db; rm -f "$DB"
+echo "SELECT dolt_checkout('-b','feature');
+CREATE TABLE feature_only(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO feature_only VALUES(1,'one');
+SELECT dolt_commit('-A','-m','feature one');
+INSERT INTO feature_only VALUES(2,'two');
+SELECT dolt_commit('-A','-m','feature two');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "noncurrent_default_starts_at_head" "SELECT count(*) FROM dolt_history_feature_only;" "0" "$DB"
+run_test "noncurrent_start_ref" "SELECT count(*) FROM dolt_history_feature_only('feature');" "3" "$DB"
+run_test "noncurrent_exact_commit" "SELECT count(*) FROM dolt_history_feature_only WHERE commit_hash=dolt_hashof('feature');" "2" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_hist_merge_replay_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');

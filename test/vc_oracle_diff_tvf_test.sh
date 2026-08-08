@@ -50,6 +50,34 @@ oracle() {
   fi
 }
 
+oracle_reopen() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.setup" 2>"$dir/dl.setup.err"
+  local dl_out
+  dl_out=$(printf ".headers off\n.mode list\n%s\n" "$query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep '^R|' | sort)
+
+  local dolt_setup dolt_query
+  dolt_setup=$(echo "$setup" | translate_for_dolt)
+  dolt_query=$(echo "$query" | translate_for_dolt)
+
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.setup.err"
+    echo "$dolt_query" | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 echo "=== Version Control Oracle Tests: dolt_diff TVF form ==="
 echo ""
 
@@ -85,6 +113,14 @@ SELECT dolt_checkout('-b', 'feat');
 INSERT INTO t VALUES (2, 2);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_c1');
 " "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('main', 'feat');"
+
+oracle_reopen "slice_table_only_on_sibling_branch" "
+SELECT dolt_checkout('-b', 'feature');
+CREATE TABLE feature_only(id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+INSERT INTO feature_only VALUES(1, 'feature');
+SELECT dolt_commit('-A', '-m', 'feature-only table');
+SELECT dolt_checkout('main');
+" "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', diff_type) FROM dolt_diff_feature_only('main', 'feature');"
 
 oracle "slice_tag_refs" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

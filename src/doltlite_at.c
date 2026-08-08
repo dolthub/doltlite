@@ -87,6 +87,104 @@ static int atSeenTableAdd(AtSeenTable *pSeen, const char *zName){
   return SQLITE_OK;
 }
 
+static int atEnqueueReachableRoots(
+  sqlite3 *db,
+  DoltliteCommitQueue *pQueue
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const BranchRef *aBr = 0;
+  const TagRef *aTag = 0;
+  const TrackingBranch *aTracking = 0;
+  int nBr = 0, nTag = 0, nTracking = 0;
+  int i, rc = SQLITE_OK;
+  ProllyHash head;
+
+  if( !cs ) return SQLITE_OK;
+  memset(&head, 0, sizeof(head));
+  doltliteGetSessionHead(db, &head);
+  rc = doltliteCommitQueueEnqueue(pQueue, &head);
+  refsTableGetBranches(&cs->refs, &nBr, &aBr);
+  for(i=0; i<nBr && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(pQueue, &aBr[i].commitHash);
+  }
+  refsTableGetTags(&cs->refs, &nTag, &aTag);
+  for(i=0; i<nTag && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(pQueue, &aTag[i].commitHash);
+  }
+  refsTableGetTracking(&cs->refs, &nTracking, &aTracking);
+  for(i=0; i<nTracking && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(pQueue, &aTracking[i].commitHash);
+  }
+  return rc;
+}
+
+int doltliteLoadHistoricalTableColumns(
+  sqlite3 *db,
+  const char *zTableName,
+  DoltliteColInfo *pCols,
+  char **pzErr
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  int has, rc;
+  DoltliteCommitQueue q;
+  ProllyHash cur;
+
+  memset(pCols, 0, sizeof(*pCols));
+  pCols->iPkCol = -1;
+  if( sqlite3FindTable(db, zTableName, "main") ){
+    rc = doltliteGetColumnNames(db, zTableName, pCols);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCols->nCol>0 ) return SQLITE_OK;
+    doltliteFreeColInfo(pCols);
+  }
+
+  memset(&q, 0, sizeof(q));
+  memset(&cur, 0, sizeof(cur));
+  rc = doltliteCommitQueueInit(&q, &cur);
+  if( rc==SQLITE_OK ) rc = atEnqueueReachableRoots(db, &q);
+  while( rc==SQLITE_OK && pCols->nCol<=0 ){
+    DoltliteCommit commit;
+    SchemaEntry entry;
+    int found = 0;
+    sqlite3 *tmp = 0;
+    memset(&commit, 0, sizeof(commit));
+    memset(&entry, 0, sizeof(entry));
+    rc = doltliteCommitQueueNext(&q, &cur, &has);
+    if( rc!=SQLITE_OK || !has ) break;
+    rc = doltliteLoadCommit(db, &cur, &commit);
+    if( rc==SQLITE_OK ) rc = doltliteCommitQueueEnqueueParents(&q, &commit);
+    if( rc==SQLITE_OK ){
+      rc = loadSchemaEntryFromCatalog(db, cs, pCache, &commit.catalogHash,
+                                      zTableName, &entry, &found);
+    }
+    if( rc==SQLITE_OK && found && entry.zSql ){
+      rc = sqlite3_open(":memory:", &tmp);
+      if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+      if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pCols);
+      if( rc==SQLITE_OK && pCols->nCol<=0 ){
+        doltliteFreeColInfo(pCols);
+        rc = SQLITE_NOTFOUND;
+      }
+    }
+    if( tmp ) sqlite3_close(tmp);
+    clearSchemaEntry(&entry);
+    doltliteCommitClear(&commit);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+  }
+  doltliteCommitQueueClear(&q);
+
+  if( rc==SQLITE_OK && pCols->nCol<=0 ){
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf("table not found in reachable refs: %s",
+                               zTableName);
+      if( !*pzErr ) return SQLITE_NOMEM;
+    }
+    return SQLITE_ERROR;
+  }
+  return rc;
+}
+
 static void atCursorReset(AtCursor *c){
   doltliteVtabCommonReset(&c->common);
   sqlite3_free(c->zCommitRef);
@@ -129,88 +227,8 @@ static int atConnect(sqlite3 *db, void *pAux, int argc,
     return SQLITE_NOMEM;
   }
 
-  if( sqlite3FindTable(db, v->zTableName, "main") ){
-    rc = doltliteGetColumnNames(db, v->zTableName, &v->cols);
-  }else{
-    rc = SQLITE_NOTFOUND;
-  }
-  if( rc==SQLITE_OK && v->cols.nCol<=0 ){
-    doltliteFreeColInfo(&v->cols);
-    rc = SQLITE_NOTFOUND;
-  }
-  if( rc==SQLITE_NOTFOUND ){
-    rc = SQLITE_OK;
-  }
-  if( rc==SQLITE_OK && v->cols.nCol<=0 ){
-    ChunkStore *cs = doltliteGetChunkStore(db);
-    ProllyCache *pCache = doltliteGetCache(db);
-    const BranchRef *aBr = 0;
-    const TagRef *aTag = 0;
-    int nBr = 0, nTag = 0, i, has;
-    DoltliteCommitQueue q;
-    ProllyHash cur;
-    ProllyHash head;
-    memset(&q, 0, sizeof(q));
-    memset(&cur, 0, sizeof(cur));
-    memset(&head, 0, sizeof(head));
-    rc = doltliteCommitQueueInit(&q, &cur);
-    if( rc==SQLITE_OK && cs ){
-      doltliteGetSessionHead(db, &head);
-      rc = doltliteCommitQueueEnqueue(&q, &head);
-    }
-    if( rc==SQLITE_OK && cs ){
-      refsTableGetBranches(&cs->refs, &nBr, &aBr);
-      for(i=0; i<nBr && rc==SQLITE_OK; i++){
-        rc = doltliteCommitQueueEnqueue(&q, &aBr[i].commitHash);
-      }
-      refsTableGetTags(&cs->refs, &nTag, &aTag);
-      for(i=0; i<nTag && rc==SQLITE_OK; i++){
-        rc = doltliteCommitQueueEnqueue(&q, &aTag[i].commitHash);
-      }
-    }
-    while( rc==SQLITE_OK && v->cols.nCol<=0 ){
-      DoltliteCommit commit;
-      SchemaEntry entry;
-      int found = 0;
-      sqlite3 *tmp = 0;
-      memset(&entry, 0, sizeof(entry));
-      rc = doltliteCommitQueueNext(&q, &cur, &has);
-      if( rc!=SQLITE_OK || !has ) break;
-      rc = doltliteLoadCommit(db, &cur, &commit);
-      if( rc!=SQLITE_OK ) break;
-      rc = doltliteCommitQueueEnqueueParents(&q, &commit);
-      if( rc==SQLITE_OK ){
-        rc = loadSchemaEntryFromCatalog(db, cs, pCache, &commit.catalogHash,
-                                        v->zTableName, &entry, &found);
-      }
-      if( rc==SQLITE_OK && found && entry.zSql ){
-        rc = sqlite3_open(":memory:", &tmp);
-        if( rc==SQLITE_OK ){
-          rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-        }
-        if( rc==SQLITE_OK ){
-          rc = doltliteGetColumnNames(tmp, v->zTableName, &v->cols);
-          if( rc==SQLITE_OK && v->cols.nCol<=0 ){
-            doltliteFreeColInfo(&v->cols);
-            rc = SQLITE_NOTFOUND;
-          }
-        }
-      }
-      if( tmp ) sqlite3_close(tmp);
-      clearSchemaEntry(&entry);
-      doltliteCommitClear(&commit);
-      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-    }
-    doltliteCommitQueueClear(&q);
-  }
-
-  if( rc==SQLITE_OK && v->cols.nCol<=0 ){
-    rc = SQLITE_ERROR;
-    if( pzErr ){
-      *pzErr = sqlite3_mprintf("table not found in reachable refs: %s",
-                               v->zTableName);
-    }
-  }
+  rc = doltliteLoadHistoricalTableColumns(db, v->zTableName,
+                                           &v->cols, pzErr);
   if( rc==SQLITE_OK ){
     zSchema = atBuildSchema(&v->cols);
     if( !zSchema ){
@@ -494,14 +512,33 @@ static sqlite3_module atModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-static int atRegisterOne(sqlite3 *db, AtSeenTable *pSeen, const char *zName){
+static int atRegisterModule(
+  sqlite3 *db,
+  const char *zPrefix,
+  const char *zName,
+  const sqlite3_module *pModule
+){
   char *zMod;
   int rc;
-  if( !zName || atSeenTableHas(pSeen, zName) ) return SQLITE_OK;
-  zMod = sqlite3_mprintf("dolt_at_%s", zName);
+  zMod = sqlite3_mprintf("%s%s", zPrefix, zName);
   if( !zMod ) return SQLITE_NOMEM;
-  rc = sqlite3_create_module(db, zMod, &atModule, 0);
+  rc = sqlite3_create_module(db, zMod, pModule, 0);
   sqlite3_free(zMod);
+  return rc;
+}
+
+static int atRegisterOne(sqlite3 *db, AtSeenTable *pSeen, const char *zName){
+  int rc;
+  if( !zName || atSeenTableHas(pSeen, zName) ) return SQLITE_OK;
+  rc = atRegisterModule(db, "dolt_at_", zName, &atModule);
+  if( rc==SQLITE_OK ){
+    rc = atRegisterModule(db, "dolt_diff_", zName,
+                          doltliteDiffTableModule());
+  }
+  if( rc==SQLITE_OK ){
+    rc = atRegisterModule(db, "dolt_history_", zName,
+                          doltliteHistoryTableModule());
+  }
   if( rc!=SQLITE_OK ) return rc;
   return atSeenTableAdd(pSeen, zName);
 }
@@ -526,11 +563,10 @@ static int atRegisterCatalogTables(
   return rc;
 }
 
-/* Register AT vtables for one catalog only. A new commit can introduce
-** table names only from its own catalog — every historical name was
-** registered by the full-graph walk at connection init — so the commit path
-** uses this instead of re-walking the whole commit graph per commit. */
-int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash){
+int doltliteRegisterHistoricalTablesForCatalog(
+  sqlite3 *db,
+  const ProllyHash *pCatHash
+){
   AtSeenTable seen;
   int rc;
   memset(&seen, 0, sizeof(seen));
@@ -539,38 +575,22 @@ int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash){
   return rc;
 }
 
-int doltliteRegisterAtTables(sqlite3 *db){
+int doltliteRegisterHistoricalTables(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  const BranchRef *aBr = 0;
-  const TagRef *aTag = 0;
-  int nBr = 0, nTag = 0;
-  int i, has, rc;
+  int has, rc;
   DoltliteCommitQueue q;
   ProllyHash cur;
-  ProllyHash head;
   AtSeenTable seen;
 
   memset(&q, 0, sizeof(q));
   memset(&cur, 0, sizeof(cur));
-  memset(&head, 0, sizeof(head));
   memset(&seen, 0, sizeof(seen));
 
   if( !cs ) return SQLITE_OK;
 
   rc = doltliteCommitQueueInit(&q, &cur);
   if( rc!=SQLITE_OK ) return rc;
-
-  doltliteGetSessionHead(db, &head);
-  rc = doltliteCommitQueueEnqueue(&q, &head);
-
-  refsTableGetBranches(&cs->refs, &nBr, &aBr);
-  for(i=0; i<nBr && rc==SQLITE_OK; i++){
-    rc = doltliteCommitQueueEnqueue(&q, &aBr[i].commitHash);
-  }
-  refsTableGetTags(&cs->refs, &nTag, &aTag);
-  for(i=0; i<nTag && rc==SQLITE_OK; i++){
-    rc = doltliteCommitQueueEnqueue(&q, &aTag[i].commitHash);
-  }
+  rc = atEnqueueReachableRoots(db, &q);
 
   while( rc==SQLITE_OK ){
     DoltliteCommit commit;

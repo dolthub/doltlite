@@ -16,7 +16,8 @@ static char *htBuildSchema(const DoltliteColInfo *ci){
     sqlite3_str_reset(pStr);
     return 0;
   }
-  sqlite3_str_appendall(pStr, ", commit_hash TEXT, committer TEXT, commit_date TEXT)");
+  sqlite3_str_appendall(pStr, ", commit_hash TEXT, committer TEXT, commit_date TEXT"
+                              ", start_ref TEXT HIDDEN)");
   z = sqlite3_str_finish(pStr);
   return z;
 }
@@ -35,6 +36,7 @@ struct HistVtab {
 #define HIST_IDX_PK_GT 0x08
 #define HIST_IDX_PK_LT 0x10
 #define HIST_IDX_COMMIT_EQ 0x20
+#define HIST_IDX_START_REF 0x40
 #define HIST_IDX_PK_ANY (HIST_IDX_PK_EQ|HIST_IDX_PK_GE|HIST_IDX_PK_LE|HIST_IDX_PK_GT|HIST_IDX_PK_LT)
 
 typedef struct HistCursor HistCursor;
@@ -210,17 +212,19 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
 static int htConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   (void)pAux;
-  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_history_",
-                                      sizeof(HistVtab), htBuildSchema,
-                                      ppVtab, pzErr);
+  return doltliteVtabConnectHistoricalTable(db, argc, argv,
+                                            "dolt_history_",
+                                            sizeof(HistVtab), htBuildSchema,
+                                            ppVtab, pzErr);
 }
 
 static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   DoltliteVtabCommon *vt = (DoltliteVtabCommon*)v;
-  int i, iCommitEq = -1, nArg = 0;
+  int i, iCommitEq = -1, iStartRef = -1, nArg = 0;
   int idxNum;
   int iPkCol = vt->cols.iPkCol;
   int iCommitCol = vt->cols.nCol;
+  int iStartRefCol = vt->cols.nCol + 3;
 
   p->estimatedCost = 100000.0;
   p->estimatedRows = 100000;
@@ -243,10 +247,12 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   for(i=0; i<p->nConstraint; i++){
     const struct sqlite3_index_constraint *pC = &p->aConstraint[i];
     if( !pC->usable ) continue;
-    if( pC->iColumn != iCommitCol ) continue;
-    if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+    if( pC->iColumn==iCommitCol
+     && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
       iCommitEq = i;
-      break;
+    }else if( pC->iColumn==iStartRefCol
+           && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      iStartRef = i;
     }
   }
   if( iCommitEq>=0 ){
@@ -255,6 +261,15 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
     idxNum |= HIST_IDX_COMMIT_EQ;
     p->estimatedCost = (idxNum & HIST_IDX_PK_ANY) ? 10.0 : 50.0;
     p->estimatedRows = (idxNum & HIST_IDX_PK_ANY) ? 1 : 10;
+  }
+  if( iStartRef>=0 ){
+    p->aConstraintUsage[iStartRef].argvIndex = ++nArg;
+    p->aConstraintUsage[iStartRef].omit = 1;
+    idxNum |= HIST_IDX_START_REF;
+    if( iCommitEq<0 ){
+      p->estimatedCost = 1000.0;
+      p->estimatedRows = 1000;
+    }
   }
   p->idxNum = idxNum;
   return SQLITE_OK;
@@ -306,6 +321,7 @@ static int htFilter(sqlite3_vtab_cursor *cur,
       return SQLITE_OK;
     }
     c->singleCommit = 1;
+    iArg++;
   }
 
   cs = doltliteGetChunkStore(v->db);
@@ -313,6 +329,17 @@ static int htFilter(sqlite3_vtab_cursor *cur,
 
   if( c->singleCommit ){
     head = startHash;
+  }else if( idxNum & HIST_IDX_START_REF ){
+    const char *zRef = iArg<argc
+                     ? (const char*)sqlite3_value_text(argv[iArg]) : 0;
+    if( !zRef ) return SQLITE_OK;
+    rc = doltliteResolveRef(v->db, zRef, &head);
+    if( rc==SQLITE_NOTFOUND ){
+      sqlite3_free(cur->pVtab->zErrMsg);
+      cur->pVtab->zErrMsg = sqlite3_mprintf("ref not found: %s", zRef);
+      return SQLITE_ERROR;
+    }
+    if( rc!=SQLITE_OK ) return rc;
   }else{
     doltliteGetSessionHead(v->db, &head);
     if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
@@ -366,8 +393,8 @@ static sqlite3_module historyModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-int doltliteRegisterHistoryTables(sqlite3 *db){
-  return doltliteForEachUserTable(db, "dolt_history_", &historyModule);
+const sqlite3_module *doltliteHistoryTableModule(void){
+  return &historyModule;
 }
 
 #endif

@@ -1007,12 +1007,13 @@ int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
                               ProllyHash*, int*);
 
 int doltliteRegisterConflictTables(sqlite3 *db);
-int doltliteRegisterDiffTables(sqlite3 *db);
 int doltliteRegisterWorkspaceTables(sqlite3 *db);
-int doltliteRegisterHistoryTables(sqlite3 *db);
 int doltliteRegisterBlameTables(sqlite3 *db);
-int doltliteRegisterAtTables(sqlite3 *db);
-int doltliteRegisterAtTablesForCatalog(sqlite3 *db, const ProllyHash *pCatHash);
+const sqlite3_module *doltliteDiffTableModule(void);
+const sqlite3_module *doltliteHistoryTableModule(void);
+int doltliteRegisterHistoricalTables(sqlite3 *db);
+int doltliteRegisterHistoricalTablesForCatalog(sqlite3 *db,
+                                                const ProllyHash *pCatHash);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);
 int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 int doltliteUpdateSchemaHashes(sqlite3 *db);
