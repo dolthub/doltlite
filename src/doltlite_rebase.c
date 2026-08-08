@@ -848,8 +848,7 @@ static int rebaseApplyPlanRowCatalog(
   sqlite3 *db,
   const RebasePlanRow *pRow,
   const ProllyHash *pCurCat,
-  ProllyHash *pMergedCat,
-  int bSkipConstraintDetect
+  ProllyHash *pMergedCat
 ){
   DoltliteCommit parentC, replayC;
   int nConflicts = 0;
@@ -888,7 +887,7 @@ static int rebaseApplyPlanRowCatalog(
     }
     doltliteFreeNameList(azReindex, nReindex);
   }
-  if( rc==SQLITE_OK && nConflicts==0 && !bSkipConstraintDetect ){
+  if( rc==SQLITE_OK && nConflicts==0 ){
     rc = doltliteDetectPostMergeConstraintViolations(db,
                                                      &parentC.catalogHash,
                                                      &nViolations);
@@ -933,15 +932,13 @@ static int rebaseReplayPlanGroup(
   int iStart,
   ProllyHash *pCurCat,
   ProllyHash *pCurHead,
-  int *piNext,
-  int bSkipConstraintDetect
+  int *piNext
 ){
   char *combinedMsg = 0;
   int rc;
   int j;
 
-  rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat,
-                                 bSkipConstraintDetect);
+  rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat);
   if( rc!=SQLITE_OK ) return rc;
 
   combinedMsg = sqlite3_mprintf("%s",
@@ -958,8 +955,7 @@ static int rebaseReplayPlanGroup(
       continue;
     }
 
-    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat,
-                                   bSkipConstraintDetect);
+    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat);
     if( rc!=SQLITE_OK ){
       sqlite3_free(combinedMsg);
       return rc;
@@ -1569,7 +1565,6 @@ static void doltliteRebaseInteractiveContinue(
   int rebaseActive = 1;
   int i;
   int bPlanDropped = 0;
-  int bSkipConstraintDetect = (!db->autoCommit || db->pSavepoint!=0);
   ProllyHash curCat;
   ProllyHash curHead;
   ProllyHash expectedOrigHead;
@@ -1650,7 +1645,12 @@ static void doltliteRebaseInteractiveContinue(
   rc = rebaseDropPlan(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  rc = doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(db);
+  /* Seal savepoints AND the enclosing transaction: constraint detection
+  ** during the replay re-prepares against the switched catalog, which needs
+  ** the claim and plan-drop schema changes committed, not pending in an
+  ** open transaction. Releasing savepoints alone leaves that BEGIN open. */
+  rc = doltliteVcSealActiveSavepoints(db);
+  if( rc==SQLITE_OK ) rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
@@ -1667,8 +1667,7 @@ static void doltliteRebaseInteractiveContinue(
     while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
     if( i >= nPlan ) break;
 
-    rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j,
-                               bSkipConstraintDetect);
+    rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j);
     if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
     if( rc!=SQLITE_OK ) goto abort_err;
     i = j;
@@ -1703,9 +1702,9 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
 
   /* curCat is already the exact flushed catalog installed by the replay and
-  ** persisted above. Under a caller savepoint, the live SQLite schema is
-  ** transitional until checkout completes, so do not re-prepare and
-  ** re-serialize it merely to capture the branch being discarded. */
+  ** persisted above; the live SQLite schema is transitional until checkout
+  ** completes, so do not re-prepare and re-serialize it merely to capture
+  ** the branch being discarded. */
   db->busyHandler.nBusy = 0;
   do {
     rc = doltliteCheckoutBranchForRebaseWithOldCatalog(
@@ -1724,8 +1723,7 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
   rc = rebaseRetryDbOp(db, doltlitePersistWorkingSet);
   if( rc!=SQLITE_OK ) goto abort_err;
-  rc = rebaseRetryDbOp(
-      db, doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint);
+  rc = rebaseRetryDbOp(db, doltliteVcSealBranchStyleTxn);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rebaseFreePlan(aPlan, nPlan);
