@@ -209,6 +209,36 @@ SELECT dolt_commit('-am','right');" "$DB" > /dev/null
 result=$(run_sql "SELECT dolt_checkout('left'); SELECT dolt_merge('right');" "$DB" | grep -c "conflict")
 check "vec1_flat_guard_stays_loud" "1" "$result"
 
+scenario "a missing stored model disables the automation"
+newdb
+python3 -c "
+import struct, random
+random.seed(3)
+with open('$TDIR/gate600.sql','w') as f:
+    for i in range(1, 601):
+        v = [random.uniform(-1,1) for _ in range(8)]
+        blob = ''.join(f'{b:02x}' for b in struct.pack('<8f', *v))
+        f.write(f\"INSERT INTO t(rowid, vector) VALUES ({i}, x'{blob}');\n\")
+"
+# vec1 treats a NULL rebuild argument as keep-the-current-model, so an
+# owner whose stored model row is gone must stay in the manual-conflict
+# path rather than let the merge commit a stale index.
+run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
+.read $TDIR/gate600.sql
+CREATE TABLE m(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO m SELECT 1, vec1_train(vector, '{nbucket: 8, codesize: 4, distance: \"l2\"}') FROM t_base;
+INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
+SELECT dolt_commit('-Am','built');
+SELECT dolt_checkout('-b','left');
+INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+DELETE FROM t_model WHERE id=1;
+SELECT dolt_commit('-am','left, model removed');
+SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
+INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
+SELECT dolt_commit('-am','right');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_checkout('left'); SELECT dolt_merge('right');" "$DB" | grep -c "conflict")
+check "vec1_missing_model_stays_loud" "1" "$result"
+
 scenario "a user-table conflict keeps every conflict manual"
 newdb
 run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);

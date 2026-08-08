@@ -247,18 +247,26 @@ static char *mergeVec1DerivedShadowOwner(sqlite3 *db, const char *zTable){
      && pTab->u.vtab.nArg>0
      && sqlite3_stricmp(pTab->u.vtab.azArg[0], "vec1")==0
      && sqlite3IsShadowTableOf(db, pTab, zTable) ){
+      /* Eligible only when %_base still holds raw vectors AND the stored
+      ** model the rebuild depends on is present: vec1 treats a NULL
+      ** rebuild argument as "keep the current model" and proceeds on
+      ** cached state, so a missing model row would let the merge commit
+      ** a stale index instead of failing. */
       char *zQry = sqlite3_mprintf(
-          "SELECT count(*) FROM \"%w_base\" WHERE typeof(vector)!='blob'",
-          zOwner);
+          "SELECT (SELECT count(*) FROM \"%w_base\""
+          "         WHERE typeof(vector)!='blob')=0"
+          " AND EXISTS(SELECT 1 FROM \"%w_model\""
+          "             WHERE id=1 AND typeof(val)='blob' AND length(val)>0)",
+          zOwner, zOwner);
       sqlite3_stmt *pStmt = 0;
-      int bRaw = 0;
+      int bEligible = 0;
       if( zQry && sqlite3_prepare_v2(db, zQry, -1, &pStmt, 0)==SQLITE_OK ){
-        bRaw = sqlite3_step(pStmt)==SQLITE_ROW
-            && sqlite3_column_int64(pStmt, 0)==0;
+        bEligible = sqlite3_step(pStmt)==SQLITE_ROW
+                 && sqlite3_column_int(pStmt, 0)==1;
       }
       sqlite3_finalize(pStmt);
       sqlite3_free(zQry);
-      if( bRaw ) return zOwner;
+      if( bEligible ) return zOwner;
     }
     sqlite3_free(zOwner);
     return 0;
