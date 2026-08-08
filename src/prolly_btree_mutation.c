@@ -692,14 +692,6 @@ int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
   return pTE->isTableRoot ? 1 : 0;
 }
 
-static int cursorIsShadowTableRoot(BtCursor *pCur, int *pRc){
-  struct TableEntry *pTE;
-  if( !pCur || !pCur->pBtree || !pCur->pBtree->db ) return 0;
-  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( !tableEntryIsTableRoot(pCur->pBtree, pTE, pRc) || !pTE->zName ) return 0;
-  return sqlite3ShadowTableName(pCur->pBtree->db, pTE->zName);
-}
-
 int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   int rc = SQLITE_OK;
   int res = 0;
@@ -1285,16 +1277,13 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
       pCur->mmActive = 0;
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
-        int rcRoot = SQLITE_OK;
         pCur->flushSeekEdits = 1;
-        if( pCur->curIntKey && hasSavedKey
-         && ((flags & BTREE_AUXDELETE)
-             || cursorIsShadowTableRoot(pCur, &rcRoot)) ){
+        if( pCur->curIntKey && hasSavedKey ){
+          /* Record the hole so the next step resumes from the deleted key;
+          ** the tree cursor may be parked past pending rows the scan still
+          ** owes (see resumeDeactivatedMergedScan). */
           pCur->cachedIntKey = iKey;
           pCur->curFlags |= BTCF_DeleteKey;
-        }else if( rcRoot!=SQLITE_OK ){
-          rc = rcRoot;
-          goto delete_cleanup;
         }else if( !pCur->curIntKey && hasSavedKey && nKey>0 ){
           /* Park the cursor on the mut-map tombstone of the deleted key so
           ** the next step resumes the scan from there. Re-seeding from a
