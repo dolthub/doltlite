@@ -6617,9 +6617,12 @@ static void vec1MetaFilterScan4ByteArray(
     switch( op ){
       case VEC1_OP_IN: {
         int ii;
+        /* doltlite: strict NEON vector types for gcc — equality compares
+        ** are sign-agnostic and vorr is bitwise, so behavior is
+        ** unchanged. Worth upstreaming. */
         for(ii=0; ii<rval; ii++){
-          uint32x4_t rhs2 = vdupq_n_s32(aRval[ii]);
-          cmp = vorrq_s32(cmp, vceqq_u32(lhs, rhs2));
+          int32x4_t rhs2 = vdupq_n_s32(aRval[ii]);
+          cmp = vorrq_u32(cmp, vceqq_s32(lhs, rhs2));
         }
         break;
       }
@@ -6629,7 +6632,7 @@ static void vec1MetaFilterScan4ByteArray(
       }
       case VEC1_OP_GT: {
         cmp = vcgtq_s32(lhs, rhs);
-        cmp = vbicq_u32(cmp, vceqq_u32(lhs, null));
+        cmp = vbicq_u32(cmp, vceqq_s32(lhs, null));
         break;
       }
       case VEC1_OP_LT: {
@@ -6638,7 +6641,7 @@ static void vec1MetaFilterScan4ByteArray(
       }
       case VEC1_OP_GE: {
         cmp = vcgeq_s32(lhs, rhs);
-        cmp = vbicq_u32(cmp, vceqq_u32(lhs, null));
+        cmp = vbicq_u32(cmp, vceqq_s32(lhs, null));
         break;
       }
       case VEC1_OP_LE: {
