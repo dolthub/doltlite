@@ -4622,6 +4622,20 @@ int sqlite3_vtab_rhs_value(
   return rc;
 }
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3DoltliteVtabConstraintIsCorrelated(
+  sqlite3_index_info *pIdxInfo,
+  int iCons
+){
+  HiddenIndexInfo *pH = (HiddenIndexInfo*)&pIdxInfo[1];
+  WhereTerm *pTerm;
+  if( iCons<0 || iCons>=pIdxInfo->nConstraint ) return 0;
+  pTerm = termFromWhereClause(pH->pWC,
+                              pIdxInfo->aConstraint[iCons].iTermOffset);
+  return pTerm->prereqRight!=0;
+}
+#endif
+
 /*
 ** Return true if ORDER BY clause may be handled as DISTINCT.
 */

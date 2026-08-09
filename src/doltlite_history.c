@@ -248,7 +248,8 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
     const struct sqlite3_index_constraint *pC = &p->aConstraint[i];
     if( !pC->usable ) continue;
     if( pC->iColumn==iCommitCol
-     && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+     && pC->op==SQLITE_INDEX_CONSTRAINT_EQ
+     && !sqlite3DoltliteVtabConstraintIsCorrelated(p, i) ){
       iCommitEq = i;
     }else if( pC->iColumn==iStartRefCol
            && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){

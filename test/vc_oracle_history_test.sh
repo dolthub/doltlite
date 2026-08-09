@@ -218,6 +218,40 @@ noncurrent_oracle "history_start_ref_on_sibling_branch_after_reopen" \
   "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only('feature');" \
   "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only AS OF 'feature';"
 
+JOIN_ORDER_SETUP="
+CREATE TABLE items(id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+INSERT INTO items VALUES(1, 'main');
+SELECT dolt_commit('-A', '-m', 'main');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO items VALUES(2, 'feature-transient');
+SELECT dolt_commit('-A', '-m', 'feature first');
+DELETE FROM items WHERE id = 2;
+INSERT INTO items VALUES(3, 'feature-head');
+SELECT dolt_commit('-A', '-m', 'feature head');
+SELECT dolt_checkout('main');
+"
+
+JOIN_ANCESTRY="WITH RECURSIVE ancestry(commit_hash) AS (
+  SELECT dolt_hashof('feature')
+  UNION ALL
+  SELECT parents.parent_hash
+  FROM ancestry
+  JOIN dolt_commit_ancestors parents
+    ON parents.commit_hash = ancestry.commit_hash
+   AND parents.parent_index = 0
+  WHERE parents.parent_hash IS NOT NULL
+)"
+
+noncurrent_oracle "history_noncurrent_ordinary_join_uses_session_head" \
+  "$JOIN_ORDER_SETUP" \
+  "$JOIN_ANCESTRY SELECT CONCAT('H|', count(*)) FROM ancestry JOIN dolt_history_items history ON history.commit_hash = ancestry.commit_hash;" \
+  "$JOIN_ANCESTRY SELECT CONCAT('H|', count(*)) FROM ancestry JOIN dolt_history_items history ON history.commit_hash = ancestry.commit_hash;"
+
+noncurrent_oracle "history_noncurrent_cross_join_uses_session_head" \
+  "$JOIN_ORDER_SETUP" \
+  "$JOIN_ANCESTRY SELECT CONCAT('H|', count(*)) FROM ancestry CROSS JOIN dolt_history_items history WHERE history.commit_hash = ancestry.commit_hash;" \
+  "$JOIN_ANCESTRY SELECT CONCAT('H|', count(*)) FROM ancestry CROSS JOIN dolt_history_items history WHERE history.commit_hash = ancestry.commit_hash;"
+
 oracle "history_on_feature_branch" "
 $SEED
 SELECT dolt_branch('feature');
