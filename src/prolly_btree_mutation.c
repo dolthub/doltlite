@@ -875,6 +875,10 @@ int prollyBtCursorInsert(
     if( rc==SQLITE_OK ){
       pSortKey = aLocalSortKey;
     }else if( rc==SQLITE_NOTFOUND ){
+      if( pCur->pSeekSortKey==pCur->aSeekSortKey ){
+        pCur->pSeekSortKey = 0;
+        pCur->nSeekSortKeyAlloc = 0;
+      }
       rc = sortKeyFromRecordPrefixCollBuffer(
           (const u8*)pPayload->pKey, (int)pPayload->nKey,
           isIndex ? 0 : (splitKey ? nKeyField : 0),
@@ -887,7 +891,7 @@ int prollyBtCursorInsert(
        && pCur->pMutMap
        && pCur->mmMissGeneration==pCur->pMutMap->generation
        && pCur->nMmMissKey==nSortKey
-       && memcmp(pCur->aMmMissKey, pSortKey, nSortKey)==0 ){
+       && memcmp(pCur->aSeekSortKey, pSortKey, nSortKey)==0 ){
         rc = prollyMutMapInsertAbsent(
             pCur->pMutMap, pSortKey, nSortKey, 0,
             storePayload ? (const u8*)pPayload->pKey : NULL,
@@ -1196,6 +1200,10 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
             nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
           }
         }
+        if( pCur->pSeekSortKey==pCur->aSeekSortKey ){
+          pCur->pSeekSortKey = 0;
+          pCur->nSeekSortKeyAlloc = 0;
+        }
         rc = sortKeyFromRecordPrefixCollBuffer(
             pCur->pCachedPayload, pCur->nCachedPayload,
             nDelKeyField, pCur->pKeyInfo,
@@ -1271,7 +1279,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
      && pCur->pMutMap
      && pCur->mmMissGeneration==pCur->pMutMap->generation
      && pCur->nMmMissKey==nKey
-     && memcmp(pCur->aMmMissKey, pKey, nKey)==0 ){
+     && memcmp(pCur->aSeekSortKey, pKey, nKey)==0 ){
       rc = prollyMutMapDeleteAbsent(pCur->pMutMap, pKey, nKey, 0);
     }else if( pCur->mmActive
      && pCur->mmPhysActive

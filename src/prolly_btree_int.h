@@ -419,7 +419,7 @@ struct BtCursor {
   int nMmMissKey;
   i64 mmMissIntKey;
   u32 mmMissGeneration;
-  u8 aMmMissKey[40];
+  u8 aSeekSortKey[40];
   u8 mmActive;
   u8 mmPhysActive;
   u8 mmExactMiss;
