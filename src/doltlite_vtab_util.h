@@ -34,6 +34,7 @@ struct DoltliteVtabCursorCommon {
   sqlite3_vtab_cursor base;
   ProllyCursor tblCur;
   int tblCurOpen;
+  u8 rootIntKey;
   i64 intKey;
   u8 *pVal;
   int nVal;
@@ -53,6 +54,7 @@ static SQLITE_INLINE void doltliteVtabCommonReset(
   c->nVal = 0;
   c->hasRow = 0;
   c->iRowid = 0;
+  c->rootIntKey = 0;
 }
 
 static SQLITE_INLINE int doltliteVtabCommonCaptureRow(

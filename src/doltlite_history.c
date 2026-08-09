@@ -109,8 +109,9 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   }
 
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
+  c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
 
-  seekable = (flags & PROLLY_NODE_INTKEY) != 0
+  seekable = c->common.rootIntKey
           && (c->idxNum & HIST_IDX_PK_ANY) != 0;
 
   if( seekable && (c->idxNum & HIST_IDX_PK_EQ) ){
@@ -171,7 +172,7 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
   int rc;
 
   if( c->common.tblCurOpen ){
-    if( c->idxNum & HIST_IDX_PK_EQ ){
+    if( (c->idxNum & HIST_IDX_PK_EQ) && c->common.rootIntKey ){
       prollyCursorClose(&c->common.tblCur);
       c->common.tblCurOpen = 0;
     }else{
@@ -181,7 +182,8 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
         c->common.tblCurOpen = 0;
         return rc;
       }
-      if( prollyCursorIsValid(&c->common.tblCur) && htRowMatchesUpper(c) ){
+      if( prollyCursorIsValid(&c->common.tblCur)
+       && (!c->common.rootIntKey || htRowMatchesUpper(c)) ){
         return doltliteVtabCommonCaptureRow(&c->common, db, zTableName);
       }
       prollyCursorClose(&c->common.tblCur);
@@ -367,7 +369,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
   if(nCols>0 && col<nCols){
     doltliteResultUserCol(ctx, &v->cols, c->common.pVal, c->common.nVal,
-                          c->common.intKey, col);
+                          c->common.intKey, c->common.rootIntKey, col);
   }else{
     int fixedCol=col-nCols;
     switch(fixedCol){

@@ -349,29 +349,32 @@ static SQLITE_INLINE int doltliteBestIndexIntPkRange(
 
   if( iEq >= 0 ){
     pInfo->aConstraintUsage[iEq].argvIndex = ++nArg;
-    pInfo->aConstraintUsage[iEq].omit = 1;
+    /* The visited root's key shape may not match the declared schema's
+    ** rowid alias, so the constraint is applied against the rendered
+    ** values rather than omitted; the seek stays a pushdown fast path. */
+    pInfo->aConstraintUsage[iEq].omit = 0;
     idxNum |= idxEq;
     pInfo->estimatedCost = eqCost;
     pInfo->estimatedRows = eqRows;
   }else{
     if( iGe >= 0 ){
       pInfo->aConstraintUsage[iGe].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iGe].omit = 1;
+      pInfo->aConstraintUsage[iGe].omit = 0;
       idxNum |= idxGe;
     }
     if( iGt >= 0 ){
       pInfo->aConstraintUsage[iGt].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iGt].omit = 1;
+      pInfo->aConstraintUsage[iGt].omit = 0;
       idxNum |= idxGt;
     }
     if( iLe >= 0 ){
       pInfo->aConstraintUsage[iLe].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iLe].omit = 1;
+      pInfo->aConstraintUsage[iLe].omit = 0;
       idxNum |= idxLe;
     }
     if( iLt >= 0 ){
       pInfo->aConstraintUsage[iLt].argvIndex = ++nArg;
-      pInfo->aConstraintUsage[iLt].omit = 1;
+      pInfo->aConstraintUsage[iLt].omit = 0;
       idxNum |= idxLt;
     }
     if( idxNum != 0 ){
