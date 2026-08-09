@@ -90,6 +90,41 @@ static SQLITE_INLINE int prollyCursorNextFastLeaf(ProllyCursor *pCur){
   return prollyCursorNext(pCur);
 }
 
+static SQLITE_INLINE int prollyBtCursorNextFastIntLeaf(BtCursor *pCur){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCursorLevel *pLevel;
+  ProllyNode *pNode;
+  const u8 *pVal;
+  int nVal;
+  int nAvail;
+  int rc;
+  if( pCur->eState!=CURSOR_VALID
+   || pProllyCur->eState!=PROLLY_CURSOR_VALID
+   || !pCur->curIntKey
+   || pCur->mmActive
+   || pCur->pMutMap!=0
+   || pCur->cachedPayloadOwned
+   || pCur->pCachedFrom!=0 ){
+    return SQLITE_NOTFOUND;
+  }
+  pLevel = &pProllyCur->aLevel[pProllyCur->iLevel];
+  pNode = &pLevel->pEntry->node;
+  if( pLevel->idx>=pNode->nItems-1 ) return SQLITE_NOTFOUND;
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
+  pLevel->idx++;
+  prollyNodeValueSpan(pNode, pLevel->idx, &pVal, &nVal, &nAvail);
+  if( nVal>0 && nAvail==nVal ){
+    pCur->pCachedPayload = (u8*)pVal;
+    pCur->nCachedPayload = nVal;
+  }else{
+    pCur->pCachedPayload = 0;
+    pCur->nCachedPayload = 0;
+  }
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
+  return SQLITE_OK;
+}
+
 
 static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   assert( pCur!=0 && e!=0 );
@@ -622,6 +657,9 @@ static SQLITE_INLINE int prollyCursorFinishTreeStep(BtCursor *pCur, int rc){
 int prollyBtCursorNext(BtCursor *pCur, int flags){
   int rc, immediate;
   (void)flags;
+
+  rc = prollyBtCursorNextFastIntLeaf(pCur);
+  if( rc!=SQLITE_NOTFOUND ) return rc;
 
   rc = prollyBtCursorStepPrologue(pCur, 1, &immediate);
   if( immediate ) return rc;
