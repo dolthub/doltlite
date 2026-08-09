@@ -300,4 +300,102 @@ run_test "onepass_update_resume_lands_merged" \
 
 db_rm "$DB"
 
+# A scan whose moveto lands on a pending row defers the tree-side seek. When
+# a deferred write then deactivates the merge state, the resume re-seeds both
+# sides past the departed key; a surviving deferral would re-seek the tree
+# back to that key on the following step, skipping pending rows or
+# resurrecting delete-masked ones.
+DB=/tmp/test_txn_onepass_deferred_$$.db; db_rm "$DB"
+
+run_test "onepass_update_from_deferred_seek_landing" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (5,'a'),(8,'skip'),(13,'a'),(27,'a');
+   BEGIN;
+   INSERT INTO t VALUES (10,'a');
+   UPDATE t SET v='a2' WHERE id=5;
+   UPDATE t SET v=v||'x' WHERE id>=5 AND v<>'skip';
+   COMMIT;
+   SELECT group_concat(id||'='||v) FROM t;" \
+  "5=a2x,8=skip,10=ax,13=ax,27=ax" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "onepass_delete_from_deferred_seek_landing" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (5,'a'),(8,'skip'),(13,'a'),(27,'a');
+   BEGIN;
+   INSERT INTO t VALUES (10,'a');
+   UPDATE t SET v='a2' WHERE id=5;
+   DELETE FROM t WHERE id>=5 AND v<>'skip';
+   COMMIT;
+   SELECT group_concat(id||'='||v) FROM t;" \
+  "8=skip" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "onepass_interleaved_writes_no_resurrected_delete" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (12,'a'),(21,'a'),(27,'b');
+   BEGIN;
+   INSERT OR REPLACE INTO t VALUES (53,'z');
+   DELETE FROM t WHERE id>=26 AND id<=42 AND v<>'skip';
+   INSERT OR REPLACE INTO t VALUES (28,'skip');
+   INSERT OR REPLACE INTO t VALUES (40,'a');
+   INSERT OR REPLACE INTO t VALUES (31,'skip');
+   INSERT OR REPLACE INTO t VALUES (23,'b');
+   SELECT count(*), coalesce(sum(id),0) FROM t WHERE id>=25;
+   DELETE FROM t WHERE id=21;
+   UPDATE t SET v=v||'F' WHERE id>=23 AND v<>'skip';
+   COMMIT;
+   SELECT id||'='||v FROM t ORDER BY id;
+   SELECT count(*) FROM t;" \
+  "4|152
+12=a
+23=bF
+28=skip
+31=skip
+40=aF
+53=zF
+6" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "onepass_interleaved_writes_covers_late_insert" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   INSERT INTO t VALUES (21,'skip'),(22,'skip'),(23,'skip'),(31,'skip'),
+                        (35,'a'),(40,'skip'),(50,'a'),(52,'b'),(56,'skip');
+   BEGIN;
+   UPDATE t SET v=v||'u' WHERE id=14;
+   INSERT OR REPLACE INTO t VALUES (25,'z');
+   INSERT OR REPLACE INTO t VALUES (6,'skip');
+   INSERT OR REPLACE INTO t VALUES (1,'z');
+   DELETE FROM t WHERE id=60;
+   SELECT count(*), coalesce(sum(id),0) FROM t WHERE id>=58;
+   INSERT OR REPLACE INTO t VALUES (19,'a');
+   UPDATE t SET v=v||'F' WHERE id>=19 AND v<>'skip';
+   COMMIT;
+   SELECT id||'='||v FROM t ORDER BY id;
+   SELECT count(*) FROM t;" \
+  "0|0
+1=z
+6=skip
+19=aF
+21=skip
+22=skip
+23=skip
+25=zF
+31=skip
+35=aF
+40=skip
+50=aF
+52=bF
+56=skip
+13" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
