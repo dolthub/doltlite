@@ -179,12 +179,12 @@ prepare_fixtures() {
 
   MANY_DATA="$TMPDIR/many_data.db"
   cp "$MANY_CLEAN" "$MANY_DATA"
-  write_modify_tables_sql "$TMPDIR/dirty_data.sql" 1 40 0
+  write_modify_tables_sql "$TMPDIR/dirty_data.sql" 1 $((TABLES < 40 ? TABLES : 40)) 0
   run_sql_file "$MANY_DATA" "$TMPDIR/dirty_data.sql"
 
   MANY_SCHEMA="$TMPDIR/many_schema.db"
   cp "$MANY_CLEAN" "$MANY_SCHEMA"
-  write_modify_tables_sql "$TMPDIR/dirty_schema.sql" 1 20 1
+  write_modify_tables_sql "$TMPDIR/dirty_schema.sql" 1 $((TABLES < 20 ? TABLES : 20)) 1
   run_sql_file "$MANY_SCHEMA" "$TMPDIR/dirty_schema.sql"
 
   BRANCH_DB="$TMPDIR/branches.db"
@@ -330,24 +330,46 @@ VC_PERF_IO_SCALE_MAX=${VC_PERF_IO_SCALE_MAX:-5}
 IO_PROBE_US=$(python3 - "$TMPDIR" <<'PYEOF'
 import os, sys, time
 path = os.path.join(sys.argv[1], "io_probe.bin")
-fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-try:
-    os.pwrite(fd, b"\0" * 65536, 0)
-    os.fsync(fd)
-    vals = []
-    for i in range(15):
-        t0 = time.monotonic_ns()
-        os.pwrite(fd, os.urandom(8192), (i % 8) * 8192)
+
+def measure():
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.pwrite(fd, b"\0" * 65536, 0)
         os.fsync(fd)
-        vals.append((time.monotonic_ns() - t0) // 1000)
-    vals.sort()
-    print(vals[len(vals) // 2])
-finally:
-    os.close(fd)
-    os.unlink(path)
+        vals = []
+        for i in range(15):
+            t0 = time.monotonic_ns()
+            os.pwrite(fd, os.urandom(8192), (i % 8) * 8192)
+            os.fsync(fd)
+            vals.append((time.monotonic_ns() - t0) // 1000)
+        vals.sort()
+        return vals[len(vals) // 2]
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+# The probe is an assist, not a gate: a transient IO error must not fail
+# the benchmark, so retry briefly and fall back to unscaled ceilings (0).
+result = 0
+for attempt in range(3):
+    try:
+        result = measure()
+        break
+    except OSError:
+        time.sleep(0.2)
+print(result)
 PYEOF
 )
-IO_SCALE=$(python3 -c "print(f'{min(max(1.0, $IO_PROBE_US/$VC_PERF_IO_REF_US), $VC_PERF_IO_SCALE_MAX):.2f}')")
+if [ "$IO_PROBE_US" -gt 0 ]; then
+  IO_SCALE=$(python3 -c "print(f'{min(max(1.0, $IO_PROBE_US/$VC_PERF_IO_REF_US), $VC_PERF_IO_SCALE_MAX):.2f}')")
+  IO_PROBE_NOTE="${IO_PROBE_US}us per 8KiB write+fsync"
+else
+  IO_SCALE=1.00
+  IO_PROBE_NOTE="unavailable (probe IO error; ceilings unscaled)"
+fi
 
 prepare_fixtures
 
@@ -394,7 +416,7 @@ if [ -n "$VC_PERF_BASELINE" ]; then
 
 Runs: median of $RUNS paired executions per benchmark, excluding fixture setup.
 Execution order alternates between baseline and candidate on each repetition.
-IO probe: ${IO_PROBE_US}us per 8KiB write+fsync.
+IO probe: ${IO_PROBE_NOTE}.
 
 | Benchmark | $VC_PERF_BASELINE_LABEL median ms | $VC_PERF_CANDIDATE_LABEL median ms | Ratio |
 |---|---:|---:|---:|
@@ -414,7 +436,7 @@ branch switch over $((CHECKOUT_TABLES * CHECKOUT_ROWS_PER_TABLE)) rows, and merg
 tests use $MERGE_ROWS-row tables with $MERGE_CHANGE_ROWS changed or conflicting
 rows per side.
 
-IO probe: ${IO_PROBE_US}us per 8KiB write+fsync (reference ${VC_PERF_IO_REF_US}us);
+IO probe: ${IO_PROBE_NOTE} (reference ${VC_PERF_IO_REF_US}us);
 ceilings scaled by ${IO_SCALE}x.
 
 | Benchmark | Median ms | Ceiling ms | Result |
