@@ -157,6 +157,44 @@ run_test "noncurrent_exact_commit" "SELECT count(*) FROM dolt_history_feature_on
 
 rm -f "$DB"
 
+DB=/tmp/test_hist_join_order_$$.db; rm -f "$DB"
+echo "CREATE TABLE items(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO items VALUES(1,'main');
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_checkout('-b','feature');
+INSERT INTO items VALUES(2,'feature-transient');
+SELECT dolt_commit('-A','-m','feature first');
+DELETE FROM items WHERE id=2;
+INSERT INTO items VALUES(3,'feature-head');
+SELECT dolt_commit('-A','-m','feature head');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+ANCESTRY="WITH RECURSIVE ancestry(commit_hash) AS (
+  SELECT dolt_hashof('feature')
+  UNION ALL
+  SELECT parents.parent_hash
+  FROM ancestry
+  JOIN dolt_commit_ancestors parents
+    ON parents.commit_hash=ancestry.commit_hash
+   AND parents.parent_index=0
+  WHERE parents.parent_hash IS NOT NULL
+)"
+
+run_test "history_join_noncurrent_uses_session_head" \
+  "$ANCESTRY SELECT count(*) FROM ancestry JOIN dolt_history_items history ON history.commit_hash=ancestry.commit_hash;" \
+  "1" "$DB"
+run_test "history_cross_join_noncurrent_uses_session_head" \
+  "$ANCESTRY SELECT count(*) FROM ancestry CROSS JOIN dolt_history_items history WHERE history.commit_hash=ancestry.commit_hash;" \
+  "1" "$DB"
+run_test "history_join_explicit_ref" \
+  "$ANCESTRY SELECT count(*) FROM ancestry JOIN dolt_history_items('feature') history ON history.commit_hash=ancestry.commit_hash;" \
+  "5" "$DB"
+run_test "history_cross_join_explicit_ref" \
+  "$ANCESTRY SELECT count(*) FROM ancestry CROSS JOIN dolt_history_items('feature') history WHERE history.commit_hash=ancestry.commit_hash;" \
+  "5" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_hist_merge_replay_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');

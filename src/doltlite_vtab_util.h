@@ -8,6 +8,9 @@
 #include "chunk_store.h"
 #include "doltlite_record.h"
 
+int sqlite3DoltliteVtabConstraintIsCorrelated(sqlite3_index_info *pIdxInfo,
+                                              int iConstraint);
+
 /*
  * Shared prefix for virtual table instances whose per-table metadata
  * consist of (db, zTableName, cols) immediately after the base vtab.
