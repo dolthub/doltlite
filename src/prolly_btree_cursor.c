@@ -113,7 +113,7 @@ static SQLITE_INLINE int prollyBtCursorNextFastIntLeaf(BtCursor *pCur){
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
   pLevel->idx++;
-  prollyNodeValueSpan(pNode, pLevel->idx, &pVal, &nVal, &nAvail);
+  prollyNodeValueSpanInline(pNode, pLevel->idx, &pVal, &nVal, &nAvail);
   if( nVal>0 && nAvail==nVal ){
     pCur->pCachedPayload = (u8*)pVal;
     pCur->nCachedPayload = nVal;

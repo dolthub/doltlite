@@ -163,23 +163,7 @@ void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVa
 
 void prollyNodeValueSpan(const ProllyNode *pNode, int i, const u8 **ppVal,
                          int *pnVal, int *pnAvail){
-  u32 off0;
-  u32 off1;
-  int nValPhys;
-  assert( i >= 0 && i < (int)pNode->nItems );
-  off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
-  off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
-  *pnVal = (int)(off1 - off0);
-  nValPhys = pNode->nDataPhys - (int)(pNode->pValData - pNode->pData);
-  if( nValPhys<0 ) nValPhys = 0;
-  if( (int)off0 < nValPhys ){
-    *ppVal = pNode->pValData + off0;
-    *pnAvail = nValPhys - (int)off0;
-    if( *pnAvail > *pnVal ) *pnAvail = *pnVal;
-  }else{
-    *ppVal = pNode->pValData + nValPhys;
-    *pnAvail = 0;
-  }
+  prollyNodeValueSpanInline(pNode, i, ppVal, pnVal, pnAvail);
 }
 
 void prollyEncodeIntKey(i64 v, u8 buf[8]){
