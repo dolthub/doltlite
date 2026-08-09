@@ -179,12 +179,12 @@ prepare_fixtures() {
 
   MANY_DATA="$TMPDIR/many_data.db"
   cp "$MANY_CLEAN" "$MANY_DATA"
-  write_modify_tables_sql "$TMPDIR/dirty_data.sql" 1 40 0
+  write_modify_tables_sql "$TMPDIR/dirty_data.sql" 1 $((TABLES < 40 ? TABLES : 40)) 0
   run_sql_file "$MANY_DATA" "$TMPDIR/dirty_data.sql"
 
   MANY_SCHEMA="$TMPDIR/many_schema.db"
   cp "$MANY_CLEAN" "$MANY_SCHEMA"
-  write_modify_tables_sql "$TMPDIR/dirty_schema.sql" 1 20 1
+  write_modify_tables_sql "$TMPDIR/dirty_schema.sql" 1 $((TABLES < 20 ? TABLES : 20)) 1
   run_sql_file "$MANY_SCHEMA" "$TMPDIR/dirty_schema.sql"
 
   BRANCH_DB="$TMPDIR/branches.db"
@@ -304,16 +304,72 @@ bench_sql() {
     printf 'vc\t%s\t%s\t%s\n' \
       "$name" "$baseline_median" "$candidate_median" >> "$RESULTS_FILE"
   else
+    local eff_ceiling_us
+    eff_ceiling_us=$(python3 -c "print(int($ceiling * 1000 * $IO_SCALE))")
     status="PASS"
-    if [ "$candidate_median" -gt $((ceiling * 1000)) ]; then
+    if [ "$candidate_median" -gt "$eff_ceiling_us" ]; then
       status="FAIL"
       failures=$((failures+1))
     fi
-    rows="${rows}| $name | $(python3 -c "print(f'{$candidate_median/1000:.2f}')") | $ceiling | $status |\n"
+    rows="${rows}| $name | $(python3 -c "print(f'{$candidate_median/1000:.2f}')") | $(python3 -c "print(f'{$eff_ceiling_us/1000:.0f}')") | $status |\n"
     printf 'vc\t%s\t%d\t%s\n' \
-      "$name" "$((ceiling * 1000))" "$candidate_median" >> "$RESULTS_FILE"
+      "$name" "$eff_ceiling_us" "$candidate_median" >> "$RESULTS_FILE"
   fi
 }
+
+# Absolute ceilings are meaningless on a runner whose disk is degraded: the
+# write-path benchmarks are fsync-bound, and shared-runner fsync latency has
+# been observed to swing several-fold while CPU-bound reads on the same run
+# got faster. Measure fsync cost with an engine-independent probe on the
+# benchmark disk and scale the ceilings when it exceeds the reference,
+# leaving them exact on a healthy runner. The probe is reported so the
+# reference can be retuned from nightly history; healthy GitHub runners
+# measure ~120us, so the reference only engages on real degradation.
+VC_PERF_IO_REF_US=${VC_PERF_IO_REF_US:-1000}
+VC_PERF_IO_SCALE_MAX=${VC_PERF_IO_SCALE_MAX:-5}
+IO_PROBE_US=$(python3 - "$TMPDIR" <<'PYEOF'
+import os, sys, time
+path = os.path.join(sys.argv[1], "io_probe.bin")
+
+def measure():
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.pwrite(fd, b"\0" * 65536, 0)
+        os.fsync(fd)
+        vals = []
+        for i in range(15):
+            t0 = time.monotonic_ns()
+            os.pwrite(fd, os.urandom(8192), (i % 8) * 8192)
+            os.fsync(fd)
+            vals.append((time.monotonic_ns() - t0) // 1000)
+        vals.sort()
+        return vals[len(vals) // 2]
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+# The probe is an assist, not a gate: a transient IO error must not fail
+# the benchmark, so retry briefly and fall back to unscaled ceilings (0).
+result = 0
+for attempt in range(3):
+    try:
+        result = measure()
+        break
+    except OSError:
+        time.sleep(0.2)
+print(result)
+PYEOF
+)
+if [ "$IO_PROBE_US" -gt 0 ]; then
+  IO_SCALE=$(python3 -c "print(f'{min(max(1.0, $IO_PROBE_US/$VC_PERF_IO_REF_US), $VC_PERF_IO_SCALE_MAX):.2f}')")
+  IO_PROBE_NOTE="${IO_PROBE_US}us per 8KiB write+fsync"
+else
+  IO_SCALE=1.00
+  IO_PROBE_NOTE="unavailable (probe IO error; ceilings unscaled)"
+fi
 
 prepare_fixtures
 
@@ -360,6 +416,7 @@ if [ -n "$VC_PERF_BASELINE" ]; then
 
 Runs: median of $RUNS paired executions per benchmark, excluding fixture setup.
 Execution order alternates between baseline and candidate on each repetition.
+IO probe: ${IO_PROBE_NOTE}.
 
 | Benchmark | $VC_PERF_BASELINE_LABEL median ms | $VC_PERF_CANDIDATE_LABEL median ms | Ratio |
 |---|---:|---:|---:|
@@ -378,6 +435,9 @@ Branch tests use $BRANCHES branches, checkout uses a clean $CHECKOUT_TABLES-tabl
 branch switch over $((CHECKOUT_TABLES * CHECKOUT_ROWS_PER_TABLE)) rows, and merge
 tests use $MERGE_ROWS-row tables with $MERGE_CHANGE_ROWS changed or conflicting
 rows per side.
+
+IO probe: ${IO_PROBE_NOTE} (reference ${VC_PERF_IO_REF_US}us);
+ceilings scaled by ${IO_SCALE}x.
 
 | Benchmark | Median ms | Ceiling ms | Result |
 |---|---:|---:|---|
