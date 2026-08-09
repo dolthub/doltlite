@@ -2364,12 +2364,6 @@ int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
                                   0, 0, &emptyHash);
 }
 
-int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
-                                        const ProllyHash *pCatHash,
-                                        const ProllyHash *pCommitHash){
-  return btreeWriteWorkingState(cs, zBranch, pCatHash, pCommitHash);
-}
-
 int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                        ProllyHash *pCatHash,
                                        ProllyHash *pCommitHash){

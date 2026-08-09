@@ -214,9 +214,6 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
 
-int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
-                                        const ProllyHash *pCatHash,
-                                        const ProllyHash *pCommitHash);
 int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                        ProllyHash *pCatHash,
                                        ProllyHash *pCommitHash);
