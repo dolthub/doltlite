@@ -323,8 +323,9 @@ bench_sql() {
 # got faster. Measure fsync cost with an engine-independent probe on the
 # benchmark disk and scale the ceilings when it exceeds the reference,
 # leaving them exact on a healthy runner. The probe is reported so the
-# reference can be retuned from nightly history.
-VC_PERF_IO_REF_US=${VC_PERF_IO_REF_US:-2500}
+# reference can be retuned from nightly history; healthy GitHub runners
+# measure ~120us, so the reference only engages on real degradation.
+VC_PERF_IO_REF_US=${VC_PERF_IO_REF_US:-1000}
 VC_PERF_IO_SCALE_MAX=${VC_PERF_IO_SCALE_MAX:-5}
 IO_PROBE_US=$(python3 - "$TMPDIR" <<'PYEOF'
 import os, sys, time
