@@ -76,6 +76,10 @@ int prollyMutMapInsert(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
                        const u8 *pVal, int nVal);
 
+int prollyMutMapInsertAbsent(ProllyMutMap *mm,
+                             const u8 *pKey, int nKey, i64 intKey,
+                             const u8 *pVal, int nVal);
+
 int prollyMutMapInsertZeroTail(ProllyMutMap *mm, i64 intKey,
                                const u8 *pVal, int nValPrefix,
                                i64 nZeroTail);
@@ -89,6 +93,9 @@ int prollyMutMapReplaceEntry(
 
 int prollyMutMapDelete(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey);
+
+int prollyMutMapDeleteAbsent(ProllyMutMap *mm,
+                             const u8 *pKey, int nKey, i64 intKey);
 
 int prollyMutMapDeleteEntry(
   ProllyMutMap *mm,

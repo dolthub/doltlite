@@ -324,6 +324,7 @@ void clearMergeCursorState(BtCursor *pCur){
   pCur->mmPhysIdx = -1;
   pCur->mmActive = 0;
   pCur->mmPhysActive = 0;
+  pCur->mmExactMiss = 0;
   pCur->deferredTreeSeek = 0;
   pCur->deferredMergedSeek = 0;
   pCur->mergeSrc = MERGE_SRC_TREE;
@@ -525,6 +526,7 @@ void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
       p->pMutMap = pNewMap;
       p->mmActive = 0;
       p->mmPhysActive = 0;
+      p->mmExactMiss = 0;
       p->deferredTreeSeek = 0;
       p->mmIdx = -1;
       p->mmPhysIdx = -1;
@@ -810,6 +812,13 @@ int prollyBtCursorInsert(
       ** zeros are never materialized in memory. */
       rc = prollyMutMapInsertZeroTail(pCur->pMutMap, pPayload->nKey,
                                       pData, nData, (i64)pPayload->nZero);
+    }else if( pCur->mmExactMiss
+     && pCur->pMutMap
+     && pCur->mmMissGeneration==pCur->pMutMap->generation
+     && pCur->mmMissIntKey==pPayload->nKey ){
+      rc = prollyMutMapInsertAbsent(pCur->pMutMap,
+                                    NULL, 0, pPayload->nKey,
+                                    pData, nData);
     }else if( pCur->mmActive
      && pCur->mmPhysActive
      && pCur->pMutMap
@@ -874,7 +883,16 @@ int prollyBtCursorInsert(
       pSortKey = pCur->pSeekSortKey;
     }
     if( rc==SQLITE_OK ){
-      if( storePayload ){
+      if( pCur->mmExactMiss
+       && pCur->pMutMap
+       && pCur->mmMissGeneration==pCur->pMutMap->generation
+       && pCur->nMmMissKey==nSortKey
+       && memcmp(pCur->aMmMissKey, pSortKey, nSortKey)==0 ){
+        rc = prollyMutMapInsertAbsent(
+            pCur->pMutMap, pSortKey, nSortKey, 0,
+            storePayload ? (const u8*)pPayload->pKey : NULL,
+            storePayload ? (int)pPayload->nKey : 0);
+      }else if( storePayload ){
         rc = prollyMutMapInsert(pCur->pMutMap,
                                  pSortKey, nSortKey, 0,
                                  (const u8*)pPayload->pKey, (int)pPayload->nKey);
@@ -1225,7 +1243,12 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   }
   if( pCur->curIntKey ){
     iKey = savedIntKey;
-    if( pCur->mmActive
+    if( pCur->mmExactMiss
+     && pCur->pMutMap
+     && pCur->mmMissGeneration==pCur->pMutMap->generation
+     && pCur->mmMissIntKey==iKey ){
+      rc = prollyMutMapDeleteAbsent(pCur->pMutMap, NULL, 0, iKey);
+    }else if( pCur->mmActive
      && pCur->mmPhysActive
      && pCur->pMutMap
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
@@ -1244,7 +1267,13 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   } else {
     pKey = pSavedDelKey;
     nKey = nSavedDelKey;
-    if( pCur->mmActive
+    if( pCur->mmExactMiss
+     && pCur->pMutMap
+     && pCur->mmMissGeneration==pCur->pMutMap->generation
+     && pCur->nMmMissKey==nKey
+     && memcmp(pCur->aMmMissKey, pKey, nKey)==0 ){
+      rc = prollyMutMapDeleteAbsent(pCur->pMutMap, pKey, nKey, 0);
+    }else if( pCur->mmActive
      && pCur->mmPhysActive
      && pCur->pMutMap
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
