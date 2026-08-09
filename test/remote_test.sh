@@ -689,6 +689,43 @@ check_match "non-ff push rejected" "not a fast-forward" "$result"
 result=$("$DB" "$TMPDIR/nff_b.db" "SELECT dolt_push('origin','main','--force');")
 check "force push succeeds" "0" "$result"
 
+echo "=== Working sets do not push/pull (Dolt 2.2.2 semantics) ==="
+# A push carries commits and refs only. A dirty working set stays local, and
+# every branch on a clone starts clean at its head -- a kept working-set hash
+# would name a chunk the commit-graph sync never fetches, wedging
+# dolt_branches and dolt_checkout on the clone.
+
+"$DB" "$TMPDIR/ws_src.db" <<ENDSQL
+CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES(1,'main-row');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_remote('add','origin','$R/ws_remote.db');
+SELECT dolt_push('origin','main');
+SELECT dolt_checkout('-b','feature');
+INSERT INTO t VALUES(2,'feat-row');
+SELECT dolt_commit('-am','feat commit');
+INSERT INTO t VALUES(3,'dirty-uncommitted');
+SELECT dolt_push('origin','feature');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT dolt_clone('$R/ws_remote.db');" 2>&1)
+check_match "multi-branch clone succeeds" "^0$" "$result"
+
+result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT name, dirty FROM dolt_branches ORDER BY name;" 2>&1)
+check "cloned branches are listable and clean" "feature|0
+main|0" "$result"
+
+result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT dolt_checkout('feature'); SELECT count(*) FROM t; SELECT count(*) FROM dolt_status;" 2>&1)
+check "cloned branch checks out clean at its head" "0
+2
+0" "$result"
+
+result=$("$DB" "$TMPDIR/ws_src.db" "SELECT dolt_checkout('feature'); SELECT b FROM t WHERE a=3; SELECT count(*) FROM dolt_status;")
+check "dirty row stays in the source working set" "0
+dirty-uncommitted
+1" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

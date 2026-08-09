@@ -126,37 +126,6 @@ static int remoteCollectRootsFromRefsBlob(
   return SQLITE_OK;
 }
 
-static int remoteLoadCommitCatalogHash(
-  ChunkStore *cs,
-  const ProllyHash *pCommitHash,
-  ProllyHash *pCatalogHash
-){
-  u8 *pData = 0;
-  int nData = 0;
-  DoltliteCommit c;
-  int rc;
-
-  if( pCatalogHash ) memset(pCatalogHash, 0, sizeof(*pCatalogHash));
-  if( !cs || !pCommitHash || prollyHashIsEmpty(pCommitHash) || !pCatalogHash ){
-    return SQLITE_ERROR;
-  }
-
-  rc = chunkStoreGet(cs, pCommitHash, &pData, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-
-  memset(&c, 0, sizeof(c));
-  rc = doltliteCommitDeserialize(pData, nData, &c);
-  sqlite3_free(pData);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&c);
-    return rc;
-  }
-
-  memcpy(pCatalogHash, &c.catalogHash, sizeof(*pCatalogHash));
-  doltliteCommitClear(&c);
-  return SQLITE_OK;
-}
-
 typedef struct SyncEnqCtx SyncEnqCtx;
 struct SyncEnqCtx {
   SyncQueue *q;
@@ -1002,7 +971,6 @@ int doltlitePush(
   int bForce
 ){
   ProllyHash localCommit;
-  ProllyHash localCatalog;
   ProllyHash remoteCommit;
   ProllyHash expectedRefsHash;
   u8 *refsData = 0;
@@ -1014,9 +982,6 @@ int doltlitePush(
   if( rc!=SQLITE_OK ){
     return SQLITE_ERROR;
   }
-
-  rc = remoteLoadCommitCatalogHash(pLocal, &localCommit, &localCatalog);
-  if( rc!=SQLITE_OK ) return rc;
 
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc==SQLITE_OK && refsData ){
@@ -1073,8 +1038,6 @@ int doltlitePush(
     {
       ChunkStore tmpCs;
       u8 *newRefs = 0; int nNewRefs = 0;
-      u8 *wsData = 0; int nWsData = 0;
-      ProllyHash wsHash;
       memset(&tmpCs, 0, sizeof(tmpCs));
       if( refsData2 && nRefsData2 > 0 ){
         rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
@@ -1100,27 +1063,17 @@ int doltlitePush(
         return rc;
       }
 
-      rc = chunkStoreWriteBranchWorkingCatalog(
-        &tmpCs, zBranch, &localCatalog, &localCommit);
-      if( rc!=SQLITE_OK ){
-        chunkStoreClose(&tmpCs);
-        return rc;
-      }
-      rc = chunkStoreGetBranchWorkingSet(&tmpCs, zBranch, &wsHash);
-      if( rc!=SQLITE_OK ){
-        chunkStoreClose(&tmpCs);
-        return rc;
-      }
-      rc = chunkStoreGet(&tmpCs, &wsHash, &wsData, &nWsData);
-      if( rc!=SQLITE_OK ){
-        chunkStoreClose(&tmpCs);
-        return rc;
-      }
-      rc = pRemote->xPutChunk(pRemote, &wsHash, wsData, nWsData);
-      sqlite3_free(wsData);
-      if( rc!=SQLITE_OK ){
-        chunkStoreClose(&tmpCs);
-        return rc;
+      /* Working sets do not push: the remote carries commits and refs only,
+      ** so clear any working-set hash an older client left on this branch
+      ** rather than declare a chunk no cloner fetches. */
+      {
+        ProllyHash emptyWs;
+        memset(&emptyWs, 0, sizeof(emptyWs));
+        rc = chunkStoreSetBranchWorkingSet(&tmpCs, zBranch, &emptyWs);
+        if( rc!=SQLITE_OK ){
+          chunkStoreClose(&tmpCs);
+          return rc;
+        }
       }
 
       {
@@ -1376,6 +1329,28 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   sqlite3_free(refsData);
   refsData = 0;
   if( rc!=SQLITE_OK ) goto clone_restore_refs;
+
+  /* Working sets do not pull: cloned branches start clean at their heads.
+  ** Clear any working-set hashes in the installed refs (older clients
+  ** pushed them) -- the commit-graph sync above never fetches those
+  ** chunks, so a kept hash would dangle. */
+  {
+    int nBr = 0;
+    int i;
+    const BranchRef *aBr = 0;
+    ProllyHash emptyWs;
+    memset(&emptyWs, 0, sizeof(emptyWs));
+    refsTableGetBranches(&pLocal->refs, &nBr, &aBr);
+    for(i=0; i<nBr && rc==SQLITE_OK; i++){
+      if( !prollyHashIsEmpty(&aBr[i].workingSetHash) ){
+        rc = chunkStoreSetBranchWorkingSet(pLocal, aBr[i].zName, &emptyWs);
+      }
+    }
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreSerializeRefs(pLocal);
+    }
+    if( rc!=SQLITE_OK ) goto clone_restore_refs;
+  }
 
   rc = chunkStoreCommit(pLocal);
   if( rc!=SQLITE_OK ){
