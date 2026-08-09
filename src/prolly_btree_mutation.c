@@ -399,14 +399,6 @@ static void setCursorToMutMapMissingEntryPhys(BtCursor *pCur, int physIdx){
   }
 }
 
-int prollyCursorCheckInterrupt(BtCursor *pCur){
-  sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
-  if( db && AtomicLoad(&db->u1.isInterrupted) ){
-    return SQLITE_INTERRUPT;
-  }
-  return SQLITE_OK;
-}
-
 int advanceTreeCursor(BtCursor *pCur, int dir){
   int rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
