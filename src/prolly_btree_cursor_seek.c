@@ -454,10 +454,25 @@ static int indexMovetoBuildSeekKey(
   if( unpackedRecordCanUseIntSortKey(
           pCur, pIdxKey,
           nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
+    int nIntField = nSeekKeyField>0
+      ? nSeekKeyField : (int)pIdxKey->nField;
+    if( pCur->pSeekSortKey==0
+     && nIntField <= (int)sizeof(pCur->aSeekSortKey)/18 ){
+      pCur->pSeekSortKey = pCur->aSeekSortKey;
+      pCur->nSeekSortKeyAlloc = sizeof(pCur->aSeekSortKey);
+    }else if( pCur->pSeekSortKey==pCur->aSeekSortKey
+           && nIntField > (int)sizeof(pCur->aSeekSortKey)/18 ){
+      pCur->pSeekSortKey = 0;
+      pCur->nSeekSortKeyAlloc = 0;
+    }
     rc = sortKeyFromUnpackedIntRecordBuffer(
-        pIdxKey, nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField,
+        pIdxKey, nIntField,
         &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
   }else{
+    if( pCur->pSeekSortKey==pCur->aSeekSortKey ){
+      pCur->pSeekSortKey = 0;
+      pCur->nSeekSortKeyAlloc = 0;
+    }
     rc = sortKeyFromMemPrefixCollBuffer(
         pIdxKey->aMem, (int)pIdxKey->nField, nSeekKeyField,
         pCur->pKeyInfo,
@@ -545,11 +560,13 @@ static int indexMovetoExactMutMap(
   }
   if( cursorMapMiss
    && (!pPending || pPending==pCur->pMutMap)
-   && nSortKey<=(int)sizeof(pCur->aMmMissKey) ){
+   && nSortKey<=(int)sizeof(pCur->aSeekSortKey) ){
     pCur->mmExactMiss = 1;
     pCur->mmMissGeneration = pCur->pMutMap->generation;
     pCur->nMmMissKey = nSortKey;
-    memcpy(pCur->aMmMissKey, pSortKey, nSortKey);
+    if( pSortKey!=pCur->aSeekSortKey ){
+      memcpy(pCur->aSeekSortKey, pSortKey, nSortKey);
+    }
   }
   return SQLITE_OK;
 }

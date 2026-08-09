@@ -1521,11 +1521,11 @@ int prollyBtCursorCloseCursor(BtCursor *pCur){
     pCur->pSeekRecord = 0;
     pCur->nSeekRecordAlloc = 0;
   }
-  if( pCur->pSeekSortKey ){
+  if( pCur->pSeekSortKey && pCur->pSeekSortKey!=pCur->aSeekSortKey ){
     sqlite3_free(pCur->pSeekSortKey);
-    pCur->pSeekSortKey = 0;
-    pCur->nSeekSortKeyAlloc = 0;
   }
+  pCur->pSeekSortKey = 0;
+  pCur->nSeekSortKeyAlloc = 0;
   if( pCur->pCompareSortKey ){
     sqlite3_free(pCur->pCompareSortKey);
     pCur->pCompareSortKey = 0;
