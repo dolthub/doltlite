@@ -8413,21 +8413,34 @@ static void run_mutmap_differential_randomized(void){
     int op = (int)(r % 10);
     i64 key = (i64)(mutmapRandNext(&rng) % 64);
     int val = (int)(mutmapRandNext(&rng) % 100000);
+    int useAbsent = mutmapModelFindIndex(&model, key)<0 && (r & 0x100)!=0;
 
     if( op < 4 ){
       rc = mutmapModelSet(&model, key, PROLLY_EDIT_INSERT, val);
       check("mutmap_diff_model_insert_rc", rc==SQLITE_OK);
       check("mutmap_diff_sorted_insert_rc",
-            prollyMutMapInsert(&sorted, 0, 0, key, (const u8*)&val, sizeof(val))==SQLITE_OK);
+            (useAbsent
+              ? prollyMutMapInsertAbsent(&sorted, 0, 0, key,
+                                         (const u8*)&val, sizeof(val))
+              : prollyMutMapInsert(&sorted, 0, 0, key,
+                                   (const u8*)&val, sizeof(val)))==SQLITE_OK);
       check("mutmap_diff_lazy_insert_rc",
-            prollyMutMapInsert(&lazy, 0, 0, key, (const u8*)&val, sizeof(val))==SQLITE_OK);
+            (useAbsent
+              ? prollyMutMapInsertAbsent(&lazy, 0, 0, key,
+                                         (const u8*)&val, sizeof(val))
+              : prollyMutMapInsert(&lazy, 0, 0, key,
+                                   (const u8*)&val, sizeof(val)))==SQLITE_OK);
     }else if( op < 7 ){
       rc = mutmapModelSet(&model, key, PROLLY_EDIT_DELETE, 0);
       check("mutmap_diff_model_delete_rc", rc==SQLITE_OK);
       check("mutmap_diff_sorted_delete_rc",
-            prollyMutMapDelete(&sorted, 0, 0, key)==SQLITE_OK);
+            (useAbsent
+              ? prollyMutMapDeleteAbsent(&sorted, 0, 0, key)
+              : prollyMutMapDelete(&sorted, 0, 0, key))==SQLITE_OK);
       check("mutmap_diff_lazy_delete_rc",
-            prollyMutMapDelete(&lazy, 0, 0, key)==SQLITE_OK);
+            (useAbsent
+              ? prollyMutMapDeleteAbsent(&lazy, 0, 0, key)
+              : prollyMutMapDelete(&lazy, 0, 0, key))==SQLITE_OK);
     }else if( op == 7 ){
       level++;
       check("mutmap_diff_push_snapshot",

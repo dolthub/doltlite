@@ -78,6 +78,11 @@ int prollyBtCursorTableMoveto(
     }
     rc = prollyMutMapFindRc(pCur->pMutMap, 0, 0, intKey, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
+    if( !pEntry ){
+      pCur->mmExactMiss = 1;
+      pCur->mmMissGeneration = pCur->pMutMap->generation;
+      pCur->mmMissIntKey = intKey;
+    }
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
       if( pCur->isPinned ){
         return SQLITE_CONSTRAINT_PINNED;
@@ -494,6 +499,7 @@ static int indexMovetoExactMutMap(
   struct TableEntry *pTE;
   ProllyMutMap *pPending;
   ProllyMutMapEntry *pEntry = 0;
+  int cursorMapMiss = 0;
   int rc;
 
   *pDone = 0;
@@ -506,6 +512,7 @@ static int indexMovetoExactMutMap(
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
+    cursorMapMiss = pEntry==0;
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
       if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
       setCursorToMutMapEntryPhys(
@@ -535,6 +542,14 @@ static int indexMovetoExactMutMap(
       *pDone = 1;
       return SQLITE_OK;
     }
+  }
+  if( cursorMapMiss
+   && (!pPending || pPending==pCur->pMutMap)
+   && nSortKey<=(int)sizeof(pCur->aMmMissKey) ){
+    pCur->mmExactMiss = 1;
+    pCur->mmMissGeneration = pCur->pMutMap->generation;
+    pCur->nMmMissKey = nSortKey;
+    memcpy(pCur->aMmMissKey, pSortKey, nSortKey);
   }
   return SQLITE_OK;
 }

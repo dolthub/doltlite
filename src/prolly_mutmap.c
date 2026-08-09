@@ -549,6 +549,44 @@ static void updateAppendSorted(ProllyMutMap *mm, int phys){
   }
 }
 
+static int appendEntry(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey,
+  const u8 *pVal, int nVal,
+  int idx, u8 op, i64 nZeroTail
+){
+  ProllyMutMapEntry *e;
+  int phys;
+  int rc;
+
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = ensureHashForInsert(mm);
+  if( rc!=SQLITE_OK ) return rc;
+
+  phys = mm->nEntries;
+  e = &mm->aEntries[phys];
+  memset(e, 0, sizeof(*e));
+  e->op = op;
+  e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+  rc = copyEntryData(mm, e, pKey, nKey, pVal, nVal);
+  if( rc!=SQLITE_OK ) return rc;
+  e->nZeroTail = nZeroTail;
+  updateAppendSorted(mm, phys);
+  if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
+    insertOrderEntry(mm, idx, phys);
+  }else{
+    mm->aOrder[phys] = phys;
+    mm->aPos[phys] = phys;
+    mm->orderDirty = 1;
+  }
+
+  mm->nEntries++;
+  if( !mm->keepSorted ) hashInsertPhys(mm, phys);
+  mm->generation++;
+  return SQLITE_OK;
+}
+
 static int appendUndoRec(ProllyMutMap *mm, int idx){
   ProllyMutMapEntry *e;
   ProllyMutMapUndoRec *rec;
@@ -616,38 +654,25 @@ int prollyMutMapInsert(
     return SQLITE_OK;
   }
 
-  rc = ensureCapacity(mm);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = ensureHashForInsert(mm);
-  if( rc!=SQLITE_OK ) return rc;
+  return appendEntry(mm, pKey, nKey, pVal, nVal, idx,
+                     PROLLY_EDIT_INSERT, 0);
+}
 
-  {
-    ProllyMutMapEntry *e;
-    phys = mm->nEntries;
-    e = &mm->aEntries[phys];
-    memset(e, 0, sizeof(*e));
-    e->op = PROLLY_EDIT_INSERT;
-    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    rc = copyEntryData(mm, e, pKey, nKey, pVal, nVal);
-    if( rc!=SQLITE_OK ){
-      return rc;
-    }
-    updateAppendSorted(mm, phys);
-    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
-      insertOrderEntry(mm, idx, phys);
-    }else{
-      mm->aOrder[phys] = phys;
-      mm->aPos[phys] = phys;
-      mm->orderDirty = 1;
-    }
+int prollyMutMapInsertAbsent(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  const u8 *pVal, int nVal
+){
+  int found = 0;
+  int idx = 0;
+  u8 keyBuf[8];
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
+  if( mm->keepSorted || !mm->orderDirty ){
+    idx = bsearch_key(mm, pKey, nKey, &found);
+    if( found ) return prollyMutMapInsert(mm, pKey, nKey, intKey, pVal, nVal);
   }
-
-  mm->nEntries++;
-  if( !mm->keepSorted ){
-    hashInsertPhys(mm, phys);
-  }
-  mm->generation++;
-  return SQLITE_OK;
+  return appendEntry(mm, pKey, nKey, pVal, nVal, idx,
+                     PROLLY_EDIT_INSERT, 0);
 }
 
 /* Insert a value of pVal[0..nValPrefix) followed by nZeroTail zero bytes,
@@ -696,39 +721,8 @@ int prollyMutMapInsertZeroTail(
     return SQLITE_OK;
   }
 
-  rc = ensureCapacity(mm);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = ensureHashForInsert(mm);
-  if( rc!=SQLITE_OK ) return rc;
-
-  {
-    ProllyMutMapEntry *e;
-    phys = mm->nEntries;
-    e = &mm->aEntries[phys];
-    memset(e, 0, sizeof(*e));
-    e->op = PROLLY_EDIT_INSERT;
-    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    rc = copyEntryData(mm, e, pKey, nKey, pVal, nValPrefix);
-    if( rc!=SQLITE_OK ){
-      return rc;
-    }
-    e->nZeroTail = nZeroTail;
-    updateAppendSorted(mm, phys);
-    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
-      insertOrderEntry(mm, idx, phys);
-    }else{
-      mm->aOrder[phys] = phys;
-      mm->aPos[phys] = phys;
-      mm->orderDirty = 1;
-    }
-  }
-
-  mm->nEntries++;
-  if( !mm->keepSorted ){
-    hashInsertPhys(mm, phys);
-  }
-  mm->generation++;
-  return SQLITE_OK;
+  return appendEntry(mm, pKey, nKey, pVal, nValPrefix, idx,
+                     PROLLY_EDIT_INSERT, nZeroTail);
 }
 
 int prollyMutMapReplaceEntry(
@@ -790,38 +784,22 @@ int prollyMutMapDelete(
     return SQLITE_OK;
   }
 
-  rc = ensureCapacity(mm);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = ensureHashForInsert(mm);
-  if( rc!=SQLITE_OK ) return rc;
+  return appendEntry(mm, pKey, nKey, 0, 0, idx, PROLLY_EDIT_DELETE, 0);
+}
 
-  {
-    ProllyMutMapEntry *e;
-    phys = mm->nEntries;
-    e = &mm->aEntries[phys];
-    memset(e, 0, sizeof(*e));
-    e->op = PROLLY_EDIT_DELETE;
-    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    rc = copyEntryData(mm, e, pKey, nKey, 0, 0);
-    if( rc!=SQLITE_OK ){
-      return rc;
-    }
-    updateAppendSorted(mm, phys);
-    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
-      insertOrderEntry(mm, idx, phys);
-    }else{
-      mm->aOrder[phys] = phys;
-      mm->aPos[phys] = phys;
-      mm->orderDirty = 1;
-    }
+int prollyMutMapDeleteAbsent(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey
+){
+  int found = 0;
+  int idx = 0;
+  u8 keyBuf[8];
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
+  if( mm->keepSorted || !mm->orderDirty ){
+    idx = bsearch_key(mm, pKey, nKey, &found);
+    if( found ) return prollyMutMapDelete(mm, pKey, nKey, intKey);
   }
-
-  mm->nEntries++;
-  if( !mm->keepSorted ){
-    hashInsertPhys(mm, phys);
-  }
-  mm->generation++;
-  return SQLITE_OK;
+  return appendEntry(mm, pKey, nKey, 0, 0, idx, PROLLY_EDIT_DELETE, 0);
 }
 
 int prollyMutMapDeleteEntry(
