@@ -836,13 +836,6 @@ int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   return sqlite3_exec(db, "BEGIN", 0, 0, 0);
 }
 
-int doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(sqlite3 *db){
-  if( doltliteSavepointIsTopLevelTxn(db) ){
-    return SQLITE_OK;
-  }
-  return doltliteVcSealBranchStyleTxn(db);
-}
-
 int doltlitePrimeSchemaCache(sqlite3 *db){
   sqlite3_stmt *pStmt = 0;
   int rc = sqlite3_prepare_v2(

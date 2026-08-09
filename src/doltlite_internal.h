@@ -953,7 +953,6 @@ int doltliteRollbackAutocommitConflict(
 );
 int doltliteSavepointIsTopLevelTxn(sqlite3 *db);
 int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db);
-int doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(sqlite3 *db);
 
 typedef DoltliteNameIndex AddNameIndex;
 int addNameIndexInit(

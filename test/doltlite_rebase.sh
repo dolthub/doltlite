@@ -319,7 +319,61 @@ run_test "rebase_64_byte_default_branch_rejection_is_atomic" \
 0" \
   "$DB8"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8"
+# Constraint detection must run for --continue regardless of the enclosing
+# transaction shape: a replayed commit that orphans an FK row has to abort
+# the rebase in every mode, never advance the branch with the violation.
+seed_fk_conflict_repo() {
+  local d="$1"
+  rm -f "$d"
+  cat <<'SQL' | "$DOLTLITE" "$d" >/dev/null 2>&1
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT REFERENCES parent(id));
+INSERT INTO parent VALUES(1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+DELETE FROM parent WHERE id=1;
+SELECT dolt_commit('-am','main deletes parent');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES(1,1);
+SELECT dolt_commit('-am','feat adds child');
+SQL
+}
+
+DB9=/tmp/test_rebase_fk_txn_$$.db
+seed_fk_conflict_repo "$DB9"
+run_test_match "continue_in_txn_detects_fk_violation" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   UPDATE dolt_rebase SET action='pick';
+   BEGIN;
+   SELECT dolt_rebase('--continue');
+   COMMIT;" \
+  "data conflicts from rebase" \
+  "$DB9"
+run_test "continue_in_txn_no_orphans" \
+  "SELECT count(*) FROM pragma_foreign_key_check;
+   SELECT message FROM dolt_log('feat') LIMIT 1;" \
+  "0
+feat adds child" \
+  "$DB9"
+
+seed_fk_conflict_repo "$DB9"
+run_test_match "continue_in_savepoint_detects_fk_violation" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   UPDATE dolt_rebase SET action='pick';
+   SAVEPOINT s1;
+   SELECT dolt_rebase('--continue');" \
+  "data conflicts from rebase" \
+  "$DB9"
+run_test "continue_in_savepoint_no_orphans" \
+  "SELECT count(*) FROM pragma_foreign_key_check;
+   SELECT message FROM dolt_log('feat') LIMIT 1;" \
+  "0
+feat adds child" \
+  "$DB9"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
