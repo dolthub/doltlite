@@ -199,6 +199,15 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   if( !pCur->deferredTreeSeek ) return SQLITE_OK;
   assert( pCur->mmActive );
   assert( pCur->pMutMap!=0 );
+#ifdef SQLITE_DEBUG
+  /* The deferral must still describe the mut-map landing it was armed on;
+  ** anything that repositions the merge state owes a cleared flag. */
+  if( pCur->curIntKey && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
+    ProllyMutMapEntry *eChk = 0;
+    assert( orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &eChk)==SQLITE_OK );
+    assert( eChk && prollyMutMapEntryIntKey(eChk)==pCur->cachedIntKey );
+  }
+#endif
   pCur->deferredTreeSeek = 0;
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
@@ -430,6 +439,11 @@ static int resumeDeactivatedMergedScan(BtCursor *pCur, int dir){
   pCur->mmPhysIdx = -1;
   pCur->mmPhysActive = 0;
   pCur->mmActive = 1;
+  /* This re-seek supersedes any tree positioning the pre-write moveto
+  ** deferred; a surviving deferral would re-seek the tree back to the
+  ** departed key on the next step, skipping pending rows and re-serving
+  ** delete-masked ones. */
+  pCur->deferredTreeSeek = 0;
   rc = mergeScan(pCur, dir, &res);
   if( rc!=SQLITE_OK ) return rc;
   if( res ){
