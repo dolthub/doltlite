@@ -528,7 +528,11 @@ int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   return pCur->pCurOps->xLast(pCur, pRes);
 }
 
-static int prollyBtCursorStepPrologue(BtCursor *pCur, int dir, int *pImmediate){
+static SQLITE_INLINE int prollyBtCursorStepPrologue(
+  BtCursor *pCur,
+  int dir,
+  int *pImmediate
+){
   int rc;
   *pImmediate = 1;
   CLEAR_CACHED_PAYLOAD(pCur);
@@ -600,7 +604,7 @@ static int prollyCursorApplyMergeStep(BtCursor *pCur, int dir){
 ** through eState, never by returning SQLITE_DONE, so returning SQLITE_DONE here
 ** unambiguously means "went invalid" and lets callers skip the trailing
 ** curFlags clear exactly as the open-coded versions did. */
-static int prollyCursorFinishTreeStep(BtCursor *pCur, int rc){
+static SQLITE_INLINE int prollyCursorFinishTreeStep(BtCursor *pCur, int rc){
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
     pCur->eState = CURSOR_VALID;
