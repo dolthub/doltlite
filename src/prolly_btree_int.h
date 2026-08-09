@@ -754,7 +754,13 @@ int materializeDeferredMergedSeekBackward(BtCursor *pCur);
 int tableEntryIsTableRoot(Btree*, struct TableEntry*, int*);
 void clearMergeCursorState(BtCursor*);
 int mergeLast(BtCursor *pCur, int *pRes);
-int prollyCursorCheckInterrupt(BtCursor*);
+static SQLITE_INLINE int prollyCursorCheckInterrupt(BtCursor *pCur){
+  sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
+  if( db && AtomicLoad(&db->u1.isInterrupted) ){
+    return SQLITE_INTERRUPT;
+  }
+  return SQLITE_OK;
+}
 int advanceTreeCursor(BtCursor*, int);
 int orderedMutMapEntryAt(ProllyMutMap*, int, ProllyMutMapEntry**);
 int unpackedRecordCanUseIntSortKey(BtCursor*, UnpackedRecord*, int);
