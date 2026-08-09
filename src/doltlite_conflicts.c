@@ -1198,7 +1198,7 @@ static void cfrEmitRecordCol(
   const DoltliteColInfo *pCols,
   i64 intKey
 ){
-  doltliteResultUserCol(ctx, pCols, pRec, nRec, intKey, iUserCol);
+  doltliteResultUserCol(ctx, pCols, pRec, nRec, intKey, 1, iUserCol);
 }
 
 static const char *cfrDiffType(const u8 *pBase, int nBase,

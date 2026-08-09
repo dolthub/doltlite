@@ -53,6 +53,7 @@ void doltliteResultUserCol(sqlite3_context *ctx,
                            const DoltliteColInfo *ci,
                            const u8 *pRec, int nRec,
                            i64 intKey,
+                           int bRootIntKey,
                            int iDeclaredCol);
 
 int doltliteFieldValuesEqual(int aType, const u8 *pA, int nA, int aOff,

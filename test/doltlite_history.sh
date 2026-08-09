@@ -344,4 +344,33 @@ run_test_match "filter_commit" \
 
 rm -f "$DB"
 
+# Rows from a historical root whose key shape differs from the declared
+# schema must render their real values and honor PK constraints; the old
+# code returned raw sort-key bytes for the key column and dropped the
+# pushed-down filter entirely.
+DB=/tmp/test_hist_keyshape_$$.db; rm -f "$DB"
+echo "CREATE TABLE s(a TEXT PRIMARY KEY, b TEXT) WITHOUT ROWID;
+INSERT INTO s VALUES('x','one'),('y','two');
+SELECT dolt_commit('-Am','v1');
+DROP TABLE s;
+CREATE TABLE s(a INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO s VALUES(1,'one'),(2,'two'),(7,'seven');
+SELECT dolt_commit('-Am','v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "keyshape_history_eq_filters" \
+  "SELECT a, b FROM dolt_history_s WHERE a=7;" \
+  "7|seven" "$DB"
+run_test "keyshape_history_upper_bound" \
+  "SELECT count(*) FROM dolt_history_s WHERE a<'z';" \
+  "2" "$DB"
+run_test "keyshape_history_values_render" \
+  "SELECT a FROM dolt_history_s ORDER BY a;" \
+  "1
+2
+7
+x
+y" "$DB"
+
+rm -f "$DB"
+
 dltest_finish

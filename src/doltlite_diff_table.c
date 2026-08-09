@@ -1120,7 +1120,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
   if( nCols > 0 && col < nCols ){
     doltliteResultUserCol(ctx, &pVtab->cols, r->pNewVal, r->nNewVal,
-                          r->intKey, col);
+                          r->intKey, 1, col);
   }else if( nCols > 0 && col == nCols ){
 
     sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
@@ -1129,7 +1129,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if( nCols > 0 && col < 2*nCols+2 ){
     int colIdx = col - nCols - 2;
     doltliteResultUserCol(ctx, &pVtab->cols, r->pOldVal, r->nOldVal,
-                          r->intKey, colIdx);
+                          r->intKey, 1, colIdx);
   }else if( nCols > 0 && col == 2*nCols+2 ){
 
     sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);

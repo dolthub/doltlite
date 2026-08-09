@@ -287,29 +287,27 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iRef].argvIndex=argvIdx++;
     pInfo->aConstraintUsage[iRef].omit=1;
     idxNum |= AT_IDX_REF;
+    /* Historical roots may not share the declared schema's key shape, so
+    ** PK constraints are never omitted: the values still push down for the
+    ** seek fast path, and SQLite re-checks them against the rendered row. */
     if( iEq>=0 ){
       pInfo->aConstraintUsage[iEq].argvIndex=argvIdx++;
-      pInfo->aConstraintUsage[iEq].omit=1;
       idxNum |= AT_IDX_PK_EQ;
     }else{
       if( iGe>=0 ){
         pInfo->aConstraintUsage[iGe].argvIndex=argvIdx++;
-        pInfo->aConstraintUsage[iGe].omit=1;
         idxNum |= AT_IDX_PK_GE;
       }
       if( iGt>=0 ){
         pInfo->aConstraintUsage[iGt].argvIndex=argvIdx++;
-        pInfo->aConstraintUsage[iGt].omit=1;
         idxNum |= AT_IDX_PK_GT;
       }
       if( iLe>=0 ){
         pInfo->aConstraintUsage[iLe].argvIndex=argvIdx++;
-        pInfo->aConstraintUsage[iLe].omit=1;
         idxNum |= AT_IDX_PK_LE;
       }
       if( iLt>=0 ){
         pInfo->aConstraintUsage[iLt].argvIndex=argvIdx++;
-        pInfo->aConstraintUsage[iLt].omit=1;
         idxNum |= AT_IDX_PK_LT;
       }
     }
@@ -390,8 +388,9 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   if( prollyHashIsEmpty(&tableRoot) ) return SQLITE_OK;
 
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
+  c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
 
-  seekable = (flags & PROLLY_NODE_INTKEY) != 0
+  seekable = c->common.rootIntKey
           && (idxNum & AT_IDX_PK_ANY) != 0;
 
   if( seekable && (idxNum & AT_IDX_PK_EQ) ){
@@ -457,7 +456,9 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  if( c->idxNum & AT_IDX_PK_EQ ){
+  /* The EQ probe positioned the cursor only on an intkey root; a
+  ** shape-mismatched root is scanning and must keep stepping. */
+  if( (c->idxNum & AT_IDX_PK_EQ) && c->common.rootIntKey ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;
@@ -476,7 +477,8 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  if( (c->idxNum & AT_IDX_PK_ANY) && !atRowMatchesUpper(c) ){
+  if( (c->idxNum & AT_IDX_PK_ANY) && c->common.rootIntKey
+   && !atRowMatchesUpper(c) ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;
@@ -497,7 +499,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
                         -1, SQLITE_TRANSIENT);
   }else if(nCols>0 && col<nCols){
     doltliteResultUserCol(ctx, &v->cols, c->common.pVal, c->common.nVal,
-                          c->common.intKey, col);
+                          c->common.intKey, c->common.rootIntKey, col);
   }
 
   return SQLITE_OK;

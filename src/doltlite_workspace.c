@@ -445,10 +445,10 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     else sqlite3_result_null(ctx);
   }else if( col>=3 && col<3+nCols ){
     doltliteResultUserCol(ctx, &p->cols, r->pNewVal, r->nNewVal,
-                          r->intKey, col-3);
+                          r->intKey, 1, col-3);
   }else if( col>=3+nCols && col<3+2*nCols ){
     doltliteResultUserCol(ctx, &p->cols, r->pOldVal, r->nOldVal,
-                          r->intKey, col-3-nCols);
+                          r->intKey, 1, col-3-nCols);
   }else{
     sqlite3_result_null(ctx);
   }

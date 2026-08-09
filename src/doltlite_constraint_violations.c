@@ -859,7 +859,7 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
         r->nVal = nRec;
       }
     }
-    doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, col - 1);
+    doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, 1, col - 1);
   }else if( col == nUserCols + 1 ){
     sqlite3_result_text(ctx, r->zInfo ? r->zInfo : "", -1, SQLITE_TRANSIENT);
   }else{

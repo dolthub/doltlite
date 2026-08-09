@@ -328,4 +328,37 @@ run_test "empty_at_c2" \
 
 rm -f "$DB"
 
+# A historical root whose key shape differs from the declared schema (table
+# dropped and recreated across a rowid/WITHOUT ROWID boundary) must render
+# the historical row values -- matching Dolt's AS OF -- and pushed-down PK
+# constraints must still filter (they were silently dropped for such roots).
+DB=/tmp/test_at_keyshape_$$.db; rm -f "$DB"
+echo "CREATE TABLE s(a TEXT PRIMARY KEY, b TEXT) WITHOUT ROWID;
+INSERT INTO s VALUES('x','one'),('y','two');
+SELECT dolt_commit('-Am','v1');
+SELECT dolt_tag('oldtag');
+DROP TABLE s;
+CREATE TABLE s(a INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO s VALUES(1,'one'),(2,'two'),(7,'seven');
+SELECT dolt_commit('-Am','v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "keyshape_values_render" \
+  "SELECT a, b FROM dolt_at_s WHERE commit_ref='oldtag' ORDER BY a;" \
+  "x|one
+y|two" "$DB"
+run_test "keyshape_eq_filters" \
+  "SELECT count(*) FROM dolt_at_s WHERE commit_ref='oldtag' AND a=7;" \
+  "0" "$DB"
+run_test "keyshape_eq_matches_text" \
+  "SELECT b FROM dolt_at_s WHERE commit_ref='oldtag' AND a='y';" \
+  "two" "$DB"
+run_test "keyshape_current_seek_intact" \
+  "SELECT b FROM dolt_at_s WHERE commit_ref='HEAD' AND a=7;" \
+  "seven" "$DB"
+run_test "keyshape_upper_bound_scans_all" \
+  "SELECT count(*) FROM dolt_at_s WHERE commit_ref='oldtag' AND a<'z';" \
+  "2" "$DB"
+
+rm -f "$DB"
+
 dltest_finish

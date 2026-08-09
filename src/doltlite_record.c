@@ -490,6 +490,7 @@ void doltliteResultUserCol(
   const DoltliteColInfo *ci,
   const u8 *pRec, int nRec,
   i64 intKey,
+  int bRootIntKey,
   int iDeclaredCol
 ){
   int iRecField;
@@ -500,7 +501,10 @@ void doltliteResultUserCol(
     return;
   }
 
-  if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 ){
+  /* intKey is the row's key only when the visited root is an intkey tree.
+  ** A historical root with a different key shape stores the whole row in
+  ** the record, so the declared rowid-alias column reads from there. */
+  if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 && bRootIntKey ){
     sqlite3_result_int64(ctx, intKey);
     return;
   }
