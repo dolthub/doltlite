@@ -973,9 +973,9 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
 static int dtConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   (void)pAux;
-  return doltliteVtabConnectUserTable(db, argc, argv, "dolt_diff_",
-                                      sizeof(DiffTblVtab), buildDiffSchema,
-                                      ppVtab, pzErr);
+  return doltliteVtabConnectHistoricalTable(db, argc, argv, "dolt_diff_",
+                                            sizeof(DiffTblVtab),
+                                            buildDiffSchema, ppVtab, pzErr);
 }
 
 static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
@@ -1158,8 +1158,8 @@ static sqlite3_module diffTableModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-int doltliteRegisterDiffTables(sqlite3 *db){
-  return doltliteForEachUserTable(db, "dolt_diff_", &diffTableModule);
+const sqlite3_module *doltliteDiffTableModule(void){
+  return &diffTableModule;
 }
 
 #endif

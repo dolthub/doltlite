@@ -116,10 +116,14 @@ static SQLITE_INLINE int doltliteVtabCommonRowid(
  * trailing fields can use it and fill them in after success. On any failure
  * the partial instance is freed through doltliteVtabCommonDisconnect.
  */
-static SQLITE_INLINE int doltliteVtabConnectUserTable(
+int doltliteLoadHistoricalTableColumns(sqlite3*, const char*,
+                                       DoltliteColInfo*, char**);
+
+static SQLITE_INLINE int doltliteVtabConnectTable(
   sqlite3 *db, int argc, const char *const *argv,
   const char *zPrefix, int nByte,
   char *(*xBuildSchema)(const DoltliteColInfo*),
+  int historical,
   sqlite3_vtab **ppVtab, char **pzErr
 ){
   DoltliteVtabCommon *v;
@@ -140,8 +144,17 @@ static SQLITE_INLINE int doltliteVtabConnectUserTable(
   }else{
     v->zTableName = sqlite3_mprintf("");
   }
+  if( !v->zTableName ){
+    doltliteVtabCommonDisconnect(&v->base);
+    return SQLITE_NOMEM;
+  }
 
-  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
+  if( historical ){
+    rc = doltliteLoadHistoricalTableColumns(db, v->zTableName,
+                                             &v->cols, pzErr);
+  }else{
+    rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
+  }
   if( rc==SQLITE_OK ){
     zSchema = xBuildSchema(&v->cols);
     if( !zSchema ){
@@ -157,6 +170,26 @@ static SQLITE_INLINE int doltliteVtabConnectUserTable(
   }
   *ppVtab = &v->base;
   return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabConnectUserTable(
+  sqlite3 *db, int argc, const char *const *argv,
+  const char *zPrefix, int nByte,
+  char *(*xBuildSchema)(const DoltliteColInfo*),
+  sqlite3_vtab **ppVtab, char **pzErr
+){
+  return doltliteVtabConnectTable(db, argc, argv, zPrefix, nByte,
+                                  xBuildSchema, 0, ppVtab, pzErr);
+}
+
+static SQLITE_INLINE int doltliteVtabConnectHistoricalTable(
+  sqlite3 *db, int argc, const char *const *argv,
+  const char *zPrefix, int nByte,
+  char *(*xBuildSchema)(const DoltliteColInfo*),
+  sqlite3_vtab **ppVtab, char **pzErr
+){
+  return doltliteVtabConnectTable(db, argc, argv, zPrefix, nByte,
+                                  xBuildSchema, 1, ppVtab, pzErr);
 }
 
 #endif /* DOLTLITE_VTAB_UTIL_H */

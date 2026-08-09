@@ -87,6 +87,31 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+noncurrent_oracle() {
+  local name="$1" setup="$2" dl_query="$3" dt_query="$4"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.setup" 2>"$dir/dl.setup.err"
+  local dl_out
+  dl_out=$(printf ".headers off\n.mode list\n%s\n" "$dl_query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' | grep '^H|' | sort)
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf '%s\n' "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.setup.err"
+    printf '%s\n' "$dt_query" | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^H|' | sort)
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 echo "=== Version Control Oracle Tests: dolt_history_<table> ==="
 echo ""
 
@@ -172,6 +197,26 @@ SELECT dolt_commit('-m', 'add_u');
 " "t,u"
 
 echo "--- branching ---"
+
+NONCURRENT_SETUP="
+SELECT dolt_checkout('-b', 'feature');
+CREATE TABLE feature_only(id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+INSERT INTO feature_only VALUES(1, 'feature');
+SELECT dolt_commit('-A', '-m', 'feature-only table');
+INSERT INTO feature_only VALUES(2, 'feature-2');
+SELECT dolt_commit('-A', '-m', 'feature-only second commit');
+SELECT dolt_checkout('main');
+"
+
+noncurrent_oracle "history_exact_commit_on_sibling_branch_after_reopen" \
+  "$NONCURRENT_SETUP" \
+  "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only WHERE commit_hash = dolt_hashof('feature');" \
+  "SELECT CONCAT('H|', id, '|', v) FROM feature_only AS OF 'feature';"
+
+noncurrent_oracle "history_start_ref_on_sibling_branch_after_reopen" \
+  "$NONCURRENT_SETUP" \
+  "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only('feature');" \
+  "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only AS OF 'feature';"
 
 oracle "history_on_feature_branch" "
 $SEED
