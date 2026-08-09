@@ -304,16 +304,49 @@ bench_sql() {
     printf 'vc\t%s\t%s\t%s\n' \
       "$name" "$baseline_median" "$candidate_median" >> "$RESULTS_FILE"
   else
+    local eff_ceiling_us
+    eff_ceiling_us=$(python3 -c "print(int($ceiling * 1000 * $IO_SCALE))")
     status="PASS"
-    if [ "$candidate_median" -gt $((ceiling * 1000)) ]; then
+    if [ "$candidate_median" -gt "$eff_ceiling_us" ]; then
       status="FAIL"
       failures=$((failures+1))
     fi
-    rows="${rows}| $name | $(python3 -c "print(f'{$candidate_median/1000:.2f}')") | $ceiling | $status |\n"
+    rows="${rows}| $name | $(python3 -c "print(f'{$candidate_median/1000:.2f}')") | $(python3 -c "print(f'{$eff_ceiling_us/1000:.0f}')") | $status |\n"
     printf 'vc\t%s\t%d\t%s\n' \
-      "$name" "$((ceiling * 1000))" "$candidate_median" >> "$RESULTS_FILE"
+      "$name" "$eff_ceiling_us" "$candidate_median" >> "$RESULTS_FILE"
   fi
 }
+
+# Absolute ceilings are meaningless on a runner whose disk is degraded: the
+# write-path benchmarks are fsync-bound, and shared-runner fsync latency has
+# been observed to swing several-fold while CPU-bound reads on the same run
+# got faster. Measure fsync cost with an engine-independent probe on the
+# benchmark disk and scale the ceilings when it exceeds the reference,
+# leaving them exact on a healthy runner. The probe is reported so the
+# reference can be retuned from nightly history.
+VC_PERF_IO_REF_US=${VC_PERF_IO_REF_US:-2500}
+VC_PERF_IO_SCALE_MAX=${VC_PERF_IO_SCALE_MAX:-5}
+IO_PROBE_US=$(python3 - "$TMPDIR" <<'PYEOF'
+import os, sys, time
+path = os.path.join(sys.argv[1], "io_probe.bin")
+fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+try:
+    os.pwrite(fd, b"\0" * 65536, 0)
+    os.fsync(fd)
+    vals = []
+    for i in range(15):
+        t0 = time.monotonic_ns()
+        os.pwrite(fd, os.urandom(8192), (i % 8) * 8192)
+        os.fsync(fd)
+        vals.append((time.monotonic_ns() - t0) // 1000)
+    vals.sort()
+    print(vals[len(vals) // 2])
+finally:
+    os.close(fd)
+    os.unlink(path)
+PYEOF
+)
+IO_SCALE=$(python3 -c "print(f'{min(max(1.0, $IO_PROBE_US/$VC_PERF_IO_REF_US), $VC_PERF_IO_SCALE_MAX):.2f}')")
 
 prepare_fixtures
 
@@ -360,6 +393,7 @@ if [ -n "$VC_PERF_BASELINE" ]; then
 
 Runs: median of $RUNS paired executions per benchmark, excluding fixture setup.
 Execution order alternates between baseline and candidate on each repetition.
+IO probe: ${IO_PROBE_US}us per 8KiB write+fsync.
 
 | Benchmark | $VC_PERF_BASELINE_LABEL median ms | $VC_PERF_CANDIDATE_LABEL median ms | Ratio |
 |---|---:|---:|---:|
@@ -378,6 +412,9 @@ Branch tests use $BRANCHES branches, checkout uses a clean $CHECKOUT_TABLES-tabl
 branch switch over $((CHECKOUT_TABLES * CHECKOUT_ROWS_PER_TABLE)) rows, and merge
 tests use $MERGE_ROWS-row tables with $MERGE_CHANGE_ROWS changed or conflicting
 rows per side.
+
+IO probe: ${IO_PROBE_US}us per 8KiB write+fsync (reference ${VC_PERF_IO_REF_US}us);
+ceilings scaled by ${IO_SCALE}x.
 
 | Benchmark | Median ms | Ceiling ms | Result |
 |---|---:|---:|---|
