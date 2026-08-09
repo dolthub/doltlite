@@ -422,18 +422,24 @@ static int appendNodeEntryToBuilder(
                                        subtreeCount);
 }
 
-static int writeBuilderNode(ChunkStore *pStore, ProllyNodeBuilder *pBuilder,
-                            ProllyHash *pHash){
+static int writeBuilderNode(ChunkStore *pStore, ProllyCache *pCache,
+                            ProllyNodeBuilder *pBuilder, ProllyHash *pHash){
   u8 *pData = 0;
   int nData = 0;
   int rc = prollyNodeBuilderFinish(pBuilder, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStorePut(pStore, pData, nData, pHash);
+  if( rc==SQLITE_OK && pCache ){
+    ProllyCacheEntry *pEntry;
+    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
+    pData = 0;
+    if( pEntry ) prollyCacheRelease(pCache, pEntry);
+  }
   sqlite3_free(pData);
   return rc;
 }
 
-static int finishAndWriteBuilderNode(ChunkStore *pStore,
+static int finishAndWriteBuilderNode(ChunkStore *pStore, ProllyCache *pCache,
                                      ProllyNodeBuilder *pBuilder,
                                      int requireBoundary,
                                      ProllyHash *pHash){
@@ -449,6 +455,12 @@ static int finishAndWriteBuilderNode(ChunkStore *pStore,
   }
   if( rc==SQLITE_OK ){
     rc = chunkStorePut(pStore, pData, nData, pHash);
+  }
+  if( rc==SQLITE_OK && pCache ){
+    ProllyCacheEntry *pEntry;
+    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
+    pData = 0;
+    if( pEntry ) prollyCacheRelease(pCache, pEntry);
   }
   sqlite3_free(pData);
   return rc;
@@ -516,7 +528,7 @@ static int rewriteAncestorSpine(
         return rc;
       }
     }
-    rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+    rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &parentHash);
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ) return rc;
     *pChildHash = parentHash;
@@ -595,9 +607,9 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
       }
     }
     if( sameSize ){
-      rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+      rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &childHash);
     }else{
-      rc = finishAndWriteBuilderNode(pMut->pStore, &b,
+      rc = finishAndWriteBuilderNode(pMut->pStore, pMut->pCache, &b,
                                      !cursorLeafIsRightmost(&cur),
                                      &childHash);
     }
@@ -661,8 +673,8 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
       }
     }
     requireBoundary = !cursorLeafIsRightmost(&cur);
-    rc = finishAndWriteBuilderNode(pMut->pStore, &b, requireBoundary,
-                                   &childHash);
+    rc = finishAndWriteBuilderNode(pMut->pStore, pMut->pCache, &b,
+                                   requireBoundary, &childHash);
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);
@@ -739,8 +751,8 @@ static int tryDeleteSingleNoRechunk(ProllyMutator *pMut){
       }
     }
     requireBoundary = !cursorLeafIsRightmost(&cur);
-    rc = finishAndWriteBuilderNode(pMut->pStore, &b, requireBoundary,
-                                   &childHash);
+    rc = finishAndWriteBuilderNode(pMut->pStore, pMut->pCache, &b,
+                                   requireBoundary, &childHash);
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);
@@ -834,7 +846,7 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         rc = prollyNodeBuilderAdd(&b, pNewKey, nNewKey,
                                   pEdit->pVal, pEdit->nVal);
         if( rc==SQLITE_OK ){
-          rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+          rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &childHash);
         }
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
@@ -860,7 +872,7 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
           prollyCursorClose(&cur);
           return rc;
         }
-        rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+        rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &childHash);
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
           prollyCursorClose(&cur);
@@ -895,7 +907,7 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         rc = prollyNodeBuilderAddWithCount(&b, pNewKey, nNewKey,
                                            childHash.data, PROLLY_HASH_SIZE, 1);
         if( rc==SQLITE_OK ){
-          rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+          rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &parentHash);
         }
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
@@ -926,7 +938,7 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         rc = prollyNodeBuilderAdd(&b, pNewKey, nNewKey,
                                   pEdit->pVal, pEdit->nVal);
         if( rc==SQLITE_OK ){
-          rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+          rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &childHash);
         }
         prollyNodeBuilderFree(&b);
         if( rc!=SQLITE_OK ){
@@ -971,7 +983,7 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
         return rc;
       }
     }
-    rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+    rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &parentHash);
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);
@@ -1115,9 +1127,9 @@ static int replaceBatchLeafNoRechunk(
       ** build would pick. Validate and let the caller rechunk if they moved,
       ** the way the single-edit path does -- writing regardless freezes a shape
       ** that history independence says must not depend on how we got here. */
-      rc = finishAndWriteBuilderNode(pMut->pStore, &b, !isLast, pHash);
+      rc = finishAndWriteBuilderNode(pMut->pStore, 0, &b, !isLast, pHash);
     }else{
-      rc = writeBuilderNode(pMut->pStore, &b, pHash);
+      rc = writeBuilderNode(pMut->pStore, 0, &b, pHash);
     }
   }
   prollyNodeBuilderFree(&b);
@@ -1271,7 +1283,7 @@ static int replaceBatchNodeNoRechunk(
   }
 
   if( changed ){
-    rc = writeBuilderNode(pMut->pStore, &b, pHash);
+    rc = writeBuilderNode(pMut->pStore, 0, &b, pHash);
   }
   prollyNodeBuilderFree(&b);
   if( rc!=SQLITE_OK ) return rc;
