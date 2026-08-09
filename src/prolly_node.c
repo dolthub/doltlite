@@ -194,9 +194,15 @@ void prollyEncodeIntKey(i64 v, u8 buf[8]){
   buf[7] = (u8)u;
 }
 
+static SQLITE_INLINE u64 prollyReadEncodedIntKey(const u8 *p){
+  return ((u64)p[0]<<56) | ((u64)p[1]<<48)
+       | ((u64)p[2]<<40) | ((u64)p[3]<<32)
+       | ((u64)p[4]<<24) | ((u64)p[5]<<16)
+       | ((u64)p[6]<<8) | (u64)p[7];
+}
+
 i64 prollyDecodeIntKey(const u8 *p){
-  u64 u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
-        | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
+  u64 u = prollyReadEncodedIntKey(p);
   return (i64)(u ^ ((u64)1 << 63));
 }
 
@@ -310,36 +316,39 @@ int prollyNodeSearchBlob(
 
 int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes){
   int lo = 0;
-  int hi = pNode->nItems - 1;
+  int hi = pNode->nItems;
   int mid;
-  i64 midKey;
+  u64 key = ((u64)intKey) ^ ((u64)1 << 63);
+  u64 midKey;
 
   if( pNode->nItems==0 ){
     *pRes = -1;
     return 0;
   }
 
-  while( lo<=hi ){
+  while( lo<hi ){
+    const u8 *p;
     mid = lo + (hi - lo) / 2;
-    midKey = prollyNodeIntKey(pNode, mid);
+    p = pNode->pKeyData + mid*8;
+    midKey = prollyReadEncodedIntKey(p);
 
-    if( intKey==midKey ){
-      *pRes = 0;
-      return mid;
-    }else if( intKey<midKey ){
-      hi = mid - 1;
-    }else{
+    if( midKey<key ){
       lo = mid + 1;
+    }else{
+      hi = mid;
     }
   }
 
   if( lo>=pNode->nItems ){
     *pRes = 1;
     return pNode->nItems - 1;
-  }else{
-    *pRes = -1;
-    return lo;
   }
+  {
+    const u8 *p = pNode->pKeyData + lo*8;
+    midKey = prollyReadEncodedIntKey(p);
+  }
+  *pRes = key==midKey ? 0 : -1;
+  return lo;
 }
 
 #define PROLLY_BUILDER_INIT_CAP  64
