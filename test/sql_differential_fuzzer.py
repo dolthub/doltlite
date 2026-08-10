@@ -146,8 +146,10 @@ class Gen:
             return "a IS NULL"
         if r < 0.8:
             return "b > %s" % self.text_val()
-        if r < 0.9:
+        if r < 0.82:
             return "a = %s" % self.val("any")
+        if r < 0.9:
+            return "a > %s AND a < %s" % (self.val("any"), self.val("any"))
         return "k IN (%s, %s)" % (self.int_val(), self.int_val())
 
     def read(self):
@@ -164,9 +166,28 @@ class Gen:
         elif r < 0.8:
             self.emit("SELECT group_concat(q, '|') FROM (SELECT quote(b) AS q "
                       "FROM t ORDER BY b, k);")
+        elif r < 0.9:
+            # Ordered reads over the indexed column, in both directions. An
+            # index whose stored order is wrong only shows up here or in a
+            # range scan over it -- ordering by the key or by rendered text
+            # cannot see it. Ties break on the whole row so the output is
+            # deterministic even for the keyless shape.
+            d = "DESC" if self.r.random() < 0.5 else "ASC"
+            self.emit("SELECT group_concat(coalesce(quote(a),'NA'), '|') FROM "
+                      "(SELECT a FROM t ORDER BY a %s, "
+                      "coalesce(quote(k),'NK'), coalesce(quote(b),'NB'));" % d)
         else:
             self.emit("SELECT count(*) FROM t WHERE a IN "
                       "(SELECT a FROM t WHERE %s);" % self.pred())
+
+    def ordered_reads(self):
+        # Index order in both directions, once per script. A stored order that
+        # is wrong shows up nowhere else: ordering by the key or by rendered
+        # text is served without consulting the secondary index.
+        for d in ("ASC", "DESC"):
+            self.emit("SELECT group_concat(coalesce(quote(a),'NA'), '|') FROM "
+                      "(SELECT a FROM t ORDER BY a %s, "
+                      "coalesce(quote(k),'NK'), coalesce(quote(b),'NB'));" % d)
 
     def full_read(self):
         self.emit("SELECT group_concat(q, '|') FROM (SELECT "
@@ -228,6 +249,7 @@ class Gen:
         for _ in range(self.r.randint(2, 10)):
             self.insert()
         self.body()
+        self.ordered_reads()
         self.full_read()
         self.emit("PRAGMA integrity_check;")
         return "\n".join(self.out)
