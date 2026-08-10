@@ -86,7 +86,8 @@ static sqlite3_int64 encodedFieldSize(
   u32 serialType,
   const u8 *pData,
   u32 nData,
-  int coll
+  int coll,
+  int desc
 ){
   u8 tag = serialTypeTag(serialType);
   switch( tag ){
@@ -100,7 +101,7 @@ static sqlite3_int64 encodedFieldSize(
         i64 back;
         int exact;
         u32 i;
-        if( serialType == 8 || serialType == 9 ) return 9;
+        if( serialType == 8 || serialType == 9 ) return desc ? 10 : 9;
         for(i = 0; i < nData; i++){
           uv = (uv << 8) | pData[i];
         }
@@ -109,9 +110,9 @@ static sqlite3_int64 encodedFieldSize(
         exact = d>=-9223372036854775808.0
              && d<9223372036854775808.0
              && (back = (i64)d)==v;
-        return exact ? 9 : 18;
+        return exact ? (desc ? 10 : 9) : 18;
       }
-      return 9;
+      return desc ? 10 : 9;
     case SORTKEY_TEXT: {
       u32 n = collTextLen(coll, pData, nData);
       sqlite3_int64 extra = 0;
@@ -136,7 +137,15 @@ static sqlite3_int64 encodedFieldSize(
   }
 }
 
-static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
+/* A descending field is stored with every byte inverted, so the 9-byte form
+** would remain a byte prefix of the 18-byte one and memcmp puts a prefix first
+** in either direction -- while descending order needs the longer form first,
+** since a nudged base is always strictly below the integer it stands for. The
+** terminator below breaks the prefix relation: inverted it becomes 0xFF, above
+** the inverted marker, so the extended form sorts first. No tag is 0x00, so
+** the length can still be read back from this byte. */
+static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData,
+                         int desc){
   u8 buf[8];
   double d;
   i64 intVal = 0;
@@ -216,6 +225,10 @@ static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     pOut[17] = (u8)u;
     return 18;
   }
+  if( desc ){
+    pOut[9] = SORTKEY_NUM_DESC_END;
+    return 10;
+  }
   return 9;
 }
 
@@ -224,6 +237,7 @@ static int numericSortKeyLen(const u8 *pSortKey, int nAvail){
   if( nAvail>=18 && (pSortKey[9]==0x01 || pSortKey[9]==0x80) ){
     return 18;
   }
+  if( nAvail>=10 && pSortKey[9]==SORTKEY_NUM_DESC_END ) return 10;
   return 9;
 }
 
@@ -303,7 +317,8 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
           pOut[outPos++] = SORTKEY_NULL;
           break;
         case SORTKEY_NUM:
-          outPos += encodeNumeric(pOut + outPos, serialType, pField, fieldLen);
+          outPos += encodeNumeric(pOut + outPos, serialType, pField, fieldLen,
+                                  descFromKeyInfo(pKeyInfo, nField));
           break;
         case SORTKEY_TEXT:
           outPos += encodeText(pOut + outPos, pField, fieldLen, coll);
@@ -320,7 +335,8 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
       }
     }else{
       sqlite3_int64 nFieldSize =
-          encodedFieldSize(serialType, pField, fieldLen, coll);
+          encodedFieldSize(serialType, pField, fieldLen, coll,
+                           descFromKeyInfo(pKeyInfo, nField));
       if( nFieldSize > INT_MAX || outSize > INT_MAX - nFieldSize ){
         return -2;
       }
@@ -528,7 +544,8 @@ static int sortKeyEncodeMemArray(
           pOut[outPos++] = SORTKEY_NULL;
           break;
         case SORTKEY_NUM:
-          outPos += encodeNumeric(pOut + outPos, serialType, pField, fieldLen);
+          outPos += encodeNumeric(pOut + outPos, serialType, pField, fieldLen,
+                                  descFromKeyInfo(pKeyInfo, i));
           break;
         case SORTKEY_TEXT:
           outPos += encodeText(pOut + outPos, pField, fieldLen, coll);
@@ -545,7 +562,8 @@ static int sortKeyEncodeMemArray(
       }
     }else{
       sqlite3_int64 nFieldSize =
-          encodedFieldSize(serialType, pField, fieldLen, coll);
+          encodedFieldSize(serialType, pField, fieldLen, coll,
+                           descFromKeyInfo(pKeyInfo, i));
       if( nFieldSize > INT_MAX || outSize > INT_MAX - nFieldSize ){
         return -2;
       }
@@ -706,7 +724,7 @@ int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut){
 
   intSerialType(v, &serialType, &nData);
   writeIntBE(aData, v, (int)nData);
-  *pnOut = encodeNumeric(pOut, serialType, aData, nData);
+  *pnOut = encodeNumeric(pOut, serialType, aData, nData, 0);
   return SQLITE_OK;
 }
 
