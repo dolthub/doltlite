@@ -241,6 +241,15 @@ static int numericSortKeyLen(const u8 *pSortKey, int nAvail){
   return 9;
 }
 
+/* Bytes after the SORTKEY_NUM tag that decodeNumericSortKeyToRecord should
+** see. The 10-byte descending short form is tag + 8-byte base + terminator;
+** the terminator is only a length delimiter for memcmp order and must not be
+** fed into the numeric decoder as payload. */
+static SQLITE_INLINE int numericSortKeyPayloadLen(int nNum){
+  if( nNum==10 ) return 8;
+  return nNum - 1;
+}
+
 static int encodeVarLen(u8 *pOut, u8 tag, const u8 *pData, u32 nData){
   int pos = 0;
   pOut[pos++] = tag;
@@ -1166,7 +1175,8 @@ int recordFromSortKeyBuffer(
         rc = SQLITE_CORRUPT;
         goto record_from_sortkey_done;
       }
-      decodeNumericSortKeyToRecord(pSortKey + pos + 1, nNum - 1,
+      decodeNumericSortKeyToRecord(pSortKey + pos + 1,
+                                   numericSortKeyPayloadLen(nNum),
                                    &aType[nFields], &aLen[nFields],
                                    aIntBuf[nFields]);
       pos += nNum;

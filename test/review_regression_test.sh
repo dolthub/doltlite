@@ -1154,6 +1154,29 @@ run_test "desc_pk_integrity_large_ints" \
 
 rm -f "$DB"
 
+# Reconstructing rows from a DESC numeric PK (ORDER BY a ASC walks the key
+# backwards) must return each inserted row once. The short DESC form is
+# 10 bytes (base + terminator); decoding must strip the terminator rather
+# than treat it as numeric payload.
+DB=/tmp/test_rg_desc_pk_asc_scan_$$.db; rm -f "$DB"
+echo "CREATE TABLE d(a NUMERIC PRIMARY KEY DESC, b) WITHOUT ROWID;
+INSERT INTO d VALUES(9007199254740992.0,'p0'),(9007199254740993,'p1'),
+                    (9007199254740994,'p2'),(-9007199254740993,'n1'),
+                    (-9007199254740992,'n2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "desc_pk_asc_scan_count" \
+  "SELECT count(*) FROM (SELECT a,b FROM d ORDER BY a ASC);" "5" "$DB"
+run_test "desc_pk_asc_scan_order" \
+  "SELECT group_concat(a||'|'||b) FROM (SELECT a,b FROM d ORDER BY a ASC);" \
+  "-9007199254740993|n1,-9007199254740992|n2,9007199254740992|p0,9007199254740993|p1,9007199254740994|p2" \
+  "$DB"
+run_test "desc_pk_natural_scan_count" \
+  "SELECT count(*) FROM d;" "5" "$DB"
+run_test "desc_pk_asc_scan_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_rg_desc_negative_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(a NUMERIC, b TEXT);
 CREATE INDEX ad ON t(a DESC, b);
