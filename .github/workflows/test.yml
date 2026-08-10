@@ -253,6 +253,16 @@ jobs:
         done
       timeout-minutes: 10
 
+    # A fixed seed window, so a red here is reproducible from the seed alone
+    # rather than depending on when it ran. The nightly job sweeps a moving
+    # window for breadth; this one is the per-PR gate.
+    - name: Randomized SQL differential sweep (vs stock SQLite)
+      if: matrix.bucket == 'sql'
+      run: |
+        cd build-coverage
+        bash ../test/sql_differential_test.sh ./doltlite ./sqlite3-stock 1 400 || exit 1
+      timeout-minutes: 12
+
     - name: Upload oracle coverage profiles
       if: always()
       uses: actions/upload-artifact@v4
