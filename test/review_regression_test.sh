@@ -1109,6 +1109,65 @@ run_test "large_int_range_order" \
 
 rm -f "$DB"
 
+# A descending field is stored with every byte inverted, so the 9-byte numeric
+# form would stay a byte prefix of the 18-byte one and memcmp puts a prefix
+# first in either direction -- while descending order needs the longer form
+# first. The values below pair a base with the integer it stands for, which is
+# the only way to put both forms under one base.
+
+DB=/tmp/test_rg_desc_index_order_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(a NUMERIC);
+CREATE INDEX ad ON t(a DESC);
+INSERT INTO t VALUES(9007199254740992.0),(9007199254740993),(9007199254740994),
+                    (18014398509481983),(18014398509481984);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "desc_index_order_large_ints" \
+  "SELECT group_concat(a) FROM (SELECT a FROM t ORDER BY a DESC);" \
+  "18014398509481984,18014398509481983,9007199254740994,9007199254740993,9007199254740992" \
+  "$DB"
+# A wrong stored order shows up ascending too: the planner answers ORDER BY a by
+# walking the descending index backwards.
+run_test "desc_index_order_large_ints_ascending" \
+  "SELECT group_concat(a) FROM (SELECT a FROM t ORDER BY a);" \
+  "9007199254740992,9007199254740993,9007199254740994,18014398509481983,18014398509481984" \
+  "$DB"
+run_test "desc_index_range_large_ints" \
+  "SELECT count(*) FROM t WHERE a > 9007199254740992.0 AND a < 9007199254740995;" \
+  "2" "$DB"
+run_test "desc_index_integrity_large_ints" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rg_desc_pk_order_$$.db; rm -f "$DB"
+echo "CREATE TABLE d(a NUMERIC PRIMARY KEY DESC, b) WITHOUT ROWID;
+INSERT INTO d VALUES(9007199254740992.0,'x'),(9007199254740993,'y'),
+                    (18014398509481983,'z');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "desc_pk_order_large_ints" \
+  "SELECT group_concat(a) FROM (SELECT a FROM d ORDER BY a DESC);" \
+  "18014398509481983,9007199254740993,9007199254740992" "$DB"
+# A descending primary key stores the rows themselves, so a wrong order is
+# self-reported rather than just mis-answered.
+run_test "desc_pk_integrity_large_ints" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rg_desc_negative_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(a NUMERIC, b TEXT);
+CREATE INDEX ad ON t(a DESC, b);
+INSERT INTO t VALUES(-9007199254740993,'p'),(-9007199254740992,'q'),(5,'r'),
+                    (-9223372036854775808,'s');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "desc_index_order_negative_large_ints" \
+  "SELECT group_concat(a||'/'||b) FROM (SELECT a,b FROM t ORDER BY a DESC, b);" \
+  "5/r,-9007199254740992/q,-9007199254740993/p,-9223372036854775808/s" "$DB"
+run_test "desc_index_negative_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

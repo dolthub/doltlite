@@ -10,6 +10,11 @@
 #define SORTKEY_TEXT    0x35
 #define SORTKEY_BLOB    0x45
 
+/* Terminates the 9-byte numeric form in a descending field so it is not a byte
+** prefix of the 18-byte one. Distinct from every tag, so a field's length is
+** still readable from this position. */
+#define SORTKEY_NUM_DESC_END 0x00
+
 /* True when b could begin a field, in either sort direction (a DESC field is
 ** stored with every byte inverted, tag included).
 **
