@@ -168,14 +168,19 @@ class Gen:
                 self.emit("INSERT INTO s(id, v, w) VALUES(%d, %s, %s);"
                           % (i, self.val(), self.text_val()))
         if self.on("triggers"):
-            self.emit("CREATE TABLE u(n INTEGER PRIMARY KEY, tag TEXT);")
+            # No unique constraint on n: inside a trigger body SQLite replaces
+            # the trigger statement's conflict policy with the outer
+            # statement's, so an OR IGNORE here still aborts under a plain
+            # INSERT. Collisions are certain because n is derived from a value,
+            # so the table records every firing instead.
+            self.emit("CREATE TABLE u(n INTEGER, tag TEXT);")
             # Trigger bodies run inside the statement that fired them, so they
             # write through the pending map while a scan of t is still open.
             self.emit("CREATE TRIGGER tr_i AFTER INSERT ON t BEGIN "
-                      "INSERT OR REPLACE INTO u(n, tag) "
+                      "INSERT INTO u(n, tag) "
                       "VALUES(length(coalesce(quote(NEW.b),'')), 'i'); END;")
             self.emit("CREATE TRIGGER tr_u AFTER UPDATE ON t BEGIN "
-                      "INSERT OR IGNORE INTO u(n, tag) "
+                      "INSERT INTO u(n, tag) "
                       "VALUES(length(coalesce(quote(NEW.a),'')) + 40, 'u'); END;")
             self.emit("CREATE TRIGGER tr_d AFTER DELETE ON t BEGIN "
                       "DELETE FROM u WHERE n = length(coalesce(quote(OLD.b),'')); "

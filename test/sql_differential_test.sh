@@ -92,6 +92,7 @@ echo ""
 
 pass=0
 fail=0
+errored=0
 failed_seeds=""
 
 for seed in $(seq "$FIRST" "$LAST"); do
@@ -111,6 +112,13 @@ for seed in $(seq "$FIRST" "$LAST"); do
 
   if [ "$rc_dl" -eq "$rc_sq" ] && [ "$out_dl" = "$out_sq" ]; then
     pass=$((pass + 1))
+    # Some workloads conflict on purpose: INSERT OR ROLLBACK, or a CHECK
+    # violation from the constraints group. Both engines rejecting a statement
+    # and agreeing on how is the comparison working, not the script breaking,
+    # so count those rather than leave a nonzero exit looking accidental.
+    case "$out_dl" in
+      *Error*|*error*) errored=$((errored + 1)) ;;
+    esac
     continue
   fi
 
@@ -126,6 +134,10 @@ done
 
 echo ""
 echo "Results: $pass passed, $fail failed out of $((pass + fail)) seeds"
+if [ "$errored" -gt 0 ]; then
+  echo "          ($errored of the passing seeds had a statement both engines"
+  echo "           rejected, and they agreed on the rejection)"
+fi
 if [ "$fail" -gt 0 ]; then
   echo "Failing seeds:$failed_seeds"
   echo "Reproduce with: python3 test/sql_differential_fuzzer.py <seed>$GENFLAGS"
