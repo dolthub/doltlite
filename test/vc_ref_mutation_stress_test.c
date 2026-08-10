@@ -46,7 +46,9 @@ static int isRetryableMsg(const char *msg){
   return msgContains(msg, "busy")
       || msgContains(msg, "locked")
       || msgContains(msg, "schema has changed")
-      || msgContains(msg, "commit conflict: another connection committed")
+      /* commit/merge/cherry-pick/revert peer-CAS wording from
+      ** doltliteCmdResultPeerBranchBusy: "<op> conflict: another connection..." */
+      || msgContains(msg, "conflict: another connection committed")
       || msgContains(msg, "failed to snapshot current branch state")
       || msgContains(msg, "unknown operation");
 }
@@ -219,9 +221,16 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
       if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
       snprintf(sql, sizeof(sql), "SELECT dolt_merge('%s')", branch);
       rc = queryTextWithRetry(db, sql, out, sizeof(out));
-      if( rc==SQLITE_OK && strlen(out)==40 ) return SQLITE_OK;
-      if( rc==SQLITE_OK && msgContains(out, "Already up to date") ){
-        return SQLITE_OK;
+      if( rc==SQLITE_OK
+       && (strlen(out)==40 || msgContains(out, "Already up to date")) ){
+        /* Never treat a merge result as success unless the worker row is
+        ** actually on main — a lost-update CAS clobber used to return a
+        ** 40-char hash while dropping a peer's already-merged rows. */
+        count = 0;
+        snprintf(sql, sizeof(sql),
+                 "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);
+        rc = queryIntWithRetry(db, sql, &count);
+        if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
       }
     }
     sqlite3_sleep(5);
