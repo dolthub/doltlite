@@ -369,6 +369,22 @@ static int mergeStepForward(BtCursor *pCur){
   }
   rc = materializeDeferredTreeSeek(pCur, 1);
   if( rc!=SQLITE_OK ) return rc;
+  /* A row reached by scanning backwards leaves the mut-map index at or below
+  ** it, which is what a further backward step wants. Going forward instead,
+  ** those entries are behind the cursor and must not be served again -- and one
+  ** of them may be the tombstone that masks the very tree row about to be
+  ** stepped onto. Normal forward scanning already satisfies this, so the loop
+  ** only does work after a direction change. */
+  if( pCur->mergeSrc==MERGE_SRC_TREE && prollyCursorIsValid(&pCur->pCur) ){
+    if( pCur->mmIdx < 0 ) pCur->mmIdx = 0;
+    while( pCur->mmIdx < pCur->pMutMap->nEntries ){
+      ProllyMutMapEntry *e;
+      rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
+      if( rc!=SQLITE_OK ) return rc;
+      if( mergeCompare(pCur, e) <= 0 ) break;
+      pCur->mmIdx++;
+    }
+  }
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     rc = advanceTreeCursor(pCur, 1);
     if( rc!=SQLITE_OK ) return rc;
@@ -677,6 +693,14 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
 
   rc = prollyBtCursorStepPrologue(pCur, 1, &immediate);
   if( immediate ) return rc;
+
+  /* Nothing follows the last row, and any write since would have cleared this
+  ** flag along with the merge state. Without this, a merged cursor parked by
+  ** BtreeLast steps forward into whichever side the backward scan left behind. */
+  if( pCur->mmActive && (pCur->curFlags & BTCF_AtLast)!=0 ){
+    pCur->eState = CURSOR_INVALID;
+    return SQLITE_DONE;
+  }
 
   if( !pCur->mmActive && pCur->pMutMap==0 ){
     rc = prollyCursorFinishTreeStep(pCur, prollyCursorNextFastLeaf(&pCur->pCur));
