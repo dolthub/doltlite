@@ -776,9 +776,11 @@ where where-1.1.1 class=intentional issue=1840  # sqlite_search_count metric; SE
 # the test sees the committed state where stock expects a journal rollback
 # (crash3-1.odd.3 post-commit signature). The test.db crash simulations
 # themselves (crash3 even, crash4, crash6) pass clean. crash2 and savepoint4
-# are quarantined whole (known_testfixture_crashes.txt, issue #2045): their
-# failing-assertion sets move with the WAL layout because a crash torn during
-# a commit's own sync may legitimately recover the committed state.
+# are quarantined whole (known_testfixture_crashes.txt, issue #2072): crash2
+# adds the same journal-sidecar divergence across its 2.* block, and both
+# suites carry an assertion that moves with the WAL layout because a crash
+# torn during a commit's own sync may legitimately recover the committed
+# state. #2072 tracks narrowing that to per-assertion gates.
 crash3 crash3-1.41.3 class=intentional
 crash3 crash3-1.43.3 class=intentional
 crash3 crash3-1.45.3 class=intentional
