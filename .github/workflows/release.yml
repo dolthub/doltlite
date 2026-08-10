@@ -453,8 +453,8 @@ jobs:
         make doltlite
         make doltlite-lib
         cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
-        make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-        cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
+        bash ../test/build_stock_reference.sh ../build-stockref ./doltlite
+        cc -O2 -I../build-stockref -I../src -o bench_timer_sqlite ../test/sysbench_timer.c ../build-stockref/sqlite3.o -lpthread -lz -lm
 
     - name: Run benchmarks
       run: |

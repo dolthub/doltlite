@@ -42,24 +42,13 @@ if [ ! -f "$GEN" ]; then
 fi
 
 # A reference sharing doltlite's storage would compare the engine against
-# itself and pass no matter what broke. What matters is the storage, not
-# whether the dolt_* functions happen to be linked in, so ask what the binary
-# actually writes: stock lays down an SQLite database header, doltlite a chunk
-# store.
-REFPROBE="$(mktemp -d)"
-if ! "$SQLITE3" "$REFPROBE/ref.db" \
-      "CREATE TABLE x(y); INSERT INTO x VALUES(1);" >/dev/null 2>&1; then
-  echo "ERROR: $SQLITE3 could not create a database"
-  rm -rf "$REFPROBE"
+# itself and pass no matter what broke. Asking whether the dolt_* functions are
+# linked in is the wrong question -- they can be present while the storage is
+# stock -- so defer to the shared check, which asks what the binary writes and
+# is the same check CI runs where each reference is built.
+if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3" "$DOLTLITE"; then
   exit 1
 fi
-if [ "$(head -c 15 "$REFPROBE/ref.db" 2>/dev/null)" != "SQLite format 3" ]; then
-  echo "ERROR: $SQLITE3 does not write SQLite-format databases, so it shares"
-  echo "       doltlite's storage and cannot be the reference"
-  rm -rf "$REFPROBE"
-  exit 1
-fi
-rm -rf "$REFPROBE"
 
 # Not named GROUPS: bash keeps that as the caller's group-id array and silently
 # ignores assignments to it.
@@ -116,11 +105,19 @@ for seed in $(seq "$FIRST" "$LAST"); do
 
   fail=$((fail + 1))
   failed_seeds="$failed_seeds $seed"
+  # Every failing seed keeps its script, so a long sweep does not end up with
+  # more failures than reproducers. Only the first few print a diff, because
+  # that is about keeping the log readable.
+  if [ -n "${DOLTLITE_DIFF_SAVE_DIR:-}" ]; then
+    cp "$sql" "$DOLTLITE_DIFF_SAVE_DIR/seed_$seed.sql" 2>/dev/null || true
+  fi
   if [ "$fail" -le 5 ]; then
     echo "  FAIL: seed $seed (doltlite rc=$rc_dl, stock rc=$rc_sq)"
     diff <(printf '%s\n' "$out_dl") <(printf '%s\n' "$out_sq") \
       | head -20 | sed 's/^/    /'
-    cp "$sql" "${DOLTLITE_DIFF_SAVE_DIR:-$WORK}/seed_$seed.sql" 2>/dev/null || true
+  elif [ "$fail" -eq 6 ]; then
+    echo "  ... further diffs omitted; every failing seed is listed below and"
+    echo "      its script saved to the artifact directory"
   fi
 done
 

@@ -416,6 +416,9 @@ jobs:
         fi
         find . -type f -name '*.profraw' -delete
 
+    - name: Build the stock reference
+      run: bash test/build_stock_reference.sh build-stockref build-coverage/doltlite
+
     - name: Package
       run: |
         mkdir -p coverage-artifact/build-coverage
@@ -427,9 +430,14 @@ jobs:
           build-coverage/blake3*.o \
           build-coverage/*_test \
           coverage-artifact/build-coverage/
-        cp build-coverage/sqlite3 \
+        cp build-stockref/sqlite3 \
           coverage-artifact/build-coverage/sqlite3-stock
         llvm-strip --strip-debug coverage-artifact/build-coverage/*
+        # The consumers compare against this copy, so assert the copy: it is
+        # what ships, and stripping it is the last thing that touches it.
+        bash test/assert_stock_reference.sh \
+          coverage-artifact/build-coverage/sqlite3-stock \
+          coverage-artifact/build-coverage/doltlite
         tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
 
     - name: Upload
