@@ -145,7 +145,17 @@ int doltliteRefreshAndConfirmHead(
     chunkStoreUnlock(cs);
     return rc;
   }
-  if( found && prollyHashCompare(&branchTip, pExpectedHead)!=0 ){
+  /* A non-empty expected tip means the branch must already exist on disk.
+  ** Treating a missing branch as "confirmed" would let the advance install a
+  ** tip without having compared against a peer that already created it. */
+  if( !found ){
+    if( !prollyHashIsEmpty(pExpectedHead) ){
+      chunkStoreUnlock(cs);
+      return SQLITE_BUSY;
+    }
+    return SQLITE_OK;
+  }
+  if( prollyHashCompare(&branchTip, pExpectedHead)!=0 ){
     chunkStoreUnlock(cs);
     return SQLITE_BUSY;
   }
@@ -587,12 +597,21 @@ int doltliteSeedStoreIfNeeded(
   return rc;
 }
 
+/* Advance the current branch tip and persist the working set. When
+** bSwitchBeforePersist is set, adopt the catalog into the live session before
+** persisting (the historical path used by non-CAS advances). The CAS path
+** leaves it clear so no lock-cycling SQL runs between tip confirm and the
+** durable refs commit — SwitchCatalog / nested statement commits can drop
+** lockDepth to 0, after which PersistWorkingSetWithHash may re-acquire the
+** lock, reload a peer tip, then overwrite it with the local tip (lost update).
+*/
 static int doltliteAdvanceBranchWithState(
   sqlite3 *db,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash,
-  DoltliteTxnState *pSaved
+  DoltliteTxnState *pSaved,
+  int bSwitchBeforePersist
 ){
   ChunkStore *cs;
   const char *branch;
@@ -620,13 +639,15 @@ static int doltliteAdvanceBranchWithState(
   if( rc!=SQLITE_OK ){
     return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
   }
-  if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
-    rc = doltliteSwitchCatalog(db, pWorkingCatHash);
-  }else{
-    rc = doltliteSwitchCatalog(db, pCatalogHash);
-  }
-  if( rc!=SQLITE_OK ){
-    return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+  if( bSwitchBeforePersist ){
+    if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
+      rc = doltliteSwitchCatalog(db, pWorkingCatHash);
+    }else{
+      rc = doltliteSwitchCatalog(db, pCatalogHash);
+    }
+    if( rc!=SQLITE_OK ){
+      return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    }
   }
 
   rc = doltlitePersistWorkingSetWithHash(db, pWorkingCatHash);
@@ -650,7 +671,7 @@ int doltliteAdvanceBranch(
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
   return doltliteAdvanceBranchWithState(
-      db, pNewHead, pCatalogHash, pWorkingCatHash, &saved);
+      db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 1);
 }
 
 int doltliteCompareAndAdvanceBranch(
@@ -662,18 +683,55 @@ int doltliteCompareAndAdvanceBranch(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState saved;
+  ProllyHash diskTip;
+  int found = 0;
   int rc;
   if( !cs ) return SQLITE_ERROR;
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteRefreshAndConfirmHead(db, cs, pExpectedHead);
-  if( rc==SQLITE_OK ){
-    rc = doltliteAdvanceBranchWithState(
-        db, pNewHead, pCatalogHash, pWorkingCatHash, &saved);
-    assert( cs->lockDepth>0 );
-    chunkStoreUnlock(cs);
-  }else{
+  if( rc!=SQLITE_OK ){
     doltliteTxnStateClear(&saved);
+    return rc;
+  }
+  assert( cs->lockDepth>0 );
+
+  /* Persist the tip under the confirm lock without SwitchCatalog: any SQL that
+  ** cycles the graph lock between confirm and commit can let a peer land and
+  ** then be clobbered when this connection re-acquires and writes its tip. */
+  rc = doltliteAdvanceBranchWithState(
+      db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 0);
+  if( rc==SQLITE_OK ){
+    /* Belt-and-suspenders: the durable tip must be ours before we unlock.
+    ** PersistWorkingSetWithHash can silently skip the commit when a conflicts
+    ** catalog is present; refuse that here rather than report a successful
+    ** advance that never hit disk. */
+    rc = chunkStoreReadDiskBranchTip(
+        cs, doltliteGetSessionBranch(db), &diskTip, &found);
+    if( rc==SQLITE_OK
+     && (!found || prollyHashCompare(&diskTip, pNewHead)!=0) ){
+      rc = SQLITE_BUSY;
+    }
+    if( rc!=SQLITE_OK ){
+      /* AdvanceBranchWithState already cleared saved on success; rebuild a
+      ** restore from the pre-confirm session by re-saving is impossible here.
+      ** Surface BUSY so the caller retries on a fresh view. */
+    }
+  }
+  assert( cs->lockDepth>0 );
+  chunkStoreUnlock(cs);
+
+  if( rc==SQLITE_OK ){
+    /* Adopt the advanced catalog into the live session after the durable tip
+    ** is on disk. Failure here leaves HEAD advanced with a recoverable
+    ** working-set mismatch on reopen. */
+    if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
+      int src = doltliteSwitchCatalog(db, pWorkingCatHash);
+      if( src!=SQLITE_OK ) rc = src;
+    }else{
+      int src = doltliteSwitchCatalog(db, pCatalogHash);
+      if( src!=SQLITE_OK ) rc = src;
+    }
   }
   return rc;
 }
