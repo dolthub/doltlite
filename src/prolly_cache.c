@@ -13,7 +13,7 @@
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
   memcpy(&h, hash->data, sizeof(u32));
-  return (int)(h % (u32)cache->nBucket);
+  return (int)(h & (u32)(cache->nBucket - 1));
 }
 
 static void lruRemove(ProllyCacheEntry *pEntry){
@@ -101,14 +101,15 @@ static ProllyCacheEntry *cacheEntryNewOwned(
 }
 
 int prollyCacheInit(ProllyCache *cache, int nCapacity){
-  int nBucket;
+  int nBucket = 16;
+  i64 nBucketMin = (i64)nCapacity * 2;
 
   memset(cache, 0, sizeof(*cache));
+  if( nBucketMin>0x40000000 ) return SQLITE_NOMEM;
   cache->nCapacity = nCapacity;
   cache->nUsed = 0;
 
-  nBucket = nCapacity * 2;
-  if( nBucket<16 ) nBucket = 16;
+  while( nBucket<nBucketMin ) nBucket *= 2;
   cache->nBucket = nBucket;
 
   cache->aBucket = (ProllyCacheEntry **)sqlite3_malloc(
