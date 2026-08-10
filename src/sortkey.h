@@ -10,6 +10,31 @@
 #define SORTKEY_TEXT    0x35
 #define SORTKEY_BLOB    0x45
 
+/* True when b could begin a field, in either sort direction (a DESC field is
+** stored with every byte inverted, tag included).
+**
+** A byte-prefix match only means the encoded fields are equal if the shorter
+** key ends on a field boundary. A numeric field carrying an integer that no
+** double represents exactly is 18 bytes -- 9 bytes of IEEE base plus a
+** continuation marker and the exact value -- so the 9-byte encoding of its
+** base is a byte-prefix of it while denoting a different, smaller number.
+** Anything that is not a tag is treated as a continuation, so an encoding
+** grown later fails safe onto the authoritative comparator. */
+static inline int sortKeyByteStartsField(u8 b){
+  switch( b ){
+    case SORTKEY_NULL:
+    case SORTKEY_NUM:
+    case SORTKEY_TEXT:
+    case SORTKEY_BLOB:
+    case (u8)~SORTKEY_NULL:
+    case (u8)~SORTKEY_NUM:
+    case (u8)~SORTKEY_TEXT:
+    case (u8)~SORTKEY_BLOB:
+      return 1;
+  }
+  return 0;
+}
+
 int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut);
 
 int sortKeyFromRecordPrefix(const u8 *pRec, int nRec, int nKeyField,

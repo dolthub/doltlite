@@ -717,7 +717,8 @@ static int indexMovetoScanTreeLeaf(
           }
           break;
         }
-        if( nSeekKeyField>0 && prefixCmp==0 && nSK>=nSortKey ){
+        if( nSeekKeyField>0 && prefixCmp==0 && nSK>=nSortKey
+         && (nSK==nSortKey || sortKeyByteStartsField(pSK[nSortKey])) ){
           if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
             ProllyMutMapEntry *mmE = 0;
             rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
@@ -1098,6 +1099,12 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
       *pRes = 1;
     }else if( nKey < pCur->nSeekSortKey ){
       *pRes = -1;
+    }else if( nKey > pCur->nSeekSortKey
+           && !sortKeyByteStartsField(pKey[pCur->nSeekSortKey]) ){
+      /* The seek key stops mid-field, so the rows are not equal and their
+      ** order depends on the encoding rather than on the bytes compared
+      ** here. Decline and let the record comparator answer. */
+      return SQLITE_NOTFOUND;
     }else{
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;
@@ -1126,6 +1133,9 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
       *pRes = 1;
     }else if( nKey < pCur->nCompareSortKey ){
       *pRes = -1;
+    }else if( nKey > pCur->nCompareSortKey
+           && !sortKeyByteStartsField(pKey[pCur->nCompareSortKey]) ){
+      return SQLITE_NOTFOUND;
     }else{
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;

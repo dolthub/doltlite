@@ -1056,6 +1056,59 @@ run_test "negative_large_int_index_lookup" \
 
 rm -f "$DB"
 
+# An integer above 2^53 that no double represents exactly encodes as 9 bytes of
+# IEEE base plus the exact value, so the 9-byte key of the base is a byte-prefix
+# of it. Probing for the base must not match the larger row: the cases above
+# only ever probe the extended value, whose whole key matches.
+
+DB=/tmp/test_rg_large_int_prefix_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(x NUMERIC PRIMARY KEY, y TEXT) WITHOUT ROWID;
+INSERT INTO t VALUES(9007199254740993,'keep');
+INSERT INTO t VALUES(1,'other');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "large_int_base_probe_finds_nothing" \
+  "SELECT count(*) FROM t WHERE x=9007199254740992;" "0" "$DB"
+run_test "large_int_base_probe_real_finds_nothing" \
+  "SELECT count(*) FROM t WHERE x=9007199254740992.0;" "0" "$DB"
+run_test "large_int_extended_probe_still_hits" \
+  "SELECT y FROM t WHERE x=9007199254740993;" "keep" "$DB"
+run_test "large_int_base_update_spares_extended_row" \
+  "UPDATE t SET y='clobbered' WHERE x=9007199254740992.0;
+   SELECT group_concat(x || ':' || y, '|') FROM (SELECT x,y FROM t ORDER BY x);" \
+  "1:other|9007199254740993:keep" "$DB"
+run_test "large_int_base_delete_spares_extended_row" \
+  "DELETE FROM t WHERE x=9007199254740992;
+   SELECT count(*) FROM t;" "2" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rg_large_int_prefix_uniq_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(x NUMERIC UNIQUE, y TEXT);
+INSERT INTO t VALUES(9007199254740993,'keep');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "large_int_base_not_a_unique_conflict" \
+  "INSERT INTO t VALUES(9007199254740992.0,'base');
+   SELECT group_concat(x || ':' || y, '|') FROM (SELECT x,y FROM t ORDER BY x);" \
+  "9007199254740992:base|9007199254740993:keep" "$DB"
+run_test "large_int_prefix_integrity_check" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rg_large_int_prefix_range_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(x NUMERIC PRIMARY KEY) WITHOUT ROWID;
+INSERT INTO t VALUES(9007199254740993);
+INSERT INTO t VALUES(9007199254740994);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "large_int_range_above_base_sees_both" \
+  "SELECT count(*) FROM t WHERE x>9007199254740992.0 AND x<9007199254740995;" \
+  "2" "$DB"
+run_test "large_int_range_order" \
+  "SELECT group_concat(x, '|') FROM (SELECT x FROM t ORDER BY x);" \
+  "9007199254740993|9007199254740994" "$DB"
+
+rm -f "$DB"
+
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
