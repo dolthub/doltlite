@@ -492,7 +492,12 @@ static int indexMovetoBuildSeekKey(
   *pnSeekKeyField = nSeekKeyField;
   pCur->nSeekSortKey = nSortKey;
   pCur->nSeekKeyField = nSeekKeyField;
+  /* A probe covering a table root's whole primary key names one row, so the
+  ** pending map can be searched by exact key -- but only when the probe is an
+  ** equality. A range bound names no row, and an exact lookup for it finds
+  ** nothing, which would hide every pending row the range should return. */
   if( pCur->pKeyInfo
+   && pIdxKey->default_rc == 0
    && nSeekKeyField == pCur->pKeyInfo->nKeyField
    && pCur->isTableRoot ){
     *pExactMutMapKey = 1;

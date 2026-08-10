@@ -64,6 +64,68 @@ run_test "intkey_uncommitted_insert_visible_to_range_seeks" \
 
 db_rm "$DB"
 
+# The same visibility on a blob-key table root. A probe covering the whole
+# primary key names one row, so the pending map can be searched by exact key --
+# but only for an equality. A range bound names no row, so that lookup found
+# nothing and every pending row the range should have returned went missing:
+# invisible to SELECT, and skipped by UPDATE and DELETE.
+run_test "blobkey_range_seek_sees_pending_row_above_tree" \
+  "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
+   INSERT INTO t VALUES(5,'c');
+   BEGIN;
+   INSERT INTO t VALUES(20,'p');
+   SELECT coalesce(group_concat(k),'none') FROM t WHERE k > 10;
+   SELECT coalesce(group_concat(k),'none') FROM t WHERE k >= 20;
+   SELECT coalesce(group_concat(k),'none') FROM t WHERE k > 1;
+   SELECT count(*) FROM t WHERE k = 20;
+   UPDATE t SET v='u' WHERE k > 10;
+   SELECT coalesce(group_concat(k||'='||v),'none') FROM (SELECT k,v FROM t ORDER BY k);
+   ROLLBACK;" \
+  "20
+20
+5,20
+1
+5=c,20=u" \
+  "$DB"
+
+db_rm "$DB"
+
+# With no committed rows at all there is no tree row to fall back on, so the
+# range sees nothing whatsoever.
+run_test "blobkey_range_seek_sees_pending_only_table" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, v TEXT) WITHOUT ROWID;
+   BEGIN;
+   INSERT INTO t VALUES(-18,'p');
+   SELECT count(*) FROM t WHERE k > -19 AND k < -2;
+   UPDATE t SET v='u' WHERE k > -19;
+   SELECT k||'='||v FROM t;
+   DELETE FROM t WHERE k > -19 AND k < -2;
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "1
+-18=u
+0" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "composite_pk_range_seek_sees_pending_row" \
+  "CREATE TABLE t(a INTEGER, b TEXT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+   INSERT INTO t VALUES(1,'x','c');
+   BEGIN;
+   INSERT INTO t VALUES(9,'y','p');
+   SELECT coalesce(group_concat(a),'none') FROM t WHERE a > 4;
+   SELECT count(*) FROM t WHERE a = 9 AND b = 'y';
+   DELETE FROM t WHERE a > 4;
+   SELECT coalesce(group_concat(a),'none') FROM t;
+   COMMIT;" \
+  "9
+1
+1" \
+  "$DB"
+
+db_rm "$DB"
+
 run_test "intkey_seek_above_deleted_key" \
   "CREATE TABLE t(k INTEGER PRIMARY KEY, v);
    INSERT INTO t VALUES (5, 'a'), (7, 'b');
