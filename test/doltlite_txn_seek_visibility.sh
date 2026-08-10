@@ -443,4 +443,151 @@ run_test "onepass_interleaved_writes_covers_late_insert" \
 
 db_rm "$DB"
 
+# An index seek that finds nothing at or above its key lands on the merged last
+# row, which is reached by scanning backwards. That leaves the tree side below a
+# mut-map-sourced landing, so a forward step from it used to serve a tree row the
+# scan had already passed -- a scan bounded only from below then walked backwards
+# and matched rows outside its range. The blob here outsorts every text value, so
+# the pre-update index entry sits above the seek keys.
+DB=/tmp/test_txn_index_seek_past_end_$$.db; db_rm "$DB"
+
+run_test "index_seek_past_end_after_pending_update" \
+  "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   INSERT INTO t VALUES(-5, -25.110, x'0001');
+   INSERT INTO t VALUES(3, 33, '');
+   BEGIN;
+   UPDATE t SET b = 'a' WHERE b > 'AB';
+   SELECT count(*) FROM t WHERE b > 'zz';
+   SELECT count(*) FROM t WHERE b > x'ffff';
+   SELECT count(*) FROM t WHERE b >= x'0001';
+   SELECT group_concat(quote(b), '|') FROM (SELECT b FROM t ORDER BY b, k);
+   COMMIT;" \
+  "0
+0
+0
+''|'a'" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "index_delete_past_end_spares_all_rows" \
+  "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   INSERT INTO t VALUES(-5, -25.110, x'0001');
+   INSERT INTO t VALUES(3, 33, '');
+   BEGIN;
+   UPDATE t SET b = 'a' WHERE b > 'AB';
+   DELETE FROM t WHERE b > 'zz';
+   COMMIT;
+   SELECT group_concat(quote(b), '|') FROM (SELECT b FROM t ORDER BY b, k);" \
+  "''|'a'" \
+  "$DB"
+
+db_rm "$DB"
+
+# The same landing with the tree as its source. The backward scan walks the
+# mut-map index down past the landing key, possibly off the start, and a forward
+# step left with no mut-map side cannot mask a delete -- so a range scan served
+# the row this transaction deleted. Reachable whenever the deleted row is the
+# greatest one, which is why the keys here sort with it last.
+DB=/tmp/test_txn_masked_last_row_$$.db; db_rm "$DB"
+
+run_test "range_scan_masks_deleted_last_row" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, a) WITHOUT ROWID;
+   INSERT INTO t VALUES(-17,-33.132);
+   INSERT INTO t VALUES(-38,-44.638);
+   BEGIN;
+   DELETE FROM t WHERE k = -17;
+   SELECT count(*) FROM t WHERE k > -20 AND k < -3;
+   SELECT count(*) FROM t WHERE k >= -20;
+   SELECT coalesce(group_concat(k), 'none') FROM t WHERE k > -20;
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "0
+0
+none
+1" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "range_scan_masks_deleted_last_row_text_pk" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a) WITHOUT ROWID;
+   INSERT INTO t VALUES('m',1);
+   INSERT INTO t VALUES('a',2);
+   BEGIN;
+   DELETE FROM t WHERE k = 'm';
+   SELECT count(*) FROM t WHERE k > 'b' AND k < 'z';
+   SELECT coalesce(group_concat(k), 'none') FROM t WHERE k > 'b';
+   SELECT coalesce(group_concat(k), 'none') FROM t WHERE k < 'z' ORDER BY k DESC;
+   COMMIT;" \
+  "0
+none
+a" \
+  "$DB"
+
+db_rm "$DB"
+
+# Serving that phantom row to an UPDATE made the VDBE try to delete an index
+# entry for a row that is not there, which surfaces as OP_IdxDelete's
+# "index corruption" rather than as a wrong answer.
+run_test "update_over_deleted_last_row_is_not_corruption" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, a) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES(-17,-33.132);
+   INSERT INTO t VALUES(-38,-44.638);
+   BEGIN;
+   DELETE FROM t WHERE k = -17;
+   UPDATE t SET a = 27 WHERE k > -20 AND k < -3;
+   COMMIT;
+   SELECT count(*), coalesce(group_concat(k||'/'||a),'none') FROM t;" \
+  "1|-38/-44.638" \
+  "$DB"
+
+db_rm "$DB"
+
+# A prefix seek that reports "below the key" with an equal prefix sends OP_Seek
+# through its prolly-specific walk, which ends in BtreeLast when every remaining
+# entry matched. BtreeLast also lands by scanning backwards, so the forward step
+# SeekGT then makes must not serve the pending row sitting below that landing --
+# nothing follows the last row.
+DB=/tmp/test_txn_atlast_forward_$$.db; db_rm "$DB"
+
+run_test "seek_gt_after_last_landing_finds_nothing" \
+  "CREATE TABLE t(k INTEGER PRIMARY KEY, b TEXT);
+   CREATE INDEX i_b ON t(b);
+   INSERT INTO t VALUES(1, 'm');
+   BEGIN;
+   INSERT INTO t VALUES(2, 'a');
+   SELECT coalesce(group_concat(k), 'none') FROM t WHERE b > 'm';
+   SELECT coalesce(group_concat(k), 'none') FROM t WHERE b > 'a';
+   SELECT coalesce(group_concat(b), 'none') FROM (SELECT b FROM t ORDER BY b DESC);
+   SELECT quote(max(b)), quote(min(b)) FROM t;
+   COMMIT;" \
+  "none
+1
+m,a
+'m'|'a'" \
+  "$DB"
+
+db_rm "$DB"
+
+# Backward stepping from that same landing must still reach the row below it.
+run_test "index_seek_past_end_steps_backward" \
+  "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   INSERT INTO t VALUES(-5, -25.110, x'0001');
+   INSERT INTO t VALUES(3, 33, '');
+   BEGIN;
+   UPDATE t SET b = 'a' WHERE b > 'AB';
+   SELECT quote(max(b)) FROM t WHERE b < x'ffff';
+   SELECT group_concat(quote(b), '|') FROM (SELECT b FROM t WHERE b <= 'a' ORDER BY b DESC);
+   COMMIT;" \
+  "'a'
+'a'|''" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish

@@ -1020,6 +1020,13 @@ int prollyBtCursorIndexMoveto(
       *pRes = -1;
       if( !pCur->mmActive || pCur->mergeSrc!=MERGE_SRC_MUT ){
         cacheCurrentTreeStoredPayloadNonIntKey(pCur);
+      }else{
+        /* mergeLast scanned backwards to get here, so the tree side sits
+        ** below this mut-map row -- it was retreated past any delete-masked
+        ** row at the same key. Stepping forward from that would serve a tree
+        ** row the scan has already passed. Defer the tree seek so the first
+        ** step re-seeks to this row's key and adjusts for its own direction. */
+        pCur->deferredTreeSeek = 1;
       }
     } else {
       pCur->eState = CURSOR_INVALID;
