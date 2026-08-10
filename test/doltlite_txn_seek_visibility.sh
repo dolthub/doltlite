@@ -109,6 +109,65 @@ run_test "blobkey_range_seek_sees_pending_only_table" \
 
 db_rm "$DB"
 
+# A >= bound is a forward seek that SQLite marks with a positive default_rc,
+# the same mark it puts on the backward <. Reading that mark as the direction
+# lost the pending landing for >=, so a range starting at or below a pending
+# row missed it while the same range written with > found it.
+run_test "ge_bound_sees_pending_row" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   BEGIN;
+   INSERT INTO t VALUES(-14, 'x', 'y');
+   SELECT count(*) FROM t WHERE k >= -18 AND k <= 33;
+   SELECT count(*) FROM t WHERE k >= -14;
+   UPDATE t SET a = 10 WHERE k >= -18;
+   SELECT quote(a) FROM t;
+   DELETE FROM t WHERE k >= -18;
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "1
+1
+10
+0" \
+  "$DB"
+
+db_rm "$DB"
+
+# A prefix GLOB or LIKE is compiled into a >= / < range, so it reaches the same
+# path through a secondary index.
+run_test "prefix_match_sees_pending_row" \
+  "CREATE TABLE t(k INTEGER, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   BEGIN;
+   INSERT INTO t VALUES(-3, NULL, 'aXb');
+   SELECT count(*) FROM t WHERE b GLOB 'a*';
+   SELECT count(*) FROM t WHERE b >= 'a' AND b < 'b';
+   SELECT count(*) FROM t WHERE b LIKE 'a%';
+   COMMIT;" \
+  "1
+1
+1" \
+  "$DB"
+
+db_rm "$DB"
+
+# The other half of the contract, and the one an earlier attempt at this broke:
+# a landing above the key is not a match. An equality seek for a key that does
+# not exist must not settle for the next pending row above it.
+run_test "equality_seek_does_not_match_greater_pending_row" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, a, b TEXT);
+   BEGIN;
+   INSERT INTO t VALUES(26, 42.693, 'z');
+   UPDATE t SET b = 'zz' WHERE k = 20;
+   DELETE FROM t WHERE k = 20;
+   SELECT count(*) FROM t WHERE k = 20;
+   SELECT quote(k)||'/'||quote(b) FROM t;
+   COMMIT;" \
+  "0
+26/'z'" \
+  "$DB"
+
+db_rm "$DB"
+
 run_test "composite_pk_range_seek_sees_pending_row" \
   "CREATE TABLE t(a INTEGER, b TEXT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
    INSERT INTO t VALUES(1,'x','c');
