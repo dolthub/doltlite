@@ -1,5 +1,5 @@
 # Crash-recovery coverage replacing the bucketed savepoint4 and crash2 runs
-# (issue #2045). Those suites hard-code rollback-journal semantics: stock's
+# (issue #2072). Those suites hard-code rollback-journal semantics: stock's
 # commit point (the journal delete) lies strictly after the last main-file
 # sync, and crashsql only crashes on syncs, so any simulated crash recovers
 # the pre-transaction state. DoltLite's commit point IS a sync of the main
