@@ -174,3 +174,112 @@ jobs:
       run: |
         echo "::error::fuzz crash in ${{ matrix.target }}"
         exit 1
+
+  # Randomized differential sweep against stock SQLite. Separate from the
+  # libFuzzer matrix above: those feed bytes to on-disk-format decoders, this
+  # one runs generated SQL through both engines and compares answers, so it
+  # covers query and transaction semantics instead of parsing.
+  #
+  # Nightly only for now. The engine currently diverges on roughly 3% of seeds
+  # (issue #2076), so a per-PR gate would block every pull request; adding the
+  # short per-PR run is the last step of that issue.
+  #
+  # Each night sweeps a different seed window derived from the run number, so
+  # coverage compounds instead of re-checking seeds earlier runs already
+  # cleared. The window is printed and every failing seed is reproducible from
+  # the generator alone.
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+
+    - name: Build doltlite and the stock reference
+      run: |
+        mkdir -p build-diff && cd build-diff
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+        make -j2 doltlite
+        # The reference is this tree with the prolly storage compiled out, so
+        # both binaries share a SQLite version. A packaged sqlite3 would
+        # differ in text rendering of large reals and read as a divergence.
+        make DOLTLITE_PROLLY=0 sqlite3
+        mv sqlite3 sqlite3-stock
+
+    - name: Run differential sweep
+      id: sweep
+      run: |
+        set -o pipefail
+        WINDOW=4000
+        FIRST=$(( (${{ github.run_number }} * WINDOW) % 1000000 + 1 ))
+        LAST=$(( FIRST + WINDOW - 1 ))
+        mkdir -p "$GITHUB_WORKSPACE/diff-artifacts"
+        cd build-diff
+        if DOLTLITE_DIFF_SAVE_DIR="$GITHUB_WORKSPACE/diff-artifacts" \
+           bash ../test/sql_differential_test.sh \
+             ./doltlite ./sqlite3-stock "$FIRST" "$LAST" \
+             2>&1 | tee "$GITHUB_WORKSPACE/diff-artifacts/sweep.log"; then
+          echo "diverged=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "diverged=1" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Compose divergence report
+      if: steps.sweep.outputs.diverged == '1'
+      run: |
+        set -euo pipefail
+        WS="$GITHUB_WORKSPACE"
+        BODY="$RUNNER_TEMP/diff-body.md"
+        {
+          echo "The randomized SQL differential sweep found answers that differ"
+          echo "from stock SQLite."
+          echo ""
+          echo "Reproduce a failing seed locally:"
+          echo ""
+          echo '```'
+          echo "make DOLTLITE_PROLLY=0 sqlite3   # stock reference, same version"
+          echo "bash test/sql_differential_test.sh ./doltlite ./sqlite3 <seed> <seed>"
+          echo '```'
+          echo ""
+          echo "Generated scripts for the first failing seeds are attached as the"
+          echo "\`differential-cases\` artifact."
+          echo ""
+          echo '```'
+          tail -n 60 "$WS/diff-artifacts/sweep.log" 2>/dev/null || echo "(no log)"
+          echo '```'
+        } > "$BODY"
+        cat "$BODY"
+
+    - name: Upload failing cases
+      if: steps.sweep.outputs.diverged == '1'
+      uses: actions/upload-artifact@v4
+      with:
+        name: differential-cases
+        path: |
+          diff-artifacts/seed_*.sql
+          diff-artifacts/sweep.log
+        if-no-files-found: warn
+
+    - name: Report divergence as GitHub issue
+      if: steps.sweep.outputs.diverged == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: sql-differential-divergence
+        title: "Nightly SQL differential sweep diverged from stock SQLite"
+        body-file: ${{ runner.temp }}/diff-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Fail the job if the sweep diverged
+      if: steps.sweep.outputs.diverged == '1'
+      run: |
+        echo "::error::SQL differential sweep diverged from stock SQLite"
+        exit 1
