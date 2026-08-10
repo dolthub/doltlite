@@ -61,15 +61,14 @@ jobs:
           cc -O2 -Werror -I. -I../src \
             -o bench_timer_doltlite ../test/sysbench_timer.c \
             libdoltlite.a -lpthread -lz -lm
-          # Both are rebuilt from scratch: a stale sqlite3.o compiled with the
-          # prolly storage would make the SQLite baseline another doltlite.
-          rm -f sqlite3 sqlite3.o
-          make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-          cc -O2 -Werror -I. -I../src \
+          # The baseline links sqlite3.o, so it comes from the reference
+          # directory: an object compiled from an amalgamation generated with
+          # the prolly storage would make this baseline another doltlite.
+          bash ../test/build_stock_reference.sh ../build-stockref ./doltlite
+          cc -O2 -Werror -I../build-stockref -I../src \
             -o bench_timer_sqlite ../test/sysbench_timer.c \
-            sqlite3.o -lpthread -lz -lm
+            ../build-stockref/sqlite3.o -lpthread -lz -lm
         } 2>&1 | tee build.log
-        bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite
         if grep -E "warning:" build.log; then
           echo "::error::compiler warnings in nightly benchmark build"
           exit 1

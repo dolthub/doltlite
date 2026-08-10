@@ -68,6 +68,11 @@ fi
 if [ -n "$WANT" ]; then
   if [ -x "$WANT" ]; then
     wantver="$("$WANT" :memory: "SELECT sqlite_version();" 2>/dev/null)"
+  elif case "$WANT" in */*) true ;; *) false ;; esac; then
+    # Looks like a path but is not runnable: say so rather than compare the
+    # path text against a version and report a confusing mismatch.
+    echo "ERROR: expected engine binary '$WANT' is not executable"
+    exit 1
   else
     wantver="$WANT"
   fi

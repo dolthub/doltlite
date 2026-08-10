@@ -212,10 +212,10 @@ jobs:
         # The reference is this tree with the prolly storage compiled out, so
         # both binaries share a SQLite version. A packaged sqlite3 would
         # differ in text rendering of large reals and read as a divergence.
-        rm -f sqlite3
-        make DOLTLITE_PROLLY=0 sqlite3
-        mv sqlite3 sqlite3-stock
-        bash ../test/assert_stock_reference.sh ./sqlite3-stock ./doltlite
+        # Built in a directory of its own: see test/build_stock_reference.sh
+        # for why a shared one cannot be trusted to be stock.
+        bash ../test/build_stock_reference.sh ../build-stockref ./doltlite
+        cp ../build-stockref/sqlite3 ./sqlite3-stock
 
     - name: Run differential sweep
       id: sweep
