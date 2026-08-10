@@ -689,6 +689,25 @@ check_match "non-ff push rejected" "not a fast-forward" "$result"
 result=$("$DB" "$TMPDIR/nff_b.db" "SELECT dolt_push('origin','main','--force');")
 check "force push succeeds" "0" "$result"
 
+echo "=== Direct multi-branch clone starts every branch clean ==="
+"$DB" "$TMPDIR/direct_ws_src.db" <<'ENDSQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feature');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-Am','feature change');
+SELECT dolt_checkout('main');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/direct_ws_clone.db" \
+  "SELECT dolt_clone('$R/direct_ws_src.db'); SELECT active_branch(); SELECT name,dirty FROM dolt_branches ORDER BY name;" 2>&1)
+check "direct clone lists clean non-current branch" "0
+main
+feature|0
+main|0" "$result"
+
 echo "=== Working sets do not push/pull (Dolt 2.2.2 semantics) ==="
 # A push carries commits and refs only. A dirty working set stays local, and
 # every branch on a clone starts clean at its head -- a kept working-set hash
