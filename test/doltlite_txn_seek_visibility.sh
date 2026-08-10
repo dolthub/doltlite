@@ -300,6 +300,51 @@ run_test "onepass_update_resume_lands_merged" \
 
 db_rm "$DB"
 
+# The same resume contract on blob keys. Writing a row that exists only in the
+# pending map must not step the tree cursor: the tree already sits on the next
+# committed row above it, so advancing drops that row from the rest of the scan.
+# The pending row has to sort between two committed ones for the skip to show.
+run_test "onepass_update_blobkey_covers_committed_row_after_pending" \
+  "CREATE TABLE t(k INTEGER, j TEXT, v TEXT, PRIMARY KEY(k, j)) WITHOUT ROWID;
+   INSERT INTO t VALUES (1,'a','x'),(3,'c','x');
+   BEGIN;
+   INSERT INTO t VALUES (2,'b','x');
+   UPDATE t SET v='u' WHERE k >= 1;
+   COMMIT;
+   SELECT group_concat(k||j||'='||v, ',') FROM (SELECT k,j,v FROM t ORDER BY k);" \
+  "1a=u,2b=u,3c=u" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "onepass_delete_blobkey_covers_committed_row_after_pending" \
+  "CREATE TABLE t(k INTEGER, j TEXT, v TEXT, PRIMARY KEY(k, j)) WITHOUT ROWID;
+   INSERT INTO t VALUES (1,'a','x'),(3,'c','x');
+   BEGIN;
+   INSERT INTO t VALUES (2,'b','x');
+   DELETE FROM t WHERE k >= 1;
+   COMMIT;
+   SELECT count(*) FROM t;" \
+  "0" \
+  "$DB"
+
+db_rm "$DB"
+
+# Several pending rows interleaved with several committed ones: every committed
+# row above a pending write must still be visited.
+run_test "onepass_update_blobkey_interleaved_rows" \
+  "CREATE TABLE t(k INTEGER, j TEXT, v TEXT, PRIMARY KEY(k, j)) WITHOUT ROWID;
+   INSERT INTO t VALUES (10,'a','x'),(30,'c','x'),(50,'e','x'),(70,'g','x');
+   BEGIN;
+   INSERT INTO t VALUES (20,'b','x'),(40,'d','x'),(60,'f','x');
+   UPDATE t SET v='u' WHERE k >= 10;
+   COMMIT;
+   SELECT count(*) FROM t WHERE v='u';" \
+  "7" \
+  "$DB"
+
+db_rm "$DB"
+
 # A scan whose moveto lands on a pending row defers the tree-side seek. When
 # a deferred write then deactivates the merge state, the resume re-seeds both
 # sides past the departed key; a surviving deferral would re-seek the tree

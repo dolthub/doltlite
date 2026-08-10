@@ -933,7 +933,12 @@ int prollyBtCursorInsert(
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
         ProllyMutMapEntry *pEntry = 0;
         CLEAR_CACHED_PAYLOAD(pCur);
-        if( prollyCursorIsValid(&pCur->pCur) ){
+        /* Step the tree off the row just written -- but only when the tree is
+        ** the side sitting on it. A mut-map-only row leaves the tree already
+        ** parked on the next committed row above it, so advancing here would
+        ** step over that row and drop it from the rest of the scan. */
+        if( prollyCursorIsValid(&pCur->pCur)
+         && (!pCur->mmActive || pCur->mergeSrc!=MERGE_SRC_MUT) ){
           int trc = prollyCursorNext(&pCur->pCur);
           if( trc!=SQLITE_OK ) return trc;
         }
