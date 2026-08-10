@@ -13,10 +13,12 @@
 #
 # Usage: sql_differential_test.sh [doltlite] [stock] [first-seed] [last-seed]
 #
-# Two axes are off by default because they have known open bugs; enabling them
-# is how this suite grows once those land:
-#   DOLTLITE_DIFF_LARGE_INTS=1  integers beyond 2^53 (needs PR #2075)
-#   DOLTLITE_DIFF_DESC=1        DESC indexes (issue #2077)
+# Feature groups are selected with DOLTLITE_DIFF_GROUPS: a space-separated list,
+# "all" for every group, "default" (the default) for every group that is clean,
+# or "" for the base single-table workload.
+# Running one group is how a divergence gets attributed. Groups:
+#   large-ints desc expr agg setops cte window joins writesel ddl
+#   constraints triggers
 
 set -uo pipefail
 
@@ -39,18 +41,45 @@ if [ ! -f "$GEN" ]; then
   exit 1
 fi
 
-# A doltlite build answering as the stock reference would compare the engine
-# against itself and pass no matter what broke.
-if "$SQLITE3" :memory: \
-     "SELECT 1 FROM pragma_function_list WHERE name='dolt_version';" \
-     2>/dev/null | grep -q 1; then
-  echo "ERROR: $SQLITE3 provides dolt_version, so it is not a stock reference"
+# A reference sharing doltlite's storage would compare the engine against
+# itself and pass no matter what broke. What matters is the storage, not
+# whether the dolt_* functions happen to be linked in, so ask what the binary
+# actually writes: stock lays down an SQLite database header, doltlite a chunk
+# store.
+REFPROBE="$(mktemp -d)"
+if ! "$SQLITE3" "$REFPROBE/ref.db" \
+      "CREATE TABLE x(y); INSERT INTO x VALUES(1);" >/dev/null 2>&1; then
+  echo "ERROR: $SQLITE3 could not create a database"
+  rm -rf "$REFPROBE"
   exit 1
 fi
+if [ "$(head -c 15 "$REFPROBE/ref.db" 2>/dev/null)" != "SQLite format 3" ]; then
+  echo "ERROR: $SQLITE3 does not write SQLite-format databases, so it shares"
+  echo "       doltlite's storage and cannot be the reference"
+  rm -rf "$REFPROBE"
+  exit 1
+fi
+rm -rf "$REFPROBE"
 
+# Not named GROUPS: bash keeps that as the caller's group-id array and silently
+# ignores assignments to it.
+SEL_GROUPS="${DOLTLITE_DIFF_GROUPS-default}"
 GENFLAGS=""
-[ "${DOLTLITE_DIFF_LARGE_INTS:-0}" = "1" ] && GENFLAGS="$GENFLAGS --include-large-ints"
-[ "${DOLTLITE_DIFF_DESC:-0}" = "1" ] && GENFLAGS="$GENFLAGS --include-desc"
+if [ "$SEL_GROUPS" = "all" ]; then
+  GENFLAGS="--all"
+elif [ "$SEL_GROUPS" = "default" ]; then
+  # The value axes, which are clean. The feature groups added alongside them are
+  # opt-in until the divergences they find are fixed: expr reaches issue #2089,
+  # and several groups diverge only in combination (see that issue's thread), so
+  # enabling them here would redden every pull request.
+  for g in large-ints desc; do
+    GENFLAGS="$GENFLAGS --include-$g"
+  done
+else
+  for g in $SEL_GROUPS; do
+    GENFLAGS="$GENFLAGS --include-$g"
+  done
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -58,7 +87,7 @@ trap 'rm -rf "$WORK"' EXIT
 echo "=== SQL differential sweep: seeds $FIRST..$LAST ==="
 echo "    doltlite: $DOLTLITE"
 echo "    stock:    $SQLITE3"
-[ -n "$GENFLAGS" ] && echo "    axes:    $GENFLAGS"
+[ -n "$GENFLAGS" ] && echo "    groups:  $GENFLAGS"
 echo ""
 
 pass=0
