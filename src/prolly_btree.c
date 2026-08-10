@@ -1402,7 +1402,9 @@ int sqlite3BtreeCursorSize(void){
 }
 
 void sqlite3BtreeCursorZero(BtCursor *p){
-  memset(p, 0, sizeof(BtCursor));
+  memset(p, 0, offsetof(BtCursor, pCur));
+  memset(&p->pMutMap, 0,
+         sizeof(BtCursor) - offsetof(BtCursor, pMutMap));
   p->pCurOps = &prollyCursorOps;
 }
 
@@ -1418,9 +1420,6 @@ int prollyBtreeCursor(
 
   assert( p->inTrans>=TRANS_READ );
 
-  memset(pCur, 0, sizeof(BtCursor));
-  pCur->pBtree = p;
-  pCur->pBt = pBt;
   pCur->pgnoRoot = iTable;
   pCur->pKeyInfo = pKeyInfo;
   pCur->eState = CURSOR_INVALID;
@@ -1454,6 +1453,9 @@ int prollyBtreeCursor(
     pCur->isTableRoot = tableEntryIsTableRoot(p, pTE, &rcRoot) ? 1 : 0;
     if( rcRoot!=SQLITE_OK ) return rcRoot;
   }
+
+  pCur->pBtree = p;
+  pCur->pBt = pBt;
 
   if( wrFlag & BTREE_WRCSR ){
     pCur->curFlags = BTCF_WriteFlag;
