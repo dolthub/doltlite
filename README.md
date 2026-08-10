@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="doltlite-logo.png" alt="Doltlite" width="600">
+  <img src="doltlite-logo.png" alt="DoltLite" width="600">
 </p>
 
-# Doltlite
+# DoltLite
 
 A SQLite fork that replaces the B-tree storage engine with a content-addressed
 [prolly tree](https://docs.dolthub.com/architecture/storage-engine/prolly-tree),
@@ -105,7 +105,7 @@ make DOLTLITE_PROLLY=0 sqlite3
 
 ### WebAssembly (`ext/wasm`)
 
-Vendored SQLite `ext/wasm`, defaulting to the Doltlite engine. Build generated
+Vendored SQLite `ext/wasm`, defaulting to the DoltLite engine. Build generated
 SQLite sources first, then wasm:
 
 ```bash
