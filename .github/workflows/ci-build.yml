@@ -81,6 +81,7 @@ jobs:
         {
           make -j2 DOLTLITE_PROLLY_CHECK=1 \
             doltlite doltlite-remotesrv doltlite-lib
+          rm -f sqlite3
           make DOLTLITE_PROLLY=0 sqlite3
           make libsqlite3.a USE_AMALGAMATION=0
           rm -f sqlite3.c .target_source
@@ -400,6 +401,7 @@ jobs:
           make -j2 DOLTLITE_PROLLY_CHECK=1 \
             doltlite doltlite-remotesrv doltlite-lib testfixture \
             doltlite-c-tests-build doltlite-regression-test-c-build
+          rm -f sqlite3
           make DOLTLITE_PROLLY=0 sqlite3
           blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
           for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
@@ -416,6 +418,9 @@ jobs:
         fi
         find . -type f -name '*.profraw' -delete
 
+    - name: Assert the stock reference does not share doltlite's storage
+      run: bash test/assert_stock_reference.sh build-coverage/sqlite3
+
     - name: Package
       run: |
         mkdir -p coverage-artifact/build-coverage
@@ -430,6 +435,10 @@ jobs:
         cp build-coverage/sqlite3 \
           coverage-artifact/build-coverage/sqlite3-stock
         llvm-strip --strip-debug coverage-artifact/build-coverage/*
+        # The consumers compare against this copy, so assert the copy: it is
+        # what ships, and stripping it is the last thing that touches it.
+        bash test/assert_stock_reference.sh \
+          coverage-artifact/build-coverage/sqlite3-stock
         tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
 
     - name: Upload
@@ -565,6 +574,7 @@ jobs:
         {
           make CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
             doltlite libdoltlite.a
+          rm -f sqlite3
           make DOLTLITE_PROLLY=0 sqlite3
           cc $ASAN_CFLAGS -I. -I../src \
             -o doltlite_regression_test_c \

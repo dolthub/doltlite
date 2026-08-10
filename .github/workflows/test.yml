@@ -231,6 +231,13 @@ jobs:
         done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
       timeout-minutes: 18
 
+    # Checked here too, not just where it is built: every suite below is a
+    # comparison against this binary, and if it shares doltlite's storage they
+    # all pass without testing anything.
+    - name: Assert the stock reference does not share doltlite's storage
+      if: matrix.bucket == 'sql'
+      run: bash test/assert_stock_reference.sh build-coverage/sqlite3-stock
+
     - name: SQL oracle tests (vs stock SQLite)
       if: matrix.bucket == 'sql'
       run: |

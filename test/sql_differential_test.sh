@@ -42,24 +42,13 @@ if [ ! -f "$GEN" ]; then
 fi
 
 # A reference sharing doltlite's storage would compare the engine against
-# itself and pass no matter what broke. What matters is the storage, not
-# whether the dolt_* functions happen to be linked in, so ask what the binary
-# actually writes: stock lays down an SQLite database header, doltlite a chunk
-# store.
-REFPROBE="$(mktemp -d)"
-if ! "$SQLITE3" "$REFPROBE/ref.db" \
-      "CREATE TABLE x(y); INSERT INTO x VALUES(1);" >/dev/null 2>&1; then
-  echo "ERROR: $SQLITE3 could not create a database"
-  rm -rf "$REFPROBE"
+# itself and pass no matter what broke. Asking whether the dolt_* functions are
+# linked in is the wrong question -- they can be present while the storage is
+# stock -- so defer to the shared check, which asks what the binary writes and
+# is the same check CI runs where each reference is built.
+if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3"; then
   exit 1
 fi
-if [ "$(head -c 15 "$REFPROBE/ref.db" 2>/dev/null)" != "SQLite format 3" ]; then
-  echo "ERROR: $SQLITE3 does not write SQLite-format databases, so it shares"
-  echo "       doltlite's storage and cannot be the reference"
-  rm -rf "$REFPROBE"
-  exit 1
-fi
-rm -rf "$REFPROBE"
 
 # Not named GROUPS: bash keeps that as the caller's group-id array and silently
 # ignores assignments to it.
