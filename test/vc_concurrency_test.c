@@ -69,7 +69,7 @@ static int isRetryableMsg(const char *msg){
 }
 
 static int isCommitConflictMsg(const char *msg){
-  return msg!=0 && strstr(msg, "commit conflict: another connection committed")!=0;
+  return msg!=0 && strstr(msg, "conflict: another connection committed")!=0;
 }
 
 static int isCleanWorkingTreeMsg(const char *msg){

@@ -69,7 +69,7 @@ static int looks_like_lock_busy(const char *s){
 }
 
 static int looks_like_commit_conflict(const char *s){
-  return s!=0 && strstr(s, "commit conflict: another connection committed")!=0;
+  return s!=0 && strstr(s, "conflict: another connection committed")!=0;
 }
 
 static int is_commit_hash(const char *s){
