@@ -495,18 +495,23 @@ check "vec1_cherry_pick_revert" "1
 ok" "$result"
 
 scenario "a conflicting cherry-pick stays manual"
+# Flat (uncompressed) builds leave bucket numbers in %_base, so derived-shadow
+# auto-absorb is ineligible — same guard as vec1_flat_guard_stays_loud. Cherry-
+# pick also never requests the rebuild list (unlike merge). Use flat + dual
+# inserts rather than PQ "same bucket" inserts: which PQ segment two vectors
+# share is platform-sensitive under train, and was flaking the loudness check
+# on macOS CI when the inserts did not actually conflict.
 newdb
-gen600 "$TDIR/w600.sql"
 run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
-.read $TDIR/w600.sql
-$PQ_BUILD
-SELECT dolt_commit('-Am','built');
+INSERT INTO t(rowid, vector) VALUES (1, $V1);
+INSERT INTO t(cmd, arg) VALUES ('rebuild', '{index:\"flat\", distance:\"l2\"}');
+SELECT dolt_commit('-Am','flat built');
 SELECT dolt_checkout('-b','side');
-INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+INSERT INTO t(rowid, vector) VALUES (10, $V2);
 SELECT dolt_commit('-am','side');
 SELECT dolt_checkout('main');
-INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
-SELECT dolt_commit('-am','main same bucket');" "$DB" > /dev/null
+INSERT INTO t(rowid, vector) VALUES (20, $V3);
+SELECT dolt_commit('-am','main');" "$DB" > /dev/null
 result=$(run_sql "SELECT dolt_cherry_pick(dolt_hashof('side'));" "$DB" | grep -c "conflict")
 check "vec1_cherry_pick_conflict_stays_loud" "1" "$result"
 
