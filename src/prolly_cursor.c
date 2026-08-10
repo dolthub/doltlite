@@ -448,12 +448,10 @@ void prollyCursorValue(ProllyCursor *cur, const u8 **ppVal, int *pnVal){
 
 void prollyCursorReleaseAll(ProllyCursor *cur){
   int i;
-  for(i=0; i<PROLLY_CURSOR_MAX_DEPTH; i++){
-    if( cur->aLevel[i].pEntry ){
-      prollyCacheRelease(cur->pCache, cur->aLevel[i].pEntry);
-      cur->aLevel[i].pEntry = 0;
-      cur->aLevel[i].idx = 0;
-    }
+  for(i=0; i<PROLLY_CURSOR_MAX_DEPTH && cur->aLevel[i].pEntry; i++){
+    prollyCacheRelease(cur->pCache, cur->aLevel[i].pEntry);
+    cur->aLevel[i].pEntry = 0;
+    cur->aLevel[i].idx = 0;
   }
   cur->iLevel = 0;
 
