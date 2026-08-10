@@ -1192,6 +1192,61 @@ run_test "desc_index_negative_integrity" \
 rm -f "$DB"
 
 
+echo "--- Guard 24: ALTER TABLE ADD COLUMN DEFAULT is invisible to the user ---"
+
+# Storing the new column rewrites every row, which stock never does. The rewrite
+# must not reach anything the user can observe: no trigger fires for it, the
+# change counters do not move, and a trigger that cannot resolve does not fail
+# the ALTER.
+DB=/tmp/test_rg_altercol_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a);
+CREATE TABLE log(what TEXT);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+CREATE TRIGGER tu AFTER UPDATE ON t BEGIN INSERT INTO log VALUES('u'||OLD.k); END;
+CREATE TRIGGER ti AFTER INSERT ON t BEGIN INSERT INTO log VALUES('i'||NEW.k); END;
+CREATE TRIGGER td AFTER DELETE ON t BEGIN INSERT INTO log VALUES('d'||OLD.k); END;
+ALTER TABLE t ADD COLUMN c DEFAULT 7;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "altercol_no_trigger_fired" \
+  "SELECT coalesce(group_concat(what,','),'none') FROM log;" "none" "$DB"
+run_test "altercol_default_materialized" \
+  "SELECT group_concat(k||'/'||quote(c),',') FROM t;" "1/7,2/7,3/7" "$DB"
+run_test "altercol_changes_not_bumped" \
+  "UPDATE t SET a=a+1 WHERE k=1;
+   ALTER TABLE t ADD COLUMN d DEFAULT 'x';
+   SELECT changes();" "1" "$DB"
+run_test "altercol_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# The trigger body references a table that does not exist. Stock resolves
+# trigger bodies when they fire, so the ALTER succeeds; an internal UPDATE that
+# compiled the trigger would fail it instead.
+DB=/tmp/test_rg_altercol_dangling_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a);
+INSERT INTO t VALUES(1,10);
+CREATE TRIGGER tr AFTER UPDATE ON t BEGIN INSERT INTO gone(n) VALUES(NEW.a); END;
+ALTER TABLE t ADD COLUMN c DEFAULT 7;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "altercol_dangling_trigger_column_added" \
+  "SELECT count(*) FROM pragma_table_info('t');" "3" "$DB"
+run_test "altercol_dangling_trigger_value" \
+  "SELECT quote(c) FROM t WHERE k=1;" "7" "$DB"
+
+# The trigger still fires for a real update, so suppression is scoped to the
+# ALTER and not left switched on.
+DB=/tmp/test_rg_altercol_scope_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a);
+CREATE TABLE log(what TEXT);
+INSERT INTO t VALUES(1,10);
+CREATE TRIGGER tu AFTER UPDATE ON t BEGIN INSERT INTO log VALUES('u'||OLD.k); END;
+ALTER TABLE t ADD COLUMN c DEFAULT 7;
+UPDATE t SET a=99 WHERE k=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "altercol_trigger_still_fires_after" \
+  "SELECT group_concat(what,',') FROM log;" "u1" "$DB"
+rm -f "$DB" /tmp/test_rg_altercol_dangling_$$.db
+
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

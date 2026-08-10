@@ -164,7 +164,22 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     sqlite3_result_error_nomem(ctx);
     return;
   }
-  rc = sqlite3_exec(db, zSql, 0, 0, 0);
+
+  /* Every row has to be rewritten to carry the new column, but the user wrote
+  ** ALTER TABLE, not an UPDATE. DBFLAG_InternalDml keeps triggers from firing
+  ** for rows nobody changed, and the change counters are put back afterwards,
+  ** so the statement is as invisible as stock's, which touches no rows at all.
+  */
+  {
+    u32 savedFlags = db->mDbFlags;
+    i64 nChange = db->nChange;
+    i64 nTotalChange = db->nTotalChange;
+    db->mDbFlags |= DBFLAG_InternalDml;
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    db->mDbFlags = savedFlags;
+    db->nChange = nChange;
+    db->nTotalChange = nTotalChange;
+  }
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);

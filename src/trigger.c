@@ -877,6 +877,12 @@ Trigger *sqlite3TriggersExist(
   assert( pTab!=0 );
   if( (pTab->pTrigger==0 && !tempTriggersExist(pParse->db))
    || pParse->disableTriggers
+#ifdef DOLTLITE_PROLLY
+   /* Storing a column means writing every row, so ALTER TABLE ADD COLUMN with
+   ** a DEFAULT runs an UPDATE that stock does not. The rows it rewrites are
+   ** not rows the user changed, so no trigger fires for them. */
+   || (pParse->db->mDbFlags & DBFLAG_InternalDml)!=0
+#endif
   ){
     if( pMask ) *pMask = 0;
     return 0;
