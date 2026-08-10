@@ -51,7 +51,7 @@ int prollyBtreeCursorCurrentTreeValueCopy(
 ** operation returns the real error. Returning a zero key or an empty payload
 ** without faulting reports a row that was never read -- an OOM or interrupt
 ** during positioning became wrong data under SQLITE_OK. */
-i64 prollyBtCursorIntegerKey(BtCursor *pCur){
+static SQLITE_NOINLINE i64 prollyBtCursorIntegerKeySlow(BtCursor *pCur){
   if( pCur->deferredMergedSeek ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
@@ -81,6 +81,19 @@ i64 prollyBtCursorIntegerKey(BtCursor *pCur){
   }
   assert( pCur->pCur.eState==PROLLY_CURSOR_VALID );
   return cursorCurrentTreeIntKey(pCur);
+}
+i64 prollyBtCursorIntegerKey(BtCursor *pCur){
+  if( !pCur->deferredMergedSeek && !pCur->mmActive ){
+    assert( pCur->eState==CURSOR_VALID );
+    assert( pCur->curIntKey );
+    if( pCur->pCur.eState!=PROLLY_CURSOR_VALID
+     && (pCur->curFlags & BTCF_ValidNKey) ){
+      return pCur->cachedIntKey;
+    }
+    assert( pCur->pCur.eState==PROLLY_CURSOR_VALID );
+    return cursorCurrentTreeIntKey(pCur);
+  }
+  return prollyBtCursorIntegerKeySlow(pCur);
 }
 i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
   if( pCur->pCurOps==&prollyCursorOps ){
@@ -203,7 +216,7 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   return SQLITE_OK;
 }
 
-u32 prollyBtCursorPayloadSize(BtCursor *pCur){
+static SQLITE_NOINLINE u32 prollyBtCursorPayloadSizeSlow(BtCursor *pCur){
   const u8 *pData;
   int nData;
   if( pCur->deferredMergedSeek ){
@@ -245,6 +258,13 @@ u32 prollyBtCursorPayloadSize(BtCursor *pCur){
     return 0;
   }
   return (u32)nData;
+}
+u32 prollyBtCursorPayloadSize(BtCursor *pCur){
+  if( !pCur->deferredMergedSeek
+   && pCur->pCachedPayload && pCur->nCachedPayload>0 ){
+    return (u32)pCur->nCachedPayload;
+  }
+  return prollyBtCursorPayloadSizeSlow(pCur);
 }
 u32 sqlite3BtreePayloadSize(BtCursor *pCur){
   if( pCur->pCurOps==&prollyCursorOps ){
@@ -326,7 +346,10 @@ int sqlite3BtreePayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   return pCur->pCurOps->xPayload(pCur, offset, amt, pBuf);
 }
 
-const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
+static SQLITE_NOINLINE const void *prollyBtCursorPayloadFetchSlow(
+  BtCursor *pCur,
+  u32 *pAmt
+){
   const u8 *pData;
   int nData;
 
@@ -384,12 +407,35 @@ const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( pAmt ) *pAmt = (u32)nData;
   return (const void*)pData;
 }
+const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
+  if( !pCur->deferredMergedSeek
+   && pCur->pCachedPayload && pCur->nCachedPayload>0 ){
+    if( pAmt ) *pAmt = (u32)pCur->nCachedPayload;
+    return (const void*)pCur->pCachedPayload;
+  }
+  return prollyBtCursorPayloadFetchSlow(pCur, pAmt);
+}
 const void *sqlite3BtreePayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( !pCur ) return 0;
   if( pCur->pCurOps==&prollyCursorOps ){
     return prollyBtCursorPayloadFetch(pCur, pAmt);
   }
   return pCur->pCurOps->xPayloadFetch(pCur, pAmt);
+}
+const void *sqlite3BtreePayloadFetchWithSize(
+  BtCursor *pCur,
+  u32 *pAmt,
+  u32 *pSize
+){
+  if( !pCur ) return 0;
+  if( pCur->pCurOps==&prollyCursorOps
+   && !pCur->deferredMergedSeek
+   && pCur->pCachedPayload && pCur->nCachedPayload>0 ){
+    *pAmt = *pSize = (u32)pCur->nCachedPayload;
+    return (const void*)pCur->pCachedPayload;
+  }
+  *pSize = sqlite3BtreePayloadSize(pCur);
+  return sqlite3BtreePayloadFetch(pCur, pAmt);
 }
 
 sqlite3_int64 prollyBtCursorMaxRecordSize(BtCursor *pCur){

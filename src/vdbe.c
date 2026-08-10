@@ -20,6 +20,10 @@
 */
 #include "sqliteInt.h"
 #include "vdbeInt.h"
+
+#ifdef DOLTLITE_PROLLY
+const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
+#endif
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 #include "chunk_store.h"
 struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
@@ -3125,8 +3129,13 @@ op_column_restart:
       assert( pC->eCurType==CURTYPE_BTREE );
       assert( pCrsr );
       assert( sqlite3BtreeCursorIsValid(pCrsr) );
+#ifdef DOLTLITE_PROLLY
+      pC->aRow = sqlite3BtreePayloadFetchWithSize(
+          pCrsr, &pC->szRow, &pC->payloadSize);
+#else
       pC->payloadSize = sqlite3BtreePayloadSize(pCrsr);
       pC->aRow = sqlite3BtreePayloadFetch(pCrsr, &pC->szRow);
+#endif
       if( pC->aRow==0 ){
         if( db->mallocFailed ) goto no_mem;
         goto op_column_corrupt;
