@@ -236,7 +236,9 @@ jobs:
     # all pass without testing anything.
     - name: Assert the stock reference does not share doltlite's storage
       if: matrix.bucket == 'sql'
-      run: bash test/assert_stock_reference.sh build-coverage/sqlite3-stock
+      run: |
+        bash test/assert_stock_reference.sh \
+          build-coverage/sqlite3-stock build-coverage/doltlite
 
     - name: SQL oracle tests (vs stock SQLite)
       if: matrix.bucket == 'sql'

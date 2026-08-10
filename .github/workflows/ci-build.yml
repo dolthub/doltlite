@@ -419,7 +419,9 @@ jobs:
         find . -type f -name '*.profraw' -delete
 
     - name: Assert the stock reference does not share doltlite's storage
-      run: bash test/assert_stock_reference.sh build-coverage/sqlite3
+      run: |
+        bash test/assert_stock_reference.sh \
+          build-coverage/sqlite3 build-coverage/doltlite
 
     - name: Package
       run: |
@@ -438,7 +440,8 @@ jobs:
         # The consumers compare against this copy, so assert the copy: it is
         # what ships, and stripping it is the last thing that touches it.
         bash test/assert_stock_reference.sh \
-          coverage-artifact/build-coverage/sqlite3-stock
+          coverage-artifact/build-coverage/sqlite3-stock \
+          coverage-artifact/build-coverage/doltlite
         tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
 
     - name: Upload

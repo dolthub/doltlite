@@ -69,7 +69,7 @@ jobs:
             -o bench_timer_sqlite ../test/sysbench_timer.c \
             sqlite3.o -lpthread -lz -lm
         } 2>&1 | tee build.log
-        bash ../test/assert_stock_reference.sh ./sqlite3
+        bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite
         if grep -E "warning:" build.log; then
           echo "::error::compiler warnings in nightly benchmark build"
           exit 1

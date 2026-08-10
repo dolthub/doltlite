@@ -46,7 +46,7 @@ fi
 # linked in is the wrong question -- they can be present while the storage is
 # stock -- so defer to the shared check, which asks what the binary writes and
 # is the same check CI runs where each reference is built.
-if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3"; then
+if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3" "$DOLTLITE"; then
   exit 1
 fi
 
@@ -105,11 +105,19 @@ for seed in $(seq "$FIRST" "$LAST"); do
 
   fail=$((fail + 1))
   failed_seeds="$failed_seeds $seed"
+  # Every failing seed keeps its script, so a long sweep does not end up with
+  # more failures than reproducers. Only the first few print a diff, because
+  # that is about keeping the log readable.
+  if [ -n "${DOLTLITE_DIFF_SAVE_DIR:-}" ]; then
+    cp "$sql" "$DOLTLITE_DIFF_SAVE_DIR/seed_$seed.sql" 2>/dev/null || true
+  fi
   if [ "$fail" -le 5 ]; then
     echo "  FAIL: seed $seed (doltlite rc=$rc_dl, stock rc=$rc_sq)"
     diff <(printf '%s\n' "$out_dl") <(printf '%s\n' "$out_sq") \
       | head -20 | sed 's/^/    /'
-    cp "$sql" "${DOLTLITE_DIFF_SAVE_DIR:-$WORK}/seed_$seed.sql" 2>/dev/null || true
+  elif [ "$fail" -eq 6 ]; then
+    echo "  ... further diffs omitted; every failing seed is listed below and"
+    echo "      its script saved to the artifact directory"
   fi
 done
 

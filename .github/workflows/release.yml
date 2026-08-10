@@ -455,7 +455,7 @@ jobs:
         cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
         rm -f sqlite3 sqlite3.o
         make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-        bash ../test/assert_stock_reference.sh ./sqlite3
+        bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite
         cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
 
     - name: Run benchmarks

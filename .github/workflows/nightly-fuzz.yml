@@ -215,7 +215,7 @@ jobs:
         rm -f sqlite3
         make DOLTLITE_PROLLY=0 sqlite3
         mv sqlite3 sqlite3-stock
-        bash ../test/assert_stock_reference.sh ./sqlite3-stock
+        bash ../test/assert_stock_reference.sh ./sqlite3-stock ./doltlite
 
     - name: Run differential sweep
       id: sweep

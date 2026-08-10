@@ -15,11 +15,19 @@
 # functions can be compiled in while the storage is stock, and those functions
 # are harmless to a comparison; sharing the storage is not.
 #
-# Usage: assert_stock_reference.sh <binary>
+# A reference at a different SQLite version is also unusable, for the opposite
+# reason: it disagrees with doltlite about things that are not bugs. Text
+# rendering of large reals changed in 3.44, and error messages get reworded
+# between releases, so a mismatched version reports differences that are only
+# version skew. Pass the engine as the second argument to require the versions
+# match, which is what a comparison against this tree's own build should mean.
+#
+# Usage: assert_stock_reference.sh <reference> [engine-binary|version]
 
 set -uo pipefail
 
-REF="${1:?Usage: assert_stock_reference.sh <binary>}"
+REF="${1:?Usage: assert_stock_reference.sh <reference> [engine|version]}"
+WANT="${2-}"
 
 if [ ! -x "$REF" ]; then
   echo "ERROR: not executable: $REF"
@@ -51,4 +59,30 @@ if [ "$header" != "SQLite format 3" ]; then
   exit 1
 fi
 
-echo "OK: $REF is a stock reference (writes an SQLite database header)"
+refver="$("$REF" :memory: "SELECT sqlite_version();" 2>/dev/null)"
+if [ -z "$refver" ]; then
+  echo "ERROR: $REF did not report a SQLite version"
+  exit 1
+fi
+
+if [ -n "$WANT" ]; then
+  if [ -x "$WANT" ]; then
+    wantver="$("$WANT" :memory: "SELECT sqlite_version();" 2>/dev/null)"
+  else
+    wantver="$WANT"
+  fi
+  if [ -z "$wantver" ]; then
+    echo "ERROR: could not determine the expected SQLite version from '$WANT'"
+    exit 1
+  fi
+  if [ "$refver" != "$wantver" ]; then
+    echo "ERROR: $REF is SQLite $refver but the engine is $wantver."
+    echo "       A reference at another version disagrees about things that are"
+    echo "       not bugs -- large-real rendering changed in 3.44, and error"
+    echo "       wording moves between releases -- so it reports version skew"
+    echo "       as divergence. Build the reference from this tree."
+    exit 1
+  fi
+fi
+
+echo "OK: $REF is a stock reference (SQLite $refver, writes an SQLite header)"
