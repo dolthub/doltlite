@@ -234,7 +234,8 @@ static int findMatchingMutMapEntry(
   int nSortKey,
   int bExactKey,
   ProllyMutMapEntry **ppMatch,
-  int *pCmp
+  int *pCmp,
+  int *pEqSeen
 ){
   int rc = SQLITE_OK;
   int cmp = 0;
@@ -245,6 +246,7 @@ static int findMatchingMutMapEntry(
 
   *ppMatch = 0;
   *pCmp = 0;
+  *pEqSeen = 0;
   if( !pMap || prollyMutMapIsEmpty(pMap) ){
     return SQLITE_OK;
   }
@@ -256,6 +258,7 @@ static int findMatchingMutMapEntry(
     if( rc!=SQLITE_OK ) return rc;
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
       *ppMatch = pEntry;
+      *pEqSeen = 1;
     }
     return SQLITE_OK;
   }
@@ -281,18 +284,20 @@ static int findMatchingMutMapEntry(
     }
     cmpLen = pEntry->nKey < nSortKey ? pEntry->nKey : nSortKey;
     prefixCmp = memcmp(pEntry->pKey, pSortKey, cmpLen);
-    if( prefixCmp>0 && pIdxKey->default_rc<0 ){
+    if( prefixCmp>0 ){
+      /* The first pending row above the seek key. That is a landing for any
+      ** direction -- the caller reports it as above and its consumer steps
+      ** from there. It is emphatically not an equality, so *pEqSeen stays
+      ** clear: claiming otherwise tells an equality seek it found a row.
+      ** default_rc says how a prefix-equal row compares, which is a different
+      ** question, and gating this on it lost the landing for SeekGE. */
       if( pEntry->op==PROLLY_EDIT_INSERT ){
         pMatch = pEntry;
         cmp = 1;
-      }else{
-        lo++;
-        continue;
+        break;
       }
-      break;
-    }
-    if( prefixCmp>0 ){
-      break;
+      lo++;
+      continue;
     }
     if( prefixCmp==0 && pEntry->nKey < nSortKey ){
       break;
@@ -311,6 +316,7 @@ static int findMatchingMutMapEntry(
     }
     if( pEntry->op==PROLLY_EDIT_INSERT ){
       pMatch = pEntry;
+      *pEqSeen = (cmp==0 || pIdxKey->eqSeen);
       break;
     }
     lo++;
@@ -867,7 +873,7 @@ int prollyBtCursorIndexMoveto(
   refreshCursorRoot(pCur);
 
   {
-    int treeFound = 0, mutFound = 0;
+    int treeFound = 0, mutFound = 0, mutEqSeen = 0;
     int treeCmp = 0, mutCmp = 0;
     const u8 *mutKey = 0;
     int mutNKey = 0;
@@ -913,7 +919,7 @@ int prollyBtCursorIndexMoveto(
                                    pCur->pKeyInfo,
                                    pIdxKey, pSortKey, nSortKey,
                                    exactMutMapKey,
-                                   &mutE, &mutCmp);
+                                   &mutE, &mutCmp, &mutEqSeen);
       if( rc!=SQLITE_OK ){
         return rc;
       }
@@ -923,7 +929,7 @@ int prollyBtCursorIndexMoveto(
                                      pCur->pKeyInfo,
                                      pIdxKey, pSortKey, nSortKey,
                                      exactMutMapKey,
-                                     &mutE, &mutCmp);
+                                     &mutE, &mutCmp, &mutEqSeen);
         if( rc!=SQLITE_OK ){
           return rc;
         }
@@ -978,7 +984,9 @@ int prollyBtCursorIndexMoveto(
           pCur->eState = CURSOR_VALID;
         }
         *pRes = mutCmp;
-        pIdxKey->eqSeen = 1;
+        /* Only if the row actually compared equal. A landing above the key is
+        ** still a landing, but an equality seek must not read it as a hit. */
+        if( mutEqSeen ) pIdxKey->eqSeen = 1;
         return SQLITE_OK;
       }
     }
