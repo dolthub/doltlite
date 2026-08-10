@@ -1037,8 +1037,7 @@ static int commitPhaseTwoFailRestore(
   return commitRc;
 }
 
-int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
-  BtShared *pBt = p->pBt;
+static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   int rc = SQLITE_OK;
   u8 *catData = 0;
   int nCatData = 0;
@@ -1047,19 +1046,7 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   int bReloadSchema = 0;
   int bHaveReloadCatalog = 0;
   u32 nativeSchemaCookie = 0;
-  (void)bCleanup;
   memset(&reloadBtree, 0, sizeof(reloadBtree));
-
-  /* Catalog serialization runs a SELECT whose finalize re-enters
-  ** commit/rollback; that nested call is read-only, so no-op it instead of
-  ** recursing into a stack overflow. */
-  if( pBt->inCatalogSerialize ) return SQLITE_OK;
-
-  if( p->inTrans!=TRANS_WRITE ){
-    commitPhaseTwoEndWriteTxn(p);
-    commitPhaseTwoReleaseGraph(pBt);
-    return rc;
-  }
 
   PROLLY_ASSERT_GRAPH_LOCKED(pBt);
   rc = flushAllPending(p, pBt, 0);
@@ -1130,6 +1117,23 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   sqlite3_free(catData);
   commitPhaseTwoReleaseGraph(pBt);
   return SQLITE_OK;
+}
+
+int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
+  BtShared *pBt = p->pBt;
+  (void)bCleanup;
+
+  /* Catalog serialization runs a SELECT whose finalize re-enters
+  ** commit/rollback; that nested call is read-only, so no-op it instead of
+  ** recursing into a stack overflow. */
+  if( pBt->inCatalogSerialize ) return SQLITE_OK;
+
+  if( p->inTrans!=TRANS_WRITE ){
+    commitPhaseTwoEndWriteTxn(p);
+    commitPhaseTwoReleaseGraph(pBt);
+    return SQLITE_OK;
+  }
+  return commitPhaseTwoWrite(p, pBt);
 }
 int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
   if( !p ) return SQLITE_OK;
