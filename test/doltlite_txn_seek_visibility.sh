@@ -398,4 +398,64 @@ run_test "onepass_interleaved_writes_covers_late_insert" \
 
 db_rm "$DB"
 
+# An index seek that finds nothing at or above its key lands on the merged last
+# row, which is reached by scanning backwards. That leaves the tree side below a
+# mut-map-sourced landing, so a forward step from it used to serve a tree row the
+# scan had already passed -- a scan bounded only from below then walked backwards
+# and matched rows outside its range. The blob here outsorts every text value, so
+# the pre-update index entry sits above the seek keys.
+DB=/tmp/test_txn_index_seek_past_end_$$.db; db_rm "$DB"
+
+run_test "index_seek_past_end_after_pending_update" \
+  "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   INSERT INTO t VALUES(-5, -25.110, x'0001');
+   INSERT INTO t VALUES(3, 33, '');
+   BEGIN;
+   UPDATE t SET b = 'a' WHERE b > 'AB';
+   SELECT count(*) FROM t WHERE b > 'zz';
+   SELECT count(*) FROM t WHERE b > x'ffff';
+   SELECT count(*) FROM t WHERE b >= x'0001';
+   SELECT group_concat(quote(b), '|') FROM (SELECT b FROM t ORDER BY b, k);
+   COMMIT;" \
+  "0
+0
+0
+''|'a'" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "index_delete_past_end_spares_all_rows" \
+  "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   INSERT INTO t VALUES(-5, -25.110, x'0001');
+   INSERT INTO t VALUES(3, 33, '');
+   BEGIN;
+   UPDATE t SET b = 'a' WHERE b > 'AB';
+   DELETE FROM t WHERE b > 'zz';
+   COMMIT;
+   SELECT group_concat(quote(b), '|') FROM (SELECT b FROM t ORDER BY b, k);" \
+  "''|'a'" \
+  "$DB"
+
+db_rm "$DB"
+
+# Backward stepping from that same landing must still reach the row below it.
+run_test "index_seek_past_end_steps_backward" \
+  "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
+   CREATE INDEX i_b ON t(b, a);
+   INSERT INTO t VALUES(-5, -25.110, x'0001');
+   INSERT INTO t VALUES(3, 33, '');
+   BEGIN;
+   UPDATE t SET b = 'a' WHERE b > 'AB';
+   SELECT quote(max(b)) FROM t WHERE b < x'ffff';
+   SELECT group_concat(quote(b), '|') FROM (SELECT b FROM t WHERE b <= 'a' ORDER BY b DESC);
+   COMMIT;" \
+  "'a'
+'a'|''" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
