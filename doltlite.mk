@@ -66,6 +66,7 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               doltlite_merge_constraints_unique.o \
               doltlite_merge_constraints_check.o \
               doltlite_merge_constraints_fk.o \
+              doltlite_merge_constraints_notnull.o \
               doltlite_dbpage.o \
               doltlite_remote.o doltlite_remote_sql.o \
               doltlite_http_remote.o doltlite_remotesrv.o

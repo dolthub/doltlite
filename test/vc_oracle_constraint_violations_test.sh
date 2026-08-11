@@ -185,6 +185,57 @@ SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" 
 "R|AGG|t|1
 R|CK|2|-5|expr=v>0"
 
+echo "--- not null: column tightened on one branch, NULL row on the other ---"
+# Same split as CHECK above, and for the same reason: tightening a column to NOT
+# NULL needs SQLite's recreate-and-rename, which Dolt reads as a primary-key
+# change and refuses. Expressed Dolt's way (ALTER TABLE t MODIFY b ... NOT NULL)
+# on Dolt 2.2.2, the merge reports one violation and
+# dolt_constraint_violations_t holds exactly the row asserted here:
+#   not null | 2 | {"Columns": ["b"]}
+# so the expectation below is Dolt's answer, not just doltlite's.
+dl_expect "not_null_tightened_other_branch_inserts_null" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES (1,'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,NULL);
+SELECT dolt_commit('-Am','feat_null');
+SELECT dolt_checkout('main');
+CREATE TABLE t2(id INTEGER PRIMARY KEY, b TEXT NOT NULL);
+INSERT INTO t2 SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t2 RENAME TO t;
+SELECT dolt_commit('-Am','main_not_null');
+SELECT dolt_merge('feat');
+" \
+"SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' WHEN 'not null' THEN 'NN' ELSE '?' END, '|', id, '|cols=', JSON_EXTRACT(violation_info,'\$.Columns')) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" \
+"R|AGG|t|1
+R|NN|2|cols=[b]"
+
+# A column added NOT NULL WITH a default is not a violation on either engine:
+# the rows merged in from the other branch take the default. Asserted so the
+# detector cannot start reporting those.
+dl_expect "not_null_added_with_default_is_clean" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,'b');
+SELECT dolt_commit('-Am','feat_row');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT 7;
+SELECT dolt_commit('-Am','main_addcol');
+SELECT dolt_merge('feat');
+" \
+"SELECT CONCAT('R|CV|', count(*)) FROM dolt_constraint_violations_t;
+SELECT CONCAT('R|ROW|', id, '|', quote(c)) FROM t ORDER BY id;" \
+"R|CV|0
+R|ROW|1|'7'
+R|ROW|2|'7'"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

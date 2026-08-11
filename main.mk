@@ -1598,6 +1598,9 @@ doltlite_merge_constraints_check.o:	$(TOP)/src/doltlite_merge_constraints_check.
 doltlite_merge_constraints_fk.o:	$(TOP)/src/doltlite_merge_constraints_fk.c $(TOP)/src/doltlite_merge_constraints_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints_fk.c
 
+doltlite_merge_constraints_notnull.o:	$(TOP)/src/doltlite_merge_constraints_notnull.c $(TOP)/src/doltlite_merge_constraints_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_constraints_notnull.c
+
 doltlite_merge.o:	$(TOP)/src/doltlite_merge.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge.c
 
