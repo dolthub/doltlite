@@ -318,6 +318,10 @@ jobs:
           2> "$generator_stderr"
         generator_rc=$?
         set -e
+        report_result_value=""
+        if [ "$generator_rc" -eq 0 ] && [ -s "$report_result" ]; then
+          report_result_value=$(cat "$report_result") || report_result_value=""
+        fi
         if [ "$generator_rc" -ne 0 ]; then
           valid=0
           failed=1
@@ -337,7 +341,7 @@ jobs:
             cat "$generator_stderr"
             echo '```'
           } > "$summary"
-        elif [ "$(cat "$report_result")" = "FAIL" ]; then
+        elif [ "$report_result_value" = "FAIL" ]; then
           failed=1
           {
             echo "### Performance ceiling"
@@ -345,6 +349,20 @@ jobs:
             echo "One or more performance ceilings were exceeded."
             echo ""
           } >> "$issue_body"
+        elif [ "$report_result_value" != "PASS" ]; then
+          valid=0
+          failed=1
+          {
+            echo "### Report classification"
+            echo ""
+            echo "The machine-readable report result was missing or invalid."
+            echo ""
+          } >> "$issue_body"
+          {
+            echo "## Nightly DoltLite performance"
+            echo ""
+            echo "**FAILED:** missing or invalid report classification."
+          } > "$summary"
         fi
 
         cat "$summary" >> "$GITHUB_STEP_SUMMARY"
