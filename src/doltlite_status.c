@@ -588,7 +588,12 @@ static int statusRootsShareAnyKey(
   return rc;
 }
 
-static int isRenamePair(
+/* isRenamePair without the same-number gate, for renames that shift the
+** canonical order and therefore the table number. Row-content identity
+** carries the pairing; two EMPTY roots compare equal without being the
+** same object (a dropped empty table and a new one), so emptiness defers
+** to the rename-tolerant schema comparison instead. */
+static int isRenamePairContent(
   sqlite3 *db,
   const StatusCatalogIndex *pFromIdx,
   const StatusCatalogIndex *pToIdx,
@@ -600,26 +605,37 @@ static int isRenamePair(
   char *zLiveSql = 0;
   int bMatch = 0;
 
-  if( pA->iTable != pB->iTable ) return 0;
   if( !pA->zName || !pB->zName ) return 0;
   if( strcmp(pA->zName, pB->zName)==0 ) return 0;
   if( statusCatalogFindName(pFromIdx, pB->zName)!=0 ) return 0;
   if( statusCatalogFindName(pToIdx, pA->zName)!=0 ) return 0;
-  if( prollyHashCompare(&pA->root, &pB->root)==0 ){
-    bMatch = 1;
-    goto rename_done;
+  if( !prollyHashIsEmpty(&pA->root)
+   && prollyHashCompare(&pA->root, &pB->root)==0 ){
+    return 1;
   }
 
   rc = statusLoadLiveTableSql(db, pB->zName, &foundLive, &zLiveSql);
-  if( rc!=SQLITE_OK || !foundLive ) goto rename_done;
+  if( rc!=SQLITE_OK || !foundLive ) goto content_done;
   if( statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName)
-   && statusRootsShareAnyKey(db, pA, pB) ){
+   && (statusRootsShareAnyKey(db, pA, pB)
+       || (prollyHashIsEmpty(&pA->root) && prollyHashIsEmpty(&pB->root))) ){
     bMatch = 1;
   }
 
-rename_done:
+content_done:
   sqlite3_free(zLiveSql);
   return bMatch;
+}
+
+static int isRenamePair(
+  sqlite3 *db,
+  const StatusCatalogIndex *pFromIdx,
+  const StatusCatalogIndex *pToIdx,
+  const struct TableEntry *pA,
+  const struct TableEntry *pB
+){
+  if( pA->iTable != pB->iTable ) return 0;
+  return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB);
 }
 
 /* Find the rename mate of pKnown across the from/to catalogs, using the
@@ -653,6 +669,25 @@ int doltliteCatalogRenameMate(
     const struct TableEntry *pA = bKnownIsFrom ? pKnown : pMate;
     const struct TableEntry *pB = bKnownIsFrom ? pMate : pKnown;
     if( !isRenamePair(db, &fromIdx, &toIdx, pA, pB) ) pMate = 0;
+  }
+  if( !pMate ){
+    /* A rename that shifts the canonical order changes the number, so
+    ** the number lookup misses it; scan by content and accept only an
+    ** unambiguous mate. */
+    struct TableEntry *aOther = bKnownIsFrom ? aTo : aFrom;
+    int nOther = bKnownIsFrom ? nTo : nFrom;
+    int i;
+    for(i=0; i<nOther; i++){
+      const struct TableEntry *pA = bKnownIsFrom ? pKnown : &aOther[i];
+      const struct TableEntry *pB = bKnownIsFrom ? &aOther[i] : pKnown;
+      if( aOther[i].iTable<=1 || !aOther[i].zName ) continue;
+      if( !isRenamePairContent(db, &fromIdx, &toIdx, pA, pB) ) continue;
+      if( pMate ){
+        pMate = 0;
+        break;
+      }
+      pMate = &aOther[i];
+    }
   }
   statusCatalogIndexFree(&fromIdx);
   statusCatalogIndexFree(&toIdx);
@@ -700,6 +735,35 @@ static int compareCatalogs(
         if( rc!=SQLITE_OK ) goto compare_done;
         fromHandled[i] = 1;
         toHandled[j] = 1;
+      }
+    }
+    /* Second pass for renames whose canonical order shifted: the number
+    ** changed, so pairing goes by content, and only an unambiguous mate
+    ** counts. */
+    for(i=0; i<nFrom; i++){
+      int jMate = -1;
+      if( aFrom[i].iTable<=1 || fromHandled[i] || !aFrom[i].zName ) continue;
+      if( statusCatalogFindName(&toIdx, aFrom[i].zName) ) continue;
+      for(j=0; j<nTo; j++){
+        if( toHandled[j] || aTo[j].iTable<=1 || !aTo[j].zName ) continue;
+        if( !isRenamePairContent(db, &fromIdx, &toIdx, &aFrom[i], &aTo[j]) ){
+          continue;
+        }
+        if( jMate>=0 ){
+          jMate = -1;
+          break;
+        }
+        jMate = j;
+      }
+      if( jMate>=0 ){
+        char *zCompound = sqlite3_mprintf("%s -> %s",
+                                          aFrom[i].zName, aTo[jMate].zName);
+        if( !zCompound ){ rc = SQLITE_NOMEM; goto compare_done; }
+        rc = addRow(pCur, zCompound, staged, "renamed");
+        sqlite3_free(zCompound);
+        if( rc!=SQLITE_OK ) goto compare_done;
+        fromHandled[i] = 1;
+        toHandled[jMate] = 1;
       }
     }
   }

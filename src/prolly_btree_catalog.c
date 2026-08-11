@@ -1030,6 +1030,7 @@ int doltliteBuildNamedStageMasterRoot(
   const ProllyHash *pWorkingMaster, u8 workingFlags,
   const ProllyHash *pOldMaster, u8 oldFlags,
   const char **azTouched, int nTouched,
+  struct TableEntry *aFinal, int nFinal,
   ProllyHash *pNewRoot
 ){
   Btree *pBtree;
@@ -1099,18 +1100,30 @@ int doltliteBuildNamedStageMasterRoot(
       }
       if( fromWorking != touched ) continue;
     }
-    /* Staged entries whose name exists in working are aligned to the
-    ** working table number, so old-sourced table rows must carry that
-    ** number too, or the composed rows collide across numbering domains
-    ** and no longer pair with their entries. Index entries are unnamed
-    ** and never aligned; their rows keep the old number. */
+    /* Old-sourced table rows must carry the number their entry holds in
+    ** the FINAL entry list, or the composed rows collide across numbering
+    ** domains and no longer pair with their entries: aligned entries hold
+    ** working numbers, and entries whose tables left the working tree
+    ** hold fresh numbers. Index entries are unnamed and never renumbered;
+    ** their rows keep the old number. */
     iPg = pRow->oldPg;
     if( !fromWorking && strcmp(pRow->zType, "table")==0 && pRow->zName ){
-      for(t=0; t<nWork; t++){
-        if( aWork[t].zType && strcmp(aWork[t].zType, "table")==0
-         && aWork[t].zName && strcmp(aWork[t].zName, pRow->zName)==0 ){
-          iPg = aWork[t].oldPg;
+      const struct TableEntry *pFinal = 0;
+      for(t=0; t<nFinal; t++){
+        if( aFinal[t].zName && strcmp(aFinal[t].zName, pRow->zName)==0 ){
+          pFinal = &aFinal[t];
           break;
+        }
+      }
+      if( pFinal ){
+        iPg = pFinal->iTable;
+      }else{
+        for(t=0; t<nWork; t++){
+          if( aWork[t].zType && strcmp(aWork[t].zType, "table")==0
+           && aWork[t].zName && strcmp(aWork[t].zName, pRow->zName)==0 ){
+            iPg = aWork[t].oldPg;
+            break;
+          }
         }
       }
     }
