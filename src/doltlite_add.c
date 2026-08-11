@@ -158,6 +158,30 @@ static void addAlignStagedEntriesToWorking(
   addNameIndexFree(&workingIdx);
 }
 
+/* Move staged entries whose tables no longer exist in working onto fresh
+** numbers above both domains. Alignment cannot renumber them (nothing to
+** align to), and the number they hold may have been reused by the working
+** domain for a different table. Rows follow through the master composer,
+** which stamps old-sourced table rows from the final entry numbering. */
+static void addRenumberStaleStagedEntries(
+  struct TableEntry *aStaged, int nStaged,
+  struct TableEntry *aWorking, int nWorking
+){
+  Pgno iNext = 2;
+  int i;
+  for(i=0; i<nWorking; i++){
+    if( aWorking[i].iTable >= iNext ) iNext = aWorking[i].iTable + 1;
+  }
+  for(i=0; i<nStaged; i++){
+    if( aStaged[i].iTable >= iNext ) iNext = aStaged[i].iTable + 1;
+  }
+  for(i=0; i<nStaged; i++){
+    if( aStaged[i].iTable<=1 || !aStaged[i].zName ) continue;
+    if( addFindEntryByName(aWorking, nWorking, aStaged[i].zName) ) continue;
+    aStaged[i].iTable = iNext++;
+  }
+}
+
 static int addLoadWorkingAndStagedCatalogs(
   sqlite3 *db,
   const ProllyHash *pWorkingHash,
@@ -738,7 +762,21 @@ int doltliteStageNamedTables(
         int k;
         int updated = 0;
         int iRetired = -1;
+        struct TableEntry *pRenameMate = 0;
         updateMaster = 1;
+        /* A staged rename pairs by content identity, never by a bare
+        ** number match: table numbers are canonical-by-sorted-name, so a
+        ** drop reuses its number for the next table (a drop plus a create
+        ** is not a rename), and a rename that shifts the sort order
+        ** changes its number (still one object). */
+        rc = doltliteCatalogRenameMate(db, aStaged, nStaged,
+                                       aWorking, nWorking,
+                                       &aWorking[j], 0, &pRenameMate);
+        if( rc!=SQLITE_OK ){
+          ADDNAMED_FREE_ALL();
+          sqlite3_result_error_code(context, rc);
+          return rc;
+        }
         for(k=0; k<nStaged; k++){
           int nameMatch = aStaged[k].zName && aWorking[j].zName
             && strcmp(aStaged[k].zName, aWorking[j].zName)==0;
@@ -748,11 +786,7 @@ int doltliteStageNamedTables(
           ** the staged catalog's own schema rows say the entry at this
           ** number is this very table. */
           int unnamedRootMatch = 0;
-          int renameRootMatch = rootMatch
-            && aStaged[k].zName && aWorking[j].zName
-            && strcmp(aStaged[k].zName, aWorking[j].zName)!=0
-            && !addFindEntryByName(aWorking, nWorking, aStaged[k].zName)
-            && !addFindEntryByName(aStaged, nStaged, aWorking[j].zName);
+          int renameRootMatch = (pRenameMate==&aStaged[k]);
           if( rootMatch && !aStaged[k].zName && aWorking[j].zName ){
             int r;
             for(r=0; r<nStagedSchema; r++){
@@ -832,21 +866,32 @@ int doltliteStageNamedTables(
     }
   }
 
+  /* Settle the final numbering before composing the master, so the
+  ** composed rows can follow it: alignment moves same-named entries to
+  ** working numbers, and entries whose tables no longer exist in working
+  ** move off numbers the working domain may have reused for different
+  ** tables (a bare number collision makes the serialized catalog
+  ** ambiguous and can pair a table with another object's schema row). */
+  addAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
+  addRenumberStaleStagedEntries(aStaged, nStaged, aWorking, nWorking);
+
   if( updateMaster ){
     struct TableEntry *pWorkingMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
     struct TableEntry *pStagedMaster = doltliteFindTableByNumber(aStaged, nStaged, 1);
     if( pWorkingMaster ){
-      /* The staged master must share the working numbering domain, but a
+      /* The staged master must share the entries' numbering domain, but a
       ** wholesale adoption would carry unstaged view and trigger changes
       ** into the commit (Dolt keeps them out of a named add). Compose the
       ** master: table and index rows from working, view and trigger rows
-      ** from the previously staged state. */
+      ** from the previously staged state, numbered from the final entry
+      ** list. */
       ProllyHash composedRoot;
       rc = doltliteBuildNamedStageMasterRoot(db,
               &pWorkingMaster->root, pWorkingMaster->flags,
               pStagedMaster ? &pStagedMaster->root : 0,
               pStagedMaster ? pStagedMaster->flags : 0,
               (const char**)azTouched, nTouched,
+              aStaged, nStaged,
               &composedRoot);
       if( rc!=SQLITE_OK ){
         ADDNAMED_FREE_ALL();
@@ -870,7 +915,6 @@ int doltliteStageNamedTables(
     }
   }
 
-  addAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
   rc = addWriteStagedCatalog(db, cs, aStaged, nStaged);
   ADDNAMED_FREE_ALL();
   #undef ADDNAMED_TOUCH

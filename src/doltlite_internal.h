@@ -1304,6 +1304,7 @@ int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     const ProllyHash *pWorkingMaster, u8 workingFlags,
     const ProllyHash *pOldMaster, u8 oldFlags,
     const char **azTouched, int nTouched,
+    struct TableEntry *aFinal, int nFinal,
     ProllyHash *pNewRoot);
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,

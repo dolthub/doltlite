@@ -581,6 +581,76 @@ SELECT dolt_add('t');
 INSERT INTO t VALUES (2, 20);
 "
 
+echo "--- rename identity: content pairing, one numbering domain ---"
+
+DROP_CREATE_SEED="
+CREATE TABLE m(a INT PRIMARY KEY, b INT);
+CREATE TABLE n(a INT PRIMARY KEY);
+INSERT INTO m VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+DROP TABLE m;
+CREATE TABLE a(x INT PRIMARY KEY, y TEXT);
+INSERT INTO a VALUES (9, 'nine');
+"
+
+oracle "add_named_keeps_unstaged_drop_out" "
+$DROP_CREATE_SEED
+SELECT dolt_add('a');
+"
+
+oracle_reopen "add_named_then_commit_keeps_dropped_table_in_head" "
+$DROP_CREATE_SEED
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'add a only');
+" "SELECT concat('Q|', table_name, '|', staged, '|', status) FROM dolt_status;"
+
+RENAME_SHIFT_SEED="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+CREATE TABLE u(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+ALTER TABLE t RENAME TO z;
+"
+
+oracle "add_bystander_during_order_shifting_rename" "
+$RENAME_SHIFT_SEED
+INSERT INTO u VALUES (3, 3);
+SELECT dolt_add('u');
+"
+
+oracle_reopen "add_bystander_then_commit_preserves_rename" "
+$RENAME_SHIFT_SEED
+INSERT INTO u VALUES (3, 3);
+SELECT dolt_add('u');
+SELECT dolt_commit('-m', 'commit u only');
+" "SELECT concat('Q|', table_name, '|', staged, '|', status) FROM dolt_status;"
+
+oracle "add_renamed_table_order_shifting" "
+$RENAME_SHIFT_SEED
+SELECT dolt_add('z');
+"
+
+oracle_reopen "add_renamed_table_then_commit_renames_in_head" "
+$RENAME_SHIFT_SEED
+SELECT dolt_add('z');
+SELECT dolt_commit('-m', 'commit rename');
+" "SELECT concat('Q|z|', id, '|', v) FROM z ORDER BY id;
+SELECT concat('Q|u|', id, '|', v) FROM u ORDER BY id;
+SELECT concat('Q|nstatus|', count(*)) FROM dolt_status;"
+
+oracle "add_named_empty_drop_create_not_a_rename" "
+CREATE TABLE e1(a INT PRIMARY KEY);
+CREATE TABLE n(a INT PRIMARY KEY);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+DROP TABLE e1;
+CREATE TABLE e2(b VARCHAR(32) PRIMARY KEY, c INT);
+SELECT dolt_add('e2');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
