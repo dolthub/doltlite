@@ -811,6 +811,7 @@ jobs:
         {
           ./configure
           make sqlite3.c sqlite3.h sqlite3ext.h
+          bash test/amalgamation_wasm_compile_test.sh sqlite3.c
           mkdir -p build
           cd build
           ../configure

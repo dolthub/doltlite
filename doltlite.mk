@@ -91,11 +91,16 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # new source added to src/ is picked up automatically. A missed entry
   # used to leave the generated engine quietly short a file.
   #
-  # The credential and TLS units are the exceptions: they compile
-  # separately into DOLTLITE_AUTH_OBJS against the vendored ed25519 and
-  # mbedtls include paths, and are linked rather than inlined.
+  # Remote transport is linked into native builds, not the single-file
+  # library.
   DOLTLITE_TSRC_EXCLUDE = \
-    $(TOP)/src/doltlite_creds.c $(TOP)/src/doltlite_tls.c
+    $(TOP)/src/doltlite_creds.c $(TOP)/src/doltlite_creds.h \
+    $(TOP)/src/doltlite_tls.c $(TOP)/src/doltlite_tls.h \
+    $(TOP)/src/doltlite_net.h \
+    $(TOP)/src/doltlite_remote.c $(TOP)/src/doltlite_remote.h \
+    $(TOP)/src/doltlite_remote_sql.c \
+    $(TOP)/src/doltlite_http_remote.c \
+    $(TOP)/src/doltlite_remotesrv.c $(TOP)/src/doltlite_remotesrv.h
   # Files the amalgamation needs that do not match those patterns.
   DOLTLITE_EXTRA_TSRC = \
     $(TOP)/src/record_codec.h \

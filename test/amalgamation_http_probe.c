@@ -35,26 +35,20 @@ static int scalar_int(sqlite3 *db, const char *zSql, int *pVal){
 
 int main(int argc, char **argv){
   sqlite3 *db = 0;
+  sqlite3_stmt *pStmt = 0;
   int n = 0;
-  char *zSql;
-  const char *zSrc;
-  const char *zClone;
-  const char *zUrl;
 
-  if( argc!=4 ){
-    fprintf(stderr, "usage: %s SRC_DB CLONE_DB HTTP_URL\n", argv[0]);
+  if( argc!=2 ){
+    fprintf(stderr, "usage: %s DB\n", argv[0]);
     return 1;
   }
-  zSrc = argv[1];
-  zClone = argv[2];
-  zUrl = argv[3];
 
   if( doltliteInstallAutoExt()!=SQLITE_OK ){
     fprintf(stderr, "doltliteInstallAutoExt failed\n");
     return 1;
   }
 
-  if( sqlite3_open(zSrc, &db)!=SQLITE_OK ){
+  if( sqlite3_open(argv[1], &db)!=SQLITE_OK ){
     fprintf(stderr, "%s\n", db ? sqlite3_errmsg(db) : "sqlite3_open failed");
     return 1;
   }
@@ -66,28 +60,13 @@ int main(int argc, char **argv){
     sqlite3_close(db);
     return 1;
   }
-  zSql = sqlite3_mprintf(
-      "SELECT dolt_remote('add','origin',%Q);"
-      "SELECT dolt_push('origin','main');", zUrl);
-  if( !zSql || exec_sql(db, zSql) ){
-    sqlite3_free(zSql);
+  if( sqlite3_prepare_v2(db, "SELECT dolt_remote('add','x','file:///x')",
+                         -1, &pStmt, 0)==SQLITE_OK ){
+    fprintf(stderr, "remote SQL is present in the amalgamation\n");
+    sqlite3_finalize(pStmt);
     sqlite3_close(db);
     return 1;
   }
-  sqlite3_free(zSql);
-  sqlite3_close(db);
-
-  if( sqlite3_open(zClone, &db)!=SQLITE_OK ){
-    fprintf(stderr, "%s\n", db ? sqlite3_errmsg(db) : "sqlite3_open failed");
-    return 1;
-  }
-  zSql = sqlite3_mprintf("SELECT dolt_clone(%Q);", zUrl);
-  if( !zSql || exec_sql(db, zSql) ){
-    sqlite3_free(zSql);
-    sqlite3_close(db);
-    return 1;
-  }
-  sqlite3_free(zSql);
   if( scalar_int(db, "SELECT count(*) FROM users;", &n) ){
     sqlite3_close(db);
     return 1;
@@ -95,7 +74,7 @@ int main(int argc, char **argv){
   sqlite3_close(db);
 
   if( n!=3 ){
-    fprintf(stderr, "expected 3 cloned users, got %d\n", n);
+    fprintf(stderr, "expected 3 users, got %d\n", n);
     return 1;
   }
   return 0;
