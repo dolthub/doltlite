@@ -861,6 +861,44 @@ oracle_same_session "reset_hard_preserves_untracked_contents" "$UNTRACKED_SEED" 
 SELECT concat('Q|s|', id, '|', v) FROM s;
 SELECT concat('Q|u|', x, '|', w) FROM u;"
 
+echo "--- table takes precedence over a same-named ref ---"
+
+oracle "reset_path_prefers_table_over_same_named_branch" "
+CREATE TABLE x(a INT PRIMARY KEY);
+INSERT INTO x VALUES (1);
+SELECT dolt_add('x');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('x');
+INSERT INTO x VALUES (2);
+SELECT dolt_add('x');
+SELECT dolt_commit('-m', 'c2');
+INSERT INTO x VALUES (3);
+SELECT dolt_add('x');
+SELECT dolt_reset('x');
+"
+
+oracle "reset_path_prefers_staged_drop_over_same_named_branch" "
+CREATE TABLE x(a INT PRIMARY KEY);
+INSERT INTO x VALUES (1);
+SELECT dolt_add('x');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('x');
+CREATE TABLE y(b INT PRIMARY KEY);
+SELECT dolt_add('y');
+SELECT dolt_commit('-m', 'c2');
+DROP TABLE x;
+SELECT dolt_add('x');
+SELECT dolt_reset('x');
+"
+
+oracle "reset_bare_ref_still_moves_head" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_reset('HEAD~1');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

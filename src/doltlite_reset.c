@@ -31,6 +31,36 @@ static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
   return -1;
 }
 
+/* True when zName names a table in the live schema, the staged catalog,
+** or HEAD — the domains a path argument can act on. Used to give a table
+** precedence over a same-named ref, as Dolt does: a bare dolt_reset('x')
+** must never rewind HEAD when x is a table the caller meant to unstage. */
+static int resetNameIsTablePath(sqlite3 *db, const char *zName){
+  struct TableEntry *aCat = 0;
+  ProllyHash hash;
+  Pgno iLive = 0;
+  int nCat = 0;
+  int found = 0;
+
+  if( doltliteResolveTableName(db, zName, &iLive)==SQLITE_OK ) return 1;
+  doltliteGetSessionStaged(db, &hash);
+  if( !prollyHashIsEmpty(&hash)
+   && doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0)==SQLITE_OK ){
+    found = resetFindTableIndex(aCat, nCat, zName)>=0;
+    doltliteFreeCatalog(aCat, nCat);
+    if( found ) return 1;
+    aCat = 0;
+    nCat = 0;
+  }
+  if( doltliteGetHeadCatalogHash(db, &hash)==SQLITE_OK
+   && !prollyHashIsEmpty(&hash)
+   && doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0)==SQLITE_OK ){
+    found = resetFindTableIndex(aCat, nCat, zName)>=0;
+    doltliteFreeCatalog(aCat, nCat);
+  }
+  return found;
+}
+
 static int resetStageNamedPaths(
   sqlite3 *db,
   ChunkStore *cs,
@@ -398,7 +428,8 @@ static void doltliteResetFunc(
         zRef = arg;
       }else{
         ProllyHash probe;
-        if( doltliteResolveRef(db, arg, &probe)==SQLITE_OK ){
+        if( !resetNameIsTablePath(db, arg)
+         && doltliteResolveRef(db, arg, &probe)==SQLITE_OK ){
           zRef = arg;
         }else{
           azPaths[nPaths++] = arg;
