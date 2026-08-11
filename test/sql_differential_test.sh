@@ -18,7 +18,7 @@
 # or "" for the base single-table workload.
 # Running one group is how a divergence gets attributed. Groups:
 #   large-ints desc expr agg setops cte window joins writesel ddl
-#   constraints triggers
+#   constraints triggers returning generated fkeys
 
 set -uo pipefail
 
@@ -57,10 +57,11 @@ GENFLAGS=""
 if [ "$SEL_GROUPS" = "all" ]; then
   GENFLAGS="--all"
 elif [ "$SEL_GROUPS" = "default" ]; then
-  # The value axes, which are clean. The feature groups added alongside them are
-  # opt-in until the divergences they find are fixed: expr reaches issue #2089,
-  # and several groups diverge only in combination (see that issue's thread), so
-  # enabling them here would redden every pull request.
+  # The value axes only. Every group is clean now, so this is about what belongs
+  # in a pull request's path: these two are the cheapest per seed, and a gate
+  # that blocks unrelated work should be the narrow one. The nightly runs every
+  # group over a much wider window, and reports what it finds as an issue
+  # instead of blocking anyone.
   for g in large-ints desc; do
     GENFLAGS="$GENFLAGS --include-$g"
   done

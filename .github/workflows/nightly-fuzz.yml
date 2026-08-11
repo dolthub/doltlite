@@ -225,7 +225,11 @@ jobs:
         LAST=$(( FIRST + WINDOW - 1 ))
         mkdir -p "$GITHUB_WORKSPACE/diff-artifacts"
         cd build-diff
-        if DOLTLITE_DIFF_SAVE_DIR="$GITHUB_WORKSPACE/diff-artifacts" \
+        # Every feature group, not the pull-request default. This is the only
+        # place the wider SQL surface runs, and a divergence here becomes an
+        # issue rather than a block, which is what that surface is worth.
+        if DOLTLITE_DIFF_GROUPS=all \
+           DOLTLITE_DIFF_SAVE_DIR="$GITHUB_WORKSPACE/diff-artifacts" \
            bash ../test/sql_differential_test.sh \
              ./doltlite ./sqlite3-stock "$FIRST" "$LAST" \
              2>&1 | tee "$GITHUB_WORKSPACE/diff-artifacts/sweep.log"; then
@@ -247,9 +251,17 @@ jobs:
           echo "Reproduce a failing seed locally:"
           echo ""
           echo '```'
-          echo "make DOLTLITE_PROLLY=0 sqlite3   # stock reference, same version"
-          echo "bash test/sql_differential_test.sh ./doltlite ./sqlite3 <seed> <seed>"
+          echo "# The reference has to be built where doltlite never was, or it"
+          echo "# can reuse an amalgamation carrying the storage and agree with"
+          echo "# doltlite by construction. This script checks what it wrote."
+          echo "bash test/build_stock_reference.sh build-stockref ./doltlite"
+          echo "DOLTLITE_DIFF_GROUPS=all bash test/sql_differential_test.sh \\"
+          echo "  ./doltlite build-stockref/sqlite3 <seed> <seed>"
           echo '```'
+          echo ""
+          echo "The sweep runs every feature group, so the group selection is"
+          echo "part of the reproducer: without it the generator emits a"
+          echo "different script for the same seed."
           echo ""
           echo "Generated scripts for the first failing seeds are attached as the"
           echo "\`differential-cases\` artifact."
