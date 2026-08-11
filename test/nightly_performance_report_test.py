@@ -100,7 +100,8 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             "| Autocommit writes | 4 | 3 | 400µs | 2.00ms | 5.000× |",
             report,
         )
-        self.assertIn("Median paired-ratio MAD", report)
+        self.assertIn("Paired-ratio noise", report)
+        self.assertNotIn("paired-ratio MAD", report)
         summary = report.split("<details>", 1)[0]
         self.assertNotIn("| Autocommit reads |", summary)
         self.assertNotIn("Key shape", summary)

@@ -329,7 +329,7 @@ def render_sql_summary(suites):
                 "",
                 "| Operation | Workloads | Samples/workload | "
                 "SQLite median total | DoltLite median total | Ratio | "
-                "Median paired-ratio MAD | Result |",
+                "Paired-ratio noise | Result |",
                 "|---|---:|---:|---:|---:|---:|---:|---|",
             ]
         )
@@ -351,7 +351,7 @@ def render_key_shape_breakdown(suites):
         "",
         "| Storage | Operation | Key shape | Workloads | Samples/workload | "
         "SQLite median total | DoltLite median total | Ratio | "
-        "Median paired-ratio MAD | Result |",
+        "Paired-ratio noise | Result |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for storage, operation, section in KEY_SHAPE_GROUPS:
@@ -373,7 +373,7 @@ def render_sysbench_details(suite):
         f"<summary>{suite.name} workload details</summary>",
         "",
         "| Section | Workload | SQLite median | DoltLite median | "
-        "Ratio | Paired-ratio MAD | Result |",
+        "Ratio | Paired-ratio noise | Result |",
         "|---|---|---:|---:|---:|---:|---|",
     ]
     for result in suite.results:
@@ -433,8 +433,9 @@ def render_report(suites, commit, run_url, generated_at, runner):
         "",
         "This report compares optimized DoltLite against stock SQLite on the "
         "same GitHub-hosted runner. Baseline and candidate execution order "
-        "alternates on each repetition. Reported timings are medians; MAD is "
-        "the median absolute deviation and describes run-to-run noise.",
+        "alternates on each repetition. Reported timings are medians. "
+        "Paired-ratio noise is the median absolute deviation of the paired "
+        "DoltLite/SQLite ratios, expressed as a percentage.",
         "",
         "## SQL workload summary",
         "",
