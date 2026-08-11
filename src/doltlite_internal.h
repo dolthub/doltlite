@@ -1048,6 +1048,9 @@ int doltliteDetectMergeCheckViolations(sqlite3 *db, const ProllyHash *pAncCatHas
 int doltliteDetectMergeNotNullViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
                                        char **pzErrMsg, int *pnFound,
                                        const char **azTables, int nTables);
+int doltliteDetectMergeStrictViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
+                                       char **pzErrMsg, int *pnFound,
+                                       const char **azTables, int nTables);
 
 int doltliteConstraintViolationBatchBegin(sqlite3 *db);
 int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);

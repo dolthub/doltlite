@@ -300,6 +300,33 @@ SELECT dolt_merge('feat');
 "SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' ELSE '?' END, '|', id, '|', v, '|cols=', JSON_EXTRACT(violation_info,'\$.Columns')) FROM dolt_constraint_violations_t ORDER BY id;
 SELECT CONCAT('R|AGG|', \`table\`, '|', num_violations) FROM dolt_constraint_violations ORDER BY \`table\`;"
 
+echo "--- strict table: forbidden storage class arrives on merge (doltlite-only) ---"
+# Same split as CHECK: Dolt has no STRICT/flexible distinction (every table is
+# typed, so the violating row cannot exist on the source branch), and the
+# recreate-and-rename tighten reads as a primary-key change there. The closest
+# Dolt behavior is a type conflict; doltlite records a violation naming the
+# column, in the shape the other detectors use.
+dl_expect "strict_type_violating_row_arrives_on_merge" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,'hello');
+SELECT dolt_commit('-Am','feat_text');
+SELECT dolt_checkout('main');
+CREATE TABLE t2(id INTEGER PRIMARY KEY, v INT) STRICT;
+INSERT INTO t2 SELECT id, CAST(v AS INT) FROM t;
+DROP TABLE t;
+ALTER TABLE t2 RENAME TO t;
+SELECT dolt_commit('-Am','main_strict');
+SELECT dolt_merge('feat');
+" \
+"SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' WHEN 'strict type' THEN 'ST' ELSE '?' END, '|', id, '|', v, '|', typeof(v), '|cols=', JSON_EXTRACT(violation_info,'\$.Columns')) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" \
+"R|AGG|t|1
+R|ST|2|hello|text|cols=[v]"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
