@@ -846,4 +846,107 @@ run_test "backward_scan_reaches_pending_extended_keys" \
 
 db_rm "$DB"
 
+# A backward seek whose bound is below every row lands above the bound, and the
+# step that follows has to move down and find nothing. The pending-row candidate
+# for that step is chosen from a lower-bound search, so it is always the entry
+# before the landing -- keeping the landing itself made a pending row above the
+# cursor the answer to a step that has to move down, and a backward scan
+# returned it.
+DB=/tmp/test_txn_backward_landing_$$.db; db_rm "$DB"
+
+run_test "backward_seek_below_all_rows_finds_nothing" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES('AB', -47.436, 'x');
+   BEGIN;
+   INSERT INTO t VALUES('ab', 5, 'z');
+   SELECT coalesce(quote(max(a)),'NULL') FROM t WHERE a <= -1e308;
+   SELECT coalesce(group_concat(quote(a)),'none') FROM (SELECT a FROM t WHERE a <= -1e308 ORDER BY a DESC);
+   SELECT count(*) FROM t WHERE a <= -1e308;
+   COMMIT;" \
+  "NULL
+none
+0" \
+  "$DB"
+
+db_rm "$DB"
+
+# The ordering that reaches the same step through a plan rather than a bound:
+# DESC NULLS FIRST is the one ordering an index cannot serve by walking
+# backwards, so it scans the NULL region separately and re-seeks for the rest.
+run_test "desc_nulls_first_does_not_repeat_pending_row" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES('AB', -47.436, 'x');
+   BEGIN;
+   INSERT INTO t VALUES('ab', 5, 'z');
+   SELECT group_concat(quote(a),'|') FROM (SELECT a FROM t ORDER BY a DESC NULLS FIRST, quote(k));
+   SELECT group_concat(quote(a),'|') FROM (SELECT a FROM t ORDER BY a DESC);
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "5|-47.436
+5|-47.436
+2" \
+  "$DB"
+
+db_rm "$DB"
+
+# Reversing direction mid-scan. A prefix seek walks forward past the matching
+# range so the step back can land on the last match, which leaves both sides of
+# the merge primed for forward travel: the pending index parked past its last
+# entry, and the tree cursor above the row -- or run off the end entirely. A
+# backward step that trusts either one skips every row underneath, so these
+# assert the rows on the far side of the reversal are still served.
+DB=/tmp/test_txn_reverse_$$.db; db_rm "$DB"
+
+run_test "reversal_serves_pending_null_row" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES('AB', -47.436, 'x');
+   BEGIN;
+   INSERT INTO t VALUES('zz', NULL, 'q');
+   SELECT group_concat(coalesce(quote(a),'N'),'|') FROM (SELECT a FROM t ORDER BY a DESC NULLS FIRST);
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "NULL|-47.436
+2" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "reversal_serves_committed_null_row" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY COLLATE RTRIM, a, b TEXT COLLATE RTRIM);
+   CREATE INDEX i_a ON t(a);
+   INSERT OR REPLACE INTO t(k, a, b) VALUES('', NULL, x'00');
+   BEGIN;
+   INSERT OR IGNORE INTO t(k, a, b) VALUES(x'0001', -19, 'zz');
+   SELECT coalesce(group_concat(q,'|'),'none') FROM (SELECT coalesce(quote(a), 'N') AS q FROM t ORDER BY a DESC NULLS FIRST, coalesce(quote(k), 'N'));
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "NULL|-19
+2" \
+  "$DB"
+
+db_rm "$DB"
+
+# Three rows spanning the reversal, so the NULL region and the rows above it are
+# both crossed, and a pending row sits among them.
+run_test "reversal_across_null_region_keeps_order" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES('AB', -47.436, 'x');
+   INSERT INTO t VALUES('zz', NULL, 'q');
+   BEGIN;
+   INSERT INTO t VALUES('ab', 5, 'z');
+   SELECT group_concat(coalesce(quote(a),'N'),'|') FROM (SELECT a FROM t ORDER BY a DESC NULLS FIRST);
+   SELECT group_concat(coalesce(quote(a),'N'),'|') FROM (SELECT a FROM t ORDER BY a ASC NULLS LAST);
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "NULL|5|-47.436
+-47.436|5|NULL
+3" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish

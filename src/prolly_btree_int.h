@@ -429,6 +429,11 @@ struct BtCursor {
 #define MERGE_SRC_MUT   1
 #define MERGE_SRC_BOTH  2
   u8 mergeSrc;
+  /* Direction of the last merged step: +1, -1, or 0 when the position came
+  ** from a seek rather than a step. Each side of the merge is left primed for
+  ** the direction it was travelling, so a reversal has to re-derive the side
+  ** that did not produce the current row. */
+  i8 mergeStepDir;
 
   i64 nKey;
   void *pKey;
