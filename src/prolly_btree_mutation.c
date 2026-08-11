@@ -1771,6 +1771,10 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
+  if( pBtree->inTrans==TRANS_NONE ){
+    rc = sqlite3BtreeBeginTrans(pBtree, 0, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( pBtree->inTrans!=TRANS_WRITE ){
     rc = sqlite3BtreeBeginTrans(pBtree, 2, 0);
     if( rc!=SQLITE_OK ) return rc;

@@ -214,6 +214,7 @@ static SQLITE_INLINE u64 doltliteFnv1aSep(u64 h){
 
 struct DoltliteTxnState {
   ProllyHash refsHash;
+  ProllyHash committedRefsHash;
   char *zSessionBranch;
   ProllyHash sessionHead;
   ProllyHash sessionStaged;
