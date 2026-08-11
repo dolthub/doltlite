@@ -290,5 +290,74 @@ sqlite3_module doltliteBranchesModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
+static int rbConnect(sqlite3 *db, void *pAux, int argc,
+    const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  BrVtab *p; int rc;
+  (void)pAux; (void)argc; (void)argv; (void)pzErr;
+  rc = doltliteVtabConnectSimple(db,
+    "CREATE TABLE x("
+      "name TEXT, "
+      "hash TEXT, "
+      "latest_committer TEXT, "
+      "latest_committer_email TEXT, "
+      "latest_commit_date TEXT, "
+      "latest_commit_message TEXT"
+    ")",
+    sizeof(*p), ppVtab);
+  if( rc!=SQLITE_OK ) return rc;
+  p = (BrVtab*)*ppVtab;
+  p->db = db;
+  return SQLITE_OK;
+}
+
+/* Rows snapshot into BranchRef entries (name + commit hash only) so the
+** cursor can share the dolt_branches machinery: its first six columns are
+** exactly this table's schema. */
+static int rbFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
+  BrVtab *pVtab = (BrVtab*)c->pVtab;
+  BrCur *pCur = (BrCur*)c;
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  int nTr = 0;
+  const TrackingBranch *aTr = 0;
+  const char *zName = 0;
+  int i;
+  (void)s;
+  (void)a;
+  brClearCommit(pCur);
+  brCurClearSnapshot(pCur);
+  if( !cs ) return SQLITE_OK;
+  refsTableGetTracking(&cs->refs, &nTr, &aTr);
+  if( n==1 ){
+    zName = (const char*)sqlite3_value_text(v[0]);
+    if( !zName ) return SQLITE_OK;
+  }
+  if( nTr<=0 ) return SQLITE_OK;
+  pCur->aSnap = (BranchRef*)sqlite3_malloc64(
+      (sqlite3_uint64)nTr*sizeof(BranchRef));
+  if( !pCur->aSnap ) return SQLITE_NOMEM;
+  memset(pCur->aSnap, 0, (size_t)nTr*sizeof(BranchRef));
+  for(i=0; i<nTr; i++){
+    char *z = sqlite3_mprintf("remotes/%s/%s", aTr[i].zRemote, aTr[i].zBranch);
+    if( !z ){
+      brCurClearSnapshot(pCur);
+      return SQLITE_NOMEM;
+    }
+    if( zName && strcmp(z, zName)!=0 ){
+      sqlite3_free(z);
+      continue;
+    }
+    pCur->aSnap[pCur->nRows].zName = z;
+    pCur->aSnap[pCur->nRows].commitHash = aTr[i].commitHash;
+    pCur->nRows++;
+  }
+  return SQLITE_OK;
+}
+
+sqlite3_module doltliteRemoteBranchesModule = {
+  0,0,rbConnect,brBestIndex,doltliteVtabDisconnect,0,
+  brOpen,brClose,rbFilter,brNext,brEof,brColumn,brRowid,
+  0,0,0,0,0,0,0,0,0,0,0,0
+};
+
 
 #endif

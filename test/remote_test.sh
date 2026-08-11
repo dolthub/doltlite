@@ -219,6 +219,23 @@ echo "=== 8. Fetch new branch ==="
 result=$("$DB" "$TMPDIR/clone.db" "SELECT dolt_fetch('origin','feature');")
 check "fetch feature returns 0" "0" "$result"
 
+result=$("$DB" "$TMPDIR/clone.db" "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "remote branches lists tracking refs" "remotes/origin/feature
+remotes/origin/main" "$result"
+
+result=$("$DB" "$TMPDIR/clone.db" "SELECT count(*) FROM dolt_branches WHERE name='feature';")
+check "fetched branch is not local" "0" "$result"
+
+result=$("$DB" "$TMPDIR/clone.db" "SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/origin/feature';")
+check "remote branches name filter and commit metadata" "add eve on feature" "$result"
+
+src_feature=$("$DB" "$TMPDIR/src.db" "SELECT hash FROM dolt_branches WHERE name='feature';")
+result=$("$DB" "$TMPDIR/clone.db" "SELECT hash FROM dolt_remote_branches WHERE name='remotes/origin/feature';")
+check "remote branches hash matches pushed feature" "$src_feature" "$result"
+
+result=$("$DB" "$TMPDIR/clone.db" "SELECT count(*) FROM dolt_at_users('remotes/origin/feature');")
+check "remotes/ name resolves as a ref" "5" "$result"
+
 echo "=== 9. Multiple commits then push ==="
 "$DB" "$TMPDIR/src.db" <<'ENDSQL'
 SELECT dolt_checkout('main');

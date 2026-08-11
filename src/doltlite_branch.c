@@ -418,6 +418,7 @@ int doltliteBranchRegister(sqlite3 *db){
                                                   DOLTLITE_COMMAND_FUNC_FLAGS,
                                                   0, doltConnectBranchFunc, 0, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_module(db, "dolt_branches", &doltliteBranchesModule, 0);
+  if(rc==SQLITE_OK) rc = sqlite3_create_module(db, "dolt_remote_branches", &doltliteRemoteBranchesModule, 0);
   return rc;
 }
 

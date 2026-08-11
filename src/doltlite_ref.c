@@ -111,6 +111,8 @@ static int doltliteResolveBaseRef(
     const char *zSlash;
     if( strncmp(zRef, zTrackingPrefix, sizeof(zTrackingPrefix)-1)==0 ){
       zTrackingRef = zRef + sizeof(zTrackingPrefix)-1;
+    }else if( strncmp(zRef, "remotes/", 8)==0 ){
+      zTrackingRef = zRef + 8;
     }
     zSlash = strchr(zTrackingRef, '/');
     if( zSlash && zSlash!=zRef && zSlash[1] ){
