@@ -1125,6 +1125,62 @@ static int mutmapHasOnlyInserts(ProllyMutMap *pMap){
   return 1;
 }
 
+static int tryReplaceBatchLeafDirect(
+  ProllyMutator *pMut,
+  const ProllyNode *pLeaf,
+  ProllyMutMapIter *pIter,
+  int isLast,
+  ProllyHash *pHash,
+  int *pChanged
+){
+  ProllyMutMapIter iter = *pIter;
+  u8 *pData = copyNodeData(pLeaf);
+  int changed = 0;
+  int i;
+  int rc;
+
+  if( pData==0 ) return SQLITE_NOTFOUND;
+  for(i=0; i<(int)pLeaf->nItems; i++){
+    const u8 *pCurKey;
+    const u8 *pVal;
+    int nCurKey;
+    int nVal;
+    ProllyMutMapEntry *pEd = 0;
+    int cmp = 1;
+
+    prollyNodeKey(pLeaf, i, &pCurKey, &nCurKey);
+    prollyNodeValue(pLeaf, i, &pVal, &nVal);
+    if( prollyMutMapIterValid(&iter) ){
+      pEd = prollyMutMapIterEntry(&iter);
+      cmp = prollyKeyCmp(pEd->pKey, pEd->nKey, pCurKey, nCurKey);
+    }
+    if( cmp<0 || (cmp==0 && (pEd->nZeroTail || pEd->nVal!=nVal)) ){
+      sqlite3_free(pData);
+      return SQLITE_NOTFOUND;
+    }
+    if( cmp==0 ){
+      if( nVal>0 ){
+        memcpy(pData + (pVal - pLeaf->pData), pEd->pVal, nVal);
+      }
+      changed = 1;
+      prollyMutMapIterNext(&iter);
+    }
+  }
+  if( isLast && prollyMutMapIterValid(&iter) ){
+    sqlite3_free(pData);
+    return SQLITE_NOTFOUND;
+  }
+  if( changed ){
+    rc = writeOwnedNode(pMut->pStore, 0, pData, pLeaf->nData, pHash);
+    pData = 0;
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  sqlite3_free(pData);
+  *pIter = iter;
+  *pChanged = changed;
+  return SQLITE_OK;
+}
+
 static int replaceBatchLeafNoRechunk(
   ProllyMutator *pMut,
   const ProllyNode *pLeaf,
@@ -1138,6 +1194,10 @@ static int replaceBatchLeafNoRechunk(
   int changed = 0;
   int sizeChanged = 0;
   int i;
+
+  rc = tryReplaceBatchLeafDirect(pMut, pLeaf, pIter, isLast,
+                                 pHash, pChanged);
+  if( rc!=SQLITE_NOTFOUND ) return rc;
 
   prollyNodeBuilderInit(&b, 0, pMut->flags);
   for(i=0; i<(int)pLeaf->nItems; i++){
@@ -1277,6 +1337,7 @@ static int replaceBatchNodeNoRechunk(
   int *pChanged
 ){
   ProllyNodeBuilder b;
+  u8 *pData;
   int rc = SQLITE_OK;
   int changed = 0;
   int i;
@@ -1287,6 +1348,11 @@ static int replaceBatchNodeNoRechunk(
   }
 
   prollyNodeBuilderInit(&b, pNode->level, pMut->flags);
+  pData = copyNodeData(pNode);
+  if( pData && !prollyNodeHasSubtreeCounts(pNode) ){
+    sqlite3_free(pData);
+    pData = 0;
+  }
   for(i=0; i<(int)pNode->nItems; i++){
     const u8 *pBoundKey;
     const u8 *pChildVal;
@@ -1302,16 +1368,20 @@ static int replaceBatchNodeNoRechunk(
     prollyNodeKey(pNode, i, &pBoundKey, &nBoundKey);
     prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
     if( nChildVal!=PROLLY_HASH_SIZE ){
+      sqlite3_free(pData);
       prollyNodeBuilderFree(&b);
       return SQLITE_CORRUPT;
     }
     memcpy(&childHash, pChildVal, PROLLY_HASH_SIZE);
     newChildHash = childHash;
-    rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
-                                 pNode, i, &childCount);
-    if( rc!=SQLITE_OK ){
-      prollyNodeBuilderFree(&b);
-      return rc;
+    if( pData==0 ){
+      rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
+                                   pNode, i, &childCount);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(pData);
+        prollyNodeBuilderFree(&b);
+        return rc;
+      }
     }
 
     if( forceDescend || subtreeHasEdits(pIter, pBoundKey, nBoundKey) ){
@@ -1319,6 +1389,7 @@ static int replaceBatchNodeNoRechunk(
 
       rc = prollyLoadNode(pMut->pStore, pMut->pCache, &childHash, &pChildEntry);
       if( rc!=SQLITE_OK ){
+        sqlite3_free(pData);
         prollyNodeBuilderFree(&b);
         return rc;
       }
@@ -1327,25 +1398,41 @@ static int replaceBatchNodeNoRechunk(
                                      &childChanged);
       prollyCacheRelease(pMut->pCache, pChildEntry);
       if( rc!=SQLITE_OK ){
+        sqlite3_free(pData);
         prollyNodeBuilderFree(&b);
         return rc;
       }
-      if( childChanged ) changed = 1;
+      if( childChanged ){
+        changed = 1;
+        if( pData ){
+          memcpy(pData + (pChildVal - pNode->pData), newChildHash.data,
+                 PROLLY_HASH_SIZE);
+        }
+      }
     }
 
-    rc = prollyNodeBuilderAddWithCount(
-        &b, pBoundKey, nBoundKey,
-        (childChanged ? newChildHash.data : childHash.data),
-        PROLLY_HASH_SIZE, childCount);
-    if( rc!=SQLITE_OK ){
-      prollyNodeBuilderFree(&b);
-      return rc;
+    if( pData==0 ){
+      rc = prollyNodeBuilderAddWithCount(
+          &b, pBoundKey, nBoundKey,
+          (childChanged ? newChildHash.data : childHash.data),
+          PROLLY_HASH_SIZE, childCount);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(pData);
+        prollyNodeBuilderFree(&b);
+        return rc;
+      }
     }
   }
 
   if( changed ){
-    rc = writeBuilderNode(pMut->pStore, 0, &b, pHash);
+    if( pData ){
+      rc = writeOwnedNode(pMut->pStore, 0, pData, pNode->nData, pHash);
+      pData = 0;
+    }else{
+      rc = writeBuilderNode(pMut->pStore, 0, &b, pHash);
+    }
   }
+  sqlite3_free(pData);
   prollyNodeBuilderFree(&b);
   if( rc!=SQLITE_OK ) return rc;
   *pChanged = changed;
@@ -1363,11 +1450,7 @@ static int tryReplaceBatchNoRechunk(ProllyMutator *pMut){
   int changed = 0;
   int rc;
 
-  /* Conservative batch path for rowid-table updates: only existing INT keys
-  ** are replaced, so leaf boundaries, separator keys, and subtree counts are
-  ** unchanged. */
   if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
-  if( !(pMut->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
   if( prollyMutMapCount(pMut->pEdits)<=1 ) return SQLITE_NOTFOUND;
   if( !mutmapHasOnlyInserts(pMut->pEdits) ) return SQLITE_NOTFOUND;
 
