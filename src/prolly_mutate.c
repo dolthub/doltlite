@@ -646,8 +646,10 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
     sameSize = (nOldVal==pEdit->nVal);
     pData = sameSize ? copyNodeData(pLeaf) : 0;
     if( pData ){
-      memcpy(pData + (pOldVal - pLeaf->pData), pEdit->pVal,
-             pEdit->nVal);
+      if( pEdit->nVal ){
+        memcpy(pData + (pOldVal - pLeaf->pData), pEdit->pVal,
+               pEdit->nVal);
+      }
       rc = writeOwnedNode(pMut->pStore, pMut->pCache, pData,
                           pLeaf->nData, &childHash);
     }else{
