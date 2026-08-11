@@ -405,39 +405,25 @@ static int csCommitToFile(ChunkStore *cs){
   ** it finds a later valid root record that points at the new manifest. */
   if( cs->staging.nPending > 0 ){
     i64 walBytes = 0;
-    u8 *pWalBatch = 0;
-    u8 aSmallWalBatch[4096];
-    u8 *pOut = 0;
     int hasSparse = 0;
     for( i = 0; i < cs->staging.nPending; i++ ){
       walBytes += (i64)CS_WAL_CHUNK_HDR_SIZE
                 + (i64)cs->staging.aPending[i].size;
       if( cs->staging.aPendingZeroTail[i] ) hasSparse = 1;
     }
-    if( !crashWriteActive && !hasSparse && walBytes <= 64*1024 ){
-      if( walBytes <= (i64)sizeof(aSmallWalBatch) ){
-        pWalBatch = aSmallWalBatch;
-      }else{
-        pWalBatch = (u8*)sqlite3_malloc64((sqlite3_uint64)walBytes);
-        if( !pWalBatch ){
-          rc = SQLITE_NOMEM;
-          goto commit_done;
-        }
+    if( !crashWriteActive && !hasSparse ){
+      i64 remaining = walBytes;
+      const u8 *pSrc = cs->staging.pWriteBuf;
+      assert( walBytes == cs->staging.nWriteBuf );
+      while( remaining > 0 ){
+        int toWrite = remaining > 65536 ? 65536 : (int)remaining;
+        CRASH_CHECK_WRITE();
+        rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
+        if( rc != SQLITE_OK ) goto commit_done;
+        pSrc += toWrite;
+        writeOff += toWrite;
+        remaining -= toWrite;
       }
-      pOut = pWalBatch;
-      for( i = 0; i < cs->staging.nPending; i++ ){
-        ChunkIndexEntry *pe = &cs->staging.aPending[i];
-        i64 bufOff = pe->offset + 4;
-        csFillChunkHdr(pOut, &pe->hash, (u32)pe->size);
-        pOut += CS_WAL_CHUNK_HDR_SIZE;
-        memcpy(pOut, cs->staging.pWriteBuf + bufOff, pe->size);
-        pOut += pe->size;
-      }
-      CRASH_CHECK_WRITE();
-      rc = sqlite3OsWrite(cs->file.pFile, pWalBatch, (int)walBytes, writeOff);
-      if( pWalBatch != aSmallWalBatch ) sqlite3_free(pWalBatch);
-      if( rc != SQLITE_OK ) goto commit_done;
-      writeOff += walBytes;
     }else{
       for( i = 0; i < cs->staging.nPending; i++ ){
         ChunkIndexEntry *pe = &cs->staging.aPending[i];
