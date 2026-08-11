@@ -349,11 +349,47 @@ static int statusMaybeAddParentSchemaChange(
   return addRow(pCur, zParent, staged, "modified");
 }
 
+/* True when zTblA's indexes in aA and zTblB's in aB carry the same name
+** set. A renamed table's index rows re-key their tbl_name and SQL text to
+** the new table, so the exact-SQL comparator reads a pure rename as two
+** changes; across a rename pair the index names are the identity. */
+static int statusIndexNameSetsMatch(
+  SchemaEntry *aA, int nA, const char *zTblA,
+  SchemaEntry *aB, int nB, const char *zTblB
+){
+  int i, j, nACount = 0, nBCount = 0;
+  for(i=0; i<nA; i++){
+    if( !aA[i].zType || strcmp(aA[i].zType, "index")!=0
+     || !aA[i].zTblName || strcmp(aA[i].zTblName, zTblA)!=0 ){
+      continue;
+    }
+    nACount++;
+    for(j=0; j<nB; j++){
+      if( aB[j].zType && strcmp(aB[j].zType, "index")==0
+       && aB[j].zTblName && strcmp(aB[j].zTblName, zTblB)==0
+       && aB[j].zName && aA[i].zName
+       && strcmp(aB[j].zName, aA[i].zName)==0 ){
+        break;
+      }
+    }
+    if( j==nB ) return 0;
+  }
+  for(j=0; j<nB; j++){
+    if( aB[j].zType && strcmp(aB[j].zType, "index")==0
+     && aB[j].zTblName && strcmp(aB[j].zTblName, zTblB)==0 ){
+      nBCount++;
+    }
+  }
+  return nACount==nBCount;
+}
+
 static int statusCompareIndexSchemaObjects(
   DoltliteStatusCursor *pCur,
   sqlite3 *db,
   const ProllyHash *pFromCat,
   const ProllyHash *pToCat,
+  struct TableEntry *aFromEnt, int nFromEnt,
+  struct TableEntry *aToEnt, int nToEnt,
   int staged,
   const char *zFilter
 ){
@@ -373,10 +409,15 @@ static int statusCompareIndexSchemaObjects(
   if( rc!=SQLITE_OK ) goto index_schema_done;
 
   /* One comparison per distinct parent table across both row sets; the
-  ** shared comparator decides whether that table's index set changed. */
+  ** shared comparator decides whether that table's index set changed. A
+  ** parent participating in a rename pair compares across the pair, and
+  ** any real change attributes to the new name. */
   for(i=0; i<nFrom+nTo; i++){
     SchemaEntry *pRow = i<nFrom ? &aFrom[i] : &aTo[i-nFrom];
     int seen = 0;
+    struct TableEntry *pFromEnt;
+    struct TableEntry *pToEnt;
+    struct TableEntry *pMate = 0;
     if( !pRow->zType || strcmp(pRow->zType, "index")!=0
      || !pRow->zTblName ){
       continue;
@@ -391,6 +432,35 @@ static int statusCompareIndexSchemaObjects(
       }
     }
     if( seen ) continue;
+    pFromEnt = doltliteFindTableByName(aFromEnt, nFromEnt, pRow->zTblName);
+    pToEnt = doltliteFindTableByName(aToEnt, nToEnt, pRow->zTblName);
+    if( pFromEnt && !pToEnt ){
+      rc = doltliteCatalogRenameMate(db, aFromEnt, nFromEnt, aToEnt, nToEnt,
+                                     pFromEnt, 1, &pMate);
+      if( rc!=SQLITE_OK ) goto index_schema_done;
+      if( pMate ){
+        if( !statusIndexNameSetsMatch(aFrom, nFrom, pRow->zTblName,
+                                      aTo, nTo, pMate->zName) ){
+          rc = statusMaybeAddParentSchemaChange(pCur, pMate->zName,
+                                                staged, zFilter);
+          if( rc!=SQLITE_OK ) goto index_schema_done;
+        }
+        continue;
+      }
+    }else if( pToEnt && !pFromEnt ){
+      rc = doltliteCatalogRenameMate(db, aFromEnt, nFromEnt, aToEnt, nToEnt,
+                                     pToEnt, 0, &pMate);
+      if( rc!=SQLITE_OK ) goto index_schema_done;
+      if( pMate ){
+        if( !statusIndexNameSetsMatch(aFrom, nFrom, pMate->zName,
+                                      aTo, nTo, pRow->zTblName) ){
+          rc = statusMaybeAddParentSchemaChange(pCur, pRow->zTblName,
+                                                staged, zFilter);
+          if( rc!=SQLITE_OK ) goto index_schema_done;
+        }
+        continue;
+      }
+    }
     if( doltliteIndexSchemaRowsDifferForTable(aFrom, nFrom, aTo, nTo,
                                               pRow->zTblName) ){
       rc = statusMaybeAddParentSchemaChange(pCur, pRow->zTblName,
@@ -552,6 +622,44 @@ rename_done:
   return bMatch;
 }
 
+/* Find the rename mate of pKnown across the from/to catalogs, using the
+** same pairing dolt_status renders, so every staging surface agrees on
+** which two entries are one renamed object. bKnownIsFrom says which side
+** pKnown sits on; the mate is looked up on the other side. */
+int doltliteCatalogRenameMate(
+  sqlite3 *db,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  const struct TableEntry *pKnown,
+  int bKnownIsFrom,
+  struct TableEntry **ppMate
+){
+  StatusCatalogIndex fromIdx, toIdx;
+  struct TableEntry *pMate;
+  int rc;
+
+  *ppMate = 0;
+  if( !pKnown->zName || pKnown->iTable<=1 ) return SQLITE_OK;
+  rc = statusCatalogIndexInit(&fromIdx, aFrom, nFrom);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = statusCatalogIndexInit(&toIdx, aTo, nTo);
+  if( rc!=SQLITE_OK ){
+    statusCatalogIndexFree(&fromIdx);
+    return rc;
+  }
+  pMate = statusCatalogFindNumber(bKnownIsFrom ? &toIdx : &fromIdx,
+                                  pKnown->iTable);
+  if( pMate ){
+    const struct TableEntry *pA = bKnownIsFrom ? pKnown : pMate;
+    const struct TableEntry *pB = bKnownIsFrom ? pMate : pKnown;
+    if( !isRenamePair(db, &fromIdx, &toIdx, pA, pB) ) pMate = 0;
+  }
+  statusCatalogIndexFree(&fromIdx);
+  statusCatalogIndexFree(&toIdx);
+  *ppMate = pMate;
+  return SQLITE_OK;
+}
+
 static int compareCatalogs(
   DoltliteStatusCursor *pCur, sqlite3 *db,
   const ProllyHash *pFromCat, const ProllyHash *pToCat,
@@ -664,6 +772,7 @@ static int compareCatalogs(
     }
   }
   rc = statusCompareIndexSchemaObjects(pCur, db, pFromCat, pToCat,
+                                       aFrom, nFrom, aTo, nTo,
                                        staged, 0);
 
 compare_done:
@@ -873,6 +982,7 @@ check_deleted:
     }
   }
   rc = statusCompareIndexSchemaObjects(pCur, db, pFromCat, pToCat,
+                                       aFrom, nFrom, aTo, nTo,
                                        staged, zFilter);
 
 filtered_done:

@@ -984,6 +984,14 @@ int doltliteStageNamedTables(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
   const ProllyHash *pWorkingHash, int argc, sqlite3_value **argv
 );
+int doltliteCatalogRenameMate(
+  sqlite3 *db,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  const struct TableEntry *pKnown,
+  int bKnownIsFrom,
+  struct TableEntry **ppMate
+);
 
 int mergeAbortInPlace(sqlite3 *db);
 int mergeFastForward(
