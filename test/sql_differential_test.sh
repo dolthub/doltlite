@@ -84,7 +84,10 @@ fail=0
 errored=0
 failed_seeds=""
 
-for seed in $(seq "$FIRST" "$LAST"); do
+# -f %.0f, not a bare seq: BSD seq renders a seed this size as 4.82399e+09 and
+# the generator cannot parse that. The nightly draws seeds up to 9e9, so a
+# window it picks would fail on every seed on a Mac and pass on the runner.
+for seed in $(seq -f %.0f "$FIRST" "$LAST"); do
   sql="$WORK/case.sql"
   if ! python3 "$GEN" "$seed" $GENFLAGS > "$sql" 2>"$WORK/gen.err"; then
     echo "  ERROR: generator failed for seed $seed"

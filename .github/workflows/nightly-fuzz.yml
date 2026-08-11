@@ -183,10 +183,10 @@ jobs:
   # The per-PR gate lives in test.yml and sweeps a fixed seed window; this job
   # sweeps a moving one for breadth, so the two do not re-check the same seeds.
   #
-  # Each night sweeps a different seed window derived from the run number, so
-  # coverage compounds instead of re-checking seeds earlier runs already
-  # cleared. The window is printed and every failing seed is reproducible from
-  # the generator alone.
+  # Each night samples a fresh window at random rather than stepping through
+  # the space in order. The window is printed, and a failing seed is its own
+  # reproducer, so nothing is lost by not knowing in advance which seeds a
+  # given night will draw.
   differential:
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -221,12 +221,15 @@ jobs:
       run: |
         set -o pipefail
         WINDOW=100000
-        # Above the pull-request gate's fixed 1..10000 window, so the nightly
-        # never spends its budget re-checking seeds every PR already cleared.
-        # The modulus gives 10,000 distinct windows before one repeats; at
-        # 4000-per-night with a 1e6 modulus it came back around every 250 runs.
-        FIRST=$(( 10000001 + (${{ github.run_number }} * WINDOW) % 1000000000 ))
+        # Rolled, not walked. A seed is a PRNG seed: seed N and seed N+1 are
+        # unrelated streams, so marching through the space in order buys
+        # nothing that sampling it does not, and it needed run-number
+        # arithmetic and a modulus that quietly wrapped every 250 runs.
+        # Starts above the pull-request gate's fixed 1..10000 so the nightly
+        # does not spend its budget on seeds every PR already cleared.
+        FIRST=$(python3 -c 'import random; print(random.randint(10_000_001, 9_000_000_000))')
         LAST=$(( FIRST + WINDOW - 1 ))
+        echo "seed window: $FIRST..$LAST"
         mkdir -p "$GITHUB_WORKSPACE/diff-artifacts"
         cd build-diff
         if DOLTLITE_DIFF_SAVE_DIR="$GITHUB_WORKSPACE/diff-artifacts" \
