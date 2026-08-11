@@ -338,16 +338,13 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
 
   fileState.iFileSize = -1;
   fileState.bMoved = 0;
-  rc = sqlite3OsFileControl(cs->file.pFile,
-                            SQLITE_FCNTL_DOLTLITE_FILE_STATE, &fileState);
+  rc = sqlite3OsDoltliteFileState(cs->file.pFile, &fileState);
   if( rc==SQLITE_OK ){
     bMoved = fileState.bMoved;
     haveFileState = fileState.iFileSize>=0;
-  }else if( rc==SQLITE_NOTFOUND ){
+  }else{
     rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
     if( rc!=SQLITE_OK ) return rc;
-  }else{
-    return rc;
   }
   if( bMoved ){
     int bOurs = 0;

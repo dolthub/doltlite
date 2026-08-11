@@ -218,12 +218,12 @@
 #include "sqliteLimit.h"
 
 #ifdef DOLTLITE_PROLLY
-#define SQLITE_FCNTL_DOLTLITE_FILE_STATE 1000
 typedef struct DoltliteFileState DoltliteFileState;
 struct DoltliteFileState {
   sqlite3_int64 iFileSize;
   int bMoved;
 };
+int sqlite3OsDoltliteFileState(sqlite3_file*, DoltliteFileState*);
 #endif
 
 /* Disable nuisance warnings on Borland compilers */
