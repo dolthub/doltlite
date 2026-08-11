@@ -422,12 +422,9 @@ static int appendNodeEntryToBuilder(
                                        subtreeCount);
 }
 
-static int writeBuilderNode(ChunkStore *pStore, ProllyCache *pCache,
-                            ProllyNodeBuilder *pBuilder, ProllyHash *pHash){
-  u8 *pData = 0;
-  int nData = 0;
-  int rc = prollyNodeBuilderFinish(pBuilder, &pData, &nData);
-  if( rc!=SQLITE_OK ) return rc;
+static int writeOwnedNode(ChunkStore *pStore, ProllyCache *pCache,
+                          u8 *pData, int nData, ProllyHash *pHash){
+  int rc;
   rc = chunkStorePut(pStore, pData, nData, pHash);
   if( rc==SQLITE_OK && pCache ){
     ProllyCacheEntry *pEntry;
@@ -437,6 +434,25 @@ static int writeBuilderNode(ChunkStore *pStore, ProllyCache *pCache,
   }
   sqlite3_free(pData);
   return rc;
+}
+
+static int writeBuilderNode(ChunkStore *pStore, ProllyCache *pCache,
+                            ProllyNodeBuilder *pBuilder, ProllyHash *pHash){
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = prollyNodeBuilderFinish(pBuilder, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  return writeOwnedNode(pStore, pCache, pData, nData, pHash);
+}
+
+static u8 *copyNodeData(const ProllyNode *pNode){
+  u8 *pData;
+  if( pNode->nDataPhys!=pNode->nData ) return 0;
+  sqlite3BeginBenignMalloc();
+  pData = sqlite3_malloc(pNode->nData);
+  sqlite3EndBenignMalloc();
+  if( pData ) memcpy(pData, pNode->pData, pNode->nData);
+  return pData;
 }
 
 static int finishAndWriteBuilderNode(ChunkStore *pStore, ProllyCache *pCache,
@@ -490,12 +506,48 @@ static int rewriteAncestorSpine(
     ProllyNode *pNode;
     ProllyNodeBuilder b;
     ProllyHash parentHash;
+    u8 *pData;
     int idx;
     int i;
 
     level--;
     pNode = &pCur->aLevel[level].pEntry->node;
     idx = pCur->aLevel[level].idx;
+    pData = copyNodeData(pNode);
+    if( pData && prollyNodeHasSubtreeCounts(pNode) ){
+      const u8 *pVal;
+      int nVal;
+      u64 cnt = prollyNodeChildSubtreeCount(pNode, idx);
+      u8 *pCount;
+      prollyNodeValue(pNode, idx, &pVal, &nVal);
+      if( nVal!=PROLLY_HASH_SIZE ){
+        sqlite3_free(pData);
+        return SQLITE_CORRUPT;
+      }
+      if( countDelta<0 && cnt==0 ){
+        sqlite3_free(pData);
+        return SQLITE_CORRUPT;
+      }
+      if( countDelta<0 ) cnt--;
+      if( countDelta>0 ) cnt++;
+      memcpy(pData + (pVal - pNode->pData), pChildHash->data,
+             PROLLY_HASH_SIZE);
+      pCount = pData + (pNode->pSubtreeCounts - pNode->pData) + idx*8;
+      pCount[0] = (u8)cnt;
+      pCount[1] = (u8)(cnt >> 8);
+      pCount[2] = (u8)(cnt >> 16);
+      pCount[3] = (u8)(cnt >> 24);
+      pCount[4] = (u8)(cnt >> 32);
+      pCount[5] = (u8)(cnt >> 40);
+      pCount[6] = (u8)(cnt >> 48);
+      pCount[7] = (u8)(cnt >> 56);
+      rc = writeOwnedNode(pMut->pStore, pMut->pCache, pData,
+                          pNode->nData, &parentHash);
+      if( rc!=SQLITE_OK ) return rc;
+      *pChildHash = parentHash;
+      continue;
+    }
+    sqlite3_free(pData);
     prollyNodeBuilderInit(&b, (u8)pNode->level, pMut->flags);
     for(i=0; i<(int)pNode->nItems; i++){
       u64 cnt = 0;
@@ -584,6 +636,7 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
     ProllyNode *pLeaf = &cur.aLevel[level].pEntry->node;
     int idx = cur.aLevel[level].idx;
     const u8 *pOldVal;
+    u8 *pData;
     int nOldVal;
     ProllyNodeBuilder b;
     int sameSize;
@@ -591,29 +644,37 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
 
     prollyNodeValue(pLeaf, idx, &pOldVal, &nOldVal);
     sameSize = (nOldVal==pEdit->nVal);
-
-    prollyNodeBuilderInit(&b, 0, pMut->flags);
-    for(i=0; i<(int)pLeaf->nItems; i++){
-      if( i==idx ){
-        rc = prollyNodeBuilderAdd(&b, pEdit->pKey, pEdit->nKey,
-                                  pEdit->pVal, pEdit->nVal);
-      }else{
-        rc = appendNodeEntryToBuilder(&b, pLeaf, i, 0);
+    pData = sameSize ? copyNodeData(pLeaf) : 0;
+    if( pData ){
+      if( pEdit->nVal ){
+        memcpy(pData + (pOldVal - pLeaf->pData), pEdit->pVal,
+               pEdit->nVal);
       }
-      if( rc!=SQLITE_OK ){
-        prollyNodeBuilderFree(&b);
-        prollyCursorClose(&cur);
-        return rc;
-      }
-    }
-    if( sameSize ){
-      rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b, &childHash);
+      rc = writeOwnedNode(pMut->pStore, pMut->pCache, pData,
+                          pLeaf->nData, &childHash);
     }else{
-      rc = finishAndWriteBuilderNode(pMut->pStore, pMut->pCache, &b,
-                                     !cursorLeafIsRightmost(&cur),
-                                     &childHash);
+      prollyNodeBuilderInit(&b, 0, pMut->flags);
+      for(i=0; i<(int)pLeaf->nItems; i++){
+        if( i==idx ){
+          rc = prollyNodeBuilderAdd(&b, pEdit->pKey, pEdit->nKey,
+                                    pEdit->pVal, pEdit->nVal);
+        }else{
+          rc = appendNodeEntryToBuilder(&b, pLeaf, i, 0);
+        }
+        if( rc!=SQLITE_OK ) break;
+      }
+      if( rc==SQLITE_OK ){
+        if( sameSize ){
+          rc = writeBuilderNode(pMut->pStore, pMut->pCache, &b,
+                                &childHash);
+        }else{
+          rc = finishAndWriteBuilderNode(pMut->pStore, pMut->pCache, &b,
+                                         !cursorLeafIsRightmost(&cur),
+                                         &childHash);
+        }
+      }
+      prollyNodeBuilderFree(&b);
     }
-    prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);
       return rc;
