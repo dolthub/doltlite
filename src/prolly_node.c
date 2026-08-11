@@ -615,7 +615,9 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
   int nPhys;
   u8 *pBuf;
   u8 *pCur;
+#if SQLITE_BYTEORDER!=1234
   int i;
+#endif
   int writeCounts;
   u8 flagsOut;
 
@@ -649,6 +651,12 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
 
   pCur = pBuf + PROLLY_HDR_SIZE;
 
+#if SQLITE_BYTEORDER==1234
+  memcpy(pCur, b->aKeyOff, nOff);
+  pCur += nOff;
+  memcpy(pCur, b->aValOff, nOff);
+  pCur += nOff;
+#else
   for(i=0; i<=b->nItems; i++){
     PROLLY_PUT_U32(pCur, b->aKeyOff[i]);
     pCur += 4;
@@ -658,6 +666,7 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
     PROLLY_PUT_U32(pCur, b->aValOff[i]);
     pCur += 4;
   }
+#endif
 
   if( b->nKeyBytes>0 ){
     memcpy(pCur, b->pKeyBuf, b->nKeyBytes);
@@ -671,6 +680,10 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
   }
 
   if( writeCounts ){
+#if SQLITE_BYTEORDER==1234
+    memcpy(pCur, b->aSubtreeCount, b->nItems * 8);
+    pCur += b->nItems * 8;
+#else
     for(i=0; i<b->nItems; i++){
       u64 v = b->aSubtreeCount[i];
       pCur[0] = (u8)v;
@@ -683,6 +696,7 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
       pCur[7] = (u8)(v >> 56);
       pCur += 8;
     }
+#endif
   }
 
   assert( pCur==pBuf+nPhys );
