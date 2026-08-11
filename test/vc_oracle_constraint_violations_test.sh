@@ -283,6 +283,23 @@ SELECT dolt_merge('feat');
 "SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' ELSE '?' END, '|', id, '|', v, '|cols=', JSON_EXTRACT(violation_info,'\$.Columns')) FROM dolt_constraint_violations_t ORDER BY id;
 SELECT CONCAT('R|AGG|', \`table\`, '|', num_violations) FROM dolt_constraint_violations ORDER BY \`table\`;"
 
+echo "--- unique index adopted from the other branch over local duplicates ---"
+oracle "unique_adopted_index_over_local_dups" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,7);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2,7);
+SELECT dolt_commit('-Am','dup_on_main');
+SELECT dolt_checkout('feat');
+CREATE UNIQUE INDEX uv ON t(v);
+SELECT dolt_commit('-Am','unique_on_feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+"SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' ELSE '?' END, '|', id, '|', v, '|cols=', JSON_EXTRACT(violation_info,'\$.Columns')) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|AGG|', \`table\`, '|', num_violations) FROM dolt_constraint_violations ORDER BY \`table\`;"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
