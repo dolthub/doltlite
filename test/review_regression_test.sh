@@ -1282,6 +1282,41 @@ run_test "sp_returning_analyze_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
 
+echo "--- Guard: BOTH-landing keeps the pending value (in-txn UPDATE vs descending bounded scans) ---"
+
+# The IndexMoveto past-end fallback lands on the merged last row; caching the
+# tree payload there on a BOTH landing served the shadowed committed value
+# instead of the one this transaction wrote. Expected values verified against
+# stock SQLite 3.54.
+DB=/tmp/test_rg_both_landing_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, v) WITHOUT ROWID;
+INSERT INTO t VALUES('a','old');
+INSERT INTO t VALUES('m','mid');
+CREATE TABLE t2(k TEXT PRIMARY KEY DESC, v) WITHOUT ROWID;
+INSERT INTO t2 VALUES('a','old');
+INSERT INTO t2 VALUES('m','mid');
+CREATE TABLE t3(k TEXT PRIMARY KEY, v) WITHOUT ROWID;
+INSERT INTO t3 VALUES('a','old');
+INSERT INTO t3 VALUES('m','mid');
+INSERT INTO t3 VALUES('z','top');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "both_landing_desc_lt" \
+  "BEGIN; UPDATE t SET v='new' WHERE k='m'; SELECT group_concat(v,'|') FROM (SELECT v FROM t WHERE k < 'q' ORDER BY k DESC); ROLLBACK;" \
+  "new|old" "$DB"
+run_test "both_landing_desc_le" \
+  "BEGIN; UPDATE t SET v='new' WHERE k='m'; SELECT group_concat(v,'|') FROM (SELECT v FROM t WHERE k <= 'm' ORDER BY k DESC); ROLLBACK;" \
+  "new|old" "$DB"
+run_test "both_landing_scalar_last" \
+  "BEGIN; UPDATE t SET v='new' WHERE k='m'; SELECT (SELECT v FROM t WHERE k < 'z' ORDER BY k DESC LIMIT 1); ROLLBACK;" \
+  "new" "$DB"
+run_test "both_landing_desc_pk_asc_scan" \
+  "BEGIN; UPDATE t2 SET v='new' WHERE k='m'; SELECT group_concat(v,'|') FROM (SELECT v FROM t2 WHERE k > '' ORDER BY k); ROLLBACK;" \
+  "old|new" "$DB"
+run_test "both_landing_tombstone_reroute" \
+  "BEGIN; DELETE FROM t3 WHERE k='z'; UPDATE t3 SET v='new' WHERE k='m'; SELECT group_concat(v,'|') FROM (SELECT v FROM t3 WHERE k < 'y' ORDER BY k DESC); ROLLBACK;" \
+  "new|old" "$DB"
+rm -f "$DB"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
