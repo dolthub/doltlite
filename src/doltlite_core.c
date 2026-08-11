@@ -770,6 +770,7 @@ int doltliteDetectConstraintViolationsFiltered(
   int nUnique = 0;
   int nCheck = 0;
   int nNotNull = 0;
+  int nStrict = 0;
   char *zDetectErrMsg = 0;
   int rc;
   sqlite3_stmt *pStmt = 0;
@@ -788,7 +789,10 @@ int doltliteDetectConstraintViolationsFiltered(
       ** dolt_verify_constraints could not see a violating row at all. Matching
       ** a column merely named like the keyword only costs a scan the detectors
       ** find nothing in; missing one reports a clean database that is not. */
-      "            OR instr(upper(sql), 'NOT NULL')>0)) "
+      "            OR instr(upper(sql), 'NOT NULL')>0 "
+      /* STRICT tables have a type detector; the keyword sits at the tail
+      ** of the CREATE statement. */
+      "            OR instr(upper(sql), 'STRICT')>0)) "
       "   OR (type='index' AND sql IS NOT NULL "
       "       AND instr(upper(sql), 'CREATE UNIQUE INDEX')>0) "
       "LIMIT 1",
@@ -829,6 +833,11 @@ int doltliteDetectConstraintViolationsFiltered(
                                              &zDetectErrMsg, &nNotNull,
                                              azTables, nTables);
   }
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeStrictViolations(db, pAncCatHash,
+                                            &zDetectErrMsg, &nStrict,
+                                            azTables, nTables);
+  }
   {
     int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
     if( rc==SQLITE_OK ) rc = erc;
@@ -836,7 +845,9 @@ int doltliteDetectConstraintViolationsFiltered(
   sqlite3_free(zDetectErrMsg);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( pnViolations ) *pnViolations = nViolations + nUnique + nCheck + nNotNull;
+  if( pnViolations ){
+    *pnViolations = nViolations + nUnique + nCheck + nNotNull + nStrict;
+  }
   return SQLITE_OK;
 }
 
