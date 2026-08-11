@@ -29,6 +29,9 @@ KEY_SHAPE_GROUPS = (
     ("File-backed", "Autocommit reads", "ac_reads"),
     ("File-backed", "Autocommit writes", "ac_writes"),
 )
+SYSBENCH_SECTIONS = tuple(
+    section for _, _, section in KEY_SHAPE_GROUPS
+)
 SAMPLE_HEADER = (
     "section",
     "test",
@@ -279,6 +282,26 @@ def section_passes(suites, section):
     return True
 
 
+def report_passes(suites):
+    if any(suite.status != 0 for suite in suites):
+        return False
+    by_name = {suite.name: suite for suite in suites}
+    sysbench_suites = tuple(by_name[name] for name in SYSBENCH_SUITES)
+    if not all(
+        section_passes(sysbench_suites, section)
+        for section in SYSBENCH_SECTIONS
+    ):
+        return False
+    return vc_passes(by_name["vc"])
+
+
+def vc_passes(suite):
+    return suite.status == 0 and all(
+        result.candidate_us <= result.baseline_us
+        for result in suite.results
+    )
+
+
 def render_section_summary(suites, section, prefix):
     results = section_results(suites, section)
     if not results:
@@ -386,14 +409,13 @@ def render_vc(suite):
             f"{format_time(result.baseline_us)} | {used:.1%} | "
             f"{workload_noise(suite, result):.2f}% | {status} |"
         )
-    result = "PASS" if suite.status == 0 else "FAIL"
+    result = "PASS" if vc_passes(suite) else "FAIL"
     lines.extend(["", f"Version-control ceiling result: **{result}**.", ""])
     return lines
 
 
 def render_report(suites, commit, run_url, generated_at, runner):
-    overall_failed = any(suite.status != 0 for suite in suites)
-    overall = "FAIL" if overall_failed else "PASS"
+    overall = "PASS" if report_passes(suites) else "FAIL"
     by_name = {suite.name: suite for suite in suites}
     lines = [
         "# DoltLite Performance Report",
@@ -456,12 +478,27 @@ def parse_args(argv):
         "--runner", default="GitHub Actions ubuntu-latest"
     )
     parser.add_argument("--output", type=pathlib.Path, required=True)
+    parser.add_argument("--result-output", type=pathlib.Path)
     return parser.parse_args(argv)
+
+
+def remove_output(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def main(argv=None):
     args = parse_args(argv)
+    outputs = [args.output]
+    if args.result_output is not None:
+        outputs.append(args.result_output)
     try:
+        if len(set(outputs)) != len(outputs):
+            raise ValueError("output paths must be distinct")
+        for path in outputs:
+            remove_output(path)
         suites = [
             load_suite(args.results_dir, name) for name in ALL_SUITES
         ]
@@ -473,7 +510,15 @@ def main(argv=None):
             args.runner,
         )
         args.output.write_text(report, encoding="utf-8")
+        if args.result_output is not None:
+            result = "PASS" if report_passes(suites) else "FAIL"
+            args.result_output.write_text(f"{result}\n", encoding="utf-8")
     except (OSError, ValueError) as exc:
+        for path in outputs:
+            try:
+                remove_output(path)
+            except OSError:
+                pass
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -246,6 +246,7 @@ jobs:
         SOURCE_RUN_ID: ${{ inputs.source_run_id }}
       run: |
         summary="$RUNNER_TEMP/performance-report.md"
+        report_result="$RUNNER_TEMP/performance-report.result"
         issue_body="$RUNNER_TEMP/nightly-performance-failure.md"
         generator_stderr="$RUNNER_TEMP/performance-report.stderr"
         suites="int textpk blobpk compositepk vc"
@@ -313,6 +314,7 @@ jobs:
           --generated-at "$generated_at" \
           --runner "${ImageOS:-ubuntu-latest} ${ImageVersion:-}" \
           --output "$summary" \
+          --result-output "$report_result" \
           2> "$generator_stderr"
         generator_rc=$?
         set -e
@@ -335,6 +337,14 @@ jobs:
             cat "$generator_stderr"
             echo '```'
           } > "$summary"
+        elif [ "$(cat "$report_result")" = "FAIL" ]; then
+          failed=1
+          {
+            echo "### Performance ceiling"
+            echo ""
+            echo "One or more performance ceilings were exceeded."
+            echo ""
+          } >> "$issue_body"
         fi
 
         cat "$summary" >> "$GITHUB_STEP_SUMMARY"

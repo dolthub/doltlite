@@ -102,6 +102,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         )
         self.assertIn("Median paired-ratio MAD", report)
         summary = report.split("<details>", 1)[0]
+        self.assertNotIn("| Autocommit reads |", summary)
         self.assertNotIn("Key shape", summary)
         self.assertLess(
             summary.index("### In-memory"),
@@ -146,6 +147,73 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 "ubuntu24",
             )
         self.assertIn("Nightly result: **FAIL**", report)
+
+    def test_ceiling_failure_marks_report_and_machine_result_failed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            results_path = directory / "int.tsv"
+            results_path.write_text(
+                results_path.read_text(encoding="utf-8").replace(
+                    "ac_writes\tinsert_ac\t100\t500",
+                    "ac_writes\tinsert_ac\t100\t700",
+                ),
+                encoding="utf-8",
+            )
+            output = directory / "performance-report.md"
+            result_output = directory / "performance-report.result"
+            rc = nightly_report.main(
+                [
+                    "--results-dir",
+                    str(directory),
+                    "--commit",
+                    "abc123",
+                    "--run-url",
+                    "https://example.test/run",
+                    "--generated-at",
+                    "now",
+                    "--output",
+                    str(output),
+                    "--result-output",
+                    str(result_output),
+                ]
+            )
+            report = output.read_text(encoding="utf-8")
+            result = result_output.read_text(encoding="utf-8")
+        self.assertEqual(rc, 0)
+        self.assertIn("Nightly result: **FAIL**", report)
+        self.assertIn("| Autocommit writes | 4 | 3 |", report)
+        self.assertEqual(result, "FAIL\n")
+
+    def test_audit_only_section_still_gates_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            results_path = directory / "int.tsv"
+            results_path.write_text(
+                results_path.read_text(encoding="utf-8").replace(
+                    "ac_reads\tpoint\t200\t210",
+                    "ac_reads\tpoint\t200\t600",
+                ),
+                encoding="utf-8",
+            )
+            suites = [
+                nightly_report.load_suite(directory, name)
+                for name in nightly_report.ALL_SUITES
+            ]
+            report = nightly_report.render_report(
+                suites,
+                "abc123",
+                "https://example.test/run",
+                "now",
+                "ubuntu24",
+            )
+        summary = report.split("<details>", 1)[0]
+        self.assertNotIn("| Autocommit reads |", summary)
+        self.assertIn("Nightly result: **FAIL**", report)
+        self.assertIn(
+            "| File-backed | Autocommit reads | int | 1 | 3 | ", report
+        )
 
     def test_rejects_result_without_matching_samples(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -197,6 +265,55 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             report = output.read_text(encoding="utf-8")
         self.assertEqual(rc, 0)
         self.assertIn("# DoltLite Performance Report", report)
+
+    def test_main_removes_stale_outputs_on_generation_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            output = directory / "performance-report.md"
+            result_output = directory / "performance-report.result"
+            arguments = [
+                "--results-dir",
+                str(directory),
+                "--commit",
+                "abc123",
+                "--run-url",
+                "https://example.test/run",
+                "--generated-at",
+                "now",
+                "--output",
+                str(output),
+                "--result-output",
+                str(result_output),
+            ]
+            self.assertEqual(nightly_report.main(arguments), 0)
+            results_path = directory / "int.tsv"
+            results_path.write_text(
+                "\n".join(
+                    line
+                    for line in results_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if not line.startswith("file_writes\t")
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            samples_path = directory / "int-samples.tsv"
+            samples_path.write_text(
+                "\n".join(
+                    line
+                    for line in samples_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if not line.startswith("file_writes\t")
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(nightly_report.main(arguments), 1)
+            self.assertFalse(output.exists())
+            self.assertFalse(result_output.exists())
 
 
 if __name__ == "__main__":
