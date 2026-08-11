@@ -392,12 +392,14 @@ static int mergeStepForward(BtCursor *pCur){
   if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH )
     pCur->mmIdx++;
   rc = mergeScan(pCur, 1, 0);
+  pCur->mergeStepDir = 1;
   CLEAR_CACHED_PAYLOAD(pCur);
   return rc;
 }
 
 static int mergeStepBackward(BtCursor *pCur){
   int rc = SQLITE_OK;
+
   rc = cursorNormalizeMmPhys(pCur);
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->deferredMergedSeek ){
@@ -410,6 +412,56 @@ static int mergeStepBackward(BtCursor *pCur){
   }
   rc = materializeDeferredTreeSeek(pCur, -1);
   if( rc!=SQLITE_OK ) return rc;
+  /* Reversing onto a mut-map row leaves the tree side stale the same way. The
+  ** step below does not touch the tree cursor for a MUT row, so whatever
+  ** forward travel left it on -- a row above this one, or nothing at all once
+  ** it ran off the end -- stands in for "the next tree row below", and every
+  ** tree row underneath goes unserved. Re-seek it to this key and put it below.
+  ** Only on a reversal: a backward scan already leaves it correctly placed, and
+  ** an exhausted tree side would otherwise pay a seek per row. */
+  if( pCur->mergeStepDir > 0
+   && pCur->mergeSrc==MERGE_SRC_MUT
+   && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
+    ProllyMutMapEntry *e;
+    rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    {
+      int res = 0;
+      refreshCursorRoot(pCur);
+      if( pCur->curIntKey ){
+        rc = prollyCursorSeekInt(&pCur->pCur, prollyMutMapEntryIntKey(e), &res);
+      }else{
+        rc = prollyCursorSeekBlob(&pCur->pCur, e->pKey, e->nKey, &res);
+      }
+      if( rc!=SQLITE_OK ) return rc;
+      if( res>0 && prollyCursorIsValid(&pCur->pCur) ){
+        rc = prollyCursorPrev(&pCur->pCur);
+        if( rc!=SQLITE_OK ) return rc;
+      }else if( res==0 ){
+        /* The tree holds this key too, so the row is on both sides and the
+        ** step below has to retreat both. */
+        pCur->mergeSrc = MERGE_SRC_BOTH;
+      }
+    }
+  }
+  /* The mirror of the forward loop above. A row reached by scanning forwards
+  ** leaves the mut-map index at or above it, which is what a further forward
+  ** step wants; going backwards instead, those entries are ahead of the cursor
+  ** and the entry the step needs is below them. Left alone, an index parked past
+  ** the last entry reads as "no pending row below" and the rows under it are
+  ** never served -- which is how a reversal dropped a pending row entirely. */
+  if( pCur->mergeSrc==MERGE_SRC_TREE && prollyCursorIsValid(&pCur->pCur) ){
+    if( pCur->mmIdx >= pCur->pMutMap->nEntries ){
+      pCur->mmIdx = pCur->pMutMap->nEntries - 1;
+    }
+    while( pCur->mmIdx >= 0 ){
+      ProllyMutMapEntry *e;
+      rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
+      if( rc!=SQLITE_OK ) return rc;
+      if( mergeCompare(pCur, e) >= 0 ) break;
+      pCur->mmIdx--;
+    }
+  }
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     rc = advanceTreeCursor(pCur, -1);
     if( rc!=SQLITE_OK ) return rc;
@@ -417,6 +469,7 @@ static int mergeStepBackward(BtCursor *pCur){
   if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH )
     pCur->mmIdx--;
   rc = mergeScan(pCur, -1, 0);
+  pCur->mergeStepDir = -1;
   CLEAR_CACHED_PAYLOAD(pCur);
   return rc;
 }
