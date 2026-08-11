@@ -28,12 +28,28 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         else:
             results = (
                 "mem_reads\tpoint\t100\t150\n"
+                "mem_writes\tinsert\t100\t175\n"
+                "file_reads\tpoint\t200\t100\n"
+                "file_writes\tinsert\t200\t250\n"
+                "ac_reads\tpoint\t200\t210\n"
                 "ac_writes\tinsert_ac\t100\t500\n"
             )
             samples = [
                 ("mem_reads", "point", 1, 100, 140),
                 ("mem_reads", "point", 2, 100, 150),
                 ("mem_reads", "point", 3, 100, 160),
+                ("mem_writes", "insert", 1, 100, 170),
+                ("mem_writes", "insert", 2, 100, 175),
+                ("mem_writes", "insert", 3, 100, 180),
+                ("file_reads", "point", 1, 200, 90),
+                ("file_reads", "point", 2, 200, 100),
+                ("file_reads", "point", 3, 200, 110),
+                ("file_writes", "insert", 1, 200, 240),
+                ("file_writes", "insert", 2, 200, 250),
+                ("file_writes", "insert", 3, 200, 260),
+                ("ac_reads", "point", 1, 200, 200),
+                ("ac_reads", "point", 2, 200, 210),
+                ("ac_reads", "point", 3, 200, 220),
                 ("ac_writes", "insert_ac", 1, 100, 480),
                 ("ac_writes", "insert_ac", 2, 100, 500),
                 ("ac_writes", "insert_ac", 3, 100, 520),
@@ -76,8 +92,35 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 "ubuntu24 20260720.1",
             )
         self.assertIn("Nightly result: **PASS**", report)
-        self.assertIn("| int | 2 | 3 | 1h 2m 3s |", report)
+        self.assertIn("aggregates all key shapes", report)
+        self.assertIn("### In-memory", report)
+        self.assertIn("| Reads | 4 | 3 | 400µs | 600µs | 1.500× |", report)
+        self.assertIn("### File-backed", report)
+        self.assertIn(
+            "| Autocommit writes | 4 | 3 | 400µs | 2.00ms | 5.000× |",
+            report,
+        )
         self.assertIn("Median paired-ratio MAD", report)
+        summary = report.split("<details>", 1)[0]
+        self.assertNotIn("| Autocommit reads |", summary)
+        self.assertNotIn("Key shape", summary)
+        self.assertLess(
+            summary.index("### In-memory"),
+            summary.index("### File-backed"),
+        )
+        self.assertLess(
+            summary.index("| Reads |"),
+            summary.index("| Writes |"),
+        )
+        self.assertLess(
+            summary.index("| Writes |", summary.index("### File-backed")),
+            summary.index("| Autocommit writes |"),
+        )
+        self.assertIn(
+            "<summary>Key-shape and individual-workload breakdown</summary>",
+            report,
+        )
+        self.assertIn("| In-memory | Reads | int | 1 | 3 |", report)
         self.assertIn("Version-control latency", report)
         self.assertIn("50.0%", report)
         self.assertFalse(
@@ -104,7 +147,73 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 "ubuntu24",
             )
         self.assertIn("Nightly result: **FAIL**", report)
-        self.assertRegex(report, r"\| blobpk .* \*\*FAIL\*\* \|")
+
+    def test_ceiling_failure_marks_report_and_machine_result_failed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            results_path = directory / "int.tsv"
+            results_path.write_text(
+                results_path.read_text(encoding="utf-8").replace(
+                    "ac_writes\tinsert_ac\t100\t500",
+                    "ac_writes\tinsert_ac\t100\t700",
+                ),
+                encoding="utf-8",
+            )
+            output = directory / "performance-report.md"
+            result_output = directory / "performance-report.result"
+            rc = nightly_report.main(
+                [
+                    "--results-dir",
+                    str(directory),
+                    "--commit",
+                    "abc123",
+                    "--run-url",
+                    "https://example.test/run",
+                    "--generated-at",
+                    "now",
+                    "--output",
+                    str(output),
+                    "--result-output",
+                    str(result_output),
+                ]
+            )
+            report = output.read_text(encoding="utf-8")
+            result = result_output.read_text(encoding="utf-8")
+        self.assertEqual(rc, 0)
+        self.assertIn("Nightly result: **FAIL**", report)
+        self.assertIn("| Autocommit writes | 4 | 3 |", report)
+        self.assertEqual(result, "FAIL\n")
+
+    def test_audit_only_section_still_gates_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            results_path = directory / "int.tsv"
+            results_path.write_text(
+                results_path.read_text(encoding="utf-8").replace(
+                    "ac_reads\tpoint\t200\t210",
+                    "ac_reads\tpoint\t200\t600",
+                ),
+                encoding="utf-8",
+            )
+            suites = [
+                nightly_report.load_suite(directory, name)
+                for name in nightly_report.ALL_SUITES
+            ]
+            report = nightly_report.render_report(
+                suites,
+                "abc123",
+                "https://example.test/run",
+                "now",
+                "ubuntu24",
+            )
+        summary = report.split("<details>", 1)[0]
+        self.assertNotIn("| Autocommit reads |", summary)
+        self.assertIn("Nightly result: **FAIL**", report)
+        self.assertIn(
+            "| File-backed | Autocommit reads | int | 1 | 3 | ", report
+        )
 
     def test_rejects_result_without_matching_samples(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -156,6 +265,55 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             report = output.read_text(encoding="utf-8")
         self.assertEqual(rc, 0)
         self.assertIn("# DoltLite Performance Report", report)
+
+    def test_main_removes_stale_outputs_on_generation_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            output = directory / "performance-report.md"
+            result_output = directory / "performance-report.result"
+            arguments = [
+                "--results-dir",
+                str(directory),
+                "--commit",
+                "abc123",
+                "--run-url",
+                "https://example.test/run",
+                "--generated-at",
+                "now",
+                "--output",
+                str(output),
+                "--result-output",
+                str(result_output),
+            ]
+            self.assertEqual(nightly_report.main(arguments), 0)
+            results_path = directory / "int.tsv"
+            results_path.write_text(
+                "\n".join(
+                    line
+                    for line in results_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if not line.startswith("file_writes\t")
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            samples_path = directory / "int-samples.tsv"
+            samples_path.write_text(
+                "\n".join(
+                    line
+                    for line in samples_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if not line.startswith("file_writes\t")
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(nightly_report.main(arguments), 1)
+            self.assertFalse(output.exists())
+            self.assertFalse(result_output.exists())
 
 
 if __name__ == "__main__":
