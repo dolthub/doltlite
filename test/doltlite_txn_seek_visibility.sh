@@ -773,4 +773,77 @@ run_test "equality_seek_near_extended_numeric_key_hits_right_row" \
 
 db_rm "$DB"
 
+# Reporting the landing means the scan walks past a pending tombstone that
+# shares the prefix instead of stopping at it, so check the row between the key
+# and that tombstone still comes back and the deleted row stays masked.
+run_test "tombstone_sharing_extended_prefix_does_not_hide_row" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   INSERT INTO t VALUES(-9007199254740993,'ext'),(-9007199254740992,'mid');
+   BEGIN;
+   DELETE FROM t WHERE k = -9007199254740993;
+   SELECT coalesce(group_concat(quote(k)),'none') FROM t WHERE k > -9007199254740994;
+   SELECT count(*) FROM t WHERE k = -9007199254740993;
+   COMMIT;
+   SELECT coalesce(group_concat(quote(k)),'none') FROM t;" \
+  "-9007199254740992
+0
+-9007199254740992" \
+  "$DB"
+
+db_rm "$DB"
+
+# All three adjacent keys pending at once: the bounds must exclude the rows they
+# name and the range must land on exactly the one between them.
+run_test "adjacent_extended_keys_respect_both_bounds" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   BEGIN;
+   INSERT INTO t VALUES(-9007199254740994,'lo'),(-9007199254740993,'m'),(-9007199254740992,'hi');
+   SELECT group_concat(quote(k)) FROM (SELECT k FROM t WHERE k > -9007199254740995 ORDER BY k);
+   SELECT group_concat(quote(k)) FROM (SELECT k FROM t WHERE k > -9007199254740994 ORDER BY k);
+   UPDATE t SET b='u' WHERE k > -9007199254740994 AND k < -9007199254740992;
+   SELECT changes();
+   SELECT group_concat(quote(k)||'='||quote(b)) FROM (SELECT k,b FROM t ORDER BY k);
+   COMMIT;" \
+  "-9007199254740994,-9007199254740993,-9007199254740992
+-9007199254740993,-9007199254740992
+1
+-9007199254740994='lo',-9007199254740993='u',-9007199254740992='hi'" \
+  "$DB"
+
+db_rm "$DB"
+
+# Deleted and re-inserted in one transaction, so the live row is a pending
+# insert sitting behind a pending tombstone at the same key.
+run_test "reinserted_extended_key_is_reachable_by_range" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   INSERT INTO t VALUES(-9007199254740993,'old');
+   BEGIN;
+   DELETE FROM t WHERE k = -9007199254740993;
+   INSERT INTO t VALUES(-9007199254740993,'new');
+   SELECT coalesce(group_concat(quote(k)||'='||quote(b)),'none') FROM t WHERE k > -9007199254740994;
+   UPDATE t SET b='upd' WHERE k > -9007199254740994;
+   SELECT changes();
+   COMMIT;
+   SELECT quote(b) FROM t;" \
+  "-9007199254740993='new'
+1
+'upd'" \
+  "$DB"
+
+db_rm "$DB"
+
+# The same landing reached while stepping backwards.
+run_test "backward_scan_reaches_pending_extended_keys" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   BEGIN;
+   INSERT INTO t VALUES(-9007199254740993,'n'),(9007199254740993,'p');
+   SELECT group_concat(quote(k)) FROM (SELECT k FROM t WHERE k < 9007199254740994 ORDER BY k DESC);
+   SELECT quote(max(k)), quote(min(k)) FROM t;
+   COMMIT;" \
+  "9007199254740993,-9007199254740993
+9007199254740993|-9007199254740993" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
