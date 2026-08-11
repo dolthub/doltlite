@@ -138,6 +138,7 @@ static int resetStageNamedPaths(
       ** rename. A rename resets as one object: retire the staged new-name
       ** entry and its indexes here, then restore HEAD's state below. */
       struct TableEntry *pMate = 0;
+      struct TableEntry *aNew;
       rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
                                      &aHead[iH], 1, &pMate);
       if( rc!=SQLITE_OK ) goto done;
@@ -165,7 +166,7 @@ static int resetStageNamedPaths(
       ** HEAD's domain and its schema row is absent from the staged master
       ** (and from the live schema -- the table is dropped there), so it
       ** gets a fresh number and its row comes from the HEAD fallback. */
-      struct TableEntry *aNew = sqlite3_realloc(aStaged,
+      aNew = sqlite3_realloc(aStaged,
           (nStaged+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
         rc = SQLITE_NOMEM;
