@@ -263,7 +263,7 @@ static int mergeRefDetectConstraintViolations(
   int *pnViolations,
   char **pzErr
 ){
-  int nFk = 0, nUnique = 0, nCheck = 0;
+  int nFk = 0, nUnique = 0, nCheck = 0, nNotNull = 0;
   int vrc;
   int erc;
 
@@ -279,9 +279,13 @@ static int mergeRefDetectConstraintViolations(
   if( vrc==SQLITE_OK ){
     vrc = doltliteDetectMergeCheckViolations(db, pAncCat, pzErr, &nCheck, 0, 0);
   }
+  if( vrc==SQLITE_OK ){
+    vrc = doltliteDetectMergeNotNullViolations(db, pAncCat, pzErr, &nNotNull,
+                                              0, 0);
+  }
   erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
   if( vrc==SQLITE_OK ) vrc = erc;
-  if( vrc==SQLITE_OK ) *pnViolations = nFk + nUnique + nCheck;
+  if( vrc==SQLITE_OK ) *pnViolations = nFk + nUnique + nCheck + nNotNull;
   return vrc;
 }
 

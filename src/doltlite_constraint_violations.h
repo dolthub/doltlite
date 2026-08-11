@@ -7,6 +7,7 @@
 #define DOLTLITE_CV_FOREIGN_KEY      1
 #define DOLTLITE_CV_UNIQUE_INDEX     2
 #define DOLTLITE_CV_CHECK_CONSTRAINT 3
+#define DOLTLITE_CV_NOT_NULL         4
 
 typedef struct ConstraintViolationRow ConstraintViolationRow;
 struct ConstraintViolationRow {

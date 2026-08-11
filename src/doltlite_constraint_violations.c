@@ -829,6 +829,7 @@ static const char *violationTypeName(u8 t){
     case DOLTLITE_CV_FOREIGN_KEY: return "foreign key";
     case DOLTLITE_CV_UNIQUE_INDEX: return "unique index";
     case DOLTLITE_CV_CHECK_CONSTRAINT: return "check constraint";
+    case DOLTLITE_CV_NOT_NULL: return "not null";
     default: return "unknown";
   }
 }

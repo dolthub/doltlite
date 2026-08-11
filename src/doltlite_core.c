@@ -769,6 +769,7 @@ int doltliteDetectConstraintViolationsFiltered(
   int nViolations = 0;
   int nUnique = 0;
   int nCheck = 0;
+  int nNotNull = 0;
   char *zDetectErrMsg = 0;
   int rc;
   sqlite3_stmt *pStmt = 0;
@@ -817,6 +818,11 @@ int doltliteDetectConstraintViolationsFiltered(
                                             &zDetectErrMsg, &nCheck,
                                             azTables, nTables);
   }
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeNotNullViolations(db, pAncCatHash,
+                                             &zDetectErrMsg, &nNotNull,
+                                             azTables, nTables);
+  }
   {
     int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
     if( rc==SQLITE_OK ) rc = erc;
@@ -824,7 +830,7 @@ int doltliteDetectConstraintViolationsFiltered(
   sqlite3_free(zDetectErrMsg);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( pnViolations ) *pnViolations = nViolations + nUnique + nCheck;
+  if( pnViolations ) *pnViolations = nViolations + nUnique + nCheck + nNotNull;
   return SQLITE_OK;
 }
 

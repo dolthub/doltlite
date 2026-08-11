@@ -197,6 +197,7 @@ int applyMergedCatalogAndCommit(
     int nViolations = 0;
     int nUnique = 0;
     int nCheck = 0;
+    int nNotNull = 0;
     char *zDetectErrMsg = 0;
 
     rc = doltliteConstraintViolationBatchBegin(db);
@@ -215,6 +216,11 @@ int applyMergedCatalogAndCommit(
                                               &zDetectErrMsg, &nCheck,
                                               0, 0);
     }
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeNotNullViolations(db, ancCatHash,
+                                               &zDetectErrMsg, &nNotNull,
+                                               0, 0);
+    }
     {
       int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
       if( rc==SQLITE_OK ) rc = erc;
@@ -228,7 +234,7 @@ int applyMergedCatalogAndCommit(
     }
     sqlite3_free(zDetectErrMsg);
 
-    if( nViolations + nUnique + nCheck > 0 ){
+    if( nViolations + nUnique + nCheck + nNotNull > 0 ){
       if( *pnConflicts > 0 ){
         return doltliteCmdFinishWithConflictsAndConstraintViolations(
             db, context, &savedState, *pnConflicts, zOpLabel, 1, 0);
