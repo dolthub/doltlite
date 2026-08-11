@@ -220,8 +220,12 @@ jobs:
       id: sweep
       run: |
         set -o pipefail
-        WINDOW=4000
-        FIRST=$(( (${{ github.run_number }} * WINDOW) % 1000000 + 1 ))
+        WINDOW=100000
+        # Above the pull-request gate's fixed 1..10000 window, so the nightly
+        # never spends its budget re-checking seeds every PR already cleared.
+        # The modulus gives 10,000 distinct windows before one repeats; at
+        # 4000-per-night with a 1e6 modulus it came back around every 250 runs.
+        FIRST=$(( 10000001 + (${{ github.run_number }} * WINDOW) % 1000000000 ))
         LAST=$(( FIRST + WINDOW - 1 ))
         mkdir -p "$GITHUB_WORKSPACE/diff-artifacts"
         cd build-diff
