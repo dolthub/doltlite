@@ -15,7 +15,7 @@
 ** ANY columns allow everything, so neither generates a term.
 */
 
-static void freeNames(char **az, int n){
+static void strictFreeNames(char **az, int n){
   int i;
   for(i=0; i<n; i++) sqlite3_free(az[i]);
   sqlite3_free(az);
@@ -108,8 +108,8 @@ static int loadStrictColumns(
   }
   sqlite3_finalize(pQ);
   if( rc!=SQLITE_OK ){
-    freeNames(azCols, n);
-    freeNames(azAllowed, n);
+    strictFreeNames(azCols, n);
+    strictFreeNames(azAllowed, n);
     return rc;
   }
   *pazCols = azCols;
@@ -190,8 +190,8 @@ int doltliteDetectMergeStrictViolations(
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &pkInfo);
       if( rc!=SQLITE_OK ){
-        freeNames(azCols, nCols);
-        freeNames(azAllowed, nCols);
+        strictFreeNames(azCols, nCols);
+        strictFreeNames(azAllowed, nCols);
         sqlite3_free(zTable);
         break;
       }
@@ -214,8 +214,8 @@ int doltliteDetectMergeStrictViolations(
     }
     zQuery = sqlite3_str_finish(pStr);
     if( !zQuery ){
-      freeNames(azCols, nCols);
-      freeNames(azAllowed, nCols);
+      strictFreeNames(azCols, nCols);
+      strictFreeNames(azAllowed, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
       rc = SQLITE_NOMEM;
@@ -225,8 +225,8 @@ int doltliteDetectMergeStrictViolations(
     sqlite3_free(zQuery);
     if( rc!=SQLITE_OK ){
       /* A table the merge left unreadable is the other detectors' business. */
-      freeNames(azCols, nCols);
-      freeNames(azAllowed, nCols);
+      strictFreeNames(azCols, nCols);
+      strictFreeNames(azAllowed, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
       rc = SQLITE_OK;
@@ -306,8 +306,8 @@ int doltliteDetectMergeStrictViolations(
     }
 
     sqlite3_finalize(pQ);
-    freeNames(azCols, nCols);
-    freeNames(azAllowed, nCols);
+    strictFreeNames(azCols, nCols);
+    strictFreeNames(azAllowed, nCols);
     freeMergePkInfo(&pkInfo);
     sqlite3_free(zTable);
     if( rc!=SQLITE_OK ) break;
