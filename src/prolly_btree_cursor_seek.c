@@ -1040,9 +1040,15 @@ int prollyBtCursorIndexMoveto(
     if( lastRes==0 ){
       pCur->eState = CURSOR_VALID;
       *pRes = -1;
-      if( !pCur->mmActive || pCur->mergeSrc!=MERGE_SRC_MUT ){
+      if( !pCur->mmActive || pCur->mergeSrc==MERGE_SRC_TREE ){
+        /* Cache only on a pure tree landing: getCursorPayload serves the
+        ** cache before the merge source, so caching on a BOTH landing
+        ** serves the shadowed committed value instead of the pending one
+        ** written in this transaction. A BOTH landing needs no deferral
+        ** either -- mergeLast leaves the tree cursor ON the row, valid
+        ** for a step in either direction. */
         cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-      }else{
+      }else if( pCur->mergeSrc==MERGE_SRC_MUT ){
         /* mergeLast scanned backwards to get here, so the tree side sits
         ** below this mut-map row -- it was retreated past any delete-masked
         ** row at the same key. Stepping forward from that would serve a tree
