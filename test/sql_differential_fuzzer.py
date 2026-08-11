@@ -220,11 +220,18 @@ class Gen:
             self.emit("PRAGMA foreign_keys=ON;")
 
     def child_write(self):
-        """Insert or delete in the table that references t."""
+        """Insert or delete in the table that references t.
+
+        The ORDER BY is load-bearing: LIMIT 1 without one picks whichever row
+        the scan reaches first, which SQL does not define and which two engines
+        settle differently whenever they choose different plans. ch is only built
+        for shapes whose k is unique, so ordering by it is a total order.
+        """
         if self.r.random() < 0.7:
             self.emit("INSERT OR IGNORE INTO ch(cid, fk, note) "
-                      "SELECT %d, k, %s FROM t WHERE %s LIMIT 1;"
-                      % (self.r.randint(1, 60), self.text_val(), self.pred()))
+                      "SELECT %d, k, %s FROM t WHERE %s ORDER BY %s LIMIT 1;"
+                      % (self.r.randint(1, 60), self.text_val(), self.pred(),
+                         Q % "k"))
         else:
             self.emit("DELETE FROM ch WHERE cid = %d;" % self.r.randint(1, 60))
 
