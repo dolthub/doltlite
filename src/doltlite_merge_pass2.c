@@ -45,10 +45,7 @@ int mergeCatalogPass2(
          || !pTheirTable
          || !doltliteFindTableByName(aMerged, *pnMerged,
                                      pTheirSe->zTblName)
-         || mergeTableRenameOtherDrop(
-              aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
-              aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema,
-              pTheirTable) ){
+         ){
           continue;
         }
         oursEntry = findCatalogEntryBySchemaObject(
@@ -181,12 +178,6 @@ int mergeCatalogPass2(
     }
 
     if( hasSchemaConflictObject(aConflictTables, nConflictTables, zName) ){
-      continue;
-    }
-    if( mergeTableRenameOtherDrop(
-          aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
-          aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema,
-          &aTheirs[i]) ){
       continue;
     }
     oursEntry = doltliteFindTableByName(aOurs, nOurs, zName);

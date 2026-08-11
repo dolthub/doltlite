@@ -45,7 +45,6 @@ struct MergePass1Ctx {
   SchemaMergeAction **ppSchemaActions; int *pnSchemaActions;
   int bDisjointSchemaChanges;
   int bPreferOurMaster;
-  int bTheirsRenameOursDrop;
   char ***pazReindex; int *pnReindex;
   IndexMergePatch *aPatches;
   int nPatches;
@@ -206,7 +205,7 @@ static int mergePass1MergeTableData(
     rc = mergeTableRows(c->db, &pAnc->root, &pOurs->root,
                         pTheirsRoot, pOurs->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
-                        aIdxInfo, nIdxInfo);
+                        aIdxInfo, nIdxInfo, 0);
     if( rc!=SQLITE_OK ){
       mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
       return rc;
@@ -541,14 +540,6 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
 
     if( c->aTheirs[i].iTable<=1 ) continue;
     if( zObject ){
-      if( mergeTableRenameOtherDrop(
-            c->aAnc, c->nAnc, c->aOurs, c->nOurs,
-            c->aTheirs, c->nTheirs,
-            c->aAncSchema, c->nAncSchema,
-            c->aTheirsSchema, c->nTheirsSchema, &c->aTheirs[i]) ){
-        c->bTheirsRenameOursDrop = 1;
-        continue;
-      }
       pAncEntry = doltliteFindTableByName(c->aAnc, c->nAnc, zObject);
       pOurEntry = doltliteFindTableByName(c->aOurs, c->nOurs, zObject);
       if( pAncEntry ){
@@ -592,6 +583,44 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
+/* Objects one side renamed and the other dropped, by the name they had in the
+** ancestor. Collected from both sides: Dolt keeps such a table whichever branch
+** did the renaming. */
+static int mergePass1CollectRenameOverDrop(
+  MergePass1Ctx *c,
+  MergeRowPolicy *pPolicy
+){
+  int dir;
+  for(dir=0; dir<2; dir++){
+    struct TableEntry *aRenamed = dir ? c->aOurs : c->aTheirs;
+    int nRenamed = dir ? c->nOurs : c->nTheirs;
+    struct TableEntry *aDropped = dir ? c->aTheirs : c->aOurs;
+    int nDropped = dir ? c->nTheirs : c->nOurs;
+    SchemaEntry *aRenamedSchema = dir ? c->aOursSchema : c->aTheirsSchema;
+    int nRenamedSchema = dir ? c->nOursSchema : c->nTheirsSchema;
+    int i;
+    for(i=0; i<nRenamed; i++){
+      const char *zAnc = 0;
+      const char **azNew;
+      if( aRenamed[i].iTable<=1 ) continue;
+      if( !mergeTableRenameOtherDrop(
+            c->aAnc, c->nAnc, aDropped, nDropped, aRenamed, nRenamed,
+            c->aAncSchema, c->nAncSchema,
+            aRenamedSchema, nRenamedSchema, &aRenamed[i], &zAnc) ){
+        continue;
+      }
+      if( !zAnc ) continue;
+      azNew = sqlite3_realloc(
+          (void*)pPolicy->azRenameOverDrop,
+          (pPolicy->nRenameOverDrop + 1) * (int)sizeof(char*));
+      if( !azNew ) return SQLITE_NOMEM;
+      pPolicy->azRenameOverDrop = azNew;
+      pPolicy->azRenameOverDrop[pPolicy->nRenameOverDrop++] = zAnc;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* Merge catalog root (iTable==1). Deferred so schema actions are known. */
 static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
   struct TableEntry *ancEntry;
@@ -608,7 +637,7 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
                       && *c->pnSchemaActions > 0);
   bPreferOurMasterHere = hasAnySchemaConflict(
       *c->ppConflictTables, *c->pnConflictTables)
-      || c->bTheirsRenameOursDrop || (c->bPreferOurMaster
+      || (c->bPreferOurMaster
       && replayDropsDisjointSchemaObject(c->aAncSchema, c->nAncSchema,
                                          c->aTheirsSchema, c->nTheirsSchema));
 
@@ -651,10 +680,18 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
       int theirSchemaChanged2 = prollyHashCompare(
           &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
 
+      MergeRowPolicy policy;
+      memset(&policy, 0, sizeof(policy));
+      rc = mergePass1CollectRenameOverDrop(c, &policy);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free((void*)policy.azRenameOverDrop);
+        return rc;
+      }
       rc = mergeTableRows(c->db, &ancEntry->root, &c->aOurs[iTable1Idx].root,
                           &theirsEntry->root, c->aOurs[iTable1Idx].flags,
                           &mergedTableRoot, &nConflicts, &aConflictRows,
-                          NULL, 0);
+                          NULL, 0, &policy);
+      sqlite3_free((void*)policy.azRenameOverDrop);
       if( rc!=SQLITE_OK ) return rc;
 
       {

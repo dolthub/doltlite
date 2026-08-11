@@ -59,6 +59,22 @@ int canFastMerge(
   int schemaUnchangedBothSides
 );
 
+/* Row-merge policy. Scoped by object identity, computed where both full
+** catalogs are visible, so enabling it cannot change any conflict but the ones
+** it names -- a rename on both sides still conflicts.
+**
+** azRenameOverDrop holds ancestor object names one side renamed and the other
+** dropped. A catalog row whose base name or tbl_name is listed resolves to the
+** surviving side instead of conflicting, matching Dolt, which keeps such a
+** table as an add. Resolving inside the row merge keeps the merged root
+** canonical, which the history-independence gate requires.
+*/
+typedef struct MergeRowPolicy MergeRowPolicy;
+struct MergeRowPolicy {
+  const char **azRenameOverDrop;
+  int nRenameOverDrop;
+};
+
 int mergeTableRows(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
@@ -69,7 +85,8 @@ int mergeTableRows(
   int *pnConflicts,
   DoltliteConflictRow **ppConflicts,
   MergeIndexInfo *aIndexes,
-  int nIndexes
+  int nIndexes,
+  const MergeRowPolicy *pPolicy
 );
 
 /* ── schema IR (doltlite_merge_schema.c) ──────────────────────────────── */
@@ -168,8 +185,10 @@ int mergeTableRenameOtherDrop(
   struct TableEntry *aRenamed, int nRenamed,
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aRenamedSchema, int nRenamedSchema,
-  struct TableEntry *pRenamed
+  struct TableEntry *pRenamed,
+  const char **pzAncName
 );
+
 
 struct TableEntry *findCatalogEntryBySchemaObject(
   struct TableEntry *aCat,

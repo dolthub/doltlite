@@ -255,15 +255,23 @@ DROP TABLE t;
 CREATE TABLE replacement(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','drop-add');
 EOF
+# A table renamed on one side and dropped on the other is now kept, matching
+# Dolt, so this cherry-pick no longer quietly discards `renamed` and its index.
+# It cannot be applied either: the current branch dropped t and gave its catalog
+# number to `replacement`, so the rename does not resolve and the catalog rows
+# conflict. The pick is refused with nothing committed and the schema untouched.
+# Dolt refuses this scenario too, reporting "no changes were made, nothing to
+# commit" -- a different message for the same outcome, and both are preferable
+# to the silent table drop this used to assert.
 out=$("$DOLTLITE" "$DB/feat" "SELECT dolt_cherry_pick('main');" 2>/dev/null)
 rc=$?
-check "rename_vs_drop_cherry_pick_succeeds" "0" "$rc"
+check "rename_vs_drop_cherry_pick_refuses" "1" "$rc"
 out=$("$DOLTLITE" "$DB/feat" \
   "SELECT group_concat(name, ',') FROM sqlite_schema WHERE name IN ('first','t','renamed','iv','replacement') ORDER BY name;")
-check "rename_vs_drop_keeps_current_schema" "replacement" "$out"
+check "rename_vs_drop_leaves_schema_untouched" "first,replacement" "$out"
 out=$("$DOLTLITE" "$DB/feat" \
   "SELECT (SELECT count(*) FROM dolt_status) || '|' || (SELECT message FROM dolt_log LIMIT 1);")
-check "rename_vs_drop_is_clean_commit" "0|rename" "$out"
+check "rename_vs_drop_commits_nothing" "0|drop-add" "$out"
 
 DB="$TMPROOT/index_drop_vs_parent_rename.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
@@ -412,6 +420,60 @@ out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELEC
 check "cherry_pick_cellmerge_table_scan_rows" "1:a1:b1" "$out"
 out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
 check "cherry_pick_cellmerge_index_has_no_stale_entry" "1:a1:b1" "$out"
+
+# The shape itself, in both directions and for cherry-pick: a table renamed on
+# one branch and dropped on the other is kept with its rows and its index, and
+# the merge is clean. Dolt 2.2.2 answers the same for all three.
+for direction in theirs ours; do
+  DB="$TMPROOT/rename_over_drop_$direction.db"
+  rm -rf "$DB"
+  if [ "$direction" = theirs ]; then ren=feat; drp=main; else ren=main; drp=feat; fi
+  "$DOLTLITE" "$DB" <<EOF >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX i_v ON t(v);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$ren');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('$drp');
+DROP TABLE t;
+SELECT dolt_commit('-Am','drop');
+SELECT dolt_checkout('main');
+EOF
+  if [ "$direction" = theirs ]; then merge_from=feat; else merge_from=feat; fi
+  out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('$merge_from'));" 2>/dev/null)
+  check "rename_over_drop_${direction}_merge_clean" "40" "$out"
+  out=$("$DOLTLITE" "$DB" \
+    "SELECT (SELECT count(*) FROM t2) || '|' ||
+            (SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_schema WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name)) || '|' ||
+            (SELECT * FROM pragma_integrity_check LIMIT 1);" 2>/dev/null)
+  check "rename_over_drop_${direction}_keeps_table" "2|i_v|ok" "$out"
+done
+
+# A rename on *both* sides now conflicts. That is not yet Dolt parity -- Dolt
+# keeps ours_t and theirs_t both, treating each rename as an add -- but it is
+# what falls out of scoping the policy to objects the other side dropped, and it
+# replaces something worse: before this change the merge reported success and
+# silently kept only ours, losing theirs_t and its rows. Conflicting is the safe
+# half-step; keeping both needs catalog-identity work, tracked separately.
+DB="$TMPROOT/rename_vs_rename.db"; rm -rf "$DB"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME TO theirs_t;
+SELECT dolt_commit('-Am','theirs rename');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO ours_t;
+SELECT dolt_commit('-Am','ours rename');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('feat'));" 2>/dev/null)
+rc=$?
+check "rename_vs_rename_conflicts_not_silent_loss" "1" "$rc"
 
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
