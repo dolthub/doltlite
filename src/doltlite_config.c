@@ -171,12 +171,14 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
   ** so the statement is as invisible as stock's, which touches no rows at all.
   */
   {
-    u32 savedFlags = db->mDbFlags;
+    int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
     i64 nChange = db->nChange;
     i64 nTotalChange = db->nTotalChange;
     db->mDbFlags |= DBFLAG_InternalDml;
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    db->mDbFlags = savedFlags;
+    /* Clear the one bit rather than restoring the word: preparing a statement
+    ** moves other bits, and putting the old word back would undo that. */
+    if( !bWasSet ) db->mDbFlags &= ~DBFLAG_InternalDml;
     db->nChange = nChange;
     db->nTotalChange = nTotalChange;
   }
