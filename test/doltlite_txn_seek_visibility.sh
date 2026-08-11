@@ -846,4 +846,49 @@ run_test "backward_scan_reaches_pending_extended_keys" \
 
 db_rm "$DB"
 
+# A backward seek whose bound is below every row lands above the bound, and the
+# step that follows has to move down and find nothing. The pending-row candidate
+# for that step is chosen from a lower-bound search, so it is always the entry
+# before the landing -- keeping the landing itself made a pending row above the
+# cursor the answer to a step that has to move down, and a backward scan
+# returned it.
+DB=/tmp/test_txn_backward_landing_$$.db; db_rm "$DB"
+
+run_test "backward_seek_below_all_rows_finds_nothing" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES('AB', -47.436, 'x');
+   BEGIN;
+   INSERT INTO t VALUES('ab', 5, 'z');
+   SELECT coalesce(quote(max(a)),'NULL') FROM t WHERE a <= -1e308;
+   SELECT coalesce(group_concat(quote(a)),'none') FROM (SELECT a FROM t WHERE a <= -1e308 ORDER BY a DESC);
+   SELECT count(*) FROM t WHERE a <= -1e308;
+   COMMIT;" \
+  "NULL
+none
+0" \
+  "$DB"
+
+db_rm "$DB"
+
+# The ordering that reaches the same step through a plan rather than a bound:
+# DESC NULLS FIRST is the one ordering an index cannot serve by walking
+# backwards, so it scans the NULL region separately and re-seeks for the rest.
+run_test "desc_nulls_first_does_not_repeat_pending_row" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
+   CREATE INDEX i_a ON t(a);
+   INSERT INTO t VALUES('AB', -47.436, 'x');
+   BEGIN;
+   INSERT INTO t VALUES('ab', 5, 'z');
+   SELECT group_concat(quote(a),'|') FROM (SELECT a FROM t ORDER BY a DESC NULLS FIRST, quote(k));
+   SELECT group_concat(quote(a),'|') FROM (SELECT a FROM t ORDER BY a DESC);
+   SELECT count(*) FROM t;
+   COMMIT;" \
+  "5|-47.436
+5|-47.436
+2" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish

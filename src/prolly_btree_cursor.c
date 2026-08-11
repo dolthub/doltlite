@@ -785,31 +785,23 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
     ProllyMutMapIter it;
     rc = ensureCursorMutMapOrder(pCur);
     if( rc!=SQLITE_OK ) return rc;
+    /* The seek is a lower bound, so it lands on the first pending entry at or
+    ** above the tree row. A backward step needs the entry strictly below it,
+    ** which is always the one before that landing -- including when the landing
+    ** sorts above the tree row, which is the case a conditional decrement got
+    ** wrong: keeping it made the pending row above the cursor the candidate for
+    ** a step that has to move down, so a backward scan returned it. */
     if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
       rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
                                 prollyCursorIntKey(&pCur->pCur));
       if( rc!=SQLITE_OK ) return rc;
-      if( it.idx >= pCur->pMutMap->nEntries ){
-        it.idx--;
-      }else{
-        ProllyMutMapEntry *e;
-        rc = orderedMutMapEntryAt(pCur->pMutMap, it.idx, &e);
-        if( rc!=SQLITE_OK ) return rc;
-        if( mergeCompare(pCur, e)>=0 || e->op==PROLLY_EDIT_DELETE ) it.idx--;
-      }
+      it.idx--;
     }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
       const u8 *pK; int nK;
       prollyCursorKey(&pCur->pCur, &pK, &nK);
       rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
       if( rc!=SQLITE_OK ) return rc;
-      if( it.idx >= pCur->pMutMap->nEntries ){
-        it.idx--;
-      }else{
-        ProllyMutMapEntry *e;
-        rc = orderedMutMapEntryAt(pCur->pMutMap, it.idx, &e);
-        if( rc!=SQLITE_OK ) return rc;
-        if( mergeCompare(pCur, e)>=0 || e->op==PROLLY_EDIT_DELETE ) it.idx--;
-      }
+      it.idx--;
     }else if( pCur->eState==CURSOR_VALID ){
       rc = seedMutMapIterFromCursor(pCur, &it);
       if( rc==SQLITE_NOTFOUND ){
