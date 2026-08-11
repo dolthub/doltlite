@@ -264,10 +264,8 @@ def commit_branch(doltlite, db_path, branch, model, step, stage_all=True):
         return
     msg = "stateful %s %d" % (branch, step)
     args = "'-A','-m',%s" % sql_quote(msg) if stage_all else "'-m',%s" % sql_quote(msg)
-    # dolt_status can be non-empty while working already matches HEAD: staged
-    # diverged and working undid those changes. dolt_commit('-A') restages from
-    # working, sees staged==HEAD, and errors "nothing to commit" (same as Dolt).
-    # Treat that as a successful no-op and resync the model from the DB.
+    # A failed SQLite statement rolls back -A's restage along with the commit.
+    # Complete that restage successfully before treating it as a clean no-op.
     out = run_sql(
         doltlite,
         db_for_branch(db_path, branch),
@@ -276,6 +274,12 @@ def commit_branch(doltlite, db_path, branch, model, step, stage_all=True):
         allowed_errors=("nothing to commit",) if stage_all else (),
     )
     if out is None:
+        run_sql(
+            doltlite,
+            db_for_branch(db_path, branch),
+            "SELECT dolt_add('-A');",
+            "restage_%s" % branch,
+        )
         sync_vc_result(doltlite, db_path, branch, model)
         return
     expected = model[branch]["working"] if stage_all else model[branch]["staged"]
