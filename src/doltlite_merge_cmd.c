@@ -391,6 +391,12 @@ int doltliteMergeRef(
     return SQLITE_ERROR;
   }
 
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return SQLITE_ERROR;
+  }
+
   doltliteGetSessionHead(db, &ourHead);
   if( prollyHashIsEmpty(&ourHead) ){
     sqlite3_result_error(context, "no commits on current branch", -1);
@@ -437,9 +443,6 @@ int doltliteMergeRef(
   rc = mergeRefLoadCatalogs(db, &ourHead, &theirHead, &ancestorHash,
                             &ourCommit, &theirCommit,
                             &ourCatHash, &theirCatHash, &ancCatHash, &zFail);
-  if( rc!=SQLITE_OK ) goto merge_fail;
-
-  rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) goto merge_fail;
 
   rc = doltliteSaveTxnState(db, &savedState);
