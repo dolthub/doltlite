@@ -4204,6 +4204,18 @@ static int unixFileControl(sqlite3_file *id, int op, void *pArg){
       *(int*)pArg = fileHasMoved(pFile);
       return SQLITE_OK;
     }
+#ifdef DOLTLITE_PROLLY
+    case SQLITE_FCNTL_DOLTLITE_FILE_STATE: {
+      DoltliteFileState *pState = (DoltliteFileState*)pArg;
+      struct stat buf;
+      int rc = osStat(pFile->zPath, &buf);
+      pState->bMoved = pFile->pInode!=0
+                    && (rc!=0
+                        || (u64)buf.st_ino!=pFile->pInode->fileId.ino);
+      pState->iFileSize = rc==0 ? (sqlite3_int64)buf.st_size : -1;
+      return SQLITE_OK;
+    }
+#endif
 #ifdef SQLITE_ENABLE_SETLK_TIMEOUT
     case SQLITE_FCNTL_LOCK_TIMEOUT: {
       int iOld = pFile->iBusyTimeout;
