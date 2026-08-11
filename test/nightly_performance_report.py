@@ -302,7 +302,7 @@ def vc_passes(suite):
     )
 
 
-def render_section_summary(suites, section, prefix):
+def render_section_summary(suites, section, prefix, include_counts=True):
     results = section_results(suites, section)
     if not results:
         raise ValueError(f"missing results for section: {section}")
@@ -310,14 +310,19 @@ def render_section_summary(suites, section, prefix):
     candidate = sum(result.candidate_us for _, result in results)
     ratio = candidate / baseline
     result = "PASS" if section_passes(suites, section) else "FAIL"
-    return (
-        f"| {prefix} | {len(results)} | "
-        f"{sample_count_text(suites, results)} | "
-        f"{format_time(baseline)} | {format_time(candidate)} | "
-        f"{ratio:.1f}× | "
-        f"{statistics.median(workload_noise(*item) for item in results):.1f}% "
-        f"| **{result}** |"
+    cells = [prefix]
+    if include_counts:
+        cells.extend((str(len(results)), sample_count_text(suites, results)))
+    cells.extend(
+        (
+            format_time(baseline),
+            format_time(candidate),
+            f"{ratio:.1f}×",
+            f"{statistics.median(workload_noise(*item) for item in results):.1f}%",
+            f"**{result}**",
+        )
     )
+    return "| " + " | ".join(cells) + " |"
 
 
 def render_sql_summary(suites):
@@ -327,15 +332,17 @@ def render_sql_summary(suites):
             [
                 f"### {storage}",
                 "",
-                "| Operation | Workloads | Samples/workload | "
-                "SQLite median total | DoltLite median total | Ratio | "
+                "| Operation | SQLite median total | "
+                "DoltLite median total | Ratio | "
                 "Paired-ratio noise | Result |",
-                "|---|---:|---:|---:|---:|---:|---:|---|",
+                "|---|---:|---:|---:|---:|---|",
             ]
         )
         for operation, section in operations:
             lines.append(
-                render_section_summary(suites, section, operation)
+                render_section_summary(
+                    suites, section, operation, include_counts=False
+                )
             )
         lines.append("")
     return lines
