@@ -1247,6 +1247,41 @@ run_test "altercol_trigger_still_fires_after" \
 rm -f "$DB" /tmp/test_rg_altercol_dangling_$$.db
 
 
+echo "--- Guard 24: SAVEPOINT rollback after INSERT RETURNING + ANALYZE (#2103) ---"
+# prollyBtreeBeginStmt used to push every journal level as a statement
+# savepoint, so a named SAVEPOINT never captured table roots. ANALYZE after
+# INSERT RETURNING flushed the index; ROLLBACK TO then left the index entry
+# for the rolled-back row behind while the table scan was correct.
+DB=/tmp/test_rg_sp_returning_analyze_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER, a, b TEXT DEFAULT 'dflt', g AS (length(coalesce(quote(b),'')) + coalesce(a, 0)) VIRTUAL);
+CREATE INDEX i_a ON t(a);
+INSERT OR IGNORE INTO t(k, a, b) VALUES(34, -18, x'00');
+INSERT OR REPLACE INTO t(k, a, b) VALUES(0, 'AB ', 'z');
+INSERT OR REPLACE INTO t(k, a, b) VALUES(-27, 'A', 'a' || char(0) || 'b');
+INSERT OR IGNORE INTO t(k, a, b) VALUES (34, 'a', 'ab'), (18, 20.369, 'z');
+INSERT OR ROLLBACK INTO t(k, a, b) VALUES(9007199254740993, -46.284, 'A');
+INSERT OR IGNORE INTO t(k, a, b) VALUES(38, -27, 'a');
+INSERT OR ROLLBACK INTO t(k, a, b) VALUES(-22, -45.950, 'A');
+ANALYZE t;
+BEGIN;
+DELETE FROM t WHERE b IN (SELECT b FROM t WHERE k = -25);
+SAVEPOINT sp2;
+INSERT OR REPLACE INTO t(k, a, b) VALUES(9007199254740992, '', 'a' || char(0) || 'b') RETURNING coalesce(quote(k),'N'), coalesce(quote(a),'N'), coalesce(quote(b),'N');
+ANALYZE t;
+ROLLBACK TO sp2;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "sp_returning_analyze_count" "SELECT count(*) FROM t;" "8" "$DB"
+run_test "sp_returning_analyze_not_indexed" \
+  "SELECT count(*) FROM t NOT INDEXED;" "8" "$DB"
+run_test "sp_returning_analyze_indexed" \
+  "SELECT count(*) FROM t INDEXED BY i_a;" "8" "$DB"
+run_test "sp_returning_analyze_order" \
+  "SELECT group_concat(coalesce(quote(a), 'N'), '|') FROM (SELECT a FROM t ORDER BY a ASC, coalesce(quote(k), 'N'), coalesce(quote(b), 'N'));" \
+  "-46.284|-45.95|-27|-18|20.369|'A'|'AB '|'a'" "$DB"
+run_test "sp_returning_analyze_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
