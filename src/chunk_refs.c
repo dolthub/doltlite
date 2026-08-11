@@ -548,3 +548,318 @@ int csReplaceRefsStateFromBlob(
 }
 
 #endif
+
+/* Three-way merge of the session's uncommitted ref changes onto a refs
+** table peers have advanced. cs->refs holds the DISK state just reloaded;
+** pLocal holds this session's arrays, derived from pBase (the blob at the
+** committedRefsHash the session last adopted). Refs the session did not
+** touch keep their disk value — that is the whole point: a wholesale
+** restore of pLocal silently reverted every peer change except the one
+** tip the branch CAS happened to check. Refs the session changed apply
+** onto disk unless a peer changed the same ref differently, which is a
+** real race and fails SQLITE_BUSY_SNAPSHOT rather than picking a winner.
+** Sequences are AUTOINCREMENT high-water marks and merge by max. The
+** scan runs conflict-detection first so the disk arrays are untouched
+** unless the whole merge applies. */
+
+static int refsHashesEqual(const ProllyHash *a, const ProllyHash *b){
+  return prollyHashCompare(a, b)==0;
+}
+
+static int refsStrEqual(const char *a, const char *b){
+  if( a==0 && b==0 ) return 1;
+  if( a==0 || b==0 ) return 0;
+  return strcmp(a, b)==0;
+}
+
+static int branchRefsEqual(const BranchRef *a, const BranchRef *b){
+  return refsHashesEqual(&a->commitHash, &b->commitHash)
+      && refsHashesEqual(&a->workingSetHash, &b->workingSetHash);
+}
+
+static int tagRefsEqual(const TagRef *a, const TagRef *b){
+  return refsHashesEqual(&a->commitHash, &b->commitHash)
+      && a->timestamp==b->timestamp
+      && refsStrEqual(a->zTagger, b->zTagger)
+      && refsStrEqual(a->zEmail, b->zEmail)
+      && refsStrEqual(a->zMessage, b->zMessage);
+}
+
+static int remoteRefsEqual(const RemoteRef *a, const RemoteRef *b){
+  return refsStrEqual(a->zUrl, b->zUrl);
+}
+
+static int trackingRefsEqual(const TrackingBranch *a, const TrackingBranch *b){
+  return refsHashesEqual(&a->commitHash, &b->commitHash);
+}
+
+static int findTrackingIdx(
+  const TrackingBranch *a, int n,
+  const char *zRemote, const char *zBranch
+){
+  int i;
+  for(i=0; i<n; i++){
+    if( refsStrEqual(a[i].zRemote, zRemote)
+     && refsStrEqual(a[i].zBranch, zBranch) ){
+      return i;
+    }
+  }
+  return -1;
+}
+
+/* One name-keyed category: detect conflicts when checkOnly, else apply.
+** The callbacks localize the per-type field handling; iteration and the
+** three-way decisions live here once. */
+typedef struct RefsMergeCat RefsMergeCat;
+struct RefsMergeCat {
+  const void *aLocal; int nLocal;
+  const void *aBase;  int nBase;
+  void **paDisk;      int *pnDisk;
+  int stride;
+  int (*xEqual)(const void*, const void*);
+  int (*xCopyInto)(void *pDst, const void *pSrc);
+  void (*xFreeEntry)(void*);
+  int (*xFind)(const void *aBase, int n, const void *pEntry);
+};
+
+static int refsMergeCategory(RefsMergeCat *p, int checkOnly){
+  int i;
+  const u8 *aLocal = (const u8*)p->aLocal;
+  const u8 *aBase = (const u8*)p->aBase;
+
+  for(i=0; i<p->nLocal; i++){
+    const void *pL = aLocal + (size_t)i*p->stride;
+    int iB = p->xFind(p->aBase, p->nBase, pL);
+    const void *pB = iB<0 ? 0 : (const void*)(aBase + (size_t)iB*p->stride);
+    int iD;
+    void *pD;
+    if( pB && p->xEqual(pL, pB) ) continue;     /* not locally changed */
+    iD = p->xFind(*p->paDisk, *p->pnDisk, pL);
+    pD = iD<0 ? 0 : (void*)((u8*)(*p->paDisk) + (size_t)iD*p->stride);
+    if( pD ){
+      if( pB && !p->xEqual(pD, pB) && !p->xEqual(pD, pL) ){
+        return SQLITE_BUSY_SNAPSHOT;            /* both sides moved it */
+      }
+      if( !pB && !p->xEqual(pD, pL) ){
+        return SQLITE_BUSY_SNAPSHOT;            /* both sides created it */
+      }
+      if( !checkOnly ){
+        p->xFreeEntry(pD);
+        if( p->xCopyInto(pD, pL) ) return SQLITE_NOMEM;
+      }
+    }else{
+      if( pB ){
+        return SQLITE_BUSY_SNAPSHOT;   /* peer deleted what we changed */
+      }
+      if( !checkOnly ){
+        int rc = csRefArrayGrow(p->paDisk, *p->pnDisk, p->stride);
+        if( rc!=SQLITE_OK ) return rc;
+        pD = (void*)((u8*)(*p->paDisk) + (size_t)(*p->pnDisk)*p->stride);
+        if( p->xCopyInto(pD, pL) ) return SQLITE_NOMEM;
+        (*p->pnDisk)++;
+      }
+    }
+  }
+  for(i=0; i<p->nBase; i++){
+    const void *pB = aBase + (size_t)i*p->stride;
+    int iL = p->xFind(p->aLocal, p->nLocal, pB);
+    int iD;
+    if( iL>=0 ) continue;                       /* still present locally */
+    iD = p->xFind(*p->paDisk, *p->pnDisk, pB);  /* locally deleted */
+    if( iD>=0 ){
+      void *pD = (void*)((u8*)(*p->paDisk) + (size_t)iD*p->stride);
+      if( !p->xEqual(pD, pB) ){
+        return SQLITE_BUSY_SNAPSHOT;   /* peer changed what we deleted */
+      }
+      if( !checkOnly ){
+        p->xFreeEntry(pD);
+        memmove(pD, (u8*)pD + p->stride,
+                (size_t)(*p->pnDisk - iD - 1)*p->stride);
+        (*p->pnDisk)--;
+      }
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int branchFind(const void *aBase, int n, const void *pEntry){
+  return csFindNamedRef(aBase, n, sizeof(BranchRef), *(char* const*)pEntry);
+}
+
+static int tagFind(const void *aBase, int n, const void *pEntry){
+  return csFindNamedRef(aBase, n, sizeof(TagRef), *(char* const*)pEntry);
+}
+
+static int remoteFind(const void *aBase, int n, const void *pEntry){
+  return csFindNamedRef(aBase, n, sizeof(RemoteRef), *(char* const*)pEntry);
+}
+
+static int trackingFind(const void *aBase, int n, const void *pEntry){
+  const TrackingBranch *e = (const TrackingBranch*)pEntry;
+  return findTrackingIdx((const TrackingBranch*)aBase, n,
+                         e->zRemote, e->zBranch);
+}
+
+static int branchCopyInto(void *pDst, const void *pSrc){
+  const BranchRef *s = (const BranchRef*)pSrc;
+  BranchRef *d = (BranchRef*)pDst;
+  memset(d, 0, sizeof(*d));
+  d->zName = sqlite3_mprintf("%s", s->zName);
+  d->commitHash = s->commitHash;
+  d->workingSetHash = s->workingSetHash;
+  return d->zName==0;
+}
+
+static void branchFreeEntry(void *pEntry){
+  sqlite3_free(((BranchRef*)pEntry)->zName);
+}
+
+static int tagCopyInto(void *pDst, const void *pSrc){
+  const TagRef *s = (const TagRef*)pSrc;
+  TagRef *d = (TagRef*)pDst;
+  memset(d, 0, sizeof(*d));
+  d->zName = sqlite3_mprintf("%s", s->zName);
+  d->commitHash = s->commitHash;
+  d->timestamp = s->timestamp;
+  d->zTagger = s->zTagger ? sqlite3_mprintf("%s", s->zTagger) : 0;
+  d->zEmail = s->zEmail ? sqlite3_mprintf("%s", s->zEmail) : 0;
+  d->zMessage = s->zMessage ? sqlite3_mprintf("%s", s->zMessage) : 0;
+  return d->zName==0
+      || (s->zTagger && !d->zTagger)
+      || (s->zEmail && !d->zEmail)
+      || (s->zMessage && !d->zMessage);
+}
+
+static void tagFreeEntry(void *pEntry){
+  TagRef *t = (TagRef*)pEntry;
+  sqlite3_free(t->zName);
+  sqlite3_free(t->zTagger);
+  sqlite3_free(t->zEmail);
+  sqlite3_free(t->zMessage);
+}
+
+static int remoteCopyInto(void *pDst, const void *pSrc){
+  const RemoteRef *s = (const RemoteRef*)pSrc;
+  RemoteRef *d = (RemoteRef*)pDst;
+  memset(d, 0, sizeof(*d));
+  d->zName = sqlite3_mprintf("%s", s->zName);
+  d->zUrl = s->zUrl ? sqlite3_mprintf("%s", s->zUrl) : 0;
+  return d->zName==0 || (s->zUrl && !d->zUrl);
+}
+
+static void remoteFreeEntry(void *pEntry){
+  RemoteRef *r = (RemoteRef*)pEntry;
+  sqlite3_free(r->zName);
+  sqlite3_free(r->zUrl);
+}
+
+static int trackingCopyInto(void *pDst, const void *pSrc){
+  const TrackingBranch *s = (const TrackingBranch*)pSrc;
+  TrackingBranch *d = (TrackingBranch*)pDst;
+  memset(d, 0, sizeof(*d));
+  d->zRemote = sqlite3_mprintf("%s", s->zRemote);
+  d->zBranch = sqlite3_mprintf("%s", s->zBranch);
+  d->commitHash = s->commitHash;
+  return d->zRemote==0 || d->zBranch==0;
+}
+
+static void trackingFreeEntry(void *pEntry){
+  TrackingBranch *t = (TrackingBranch*)pEntry;
+  sqlite3_free(t->zRemote);
+  sqlite3_free(t->zBranch);
+}
+
+int csMergeSavedRefsOntoDisk(
+  ChunkStore *cs,
+  const SavedRefsState *pLocal,
+  const RefsTable *pBase
+){
+  RefsMergeCat aCat[4];
+  int pass, i, rc;
+
+  memset(aCat, 0, sizeof(aCat));
+  aCat[0].aLocal = pLocal->aBranches; aCat[0].nLocal = pLocal->nBranches;
+  aCat[0].aBase = pBase->aBranches;   aCat[0].nBase = pBase->nBranches;
+  aCat[0].paDisk = (void**)&cs->refs.aBranches;
+  aCat[0].pnDisk = &cs->refs.nBranches;
+  aCat[0].stride = (int)sizeof(BranchRef);
+  aCat[0].xEqual = (int(*)(const void*,const void*))branchRefsEqual;
+  aCat[0].xCopyInto = branchCopyInto;
+  aCat[0].xFreeEntry = branchFreeEntry;
+  aCat[0].xFind = branchFind;
+
+  aCat[1].aLocal = pLocal->aTags; aCat[1].nLocal = pLocal->nTags;
+  aCat[1].aBase = pBase->aTags;   aCat[1].nBase = pBase->nTags;
+  aCat[1].paDisk = (void**)&cs->refs.aTags;
+  aCat[1].pnDisk = &cs->refs.nTags;
+  aCat[1].stride = (int)sizeof(TagRef);
+  aCat[1].xEqual = (int(*)(const void*,const void*))tagRefsEqual;
+  aCat[1].xCopyInto = tagCopyInto;
+  aCat[1].xFreeEntry = tagFreeEntry;
+  aCat[1].xFind = tagFind;
+
+  aCat[2].aLocal = pLocal->aRemotes; aCat[2].nLocal = pLocal->nRemotes;
+  aCat[2].aBase = pBase->aRemotes;   aCat[2].nBase = pBase->nRemotes;
+  aCat[2].paDisk = (void**)&cs->refs.aRemotes;
+  aCat[2].pnDisk = &cs->refs.nRemotes;
+  aCat[2].stride = (int)sizeof(RemoteRef);
+  aCat[2].xEqual = (int(*)(const void*,const void*))remoteRefsEqual;
+  aCat[2].xCopyInto = remoteCopyInto;
+  aCat[2].xFreeEntry = remoteFreeEntry;
+  aCat[2].xFind = remoteFind;
+
+  aCat[3].aLocal = pLocal->aTracking; aCat[3].nLocal = pLocal->nTracking;
+  aCat[3].aBase = pBase->aTracking;   aCat[3].nBase = pBase->nTracking;
+  aCat[3].paDisk = (void**)&cs->refs.aTracking;
+  aCat[3].pnDisk = &cs->refs.nTracking;
+  aCat[3].stride = (int)sizeof(TrackingBranch);
+  aCat[3].xEqual = (int(*)(const void*,const void*))trackingRefsEqual;
+  aCat[3].xCopyInto = trackingCopyInto;
+  aCat[3].xFreeEntry = trackingFreeEntry;
+  aCat[3].xFind = trackingFind;
+
+  /* The default branch is a scalar three-way. */
+  {
+    const char *zL = pLocal->zDefaultBranch;
+    const char *zB = pBase->zDefaultBranch;
+    const char *zD = cs->refs.zDefaultBranch;
+    if( !refsStrEqual(zL, zB)
+     && !refsStrEqual(zD, zB)
+     && !refsStrEqual(zD, zL) ){
+      return SQLITE_BUSY_SNAPSHOT;
+    }
+  }
+
+  for(pass=0; pass<2; pass++){
+    for(i=0; i<4; i++){
+      rc = refsMergeCategory(&aCat[i], pass==0);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+
+  if( pLocal->zDefaultBranch
+   && !refsStrEqual(pLocal->zDefaultBranch, pBase->zDefaultBranch) ){
+    char *zDup = sqlite3_mprintf("%s", pLocal->zDefaultBranch);
+    if( !zDup ) return SQLITE_NOMEM;
+    sqlite3_free(cs->refs.zDefaultBranch);
+    cs->refs.zDefaultBranch = zDup;
+  }
+
+  /* AUTOINCREMENT counters are high-water marks shared across branches:
+  ** the merged value is the max of both sides, never a conflict, and a
+  ** counter the session dropped (DROP TABLE) goes away. */
+  for(i=0; i<pLocal->nSequences; i++){
+    const SequenceRef *pL = &pLocal->aSequences[i];
+    int rc2 = chunkStoreBumpSequence(cs, pL->zTableName, pL->iSeq);
+    if( rc2!=SQLITE_OK ) return rc2;
+  }
+  for(i=0; i<pBase->nSequences; i++){
+    const SequenceRef *pB = &pBase->aSequences[i];
+    if( csFindNamedRef(pLocal->aSequences, pLocal->nSequences,
+                       (int)sizeof(SequenceRef), pB->zTableName)<0 ){
+      chunkStoreDropSequence(cs, pB->zTableName);
+    }
+  }
+
+  return SQLITE_OK;
+}

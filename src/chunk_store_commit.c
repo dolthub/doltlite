@@ -562,11 +562,13 @@ int chunkStoreCommit(ChunkStore *cs){
   if( cs->readOnly || cs->movedReadOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( cs->lockDepth<=0 && cs->file.zFilename ){
+    ProllyHash baseRefsHash;
     preserveRefs = cs->staging.nPending > 0
                 && prollyHashCompare(&cs->refs.refsHash,
                                      &cs->refs.committedRefsHash)!=0;
     if( preserveRefs ){
       savedRefsHash = cs->refs.refsHash;
+      baseRefsHash = cs->refs.committedRefsHash;
       csDetachSavedRefsState(cs, &savedRefs);
     }
     rc = chunkStoreLockAndRefresh(cs);
@@ -578,9 +580,12 @@ int chunkStoreCommit(ChunkStore *cs){
       return rc;
     }
     if( preserveRefs ){
-      csFreeRefsState(cs);
-      csRestoreSavedRefsState(cs, &savedRefs);
-      cs->refs.refsHash = savedRefsHash;
+      rc = csRestoreOrMergeLocalRefs(cs, &savedRefs,
+                                     &savedRefsHash, &baseRefsHash);
+      if( rc!=SQLITE_OK ){
+        chunkStoreUnlock(cs);
+        return rc;
+      }
     }
     acquiredLock = 1;
   }

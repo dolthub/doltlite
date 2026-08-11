@@ -134,6 +134,9 @@ int csReplaceRefsStateFromBlob(struct ChunkStore *cs, const u8 *data, int nData,
                                int adopt);
 void csFreeRefsState(struct ChunkStore *cs);
 void csAdoptRefsState(struct ChunkStore *pDst, struct ChunkStore *pSrc);
+int csMergeSavedRefsOntoDisk(struct ChunkStore *cs,
+                             const SavedRefsState *pLocal,
+                             const RefsTable *pBase);
 int csEnsureDefaultBranch(struct ChunkStore *cs);
 
 void csFreeBranches(struct ChunkStore *cs);

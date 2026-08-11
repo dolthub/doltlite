@@ -164,10 +164,67 @@ int chunkStoreEnsureRefsFresh(ChunkStore *cs){
   return rc;
 }
 
+/* Reinstate a session's uncommitted ref changes after the store adopted
+** the on-disk state. When no peer committed refs since the base the
+** local arrays were derived from, the wholesale restore is exact. When
+** peers moved, restoring wholesale would publish the stale snapshot at
+** the next commit, silently reverting every peer change except the one
+** tip the branch CAS checks — the lost merged rows and resurrected temp
+** branches of the stress failures — so the local delta merges onto the
+** peers' table instead, and a ref both sides changed fails the operation
+** rather than picking a winner. On success pSaved is consumed; on
+** failure the local view is reinstated so the failing operation unwinds
+** over known state. */
+int csRestoreOrMergeLocalRefs(
+  ChunkStore *cs,
+  SavedRefsState *pSaved,
+  const ProllyHash *pSavedRefsHash,
+  const ProllyHash *pBaseRefsHash
+){
+  int rc;
+  if( prollyHashCompare(&cs->refs.committedRefsHash, pBaseRefsHash)==0 ){
+    csFreeRefsState(cs);
+    csRestoreSavedRefsState(cs, pSaved);
+    cs->refs.refsHash = *pSavedRefsHash;
+    return SQLITE_OK;
+  }
+  {
+    u8 *baseData = 0;
+    int nBaseData = 0;
+    ChunkStore baseView;
+    memset(&baseView, 0, sizeof(baseView));
+    rc = chunkStoreGet(cs, pBaseRefsHash, &baseData, &nBaseData);
+    if( rc==SQLITE_OK ){
+      rc = csDeserializeRefsIntoTemp(&baseView, baseData, nBaseData);
+    }
+    if( rc==SQLITE_OK ){
+      rc = csMergeSavedRefsOntoDisk(cs, pSaved, &baseView.refs);
+    }
+    sqlite3_free(baseData);
+    csFreeRefsState(&baseView);
+  }
+  if( rc==SQLITE_OK ){
+    /* The commit publishes the blob refsHash names, and the blob staged
+    ** before the merge holds only the local view; serialize the merged
+    ** table so the commit publishes it. */
+    rc = chunkStoreSerializeRefs(cs);
+  }
+  if( rc==SQLITE_OK ){
+    csFreeSavedRefsState(pSaved);
+    return SQLITE_OK;
+  }
+  rc = rc==SQLITE_NOMEM ? SQLITE_NOMEM : SQLITE_BUSY_SNAPSHOT;
+  csFreeRefsState(cs);
+  csRestoreSavedRefsState(cs, pSaved);
+  cs->refs.refsHash = *pSavedRefsHash;
+  return rc;
+}
+
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
   int rc;
   int preserveRefs;
   ProllyHash savedRefsHash;
+  ProllyHash baseRefsHash;
   SavedRefsState savedRefs;
 
   /* Reloading drops aRecent; never do that with uncommitted refs to it. */
@@ -181,6 +238,7 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( preserveRefs ){
     savedRefsHash = cs->refs.refsHash;
+    baseRefsHash = cs->refs.committedRefsHash;
     csDetachSavedRefsState(cs, &savedRefs);
   }
 
@@ -188,7 +246,8 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 
   if( preserveRefs ){
     if( rc==SQLITE_OK ){
-      csFreeRefsState(cs);
+      return csRestoreOrMergeLocalRefs(cs, &savedRefs,
+                                       &savedRefsHash, &baseRefsHash);
     }
     csRestoreSavedRefsState(cs, &savedRefs);
     cs->refs.refsHash = savedRefsHash;

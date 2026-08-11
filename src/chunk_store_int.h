@@ -30,6 +30,9 @@ int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
                  sqlite3_file **ppFile, char **pzName);
 int csReloadFromDisk(ChunkStore *cs);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
+int csRestoreOrMergeLocalRefs(ChunkStore *cs, SavedRefsState *pSaved,
+                              const ProllyHash *pSavedRefsHash,
+                              const ProllyHash *pBaseRefsHash);
 int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize);
 int csDiskStateMatchesMemory(ChunkStore *cs);
 int csOpenFile(sqlite3_vfs *pVfs, const char *zPath, sqlite3_file **ppFile,
