@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <limits.h>
 
+#define CS_INDEX_WINDOW_MIN 4096
+#define CS_INDEX_WINDOW_MARGIN_DIV 64
+
 void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry **par){
   assert( idx!=0 && pn!=0 && par!=0 );
   assert( idx->nIndex>=0 );
@@ -57,9 +60,42 @@ int csSearchIndex(
 ){
   int lo = 0;
   int hi = nIdx - 1;
+  int outerLo = 0;
+  int outerHi = nIdx - 1;
   assert( pHash!=0 );
   assert( nIdx>=0 );
   assert( nIdx==0 || aIdx!=0 );
+  if( nIdx>=CS_INDEX_WINDOW_MIN ){
+    int margin = nIdx/CS_INDEX_WINDOW_MARGIN_DIV + 1;
+    int bucket = pHash->data[0];
+    lo = (int)(((i64)bucket * nIdx) >> 8) - margin;
+    hi = (int)(((i64)(bucket + 1) * nIdx) >> 8) + margin;
+    if( lo<0 ) lo = 0;
+    if( hi>=nIdx ) hi = nIdx - 1;
+    outerLo = lo;
+    outerHi = hi;
+  }
+  while( lo <= hi ){
+    int mid = lo + (hi - lo) / 2;
+    int cmp = prollyHashCompare(&aIdx[mid].hash, pHash);
+    if( cmp == 0 ) return mid;
+    if( cmp < 0 ){
+      lo = mid + 1;
+    }else{
+      hi = mid - 1;
+    }
+  }
+  if( nIdx<CS_INDEX_WINDOW_MIN ) return -1;
+  if( outerLo>0 && prollyHashCompare(pHash, &aIdx[outerLo].hash)<0 ){
+    lo = 0;
+    hi = outerLo - 1;
+  }else if( outerHi<nIdx-1
+         && prollyHashCompare(pHash, &aIdx[outerHi].hash)>0 ){
+    lo = outerHi + 1;
+    hi = nIdx - 1;
+  }else{
+    return -1;
+  }
   while( lo <= hi ){
     int mid = lo + (hi - lo) / 2;
     int cmp = prollyHashCompare(&aIdx[mid].hash, pHash);
