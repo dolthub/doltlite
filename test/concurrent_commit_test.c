@@ -82,7 +82,8 @@ static void test_aaron_scenario(void){
   check("reopen_db1", rc==SQLITE_OK);
 
   res = queryScalarText(db1, "SELECT count(*) FROM dolt_log");
-  check("log_has_2_entries", strcmp(res, "2")==0);
+  /* Two commits plus the "Initialize data repository" seed commit. */
+  check("log_has_2_entries", strcmp(res, "3")==0);
 
   res = queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1");
   check("latest_commit_is_add_one", strcmp(res, "add one")==0);
@@ -120,7 +121,8 @@ static void test_single_connection(void){
   check("single_commit_3", strlen(res)==40);
 
   res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
-  check("single_log_count", strcmp(res, "3")==0);
+  /* Three commits plus the seed commit. */
+  check("single_log_count", strcmp(res, "4")==0);
 
   res = queryScalarText(db, "SELECT count(*) FROM t1");
   check("single_data_count", strcmp(res, "2")==0);
@@ -168,7 +170,8 @@ static void test_sequential_multi_connection(void){
   check("seq_both_rows", strcmp(res, "2")==0);
 
   res = queryScalarText(db1, "SELECT count(*) FROM dolt_log");
-  check("seq_log_count", strcmp(res, "3")==0);
+  /* Three commits plus the seed commit. */
+  check("seq_log_count", strcmp(res, "4")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);

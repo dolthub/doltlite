@@ -39,6 +39,7 @@ COVERAGE_TESTS=(
 )
 
 SPECIALIZED_TESTS=(
+  concurrent_commit_test
   concurrent_stress_test
   prolly_txn_stress_test
   vc_concurrency_test
