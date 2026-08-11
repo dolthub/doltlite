@@ -69,7 +69,8 @@ static int resetStageNamedPaths(
 ){
   struct TableEntry *aHead = 0, *aStaged = 0;
   SchemaEntry *aHeadSchema = 0;
-  int nHead = 0, nStaged = 0, nHeadSchema = 0;
+  SchemaEntry *aStagedSchema = 0;
+  int nHead = 0, nStaged = 0, nHeadSchema = 0, nStagedSchema = 0;
   ProllyHash headCatHash, stagedHash;
   Pgno iNextFree = 2;
   int p, k;
@@ -92,6 +93,11 @@ static int resetStageNamedPaths(
   if( !prollyHashIsEmpty(&stagedHash) ){
     rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
     if( rc!=SQLITE_OK ) goto done;
+    /* Staged index entries are unnamed and resolve to their parent table
+    ** only through the staged catalog's own schema rows. */
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedHash,
+                               &aStagedSchema, &nStagedSchema);
+    if( rc!=SQLITE_OK ) goto done;
   }
 
   for(k=0; k<nStaged; k++){
@@ -108,6 +114,19 @@ static int resetStageNamedPaths(
       goto done;
     }
     if( iH<0 ){
+      /* A staged-only name is a staged new table, or the new name of a
+      ** staged rename. Dolt keeps a staged rename fully staged when its
+      ** new name is reset; a staged new table leaves as one object, its
+      ** unnamed index entries with it, or the commit carries indexes over
+      ** a table that no longer exists. */
+      struct TableEntry *pMate = 0;
+      rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
+                                     &aStaged[iS], 0, &pMate);
+      if( rc!=SQLITE_OK ) goto done;
+      if( pMate ) continue;
+      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                   aStagedSchema, nStagedSchema, zTable);
+      iS = resetFindTableIndex(aStaged, nStaged, zTable);
       sqlite3_free(aStaged[iS].zName);
       if( iS+1<nStaged ){
         memmove(&aStaged[iS], &aStaged[iS+1],
@@ -115,6 +134,33 @@ static int resetStageNamedPaths(
       }
       nStaged--;
     }else if( iS<0 ){
+      /* A HEAD-only name is a staged drop, or the old name of a staged
+      ** rename. A rename resets as one object: retire the staged new-name
+      ** entry and its indexes here, then restore HEAD's state below. */
+      struct TableEntry *pMate = 0;
+      rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
+                                     &aHead[iH], 1, &pMate);
+      if( rc!=SQLITE_OK ) goto done;
+      if( pMate ){
+        char *zMateName = sqlite3_mprintf("%s", pMate->zName);
+        int iM;
+        if( !zMateName ){
+          rc = SQLITE_NOMEM;
+          goto done;
+        }
+        addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                     aStagedSchema, nStagedSchema, zMateName);
+        iM = resetFindTableIndex(aStaged, nStaged, zMateName);
+        sqlite3_free(zMateName);
+        if( iM>=0 ){
+          sqlite3_free(aStaged[iM].zName);
+          if( iM+1<nStaged ){
+            memmove(&aStaged[iM], &aStaged[iM+1],
+                    (nStaged-iM-1)*(int)sizeof(struct TableEntry));
+          }
+          nStaged--;
+        }
+      }
       /* Restoring a staged-dropped table: the HEAD entry is numbered in
       ** HEAD's domain and its schema row is absent from the staged master
       ** (and from the live schema -- the table is dropped there), so it
@@ -127,7 +173,7 @@ static int resetStageNamedPaths(
       }
       aStaged = aNew;
       addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aHeadSchema, nHeadSchema, zTable);
+                                   aStagedSchema, nStagedSchema, zTable);
       zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
       if( aHead[iH].zName && !zDup ){
         rc = SQLITE_NOMEM;
@@ -144,7 +190,9 @@ static int resetStageNamedPaths(
       if( rc!=SQLITE_OK ) goto done;
     }else{
       /* Take HEAD's content under the STAGED entry's number so the entry
-      ** keeps pairing with the staged catalog's schema row. */
+      ** keeps pairing with the staged catalog's schema row. The table's
+      ** index set resets with it: replace whatever index entries staging
+      ** carried for this table with HEAD's. */
       Pgno iKeep = aStaged[iS].iTable;
       zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
       if( aHead[iH].zName && !zDup ){
@@ -155,6 +203,13 @@ static int resetStageNamedPaths(
       aStaged[iS] = aHead[iH];
       aStaged[iS].zName = zDup;
       aStaged[iS].iTable = iKeep;
+      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                   aStagedSchema, nStagedSchema, zTable);
+      rc = addAppendIndexEntriesOfTable(0, &aStaged, &nStaged,
+                                        aHead, nHead,
+                                        aHeadSchema, nHeadSchema,
+                                        zTable);
+      if( rc!=SQLITE_OK ) goto done;
     }
   }
 
@@ -179,6 +234,10 @@ done:
   if( aHeadSchema ){
     for(k=0; k<nHeadSchema; k++) clearSchemaEntry(&aHeadSchema[k]);
     sqlite3_free(aHeadSchema);
+  }
+  if( aStagedSchema ){
+    for(k=0; k<nStagedSchema; k++) clearSchemaEntry(&aStagedSchema[k]);
+    sqlite3_free(aStagedSchema);
   }
   return rc;
 }

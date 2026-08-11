@@ -737,6 +737,7 @@ int doltliteStageNamedTables(
       if( aWorking[j].iTable==iTable ){
         int k;
         int updated = 0;
+        int iRetired = -1;
         updateMaster = 1;
         for(k=0; k<nStaged; k++){
           int nameMatch = aStaged[k].zName && aWorking[j].zName
@@ -776,6 +777,7 @@ int doltliteStageNamedTables(
             ** where they no longer exist. */
             if( nameChanged && aStaged[k].zName ){
               ADDNAMED_TOUCH(aStaged[k].zName);
+              iRetired = nTouched-1;
             }
             zDup = aWorking[j].zName
                            ? sqlite3_mprintf("%s", aWorking[j].zName) : 0;
@@ -799,9 +801,16 @@ int doltliteStageNamedTables(
           }
         }
         /* An index travels with its table: replace whatever index entries
-        ** the staged catalog carried for this table with the working ones. */
+        ** the staged catalog carried for this table with the working ones.
+        ** A staged rename's index entries resolve through the OLD name in
+        ** the staged schema rows, so the retired name's entries go too. */
         addRemoveIndexEntriesOfTable(aStaged, &nStaged,
                                      aStagedSchema, nStagedSchema, zTable);
+        if( iRetired>=0 ){
+          addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                       aStagedSchema, nStagedSchema,
+                                       azTouched[iRetired]);
+        }
         rc = addAppendIndexEntriesOfTable(context, &aStaged, &nStaged,
                                           aWorking, nWorking,
                                           aWorkSchema, nWorkSchema, zTable);

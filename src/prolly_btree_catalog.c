@@ -792,6 +792,26 @@ static int appendMissingSchemaCatalogRows(
     if( strcmp(aMeta[i].zType, "table")!=0 && strcmp(aMeta[i].zType, "index")!=0 ){
       continue;
     }
+    /* Live numbers can coincide with entries restored from another domain
+    ** (a reset rename). Adopting a live index row whose parent table is
+    ** not part of this catalog would retarget the index at a table the
+    ** catalog does not contain; its correct row comes from the fallback. */
+    if( strcmp(aMeta[i].zType, "index")==0 ){
+      int parentHere = 0;
+      for(j=0; j<nRows && !parentHere; j++){
+        if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0
+         && aRows[j].zName && strcmp(aRows[j].zName, aMeta[i].zTblName)==0 ){
+          parentHere = 1;
+        }
+      }
+      for(j=0; j<nTables && !parentHere; j++){
+        if( aTables[j].zName
+         && strcmp(aTables[j].zName, aMeta[i].zTblName)==0 ){
+          parentHere = 1;
+        }
+      }
+      if( !parentHere ) continue;
+    }
     for(j=0; j<nTables; j++){
       if( aTables[j].iTable==aMeta[i].iTable ){
         wanted = 1;
@@ -1153,6 +1173,52 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
+  /* A retired object can leave an index row behind at a number a restored
+  ** entry now occupies: the entry filter pairs one row to one entry and
+  ** cannot see that the row's parent table is gone from the set, and a
+  ** serialized catalog whose index has no table does not load. Purge by
+  ** parent before the supplementation passes, so the freed number can
+  ** receive the correct row from live or fallback schema. A parent whose
+  ** row arrives in those passes has a named entry here, so requiring a
+  ** parent row OR a parent entry keeps every live pairing. Constructed
+  ** arrays only: the live catalog never composes rows across domains. */
+  if( aTables!=pBtree->cat.a ){
+    int nOut = 0;
+    for(i=0; i<nRows; i++){
+      int keep = 1;
+      if( aRows[i].zType && strcmp(aRows[i].zType, "index")==0
+       && aRows[i].zTblName ){
+        keep = 0;
+        for(j=0; j<nRows && !keep; j++){
+          if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0
+           && aRows[j].zName
+           && strcmp(aRows[j].zName, aRows[i].zTblName)==0 ){
+            keep = 1;
+          }
+        }
+        for(j=0; j<nTables && !keep; j++){
+          if( aTables[j].zName
+           && strcmp(aTables[j].zName, aRows[i].zTblName)==0 ){
+            keep = 1;
+          }
+        }
+      }
+      if( keep ){
+        if( nOut!=i ){
+          aRows[nOut] = aRows[i];
+          memset(&aRows[i], 0, sizeof(aRows[i]));
+        }
+        nOut++;
+      }else{
+        sqlite3_free(aRows[i].zType);
+        sqlite3_free(aRows[i].zName);
+        sqlite3_free(aRows[i].zTblName);
+        sqlite3_free(aRows[i].zSql);
+        memset(&aRows[i], 0, sizeof(aRows[i]));
+      }
+    }
+    nRows = nOut;
+  }
   /* Live-schema supplementation keys rows by the CONNECTION's table
   ** numbers. Arrays numbered in a foreign domain (a reset target catalog)
   ** must not use it -- a live number there can belong to a different table

@@ -899,6 +899,74 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('HEAD~1');
 "
 
+echo "--- reset path: staged objects reset whole (indexes, renames) ---"
+
+oracle "reset_path_staged_new_indexed_table_unstages_cleanly" "
+$SEED
+CREATE TABLE t2(a INTEGER PRIMARY KEY, b INT);
+CREATE INDEX t2i ON t2(b);
+INSERT INTO t2 VALUES (1, 2);
+SELECT dolt_add('t2');
+SELECT dolt_reset('t2');
+"
+
+oracle_error "reset_path_staged_new_indexed_table_commit_errors" "
+$SEED
+CREATE TABLE t2(a INTEGER PRIMARY KEY, b INT);
+CREATE INDEX t2i ON t2(b);
+INSERT INTO t2 VALUES (1, 2);
+SELECT dolt_add('t2');
+SELECT dolt_reset('t2');
+SELECT dolt_commit('-m', 'nothing is staged');
+"
+
+RENAME_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX tvi ON t(v);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('t2');
+"
+
+oracle "reset_path_staged_rename_new_name_noop" "
+$RENAME_SEED
+SELECT dolt_reset('t2');
+"
+
+oracle "reset_path_staged_rename_new_name_then_commit_clean" "
+$RENAME_SEED
+SELECT dolt_reset('t2');
+SELECT dolt_commit('-m', 'commit the still-staged rename');
+"
+
+oracle "reset_path_staged_rename_old_name_unstages_whole" "
+$RENAME_SEED
+SELECT dolt_reset('t');
+"
+
+oracle_error "reset_path_staged_rename_old_name_commit_errors" "
+$RENAME_SEED
+SELECT dolt_reset('t');
+SELECT dolt_commit('-m', 'nothing is staged');
+"
+
+oracle "reset_path_staged_index_only_change_unstages" "
+$SEED
+CREATE INDEX ti ON t(v);
+SELECT dolt_add('t');
+SELECT dolt_reset('t');
+"
+
+oracle_error "reset_path_staged_index_only_change_commit_errors" "
+$SEED
+CREATE INDEX ti ON t(v);
+SELECT dolt_add('t');
+SELECT dolt_reset('t');
+SELECT dolt_commit('-m', 'nothing is staged');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
