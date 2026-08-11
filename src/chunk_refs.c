@@ -562,45 +562,45 @@ int csReplaceRefsStateFromBlob(
 ** scan runs conflict-detection first so the disk arrays are untouched
 ** unless the whole merge applies. */
 
-static int refsHashesEqual(const ProllyHash *a, const ProllyHash *b){
+static int refsMergeHashEqual(const ProllyHash *a, const ProllyHash *b){
   return prollyHashCompare(a, b)==0;
 }
 
-static int refsStrEqual(const char *a, const char *b){
+static int refsMergeStrEqual(const char *a, const char *b){
   if( a==0 && b==0 ) return 1;
   if( a==0 || b==0 ) return 0;
   return strcmp(a, b)==0;
 }
 
-static int branchRefsEqual(const BranchRef *a, const BranchRef *b){
-  return refsHashesEqual(&a->commitHash, &b->commitHash)
-      && refsHashesEqual(&a->workingSetHash, &b->workingSetHash);
+static int refsMergeBranchEqual(const BranchRef *a, const BranchRef *b){
+  return refsMergeHashEqual(&a->commitHash, &b->commitHash)
+      && refsMergeHashEqual(&a->workingSetHash, &b->workingSetHash);
 }
 
-static int tagRefsEqual(const TagRef *a, const TagRef *b){
-  return refsHashesEqual(&a->commitHash, &b->commitHash)
+static int refsMergeTagEqual(const TagRef *a, const TagRef *b){
+  return refsMergeHashEqual(&a->commitHash, &b->commitHash)
       && a->timestamp==b->timestamp
-      && refsStrEqual(a->zTagger, b->zTagger)
-      && refsStrEqual(a->zEmail, b->zEmail)
-      && refsStrEqual(a->zMessage, b->zMessage);
+      && refsMergeStrEqual(a->zTagger, b->zTagger)
+      && refsMergeStrEqual(a->zEmail, b->zEmail)
+      && refsMergeStrEqual(a->zMessage, b->zMessage);
 }
 
-static int remoteRefsEqual(const RemoteRef *a, const RemoteRef *b){
-  return refsStrEqual(a->zUrl, b->zUrl);
+static int refsMergeRemoteEqual(const RemoteRef *a, const RemoteRef *b){
+  return refsMergeStrEqual(a->zUrl, b->zUrl);
 }
 
-static int trackingRefsEqual(const TrackingBranch *a, const TrackingBranch *b){
-  return refsHashesEqual(&a->commitHash, &b->commitHash);
+static int refsMergeTrackingEqual(const TrackingBranch *a, const TrackingBranch *b){
+  return refsMergeHashEqual(&a->commitHash, &b->commitHash);
 }
 
-static int findTrackingIdx(
+static int refsMergeFindTrackingIdx(
   const TrackingBranch *a, int n,
   const char *zRemote, const char *zBranch
 ){
   int i;
   for(i=0; i<n; i++){
-    if( refsStrEqual(a[i].zRemote, zRemote)
-     && refsStrEqual(a[i].zBranch, zBranch) ){
+    if( refsMergeStrEqual(a[i].zRemote, zRemote)
+     && refsMergeStrEqual(a[i].zBranch, zBranch) ){
       return i;
     }
   }
@@ -682,25 +682,25 @@ static int refsMergeCategory(RefsMergeCat *p, int checkOnly){
   return SQLITE_OK;
 }
 
-static int branchFind(const void *aBase, int n, const void *pEntry){
+static int refsMergeBranchFind(const void *aBase, int n, const void *pEntry){
   return csFindNamedRef(aBase, n, sizeof(BranchRef), *(char* const*)pEntry);
 }
 
-static int tagFind(const void *aBase, int n, const void *pEntry){
+static int refsMergeTagFind(const void *aBase, int n, const void *pEntry){
   return csFindNamedRef(aBase, n, sizeof(TagRef), *(char* const*)pEntry);
 }
 
-static int remoteFind(const void *aBase, int n, const void *pEntry){
+static int refsMergeRemoteFind(const void *aBase, int n, const void *pEntry){
   return csFindNamedRef(aBase, n, sizeof(RemoteRef), *(char* const*)pEntry);
 }
 
-static int trackingFind(const void *aBase, int n, const void *pEntry){
+static int refsMergeTrackingFind(const void *aBase, int n, const void *pEntry){
   const TrackingBranch *e = (const TrackingBranch*)pEntry;
-  return findTrackingIdx((const TrackingBranch*)aBase, n,
+  return refsMergeFindTrackingIdx((const TrackingBranch*)aBase, n,
                          e->zRemote, e->zBranch);
 }
 
-static int branchCopyInto(void *pDst, const void *pSrc){
+static int refsMergeBranchCopy(void *pDst, const void *pSrc){
   const BranchRef *s = (const BranchRef*)pSrc;
   BranchRef *d = (BranchRef*)pDst;
   memset(d, 0, sizeof(*d));
@@ -710,11 +710,11 @@ static int branchCopyInto(void *pDst, const void *pSrc){
   return d->zName==0;
 }
 
-static void branchFreeEntry(void *pEntry){
+static void refsMergeBranchFree(void *pEntry){
   sqlite3_free(((BranchRef*)pEntry)->zName);
 }
 
-static int tagCopyInto(void *pDst, const void *pSrc){
+static int refsMergeTagCopy(void *pDst, const void *pSrc){
   const TagRef *s = (const TagRef*)pSrc;
   TagRef *d = (TagRef*)pDst;
   memset(d, 0, sizeof(*d));
@@ -730,7 +730,7 @@ static int tagCopyInto(void *pDst, const void *pSrc){
       || (s->zMessage && !d->zMessage);
 }
 
-static void tagFreeEntry(void *pEntry){
+static void refsMergeTagFree(void *pEntry){
   TagRef *t = (TagRef*)pEntry;
   sqlite3_free(t->zName);
   sqlite3_free(t->zTagger);
@@ -738,7 +738,7 @@ static void tagFreeEntry(void *pEntry){
   sqlite3_free(t->zMessage);
 }
 
-static int remoteCopyInto(void *pDst, const void *pSrc){
+static int refsMergeRemoteCopy(void *pDst, const void *pSrc){
   const RemoteRef *s = (const RemoteRef*)pSrc;
   RemoteRef *d = (RemoteRef*)pDst;
   memset(d, 0, sizeof(*d));
@@ -747,13 +747,13 @@ static int remoteCopyInto(void *pDst, const void *pSrc){
   return d->zName==0 || (s->zUrl && !d->zUrl);
 }
 
-static void remoteFreeEntry(void *pEntry){
+static void refsMergeRemoteFree(void *pEntry){
   RemoteRef *r = (RemoteRef*)pEntry;
   sqlite3_free(r->zName);
   sqlite3_free(r->zUrl);
 }
 
-static int trackingCopyInto(void *pDst, const void *pSrc){
+static int refsMergeTrackingCopy(void *pDst, const void *pSrc){
   const TrackingBranch *s = (const TrackingBranch*)pSrc;
   TrackingBranch *d = (TrackingBranch*)pDst;
   memset(d, 0, sizeof(*d));
@@ -763,7 +763,7 @@ static int trackingCopyInto(void *pDst, const void *pSrc){
   return d->zRemote==0 || d->zBranch==0;
 }
 
-static void trackingFreeEntry(void *pEntry){
+static void refsMergeTrackingFree(void *pEntry){
   TrackingBranch *t = (TrackingBranch*)pEntry;
   sqlite3_free(t->zRemote);
   sqlite3_free(t->zBranch);
@@ -783,49 +783,49 @@ int csMergeSavedRefsOntoDisk(
   aCat[0].paDisk = (void**)&cs->refs.aBranches;
   aCat[0].pnDisk = &cs->refs.nBranches;
   aCat[0].stride = (int)sizeof(BranchRef);
-  aCat[0].xEqual = (int(*)(const void*,const void*))branchRefsEqual;
-  aCat[0].xCopyInto = branchCopyInto;
-  aCat[0].xFreeEntry = branchFreeEntry;
-  aCat[0].xFind = branchFind;
+  aCat[0].xEqual = (int(*)(const void*,const void*))refsMergeBranchEqual;
+  aCat[0].xCopyInto = refsMergeBranchCopy;
+  aCat[0].xFreeEntry = refsMergeBranchFree;
+  aCat[0].xFind = refsMergeBranchFind;
 
   aCat[1].aLocal = pLocal->aTags; aCat[1].nLocal = pLocal->nTags;
   aCat[1].aBase = pBase->aTags;   aCat[1].nBase = pBase->nTags;
   aCat[1].paDisk = (void**)&cs->refs.aTags;
   aCat[1].pnDisk = &cs->refs.nTags;
   aCat[1].stride = (int)sizeof(TagRef);
-  aCat[1].xEqual = (int(*)(const void*,const void*))tagRefsEqual;
-  aCat[1].xCopyInto = tagCopyInto;
-  aCat[1].xFreeEntry = tagFreeEntry;
-  aCat[1].xFind = tagFind;
+  aCat[1].xEqual = (int(*)(const void*,const void*))refsMergeTagEqual;
+  aCat[1].xCopyInto = refsMergeTagCopy;
+  aCat[1].xFreeEntry = refsMergeTagFree;
+  aCat[1].xFind = refsMergeTagFind;
 
   aCat[2].aLocal = pLocal->aRemotes; aCat[2].nLocal = pLocal->nRemotes;
   aCat[2].aBase = pBase->aRemotes;   aCat[2].nBase = pBase->nRemotes;
   aCat[2].paDisk = (void**)&cs->refs.aRemotes;
   aCat[2].pnDisk = &cs->refs.nRemotes;
   aCat[2].stride = (int)sizeof(RemoteRef);
-  aCat[2].xEqual = (int(*)(const void*,const void*))remoteRefsEqual;
-  aCat[2].xCopyInto = remoteCopyInto;
-  aCat[2].xFreeEntry = remoteFreeEntry;
-  aCat[2].xFind = remoteFind;
+  aCat[2].xEqual = (int(*)(const void*,const void*))refsMergeRemoteEqual;
+  aCat[2].xCopyInto = refsMergeRemoteCopy;
+  aCat[2].xFreeEntry = refsMergeRemoteFree;
+  aCat[2].xFind = refsMergeRemoteFind;
 
   aCat[3].aLocal = pLocal->aTracking; aCat[3].nLocal = pLocal->nTracking;
   aCat[3].aBase = pBase->aTracking;   aCat[3].nBase = pBase->nTracking;
   aCat[3].paDisk = (void**)&cs->refs.aTracking;
   aCat[3].pnDisk = &cs->refs.nTracking;
   aCat[3].stride = (int)sizeof(TrackingBranch);
-  aCat[3].xEqual = (int(*)(const void*,const void*))trackingRefsEqual;
-  aCat[3].xCopyInto = trackingCopyInto;
-  aCat[3].xFreeEntry = trackingFreeEntry;
-  aCat[3].xFind = trackingFind;
+  aCat[3].xEqual = (int(*)(const void*,const void*))refsMergeTrackingEqual;
+  aCat[3].xCopyInto = refsMergeTrackingCopy;
+  aCat[3].xFreeEntry = refsMergeTrackingFree;
+  aCat[3].xFind = refsMergeTrackingFind;
 
   /* The default branch is a scalar three-way. */
   {
     const char *zL = pLocal->zDefaultBranch;
     const char *zB = pBase->zDefaultBranch;
     const char *zD = cs->refs.zDefaultBranch;
-    if( !refsStrEqual(zL, zB)
-     && !refsStrEqual(zD, zB)
-     && !refsStrEqual(zD, zL) ){
+    if( !refsMergeStrEqual(zL, zB)
+     && !refsMergeStrEqual(zD, zB)
+     && !refsMergeStrEqual(zD, zL) ){
       return SQLITE_BUSY_SNAPSHOT;
     }
   }
@@ -838,7 +838,7 @@ int csMergeSavedRefsOntoDisk(
   }
 
   if( pLocal->zDefaultBranch
-   && !refsStrEqual(pLocal->zDefaultBranch, pBase->zDefaultBranch) ){
+   && !refsMergeStrEqual(pLocal->zDefaultBranch, pBase->zDefaultBranch) ){
     char *zDup = sqlite3_mprintf("%s", pLocal->zDefaultBranch);
     if( !zDup ) return SQLITE_NOMEM;
     sqlite3_free(cs->refs.zDefaultBranch);
