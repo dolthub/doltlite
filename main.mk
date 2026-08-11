@@ -2698,6 +2698,7 @@ DOLTLITE_C_TESTS = \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
 	gc_tip_survival_test$(T.exe) \
+	detached_head_test$(T.exe) \
 	prepared_stmt_reuse_test$(T.exe) \
 	catalog_serialize_determinism_test$(T.exe) \
 	clone_error_code_test$(T.exe) \
@@ -2790,6 +2791,10 @@ corruption_test$(T.exe): $(TOP)/test/corruption_test.c libdoltlite$(T.lib)
 
 gc_tip_survival_test$(T.exe): $(TOP)/test/gc_tip_survival_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/gc_tip_survival_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+detached_head_test$(T.exe): $(TOP)/test/detached_head_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/detached_head_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 prepared_stmt_reuse_test$(T.exe): $(TOP)/test/prepared_stmt_reuse_test.c libdoltlite$(T.lib)

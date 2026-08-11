@@ -47,6 +47,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   char *zParsedEmail = 0;
   int rc, i;
 
+  if( doltliteCmdRejectDetached(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<1 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
 

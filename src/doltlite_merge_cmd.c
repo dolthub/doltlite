@@ -611,6 +611,7 @@ static void doltliteMergeFunc(
   u8 isMerging = 0;
   int rc, i;
 
+  if( doltliteCmdRejectDetached(context) ) return;
   if( !doltliteGetChunkStore(db) ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     return;

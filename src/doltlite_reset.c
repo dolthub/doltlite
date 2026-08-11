@@ -459,6 +459,7 @@ static void doltliteResetFunc(
 
   assert( context!=0 );
   assert( argc>=0 );
+  if( doltliteCmdRejectDetached(context) ) return;
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto reset_cleanup;

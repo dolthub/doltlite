@@ -5114,7 +5114,14 @@ static void parseDoltiteDbBranch(
   {
     const char *zAt = strrchr(zInput, '@');
     if( zAt && zAt[1]!=0 && (!zSep || zAt > zSep) ){
-      *pzFilename = sqlite3_mprintf("%.*s", (int)(zAt - zInput), zInput);
+      zBase = sqlite3_mprintf("%.*s", (int)(zAt - zInput), zInput);
+      if( zBase && doltliteShellLooksLikeDbPath(zBase)
+       && (doltliteShellReadableFile(zBase) || access(zBase, 0)==0) ){
+        sqlite3_free(zBase);
+        *pzFilename = sqlite3_mprintf("%s", zInput);
+        return;
+      }
+      *pzFilename = zBase;
       *pzBranch = sqlite3_mprintf("%s", zAt + 1);
       return;
     }

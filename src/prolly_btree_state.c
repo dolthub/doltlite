@@ -472,6 +472,7 @@ int btreeRefreshSharedWorkingState(Btree *p){
   ProllyHash loadedCatHash;
   int rc;
   assert( p!=0 && p->pBt!=0 );
+  if( p->isDetached ) return SQLITE_OK;
   pBt = p->pBt;
   if( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion ){
     return SQLITE_OK;
@@ -509,6 +510,7 @@ int btreeRefreshFromDisk(Btree *p){
   }
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
+  if( p->isDetached ) return SQLITE_OK;
 
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));
   rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
@@ -527,6 +529,17 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
     return p->zBranch ? p->zBranch : "main";
   }
   return "main";
+}
+
+int doltliteIsDetached(sqlite3 *db){
+  return db && db->nDb>0 && db->aDb[0].pBt
+      && db->aDb[0].pBt->isDetached;
+}
+
+void doltliteSetSessionDetached(sqlite3 *db, int isDetached){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    db->aDb[0].pBt->isDetached = isDetached!=0;
+  }
 }
 
 static int replaceSessionString(char **pzDest, const char *zValue){
@@ -948,6 +961,7 @@ int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHas
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
+  if( pBtree->isDetached ) return SQLITE_READONLY;
   if( !cs ) return SQLITE_ERROR;
 
   zBranch = pBtree->zBranch ? pBtree->zBranch : "main";

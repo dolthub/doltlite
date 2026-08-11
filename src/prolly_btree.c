@@ -711,23 +711,42 @@ int sqlite3BtreeOpen(
   {
     BtreeBranchState state;
     ProllyHash branchCommit;
+    ProllyHash revisionCatalog;
+    u8 isBranchRevision = 0;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
       chunkStoreGetDefaultBranch(&pBt->store);
     if( !zDef ) zDef = "main";
     memset(&branchCommit, 0, sizeof(branchCommit));
-    if( zBranchFromPath
-     && chunkStoreFindBranch(&pBt->store, zDef, &branchCommit)!=SQLITE_OK ){
-      sqlite3ErrorWithMsg(db, SQLITE_ERROR, "unable to select branch \"%s\"",
-                          zDef);
+    memset(&revisionCatalog, 0, sizeof(revisionCatalog));
+    if( zBranchFromPath ){
+      rc = doltliteResolveOpenRevision(&pBt->store, zDef, &branchCommit,
+                                       &revisionCatalog, &isBranchRevision);
+    }
+    if( zBranchFromPath && rc!=SQLITE_OK ){
+      int openRc = rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM
+                 ? rc : SQLITE_ERROR;
+      if( openRc==SQLITE_ERROR ){
+        sqlite3ErrorWithMsg(db, SQLITE_ERROR,
+                            "unable to select branch \"%s\"", zDef);
+      }
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
       chunkStoreClose(&pBt->store);
       sqlite3_free(zStoreFilename);
       sqlite3_free(pBt);
       sqlite3_free(p);
-      return SQLITE_ERROR;
+      return openRc;
     }
-    rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
+    if( zBranchFromPath && !isBranchRevision ){
+      memset(&state, 0, sizeof(state));
+      state.catalog = revisionCatalog;
+      state.stagedCatalog = revisionCatalog;
+      state.headCommit = branchCommit;
+      p->isDetached = 1;
+      rc = SQLITE_OK;
+    }else{
+      rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
+    }
     if( rc!=SQLITE_OK ){
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
@@ -821,6 +840,7 @@ int sqlite3BtreeOpen(
 
   pBt->store.corruptMidStream = poisonAfterOpen;
   if( hasMainBtree
+   && !p->isDetached
    && !pBt->store.notADatabase
    && !pBt->store.corruptMidStream ){
     ProllyHash seedHash;
@@ -1115,7 +1135,7 @@ const char *sqlite3BtreeGetJournalname(Btree *p){
 }
 
 int prollyBtreeIsReadonly(Btree *p){
-  return (p->pBt->btsFlags & BTS_READ_ONLY) ? 1 : 0;
+  return p->isDetached || (p->pBt->btsFlags & BTS_READ_ONLY) ? 1 : 0;
 }
 int sqlite3BtreeIsReadonly(Btree *p){
   if( !p ) return 0;

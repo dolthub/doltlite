@@ -901,6 +901,7 @@ int doltliteCompareAndAdvanceBranch(
 );
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
 /* Shared dolt_* command scaffolding (doltlite_cmd.c). */
+int doltliteCmdRejectDetached(sqlite3_context *ctx);
 void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
 void doltliteCmdResultMissingOptionValue(
   sqlite3_context *ctx, const char *zOptName
@@ -1188,6 +1189,8 @@ int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
 int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr);
 
 const char *doltliteGetSessionBranch(sqlite3 *db);
+int doltliteIsDetached(sqlite3 *db);
+void doltliteSetSessionDetached(sqlite3 *db, int isDetached);
 int doltlitePrepareSessionBranch(sqlite3 *db, const char *zBranch,
                                  char **pzPrepared);
 void doltliteInstallPreparedSessionBranch(sqlite3 *db, char *zPrepared);

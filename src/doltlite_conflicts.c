@@ -1395,6 +1395,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   int found = 0;
   int j, rc;
 
+  if( doltliteCmdRejectDetached(ctx) ) return;
   if(!cs){ sqlite3_result_error(ctx,"no database",-1); return; }
   if(argc!=2){ sqlite3_result_error(ctx,"usage: dolt_conflicts_resolve('--ours'|'--theirs','table')",-1); return; }
 

@@ -128,6 +128,7 @@ static void doltliteRevertFunc(
   memset(&parentCommit, 0, sizeof(parentCommit));
   memset(&ourCommit, 0, sizeof(ourCommit));
 
+  if( doltliteCmdRejectDetached(context) ) return;
   if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
 
   if( argc<1 ){

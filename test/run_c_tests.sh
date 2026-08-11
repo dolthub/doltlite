@@ -31,6 +31,7 @@ COVERAGE_TESTS=(
   cross_branch_test
   corruption_test
   gc_tip_survival_test
+  detached_head_test
   prepared_stmt_reuse_test
   catalog_serialize_determinism_test
   sequence_reload_test

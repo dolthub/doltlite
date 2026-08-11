@@ -48,6 +48,9 @@ int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
                               const char *zDb,
                               const char *zName, const char *zTblName,
                               char **pzSql);
+int doltliteResolveOpenRevision(
+  ChunkStore*, const char*, ProllyHash*, ProllyHash*, u8*
+);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
@@ -347,6 +350,7 @@ struct Btree {
   char *zBranch;
   char *zAuthorName;
   char *zAuthorEmail;
+  u8 isDetached;
   ProllyHash headCommit;
   DoltVcState vc;
 
