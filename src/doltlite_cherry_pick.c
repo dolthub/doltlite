@@ -104,6 +104,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
   int *pnConflicts,
+  int *pnViolations,
   char *hexBuf
 ){
   ChunkStore *cs;
@@ -235,6 +236,7 @@ int applyMergedCatalogAndCommit(
     sqlite3_free(zDetectErrMsg);
 
     if( nViolations + nUnique + nCheck + nNotNull > 0 ){
+      if( pnViolations ) *pnViolations = nViolations + nUnique + nCheck + nNotNull;
       if( *pnConflicts > 0 ){
         return doltliteCmdFinishWithConflictsAndConstraintViolations(
             db, context, &savedState, *pnConflicts, zOpLabel, 1, 0);
@@ -405,7 +407,8 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, &nConflicts, hexBuf);
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, &nConflicts, 0,
+        hexBuf);
   }
 
   doltliteCommitClear(&pickCommit);

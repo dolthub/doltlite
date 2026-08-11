@@ -332,6 +332,7 @@ static int doltliteRebaseLinearReplay(
   int dirty = 0;
   char *zFailedMsg = 0;
   int bConflict = 0;
+  int bViolation = 0;
   assert( db!=0 && context!=0 && zUpstream!=0 && pzFinalMessage!=0 );
   cs = doltliteGetChunkStore(db);
   sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
@@ -447,6 +448,7 @@ static int doltliteRebaseLinearReplay(
     DoltliteCommit replayCommit, parentCommit, curHeadCommit;
     ProllyHash curHead;
     int nConflicts = 0;
+    int nViolations = 0;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
 
     memset(&replayCommit, 0, sizeof(replayCommit));
@@ -485,7 +487,7 @@ static int doltliteRebaseLinearReplay(
         &replayCommit.catalogHash,
         &curHead, 0,
         replayCommit.zMessage ? replayCommit.zMessage : "",
-        &nConflicts, hexBuf);
+        &nConflicts, &nViolations, hexBuf);
 
     doltliteCommitClear(&replayCommit);
     doltliteCommitClear(&parentCommit);
@@ -493,6 +495,10 @@ static int doltliteRebaseLinearReplay(
 
     if( rc!=SQLITE_OK ) goto rollback;
     if( nConflicts>0 ){ bConflict = 1; rc = SQLITE_ERROR; goto rollback; }
+    /* The finish helper rolled the replay back and returned OK; without
+    ** this stop the loop would move on and the rebase would finalize
+    ** WITHOUT this commit — its rows silently gone from the branch. */
+    if( nViolations>0 ){ bViolation = 1; rc = SQLITE_ERROR; goto rollback; }
   }
 
   doltliteGetSessionHead(db, &curHead);
@@ -560,6 +566,11 @@ rollback:
     if( bConflict && zFailedMsg && zFailedMsg[0] ){
       zErr = sqlite3_mprintf(
           "conflict rebasing \"%s\"; rebase aborted, branch restored to pre-rebase state",
+          zFailedMsg);
+    }else if( bViolation && zFailedMsg && zFailedMsg[0] ){
+      zErr = sqlite3_mprintf(
+          "constraint violations rebasing \"%s\"; rebase aborted, "
+          "branch restored to pre-rebase state",
           zFailedMsg);
     }else if( zFailedMsg && zFailedMsg[0] ){
       zErr = sqlite3_mprintf(

@@ -254,7 +254,8 @@ ALTER TABLE t2 RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_check');
 SELECT dolt_checkout('feat');
 " "SELECT dolt_rebase('main');" \
-  "SELECT CONCAT('R|',id,'|',v) FROM t ORDER BY id;"
+  "SELECT dolt_checkout('feat');
+SELECT CONCAT('R|',id,'|',v) FROM t ORDER BY id;"
 
 echo ""
 echo "--- Group E: FK constraint + rebase ---"
@@ -293,7 +294,8 @@ ALTER TABLE c2 RENAME TO c;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_fk');
 SELECT dolt_checkout('feat');
 " "SELECT dolt_rebase('main');" \
-  "SELECT CONCAT('R|',id,'|',u) FROM c ORDER BY id;"
+  "SELECT dolt_checkout('feat');
+SELECT CONCAT('R|',id,'|',u) FROM c ORDER BY id;"
 
 echo ""
 echo "--- Group F: AFTER triggers fire based on commit diff, not replay DML ---"
