@@ -302,7 +302,7 @@ def vc_passes(suite):
     )
 
 
-def render_section_summary(suites, section, prefix):
+def render_section_summary(suites, section, prefix, include_counts=True):
     results = section_results(suites, section)
     if not results:
         raise ValueError(f"missing results for section: {section}")
@@ -310,14 +310,19 @@ def render_section_summary(suites, section, prefix):
     candidate = sum(result.candidate_us for _, result in results)
     ratio = candidate / baseline
     result = "PASS" if section_passes(suites, section) else "FAIL"
-    return (
-        f"| {prefix} | {len(results)} | "
-        f"{sample_count_text(suites, results)} | "
-        f"{format_time(baseline)} | {format_time(candidate)} | "
-        f"{ratio:.3f}× | "
-        f"{statistics.median(workload_noise(*item) for item in results):.2f}% "
-        f"| **{result}** |"
+    cells = [prefix]
+    if include_counts:
+        cells.extend((str(len(results)), sample_count_text(suites, results)))
+    cells.extend(
+        (
+            format_time(baseline),
+            format_time(candidate),
+            f"{ratio:.1f}×",
+            f"{statistics.median(workload_noise(*item) for item in results):.1f}%",
+            f"**{result}**",
+        )
     )
+    return "| " + " | ".join(cells) + " |"
 
 
 def render_sql_summary(suites):
@@ -327,15 +332,17 @@ def render_sql_summary(suites):
             [
                 f"### {storage}",
                 "",
-                "| Operation | Workloads | Samples/workload | "
-                "SQLite median total | DoltLite median total | Ratio | "
-                "Median paired-ratio MAD | Result |",
-                "|---|---:|---:|---:|---:|---:|---:|---|",
+                "| Operation | SQLite median total | "
+                "DoltLite median total | Ratio | "
+                "Paired-ratio noise | Result |",
+                "|---|---:|---:|---:|---:|---|",
             ]
         )
         for operation, section in operations:
             lines.append(
-                render_section_summary(suites, section, operation)
+                render_section_summary(
+                    suites, section, operation, include_counts=False
+                )
             )
         lines.append("")
     return lines
@@ -351,7 +358,7 @@ def render_key_shape_breakdown(suites):
         "",
         "| Storage | Operation | Key shape | Workloads | Samples/workload | "
         "SQLite median total | DoltLite median total | Ratio | "
-        "Median paired-ratio MAD | Result |",
+        "Paired-ratio noise | Result |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for storage, operation, section in KEY_SHAPE_GROUPS:
@@ -373,7 +380,7 @@ def render_sysbench_details(suite):
         f"<summary>{suite.name} workload details</summary>",
         "",
         "| Section | Workload | SQLite median | DoltLite median | "
-        "Ratio | Paired-ratio MAD | Result |",
+        "Ratio | Paired-ratio noise | Result |",
         "|---|---|---:|---:|---:|---:|---|",
     ]
     for result in suite.results:
@@ -383,8 +390,8 @@ def render_sysbench_details(suite):
             f"| {escape_markdown(result.section)} | "
             f"`{escape_markdown(result.test)}` | "
             f"{format_time(result.baseline_us)} | "
-            f"{format_time(result.candidate_us)} | {ratio:.3f}× | "
-            f"{workload_noise(suite, result):.2f}% | {status} |"
+            f"{format_time(result.candidate_us)} | {ratio:.1f}× | "
+            f"{workload_noise(suite, result):.1f}% | {status} |"
         )
     lines.extend(["", "</details>", ""])
     return lines
@@ -407,7 +414,7 @@ def render_vc(suite):
             f"| `{escape_markdown(result.test)}` | "
             f"{format_time(result.candidate_us)} | "
             f"{format_time(result.baseline_us)} | {used:.1%} | "
-            f"{workload_noise(suite, result):.2f}% | {status} |"
+            f"{workload_noise(suite, result):.1f}% | {status} |"
         )
     result = "PASS" if vc_passes(suite) else "FAIL"
     lines.extend(["", f"Version-control ceiling result: **{result}**.", ""])
@@ -433,8 +440,9 @@ def render_report(suites, commit, run_url, generated_at, runner):
         "",
         "This report compares optimized DoltLite against stock SQLite on the "
         "same GitHub-hosted runner. Baseline and candidate execution order "
-        "alternates on each repetition. Reported timings are medians; MAD is "
-        "the median absolute deviation and describes run-to-run noise.",
+        "alternates on each repetition. Reported timings are medians. "
+        "Paired-ratio noise is the median absolute deviation of the paired "
+        "DoltLite/SQLite ratios, expressed as a percentage.",
         "",
         "## SQL workload summary",
         "",

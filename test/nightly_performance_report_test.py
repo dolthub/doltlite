@@ -94,14 +94,16 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("Nightly result: **PASS**", report)
         self.assertIn("aggregates all key shapes", report)
         self.assertIn("### In-memory", report)
-        self.assertIn("| Reads | 4 | 3 | 400µs | 600µs | 1.500× |", report)
+        self.assertIn("| Reads | 400µs | 600µs | 1.5× |", report)
         self.assertIn("### File-backed", report)
         self.assertIn(
-            "| Autocommit writes | 4 | 3 | 400µs | 2.00ms | 5.000× |",
+            "| Autocommit writes | 400µs | 2.00ms | 5.0× |",
             report,
         )
-        self.assertIn("Median paired-ratio MAD", report)
+        self.assertIn("Paired-ratio noise", report)
+        self.assertNotIn("paired-ratio MAD", report)
         summary = report.split("<details>", 1)[0]
+        self.assertNotIn("Workloads | Samples/workload", summary)
         self.assertNotIn("| Autocommit reads |", summary)
         self.assertNotIn("Key shape", summary)
         self.assertLess(
@@ -120,6 +122,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             "<summary>Key-shape and individual-workload breakdown</summary>",
             report,
         )
+        self.assertIn("Workloads | Samples/workload", report)
         self.assertIn("| In-memory | Reads | int | 1 | 3 |", report)
         self.assertIn("Version-control latency", report)
         self.assertIn("50.0%", report)
@@ -182,7 +185,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             result = result_output.read_text(encoding="utf-8")
         self.assertEqual(rc, 0)
         self.assertIn("Nightly result: **FAIL**", report)
-        self.assertIn("| Autocommit writes | 4 | 3 |", report)
+        self.assertIn("| Autocommit writes | 400µs | 2.20ms |", report)
         self.assertEqual(result, "FAIL\n")
 
     def test_audit_only_section_still_gates_report(self):
