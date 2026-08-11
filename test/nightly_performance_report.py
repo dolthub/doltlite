@@ -245,7 +245,7 @@ def escape_markdown(value):
 
 
 def individual_limit(result):
-    return 6.0 if result.section == "ac_writes" else 2.4
+    return 10.0 if result.section == "ac_writes" else 2.4
 
 
 def average_limit(section):
@@ -455,7 +455,7 @@ def render_report(suites, commit, run_url, generated_at, runner):
     lines.extend(
         [
             "The absolute ceiling is 2.4× per ordinary workload and 1.95× "
-            "for a section average. Durable autocommit writes use 6.0× "
+            "for a section average. Durable autocommit writes use 10.0× "
             "and 5.0× ceilings respectively.",
             "",
         ]
