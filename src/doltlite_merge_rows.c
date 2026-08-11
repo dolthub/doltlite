@@ -331,6 +331,7 @@ int doltliteIndexApplyRowDelta(
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
   ProllyMutMap *pEdits;
+  const MergeRowPolicy *pPolicy;
   u8 isIntKey;
   MergeIndexInfo *aIndexes;
   int nIndexes;
@@ -393,6 +394,40 @@ static int parseRecordFields(const u8 *pRec, int nRec,
   *ppFields = aFields;
   *pnFields = nFields;
   return nFields;
+}
+
+/* Is this sqlite_master row one the policy names? Fields 1 and 2 are name and
+** tbl_name, so the table's own row matches by name and each of its indexes and
+** triggers matches by tbl_name. The base row is the one compared: it carries the
+** ancestor name, which is what the policy was built from. */
+static int catalogRowNamedByPolicy(
+  const MergeRowPolicy *pPolicy,
+  const u8 *pBase, int nBase
+){
+  RecField *aBase = 0;
+  int nBaseF = 0;
+  int matched = 0;
+  int i, f;
+
+  if( !pPolicy || pPolicy->nRenameOverDrop<=0 ) return 0;
+  if( !pBase || nBase<=0 ) return 0;
+  /* Returns the field count, or -1; it is not an SQLITE_ code. */
+  if( parseRecordFields(pBase, nBase, &aBase, &nBaseF) < 0 ) return 0;
+  for(f=1; f<=2 && !matched; f++){
+    if( f>=nBaseF ) break;
+    for(i=0; i<pPolicy->nRenameOverDrop && !matched; i++){
+      const char *z = pPolicy->azRenameOverDrop[i];
+      int n;
+      if( !z ) continue;
+      n = (int)strlen(z);
+      if( aBase[f].len==n
+       && sqlite3_strnicmp((const char*)(pBase + aBase[f].off), z, n)==0 ){
+        matched = 1;
+      }
+    }
+  }
+  sqlite3_free(aBase);
+  return matched;
 }
 
 static int fieldEquals(const u8 *pRecA, RecField *fA,
@@ -653,6 +688,25 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     deliberate_fall_through
     case THREE_WAY_CONFLICT_DM: {
 
+      /* One side deleted the row, the other changed it. For a catalog row the
+      ** policy names -- an object one side renamed and the other dropped -- the
+      ** rename wins, which is what Dolt does. The policy carries the object
+      ** names rather than inferring them here, because a rename presents at this
+      ** level as a delete plus an add: inferring would also resolve a rename on
+      ** both sides, silently picking a winner for a real conflict. */
+      if( pChange->type==THREE_WAY_CONFLICT_DM
+       && catalogRowNamedByPolicy(ctx->pPolicy,
+                                  pChange->pBaseVal, pChange->nBaseVal) ){
+        const u8 *pSurv = pChange->pOurVal ? pChange->pOurVal
+                                           : pChange->pTheirVal;
+        int nSurv = pChange->pOurVal ? pChange->nOurVal : pChange->nTheirVal;
+        if( pSurv && nSurv>0 ){
+          rc = prollyMutMapInsert(ctx->pEdits,
+              pChange->pKey, pChange->nKey, pChange->intKey, pSurv, nSurv);
+          break;
+        }
+      }
+
       rc = DOLTLITE_GROW_ARRAY(&ctx->aConflicts, &ctx->nConflictsAlloc,
                                 ctx->nConflicts + 1, 16);
       if( rc!=SQLITE_OK ) return rc;
@@ -759,7 +813,8 @@ int mergeTableRows(
   int *pnConflicts,
   DoltliteConflictRow **ppConflicts,
   MergeIndexInfo *aIndexes,
-  int nIndexes
+  int nIndexes,
+  const MergeRowPolicy *pPolicy
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *cache = doltliteGetCache(db);
@@ -771,6 +826,7 @@ int mergeTableRows(
 
   memset(&ctx, 0, sizeof(ctx));
   ctx.isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
+  ctx.pPolicy = pPolicy;
   ctx.aIndexes = aIndexes;
   ctx.nIndexes = nIndexes;
   ctx.pEdits = sqlite3_malloc(sizeof(ProllyMutMap));

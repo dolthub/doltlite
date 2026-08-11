@@ -565,7 +565,8 @@ int mergeTableRenameOtherDrop(
   struct TableEntry *aRenamed, int nRenamed,
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aRenamedSchema, int nRenamedSchema,
-  struct TableEntry *pRenamed
+  struct TableEntry *pRenamed,
+  const char **pzAncName
 ){
   struct TableEntry *pAnc;
   SchemaEntry *pAncSe;
@@ -630,6 +631,11 @@ int mergeTableRenameOtherDrop(
     }
   }
   if( !pAnc || !pAncSe ) return 0;
+  /* The name the object had in the ancestor. Its catalog rows are the ones a
+  ** merge has to resolve toward the rename, and only this function can name
+  ** them: the row merge sees a rename as a delete plus an add, so it cannot
+  ** tell this shape from a rename on both sides. */
+  if( pzAncName ) *pzAncName = pAnc->zName;
   return 1;
 }
 
