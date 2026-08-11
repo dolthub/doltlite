@@ -312,7 +312,9 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
 }
 
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
+  DoltliteFileState fileState;
   int bMoved = 0;
+  int haveFileState = 0;
   int rc;
 
   *pChanged = 0;
@@ -334,9 +336,16 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
 
-  /* Recheck HAS_MOVED on each lock; GC may atomically replace the file. */
-  rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
-  if( rc!=SQLITE_OK ) return rc;
+  fileState.iFileSize = -1;
+  fileState.bMoved = 0;
+  rc = sqlite3OsDoltliteFileState(cs->file.pFile, &fileState);
+  if( rc==SQLITE_OK ){
+    bMoved = fileState.bMoved;
+    haveFileState = fileState.iFileSize>=0;
+  }else{
+    rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( bMoved ){
     int bOurs = 0;
     rc = csMovedFileIsOurs(cs, &bOurs);
@@ -356,9 +365,11 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   cs->movedReadOnly = 0;
 
   {
-    i64 fileSize = 0;
-    rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
-    if( rc!=SQLITE_OK ) return rc;
+    i64 fileSize = fileState.iFileSize;
+    if( !haveFileState ){
+      rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     if( fileSize > cs->file.iFileSize ){
       *pChanged = 1;
     }

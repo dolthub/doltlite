@@ -4340,6 +4340,35 @@ static int unixFileControl(sqlite3_file *id, int op, void *pArg){
   return SQLITE_NOTFOUND;
 }
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsDoltliteFileState(
+  sqlite3_file *id,
+  DoltliteFileState *pState
+){
+#ifdef SQLITE_TEST
+  /* Preserve testfixture's separate stat and fstat fault-injection points. */
+  UNUSED_PARAMETER(id);
+  UNUSED_PARAMETER(pState);
+  return SQLITE_NOTFOUND;
+#else
+  unixFile *pFile;
+  struct stat buf;
+  int rc;
+  if( id==0 || id->pMethods==0
+   || id->pMethods->xFileControl!=unixFileControl
+  ){
+    return SQLITE_NOTFOUND;
+  }
+  pFile = (unixFile*)id;
+  rc = osStat(pFile->zPath, &buf);
+  pState->bMoved = pFile->pInode!=0
+                && (rc!=0 || (u64)buf.st_ino!=pFile->pInode->fileId.ino);
+  pState->iFileSize = rc==0 ? (sqlite3_int64)buf.st_size : -1;
+  return SQLITE_OK;
+#endif
+}
+#endif
+
 /*
 ** If pFd->sectorSize is non-zero when this function is called, it is a
 ** no-op. Otherwise, the values of pFd->sectorSize and

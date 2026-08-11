@@ -2834,6 +2834,17 @@ static int winFileControl(sqlite3_file *id, int op, void *pArg){
   return SQLITE_NOTFOUND;
 }
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsDoltliteFileState(
+  sqlite3_file *id,
+  DoltliteFileState *pState
+){
+  UNUSED_PARAMETER(id);
+  UNUSED_PARAMETER(pState);
+  return SQLITE_NOTFOUND;
+}
+#endif
+
 /*
 ** Return the sector size in bytes of the underlying block device for
 ** the specified file. This is almost always 512 bytes, but may be

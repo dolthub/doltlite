@@ -856,6 +856,17 @@ static int kvvfsCurrentTimeInt64(sqlite3_vfs *pVfs, sqlite3_int64 *pTimeOut){
 #endif
 
 #if SQLITE_OS_KV
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsDoltliteFileState(
+  sqlite3_file *id,
+  DoltliteFileState *pState
+){
+  UNUSED_PARAMETER(id);
+  UNUSED_PARAMETER(pState);
+  return SQLITE_NOTFOUND;
+}
+#endif
+
 int sqlite3_os_init(void){
   return sqlite3_vfs_register(&sqlite3OsKvvfsObject, 1);
 }

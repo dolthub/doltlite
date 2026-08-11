@@ -610,3 +610,14 @@ int sqlite3_vfs_unregister(sqlite3_vfs *pVfs){
   sqlite3_mutex_leave(mutex);
   return SQLITE_OK;
 }
+
+#if defined(DOLTLITE_PROLLY) && SQLITE_OS_OTHER
+int sqlite3OsDoltliteFileState(
+  sqlite3_file *id,
+  DoltliteFileState *pState
+){
+  UNUSED_PARAMETER(id);
+  UNUSED_PARAMETER(pState);
+  return SQLITE_NOTFOUND;
+}
+#endif
