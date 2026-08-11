@@ -1902,6 +1902,7 @@ struct sqlite3 {
 #define DBFLAG_EncodingFixed  0x0040  /* No longer possible to change enc. */
 #ifdef DOLTLITE_PROLLY
 #define DBFLAG_VacuumOrig     0x0080  /* Open the VACUUM target as orig-format */
+#define DBFLAG_InternalDml    0x0100  /* Running DML the user did not write */
 #endif
 
 /*

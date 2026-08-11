@@ -26,6 +26,9 @@ do_execsql_test doltlite_default_materialization-1.1 {
 
 reset_db
 
+# Storing the column rewrites both rows, but the user wrote ALTER TABLE, not an
+# UPDATE. Stock reports 2 here and so does this: the counters were counting the
+# rewrites, which made a schema change look like it had modified rows.
 do_execsql_test doltlite_default_materialization-2.1 {
   CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
   INSERT INTO t VALUES(1,'a'),(2,'b');
@@ -36,7 +39,7 @@ do_execsql_test doltlite_default_materialization-2.1 {
   SELECT length(dolt_commit('-Am','add default'));
   SELECT total_changes();
   SELECT group_concat(id || ':' || v || ':' || x, '|') FROM t ORDER BY id;
-} {40 2 4 40 4 1:a:7|2:b:7}
+} {40 2 2 40 2 1:a:7|2:b:7}
 
 reset_db
 
