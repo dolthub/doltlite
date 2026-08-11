@@ -94,10 +94,10 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("Nightly result: **PASS**", report)
         self.assertIn("aggregates all key shapes", report)
         self.assertIn("### In-memory", report)
-        self.assertIn("| Reads | 4 | 3 | 400µs | 600µs | 1.500× |", report)
+        self.assertIn("| Reads | 4 | 3 | 400µs | 600µs | 1.5× |", report)
         self.assertIn("### File-backed", report)
         self.assertIn(
-            "| Autocommit writes | 4 | 3 | 400µs | 2.00ms | 5.000× |",
+            "| Autocommit writes | 4 | 3 | 400µs | 2.00ms | 5.0× |",
             report,
         )
         self.assertIn("Paired-ratio noise", report)

@@ -314,8 +314,8 @@ def render_section_summary(suites, section, prefix):
         f"| {prefix} | {len(results)} | "
         f"{sample_count_text(suites, results)} | "
         f"{format_time(baseline)} | {format_time(candidate)} | "
-        f"{ratio:.3f}× | "
-        f"{statistics.median(workload_noise(*item) for item in results):.2f}% "
+        f"{ratio:.1f}× | "
+        f"{statistics.median(workload_noise(*item) for item in results):.1f}% "
         f"| **{result}** |"
     )
 
@@ -383,8 +383,8 @@ def render_sysbench_details(suite):
             f"| {escape_markdown(result.section)} | "
             f"`{escape_markdown(result.test)}` | "
             f"{format_time(result.baseline_us)} | "
-            f"{format_time(result.candidate_us)} | {ratio:.3f}× | "
-            f"{workload_noise(suite, result):.2f}% | {status} |"
+            f"{format_time(result.candidate_us)} | {ratio:.1f}× | "
+            f"{workload_noise(suite, result):.1f}% | {status} |"
         )
     lines.extend(["", "</details>", ""])
     return lines
@@ -407,7 +407,7 @@ def render_vc(suite):
             f"| `{escape_markdown(result.test)}` | "
             f"{format_time(result.candidate_us)} | "
             f"{format_time(result.baseline_us)} | {used:.1%} | "
-            f"{workload_noise(suite, result):.2f}% | {status} |"
+            f"{workload_noise(suite, result):.1f}% | {status} |"
         )
     result = "PASS" if vc_passes(suite) else "FAIL"
     lines.extend(["", f"Version-control ceiling result: **{result}**.", ""])
