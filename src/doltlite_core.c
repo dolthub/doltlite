@@ -782,7 +782,13 @@ int doltliteDetectConstraintViolationsFiltered(
       "       AND sql IS NOT NULL "
       "       AND (instr(upper(sql), 'REFERENCES')>0 "
       "            OR instr(upper(sql), 'CHECK')>0 "
-      "            OR instr(upper(sql), 'UNIQUE')>0)) "
+      "            OR instr(upper(sql), 'UNIQUE')>0 "
+      /* NOT NULL has a detector too. Without this term a table whose only
+      ** constraint is NOT NULL returned from here reporting nothing, so
+      ** dolt_verify_constraints could not see a violating row at all. Matching
+      ** a column merely named like the keyword only costs a scan the detectors
+      ** find nothing in; missing one reports a clean database that is not. */
+      "            OR instr(upper(sql), 'NOT NULL')>0)) "
       "   OR (type='index' AND sql IS NOT NULL "
       "       AND instr(upper(sql), 'CREATE UNIQUE INDEX')>0) "
       "LIMIT 1",

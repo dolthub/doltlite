@@ -236,6 +236,36 @@ SELECT CONCAT('R|ROW|', id, '|', quote(c)) FROM t ORDER BY id;" \
 R|ROW|1|'7'
 R|ROW|2|'7'"
 
+echo "--- not null: dolt_verify_constraints --all sees the merged row ---"
+# The detectors sit behind a precheck that scans each table's SQL for a
+# constraint worth looking for. It listed REFERENCES, CHECK and UNIQUE, so a
+# table whose only constraint is NOT NULL returned "nothing to detect" and
+# dolt_verify_constraints could not see a violating row at all -- the merge path
+# refused it, but verification called the database clean. Reported by Ito QA on
+# the pull request that added the detector.
+dl_expect "not_null_verify_all_reports_merged_row" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES (1,'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,NULL);
+SELECT dolt_commit('-Am','feat_null');
+SELECT dolt_checkout('main');
+CREATE TABLE t2(id INTEGER PRIMARY KEY, b TEXT NOT NULL);
+INSERT INTO t2 SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t2 RENAME TO t;
+SELECT dolt_commit('-Am','main_not_null');
+SELECT dolt_merge('feat');
+" \
+"SELECT CONCAT('R|VERIFY|', dolt_verify_constraints('--all'));
+SELECT CONCAT('R|TYPE|', violation_type) FROM dolt_constraint_violations_t;
+SELECT CONCAT('R|AGG|', count(*)) FROM dolt_constraint_violations;" \
+"R|AGG|1
+R|TYPE|not null
+R|VERIFY|1"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
