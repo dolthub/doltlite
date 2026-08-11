@@ -2,7 +2,7 @@
 
 > Nightly result: **PASS**
 >
-> Generated: 2026-08-11 11:17 UTC
+> Generated: 2026-08-11 19:52 UTC
 >
 > Commit: [`1ae7e33c58de5f0b349b34f733c32e63e485578a`](https://github.com/dolthub/doltlite/commit/1ae7e33c58de5f0b349b34f733c32e63e485578a)
 >
@@ -14,14 +14,56 @@ This report compares optimized DoltLite against stock SQLite on the same GitHub-
 
 ## SQL workload summary
 
-| Key shape | Workloads | Samples/workload | Wall time | SQLite median total | DoltLite median total | Ratio | Median paired-ratio MAD | Result |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| int | 69 | 55 | 1h 11m 8s | 9.10s | 10.35s | 1.138× | 1.63% | **PASS** |
-| textpk | 69 | 55 | 1h 25m 59s | 9.09s | 11.28s | 1.241× | 2.46% | **PASS** |
-| blobpk | 69 | 55 | 1h 19m 21s | 8.26s | 9.40s | 1.139× | 0.80% | **PASS** |
-| compositepk | 69 | 55 | 1h 26m 2s | 10.47s | 11.77s | 1.124× | 1.32% | **PASS** |
+The primary view aggregates all key shapes and compares DoltLite with SQLite by storage mode and operation class.
+
+### In-memory
+
+| Operation | Workloads | Samples/workload | SQLite median total | DoltLite median total | Ratio | Median paired-ratio MAD | Result |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Reads | 60 | 55 | 9.56s | 9.77s | 1.022× | 1.74% | **PASS** |
+| Writes | 32 | 55 | 1.86s | 3.12s | 1.676× | 1.51% | **PASS** |
+
+### File-backed
+
+| Operation | Workloads | Samples/workload | SQLite median total | DoltLite median total | Ratio | Median paired-ratio MAD | Result |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Reads | 60 | 55 | 10.03s | 9.91s | 0.988× | 1.38% | **PASS** |
+| Writes | 32 | 55 | 3.97s | 4.49s | 1.129× | 1.74% | **PASS** |
+| Autocommit writes | 32 | 55 | 2.04s | 5.65s | 2.766× | 5.26% | **PASS** |
 
 The absolute ceiling is 2.4× per ordinary workload and 1.95× for a section average. Durable autocommit writes use 6.0× and 5.0× ceilings respectively.
+
+<details>
+<summary>Key-shape and individual-workload breakdown</summary>
+
+The integer, text, blob, and composite primary-key runs verify that performance holds across key shapes.
+
+| Storage | Operation | Key shape | Workloads | Samples/workload | SQLite median total | DoltLite median total | Ratio | Median paired-ratio MAD | Result |
+|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| In-memory | Reads | int | 15 | 55 | 2.52s | 2.65s | 1.052× | 2.01% | **PASS** |
+| In-memory | Reads | textpk | 15 | 55 | 1.87s | 1.90s | 1.016× | 2.45% | **PASS** |
+| In-memory | Reads | blobpk | 15 | 55 | 2.07s | 2.21s | 1.068× | 0.71% | **PASS** |
+| In-memory | Reads | compositepk | 15 | 55 | 3.10s | 3.01s | 0.970× | 1.65% | **PASS** |
+| In-memory | Writes | int | 8 | 55 | 452.27ms | 718.61ms | 1.589× | 1.75% | **PASS** |
+| In-memory | Writes | textpk | 8 | 55 | 363.59ms | 631.51ms | 1.737× | 1.73% | **PASS** |
+| In-memory | Writes | blobpk | 8 | 55 | 440.36ms | 761.51ms | 1.729× | 0.64% | **PASS** |
+| In-memory | Writes | compositepk | 8 | 55 | 606.32ms | 1.01s | 1.665× | 1.42% | **PASS** |
+| File-backed | Reads | int | 15 | 55 | 2.79s | 2.73s | 0.979× | 1.57% | **PASS** |
+| File-backed | Reads | textpk | 15 | 55 | 1.93s | 1.92s | 0.991× | 2.21% | **PASS** |
+| File-backed | Reads | blobpk | 15 | 55 | 2.28s | 2.26s | 0.988× | 1.21% | **PASS** |
+| File-backed | Reads | compositepk | 15 | 55 | 3.02s | 3.00s | 0.995× | 1.27% | **PASS** |
+| File-backed | Writes | int | 8 | 55 | 590.06ms | 840.47ms | 1.424× | 1.33% | **PASS** |
+| File-backed | Writes | textpk | 8 | 55 | 1.55s | 1.25s | 0.809× | 31.87% | **PASS** |
+| File-backed | Writes | blobpk | 8 | 55 | 1.07s | 1.23s | 1.153× | 1.44% | **PASS** |
+| File-backed | Writes | compositepk | 8 | 55 | 770.03ms | 1.17s | 1.515× | 1.74% | **PASS** |
+| File-backed | Autocommit reads | int | 15 | 55 | 2.56s | 2.70s | 1.056× | 1.12% | **PASS** |
+| File-backed | Autocommit reads | textpk | 15 | 55 | 1.92s | 1.93s | 1.007× | 1.86% | **PASS** |
+| File-backed | Autocommit reads | blobpk | 15 | 55 | 2.15s | 2.26s | 1.050× | 0.61% | **PASS** |
+| File-backed | Autocommit reads | compositepk | 15 | 55 | 2.83s | 2.99s | 1.057× | 1.16% | **PASS** |
+| File-backed | Autocommit writes | int | 8 | 55 | 190.12ms | 713.73ms | 3.754× | 4.95% | **PASS** |
+| File-backed | Autocommit writes | textpk | 8 | 55 | 1.46s | 3.65s | 2.502× | 61.59% | **PASS** |
+| File-backed | Autocommit writes | blobpk | 8 | 55 | 249.57ms | 692.45ms | 2.775× | 4.76% | **PASS** |
+| File-backed | Autocommit writes | compositepk | 8 | 55 | 144.60ms | 594.26ms | 4.110× | 4.96% | **PASS** |
 
 <details>
 <summary>int workload details</summary>
@@ -328,6 +370,8 @@ The absolute ceiling is 2.4× per ordinary workload and 1.95× for a section ave
 | ac_writes | `oltp_write_only_ac` | 18.02ms | 78.40ms | 4.350× | 4.14% | PASS |
 | ac_writes | `types_delete_insert_ac` | 15.86ms | 66.37ms | 4.185× | 6.02% | PASS |
 | ac_writes | `oltp_read_write_ac` | 24.59ms | 85.92ms | 3.494× | 4.06% | PASS |
+
+</details>
 
 </details>
 
