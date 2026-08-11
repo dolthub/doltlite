@@ -711,4 +711,66 @@ run_test "index_seek_past_end_steps_backward" \
 
 db_rm "$DB"
 
+# A numeric key no double represents exactly is stored as the neighbouring
+# double plus the exact integer, so its key bytes begin with the key of that
+# neighbour. Seeking to the neighbour lands on such a pending row with the bytes
+# equal and the values not, and that landing used to be dropped: the row was
+# invisible to every bounded seek while it was pending, so a range UPDATE
+# reported no changes and left it stale.
+DB=/tmp/test_txn_extended_numeric_$$.db; db_rm "$DB"
+
+run_test "range_update_reaches_pending_extended_numeric_key" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   BEGIN;
+   INSERT INTO t VALUES(-9007199254740993, 'z');
+   UPDATE t SET b = '' WHERE k > -9007199254740994 AND k < 9007199254740994;
+   SELECT changes();
+   SELECT quote(k) || '/' || quote(b) FROM t;
+   COMMIT;
+   SELECT quote(k) || '/' || quote(b) FROM t;" \
+  "1
+-9007199254740993/''
+-9007199254740993/''" \
+  "$DB"
+
+db_rm "$DB"
+
+# The same landing through a bare lower bound, and for the positive key, whose
+# base double sits below it too.
+run_test "bounded_seek_sees_pending_extended_numeric_keys" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   INSERT INTO t VALUES(500, 'c');
+   BEGIN;
+   INSERT INTO t VALUES(-9007199254740993, 'n');
+   INSERT INTO t VALUES(9007199254740993, 'p');
+   SELECT count(*) FROM t WHERE k > -9007199254740994;
+   SELECT count(*) FROM t WHERE k >= -9007199254740994;
+   SELECT count(*) FROM t WHERE k > 9007199254740992;
+   SELECT group_concat(quote(k), '|') FROM (SELECT k FROM t WHERE k > -9007199254740994 ORDER BY k);
+   COMMIT;" \
+  "3
+3
+1
+-9007199254740993|500|9007199254740993" \
+  "$DB"
+
+db_rm "$DB"
+
+# An equality seek must still resolve to the row it names. The landing above is
+# reported as above, not as an equality, or an UPDATE would rewrite a neighbour.
+run_test "equality_seek_near_extended_numeric_key_hits_right_row" \
+  "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
+   BEGIN;
+   INSERT INTO t VALUES(-9007199254740993, 'n');
+   INSERT INTO t VALUES(-9007199254740994, 'base');
+   UPDATE t SET b = 'hit' WHERE k = -9007199254740994;
+   SELECT changes();
+   SELECT group_concat(quote(k) || '/' || quote(b), '|') FROM (SELECT k, b FROM t ORDER BY k);
+   COMMIT;" \
+  "1
+-9007199254740994/'hit'|-9007199254740993/'n'" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
