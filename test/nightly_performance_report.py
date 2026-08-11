@@ -10,6 +10,25 @@ from dataclasses import dataclass
 
 SYSBENCH_SUITES = ("int", "textpk", "blobpk", "compositepk")
 ALL_SUITES = SYSBENCH_SUITES + ("vc",)
+SQL_SUMMARY_GROUPS = (
+    ("In-memory", (("Reads", "mem_reads"), ("Writes", "mem_writes"))),
+    (
+        "File-backed",
+        (
+            ("Reads", "file_reads"),
+            ("Writes", "file_writes"),
+            ("Autocommit writes", "ac_writes"),
+        ),
+    ),
+)
+KEY_SHAPE_GROUPS = (
+    ("In-memory", "Reads", "mem_reads"),
+    ("In-memory", "Writes", "mem_writes"),
+    ("File-backed", "Reads", "file_reads"),
+    ("File-backed", "Writes", "file_writes"),
+    ("File-backed", "Autocommit reads", "ac_reads"),
+    ("File-backed", "Autocommit writes", "ac_writes"),
+)
 SAMPLE_HEADER = (
     "section",
     "test",
@@ -177,14 +196,24 @@ def workload_noise(suite, result):
     return median_relative_mad(ratios)
 
 
-def suite_noise(suite):
-    return statistics.median(
-        workload_noise(suite, result) for result in suite.results
-    )
-
-
-def sample_count_text(suite):
-    counts = sorted({len(values) for values in suite.samples.values()})
+def sample_count_text(suites, results=None):
+    if isinstance(suites, Suite):
+        suites = (suites,)
+    if results is None:
+        counts = sorted(
+            {
+                len(values)
+                for suite in suites
+                for values in suite.samples.values()
+            }
+        )
+    else:
+        counts = sorted(
+            {
+                len(suite.samples[(result.section, result.test)])
+                for suite, result in results
+            }
+        )
     if len(counts) == 1:
         return str(counts[0])
     return f"{counts[0]}–{counts[-1]}"
@@ -213,21 +242,106 @@ def escape_markdown(value):
 
 
 def individual_limit(result):
-    return 10.0 if result.section == "ac_writes" else 2.5
+    return 6.0 if result.section == "ac_writes" else 2.4
 
 
-def render_sysbench_summary(suite):
-    baseline = sum(result.baseline_us for result in suite.results)
-    candidate = sum(result.candidate_us for result in suite.results)
-    ratio = candidate / baseline
-    result = "PASS" if suite.status == 0 else "FAIL"
-    return (
-        f"| {suite.name} | {len(suite.results)} | "
-        f"{sample_count_text(suite)} | "
-        f"{format_duration(suite.duration_seconds)} | "
-        f"{format_time(baseline)} | {format_time(candidate)} | "
-        f"{ratio:.3f}× | {suite_noise(suite):.2f}% | **{result}** |"
+def average_limit(section):
+    return 5.0 if section == "ac_writes" else 1.95
+
+
+def section_results(suites, section):
+    return tuple(
+        (suite, result)
+        for suite in suites
+        for result in suite.results
+        if result.section == section
     )
+
+
+def section_passes(suites, section):
+    for suite in suites:
+        results = [
+            result for result in suite.results if result.section == section
+        ]
+        ratios = [
+            result.candidate_us / result.baseline_us for result in results
+        ]
+        if not ratios:
+            return False
+        if any(
+            ratio > individual_limit(result)
+            for ratio, result in zip(ratios, results)
+        ):
+            return False
+        average = float(f"{statistics.mean(ratios):.2f}")
+        if average > average_limit(section):
+            return False
+    return True
+
+
+def render_section_summary(suites, section, prefix):
+    results = section_results(suites, section)
+    if not results:
+        raise ValueError(f"missing results for section: {section}")
+    baseline = sum(result.baseline_us for _, result in results)
+    candidate = sum(result.candidate_us for _, result in results)
+    ratio = candidate / baseline
+    result = "PASS" if section_passes(suites, section) else "FAIL"
+    return (
+        f"| {prefix} | {len(results)} | "
+        f"{sample_count_text(suites, results)} | "
+        f"{format_time(baseline)} | {format_time(candidate)} | "
+        f"{ratio:.3f}× | "
+        f"{statistics.median(workload_noise(*item) for item in results):.2f}% "
+        f"| **{result}** |"
+    )
+
+
+def render_sql_summary(suites):
+    lines = []
+    for storage, operations in SQL_SUMMARY_GROUPS:
+        lines.extend(
+            [
+                f"### {storage}",
+                "",
+                "| Operation | Workloads | Samples/workload | "
+                "SQLite median total | DoltLite median total | Ratio | "
+                "Median paired-ratio MAD | Result |",
+                "|---|---:|---:|---:|---:|---:|---:|---|",
+            ]
+        )
+        for operation, section in operations:
+            lines.append(
+                render_section_summary(suites, section, operation)
+            )
+        lines.append("")
+    return lines
+
+
+def render_key_shape_breakdown(suites):
+    lines = [
+        "<details>",
+        "<summary>Key-shape and individual-workload breakdown</summary>",
+        "",
+        "The integer, text, blob, and composite primary-key runs verify "
+        "that performance holds across key shapes.",
+        "",
+        "| Storage | Operation | Key shape | Workloads | Samples/workload | "
+        "SQLite median total | DoltLite median total | Ratio | "
+        "Median paired-ratio MAD | Result |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for storage, operation, section in KEY_SHAPE_GROUPS:
+        for suite in suites:
+            prefix = f"{storage} | {operation} | {suite.name}"
+            lines.append(
+                render_section_summary((suite,), section, prefix)
+            )
+    lines.append("")
+    for suite in suites:
+        lines.extend(render_sysbench_details(suite))
+    lines.extend(["</details>", ""])
+    return lines
 
 
 def render_sysbench_details(suite):
@@ -302,24 +416,21 @@ def render_report(suites, commit, run_url, generated_at, runner):
         "",
         "## SQL workload summary",
         "",
-        "| Key shape | Workloads | Samples/workload | Wall time | "
-        "SQLite median total | DoltLite median total | Ratio | "
-        "Median paired-ratio MAD | Result |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        "The primary view aggregates all key shapes and compares DoltLite "
+        "with SQLite by storage mode and operation class.",
+        "",
     ]
-    for name in SYSBENCH_SUITES:
-        lines.append(render_sysbench_summary(by_name[name]))
+    sysbench_suites = tuple(by_name[name] for name in SYSBENCH_SUITES)
+    lines.extend(render_sql_summary(sysbench_suites))
     lines.extend(
         [
-            "",
             "The absolute ceiling is 2.4× per ordinary workload and 1.95× "
             "for a section average. Durable autocommit writes use 6.0× "
             "and 5.0× ceilings respectively.",
             "",
         ]
     )
-    for name in SYSBENCH_SUITES:
-        lines.extend(render_sysbench_details(by_name[name]))
+    lines.extend(render_key_shape_breakdown(sysbench_suites))
     lines.extend(render_vc(by_name["vc"]))
     lines.extend(
         [

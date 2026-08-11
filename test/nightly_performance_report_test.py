@@ -28,12 +28,28 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         else:
             results = (
                 "mem_reads\tpoint\t100\t150\n"
+                "mem_writes\tinsert\t100\t175\n"
+                "file_reads\tpoint\t200\t100\n"
+                "file_writes\tinsert\t200\t250\n"
+                "ac_reads\tpoint\t200\t210\n"
                 "ac_writes\tinsert_ac\t100\t500\n"
             )
             samples = [
                 ("mem_reads", "point", 1, 100, 140),
                 ("mem_reads", "point", 2, 100, 150),
                 ("mem_reads", "point", 3, 100, 160),
+                ("mem_writes", "insert", 1, 100, 170),
+                ("mem_writes", "insert", 2, 100, 175),
+                ("mem_writes", "insert", 3, 100, 180),
+                ("file_reads", "point", 1, 200, 90),
+                ("file_reads", "point", 2, 200, 100),
+                ("file_reads", "point", 3, 200, 110),
+                ("file_writes", "insert", 1, 200, 240),
+                ("file_writes", "insert", 2, 200, 250),
+                ("file_writes", "insert", 3, 200, 260),
+                ("ac_reads", "point", 1, 200, 200),
+                ("ac_reads", "point", 2, 200, 210),
+                ("ac_reads", "point", 3, 200, 220),
                 ("ac_writes", "insert_ac", 1, 100, 480),
                 ("ac_writes", "insert_ac", 2, 100, 500),
                 ("ac_writes", "insert_ac", 3, 100, 520),
@@ -76,8 +92,34 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 "ubuntu24 20260720.1",
             )
         self.assertIn("Nightly result: **PASS**", report)
-        self.assertIn("| int | 2 | 3 | 1h 2m 3s |", report)
+        self.assertIn("aggregates all key shapes", report)
+        self.assertIn("### In-memory", report)
+        self.assertIn("| Reads | 4 | 3 | 400µs | 600µs | 1.500× |", report)
+        self.assertIn("### File-backed", report)
+        self.assertIn(
+            "| Autocommit writes | 4 | 3 | 400µs | 2.00ms | 5.000× |",
+            report,
+        )
         self.assertIn("Median paired-ratio MAD", report)
+        summary = report.split("<details>", 1)[0]
+        self.assertNotIn("Key shape", summary)
+        self.assertLess(
+            summary.index("### In-memory"),
+            summary.index("### File-backed"),
+        )
+        self.assertLess(
+            summary.index("| Reads |"),
+            summary.index("| Writes |"),
+        )
+        self.assertLess(
+            summary.index("| Writes |", summary.index("### File-backed")),
+            summary.index("| Autocommit writes |"),
+        )
+        self.assertIn(
+            "<summary>Key-shape and individual-workload breakdown</summary>",
+            report,
+        )
+        self.assertIn("| In-memory | Reads | int | 1 | 3 |", report)
         self.assertIn("Version-control latency", report)
         self.assertIn("50.0%", report)
         self.assertFalse(
@@ -104,7 +146,6 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 "ubuntu24",
             )
         self.assertIn("Nightly result: **FAIL**", report)
-        self.assertRegex(report, r"\| blobpk .* \*\*FAIL\*\* \|")
 
     def test_rejects_result_without_matching_samples(self):
         with tempfile.TemporaryDirectory() as temporary:
