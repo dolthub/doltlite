@@ -311,9 +311,18 @@ static int findMatchingMutMapEntry(
     }
     pIdxKey->eqSeen = 0;
     cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
-    if( cmp!=0 && !pIdxKey->eqSeen ){
+    if( cmp<0 && !pIdxKey->eqSeen ){
       break;
     }
+    /* cmp>0 with no equality means this row sorts above the seek key even
+    ** though its key bytes started with the seek key's. A numeric value that
+    ** no double represents exactly is encoded as the neighbouring double plus
+    ** the exact integer, so its key literally begins with the key of that
+    ** neighbour: seeking to the neighbour lands here with the bytes equal and
+    ** the values not. That is the same landing the prefix-above branch reports,
+    ** so report it rather than losing the row. *pEqSeen stays clear -- nothing
+    ** compared equal, and claiming otherwise would let an equality seek
+    ** overwrite the wrong row. */
     if( pEntry->op==PROLLY_EDIT_INSERT ){
       pMatch = pEntry;
       *pEqSeen = (cmp==0 || pIdxKey->eqSeen);
