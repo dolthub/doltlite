@@ -1081,20 +1081,31 @@ int chunkStorePut(
   rc = csGrowPending(cs);
   if( rc != SQLITE_OK ) return rc;
 
-  rc = csGrowWriteBuf(cs, 4 + nData);
+  if( cs->isMemory ){
+    rc = csGrowWriteBuf(cs, 4 + nData);
+  }else{
+    rc = csGrowWriteBuf(cs, CS_WAL_CHUNK_HDR_SIZE + nData);
+  }
   if( rc != SQLITE_OK ) return rc;
 
   {
     ChunkIndexEntry *e = &cs->staging.aPending[cs->staging.nPending];
     e->hash = h;
     e->offset = (i64)cs->staging.nWriteBuf;
+    if( !cs->isMemory ) e->offset += CS_WAL_CHUNK_LEN_OFF;
     e->size = nData;
     cs->staging.aPendingZeroTail[cs->staging.nPending] = 0;
     cs->staging.nPending++;
   }
 
-  CS_WRITE_U32(cs->staging.pWriteBuf + cs->staging.nWriteBuf, (u32)nData);
-  cs->staging.nWriteBuf += 4;
+  if( cs->isMemory ){
+    CS_WRITE_U32(cs->staging.pWriteBuf + cs->staging.nWriteBuf, (u32)nData);
+    cs->staging.nWriteBuf += 4;
+  }else{
+    csFillChunkHdr(cs->staging.pWriteBuf + cs->staging.nWriteBuf,
+                   &h, (u32)nData);
+    cs->staging.nWriteBuf += CS_WAL_CHUNK_HDR_SIZE;
+  }
   memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
   cs->staging.nWriteBuf += nData;
 
@@ -1151,20 +1162,21 @@ int chunkStorePutSparse(
 
   rc = csGrowPending(cs);
   if( rc != SQLITE_OK ) return rc;
-  rc = csGrowWriteBuf(cs, 4 + nPrefix);
+  rc = csGrowWriteBuf(cs, CS_WAL_CHUNK_HDR_SIZE + nPrefix);
   if( rc != SQLITE_OK ) return rc;
 
   {
     ChunkIndexEntry *e = &cs->staging.aPending[cs->staging.nPending];
     e->hash = h;
-    e->offset = (i64)cs->staging.nWriteBuf;
+    e->offset = (i64)cs->staging.nWriteBuf + CS_WAL_CHUNK_LEN_OFF;
     e->size = nData;
     cs->staging.aPendingZeroTail[cs->staging.nPending] = nZeroTail;
     cs->staging.nPending++;
   }
 
-  CS_WRITE_U32(cs->staging.pWriteBuf + cs->staging.nWriteBuf, (u32)nData);
-  cs->staging.nWriteBuf += 4;
+  csFillChunkHdr(cs->staging.pWriteBuf + cs->staging.nWriteBuf,
+                 &h, (u32)nData);
+  cs->staging.nWriteBuf += CS_WAL_CHUNK_HDR_SIZE;
   if( nPrefix>0 ){
     memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pPrefix, nPrefix);
     cs->staging.nWriteBuf += nPrefix;
