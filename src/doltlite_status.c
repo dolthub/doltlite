@@ -638,6 +638,29 @@ static int isRenamePair(
   return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB);
 }
 
+/* True when another to-side entry carries the same non-empty row content
+** as the from-side table: two candidates for one identity, and the rename
+** pairing cannot choose (Dolt's tags could; content cannot). From-side
+** duplicates do not contest — a dropped identical sibling never makes a
+** real rename ambiguous — and empty tables carry no content to contest
+** with. Staging state is ignored deliberately: a contestant staged a
+** moment ago is still a contestant, or staging one of two identical new
+** tables would hand the other the dropped table's identity. */
+static int renameMateIsContested(
+  struct TableEntry *aTo, int nTo,
+  const struct TableEntry *pFrom,
+  const struct TableEntry *pTo
+){
+  int i;
+  if( prollyHashIsEmpty(&pFrom->root) ) return 0;
+  for(i=0; i<nTo; i++){
+    if( &aTo[i]==pTo || aTo[i].iTable<=1 || !aTo[i].zName ) continue;
+    if( pFrom->zName && strcmp(aTo[i].zName, pFrom->zName)==0 ) continue;
+    if( prollyHashCompare(&aTo[i].root, &pFrom->root)==0 ) return 1;
+  }
+  return 0;
+}
+
 /* Find the rename mate of pKnown across the from/to catalogs, using the
 ** same pairing dolt_status renders, so every staging surface agrees on
 ** which two entries are one renamed object. bKnownIsFrom says which side
@@ -689,6 +712,11 @@ int doltliteCatalogRenameMate(
       pMate = &aOther[i];
     }
   }
+  if( pMate ){
+    const struct TableEntry *pF = bKnownIsFrom ? pKnown : pMate;
+    const struct TableEntry *pT = bKnownIsFrom ? pMate : pKnown;
+    if( renameMateIsContested(aTo, nTo, pF, pT) ) pMate = 0;
+  }
   statusCatalogIndexFree(&fromIdx);
   statusCatalogIndexFree(&toIdx);
   *ppMate = pMate;
@@ -727,7 +755,8 @@ static int compareCatalogs(
       if( !pTo ) continue;
       j = (int)(pTo - aTo);
       if( j<0 || j>=nTo || toHandled[j] || pTo->iTable<=1 ) continue;
-      if( isRenamePair(db, &fromIdx, &toIdx, &aFrom[i], pTo) ){
+      if( isRenamePair(db, &fromIdx, &toIdx, &aFrom[i], pTo)
+       && !renameMateIsContested(aTo, nTo, &aFrom[i], pTo) ){
         char *zCompound = sqlite3_mprintf("%s -> %s", aFrom[i].zName, pTo->zName);
         if( !zCompound ){ rc = SQLITE_NOMEM; goto compare_done; }
         rc = addRow(pCur, zCompound, staged, "renamed");
@@ -754,6 +783,10 @@ static int compareCatalogs(
           break;
         }
         jMate = j;
+      }
+      if( jMate>=0
+       && renameMateIsContested(aTo, nTo, &aFrom[i], &aTo[jMate]) ){
+        jMate = -1;
       }
       if( jMate>=0 ){
         char *zCompound = sqlite3_mprintf("%s -> %s",
@@ -868,7 +901,8 @@ static int statusMaybeAddRename(
   int rc = SQLITE_OK;
   *pIsRename = 0;
   if( !pFrom || !pTo ) return SQLITE_OK;
-  if( isRenamePair(db, pFromIdx, pToIdx, pFrom, pTo) ){
+  if( isRenamePair(db, pFromIdx, pToIdx, pFrom, pTo)
+   && !renameMateIsContested(pToIdx->aEntry, pToIdx->nEntry, pFrom, pTo) ){
     char *zCompound;
     *pIsRename = 1;
     zCompound = sqlite3_mprintf("%s -> %s", pFrom->zName, pTo->zName);

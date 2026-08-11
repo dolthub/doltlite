@@ -651,6 +651,19 @@ CREATE TABLE e2(b VARCHAR(32) PRIMARY KEY, c INT);
 SELECT dolt_add('e2');
 "
 
+oracle "add_ambiguous_content_match_is_not_a_rename" "
+CREATE TABLE orig(id INT PRIMARY KEY, v INT);
+INSERT INTO orig VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+DROP TABLE orig;
+CREATE TABLE alpha(id INT PRIMARY KEY, v INT);
+INSERT INTO alpha VALUES (1, 10);
+CREATE TABLE beta(id INT PRIMARY KEY, v INT);
+INSERT INTO beta VALUES (1, 10);
+SELECT dolt_add('alpha');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

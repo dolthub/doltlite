@@ -508,6 +508,18 @@ INSERT INTO d VALUES (1);
 INSERT INTO c VALUES (2, 20);
 "
 
+oracle "ambiguous_content_match_shows_no_rename" "
+CREATE TABLE orig(id INT PRIMARY KEY, v INT);
+INSERT INTO orig VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+DROP TABLE orig;
+CREATE TABLE alpha(id INT PRIMARY KEY, v INT);
+INSERT INTO alpha VALUES (1, 10);
+CREATE TABLE beta(id INT PRIMARY KEY, v INT);
+INSERT INTO beta VALUES (1, 10);
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
