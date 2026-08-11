@@ -980,6 +980,10 @@ int addAppendIndexEntriesOfTable(
   SchemaEntry *aWorkSchema, int nWorkSchema,
   const char *zTable
 );
+int doltliteStageNamedTables(
+  sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
+  const ProllyHash *pWorkingHash, int argc, sqlite3_value **argv
+);
 
 int mergeAbortInPlace(sqlite3 *db);
 int mergeFastForward(

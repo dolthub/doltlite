@@ -1129,6 +1129,36 @@ ROLLBACK;
 "
 
 
+echo "--- table checkout stages only the named table ---"
+
+CHK_TWO_TABLE_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+"
+
+oracle "checkout_ref_table_stages_only_named" "
+$CHK_TWO_TABLE_SEED
+SELECT dolt_branch('side');
+SELECT dolt_checkout('side');
+UPDATE t SET v = 50;
+SELECT dolt_commit('-am', 'side t');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 99;
+UPDATE u SET v = 99;
+SELECT dolt_checkout('side', 't');
+"
+
+oracle "checkout_head_table_leaves_others_unstaged" "
+$CHK_TWO_TABLE_SEED
+UPDATE t SET v = 99;
+UPDATE u SET v = 99;
+SELECT dolt_checkout('HEAD', 't');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

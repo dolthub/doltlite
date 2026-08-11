@@ -553,7 +553,7 @@ static void addRemoveShadowEntriesOfDroppedVtab(
   }
 }
 
-static int addStageNamedTables(
+int doltliteStageNamedTables(
   sqlite3 *db,
   sqlite3_context *context,
   ChunkStore *cs,
@@ -901,7 +901,7 @@ static int doltliteStageArgsAndPersist(
   if( stageAll ){
     rc = addStageAllTables(db, context, cs, &workingHash);
   }else{
-    rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
+    rc = doltliteStageNamedTables(db, context, cs, &workingHash, argc, argv);
   }
   if( rc!=SQLITE_OK ) return rc;
 

@@ -791,6 +791,7 @@ static int checkoutAdoptVtabShadows(
 
 static int doltliteCheckoutTables(
   sqlite3 *db,
+  sqlite3_context *context,
   const char *zSourceRef,
   sqlite3_value **argv,
   int iFirstName,
@@ -1092,8 +1093,12 @@ static int doltliteCheckoutTables(
     if( rc==SQLITE_OK ){
       rc = doltliteSwitchCatalog(db, &newWorkingHash);
     }
+    /* Checking a table out of a ref stages that table from the ref, and
+    ** only that table: adopting the whole working catalog as staged would
+    ** sweep every other table's working changes into the next commit. */
     if( rc==SQLITE_OK && zSourceRef ){
-      rc = doltliteSetSessionStaged(db, &newWorkingHash);
+      rc = doltliteStageNamedTables(db, context, cs, &newWorkingHash,
+                                    nNames, argv+iFirstName);
     }
     if( rc==SQLITE_OK ){
       rc = doltlitePersistWorkingSet(db);
@@ -1182,9 +1187,9 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     ProllyHash sourceRef;
     rc = doltliteResolveRef(db, zBranch, &sourceRef);
     if( rc==SQLITE_OK ){
-      rc = doltliteCheckoutTables(db, zBranch, argv, 1, argc-1);
+      rc = doltliteCheckoutTables(db, ctx, zBranch, argv, 1, argc-1);
     }else{
-      rc = doltliteCheckoutTables(db, 0, argv, 0, argc);
+      rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc);
     }
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf("no such branch or table: %s", zBranch);
@@ -1276,7 +1281,7 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
 
-    rc = doltliteCheckoutTables(db, 0, argv, 0, argc);
+    rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc);
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf(
           "no such branch or table: %s", zBranch);
