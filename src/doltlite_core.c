@@ -44,6 +44,8 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   if( !cs ) return SQLITE_ERROR;
 
   memcpy(&p->refsHash, refsTableGetHash(&cs->refs), sizeof(ProllyHash));
+  memcpy(&p->committedRefsHash, &cs->refs.committedRefsHash,
+         sizeof(ProllyHash));
 
   p->zSessionBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !p->zSessionBranch ){
@@ -74,8 +76,13 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
 
   if( !cs ) return SQLITE_ERROR;
 
-  refsTableSetHash(&cs->refs, &p->refsHash);
-  if( prollyHashIsEmpty(&p->refsHash) ){
+  if( prollyHashCompare(&p->committedRefsHash,
+                        &cs->refs.committedRefsHash)==0 ){
+    refsTableSetHash(&cs->refs, &p->refsHash);
+  }else{
+    csRestoreCommittedRefsHash(cs);
+  }
+  if( prollyHashIsEmpty(&cs->refs.refsHash) ){
     chunkStoreClearRefs(cs);
   }else{
     rc = chunkStoreReloadRefs(cs);
