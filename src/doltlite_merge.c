@@ -1409,13 +1409,38 @@ void doltliteFreeNameList(char **az, int n){
   sqlite3_free(az);
 }
 
+/* Rebuild the named (merge-adopted) indexes over the merged rows. REINDEX
+** enforces uniqueness while rebuilding, but rows that collide under an
+** adopted unique index are exactly what the merge must SURFACE — as
+** resolvable constraint violations from the detector that runs after this
+** — not a bare "constraint failed" that aborts the merge with nothing
+** recorded. A unique index holds duplicates physically (entries carry the
+** row key), so the rebuild runs with enforcement off and the detector
+** owns the outcome, as Dolt does. Enforcement returns for ordinary DML
+** once onError is restored. */
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n){
   int i, rc = SQLITE_OK;
+  if( n>0 ){
+    /* The adopted indexes exist only in the just-switched catalog; the
+    ** schema reloads on this prepare, so the lookups below can see them. */
+    rc = sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", 0, 0, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   for(i=0; i<n && rc==SQLITE_OK; i++){
+    Index *pIdx = sqlite3FindIndex(db, az[i], "main");
+    u8 savedOnError = pIdx ? pIdx->onError : 0;
+    int suppressed = pIdx!=0;
     char *zSql = sqlite3_mprintf("REINDEX \"%w\"", az[i]);
     if( !zSql ) return SQLITE_NOMEM;
+    if( pIdx ) pIdx->onError = OE_None;
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
     sqlite3_free(zSql);
+    if( suppressed ){
+      /* Re-find rather than trust the pointer: a failed exec can reset
+      ** the schema and free the Index. */
+      pIdx = sqlite3FindIndex(db, az[i], "main");
+      if( pIdx ) pIdx->onError = savedOnError;
+    }
   }
   return rc;
 }

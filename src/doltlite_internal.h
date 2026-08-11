@@ -1048,6 +1048,9 @@ int doltliteDetectMergeCheckViolations(sqlite3 *db, const ProllyHash *pAncCatHas
 int doltliteDetectMergeNotNullViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
                                        char **pzErrMsg, int *pnFound,
                                        const char **azTables, int nTables);
+int doltliteDetectMergeStrictViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
+                                       char **pzErrMsg, int *pnFound,
+                                       const char **azTables, int nTables);
 
 int doltliteConstraintViolationBatchBegin(sqlite3 *db);
 int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
@@ -1090,6 +1093,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
   int *pnConflicts,
+  int *pnViolations,
   char *hexBuf
 );
 
@@ -1305,7 +1309,14 @@ int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     const ProllyHash *pOldMaster, u8 oldFlags,
     const char **azTouched, int nTouched,
     struct TableEntry *aFinal, int nFinal,
+    int bEntrylessFromWorking,
     ProllyHash *pNewRoot);
+void doltliteRenumberStaleStagedEntries(
+    struct TableEntry *aStaged, int nStaged,
+    struct TableEntry *aWorking, int nWorking);
+void doltliteAlignStagedEntriesToWorking(
+    struct TableEntry *aWorking, int nWorking,
+    struct TableEntry *aStaged, int nStaged);
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
     const char *zOurSql, const char *zTheirSql, char **pzDetail);

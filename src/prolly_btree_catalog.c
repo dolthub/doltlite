@@ -1031,6 +1031,7 @@ int doltliteBuildNamedStageMasterRoot(
   const ProllyHash *pOldMaster, u8 oldFlags,
   const char **azTouched, int nTouched,
   struct TableEntry *aFinal, int nFinal,
+  int bEntrylessFromWorking,
   ProllyHash *pNewRoot
 ){
   Btree *pBtree;
@@ -1087,7 +1088,9 @@ int doltliteBuildNamedStageMasterRoot(
     isEntryless = strcmp(pRow->zType, "view")==0
                || strcmp(pRow->zType, "trigger")==0;
     if( isEntryless ){
-      if( fromWorking ) continue;      /* views/triggers keep staged state */
+      /* A named add keeps views and triggers at their staged state; -a
+      ** stages them from working, as Dolt does through dolt_schemas. */
+      if( fromWorking != (bEntrylessFromWorking!=0) ) continue;
     }else{
       zParent = strcmp(pRow->zType, "index")==0
                   ? pRow->zTblName : pRow->zName;

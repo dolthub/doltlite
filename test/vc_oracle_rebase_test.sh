@@ -915,6 +915,66 @@ oracle "merge_dissolve_log" "$MERGE_DISSOLVE_SETUP" \
 oracle "merge_dissolve_table" "$MERGE_DISSOLVE_SETUP" \
   "SELECT CONCAT('LOG|', id, '=', v) FROM t ORDER BY id;"
 
+echo "--- a replay that violates a constraint aborts the whole rebase ---"
+
+CV_REBASE_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'x');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 'x'), (3, 'y');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_rows');
+SELECT dolt_checkout('main');
+CREATE UNIQUE INDEX uv ON t(v);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'unique_v');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+"
+
+oracle_error_reopen "rebase_aborts_on_unique_violation_replay" "$CV_REBASE_SETUP" \
+  "SELECT dolt_checkout('feat');
+SELECT CONCAT('LOG|', id, '=', v) FROM t ORDER BY id;
+SELECT CONCAT('LOG|msg=', message) FROM dolt_log;"
+
+FK_REBASE_SEED="
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER,
+  FOREIGN KEY(pid) REFERENCES parent(id));
+INSERT INTO parent VALUES (1), (2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+"
+
+oracle_error_reopen "rebase_aborts_on_fk_violation_replay" "
+$FK_REBASE_SEED
+INSERT INTO child VALUES (1, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE id = 2;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'drop_parent_row');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "SELECT dolt_checkout('feat');
+SELECT CONCAT('LOG|child|', id, '=', pid) FROM child ORDER BY id;
+SELECT CONCAT('LOG|parent|', id) FROM parent ORDER BY id;
+SELECT CONCAT('LOG|msg=', message) FROM dolt_log;"
+
+oracle_error_reopen "rebase_fk_cv_in_second_replay_aborts_whole_rebase" "
+$FK_REBASE_SEED
+INSERT INTO parent VALUES (5);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_clean');
+INSERT INTO child VALUES (1, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE id = 2;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'drop_parent_row');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "SELECT dolt_checkout('feat');
+SELECT CONCAT('LOG|child|', id, '=', pid) FROM child ORDER BY id;
+SELECT CONCAT('LOG|parent|', id) FROM parent ORDER BY id;
+SELECT CONCAT('LOG|msg=', message) FROM dolt_log;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

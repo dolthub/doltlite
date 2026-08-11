@@ -3,9 +3,12 @@
 #include "doltlite_merge_constraints_int.h"
 #include "vdbeInt.h"
 
+/* Every member of a colliding group is recorded, including rows that
+** predate the merge: the collision names them all as one violation, and
+** Dolt records both sides. The pre-existing-row skip the other detectors
+** apply does not belong here — it silently halved the violation. */
 static int appendUniqueViolationByRowid(
   sqlite3 *db,
-  struct TableEntry *aAnc, int nAnc,
   const char *zTable,
   const char *zIndexName,
   const char *zCols,
@@ -24,21 +27,6 @@ static int appendUniqueViolationByRowid(
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 
-  if( aAnc ){
-    u8 *pAncVal = 0;
-    int nAncVal = 0;
-    int ancRc = fetchAncestorRowByName(db, aAnc, nAnc, zTable,
-                                       rowid, &pAncVal, &nAncVal);
-    int preExisting = (ancRc==SQLITE_OK)
-        && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
-    sqlite3_free(pAncVal);
-    if( preExisting ){
-      sqlite3_free(pKey);
-      sqlite3_free(pVal);
-      return SQLITE_OK;
-    }
-  }
-
   zInfo = sqlite3_mprintf(
       "{\"Columns\": [%s], \"Name\": \"%w\"}",
       zCols, zIndexName);
@@ -54,7 +42,6 @@ static int appendUniqueViolationByRowid(
 
 static int appendUniqueViolationByPk(
   sqlite3 *db,
-  struct TableEntry *aAnc, int nAnc,
   const char *zTable,
   const char *zIndexName,
   const char *zCols,
@@ -74,21 +61,6 @@ static int appendUniqueViolationByPk(
                              &pKey, &nKey, &pVal, &nVal);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
-
-  if( aAnc ){
-    u8 *pAncVal = 0;
-    int nAncVal = 0;
-    int ancRc = fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
-                                      pKey, nKey, &pAncVal, &nAncVal);
-    int preExisting = (ancRc==SQLITE_OK)
-        && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
-    sqlite3_free(pAncVal);
-    if( preExisting ){
-      sqlite3_free(pKey);
-      sqlite3_free(pVal);
-      return SQLITE_OK;
-    }
-  }
 
   zInfo = sqlite3_mprintf(
       "{\"Columns\": [%s], \"Name\": \"%w\"}",
@@ -297,7 +269,6 @@ static int uniqueIndexEntriesSort(
 
 static int detectUniqueViolationsForIndex(
   sqlite3 *db,
-  struct TableEntry *aAnc, int nAnc,
   const char *zTable,
   Index *pIdx,
   const char *zCols,
@@ -384,7 +355,7 @@ static int detectUniqueViolationsForIndex(
       int appended = 0;
       if( !winnerHandled ){
         rc = appendUniqueViolationByRowid(
-            db, aAnc, nAnc, zTable, pIdx->zName, zCols,
+            db, zTable, pIdx->zName, zCols,
             aEntry[i-1].rowid, &appended);
         if( rc!=SQLITE_OK ) break;
         if( appended && pnFound ) (*pnFound)++;
@@ -392,7 +363,7 @@ static int detectUniqueViolationsForIndex(
       }
       appended = 0;
       rc = appendUniqueViolationByRowid(
-          db, aAnc, nAnc, zTable, pIdx->zName, zCols,
+          db, zTable, pIdx->zName, zCols,
           aEntry[i].rowid, &appended);
       if( rc!=SQLITE_OK ) break;
       if( appended && pnFound ) (*pnFound)++;
@@ -411,7 +382,6 @@ unique_done:
 
 static int detectUniqueViolationsForIndexWithoutRowid(
   sqlite3 *db,
-  struct TableEntry *aAnc, int nAnc,
   struct TableEntry *pCurrent,
   const char *zTable,
   Index *pIdx,
@@ -545,7 +515,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
       int appended = 0;
       if( !winnerHandled ){
         rc = appendUniqueViolationByPk(
-            db, aAnc, nAnc, zTable, pIdx->zName, zCols, pPk,
+            db, zTable, pIdx->zName, zCols, pPk,
             aEntry[i-1].pPk, aEntry[i-1].nPk, &appended);
         if( rc!=SQLITE_OK ) break;
         if( appended && pnFound ) (*pnFound)++;
@@ -553,7 +523,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
       }
       appended = 0;
       rc = appendUniqueViolationByPk(
-          db, aAnc, nAnc, zTable, pIdx->zName, zCols, pPk,
+          db, zTable, pIdx->zName, zCols, pPk,
           aEntry[i].pPk, aEntry[i].nPk, &appended);
       if( rc!=SQLITE_OK ) break;
       if( appended && pnFound ) (*pnFound)++;
@@ -684,11 +654,10 @@ int doltliteDetectMergeUniqueViolations(
       if( supported && zColList && *zColList ){
         if( hasRowid ){
           rc = detectUniqueViolationsForIndex(
-              db, aAnc, nAnc, zTable, pIdx, zColList, pnFound);
+              db, zTable, pIdx, zColList, pnFound);
         }else{
           rc = detectUniqueViolationsForIndexWithoutRowid(
-              db, aAnc, nAnc,
-              doltliteFindTableByName(aCur, nCur, zTable),
+              db, doltliteFindTableByName(aCur, nCur, zTable),
               zTable, pIdx, zColList, &pkInfo, pnFound);
         }
       }

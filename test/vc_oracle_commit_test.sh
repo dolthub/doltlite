@@ -599,6 +599,64 @@ SELECT dolt_merge('feature');
 SELECT dolt_commit('-m', 'force-commit-with-conflict');
 "
 
+echo "--- commit -a leaves a working-tree rename in the working tree ---"
+
+COMMIT_A_RENAME_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX tvi ON t(v);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO t2;
+"
+
+oracle "commit_a_leaves_unstaged_rename_alone" "
+$COMMIT_A_RENAME_SEED
+SELECT dolt_commit('-am', 'nothing stageable');
+"
+
+oracle_query "commit_a_unstaged_rename_head_keeps_table" "
+$COMMIT_A_RENAME_SEED
+SELECT dolt_commit('-am', 'nothing stageable');
+SELECT dolt_reset('--hard');
+" "SELECT 'R|' || id || '|' || v FROM t;" "SELECT concat('R|', id, '|', v) FROM t;"
+
+COMMIT_A_SHIFT_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO z;
+INSERT INTO u VALUES (3, 3);
+"
+
+oracle "commit_a_order_shifting_rename_stays_unstaged" "
+$COMMIT_A_SHIFT_SEED
+SELECT dolt_commit('-am', 'rename and edit');
+"
+
+oracle_query "commit_a_order_shifting_rename_head_keeps_table" "
+$COMMIT_A_SHIFT_SEED
+SELECT dolt_commit('-am', 'rename and edit');
+SELECT dolt_reset('--hard');
+" "SELECT 'R|t|' || id || '|' || v FROM t;
+SELECT 'R|u|' || id || '|' || v FROM u;" "SELECT concat('R|t|', id, '|', v) FROM t;
+SELECT concat('R|u|', id, '|', v) FROM u;"
+
+oracle "commit_a_drop_create_commits_drop_only" "
+CREATE TABLE m(a INT PRIMARY KEY, b INT);
+CREATE TABLE n(a INT PRIMARY KEY);
+INSERT INTO m VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+DROP TABLE m;
+CREATE TABLE a(x INT PRIMARY KEY, y INT);
+INSERT INTO a VALUES (9, 9);
+SELECT dolt_commit('-am', 'drop only');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
