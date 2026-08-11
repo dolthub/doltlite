@@ -180,6 +180,8 @@ static int mergePass1MergeTableData(
   struct TableEntry *pTheirsEntry
 ){
   ProllyHash mergedTableRoot;
+  ProllyHash emptyAnc;
+  const ProllyHash *pAncRoot = &pAnc->root;
   int nConflicts = 0;
   DoltliteConflictRow *aConflictRows = 0;
   MergeIndexInfo *aIdxInfo = 0;
@@ -187,13 +189,24 @@ static int mergePass1MergeTableData(
   int rc;
   int handled = 0;
 
+  /* A key-shape change is a recreate: the old rows are a different
+  ** object, and walking their root with the new shape's flags reads
+  ** aliased keys — an old row whose raw key collides with a new intkey
+  ** turns one side's insert into a phantom modify/delete pair and the
+  ** merge raises a conflict neither side created. Both sides' rows are
+  ** additions over an empty ancestor. */
+  if( ((pAnc->flags ^ pOurs->flags) & PROLLY_NODE_INTKEY)!=0 ){
+    memset(&emptyAnc, 0, sizeof(emptyAnc));
+    pAncRoot = &emptyAnc;
+  }
+
   rc = mergePass1CollectIndexes(c, zName, &aIdxInfo, &nIdxInfo);
   if( rc!=SQLITE_OK ) return rc;
 
   if( canFastMerge(c->db, zName, !ourSchemaChanged && !theirSchemaChanged) ){
     rc = prollyThreeWayMergeFast(
       doltliteGetChunkStore(c->db), doltliteGetCache(c->db),
-      &pAnc->root, &pOurs->root, pTheirsRoot,
+      pAncRoot, &pOurs->root, pTheirsRoot,
       pOurs->flags, &mergedTableRoot, &handled);
     if( rc!=SQLITE_OK ){
       mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
@@ -202,7 +215,7 @@ static int mergePass1MergeTableData(
   }
 
   if( !handled ){
-    rc = mergeTableRows(c->db, &pAnc->root, &pOurs->root,
+    rc = mergeTableRows(c->db, pAncRoot, &pOurs->root,
                         pTheirsRoot, pOurs->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo, 0);

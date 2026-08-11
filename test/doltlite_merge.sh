@@ -484,5 +484,54 @@ else
   ERRORS="$ERRORS\nFAIL: ff_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
+# A key-shape recreate on both branches merges over an EMPTY ancestor: the
+# old rows are a different object, and walking their root with the new
+# shape's flags reads aliased keys. The text key 'AAAAA' aliases intkey
+# -5385951930834944000; before the fix, ours' insert at that key read as a
+# phantom modify/delete pair and the merge raised a conflict neither side
+# created.
+DB26=/tmp/test_merge_shape_recreate_$$.db; rm -f "$DB26"
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO t VALUES('AAAAA','basev');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(-5385951930834944000,'oursval');
+SELECT dolt_commit('-Am','feat recreate');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(5,'other');
+SELECT dolt_commit('-Am','main recreate');" | $DOLTLITE "$DB26" > /dev/null 2>&1
+
+run_test_match "shape_recreate_merge_clean" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB26"
+run_test "shape_recreate_rows" \
+  "SELECT group_concat(id || '=' || v, '|') FROM (SELECT id, v FROM t ORDER BY id);" \
+  "-5385951930834944000=oursval|5=other" "$DB26"
+run_test "shape_recreate_integrity" "PRAGMA integrity_check;" "ok" "$DB26"
+
+# A true add/add collision at one key over the recreate still conflicts.
+DB27=/tmp/test_merge_shape_conflict_$$.db; rm -f "$DB27"
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO t VALUES('AAAAA','basev');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(-5385951930834944000,'oursval');
+SELECT dolt_commit('-Am','feat recreate');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(-5385951930834944000,'mainval');
+SELECT dolt_commit('-Am','main recreate');" | $DOLTLITE "$DB27" > /dev/null 2>&1
+
+run_test_match "shape_recreate_addadd_conflicts" \
+  "SELECT dolt_merge('feat');" "conflicts detected" "$DB27"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27"
 dltest_finish
