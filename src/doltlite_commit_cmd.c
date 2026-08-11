@@ -172,12 +172,15 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
   AddNameIndex headIdx;
   AddNameIndex stagedIdx;
   u8 *aRemoveStaged = 0;
+  const char **azTouched = 0;
+  int nTouched = 0;
 
   memset(&workingIdx, 0, sizeof(workingIdx));
   memset(&headIdx, 0, sizeof(headIdx));
   memset(&stagedIdx, 0, sizeof(stagedIdx));
 
   #define FREE_ADD_MODIFIED_CATALOGS() do { \
+    sqlite3_free((void*)azTouched); \
     sqlite3_free(aRemoveStaged); \
     addNameIndexFree(&workingIdx); \
     addNameIndexFree(&headIdx); \
@@ -186,6 +189,7 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     doltliteFreeCatalog(aHead, nHead); \
     doltliteFreeCatalog(aStaged, nStaged); \
   } while(0)
+
 
   rc = doltliteFlushCatalogToHash(db, &workingHash);
   if( rc!=SQLITE_OK ){
@@ -248,22 +252,15 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     return rc;
   }
 
-  /* The master entry carries no name and pairs by table number 1. The
-  ** staged catalog must use the WORKING master root so the schema rows
-  ** and the overlaid entries share one numbering domain; keeping HEAD's
-  ** master under working-numbered entries makes the serializer pair
-  ** entries with the wrong rows. */
-  for(j=0; j<nWorking; j++){
-    if( aWorking[j].iTable!=1 ) continue;
-    for(k=0; k<nStaged; k++){
-      if( aStaged[k].iTable==1 ){
-        sqlite3_free(aStaged[k].zName);
-        aStaged[k] = aWorking[j];
-        aStaged[k].zName = 0;
-        break;
-      }
-    }
-    break;
+  /* Names whose master rows follow WORKING in this operation: tables
+  ** overlaid from working and tables staged as deleted. Rename-kept and
+  ** staged-only tables keep their previous rows through the composed
+  ** master below. Names are borrowed from the catalog arrays. */
+  azTouched = sqlite3_malloc((nWorking+nHead+1)*(int)sizeof(char*));
+  if( !azTouched ){
+    sqlite3_result_error_nomem(context);
+    FREE_ADD_MODIFIED_CATALOGS();
+    return SQLITE_NOMEM;
   }
 
   for(j=0; j<nWorking; j++){
@@ -273,6 +270,7 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     struct TableEntry *pStaged;
     if( !addNameIndexFind(&headIdx, zName) ) continue;
 
+    azTouched[nTouched++] = zName;
     pStaged = addNameIndexFind(&stagedIdx, zName);
     if( pStaged ){
         k = (int)(pStaged - aStaged);
@@ -303,7 +301,22 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
   for(k=0; k<nHead; k++){
     const char *zName = aHead[k].zName;
     struct TableEntry *pStaged;
+    struct TableEntry *pMate = 0;
     if( addNameIndexFind(&workingIdx, zName) ) continue;
+    /* A HEAD table missing from working is a deletion — unless it is the
+    ** old name of a working-tree rename. Dolt's -a leaves the rename in
+    ** the working tree (the new name reads as a new table, which -a never
+    ** stages); staging just this half commits the rename as a bare DROP
+    ** and the table's history is gone. */
+    rc = doltliteCatalogRenameMate(db, aHead, nHead, aWorking, nWorking,
+                                   &aHead[k], 1, &pMate);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      FREE_ADD_MODIFIED_CATALOGS();
+      return rc;
+    }
+    if( pMate ) continue;
+    azTouched[nTouched++] = zName;
     pStaged = addNameIndexFind(&stagedIdx, zName);
     if( pStaged ){
       int j2 = (int)(pStaged - aStaged);
@@ -357,14 +370,12 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
 
     for(k2=0; k2<nStaged; ){
       const char *zParent = 0;
-      const char *zIdxName = 0;
       if( aStaged[k2].iTable<=1 || aStaged[k2].zName ){ k2++; continue; }
       for(i2=0; i2<nOldSchema; i2++){
         if( aOldSchema[i2].zType
          && strcmp(aOldSchema[i2].zType, "index")==0
          && aOldSchema[i2].iRootpage==aStaged[k2].iTable ){
           zParent = aOldSchema[i2].zTblName;
-          zIdxName = aOldSchema[i2].zName;
           break;
         }
       }
@@ -372,27 +383,12 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
        && amTableStagedByName(aStaged, nStaged, zParent)
        && !(addNameIndexFind(&workingIdx, zParent)
             && addNameIndexFind(&headIdx, zParent)) ){
-        /* Staged-sourced index: its table was staged explicitly and is
-        ** not refreshed from working, so the entry keeps the staged data
-        ** root — but its number is from the add-time catalog's domain,
-        ** which the serializer resolves against working-domain schema
-        ** rows. Renumber by index name so the row pairs; an index that
-        ** no longer exists in working falls through to the drop. */
-        int renumbered = 0;
-        for(i2=0; i2<nWorkSchema; i2++){
-          if( aWorkSchema[i2].zType
-           && strcmp(aWorkSchema[i2].zType, "index")==0
-           && aWorkSchema[i2].zName && zIdxName
-           && strcmp(aWorkSchema[i2].zName, zIdxName)==0 ){
-            aStaged[k2].iTable = aWorkSchema[i2].iRootpage;
-            renumbered = 1;
-            break;
-          }
-        }
-        if( renumbered ){
-          k2++;
-          continue;
-        }
+        /* Staged-sourced index: its table was staged explicitly (or is a
+        ** rename kept out of -a) and is not refreshed from working. The
+        ** composed master keeps its previous rows, so the entry keeps
+        ** its previous number and pairs as stored. */
+        k2++;
+        continue;
       }
       sqlite3_free(aStaged[k2].zName);
       if( k2+1<nStaged ){
@@ -449,6 +445,38 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
 
     freeSchemaEntries(aWorkSchema, nWorkSchema);
     freeSchemaEntries(aOldSchema, nOldSchema);
+  }
+
+  /* Settle the final numbering, then compose the staged master so its
+  ** rows follow it: touched tables' rows come from working, everything
+  ** else keeps its previous rows stamped to the final entry numbers.
+  ** Wholesale adoption of the working master dropped the rows of tables
+  ** deliberately kept out of -a (a working-tree rename), and the
+  ** serializer then dropped their unpairable entries from the commit. */
+  doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
+  doltliteRenumberStaleStagedEntries(aStaged, nStaged, aWorking, nWorking);
+  {
+    struct TableEntry *pWorkingMaster =
+        doltliteFindTableByNumber(aWorking, nWorking, 1);
+    struct TableEntry *pStagedMaster =
+        doltliteFindTableByNumber(aStaged, nStaged, 1);
+    if( pWorkingMaster && pStagedMaster ){
+      ProllyHash composedRoot;
+      rc = doltliteBuildNamedStageMasterRoot(db,
+              &pWorkingMaster->root, pWorkingMaster->flags,
+              &pStagedMaster->root, pStagedMaster->flags,
+              azTouched, nTouched,
+              aStaged, nStaged, 1,
+              &composedRoot);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+        FREE_ADD_MODIFIED_CATALOGS();
+        return rc;
+      }
+      pStagedMaster->root = composedRoot;
+      pStagedMaster->schemaHash = pWorkingMaster->schemaHash;
+      pStagedMaster->flags = pWorkingMaster->flags;
+    }
   }
 
   if( nStaged==0 ){

@@ -128,7 +128,7 @@ struct TableEntry *addNameIndexFind(
   return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
-static void addAlignStagedEntriesToWorking(
+void doltliteAlignStagedEntriesToWorking(
   struct TableEntry *aWorking,
   int nWorking,
   struct TableEntry *aStaged,
@@ -163,7 +163,7 @@ static void addAlignStagedEntriesToWorking(
 ** align to), and the number they hold may have been reused by the working
 ** domain for a different table. Rows follow through the master composer,
 ** which stamps old-sourced table rows from the final entry numbering. */
-static void addRenumberStaleStagedEntries(
+void doltliteRenumberStaleStagedEntries(
   struct TableEntry *aStaged, int nStaged,
   struct TableEntry *aWorking, int nWorking
 ){
@@ -389,7 +389,7 @@ static int addStageAllTables(
   if( useWorkingHash ){
     rc = doltliteSetSessionStaged(db, pWorkingHash);
   }else{
-    addAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
+    doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
     rc = addWriteStagedCatalog(db, cs, aNew, nNew);
   }
   if( workingIdxInit ) addNameIndexFree(&workingIdx);
@@ -872,8 +872,8 @@ int doltliteStageNamedTables(
   ** move off numbers the working domain may have reused for different
   ** tables (a bare number collision makes the serialized catalog
   ** ambiguous and can pair a table with another object's schema row). */
-  addAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
-  addRenumberStaleStagedEntries(aStaged, nStaged, aWorking, nWorking);
+  doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
+  doltliteRenumberStaleStagedEntries(aStaged, nStaged, aWorking, nWorking);
 
   if( updateMaster ){
     struct TableEntry *pWorkingMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
@@ -891,7 +891,7 @@ int doltliteStageNamedTables(
               pStagedMaster ? &pStagedMaster->root : 0,
               pStagedMaster ? pStagedMaster->flags : 0,
               (const char**)azTouched, nTouched,
-              aStaged, nStaged,
+              aStaged, nStaged, 0,
               &composedRoot);
       if( rc!=SQLITE_OK ){
         ADDNAMED_FREE_ALL();

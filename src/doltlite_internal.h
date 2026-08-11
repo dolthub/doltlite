@@ -1305,7 +1305,14 @@ int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     const ProllyHash *pOldMaster, u8 oldFlags,
     const char **azTouched, int nTouched,
     struct TableEntry *aFinal, int nFinal,
+    int bEntrylessFromWorking,
     ProllyHash *pNewRoot);
+void doltliteRenumberStaleStagedEntries(
+    struct TableEntry *aStaged, int nStaged,
+    struct TableEntry *aWorking, int nWorking);
+void doltliteAlignStagedEntriesToWorking(
+    struct TableEntry *aWorking, int nWorking,
+    struct TableEntry *aStaged, int nStaged);
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
     const char *zOurSql, const char *zTheirSql, char **pzDetail);
