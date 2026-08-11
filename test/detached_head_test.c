@@ -78,9 +78,9 @@ static void checkDetached(sqlite3 *db, const char *zName){
 
 int main(void){
   char zDir[] = "/tmp/doltlite-detached-head-XXXXXX";
-  char zPath[1024];
-  char zOpen[1024];
-  char zLock[1024];
+  char zPath[sizeof(zDir) + sizeof("/test.db")];
+  char zOpen[sizeof(zPath) + 128];
+  char zLock[sizeof(zPath) + sizeof("-lock")];
   char zHash[64] = {0};
   sqlite3 *db = 0;
   int rc;
