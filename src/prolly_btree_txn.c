@@ -1443,9 +1443,21 @@ int prollyBtreeBeginStmt(Btree *p, int iStatement){
     return SQLITE_ERROR;
   }
 
+  /* iStatement is db->nSavepoint+db->nStatement: the first db->nSavepoint
+  ** slots are named SAVEPOINTs (and must capture table roots), and only the
+  ** remainder are statement journals. Always pushing bStatement=1 made
+  ** SAVEPOINT ... ROLLBACK TO skip catalog capture, so a later flush (e.g.
+  ** ANALYZE after INSERT RETURNING) could leave index roots ahead of the
+  ** table after rollback (#2103). Match syncBtreeSavepoints. */
   while( p->nSavepoint < iStatement ){
-    int rc = pushSavepoint(p, 1);
-    if( rc!=SQLITE_OK ) return rc;
+    int bStatement = 1;
+    if( p->db && p->nSavepoint < p->db->nSavepoint ){
+      bStatement = 0;
+    }
+    {
+      int rc = pushSavepoint(p, bStatement);
+      if( rc!=SQLITE_OK ) return rc;
+    }
   }
   return SQLITE_OK;
 }
