@@ -21,14 +21,21 @@ default; the runner documents how to narrow.
 
 Usage: sql_differential_fuzzer.py SEED [--include-<group>]... [--all]
 Groups: large-ints desc expr agg setops cte window joins writesel ddl
-        constraints triggers
+        constraints triggers returning generated fkeys
+
+returning, generated and fkeys each add a write whose effect the statement does
+not spell out: RETURNING reads the row the write just produced, a generated
+column is recomputed from it, and a foreign-key action writes another table
+while the parent's scan is open. That is the shape the triggers group found bugs
+in, reached three other ways.
 """
 
 import random
 import sys
 
 GROUPS = ["large-ints", "desc", "expr", "agg", "setops", "cte", "window",
-          "joins", "writesel", "ddl", "constraints", "triggers"]
+          "joins", "writesel", "ddl", "constraints", "triggers",
+          "returning", "generated", "fkeys"]
 
 # Integers beyond 2^53 that no double represents exactly get a longer numeric
 # sort key, and the INT64 extremes are in that class too.
@@ -57,6 +64,7 @@ class Gen:
         self.savepoints = []
         self.ncols = 3          # k/j, a, b -- grows if ddl adds one
         self.added_col = False
+        self.has_child = False  # fkeys built a table referencing t
 
     def on(self, name):
         return name in self.g
@@ -127,6 +135,16 @@ class Gen:
         bdecl = "b TEXT%s" % coll
         if self.on("constraints") and self.r.random() < 0.25:
             bdecl = "b TEXT%s DEFAULT 'dflt'" % coll
+        # A generated column is derived from the row on every read (VIRTUAL) or
+        # written with it (STORED), and an index over one has to be maintained
+        # by the same writes. Nothing else in the schema makes the engine
+        # recompute a column value while a scan of the row is open.
+        self.gen_kind = ""
+        if self.on("generated"):
+            self.gen_kind = self.r.choice(["", "VIRTUAL", "STORED"])
+            if self.gen_kind:
+                bdecl += (", g AS (length(coalesce(quote(b),'')) + "
+                          "coalesce(a, 0)) %s" % self.gen_kind)
         if shape == "int_pk":
             cols = "k INTEGER PRIMARY KEY, a, %s" % bdecl
         elif shape == "text_pk":
@@ -185,6 +203,61 @@ class Gen:
             self.emit("CREATE TRIGGER tr_d AFTER DELETE ON t BEGIN "
                       "DELETE FROM u WHERE n = length(coalesce(quote(OLD.b),'')); "
                       "END;")
+
+        if self.on("generated") and self.gen_kind and self.r.random() < 0.5:
+            self.emit("CREATE INDEX i_g ON t(g);")
+        if self.on("fkeys") and self.shape in (
+                "int_pk", "text_pk", "numeric_pk", "unique_only"):
+            # A cascade is a write the user's statement did not name, applied to
+            # another table while the parent's scan is open -- the same shape as
+            # a trigger, reached through the foreign-key machinery instead.
+            self.has_child = True
+            action = self.r.choice(["CASCADE", "SET NULL", "RESTRICT"])
+            ktype = "TEXT" if self.key_kind == "text" else "INTEGER"
+            self.emit("CREATE TABLE ch(cid INTEGER PRIMARY KEY, fk %s "
+                      "REFERENCES t(k) ON DELETE %s ON UPDATE %s, note TEXT);"
+                      % (ktype, action, action))
+            self.emit("PRAGMA foreign_keys=ON;")
+
+    def child_write(self):
+        """Insert or delete in the table that references t."""
+        if self.r.random() < 0.7:
+            self.emit("INSERT OR IGNORE INTO ch(cid, fk, note) "
+                      "SELECT %d, k, %s FROM t WHERE %s LIMIT 1;"
+                      % (self.r.randint(1, 60), self.text_val(), self.pred()))
+        else:
+            self.emit("DELETE FROM ch WHERE cid = %d;" % self.r.randint(1, 60))
+
+    def returning(self):
+        """A write with RETURNING, kept to at most one row.
+
+        SQLite does not promise an order for RETURNING rows and it cannot carry
+        an ORDER BY, so a multi-row RETURNING would report row order as a
+        difference. Restricting these to a single row keeps the comparison
+        about the values.
+        """
+        cols = "coalesce(quote(k),'N'), coalesce(quote(a),'N'), " \
+               "coalesce(quote(b),'N')"
+        r = self.r.random()
+        if r < 0.4 or self.shape == "no_pk":
+            kc, kv = self.key_args()
+            self.emit("INSERT OR REPLACE INTO t(%s, a, b) VALUES(%s, %s, %s) "
+                      "RETURNING %s;"
+                      % (kc, kv, self.val(), self.val("text"), cols))
+            return
+        eq = self.key_eq()
+        if r < 0.7:
+            self.emit("UPDATE t SET b = %s WHERE %s RETURNING %s;"
+                      % (self.val("text"), eq, cols))
+        else:
+            self.emit("DELETE FROM t WHERE %s RETURNING %s;" % (eq, cols))
+
+    def key_eq(self):
+        """An equality on the whole key, so it names at most one row."""
+        if self.shape == "composite_pk":
+            return "k = %s AND j = %s" % (self.int_val(), self.text_val())
+        kv = self.text_val() if self.key_kind == "text" else self.int_val()
+        return "k = %s" % kv
 
     def key_args(self):
         if self.shape == "composite_pk":
@@ -401,6 +474,15 @@ class Gen:
                       % (Q % "n", Q % "tag"))
         if self.on("ddl"):
             self.emit("SELECT count(*) FROM sqlite_master WHERE type='index';")
+        if self.on("generated") and self.gen_kind:
+            self.emit("SELECT group_concat(q,'|') FROM (SELECT %s || '/' || %s "
+                      "AS q FROM t ORDER BY 1);" % (Q % "g", Q % "k"))
+            self.emit("SELECT count(*) FROM t WHERE g > 2;")
+        if self.has_child:
+            self.emit("SELECT coalesce(group_concat(q,'|'),'none') FROM "
+                      "(SELECT %s || '/' || %s AS q FROM ch ORDER BY 1);"
+                      % (Q % "cid", Q % "fk"))
+            self.emit("PRAGMA foreign_key_check;")
 
     # ---- transaction shaping -------------------------------------------
     def open_txn(self):
@@ -448,6 +530,10 @@ class Gen:
                 self.delete()
             elif r < 0.73 and self.on("ddl"):
                 self.ddl_step()
+            elif r < 0.76 and self.on("returning"):
+                self.returning()
+            elif r < 0.79 and self.has_child:
+                self.child_write()
             else:
                 self.read()
         while self.savepoints:
