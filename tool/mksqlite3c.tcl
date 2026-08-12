@@ -91,9 +91,11 @@ close $in
 #
 set fname sqlite3.c
 if {$enable_recover} { set fname sqlite3r.c }
-set out [open $fname wb]
+set tmpfname "$fname.tmp-[pid]-[clock clicks]"
+set out [open $tmpfname {WRONLY CREAT EXCL}]
 # Force the output to use unix line endings, even on Windows.
 fconfigure $out -translation binary
+try {
 set today [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S UTC" -gmt 1]
 puts $out [subst \
 {/******************************************************************************
@@ -643,12 +645,10 @@ proc emit_doltlite_engine_block {} {
     }
   }
   if {[llength $doltlite_unemitted]>0} {
-    puts stderr "mksqlite3c: doltlite sources copied into tsrc but never\
-emitted into the amalgamation: $doltlite_unemitted"
-    puts stderr "Add them to the emission list in tool/mksqlite3c.tcl (in\
-dependency order), or exclude them from DOLTLITE_EXTRA_TSRC in doltlite.mk\
-if they are compiled separately."
-    exit 1
+    error "mksqlite3c: doltlite sources copied into tsrc but never\
+emitted into the amalgamation: $doltlite_unemitted. Add them to the emission\
+list in tool/mksqlite3c.tcl (in dependency order), or exclude them from\
+DOLTLITE_EXTRA_TSRC in doltlite.mk if they are compiled separately."
   }
   section_comment "doltlite: END prolly engine + version-control layer"
 }
@@ -824,3 +824,10 @@ puts $out \
 /************************** End of sqlite3.c ******************************/"
 
 close $out
+set out {}
+file rename -force $tmpfname $fname
+} on error {msg opts} {
+  if {$out ne ""} { catch {close $out} }
+  catch {file delete -force $tmpfname}
+  return -options $opts $msg
+}
