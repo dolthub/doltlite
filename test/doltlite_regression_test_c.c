@@ -899,6 +899,14 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
            queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
   check("first_commit_hash", strlen(firstCommit)==40);
   check("open_db2", open_db(dbpath, &db2)==SQLITE_OK);
+  /* Pin db2's snapshot before the peer commits so it genuinely cannot
+  ** observe that commit. Merely having opened earlier no longer makes a
+  ** session stale: a connection adopts the branch head with the catalog at
+  ** each statement, so an unpinned db2 would reset from a current view --
+  ** an ordinary backward reset, and what Dolt does (see
+  ** test_concurrent_refs_informed_reset_moves_branch). */
+  check("pin_db2_snapshot", execSql(db2, "BEGIN")==SQLITE_OK);
+  queryScalarText(db2, "SELECT count(*) FROM t");
 
   check("insert_second_row",
     execSql(db1, "INSERT INTO t VALUES(2,'b')")==SQLITE_OK);
@@ -910,6 +918,7 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
   queryScalarText(db2, sql);
   check("stale_reset_is_rejected",
     strstr(gBuf, "ERROR")!=0 || strstr(gBuf, "conflict")!=0);
+  execSqlSilent(db2, "ROLLBACK");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
@@ -924,6 +933,50 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
   check("branch_history_has_both_commits",
     strcmp(queryScalarText(db3, "SELECT count(*) FROM dolt_log"), "3")==0);
 
+  sqlite3_close(db3);
+  removeDbFiles(dbpath);
+}
+
+/* The counterpart to the stale case: a session with a current view that
+** asks to reset backward gets the reset. Dolt 2.2.2 does the same -- the
+** branch moves to the named commit and the newer commit leaves the log. */
+static void test_concurrent_refs_informed_reset_moves_branch(void){
+  sqlite3 *db1 = 0, *db2 = 0, *db3 = 0;
+  char dbpath[256];
+  char firstCommit[128];
+  char sql[512];
+
+  printf("--- Test 1b: informed dolt_reset moves the branch ---\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_concurrent_refs_informed_reset");
+  removeDbFiles(dbpath);
+
+  check("ir_open_db1", open_db(dbpath, &db1)==SQLITE_OK);
+  check("ir_setup", execSql(db1,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  snprintf(firstCommit, sizeof(firstCommit), "%s",
+           queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
+  check("ir_first_commit", strlen(firstCommit)==40);
+
+  check("ir_open_db2", open_db(dbpath, &db2)==SQLITE_OK);
+  check("ir_peer_commit", execSql(db1,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+
+  /* db2 has no pinned snapshot, so this statement sees the peer commit
+  ** first and the reset is an informed one. */
+  snprintf(sql, sizeof(sql), "SELECT dolt_reset('%s')", firstCommit);
+  queryScalarText(db2, sql);
+  check("ir_reset_accepted", strstr(gBuf, "ERROR")==0 && strstr(gBuf, "conflict")==0);
+
+  sqlite3_close(db1);
+  sqlite3_close(db2);
+
+  check("ir_open_db3", open_db(dbpath, &db3)==SQLITE_OK);
+  check("ir_branch_moved_back",
+    strcmp(queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1"), "init")==0);
+  check("ir_log_shrank",
+    strcmp(queryScalarText(db3, "SELECT count(*) FROM dolt_log"), "2")==0);
   sqlite3_close(db3);
   removeDbFiles(dbpath);
 }
@@ -967,6 +1020,7 @@ static void test_concurrent_refs_checkout_refreshes_branch(void){
 static void run_concurrent_refs(void){
   printf("=== Concurrent Refs Test ===\n\n");
   test_concurrent_refs_stale_reset_is_rejected();
+  test_concurrent_refs_informed_reset_moves_branch();
   test_concurrent_refs_checkout_refreshes_branch();
 }
 
