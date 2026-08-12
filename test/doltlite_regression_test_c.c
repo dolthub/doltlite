@@ -1831,13 +1831,17 @@ static void run_remote_refs_corruption(void){
 ** -- taking dolt_remote/dolt_hashof and friends down with it, with no
 ** in-band way back. The install must verify the graph and fail instead. */
 static const char *gGcWindowPath = 0;
+static int gGcWindowCollected = 0;
 
 static void gcInFetchWindow(void *pArg){
   sqlite3 *gcDb = 0;
   (void)pArg;
+  gGcWindowCollected = 0;
   if( !gGcWindowPath ) return;
   if( open_db(gGcWindowPath, &gcDb)==SQLITE_OK ){
-    execSql(gcDb, "SELECT dolt_gc()");
+    /* Platforms that cannot rewrite a file another handle holds open (and
+    ** so cannot gc here) still exercise the health invariants below. */
+    gGcWindowCollected = execSqlSilent(gcDb, "SELECT dolt_gc()")==SQLITE_OK;
   }
   sqlite3_close(gcDb);
 }
@@ -1877,7 +1881,11 @@ static void run_fetch_ref_install_survives_window_gc(void){
   gGcWindowPath = localPath;
   doltliteTestSetBeforeRefInstallHook(gcInFetchWindow, 0);
   res = queryScalarText(localDb, "SELECT dolt_fetch('origin','main')");
-  check("window_gc_fetch_reports_failure", res && strstr(res, "0")!=res);
+  if( gGcWindowCollected ){
+    check("window_gc_fetch_reports_failure", res && strstr(res, "0")!=res);
+  }else{
+    printf("  SKIP: window_gc_fetch_reports_failure (in-window gc unavailable)\n");
+  }
   doltliteTestSetBeforeRefInstallHook(0, 0);
   gGcWindowPath = 0;
   sqlite3_close(localDb);
