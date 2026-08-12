@@ -3286,7 +3286,17 @@ static void setDefaultSyncFlag(BtShared *pBt, u8 safety_level){
   sqlite3 *db;
   Db *pDb;
   if( (db=pBt->db)!=0 && (pDb=db->aDb)!=0 ){
+#ifdef DOLTLITE_PROLLY
+    Btree *pOrig = 0;
+    while( pDb->pBt==0
+        || (pOrig=(Btree*)doltliteBtreeOrigPtr((void*)pDb->pBt))==0
+        || pOrig->pBt!=pBt
+    ){
+      pDb++;
+    }
+#else
     while( pDb->pBt==0 || pDb->pBt->pBt!=pBt ){ pDb++; }
+#endif
     if( pDb->bSyncSet==0
      && pDb->safety_level!=safety_level
      && pDb!=&db->aDb[1]
