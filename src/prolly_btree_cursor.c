@@ -369,6 +369,36 @@ static int mergeStepForward(BtCursor *pCur){
   }
   rc = materializeDeferredTreeSeek(pCur, 1);
   if( rc!=SQLITE_OK ) return rc;
+  /* Mirror of the reversal re-seek in mergeStepBackward: backward travel
+  ** onto a mut-map row leaves the tree cursor below it (or run off the
+  ** front), and a forward step does not touch the tree for a MUT row, so
+  ** the merge would re-serve tree rows the scan already passed. Re-seek the
+  ** tree to this key and put it above. */
+  if( pCur->mergeStepDir < 0
+   && pCur->mergeSrc==MERGE_SRC_MUT
+   && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
+    ProllyMutMapEntry *e;
+    rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    {
+      int res = 0;
+      refreshCursorRoot(pCur);
+      if( pCur->curIntKey ){
+        rc = prollyCursorSeekInt(&pCur->pCur, prollyMutMapEntryIntKey(e), &res);
+      }else{
+        rc = prollyCursorSeekBlob(&pCur->pCur, e->pKey, e->nKey, &res);
+      }
+      if( rc!=SQLITE_OK ) return rc;
+      if( res<0 && prollyCursorIsValid(&pCur->pCur) ){
+        rc = prollyCursorNext(&pCur->pCur);
+        if( rc!=SQLITE_OK ) return rc;
+      }else if( res==0 ){
+        /* The tree holds this key too, so the row is on both sides and the
+        ** step below has to advance both. */
+        pCur->mergeSrc = MERGE_SRC_BOTH;
+      }
+    }
+  }
   /* A row reached by scanning backwards leaves the mut-map index at or below
   ** it, which is what a further backward step wants. Going forward instead,
   ** those entries are behind the cursor and must not be served again -- and one
@@ -548,6 +578,9 @@ static int resumeDeactivatedMergedScan(BtCursor *pCur, int dir){
   ** departed key on the next step, skipping pending rows and re-serving
   ** delete-masked ones. */
   pCur->deferredTreeSeek = 0;
+  /* The resume IS this scan's travel: a later reversal must compare
+  ** against it, not against whatever direction preceded the write. */
+  pCur->mergeStepDir = (i8)(dir>0 ? 1 : -1);
   rc = mergeScan(pCur, dir, &res);
   if( rc!=SQLITE_OK ) return rc;
   if( res ){
