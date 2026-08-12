@@ -109,7 +109,8 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   if( rc==SQLITE_OK ){
     DoltliteVtabCommon *v = (DoltliteVtabCommon*)c->common.base.pVtab;
     rc = doltliteSideColsLoad(db, &commit.catalogHash, &schemaHash,
-                              zTableName, &v->cols, &c->side);
+                              zTableName, &v->cols,
+                              !prollyHashIsEmpty(&tableRoot), &c->side);
   }
   doltliteCommitClear(&commit);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;

@@ -10111,6 +10111,64 @@ static void run_incrblob_chunked_and_multihandle(void){
   removeDbFiles(dbpath);
 }
 
+/* Historical sides whose schema the scratch db cannot parse (a CHECK naming
+** an application-registered function) must never render records with the
+** wrong layout. When the visited schema drifted from the live one, the read
+** fails; when it is identical, the declared-layout fallback is provably
+** safe and the values still come back correct. */
+static void sideCheckFn(sqlite3_context *ctx, int n, sqlite3_value **v){
+  (void)n;
+  (void)v;
+  sqlite3_result_int(ctx, 1);
+}
+
+static void run_diff_side_schema_custom_function(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  int rc;
+
+  printf("=== Diff Side Schema Custom Function Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_side_function");
+  removeDbFiles(dbpath);
+
+  rc = sqlite3_open(dbpath, &db);
+  check("side_fn_open", rc==SQLITE_OK);
+  if( !db ) return;
+  check("side_fn_register",
+        sqlite3_create_function(db, "side_ok", 1, SQLITE_UTF8, 0,
+                                sideCheckFn, 0, 0)==SQLITE_OK);
+
+  /* Unchanged schema: both sides fail the scratch parse, but the live
+  ** schema hashes identically, so the fallback renders real values. */
+  check("side_fn_setup_same", execSql(db,
+      "CREATE TABLE s(a TEXT CHECK(side_ok(a)), pk TEXT PRIMARY KEY, c TEXT);"
+      "INSERT INTO s VALUES('a1','k1','c1');"
+      "SELECT dolt_commit('-Am','base_s');"
+      "UPDATE s SET c='c2';"
+      "SELECT dolt_commit('-Am','update_s');")==SQLITE_OK);
+  check("side_fn_same_schema_renders",
+        strcmp(queryScalarText(db,
+            "SELECT from_c FROM dolt_diff_s WHERE diff_type='modified'"),
+            "c1")==0);
+
+  /* Drifted schema: the from side cannot be mapped and cannot fall back,
+  ** so the read fails instead of mislabeling the dropped column's value. */
+  check("side_fn_setup_drift", execSql(db,
+      "CREATE TABLE t(a TEXT CHECK(side_ok(a)), pk TEXT PRIMARY KEY, c TEXT);"
+      "INSERT INTO t VALUES('a1','k1','c1');"
+      "SELECT dolt_commit('-Am','base_t');"
+      "ALTER TABLE t DROP COLUMN a;"
+      "UPDATE t SET c='c2';"
+      "SELECT dolt_commit('-Am','drop_a');")==SQLITE_OK);
+  check("side_fn_drift_read_fails",
+        execSqlSilent(db,
+            "SELECT from_c FROM dolt_diff_t WHERE diff_type='modified'")
+        !=SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 /* A single-column PRIMARY KEY named "rowid" keeps stock rowid-table form
 ** instead of the usual conversion to WITHOUT ROWID storage. sqlite-vec
 ** declares its vector-chunk shadow tables exactly this way and then writes
@@ -10734,6 +10792,7 @@ static const RegressionCase aCases[] = {
   { "incrblob_legacy_engine_write", "Incrblob Legacy Engine Write Test", run_incrblob_legacy_engine_write },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
+  { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn }
 };
 

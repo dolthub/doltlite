@@ -862,10 +862,12 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
 
     rc = doltliteSideColsLoad(db, &p->fromCatHash, &p->fromSchemaHash,
                               pVtab->zTableName, &pVtab->cols,
+                              !prollyHashIsEmpty(&p->fromTblRoot),
                               &pCur->fromSide);
     if( rc==SQLITE_OK ){
       rc = doltliteSideColsLoad(db, &p->toCatHash, &p->toSchemaHash,
                                 pVtab->zTableName, &pVtab->cols,
+                                !prollyHashIsEmpty(&p->toTblRoot),
                                 &pCur->toSide);
     }
     if( rc!=SQLITE_OK ) return rc;

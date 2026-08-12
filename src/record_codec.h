@@ -75,7 +75,7 @@ void doltliteSideColsClear(DoltliteSideCols *pSide);
 int doltliteSideColsLoad(sqlite3 *db,
     const ProllyHash *pCatHash, const ProllyHash *pSchemaHash,
     const char *zTable, const DoltliteColInfo *pDeclared,
-    DoltliteSideCols *pSide);
+    int bSideHasData, DoltliteSideCols *pSide);
 void doltliteResultSideCol(sqlite3_context *ctx,
     const DoltliteSideCols *pSide,
     const DoltliteColInfo *pDeclared,
