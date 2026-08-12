@@ -121,6 +121,14 @@ static int mergeIntoMainWithRetry(const char *path, const char *branch,
     snprintf(sql, sizeof(sql), "SELECT dolt_merge('%s')", branch);
     r = queryScalarText(db, sql);
     if( is_commit_hash(r) || strstr(r, "Already up to date")!=0 ){
+      char hp[192];
+      FILE *hf;
+      snprintf(hp, sizeof(hp), "%s.mergehash.%s", path, branch);
+      hf = fopen(hp, "w");
+      if( hf ){
+        fprintf(hf, "%s\n", r);
+        fclose(hf);
+      }
       sqlite3_close(db);
       return 0;
     }
@@ -263,11 +271,35 @@ static void test_concurrent_mergers_into_main(void){
           countRows(db, "SELECT count(*) FROM t")==20 + N_MERGERS*N_PER);
     for(i=0; i<N_MERGERS; i++){
       char sql[96], nm[48];
+      int got;
       snprintf(sql, sizeof(sql),
                "SELECT count(*) FROM t WHERE id>=%d AND id<%d",
                100 + i*100, 100 + i*100 + N_PER);
       snprintf(nm, sizeof(nm), "mergers_feat%d_rows_present", i);
-      check(nm, countRows(db, sql)==N_PER);
+      got = countRows(db, sql);
+      if( got!=N_PER ){
+        char hp[192], mergeHash[128], q[256];
+        FILE *hf;
+        mergeHash[0] = 0;
+        snprintf(hp, sizeof(hp), "%s.mergehash.feat%d", path, i);
+        hf = fopen(hp, "r");
+        if( hf ){
+          if( fgets(mergeHash, sizeof(mergeHash), hf) ){
+            mergeHash[strcspn(mergeHash, "\n")] = 0;
+          }
+          fclose(hf);
+        }
+        fprintf(stderr, "[forensic] feat%d rows=%d merge hash=%s\n",
+                i, got, mergeHash[0] ? mergeHash : "(none)");
+        if( mergeHash[0] ){
+          snprintf(q, sizeof(q),
+                   "SELECT count(*) FROM dolt_log WHERE commit_hash='%s'",
+                   mergeHash);
+          fprintf(stderr, "[forensic] feat%d merge in ancestry: %d\n",
+                  i, countRows(db, q));
+        }
+      }
+      check(nm, got==N_PER);
     }
     sqlite3_close(db);
   }
@@ -308,11 +340,51 @@ static void test_merge_racing_target_commits(void){
 
   {
     sqlite3 *db = 0;
+    int featRows;
     sqlite3_open(path, &db);
     sqlite3_busy_timeout(db, 30000);
     queryScalarText(db, "SELECT dolt_checkout('main')");
-    check("merge_race_feat_rows_present",
-          countRows(db, "SELECT count(*) FROM t WHERE id>=100 AND id<115")==15);
+    featRows = countRows(db, "SELECT count(*) FROM t WHERE id>=100 AND id<115");
+    if( featRows!=15 ){
+      /* Forensics for the recurring lost-merge race: whether the merge
+      ** commit survived in main's ancestry splits the bug between a ref
+      ** clobber (absent) and a tree loss in a later commit (present). */
+      char hp[192], mergeHash[128];
+      FILE *hf;
+      sqlite3_stmt *st = 0;
+      mergeHash[0] = 0;
+      snprintf(hp, sizeof(hp), "%s.mergehash.feat", path);
+      hf = fopen(hp, "r");
+      if( hf ){
+        if( fgets(mergeHash, sizeof(mergeHash), hf) ){
+          mergeHash[strcspn(mergeHash, "\n")] = 0;
+        }
+        fclose(hf);
+      }
+      fprintf(stderr, "[forensic] feat rows=%d merger result hash=%s\n",
+              featRows, mergeHash[0] ? mergeHash : "(none)");
+      if( mergeHash[0] ){
+        char q[256];
+        snprintf(q, sizeof(q),
+                 "SELECT count(*) FROM dolt_log WHERE commit_hash='%s'",
+                 mergeHash);
+        fprintf(stderr, "[forensic] merge commit in main ancestry: %d\n",
+                countRows(db, q));
+      }
+      if( sqlite3_prepare_v2(db,
+              "SELECT commit_hash, message FROM dolt_log", -1, &st, 0)
+          ==SQLITE_OK ){
+        while( sqlite3_step(st)==SQLITE_ROW ){
+          fprintf(stderr, "[forensic] log %s %s\n",
+                  sqlite3_column_text(st, 0), sqlite3_column_text(st, 1));
+        }
+      }
+      sqlite3_finalize(st);
+      fprintf(stderr, "[forensic] total rows=%d main-commit rows=%d\n",
+              countRows(db, "SELECT count(*) FROM t"),
+              countRows(db, "SELECT count(*) FROM t WHERE id>=500 AND id<520"));
+    }
+    check("merge_race_feat_rows_present", featRows==15);
     check("merge_race_some_main_commits_present",
           countRows(db, "SELECT count(*) FROM t WHERE id>=500 AND id<520")>=1);
     sqlite3_close(db);
