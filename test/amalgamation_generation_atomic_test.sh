@@ -29,7 +29,14 @@ if ! grep -q 'doltlite_atomic_failure_probe.c' "$tmp/stderr"; then
   echo "FAIL: generation error did not name the unlisted source"
   exit 1
 fi
-if ! cmp -s sqlite3.c "$tmp/sqlite3.c.good"; then
+if ! "$tclsh_bin" -e '
+  set a [open [lindex $argv 0] rb]
+  set b [open [lindex $argv 1] rb]
+  set same [expr {[read $a] eq [read $b]}]
+  close $a
+  close $b
+  exit [expr {!$same}]
+' sqlite3.c "$tmp/sqlite3.c.good" >/dev/null; then
   echo "FAIL: failed generation replaced sqlite3.c"
   exit 1
 fi
