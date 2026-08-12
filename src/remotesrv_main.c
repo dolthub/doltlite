@@ -14,7 +14,7 @@
 static void usage(const char *prog){
   fprintf(stderr,
     "Usage: %s [-p PORT] [--bind ADDR] [--cert FILE --key FILE]\n"
-    "          [--auth-keys DIR] [--audience AUD] DIRECTORY\n"
+    "          [--auth-keys DIR --audience AUD] DIRECTORY\n"
     "\n"
     "Serve doltlite databases over HTTP/HTTPS.\n"
     "\n"
@@ -26,7 +26,7 @@ static void usage(const char *prog){
     "  --auth-keys DIR Require a bearer credential; authorized public keys are\n"
     "                  <kid>.jwk files in DIR. Omitted, requests are\n"
     "                  unauthenticated and may read and push.\n"
-    "  --audience AUD  Expected JWT audience (default: none)\n"
+    "  --audience AUD  Expected JWT audience (required with --auth-keys)\n"
     "  --timeout-ms MS Connection I/O timeout (default: 30000)\n"
     "  -h              Show this help\n"
     "\n"
@@ -97,6 +97,10 @@ int main(int argc, char **argv){
   }
   if( (o.certFile!=0) != (o.keyFile!=0) ){
     fprintf(stderr, "Error: --cert and --key must be given together\n");
+    return 1;
+  }
+  if( o.authKeysDir && (!o.audience || !o.audience[0]) ){
+    fprintf(stderr, "Error: --audience is required with --auth-keys\n");
     return 1;
   }
   signal(SIGINT, onSignal);
