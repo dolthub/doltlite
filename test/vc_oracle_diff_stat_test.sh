@@ -759,6 +759,24 @@ UPDATE t SET c='c1';
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','add_c');
 " "HEAD~1" "HEAD"
 
+oracle_both "populate_omitted_trailing_null" "
+CREATE TABLE t(a VARCHAR(16), pk VARCHAR(16) PRIMARY KEY);
+INSERT INTO t VALUES('a1','k1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+ALTER TABLE t ADD COLUMN c VARCHAR(16);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','add_c');
+UPDATE t SET c='x';
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','fill_c');
+" "HEAD~1" "HEAD"
+
+oracle_both "clear_to_omitted_trailing_null" "
+CREATE TABLE t(a VARCHAR(16), pk VARCHAR(16) PRIMARY KEY, c VARCHAR(16));
+INSERT INTO t VALUES('a1','k1','x');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+UPDATE t SET c=NULL;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','clear_c');
+" "HEAD~1" "HEAD"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
