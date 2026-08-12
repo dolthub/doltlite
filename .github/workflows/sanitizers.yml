@@ -26,8 +26,11 @@ jobs:
     - name: Install Dolt
       if: matrix.suite == 'oracles'
       run: |
-        curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz \
-          | sudo tar -xz -C /usr/local --strip-components=1
+        dolt_archive="$RUNNER_TEMP/dolt-linux-amd64.tar.gz"
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+          -o "$dolt_archive" \
+          https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz
+        sudo tar -xzf "$dolt_archive" -C /usr/local --strip-components=1
         dolt version
 
     - name: Download ASan/UBSan build
