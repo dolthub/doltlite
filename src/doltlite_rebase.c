@@ -910,30 +910,35 @@ static int rebaseApplyPlanRowCatalog(
   return SQLITE_OK;
 }
 
+static void (*rebaseBeforeAdvanceHook)(void) = 0;
+
+void doltliteTestSetRebaseBeforeAdvanceHook(void (*xHook)(void)){
+  rebaseBeforeAdvanceHook = xHook;
+}
+
+/* Refresh while the write txn holds lockDepth==1, before replay stages
+** chunks. CompareAndAdvance later reenters the lock so its ForceRefresh
+** is a no-op; refreshing after CreateAndStoreCommit would drop the
+** pending commit. */
+static int rebaseRefreshWorkingRefs(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  if( rebaseBeforeAdvanceHook ){
+    void (*xHook)(void) = rebaseBeforeAdvanceHook;
+    rebaseBeforeAdvanceHook = 0;
+    xHook();
+  }
+  if( !cs ) return SQLITE_ERROR;
+  return chunkStoreForceRefresh(cs);
+}
+
 static int rebaseAdvanceWorkingBranch(
   sqlite3 *db,
+  const ProllyHash *pExpectedHead,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *zBranch = doltliteGetSessionBranch(db);
-  int rc;
-
-  if( !cs ) return SQLITE_ERROR;
-  rc = chunkStoreUpdateBranch(cs, zBranch, pNewHead);
-  if( rc!=SQLITE_OK ) return rc;
-
-  doltliteSetSessionHead(db, pNewHead);
-  rc = doltliteSetSessionStaged(db, pCatalogHash);
-  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCatalogHash);
-  if( rc!=SQLITE_OK ) return rc;
-
-  db->busyHandler.nBusy = 0;
-  do {
-    rc = doltlitePersistWorkingSetWithHash(db, 0);
-  }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
-       && sqlite3InvokeBusyHandler(&db->busyHandler) );
-  return rc;
+  return doltliteCompareAndAdvanceBranch(
+      db, pExpectedHead, pNewHead, pCatalogHash, 0);
 }
 
 static int rebaseReplayPlanGroup(
@@ -993,7 +998,7 @@ static int rebaseReplayPlanGroup(
       rc = doltliteSetSessionStaged(db, pCurCat);
     }
     if( rc==SQLITE_OK ){
-      rc = rebaseAdvanceWorkingBranch(db, &newCommit, pCurCat);
+      rc = rebaseAdvanceWorkingBranch(db, pCurHead, &newCommit, pCurCat);
     }
     if( rc==SQLITE_OK ) *pCurHead = newCommit;
   }
@@ -1665,6 +1670,9 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
+
+  rc = rebaseRefreshWorkingRefs(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = doltliteFlushCatalogToHash(db, &curCat);
