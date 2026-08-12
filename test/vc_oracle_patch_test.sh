@@ -727,6 +727,45 @@ SELECT group_concat(pk||':'||v||':'||n,',') FROM t;
 SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);
 "
 
+
+# Views are emitted as DDL (Dolt writes dolt_schemas rows instead — dialect
+# divergence): a changed view drops and recreates, a new one creates, and
+# creates run after all table statements since a view may reference any
+# table. Bidirectional apply covers the dropped-view direction too.
+apply_bidirectional view_redefine_and_add "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE VIEW v_old AS SELECT id FROM t;
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+DROP VIEW v_old;
+CREATE VIEW v_old AS SELECT id, v FROM t;
+CREATE VIEW v_new AS SELECT count(*) AS n FROM t;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(name||'='||replace(sql,' ',''),';') FROM (SELECT name, sql FROM sqlite_master WHERE type='view' ORDER BY name);
+SELECT group_concat(id||':'||v,',') FROM (SELECT * FROM t ORDER BY id);
+"
+
+# A quoted table name containing a paren must not split the CREATE body at
+# the wrong position: the rebuild's temp-table statement has to stay
+# executable SQL.
+apply_bidirectional quoted_paren_table_name "
+CREATE TABLE \"we (them)\"(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO \"we (them)\" VALUES(1,'x');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+ALTER TABLE \"we (them)\" ADD COLUMN w TEXT;
+UPDATE \"we (them)\" SET w='y';
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(id||':'||v,',') FROM (SELECT id, v FROM \"we (them)\" ORDER BY id);
+SELECT group_concat(name,',') FROM pragma_table_info('we (them)');
+SELECT replace(sql,' ','') FROM sqlite_master WHERE name='we (them)';
+"
+
 echo ""
 echo "=== dolt_patch oracle results: $pass passed, $fail failed ==="
 if [ "$fail" -gt 0 ]; then
