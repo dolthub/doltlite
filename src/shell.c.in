@@ -5131,9 +5131,9 @@ static void parseDoltiteDbBranch(
   if( zSep && zSep[1]!=0 ){
     zBase = sqlite3_mprintf("%.*s", (int)(zSep - zInput), zInput);
     if( zBase && doltliteShellLooksLikeDbPath(zBase)
-     && doltliteShellReadableFile(zBase) ){
-      *pzFilename = zBase;
-      *pzBranch = sqlite3_mprintf("%s", zSep + 1);
+     && (doltliteShellReadableFile(zBase) || access(zBase, 0)==0) ){
+      sqlite3_free(zBase);
+      *pzFilename = sqlite3_mprintf("%s", zInput);
       return;
     }
     sqlite3_free(zBase);
