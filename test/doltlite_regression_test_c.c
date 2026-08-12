@@ -8213,11 +8213,14 @@ static void run_mutmap_delete_reinsert_reuses_entry(void){
 static void run_mutmap_append_sorted_order(void){
   ProllyMutMap mm;
   ProllyMutMapIter it;
+  ProllyMutMapEntry *pEntry;
   static const u8 aVal[] = { 1 };
   static const u8 aKey1[] = { 'a', 'a' };
   static const u8 aKey2[] = { 'b', 'b' };
   static const u8 aKey3[] = { 'c', 'c' };
   static const u8 aKey0[] = { '0', '0' };
+  char zKey[8];
+  int i;
 
   printf("=== MutMap Append Sorted Order Test ===\n\n");
   check("mutmap_append_sorted_init",
@@ -8248,6 +8251,31 @@ static void run_mutmap_append_sorted_order(void){
         prollyMutMapInsert(&mm, aKey0, sizeof(aKey0), 0,
                            aVal, sizeof(aVal))==SQLITE_OK);
   check("mutmap_append_unsorted_flag_clears", !mm.appendSorted);
+  prollyMutMapFree(&mm);
+
+  check("mutmap_blob_deferred_pos_init",
+        prollyMutMapInitMode(&mm, 0, 0)==SQLITE_OK);
+  for(i=1; i<=100; i++){
+    sqlite3_snprintf(sizeof(zKey), zKey, "%04d", i);
+    check("mutmap_blob_deferred_pos_insert",
+          prollyMutMapInsert(&mm, (u8*)zKey, 4, 0,
+                             aVal, sizeof(aVal))==SQLITE_OK);
+  }
+  check("mutmap_blob_deferred_pos_order",
+        prollyMutMapEnsureOrder(&mm)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zKey), zKey, "%04d", 0);
+  check("mutmap_blob_deferred_pos_prepend",
+        prollyMutMapInsert(&mm, (u8*)zKey, 4, 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zKey), zKey, "%04d", 50);
+  check("mutmap_blob_deferred_pos_find",
+        prollyMutMapFindRc(&mm, (u8*)zKey, 4, 0, &pEntry)==SQLITE_OK
+     && pEntry!=0);
+  check("mutmap_blob_deferred_pos_rank",
+        pEntry!=0 && prollyMutMapOrderIndexFromEntry(&mm, pEntry)==50);
+  check("mutmap_blob_deferred_pos_entry",
+        prollyMutMapEntryAt(&mm, 50, &pEntry)==SQLITE_OK
+     && memcmp(pEntry->pKey, zKey, 4)==0);
   prollyMutMapFree(&mm);
 }
 
