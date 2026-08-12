@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <time.h>
 
 /* Thin cross-platform socket shim shared by doltlite_tls.c and
  * doltlite_remotesrv.c. Socket handles are kept as int to match
@@ -52,7 +53,6 @@ static inline int doltliteNetInit(void) {
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
 
 typedef struct pollfd doltlite_pollfd;

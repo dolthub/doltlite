@@ -62,7 +62,9 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   u8 **ppOut,
   int *pnOut
 );
+#ifndef SQLITE_OMIT_WAL
 int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
+#endif
 
 u32 prollyBtreeGetU32LE(const u8 *p);
 
