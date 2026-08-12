@@ -7612,18 +7612,32 @@ static void run_rebase_concurrent_peer_commit_is_preserved(void){
 
   res = queryScalarText(db1, "SELECT dolt_rebase('--continue')");
   check("rebase_rejects_concurrent_peer_commit", strstr(res, "ERROR:")!=0);
+  check("rebase_rejects_concurrent_peer_names_source_branch",
+        strstr(res, "changes in branch feat")!=0);
 
   sqlite3_close(db2);
   sqlite3_close(db1);
 
   check("open_db3_after_rebase_concurrent_peer", open_db(dbpath, &db3)==SQLITE_OK);
+  check("rebase_concurrent_working_branch_kept",
+        strcmp(queryScalarText(db3,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"), "1")==0);
+  check("checkout_working_after_rebase_concurrent_peer",
+        strcmp(queryScalarText(db3, "SELECT dolt_checkout('dolt_rebase_feat')"), "0")==0);
+  check("rebase_concurrent_plan_kept",
+        strcmp(queryScalarText(db3,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"),
+               "1")==0);
+  check("rebase_concurrent_abort_after_cas_reject",
+        strstr(queryScalarText(db3, "SELECT dolt_rebase('--abort')"),
+               "Interactive rebase aborted")!=0);
   check("checkout_feat_after_rebase_concurrent_peer",
         strcmp(queryScalarText(db3, "SELECT dolt_checkout('feat')"), "0")==0);
   check("rebase_concurrent_peer_row_is_preserved",
         strcmp(queryScalarText(db3, "SELECT v FROM t WHERE id=4"), "peer")==0);
   check("rebase_concurrent_peer_remains_head",
         strcmp(queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1"), "peer")==0);
-  check("rebase_concurrent_working_branch_removed",
+  check("rebase_concurrent_working_branch_removed_after_abort",
         strcmp(queryScalarText(db3,
           "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"), "0")==0);
 

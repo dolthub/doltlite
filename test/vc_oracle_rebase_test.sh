@@ -572,6 +572,9 @@ SELECT dolt_rebase('-i', 'main');
 SELECT dolt_branch('-f', 'feat', 'peer');
 SELECT dolt_rebase('--continue');
 " "
+SELECT CONCAT('LOG|WB|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT dolt_checkout('dolt_rebase_feat');
+SELECT CONCAT('LOG|P|', count(*)) FROM dolt_rebase;
 SELECT dolt_checkout('feat');
 SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 4;
 SELECT CONCAT('LOG|L|', message) FROM dolt_log LIMIT 1;
