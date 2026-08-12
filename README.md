@@ -261,6 +261,21 @@ INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 INSERT INTO dolt_ignore VALUES ('tmp_keep', 0);  -- un-ignore
 ```
 
+#### Repository Docs (`dolt_docs`)
+
+Versioned documents keyed by name (`README.md`, `LICENSE.md`, or any name),
+as in Dolt. `SELECT` works before any doc exists; the first write statement
+creates the backing table, which then commits, diffs, branches and merges
+like any other table. A fresh repo serves a default `AGENT.md` (a usage
+guide for AI agents); overwrite or delete it like any other doc.
+
+```sql
+SELECT * FROM dolt_docs;                       -- default AGENT.md on a fresh repo
+INSERT INTO dolt_docs VALUES ('README.md', '# my project');
+REPLACE INTO dolt_docs VALUES ('README.md', '# updated');
+SELECT dolt_commit('-A', '-m', 'update readme');
+```
+
 ### Inspecting what's there
 
 #### Diff

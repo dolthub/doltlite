@@ -635,6 +635,7 @@ proc emit_doltlite_engine_block {} {
     doltlite_conflicts.c doltlite_gc.c doltlite_chunk_walk.c
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c doltlite_patch.c
     doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c
+    doltlite_docs.c
     doltlite_hashof.c doltlite_constraint_violations.c doltlite_verify_constraints.c doltlite_merge_constraints.c doltlite_merge_constraints_unique.c doltlite_merge_constraints_check.c doltlite_merge_constraints_fk.c doltlite_merge_constraints_notnull.c doltlite_merge_constraints_strict.c
     doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c
     doltlite_http_remote.c

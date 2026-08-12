@@ -2870,6 +2870,46 @@ void sqlite3EndTable(
     }
   }
 
+  /* Doltlite: dolt_docs shares dolt_ignore's user-created system table
+  ** contract. The dolt_docs eponymous module materializes the table with
+  ** exactly this shape on the first write statement; a hand-issued CREATE
+  ** TABLE must match so both paths produce the same schema Dolt uses. */
+  if( !db->init.busy
+   && !db->init.imposterTable
+   && iDb!=1
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && sqlite3StrICmp(p->zName, "dolt_docs")==0 ){
+    const char *zFail = 0;
+    if( p->nCol!=2 ){
+      zFail = "dolt_docs must have exactly two columns";
+    }else if( sqlite3StrICmp(p->aCol[0].zCnName, "doc_name")!=0 ){
+      zFail = "dolt_docs.doc_name must be the first column";
+    }else if( sqlite3StrICmp(p->aCol[1].zCnName, "doc_text")!=0 ){
+      zFail = "dolt_docs.doc_text must be the second column";
+    }else if( p->aCol[0].affinity!=SQLITE_AFF_TEXT
+           && p->aCol[0].affinity!=SQLITE_AFF_BLOB ){
+      zFail = "dolt_docs.doc_name must be TEXT";
+    }else if( p->aCol[1].affinity!=SQLITE_AFF_TEXT
+           && p->aCol[1].affinity!=SQLITE_AFF_BLOB ){
+      zFail = "dolt_docs.doc_text must be TEXT";
+    }else if( p->aCol[0].notNull==OE_None ){
+      zFail = "dolt_docs.doc_name must be NOT NULL";
+    }else if( p->aCol[1].notNull==OE_None ){
+      zFail = "dolt_docs.doc_text must be NOT NULL";
+    }else if( (p->aCol[0].colFlags & COLFLAG_PRIMKEY)==0
+           || (p->aCol[1].colFlags & COLFLAG_PRIMKEY)!=0 ){
+      zFail = "dolt_docs must have PRIMARY KEY(doc_name) and no other key columns";
+    }
+    if( zFail ){
+      sqlite3ErrorMsg(pParse,
+          "%s; expected: CREATE TABLE dolt_docs("
+          "doc_name TEXT NOT NULL, doc_text TEXT NOT NULL, "
+          "PRIMARY KEY(doc_name))", zFail);
+      return;
+    }
+  }
+
   /* Special processing for WITHOUT ROWID Tables */
   if( tabOpts & TF_WithoutRowid ){
     if( (p->tabFlags & TF_Autoincrement) ){
