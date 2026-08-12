@@ -363,6 +363,104 @@ static int mergePass1OursModifyTheirsDelete(
   return SQLITE_OK;
 }
 
+/* Ordered primary-key signature ("name type,name type") of the table zSql
+** creates, built by executing it in a scratch db. No declared PK yields the
+** empty signature, which matches SQLite treating those tables as rowid keyed
+** regardless of the rest of the schema. */
+static int mergePass1PkSignature(
+  const char *zSql,
+  const char *zTableName,
+  char **pzSig
+){
+  sqlite3 *tmp = 0;
+  sqlite3_stmt *pStmt = 0;
+  char *zQuery = 0;
+  char *zSig = 0;
+  int rc;
+
+  *pzSig = 0;
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+  if( rc!=SQLITE_OK ) goto done;
+  zQuery = sqlite3_mprintf(
+      "SELECT name, type FROM pragma_table_info(%Q) WHERE pk>0 ORDER BY pk",
+      zTableName);
+  if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
+  rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) goto done;
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+    const char *zType = (const char*)sqlite3_column_text(pStmt, 1);
+    char *zNew = sqlite3_mprintf("%s%s%s %s", zSig ? zSig : "",
+                                 zSig ? "," : "",
+                                 zName ? zName : "", zType ? zType : "");
+    sqlite3_free(zSig);
+    zSig = zNew;
+    if( !zSig ){ rc = SQLITE_NOMEM; goto done; }
+  }
+  rc = rc==SQLITE_DONE ? SQLITE_OK : rc;
+
+done:
+  if( pStmt ) sqlite3_finalize(pStmt);
+  sqlite3_free(zQuery);
+  if( tmp ) sqlite3_close(tmp);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zSig);
+    return rc;
+  }
+  *pzSig = zSig ? zSig : sqlite3_mprintf("");
+  return *pzSig ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+/* Tables whose primary keys differ never row-merge: the keys identify
+** different things, so there is no shared ancestor keyspace to merge in.
+** Refuse the merge outright, the same way Dolt does. */
+static int mergePass1CheckPrimaryKeysMatch(
+  MergePass1Ctx *c,
+  const char *zName,
+  struct TableEntry *pOurs,
+  struct TableEntry *pAnc,
+  struct TableEntry *pTheirs
+){
+  SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+  SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+  SchemaEntry *theirSE = findSchemaEntry(
+      c->aTheirsSchema, c->nTheirsSchema, zName);
+  char *zAncSig = 0, *zOursSig = 0, *zTheirsSig = 0;
+  int vsTheirs = 0, vsAncestor = 0;
+  int rc = SQLITE_OK;
+
+  if( !ancSE || !ancSE->zSql || !ourSE || !ourSE->zSql
+   || !theirSE || !theirSE->zSql ){
+    return SQLITE_OK;
+  }
+
+  rc = mergePass1PkSignature(ancSE->zSql, zName, &zAncSig);
+  if( rc==SQLITE_OK ) rc = mergePass1PkSignature(ourSE->zSql, zName, &zOursSig);
+  if( rc==SQLITE_OK ){
+    rc = mergePass1PkSignature(theirSE->zSql, zName, &zTheirsSig);
+  }
+  if( rc==SQLITE_OK ){
+    vsTheirs = sqlite3_stricmp(zOursSig, zTheirsSig)!=0
+            || ((pOurs->flags ^ pTheirs->flags) & PROLLY_NODE_INTKEY)!=0;
+    vsAncestor = sqlite3_stricmp(zOursSig, zAncSig)!=0
+              || ((pOurs->flags ^ pAnc->flags) & PROLLY_NODE_INTKEY)!=0;
+  }
+  sqlite3_free(zAncSig);
+  sqlite3_free(zOursSig);
+  sqlite3_free(zTheirsSig);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !vsTheirs && !vsAncestor ) return SQLITE_OK;
+  if( c->pzErrMsg ){
+    sqlite3_free(*c->pzErrMsg);
+    *c->pzErrMsg = sqlite3_mprintf(
+        "cannot merge because table '%s' has different primary keys%s",
+        zName, vsTheirs ? "" : " in its common ancestor");
+  }
+  return SQLITE_ERROR;
+}
+
 /* Both sides still have the object. */
 static int mergePass1BothSides(
   MergePass1Ctx *c,
@@ -398,6 +496,15 @@ static int mergePass1BothSides(
     theirSchemaChanged = theirSchemaChanged || schemaEntryChangedByName(
         c->aAncSchema, c->nAncSchema, c->aTheirsSchema, c->nTheirsSchema,
         zSchemaMergeName);
+  }
+
+  /* A theirs side that never touched the table keeps ours verbatim, so no
+  ** cross-key merge can happen and the primary keys need not agree. */
+  if( zName && (ourSchemaChanged || theirSchemaChanged)
+   && (theirsChanged || theirSchemaChanged) ){
+    rc = mergePass1CheckPrimaryKeysMatch(
+        c, zName, &c->aOurs[iOurs], ancEntry, theirsEntry);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   if( ourSchemaChanged && theirSchemaChanged

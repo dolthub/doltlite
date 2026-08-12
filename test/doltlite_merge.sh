@@ -460,7 +460,7 @@ else
   ERRORS="$ERRORS\nFAIL: clean_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
 fi
 
-DB25=/tmp/test_merge25_$$.db; rm -f "$DB25"
+DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','base');
 SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');
@@ -483,6 +483,31 @@ else
   FAIL=$((FAIL+1))
   ERRORS="$ERRORS\nFAIL: ff_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
 fi
+
+
+DB26=/tmp/test_merge26_$$.db; rm -f "$DB26"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('AAAAA',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB26" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB26" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(5,50); SELECT dolt_commit('-A','-m','feat recreate');" | $DOLTLITE "$DB26/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES('BBBBB',2); SELECT dolt_commit('-A','-m','main rows');" | $DOLTLITE "$DB26" > /dev/null 2>&1
+run_test_match "pk_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB26"
+run_test "pk_change_local_intact" "SELECT count(*) FROM t;" "2" "$DB26"
+
+DB27=/tmp/test_merge27_$$.db; rm -f "$DB27"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('AAAAA',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB27" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB27" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(5,50); SELECT dolt_commit('-A','-m','feat recreate');" | $DOLTLITE "$DB27/feature" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT); CREATE INDEX tv ON t(v); INSERT INTO t VALUES(7,70); SELECT dolt_commit('-A','-m','main recreate');" | $DOLTLITE "$DB27" > /dev/null 2>&1
+run_test_match "pk_change_ancestor_refused" "SELECT dolt_merge('feature');" "different primary keys in its common ancestor" "$DB27"
+
+DB28=/tmp/test_merge28_$$.db; rm -f "$DB28"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('AAAAA',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB28" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB28" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('feat',50); SELECT dolt_commit('-A','-m','feat recreate');" | $DOLTLITE "$DB28/feature" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('main',7); SELECT dolt_commit('-A','-m','main recreate');" | $DOLTLITE "$DB28" > /dev/null 2>&1
+run_test_match "identical_recreate_merge_ok" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB28"
+run_test "identical_recreate_rows" "SELECT group_concat(pk || ':' || v, ',') FROM (SELECT pk,v FROM t ORDER BY pk);" "feat:50,main:7" "$DB28"
+run_test "identical_recreate_integrity" "PRAGMA integrity_check;" "ok" "$DB28"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
 dltest_finish
