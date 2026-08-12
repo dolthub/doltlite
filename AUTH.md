@@ -23,6 +23,10 @@ The audience normally equals the remote host. A
 `doltliteremoteapi.<suffix>` host uses `doltremoteapi.<suffix>` to match
 DoltHub's existing audience. `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE` overrides both.
 
+`doltlite-remotesrv --auth-keys` requires `--audience`. Verification accepts
+either a string `aud` or a Dolt-shaped one-element (or multi-element) array
+and rejects a missing audience rather than treating it as "any".
+
 ## Credential interface
 
 Credentials use a separate `~/.doltlite/creds/` store rather than
