@@ -292,5 +292,28 @@ run_test "namemap_pkswap_from" \
   "k1/k2" "$DBK"
 
 rm -f "$DBN" "$DBR" "$DBK"
+# A pushed-down to_commit filter is a SUBSET of the full scan: a commit not
+# reachable from the session head yields no rows, exactly like the
+# unfiltered scan (and Dolt). The +to_commit form blocks pushdown, so the
+# two must agree.
+DBG=/tmp/test_dt_ancgate_$$.db; rm -f "$DBG"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DBG" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,'feat-only');
+SELECT dolt_commit('-Am','feat_commit');" | $DOLTLITE "$DBG/feat" > /dev/null 2>&1
+
+run_test "ancestry_gate_foreign_commit" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log('feat') LIMIT 1);" \
+  "0" "$DBG"
+run_test "ancestry_gate_subset_of_full_scan" \
+  "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log('feat') LIMIT 1)) = (SELECT count(*) FROM dolt_diff_t WHERE +to_commit=(SELECT commit_hash FROM dolt_log('feat') LIMIT 1));" \
+  "1" "$DBG"
+run_test "ancestry_gate_reachable_commit" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
+  "1" "$DBG"
+
+rm -f "$DBG"
 
 dltest_finish

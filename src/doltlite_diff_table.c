@@ -578,6 +578,23 @@ static int buildCommitDiffPair(
   rc = doltliteResolveRef(db, zToCommit, &toHash);
   if( rc!=SQLITE_OK ) return SQLITE_OK;
 
+  /* A pushed-down to_commit filter must select a subset of the full scan,
+  ** which only walks the session head's ancestry. A commit that is not
+  ** reachable from the head yields no rows, matching both the unfiltered
+  ** scan and Dolt. */
+  {
+    ProllyHash head, base;
+    memset(&head, 0, sizeof(head));
+    doltliteGetSessionHead(db, &head);
+    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+    rc = doltliteFindAncestor(db, &head, &toHash, &base);
+    if( rc==SQLITE_NOTFOUND
+     || (rc==SQLITE_OK && prollyHashCompare(&base, &toHash)!=0) ){
+      return SQLITE_OK;
+    }
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   rc = doltliteLoadCommit(db, &toHash, &toCommit);
   if( rc!=SQLITE_OK ) return rc;
   memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));

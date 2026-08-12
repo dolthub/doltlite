@@ -241,6 +241,19 @@ oracle "namemap_moved_column" "$SETUP_READD" \
   "SELECT CONCAT('R|', IFNULL(to_b,''), '|', IFNULL(to_c,''), '|', IFNULL(from_b,''), '|', IFNULL(from_c,''), '|', diff_type) FROM dolt_diff_t('HEAD~1','HEAD');"
 
 
+echo "--- to_commit filter is a subset of head ancestry ---"
+
+oracle "to_commit_foreign_branch_yields_nothing" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_commit');
+SELECT dolt_checkout('main');
+" "SELECT CONCAT('R|', count(*)) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log('feat') LIMIT 1);"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
