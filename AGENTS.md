@@ -115,6 +115,24 @@ conformance bugs. When comparing against Dolt, only **row-level semantics** must
 match; do not file conformance issues over the vtable/function shape or column
 naming.
 
+`dolt_docs` is a hybrid: an eponymous writable vtab answers reads while no
+backing table exists (always-empty scans, so `SELECT` never errors on a fresh
+repo), and the first write statement materializes a real
+`dolt_docs(doc_name TEXT NOT NULL, doc_text TEXT NOT NULL, PRIMARY KEY(doc_name))`
+table that shadows the module from then on — Dolt's lazy-creation UX without
+the open-time auto-materialization that sank the original `dolt_ignore`
+attempt (`fcb7720e00`). A default `AGENT.md` row (DoltLite's own operations
+guide, not Dolt's embedded text) is served by the module pre-materialization
+and seeded as a stored row when the table materializes. Deliberate
+divergences from Dolt: the table shows in `.tables`/`.schema` once it exists
+(same accepted divergence as `dolt_ignore`); the default `AGENT.md` text
+differs (the docs oracle compares it by name/count, or by full row after a
+test overwrites it); and because the row is stored rather than synthesized,
+deleting `AGENT.md` sticks (Dolt resurrects it on the next read) and it
+appears in row-level diffs. A `build.c` shape guard beside `dolt_ignore`'s
+keeps hand-issued `CREATE TABLE dolt_docs` on the exact schema the module
+creates.
+
 ### Surfaces deliberately not implemented
 
 Absent on purpose, so don't file them as parity gaps or implement them
@@ -145,11 +163,9 @@ unprompted:
   merges with everything else. Keeping it accurate is the user's call, same as
   `ANALYZE` anywhere else.
 
-- **`dolt_docs`, `dolt_query_catalog`** — DoltHub-specific storage, not engine
-  behavior: `dolt_docs` holds `README.md` / `LICENSE.md` and
-  `dolt_query_catalog` holds saved queries, both so DoltHub can display them.
-  Nothing local reads either. Worth revisiting if pushing to DoltHub lands, and
-  not before.
+- **`dolt_query_catalog`** — DoltHub-specific storage, not engine behavior:
+  it holds saved queries so DoltHub can display them. Nothing local reads it.
+  Worth revisiting if pushing to DoltHub lands, and not before.
 
 ### Dolt is the reference implementation
 
