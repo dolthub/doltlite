@@ -173,6 +173,8 @@ if {$doltlite} {
 # include <winsock2.h>
 # include <ws2tcpip.h>
 #endif}
+  set seen_hdr(winsock2.h) 1
+  set seen_hdr(ws2tcpip.h) 1
 }
 
 # Examine the parse.c file.  If it contains lines of the form:
@@ -816,6 +818,9 @@ foreach file $flist {
     puts $out "#include <limits.h>"
     puts $out "#include <stdint.h>"
     copy_file $srcdir/chunk_store.h
+    section_comment "doltlite: network portability header"
+    set available_hdr(doltlite_net.h) 0
+    copy_file $srcdir/doltlite_net.h
   }
 }
 if {$doltlite} {
