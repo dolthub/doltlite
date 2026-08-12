@@ -774,11 +774,21 @@ static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
   return remoteSrvCommitPending(pStore);
 }
 
+static int remoteSrvLockAndForceRefresh(ChunkStore *pStore){
+  int rc = chunkStoreLockAndRefresh(pStore);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreForceRefresh(pStore);
+    if( rc==SQLITE_CANTOPEN || rc==SQLITE_NOTADB ) rc = SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) chunkStoreUnlock(pStore);
+  return rc;
+}
+
 static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
                               int bForce, const u8 *pBody, int nBody){
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
-  rc = chunkStoreLockAndRefresh(pStore);
+  rc = remoteSrvLockAndForceRefresh(pStore);
   if( rc!=SQLITE_OK ) return rc;
   rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody);
   chunkStoreUnlock(pStore);
@@ -795,7 +805,7 @@ static int remoteSrvApplyRefsIf(
 ){
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
-  rc = chunkStoreLockAndRefresh(pStore);
+  rc = remoteSrvLockAndForceRefresh(pStore);
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashCompare(refsTableGetHash(&pStore->refs), pExpectedRefsHash)!=0 ){
     chunkStoreUnlock(pStore);
@@ -1070,6 +1080,17 @@ static int remoteDbAcquire(
   if( !h->bOpen ){
     rc = remoteDbHandleOpenStore(h, zPath, bWritable);
     if( rc!=SQLITE_OK ) goto acquire_error;
+  }else if( bWritable ){
+    rc = remoteSrvLockAndForceRefresh(&h->store);
+    if( rc==SQLITE_OK ){
+      chunkStoreUnlock(&h->store);
+    }else if( h->store.movedReadOnly ){
+      remoteDbHandleCloseStore(h);
+      rc = remoteDbHandleOpenStore(h, zPath, bWritable);
+      if( rc!=SQLITE_OK ) goto acquire_error;
+    }else{
+      goto acquire_error;
+    }
   }else{
     int changed = 0;
     rc = chunkStoreRefreshIfChanged(&h->store, &changed);

@@ -33,6 +33,7 @@ extern int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore);
 extern int doltliteRemoteSrvApplyRefsForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
 );
+extern ChunkStore *doltliteFsRemoteStoreForTest(DoltliteRemote *pRemote);
 extern int doltliteRemoteSrvApplyScopedRefsForTest(
   ChunkStore *pStore, const char *zBranch, int bForce,
   const u8 *pBody, int nBody
@@ -9282,6 +9283,131 @@ static void run_remotesrv_plain_refs_refreshes_under_lock(void){
   removeDbFiles(dbpath);
 }
 
+static void run_remotesrv_stale_size_heuristic_keeps_peer_branch(void){
+  ChunkStore cs1;
+  ChunkStore cs2;
+  ChunkStore reopened;
+  ProllyHash foundHash;
+  u8 *pRefsA;
+  u8 *pRefsB;
+  char dbpath[256];
+  int nRefsA;
+  int nRefsB;
+  int rc;
+
+  printf("=== RemoteSrv Stale Size Heuristic Keeps Peer Branch ===\n\n");
+  memset(&cs1, 0, sizeof(cs1));
+  memset(&cs2, 0, sizeof(cs2));
+  memset(&reopened, 0, sizeof(reopened));
+  make_dbpath(dbpath, sizeof(dbpath), "test_remotesrv_stale_size_heuristic");
+  removeDbFiles(dbpath);
+  pRefsA = singleBranchRefsBlob("branch_a", &nRefsA);
+  pRefsB = singleBranchRefsBlob("branch_b", &nRefsB);
+  check("stale_size_serialize_branch_a", pRefsA!=0);
+  check("stale_size_serialize_branch_b", pRefsB!=0);
+
+  check("stale_size_open_store_1",
+        chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+          | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("stale_size_open_store_2",
+        chunkStoreOpen(&cs2, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+          | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+
+  rc = doltliteRemoteSrvApplyScopedRefsForTest(
+      &cs1, "branch_a", 0, pRefsA, nRefsA);
+  check("stale_size_first_install_succeeds", rc==SQLITE_OK);
+  chunkFileSetSize(&cs2.file, ((i64)1) << 40);
+  cs2.snapshotPinned = 1;
+
+  rc = doltliteRemoteSrvApplyScopedRefsForTest(
+      &cs2, "branch_b", 0, pRefsB, nRefsB);
+  check("stale_size_second_install_rejected", rc==SQLITE_CONSTRAINT);
+  check("stale_size_store_keeps_branch_a",
+        chunkStoreFindBranch(&cs2, "branch_a", &foundHash)==SQLITE_OK);
+  check("stale_size_store_does_not_install_branch_b",
+        chunkStoreFindBranch(&cs2, "branch_b", &foundHash)!=SQLITE_OK);
+
+  chunkStoreClose(&cs2);
+  chunkStoreClose(&cs1);
+  check("stale_size_reopen_store",
+        chunkStoreOpen(&reopened, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("stale_size_reopen_keeps_branch_a",
+        chunkStoreFindBranch(&reopened, "branch_a", &foundHash)==SQLITE_OK);
+  check("stale_size_reopen_has_no_branch_b",
+        chunkStoreFindBranch(&reopened, "branch_b", &foundHash)!=SQLITE_OK);
+  chunkStoreClose(&reopened);
+  sqlite3_free(pRefsA);
+  sqlite3_free(pRefsB);
+  removeDbFiles(dbpath);
+}
+
+static void run_file_remote_stale_size_heuristic_keeps_peer_branch(void){
+  DoltliteRemote *pA = 0;
+  DoltliteRemote *pB = 0;
+  ChunkStore *pStoreB;
+  ChunkStore reopened;
+  ProllyHash foundHash;
+  ProllyHash expected;
+  u8 *pRefsA;
+  u8 *pRefsB;
+  char dbpath[256];
+  int nRefsA;
+  int nRefsB;
+  int rc;
+
+  printf("=== File Remote Stale Size Heuristic Keeps Peer Branch ===\n\n");
+  memset(&reopened, 0, sizeof(reopened));
+  memset(&expected, 0, sizeof(expected));
+  make_dbpath(dbpath, sizeof(dbpath), "test_file_remote_stale_size_heuristic");
+  removeDbFiles(dbpath);
+  pRefsA = singleBranchRefsBlob("branch_a", &nRefsA);
+  pRefsB = singleBranchRefsBlob("branch_b", &nRefsB);
+  check("file_remote_serialize_branch_a", pRefsA!=0);
+  check("file_remote_serialize_branch_b", pRefsB!=0);
+
+  pA = doltliteFsRemoteOpen(sqlite3_vfs_find(0), dbpath);
+  pB = doltliteFsRemoteOpen(sqlite3_vfs_find(0), dbpath);
+  check("file_remote_open_a", pA!=0);
+  check("file_remote_open_b", pB!=0);
+  pStoreB = doltliteFsRemoteStoreForTest(pB);
+  check("file_remote_store_b", pStoreB!=0);
+
+  rc = pA->xSetRefsIf(pA, &expected, "branch_a", 0, pRefsA, nRefsA);
+  if( rc==SQLITE_OK ) rc = pA->xCommit(pA);
+  check("file_remote_first_install_succeeds", rc==SQLITE_OK);
+  chunkFileSetSize(&pStoreB->file, ((i64)1) << 40);
+  pStoreB->snapshotPinned = 1;
+
+  rc = pB->xSetRefsIf(pB, &expected, "branch_b", 0, pRefsB, nRefsB);
+  check("file_remote_second_install_rejected", rc==SQLITE_CONSTRAINT || rc==SQLITE_BUSY);
+  if( rc==SQLITE_OK ){
+    (void)pB->xCommit(pB);
+  }
+  check("file_remote_store_keeps_branch_a",
+        pStoreB && chunkStoreFindBranch(pStoreB, "branch_a",
+                                        &foundHash)==SQLITE_OK);
+  check("file_remote_store_does_not_install_branch_b",
+        pStoreB && chunkStoreFindBranch(pStoreB, "branch_b",
+                                        &foundHash)!=SQLITE_OK);
+
+  if( pB ) pB->xClose(pB);
+  if( pA ) pA->xClose(pA);
+  check("file_remote_reopen_store",
+        chunkStoreOpen(&reopened, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("file_remote_reopen_keeps_branch_a",
+        chunkStoreFindBranch(&reopened, "branch_a", &foundHash)==SQLITE_OK);
+  check("file_remote_reopen_has_no_branch_b",
+        chunkStoreFindBranch(&reopened, "branch_b", &foundHash)!=SQLITE_OK);
+  chunkStoreClose(&reopened);
+  sqlite3_free(pRefsA);
+  sqlite3_free(pRefsB);
+  removeDbFiles(dbpath);
+}
+
 static void run_remotesrv_chunk_commit_failure_clears_pending(void){
   ChunkStore cs;
   ChunkStore reopened;
@@ -10897,6 +11023,8 @@ static const RegressionCase aCases[] = {
   { "chunk_store_full_pathname", "Chunk Store Uses VFS Full Pathname Test", run_chunk_store_uses_vfs_full_pathname },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
   { "remotesrv_plain_refs_refreshes_under_lock", "RemoteSrv Plain Refs Refreshes Under Lock Test", run_remotesrv_plain_refs_refreshes_under_lock },
+  { "remotesrv_stale_size_heuristic_keeps_peer_branch", "RemoteSrv Stale Size Heuristic Keeps Peer Branch Test", run_remotesrv_stale_size_heuristic_keeps_peer_branch },
+  { "file_remote_stale_size_heuristic_keeps_peer_branch", "File Remote Stale Size Heuristic Keeps Peer Branch Test", run_file_remote_stale_size_heuristic_keeps_peer_branch },
   { "remotesrv_chunk_commit_failure_clears_pending", "RemoteSrv Chunk Commit Failure Clears Pending Test", run_remotesrv_chunk_commit_failure_clears_pending },
   { "prolly_int_cursor_boundary", "Prolly Int Cursor Internal Boundary Test", run_prolly_int_cursor_seek_across_internal_boundary },
   { "prolly_int_cursor_seek_past_max", "Prolly Int Cursor Seek Past Max Test", run_prolly_int_cursor_seek_past_max },
