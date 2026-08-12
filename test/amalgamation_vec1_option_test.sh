@@ -20,12 +20,12 @@ esac
 "$cc_bin" -w -I"$build_dir" \
   "$repo_dir/test/amalgamation_vec1_probe.c" "$build_dir/sqlite3.c" \
   "${libs[@]}" -o "$tmp/default"
-"$tmp/default" enabled
+"$tmp/default" disabled
 
-"$cc_bin" -w -DDOLTLITE_VEC1=0 -I"$build_dir" \
+"$cc_bin" -w -DDOLTLITE_VEC1=1 -I"$build_dir" \
   "$repo_dir/test/amalgamation_vec1_probe.c" "$build_dir/sqlite3.c" \
-  "${libs[@]}" -o "$tmp/disabled"
-"$tmp/disabled" disabled
+  "${libs[@]}" -o "$tmp/enabled"
+"$tmp/enabled" enabled
 
 case "$(uname -s)" in
   Darwin)
@@ -39,6 +39,6 @@ case "$(uname -s)" in
       "$repo_dir/ext/vec1/vec1.c" -o "$module"
     ;;
 esac
-"$tmp/disabled" load "$module"
+"$tmp/default" load "$module"
 
 echo "amalgamation vec1 compile option: PASS"

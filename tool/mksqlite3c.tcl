@@ -164,9 +164,6 @@ if {$doltlite} {
 {#ifndef DOLTLITE_PROLLY
 # define DOLTLITE_PROLLY 1
 #endif
-#ifndef DOLTLITE_VEC1
-# define DOLTLITE_VEC1 1
-#endif
 #ifndef DOLTLITE_VERSION
 # define DOLTLITE_VERSION "doltlite-amalgamation"
 #endif
