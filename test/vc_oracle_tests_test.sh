@@ -98,6 +98,27 @@ oracle_status "zero_row_delete_materializes" "
 DELETE FROM dolt_tests WHERE test_name='missing';
 "
 
+oracle_query tests "rollback_first_write" "
+BEGIN;
+INSERT INTO dolt_tests VALUES ('rolled',NULL,'SELECT 1','expected_rows','==','1');
+ROLLBACK;
+" \
+  "SELECT 'T|' || (SELECT count(*) FROM dolt_tests) || '|' ||
+      (SELECT count(*) FROM dolt_status WHERE table_name='dolt_tests');" \
+  "SELECT concat('T|', (SELECT count(*) FROM dolt_tests), '|',
+      (SELECT count(*) FROM dolt_status WHERE table_name='dolt_tests'));"
+
+oracle_query tests "rollback_after_zero_row_materialization" "
+DELETE FROM dolt_tests WHERE test_name='missing';
+BEGIN;
+INSERT INTO dolt_tests VALUES ('rolled',NULL,'SELECT 1','expected_rows','==','1');
+ROLLBACK;
+" \
+  "SELECT 'T|' || (SELECT count(*) FROM dolt_tests) || '|' ||
+      (SELECT count(*) FROM dolt_status WHERE table_name='dolt_tests');" \
+  "SELECT concat('T|', (SELECT count(*) FROM dolt_tests), '|',
+      (SELECT count(*) FROM dolt_status WHERE table_name='dolt_tests'));"
+
 oracle_tests "update_replace_delete" "
 INSERT INTO dolt_tests VALUES ('one', 'g', 'SELECT 1', 'expected_rows', '==', '1');
 INSERT INTO dolt_tests VALUES ('two', NULL, 'SELECT 2', 'expected_single_value', '==', '2');
