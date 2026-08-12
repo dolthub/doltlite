@@ -1681,6 +1681,71 @@ COMMIT;
                   WHERE commit_hash = HASHOF('HEAD')));"
 
 echo ""
+echo "--- add/add matching schema ---"
+
+oracle_error_poststate "dual_add_table_same_schema_union" "
+SELECT dolt_commit('-Am', 'init empty');
+SELECT dolt_branch('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main'), (3, 'm3');
+SELECT dolt_commit('-Am', 'main adds t');
+SELECT dolt_checkout('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (2, 'feat'), (4, 'f4');
+SELECT dolt_commit('-Am', 'feat adds t');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id))" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_same_session "dual_add_table_same_pk_is_row_conflict" "
+SELECT dolt_commit('-Am', 'init empty');
+SELECT dolt_branch('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_commit('-Am', 'main adds t');
+SELECT dolt_checkout('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'feat');
+SELECT dolt_commit('-Am', 'feat adds t');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('feat');
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_schema_conflicts) || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || (SELECT coalesce(sum(num_conflicts), 0) FROM dolt_conflicts) || char(9) || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id));" \
+"SELECT CONCAT('Q', char(9), (SELECT COUNT(*) FROM dolt_schema_conflicts), char(9), (SELECT COUNT(*) FROM dolt_conflicts), char(9), (SELECT COALESCE(SUM(num_conflicts), 0) FROM dolt_conflicts), char(9), (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t));"
+
+oracle_error "dual_add_table_different_schema_refused" "
+SELECT dolt_commit('-Am', 'init empty');
+SELECT dolt_branch('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_commit('-Am', 'main adds t');
+SELECT dolt_checkout('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (2, 7);
+SELECT dolt_commit('-Am', 'feat adds t');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+"
+
+oracle_error_poststate "dual_add_index_same_sql_covers_merged_rows" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, v TEXT);
+INSERT INTO t VALUES (1, 10, 'x');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 20, 'main');
+CREATE INDEX tk ON t(k);
+SELECT dolt_commit('-Am', 'main idx');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 30, 'feat');
+CREATE INDEX tk ON t(k);
+SELECT dolt_commit('-Am', 'feat idx');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT group_concat(id || ':' || k, ',') FROM (SELECT id, k FROM t ORDER BY id)) || '|' || (SELECT group_concat(id || ':' || k, ',') FROM (SELECT id, k FROM t INDEXED BY tk WHERE k >= 10 ORDER BY k))" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', k) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', k) ORDER BY k SEPARATOR ',') FROM t WHERE k >= 10))"
+
+echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"

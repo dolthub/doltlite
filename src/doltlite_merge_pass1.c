@@ -292,6 +292,25 @@ static int mergePass1ResolveOursEntry(
   return SQLITE_OK;
 }
 
+static int mergePass1AddedSchemaMatches(
+  MergePass1Ctx *c,
+  const char *zObjectName,
+  int iOurs,
+  struct TableEntry *theirsEntry
+){
+  SchemaEntry *ourSE;
+  SchemaEntry *theirSE;
+  if( prollyHashCompare(&c->aOurs[iOurs].schemaHash,
+                        &theirsEntry->schemaHash)==0 ){
+    return 1;
+  }
+  if( !zObjectName ) return 0;
+  ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zObjectName);
+  theirSE = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zObjectName);
+  if( !ourSE || !theirSE || !ourSE->zSql || !theirSE->zSql ) return 0;
+  return strcmp(ourSE->zSql, theirSE->zSql)==0;
+}
+
 /* Ours added the object (absent from ancestor). */
 static int mergePass1OursAdded(
   MergePass1Ctx *c,
@@ -307,18 +326,48 @@ static int mergePass1OursAdded(
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
       return SQLITE_OK;
     }
-    if( prollyHashCompare(&c->aOurs[iOurs].root, &theirsEntry->root)!=0
-     || prollyHashCompare(&c->aOurs[iOurs].schemaHash,
-                          &theirsEntry->schemaHash)!=0 ){
-      if( zName
-       && (strcmp(zName, "sqlite_stat1")==0
-        || strcmp(zName, "sqlite_stat4")==0) ){
+    if( zName
+     && (strcmp(zName, "sqlite_stat1")==0
+      || strcmp(zName, "sqlite_stat4")==0) ){
+      c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+      return SQLITE_OK;
+    }
+    if( mergePass1AddedSchemaMatches(
+          c, zName ? zName : zSchemaMergeName, iOurs, theirsEntry) ){
+      if( prollyHashCompare(&c->aOurs[iOurs].root, &theirsEntry->root)==0 ){
         c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
         return SQLITE_OK;
       }
-      rc = mergePass1NoteSchemaConflict(c, zSchemaConflictTable, zSchemaMergeName);
-      if( rc!=SQLITE_OK ) return rc;
+      if( !zName ){
+        if( zSchemaMergeName && zSchemaMergeName[0] ){
+          rc = mergeAppendReindexName(
+              c->pazReindex, c->pnReindex, zSchemaMergeName);
+          if( rc!=SQLITE_OK ) return rc;
+        }
+        c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+        return SQLITE_OK;
+      }
+      if( ((c->aOurs[iOurs].flags ^ theirsEntry->flags)
+           & PROLLY_NODE_INTKEY)!=0 ){
+        if( c->pzErrMsg ){
+          sqlite3_free(*c->pzErrMsg);
+          *c->pzErrMsg = sqlite3_mprintf(
+              "cannot merge because table '%s' has different primary keys",
+              zName);
+        }
+        return SQLITE_ERROR;
+      }
+      {
+        struct TableEntry ancEmpty;
+        memset(&ancEmpty, 0, sizeof(ancEmpty));
+        ancEmpty.flags = c->aOurs[iOurs].flags;
+        return mergePass1MergeTableData(
+            c, zName, zName, &c->aOurs[iOurs], &ancEmpty,
+            &theirsEntry->root, 0, 0, SCHEMA_MERGE_DEFAULT, theirsEntry);
+      }
     }
+    rc = mergePass1NoteSchemaConflict(c, zSchemaConflictTable, zSchemaMergeName);
+    if( rc!=SQLITE_OK ) return rc;
   }
   c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
   return SQLITE_OK;
