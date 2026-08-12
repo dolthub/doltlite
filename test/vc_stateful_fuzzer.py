@@ -266,6 +266,76 @@ def mutate_branch(doltlite, db_path, branch, model, rng, step):
     run_sql(doltlite, db_for_branch(db_path, branch), sql, "mutate_%s" % branch)
 
 
+def transaction_branch(doltlite, db_path, branch, model, step, outcome):
+    branch_num = 0 if branch == "main" else int(branch[1:])
+    key_base = branch_num * 10000 + step * 2 + 1000
+    pre_value = "pre_tx_%s_%05d" % (branch, step)
+    tx_value = "in_tx_%s_%05d" % (branch, step)
+    pre_sql = (
+        "INSERT INTO kv(id, v, n) VALUES(%d, %s, %d) "
+        "ON CONFLICT(id) DO UPDATE SET v=excluded.v, n=excluded.n;"
+        % (key_base, sql_quote(pre_value), step)
+    )
+    run_sql(doltlite, db_for_branch(db_path, branch), pre_sql, "pre_transaction_%s" % branch)
+    model[branch]["working"][key_base] = (pre_value, step)
+
+    before = {name: dict(rows) for name, rows in model[branch].items()}
+    before_schema = query_schema(doltlite, db_path, branch)
+    before_status = status_counts(doltlite, db_path, branch)
+    table = "tx_aux_%d" % step
+    statements = [
+        "BEGIN;",
+        (
+            "INSERT INTO kv(id, v, n) VALUES(%d, %s, %d) "
+            "ON CONFLICT(id) DO UPDATE SET v=excluded.v, n=excluded.n;"
+            % (key_base + 1, sql_quote(tx_value), step + 1)
+        ),
+        "CREATE TABLE %s(id INTEGER PRIMARY KEY, payload TEXT);" % table,
+        "INSERT INTO %s VALUES(1, %s);" % (table, sql_quote(tx_value)),
+        "CREATE INDEX %s_idx ON %s(payload);" % (table, table),
+        "SELECT dolt_add('-A');",
+    ]
+    expected = dict(before["working"])
+    expected[key_base + 1] = (tx_value, step + 1)
+    if outcome == "rollback":
+        statements.append("ROLLBACK;")
+    elif outcome == "commit":
+        statements.append("COMMIT;")
+    else:
+        statements.append(
+            "SELECT dolt_commit('-m',%s);"
+            % sql_quote("stateful transaction %s %d" % (branch, step))
+        )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "\n".join(statements),
+        "transaction_%s_%s" % (outcome, branch),
+        timeout=30,
+    )
+
+    schema = query_schema(doltlite, db_path, branch)
+    status = status_counts(doltlite, db_path, branch)
+    if outcome == "rollback":
+        model[branch] = before
+        if schema != before_schema:
+            raise AssertionError("transaction rollback kept schema changes on %s" % branch)
+        if status != before_status:
+            raise AssertionError("transaction rollback kept staged changes on %s" % branch)
+    else:
+        model[branch]["working"] = dict(expected)
+        model[branch]["staged"] = dict(expected)
+        if outcome == "vc_commit":
+            model[branch]["committed"] = dict(expected)
+            if status != (0, 0):
+                raise AssertionError("VC commit left status entries on %s" % branch)
+        elif status[0] != status[1]:
+            raise AssertionError("transaction commit lost staged changes on %s" % branch)
+        if schema == before_schema:
+            raise AssertionError("transaction commit lost schema changes on %s" % branch)
+    assert_rows(doltlite, db_path, branch, model)
+
+
 def add_branch(doltlite, db_path, branch, model, all_tables):
     arg = "-A" if all_tables else "kv"
     run_sql(
@@ -725,6 +795,9 @@ OPERATIONS = (
         "add",
         "commit_staged",
         "commit_all",
+        "transaction_rollback",
+        "transaction_commit",
+        "transaction_vc_commit",
         "reset_soft",
         "reset_hard",
         "branch_create",
@@ -793,6 +866,15 @@ def main():
                 commit_branch(doltlite, db_path, branch, model, step, False)
             elif op == "commit_all":
                 commit_branch(doltlite, db_path, branch, model, step)
+            elif op.startswith("transaction_"):
+                transaction_branch(
+                    doltlite,
+                    db_path,
+                    branch,
+                    model,
+                    step,
+                    op[len("transaction_"):],
+                )
             elif op == "reset_soft":
                 reset_branch(doltlite, db_path, branch, model, False)
             elif op == "reset_hard":
