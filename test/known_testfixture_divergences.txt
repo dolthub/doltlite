@@ -1465,8 +1465,8 @@ attach2 attach2-4.15 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 attachmalloc attachmalloc-1.transient.492 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 attachmalloc attachmalloc-1.transient.917 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 attachmalloc attachmalloc-1.transient.1411 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.924 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1425 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.925 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1427 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 mallocD mallocD-4.transient.107 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
@@ -5901,8 +5901,8 @@ vtab_err vtab_err-2.transient.727 @coverage class=intentional
 vtab_err vtab_err-2.transient.728 @coverage class=intentional
 vtab_err vtab_err-2.persistent.727 @coverage class=intentional
 vtab_err vtab_err-2.persistent.728 @coverage class=intentional
-vtab_err vtab_err-3-oom-transient.435 @coverage class=intentional
 vtab_err vtab_err-3-oom-transient.436 @coverage class=intentional
+vtab_err vtab_err-3-oom-transient.437 @coverage class=intentional
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=1846  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
