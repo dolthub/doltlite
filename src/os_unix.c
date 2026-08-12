@@ -89,7 +89,7 @@
 */
 #include <sys/types.h>   /* amalgamator: keep */
 #include <sys/stat.h>    /* amalgamator: keep */
-#include <fcntl.h>
+#include <fcntl.h>     /* amalgamator: keep */
 #include <sys/ioctl.h>
 #include <unistd.h>      /* amalgamator: keep */
 #include <time.h>

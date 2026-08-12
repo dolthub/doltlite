@@ -47,4 +47,33 @@ trap 'rm -rf "$tmp"' EXIT
   -o "$tmp/sqlite3.o"
 
 test -s "$tmp/sqlite3.o"
+
+"$emcc_bin" -Werror -Wno-comment "$amalgamation" \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  -s WASM=1 \
+  -s 'ENVIRONMENT=web,worker,node' \
+  -s STACK_SIZE=512KB \
+  --no-entry \
+  --minify=0 \
+  -DSQLITE_DQS=0 \
+  -DSQLITE_THREADSAFE=0 \
+  -DSQLITE_DEFAULT_MEMSTATUS=0 \
+  -DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
+  -DSQLITE_OMIT_DECLTYPE \
+  -DSQLITE_OMIT_DEPRECATED \
+  -DSQLITE_OMIT_SHARED_CACHE \
+  -DSQLITE_OMIT_AUTOINIT \
+  -DSQLITE_OMIT_UTF16 \
+  -DDOLTLITE_PROLLY=1 \
+  -DSQLITE_WASM \
+  -DSQLITE_USE_ALLOCA \
+  -DVEC1_THREADS=0 \
+  -DSQLITE_ENABLE_BATCH_ATOMIC_WRITE \
+  -Oz \
+  -flto \
+  -s MAIN_MODULE=2 \
+  -s "EXPORTED_FUNCTIONS=['_sqlite3_initialize']" \
+  -o "$tmp/sqlite.mjs"
+
+test -s "$tmp/sqlite.mjs"
 echo "amalgamation wa-sqlite compile: PASS"
