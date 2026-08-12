@@ -185,6 +185,7 @@ static void dsCountChangedCells(
   for(i=0; i<pColMap->nTo; i++){
     int toRec = pColMap->aToRecTo ? pColMap->aToRecTo[i] : i;
     int fromRec = pColMap->aToRecFrom ? pColMap->aToRecFrom[i] : -1;
+    int fromType, fromOffset, toType, toOffset;
     if( fromRec<0 ){
       /* A trailing NULL is not stored, so the field may be absent from the
       ** record even though the column exists on the to side. */
@@ -192,10 +193,13 @@ static void dsCountChangedCells(
       if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) nDiffer++;
       continue;
     }
-    if( toRec>=toRi.nField || fromRec>=fromRi.nField ) continue;
+    fromType = fromRec<fromRi.nField ? fromRi.aType[fromRec] : 0;
+    fromOffset = fromRec<fromRi.nField ? fromRi.aOffset[fromRec] : 0;
+    toType = toRec<toRi.nField ? toRi.aType[toRec] : 0;
+    toOffset = toRec<toRi.nField ? toRi.aOffset[toRec] : 0;
     if( !doltliteFieldValuesEqual(
-            fromRi.aType[fromRec], pFromRec, nFromRec, fromRi.aOffset[fromRec],
-            toRi.aType[toRec],     pToRec,   nToRec,   toRi.aOffset[toRec]) ){
+            fromType, pFromRec, nFromRec, fromOffset,
+            toType,   pToRec,   nToRec,   toOffset) ){
       nDiffer++;
       nModified++;
     }
