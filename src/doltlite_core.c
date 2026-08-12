@@ -39,6 +39,25 @@ void doltliteTestFailNextHeadConfirm(void){
   failNextHeadConfirm = 1;
 }
 
+static void (*xTestBeforeRefInstall)(void*) = 0;
+static void *pTestBeforeRefInstallArg = 0;
+
+/* Fires once, unlocked, where a fetch has committed its chunks but has not
+** yet rooted them with a tracking ref -- the window a concurrent gc can
+** empty. Lets a test drive that gc deterministically. */
+void doltliteTestSetBeforeRefInstallHook(void (*xHook)(void*), void *pArg){
+  xTestBeforeRefInstall = xHook;
+  pTestBeforeRefInstallArg = pArg;
+}
+
+void doltliteTestRunBeforeRefInstallHook(void){
+  void (*xHook)(void*) = xTestBeforeRefInstall;
+  if( xHook ){
+    xTestBeforeRefInstall = 0;
+    xHook(pTestBeforeRefInstallArg);
+  }
+}
+
 void doltliteTxnStateClear(DoltliteTxnState *p){
   assert( p!=0 );
   sqlite3_free(p->zSessionBranch);

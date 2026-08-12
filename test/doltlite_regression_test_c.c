@@ -1824,6 +1824,95 @@ static void run_remote_refs_corruption(void){
   removeDbFiles(clonePath);
 }
 
+/* A fetch commits its chunks before any ref roots them, so a gc landing in
+** that window collects the whole fetched history. Installing the tracking
+** ref anyway leaves it pointing at absent chunks, which breaks gc forever
+** and aborts the historical-table registration every later connection runs
+** -- taking dolt_remote/dolt_hashof and friends down with it, with no
+** in-band way back. The install must verify the graph and fail instead. */
+static const char *gGcWindowPath = 0;
+
+static void gcInFetchWindow(void *pArg){
+  sqlite3 *gcDb = 0;
+  (void)pArg;
+  if( !gGcWindowPath ) return;
+  if( open_db(gGcWindowPath, &gcDb)==SQLITE_OK ){
+    execSql(gcDb, "SELECT dolt_gc()");
+  }
+  sqlite3_close(gcDb);
+}
+
+static void run_fetch_ref_install_survives_window_gc(void){
+  sqlite3 *remoteDb = 0;
+  sqlite3 *localDb = 0;
+  sqlite3 *afterDb = 0;
+  char remotePath[256];
+  char localPath[256];
+  char sql[512];
+  const char *res;
+
+  printf("=== Fetch Ref Install Survives Window GC Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath), "test_fetch_window_gc_remote");
+  make_dbpath(localPath, sizeof(localPath), "test_fetch_window_gc_local");
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+
+  check("window_gc_open_remote", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("window_gc_seed_remote", execSql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "INSERT INTO t VALUES(2,'more');"
+    "SELECT dolt_commit('-A','-m','more');")==SQLITE_OK);
+
+  check("window_gc_open_local", open_db(localPath, &localDb)==SQLITE_OK);
+  check("window_gc_seed_local", execSql(localDb,
+    "CREATE TABLE u(id INTEGER PRIMARY KEY);"
+    "INSERT INTO u VALUES(1);"
+    "SELECT dolt_commit('-A','-m','local');")==SQLITE_OK);
+  snprintf(sql, sizeof(sql),
+           "SELECT dolt_remote('add','origin','file://%s')", remotePath);
+  check("window_gc_add_remote", execSql(localDb, sql)==SQLITE_OK);
+
+  gGcWindowPath = localPath;
+  doltliteTestSetBeforeRefInstallHook(gcInFetchWindow, 0);
+  res = queryScalarText(localDb, "SELECT dolt_fetch('origin','main')");
+  check("window_gc_fetch_reports_failure", res && strstr(res, "0")!=res);
+  doltliteTestSetBeforeRefInstallHook(0, 0);
+  gGcWindowPath = 0;
+  sqlite3_close(localDb);
+  localDb = 0;
+
+  /* A fresh connection must still get the full function surface: the
+  ** registration chain aborts on the first failing member, so a dangling
+  ** tracking ref silently removes everything after it. */
+  check("window_gc_reopen", open_db(localPath, &afterDb)==SQLITE_OK);
+  check("window_gc_remote_fn_alive",
+        strstr(queryScalarText(afterDb,
+            "SELECT count(*) FROM dolt_remotes"), "1")!=0);
+  check("window_gc_hashof_fn_alive",
+        execSqlSilent(afterDb, "SELECT dolt_hashof('HEAD')")==SQLITE_OK);
+  check("window_gc_gc_still_works",
+        execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
+  check("window_gc_local_data_intact",
+        strcmp(queryScalarText(afterDb, "SELECT count(*) FROM u"), "1")==0);
+
+  /* And the fetch must heal on retry: the chunks the gc took are re-synced,
+  ** the tracking ref lands, and gc -- which walks tracking commits -- proves
+  ** the graph behind it is complete. */
+  check("window_gc_retry_fetch",
+        execSqlSilent(afterDb, "SELECT dolt_fetch('origin','main')")==SQLITE_OK);
+  check("window_gc_retry_tracking_landed",
+        strcmp(queryScalarText(afterDb,
+            "SELECT count(*) FROM dolt_remote_branches"), "1")==0);
+  check("window_gc_retry_graph_complete",
+        execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
+
+  sqlite3_close(afterDb);
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+}
+
 static void run_fetch_preserves_concurrent_local_refs(void){
   sqlite3 *remoteDb = 0;
   sqlite3 *localDb1 = 0;
@@ -10894,6 +10983,7 @@ static const RegressionCase aCases[] = {
   { "refs_commit_merges_concurrent_peer_refs", "Refs Commit Merges Concurrent Peer Refs Test", run_refs_commit_merges_concurrent_peer_refs },
   { "refs_commit_conflicting_peer_ref_fails", "Refs Commit Conflicting Peer Ref Fails Test", run_refs_commit_conflicting_peer_ref_fails },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
+  { "fetch_ref_install_survives_window_gc", "Fetch Ref Install Survives Window GC Test", run_fetch_ref_install_survives_window_gc },
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },
