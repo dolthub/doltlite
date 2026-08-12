@@ -29,6 +29,7 @@ trap 'rm -rf "$tmp"' EXIT
   -DSQLITE_ENABLE_SESSION \
   -DSQLITE_ENABLE_STMTVTAB \
   -DSQLITE_THREADSAFE=0 \
+  -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 \
   -DSQLITE_TEMP_STORE=2 \
   -DSQLITE_ENABLE_MATH_FUNCTIONS \
   -DSQLITE_OS_OTHER=1 \
@@ -46,7 +47,28 @@ trap 'rm -rf "$tmp"' EXIT
   -DBUILD_sqlite \
   -o "$tmp/sqlite3.o"
 
+"$emcc_bin" -Werror -Wno-comment -c "$amalgamation" \
+  -Oz -flto \
+  -DSQLITE_DQS=0 \
+  -DSQLITE_THREADSAFE=0 \
+  -DSQLITE_DEFAULT_MEMSTATUS=0 \
+  -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 \
+  -DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
+  -DSQLITE_OMIT_DECLTYPE \
+  -DSQLITE_OMIT_DEPRECATED \
+  -DSQLITE_OMIT_SHARED_CACHE \
+  -DSQLITE_OMIT_AUTOINIT \
+  -DSQLITE_OMIT_UTF16 \
+  -DDOLTLITE_PROLLY=1 \
+  -DSQLITE_WASM \
+  -DSQLITE_USE_ALLOCA \
+  -DVEC1_THREADS=0 \
+  -DSQLITE_OS_OTHER=1 \
+  -DSQLITE_ENABLE_BATCH_ATOMIC_WRITE \
+  -o "$tmp/sqlite3-user-flags.o"
+
 test -s "$tmp/sqlite3.o"
+test -s "$tmp/sqlite3-user-flags.o"
 
 "$emcc_bin" -Werror -Wno-comment "$amalgamation" \
   -s ALLOW_MEMORY_GROWTH=1 \
