@@ -450,6 +450,12 @@ int prollyThreeWayMergeFast(
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
     return SQLITE_OK;
   }
+  if( ((oursNode.flags ^ ancNode.flags) & PROLLY_NODE_INTKEY)!=0
+   || ((theirsNode.flags ^ ancNode.flags) & PROLLY_NODE_INTKEY)!=0
+   || ((oursNode.flags ^ flags) & PROLLY_NODE_INTKEY)!=0 ){
+    sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
+    return SQLITE_OK;
+  }
 
   fm.pStore = pStore;
   fm.pCache = pCache;

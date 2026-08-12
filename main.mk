@@ -2709,6 +2709,7 @@ DOLTLITE_C_TESTS = \
 	catalog_serialize_determinism_test$(T.exe) \
 	clone_error_code_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
+	three_way_merge_fast_test$(T.exe) \
 	prolly_hashset_test$(T.exe) \
 	prolly_chunker_boundary_test$(T.exe) \
 	scoped_refs_push_test$(T.exe) \
@@ -2818,6 +2819,11 @@ catalog_serialize_determinism_test$(T.exe): $(TOP)/test/catalog_serialize_determ
 three_way_diff_test$(T.exe): $(TOP)/test/three_way_diff_test.c $(LIBOBJS0)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/three_way_diff_test.c $(LIBOBJS0) \
+		-lz -lpthread -lm
+
+three_way_merge_fast_test$(T.exe): $(TOP)/test/three_way_merge_fast_test.c $(LIBOBJS0)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/three_way_merge_fast_test.c $(LIBOBJS0) \
 		-lz -lpthread -lm
 
 # prolly_hashset_test includes prolly_hashset.h (which pulls sqliteInt.h via
