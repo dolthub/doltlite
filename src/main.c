@@ -53,7 +53,7 @@ int SQLITE_EXTRA_AUTOEXT(sqlite3*);
 #if defined(DOLTLITE_PROLLY) && defined(SQLITE_ENABLE_DBPAGE_VTAB)
 int doltliteDbpageRegister(sqlite3*);
 #endif
-#if defined(DOLTLITE_PROLLY) && defined(DOLTLITE_VEC1) && DOLTLITE_VEC1
+#if DOLTLITE_VEC1
 int sqlite3Vec1Init(sqlite3*);
 #endif
 /*
@@ -92,7 +92,7 @@ static int (*const sqlite3BuiltinExtensions[])(sqlite3*) = {
 #ifdef SQLITE_ENABLE_BYTECODE_VTAB
   sqlite3VdbeBytecodeVtabInit,
 #endif
-#if defined(DOLTLITE_PROLLY) && defined(DOLTLITE_VEC1) && DOLTLITE_VEC1
+#if DOLTLITE_VEC1
   /* doltlite ships the vec1 vector-search extension built in. */
   sqlite3Vec1Init,
 #endif

@@ -38,6 +38,16 @@ int main(int argc, char **argv){
     return 6;
   }
   sqlite3_finalize(stmt);
+  stmt = 0;
+  rc = sqlite3_prepare_v2(db, "SELECT doltlite_engine()", -1, &stmt, 0);
+  if( rc!=SQLITE_OK || sqlite3_step(stmt)!=SQLITE_ROW
+   || strcmp((const char*)sqlite3_column_text(stmt, 0), "prolly")!=0 ){
+    fprintf(stderr, "DoltLite engine unavailable: %s\n", sqlite3_errmsg(db));
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return 7;
+  }
+  sqlite3_finalize(stmt);
   sqlite3_close(db);
   return 0;
 }
