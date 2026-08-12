@@ -229,4 +229,23 @@ run_test "workspace_delete_via_filtered_rowid" \
 
 rm -rf "$MC_DB"
 
+# An uncommitted key-shape recreate renders the head row under the head
+# shape: before the per-side fix, from_pk showed the raw text sort key
+# decoded as a sign-flipped integer.
+WS_DB=/tmp/test_ws_shape_$$.db; rm -f "$WS_DB"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID;
+INSERT INTO t VALUES('alpha', 1);
+SELECT dolt_commit('-Am','c1');
+DROP TABLE t;
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(42, 2);" | $DOLTLITE "$WS_DB" > /dev/null 2>&1
+
+run_test "ws_shape_removed_side" \
+  "SELECT from_pk || '=' || from_v FROM dolt_workspace_t WHERE diff_type='removed';" \
+  "alpha=1" "$WS_DB"
+run_test "ws_shape_added_side" \
+  "SELECT to_pk || '=' || to_v FROM dolt_workspace_t WHERE diff_type='added';" \
+  "42=2" "$WS_DB"
+rm -f "$WS_DB"
+
 dltest_finish

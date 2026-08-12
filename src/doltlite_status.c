@@ -242,7 +242,8 @@ static int statusSchemaHasViewOrTriggerDiff(sqlite3 *db,
   int found = 0;
   if( !cs || !pCache ) return 0;
   if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return 0;
-  rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags);
+  rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags,
+                          flags);
   if( rc!=SQLITE_OK ) return 0;
   while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
     if( statusSchemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)

@@ -46,7 +46,8 @@ static void diffFillKey(
   prollyCursorKey(pCur, &pKey, &nKey);
   pChange->pKey   = pKey;
   pChange->nKey   = nKey;
-  pChange->intKey = (flags & PROLLY_NODE_INTKEY) ? prollyCursorIntKey(pCur) : 0;
+  pChange->keyIsIntKey = (flags & PROLLY_NODE_INTKEY)!=0;
+  pChange->intKey = pChange->keyIsIntKey ? prollyCursorIntKey(pCur) : 0;
 }
 
 static int diffIterCopyKey(
@@ -66,7 +67,8 @@ static int diffIterCopyKey(
   }
   pChange->pKey = pIter->pKeyCopy;
   pChange->nKey = pIter->nKeyCopy;
-  pChange->intKey = (flags & PROLLY_NODE_INTKEY) ? prollyCursorIntKey(pCur) : 0;
+  pChange->keyIsIntKey = (flags & PROLLY_NODE_INTKEY)!=0;
+  pChange->intKey = pChange->keyIsIntKey ? prollyCursorIntKey(pCur) : 0;
   return SQLITE_OK;
 }
 
@@ -611,7 +613,8 @@ int prollyDiffIterOpen(
   ProllyCache *pCache,
   const ProllyHash *pOldRoot,
   const ProllyHash *pNewRoot,
-  u8 flags
+  u8 oldFlags,
+  u8 newFlags
 ){
   int rc = SQLITE_OK;
   int emptyOld = 0, emptyNew = 0;
@@ -619,7 +622,11 @@ int prollyDiffIterOpen(
   memset(pIter, 0, sizeof(*pIter));
   pIter->pStore = pStore;
   pIter->pCache = pCache;
-  pIter->flags = flags;
+  pIter->flags = oldFlags;
+  pIter->oldFlags = oldFlags;
+  pIter->newFlags = newFlags;
+  pIter->shapeMismatch =
+      ((oldFlags ^ newFlags) & PROLLY_NODE_INTKEY)!=0;
 
   pIter->pCurOld = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
   pIter->pCurNew = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
@@ -633,8 +640,8 @@ int prollyDiffIterOpen(
     return SQLITE_NOMEM;
   }
 
-  prollyCursorInit(pIter->pCurOld, pStore, pCache, pOldRoot, flags);
-  prollyCursorInit(pIter->pCurNew, pStore, pCache, pNewRoot, flags);
+  prollyCursorInit(pIter->pCurOld, pStore, pCache, pOldRoot, oldFlags);
+  prollyCursorInit(pIter->pCurNew, pStore, pCache, pNewRoot, newFlags);
 
   rc = prollyCursorFirst(pIter->pCurOld, &emptyOld);
   if( rc==SQLITE_OK ) rc = prollyCursorFirst(pIter->pCurNew, &emptyNew);
@@ -681,7 +688,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 
     memset(pCh, 0, sizeof(*pCh));
 
-    if( validOld && validNew ){
+    if( validOld && validNew && !pIter->shapeMismatch ){
       int cmp;
       diffCompareKeys(pOld, pNew, pIter->flags, &cmp);
 
@@ -689,7 +696,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 
         const u8 *pVal; int nVal;
         pCh->type = PROLLY_DIFF_DELETE;
-        pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
+        pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->oldFlags);
         if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         prollyCursorValue(pOld, &pVal, &nVal);
         if( diffSetChangeVal(pIter, &pIter->pOldValCopy, &pIter->nOldValCopy,
@@ -700,7 +707,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 
         const u8 *pVal; int nVal;
         pCh->type = PROLLY_DIFF_ADD;
-        pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
+        pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->newFlags);
         if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         prollyCursorValue(pNew, &pVal, &nVal);
         if( diffSetChangeVal(pIter, &pIter->pNewValCopy, &pIter->nNewValCopy,
@@ -720,7 +727,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           const u8 *pOV; int nOV;
           const u8 *pNV; int nNV;
           pCh->type = PROLLY_DIFF_MODIFY;
-          pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
+          pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->newFlags);
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
           prollyCursorValue(pOld, &pOV, &nOV);
           prollyCursorValue(pNew, &pNV, &nNV);
@@ -737,7 +744,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 
       const u8 *pVal; int nVal;
       pCh->type = PROLLY_DIFF_DELETE;
-      pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
+      pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->oldFlags);
       if( pIter->rc!=SQLITE_OK ) return pIter->rc;
       prollyCursorValue(pOld, &pVal, &nVal);
       if( diffSetChangeVal(pIter, &pIter->pOldValCopy, &pIter->nOldValCopy,
@@ -748,7 +755,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 
       const u8 *pVal; int nVal;
       pCh->type = PROLLY_DIFF_ADD;
-      pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
+      pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->newFlags);
       if( pIter->rc!=SQLITE_OK ) return pIter->rc;
       prollyCursorValue(pNew, &pVal, &nVal);
       if( diffSetChangeVal(pIter, &pIter->pNewValCopy, &pIter->nNewValCopy,

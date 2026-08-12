@@ -26,6 +26,7 @@ typedef struct ProllyDiffChange ProllyDiffChange;
 
 struct ProllyDiffChange {
   u8 type;
+  u8 keyIsIntKey;
   const u8 *pKey;
   int nKey;
   i64 intKey;
@@ -52,6 +53,12 @@ struct ProllyDiffIter {
   ChunkStore *pStore;
   ProllyCache *pCache;
   u8 flags;
+  u8 oldFlags;
+  u8 newFlags;
+  /* The roots hold different key shapes: no cross-shape order exists, so
+  ** the walk drains every old row as a delete, then every new row as an
+  ** add — a key-shape change is a drop plus a recreate. */
+  u8 shapeMismatch;
 
   ProllyCursor *pCurOld;
   ProllyCursor *pCurNew;
@@ -71,8 +78,9 @@ struct ProllyDiffIter {
 };
 
 int prollyDiffIterOpen(ProllyDiffIter *pIter, ChunkStore *pStore,
-                       ProllyCache *pCache, const ProllyHash *pOldRoot,
-                       const ProllyHash *pNewRoot, u8 flags);
+                       ProllyCache *pCache,
+                       const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
+                       u8 oldFlags, u8 newFlags);
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange);
 void prollyDiffIterClose(ProllyDiffIter *pIter);
 

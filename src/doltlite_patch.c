@@ -914,15 +914,18 @@ static int patchAppendData(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyHash oldRoot, newRoot;
-  u8 flags;
+  u8 fromFlags;
+  u8 toFlags;
   int rc;
   memset(&oldRoot,0,sizeof(oldRoot));
   memset(&newRoot,0,sizeof(newRoot));
   if( pTable->pFromTable ) oldRoot = pTable->pFromTable->root;
   if( pTable->pToTable ) newRoot = pTable->pToTable->root;
-  flags = pTable->pFromTable ? pTable->pFromTable->flags
-                             : pTable->pToTable->flags;
-  rc = prollyDiffIterOpen(&it,cs,pCache,&oldRoot,&newRoot,flags);
+  fromFlags = pTable->pFromTable ? pTable->pFromTable->flags
+                                 : pTable->pToTable->flags;
+  toFlags = pTable->pToTable ? pTable->pToTable->flags
+                             : pTable->pFromTable->flags;
+  rc = prollyDiffIterOpen(&it,cs,pCache,&oldRoot,&newRoot,fromFlags,toFlags);
   if( rc!=SQLITE_OK ) return rc;
   while( (rc=prollyDiffIterStep(&it,&pChange))==SQLITE_ROW ){
     const u8 *pOld = pChange->pOldVal;

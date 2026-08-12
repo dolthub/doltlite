@@ -48,7 +48,8 @@ static int schemaHasViewOrTriggerDiff(sqlite3 *db,
   if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return SQLITE_OK;
   memset(&iter, 0, sizeof(iter));
   rc = sqlite3FaultSim(957) ? SQLITE_IOERR :
-       prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags);
+       prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags,
+                          flags);
   if( rc!=SQLITE_OK ){
     prollyDiffIterClose(&iter);
     return rc;
