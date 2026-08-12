@@ -1224,6 +1224,124 @@ expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
   "SELECT GROUP_CONCAT(CONCAT(id, ':', x) ORDER BY id SEPARATOR ',') FROM t;"
 
 echo ""
+echo "--- Primary key changes ---"
+
+DB="$TMPROOT/pk1.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "pk1"
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('AAAAA',1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(pk BIGINT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(5,50);
+SELECT dolt_commit('-Am','feat_recreate');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES('BBBBB',2);
+SELECT dolt_commit('-Am','main_rows');
+SQL
+expect_merge_conflict "pk_change_vs_row_change" "$DB"
+expect_dual_value "pk_change_vs_row_change_local_intact" "$DB" "2" \
+  "SELECT count(*) FROM t;" "SELECT count(*) FROM t;"
+
+DB="$TMPROOT/pk2.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "pk2"
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('AAAAA',1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(pk BIGINT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(5,50);
+SELECT dolt_commit('-Am','feat_recreate');
+SELECT dolt_checkout('main');
+CREATE TABLE other(a BIGINT PRIMARY KEY);
+SELECT dolt_commit('-Am','main_other');
+SQL
+expect_merge_conflict "pk_change_vs_untouched_table" "$DB"
+
+DB="$TMPROOT/pk3.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "pk3"
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('AAAAA',1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(pk BIGINT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(5,50);
+SELECT dolt_commit('-Am','feat_recreate');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(pk VARBINARY(16) PRIMARY KEY, v INT);
+INSERT INTO t VALUES(X'AB',7);
+SELECT dolt_commit('-Am','main_recreate');
+SQL
+expect_merge_conflict "pk_change_both_sides_differ" "$DB"
+
+DB="$TMPROOT/pk4.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "pk4"
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('AAAAA',1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(pk BIGINT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(5,50);
+SELECT dolt_commit('-Am','feat_recreate');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(pk BIGINT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(7,70);
+SELECT dolt_commit('-Am','main_recreate');
+SQL
+expect_merge_conflict "pk_change_agreed_but_differs_from_ancestor" "$DB"
+
+DB="$TMPROOT/pk5.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "pk5"
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('AAAAA',1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('feat',50);
+SELECT dolt_commit('-Am','feat_recreate');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('main',7);
+SELECT dolt_commit('-Am','main_recreate');
+SQL
+expect_merge_ok "identical_recreate_merges" "$DB"
+expect_dual_value "identical_recreate_rows" "$DB" "feat:50,main:7" \
+  "SELECT group_concat(pk || ':' || v, ',') FROM (SELECT pk,v FROM t ORDER BY pk);" \
+  "SELECT GROUP_CONCAT(CONCAT(pk, ':', v) ORDER BY pk SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/pk6.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "pk6"
+CREATE TABLE t(pk VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('AAAAA',1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE feat_tbl(id BIGINT PRIMARY KEY);
+SELECT dolt_commit('-Am','feat_other');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(pk BIGINT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(7,70);
+SELECT dolt_commit('-Am','main_recreate');
+SQL
+expect_merge_ok "pk_change_ours_only_theirs_untouched" "$DB"
+expect_dual_value "pk_change_ours_only_kept" "$DB" "7:70" \
+  "SELECT pk || ':' || v FROM t;" "SELECT CONCAT(pk, ':', v) FROM t;"
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
