@@ -802,13 +802,7 @@ foreach file $flist {
     if {$file eq "pager.c"} { emit_doltlite_storage_block }
     continue
   }
-  if {$doltlite && $file eq "vec1.c"} {
-    puts $out "#if DOLTLITE_VEC1"
-    copy_file $srcdir/$file
-    puts $out "#endif /* DOLTLITE_VEC1 */"
-  } else {
-    copy_file $srcdir/$file
-  }
+  copy_file $srcdir/$file
   if {$doltlite && $file eq "sqliteInt.h"} {
     # Force-inline chunk_store.h (and its nested prolly_hash.h / chunk_*.h)
     # unconditionally and early. Core code (vdbe.c) includes it under
