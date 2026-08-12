@@ -4723,6 +4723,62 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
 ** makes every later working-set persist record a commit the branch no
 ** longer points at, and the load gate discards such a blob -- so rows this
 ** session durably wrote vanish for every future connection. */
+/* Persisting a working set is the one ref install with no compare-and-swap:
+** when the branch ref is missing it created one. A session whose branch a
+** peer deleted would therefore resurrect it on its next write, restoring a
+** ref the peer removed and carrying that session's later commits on it. */
+static void run_persist_does_not_resurrect_deleted_branch(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  sqlite3 *dbC = 0;
+  char dbpath[256];
+
+  printf("=== Persist Does Not Resurrect Deleted Branch Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_persist_no_resurrect");
+  removeDbFiles(dbpath);
+
+  check("nr_open_A", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("nr_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "SELECT dolt_branch('feat');")==SQLITE_OK);
+  check("nr_checkout_feat",
+        execSql(dbA, "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  check("nr_commit_on_feat", execSql(dbA,
+    "INSERT INTO t VALUES(2,'two');"
+    "SELECT dolt_commit('-A','-m','feat work');")==SQLITE_OK);
+
+  /* A peer deletes the branch this session is on. */
+  check("nr_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("nr_peer_delete",
+        execSql(dbB, "SELECT dolt_branch('-D','feat');")==SQLITE_OK);
+  check("nr_deleted_for_peer",
+        strcmp(queryScalarText(dbB,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+
+  /* The orphaned session's next write must not put the branch back. */
+  execSqlSilent(dbA, "INSERT INTO t VALUES(3,'three');");
+  execSqlSilent(dbA, "SELECT dolt_commit('-A','-m','after delete');");
+  sqlite3_close(dbA);
+  dbA = 0;
+  check("nr_still_deleted_for_peer",
+        strcmp(queryScalarText(dbB,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("nr_close_B", sqlite3_close(dbB)==SQLITE_OK);
+  dbB = 0;
+
+  check("nr_open_C", open_db(dbpath, &dbC)==SQLITE_OK);
+  check("nr_still_deleted_for_fresh",
+        strcmp(queryScalarText(dbC,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("nr_main_intact",
+        strcmp(queryScalarText(dbC,
+            "SELECT count(*) FROM dolt_branches WHERE name='main'"), "1")==0);
+  check("nr_close_C", sqlite3_close(dbC)==SQLITE_OK);
+  removeDbFiles(dbpath);
+}
+
 static void run_peer_commit_keeps_local_row_durable(void){
   sqlite3 *dbA = 0;
   sqlite3 *dbB = 0;
@@ -11349,6 +11405,7 @@ static const RegressionCase aCases[] = {
   { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
   { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
+  { "persist_does_not_resurrect_deleted_branch", "Persist Does Not Resurrect Deleted Branch Test", run_persist_does_not_resurrect_deleted_branch },
   { "peer_commit_keeps_local_row_durable", "Peer Commit Keeps Local Row Durable Test", run_peer_commit_keeps_local_row_durable },
   { "commit_recovers_after_peer_commit", "Commit Recovers After Peer Commit Test", run_commit_recovers_after_peer_commit },
   { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },
