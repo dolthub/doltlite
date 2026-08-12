@@ -97,7 +97,8 @@ make DOLTLITE_PROLLY=0 sqlite3   # stock SQLite, for oracle/perf comparison
   `doltlite_tag`, `doltlite_conflicts`, `doltlite_constraint_violations` /
   `doltlite_verify_constraints`,
   `doltlite_schemas` / `doltlite_schema_diff`, `doltlite_patch`,
-  `doltlite_status`, `doltlite_workspace`, `doltlite_ignore`, `doltlite_hashof`,
+  `doltlite_status`, `doltlite_workspace`, `doltlite_ignore`, `doltlite_docs`,
+  `doltlite_tests`, `doltlite_hashof`,
   `doltlite_gc`, `doltlite_remote` / `doltlite_http_remote` /
   `doltlite_remotesrv`. Internal header: `src/doltlite_internal.h`; surfaces are
   registered in `src/doltlite.c`.
@@ -132,6 +133,12 @@ deleting `AGENT.md` sticks (Dolt resurrects it on the next read) and it
 appears in row-level diffs. A `build.c` shape guard beside `dolt_ignore`'s
 keeps hand-issued `CREATE TABLE dolt_docs` on the exact schema the module
 creates.
+
+`dolt_tests` uses the same lazy user-space system-table pattern: empty reads
+resolve before a backing table exists, and the first write materializes the
+six-column table with Dolt's assertion checks. `dolt_test_run(...)` executes
+the versioned definitions as read-only single-statement queries and returns
+the Dolt-compatible test result rows.
 
 ### Surfaces deliberately not implemented
 

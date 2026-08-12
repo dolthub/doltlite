@@ -9,6 +9,7 @@ vc_oracle_commit_test.sh
 vc_oracle_connection_branch_test.sh
 vc_oracle_cross_connection_state_test.sh
 vc_oracle_docs_test.sh
+vc_oracle_tests_test.sh
 vc_oracle_hashof_errors_test.sh
 vc_oracle_hashof_test.sh
 vc_oracle_ignore_test.sh

@@ -11,6 +11,7 @@ doltlite_commit.sh
 doltlite_staging.sh
 doltlite_workspace.sh
 doltlite_docs.sh
+doltlite_tests.sh
 doltlite_diff.sh
 doltlite_reset.sh
 doltlite_branch.sh
@@ -139,6 +140,7 @@ doltlite_commit.sh
 doltlite_staging.sh
 doltlite_workspace.sh
 doltlite_docs.sh
+doltlite_tests.sh
 doltlite_branch.sh
 doltlite_open_branch.sh
 doltlite_tag.sh

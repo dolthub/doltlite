@@ -276,6 +276,22 @@ REPLACE INTO dolt_docs VALUES ('README.md', '# updated');
 SELECT dolt_commit('-A', '-m', 'update readme');
 ```
 
+#### Repository Tests (`dolt_tests`)
+
+Versioned SQL tests live in `dolt_tests`. The first write creates the backing
+table; test definitions then commit, diff, branch and merge like ordinary
+data. Each read-only query can assert its row count, column count, or single
+result value with `==`, `!=`, `<`, `>`, `<=`, or `>=`. Run every test with no
+argument or `'*'`, or select tests by test name or group.
+
+```sql
+INSERT INTO dolt_tests VALUES (
+  'user count', 'users', 'SELECT * FROM users', 'expected_rows', '==', '10'
+);
+SELECT * FROM dolt_test_run();
+SELECT * FROM dolt_test_run('users');
+```
+
 ### Inspecting what's there
 
 #### Diff

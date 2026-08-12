@@ -1580,6 +1580,9 @@ doltlite_ignore.o:	$(TOP)/src/doltlite_ignore.c $(DEPS_OBJ_COMMON)
 doltlite_docs.o:	$(TOP)/src/doltlite_docs.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_docs.c
 
+doltlite_tests.o:	$(TOP)/src/doltlite_tests.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_tests.c
+
 doltlite_hashof.o:	$(TOP)/src/doltlite_hashof.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_hashof.c
 
