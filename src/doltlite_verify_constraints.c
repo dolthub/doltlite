@@ -163,6 +163,7 @@ static void doltVerifyConstraintsFunc(
   memset(&headCommit, 0, sizeof(headCommit));
   memset(&headHash, 0, sizeof(headHash));
 
+  if( doltliteCmdRejectDetached(context) ) return;
   for(i=0; i<argc; i++){
     const char *zArg = (const char*)sqlite3_value_text(argv[i]);
     int exists;

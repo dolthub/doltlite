@@ -356,6 +356,7 @@ int doltliteMutateRefsExpected(
   if( !cs || !xMutate || nExpected<0 || (nExpected>0 && !aExpected) ){
     return SQLITE_MISUSE;
   }
+  if( doltliteIsDetached(db) ) return SQLITE_READONLY;
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;

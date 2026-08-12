@@ -65,6 +65,25 @@ def query_rows(doltlite, db_path, branch):
     return rows
 
 
+def query_revision_rows(doltlite, db_path, revision):
+    sql = (
+        ".mode list\n"
+        ".separator |\n"
+        "SELECT id, v, n FROM dolt_at_kv(%s) ORDER BY id;\n"
+        % sql_quote(revision)
+    )
+    out = run_sql(doltlite, db_path, sql, "query_revision_rows")
+    rows = {}
+    if not out:
+        return rows
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) != 3:
+            raise RuntimeError("unexpected revision row output: %r" % line)
+        rows[int(parts[0])] = (parts[1], int(parts[2]))
+    return rows
+
+
 def query_committed_rows(doltlite, db_path, branch):
     sql = (
         ".mode list\n"
@@ -551,6 +570,84 @@ def delete_tag(doltlite, db_path, tags, rng):
     tags.remove(name)
 
 
+def detached_revision(doltlite, db_path, branches, tags, model, rng, step):
+    branch = rng.choice(branches)
+    commit_branch(doltlite, db_path, branch, model, step)
+    head = query_scalar(
+        doltlite,
+        db_path,
+        "main",
+        "SELECT dolt_hashof(%s);" % sql_quote(branch),
+        "detached_head_hash",
+    )
+    revisions = [head, branch + "~0"]
+    if tags:
+        revisions.append(rng.choice(tags))
+    revision = rng.choice(revisions)
+    expected_hash = query_scalar(
+        doltlite,
+        db_path,
+        "main",
+        "SELECT dolt_hashof(%s);" % sql_quote(revision),
+        "detached_revision_hash",
+    )
+    expected_rows = query_revision_rows(doltlite, db_path, revision)
+    separator = rng.choice(("/", "@"))
+    detached_path = db_path + separator + revision
+    out = run_sql(
+        doltlite,
+        detached_path,
+        (
+            ".mode list\n"
+            ".separator |\n"
+            "SELECT 'STATE', IFNULL(active_branch(),'NULL'), dolt_hashof('HEAD');\n"
+            "SELECT 'ROW', id, v, n FROM kv ORDER BY id;\n"
+        ),
+        "detached_read_%s" % revision,
+    )
+    lines = out.splitlines()
+    if not lines or lines[0] != "STATE|NULL|" + expected_hash:
+        raise AssertionError("bad detached state for %s: %r" % (revision, out))
+    actual_rows = {}
+    for line in lines[1:]:
+        parts = line.split("|")
+        if len(parts) != 4 or parts[0] != "ROW":
+            raise AssertionError("bad detached row for %s: %r" % (revision, line))
+        actual_rows[int(parts[1])] = (parts[2], int(parts[3]))
+    if actual_rows != expected_rows:
+        raise AssertionError(
+            "detached row mismatch for %s\nexpected=%r\nactual=%r"
+            % (revision, expected_rows, actual_rows)
+        )
+
+    write = run_sql(
+        doltlite,
+        detached_path,
+        "UPDATE kv SET n=n WHERE 0;",
+        "detached_write_%s" % revision,
+        allowed_errors=("read-only", "readonly"),
+    )
+    if write is not None:
+        raise AssertionError("detached write unexpectedly succeeded for %s" % revision)
+
+    target = rng.choice(branches)
+    out = run_sql(
+        doltlite,
+        detached_path,
+        (
+            "SELECT 'BEFORE|' || IFNULL(active_branch(),'NULL');\n"
+            "SELECT dolt_checkout(%s);\n"
+            "SELECT 'AFTER|' || active_branch();\n"
+            "UPDATE kv SET n=n WHERE 0;\n"
+        )
+        % sql_quote(target),
+        "detached_reattach_%s_to_%s" % (revision, target),
+    )
+    if "BEFORE|NULL" not in out.splitlines() or "AFTER|" + target not in out.splitlines():
+        raise AssertionError("detached reattach failed for %s: %r" % (revision, out))
+    assert_rows(doltlite, db_path, target, model)
+
+
 def remote_operation(doltlite, db_path, branches, model, pushed, rng, step, op):
     if op == "pull":
         candidates = [branch for branch in branches if branch in pushed]
@@ -639,6 +736,7 @@ OPERATIONS = (
         "connect_branch",
         "tag_create",
         "tag_delete",
+        "detached_revision",
         "merge",
         "cherry_pick",
         "revert",
@@ -730,6 +828,8 @@ def main():
                 next_tag += 1
             elif op == "tag_delete":
                 delete_tag(doltlite, db_path, tags, rng)
+            elif op == "detached_revision":
+                detached_revision(doltlite, db_path, branches, tags, model, rng, step)
             elif op == "merge":
                 merge_branch(doltlite, db_path, branches, model, rng)
             elif op == "cherry_pick":

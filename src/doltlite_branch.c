@@ -16,7 +16,11 @@
 static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   (void)argc; (void)argv;
-  sqlite3_result_text(ctx, doltliteGetSessionBranch(db), -1, SQLITE_TRANSIENT);
+  if( doltliteIsDetached(db) ){
+    sqlite3_result_null(ctx);
+  }else{
+    sqlite3_result_text(ctx, doltliteGetSessionBranch(db), -1, SQLITE_TRANSIENT);
+  }
 }
 
 int branchNameEmpty(const char *zName){
@@ -158,6 +162,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   int hadSavepoint = db->pSavepoint!=0;
   int i, rc;
 
+  if( doltliteCmdRejectDetached(ctx) ) return;
   if( !cs ){ branchError(ctx, hadSavepoint, doltliteVcUnavailableMessage(db)); return; }
   if( argc<1 ){ branchError(ctx, hadSavepoint, "dolt_branch requires arguments"); return; }
 

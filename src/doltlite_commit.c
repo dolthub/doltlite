@@ -180,6 +180,7 @@ int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
     return doltliteGetHeadCatalogHash(db, pCatHash);
   }
   if( doltliteRefIsWorking(zRef) ){
+    if( doltliteIsDetached(db) ) return SQLITE_NOTFOUND;
     rc = doltliteHasUncommittedChanges(db, &dirty);
     if( rc!=SQLITE_OK ) return rc;
     if( dirty ){
@@ -188,6 +189,7 @@ int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
     return doltliteGetPersistedWorkingCatalogHash(db, pCatHash);
   }
   if( doltliteRefIsStaged(zRef) ){
+    if( doltliteIsDetached(db) ) return SQLITE_NOTFOUND;
     doltliteGetSessionStaged(db, pCatHash);
     if( prollyHashIsEmpty(pCatHash) ){
       return doltliteGetHeadCatalogHash(db, pCatHash);

@@ -980,6 +980,7 @@ static void doltliteAddFunc(
   int stageAll = 0;
   int opRc = SQLITE_OK;
 
+  if( doltliteCmdRejectDetached(context) ) return;
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto add_cleanup;

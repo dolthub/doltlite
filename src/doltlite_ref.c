@@ -12,6 +12,136 @@ static int doltliteRefComponentEndsLock(const char *zStart, const char *zEnd){
   return zEnd-zStart>=5 && memcmp(zEnd-5, ".lock", 5)==0;
 }
 
+static int doltliteLoadCommitFromStore(
+  ChunkStore *cs,
+  const ProllyHash *pHash,
+  DoltliteCommit *pCommit
+){
+  u8 *data = 0;
+  int nData = 0;
+  int rc = chunkStoreGet(cs, pHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteCommitDeserialize(data, nData, pCommit);
+  sqlite3_free(data);
+  return rc;
+}
+
+static int doltliteOpenRevisionBase(
+  ChunkStore *cs,
+  const char *zRef,
+  ProllyHash *pCommit,
+  u8 *pIsBranch
+){
+  DoltliteCommit commit;
+  int rc;
+
+  *pIsBranch = 0;
+  rc = chunkStoreFindBranch(cs, zRef, pCommit);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
+    *pIsBranch = 1;
+  }else{
+    rc = chunkStoreFindTag(cs, zRef, pCommit);
+    if( rc!=SQLITE_OK && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
+      rc = doltliteHexToHash(zRef, pCommit);
+    }
+  }
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit);
+  if( rc==SQLITE_OK ) doltliteCommitClear(&commit);
+  return rc;
+}
+
+static int doltliteOpenRevisionParent(
+  ChunkStore *cs,
+  ProllyHash *pCommit,
+  int iParent
+){
+  DoltliteCommit commit;
+  const ProllyHash *pParent;
+  int rc;
+
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  pParent = doltliteCommitParentHash(&commit, iParent);
+  if( !pParent ){
+    doltliteCommitClear(&commit);
+    return SQLITE_NOTFOUND;
+  }
+  memcpy(pCommit, pParent, sizeof(*pCommit));
+  doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+int doltliteResolveOpenRevision(
+  ChunkStore *cs,
+  const char *zRef,
+  ProllyHash *pCommit,
+  ProllyHash *pCatalog,
+  u8 *pIsBranch
+){
+  DoltliteCommit commit;
+  char *zBase = 0;
+  int nRef, nBase, i, rc;
+
+  if( !cs || !zRef || !pCommit || !pCatalog || !pIsBranch ){
+    return SQLITE_MISUSE;
+  }
+  nRef = (int)strlen(zRef);
+  nBase = nRef;
+  for(;;){
+    int q = nBase;
+    while( q>0 && zRef[q-1]>='0' && zRef[q-1]<='9' ) q--;
+    if( q>0 && (zRef[q-1]=='~' || zRef[q-1]=='^') ){
+      nBase = q - 1;
+    }else{
+      break;
+    }
+  }
+  if( nBase==0 ) return SQLITE_NOTFOUND;
+  if( nBase==nRef ){
+    rc = doltliteOpenRevisionBase(cs, zRef, pCommit, pIsBranch);
+  }else{
+    zBase = sqlite3_mprintf("%.*s", nBase, zRef);
+    if( !zBase ) return SQLITE_NOMEM;
+    rc = doltliteOpenRevisionBase(cs, zBase, pCommit, pIsBranch);
+    sqlite3_free(zBase);
+    *pIsBranch = 0;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i=nBase; i<nRef; ){
+    char op = zRef[i++];
+    int d = i;
+    int n, j;
+    while( i<nRef && zRef[i]>='0' && zRef[i]<='9' ) i++;
+    if( i==d ){
+      n = 1;
+    }else{
+      uint64_t value;
+      if( doltliteParseDecimal(zRef+d, zRef+i, 0x7fffffff, &value)
+          !=DOLTLITE_DECIMAL_OK ) return SQLITE_NOTFOUND;
+      n = (int)value;
+      if( n==0 && op=='^' ) return SQLITE_NOTFOUND;
+    }
+    if( op=='~' ){
+      for(j=0; j<n && rc==SQLITE_OK; j++){
+        rc = doltliteOpenRevisionParent(cs, pCommit, 0);
+      }
+    }else{
+      rc = doltliteOpenRevisionParent(cs, pCommit, n-1);
+    }
+    if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+  }
+
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit);
+  if( rc==SQLITE_OK ) memcpy(pCatalog, &commit.catalogHash, sizeof(*pCatalog));
+  doltliteCommitClear(&commit);
+  return rc;
+}
+
 int doltliteUserRefNameIsValid(const char *zName){
   const unsigned char *z;
   const char *zComponent;

@@ -667,6 +667,7 @@ static void doltliteCommitFunc(
 
   memset(&mutationState, 0, sizeof(mutationState));
 
+  if( doltliteCmdRejectDetached(context) ) return;
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     return;

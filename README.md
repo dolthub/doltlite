@@ -415,6 +415,25 @@ Open a branch at connect time via the database path (CLI, C API, or bindings):
 sqlite3_open("my.db@feature", &db);
 ```
 
+##### Detached revisions
+
+A tag, commit hash, or ancestor spec in the same qualified database path opens
+an immutable historical snapshot:
+
+```bash
+./doltlite my.db/v1
+./doltlite my.db/0123456789abcdef0123456789abcdef01234567
+./doltlite 'my.db/main~1'
+```
+
+Detached state belongs only to that connection. `active_branch()` returns
+`NULL`, `HEAD` names the selected commit, and the database is read-only. A peer
+may advance branches or delete the selected tag without changing the open
+snapshot. `dolt_checkout()` does not enter detached state; checking out an
+existing branch from a detached connection reattaches that session and makes it
+writable again. Closing and reopening the unqualified database uses its default
+branch normally.
+
 #### Tags
 
 ```sql

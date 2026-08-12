@@ -13,6 +13,14 @@
 ** merge conflicts / constraint violations.
 */
 
+int doltliteCmdRejectDetached(sqlite3_context *ctx){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  if( !doltliteIsDetached(db) ) return 0;
+  sqlite3_result_error(ctx,
+      "this operation is not supported while in a detached head state", -1);
+  return 1;
+}
+
 void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt){
   char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
   if( zErr ){
