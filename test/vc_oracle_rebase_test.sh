@@ -572,9 +572,32 @@ SELECT dolt_rebase('-i', 'main');
 SELECT dolt_branch('-f', 'feat', 'peer');
 SELECT dolt_rebase('--continue');
 " "
+SELECT CONCAT('LOG|WB|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT dolt_checkout('dolt_rebase_feat');
+SELECT CONCAT('LOG|P|', count(*)) FROM dolt_rebase;
 SELECT dolt_checkout('feat');
 SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 4;
 SELECT CONCAT('LOG|L|', message) FROM dolt_log LIMIT 1;
+"
+
+oracle "interactive_continue_keeps_side_branch" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 'feat');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 'main');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_branch('other');
+SELECT dolt_rebase('--continue');
+" "
+SELECT CONCAT('LOG|O|', count(*)) FROM dolt_branches WHERE name='other';
+SELECT CONCAT('LOG|F|', count(*)) FROM dolt_branches WHERE name='feat';
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
 "
 
 oracle "interactive_drop_one" "

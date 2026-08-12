@@ -810,6 +810,70 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
+static int rebaseWritePlanRows(
+  sqlite3 *db,
+  const RebasePlanRow *aPlan,
+  int nPlan
+){
+  int rc;
+  int i;
+
+  rc = sqlite3_exec(db,
+    "DROP TABLE IF EXISTS main.dolt_rebase;"
+    "CREATE TABLE main.dolt_rebase("
+    "  rebase_order REAL PRIMARY KEY,"
+    "  action TEXT,"
+    "  commit_hash TEXT,"
+    "  commit_message TEXT"
+    ")", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i=0; i<nPlan; i++){
+    char zHex[PROLLY_HASH_SIZE*2+1];
+    char zOrder[64];
+    char *zSql;
+    doltliteHashToHex(&aPlan[i].commitHash, zHex);
+    sqlite3_snprintf(sizeof(zOrder), zOrder, "%!.17g", aPlan[i].order);
+    zSql = sqlite3_mprintf(
+      "INSERT INTO main.dolt_rebase VALUES (%s, %Q, %Q, %Q)",
+      zOrder,
+      aPlan[i].zAction ? aPlan[i].zAction : "pick",
+      zHex,
+      aPlan[i].zCommitMessage ? aPlan[i].zCommitMessage : "");
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
+/* A source-tip CAS reject must not delete the plan or working branch.
+** Dolt leaves both so --abort can clean up without rewriting the peer tip. */
+static int rebaseRestoreInProgress(
+  sqlite3 *db,
+  const RebasePlanRow *aPlan,
+  int nPlan,
+  const ProllyHash *pPreRebaseCat,
+  const ProllyHash *pExpectedOrigHead,
+  const char *zOrigBranch,
+  const char *zReturnBranch
+){
+  int rc;
+  rc = rebaseWritePlanRows(db, aPlan, nPlan);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionRebaseState(db, 1, pPreRebaseCat, pExpectedOrigHead,
+                                       zOrigBranch, zReturnBranch);
+  }
+  if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
+  if( rc==SQLITE_OK ) rc = doltliteVcSealBranchStyleTxn(db);
+  if( rc==SQLITE_OK ){
+    sqlite3ExpirePreparedStatements(db, 0);
+    sqlite3ResetAllSchemasOfConnection(db);
+  }
+  return rc;
+}
+
 static int rebaseCreateAndPopulatePlanTable(
   sqlite3 *db,
   const ProllyHash *aReplay,
@@ -910,30 +974,35 @@ static int rebaseApplyPlanRowCatalog(
   return SQLITE_OK;
 }
 
+static void (*rebaseBeforeAdvanceHook)(void) = 0;
+
+void doltliteTestSetRebaseBeforeAdvanceHook(void (*xHook)(void)){
+  rebaseBeforeAdvanceHook = xHook;
+}
+
+/* Refresh while the write txn holds lockDepth==1, before replay stages
+** chunks. CompareAndAdvance later reenters the lock so its ForceRefresh
+** is a no-op; refreshing after CreateAndStoreCommit would drop the
+** pending commit. */
+static int rebaseRefreshWorkingRefs(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  if( rebaseBeforeAdvanceHook ){
+    void (*xHook)(void) = rebaseBeforeAdvanceHook;
+    rebaseBeforeAdvanceHook = 0;
+    xHook();
+  }
+  if( !cs ) return SQLITE_ERROR;
+  return chunkStoreForceRefresh(cs);
+}
+
 static int rebaseAdvanceWorkingBranch(
   sqlite3 *db,
+  const ProllyHash *pExpectedHead,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *zBranch = doltliteGetSessionBranch(db);
-  int rc;
-
-  if( !cs ) return SQLITE_ERROR;
-  rc = chunkStoreUpdateBranch(cs, zBranch, pNewHead);
-  if( rc!=SQLITE_OK ) return rc;
-
-  doltliteSetSessionHead(db, pNewHead);
-  rc = doltliteSetSessionStaged(db, pCatalogHash);
-  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCatalogHash);
-  if( rc!=SQLITE_OK ) return rc;
-
-  db->busyHandler.nBusy = 0;
-  do {
-    rc = doltlitePersistWorkingSetWithHash(db, 0);
-  }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
-       && sqlite3InvokeBusyHandler(&db->busyHandler) );
-  return rc;
+  return doltliteCompareAndAdvanceBranch(
+      db, pExpectedHead, pNewHead, pCatalogHash, 0);
 }
 
 static int rebaseReplayPlanGroup(
@@ -993,7 +1062,7 @@ static int rebaseReplayPlanGroup(
       rc = doltliteSetSessionStaged(db, pCurCat);
     }
     if( rc==SQLITE_OK ){
-      rc = rebaseAdvanceWorkingBranch(db, &newCommit, pCurCat);
+      rc = rebaseAdvanceWorkingBranch(db, pCurHead, &newCommit, pCurCat);
     }
     if( rc==SQLITE_OK ) *pCurHead = newCommit;
   }
@@ -1579,14 +1648,16 @@ static void doltliteRebaseInteractiveContinue(
   ProllyHash curCat;
   ProllyHash curHead;
   ProllyHash expectedOrigHead;
+  ProllyHash preRebaseCat;
   RebaseFinalizeRefsCtx refsCtx;
   char *zPlanErr = 0;
 
   memset(&curCat, 0, sizeof(curCat));
   memset(&curHead, 0, sizeof(curHead));
   memset(&expectedOrigHead, 0, sizeof(expectedOrigHead));
+  memset(&preRebaseCat, 0, sizeof(preRebaseCat));
 
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, &expectedOrigHead,
+  doltliteGetSessionRebaseState(db, &isRebasing, &preRebaseCat, &expectedOrigHead,
                                 &zOrigBranchConst, &zReturnBranchConst);
   if( !isRebasing || !zOrigBranchConst || !zReturnBranchConst ){
     sqlite3_result_error(context, "no rebase in progress", -1);
@@ -1667,6 +1738,9 @@ static void doltliteRebaseInteractiveContinue(
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
+  rc = rebaseRefreshWorkingRefs(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
+
   rc = doltliteFlushCatalogToHash(db, &curCat);
   if( rc!=SQLITE_OK ) goto abort_err;
   doltliteGetSessionHead(db, &curHead);
@@ -1680,6 +1754,7 @@ static void doltliteRebaseInteractiveContinue(
 
     rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j);
     if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
+    if( rc==SQLITE_BUSY ) goto abort_err_cas;
     if( rc!=SQLITE_OK ) goto abort_err;
     i = j;
   }
@@ -1704,6 +1779,7 @@ static void doltliteRebaseInteractiveContinue(
     }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
          && sqlite3InvokeBusyHandler(&db->busyHandler) );
   }
+  if( rc==SQLITE_BUSY ) goto abort_err_cas;
   if( rc!=SQLITE_OK ) goto abort_err;
 
   /* Claim already cleared durable isRebasing; keep session clear and finish
@@ -1764,6 +1840,35 @@ abort_err_conflict:
   }else{
     sqlite3_result_error(context,
       "data conflicts from rebase — rebase has been aborted", -1);
+  }
+  return;
+
+abort_err_cas:
+  recoveryRc = rebaseRestoreInProgress(
+      db, aPlan, nPlan, &preRebaseCat, &expectedOrigHead,
+      zOrigBranch, zReturnBranch);
+  rebaseFreePlan(aPlan, nPlan);
+  if( recoveryRc!=SQLITE_OK ){
+    sqlite3_free(zOrigBranch);
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    rebaseResultRecoveryFailure(context, recoveryRc);
+    return;
+  }
+  {
+    char *zMsg = sqlite3_mprintf(
+        "rebase aborted due to changes in branch %s",
+        zOrigBranch ? zOrigBranch : "main");
+    sqlite3_free(zOrigBranch);
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    if( zMsg ){
+      sqlite3_result_error(context, zMsg, -1);
+      sqlite3_free(zMsg);
+    }else{
+      sqlite3_result_error(context,
+        "rebase aborted due to changes in the source branch", -1);
+    }
   }
   return;
 
