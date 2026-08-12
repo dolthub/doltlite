@@ -422,12 +422,6 @@ static int ensureOrder(ProllyMutMap *mm){
   mm->preferSorted = 1;
   if( mm->keepSorted ) return SQLITE_OK;
   if( !mm->orderDirty ){
-    if( mm->posDirty ){
-      for(i=0; i<mm->nEntries; i++){
-        mm->aPos[mm->aOrder[i]] = i;
-      }
-      mm->posDirty = 0;
-    }
     return SQLITE_OK;
   }
   if( mm->appendSorted ){
@@ -514,7 +508,7 @@ static void insertOrderEntry(ProllyMutMap *mm, int idx, int phys){
             (mm->nEntries - idx) * sizeof(int));
   }
   mm->aOrder[idx] = phys;
-  if( !mm->isIntKey || shifted <= MUTMAP_POS_UPDATE_LIMIT ){
+  if( shifted <= MUTMAP_POS_UPDATE_LIMIT ){
     int i;
     for(i=idx; i<=mm->nEntries; i++){
       mm->aPos[mm->aOrder[i]] = i;
@@ -1010,7 +1004,7 @@ int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry)
   assert( mm->aEntries!=0 );
   phys = (int)(pEntry - mm->aEntries);
   assert( phys>=0 && phys<mm->nEntries );
-  if( mm->keepSorted ){
+  if( mm->keepSorted || (!mm->orderDirty && mm->posDirty) ){
     int found = 0;
     int idx = bsearch_key(mm, pEntry->pKey, pEntry->nKey, &found);
     return found ? idx : mm->nEntries;
@@ -1018,8 +1012,6 @@ int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry)
   if( !mm->keepSorted && mm->orderDirty ){
     return rankEntryWithoutOrder(mm, phys);
   }
-  /* Both branches that can fail returned above, so this only refreshes aPos. */
-  ensureOrder(mm);
   return mm->aPos[phys];
 }
 
