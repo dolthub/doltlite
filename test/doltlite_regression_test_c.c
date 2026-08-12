@@ -9704,7 +9704,7 @@ static void run_prolly_diff_iter_copies_blob_keys(void){
   prollyNodeBuilderFree(&b);
 
   rc = prollyDiffIterOpen(&iter, &cs, &cache, &oldRootHash, &newRootHash,
-                          PROLLY_NODE_BLOBKEY);
+                          PROLLY_NODE_BLOBKEY, PROLLY_NODE_BLOBKEY);
   check("open_diff_iter_key_copy", rc==SQLITE_OK);
   if( rc==SQLITE_OK ){
     rc = prollyDiffIterStep(&iter, &pCh);
