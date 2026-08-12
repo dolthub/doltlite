@@ -91,9 +91,11 @@ close $in
 #
 set fname sqlite3.c
 if {$enable_recover} { set fname sqlite3r.c }
-set out [open $fname wb]
+set tmpfname "$fname.tmp-[pid]-[clock clicks]"
+set out [open $tmpfname {WRONLY CREAT EXCL}]
 # Force the output to use unix line endings, even on Windows.
 fconfigure $out -translation binary
+try {
 set today [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S UTC" -gmt 1]
 puts $out [subst \
 {/******************************************************************************
@@ -164,16 +166,6 @@ if {$doltlite} {
 #endif
 #ifndef DOLTLITE_VERSION
 # define DOLTLITE_VERSION "doltlite-amalgamation"
-#endif
-
-/* DOLTLITE_AMALGAMATION_WINSOCK2_EARLY
-** windows.h includes the obsolete winsock.h unless Winsock 2 has already
-** been selected.  The doltlite networking sources are emitted late in the
-** amalgamation, after SQLite's Windows VFS has included windows.h, so select
-** Winsock 2 before any amalgamated source headers are processed. */
-#ifdef _WIN32
-# include <winsock2.h>
-# include <ws2tcpip.h>
 #endif}
 }
 
@@ -250,8 +242,7 @@ if {$doltlite} {
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
     doltlite_branch_int.h doltlite_merge_int.h doltlite_merge_constraints_int.h
     doltlite_name_index.h doltlite_parse.h
-    doltlite_record.h doltlite_remote.h doltlite_remotesrv.h doltlite_vtab_util.h
-    doltlite_creds.h doltlite_net.h doltlite_tls.h
+    doltlite_record.h doltlite_vtab_util.h
   } {
     set available_hdr($hdr) 1
   }
@@ -638,8 +629,7 @@ proc emit_doltlite_engine_block {} {
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c doltlite_patch.c
     doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c
     doltlite_hashof.c doltlite_constraint_violations.c doltlite_verify_constraints.c doltlite_merge_constraints.c doltlite_merge_constraints_unique.c doltlite_merge_constraints_check.c doltlite_merge_constraints_fk.c doltlite_merge_constraints_notnull.c doltlite_merge_constraints_strict.c
-    doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c
-    doltlite_remotesrv.c
+    doltlite_dbpage.c
   }
   foreach f $doltlite_emitted {
     copy_file $srcdir/$f
@@ -655,12 +645,10 @@ proc emit_doltlite_engine_block {} {
     }
   }
   if {[llength $doltlite_unemitted]>0} {
-    puts stderr "mksqlite3c: doltlite sources copied into tsrc but never\
-emitted into the amalgamation: $doltlite_unemitted"
-    puts stderr "Add them to the emission list in tool/mksqlite3c.tcl (in\
-dependency order), or exclude them from DOLTLITE_EXTRA_TSRC in doltlite.mk\
-if they are compiled separately."
-    exit 1
+    error "mksqlite3c: doltlite sources copied into tsrc but never\
+emitted into the amalgamation: $doltlite_unemitted. Add them to the emission\
+list in tool/mksqlite3c.tcl (in dependency order), or exclude them from\
+DOLTLITE_EXTRA_TSRC in doltlite.mk if they are compiled separately."
   }
   section_comment "doltlite: END prolly engine + version-control layer"
 }
@@ -836,3 +824,10 @@ puts $out \
 /************************** End of sqlite3.c ******************************/"
 
 close $out
+set out {}
+file rename -force $tmpfname $fname
+} on error {msg opts} {
+  if {$out ne ""} { catch {close $out} }
+  catch {file delete -force $tmpfname}
+  return -options $opts $msg
+}

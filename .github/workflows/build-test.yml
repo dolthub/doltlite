@@ -369,7 +369,8 @@ jobs:
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/amalgamation_windows_source_test.sh ./sqlite3.c
-        REMOTESRV=./doltlite-remotesrv.exe bash ../test/amalgamation_http_remote_test.sh .
+        bash ../test/amalgamation_http_remote_test.sh .
+        bash ../test/amalgamation_generation_atomic_test.sh .
       timeout-minutes: 20
 
     - name: Remote integration tests
@@ -425,11 +426,12 @@ jobs:
       run: cd build && bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
-    - name: Amalgamation plaintext HTTP remote test
+    - name: Amalgamation excludes remote implementation
       if: matrix.platform != 'windows'
       run: |
         cd build
         bash ../test/amalgamation_http_remote_test.sh .
+        bash ../test/amalgamation_generation_atomic_test.sh .
       timeout-minutes: 5
 
     # -- C/Python/Go integration tests -----------------------

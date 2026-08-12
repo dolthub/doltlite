@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+amalgamation="${1:-sqlite3.c}"
+emcc_bin="${EMCC:-emcc}"
+
+if ! command -v "$emcc_bin" >/dev/null 2>&1; then
+  echo "SKIP: emcc not found"
+  exit 0
+fi
+if [ ! -f "$amalgamation" ]; then
+  echo "FAIL: amalgamation not found at $amalgamation"
+  exit 1
+fi
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-amalg-wasm.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+
+"$emcc_bin" -Werror -Wno-comment -c "$amalgamation" \
+  -DSQLITE_WASM \
+  -DSQLITE_ENABLE_BYTECODE_VTAB \
+  -DSQLITE_ENABLE_COLUMN_METADATA \
+  -DSQLITE_ENABLE_DBPAGE_VTAB \
+  -DSQLITE_ENABLE_DBSTAT_VTAB \
+  -DSQLITE_ENABLE_FTS4 \
+  -DSQLITE_ENABLE_FTS5 \
+  -DSQLITE_ENABLE_PREUPDATE_HOOK \
+  -DSQLITE_ENABLE_RTREE \
+  -DSQLITE_ENABLE_SESSION \
+  -DSQLITE_ENABLE_STMTVTAB \
+  -DSQLITE_THREADSAFE=0 \
+  -DSQLITE_TEMP_STORE=2 \
+  -DSQLITE_ENABLE_MATH_FUNCTIONS \
+  -DSQLITE_OS_OTHER=1 \
+  -DVEC1_THREADS=0 \
+  -DSQLITE_C=sqlite3.c \
+  -DSQLITE_OMIT_DEPRECATED \
+  -DSQLITE_OMIT_UTF16 \
+  -DSQLITE_OMIT_LOAD_EXTENSION \
+  -DSQLITE_OMIT_SHARED_CACHE \
+  -DDOLTLITE_PROLLY=1 \
+  -DDOLTLITE_VERSION=\"wasm-compile-test\" \
+  -DSQLITE_WASM_SPLIT_BUILD \
+  -D_HAVE_SQLITE_CONFIG_H \
+  -DBUILD_sqlite \
+  -o "$tmp/sqlite3.o"
+
+test -s "$tmp/sqlite3.o"
+echo "amalgamation wa-sqlite compile: PASS"
