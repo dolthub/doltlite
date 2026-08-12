@@ -1620,6 +1620,139 @@ static void run_status_many_table_renames(void){
   removeDbFiles(dbpath);
 }
 
+
+static void run_refs_commit_merges_concurrent_peer_refs(void){
+  ChunkStore csA, csB, csC;
+  ProllyHash h1, h2, h3, hB, chunkHash;
+  ProllyHash found;
+  static const u8 payload[] = "refs-merge-pending-chunk";
+  char dbpath[256];
+
+  printf("=== Refs Commit Merges Concurrent Peer Refs Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_commit_merges_peer");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csC, 0, sizeof(csC));
+
+  prollyHashCompute("one", 3, &h1);
+  prollyHashCompute("two", 3, &h2);
+  prollyHashCompute("three", 5, &h3);
+  prollyHashCompute("peer", 4, &hB);
+
+  /* Seed the store with a branch. */
+  check("rm_open_A",
+        chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rm_seed_branch",
+        chunkStoreAddBranch(&csA, "seed", &h1)==SQLITE_OK);
+  check("rm_seed_default",
+        chunkStoreSetDefaultBranch(&csA, "seed")==SQLITE_OK);
+  check("rm_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rm_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  /* A peer advances the refs on disk; A's view stays at the old base. */
+  check("rm_open_B",
+        chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rm_peer_branch",
+        chunkStoreAddBranch(&csB, "peer_keep", &hB)==SQLITE_OK);
+  check("rm_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
+  check("rm_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
+
+  /* A stages a chunk and its own ref change over the stale view, then
+  ** commits: the resolve path adopts the peer's newer refs, and the
+  ** local delta must merge onto them instead of replacing them. */
+  check("rm_local_branch",
+        chunkStoreAddBranch(&csA, "local_new", &h3)==SQLITE_OK);
+  check("rm_local_chunk",
+        chunkStorePut(&csA, payload, (int)sizeof(payload),
+                      &chunkHash)==SQLITE_OK);
+  check("rm_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rm_local_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  /* A fresh reader sees the union: the peer's branch, the local branch,
+  ** and the seed. */
+  check("rm_open_C",
+        chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rm_peer_survives",
+        chunkStoreFindBranch(&csC, "peer_keep", &found)==SQLITE_OK
+        && prollyHashCompare(&found, &hB)==0);
+  check("rm_local_survives",
+        chunkStoreFindBranch(&csC, "local_new", &found)==SQLITE_OK
+        && prollyHashCompare(&found, &h3)==0);
+  check("rm_seed_survives",
+        chunkStoreFindBranch(&csC, "seed", &found)==SQLITE_OK
+        && prollyHashCompare(&found, &h1)==0);
+
+  chunkStoreClose(&csA);
+  chunkStoreClose(&csB);
+  chunkStoreClose(&csC);
+  removeDbFiles(dbpath);
+}
+
+static void run_refs_commit_conflicting_peer_ref_fails(void){
+  ChunkStore csA, csB, csC;
+  ProllyHash h1, hA, hB, chunkHash;
+  ProllyHash found;
+  static const u8 payload[] = "refs-conflict-pending-chunk";
+  char dbpath[256];
+
+  printf("=== Refs Commit Conflicting Peer Ref Fails Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_commit_conflict_peer");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csC, 0, sizeof(csC));
+
+  prollyHashCompute("base", 4, &h1);
+  prollyHashCompute("ours", 4, &hA);
+  prollyHashCompute("theirs", 6, &hB);
+
+  check("rc_open_A",
+        chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rc_seed_branch",
+        chunkStoreAddBranch(&csA, "shared", &h1)==SQLITE_OK);
+  check("rc_seed_default",
+        chunkStoreSetDefaultBranch(&csA, "shared")==SQLITE_OK);
+  check("rc_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rc_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  /* Both sides move the SAME branch to different tips. */
+  check("rc_open_B",
+        chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rc_peer_move",
+        chunkStoreUpdateBranch(&csB, "shared", &hB)==SQLITE_OK);
+  check("rc_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
+  check("rc_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
+
+  check("rc_local_move",
+        chunkStoreUpdateBranch(&csA, "shared", &hA)==SQLITE_OK);
+  check("rc_local_chunk",
+        chunkStorePut(&csA, payload, (int)sizeof(payload),
+                      &chunkHash)==SQLITE_OK);
+  check("rc_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  /* A real race on one ref must fail the commit, not pick a winner. */
+  check("rc_commit_fails",
+        chunkStoreCommit(&csA)==SQLITE_BUSY_SNAPSHOT);
+
+  /* The peer's move is what disk keeps. */
+  check("rc_open_C",
+        chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rc_peer_tip_kept",
+        chunkStoreFindBranch(&csC, "shared", &found)==SQLITE_OK
+        && prollyHashCompare(&found, &hB)==0);
+
+  chunkStoreClose(&csA);
+  chunkStoreClose(&csB);
+  chunkStoreClose(&csC);
+  removeDbFiles(dbpath);
+}
+
 static void run_remote_refs_corruption(void){
   sqlite3 *srcDb = 0;
   sqlite3 *localDb = 0;
@@ -10457,6 +10590,8 @@ static const RegressionCase aCases[] = {
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
   { "status_many_table_renames", "Status Many Table Renames Test", run_status_many_table_renames },
+  { "refs_commit_merges_concurrent_peer_refs", "Refs Commit Merges Concurrent Peer Refs Test", run_refs_commit_merges_concurrent_peer_refs },
+  { "refs_commit_conflicting_peer_ref_fails", "Refs Commit Conflicting Peer Ref Fails Test", run_refs_commit_conflicting_peer_ref_fails },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
