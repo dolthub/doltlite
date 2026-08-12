@@ -264,15 +264,18 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   }
 
   rc = doltliteSideColsLoad(db, &headCat, &headSchema, pVtab->zTableName,
-                            &pVtab->cols, &c->headSide);
+                            &pVtab->cols,
+                            !prollyHashIsEmpty(&c->headRoot), &c->headSide);
   if( rc==SQLITE_OK ){
     rc = doltliteSideColsLoad(db, &stagedCat, &stagedSchema,
                               pVtab->zTableName, &pVtab->cols,
+                              !prollyHashIsEmpty(&c->stagedRoot),
                               &c->stagedSide);
   }
   if( rc==SQLITE_OK && c->stagedOnly!=1 ){
     rc = doltliteSideColsLoad(db, &workingCat, &workingSchema,
                               pVtab->zTableName, &pVtab->cols,
+                              !prollyHashIsEmpty(&c->workingRoot),
                               &c->workingSide);
   }
   if( rc!=SQLITE_OK ) return rc;

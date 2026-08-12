@@ -121,16 +121,60 @@ static int atEnqueueReachableRoots(
   return rc;
 }
 
+/* Whether the LIVE table's canonicalized schema hashes to pSchemaHash — when
+** it does, the declared layout is provably the visited schema's layout and
+** rendering with it cannot mislabel a value. */
+static int sideColsDeclaredSchemaMatches(
+  sqlite3 *db,
+  const char *zTable,
+  const ProllyHash *pSchemaHash,
+  int *pbMatch
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zQ;
+  int rc;
+
+  *pbMatch = 0;
+  zQ = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master WHERE type='table' AND name=%Q",
+      zTable);
+  if( !zQ ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zQ, -1, &pStmt, 0);
+  sqlite3_free(zQ);
+  if( rc!=SQLITE_OK ) return rc;
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
+    if( zSql && zSql[0] ){
+      char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zTable);
+      if( zCanon ){
+        ProllyHash h;
+        prollyHashCompute((const u8*)zCanon, (int)strlen(zCanon), &h);
+        *pbMatch = prollyHashCompare(&h, pSchemaHash)==0;
+        sqlite3_free(zCanon);
+      }
+    }
+  }
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
+}
+
 /* Load zTable's columns as the schema at pCatHash declares them and map the
-** declared (vtab-visible) columns onto them by name. Cached by schema hash;
-** any failure leaves the side invalid, which renders with the declared
-** layout — the pre-existing behavior. */
+** declared (vtab-visible) columns onto them by name. Cached by schema hash.
+**
+** A side left invalid renders with the declared layout, so that fallback is
+** allowed only when it cannot mislabel a value: the table is absent at that
+** commit (nothing to render), or the live declared schema is byte-identical
+** to the visited one. Everything else — store errors, a schema row missing
+** for a side that holds rows, a schema the scratch db cannot parse (e.g. a
+** CHECK naming an application-registered function) that drifted — fails the
+** read instead of silently decoding records with the wrong layout. */
 int doltliteSideColsLoad(
   sqlite3 *db,
   const ProllyHash *pCatHash,
   const ProllyHash *pSchemaHash,
   const char *zTable,
   const DoltliteColInfo *pDeclared,
+  int bSideHasData,
   DoltliteSideCols *pSide
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -150,10 +194,10 @@ int doltliteSideColsLoad(
 
   rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTable,
                                   &entry, &found);
-  if( rc!=SQLITE_OK ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
   if( !found || !entry.zSql ){
     clearSchemaEntry(&entry);
-    return SQLITE_OK;
+    return bSideHasData ? SQLITE_CORRUPT : SQLITE_OK;
   }
 
   rc = sqlite3_open(":memory:", &tmp);
@@ -162,8 +206,13 @@ int doltliteSideColsLoad(
   if( tmp ) sqlite3_close(tmp);
   clearSchemaEntry(&entry);
   if( rc!=SQLITE_OK || pSide->ci.nCol<=0 ){
+    int match = 0;
+    int rc2;
     doltliteSideColsClear(pSide);
-    return SQLITE_OK;
+    rc2 = sideColsDeclaredSchemaMatches(db, zTable, pSchemaHash, &match);
+    if( rc2==SQLITE_OK && match ) return SQLITE_OK;
+    if( rc2!=SQLITE_OK ) return rc2;
+    return rc==SQLITE_OK ? SQLITE_ERROR : rc;
   }
 
   if( pDeclared->nCol>0 ){
@@ -456,7 +505,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
                                    &flags,&schemaHash);
     if( rc==SQLITE_OK ){
       rc = doltliteSideColsLoad(db, &effCatHash, &schemaHash,
-                                v->zTableName, &v->cols, &c->side);
+                                v->zTableName, &v->cols,
+                                !prollyHashIsEmpty(&tableRoot), &c->side);
     }
   }
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
