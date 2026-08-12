@@ -15,23 +15,18 @@
 #include <stddef.h>
 #include <string.h>
 
-static int dsLoadColNames(sqlite3 *db,
-                          const ProllyHash *pCatHash,
-                          const char *zTableName,
-                          char ***pazOut, int *pnOut){
+static int dsLoadColInfo(sqlite3 *db,
+                         const ProllyHash *pCatHash,
+                         const char *zTableName,
+                         DoltliteColInfo *pOut){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   SchemaEntry entry;
   int found = 0;
   sqlite3 *tmp = 0;
-  sqlite3_stmt *pStmt = 0;
-  char *zPragma = 0;
-  char **az = 0;
-  int n = 0, alloc = 0;
   int rc;
 
-  *pazOut = 0;
-  *pnOut = 0;
+  memset(pOut, 0, sizeof(*pOut));
   if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
   rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTableName,
@@ -43,43 +38,12 @@ static int dsLoadColNames(sqlite3 *db,
   }
 
   rc = sqlite3_open(":memory:", &tmp);
-  if( rc!=SQLITE_OK ) goto cleanup;
-  rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-  if( rc!=SQLITE_OK ) goto cleanup;
-
-  zPragma = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTableName);
-  if( !zPragma ){ rc = SQLITE_NOMEM; goto cleanup; }
-  rc = sqlite3_prepare_v2(tmp, zPragma, -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) goto cleanup;
-
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
-    if( n>=alloc ){
-      int newAlloc = alloc ? alloc*2 : 8;
-      char **aNew = sqlite3_realloc(az, newAlloc*(int)sizeof(char*));
-      if( !aNew ){ rc = SQLITE_NOMEM; break; }
-      az = aNew;
-      alloc = newAlloc;
-    }
-    az[n] = sqlite3_mprintf("%s", zName ? zName : "");
-    if( !az[n] ){ rc = SQLITE_NOMEM; break; }
-    n++;
-  }
-
-cleanup:
-  if( pStmt ) sqlite3_finalize(pStmt);
-  sqlite3_free(zPragma);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pOut);
   if( tmp ) sqlite3_close(tmp);
   clearSchemaEntry(&entry);
-  if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
-    int k;
-    for(k=0; k<n; k++) sqlite3_free(az[k]);
-    sqlite3_free(az);
-    return rc;
-  }
-  *pazOut = az;
-  *pnOut = n;
-  return SQLITE_OK;
+  if( rc!=SQLITE_OK ) doltliteFreeColInfo(pOut);
+  return rc;
 }
 
 static int dsLoadCreateSql(
@@ -129,44 +93,60 @@ static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
 
 typedef struct DsColMap DsColMap;
 struct DsColMap {
-  int *aToFrom;
+  /* All indices are RECORD-FIELD indices, already translated through each
+  ** side's aColToRec: WITHOUT ROWID records store PK columns first, so a
+  ** declared column index is not a field index. */
+  int *aToRecTo;    /* to column i in the to record */
+  int *aToRecFrom;  /* to column i in the from record, -1 when absent */
+  int *aFromRec;    /* from column j in the from record */
   u8 *aFromMatched;
   int nTo;
   int nFrom;
 };
 
 static void dsFreeColMap(DsColMap *pMap){
-  sqlite3_free(pMap->aToFrom);
+  sqlite3_free(pMap->aToRecTo);
+  sqlite3_free(pMap->aToRecFrom);
+  sqlite3_free(pMap->aFromRec);
   sqlite3_free(pMap->aFromMatched);
   memset(pMap, 0, sizeof(*pMap));
 }
 
 static int dsBuildColMap(
-  char **azFromCols, int nFromCols,
-  char **azToCols, int nToCols,
+  const DoltliteColInfo *pFrom,
+  const DoltliteColInfo *pTo,
   DsColMap *pMap
 ){
   int i, j;
   memset(pMap, 0, sizeof(*pMap));
-  pMap->nTo = nToCols;
-  pMap->nFrom = nFromCols;
-  if( nToCols>0 ){
-    pMap->aToFrom = sqlite3_malloc(nToCols * (int)sizeof(int));
-    if( !pMap->aToFrom ) return SQLITE_NOMEM;
-  }
-  if( nFromCols>0 ){
-    pMap->aFromMatched = sqlite3_malloc(nFromCols * (int)sizeof(u8));
-    if( !pMap->aFromMatched ){
+  pMap->nTo = pTo->nCol;
+  pMap->nFrom = pFrom->nCol;
+  if( pTo->nCol>0 ){
+    pMap->aToRecTo = sqlite3_malloc(pTo->nCol * (int)sizeof(int));
+    pMap->aToRecFrom = sqlite3_malloc(pTo->nCol * (int)sizeof(int));
+    if( !pMap->aToRecTo || !pMap->aToRecFrom ){
       dsFreeColMap(pMap);
       return SQLITE_NOMEM;
     }
-    memset(pMap->aFromMatched, 0, nFromCols * (int)sizeof(u8));
   }
-  for(i=0; i<nToCols; i++){
-    pMap->aToFrom[i] = -1;
-    for(j=0; j<nFromCols; j++){
-      if( strcmp(azFromCols[j], azToCols[i])==0 ){
-        pMap->aToFrom[i] = j;
+  if( pFrom->nCol>0 ){
+    pMap->aFromRec = sqlite3_malloc(pFrom->nCol * (int)sizeof(int));
+    pMap->aFromMatched = sqlite3_malloc(pFrom->nCol * (int)sizeof(u8));
+    if( !pMap->aFromRec || !pMap->aFromMatched ){
+      dsFreeColMap(pMap);
+      return SQLITE_NOMEM;
+    }
+    memset(pMap->aFromMatched, 0, pFrom->nCol * (int)sizeof(u8));
+    for(j=0; j<pFrom->nCol; j++){
+      pMap->aFromRec[j] = pFrom->aColToRec ? pFrom->aColToRec[j] : j;
+    }
+  }
+  for(i=0; i<pTo->nCol; i++){
+    pMap->aToRecTo[i] = pTo->aColToRec ? pTo->aColToRec[i] : i;
+    pMap->aToRecFrom[i] = -1;
+    for(j=0; j<pFrom->nCol; j++){
+      if( strcmp(pFrom->azName[j], pTo->azName[i])==0 ){
+        pMap->aToRecFrom[i] = pMap->aFromRec[j];
         pMap->aFromMatched[j] = 1;
         break;
       }
@@ -203,27 +183,30 @@ static void dsCountChangedCells(
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
 
   for(i=0; i<pColMap->nTo; i++){
-    int fromIdx = pColMap->aToFrom ? pColMap->aToFrom[i] : -1;
-    if( fromIdx<0 ){
+    int toRec = pColMap->aToRecTo ? pColMap->aToRecTo[i] : i;
+    int fromRec = pColMap->aToRecFrom ? pColMap->aToRecFrom[i] : -1;
+    if( fromRec<0 ){
       /* A trailing NULL is not stored, so the field may be absent from the
       ** record even though the column exists on the to side. */
       nModified++;
-      if( i<toRi.nField && toRi.aType[i]!=0 ) nDiffer++;
+      if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) nDiffer++;
       continue;
     }
-    if( i>=toRi.nField || fromIdx>=fromRi.nField ) continue;
+    if( toRec>=toRi.nField || fromRec>=fromRi.nField ) continue;
     if( !doltliteFieldValuesEqual(
-            fromRi.aType[fromIdx], pFromRec, nFromRec, fromRi.aOffset[fromIdx],
-            toRi.aType[i],         pToRec,   nToRec,   toRi.aOffset[i]) ){
+            fromRi.aType[fromRec], pFromRec, nFromRec, fromRi.aOffset[fromRec],
+            toRi.aType[toRec],     pToRec,   nToRec,   toRi.aOffset[toRec]) ){
       nDiffer++;
       nModified++;
     }
   }
 
   for(i=0; i<pColMap->nFrom; i++){
+    int fromRec;
     if( pColMap->aFromMatched && pColMap->aFromMatched[i] ) continue;
-    if( i>=fromRi.nField ) continue;
-    if( fromRi.aType[i]!=0 ) nDiffer++;
+    fromRec = pColMap->aFromRec ? pColMap->aFromRec[i] : i;
+    if( fromRec>=fromRi.nField ) continue;
+    if( fromRi.aType[fromRec]!=0 ) nDiffer++;
   }
 
   *pnDiffer = nDiffer;
@@ -317,7 +300,7 @@ static int dsComputeTableStats(
   ProllyHash fromRoot, toRoot;
   u8 fromFlags = 0, toFlags = 0;
   char *zFromSql = 0, *zToSql = 0;
-  char **azFromCols = 0, **azToCols = 0;
+  DoltliteColInfo fromCi, toCi;
   int nFromCols = 0, nToCols = 0;
   DsColMap colMap;
   i64 oldCount = 0, newCount = 0;
@@ -344,19 +327,24 @@ static int dsComputeTableStats(
 
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
+  memset(&fromCi, 0, sizeof(fromCi));
+  memset(&toCi, 0, sizeof(toCi));
+
   if( hasFrom ){
     rc = dsLoadCreateSql(db, pFromCatHash, zFromName, &zFromSql);
     if( rc!=SQLITE_OK ) return rc;
-    rc = dsLoadColNames(db, pFromCatHash, zFromName, &azFromCols, &nFromCols);
+    rc = dsLoadColInfo(db, pFromCatHash, zFromName, &fromCi);
     if( rc!=SQLITE_OK ) goto done;
+    nFromCols = fromCi.nCol;
   }
   if( hasTo ){
     rc = dsLoadCreateSql(db, pToCatHash, zToName, &zToSql);
     if( rc!=SQLITE_OK ) goto done;
-    rc = dsLoadColNames(db, pToCatHash, zToName, &azToCols, &nToCols);
+    rc = dsLoadColInfo(db, pToCatHash, zToName, &toCi);
     if( rc!=SQLITE_OK ){
       goto done;
     }
+    nToCols = toCi.nCol;
   }
 
   schemaChanged =
@@ -364,7 +352,7 @@ static int dsComputeTableStats(
     strcmp(zFromSql ? zFromSql : "", zToSql ? zToSql : "")!=0;
 
   if( hasFrom && hasTo ){
-    rc = dsBuildColMap(azFromCols, nFromCols, azToCols, nToCols, &colMap);
+    rc = dsBuildColMap(&fromCi, &toCi, &colMap);
     if( rc!=SQLITE_OK ) goto done;
   }
 
@@ -468,8 +456,8 @@ static int dsComputeTableStats(
 done:
   sqlite3_free(zFromSql);
   sqlite3_free(zToSql);
-  doltliteFreeStringArray(azFromCols, nFromCols);
-  doltliteFreeStringArray(azToCols, nToCols);
+  doltliteFreeColInfo(&fromCi);
+  doltliteFreeColInfo(&toCi);
   dsFreeColMap(&colMap);
   return rc;
 }
@@ -993,8 +981,7 @@ static int dssDataActuallyChanged(
   struct TableEntry *pToEntry,
   int *pChanged
 ){
-  char **azFromCols = 0, **azToCols = 0;
-  int nFromCols = 0, nToCols = 0;
+  DoltliteColInfo fromCi, toCi;
   DsColMap colMap;
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
@@ -1003,18 +990,19 @@ static int dssDataActuallyChanged(
   int changed = 0;
   int iterOpen = 0;
   int rc;
-  int i;
 
+  memset(&fromCi, 0, sizeof(fromCi));
+  memset(&toCi, 0, sizeof(toCi));
   memset(&colMap, 0, sizeof(colMap));
   /* Anything unexpected falls back to the root comparison's answer. */
   *pChanged = 1;
   if( !cs || !pCache ) return SQLITE_OK;
 
-  rc = dsLoadColNames(db, &pCtx->fromCat, zTableName, &azFromCols, &nFromCols);
+  rc = dsLoadColInfo(db, &pCtx->fromCat, zTableName, &fromCi);
   if( rc!=SQLITE_OK ) goto done;
-  rc = dsLoadColNames(db, &pCtx->toCat, zTableName, &azToCols, &nToCols);
+  rc = dsLoadColInfo(db, &pCtx->toCat, zTableName, &toCi);
   if( rc!=SQLITE_OK ) goto done;
-  rc = dsBuildColMap(azFromCols, nFromCols, azToCols, nToCols, &colMap);
+  rc = dsBuildColMap(&fromCi, &toCi, &colMap);
   if( rc!=SQLITE_OK ) goto done;
 
   rc = prollyDiffIterOpen(&iter, cs, pCache, &pFromEntry->root,
@@ -1045,10 +1033,8 @@ static int dssDataActuallyChanged(
 
 done:
   if( iterOpen ) prollyDiffIterClose(&iter);
-  for(i=0; i<nFromCols; i++) sqlite3_free(azFromCols[i]);
-  sqlite3_free(azFromCols);
-  for(i=0; i<nToCols; i++) sqlite3_free(azToCols[i]);
-  sqlite3_free(azToCols);
+  doltliteFreeColInfo(&fromCi);
+  doltliteFreeColInfo(&toCi);
   dsFreeColMap(&colMap);
   return rc;
 }

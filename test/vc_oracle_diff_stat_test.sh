@@ -730,6 +730,35 @@ SELECT dolt_add('-A');
 INSERT INTO t VALUES(3, 30);
 " "STAGED" "WORKING"
 
+
+# WITHOUT ROWID records store PK columns first, so declared column order and
+# record field order differ when the PK is not the first column. Cell
+# counting must translate through each side's layout.
+oracle_both "nonleading_pk_update" "
+CREATE TABLE t(a VARCHAR(16), pk VARCHAR(16) PRIMARY KEY, c VARCHAR(16));
+INSERT INTO t VALUES('a1','k1','c1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+UPDATE t SET c='c2';
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','change_c');
+" "HEAD~1" "HEAD"
+
+oracle_both "nonleading_pk_drop_col" "
+CREATE TABLE t(a VARCHAR(16), pk VARCHAR(16) PRIMARY KEY, c VARCHAR(16));
+INSERT INTO t VALUES('a1','k1','c1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','drop_a');
+" "HEAD~1" "HEAD"
+
+oracle_both "nonleading_pk_add_col" "
+CREATE TABLE t(a VARCHAR(16), pk VARCHAR(16) PRIMARY KEY);
+INSERT INTO t VALUES('a1','k1');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+ALTER TABLE t ADD COLUMN c VARCHAR(16);
+UPDATE t SET c='c1';
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','add_c');
+" "HEAD~1" "HEAD"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
