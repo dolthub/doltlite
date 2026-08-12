@@ -8,8 +8,20 @@ if [ ! -f "$amalgamation" ]; then
   exit 1
 fi
 
-if grep -Eq '^# *include <(winsock2|ws2tcpip)\.h>' "$amalgamation"; then
-  echo "FAIL: remote networking headers present in $amalgamation"
+if grep -Eq 'Begin file doltlite_remotesrv\.c|doltliteServe' "$amalgamation"; then
+  echo "FAIL: remote server implementation present in $amalgamation"
+  exit 1
+fi
+
+winsock_line="$(grep -n -m1 '^# *include <winsock2.h>' "$amalgamation" | cut -d: -f1 || true)"
+windows_line="$(grep -n -m1 '^# *include [<\"]windows.h[>\"]' "$amalgamation" | cut -d: -f1 || true)"
+
+if [ -z "$winsock_line" ] || [ -z "$windows_line" ]; then
+  echo "FAIL: expected winsock2.h and windows.h includes in $amalgamation"
+  exit 1
+fi
+if [ "$winsock_line" -ge "$windows_line" ]; then
+  echo "FAIL: winsock2.h must precede windows.h in $amalgamation"
   exit 1
 fi
 

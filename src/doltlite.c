@@ -19,9 +19,7 @@ extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteRegisterBlameTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 extern int doltlitePatchRegister(sqlite3 *db);
-#ifndef SQLITE_AMALGAMATION
 extern int doltliteRemoteSqlRegister(sqlite3 *db);
-#endif
 extern int doltliteHashofRegister(sqlite3 *db);
 extern int doltliteConstraintViolationsRegister(sqlite3 *db);
 extern int doltliteVerifyConstraintsRegister(sqlite3 *db);
@@ -53,9 +51,7 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltlitePatchRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteSchemasRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteDiffStatRegister(db))!=SQLITE_OK ) return rc;
-#ifndef SQLITE_AMALGAMATION
   if( (rc = doltliteRemoteSqlRegister(db))!=SQLITE_OK ) return rc;
-#endif
   if( (rc = doltliteHashofRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteConstraintViolationsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteVerifyConstraintsRegister(db))!=SQLITE_OK ) return rc;
