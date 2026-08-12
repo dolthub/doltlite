@@ -43,6 +43,7 @@ typedef struct AuditRow AuditRow;
 struct AuditRow {
   u8 diffType;
   i64 intKey;
+  u8 keyIsIntKey;
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
   u8 *pKeyRec; int nKeyRec;   /* owned record rebuilt from a clustered key */
@@ -862,15 +863,18 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
 
   {
     DiffPair *p;
-    u8 flags;
+    u8 fromFlags;
+    u8 toFlags;
     p = &pCur->aPairs[pCur->iPair++];
-    flags = p->fromFlags ? p->fromFlags : p->toFlags;
+    fromFlags = p->fromFlags ? p->fromFlags : p->toFlags;
+    toFlags = p->toFlags ? p->toFlags : p->fromFlags;
     memcpy(pCur->row.zFromCommit, p->zFromCommit, PROLLY_HASH_SIZE*2+1);
     pCur->row.fromDate = p->fromDate;
     memcpy(pCur->row.zToCommit, p->zToCommit, PROLLY_HASH_SIZE*2+1);
     pCur->row.toDate = p->toDate;
     rc = prollyDiffIterOpen(&pCur->diffIter, cs, pCache,
-                            &p->fromTblRoot, &p->toTblRoot, flags);
+                            &p->fromTblRoot, &p->toTblRoot,
+                            fromFlags, toFlags);
     if( rc!=SQLITE_OK ) return rc;
     pCur->diffIterOpen = 1;
 
@@ -918,6 +922,7 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
 
         pCur->row.diffType = pChange->type;
         pCur->row.intKey = pChange->intKey;
+        pCur->row.keyIsIntKey = pChange->keyIsIntKey;
 
         pCur->row.pOldVal = pChange->pOldVal;
         pCur->row.nOldVal = pChange->pOldVal ? pChange->nOldVal : 0;
@@ -1120,7 +1125,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
   if( nCols > 0 && col < nCols ){
     doltliteResultUserCol(ctx, &pVtab->cols, r->pNewVal, r->nNewVal,
-                          r->intKey, 1, col);
+                          r->intKey, r->keyIsIntKey, col);
   }else if( nCols > 0 && col == nCols ){
 
     sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
@@ -1129,7 +1134,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if( nCols > 0 && col < 2*nCols+2 ){
     int colIdx = col - nCols - 2;
     doltliteResultUserCol(ctx, &pVtab->cols, r->pOldVal, r->nOldVal,
-                          r->intKey, 1, colIdx);
+                          r->intKey, r->keyIsIntKey, colIdx);
   }else if( nCols > 0 && col == 2*nCols+2 ){
 
     sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);

@@ -383,12 +383,13 @@ static int dsComputeTableStats(
     ProllyCache *pCache = doltliteGetCache(db);
     ProllyDiffIter iter;
     ProllyDiffChange *pChange = 0;
-    u8 flags = fromFlags ? fromFlags : toFlags;
+    u8 ff = fromFlags ? fromFlags : toFlags;
+    u8 tf = toFlags ? toFlags : fromFlags;
     if( !cs || !pCache ){
       rc = SQLITE_ERROR;
       goto done;
     }
-    rc = prollyDiffIterOpen(&iter, cs, pCache, &fromRoot, &toRoot, flags);
+    rc = prollyDiffIterOpen(&iter, cs, pCache, &fromRoot, &toRoot, ff, tf);
     if( rc!=SQLITE_OK ) goto done;
     while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
       switch( pChange->type ){
@@ -1017,9 +1018,12 @@ static int dssDataActuallyChanged(
   rc = dsBuildColMap(azFromCols, nFromCols, azToCols, nToCols, &colMap);
   if( rc!=SQLITE_OK ) goto done;
 
-  flags = pFromEntry->flags ? pFromEntry->flags : pToEntry->flags;
   rc = prollyDiffIterOpen(&iter, cs, pCache, &pFromEntry->root,
-                          &pToEntry->root, flags);
+                          &pToEntry->root,
+                          pFromEntry->flags ? pFromEntry->flags
+                                            : pToEntry->flags,
+                          pToEntry->flags ? pToEntry->flags
+                                          : pFromEntry->flags);
   if( rc!=SQLITE_OK ) goto done;
   iterOpen = 1;
 

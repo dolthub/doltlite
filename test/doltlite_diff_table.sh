@@ -212,4 +212,29 @@ run_test_match "vals_mod_to" "SELECT typeof(to_v) FROM dolt_diff_t WHERE diff_ty
 
 rm -f "$DB"
 
+# A key-shape recreate between commits renders each side under its own key
+# shape and pairs nothing across the shapes: the from row keeps its text
+# key, the to row its integer, and a raw-key collision ('AAAAA' aliases
+# intkey -5385951930834944000) is a remove plus an add, never one
+# "modified" row.
+DBS=/tmp/test_dt_shape_$$.db; rm -f "$DBS"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID;
+INSERT INTO t VALUES('AAAAA', 1);
+SELECT dolt_commit('-Am','c1');
+DROP TABLE t;
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(-5385951930834944000, 2);
+SELECT dolt_commit('-Am','c2');" | $DOLTLITE "$DBS" > /dev/null 2>&1
+
+run_test "shape_from_pk_text" \
+  "SELECT from_pk || '=' || from_v FROM dolt_diff_t WHERE diff_type='removed' AND to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" \
+  "AAAAA=1" "$DBS"
+run_test "shape_to_pk_int" \
+  "SELECT to_pk || '=' || to_v FROM dolt_diff_t WHERE diff_type='added' AND to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" \
+  "-5385951930834944000=2" "$DBS"
+run_test "shape_no_modified_pairing" \
+  "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" \
+  "0" "$DBS"
+rm -f "$DBS"
+
 dltest_finish

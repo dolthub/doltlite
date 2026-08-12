@@ -180,13 +180,13 @@ int prollyThreeWayDiff(
   memset(&iterR, 0, sizeof(iterR));
 
   rcL = prollyDiffIterOpen(&iterL, pStore, pCache,
-                           pAncestorRoot, pOursRoot, flags);
+                           pAncestorRoot, pOursRoot, flags, flags);
   if( rcL!=SQLITE_OK ){
     rc = rcL;
     goto cleanup;
   }
   rcR = prollyDiffIterOpen(&iterR, pStore, pCache,
-                           pAncestorRoot, pTheirsRoot, flags);
+                           pAncestorRoot, pTheirsRoot, flags, flags);
   if( rcR!=SQLITE_OK ){
     rc = rcR;
     goto cleanup;
