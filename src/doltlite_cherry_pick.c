@@ -159,9 +159,8 @@ int applyMergedCatalogAndCommit(
 
     rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
     if( rc!=SQLITE_OK ){
-      doltliteTxnStateClear(&savedState);
       doltliteFreeNameList(azReindex, nReindex);
-      return rc;
+      return doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
     }
     graphLocked = 1;
 
@@ -307,12 +306,12 @@ int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteVcSealActiveSavepoints(db);
-  if( rc!=SQLITE_OK ) goto apply_rollback;
-
   if( graphLocked ){
     chunkStoreUnlock(cs);
+    graphLocked = 0;
   }
   doltliteTxnStateClear(&savedState);
+  if( rc!=SQLITE_OK ) return rc;
   doltliteHashToHex(&commitHash, hexBuf);
   return SQLITE_OK;
 

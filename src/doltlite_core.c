@@ -28,6 +28,17 @@ void doltliteTestCrashFinalize(const char *zOperation){
 #endif
 }
 
+static int failNextVcSeal = 0;
+static int failNextHeadConfirm = 0;
+
+void doltliteTestFailNextVcSeal(void){
+  failNextVcSeal = 1;
+}
+
+void doltliteTestFailNextHeadConfirm(void){
+  failNextHeadConfirm = 1;
+}
+
 void doltliteTxnStateClear(DoltliteTxnState *p){
   assert( p!=0 );
   sqlite3_free(p->zSessionBranch);
@@ -128,6 +139,11 @@ int doltliteRefreshAndConfirmHead(
   int found = 0;
   int rc;
   assert( db!=0 && cs!=0 && pExpectedHead!=0 );
+
+  if( failNextHeadConfirm ){
+    failNextHeadConfirm = 0;
+    return SQLITE_BUSY;
+  }
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
@@ -880,6 +896,10 @@ DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db){
 
 int doltliteVcSealActiveSavepoints(sqlite3 *db){
   int rc = SQLITE_OK;
+  if( failNextVcSeal ){
+    failNextVcSeal = 0;
+    return SQLITE_ERROR;
+  }
   while( rc==SQLITE_OK && db->pSavepoint ){
     char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
     if( !zSql ) return SQLITE_NOMEM;
