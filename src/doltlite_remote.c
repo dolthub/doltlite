@@ -1157,6 +1157,20 @@ static int installFetchedRefs(
     rc = chunkStoreForceRefresh(pLocal);
   }
   if( rc==SQLITE_OK ){
+    /* Nothing roots the synced chunks until this tracking ref lands, so a
+    ** gc between the chunk commit and here -- a peer's dolt_gc, or the
+    ** compaction a WAL checkpoint runs -- can collect the whole fetched
+    ** history. Installing then leaves a tracking ref pointing at absent
+    ** chunks, which breaks gc permanently and aborts the historical-table
+    ** registration every later connection performs. Re-verify the graph
+    ** under the lock gc itself must hold, and fail the fetch so a retry
+    ** re-syncs what went missing. */
+    ProllyHash aRoots[1];
+    memcpy(&aRoots[0], pRemoteCommit, sizeof(aRoots[0]));
+    rc = remoteValidateGraph(pLocal, aRoots, 1);
+    if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ) rc = SQLITE_BUSY_SNAPSHOT;
+  }
+  if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefsToBlob(
         pLocal, &currentData, &nCurrentData);
   }
@@ -1275,6 +1289,7 @@ int doltliteFetch(
   if( rc==SQLITE_OK ) rc = pLocalDst->xCommit(pLocalDst);
   pLocalDst->xClose(pLocalDst);
   if( rc==SQLITE_OK ){
+    doltliteTestRunBeforeRefInstallHook();
     rc = installFetchedRefs(
         pLocal, &remoteRefs, zRemoteName, zBranch, &remoteCommit);
   }
