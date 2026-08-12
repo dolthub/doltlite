@@ -81,6 +81,8 @@ int mergeTableRows(
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
   u8 flags,
+  u8 ancFlags,
+  u8 theirsFlags,
   ProllyHash *pMergedRoot,
   int *pnConflicts,
   DoltliteConflictRow **ppConflicts,

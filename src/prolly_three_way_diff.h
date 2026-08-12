@@ -43,7 +43,9 @@ int prollyThreeWayDiff(
   const ProllyHash *pAncestorRoot,
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
-  u8 flags,
+  u8 ancFlags,
+  u8 oursFlags,
+  u8 theirsFlags,
   ThreeWayDiffCallback xCallback,
   void *pCtx
 );
