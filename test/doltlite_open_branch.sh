@@ -1,6 +1,8 @@
 #!/bin/bash
 
 DOLTLITE="${1:-./doltlite}"
+DOLTLITE_SYSTEM="${DOLTLITE_SYSTEM:-$DOLTLITE}"
+DOLTLITE_SYSTEM_NULL="${DOLTLITE_SYSTEM_NULL:-/dev/null}"
 PASS=0; FAIL=0; ERRORS=""
 
 normalize_output() {
@@ -169,7 +171,7 @@ check_eq "branch_wins_over_tag" $'same\n2' "$res"
 res=$("$DOLTLITE" "$DB/0000000000000000000000000000000000000000" "SELECT 1;" 2>&1 | normalize_output || true)
 check_match "missing_hash_errors" "unable to open database|unable to select branch|not found|SQLITE_NOTFOUND" "$res"
 
-res=$(printf ".headers off\nSELECT count(*) FROM t;\n.system %s %s \"INSERT INTO t VALUES(4,'peer'); SELECT dolt_commit('-A','-m','peer'); SELECT dolt_tag('-d','v1');\" >/dev/null\nSELECT IFNULL(active_branch(),'NULL');\nSELECT count(*) FROM t;\n" "$DOLTLITE" "$DB" \
+res=$(printf ".headers off\nSELECT count(*) FROM t;\n.system %s %s \"INSERT INTO t VALUES(4,'peer'); SELECT dolt_commit('-A','-m','peer'); SELECT dolt_tag('-d','v1');\" >%s\nSELECT IFNULL(active_branch(),'NULL');\nSELECT count(*) FROM t;\n" "$DOLTLITE_SYSTEM" "$DB" "$DOLTLITE_SYSTEM_NULL" \
   | "$DOLTLITE" "$DB/v1" | normalize_output)
 check_eq "detached_reader_stays_on_pinned_commit" $'1\nNULL\n1' "$res"
 

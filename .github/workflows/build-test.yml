@@ -312,6 +312,8 @@ jobs:
         SH
         chmod +x ./doltlite-no-msys-conv
         export DOLTLITE=./doltlite-no-msys-conv
+        export DOLTLITE_SYSTEM=./doltlite.exe
+        export DOLTLITE_SYSTEM_NULL=NUL
         source ../test/lib/doltlite_suite_manifest.sh
         while IFS= read -r test; do
           test="../test/$test"
