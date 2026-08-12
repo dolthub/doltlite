@@ -257,6 +257,9 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
   int rc = 1;
   size_t hn, cn, need;
 
+  if( !c || !audience || !audience[0] || !jwtOut ) return 1;
+  *jwtOut = 0;
+
   kid = doltliteCredsKid(c);
   if (!kid) goto done;
 
@@ -267,11 +270,11 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *c, const char *audience,
            "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"%s\"}",
            kid, JWT_TOKEN_VERSION);
 
-  cn = strlen(kid) + strlen(audience) + 160;
+  cn = strlen(kid) + strlen(audience) + 164;
   claims = (char *)sqlite3_malloc(cn);
   if (!claims) goto done;
   snprintf(claims, cn,
-           "{\"iss\":\"%s\",\"sub\":\"%s%s\",\"aud\":\"%s\",\"iat\":%ld,\"exp\":%ld}",
+           "{\"iss\":\"%s\",\"sub\":\"%s%s\",\"aud\":[\"%s\"],\"iat\":%ld,\"exp\":%ld}",
            JWT_ISSUER, JWT_SUBJECT_PREFIX, kid, audience, iat,
            iat + JWT_TTL_SECONDS);
 
@@ -332,58 +335,150 @@ char *doltliteCredsToJwk(const DoltliteCreds *c) {
   return json;
 }
 
-static char *jsonFindString(const char *json, const char *key) {
-  size_t keylen = strlen(key);
-  const char *p = json;
-  while ((p = strchr(p, '"')) != NULL) {
-    const char *kstart = p + 1;
-    if (strncmp(kstart, key, keylen) == 0 && kstart[keylen] == '"') {
-      const char *q = kstart + keylen + 1;
-      const char *vend;
-      while (*q == ' ' || *q == ':' || *q == '\t') q++;
-      if (*q != '"') return NULL;
-      q++;
-      vend = strchr(q, '"');
-      if (!vend) return NULL;
-      {
-        size_t vlen = (size_t)(vend - q);
-        char *v = (char *)sqlite3_malloc(vlen + 1);
-        if (!v) return NULL;
-        memcpy(v, q, vlen);
-        v[vlen] = '\0';
-        return v;
-      }
+static const char *jsonSkipWs(const char *p){
+  while( p && (*p==' ' || *p=='\t' || *p=='\r' || *p=='\n') ) p++;
+  return p;
+}
+
+static const char *jsonSkipString(const char *p){
+  if( !p || *p!='"' ) return 0;
+  p++;
+  while( *p && *p!='"' ){
+    if( *p=='\\' ){
+      p++;
+      if( !*p ) return 0;
     }
-    p = kstart;
+    p++;
   }
-  return NULL;
+  return *p=='"' ? p+1 : 0;
+}
+
+static const char *jsonSkipValue(const char *p){
+  p = jsonSkipWs(p);
+  if( !p || !*p ) return 0;
+  if( *p=='"' ) return jsonSkipString(p);
+  if( *p=='{' || *p=='[' ){
+    char open = *p;
+    char close = (open=='{') ? '}' : ']';
+    int depth = 1;
+    p++;
+    while( *p && depth ){
+      if( *p=='"' ){
+        p = jsonSkipString(p);
+        if( !p ) return 0;
+        continue;
+      }
+      if( *p==open ) depth++;
+      else if( *p==close ) depth--;
+      p++;
+    }
+    return depth ? 0 : p;
+  }
+  while( *p && *p!=',' && *p!='}' && *p!=']' ) p++;
+  return p;
+}
+
+static const char *jsonObjectValue(const char *json, const char *key){
+  const char *p;
+  size_t keylen;
+  if( !json || !key ) return 0;
+  keylen = strlen(key);
+  p = jsonSkipWs(json);
+  if( *p!='{' ) return 0;
+  p++;
+  for(;;){
+    const char *kstart;
+    const char *kend;
+    p = jsonSkipWs(p);
+    if( *p=='}' ) return 0;
+    if( *p!='"' ) return 0;
+    kstart = p+1;
+    p = jsonSkipString(p);
+    if( !p ) return 0;
+    kend = p-1;
+    p = jsonSkipWs(p);
+    if( *p!=':' ) return 0;
+    p = jsonSkipWs(p+1);
+    if( (size_t)(kend-kstart)==keylen && memcmp(kstart, key, keylen)==0 ){
+      return p;
+    }
+    p = jsonSkipValue(p);
+    if( !p ) return 0;
+    p = jsonSkipWs(p);
+    if( *p==',' ){ p++; continue; }
+    return 0;
+  }
+}
+
+static char *jsonDupQuoted(const char *p){
+  const char *end;
+  const char *s;
+  char *out;
+  size_t cap;
+  size_t o = 0;
+  if( !p || *p!='"' ) return 0;
+  end = jsonSkipString(p);
+  if( !end ) return 0;
+  cap = (size_t)(end - p);
+  if( cap>(size_t)0x7fffffff ) return 0;
+  out = (char*)sqlite3_malloc((int)cap);
+  if( !out ) return 0;
+  for(s=p+1; s<end-1; s++){
+    if( *s=='\\' && s+1<end-1 ) s++;
+    out[o++] = *s;
+  }
+  out[o] = 0;
+  return out;
+}
+
+static char *jsonFindString(const char *json, const char *key) {
+  return jsonDupQuoted(jsonObjectValue(json, key));
 }
 
 static int jsonFindLong(const char *json, const char *key, long *out) {
-  size_t keylen = strlen(key);
-  const char *p = json;
-  while ((p = strchr(p, '"')) != NULL) {
-    const char *kstart = p + 1;
-    if (strncmp(kstart, key, keylen) == 0 && kstart[keylen] == '"') {
-      const char *q = kstart + keylen + 1;
-      const char *end;
-      uint64_t v;
-      while (*q == ' ' || *q == ':' || *q == '\t') q++;
-      end = q;
-      while (*end >= '0' && *end <= '9') end++;
-      if (doltliteParseDecimal(q, end, LONG_MAX, &v) !=
-          DOLTLITE_DECIMAL_OK) {
-        return 0;
-      }
-      q = end;
-      while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') q++;
-      if (*q != ',' && *q != '}') return 0;
-      *out = (long)v;
+  const char *p = jsonObjectValue(json, key);
+  const char *end;
+  uint64_t v;
+  if( !p || !out ) return 0;
+  end = p;
+  while( *end>='0' && *end<='9' ) end++;
+  if( doltliteParseDecimal(p, end, LONG_MAX, &v)!=DOLTLITE_DECIMAL_OK ){
+    return 0;
+  }
+  end = jsonSkipWs(end);
+  if( *end!=',' && *end!='}' ) return 0;
+  *out = (long)v;
+  return 1;
+}
+
+static int jsonAudienceMatches(const char *json, const char *expected){
+  const char *p = jsonObjectValue(json, "aud");
+  if( !p || !expected || !expected[0] ) return 0;
+  if( *p=='"' ){
+    char *s = jsonDupQuoted(p);
+    int ok = s && strcmp(s, expected)==0;
+    sqlite3_free(s);
+    return ok;
+  }
+  if( *p!='[' ) return 0;
+  p++;
+  for(;;){
+    char *s;
+    p = jsonSkipWs(p);
+    if( *p==']' ) return 0;
+    if( *p!='"' ) return 0;
+    s = jsonDupQuoted(p);
+    if( s && strcmp(s, expected)==0 ){
+      sqlite3_free(s);
       return 1;
     }
-    p = kstart;
+    sqlite3_free(s);
+    p = jsonSkipString(p);
+    if( !p ) return 0;
+    p = jsonSkipWs(p);
+    if( *p==',' ){ p++; continue; }
+    return 0;
   }
-  return 0;
 }
 
 static char *decodeSegZ(const char *seg, size_t seglen) {
@@ -839,7 +934,7 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   const char *dot1, *dot2;
   char *hdr = NULL, *claims = NULL;
   char *alg = NULL, *ver = NULL, *kid = NULL;
-  char *iss = NULL, *sub = NULL, *aud = NULL, *expectSub = NULL;
+  char *iss = NULL, *sub = NULL, *expectSub = NULL;
   char *sigStr = NULL;
   unsigned char *sig = NULL;
   size_t siglen = 0;
@@ -849,6 +944,7 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
 
   if (kidOut) *kidOut = NULL;
   if (!authValue) return 1;
+  if (!expectedAudience || !expectedAudience[0]) return 1;
 
   jwt = authValue;
   if (strncmp(jwt, "Bearer ", 7) == 0) jwt += 7;
@@ -883,7 +979,6 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
 
   iss = jsonFindString(claims, "iss");
   sub = jsonFindString(claims, "sub");
-  aud = jsonFindString(claims, "aud");
   if (!iss || strcmp(iss, JWT_ISSUER_EXPECTED) != 0) goto done;
 
   expectSub = (char *)sqlite3_malloc(strlen(JWT_SUBJECT_PREFIX_V) + strlen(kid) + 1);
@@ -892,9 +987,7 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   strcat(expectSub, kid);
   if (!sub || strcmp(sub, expectSub) != 0) goto done;
 
-  if (expectedAudience && *expectedAudience) {
-    if (!aud || strcmp(aud, expectedAudience) != 0) goto done;
-  }
+  if (!jsonAudienceMatches(claims, expectedAudience)) goto done;
 
   if (!jsonFindLong(claims, "exp", &exp)) goto done;
   if (now >= exp) goto done;
@@ -913,7 +1006,6 @@ done:
   sqlite3_free(kid);
   sqlite3_free(iss);
   sqlite3_free(sub);
-  sqlite3_free(aud);
   sqlite3_free(expectSub);
   sqlite3_free(sigStr);
   sqlite3_free(sig);

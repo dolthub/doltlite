@@ -1370,6 +1370,10 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
   }
 
   if( o->authKeysDir && o->authKeysDir[0] ){
+    if( !o->audience || !o->audience[0] ){
+      serverCleanup(pSrv);
+      return SQLITE_ERROR;
+    }
     pSrv->authKeysDir = dupStr(o->authKeysDir);
     if( !pSrv->authKeysDir ){ serverCleanup(pSrv); return SQLITE_NOMEM; }
   }

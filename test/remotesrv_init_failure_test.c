@@ -149,6 +149,19 @@ int main(void){
   check("invalid_address_destroys_condition", condInit==0);
 
   opts.zBindAddr = "127.0.0.1";
+  opts.authKeysDir = ".";
+  opts.audience = 0;
+  setFailure(-1);
+  mutexInit = -1;
+  condInit = -1;
+  rc = doltliteRemoteSrvInitForTest(&opts, &mutexInit, &condInit);
+  check("auth_keys_without_audience_fails", rc==SQLITE_ERROR);
+  check("auth_keys_without_audience_destroys_mutex", mutexInit==0);
+  check("auth_keys_without_audience_destroys_condition", condInit==0);
+  check("auth_keys_without_audience_frees_allocations",
+        gFault.nOutstanding==nBaseline);
+  opts.authKeysDir = 0;
+
   setFailure(1);
   mutexInit = -1;
   condInit = -1;

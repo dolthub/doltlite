@@ -630,7 +630,7 @@ SELECT dolt_clone('http://myserver:8080/mydb.db');
 > [!WARNING]
 > The server binds to `127.0.0.1` by default. Bound anywhere else, it warns at
 > startup about each protection left unconfigured: `--cert`/`--key` for TLS, and
-> `--auth-keys` for authentication. These are independent — TLS encrypts but does
+> `--auth-keys` plus `--audience` for authentication. These are independent — TLS encrypts but does
 > not authenticate, and without `--auth-keys` every client that can reach the port
 > may read the served databases *and push to them*. Configure both, or place the
 > server behind a reverse proxy that provides equivalent TLS and authentication.

@@ -90,16 +90,16 @@ static const char *GOLDEN_JWT =
     "Yzl0N28zZGtkYmFycyIsImRvbHRfdG9rZW5fdmVyc2lvbiI6IjIwMjMuMDEifQ.eyJpc3Mi"
     "OiJkb2x0LWNsaWVudC5kb2x0aHViLmNvbSIsInN1YiI6ImRvbHRDbGllbnRDcmVkZW50aWFs"
     "cy83a3UxY2dkN3Vqa2NyaTV1NHNtbXJzcnBjcDNlanNtZ2M5dDdvM2RrZGJhcnMiLCJhdWQi"
-    "OiJkb2x0cmVtb3RlYXBpLmRvbHRodWIuY29tIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3"
-    "MDAwMDAwMzB9.zYNXsaON_rblUat4NuSeDYNcCkkn5V5M28BVXgTybOs4lldxD_GUxRroTTeK"
-    "xlLebVONlBZxI6ukuhbW_1hvCg";
+    "OlsiZG9sdHJlbW90ZWFwaS5kb2x0aHViLmNvbSJdLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6"
+    "MTcwMDAwMDAzMH0.BEmqWAF_yBLZu2GnOmri7caHyu2smBeyGrCH40GO8otnbV1-xokfy1l2"
+    "jF5x2nVGino6X2_EhYBFtERt5CjGDQ";
 static const char *EXP_HEADER =
     "{\"alg\":\"EdDSA\",\"kid\":\"7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbars\","
     "\"dolt_token_version\":\"2023.01\"}";
 static const char *EXP_CLAIMS =
     "{\"iss\":\"dolt-client.dolthub.com\","
     "\"sub\":\"doltClientCredentials/7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbars\","
-    "\"aud\":\"doltremoteapi.dolthub.com\",\"iat\":1700000000,\"exp\":1700000030}";
+    "\"aud\":[\"doltremoteapi.dolthub.com\"],\"iat\":1700000000,\"exp\":1700000030}";
 
 int main(int argc, char **argv) {
   char hexbuf[256];
@@ -193,6 +193,10 @@ int main(int argc, char **argv) {
 
   {
     char *jwt = NULL;
+    check_bool("null audience rejected at mint",
+               doltliteCredsBearerTokenAt(c, NULL, 1700000000L, &jwt) != 0);
+    check_bool("empty audience rejected at mint",
+               doltliteCredsBearerTokenAt(c, "", 1700000000L, &jwt) != 0);
     if (doltliteCredsBearerTokenAt(c, AUD, 1700000000L, &jwt) != 0 || !jwt) {
       failures++;
       printf("  FAIL  bearer token build\n");

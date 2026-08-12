@@ -32,9 +32,10 @@ static char *encodeRaw(const unsigned char *p, size_t n) {
   return z;
 }
 
-static char *tokenForKid(
+static char *tokenWithAudJson(
   const DoltliteCreds *c,
   const char *kid,
+  const char *audJson,
   const char *exp
 ) {
   char *header = NULL, *claims = NULL, *h64 = NULL, *c64 = NULL;
@@ -48,14 +49,14 @@ static char *tokenForKid(
   snprintf(header, n,
            "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"2023.01\"}",
            kid);
-  n = strlen(kid) * 2 + strlen(AUD) + strlen(exp) + 160;
+  n = strlen(kid) * 2 + strlen(audJson) + strlen(exp) + 160;
   claims = (char *)malloc(n);
   if (!claims) goto done;
   snprintf(claims, n,
            "{\"iss\":\"dolt-client.dolthub.com\","
-           "\"sub\":\"doltClientCredentials/%s\",\"aud\":\"%s\","
+           "\"sub\":\"doltClientCredentials/%s\",\"aud\":%s,"
            "\"iat\":%ld,\"exp\":%s}",
-           kid, AUD, IAT, exp);
+           kid, audJson, IAT, exp);
   h64 = encodeRaw((const unsigned char *)header, strlen(header));
   c64 = encodeRaw((const unsigned char *)claims, strlen(claims));
   if (!h64 || !c64) goto done;
@@ -78,6 +79,14 @@ done:
   free(input);
   sqlite3_free(s64);
   return token;
+}
+
+static char *tokenForKid(
+  const DoltliteCreds *c,
+  const char *kid,
+  const char *exp
+) {
+  return tokenWithAudJson(c, kid, "\"" AUD "\"", exp);
 }
 
 int main(int argc, char **argv) {
@@ -119,8 +128,34 @@ int main(int argc, char **argv) {
   check("\"Bearer \" prefix accepted",
         doltliteCredsVerifyBearer(bearer, AUD, authDir, MID, NULL) == 0);
 
-  check("null expected-audience accepted",
-        doltliteCredsVerifyBearer(jwt, NULL, authDir, MID, NULL) == 0);
+  check("null expected-audience rejected",
+        doltliteCredsVerifyBearer(jwt, NULL, authDir, MID, NULL) != 0);
+  check("empty expected-audience rejected",
+        doltliteCredsVerifyBearer(jwt, "", authDir, MID, NULL) != 0);
+
+  {
+    char *arrayJwt = tokenWithAudJson(c, kid, "[\"" AUD "\"]", "1700000030");
+    char *multiJwt = tokenWithAudJson(c, kid, "[\"other\",\"" AUD "\"]",
+                                      "1700000030");
+    char *wrongArr = tokenWithAudJson(c, kid, "[\"other\"]", "1700000030");
+    char *emptyArr = tokenWithAudJson(c, kid, "[]", "1700000030");
+    check("Dolt array aud accepted",
+          arrayJwt &&
+              doltliteCredsVerifyBearer(arrayJwt, AUD, authDir, MID, NULL) == 0);
+    check("aud array containing expected accepted",
+          multiJwt &&
+              doltliteCredsVerifyBearer(multiJwt, AUD, authDir, MID, NULL) == 0);
+    check("aud array without expected rejected",
+          wrongArr &&
+              doltliteCredsVerifyBearer(wrongArr, AUD, authDir, MID, NULL) != 0);
+    check("empty aud array rejected",
+          emptyArr &&
+              doltliteCredsVerifyBearer(emptyArr, AUD, authDir, MID, NULL) != 0);
+    free(arrayJwt);
+    free(multiJwt);
+    free(wrongArr);
+    free(emptyArr);
+  }
 
   check("expired token rejected",
         doltliteCredsVerifyBearer(jwt, AUD, authDir, LATE, NULL) != 0);

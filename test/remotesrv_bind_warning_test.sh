@@ -86,9 +86,24 @@ w=$(warnings_for --bind 0.0.0.0)
 check "0.0.0.0 bare: TLS warning"  "1" "$(tls_count "$w")"
 check "0.0.0.0 bare: auth warning" "1" "$(auth_count "$w")"
 
+echo "=== 3b. --auth-keys without --audience refuses to start ==="
+if [ "$HAVE_KEYS" = 1 ]; then
+  : >"$TMP/err.txt"; : >"$TMP/out.txt"
+  "$REMOTESRV" -p 0 --bind 0.0.0.0 --auth-keys "$TMP/keys" "$TMP/srv" \
+    >"$TMP/out.txt" 2>"$TMP/err.txt" || true
+  if grep -q 'audience is required' "$TMP/err.txt"; then
+    check "auth-keys without audience errors" "1" "1"
+  else
+    check "auth-keys without audience errors" "1" "0"
+    echo "    stderr: $(tr '\n' ' ' < "$TMP/err.txt")"
+  fi
+else
+  echo "  SKIP: could not generate a credential"
+fi
+
 echo "=== 4. Configured auth is not reported as unauthenticated ==="
 if [ "$HAVE_KEYS" = 1 ]; then
-  w=$(warnings_for --bind 0.0.0.0 --auth-keys "$TMP/keys")
+  w=$(warnings_for --bind 0.0.0.0 --auth-keys "$TMP/keys" --audience 0.0.0.0)
   check "0.0.0.0 with --auth-keys: still warns about TLS" "1" "$(tls_count "$w")"
   check "0.0.0.0 with --auth-keys: no auth warning"       "0" "$(auth_count "$w")"
 else
@@ -107,7 +122,7 @@ fi
 echo "=== 6. Fully configured public bind is quiet ==="
 if [ "$HAVE_TLS" = 1 ] && [ "$HAVE_KEYS" = 1 ]; then
   w=$(warnings_for --bind 0.0.0.0 --cert "$TMP/cert.pem" --key "$TMP/key.pem" \
-                   --auth-keys "$TMP/keys")
+                   --auth-keys "$TMP/keys" --audience 0.0.0.0)
   check "0.0.0.0 with TLS and auth: no TLS warning"  "0" "$(tls_count "$w")"
   check "0.0.0.0 with TLS and auth: no auth warning" "0" "$(auth_count "$w")"
 else
