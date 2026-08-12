@@ -1109,6 +1109,66 @@ SELECT dolt_checkout('main', 't');
 " "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT b FROM t WHERE a = 1);" \
 "SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT b FROM t WHERE a = 1));"
 
+# Same CREATE SQL for t on both branches. d1/d2 on feature shift t onto
+# main's index number; overlaying the source iTable then writes t's root
+# onto the working index and corrupts both the table and the index scan.
+oracle_dual_poststate "checkout_table_keeps_working_catalog_numbers" "
+CREATE TABLE seed(id INTEGER PRIMARY KEY);
+INSERT INTO seed VALUES (0);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feature');
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'main_a');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 'main_t', 10);
+SELECT dolt_commit('-Am', 'main_at');
+SELECT dolt_checkout('feature');
+CREATE TABLE d1(id INTEGER PRIMARY KEY);
+CREATE TABLE d2(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 'feat_t', 77);
+SELECT dolt_commit('-Am', 'feat_t');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature', 't');
+" "
+CREATE TABLE seed(id INT PRIMARY KEY);
+INSERT INTO seed VALUES (0);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feature');
+CREATE TABLE a(id INT PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'main_a');
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 'main_t', 10);
+SELECT dolt_commit('-Am', 'main_at');
+SELECT dolt_checkout('feature');
+CREATE TABLE d1(id INT PRIMARY KEY);
+CREATE TABLE d2(id INT PRIMARY KEY);
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT, b INT);
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (1, 'feat_t', 77);
+SELECT dolt_commit('-Am', 'feat_t');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature', 't');
+" "SELECT 'Q|' || tbl || '|' || id || '|' || v FROM (
+  SELECT 'a' AS tbl, id, v FROM a
+  UNION ALL
+  SELECT 't', id, v FROM t
+  UNION ALL
+  SELECT 'seed', id, CAST(id AS TEXT) FROM seed
+) ORDER BY tbl, id;
+SELECT 'I|' || id || '|' || b FROM t WHERE b = 77;" \
+"SELECT concat('Q|', tbl, '|', id, '|', v) FROM (
+  SELECT 'a' AS tbl, id, v FROM a
+  UNION ALL
+  SELECT 't', id, v FROM t
+  UNION ALL
+  SELECT 'seed', id, CAST(id AS CHAR) FROM seed
+) q ORDER BY tbl, id;
+SELECT concat('I|', id, '|', b) FROM t WHERE b = 77;"
+
 # ROLLBACK does not revert dolt_checkout: the session stays on the branch it
 # checked out, and later writes land there. Reported once as state corruption
 # because dolt_default_branch() still says "main" -- that is the repo default,

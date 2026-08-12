@@ -714,20 +714,60 @@ static void checkoutAdoptSourceIndexRoots(
   }
 }
 
+static Pgno checkoutNextTableNumber(const struct TableEntry *a, int n){
+  Pgno iNext = 2;
+  int i;
+  for(i=0; i<n; i++){
+    if( a[i].iTable>=iNext ) iNext = a[i].iTable + 1;
+  }
+  return iNext;
+}
+
+static int checkoutInstallSourceEntry(
+  struct TableEntry **paWorking, int *pnWorking,
+  const struct TableEntry *pSource,
+  const char *zName,
+  int workIdx
+){
+  char *zDup;
+  if( !pSource || !zName ) return SQLITE_MISUSE;
+  zDup = sqlite3_mprintf("%s", zName);
+  if( !zDup ) return SQLITE_NOMEM;
+  if( workIdx<0 ){
+    struct TableEntry *aNew = sqlite3_realloc(*paWorking,
+        (*pnWorking+1)*(int)sizeof(struct TableEntry));
+    if( !aNew ){
+      sqlite3_free(zDup);
+      return SQLITE_NOMEM;
+    }
+    *paWorking = aNew;
+    workIdx = *pnWorking;
+    (*pnWorking)++;
+    (*paWorking)[workIdx] = *pSource;
+    (*paWorking)[workIdx].zName = zDup;
+    (*paWorking)[workIdx].iTable = checkoutNextTableNumber(*paWorking, workIdx);
+  }else{
+    Pgno iKeep = (*paWorking)[workIdx].iTable;
+    sqlite3_free((*paWorking)[workIdx].zName);
+    (*paWorking)[workIdx] = *pSource;
+    (*paWorking)[workIdx].iTable = iKeep;
+    (*paWorking)[workIdx].zName = zDup;
+  }
+  return SQLITE_OK;
+}
+
 /* Virtual tables persist through their shadow tables: a table-level
 ** checkout of a vtab must swap the shadows' catalog entries, the same way
 ** staging carries them. The vtab's own master row is schema-only and is
-** handled by the schema pass; when that pass rebuilt the vtab, the live
-** shadows are fresh trees whose table numbers must be kept while their
-** content roots adopt the source. */
+** handled by the schema pass. Shadow table numbers stay in the working
+** catalog's domain; only the content roots come from the source. */
 static int checkoutAdoptVtabShadows(
   sqlite3 *db,
   struct TableEntry **paWorking, int *pnWorking,
   struct TableEntry *aSource, int nSource,
   SchemaEntry *aWorkSchema, int nWorkSchema,
   SchemaEntry *aSourceSchema, int nSourceSchema,
-  const char *zVtab,
-  int vtabRebuilt
+  const char *zVtab
 ){
   Table *pTab = sqlite3FindTable(db, zVtab, "main");
   SchemaEntry *aList[2];
@@ -770,27 +810,11 @@ static int checkoutAdoptVtabShadows(
                   (*pnWorking-workIdx-1)*(int)sizeof(struct TableEntry));
         }
         (*pnWorking)--;
-      }else if( workIdx<0 ){
-        struct TableEntry *aNew = sqlite3_realloc(*paWorking,
-            (*pnWorking+1)*(int)sizeof(struct TableEntry));
-        char *zDup;
-        if( !aNew ) return SQLITE_NOMEM;
-        *paWorking = aNew;
-        zDup = sqlite3_mprintf("%s", zName);
-        if( !zDup ) return SQLITE_NOMEM;
-        (*paWorking)[*pnWorking] = aSource[srcIdx];
-        (*paWorking)[*pnWorking].zName = zDup;
-        (*pnWorking)++;
       }else{
-        char *zDup = sqlite3_mprintf("%s", zName);
-        Pgno iCurrentTable = (*paWorking)[workIdx].iTable;
-        if( !zDup ) return SQLITE_NOMEM;
-        sqlite3_free((*paWorking)[workIdx].zName);
-        (*paWorking)[workIdx] = aSource[srcIdx];
-        if( vtabRebuilt ){
-          (*paWorking)[workIdx].iTable = iCurrentTable;
-        }
-        (*paWorking)[workIdx].zName = zDup;
+        int rcInstall = checkoutInstallSourceEntry(paWorking, pnWorking,
+                                                  &aSource[srcIdx], zName,
+                                                  workIdx);
+        if( rcInstall!=SQLITE_OK ) return rcInstall;
       }
       checkoutAdoptSourceIndexRoots(*paWorking, *pnWorking,
                                     aWorkSchema, nWorkSchema,
@@ -976,7 +1000,6 @@ static int doltliteCheckoutTables(
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int srcIdx = -1, workIdx = -1;
-    char *zDup;
     if( !zName ) continue;
 
     for(j=0; j<nSource; j++){
@@ -1017,48 +1040,15 @@ static int doltliteCheckoutTables(
                 (nWorking-workIdx-1)*(int)sizeof(struct TableEntry));
       }
       nWorking--;
-    }else if( workIdx<0 ){
-
-      struct TableEntry *aNew = sqlite3_realloc(aWorking,
-          (nWorking+1)*(int)sizeof(struct TableEntry));
-      if( !aNew ){
-        freeSchemaEntries(aSourceSchema, nSourceSchema);
-        checkoutSchemaInfoClear(aSchema, nNames);
-        doltliteFreeCatalog(aWorking, nWorking);
-        doltliteFreeCatalog(aSource, nSource);
-        return SQLITE_NOMEM;
-      }
-      aWorking = aNew;
-      zDup = aSource[srcIdx].zName
-               ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
-      if( aSource[srcIdx].zName && !zDup ){
-        freeSchemaEntries(aSourceSchema, nSourceSchema);
-        checkoutSchemaInfoClear(aSchema, nNames);
-        doltliteFreeCatalog(aWorking, nWorking);
-        doltliteFreeCatalog(aSource, nSource);
-        return SQLITE_NOMEM;
-      }
-      aWorking[nWorking] = aSource[srcIdx];
-      aWorking[nWorking].zName = zDup;
-      nWorking++;
     }else{
-      zDup = aSource[srcIdx].zName
-               ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
-      if( aSource[srcIdx].zName && !zDup ){
+      rc = checkoutInstallSourceEntry(&aWorking, &nWorking,
+                                      &aSource[srcIdx], zName, workIdx);
+      if( rc!=SQLITE_OK ){
         freeSchemaEntries(aSourceSchema, nSourceSchema);
         checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
-        return SQLITE_NOMEM;
-      }
-      {
-        Pgno iCurrentTable = aWorking[workIdx].iTable;
-        sqlite3_free(aWorking[workIdx].zName);
-        aWorking[workIdx] = aSource[srcIdx];
-        if( aSchema[i].rebuilt ){
-          aWorking[workIdx].iTable = iCurrentTable;
-        }
-        aWorking[workIdx].zName = zDup;
+        return rc;
       }
     }
   }
@@ -1083,7 +1073,7 @@ static int doltliteCheckoutTables(
                                   aSource, nSource,
                                   aWorkSchema, nWorkSchema,
                                   aSourceSchema, nSourceSchema,
-                                  zName, aSchema[i].rebuilt);
+                                  zName);
     if( rc!=SQLITE_OK ){
       freeSchemaEntries(aSourceSchema, nSourceSchema);
       freeSchemaEntries(aWorkSchema, nWorkSchema);
