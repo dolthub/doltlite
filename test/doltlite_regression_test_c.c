@@ -1693,6 +1693,194 @@ static void run_refs_commit_merges_concurrent_peer_refs(void){
   removeDbFiles(dbpath);
 }
 
+/* Each ref category merges in isolation, so a pairing legal in both views
+** separately can still be illegal together: a peer repoints the default
+** branch while this session deletes that branch. The decoder requires the
+** default to name a live branch, so publishing that pair leaves a store no
+** open can read -- the merge must refuse it instead. */
+static void run_refs_merge_rejects_dangling_default(void){
+  ChunkStore csA, csB, csC;
+  ProllyHash h1, h2, chunkHash;
+  static const u8 payload[] = "refs-dangling-default-chunk";
+  char dbpath[256];
+
+  printf("=== Refs Merge Rejects Dangling Default Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_dangling_default");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csC, 0, sizeof(csC));
+
+  prollyHashCompute("main-tip", 8, &h1);
+  prollyHashCompute("feat-tip", 8, &h2);
+
+  check("dd_open_A",
+        chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("dd_seed_main", chunkStoreAddBranch(&csA, "main", &h1)==SQLITE_OK);
+  check("dd_seed_feat", chunkStoreAddBranch(&csA, "feat", &h2)==SQLITE_OK);
+  check("dd_seed_default", chunkStoreSetDefaultBranch(&csA, "main")==SQLITE_OK);
+  check("dd_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("dd_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  /* Peer repoints the default onto feat. */
+  check("dd_open_B",
+        chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("dd_peer_default",
+        chunkStoreSetDefaultBranch(&csB, "feat")==SQLITE_OK);
+  check("dd_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
+  check("dd_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
+
+  /* This session, still on the base view where the default is main,
+  ** legally deletes feat and commits alongside a staged chunk. */
+  check("dd_local_delete", chunkStoreDeleteBranch(&csA, "feat")==SQLITE_OK);
+  check("dd_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("dd_local_put",
+        chunkStorePut(&csA, payload, (int)sizeof(payload), &chunkHash)==SQLITE_OK);
+  check("dd_local_commit_refused",
+        chunkStoreCommit(&csA)==SQLITE_BUSY_SNAPSHOT);
+
+  chunkStoreClose(&csA);
+  chunkStoreClose(&csB);
+
+  /* The store must still open: a published dangling default is unreadable. */
+  check("dd_reopen",
+        chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("dd_reopen_default_live",
+        chunkStoreFindBranch(&csC, "feat", 0)==SQLITE_OK);
+  chunkStoreClose(&csC);
+  removeDbFiles(dbpath);
+}
+
+/* A commit that lost the refs merge reinstates its pre-merge view for the
+** caller to unwind over. Retrying that commit without rolling back first
+** must not republish the stale table wholesale -- that is exactly the peer
+** clobber the merge exists to prevent. */
+static void run_refs_commit_retry_after_conflict_still_fails(void){
+  ChunkStore csA, csB, csC;
+  ProllyHash h1, hA, hB, hKeep, found, chunkHash;
+  static const u8 payload[] = "refs-retry-chunk";
+  char dbpath[256];
+
+  printf("=== Refs Commit Retry After Conflict Still Fails Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_retry_conflict");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csC, 0, sizeof(csC));
+
+  prollyHashCompute("base", 4, &h1);
+  prollyHashCompute("ours", 4, &hA);
+  prollyHashCompute("theirs", 6, &hB);
+  prollyHashCompute("keepme", 6, &hKeep);
+
+  check("rr_open_A",
+        chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rr_seed_branch", chunkStoreAddBranch(&csA, "shared", &h1)==SQLITE_OK);
+  check("rr_seed_default",
+        chunkStoreSetDefaultBranch(&csA, "shared")==SQLITE_OK);
+  check("rr_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rr_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  /* Peer moves the shared branch and adds an unrelated one. */
+  check("rr_open_B",
+        chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rr_peer_update",
+        chunkStoreUpdateBranch(&csB, "shared", &hB)==SQLITE_OK);
+  check("rr_peer_add", chunkStoreAddBranch(&csB, "peer_keep", &hKeep)==SQLITE_OK);
+  check("rr_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
+  check("rr_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
+
+  /* This session moves the same branch from its stale base: a real
+  ** conflict, correctly refused. */
+  check("rr_local_update",
+        chunkStoreUpdateBranch(&csA, "shared", &hA)==SQLITE_OK);
+  check("rr_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rr_local_put",
+        chunkStorePut(&csA, payload, (int)sizeof(payload), &chunkHash)==SQLITE_OK);
+  check("rr_first_commit_conflicts",
+        chunkStoreCommit(&csA)==SQLITE_BUSY_SNAPSHOT);
+  check("rr_retry_still_conflicts",
+        chunkStoreCommit(&csA)==SQLITE_BUSY_SNAPSHOT);
+
+  chunkStoreClose(&csA);
+  chunkStoreClose(&csB);
+
+  check("rr_reopen",
+        chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rr_peer_tip_survives",
+        chunkStoreFindBranch(&csC, "shared", &found)==SQLITE_OK
+        && prollyHashCompare(&found, &hB)==0);
+  check("rr_peer_branch_survives",
+        chunkStoreFindBranch(&csC, "peer_keep", 0)==SQLITE_OK);
+  chunkStoreClose(&csC);
+  removeDbFiles(dbpath);
+}
+
+/* AUTOINCREMENT counters merge as high-water marks, but only for counters
+** this session actually changed. Bumping an untouched one back onto disk
+** resurrects a counter a peer dropped with its table, so a recreated table
+** would resume from the old mark instead of restarting. */
+static void run_refs_merge_keeps_peer_sequence_drop(void){
+  ChunkStore csA, csB, csC;
+  ProllyHash h1, chunkHash;
+  static const u8 payload[] = "refs-seq-drop-chunk";
+  i64 seqVal = 0;
+  char dbpath[256];
+
+  printf("=== Refs Merge Keeps Peer Sequence Drop Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_seq_drop");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csC, 0, sizeof(csC));
+
+  prollyHashCompute("main-tip", 8, &h1);
+
+  check("sd_open_A",
+        chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("sd_seed_branch", chunkStoreAddBranch(&csA, "main", &h1)==SQLITE_OK);
+  check("sd_seed_default", chunkStoreSetDefaultBranch(&csA, "main")==SQLITE_OK);
+  check("sd_seed_sequence", chunkStoreBumpSequence(&csA, "t", 5)==SQLITE_OK);
+  check("sd_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("sd_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  /* Peer drops the table, taking its counter with it. */
+  check("sd_open_B",
+        chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  chunkStoreDropSequence(&csB, "t");
+  check("sd_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
+  check("sd_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
+
+  /* This session commits something unrelated over its stale base. */
+  check("sd_local_branch",
+        chunkStoreAddBranch(&csA, "unrelated", &h1)==SQLITE_OK);
+  check("sd_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("sd_local_put",
+        chunkStorePut(&csA, payload, (int)sizeof(payload), &chunkHash)==SQLITE_OK);
+  check("sd_local_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  chunkStoreClose(&csA);
+  chunkStoreClose(&csB);
+
+  check("sd_reopen",
+        chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
+            SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  seqVal = chunkStoreGetSequenceValue(&csC, "t");
+  check("sd_dropped_sequence_stays_dropped", seqVal==0);
+  check("sd_unrelated_branch_survives",
+        chunkStoreFindBranch(&csC, "unrelated", 0)==SQLITE_OK);
+  chunkStoreClose(&csC);
+  removeDbFiles(dbpath);
+}
+
 static void run_refs_commit_conflicting_peer_ref_fails(void){
   ChunkStore csA, csB, csC;
   ProllyHash h1, hA, hB, chunkHash;
@@ -10972,6 +11160,9 @@ static const RegressionCase aCases[] = {
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
   { "status_many_table_renames", "Status Many Table Renames Test", run_status_many_table_renames },
   { "refs_commit_merges_concurrent_peer_refs", "Refs Commit Merges Concurrent Peer Refs Test", run_refs_commit_merges_concurrent_peer_refs },
+  { "refs_merge_rejects_dangling_default", "Refs Merge Rejects Dangling Default Test", run_refs_merge_rejects_dangling_default },
+  { "refs_commit_retry_after_conflict_still_fails", "Refs Commit Retry After Conflict Still Fails Test", run_refs_commit_retry_after_conflict_still_fails },
+  { "refs_merge_keeps_peer_sequence_drop", "Refs Merge Keeps Peer Sequence Drop Test", run_refs_merge_keeps_peer_sequence_drop },
   { "refs_commit_conflicting_peer_ref_fails", "Refs Commit Conflicting Peer Ref Fails Test", run_refs_commit_conflicting_peer_ref_fails },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
