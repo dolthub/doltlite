@@ -1002,7 +1002,6 @@ static int dssDataActuallyChanged(
   ProllyDiffChange *pChange = 0;
   int changed = 0;
   int iterOpen = 0;
-  u8 flags;
   int rc;
   int i;
 
