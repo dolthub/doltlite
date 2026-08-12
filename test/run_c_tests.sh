@@ -23,6 +23,7 @@ COVERAGE_TESTS=(
   sql_transaction_test
   invariant_test
   three_way_diff_test
+  three_way_merge_fast_test
   clone_error_code_test
   prolly_hashset_test
   prolly_chunker_boundary_test
