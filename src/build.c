@@ -2834,6 +2834,7 @@ void sqlite3EndTable(
   ** error instead of silent mis-configuration. Skipped during
   ** schema replay (db->init.busy): a previously-validated on-disk
   ** schema is assumed correct. */
+#ifdef DOLTLITE_PROLLY
   if( !db->init.busy
    && !db->init.imposterTable
    && iDb!=1
@@ -2909,6 +2910,96 @@ void sqlite3EndTable(
       return;
     }
   }
+
+  if( !db->init.busy
+   && !db->init.imposterTable
+   && iDb!=1
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && sqlite3StrICmp(p->zName, "dolt_tests")==0 ){
+    static const char *azName[] = {
+      "test_name", "test_group", "test_query", "assertion_type",
+      "assertion_comparator", "assertion_value"
+    };
+    static const char *azCheckColumn[] = {
+      "assertion_type", "assertion_comparator"
+    };
+    static const char *aazCheckValue[2][6] = {
+      {"expected_rows", "expected_columns", "expected_single_value"},
+      {"==", "!=", "<", ">", "<=", ">="}
+    };
+    static const int anCheckValue[] = {3, 6};
+    const char *zFail = 0;
+    int i;
+    int j;
+    if( p->nCol!=6 ){
+      zFail = "dolt_tests must have exactly six columns";
+    }
+    for(i=0; !zFail && i<6; i++){
+      if( sqlite3StrICmp(p->aCol[i].zCnName, azName[i])!=0 ){
+        zFail = "dolt_tests columns have the wrong name or order";
+      }else if( p->aCol[i].affinity!=SQLITE_AFF_TEXT
+             && p->aCol[i].affinity!=SQLITE_AFF_BLOB ){
+        zFail = "dolt_tests columns must be TEXT";
+      }
+    }
+    if( !zFail && p->aCol[0].notNull==OE_None ){
+      zFail = "dolt_tests.test_name must be NOT NULL";
+    }else if( !zFail && p->aCol[1].notNull!=OE_None ){
+      zFail = "dolt_tests.test_group must be nullable";
+    }else if( !zFail && p->aCol[2].notNull==OE_None ){
+      zFail = "dolt_tests.test_query must be NOT NULL";
+    }else if( !zFail && p->aCol[3].notNull==OE_None ){
+      zFail = "dolt_tests.assertion_type must be NOT NULL";
+    }else if( !zFail && p->aCol[4].notNull==OE_None ){
+      zFail = "dolt_tests.assertion_comparator must be NOT NULL";
+    }else if( !zFail && p->aCol[5].notNull!=OE_None ){
+      zFail = "dolt_tests.assertion_value must be nullable";
+    }else if( !zFail && ((p->aCol[0].colFlags & COLFLAG_PRIMKEY)==0
+                     || (p->aCol[1].colFlags & COLFLAG_PRIMKEY)!=0
+                     || (p->aCol[2].colFlags & COLFLAG_PRIMKEY)!=0
+                     || (p->aCol[3].colFlags & COLFLAG_PRIMKEY)!=0
+                     || (p->aCol[4].colFlags & COLFLAG_PRIMKEY)!=0
+                     || (p->aCol[5].colFlags & COLFLAG_PRIMKEY)!=0)){
+      zFail = "dolt_tests must have PRIMARY KEY(test_name)";
+    }else if( !zFail && (!p->pCheck || p->pCheck->nExpr!=2) ){
+      zFail = "dolt_tests must have the assertion checks";
+    }else if( !zFail && (!p->pCheck->a[0].zEName
+                      || sqlite3StrICmp(p->pCheck->a[0].zEName,
+                           "assertion_type_check")!=0
+                      || !p->pCheck->a[1].zEName
+                      || sqlite3StrICmp(p->pCheck->a[1].zEName,
+                           "assertion_comparator_check")!=0) ){
+      zFail = "dolt_tests assertion checks have the wrong names";
+    }
+    for(i=0; !zFail && i<2; i++){
+      Expr *pExpr = p->pCheck->a[i].pExpr;
+      if( !pExpr || pExpr->op!=TK_IN || !pExpr->pLeft
+       || pExpr->pLeft->op!=TK_ID
+       || !ExprUseUToken(pExpr->pLeft)
+       || sqlite3StrICmp(pExpr->pLeft->u.zToken, azCheckColumn[i])!=0
+       || !ExprUseXList(pExpr) || !pExpr->x.pList
+       || pExpr->x.pList->nExpr!=anCheckValue[i] ){
+        zFail = "dolt_tests assertion checks have the wrong expressions";
+        break;
+      }
+      for(j=0; j<anCheckValue[i]; j++){
+        Expr *pValue = pExpr->x.pList->a[j].pExpr;
+        if( !pValue || pValue->op!=TK_STRING || !ExprUseUToken(pValue)
+         || strcmp(pValue->u.zToken, aazCheckValue[i][j])!=0 ){
+          zFail = "dolt_tests assertion checks have the wrong expressions";
+          break;
+        }
+      }
+    }
+    if( zFail ){
+      sqlite3ErrorMsg(pParse,
+          "%s; expected Dolt's six-column dolt_tests schema",
+          zFail);
+      return;
+    }
+  }
+#endif
 
   /* Special processing for WITHOUT ROWID Tables */
   if( tabOpts & TF_WithoutRowid ){
