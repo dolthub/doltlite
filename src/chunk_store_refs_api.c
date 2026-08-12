@@ -83,6 +83,35 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
                 cs->refs.refsHash.data, PROLLY_HASH_SIZE)==0;
 }
 
+/* The refs hash the on-disk manifest tail records, read fresh. The
+** in-memory committedRefsHash is only a proxy for it: an operation that
+** reinstates a pre-merge view leaves the two disagreeing, and a lock
+** refresh that finds the file unchanged never re-adopts it. Returns 0 when
+** the tail cannot be read as a sealed root record, which the caller must
+** treat as "cannot prove disk is unmoved". Caller holds the store lock. */
+int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
+  i64 physSize = 0;
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+
+  memset(pOut, 0, sizeof(*pOut));
+  if( cs->file.pFile==0 ) return 0;
+  /* Locate the tail from the file itself, not from this handle's WAL
+  ** bookkeeping: a peer's commit appended past where this handle believes
+  ** the content ends, and that append is exactly what must be detected. */
+  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK ) return 0;
+  if( physSize < (i64)sizeof(aRoot) ) return 0;
+  if( sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot),
+                    physSize - (i64)sizeof(aRoot))!=SQLITE_OK ){
+    return 0;
+  }
+  /* An unsealed tail (this handle's own uncommitted append, or a torn
+  ** write) is not a published state; report "cannot prove" and let the
+  ** caller fall back to its in-memory comparison. */
+  if( aRoot[0]!=CS_WAL_TAG_ROOT ) return 0;
+  memcpy(pOut->data, aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
+  return 1;
+}
+
 /* Read zName's committed tip straight from disk into *pTip, leaving this
 ** store's in-memory state untouched. Opens a throwaway view of the file (as
 ** csReloadFromDisk does) so a commit/merge head-CAS sees a peer's advance even

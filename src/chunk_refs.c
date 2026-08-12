@@ -845,12 +845,30 @@ int csMergeSavedRefsOntoDisk(
     cs->refs.zDefaultBranch = zDup;
   }
 
+  /* Each category merged in isolation, so a pairing that is legal in both
+  ** views separately can still be illegal together: one side repoints the
+  ** default branch while the other deletes that branch. The decoder
+  ** requires the default to name a live branch, so publishing that pair
+  ** leaves a store no open can read. Treat it as the conflict it is. */
+  if( cs->refs.zDefaultBranch
+   && csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
+                     (int)sizeof(BranchRef), cs->refs.zDefaultBranch)<0 ){
+    return SQLITE_BUSY_SNAPSHOT;
+  }
+
   /* AUTOINCREMENT counters are high-water marks shared across branches:
   ** the merged value is the max of both sides, never a conflict, and a
-  ** counter the session dropped (DROP TABLE) goes away. */
+  ** counter the session dropped (DROP TABLE) goes away. Counters the
+  ** session never touched are the peer's business -- bumping those back
+  ** onto disk resurrects one the peer dropped, so a recreated table would
+  ** resume from the old high-water mark. */
   for(i=0; i<pLocal->nSequences; i++){
     const SequenceRef *pL = &pLocal->aSequences[i];
-    int rc2 = chunkStoreBumpSequence(cs, pL->zTableName, pL->iSeq);
+    int iBase = csFindNamedRef(pBase->aSequences, pBase->nSequences,
+                               (int)sizeof(SequenceRef), pL->zTableName);
+    int rc2;
+    if( iBase>=0 && pBase->aSequences[iBase].iSeq==pL->iSeq ) continue;
+    rc2 = chunkStoreBumpSequence(cs, pL->zTableName, pL->iSeq);
     if( rc2!=SQLITE_OK ) return rc2;
   }
   for(i=0; i<pBase->nSequences; i++){

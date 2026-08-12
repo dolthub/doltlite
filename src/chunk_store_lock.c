@@ -181,8 +181,22 @@ int csRestoreOrMergeLocalRefs(
   const ProllyHash *pSavedRefsHash,
   const ProllyHash *pBaseRefsHash
 ){
+  ProllyHash diskRefsHash;
+  int diskMoved = 0;
   int rc;
-  if( prollyHashCompare(&cs->refs.committedRefsHash, pBaseRefsHash)==0 ){
+  /* committedRefsHash is only a proxy for what disk holds. An operation that
+  ** lost this merge reinstates a base-derived view but leaves that field at
+  ** the disk hash, and a later lock refresh that finds the file unchanged
+  ** never re-adopts it -- so a commit retried without a rollback would read
+  ** "base unchanged" and republish the stale table, the very clobber this
+  ** merge exists to prevent. Consult the sealed manifest tail as well, and
+  ** merge whenever it proves disk has moved past the base. */
+  if( csReadDiskRefsHash(cs, &diskRefsHash)
+   && prollyHashCompare(&diskRefsHash, pBaseRefsHash)!=0 ){
+    diskMoved = 1;
+  }
+  if( !diskMoved
+   && prollyHashCompare(&cs->refs.committedRefsHash, pBaseRefsHash)==0 ){
     csFreeRefsState(cs);
     csRestoreSavedRefsState(cs, pSaved);
     cs->refs.refsHash = *pSavedRefsHash;
@@ -217,6 +231,11 @@ int csRestoreOrMergeLocalRefs(
   csFreeRefsState(cs);
   csRestoreSavedRefsState(cs, pSaved);
   cs->refs.refsHash = *pSavedRefsHash;
+  /* The reinstated tables derive from the base, so that is what they are
+  ** committed against -- leaving this at the disk hash the refresh adopted
+  ** would make the next commit capture disk as its base and see nothing to
+  ** merge. */
+  cs->refs.committedRefsHash = *pBaseRefsHash;
   return rc;
 }
 

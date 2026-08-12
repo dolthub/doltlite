@@ -41,5 +41,6 @@ int csSyncFile(ChunkStore *cs);
 void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 int csManifestHashStateOffsetless(const u8 *aBuf);
+int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut);
 
 #endif /* CHUNK_STORE_INT_H */
