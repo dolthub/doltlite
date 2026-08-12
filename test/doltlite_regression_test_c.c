@@ -1888,8 +1888,10 @@ static void run_fetch_ref_install_survives_window_gc(void){
   }
   doltliteTestSetBeforeRefInstallHook(0, 0);
   gGcWindowPath = 0;
-  sqlite3_close(localDb);
+  check("window_gc_close_local_clean", sqlite3_close(localDb)==SQLITE_OK);
   localDb = 0;
+  check("window_gc_close_remote_clean", sqlite3_close(remoteDb)==SQLITE_OK);
+  remoteDb = 0;
 
   /* A fresh connection must still get the full function surface: the
   ** registration chain aborts on the first failing member, so a dangling
