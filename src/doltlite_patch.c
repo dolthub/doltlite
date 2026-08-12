@@ -252,6 +252,36 @@ static int patchRootsShareKey(
   return found;
 }
 
+/* The '(' that opens a CREATE statement's definition body: the first one
+** outside any quoted identifier or string. A quoted table name may itself
+** contain parens. */
+static const char *patchSchemaBody(const char *zSql){
+  const char *z = zSql;
+  while( *z ){
+    char c = *z;
+    if( c=='"' || c=='`' || c=='\'' ){
+      z++;
+      while( *z ){
+        if( *z==c ){
+          if( z[1]==c ){ z += 2; continue; }
+          z++;
+          break;
+        }
+        z++;
+      }
+    }else if( c=='[' ){
+      z++;
+      while( *z && *z!=']' ) z++;
+      if( *z ) z++;
+    }else if( c=='(' ){
+      return z;
+    }else{
+      z++;
+    }
+  }
+  return 0;
+}
+
 static int patchIsRenamePair(
   sqlite3 *db,
   const struct TableEntry *pFrom,
@@ -264,8 +294,8 @@ static int patchIsRenamePair(
   if( pFrom->iTable!=pTo->iTable ) return 0;
   if( prollyHashCompare(&pFrom->root,&pTo->root)==0 ) return 1;
   if( !pFromSchema || !pToSchema ) return 0;
-  zFromBody = strchr(pFromSchema->zSql,'(');
-  zToBody = strchr(pToSchema->zSql,'(');
+  zFromBody = patchSchemaBody(pFromSchema->zSql);
+  zToBody = patchSchemaBody(pToSchema->zSql);
   if( !zFromBody || !zToBody || strcmp(zFromBody,zToBody)!=0 ) return 0;
   return patchRootsShareKey(db,pFrom,pTo);
 }
@@ -517,6 +547,61 @@ static int patchAppendObjectDiffs(
   return SQLITE_OK;
 }
 
+/* Views never appear in the table walk: a view's tbl_name is the view
+** itself. Diff them by name against the other side's schema rows. Drops
+** run before any table statement so a view freeing its name (say for a
+** table that replaces it) is gone in time; creates run last, after every
+** table and trigger has reached its target state, since a view may
+** reference any of them. */
+static int patchAppendViewDrops(
+  PatchCursor *pCur, const char *zFilter,
+  SchemaEntry *aFrom, int nFrom,
+  SchemaEntry *aTo, int nTo,
+  int *pFound
+){
+  int i, rc;
+  for(i=0; i<nFrom; i++){
+    SchemaEntry *p = &aFrom[i];
+    SchemaEntry *q;
+    if( !p->zType || sqlite3_stricmp(p->zType,"view")!=0 ) continue;
+    if( !p->zName || !p->zSql ) continue;
+    if( zFilter && sqlite3_stricmp(zFilter,p->zName)!=0 ) continue;
+    q = findSchemaEntry(aTo, nTo, p->zName);
+    if( !q || !q->zSql || strcmp(p->zSql,q->zSql)!=0 ){
+      char *zSql = sqlite3_mprintf("DROP VIEW \"%w\"", p->zName);
+      if( !zSql ) return SQLITE_NOMEM;
+      rc = patchAppendRow(pCur, p->zName, "schema", zSql);
+      sqlite3_free(zSql);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pFound ) *pFound = 1;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int patchAppendViewCreates(
+  PatchCursor *pCur, const char *zFilter,
+  SchemaEntry *aFrom, int nFrom,
+  SchemaEntry *aTo, int nTo,
+  int *pFound
+){
+  int i, rc;
+  for(i=0; i<nTo; i++){
+    SchemaEntry *p = &aTo[i];
+    SchemaEntry *q;
+    if( !p->zType || sqlite3_stricmp(p->zType,"view")!=0 ) continue;
+    if( !p->zName || !p->zSql ) continue;
+    if( zFilter && sqlite3_stricmp(zFilter,p->zName)!=0 ) continue;
+    q = findSchemaEntry(aFrom, nFrom, p->zName);
+    if( !q || !q->zSql || strcmp(p->zSql,q->zSql)!=0 ){
+      rc = patchAppendRow(pCur, p->zName, "schema", p->zSql);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pFound ) *pFound = 1;
+    }
+  }
+  return SQLITE_OK;
+}
+
 static int patchAppendTargetTriggers(
   PatchCursor *pCur,
   const PatchTable *pTable,
@@ -578,7 +663,7 @@ static int patchAppendRebuild(
   int iTemp,
   int bCopyData
 ){
-  const char *zBody = strchr(pTable->pToSchema->zSql, '(');
+  const char *zBody = patchSchemaBody(pTable->pToSchema->zSql);
   sqlite3_str *pStr;
   char *zSql;
   char *zTemp = 0;
@@ -1195,6 +1280,10 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
                                                &aToSchema,&nToSchema);
   if( rc==SQLITE_OK ) rc=patchBuildTables(pVtab->db,aFromSchema,nFromSchema,
       aToSchema,nToSchema,aFromTable,nFromTable,aToTable,nToTable,&aTable,&nTable);
+  if( rc==SQLITE_OK ){
+    rc=patchAppendViewDrops(pCur,zFilter,aFromSchema,nFromSchema,
+                            aToSchema,nToSchema,&found);
+  }
   for(i=0; rc==SQLITE_OK && i<nTable; i++){
     if( zFilter && (!aTable[i].zFromName
                  || sqlite3_stricmp(zFilter,aTable[i].zFromName)!=0)
@@ -1219,6 +1308,10 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     if( patchTableUnchanged(&aTable[i],aFromSchema,nFromSchema,
                             aToSchema,nToSchema) ) continue;
     rc=patchAppendTargetTriggers(pCur,&aTable[i],aToSchema,nToSchema);
+  }
+  if( rc==SQLITE_OK ){
+    rc=patchAppendViewCreates(pCur,zFilter,aFromSchema,nFromSchema,
+                              aToSchema,nToSchema,&found);
   }
   if( rc==SQLITE_OK && zFilter && !found ){
     patchSetError(&pVtab->base,"dolt_patch: table '%s' does not exist",zFilter);
