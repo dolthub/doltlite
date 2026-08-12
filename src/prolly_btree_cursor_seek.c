@@ -624,6 +624,10 @@ static int indexMovetoCustomCollation(
   if( pEntry ){
     setCursorToMutMapEntryPhys(
         pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+    /* The tree side is still wherever the last operation left it, the same
+    ** as every other mut-map landing after a moveto: a later step must
+    ** re-seek it to this key before merging or it feeds stale rows in. */
+    pCur->deferredTreeSeek = 1;
     *pRes = cmp;
     pIdxKey->eqSeen = 1;
     *pDone = 1;
