@@ -2,7 +2,7 @@
 
 #include "sqliteInt.h"
 #include "doltlite_internal.h"
-#include <errno.h>
+#include <errno.h> /* amalgamator: keep */
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
