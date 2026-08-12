@@ -3350,6 +3350,95 @@ static void run_cherry_pick_stale_branch(void){
   removeDbFiles(dbpath);
 }
 
+static void run_cherry_pick_stale_conflict_clears_session(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  ProllyHash conflictsHash;
+  u8 isMerging = 0;
+
+  printf("=== Cherry-pick Stale Conflict Clears Session ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_cherry_pick_stale_conflict_clears_session");
+  removeDbFiles(dbpath);
+
+  check("open_db_stale_conflict", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_stale_conflict_repo", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "UPDATE t SET v='feat' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'feat');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v='main' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'main');")==SQLITE_OK);
+
+  doltliteTestFailNextHeadConfirm();
+  res = queryScalarText(db, "SELECT dolt_cherry_pick('feature')");
+  check("stale_conflict_cherry_pick_busy",
+        strstr(res, "another connection")!=0);
+
+  doltliteGetSessionMergeState(db, &isMerging, 0, &conflictsHash);
+  check("stale_conflict_cherry_pick_not_merging", isMerging==0);
+  check("stale_conflict_cherry_pick_no_conflicts_catalog",
+        prollyHashIsEmpty(&conflictsHash));
+  check("stale_conflict_working_still_main",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+
+  check("stale_conflict_insert_after",
+        execSql(db, "INSERT INTO t VALUES(3,'after');")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'after');");
+  check("stale_conflict_cherry_pick_not_unresolved_merge",
+        strstr(res, "unresolved merge conflicts")==0);
+  check("stale_conflict_cherry_pick_commit_after", strlen(res)==40);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_cherry_pick_seal_fail_keeps_advanced_tip(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  char dbpath[256];
+  const char *res;
+  ProllyHash sessionHead;
+  ProllyHash diskTip;
+  int found = 0;
+
+  printf("=== Cherry-pick Seal Failure Keeps Advanced Tip ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_cherry_pick_seal_fail_keeps_advanced_tip");
+  removeDbFiles(dbpath);
+
+  check("open_db_seal_fail", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_seal_fail_repo", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_commit('-A', '-m', 'feat');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  doltliteTestFailNextVcSeal();
+  res = queryScalarText(db, "SELECT dolt_cherry_pick('feature')");
+  check("cherry_pick_seal_fail_reports_error", strstr(res, "ERROR:")!=0);
+
+  cs = doltliteGetChunkStore(db);
+  check("cherry_pick_seal_fail_has_store", cs!=0);
+  doltliteGetSessionHead(db, &sessionHead);
+  check("cherry_pick_seal_fail_read_disk_tip",
+        cs && chunkStoreFindBranch(cs, "main", &diskTip)==SQLITE_OK);
+  found = cs && !prollyHashIsEmpty(&diskTip);
+  check("cherry_pick_seal_fail_disk_tip_advanced", found);
+  check("cherry_pick_seal_fail_session_matches_disk",
+        found && prollyHashCompare(&sessionHead, &diskTip)==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -10703,6 +10792,8 @@ static const RegressionCase aCases[] = {
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
   { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
+  { "cherry_pick_stale_conflict_clears_session", "Cherry-pick Stale Conflict Clears Session Test", run_cherry_pick_stale_conflict_clears_session },
+  { "cherry_pick_seal_fail_keeps_advanced_tip", "Cherry-pick Seal Failure Keeps Advanced Tip Test", run_cherry_pick_seal_fail_keeps_advanced_tip },
   { "failed_cherry_pick_reopen_preserves_conflict_state", "Failed Cherry-pick Reopen Preserves Conflict State Test", run_failed_cherry_pick_reopen_preserves_conflict_state },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },

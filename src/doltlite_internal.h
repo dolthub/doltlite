@@ -1267,6 +1267,8 @@ int doltliteMutateRefsExpected(
 );
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg);
 void doltliteTestCrashFinalize(const char *zOperation);
+void doltliteTestFailNextVcSeal(void);
+void doltliteTestFailNextHeadConfirm(void);
 
 const char *doltliteGetAuthorName(sqlite3 *db);
 int doltliteSetAuthorName(sqlite3 *db, const char *zName);
