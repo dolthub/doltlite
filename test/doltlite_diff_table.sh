@@ -237,4 +237,60 @@ run_test "shape_no_modified_pairing" \
   "0" "$DBS"
 rm -f "$DBS"
 
+
+# Historical sides render by column NAME against the schema at their commit,
+# not by record position under the current schema: after a mid-position
+# column drop, from_c must show the old row's c, and the base commit's
+# "added" row must show its c even though the record still holds three
+# fields.
+DBN=/tmp/test_dt_namemap_$$.db; rm -f "$DBN"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','drop_b');" | $DOLTLITE "$DBN" > /dev/null 2>&1
+
+run_test "namemap_from_after_drop" \
+  "SELECT from_a || '=' || from_c FROM dolt_diff_t WHERE diff_type='modified';" \
+  "1=CEE" "$DBN"
+run_test "namemap_to_at_old_commit" \
+  "SELECT to_a || '=' || to_c FROM dolt_diff_t WHERE diff_type='added';" \
+  "1=CEE" "$DBN"
+
+# Re-adding a dropped column moves it to the end of the declared order; the
+# base commit's record still holds it at its old position, so only a name
+# walk finds it.
+DBR=/tmp/test_dt_readd_$$.db; rm -f "$DBR"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t ADD COLUMN b TEXT;
+UPDATE t SET b='NEWBEE';
+SELECT dolt_commit('-Am','moved_b');" | $DOLTLITE "$DBR" > /dev/null 2>&1
+
+run_test "namemap_moved_col_from" \
+  "SELECT from_b || '/' || from_c FROM dolt_diff_t WHERE diff_type='modified';" \
+  "BEE/CEE" "$DBR"
+run_test "namemap_moved_col_to" \
+  "SELECT to_b || '/' || to_c FROM dolt_diff_t WHERE diff_type='modified';" \
+  "NEWBEE/CEE" "$DBR"
+
+# A PK-only WITHOUT ROWID table whose recreate swapped the key column order
+# decodes each side's key with that side's primary key definition.
+DBK=/tmp/test_dt_pkswap_$$.db; rm -f "$DBK"
+echo "CREATE TABLE t(a TEXT, b TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO t VALUES('k1','k2');
+SELECT dolt_commit('-Am','base');
+DROP TABLE t;
+CREATE TABLE t(b TEXT, a TEXT, PRIMARY KEY(b,a)) WITHOUT ROWID;
+INSERT INTO t VALUES('k2','k1');
+SELECT dolt_commit('-Am','swap');" | $DOLTLITE "$DBK" > /dev/null 2>&1
+
+run_test "namemap_pkswap_from" \
+  "SELECT from_a || '/' || from_b FROM dolt_diff_t WHERE diff_type='removed';" \
+  "k1/k2" "$DBK"
+
+rm -f "$DBN" "$DBR" "$DBK"
+
 dltest_finish

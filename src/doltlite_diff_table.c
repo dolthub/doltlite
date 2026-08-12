@@ -46,7 +46,10 @@ struct AuditRow {
   u8 keyIsIntKey;
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
-  u8 *pKeyRec; int nKeyRec;   /* owned record rebuilt from a clustered key */
+  /* Owned records rebuilt from a clustered key, one per side so each is
+  ** decoded with that side's primary key definition. */
+  u8 *pKeyRec; int nKeyRec;
+  u8 *pOldKeyRec; int nOldKeyRec;
   char zFromCommit[PROLLY_HASH_SIZE*2+1];
   char zToCommit[PROLLY_HASH_SIZE*2+1];
   i64 fromDate;
@@ -92,8 +95,11 @@ struct DiffTblCursor {
   ProllyDiffIter diffIter;
   int diffIterOpen;
 
-  DoltliteColInfo fromColInfo;
-  DoltliteColInfo toColInfo;
+  /* Columns as each side's commit declares them; cached by schema hash and
+  ** reused across pairs. An invalid side renders with the vtab's declared
+  ** layout. */
+  DoltliteSideCols fromSide;
+  DoltliteSideCols toSide;
   int    needFilter;
 
   AuditRow row;
@@ -107,6 +113,7 @@ struct DiffTblCursor {
 
 static void clearAuditRow(AuditRow *r){
   sqlite3_free(r->pKeyRec);
+  sqlite3_free(r->pOldKeyRec);
   memset(r, 0, sizeof(*r));
 }
 
@@ -744,51 +751,9 @@ static int buildRangeSpecDiffPair(
 }
 
 static void freePairCols(DiffTblCursor *pCur){
-  doltliteFreeColInfo(&pCur->fromColInfo);
-  doltliteFreeColInfo(&pCur->toColInfo);
+  doltliteSideColsClear(&pCur->fromSide);
+  doltliteSideColsClear(&pCur->toSide);
   pCur->needFilter = 0;
-}
-
-static int loadColInfoAtCatalog(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  const char *zTableName,
-  DoltliteColInfo *pOut
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry entry;
-  int found = 0;
-  sqlite3 *tmp = 0;
-  int rc;
-
-  memset(pOut, 0, sizeof(*pOut));
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
-
-  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTableName,
-                                  &entry, &found);
-  if( rc!=SQLITE_OK ) return rc;
-  if( !found || !entry.zSql ){
-    clearSchemaEntry(&entry);
-    return SQLITE_NOTFOUND;
-  }
-
-  rc = sqlite3_open(":memory:", &tmp);
-  if( rc!=SQLITE_OK ) goto cleanup;
-  rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-  if( rc!=SQLITE_OK ) goto cleanup;
-
-  rc = doltliteGetColumnNames(tmp, zTableName, pOut);
-  if( rc!=SQLITE_OK ) goto cleanup;
-  if( pOut->nCol<=0 ){ rc = SQLITE_NOTFOUND; goto cleanup; }
-
-cleanup:
-  if( tmp ) sqlite3_close(tmp);
-  clearSchemaEntry(&entry);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeColInfo(pOut);
-  }
-  return rc;
 }
 
 static int changeIsSchemaOnly(
@@ -852,7 +817,7 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   DiffTblVtab *pVtab = (DiffTblVtab*)pCur->base.pVtab;
   int rc;
 
-  freePairCols(pCur);
+  pCur->needFilter = 0;
 
   if( !cs ) return SQLITE_OK;
 
@@ -878,20 +843,18 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
     pCur->diffIterOpen = 1;
 
-    if( prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)!=0 ){
-      int rc2;
-      rc2 = loadColInfoAtCatalog(db, &p->fromCatHash, pVtab->zTableName,
-                                 &pCur->fromColInfo);
-      if( rc2==SQLITE_OK ){
-        rc2 = loadColInfoAtCatalog(db, &p->toCatHash, pVtab->zTableName,
-                                   &pCur->toColInfo);
-      }
-      if( rc2==SQLITE_OK ){
-        pCur->needFilter = 1;
-      }else{
-        freePairCols(pCur);
-      }
+    rc = doltliteSideColsLoad(db, &p->fromCatHash, &p->fromSchemaHash,
+                              pVtab->zTableName, &pVtab->cols,
+                              &pCur->fromSide);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSideColsLoad(db, &p->toCatHash, &p->toSchemaHash,
+                                pVtab->zTableName, &pVtab->cols,
+                                &pCur->toSide);
     }
+    if( rc!=SQLITE_OK ) return rc;
+
+    pCur->needFilter = pCur->fromSide.valid && pCur->toSide.valid
+        && prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)!=0;
     return SQLITE_OK;
   }
 }
@@ -911,7 +874,7 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
          && pChange->type==PROLLY_DIFF_MODIFY
          && changeIsSchemaOnly(pChange->pOldVal, pChange->nOldVal,
                                pChange->pNewVal, pChange->nNewVal,
-                               &pCur->fromColInfo, &pCur->toColInfo) ){
+                               &pCur->fromSide.ci, &pCur->toSide.ci) ){
           continue;
         }
 
@@ -930,24 +893,41 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
         pCur->row.nNewVal = pChange->pNewVal ? pChange->nNewVal : 0;
 
         /* PK-only clustered rows store an empty value; both sides of the
-        ** change share one key, so rebuild the record from it once and let
-        ** each side that exists (per the diff type) present it. */
+        ** change share one key, but each is decoded with its own side's
+        ** primary key definition so historical keys read correctly. */
         if( (pCur->row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
          || (pCur->row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
           DiffTblVtab *pV = (DiffTblVtab*)pCur->base.pVtab;
-          sqlite3_free(pCur->row.pKeyRec);
-          pCur->row.pKeyRec = 0;
-          pCur->row.nKeyRec = 0;
-          rc = doltliteRecordFromClusteredKey(db, pV->zTableName,
-                   pChange->pKey, pChange->nKey,
-                   &pCur->row.pKeyRec, &pCur->row.nKeyRec);
-          if( rc!=SQLITE_OK ) return rc;
-          if( pCur->row.pKeyRec ){
-            if( pCur->row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
-              pCur->row.pOldVal = pCur->row.pKeyRec;
-              pCur->row.nOldVal = pCur->row.nKeyRec;
+          if( pCur->row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
+            sqlite3_free(pCur->row.pOldKeyRec);
+            pCur->row.pOldKeyRec = 0;
+            pCur->row.nOldKeyRec = 0;
+            rc = pCur->fromSide.valid
+              ? doltliteRecordFromClusteredKeyCols(db, &pCur->fromSide.ci,
+                    pChange->pKey, pChange->nKey,
+                    &pCur->row.pOldKeyRec, &pCur->row.nOldKeyRec)
+              : doltliteRecordFromClusteredKey(db, pV->zTableName,
+                    pChange->pKey, pChange->nKey,
+                    &pCur->row.pOldKeyRec, &pCur->row.nOldKeyRec);
+            if( rc!=SQLITE_OK ) return rc;
+            if( pCur->row.pOldKeyRec ){
+              pCur->row.pOldVal = pCur->row.pOldKeyRec;
+              pCur->row.nOldVal = pCur->row.nOldKeyRec;
             }
-            if( pCur->row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
+          }
+          if( pCur->row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
+            sqlite3_free(pCur->row.pKeyRec);
+            pCur->row.pKeyRec = 0;
+            pCur->row.nKeyRec = 0;
+            rc = pCur->toSide.valid
+              ? doltliteRecordFromClusteredKeyCols(db, &pCur->toSide.ci,
+                    pChange->pKey, pChange->nKey,
+                    &pCur->row.pKeyRec, &pCur->row.nKeyRec)
+              : doltliteRecordFromClusteredKey(db, pV->zTableName,
+                    pChange->pKey, pChange->nKey,
+                    &pCur->row.pKeyRec, &pCur->row.nKeyRec);
+            if( rc!=SQLITE_OK ) return rc;
+            if( pCur->row.pKeyRec ){
               pCur->row.pNewVal = pCur->row.pKeyRec;
               pCur->row.nNewVal = pCur->row.nKeyRec;
             }
@@ -1124,7 +1104,8 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   int nCols = pVtab->cols.nCol;
 
   if( nCols > 0 && col < nCols ){
-    doltliteResultUserCol(ctx, &pVtab->cols, r->pNewVal, r->nNewVal,
+    doltliteResultSideCol(ctx, &c->toSide, &pVtab->cols,
+                          r->pNewVal, r->nNewVal,
                           r->intKey, r->keyIsIntKey, col);
   }else if( nCols > 0 && col == nCols ){
 
@@ -1133,7 +1114,8 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     doltliteResultTimestamp(ctx, r->toDate);
   }else if( nCols > 0 && col < 2*nCols+2 ){
     int colIdx = col - nCols - 2;
-    doltliteResultUserCol(ctx, &pVtab->cols, r->pOldVal, r->nOldVal,
+    doltliteResultSideCol(ctx, &c->fromSide, &pVtab->cols,
+                          r->pOldVal, r->nOldVal,
                           r->intKey, r->keyIsIntKey, colIdx);
   }else if( nCols > 0 && col == 2*nCols+2 ){
 

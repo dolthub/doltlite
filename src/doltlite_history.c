@@ -42,6 +42,9 @@ struct HistVtab {
 typedef struct HistCursor HistCursor;
 struct HistCursor {
   DoltliteVtabCursorCommon common;
+  /* Columns as the visited commit's schema declares them, cached by schema
+  ** hash across commits. Invalid renders with the declared layout. */
+  DoltliteSideCols side;
   DoltliteCommitQueue queue;
   char zCommitHex[PROLLY_HASH_SIZE*2+1];
   char *zCommitter;
@@ -53,6 +56,7 @@ struct HistCursor {
 
 static void htCursorReset(HistCursor *c){
   doltliteVtabCommonReset(&c->common);
+  doltliteSideColsClear(&c->side);
   sqlite3_free(c->zCommitter);
   c->zCommitter = 0;
   doltliteCommitQueueClear(&c->queue);
@@ -74,9 +78,11 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   ProllyCache *pCache = doltliteGetCache(db);
   DoltliteCommit commit;
   ProllyHash tableRoot; u8 flags = 0;
+  ProllyHash schemaHash;
   int rc, res;
   int seekable;
 
+  memset(&schemaHash, 0, sizeof(schemaHash));
   memset(&commit, 0, sizeof(commit));
   rc = doltliteLoadCommit(db, pCommitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
@@ -99,7 +105,12 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   }
 
   rc = doltliteLoadTableRootByName(db, &commit.catalogHash, zTableName,
-                                   &tableRoot, &flags, 0);
+                                   &tableRoot, &flags, &schemaHash);
+  if( rc==SQLITE_OK ){
+    DoltliteVtabCommon *v = (DoltliteVtabCommon*)c->common.base.pVtab;
+    rc = doltliteSideColsLoad(db, &commit.catalogHash, &schemaHash,
+                              zTableName, &v->cols, &c->side);
+  }
   doltliteCommitClear(&commit);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
@@ -184,7 +195,8 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
       }
       if( prollyCursorIsValid(&c->common.tblCur)
        && (!c->common.rootIntKey || htRowMatchesUpper(c)) ){
-        return doltliteVtabCommonCaptureRow(&c->common, db, zTableName);
+        return doltliteVtabCommonCaptureRowSide(&c->common, db, zTableName,
+                                                &c->side);
       }
       prollyCursorClose(&c->common.tblCur);
       c->common.tblCurOpen = 0;
@@ -203,7 +215,8 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     if( rc!=SQLITE_OK ) return rc;
 
     if( c->common.tblCurOpen ){
-      return doltliteVtabCommonCaptureRow(&c->common, db, zTableName);
+      return doltliteVtabCommonCaptureRowSide(&c->common, db, zTableName,
+                                              &c->side);
     }
   }
 
@@ -369,7 +382,8 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   nCols=v->cols.nCol;
 
   if(nCols>0 && col<nCols){
-    doltliteResultUserCol(ctx, &v->cols, c->common.pVal, c->common.nVal,
+    doltliteResultSideCol(ctx, &c->side, &v->cols,
+                          c->common.pVal, c->common.nVal,
                           c->common.intKey, c->common.rootIntKey, col);
   }else{
     int fixedCol=col-nCols;

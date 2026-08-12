@@ -211,6 +211,36 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 oracle "slice_multi_col" "$SETUP_MULTI" \
   "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_m('HEAD~1', 'HEAD');"
 
+echo "--- historical sides render by column name ---"
+
+SETUP_NAMEMAP="
+CREATE TABLE t(a INT PRIMARY KEY, b VARCHAR(32), c VARCHAR(32));
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','drop_b');
+"
+
+oracle "namemap_from_side_after_col_drop" "$SETUP_NAMEMAP" \
+  "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_c,''), '|', IFNULL(from_a,''), '|', IFNULL(from_c,''), '|', diff_type) FROM dolt_diff_t('HEAD~1','HEAD');"
+
+oracle "namemap_to_side_at_old_commit" "$SETUP_NAMEMAP" \
+  "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_c,''), '|', IFNULL(from_a,''), '|', IFNULL(from_c,''), '|', diff_type) FROM dolt_diff_t('HEAD~2','HEAD~1');"
+
+SETUP_READD="
+CREATE TABLE t(a INT PRIMARY KEY, b VARCHAR(32), c VARCHAR(32));
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t ADD COLUMN b VARCHAR(32);
+UPDATE t SET b='NEWBEE';
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','moved_b');
+"
+
+oracle "namemap_moved_column" "$SETUP_READD" \
+  "SELECT CONCAT('R|', IFNULL(to_b,''), '|', IFNULL(to_c,''), '|', IFNULL(from_b,''), '|', IFNULL(from_c,''), '|', diff_type) FROM dolt_diff_t('HEAD~1','HEAD');"
+
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

@@ -56,6 +56,9 @@ struct WorkspaceCursor {
   ProllyDiffIter iter;
   ProllyHash headRoot, stagedRoot, workingRoot;
   u8 headFlags, stagedFlags, workingFlags;
+  /* Columns as each phase's catalog declares them; an invalid side renders
+  ** with the vtab's declared layout. */
+  DoltliteSideCols headSide, stagedSide, workingSide;
   int stagedOnly;
   WorkspaceRows *pRows;
 };
@@ -152,25 +155,33 @@ static int wsAppendRow(
   ** key for each side the diff type says exists. */
   if( (row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
    || (row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
-    u8 *pRec = 0; int nRec = 0;
-    if( doltliteRecordFromClusteredKey(pVtab->db, pVtab->zTableName,
-            pChange->pKey, pChange->nKey, &pRec, &nRec)!=SQLITE_OK ){
-      goto nomem;
-    }
-    if( pRec ){
-      if( row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
-        row.pOldVal = sqlite3_malloc(nRec);
-        if( !row.pOldVal ){ sqlite3_free(pRec); goto nomem; }
-        memcpy(row.pOldVal, pRec, nRec);
+    const DoltliteSideCols *pFromSide = staged ? &c->headSide : &c->stagedSide;
+    const DoltliteSideCols *pToSide = staged ? &c->stagedSide : &c->workingSide;
+    if( row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
+      u8 *pRec = 0; int nRec = 0;
+      int rc2 = pFromSide->valid
+        ? doltliteRecordFromClusteredKeyCols(pVtab->db, &pFromSide->ci,
+              pChange->pKey, pChange->nKey, &pRec, &nRec)
+        : doltliteRecordFromClusteredKey(pVtab->db, pVtab->zTableName,
+              pChange->pKey, pChange->nKey, &pRec, &nRec);
+      if( rc2!=SQLITE_OK ) goto nomem;
+      if( pRec ){
+        row.pOldVal = pRec;
         row.nOldVal = nRec;
       }
-      if( row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
-        row.pNewVal = sqlite3_malloc(nRec);
-        if( !row.pNewVal ){ sqlite3_free(pRec); goto nomem; }
-        memcpy(row.pNewVal, pRec, nRec);
+    }
+    if( row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
+      u8 *pRec = 0; int nRec = 0;
+      int rc2 = pToSide->valid
+        ? doltliteRecordFromClusteredKeyCols(pVtab->db, &pToSide->ci,
+              pChange->pKey, pChange->nKey, &pRec, &nRec)
+        : doltliteRecordFromClusteredKey(pVtab->db, pVtab->zTableName,
+              pChange->pKey, pChange->nKey, &pRec, &nRec);
+      if( rc2!=SQLITE_OK ) goto nomem;
+      if( pRec ){
+        row.pNewVal = pRec;
         row.nNewVal = nRec;
       }
-      sqlite3_free(pRec);
     }
   }
   if( pRows->n>=pRows->nAlloc ){
@@ -201,7 +212,7 @@ static void wsCloseIter(WorkspaceCursor *c){
 static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   sqlite3 *db = pVtab->db;
   ProllyHash headHash, headCat, stagedCat, workingCat;
-  ProllyHash schemaHash;
+  ProllyHash headSchema, stagedSchema, workingSchema;
 
   int rc;
 
@@ -211,7 +222,9 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   memset(&c->headRoot, 0, sizeof(c->headRoot));
   memset(&c->stagedRoot, 0, sizeof(c->stagedRoot));
   memset(&c->workingRoot, 0, sizeof(c->workingRoot));
-  memset(&schemaHash, 0, sizeof(schemaHash));
+  memset(&headSchema, 0, sizeof(headSchema));
+  memset(&stagedSchema, 0, sizeof(stagedSchema));
+  memset(&workingSchema, 0, sizeof(workingSchema));
   c->headFlags = 0;
   c->stagedFlags = 0;
   c->workingFlags = 0;
@@ -237,18 +250,32 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
 
   rc = doltliteLoadTableRootByNameOrEmpty(db, &headCat, pVtab->zTableName,
                                           &c->headRoot, &c->headFlags,
-                                          &schemaHash);
+                                          &headSchema);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadTableRootByNameOrEmpty(db, &stagedCat, pVtab->zTableName,
                                           &c->stagedRoot, &c->stagedFlags,
-                                          &schemaHash);
+                                          &stagedSchema);
   if( rc!=SQLITE_OK ) return rc;
   if( c->stagedOnly!=1 ){
     rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, pVtab->zTableName,
                                             &c->workingRoot, &c->workingFlags,
-                                            &schemaHash);
+                                            &workingSchema);
     if( rc!=SQLITE_OK ) return rc;
   }
+
+  rc = doltliteSideColsLoad(db, &headCat, &headSchema, pVtab->zTableName,
+                            &pVtab->cols, &c->headSide);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSideColsLoad(db, &stagedCat, &stagedSchema,
+                              pVtab->zTableName, &pVtab->cols,
+                              &c->stagedSide);
+  }
+  if( rc==SQLITE_OK && c->stagedOnly!=1 ){
+    rc = doltliteSideColsLoad(db, &workingCat, &workingSchema,
+                              pVtab->zTableName, &pVtab->cols,
+                              &c->workingSide);
+  }
+  if( rc!=SQLITE_OK ) return rc;
 
   if( !c->headFlags ){
     c->headFlags = c->stagedFlags ? c->stagedFlags : c->workingFlags;
@@ -383,9 +410,16 @@ static int wsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
   return doltliteVtabOpenCursor(pp, sizeof(WorkspaceCursor));
 }
 
+static void wsClearSides(WorkspaceCursor *c){
+  doltliteSideColsClear(&c->headSide);
+  doltliteSideColsClear(&c->stagedSide);
+  doltliteSideColsClear(&c->workingSide);
+}
+
 static int wsClose(sqlite3_vtab_cursor *cur){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   wsCloseIter(c);
+  wsClearSides(c);
   wsRowsRelease(c->pRows);
   sqlite3_free(cur);
   return SQLITE_OK;
@@ -398,6 +432,7 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   int rc;
   (void)idxStr;
   wsCloseIter(c);
+  wsClearSides(c);
   wsRowsRelease(c->pRows);
   c->pRows = wsRowsNew();
   if( !c->pRows ) return SQLITE_NOMEM;
@@ -454,10 +489,12 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     if( zType ) sqlite3_result_text(ctx, zType, -1, SQLITE_STATIC);
     else sqlite3_result_null(ctx);
   }else if( col>=3 && col<3+nCols ){
-    doltliteResultUserCol(ctx, &p->cols, r->pNewVal, r->nNewVal,
+    doltliteResultSideCol(ctx, r->staged ? &c->stagedSide : &c->workingSide,
+                          &p->cols, r->pNewVal, r->nNewVal,
                           r->intKey, r->keyIsIntKey, col-3);
   }else if( col>=3+nCols && col<3+2*nCols ){
-    doltliteResultUserCol(ctx, &p->cols, r->pOldVal, r->nOldVal,
+    doltliteResultSideCol(ctx, r->staged ? &c->headSide : &c->stagedSide,
+                          &p->cols, r->pOldVal, r->nOldVal,
                           r->intKey, r->keyIsIntKey, col-3-nCols);
   }else{
     sqlite3_result_null(ctx);
