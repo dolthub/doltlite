@@ -204,6 +204,7 @@ static int mergePass1MergeTableData(
   if( !handled ){
     rc = mergeTableRows(c->db, &pAnc->root, &pOurs->root,
                         pTheirsRoot, pOurs->flags,
+                        pAnc->flags, pTheirsEntry->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo, 0);
     if( rc!=SQLITE_OK ){
@@ -845,6 +846,7 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
       }
       rc = mergeTableRows(c->db, &ancEntry->root, &c->aOurs[iTable1Idx].root,
                           &theirsEntry->root, c->aOurs[iTable1Idx].flags,
+                          ancEntry->flags, theirsEntry->flags,
                           &mergedTableRoot, &nConflicts, &aConflictRows,
                           NULL, 0, &policy);
       sqlite3_free((void*)policy.azRenameOverDrop);

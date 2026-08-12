@@ -165,7 +165,9 @@ int prollyThreeWayDiff(
   const ProllyHash *pAncestorRoot,
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
-  u8 flags,
+  u8 ancFlags,
+  u8 oursFlags,
+  u8 theirsFlags,
   ThreeWayDiffCallback xCallback,
   void *pCtx
 ){
@@ -175,28 +177,38 @@ int prollyThreeWayDiff(
   ProllyDiffChange *pR = 0;
   int rcL, rcR;
   int rc = SQLITE_OK;
+  int skipPair;
 
   memset(&iterL, 0, sizeof(iterL));
   memset(&iterR, 0, sizeof(iterR));
 
   rcL = prollyDiffIterOpen(&iterL, pStore, pCache,
-                           pAncestorRoot, pOursRoot, flags, flags);
+                           pAncestorRoot, pOursRoot, ancFlags, oursFlags);
   if( rcL!=SQLITE_OK ){
     rc = rcL;
     goto cleanup;
   }
   rcR = prollyDiffIterOpen(&iterR, pStore, pCache,
-                           pAncestorRoot, pTheirsRoot, flags, flags);
+                           pAncestorRoot, pTheirsRoot, ancFlags, theirsFlags);
   if( rcR!=SQLITE_OK ){
     rc = rcR;
     goto cleanup;
   }
 
+  skipPair = ((oursFlags ^ theirsFlags) & PROLLY_NODE_INTKEY)!=0;
+
   rcL = prollyDiffIterStep(&iterL, &pL);
   rcR = prollyDiffIterStep(&iterR, &pR);
 
   while( rcL==SQLITE_ROW && rcR==SQLITE_ROW ){
-    int cmp = diffChangeKeyCmp(pL, pR, flags);
+    int cmp;
+    if( skipPair ){
+      rc = emitLeftOnly(pL, xCallback, pCtx);
+      if( rc!=SQLITE_OK ) goto cleanup;
+      rcL = prollyDiffIterStep(&iterL, &pL);
+      continue;
+    }
+    cmp = diffChangeKeyCmp(pL, pR, oursFlags);
     if( cmp < 0 ){
       rc = emitLeftOnly(pL, xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;

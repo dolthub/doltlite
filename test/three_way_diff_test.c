@@ -118,6 +118,21 @@ static int treeDeleteInt(
                             0, 0, key, pNewRoot);
 }
 
+static int treeInsertBlob(
+  ChunkStore *cs, ProllyCache *cache,
+  const ProllyHash *pRoot, const u8 *pKey, int nKey,
+  const char *val, ProllyHash *pNewRoot
+){
+  int nRec = 0;
+  u8 *pRec = encodeTextRecord(val, &nRec);
+  int rc;
+  if( !pRec ) return SQLITE_NOMEM;
+  rc = prollyMutateInsert(cs, cache, pRoot, PROLLY_NODE_BLOBKEY,
+                          pKey, nKey, 0, pRec, nRec, pNewRoot);
+  sqlite3_free(pRec);
+  return rc;
+}
+
 static int openTestStore(ChunkStore *cs, ProllyCache *cache, const char *path){
   int rc;
   char chunks[512];
@@ -185,6 +200,7 @@ static void test_identical(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &root, &root, &root,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("identical: diff ok", rc==SQLITE_OK);
   check("identical: no changes", nChanges==0);
@@ -216,6 +232,7 @@ static void test_left_add(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &ancestor,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("left_add: diff ok", rc==SQLITE_OK);
   check("left_add: 1 change", nChanges==1);
@@ -253,6 +270,7 @@ static void test_right_add(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ancestor, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("right_add: diff ok", rc==SQLITE_OK);
   check("right_add: 1 change", nChanges==1);
@@ -288,6 +306,7 @@ static void test_left_delete(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &ancestor,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("left_delete: diff ok", rc==SQLITE_OK);
   check("left_delete: 1 change", nChanges==1);
@@ -324,6 +343,7 @@ static void test_right_delete(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ancestor, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("right_delete: diff ok", rc==SQLITE_OK);
   check("right_delete: 1 change", nChanges==1);
@@ -360,6 +380,7 @@ static void test_left_modify(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &ancestor,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("left_modify: diff ok", rc==SQLITE_OK);
   check("left_modify: 1 change", nChanges==1);
@@ -400,6 +421,7 @@ static void test_right_modify(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ancestor, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("right_modify: diff ok", rc==SQLITE_OK);
   check("right_modify: 1 change", nChanges==1);
@@ -440,6 +462,7 @@ static void test_convergent_modify(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conv_modify: diff ok", rc==SQLITE_OK);
   check("conv_modify: 1 change", nChanges==1);
@@ -480,6 +503,7 @@ static void test_convergent_delete(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conv_delete: diff ok", rc==SQLITE_OK);
   check("conv_delete: 1 change", nChanges==1);
@@ -520,6 +544,7 @@ static void test_convergent_add(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conv_add: diff ok", rc==SQLITE_OK);
   check("conv_add: 1 change", nChanges==1);
@@ -560,6 +585,7 @@ static void test_conflict_mm(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conflict_mm: diff ok", rc==SQLITE_OK);
   check("conflict_mm: 1 change", nChanges==1);
@@ -604,6 +630,7 @@ static void test_conflict_dm(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conflict_dm: diff ok", rc==SQLITE_OK);
   check("conflict_dm: 1 change", nChanges==1);
@@ -644,6 +671,7 @@ static void test_conflict_dm_reversed(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conflict_dm_r: diff ok", rc==SQLITE_OK);
   check("conflict_dm_r: 1 change", nChanges==1);
@@ -691,6 +719,7 @@ static void test_mixed(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("mixed: diff ok", rc==SQLITE_OK);
   check("mixed: 3 changes", nChanges==3);
@@ -742,6 +771,7 @@ static void test_empty_ancestor(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("empty_anc: diff ok", rc==SQLITE_OK);
   check("empty_anc: 4 changes", nChanges==4);
@@ -759,6 +789,56 @@ static void test_empty_ancestor(void){
 
   closeTestStore(&cs, &cache, path);
   printf("  test_empty_ancestor passed\n");
+}
+
+static void test_mixed_shape_empty_ancestor(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash ancestor, ours, theirs;
+  u8 blobKey[8];
+  int rc;
+  int i;
+  int leftAdds = 0, rightAdds = 0, paired = 0;
+  const char *path = "/tmp/test_3wd_mixed_shape";
+
+  rc = openTestStore(&cs, &cache, path);
+  check("mixed_shape: open", rc==SQLITE_OK);
+  memset(&ancestor, 0, sizeof(ancestor));
+  prollyEncodeIntKey(1, blobKey);
+
+  rc = treeInsertInt(&cs, &cache, &ancestor, 1, "ours", &ours);
+  check("mixed_shape: ours", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  rc = treeInsertBlob(&cs, &cache, &ancestor, blobKey, 8, "theirs", &theirs);
+  check("mixed_shape: theirs", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+
+  resetChanges();
+  rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          0, PROLLY_NODE_INTKEY, PROLLY_NODE_BLOBKEY,
+                          collectCallback, 0);
+  check("mixed_shape: diff ok", rc==SQLITE_OK);
+  for(i=0; i<nChanges; i++){
+    if( aChanges[i].type==THREE_WAY_LEFT_ADD ) leftAdds++;
+    if( aChanges[i].type==THREE_WAY_RIGHT_ADD ) rightAdds++;
+    if( aChanges[i].type==THREE_WAY_CONFLICT_MM
+     || aChanges[i].type==THREE_WAY_CONVERGENT ){
+      paired++;
+    }
+  }
+  check("mixed_shape: 1 left add", leftAdds==1);
+  check("mixed_shape: 1 right add", rightAdds==1);
+  check("mixed_shape: not paired", paired==0);
+  check("mixed_shape: 2 changes", nChanges==2);
+  if( nChanges>=2 ){
+    check("mixed_shape: right key is blob",
+          aChanges[0].type==THREE_WAY_RIGHT_ADD
+            ? aChanges[0].nKey==8
+            : aChanges[1].nKey==8);
+  }
+
+  closeTestStore(&cs, &cache, path);
+  printf("  test_mixed_shape_empty_ancestor passed\n");
 }
 
 static void test_conflict_add(void){
@@ -788,6 +868,7 @@ static void test_conflict_add(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("conflict_add: diff ok", rc==SQLITE_OK);
   check("conflict_add: 1 change", nChanges==1);
@@ -857,6 +938,7 @@ static void test_many_rows(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("many_rows: diff ok", rc==SQLITE_OK);
   check("many_rows: 10 changes", nChanges==10);
@@ -905,6 +987,7 @@ static void test_sorted_output(void){
 
   resetChanges();
   rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("sorted: diff ok", rc==SQLITE_OK);
   check("sorted: 4 changes", nChanges==4);
@@ -947,6 +1030,7 @@ static void test_open_failure_cleanup(void){
   resetChanges();
   poisonStack();
   rc = prollyThreeWayDiff(&cs, &cache, &bogus, &bogus, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
                           PROLLY_NODE_INTKEY, collectCallback, 0);
   check("open_fail: diff returns error", rc!=SQLITE_OK);
   check("open_fail: no changes emitted", nChanges==0);
@@ -975,6 +1059,7 @@ int main(void){
   test_conflict_dm_reversed();
   test_mixed();
   test_empty_ancestor();
+  test_mixed_shape_empty_ancestor();
   test_conflict_add();
   test_many_rows();
   test_sorted_output();

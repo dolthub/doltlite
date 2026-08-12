@@ -809,6 +809,8 @@ int mergeTableRows(
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
   u8 flags,
+  u8 ancFlags,
+  u8 theirsFlags,
   ProllyHash *pMergedRoot,
   int *pnConflicts,
   DoltliteConflictRow **ppConflicts,
@@ -823,6 +825,14 @@ int mergeTableRows(
   ProllyMutator mut;
   int rc;
   int i;
+
+  if( ((flags ^ theirsFlags) & PROLLY_NODE_INTKEY)!=0 ){
+    return SQLITE_ERROR;
+  }
+  if( !prollyHashIsEmpty(pAncRoot)
+   && ((flags ^ ancFlags) & PROLLY_NODE_INTKEY)!=0 ){
+    return SQLITE_ERROR;
+  }
 
   memset(&ctx, 0, sizeof(ctx));
   ctx.isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
@@ -842,7 +852,8 @@ int mergeTableRows(
   }
 
   rc = prollyThreeWayDiff(cs, cache, pAncRoot, pOursRoot, pTheirsRoot,
-                          flags, rowMergeCallback, &ctx);
+                          ancFlags, flags, theirsFlags,
+                          rowMergeCallback, &ctx);
   if( rc!=SQLITE_OK ) goto merge_err;
 
   if( !prollyMutMapIsEmpty(ctx.pEdits) ){
