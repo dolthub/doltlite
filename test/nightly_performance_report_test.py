@@ -76,6 +76,36 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         for name in nightly_report.ALL_SUITES:
             self.write_suite(directory, name)
 
+    def test_absolute_gate_tiers(self):
+        ordinary = nightly_report.Result("mem_reads", "point", 100, 240)
+        autocommit = nightly_report.Result(
+            "ac_writes", "insert_ac", 100, 600
+        )
+        self.assertEqual(nightly_report.individual_limit(ordinary), 2.4)
+        self.assertEqual(nightly_report.individual_limit(autocommit), 6.0)
+
+        repository = pathlib.Path(__file__).parent.parent
+        for script in (
+            "sysbench_compare.sh",
+            "sysbench_compare_textpk.sh",
+            "sysbench_compare_blobpk.sh",
+            "sysbench_compare_compositepk.sh",
+        ):
+            contents = (repository / "test" / script).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(
+                "BENCH_AC_WRITE_MAX_MULTIPLIER="
+                "${BENCH_AC_WRITE_MAX_MULTIPLIER:-8}",
+                contents,
+            )
+
+        workflow = (
+            repository / ".github" / "workflows" /
+            "nightly-performance.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("BENCH_AC_WRITE_MAX_MULTIPLIER: 6", workflow)
+
     def test_generates_complete_pass_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
@@ -98,6 +128,10 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("### File-backed", report)
         self.assertIn(
             "| Autocommit writes | 400µs | 2.00ms | 5.0× |",
+            report,
+        )
+        self.assertIn(
+            "Durable autocommit writes use 6.0× and 5.0× ceilings",
             report,
         )
         self.assertIn("Paired-ratio noise", report)
