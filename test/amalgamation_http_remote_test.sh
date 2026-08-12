@@ -5,20 +5,38 @@ build_dir="${1:-.}"
 cd "$build_dir"
 
 cc_bin="${CC:-cc}"
+remotesrv="${REMOTESRV:-./doltlite-remotesrv}"
 if [ ! -f ./sqlite3.c ] || [ ! -f ./sqlite3.h ]; then
   echo "SKIP: sqlite3.c/sqlite3.h not found in $PWD"
   exit 0
 fi
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-amalg-local.XXXXXX")"
+if [ ! -x "$remotesrv" ]; then
+  echo "SKIP: doltlite-remotesrv not found at $remotesrv"
+  exit 0
+fi
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-amalg-http.XXXXXX")"
+srv_pid=""
 cleanup() {
+  if [ -n "$srv_pid" ]; then
+    kill "$srv_pid" 2>/dev/null || true
+    wait "$srv_pid" 2>/dev/null || true
+    srv_pid=""
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
 
-if grep -Eq 'Begin file doltlite_(remote|remote_sql|http_remote|remotesrv)\.c|DoltliteRemote|doltliteServe' ./sqlite3.c; then
-  echo "FAIL: remote implementation present in amalgamation"
+if grep -Eq 'Begin file doltlite_remotesrv\.c|doltliteServe' ./sqlite3.c; then
+  echo "FAIL: remote server implementation present in amalgamation"
   exit 1
 fi
+for source in doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c; do
+  if ! grep -q "Begin file $source" ./sqlite3.c; then
+    echo "FAIL: remote client source missing from amalgamation: $source"
+    exit 1
+  fi
+done
 
 probe_libs=(-lz -lpthread -lm)
 case "$(uname -s)" in
@@ -33,9 +51,25 @@ if [ -z "$probe" ]; then
     ./sqlite3.c "${probe_libs[@]}" -o "$probe"
 fi
 if [ ! -x "$probe" ]; then
-  echo "FAIL: amalgamation local probe not found at $probe"
+  echo "FAIL: amalgamation HTTP probe not found at $probe"
   exit 1
 fi
 
-"$probe" "$tmp/local.db"
-echo "amalgamation excludes remote implementation: PASS"
+mkdir -p "$tmp/srv"
+"$remotesrv" -p 0 --bind 127.0.0.1 "$tmp/srv" >"$tmp/srv.log" 2>&1 &
+srv_pid=$!
+
+port=""
+for _ in $(seq 1 50); do
+  port="$(sed -n 's#.*://127.0.0.1:\([0-9][0-9]*\).*#\1#p' "$tmp/srv.log" | head -1)"
+  [ -n "$port" ] && break
+  sleep 0.1
+done
+if [ -z "$port" ]; then
+  echo "FAIL: server did not start"
+  cat "$tmp/srv.log"
+  exit 1
+fi
+
+"$probe" "$tmp/src.db" "$tmp/clone.db" "http://127.0.0.1:$port/repo.db"
+echo "amalgamation remote client without server implementation: PASS"

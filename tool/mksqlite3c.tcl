@@ -166,6 +166,12 @@ if {$doltlite} {
 #endif
 #ifndef DOLTLITE_VERSION
 # define DOLTLITE_VERSION "doltlite-amalgamation"
+#endif
+
+/* winsock2.h must precede SQLite's first windows.h include. */
+#ifdef _WIN32
+# include <winsock2.h>
+# include <ws2tcpip.h>
 #endif}
 }
 
@@ -242,7 +248,8 @@ if {$doltlite} {
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
     doltlite_branch_int.h doltlite_merge_int.h doltlite_merge_constraints_int.h
     doltlite_name_index.h doltlite_parse.h
-    doltlite_record.h doltlite_vtab_util.h
+    doltlite_record.h doltlite_remote.h doltlite_vtab_util.h
+    doltlite_creds.h doltlite_net.h
   } {
     set available_hdr($hdr) 1
   }
@@ -629,7 +636,8 @@ proc emit_doltlite_engine_block {} {
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c doltlite_patch.c
     doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c
     doltlite_hashof.c doltlite_constraint_violations.c doltlite_verify_constraints.c doltlite_merge_constraints.c doltlite_merge_constraints_unique.c doltlite_merge_constraints_check.c doltlite_merge_constraints_fk.c doltlite_merge_constraints_notnull.c doltlite_merge_constraints_strict.c
-    doltlite_dbpage.c
+    doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c
+    doltlite_http_remote.c
   }
   foreach f $doltlite_emitted {
     copy_file $srcdir/$f
