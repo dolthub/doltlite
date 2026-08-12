@@ -4664,6 +4664,84 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
   removeDbFiles(dbpath);
 }
 
+/* A session that refreshes after a peer commit adopts the peer's catalog;
+** it must adopt that snapshot's branch head with it. Holding the old head
+** makes every later working-set persist record a commit the branch no
+** longer points at, and the load gate discards such a blob -- so rows this
+** session durably wrote vanish for every future connection. */
+static void run_peer_commit_keeps_local_row_durable(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  sqlite3 *dbC = 0;
+  char dbpath[256];
+
+  printf("=== Peer Commit Keeps Local Row Durable Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_peer_commit_local_row");
+  removeDbFiles(dbpath);
+
+  check("pk_open_A", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("pk_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
+
+  /* A writes an uncommitted row, then a peer commits on the same branch. */
+  check("pk_local_row", execSql(dbA, "INSERT INTO t VALUES(2,'two');")==SQLITE_OK);
+  check("pk_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("pk_peer_commit", execSql(dbB,
+    "INSERT INTO t VALUES(3,'three');"
+    "SELECT dolt_commit('-A','-m','peer');")==SQLITE_OK);
+  check("pk_close_B", sqlite3_close(dbB)==SQLITE_OK);
+  dbB = 0;
+
+  /* A writes again after the peer landed. Autocommit reported success, so
+  ** the row must be there for anyone who opens the database next. */
+  check("pk_local_row_after_peer",
+        execSql(dbA, "INSERT INTO t VALUES(4,'four');")==SQLITE_OK);
+  check("pk_close_A", sqlite3_close(dbA)==SQLITE_OK);
+  dbA = 0;
+
+  check("pk_open_C", open_db(dbpath, &dbC)==SQLITE_OK);
+  check("pk_row_survived",
+        strcmp(queryScalarText(dbC, "SELECT count(*) FROM t WHERE id=4"),
+               "1")==0);
+  check("pk_close_C", sqlite3_close(dbC)==SQLITE_OK);
+  removeDbFiles(dbpath);
+}
+
+/* The same stale head is what dolt_commit compares against, so a session
+** that outlives a peer commit could never commit again -- every retry hit
+** the conflict error, and only reconnecting escaped it. */
+static void run_commit_recovers_after_peer_commit(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  const char *res;
+  char dbpath[256];
+
+  printf("=== Commit Recovers After Peer Commit Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_commit_recovers_after_peer");
+  removeDbFiles(dbpath);
+
+  check("cr_open_A", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("cr_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
+
+  check("cr_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("cr_peer_commit", execSql(dbB,
+    "INSERT INTO t VALUES(2,'two');"
+    "SELECT dolt_commit('-A','-m','peer');")==SQLITE_OK);
+  check("cr_close_B", sqlite3_close(dbB)==SQLITE_OK);
+  dbB = 0;
+
+  check("cr_local_row", execSql(dbA, "INSERT INTO t VALUES(3,'three');")==SQLITE_OK);
+  res = queryScalarText(dbA, "SELECT dolt_commit('-A','-m','after peer')");
+  check("cr_commit_succeeds", res && strlen(res)==40 && strstr(res, "ERROR")==0);
+  check("cr_close_A", sqlite3_close(dbA)==SQLITE_OK);
+  removeDbFiles(dbpath);
+}
+
 static void run_working_set_refreshes_staged_across_connections(void){
   sqlite3 *db1 = 0;
   sqlite3 *db2 = 0;
@@ -11217,6 +11295,8 @@ static const RegressionCase aCases[] = {
   { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
   { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
+  { "peer_commit_keeps_local_row_durable", "Peer Commit Keeps Local Row Durable Test", run_peer_commit_keeps_local_row_durable },
+  { "commit_recovers_after_peer_commit", "Commit Recovers After Peer Commit Test", run_commit_recovers_after_peer_commit },
   { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },
   { "reopen_preserves_staged_working_set", "Reopen Preserves Staged Working Set Test", run_reopen_preserves_staged_working_set },
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
