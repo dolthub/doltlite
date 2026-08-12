@@ -60,8 +60,9 @@ static SQLITE_INLINE void doltliteVtabCommonReset(
   c->rootIntKey = 0;
 }
 
-static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
-  DoltliteVtabCursorCommon *c, sqlite3 *db, const char *zTableName
+static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
+  DoltliteVtabCursorCommon *c, sqlite3 *db, const char *zTableName,
+  const DoltliteSideCols *pSide
 ){
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
@@ -76,16 +77,26 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
   }else{
     /* Clustered rows whose PRIMARY KEY covers every column store an empty
     ** value; the row lives in the sort key. Rebuild the record from the key
-    ** so column reads see the PK values instead of NULLs. */
+    ** — with the visited schema's primary key when one is loaded — so
+    ** column reads see the PK values instead of NULLs. */
     const u8 *pKey; int nKey;
     int rc;
     prollyCursorKey(&c->tblCur, &pKey, &nKey);
-    rc = doltliteRecordFromClusteredKey(db, zTableName, pKey, nKey,
-                                        &c->pVal, &c->nVal);
+    rc = pSide && pSide->valid
+      ? doltliteRecordFromClusteredKeyCols(db, &pSide->ci, pKey, nKey,
+                                           &c->pVal, &c->nVal)
+      : doltliteRecordFromClusteredKey(db, zTableName, pKey, nKey,
+                                       &c->pVal, &c->nVal);
     if( rc!=SQLITE_OK ) return rc;
   }
   c->hasRow = 1;
   return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
+  DoltliteVtabCursorCommon *c, sqlite3 *db, const char *zTableName
+){
+  return doltliteVtabCommonCaptureRowSide(c, db, zTableName, 0);
 }
 
 static SQLITE_INLINE int doltliteVtabCommonDisconnect(

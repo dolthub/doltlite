@@ -2,6 +2,7 @@
 #define RECORD_CODEC_H
 
 #include "prolly_record.h"
+#include "prolly_hash.h"
 
 char *doltliteDecodeRecord(const u8 *pData, int nData);
 
@@ -19,6 +20,24 @@ struct DoltliteColInfo {
   ** SQLite's convertToWithoutRowidTable builds for the covering
   ** PK index. */
   int *aColToRec;
+  /* Clustered-key metadata, filled from the same table the names came
+  ** from, so a historical schema decodes its own keys. */
+  int bHasRowid;
+  int nPk;
+  u8 *aPkSortFlags;
+};
+
+/* One side of a diff-style read: the table's columns as the schema at the
+** visited commit declares them, plus a by-name projection of the vtab's
+** declared columns onto them. Cached by schema hash — adjacent commits
+** nearly always share a schema. An invalid side falls back to rendering
+** with the declared layout, which is the pre-existing behavior. */
+typedef struct DoltliteSideCols DoltliteSideCols;
+struct DoltliteSideCols {
+  DoltliteColInfo ci;
+  int *aDeclToSide;   /* declared column -> ci column, -1 when absent */
+  ProllyHash schemaHash;
+  int valid;
 };
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);
@@ -49,6 +68,19 @@ void doltliteResultField(sqlite3_context *ctx, const u8 *pData, int nData,
 
 int doltliteRecordFromClusteredKey(sqlite3 *db, const char *zTable,
     const u8 *pKey, int nKey, u8 **ppRec, int *pnRec);
+int doltliteRecordFromClusteredKeyCols(sqlite3 *db,
+    const DoltliteColInfo *ci,
+    const u8 *pKey, int nKey, u8 **ppRec, int *pnRec);
+void doltliteSideColsClear(DoltliteSideCols *pSide);
+int doltliteSideColsLoad(sqlite3 *db,
+    const ProllyHash *pCatHash, const ProllyHash *pSchemaHash,
+    const char *zTable, const DoltliteColInfo *pDeclared,
+    DoltliteSideCols *pSide);
+void doltliteResultSideCol(sqlite3_context *ctx,
+    const DoltliteSideCols *pSide,
+    const DoltliteColInfo *pDeclared,
+    const u8 *pRec, int nRec,
+    i64 intKey, int bRootIntKey, int iDeclaredCol);
 void doltliteResultUserCol(sqlite3_context *ctx,
                            const DoltliteColInfo *ci,
                            const u8 *pRec, int nRec,

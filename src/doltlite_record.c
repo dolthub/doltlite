@@ -239,9 +239,13 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   for(i=0; i<ci->nCol; i++) sqlite3_free(ci->azName[i]);
   sqlite3_free(ci->azName);
   sqlite3_free(ci->aColToRec);
+  sqlite3_free(ci->aPkSortFlags);
   ci->azName = 0;
   ci->aColToRec = 0;
+  ci->aPkSortFlags = 0;
   ci->nCol = 0;
+  ci->nPk = 0;
+  ci->bHasRowid = 0;
 }
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
@@ -316,9 +320,32 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   ** declared primary key and has no integer key to read, so treating its
   ** INTEGER pk as an alias yields the raw key bytes as a number and silently
   ** drops the pk constraints xBestIndex promised to apply. */
-  if( nPkCols==1 && iCandidateAlias>=0 ){
+  {
     Table *pTab = sqlite3FindTable(db, zTable, "main");
-    if( pTab && HasRowid(pTab) ) ci->iPkCol = iCandidateAlias;
+    if( pTab ){
+      ci->bHasRowid = HasRowid(pTab);
+      if( nPkCols==1 && iCandidateAlias>=0 && ci->bHasRowid ){
+        ci->iPkCol = iCandidateAlias;
+      }
+      if( !ci->bHasRowid ){
+        Index *pPk = sqlite3PrimaryKeyIndex(pTab);
+        if( pPk && pPk->nKeyCol>0 ){
+          ci->aPkSortFlags = sqlite3_malloc(pPk->nKeyCol);
+          if( !ci->aPkSortFlags ){
+            sqlite3_free(aPk);
+            doltliteFreeColInfo(ci);
+            sqlite3_finalize(pStmt);
+            return SQLITE_NOMEM;
+          }
+          for(i=0; i<pPk->nKeyCol; i++){
+            ci->aPkSortFlags[i] = pPk->aSortOrder[i];
+          }
+          ci->nPk = pPk->nKeyCol;
+        }
+      }
+    }else{
+      ci->bHasRowid = 1;
+    }
   }
 
   if( ci->nCol>0 ){
@@ -566,6 +593,69 @@ int doltliteRecordFromClusteredKey(
   *ppRec = pBuf;
   *pnRec = nRec;
   return SQLITE_OK;
+}
+
+/* Same reconstruction, but keyed by a DoltliteColInfo instead of the live
+** table, so a historical schema decodes keys its own primary key wrote. */
+int doltliteRecordFromClusteredKeyCols(
+  sqlite3 *db, const DoltliteColInfo *ci,
+  const u8 *pKey, int nKey,
+  u8 **ppRec, int *pnRec
+){
+  KeyInfo *pKI;
+  u8 *pBuf = 0;
+  int nAlloc = 0, nRec = 0;
+  int i, rc;
+
+  *ppRec = 0;
+  *pnRec = 0;
+  if( !pKey || nKey<=0 || !ci ) return SQLITE_OK;
+  if( ci->bHasRowid || ci->nPk<=0 || !ci->aPkSortFlags ) return SQLITE_OK;
+
+  pKI = sqlite3KeyInfoAlloc(db, ci->nPk, 0);
+  if( !pKI ) return SQLITE_NOMEM;
+  for(i=0; i<ci->nPk; i++){
+    pKI->aSortFlags[i] = ci->aPkSortFlags[i];
+  }
+  rc = recordFromSortKeyBufferColl(pKey, nKey, pKI, &pBuf, &nAlloc, &nRec);
+  sqlite3KeyInfoUnref(pKI);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBuf);
+    return rc;
+  }
+  *ppRec = pBuf;
+  *pnRec = nRec;
+  return SQLITE_OK;
+}
+
+void doltliteSideColsClear(DoltliteSideCols *pSide){
+  doltliteFreeColInfo(&pSide->ci);
+  sqlite3_free(pSide->aDeclToSide);
+  memset(pSide, 0, sizeof(*pSide));
+}
+
+void doltliteResultSideCol(
+  sqlite3_context *ctx,
+  const DoltliteSideCols *pSide,
+  const DoltliteColInfo *pDeclared,
+  const u8 *pRec, int nRec,
+  i64 intKey, int bRootIntKey, int iDeclaredCol
+){
+  if( pSide && pSide->valid ){
+    int iSide = -1;
+    if( iDeclaredCol>=0 && iDeclaredCol<pDeclared->nCol ){
+      iSide = pSide->aDeclToSide[iDeclaredCol];
+    }
+    if( iSide<0 ){
+      sqlite3_result_null(ctx);
+      return;
+    }
+    doltliteResultUserCol(ctx, &pSide->ci, pRec, nRec,
+                          intKey, bRootIntKey, iSide);
+    return;
+  }
+  doltliteResultUserCol(ctx, pDeclared, pRec, nRec,
+                        intKey, bRootIntKey, iDeclaredCol);
 }
 
 u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut){

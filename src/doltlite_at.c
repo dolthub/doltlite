@@ -42,6 +42,9 @@ struct AtVtab {
 typedef struct AtCursor AtCursor;
 struct AtCursor {
   DoltliteVtabCursorCommon common;
+  /* Columns as the pinned commit's schema declares them; invalid renders
+  ** with the declared layout. */
+  DoltliteSideCols side;
   char *zCommitRef;
   int idxNum;
   DoltlitePkRange pkRange;
@@ -118,6 +121,72 @@ static int atEnqueueReachableRoots(
   return rc;
 }
 
+/* Load zTable's columns as the schema at pCatHash declares them and map the
+** declared (vtab-visible) columns onto them by name. Cached by schema hash;
+** any failure leaves the side invalid, which renders with the declared
+** layout — the pre-existing behavior. */
+int doltliteSideColsLoad(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const ProllyHash *pSchemaHash,
+  const char *zTable,
+  const DoltliteColInfo *pDeclared,
+  DoltliteSideCols *pSide
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  SchemaEntry entry;
+  int found = 0;
+  sqlite3 *tmp = 0;
+  int i, j;
+  int rc;
+
+  if( pSide->valid
+   && prollyHashCompare(&pSide->schemaHash, pSchemaHash)==0 ){
+    return SQLITE_OK;
+  }
+  doltliteSideColsClear(pSide);
+  if( !cs || !pCache || prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
+
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatHash, zTable,
+                                  &entry, &found);
+  if( rc!=SQLITE_OK ) return SQLITE_OK;
+  if( !found || !entry.zSql ){
+    clearSchemaEntry(&entry);
+    return SQLITE_OK;
+  }
+
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTable, &pSide->ci);
+  if( tmp ) sqlite3_close(tmp);
+  clearSchemaEntry(&entry);
+  if( rc!=SQLITE_OK || pSide->ci.nCol<=0 ){
+    doltliteSideColsClear(pSide);
+    return SQLITE_OK;
+  }
+
+  if( pDeclared->nCol>0 ){
+    pSide->aDeclToSide = sqlite3_malloc(pDeclared->nCol * (int)sizeof(int));
+    if( !pSide->aDeclToSide ){
+      doltliteSideColsClear(pSide);
+      return SQLITE_NOMEM;
+    }
+    for(i=0; i<pDeclared->nCol; i++){
+      pSide->aDeclToSide[i] = -1;
+      for(j=0; j<pSide->ci.nCol; j++){
+        if( sqlite3_stricmp(pDeclared->azName[i], pSide->ci.azName[j])==0 ){
+          pSide->aDeclToSide[i] = j;
+          break;
+        }
+      }
+    }
+  }
+  memcpy(&pSide->schemaHash, pSchemaHash, sizeof(ProllyHash));
+  pSide->valid = 1;
+  return SQLITE_OK;
+}
+
 int doltliteLoadHistoricalTableColumns(
   sqlite3 *db,
   const char *zTableName,
@@ -186,6 +255,7 @@ int doltliteLoadHistoricalTableColumns(
 }
 
 static void atCursorReset(AtCursor *c){
+  doltliteSideColsClear(&c->side);
   doltliteVtabCommonReset(&c->common);
   sqlite3_free(c->zCommitRef);
   c->zCommitRef = 0;
@@ -338,9 +408,12 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   const char *zRef;
   ProllyHash catHash;
   ProllyHash tableRoot; u8 flags=0;
+  ProllyHash schemaHash;
   int rc, res;
   int seekable;
   (void)idxStr;
+
+  memset(&schemaHash, 0, sizeof(schemaHash));
 
   atCursorReset(c);
   c->idxNum = idxNum;
@@ -380,7 +453,11 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       memcpy(&effCatHash, &catHash, sizeof(ProllyHash));
     }
     rc=doltliteLoadTableRootByName(db,&effCatHash,v->zTableName,&tableRoot,
-                                   &flags,0);
+                                   &flags,&schemaHash);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSideColsLoad(db, &effCatHash, &schemaHash,
+                                v->zTableName, &v->cols, &c->side);
+    }
   }
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
   if(rc!=SQLITE_OK) return rc;
@@ -404,7 +481,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       return SQLITE_OK;
     }
     c->common.tblCurOpen = 1;
-    return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
+    return doltliteVtabCommonCaptureRowSide(&c->common, v->db, v->zTableName,
+                                            &c->side);
   }
 
   if( seekable && c->pkRange.hasPkLo ){
@@ -427,7 +505,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       return SQLITE_OK;
     }
     c->common.tblCurOpen = 1;
-    return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
+    return doltliteVtabCommonCaptureRowSide(&c->common, v->db, v->zTableName,
+                                            &c->side);
   }
 
   rc = prollyCursorFirst(&c->common.tblCur, &res);
@@ -444,7 +523,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     return SQLITE_OK;
   }
   c->common.tblCurOpen = 1;
-  return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
+  return doltliteVtabCommonCaptureRowSide(&c->common, v->db, v->zTableName,
+                                          &c->side);
 }
 
 static int atNext(sqlite3_vtab_cursor *cur){
@@ -484,7 +564,8 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  return doltliteVtabCommonCaptureRow(&c->common, v->db, v->zTableName);
+  return doltliteVtabCommonCaptureRowSide(&c->common, v->db, v->zTableName,
+                                          &c->side);
 }
 
 static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
@@ -498,7 +579,8 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_text(ctx, c->zCommitRef ? c->zCommitRef : "",
                         -1, SQLITE_TRANSIENT);
   }else if(nCols>0 && col<nCols){
-    doltliteResultUserCol(ctx, &v->cols, c->common.pVal, c->common.nVal,
+    doltliteResultSideCol(ctx, &c->side, &v->cols,
+                          c->common.pVal, c->common.nVal,
                           c->common.intKey, c->common.rootIntKey, col);
   }
 

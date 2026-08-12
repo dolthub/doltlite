@@ -361,4 +361,19 @@ run_test "keyshape_upper_bound_scans_all" \
 
 rm -f "$DB"
 
+
+# dolt_at renders the pinned commit's rows with that commit's schema.
+DBA=/tmp/test_at_namemap_$$.db; rm -f "$DBA"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','drop_b');" | $DOLTLITE "$DBA" > /dev/null 2>&1
+
+run_test "at_namemap_old_commit" \
+  "SELECT a || '=' || c FROM dolt_at_t WHERE commit_ref='HEAD~1';" \
+  "1=CEE" "$DBA"
+
+rm -f "$DBA"
+
 dltest_finish

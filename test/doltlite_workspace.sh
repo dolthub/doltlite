@@ -248,4 +248,24 @@ run_test "ws_shape_added_side" \
   "42=2" "$WS_DB"
 rm -f "$WS_DB"
 
+
+# Uncommitted DDL: head still has column b mid-position, working does not.
+# The from side renders with head's schema by name, the to side with the
+# working schema.
+DBW=/tmp/test_ws_namemap_$$.db; rm -f "$DBW"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP COLUMN b;
+UPDATE t SET c='NEW';" | $DOLTLITE "$DBW" > /dev/null 2>&1
+
+run_test "ws_namemap_from" \
+  "SELECT from_a || '=' || from_c FROM dolt_workspace_t WHERE diff_type='modified';" \
+  "1=CEE" "$DBW"
+run_test "ws_namemap_to" \
+  "SELECT to_a || '=' || to_c FROM dolt_workspace_t WHERE diff_type='modified';" \
+  "1=NEW" "$DBW"
+
+rm -f "$DBW"
+
 dltest_finish

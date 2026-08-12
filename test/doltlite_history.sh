@@ -373,4 +373,19 @@ y" "$DB"
 
 rm -f "$DB"
 
+
+# Rows at old commits render by column NAME against that commit's schema.
+DBH=/tmp/test_hist_namemap_$$.db; rm -f "$DBH"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'BEE','CEE');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','drop_b');" | $DOLTLITE "$DBH" > /dev/null 2>&1
+
+run_test "hist_namemap_old_commit" \
+  "SELECT group_concat(a || '=' || c, ',') FROM (SELECT a, c FROM dolt_history_t ORDER BY commit_date);" \
+  "1=CEE,1=CEE" "$DBH"
+
+rm -f "$DBH"
+
 dltest_finish
