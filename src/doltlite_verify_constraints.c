@@ -224,7 +224,15 @@ static void doltVerifyConstraintsFunc(
     hasSavedCv = 1;
   }
 
-  rc = doltliteClearAllConstraintViolations(db);
+  /* Only the tables about to be re-checked lose their recorded findings.
+  ** A scoped verify says nothing about the tables it does not scan, and the
+  ** commit gate reads this catalog. */
+  if( nArgTables>0 ){
+    rc = doltliteClearConstraintViolationsForTables(
+        db, (const char *const *)azArgTables, nArgTables);
+  }else{
+    rc = doltliteClearAllConstraintViolations(db);
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     goto cleanup;

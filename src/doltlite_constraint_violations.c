@@ -636,6 +636,50 @@ int doltliteAppendConstraintViolation(
   return rc;
 }
 
+/* Drop the recorded violations for the named tables, leaving every other
+** table's untouched. Verifying one table must not retract findings about
+** the others: the commit gate reads this catalog, so clearing it wholesale
+** turns a scoped re-check into permission to commit violating rows. */
+int doltliteClearConstraintViolationsForTables(
+  sqlite3 *db,
+  const char *const *azTables,
+  int nNames
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ConstraintViolationTable *aTables = 0;
+  int nTables = 0;
+  int nKept = 0;
+  int i, j;
+  int rc;
+
+  if( !cs || nNames<=0 ) return SQLITE_OK;
+  rc = loadAllViolations(db, cs, &aTables, &nTables);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i=0; i<nTables; i++){
+    int drop = 0;
+    for(j=0; j<nNames; j++){
+      if( aTables[i].zName && azTables[j]
+       && sqlite3_stricmp(aTables[i].zName, azTables[j])==0 ){
+        drop = 1;
+        break;
+      }
+    }
+    if( drop ){
+      /* Free this entry's contents only: the array itself is one block
+      ** that freeViolationTables releases once, at the end. */
+      freeViolationTable(&aTables[i]);
+      memset(&aTables[i], 0, sizeof(aTables[i]));
+    }else{
+      if( nKept!=i ) aTables[nKept] = aTables[i];
+      nKept++;
+    }
+  }
+  rc = storeUpdatedViolations(db, cs, aTables, nKept);
+  freeViolationTables(aTables, nKept);
+  return rc;
+}
+
 int doltliteClearAllConstraintViolations(sqlite3 *db){
   static const ProllyHash emptyHash = {{0}};
   int rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
