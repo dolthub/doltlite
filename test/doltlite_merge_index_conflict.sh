@@ -495,7 +495,7 @@ SELECT dolt_checkout('main');
 ALTER TABLE a RENAME TO ours_a;
 SELECT dolt_commit('-Am','ours rename');
 EOF
-out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('feat'));" 2>/dev/null)
+out=$("$DOLTLITE" "$DB" "SELECT coalesce(length(dolt_merge('feat')), 'null');")
 check "indexed_rename_vs_rename_merge_clean" "40" "$out"
 out=$("$DOLTLITE" "$DB" \
   "SELECT (SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ours_a','theirs_a') ORDER BY name)) || '|' ||

@@ -182,6 +182,35 @@ static int mergeSchemaEntriesSame(
   return !pA->zSql || strcmp(pA->zSql, pB->zSql)==0;
 }
 
+static int mergeIndexColListSame(const char *zA, const char *zB){
+  if( !zA || !zB ) return zA==zB;
+  while( *zA && *zB ){
+    while( *zA=='"' || *zA=='\'' || *zA=='`' || *zA=='[' || *zA==']'
+        || *zA==' ' || *zA=='\t' ){
+      zA++;
+    }
+    while( *zB=='"' || *zB=='\'' || *zB=='`' || *zB=='[' || *zB==']'
+        || *zB==' ' || *zB=='\t' ){
+      zB++;
+    }
+    if( sqlite3UpperToLower[(u8)*zA]!=sqlite3UpperToLower[(u8)*zB] ){
+      return 0;
+    }
+    if( *zA==0 ) return 1;
+    zA++;
+    zB++;
+  }
+  while( *zA=='"' || *zA=='\'' || *zA=='`' || *zA=='[' || *zA==']'
+      || *zA==' ' || *zA=='\t' ){
+    zA++;
+  }
+  while( *zB=='"' || *zB=='\'' || *zB=='`' || *zB=='[' || *zB==']'
+      || *zB==' ' || *zB=='\t' ){
+    zB++;
+  }
+  return *zA==0 && *zB==0;
+}
+
 static int mergeIndexFollowsDualRename(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -208,20 +237,23 @@ static int mergeIndexFollowsDualRename(
   pAncTable = findSchemaEntry(aAnc, nAnc, pAnc->zTblName);
   pOursTable = findSchemaEntry(aOurs, nOurs, pOurs->zTblName);
   pTheirsTable = findSchemaEntry(aTheirs, nTheirs, pTheirs->zTblName);
-  zAncBody = pAnc->zSql ? strchr(pAnc->zSql, '(') : 0;
-  zOursBody = pOurs->zSql ? strchr(pOurs->zSql, '(') : 0;
-  zTheirsBody = pTheirs->zSql ? strchr(pTheirs->zSql, '(') : 0;
-  return pAncTable && pAncTable->zType
-      && strcmp(pAncTable->zType, "table")==0
-      && pOursTable && pOursTable->zType
-      && strcmp(pOursTable->zType, "table")==0
-      && pTheirsTable && pTheirsTable->zType
-      && strcmp(pTheirsTable->zType, "table")==0
-      && zAncBody && zOursBody && zTheirsBody
-      && strcmp(zAncBody, zOursBody)==0
-      && strcmp(zAncBody, zTheirsBody)==0
-      && !findSchemaEntry(aAnc, nAnc, pOurs->zTblName)
-      && !findSchemaEntry(aAnc, nAnc, pTheirs->zTblName);
+  zAncBody = pAnc->zSql ? strrchr(pAnc->zSql, '(') : 0;
+  zOursBody = pOurs->zSql ? strrchr(pOurs->zSql, '(') : 0;
+  zTheirsBody = pTheirs->zSql ? strrchr(pTheirs->zSql, '(') : 0;
+  if( !pAncTable || !pAncTable->zType || strcmp(pAncTable->zType, "table")!=0
+   || !pOursTable || !pOursTable->zType || strcmp(pOursTable->zType, "table")!=0
+   || !pTheirsTable || !pTheirsTable->zType
+   || strcmp(pTheirsTable->zType, "table")!=0
+   || findSchemaEntry(aAnc, nAnc, pOurs->zTblName)
+   || findSchemaEntry(aAnc, nAnc, pTheirs->zTblName) ){
+    return 0;
+  }
+  if( zAncBody && zOursBody && zTheirsBody
+   && mergeIndexColListSame(zAncBody, zOursBody)
+   && mergeIndexColListSame(zAncBody, zTheirsBody) ){
+    return 1;
+  }
+  return zAncBody==0 && zOursBody==0 && zTheirsBody==0;
 }
 
 static int preDetectIndexSchemaConflicts(
