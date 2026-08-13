@@ -3,14 +3,81 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include "sqlite3.h"
 #include "doltlite_internal.h"
 
 #define N_WORKERS 3
 #define N_ROUNDS 4
-#define N_ATTEMPTS 600
 #define DEFAULT_RENAME_ROUNDS 50
+
+/* Retry budgets here are wall clock, not attempt counts. An attempt count is
+** not a bound on anything: the same 600 attempts are seconds when contention
+** resolves quickly and tens of minutes when each one blocks out a busy
+** timeout, so it cannot express "keep trying for a while, then say so".
+** Under ThreadSanitizer, which runs the same work roughly 10x slower on a
+** two-core runner, that ambiguity is the difference between passing and a
+** silent give-up. threadtest5 buys the same headroom with THREADTEST5_BUSY_MS. */
+#define STRESS_BUSY_MS_DEFAULT 60000
+
+static sqlite3_int64 nowMs(void){
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (sqlite3_int64)ts.tv_sec*1000 + ts.tv_nsec/1000000;
+}
+
+static int stressBusyMs(void){
+  static int ms = 0;
+  if( ms==0 ){
+    const char *z = getenv("DOLTLITE_STRESS_BUSY_MS");
+    ms = z ? atoi(z) : STRESS_BUSY_MS_DEFAULT;
+    if( ms<1000 ) ms = STRESS_BUSY_MS_DEFAULT;
+  }
+  return ms;
+}
+
+typedef struct Budget Budget;
+struct Budget {
+  sqlite3_int64 deadline;
+  int attempts;
+};
+
+/* Budgets nest -- commitBranchRow retries around execSqlWithRetry, which
+** retries around a statement -- so a per-call budget alone bounds nothing: a
+** worker gets one per operation per round, and the product can outrun the CI
+** job's own timeout, turning a legible failure into a killed job. Each phase
+** therefore caps the budgets inside it, so the whole test is bounded by the
+** number of phases rather than by how deeply its retries happen to nest. */
+static sqlite3_int64 gPhaseDeadline = 0;
+
+static void startPhase(void){
+  gPhaseDeadline = nowMs() + stressBusyMs();
+}
+
+static void budgetStart(Budget *p){
+  sqlite3_int64 deadline = nowMs() + stressBusyMs();
+  if( gPhaseDeadline && deadline>gPhaseDeadline ) deadline = gPhaseDeadline;
+  p->deadline = deadline;
+  p->attempts = 0;
+}
+
+static int budgetLive(Budget *p){
+  p->attempts++;
+  return nowMs() < p->deadline;
+}
+
+/* Every give-up path reports itself. A bare SQLITE_BUSY out of a retry loop
+** reaches the caller with nothing set on the handle, so the worker used to
+** report "rc=5 msg=not an error" without naming what it had been waiting on.
+** budgetLive() counts the check that ends the loop, so zero attempts here
+** means the phase budget was already spent before this call ran at all. */
+static int budgetSpent(Budget *p, const char *zOp, int rc, const char *zMsg){
+  fprintf(stderr, "gave up on %s after %d attempts in %dms; last rc=%d msg=%s\n",
+          zOp, p->attempts - 1, stressBusyMs(), rc,
+          zMsg && zMsg[0] ? zMsg : "(none)");
+  return SQLITE_BUSY;
+}
 
 static int nPass = 0;
 static int nFail = 0;
@@ -65,8 +132,12 @@ static int execSql(sqlite3 *db, const char *sql){
 }
 
 static int execSqlWithRetry(sqlite3 *db, const char *sql){
-  int attempt;
-  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+  Budget budget;
+  char last[256];
+  int lastRc = SQLITE_OK;
+  last[0] = 0;
+  budgetStart(&budget);
+  while( budgetLive(&budget) ){
     char *err = 0;
     int rc = sqlite3_exec(db, sql, 0, 0, &err);
     const char *msg = err ? err : sqlite3_errmsg(db);
@@ -79,20 +150,29 @@ static int execSqlWithRetry(sqlite3 *db, const char *sql){
       sqlite3_free(err);
       return rc;
     }
+    lastRc = rc;
+    snprintf(last, sizeof(last), "%s", msg ? msg : "");
     sqlite3_free(err);
     sqlite3_sleep(5);
   }
-  return SQLITE_BUSY;
+  fprintf(stderr, "  SQL: %s\n", sql);
+  return budgetSpent(&budget, "execSqlWithRetry", lastRc, last);
 }
 
 static int queryTextWithRetry(sqlite3 *db, const char *sql, char *out, int nOut){
-  int attempt;
+  Budget budget;
+  char last[256];
+  int lastRc = SQLITE_OK;
   out[0] = 0;
-  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+  last[0] = 0;
+  budgetStart(&budget);
+  while( budgetLive(&budget) ){
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if( rc!=SQLITE_OK ){
       if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
+        lastRc = rc;
+        snprintf(last, sizeof(last), "%s", sqlite3_errmsg(db));
         sqlite3_sleep(5);
         continue;
       }
@@ -112,10 +192,13 @@ static int queryTextWithRetry(sqlite3 *db, const char *sql, char *out, int nOut)
       snprintf(out, nOut, "%s", sqlite3_errmsg(db));
       return rc;
     }
+    lastRc = rc;
+    snprintf(last, sizeof(last), "%s", sqlite3_errmsg(db));
     sqlite3_sleep(5);
   }
   snprintf(out, nOut, "BUSY");
-  return SQLITE_BUSY;
+  fprintf(stderr, "  SQL: %s\n", sql);
+  return budgetSpent(&budget, "queryTextWithRetry", lastRc, last);
 }
 
 static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
@@ -125,15 +208,36 @@ static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
   return rc;
 }
 
+/* The worker reopens between rounds, and an open that loses the race for the
+** store lock is as retryable as any other step here. Left unretried it was
+** also the only way out of a worker loop that reported no error at all: it
+** returns straight through the caller, and the fresh handle it leaves behind
+** answers sqlite3_errmsg() with "not an error". */
 static int reopenDb(const char *path, sqlite3 **pDb){
-  int rc;
+  Budget budget;
+  int rc = SQLITE_OK;
   if( *pDb ){
     sqlite3_close(*pDb);
     *pDb = 0;
   }
-  rc = sqlite3_open(path, pDb);
-  if( rc==SQLITE_OK ) sqlite3_busy_timeout(*pDb, 5000);
-  return rc;
+  budgetStart(&budget);
+  while( budgetLive(&budget) ){
+    const char *msg;
+    rc = sqlite3_open(path, pDb);
+    if( rc==SQLITE_OK ){
+      sqlite3_busy_timeout(*pDb, 5000);
+      return SQLITE_OK;
+    }
+    msg = *pDb ? sqlite3_errmsg(*pDb) : 0;
+    if( !isRetryableRc(rc) && !isRetryableMsg(msg) ){
+      fprintf(stderr, "open failed rc=%d: %s\n", rc, msg ? msg : "(none)");
+      return rc;
+    }
+    sqlite3_close(*pDb);
+    *pDb = 0;
+    sqlite3_sleep(5);
+  }
+  return budgetSpent(&budget, "reopenDb", rc, "open never succeeded");
 }
 
 static int setupDb(const char *path){
@@ -171,10 +275,12 @@ static int commitBranchRow(sqlite3 **pDb, const char *path, int worker, int roun
   char sql[256];
   char out[256];
   int rowid = worker*1000 + round;
-  int attempt;
+  Budget budget;
+  out[0] = 0;
   snprintf(branch, sizeof(branch), "stress_w%d_r%d", worker, round);
 
-  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+  budgetStart(&budget);
+  while( budgetLive(&budget) ){
     int rc;
     rc = createBranch(db, branch);
     if( rc!=SQLITE_OK ) goto retry;
@@ -199,7 +305,7 @@ retry:
     if( rc!=SQLITE_OK ) return rc;
     db = *pDb;
   }
-  return SQLITE_BUSY;
+  return budgetSpent(&budget, "commitBranchRow", SQLITE_BUSY, out);
 }
 
 static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int round){
@@ -209,10 +315,12 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
   char out[256];
   int rowid = worker*1000 + round;
   int count = 0;
-  int attempt;
+  Budget budget;
+  out[0] = 0;
   snprintf(branch, sizeof(branch), "stress_w%d_r%d", worker, round);
 
-  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+  budgetStart(&budget);
+  while( budgetLive(&budget) ){
     int rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
     if( rc==SQLITE_OK ){
       snprintf(sql, sizeof(sql),
@@ -238,14 +346,18 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
     if( rc!=SQLITE_OK ) return rc;
     db = *pDb;
   }
-  return SQLITE_BUSY;
+  return budgetSpent(&budget, "mergeBranchToMain", SQLITE_BUSY, out);
 }
 
 static int deleteBranch(sqlite3 *db, const char *zBranch){
   char sql[256];
-  int attempt;
+  char last[256];
+  int lastRc = SQLITE_OK;
+  Budget budget;
+  last[0] = 0;
   snprintf(sql, sizeof(sql), "SELECT dolt_branch('-d','%s')", zBranch);
-  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+  budgetStart(&budget);
+  while( budgetLive(&budget) ){
     char *err = 0;
     int rc = sqlite3_exec(db, sql, 0, 0, &err);
     const char *msg = err ? err : sqlite3_errmsg(db);
@@ -258,16 +370,20 @@ static int deleteBranch(sqlite3 *db, const char *zBranch){
       sqlite3_free(err);
       return rc;
     }
+    lastRc = rc;
+    snprintf(last, sizeof(last), "%s", msg ? msg : "");
     sqlite3_free(err);
     sqlite3_sleep(5);
   }
-  return SQLITE_BUSY;
+  return budgetSpent(&budget, "deleteBranch", lastRc, last);
 }
 
 static int runWorker(const char *path, int worker){
   sqlite3 *db = 0;
-  int rc = reopenDb(path, &db);
+  int rc;
   int round;
+  startPhase();
+  rc = reopenDb(path, &db);
   if( rc!=SQLITE_OK ) return 10;
 
   for( round=1; round<=N_ROUNDS; round++ ){
@@ -299,6 +415,7 @@ static void verifyFinalState(const char *path){
   int count = 0;
   char msg[256];
 
+  startPhase();
   rc = sqlite3_open(path, &db);
   check("verify_open", rc==SQLITE_OK);
   sqlite3_busy_timeout(db, 5000);
@@ -388,6 +505,7 @@ static void runDefaultRenameStress(void){
   const char *zDest = "trunk";
   char out[128];
 
+  startPhase();
   check("default_rename_setup", setupDefaultRenameDb(path)==SQLITE_OK);
   check("default_rename_open", sqlite3_open(path, &db)==SQLITE_OK);
   sqlite3_busy_timeout(db, 5000);
@@ -473,6 +591,7 @@ static void runAtomicMutationTests(void){
   int count = 0;
   int rc;
 
+  startPhase();
   check("atomic_mutation_setup", setupDb(path)==SQLITE_OK);
   check("atomic_mutation_open_first", sqlite3_open(path, &db1)==SQLITE_OK);
   sqlite3_busy_timeout(db1, 5000);
