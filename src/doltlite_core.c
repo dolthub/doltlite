@@ -136,6 +136,9 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
     rc = doltliteSetSessionConstraintViolationsCatalog(
         db, &p->sessionConstraintViolationsCatalog);
   }
+  if( rc==SQLITE_OK ){
+    rc = doltlitePersistWorkingSetWithHash(db, &p->sessionCatalogHash);
+  }
   return rc;
 }
 
