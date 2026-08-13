@@ -830,6 +830,13 @@ int doltliteClearSessionRebaseState(sqlite3 *db){
   return doltliteSetSessionRebaseState(db, 0, 0, 0, 0, 0);
 }
 
+int doltliteSessionHasUnresolvedConflicts(sqlite3 *db){
+  Btree *p;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
+  p = db->aDb[0].pBt;
+  return !prollyHashIsEmpty(&p->vc.conflictsCatalogHash);
+}
+
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   u8 isMerging = 0;
   if( pHash ) memset(pHash, 0, sizeof(*pHash));

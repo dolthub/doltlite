@@ -51,6 +51,12 @@ static void branchNamedResultError(
   const char *zNotFound,
   const char *zExists
 ){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
+    branchError(ctx, bHadSavepoint,
+      "cannot update refs: unresolved merge conflicts");
+    return;
+  }
   branchSealSavepointsOnError(ctx, bHadSavepoint);
   doltliteRefResultError(ctx, rc, zNotFound, zExists);
 }
@@ -246,9 +252,14 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       m.isDelete = 1;
       rc = doltliteMutateRefs(db, mutateBranchRef, &m);
       if( rc==SQLITE_CONSTRAINT ){
-        branchError(ctx, hadSavepoint,
-          "cannot delete the default branch; "
-          "call dolt_default_branch(<other>) first");
+        if( doltliteSessionHasUnresolvedConflicts(db) ){
+          branchError(ctx, hadSavepoint,
+            "cannot update refs: unresolved merge conflicts");
+        }else{
+          branchError(ctx, hadSavepoint,
+            "cannot delete the default branch; "
+            "call dolt_default_branch(<other>) first");
+        }
         return;
       }
       if( rc!=SQLITE_OK ){
