@@ -1151,6 +1151,7 @@ int normalizeTheirsToMergedLayout(
       m->eType = SQLITE_NULL;
       if( st==0 ){
         m->eType = SQLITE_NULL;
+        if( rowOnlyTheirs && tgt+1>nEmit ) nEmit = tgt+1;
       }else if( dlSerialIsInt(st) ){
         m->eType = SQLITE_INTEGER;
         if( st==8 ) m->i = 0;

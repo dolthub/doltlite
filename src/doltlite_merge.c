@@ -6,9 +6,9 @@
 
 /* Rewrite every record in theirs' table root from theirs' column order into
 ** the merged column order (ours' columns, then theirs' added columns), using
-** the ancestor to retain renamed-column identity. A missing field is emitted as
-** NULL; trailing NULLs are dropped so an unchanged row re-encodes identically
-** to the ancestor's. This lets the positional cell-level three-way merge run
+** the ancestor to retain renamed-column identity. Missing fields use their
+** declared defaults where needed, while encoded NULLs remain NULL. This lets
+** the positional cell-level three-way merge run
 ** across a dual ADD COLUMN divergence: without it, theirs' added-column value
 ** would be read at the wrong ordinal. Records are content-addressed and rebuilt
 ** through the canonical doltliteBuildRecord, so the tree stays deterministic. */
