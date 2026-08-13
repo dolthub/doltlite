@@ -3518,7 +3518,6 @@ fts4content fts4content-7.2.3 class=intentional issue=1852  # canonical adoption
 # assignment diverges in these assertions.
 fts4growth fts4growth-1.6 class=intentional
 fts4growth fts4growth-5.4 class=intentional
-fts4growth fts4growth-5.5 class=intentional
 fts4growth fts4growth-6.3 class=intentional
 fts4growth fts4growth-6.5 class=intentional
 
