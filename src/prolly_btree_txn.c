@@ -779,21 +779,32 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
 
-    if( p->db ){
-      while( p->nSavepoint < p->db->nSavepoint ){
-        int rc2 = pushSavepoint(p, 0);
-        if( rc2!=SQLITE_OK ){
-          while( p->nSavepoint > nSavepointStart ){
-            p->nSavepoint--;
-            freeSavepointTables(&p->aSavepointTables[p->nSavepoint]);
+    /* The transaction becomes a write here rather than after the savepoint
+    ** mirror below: pushSavepoint snapshots per-table state on behalf of a
+    ** write and says so with an assertion, and this is the caller that
+    ** establishes the very state it asserts on. A failed push still has to
+    ** leave nothing behind, so it puts both fields back. */
+    {
+      u8 inTransBefore = p->inTrans;
+      u8 inTransactionBefore = p->inTransaction;
+      p->inTrans = TRANS_WRITE;
+      p->inTransaction = TRANS_WRITE;
+      if( p->db ){
+        while( p->nSavepoint < p->db->nSavepoint ){
+          int rc2 = pushSavepoint(p, 0);
+          if( rc2!=SQLITE_OK ){
+            while( p->nSavepoint > nSavepointStart ){
+              p->nSavepoint--;
+              freeSavepointTables(&p->aSavepointTables[p->nSavepoint]);
+            }
+            p->inTrans = inTransBefore;
+            p->inTransaction = inTransactionBefore;
+            chunkStoreUnlock(&pBt->store);
+            return rc2;
           }
-          chunkStoreUnlock(&pBt->store);
-          return rc2;
         }
       }
     }
-    p->inTrans = TRANS_WRITE;
-    p->inTransaction = TRANS_WRITE;
     PROLLY_ASSERT_GRAPH_LOCKED(pBt);
   } else {
     if( p->inTrans==TRANS_NONE ){
