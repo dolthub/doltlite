@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
+#include "prolly_btree_int.h"
 #include "prolly_hash.h"
 #include "prolly_hashset.h"
 #include "chunk_store.h"
@@ -382,8 +383,11 @@ int doltliteMutateRefsExpected(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ChunkStoreRefsSnapshot snapshot;
+  const BranchRef *aBr = 0;
   int haveSnapshot = 0;
   int i;
+  int nBr = 0;
+  int iBr;
   int rc;
 
   memset(&snapshot, 0, sizeof(snapshot));
@@ -425,6 +429,25 @@ int doltliteMutateRefsExpected(
   }
 
   if( rc==SQLITE_OK ) rc = xMutate(db, cs, pArg);
+  /* PersistWorkingSet and commit phase one refuse a conflicted working set.
+  ** Walk the refs about to land, not the session hash, so abort helpers
+  ** that rewrite a clean working set can still finish. */
+  if( rc==SQLITE_OK ){
+    refsTableGetBranches(&cs->refs, &nBr, &aBr);
+    for(iBr=0; rc==SQLITE_OK && iBr<nBr; iBr++){
+      ProllyHash conflicts;
+      int loadRc;
+      if( !aBr[iBr].zName ) continue;
+      loadRc = btreeLoadWorkingSetBlob(cs, aBr[iBr].zName, 0, 0, 0, 0, 0,
+                                       &conflicts, 0, 0, 0, 0, 0, 0);
+      if( loadRc==SQLITE_NOTFOUND ) continue;
+      if( loadRc!=SQLITE_OK ){
+        rc = loadRc;
+      }else if( !prollyHashIsEmpty(&conflicts) ){
+        rc = SQLITE_CONSTRAINT;
+      }
+    }
+  }
   if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefs(cs);
     if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
