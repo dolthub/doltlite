@@ -1140,6 +1140,16 @@ static int rebaseReadActive(
   return rc;
 }
 
+static int rebaseEndBusyRetry(sqlite3 *db){
+  if( db->busyHandler.xBusyHandler ){
+    return sqlite3InvokeBusyHandler(&db->busyHandler);
+  }
+  if( db->busyHandler.nBusy>=200 ) return 0;
+  sqlite3OsSleep(db->pVfs, 5000);
+  db->busyHandler.nBusy++;
+  return 1;
+}
+
 static int rebaseReadActiveRetry(
   sqlite3 *db,
   const char *zWorkingBranch,
@@ -1150,7 +1160,7 @@ static int rebaseReadActiveRetry(
   do {
     rc = rebaseReadActive(db, zWorkingBranch, pActive);
   }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
-       && sqlite3InvokeBusyHandler(&db->busyHandler) );
+       && rebaseEndBusyRetry(db) );
   return rc;
 }
 
@@ -1236,7 +1246,7 @@ static int rebaseClaimActiveEndRetry(
   do {
     rc = rebaseClaimActiveEnd(db, zWorkingBranch);
   }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
-       && sqlite3InvokeBusyHandler(&db->busyHandler) );
+       && rebaseEndBusyRetry(db) );
   return rc;
 }
 
@@ -1555,20 +1565,21 @@ static int rebaseAdoptPersistedRebase(sqlite3 *db){
     zWorking = rebaseBuildWorkingBranchName(zOrig);
   }else if( zCur && zCur[0] ){
     zWorking = rebaseBuildWorkingBranchName(zCur);
-    rc = doltliteBranchWorkingSetIsRebasing(db, zWorking, &active);
-    if( rc!=SQLITE_OK || !active ){
-      sqlite3_free(zWorking);
-      return rc;
-    }
   }else{
     return SQLITE_OK;
   }
   if( !zWorking ) return SQLITE_NOMEM;
-  if( !zCur || sqlite3_stricmp(zCur, zWorking)!=0 ){
-    rc = doltliteCheckoutBranchForRebase(db, zWorking);
-  }else{
-    rc = SQLITE_OK;
-  }
+  db->busyHandler.nBusy = 0;
+  do {
+    rc = doltliteBranchWorkingSetIsRebasing(db, zWorking, &active);
+    if( rc==SQLITE_OK && !active ) rc = SQLITE_DONE;
+    if( rc==SQLITE_OK
+     && (!zCur || sqlite3_stricmp(zCur, zWorking)!=0) ){
+      rc = doltliteCheckoutPersistedRebase(db, zWorking);
+    }
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_DONE;
+  }while( (rc==SQLITE_BUSY || rc==SQLITE_LOCKED)
+       && rebaseEndBusyRetry(db) );
   sqlite3_free(zWorking);
   return rc;
 }
@@ -1587,6 +1598,10 @@ static void doltliteRebaseInteractiveAbort(
   int rc;
 
   rc = rebaseAdoptPersistedRebase(db);
+  if( rc==SQLITE_DONE ){
+    sqlite3_result_error(context, "no rebase in progress", -1);
+    return;
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
@@ -1698,6 +1713,10 @@ static void doltliteRebaseInteractiveContinue(
   memset(&preRebaseCat, 0, sizeof(preRebaseCat));
 
   rc = rebaseAdoptPersistedRebase(db);
+  if( rc==SQLITE_DONE ){
+    sqlite3_result_error(context, "no rebase in progress", -1);
+    return;
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
