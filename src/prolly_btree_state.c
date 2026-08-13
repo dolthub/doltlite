@@ -940,7 +940,10 @@ int doltliteSeedSessionHashes(
     Btree *pBt = db->aDb[i].pBt;
     if( !pBt || pBt->pOps!=&prollyBtreeOps || !pBt->pBt ) continue;
     if( &pBt->pBt->store!=cs ) continue;
-    rc = xPush(pCtx, &pBt->vc.stagedCatalog);
+    /* A detached session's head is reachable from no ref, so nothing else
+    ** keeps the commit it reads through alive. */
+    rc = xPush(pCtx, &pBt->headCommit);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.stagedCatalog);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.mergeCommitHash);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.conflictsCatalogHash);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);

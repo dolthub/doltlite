@@ -88,4 +88,49 @@ run_test_match "cv_table_c" "SELECT count(*) FROM c;" "[0-9]+" "$DB"
 
 db_rm "$DB"
 
+DB=/tmp/test_gc_session_detached_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','feat row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+FEAT_TIP=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='feat';" "$DB")
+MAIN_TIP=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='main';" "$DB")
+
+echo "SELECT dolt_checkout('main');
+SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "detached_head_branch_intact" "SELECT count(*) FROM t;" "1" "$DB"
+
+# The revision cases below name the commit with @ rather than /, because MSYS
+# resolves a slash-qualified hash as a filesystem path before doltlite ever
+# sees the revision. The SQL goes in as an argument to match the form
+# doltlite_open_branch.sh uses for the same opens.
+run_rev_test() {
+  local name="$1" sql="$2" expected="$3" db="$4"
+  local result
+  result=$("$DOLTLITE" "$db" "$sql" 2>&1 | tr -d '\r')
+  if [ "$result" = "$expected" ]; then
+    dltest_pass
+  else
+    dltest_fail "$name" "  expected: $expected\n  got:      $result"
+  fi
+}
+
+# Pairs with the case below: same database, same open form, but a commit a
+# branch still reaches. If both fail, the revision open is at fault; if only
+# the unreachable one does, the sweep is.
+run_rev_test "detached_reachable_head_before_gc" "SELECT count(*) FROM t;" "1" "$DB@$MAIN_TIP"
+run_rev_test "detached_head_before_gc" "SELECT count(*) FROM t;" "2" "$DB@$FEAT_TIP"
+
+"$DOLTLITE" "$DB@$FEAT_TIP" "SELECT dolt_gc();" > /dev/null 2>&1
+
+run_rev_test "detached_head_survives_own_gc" "SELECT count(*) FROM t;" "2" "$DB@$FEAT_TIP"
+run_rev_test "detached_head_log_survives" "SELECT count(*) FROM dolt_log;" "3" "$DB@$FEAT_TIP"
+run_test "detached_head_branch_intact_after_gc" "SELECT count(*) FROM t;" "1" "$DB"
+
+db_rm "$DB"
+
 dltest_finish
