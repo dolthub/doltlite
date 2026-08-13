@@ -28,7 +28,8 @@ trap 'rm -rf "$tmp"' EXIT
   -o "$tmp/replace-failure-test"
 "$tmp/replace-failure-test"
 
-"$emcc_bin" -Werror -Wno-comment -c "$amalgamation" \
+"$emcc_bin" -Werror -Wno-comment -Wdeclaration-after-statement \
+  -c "$amalgamation" \
   -DSQLITE_WASM \
   -DSQLITE_ENABLE_BYTECODE_VTAB \
   -DSQLITE_ENABLE_COLUMN_METADATA \

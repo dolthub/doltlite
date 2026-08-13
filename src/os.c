@@ -243,9 +243,9 @@ int sqlite3OsReplaceFile(
   const char *zDest,
   int *pRetainTmp
 ){
-  *pRetainTmp = 0;
 #if SQLITE_OS_WIN \
  || (SQLITE_OS_UNIX && !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__))
+  *pRetainTmp = 0;
   return sqlite3OsReplaceFileNative(pVfs, zTmp, zDest);
 #else
   sqlite3_file *pIn = 0;
@@ -255,6 +255,7 @@ int sqlite3OsReplaceFile(
   i64 iOff = 0;
   int rc;
 
+  *pRetainTmp = 0;
   rc = sqlite3OsOpenMalloc(pVfs, zTmp, &pIn,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) goto wasm_replace_done;
