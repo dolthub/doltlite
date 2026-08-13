@@ -478,6 +478,31 @@ out=$("$DOLTLITE" "$DB" \
           (SELECT coalesce(sum(num_conflicts),0) FROM dolt_conflicts);" 2>/dev/null)
 check "rename_vs_rename_keeps_both_tables" "ours_t,theirs_t|1|1|0" "$out"
 
+DB="$TMPROOT/indexed_rename_vs_rename.db"; rm -rf "$DB"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE a(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE INDEX i1 ON a(payload);
+CREATE INDEX i2 ON b(payload);
+INSERT INTO a VALUES(1,'a');
+INSERT INTO b VALUES(2,'b');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE a RENAME TO theirs_a;
+SELECT dolt_commit('-Am','theirs rename');
+SELECT dolt_checkout('main');
+ALTER TABLE a RENAME TO ours_a;
+SELECT dolt_commit('-Am','ours rename');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('feat'));" 2>/dev/null)
+check "indexed_rename_vs_rename_merge_clean" "40" "$out"
+out=$("$DOLTLITE" "$DB" \
+  "SELECT (SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ours_a','theirs_a') ORDER BY name)) || '|' ||
+          (SELECT group_concat(name || ':' || tbl_name,',') FROM (SELECT name,tbl_name FROM sqlite_master WHERE type='index' AND name IN ('i1','i2') ORDER BY name)) || '|' ||
+          (SELECT * FROM pragma_integrity_check LIMIT 1);" 2>/dev/null)
+check "indexed_rename_vs_rename_keeps_catalog_valid" "ours_a,theirs_a|i1:ours_a,i2:b|ok" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
