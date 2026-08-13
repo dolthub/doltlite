@@ -602,10 +602,10 @@ run_test "pk_only_clean_merge_rows" "SELECT count(*) FROM child;" "2" "$DB36"
 DB37=/tmp/test_merge37_$$.db; rm -f "$DB37"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB37" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB37" > /dev/null 2>&1
-echo "ALTER TABLE t ADD COLUMN m INT DEFAULT 5; INSERT INTO t VALUES(2,'from-feat',7); SELECT dolt_commit('-A','-m','feat col');" | $DOLTLITE "$DB37/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN m INT DEFAULT 5; INSERT INTO t VALUES(2,'from-feat',7); INSERT INTO t(id,v,m) VALUES(3,'null-feat',NULL); SELECT dolt_commit('-A','-m','feat col');" | $DOLTLITE "$DB37/feature" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN n INT DEFAULT 9; SELECT dolt_commit('-A','-m','main col');" | $DOLTLITE "$DB37" > /dev/null 2>&1
 run_test_match "dual_add_column_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB37"
-run_test "dual_add_column_defaults" "SELECT group_concat(id || ':' || n || ':' || m, ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:9:5,2:9:7" "$DB37"
+run_test "dual_add_column_defaults" "SELECT group_concat(id || ':' || quote(n) || ':' || quote(m), ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:9:5,2:9:7,3:9:NULL" "$DB37"
 
 # Text defaults take the same path, and a NOT NULL default must not turn
 # into a constraint violation invented by the rewrite.
