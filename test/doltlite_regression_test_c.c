@@ -899,6 +899,14 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
            queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
   check("first_commit_hash", strlen(firstCommit)==40);
   check("open_db2", open_db(dbpath, &db2)==SQLITE_OK);
+  /* Pin db2's snapshot before the peer commits so it genuinely cannot
+  ** observe that commit. Merely having opened earlier no longer makes a
+  ** session stale: a connection adopts the branch head with the catalog at
+  ** each statement, so an unpinned db2 would reset from a current view --
+  ** an ordinary backward reset, and what Dolt does (see
+  ** test_concurrent_refs_informed_reset_moves_branch). */
+  check("pin_db2_snapshot", execSql(db2, "BEGIN")==SQLITE_OK);
+  queryScalarText(db2, "SELECT count(*) FROM t");
 
   check("insert_second_row",
     execSql(db1, "INSERT INTO t VALUES(2,'b')")==SQLITE_OK);
@@ -910,6 +918,7 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
   queryScalarText(db2, sql);
   check("stale_reset_is_rejected",
     strstr(gBuf, "ERROR")!=0 || strstr(gBuf, "conflict")!=0);
+  execSqlSilent(db2, "ROLLBACK");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
@@ -924,6 +933,50 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
   check("branch_history_has_both_commits",
     strcmp(queryScalarText(db3, "SELECT count(*) FROM dolt_log"), "3")==0);
 
+  sqlite3_close(db3);
+  removeDbFiles(dbpath);
+}
+
+/* The counterpart to the stale case: a session with a current view that
+** asks to reset backward gets the reset. Dolt 2.2.2 does the same -- the
+** branch moves to the named commit and the newer commit leaves the log. */
+static void test_concurrent_refs_informed_reset_moves_branch(void){
+  sqlite3 *db1 = 0, *db2 = 0, *db3 = 0;
+  char dbpath[256];
+  char firstCommit[128];
+  char sql[512];
+
+  printf("--- Test 1b: informed dolt_reset moves the branch ---\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_concurrent_refs_informed_reset");
+  removeDbFiles(dbpath);
+
+  check("ir_open_db1", open_db(dbpath, &db1)==SQLITE_OK);
+  check("ir_setup", execSql(db1,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  snprintf(firstCommit, sizeof(firstCommit), "%s",
+           queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
+  check("ir_first_commit", strlen(firstCommit)==40);
+
+  check("ir_open_db2", open_db(dbpath, &db2)==SQLITE_OK);
+  check("ir_peer_commit", execSql(db1,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+
+  /* db2 has no pinned snapshot, so this statement sees the peer commit
+  ** first and the reset is an informed one. */
+  snprintf(sql, sizeof(sql), "SELECT dolt_reset('%s')", firstCommit);
+  queryScalarText(db2, sql);
+  check("ir_reset_accepted", strstr(gBuf, "ERROR")==0 && strstr(gBuf, "conflict")==0);
+
+  sqlite3_close(db1);
+  sqlite3_close(db2);
+
+  check("ir_open_db3", open_db(dbpath, &db3)==SQLITE_OK);
+  check("ir_branch_moved_back",
+    strcmp(queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1"), "init")==0);
+  check("ir_log_shrank",
+    strcmp(queryScalarText(db3, "SELECT count(*) FROM dolt_log"), "2")==0);
   sqlite3_close(db3);
   removeDbFiles(dbpath);
 }
@@ -967,6 +1020,7 @@ static void test_concurrent_refs_checkout_refreshes_branch(void){
 static void run_concurrent_refs(void){
   printf("=== Concurrent Refs Test ===\n\n");
   test_concurrent_refs_stale_reset_is_rejected();
+  test_concurrent_refs_informed_reset_moves_branch();
   test_concurrent_refs_checkout_refreshes_branch();
 }
 
@@ -4760,6 +4814,140 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
 
   sqlite3_finalize(stmt);
   sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+/* A session that refreshes after a peer commit adopts the peer's catalog;
+** it must adopt that snapshot's branch head with it. Holding the old head
+** makes every later working-set persist record a commit the branch no
+** longer points at, and the load gate discards such a blob -- so rows this
+** session durably wrote vanish for every future connection. */
+/* Persisting a working set is the one ref install with no compare-and-swap:
+** when the branch ref is missing it created one. A session whose branch a
+** peer deleted would therefore resurrect it on its next write, restoring a
+** ref the peer removed and carrying that session's later commits on it. */
+static void run_persist_does_not_resurrect_deleted_branch(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  sqlite3 *dbC = 0;
+  char dbpath[256];
+
+  printf("=== Persist Does Not Resurrect Deleted Branch Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_persist_no_resurrect");
+  removeDbFiles(dbpath);
+
+  check("nr_open_A", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("nr_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "SELECT dolt_branch('feat');")==SQLITE_OK);
+  check("nr_checkout_feat",
+        execSql(dbA, "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  check("nr_commit_on_feat", execSql(dbA,
+    "INSERT INTO t VALUES(2,'two');"
+    "SELECT dolt_commit('-A','-m','feat work');")==SQLITE_OK);
+
+  /* A peer deletes the branch this session is on. */
+  check("nr_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("nr_peer_delete",
+        execSql(dbB, "SELECT dolt_branch('-D','feat');")==SQLITE_OK);
+  check("nr_deleted_for_peer",
+        strcmp(queryScalarText(dbB,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+
+  /* The orphaned session's next write must not put the branch back. */
+  execSqlSilent(dbA, "INSERT INTO t VALUES(3,'three');");
+  execSqlSilent(dbA, "SELECT dolt_commit('-A','-m','after delete');");
+  sqlite3_close(dbA);
+  dbA = 0;
+  check("nr_still_deleted_for_peer",
+        strcmp(queryScalarText(dbB,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("nr_close_B", sqlite3_close(dbB)==SQLITE_OK);
+  dbB = 0;
+
+  check("nr_open_C", open_db(dbpath, &dbC)==SQLITE_OK);
+  check("nr_still_deleted_for_fresh",
+        strcmp(queryScalarText(dbC,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("nr_main_intact",
+        strcmp(queryScalarText(dbC,
+            "SELECT count(*) FROM dolt_branches WHERE name='main'"), "1")==0);
+  check("nr_close_C", sqlite3_close(dbC)==SQLITE_OK);
+  removeDbFiles(dbpath);
+}
+
+static void run_peer_commit_keeps_local_row_durable(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  sqlite3 *dbC = 0;
+  char dbpath[256];
+
+  printf("=== Peer Commit Keeps Local Row Durable Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_peer_commit_local_row");
+  removeDbFiles(dbpath);
+
+  check("pk_open_A", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("pk_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
+
+  /* A writes an uncommitted row, then a peer commits on the same branch. */
+  check("pk_local_row", execSql(dbA, "INSERT INTO t VALUES(2,'two');")==SQLITE_OK);
+  check("pk_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("pk_peer_commit", execSql(dbB,
+    "INSERT INTO t VALUES(3,'three');"
+    "SELECT dolt_commit('-A','-m','peer');")==SQLITE_OK);
+  check("pk_close_B", sqlite3_close(dbB)==SQLITE_OK);
+  dbB = 0;
+
+  /* A writes again after the peer landed. Autocommit reported success, so
+  ** the row must be there for anyone who opens the database next. */
+  check("pk_local_row_after_peer",
+        execSql(dbA, "INSERT INTO t VALUES(4,'four');")==SQLITE_OK);
+  check("pk_close_A", sqlite3_close(dbA)==SQLITE_OK);
+  dbA = 0;
+
+  check("pk_open_C", open_db(dbpath, &dbC)==SQLITE_OK);
+  check("pk_row_survived",
+        strcmp(queryScalarText(dbC, "SELECT count(*) FROM t WHERE id=4"),
+               "1")==0);
+  check("pk_close_C", sqlite3_close(dbC)==SQLITE_OK);
+  removeDbFiles(dbpath);
+}
+
+/* The same stale head is what dolt_commit compares against, so a session
+** that outlives a peer commit could never commit again -- every retry hit
+** the conflict error, and only reconnecting escaped it. */
+static void run_commit_recovers_after_peer_commit(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  const char *res;
+  char dbpath[256];
+
+  printf("=== Commit Recovers After Peer Commit Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_commit_recovers_after_peer");
+  removeDbFiles(dbpath);
+
+  check("cr_open_A", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("cr_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
+
+  check("cr_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("cr_peer_commit", execSql(dbB,
+    "INSERT INTO t VALUES(2,'two');"
+    "SELECT dolt_commit('-A','-m','peer');")==SQLITE_OK);
+  check("cr_close_B", sqlite3_close(dbB)==SQLITE_OK);
+  dbB = 0;
+
+  check("cr_local_row", execSql(dbA, "INSERT INTO t VALUES(3,'three');")==SQLITE_OK);
+  res = queryScalarText(dbA, "SELECT dolt_commit('-A','-m','after peer')");
+  check("cr_commit_succeeds", res && strlen(res)==40 && strstr(res, "ERROR")==0);
+  check("cr_close_A", sqlite3_close(dbA)==SQLITE_OK);
   removeDbFiles(dbpath);
 }
 
@@ -11317,6 +11505,9 @@ static const RegressionCase aCases[] = {
   { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
   { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
+  { "persist_does_not_resurrect_deleted_branch", "Persist Does Not Resurrect Deleted Branch Test", run_persist_does_not_resurrect_deleted_branch },
+  { "peer_commit_keeps_local_row_durable", "Peer Commit Keeps Local Row Durable Test", run_peer_commit_keeps_local_row_durable },
+  { "commit_recovers_after_peer_commit", "Commit Recovers After Peer Commit Test", run_commit_recovers_after_peer_commit },
   { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },
   { "reopen_preserves_staged_working_set", "Reopen Preserves Staged Working Set Test", run_reopen_preserves_staged_working_set },
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },

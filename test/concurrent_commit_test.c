@@ -72,27 +72,82 @@ static void test_aaron_scenario(void){
   res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
   check("commit_add_one", strlen(res)==40);
 
+  /* db2 opened before db1's commit and has not observed it, but it is not
+  ** pinned to that view: its next statement adopts the branch head, so this
+  ** commit stacks on "add one" rather than racing it. Dolt 2.2.2 does the
+  ** same -- verified against a sql-server with two live sessions, where the
+  ** second session's commit is accepted and both commits and both rows
+  ** survive. The pinned session that genuinely cannot see the peer is
+  ** covered by test_pinned_session_commit_rejected below. */
   execSql(db2, "INSERT INTO vals VALUES (2, 2)");
   res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
-  check("commit_add_two_rejected",
-    strstr(res, "ERROR") != 0 || strstr(res, "conflict") != 0);
+  check("commit_add_two_accepted", strlen(res)==40);
 
   sqlite3_close(db1);
   rc = sqlite3_open(dbpath, &db1);
   check("reopen_db1", rc==SQLITE_OK);
 
   res = queryScalarText(db1, "SELECT count(*) FROM dolt_log");
-  /* Two commits plus the "Initialize data repository" seed commit. */
-  check("log_has_2_entries", strcmp(res, "3")==0);
+  /* Both commits plus the "Initialize data repository" seed commit. */
+  check("log_has_both_commits", strcmp(res, "4")==0);
 
   res = queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1");
-  check("latest_commit_is_add_one", strcmp(res, "add one")==0);
+  check("latest_commit_is_add_two", strcmp(res, "add two")==0);
 
   res = queryScalarText(db1, "SELECT val FROM vals WHERE id=1");
   check("add_one_data_intact", strcmp(res, "1")==0);
 
+  res = queryScalarText(db1, "SELECT val FROM vals WHERE id=2");
+  check("add_two_data_intact", strcmp(res, "2")==0);
+
   sqlite3_close(db1);
   sqlite3_close(db2);
+  remove(dbpath);
+}
+
+/* A session that pins its snapshot in a transaction cannot observe the peer
+** commit, so its own commit is refused rather than built on a head it never
+** saw. This is the protection the scenario above used to get for free from
+** a stale head. */
+static void test_pinned_session_commit_rejected(void){
+  sqlite3 *db1 = 0, *db2 = 0;
+  const char *dbpath = "/tmp/test_pinned_commit.db";
+  int rc;
+  const char *res;
+
+  printf("--- Test 1b: pinned session's commit is rejected ---\n");
+
+  remove(dbpath);
+  rc = sqlite3_open(dbpath, &db1);
+  check("pin_open_db1", rc==SQLITE_OK);
+  execSql(db1, "CREATE TABLE vals (id INT, val INT)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'Initial commit')");
+  check("pin_initial_commit", strlen(res)==40);
+
+  rc = sqlite3_open(dbpath, &db2);
+  check("pin_open_db2", rc==SQLITE_OK);
+  execSql(db2, "BEGIN");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
+
+  execSql(db1, "INSERT INTO vals VALUES (1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  check("pin_peer_commit", strlen(res)==40);
+
+  execSql(db2, "INSERT INTO vals VALUES (2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
+  check("pin_commit_rejected",
+    strstr(res, "ERROR") != 0 || strstr(res, "conflict") != 0);
+  execSql(db2, "ROLLBACK");
+
+  sqlite3_close(db1);
+  sqlite3_close(db2);
+  rc = sqlite3_open(dbpath, &db1);
+  check("pin_reopen", rc==SQLITE_OK);
+  res = queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1");
+  check("pin_peer_commit_is_head", strcmp(res, "add one")==0);
+  res = queryScalarText(db1, "SELECT val FROM vals WHERE id=1");
+  check("pin_peer_data_intact", strcmp(res, "1")==0);
+  sqlite3_close(db1);
   remove(dbpath);
 }
 
@@ -182,6 +237,7 @@ int main(){
   printf("=== Concurrent Commit Test ===\n\n");
 
   test_aaron_scenario();
+  test_pinned_session_commit_rejected();
   test_single_connection();
   test_sequential_multi_connection();
 

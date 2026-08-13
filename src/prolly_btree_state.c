@@ -365,13 +365,11 @@ int btreeReloadBranchWorkingStateInto(
   BtShared *pBt;
   BtreeBranchState state;
   const char *zBr;
-  int hadUserCatalog;
   int rc;
 
   assert( p!=0 && p->pBt!=0 );
   pBt = p->pBt;
   zBr = p->zBranch ? p->zBranch : "main";
-  hadUserCatalog = p->cat.n > 1;
 
   rc = chunkStoreEnsureRefsFresh(&pBt->store);
   if( rc!=SQLITE_OK ) return rc;
@@ -400,7 +398,19 @@ int btreeReloadBranchWorkingStateInto(
       }
     }
   }
-  if( prollyHashIsEmpty(&p->headCommit) || !hadUserCatalog ){
+  /* Head and catalog come from one snapshot and must be adopted together.
+  ** Keeping a stale head beside the reloaded catalog makes every later
+  ** working-set persist record that stale commit, which the load gate then
+  ** discards -- silently dropping rows this session durably wrote -- and
+  ** makes the commit CAS compare against a tip no peer will ever restore,
+  ** so the session can never commit again without reconnecting.
+  **
+  ** An empty tip is not a newer state: it means the branch is absent from
+  ** the refs (a peer deleted it, or it does not exist yet), and zeroing a
+  ** live head there would turn an orphaned session into one that looks
+  ** brand new. */
+  if( !prollyHashIsEmpty(&state.headCommit)
+   || prollyHashIsEmpty(&p->headCommit) ){
     p->headCommit = state.headCommit;
   }
   if( pLoadedCatHash ){
