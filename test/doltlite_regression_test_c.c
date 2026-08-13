@@ -2501,6 +2501,76 @@ static void run_catalog_deserialize_corruption(void){
   sqlite3_close(db);
 }
 
+static void fill_v5_one_entry_catalog(u8 *buf, int nBuf, Pgno iTable){
+  u8 *q = buf;
+  memset(buf, 0, nBuf);
+  *q++ = CATALOG_FORMAT_V5;
+  q[0] = 1; q += 4;
+  q += 8;
+  q[0] = (u8)iTable; q[1] = (u8)(iTable>>8);
+  q[2] = (u8)(iTable>>16); q[3] = (u8)(iTable>>24);
+}
+
+static void run_schema_loader_missing_master(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  ProllyCache *pCache;
+  ProllyHash emptyHash;
+  ProllyHash catHash;
+  SchemaEntry *aSchema = 0;
+  int nSchema = 0;
+  SchemaEntry one;
+  int found = 0;
+  int rc;
+  u8 noMaster[CAT_HEADER_SIZE_V5 + CAT_ENTRY_FIXED_SIZE_V4];
+  u8 emptyMaster[CAT_HEADER_SIZE_V5 + CAT_ENTRY_FIXED_SIZE_V4];
+
+  printf("=== Schema Loader Missing Master Test ===\n\n");
+  check("open_memory_db_for_schema_loader", open_db(":memory:", &db)==SQLITE_OK);
+  cs = doltliteGetChunkStore(db);
+  pCache = doltliteGetCache(db);
+  check("schema_loader_chunk_store", cs!=0 && pCache!=0);
+
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  rc = loadSchemaFromCatalog(db, cs, pCache, &emptyHash, &aSchema, &nSchema);
+  check("empty_catalog_hash_is_ok", rc==SQLITE_OK && aSchema==0 && nSchema==0);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, &emptyHash, "t", &one, &found);
+  check("empty_catalog_hash_entry_is_ok", rc==SQLITE_OK && found==0);
+
+  check("setup_real_catalog",
+        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+                    "SELECT dolt_commit('-A','-m','init');")==SQLITE_OK);
+  check("real_catalog_hash",
+        doltliteGetHeadCatalogHash(db, &catHash)==SQLITE_OK
+        && !prollyHashIsEmpty(&catHash));
+  rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aSchema, &nSchema);
+  check("real_catalog_loads_schema", rc==SQLITE_OK && nSchema>0);
+  freeSchemaEntries(aSchema, nSchema);
+  aSchema = 0; nSchema = 0;
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, &catHash, "t", &one, &found);
+  check("real_catalog_finds_table", rc==SQLITE_OK && found==1);
+  clearSchemaEntry(&one);
+
+  fill_v5_one_entry_catalog(noMaster, (int)sizeof(noMaster), 2);
+  check("put_catalog_without_master",
+        chunkStorePut(cs, noMaster, (int)sizeof(noMaster), &catHash)==SQLITE_OK);
+  rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aSchema, &nSchema);
+  check("missing_master_entry_is_corrupt", rc==SQLITE_CORRUPT);
+  check("missing_master_leaves_no_entries", aSchema==0 && nSchema==0);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, &catHash, "t", &one, &found);
+  check("missing_master_entry_lookup_is_corrupt", rc==SQLITE_CORRUPT);
+
+  fill_v5_one_entry_catalog(emptyMaster, (int)sizeof(emptyMaster), 1);
+  check("put_catalog_with_empty_master_root",
+        chunkStorePut(cs, emptyMaster, (int)sizeof(emptyMaster), &catHash)==SQLITE_OK);
+  rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aSchema, &nSchema);
+  check("empty_master_root_is_corrupt", rc==SQLITE_CORRUPT);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, &catHash, "t", &one, &found);
+  check("empty_master_root_lookup_is_corrupt", rc==SQLITE_CORRUPT);
+
+  sqlite3_close(db);
+}
+
 static void run_ancestor_missing_start(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -11835,6 +11905,7 @@ static const RegressionCase aCases[] = {
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },
+  { "schema_loader_missing_master", "Schema Loader Missing Master Test", run_schema_loader_missing_master },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "ancestor_criss_cross_single_walk", "Ancestor Criss-Cross Single Walk Test", run_ancestor_criss_cross_single_walk },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },

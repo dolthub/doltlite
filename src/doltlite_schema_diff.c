@@ -118,6 +118,12 @@ int loadSchemaFromCatalog(
   SchemaEntry *aEntries = 0;
   int nEntries = 0, nAlloc = 0;
 
+  if( !pCatHash || prollyHashIsEmpty(pCatHash) ){
+    *ppEntries = 0;
+    *pnEntries = 0;
+    return SQLITE_OK;
+  }
+
   rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ){ *ppEntries = 0; *pnEntries = 0; return rc; }
 
@@ -132,8 +138,9 @@ int loadSchemaFromCatalog(
   doltliteFreeCatalog(aTables, nTables);
 
   if( prollyHashIsEmpty(&masterRoot) ){
-    *ppEntries = 0; *pnEntries = 0;
-    return SQLITE_OK;
+    *ppEntries = 0;
+    *pnEntries = 0;
+    return SQLITE_CORRUPT;
   }
 
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
@@ -232,9 +239,9 @@ int loadSchemaEntryFromCatalog(
   if( !zName || prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
   rc = doltliteLoadTableRootById(db, pCatHash, 1, &masterRoot, &masterFlags, 0);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_CORRUPT;
   if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
+  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_CORRUPT;
 
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
   rc = prollyCursorFirst(&cur, &res);
