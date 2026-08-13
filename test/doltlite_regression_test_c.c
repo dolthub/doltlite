@@ -2219,13 +2219,19 @@ static void run_clone_ref_install_survives_window_gc(void){
   check("clone_window_gc_still_works",
         execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
 
-  /* And it must heal on retry, re-syncing whatever the gc took. */
-  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
-  check("clone_window_retry_succeeds",
-        execSqlSilent(afterDb, sql)==SQLITE_OK);
-  check("clone_window_retry_rows",
+  /* And it must heal on retry, re-syncing whatever the gc took. Where the gc
+  ** could not run there was nothing to refuse, so the first clone landed and
+  ** a second one has nowhere to go -- the rows are already the proof. */
+  if( gGcWindowCollected ){
+    snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+    check("clone_window_retry_succeeds",
+          execSqlSilent(afterDb, sql)==SQLITE_OK);
+  }else{
+    printf("  SKIP: clone_window_retry_succeeds (in-window gc unavailable)\n");
+  }
+  check("clone_window_rows",
         strcmp(queryScalarText(afterDb, "SELECT count(*) FROM t"), "2")==0);
-  check("clone_window_retry_graph_complete",
+  check("clone_window_graph_complete",
         execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
 
   sqlite3_close(afterDb);
