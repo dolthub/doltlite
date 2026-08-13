@@ -212,6 +212,7 @@ struct TableEntry *findCatalogEntryBySchemaObject(
 
 int normalizeTheirsToMergedLayout(
   sqlite3 *db,
+  const char *zTable,
   const ProllyHash *pTheirsRoot,
   u8 flags,
   const char *zAncSql,

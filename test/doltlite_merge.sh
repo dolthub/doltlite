@@ -460,7 +460,7 @@ else
   ERRORS="$ERRORS\nFAIL: clean_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
 fi
 
-DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32" "$DB33" "$DB34" "$DB35" "$DB36"
+DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32" "$DB33" "$DB34" "$DB35" "$DB36" "$DB37" "$DB38" "$DB39"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','base');
 SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');
@@ -593,6 +593,40 @@ echo "INSERT INTO child VALUES(1,'t1'); SELECT dolt_commit('-A','-m','child one'
 echo "INSERT INTO child VALUES(2,'t2'); SELECT dolt_commit('-A','-m','child two');" | $DOLTLITE "$DB36" > /dev/null 2>&1
 run_test_match "pk_only_clean_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB36"
 run_test "pk_only_clean_merge_rows" "SELECT count(*) FROM child;" "2" "$DB36"
+
+
+# Both sides adding a column leaves each side's rows short of the other's
+# column. Rewriting theirs into the merged layout has to fill our column
+# with its declared default: the record now physically covers that slot, so
+# an explicit NULL there replaces a default the table always read.
+DB37=/tmp/test_merge37_$$.db; rm -f "$DB37"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB37" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB37" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN m INT DEFAULT 5; INSERT INTO t VALUES(2,'from-feat',7); SELECT dolt_commit('-A','-m','feat col');" | $DOLTLITE "$DB37/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN n INT DEFAULT 9; SELECT dolt_commit('-A','-m','main col');" | $DOLTLITE "$DB37" > /dev/null 2>&1
+run_test_match "dual_add_column_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB37"
+run_test "dual_add_column_defaults" "SELECT group_concat(id || ':' || n || ':' || m, ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:9:5,2:9:7" "$DB37"
+
+# Text defaults take the same path, and a NOT NULL default must not turn
+# into a constraint violation invented by the rewrite.
+DB38=/tmp/test_merge38_$$.db; rm -f "$DB38"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB38" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB38" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN m TEXT DEFAULT 'em'; INSERT INTO t VALUES(2,'from-feat','x'); SELECT dolt_commit('-A','-m','feat col');" | $DOLTLITE "$DB38/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN n TEXT NOT NULL DEFAULT 'en'; SELECT dolt_commit('-A','-m','main col');" | $DOLTLITE "$DB38" > /dev/null 2>&1
+run_test_match "dual_add_text_default_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB38"
+run_test "dual_add_text_defaults" "SELECT group_concat(id || ':' || n || ':' || m, ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:en:em,2:en:x" "$DB38"
+run_test "dual_add_not_null_no_violation" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB38"
+
+# A column with no default still reads NULL, and rows that predate it stay
+# NULL rather than gaining a value.
+DB39=/tmp/test_merge39_$$.db; rm -f "$DB39"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB39" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB39" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN m INT; INSERT INTO t VALUES(2,'from-feat',7); SELECT dolt_commit('-A','-m','feat col');" | $DOLTLITE "$DB39/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN n INT; SELECT dolt_commit('-A','-m','main col');" | $DOLTLITE "$DB39" > /dev/null 2>&1
+run_test_match "dual_add_no_default_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB39"
+run_test "dual_add_no_default_nulls" "SELECT group_concat(id || ':' || coalesce(n,'-') || ':' || coalesce(m,'-'), ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:-:-,2:-:7" "$DB39"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
 dltest_finish

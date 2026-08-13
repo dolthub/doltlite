@@ -12,8 +12,135 @@
 ** across a dual ADD COLUMN divergence: without it, theirs' added-column value
 ** would be read at the wrong ordinal. Records are content-addressed and rebuilt
 ** through the canonical doltliteBuildRecord, so the tree stays deterministic. */
+/* Column defaults for a table's declared columns, evaluated once.
+**
+** A row written before ADD COLUMN stops short of the new column, and reads
+** materialize the declared default for the missing field. Rewriting such a
+** row into a wider layout has to keep that promise: once any later column
+** is present the record physically covers the earlier slot, so leaving it
+** NULL replaces the default with a NULL the table never held. Defaults for
+** ADD COLUMN are constants, so evaluating the stored text in the scratch
+** database that already holds the schema yields the value to store. */
+typedef struct MergeColDefaults MergeColDefaults;
+struct MergeColDefaults {
+  DoltliteSerialValue *aVal;
+  u8 **apOwned;
+  int nCol;
+};
+
+static void mergeColDefaultsFree(MergeColDefaults *p){
+  int i;
+  if( p->apOwned ){
+    for(i=0; i<p->nCol; i++) sqlite3_free(p->apOwned[i]);
+    sqlite3_free(p->apOwned);
+  }
+  sqlite3_free(p->aVal);
+  memset(p, 0, sizeof(*p));
+}
+
+static int mergeColDefaultsLoad(
+  const char *zSql,
+  const char *zTable,
+  MergeColDefaults *pOut
+){
+  sqlite3 *tmp = 0;
+  sqlite3_stmt *pStmt = 0;
+  char *zQuery = 0;
+  int nCol = 0;
+  int rc;
+
+  memset(pOut, 0, sizeof(*pOut));
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+  if( rc!=SQLITE_OK ) goto done;
+
+  zQuery = sqlite3_mprintf(
+      "SELECT cid, dflt_value FROM pragma_table_info(%Q) ORDER BY cid",
+      zTable);
+  if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
+  rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) goto done;
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ) nCol++;
+  if( rc!=SQLITE_DONE ) goto done;
+  sqlite3_reset(pStmt);
+
+  if( nCol>0 ){
+    pOut->aVal = sqlite3_malloc(nCol * (int)sizeof(DoltliteSerialValue));
+    pOut->apOwned = sqlite3_malloc(nCol * (int)sizeof(u8*));
+    if( !pOut->aVal || !pOut->apOwned ){ rc = SQLITE_NOMEM; goto done; }
+    memset(pOut->aVal, 0, nCol * (int)sizeof(DoltliteSerialValue));
+    memset(pOut->apOwned, 0, nCol * (int)sizeof(u8*));
+    pOut->nCol = nCol;
+    do{
+      pOut->aVal[--nCol].eType = SQLITE_NULL;
+    }while( nCol>0 );
+  }
+
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    int cid = sqlite3_column_int(pStmt, 0);
+    const char *zDflt = (const char*)sqlite3_column_text(pStmt, 1);
+    sqlite3_stmt *pEval = 0;
+    char *zEval;
+    if( !zDflt || !zDflt[0] || cid<0 || cid>=pOut->nCol ) continue;
+    zEval = sqlite3_mprintf("SELECT %s", zDflt);
+    if( !zEval ){ rc = SQLITE_NOMEM; goto done; }
+    if( sqlite3_prepare_v2(tmp, zEval, -1, &pEval, 0)==SQLITE_OK
+     && sqlite3_step(pEval)==SQLITE_ROW ){
+      DoltliteSerialValue *m = &pOut->aVal[cid];
+      switch( sqlite3_column_type(pEval, 0) ){
+        case SQLITE_INTEGER:
+          m->eType = SQLITE_INTEGER;
+          m->i = sqlite3_column_int64(pEval, 0);
+          break;
+        case SQLITE_FLOAT:
+          m->eType = SQLITE_FLOAT;
+          m->r = sqlite3_column_double(pEval, 0);
+          break;
+        case SQLITE_TEXT:
+        case SQLITE_BLOB: {
+          int isText = sqlite3_column_type(pEval, 0)==SQLITE_TEXT;
+          const void *p = isText
+              ? (const void*)sqlite3_column_text(pEval, 0)
+              : sqlite3_column_blob(pEval, 0);
+          int n = sqlite3_column_bytes(pEval, 0);
+          u8 *pCopy = 0;
+          if( n>0 ){
+            pCopy = sqlite3_malloc(n);
+            if( !pCopy ){
+              sqlite3_finalize(pEval);
+              sqlite3_free(zEval);
+              rc = SQLITE_NOMEM;
+              goto done;
+            }
+            memcpy(pCopy, p, n);
+          }
+          pOut->apOwned[cid] = pCopy;
+          m->eType = isText ? SQLITE_TEXT : SQLITE_BLOB;
+          m->p = pCopy;
+          m->n = n;
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    sqlite3_finalize(pEval);
+    sqlite3_free(zEval);
+  }
+  rc = rc==SQLITE_DONE ? SQLITE_OK : rc;
+
+done:
+  if( pStmt ) sqlite3_finalize(pStmt);
+  sqlite3_free(zQuery);
+  if( tmp ) sqlite3_close(tmp);
+  if( rc!=SQLITE_OK ) mergeColDefaultsFree(pOut);
+  return rc;
+}
+
 int normalizeTheirsToMergedLayout(
   sqlite3 *db,
+  const char *zTable,
   const ProllyHash *pTheirsRoot,
   u8 flags,
   const char *zAncSql,
@@ -32,7 +159,12 @@ int normalizeTheirsToMergedLayout(
   ProllyCursor cur;
   int curInit = 0;
   int isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
+  MergeColDefaults oursDefaults;
+  MergeColDefaults theirsDefaults;
   int rc, res, j;
+
+  memset(&oursDefaults, 0, sizeof(oursDefaults));
+  memset(&theirsDefaults, 0, sizeof(theirsDefaults));
 
   memset(pOutRoot, 0, sizeof(*pOutRoot));
   rc = parseColumns(zAncSql, &aAnc, &nAnc);
@@ -76,6 +208,14 @@ int normalizeTheirsToMergedLayout(
   }
   if( nMerged > DOLTLITE_MAX_RECORD_FIELDS ){ rc = SQLITE_ERROR; goto done; }
 
+  /* Slots this side does not supply take the declared default of whichever
+  ** schema owns them: ours for the columns we keep, theirs for the ones
+  ** their side appended. */
+  rc = mergeColDefaultsLoad(zOursSql, zTable, &oursDefaults);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = mergeColDefaultsLoad(zTheirsSql, zTable, &theirsDefaults);
+  if( rc!=SQLITE_OK ) goto done;
+
   rc = prollyMutMapInit(&mm, (u8)isIntKey);
   if( rc!=SQLITE_OK ) goto done;
   mmInit = 1;
@@ -104,12 +244,22 @@ int normalizeTheirsToMergedLayout(
     for(k=0; k<nMerged; k++){
       memset(&aMem[k], 0, sizeof(aMem[k]));
       aMem[k].eType = SQLITE_NULL;
+      if( k<oursDefaults.nCol ){
+        aMem[k] = oursDefaults.aVal[k];
+      }
+    }
+    for(j=0; j<nTheirs; j++){
+      if( aMap[j]>=nOurs && j<theirsDefaults.nCol ){
+        aMem[aMap[j]] = theirsDefaults.aVal[j];
+      }
     }
     for(j=0; j<info.nField && j<nTheirs; j++){
       int tgt = aMap[j];
       int st = info.aType[j];
       const u8 *body = pVal + info.aOffset[j];
       DoltliteSerialValue *m = &aMem[tgt];
+      memset(m, 0, sizeof(*m));
+      m->eType = SQLITE_NULL;
       if( st==0 ){
         m->eType = SQLITE_NULL;
       }else if( dlSerialIsInt(st) ){
@@ -129,6 +279,9 @@ int normalizeTheirsToMergedLayout(
         m->n = dlSerialTypeLen((u64)st);
       }
       if( m->eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
+    }
+    for(k=0; k<nMerged; k++){
+      if( aMem[k].eType!=SQLITE_NULL && k+1>nEmit ) nEmit = k+1;
     }
 
     if( nEmit>0 ){
@@ -156,6 +309,8 @@ int normalizeTheirsToMergedLayout(
   }
 
 done:
+  mergeColDefaultsFree(&oursDefaults);
+  mergeColDefaultsFree(&theirsDefaults);
   if( curInit ) prollyCursorClose(&cur);
   if( mmInit ) prollyMutMapFree(&mm);
   sqlite3_free(aMap);

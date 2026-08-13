@@ -651,7 +651,7 @@ static int mergePass1BothSides(
       SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
       if( ancSE && ancSE->zSql && ourSE && ourSE->zSql
        && theirSE && theirSE->zSql ){
-        rc = normalizeTheirsToMergedLayout(c->db, &theirsEntry->root,
+        rc = normalizeTheirsToMergedLayout(c->db, zName, &theirsEntry->root,
                                            c->aOurs[iOurs].flags, ancSE->zSql,
                                            ourSE->zSql, theirSE->zSql,
                                            &theirsNormRoot);
