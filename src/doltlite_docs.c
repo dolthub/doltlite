@@ -5,13 +5,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* Eponymous stand-in for dolt_docs while no real table exists. Reads are
-** always empty; the first write statement materializes a real dolt_docs
-** table in main, which then shadows this module in name resolution
-** (sqlite3LocateTable only reaches eponymous modules when sqlite3FindTable
-** misses), so status/diff/merge/branching treat docs as an ordinary
-** versioned table exactly like Dolt's user-space system tables. */
-
 typedef struct DocsVtab DocsVtab;
 struct DocsVtab {
   sqlite3_vtab base;
@@ -21,11 +14,15 @@ struct DocsVtab {
 typedef struct DocsCursor DocsCursor;
 struct DocsCursor {
   sqlite3_vtab_cursor base;
-  int iRow;
+  sqlite3_stmt *pStmt;
+  int eof;
+  int synthetic;
+  int foundAgent;
 };
 
 static const char *zDocsVtabSchema =
-  "CREATE TABLE x(doc_name TEXT, doc_text TEXT)";
+  "CREATE TABLE x(doc_name TEXT NOT NULL PRIMARY KEY, "
+  "doc_text TEXT NOT NULL) WITHOUT ROWID";
 
 static const char *zDocsCreate =
   "CREATE TABLE main.dolt_docs("
@@ -33,9 +30,6 @@ static const char *zDocsCreate =
 
 static const char *zDocsAgentName = "AGENT.md";
 
-/* Default AGENT.md, seeded when the backing table materializes and served
-** by the module before that. DoltLite's counterpart to Dolt's embedded
-** doc/AGENT.md, rewritten for this engine's SQL surface. */
 static const char *zDocsAgentDefault =
   "# AGENT.md - DoltLite Database Operations Guide\n"
   "\n"
@@ -132,29 +126,83 @@ static int docsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   return doltliteVtabOpenCursor(ppCursor, sizeof(DocsCursor));
 }
 
+static int docsSetErrMsg(DocsVtab *p, int rc){
+  sqlite3_free(p->base.zErrMsg);
+  p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(p->db));
+  return rc;
+}
+
+static int docsAdvance(DocsCursor *c){
+  DocsVtab *p = (DocsVtab*)c->base.pVtab;
+  int rc;
+  if( !c->pStmt ){
+    c->eof = 1;
+    return SQLITE_OK;
+  }
+  rc = sqlite3_step(c->pStmt);
+  if( rc==SQLITE_ROW ){
+    const unsigned char *zName = sqlite3_column_text(c->pStmt, 0);
+    if( zName && strcmp((const char*)zName, zDocsAgentName)==0 ){
+      c->foundAgent = 1;
+    }
+    return SQLITE_OK;
+  }
+  rc = sqlite3_finalize(c->pStmt);
+  c->pStmt = 0;
+  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+  if( !c->foundAgent ){
+    c->synthetic = 1;
+  }else{
+    c->eof = 1;
+  }
+  return SQLITE_OK;
+}
+
 static int docsFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
+  DocsCursor *c = (DocsCursor*)pCursor;
+  DocsVtab *p = (DocsVtab*)pCursor->pVtab;
+  int rc;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
-  ((DocsCursor*)pCursor)->iRow = 0;
-  return SQLITE_OK;
+  sqlite3_finalize(c->pStmt);
+  c->pStmt = 0;
+  c->eof = 0;
+  c->synthetic = 0;
+  c->foundAgent = 0;
+  if( !sqlite3FindTable(p->db, "dolt_docs", "main") ){
+    c->synthetic = 1;
+    return SQLITE_OK;
+  }
+  rc = sqlite3_prepare_v3(p->db,
+      "SELECT doc_name, doc_text FROM main.dolt_docs", -1,
+      SQLITE_PREPARE_NO_VTAB, &c->pStmt, 0);
+  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+  return docsAdvance(c);
 }
 
 static int docsNext(sqlite3_vtab_cursor *pCursor){
-  ((DocsCursor*)pCursor)->iRow++;
-  return SQLITE_OK;
+  DocsCursor *c = (DocsCursor*)pCursor;
+  if( c->synthetic ){
+    c->synthetic = 0;
+    c->eof = 1;
+    return SQLITE_OK;
+  }
+  return docsAdvance(c);
 }
 
 static int docsEof(sqlite3_vtab_cursor *pCursor){
-  return ((DocsCursor*)pCursor)->iRow >= 1;
+  return ((DocsCursor*)pCursor)->eof;
 }
 
 static int docsColumn(sqlite3_vtab_cursor *pCursor,
     sqlite3_context *ctx, int iCol){
-  (void)pCursor;
-  if( iCol==0 ){
+  DocsCursor *c = (DocsCursor*)pCursor;
+  if( c->synthetic && iCol==0 ){
     sqlite3_result_text(ctx, zDocsAgentName, -1, SQLITE_STATIC);
-  }else{
+  }else if( c->synthetic ){
     sqlite3_result_text(ctx, zDocsAgentDefault, -1, SQLITE_STATIC);
+  }else{
+    sqlite3_result_value(ctx, sqlite3_column_value(c->pStmt, iCol));
   }
   return SQLITE_OK;
 }
@@ -165,19 +213,23 @@ static int docsRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
   return SQLITE_OK;
 }
 
-static int docsSetErrMsg(DocsVtab *p, int rc){
-  sqlite3_free(p->base.zErrMsg);
-  p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(p->db));
-  return rc;
+static int docsClose(sqlite3_vtab_cursor *pCursor){
+  DocsCursor *c = (DocsCursor*)pCursor;
+  sqlite3_finalize(c->pStmt);
+  sqlite3_free(c);
+  return SQLITE_OK;
 }
 
 static int docsExecBound(DocsVtab *p, const char *zSql,
-                         sqlite3_value *pArg1, sqlite3_value *pArg2){
+                         sqlite3_value *pArg1, sqlite3_value *pArg2,
+                         sqlite3_value *pArg3){
   sqlite3_stmt *pStmt = 0;
-  int rc = sqlite3_prepare_v2(p->db, zSql, -1, &pStmt, 0);
+  int rc = sqlite3_prepare_v3(p->db, zSql, -1,
+                              SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
   if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
   if( pArg1 ) sqlite3_bind_value(pStmt, 1, pArg1);
   if( pArg2 ) sqlite3_bind_value(pStmt, 2, pArg2);
+  if( pArg3 ) sqlite3_bind_value(pStmt, 3, pArg3);
   sqlite3_step(pStmt);
   rc = sqlite3_finalize(pStmt);
   if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
@@ -187,7 +239,6 @@ static int docsExecBound(DocsVtab *p, const char *zSql,
 static int docsMaterialize(DocsVtab *p){
   int rc;
   char *zErr = 0;
-  sqlite3_stmt *pStmt = 0;
   if( sqlite3FindTable(p->db, "dolt_docs", "main") ) return SQLITE_OK;
   rc = sqlite3_exec(p->db, zDocsCreate, 0, 0, &zErr);
   if( rc!=SQLITE_OK ){
@@ -196,14 +247,6 @@ static int docsMaterialize(DocsVtab *p){
     sqlite3_free(zErr);
     return rc;
   }
-  rc = sqlite3_prepare_v2(p->db,
-      "INSERT INTO main.dolt_docs(doc_name, doc_text) VALUES('AGENT.md', ?1)",
-      -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
-  sqlite3_bind_text(pStmt, 1, zDocsAgentDefault, -1, SQLITE_STATIC);
-  sqlite3_step(pStmt);
-  rc = sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
   return SQLITE_OK;
 }
 
@@ -211,27 +254,55 @@ static int docsBegin(sqlite3_vtab *pBase){
   return docsMaterialize((DocsVtab*)pBase);
 }
 
-/* True when the stored AGENT.md row still carries the text this statement's
-** materialization seeded, so an INSERT of AGENT.md should behave as if the
-** row did not exist yet — matching Dolt, where the default row is synthetic
-** and never blocks an insert. */
-static int docsAgentSeedUntouched(DocsVtab *p){
-  sqlite3_stmt *pStmt = 0;
-  int hit = 0;
-  int rc = sqlite3_prepare_v2(p->db,
-      "SELECT 1 FROM main.dolt_docs WHERE doc_name='AGENT.md' AND doc_text=?1",
-      -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return 0;
-  sqlite3_bind_text(pStmt, 1, zDocsAgentDefault, -1, SQLITE_STATIC);
-  hit = sqlite3_step(pStmt)==SQLITE_ROW;
-  sqlite3_finalize(pStmt);
-  return hit;
+static int docsIsAgent(sqlite3_value *pValue){
+  const unsigned char *z;
+  if( sqlite3_value_type(pValue)!=SQLITE_TEXT ) return 0;
+  z = sqlite3_value_text(pValue);
+  return z && strcmp((const char*)z, zDocsAgentName)==0;
+}
+
+static const char *docsInsertSql(sqlite3 *db){
+  switch( sqlite3_vtab_on_conflict(db) ){
+    case SQLITE_REPLACE:
+      return "INSERT OR REPLACE INTO main.dolt_docs(doc_name, doc_text) "
+             "VALUES(?1, ?2)";
+    case SQLITE_IGNORE:
+      return "INSERT OR IGNORE INTO main.dolt_docs(doc_name, doc_text) "
+             "VALUES(?1, ?2)";
+    case SQLITE_FAIL:
+      return "INSERT OR FAIL INTO main.dolt_docs(doc_name, doc_text) "
+             "VALUES(?1, ?2)";
+    case SQLITE_ROLLBACK:
+      return "INSERT OR ROLLBACK INTO main.dolt_docs(doc_name, doc_text) "
+             "VALUES(?1, ?2)";
+    default:
+      return "INSERT INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)";
+  }
+}
+
+static const char *docsUpdateSql(sqlite3 *db){
+  switch( sqlite3_vtab_on_conflict(db) ){
+    case SQLITE_REPLACE:
+      return "UPDATE OR REPLACE main.dolt_docs SET doc_name=?1, doc_text=?2 "
+             "WHERE doc_name=?3";
+    case SQLITE_IGNORE:
+      return "UPDATE OR IGNORE main.dolt_docs SET doc_name=?1, doc_text=?2 "
+             "WHERE doc_name=?3";
+    case SQLITE_FAIL:
+      return "UPDATE OR FAIL main.dolt_docs SET doc_name=?1, doc_text=?2 "
+             "WHERE doc_name=?3";
+    case SQLITE_ROLLBACK:
+      return "UPDATE OR ROLLBACK main.dolt_docs SET doc_name=?1, doc_text=?2 "
+             "WHERE doc_name=?3";
+    default:
+      return "UPDATE main.dolt_docs SET doc_name=?1, doc_text=?2 "
+             "WHERE doc_name=?3";
+  }
 }
 
 static int docsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
                       sqlite3_int64 *pRowid){
   DocsVtab *p = (DocsVtab*)pBase;
-  const char *zSql;
   int rc;
 
   rc = docsMaterialize(p);
@@ -239,34 +310,28 @@ static int docsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
 
   if( argc==1 ){
     return docsExecBound(p,
-        "DELETE FROM main.dolt_docs WHERE doc_name='AGENT.md'", 0, 0);
+        "DELETE FROM main.dolt_docs WHERE doc_name=?1", argv[0], 0, 0);
   }
   if( sqlite3_value_type(argv[0])!=SQLITE_NULL ){
+    if( docsIsAgent(argv[0]) ){
+      sqlite3_stmt *pStmt = 0;
+      int exists;
+      rc = sqlite3_prepare_v3(p->db,
+          "SELECT 1 FROM main.dolt_docs WHERE doc_name='AGENT.md'", -1,
+          SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
+      if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+      exists = sqlite3_step(pStmt)==SQLITE_ROW;
+      rc = sqlite3_finalize(pStmt);
+      if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+      if( !exists ){
+        return docsExecBound(p, docsInsertSql(p->db), argv[2], argv[3], 0);
+      }
+    }
     return docsExecBound(p,
-        "UPDATE main.dolt_docs SET doc_name=?1, doc_text=?2 "
-        "WHERE doc_name='AGENT.md'", argv[2], argv[3]);
+        docsUpdateSql(p->db), argv[2], argv[3], argv[0]);
   }
 
-  switch( sqlite3_vtab_on_conflict(p->db) ){
-    case SQLITE_REPLACE:
-      zSql = "INSERT OR REPLACE INTO main.dolt_docs(doc_name, doc_text) "
-             "VALUES(?1, ?2)";
-      break;
-    case SQLITE_IGNORE:
-      zSql = "INSERT OR IGNORE INTO main.dolt_docs(doc_name, doc_text) "
-             "VALUES(?1, ?2)";
-      break;
-    default:
-      zSql = "INSERT INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)";
-      break;
-  }
-  if( sqlite3_value_type(argv[2])==SQLITE_TEXT
-   && strcmp((const char*)sqlite3_value_text(argv[2]), zDocsAgentName)==0
-   && docsAgentSeedUntouched(p) ){
-    zSql = "INSERT OR REPLACE INTO main.dolt_docs(doc_name, doc_text) "
-           "VALUES(?1, ?2)";
-  }
-  rc = docsExecBound(p, zSql, argv[2], argv[3]);
+  rc = docsExecBound(p, docsInsertSql(p->db), argv[2], argv[3], 0);
   if( rc!=SQLITE_OK ) return rc;
   if( pRowid ) *pRowid = sqlite3_last_insert_rowid(p->db);
   return SQLITE_OK;
@@ -274,7 +339,7 @@ static int docsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
 
 static sqlite3_module doltliteDocsModule = {
   0, 0, docsConnect, docsBestIndex, doltliteVtabDisconnect, 0,
-  docsOpen, doltliteVtabClose, docsFilter, docsNext, docsEof,
+  docsOpen, docsClose, docsFilter, docsNext, docsEof,
   docsColumn, docsRowid,
   docsUpdate, docsBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
