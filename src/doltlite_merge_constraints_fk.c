@@ -17,6 +17,13 @@ static int backfillParentPk(sqlite3 *db, const char *zParent,
     for(i=0; i<nCol; i++){
       if( !azTo[i] && i < parentPk.nPk ){
         azTo[i] = sqlite3_mprintf("%s", parentPk.azPk[i]);
+        if( !azTo[i] ){
+          rc = SQLITE_NOMEM;
+          break;
+        }
+      }else if( !azTo[i] ){
+        rc = SQLITE_CORRUPT;
+        break;
       }
     }
   }
@@ -157,7 +164,8 @@ static int fkParentExistsInCatalog(
 static char *buildFkViolationInfo(
   sqlite3 *db,
   const char *zChildTable,
-  int fkid
+  int fkid,
+  int *pRc
 ){
   sqlite3_stmt *pStmt = 0;
   sqlite3_str *pJson;
@@ -172,7 +180,9 @@ static char *buildFkViolationInfo(
   char *zResult;
   int rc;
   int nMatches = 0;
-  int fatal = 0;
+  int stepRc = SQLITE_DONE;
+
+  *pRc = SQLITE_OK;
 
   pJson = sqlite3_str_new(0);
   pCols = sqlite3_str_new(0);
@@ -180,14 +190,14 @@ static char *buildFkViolationInfo(
 
   zQuery = sqlite3_mprintf("PRAGMA main.foreign_key_list(%Q)", zChildTable);
   if( !zQuery ){
-    fatal = 1;
+    *pRc = SQLITE_NOMEM;
   }else{
     rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
     sqlite3_free(zQuery);
     if( rc != SQLITE_OK ){
-      fatal = 1;
+      *pRc = rc;
     }else{
-      while( sqlite3_step(pStmt) == SQLITE_ROW ){
+      while( (stepRc = sqlite3_step(pStmt)) == SQLITE_ROW ){
         int id = sqlite3_column_int(pStmt, 0);
         const char *zParent, *zFrom, *zTo, *zOnUp, *zOnDel;
         if( id != fkid ) continue;
@@ -206,17 +216,23 @@ static char *buildFkViolationInfo(
           if( zParent ) zParentBuf = sqlite3_mprintf("%s", zParent);
           zOnUpBuf  = sqlite3_mprintf("%s", zOnUp  ? zOnUp  : "NO ACTION");
           zOnDelBuf = sqlite3_mprintf("%s", zOnDel ? zOnDel : "NO ACTION");
+          if( (zParent && !zParentBuf) || !zOnUpBuf || !zOnDelBuf ){
+            *pRc = SQLITE_NOMEM;
+            break;
+          }
         }
         nMatches++;
       }
+      if( *pRc==SQLITE_OK && stepRc!=SQLITE_DONE ) *pRc = stepRc;
     }
   }
-  sqlite3_finalize(pStmt);
+  *pRc = finishConstraintStmt(pStmt, *pRc);
 
   zColsBuf    = sqlite3_str_finish(pCols);
   zRefColsBuf = sqlite3_str_finish(pRefCols);
 
-  if( fatal ){
+  if( *pRc!=SQLITE_OK || !zColsBuf || !zRefColsBuf ){
+    if( *pRc==SQLITE_OK ) *pRc = SQLITE_NOMEM;
     sqlite3_free(sqlite3_str_finish(pJson));
     sqlite3_free(zColsBuf);
     sqlite3_free(zRefColsBuf);
@@ -237,6 +253,7 @@ static char *buildFkViolationInfo(
       zOnUpBuf ? zOnUpBuf : "NO ACTION",
       zOnDelBuf ? zOnDelBuf : "NO ACTION");
   zResult = sqlite3_str_finish(pJson);
+  if( !zResult ) *pRc = SQLITE_NOMEM;
   sqlite3_free(zColsBuf);
   sqlite3_free(zRefColsBuf);
   sqlite3_free(zParentBuf);
@@ -264,6 +281,7 @@ static int detectFkViolationsForSpec(
   sqlite3_stmt *pStmt = 0;
   int nKeyCol;
   int rc;
+  int stepRc;
 
   pSql = sqlite3_str_new(0);
   sqlite3_str_appendf(pSql, "SELECT %s", hasRowid ? "rowid" : pChildPk->zPkCols);
@@ -290,7 +308,7 @@ static int detectFkViolationsForSpec(
   if( rc!=SQLITE_OK ) return rc;
   nKeyCol = hasRowid ? 1 : pChildPk->nPk;
 
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  while( (stepRc = sqlite3_step(pStmt))==SQLITE_ROW ){
     u8 *pKey = 0; int nKey = 0;
     u8 *pVal = 0; int nVal = 0;
     u8 *pChildFkRec = 0; int nChildFkRec = 0;
@@ -359,7 +377,12 @@ static int detectFkViolationsForSpec(
       }
     }
 
-    zInfo = buildFkViolationInfo(db, zChildTable, fkid);
+    zInfo = buildFkViolationInfo(db, zChildTable, fkid, &rc);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pKey);
+      sqlite3_free(pVal);
+      break;
+    }
     appendRc = doltliteAppendConstraintViolation(
         db, zChildTable, DOLTLITE_CV_FOREIGN_KEY,
         intKey, pKey, nKey, pVal, nVal, zInfo);
@@ -373,8 +396,8 @@ static int detectFkViolationsForSpec(
     if( pnFound ) (*pnFound)++;
   }
 
-  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
-  sqlite3_finalize(pStmt);
+  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
+  rc = finishConstraintStmt(pStmt, rc);
   return rc;
 }
 
@@ -394,8 +417,6 @@ int doltliteDetectMergeFkViolations(
   int rc;
   int nFound = 0;
   int stepRc;
-
-  (void)pzErrMsg;
 
   if( pnFound ) *pnFound = 0;
 
@@ -427,6 +448,7 @@ int doltliteDetectMergeFkViolations(
     int nCol = 0;
     int nAlloc = 0;
     int childChanged;
+    int fkStepRc;
 
     if( !zTableRaw ) continue;
     zTable = sqlite3_mprintf("%s", zTableRaw);
@@ -437,7 +459,11 @@ int doltliteDetectMergeFkViolations(
     }
     childChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable);
     memset(&childPk, 0, sizeof(childPk));
-    hasRowid = tableHasRowid(db, zTable);
+    rc = tableHasRowid(db, zTable, &hasRowid);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zTable);
+      break;
+    }
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &childPk);
       if( rc != SQLITE_OK ){
@@ -461,7 +487,7 @@ int doltliteDetectMergeFkViolations(
       break;
     }
 
-    while( sqlite3_step(pFk) == SQLITE_ROW ){
+    while( (fkStepRc = sqlite3_step(pFk)) == SQLITE_ROW ){
       int id = sqlite3_column_int(pFk, 0);
       const char *zParentRaw = (const char*)sqlite3_column_text(pFk, 2);
       const char *zFromRaw = (const char*)sqlite3_column_text(pFk, 3);
@@ -518,9 +544,7 @@ int doltliteDetectMergeFkViolations(
       nCol++;
     }
 
-    if( rc==SQLITE_ROW || rc==SQLITE_DONE ){
-      rc = SQLITE_OK;
-    }
+    if( rc==SQLITE_OK && fkStepRc!=SQLITE_DONE ) rc = fkStepRc;
     if( rc==SQLITE_OK && curId>=0 ){
       int parentChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zParent);
       if( childChanged || parentChanged ){
@@ -538,7 +562,7 @@ int doltliteDetectMergeFkViolations(
     doltliteFreeStringArray(azFrom, nCol);
     doltliteFreeStringArray(azTo, nCol);
     sqlite3_free(zParent);
-    sqlite3_finalize(pFk);
+    rc = finishConstraintStmt(pFk, rc);
     freeMergePkInfo(&childPk);
     sqlite3_free(zTable);
     if( rc != SQLITE_OK ) break;
@@ -547,10 +571,11 @@ int doltliteDetectMergeFkViolations(
   if( rc == SQLITE_OK && stepRc != SQLITE_DONE && stepRc != SQLITE_ROW ){
     rc = stepRc;
   }
-  sqlite3_finalize(pTbls);
+  rc = finishConstraintStmt(pTbls, rc);
   doltliteFreeCatalog(aAnc, nAnc);
   doltliteFreeCatalog(aCur, nCur);
   if( pnFound ) *pnFound = nFound;
+  setConstraintError(db, pzErrMsg, rc);
   return rc;
 }
 

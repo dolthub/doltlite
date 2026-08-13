@@ -628,5 +628,13 @@ echo "ALTER TABLE t ADD COLUMN n INT; SELECT dolt_commit('-A','-m','main col');"
 run_test_match "dual_add_no_default_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB39"
 run_test "dual_add_no_default_nulls" "SELECT group_concat(id || ':' || coalesce(n,'-') || ':' || coalesce(m,'-'), ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:-:-,2:-:7" "$DB39"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
+DB40=/tmp/test_merge40_$$.db; rm -f "$DB40"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB40" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(1,'not-json'); SELECT dolt_commit('-A','-m','invalid json');" | $DOLTLITE "$DB40/feature" > /dev/null 2>&1
+echo "CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT CHECK(json_extract(v,'$.ok'))); DROP TABLE t; ALTER TABLE t2 RENAME TO t; SELECT dolt_commit('-A','-m','add json check');" | $DOLTLITE "$DB40" > /dev/null 2>&1
+run_test_match "constraint_detector_sql_error_merge_errors" "SELECT dolt_merge('feature');" "malformed JSON" "$DB40"
+run_test "constraint_detector_sql_error_restores_rows" "SELECT count(*) FROM t;" "0" "$DB40"
+run_test "constraint_detector_sql_error_preserves_head" "SELECT message FROM dolt_log LIMIT 1;" "add json check" "$DB40"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40"
 dltest_finish
