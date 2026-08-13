@@ -79,12 +79,23 @@ INSERT INTO c VALUES(20, 1);
 SELECT dolt_commit('-A','-m','feat insert');
 SELECT dolt_checkout('main');
 PRAGMA foreign_keys=1;
-SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# The merge detects foreign-key violations, which it reports by scanning the
+# merged tables and recording what it finds. Assert the message rather than
+# discarding it: an assert-enabled build used to die inside that scan, and
+# matching only [0-9]+ on the counts below passed either way.
+CV_MERGE_OUT=$(dltest_run_sql "PRAGMA foreign_keys=1; SELECT dolt_merge('feat');" "$DB")
+case "$CV_MERGE_OUT" in
+  *"constraint violations"*) dltest_pass ;;
+  *) dltest_fail "cv_merge_reports_violations" \
+       "  expected: a constraint-violation error\n  got:      $CV_MERGE_OUT" ;;
+esac
 
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cv_table_p" "SELECT count(*) FROM p;" "[0-9]+" "$DB"
-run_test_match "cv_table_c" "SELECT count(*) FROM c;" "[0-9]+" "$DB"
+run_test "cv_table_p" "SELECT count(*) FROM p;" "0" "$DB"
+run_test "cv_table_c" "SELECT count(*) FROM c;" "1" "$DB"
 
 db_rm "$DB"
 
