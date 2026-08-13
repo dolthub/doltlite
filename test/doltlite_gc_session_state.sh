@@ -97,10 +97,15 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','feat row');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 FEAT_TIP=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='feat';" "$DB")
+MAIN_TIP=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='main';" "$DB")
 
 echo "SELECT dolt_checkout('main');
 SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
+# Pairs with the case below: same database, same open form, but a commit a
+# branch still reaches. If both fail, the revision open is at fault; if only
+# the unreachable one does, the sweep is.
+run_test "detached_reachable_head_before_gc" "SELECT count(*) FROM t;" "1" "$DB/$MAIN_TIP"
 run_test "detached_head_before_gc" "SELECT count(*) FROM t;" "2" "$DB/$FEAT_TIP"
 
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB/$FEAT_TIP" > /dev/null 2>&1
