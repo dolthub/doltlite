@@ -418,6 +418,35 @@ static int mergePass1OursModifyTheirsDelete(
 ** creates, built by executing it in a scratch db. No declared PK yields the
 ** empty signature, which matches SQLite treating those tables as rowid keyed
 ** regardless of the rest of the schema. */
+/* Ordered primary-key signature of the table zSql creates, built by
+** executing it in a scratch db.
+**
+** The signature must name everything that decides where a row sorts and
+** which rows collide, because that is what makes two keyspaces mergeable:
+** the columns in key order, their types, their collations, and their sort
+** directions. A table with a real primary-key index reads all four from
+** that index. Otherwise the key is either a rowid alias, where none of it
+** applies, or absent entirely; both fall back to the declared columns, and
+** no declared PK yields the empty signature, matching SQLite treating such
+** tables as rowid keyed regardless of the rest of the schema. */
+static int mergePass1AppendSigRow(
+  char **pzSig,
+  const char *zName,
+  const char *zType,
+  const char *zColl,
+  int bDesc
+){
+  char *zNew = sqlite3_mprintf("%s%s%s %s %s %s", *pzSig ? *pzSig : "",
+                               *pzSig ? "," : "",
+                               zName ? zName : "",
+                               zType ? zType : "",
+                               zColl ? zColl : "BINARY",
+                               bDesc ? "DESC" : "ASC");
+  sqlite3_free(*pzSig);
+  *pzSig = zNew;
+  return zNew ? SQLITE_OK : SQLITE_NOMEM;
+}
+
 static int mergePass1PkSignature(
   const char *zSql,
   const char *zTableName,
@@ -434,21 +463,45 @@ static int mergePass1PkSignature(
   if( rc!=SQLITE_OK ) goto done;
   rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto done;
+
   zQuery = sqlite3_mprintf(
-      "SELECT name, type FROM pragma_table_info(%Q) WHERE pk>0 ORDER BY pk",
-      zTableName);
+      "SELECT x.name, i.type, x.coll, x.desc "
+      "FROM pragma_index_list(%Q) AS l "
+      "JOIN pragma_index_xinfo(l.name) AS x "
+      "LEFT JOIN pragma_table_info(%Q) AS i ON i.name = x.name "
+      "WHERE l.origin='pk' AND x.key=1 ORDER BY x.seqno",
+      zTableName, zTableName);
   if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
   rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) goto done;
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
-    const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
-    const char *zType = (const char*)sqlite3_column_text(pStmt, 1);
-    char *zNew = sqlite3_mprintf("%s%s%s %s", zSig ? zSig : "",
-                                 zSig ? "," : "",
-                                 zName ? zName : "", zType ? zType : "");
-    sqlite3_free(zSig);
-    zSig = zNew;
-    if( !zSig ){ rc = SQLITE_NOMEM; goto done; }
+    rc = mergePass1AppendSigRow(&zSig,
+             (const char*)sqlite3_column_text(pStmt, 0),
+             (const char*)sqlite3_column_text(pStmt, 1),
+             (const char*)sqlite3_column_text(pStmt, 2),
+             sqlite3_column_int(pStmt, 3));
+    if( rc!=SQLITE_OK ) goto done;
+  }
+  if( rc!=SQLITE_DONE ) goto done;
+  sqlite3_finalize(pStmt);
+  pStmt = 0;
+  sqlite3_free(zQuery);
+  zQuery = 0;
+
+  if( !zSig ){
+    zQuery = sqlite3_mprintf(
+        "SELECT name, type FROM pragma_table_info(%Q) WHERE pk>0 ORDER BY pk",
+        zTableName);
+    if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
+    rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
+    if( rc!=SQLITE_OK ) goto done;
+    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+      rc = mergePass1AppendSigRow(&zSig,
+               (const char*)sqlite3_column_text(pStmt, 0),
+               (const char*)sqlite3_column_text(pStmt, 1),
+               0, 0);
+      if( rc!=SQLITE_OK ) goto done;
+    }
   }
   rc = rc==SQLITE_DONE ? SQLITE_OK : rc;
 
