@@ -223,6 +223,7 @@ int mergeColDefaultsLoad(const char *zSql, const char *zTable,
 int normalizeTheirsToMergedLayout(
   sqlite3 *db,
   const char *zTable,
+  const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
   u8 flags,
   const char *zAncSql,
