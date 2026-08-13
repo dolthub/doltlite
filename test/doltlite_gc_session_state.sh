@@ -88,4 +88,27 @@ run_test_match "cv_table_c" "SELECT count(*) FROM c;" "[0-9]+" "$DB"
 
 db_rm "$DB"
 
+DB=/tmp/test_gc_session_detached_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','feat row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+FEAT_TIP=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='feat';" "$DB")
+
+echo "SELECT dolt_checkout('main');
+SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "detached_head_before_gc" "SELECT count(*) FROM t;" "2" "$DB/$FEAT_TIP"
+
+echo "SELECT dolt_gc();" | $DOLTLITE "$DB/$FEAT_TIP" > /dev/null 2>&1
+
+run_test "detached_head_survives_own_gc" "SELECT count(*) FROM t;" "2" "$DB/$FEAT_TIP"
+run_test "detached_head_log_survives" "SELECT count(*) FROM dolt_log;" "3" "$DB/$FEAT_TIP"
+run_test "detached_head_branch_intact" "SELECT count(*) FROM t;" "1" "$DB"
+
+db_rm "$DB"
+
 dltest_finish
