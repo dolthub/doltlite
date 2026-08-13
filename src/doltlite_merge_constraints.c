@@ -176,11 +176,25 @@ void freeMergePkInfo(MergePkInfo *pPk){
   memset(pPk, 0, sizeof(*pPk));
 }
 
+int finishConstraintStmt(sqlite3_stmt *pStmt, int rc){
+  int finalizeRc = sqlite3_finalize(pStmt);
+  return rc==SQLITE_OK ? finalizeRc : rc;
+}
+
+void setConstraintError(sqlite3 *db, char **pzErrMsg, int rc){
+  if( rc!=SQLITE_OK && pzErrMsg && !*pzErrMsg ){
+    const char *zErr = (sqlite3_errcode(db) & 0xff)==rc
+        ? sqlite3_errmsg(db) : sqlite3_errstr(rc);
+    *pzErrMsg = sqlite3_mprintf("%s", zErr);
+  }
+}
+
 int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
   sqlite3_stmt *pStmt = 0;
   sqlite3_str *pCols = 0;
   char *zQuery = 0;
   int rc;
+  int stepRc;
   int nPk = 0;
   char **azPk = 0;
   int i;
@@ -192,28 +206,29 @@ int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
   sqlite3_free(zQuery);
   if( rc!=SQLITE_OK ) return rc;
 
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  while( (stepRc = sqlite3_step(pStmt))==SQLITE_ROW ){
     int pk = sqlite3_column_int(pStmt, 5);
     if( pk>nPk ) nPk = pk;
   }
+  if( stepRc!=SQLITE_DONE ){
+    return finishConstraintStmt(pStmt, stepRc);
+  }
   rc = sqlite3_reset(pStmt);
   if( rc!=SQLITE_OK ){
-    sqlite3_finalize(pStmt);
-    return rc;
+    return finishConstraintStmt(pStmt, rc);
   }
   if( nPk<=0 ){
-    sqlite3_finalize(pStmt);
-    return SQLITE_NOTFOUND;
+    rc = finishConstraintStmt(pStmt, SQLITE_OK);
+    return rc==SQLITE_OK ? SQLITE_NOTFOUND : rc;
   }
 
   azPk = sqlite3_malloc64((sqlite3_int64)nPk * sizeof(char*));
   if( !azPk ){
-    sqlite3_finalize(pStmt);
-    return SQLITE_NOMEM;
+    return finishConstraintStmt(pStmt, SQLITE_NOMEM);
   }
   memset(azPk, 0, (size_t)nPk * sizeof(char*));
 
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  while( (stepRc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zCol = (const char*)sqlite3_column_text(pStmt, 1);
     int pk = sqlite3_column_int(pStmt, 5);
     if( pk<=0 || pk>nPk ) continue;
@@ -223,8 +238,9 @@ int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
       break;
     }
   }
-  sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_DONE && rc!=SQLITE_OK ){
+  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
+  rc = finishConstraintStmt(pStmt, rc);
+  if( rc!=SQLITE_OK ){
     doltliteFreeStringArray(azPk, nPk);
     return rc;
   }
@@ -483,16 +499,28 @@ int isRowPreExisting(
   return memcmp(pMergedVal, pAncVal, nMergedVal)==0 ? 1 : 0;
 }
 
-int tableHasRowid(sqlite3 *db, const char *zTable){
+int tableHasRowid(sqlite3 *db, const char *zTable, int *pHasRowid){
   sqlite3_stmt *pStmt = 0;
   char *zQuery;
   int rc;
-  zQuery = sqlite3_mprintf("SELECT rowid FROM main.\"%w\" LIMIT 0", zTable);
-  if( !zQuery ) return 1;
+  int stepRc;
+
+  *pHasRowid = 0;
+  zQuery = sqlite3_mprintf(
+      "SELECT wr FROM pragma_table_list WHERE schema='main' AND name=%Q",
+      zTable);
+  if( !zQuery ) return SQLITE_NOMEM;
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
   sqlite3_free(zQuery);
-  if( pStmt ) sqlite3_finalize(pStmt);
-  return rc == SQLITE_OK ? 1 : 0;
+  if( rc!=SQLITE_OK ) return rc;
+  stepRc = sqlite3_step(pStmt);
+  if( stepRc==SQLITE_ROW ){
+    *pHasRowid = !sqlite3_column_int(pStmt, 0);
+    rc = SQLITE_OK;
+  }else{
+    rc = stepRc==SQLITE_DONE ? SQLITE_NOTFOUND : stepRc;
+  }
+  return finishConstraintStmt(pStmt, rc);
 }
 
 int fetchOrphanRow(

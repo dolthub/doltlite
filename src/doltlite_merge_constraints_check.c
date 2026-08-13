@@ -2,6 +2,10 @@
 
 #include "doltlite_merge_constraints_int.h"
 
+static int checkIsIdent(char c){
+  return sqlite3Isalnum(c) || c=='_';
+}
+
 static int nextCheckClause(
   const char *zSql, int *pOffset, char **pzExpr, char **pzName
 ){
@@ -15,7 +19,8 @@ static int nextCheckClause(
   *pzName = 0;
 
   while( *p ){
-    if( (p[0]=='C' || p[0]=='c')
+    if( (p==zSql || !checkIsIdent(p[-1]))
+     && (p[0]=='C' || p[0]=='c')
      && sqlite3_strnicmp(p, "CONSTRAINT", 10)==0
      && (p[10]==' ' || p[10]=='\t' || p[10]=='\n') ){
       int i = 0;
@@ -27,7 +32,8 @@ static int nextCheckClause(
       lastConstraintName[i] = 0;
       continue;
     }
-    if( (p[0]=='C' || p[0]=='c')
+    if( (p==zSql || !checkIsIdent(p[-1]))
+     && (p[0]=='C' || p[0]=='c')
      && sqlite3_strnicmp(p, "CHECK", 5)==0
      && (p[5]==' ' || p[5]=='\t' || p[5]=='(' || p[5]=='\n') ){
       p += 5;
@@ -57,15 +63,20 @@ static int nextCheckClause(
         else if( c==')' ) depth--;
         if( depth>0 ) p++;
       }
-      if( depth!=0 ) return -1;
+      if( depth!=0 ) return -SQLITE_CORRUPT;
       pEnd = p;
       p++;
       *pzExpr = sqlite3_malloc((int)(pEnd - pExprStart) + 1);
-      if( !*pzExpr ) return -1;
+      if( !*pzExpr ) return -SQLITE_NOMEM;
       memcpy(*pzExpr, pExprStart, (size_t)(pEnd - pExprStart));
       (*pzExpr)[pEnd - pExprStart] = 0;
       if( lastConstraintName[0] ){
         *pzName = sqlite3_mprintf("%s", lastConstraintName);
+        if( !*pzName ){
+          sqlite3_free(*pzExpr);
+          *pzExpr = 0;
+          return -SQLITE_NOMEM;
+        }
       }
       *pOffset = (int)(p - zSql);
       return 1;
@@ -153,7 +164,12 @@ int doltliteDetectMergeCheckViolations(
       continue;
     }
     memset(&pkInfo, 0, sizeof(pkInfo));
-    hasRowid = tableHasRowid(db, zTable);
+    rc = tableHasRowid(db, zTable, &hasRowid);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zTable);
+      sqlite3_free(zSql);
+      break;
+    }
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &pkInfo);
       if( rc != SQLITE_OK ){
@@ -169,11 +185,12 @@ int doltliteDetectMergeCheckViolations(
       int clauseRc = nextCheckClause(zSql, &offset, &zExpr, &zCkName);
       char *zQuery;
       sqlite3_stmt *pQ = 0;
-      int prepareRc;
+      int queryStepRc;
 
       if( clauseRc <= 0 ){
         sqlite3_free(zExpr);
         sqlite3_free(zCkName);
+        if( clauseRc<0 ) rc = -clauseRc;
         break;
       }
 
@@ -192,15 +209,16 @@ int doltliteDetectMergeCheckViolations(
         rc = SQLITE_NOMEM;
         break;
       }
-      prepareRc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
+      rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
       sqlite3_free(zQuery);
-      if( prepareRc != SQLITE_OK ){
+      if( rc != SQLITE_OK ){
+        setConstraintError(db, pzErrMsg, rc);
         sqlite3_free(zExpr);
         sqlite3_free(zCkName);
-        continue;
+        break;
       }
 
-      while( sqlite3_step(pQ) == SQLITE_ROW ){
+      while( (queryStepRc = sqlite3_step(pQ)) == SQLITE_ROW ){
         u8 *pKey = 0; int nKey = 0;
         u8 *pVal = 0; int nVal = 0;
         char *zInfo;
@@ -245,6 +263,12 @@ int doltliteDetectMergeCheckViolations(
         zInfo = sqlite3_mprintf(
             "{\"Name\": \"%w\", \"Expression\": \"%w\"}",
             zCkName ? zCkName : "", zExpr);
+        if( !zInfo ){
+          sqlite3_free(pKey);
+          sqlite3_free(pVal);
+          rc = SQLITE_NOMEM;
+          break;
+        }
         appendRc = doltliteAppendConstraintViolation(
             db, zTable, DOLTLITE_CV_CHECK_CONSTRAINT,
             intKey, pKey, nKey, pVal, nVal, zInfo);
@@ -254,7 +278,10 @@ int doltliteDetectMergeCheckViolations(
         if( appendRc != SQLITE_OK ){ rc = appendRc; break; }
         if( pnFound ) (*pnFound)++;
       }
-      sqlite3_finalize(pQ);
+      if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
+      setConstraintError(db, pzErrMsg, rc);
+      rc = finishConstraintStmt(pQ, rc);
+      setConstraintError(db, pzErrMsg, rc);
       sqlite3_free(zExpr);
       sqlite3_free(zCkName);
       if( rc != SQLITE_OK ) break;
@@ -268,9 +295,10 @@ int doltliteDetectMergeCheckViolations(
   if( rc == SQLITE_OK && stepRc != SQLITE_DONE && stepRc != SQLITE_ROW ){
     rc = stepRc;
   }
-  sqlite3_finalize(pTbls);
+  rc = finishConstraintStmt(pTbls, rc);
   doltliteFreeCatalog(aAnc, nAnc);
   doltliteFreeCatalog(aCur, nCur);
+  setConstraintError(db, pzErrMsg, rc);
   return rc;
 }
 

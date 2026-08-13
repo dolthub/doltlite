@@ -942,6 +942,7 @@ int doltliteDetectConstraintViolationsFiltered(
   const ProllyHash *pAncCatHash,
   const char **azTables,
   int nTables,
+  int bPersist,
   int *pnViolations
 );
 int doltliteVerifyConstraintsRegister(sqlite3 *db);

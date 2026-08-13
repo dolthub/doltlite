@@ -11,14 +11,13 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Both engines serve a default AGENT.md row on a fresh repo, but the text
-# differs (Dolt embeds its own guide, doltlite ships one for this engine)
-# and Dolt's row is synthetic while doltlite stores it on materialization.
-# Content comparisons filter AGENT.md; the agent scenarios below compare it
-# by name/count, or by full row after the test overwrote the text.
+# Both engines serve a synthetic default AGENT.md row, but the text differs.
+# Content comparisons filter it; agent scenarios compare it by name/count,
+# or by full row after the test overwrote the text.
 normalize_docs() { tr -d '\r"' | grep '^D|' | grep -v '^D|AGENT\.md|' | sort; }
 normalize_status() { tr -d '\r"' | grep '^S|' | sort; }
 normalize_agent() { tr -d '\r"' | grep '^A|' | sort; }
+normalize_diff_stat() { tr -d '\r"' | grep '^V|' | sort; }
 
 DOCS_QUERY_DL="SELECT 'D|' || doc_name || '|' || doc_text FROM dolt_docs;"
 DOCS_QUERY_DT="SELECT concat('D|', doc_name, '|', doc_text) FROM dolt_docs;"
@@ -28,6 +27,8 @@ AGENT_QUERY_DL="SELECT 'A|' || doc_name || '|' || doc_text FROM dolt_docs WHERE 
 AGENT_QUERY_DT="SELECT concat('A|', doc_name, '|', doc_text) FROM dolt_docs WHERE doc_name = 'AGENT.md';"
 AGENT_COUNT_DL="SELECT 'A|' || count(*) FROM dolt_docs WHERE doc_name = 'AGENT.md';"
 AGENT_COUNT_DT="SELECT concat('A|', count(*)) FROM dolt_docs WHERE doc_name = 'AGENT.md';"
+DIFF_STAT_DL="SELECT 'V|' || rows_added || '|' || rows_deleted || '|' || rows_modified || '|' || old_row_count || '|' || new_row_count FROM dolt_diff_stat('HEAD', 'WORKING', 'dolt_docs');"
+DIFF_STAT_DT="SELECT concat('V|', rows_added, '|', rows_deleted, '|', rows_modified, '|', old_row_count, '|', new_row_count) FROM dolt_diff_stat('HEAD', 'WORKING', 'dolt_docs');"
 
 oracle() {
   local kind="$1" name="$2" setup="$3" allow_empty="${4:-}"
@@ -39,6 +40,8 @@ oracle() {
     dl_query="$AGENT_QUERY_DL"; dt_query="$AGENT_QUERY_DT"; norm=normalize_agent
   elif [ "$kind" = "agent_count" ]; then
     dl_query="$AGENT_COUNT_DL"; dt_query="$AGENT_COUNT_DT"; norm=normalize_agent
+  elif [ "$kind" = "diff_stat" ]; then
+    dl_query="$DIFF_STAT_DL"; dt_query="$DIFF_STAT_DT"; norm=normalize_diff_stat
   else
     dl_query="$STATUS_QUERY_DL"; dt_query="$STATUS_QUERY_DT"; norm=normalize_status
   fi
@@ -73,6 +76,7 @@ oracle_docs() { oracle docs "$@"; }
 oracle_status() { oracle status "$@"; }
 oracle_agent() { oracle agent "$@"; }
 oracle_agent_count() { oracle agent_count "$@"; }
+oracle_diff_stat() { oracle diff_stat "$@"; }
 
 oracle_error() {
   local name="$1" setup="$2"
@@ -284,6 +288,10 @@ oracle_agent_count "agent_survives_other_writes" "
 INSERT INTO dolt_docs VALUES ('README.md', 'hi');
 "
 
+oracle_diff_stat "default_agent_is_not_versioned" "
+INSERT INTO dolt_docs VALUES ('README.md', 'hi');
+"
+
 oracle_agent "agent_replace_overrides_default" "
 REPLACE INTO dolt_docs VALUES ('AGENT.md', 'custom agent doc');
 "
@@ -294,6 +302,11 @@ UPDATE dolt_docs SET doc_text = 'edited agent doc' WHERE doc_name = 'AGENT.md';
 
 oracle_agent "agent_insert_as_first_write" "
 INSERT INTO dolt_docs VALUES ('AGENT.md', 'inserted agent doc');
+"
+
+oracle_agent_count "agent_delete_resynthesizes_default" "
+REPLACE INTO dolt_docs VALUES ('AGENT.md', 'custom agent doc');
+DELETE FROM dolt_docs WHERE doc_name = 'AGENT.md';
 "
 
 oracle_agent "agent_override_commits" "
