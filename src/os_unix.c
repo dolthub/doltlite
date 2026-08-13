@@ -8474,12 +8474,14 @@ static int proxyClose(sqlite3_file *id) {
 int sqlite3OsReplaceFileNative(
   sqlite3_vfs *pVfs,
   const char *zTmp,
-  const char *zDest
+  const char *zDest,
+  int *pRetainTmp
 ){
   int rc = SQLITE_OK;
   char *zDestFull = 0;
   int nPath = pVfs->mxPathname + 1;
 
+  *pRetainTmp = 1;
   zDestFull = sqlite3_malloc64((sqlite3_uint64)nPath);
   if( zDestFull==0 ) return SQLITE_NOMEM;
   rc = sqlite3OsFullPathname(pVfs, zDest, nPath, zDestFull);
@@ -8492,6 +8494,7 @@ int sqlite3OsReplaceFileNative(
     rc = SQLITE_IOERR;
   }else{
     char *zDir = sqlite3_mprintf("%s", zDestFull);
+    *pRetainTmp = 0;
     if( zDir==0 ){
       rc = SQLITE_NOMEM;
     }else{

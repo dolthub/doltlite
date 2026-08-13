@@ -4,10 +4,6 @@ set -euo pipefail
 amalgamation="${1:-sqlite3.c}"
 emcc_bin="${EMCC:-emcc}"
 
-if ! command -v "$emcc_bin" >/dev/null 2>&1; then
-  echo "SKIP: emcc not found"
-  exit 0
-fi
 if [ ! -f "$amalgamation" ]; then
   echo "FAIL: amalgamation not found at $amalgamation"
   exit 1
@@ -27,6 +23,24 @@ trap 'rm -rf "$tmp"' EXIT
   -lm \
   -o "$tmp/replace-failure-test"
 "$tmp/replace-failure-test"
+
+"${CC:-cc}" -w -std=c99 -O0 \
+  -DSQLITE_THREADSAFE=0 \
+  -DDOLTLITE_PROLLY=1 \
+  -DDOLTLITE_VEC1=0 \
+  -DVEC1_THREADS=0 \
+  -Drename=replaceTestRename \
+  -Dfsync=replaceTestFsync \
+  -include "$amalgamation" \
+  "$(dirname "$0")/amalgamation_native_replace_failure_probe.c" \
+  -lm \
+  -o "$tmp/native-replace-failure-test"
+"$tmp/native-replace-failure-test"
+
+if ! command -v "$emcc_bin" >/dev/null 2>&1; then
+  echo "SKIP: emcc not found"
+  exit 0
+fi
 
 "$emcc_bin" -Werror -Wno-comment -Wdeclaration-after-statement \
   -c "$amalgamation" \

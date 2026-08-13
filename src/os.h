@@ -204,7 +204,7 @@ int sqlite3OsOpen(sqlite3_vfs *, const char *, sqlite3_file*, int, int *);
 int sqlite3OsDelete(sqlite3_vfs *, const char *, int);
 #ifdef DOLTLITE_PROLLY
 int sqlite3OsReplaceFile(sqlite3_vfs *, const char *, const char *, int *);
-int sqlite3OsReplaceFileNative(sqlite3_vfs *, const char *, const char *);
+int sqlite3OsReplaceFileNative(sqlite3_vfs *, const char *, const char *, int *);
 #endif
 int sqlite3OsAccess(sqlite3_vfs *, const char *, int, int *pResOut);
 int sqlite3OsFullPathname(sqlite3_vfs *, const char *, int, char *);

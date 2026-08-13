@@ -5234,7 +5234,8 @@ static int winGetLastError(sqlite3_vfs *pVfs, int nBuf, char *zBuf){
 int sqlite3OsReplaceFileNative(
   sqlite3_vfs *pVfs,
   const char *zTmp,
-  const char *zDest
+  const char *zDest,
+  int *pRetainTmp
 ){
   int nPath = pVfs->mxPathname + 1;
   char *zTmpFull = 0;
@@ -5244,6 +5245,7 @@ int sqlite3OsReplaceFileNative(
   int nTmp, nDest;
   int rc;
 
+  *pRetainTmp = 1;
   zTmpFull = sqlite3_malloc64((sqlite3_uint64)nPath);
   zDestFull = sqlite3_malloc64((sqlite3_uint64)nPath);
   if( zTmpFull==0 || zDestFull==0 ){
@@ -5288,6 +5290,7 @@ int sqlite3OsReplaceFileNative(
     rc = SQLITE_IOERR;
   }else{
     rc = SQLITE_OK;
+    *pRetainTmp = 0;
   }
   sqlite3_free(zTmpFull);
   sqlite3_free(zDestFull);
