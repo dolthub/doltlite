@@ -266,9 +266,20 @@ static int mergeRefDetectConstraintViolations(
   int nFk = 0, nUnique = 0, nCheck = 0, nNotNull = 0, nStrict = 0;
   int vrc;
   int erc;
+  int bOwnTxn = 0;
 
   *pnViolations = 0;
   *pzErr = 0;
+  /* Each detector scans the merged tables with one statement and records what
+  ** it finds with another. In autocommit that inner write commits when it
+  ** halts, which ends the transaction the open scan is reading through -- the
+  ** next cursor it opens then has none, and an assert-enabled build dies on
+  ** it. Hold a transaction across the pass so the writes stay inside it. */
+  if( db->autoCommit ){
+    vrc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+    if( vrc!=SQLITE_OK ) return vrc;
+    bOwnTxn = 1;
+  }
   vrc = doltliteConstraintViolationBatchBegin(db);
   if( vrc==SQLITE_OK ){
     vrc = doltliteDetectMergeFkViolations(db, pAncCat, pzErr, &nFk, 0, 0);
@@ -289,6 +300,12 @@ static int mergeRefDetectConstraintViolations(
   }
   erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
   if( vrc==SQLITE_OK ) vrc = erc;
+  if( bOwnTxn ){
+    /* Commit what the pass recorded, as the individual writes used to do on
+    ** their own. The caller decides what a non-empty violation set means. */
+    erc = sqlite3_exec(db, vrc==SQLITE_OK ? "COMMIT" : "ROLLBACK", 0, 0, 0);
+    if( vrc==SQLITE_OK ) vrc = erc;
+  }
   if( vrc==SQLITE_OK ){
     *pnViolations = nFk + nUnique + nCheck + nNotNull + nStrict;
   }
