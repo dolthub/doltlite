@@ -1,0 +1,39 @@
+name: Dolt oracle upgrade
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dolt-oracle-upgrade
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+    steps:
+    - name: Check out master
+      uses: actions/checkout@v4
+      with:
+        ref: master
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Check release bot token
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "RELEASE_BOT_TOKEN is required to open an upgrade PR that triggers CI"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - name: Reconcile Dolt oracle upgrades
+      run: bash .github/scripts/upgrade-dolt-oracle.sh

@@ -311,6 +311,7 @@ lint:
 	@bash $(TOP)/test/lint_layers_selftest.sh
 	@bash $(TOP)/test/check_testfixture_exception_inventory.sh
 	@bash $(TOP)/test/check_testfixture_exception_inventory_test.sh
+	@bash $(TOP)/test/dolt_oracle_upgrade_test.sh
 
 ########################################################################
 ########################################################################

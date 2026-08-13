@@ -145,13 +145,7 @@ jobs:
 
     - name: Install Dolt
       if: matrix.platform == 'ubuntu'
-      run: |
-        dolt_archive="$RUNNER_TEMP/dolt-linux-amd64.tar.gz"
-        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-          -o "$dolt_archive" \
-          https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz
-        sudo tar -xzf "$dolt_archive" -C /usr/local --strip-components=1
-        dolt version
+      run: bash .github/scripts/install-dolt-oracle.sh
 
     - name: Download checked build
       uses: actions/download-artifact@v4
