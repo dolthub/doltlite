@@ -212,6 +212,14 @@ int chunkStoreClose(ChunkStore *cs);
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
+
+/* A memory store has no file to lock and no peer to race, so the lock calls
+** are no-ops there and leave lockDepth at zero. */
+#define PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs) do{ \
+  assert( (cs)!=0 ); \
+  assert( (cs)->isMemory \
+       || ((cs)->pGraphLockFile!=0 && (cs)->lockDepth>0) ); \
+}while(0)
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
 
 int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,

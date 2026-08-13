@@ -116,8 +116,7 @@ u32 prollyBtreeGetU32LE(const u8 *p);
 
 #define PROLLY_ASSERT_GRAPH_LOCKED(pBt) do{ \
   assert( (pBt)!=0 ); \
-  assert( (pBt)->store.isMemory \
-       || ((pBt)->store.pGraphLockFile!=0 && (pBt)->store.lockDepth>0) ); \
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED(&(pBt)->store); \
 }while(0)
 
 #define PROLLY_ASSERT_CURSOR_OWNED(pCur) do{ \
