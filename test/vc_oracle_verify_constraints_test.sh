@@ -244,6 +244,15 @@ DELETE FROM dolt_constraint_violations_t;
 "'--all', '--output-only'" \
 "$FOLLOW_AGG_COUNT" 1
 
+echo "--- unique: --output-only preserves recorded violations ---"
+run_oracle "unique_output_only_preserves_recorded" \
+"$UNIQUE_SETUP
+DELETE FROM t WHERE pk=2;
+" \
+"'--output-only'" \
+"$FOLLOW_AGG
+$FOLLOW_T_ROWS" 0
+
 echo "--- clean database ---"
 run_oracle "clean_no_violations" \
 "

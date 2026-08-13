@@ -792,7 +792,7 @@ int doltliteDetectPostMergeConstraintViolations(
   int *pnViolations
 ){
   return doltliteDetectConstraintViolationsFiltered(
-      db, pAncCatHash, 0, 0, pnViolations);
+      db, pAncCatHash, 0, 0, 1, pnViolations);
 }
 
 int doltliteDetectConstraintViolationsFiltered(
@@ -800,6 +800,7 @@ int doltliteDetectConstraintViolationsFiltered(
   const ProllyHash *pAncCatHash,
   const char **azTables,
   int nTables,
+  int bPersist,
   int *pnViolations
 ){
   int nViolations = 0;
@@ -875,7 +876,8 @@ int doltliteDetectConstraintViolationsFiltered(
                                             azTables, nTables);
   }
   {
-    int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+    int erc = doltliteConstraintViolationBatchEnd(
+        db, rc==SQLITE_OK && bPersist);
     if( rc==SQLITE_OK ) rc = erc;
   }
   sqlite3_free(zDetectErrMsg);
