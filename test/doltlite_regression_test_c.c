@@ -2165,6 +2165,74 @@ static void run_fetch_ref_install_survives_window_gc(void){
   removeDbFiles(localPath);
 }
 
+/* Clone has the same window as fetch: it commits the synced chunks, and
+** until the refs blob lands nothing roots them. A gc on the database being
+** cloned into collects the lot, and installing branch refs over that leaves
+** them naming absent chunks. */
+static void run_clone_ref_install_survives_window_gc(void){
+  sqlite3 *remoteDb = 0;
+  sqlite3 *cloneDb = 0;
+  sqlite3 *afterDb = 0;
+  char remotePath[256];
+  char clonePath[256];
+  char sql[512];
+  int rc;
+
+  printf("=== Clone Ref Install Survives Window GC Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath), "test_clone_window_gc_remote");
+  make_dbpath(clonePath, sizeof(clonePath), "test_clone_window_gc_clone");
+  removeDbFiles(remotePath);
+  removeDbFiles(clonePath);
+
+  check("clone_window_open_remote", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("clone_window_seed_remote", execSql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "INSERT INTO t VALUES(2,'more');"
+    "SELECT dolt_commit('-A','-m','more');")==SQLITE_OK);
+
+  check("clone_window_open_target", open_db(clonePath, &cloneDb)==SQLITE_OK);
+
+  gGcWindowPath = clonePath;
+  doltliteTestSetBeforeRefInstallHook(gcInFetchWindow, 0);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  rc = execSqlSilent(cloneDb, sql);
+  if( gGcWindowCollected ){
+    check("clone_window_reports_failure", rc!=SQLITE_OK);
+  }else{
+    printf("  SKIP: clone_window_reports_failure (in-window gc unavailable)\n");
+  }
+  doltliteTestSetBeforeRefInstallHook(0, 0);
+  gGcWindowPath = 0;
+  check("clone_window_close_target_clean", sqlite3_close(cloneDb)==SQLITE_OK);
+  cloneDb = 0;
+  check("clone_window_close_remote_clean", sqlite3_close(remoteDb)==SQLITE_OK);
+  remoteDb = 0;
+
+  /* The refused clone must leave a database that still works: the function
+  ** registration chain aborts on its first failing member, so a branch ref
+  ** naming absent chunks takes every later function down with it. */
+  check("clone_window_reopen", open_db(clonePath, &afterDb)==SQLITE_OK);
+  check("clone_window_hashof_fn_alive",
+        execSqlSilent(afterDb, "SELECT dolt_hashof('HEAD')")==SQLITE_OK);
+  check("clone_window_gc_still_works",
+        execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
+
+  /* And it must heal on retry, re-syncing whatever the gc took. */
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_window_retry_succeeds",
+        execSqlSilent(afterDb, sql)==SQLITE_OK);
+  check("clone_window_retry_rows",
+        strcmp(queryScalarText(afterDb, "SELECT count(*) FROM t"), "2")==0);
+  check("clone_window_retry_graph_complete",
+        execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
+
+  sqlite3_close(afterDb);
+  removeDbFiles(remotePath);
+  removeDbFiles(clonePath);
+}
+
 static void run_fetch_preserves_concurrent_local_refs(void){
   sqlite3 *remoteDb = 0;
   sqlite3 *localDb1 = 0;
@@ -11536,6 +11604,7 @@ static const RegressionCase aCases[] = {
   { "refs_commit_conflicting_peer_ref_fails", "Refs Commit Conflicting Peer Ref Fails Test", run_refs_commit_conflicting_peer_ref_fails },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
   { "fetch_ref_install_survives_window_gc", "Fetch Ref Install Survives Window GC Test", run_fetch_ref_install_survives_window_gc },
+  { "clone_ref_install_survives_window_gc", "Clone Ref Install Survives Window GC Test", run_clone_ref_install_survives_window_gc },
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },

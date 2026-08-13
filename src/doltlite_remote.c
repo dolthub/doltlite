@@ -1343,6 +1343,10 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
 
     if( rc==SQLITE_OK ) rc = pLocalDst->xCommit(pLocalDst);
     pLocalDst->xClose(pLocalDst);
+    /* The synced chunks are rooted by nothing until the refs blob below
+    ** lands. A sweep in that window is refused because the store still holds
+    ** the pre-sweep file identity -- the hook lets a test drive one. */
+    if( rc==SQLITE_OK ) doltliteTestRunBeforeRefInstallHook();
     sqlite3_free(aRoots);
     aRoots = 0;
 
