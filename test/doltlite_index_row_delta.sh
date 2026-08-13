@@ -108,6 +108,43 @@ else
 fi
 rm -f "$DB"
 
+# Expression-index keys must include the expression value. Theirs-added
+# rows used to be stored under a rowid-only key, so INDEXED BY missed them
+# and integrity_check reported the row missing from the index.
+DB=/tmp/test_idx_delta_expr_merge_$$.db
+rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX tv ON t(lower(v));
+INSERT INTO t VALUES(1,'A');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,'Feat');
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'Main');
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+EOF
+
+run_test "expr_merge_rows" \
+  "SELECT group_concat(id||'|'||v, ',') FROM (SELECT id,v FROM t ORDER BY id);" \
+  "1|A,2|Main,3|Feat" "$DB"
+run_test "expr_merge_indexed_by" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY tv WHERE lower(v)>='a' ORDER BY id);" \
+  "1,2,3" "$DB"
+run_test_lastline "expr_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+PRE=$(echo "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY tv WHERE lower(v)>='a' ORDER BY id);" | $DOLTLITE "$DB" 2>/dev/null | tail -1)
+echo "REINDEX tv;" | $DOLTLITE "$DB" > /dev/null 2>&1
+POST=$(echo "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY tv WHERE lower(v)>='a' ORDER BY id);" | $DOLTLITE "$DB" 2>/dev/null | tail -1)
+if [ -n "$PRE" ] && [ "$PRE" = "$POST" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: expr_merge_reindex_idempotent\n  pre:  $PRE\n  post: $POST"
+fi
+rm -f "$DB"
+
 # --- Workspace stage of NOCASE index row ------------------------------------
 DB=/tmp/test_idx_delta_ws_nocase_$$.db
 rm -f "$DB"
