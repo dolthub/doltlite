@@ -156,10 +156,14 @@ static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData,
   pOut[0] = SORTKEY_NUM;
 
   /* Convert SQLite numeric serial types to sortable IEEE bytes: positive
-  ** values flip the sign bit, negative values invert all bits. */
+  ** values flip the sign bit, negative values invert all bits. IEEE -0.0
+  ** compares equal to +0.0, so both use the +0.0 encoding. */
   if( serialType == 7 ){
-
     memcpy(buf, pData, 8);
+    if( buf[0]==0x80 && buf[1]==0 && buf[2]==0 && buf[3]==0
+     && buf[4]==0 && buf[5]==0 && buf[6]==0 && buf[7]==0 ){
+      buf[0] = 0;
+    }
   }else{
 
     i64 v;
