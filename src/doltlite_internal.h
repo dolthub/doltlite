@@ -1240,6 +1240,8 @@ int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHas
 int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 void doltliteAdoptRollbackBaseline(sqlite3 *db, const ProllyHash *pCatalogHash);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
+int doltliteBranchWorkingSetIsRebasing(sqlite3 *db, const char *zBranch,
+                                       int *pActive);
 int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
 int doltliteCheckoutBranchForRebaseWithOldCatalog(

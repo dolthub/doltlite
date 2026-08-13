@@ -47,8 +47,8 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
 SELECT dolt_checkout('feat');
 SQL
 
-# The plan lives in the session that started the interactive rebase, so the
-# edit and --continue must run together (as a user does interactively).
+# Invalid-plan --continue must leave the rebase in progress so the plan
+# can be edited and retried. Start, edit, and continue run in one session.
 run_test_match "invalid_plan_continue_errors" \
   "SELECT dolt_rebase('-i', 'main');
    UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';
@@ -249,6 +249,59 @@ feat
 1,2,3
 0" \
   "$DB5_SHORT/dolt_rebase_feat"
+
+# Reopen of the default DB used to see the mirrored plan then CAS-fail
+# (issue 1961). Reopen of the original branch had no plan at all.
+DB5_DEFAULT=/tmp/test_rebase_default_continue_$$.db
+seed_rebase_name_repo "$DB5_DEFAULT" "feat"
+run_test_match "rebase_default_reopen_starts" \
+  "SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB5_DEFAULT/feat"
+run_test "rebase_default_reopen_continues" \
+  "SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT group_concat(id, ',') FROM t;
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Successfully rebased and updated refs/heads/feat
+feat
+1,2,3
+0" \
+  "$DB5_DEFAULT"
+
+DB5_ORIG=/tmp/test_rebase_orig_continue_$$.db
+seed_rebase_name_repo "$DB5_ORIG" "feat"
+run_test_match "rebase_orig_reopen_starts" \
+  "SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB5_ORIG/feat"
+run_test "rebase_orig_reopen_continues" \
+  "SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT group_concat(id, ',') FROM t;
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Successfully rebased and updated refs/heads/feat
+feat
+1,2,3
+0" \
+  "$DB5_ORIG/feat"
+
+DB5_DEFAULT_ABORT=/tmp/test_rebase_default_abort_$$.db
+seed_rebase_name_repo "$DB5_DEFAULT_ABORT" "feat"
+run_test_match "rebase_default_reopen_starts_for_abort" \
+  "SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB5_DEFAULT_ABORT/feat"
+run_test "rebase_default_reopen_aborts" \
+  "SELECT dolt_rebase('--abort');
+   SELECT active_branch();
+   SELECT group_concat(id, ',') FROM t;
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Interactive rebase aborted
+feat
+1,2
+0" \
+  "$DB5_DEFAULT_ABORT"
 
 DB6=/tmp/test_rebase_name_abort_$$.db
 seed_rebase_name_repo "$DB6" "$BRANCH63"
