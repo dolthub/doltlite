@@ -51,7 +51,7 @@ ifneq ($(DOLTLITE_IS_WINDOWS),)
   LDFLAGS.libsqlite3 += -lws2_32 -lbcrypt -lcrypt32
 endif
 
-PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
+PROLLY_OBJS = \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o chunk_store_lock.o chunk_store_refs_api.o chunk_store_commit.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
@@ -69,12 +69,19 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               doltlite_merge_constraints_notnull.o \
               doltlite_merge_constraints_strict.o \
               doltlite_dbpage.o \
-              doltlite_remote.o doltlite_remote_sql.o \
-              doltlite_http_remote.o doltlite_remotesrv.o
+              $(DOLTLITE_REMOTE_OBJS)
 
 DOLTLITE_PROLLY ?= 1
 DOLTLITE_VEC1 ?= 1
+DOLTLITE_ENABLE_REMOTES ?= 1
 DOLTLITE_VERSION ?= $(shell cat $(TOP)/.dolt_release_version 2>/dev/null || git describe --tags --always 2>/dev/null || echo "dev")
+ifeq ($(DOLTLITE_ENABLE_REMOTES),1)
+  DOLTLITE_REMOTE_OBJS = $(DOLTLITE_AUTH_OBJS) doltlite_remote.o \
+                         doltlite_remote_sql.o doltlite_http_remote.o \
+                         doltlite_remotesrv.o
+else
+  DOLTLITE_REMOTE_OBJS = doltlite_remote_sql.o
+endif
 LIBOBJS0 := $(filter-out vec1.o,$(LIBOBJS0))
 ifeq ($(DOLTLITE_PROLLY),1)
   # Replace btree.o/pager.o/wal.o/btmutex.o/backup.o with prolly engine
@@ -87,6 +94,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # Also compile original btree/pager/wal with renamed symbols for ATTACH
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
+  OPT_FEATURE_FLAGS += -DDOLTLITE_ENABLE_REMOTES=$(DOLTLITE_ENABLE_REMOTES)
   OPT_FEATURE_FLAGS += -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD
   # Generate a real doltlite amalgamation (prolly engine + VC layer woven in).
   AMALGAMATION_GEN_FLAGS += --doltlite
@@ -97,12 +105,15 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # new source added to src/ is picked up automatically. A missed entry
   # used to leave the generated engine quietly short a file.
   #
-  # Credential/TLS and the remote server stay in the native build. The
-  # amalgamation retains the unauthenticated client and remote SQL surface.
+  # The remote server stays in the native build.
   DOLTLITE_TSRC_EXCLUDE = \
-    $(TOP)/src/doltlite_creds.c \
-    $(TOP)/src/doltlite_tls.c $(TOP)/src/doltlite_tls.h \
     $(TOP)/src/doltlite_remotesrv.c $(TOP)/src/doltlite_remotesrv.h
+  DOLTLITE_AUTH_TSRC = \
+    $(wildcard $(TOP)/ext/ed25519/*.c) $(wildcard $(TOP)/ext/ed25519/*.h) \
+    $(wildcard $(TOP)/ext/mbedtls/include/mbedtls/*.h) \
+    $(wildcard $(TOP)/ext/mbedtls/include/psa/*.h) \
+    $(wildcard $(TOP)/ext/mbedtls/library/*.c) \
+    $(wildcard $(TOP)/ext/mbedtls/library/*.h)
   # Files the amalgamation needs that do not match those patterns.
   DOLTLITE_EXTRA_TSRC = \
     $(TOP)/src/record_codec.h \

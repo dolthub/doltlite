@@ -58,6 +58,11 @@ int main(int argc, char **argv){
     fprintf(stderr, "%s\n", db ? sqlite3_errmsg(db) : "sqlite3_open failed");
     return 1;
   }
+  if( scalar_int(db, "SELECT length(dolt_creds_new())>0;", &n) || !n ){
+    fprintf(stderr, "amalgamation credential creation failed\n");
+    sqlite3_close(db);
+    return 1;
+  }
   if( exec_sql(db,
         "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);"
         "INSERT INTO users VALUES(1,'alice'),(2,'bob'),(3,'charlie');"

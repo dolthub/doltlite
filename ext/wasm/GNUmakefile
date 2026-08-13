@@ -346,6 +346,7 @@ sqlite3.h = $(dir $(sqlite3.c))sqlite3.h
 # back to the stock upstream sqlite3.c path.
 #
 DOLTLITE_WASM ?= 1
+DOLTLITE_ENABLE_REMOTES ?= 1
 DOLTLITE_VERSION ?= $(shell git -C $(dir.top) describe --tags --always 2>/dev/null || echo "dev")
 doltlite.wasm.lib = $(dir.doltlite.build)/libdoltlite.a
 doltlite.wasm.options = \
@@ -1236,6 +1237,7 @@ $(doltlite.wasm.lib): $(dir.doltlite.build)/Makefile
 	@echo "[$(emo.tool) doltlite] building wasm libdoltlite.a"
 	@$(MAKE) -C $(dir.doltlite.build) libdoltlite.a \
 		CC='$(bin.emcc)' AR=emar \
+		DOLTLITE_ENABLE_REMOTES='$(DOLTLITE_ENABLE_REMOTES)' \
 		CFLAGS='$(CFLAGS)' \
 		CFLAGS.core='$(CFLAGS.core)' \
 		OPTIONS='$(doltlite.wasm.options)' \
