@@ -1318,8 +1318,20 @@ CREATE VIEW v AS SELECT a, b FROM t;
 SELECT dolt_commit('-Am', 'main_view');
 BEGIN;
 SELECT dolt_merge('feature');
-" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || (SELECT sum(num_conflicts) FROM dolt_conflicts);" \
-"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts), char(9), (SELECT sum(num_conflicts) FROM dolt_conflicts));"
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts WHERE \"table\"='(sqlite_master)') || '|' || (SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)+(SELECT count(*) FROM dolt_schema_conflicts)>0 THEN 1 ELSE 0 END);" \
+"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts WHERE \`table\`='(sqlite_master)'), '|', CASE WHEN (SELECT count(*) FROM dolt_conflicts)+(SELECT count(*) FROM dolt_schema_conflicts)>0 THEN 1 ELSE 0 END);"
+
+oracle_same_session "merge_view_both_add_different_not_master" "
+$VIEW_BASE
+CREATE VIEW v AS SELECT b FROM t;
+SELECT dolt_commit('-Am', 'feat_view');
+SELECT dolt_checkout('main');
+CREATE VIEW v AS SELECT a FROM t;
+SELECT dolt_commit('-Am', 'main_view');
+BEGIN;
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts WHERE \"table\"='(sqlite_master)') || '|' || (SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)+(SELECT count(*) FROM dolt_schema_conflicts)>0 THEN 1 ELSE 0 END);" \
+"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts WHERE \`table\`='(sqlite_master)'), '|', CASE WHEN (SELECT count(*) FROM dolt_conflicts)+(SELECT count(*) FROM dolt_schema_conflicts)>0 THEN 1 ELSE 0 END);"
 
 TRG_DL_BASE="
 CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);

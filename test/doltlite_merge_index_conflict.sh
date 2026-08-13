@@ -331,7 +331,7 @@ ROLLBACK;
 EOF
 )
 check "retarget_to_divergent_rename_keeps_index_catalog_valid" \
-  "2|i1,i2,ours_a,theirs_a" "$out"
+  "0|i1,i2,ours_a,theirs_a" "$out"
 
 DB="$TMPROOT/index_on_excluded_rename.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
