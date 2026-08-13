@@ -23,7 +23,7 @@ trap 'rm -rf "$tmp"' EXIT
   -DDOLTLITE_VEC1=0 \
   -DVEC1_THREADS=0 \
   -include "$amalgamation" \
-  "$(dirname "$0")/amalgamation_replace_failure_test.c" \
+  "$(dirname "$0")/amalgamation_replace_failure_probe.c" \
   -lm \
   -o "$tmp/replace-failure-test"
 "$tmp/replace-failure-test"
