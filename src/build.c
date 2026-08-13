@@ -424,6 +424,19 @@ Table *sqlite3LocateTable(
   }
 
   p = sqlite3FindTable(db, zName, zDbase);
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_OMIT_VIRTUALTABLE)
+  if( p!=0
+   && p->pSchema==db->aDb[0].pSchema
+   && sqlite3StrICmp(zName, "dolt_docs")==0
+   && (pParse->prepFlags & SQLITE_PREPARE_NO_VTAB)==0
+   && db->init.busy==0 ){
+    Module *pMod = (Module*)sqlite3HashFind(&db->aModule, zName);
+    if( pMod && sqlite3VtabEponymousTableInit(pParse, pMod) ){
+      testcase( pMod->pEpoTab==0 );
+      return pMod->pEpoTab;
+    }
+  }
+#endif
   if( p==0 ){
 #ifndef SQLITE_OMIT_VIRTUALTABLE
     /* If zName is the not the name of a table in the schema created using
@@ -3810,6 +3823,13 @@ void sqlite3DropTable(Parse *pParse, SrcList *pName, int isView, int noErr){
     }
     goto exit_drop_table;
   }
+#ifdef DOLTLITE_PROLLY
+  if( IsVirtual(pTab) && sqlite3StrICmp(pTab->zName, "dolt_docs")==0 ){
+    Table *pBacking = sqlite3FindTable(db, pName->a[0].zName,
+                                       pName->a[0].u4.zDatabase);
+    if( pBacking && !IsVirtual(pBacking) ) pTab = pBacking;
+  }
+#endif
   iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
   assert( iDb>=0 && iDb<db->nDb );
 

@@ -18,11 +18,16 @@ run_test "fresh_not_in_sqlite_master" \
   "SELECT count(*) FROM sqlite_master WHERE name='dolt_docs';" \
   "0" "$DB"
 
-run_test "insert_materializes_and_seeds_agent" \
+run_test "insert_materializes_without_storing_agent" \
   "INSERT INTO dolt_docs VALUES('README.md','# hello');
    SELECT doc_name FROM dolt_docs ORDER BY doc_name;" \
   "AGENT.md
 README.md" "$DB"
+
+run_test "default_agent_not_in_working_diff" \
+  "SELECT rows_added, old_row_count, new_row_count
+     FROM dolt_diff_stat('HEAD','WORKING','dolt_docs');" \
+  "1|0|1" "$DB"
 
 run_test "status_new_table" \
   "SELECT table_name, staged, status FROM dolt_status;" \
@@ -128,17 +133,17 @@ run_test "conflict_inspect_and_resolve" \
    INSERT INTO dolt_docs VALUES('README.md','base');
    SELECT dolt_commit('-A','-m','base') IS NOT NULL;
    SELECT dolt_branch('b2') IS NOT NULL;
-   UPDATE dolt_docs SET doc_text='main edit';
+   UPDATE dolt_docs SET doc_text='main edit' WHERE doc_name='README.md';
    SELECT dolt_commit('-A','-m','m') IS NOT NULL;
    SELECT dolt_checkout('b2') IS NOT NULL;
-   UPDATE dolt_docs SET doc_text='b2 edit';
+   UPDATE dolt_docs SET doc_text='b2 edit' WHERE doc_name='README.md';
    SELECT dolt_commit('-A','-m','b') IS NOT NULL;
    SELECT dolt_checkout('main') IS NOT NULL;
    BEGIN;
    SELECT dolt_merge('b2') IS NOT NULL;
    SELECT base_doc_text, our_doc_text, their_doc_text FROM dolt_conflicts_dolt_docs;
    SELECT dolt_conflicts_resolve('--ours','dolt_docs') IS NOT NULL;
-   SELECT doc_text FROM dolt_docs;
+   SELECT doc_text FROM dolt_docs WHERE doc_name='README.md';
    COMMIT;" \
   "1
 1
@@ -177,16 +182,16 @@ rm -f "$DB"
 DB=/tmp/test_docs7_$$.db
 rm -f "$DB"
 
-run_test "agent_delete_sticks" \
+run_test "agent_delete_resynthesizes_default" \
   "DELETE FROM dolt_docs WHERE doc_name='AGENT.md';
-   SELECT count(*) FROM dolt_docs;" \
-  "0" "$DB"
+   SELECT count(*), length(doc_text) > 500 FROM dolt_docs;" \
+  "1|1" "$DB"
 
 rm -f "$DB"
 DB=/tmp/test_docs8_$$.db
 rm -f "$DB"
 
-run_test "agent_default_committable" \
+run_test "agent_default_visible_after_commit" \
   "INSERT INTO dolt_docs VALUES('README.md','hi');
    SELECT dolt_commit('-A','-m','docs') IS NOT NULL;
    SELECT count(*) FROM dolt_docs WHERE doc_name='AGENT.md';" \
