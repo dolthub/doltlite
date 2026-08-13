@@ -737,7 +737,7 @@ int doltliteCompareAndAdvanceBranch(
     doltliteTxnStateClear(&saved);
     return rc;
   }
-  assert( cs->lockDepth>0 );
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
 
   /* Persist the tip under the confirm lock without SwitchCatalog: any SQL that
   ** cycles the graph lock between confirm and commit can let a peer land and
@@ -761,7 +761,7 @@ int doltliteCompareAndAdvanceBranch(
       ** Surface BUSY so the caller retries on a fresh view. */
     }
   }
-  assert( cs->lockDepth>0 );
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
   chunkStoreUnlock(cs);
 
   if( rc==SQLITE_OK ){
