@@ -16,6 +16,18 @@ fi
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-amalg-wasm.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
+"${CC:-cc}" -w -std=c99 -O0 \
+  -DSQLITE_THREADSAFE=0 \
+  -DSQLITE_OS_OTHER=1 \
+  -DDOLTLITE_PROLLY=1 \
+  -DDOLTLITE_VEC1=0 \
+  -DVEC1_THREADS=0 \
+  -include "$amalgamation" \
+  "$(dirname "$0")/amalgamation_replace_failure_test.c" \
+  -lm \
+  -o "$tmp/replace-failure-test"
+"$tmp/replace-failure-test"
+
 "$emcc_bin" -Werror -Wno-comment -c "$amalgamation" \
   -DSQLITE_WASM \
   -DSQLITE_ENABLE_BYTECODE_VTAB \

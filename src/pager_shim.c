@@ -1111,6 +1111,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   sqlite3_file *pSrc = 0;
   sqlite3_file *pTmp = 0;
   char *zTmpFile = 0;
+  int retainTmp = 0;
   i64 fileSize = 0;
   int rc;
   int openFlags;
@@ -1206,14 +1207,17 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     pTmp = 0;
   }
   if( rc == SQLITE_OK ){
-    rc = sqlite3OsReplaceFile(p->pDestVfs, zTmpFile, p->zDestFile);
+    rc = sqlite3OsReplaceFile(p->pDestVfs, zTmpFile, p->zDestFile,
+                              &retainTmp);
   }
 
 backup_step_done:
   if( pSrc ) sqlite3OsCloseFree(pSrc);
   if( pTmp ) sqlite3OsCloseFree(pTmp);
   if( zTmpFile ){
-    if( rc!=SQLITE_OK ) (void)sqlite3OsDelete(p->pDestVfs, zTmpFile, 0);
+    if( rc!=SQLITE_OK && !retainTmp ){
+      (void)sqlite3OsDelete(p->pDestVfs, zTmpFile, 0);
+    }
     sqlite3_free(zTmpFile);
   }
 

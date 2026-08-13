@@ -203,7 +203,7 @@ int sqlite3OsUnfetch(sqlite3_file *, i64, void *);
 int sqlite3OsOpen(sqlite3_vfs *, const char *, sqlite3_file*, int, int *);
 int sqlite3OsDelete(sqlite3_vfs *, const char *, int);
 #ifdef DOLTLITE_PROLLY
-int sqlite3OsReplaceFile(sqlite3_vfs *, const char *, const char *);
+int sqlite3OsReplaceFile(sqlite3_vfs *, const char *, const char *, int *);
 int sqlite3OsReplaceFileNative(sqlite3_vfs *, const char *, const char *);
 #endif
 int sqlite3OsAccess(sqlite3_vfs *, const char *, int, int *pResOut);

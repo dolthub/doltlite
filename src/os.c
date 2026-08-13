@@ -237,7 +237,13 @@ int sqlite3OsDelete(sqlite3_vfs *pVfs, const char *zPath, int dirSync){
 }
 
 #ifdef DOLTLITE_PROLLY
-int sqlite3OsReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest){
+int sqlite3OsReplaceFile(
+  sqlite3_vfs *pVfs,
+  const char *zTmp,
+  const char *zDest,
+  int *pRetainTmp
+){
+  *pRetainTmp = 0;
 #if SQLITE_OS_WIN \
  || (SQLITE_OS_UNIX && !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__))
   return sqlite3OsReplaceFileNative(pVfs, zTmp, zDest);
@@ -255,10 +261,9 @@ int sqlite3OsReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest)
   rc = sqlite3OsFileSize(pIn, &nByte);
   if( rc!=SQLITE_OK ) goto wasm_replace_done;
 
-  (void)sqlite3OsDelete(pVfs, zDest, 0);
   rc = sqlite3OsOpenMalloc(pVfs, zDest, &pOut,
                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-                         | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_MAIN_DB, 0);
+                         | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) goto wasm_replace_done;
 
   aBuf = sqlite3_malloc(65536);
@@ -288,7 +293,7 @@ wasm_replace_done:
   if( rc==SQLITE_OK ){
     (void)sqlite3OsDelete(pVfs, zTmp, 0);
   }else{
-    (void)sqlite3OsDelete(pVfs, zDest, 0);
+    *pRetainTmp = 1;
   }
   return rc;
 #endif

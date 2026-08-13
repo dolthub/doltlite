@@ -592,6 +592,7 @@ static int gcRewriteFile(
   char *zRaw;
   char *zTmp = 0;
   int rc = SQLITE_OK;
+  int retainTmp = 0;
 
   *pReplaced = 0;
   *ppNewIndex = 0;
@@ -768,7 +769,8 @@ static int gcRewriteFile(
       GC_CRASH_CHECK();
       if( rc==SQLITE_OK ){
         rc = sqlite3OsReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
-                                  chunkFileGetFilename(&cs->file));
+                                  chunkFileGetFilename(&cs->file),
+                                  &retainTmp);
       }
       if( rc!=SQLITE_OK ){
 #if SQLITE_OS_WIN
@@ -777,9 +779,11 @@ static int gcRewriteFile(
           if( restoreRc!=SQLITE_OK ) rc = restoreRc;
         }
 #endif
-        sqlite3BeginBenignMalloc();
-        sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
-        sqlite3EndBenignMalloc();
+        if( !retainTmp ){
+          sqlite3BeginBenignMalloc();
+          sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+          sqlite3EndBenignMalloc();
+        }
       }else{
         *pReplaced = 1;
 #if !SQLITE_OS_WIN
