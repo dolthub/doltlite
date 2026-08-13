@@ -961,6 +961,10 @@ int doltliteVcSealActiveSavepoints(sqlite3 *db){
 ** and a later ROLLBACK then reverts the working set while the advanced ref
 ** stays, splitting HEAD from the data. */
 int doltliteVcSealEnclosingTxn(sqlite3 *db){
+  if( failNextVcSeal ){
+    failNextVcSeal = 0;
+    return SQLITE_ERROR;
+  }
   if( !db->autoCommit
    || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
    || db->pSavepoint ){
