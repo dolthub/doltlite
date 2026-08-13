@@ -305,19 +305,19 @@ static int flushPendingForCount(BtCursor *pCur){
     if( !prollyMutMapIsEmpty(pMap) ){
       ProllyMutMap *pFlushMap = pMap;
       int captured = 0;
-      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+      int rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
                                        (ProllyMutMap**)&pTE->pPending,
                                        &pFlushMap, &captured);
       if( rc!=SQLITE_OK ) return rc;
-      if( captured ){
-        refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
-                                   (ProllyMutMap*)pTE->pPending);
-      }
       rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
       if( rc!=SQLITE_OK ) return rc;
       if( pTE->pPending==pMap ){
         prollyMutMapClear(pMap);
       }
+      refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                                 (ProllyMutMap*)pTE->pPending);
     }
   }
   flushIfNeeded(pCur);
