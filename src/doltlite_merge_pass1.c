@@ -371,6 +371,19 @@ static int mergePass1OursAdded(
     rc = mergePass1NoteSchemaConflict(c, zSchemaConflictTable, zSchemaMergeName);
     if( rc!=SQLITE_OK ) return rc;
   }
+  if( !theirsEntry && !zName && zSchemaMergeName && zSchemaMergeName[0]
+   && zSchemaConflictTable && zSchemaConflictTable[0] ){
+    struct TableEntry *pAncTable = doltliteFindTableByName(
+        c->aAnc, c->nAnc, zSchemaConflictTable);
+    struct TableEntry *pTheirTable = doltliteFindTableByName(
+        c->aTheirs, c->nTheirs, zSchemaConflictTable);
+    if( pTheirTable && (!pAncTable
+     || prollyHashCompare(&pTheirTable->root, &pAncTable->root)!=0) ){
+      rc = mergeAppendReindexName(
+          c->pazReindex, c->pnReindex, zSchemaMergeName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
   c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
   return SQLITE_OK;
 }
