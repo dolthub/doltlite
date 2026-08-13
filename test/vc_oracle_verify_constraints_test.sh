@@ -135,6 +135,32 @@ echo "--- FK: named table with no violations ---"
 run_oracle "fk_named_other" "$FK_SETUP" "'otherTable'" \
   "$FOLLOW_AGG_COUNT" 1
 
+
+# A merge records violations up front. Verifying an unrelated table must not
+# retract them: the commit gate reads that record, so clearing it wholesale
+# turns a scoped re-check into permission to commit violating rows.
+MERGE_CV_SETUP="
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pid INT REFERENCES parent(pk));
+CREATE TABLE otherTable(pk INTEGER PRIMARY KEY);
+INSERT INTO parent VALUES (1);
+INSERT INTO otherTable VALUES (1);
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('br');
+SELECT dolt_checkout('br');
+INSERT INTO child VALUES (1,1);
+SELECT dolt_commit('-Am', 'child row');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk=1;
+SELECT dolt_commit('-Am', 'drop parent');
+BEGIN;
+SELECT dolt_merge('br');
+"
+
+echo "--- FK: merge-recorded violation survives a scoped verify ---"
+run_oracle "fk_merge_cv_survives_named_other" "$MERGE_CV_SETUP" "'otherTable'" \
+  "$FOLLOW_AGG_COUNT" 1
+
 echo "--- FK: default clean after force-commit ---"
 run_oracle "fk_default_clean_after_commit" \
 "$FK_SETUP

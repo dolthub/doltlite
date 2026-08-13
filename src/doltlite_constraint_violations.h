@@ -26,6 +26,10 @@ struct ConstraintViolationTable {
   ConstraintViolationRow *aRows;
 };
 
+int doltliteClearConstraintViolationsForTables(
+  sqlite3 *db, const char *const *azTables, int nNames
+);
+
 int doltliteAppendConstraintViolation(
   sqlite3 *db,
   const char *zTable,
