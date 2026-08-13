@@ -460,7 +460,7 @@ else
   ERRORS="$ERRORS\nFAIL: clean_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
 fi
 
-DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32"
+DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32" "$DB33" "$DB34" "$DB35" "$DB36"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','base');
 SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');
@@ -548,6 +548,51 @@ echo "INSERT INTO t VALUES(2,1,'y'); SELECT dolt_commit('-A','-m','feat row');" 
 echo "INSERT INTO t VALUES(3,1,'z'); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB32" > /dev/null 2>&1
 run_test_match "pk_same_desc_merges" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB32"
 run_test "pk_same_desc_integrity" "PRAGMA integrity_check;" "ok" "$DB32"
+# When the primary key covers every column the value record is empty and the
+# row lives in the sort key, so a lookup that matched on the value alone
+# found nothing and every constraint detector skipped the row: violating
+# merges committed clean. Dolt records these and refuses the merge.
+DB33=/tmp/test_merge33_$$.db; rm -f "$DB33"
+echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT REFERENCES parent(id), tag TEXT, PRIMARY KEY(pid,tag)); INSERT INTO parent VALUES(1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB33" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB33" > /dev/null 2>&1
+echo "INSERT INTO child VALUES(1,'t1'); SELECT dolt_commit('-A','-m','child row');" | $DOLTLITE "$DB33/feature" > /dev/null 2>&1
+echo "DELETE FROM parent WHERE id=1; SELECT dolt_commit('-A','-m','drop parent');" | $DOLTLITE "$DB33" > /dev/null 2>&1
+run_test_match "pk_only_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB33"
+TX33=$(echo "BEGIN;
+SELECT dolt_merge('feature');
+SELECT 'CV|' || (SELECT count(*) FROM dolt_constraint_violations);
+ROLLBACK;" | $DOLTLITE "$DB33" 2>&1 | grep '^CV|')
+if [ "$TX33" = "CV|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: pk_only_fk_violation_recorded\n  expected: CV|1\n  got:      $TX33"
+fi
+
+DB34=/tmp/test_merge34_$$.db; rm -f "$DB34"
+echo "CREATE TABLE t(a INT, b INT, PRIMARY KEY(a,b), UNIQUE(b)); INSERT INTO t VALUES(1,1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB34" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB34" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,5); SELECT dolt_commit('-A','-m','feat dup');" | $DOLTLITE "$DB34/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,5); SELECT dolt_commit('-A','-m','main dup');" | $DOLTLITE "$DB34" > /dev/null 2>&1
+run_test_match "pk_only_unique_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB34"
+
+# A table with a non-key column still stores its value record, so the
+# ordinary path must keep working.
+DB35=/tmp/test_merge35_$$.db; rm -f "$DB35"
+echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT REFERENCES parent(id), tag TEXT, note TEXT, PRIMARY KEY(pid,tag)); INSERT INTO parent VALUES(1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB35" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB35" > /dev/null 2>&1
+echo "INSERT INTO child VALUES(1,'t1','n'); SELECT dolt_commit('-A','-m','child row');" | $DOLTLITE "$DB35/feature" > /dev/null 2>&1
+echo "DELETE FROM parent WHERE id=1; SELECT dolt_commit('-A','-m','drop parent');" | $DOLTLITE "$DB35" > /dev/null 2>&1
+run_test_match "valued_row_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB35"
+
+# And a clean merge on a PK-only table must stay clean.
+DB36=/tmp/test_merge36_$$.db; rm -f "$DB36"
+echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT REFERENCES parent(id), tag TEXT, PRIMARY KEY(pid,tag)); INSERT INTO parent VALUES(1),(2); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB36" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB36" > /dev/null 2>&1
+echo "INSERT INTO child VALUES(1,'t1'); SELECT dolt_commit('-A','-m','child one');" | $DOLTLITE "$DB36/feature" > /dev/null 2>&1
+echo "INSERT INTO child VALUES(2,'t2'); SELECT dolt_commit('-A','-m','child two');" | $DOLTLITE "$DB36" > /dev/null 2>&1
+run_test_match "pk_only_clean_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB36"
+run_test "pk_only_clean_merge_rows" "SELECT count(*) FROM child;" "2" "$DB36"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
 dltest_finish

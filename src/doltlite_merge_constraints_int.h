@@ -57,6 +57,7 @@ int recordPrefixEquals(
 );
 int fetchRowByPkRecord(
   ChunkStore *cs, ProllyCache *pCache, const ProllyHash *pRoot, u8 flags,
+  sqlite3 *db, const char *zTable,
   const u8 *pPkRec, int nPkRec, int nPkField,
   u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal
 );

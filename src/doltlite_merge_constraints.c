@@ -322,11 +322,22 @@ int recordPrefixEquals(
   return 1;
 }
 
+/* Find the row whose primary key matches pPkRec.
+**
+** The stored value carries the key columns for an ordinary table, but when
+** the primary key covers every column there is nothing left to store and
+** the value record is empty -- the row lives entirely in the sort key.
+** Matching on the value alone therefore never finds those rows, and every
+** caller reads that as "no such row" and skips the check it was about to
+** make. Fall back to the record the sort key decodes to, and hand that back
+** as the row so the caller has the columns it came for. */
 int fetchRowByPkRecord(
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pRoot,
   u8 flags,
+  sqlite3 *db,
+  const char *zTable,
   const u8 *pPkRec, int nPkRec,
   int nPkField,
   u8 **ppKey, int *pnKey,
@@ -349,10 +360,44 @@ int fetchRowByPkRecord(
     const u8 *pVal = 0;
     int nVal = 0;
     prollyCursorValue(&cur, &pVal, &nVal);
-    if( pVal && recordPrefixEquals(pVal, nVal, pPkRec, nPkRec, nPkField) ){
+    if( pVal && nVal>0
+     && recordPrefixEquals(pVal, nVal, pPkRec, nPkRec, nPkField) ){
       rc = copyCursorRow(&cur, ppKey, pnKey, ppVal, pnVal);
       prollyCursorClose(&cur);
       return rc;
+    }
+    if( (!pVal || nVal==0) && db && zTable ){
+      const u8 *pKey = 0;
+      int nKey = 0;
+      u8 *pKeyRec = 0;
+      int nKeyRec = 0;
+      prollyCursorKey(&cur, &pKey, &nKey);
+      rc = doltliteRecordFromClusteredKey(db, zTable, pKey, nKey,
+                                          &pKeyRec, &nKeyRec);
+      if( rc!=SQLITE_OK ){
+        prollyCursorClose(&cur);
+        return rc;
+      }
+      if( pKeyRec
+       && recordPrefixEquals(pKeyRec, nKeyRec, pPkRec, nPkRec, nPkField) ){
+        u8 *pKeyCopy = 0;
+        if( nKey>0 ){
+          pKeyCopy = sqlite3_malloc(nKey);
+          if( !pKeyCopy ){
+            sqlite3_free(pKeyRec);
+            prollyCursorClose(&cur);
+            return SQLITE_NOMEM;
+          }
+          memcpy(pKeyCopy, pKey, nKey);
+        }
+        *ppKey = pKeyCopy;
+        *pnKey = nKey;
+        *ppVal = pKeyRec;
+        *pnVal = nKeyRec;
+        prollyCursorClose(&cur);
+        return SQLITE_OK;
+      }
+      sqlite3_free(pKeyRec);
     }
     rc = prollyCursorNext(&cur);
     if( rc!=SQLITE_OK ){
@@ -510,7 +555,8 @@ int fetchRowByPkFromTable(
   if( rc != SQLITE_OK ) return rc;
   if( flags & PROLLY_NODE_INTKEY ) return SQLITE_NOTFOUND;
 
-  return fetchRowByPkRecord(cs, pCache, &root, flags, pPkRec, nPkRec, nPkField,
+  return fetchRowByPkRecord(cs, pCache, &root, flags, db, zTable,
+                            pPkRec, nPkRec, nPkField,
                             ppKey, pnKey, ppVal, pnVal);
 }
 
