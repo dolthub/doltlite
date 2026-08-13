@@ -131,6 +131,44 @@ static void freeStringList(char **az, int n){
   sqlite3_free(az);
 }
 
+static int hasRecordedViolations(
+  sqlite3 *db,
+  const char **azTables,
+  int nTables,
+  int *pFound
+){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+
+  *pFound = 0;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT \"table\" FROM dolt_constraint_violations "
+      "WHERE num_violations>0", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    const char *zTable = (const char*)sqlite3_column_text(pStmt, 0);
+    int i;
+    if( nTables==0 ){
+      *pFound = 1;
+      break;
+    }
+    for(i=0; zTable && i<nTables; i++){
+      if( sqlite3_stricmp(zTable, azTables[i])==0 ){
+        *pFound = 1;
+        break;
+      }
+    }
+    if( *pFound ) break;
+  }
+  if( rc==SQLITE_ROW ) rc = SQLITE_OK;
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  {
+    int finalizeRc = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_OK ) rc = finalizeRc;
+  }
+  return rc;
+}
+
 static void doltVerifyConstraintsFunc(
   sqlite3_context *context,
   int argc,
@@ -151,15 +189,12 @@ static void doltVerifyConstraintsFunc(
   int nViolations = 0;
   ProllyHash headCat;
   ProllyHash emptyCat;
-  ProllyHash savedCv;
-  int hasSavedCv = 0;
   DoltliteCommit headCommit;
   ProllyHash headHash;
   const ProllyHash *pDetectAnc = 0;
 
   memset(&headCat, 0, sizeof(headCat));
   memset(&emptyCat, 0, sizeof(emptyCat));
-  memset(&savedCv, 0, sizeof(savedCv));
   memset(&headCommit, 0, sizeof(headCommit));
   memset(&headHash, 0, sizeof(headHash));
 
@@ -219,23 +254,20 @@ static void doltVerifyConstraintsFunc(
     azArgTables[nArgTables++] = zArg;
   }
 
-  if( bOutputOnly ){
-    doltliteGetSessionConstraintViolationsCatalog(db, &savedCv);
-    hasSavedCv = 1;
-  }
-
   /* Only the tables about to be re-checked lose their recorded findings.
   ** A scoped verify says nothing about the tables it does not scan, and the
   ** commit gate reads this catalog. */
-  if( nArgTables>0 ){
-    rc = doltliteClearConstraintViolationsForTables(
-        db, (const char *const *)azArgTables, nArgTables);
-  }else{
-    rc = doltliteClearAllConstraintViolations(db);
-  }
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    goto cleanup;
+  if( !bOutputOnly ){
+    if( nArgTables>0 ){
+      rc = doltliteClearConstraintViolationsForTables(
+          db, (const char *const *)azArgTables, nArgTables);
+    }else{
+      rc = doltliteClearAllConstraintViolations(db);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto cleanup;
+    }
   }
 
   doltliteGetSessionHead(db, &headHash);
@@ -305,38 +337,36 @@ static void doltVerifyConstraintsFunc(
     }
     if( nChanged==0 ){
       /* No changed tables: nothing to scan. */
-      sqlite3_result_int(context, 0);
-      goto cleanup_refresh;
+      goto detection_done;
     }
     azScan = (const char**)azChanged;
     nScan = nChanged;
   }
 
   rc = doltliteDetectConstraintViolationsFiltered(
-      db, pDetectAnc, azScan, nScan, &nViolations);
+      db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     goto cleanup;
   }
 
-  if( bOutputOnly && hasSavedCv ){
-    doltliteSetSessionConstraintViolationsCatalog(db, &savedCv);
-    if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-      rc = doltlitePersistWorkingSet(db);
-    }else{
-      rc = doltliteSaveWorkingSet(db);
-    }
+detection_done:
+  if( bOutputOnly && nViolations==0 ){
+    int found = 0;
+    rc = hasRecordedViolations(db, azArgTables, nArgTables, &found);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto cleanup;
     }
+    nViolations = found;
   }
 
-cleanup_refresh:
-  rc = doltliteRefreshConstraintViolationTables(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    goto cleanup;
+  if( !bOutputOnly ){
+    rc = doltliteRefreshConstraintViolationTables(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto cleanup;
+    }
   }
 
   sqlite3_result_int(context, nViolations>0 ? 1 : 0);
