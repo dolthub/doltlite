@@ -210,8 +210,20 @@ struct TableEntry *findCatalogEntryBySchemaObject(
   const char *zTblName
 );
 
+typedef struct MergeColDefaults MergeColDefaults;
+struct MergeColDefaults {
+  DoltliteSerialValue *aVal;
+  u8 **apOwned;
+  int nCol;
+};
+void mergeColDefaultsFree(MergeColDefaults *p);
+int mergeColDefaultsLoad(const char *zSql, const char *zTable,
+                         MergeColDefaults *pOut);
+
 int normalizeTheirsToMergedLayout(
   sqlite3 *db,
+  const char *zTable,
+  const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
   u8 flags,
   const char *zAncSql,
