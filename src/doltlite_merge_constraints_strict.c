@@ -34,23 +34,28 @@ static const char *strictAllowedTypeof(const char *zDecl){
   return 0;
 }
 
-/* True when zTable is declared STRICT. */
-static int tableIsStrict(sqlite3 *db, const char *zTable){
+static int tableIsStrict(sqlite3 *db, const char *zTable, int *pStrict){
   sqlite3_stmt *pQ = 0;
   char *zSql;
-  int strict = 0;
+  int rc;
+  int stepRc;
 
+  *pStrict = 0;
   zSql = sqlite3_mprintf(
       "SELECT strict FROM pragma_table_list WHERE schema='main' AND name=%Q",
       zTable);
-  if( !zSql ) return 0;
-  if( sqlite3_prepare_v2(db, zSql, -1, &pQ, 0)==SQLITE_OK
-   && sqlite3_step(pQ)==SQLITE_ROW ){
-    strict = sqlite3_column_int(pQ, 0);
-  }
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pQ, 0);
   sqlite3_free(zSql);
-  sqlite3_finalize(pQ);
-  return strict;
+  if( rc!=SQLITE_OK ) return rc;
+  stepRc = sqlite3_step(pQ);
+  if( stepRc==SQLITE_ROW ){
+    *pStrict = sqlite3_column_int(pQ, 0);
+    rc = SQLITE_OK;
+  }else{
+    rc = stepRc==SQLITE_DONE ? SQLITE_NOTFOUND : stepRc;
+  }
+  return finishConstraintStmt(pQ, rc);
 }
 
 /* The typed columns of a STRICT table with the storage class each admits. */
@@ -68,6 +73,7 @@ static int loadStrictColumns(
   int n = 0;
   int nAlloc = 0;
   int rc;
+  int stepRc;
 
   *pazCols = 0;
   *pazAllowed = 0;
@@ -79,7 +85,7 @@ static int loadStrictColumns(
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) return rc;
 
-  while( sqlite3_step(pQ)==SQLITE_ROW ){
+  while( (stepRc = sqlite3_step(pQ))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pQ, 0);
     const char *zType = (const char*)sqlite3_column_text(pQ, 1);
     const char *zAllowed;
@@ -106,7 +112,8 @@ static int loadStrictColumns(
     }
     n++;
   }
-  sqlite3_finalize(pQ);
+  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
+  rc = finishConstraintStmt(pQ, rc);
   if( rc!=SQLITE_OK ){
     strictFreeNames(azCols, n);
     strictFreeNames(azAllowed, n);
@@ -134,7 +141,6 @@ int doltliteDetectMergeStrictViolations(
   int rc;
   int stepRc;
 
-  (void)pzErrMsg;
   if( pnFound ) *pnFound = 0;
 
   rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
@@ -164,13 +170,23 @@ int doltliteDetectMergeStrictViolations(
     char *zQuery = 0;
     sqlite3_stmt *pQ = 0;
     int i;
+    int isStrict;
+    int queryStepRc;
 
     if( !zTableRaw ) continue;
     zTable = sqlite3_mprintf("%s", zTableRaw);
     if( !zTable ){ rc = SQLITE_NOMEM; break; }
     if( !cvTableAllowed(zTable, azTables, nTables)
-     || !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable)
-     || !tableIsStrict(db, zTable) ){
+     || !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable) ){
+      sqlite3_free(zTable);
+      continue;
+    }
+    rc = tableIsStrict(db, zTable, &isStrict);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zTable);
+      break;
+    }
+    if( !isStrict ){
       sqlite3_free(zTable);
       continue;
     }
@@ -186,7 +202,13 @@ int doltliteDetectMergeStrictViolations(
     }
 
     memset(&pkInfo, 0, sizeof(pkInfo));
-    hasRowid = tableHasRowid(db, zTable);
+    rc = tableHasRowid(db, zTable, &hasRowid);
+    if( rc!=SQLITE_OK ){
+      strictFreeNames(azCols, nCols);
+      strictFreeNames(azAllowed, nCols);
+      sqlite3_free(zTable);
+      break;
+    }
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &pkInfo);
       if( rc!=SQLITE_OK ){
@@ -224,16 +246,14 @@ int doltliteDetectMergeStrictViolations(
     rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
     sqlite3_free(zQuery);
     if( rc!=SQLITE_OK ){
-      /* A table the merge left unreadable is the other detectors' business. */
       strictFreeNames(azCols, nCols);
       strictFreeNames(azAllowed, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
-      rc = SQLITE_OK;
-      continue;
+      break;
     }
 
-    while( sqlite3_step(pQ)==SQLITE_ROW ){
+    while( (queryStepRc = sqlite3_step(pQ))==SQLITE_ROW ){
       u8 *pKey = 0; int nKey = 0;
       u8 *pVal = 0; int nVal = 0;
       i64 intKey = 0;
@@ -305,7 +325,8 @@ int doltliteDetectMergeStrictViolations(
       if( pnFound ) (*pnFound)++;
     }
 
-    sqlite3_finalize(pQ);
+    if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
+    rc = finishConstraintStmt(pQ, rc);
     strictFreeNames(azCols, nCols);
     strictFreeNames(azAllowed, nCols);
     freeMergePkInfo(&pkInfo);
@@ -315,9 +336,10 @@ int doltliteDetectMergeStrictViolations(
   if( rc==SQLITE_OK && stepRc!=SQLITE_DONE && stepRc!=SQLITE_ROW ){
     rc = stepRc;
   }
-  sqlite3_finalize(pTbls);
+  rc = finishConstraintStmt(pTbls, rc);
   doltliteFreeCatalog(aAnc, nAnc);
   doltliteFreeCatalog(aCur, nCur);
+  setConstraintError(db, pzErrMsg, rc);
   return rc;
 }
 

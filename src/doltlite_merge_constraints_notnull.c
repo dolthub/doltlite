@@ -33,6 +33,7 @@ static int loadNotNullColumns(
   int n = 0;
   int nAlloc = 0;
   int rc;
+  int stepRc;
 
   *pazCols = 0;
   *pnCols = 0;
@@ -43,7 +44,7 @@ static int loadNotNullColumns(
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) return rc;
 
-  while( sqlite3_step(pQ)==SQLITE_ROW ){
+  while( (stepRc = sqlite3_step(pQ))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pQ, 0);
     if( !zName ) continue;
     if( n==nAlloc ){
@@ -57,7 +58,8 @@ static int loadNotNullColumns(
     if( !az[n] ){ rc = SQLITE_NOMEM; break; }
     n++;
   }
-  sqlite3_finalize(pQ);
+  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
+  rc = finishConstraintStmt(pQ, rc);
   if( rc!=SQLITE_OK ){
     freeNames(az, n);
     return rc;
@@ -83,7 +85,6 @@ int doltliteDetectMergeNotNullViolations(
   int rc;
   int stepRc;
 
-  (void)pzErrMsg;
   if( pnFound ) *pnFound = 0;
 
   rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
@@ -112,6 +113,7 @@ int doltliteDetectMergeNotNullViolations(
     char *zQuery = 0;
     sqlite3_stmt *pQ = 0;
     int i;
+    int queryStepRc;
 
     if( !zTableRaw ) continue;
     zTable = sqlite3_mprintf("%s", zTableRaw);
@@ -133,7 +135,12 @@ int doltliteDetectMergeNotNullViolations(
     }
 
     memset(&pkInfo, 0, sizeof(pkInfo));
-    hasRowid = tableHasRowid(db, zTable);
+    rc = tableHasRowid(db, zTable, &hasRowid);
+    if( rc!=SQLITE_OK ){
+      freeNames(azCols, nCols);
+      sqlite3_free(zTable);
+      break;
+    }
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &pkInfo);
       if( rc!=SQLITE_OK ){
@@ -167,15 +174,13 @@ int doltliteDetectMergeNotNullViolations(
     rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
     sqlite3_free(zQuery);
     if( rc!=SQLITE_OK ){
-      /* A table the merge left unreadable is the other detectors' business. */
       freeNames(azCols, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
-      rc = SQLITE_OK;
-      continue;
+      break;
     }
 
-    while( sqlite3_step(pQ)==SQLITE_ROW ){
+    while( (queryStepRc = sqlite3_step(pQ))==SQLITE_ROW ){
       u8 *pKey = 0; int nKey = 0;
       u8 *pVal = 0; int nVal = 0;
       i64 intKey = 0;
@@ -246,7 +251,8 @@ int doltliteDetectMergeNotNullViolations(
       if( appendRc!=SQLITE_OK ){ rc = appendRc; break; }
       if( pnFound ) (*pnFound)++;
     }
-    sqlite3_finalize(pQ);
+    if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
+    rc = finishConstraintStmt(pQ, rc);
     freeNames(azCols, nCols);
     freeMergePkInfo(&pkInfo);
     sqlite3_free(zTable);
@@ -255,9 +261,10 @@ int doltliteDetectMergeNotNullViolations(
   if( rc==SQLITE_OK && stepRc!=SQLITE_DONE && stepRc!=SQLITE_ROW ){
     rc = stepRc;
   }
-  sqlite3_finalize(pTbls);
+  rc = finishConstraintStmt(pTbls, rc);
   doltliteFreeCatalog(aAnc, nAnc);
   doltliteFreeCatalog(aCur, nCur);
+  setConstraintError(db, pzErrMsg, rc);
   return rc;
 }
 

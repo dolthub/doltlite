@@ -23,6 +23,8 @@ struct MergePkInfo {
 
 void freeMergePkInfo(MergePkInfo *pPk);
 int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk);
+int finishConstraintStmt(sqlite3_stmt *pStmt, int rc);
+void setConstraintError(sqlite3 *db, char **pzErrMsg, int rc);
 
 int copyCursorRow(
   ProllyCursor *pCur,
@@ -73,7 +75,7 @@ int isRowPreExisting(
   const u8 *pMergedVal, int nMergedVal,
   const u8 *pAncVal, int nAncVal
 );
-int tableHasRowid(sqlite3 *db, const char *zTable);
+int tableHasRowid(sqlite3 *db, const char *zTable, int *pHasRowid);
 int fetchOrphanRow(
   sqlite3 *db, const char *zTable, i64 rowid,
   u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal

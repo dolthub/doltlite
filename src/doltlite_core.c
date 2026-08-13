@@ -842,7 +842,10 @@ int doltliteDetectConstraintViolationsFiltered(
   }else if( rc==SQLITE_DONE ){
     rc = SQLITE_OK;
   }
-  sqlite3_finalize(pStmt);
+  {
+    int finalizeRc = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_OK ) rc = finalizeRc;
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( !needsDetection ){
     if( pnViolations ) *pnViolations = 0;
