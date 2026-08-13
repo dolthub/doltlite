@@ -754,6 +754,31 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
     btreeStoreCommittedFromCurrent(p, 0);
 
+    /* A peer can delete the branch this session sits on. Writing then
+    ** persists a working set for a ref that no longer exists, and that
+    ** persist -- the one ref install with no compare-and-swap -- puts the
+    ** branch back, undoing a delete that was durable for everyone else.
+    ** Refuse the write instead.
+    **
+    ** This is the last point where refusing is safe. Past here the persist
+    ** runs inside commit phase two, whose abort path releases the graph
+    ** lock while the transaction is still a write, so an error there trips
+    ** the lock assert in the rollback that follows.
+    **
+    ** A store with no branches at all is one being seeded, where the head
+    ** exists before any ref does and this very write is what creates it;
+    ** an empty head likewise means the branch is still being created. Only
+    ** a branch missing from an established set of refs was deleted. */
+    if( !prollyHashIsEmpty(&p->headCommit)
+     && !p->isDetached
+     && pBt->store.refs.nBranches>0 ){
+      const char *zBranchName = p->zBranch ? p->zBranch : "main";
+      if( chunkStoreFindBranch(&pBt->store, zBranchName, 0)==SQLITE_NOTFOUND ){
+        chunkStoreUnlock(&pBt->store);
+        return SQLITE_BUSY_SNAPSHOT;
+      }
+    }
+
     if( p->db ){
       while( p->nSavepoint < p->db->nSavepoint ){
         int rc2 = pushSavepoint(p, 0);

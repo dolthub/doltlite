@@ -285,15 +285,6 @@ int btreeStoreWorkingSetBlob(
   if( rc != SQLITE_OK ) return rc;
   rc = chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);
   if( rc == SQLITE_NOTFOUND ){
-    /* The branch has no ref yet. With no commit behind this session that
-    ** is the first working set of a branch being created, and the add is
-    ** how the ref appears. With a commit behind it the branch did exist
-    ** and is now gone -- a peer deleted it -- and adding it back here
-    ** would resurrect the ref from this session's stale view, restoring a
-    ** branch the peer removed and carrying whatever this session goes on
-    ** to commit. This is the one ref install with no compare-and-swap, so
-    ** refuse rather than publish. */
-    if( !prollyHashIsEmpty(pWorkingCommit) ) return SQLITE_BUSY_SNAPSHOT;
     rc = chunkStoreAddBranch(cs, zBranch, pWorkingCommit);
     if( rc == SQLITE_OK ){
       rc = chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);
