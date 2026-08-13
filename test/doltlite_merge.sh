@@ -460,7 +460,7 @@ else
   ERRORS="$ERRORS\nFAIL: clean_merge_in_txn_rollback_refused\n  expected the post-merge ROLLBACK to find no open transaction"
 fi
 
-DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28"
+DB25=/tmp/test_merge25_$$.db; rm -f "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','base');
 SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');
@@ -508,6 +508,46 @@ echo "DROP TABLE t; CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VA
 run_test_match "identical_recreate_merge_ok" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB28"
 run_test "identical_recreate_rows" "SELECT group_concat(pk || ':' || v, ',') FROM (SELECT pk,v FROM t ORDER BY pk);" "feat:50,main:7" "$DB28"
 run_test "identical_recreate_integrity" "PRAGMA integrity_check;" "ok" "$DB28"
+
+
+# The primary key decides where a row sorts and which rows collide, so a
+# change to its collation or sort direction makes the two keyspaces
+# incomparable just as a column or type change does. Merging across one
+# produced a committed table whose rows are out of key order.
+DB29=/tmp/test_merge29_$$.db; rm -f "$DB29"
+echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(pk TEXT COLLATE NOCASE PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); SELECT dolt_commit('-A','-m','feat collate');" | $DOLTLITE "$DB29/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES('A',3); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+run_test_match "pk_collation_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB29"
+run_test "pk_collation_change_integrity" "PRAGMA integrity_check;" "ok" "$DB29"
+
+DB30=/tmp/test_merge30_$$.db; rm -f "$DB30"
+echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID; INSERT INTO t VALUES(1,1,'x'),(2,1,'y'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB30" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB30" > /dev/null 2>&1
+echo "DROP TABLE t; CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a DESC, b)) WITHOUT ROWID; INSERT INTO t VALUES(1,1,'x'),(2,1,'y'),(9,1,'f'); SELECT dolt_commit('-A','-m','feat desc');" | $DOLTLITE "$DB30/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(5,1,'m'); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB30" > /dev/null 2>&1
+run_test_match "pk_sort_order_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB30"
+run_test "pk_sort_order_change_integrity" "PRAGMA integrity_check;" "ok" "$DB30"
+
+# Matching collations must still merge: the signature names collation, so a
+# table that always had one must not start refusing its own merges.
+DB31=/tmp/test_merge31_$$.db; rm -f "$DB31"
+echo "CREATE TABLE t(pk TEXT COLLATE NOCASE PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB31" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB31" > /dev/null 2>&1
+echo "INSERT INTO t VALUES('b',2); SELECT dolt_commit('-A','-m','feat row');" | $DOLTLITE "$DB31/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES('c',3); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB31" > /dev/null 2>&1
+run_test_match "pk_same_collation_merges" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB31"
+run_test "pk_same_collation_rows" "SELECT count(*) FROM t;" "3" "$DB31"
+
+# A DESC primary key on both sides is likewise unchanged, so it merges.
+DB32=/tmp/test_merge32_$$.db; rm -f "$DB32"
+echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a DESC, b)) WITHOUT ROWID; INSERT INTO t VALUES(1,1,'x'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB32" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB32" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,1,'y'); SELECT dolt_commit('-A','-m','feat row');" | $DOLTLITE "$DB32/feature" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,1,'z'); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB32" > /dev/null 2>&1
+run_test_match "pk_same_desc_merges" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB32"
+run_test "pk_same_desc_integrity" "PRAGMA integrity_check;" "ok" "$DB32"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
 dltest_finish
