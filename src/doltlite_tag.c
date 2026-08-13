@@ -69,6 +69,11 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     m.zName = zName;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
+    if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
+      doltliteVcResultError(ctx, db,
+        "cannot update refs: unresolved merge conflicts");
+      return;
+    }
     if( rc!=SQLITE_OK ){
       tagSealSavepointError(ctx);
       doltliteRefResultError(ctx, rc, "tag not found", 0);
@@ -156,6 +161,11 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltliteMutateRefs(db, mutateTagRef, &m);
   sqlite3_free(zParsedTagger);
   sqlite3_free(zParsedEmail);
+  if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
+    doltliteVcResultError(ctx, db,
+      "cannot update refs: unresolved merge conflicts");
+    return;
+  }
   if( rc!=SQLITE_OK ){
     tagSealSavepointError(ctx);
     doltliteRefResultError(ctx, rc, "tag not found", "tag already exists");

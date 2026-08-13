@@ -231,5 +231,36 @@ run_test "resolve_both_then_commit_lands" \
 run_test "resolve_both_then_commit_not_merging" \
   "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB12"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12"
+# dolt_branch/dolt_tag serialize the whole refs blob. A conflicted merge
+# in BEGIN saves the unfinished working set in memory; those commands
+# must not commit it.
+DB13=/tmp/test_conf13_$$.db; rm -f "$DB13"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('br');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+echo "UPDATE t SET v='theirs'; SELECT dolt_commit('-Am','br');" | $DOLTLITE "$DB13/br" > /dev/null 2>&1
+echo "UPDATE t SET v='ours'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+run_test_match "branch_during_conflicts_refused" \
+  "BEGIN; SELECT dolt_merge('br'); SELECT dolt_branch('backup');" \
+  "unresolved merge conflicts" "$DB13"
+run_test "branch_during_conflicts_no_backup" \
+  "SELECT count(*) FROM dolt_branches WHERE name='backup';" "0" "$DB13"
+run_test "branch_during_conflicts_not_persisted" \
+  "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB13"
+run_test "branch_during_conflicts_no_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB13"
+
+DB14=/tmp/test_conf14_$$.db; rm -f "$DB14"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('br');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+echo "UPDATE t SET v='theirs'; SELECT dolt_commit('-Am','br');" | $DOLTLITE "$DB14/br" > /dev/null 2>&1
+echo "UPDATE t SET v='ours'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+run_test_match "tag_during_conflicts_refused" \
+  "BEGIN; SELECT dolt_merge('br'); SELECT dolt_tag('v1');" \
+  "unresolved merge conflicts" "$DB14"
+run_test "tag_during_conflicts_no_tag" \
+  "SELECT count(*) FROM dolt_tags WHERE tag_name='v1';" "0" "$DB14"
+run_test "tag_during_conflicts_not_persisted" \
+  "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB14"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
 dltest_finish
