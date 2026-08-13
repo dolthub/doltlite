@@ -707,9 +707,25 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
       pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     }
     if( pCur->pKey && pCur->nKey>0 ){
-      rc = prollyCursorSeekBlob(&pCur->pCur,
-                                 (const u8*)pCur->pKey, (int)pCur->nKey,
-                                 &res);
+      int landedMut = 0;
+      if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+        ProllyMutMapEntry *pEntry = 0;
+        rc = prollyMutMapFindRc(pCur->pMutMap,
+                                (const u8*)pCur->pKey, (int)pCur->nKey,
+                                0, &pEntry);
+        if( rc==SQLITE_OK && pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          setCursorToMutMapEntryPhys(
+              pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+          pCur->deferredTreeSeek = 1;
+          res = 0;
+          landedMut = 1;
+        }
+      }
+      if( rc==SQLITE_OK && !landedMut ){
+        rc = prollyCursorSeekBlob(&pCur->pCur,
+                                   (const u8*)pCur->pKey, (int)pCur->nKey,
+                                   &res);
+      }
     } else {
       pCur->eState = CURSOR_INVALID;
       if( pDifferentRow ) *pDifferentRow = 1;
