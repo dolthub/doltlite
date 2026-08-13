@@ -182,7 +182,13 @@ jobs:
   oracle-tests:
     name: oracle-tests-${{ matrix.bucket }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The sql bucket budgets 10 minutes for the oracle suites and 25 for the
+    # differential sweep. A 20-minute job cap made both of those fiction: the
+    # cap always bit first, so a sweep slowed by runner load was killed at 20
+    # with "The operation was canceled" instead of failing on its own budget
+    # with a message naming the step. The other buckets ask for 18 and finish
+    # in about 4, so they keep a tight cap.
+    timeout-minutes: ${{ matrix.bucket == 'sql' && 40 || 25 }}
     strategy:
       fail-fast: false
       matrix:
