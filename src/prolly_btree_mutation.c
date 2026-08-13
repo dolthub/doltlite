@@ -1789,7 +1789,14 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  if( pBtree->inTrans==TRANS_NONE ){
+  /* Taking a read first and upgrading is what refuses to promote a session
+  ** whose loaded working state has fallen behind -- and inside an explicit
+  ** transaction that refusal is the point, since reloading underneath the
+  ** caller would break its isolation. In autocommit there is no such caller:
+  ** the read only manufactures a stale upgrade to refuse, and because that
+  ** read stays open the refusal never clears however often the caller retries.
+  ** Begin the write directly there, which reloads the working state. */
+  if( pBtree->inTrans==TRANS_NONE && !db->autoCommit ){
     rc = sqlite3BtreeBeginTrans(pBtree, 0, 0);
     if( rc!=SQLITE_OK ) return rc;
   }
