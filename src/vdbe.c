@@ -3141,7 +3141,12 @@ op_column_restart:
         goto op_column_corrupt;
       }
       assert( pC->szRow<=pC->payloadSize );
+#ifndef DOLTLITE_PROLLY
       assert( pC->szRow<=65536 );  /* Maximum page size is 64KiB */
+#else
+      /* No pages here: a prolly record is handed over whole, so the bound
+      ** above -- which is the maximum page size -- does not describe it. */
+#endif
     }
     pC->cacheStatus = p->cacheCtr;
     if( (aOffset[0] = pC->aRow[0])<0x80 ){
