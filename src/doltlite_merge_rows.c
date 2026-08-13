@@ -396,12 +396,13 @@ static int parseRecordFields(const u8 *pRec, int nRec,
   return nFields;
 }
 
-/* Is this sqlite_master row one the policy names? Fields 1 and 2 are name and
-** tbl_name, so the table's own row matches by name and each of its indexes and
-** triggers matches by tbl_name. The base row is the one compared: it carries the
-** ancestor name, which is what the policy was built from. */
-static int catalogRowNamedByPolicy(
-  const MergeRowPolicy *pPolicy,
+/* Is this sqlite_master row one the listed ancestor names? Fields 1 and 2 are
+** name and tbl_name, so the table's own row matches by name and each of its
+** indexes and triggers matches by tbl_name. The base row is the one compared:
+** it carries the ancestor name, which is what the policy was built from. */
+static int catalogRowNamedInList(
+  const char **azNames,
+  int nNames,
   const u8 *pBase, int nBase
 ){
   RecField *aBase = 0;
@@ -409,14 +410,14 @@ static int catalogRowNamedByPolicy(
   int matched = 0;
   int i, f;
 
-  if( !pPolicy || pPolicy->nRenameOverDrop<=0 ) return 0;
+  if( !azNames || nNames<=0 ) return 0;
   if( !pBase || nBase<=0 ) return 0;
   /* Returns the field count, or -1; it is not an SQLITE_ code. */
   if( parseRecordFields(pBase, nBase, &aBase, &nBaseF) < 0 ) return 0;
   for(f=1; f<=2 && !matched; f++){
     if( f>=nBaseF ) break;
-    for(i=0; i<pPolicy->nRenameOverDrop && !matched; i++){
-      const char *z = pPolicy->azRenameOverDrop[i];
+    for(i=0; i<nNames && !matched; i++){
+      const char *z = azNames[i];
       int n;
       if( !z ) continue;
       n = (int)strlen(z);
@@ -428,6 +429,24 @@ static int catalogRowNamedByPolicy(
   }
   sqlite3_free(aBase);
   return matched;
+}
+
+static int catalogRowNamedByPolicy(
+  const MergeRowPolicy *pPolicy,
+  const u8 *pBase, int nBase
+){
+  if( !pPolicy ) return 0;
+  return catalogRowNamedInList(
+      pPolicy->azRenameOverDrop, pPolicy->nRenameOverDrop, pBase, nBase);
+}
+
+static int catalogRowNamedByDualRename(
+  const MergeRowPolicy *pPolicy,
+  const u8 *pBase, int nBase
+){
+  if( !pPolicy ) return 0;
+  return catalogRowNamedInList(
+      pPolicy->azDualRename, pPolicy->nDualRename, pBase, nBase);
 }
 
 static int fieldEquals(const u8 *pRecA, RecField *fA,
@@ -681,6 +700,11 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           }
         }
         sqlite3_free(pMerged);
+        break;
+      }
+
+      if( catalogRowNamedByDualRename(ctx->pPolicy,
+                                      pChange->pBaseVal, pChange->nBaseVal) ){
         break;
       }
 
