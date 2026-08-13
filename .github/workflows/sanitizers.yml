@@ -225,6 +225,12 @@ jobs:
         ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
     - name: Run version-control concurrency under TSan
+      env:
+        # Same reason threadtest5 above gets a longer busy window: three forked
+        # workers contending on ref updates make far less progress per second
+        # under TSan, and the stress test's default retry budget is a wall
+        # clock, so it has to be told to wait proportionally longer.
+        DOLTLITE_STRESS_BUSY_MS: "120000"
       run: |
         cd build
         ./vc_concurrency_test
