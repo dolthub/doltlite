@@ -171,5 +171,65 @@ run_test_match "theirs_delete_trigger_skipped" \
   "BEGIN; SELECT dolt_merge('feature'); DROP TRIGGER IF EXISTS audit_delete; CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDT|' || count(*) FROM trig_log; ROLLBACK;" \
   "^TDT\\|0$" "$DB9"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"
+
+# A commit refused for unresolved conflicts must leave the transaction the
+# caller opened intact. Committing the transaction first and only then
+# checking left the session in autocommit with live merge state, so the next
+# resolve wrote the still-conflicted working set to disk -- the one thing a
+# conflicted merge must never do -- and reported success without applying.
+DB10=/tmp/test_conf10_$$.db; rm -f "$DB10"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base'); INSERT INTO u VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('br');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+echo "UPDATE t SET v='theirs'; UPDATE u SET v='theirs'; SELECT dolt_commit('-Am','br');" | $DOLTLITE "$DB10/br" > /dev/null 2>&1
+echo "UPDATE t SET v='ours'; UPDATE u SET v='ours'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+echo "BEGIN;
+SELECT dolt_merge('br');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_commit('-A','-m','partial');
+SELECT dolt_conflicts_resolve('--ours','u');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+run_test "refused_commit_leaves_nothing_merging" \
+  "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB10"
+run_test "refused_commit_leaves_no_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts_u;" "0" "$DB10"
+run_test "refused_commit_keeps_our_rows" \
+  "SELECT v FROM t;" "ours" "$DB10"
+
+# The same refusal with nothing resolved first must also leave clean state,
+# and the surfaces that read merge state must stay readable.
+DB11=/tmp/test_conf11_$$.db; rm -f "$DB11"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('br');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+echo "UPDATE t SET v='theirs'; SELECT dolt_commit('-Am','br');" | $DOLTLITE "$DB11/br" > /dev/null 2>&1
+echo "UPDATE t SET v='ours'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+echo "BEGIN;
+SELECT dolt_merge('br');
+SELECT dolt_commit('-A','-m','nope');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+run_test "refused_commit_no_prior_resolve_clean" \
+  "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB11"
+run_test "refused_commit_conflicts_readable" \
+  "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB11"
+
+# Resolving everything inside the transaction still commits the merge.
+DB12=/tmp/test_conf12_$$.db; rm -f "$DB12"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base'); INSERT INTO u VALUES(1,'base');
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('br');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+echo "UPDATE t SET v='theirs'; UPDATE u SET v='theirs'; SELECT dolt_commit('-Am','br');" | $DOLTLITE "$DB12/br" > /dev/null 2>&1
+echo "UPDATE t SET v='ours'; UPDATE u SET v='ours'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+echo "BEGIN;
+SELECT dolt_merge('br');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_conflicts_resolve('--ours','u');
+SELECT dolt_commit('-A','-m','resolved');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+run_test "resolve_both_then_commit_lands" \
+  "SELECT (SELECT v FROM t) || '/' || (SELECT v FROM u);" "theirs/ours" "$DB12"
+run_test "resolve_both_then_commit_not_merging" \
+  "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB12"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12"
 dltest_finish
