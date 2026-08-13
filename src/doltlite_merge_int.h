@@ -178,6 +178,15 @@ int hasAnySchemaConflict(
   int nConflictTables
 );
 
+int mergeIndexFollowsDualRename(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const SchemaEntry *pAnc,
+  const SchemaEntry *pOurs,
+  const SchemaEntry *pTheirs
+);
+
 int replayDropsDisjointSchemaObject(
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema

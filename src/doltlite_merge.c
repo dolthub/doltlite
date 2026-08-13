@@ -211,7 +211,7 @@ static int mergeIndexColListSame(const char *zA, const char *zB){
   return *zA==0 && *zB==0;
 }
 
-static int mergeIndexFollowsDualRename(
+int mergeIndexFollowsDualRename(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
   SchemaEntry *aTheirs, int nTheirs,
