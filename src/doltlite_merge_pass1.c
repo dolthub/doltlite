@@ -867,11 +867,68 @@ static void mergePass1FreeRowPolicy(MergeRowPolicy *pPolicy){
   pPolicy->nDualRename = 0;
 }
 
+static int mergePass1IsAuxSchemaType(const char *zType){
+  return zType && (strcmp(zType, "view")==0 || strcmp(zType, "trigger")==0);
+}
+
+static int mergePass1AuxSchemaSame(const SchemaEntry *pA, const SchemaEntry *pB){
+  const char *zASql;
+  const char *zBSql;
+  const char *zATbl;
+  const char *zBTbl;
+  if( !pA || !pB ) return 0;
+  zASql = pA->zSql ? pA->zSql : "";
+  zBSql = pB->zSql ? pB->zSql : "";
+  zATbl = pA->zTblName ? pA->zTblName : "";
+  zBTbl = pB->zTblName ? pB->zTblName : "";
+  return strcmp(zASql, zBSql)==0 && sqlite3_stricmp(zATbl, zBTbl)==0;
+}
+
+/* Views and triggers live only as catalog rows. Competing definitions are
+** schema conflicts; they must not become (sqlite_master) row conflicts. */
+static int mergePass1NoteAuxSchemaConflicts(MergePass1Ctx *c){
+  int side, i, rc;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *a = side==0 ? c->aOursSchema : c->aTheirsSchema;
+    int n = side==0 ? c->nOursSchema : c->nTheirsSchema;
+    for(i=0; i<n; i++){
+      SchemaEntry *pOurs;
+      SchemaEntry *pTheirs;
+      const char *zName = a[i].zName;
+      const char *zTable;
+      int oursChanged;
+      int theirsChanged;
+      if( !mergePass1IsAuxSchemaType(a[i].zType) || !zName ) continue;
+      if( side==1
+       && findSchemaEntry(c->aOursSchema, c->nOursSchema, zName) ){
+        continue;
+      }
+      pOurs = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+      pTheirs = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
+      if( !pOurs && !pTheirs ) continue;
+      if( pOurs && pTheirs && mergePass1AuxSchemaSame(pOurs, pTheirs) ){
+        continue;
+      }
+      oursChanged = schemaEntryChangedByName(
+          c->aAncSchema, c->nAncSchema, c->aOursSchema, c->nOursSchema, zName);
+      theirsChanged = schemaEntryChangedByName(
+          c->aAncSchema, c->nAncSchema, c->aTheirsSchema, c->nTheirsSchema,
+          zName);
+      if( !oursChanged || !theirsChanged ) continue;
+      zTable = pOurs && pOurs->zTblName ? pOurs->zTblName
+             : (pTheirs && pTheirs->zTblName ? pTheirs->zTblName : zName);
+      rc = mergePass1NoteSchemaConflict(c, zTable, zName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* Merge catalog root (iTable==1). Deferred so schema actions are known. */
 static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
   struct TableEntry *ancEntry;
   struct TableEntry *theirsEntry;
-  int hasSchemaActions;
   int bPreferOurMasterHere;
   int rc = SQLITE_OK;
 
@@ -879,8 +936,6 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
 
   ancEntry = doltliteFindTableByNumber(c->aAnc, c->nAnc, 1);
   theirsEntry = doltliteFindTableByNumber(c->aTheirs, c->nTheirs, 1);
-  hasSchemaActions = (c->ppSchemaActions && c->pnSchemaActions
-                      && *c->pnSchemaActions > 0);
   bPreferOurMasterHere = hasAnySchemaConflict(
       *c->ppConflictTables, *c->pnConflictTables)
       || (c->bPreferOurMaster
@@ -910,23 +965,26 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
         &c->aOurs[iTable1Idx].root, &ancEntry->root)!=0;
     int theirsChanged = prollyHashCompare(
         &theirsEntry->root, &ancEntry->root)!=0;
+    int hasSchemaActions = (c->ppSchemaActions && c->pnSchemaActions
+                            && *c->pnSchemaActions > 0);
     if( bPreferOurMasterHere ){
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iTable1Idx];
-      /* Original pass1 returned here without applying index patches. */
+      rc = mergePass1NoteAuxSchemaConflicts(c);
+      if( rc!=SQLITE_OK ) return rc;
       return SQLITE_DONE;
     }
-    if( oursChanged && theirsChanged && hasSchemaActions ){
+    if( oursChanged && theirsChanged
+     && (hasSchemaActions || c->bDisjointSchemaChanges) ){
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iTable1Idx];
-    }else if( oursChanged && theirsChanged && c->bDisjointSchemaChanges ){
-      c->aMerged[(*c->pnMerged)++] = c->aOurs[iTable1Idx];
+      rc = mergePass1NoteAuxSchemaConflicts(c);
     }else if( oursChanged && theirsChanged ){
       ProllyHash mergedTableRoot;
       int nConflicts = 0;
       DoltliteConflictRow *aConflictRows = 0;
       int theirSchemaChanged2 = prollyHashCompare(
           &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
-
       MergeRowPolicy policy;
+
       memset(&policy, 0, sizeof(policy));
       rc = mergePass1CollectRenameOverDrop(c, &policy);
       if( rc==SQLITE_OK ) rc = mergePass1CollectDualRename(c, &policy);
@@ -955,11 +1013,31 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
         c->aMerged[(*c->pnMerged)++] = merged;
       }
 
-      if( nConflicts>0 ){
-        *c->pTotalConflicts += nConflicts;
-        rc = appendConflictTable(c->ppConflictTables, c->pnConflictTables,
-                                 "(sqlite_master)", nConflicts, aConflictRows);
-        if( rc!=SQLITE_OK ) return rc;
+      freeConflictRows(aConflictRows, nConflicts);
+      rc = mergePass1NoteAuxSchemaConflicts(c);
+      if( rc!=SQLITE_OK ) return rc;
+      if( nConflicts>0
+       && !hasAnySchemaConflict(*c->ppConflictTables, *c->pnConflictTables) ){
+        int i;
+        rc = SQLITE_OK;
+        for(i=0; i<c->nAnc && rc==SQLITE_OK; i++){
+          const char *zName = c->aAnc[i].zName;
+          if( !zName || c->aAnc[i].iTable<=1 ) continue;
+          if( !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
+                                        c->aOursSchema, c->nOursSchema, zName) ){
+            continue;
+          }
+          if( !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
+                                        c->aTheirsSchema, c->nTheirsSchema,
+                                        zName) ){
+            continue;
+          }
+          if( hasSchemaConflictObject(*c->ppConflictTables,
+                                      *c->pnConflictTables, zName) ){
+            continue;
+          }
+          rc = mergePass1NoteSchemaConflict(c, zName, zName);
+        }
       }
     }else if( theirsChanged ){
       struct TableEntry merged = c->aOurs[iTable1Idx];
