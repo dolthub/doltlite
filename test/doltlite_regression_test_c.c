@@ -11664,6 +11664,57 @@ static void run_intpk_scan_delete_keeps_scan(void){
   removeDbFiles(dbpath);
 }
 
+static void run_count_flush_keeps_scan(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *scan = 0;
+  char dbpath[256];
+  char seen[128];
+  int rc;
+
+  printf("=== Count Flush Keeps Scan Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_count_flush_keeps_scan");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_count_flush", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_wr_for_count_flush", execSql(db,
+    "CREATE TABLE t(a TEXT PRIMARY KEY, b INT) WITHOUT ROWID;")==SQLITE_OK);
+  check("begin_wr_count_flush", execSql(db, "BEGIN;")==SQLITE_OK);
+  check("insert_wr_pending_for_count_flush",
+        execSql(db, "INSERT INTO t VALUES('a',1),('b',2),('c',3);")==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db,
+    "SELECT a || '|' || (SELECT count(*) FROM t) FROM t ORDER BY a;",
+    -1, &scan, 0);
+  check("prepare_wr_count_flush_scan", rc==SQLITE_OK);
+  if( scan ){
+    rc = collect_stepped_text(scan, seen, (int)sizeof(seen));
+    check("wr_count_flush_scan_done", rc==SQLITE_DONE);
+    check("wr_count_flush_sees_all", strcmp(seen, "a|3,b|3,c|3")==0);
+  }
+  sqlite3_finalize(scan);
+  scan = 0;
+  check("rollback_wr_count_flush", execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  check("setup_intpk_for_count_flush", execSql(db,
+    "CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  check("begin_intpk_count_flush", execSql(db, "BEGIN;")==SQLITE_OK);
+  check("insert_intpk_pending_for_count_flush",
+        execSql(db, "INSERT INTO u VALUES(1,'a'),(2,'b'),(3,'c');")==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db,
+    "SELECT v || '|' || (SELECT count(*) FROM u) FROM u ORDER BY id;",
+    -1, &scan, 0);
+  check("prepare_intpk_count_flush_scan", rc==SQLITE_OK);
+  if( scan ){
+    rc = collect_stepped_text(scan, seen, (int)sizeof(seen));
+    check("intpk_count_flush_scan_done", rc==SQLITE_DONE);
+    check("intpk_count_flush_sees_all", strcmp(seen, "a|3,b|3,c|3")==0);
+  }
+  sqlite3_finalize(scan);
+  check("rollback_intpk_count_flush", execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -11845,7 +11896,8 @@ static const RegressionCase aCases[] = {
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
-  { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan }
+  { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
+  { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan }
 };
 
 static int run_case_by_name(const char *zName){

@@ -305,19 +305,29 @@ static int flushPendingForCount(BtCursor *pCur){
     if( !prollyMutMapIsEmpty(pMap) ){
       ProllyMutMap *pFlushMap = pMap;
       int captured = 0;
-      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+      int rc = SQLITE_OK;
+      BtCursor *p;
+      for(p=pCur->pBt->pCursor; p; p=p->pNext){
+        if( p->pBtree==pCur->pBtree
+         && p!=pCur
+         && p->pgnoRoot==pCur->pgnoRoot
+         && (p->curFlags & BTCF_WriteFlag)==0
+         && (p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT) ){
+          rc = saveCursorPosition(p);
+          if( rc!=SQLITE_OK ) return rc;
+        }
+      }
+      rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
                                        (ProllyMutMap**)&pTE->pPending,
                                        &pFlushMap, &captured);
       if( rc!=SQLITE_OK ) return rc;
-      if( captured ){
-        refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
-                                   (ProllyMutMap*)pTE->pPending);
-      }
       rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
       if( rc!=SQLITE_OK ) return rc;
       if( pTE->pPending==pMap ){
         prollyMutMapClear(pMap);
       }
+      refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                                 (ProllyMutMap*)pTE->pPending);
     }
   }
   flushIfNeeded(pCur);
