@@ -689,6 +689,7 @@ static void test_concurrent_continue_adoption(void){
     int parentWin, childWin, parentLost, childLost;
 
     remove(path);
+    { char w[320]; snprintf(w, sizeof(w), "%s-wal", path); remove(w); }
     sqlite3_open(path, &db);
     execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
     execSql(db, "INSERT INTO t VALUES(1, 1)");

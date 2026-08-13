@@ -1788,10 +1788,11 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  if( pBtree->inTrans==TRANS_NONE ){
-    rc = sqlite3BtreeBeginTrans(pBtree, 0, 0);
-    if( rc!=SQLITE_OK ) return rc;
-  }
+  /* Straight to a write from no transaction at all. Opening a read first and
+  ** upgrading walks into the guard that refuses to promote a read whose loaded
+  ** working state is older than the current one -- and since the read txn stays
+  ** open, that refusal is permanent however often the caller retries. Beginning
+  ** the write directly reloads the working state instead. */
   if( pBtree->inTrans!=TRANS_WRITE ){
     rc = sqlite3BtreeBeginTrans(pBtree, 2, 0);
     if( rc!=SQLITE_OK ) return rc;
