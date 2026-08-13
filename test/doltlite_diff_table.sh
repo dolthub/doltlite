@@ -316,4 +316,57 @@ run_test "ancestry_gate_reachable_commit" \
 
 rm -f "$DBG"
 
+
+# A STORED generated column holds a field in every record but is absent from
+# the declared column list, so every column after it sat one slot further
+# along than its declared position: reading by that position returned the
+# generated column's value instead. VIRTUAL ones are computed on read and
+# occupy nothing, so they must not shift anything.
+DBG1=/tmp/test_dt_gencol_$$.db; rm -f "$DBG1"
+echo "CREATE TABLE g(a INTEGER PRIMARY KEY, b TEXT, gs TEXT GENERATED ALWAYS AS (b||'S') STORED, gv TEXT AS (b||'V') VIRTUAL, c TEXT);
+INSERT INTO g(a,b,c) VALUES(1,'x','c1');
+SELECT dolt_commit('-Am','base');
+UPDATE g SET c='c2';
+SELECT dolt_commit('-am','upd');" | $DOLTLITE "$DBG1" > /dev/null 2>&1
+
+run_test "gencol_diff_sides" \
+  "SELECT to_c || '/' || from_c FROM dolt_diff_g WHERE diff_type='modified';" \
+  "c2/c1" "$DBG1"
+run_test "gencol_live_matches_diff" "SELECT c FROM g;" "c2" "$DBG1"
+run_test "gencol_history" \
+  "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_g ORDER BY commit_date);" \
+  "c2,c1" "$DBG1"
+run_test "gencol_at" "SELECT c FROM dolt_at_g WHERE commit_ref='HEAD~1';" "c1" "$DBG1"
+
+# The clustered layout puts key columns first and the rest in declared
+# order, generated ones included, so it needs the same accounting.
+DBG2=/tmp/test_dt_gencol_wr_$$.db; rm -f "$DBG2"
+echo "CREATE TABLE w(k TEXT, b TEXT, gs TEXT GENERATED ALWAYS AS (b||'S') STORED, c TEXT, PRIMARY KEY(k)) WITHOUT ROWID;
+INSERT INTO w(k,b,c) VALUES('k1','x','c1');
+SELECT dolt_commit('-Am','base');
+UPDATE w SET c='c2';
+SELECT dolt_commit('-am','upd');" | $DOLTLITE "$DBG2" > /dev/null 2>&1
+
+run_test "gencol_clustered_diff_sides" \
+  "SELECT to_c || '/' || from_c FROM dolt_diff_w WHERE diff_type='modified';" \
+  "c2/c1" "$DBG2"
+run_test "gencol_clustered_history" \
+  "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_w ORDER BY commit_date);" \
+  "c2,c1" "$DBG2"
+
+# A key column that is not the first declared column, with a generated
+# column between it and the rest.
+DBG3=/tmp/test_dt_gencol_nlpk_$$.db; rm -f "$DBG3"
+echo "CREATE TABLE z(a TEXT, k TEXT PRIMARY KEY, gs TEXT GENERATED ALWAYS AS (a||'S') STORED, c TEXT) WITHOUT ROWID;
+INSERT INTO z(a,k,c) VALUES('av','k1','c1');
+SELECT dolt_commit('-Am','base');
+UPDATE z SET c='c2';
+SELECT dolt_commit('-am','upd');" | $DOLTLITE "$DBG3" > /dev/null 2>&1
+
+run_test "gencol_nonleading_pk_diff" \
+  "SELECT to_a || '/' || to_c FROM dolt_diff_z WHERE diff_type='modified';" \
+  "av/c2" "$DBG3"
+
+rm -f "$DBG1" "$DBG2" "$DBG3"
+
 dltest_finish

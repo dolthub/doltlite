@@ -255,11 +255,22 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   int nPkCols = 0;
   int iCandidateAlias = -1;
   int *aPk = 0;
+  int *aRecPos = 0;
+  int *aStoredPk = 0;
+  int *aStoredDecl = 0;
+  int nStored = 0;
+  int nRecPos = 0;
   int i, iNonPk;
 
   memset(ci, 0, sizeof(*ci));
   ci->iPkCol = -1;
-  zSql = sqlite3_mprintf("PRAGMA main.table_info(\"%w\")", zTable);
+  /* table_xinfo also lists generated columns. They matter even though the
+  ** vtabs do not expose them: a STORED one occupies a field in every stored
+  ** record, so the columns after it sit one slot further along than their
+  ** declared position suggests, and reading by declared position returns a
+  ** neighbour's value. A VIRTUAL one is never stored and occupies nothing.
+  ** hidden: 0 ordinary, 2 virtual generated, 3 stored generated. */
+  zSql = sqlite3_mprintf("PRAGMA main.table_xinfo(\"%w\")", zTable);
   if( !zSql ) return SQLITE_NOMEM;
 
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
@@ -281,7 +292,14 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
 
   if( nCol>0 ){
     aPk = sqlite3_malloc(nCol * (int)sizeof(int));
-    if( !aPk ){
+    aRecPos = sqlite3_malloc(nCol * (int)sizeof(int));
+    aStoredPk = sqlite3_malloc(nCol * (int)sizeof(int));
+    aStoredDecl = sqlite3_malloc(nCol * (int)sizeof(int));
+    if( !aPk || !aRecPos || !aStoredPk || !aStoredDecl ){
+      sqlite3_free(aPk);
+      sqlite3_free(aRecPos);
+      sqlite3_free(aStoredPk);
+      sqlite3_free(aStoredDecl);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
@@ -292,6 +310,20 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     int pk = sqlite3_column_int(pStmt, 5);
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
+    int hidden = sqlite3_column_int(pStmt, 6);
+
+    if( hidden==2 ){
+      /* Virtual: computed on read, absent from the record entirely. */
+      continue;
+    }
+    if( hidden==3 ){
+      /* Stored: holds a field every later column sits behind. */
+      aStoredPk[nStored] = pk;
+      aStoredDecl[nStored] = -1;
+      nStored++;
+      nRecPos++;
+      continue;
+    }
 
     if( pk>0 ) nPkCols++;
     if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
@@ -299,9 +331,16 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     }
 
     aPk[ci->nCol] = pk;
+    aRecPos[ci->nCol] = nRecPos++;
+    aStoredPk[nStored] = pk;
+    aStoredDecl[nStored] = ci->nCol;
+    nStored++;
     ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
     if( !ci->azName[ci->nCol] ){
       sqlite3_free(aPk);
+      sqlite3_free(aRecPos);
+      sqlite3_free(aStoredPk);
+      sqlite3_free(aStoredDecl);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
@@ -310,6 +349,9 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   }
   if( rc!=SQLITE_DONE ){
     sqlite3_free(aPk);
+    sqlite3_free(aRecPos);
+    sqlite3_free(aStoredPk);
+    sqlite3_free(aStoredDecl);
     doltliteFreeColInfo(ci);
     sqlite3_finalize(pStmt);
     return rc;
@@ -357,19 +399,32 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
       return SQLITE_NOMEM;
     }
     if( ci->iPkCol>=0 || nPkCols==0 ){
-      for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = i;
+      /* Declared order, but over record slots: a stored generated column
+      ** consumes one without being declared. */
+      for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = aRecPos[i];
     }else{
+      /* Clustered layout: key columns in key order, then every other
+      ** stored column in declared order -- generated ones included, which
+      ** is why the walk is over stored columns rather than declared ones. */
+      int iSlot;
       for(i=0; i<ci->nCol; i++){
         if( aPk[i]>0 ) ci->aColToRec[i] = aPk[i] - 1;
       }
       iNonPk = nPkCols;
-      for(i=0; i<ci->nCol; i++){
-        if( aPk[i]==0 ) ci->aColToRec[i] = iNonPk++;
+      for(iSlot=0; iSlot<nStored; iSlot++){
+        if( aStoredPk[iSlot]>0 ) continue;
+        if( aStoredDecl[iSlot]>=0 ){
+          ci->aColToRec[aStoredDecl[iSlot]] = iNonPk;
+        }
+        iNonPk++;
       }
     }
   }
 
   sqlite3_free(aPk);
+  sqlite3_free(aRecPos);
+  sqlite3_free(aStoredPk);
+  sqlite3_free(aStoredDecl);
   sqlite3_finalize(pStmt);
   return SQLITE_OK;
 }
