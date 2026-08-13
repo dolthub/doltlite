@@ -212,13 +212,7 @@ jobs:
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
 
     - name: Install Dolt
-      run: |
-        dolt_archive="$RUNNER_TEMP/dolt-linux-amd64.tar.gz"
-        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-          -o "$dolt_archive" \
-          https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz
-        sudo tar -xzf "$dolt_archive" -C /usr/local --strip-components=1
-        dolt version
+      run: bash .github/scripts/install-dolt-oracle.sh
 
     - name: Check oracle bucket manifests
       run: bash test/check_oracle_buckets.sh
