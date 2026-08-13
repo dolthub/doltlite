@@ -104,9 +104,10 @@ SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "detached_head_branch_intact" "SELECT count(*) FROM t;" "1" "$DB"
 
-# Revision opens take the SQL as an argument rather than on stdin: on Windows
-# a hash revision handed to the shared helper fails to open at all, while the
-# same path opens fine this way (doltlite_open_branch.sh relies on it).
+# The revision cases below name the commit with @ rather than /, because MSYS
+# resolves a slash-qualified hash as a filesystem path before doltlite ever
+# sees the revision. The SQL goes in as an argument to match the form
+# doltlite_open_branch.sh uses for the same opens.
 run_rev_test() {
   local name="$1" sql="$2" expected="$3" db="$4"
   local result
