@@ -1244,6 +1244,7 @@ int doltliteBranchWorkingSetIsRebasing(sqlite3 *db, const char *zBranch,
                                        int *pActive);
 int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
+int doltliteCheckoutPersistedRebase(sqlite3 *db, const char *zBranch);
 int doltliteCheckoutBranchForRebaseWithOldCatalog(
   sqlite3 *db,
   const char *zBranch,

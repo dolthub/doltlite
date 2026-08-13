@@ -217,6 +217,8 @@ struct CheckoutMutationCtx {
   const char *zSavedRebaseOrigBranch;
   const char *zSavedRebaseReturnBranch;
   u8 savedWasDetached;
+  u8 requireActiveRebase;
+  u8 targetRebaseInactive;
   int haveOldState;
   /* Top-level branch connection checkout must persist even though SQLite has
   ** a savepoint frame; ordinary nested savepoint checkout remains rollbackable. */
@@ -330,6 +332,14 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
 
   rc = doltliteLoadWorkingSet(db, p->zTargetBranch);
   if( rc!=SQLITE_OK ) return rc;
+  if( p->requireActiveRebase ){
+    u8 isRebasing = 0;
+    doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+    if( !isRebasing ){
+      p->targetRebaseInactive = 1;
+      return SQLITE_NOTFOUND;
+    }
+  }
 
   {
     ProllyHash staged;
@@ -485,7 +495,8 @@ void doltConnectBranchFunc(
 static int checkoutBranchForRebase(
   sqlite3 *db,
   const char *zBranch,
-  const ProllyHash *pKnownOldCatHash
+  const ProllyHash *pKnownOldCatHash,
+  int requireActiveRebase
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   CheckoutMutationCtx m;
@@ -514,13 +525,14 @@ static int checkoutBranchForRebase(
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
   m.bPersistUnderSavepoint = 1;
+  m.requireActiveRebase = requireActiveRebase;
   checkoutSaveSession(db, &m);
 
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
   if( rc!=SQLITE_OK ){
     int restoreRc = checkoutRestoreSession(db, &m);
     if( restoreRc!=SQLITE_OK ) rc = restoreRc;
-    if( !m.savedWasDetached ){
+    if( !m.savedWasDetached && !m.targetRebaseInactive ){
       int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
       if( durableRc!=SQLITE_OK ) rc = durableRc;
     }
@@ -530,7 +542,11 @@ static int checkoutBranchForRebase(
 }
 
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
-  return checkoutBranchForRebase(db, zBranch, 0);
+  return checkoutBranchForRebase(db, zBranch, 0, 0);
+}
+
+int doltliteCheckoutPersistedRebase(sqlite3 *db, const char *zBranch){
+  return checkoutBranchForRebase(db, zBranch, 0, 1);
 }
 
 int doltliteCheckoutBranchForRebaseWithOldCatalog(
@@ -539,7 +555,7 @@ int doltliteCheckoutBranchForRebaseWithOldCatalog(
   const ProllyHash *pOldCatHash
 ){
   if( !pOldCatHash ) return SQLITE_MISUSE;
-  return checkoutBranchForRebase(db, zBranch, pOldCatHash);
+  return checkoutBranchForRebase(db, zBranch, pOldCatHash, 0);
 }
 
 /* A restored table's indexes must follow it: named indexes present only in

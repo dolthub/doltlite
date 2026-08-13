@@ -104,6 +104,18 @@ static int readSignal(int fd){
   return n==1;
 }
 
+static int writeText(int fd, const char *z){
+  size_t n = strlen(z) + 1;
+  size_t off = 0;
+  while( off<n ){
+    ssize_t wrote = write(fd, z+off, n-off);
+    if( wrote<0 && errno==EINTR ) continue;
+    if( wrote<=0 ) return 0;
+    off += (size_t)wrote;
+  }
+  return 1;
+}
+
 /* Commit conflict means a peer advanced main first; reopen and re-merge. Uses
 ** a short busy_timeout with one attempt per round so contention fails fast and
 ** the round loop is the only retry path, bounding total time. */
@@ -659,6 +671,121 @@ static void test_concurrent_continue_abort(void){
   remove(path);
 }
 
+static void test_concurrent_continue_adoption(void){
+  const char *path = "/tmp/test_rebase_continue_adoption_race.db";
+  int trial, bad = 0;
+
+  printf("--- Test 6: concurrent --continue after default reopen ---\n");
+
+  for(trial=0; trial<12; trial++){
+    pid_t child;
+    int status;
+    int pipefd[2];
+    int readyfd[2];
+    int gofd[2];
+    char parentOut[256], childOut[256];
+    char branchPath[320];
+    sqlite3 *db = 0;
+    int parentWin, childWin, parentLost, childLost;
+
+    remove(path);
+    sqlite3_open(path, &db);
+    execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+    execSql(db, "INSERT INTO t VALUES(1, 1)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','base')");
+    queryScalarText(db, "SELECT dolt_checkout('-b','feat')");
+    execSql(db, "INSERT INTO t VALUES(2, 2)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','f1')");
+    execSql(db, "INSERT INTO t VALUES(3, 3)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','f2')");
+    queryScalarText(db, "SELECT dolt_checkout('main')");
+    execSql(db, "INSERT INTO t VALUES(10, 10)");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','main')");
+    sqlite3_close(db);
+
+    snprintf(branchPath, sizeof(branchPath), "%s/feat", path);
+    sqlite3_open(branchPath, &db);
+    queryScalarText(db, "SELECT dolt_rebase('-i','main')");
+    sqlite3_close(db);
+
+    parentOut[0] = childOut[0] = 0;
+    if( pipe(pipefd)!=0 || pipe(readyfd)!=0 || pipe(gofd)!=0 ){
+      bad++;
+      continue;
+    }
+    child = fork();
+    if( child==0 ){
+      sqlite3 *cdb = 0;
+      const char *r;
+      close(pipefd[0]);
+      close(readyfd[0]);
+      close(gofd[1]);
+      sqlite3_open(path, &cdb);
+      if( !writeSignal(readyfd[1]) || !readSignal(gofd[0]) ){
+        sqlite3_close(cdb);
+        _exit(1);
+      }
+      r = queryScalarText(cdb, "SELECT dolt_rebase('--continue')");
+      if( !writeText(pipefd[1], r) ){
+        sqlite3_close(cdb);
+        _exit(1);
+      }
+      sqlite3_close(cdb);
+      close(pipefd[1]);
+      close(readyfd[1]);
+      close(gofd[0]);
+      _exit(0);
+    }
+    close(pipefd[1]);
+    close(readyfd[1]);
+    close(gofd[0]);
+    sqlite3_open(path, &db);
+    if( !readSignal(readyfd[0]) || !writeSignal(gofd[1]) ){
+      snprintf(parentOut, sizeof(parentOut), "SYNC_ERR");
+    }else{
+      snprintf(parentOut, sizeof(parentOut), "%s",
+               queryScalarText(db, "SELECT dolt_rebase('--continue')"));
+    }
+    sqlite3_close(db);
+    close(readyfd[0]);
+    close(gofd[1]);
+    {
+      ssize_t n = read(pipefd[0], childOut, sizeof(childOut)-1);
+      if( n<0 ) n = 0;
+      childOut[n] = 0;
+      close(pipefd[0]);
+    }
+    waitpid(child, &status, 0);
+
+    parentWin = strstr(parentOut, "Successfully")!=0;
+    childWin = strstr(childOut, "Successfully")!=0;
+    parentLost = strstr(parentOut, "no rebase in progress")!=0;
+    childLost = strstr(childOut, "no rebase in progress")!=0;
+    if( !(parentWin ^ childWin)
+     || !((parentWin && childLost) || (childWin && parentLost)) ){
+      bad++;
+      fprintf(stderr, "FAIL trial %d parent=[%s] child=[%s]\n",
+              trial, parentOut, childOut);
+    }
+
+    sqlite3_open(path, &db);
+    if( strcmp(queryScalarText(db, "SELECT active_branch()"), "main")!=0
+     || countRows(db, "SELECT count(*) FROM t WHERE id IN (1,10)")!=2 ){
+      bad++;
+    }
+    sqlite3_close(db);
+    sqlite3_open(branchPath, &db);
+    if( countRows(db, "SELECT count(*) FROM t WHERE id IN (1,2,3,10)")!=4
+     || countRows(db, "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'")!=0 ){
+      bad++;
+    }
+    sqlite3_close(db);
+  }
+
+  check("concurrent_continue_adoption_exactly_one_winner", bad==0);
+  remove(path);
+}
+
 int main(void){
   setvbuf(stdout, 0, _IOLBF, 0);
   printf("=== Multi-Process Merge & Rebase Concurrency Tests ===\n\n");
@@ -668,6 +795,7 @@ int main(void){
   test_rebase_racing_gc();
   test_rebase_racing_checkout();
   test_concurrent_continue_abort();
+  test_concurrent_continue_adoption();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
