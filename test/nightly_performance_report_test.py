@@ -81,8 +81,10 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         autocommit = nightly_report.Result(
             "ac_writes", "insert_ac", 100, 600
         )
-        self.assertEqual(nightly_report.individual_limit(ordinary), 2.4)
+        self.assertEqual(nightly_report.individual_limit(ordinary), 2.3)
         self.assertEqual(nightly_report.individual_limit(autocommit), 6.0)
+        self.assertEqual(nightly_report.average_limit("mem_reads"), 1.9)
+        self.assertEqual(nightly_report.average_limit("ac_writes"), 5.0)
 
         repository = pathlib.Path(__file__).parent.parent
         for script in (
@@ -104,6 +106,8 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             repository / ".github" / "workflows" /
             "nightly-performance.yml"
         ).read_text(encoding="utf-8")
+        self.assertIn("BENCH_MAX_MULTIPLIER: 2.3", workflow)
+        self.assertIn("BENCH_AVG_MAX_MULTIPLIER: 1.9", workflow)
         self.assertIn("BENCH_AC_WRITE_MAX_MULTIPLIER: 6", workflow)
 
     def test_generates_complete_pass_report(self):

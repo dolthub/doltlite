@@ -1129,6 +1129,45 @@ static int mutmapHasOnlyInserts(ProllyMutMap *pMap){
   return 1;
 }
 
+static int batchReplacementProbe(ProllyMutator *pMut){
+  ProllyCursor cur;
+  int nEdits = prollyMutMapCount(pMut->pEdits);
+  int nProbe = nEdits < 16 ? nEdits : 16;
+  int i;
+  int rc = SQLITE_OK;
+
+  prollyCursorInit(&cur, pMut->pStore, pMut->pCache, &pMut->oldRoot,
+                   pMut->flags);
+  for(i=0; i<nProbe; i++){
+    ProllyMutMapEntry *pEdit;
+    int idx = (int)(((i64)i * nEdits) / nProbe);
+    int res = 0;
+    rc = prollyMutMapEntryAt(pMut->pEdits, idx, &pEdit);
+    if( rc!=SQLITE_OK ) break;
+    if( pMut->flags & PROLLY_NODE_INTKEY ){
+      rc = prollyCursorSeekInt(&cur, prollyMutMapEntryIntKey(pEdit), &res);
+    }else{
+      rc = prollyCursorSeekBlob(&cur, pEdit->pKey, pEdit->nKey, &res);
+    }
+    if( rc!=SQLITE_OK || res!=0 || !prollyCursorIsValid(&cur) ){
+      if( rc==SQLITE_OK ) rc = SQLITE_NOTFOUND;
+      break;
+    }
+    {
+      const u8 *pOldVal;
+      int nOldVal;
+      prollyCursorValue(&cur, &pOldVal, &nOldVal);
+      (void)pOldVal;
+      if( pEdit->nZeroTail || pEdit->nVal!=nOldVal ){
+        rc = SQLITE_NOTFOUND;
+        break;
+      }
+    }
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
 static int tryReplaceBatchLeafDirect(
   ProllyMutator *pMut,
   const ProllyNode *pLeaf,
@@ -1457,6 +1496,9 @@ static int tryReplaceBatchNoRechunk(ProllyMutator *pMut){
   if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
   if( prollyMutMapCount(pMut->pEdits)<=1 ) return SQLITE_NOTFOUND;
   if( !mutmapHasOnlyInserts(pMut->pEdits) ) return SQLITE_NOTFOUND;
+
+  rc = batchReplacementProbe(pMut);
+  if( rc!=SQLITE_OK ) return rc;
 
   pRootEntry = pMut->pCache ? prollyCacheGet(pMut->pCache, &pMut->oldRoot) : 0;
   if( pRootEntry ){

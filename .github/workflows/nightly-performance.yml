@@ -118,6 +118,8 @@ jobs:
       env:
         BENCH_RUNS: ${{ github.event.inputs.runs || '55' }}
         BENCH_AC_WRITE_RUNS: ${{ github.event.inputs.runs || '55' }}
+        BENCH_MAX_MULTIPLIER: 2.3
+        BENCH_AVG_MAX_MULTIPLIER: 1.9
         BENCH_AC_WRITE_MAX_MULTIPLIER: 6
       run: |
         results="$RUNNER_TEMP/nightly-results"
