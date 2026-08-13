@@ -562,4 +562,44 @@ run_test "rv_violation_state" \
 
 rm -f "$DB"
 
+# Cherry-pick / rebase must not treat a commit message starting with
+# "Revert" as dolt_revert. That skipped index patches and left a DROP INDEX
+# unapplied. Real dolt_revert still prefers ours and restores the index.
+DB=/tmp/test_cp_revert_msg_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX t_v ON t(v);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP INDEX t_v;
+SELECT dolt_commit('-A','-m','Revert leftover');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "cp_revert_msg_hash" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_revert_msg_drops_index" \
+  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v';" \
+  "0" "$DB"
+run_test "cp_revert_msg_keeps_rows" \
+  "SELECT count(*) FROM t;" "2" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rv_drop_index_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX t_v ON t(v);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+DROP INDEX t_v;
+SELECT dolt_commit('-A','-m','drop idx');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_drop_index_hash" \
+  "SELECT dolt_revert('HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_drop_index_restored" \
+  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v';" \
+  "1" "$DB"
+rm -f "$DB"
+
 dltest_finish
