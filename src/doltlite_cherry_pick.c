@@ -304,13 +304,16 @@ int applyMergedCatalogAndCommit(
       commitSplit ? &liveMergedCatHash : 0);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  rc = doltliteVcSealActiveSavepoints(db);
   if( graphLocked ){
     chunkStoreUnlock(cs);
     graphLocked = 0;
   }
+  rc = doltliteVcSealEnclosingTxn(db);
+  if( rc!=SQLITE_OK ){
+    doltliteTxnStateClear(&savedState);
+    return rc;
+  }
   doltliteTxnStateClear(&savedState);
-  if( rc!=SQLITE_OK ) return rc;
   doltliteHashToHex(&commitHash, hexBuf);
   return SQLITE_OK;
 
