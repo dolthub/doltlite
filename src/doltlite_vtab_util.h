@@ -67,7 +67,10 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
   c->pVal = 0; c->nVal = 0;
-  c->intKey = prollyCursorIntKey(&c->tblCur);
+  /* A blobkey node holds no integer key, and the column renderer ignores this
+  ** field without rootIntKey. History spanning a key-shape change visits both
+  ** shapes, so the read has to follow the node rather than the table. */
+  c->intKey = c->rootIntKey ? prollyCursorIntKey(&c->tblCur) : 0;
   prollyCursorValue(&c->tblCur, &pVal, &nVal);
   if( pVal && nVal>0 ){
     c->pVal = sqlite3_malloc(nVal);
