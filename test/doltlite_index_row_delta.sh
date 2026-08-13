@@ -145,6 +145,84 @@ else
 fi
 rm -f "$DB"
 
+# Partial unique indexes only constrain rows that match WHERE. Both
+# branches inserting v=-1 must merge cleanly; v=9 on both is a real
+# unique violation.
+DB=/tmp/test_idx_delta_partial_unique_neg_$$.db
+rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE UNIQUE INDEX tv ON t(v) WHERE v>0;
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3, -1);
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2, -1);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+EOF
+
+run_test_match "partial_unique_neg_merge" \
+  "SELECT length(dolt_hashof('HEAD'));" "^40$" "$DB"
+run_test "partial_unique_neg_rows" \
+  "SELECT group_concat(id||':'||v, ',') FROM (SELECT id,v FROM t ORDER BY id);" \
+  "1:1,2:-1,3:-1" "$DB"
+run_test "partial_unique_neg_no_cv" \
+  "SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations;" \
+  "0" "$DB"
+run_test_lastline "partial_unique_neg_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_idx_delta_partial_unique_pos_$$.db
+rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE UNIQUE INDEX tv ON t(v) WHERE v>0;
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3, 9);
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2, 9);
+SELECT dolt_commit('-Am','main');
+EOF
+out=$(echo "BEGIN; SELECT dolt_merge('feat'); SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations; ROLLBACK;" | $DOLTLITE "$DB" 2>/dev/null | tail -1)
+if [ "$out" = "2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: partial_unique_pos_still_violates\n  expected: 2\n  got:      $out"
+fi
+rm -f "$DB"
+
+DB=/tmp/test_idx_delta_partial_unique_wr_neg_$$.db
+rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
+CREATE UNIQUE INDEX tv ON t(v) WHERE v>0;
+INSERT INTO t VALUES('a', 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES('c', -1);
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES('b', -1);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+EOF
+
+run_test "partial_unique_wr_neg_rows" \
+  "SELECT group_concat(k||':'||v, ',') FROM (SELECT k,v FROM t ORDER BY k);" \
+  "a:1,b:-1,c:-1" "$DB"
+run_test "partial_unique_wr_neg_no_cv" \
+  "SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations;" \
+  "0" "$DB"
+run_test_lastline "partial_unique_wr_neg_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 # --- Workspace stage of NOCASE index row ------------------------------------
 DB=/tmp/test_idx_delta_ws_nocase_$$.db
 rm -f "$DB"
