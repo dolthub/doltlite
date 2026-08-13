@@ -3686,6 +3686,94 @@ CREATE INDEX idx_t_v ON t(v);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');
 "
+
+echo "--- oversized singleton leaf append ---"
+
+assert_table_hash_pair() {
+  local name="$1"
+  local sql_a="$2"
+  local sql_b="$3"
+  local db_a="$TMPROOT/${name}_a.db"
+  local db_b="$TMPROOT/${name}_b.db"
+  run_setup "$db_a" "${name}_a" "$sql_a"
+  run_setup "$db_b" "${name}_b" "$sql_b"
+  local ha hb
+  ha=$(table_hash "$db_a" "${name}_a_th")
+  hb=$(table_hash "$db_b" "${name}_b_th")
+  assert_equal "$name" "$ha" "$hb"
+}
+
+assert_table_hash_pair \
+  "small_int_two_commit_vs_one" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'a');
+INSERT INTO t VALUES(2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1), (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
+assert_table_hash_pair \
+  "zeroblob_8192_two_commit_vs_one" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1, zeroblob(8192));
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'fat');
+INSERT INTO t VALUES(2, x'78');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'small');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1, zeroblob(8192)), (2, x'78');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
+assert_table_hash_pair \
+  "zeroblob_8192_count_flush_vs_one" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1, zeroblob(8192));
+SELECT count(*) FROM t;
+INSERT INTO t VALUES(2, x'78');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1, zeroblob(8192)), (2, x'78');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
+assert_table_hash_pair \
+  "zeroblob_16384_two_commit_vs_one" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1, zeroblob(16384));
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'fat');
+INSERT INTO t VALUES(2, x'78');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'small');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1, zeroblob(16384)), (2, x'78');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "======================================="

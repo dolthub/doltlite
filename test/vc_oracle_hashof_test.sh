@@ -244,6 +244,65 @@ same "net_vs_delete_reinsert" "$H_NET" "$H_DR"
 
 echo ""
 
+echo "--- 3b. Oversized singleton leaf vs one-shot insert ---"
+
+SMALL_TWO="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'a');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b');
+"
+
+SMALL_ONE="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1), (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
+H_SMALL_TWO=$(run_hash "small_two" "$SMALL_TWO" "SELECT dolt_hashof_table('t');")
+H_SMALL_ONE=$(run_hash "small_one" "$SMALL_ONE" "SELECT dolt_hashof_table('t');")
+same "small_int_two_commit_vs_one" "$H_SMALL_ONE" "$H_SMALL_TWO"
+
+FAT_TWO="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t
+WITH RECURSIVE s(n, x) AS (
+  SELECT 1, 'x'
+  UNION ALL
+  SELECT n+1, x||x FROM s WHERE n<14
+)
+SELECT 1, x FROM s WHERE n=14;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'fat');
+INSERT INTO t VALUES (2, 'y');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'small');
+"
+
+FAT_ONE="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t
+WITH RECURSIVE s(n, x) AS (
+  SELECT 1, 'x'
+  UNION ALL
+  SELECT n+1, x||x FROM s WHERE n<14
+)
+SELECT 1, x FROM s WHERE n=14;
+INSERT INTO t VALUES (2, 'y');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'both');
+"
+
+H_FAT_TWO=$(run_hash "fat_two" "$FAT_TWO" "SELECT dolt_hashof_table('t');")
+H_FAT_ONE=$(run_hash "fat_one" "$FAT_ONE" "SELECT dolt_hashof_table('t');")
+same "fat_text_8192_two_commit_vs_one" "$H_FAT_ONE" "$H_FAT_TWO"
+
+echo ""
+
 echo "--- 4. Cross-branch state invariance ---"
 
 BRANCH_CONVERGE="
