@@ -34,6 +34,10 @@ int mergeCatalogPass2(
           aTheirsSchema, nTheirsSchema, aTheirs[i].iTable);
       if( pTheirSe && pTheirSe->zName && pTheirSe->zType
        && strcmp(pTheirSe->zType, "index")==0 ){
+        SchemaEntry *pAncSe = findSchemaEntry(
+            aAncSchema, nAncSchema, pTheirSe->zName);
+        SchemaEntry *pOurSe = findSchemaEntry(
+            aOursSchema, nOursSchema, pTheirSe->zName);
         struct TableEntry *pTheirTable = doltliteFindTableByName(
             aTheirs, nTheirs, pTheirSe->zTblName);
         if( hasSchemaConflictObject(aConflictTables, nConflictTables,
@@ -46,6 +50,11 @@ int mergeCatalogPass2(
          || !doltliteFindTableByName(aMerged, *pnMerged,
                                      pTheirSe->zTblName)
          ){
+          continue;
+        }
+        if( mergeIndexFollowsDualRename(
+              aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+              aTheirsSchema, nTheirsSchema, pAncSe, pOurSe, pTheirSe) ){
           continue;
         }
         oursEntry = findCatalogEntryBySchemaObject(

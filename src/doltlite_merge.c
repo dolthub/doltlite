@@ -182,6 +182,80 @@ static int mergeSchemaEntriesSame(
   return !pA->zSql || strcmp(pA->zSql, pB->zSql)==0;
 }
 
+static int mergeIndexColListSame(const char *zA, const char *zB){
+  if( !zA || !zB ) return zA==zB;
+  while( *zA && *zB ){
+    while( *zA=='"' || *zA=='\'' || *zA=='`' || *zA=='[' || *zA==']'
+        || *zA==' ' || *zA=='\t' ){
+      zA++;
+    }
+    while( *zB=='"' || *zB=='\'' || *zB=='`' || *zB=='[' || *zB==']'
+        || *zB==' ' || *zB=='\t' ){
+      zB++;
+    }
+    if( sqlite3UpperToLower[(u8)*zA]!=sqlite3UpperToLower[(u8)*zB] ){
+      return 0;
+    }
+    if( *zA==0 ) return 1;
+    zA++;
+    zB++;
+  }
+  while( *zA=='"' || *zA=='\'' || *zA=='`' || *zA=='[' || *zA==']'
+      || *zA==' ' || *zA=='\t' ){
+    zA++;
+  }
+  while( *zB=='"' || *zB=='\'' || *zB=='`' || *zB=='[' || *zB==']'
+      || *zB==' ' || *zB=='\t' ){
+    zB++;
+  }
+  return *zA==0 && *zB==0;
+}
+
+int mergeIndexFollowsDualRename(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const SchemaEntry *pAnc,
+  const SchemaEntry *pOurs,
+  const SchemaEntry *pTheirs
+){
+  const char *zAncBody;
+  const char *zOursBody;
+  const char *zTheirsBody;
+  SchemaEntry *pAncTable;
+  SchemaEntry *pOursTable;
+  SchemaEntry *pTheirsTable;
+  if( !pAnc || !pOurs || !pTheirs || !pAnc->zTblName
+   || !pOurs->zTblName || !pTheirs->zTblName ){
+    return 0;
+  }
+  if( sqlite3_stricmp(pAnc->zTblName, pOurs->zTblName)==0
+   || sqlite3_stricmp(pAnc->zTblName, pTheirs->zTblName)==0
+   || sqlite3_stricmp(pOurs->zTblName, pTheirs->zTblName)==0 ){
+    return 0;
+  }
+  pAncTable = findSchemaEntry(aAnc, nAnc, pAnc->zTblName);
+  pOursTable = findSchemaEntry(aOurs, nOurs, pOurs->zTblName);
+  pTheirsTable = findSchemaEntry(aTheirs, nTheirs, pTheirs->zTblName);
+  zAncBody = pAnc->zSql ? strrchr(pAnc->zSql, '(') : 0;
+  zOursBody = pOurs->zSql ? strrchr(pOurs->zSql, '(') : 0;
+  zTheirsBody = pTheirs->zSql ? strrchr(pTheirs->zSql, '(') : 0;
+  if( !pAncTable || !pAncTable->zType || strcmp(pAncTable->zType, "table")!=0
+   || !pOursTable || !pOursTable->zType || strcmp(pOursTable->zType, "table")!=0
+   || !pTheirsTable || !pTheirsTable->zType
+   || strcmp(pTheirsTable->zType, "table")!=0
+   || findSchemaEntry(aAnc, nAnc, pOurs->zTblName)
+   || findSchemaEntry(aAnc, nAnc, pTheirs->zTblName) ){
+    return 0;
+  }
+  if( zAncBody && zOursBody && zTheirsBody
+   && mergeIndexColListSame(zAncBody, zOursBody)
+   && mergeIndexColListSame(zAncBody, zTheirsBody) ){
+    return 1;
+  }
+  return zAncBody==0 && zOursBody==0 && zTheirsBody==0;
+}
+
 static int preDetectIndexSchemaConflicts(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -225,6 +299,11 @@ static int preDetectIndexSchemaConflicts(
       pTheirs = findSchemaEntry(aTheirs, nTheirs, a[i].zName);
       oursChanged = !mergeSchemaEntriesSame(pAnc, pOurs);
       theirsChanged = !mergeSchemaEntriesSame(pAnc, pTheirs);
+      if( mergeIndexFollowsDualRename(
+            aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+            pAnc, pOurs, pTheirs) ){
+        continue;
+      }
       if( pAnc && pAnc->zTblName && !pOurs
        && pTheirs && pTheirs->zTblName
        && sqlite3_stricmp(pAnc->zTblName, pTheirs->zTblName)!=0 ){
