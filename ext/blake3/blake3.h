@@ -72,6 +72,10 @@ BLAKE3_API void blake3_hasher_finalize(const blake3_hasher *self, uint8_t *out,
 BLAKE3_API void blake3_hasher_finalize_seek(const blake3_hasher *self, uint64_t seek,
                                             uint8_t *out, size_t out_len);
 BLAKE3_API void blake3_hasher_reset(blake3_hasher *self);
+/* DOLTLITE addition; see blake3.c. Equivalent to init/update/finalize over
+** the whole buffer, but takes the wide compression path. */
+BLAKE3_API void blake3_hash_oneshot(const void *input, size_t input_len,
+                                    uint8_t *out, size_t out_len);
 
 #ifdef __cplusplus
 }
