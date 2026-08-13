@@ -4,6 +4,23 @@
 
 #include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
+
+/* Stock bounds a single VFS read at 128KiB -- os_unix asserts it, and the
+** write side masks the length outright -- so whole-buffer reads slice the way
+** the commit and WAL-replay writers already do. */
+#define CS_IO_SLICE 65536
+int csReadSliced(ChunkStore *cs, void *pBuf, i64 nByte, i64 iOff){
+  u8 *p = (u8*)pBuf;
+  while( nByte > 0 ){
+    int n = nByte > CS_IO_SLICE ? CS_IO_SLICE : (int)nByte;
+    int rc = sqlite3OsRead(cs->file.pFile, p, n, iOff);
+    if( rc != SQLITE_OK ) return rc;
+    p += n;
+    iOff += n;
+    nByte -= n;
+  }
+  return SQLITE_OK;
+}
 #ifdef SQLITE_CRASH_TEST
 #endif
 
@@ -822,7 +839,7 @@ int chunkStoreGet(
       pBuf = (u8 *)sqlite3_malloc(sz + 4);
       if( pBuf == 0 ) return SQLITE_NOMEM;
 
-      rc = sqlite3OsRead(cs->file.pFile, pBuf, sz + 4, fileOff);
+      rc = csReadSliced(cs, pBuf, (i64)sz + 4, fileOff);
       if( rc != SQLITE_OK ){
         sqlite3_free(pBuf);
         return rc;
@@ -916,7 +933,7 @@ int chunkStoreGetSparse(
     nPhys = e->size - (int)zeroTail;
     pBuf = (u8*)sqlite3_malloc(nPhys + 4);
     if( !pBuf ) return SQLITE_NOMEM;
-    rc = sqlite3OsRead(cs->file.pFile, pBuf, nPhys + 4, e->offset);
+    rc = csReadSliced(cs, pBuf, (i64)nPhys + 4, e->offset);
     if( rc!=SQLITE_OK ){
       sqlite3_free(pBuf);
       return rc;

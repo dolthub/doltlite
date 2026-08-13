@@ -209,6 +209,8 @@ int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
 
 int chunkStoreClose(ChunkStore *cs);
 
+int csReadSliced(ChunkStore *cs, void *pBuf, i64 nByte, i64 iOff);
+
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);

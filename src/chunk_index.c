@@ -202,7 +202,7 @@ int csReadIndex(ChunkStore *cs){
     return SQLITE_NOMEM;
   }
 
-  rc = sqlite3OsRead(cs->file.pFile, aBuf, cs->index.nIndexSize, cs->index.iIndexOffset);
+  rc = csReadSliced(cs, aBuf, (i64)cs->index.nIndexSize, cs->index.iIndexOffset);
   if( rc != SQLITE_OK ){
     sqlite3_free(aBuf);
     sqlite3_free(cs->index.aIndex);
