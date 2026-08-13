@@ -134,6 +134,7 @@ static int mergePass1CollectIndexes(
         return SQLITE_NOMEM;
       }
       mi->iPKey = pTab->iPKey;
+      mi->pIdx = pIdx;
       nIdxInfo++;
     }
   }

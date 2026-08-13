@@ -31,6 +31,7 @@ struct MergeIndexInfo {
   i16 *aiColumn;
   KeyInfo *pKeyInfo;
   int iPKey;          /* IPK column in the parent table schema, -1 if none */
+  Index *pIdx;
 };
 
 typedef struct ParsedColumn ParsedColumn;

@@ -1157,6 +1157,8 @@ void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
 void doltliteIpkWriteBE(u8 *p, i64 v, int n);
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
 int doltliteIndexMutMapRowDelta(
+  sqlite3 *db,
+  Index *pIdx,
   ProllyMutMap *pMap,
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
