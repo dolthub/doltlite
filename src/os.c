@@ -14,12 +14,6 @@
 ** architectures.
 */
 #include "sqliteInt.h"
-#if SQLITE_OS_WIN
-# include "os_win.h"
-#elif !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__)
-# include <fcntl.h>
-# include <unistd.h>
-#endif
 
 /*
 ** If we compile with the SQLITE_TEST macro set, then the following block
@@ -242,67 +236,17 @@ int sqlite3OsDelete(sqlite3_vfs *pVfs, const char *zPath, int dirSync){
   return pVfs->xDelete!=0 ? pVfs->xDelete(pVfs, zPath, dirSync) : SQLITE_OK;
 }
 
-int sqlite3OsReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest){
-#if SQLITE_OS_WIN
-  int nPath = pVfs->mxPathname + 1;
-  char *zTmpFull = 0;
-  char *zDestFull = 0;
-  WCHAR *zTmpW = 0;
-  WCHAR *zDestW = 0;
-  int nTmp, nDest;
-  int rc;
-
-  zTmpFull = sqlite3_malloc64((sqlite3_uint64)nPath);
-  zDestFull = sqlite3_malloc64((sqlite3_uint64)nPath);
-  if( zTmpFull==0 || zDestFull==0 ){
-    sqlite3_free(zTmpFull);
-    sqlite3_free(zDestFull);
-    return SQLITE_NOMEM;
-  }
-  rc = sqlite3OsFullPathname(pVfs, zTmp, nPath, zTmpFull);
-  if( rc==SQLITE_OK ){
-    rc = sqlite3OsFullPathname(pVfs, zDest, nPath, zDestFull);
-  }
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zTmpFull);
-    sqlite3_free(zDestFull);
-    return rc;
-  }
-
-  nTmp = MultiByteToWideChar(CP_UTF8, 0, zTmpFull, -1, 0, 0);
-  nDest = MultiByteToWideChar(CP_UTF8, 0, zDestFull, -1, 0, 0);
-  if( nTmp==0 || nDest==0 ){
-    sqlite3_free(zTmpFull);
-    sqlite3_free(zDestFull);
-    return SQLITE_IOERR;
-  }
-
-  zTmpW = sqlite3_malloc64((sqlite3_uint64)nTmp * sizeof(WCHAR));
-  zDestW = sqlite3_malloc64((sqlite3_uint64)nDest * sizeof(WCHAR));
-  if( zTmpW==0 || zDestW==0 ){
-    sqlite3_free(zTmpFull);
-    sqlite3_free(zDestFull);
-    sqlite3_free(zTmpW);
-    sqlite3_free(zDestW);
-    return SQLITE_NOMEM;
-  }
-
-  if( MultiByteToWideChar(CP_UTF8, 0, zTmpFull, -1, zTmpW, nTmp)==0
-   || MultiByteToWideChar(CP_UTF8, 0, zDestFull, -1, zDestW, nDest)==0
-  ){
-    rc = SQLITE_IOERR;
-  }else if( !MoveFileExW(zTmpW, zDestW,
-                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ){
-    rc = SQLITE_IOERR;
-  }else{
-    rc = SQLITE_OK;
-  }
-  sqlite3_free(zTmpFull);
-  sqlite3_free(zDestFull);
-  sqlite3_free(zTmpW);
-  sqlite3_free(zDestW);
-  return rc;
-#elif defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsReplaceFile(
+  sqlite3_vfs *pVfs,
+  const char *zTmp,
+  const char *zDest,
+  int *pRetainTmp
+){
+#if SQLITE_OS_WIN \
+ || (SQLITE_OS_UNIX && !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__))
+  return sqlite3OsReplaceFileNative(pVfs, zTmp, zDest, pRetainTmp);
+#else
   sqlite3_file *pIn = 0;
   sqlite3_file *pOut = 0;
   u8 *aBuf = 0;
@@ -310,16 +254,16 @@ int sqlite3OsReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest)
   i64 iOff = 0;
   int rc;
 
+  *pRetainTmp = 0;
   rc = sqlite3OsOpenMalloc(pVfs, zTmp, &pIn,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) goto wasm_replace_done;
   rc = sqlite3OsFileSize(pIn, &nByte);
   if( rc!=SQLITE_OK ) goto wasm_replace_done;
 
-  (void)sqlite3OsDelete(pVfs, zDest, 0);
   rc = sqlite3OsOpenMalloc(pVfs, zDest, &pOut,
                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-                         | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_MAIN_DB, 0);
+                         | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) goto wasm_replace_done;
 
   aBuf = sqlite3_malloc(65536);
@@ -349,56 +293,12 @@ wasm_replace_done:
   if( rc==SQLITE_OK ){
     (void)sqlite3OsDelete(pVfs, zTmp, 0);
   }else{
-    (void)sqlite3OsDelete(pVfs, zDest, 0);
+    *pRetainTmp = 1;
   }
-  return rc;
-#else
-  int rc = SQLITE_OK;
-  char *zDestFull = 0;
-  int nPath = pVfs->mxPathname + 1;
-
-  zDestFull = sqlite3_malloc64((sqlite3_uint64)nPath);
-  if( zDestFull==0 ) return SQLITE_NOMEM;
-  rc = sqlite3OsFullPathname(pVfs, zDest, nPath, zDestFull);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zDestFull);
-    return rc;
-  }
-
-  if( rename(zTmp, zDest)!=0 ){
-    rc = SQLITE_IOERR;
-  }else{
-    char *zDir = sqlite3_mprintf("%s", zDestFull);
-    if( zDir==0 ){
-      rc = SQLITE_NOMEM;
-    }else{
-      int k = (int)strlen(zDir);
-      int dfd;
-      while( k>0 && zDir[k-1]!='/' ) k--;
-      if( k>0 ){
-        zDir[k-1] = 0;
-      }else{
-        zDir[0] = '.';
-        zDir[1] = 0;
-      }
-      dfd = open(zDir, O_RDONLY);
-      if( dfd>=0 ){
-        if( fsync(dfd)!=0 ){
-          rc = SQLITE_IOERR_DIR_FSYNC;
-        }
-        if( close(dfd)!=0 && rc==SQLITE_OK ){
-          rc = SQLITE_IOERR_DIR_FSYNC;
-        }
-      }else{
-        rc = SQLITE_IOERR_DIR_FSYNC;
-      }
-      sqlite3_free(zDir);
-    }
-  }
-  sqlite3_free(zDestFull);
   return rc;
 #endif
 }
+#endif
 
 int sqlite3OsAccess(
   sqlite3_vfs *pVfs,

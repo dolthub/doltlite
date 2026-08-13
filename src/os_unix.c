@@ -8470,6 +8470,62 @@ static int proxyClose(sqlite3_file *id) {
 ** necessarily been initialized when this routine is called, and so they
 ** should not be used.
 */
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsReplaceFileNative(
+  sqlite3_vfs *pVfs,
+  const char *zTmp,
+  const char *zDest,
+  int *pRetainTmp
+){
+  int rc = SQLITE_OK;
+  char *zDestFull = 0;
+  int nPath = pVfs->mxPathname + 1;
+
+  *pRetainTmp = 1;
+  zDestFull = sqlite3_malloc64((sqlite3_uint64)nPath);
+  if( zDestFull==0 ) return SQLITE_NOMEM;
+  rc = sqlite3OsFullPathname(pVfs, zDest, nPath, zDestFull);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zDestFull);
+    return rc;
+  }
+
+  if( rename(zTmp, zDest)!=0 ){
+    rc = SQLITE_IOERR;
+  }else{
+    char *zDir = sqlite3_mprintf("%s", zDestFull);
+    *pRetainTmp = 0;
+    if( zDir==0 ){
+      rc = SQLITE_NOMEM;
+    }else{
+      int k = (int)strlen(zDir);
+      int dfd;
+      while( k>0 && zDir[k-1]!='/' ) k--;
+      if( k>0 ){
+        zDir[k-1] = 0;
+      }else{
+        zDir[0] = '.';
+        zDir[1] = 0;
+      }
+      dfd = open(zDir, O_RDONLY);
+      if( dfd>=0 ){
+        if( fsync(dfd)!=0 ){
+          rc = SQLITE_IOERR_DIR_FSYNC;
+        }
+        if( close(dfd)!=0 && rc==SQLITE_OK ){
+          rc = SQLITE_IOERR_DIR_FSYNC;
+        }
+      }else{
+        rc = SQLITE_IOERR_DIR_FSYNC;
+      }
+      sqlite3_free(zDir);
+    }
+  }
+  sqlite3_free(zDestFull);
+  return rc;
+}
+#endif
+
 int sqlite3_os_init(void){
   /*
   ** The following macro defines an initializer for an sqlite3_vfs object.

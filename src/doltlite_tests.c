@@ -368,6 +368,10 @@ static int testParseBool(const char *z, int *pValue){
 }
 
 static int testDecimalScale(sqlite3_stmt *pStmt){
+#ifdef SQLITE_OMIT_DECLTYPE
+  UNUSED_PARAMETER(pStmt);
+  return -1;
+#else
   const char *zType = sqlite3_column_decltype(pStmt, 0);
   const char *zComma;
   char *zEnd = 0;
@@ -379,6 +383,7 @@ static int testDecimalScale(sqlite3_stmt *pStmt){
   if( zEnd==zComma+1 || scale<0 || scale>30 ) return -1;
   while( sqlite3Isspace(*zEnd) ) zEnd++;
   return *zEnd==')' ? (int)scale : -1;
+#endif
 }
 
 static char *testCompareNull(const char *zComparator,

@@ -73,11 +73,17 @@ PROLLY_OBJS = $(DOLTLITE_AUTH_OBJS) \
               doltlite_http_remote.o doltlite_remotesrv.o
 
 DOLTLITE_PROLLY ?= 1
+DOLTLITE_VEC1 ?= 1
 DOLTLITE_VERSION ?= $(shell cat $(TOP)/.dolt_release_version 2>/dev/null || git describe --tags --always 2>/dev/null || echo "dev")
+LIBOBJS0 := $(filter-out vec1.o,$(LIBOBJS0))
 ifeq ($(DOLTLITE_PROLLY),1)
   # Replace btree.o/pager.o/wal.o/btmutex.o/backup.o with prolly engine
   LIBOBJS0 := $(filter-out btree.o pager.o wal.o btmutex.o backup.o,$(LIBOBJS0))
   LIBOBJS0 += $(PROLLY_OBJS)
+  ifeq ($(DOLTLITE_VEC1),1)
+    LIBOBJS0 += vec1.o
+    OPT_FEATURE_FLAGS += -DDOLTLITE_VEC1=1
+  endif
   # Also compile original btree/pager/wal with renamed symbols for ATTACH
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'

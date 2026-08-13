@@ -195,6 +195,7 @@
 #endif
 #define sqlite3PagerWrite orig_sqlite3PagerWrite
 
+#ifndef SQLITE_OMIT_WAL
 #define sqlite3WalBeginReadTransaction orig_sqlite3WalBeginReadTransaction
 #define sqlite3WalBeginWriteTransaction orig_sqlite3WalBeginWriteTransaction
 #define sqlite3WalCallback orig_sqlite3WalCallback
@@ -228,6 +229,7 @@
 #define sqlite3WalTrace orig_sqlite3WalTrace
 #define sqlite3WalUndo orig_sqlite3WalUndo
 #define sqlite3WalWriteLock orig_sqlite3WalWriteLock
+#endif
 
 #define sqlite3BackupRestart orig_sqlite3BackupRestart
 #define sqlite3BackupUpdate orig_sqlite3BackupUpdate

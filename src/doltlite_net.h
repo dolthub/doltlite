@@ -1,8 +1,9 @@
 #ifndef DOLTLITE_NET_H
 #define DOLTLITE_NET_H
 
-#include <errno.h> /* amalgamator: keep */
-#include <string.h> /* amalgamator: keep */
+#include <errno.h>
+#include <string.h>
+#include <time.h>
 
 /* Thin cross-platform socket shim shared by doltlite_tls.c and
  * doltlite_remotesrv.c. Socket handles are kept as int to match
@@ -10,9 +11,9 @@
 
 #ifdef _WIN32
 
-#include <winsock2.h> /* amalgamator: keep */
-#include <ws2tcpip.h> /* amalgamator: keep */
-#include <windows.h> /* amalgamator: keep */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 
 typedef WSAPOLLFD doltlite_pollfd;
 #define doltliteCloseSocket closesocket
@@ -45,15 +46,14 @@ static inline int doltliteNetInit(void) {
 
 #else
 
-#include <sys/socket.h> /* amalgamator: keep */
-#include <netinet/in.h> /* amalgamator: keep */
-#include <arpa/inet.h> /* amalgamator: keep */
-#include <netdb.h> /* amalgamator: keep */
-#include <fcntl.h> /* amalgamator: keep */
-#include <poll.h> /* amalgamator: keep */
-#include <sys/time.h> /* amalgamator: keep */
-#include <time.h> /* amalgamator: keep */
-#include <unistd.h> /* amalgamator: keep */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 typedef struct pollfd doltlite_pollfd;
 #define doltliteCloseSocket close

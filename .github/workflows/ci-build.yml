@@ -89,6 +89,7 @@ jobs:
         } 2>&1 | tee build.log
         DOLTLITE_CHECK_AMALGAMATION=0 \
           bash ../test/assert_doltlite_artifacts.sh .
+        bash ../test/amalgamation_vec1_option_test.sh .
         if grep -E "warning:" build.log; then
           echo "::error::compiler warnings in checked build"
           exit 1

@@ -20,6 +20,9 @@
 **    https://sqlite.org/vec1
 */
 
+#if !defined(SQLITE_CORE) \
+ || (defined(DOLTLITE_VEC1) && DOLTLITE_VEC1)
+
 /* doltlite: vendored from https://sqlite.org/vec1 trunk check-in
 ** [ecb12ac26e] (v0.7). Compiled into the core build, where the
 ** sqlite3ext.h indirection is neither needed nor usable. Local changes
@@ -11270,4 +11273,5 @@ int sqlite3Vec1Init(sqlite3 *db){
 
 #endif /* !defined(VEC1SIMD) || VEC1SIMD==SCALAR */
 
+#endif /* !SQLITE_CORE || DOLTLITE_VEC1 */
 

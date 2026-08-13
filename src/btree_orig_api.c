@@ -51,9 +51,11 @@ int origBtreeCommit(void *p){ return orig_sqlite3BtreeCommit(B(p)); }
 int origBtreeRollback(void *p, int t, int w){ return orig_sqlite3BtreeRollback(B(p),t,w); }
 int origBtreeBeginStmt(void *p, int i){ return orig_sqlite3BtreeBeginStmt(B(p),i); }
 int origBtreeSavepoint(void *p, int op, int i){ return orig_sqlite3BtreeSavepoint(B(p),op,i); }
+#ifndef SQLITE_OMIT_WAL
 int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt){
   return orig_sqlite3BtreeCheckpoint(B(p), eMode, pnLog, pnCkpt);
 }
+#endif
 int origBtreeTxnState(void *p){ return orig_sqlite3BtreeTxnState(B(p)); }
 int origBtreeCreateTable(void *p, Pgno *pi, int f){ return orig_sqlite3BtreeCreateTable(B(p),pi,f); }
 int origBtreeDropTable(void *p, int i, int *pm){ return orig_sqlite3BtreeDropTable(B(p),i,pm); }

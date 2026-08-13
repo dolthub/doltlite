@@ -103,6 +103,10 @@ To build stock SQLite instead (for comparison):
 make DOLTLITE_PROLLY=0 sqlite3
 ```
 
+Vec1 is built into native DoltLite by default. Use `make DOLTLITE_VEC1=0` to
+omit it. Compile the DoltLite amalgamation with `-DDOLTLITE_VEC1=1` to include
+vec1; otherwise it can be built and loaded as an extension.
+
 ### WebAssembly (`ext/wasm`)
 
 Vendored SQLite `ext/wasm`, defaulting to the DoltLite engine. Build generated
