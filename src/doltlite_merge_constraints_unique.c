@@ -85,6 +85,135 @@ static int uniqueIndexRecordHasNull(UnpackedRecord *pRecord, int nKeyCol){
   return 0;
 }
 
+static int uniqueIsIdent(char c){
+  return sqlite3Isalnum(c) || c=='_';
+}
+
+/* Trailing WHERE of a CREATE INDEX statement, or NULL. */
+static char *uniqueIndexWhereFromSql(const char *zSql){
+  const char *p = zSql;
+  int depth = 0;
+  int seenOn = 0;
+  int quote = 0;
+
+  if( !zSql ) return 0;
+  while( *p ){
+    if( quote ){
+      if( *p==quote ){
+        if( p[1]==quote ){ p += 2; continue; }
+        quote = 0;
+      }
+      p++;
+      continue;
+    }
+    if( *p=='\'' || *p=='"' || *p=='`' ){ quote = *p++; continue; }
+    if( *p=='[' ){ quote = ']'; p++; continue; }
+    if( *p=='(' ){ depth++; p++; continue; }
+    if( *p==')' ){
+      if( depth>0 ) depth--;
+      p++;
+      continue;
+    }
+    if( depth==0 && (p==zSql || !uniqueIsIdent(p[-1]))
+     && (p[0]=='O' || p[0]=='o') && (p[1]=='N' || p[1]=='n')
+     && !uniqueIsIdent(p[2]) ){
+      seenOn = 1;
+      p += 2;
+      continue;
+    }
+    if( depth==0 && seenOn
+     && sqlite3_strnicmp(p, "WHERE", 5)==0 && !uniqueIsIdent(p[5]) ){
+      p += 5;
+      while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
+      if( !*p ) return 0;
+      return sqlite3_mprintf("%s", p);
+    }
+    p++;
+  }
+  return 0;
+}
+
+static char *uniqueIndexWhereSql(sqlite3 *db, Index *pIdx){
+  sqlite3_stmt *pStmt = 0;
+  char *zWhere = 0;
+  int rc;
+
+  if( !pIdx || !pIdx->pPartIdxWhere || !pIdx->zName ) return 0;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT sql FROM main.sqlite_master WHERE type='index' AND name=?1",
+      -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return 0;
+  sqlite3_bind_text(pStmt, 1, pIdx->zName, -1, SQLITE_STATIC);
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    zWhere = uniqueIndexWhereFromSql((const char*)sqlite3_column_text(pStmt, 0));
+  }
+  sqlite3_finalize(pStmt);
+  return zWhere;
+}
+
+static int uniqueValueFromRecord(
+  const u8 *pRecord, int nRecord,
+  const DoltliteRecordInfo *pInfo, int iField,
+  DoltliteSerialValue *pValue
+);
+
+static int uniquePartialMatchesRecord(
+  sqlite3 *db,
+  Index *pIdx,
+  const char *zWhere,
+  const u8 *pRec, int nRec,
+  const DoltliteColInfo *pCols
+){
+  Table *pTab;
+  sqlite3_str *pSql;
+  char *zSql;
+  sqlite3_stmt *pStmt = 0;
+  DoltliteRecordInfo info;
+  int i, rc, match = 0;
+
+  if( !zWhere || !zWhere[0] ) return 1;
+  if( !pIdx || !pIdx->pTable || !pRec || nRec<=0 ) return 0;
+  pTab = pIdx->pTable;
+  doltliteParseRecord(pRec, nRec, &info);
+  pSql = sqlite3_str_new(0);
+  sqlite3_str_appendall(pSql, "SELECT 1 FROM (SELECT ");
+  for(i=0; i<pTab->nCol; i++){
+    if( i ) sqlite3_str_appendall(pSql, ", ");
+    sqlite3_str_appendf(pSql, "?%d AS \"%w\"", i+1, pTab->aCol[i].zCnName);
+  }
+  sqlite3_str_appendf(pSql, ") WHERE (%s)", zWhere);
+  zSql = sqlite3_str_finish(pSql);
+  if( !zSql ) return 0;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ) return 0;
+  for(i=0; i<pTab->nCol && rc==SQLITE_OK; i++){
+    int iField = (pCols && i<pCols->nCol) ? pCols->aColToRec[i] : i;
+    DoltliteSerialValue v;
+    if( iField<0 || iField>=info.nField ){
+      rc = sqlite3_bind_null(pStmt, i+1);
+      continue;
+    }
+    rc = uniqueValueFromRecord(pRec, nRec, &info, iField, &v);
+    if( rc!=SQLITE_OK ) break;
+    if( v.eType==SQLITE_NULL ){
+      rc = sqlite3_bind_null(pStmt, i+1);
+    }else if( v.eType==SQLITE_INTEGER ){
+      rc = sqlite3_bind_int64(pStmt, i+1, v.i);
+    }else if( v.eType==SQLITE_FLOAT ){
+      rc = sqlite3_bind_double(pStmt, i+1, v.r);
+    }else if( v.eType==SQLITE_TEXT ){
+      rc = sqlite3_bind_text(pStmt, i+1, (const char*)v.p, v.n, SQLITE_TRANSIENT);
+    }else{
+      rc = sqlite3_bind_blob(pStmt, i+1, v.p, v.n, SQLITE_TRANSIENT);
+    }
+  }
+  if( rc==SQLITE_OK ) rc = sqlite3_step(pStmt);
+  match = (rc==SQLITE_ROW);
+  sqlite3_finalize(pStmt);
+  return match;
+}
+
 static KeyInfo *uniqueIndexKeyInfo(sqlite3 *db, Index *pIdx, int *pRc){
   Parse sParse;
   KeyInfo *pKeyInfo;
@@ -286,8 +415,18 @@ static int detectUniqueViolationsForIndex(
 
   pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
   if( !pKeyInfo ) goto unique_done;
-  zQuery = sqlite3_mprintf(
-      "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED", zCols, zTable);
+  {
+    char *zWhere = uniqueIndexWhereSql(db, pIdx);
+    if( zWhere ){
+      zQuery = sqlite3_mprintf(
+          "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
+          zCols, zTable, zWhere);
+      sqlite3_free(zWhere);
+    }else{
+      zQuery = sqlite3_mprintf(
+          "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED", zCols, zTable);
+    }
+  }
   if( !zQuery ){ rc = SQLITE_NOMEM; goto unique_done; }
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pScan, 0);
   if( rc!=SQLITE_OK ) goto unique_done;
@@ -400,6 +539,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   int nAlloc = 0;
   int cursorOpen = 0;
   int winnerHandled = 0;
+  char *zPartWhere = 0;
   int rc;
   int res = 0;
   int i;
@@ -411,6 +551,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
   if( !pKeyInfo ) goto without_rowid_done;
   if( prollyHashIsEmpty(&pCurrent->root) ) goto without_rowid_done;
+  zPartWhere = uniqueIndexWhereSql(db, pIdx);
 
   prollyCursorInit(
       &cursor, cs, pCache, &pCurrent->root, pCurrent->flags);
@@ -440,6 +581,13 @@ static int detectUniqueViolationsForIndexWithoutRowid(
       pRecord = pOwnedRecord;
     }
     rc = doltliteParseRecordStrict(pRecord, nRecord, &info);
+    if( rc==SQLITE_OK && zPartWhere
+     && !uniquePartialMatchesRecord(db, pIdx, zPartWhere,
+                                    pRecord, nRecord, &cols) ){
+      sqlite3_free(pOwnedRecord);
+      rc = prollyCursorNext(&cursor);
+      continue;
+    }
     if( rc==SQLITE_OK ){
       rc = uniqueRecordFromTableRow(
           pRecord, nRecord, &info, &cols, pIdx, pIdx->nKeyCol,
@@ -533,6 +681,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   }
 
 without_rowid_done:
+  sqlite3_free(zPartWhere);
   if( cursorOpen ) prollyCursorClose(&cursor);
   uniqueIndexEntriesFree(db, aEntry, nEntry);
   doltliteFreeColInfo(&cols);
