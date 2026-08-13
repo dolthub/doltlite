@@ -145,6 +145,30 @@ else
 fi
 rm -f "$DB"
 
+DB=/tmp/test_idx_delta_ours_index_$$.db
+rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(1,'Alpha'),(2,'Beta');
+SELECT dolt_commit('-Am','feat rows');
+SELECT dolt_checkout('main');
+CREATE INDEX tv ON t(v);
+CREATE INDEX tlower ON t(lower(v));
+SELECT dolt_commit('-Am','main indexes');
+SELECT dolt_merge('feat');
+EOF
+
+run_test "ours_index_merge_column_rows" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY tv WHERE v>='' ORDER BY id);" \
+  "1,2" "$DB"
+run_test "ours_index_merge_expression_rows" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY tlower WHERE lower(v)>='' ORDER BY id);" \
+  "1,2" "$DB"
+run_test_lastline "ours_index_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 # Partial unique indexes only constrain rows that match WHERE. Both
 # branches inserting v=-1 must merge cleanly; v=9 on both is a real
 # unique violation.
