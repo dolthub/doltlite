@@ -739,12 +739,13 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   }
 
   if( rc==SQLITE_OK ){
-    if( res==0 ){
+    if( res==0 || pCur->deferredMergedSeek ){
       pCur->eState = CURSOR_VALID;
       if( pDifferentRow ){
-        *pDifferentRow = pCur->mmActive
-                       && (pCur->mergeSrc==MERGE_SRC_MUT
-                           || pCur->mergeSrc==MERGE_SRC_BOTH);
+        *pDifferentRow = pCur->deferredMergedSeek
+                       || (pCur->mmActive
+                           && (pCur->mergeSrc==MERGE_SRC_MUT
+                               || pCur->mergeSrc==MERGE_SRC_BOTH));
       }
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       pCur->skipNext = res;

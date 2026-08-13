@@ -11582,6 +11582,88 @@ static void run_blob_restore_mutmap_keeps_scan(void){
   removeDbFiles(dbpath);
 }
 
+static void run_intpk_scan_delete_keeps_scan(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *scan = 0;
+  sqlite3_stmt *del = 0;
+  char dbpath[256];
+  char seen[128];
+  int rc;
+
+  printf("=== INT PK Scan Delete Keeps Scan Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_intpk_scan_delete_keeps_scan");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_intpk_scan_delete", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_committed_intpk_rows", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');")==SQLITE_OK);
+  check("begin_committed_intpk_scan_delete", execSql(db, "BEGIN;")==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db, "SELECT id FROM t ORDER BY id;", -1, &scan, 0);
+  check("prepare_committed_intpk_scan", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db, "DELETE FROM t WHERE id=?;", -1, &del, 0);
+  check("prepare_committed_intpk_delete", rc==SQLITE_OK);
+  seen[0] = 0;
+  if( scan && del ){
+    while( (rc = sqlite3_step(scan))==SQLITE_ROW ){
+      int id = sqlite3_column_int(scan, 0);
+      if( seen[0] ) strcat(seen, ",");
+      sprintf(seen+strlen(seen), "%d", id);
+      if( (id%2)==0 ){
+        sqlite3_reset(del);
+        sqlite3_bind_int(del, 1, id);
+        check("committed_intpk_delete_even", sqlite3_step(del)==SQLITE_DONE);
+      }
+    }
+    check("committed_intpk_scan_done", rc==SQLITE_DONE);
+    check("committed_intpk_scan_sees_all", strcmp(seen, "1,2,3,4,5")==0);
+  }
+  sqlite3_finalize(scan);
+  sqlite3_finalize(del);
+  scan = 0;
+  del = 0;
+  check("committed_intpk_leftover_odds",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id, ',') FROM (SELECT id FROM t ORDER BY id)"),
+          "1,3,5")==0);
+  check("rollback_committed_intpk_scan_delete", execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  check("setup_uncommitted_intpk_rows", execSql(db,
+    "CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);"
+    "BEGIN;"
+    "INSERT INTO u VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');")==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db, "SELECT id FROM u ORDER BY id;", -1, &scan, 0);
+  check("prepare_uncommitted_intpk_scan", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db, "DELETE FROM u WHERE id=?;", -1, &del, 0);
+  check("prepare_uncommitted_intpk_delete", rc==SQLITE_OK);
+  seen[0] = 0;
+  if( scan && del ){
+    while( (rc = sqlite3_step(scan))==SQLITE_ROW ){
+      int id = sqlite3_column_int(scan, 0);
+      if( seen[0] ) strcat(seen, ",");
+      sprintf(seen+strlen(seen), "%d", id);
+      if( (id%2)==0 ){
+        sqlite3_reset(del);
+        sqlite3_bind_int(del, 1, id);
+        check("uncommitted_intpk_delete_even", sqlite3_step(del)==SQLITE_DONE);
+      }
+    }
+    check("uncommitted_intpk_scan_done", rc==SQLITE_DONE);
+    check("uncommitted_intpk_scan_sees_all", strcmp(seen, "1,2,3,4,5")==0);
+  }
+  sqlite3_finalize(scan);
+  sqlite3_finalize(del);
+  check("uncommitted_intpk_leftover_odds",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id, ',') FROM (SELECT id FROM u ORDER BY id)"),
+          "1,3,5")==0);
+  check("rollback_uncommitted_intpk_scan_delete", execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -11762,7 +11844,8 @@ static const RegressionCase aCases[] = {
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
-  { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan }
+  { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
+  { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan }
 };
 
 static int run_case_by_name(const char *zName){
