@@ -102,6 +102,10 @@ MAIN_TIP=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='main';" "$
 echo "SELECT dolt_checkout('main');
 SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
+# Ordinary open first: a revision opens read-only, and on Windows one that
+# lands straight after a write session cannot replay what that session left.
+run_test "detached_head_branch_intact" "SELECT count(*) FROM t;" "1" "$DB"
+
 # Pairs with the case below: same database, same open form, but a commit a
 # branch still reaches. If both fail, the revision open is at fault; if only
 # the unreachable one does, the sweep is.
@@ -112,7 +116,7 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB/$FEAT_TIP" > /dev/null 2>&1
 
 run_test "detached_head_survives_own_gc" "SELECT count(*) FROM t;" "2" "$DB/$FEAT_TIP"
 run_test "detached_head_log_survives" "SELECT count(*) FROM dolt_log;" "3" "$DB/$FEAT_TIP"
-run_test "detached_head_branch_intact" "SELECT count(*) FROM t;" "1" "$DB"
+run_test "detached_head_branch_intact_after_gc" "SELECT count(*) FROM t;" "1" "$DB"
 
 db_rm "$DB"
 
