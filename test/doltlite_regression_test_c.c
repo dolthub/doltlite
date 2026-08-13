@@ -11425,6 +11425,89 @@ static void run_storage_format_v12(void){
   removeDbFiles(dbpath);
 }
 
+static int collect_stepped_text(sqlite3_stmt *stmt, char *zOut, int nOut){
+  int n = 0;
+  int rc;
+  zOut[0] = 0;
+  while( (rc = sqlite3_step(stmt))==SQLITE_ROW ){
+    const unsigned char *z = sqlite3_column_text(stmt, 0);
+    int need = (int)strlen(zOut) + (n ? 1 : 0) + (z ? (int)strlen((const char*)z) : 4) + 1;
+    if( need>nOut ) return SQLITE_TOOBIG;
+    if( n ) strcat(zOut, ",");
+    strcat(zOut, z ? (const char*)z : "NULL");
+    n++;
+  }
+  return rc;
+}
+
+static void run_blob_restore_mutmap_keeps_scan(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *scan = 0;
+  sqlite3_stmt *ins = 0;
+  char dbpath[256];
+  char seen[128];
+  int rc;
+
+  printf("=== Blob Restore MutMap Keeps Scan Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blob_restore_mutmap_keeps_scan");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_blob_restore", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_wr_table_for_blob_restore", execSql(db,
+    "CREATE TABLE t(a TEXT PRIMARY KEY, b INT) WITHOUT ROWID;")==SQLITE_OK);
+  check("begin_wr_blob_restore_txn", execSql(db, "BEGIN;")==SQLITE_OK);
+  check("insert_pending_wr_rows",
+        execSql(db, "INSERT INTO t VALUES('a',1),('b',2),('c',3);")==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db, "SELECT a FROM t ORDER BY a;", -1, &scan, 0);
+  check("prepare_wr_scan", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db, "INSERT INTO t VALUES('az',11);", -1, &ins, 0);
+  check("prepare_wr_insert", rc==SQLITE_OK);
+  if( scan && ins ){
+    rc = sqlite3_step(scan);
+    check("wr_scan_first", rc==SQLITE_ROW && stmt_column_text_equals(scan, 0, "a"));
+    check("wr_insert_mid_scan", sqlite3_step(ins)==SQLITE_DONE);
+    rc = collect_stepped_text(scan, seen, (int)sizeof(seen));
+    check("wr_scan_rest_done", rc==SQLITE_DONE);
+    check("wr_scan_sees_remaining", strcmp(seen, "az,b,c")==0);
+  }
+  sqlite3_finalize(scan);
+  sqlite3_finalize(ins);
+  scan = 0;
+  ins = 0;
+  check("wr_final_rows",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(a, ',') FROM (SELECT a FROM t ORDER BY a)"),
+          "a,az,b,c")==0);
+  check("commit_wr_blob_restore", execSql(db, "COMMIT;")==SQLITE_OK);
+
+  check("setup_index_for_blob_restore", execSql(db,
+    "CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT UNIQUE);"
+    "CREATE INDEX wv ON w(v);")==SQLITE_OK);
+  check("begin_idx_blob_restore_txn", execSql(db, "BEGIN;")==SQLITE_OK);
+  check("insert_pending_idx_rows",
+        execSql(db, "INSERT INTO w VALUES(1,'a'),(2,'c');")==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db,
+    "SELECT v FROM w INDEXED BY wv WHERE v>='a';", -1, &scan, 0);
+  check("prepare_idx_scan", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db, "INSERT INTO w VALUES(3,'b');", -1, &ins, 0);
+  check("prepare_idx_insert", rc==SQLITE_OK);
+  if( scan && ins ){
+    rc = sqlite3_step(scan);
+    check("idx_scan_first", rc==SQLITE_ROW && stmt_column_text_equals(scan, 0, "a"));
+    check("idx_insert_mid_scan", sqlite3_step(ins)==SQLITE_DONE);
+    rc = collect_stepped_text(scan, seen, (int)sizeof(seen));
+    check("idx_scan_rest_done", rc==SQLITE_DONE);
+    check("idx_scan_sees_remaining", strcmp(seen, "b,c")==0);
+  }
+  sqlite3_finalize(scan);
+  sqlite3_finalize(ins);
+  check("commit_idx_blob_restore", execSql(db, "COMMIT;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -11603,7 +11686,8 @@ static const RegressionCase aCases[] = {
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
-  { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn }
+  { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
+  { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan }
 };
 
 static int run_case_by_name(const char *zName){
