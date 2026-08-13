@@ -305,8 +305,18 @@ static int flushPendingForCount(BtCursor *pCur){
     if( !prollyMutMapIsEmpty(pMap) ){
       ProllyMutMap *pFlushMap = pMap;
       int captured = 0;
-      int rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
-      if( rc!=SQLITE_OK ) return rc;
+      int rc = SQLITE_OK;
+      BtCursor *p;
+      for(p=pCur->pBt->pCursor; p; p=p->pNext){
+        if( p->pBtree==pCur->pBtree
+         && p!=pCur
+         && p->pgnoRoot==pCur->pgnoRoot
+         && (p->curFlags & BTCF_WriteFlag)==0
+         && (p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT) ){
+          rc = saveCursorPosition(p);
+          if( rc!=SQLITE_OK ) return rc;
+        }
+      }
       rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
                                        (ProllyMutMap**)&pTE->pPending,
                                        &pFlushMap, &captured);
