@@ -11715,6 +11715,94 @@ static void run_count_flush_keeps_scan(void){
   removeDbFiles(dbpath);
 }
 
+static void run_negzero_sortkey_eq(void){
+  static const u8 posZero[] = {
+    0x02, 0x07,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  };
+  static const u8 negZero[] = {
+    0x02, 0x07,
+    0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  };
+  sqlite3 *db = 0;
+  u8 *pPos = 0;
+  u8 *pNeg = 0;
+  char dbpath[256];
+  int nPos = 0;
+  int nNeg = 0;
+  int rc;
+
+  printf("=== Negzero Sortkey Eq Test ===\n\n");
+
+  rc = sortKeyFromRecord(posZero, (int)sizeof(posZero), &pPos, &nPos);
+  check("negzero_pos_encode_ok", rc==SQLITE_OK);
+  rc = sortKeyFromRecord(negZero, (int)sizeof(negZero), &pNeg, &nNeg);
+  check("negzero_neg_encode_ok", rc==SQLITE_OK);
+  check("negzero_keys_same_width", nPos==nNeg && nPos>0);
+  check("negzero_keys_equal",
+        nPos==nNeg && nPos>0 && pPos && pNeg && memcmp(pPos, pNeg, nPos)==0);
+  sqlite3_free(pPos);
+  sqlite3_free(pNeg);
+
+  make_dbpath(dbpath, sizeof(dbpath), "test_negzero_sortkey_eq");
+  removeDbFiles(dbpath);
+  check("open_db_for_negzero", open_db(dbpath, &db)==SQLITE_OK);
+
+  check("setup_negzero_real_pk", execSql(db,
+    "CREATE TABLE t(id REAL PRIMARY KEY, v INT) WITHOUT ROWID;")==SQLITE_OK);
+  check("insert_poszero_pk", execSql(db, "INSERT INTO t VALUES (0.0, 1);")==SQLITE_OK);
+  rc = execSqlSilent(db, "INSERT INTO t VALUES (-0.0, 2);");
+  check("negzero_pk_unique", (rc&0xff)==SQLITE_CONSTRAINT);
+  check("negzero_pk_row_count",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
+  check("negzero_pk_seek_neg",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id = -0.0"), "1")==0);
+  check("negzero_pk_seek_pos",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id = 0.0"), "1")==0);
+
+  check("setup_negzero_first_pk", execSql(db,
+    "CREATE TABLE w(id REAL PRIMARY KEY, v INT) WITHOUT ROWID;")==SQLITE_OK);
+  check("insert_negzero_pk_first",
+        execSql(db, "INSERT INTO w VALUES (-0.0, 7);")==SQLITE_OK);
+  check("poszero_seek_after_neg_insert",
+        strcmp(queryScalarText(db, "SELECT v FROM w WHERE id = 0.0"), "7")==0);
+  rc = execSqlSilent(db, "INSERT INTO w VALUES (0.0, 8);");
+  check("poszero_pk_unique_after_neg", (rc&0xff)==SQLITE_CONSTRAINT);
+
+  check("setup_negzero_secondary", execSql(db,
+    "CREATE TABLE u(id INTEGER PRIMARY KEY, v REAL);"
+    "CREATE INDEX uv ON u(v);"
+    "CREATE INDEX ud ON u(v DESC);"
+    "INSERT INTO u VALUES (1, 0.0), (2, 1.5), (3, -0.0);")==SQLITE_OK);
+  check("negzero_idx_eq_neg",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM u WHERE v = -0.0 ORDER BY id)"),
+          "1,3")==0);
+  check("negzero_idx_eq_pos",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM u WHERE v = 0.0 ORDER BY id)"),
+          "1,3")==0);
+  check("negzero_idx_count",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM u WHERE v = -0.0"),
+               "2")==0);
+  check("negzero_not_indexed_count",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM u NOT INDEXED WHERE v = -0.0"),
+          "2")==0);
+  check("negzero_between_count",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM u WHERE v BETWEEN -0.0 AND 0.0"),
+          "2")==0);
+  check("negzero_desc_idx_eq_neg",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id) FROM ("
+          "SELECT id FROM u INDEXED BY ud WHERE v = -0.0 ORDER BY id)"),
+          "1,3")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -11897,7 +11985,8 @@ static const RegressionCase aCases[] = {
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
-  { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan }
+  { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
+  { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq }
 };
 
 static int run_case_by_name(const char *zName){
