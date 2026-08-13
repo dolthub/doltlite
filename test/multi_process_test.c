@@ -357,6 +357,53 @@ static void test_gc_blocked_by_writer(void){
   remove(path);
 }
 
+/* The unpinned counterpart: a process that opened before a peer committed
+** adopts the branch head at its next statement, so its commit stacks on the
+** peer's instead of being refused. Verified against Dolt 2.2.2 with two
+** sql-server sessions: the second commit is accepted and both commits and
+** both rows survive. */
+static void test_cross_process_commit_after_peer(void){
+  const char *path = "/tmp/test_mp_commit_after_peer.db";
+  pid_t pid;
+  int status;
+  sqlite3 *db = 0;
+  const char *r;
+
+  printf("--- Test 6b: commit after a peer commit is accepted ---\n");
+
+  setup_db(path);
+  sqlite3_open(path, &db);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *cdb = 0;
+    sqlite3_open(path, &cdb);
+    execSql(cdb, "INSERT INTO t VALUES(2, 'child')");
+    queryScalarText(cdb, "SELECT dolt_commit('-A','-m','child commit')");
+    sqlite3_close(cdb);
+    _exit(0);
+  }
+  waitpid(pid, &status, 0);
+  check("mp_after_peer_child_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  execSql(db, "INSERT INTO t VALUES(3, 'parent')");
+  r = queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");
+  check("mp_after_peer_commit_accepted", strlen(r)==40);
+  sqlite3_close(db);
+
+  sqlite3_open(path, &db);
+  check("mp_after_peer_head_is_parent",
+    strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"),
+           "parent commit")==0);
+  check("mp_after_peer_child_survived",
+    strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_log WHERE message='child commit'"), "1")==0);
+  check("mp_after_peer_rows",
+    strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "3")==0);
+  sqlite3_close(db);
+  remove(path);
+}
+
 static void test_cross_process_commit_conflict(void){
   const char *stalePath = "/tmp/test_mp_conflict_stale.db";
   const char *freshPath = "/tmp/test_mp_conflict_fresh.db";
@@ -391,6 +438,13 @@ static void test_cross_process_commit_conflict(void){
     char buf;
 
     sqlite3_open(stalePath, &db);
+    /* Pin this process's snapshot before the child commits, so it truly
+    ** cannot observe that commit. Without the pin it would adopt the branch
+    ** head at its next statement and stack on the child's commit, which is
+    ** what Dolt does with two live sessions -- covered by
+    ** test_cross_process_commit_after_peer below. */
+    execSql(db, "BEGIN");
+    queryScalarText(db, "SELECT count(*) FROM t");
 
     close(pipefd[1]);
     mpRead(pipefd[0], &buf);
@@ -401,6 +455,7 @@ static void test_cross_process_commit_conflict(void){
     r = queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");
     check("mp_conflict_detected",
       strstr(r, "conflict")!=0 || strstr(r, "ERR")!=0);
+    execSql(db, "ROLLBACK");
 
     sqlite3_close(db);
   }
@@ -583,6 +638,7 @@ int main(){
   test_gc_during_read();
   test_gc_blocked_by_writer();
   test_cross_process_commit_conflict();
+  test_cross_process_commit_after_peer();
   test_many_process_commit_contention();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
