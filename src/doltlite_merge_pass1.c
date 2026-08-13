@@ -778,6 +778,41 @@ static int mergePass1CollectRenameOverDrop(
   return SQLITE_OK;
 }
 
+static int mergePass1CollectDualRename(
+  MergePass1Ctx *c,
+  MergeRowPolicy *pPolicy
+){
+  int i;
+  for(i=0; i<c->nAnc; i++){
+    struct TableEntry *pOurs;
+    struct TableEntry *pTheirs;
+    const char **azNew;
+    if( c->aAnc[i].iTable<=1 || !c->aAnc[i].zName ) continue;
+    pOurs = doltliteFindTableByNumber(c->aOurs, c->nOurs, c->aAnc[i].iTable);
+    pTheirs = doltliteFindTableByNumber(c->aTheirs, c->nTheirs, c->aAnc[i].iTable);
+    if( !pOurs || !pTheirs || !pOurs->zName || !pTheirs->zName ) continue;
+    if( sqlite3_stricmp(pOurs->zName, c->aAnc[i].zName)==0 ) continue;
+    if( sqlite3_stricmp(pTheirs->zName, c->aAnc[i].zName)==0 ) continue;
+    if( sqlite3_stricmp(pOurs->zName, pTheirs->zName)==0 ) continue;
+    azNew = sqlite3_realloc(
+        (void*)pPolicy->azDualRename,
+        (pPolicy->nDualRename + 1) * (int)sizeof(char*));
+    if( !azNew ) return SQLITE_NOMEM;
+    pPolicy->azDualRename = azNew;
+    pPolicy->azDualRename[pPolicy->nDualRename++] = c->aAnc[i].zName;
+  }
+  return SQLITE_OK;
+}
+
+static void mergePass1FreeRowPolicy(MergeRowPolicy *pPolicy){
+  sqlite3_free((void*)pPolicy->azRenameOverDrop);
+  sqlite3_free((void*)pPolicy->azDualRename);
+  pPolicy->azRenameOverDrop = 0;
+  pPolicy->azDualRename = 0;
+  pPolicy->nRenameOverDrop = 0;
+  pPolicy->nDualRename = 0;
+}
+
 /* Merge catalog root (iTable==1). Deferred so schema actions are known. */
 static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
   struct TableEntry *ancEntry;
@@ -840,8 +875,9 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
       MergeRowPolicy policy;
       memset(&policy, 0, sizeof(policy));
       rc = mergePass1CollectRenameOverDrop(c, &policy);
+      if( rc==SQLITE_OK ) rc = mergePass1CollectDualRename(c, &policy);
       if( rc!=SQLITE_OK ){
-        sqlite3_free((void*)policy.azRenameOverDrop);
+        mergePass1FreeRowPolicy(&policy);
         return rc;
       }
       rc = mergeTableRows(c->db, &ancEntry->root, &c->aOurs[iTable1Idx].root,
@@ -849,7 +885,7 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
                           ancEntry->flags, theirsEntry->flags,
                           &mergedTableRoot, &nConflicts, &aConflictRows,
                           NULL, 0, &policy);
-      sqlite3_free((void*)policy.azRenameOverDrop);
+      mergePass1FreeRowPolicy(&policy);
       if( rc!=SQLITE_OK ) return rc;
 
       {

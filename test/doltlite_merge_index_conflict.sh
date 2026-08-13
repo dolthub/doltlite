@@ -331,7 +331,7 @@ ROLLBACK;
 EOF
 )
 check "retarget_to_divergent_rename_keeps_index_catalog_valid" \
-  "3|i1,i2,ours_a,theirs_a" "$out"
+  "2|i1,i2,ours_a,theirs_a" "$out"
 
 DB="$TMPROOT/index_on_excluded_rename.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
@@ -452,12 +452,10 @@ EOF
   check "rename_over_drop_${direction}_keeps_table" "2|i_v|ok" "$out"
 done
 
-# A rename on *both* sides now conflicts. That is not yet Dolt parity -- Dolt
-# keeps ours_t and theirs_t both, treating each rename as an add -- but it is
-# what falls out of scoping the policy to objects the other side dropped, and it
-# replaces something worse: before this change the merge reported success and
-# silently kept only ours, losing theirs_t and its rows. Conflicting is the safe
-# half-step; keeping both needs catalog-identity work, tracked separately.
+# Both sides rename the same table to different names. Dolt treats each rename
+# as delete+add and keeps both tables with no conflicts. A phantom
+# sqlite_master modify/modify used to refuse the merge (or, earlier, succeed
+# and drop theirs). Both tables stay, and autocommit can finish.
 DB="$TMPROOT/rename_vs_rename.db"; rm -rf "$DB"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -472,8 +470,13 @@ ALTER TABLE t RENAME TO ours_t;
 SELECT dolt_commit('-Am','ours rename');
 EOF
 out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('feat'));" 2>/dev/null)
-rc=$?
-check "rename_vs_rename_conflicts_not_silent_loss" "1" "$rc"
+check "rename_vs_rename_merge_clean" "40" "$out"
+out=$("$DOLTLITE" "$DB" \
+  "SELECT (SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ours_t','theirs_t','t') ORDER BY name)) || '|' ||
+          (SELECT count(*) FROM ours_t) || '|' ||
+          (SELECT count(*) FROM theirs_t) || '|' ||
+          (SELECT coalesce(sum(num_conflicts),0) FROM dolt_conflicts);" 2>/dev/null)
+check "rename_vs_rename_keeps_both_tables" "ours_t,theirs_t|1|1|0" "$out"
 
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"

@@ -1681,6 +1681,41 @@ COMMIT;
                   WHERE commit_hash = HASHOF('HEAD')));"
 
 echo ""
+echo "--- dual rename keeps both tables ---"
+
+oracle_error_poststate "dual_rename_keeps_both_tables" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME TO theirs_t;
+SELECT dolt_commit('-Am', 'theirs rename');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO ours_t;
+SELECT dolt_commit('-Am', 'ours rename');
+SELECT dolt_merge('feat');
+" "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ours_t','theirs_t','t') ORDER BY name)) || '|' || (SELECT count(*) FROM ours_t) || '|' || (SELECT count(*) FROM theirs_t)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME SEPARATOR ',') FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('ours_t','theirs_t','t')), '|', (SELECT COUNT(*) FROM ours_t), '|', (SELECT COUNT(*) FROM theirs_t))"
+
+oracle_error_poststate "dual_rename_with_row_edits_keeps_both" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME TO theirs_t;
+INSERT INTO theirs_t VALUES (2, 'feat');
+SELECT dolt_commit('-Am', 'theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO ours_t;
+INSERT INTO ours_t VALUES (3, 'main');
+SELECT dolt_commit('-Am', 'ours');
+SELECT dolt_merge('feat');
+" "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM ours_t ORDER BY id)) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM theirs_t ORDER BY id))" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM ours_t), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM theirs_t))"
+
+echo ""
 echo "--- add/add matching schema ---"
 
 oracle_error_poststate "dual_add_table_same_schema_union" "

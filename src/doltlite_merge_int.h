@@ -61,18 +61,25 @@ int canFastMerge(
 
 /* Row-merge policy. Scoped by object identity, computed where both full
 ** catalogs are visible, so enabling it cannot change any conflict but the ones
-** it names -- a rename on both sides still conflicts.
+** it names.
 **
 ** azRenameOverDrop holds ancestor object names one side renamed and the other
 ** dropped. A catalog row whose base name or tbl_name is listed resolves to the
 ** surviving side instead of conflicting, matching Dolt, which keeps such a
-** table as an add. Resolving inside the row merge keeps the merged root
-** canonical, which the history-independence gate requires.
+** table as an add.
+**
+** azDualRename holds ancestor names both sides renamed to different names.
+** A modify/modify on those catalog rows is not a user conflict: pass 2 keeps
+** both tables. The row merge leaves ours in place; serialize rebuilds master.
+** Resolving inside the row merge keeps the merged root canonical, which the
+** history-independence gate requires.
 */
 typedef struct MergeRowPolicy MergeRowPolicy;
 struct MergeRowPolicy {
   const char **azRenameOverDrop;
   int nRenameOverDrop;
+  const char **azDualRename;
+  int nDualRename;
 };
 
 int mergeTableRows(
