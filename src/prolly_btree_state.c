@@ -1064,6 +1064,25 @@ int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
   return btreeReadWorkingCatalog(cs, zBranch, pCatHash, 0);
 }
 
+int doltliteBranchWorkingSetIsRebasing(
+  sqlite3 *db,
+  const char *zBranch,
+  int *pActive
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  u8 isRebasing = 0;
+  int rc;
+
+  if( pActive ) *pActive = 0;
+  if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
+  rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, 0, 0, 0, 0,
+                               &isRebasing, 0, 0, 0, 0, 0);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  if( pActive ) *pActive = isRebasing!=0;
+  return SQLITE_OK;
+}
+
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;

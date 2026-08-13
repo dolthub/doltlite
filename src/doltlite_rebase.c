@@ -1538,6 +1538,41 @@ fail:
   }
 }
 
+/* Reopen of $db lands on the default branch with a mirrored working set,
+** and $db/<orig> has no plan. Continue/abort must run on dolt_rebase_<orig>
+** so replay advances that tip instead of CAS-failing against feat. */
+static int rebaseAdoptPersistedRebase(sqlite3 *db){
+  const char *zCur;
+  const char *zOrig = 0;
+  char *zWorking = 0;
+  u8 isRebasing = 0;
+  int active = 0;
+  int rc;
+
+  zCur = doltliteGetSessionBranch(db);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrig, 0);
+  if( isRebasing && zOrig && zOrig[0] ){
+    zWorking = rebaseBuildWorkingBranchName(zOrig);
+  }else if( zCur && zCur[0] ){
+    zWorking = rebaseBuildWorkingBranchName(zCur);
+    rc = doltliteBranchWorkingSetIsRebasing(db, zWorking, &active);
+    if( rc!=SQLITE_OK || !active ){
+      sqlite3_free(zWorking);
+      return rc;
+    }
+  }else{
+    return SQLITE_OK;
+  }
+  if( !zWorking ) return SQLITE_NOMEM;
+  if( !zCur || sqlite3_stricmp(zCur, zWorking)!=0 ){
+    rc = doltliteCheckoutBranchForRebase(db, zWorking);
+  }else{
+    rc = SQLITE_OK;
+  }
+  sqlite3_free(zWorking);
+  return rc;
+}
+
 static void doltliteRebaseInteractiveAbort(
   sqlite3_context *context,
   sqlite3 *db
@@ -1551,6 +1586,11 @@ static void doltliteRebaseInteractiveAbort(
   char *zWorking = 0;
   int rc;
 
+  rc = rebaseAdoptPersistedRebase(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0,
                                 &zOrigBranchConst, &zReturnBranchConst);
   if( !isRebasing || !zOrigBranchConst || !zReturnBranchConst ){
@@ -1657,6 +1697,11 @@ static void doltliteRebaseInteractiveContinue(
   memset(&expectedOrigHead, 0, sizeof(expectedOrigHead));
   memset(&preRebaseCat, 0, sizeof(preRebaseCat));
 
+  rc = rebaseAdoptPersistedRebase(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
   doltliteGetSessionRebaseState(db, &isRebasing, &preRebaseCat, &expectedOrigHead,
                                 &zOrigBranchConst, &zReturnBranchConst);
   if( !isRebasing || !zOrigBranchConst || !zReturnBranchConst ){
