@@ -171,6 +171,12 @@ jobs:
         {
           make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
             doltlite.exe doltlite-remotesrv.exe doltlite-lib
+          rm -f doltlite.exe
+          make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
+            'T.link=$(T.cc.sqlite) -static' doltlite.exe
+          if objdump -p doltlite.exe | grep -Eq 'DLL Name: (libwinpthread-1\.dll|zlib1\.dll)'; then
+            exit 1
+          fi
           make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
           cc $CFLAGS -I. -I../src \
             -o doltlite_regression_test_c \

@@ -215,7 +215,16 @@ jobs:
       run: |
         mkdir -p build && cd build
         ../configure
-        make -j$(nproc) doltlite.exe doltlite-lib
+        make -j$(nproc) 'T.link=$(T.cc.sqlite) -static' doltlite.exe
+        make -j$(nproc) doltlite-lib
+
+    - name: Verify Windows CLI runtime dependencies
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: |
+        if objdump -p build/doltlite.exe | grep -Eq 'DLL Name: (libwinpthread-1\.dll|zlib1\.dll)'; then
+          exit 1
+        fi
 
     - name: Package CLI tools (Unix)
       if: runner.os != 'Windows'
