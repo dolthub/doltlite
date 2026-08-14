@@ -139,6 +139,11 @@ int loadSchemaFromCatalog(
       }
     }
     doltliteFreeCatalog(aTables, nTables);
+    if( nTables==0 ){
+      *ppEntries = 0;
+      *pnEntries = 0;
+      return SQLITE_OK;
+    }
     if( !foundMaster ){
       *ppEntries = 0;
       *pnEntries = 0;
@@ -248,7 +253,14 @@ int loadSchemaEntryFromCatalog(
   if( !zName || prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
 
   rc = doltliteLoadTableRootById(db, pCatHash, 1, &masterRoot, &masterFlags, 0);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_CORRUPT;
+  if( rc==SQLITE_NOTFOUND ){
+    struct TableEntry *aTables = 0;
+    int nTables = 0;
+    rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+    doltliteFreeCatalog(aTables, nTables);
+    if( rc!=SQLITE_OK ) return rc;
+    return nTables>0 ? SQLITE_CORRUPT : SQLITE_OK;
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
 

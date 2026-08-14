@@ -2522,6 +2522,7 @@ static void run_schema_loader_missing_master(void){
   SchemaEntry one;
   int found = 0;
   int rc;
+  u8 emptyBlob[CAT_HEADER_SIZE_V5];
   u8 noMaster[CAT_HEADER_SIZE_V5 + CAT_ENTRY_FIXED_SIZE_V4];
   u8 emptyMaster[CAT_HEADER_SIZE_V5 + CAT_ENTRY_FIXED_SIZE_V4];
 
@@ -2550,6 +2551,16 @@ static void run_schema_loader_missing_master(void){
   rc = loadSchemaEntryFromCatalog(db, cs, pCache, &catHash, "t", &one, &found);
   check("real_catalog_finds_table", rc==SQLITE_OK && found==1);
   clearSchemaEntry(&one);
+
+  memset(emptyBlob, 0, sizeof(emptyBlob));
+  emptyBlob[0] = CATALOG_FORMAT_V5;
+  check("put_zero_entry_catalog",
+        chunkStorePut(cs, emptyBlob, (int)sizeof(emptyBlob), &catHash)==SQLITE_OK);
+  rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aSchema, &nSchema);
+  check("zero_entry_catalog_is_empty_schema",
+        rc==SQLITE_OK && aSchema==0 && nSchema==0);
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, &catHash, "t", &one, &found);
+  check("zero_entry_catalog_lookup_is_ok", rc==SQLITE_OK && found==0);
 
   fill_v5_one_entry_catalog(noMaster, (int)sizeof(noMaster), 2);
   check("put_catalog_without_master",
