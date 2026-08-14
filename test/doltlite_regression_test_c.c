@@ -2586,6 +2586,158 @@ static void run_schema_loader_missing_master(void){
   sqlite3_close(db);
 }
 
+/* OP_RowCell / TransferRow for blob-key indexes and WITHOUT ROWID tables
+** must feed Insert a SQLite record. Passing the tree sort key makes
+** sortKeyFromIntRecordLocal treat 0x15/0x35 tags as a record header. */
+static int xferBlobkeyPayloadEquals(
+  BtCursor *pCur, const u8 *pWant, int nWant
+){
+  u8 buf[64];
+  u32 n;
+  int rc;
+  int res;
+
+  rc = sqlite3BtreeFirst(pCur, &res);
+  if( rc!=SQLITE_OK || res!=0 ) return 0;
+  n = sqlite3BtreePayloadSize(pCur);
+  if( n!=(u32)nWant || n>sizeof(buf) ) return 0;
+  rc = sqlite3BtreePayload(pCur, 0, n, buf);
+  return rc==SQLITE_OK && memcmp(buf, pWant, nWant)==0;
+}
+
+static void run_transfer_row_blobkey_uses_record(void){
+  sqlite3 *db = 0;
+  Btree *pBt;
+  BtCursor *pSrc = 0;
+  BtCursor *pDest = 0;
+  Pgno iSrc = 0;
+  Pgno iDest = 0;
+  BtreePayload payload;
+  char dbpath[256];
+  int nCur;
+  int rc;
+  int res;
+  /* One TEXT field "ab": header 2, serial 17, payload. */
+  static const u8 rec[] = { 0x02, 0x11, 'a', 'b' };
+
+  printf("=== TransferRow Blob-Key Uses Record Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_transfer_row_blobkey");
+  removeDbFiles(dbpath);
+  check("xfer_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("xfer_write_txn",
+        execSql(db, "BEGIN; CREATE TABLE _lock(id INTEGER PRIMARY KEY);")
+        ==SQLITE_OK);
+
+  pBt = db->aDb[0].pBt;
+  check("xfer_btree", pBt!=0 && sqlite3BtreeIsDoltliteFormat(pBt));
+  sqlite3BtreeEnter(pBt);
+  nCur = sqlite3BtreeCursorSize();
+  pSrc = sqlite3_malloc(nCur);
+  pDest = sqlite3_malloc(nCur);
+  check("xfer_cursors_alloc", pSrc!=0 && pDest!=0);
+  if( !pSrc || !pDest ){
+    sqlite3_free(pSrc);
+    sqlite3_free(pDest);
+    sqlite3BtreeLeave(pBt);
+    sqlite3_close(db);
+    removeDbFiles(dbpath);
+    return;
+  }
+  sqlite3BtreeCursorZero(pSrc);
+  sqlite3BtreeCursorZero(pDest);
+
+  rc = sqlite3BtreeCreateTable(pBt, &iSrc, BTREE_BLOBKEY);
+  check("xfer_create_src", rc==SQLITE_OK && iSrc>0);
+  rc = sqlite3BtreeCreateTable(pBt, &iDest, BTREE_BLOBKEY);
+  check("xfer_create_dest", rc==SQLITE_OK && iDest>0 && iDest!=iSrc);
+
+  rc = sqlite3BtreeCursor(pBt, iSrc, BTREE_WRCSR, 0, pSrc);
+  check("xfer_open_src", rc==SQLITE_OK);
+  rc = sqlite3BtreeCursor(pBt, iDest, BTREE_WRCSR, 0, pDest);
+  check("xfer_open_dest", rc==SQLITE_OK);
+
+  memset(&payload, 0, sizeof(payload));
+  payload.pKey = rec;
+  payload.nKey = (int)sizeof(rec);
+  rc = sqlite3BtreeInsert(pSrc, &payload, 0, 0);
+  check("xfer_insert_src", rc==SQLITE_OK);
+  rc = sqlite3BtreeFirst(pSrc, &res);
+  check("xfer_src_landed", rc==SQLITE_OK && res==0);
+
+  rc = sqlite3BtreeTransferRow(pDest, pSrc, 0);
+  check("xfer_mutmap_ok", rc==SQLITE_OK);
+  check("xfer_mutmap_record",
+        xferBlobkeyPayloadEquals(pDest, rec, (int)sizeof(rec)));
+
+  sqlite3BtreeCloseCursor(pSrc);
+  sqlite3BtreeCloseCursor(pDest);
+  sqlite3BtreeLeave(pBt);
+  check("xfer_commit_src", execSql(db, "COMMIT;")==SQLITE_OK);
+  check("xfer_new_write_txn",
+        execSql(db, "BEGIN; INSERT INTO _lock VALUES(1);")==SQLITE_OK);
+
+  sqlite3BtreeEnter(pBt);
+  sqlite3BtreeCursorZero(pSrc);
+  sqlite3BtreeCursorZero(pDest);
+  rc = sqlite3BtreeCreateTable(pBt, &iDest, BTREE_BLOBKEY);
+  check("xfer_create_tree_dest", rc==SQLITE_OK && iDest>0);
+  rc = sqlite3BtreeCursor(pBt, iSrc, BTREE_WRCSR, 0, pSrc);
+  check("xfer_reopen_src", rc==SQLITE_OK);
+  rc = sqlite3BtreeCursor(pBt, iDest, BTREE_WRCSR, 0, pDest);
+  check("xfer_open_tree_dest", rc==SQLITE_OK);
+  rc = sqlite3BtreeFirst(pSrc, &res);
+  check("xfer_tree_src_landed", rc==SQLITE_OK && res==0);
+
+  rc = sqlite3BtreeTransferRow(pDest, pSrc, 0);
+  check("xfer_tree_ok", rc==SQLITE_OK);
+  check("xfer_tree_record",
+        xferBlobkeyPayloadEquals(pDest, rec, (int)sizeof(rec)));
+
+  sqlite3BtreeCloseCursor(pSrc);
+  sqlite3BtreeCloseCursor(pDest);
+  sqlite3BtreeLeave(pBt);
+  sqlite3_free(pSrc);
+  sqlite3_free(pDest);
+  execSqlSilent(db, "ROLLBACK;");
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+
+  /* User-facing copy path: secondary index + WITHOUT ROWID survive
+  ** INSERT…SELECT and VACUUM (prolly VACUUM is GC; integrity still
+  ** proves the indexes match the tables). */
+  check("xfer_reopen_sql", open_db(dbpath, &db)==SQLITE_OK);
+  check("xfer_sql_setup", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n REAL);"
+    "CREATE UNIQUE INDEX idx ON t(v);"
+    "INSERT INTO t VALUES(1,'alpha',1.5),(2,'beta',2.25),(3,'gamma',3.0);"
+    "CREATE TABLE wr(k TEXT PRIMARY KEY, v INT, n REAL) WITHOUT ROWID;"
+    "INSERT INTO wr VALUES('a',10,1.0),('b',20,2.0),('c',30,3.0);"
+    "CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT, n REAL);"
+    "CREATE UNIQUE INDEX idx2 ON t2(v);"
+    "INSERT INTO t2 SELECT * FROM t;"
+    "CREATE TABLE wr2(k TEXT PRIMARY KEY, v INT, n REAL) WITHOUT ROWID;"
+    "INSERT INTO wr2 SELECT * FROM wr;")==SQLITE_OK);
+  check("xfer_sql_integrity",
+        strcmp(queryScalarText(db, "PRAGMA integrity_check;"), "ok")==0);
+  check("xfer_sql_index_lookup",
+        strcmp(queryScalarText(db, "SELECT id FROM t2 WHERE v='beta'"), "2")==0);
+  check("xfer_sql_unique",
+        (execSqlSilent(db, "INSERT INTO t2 VALUES(4,'alpha',9);")&0xff)
+        ==SQLITE_CONSTRAINT);
+  check("xfer_sql_wr_lookup",
+        strcmp(queryScalarText(db, "SELECT v FROM wr2 WHERE k='b'"), "20")==0);
+  check("xfer_sql_vacuum", execSql(db, "VACUUM;")==SQLITE_OK);
+  check("xfer_sql_integrity_after_vacuum",
+        strcmp(queryScalarText(db, "PRAGMA integrity_check;"), "ok")==0);
+  check("xfer_sql_index_after_vacuum",
+        strcmp(queryScalarText(db, "SELECT id FROM t2 WHERE v='gamma'"), "3")==0);
+  check("xfer_sql_wr_after_vacuum",
+        strcmp(queryScalarText(db, "SELECT v FROM wr2 WHERE k='c'"), "30")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_ancestor_missing_start(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -11921,6 +12073,7 @@ static const RegressionCase aCases[] = {
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },
   { "schema_loader_missing_master", "Schema Loader Missing Master Test", run_schema_loader_missing_master },
+  { "transfer_row_blobkey_uses_record", "TransferRow Blob-Key Uses Record Test", run_transfer_row_blobkey_uses_record },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "ancestor_criss_cross_single_walk", "Ancestor Criss-Cross Single Walk Test", run_ancestor_criss_cross_single_walk },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },

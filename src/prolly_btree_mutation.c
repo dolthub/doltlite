@@ -1425,17 +1425,15 @@ int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
     payload.pData = pVal;
     payload.nData = nVal;
   } else {
+    /* Insert re-encodes pKey as a SQLite record (sortKeyFromIntRecordLocal /
+    ** sortKeyFromRecordPrefixCollBuffer). The tree/mutmap key is a sort key
+    ** (0x15/0x35 tags), not that record. Use the stored or reconstructed
+    ** record -- the same object a normal IdxInsert / covering read uses. */
     const u8 *pKey;
     int nKey;
-    if( pSrc->mmActive
-     && (pSrc->mergeSrc==MERGE_SRC_MUT || pSrc->mergeSrc==MERGE_SRC_BOTH) ){
-      ProllyMutMapEntry *pEntry;
-      int rcEntry = currentMutMapEntry(pSrc, &pEntry);
-      if( rcEntry!=SQLITE_OK ) return rcEntry;
-      pKey = pEntry->pKey;
-      nKey = pEntry->nKey;
-    }else{
-      prollyCursorKey(&pSrc->pCur, &pKey, &nKey);
+    rc = getCursorPayload(pSrc, &pKey, &nKey);
+    if( rc!=SQLITE_OK ){
+      return rc;
     }
     payload.pKey = pKey;
     payload.nKey = nKey;
