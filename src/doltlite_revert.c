@@ -246,7 +246,7 @@ static void doltliteRevertFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &revertCommit.catalogHash, &liveOurCatalog,
-        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg, 1,
+        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg, 1, 1,
         &nConflicts, 0, hexBuf);
   }
 
@@ -256,6 +256,10 @@ static void doltliteRevertFunc(
 
   if( rc==SQLITE_BUSY ){
     doltliteCmdResultPeerBranchBusy(context, "revert");
+    return;
+  }
+  if( rc==SQLITE_DONE ){
+    sqlite3_result_error(context, "nothing to commit", -1);
     return;
   }
   if( rc!=SQLITE_OK ){

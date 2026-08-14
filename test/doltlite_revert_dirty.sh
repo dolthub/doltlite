@@ -156,4 +156,76 @@ run_test "rv_clean_t_reverted" "SELECT count(*) FROM t;" "0" "$DB"
 
 db_rm "$DB"
 
+
+# Dolt: a second revert of the same commit is "nothing to commit", not
+# another Revert commit. Reverting the revert commit itself still works.
+DB=/tmp/test_rv_dup_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX t_v ON t(v);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','init');
+DROP INDEX t_v;
+SELECT dolt_commit('-Am','drop index');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "rv_dup_first" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_dup_index_restored" \
+  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v';" \
+  "1" "$DB"
+run_test_match "rv_dup_second_nothing" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='drop index' LIMIT 1));" \
+  "nothing to commit" "$DB"
+run_test "rv_dup_one_revert_commit" \
+  "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
+  "1" "$DB"
+run_test "rv_dup_index_still_there" \
+  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v';" \
+  "1" "$DB"
+
+echo "INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-Am','later');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_dup_after_later_still_nothing" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='drop index' LIMIT 1));" \
+  "nothing to commit" "$DB"
+run_test_match "rv_dup_revert_the_revert" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message LIKE 'Revert%' LIMIT 1));" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_dup_revert_the_revert_drops_index" \
+  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v';" \
+  "0" "$DB"
+
+db_rm "$DB"
+
+
+DB=/tmp/test_rv_dup_data_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','init');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-Am','add row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "rv_dup_data_first" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_dup_data_row_gone" "SELECT count(*) FROM t;" "1" "$DB"
+run_test_match "rv_dup_data_second" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='add row' LIMIT 1));" \
+  "nothing to commit" "$DB"
+run_test "rv_dup_data_still_one_row" "SELECT count(*) FROM t;" "1" "$DB"
+run_test "rv_dup_data_one_revert" \
+  "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
+  "1" "$DB"
+
+echo "CREATE TABLE meta(id INTEGER PRIMARY KEY, note TEXT);
+INSERT INTO meta VALUES(1,'side');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_dup_data_dirty_unrelated_second" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='add row' LIMIT 1));" \
+  "nothing to commit" "$DB"
+run_test "rv_dup_data_dirty_kept" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='meta';" \
+  "1" "$DB"
+
+db_rm "$DB"
+
 dltest_finish
