@@ -62,6 +62,11 @@ static void budgetStart(Budget *p){
   p->attempts = 0;
 }
 
+static void budgetStartWithFloor(Budget *p, int floorMs){
+  budgetStart(p);
+  if( nowMs() >= p->deadline ) p->deadline = nowMs() + floorMs;
+}
+
 static int budgetLive(Budget *p){
   p->attempts++;
   return nowMs() < p->deadline;
@@ -113,9 +118,6 @@ static int isRetryableMsg(const char *msg){
   return msgContains(msg, "busy")
       || msgContains(msg, "locked")
       || msgContains(msg, "schema has changed")
-      /* commit/merge/cherry-pick/revert peer-CAS wording from
-      ** doltliteCmdResultPeerBranchBusy: "<op> conflict: another connection..." */
-      || msgContains(msg, "conflict: another connection committed")
       || msgContains(msg, "failed to snapshot current branch state")
       || msgContains(msg, "unknown operation");
 }
@@ -220,7 +222,7 @@ static int reopenDb(const char *path, sqlite3 **pDb){
     sqlite3_close(*pDb);
     *pDb = 0;
   }
-  budgetStart(&budget);
+  budgetStartWithFloor(&budget, 2000);
   while( budgetLive(&budget) ){
     const char *msg;
     rc = sqlite3_open(path, pDb);
@@ -382,12 +384,12 @@ static int runWorker(const char *path, int worker){
   sqlite3 *db = 0;
   int rc;
   int round;
-  startPhase();
   rc = reopenDb(path, &db);
   if( rc!=SQLITE_OK ) return 10;
 
   for( round=1; round<=N_ROUNDS; round++ ){
     char branch[64];
+    startPhase();
     snprintf(branch, sizeof(branch), "stress_w%d_r%d", worker, round);
     rc = commitBranchRow(&db, path, worker, round);
     if( rc!=SQLITE_OK ) goto worker_error;
