@@ -74,16 +74,17 @@ PROLLY_OBJS = \
 DOLTLITE_PROLLY ?= 1
 DOLTLITE_VEC1 ?= 1
 DOLTLITE_ENABLE_REMOTES ?= 1
-ifneq ($(filter 0 1,$(DOLTLITE_ENABLE_REMOTES)),$(DOLTLITE_ENABLE_REMOTES))
-  $(error DOLTLITE_ENABLE_REMOTES must be 0 or 1)
-endif
 DOLTLITE_VERSION ?= $(shell cat $(TOP)/.dolt_release_version 2>/dev/null || git describe --tags --always 2>/dev/null || echo "dev")
 ifeq ($(DOLTLITE_ENABLE_REMOTES),1)
   DOLTLITE_REMOTE_OBJS = $(DOLTLITE_AUTH_OBJS) doltlite_remote.o \
                          doltlite_remote_sql.o doltlite_http_remote.o \
                          doltlite_remotesrv.o
 else
-  DOLTLITE_REMOTE_OBJS = doltlite_remote_sql.o
+  ifeq ($(DOLTLITE_ENABLE_REMOTES),0)
+    DOLTLITE_REMOTE_OBJS = doltlite_remote_sql.o
+  else
+    $(error DOLTLITE_ENABLE_REMOTES must be 0 or 1)
+  endif
 endif
 LIBOBJS0 := $(filter-out vec1.o,$(LIBOBJS0))
 ifeq ($(DOLTLITE_PROLLY),1)
