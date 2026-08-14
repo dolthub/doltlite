@@ -254,22 +254,6 @@ static void doltVerifyConstraintsFunc(
     azArgTables[nArgTables++] = zArg;
   }
 
-  /* Only the tables about to be re-checked lose their recorded findings.
-  ** A scoped verify says nothing about the tables it does not scan, and the
-  ** commit gate reads this catalog. */
-  if( !bOutputOnly ){
-    if( nArgTables>0 ){
-      rc = doltliteClearConstraintViolationsForTables(
-          db, (const char *const *)azArgTables, nArgTables);
-    }else{
-      rc = doltliteClearAllConstraintViolations(db);
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
-      goto cleanup;
-    }
-  }
-
   doltliteGetSessionHead(db, &headHash);
   if( !prollyHashIsEmpty(&headHash) ){
     rc = doltliteLoadCommit(db, &headHash, &headCommit);
@@ -343,6 +327,25 @@ static void doltVerifyConstraintsFunc(
     nScan = nChanged;
   }
 
+  /* Only the tables about to be re-checked lose their recorded findings, so
+  ** the clear has to wait until the scan set is known. A default verify scans
+  ** just the tables that differ from HEAD; clearing the whole catalog would
+  ** drop findings for tables it never looks at, and the commit gate reads this
+  ** catalog. An empty scan set here means --all with no named tables, which
+  ** does re-check everything. */
+  if( !bOutputOnly ){
+    if( nScan>0 ){
+      rc = doltliteClearConstraintViolationsForTables(
+          db, (const char *const *)azScan, nScan);
+    }else{
+      rc = doltliteClearAllConstraintViolations(db);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto cleanup;
+    }
+  }
+
   rc = doltliteDetectConstraintViolationsFiltered(
       db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations);
   if( rc!=SQLITE_OK ){
@@ -351,7 +354,11 @@ static void doltVerifyConstraintsFunc(
   }
 
 detection_done:
-  if( bOutputOnly && nViolations==0 ){
+  /* The result reports the catalog, not just this scan. A scoped verify that
+  ** looked at nothing violating still answers 1 while another table's finding
+  ** is recorded, because that finding is what the commit gate will refuse on.
+  ** Dolt answers the same way. */
+  if( nViolations==0 ){
     int found = 0;
     rc = hasRecordedViolations(db, azArgTables, nArgTables, &found);
     if( rc!=SQLITE_OK ){

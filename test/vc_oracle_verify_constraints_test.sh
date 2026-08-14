@@ -253,6 +253,44 @@ DELETE FROM t WHERE pk=2;
 "$FOLLOW_AGG
 $FOLLOW_T_ROWS" 0
 
+# A default verify scans only the tables that differ from HEAD. It must not
+# clear findings for a table it never scans -- the commit gate reads this
+# catalog, so dropping them lets a commit through over a live violation.
+UNSCANNED_SETUP="
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, v INT UNIQUE);
+CREATE TABLE users(pk INTEGER PRIMARY KEY, v INT REFERENCES parent(v));
+CREATE TABLE orders(pk INTEGER PRIMARY KEY, note TEXT);
+INSERT INTO parent VALUES (1,10);
+SELECT dolt_commit('-Am', 'init');
+PRAGMA foreign_keys=OFF;
+INSERT INTO users VALUES (1,98);
+PRAGMA foreign_keys=ON;
+SELECT dolt_commit('-Am', 'commit the violating row into HEAD');
+SELECT dolt_verify_constraints('--all');
+INSERT INTO orders VALUES (1,'unrelated');
+"
+
+echo "--- default verify keeps findings for tables it does not scan ---"
+run_oracle "default_keeps_unscanned_findings" "$UNSCANNED_SETUP" "" \
+  "$FOLLOW_AGG
+$FOLLOW_AGG_COUNT" 0
+
+echo "--- default verify on a clean working set keeps recorded findings ---"
+run_oracle "default_clean_worktree_keeps_findings" \
+"CREATE TABLE parent(pk INTEGER PRIMARY KEY, v INT UNIQUE);
+CREATE TABLE users(pk INTEGER PRIMARY KEY, v INT REFERENCES parent(v));
+INSERT INTO parent VALUES (1,10);
+SELECT dolt_commit('-Am', 'init');
+PRAGMA foreign_keys=OFF;
+INSERT INTO users VALUES (1,98);
+PRAGMA foreign_keys=ON;
+SELECT dolt_commit('-Am', 'commit the violating row into HEAD');
+SELECT dolt_verify_constraints('--all');
+" \
+  "" \
+  "$FOLLOW_AGG
+$FOLLOW_AGG_COUNT" 0
+
 echo "--- clean database ---"
 run_oracle "clean_no_violations" \
 "
