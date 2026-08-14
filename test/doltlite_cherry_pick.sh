@@ -602,4 +602,56 @@ run_test "rv_drop_index_restored" \
   "1" "$DB"
 rm -f "$DB"
 
+# A clean cherry-pick / revert is a transaction boundary like dolt_commit:
+# it seals the enclosing BEGIN when it advances the ref. Leaving the
+# transaction open let a later ROLLBACK revert the working set while the
+# advanced ref stayed, splitting HEAD from the data.
+DB=/tmp/test_cp_txn_seal_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','add feat_row');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_cherry_pick('feat');
+ROLLBACK;
+SELECT 'TX|' || (SELECT message FROM dolt_log LIMIT 1) || '|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status);" | $DOLTLITE "$DB" 2>&1)
+TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
+if [ "$TX_LINE" = "TX|add feat_row|2|0" ]; then
+  dltest_pass
+else
+  dltest_fail "cp_in_txn_seals" "  expected: TX|add feat_row|2|0\n  got:      $TX_LINE"
+fi
+if echo "$TX_OUT" | grep -q "cannot rollback - no transaction is active"; then
+  dltest_pass
+else
+  dltest_fail "cp_in_txn_rollback_refused" "  expected the post-cherry-pick ROLLBACK to find no open transaction"
+fi
+rm -f "$DB"
+
+DB=/tmp/test_rv_txn_seal_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'init');
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,'added');
+SELECT dolt_commit('-A','-m','add row 2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));
+ROLLBACK;
+SELECT 'TX|' || (SELECT message FROM dolt_log LIMIT 1) || '|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status);" | $DOLTLITE "$DB" 2>&1)
+TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
+if [ "$TX_LINE" = "TX|Revert \"add row 2\"|1|0" ]; then
+  dltest_pass
+else
+  dltest_fail "rv_in_txn_seals" "  expected: TX|Revert \"add row 2\"|1|0\n  got:      $TX_LINE"
+fi
+if echo "$TX_OUT" | grep -q "cannot rollback - no transaction is active"; then
+  dltest_pass
+else
+  dltest_fail "rv_in_txn_rollback_refused" "  expected the post-revert ROLLBACK to find no open transaction"
+fi
+rm -f "$DB"
+
 dltest_finish

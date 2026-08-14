@@ -536,6 +536,13 @@ static int doltliteRebaseLinearReplay(
   doltliteCommitClear(&origCommit);
   sqlite3_free(aReplay);
   sqlite3_free(zFailedMsg);
+  rc = doltliteVcSealEnclosingTxn(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    sqlite3_free(zOrig);
+    sqlite3_free(zWorking);
+    return rc;
+  }
   *pzFinalMessage = sqlite3_mprintf(
     "Successfully rebased and updated refs/heads/%s",
     zOrig);

@@ -461,6 +461,41 @@ else
 fi
 rm -f "$DB10"
 
+# A successful linear rebase is a transaction boundary like dolt_commit:
+# it seals the enclosing BEGIN when it advances the ref.
+DB11=/tmp/test_rebase_txn_seal_$$.db; rm -f "$DB11"
+cat <<'SQL' | "$DOLTLITE" "$DB11" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
+SELECT dolt_checkout('feat');
+SQL
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+ROLLBACK;
+SELECT 'TX|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status) || '|' || (SELECT active_branch());" | "$DOLTLITE" "$DB11" 2>&1)
+TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
+if [ "$TX_LINE" = "TX|3|0|feat" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_in_txn_seals\n  expected: TX|3|0|feat\n  got:      $TX_LINE"
+fi
+if echo "$TX_OUT" | grep -q "cannot rollback - no transaction is active"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_in_txn_rollback_refused\n  expected the post-rebase ROLLBACK to find no open transaction"
+fi
+rm -f "$DB11"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

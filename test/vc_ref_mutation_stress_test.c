@@ -218,6 +218,8 @@ static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
 static int reopenDb(const char *path, sqlite3 **pDb){
   Budget budget;
   int rc = SQLITE_OK;
+  char last[256];
+  last[0] = 0;
   if( *pDb ){
     sqlite3_close(*pDb);
     *pDb = 0;
@@ -231,6 +233,7 @@ static int reopenDb(const char *path, sqlite3 **pDb){
       return SQLITE_OK;
     }
     msg = *pDb ? sqlite3_errmsg(*pDb) : 0;
+    snprintf(last, sizeof(last), "%s", msg ? msg : "");
     if( !isRetryableRc(rc) && !isRetryableMsg(msg) ){
       fprintf(stderr, "open failed rc=%d: %s\n", rc, msg ? msg : "(none)");
       return rc;
@@ -239,7 +242,7 @@ static int reopenDb(const char *path, sqlite3 **pDb){
     *pDb = 0;
     sqlite3_sleep(5);
   }
-  return budgetSpent(&budget, "reopenDb", rc, "open never succeeded");
+  return budgetSpent(&budget, "reopenDb", rc, last[0] ? last : "open never succeeded");
 }
 
 static int setupDb(const char *path){
@@ -406,7 +409,7 @@ static int runWorker(const char *path, int worker){
 
 worker_error:
   fprintf(stderr, "worker %d failed rc=%d msg=%s\n",
-          worker, rc, sqlite3_errmsg(db));
+          worker, rc, db ? sqlite3_errmsg(db) : "no live connection");
   sqlite3_close(db);
   return 1;
 }
