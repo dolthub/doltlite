@@ -118,8 +118,16 @@ make sqlite3.c sqlite3.h sqlite3ext.h
 make -C ext/wasm
 # → ext/wasm/jswasm/{sqlite3.js,sqlite3.mjs,sqlite3.wasm}
 make -C ext/wasm DOLTLITE_WASM=0   # upstream SQLite wasm instead
+make -C ext/wasm DOLTLITE_ENABLE_REMOTES=0 # DoltLite without remote clients
 make -C ext/wasm dist             # zip package
 ```
+
+`DOLTLITE_ENABLE_REMOTES=0` omits clone, fetch, pull, push, HTTP, TLS, and
+credential code. Calls to the remote SQL functions then return `DoltLite
+remotes are disabled in this build`. Browser builds with remotes enabled need
+an Emscripten-compatible socket transport or proxy; see
+[`examples/wa-sqlite-clone.mjs`](examples/wa-sqlite-clone.mjs) for a public
+clone request that exercises the client.
 
 ## Using as a C Library
 

@@ -167,6 +167,14 @@ if {$doltlite} {
 #ifndef DOLTLITE_VERSION
 # define DOLTLITE_VERSION "doltlite-amalgamation"
 #endif
+#ifndef DOLTLITE_ENABLE_REMOTES
+# define DOLTLITE_ENABLE_REMOTES 1
+#endif
+#if DOLTLITE_ENABLE_REMOTES
+# define DOLTLITE_AMALGAMATION_AUTH 1
+# define DOLTLITE_AUTH_CLIENT_ONLY 1
+# define DOLTLITE_HAVE_AUTH 1
+#endif
 
 /* winsock2.h must precede SQLite's first windows.h include. */
 #ifdef _WIN32
@@ -251,9 +259,31 @@ if {$doltlite} {
     doltlite_branch_int.h doltlite_merge_int.h doltlite_merge_constraints_int.h
     doltlite_name_index.h doltlite_parse.h
     doltlite_record.h doltlite_remote.h doltlite_vtab_util.h
-    doltlite_creds.h doltlite_net.h
+    doltlite_creds.h doltlite_mbedtls_config.h doltlite_net.h doltlite_tls.h
   } {
     set available_hdr($hdr) 1
+  }
+  foreach path [glob -nocomplain $srcdir/ed25519/*.h] {
+    set tail [file tail $path]
+    set hdr ed25519/$tail
+    set available_hdr($hdr) 1
+    set available_hdr_path($hdr) $path
+    if {$tail ne "sha512.h"} {
+      set available_hdr($tail) 1
+      set available_hdr_path($tail) $path
+    }
+  }
+  foreach dir {mbedtls psa} {
+    foreach path [glob -nocomplain $srcdir/$dir/*.h] {
+      set hdr "$dir/[file tail $path]"
+      set available_hdr($hdr) 1
+      set available_hdr_path($hdr) $path
+    }
+  }
+  foreach path [glob -nocomplain $srcdir/mbedtls_library/*.h] {
+    set hdr [file tail $path]
+    set available_hdr($hdr) 1
+    set available_hdr_path($hdr) $path
   }
 }
 
@@ -284,6 +314,7 @@ proc section_comment {text} {
   global out s78
   set n [string length $text]
   set nstar [expr {60 - $n}]
+  if {$nstar<0} {set nstar 0}
   set stars [string range $s78 0 $nstar]
   puts $out "/************** $text $stars/"
 }
@@ -293,7 +324,7 @@ proc section_comment {text} {
 # process them appropriately.
 #
 proc copy_file {filename} {
-  global seen_hdr available_hdr varonly_hdr cdecllist out
+  global seen_hdr available_hdr available_hdr_path varonly_hdr cdecllist out
   global addstatic linemacros useapicall srcdir skipstructs skipfns
   set ln 0
   set tail [file tail $filename]
@@ -337,6 +368,18 @@ proc copy_file {filename} {
       }
     }
     if {[regexp {^\s*#\s*include\s+["<]([^">]+)[">]} $line all hdr]} {
+      if {[string first / $hdr]<0
+          && [string match */ed25519/* $filename]
+          && [info exists available_hdr(ed25519/$hdr)]} {
+        set hdr ed25519/$hdr
+      } elseif {[string first / $hdr]<0
+          && [string match */psa/* $filename]
+          && [info exists available_hdr(psa/$hdr)]} {
+        set hdr psa/$hdr
+      } elseif {[string first / $hdr]<0
+          && [info exists available_hdr(mbedtls/$hdr)]} {
+        set hdr mbedtls/$hdr
+      }
       # A doltlite source may include a registered header by a relative path
       # (e.g. "../ext/blake3/blake3.h"); normalize to the basename so it inlines.
       if {![info exists available_hdr($hdr)]
@@ -347,7 +390,22 @@ proc copy_file {filename} {
         if {$available_hdr($hdr)} {
           set available_hdr($hdr) 0
           section_comment "Include $hdr in the middle of $tail"
-          copy_file $srcdir/$hdr
+          if {[info exists available_hdr_path($hdr)]} {
+            set mapped_path $available_hdr_path($hdr)
+            foreach alias [array names available_hdr_path] {
+              if {$available_hdr_path($alias) eq $mapped_path} {
+                set available_hdr($alias) 0
+              }
+            }
+            copy_file $mapped_path
+          } else {
+            copy_file $srcdir/$hdr
+          }
+          if {$hdr eq "mbedtls/mbedtls_config.h"
+              && $available_hdr(doltlite_mbedtls_config.h)} {
+            set available_hdr(doltlite_mbedtls_config.h) 0
+            copy_file $srcdir/doltlite_mbedtls_config.h
+          }
           section_comment "Continuing where we left off in $tail"
           if {$linemacros} {puts $out "#line [expr {$ln+1}] \"$filename\""}
         } else {
@@ -439,6 +497,40 @@ proc copy_file {filename} {
   }
   close $in
   section_comment "End of $tail"
+}
+
+proc reset_auth_headers {headers} {
+  global available_hdr
+  foreach hdr $headers {
+    set available_hdr($hdr) 1
+  }
+}
+
+proc copy_file_isolated {filename {renames {}}} {
+  global out
+  set names {}
+  set in [open $filename rb]
+  while {![eof $in]} {
+    set line [gets $in]
+    if {[regexp {^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)} $line all name]
+        && [lsearch -exact $names $name]<0} {
+      lappend names $name
+    }
+  }
+  close $in
+  foreach {name replacement} $renames {
+    if {[lsearch -exact $names $name]<0} {lappend names $name}
+  }
+  foreach name $names {
+    puts $out "#pragma push_macro(\"$name\")"
+  }
+  foreach {name replacement} $renames {
+    puts $out "#define $name $replacement"
+  }
+  copy_file $filename
+  foreach name [lreverse $names] {
+    puts $out "#pragma pop_macro(\"$name\")"
+  }
 }
 
 # Read the source file named $filename and write it into the
@@ -594,7 +686,7 @@ proc emit_doltlite_storage_block {} {
 # define the unprefixed sqlite3Btree*/sqlite3Pager* entry points and call the
 # orig_* engine emitted above for ATTACH'd stock databases.
 proc emit_doltlite_engine_block {} {
-  global out srcdir
+  global out srcdir seen_hdr
   section_comment "doltlite: BEGIN prolly engine + version-control layer"
   # blake3: a single-TU amalgamation cannot pass the per-file -m{sse,avx} flags
   # the SIMD sources need, so force the portable backend (the object/release
@@ -609,6 +701,102 @@ proc emit_doltlite_engine_block {} {
   puts $out "#ifndef BLAKE3_USE_NEON"
   puts $out "#define BLAKE3_USE_NEON 0"
   puts $out "#endif"
+  copy_file $srcdir/doltlite_parse.h
+  set auth_system_headers {
+    dirent.h errno.h fcntl.h inttypes.h limits.h stdarg.h stddef.h stdint.h
+    stdio.h stdlib.h string.h sys/socket.h sys/stat.h sys/time.h time.h
+    unistd.h netinet/in.h arpa/inet.h netdb.h poll.h
+  }
+  foreach hdr $auth_system_headers {
+    unset -nocomplain seen_hdr($hdr)
+  }
+  set auth_seen_before [array names seen_hdr]
+  puts $out "#if DOLTLITE_ENABLE_REMOTES && defined(DOLTLITE_HAVE_AUTH)"
+  puts $out "#if defined(__clang__)"
+  puts $out "#pragma clang diagnostic push"
+  puts $out "#pragma clang diagnostic ignored \"-Wdeclaration-after-statement\""
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#pragma GCC diagnostic push"
+  puts $out "#pragma GCC diagnostic ignored \"-Wdeclaration-after-statement\""
+  puts $out "#endif"
+  unset -nocomplain seen_hdr(arm_neon.h)
+  foreach f [lsort [glob -nocomplain $srcdir/ed25519/*.c]] {
+    set renames {}
+    if {[file tail $f] eq "ge.c"} {
+      set renames {select doltlite_ed25519_select}
+    }
+    if {[file tail $f] eq "sc.c"} {
+      set renames {load_3 doltlite_ed25519_sc_load_3
+                   load_4 doltlite_ed25519_sc_load_4}
+    }
+    if {[file tail $f] eq "sha512.c"} {
+      set renames {K doltlite_ed25519_sha512_K}
+    }
+    copy_file_isolated $f $renames
+  }
+  set mbedtls_emitted {
+    aes.c asn1parse.c asn1write.c base64.c bignum.c bignum_core.c
+    psa_crypto_slot_management.c
+    psa_crypto.c psa_crypto_aead.c psa_crypto_cipher.c psa_crypto_client.c
+    psa_crypto_driver_wrappers_no_static.c psa_crypto_ecp.c psa_crypto_ffdh.c
+    psa_crypto_hash.c psa_crypto_mac.c psa_crypto_random.c psa_crypto_rsa.c
+    psa_crypto_storage.c psa_its_file.c psa_util.c
+    chacha20.c chachapoly.c cipher.c cipher_wrap.c constant_time.c
+    ecp.c ecp_curves.c ecdh.c ecdsa.c ctr_drbg.c
+    debug.c dhm.c entropy.c entropy_poll.c
+    gcm.c hmac_drbg.c md.c net_sockets.c oid.c pem.c pk.c pk_ecc.c pk_wrap.c
+    pkcs5.c pkparse.c platform.c platform_util.c poly1305.c rsa.c rsa_alt_helpers.c
+    sha1.c sha256.c sha512.c ssl_ciphersuites.c ssl_client.c
+    ssl_debug_helpers_generated.c ssl_msg.c ssl_tls.c ssl_tls12_client.c
+    x509.c x509_crt.c
+  }
+  foreach name $mbedtls_emitted {
+    set f $srcdir/mbedtls_library/$name
+    set tail [file tail $f]
+    set renames {}
+    if {$tail eq "ecdsa.c"} {
+      reset_auth_headers {mbedtls/hmac_drbg.h}
+    }
+    if {$tail eq "debug.c"} {
+      reset_auth_headers {
+        entropy_poll.h mbedtls/ssl.h mbedtls/ssl_ciphersuites.h
+        mbedtls/x509.h mbedtls/x509_crl.h mbedtls/x509_crt.h
+      }
+    }
+    if {$tail eq "sha512.c"} {set renames {K doltlite_mbedtls_sha512_K}}
+    if {$tail eq "ssl_ciphersuites.c"} {
+      set renames {supported_init doltlite_mbedtls_ssl_supported_init}
+    }
+    if {$tail eq "psa_crypto_aead.c"} {
+      set renames {psa_aead_setup doltlite_mbedtls_psa_aead_setup}
+    }
+    if {$tail eq "psa_crypto_cipher.c"} {
+      set renames {psa_cipher_setup doltlite_mbedtls_psa_cipher_setup}
+    }
+    if {$tail eq "psa_crypto_mac.c"} {
+      set renames {psa_mac_setup doltlite_mbedtls_psa_mac_setup}
+    }
+    if {$tail eq "psa_crypto_slot_management.c"} {
+      set renames {
+        psa_global_data_t doltlite_mbedtls_psa_slot_global_data_t
+        global_data doltlite_mbedtls_psa_slot_global_data
+      }
+    }
+    copy_file_isolated $f $renames
+  }
+  copy_file_isolated $srcdir/doltlite_creds.c
+  copy_file_isolated $srcdir/doltlite_tls.c
+  puts $out "#if defined(__clang__)"
+  puts $out "#pragma clang diagnostic pop"
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#pragma GCC diagnostic pop"
+  puts $out "#endif"
+  puts $out "#endif"
+  foreach hdr [array names seen_hdr] {
+    if {[lsearch -exact $auth_seen_before $hdr]<0} {
+      unset seen_hdr($hdr)
+    }
+  }
   # The emission list below is ordered deliberately (definitions before
   # users), so it stays hand-written rather than globbed. main.mk copies
   # every doltlite/prolly/chunk source into tsrc by wildcard, though, so
@@ -627,6 +815,7 @@ proc emit_doltlite_engine_block {} {
     prolly_btree_cursor_count.c
     prolly_btree_mutation.c prolly_btree_orig.c prolly_btree_state.c
     prolly_btree_txn.c pager_shim.c sortkey.c
+    doltlite_creds.c doltlite_tls.c
     doltlite.c doltlite_core.c doltlite_cmd.c doltlite_add.c doltlite_commit_cmd.c
     doltlite_reset.c doltlite_merge_cmd.c doltlite_cherry_pick.c
     doltlite_revert.c doltlite_rebase.c doltlite_config.c
@@ -644,7 +833,9 @@ proc emit_doltlite_engine_block {} {
     doltlite_http_remote.c
   }
   foreach f $doltlite_emitted {
-    copy_file $srcdir/$f
+    if {$f ni {doltlite_creds.c doltlite_tls.c}} {
+      copy_file $srcdir/$f
+    }
   }
   set doltlite_unemitted {}
   foreach path [lsort [concat \
@@ -819,8 +1010,16 @@ foreach file $flist {
     puts $out "#include <stdint.h>"
     copy_file $srcdir/chunk_store.h
     section_comment "doltlite: network portability header"
+    puts $out "#if DOLTLITE_ENABLE_REMOTES"
     set available_hdr(doltlite_net.h) 0
     copy_file $srcdir/doltlite_net.h
+    puts $out "#endif"
+    foreach hdr {
+      errno.h string.h time.h windows.h sys/socket.h netinet/in.h arpa/inet.h
+      netdb.h fcntl.h poll.h sys/time.h unistd.h
+    } {
+      unset -nocomplain seen_hdr($hdr)
+    }
   }
 }
 if {$doltlite} {

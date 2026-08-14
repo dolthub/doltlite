@@ -1154,11 +1154,17 @@ T.link.tcl = $(T.tcl.env.source); $(T.link)
 # the amalgamation stale, and every amalgamation consumer (testfixture
 # above all) silently tests the previously generated engine.
 .target_source: $(MAKE_SANITY_CHECK) $(SRC) $(DOLTLITE_EXTRA_TSRC) \
+    $(DOLTLITE_AUTH_TSRC) \
     $(TOP)/tool/vdbe-compress.tcl fts5.c $(B.tclsh)
 	rm -rf tsrc
 	mkdir tsrc
 	cp -f $(SRC) tsrc
 	$(if $(DOLTLITE_EXTRA_TSRC),cp -f $(DOLTLITE_EXTRA_TSRC) tsrc)
+	$(if $(DOLTLITE_AUTH_TSRC),mkdir -p tsrc/ed25519 tsrc/mbedtls tsrc/psa tsrc/mbedtls_library)
+	$(if $(DOLTLITE_AUTH_TSRC),cp -f $(TOP)/ext/ed25519/*.c $(TOP)/ext/ed25519/*.h tsrc/ed25519)
+	$(if $(DOLTLITE_AUTH_TSRC),cp -f $(TOP)/ext/mbedtls/include/mbedtls/*.h tsrc/mbedtls)
+	$(if $(DOLTLITE_AUTH_TSRC),cp -f $(TOP)/ext/mbedtls/include/psa/*.h tsrc/psa)
+	$(if $(DOLTLITE_AUTH_TSRC),cp -f $(TOP)/ext/mbedtls/library/*.c $(TOP)/ext/mbedtls/library/*.h tsrc/mbedtls_library)
 	rm -f tsrc/sqlite.h.in tsrc/parse.y
 	$(B.tclsh) $(TOP)/tool/vdbe-compress.tcl $(OPTS) <tsrc/vdbe.c >vdbe.new
 	mv -f vdbe.new tsrc/vdbe.c
