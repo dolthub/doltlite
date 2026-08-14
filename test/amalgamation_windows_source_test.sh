@@ -54,4 +54,10 @@ if [ "$seh_defs" -ne 2 ]; then
   exit 1
 fi
 
+chunk_commit_section="$(sed -n '/Begin file chunk_store_commit\.c/,/End of chunk_store_commit\.c/p' "$amalgamation")"
+if ! grep -Fq 'include <process.h>' <<<"$chunk_commit_section"; then
+  echo "FAIL: chunk_store_commit.c lacks the Windows _exit declaration in $amalgamation"
+  exit 1
+fi
+
 echo "Windows amalgamation source invariants: PASS"
