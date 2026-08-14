@@ -2,8 +2,6 @@ name: CI
 
 on:
   pull_request:
-    paths-ignore:
-      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -12,31 +10,91 @@ permissions:
   pull-requests: write
 
 jobs:
+  classify:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.files.outputs.docs_only }}
+    steps:
+      - id: files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pull = context.payload.pull_request;
+            if (!pull) {
+              core.setOutput('docs_only', 'false');
+              return;
+            }
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pull.number,
+                per_page: 100,
+              }
+            );
+            core.setOutput(
+              'docs_only',
+              String(files.length > 0 && files.every(file => file.filename.endsWith('.md')))
+            );
+
   build:
     name: Build all binaries
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/ci-build.yml
 
-  build-test:
+  build_test:
     name: Build-Test
-    needs: build
+    needs: [classify, build]
+    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/build-test.yml
 
-  test-suite:
+  test_suite:
     name: Test Suite
-    needs: build
+    needs: [classify, build]
+    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/test.yml
 
   sanitizers:
     name: Sanitizers
-    needs: build
+    needs: [classify, build]
+    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/sanitizers.yml
 
   smoke:
     name: Smoke
-    needs: build
+    needs: [classify, build]
+    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/smoke.yml
 
   benchmark:
     name: Benchmark
-    needs: build
+    needs: [classify, build]
+    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/benchmark.yml
+
+  gate:
+    name: CI Gate
+    needs: [classify, build, build_test, test_suite, sanitizers, smoke, benchmark]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          CLASSIFY: ${{ needs.classify.result }}
+          BUILD: ${{ needs.build.result }}
+          BUILD_TEST: ${{ needs.build_test.result }}
+          TEST_SUITE: ${{ needs.test_suite.result }}
+          SANITIZERS: ${{ needs.sanitizers.result }}
+          SMOKE: ${{ needs.smoke.result }}
+          BENCHMARK: ${{ needs.benchmark.result }}
+        run: |
+          test "$CLASSIFY" = success
+          if [ "$DOCS_ONLY" = true ]; then
+            exit 0
+          fi
+          for result in "$BUILD" "$BUILD_TEST" "$TEST_SUITE" "$SANITIZERS" "$SMOKE" "$BENCHMARK"; do
+            test "$result" = success
+          done

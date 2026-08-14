@@ -246,25 +246,6 @@ def publish_report(args):
             f"warning: unable to add label {LABEL}",
             file=sys.stderr,
         )
-    if args.reviewer:
-        review = command(
-            [
-                "gh",
-                "pr",
-                "edit",
-                url,
-                "--repo",
-                args.repository,
-                "--add-reviewer",
-                args.reviewer,
-            ],
-            check=False,
-        )
-        if review.returncode:
-            print(
-                f"warning: unable to request review from {args.reviewer}",
-                file=sys.stderr,
-            )
 
 
 def parse_args(argv):
@@ -275,7 +256,6 @@ def parse_args(argv):
     parser.add_argument("--run-attempt", default="1")
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--generated-date", required=True)
-    parser.add_argument("--reviewer", default="")
     return parser.parse_args(argv)
 
 

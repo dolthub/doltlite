@@ -407,7 +407,6 @@ jobs:
             steps.report.outputs.valid == '1' }}
       env:
         GH_TOKEN: ${{ github.token }}
-        PERFORMANCE_REPORT_REVIEWER: ${{ vars.PERFORMANCE_REPORT_REVIEWER }}
       run: |
         python3 tool/publish-performance-report.py \
           --report "${{ steps.report.outputs.report }}" \
@@ -415,8 +414,7 @@ jobs:
           --run-id "$GITHUB_RUN_ID" \
           --run-attempt "$GITHUB_RUN_ATTEMPT" \
           --run-url "${{ steps.report.outputs.run_url }}" \
-          --generated-date "${{ steps.report.outputs.generated_date }}" \
-          --reviewer "$PERFORMANCE_REPORT_REVIEWER"
+          --generated-date "${{ steps.report.outputs.generated_date }}"
 
     - name: Fail when a ceiling regressed
       if: ${{ always() && steps.report.outputs.failed == '1' }}
