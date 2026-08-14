@@ -104,6 +104,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
   int bPreferOurMaster,
+  int bRejectUnchanged,
   int *pnConflicts,
   int *pnViolations,
   char *hexBuf
@@ -295,6 +296,29 @@ int applyMergedCatalogAndCommit(
     commitSplit = 1;
   }
 
+  /* Revert of a commit whose inverse is already in HEAD is Dolt's
+  ** "nothing to commit": the commit catalog equals HEAD, so do not
+  ** write another empty Revert commit. Restore the pre-op working
+  ** set (including unrelated dirty tables) and tell the caller. */
+  if( bRejectUnchanged && *pnConflicts==0 ){
+    const ProllyHash *pHeadCat = pCommitOurCatHash
+        ? pCommitOurCatHash : ourCatHash;
+    if( prollyHashCompare(&commitCatHash, pHeadCat)==0 ){
+      ProllyHash restoredCat = savedState.sessionCatalogHash;
+      int restoreRc;
+      if( graphLocked ){
+        chunkStoreUnlock(cs);
+        graphLocked = 0;
+      }
+      restoreRc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_DONE);
+      if( restoreRc==SQLITE_DONE && !prollyHashIsEmpty(&restoredCat) ){
+        int persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
+        if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) return persistRc;
+      }
+      return restoreRc;
+    }
+  }
+
   rc = doltliteCreateAndStoreCommit(db, ourHead, &commitCatHash,
       zMessage, NULL, NULL, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
@@ -423,7 +447,7 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, &nConflicts, 0,
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, &nConflicts, 0,
         hexBuf);
   }
 

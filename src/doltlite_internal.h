@@ -1095,6 +1095,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
   int bPreferOurMaster,
+  int bRejectUnchanged,
   int *pnConflicts,
   int *pnViolations,
   char *hexBuf
