@@ -5,7 +5,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef SQLITE_TEST
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
+#endif
 
 /* Chunk-store commit/rollback path. */
 
