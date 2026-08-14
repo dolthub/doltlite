@@ -28,6 +28,23 @@ static int doltliteTableEntryDiffers(
   return 0;
 }
 
+static int revertTouchesTable(
+  struct TableEntry *aCommit, int nCommit,
+  struct TableEntry *aParent, int nParent,
+  SchemaEntry *aCommitSchema, int nCommitSchema,
+  SchemaEntry *aParentSchema, int nParentSchema,
+  const char *zName
+){
+  struct TableEntry *pInCommit;
+  struct TableEntry *pInParent;
+  if( !zName ) return 0;
+  pInCommit = doltliteFindTableByName(aCommit, nCommit, zName);
+  pInParent = doltliteFindTableByName(aParent, nParent, zName);
+  if( doltliteTableEntryDiffers(pInCommit, pInParent) ) return 1;
+  return doltliteIndexSchemaRowsDifferForTable(
+      aCommitSchema, nCommitSchema, aParentSchema, nParentSchema, zName);
+}
+
 static int doltliteRevertCheckDirty(
   sqlite3 *db,
   const ProllyHash *pCommitCat,
@@ -39,8 +56,10 @@ static int doltliteRevertCheckDirty(
   u8 *wBuf = 0; int nWBuf = 0;
   struct TableEntry *aCommit = 0, *aParent = 0;
   struct TableEntry *aWorking = 0, *aCompare = 0;
+  SchemaEntry *aCommitSchema = 0, *aParentSchema = 0;
   int nCommit = 0, nParent = 0;
   int nWorking = 0, nCompare = 0;
+  int nCommitSchema = 0, nParentSchema = 0;
   int i, rc;
 
   *pConflict = 0;
@@ -75,27 +94,33 @@ static int doltliteRevertCheckDirty(
     rc = doltliteLoadCatalog(db, &headCatHash, &aCompare, &nCompare, 0);
     if( rc!=SQLITE_OK ) goto done;
   }
+  rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pCommitCat,
+                             &aCommitSchema, &nCommitSchema);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pParentCat,
+                             &aParentSchema, &nParentSchema);
+  if( rc!=SQLITE_OK ) goto done;
 
   for(i=0; i<nWorking; i++){
     struct TableEntry *pCmp;
-    struct TableEntry *pInCommit;
-    struct TableEntry *pInParent;
+    if( !aWorking[i].zName ) continue;
     pCmp = doltliteFindTableByName(aCompare, nCompare, aWorking[i].zName);
     if( !doltliteTableEntryDiffers(pCmp, &aWorking[i]) ) continue;
-    pInCommit = doltliteFindTableByName(aCommit, nCommit, aWorking[i].zName);
-    pInParent = doltliteFindTableByName(aParent, nParent, aWorking[i].zName);
-    if( doltliteTableEntryDiffers(pInCommit, pInParent) ){
+    if( revertTouchesTable(aCommit, nCommit, aParent, nParent,
+                           aCommitSchema, nCommitSchema,
+                           aParentSchema, nParentSchema,
+                           aWorking[i].zName) ){
       *pConflict = 1;
       goto done;
     }
   }
   for(i=0; i<nCompare; i++){
-    struct TableEntry *pInCommit;
-    struct TableEntry *pInParent;
+    if( !aCompare[i].zName ) continue;
     if( doltliteFindTableByName(aWorking, nWorking, aCompare[i].zName) ) continue;
-    pInCommit = doltliteFindTableByName(aCommit, nCommit, aCompare[i].zName);
-    pInParent = doltliteFindTableByName(aParent, nParent, aCompare[i].zName);
-    if( doltliteTableEntryDiffers(pInCommit, pInParent) ){
+    if( revertTouchesTable(aCommit, nCommit, aParent, nParent,
+                           aCommitSchema, nCommitSchema,
+                           aParentSchema, nParentSchema,
+                           aCompare[i].zName) ){
       *pConflict = 1;
       goto done;
     }
@@ -106,6 +131,8 @@ done:
   doltliteFreeCatalog(aParent, nParent);
   doltliteFreeCatalog(aWorking, nWorking);
   doltliteFreeCatalog(aCompare, nCompare);
+  freeSchemaEntries(aCommitSchema, nCommitSchema);
+  freeSchemaEntries(aParentSchema, nParentSchema);
   return rc;
 }
 
