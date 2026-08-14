@@ -1312,6 +1312,7 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   ProllyHash oldCommittedRefsHash;
   SavedRefsState savedRefs;
   int refsDetached = 0;
+  int locked = 0;
   u8 oldRefsStale;
   int rc;
 
@@ -1330,12 +1331,7 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
     return rc;
   }
 
-  if( nRoots == 0 ){
-
-    sqlite3_free(aRoots);
-
-  }else{
-
+  if( nRoots>0 ){
     pLocalDst = doltliteLocalAsRemote(pLocal);
     if( !pLocalDst ){
       sqlite3_free(aRoots);
@@ -1351,14 +1347,32 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
     ** lands. A sweep in that window is refused because the store still holds
     ** the pre-sweep file identity -- the hook lets a test drive one. */
     if( rc==SQLITE_OK ) doltliteTestRunBeforeRefInstallHook();
-    sqlite3_free(aRoots);
-    aRoots = 0;
-
     if( rc!=SQLITE_OK ){
+      sqlite3_free(aRoots);
       sqlite3_free(refsData);
       return rc;
     }
   }
+
+  /* Same window as fetch: nothing roots the synced chunks until this refs
+  ** blob lands. Hold the store lock across validate + install + commit
+  ** (chunkStoreCommit is reentrant at lockDepth>0). Re-walk every collected
+  ** root under the lock gc itself must hold, and fail SQLITE_BUSY_SNAPSHOT
+  ** so a retry re-syncs what went missing. Installing branch refs over a
+  ** collected graph wedges later connections: the dolt_* registration
+  ** chain aborts on the first missing member. */
+  rc = chunkStoreLockAndRefresh(pLocal);
+  if( rc==SQLITE_OK ){
+    locked = 1;
+    rc = chunkStoreForceRefresh(pLocal);
+  }
+  if( rc==SQLITE_OK && nRoots>0 ){
+    rc = remoteValidateGraph(pLocal, aRoots, nRoots);
+    if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ) rc = SQLITE_BUSY_SNAPSHOT;
+  }
+  sqlite3_free(aRoots);
+  aRoots = 0;
+  if( rc!=SQLITE_OK ) goto clone_restore_refs;
 
   if( refsData && nRefsData > 0 ){
     csDetachSavedRefsState(pLocal, &savedRefs);
@@ -1397,10 +1411,12 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   }
 
   if( refsDetached ) csFreeSavedRefsState(&savedRefs);
+  if( locked ) chunkStoreUnlock(pLocal);
   return rc;
 
 clone_restore_refs:
   sqlite3_free(refsData);
+  sqlite3_free(aRoots);
   if( refsDetached ){
     csFreeRefsState(pLocal);
     csRestoreSavedRefsState(pLocal, &savedRefs);
@@ -1410,6 +1426,7 @@ clone_restore_refs:
   memcpy(&pLocal->refs.committedRefsHash, &oldCommittedRefsHash,
          sizeof(ProllyHash));
   pLocal->bRefsStale = oldRefsStale;
+  if( locked ) chunkStoreUnlock(pLocal);
   return rc;
 }
 
