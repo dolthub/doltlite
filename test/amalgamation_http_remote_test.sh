@@ -27,6 +27,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if make -n DOLTLITE_ENABLE_REMOTES=2 doltlite >"$tmp/invalid-option.log" 2>&1; then
+  echo "FAIL: invalid DOLTLITE_ENABLE_REMOTES value accepted"
+  exit 1
+fi
+if ! grep -Fq "DOLTLITE_ENABLE_REMOTES must be 0 or 1" "$tmp/invalid-option.log"; then
+  echo "FAIL: invalid DOLTLITE_ENABLE_REMOTES value did not produce a clear error"
+  cat "$tmp/invalid-option.log"
+  exit 1
+fi
+
 if grep -Eq 'Begin file doltlite_remotesrv\.c|doltliteServe' ./sqlite3.c; then
   echo "FAIL: remote server implementation present in amalgamation"
   exit 1
