@@ -6,10 +6,7 @@
 #include <string.h>
 
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
-  blake3_hasher h;
-  blake3_hasher_init(&h);
-  blake3_hasher_update(&h, pData, (size_t)nData);
-  blake3_hasher_finalize(&h, pOut->data, PROLLY_HASH_SIZE);
+  blake3_hash_oneshot(pData, (size_t)nData, pOut->data, PROLLY_HASH_SIZE);
 }
 
 /* Hash of pData[0..nData) followed by nZeroTail zero bytes, without

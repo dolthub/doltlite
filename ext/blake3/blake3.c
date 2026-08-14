@@ -165,6 +165,27 @@ INLINE size_t left_subtree_len(size_t input_len) {
   return round_down_to_power_of_2(full_chunks) * BLAKE3_CHUNK_LEN;
 }
 
+/* DOLTLITE: a dummy chunk to round a hash_many() batch up to a lane count.
+** Its chaining value lands in an output slot the caller never reads. */
+static const uint8_t blake3_dl_pad_chunk[BLAKE3_CHUNK_LEN] = {0};
+
+/* DOLTLITE: every hash_many() backend vectorises whole groups of its lane
+** count and hashes the remainder one chunk at a time, so a 2- or 3-chunk
+** batch never reaches the vector path at all. Rounding the batch up to the
+** next lane count is at worst the cost of the serial remainder it replaces.
+** Returns n unchanged when no backend can take it. */
+INLINE size_t blake3_dl_padded_batch(size_t n) {
+  size_t degree = blake3_simd_degree();
+  size_t lanes = 4;
+  if (n < 2 || degree < 4) {
+    return n;
+  }
+  while (lanes < n) {
+    lanes *= 2;
+  }
+  return lanes <= degree ? lanes : n;
+}
+
 INLINE size_t compress_chunks_parallel(const uint8_t *input, size_t input_len,
                                        const uint32_t key[8],
                                        uint64_t chunk_counter, uint8_t flags,
@@ -172,13 +193,19 @@ INLINE size_t compress_chunks_parallel(const uint8_t *input, size_t input_len,
   const uint8_t *chunks_array[MAX_SIMD_DEGREE];
   size_t input_position = 0;
   size_t chunks_array_len = 0;
+  size_t batch_len;
+  size_t i;
   while (input_len - input_position >= BLAKE3_CHUNK_LEN) {
     chunks_array[chunks_array_len] = &input[input_position];
     input_position += BLAKE3_CHUNK_LEN;
     chunks_array_len += 1;
   }
 
-  blake3_hash_many(chunks_array, chunks_array_len,
+  batch_len = blake3_dl_padded_batch(chunks_array_len);
+  for (i = chunks_array_len; i < batch_len; i++) {
+    chunks_array[i] = blake3_dl_pad_chunk;
+  }
+  blake3_hash_many(chunks_array, batch_len,
                    BLAKE3_CHUNK_LEN / BLAKE3_BLOCK_LEN, key, chunk_counter,
                    true, flags, CHUNK_START, CHUNK_END, out);
 
@@ -443,6 +470,30 @@ void blake3_hasher_finalize_seek(const blake3_hasher *self, uint64_t seek,
 void blake3_hasher_reset(blake3_hasher *self) {
   chunk_state_reset(&self->chunk, self->key, 0);
   self->cv_stack_len = 0;
+}
+
+/* DOLTLITE: hash a whole buffer in one call. blake3_hasher_update() consumes
+** input as a stream, so it must break a buffer into power-of-two aligned
+** subtrees and compress them one after another; a 3712-byte prolly node
+** becomes a 2-chunk subtree, then a 1-chunk subtree, then a partial chunk,
+** none of which fill a SIMD batch. Handing the whole buffer to the wide
+** compressor instead puts every full chunk in a single hash_many() call.
+** Output is identical to init/update/finalize on the same bytes. */
+void blake3_hash_oneshot(const void *input, size_t input_len, uint8_t *out,
+                         size_t out_len) {
+  output_t output;
+  if (input_len <= BLAKE3_CHUNK_LEN) {
+    blake3_chunk_state chunk;
+    chunk_state_init(&chunk, IV, 0);
+    chunk_state_update(&chunk, (const uint8_t *)input, input_len);
+    output = chunk_state_output(&chunk);
+  } else {
+    uint8_t cv_pair[2 * BLAKE3_OUT_LEN];
+    compress_subtree_to_parent_node((const uint8_t *)input, input_len, IV, 0, 0,
+                                    cv_pair, false);
+    output = parent_output(cv_pair, IV, 0);
+  }
+  output_root_bytes(&output, 0, out, out_len);
 }
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop

@@ -89,6 +89,21 @@ check "prollyHashCompute(0..255 x 64, 16384 B = 16 chunks)" \
   "$($BIN prolly-16384)" \
   "d49d367e4b0011a34510a28a1eb0caeb3e51e77f"
 
+# Chunk counts that do not fill a SIMD batch on their own. These are the
+# ordinary prolly node sizes, and they reach hash_many() padded out to a lane
+# count with a dummy chunk; the pinned values are the unpadded ones.
+check "prollyHashCompute(2048 B = 2 chunks)" \
+  "$($BIN prolly-size 2048)" \
+  "1bdccfde0210a8ca178be19c6777cdb4b9a8fd24"
+
+check "prollyHashCompute(3712 B = 3 chunks + partial)" \
+  "$($BIN prolly-size 3712)" \
+  "1a9a7255bb8549b589da5fadd01078a420836777"
+
+check "prollyHashCompute(5120 B = 5 chunks)" \
+  "$($BIN prolly-size 5120)" \
+  "755ae1e177565c02059c4eb273c1e1765f4aebfd"
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "=== Results: $pass passed, 0 failed ==="

@@ -79,6 +79,26 @@ int main(int argc, char **argv){
     printf("\n");
     return 0;
   }
+  /* Arbitrary length, so the suite can pin sizes whose chunk count does not
+  ** fill a SIMD batch -- those take a different path through hash_many(). */
+  if( !strcmp(test, "prolly-size") ){
+    uint8_t *buf;
+    int n;
+    int i;
+    ProllyHash h;
+    if( argc<3 ) return 2;
+    n = atoi(argv[2]);
+    if( n<0 ) return 2;
+    buf = malloc(n ? (size_t)n : 1);
+    if( !buf ) return 1;
+    for(i=0; i<n; i++) buf[i] = (uint8_t)(i % 256);
+    prollyHashCompute(buf, n, &h);
+    free(buf);
+    print_hex(h.data, 20);
+    printf("\n");
+    return 0;
+  }
+
   fprintf(stderr, "unknown test: %s\n", test);
   return 2;
 }
