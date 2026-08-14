@@ -496,6 +496,94 @@ else
 fi
 rm -f "$DB11"
 
+# A failed linear rebase restores feat, but AdoptRollbackBaseline used to
+# run only in autocommit. ROLLBACK of the enclosing BEGIN then reinstalled
+# the working-branch (upstream) catalog on feat.
+DB12=/tmp/test_rebase_fail_txn_$$.db; rm -f "$DB12"
+cat <<'SQL' | "$DOLTLITE" "$DB12" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-am','feat changes');
+SELECT dolt_checkout('main');
+UPDATE t SET v=3 WHERE id=1;
+SELECT dolt_commit('-am','main changes');
+SELECT dolt_checkout('feat');
+SQL
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT 'AFTER_FAIL|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+ROLLBACK;
+SELECT 'AFTER_RB|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_status);" | "$DOLTLITE" "$DB12" 2>&1)
+if echo "$TX_OUT" | grep -q 'conflict rebasing'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn\n  expected conflict rebasing\n  got: $TX_OUT"
+fi
+AFTER_FAIL=$(echo "$TX_OUT" | grep '^AFTER_FAIL|')
+AFTER_RB=$(echo "$TX_OUT" | grep '^AFTER_RB|')
+if [ "$AFTER_FAIL" = "AFTER_FAIL|feat|2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn_restores\n  expected: AFTER_FAIL|feat|2\n  got:      $AFTER_FAIL"
+fi
+if [ "$AFTER_RB" = "AFTER_RB|feat|2|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn_rollback\n  expected: AFTER_RB|feat|2|0\n  got:      $AFTER_RB"
+fi
+rm -f "$DB12"
+
+# Same split after a conflicted interactive --continue aborts the rebase.
+DB13=/tmp/test_rebase_iconflict_txn_$$.db; rm -f "$DB13"
+cat <<'SQL' | "$DOLTLITE" "$DB13" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-am','feat changes');
+SELECT dolt_checkout('main');
+UPDATE t SET v=3 WHERE id=1;
+SELECT dolt_commit('-am','main changes');
+SELECT dolt_checkout('feat');
+SQL
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='pick';
+SELECT dolt_rebase('--continue');
+SELECT 'AFTER_CONT|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+ROLLBACK;
+SELECT 'AFTER_RB|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_status);" | "$DOLTLITE" "$DB13" 2>&1)
+if echo "$TX_OUT" | grep -q 'data conflicts from rebase'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn\n  expected data conflicts from rebase\n  got: $TX_OUT"
+fi
+AFTER_CONT=$(echo "$TX_OUT" | grep '^AFTER_CONT|')
+AFTER_RB=$(echo "$TX_OUT" | grep '^AFTER_RB|')
+if [ "$AFTER_CONT" = "AFTER_CONT|feat|2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_restores\n  expected: AFTER_CONT|feat|2\n  got:      $AFTER_CONT"
+fi
+if [ "$AFTER_RB" = "AFTER_RB|feat|2|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_rollback\n  expected: AFTER_RB|feat|2|0\n  got:      $AFTER_RB"
+fi
+rm -f "$DB13"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
