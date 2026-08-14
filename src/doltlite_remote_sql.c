@@ -742,7 +742,11 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltliteClone(cs, pRemote);
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
-    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+    char *zOwned;
+    if( !zMsg && rc==SQLITE_BUSY_SNAPSHOT ){
+      zMsg = "clone failed (graph changed during install; retry)";
+    }
+    zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
     pRemote->xClose(pRemote);
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
                               zOwned ? zOwned : "clone failed");

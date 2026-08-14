@@ -2200,8 +2200,11 @@ static void run_clone_ref_install_survives_window_gc(void){
   rc = execSqlSilent(cloneDb, sql);
   if( gGcWindowCollected ){
     check("clone_window_reports_failure", rc!=SQLITE_OK);
+    check("clone_window_busy_snapshot",
+          sqlite3_extended_errcode(cloneDb)==SQLITE_BUSY_SNAPSHOT);
   }else{
     printf("  SKIP: clone_window_reports_failure (in-window gc unavailable)\n");
+    printf("  SKIP: clone_window_busy_snapshot (in-window gc unavailable)\n");
   }
   doltliteTestSetBeforeRefInstallHook(0, 0);
   gGcWindowPath = 0;
