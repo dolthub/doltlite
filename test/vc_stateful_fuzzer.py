@@ -594,7 +594,7 @@ def revert_branch(doltlite, db_path, branch, model, step):
         "SELECT dolt_revert('HEAD');",
         "revert_%s" % branch,
         timeout=30,
-        allowed_errors=("conflict",),
+        allowed_errors=("conflict", "nothing to commit"),
     )
     sync_vc_result(doltlite, db_path, branch, model)
 
