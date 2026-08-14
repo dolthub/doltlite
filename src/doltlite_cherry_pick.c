@@ -322,7 +322,13 @@ apply_rollback:
     chunkStoreUnlock(cs);
   }
   {
-    return doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+    ProllyHash restoredCat = savedState.sessionCatalogHash;
+    int restoreRc = doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+    if( restoreRc==rc && !prollyHashIsEmpty(&restoredCat) ){
+      int persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
+      if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) restoreRc = persistRc;
+    }
+    return restoreRc;
   }
 }
 
