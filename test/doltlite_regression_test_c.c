@@ -2564,9 +2564,10 @@ static void run_schema_loader_missing_master(void){
   check("put_catalog_with_empty_master_root",
         chunkStorePut(cs, emptyMaster, (int)sizeof(emptyMaster), &catHash)==SQLITE_OK);
   rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aSchema, &nSchema);
-  check("empty_master_root_is_corrupt", rc==SQLITE_CORRUPT);
+  check("empty_master_root_is_empty_schema",
+        rc==SQLITE_OK && aSchema==0 && nSchema==0);
   rc = loadSchemaEntryFromCatalog(db, cs, pCache, &catHash, "t", &one, &found);
-  check("empty_master_root_lookup_is_corrupt", rc==SQLITE_CORRUPT);
+  check("empty_master_root_lookup_is_ok", rc==SQLITE_OK && found==0);
 
   sqlite3_close(db);
 }

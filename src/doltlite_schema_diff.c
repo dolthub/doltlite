@@ -128,19 +128,28 @@ int loadSchemaFromCatalog(
   if( rc!=SQLITE_OK ){ *ppEntries = 0; *pnEntries = 0; return rc; }
 
   memset(&masterRoot, 0, sizeof(masterRoot));
-  for(i=0; i<nTables; i++){
-    if( aTables[i].iTable==1 ){
-      memcpy(&masterRoot, &aTables[i].root, sizeof(ProllyHash));
-      masterFlags = aTables[i].flags;
-      break;
+  {
+    int foundMaster = 0;
+    for(i=0; i<nTables; i++){
+      if( aTables[i].iTable==1 ){
+        memcpy(&masterRoot, &aTables[i].root, sizeof(ProllyHash));
+        masterFlags = aTables[i].flags;
+        foundMaster = 1;
+        break;
+      }
+    }
+    doltliteFreeCatalog(aTables, nTables);
+    if( !foundMaster ){
+      *ppEntries = 0;
+      *pnEntries = 0;
+      return SQLITE_CORRUPT;
     }
   }
-  doltliteFreeCatalog(aTables, nTables);
 
   if( prollyHashIsEmpty(&masterRoot) ){
     *ppEntries = 0;
     *pnEntries = 0;
-    return SQLITE_CORRUPT;
+    return SQLITE_OK;
   }
 
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
@@ -241,7 +250,7 @@ int loadSchemaEntryFromCatalog(
   rc = doltliteLoadTableRootById(db, pCatHash, 1, &masterRoot, &masterFlags, 0);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_CORRUPT;
   if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_CORRUPT;
+  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
 
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
   rc = prollyCursorFirst(&cur, &res);
