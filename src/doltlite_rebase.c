@@ -563,7 +563,7 @@ rollback:
   }
   doltliteCommitClear(&origCommit);
   if( rebaseRestoreBranchState(db, zOrig)==SQLITE_OK ){
-    if( workingCreated && db->autoCommit && !prollyHashIsEmpty(&origCat) ){
+    if( workingCreated && !prollyHashIsEmpty(&origCat) ){
       doltliteAdoptRollbackBaseline(db, &origCat);
     }
   }
@@ -816,6 +816,20 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   }
   doltliteCommitClear(&headCommit);
   return rc;
+}
+
+/* SwitchCatalog updates the live catalog but not the txn rollback snapshot.
+** A later ROLLBACK of an enclosing BEGIN would otherwise undo the restore
+** and leave the original branch showing the working-branch (upstream)
+** catalog. Pin the committed baseline to HEAD's catalog so ROLLBACK keeps
+** the restored state. */
+static void rebaseAdoptRestoredCatalog(sqlite3 *db){
+  ProllyHash cat;
+  memset(&cat, 0, sizeof(cat));
+  if( doltliteGetHeadCatalogHash(db, &cat)==SQLITE_OK
+   && !prollyHashIsEmpty(&cat) ){
+    doltliteAdoptRollbackBaseline(db, &cat);
+  }
 }
 
 static int rebaseWritePlanRows(
@@ -1369,6 +1383,7 @@ static int rebaseAbortConflictedContinue(
   if( zOrigBranch && zOrigBranch[0] ){
     rc2 = rebaseRestoreBranchState(db, zOrigBranch);
     rebaseKeepFirstError(&rc, rc2);
+    if( rc2==SQLITE_OK ) rebaseAdoptRestoredCatalog(db);
     rc2 = doltliteClearSessionRebaseState(db);
     rebaseKeepFirstError(&rc, rc2);
   }

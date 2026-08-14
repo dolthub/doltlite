@@ -31,7 +31,8 @@ if grep -Eq 'Begin file doltlite_remotesrv\.c|doltliteServe' ./sqlite3.c; then
   echo "FAIL: remote server implementation present in amalgamation"
   exit 1
 fi
-for source in doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c; do
+for source in doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c \
+              doltlite_creds.c doltlite_tls.c; do
   if ! grep -q "Begin file $source" ./sqlite3.c; then
     echo "FAIL: remote client source missing from amalgamation: $source"
     exit 1
@@ -71,5 +72,18 @@ if [ -z "$port" ]; then
   exit 1
 fi
 
-"$probe" "$tmp/src.db" "$tmp/clone.db" "http://127.0.0.1:$port/repo.db"
-echo "amalgamation remote client without server implementation: PASS"
+DOLTLITE_CREDS_DIR="$tmp/creds" \
+  "$probe" "$tmp/src.db" "$tmp/clone.db" "http://127.0.0.1:$port/repo.db"
+
+offline_probe="$tmp/amalg_remotes_disabled_probe"
+"$cc_bin" -Wno-comment -DDOLTLITE_ENABLE_REMOTES=0 -I. \
+  ../test/amalgamation_remotes_disabled_probe.c ./sqlite3.c \
+  "${probe_libs[@]}" -o "$offline_probe"
+"$offline_probe"
+
+if nm "$offline_probe" | grep -Eq 'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)'; then
+  echo "FAIL: networking implementation present in remotes-disabled amalgamation"
+  exit 1
+fi
+
+echo "amalgamation remote, credentials, and offline option: PASS"

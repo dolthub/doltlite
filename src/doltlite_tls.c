@@ -33,6 +33,7 @@ struct DoltliteConn {
   mbedtls_entropy_context entropy;
 };
 
+#ifndef DOLTLITE_AUTH_CLIENT_ONLY
 struct DoltliteTlsServer {
   mbedtls_x509_crt cert;
   mbedtls_pk_context key;
@@ -40,6 +41,7 @@ struct DoltliteTlsServer {
   mbedtls_ctr_drbg_context drbg;
   mbedtls_entropy_context entropy;
 };
+#endif
 
 static void configureSocket(int fd) {
 #if !defined(_WIN32) && defined(SO_NOSIGPIPE)
@@ -255,6 +257,7 @@ void doltliteConnClose(DoltliteConn *c) {
   sqlite3_free(c);
 }
 
+#ifndef DOLTLITE_AUTH_CLIENT_ONLY
 DoltliteTlsServer *doltliteTlsServerNew(const char *certFile, const char *keyFile) {
   DoltliteTlsServer *s = (DoltliteTlsServer *)sqlite3_malloc((int)sizeof(*s));
   if (!s) return NULL;
@@ -347,3 +350,4 @@ DoltliteConn *doltliteConnFromFd(int clientFd) {
   configureSocket(clientFd);
   return c;
 }
+#endif

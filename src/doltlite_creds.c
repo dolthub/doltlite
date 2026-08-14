@@ -378,7 +378,7 @@ static const char *jsonSkipValue(const char *p){
   return p;
 }
 
-static const char *jsonObjectValue(const char *json, const char *key){
+static const char *credsJsonObjectValue(const char *json, const char *key){
   const char *p;
   size_t keylen;
   if( !json || !key ) return 0;
@@ -432,11 +432,11 @@ static char *jsonDupQuoted(const char *p){
 }
 
 static char *jsonFindString(const char *json, const char *key) {
-  return jsonDupQuoted(jsonObjectValue(json, key));
+  return jsonDupQuoted(credsJsonObjectValue(json, key));
 }
 
 static int jsonFindLong(const char *json, const char *key, long *out) {
-  const char *p = jsonObjectValue(json, key);
+  const char *p = credsJsonObjectValue(json, key);
   const char *end;
   uint64_t v;
   if( !p || !out ) return 0;
@@ -452,7 +452,7 @@ static int jsonFindLong(const char *json, const char *key, long *out) {
 }
 
 static int jsonAudienceMatches(const char *json, const char *expected){
-  const char *p = jsonObjectValue(json, "aud");
+  const char *p = credsJsonObjectValue(json, "aud");
   if( !p || !expected || !expected[0] ) return 0;
   if( *p=='"' ){
     char *s = jsonDupQuoted(p);

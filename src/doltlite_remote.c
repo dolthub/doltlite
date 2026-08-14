@@ -1,5 +1,9 @@
 
-#ifdef DOLTLITE_PROLLY
+#ifndef DOLTLITE_ENABLE_REMOTES
+#define DOLTLITE_ENABLE_REMOTES 1
+#endif
+
+#if defined(DOLTLITE_PROLLY) && DOLTLITE_ENABLE_REMOTES
 
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"

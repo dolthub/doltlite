@@ -1,6 +1,10 @@
 #ifndef DOLTLITE_REMOTE_H
 #define DOLTLITE_REMOTE_H
 
+#ifndef DOLTLITE_ENABLE_REMOTES
+#define DOLTLITE_ENABLE_REMOTES 1
+#endif
+
 #include "chunk_store.h"
 
 typedef struct DoltliteRemote DoltliteRemote;

@@ -12,6 +12,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#if DOLTLITE_ENABLE_REMOTES
+
 typedef struct RemoteMutationCtx RemoteMutationCtx;
 struct RemoteMutationCtx {
   const char *zName;
@@ -1056,5 +1058,33 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
   if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_remotes", &remotesModule, 0);
   return rc;
 }
+
+#else
+
+static void doltliteRemotesDisabled(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  (void)argc;
+  (void)argv;
+  sqlite3_result_error(ctx,
+      "DoltLite remotes are disabled in this build", -1);
+}
+
+int doltliteRemoteSqlRegister(sqlite3 *db){
+  static const char *azName[] = {
+    "dolt_remote", "dolt_push", "dolt_fetch", "dolt_pull", "dolt_clone"
+  };
+  int i;
+  int rc = SQLITE_OK;
+  for(i=0; i<ArraySize(azName) && rc==SQLITE_OK; i++){
+    rc = sqlite3_create_function(db, azName[i], -1,
+        DOLTLITE_COMMAND_FUNC_FLAGS, 0, doltliteRemotesDisabled, 0, 0);
+  }
+  return rc;
+}
+
+#endif
 
 #endif
