@@ -219,7 +219,7 @@ static void doltliteRevertFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &revertCommit.catalogHash, &liveOurCatalog,
-        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg,
+        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg, 1,
         &nConflicts, 0, hexBuf);
   }
 

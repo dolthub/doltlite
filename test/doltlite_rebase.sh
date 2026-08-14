@@ -426,6 +426,41 @@ run_test "continue_in_savepoint_no_orphans" \
 feat adds child" \
   "$DB9"
 
+# Linear rebase used the replayed commit message to decide revert vs
+# cherry-pick. A DROP INDEX titled "Revert leftover" skipped index patches
+# and left the index in place.
+DB10=/tmp/test_rebase_revert_msg_$$.db; rm -f "$DB10"
+cat <<'SQL' | "$DOLTLITE" "$DB10" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX t_v ON t(v);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_checkout('-b','feat');
+DROP INDEX t_v;
+SELECT dolt_commit('-A','-m','Revert leftover');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','main row');
+SELECT dolt_checkout('feat');
+SQL
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+SELECT 'TX|' || (SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v') || '|' || (SELECT count(*) FROM t);" | "$DOLTLITE" "$DB10" 2>&1)
+if echo "$TX_OUT" | grep -q "Successfully rebased"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_revert_msg_ok\n  expected Successfully rebased\n  got: $TX_OUT"
+fi
+TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
+if [ "$TX_LINE" = "TX|0|2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_revert_msg_result\n  expected: TX|0|2\n  got:      $TX_LINE"
+fi
+rm -f "$DB10"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

@@ -103,6 +103,7 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *ourHead,
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
+  int bPreferOurMaster,
   int *pnConflicts,
   int *pnViolations,
   char *hexBuf
@@ -116,7 +117,6 @@ int applyMergedCatalogAndCommit(
   ProllyHash commitHash;
   char *zMergeErr = 0;
   int graphLocked = 0;
-  int bPreferOurMaster;
   const char *zOpLabel;
   const char *zBranch;
   int rc;
@@ -127,7 +127,6 @@ int applyMergedCatalogAndCommit(
   cs = doltliteGetChunkStore(db);
   memset(&savedState, 0, sizeof(savedState));
   if( hexBuf ) hexBuf[0] = '\0';
-  bPreferOurMaster = (sqlite3_strnicmp(zMessage, "Revert", 6)==0);
   zOpLabel = bPreferOurMaster ? "Revert" : "Cherry-pick";
   zBranch = doltliteGetSessionBranch(db);
 
@@ -415,7 +414,7 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, &nConflicts, 0,
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, &nConflicts, 0,
         hexBuf);
   }
 
