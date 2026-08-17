@@ -765,9 +765,9 @@ For a DoltLite-format main database, the compatibility contract is:
   of those built-ins is rejected while a persisted index uses its name.
 - A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key and has
   no separate `rowid` column.
-- `sqlite3_backup_step()` copies a file-backed DoltLite main database as one
-  operation; its page-count argument is not incremental. Backing up an
-  in-memory or non-main DoltLite database is unsupported.
+- `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
+  attached database, as one operation; its page-count argument is not
+  incremental. Backing up an in-memory DoltLite database is unsupported.
 - `sqlite3_serialize()` does not expose a DoltLite-format main database as a
   SQLite page image; it returns `NULL` and sets the size output to `-1`.
 

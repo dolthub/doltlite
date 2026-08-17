@@ -297,6 +297,7 @@ struct Btree {
   u32 iLoadedWorkingStateVersion;
   Btree *pNext;
   u64 nSeek;
+  int nBackup;
 
   Catalog cat;
 
@@ -778,6 +779,9 @@ int sortKeyFromUnpackedIntRecordBuffer(UnpackedRecord*, int, u8**, int*, int*);
 int prollyInvokeBusyHandler(BtShared*);
 ChunkStore *doltliteGetChunkStore(sqlite3*);
 ChunkStore *doltliteBtreeChunkStore(Btree*);
+void doltliteBtreeBackupStart(Btree*);
+void doltliteBtreeBackupFinish(Btree*);
+void doltliteInvalidateBtreeWorkingState(Btree*);
 BtShared *doltliteGetBtShared(sqlite3*);
 ProllyCache *doltliteGetCache(sqlite3*);
 int doltliteRegister(sqlite3*);

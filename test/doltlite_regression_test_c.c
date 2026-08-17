@@ -394,11 +394,18 @@ static void run_backup_safety(void){
   sqlite3 *dest = 0;
   sqlite3 *sameA = 0;
   sqlite3 *sameB = 0;
+  sqlite3 *srcAttached = 0;
+  sqlite3 *destAttached = 0;
   sqlite3_backup *pBackup;
   char zBig[512];
   char zSmall[512];
   char zDest[512];
   char zSame[512];
+  char zSrcHost[512];
+  char zDestHost[512];
+  char zSrcAux[512];
+  char zDestAux[512];
+  char *sql = 0;
   sqlite3_int64 nSmall;
   sqlite3_int64 nDest;
   int rc;
@@ -407,10 +414,18 @@ static void run_backup_safety(void){
   make_dbpath(zSmall, sizeof(zSmall), "backup_safety_small");
   make_dbpath(zDest, sizeof(zDest), "backup_safety_dest");
   make_dbpath(zSame, sizeof(zSame), "backup_safety_same");
+  make_dbpath(zSrcHost, sizeof(zSrcHost), "backup_safety_src_host");
+  make_dbpath(zDestHost, sizeof(zDestHost), "backup_safety_dest_host");
+  make_dbpath(zSrcAux, sizeof(zSrcAux), "backup_safety_src_aux");
+  make_dbpath(zDestAux, sizeof(zDestAux), "backup_safety_dest_aux");
   removeDbFiles(zBig);
   removeDbFiles(zSmall);
   removeDbFiles(zDest);
   removeDbFiles(zSame);
+  removeDbFiles(zSrcHost);
+  removeDbFiles(zDestHost);
+  removeDbFiles(zSrcAux);
+  removeDbFiles(zDestAux);
 
   check("backup_safety_open_big", open_db(zBig, &srcBig)==SQLITE_OK);
   check("backup_safety_open_dest", open_db(zDest, &dest)==SQLITE_OK);
@@ -461,9 +476,88 @@ static void run_backup_safety(void){
     if( pBackup ) sqlite3_backup_finish(pBackup);
   }
 
+  check("backup_safety_open_attached_source",
+        open_db(zSrcHost, &srcAttached)==SQLITE_OK);
+  check("backup_safety_open_attached_dest",
+        open_db(zDestHost, &destAttached)==SQLITE_OK);
+  if( srcAttached && destAttached ){
+    sql = sqlite3_mprintf(
+        "ATTACH %Q AS aux;"
+        "CREATE TABLE aux.t(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO aux.t VALUES(1, 'attached'), (2, 'source');",
+        zSrcAux);
+    check("backup_safety_attach_source_alloc", sql!=0);
+    check("backup_safety_attach_source",
+          sql && execSql(srcAttached, sql)==SQLITE_OK);
+    sqlite3_free(sql);
+    sql = 0;
+    sql = sqlite3_mprintf(
+        "CREATE TABLE sentinel(v TEXT);"
+        "INSERT INTO sentinel VALUES('main');"
+        "ATTACH %Q AS aux;"
+        "CREATE TABLE aux.old(v TEXT);"
+        "INSERT INTO aux.old VALUES('old');",
+        zDestAux);
+    check("backup_safety_attach_dest_alloc", sql!=0);
+    check("backup_safety_attach_dest",
+          sql && execSql(destAttached, sql)==SQLITE_OK);
+    sqlite3_free(sql);
+    sql = 0;
+
+    pBackup = sqlite3_backup_init(destAttached, "aux", srcAttached, "aux");
+    check("backup_safety_attached_init_for_detach", pBackup!=0);
+    if( pBackup ){
+      check("backup_safety_attached_dest_detach",
+            execSqlSilent(destAttached, "DETACH aux")==SQLITE_OK);
+      check("backup_safety_attached_missing_dest",
+            sqlite3_backup_step(pBackup, 1)==SQLITE_ERROR);
+      check("backup_safety_attached_missing_dest_message",
+            strstr(sqlite3_errmsg(destAttached), "unknown database aux")!=0);
+      check("backup_safety_attached_missing_dest_finish",
+            sqlite3_backup_finish(pBackup)==SQLITE_ERROR);
+    }
+
+    sql = sqlite3_mprintf("ATTACH %Q AS aux", zDestAux);
+    check("backup_safety_reattach_dest_alloc", sql!=0);
+    check("backup_safety_reattach_dest",
+          sql && execSql(destAttached, sql)==SQLITE_OK);
+    sqlite3_free(sql);
+    sql = 0;
+
+    pBackup = sqlite3_backup_init(destAttached, "aux", srcAttached, "aux");
+    check("backup_safety_attached_init", pBackup!=0);
+    if( pBackup ){
+      check("backup_safety_attached_source_detach_locked",
+            execSqlSilent(srcAttached, "DETACH aux")!=SQLITE_OK
+            && strstr(sqlite3_errmsg(srcAttached), "database aux is locked")!=0);
+      check("backup_safety_attached_source_close_busy",
+            sqlite3_close(srcAttached)==SQLITE_BUSY);
+      check("backup_safety_attached_step",
+            sqlite3_backup_step(pBackup, 1)==SQLITE_DONE);
+      check("backup_safety_attached_finish",
+            sqlite3_backup_finish(pBackup)==SQLITE_OK);
+      check("backup_safety_attached_source_detach_after_finish",
+            execSql(srcAttached, "DETACH aux")==SQLITE_OK);
+    }
+    check("backup_safety_attached_dest_rows",
+          strcmp(queryScalarText(destAttached,
+            "SELECT group_concat(id || ':' || v, ',') "
+            "FROM (SELECT id, v FROM aux.t ORDER BY id)"),
+            "1:attached,2:source")==0);
+    check("backup_safety_attached_dest_old_replaced",
+          strcmp(queryScalarText(destAttached,
+            "SELECT count(*) FROM aux.sqlite_master WHERE name='old'"), "0")==0);
+    check("backup_safety_attached_dest_main_untouched",
+          strcmp(queryScalarText(destAttached,
+            "SELECT v FROM main.sentinel"), "main")==0);
+  }
+
 backup_safety_done:
+  sqlite3_free(sql);
   if( sameA ) sqlite3_close(sameA);
   if( sameB ) sqlite3_close(sameB);
+  if( srcAttached ) sqlite3_close(srcAttached);
+  if( destAttached ) sqlite3_close(destAttached);
   if( srcBig ) sqlite3_close(srcBig);
   if( srcSmall ) sqlite3_close(srcSmall);
   if( dest ) sqlite3_close(dest);
@@ -471,6 +565,10 @@ backup_safety_done:
   removeDbFiles(zSmall);
   removeDbFiles(zDest);
   removeDbFiles(zSame);
+  removeDbFiles(zSrcHost);
+  removeDbFiles(zDestHost);
+  removeDbFiles(zSrcAux);
+  removeDbFiles(zDestAux);
 }
 
 static void run_integer_pk_autocommit_append_correctness(void){

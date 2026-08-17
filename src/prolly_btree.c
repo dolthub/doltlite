@@ -2041,8 +2041,9 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 }
 
 int sqlite3BtreeIsInBackup(Btree *p){
-  (void)p;
-  return 0;
+  assert( p );
+  assert( sqlite3_mutex_held(p->db->mutex) );
+  return p->nBackup!=0;
 }
 
 #ifndef SQLITE_OMIT_WAL
@@ -2084,6 +2085,22 @@ ChunkStore *doltliteBtreeChunkStore(Btree *p){
   return &p->pBt->store;
 }
 
+void doltliteBtreeBackupStart(Btree *p){
+  if( p ) p->nBackup++;
+}
+
+void doltliteBtreeBackupFinish(Btree *p){
+  assert( p && p->nBackup>0 );
+  p->nBackup--;
+}
+
+void doltliteInvalidateBtreeWorkingState(Btree *p){
+  BtShared *pBt = p ? p->pBt : 0;
+  if( !pBt ) return;
+  pBt->iWorkingStateVersion++;
+  if( pBt->iWorkingStateVersion==0 ) pBt->iWorkingStateVersion = 1;
+}
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *pBt = db->aDb[0].pBt;
@@ -2107,10 +2124,8 @@ int doltliteIsStockSqliteDb(sqlite3 *db){
 }
 
 void doltliteInvalidateWorkingState(sqlite3 *db){
-  BtShared *pBt = doltliteGetBtShared(db);
-  if( !pBt ) return;
-  pBt->iWorkingStateVersion++;
-  if( pBt->iWorkingStateVersion==0 ) pBt->iWorkingStateVersion = 1;
+  doltliteInvalidateBtreeWorkingState(
+      db && db->nDb>0 ? db->aDb[0].pBt : 0);
 }
 
 ProllyCache *doltliteGetCache(sqlite3 *db){
