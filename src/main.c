@@ -1152,6 +1152,18 @@ static int nocaseCollatingFunc(
   return r;
 }
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3DoltliteIsBuiltinCollation(const CollSeq *p){
+  if( !p || !p->zName ) return 0;
+  if( sqlite3StrICmp(p->zName, "BINARY")==0 ) return p->xCmp==binCollFunc;
+  if( sqlite3StrICmp(p->zName, "NOCASE")==0 ){
+    return p->xCmp==nocaseCollatingFunc;
+  }
+  if( sqlite3StrICmp(p->zName, "RTRIM")==0 ) return p->xCmp==rtrimCollFunc;
+  return 0;
+}
+#endif
+
 /*
 ** Return the ROWID of the most recent insert
 */
@@ -2942,6 +2954,36 @@ static int createCollation(
  
   assert( sqlite3_mutex_held(db->mutex) );
 
+#ifdef DOLTLITE_PROLLY
+  if( sqlite3StrICmp(zName, "BINARY")==0
+   || sqlite3StrICmp(zName, "NOCASE")==0
+   || sqlite3StrICmp(zName, "RTRIM")==0 ){
+    int iDb;
+    for(iDb=0; iDb<db->nDb; iDb++){
+      HashElem *pElem;
+      if( !db->aDb[iDb].pBt || sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+        continue;
+      }
+      for(pElem=sqliteHashFirst(&db->aDb[iDb].pSchema->tblHash);
+          pElem; pElem=sqliteHashNext(pElem)){
+        Table *pTab = sqliteHashData(pElem);
+        Index *pIdx;
+        for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+          int i;
+          for(i=0; i<pIdx->nKeyCol; i++){
+            if( sqlite3StrICmp(pIdx->azColl[i], zName)==0 ){
+              sqlite3ErrorWithMsg(db, SQLITE_ERROR,
+                "doltlite cannot replace collation '%s' used by index '%s'",
+                zName, pIdx->zName);
+              return SQLITE_ERROR;
+            }
+          }
+        }
+      }
+    }
+  }
+#endif
+
   /* If SQLITE_UTF16 is specified as the encoding type, transform this
   ** to one of SQLITE_UTF16LE or SQLITE_UTF16BE using the
   ** SQLITE_UTF16NATIVE macro. SQLITE_UTF16 is not used internally.
@@ -3826,17 +3868,6 @@ int sqlite3_open16(
 /*
 ** Register a new collation sequence with the database handle db.
 */
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-static int doltliteCreateCollationUnsupported(sqlite3 *db){
-  int rc = SQLITE_ERROR;
-  sqlite3_mutex_enter(db->mutex);
-  sqlite3ErrorWithMsg(db, rc, "not supported");
-  rc = sqlite3ApiExit(db, rc);
-  sqlite3_mutex_leave(db->mutex);
-  return rc;
-}
-#endif
-
 int sqlite3_create_collation(
   sqlite3* db,
   const char *zName,
@@ -3844,18 +3875,7 @@ int sqlite3_create_collation(
   void* pCtx,
   int(*xCompare)(void*,int,const void*,int,const void*)
 ){
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-#ifdef SQLITE_ENABLE_API_ARMOR
-  if( !sqlite3SafetyCheckOk(db) || zName==0 ) return SQLITE_MISUSE_BKPT;
-#endif
-  (void)zName;
-  (void)enc;
-  (void)pCtx;
-  (void)xCompare;
-  return doltliteCreateCollationUnsupported(db);
-#else
   return sqlite3_create_collation_v2(db, zName, enc, pCtx, xCompare, 0);
-#endif
 }
 
 /*
@@ -3873,14 +3893,6 @@ int sqlite3_create_collation_v2(
 
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) || zName==0 ) return SQLITE_MISUSE_BKPT;
-#endif
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-  (void)zName;
-  (void)enc;
-  (void)pCtx;
-  (void)xCompare;
-  (void)xDel;
-  return doltliteCreateCollationUnsupported(db);
 #endif
   sqlite3_mutex_enter(db->mutex);
   assert( !db->mallocFailed );
@@ -3906,13 +3918,6 @@ int sqlite3_create_collation16(
 
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) || zName==0 ) return SQLITE_MISUSE_BKPT;
-#endif
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-  (void)zName;
-  (void)enc;
-  (void)pCtx;
-  (void)xCompare;
-  return doltliteCreateCollationUnsupported(db);
 #endif
   sqlite3_mutex_enter(db->mutex);
   assert( !db->mallocFailed );
