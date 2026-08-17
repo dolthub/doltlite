@@ -8508,6 +8508,75 @@ static void run_rebase_continue_after_reopen_dirty_default(void){
   removeDbFiles(dbpath);
 }
 
+static void run_rebase_abort_retry_after_claim_commit_error(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+
+  printf("=== Rebase Abort Retry After Claim Commit Error Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_abort_retry_after_claim_commit_error");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_abort_retry_after_claim_error",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_abort_retry_after_claim_error",
+        setup_dirty_default_rebase(db)==SQLITE_OK);
+  check("start_interactive_rebase_for_claim_commit_error",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started on branch dolt_rebase_feat")!=0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_db_before_claim_commit_error", open_db(dbpath, &db)==SQLITE_OK);
+
+  gRegressionFaultCode = 961;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  res = queryScalarText(db, "SELECT dolt_rebase('--abort')");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+
+  check("rebase_abort_claim_commit_error_was_injected", gRegressionFaultHits==1);
+  check("rebase_abort_claim_commit_error_is_recovery_failure",
+        strstr(res, "ERROR: rebase recovery failed")!=0);
+  check("rebase_abort_claim_commit_error_does_not_report_success",
+        strstr(res, "Interactive rebase aborted")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_db_after_claim_commit_error", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_abort_retry_after_claim_error_lands_on_main",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
+  check("rebase_abort_retry_after_claim_error_keeps_uncommitted_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE v='row99'"),
+               "1")==0);
+  check("rebase_abort_retry_after_claim_error_keeps_temp_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"),
+          "1")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  check("rebase_abort_retry_after_claim_error_keeps_flag", isRebasing==1);
+  check("rebase_abort_retry_after_claim_error_succeeds",
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"),
+               "Interactive rebase aborted")==0);
+  check("rebase_abort_retry_after_claim_error_checkout_main",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('main')"), "0")==0);
+  check("rebase_abort_retry_after_claim_error_row_survives",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE v='row99'"),
+               "1")==0);
+  check("rebase_abort_retry_after_claim_error_drops_temp_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"),
+          "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  check("rebase_abort_retry_after_claim_error_clears_flag", isRebasing==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_main_table_schema_guard(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -12772,6 +12841,7 @@ static const RegressionCase aCases[] = {
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
   { "rebase_abort_after_reopen_dirty_default", "Rebase Abort After Reopen Dirty Default Test", run_rebase_abort_after_reopen_dirty_default },
   { "rebase_continue_after_reopen_dirty_default", "Rebase Continue After Reopen Dirty Default Test", run_rebase_continue_after_reopen_dirty_default },
+  { "rebase_abort_retry_after_claim_commit_error", "Rebase Abort Retry After Claim Commit Error Test", run_rebase_abort_retry_after_claim_commit_error },
   { "rebase_plan_read_error_is_not_partial", "Rebase Plan Read Error Is Not Partial Test", run_rebase_plan_read_error_is_not_partial },
   { "rebase_upstream_history_failure_is_atomic", "Rebase Upstream History Failure Is Atomic Test", run_rebase_upstream_history_failure_is_atomic },
   { "rebase_start_failure_cleans_working_branch", "Rebase Start Failure Cleans Working Branch Test", run_rebase_start_failure_cleans_working_branch },

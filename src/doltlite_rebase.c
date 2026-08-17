@@ -1223,11 +1223,36 @@ static int rebaseReadActiveRetry(
   return rc;
 }
 
+/* Put cleared claim ownership back so a later abort/continue can retry.
+** The rollback persist must not share the claim-commit fault point. */
+static int rebaseUnclaimActiveEnd(
+  sqlite3 *db,
+  u8 flags,
+  const ProllyHash *pPreRebaseCat,
+  const ProllyHash *pRebaseOnto,
+  const char *zOrigBranch,
+  const char *zReturnBranch
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  rc = doltliteSetSessionRebaseState(db, flags, pPreRebaseCat, pRebaseOnto,
+                                     zOrigBranch, zReturnBranch);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreSerializeRefs(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStoreCommit(cs);
+}
+
 /* Claim exclusive ownership of ending the active rebase.
 **
 ** Returns SQLITE_DONE if durable isRebasing is already clear (peer won).
 ** Returns SQLITE_OK after this connection clears isRebasing. Storage failures
-** return an error without reporting "no rebase in progress".
+** after mutation restore ownership so a retry can still abort or continue,
+** and return an error without reporting "no rebase in progress".
 ** Callers must copy branch names out of session state before claiming. */
 static int rebaseClaimActiveEnd(
   sqlite3 *db,
@@ -1236,11 +1261,19 @@ static int rebaseClaimActiveEnd(
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zBranch;
   const char *zReturnBranchConst = 0;
+  const char *zOrigBranchConst = 0;
   char *zReturnBranch = 0;
+  char *zSavedOrig = 0;
+  ProllyHash savedPre;
+  ProllyHash savedOnto;
   u8 isRebasing = 0;
+  u8 savedFlags = 0;
   int rc;
   int locked = 0;
+  int mutated = 0;
 
+  memset(&savedPre, 0, sizeof(savedPre));
+  memset(&savedOnto, 0, sizeof(savedOnto));
   if( !cs || !db || !zWorkingBranch || !zWorkingBranch[0] ){
     return SQLITE_ERROR;
   }
@@ -1256,23 +1289,26 @@ static int rebaseClaimActiveEnd(
   ** working branch is canonical for terminal-operation ownership. */
   rc = doltliteLoadWorkingSet(db, zWorkingBranch);
   if( rc!=SQLITE_OK ) goto claim_done;
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0,
-                                0, &zReturnBranchConst);
+  savedFlags = doltliteGetSessionRebaseFlags(db);
+  doltliteGetSessionRebaseState(db, &isRebasing, &savedPre, &savedOnto,
+                                &zOrigBranchConst, &zReturnBranchConst);
   if( !isRebasing ){
     rc = SQLITE_DONE;
     goto claim_done;
   }
-  zReturnBranch = sqlite3_mprintf("%s", zReturnBranchConst);
-  if( !zReturnBranch ){
+  zReturnBranch = sqlite3_mprintf("%s", zReturnBranchConst ? zReturnBranchConst : "");
+  zSavedOrig = sqlite3_mprintf("%s", zOrigBranchConst ? zOrigBranchConst : "");
+  if( !zReturnBranch || !zSavedOrig ){
     rc = SQLITE_NOMEM;
     goto claim_done;
   }
 
   rc = doltliteClearSessionRebaseState(db);
   if( rc!=SQLITE_OK ) goto claim_done;
+  mutated = 1;
   rc = doltliteSaveWorkingSet(db);
   if( rc!=SQLITE_OK ) goto claim_done;
-  if( zReturnBranch && zReturnBranch[0]
+  if( zReturnBranch[0]
    && sqlite3_stricmp(zBranch, zReturnBranch)!=0 ){
     rc = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
     if( rc!=SQLITE_OK ) goto claim_done;
@@ -1282,12 +1318,17 @@ static int rebaseClaimActiveEnd(
     if( rc!=SQLITE_OK ) goto claim_done;
   }
   rc = chunkStoreSerializeRefs(cs);
-  if( rc!=SQLITE_OK ) goto claim_done;
-  rc = chunkStoreCommit(cs);
+  if( rc==SQLITE_OK && sqlite3FaultSim(961) ) rc = SQLITE_IOERR;
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
 
 claim_done:
+  if( mutated && rc!=SQLITE_OK ){
+    (void)rebaseUnclaimActiveEnd(db, savedFlags, &savedPre, &savedOnto,
+                                 zSavedOrig, zReturnBranch);
+  }
   if( locked ) chunkStoreUnlock(cs);
   sqlite3_free(zReturnBranch);
+  sqlite3_free(zSavedOrig);
   return rc;
 }
 
