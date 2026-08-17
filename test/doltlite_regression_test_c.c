@@ -396,6 +396,10 @@ static void run_backup_safety(void){
   sqlite3 *sameB = 0;
   sqlite3 *srcAttached = 0;
   sqlite3 *destAttached = 0;
+  sqlite3 *memSrc = 0;
+  sqlite3 *memDest = 0;
+  sqlite3 *memClone = 0;
+  sqlite3 *fileFromMem = 0;
   sqlite3_backup *pBackup;
   char zBig[512];
   char zSmall[512];
@@ -406,6 +410,7 @@ static void run_backup_safety(void){
   char zSrcAux[512];
   char zDestAux[512];
   char zDestOther[512];
+  char zMemFile[512];
   char *sql = 0;
   sqlite3_int64 nSmall;
   sqlite3_int64 nDest;
@@ -420,6 +425,7 @@ static void run_backup_safety(void){
   make_dbpath(zSrcAux, sizeof(zSrcAux), "backup_safety_src_aux");
   make_dbpath(zDestAux, sizeof(zDestAux), "backup_safety_dest_aux");
   make_dbpath(zDestOther, sizeof(zDestOther), "backup_safety_dest_other");
+  make_dbpath(zMemFile, sizeof(zMemFile), "backup_safety_mem_file");
   removeDbFiles(zBig);
   removeDbFiles(zSmall);
   removeDbFiles(zDest);
@@ -429,6 +435,7 @@ static void run_backup_safety(void){
   removeDbFiles(zSrcAux);
   removeDbFiles(zDestAux);
   removeDbFiles(zDestOther);
+  removeDbFiles(zMemFile);
 
   check("backup_safety_open_big", open_db(zBig, &srcBig)==SQLITE_OK);
   check("backup_safety_open_dest", open_db(zDest, &dest)==SQLITE_OK);
@@ -466,6 +473,67 @@ static void run_backup_safety(void){
         strcmp(queryScalarText(dest, "SELECT count(*) FROM t"), "1")==0);
   check("backup_safety_dest_value_refreshed",
         strcmp(queryScalarText(dest, "SELECT v FROM t WHERE id=1"), "small")==0);
+
+  check("backup_safety_open_memory_dest",
+        open_db(":memory:", &memDest)==SQLITE_OK);
+  if( memDest ){
+    check("backup_safety_file_to_memory",
+          backup_db(srcSmall, memDest)==SQLITE_OK);
+    check("backup_safety_file_to_memory_rows",
+          strcmp(queryScalarText(memDest,
+            "SELECT group_concat(id || ':' || v) FROM t"), "1:small")==0);
+  }
+
+  check("backup_safety_open_memory_source",
+        open_db(":memory:", &memSrc)==SQLITE_OK);
+  if( memSrc ){
+    check("backup_safety_seed_memory_source",
+          execSql(memSrc,
+            "CREATE TABLE m(id INTEGER PRIMARY KEY, v TEXT);"
+            "CREATE INDEX m_v ON m(v);"
+            "INSERT INTO m VALUES(1,'memory'),(2,'source');"
+            "SELECT dolt_branch('feature');")==SQLITE_OK);
+    check("backup_safety_open_file_from_memory",
+          open_db(zMemFile, &fileFromMem)==SQLITE_OK);
+    if( fileFromMem ){
+      check("backup_safety_memory_to_file",
+            backup_db(memSrc, fileFromMem)==SQLITE_OK);
+      check("backup_safety_memory_to_file_rows",
+            strcmp(queryScalarText(fileFromMem,
+              "SELECT group_concat(id || ':' || v, ',') FROM m"),
+              "1:memory,2:source")==0);
+      check("backup_safety_memory_to_file_index",
+            strcmp(queryScalarText(fileFromMem,
+              "SELECT count(*) FROM sqlite_master "
+              "WHERE type='index' AND name='m_v'"), "1")==0);
+      check("backup_safety_memory_to_file_refs",
+            strcmp(queryScalarText(fileFromMem,
+              "SELECT count(*) FROM dolt_branches WHERE name='feature'"),
+              "1")==0);
+    }
+
+    check("backup_safety_open_memory_clone",
+          open_db(":memory:", &memClone)==SQLITE_OK);
+    if( memClone ){
+      check("backup_safety_seed_memory_clone",
+            execSql(memClone,
+              "CREATE TABLE old(v TEXT); INSERT INTO old VALUES('old');")
+              ==SQLITE_OK);
+      check("backup_safety_memory_to_memory",
+            backup_db(memSrc, memClone)==SQLITE_OK);
+      check("backup_safety_memory_to_memory_rows",
+            strcmp(queryScalarText(memClone,
+              "SELECT group_concat(id || ':' || v, ',') FROM m"),
+              "1:memory,2:source")==0);
+      check("backup_safety_memory_to_memory_replaced",
+            strcmp(queryScalarText(memClone,
+              "SELECT count(*) FROM sqlite_master WHERE name='old'"), "0")==0);
+      check("backup_safety_memory_to_memory_refs",
+            strcmp(queryScalarText(memClone,
+              "SELECT count(*) FROM dolt_branches WHERE name='feature'"),
+              "1")==0);
+    }
+  }
 
   check("backup_safety_open_same_a", open_db(zSame, &sameA)==SQLITE_OK);
   check("backup_safety_open_same_b", open_db(zSame, &sameB)==SQLITE_OK);
@@ -579,6 +647,10 @@ backup_safety_done:
   if( sameB ) sqlite3_close(sameB);
   if( srcAttached ) sqlite3_close(srcAttached);
   if( destAttached ) sqlite3_close(destAttached);
+  if( memSrc ) sqlite3_close(memSrc);
+  if( memDest ) sqlite3_close(memDest);
+  if( memClone ) sqlite3_close(memClone);
+  if( fileFromMem ) sqlite3_close(fileFromMem);
   if( srcBig ) sqlite3_close(srcBig);
   if( srcSmall ) sqlite3_close(srcSmall);
   if( dest ) sqlite3_close(dest);
@@ -591,6 +663,7 @@ backup_safety_done:
   removeDbFiles(zSrcAux);
   removeDbFiles(zDestAux);
   removeDbFiles(zDestOther);
+  removeDbFiles(zMemFile);
 }
 
 static void run_integer_pk_autocommit_append_correctness(void){

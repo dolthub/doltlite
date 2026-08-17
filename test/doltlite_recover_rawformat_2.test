@@ -448,10 +448,14 @@ do_test doltlite_recover_rawformat_2-6.8 {
 
 do_test doltlite_recover_rawformat_2-6.9 {
   sqlite3 dbm :memory:
+  dbm eval {CREATE TABLE mem_src(x PRIMARY KEY); INSERT INTO mem_src VALUES(42)}
   set rc [catch {dbm backup rf2bu4.db} msg]
   dbm close
-  list $rc $msg
-} {1 {backup failed: cannot backup in-memory doltlite database}}
+  sqlite3 dbm2 rf2bu4.db
+  set rows [dbm2 eval {SELECT x FROM mem_src}]
+  dbm2 close
+  list $rc $msg $rows
+} {0 {} 42}
 
 do_test doltlite_recover_rawformat_2-6.10 {
   forcedelete rf2empty.db rf2bu5.db
