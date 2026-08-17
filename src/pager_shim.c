@@ -937,6 +937,7 @@ struct DoltliteBackup {
   sqlite3 *pSrcDb;
   sqlite3 *pDestDb;
   Btree *pSrcBt;
+  Btree *pDestBt;
   char *zDestDb;
   char *zSrcFile;
   char *zDestFile;
@@ -1034,11 +1035,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "source database is not backed by a file");
     return 0;
   }
-  if( srcCs->isMemory ){
-    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "cannot backup in-memory doltlite database");
-    return 0;
-  }
-  if( !chunkFileGetFilename(&srcCs->file) ){
+  if( !srcCs->isMemory && !chunkFileGetFilename(&srcCs->file) ){
     sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "source database is not backed by a file");
     return 0;
   }
@@ -1046,13 +1043,12 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "destination database is not backed by a file");
     return 0;
   }
-  if( destCs->isMemory ){
-    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR,
-                        "cannot backup to in-memory doltlite database");
+  if( !destCs->isMemory && !chunkFileGetFilename(&destCs->file) ){
+    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "destination database is not backed by a file");
     return 0;
   }
-  if( !chunkFileGetFilename(&destCs->file) ){
-    sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "destination database is not backed by a file");
+  if( destCs->readOnly ){
+    sqlite3Error(pDest, SQLITE_READONLY);
     return 0;
   }
   if( sqlite3BtreeTxnState(pDest->aDb[iDest].pBt)!=SQLITE_TXN_NONE ){
@@ -1065,7 +1061,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     sqlite3ErrorWithMsg(pDest, SQLITE_NOTADB, "file is not a database");
     return 0;
   }
-  {
+  if( !srcCs->isMemory && !destCs->isMemory ){
     int sameRc = SQLITE_OK;
     int same = doltliteBackupSameFile(chunkFileGetVfs(&srcCs->file),
                                       chunkFileGetFilename(&srcCs->file),
@@ -1096,6 +1092,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
   p->pSrcDb = pSrc;
   p->pDestDb = pDest;
   p->pSrcBt = pSrc->aDb[iSrc].pBt;
+  p->pDestBt = pDest->aDb[iDest].pBt;
   p->pSrcVfs = chunkFileGetVfs(&srcCs->file);
   p->pDestVfs = chunkFileGetVfs(&destCs->file);
   p->zDestDb = sqlite3_mprintf("%s", zDestDb);
@@ -1107,14 +1104,16 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
   /* zSrcFile is opened with SQLITE_OPEN_MAIN_DB below, so it needs the VFS's
   ** double-nul terminator (a plain "%s" copy keeps only the first nul). */
   p->zSrcFile = 0;
-  if( chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&srcCs->file),
+  if( !srcCs->isMemory
+   && chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&srcCs->file),
                                      &p->zSrcFile)!=SQLITE_OK ){
     sqlite3_free(p->zDestDb);
     sqlite3_free(p);
     sqlite3Error(pDest, SQLITE_NOMEM);
     return 0;
   }
-  if( chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&destCs->file),
+  if( !destCs->isMemory
+   && chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&destCs->file),
                                      &p->zDestFile)!=SQLITE_OK ){
     sqlite3_free(p->zSrcFile);
     sqlite3_free(p->zDestDb);
@@ -1130,6 +1129,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
   ChunkStore *srcCs = 0;
   ChunkStore *destCs = 0;
+  ChunkStore tmpStore;
   Btree *pDestBt = 0;
   sqlite3_vfs *pDestVfs = 0;
   const char *zDestFile = 0;
@@ -1142,8 +1142,12 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   int openFlags;
   int srcLocked = 0;
   int destLocked = 0;
+  int tmpStoreOpen = 0;
+  int memoryAdopted = 0;
   int iDest;
   (void)nPage;
+
+  memset(&tmpStore, 0, sizeof(tmpStore));
 
   if( p && p->pOrig ) return orig_sqlite3_backup_step(p->pOrig, nPage);
   if( !p ) return SQLITE_DONE;
@@ -1163,6 +1167,12 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     goto backup_step_done;
   }
   pDestBt = p->pDestDb->aDb[iDest].pBt;
+  if( pDestBt!=p->pDestBt ){
+    sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
+                        "unknown database %s", p->zDestDb);
+    rc = SQLITE_ERROR;
+    goto backup_step_done;
+  }
   destCs = doltliteBtreeChunkStore(pDestBt);
   if( !srcCs || !destCs ){
     sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
@@ -1171,21 +1181,21 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     rc = SQLITE_ERROR;
     goto backup_step_done;
   }
-  if( destCs->isMemory ){
-    sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
-                        "cannot backup to in-memory doltlite database");
-    rc = SQLITE_ERROR;
-    goto backup_step_done;
-  }
-  if( !chunkFileGetFilename(&destCs->file) ){
+  if( !destCs->isMemory && !chunkFileGetFilename(&destCs->file) ){
     sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
                         "destination database is not backed by a file");
     rc = SQLITE_ERROR;
     goto backup_step_done;
   }
-  {
+  if( destCs->readOnly ){
+    rc = SQLITE_READONLY;
+    sqlite3Error(p->pDestDb, rc);
+    goto backup_step_done;
+  }
+  if( p->zDestFile ){
     int sameRc = SQLITE_OK;
-    int same = doltliteBackupSameFile(p->pDestVfs, p->zDestFile,
+    int same = !destCs->isMemory
+            && doltliteBackupSameFile(p->pDestVfs, p->zDestFile,
                                       chunkFileGetVfs(&destCs->file),
                                       chunkFileGetFilename(&destCs->file),
                                       &sameRc);
@@ -1200,6 +1210,11 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
       rc = SQLITE_ERROR;
       goto backup_step_done;
     }
+  }else if( !destCs->isMemory ){
+    sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
+                        "unknown database %s", p->zDestDb);
+    rc = SQLITE_ERROR;
+    goto backup_step_done;
   }
   if( sqlite3BtreeTxnState(pDestBt)!=SQLITE_TXN_NONE ){
     sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
@@ -1207,9 +1222,15 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     rc = SQLITE_ERROR;
     goto backup_step_done;
   }
-  zDestFile = chunkFileGetFilename(&destCs->file);
+  zDestFile = destCs->isMemory ? 0 : chunkFileGetFilename(&destCs->file);
   pDestVfs = chunkFileGetVfs(&destCs->file);
-  {
+  if( srcCs==destCs ){
+    sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
+                        "source and destination are the same database");
+    rc = SQLITE_ERROR;
+    goto backup_step_done;
+  }
+  if( !srcCs->isMemory && !destCs->isMemory ){
     int sameRc = SQLITE_OK;
     int same = doltliteBackupSameFile(p->pSrcVfs, p->zSrcFile,
                                       pDestVfs, zDestFile, &sameRc);
@@ -1239,17 +1260,27 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   }
   destLocked = 1;
 
-  openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
-  rc = sqlite3OsOpenMalloc(p->pSrcVfs, p->zSrcFile, &pSrc, openFlags, 0);
-  if( rc != SQLITE_OK ) goto backup_step_done;
+  if( destCs->isMemory ){
+    openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+              | SQLITE_OPEN_MEMORY | SQLITE_OPEN_MAIN_DB;
+    rc = chunkStoreOpen(&tmpStore, pDestVfs, ":memory:", openFlags);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
+    tmpStoreOpen = 1;
+    rc = chunkStoreCopyIntoEmpty(srcCs, &tmpStore);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
 
-  rc = sqlite3OsFileSize(pSrc, &fileSize);
-  if( rc != SQLITE_OK ){
+    chunkStoreUnlock(destCs);
+    destLocked = 0;
+    chunkStoreClose(destCs);
+    *destCs = tmpStore;
+    memset(&tmpStore, 0, sizeof(tmpStore));
+    tmpStoreOpen = 0;
+    memoryAdopted = 1;
+    doltliteInvalidateBtreeWorkingState(pDestBt);
     goto backup_step_done;
   }
 
   {
-    /* Opened with SQLITE_OPEN_MAIN_DB below; needs the VFS double-nul name. */
     char *zTmpRaw = sqlite3_mprintf("%s-backup-%p", zDestFile, (void*)p);
     if( !zTmpRaw ){
       rc = SQLITE_NOMEM;
@@ -1259,46 +1290,64 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     sqlite3_free(zTmpRaw);
     if( rc!=SQLITE_OK ) goto backup_step_done;
   }
-  /* Clearing a stale tmp file may legitimately find nothing to delete, but
-  ** any other failure would surface as a confusing EXCLUSIVE-open error (or
-  ** silently consume an injected fault), so propagate it here. */
   rc = sqlite3OsDelete(pDestVfs, zTmpFile, 0);
   if( rc==SQLITE_IOERR_DELETE_NOENT ) rc = SQLITE_OK;
   if( rc!=SQLITE_OK ) goto backup_step_done;
 
-  openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE
-            | SQLITE_OPEN_MAIN_DB;
-  rc = sqlite3OsOpenMalloc(pDestVfs, zTmpFile, &pTmp, openFlags, 0);
-  if( rc != SQLITE_OK ) goto backup_step_done;
+  if( srcCs->isMemory ){
+    openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+              | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_MAIN_DB;
+    rc = chunkStoreOpen(&tmpStore, pDestVfs, zTmpFile, openFlags);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
+    tmpStoreOpen = 1;
+    rc = chunkStoreCopyIntoEmpty(srcCs, &tmpStore);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
+    chunkStoreClose(&tmpStore);
+    tmpStoreOpen = 0;
+  }else{
+    openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
+    rc = sqlite3OsOpenMalloc(p->pSrcVfs, p->zSrcFile, &pSrc, openFlags, 0);
+    if( rc != SQLITE_OK ) goto backup_step_done;
 
-  {
-    u8 *buf = (u8*)sqlite3_malloc(65536);
-    i64 off = 0;
-    if( !buf ){
-      rc = SQLITE_NOMEM;
+    rc = sqlite3OsFileSize(pSrc, &fileSize);
+    if( rc != SQLITE_OK ){
       goto backup_step_done;
     }
-    while( off < fileSize ){
-      int toRead = (fileSize - off) > 65536 ? 65536 : (int)(fileSize - off);
-      rc = sqlite3OsRead(pSrc, buf, toRead, off);
-      if( rc != SQLITE_OK ) break;
-      rc = sqlite3OsWrite(pTmp, buf, toRead, off);
-      if( rc != SQLITE_OK ) break;
-      off += toRead;
-    }
-    sqlite3_free(buf);
-  }
 
-  if( rc == SQLITE_OK ){
-    rc = sqlite3OsTruncate(pTmp, fileSize);
-  }
-  if( rc == SQLITE_OK ){
-    rc = sqlite3OsSync(pTmp, SQLITE_SYNC_NORMAL);
-  }
-  if( pTmp ){
-    sqlite3OsClose(pTmp);
-    sqlite3_free(pTmp);
-    pTmp = 0;
+    openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+              | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_MAIN_DB;
+    rc = sqlite3OsOpenMalloc(pDestVfs, zTmpFile, &pTmp, openFlags, 0);
+    if( rc != SQLITE_OK ) goto backup_step_done;
+
+    {
+      u8 *buf = (u8*)sqlite3_malloc(65536);
+      i64 off = 0;
+      if( !buf ){
+        rc = SQLITE_NOMEM;
+        goto backup_step_done;
+      }
+      while( off < fileSize ){
+        int toRead = (fileSize - off) > 65536 ? 65536 : (int)(fileSize - off);
+        rc = sqlite3OsRead(pSrc, buf, toRead, off);
+        if( rc != SQLITE_OK ) break;
+        rc = sqlite3OsWrite(pTmp, buf, toRead, off);
+        if( rc != SQLITE_OK ) break;
+        off += toRead;
+      }
+      sqlite3_free(buf);
+    }
+
+    if( rc == SQLITE_OK ){
+      rc = sqlite3OsTruncate(pTmp, fileSize);
+    }
+    if( rc == SQLITE_OK ){
+      rc = sqlite3OsSync(pTmp, SQLITE_SYNC_NORMAL);
+    }
+    if( pTmp ){
+      sqlite3OsClose(pTmp);
+      sqlite3_free(pTmp);
+      pTmp = 0;
+    }
   }
   if( rc == SQLITE_OK ){
     rc = sqlite3OsReplaceFile(pDestVfs, zTmpFile, zDestFile,
@@ -1308,6 +1357,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
 backup_step_done:
   if( pSrc ) sqlite3OsCloseFree(pSrc);
   if( pTmp ) sqlite3OsCloseFree(pTmp);
+  if( tmpStoreOpen ) chunkStoreClose(&tmpStore);
   if( zTmpFile ){
     if( rc!=SQLITE_OK && !retainTmp ){
       (void)sqlite3OsDelete(pDestVfs, zTmpFile, 0);
@@ -1320,7 +1370,7 @@ backup_step_done:
     destLocked = 0;
   }
 
-  if( rc == SQLITE_OK ){
+  if( rc == SQLITE_OK && !memoryAdopted ){
     destCs->adoptReplacement = 1;
     rc = chunkStoreLockAndRefresh(destCs);
     if( rc==SQLITE_OK ){

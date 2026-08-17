@@ -1207,6 +1207,58 @@ int chunkStorePutSparse(
   return SQLITE_OK;
 }
 
+static int csCopyEntries(
+  ChunkStore *pSrc,
+  ChunkStore *pDest,
+  const ChunkIndexEntry *aEntry,
+  int nEntry
+){
+  int i;
+  for(i=0; i<nEntry; i++){
+    u8 *pData = 0;
+    int nData = 0;
+    int nPhys = 0;
+    int rc = chunkStoreGetSparse(pSrc, &aEntry[i].hash,
+                                 &pData, &nData, &nPhys);
+    if( rc==SQLITE_OK ){
+      rc = chunkStorePutSparse(pDest, pData, nPhys,
+                               (i64)nData - nPhys, 0);
+    }
+    sqlite3_free(pData);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
+int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest){
+  const ChunkIndexEntry *aEntry = 0;
+  u8 *pRefs = 0;
+  int nEntry = 0;
+  int nRefs = 0;
+  int rc;
+
+  assert( chunkStoreIsEmpty(pDest) );
+  chunkIndexGetEntries(&pSrc->index, &nEntry, &aEntry);
+  rc = csCopyEntries(pSrc, pDest, aEntry, nEntry);
+  if( rc!=SQLITE_OK ) return rc;
+
+  chunkStagingGetRecent(&pSrc->staging, &nEntry, &aEntry);
+  rc = csCopyEntries(pSrc, pDest, aEntry, nEntry);
+  if( rc!=SQLITE_OK ) return rc;
+
+  chunkStagingGetPending(&pSrc->staging, &nEntry, &aEntry);
+  rc = csCopyEntries(pSrc, pDest, aEntry, nEntry);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = chunkStoreSerializeRefsToBlob(pSrc, &pRefs, &nRefs);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreInstallRefsBlob(pDest, pRefs, nRefs);
+  }
+  sqlite3_free(pRefs);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStoreCommit(pDest);
+}
+
 int chunkStoreIsEmpty(ChunkStore *cs){
   return cs->refs.nBranches == 0 && prollyHashIsEmpty(&cs->refs.refsHash);
 }
