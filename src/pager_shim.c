@@ -503,8 +503,7 @@ static inline const PagerOps *getPagerOps(const Pager *p){
 
 /* True when pPager is doltlite's chunk-store pager shim rather than a real
 ** SQLite pager. The shim only services the handful of pager calls the prolly
-** btree facade makes; it has no page image, so callers that need real pages
-** (e.g. sqlite3_serialize's page dump) must treat a shim as unsupported. */
+** btree facade makes and has no page image. */
 int pagerShimIsShim(const Pager *p){
   return p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC;
 }

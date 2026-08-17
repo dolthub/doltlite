@@ -333,6 +333,7 @@ int chunkStoreOpen(
     if( !pVfs ) return SQLITE_CANTOPEN;
   }
   cs->file.pVfs = pVfs;
+  cs->isBuffer = sqlite3IsDoltliteMemdb(pVfs);
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   cs->pGraphLockName = 0;
   cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
@@ -608,7 +609,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   char *lockName = 0;
   int lockHeld;
 
-  if( cs->isMemory || cs->readOnly || cs->corruptMidStream ){
+  if( cs->isMemory || cs->isBuffer || cs->readOnly || cs->corruptMidStream ){
     return;
   }
   if( !cs->file.pFile || !cs->file.zFilename || cs->wal.cleanCloseMarker ){
@@ -690,6 +691,10 @@ int chunkStoreClose(ChunkStore *cs){
   if( cs->file.pFile ){
     csCloseFile(cs->file.pFile);
     cs->file.pFile = 0;
+  }
+  if( cs->pOwnedVfs ){
+    sqlite3MemdbDestroyPrivateVfs(cs->pOwnedVfs);
+    cs->pOwnedVfs = 0;
   }
   sqlite3_free(cs->file.zFilename);
   csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
@@ -980,7 +985,7 @@ static int csDrainPendingToWal(ChunkStore *cs){
   if( cs->staging.nPending==0 ){
     return SQLITE_OK;
   }
-  if( cs->lockDepth<=0 ){
+  if( cs->lockDepth<=0 && !cs->isBuffer ){
     return SQLITE_OK;
   }
 

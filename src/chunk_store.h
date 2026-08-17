@@ -181,6 +181,7 @@ struct ChunkStore {
   ** change detection can be expected to bless. */
   u8 adoptReplacement;
   u8 isMemory;
+  u8 isBuffer;
   u8 fullFsync;           /* PRAGMA fullfsync: syncs use SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip durability syncs */
   u8 snapshotPinned;
@@ -199,6 +200,7 @@ struct ChunkStore {
 
   /* Prevent checkpoint reentry through VFS write hooks. */
   int checkpointActive;
+  sqlite3_vfs *pOwnedVfs;
 };
 
 void csManifestSeal(u8 *aBuf, i64 iOffset);
@@ -215,11 +217,11 @@ int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
 
-/* A memory store has no file to lock and no peer to race, so the lock calls
-** are no-ops there and leave lockDepth at zero. */
+/* Connection-private stores have no peer to race, so their lock calls are
+** no-ops and leave lockDepth at zero. */
 #define PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs) do{ \
   assert( (cs)!=0 ); \
-  assert( (cs)->isMemory \
+  assert( (cs)->isMemory || (cs)->isBuffer \
        || ((cs)->pGraphLockFile!=0 && (cs)->lockDepth>0) ); \
 }while(0)
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);

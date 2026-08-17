@@ -2085,6 +2085,85 @@ ChunkStore *doltliteBtreeChunkStore(Btree *p){
   return &p->pBt->store;
 }
 
+int doltliteBtreeSerialize(
+  Btree *p,
+  unsigned char **ppData,
+  sqlite3_int64 *pnData
+){
+  ChunkStore *pSrc = doltliteBtreeChunkStore(p);
+  ChunkStore dest;
+  sqlite3_vfs *pVfs;
+  int rc;
+  int locked = 0;
+
+  *ppData = 0;
+  *pnData = -1;
+  if( pSrc==0 ) return SQLITE_ERROR;
+  pVfs = sqlite3MemdbCreatePrivateVfs(
+      0, 0, 0,
+      SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE);
+  if( pVfs==0 ) return SQLITE_NOMEM;
+  rc = chunkStoreOpen(&dest, pVfs, "x\0",
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ){
+    sqlite3MemdbDestroyPrivateVfs(pVfs);
+    return rc;
+  }
+  dest.pOwnedVfs = pVfs;
+  rc = chunkStoreLockAndRefresh(pSrc);
+  if( rc==SQLITE_OK ){
+    locked = 1;
+    rc = chunkStoreCopyIntoEmpty(pSrc, &dest);
+  }
+  if( locked ) chunkStoreUnlock(pSrc);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3MemdbPrivateVfsData(pVfs, ppData, pnData, 1);
+  }
+  chunkStoreClose(&dest);
+  return rc;
+}
+
+int doltliteBtreeDeserialize(
+  sqlite3 *db,
+  unsigned char *pData,
+  sqlite3_int64 szDb,
+  sqlite3_int64 szBuf,
+  unsigned mFlags,
+  Btree **ppBt
+){
+  sqlite3_vfs *pVfs;
+  ChunkStore *pStore;
+  int openFlags;
+  int rc;
+
+  *ppBt = 0;
+  pVfs = sqlite3MemdbCreatePrivateVfs(pData, szDb, szBuf, mFlags);
+  if( pVfs==0 ){
+    if( mFlags & SQLITE_DESERIALIZE_FREEONCLOSE ) sqlite3_free(pData);
+    return SQLITE_NOMEM;
+  }
+  openFlags = 0;
+  if( mFlags & SQLITE_DESERIALIZE_READONLY ){
+    openFlags |= SQLITE_OPEN_READONLY;
+  }else{
+    openFlags |= SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+  }
+  rc = sqlite3BtreeOpen(pVfs, "x\0", db, ppBt, 0, openFlags);
+  if( rc==SQLITE_OK && !sqlite3BtreeIsDoltliteFormat(*ppBt) ){
+    sqlite3BtreeClose(*ppBt);
+    *ppBt = 0;
+    rc = SQLITE_NOTADB;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3MemdbDestroyPrivateVfs(pVfs);
+    return rc;
+  }
+  pStore = doltliteBtreeChunkStore(*ppBt);
+  assert( pStore && pStore->isBuffer && pStore->pOwnedVfs==0 );
+  pStore->pOwnedVfs = pVfs;
+  return SQLITE_OK;
+}
+
 void doltliteBtreeBackupStart(Btree *p){
   if( p ) p->nBackup++;
 }

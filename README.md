@@ -767,9 +767,12 @@ For a DoltLite-format main database, the compatibility contract is:
   no separate `rowid` column.
 - `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
   attached database, as one operation; its page-count argument is not
-  incremental. Backing up an in-memory DoltLite database is unsupported.
-- `sqlite3_serialize()` does not expose a DoltLite-format main database as a
-  SQLite page image; it returns `NULL` and sets the size output to `-1`.
+  incremental. File-backed and in-memory DoltLite databases can be copied in
+  either direction.
+- `sqlite3_serialize()` and `sqlite3_deserialize()` use a contiguous native
+  DoltLite database image, including the commit graph, refs, and working sets.
+  The image is an existing DoltLite storage-format file represented as bytes,
+  not a SQLite page image or a SQL dump, and is not readable by stock SQLite.
 
 The machine-readable contract and its test mapping live in
 [`test/sqlite_compatibility_contract.tsv`](test/sqlite_compatibility_contract.tsv).

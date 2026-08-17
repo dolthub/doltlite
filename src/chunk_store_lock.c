@@ -279,7 +279,7 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
   int changed = 0;
   int rc;
   if( pChanged ) *pChanged = 0;
-  if( cs->isMemory ) return SQLITE_OK;
+  if( cs->isMemory || cs->isBuffer ) return SQLITE_OK;
   if( cs->pLockMutex && sqlite3_mutex_try(cs->pLockMutex)!=SQLITE_OK ){
     return SQLITE_BUSY;
   }
@@ -367,7 +367,7 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   int rc;
 
   *pIsOurs = 0;
-  if( cs->isMemory || cs->file.pFile==0 ) return SQLITE_OK;
+  if( cs->isMemory || cs->isBuffer || cs->file.pFile==0 ) return SQLITE_OK;
   if( cs->file.zFilename==0 || cs->file.zFilename[0]==0 ) return SQLITE_OK;
   if( cs->file.iFileSize<=0 ){
     *pIsOurs = 1;
@@ -396,7 +396,7 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   int rc;
 
   *pChanged = 0;
-  if( cs->isMemory ) return SQLITE_OK;
+  if( cs->isMemory || cs->isBuffer ) return SQLITE_OK;
 
   if( cs->file.pFile==0 ){
     int exists = 0;
@@ -462,7 +462,7 @@ int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
-  if( cs->isMemory ){
+  if( cs->isMemory || cs->isBuffer ){
     *pChanged = 0;
     return SQLITE_OK;
   }
@@ -492,7 +492,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
 int chunkStoreForceRefresh(ChunkStore *cs){
   int rc;
   int wasPinned;
-  if( cs->isMemory ) return SQLITE_OK;
+  if( cs->isMemory || cs->isBuffer ) return SQLITE_OK;
   /* The refresh the moved-file check declined, refused for the reason it
   ** declined it: reloading by path here would adopt the foreign store while the
   ** caller's catalog stays ours, and every caller is on a write path. A peer's

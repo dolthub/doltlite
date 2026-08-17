@@ -126,7 +126,7 @@ int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
   int rc;
 
   *pFound = 0;
-  if( cs->isMemory || !cs->file.zFilename ){
+  if( cs->isMemory || cs->isBuffer || !cs->file.zFilename ){
     if( chunkStoreFindBranch(cs, zName, pTip)==SQLITE_OK ) *pFound = 1;
     return SQLITE_OK;
   }

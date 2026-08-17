@@ -275,50 +275,270 @@ static void *trySerializeConnectionMutex(void *pArg){
   return 0;
 }
 
-static void run_serialize_unsupported_releases_mutex(void){
+static void run_serialize_deserialize(void){
   char path[256];
+  char auxPath[256];
+  char imagePath[256];
   sqlite3 *db = 0;
+  sqlite3 *dest = 0;
+  sqlite3 *readOnly = 0;
+  sqlite3 *fixed = 0;
+  sqlite3 *busy = 0;
+  sqlite3 *malformed = 0;
+  sqlite3 *named = 0;
+  sqlite3 *emptySrc = 0;
+  sqlite3 *emptyDest = 0;
+  sqlite3 *zeroDest = 0;
+  sqlite3 *rawFile = 0;
   sqlite3_int64 nData = 0;
-  unsigned char *pData;
+  sqlite3_int64 nDirect = 0;
+  sqlite3_int64 nCopy = 0;
+  sqlite3_int64 nReadOnly = 0;
+  sqlite3_int64 nFixed = 0;
+  sqlite3_int64 nBusy = 0;
+  sqlite3_int64 nAux = 0;
+  sqlite3_int64 nEmpty = 0;
+  unsigned char *pData = 0;
+  unsigned char *pDirect = 0;
+  unsigned char *pCopy = 0;
+  unsigned char *pReadOnly = 0;
+  unsigned char *pFixed = 0;
+  unsigned char *pBusy = 0;
+  unsigned char *pBad = 0;
+  unsigned char *pAux = 0;
+  unsigned char *pEmpty = 0;
+  char *zSql = 0;
+  FILE *f = 0;
   SerializeMutexProbe probe;
   pthread_t thread;
-  int threadStarted = 0;
   int rc;
 
   make_dbpath(path, sizeof(path), "doltlite_serialize_mutex");
+  make_dbpath(auxPath, sizeof(auxPath), "doltlite_serialize_aux");
+  make_dbpath(imagePath, sizeof(imagePath), "doltlite_serialize_image");
   removeDbFiles(path);
+  removeDbFiles(auxPath);
+  removeDbFiles(imagePath);
   rc = sqlite3_open_v2(path, &db,
       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX, 0);
   check("serialize_mutex_open", rc==SQLITE_OK);
   if( db==0 ) return;
 
   check("serialize_mutex_setup",
-        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+        execSql(db,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE);"
+          "CREATE INDEX t_v ON t(v);"
+          "INSERT INTO t VALUES(1,'one'),(2,'two');"
+          "SELECT dolt_commit('-A','-m','base');"
+          "SELECT dolt_branch('feature');"
+          "INSERT INTO t VALUES(3,'working');")==SQLITE_OK);
   pData = sqlite3_serialize(db, "main", &nData, 0);
-  check("serialize_mutex_unsupported", pData==0 && nData==-1);
-  sqlite3_free(pData);
+  check("serialize_native_image", pData!=0 && nData>168
+        && memcmp(pData, "CTLD", 4)==0);
+  f = fopen(imagePath, "wb");
+  check("serialize_image_file_open", f!=0);
+  if( f && pData ){
+    check("serialize_image_file_write",
+          fwrite(pData, 1, (size_t)nData, f)==(size_t)nData);
+    fclose(f);
+    f = 0;
+  }else if( f ){
+    fclose(f);
+    f = 0;
+  }
+  check("serialize_image_file_database", open_db(imagePath, &rawFile)==SQLITE_OK);
+  if( rawFile ){
+    check("serialize_image_file_rows",
+          strcmp(queryScalarText(rawFile, "SELECT count(*) FROM t"), "3")==0);
+    check("serialize_image_file_refs",
+          strcmp(queryScalarText(rawFile,
+            "SELECT count(*) FROM dolt_branches WHERE name='feature'"),
+            "1")==0);
+  }
+  pDirect = sqlite3_serialize(
+      db, "main", &nDirect, SQLITE_SERIALIZE_NOCOPY);
+  check("serialize_disk_nocopy", pDirect==0 && nDirect==-1);
 
   probe.db = db;
   probe.rc = SQLITE_ERROR;
   rc = pthread_create(&thread, 0, trySerializeConnectionMutex, &probe);
   check("serialize_mutex_thread_create", rc==0);
   if( rc==0 ){
-    threadStarted = 1;
     rc = pthread_join(thread, 0);
     check("serialize_mutex_thread_join", rc==0);
     check("serialize_mutex_released", probe.rc==SQLITE_OK);
   }
 
-  /* Keep a failing build clean enough to finish the test process. If the
-  ** worker observed SQLITE_BUSY, this thread owns the leaked recursive
-  ** connection-mutex entry made by sqlite3_serialize(). */
-  if( threadStarted && probe.rc==SQLITE_BUSY ){
-    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+  check("deserialize_open", open_db(":memory:", &dest)==SQLITE_OK);
+  if( dest && pData ){
+    rc = sqlite3_deserialize(dest, "main", pData, nData, nData,
+        SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE);
+    pData = 0;
+    check("deserialize_roundtrip", rc==SQLITE_OK);
+    check("deserialize_rows",
+          strcmp(queryScalarText(dest,
+            "SELECT group_concat(id || ':' || v, ',') FROM t"),
+            "1:one,2:two,3:working")==0);
+    check("deserialize_index",
+          strcmp(queryScalarText(dest,
+            "SELECT count(*) FROM sqlite_master "
+            "WHERE type='index' AND name='t_v'"), "1")==0);
+    check("deserialize_refs",
+          strcmp(queryScalarText(dest,
+            "SELECT count(*) FROM dolt_branches WHERE name='feature'"),
+            "1")==0);
+    check("deserialize_history",
+          strcmp(queryScalarText(dest, "SELECT count(*)>=1 FROM dolt_log"),
+            "1")==0);
+    check("deserialize_working_state",
+          strcmp(queryScalarText(dest,
+            "SELECT count(*) FROM dolt_status WHERE table_name='t'"),
+            "1")==0);
+    pDirect = sqlite3_serialize(
+        dest, "main", &nDirect, SQLITE_SERIALIZE_NOCOPY);
+    check("deserialize_nocopy", pDirect!=0 && nDirect==nData);
+    check("deserialize_resizable_write",
+          execSql(dest, "INSERT INTO t VALUES(4, zeroblob(20000));")
+            ==SQLITE_OK);
+    pCopy = sqlite3_serialize(dest, "main", &nCopy, 0);
+    check("deserialize_reserialize", pCopy!=0 && nCopy>nData);
+    sqlite3_free(pCopy);
+    pCopy = 0;
   }
-  check("serialize_mutex_connection_usable",
-        execSql(db, "INSERT INTO t VALUES(1);")==SQLITE_OK);
+
+  pReadOnly = sqlite3_serialize(db, "main", &nReadOnly, 0);
+  check("deserialize_readonly_image", pReadOnly!=0 && nReadOnly>0);
+  check("deserialize_readonly_open", open_db(":memory:", &readOnly)==SQLITE_OK);
+  if( readOnly && pReadOnly ){
+    rc = sqlite3_deserialize(readOnly, 0, pReadOnly, nReadOnly, nReadOnly,
+        SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_READONLY);
+    pReadOnly = 0;
+    check("deserialize_readonly", rc==SQLITE_OK);
+    check("deserialize_readonly_query",
+          strcmp(queryScalarText(readOnly, "SELECT count(*) FROM t"), "3")==0);
+    check("deserialize_readonly_rejects_write",
+          execSqlSilent(readOnly, "INSERT INTO t VALUES(4,'four')")
+            ==SQLITE_READONLY);
+  }
+
+  pFixed = sqlite3_serialize(db, "main", &nFixed, 0);
+  check("deserialize_fixed_image", pFixed!=0 && nFixed>0);
+  check("deserialize_fixed_open", open_db(":memory:", &fixed)==SQLITE_OK);
+  if( fixed && pFixed ){
+    rc = sqlite3_deserialize(fixed, 0, pFixed, nFixed, nFixed,
+        SQLITE_DESERIALIZE_FREEONCLOSE);
+    pFixed = 0;
+    check("deserialize_fixed", rc==SQLITE_OK);
+    check("deserialize_fixed_full",
+          execSqlSilent(fixed, "INSERT INTO t VALUES(4, zeroblob(20000))")
+            ==SQLITE_FULL);
+  }
+
+  pBusy = sqlite3_serialize(db, "main", &nBusy, 0);
+  check("deserialize_busy_image", pBusy!=0 && nBusy>0);
+  check("deserialize_busy_open", open_db(":memory:", &busy)==SQLITE_OK);
+  if( busy && pBusy ){
+    check("deserialize_busy_setup",
+          execSql(busy,
+            "CREATE TABLE busy_t(x); INSERT INTO busy_t VALUES(1);"
+            "BEGIN; SELECT * FROM busy_t;")==SQLITE_OK);
+    rc = sqlite3_deserialize(busy, 0, pBusy, nBusy, nBusy,
+        SQLITE_DESERIALIZE_FREEONCLOSE);
+    pBusy = 0;
+    check("deserialize_busy", rc==SQLITE_BUSY);
+    execSqlSilent(busy, "ROLLBACK");
+  }
+
+  check("deserialize_malformed_open", open_db(":memory:", &malformed)==SQLITE_OK);
+  pBad = sqlite3_malloc64(256);
+  check("deserialize_malformed_alloc", pBad!=0);
+  if( malformed && pBad ){
+    memset(pBad, 0xa5, 256);
+    rc = sqlite3_deserialize(malformed, 0, pBad, 256, 256,
+        SQLITE_DESERIALIZE_FREEONCLOSE);
+    pBad = 0;
+    check("deserialize_malformed_accept_or_reject",
+          rc==SQLITE_OK || rc==SQLITE_NOTADB || rc==SQLITE_CORRUPT);
+    if( rc==SQLITE_OK ){
+      check("deserialize_malformed_query_rejected",
+            strstr(queryScalarText(malformed, "SELECT count(*) FROM sqlite_master"),
+                   "not a database")!=0);
+    }
+  }
+
+  check("serialize_named_open", open_db(":memory:", &named)==SQLITE_OK);
+  zSql = sqlite3_mprintf(
+      "ATTACH %Q AS aux; CREATE TABLE aux.a(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO aux.a VALUES(1,'attached');", auxPath);
+  check("serialize_named_alloc", zSql!=0);
+  check("serialize_named_setup", named && zSql
+        && execSql(named, zSql)==SQLITE_OK);
+  sqlite3_free(zSql);
+  zSql = 0;
+  if( named ){
+    pAux = sqlite3_serialize(named, "aux", &nAux, 0);
+    check("serialize_named_image", pAux!=0 && nAux>0);
+    if( pAux ){
+      rc = sqlite3_deserialize(named, "aux", pAux, nAux, nAux,
+          SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE);
+      pAux = 0;
+      check("deserialize_named", rc==SQLITE_OK);
+      check("deserialize_named_rows",
+            strcmp(queryScalarText(named, "SELECT v FROM aux.a"),
+                   "attached")==0);
+    }
+  }
+
+  check("serialize_empty_source_open", open_db(":memory:", &emptySrc)==SQLITE_OK);
+  check("serialize_empty_dest_open", open_db(":memory:", &emptyDest)==SQLITE_OK);
+  if( emptySrc && emptyDest ){
+    pEmpty = sqlite3_serialize(emptySrc, 0, &nEmpty, 0);
+    check("serialize_empty_image", pEmpty!=0 && nEmpty>168);
+    if( pEmpty ){
+      rc = sqlite3_deserialize(emptyDest, 0, pEmpty, nEmpty, nEmpty,
+          SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE);
+      pEmpty = 0;
+      check("deserialize_empty", rc==SQLITE_OK);
+      check("deserialize_empty_schema",
+            strcmp(queryScalarText(emptyDest,
+              "SELECT count(*) FROM sqlite_master"), "0")==0);
+    }
+  }
+  check("deserialize_zero_open", open_db(":memory:", &zeroDest)==SQLITE_OK);
+  pEmpty = sqlite3_malloc64(1);
+  check("deserialize_zero_alloc", pEmpty!=0);
+  if( zeroDest && pEmpty ){
+    rc = sqlite3_deserialize(zeroDest, 0, pEmpty, 0, 1,
+        SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE);
+    pEmpty = 0;
+    check("deserialize_zero", rc==SQLITE_OK);
+    check("deserialize_zero_write",
+          execSql(zeroDest,
+            "CREATE TABLE zero_t(v TEXT); INSERT INTO zero_t VALUES('ok');")
+            ==SQLITE_OK);
+  }
+
+  sqlite3_free(pData);
+  sqlite3_free(pReadOnly);
+  sqlite3_free(pFixed);
+  sqlite3_free(pBusy);
+  sqlite3_free(pBad);
+  sqlite3_free(pAux);
+  sqlite3_free(pEmpty);
+  sqlite3_close(rawFile);
+  sqlite3_close(zeroDest);
+  sqlite3_close(emptyDest);
+  sqlite3_close(emptySrc);
+  sqlite3_close(named);
+  sqlite3_close(malformed);
+  sqlite3_close(busy);
+  sqlite3_close(fixed);
+  sqlite3_close(readOnly);
+  sqlite3_close(dest);
   sqlite3_close(db);
   removeDbFiles(path);
+  removeDbFiles(auxPath);
+  removeDbFiles(imagePath);
 }
 
 static void run_memory_readonly_open(void){
@@ -12308,7 +12528,7 @@ static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
-  { "serialize_unsupported_releases_mutex", "Serialize Unsupported Releases Mutex Test", run_serialize_unsupported_releases_mutex },
+  { "serialize_deserialize", "Serialize Deserialize Test", run_serialize_deserialize },
   { "memory_readonly_open", "Memory Read-Only Open Test", run_memory_readonly_open },
   { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
