@@ -1331,11 +1331,14 @@ int sqlite3_backup_finish(sqlite3_backup *pBackup){
   doltliteBtreeBackupFinish(p->pSrcBt);
   sqlite3BtreeLeave(p->pSrcBt);
   sqlite3_mutex_leave(p->pSrcDb->mutex);
-  rc = p->rc;
+  rc = p->rc==SQLITE_DONE ? SQLITE_OK : p->rc;
+  sqlite3_mutex_enter(p->pDestDb->mutex);
+  sqlite3Error(p->pDestDb, rc);
+  sqlite3_mutex_leave(p->pDestDb->mutex);
   sqlite3_free(p->zSrcFile);
   sqlite3_free(p->zDestDb);
   sqlite3_free(p);
-  return rc==SQLITE_DONE ? SQLITE_OK : rc;
+  return rc;
 }
 
 int sqlite3_backup_remaining(sqlite3_backup *pBackup){
