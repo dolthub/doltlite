@@ -2123,11 +2123,6 @@ int doltliteIsStockSqliteDb(sqlite3 *db){
       && sqlite3BtreeUsesOrig(db->aDb[0].pBt);
 }
 
-void doltliteInvalidateWorkingState(sqlite3 *db){
-  doltliteInvalidateBtreeWorkingState(
-      db && db->nDb>0 ? db->aDb[0].pBt : 0);
-}
-
 ProllyCache *doltliteGetCache(sqlite3 *db){
   BtShared *pBt = doltliteGetBtShared(db);
   if( pBt ) return &pBt->cache;
