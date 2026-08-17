@@ -1010,12 +1010,14 @@ int prollyBtCursorIndexMoveto(
         /* Only if the row actually compared equal. A landing above the key is
         ** still a landing, but an equality seek must not read it as a hit. */
         if( mutEqSeen ) pIdxKey->eqSeen = 1;
+        assert( pIdxKey->default_rc>=0 || mutCmp!=-1 || pIdxKey->eqSeen );
         return SQLITE_OK;
       }
     }
     if( treeFound ){
       *pRes = treeCmp;
       if( treeEqSeen ) pIdxKey->eqSeen = 1;
+      assert( pIdxKey->default_rc>=0 || treeCmp!=-1 || pIdxKey->eqSeen );
       /* A prefix seek can land on a tree row whose value was overwritten in
       ** this transaction (full-key seeks catch this in the exact-match fast
       ** path above). Serve the row from the mut map, or the caller reads the
