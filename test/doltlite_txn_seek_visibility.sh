@@ -792,6 +792,25 @@ run_test "tombstone_sharing_extended_prefix_does_not_hide_row" \
 
 db_rm "$DB"
 
+# A committed prefix-equal key plus a committed extended-numeric neighbour
+# makes the tree scan land on the bound with res<0. Comparing the neighbour
+# then cleared eqSeen, so SeekGT took one step onto a pending twin of the
+# same bound instead of walking past every prefix match.
+run_test "gt_excludes_pending_twin_of_extended_bound" \
+  "CREATE TABLE t(k INTEGER, j TEXT, a, PRIMARY KEY(k, j));
+   INSERT INTO t VALUES(-9007199254740994, 'A', 1);
+   INSERT INTO t VALUES(-9007199254740993, 'z', 2);
+   BEGIN;
+   INSERT INTO t VALUES(-9007199254740994, 'B', 3);
+   SELECT coalesce(group_concat(quote(k)||'/'||quote(j), '|'),'none') FROM (SELECT k, j FROM t WHERE k > -9007199254740994 ORDER BY k, j);
+   SELECT coalesce(group_concat(quote(k)||'/'||quote(j), '|'),'none') FROM (SELECT k, j FROM t WHERE k >= -9007199254740994 ORDER BY k, j);
+   COMMIT;" \
+  "-9007199254740993/'z'
+-9007199254740994/'A'|-9007199254740994/'B'|-9007199254740993/'z'" \
+  "$DB"
+
+db_rm "$DB"
+
 # All three adjacent keys pending at once: the bounds must exclude the rows they
 # name and the range must land on exactly the one between them.
 run_test "adjacent_extended_keys_respect_both_bounds" \
