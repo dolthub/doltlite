@@ -92,9 +92,16 @@ static int rebaseRestoreReturnBranchWorkingState(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCommit c;
   ProllyHash headHash;
+  u8 flags = 0;
   int rc;
 
   if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
+  rc = doltliteBranchWorkingSetRebaseFlags(db, zBranch, &flags);
+  if( rc!=SQLITE_OK ) return rc;
+  if( flags & WS_REBASE_FLAG_META_MIRROR ){
+    return doltliteClearBranchRebaseMetadata(db, zBranch);
+  }
+  if( (flags & WS_REBASE_FLAG_ACTIVE)==0 ) return SQLITE_OK;
   rc = chunkStoreFindBranch(cs, zBranch, &headHash);
   if( rc!=SQLITE_OK ) return rc;
   memset(&c, 0, sizeof(c));
@@ -106,11 +113,11 @@ static int rebaseRestoreReturnBranchWorkingState(
   return rc;
 }
 /* True if zBranch holds working-set changes its head commit does not. An
-** interactive rebase mirrors its working set onto the return branch so a
-** reopen can resume, and clears that branch at the end -- both of which
-** destroy uncommitted work, so a dirty branch must not be adopted as the
-** mirror target. Rebase already refuses to start with a dirty current branch;
-** the return branch is a different one and has no such guarantee. */
+** interactive rebase mirrors onto the return branch so a reopen can resume.
+** A dirty return branch keeps its catalog and only receives rebase metadata;
+** a clean one gets the whole working-set blob. Restore undoes the same
+** choice. Rebase already refuses to start with a dirty current branch; the
+** return branch is a different one and has no such guarantee. */
 static int rebaseBranchHasUncommittedWork(
   sqlite3 *db,
   const char *zBranch,
@@ -894,7 +901,9 @@ static int rebaseRestoreInProgress(
   do {
     rc = rebaseWritePlanRows(db, aPlan, nPlan);
     if( rc==SQLITE_OK ){
-      rc = doltliteSetSessionRebaseState(db, 1, pPreRebaseCat, pExpectedOrigHead,
+      u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE |
+        (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_META_MIRROR));
+      rc = doltliteSetSessionRebaseState(db, flags, pPreRebaseCat, pExpectedOrigHead,
                                          zOrigBranch, zReturnBranch);
     }
     if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
@@ -1417,6 +1426,7 @@ static void doltliteRebaseInteractiveStart(
   int rc;
   int dirty = 0;
   u8 curIsRebasing = 0;
+  u8 rebaseFlags = WS_REBASE_FLAG_ACTIVE;
   int bWorkingBranchCreated = 0;
   const char *zFailMsg = 0;
 
@@ -1510,11 +1520,7 @@ static void doltliteRebaseInteractiveStart(
     int dirty = 0;
     rc = rebaseBranchHasUncommittedWork(db, zReturnBranch, &dirty);
     if( rc!=SQLITE_OK ) goto fail;
-    if( dirty ){
-      /* Empty disables both the mirror and the end-of-rebase clear. The rebase
-      ** still runs; only resuming it after a reopen is given up. */
-      zReturnBranch[0] = 0;
-    }
+    if( dirty ) rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
   }
   if( strlen(zReturnBranch)>=WS_REBASE_BRANCH_LEN ){
     sqlite3_free(zOrig);
@@ -1553,7 +1559,7 @@ static void doltliteRebaseInteractiveStart(
     goto fail;
   }
 
-  rc = doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &headHash,
+  rc = doltliteSetSessionRebaseState(db, rebaseFlags, &preRebaseCat, &headHash,
                                      zOrig, zReturnBranch);
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto fail;

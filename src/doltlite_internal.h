@@ -1220,12 +1220,15 @@ void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                    ProllyHash *pRebaseOnto,
                                    const char **pzOrigBranch,
                                    const char **pzReturnBranch);
+u8 doltliteGetSessionRebaseFlags(sqlite3 *db);
 int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
                                   const ProllyHash *pPreRebaseCat,
                                   const ProllyHash *pRebaseOnto,
                                   const char *zOrigBranch,
                                   const char *zReturnBranch);
 int doltliteClearSessionRebaseState(sqlite3 *db);
+int doltliteBranchWorkingSetRebaseFlags(sqlite3 *db, const char *zBranch, u8 *pFlags);
+int doltliteClearBranchRebaseMetadata(sqlite3 *db, const char *zBranch);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSessionHasUnresolvedConflicts(sqlite3 *db);
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);

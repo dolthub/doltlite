@@ -162,6 +162,42 @@ run_test_match "noninteractive_rebase_keeps_other_branch_uncommitted_work" \
   "^1$" \
   "$DB3"
 
+# Reopen used to lose the rebase when main was dirty: no mirror meant
+# --abort said "no rebase in progress" and dolt_rebase_feat was left behind.
+seed_dirty_main "$DB3"
+run_test_match "interactive_rebase_dirty_main_starts" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB3"
+run_test "interactive_rebase_abort_after_reopen_dirty_main" \
+  "SELECT dolt_rebase('--abort');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Interactive rebase aborted
+0
+1
+0" \
+  "$DB3"
+
+seed_dirty_main "$DB3"
+run_test_match "interactive_rebase_dirty_main_starts_for_continue" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB3"
+run_test "interactive_rebase_continue_after_reopen_dirty_main" \
+  "SELECT dolt_rebase('--continue');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Successfully rebased and updated refs/heads/feat
+0
+1
+0" \
+  "$DB3"
+
 # An unrecognised plan verb used to report a bare "rebase failed", which reads
 # as though the rebase had been rolled back. It is not: the plan and working
 # branch are deliberately kept so the action can be corrected and --continue

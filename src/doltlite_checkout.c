@@ -263,7 +263,8 @@ static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
   doltliteGetSessionMergeState(db, &p->savedIsMerging,
                                &p->savedMergeCommit,
                                &p->savedConflictsCatalog);
-  doltliteGetSessionRebaseState(db, &p->savedIsRebasing,
+  p->savedIsRebasing = doltliteGetSessionRebaseFlags(db);
+  doltliteGetSessionRebaseState(db, 0,
                                 &p->savedPreRebaseCat,
                                 &p->savedRebaseOnto,
                                 &p->zSavedRebaseOrigBranch,
