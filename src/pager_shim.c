@@ -939,7 +939,9 @@ struct DoltliteBackup {
   Btree *pSrcBt;
   char *zDestDb;
   char *zSrcFile;
+  char *zDestFile;
   sqlite3_vfs *pSrcVfs;
+  sqlite3_vfs *pDestVfs;
   int done;
   int rc;
 };
@@ -1095,6 +1097,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
   p->pDestDb = pDest;
   p->pSrcBt = pSrc->aDb[iSrc].pBt;
   p->pSrcVfs = chunkFileGetVfs(&srcCs->file);
+  p->pDestVfs = chunkFileGetVfs(&destCs->file);
   p->zDestDb = sqlite3_mprintf("%s", zDestDb);
   if( !p->zDestDb ){
     sqlite3_free(p);
@@ -1106,6 +1109,14 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
   p->zSrcFile = 0;
   if( chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&srcCs->file),
                                      &p->zSrcFile)!=SQLITE_OK ){
+    sqlite3_free(p->zDestDb);
+    sqlite3_free(p);
+    sqlite3Error(pDest, SQLITE_NOMEM);
+    return 0;
+  }
+  if( chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&destCs->file),
+                                     &p->zDestFile)!=SQLITE_OK ){
+    sqlite3_free(p->zSrcFile);
     sqlite3_free(p->zDestDb);
     sqlite3_free(p);
     sqlite3Error(pDest, SQLITE_NOMEM);
@@ -1171,6 +1182,24 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
                         "destination database is not backed by a file");
     rc = SQLITE_ERROR;
     goto backup_step_done;
+  }
+  {
+    int sameRc = SQLITE_OK;
+    int same = doltliteBackupSameFile(p->pDestVfs, p->zDestFile,
+                                      chunkFileGetVfs(&destCs->file),
+                                      chunkFileGetFilename(&destCs->file),
+                                      &sameRc);
+    if( sameRc!=SQLITE_OK ){
+      rc = sameRc==SQLITE_IOERR_NOMEM ? SQLITE_NOMEM : sameRc;
+      sqlite3Error(p->pDestDb, rc);
+      goto backup_step_done;
+    }
+    if( !same ){
+      sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
+                          "unknown database %s", p->zDestDb);
+      rc = SQLITE_ERROR;
+      goto backup_step_done;
+    }
   }
   if( sqlite3BtreeTxnState(pDestBt)!=SQLITE_TXN_NONE ){
     sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,
@@ -1336,6 +1365,7 @@ int sqlite3_backup_finish(sqlite3_backup *pBackup){
   sqlite3Error(p->pDestDb, rc);
   sqlite3_mutex_leave(p->pDestDb->mutex);
   sqlite3_free(p->zSrcFile);
+  sqlite3_free(p->zDestFile);
   sqlite3_free(p->zDestDb);
   sqlite3_free(p);
   return rc;
