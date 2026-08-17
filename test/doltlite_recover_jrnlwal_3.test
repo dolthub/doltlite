@@ -64,7 +64,7 @@ do_execsql_test doltlite_recover_jrnlwal_3-1.19 {
 } {-1}
 do_catchsql_test doltlite_recover_jrnlwal_3-1.20 {
   PRAGMA wal_checkpoint(TRUNCATE);
-} {1 {wal_checkpoint mode is not configurable on doltlite-format databases; use the default (PASSIVE) form}}
+} {0 {0 0 0}}
 
 do_test doltlite_recover_jrnlwal_3-2.1 {
   execsql {
