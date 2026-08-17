@@ -748,6 +748,7 @@ proc emit_doltlite_engine_block {} {
     pkcs5.c pkparse.c platform.c platform_util.c poly1305.c rsa.c rsa_alt_helpers.c
     sha1.c sha256.c sha512.c ssl_ciphersuites.c ssl_client.c
     ssl_debug_helpers_generated.c ssl_msg.c ssl_tls.c ssl_tls12_client.c
+    ssl_tls13_client.c ssl_tls13_generic.c ssl_tls13_keys.c
     x509.c x509_crt.c
   }
   foreach name $mbedtls_emitted {
@@ -780,6 +781,21 @@ proc emit_doltlite_engine_block {} {
       set renames {
         psa_global_data_t doltlite_mbedtls_psa_slot_global_data_t
         global_data doltlite_mbedtls_psa_slot_global_data
+      }
+    }
+    if {$tail eq "ssl_tls13_client.c"} {
+      set renames {
+        local_err_translation doltlite_mbedtls_tls13_client_err_translation
+      }
+    }
+    if {$tail eq "ssl_tls13_generic.c"} {
+      set renames {
+        local_err_translation doltlite_mbedtls_tls13_generic_err_translation
+      }
+    }
+    if {$tail eq "ssl_tls13_keys.c"} {
+      set renames {
+        local_err_translation doltlite_mbedtls_tls13_keys_err_translation
       }
     }
     copy_file_isolated $f $renames

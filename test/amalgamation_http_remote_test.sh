@@ -93,7 +93,8 @@ offline_probe="$tmp/amalg_remotes_disabled_probe"
   "${probe_libs[@]}" -o "$offline_probe"
 "$offline_probe"
 
-if nm "$offline_probe" | grep -Eq 'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)'; then
+if nm "$offline_probe" | grep -Eq \
+    'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)|mbedtls_ssl_tls13'; then
   echo "FAIL: networking implementation present in remotes-disabled amalgamation"
   exit 1
 fi
