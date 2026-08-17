@@ -842,7 +842,6 @@ int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);
 int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 int doltliteIsStockSqliteDb(sqlite3 *db);
-void doltliteInvalidateWorkingState(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);
 int doltliteSerializeCatalogEntries(sqlite3 *db, struct TableEntry *aTables,
                                     int nTables, u8 **ppOut, int *pnOut);

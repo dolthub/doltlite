@@ -69,7 +69,7 @@ do_test 1.2 {
   list $rc $msg [expr {$hit>0}] [dbState] \
     [expr {$target eq "absent"
         || $target eq {ok {1 {no such table: t1}}}}]
-} {1 {backup failed: not an error} 1 {{6 21 one,two,three,onex,twox,threex} ok} 1}
+} {1 {backup failed: disk I/O error} 1 {{6 21 one,two,three,onex,twox,threex} ok} 1}
 
 do_test 2.1 {
   makeMain

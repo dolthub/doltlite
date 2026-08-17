@@ -423,7 +423,7 @@ do_test doltlite_recover_rawformat_2-6.4 {
   set r1 [catch {db restore temp rf2bu1.db} m1]
   set r2 [catch {db backup temp rf2bu2.db} m2]
   list $r1 $m1 $r2 $m2 [execsql {SELECT count(*) FROM t2}]
-} {1 {restore failed: backup of non-main databases is not supported on doltlite-format databases} 1 {backup failed: backup of non-main databases is not supported on doltlite-format databases} 16}
+} {1 {restore failed: cannot backup between a legacy SQLite database and a doltlite database} 1 {backup failed: cannot backup between a legacy SQLite database and a doltlite database} 16}
 
 do_test doltlite_recover_rawformat_2-6.5 {
   rf2_garbage_file rf2bug.db "This is not a valid database file"
