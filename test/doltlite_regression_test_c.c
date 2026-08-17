@@ -141,12 +141,16 @@ static int custom_collation_cmp(
   int nB,
   const void *pB
 ){
+  int n;
+  int cmp;
   (void)pCtx;
-  (void)nA;
-  (void)pA;
-  (void)nB;
-  (void)pB;
-  return 0;
+  n = nA < nB ? nA : nB;
+  cmp = n>0 ? memcmp(pA, pB, (size_t)n) : 0;
+  if( cmp==0 ){
+    if( nA<nB ) cmp = -1;
+    if( nA>nB ) cmp = 1;
+  }
+  return cmp<0 ? 1 : cmp>0 ? -1 : 0;
 }
 
 static void custom_collation_destroy(void *pCtx){
@@ -154,44 +158,107 @@ static void custom_collation_destroy(void *pCtx){
   (*pnDestroy)++;
 }
 
-static void run_create_collation_unsupported(void){
+static void run_custom_collation_unindexed(void){
+  char dbpath[256];
   sqlite3 *db = 0;
   int rc;
   int nDestroy = 0;
 
-  check("create_collation_open", open_db(":memory:", &db)==SQLITE_OK);
+  make_dbpath(dbpath, sizeof(dbpath), "test_custom_collation_unindexed");
+  removeDbFiles(dbpath);
+  check("create_collation_open", open_db(dbpath, &db)==SQLITE_OK);
   if( db==0 ) return;
 
   rc = sqlite3_create_collation(
-      db, "custom", SQLITE_UTF8, 0, custom_collation_cmp);
-  check("create_collation_rejected", rc==SQLITE_ERROR);
-  check("create_collation_errmsg",
-        strcmp(sqlite3_errmsg(db), "not supported")==0);
+      db, "reverse", SQLITE_UTF8, 0, custom_collation_cmp);
+  check("create_collation_registered", rc==SQLITE_OK);
+  check("custom_collation_column", execSql(db,
+      "CREATE TABLE custom_values(v TEXT COLLATE reverse);"
+      "INSERT INTO custom_values VALUES('alpha'),('gamma'),('beta');"
+      )==SQLITE_OK);
+  check("custom_collation_order_by",
+      strcmp(queryScalarText(db,
+        "SELECT group_concat(v, ',') FROM ("
+        "SELECT v FROM custom_values ORDER BY v)"),
+        "gamma,beta,alpha")==0);
+  check("custom_collation_comparison",
+      strcmp(queryScalarText(db,
+        "SELECT 'alpha' < 'beta' COLLATE reverse"), "0")==0);
+
+  rc = execSqlSilent(db, "CREATE INDEX custom_values_v ON custom_values(v)");
+  check("custom_collation_index_rejected", rc==SQLITE_ERROR);
+  check("custom_collation_index_errmsg",
+      strstr(sqlite3_errmsg(db),
+        "does not support indexes with custom collation 'reverse'")!=0);
+  check("custom_collation_index_not_created",
+      strcmp(queryScalarText(db,
+        "SELECT count(*) FROM sqlite_master "
+        "WHERE type='index' AND name='custom_values_v'"), "0")==0);
+  check("custom_collation_builtin_override", execSql(db,
+      "CREATE INDEX custom_values_binary "
+      "ON custom_values(v COLLATE BINARY)")==SQLITE_OK);
+  check("custom_collation_unique_rejected",
+      execSqlSilent(db,
+        "CREATE TABLE custom_unique(v TEXT COLLATE reverse UNIQUE)")
+        ==SQLITE_ERROR);
+  check("custom_collation_primary_key_rejected",
+      execSqlSilent(db,
+        "CREATE TABLE custom_pk(v TEXT PRIMARY KEY COLLATE reverse)")
+        ==SQLITE_ERROR);
+  rc = sqlite3_create_collation(
+      db, "BINARY", SQLITE_UTF8, 0, custom_collation_cmp);
+  check("custom_collation_builtin_replacement_rejected", rc==SQLITE_ERROR);
+  check("custom_collation_builtin_replacement_errmsg",
+      strstr(sqlite3_errmsg(db),
+        "cannot replace collation 'BINARY' used by index "
+        "'custom_values_binary'")!=0);
 
   rc = sqlite3_create_collation_v2(
-      db, "custom_v2", SQLITE_UTF8, &nDestroy,
+      db, "reverse_v2", SQLITE_UTF8, &nDestroy,
       custom_collation_cmp, custom_collation_destroy);
-  check("create_collation_v2_rejected", rc==SQLITE_ERROR);
-  check("create_collation_v2_errmsg",
-        strcmp(sqlite3_errmsg(db), "not supported")==0);
-  check("create_collation_v2_does_not_call_destroy", nDestroy==0);
+  check("create_collation_v2_registered", rc==SQLITE_OK);
+  check("create_collation_v2_works",
+      strcmp(queryScalarText(db,
+        "SELECT 'alpha' < 'beta' COLLATE reverse_v2"), "0")==0);
 
 #ifndef SQLITE_OMIT_UTF16
   {
     const unsigned short zName16[] = {
-      'c', 'u', 's', 't', 'o', 'm', '1', '6', 0
+      'r', 'e', 'v', 'e', 'r', 's', 'e', '1', '6', 0
     };
     rc = sqlite3_create_collation16(
         db, zName16, SQLITE_UTF8, 0, custom_collation_cmp);
-    check("create_collation16_rejected", rc==SQLITE_ERROR);
-    check("create_collation16_errmsg",
-          strcmp(sqlite3_errmsg(db), "not supported")==0);
+    check("create_collation16_registered", rc==SQLITE_OK);
+    check("create_collation16_works",
+        strcmp(queryScalarText(db,
+          "SELECT 'alpha' < 'beta' COLLATE reverse16"), "0")==0);
   }
 #endif
 
   check("builtin_collation_still_works",
         strcmp(queryScalarText(db, "SELECT 'a'='A' COLLATE NOCASE"), "1")==0);
+  check("custom_collation_commit",
+      strlen(queryScalarText(db,
+        "SELECT dolt_commit('-A', '-m', 'custom collation')"))==40);
   sqlite3_close(db);
+  check("create_collation_v2_destroy_called", nDestroy==1);
+
+  db = 0;
+  check("custom_collation_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  if( db ){
+    check("custom_collation_requires_reregistration",
+        strcmp(queryScalarText(db,
+          "SELECT v FROM custom_values ORDER BY v LIMIT 1"),
+          "ERROR: no such collation sequence: reverse")==0);
+    check("custom_collation_reregister",
+        sqlite3_create_collation(
+          db, "reverse", SQLITE_UTF8, 0, custom_collation_cmp)==SQLITE_OK);
+    check("custom_collation_after_reregister",
+        strcmp(queryScalarText(db,
+          "SELECT v FROM custom_values ORDER BY v LIMIT 1"), "gamma")==0);
+    sqlite3_close(db);
+  }
+  removeDbFiles(dbpath);
 }
 
 typedef struct SerializeMutexProbe SerializeMutexProbe;
@@ -12047,7 +12114,7 @@ static const RegressionCase aCases[] = {
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
-  { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
+  { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
   { "serialize_unsupported_releases_mutex", "Serialize Unsupported Releases Mutex Test", run_serialize_unsupported_releases_mutex },
   { "memory_readonly_open", "Memory Read-Only Open Test", run_memory_readonly_open },
   { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },

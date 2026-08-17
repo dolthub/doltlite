@@ -757,9 +757,12 @@ For a DoltLite-format main database, the compatibility contract is:
   collection instead of rebuilding SQLite pages.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
-- The built-in `BINARY`, `NOCASE`, and `RTRIM` collations are supported.
-  `sqlite3_create_collation*` returns `SQLITE_ERROR` because persisted prolly
-  sort keys cannot depend on application callbacks.
+- Application-defined collations registered with `sqlite3_create_collation*`
+  are supported for expressions and unindexed columns. Persisted index keys,
+  `UNIQUE` constraints, and non-integer primary keys using them are rejected
+  because prolly sort keys cannot depend on application callbacks. An index
+  may override such a column with `BINARY`, `NOCASE`, or `RTRIM`. Replacing one
+  of those built-ins is rejected while a persisted index uses its name.
 - A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key and has
   no separate `rowid` column.
 - `sqlite3_backup_step()` copies a file-backed DoltLite main database as one

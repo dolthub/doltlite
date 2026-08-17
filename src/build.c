@@ -1999,9 +1999,8 @@ void sqlite3AddCollateType(Parse *pParse, Token *pToken){
         /* This retrofit would persist a custom-collated index, which
         ** prolly-tree sort keys cannot support. Apply the same rejection
         ** as sqlite3CreateIndex. */
-        if( sqlite3StrICmp(zColl, "BINARY")!=0
-         && sqlite3StrICmp(zColl, "NOCASE")!=0
-         && sqlite3StrICmp(zColl, "RTRIM")!=0 ){
+        if( !sqlite3DoltliteIsBuiltinCollation(
+              sqlite3FindCollSeq(db, ENC(db), zColl, 0)) ){
           Btree *pColBt = db->aDb[sqlite3SchemaToIndex(db, p->pSchema)].pBt;
           if( pColBt && !sqlite3BtreeUsesOrig(pColBt) ){
             sqlite3ErrorMsg(pParse,
@@ -4584,9 +4583,9 @@ void sqlite3CreateIndex(
     /* Prolly-tree sort keys only support BINARY, NOCASE, and RTRIM.
     ** Reject indexes on columns with user-defined collations — they
     ** would produce wrong results on index lookups. */
-    if( sqlite3StrICmp(zColl, "BINARY")!=0
-     && sqlite3StrICmp(zColl, "NOCASE")!=0
-     && sqlite3StrICmp(zColl, "RTRIM")!=0 ){
+    if( !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+     && !sqlite3DoltliteIsBuiltinCollation(
+           sqlite3FindCollSeq(db, ENC(db), zColl, 0)) ){
       sqlite3ErrorMsg(pParse,
         "doltlite does not support indexes with custom collation '%s'", zColl);
       goto exit_create_index;
