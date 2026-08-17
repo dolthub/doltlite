@@ -2142,7 +2142,7 @@ int doltliteBtreeDeserialize(
     if( mFlags & SQLITE_DESERIALIZE_FREEONCLOSE ) sqlite3_free(pData);
     return SQLITE_NOMEM;
   }
-  openFlags = SQLITE_OPEN_MAIN_DB;
+  openFlags = 0;
   if( mFlags & SQLITE_DESERIALIZE_READONLY ){
     openFlags |= SQLITE_OPEN_READONLY;
   }else{
