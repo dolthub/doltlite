@@ -1692,7 +1692,6 @@ walrestart walrestart-1.0 class=unsupported issue=1836  # wal_checkpoint frame c
 walrestart walrestart-1.1 class=unsupported issue=1836  # wal_checkpoint frame counters zero (no-op checkpoint)
 walrestart walrestart-1.2 class=unsupported issue=1836  # wal_checkpoint frame counters zero (no-op checkpoint)
 walrestart walrestart-1.4 class=unsupported issue=1836  # wal_checkpoint frame counters zero (no-op checkpoint)
-walseh1 walseh1-6-seh.1 class=unsupported issue=1836  # wal_checkpoint mode explicitly rejected under fault injection
 walsetlk_recover walsetlk_recover-1.2 class=unsupported issue=1836  # WAL recovery blocking lock not raised; snapshot read proceeds
 walsetlk_recover walsetlk_recover-1.3 class=unsupported issue=1836  # WAL recovery blocking lock not raised; no wait
 walsetlk_recover walsetlk_recover-1.5.2 class=unsupported issue=1836  # no WAL lock wait, so xSleep is not called
@@ -1713,14 +1712,14 @@ backup4 backup4-2.4 class=unsupported issue=1839  # chunk-store file sizes; in-m
 backup4 backup4-3.2 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-3.3 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
 backup4 backup4-3.4 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-busy2 busy2-2.1.2 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.1.3 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.1.4 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.1.5 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.2.2 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.2.3 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.2.4 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
-busy2 busy2-2.2.5 class=intentional issue=1846  # wal_checkpoint counters zero; checkpoint mode rejected
+busy2 busy2-2.1.2 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.1.3 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.1.4 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.1.5 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.2 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.3 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.4 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.5 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
 busy2 busy2-3.1.2 class=intentional  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 busy2 busy2-3.1.3 class=intentional  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 busy2 busy2-3.2.2 class=intentional  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
@@ -2162,16 +2161,15 @@ wal7 wal7-1.2 class=unsupported issue=1836  # -wal sidecar absent
 wal7 wal7-2.0 class=unsupported issue=1836  # -wal sidecar absent
 wal7 wal7-3.0 class=unsupported issue=1836  # -wal sidecar absent
 wal7 wal7-4.0 class=unsupported issue=1836  # -wal sidecar absent
-walckptnoop walckptnoop-1.1 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.2 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.3 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.4 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.5 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.6 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.7 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.8 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.9 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
-walckptnoop walckptnoop-1.10 class=unsupported issue=1836  # wal_checkpoint counters zero; checkpoint mode rejected
+walckptnoop walckptnoop-1.1 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.2 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.3 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.4 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.5 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.7 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.8 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.9 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
+walckptnoop walckptnoop-1.10 class=unsupported issue=1836  # wal_checkpoint counters zero; no external WAL frames
 walhook walhook-1.1 class=unsupported issue=1836  # wal hook never fires (no WAL frames); got []
 walhook walhook-1.2 class=unsupported issue=1836  # wal hook never fires (no WAL frames); got []
 walhook walhook-1.3 class=unsupported issue=1836  # wal-hook page counts; file sizes differ
@@ -2569,11 +2567,9 @@ wal5 wal5-pragma-3.2.2 class=unsupported issue=1836  # WAL checkpoint/frame coun
 wal5 wal5-pragma-3.2.3 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-3.2.4 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-4.1.1 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-pragma-4.1.2 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-4.1.3 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-4.1.5 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-4.2.1 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-pragma-4.2.2 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-4.2.3 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-4.2.5 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.1 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
@@ -2583,7 +2579,6 @@ wal5 wal5-pragma-5.1.6 class=unsupported issue=1836  # WAL checkpoint/frame coun
 wal5 wal5-pragma-5.1.8 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.9 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.10 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-pragma-5.1.11 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.12 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.14 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.15 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
@@ -2591,7 +2586,6 @@ wal5 wal5-pragma-5.1.16 class=unsupported issue=1836  # WAL checkpoint/frame cou
 wal5 wal5-pragma-5.1.17 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.18 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.19 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-pragma-5.1.20 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.1.21 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.1 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.3 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
@@ -2600,7 +2594,6 @@ wal5 wal5-pragma-5.2.6 class=unsupported issue=1836  # WAL checkpoint/frame coun
 wal5 wal5-pragma-5.2.8 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.9 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.10 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-pragma-5.2.11 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.12 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.14 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.15 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
@@ -2608,7 +2601,6 @@ wal5 wal5-pragma-5.2.16 class=unsupported issue=1836  # WAL checkpoint/frame cou
 wal5 wal5-pragma-5.2.17 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.18 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.19 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-pragma-5.2.20 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-pragma-5.2.21 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-1.1.1 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-1.1.3 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
@@ -2732,14 +2724,14 @@ wal5 wal5-capi-5.2.17 class=unsupported issue=1836  # WAL checkpoint/frame count
 wal5 wal5-capi-5.2.18 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-5.2.19 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
 wal5 wal5-capi-5.2.21 class=unsupported issue=1836  # WAL checkpoint/frame counters zero; sidecar absent
-wal5 wal5-capi-2.4.4.1.3 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.4.2.3 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.8.1.3 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.8.2.3 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.11.1.2 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.11.2.2 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.12.1.3 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
-wal5 wal5-capi-2.4.12.2.3 class=unsupported issue=1836  # non-PASSIVE checkpoint mode rejected; busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.4.1.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.4.2.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.8.1.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.8.2.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.11.1.2 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.11.2.2 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.12.1.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
+wal5 wal5-capi-2.4.12.2.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
 pagerfault3 pagerfault3-pre1 class=intentional issue=1846  # synthetic chunk-format page_count
 pagerfault3 pagerfault3-pre2 class=intentional issue=1846  # synthetic chunk-format page_count
 
@@ -2814,47 +2806,31 @@ e_walckpt e_walckpt-2.2.2.b class=unsupported issue=1836
 e_walckpt e_walckpt-2.3.1 class=unsupported issue=1836
 e_walckpt e_walckpt-2.3.2.1 class=unsupported issue=1836
 e_walckpt e_walckpt-2.3.2.2 class=unsupported issue=1836
+e_walckpt e_walckpt-2.3.2.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.1.14 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.1.16 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.1.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.1.9 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.2.10.1 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.2.11 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.2.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.2.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.2.9 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.3.10.1 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.3.11 class=unsupported issue=1836
-e_walckpt e_walckpt-2.full.3.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.3.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.full.3.9 class=unsupported issue=1836
 e_walckpt e_walckpt-2.passive.1.4 class=unsupported issue=1836
 e_walckpt e_walckpt-2.passive.1.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.1.14 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.1.16 class=unsupported issue=1836
-e_walckpt e_walckpt-2.restart.1.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.1.9 class=unsupported issue=1836
-e_walckpt e_walckpt-2.restart.2.10.1 class=unsupported issue=1836
-e_walckpt e_walckpt-2.restart.2.11 class=unsupported issue=1836
-e_walckpt e_walckpt-2.restart.2.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.2.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.2.9 class=unsupported issue=1836
-e_walckpt e_walckpt-2.restart.3.10.1 class=unsupported issue=1836
-e_walckpt e_walckpt-2.restart.3.3 class=unsupported issue=1836
+e_walckpt e_walckpt-2.restart.3.11 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.3.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.restart.3.9 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.1.14 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.1.16 class=unsupported issue=1836
-e_walckpt e_walckpt-2.truncate.1.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.1.9 class=unsupported issue=1836
-e_walckpt e_walckpt-2.truncate.2.10.1 class=unsupported issue=1836
-e_walckpt e_walckpt-2.truncate.2.11 class=unsupported issue=1836
-e_walckpt e_walckpt-2.truncate.2.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.2.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.2.9 class=unsupported issue=1836
-e_walckpt e_walckpt-2.truncate.3.10.1 class=unsupported issue=1836
+e_walckpt e_walckpt-2.truncate.3.11 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.3.12 class=unsupported issue=1836
-e_walckpt e_walckpt-2.truncate.3.3 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.3.7 class=unsupported issue=1836
 e_walckpt e_walckpt-2.truncate.3.9 class=unsupported issue=1836
 e_walckpt e_walckpt-3.3.1 class=unsupported issue=1836

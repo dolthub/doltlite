@@ -4,16 +4,6 @@ DOLTLITE="${1:-./doltlite}"
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
 PASS=0; FAIL=0; ERRORS=""
 
-run_test_match() {
-  local n="$1" got="$2" pat="$3"
-  if echo "$got" | grep -qE "$pat"; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  pattern: $pat\n  got:     $got"
-  fi
-}
-
 run_test_eq() {
   local n="$1" got="$2" want="$3"
   if [ "$got" = "$want" ]; then
@@ -39,9 +29,8 @@ run_test_eq "wc_dl_passive_explicit" \
   "$($DOLTLITE "$DB" "PRAGMA wal_checkpoint(PASSIVE);" 2>&1)" "0|0|0"
 
 for mode in FULL RESTART TRUNCATE; do
-  out=$($DOLTLITE "$DB" "PRAGMA wal_checkpoint($mode);" 2>&1)
-  run_test_match "wc_dl_${mode}_rejected" "$out" \
-    "wal_checkpoint mode is not configurable on doltlite-format"
+  run_test_eq "wc_dl_${mode}_accepted" \
+    "$($DOLTLITE "$DB" "PRAGMA wal_checkpoint($mode);" 2>&1)" "0|0|0"
 done
 
 db_rm "$DB"
@@ -62,7 +51,7 @@ DELETE FROM big WHERE a%2=0;" > /dev/null 2>&1
 done
 
 main_before=$(wc -c < "$MAIN"); aux_before=$(wc -c < "$AUX")
-$DOLTLITE "$MAIN" "ATTACH '$AUX' AS aux; PRAGMA aux.wal_checkpoint;" > /dev/null 2>&1
+$DOLTLITE "$MAIN" "ATTACH '$AUX' AS aux; PRAGMA aux.wal_checkpoint(RESTART);" > /dev/null 2>&1
 main_after=$(wc -c < "$MAIN"); aux_after=$(wc -c < "$AUX")
 
 run_test_eq "wc_aux_leaves_main_untouched" "$main_after" "$main_before"
@@ -84,7 +73,7 @@ WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000)
   INSERT INTO big SELECT i, 'padding-data-'||i FROM c;
 DELETE FROM big WHERE a%2=0;" > /dev/null 2>&1
 before=$(wc -c < "$DB")
-$DOLTLITE "$DB" "PRAGMA main.wal_checkpoint;" > /dev/null 2>&1
+$DOLTLITE "$DB" "PRAGMA main.wal_checkpoint(TRUNCATE);" > /dev/null 2>&1
 after=$(wc -c < "$DB")
 if [ "$after" -lt "$before" ]; then
   PASS=$((PASS+1))

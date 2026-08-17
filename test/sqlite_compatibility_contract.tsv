@@ -3,7 +3,7 @@ api.public_surface	compatible	test/install_layout_test.sh#static link via <doltl
 storage.format_routing	adapted	test/doltlite_open_sqlite_file.sh#R1_select_star_count,test/doltlite_open_sqlite_file.sh#VC_UNAVAILABLE	DoltLite-format databases use the prolly engine while stock SQLite files route to the original B-tree without Dolt version control
 storage.sqlite_sidecars	adapted	test/sqlite_compatibility_contract_test.sh#sidecars_absent	DoltLite-format databases do not create SQLite rollback-journal WAL or shared-memory sidecars
 pragma.journal_mode	adapted	test/doltlite_pragma_journal_mode.sh#jm_dl_set_${mode}_noop	journal_mode reports wal and ignores mode changes on DoltLite-format databases
-pragma.wal_checkpoint	adapted	test/doltlite_pragma_wal_checkpoint.sh#wc_dl_default,test/doltlite_pragma_wal_checkpoint.sh#wc_dl_${mode}_rejected	passive WAL checkpoint is a no-op and other modes are rejected on DoltLite-format databases
+pragma.wal_checkpoint	adapted	test/doltlite_pragma_wal_checkpoint.sh#wc_dl_default,test/doltlite_pragma_wal_checkpoint.sh#wc_dl_${mode}_accepted	all WAL checkpoint modes run DoltLite garbage collection and report zero WAL frames
 pragma.auto_vacuum	adapted	test/doltlite_pragma_auto_vacuum.sh#av_dl_set_full_noop,test/doltlite_pragma_auto_vacuum.sh#av_dl_incr_noop	auto_vacuum reports zero and attempts to enable it or run incremental_vacuum are no-ops
 pragma.vacuum	adapted	test/doltlite_vacuum.sh#vacuum_and_dolt_gc_leave_same_state	VACUUM runs DoltLite garbage collection instead of rebuilding SQLite pages
 pragma.encoding	adapted	test/doltlite_pragma_encoding.sh#encoding_after_ignored_still_utf8	DoltLite-format databases remain UTF-8 when UTF-16 encoding is requested

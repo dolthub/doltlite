@@ -2,8 +2,6 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
 
-set CKPT_ERR {wal_checkpoint mode is not configurable on doltlite-format databases; use the default (PASSIVE) form}
-
 do_execsql_test doltlite_recover_jrnlwal_4-1.1 {
   PRAGMA journal_mode;
   PRAGMA main.journal_mode;
@@ -151,7 +149,7 @@ do_execsql_test doltlite_recover_jrnlwal_4-5.2 {
 foreach {n ckmode} {3 noop 4 full 5 truncate} {
   do_test doltlite_recover_jrnlwal_4-5.$n {
     catchsql "PRAGMA wal_checkpoint = $ckmode"
-  } [list 1 $CKPT_ERR]
+  } [list 0 {0 0 0}]
 }
 do_test doltlite_recover_jrnlwal_4-5.6 {
   sqlite3_wal_checkpoint_v2 db noop

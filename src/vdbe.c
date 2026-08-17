@@ -8508,21 +8508,6 @@ case OP_Checkpoint: {
        || pOp->p2==SQLITE_CHECKPOINT_TRUNCATE
        || pOp->p2==SQLITE_CHECKPOINT_NOOP
   );
-#ifdef DOLTLITE_PROLLY
-  if( pOp->p2!=SQLITE_CHECKPOINT_PASSIVE ){
-    int iDb;
-    for(iDb=0; iDb<db->nDb; iDb++){
-      if( (pOp->p1==iDb || pOp->p1==SQLITE_MAX_DB)
-       && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt) ){
-        rc = SQLITE_ERROR;
-        sqlite3VdbeError(p,
-          "wal_checkpoint mode is not configurable on doltlite-format "
-          "databases; use the default (PASSIVE) form");
-        goto abort_due_to_error;
-      }
-    }
-  }
-#endif
   rc = sqlite3Checkpoint(db, pOp->p1, pOp->p2, &aRes[1], &aRes[2]);
   if( rc ){
     if( rc!=SQLITE_BUSY ) goto abort_due_to_error;

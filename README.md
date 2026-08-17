@@ -750,8 +750,8 @@ For a DoltLite-format main database, the compatibility contract is:
   are available only on DoltLite-format databases.
 - No SQLite rollback-journal, WAL, or shared-memory sidecar is created.
   `PRAGMA journal_mode` reports `wal` as a compatibility value and ignores
-  requests to change it. A passive WAL checkpoint is a no-op; other checkpoint
-  modes are rejected.
+  requests to change it. All `PRAGMA wal_checkpoint` modes bridge to DoltLite
+  garbage collection and report zero WAL frames.
 - `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
   `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
   collection instead of rebuilding SQLite pages.
