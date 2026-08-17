@@ -1038,11 +1038,10 @@ window6 window6-3.1 class=intentional  # index with user-defined collation unsup
 misc1 misc1-14.2b class=intentional  # no rollback-journal file: doltlite has no -journal
 
 # gencol1 — gencol1-15.10/15.20 use `db deserialize [decode_hexdb ...]` to load a
-# raw SQLite page image. DoltLite does not support the page-image deserialize API
-# (prolly feature gap, #1225); the deserialize fails ("unable to set MEMDB
-# content"). Generated-column behavior itself is correct (the other 174 tests pass).
-gencol1 gencol1-15.10 class=intentional  # db deserialize (page-image API) unsupported (#1225)
-gencol1 gencol1-15.20 class=intentional  # db deserialize (page-image API) unsupported (#1225)
+# raw SQLite page image. DoltLite deserialize accepts native DoltLite images,
+# not stock SQLite page images. Generated-column behavior itself is correct.
+gencol1 gencol1-15.10 class=intentional  # stock SQLite serialization is not a DoltLite image
+gencol1 gencol1-15.20 class=intentional  # stock SQLite serialization is not a DoltLite image
 gencol1 gencol1-21.1 class=intentional  # canonicalized text shortens the raw type span below sqlite3AddColumn's 16-char GENERATED-trim threshold; declared type string differs, affinity unchanged
 
 # enc2 — UTF-16 encoding tests (#1164). DoltLite is locked to UTF-8: it ignores
@@ -1411,8 +1410,8 @@ autoindex3 autoindex3-310 class=intentional  # EQP plan shape
 autoindex5 autoindex5-1.1 class=intentional  # EQP plan shape
 index5 index5-1.3 class=intentional  # file-format page count / index page layout
 
-# pragma6-1.0 — `db deserialize` page-image API unsupported on prolly (#1225).
-pragma6 pragma6-1.0 class=intentional  # db deserialize (page-image API) unsupported
+# pragma6-1.0 deserializes a stock SQLite page image, not a DoltLite image.
+pragma6 pragma6-1.0 class=intentional  # stock SQLite serialization is not a DoltLite image
 
 # windowC-2.0/2.1 — PRAGMA encoding=UTF16le/be ignored, locked to UTF-8
 # (#1164); randstr text read back as UTF-8 bytes.
@@ -1806,17 +1805,17 @@ corruptL corruptL-18.1 class=intentional  # stock index-page corruption; no page
 corruptL corruptL-19.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-19.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-19.4 class=intentional issue=1852  # writable_schema index rewrite tolerated; store stays self-consistent (verified intentional)
-# corruptN — stock MEMDB deserialize of raw SQLite page images, then corrupt.
-# DoltLite MEMDB is prolly/chunk-backed; page-image deserialize is unsupported.
-# Failure text cannot match stock page-corruption paths. Architectural.
-corruptN corruptN-1.0 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-1.1 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-2.0 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-6.1 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-6.3 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-7.1 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-7.2 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
-corruptN corruptN-7.3 class=intentional  # MEMDB page-image deserialize unsupported (architectural, not message parity)
+# corruptN deserializes raw stock SQLite page images and then corrupts pages.
+# DoltLite deserialize accepts native DoltLite images, so these stock
+# page-corruption paths and messages do not apply.
+corruptN corruptN-1.0 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-1.1 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-2.0 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-6.1 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-6.3 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-7.1 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-7.2 class=intentional  # stock SQLite serialization is not a DoltLite image
+corruptN corruptN-7.3 class=intentional  # stock SQLite serialization is not a DoltLite image
 dbstatus2 dbstatus2-1.1 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.2 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.3 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID

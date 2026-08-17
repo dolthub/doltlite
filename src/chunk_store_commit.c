@@ -351,7 +351,7 @@ static int csCommitToFile(ChunkStore *cs){
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
   char *lockName = 0;
   int hadFile = (cs->file.pFile != 0);
-  int lockHeld = cs->lockDepth>0;
+  int lockHeld = cs->lockDepth>0 || cs->isBuffer;
   ChunkIndexEntry *aCommittedPending = 0;
   ChunkIndexEntry aSmallCommittedPending[32];
   ChunkIndexEntry *aMergePending = 0;
@@ -553,7 +553,7 @@ int chunkStoreCommit(ChunkStore *cs){
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
   if( cs->readOnly || cs->movedReadOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
-  if( cs->lockDepth<=0 && cs->file.zFilename ){
+  if( !cs->isBuffer && cs->lockDepth<=0 && cs->file.zFilename ){
     ProllyHash baseRefsHash;
     preserveRefs = cs->staging.nPending > 0
                 && prollyHashCompare(&cs->refs.refsHash,
@@ -581,7 +581,8 @@ int chunkStoreCommit(ChunkStore *cs){
     }
     acquiredLock = 1;
   }
-  if( cs->movedReadOnly || (!acquiredLock && csFileHasMovedNoFault(cs)) ){
+  if( cs->movedReadOnly
+   || (!cs->isBuffer && !acquiredLock && csFileHasMovedNoFault(cs)) ){
     if( acquiredLock ) chunkStoreUnlock(cs);
     return SQLITE_READONLY;
   }

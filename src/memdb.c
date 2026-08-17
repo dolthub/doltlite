@@ -25,6 +25,9 @@
 typedef struct sqlite3_vfs MemVfs;
 typedef struct MemFile MemFile;
 typedef struct MemStore MemStore;
+#ifdef DOLTLITE_PROLLY
+typedef struct DoltliteMemVfs DoltliteMemVfs;
+#endif
 
 /* Access to a lower-level VFS that (might) implement dynamic loading,
 ** access to randomness, etc.
@@ -133,6 +136,7 @@ static int memdbSleep(sqlite3_vfs*, int microseconds);
 /* static int memdbCurrentTime(sqlite3_vfs*, double*); */
 static int memdbGetLastError(sqlite3_vfs*, int, char *);
 static int memdbCurrentTimeInt64(sqlite3_vfs*, sqlite3_int64*);
+static const sqlite3_io_methods memdb_io_methods;
 
 static sqlite3_vfs memdb_vfs = {
   2,                           /* iVersion */
@@ -158,6 +162,61 @@ static sqlite3_vfs memdb_vfs = {
   0,                           /* xGetSystemCall */
   0,                           /* xNextSystemCall */
 };
+
+#ifdef DOLTLITE_PROLLY
+struct DoltliteMemVfs {
+  sqlite3_vfs base;
+  MemStore *pStore;
+};
+
+static int doltliteMemdbOpen(
+  sqlite3_vfs *pVfs,
+  const char *zName,
+  sqlite3_file *pFd,
+  int flags,
+  int *pOutFlags
+){
+  DoltliteMemVfs *p = (DoltliteMemVfs*)pVfs;
+  MemFile *pFile = (MemFile*)pFd;
+  UNUSED_PARAMETER(zName);
+  memset(pFile, 0, sizeof(*pFile));
+  p->pStore->nRef++;
+  pFile->pStore = p->pStore;
+  if( pOutFlags ){
+    *pOutFlags = flags | SQLITE_OPEN_MEMORY;
+    if( p->pStore->mFlags & SQLITE_DESERIALIZE_READONLY ){
+      *pOutFlags &= ~SQLITE_OPEN_READWRITE;
+      *pOutFlags |= SQLITE_OPEN_READONLY;
+    }
+  }
+  pFd->pMethods = &memdb_io_methods;
+  return SQLITE_OK;
+}
+
+static int doltliteMemdbDelete(
+  sqlite3_vfs *pVfs,
+  const char *zName,
+  int syncDir
+){
+  UNUSED_PARAMETER(pVfs);
+  UNUSED_PARAMETER(zName);
+  UNUSED_PARAMETER(syncDir);
+  return SQLITE_IOERR_DELETE;
+}
+
+static int doltliteMemdbAccess(
+  sqlite3_vfs *pVfs,
+  const char *zName,
+  int flags,
+  int *pResOut
+){
+  DoltliteMemVfs *p = (DoltliteMemVfs*)pVfs;
+  UNUSED_PARAMETER(zName);
+  UNUSED_PARAMETER(flags);
+  *pResOut = p->pStore->sz>0;
+  return SQLITE_OK;
+}
+#endif
 
 static const sqlite3_io_methods memdb_io_methods = {
   3,                              /* iVersion */
@@ -791,14 +850,15 @@ unsigned char *sqlite3_serialize(
   pBt = db->aDb[iDb].pBt;
   if( pBt==0 ) goto serialize_out;
 #ifdef DOLTLITE_PROLLY
-  /* doltlite stores prolly trees, not a stock page image. Its chunk-store
-  ** pager shim answers every sqlite3PagerGet() with SQLITE_OK and a NULL page,
-  ** so the page dump below would memcpy() from a NULL pointer. There is no page
-  ** image to serialize, so report the operation as unsupported (NULL) rather
-  ** than crashing or returning a zero-filled buffer. */
-  {
-    extern int pagerShimIsShim(const Pager*);
-    if( pagerShimIsShim(sqlite3BtreePager(pBt)) ) goto serialize_out;
+  if( sqlite3BtreeIsDoltliteFormat(pBt) ){
+    if( mFlags & SQLITE_SERIALIZE_NOCOPY ) goto serialize_out;
+    rc = doltliteBtreeSerialize(pBt, &pOut, &sz);
+    if( rc==SQLITE_OK ){
+      if( piSize ) *piSize = sz;
+    }else if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+      sqlite3OomFault(db);
+    }
+    goto serialize_out;
   }
 #endif
   szPage = sqlite3BtreeGetPageSize(pBt);
@@ -879,6 +939,38 @@ int sqlite3_deserialize(
     rc = SQLITE_ERROR;
     goto end_deserialize;
   }
+#ifdef DOLTLITE_PROLLY
+  if( iDb>=0 && db->aDb[iDb].pBt
+   && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt) ){
+    Btree *pNewBt = 0;
+    Schema *pNewSchema;
+    if( szDb<0 || szBuf<szDb || (szDb>0 && pData==0) ){
+      rc = SQLITE_MISUSE;
+      goto end_deserialize;
+    }
+    if( sqlite3BtreeTxnState(db->aDb[iDb].pBt)!=SQLITE_TXN_NONE
+     || sqlite3BtreeIsInBackup(db->aDb[iDb].pBt) ){
+      rc = SQLITE_BUSY;
+      goto end_deserialize;
+    }
+    rc = doltliteBtreeDeserialize(
+        db, pData, szDb, szBuf, mFlags, &pNewBt);
+    pData = 0;
+    if( rc!=SQLITE_OK ) goto end_deserialize;
+    pNewSchema = sqlite3SchemaGet(db, pNewBt);
+    if( pNewSchema==0 ){
+      sqlite3BtreeClose(pNewBt);
+      rc = SQLITE_NOMEM;
+      goto end_deserialize;
+    }
+    sqlite3BtreeClose(db->aDb[iDb].pBt);
+    db->aDb[iDb].pBt = pNewBt;
+    db->aDb[iDb].pSchema = pNewSchema;
+    db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
+    rc = SQLITE_OK;
+    goto end_deserialize;
+  }
+#endif
   zSql = sqlite3_mprintf("ATTACH x AS %Q", zSchema);
   if( zSql==0 ){
     rc = SQLITE_NOMEM;
@@ -926,6 +1018,80 @@ end_deserialize:
 int sqlite3IsMemdb(const sqlite3_vfs *pVfs){
   return pVfs==&memdb_vfs;
 }
+
+#ifdef DOLTLITE_PROLLY
+sqlite3_vfs *sqlite3MemdbCreatePrivateVfs(
+  unsigned char *pData,
+  sqlite3_int64 szDb,
+  sqlite3_int64 szBuf,
+  unsigned mFlags
+){
+  DoltliteMemVfs *pVfs;
+  MemStore *pStore;
+  pVfs = sqlite3_malloc64(sizeof(*pVfs));
+  if( pVfs==0 ) return 0;
+  pStore = sqlite3_malloc64(sizeof(*pStore));
+  if( pStore==0 ){
+    sqlite3_free(pVfs);
+    return 0;
+  }
+  memset(pVfs, 0, sizeof(*pVfs));
+  memset(pStore, 0, sizeof(*pStore));
+  pVfs->base = memdb_vfs;
+  pVfs->base.zName = "doltlite-memdb";
+  pVfs->base.xOpen = doltliteMemdbOpen;
+  pVfs->base.xDelete = doltliteMemdbDelete;
+  pVfs->base.xAccess = doltliteMemdbAccess;
+  pVfs->pStore = pStore;
+  pStore->aData = pData;
+  pStore->sz = szDb;
+  pStore->szAlloc = szBuf;
+  pStore->szMax = szBuf;
+  if( (mFlags & SQLITE_DESERIALIZE_RESIZEABLE)!=0
+   && pStore->szMax<sqlite3GlobalConfig.mxMemdbSize ){
+    pStore->szMax = sqlite3GlobalConfig.mxMemdbSize;
+  }
+  pStore->mFlags = mFlags;
+  pStore->nRef = 1;
+  return &pVfs->base;
+}
+
+void sqlite3MemdbDestroyPrivateVfs(sqlite3_vfs *pBase){
+  DoltliteMemVfs *pVfs = (DoltliteMemVfs*)pBase;
+  MemStore *pStore;
+  if( pVfs==0 ) return;
+  pStore = pVfs->pStore;
+  assert( pStore->nRef==1 );
+  if( pStore->mFlags & SQLITE_DESERIALIZE_FREEONCLOSE ){
+    sqlite3_free(pStore->aData);
+  }
+  sqlite3_free(pStore);
+  sqlite3_free(pVfs);
+}
+
+int sqlite3MemdbPrivateVfsData(
+  sqlite3_vfs *pBase,
+  unsigned char **ppData,
+  sqlite3_int64 *pnData,
+  int detach
+){
+  DoltliteMemVfs *pVfs = (DoltliteMemVfs*)pBase;
+  MemStore *pStore = pVfs->pStore;
+  *ppData = pStore->aData;
+  *pnData = pStore->sz;
+  if( detach ){
+    pStore->aData = 0;
+    pStore->sz = 0;
+    pStore->szAlloc = 0;
+    pStore->mFlags &= ~SQLITE_DESERIALIZE_FREEONCLOSE;
+  }
+  return SQLITE_OK;
+}
+
+int sqlite3IsDoltliteMemdb(const sqlite3_vfs *pVfs){
+  return pVfs && pVfs->xOpen==doltliteMemdbOpen;
+}
+#endif
 
 /* 
 ** This routine is called when the extension is loaded.

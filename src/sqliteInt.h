@@ -5461,8 +5461,26 @@ const char *sqlite3ErrName(int);
 #ifndef SQLITE_OMIT_DESERIALIZE
 int sqlite3MemdbInit(void);
 int sqlite3IsMemdb(const sqlite3_vfs*);
+#ifdef DOLTLITE_PROLLY
+sqlite3_vfs *sqlite3MemdbCreatePrivateVfs(
+  unsigned char*, sqlite3_int64, sqlite3_int64, unsigned
+);
+void sqlite3MemdbDestroyPrivateVfs(sqlite3_vfs*);
+int sqlite3MemdbPrivateVfsData(
+  sqlite3_vfs*, unsigned char**, sqlite3_int64*, int
+);
+int sqlite3IsDoltliteMemdb(const sqlite3_vfs*);
+int doltliteBtreeSerialize(Btree*, unsigned char**, sqlite3_int64*);
+int doltliteBtreeDeserialize(
+  sqlite3*, unsigned char*, sqlite3_int64, sqlite3_int64, unsigned, Btree**
+);
+#endif
 #else
 # define sqlite3IsMemdb(X) 0
+# ifdef DOLTLITE_PROLLY
+#  define sqlite3IsDoltliteMemdb(X) 0
+#  define sqlite3MemdbDestroyPrivateVfs(X) ((void)0)
+# endif
 #endif
 
 const char *sqlite3ErrStr(int);
