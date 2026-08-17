@@ -677,7 +677,8 @@ static int indexMovetoScanTreeLeaf(
   int nSortKey,
   int nSeekKeyField,
   int *pTreeFound,
-  int *pTreeCmp
+  int *pTreeCmp,
+  int *pTreeEqSeen
 ){
   int rc = SQLITE_OK;
   int iLevel;
@@ -686,10 +687,12 @@ static int indexMovetoScanTreeLeaf(
   int nItems;
   int bestIdx = -1;
   int bestCmp = 0;
+  int eqLanding = 0;
   u8 *pRecBuf;
   int nRecBufAlloc;
   int i;
 
+  *pTreeEqSeen = 0;
   if( pCur->pCur.eState!=PROLLY_CURSOR_VALID ) return SQLITE_OK;
 
   iLevel = pCur->pCur.iLevel;
@@ -725,6 +728,7 @@ static int indexMovetoScanTreeLeaf(
             if( nSeekKeyField>0 ){
               pIdxKey->eqSeen = 0;
               bestCmp = 1;
+              eqLanding = 0;
             }else{
               const u8 *pVal2; int nVal2;
               prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
@@ -737,6 +741,7 @@ static int indexMovetoScanTreeLeaf(
               }
               pIdxKey->eqSeen = 0;
               bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
+              eqLanding = (bestCmp==0 || pIdxKey->eqSeen);
             }
           }
           break;
@@ -754,6 +759,7 @@ static int indexMovetoScanTreeLeaf(
           pIdxKey->eqSeen = 1;
           bestIdx = i;
           bestCmp = pIdxKey->default_rc;
+          eqLanding = 1;
           *pTreeFound = 1;
           *pTreeCmp = bestCmp;
           if( pIdxKey->default_rc < 0 ){
@@ -783,6 +789,7 @@ static int indexMovetoScanTreeLeaf(
         }
         bestIdx = i;
         bestCmp = recCmp;
+        eqLanding = 1;
         *pTreeFound = 1;
         *pTreeCmp = recCmp;
         break;
@@ -798,6 +805,7 @@ static int indexMovetoScanTreeLeaf(
         if( bestIdx < 0 ){
           bestIdx = i;
           bestCmp = recCmp;
+          eqLanding = 0;
         }
       }
     }
@@ -820,10 +828,12 @@ static int indexMovetoScanTreeLeaf(
 
   if( *pTreeFound ){
     pCur->pCur.aLevel[iLevel].idx = bestIdx;
+    *pTreeEqSeen = eqLanding;
   }else if( bestIdx >= 0 ){
     pCur->pCur.aLevel[iLevel].idx = bestIdx;
     *pTreeCmp = bestCmp;
     *pTreeFound = 1;
+    *pTreeEqSeen = eqLanding;
   }
   return SQLITE_OK;
 }
@@ -886,7 +896,7 @@ int prollyBtCursorIndexMoveto(
   refreshCursorRoot(pCur);
 
   {
-    int treeFound = 0, mutFound = 0, mutEqSeen = 0;
+    int treeFound = 0, mutFound = 0, mutEqSeen = 0, treeEqSeen = 0;
     int treeCmp = 0, mutCmp = 0;
     const u8 *mutKey = 0;
     int mutNKey = 0;
@@ -917,7 +927,7 @@ int prollyBtCursorIndexMoveto(
     ** an I/O or allocation failure. */
     rc = indexMovetoScanTreeLeaf(
         pCur, pIdxKey, pSortKey, nSortKey, nSeekKeyField,
-        &treeFound, &treeCmp);
+        &treeFound, &treeCmp, &treeEqSeen);
     if( rc!=SQLITE_OK ) return rc;
 
     {
@@ -1005,6 +1015,7 @@ int prollyBtCursorIndexMoveto(
     }
     if( treeFound ){
       *pRes = treeCmp;
+      if( treeEqSeen ) pIdxKey->eqSeen = 1;
       /* A prefix seek can land on a tree row whose value was overwritten in
       ** this transaction (full-key seeks catch this in the exact-match fast
       ** path above). Serve the row from the mut map, or the caller reads the

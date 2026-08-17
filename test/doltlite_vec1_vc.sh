@@ -184,12 +184,14 @@ check "vec1_pq_auto_merge" "0
 1
 0
 2|602" "$result"
-result=$(run_sql "SELECT rowid FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k: 1, nprobe: 8}');
-SELECT rowid FROM t(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f', '{k: 1, nprobe: 8}');
+# Approximate PQ k=1 can return the other same-bucket row; both must still
+# appear in a wider probe so the merge did not drop either vector.
+result=$(run_sql "SELECT count(*) FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k: 16, nprobe: 8}') WHERE rowid=7001;
+SELECT count(*) FROM t(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f', '{k: 16, nprobe: 8}') WHERE rowid=8001;
 SELECT message FROM dolt_log LIMIT 1;
 PRAGMA integrity_check;" "$DB/left")
-check "vec1_pq_lossless_merge" "7001
-8001
+check "vec1_pq_lossless_merge" "1
+1
 Merge branch 'right' into left
 ok" "$result"
 
