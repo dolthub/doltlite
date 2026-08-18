@@ -198,6 +198,63 @@ run_test "interactive_rebase_continue_after_reopen_dirty_main" \
 0" \
   "$DB3"
 
+# --continue claims first, which drops META_MIRROR. If the source tip moved,
+# restore used to persist a whole-blob remirror onto the dirty default.
+# Replay of a pick now moves the working HEAD and persist overlays, but an
+# all-drop plan never moves HEAD and still remirrored without this restore.
+seed_dirty_main "$DB3"
+run_test_match "interactive_rebase_dirty_main_starts_for_cas_drop" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   UPDATE dolt_rebase SET action='drop';" \
+  "interactive rebase started" \
+  "$DB3"
+"$DOLTLITE" "$DB3/feat" >/dev/null 2>&1 <<'SQL'
+INSERT INTO t VALUES(123,'peer');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','move feat');
+SQL
+run_test "interactive_rebase_continue_cas_keeps_dirty_main" \
+  "SELECT dolt_rebase('--continue');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Error near line 1: rebase aborted due to changes in branch feat
+0
+1
+1" \
+  "$DB3"
+run_test "interactive_rebase_abort_after_cas_keeps_dirty_main" \
+  "SELECT dolt_rebase('--abort');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Interactive rebase aborted
+0
+1
+0" \
+  "$DB3"
+
+seed_dirty_main "$DB3"
+run_test_match "interactive_rebase_dirty_main_starts_for_cas_pick" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');" \
+  "interactive rebase started" \
+  "$DB3"
+"$DOLTLITE" "$DB3/feat" >/dev/null 2>&1 <<'SQL'
+INSERT INTO t VALUES(124,'peer2');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','move feat again');
+SQL
+run_test "interactive_rebase_continue_cas_pick_keeps_dirty_main" \
+  "SELECT dolt_rebase('--continue');
+   SELECT dolt_checkout('main');
+   SELECT count(*) FROM t WHERE v='row99';
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "Error near line 1: rebase aborted due to changes in branch feat
+0
+1
+1" \
+  "$DB3"
+
 # Rebase onto a non-default upstream used to stamp that tip as the default
 # branch's workingCommit. Open of $DB then discarded the mirror, so continue
 # and abort reported no rebase in progress and left dolt_rebase_<orig> behind.

@@ -903,8 +903,11 @@ static int rebaseRestoreInProgress(
   do {
     rc = rebaseWritePlanRows(db, aPlan, nPlan);
     if( rc==SQLITE_OK ){
-      u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE |
-        (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_META_MIRROR));
+      /* Claim already cleared session flags. Persist remirrors the working
+      ** catalog onto the return branch unless META_MIRROR is set, which
+      ** would replace uncommitted work on a dirty default. Restore is not
+      ** a finish, so overlay metadata only. */
+      u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
       rc = doltliteSetSessionRebaseState(db, flags, pPreRebaseCat, pExpectedOrigHead,
                                          zOrigBranch, zReturnBranch);
     }
