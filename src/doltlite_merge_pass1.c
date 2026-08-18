@@ -578,12 +578,46 @@ static int mergePass1CheckPrimaryKeysMatch(
   return SQLITE_ERROR;
 }
 
-/* Exactly one side changed the table's columns, so the merged layout is that
-** side's. The other side and the ancestor still hold records in the old
-** layout, and the row merge addresses every side by merged column position,
-** so both are re-laid out first: otherwise a column the merged layout no
-** longer has shifts every later value one slot left, and an ancestor read at
-** the wrong positions reports cells as changed that neither side touched. */
+/* The row merge addresses every side by merged column position, so a side
+** still holding the old layout has to be re-laid out first: otherwise a
+** column the merged layout no longer has shifts every later value one slot
+** left, and an ancestor read at the wrong positions reports cells as changed
+** that neither side touched. zOtherSql is the layout of the side that did not
+** supply the merged one, which is not always what the schema arrays hold —
+** adopting theirs overwrites our entry's SQL. */
+static int mergePass1RelayoutToMergedSchema(
+  MergePass1Ctx *c,
+  const char *zName,
+  const char *zAncSql,
+  const char *zMergedSql,
+  const char *zOtherSql,
+  u8 flags,
+  const ProllyHash *pMergedRoot,
+  const ProllyHash *pOtherRoot,
+  const ProllyHash *pAncRoot,
+  ProllyHash *pOtherOut,
+  ProllyHash *pAncOut,
+  int *pbRelaid
+){
+  int rc;
+
+  *pbRelaid = 0;
+  if( !zAncSql || !zMergedSql || !zOtherSql ) return SQLITE_OK;
+
+  rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
+                                   flags, zAncSql,
+                                   zMergedSql, zOtherSql, pOtherOut);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pAncRoot,
+                                   flags, zAncSql,
+                                   zMergedSql, zAncSql, pAncOut);
+  if( rc!=SQLITE_OK ) return rc;
+  *pbRelaid = 1;
+  return SQLITE_OK;
+}
+
+/* Exactly one side changed the table's columns, so the merged layout is
+** that side's and the other side plus the ancestor have to move onto it. */
 static int mergePass1RelayoutOneSidedSchema(
   MergePass1Ctx *c,
   const char *zName,
@@ -598,33 +632,17 @@ static int mergePass1RelayoutOneSidedSchema(
   SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
   SchemaEntry *theirSE = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
   SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
-  const char *zMergedSql;
-  const char *zOtherSql;
-  const ProllyHash *pMergedRoot;
-  const ProllyHash *pOtherRoot;
-  int rc;
 
   *pbRelaid = 0;
-  if( !ancSE || !ancSE->zSql || !ourSE || !ourSE->zSql
-   || !theirSE || !theirSE->zSql ){
-    return SQLITE_OK;
-  }
+  if( !ancSE || !ourSE || !theirSE ) return SQLITE_OK;
 
-  zMergedSql = bMergedIsOurs ? ourSE->zSql : theirSE->zSql;
-  zOtherSql = bMergedIsOurs ? theirSE->zSql : ourSE->zSql;
-  pMergedRoot = bMergedIsOurs ? &pOurs->root : &pTheirs->root;
-  pOtherRoot = bMergedIsOurs ? &pTheirs->root : &pOurs->root;
-
-  rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
-                                   pOurs->flags, ancSE->zSql,
-                                   zMergedSql, zOtherSql, pOtherOut);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, &pAnc->root,
-                                   pOurs->flags, ancSE->zSql,
-                                   zMergedSql, ancSE->zSql, pAncOut);
-  if( rc!=SQLITE_OK ) return rc;
-  *pbRelaid = 1;
-  return SQLITE_OK;
+  return mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
+      bMergedIsOurs ? ourSE->zSql : theirSE->zSql,
+      bMergedIsOurs ? theirSE->zSql : ourSE->zSql,
+      pOurs->flags,
+      bMergedIsOurs ? &pOurs->root : &pTheirs->root,
+      bMergedIsOurs ? &pTheirs->root : &pOurs->root,
+      &pAnc->root, pOtherOut, pAncOut, pbRelaid);
 }
 
 /* Both sides still have the object. */
@@ -654,6 +672,7 @@ static int mergePass1BothSides(
   ProllyHash theirsNormRoot;
   ProllyHash otherNormRoot;
   ProllyHash ancNormRoot;
+  char *zOursPrevSql = 0;
   struct TableEntry oursAdj;
   struct TableEntry ancAdj;
   struct TableEntry *pMergeOurs = &c->aOurs[iOurs];
@@ -709,7 +728,9 @@ static int mergePass1BothSides(
         sqlite3_free(zSql);
         return pOurSe ? SQLITE_NOMEM : SQLITE_CORRUPT;
       }
-      sqlite3_free(pOurSe->zSql);
+      /* Our rows still follow the layout being replaced here; keep it so the
+      ** relayout below can move them onto the adopted one. */
+      zOursPrevSql = pOurSe->zSql;
       pOurSe->zSql = zSql;
     }
     if( !bSchemaConflict && skipRowMerge && zName ){
@@ -762,7 +783,38 @@ static int mergePass1BothSides(
     skipRowMerge = 1;
   }
 
-  if( skipRowMerge ) return SQLITE_OK;
+  if( skipRowMerge ){
+    sqlite3_free(zOursPrevSql);
+    return SQLITE_OK;
+  }
+
+  /* Their schema was adopted whole for a rename, so the merged layout is
+  ** theirs and our rows are the ones left behind. */
+  if( zName && zOursPrevSql && oursChanged && theirsChanged ){
+    SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+    SchemaEntry *mergedSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+    int bRelaid = 0;
+    if( ancSE && mergedSE ){
+      rc = mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
+          mergedSE->zSql, zOursPrevSql, c->aOurs[iOurs].flags,
+          &theirsEntry->root, &c->aOurs[iOurs].root, &ancEntry->root,
+          &otherNormRoot, &ancNormRoot, &bRelaid);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zOursPrevSql);
+        return rc;
+      }
+    }
+    if( bRelaid ){
+      ancAdj = *ancEntry;
+      memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
+      pMergeAnc = &ancAdj;
+      oursAdj = c->aOurs[iOurs];
+      memcpy(&oursAdj.root, &otherNormRoot, sizeof(ProllyHash));
+      pMergeOurs = &oursAdj;
+    }
+  }
+  sqlite3_free(zOursPrevSql);
+  zOursPrevSql = 0;
 
   if( zName && oursChanged && theirsChanged
    && ourSchemaChanged!=theirSchemaChanged ){

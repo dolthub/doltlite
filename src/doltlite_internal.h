@@ -1308,6 +1308,8 @@ struct SchemaMergeAction {
   char *zTableName;
   char **azAddColumns;
   int nAddColumns;
+  char **azDropColumns;
+  int nDropColumns;
 };
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);

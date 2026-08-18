@@ -369,12 +369,14 @@ static int preDetectIndexSchemaConflicts(
   return SQLITE_OK;
 }
 
-int recordSchemaAddColumns(
+int recordSchemaColumnChanges(
   SchemaMergeAction **ppSchemaActions,
   int *pnSchemaActions,
   const char *zName,
   char **azAddCols,
-  int nAddCols
+  int nAddCols,
+  char **azDropCols,
+  int nDropCols
 ){
   SchemaMergeAction *aNew;
   aNew = sqlite3_realloc(*ppSchemaActions,
@@ -385,8 +387,21 @@ int recordSchemaAddColumns(
   if( !aNew[*pnSchemaActions].zTableName ) return SQLITE_NOMEM;
   aNew[*pnSchemaActions].azAddColumns = azAddCols;
   aNew[*pnSchemaActions].nAddColumns = nAddCols;
+  aNew[*pnSchemaActions].azDropColumns = azDropCols;
+  aNew[*pnSchemaActions].nDropColumns = nDropCols;
   (*pnSchemaActions)++;
   return SQLITE_OK;
+}
+
+int recordSchemaAddColumns(
+  SchemaMergeAction **ppSchemaActions,
+  int *pnSchemaActions,
+  const char *zName,
+  char **azAddCols,
+  int nAddCols
+){
+  return recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
+                                   azAddCols, nAddCols, 0, 0);
 }
 
 int schemaEntryChangedByName(
@@ -1026,6 +1041,8 @@ int tryResolveSchemaDivergence(
   SchemaEntry *theirSchEntry;
   char **azAddCols = 0;
   int nAddCols = 0;
+  char **azDropCols = 0;
+  int nDropCols = 0;
   int schemaChoice = SCHEMA_MERGE_DEFAULT;
   int resolvedDivergence = 0;
   char *zSchemaErr = 0;
@@ -1048,7 +1065,7 @@ int tryResolveSchemaDivergence(
    && theirSchEntry && theirSchEntry->zSql ){
     rc = trySchemaColumnMerge(
       ancSchEntry->zSql, ourSchEntry->zSql, theirSchEntry->zSql,
-      &azAddCols, &nAddCols, &schemaChoice,
+      &azAddCols, &nAddCols, &azDropCols, &nDropCols, &schemaChoice,
       &resolvedDivergence, &zSchemaErr);
   }else{
     rc = SQLITE_ERROR;
@@ -1073,23 +1090,29 @@ int tryResolveSchemaDivergence(
     }
     sqlite3_free(zSchemaErr);
     freeAddedColumns(azAddCols, nAddCols);
+    freeAddedColumns(azDropCols, nDropCols);
     return SQLITE_ERROR;
   }
   sqlite3_free(zSchemaErr);
 
   if( schemaChoice!=SCHEMA_MERGE_DEFAULT ){
     if( ppSchemaActions && pnSchemaActions ){
-      rc = recordSchemaAddColumns(ppSchemaActions, pnSchemaActions, zName,
-                                  azAddCols, nAddCols);
+      rc = recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
+                                     azAddCols, nAddCols,
+                                     azDropCols, nDropCols);
       if( rc!=SQLITE_OK ){
         freeAddedColumns(azAddCols, nAddCols);
+        freeAddedColumns(azDropCols, nDropCols);
         return rc;
       }
       azAddCols = 0;
       nAddCols = 0;
+      azDropCols = 0;
+      nDropCols = 0;
     }
     *pSchemaChoice = schemaChoice;
     freeAddedColumns(azAddCols, nAddCols);
+    freeAddedColumns(azDropCols, nDropCols);
     return SQLITE_OK;
   }
 

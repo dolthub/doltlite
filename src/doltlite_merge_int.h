@@ -121,6 +121,7 @@ int trySchemaColumnMerge(
   const char *zOursSql,
   const char *zTheirsSql,
   char ***ppAddCols, int *pnAddCols,
+  char ***ppDropCols, int *pnDropCols,
   int *pSchemaChoice,
   int *pResolvedDivergence,
   char **pzErrDetail
@@ -145,6 +146,16 @@ int appendSchemaConflict(
   const char *zTable,
   const char *zObject,
   int *pAddedTable
+);
+
+int recordSchemaColumnChanges(
+  SchemaMergeAction **ppSchemaActions,
+  int *pnSchemaActions,
+  const char *zName,
+  char **azAddCols,
+  int nAddCols,
+  char **azDropCols,
+  int nDropCols
 );
 
 int recordSchemaAddColumns(

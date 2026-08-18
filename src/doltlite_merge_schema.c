@@ -640,6 +640,7 @@ int trySchemaColumnMerge(
   const char *zOursSql,
   const char *zTheirsSql,
   char ***ppAddCols, int *pnAddCols,
+  char ***ppDropCols, int *pnDropCols,
   int *pSchemaChoice,
   int *pResolvedDivergence,
   char **pzErrDetail
@@ -649,10 +650,14 @@ int trySchemaColumnMerge(
   int rc;
   char **azAdd = 0;
   int nAdd = 0, nAddAlloc = 0;
+  char **azDrop = 0;
+  int nDrop = 0, nDropAlloc = 0;
   int i;
 
   *ppAddCols = 0;
   *pnAddCols = 0;
+  if( ppDropCols ) *ppDropCols = 0;
+  if( pnDropCols ) *pnDropCols = 0;
   *pSchemaChoice = SCHEMA_MERGE_DEFAULT;
   *pResolvedDivergence = 0;
 
@@ -837,14 +842,48 @@ int trySchemaColumnMerge(
   }
 
 schema_merge_done:
+  /* Adopting one side's schema whole would also reinstate the columns the
+  ** other side deleted, so carry those deletions across. A column the other
+  ** side renamed is absent under its old name too, and its replacement sits
+  ** at the same position, which is what tells the two apart. */
+  if( *pSchemaChoice!=SCHEMA_MERGE_DEFAULT && ppDropCols && pnDropCols ){
+    ParsedColumn *aSel = *pSchemaChoice==SCHEMA_MERGE_OURS ? aOurs : aTheirs;
+    ParsedColumn *aOth = *pSchemaChoice==SCHEMA_MERGE_OURS ? aTheirs : aOurs;
+    int nSel = *pSchemaChoice==SCHEMA_MERGE_OURS ? nOurs : nTheirs;
+    int nOth = *pSchemaChoice==SCHEMA_MERGE_OURS ? nTheirs : nOurs;
+    for(i=0; i<nAnc; i++){
+      if( !findColumn(aSel, nSel, aAnc[i].zName) ) continue;
+      if( findColumn(aOth, nOth, aAnc[i].zName) ) continue;
+      if( i<nOth
+       && !findColumn(aAnc, nAnc, aOth[i].zName)
+       && parsedColumnDefinitionsMatch(&aOth[i], &aAnc[i]) ){
+        continue;
+      }
+      rc = DOLTLITE_GROW_ARRAY(&azDrop, &nDropAlloc, nDrop+1, 4);
+      if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
+      azDrop[nDrop] = sqlite3_mprintf("%s", aAnc[i].zName);
+      if( !azDrop[nDrop] ){
+        rc = SQLITE_NOMEM;
+        goto schema_merge_cleanup;
+      }
+      nDrop++;
+    }
+  }
   *ppAddCols = azAdd;
   *pnAddCols = nAdd;
   azAdd = 0; nAdd = 0;
+  if( ppDropCols && pnDropCols ){
+    *ppDropCols = azDrop;
+    *pnDropCols = nDrop;
+    azDrop = 0; nDrop = 0;
+  }
 
 schema_merge_cleanup:
   freeColumns(aAnc, nAnc);
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);
+  { int j; for(j=0;j<nDrop;j++) sqlite3_free(azDrop[j]); }
+  sqlite3_free(azDrop);
   if( rc!=SQLITE_OK ){
     { int j; for(j=0;j<nAdd;j++) sqlite3_free(azAdd[j]); }
     sqlite3_free(azAdd);
@@ -867,7 +906,7 @@ int doltliteTableSchemaConflictDetail(
   *pzDetail = 0;
   if( !zAncestorSql || !zOurSql || !zTheirSql ) return SQLITE_OK;
   rc = trySchemaColumnMerge(zAncestorSql, zOurSql, zTheirSql,
-                            &azAdd, &nAdd, &schemaChoice,
+                            &azAdd, &nAdd, 0, 0, &schemaChoice,
                             &resolvedDivergence, pzDetail);
   for(i=0; i<nAdd; i++) sqlite3_free(azAdd[i]);
   sqlite3_free(azAdd);
