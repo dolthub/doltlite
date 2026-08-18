@@ -348,7 +348,11 @@ static void *worker_thread(void *pArg){
     sqlite3_finalize(pStmt);
     if( p->nErr ) break;
 
+#ifdef DOLTLITE_PROLLY
+    worker_delete_all_content(p, 0);
+#else
     worker_delete_all_content(p, (p->tid+iOuter)%2);
+#endif
     worker_close_connection(p);
     p->db = 0;
   }

@@ -155,6 +155,11 @@ do_test 2.setup {
   faultsim_save_and_close
 } {}
 
+set sysfaultDoltLite 0
+ifcapable doltlite {
+  set sysfaultDoltLite 1
+}
+
 do_faultsim_test 2.1 -faults vfsfault-transient -prep {
   catch { db close }
   faultsim_restore
@@ -187,7 +192,11 @@ do_faultsim_test 2.1 -faults vfsfault-transient -prep {
   db close
   set res
 } -test {
-  faultsim_test_result {0 {abc def ghi truncate abc def ghi jkl mno pqr 2}}
+  if {$testnfail==0 && $::sysfaultDoltLite} {
+    faultsim_test_result {1 {atomic commit across multiple file-backed databases is not supported}}
+  } else {
+    faultsim_test_result {0 {abc def ghi truncate abc def ghi jkl mno pqr 2}}
+  }
 }
 
 do_faultsim_test 2.2 -faults vfsfault-* -prep {
@@ -209,11 +218,15 @@ do_faultsim_test 2.2 -faults vfsfault-* -prep {
   db close
   set res
 } -test {
-  faultsim_test_result {0 {abc def ghi truncate abc def ghi jkl mno pqr 2}} \
-    {1 {unable to open database file}}                                      \
-    {1 {unable to open database: test.db2}}                                 \
-    {1 {attempt to write a readonly database}}                              \
-    {1 {disk I/O error}}                                                  
+  if {$testnfail==0 && $::sysfaultDoltLite} {
+    faultsim_test_result {1 {atomic commit across multiple file-backed databases is not supported}}
+  } else {
+    faultsim_test_result {0 {abc def ghi truncate abc def ghi jkl mno pqr 2}} \
+      {1 {unable to open database file}}                                      \
+      {1 {unable to open database: test.db2}}                                 \
+      {1 {attempt to write a readonly database}}                              \
+      {1 {disk I/O error}}
+  }
 }
 
 #-------------------------------------------------------------------------
