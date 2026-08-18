@@ -863,7 +863,51 @@ jrnlmode jrnlmode-2.3 class=engine-gap issue=944
 jrnlmode jrnlmode-2.5 class=engine-gap issue=944
 jrnlmode jrnlmode-3.2 class=engine-gap issue=944
 jrnlmode jrnlmode-6.9 class=engine-gap issue=944
+ioerr ioerr-5.11.3 class=engine-gap issue=944
+savepoint savepoint-10.2.9 class=engine-gap issue=944
+savepoint savepoint-10.2.10 class=engine-gap issue=944
+savepoint savepoint-10.2.11 class=engine-gap issue=944
+savepoint savepoint-10.2.12 class=engine-gap issue=944
+savepoint savepoint-10.2.13 class=engine-gap issue=944
 sync sync-1.4 class=engine-gap issue=944
+syscall syscall-4.2.wal.1 class=engine-gap issue=944
+syscall syscall-4.2.wal.2 class=engine-gap issue=944
+syscall syscall-4.2.wal.3 class=engine-gap issue=944
+syscall syscall-4.2.wal.4 class=engine-gap issue=944
+syscall syscall-4.2.wal.5 class=engine-gap issue=944
+syscall syscall-4.2.wal.6 class=engine-gap issue=944
+syscall syscall-4.2.wal.7 class=engine-gap issue=944
+syscall syscall-4.2.wal.8 class=engine-gap issue=944
+syscall syscall-4.2.wal.9 class=engine-gap issue=944
+syscall syscall-4.2.wal.10 class=engine-gap issue=944
+syscall syscall-4.2.wal.11 class=engine-gap issue=944
+syscall syscall-4.2.wal.12 class=engine-gap issue=944
+syscall syscall-4.2.wal.13 class=engine-gap issue=944
+syscall syscall-4.2.wal.14 class=engine-gap issue=944
+syscall syscall-4.2.wal.15 class=engine-gap issue=944
+syscall syscall-4.2.wal.16 class=engine-gap issue=944
+syscall syscall-4.2.wal.17 class=engine-gap issue=944
+syscall syscall-4.2.wal.18 class=engine-gap issue=944
+syscall syscall-4.2.wal.19 class=engine-gap issue=944
+syscall syscall-4.2.delete.1 class=engine-gap issue=944
+syscall syscall-4.2.delete.2 class=engine-gap issue=944
+syscall syscall-4.2.delete.3 class=engine-gap issue=944
+syscall syscall-4.2.delete.4 class=engine-gap issue=944
+syscall syscall-4.2.delete.5 class=engine-gap issue=944
+syscall syscall-4.2.delete.6 class=engine-gap issue=944
+syscall syscall-4.2.delete.7 class=engine-gap issue=944
+syscall syscall-4.2.delete.8 class=engine-gap issue=944
+syscall syscall-4.2.delete.9 class=engine-gap issue=944
+syscall syscall-4.2.delete.10 class=engine-gap issue=944
+syscall syscall-4.2.delete.11 class=engine-gap issue=944
+syscall syscall-4.2.delete.12 class=engine-gap issue=944
+syscall syscall-4.2.delete.13 class=engine-gap issue=944
+syscall syscall-4.2.delete.14 class=engine-gap issue=944
+syscall syscall-4.2.delete.15 class=engine-gap issue=944
+syscall syscall-4.2.delete.16 class=engine-gap issue=944
+syscall syscall-4.2.delete.17 class=engine-gap issue=944
+syscall syscall-4.2.delete.18 class=engine-gap issue=944
+syscall syscall-4.2.delete.19 class=engine-gap issue=944
 temptrigger temptrigger-7.1 class=engine-gap issue=944
 temptrigger temptrigger-7.3.2 class=engine-gap issue=944
 temptrigger temptrigger-8.1.2 class=engine-gap issue=944
@@ -1503,7 +1547,6 @@ attachmalloc attachmalloc-1.transient.925 @no-coverage class=unsupported issue=1
 attachmalloc attachmalloc-1.transient.1419 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 attachmalloc attachmalloc-1.transient.933 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 attachmalloc attachmalloc-1.transient.1435 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-mallocD mallocD-4.transient.107 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
@@ -4002,9 +4045,11 @@ sysfault sysfault-2.2-vfsfault-persistent.103 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.102 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.103 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.104 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.105 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.104 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.105 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.98 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-persistent.99 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-transient.98 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-transient.99 class=engine-gap issue=944
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
@@ -5961,20 +6006,10 @@ sysfault sysfault-2.1-vfsfault-transient.97 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.98 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.99 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.104 class=intentional
-sysfault sysfault-2.1-vfsfault-transient.105 class=intentional
-sysfault sysfault-2.1-vfsfault-transient.106 class=intentional
-sysfault sysfault-2.1-vfsfault-transient.107 class=intentional
-sysfault sysfault-2.1-vfsfault-transient.108 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.100 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.101 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.106 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.107 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.108 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.100 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.101 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.106 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.107 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.108 class=intentional
 
 stmt stmt-1.2 class=intentional  # retained graph-lock handle raises the instrumented open-file count
 stmt stmt-1.5 class=intentional  # retained graph-lock handle raises the instrumented open-file count
