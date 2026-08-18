@@ -157,8 +157,27 @@ run_config() {
   fi
   if [ "$IS_SQL" = "1" ]; then mk_sq "$ATT_PATH" "$ATT_SEED"
   elif [ "$IS_MEM" != "1" ]; then mk_dl "$ATT_PATH" "$ATT_SEED"; fi
-  R=$(dl_last "$PRELUDE BEGIN; INSERT INTO t VALUES(30,'t2_m'); INSERT INTO x.u VALUES(30,'t2_a'); COMMIT; SELECT (SELECT v FROM t WHERE id=30) || '/' || (SELECT v FROM x.u WHERE id=30);" "$M")
-  want_eq "$cfg/T2_explicit_txn_both_commit" "$R" "t2_m/t2_a"
+  if [ "$main_kind" != "dlmem" ] && [ "$attached_kind" != "mem" ]; then
+    R=$(dl_all "$PRELUDE BEGIN; INSERT INTO t VALUES(30,'t2_m'); INSERT INTO x.u VALUES(30,'t2_a'); COMMIT;" "$M")
+    case "$R" in
+      *"atomic commit across multiple file-backed databases is not supported"*)
+        PASS=$((PASS+1)) ;;
+      *)
+        FAIL=$((FAIL+1))
+        ERRORS="$ERRORS\n  FAIL: $cfg/T2_explicit_txn_both_rejected\n    got: $(printf %q "$R")" ;;
+    esac
+    RM=$(dl_last "SELECT count(*) FROM t WHERE id=30;" "$M")
+    if [ "$IS_SQL" = "1" ]; then
+      RA=$(sq_last "SELECT count(*) FROM u WHERE id=30;" "$ATT_PATH")
+    else
+      RA=$(dl_last "SELECT count(*) FROM u WHERE id=30;" "$ATT_PATH")
+    fi
+    want_eq "$cfg/T2_rejected_txn_rolls_back_main" "$RM" "0"
+    want_eq "$cfg/T2_rejected_txn_rolls_back_attached" "$RA" "0"
+  else
+    R=$(dl_last "$PRELUDE BEGIN; INSERT INTO t VALUES(30,'t2_m'); INSERT INTO x.u VALUES(30,'t2_a'); COMMIT; SELECT (SELECT v FROM t WHERE id=30) || '/' || (SELECT v FROM x.u WHERE id=30);" "$M")
+    want_eq "$cfg/T2_explicit_txn_both_commit" "$R" "t2_m/t2_a"
+  fi
 
   if [ "$main_kind" != "dlmem" ]; then
     rm -f "$M"; printf '%s\n' "$MAIN_SEED" | $DOLTLITE "$M" >/dev/null 2>&1
@@ -198,6 +217,13 @@ if [ -z "$SQLITE3" ] || [ ! -x "$SQLITE3" ]; then
 else
   run_config "dl_file__sq_file" "dl"    "sq"
   run_config "dlmem__sq_file"   "dlmem" "sq"
+
+  STOCK_MAIN="$TMP/stock_main.db"
+  STOCK_ATT="$TMP/stock_att.db"
+  mk_sq "$STOCK_MAIN" "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+  mk_sq "$STOCK_ATT" "CREATE TABLE u(id INTEGER PRIMARY KEY);"
+  R=$(dl_last "ATTACH '$STOCK_ATT' AS x; BEGIN; INSERT INTO t VALUES(1); INSERT INTO x.u VALUES(1); COMMIT; SELECT (SELECT count(*) FROM t) || '/' || (SELECT count(*) FROM x.u);" "$STOCK_MAIN")
+  want_eq "stock_file__stock_file/T2_explicit_txn_both_commit" "$R" "1/1"
 fi
 
 echo ""

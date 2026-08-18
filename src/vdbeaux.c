@@ -2933,6 +2933,10 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
                    ** super-journal */
   int rc = SQLITE_OK;
   int needXcommit = 0;
+#ifdef DOLTLITE_PROLLY
+  int nFileWrite = 0;
+  int hasDoltliteWrite = 0;
+#endif
 
 #ifdef SQLITE_OMIT_VIRTUALTABLE
   /* With this option, sqlite3VtabSync() is defined to be simply
@@ -2973,6 +2977,15 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
       needXcommit = 1;
       sqlite3BtreeEnter(pBt);
       pPager = sqlite3BtreePager(pBt);
+#ifdef DOLTLITE_PROLLY
+      if( i!=1 && sqlite3PagerIsMemdb(pPager)==0 ){
+        const char *zFilename = sqlite3BtreeGetFilename(pBt);
+        if( zFilename && zFilename[0] ){
+          nFileWrite++;
+          if( sqlite3BtreeIsDoltliteFormat(pBt) ) hasDoltliteWrite = 1;
+        }
+      }
+#endif
       if( db->aDb[i].safety_level!=PAGER_SYNCHRONOUS_OFF
        && aMJNeeded[sqlite3PagerGetJournalMode(pPager)]
        && sqlite3PagerIsMemdb(pPager)==0
@@ -2987,6 +3000,13 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
   if( rc!=SQLITE_OK ){
     return rc;
   }
+#ifdef DOLTLITE_PROLLY
+  if( nFileWrite>1 && hasDoltliteWrite ){
+    sqlite3VdbeError(p,
+        "atomic commit across multiple file-backed databases is not supported");
+    return SQLITE_ERROR;
+  }
+#endif
 
   /* If there are any write-transactions at all, invoke the commit hook */
   if( needXcommit && db->xCommitCallback ){
