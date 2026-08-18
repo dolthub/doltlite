@@ -199,17 +199,25 @@ do_test doltlite_recover_jrnlwal_4-7.2 {
 do_execsql_test doltlite_recover_jrnlwal_4-7.3 {
   PRAGMA two.journal_size_limit = 10240;
 } {-1}
-do_test doltlite_recover_jrnlwal_4-7.4 {
-  execsql {
-    BEGIN;
-    INSERT INTO t1 VALUES(20);
-    INSERT INTO two.t2 VALUES(1, 2);
-    COMMIT;
-  }
-  list [execsql {SELECT c, d FROM two.t2}] [glob -nocomplain test.db*mj*]
-} {{1 2} {}}
+do_catchsql_test doltlite_recover_jrnlwal_4-7.4 {
+  BEGIN;
+  INSERT INTO t1 VALUES(20);
+  INSERT INTO two.t2 VALUES(1, 2);
+  COMMIT;
+} {1 {atomic commit across multiple file-backed databases is not supported}}
+do_execsql_test doltlite_recover_jrnlwal_4-7.4a {
+  SELECT count(*) FROM t1 WHERE x=20;
+  SELECT count(*) FROM two.t2;
+} {0 0}
+do_execsql_test doltlite_recover_jrnlwal_4-7.4b {
+  INSERT INTO t1 VALUES(20);
+  INSERT INTO two.t2 VALUES(1, 2);
+} {}
+do_test doltlite_recover_jrnlwal_4-7.4c {
+  glob -nocomplain test.db*mj*
+} {}
 do_execsql_test doltlite_recover_jrnlwal_4-7.5 {
-  BEGIN IMMEDIATE;
+  BEGIN;
   INSERT OR IGNORE INTO two.t2 SELECT x, x FROM t1;
   COMMIT;
   SELECT count(*) FROM two.t2;
