@@ -935,9 +935,8 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   {
     Btree *p = db->aDb[0].pBt;
     if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE || db->pSavepoint ){
-      if( p->vc.isMerging ){
-        memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
-      }
+      /* Cherry-pick and revert record conflicts without isMerging. */
+      memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
       return;
     }
   }

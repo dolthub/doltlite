@@ -602,6 +602,56 @@ run_test "rv_drop_index_restored" \
   "1" "$DB"
 rm -f "$DB"
 
+# A conflicted cherry-pick is not a merge: is_merging stays 0,
+# dolt_merge('--abort') has nothing to abort, and checkout refuses
+# because conflicts cannot be persisted (not because a merge is open).
+DB=/tmp/test_cp_conflict_not_merge_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='F';
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+UPDATE t SET v='M';
+SELECT dolt_commit('-A','-m','m');
+SELECT dolt_branch('other');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "cp_conflict_not_a_merge" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT dolt_checkout('other');
+   SELECT dolt_merge('--abort');" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+1
+Error near line 5: unresolved conflicts — resolve them or roll back first
+Error near line 6: no merge in progress" \
+  "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rv_conflict_not_merge_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET v='b';
+SELECT dolt_commit('-A','-m','b');
+UPDATE t SET v='c';
+SELECT dolt_commit('-A','-m','c');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "rv_conflict_not_a_merge" \
+  "BEGIN;
+   SELECT dolt_revert('HEAD~1');
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT dolt_merge('--abort');" \
+  "Error near line 2: Revert has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+1
+Error near line 5: no merge in progress" \
+  "$DB"
+rm -f "$DB"
+
 # A clean cherry-pick / revert is a transaction boundary like dolt_commit:
 # it seals the enclosing BEGIN when it advances the ref. Leaving the
 # transaction open let a later ROLLBACK revert the working set while the

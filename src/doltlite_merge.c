@@ -1201,9 +1201,7 @@ static int recordMergeConflicts(
       aConflictTables, nConflictTables,
       &conflictsHash);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteSetSessionConflictsCatalog(db, &conflictsHash);
-  if( rc!=SQLITE_OK ) return rc;
-  return doltliteSetSessionMergeConflicts(db, &conflictsHash);
+  return doltliteSetSessionConflictsCatalog(db, &conflictsHash);
 }
 
 int doltliteMergeCatalogs(
