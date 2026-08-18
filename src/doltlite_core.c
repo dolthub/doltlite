@@ -993,7 +993,13 @@ int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   int rc;
   if( db->autoCommit ) return SQLITE_OK;
   if( db->pSavepoint ){
-    return doltliteVcSealActiveSavepoints(db);
+    rc = doltliteVcSealActiveSavepoints(db);
+    if( rc!=SQLITE_OK ) return rc;
+    /* Releasing the savepoints leaves any enclosing BEGIN open, and a later
+    ** ROLLBACK would then revert the working set to the branch we left while
+    ** the ref already names the one we switched to. Seal that too. A top-level
+    ** SAVEPOINT was the transaction, so releasing it ended everything. */
+    if( db->autoCommit ) return SQLITE_OK;
   }
   rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
