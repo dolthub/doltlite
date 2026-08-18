@@ -68,4 +68,30 @@ SELECT dolt_commit('-A','-m','victim');" | $DOLTLITE "$ROOT/victim.db" > /dev/nu
   rm -f "$DB"
 done
 
+# Surviving is not enough: the caller is working on a path that no longer
+# holds the database it opened, and only the refusal tells it so. A merely
+# read-only store stays silent instead, because stock answers that with
+# success and compacting on checkpoint is opportunistic either way.
+DB="$ROOT/live.db"
+seed_db "$DB"
+rm -f "$ROOT/victim.db"
+echo "CREATE TABLE victim(x TEXT);
+INSERT INTO victim VALUES('untouched');
+SELECT dolt_commit('-A','-m','victim');" | $DOLTLITE "$ROOT/victim.db" > /dev/null 2>&1
+out=$(printf 'SELECT count(*) FROM t;\n.shell mv %s %s\nPRAGMA wal_checkpoint;\n' \
+        "$ROOT/victim.db" "$DB" | $DOLTLITE "$DB" 2>&1 | tail -1)
+case "$out" in
+  *readonly*) dltest_pass "replaced_checkpoint_reports" ;;
+  *) dltest_fail "replaced_checkpoint_reports" \
+       "  expected a readonly refusal\n  got:      $out" ;;
+esac
+rm -f "$DB"
+
+DB="$ROOT/ro2.db"
+seed_db "$DB"
+chmod 0444 "$DB"
+run_test_match "readonly_checkpoint_stays_quiet" "PRAGMA wal_checkpoint;" \
+  "^[0-9]+\|" "file:$DB?mode=ro"
+chmod u+w "$DB"; rm -f "$DB"
+
 dltest_finish

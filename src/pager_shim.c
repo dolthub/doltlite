@@ -373,8 +373,11 @@ static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
     rc = doltliteGcCompactStore(db, pCs);
     /* Compacting here is opportunistic -- stock does not compact on checkpoint
     ** at all, and answers a checkpoint on a database it may not write with
-    ** success. A store this connection may not rewrite just stays uncompacted. */
-    if( rc==SQLITE_READONLY ) rc = SQLITE_OK;
+    ** success, so a read-only store just stays uncompacted. A store whose file
+    ** was replaced is not that: stock has no such state to be consistent with,
+    ** and the caller is checkpointing a path that no longer holds the database
+    ** it opened, which it can only learn if we say so. */
+    if( rc==SQLITE_READONLY && !pCs->movedReadOnly ) rc = SQLITE_OK;
   }
   if( pCs ) pCs->checkpointActive = 0;
   if( rc!=SQLITE_OK ) return rc;
