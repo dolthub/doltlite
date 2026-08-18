@@ -198,6 +198,67 @@ run_test "interactive_rebase_continue_after_reopen_dirty_main" \
 0" \
   "$DB3"
 
+# Rebase onto a non-default upstream used to stamp that tip as the default
+# branch's workingCommit. Open of $DB then discarded the mirror, so continue
+# and abort reported no rebase in progress and left dolt_rebase_<orig> behind.
+seed_onto_other() {
+  rm -f "$1"
+  cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
+SELECT dolt_checkout('-b','other');
+INSERT INTO t VALUES(2,'other');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','other');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,'feat');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat');
+SQL
+}
+
+DB_OTHER_CONT=/tmp/test_rebase_other_continue_$$.db
+seed_onto_other "$DB_OTHER_CONT"
+run_test_match "interactive_rebase_onto_other_starts" \
+  "SELECT dolt_rebase('-i','other');" \
+  "interactive rebase started" \
+  "$DB_OTHER_CONT/feat"
+run_test "interactive_rebase_continue_after_reopen_onto_other" \
+  "SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT group_concat(v, ',') FROM t;
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
+   SELECT dolt_checkout('main');
+   SELECT group_concat(v, ',') FROM t;" \
+  "Successfully rebased and updated refs/heads/feat
+feat
+base,other,feat
+0
+0
+base" \
+  "$DB_OTHER_CONT"
+
+DB_OTHER_ABORT=/tmp/test_rebase_other_abort_$$.db
+seed_onto_other "$DB_OTHER_ABORT"
+run_test_match "interactive_rebase_onto_other_starts_for_abort" \
+  "SELECT dolt_rebase('-i','other');" \
+  "interactive rebase started" \
+  "$DB_OTHER_ABORT/feat"
+run_test "interactive_rebase_abort_after_reopen_onto_other" \
+  "SELECT dolt_rebase('--abort');
+   SELECT active_branch();
+   SELECT group_concat(v, ',') FROM t;
+   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
+   SELECT dolt_checkout('main');
+   SELECT group_concat(v, ',') FROM t;" \
+  "Interactive rebase aborted
+feat
+base,feat
+0
+0
+base" \
+  "$DB_OTHER_ABORT"
+
 # An unrecognised plan verb used to report a bare "rebase failed", which reads
 # as though the rebase had been rolled back. It is not: the plan and working
 # branch are deliberately kept so the action can be corrected and --continue

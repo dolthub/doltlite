@@ -114,10 +114,12 @@ static int rebaseRestoreReturnBranchWorkingState(
 }
 /* True if zBranch holds working-set changes its head commit does not. An
 ** interactive rebase mirrors onto the return branch so a reopen can resume.
-** A dirty return branch keeps its catalog and only receives rebase metadata;
-** a clean one gets the whole working-set blob. Restore undoes the same
-** choice. Rebase already refuses to start with a dirty current branch; the
-** return branch is a different one and has no such guarantee. */
+** The whole-blob mirror is only loadable when workingCommit equals that
+** branch's HEAD, so a dirty return branch -- or one whose HEAD is not the
+** rebase upstream -- keeps its catalog and only receives rebase metadata.
+** Restore undoes the same choice. Rebase already refuses to start with a
+** dirty current branch; the return branch is a different one and has no
+** such guarantee. */
 static int rebaseBranchHasUncommittedWork(
   sqlite3 *db,
   const char *zBranch,
@@ -1559,9 +1561,16 @@ static void doltliteRebaseInteractiveStart(
 
   {
     int dirty = 0;
+    ProllyHash returnHead;
     rc = rebaseBranchHasUncommittedWork(db, zReturnBranch, &dirty);
     if( rc!=SQLITE_OK ) goto fail;
-    if( dirty ) rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
+    memset(&returnHead, 0, sizeof(returnHead));
+    rc = chunkStoreFindBranch(cs, zReturnBranch, &returnHead);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) goto fail;
+    if( dirty || prollyHashCompare(&returnHead, &upstreamHash)!=0 ){
+      rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
+    }
   }
   if( strlen(zReturnBranch)>=WS_REBASE_BRANCH_LEN ){
     sqlite3_free(zOrig);
