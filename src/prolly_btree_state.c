@@ -1103,7 +1103,18 @@ int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHas
    && pBtree->zRebaseReturnBranch
    && pBtree->zRebaseReturnBranch[0]
    && sqlite3_stricmp(zBranch, pBtree->zRebaseReturnBranch)!=0 ){
-    if( pBtree->isRebasing & WS_REBASE_FLAG_META_MIRROR ){
+    int metaMirror = (pBtree->isRebasing & WS_REBASE_FLAG_META_MIRROR)!=0;
+    if( !metaMirror ){
+      ProllyHash returnHead;
+      memset(&returnHead, 0, sizeof(returnHead));
+      if( chunkStoreFindBranch(cs, pBtree->zRebaseReturnBranch, &returnHead)
+            ==SQLITE_OK
+       && prollyHashCompare(&pBtree->headCommit, &returnHead)!=0 ){
+        metaMirror = 1;
+      }
+    }
+    if( metaMirror ){
+      pBtree->isRebasing = (u8)(pBtree->isRebasing | WS_REBASE_FLAG_META_MIRROR);
       rc = btreePutRebaseMetadataOnBranch(
           cs, pBtree->zRebaseReturnBranch,
           (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR),

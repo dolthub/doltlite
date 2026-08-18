@@ -8508,6 +8508,133 @@ static void run_rebase_continue_after_reopen_dirty_default(void){
   removeDbFiles(dbpath);
 }
 
+static int setup_onto_other_rebase(sqlite3 *db){
+  return execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');"
+    "SELECT dolt_checkout('-b','other');"
+    "INSERT INTO t VALUES(2,'other');"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m','other');"
+    "SELECT dolt_checkout('main');"
+    "SELECT dolt_checkout('-b','feat');"
+    "INSERT INTO t VALUES(3,'feat');"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat');");
+}
+
+static void run_rebase_abort_after_reopen_onto_other(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+
+  printf("=== Rebase Abort After Reopen Onto Other Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_abort_after_reopen_onto_other");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_abort_after_reopen_onto_other",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_abort_after_reopen_onto_other",
+        setup_onto_other_rebase(db)==SQLITE_OK);
+  check("start_interactive_rebase_onto_other",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'other')"),
+               "interactive rebase started on branch dolt_rebase_feat")!=0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_rebase_abort_onto_other", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_abort_onto_other_reopen_lands_on_main",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
+  check("rebase_abort_onto_other_reopen_keeps_main_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(v, ',') FROM t"),
+               "base")==0);
+  check("rebase_abort_onto_other_reopen_plan_stays_off_return",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"),
+          "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
+  check("rebase_abort_onto_other_reopen_flag", isRebasing==1);
+  check("rebase_abort_onto_other_reopen_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+  check("rebase_abort_after_reopen_onto_other_returns_success",
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"),
+               "Interactive rebase aborted")==0);
+  check("rebase_abort_after_reopen_onto_other_restores_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_abort_after_reopen_onto_other_feat_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(v, ',') FROM t"),
+               "base,feat")==0);
+  check("rebase_abort_after_reopen_onto_other_checkout_main",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('main')"), "0")==0);
+  check("rebase_abort_after_reopen_onto_other_main_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(v, ',') FROM t"),
+               "base")==0);
+  check("rebase_abort_after_reopen_onto_other_drops_temp_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"), "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  check("rebase_abort_after_reopen_onto_other_clears_flag", isRebasing==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_rebase_continue_after_reopen_onto_other(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+
+  printf("=== Rebase Continue After Reopen Onto Other Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_continue_after_reopen_onto_other");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_rebase_continue_after_reopen_onto_other",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_continue_after_reopen_onto_other",
+        setup_onto_other_rebase(db)==SQLITE_OK);
+  check("start_interactive_rebase_onto_other_for_continue",
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'other')"),
+               "interactive rebase started on branch dolt_rebase_feat")!=0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_rebase_continue_onto_other", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_continue_onto_other_reopen_lands_on_main",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
+  check("rebase_continue_onto_other_reopen_keeps_main_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(v, ',') FROM t"),
+               "base")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
+  check("rebase_continue_onto_other_reopen_flag", isRebasing==1);
+  check("rebase_continue_onto_other_reopen_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+  check("rebase_continue_after_reopen_onto_other_succeeds",
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--continue')"),
+               "Successfully rebased and updated refs/heads/feat")==0);
+  check("rebase_continue_after_reopen_onto_other_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_continue_after_reopen_onto_other_feat_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(v, ',') FROM t"),
+               "base,other,feat")==0);
+  check("rebase_continue_after_reopen_onto_other_checkout_main",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('main')"), "0")==0);
+  check("rebase_continue_after_reopen_onto_other_main_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(v, ',') FROM t"),
+               "base")==0);
+  check("rebase_continue_after_reopen_onto_other_drops_temp_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"), "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  check("rebase_continue_after_reopen_onto_other_clears_flag", isRebasing==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_abort_retry_after_claim_commit_error(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -12841,6 +12968,8 @@ static const RegressionCase aCases[] = {
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
   { "rebase_abort_after_reopen_dirty_default", "Rebase Abort After Reopen Dirty Default Test", run_rebase_abort_after_reopen_dirty_default },
   { "rebase_continue_after_reopen_dirty_default", "Rebase Continue After Reopen Dirty Default Test", run_rebase_continue_after_reopen_dirty_default },
+  { "rebase_abort_after_reopen_onto_other", "Rebase Abort After Reopen Onto Other Test", run_rebase_abort_after_reopen_onto_other },
+  { "rebase_continue_after_reopen_onto_other", "Rebase Continue After Reopen Onto Other Test", run_rebase_continue_after_reopen_onto_other },
   { "rebase_abort_retry_after_claim_commit_error", "Rebase Abort Retry After Claim Commit Error Test", run_rebase_abort_retry_after_claim_commit_error },
   { "rebase_plan_read_error_is_not_partial", "Rebase Plan Read Error Is Not Partial Test", run_rebase_plan_read_error_is_not_partial },
   { "rebase_upstream_history_failure_is_atomic", "Rebase Upstream History Failure Is Atomic Test", run_rebase_upstream_history_failure_is_atomic },
