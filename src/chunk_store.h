@@ -105,6 +105,12 @@
 #define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE)
 #define WS_TOTAL_SIZE_V2    (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)
 #define WS_REBASING_OFF     WS_TOTAL_SIZE_V2
+/* Bit 0: rebase in progress. Bit 1: return-branch blob is a metadata
+** overlay that must not replace a dirty catalog. Whole-blob mirror is
+** bit 0 alone. Stay inside the v5 size: GC classifies working sets by
+** exact length. */
+#define WS_REBASE_FLAG_ACTIVE      0x01
+#define WS_REBASE_FLAG_META_MIRROR 0x02
 #define WS_PRE_REBASE_CAT_OFF (WS_REBASING_OFF + 1)
 #define WS_REBASE_ONTO_OFF  (WS_PRE_REBASE_CAT_OFF + PROLLY_HASH_SIZE)
 #define WS_REBASE_BRANCH_OFF (WS_REBASE_ONTO_OFF + PROLLY_HASH_SIZE)

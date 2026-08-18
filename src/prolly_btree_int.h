@@ -732,6 +732,10 @@ int btreeStoreWorkingSetBlob(ChunkStore*, const char*, const ProllyHash*,
                              const ProllyHash*, const ProllyHash*, u8,
                              const ProllyHash*, const ProllyHash*, const char*,
                              const char*, const ProllyHash*);
+int btreePutRebaseMetadataOnBranch(ChunkStore*, const char*, u8,
+                                   const ProllyHash*, const ProllyHash*,
+                                   const char*, const char*);
+int btreeClearRebaseMetadataOnBranch(ChunkStore*, const char*);
 int btreeReadWorkingCatalog(ChunkStore*, const char*, ProllyHash*, ProllyHash*);
 int btreeWriteWorkingState(ChunkStore*, const char*, const ProllyHash*,
                            const ProllyHash*);
