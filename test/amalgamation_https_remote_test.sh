@@ -46,6 +46,9 @@ esac
 probe="${DOLTLITE_AMALG_HTTP_PROBE:-}"
 if [ -z "$probe" ]; then
   probe="$tmp/amalg_https_probe"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) probe="${probe}.exe" ;;
+  esac
   "$cc_bin" -Wno-comment -I. ../test/amalgamation_http_probe.c \
     ./sqlite3.c "${probe_libs[@]}" -o "$probe"
 fi
@@ -54,10 +57,24 @@ if [ ! -x "$probe" ]; then
   exit 1
 fi
 
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-  -keyout "$tmp/key.pem" -out "$tmp/cert.pem" \
-  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
-  >/dev/null 2>&1
+openssl_key="$tmp/key.pem"
+openssl_cert="$tmp/cert.pem"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    openssl_key="$(cygpath -w "$openssl_key")"
+    openssl_cert="$(cygpath -w "$openssl_cert")"
+    MSYS2_ARG_CONV_EXCL='*' openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+      -keyout "$openssl_key" -out "$openssl_cert" \
+      -subj "/CN=localhost" \
+      -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+    ;;
+  *)
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+      -keyout "$openssl_key" -out "$openssl_cert" \
+      -subj "/CN=localhost" \
+      -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+    ;;
+esac
 
 mkdir -p "$tmp/srv"
 "$remotesrv" --cert "$tmp/cert.pem" --key "$tmp/key.pem" \
