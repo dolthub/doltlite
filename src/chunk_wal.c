@@ -194,7 +194,9 @@ static int csWalResolveDamage(
                            cs->wal.iWalOffset + cand + 1);
         if( rc != SQLITE_OK ) return rc;
         state = csManifestHashState(m, cs->wal.iWalOffset + cand);
-        if( state==CS_MANIFEST_HASH_OK ){
+        if( state==CS_MANIFEST_HASH_OK
+         && csValidateWalRootManifest(
+              cs, m, cs->wal.iWalOffset+cand)==SQLITE_OK ){
           i64 durableTo = CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF);
           i64 batchStart = CS_READ_I64(m + CS_MANIFEST_BATCH_START_OFF);
           if( durableTo > damageAbs ){
@@ -400,6 +402,16 @@ int csReplayWal(ChunkStore *cs){
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
+      }
+      if( hashState==CS_MANIFEST_HASH_OK
+       && csValidateWalRootManifest(
+            cs, m, cs->wal.iWalOffset+recPos)!=SQLITE_OK ){
+        sqlite3_log(SQLITE_CORRUPT,
+          "doltlite: invalid sealed WAL root manifest at offset %lld",
+          (long long)(cs->wal.iWalOffset + recPos));
+        cs->corruptMidStream = 1;
+        rc = SQLITE_CORRUPT;
+        goto replay_error;
       }
 
       cs->index.nChunks = (int)CS_READ_U32(m + CS_MANIFEST_CHUNK_COUNT_OFF);
