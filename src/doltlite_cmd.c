@@ -74,6 +74,13 @@ void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp){
   }
 }
 
+static int markPendingReplayIfNotMerging(sqlite3 *db){
+  u8 isMerging = 0;
+  doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+  if( isMerging ) return SQLITE_OK;
+  return doltliteSetSessionPendingReplayCommit(db, 1);
+}
+
 int doltliteReportConflicts(
   sqlite3 *db,
   sqlite3_context *ctx,
@@ -85,6 +92,8 @@ int doltliteReportConflicts(
   rc = doltliteRegisterConflictTables(db);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltlitePersistOrSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = markPendingReplayIfNotMerging(db);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
@@ -101,6 +110,8 @@ int doltliteReportConstraintViolations(
   char msg[256];
   int rc;
   rc = doltlitePersistOrSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = markPendingReplayIfNotMerging(db);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s resulted in constraint violations. Resolve the rows in "
@@ -121,6 +132,8 @@ int doltliteReportConflictsAndConstraintViolations(
   rc = doltliteRegisterConflictTables(db);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltlitePersistOrSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = markPendingReplayIfNotMerging(db);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s) and constraint violations. Resolve "

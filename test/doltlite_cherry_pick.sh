@@ -631,6 +631,36 @@ Error near line 6: no merge in progress" \
   "$DB"
 rm -f "$DB"
 
+# --ours can leave the working tree identical to HEAD. The concluding
+# commit must still be created as a single-parent commit, not refused
+# as empty and not recorded as a merge.
+DB=/tmp/test_cp_conflict_ours_commit_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='F';
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+UPDATE t SET v='M';
+SELECT dolt_commit('-A','-m','m');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "cp_conflict_ours_commits_single_parent" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_conflicts_resolve('--ours', 't');
+   SELECT length(dolt_commit('-A','-m','picked'))>=40;
+   SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash = dolt_hashof('HEAD');
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT message FROM dolt_log LIMIT 1;" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+1
+1
+0
+picked" \
+  "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_rv_conflict_not_merge_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');

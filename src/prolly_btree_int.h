@@ -284,6 +284,7 @@ struct BtCursorOps {
 typedef struct DoltVcState {
   ProllyHash stagedCatalog;
   u8 isMerging;
+  u8 pendingReplayCommit;
   ProllyHash mergeCommitHash;
   ProllyHash conflictsCatalogHash;
   ProllyHash constraintViolationsHash;
