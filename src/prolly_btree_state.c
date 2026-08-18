@@ -781,16 +781,6 @@ int doltliteClearSessionMergeState(sqlite3 *db){
   return doltliteSetSessionMergeState(db, 0, 0, 0);
 }
 
-/* Record a new conflicts catalog without disturbing the source commit already
-** on the session. Reaching for doltliteSetSessionMergeState with a null
-** pMergeCommit zeroes it, which drops the second parent commit owes the merged
-** branch and blanks dolt_merge_status.source. */
-int doltliteSetSessionMergeConflicts(sqlite3 *db, const ProllyHash *pConflicts){
-  ProllyHash mergeCommit;
-  doltliteGetSessionMergeState(db, 0, &mergeCommit, 0);
-  return doltliteSetSessionMergeState(db, 1, &mergeCommit, pConflicts);
-}
-
 int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
                                       const ProllyHash *pMergeCommit){
   Btree *p;
