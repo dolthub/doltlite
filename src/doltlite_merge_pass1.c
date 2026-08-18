@@ -578,6 +578,55 @@ static int mergePass1CheckPrimaryKeysMatch(
   return SQLITE_ERROR;
 }
 
+/* Exactly one side changed the table's columns, so the merged layout is that
+** side's. The other side and the ancestor still hold records in the old
+** layout, and the row merge addresses every side by merged column position,
+** so both are re-laid out first: otherwise a column the merged layout no
+** longer has shifts every later value one slot left, and an ancestor read at
+** the wrong positions reports cells as changed that neither side touched. */
+static int mergePass1RelayoutOneSidedSchema(
+  MergePass1Ctx *c,
+  const char *zName,
+  int bMergedIsOurs,
+  struct TableEntry *pOurs,
+  struct TableEntry *pAnc,
+  struct TableEntry *pTheirs,
+  ProllyHash *pOtherOut,
+  ProllyHash *pAncOut,
+  int *pbRelaid
+){
+  SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+  SchemaEntry *theirSE = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
+  SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+  const char *zMergedSql;
+  const char *zOtherSql;
+  const ProllyHash *pMergedRoot;
+  const ProllyHash *pOtherRoot;
+  int rc;
+
+  *pbRelaid = 0;
+  if( !ancSE || !ancSE->zSql || !ourSE || !ourSE->zSql
+   || !theirSE || !theirSE->zSql ){
+    return SQLITE_OK;
+  }
+
+  zMergedSql = bMergedIsOurs ? ourSE->zSql : theirSE->zSql;
+  zOtherSql = bMergedIsOurs ? theirSE->zSql : ourSE->zSql;
+  pMergedRoot = bMergedIsOurs ? &pOurs->root : &pTheirs->root;
+  pOtherRoot = bMergedIsOurs ? &pTheirs->root : &pOurs->root;
+
+  rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
+                                   pOurs->flags, ancSE->zSql,
+                                   zMergedSql, zOtherSql, pOtherOut);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, &pAnc->root,
+                                   pOurs->flags, ancSE->zSql,
+                                   zMergedSql, ancSE->zSql, pAncOut);
+  if( rc!=SQLITE_OK ) return rc;
+  *pbRelaid = 1;
+  return SQLITE_OK;
+}
+
 /* Both sides still have the object. */
 static int mergePass1BothSides(
   MergePass1Ctx *c,
@@ -603,6 +652,12 @@ static int mergePass1BothSides(
   int bDualAddColMerge = 0;
   int bSchemaConflict = 0;
   ProllyHash theirsNormRoot;
+  ProllyHash otherNormRoot;
+  ProllyHash ancNormRoot;
+  struct TableEntry oursAdj;
+  struct TableEntry ancAdj;
+  struct TableEntry *pMergeOurs = &c->aOurs[iOurs];
+  struct TableEntry *pMergeAnc = ancEntry;
   const ProllyHash *pMergeTheirsRoot = &theirsEntry->root;
   int rc = SQLITE_OK;
 
@@ -664,13 +719,23 @@ static int mergePass1BothSides(
       SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
       if( ancSE && ancSE->zSql && ourSE && ourSE->zSql
        && theirSE && theirSE->zSql ){
-        rc = normalizeTheirsToMergedLayout(c->db, zName,
+        rc = normalizeSideToMergedLayout(c->db, zName,
                                            &c->aOurs[iOurs].root,
                                            &theirsEntry->root,
                                            c->aOurs[iOurs].flags, ancSE->zSql,
                                            ourSE->zSql, theirSE->zSql,
                                            &theirsNormRoot);
         if( rc!=SQLITE_OK ) return rc;
+        rc = normalizeSideToMergedLayout(c->db, zName,
+                                           &c->aOurs[iOurs].root,
+                                           &ancEntry->root,
+                                           c->aOurs[iOurs].flags, ancSE->zSql,
+                                           ourSE->zSql, ancSE->zSql,
+                                           &ancNormRoot);
+        if( rc!=SQLITE_OK ) return rc;
+        ancAdj = *ancEntry;
+        memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
+        pMergeAnc = &ancAdj;
         pMergeTheirsRoot = &theirsNormRoot;
         bDualAddColMerge = 1;
         skipRowMerge = 0;
@@ -699,9 +764,30 @@ static int mergePass1BothSides(
 
   if( skipRowMerge ) return SQLITE_OK;
 
+  if( zName && oursChanged && theirsChanged
+   && ourSchemaChanged!=theirSchemaChanged ){
+    int bRelaid = 0;
+    rc = mergePass1RelayoutOneSidedSchema(
+        c, zName, ourSchemaChanged, &c->aOurs[iOurs], ancEntry, theirsEntry,
+        &otherNormRoot, &ancNormRoot, &bRelaid);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bRelaid ){
+      ancAdj = *ancEntry;
+      memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
+      pMergeAnc = &ancAdj;
+      if( ourSchemaChanged ){
+        pMergeTheirsRoot = &otherNormRoot;
+      }else{
+        oursAdj = c->aOurs[iOurs];
+        memcpy(&oursAdj.root, &otherNormRoot, sizeof(ProllyHash));
+        pMergeOurs = &oursAdj;
+      }
+    }
+  }
+
   if( bDualAddColMerge || (oursChanged && theirsChanged) ){
     return mergePass1MergeTableData(
-        c, zName, zLogicalName, &c->aOurs[iOurs], ancEntry,
+        c, zName, zLogicalName, pMergeOurs, pMergeAnc,
         pMergeTheirsRoot, ourSchemaChanged, theirSchemaChanged,
         schemaChoice, theirsEntry);
   }

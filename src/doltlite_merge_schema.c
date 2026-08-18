@@ -996,7 +996,11 @@ done:
 }
 
 
-int normalizeTheirsToMergedLayout(
+/* Rewrite the tree at pTheirsRoot, whose records follow zTheirsSql, into the
+** merged layout described by zOursSql. pOursRoot is the other side of the
+** merge, read only to tell rows that side also holds from rows this one
+** introduces. Either side of a merge can be the one converted. */
+int normalizeSideToMergedLayout(
   sqlite3 *db,
   const char *zTable,
   const ProllyHash *pOursRoot,
@@ -1013,6 +1017,7 @@ int normalizeTheirsToMergedLayout(
   int nAnc = 0, nOurs = 0, nTheirs = 0;
   int *aMap = 0;
   int nMerged;
+  int nDropped = 0;
   ProllyMutMap mm;
   int mmInit = 0;
   ProllyCursor cur;
@@ -1045,6 +1050,7 @@ int normalizeTheirsToMergedLayout(
   for(j=0; j<nTheirs; j++){
     int found = parsedColumnIndexByName(
         aOurs, nOurs, aTheirs[j].zName);
+    int bInAnc = 0;
     if( found<0 ){
       int ai = parsedColumnIndexByName(
           aAnc, nAnc, aTheirs[j].zName);
@@ -1055,6 +1061,7 @@ int normalizeTheirsToMergedLayout(
         ai = j;
       }
       if( ai>=0 ){
+        bInAnc = 1;
         found = parsedColumnIndexByName(
             aOurs, nOurs, aAnc[ai].zName);
         if( found<0 && ai<nOurs
@@ -1065,9 +1072,33 @@ int normalizeTheirsToMergedLayout(
         }
       }
     }
-    aMap[j] = (found>=0) ? found : nMerged++;
+    if( found>=0 ){
+      aMap[j] = found;
+    }else if( bInAnc ){
+      /* The ancestor had this column and the merged layout does not, so the
+      ** merged side dropped it. Appending it as a new column instead would
+      ** resurrect dropped data as a trailing field the schema cannot name. */
+      aMap[j] = -1;
+      nDropped++;
+    }else{
+      aMap[j] = nMerged++;
+    }
   }
   if( nMerged > DOLTLITE_MAX_RECORD_FIELDS ){ rc = SQLITE_ERROR; goto done; }
+
+  /* Records already sit at their merged positions, so the existing tree is
+  ** the answer. Trailing columns the merged layout adds read as absent from a
+  ** short record, which is what a rewrite would store anyway. */
+  if( nDropped==0 ){
+    int bSamePositions = 1;
+    for(j=0; j<nTheirs; j++){
+      if( aMap[j]!=j ){ bSamePositions = 0; break; }
+    }
+    if( bSamePositions ){
+      memcpy(pOutRoot, pTheirsRoot, sizeof(*pOutRoot));
+      goto done;
+    }
+  }
 
   /* Slots this side does not supply take the declared default of whichever
   ** schema owns them: ours for the columns we keep, theirs for the ones
@@ -1146,7 +1177,9 @@ int normalizeTheirsToMergedLayout(
       int tgt = aMap[j];
       int st = info.aType[j];
       const u8 *body = pVal + info.aOffset[j];
-      DoltliteSerialValue *m = &aMem[tgt];
+      DoltliteSerialValue *m;
+      if( tgt<0 ) continue;
+      m = &aMem[tgt];
       memset(m, 0, sizeof(*m));
       m->eType = SQLITE_NULL;
       if( st==0 ){

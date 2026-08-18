@@ -229,7 +229,7 @@ void mergeColDefaultsFree(MergeColDefaults *p);
 int mergeColDefaultsLoad(const char *zSql, const char *zTable,
                          MergeColDefaults *pOut);
 
-int normalizeTheirsToMergedLayout(
+int normalizeSideToMergedLayout(
   sqlite3 *db,
   const char *zTable,
   const ProllyHash *pOursRoot,
