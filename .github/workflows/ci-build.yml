@@ -108,7 +108,7 @@ jobs:
         set -o pipefail
         {
           make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
-          cc $CFLAGS -Wno-comment -I. -I../src \
+          cc $CFLAGS -Wno-comment -DDOLTLITE_PROLLY=1 -I. -I../src \
             -o threadtest4 ../test/threadtest4.c sqlite3.c \
             -ldl -lpthread -lm -lz
           cc $CFLAGS -Wno-comment -I. -I../src \
@@ -630,7 +630,7 @@ jobs:
         {
           make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
             sqlite3.c sqlite3.h
-          clang $TSAN_CFLAGS -I. -I../src \
+          clang $TSAN_CFLAGS -DDOLTLITE_PROLLY=1 -I. -I../src \
             -o threadtest4 ../test/threadtest4.c sqlite3.c \
             $TSAN_LDFLAGS -ldl -lpthread -lm -lz
           clang $TSAN_CFLAGS -I. -I../src \
