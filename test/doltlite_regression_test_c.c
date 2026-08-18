@@ -8508,6 +8508,76 @@ static void run_rebase_continue_after_reopen_dirty_default(void){
   removeDbFiles(dbpath);
 }
 
+static void run_rebase_continue_cas_keeps_dirty_default(void){
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  sqlite3 *db3 = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+
+  printf("=== Rebase Continue CAS Keeps Dirty Default Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_continue_cas_keeps_dirty_default");
+  removeDbFiles(dbpath);
+
+  check("open_db1_for_rebase_continue_cas_dirty",
+        open_db(dbpath, &db1)==SQLITE_OK);
+  check("setup_repo_for_rebase_continue_cas_dirty",
+        setup_dirty_default_rebase(db1)==SQLITE_OK);
+  check("start_rebase_for_continue_cas_dirty",
+        strstr(queryScalarText(db1, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started on branch dolt_rebase_feat")!=0);
+  check("drop_plan_for_continue_cas_dirty",
+        execSql(db1, "UPDATE dolt_rebase SET action='drop';")==SQLITE_OK);
+
+  check("open_db2_for_rebase_continue_cas_dirty",
+        open_db(dbpath, &db2)==SQLITE_OK);
+  check("checkout_feat_for_continue_cas_dirty",
+        strcmp(queryScalarText(db2, "SELECT dolt_checkout('feat')"), "0")==0);
+  check("peer_commit_for_continue_cas_dirty", execSql(db2,
+    "INSERT INTO t VALUES(123,'peer');"
+    "SELECT dolt_commit('-A','-m','move feat');")==SQLITE_OK);
+
+  res = queryScalarText(db1, "SELECT dolt_rebase('--continue')");
+  check("continue_cas_dirty_names_source_branch",
+        strstr(res, "changes in branch feat")!=0);
+  check("continue_cas_dirty_checkout_main",
+        strcmp(queryScalarText(db1, "SELECT dolt_checkout('main')"), "0")==0);
+  check("continue_cas_dirty_row_survives_same_session",
+        strcmp(queryScalarText(db1, "SELECT count(*) FROM t WHERE v='row99'"),
+               "1")==0);
+
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+
+  check("reopen_after_continue_cas_dirty", open_db(dbpath, &db3)==SQLITE_OK);
+  check("continue_cas_dirty_row_survives_reopen",
+        strcmp(queryScalarText(db3, "SELECT count(*) FROM t WHERE v='row99'"),
+               "1")==0);
+  check("continue_cas_dirty_keeps_temp_branch",
+        strcmp(queryScalarText(db3,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"),
+          "1")==0);
+  doltliteGetSessionRebaseState(db3, &isRebasing, 0, 0, 0, 0);
+  check("continue_cas_dirty_keeps_flag", isRebasing==1);
+  check("continue_cas_dirty_abort_after",
+        strcmp(queryScalarText(db3, "SELECT dolt_rebase('--abort')"),
+               "Interactive rebase aborted")==0);
+  check("continue_cas_dirty_abort_checkout_main",
+        strcmp(queryScalarText(db3, "SELECT dolt_checkout('main')"), "0")==0);
+  check("continue_cas_dirty_row_survives_abort",
+        strcmp(queryScalarText(db3, "SELECT count(*) FROM t WHERE v='row99'"),
+               "1")==0);
+  check("continue_cas_dirty_drops_temp_branch",
+        strcmp(queryScalarText(db3,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"),
+          "0")==0);
+
+  sqlite3_close(db3);
+  removeDbFiles(dbpath);
+}
+
 static int setup_onto_other_rebase(sqlite3 *db){
   return execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
@@ -12968,6 +13038,7 @@ static const RegressionCase aCases[] = {
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
   { "rebase_abort_after_reopen_dirty_default", "Rebase Abort After Reopen Dirty Default Test", run_rebase_abort_after_reopen_dirty_default },
   { "rebase_continue_after_reopen_dirty_default", "Rebase Continue After Reopen Dirty Default Test", run_rebase_continue_after_reopen_dirty_default },
+  { "rebase_continue_cas_keeps_dirty_default", "Rebase Continue CAS Keeps Dirty Default Test", run_rebase_continue_cas_keeps_dirty_default },
   { "rebase_abort_after_reopen_onto_other", "Rebase Abort After Reopen Onto Other Test", run_rebase_abort_after_reopen_onto_other },
   { "rebase_continue_after_reopen_onto_other", "Rebase Continue After Reopen Onto Other Test", run_rebase_continue_after_reopen_onto_other },
   { "rebase_abort_retry_after_claim_commit_error", "Rebase Abort Retry After Claim Commit Error Test", run_rebase_abort_retry_after_claim_commit_error },
