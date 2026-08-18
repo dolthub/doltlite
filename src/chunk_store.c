@@ -223,6 +223,54 @@ int csManifestHashStateOffsetless(const u8 *aBuf){
   return csManifestHashStateImpl(aBuf, 0, 0);
 }
 
+int csValidateWalRootManifest(
+  const ChunkStore *cs,
+  const u8 *aBuf,
+  i64 iRootOffset
+){
+  u32 nChunks = CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
+  u32 nIndexSize = CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
+  i64 iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
+  i64 iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
+  i64 durableTo = CS_READ_I64(aBuf + CS_MANIFEST_DURABLE_TO_OFF);
+  i64 batchStart = CS_READ_I64(aBuf + CS_MANIFEST_BATCH_START_OFF);
+  i64 rootEnd;
+  i64 nextOff = CS_READ_I64(aBuf + CS_MANIFEST_NEXT_OFF_OFF);
+
+  if( CS_READ_U32(aBuf + CS_MANIFEST_MAGIC_OFF)!=CHUNK_STORE_MAGIC
+   || CS_READ_U32(aBuf + CS_MANIFEST_VERSION_OFF)!=CHUNK_STORE_VERSION
+   || nChunks>(u32)INT_MAX || nIndexSize>(u32)INT_MAX
+   || nIndexSize%CHUNK_INDEX_ENTRY_SIZE!=0
+   || nIndexSize/CHUNK_INDEX_ENTRY_SIZE>nChunks
+   || iIndexOffset<0 || iWalOffset<CHUNK_MANIFEST_SIZE
+   || (nIndexSize>0 && iIndexOffset<CHUNK_MANIFEST_SIZE) ){
+    return SQLITE_CORRUPT;
+  }
+  if( iIndexOffset>0
+   && (iWalOffset<iIndexOffset
+       || iWalOffset-iIndexOffset<(i64)nIndexSize) ){
+    return SQLITE_CORRUPT;
+  }
+  if( cs
+   && (iWalOffset!=cs->wal.iWalOffset
+       || iIndexOffset!=cs->index.iIndexOffset
+       || (i64)nIndexSize!=cs->index.nIndexSize) ){
+    return SQLITE_CORRUPT;
+  }
+  if( iRootOffset<iWalOffset
+   || iRootOffset>LARGEST_INT64-(1+CHUNK_MANIFEST_SIZE) ){
+    return SQLITE_CORRUPT;
+  }
+  rootEnd = iRootOffset + 1 + CHUNK_MANIFEST_SIZE;
+  /* Both gaps are sector-alignment padding; writers cap sectors at 64KiB. */
+  if( durableTo<iWalOffset || durableTo>batchStart
+   || batchStart>iRootOffset || batchStart-durableTo>=65536
+   || nextOff<rootEnd || nextOff-rootEnd>=65536 ){
+    return SQLITE_CORRUPT;
+  }
+  return SQLITE_OK;
+}
+
 static int csReadManifest(ChunkStore *cs){
   u8 aBuf[CHUNK_MANIFEST_SIZE];
   u32 magic, version;
@@ -303,6 +351,10 @@ static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
         if( rc != SQLITE_OK ) return rc;
         state = csManifestHashState(m, q + i);
         if( state==CS_MANIFEST_HASH_OK ){
+          if( csValidateWalRootManifest(0, m, q+i)!=SQLITE_OK ){
+            *pEverCommitted = 1;
+            return SQLITE_OK;
+          }
           if( CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF) > CHUNK_MANIFEST_SIZE ){
             *pEverCommitted = 1;
             return SQLITE_OK;

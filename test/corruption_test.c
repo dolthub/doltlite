@@ -177,6 +177,45 @@ static off_t last_wal_chunk_body_offset(const char *path){
   return last;
 }
 
+static off_t last_sealed_wal_root_offset(const char *path){
+  long long walOffset = read_i64_le_at(path, CS_MANIFEST_WAL_OFFSET_OFF);
+  off_t sz = file_size(path);
+  unsigned char *data;
+  off_t pos;
+  off_t last = -1;
+  if( walOffset < MANIFEST_SIZE || sz <= (off_t)walOffset ) return -1;
+  data = sqlite3_malloc64((sqlite3_uint64)sz);
+  if( data==0 ) return -1;
+  if( read_bytes(path, 0, data, (size_t)sz)!=0 ){
+    sqlite3_free(data);
+    return -1;
+  }
+  for(pos=(off_t)walOffset; pos+1+MANIFEST_SIZE<=sz; pos++){
+    if( data[pos]==CS_WAL_TAG_ROOT
+     && CS_READ_U32(data+pos+1+CS_MANIFEST_MAGIC_OFF)==CHUNK_STORE_MAGIC
+     && csManifestHashState(data+pos+1, (i64)pos)==CS_MANIFEST_HASH_OK ){
+      last = pos;
+    }
+  }
+  sqlite3_free(data);
+  return last;
+}
+
+static int rewrite_sealed_root_field(
+  const char *path,
+  off_t rootOff,
+  int fieldOff,
+  const unsigned char *value,
+  size_t len
+){
+  unsigned char manifest[CHUNK_MANIFEST_SIZE];
+  if( fieldOff<0 || len>(size_t)(CHUNK_MANIFEST_SIZE-fieldOff) ) return -1;
+  if( read_bytes(path, rootOff+1, manifest, sizeof(manifest))!=0 ) return -1;
+  memcpy(manifest+fieldOff, value, len);
+  csManifestSeal(manifest, (i64)rootOff);
+  return corrupt_bytes(path, rootOff+1, manifest, sizeof(manifest));
+}
+
 static void removeDb(const char *path){
   char wal[512];
   remove(path);
@@ -1227,6 +1266,88 @@ static void test_index_end_overflow_bounds_wal_offset(void){
   removeDb(dbpath);
 }
 
+static void test_sealed_wal_root_manifest_validation(void){
+  const char *base = "/tmp/test_corr_wal_root_manifest_base.db";
+  const char *dbpath = "/tmp/test_corr_wal_root_manifest.db";
+  sqlite3 *db = 0;
+  off_t rootOff;
+  long long walOffset;
+  long long rootEnd;
+  unsigned char value[8];
+  int i;
+  struct RootMutation {
+    const char *name;
+    int fieldOff;
+    int nValue;
+    long long value;
+  } mutations[] = {
+    { "version", CS_MANIFEST_VERSION_OFF, 4, CHUNK_STORE_VERSION+1 },
+    { "chunk_count", CS_MANIFEST_CHUNK_COUNT_OFF, 4, 0x80000000LL },
+    { "index_offset", CS_MANIFEST_INDEX_OFFSET_OFF, 8, -1 },
+    { "index_size", CS_MANIFEST_INDEX_SIZE_OFF, 4, 1 },
+    { "wal_offset", CS_MANIFEST_WAL_OFFSET_OFF, 8, 0 },
+    { "durable_before_wal", CS_MANIFEST_DURABLE_TO_OFF, 8, 0 },
+    { "durable_after_batch", CS_MANIFEST_DURABLE_TO_OFF, 8, 0 },
+    { "batch_before_durable", CS_MANIFEST_BATCH_START_OFF, 8, 0 },
+    { "batch_after_root", CS_MANIFEST_BATCH_START_OFF, 8, 0 },
+    { "batch_gap", CS_MANIFEST_DURABLE_TO_OFF, 8, 0 },
+    { "next_before_root_end", CS_MANIFEST_NEXT_OFF_OFF, 8, 0 },
+    { "next_gap", CS_MANIFEST_NEXT_OFF_OFF, 8, 0 },
+  };
+
+  printf("--- Test 30: Sealed WAL root manifest fields are validated ---\n");
+
+  removeDb(base);
+  check("root_manifest_open", sqlite3_open(base, &db)==SQLITE_OK);
+  if( db ){
+    check("root_manifest_schema",
+      execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val)")==SQLITE_OK);
+    check("root_manifest_large_row",
+      execSql(db, "INSERT INTO t1 VALUES(1, randomblob(70000))")==SQLITE_OK);
+    sqlite3_close(db);
+  }
+  rootOff = last_sealed_wal_root_offset(base);
+  walOffset = read_i64_le_at(base, CS_MANIFEST_WAL_OFFSET_OFF);
+  rootEnd = (long long)rootOff + 1 + MANIFEST_SIZE;
+  check("root_manifest_find_root", rootOff>walOffset+65536);
+
+  mutations[4].value = walOffset + 1;
+  mutations[5].value = walOffset - 1;
+  mutations[6].value = (long long)rootOff + 1;
+  mutations[7].value = (long long)rootOff - 1;
+  mutations[8].value = (long long)rootOff + 1;
+  mutations[9].value = (long long)rootOff - 65536;
+  mutations[10].value = rootEnd - 1;
+  mutations[11].value = rootEnd + 65536;
+
+  for(i=0; i<(int)(sizeof(mutations)/sizeof(mutations[0])); i++){
+    ChunkStore cs;
+    int rc;
+    off_t before;
+    char name[128];
+    check("root_manifest_copy", copy_file(base, dbpath)==0);
+    if( mutations[i].nValue==4 ){
+      CS_WRITE_U32(value, (u32)mutations[i].value);
+    }else{
+      CS_WRITE_I64(value, mutations[i].value);
+    }
+    snprintf(name, sizeof(name), "root_manifest_rewrite_%s", mutations[i].name);
+    check(name, rewrite_sealed_root_field(dbpath, rootOff,
+          mutations[i].fieldOff, value, (size_t)mutations[i].nValue)==0);
+    before = file_size(dbpath);
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    snprintf(name, sizeof(name), "root_manifest_reject_%s", mutations[i].name);
+    check(name, rc==SQLITE_CORRUPT);
+    if( rc==SQLITE_OK ) chunkStoreClose(&cs);
+    snprintf(name, sizeof(name), "root_manifest_unchanged_%s", mutations[i].name);
+    check(name, file_size(dbpath)==before);
+  }
+
+  removeDb(base);
+  removeDb(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -1258,6 +1379,7 @@ int main(void){
   test_unsealed_header_still_opens();
   test_unsealed_header_bounds_checks_wal_offset();
   test_index_end_overflow_bounds_wal_offset();
+  test_sealed_wal_root_manifest_validation();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);

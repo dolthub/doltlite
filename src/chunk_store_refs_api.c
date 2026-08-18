@@ -79,6 +79,8 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
   }
   return aRoot[0]==CS_WAL_TAG_ROOT
       && hashState==CS_MANIFEST_HASH_OK
+      && csValidateWalRootManifest(
+           cs, aRoot+1, contentEnd-(i64)sizeof(aRoot))==SQLITE_OK
       && memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
                 cs->refs.refsHash.data, PROLLY_HASH_SIZE)==0;
 }
@@ -92,6 +94,7 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
 int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
   i64 physSize = 0;
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  int hashState;
 
   memset(pOut, 0, sizeof(*pOut));
   if( cs->file.pFile==0 ) return 0;
@@ -108,6 +111,15 @@ int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
   ** write) is not a published state; report "cannot prove" and let the
   ** caller fall back to its in-memory comparison. */
   if( aRoot[0]!=CS_WAL_TAG_ROOT ) return 0;
+  hashState = csManifestHashState(aRoot+1, physSize-(i64)sizeof(aRoot));
+  if( hashState==CS_MANIFEST_HASH_BAD ){
+    hashState = csManifestHashStateOffsetless(aRoot+1);
+  }
+  if( hashState!=CS_MANIFEST_HASH_OK
+   || csValidateWalRootManifest(
+        cs, aRoot+1, physSize-(i64)sizeof(aRoot))!=SQLITE_OK ){
+    return 0;
+  }
   memcpy(pOut->data, aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
   return 1;
 }
