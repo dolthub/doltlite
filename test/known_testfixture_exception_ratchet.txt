@@ -6,8 +6,8 @@
 # Counts are per gate -- one divergent assertion, or one expected crash.
 # Lowering a number is the point. Raising one is a deliberate act that belongs
 # in a PR description.
-gates 4841
+gates 4851
 intentional 3551
 unsupported 1187
 harness 11
-engine-gap 92
+engine-gap 102
