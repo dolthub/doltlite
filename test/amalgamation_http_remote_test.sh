@@ -88,12 +88,16 @@ DOLTLITE_CREDS_DIR="$tmp/creds" \
   "$probe" "$tmp/src.db" "$tmp/clone.db" "http://127.0.0.1:$port/repo.db"
 
 offline_probe="$tmp/amalg_remotes_disabled_probe"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) offline_probe="${offline_probe}.exe" ;;
+esac
 "$cc_bin" -Wno-comment -DDOLTLITE_ENABLE_REMOTES=0 -I. \
   ../test/amalgamation_remotes_disabled_probe.c ./sqlite3.c \
   "${probe_libs[@]}" -o "$offline_probe"
 "$offline_probe"
 
-if nm "$offline_probe" | grep -Eq 'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)'; then
+if nm "$offline_probe" | grep -Eq \
+    'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)|mbedtls_ssl_tls13'; then
   echo "FAIL: networking implementation present in remotes-disabled amalgamation"
   exit 1
 fi
