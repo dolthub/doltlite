@@ -115,6 +115,15 @@ static int doltliteApplyMergeSchemaActions(
       sqlite3_free(zAlter);
       if( rc!=SQLITE_OK ) break;
     }
+    /* Deletions the side whose schema was not adopted had already made. */
+    for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nDropColumns; sj++){
+      char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" DROP COLUMN \"%w\"",
+                                      aSchemaActions[si].zTableName,
+                                      aSchemaActions[si].azDropColumns[sj]);
+      if( !zAlter ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+      sqlite3_free(zAlter);
+    }
   }
 
   /* Row data (theirs' adds, edits to shared columns, deletes, and added-column
