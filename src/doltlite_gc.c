@@ -980,6 +980,18 @@ static int gcRun(
     *pzPhase = "failed to acquire lock for gc";
     return rc;
   }
+  /* The sweep republishes the store by renaming a rebuilt file over this path.
+  ** A connection that may not write must not do that, and neither may one
+  ** whose file was replaced underneath it: the path now names a database this
+  ** handle never opened, and the rename would destroy it. Checked after the
+  ** refresh, which is what detects the replacement. */
+  if( cs->readOnly || cs->movedReadOnly ){
+    chunkStoreUnlock(cs);
+    *pzPhase = cs->readOnly
+             ? "attempt to write a readonly database"
+             : "cannot rewrite a database file that was replaced";
+    return SQLITE_READONLY;
+  }
   if( bForceRefresh ){
     rc = chunkStoreForceRefresh(cs);
     if( rc!=SQLITE_OK ){

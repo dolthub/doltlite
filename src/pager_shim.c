@@ -371,6 +371,13 @@ static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
 #endif
   if( rc==SQLITE_OK && db && pCs ){
     rc = doltliteGcCompactStore(db, pCs);
+    /* Compacting here is opportunistic -- stock does not compact on checkpoint
+    ** at all, and answers a checkpoint on a database it may not write with
+    ** success, so a read-only store just stays uncompacted. A store whose file
+    ** was replaced is not that: stock has no such state to be consistent with,
+    ** and the caller is checkpointing a path that no longer holds the database
+    ** it opened, which it can only learn if we say so. */
+    if( rc==SQLITE_READONLY && !pCs->movedReadOnly ) rc = SQLITE_OK;
   }
   if( pCs ) pCs->checkpointActive = 0;
   if( rc!=SQLITE_OK ) return rc;
@@ -1258,6 +1265,16 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     goto backup_step_done;
   }
   destLocked = 1;
+
+  /* The refresh above is what learns the destination file was replaced. The
+  ** path now names a database this handle never opened, and finishing would
+  ** rename our copy over it. */
+  if( destCs->movedReadOnly ){
+    rc = SQLITE_READONLY;
+    p->rc = rc;
+    sqlite3Error(p->pDestDb, rc);
+    goto backup_step_done;
+  }
 
   if( destCs->isMemory ){
     openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
