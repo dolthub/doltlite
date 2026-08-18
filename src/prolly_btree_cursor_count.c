@@ -208,6 +208,25 @@ static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut)
   return SQLITE_OK;
 }
 
+/* Exclusive end after a complete first-field encoding. A 9-byte exact
+** numeric is a byte prefix of the 18-byte neighbor that shares its IEEE
+** base; a raw prefix successor sits above that neighbor and would count
+** it as still inside the range. Extra composite columns start with a
+** field tag below 0x80, so appending the continuation marker keeps them
+** inside and leaves the neighbor out. */
+static int blobFieldSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
+  if( nKey==9 && pKey[0]==SORTKEY_NUM ){
+    u8 *pOut = sqlite3_malloc(10);
+    if( !pOut ) return SQLITE_NOMEM;
+    memcpy(pOut, pKey, 9);
+    pOut[9] = 0x80;
+    *ppOut = pOut;
+    *pnOut = 10;
+    return SQLITE_OK;
+  }
+  return blobPrefixSuccessor(pKey, nKey, ppOut, pnOut);
+}
+
 static int countBlobKeysBefore(
   Btree *pBtree,
   const ProllyHash *pRoot,
@@ -272,7 +291,7 @@ static int countTreeBlobPrefixRange(
   rc = sortKeyFromUnpackedForCount(
       pCur, pUpper, &pUpperKey, &nUpperAlloc, &nUpperKey);
   if( rc!=SQLITE_OK ) goto done;
-  rc = blobPrefixSuccessor(pUpperKey, nUpperKey, &pUpperNext, &nUpperNext);
+  rc = blobFieldSuccessor(pUpperKey, nUpperKey, &pUpperNext, &nUpperNext);
   if( rc!=SQLITE_OK ) goto done;
 
   rc = countBlobKeysBefore(pCur->pBtree, &pTE->root, pTE->flags,
