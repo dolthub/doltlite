@@ -729,4 +729,133 @@ run_test "schema_tokenizer_comment" \
   "2" "$DB"
 rm -f "$DB"
 
+# Only one side changes the columns, so the other side and the ancestor still
+# store the dropped column. Every value right of it must not shift left, and a
+# cell neither side touched must not read as a conflict. Values verified
+# against Dolt 2.2.2.
+DB=/tmp/test_drop_col_merge_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3,'a3','b3','c3');
+SELECT dolt_commit('-A','-m','insert on feat');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b on main');
+EOF
+run_test_match "drop_col_merge_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "drop_col_merge_incoming_row" "SELECT a||'|'||c FROM t WHERE k=3;" \
+  "a3|c3" "$DB"
+run_test "drop_col_merge_existing_row" "SELECT a||'|'||c FROM t WHERE k=1;" \
+  "a1|c1" "$DB"
+run_test "drop_col_merge_cols" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='b';" "0" "$DB"
+run_test "drop_col_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# The mirror direction: the side that dropped the column is the one merged in,
+# so it is our own rows that have to move into the merged layout.
+DB=/tmp/test_drop_col_merge_rev_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b on feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'a3','b3','c3');
+SELECT dolt_commit('-A','-m','insert on main');
+EOF
+run_test_match "drop_col_merge_rev_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "drop_col_merge_rev_our_row" "SELECT a||'|'||c FROM t WHERE k=3;" \
+  "a3|c3" "$DB"
+run_test "drop_col_merge_rev_cols" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='b';" "0" "$DB"
+run_test "drop_col_merge_rev_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# A row both sides hold, changed only by them: the ancestor has to be read at
+# merged positions or the untouched cell looks like a competing edit.
+DB=/tmp/test_drop_col_merge_mod_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET c='c2new' WHERE k=2;
+SELECT dolt_commit('-A','-m','modify shared row');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b on main');
+EOF
+run_test_match "drop_col_merge_mod_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "drop_col_merge_mod_row" "SELECT a||'|'||c FROM t WHERE k=2;" \
+  "a2|c2new" "$DB"
+run_test "drop_col_merge_mod_untouched" "SELECT a||'|'||c FROM t WHERE k=1;" \
+  "a1|c1" "$DB"
+run_test "drop_col_merge_mod_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+rm -f "$DB"
+
+# Both sides change columns and one of them drops: the ancestor no longer
+# lines up with either side, so it too is read at merged positions.
+DB=/tmp/test_drop_col_merge_dual_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN d TEXT;
+UPDATE t SET c='c2new' WHERE k=2;
+SELECT dolt_commit('-A','-m','add d and modify on feat');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b on main');
+EOF
+run_test_match "drop_col_merge_dual_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "drop_col_merge_dual_modified" "SELECT a||'|'||c FROM t WHERE k=2;" \
+  "a2|c2new" "$DB"
+run_test "drop_col_merge_dual_untouched" "SELECT a||'|'||c FROM t WHERE k=1;" \
+  "a1|c1" "$DB"
+run_test "drop_col_merge_dual_added_col" \
+  "SELECT count(*) FROM t WHERE d IS NOT NULL;" "0" "$DB"
+run_test "drop_col_merge_dual_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+rm -f "$DB"
+
+# Dropping the trailing column leaves the incoming value with nowhere to go,
+# the one shape where no surviving column later claims its slot.
+DB=/tmp/test_drop_last_col_merge_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
+INSERT INTO t VALUES(1,'a1','b1','c1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'a2','b2','c2');
+SELECT dolt_commit('-A','-m','insert on feat');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN c;
+SELECT dolt_commit('-A','-m','drop trailing column');
+EOF
+run_test_match "drop_last_col_merge_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "drop_last_col_merge_incoming_row" "SELECT a||'|'||b FROM t WHERE k=2;" \
+  "a2|b2" "$DB"
+run_test "drop_last_col_merge_cols" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='c';" "0" "$DB"
+run_test "drop_last_col_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 dltest_finish
