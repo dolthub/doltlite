@@ -914,6 +914,35 @@ run_test "drop_vs_rename_edit_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 rm -f "$DB"
 
+# A rename rewrites no rows, so their root can be identical while the layout
+# has still moved. Nothing about whether a side wrote rows may decide whether
+# our rows are moved onto the adopted layout.
+DB=/tmp/test_drop_vs_rename_norows_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
+INSERT INTO t VALUES(1,'a1','b1','c1',505);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN c TO renamed_c;
+SELECT dolt_commit('-A','-m','rename only, no rows written');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b on main');
+EOF
+run_test_match "drop_vs_rename_norows_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "drop_vs_rename_norows_cols" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" \
+  "k,a,renamed_c,d" "$DB"
+run_test "drop_vs_rename_norows_row" \
+  "SELECT a||'|'||renamed_c||'|'||d FROM t WHERE k=1;" "a1|c1|505" "$DB"
+run_test "drop_vs_rename_norows_types" \
+  "SELECT typeof(renamed_c)||'|'||typeof(d) FROM t WHERE k=1;" \
+  "text|integer" "$DB"
+run_test "drop_vs_rename_norows_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 # A rename with no deletion opposite it must still keep every column.
 DB=/tmp/test_rename_no_drop_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1

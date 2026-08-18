@@ -789,8 +789,10 @@ static int mergePass1BothSides(
   }
 
   /* Their schema was adopted whole for a rename, so the merged layout is
-  ** theirs and our rows are the ones left behind. */
-  if( zName && zOursPrevSql && oursChanged && theirsChanged ){
+  ** theirs and our rows are the ones left behind. A rename rewrites no rows,
+  ** so their root can be unchanged while the layout still moved: the move has
+  ** to be judged on the schema, never on whether either side wrote rows. */
+  if( zName && zOursPrevSql ){
     SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
     SchemaEntry *mergedSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
     int bRelaid = 0;
@@ -844,13 +846,13 @@ static int mergePass1BothSides(
         schemaChoice, theirsEntry);
   }
   if( theirsChanged ){
-    struct TableEntry merged = c->aOurs[iOurs];
+    struct TableEntry merged = *pMergeOurs;
     memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
     memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
     merged.flags = theirsEntry->flags;
     c->aMerged[(*c->pnMerged)++] = merged;
   }else{
-    c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+    c->aMerged[(*c->pnMerged)++] = *pMergeOurs;
   }
   return SQLITE_OK;
 }
