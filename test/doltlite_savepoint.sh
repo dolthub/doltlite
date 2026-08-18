@@ -697,6 +697,61 @@ run_test_match "branch_name_after_rollback" \
   "SELECT name FROM dolt_branches ORDER BY name;" \
   "main" "$DB9"
 
+# A branch switch seals the transaction it runs in. Releasing the savepoints
+# is not enough on its own: an enclosing BEGIN left open means a later
+# ROLLBACK reverts the working set to the branch we left while the ref already
+# names the one we switched to, and that mismatch is what gets persisted. The
+# plain-BEGIN and bare-SAVEPOINT shapes above never had the open BEGIN, so the
+# combination is the case that needs pinning.
+DBSP1=/tmp/test_sp_begin_checkout_$$.db; rm -f "$DBSP1"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(4,40);
+SELECT dolt_commit('-A','-m','main row 4');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(9,90);
+SELECT dolt_commit('-A','-m','side row 9');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DBSP1" > /dev/null 2>&1
+echo "BEGIN;
+SAVEPOINT s;
+INSERT INTO t VALUES(7,70);
+SELECT dolt_checkout('side');
+ROLLBACK;" | $DOLTLITE "$DBSP1" > /dev/null 2>&1
+
+run_test "begin_savepoint_checkout_keeps_target_rows" \
+  "SELECT group_concat(a) FROM t;" "1,2,9" "$DBSP1/side"
+run_test "begin_savepoint_checkout_target_clean" \
+  "SELECT count(*) FROM dolt_status;" "0" "$DBSP1/side"
+run_test "begin_savepoint_checkout_source_intact" \
+  "SELECT group_concat(a) FROM t WHERE a IN (1,2,4);" "1,2,4" "$DBSP1"
+
+# The same seal carries the interactive rebase claim and plan, which are
+# written before the switch and are lost with the transaction if it stays open.
+DBSP2=/tmp/test_sp_begin_rebase_$$.db; rm -f "$DBSP2"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('side');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(9,90);
+SELECT dolt_commit('-A','-m','side');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(4,40);
+SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DBSP2" > /dev/null 2>&1
+echo "BEGIN;
+SAVEPOINT s;
+SELECT dolt_rebase('-i','main');
+ROLLBACK;" | $DOLTLITE "$DBSP2/side" > /dev/null 2>&1
+
+run_test_match "begin_savepoint_rebase_plan_survives" \
+  "SELECT count(*) FROM dolt_rebase;" "^[1-9][0-9]*$" "$DBSP2/dolt_rebase_side"
+run_test_match "begin_savepoint_rebase_continues" \
+  "SELECT dolt_rebase('--continue');" "Successfully rebased" "$DBSP2/side"
+
+rm -f "$DBSP1" "$DBSP2"
+
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" "$DB9" \
   "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10" \
   "$DB6g1u" "$DB6g1v" "$DB6g1w" "$DB7d" "$DB7e" "$DB7f"
