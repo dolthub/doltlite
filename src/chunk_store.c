@@ -532,9 +532,14 @@ int chunkStoreOpen(
 
     {
       int loadedCheckpoint = 0;
-      rc = csTryLoadWalCheckpoint(cs, &loadedCheckpoint);
+      i64 iSkipStart = 0;
+      i64 iSkipEnd = 0;
+      rc = csTryLoadWalCheckpoint(cs, &loadedCheckpoint,
+                                  &iSkipStart, &iSkipEnd);
       if( rc==SQLITE_OK && !loadedCheckpoint ) rc = csReadIndex(cs);
-      if( rc==SQLITE_OK && !loadedCheckpoint ) rc = csReplayWal(cs);
+      if( rc==SQLITE_OK && !loadedCheckpoint ){
+        rc = csReplayWalSkipping(cs, iSkipStart, iSkipEnd);
+      }
     }
     if( rc != SQLITE_OK ){
       chunkStoreClose(cs);
@@ -698,12 +703,13 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   }
 
   if( csWalCheckpointDue(cs) ){
-    rc = csWriteWalCheckpoint(cs, sectorSize);
+    int wroteCheckpoint = 0;
+    rc = csWriteWalCheckpoint(cs, sectorSize, &wroteCheckpoint);
     if( rc!=SQLITE_OK ){
       sqlite3_log(SQLITE_NOTICE,
         "doltlite: unable to checkpoint chunk WAL on close: %d", rc);
     }
-    goto done;
+    if( wroteCheckpoint ) goto done;
   }
 
   markerStart = cs->file.iFileSize;

@@ -1108,8 +1108,10 @@ static void test_damage_far_before_sealing_root_poisons(void){
   removeDb(dbpath);
 }
 
-static void test_large_wal_open_checkpoint(void){
+static void test_wal_open_checkpoint(void){
   const char *dbpath = "/tmp/test_corr_open_checkpoint.db";
+  const char *tornpath = "/tmp/test_corr_open_checkpoint_torn.db";
+  const char *gcpath = "/tmp/test_corr_open_checkpoint_gc.db";
   sqlite3 *db = 0;
   off_t tailOff;
   long long checkpointOff;
@@ -1117,9 +1119,10 @@ static void test_large_wal_open_checkpoint(void){
   long long replayOff;
   long long dataEnd;
   unsigned int entryCount;
+  int wroteCheckpoint = 0;
   int rc;
 
-  printf("--- Test 24: Large WAL gets an open checkpoint ---\n");
+  printf("--- Test 24: WAL open checkpoint recovery ---\n");
 
   removeDb(dbpath);
   rc = sqlite3_open(dbpath, &db);
@@ -1131,12 +1134,25 @@ static void test_large_wal_open_checkpoint(void){
         "CREATE TABLE s(id INTEGER PRIMARY KEY)")
         ==SQLITE_OK);
     check("open_checkpoint_insert",
-      execSql(db, "INSERT INTO t VALUES(1, zeroblob(68157440))")
+      execSql(db, "INSERT INTO t VALUES(1, zeroblob(4096))")
         ==SQLITE_OK);
     check("open_checkpoint_commit",
       execSql(db, "SELECT dolt_commit('-Am','large')")==SQLITE_OK);
   }
   if( db ) sqlite3_close(db);
+
+  {
+    ChunkStore cs;
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("open_checkpoint_store_open", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      rc = csWriteWalCheckpoint(&cs, 1, &wroteCheckpoint);
+      check("open_checkpoint_write",
+            rc==SQLITE_OK && wroteCheckpoint);
+      chunkStoreClose(&cs);
+    }
+  }
 
   tailOff = file_size(dbpath) - (1 + MANIFEST_SIZE);
   check("open_checkpoint_tail_root", tailOff>MANIFEST_SIZE);
@@ -1161,16 +1177,28 @@ static void test_large_wal_open_checkpoint(void){
     && checkpointSize<=CS_INDEX_PAGE_SIZE
     && entryCount>0
     && checkpointOff+CS_WAL_CHUNK_HDR_SIZE+checkpointSize==tailOff
-    && replayOff>=tailOff+1+MANIFEST_SIZE);
+    && replayOff>=tailOff+1+MANIFEST_SIZE
+    && read_i64_le_at(dbpath,
+         tailOff+1+CS_MANIFEST_DURABLE_TO_OFF)==dataEnd
+    && read_i64_le_at(dbpath,
+         tailOff+1+CS_MANIFEST_BATCH_START_OFF)==dataEnd);
 
   db = 0;
+  {
+    ChunkStore cs;
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("open_checkpoint_fast_path",
+          rc==SQLITE_OK && cs.index.lazy.active && cs.index.nIndex==0);
+    if( rc==SQLITE_OK ) chunkStoreClose(&cs);
+  }
   rc = sqlite3_open(dbpath, &db);
   check("open_checkpoint_reopen", rc==SQLITE_OK);
   if( rc==SQLITE_OK ){
     check("open_checkpoint_read",
       strcmp(queryScalarText(db,
         "SELECT count(*)||'|'||length(payload) FROM t"),
-        "1|68157440")==0);
+        "1|4096")==0);
     check("open_checkpoint_tail_commit",
       execSql(db,
         "INSERT INTO s VALUES(2);"
@@ -1193,17 +1221,75 @@ static void test_large_wal_open_checkpoint(void){
         "SELECT (SELECT count(*) FROM t)||'|'||"
         "(SELECT length(payload) FROM t)||'|'||"
         "(SELECT count(*) FROM s)"),
-        "1|68157440|1")==0);
+        "1|4096|1")==0);
   }
   if( db ) sqlite3_close(db);
 
   {
     ChunkStore cs;
-    ProllyHash zero;
-    u8 *pData = 0;
-    int nData = 0;
     unsigned char bad = 0;
-    memset(&zero, 0, sizeof(zero));
+    unsigned char torn = CS_WAL_TAG_CHUNK;
+    off_t walOffset = (off_t)read_i64_le_at(dbpath,
+        CS_MANIFEST_WAL_OFFSET_OFF);
+    removeDb(tornpath);
+    check("open_checkpoint_torn_copy", copy_file(dbpath, tornpath)==0);
+    check("open_checkpoint_prefix_hash_read",
+      read_bytes(tornpath, walOffset+CS_WAL_CHUNK_HASH_OFF, &bad, 1)==0);
+    bad ^= 0x01;
+    check("open_checkpoint_prefix_hash_corrupt",
+      corrupt_bytes(tornpath, walOffset+CS_WAL_CHUNK_HASH_OFF, &bad, 1)==0);
+    check("open_checkpoint_torn_append",
+      corrupt_bytes(tornpath, file_size(tornpath), &torn, 1)==0);
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), tornpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("open_checkpoint_torn_fast_path",
+      rc==SQLITE_OK && cs.index.lazy.active && !cs.corruptMidStream);
+    if( rc==SQLITE_OK ) chunkStoreClose(&cs);
+    db = 0;
+    rc = sqlite3_open(tornpath, &db);
+    check("open_checkpoint_torn_sql_open", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("open_checkpoint_torn_read",
+        strcmp(queryScalarText(db,
+          "SELECT (SELECT count(*) FROM t)||'|'||"
+          "(SELECT length(payload) FROM t)||'|'||"
+          "(SELECT count(*) FROM s)"),
+          "1|4096|1")==0);
+      sqlite3_close(db);
+    }
+    removeDb(tornpath);
+  }
+
+  removeDb(gcpath);
+  check("open_checkpoint_gc_copy", copy_file(dbpath, gcpath)==0);
+  db = 0;
+  rc = sqlite3_open(gcpath, &db);
+  check("open_checkpoint_gc_open", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("open_checkpoint_gc_run",
+      execSql(db, "SELECT dolt_gc()")==SQLITE_OK);
+    sqlite3_close(db);
+  }
+  check("open_checkpoint_gc_stamp_cleared",
+    read_u32_le_at(gcpath, CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
+      !=CS_WAL_CHECKPOINT_MAGIC_V2);
+  db = 0;
+  rc = sqlite3_open(gcpath, &db);
+  check("open_checkpoint_gc_reopen", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("open_checkpoint_gc_read",
+      strcmp(queryScalarText(db,
+        "SELECT (SELECT count(*) FROM t)||'|'||"
+        "(SELECT length(payload) FROM t)||'|'||"
+        "(SELECT count(*) FROM s)"),
+        "1|4096|1")==0);
+    sqlite3_close(db);
+  }
+  removeDb(gcpath);
+
+  {
+    ChunkStore cs;
+    unsigned char bad = 0;
     check("open_checkpoint_read_snapshot_byte",
       read_bytes(dbpath,
         (off_t)checkpointOff+CS_WAL_CHUNK_HDR_SIZE, &bad, 1)==0);
@@ -1215,11 +1301,24 @@ static void test_large_wal_open_checkpoint(void){
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
     check("open_checkpoint_corrupt_reopen", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      check("open_checkpoint_corrupt_poisoned", cs.corruptMidStream);
-      rc = chunkStoreGet(&cs, &zero, &pData, &nData);
-      check("open_checkpoint_corrupt_rejected", rc==SQLITE_CORRUPT);
-      sqlite3_free(pData);
+      check("open_checkpoint_corrupt_fallback", !cs.corruptMidStream);
       chunkStoreClose(&cs);
+    }
+    db = 0;
+    rc = sqlite3_open(dbpath, &db);
+    check("open_checkpoint_corrupt_sql_open", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("open_checkpoint_corrupt_read",
+        strcmp(queryScalarText(db,
+          "SELECT (SELECT count(*) FROM t)||'|'||"
+          "(SELECT length(payload) FROM t)||'|'||"
+          "(SELECT count(*) FROM s)"),
+          "1|4096|1")==0);
+      check("open_checkpoint_corrupt_write",
+        execSql(db,
+          "INSERT INTO s VALUES(3);"
+          "SELECT dolt_commit('-Am','after fallback')")==SQLITE_OK);
+      sqlite3_close(db);
     }
   }
   removeDb(dbpath);
@@ -1259,7 +1358,11 @@ static void test_paged_checkpoint_large_index(void){
   check("paged_checkpoint_put", rc==SQLITE_OK);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
   check("paged_checkpoint_commit", rc==SQLITE_OK);
-  if( rc==SQLITE_OK ) rc = csWriteWalCheckpoint(&cs, 1);
+  if( rc==SQLITE_OK ){
+    int wroteCheckpoint = 0;
+    rc = csWriteWalCheckpoint(&cs, 1, &wroteCheckpoint);
+    if( rc==SQLITE_OK && !wroteCheckpoint ) rc = SQLITE_ERROR;
+  }
   check("paged_checkpoint_write", rc==SQLITE_OK);
   chunkStoreClose(&cs);
 
@@ -1552,7 +1655,7 @@ int main(void){
   test_corrupt_index_order();
   test_damage_far_before_sealing_root_poisons();
   test_crash_garbage_truncated_on_write();
-  test_large_wal_open_checkpoint();
+  test_wal_open_checkpoint();
   test_paged_checkpoint_large_index();
   test_root_seal_binds_file_offset();
   test_header_seal_detects_tampered_wal_offset();
