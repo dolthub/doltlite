@@ -968,4 +968,58 @@ run_test "rename_no_drop_rows" \
   "1:a1x:c1,2:a2:c2" "$DB"
 rm -f "$DB"
 
+# Their schema supplies whatever the merged rows do not carry, and an object
+# this side deleted is exactly that -- so it came back, and a resurrected
+# trigger fires on the next write. Verified against Dolt 2.2.2, which keeps
+# the deletion.
+DB=/tmp/test_merge_dropped_objects_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+CREATE VIEW v AS SELECT a,b FROM t;
+CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET b='TRIG'; END;
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'y');
+SELECT dolt_commit('-A','-m','insert on feat');
+SELECT dolt_checkout('main');
+DROP VIEW v;
+DROP TRIGGER tg;
+SELECT dolt_commit('-A','-m','drop view and trigger');
+EOF
+run_test_match "merge_keeps_drop_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_keeps_view_dropped" \
+  "SELECT count(*) FROM sqlite_master WHERE name='v';" "0" "$DB"
+run_test "merge_keeps_trigger_dropped" \
+  "SELECT count(*) FROM sqlite_master WHERE name='tg';" "0" "$DB"
+# A trigger that came back would rewrite this row on the way in.
+run_test "merge_dropped_trigger_stays_silent" \
+  "INSERT INTO t VALUES(3,'kept'); SELECT b FROM t WHERE a=3;" "kept" "$DB"
+rm -f "$DB"
+
+# Nothing was deleted, so both objects have to survive the same merge.
+DB=/tmp/test_merge_keeps_objects_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+CREATE VIEW v AS SELECT a,b FROM t;
+CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET b='TRIG'; END;
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'y');
+SELECT dolt_commit('-A','-m','insert on feat');
+SELECT dolt_checkout('main');
+UPDATE t SET b='z' WHERE a=1;
+SELECT dolt_commit('-A','-m','edit on main');
+EOF
+run_test_match "merge_undeleted_objects_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_keeps_undeleted_objects" \
+  "SELECT group_concat(type||':'||name) FROM sqlite_master
+   WHERE name IN ('v','tg') ORDER BY name;" "view:v,trigger:tg" "$DB"
+rm -f "$DB"
+
 dltest_finish
