@@ -244,6 +244,27 @@ run_test "diff_stat_real_pos_neg_zero_no_diff" \
   "SELECT rows_modified FROM dolt_diff_stat('HEAD~1', 'HEAD', 'r');" \
   "0" "$DB17"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
+DB18=/tmp/test_diff18_$$.db; rm -f "$DB18"
+echo "CREATE TABLE baseline(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','baseline');
+CREATE TABLE empty_t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','create_empty');
+DROP TABLE empty_t;
+SELECT dolt_commit('-A','-m','drop_empty');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+
+run_test "diff_empty_table_history" \
+  "SELECT group_concat(message || '|' || data_change || '|' || schema_change, ',') FROM (SELECT message, data_change, schema_change FROM dolt_diff WHERE table_name || '' = 'empty_t' ORDER BY message);" \
+  "create_empty|0|1,drop_empty|0|1" "$DB18"
+
+run_test "diff_empty_table_history_filtered" \
+  "SELECT group_concat(message || '|' || data_change || '|' || schema_change, ',') FROM (SELECT message, data_change, schema_change FROM dolt_diff WHERE table_name = 'empty_t' ORDER BY message);" \
+  "create_empty|0|1,drop_empty|0|1" "$DB18"
+
+echo "CREATE TABLE empty_working(id INTEGER PRIMARY KEY);" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "diff_empty_table_working" \
+  "SELECT data_change || '|' || schema_change FROM dolt_diff WHERE commit_hash='WORKING' AND table_name='empty_working';" \
+  "0|1" "$DB18"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish
