@@ -4,6 +4,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "prolly_diff.h"
+#include "prolly_cursor.h"
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
@@ -248,6 +249,19 @@ static int loadIndexSchemaRows(
                                ppRows, pnRows);
 }
 
+static int diffRootHasRows(sqlite3 *db, const ProllyHash *pRoot, u8 *pHasRows){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  u64 n = 0;
+  int rc;
+  *pHasRows = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
+  rc = prollySubtreeCount(cs, pCache, pRoot, &n);
+  if( rc==SQLITE_OK ) *pHasRows = n>0;
+  return rc;
+}
+
 static int diffFilteredTableRoots(
   DoltliteDiffCursor *pCur,
   sqlite3 *db,
@@ -288,7 +302,12 @@ static int diffFilteredTableRoots(
   if( !childFound && !parentFound ) return SQLITE_OK;
 
   if( !childFound || !parentFound ){
-    return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit, 1, 1);
+    u8 dataChange;
+    rc = diffRootHasRows(db, childFound ? &childRoot : &parentRoot,
+                         &dataChange);
+    if( rc!=SQLITE_OK ) return rc;
+    return batchAppend(pCur, zHex, pCur->zFilterTable, pCommit,
+                       dataChange, 1);
   }
   {
     u8 dataChange = prollyHashCompare(&childRoot, &parentRoot)!=0;
@@ -327,6 +346,7 @@ static int diffCatalogPairOne(
   struct TableEntry *p;
   u8 dataChange;
   u8 schemaChange;
+  int rc;
 
   if( !pCur->zFilterTable ) return SQLITE_OK;
 
@@ -337,7 +357,6 @@ static int diffCatalogPairOne(
     struct TableEntry *pOldMaster;
     int hasDiff;
     int oldHas;
-    int rc;
 
     memset(&emptyRoot, 0, sizeof(emptyRoot));
     pNewMaster = doltliteFindTableByNumber(aChild, nChild, 1);
@@ -362,7 +381,8 @@ static int diffCatalogPairOne(
   if( !e && !p ) return SQLITE_OK;
 
   if( !p || !e ){
-    dataChange = 1;
+    rc = diffRootHasRows(db, e ? &e->root : &p->root, &dataChange);
+    if( rc!=SQLITE_OK ) return rc;
     schemaChange = 1;
   }else{
     dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
@@ -432,7 +452,8 @@ static int diffCatalogPair(
     }
     p = diffNameIndexFind(&parentIdx, e->zName);
     if( !p ){
-      dataChange = 1;
+      rc = diffRootHasRows(db, &e->root, &dataChange);
+      if( rc!=SQLITE_OK ) goto diff_done;
       schemaChange = 1;
     }else{
       dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
@@ -449,9 +470,12 @@ static int diffCatalogPair(
   }
   for(i=0; i<nParent; i++){
     struct TableEntry *p = &aParent[i];
+    u8 dataChange;
     if( !p->zName ) continue;
     if( diffNameIndexFind(&childIdx, p->zName) ) continue;
-    rc = batchAppend(pCur, zHex, p->zName, pCommit, 1, 1);
+    rc = diffRootHasRows(db, &p->root, &dataChange);
+    if( rc!=SQLITE_OK ) goto diff_done;
+    rc = batchAppend(pCur, zHex, p->zName, pCommit, dataChange, 1);
     if( rc!=SQLITE_OK ) goto diff_done;
   }
 diff_done:

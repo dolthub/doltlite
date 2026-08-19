@@ -989,6 +989,18 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'ix_only');
 "
 
+oracle_summary "summary_empty_table_create_drop" "
+CREATE TABLE baseline(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'baseline');
+CREATE TABLE empty_t(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'create_empty');
+DROP TABLE empty_t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_empty');
+"
+
 oracle_summary_filter_name "summary_filter_index_only_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
