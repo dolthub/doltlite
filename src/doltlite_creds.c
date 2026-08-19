@@ -335,6 +335,21 @@ char *doltliteCredsToJwk(const DoltliteCreds *c) {
   return json;
 }
 
+char *doltliteCredsToPublicJwk(const DoltliteCreds *c) {
+  char *x = doltliteBase64UrlEncode(c->pub, DOLTLITE_PUBKEY_LEN);
+  char *json = NULL;
+  if (x) {
+    size_t n = strlen(x) + 48;
+    json = (char *)sqlite3_malloc(n);
+    if (json) {
+      snprintf(json, n,
+               "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"%s\"}", x);
+    }
+  }
+  sqlite3_free(x);
+  return json;
+}
+
 static const char *jsonSkipWs(const char *p){
   while( p && (*p==' ' || *p=='\t' || *p=='\r' || *p=='\n') ) p++;
   return p;
@@ -601,7 +616,8 @@ static char *credsFilePath(const char *dir, const char *kid) {
   return path;
 }
 
-int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
+static int credsSaveJwk(const DoltliteCreds *c, const char *dir,
+                        int publicOnly) {
   char *owned = NULL;
   char *kid = NULL;
   char *path = NULL;
@@ -619,13 +635,22 @@ int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
   if (!kid) goto done;
   path = credsFilePath(dir, kid);
   if (!path) goto done;
-  json = doltliteCredsToJwk(c);
+  json = publicOnly ? doltliteCredsToPublicJwk(c) : doltliteCredsToJwk(c);
   if (!json) goto done;
 
   {
     size_t len = strlen(json);
 #ifdef _WIN32
-    FILE *f = fopen(path, "wb");
+    FILE *existing = NULL;
+    FILE *f;
+    if (publicOnly) {
+      existing = fopen(path, "rb");
+      if (existing) {
+        fclose(existing);
+        goto done;
+      }
+    }
+    f = fopen(path, "wb");
     if (!f) goto done;
     if (fwrite(json, 1, len, f) != len) {
       fclose(f);
@@ -634,7 +659,8 @@ int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
     if (fclose(f) != 0) goto done;
 #else
     size_t off = 0;
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int flags = O_WRONLY | O_CREAT | (publicOnly ? O_EXCL : O_TRUNC);
+    int fd = open(path, flags, 0600);
     if (fd < 0) goto done;
     (void)fchmod(fd, 0600);
     while (off < len) {
@@ -657,6 +683,14 @@ done:
   sqlite3_free(kid);
   sqlite3_free(owned);
   return rc;
+}
+
+int doltliteCredsSave(const DoltliteCreds *c, const char *dir) {
+  return credsSaveJwk(c, dir, 0);
+}
+
+int doltliteCredsSavePublic(const DoltliteCreds *c, const char *dir) {
+  return credsSaveJwk(c, dir, 1);
 }
 
 int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out) {
@@ -882,8 +916,12 @@ int doltliteCredsLoadPubKey(const char *dir, const char *kid,
   char *path = NULL;
   FILE *f = NULL;
   char *json = NULL;
+  char *kty = NULL;
+  char *crv = NULL;
   char *xstr = NULL;
+  char *derivedKid = NULL;
   unsigned char *raw = NULL;
+  unsigned char kidRaw[DOLTLITE_KID_RAW_LEN];
   size_t rawlen = 0;
   long sz;
   int rc = 1;
@@ -907,10 +945,18 @@ int doltliteCredsLoadPubKey(const char *dir, const char *kid,
   if (fread(json, 1, (size_t)sz, f) != (size_t)sz) goto done;
   json[sz] = '\0';
 
+  if (credsJsonObjectValue(json, "d")) goto done;
+  kty = jsonFindString(json, "kty");
+  crv = jsonFindString(json, "crv");
+  if (!kty || strcmp(kty, "OKP") != 0) goto done;
+  if (!crv || strcmp(crv, "Ed25519") != 0) goto done;
   xstr = jsonFindString(json, "x");
   if (!xstr) goto done;
   if (doltliteBase64UrlDecode(xstr, &raw, &rawlen)) goto done;
   if (rawlen != DOLTLITE_PUBKEY_LEN) goto done;
+  doltliteSha512_224(raw, rawlen, kidRaw);
+  derivedKid = doltliteBase32Encode(kidRaw, sizeof(kidRaw));
+  if (!derivedKid || strcmp(derivedKid, kid) != 0) goto done;
   memcpy(pub, raw, DOLTLITE_PUBKEY_LEN);
   rc = 0;
 
@@ -919,8 +965,40 @@ done:
   sqlite3_free(json);
   sqlite3_free(path);
   sqlite3_free(owned);
+  sqlite3_free(kty);
+  sqlite3_free(crv);
   sqlite3_free(xstr);
+  sqlite3_free(derivedKid);
   sqlite3_free(raw);
+  return rc;
+}
+
+int doltliteCredsValidateAuthDir(const char *dir) {
+  DirIter it;
+  const char *name;
+  int rc = 0;
+
+  if (!dir || dirOpen(&it, dir)) return 1;
+  while ((name = dirNext(&it)) != NULL) {
+    size_t n = strlen(name);
+    char *kid;
+    unsigned char pub[DOLTLITE_PUBKEY_LEN];
+    if (!(n > 4 && strcmp(name + n - 4, ".jwk") == 0)) continue;
+    kid = (char *)sqlite3_malloc(n - 4 + 1);
+    if (!kid) {
+      rc = 1;
+      break;
+    }
+    memcpy(kid, name, n - 4);
+    kid[n - 4] = '\0';
+    if (!credsKidValid(kid) || doltliteCredsLoadPubKey(dir, kid, pub) != 0) {
+      rc = 1;
+      sqlite3_free(kid);
+      break;
+    }
+    sqlite3_free(kid);
+  }
+  dirClose(&it);
   return rc;
 }
 

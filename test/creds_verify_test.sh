@@ -10,7 +10,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 BIN="${DOLTLITE_CREDS_VERIFY_BIN:-$TMP/creds_verify_kat}"
-mkdir -p "$TMP/authkeys" "$TMP/empty" "$TMP/outside"
+mkdir -p "$TMP/authkeys" "$TMP/empty" "$TMP/outside" "$TMP/mismatch"
 
 echo "=== doltlite credential-verify KAT ==="
 if [ -z "${DOLTLITE_CREDS_VERIFY_BIN:-}" ]; then
@@ -39,4 +39,4 @@ if [ ! -x "$BIN" ]; then
   exit 1
 fi
 
-"$BIN" "$TMP/authkeys" "$TMP/empty" "$TMP/outside"
+"$BIN" "$TMP/authkeys" "$TMP/empty" "$TMP/outside" "$TMP/mismatch"

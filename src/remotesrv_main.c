@@ -8,6 +8,7 @@
 #else
 #include <unistd.h>
 #endif
+#include "doltlite_creds.h"
 #include "doltlite_remotesrv.h"
 #include "doltlite_parse.h"
 
@@ -24,7 +25,8 @@ static void usage(const char *prog){
     "  --cert FILE     PEM certificate chain (enables TLS; requires --key)\n"
     "  --key FILE      PEM private key (requires --cert)\n"
     "  --auth-keys DIR Require a bearer credential; authorized public keys are\n"
-    "                  <kid>.jwk files in DIR. Omitted, requests are\n"
+    "                  <kid>.jwk files from dolt_creds('export', ...).\n"
+    "                  Omitted, requests are\n"
     "                  unauthenticated and may read and push.\n"
     "  --audience AUD  Expected JWT audience (required with --auth-keys)\n"
     "  --timeout-ms MS Connection I/O timeout (default: 30000)\n"
@@ -101,6 +103,12 @@ int main(int argc, char **argv){
   }
   if( o.authKeysDir && (!o.audience || !o.audience[0]) ){
     fprintf(stderr, "Error: --audience is required with --auth-keys\n");
+    return 1;
+  }
+  if( o.authKeysDir && doltliteCredsValidateAuthDir(o.authKeysDir)!=0 ){
+    fprintf(stderr,
+      "Error: --auth-keys must contain only public JWK files created by "
+      "dolt_creds('export', ...)\n");
     return 1;
   }
   signal(SIGINT, onSignal);

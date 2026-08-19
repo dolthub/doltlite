@@ -7,7 +7,13 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 CC="${CC:-cc}"
 TMP=$(mktemp -d)
 SRV_PID=""
+PRIVATE_PID=""
 cleanup() {
+  if [ -n "$PRIVATE_PID" ]; then
+    kill "$PRIVATE_PID" 2>/dev/null || true
+    wait "$PRIVATE_PID" 2>/dev/null || true
+    PRIVATE_PID=""
+  fi
   if [ -n "$SRV_PID" ]; then
     kill "$SRV_PID" 2>/dev/null || true
     wait "$SRV_PID" 2>/dev/null || true
@@ -44,9 +50,30 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -keyout /dev/null -out "$TMP/other_ca.pem" -subj "/CN=other" >/dev/null 2>&1
 
-mkdir -p "$TMP/cc" "$TMP/cc_unauth" "$TMP/empty" "$TMP/authkeys" "$TMP/srv" "$TMP/srv2"
+mkdir -p "$TMP/cc" "$TMP/cc_unauth" "$TMP/empty" "$TMP/authkeys" \
+  "$TMP/private_authkeys" "$TMP/srv" "$TMP/srv2"
 DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/throwaway.db" "SELECT dolt_creds_new();" >/dev/null 2>&1
-cp "$TMP"/cc/*.jwk "$TMP/authkeys/" 2>/dev/null || { echo "FAIL: no credential generated"; exit 1; }
+private_jwk=$(find "$TMP/cc" -maxdepth 1 -name '*.jwk' -print | head -1)
+[ -n "$private_jwk" ] || { echo "FAIL: no credential generated"; exit 1; }
+kid=$(basename "$private_jwk" .jwk)
+cp "$private_jwk" "$TMP/private_authkeys/"
+"$REMOTESRV" --cert "$TMP/cert.pem" --key "$TMP/key.pem" \
+  --auth-keys "$TMP/private_authkeys" --audience localhost \
+  -p 0 --bind 127.0.0.1 "$TMP/srv" >"$TMP/private.log" 2>&1 &
+PRIVATE_PID=$!
+sleep 0.5
+if kill -0 "$PRIVATE_PID" 2>/dev/null; then
+  kill "$PRIVATE_PID" 2>/dev/null || true
+  wait "$PRIVATE_PID" 2>/dev/null || true
+  echo "FAIL: server accepted a private credential in --auth-keys"
+  exit 1
+fi
+wait "$PRIVATE_PID" 2>/dev/null || true
+PRIVATE_PID=""
+DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
+  "SELECT dolt_creds('export','$kid','$TMP/authkeys');" >/dev/null 2>&1 || {
+  echo "FAIL: public credential export failed"; exit 1;
+}
 DOLTLITE_CREDS_DIR="$TMP/cc_unauth" "$DOLTLITE" "$TMP/throwaway2.db" "SELECT dolt_creds_new();" >/dev/null 2>&1
 
 "$REMOTESRV" --cert "$TMP/cert.pem" --key "$TMP/key.pem" \

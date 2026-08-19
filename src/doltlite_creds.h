@@ -50,10 +50,12 @@ int doltliteCredsBearerTokenAt(const DoltliteCreds *cred, const char *audience,
                                long iat, char **jwtOut);
 
 char *doltliteCredsToJwk(const DoltliteCreds *cred);
+char *doltliteCredsToPublicJwk(const DoltliteCreds *cred);
 int doltliteCredsFromJwk(const char *json, DoltliteCreds **out);
 
 char *doltliteCredsDir(void);
 int doltliteCredsSave(const DoltliteCreds *cred, const char *dir);
+int doltliteCredsSavePublic(const DoltliteCreds *cred, const char *dir);
 int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out);
 int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out);
 
@@ -64,6 +66,7 @@ int doltliteCredsRemove(const char *dir, const char *kid);
 
 int doltliteCredsLoadPubKey(const char *dir, const char *kid,
                             unsigned char pub[DOLTLITE_PUBKEY_LEN]);
+int doltliteCredsValidateAuthDir(const char *dir);
 
 int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudience,
                               const char *authKeysDir, long now, char **kidOut);
