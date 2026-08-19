@@ -14,7 +14,6 @@ if [ -n "$VC_PERF_BASELINE" ] && [ ! -x "$VC_PERF_BASELINE" ]; then
   echo "baseline doltlite binary not found: $VC_PERF_BASELINE" >&2
   exit 1
 fi
-FIXTURE_DOLTLITE="${VC_PERF_BASELINE:-$DOLTLITE}"
 VC_PERF_BASELINE_LABEL="${VC_PERF_BASELINE_LABEL:-PR base}"
 VC_PERF_CANDIDATE_LABEL="${VC_PERF_CANDIDATE_LABEL:-PR candidate}"
 
@@ -51,13 +50,15 @@ PYEOF
 run_sql() {
   local db="$1"
   local sql="$2"
-  printf '%s\n' "$sql" | "$FIXTURE_DOLTLITE" "$db" >/dev/null
+  local bin="$3"
+  printf '%s\n' "$sql" | "$bin" "$db" >/dev/null
 }
 
 run_sql_file() {
   local db="$1"
   local file="$2"
-  "$FIXTURE_DOLTLITE" "$db" < "$file" >/dev/null
+  local bin="$3"
+  "$bin" "$db" < "$file" >/dev/null
 }
 
 remove_sample_db() {
@@ -105,13 +106,15 @@ make_many_tables_db() {
   local db="$1"
   local n="$2"
   local rows="$3"
+  local bin="$4"
   local sql="$TMPDIR/many_${n}_${rows}.sql"
   write_many_tables_sql "$sql" "$n" "$rows"
-  run_sql_file "$db" "$sql"
+  run_sql_file "$db" "$sql" "$bin"
 }
 
 make_branch_db() {
   local db="$1"
+  local bin="$2"
   {
     echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     echo "INSERT INTO t VALUES(1,'base');"
@@ -120,11 +123,12 @@ make_branch_db() {
       echo "SELECT dolt_branch('b$i');"
     done
   } > "$TMPDIR/branches.sql"
-  run_sql_file "$db" "$TMPDIR/branches.sql"
+  run_sql_file "$db" "$TMPDIR/branches.sql" "$bin"
 }
 
 make_merge_data_db() {
   local db="$1"
+  local bin="$2"
   run_sql "$db" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t(id,v) $(cte 1 "$MERGE_ROWS") SELECT i, 'base_' || i FROM c;
@@ -136,11 +140,12 @@ SELECT dolt_commit('-A','-m','feat');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_' || id
   WHERE id BETWEEN $((MERGE_CHANGE_ROWS + 1)) AND $((MERGE_CHANGE_ROWS * 2));
-SELECT dolt_commit('-A','-m','main');"
+SELECT dolt_commit('-A','-m','main');" "$bin"
 }
 
 make_merge_schema_db() {
   local db="$1"
+  local bin="$2"
   run_sql "$db" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
@@ -153,11 +158,12 @@ CREATE INDEX idx_b_v ON b(v);
 SELECT dolt_commit('-A','-m','feat schema');
 SELECT dolt_checkout('main');
 CREATE INDEX idx_a_v ON a(v);
-SELECT dolt_commit('-A','-m','main schema');"
+SELECT dolt_commit('-A','-m','main schema');" "$bin"
 }
 
 make_merge_conflict_db() {
   local db="$1"
+  local bin="$2"
   run_sql "$db" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t(id,v) $(cte 1 "$MERGE_ROWS") SELECT i, 'base_' || i FROM c;
@@ -168,40 +174,37 @@ UPDATE t SET v='feat_' || id WHERE id BETWEEN 1 AND $MERGE_CHANGE_ROWS;
 SELECT dolt_commit('-A','-m','feat');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_' || id WHERE id BETWEEN 1 AND $MERGE_CHANGE_ROWS;
-SELECT dolt_commit('-A','-m','main');"
+SELECT dolt_commit('-A','-m','main');" "$bin"
 }
 
+# Build the seed databases with |bin| into |dest|. Paired PR runs must not
+# share a seed: a candidate that changes on-disk layout (for example writing
+# a WAL index checkpoint on close) would otherwise pay that cost on a
+# baseline-produced file, which is an upgrade path, not steady-state VC.
 prepare_fixtures() {
-  echo "Preparing version-control benchmark fixtures..." >&2
+  local dest="$1"
+  local bin="$2"
+  echo "Preparing version-control benchmark fixtures in $dest with $bin" >&2
+  mkdir -p "$dest"
 
-  MANY_CLEAN="$TMPDIR/many_clean.db"
-  make_many_tables_db "$MANY_CLEAN" "$TABLES" "$ROWS_PER_TABLE"
+  make_many_tables_db "$dest/many_clean.db" "$TABLES" "$ROWS_PER_TABLE" "$bin"
 
-  MANY_DATA="$TMPDIR/many_data.db"
-  cp "$MANY_CLEAN" "$MANY_DATA"
+  cp "$dest/many_clean.db" "$dest/many_data.db"
   write_modify_tables_sql "$TMPDIR/dirty_data.sql" 1 $((TABLES < 40 ? TABLES : 40)) 0
-  run_sql_file "$MANY_DATA" "$TMPDIR/dirty_data.sql"
+  run_sql_file "$dest/many_data.db" "$TMPDIR/dirty_data.sql" "$bin"
 
-  MANY_SCHEMA="$TMPDIR/many_schema.db"
-  cp "$MANY_CLEAN" "$MANY_SCHEMA"
+  cp "$dest/many_clean.db" "$dest/many_schema.db"
   write_modify_tables_sql "$TMPDIR/dirty_schema.sql" 1 $((TABLES < 20 ? TABLES : 20)) 1
-  run_sql_file "$MANY_SCHEMA" "$TMPDIR/dirty_schema.sql"
+  run_sql_file "$dest/many_schema.db" "$TMPDIR/dirty_schema.sql" "$bin"
 
-  BRANCH_DB="$TMPDIR/branches.db"
-  make_branch_db "$BRANCH_DB"
+  make_branch_db "$dest/branches.db" "$bin"
 
-  CHECKOUT_DB="$TMPDIR/checkout.db"
-  make_many_tables_db "$CHECKOUT_DB" "$CHECKOUT_TABLES" "$CHECKOUT_ROWS_PER_TABLE"
-  run_sql "$CHECKOUT_DB" "SELECT dolt_branch('feat');"
+  make_many_tables_db "$dest/checkout.db" "$CHECKOUT_TABLES" "$CHECKOUT_ROWS_PER_TABLE" "$bin"
+  run_sql "$dest/checkout.db" "SELECT dolt_branch('feat');" "$bin"
 
-  MERGE_DATA_DB="$TMPDIR/merge_data.db"
-  make_merge_data_db "$MERGE_DATA_DB"
-
-  MERGE_SCHEMA_DB="$TMPDIR/merge_schema.db"
-  make_merge_schema_db "$MERGE_SCHEMA_DB"
-
-  MERGE_CONFLICT_DB="$TMPDIR/merge_conflict.db"
-  make_merge_conflict_db "$MERGE_CONFLICT_DB"
+  make_merge_data_db "$dest/merge_data.db" "$bin"
+  make_merge_schema_db "$dest/merge_schema.db" "$bin"
+  make_merge_conflict_db "$dest/merge_conflict.db" "$bin"
 }
 
 failures=0
@@ -230,23 +233,25 @@ time_sql() {
 
 bench_sql() {
   local name="$1"
-  local seed="$2"
+  local seed_name="$2"
   local sql="$3"
   local ceiling="$4"
   local allow_error="${5:-0}"
   local candidate_vals=()
   local baseline_vals=()
   local candidate_db baseline_db candidate_us baseline_us out err
+  local candidate_seed="$CANDIDATE_FIXTURE_DIR/$seed_name"
+  local baseline_seed="$BASELINE_FIXTURE_DIR/$seed_name"
 
   for ((r=1; r<=RUNS; r++)); do
     candidate_db="$TMPDIR/${name}_candidate_${r}.db"
-    cp "$seed" "$candidate_db"
+    cp "$candidate_seed" "$candidate_db"
     out="$TMPDIR/${name}_candidate_${r}.out"
     err="$TMPDIR/${name}_candidate_${r}.err"
 
     if [ -n "$VC_PERF_BASELINE" ]; then
       baseline_db="$TMPDIR/${name}_baseline_${r}.db"
-      cp "$seed" "$baseline_db"
+      cp "$baseline_seed" "$baseline_db"
       if [ $((r % 2)) -eq 1 ]; then
         if ! baseline_us=$(time_sql "$VC_PERF_BASELINE" "$baseline_db" \
             "$sql" "$TMPDIR/${name}_baseline_${r}.out" \
@@ -371,33 +376,40 @@ else
   IO_PROBE_NOTE="unavailable (probe IO error; ceilings unscaled)"
 fi
 
-prepare_fixtures
+CANDIDATE_FIXTURE_DIR="$TMPDIR/candidate-fixtures"
+prepare_fixtures "$CANDIDATE_FIXTURE_DIR" "$DOLTLITE"
+if [ -n "$VC_PERF_BASELINE" ]; then
+  BASELINE_FIXTURE_DIR="$TMPDIR/baseline-fixtures"
+  prepare_fixtures "$BASELINE_FIXTURE_DIR" "$VC_PERF_BASELINE"
+else
+  BASELINE_FIXTURE_DIR="$CANDIDATE_FIXTURE_DIR"
+fi
 
-bench_sql "status_clean_many_tables" "$MANY_CLEAN" \
+bench_sql "status_clean_many_tables" "many_clean.db" \
   "SELECT count(*) FROM dolt_status;" 130
-bench_sql "status_dirty_many_tables" "$MANY_DATA" \
+bench_sql "status_dirty_many_tables" "many_data.db" \
   "SELECT count(*) FROM dolt_status;" 130
-bench_sql "diff_regular_working_one_table" "$MANY_DATA" \
+bench_sql "diff_regular_working_one_table" "many_data.db" \
   "SELECT count(*) FROM dolt_diff_t0001 WHERE to_commit='WORKING';" 120
-bench_sql "diff_regular_working_many_tables" "$MANY_DATA" \
+bench_sql "diff_regular_working_many_tables" "many_data.db" \
   "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND data_change=1;" 140
-bench_sql "diff_stat_working_many_tables" "$MANY_DATA" \
+bench_sql "diff_stat_working_many_tables" "many_data.db" \
   "SELECT count(*), coalesce(sum(data_change),0) FROM dolt_diff WHERE commit_hash='WORKING';" 140
-bench_sql "diff_schema_working_many_tables" "$MANY_SCHEMA" \
+bench_sql "diff_schema_working_many_tables" "many_schema.db" \
   "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND schema_change=1;" 140
-bench_sql "branch_list_many_branches" "$BRANCH_DB" \
+bench_sql "branch_list_many_branches" "branches.db" \
   "SELECT count(*) FROM dolt_branches;" 35
-bench_sql "branch_create_delete" "$BRANCH_DB" \
+bench_sql "branch_create_delete" "branches.db" \
   "SELECT dolt_branch('tmp_perf'); SELECT dolt_branch('-D','tmp_perf');" 40
-bench_sql "checkout_branch_clean" "$CHECKOUT_DB" \
+bench_sql "checkout_branch_clean" "checkout.db" \
   "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 150
-bench_sql "merge_data_no_conflicts" "$MERGE_DATA_DB" \
+bench_sql "merge_data_no_conflicts" "merge_data.db" \
   "SELECT dolt_merge('feat');" 50
-bench_sql "merge_schema_no_conflicts" "$MERGE_SCHEMA_DB" \
+bench_sql "merge_schema_no_conflicts" "merge_schema.db" \
   "SELECT dolt_merge('feat');" 35
-bench_sql "merge_data_conflicts" "$MERGE_CONFLICT_DB" \
+bench_sql "merge_data_conflicts" "merge_conflict.db" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT count(*) FROM dolt_conflicts_t; ROLLBACK;" 180 1
-bench_sql "merge_data_conflicts_with_resolve" "$MERGE_CONFLICT_DB" \
+bench_sql "merge_data_conflicts_with_resolve" "merge_conflict.db" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT count(*) FROM dolt_conflicts; ROLLBACK;" 180 1
 
 if [ -n "${VC_PERF_RESULTS_OUTPUT:-}" ]; then
@@ -415,6 +427,7 @@ if [ -n "$VC_PERF_BASELINE" ]; then
 ## Version-Control Performance: $VC_PERF_CANDIDATE_LABEL vs $VC_PERF_BASELINE_LABEL
 
 Runs: median of $RUNS paired executions per benchmark, excluding fixture setup.
+Each binary builds its own seed databases; timed runs copy those seeds.
 Execution order alternates between baseline and candidate on each repetition.
 IO probe: ${IO_PROBE_NOTE}.
 
