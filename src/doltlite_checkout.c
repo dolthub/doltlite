@@ -363,6 +363,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( !bSavepoint || p->bPersistUnderSavepoint ){
     rc = doltlitePersistWorkingSetWithHash(db, &p->targetCatHash);
     if( rc!=SQLITE_OK ) return rc;
+    /* The target branch is durable now, so it is what a rollback returns to.
+    ** Keeping the branch we left as the baseline reinstates its catalog --
+    ** its tables, under this branch. */
+    doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
   }
 
   if( p->haveOldState && !p->savedWasDetached ){
