@@ -222,19 +222,56 @@ int mergeCatalogPass2(
   return SQLITE_OK;
 }
 
-/* If zTable is a derived shadow (%_idx, %_meta, %_model, %_config) of a
-** vec1 virtual table whose %_base still holds raw vectors, return the
-** malloc'd owner name; else NULL. Uncompressed builds store bucket
-** numbers in %_base instead of vectors, so auto-resolving their index
-** conflicts would silently lose the discarded side's vectors — those
-** stay loud. %_base itself is authoritative and is never derived. */
-static char *mergeVec1DerivedShadowOwner(sqlite3 *db, const char *zTable){
-  static const char *azSuffix[] = { "_idx", "_meta", "_model", "_config" };
+/* Is this fts table contentless? Such a table has no authoritative copy of
+** the indexed text -- the index IS the data -- so nothing can regenerate a
+** discarded side, and fts5 refuses 'rebuild' on one outright. */
+static int mergeFtsIsContentless(Table *pTab){
+  int i;
+  for(i=3; i<pTab->u.vtab.nArg; i++){
+    const char *z = pTab->u.vtab.azArg[i];
+    const char *zEq;
+    if( !z ) continue;
+    while( *z==' ' ) z++;
+    if( sqlite3_strnicmp(z, "content", 7)!=0 ) continue;
+    zEq = &z[7];
+    while( *zEq==' ' ) zEq++;
+    if( *zEq!='=' ) continue;
+    zEq++;
+    while( *zEq==' ' ) zEq++;
+    /* content='' names no table; content='x' names an authoritative one. */
+    if( (zEq[0]=='\'' && zEq[1]=='\'') || (zEq[0]=='"' && zEq[1]=='"')
+     || zEq[0]==0 ){
+      return 1;
+    }
+    return 0;
+  }
+  return 0;
+}
+
+/* Classify zTable as a derived shadow of a virtual table: a shadow holding
+** state that is regenerated from data living elsewhere. Returns the malloc'd
+** owner name and sets *pbRebuildable to whether that regeneration is actually
+** possible. A shadow that is itself authoritative (%_content, %_base) is not
+** derived and is never reported here -- a conflict there is a conflict in the
+** data, which stays loud. */
+static char *mergeDerivedShadowOwner(
+  sqlite3 *db,
+  const char *zTable,
+  int *pbRebuildable
+){
+  static const char *azSuffix[] = {
+    /* vec1 */   "_idx", "_meta", "_model", "_config",
+    /* fts5 */   "_data", "_docsize",
+    /* fts3/4 */ "_segments", "_segdir", "_stat",
+    /* rtree */  "_node", "_parent", "_rowid"
+  };
   unsigned int i;
   size_t nTable = strlen(zTable);
 
+  *pbRebuildable = 0;
   for(i=0; i<sizeof(azSuffix)/sizeof(azSuffix[0]); i++){
     size_t nSfx = strlen(azSuffix[i]);
+    const char *zModule;
     char *zOwner;
     Table *pTab;
     if( nTable<=nSfx || strcmp(&zTable[nTable-nSfx], azSuffix[i])!=0 ){
@@ -243,15 +280,45 @@ static char *mergeVec1DerivedShadowOwner(sqlite3 *db, const char *zTable){
     zOwner = sqlite3_mprintf("%.*s", (int)(nTable-nSfx), zTable);
     if( !zOwner ) return 0;
     pTab = sqlite3FindTable(db, zOwner, "main");
-    if( pTab && IsVirtual(pTab)
-     && pTab->u.vtab.nArg>0
-     && sqlite3_stricmp(pTab->u.vtab.azArg[0], "vec1")==0
-     && sqlite3IsShadowTableOf(db, pTab, zTable) ){
+    if( !pTab || !IsVirtual(pTab) || pTab->u.vtab.nArg<=0
+     || !sqlite3IsShadowTableOf(db, pTab, zTable) ){
+      sqlite3_free(zOwner);
+      return 0;
+    }
+    zModule = pTab->u.vtab.azArg[0];
+
+    if( sqlite3_stricmp(zModule, "fts5")==0
+     || sqlite3_stricmp(zModule, "fts4")==0
+     || sqlite3_stricmp(zModule, "fts3")==0 ){
+      /* The merged content is authoritative, so a rebuild regenerates the
+      ** index over both sides' rows. Contentless has no such content. */
+      *pbRebuildable = !mergeFtsIsContentless(pTab);
+      return zOwner;
+    }
+    if( sqlite3_stricmp(zModule, "rtree")==0
+     || sqlite3_stricmp(zModule, "rtree_i32")==0 ){
+      /* An r-tree keeps its coordinates in %_node and offers no rebuild, so
+      ** a conflicting node is a conflict in the data itself. */
+      *pbRebuildable = 0;
+      return zOwner;
+    }
+    if( sqlite3_stricmp(zModule, "vec1")!=0 ){
+      sqlite3_free(zOwner);
+      return 0;
+    }
+    {
       /* Eligible only when %_base still holds raw vectors AND the stored
       ** model the rebuild depends on is present: vec1 treats a NULL
       ** rebuild argument as "keep the current model" and proceeds on
       ** cached state, so a missing model row would let the merge commit
       ** a stale index instead of failing. */
+      /* Eligible only when %_base still holds raw vectors AND the stored
+      ** model the rebuild depends on is present: vec1 treats a NULL
+      ** rebuild argument as "keep the current model" and proceeds on
+      ** cached state, so a missing model row would let the merge commit
+      ** a stale index instead of failing. Uncompressed builds store bucket
+      ** numbers in %_base instead of vectors, so auto-resolving their index
+      ** conflicts would silently lose the discarded side's vectors. */
       char *zQry = sqlite3_mprintf(
           "SELECT (SELECT count(*) FROM \"%w_base\""
           "         WHERE typeof(vector)!='blob')=0"
@@ -266,10 +333,15 @@ static char *mergeVec1DerivedShadowOwner(sqlite3 *db, const char *zTable){
       }
       sqlite3_finalize(pStmt);
       sqlite3_free(zQry);
-      if( bEligible ) return zOwner;
+      if( bEligible ){
+        *pbRebuildable = 1;
+        return zOwner;
+      }
+      /* An ineligible vec1 shadow keeps its conflicts resolvable, which is
+      ** this module's existing contract; it is not reported as derived. */
+      sqlite3_free(zOwner);
+      return 0;
     }
-    sqlite3_free(zOwner);
-    return 0;
   }
   return 0;
 }
@@ -287,7 +359,8 @@ int mergeFilterDerivedShadowConflicts(
   int *pnConflictTables,
   int *pTotalConflicts,
   char ***pazRebuild,
-  int *pnRebuild
+  int *pnRebuild,
+  char **pzRefuse
 ){
   int i, j, rc = SQLITE_OK;
   char **azOwner = 0;
@@ -297,10 +370,25 @@ int mergeFilterDerivedShadowConflicts(
   memset(azOwner, 0, (*pnConflictTables)*sizeof(char*));
 
   for(i=0; i<*pnConflictTables; i++){
+    int bRebuildable = 0;
     if( aConflictTables[i].nSchemaObjects>0
      || aConflictTables[i].nConflicts<=0
-     || (azOwner[i] = mergeVec1DerivedShadowOwner(
-            db, aConflictTables[i].zName))==0 ){
+     || (azOwner[i] = mergeDerivedShadowOwner(
+            db, aConflictTables[i].zName, &bRebuildable))==0 ){
+      doltliteFreeNameList(azOwner, *pnConflictTables);
+      return SQLITE_OK;
+    }
+    if( !bRebuildable ){
+      /* Neither resolution can be right: the discarded side's rows are gone
+      ** from an index nothing can regenerate, and committing either one puts
+      ** an index that disagrees with its own table into history. Refuse. */
+      if( pzRefuse && *pzRefuse==0 ){
+        *pzRefuse = sqlite3_mprintf(
+            "cannot merge: '%s' indexes data that cannot be rebuilt from the "
+            "merged rows, and both sides changed it. Merge on one branch, or "
+            "drop and recreate '%s' after merging",
+            azOwner[i], azOwner[i]);
+      }
       doltliteFreeNameList(azOwner, *pnConflictTables);
       return SQLITE_OK;
     }

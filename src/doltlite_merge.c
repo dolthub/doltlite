@@ -1323,9 +1323,19 @@ int doltliteMergeCatalogs(
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   if( rc==SQLITE_OK && nConflictTables>0 && pazRebuildVtabs ){
+    char *zRefuse = 0;
     rc = mergeFilterDerivedShadowConflicts(db,
         aConflictTables, &nConflictTables, &totalConflicts,
-        pazRebuildVtabs, pnRebuildVtabs);
+        pazRebuildVtabs, pnRebuildVtabs, &zRefuse);
+    if( rc==SQLITE_OK && zRefuse ){
+      if( pzErrMsg ){
+        sqlite3_free(*pzErrMsg);
+        *pzErrMsg = zRefuse;
+      }else{
+        sqlite3_free(zRefuse);
+      }
+      rc = SQLITE_ERROR;
+    }
   }
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
