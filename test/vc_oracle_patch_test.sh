@@ -148,6 +148,38 @@ apply_bidirectional() {
   vc_oracle_assert_match "${name}_reverse" "$actual" "$base_fingerprint"
 }
 
+apply_forward() {
+  local name="$1" setup="$2" fingerprint_sql="$3"
+  local dir="$TMPROOT/apply_$name"
+  local db="$dir/db"
+  local target_fingerprint actual
+  mkdir -p "$dir"
+  if ! printf '%s\n' "$setup" | "$DOLTLITE" "$db" \
+      >"$dir/setup.out" 2>"$dir/setup.err"; then
+    vc_oracle_assert_match "${name}_setup" \
+      "setup failed: $(cat "$dir/setup.err")" "setup succeeded"
+    return
+  fi
+  if ! "$DOLTLITE" "$db" \
+      "SELECT statement FROM dolt_patch('base','target');" \
+      >"$dir/forward.sql" 2>"$dir/forward.err"; then
+    vc_oracle_assert_match "${name}_generation" \
+      "generation failed: $(cat "$dir/forward.err")" "generation succeeded"
+    return
+  fi
+  target_fingerprint=$("$DOLTLITE" "$db" "$fingerprint_sql" \
+    2>"$dir/target.err")
+  "$DOLTLITE" "$db" "SELECT dolt_reset('--hard','base');" >/dev/null
+  if "$DOLTLITE" "$db" <"$dir/forward.sql" \
+      >"$dir/forward.out" 2>"$dir/forward_apply.err"; then
+    actual=$("$DOLTLITE" "$db" "$fingerprint_sql" \
+      2>"$dir/forward_actual.err")
+  else
+    actual="apply failed: $(cat "$dir/forward_apply.err")"
+  fi
+  vc_oracle_assert_match "$name" "$actual" "$target_fingerprint"
+}
+
 basic_setup="
 CREATE TABLE t(pk INTEGER PRIMARY KEY, c1 TEXT, n INTEGER);
 INSERT INTO t VALUES (1,'one',10),(2,'two',20),(4,NULL,40);
@@ -725,6 +757,41 @@ SELECT dolt_tag('target');
 SELECT group_concat(pk||':'||v,',') FROM __doltlite_patch_1;
 SELECT group_concat(pk||':'||v||':'||n,',') FROM t;
 SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);
+"
+
+apply_bidirectional native_column_rename_with_view "
+CREATE TABLE t(k INTEGER PRIMARY KEY,a TEXT);
+CREATE VIEW v0 AS SELECT k FROM t;
+CREATE INDEX ix_a ON t(a);
+CREATE TRIGGER tr_a AFTER UPDATE OF a ON t BEGIN SELECT 1; END;
+INSERT INTO t VALUES(1,'a1'),(2,'a2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT * FROM t ORDER BY k;
+SELECT group_concat(type||':'||name||':'||sql,';') FROM (SELECT type,name,sql FROM sqlite_master WHERE tbl_name='t' OR name='v0' ORDER BY type,name);
+PRAGMA integrity_check;
+"
+
+apply_forward native_column_add_with_view "
+CREATE TABLE t(k INTEGER PRIMARY KEY,a TEXT);
+CREATE VIEW v0 AS SELECT k FROM t;
+CREATE INDEX ix_a ON t(a);
+CREATE TRIGGER tr_a AFTER UPDATE OF a ON t BEGIN SELECT 1; END;
+INSERT INTO t VALUES(1,'a1'),(2,'a2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+ALTER TABLE t ADD COLUMN b TEXT DEFAULT 'x';
+UPDATE t SET b='y' WHERE k=2;
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(k||':'||a||':'||b,',') FROM (SELECT * FROM t ORDER BY k);
+SELECT group_concat(type||':'||name||':'||sql,';') FROM (SELECT type,name,sql FROM sqlite_master WHERE tbl_name='t' OR name='v0' ORDER BY type,name);
+PRAGMA integrity_check;
 "
 
 

@@ -513,7 +513,7 @@ static int patchAppendDropObject(PatchCursor *pCur, const char *zTable,
   return rc;
 }
 
-static int patchAppendObjectDiffs(
+static int patchAppendObjectDrops(
   PatchCursor *pCur, const char *zTable,
   SchemaEntry *aFrom, int nFrom,
   SchemaEntry *aTo, int nTo
@@ -533,6 +533,15 @@ static int patchAppendObjectDiffs(
       if( rc!=SQLITE_OK ) return rc;
     }
   }
+  return SQLITE_OK;
+}
+
+static int patchAppendIndexCreates(
+  PatchCursor *pCur, const char *zTable,
+  SchemaEntry *aFrom, int nFrom,
+  SchemaEntry *aTo, int nTo
+){
+  int i, rc;
   for(i=0; i<nTo; i++){
     SchemaEntry *p = &aTo[i];
     SchemaEntry *q;
@@ -545,6 +554,18 @@ static int patchAppendObjectDiffs(
     }
   }
   return SQLITE_OK;
+}
+
+static int patchAppendObjectDiffs(
+  PatchCursor *pCur, const char *zTable,
+  SchemaEntry *aFrom, int nFrom,
+  SchemaEntry *aTo, int nTo
+){
+  int rc = patchAppendObjectDrops(pCur,zTable,aFrom,nFrom,aTo,nTo);
+  if( rc==SQLITE_OK ){
+    rc = patchAppendIndexCreates(pCur,zTable,aFrom,nFrom,aTo,nTo);
+  }
+  return rc;
 }
 
 /* Views never appear in the table walk: a view's tbl_name is the view
@@ -741,6 +762,181 @@ static int patchAppendRebuild(
 done:
   sqlite3_free(aUsed);
   sqlite3_free(zTemp);
+  return rc;
+}
+
+static const char *patchSchemaBodyEnd(const char *zBody){
+  const char *z = zBody;
+  int depth = 0;
+  while( *z ){
+    char c = *z;
+    if( c=='"' || c=='`' || c=='\'' ){
+      z++;
+      while( *z ){
+        if( *z==c ){
+          if( z[1]==c ){ z += 2; continue; }
+          z++;
+          break;
+        }
+        z++;
+      }
+    }else if( c=='[' ){
+      z++;
+      while( *z && *z!=']' ) z++;
+      if( *z ) z++;
+    }else{
+      if( c=='(' ) depth++;
+      if( c==')' && --depth==0 ) return z;
+      z++;
+    }
+  }
+  return 0;
+}
+
+static int patchSchemaItem(
+  const char *zSql,
+  int iWanted,
+  const char **pzItem,
+  int *pnItem
+){
+  const char *zBody = patchSchemaBody(zSql);
+  const char *zEnd;
+  const char *z;
+  const char *zItem;
+  int iItem = 0;
+  int depth = 0;
+  *pzItem = 0;
+  *pnItem = 0;
+  if( !zBody ) return SQLITE_CORRUPT;
+  zEnd = patchSchemaBodyEnd(zBody);
+  if( !zEnd ) return SQLITE_CORRUPT;
+  zItem = zBody + 1;
+  for(z=zItem; z<=zEnd; z++){
+    char c = *z;
+    if( z==zEnd || (c==',' && depth==0) ){
+      const char *zStart = zItem;
+      const char *zStop = z;
+      while( zStart<zStop && sqlite3Isspace(*zStart) ) zStart++;
+      while( zStop>zStart && sqlite3Isspace(zStop[-1]) ) zStop--;
+      if( zStop==zStart ) return SQLITE_CORRUPT;
+      if( iWanted<0 || iWanted==iItem ){
+        *pzItem = zStart;
+        *pnItem = (int)(zStop-zStart);
+        if( iWanted>=0 ) return SQLITE_OK;
+      }
+      iItem++;
+      zItem = z + 1;
+    }else if( c=='"' || c=='`' || c=='\'' ){
+      char q = c;
+      z++;
+      while( z<zEnd ){
+        if( *z==q ){
+          if( z+1<zEnd && z[1]==q ){ z++; }
+          else break;
+        }
+        z++;
+      }
+    }else if( c=='[' ){
+      while( z<zEnd && *z!=']' ) z++;
+    }else if( c=='(' ){
+      depth++;
+    }else if( c==')' ){
+      depth--;
+    }
+  }
+  return *pzItem ? SQLITE_OK : SQLITE_NOTFOUND;
+}
+
+static int patchNativeAlter(
+  const PatchTable *pTable,
+  const PatchSchema *pFrom,
+  const PatchSchema *pTo,
+  char **pzAlter
+){
+  sqlite3 *tmp = 0;
+  sqlite3_stmt *pStmt = 0;
+  char *zAlter = 0;
+  const char *zActual = 0;
+  int i, nDiff = 0, iDiff = -1;
+  int isCandidate = 0;
+  int rc = SQLITE_OK;
+  *pzAlter = 0;
+  if( strcmp(pTable->zFromName,pTable->zToName)!=0 ) return SQLITE_OK;
+  if( pFrom->col.nCol==pTo->col.nCol ){
+    for(i=0; i<pFrom->col.nCol; i++){
+      if( strcmp(pFrom->col.azName[i],pTo->col.azName[i])!=0 ){
+        nDiff++;
+        iDiff = i;
+      }
+    }
+    if( nDiff==1 ){
+      const char *zItem = 0;
+      int nItem = 0;
+      int nIdent = 0;
+      rc = patchSchemaItem(pTable->pToSchema->zSql,iDiff,&zItem,&nItem);
+      if( rc!=SQLITE_OK ) return rc;
+      if( zItem[0]=='"' || zItem[0]=='`' ){
+        char q = zItem[0];
+        for(nIdent=1; nIdent<nItem; nIdent++){
+          if( zItem[nIdent]==q ){
+            if( nIdent+1<nItem && zItem[nIdent+1]==q ){ nIdent++; continue; }
+            nIdent++;
+            break;
+          }
+        }
+      }else if( zItem[0]=='[' ){
+        for(nIdent=1; nIdent<nItem && zItem[nIdent-1]!=']'; nIdent++){}
+      }else{
+        while( nIdent<nItem && !sqlite3Isspace(zItem[nIdent])
+            && zItem[nIdent]!='(' && zItem[nIdent]!=',' ) nIdent++;
+      }
+      if( nIdent<=0 || nIdent>nItem ) return SQLITE_CORRUPT;
+      isCandidate = 1;
+      zAlter = sqlite3_mprintf(
+          "ALTER TABLE \"%w\" RENAME COLUMN \"%w\" TO %.*s",
+          pTable->zFromName,pFrom->col.azName[iDiff],nIdent,zItem);
+    }
+  }else if( pTo->col.nCol==pFrom->col.nCol+1 ){
+    const char *zItem = 0;
+    int nItem = 0;
+    for(i=0; i<pFrom->col.nCol; i++){
+      if( strcmp(pFrom->col.azName[i],pTo->col.azName[i])!=0 ) return SQLITE_OK;
+    }
+    rc = patchSchemaItem(pTable->pToSchema->zSql,-1,&zItem,&nItem);
+    if( rc!=SQLITE_OK ) return rc;
+    isCandidate = 1;
+    zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %.*s",
+                             pTable->zFromName,nItem,zItem);
+  }
+  if( !zAlter ) return isCandidate ? SQLITE_NOMEM : SQLITE_OK;
+  rc = sqlite3_open(":memory:",&tmp);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_exec(tmp,pTable->pFromSchema->zSql,0,0,0);
+  }
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp,zAlter,0,0,0);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_prepare_v2(tmp,
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+        -1,&pStmt,0);
+  }
+  if( rc==SQLITE_OK ){
+    sqlite3_bind_text(pStmt,1,pTable->zToName,-1,SQLITE_STATIC);
+    rc = sqlite3_step(pStmt);
+    if( rc==SQLITE_ROW ){
+      zActual = (const char*)sqlite3_column_text(pStmt,0);
+      if( zActual && strcmp(zActual,pTable->pToSchema->zSql)==0 ){
+        *pzAlter = zAlter;
+        zAlter = 0;
+      }
+      rc = SQLITE_OK;
+    }else if( rc==SQLITE_DONE ){
+      rc = SQLITE_CORRUPT;
+    }
+  }
+  if( rc!=SQLITE_OK && rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+  sqlite3_finalize(pStmt);
+  if( tmp ) sqlite3_close(tmp);
+  sqlite3_free(zAlter);
   return rc;
 }
 
@@ -1076,6 +1272,7 @@ static int patchGenerateTable(
   int iTemp
 ){
   PatchSchema from, to;
+  char *zNativeAlter = 0;
   int schemaChanged, pkChanged = 0;
   int rc = SQLITE_OK;
   memset(&from,0,sizeof(from));
@@ -1111,8 +1308,21 @@ static int patchGenerateTable(
   if( schemaChanged ){
     pkChanged = pTable->pFromTable->flags!=pTable->pToTable->flags
              || patchPrimaryKeyChanged(&from,&to);
-    rc = patchAppendRebuild(pCur,pTable,&from,&to,aFromSchema,nFromSchema,
-                            aToSchema,nToSchema,iTemp,!pkChanged);
+    rc = patchNativeAlter(pTable,&from,&to,&zNativeAlter);
+    if( rc==SQLITE_OK && zNativeAlter ){
+      rc = patchAppendObjectDrops(pCur,pTable->zFromName,
+              aFromSchema,nFromSchema,aToSchema,nToSchema);
+      if( rc==SQLITE_OK ){
+        rc = patchAppendRow(pCur,pTable->zToName,"schema",zNativeAlter);
+      }
+      if( rc==SQLITE_OK ){
+        rc = patchAppendIndexCreates(pCur,pTable->zToName,
+                aFromSchema,nFromSchema,aToSchema,nToSchema);
+      }
+    }else if( rc==SQLITE_OK ){
+      rc = patchAppendRebuild(pCur,pTable,&from,&to,aFromSchema,nFromSchema,
+                              aToSchema,nToSchema,iTemp,!pkChanged);
+    }
   }else{
     rc = patchAppendObjectDiffs(pCur,pTable->zToName,
            aFromSchema,nFromSchema,aToSchema,nToSchema);
@@ -1122,6 +1332,7 @@ static int patchGenerateTable(
     else rc=patchAppendData(pCur,db,pTable,&from,&to);
   }
 done:
+  sqlite3_free(zNativeAlter);
   patchSchemaClear(&from);
   patchSchemaClear(&to);
   return rc;
