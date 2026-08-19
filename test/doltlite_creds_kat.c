@@ -192,6 +192,14 @@ int main(int argc, char **argv) {
   }
 
   {
+    char *json = doltliteCredsToPublicJwk(c);
+    check_str("public JWK omits private seed", json,
+              "{\"kty\":\"OKP\",\"crv\":\"Ed25519\","
+              "\"x\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\"}");
+    sqlite3_free(json);
+  }
+
+  {
     char *jwt = NULL;
     check_bool("null audience rejected at mint",
                doltliteCredsBearerTokenAt(c, NULL, 1700000000L, &jwt) != 0);

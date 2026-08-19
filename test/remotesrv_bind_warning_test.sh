@@ -41,9 +41,12 @@ if command -v openssl >/dev/null 2>&1 \
 fi
 
 HAVE_KEYS=0
-DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/throwaway.db" \
-  "SELECT dolt_creds_new();" >/dev/null 2>&1
-if cp "$TMP"/cc/*.jwk "$TMP/keys/" 2>/dev/null; then
+created=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/throwaway.db" \
+  "SELECT dolt_creds_new();" 2>/dev/null)
+kid=$(printf '%s\n' "$created" | sed -n \
+  's/^Created credential \([0-9a-v][0-9a-v]*\)$/\1/p' | head -1)
+if [ -n "$kid" ] && DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
+  "SELECT dolt_creds('export','$kid','$TMP/keys');" >/dev/null 2>&1; then
   HAVE_KEYS=1
 fi
 

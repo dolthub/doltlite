@@ -1395,6 +1395,10 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
       serverCleanup(pSrv);
       return SQLITE_ERROR;
     }
+    if( doltliteCredsValidateAuthDir(o->authKeysDir)!=0 ){
+      serverCleanup(pSrv);
+      return SQLITE_ERROR;
+    }
     pSrv->authKeysDir = dupStr(o->authKeysDir);
     if( !pSrv->authKeysDir ){ serverCleanup(pSrv); return SQLITE_NOMEM; }
   }

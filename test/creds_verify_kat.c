@@ -93,11 +93,14 @@ int main(int argc, char **argv) {
   const char *authDir = argc > 1 ? argv[1] : ".";
   const char *emptyDir = argc > 2 ? argv[2] : ".";
   const char *outsideDir = argc > 3 ? argv[3] : ".";
+  const char *mismatchDir = argc > 4 ? argv[4] : ".";
+  const char *disguisedDir = argc > 5 ? argv[5] : ".";
   unsigned char seed[32];
   DoltliteCreds *c = NULL;
   char *jwt = NULL, *kid = NULL, *kidOut = NULL;
   char *bearer = NULL, *tampered = NULL;
   char *invalidExp = NULL, *overflowExp = NULL;
+  unsigned char pub[DOLTLITE_PUBKEY_LEN];
   int i;
 
   for (i = 0; i < 32; i++) seed[i] = (unsigned char)i;
@@ -107,9 +110,24 @@ int main(int argc, char **argv) {
   }
   kid = doltliteCredsKid(c);
 
-  if (doltliteCredsSave(c, authDir) != 0) {
+  if (doltliteCredsSavePublic(c, authDir) != 0) {
     printf("  FAIL  save authorized key\n");
     return 1;
+  }
+  check("public authorization directory accepted",
+        doltliteCredsValidateAuthDir(authDir) == 0);
+  {
+    char *notePath = (char *)malloc(strlen(authDir) + 10);
+    FILE *note;
+    sprintf(notePath, "%s/note.txt", authDir);
+    note = fopen(notePath, "wb");
+    if (note) {
+      fputs("operator note\n", note);
+      fclose(note);
+    }
+    check("unrelated authorization-directory file accepted",
+          doltliteCredsValidateAuthDir(authDir) == 0);
+    free(notePath);
   }
 
   if (doltliteCredsBearerTokenAt(c, AUD, IAT, &jwt) != 0 || !jwt) {
@@ -186,11 +204,39 @@ int main(int argc, char **argv) {
         doltliteCredsVerifyBearer(tampered, AUD, authDir, MID, NULL) != 0);
 
   {
+    char *otherKid = (char *)malloc(strlen(kid) + 1);
+    char *from;
+    char *to;
+    size_t pathLen = strlen(mismatchDir) + strlen(kid) + 7;
+    strcpy(otherKid, kid);
+    otherKid[0] = otherKid[0] == '0' ? '1' : '0';
+    from = (char *)malloc(pathLen);
+    to = (char *)malloc(pathLen);
+    snprintf(from, pathLen, "%s/%s.jwk", mismatchDir, kid);
+    snprintf(to, pathLen, "%s/%s.jwk", mismatchDir, otherKid);
+    check("save public key for filename mismatch test",
+          doltliteCredsSavePublic(c, mismatchDir) == 0);
+    check("rename public key to a different canonical id",
+          rename(from, to) == 0);
+    check("public key filename must match its derived id",
+          doltliteCredsLoadPubKey(mismatchDir, otherKid, pub) != 0);
+    check("mismatched key id invalidates authorization directory",
+          doltliteCredsValidateAuthDir(mismatchDir) != 0);
+    free(otherKid);
+    free(from);
+    free(to);
+  }
+
+  {
     char *traversalKid;
     char *traversalJwt;
     size_t n = strlen(kid) + strlen("../outside/") + 1;
     check("save key outside authorized directory",
           doltliteCredsSave(c, outsideDir) == 0);
+    check("private credential rejected as an authorization key",
+          doltliteCredsLoadPubKey(outsideDir, kid, pub) != 0);
+    check("private credential invalidates authorization directory",
+          doltliteCredsValidateAuthDir(outsideDir) != 0);
     traversalKid = (char *)malloc(n);
     snprintf(traversalKid, n, "../outside/%s", kid);
     traversalJwt = tokenForKid(c, traversalKid, "1700000030");
@@ -199,6 +245,24 @@ int main(int argc, char **argv) {
               doltliteCredsVerifyBearer(traversalJwt, AUD, authDir, MID, NULL) != 0);
     free(traversalKid);
     free(traversalJwt);
+  }
+
+  {
+    char *from;
+    char *to;
+    size_t pathLen = strlen(disguisedDir) + strlen(kid) + 7;
+    from = (char *)malloc(pathLen);
+    to = (char *)malloc(strlen(disguisedDir) + 14);
+    snprintf(from, pathLen, "%s/%s.jwk", disguisedDir, kid);
+    sprintf(to, "%s/private.json", disguisedDir);
+    check("save private credential for disguised-file test",
+          doltliteCredsSave(c, disguisedDir) == 0);
+    check("rename private credential outside JWK convention",
+          rename(from, to) == 0);
+    check("disguised private credential invalidates authorization directory",
+          doltliteCredsValidateAuthDir(disguisedDir) != 0);
+    free(from);
+    free(to);
   }
 
   sqlite3_free(jwt);

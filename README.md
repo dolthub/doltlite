@@ -677,9 +677,18 @@ in `build/`):
 
 Each `.db` is at `http://host:8080/filename.db` (or the HTTPS URL). Clients use
 the system trust store (`DOLTLITE_CA_FILE` for a private CA); credentials live
-in `~/.doltlite/creds` (`SELECT dolt_creds_new();`). Default HTTP timeout is
-30s (`DOLTLITE_HTTP_TIMEOUT_MS`). Embeddable as `doltliteServeAsync` in
-`doltlite_remotesrv.h`. Transfers are content-addressed.
+in `~/.doltlite/creds` (`SELECT dolt_creds_new();`). Authorize one without
+copying its private seed by exporting its public JWK directly into the server's
+key directory:
+
+```sql
+SELECT dolt_creds('export', '<credential-id>', '/path/to/authorized-keys');
+```
+
+With no directory argument, `dolt_creds('export', '<credential-id>')` returns
+the public JWK. The server rejects private credential files in `--auth-keys`.
+Default HTTP timeout is 30s (`DOLTLITE_HTTP_TIMEOUT_MS`). Embeddable as
+`doltliteServeAsync` in `doltlite_remotesrv.h`. Transfers are content-addressed.
 
 #### Version String
 

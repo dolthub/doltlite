@@ -1027,9 +1027,48 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         sqlite3_result_int(ctx, 0);
       }
     }
+  }else if( strcmp(action, "export")==0 ){
+    const char *kid;
+    DoltliteCreds *cred = 0;
+    if( argc<2 || argc>3 || !sqlite3_value_text(argv[1]) ||
+        (argc==3 && !sqlite3_value_text(argv[2])) ){
+      doltliteVcResultError(ctx, db,
+          "usage: dolt_creds('export', <kid> [, <authorized-keys-dir>])");
+      return;
+    }
+    kid = (const char*)sqlite3_value_text(argv[1]);
+    if( doltliteCredsLoad(0, kid, &cred)!=0 ){
+      doltliteVcResultError(ctx, db, "no such credential");
+      return;
+    }
+    if( argc==2 ){
+      char *json = doltliteCredsToPublicJwk(cred);
+      if( json ){
+        sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+        sqlite3_free(json);
+      }else{
+        doltliteVcResultError(ctx, db, "out of memory");
+      }
+    }else{
+      const char *dir = (const char*)sqlite3_value_text(argv[2]);
+      if( doltliteCredsSavePublic(cred, dir)!=0 ){
+        doltliteVcResultError(ctx, db, "failed to export public credential");
+      }else{
+        char *msg = sqlite3_mprintf(
+            "Exported public credential %s to %s", kid, dir);
+        if( msg ){
+          sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+          sqlite3_free(msg);
+        }else{
+          doltliteVcResultError(ctx, db, "out of memory");
+        }
+      }
+    }
+    doltliteCredsFree(cred);
   }else{
     doltliteVcResultError(ctx, db,
-        "usage: dolt_creds(['list'] | 'rm', <kid>); use SELECT dolt_creds_new() to create");
+        "usage: dolt_creds(['list'] | 'rm', <kid> | 'export', <kid> "
+        "[, <authorized-keys-dir>]); use SELECT dolt_creds_new() to create");
   }
 }
 #endif /* DOLTLITE_HAVE_AUTH */
