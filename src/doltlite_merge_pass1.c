@@ -323,6 +323,27 @@ static int mergePass1OursAdded(
   struct TableEntry *theirsEntry
 ){
   int rc;
+
+  /* An index we added over a column their side dropped cannot survive: the
+  ** merged table has no such column, so the catalog it would produce cannot
+  ** be loaded. Dolt drops the index with the column. */
+  if( !zName && zSchemaMergeName && zSchemaConflictTable ){
+    SchemaEntry *pOurIdx = findSchemaEntry(
+        c->aOursSchema, c->nOursSchema, zSchemaMergeName);
+    SchemaEntry *pAncTbl = findSchemaEntry(
+        c->aAncSchema, c->nAncSchema, zSchemaConflictTable);
+    SchemaEntry *pTheirTbl = findSchemaEntry(
+        c->aTheirsSchema, c->nTheirsSchema, zSchemaConflictTable);
+    char *zGone = 0;
+    if( pOurIdx && pAncTbl && pTheirTbl
+     && mergeIndexColumnGoneFrom(pOurIdx->zSql, pAncTbl->zSql,
+                                 pTheirTbl->zSql, &zGone) ){
+      sqlite3_free(zGone);
+      return SQLITE_OK;
+    }
+    sqlite3_free(zGone);
+  }
+
   if( theirsEntry ){
     if( !zName && c->bDisjointSchemaChanges ){
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];

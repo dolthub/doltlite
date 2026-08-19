@@ -1313,4 +1313,122 @@ done:
   return rc;
 }
 
+/* The identifier a plain index column-list item names, with quoting, sort
+** order and collation stripped. */
+static char *mergeIndexItemColumn(const char *z, int n){
+  int i = 0;
+  int j;
+  char *zOut;
+  while( i<n && (sqlite3Isspace(z[i]) || z[i]=='"' || z[i]=='`' || z[i]=='[') ){
+    i++;
+  }
+  j = i;
+  while( j<n && (sqlite3Isalnum(z[j]) || z[j]=='_' || z[j]=='$') ) j++;
+  if( j==i ) return 0;
+  zOut = sqlite3_malloc(j-i+1);
+  if( !zOut ) return 0;
+  memcpy(zOut, z+i, j-i);
+  zOut[j-i] = 0;
+  return zOut;
+}
+
+/* Walk the column list of a CREATE INDEX, calling xEach for each column it
+** names. An expression index has a nested paren and no plain column list to
+** read, so it reports nothing rather than guessing. */
+static int mergeIndexEachColumn(
+  const char *zIndexSql,
+  int (*xEach)(void*, const char*),
+  void *pCtx
+){
+  const char *zOpen = zIndexSql ? strchr(zIndexSql, '(') : 0;
+  const char *zEnd;
+  const char *zItem;
+  const char *z;
+  int rc = SQLITE_OK;
+
+  if( !zOpen ) return SQLITE_OK;
+  zEnd = zOpen + 1;
+  while( *zEnd && *zEnd!=')' ){
+    if( *zEnd=='(' ) return SQLITE_OK;
+    zEnd++;
+  }
+  if( *zEnd!=')' ) return SQLITE_OK;
+
+  zItem = zOpen + 1;
+  for(z=zItem; z<=zEnd && rc==SQLITE_OK; z++){
+    if( z==zEnd || *z==',' ){
+      char *zCol = mergeIndexItemColumn(zItem, (int)(z-zItem));
+      if( zCol ){
+        rc = xEach(pCtx, zCol);
+        sqlite3_free(zCol);
+      }
+      zItem = z + 1;
+    }
+  }
+  return rc;
+}
+
+typedef struct MergeIndexColCtx MergeIndexColCtx;
+struct MergeIndexColCtx {
+  ParsedColumn *aAnc; int nAnc;
+  ParsedColumn *aSide; int nSide;
+  char *zMissing;
+};
+
+static int mergeIndexColSurvives(void *pCtx, const char *zCol){
+  MergeIndexColCtx *p = (MergeIndexColCtx*)pCtx;
+  int iAnc;
+  if( p->zMissing ) return SQLITE_OK;
+  if( findColumn(p->aSide, p->nSide, zCol) ) return SQLITE_OK;
+  /* Absent from this side and never in the ancestor means the other side added
+  ** it, and the merge carries additions over. */
+  iAnc = parsedColumnIndexByName(p->aAnc, p->nAnc, zCol);
+  if( iAnc<0 ) return SQLITE_OK;
+  /* A column of this side sitting at the vanished one's position, carrying its
+  ** definition, is a rename, not a drop: the indexed column still exists under
+  ** the new name and the index has to follow it there rather than disappear.
+  ** Retargeting the index is not expressible here yet, so leave those alone. */
+  if( iAnc<p->nSide
+   && !findColumn(p->aAnc, p->nAnc, p->aSide[iAnc].zName)
+   && parsedColumnDefinitionsMatch(&p->aSide[iAnc], &p->aAnc[iAnc]) ){
+    return SQLITE_OK;
+  }
+  p->zMissing = sqlite3_mprintf("%s", zCol);
+  return p->zMissing ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+int mergeIndexColumnGoneFrom(
+  const char *zIndexSql,
+  const char *zAncTableSql,
+  const char *zSideTableSql,
+  char **pzColumn
+){
+  MergeIndexColCtx ctx;
+  int rc;
+
+  if( pzColumn ) *pzColumn = 0;
+  if( !zIndexSql || !zAncTableSql || !zSideTableSql ) return 0;
+
+  memset(&ctx, 0, sizeof(ctx));
+  if( parseColumns(zAncTableSql, &ctx.aAnc, &ctx.nAnc)!=SQLITE_OK ) return 0;
+  if( parseColumns(zSideTableSql, &ctx.aSide, &ctx.nSide)!=SQLITE_OK ){
+    freeColumns(ctx.aAnc, ctx.nAnc);
+    return 0;
+  }
+
+  rc = mergeIndexEachColumn(zIndexSql, mergeIndexColSurvives, &ctx);
+  freeColumns(ctx.aAnc, ctx.nAnc);
+  freeColumns(ctx.aSide, ctx.nSide);
+  if( rc!=SQLITE_OK || !ctx.zMissing ){
+    sqlite3_free(ctx.zMissing);
+    return 0;
+  }
+  if( pzColumn ){
+    *pzColumn = ctx.zMissing;
+  }else{
+    sqlite3_free(ctx.zMissing);
+  }
+  return 1;
+}
+
 #endif

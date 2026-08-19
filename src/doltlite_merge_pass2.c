@@ -57,6 +57,24 @@ int mergeCatalogPass2(
               aTheirsSchema, nTheirsSchema, pAncSe, pOurSe, pTheirSe) ){
           continue;
         }
+        /* An index of theirs over a column we dropped or renamed away cannot
+        ** be adopted: the merged table has no such column, so the catalog it
+        ** would produce cannot be loaded at all. Dolt drops the index with
+        ** the column, so leave it behind. */
+        {
+          SchemaEntry *pAncTbl = findSchemaEntry(
+              aAncSchema, nAncSchema, pTheirSe->zTblName);
+          SchemaEntry *pOurTbl = findSchemaEntry(
+              aOursSchema, nOursSchema, pTheirSe->zTblName);
+          char *zGone = 0;
+          if( pAncTbl && pOurTbl
+           && mergeIndexColumnGoneFrom(pTheirSe->zSql, pAncTbl->zSql,
+                                           pOurTbl->zSql, &zGone) ){
+            sqlite3_free(zGone);
+            continue;
+          }
+          sqlite3_free(zGone);
+        }
         oursEntry = findCatalogEntryBySchemaObject(
             aOurs, nOurs, aOursSchema, nOursSchema,
             pTheirSe->zType, pTheirSe->zName, pTheirSe->zTblName);

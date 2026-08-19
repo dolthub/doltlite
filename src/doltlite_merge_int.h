@@ -189,6 +189,13 @@ int hasAnySchemaConflict(
   int nConflictTables
 );
 
+int mergeIndexColumnGoneFrom(
+  const char *zIndexSql,
+  const char *zAncTableSql,
+  const char *zSideTableSql,
+  char **pzColumn
+);
+
 int mergeIndexFollowsDualRename(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
