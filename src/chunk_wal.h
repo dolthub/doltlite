@@ -13,6 +13,9 @@ typedef struct ChunkStoreReloadState ChunkStoreReloadState;
 struct WalState {
   i64 iWalOffset;
   i64 nWalData;
+  i64 iCheckpointOffset;
+  i64 nCheckpointIndex;
+  i64 iCheckpointReplay;
   u8 recoveredMidStream;
   u8 cleanCloseMarker;
 };
@@ -41,6 +44,10 @@ void walStateSetDataSize(WalState *w, i64 nData);
 
 struct ChunkStore;
 int csReplayWal(struct ChunkStore *cs);
+int csTryLoadWalCheckpoint(struct ChunkStore *cs, int *pLoaded);
+int csWriteWalCheckpoint(struct ChunkStore *cs, int sectorSize);
+int csWalCheckpointDue(const struct ChunkStore *cs);
+void csStampWalCheckpoint(const struct ChunkStore *cs, u8 *aManifest);
 void csCaptureReloadState(struct ChunkStore *cs, ChunkStoreReloadState *pSaved);
 void csFreeReloadState(ChunkStoreReloadState *pSaved);
 void csAdoptOpenedStoreState(struct ChunkStore *pDst, struct ChunkStore *pSrc);

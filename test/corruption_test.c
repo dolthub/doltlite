@@ -1108,6 +1108,114 @@ static void test_damage_far_before_sealing_root_poisons(void){
   removeDb(dbpath);
 }
 
+static void test_large_wal_open_checkpoint(void){
+  const char *dbpath = "/tmp/test_corr_open_checkpoint.db";
+  sqlite3 *db = 0;
+  off_t tailOff;
+  long long checkpointOff;
+  long long checkpointSize;
+  long long replayOff;
+  int rc;
+
+  printf("--- Test 24: Large WAL gets an open checkpoint ---\n");
+
+  removeDb(dbpath);
+  rc = sqlite3_open(dbpath, &db);
+  check("open_checkpoint_create", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("open_checkpoint_schema",
+      execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, payload BLOB);"
+        "CREATE TABLE s(id INTEGER PRIMARY KEY)")
+        ==SQLITE_OK);
+    check("open_checkpoint_insert",
+      execSql(db, "INSERT INTO t VALUES(1, zeroblob(68157440))")
+        ==SQLITE_OK);
+    check("open_checkpoint_commit",
+      execSql(db, "SELECT dolt_commit('-Am','large')")==SQLITE_OK);
+  }
+  if( db ) sqlite3_close(db);
+
+  tailOff = file_size(dbpath) - (1 + MANIFEST_SIZE);
+  check("open_checkpoint_tail_root", tailOff>MANIFEST_SIZE);
+  check("open_checkpoint_magic",
+    read_u32_le_at(dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
+      ==CS_WAL_CHECKPOINT_MAGIC);
+  checkpointOff = read_i64_le_at(
+      dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_OFFSET_OFF);
+  checkpointSize = read_u32_le_at(
+      dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_SIZE_OFF);
+  replayOff = read_i64_le_at(
+      dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_REPLAY_OFF);
+  check("open_checkpoint_geometry",
+    checkpointOff>=MANIFEST_SIZE
+    && checkpointSize>0
+    && checkpointSize%CHUNK_INDEX_ENTRY_SIZE==0
+    && checkpointOff+CS_WAL_CHUNK_HDR_SIZE+checkpointSize==tailOff
+    && replayOff>=tailOff+1+MANIFEST_SIZE);
+
+  db = 0;
+  rc = sqlite3_open(dbpath, &db);
+  check("open_checkpoint_reopen", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("open_checkpoint_read",
+      strcmp(queryScalarText(db,
+        "SELECT count(*)||'|'||length(payload) FROM t"),
+        "1|68157440")==0);
+    check("open_checkpoint_tail_commit",
+      execSql(db,
+        "INSERT INTO s VALUES(2);"
+        "SELECT dolt_commit('-Am','tail');")==SQLITE_OK);
+  }
+  if( db ) sqlite3_close(db);
+
+  tailOff = file_size(dbpath) - (1 + MANIFEST_SIZE);
+  check("open_checkpoint_propagated",
+    read_u32_le_at(dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
+      ==CS_WAL_CHECKPOINT_MAGIC
+    && read_i64_le_at(dbpath,
+         tailOff+1+CS_MANIFEST_CHECKPOINT_OFFSET_OFF)==checkpointOff);
+  db = 0;
+  rc = sqlite3_open(dbpath, &db);
+  check("open_checkpoint_tail_reopen", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("open_checkpoint_tail_read",
+      strcmp(queryScalarText(db,
+        "SELECT (SELECT count(*) FROM t)||'|'||"
+        "(SELECT length(payload) FROM t)||'|'||"
+        "(SELECT count(*) FROM s)"),
+        "1|68157440|1")==0);
+  }
+  if( db ) sqlite3_close(db);
+
+  {
+    ChunkStore cs;
+    ProllyHash zero;
+    u8 *pData = 0;
+    int nData = 0;
+    unsigned char bad = 0;
+    memset(&zero, 0, sizeof(zero));
+    check("open_checkpoint_read_snapshot_byte",
+      read_bytes(dbpath,
+        (off_t)checkpointOff+CS_WAL_CHUNK_HDR_SIZE, &bad, 1)==0);
+    bad ^= 0x01;
+    check("open_checkpoint_corrupt_snapshot",
+      corrupt_bytes(dbpath,
+        (off_t)checkpointOff+CS_WAL_CHUNK_HDR_SIZE, &bad, 1)==0);
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("open_checkpoint_corrupt_reopen", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("open_checkpoint_corrupt_poisoned", cs.corruptMidStream);
+      rc = chunkStoreGet(&cs, &zero, &pData, &nData);
+      check("open_checkpoint_corrupt_rejected", rc==SQLITE_CORRUPT);
+      sqlite3_free(pData);
+      chunkStoreClose(&cs);
+    }
+  }
+  removeDb(dbpath);
+}
+
 static void test_root_seal_binds_file_offset(void){
   unsigned char manifest[CHUNK_MANIFEST_SIZE];
   const long long rootOffset = 4096;
@@ -1374,6 +1482,7 @@ int main(void){
   test_corrupt_index_order();
   test_damage_far_before_sealing_root_poisons();
   test_crash_garbage_truncated_on_write();
+  test_large_wal_open_checkpoint();
   test_root_seal_binds_file_offset();
   test_header_seal_detects_tampered_wal_offset();
   test_unsealed_header_still_opens();

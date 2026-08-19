@@ -530,13 +530,12 @@ int chunkStoreOpen(
       return rc;
     }
 
-    rc = csReadIndex(cs);
-    if( rc != SQLITE_OK ){
-      chunkStoreClose(cs);
-      return rc;
+    {
+      int loadedCheckpoint = 0;
+      rc = csTryLoadWalCheckpoint(cs, &loadedCheckpoint);
+      if( rc==SQLITE_OK && !loadedCheckpoint ) rc = csReadIndex(cs);
+      if( rc==SQLITE_OK && !loadedCheckpoint ) rc = csReplayWal(cs);
     }
-
-    rc = csReplayWal(cs);
     if( rc != SQLITE_OK ){
       chunkStoreClose(cs);
       return rc;
@@ -664,7 +663,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   if( cs->isMemory || cs->isBuffer || cs->readOnly || cs->corruptMidStream ){
     return;
   }
-  if( !cs->file.pFile || !cs->file.zFilename || cs->wal.cleanCloseMarker ){
+  if( !cs->file.pFile || !cs->file.zFilename ){
     return;
   }
   if( cs->wal.iWalOffset<=0 || cs->wal.nWalData<=0 ){
@@ -676,6 +675,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   if( prollyHashCompare(&cs->refs.refsHash, &cs->refs.committedRefsHash)!=0 ){
     return;
   }
+  if( cs->wal.cleanCloseMarker && !csWalCheckpointDue(cs) ) return;
 
   lockHeld = cs->lockDepth>0;
   if( !lockHeld ){
@@ -697,6 +697,15 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     if( sectorSize > 65536 ) sectorSize = 65536;
   }
 
+  if( csWalCheckpointDue(cs) ){
+    rc = csWriteWalCheckpoint(cs, sectorSize);
+    if( rc!=SQLITE_OK ){
+      sqlite3_log(SQLITE_NOTICE,
+        "doltlite: unable to checkpoint chunk WAL on close: %d", rc);
+    }
+    goto done;
+  }
+
   markerStart = cs->file.iFileSize;
   if( markerStart <= 0 ) goto done;
   markerEnd = markerStart + (i64)sizeof(rootRec);
@@ -708,6 +717,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
 
   rootRec[0] = CS_WAL_TAG_ROOT;
   csSerializeManifest(cs, rootRec + 1);
+  csStampWalCheckpoint(cs, rootRec + 1);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, markerStart);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, markerNext);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, markerStart);
