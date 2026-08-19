@@ -94,6 +94,7 @@ int main(int argc, char **argv) {
   const char *emptyDir = argc > 2 ? argv[2] : ".";
   const char *outsideDir = argc > 3 ? argv[3] : ".";
   const char *mismatchDir = argc > 4 ? argv[4] : ".";
+  const char *disguisedDir = argc > 5 ? argv[5] : ".";
   unsigned char seed[32];
   DoltliteCreds *c = NULL;
   char *jwt = NULL, *kid = NULL, *kidOut = NULL;
@@ -115,6 +116,19 @@ int main(int argc, char **argv) {
   }
   check("public authorization directory accepted",
         doltliteCredsValidateAuthDir(authDir) == 0);
+  {
+    char *notePath = (char *)malloc(strlen(authDir) + 10);
+    FILE *note;
+    sprintf(notePath, "%s/note.txt", authDir);
+    note = fopen(notePath, "wb");
+    if (note) {
+      fputs("operator note\n", note);
+      fclose(note);
+    }
+    check("unrelated authorization-directory file accepted",
+          doltliteCredsValidateAuthDir(authDir) == 0);
+    free(notePath);
+  }
 
   if (doltliteCredsBearerTokenAt(c, AUD, IAT, &jwt) != 0 || !jwt) {
     printf("  FAIL  build bearer token\n");
@@ -231,6 +245,24 @@ int main(int argc, char **argv) {
               doltliteCredsVerifyBearer(traversalJwt, AUD, authDir, MID, NULL) != 0);
     free(traversalKid);
     free(traversalJwt);
+  }
+
+  {
+    char *from;
+    char *to;
+    size_t pathLen = strlen(disguisedDir) + strlen(kid) + 7;
+    from = (char *)malloc(pathLen);
+    to = (char *)malloc(strlen(disguisedDir) + 14);
+    snprintf(from, pathLen, "%s/%s.jwk", disguisedDir, kid);
+    sprintf(to, "%s/private.json", disguisedDir);
+    check("save private credential for disguised-file test",
+          doltliteCredsSave(c, disguisedDir) == 0);
+    check("rename private credential outside JWK convention",
+          rename(from, to) == 0);
+    check("disguised private credential invalidates authorization directory",
+          doltliteCredsValidateAuthDir(disguisedDir) != 0);
+    free(from);
+    free(to);
   }
 
   sqlite3_free(jwt);

@@ -973,6 +973,49 @@ done:
   return rc;
 }
 
+static int credsFileContainsPrivateJwk(const char *dir, const char *name) {
+  char *path = NULL;
+  FILE *f = NULL;
+  char *json = NULL;
+  size_t pathLen;
+  long sz;
+  int found = 0;
+#ifdef _WIN32
+  DWORD attrs;
+#else
+  struct stat st;
+#endif
+
+  pathLen = strlen(dir) + strlen(name) + 2;
+  path = (char *)sqlite3_malloc(pathLen);
+  if (!path) return 0;
+  snprintf(path, pathLen, "%s/%s", dir, name);
+#ifdef _WIN32
+  attrs = GetFileAttributesA(path);
+  if (attrs == INVALID_FILE_ATTRIBUTES ||
+      (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) goto done;
+#else
+  if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) goto done;
+#endif
+  f = fopen(path, "rb");
+  if (!f) goto done;
+  if (fseek(f, 0, SEEK_END) != 0) goto done;
+  sz = ftell(f);
+  if (sz < 0 || sz > 1 << 20) goto done;
+  if (fseek(f, 0, SEEK_SET) != 0) goto done;
+  json = (char *)sqlite3_malloc((size_t)sz + 1);
+  if (!json) goto done;
+  if (fread(json, 1, (size_t)sz, f) != (size_t)sz) goto done;
+  json[sz] = '\0';
+  found = credsJsonObjectValue(json, "d") != NULL;
+
+done:
+  if (f) fclose(f);
+  sqlite3_free(json);
+  sqlite3_free(path);
+  return found;
+}
+
 int doltliteCredsValidateAuthDir(const char *dir) {
   DirIter it;
   const char *name;
@@ -983,7 +1026,13 @@ int doltliteCredsValidateAuthDir(const char *dir) {
     size_t n = strlen(name);
     char *kid;
     unsigned char pub[DOLTLITE_PUBKEY_LEN];
-    if (!(n > 4 && strcmp(name + n - 4, ".jwk") == 0)) continue;
+    if (!(n > 4 && strcmp(name + n - 4, ".jwk") == 0)) {
+      if (credsFileContainsPrivateJwk(dir, name)) {
+        rc = 1;
+        break;
+      }
+      continue;
+    }
     kid = (char *)sqlite3_malloc(n - 4 + 1);
     if (!kid) {
       rc = 1;
