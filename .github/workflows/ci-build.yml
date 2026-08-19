@@ -24,6 +24,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Test bounded apt retries
+      if: matrix.platform == 'ubuntu'
+      run: bash .github/scripts/retry-apt-get-test.sh
+
     - name: Install Linux build dependencies
       if: matrix.platform == 'ubuntu'
       run: |
