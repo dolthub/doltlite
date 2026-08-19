@@ -6,11 +6,18 @@
 #include "doltlite_ignore.h"
 #include <string.h>
 
-static unsigned char ignoreLower(unsigned char c){
-  return (c>='A' && c<='Z') ? c + 32 : c;
-}
+typedef struct IgnoreMatch IgnoreMatch;
+struct IgnoreMatch {
+  char *zPattern;
+  u8 ignored;
+  u8 removed;
+};
 
-static int ignorePatternMatch(const char *zPat, const char *zStr){
+static int ignorePatternMatchMode(
+  const char *zPat,
+  const char *zStr,
+  int patternMode
+){
   const char *pStar = 0;
   const char *sStar = 0;
 
@@ -21,10 +28,10 @@ static int ignorePatternMatch(const char *zPat, const char *zStr){
       pStar = zPat;
       sStar = zStr;
       zPat++;
-    }else if( c=='?' ){
+    }else if( c=='?' && (!patternMode || (*zStr!='*' && *zStr!='%')) ){
       zPat++;
       zStr++;
-    }else if( ignoreLower(c)==ignoreLower((unsigned char)*zStr) ){
+    }else if( c==(unsigned char)*zStr ){
       zPat++;
       zStr++;
     }else if( pStar ){
@@ -39,13 +46,134 @@ static int ignorePatternMatch(const char *zPat, const char *zStr){
   return *zPat == 0;
 }
 
-static int ignoreSpecificity(const char *zPat){
-  int n = 0;
-  while( *zPat ){
-    if( *zPat != '*' && *zPat != '%' && *zPat != '?' ) n++;
-    zPat++;
+static int ignorePatternMatch(const char *zPat, const char *zStr){
+  return ignorePatternMatchMode(zPat, zStr, 0);
+}
+
+static int ignorePatternCovers(const char *zLess, const char *zMore){
+  return ignorePatternMatchMode(zLess, zMore, 1);
+}
+
+static unsigned char ignorePatternNext(const char **pzPattern){
+  unsigned char c = (unsigned char)**pzPattern;
+  if( !c ) return 0;
+  (*pzPattern)++;
+  if( c=='*' || c=='%' ){
+    while( **pzPattern=='*' || **pzPattern=='%' ) (*pzPattern)++;
+    return '%';
   }
-  return n;
+  return c;
+}
+
+static int ignorePatternsEquivalent(const char *zA, const char *zB){
+  unsigned char a, b;
+  do{
+    a = ignorePatternNext(&zA);
+    b = ignorePatternNext(&zB);
+    if( a!=b ) return 0;
+  }while( a );
+  return 1;
+}
+
+static void ignoreMatchesClear(IgnoreMatch *aMatch, int nMatch){
+  int i;
+  for(i=0; i<nMatch; i++) sqlite3_free(aMatch[i].zPattern);
+  sqlite3_free(aMatch);
+}
+
+static int ignoreMatchAppend(
+  IgnoreMatch **paMatch,
+  int *pnMatch,
+  int *pnAlloc,
+  const char *zPattern,
+  int ignored
+){
+  IgnoreMatch *p;
+  int rc;
+  rc = DOLTLITE_GROW_ARRAY(paMatch, pnAlloc, *pnMatch+1, 8);
+  if( rc!=SQLITE_OK ) return rc;
+  p = &(*paMatch)[*pnMatch];
+  memset(p, 0, sizeof(*p));
+  p->zPattern = sqlite3_mprintf("%s", zPattern);
+  if( !p->zPattern ) return SQLITE_NOMEM;
+  p->ignored = ignored!=0;
+  (*pnMatch)++;
+  return SQLITE_OK;
+}
+
+static int ignoreConflict(
+  const char *zTable,
+  const char *zIgnored,
+  const char *zKept,
+  char **pzErr
+){
+  if( pzErr ){
+    *pzErr = sqlite3_mprintf(
+        "the table %s matches conflicting patterns in dolt_ignore:\n"
+        "ignored:     %s\nnot ignored: %s",
+        zTable, zIgnored, zKept);
+    if( !*pzErr ) return SQLITE_NOMEM;
+  }
+  return SQLITE_CONSTRAINT;
+}
+
+static int ignoreResolveMatches(
+  IgnoreMatch *aMatch,
+  int nMatch,
+  const char *zTable,
+  int *pIgnored,
+  char **pzErr
+){
+  int i, j;
+  int nIgnored = 0;
+  int nKept = 0;
+  int nIgnoredRemoved = 0;
+  int nKeptRemoved = 0;
+  const char *zIgnored = 0;
+  const char *zKept = 0;
+
+  for(i=0; i<nMatch; i++){
+    if( aMatch[i].ignored ) nIgnored++;
+    else nKept++;
+  }
+  if( nIgnored==0 ) return SQLITE_OK;
+  if( nKept==0 ){
+    *pIgnored = 1;
+    return SQLITE_OK;
+  }
+
+  for(i=0; i<nMatch; i++){
+    if( !aMatch[i].ignored ) continue;
+    for(j=0; j<nMatch; j++){
+      if( aMatch[j].ignored ) continue;
+      if( ignorePatternsEquivalent(aMatch[i].zPattern, aMatch[j].zPattern) ){
+        return ignoreConflict(zTable, aMatch[i].zPattern,
+                              aMatch[j].zPattern, pzErr);
+      }
+      if( ignorePatternCovers(aMatch[i].zPattern, aMatch[j].zPattern) ){
+        aMatch[i].removed = 1;
+      }
+      if( ignorePatternCovers(aMatch[j].zPattern, aMatch[i].zPattern) ){
+        aMatch[j].removed = 1;
+      }
+    }
+  }
+
+  for(i=0; i<nMatch; i++){
+    if( aMatch[i].ignored ){
+      if( aMatch[i].removed ) nIgnoredRemoved++;
+      else if( !zIgnored ) zIgnored = aMatch[i].zPattern;
+    }else{
+      if( aMatch[i].removed ) nKeptRemoved++;
+      else if( !zKept ) zKept = aMatch[i].zPattern;
+    }
+  }
+  if( nIgnoredRemoved==nIgnored ) return SQLITE_OK;
+  if( nKeptRemoved==nKept ){
+    *pIgnored = 1;
+    return SQLITE_OK;
+  }
+  return ignoreConflict(zTable, zIgnored, zKept, pzErr);
 }
 
 enum DoltliteIgnoreSchemaState {
@@ -115,13 +243,12 @@ int doltliteCheckIgnore(
   char **pzErr
 ){
   sqlite3_stmt *pStmt = 0;
+  IgnoreMatch *aMatch = 0;
   int rc;
+  int rc2;
   int schemaState;
-  int bestSpec = -1;
-  int bestIgnored = 0;
-  char *zBestPat = 0;
-  int tieDisagrees = 0;
-  char *zTiePat = 0;
+  int nMatch = 0;
+  int nAlloc = 0;
 
   *pIgnored = 0;
   if( pzErr ) *pzErr = 0;
@@ -151,55 +278,21 @@ int doltliteCheckIgnore(
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zPat = (const char*)sqlite3_column_text(pStmt, 0);
     int ign = sqlite3_column_int(pStmt, 1);
-    int spec;
     if( !zPat ) continue;
     if( !ignorePatternMatch(zPat, zTable) ) continue;
-    spec = ignoreSpecificity(zPat);
-    if( spec > bestSpec ){
-      bestSpec = spec;
-      bestIgnored = ign;
-      sqlite3_free(zBestPat);
-      zBestPat = sqlite3_mprintf("%s", zPat);
-      if( !zBestPat ){ rc = SQLITE_NOMEM; break; }
-      tieDisagrees = 0;
-      sqlite3_free(zTiePat);
-      zTiePat = 0;
-    }else if( spec==bestSpec && ign!=bestIgnored ){
-      tieDisagrees = 1;
-      sqlite3_free(zTiePat);
-      zTiePat = sqlite3_mprintf("%s", zPat);
-      if( !zTiePat ){ rc = SQLITE_NOMEM; break; }
-    }
+    rc = ignoreMatchAppend(&aMatch, &nMatch, &nAlloc, zPat, ign);
+    if( rc!=SQLITE_OK ) break;
   }
-  sqlite3_finalize(pStmt);
-
-  if( rc!=SQLITE_DONE && rc!=SQLITE_ROW && rc!=SQLITE_OK ){
-    sqlite3_free(zBestPat);
-    sqlite3_free(zTiePat);
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  rc2 = sqlite3_finalize(pStmt);
+  if( rc==SQLITE_OK && rc2!=SQLITE_OK ) rc = rc2;
+  if( rc!=SQLITE_OK ){
+    ignoreMatchesClear(aMatch, nMatch);
     return rc;
   }
-
-  if( tieDisagrees ){
-    if( pzErr ){
-      const char *zIgn = bestIgnored ? zBestPat : zTiePat;
-      const char *zKeep = bestIgnored ? zTiePat : zBestPat;
-      *pzErr = sqlite3_mprintf(
-          "the table %s matches conflicting patterns in dolt_ignore:\n"
-          "ignored:     %s\nnot ignored: %s",
-          zTable, zIgn, zKeep);
-    }
-    sqlite3_free(zBestPat);
-    sqlite3_free(zTiePat);
-    return SQLITE_CONSTRAINT;
-  }
-
-  if( bestSpec >= 0 ){
-    *pIgnored = bestIgnored;
-  }
-
-  sqlite3_free(zBestPat);
-  sqlite3_free(zTiePat);
-  return SQLITE_OK;
+  rc = ignoreResolveMatches(aMatch, nMatch, zTable, pIgnored, pzErr);
+  ignoreMatchesClear(aMatch, nMatch);
+  return rc;
 }
 
 typedef struct IgnoreVtab IgnoreVtab;

@@ -79,4 +79,27 @@ run_test "drop_falls_back_to_module" \
   "0
 0" "$DB"
 
+DB2=/tmp/test_ignore_case_$$.db
+rm -f "$DB2"
+
+run_test "patterns_are_case_sensitive" \
+  "INSERT INTO dolt_ignore VALUES('TMP_*', 1);
+   CREATE TABLE tmp_a(id INTEGER PRIMARY KEY);
+   SELECT dolt_add('-A');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;" \
+  "0
+dolt_ignore|1|new table
+tmp_a|1|new table" "$DB2"
+
+DB3=/tmp/test_ignore_specificity_$$.db
+rm -f "$DB3"
+
+run_test_match "incomparable_patterns_conflict" \
+  "INSERT INTO dolt_ignore VALUES('a*bc', 1),('ab*', 0);
+   CREATE TABLE abxbc(id INTEGER PRIMARY KEY);
+   SELECT dolt_add('-A');" \
+  "matches conflicting patterns" "$DB3"
+
+rm -f "$DB" "$DB2" "$DB3"
+
 dltest_finish
