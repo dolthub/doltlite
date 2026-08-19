@@ -1337,8 +1337,41 @@ int doltliteMergeCatalogs(
   }
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
-                              aTheirsSchema, nTheirsSchema, pMergedHash);
+  /* Their schema supplies anything the merged rows do not carry, and an
+  ** object we deleted is exactly that, so the fallback would reinstate it --
+  ** and a reinstated trigger fires on the next write. Drop the ones we
+  ** deleted while their side left them alone. Tables and indexes are already
+  ** excluded by the serializer, and a deletion racing a change on their side
+  ** keeps today's behaviour rather than growing a new conflict here. */
+  {
+    SchemaEntry *aFallback = aTheirsSchema;
+    int nFallback = nTheirsSchema;
+    SchemaEntry *aKept = 0;
+    int k;
+    if( nTheirsSchema>0 ){
+      aKept = sqlite3_malloc(nTheirsSchema*(int)sizeof(SchemaEntry));
+      if( !aKept ){ rc = SQLITE_NOMEM; goto merge_cleanup; }
+      nFallback = 0;
+      for(k=0; k<nTheirsSchema; k++){
+        SchemaEntry *pT = &aTheirsSchema[k];
+        SchemaEntry *pAnc;
+        if( pT->zType && pT->zName
+         && strcmp(pT->zType, "table")!=0 && strcmp(pT->zType, "index")!=0
+         && findSchemaEntry(aOursSchema, nOursSchema, pT->zName)==0
+         && (pAnc = findSchemaEntry(aAncSchema, nAncSchema, pT->zName))!=0
+         && pAnc->zType && strcmp(pAnc->zType, pT->zType)==0
+         && (pAnc->zSql==0)==(pT->zSql==0)
+         && (pAnc->zSql==0 || strcmp(pAnc->zSql, pT->zSql)==0) ){
+          continue;
+        }
+        aKept[nFallback++] = *pT;
+      }
+      aFallback = aKept;
+    }
+    rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
+                                aFallback, nFallback, pMergedHash);
+    sqlite3_free(aKept);
+  }
 
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
     rc = recordMergeConflicts(db, aConflictTables, nConflictTables);
