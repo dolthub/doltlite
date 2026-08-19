@@ -89,7 +89,7 @@ jobs:
         set -e
         if [ "$rc" -ne 0 ]; then
           echo "::error::assert-enabled regression suite failed (exit $rc)"
-          sudo apt-get install -y -qq gdb >/dev/null 2>&1 || true
+          bash .github/scripts/retry-apt-get.sh install -y -qq gdb >/dev/null 2>&1 || true
           core=$(ls -1 core.* 2>/dev/null | head -1)
           if [ -n "$core" ] && command -v gdb >/dev/null 2>&1; then
             gdb -batch -ex 'bt full' build-assert/doltlite_regression_test_c "$core" 2>&1 | head -120
