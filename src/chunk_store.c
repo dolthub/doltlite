@@ -799,10 +799,12 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   int idx = -1;
   int rc;
+  ChunkIndexEntry entry;
   *pHas = 0;
   if( cs->notADatabase ) return SQLITE_NOTADB;
-  if( csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash) >= 0 ){
-    *pHas = 1;
+  rc = csIndexLookup(cs, hash, &entry, pHas);
+  if( rc!=SQLITE_OK ) return rc;
+  if( *pHas ){
     return SQLITE_OK;
   }
   rc = csSearchRecent(cs, hash, &idx);
@@ -861,16 +863,19 @@ int chunkStoreGet(
 
   {
     ChunkIndexEntry *e;
+    ChunkIndexEntry indexEntry;
+    int found = 0;
     rc = csSearchRecent(cs, hash, &idx);
     if( rc!=SQLITE_OK ) return rc;
     if( idx >= 0 ){
       e = &cs->staging.aRecent[idx];
     }else{
-      idx = csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash);
-      if( idx < 0 ){
+      rc = csIndexLookup(cs, hash, &indexEntry, &found);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !found ){
         return SQLITE_NOTFOUND;
       }
-      e = &cs->index.aIndex[idx];
+      e = &indexEntry;
     }
 
     if( cs->file.pFile == 0 ){
@@ -1305,6 +1310,8 @@ int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest){
   int rc;
 
   assert( chunkStoreIsEmpty(pDest) );
+  rc = csMaterializeIndex(pSrc);
+  if( rc!=SQLITE_OK ) return rc;
   chunkIndexGetEntries(&pSrc->index, &nEntry, &aEntry);
   rc = csCopyEntries(pSrc, pDest, aEntry, nEntry);
   if( rc!=SQLITE_OK ) return rc;

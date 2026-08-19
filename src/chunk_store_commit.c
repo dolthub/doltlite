@@ -268,6 +268,11 @@ static int csCommitPlanPendingIndex(
     return csGrowRecent(cs, cs->staging.nPending);
   }
 
+  {
+    int rc = csMaterializeIndex(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   if( cs->staging.nRecent > 0 ){
     *paMergePending = (ChunkIndexEntry*)sqlite3_malloc(
       (cs->staging.nRecent + cs->staging.nPending) * (int)sizeof(ChunkIndexEntry)

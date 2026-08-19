@@ -54,8 +54,8 @@
 
 #define CS_MANIFEST_MAGIC_OFF        0
 #define CS_MANIFEST_VERSION_OFF      4
-/* A sealed root may point at an ordinary WAL chunk containing a full index.
-** Readers that do not understand the stamp safely replay that chunk. */
+/* A sealed root may point at an index checkpoint made of ordinary WAL chunks.
+** Readers that do not understand the stamp safely replay those chunks. */
 #define CS_MANIFEST_CHECKPOINT_MAGIC_OFF 8
 #define CS_MANIFEST_CHECKPOINT_OFFSET_OFF 12
 #define CS_MANIFEST_CHECKPOINT_SIZE_OFF 20
@@ -83,9 +83,12 @@
 #define CS_MANIFEST_NEXT_OFF_OFF     52
 #define CS_MANIFEST_BATCH_START_OFF  60
 #define CS_MANIFEST_CHECKPOINT_REPLAY_OFF 68
+#define CS_MANIFEST_CHECKPOINT_DATA_END_OFF 76
 #define CS_MANIFEST_WAL_OFFSET_OFF   84
 #define CS_MANIFEST_REFS_HASH_OFF    104
 #define CS_MANIFEST_SELF_HASH_OFF    124
+#define CS_MANIFEST_CHECKPOINT_HASH_OFF 144
+#define CS_MANIFEST_CHECKPOINT_COUNT_OFF 164
 
 #define CS_MANIFEST_HASH_LEGACY 0
 #define CS_MANIFEST_HASH_OK     1
@@ -93,10 +96,17 @@
 
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
-#define CS_WAL_CHECKPOINT_MAGIC 0x31504b43
+#define CS_WAL_CHECKPOINT_MAGIC_V1 0x31504b43
+#define CS_WAL_CHECKPOINT_MAGIC_V2 0x32504b43
 #define CS_WAL_CHUNK_HASH_OFF  1
 #define CS_WAL_CHUNK_LEN_OFF   (1 + PROLLY_HASH_SIZE)
 #define CS_WAL_CHUNK_HDR_SIZE  (1 + PROLLY_HASH_SIZE + 4)
+
+#define CS_INDEX_PAGE_LEAF_MAGIC 0x314c5049
+#define CS_INDEX_PAGE_INTERNAL_MAGIC 0x31495049
+#define CS_INDEX_PAGE_SIZE 4096
+#define CS_INDEX_PAGE_HEADER_SIZE 8
+#define CS_INDEX_CHILD_SIZE (PROLLY_HASH_SIZE + 8 + 4 + PROLLY_HASH_SIZE)
 
 #define WS_FORMAT_VERSION_V2 2
 #define WS_FORMAT_VERSION_V3 3

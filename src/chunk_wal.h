@@ -16,6 +16,10 @@ struct WalState {
   i64 iCheckpointOffset;
   i64 nCheckpointIndex;
   i64 iCheckpointReplay;
+  i64 iCheckpointDataEnd;
+  int nCheckpointEntries;
+  ProllyHash checkpointHash;
+  u32 checkpointMagic;
   u8 recoveredMidStream;
   u8 cleanCloseMarker;
 };
@@ -25,6 +29,7 @@ struct ChunkStoreReplayState {
   int nIndex;
   void *aIndexMmapBase;
   i64 aIndexMmapSize;
+  ChunkIndexLazy lazy;
   SavedRefsState refs;
 };
 

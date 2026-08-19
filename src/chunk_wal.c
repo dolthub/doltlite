@@ -28,6 +28,10 @@ void walStateSetOffset(WalState *w, i64 iOffset){
   w->iCheckpointOffset = 0;
   w->nCheckpointIndex = 0;
   w->iCheckpointReplay = 0;
+  w->iCheckpointDataEnd = 0;
+  w->nCheckpointEntries = 0;
+  memset(&w->checkpointHash, 0, sizeof(w->checkpointHash));
+  w->checkpointMagic = 0;
 }
 
 void walStateSetDataSize(WalState *w, i64 nData){
@@ -45,9 +49,13 @@ static int csReadCheckpointStamp(
   i64 nIndex;
   i64 iReplay;
   i64 iCheckpointRoot;
+  i64 iDataEnd = 0;
+  int nEntries = 0;
+  u32 magic;
 
-  if( CS_READ_U32(aManifest + CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
-      != CS_WAL_CHECKPOINT_MAGIC ){
+  magic = CS_READ_U32(aManifest + CS_MANIFEST_CHECKPOINT_MAGIC_OFF);
+  if( magic!=CS_WAL_CHECKPOINT_MAGIC_V1
+   && magic!=CS_WAL_CHECKPOINT_MAGIC_V2 ){
     return 0;
   }
   iOffset = CS_READ_I64(aManifest + CS_MANIFEST_CHECKPOINT_OFFSET_OFF);
@@ -55,11 +63,23 @@ static int csReadCheckpointStamp(
       aManifest + CS_MANIFEST_CHECKPOINT_SIZE_OFF);
   iReplay = CS_READ_I64(
       aManifest + CS_MANIFEST_CHECKPOINT_REPLAY_OFF);
-  if( iOffset<pWal->iWalOffset || nIndex<=0
-   || nIndex%CHUNK_INDEX_ENTRY_SIZE!=0
-   || nIndex>INT_MAX
+  if( iOffset<pWal->iWalOffset || nIndex<=0 || nIndex>INT_MAX
    || iOffset>LARGEST_INT64-CS_WAL_CHUNK_HDR_SIZE-nIndex ){
     return 0;
+  }
+  if( magic==CS_WAL_CHECKPOINT_MAGIC_V1 ){
+    if( nIndex%CHUNK_INDEX_ENTRY_SIZE!=0 ) return 0;
+    nEntries = (int)(nIndex/CHUNK_INDEX_ENTRY_SIZE);
+    iDataEnd = iOffset;
+  }else{
+    iDataEnd = CS_READ_I64(
+        aManifest + CS_MANIFEST_CHECKPOINT_DATA_END_OFF);
+    nEntries = (int)CS_READ_U32(
+        aManifest + CS_MANIFEST_CHECKPOINT_COUNT_OFF);
+    if( nIndex<CS_INDEX_PAGE_HEADER_SIZE || nIndex>CS_INDEX_PAGE_SIZE
+     || iDataEnd<pWal->iWalOffset || iDataEnd>iOffset || nEntries<=0 ){
+      return 0;
+    }
   }
   iCheckpointRoot = iOffset + CS_WAL_CHUNK_HDR_SIZE + nIndex;
   if( iCheckpointRoot>iRootOffset
@@ -71,23 +91,43 @@ static int csReadCheckpointStamp(
   pWal->iCheckpointOffset = iOffset;
   pWal->nCheckpointIndex = nIndex;
   pWal->iCheckpointReplay = iReplay;
+  pWal->iCheckpointDataEnd = iDataEnd;
+  pWal->nCheckpointEntries = nEntries;
+  pWal->checkpointMagic = magic;
+  if( magic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
+    memcpy(pWal->checkpointHash.data,
+           aManifest + CS_MANIFEST_CHECKPOINT_HASH_OFF,
+           PROLLY_HASH_SIZE);
+  }else{
+    memset(&pWal->checkpointHash, 0, sizeof(pWal->checkpointHash));
+  }
   return 1;
 }
 
 void csStampWalCheckpoint(const ChunkStore *cs, u8 *aManifest){
   if( cs->wal.iCheckpointOffset<=0 || cs->wal.nCheckpointIndex<=0
-   || cs->wal.iCheckpointReplay<=0 ){
+   || cs->wal.iCheckpointReplay<=0
+   || (cs->wal.checkpointMagic!=CS_WAL_CHECKPOINT_MAGIC_V1
+       && cs->wal.checkpointMagic!=CS_WAL_CHECKPOINT_MAGIC_V2) ){
     return;
   }
   assert( cs->wal.nCheckpointIndex<=0xffffffffu );
   CS_WRITE_U32(aManifest + CS_MANIFEST_CHECKPOINT_MAGIC_OFF,
-               CS_WAL_CHECKPOINT_MAGIC);
+               cs->wal.checkpointMagic);
   CS_WRITE_I64(aManifest + CS_MANIFEST_CHECKPOINT_OFFSET_OFF,
                cs->wal.iCheckpointOffset);
   CS_WRITE_U32(aManifest + CS_MANIFEST_CHECKPOINT_SIZE_OFF,
                (u32)cs->wal.nCheckpointIndex);
   CS_WRITE_I64(aManifest + CS_MANIFEST_CHECKPOINT_REPLAY_OFF,
                cs->wal.iCheckpointReplay);
+  if( cs->wal.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
+    CS_WRITE_I64(aManifest + CS_MANIFEST_CHECKPOINT_DATA_END_OFF,
+                 cs->wal.iCheckpointDataEnd);
+    memcpy(aManifest + CS_MANIFEST_CHECKPOINT_HASH_OFF,
+           cs->wal.checkpointHash.data, PROLLY_HASH_SIZE);
+    CS_WRITE_U32(aManifest + CS_MANIFEST_CHECKPOINT_COUNT_OFF,
+                 (u32)cs->wal.nCheckpointEntries);
+  }
 }
 
 static i64 csWalCheckpointThreshold(void){
@@ -134,13 +174,17 @@ static int csBuildCheckpointIndex(
   ChunkIndexEntry **ppIndex,
   int *pnIndex
 ){
-  i64 nAlloc = (i64)cs->index.nIndex + cs->staging.nRecent;
+  i64 nAlloc;
   ChunkIndexEntry *aIndex;
   int i;
   int nOut = 0;
+  int rc;
 
   *ppIndex = 0;
   *pnIndex = 0;
+  rc = csMaterializeIndex(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  nAlloc = (i64)cs->index.nIndex + cs->staging.nRecent;
   if( nAlloc<=0 || nAlloc>INT_MAX/(int)sizeof(ChunkIndexEntry) ){
     return nAlloc<=0 ? SQLITE_OK : SQLITE_TOOBIG;
   }
@@ -167,64 +211,181 @@ static int csBuildCheckpointIndex(
   return SQLITE_OK;
 }
 
+typedef struct CsCheckpointPageRef CsCheckpointPageRef;
+struct CsCheckpointPageRef {
+  ProllyHash maxHash;
+  ProllyHash bodyHash;
+  i64 offset;
+  int size;
+};
+
+static int csWriteCheckpointPage(
+  ChunkStore *cs,
+  const u8 *aBody,
+  int nBody,
+  const ProllyHash *pMaxHash,
+  i64 *pOffset,
+  CsCheckpointPageRef *pRef
+){
+  u8 aHeader[CS_WAL_CHUNK_HDR_SIZE];
+  int rc;
+  if( nBody<CS_INDEX_PAGE_HEADER_SIZE || nBody>CS_INDEX_PAGE_SIZE
+   || *pOffset>LARGEST_INT64-CS_WAL_CHUNK_HDR_SIZE-nBody ){
+    return SQLITE_TOOBIG;
+  }
+  prollyHashCompute(aBody, nBody, &pRef->bodyHash);
+  csFillChunkHdr(aHeader, &pRef->bodyHash, (u32)nBody);
+  rc = sqlite3OsWrite(cs->file.pFile, aHeader, sizeof(aHeader), *pOffset);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsWrite(cs->file.pFile, aBody, nBody,
+                        *pOffset+CS_WAL_CHUNK_HDR_SIZE);
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  pRef->maxHash = *pMaxHash;
+  pRef->offset = *pOffset;
+  pRef->size = nBody;
+  *pOffset += CS_WAL_CHUNK_HDR_SIZE+nBody;
+  return SQLITE_OK;
+}
+
+static int csWriteCheckpointLeaves(
+  ChunkStore *cs,
+  const ChunkIndexEntry *aIndex,
+  int nIndex,
+  i64 *pOffset,
+  CsCheckpointPageRef **ppRef,
+  int *pnRef
+){
+  const int nPerPage =
+      (CS_INDEX_PAGE_SIZE-CS_INDEX_PAGE_HEADER_SIZE)/CHUNK_INDEX_ENTRY_SIZE;
+  int nRef = (nIndex+nPerPage-1)/nPerPage;
+  CsCheckpointPageRef *aRef;
+  u8 aBody[CS_INDEX_PAGE_SIZE];
+  int i;
+  int rc = SQLITE_OK;
+
+  if( nRef<=0 || nRef>INT_MAX/(int)sizeof(CsCheckpointPageRef) ){
+    return SQLITE_TOOBIG;
+  }
+  aRef = sqlite3_malloc64(
+      (sqlite3_uint64)nRef*sizeof(CsCheckpointPageRef));
+  if( !aRef ) return SQLITE_NOMEM;
+  for(i=0; i<nRef; i++){
+    int iFirst = i*nPerPage;
+    int nCell = nIndex-iFirst;
+    int j;
+    int nBody;
+    if( nCell>nPerPage ) nCell = nPerPage;
+    CS_WRITE_U32(aBody, CS_INDEX_PAGE_LEAF_MAGIC);
+    CS_WRITE_U32(aBody+4, (u32)nCell);
+    for(j=0; j<nCell; j++){
+      csSerializeCheckpointEntry(
+          aBody+CS_INDEX_PAGE_HEADER_SIZE+j*CHUNK_INDEX_ENTRY_SIZE,
+          &aIndex[iFirst+j]);
+    }
+    nBody = CS_INDEX_PAGE_HEADER_SIZE+nCell*CHUNK_INDEX_ENTRY_SIZE;
+    rc = csWriteCheckpointPage(cs, aBody, nBody,
+                               &aIndex[iFirst+nCell-1].hash,
+                               pOffset, &aRef[i]);
+    if( rc!=SQLITE_OK ) break;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aRef);
+    return rc;
+  }
+  *ppRef = aRef;
+  *pnRef = nRef;
+  return SQLITE_OK;
+}
+
+static int csWriteCheckpointParents(
+  ChunkStore *cs,
+  CsCheckpointPageRef *aChild,
+  int nChild,
+  i64 *pOffset,
+  CsCheckpointPageRef **ppParent,
+  int *pnParent
+){
+  const int nPerPage =
+      (CS_INDEX_PAGE_SIZE-CS_INDEX_PAGE_HEADER_SIZE)/CS_INDEX_CHILD_SIZE;
+  int nParent = (nChild+nPerPage-1)/nPerPage;
+  CsCheckpointPageRef *aParent;
+  u8 aBody[CS_INDEX_PAGE_SIZE];
+  int i;
+  int rc = SQLITE_OK;
+
+  aParent = sqlite3_malloc64(
+      (sqlite3_uint64)nParent*sizeof(CsCheckpointPageRef));
+  if( !aParent ) return SQLITE_NOMEM;
+  for(i=0; i<nParent; i++){
+    int iFirst = i*nPerPage;
+    int nCell = nChild-iFirst;
+    int j;
+    int nBody;
+    if( nCell>nPerPage ) nCell = nPerPage;
+    CS_WRITE_U32(aBody, CS_INDEX_PAGE_INTERNAL_MAGIC);
+    CS_WRITE_U32(aBody+4, (u32)nCell);
+    for(j=0; j<nCell; j++){
+      const CsCheckpointPageRef *pChild = &aChild[iFirst+j];
+      u8 *p = aBody+CS_INDEX_PAGE_HEADER_SIZE+j*CS_INDEX_CHILD_SIZE;
+      memcpy(p, pChild->maxHash.data, PROLLY_HASH_SIZE);
+      p += PROLLY_HASH_SIZE;
+      CS_WRITE_I64(p, pChild->offset);
+      p += 8;
+      CS_WRITE_U32(p, (u32)pChild->size);
+      p += 4;
+      memcpy(p, pChild->bodyHash.data, PROLLY_HASH_SIZE);
+    }
+    nBody = CS_INDEX_PAGE_HEADER_SIZE+nCell*CS_INDEX_CHILD_SIZE;
+    rc = csWriteCheckpointPage(cs, aBody, nBody,
+                               &aChild[iFirst+nCell-1].maxHash,
+                               pOffset, &aParent[i]);
+    if( rc!=SQLITE_OK ) break;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aParent);
+    return rc;
+  }
+  *ppParent = aParent;
+  *pnParent = nParent;
+  return SQLITE_OK;
+}
+
 int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize){
   ChunkIndexEntry *aIndex = 0;
+  CsCheckpointPageRef *aRef = 0;
   int nIndex = 0;
-  i64 nIndexBytes;
   i64 iCheckpoint;
+  i64 iDataEnd;
+  i64 iWrite;
   i64 iRoot;
   i64 iRootEnd;
   i64 iNext;
-  u8 aEntry[CHUNK_INDEX_ENTRY_SIZE];
-  u8 aBuf[65536];
-  u8 aHeader[CS_WAL_CHUNK_HDR_SIZE];
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
-  ProllyHash snapshotHash;
-  blake3_hasher hasher;
-  int i;
+  int nRef = 0;
   int rc;
 
   rc = csBuildCheckpointIndex(cs, &aIndex, &nIndex);
   if( rc!=SQLITE_OK || nIndex==0 ) goto checkpoint_done;
-  nIndexBytes = (i64)nIndex * CHUNK_INDEX_ENTRY_SIZE;
-  if( nIndexBytes>INT_MAX
-   || cs->file.iFileSize>LARGEST_INT64-CS_WAL_CHUNK_HDR_SIZE-nIndexBytes ){
-    rc = SQLITE_TOOBIG;
-    goto checkpoint_done;
-  }
-
-  blake3_hasher_init(&hasher);
-  for(i=0; i<nIndex; i++){
-    csSerializeCheckpointEntry(aEntry, &aIndex[i]);
-    blake3_hasher_update(&hasher, aEntry, sizeof(aEntry));
-  }
-  blake3_hasher_finalize(&hasher, snapshotHash.data, PROLLY_HASH_SIZE);
-
-  iCheckpoint = cs->file.iFileSize;
-  csFillChunkHdr(aHeader, &snapshotHash, (u32)nIndexBytes);
-  rc = sqlite3OsWrite(cs->file.pFile, aHeader, sizeof(aHeader), iCheckpoint);
+  iDataEnd = cs->file.iFileSize;
+  iWrite = iDataEnd;
+  rc = csWriteCheckpointLeaves(cs, aIndex, nIndex, &iWrite, &aRef, &nRef);
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
-  for(i=0; i<nIndex; ){
-    int nEntry = nIndex-i;
-    int j;
-    if( nEntry>(int)(sizeof(aBuf)/CHUNK_INDEX_ENTRY_SIZE) ){
-      nEntry = (int)(sizeof(aBuf)/CHUNK_INDEX_ENTRY_SIZE);
-    }
-    for(j=0; j<nEntry; j++){
-      csSerializeCheckpointEntry(
-          aBuf + j*CHUNK_INDEX_ENTRY_SIZE, &aIndex[i+j]);
-    }
-    rc = sqlite3OsWrite(cs->file.pFile, aBuf,
-        nEntry*CHUNK_INDEX_ENTRY_SIZE,
-        iCheckpoint + CS_WAL_CHUNK_HDR_SIZE
-        + (i64)i * CHUNK_INDEX_ENTRY_SIZE);
+  while( nRef>1 ){
+    CsCheckpointPageRef *aParent = 0;
+    int nParent = 0;
+    rc = csWriteCheckpointParents(cs, aRef, nRef, &iWrite,
+                                  &aParent, &nParent);
+    sqlite3_free(aRef);
+    aRef = aParent;
+    nRef = nParent;
     if( rc!=SQLITE_OK ) goto checkpoint_rollback;
-    i += nEntry;
   }
   rc = csSyncFile(cs);
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
 
-  iRoot = iCheckpoint + CS_WAL_CHUNK_HDR_SIZE + nIndexBytes;
+  iCheckpoint = aRef[0].offset;
+  iRoot = iWrite;
   iRootEnd = iRoot + (i64)sizeof(aRoot);
   iNext = iRootEnd;
   if( sectorSize>1 ){
@@ -237,11 +398,15 @@ int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize){
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_NEXT_OFF_OFF, iNext);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_BATCH_START_OFF, iRoot);
   CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_MAGIC_OFF,
-               CS_WAL_CHECKPOINT_MAGIC);
+               CS_WAL_CHECKPOINT_MAGIC_V2);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_CHECKPOINT_OFFSET_OFF, iCheckpoint);
   CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_SIZE_OFF,
-               (u32)nIndexBytes);
+               (u32)aRef[0].size);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_CHECKPOINT_REPLAY_OFF, iNext);
+  CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_CHECKPOINT_DATA_END_OFF, iDataEnd);
+  memcpy(aRoot + 1 + CS_MANIFEST_CHECKPOINT_HASH_OFF,
+         aRef[0].bodyHash.data, PROLLY_HASH_SIZE);
+  CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_COUNT_OFF, (u32)nIndex);
   csManifestSeal(aRoot + 1, iRoot);
   rc = sqlite3OsWrite(cs->file.pFile, aRoot, sizeof(aRoot), iRoot);
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
@@ -249,8 +414,12 @@ int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize){
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
 
   cs->wal.iCheckpointOffset = iCheckpoint;
-  cs->wal.nCheckpointIndex = nIndexBytes;
+  cs->wal.nCheckpointIndex = aRef[0].size;
   cs->wal.iCheckpointReplay = iNext;
+  cs->wal.iCheckpointDataEnd = iDataEnd;
+  cs->wal.nCheckpointEntries = nIndex;
+  cs->wal.checkpointHash = aRef[0].bodyHash;
+  cs->wal.checkpointMagic = CS_WAL_CHECKPOINT_MAGIC_V2;
   cs->file.iFileSize = iNext;
   cs->wal.nWalData = iRootEnd - cs->wal.iWalOffset;
   cs->wal.cleanCloseMarker = 1;
@@ -258,10 +427,11 @@ int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize){
   goto checkpoint_done;
 
 checkpoint_rollback:
-  (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+  (void)sqlite3OsTruncate(cs->file.pFile, iDataEnd);
   (void)csSyncFile(cs);
 
 checkpoint_done:
+  sqlite3_free(aRef);
   sqlite3_free(aIndex);
   return rc;
 }
@@ -273,6 +443,7 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   pSaved->nIndex = cs->index.nIndex;
   pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
   pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
+  pSaved->lazy = cs->index.lazy;
   csCaptureSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -281,6 +452,7 @@ static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pS
   cs->index.nIndex = pSaved->nIndex;
   cs->index.aIndexMmapBase = pSaved->aIndexMmapBase;
   cs->index.aIndexMmapSize = pSaved->aIndexMmapSize;
+  cs->index.lazy = pSaved->lazy;
   csRestoreSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -340,10 +512,15 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->index.nIndex = pSrc->index.nIndex;
   pDst->index.aIndexMmapBase = pSrc->index.aIndexMmapBase;
   pDst->index.aIndexMmapSize = pSrc->index.aIndexMmapSize;
+  pDst->index.lazy = pSrc->index.lazy;
   pDst->wal.nWalData = pSrc->wal.nWalData;
   pDst->wal.iCheckpointOffset = pSrc->wal.iCheckpointOffset;
   pDst->wal.nCheckpointIndex = pSrc->wal.nCheckpointIndex;
   pDst->wal.iCheckpointReplay = pSrc->wal.iCheckpointReplay;
+  pDst->wal.iCheckpointDataEnd = pSrc->wal.iCheckpointDataEnd;
+  pDst->wal.nCheckpointEntries = pSrc->wal.nCheckpointEntries;
+  pDst->wal.checkpointHash = pSrc->wal.checkpointHash;
+  pDst->wal.checkpointMagic = pSrc->wal.checkpointMagic;
   pDst->wal.recoveredMidStream = pSrc->wal.recoveredMidStream;
   pDst->wal.cleanCloseMarker = pSrc->wal.cleanCloseMarker;
   pDst->corruptMidStream = pSrc->corruptMidStream;
@@ -355,10 +532,15 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->index.nIndex = 0;
   pSrc->index.aIndexMmapBase = 0;
   pSrc->index.aIndexMmapSize = 0;
+  memset(&pSrc->index.lazy, 0, sizeof(pSrc->index.lazy));
   pSrc->wal.nWalData = 0;
   pSrc->wal.iCheckpointOffset = 0;
   pSrc->wal.nCheckpointIndex = 0;
   pSrc->wal.iCheckpointReplay = 0;
+  pSrc->wal.iCheckpointDataEnd = 0;
+  pSrc->wal.nCheckpointEntries = 0;
+  memset(&pSrc->wal.checkpointHash, 0, sizeof(pSrc->wal.checkpointHash));
+  pSrc->wal.checkpointMagic = 0;
   pSrc->wal.cleanCloseMarker = 0;
   REFS_OWNED_CLEAR(pSrc->refs);
 }
@@ -491,10 +673,11 @@ static int csReplayWalFrom(ChunkStore *cs, i64 iStart){
   }
   if( walSize <= 0 ){
     /* Without a WAL tail, chunk_count must describe the compacted index. */
-    if( cs->index.nIndex > 0 && cs->index.nChunks != cs->index.nIndex ){
+    if( chunkIndexCount(&cs->index)>0
+     && cs->index.nChunks!=chunkIndexCount(&cs->index) ){
       return SQLITE_CORRUPT;
     }
-    if( cs->index.nIndex==0 && cs->index.nChunks==0
+    if( chunkIndexCount(&cs->index)==0 && cs->index.nChunks==0
      && !prollyHashIsEmpty(&cs->refs.refsHash) ){
       memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     }
@@ -590,9 +773,12 @@ static int csReplayWalFrom(ChunkStore *cs, i64 iStart){
         }
       }
       {
-        int existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex, &hash);
+        ChunkIndexEntry existingEntry;
+        int existing = 0;
         ChunkIndexEntry *e = 0;
-        if( existing < 0 ){
+        rc = csIndexLookup(cs, &hash, &existingEntry, &existing);
+        if( rc!=SQLITE_OK ) goto replay_error;
+        if( !existing ){
           rc = csGrowPending(cs);
           if( rc != SQLITE_OK ) goto replay_error;
           e = &cs->staging.aPending[cs->staging.nPending];
@@ -707,7 +893,7 @@ static int csReplayWalFrom(ChunkStore *cs, i64 iStart){
   ** if no root manifest can be replayed. */
   if( sawDamage
    && nRootRecordsSeen == 0
-   && nPendingBefore == 0 && cs->index.nIndex == 0 ){
+   && nPendingBefore == 0 && chunkIndexCount(&cs->index)==0 ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->index.nChunks = 0;
     cs->wal.recoveredMidStream = 1;
@@ -723,7 +909,7 @@ static int csReplayWalFrom(ChunkStore *cs, i64 iStart){
   cs->staging.nPending = nRootedPending;
 
   if( nRootRecordsSeen == 0
-   && nPendingBefore == 0 && cs->index.nIndex == 0
+   && nPendingBefore == 0 && chunkIndexCount(&cs->index)==0
    && !sawMidStream && !cs->wal.recoveredMidStream ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->index.nChunks = 0;
@@ -780,6 +966,10 @@ int csReplayWal(ChunkStore *cs){
   cs->wal.iCheckpointOffset = 0;
   cs->wal.nCheckpointIndex = 0;
   cs->wal.iCheckpointReplay = 0;
+  cs->wal.iCheckpointDataEnd = 0;
+  cs->wal.nCheckpointEntries = 0;
+  memset(&cs->wal.checkpointHash, 0, sizeof(cs->wal.checkpointHash));
+  cs->wal.checkpointMagic = 0;
   return csReplayWalFrom(cs, cs->wal.iWalOffset);
 }
 
@@ -855,6 +1045,12 @@ int csTryLoadWalCheckpoint(ChunkStore *cs, int *pLoaded){
    || rootStamp.iCheckpointOffset!=stamp.iCheckpointOffset
    || rootStamp.nCheckpointIndex!=stamp.nCheckpointIndex
    || rootStamp.iCheckpointReplay!=stamp.iCheckpointReplay
+   || rootStamp.checkpointMagic!=stamp.checkpointMagic
+   || (stamp.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2
+       && (rootStamp.iCheckpointDataEnd!=stamp.iCheckpointDataEnd
+           || rootStamp.nCheckpointEntries!=stamp.nCheckpointEntries
+           || prollyHashCompare(&rootStamp.checkpointHash,
+                                &stamp.checkpointHash)!=0))
    || CS_READ_I64(aRoot+1+CS_MANIFEST_DURABLE_TO_OFF)<iRoot
    || CS_READ_I64(aRoot+1+CS_MANIFEST_BATCH_START_OFF)!=iRoot
    || CS_READ_I64(aRoot+1+CS_MANIFEST_NEXT_OFF_OFF)
@@ -868,6 +1064,79 @@ int csTryLoadWalCheckpoint(ChunkStore *cs, int *pLoaded){
   if( aHeader[0]!=CS_WAL_TAG_CHUNK
    || (i64)CS_READ_U32(aHeader+CS_WAL_CHUNK_LEN_OFF)
         !=stamp.nCheckpointIndex ){
+    return SQLITE_OK;
+  }
+  if( stamp.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
+    u8 *aPage = 0;
+    u32 pageMagic;
+    u32 nCell;
+    int nCellSize;
+    if( memcmp(aHeader+CS_WAL_CHUNK_HASH_OFF,
+               stamp.checkpointHash.data, PROLLY_HASH_SIZE)!=0 ){
+      return SQLITE_OK;
+    }
+    aPage = sqlite3_malloc((int)stamp.nCheckpointIndex);
+    if( !aPage ) return SQLITE_NOMEM;
+    rc = sqlite3OsRead(cs->file.pFile, aPage, (int)stamp.nCheckpointIndex,
+                       stamp.iCheckpointOffset+CS_WAL_CHUNK_HDR_SIZE);
+    if( rc==SQLITE_OK ){
+      prollyHashCompute(aPage, (int)stamp.nCheckpointIndex, &bodyHash);
+      if( prollyHashCompare(&bodyHash, &stamp.checkpointHash)!=0 ){
+        rc = SQLITE_CORRUPT;
+      }
+    }
+    if( rc==SQLITE_OK ){
+      pageMagic = CS_READ_U32(aPage);
+      nCell = CS_READ_U32(aPage+4);
+      nCellSize = pageMagic==CS_INDEX_PAGE_LEAF_MAGIC
+                ? CHUNK_INDEX_ENTRY_SIZE
+                : pageMagic==CS_INDEX_PAGE_INTERNAL_MAGIC
+                  ? CS_INDEX_CHILD_SIZE : 0;
+      if( nCellSize==0 || nCell==0
+       || (i64)CS_INDEX_PAGE_HEADER_SIZE+(i64)nCell*nCellSize
+            !=stamp.nCheckpointIndex ){
+        rc = SQLITE_CORRUPT;
+      }
+    }
+    sqlite3_free(aPage);
+    if( rc!=SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
+
+    csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase,
+                      cs->index.aIndexMmapSize);
+    cs->index.aIndex = 0;
+    cs->index.nIndex = 0;
+    cs->index.aIndexMmapBase = 0;
+    cs->index.aIndexMmapSize = 0;
+    cs->index.lazy.iRootOffset = stamp.iCheckpointOffset;
+    cs->index.lazy.iDataEnd = stamp.iCheckpointDataEnd;
+    cs->index.lazy.nRootSize = (int)stamp.nCheckpointIndex;
+    cs->index.lazy.nEntries = stamp.nCheckpointEntries;
+    cs->index.lazy.rootHash = stamp.checkpointHash;
+    cs->index.lazy.active = 1;
+    cs->index.nChunks = (int)CS_READ_U32(
+        aRoot+1+CS_MANIFEST_CHUNK_COUNT_OFF);
+    memcpy(cs->refs.refsHash.data,
+           aRoot+1+CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
+    cs->wal.iCheckpointOffset = stamp.iCheckpointOffset;
+    cs->wal.nCheckpointIndex = stamp.nCheckpointIndex;
+    cs->wal.iCheckpointReplay = stamp.iCheckpointReplay;
+    cs->wal.iCheckpointDataEnd = stamp.iCheckpointDataEnd;
+    cs->wal.nCheckpointEntries = stamp.nCheckpointEntries;
+    cs->wal.checkpointHash = stamp.checkpointHash;
+    cs->wal.checkpointMagic = stamp.checkpointMagic;
+    rc = csReplayWalFrom(cs, stamp.iCheckpointReplay);
+    if( rc!=SQLITE_OK ){
+      memset(&cs->index.lazy, 0, sizeof(cs->index.lazy));
+      cs->wal.iCheckpointOffset = 0;
+      cs->wal.nCheckpointIndex = 0;
+      cs->wal.iCheckpointReplay = 0;
+      cs->wal.iCheckpointDataEnd = 0;
+      cs->wal.nCheckpointEntries = 0;
+      memset(&cs->wal.checkpointHash, 0, sizeof(cs->wal.checkpointHash));
+      cs->wal.checkpointMagic = 0;
+      return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
+    }
+    *pLoaded = 1;
     return SQLITE_OK;
   }
   nIndex = (int)(stamp.nCheckpointIndex / CHUNK_INDEX_ENTRY_SIZE);
@@ -926,6 +1195,10 @@ int csTryLoadWalCheckpoint(ChunkStore *cs, int *pLoaded){
   cs->wal.iCheckpointOffset = stamp.iCheckpointOffset;
   cs->wal.nCheckpointIndex = stamp.nCheckpointIndex;
   cs->wal.iCheckpointReplay = stamp.iCheckpointReplay;
+  cs->wal.iCheckpointDataEnd = stamp.iCheckpointDataEnd;
+  cs->wal.nCheckpointEntries = stamp.nCheckpointEntries;
+  cs->wal.checkpointHash = stamp.checkpointHash;
+  cs->wal.checkpointMagic = stamp.checkpointMagic;
   aIndex = 0;
   rc = csReplayWalFrom(cs, stamp.iCheckpointReplay);
   if( rc!=SQLITE_OK ) return rc;

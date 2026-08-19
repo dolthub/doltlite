@@ -1115,6 +1115,8 @@ static void test_large_wal_open_checkpoint(void){
   long long checkpointOff;
   long long checkpointSize;
   long long replayOff;
+  long long dataEnd;
+  unsigned int entryCount;
   int rc;
 
   printf("--- Test 24: Large WAL gets an open checkpoint ---\n");
@@ -1140,17 +1142,24 @@ static void test_large_wal_open_checkpoint(void){
   check("open_checkpoint_tail_root", tailOff>MANIFEST_SIZE);
   check("open_checkpoint_magic",
     read_u32_le_at(dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
-      ==CS_WAL_CHECKPOINT_MAGIC);
+      ==CS_WAL_CHECKPOINT_MAGIC_V2);
   checkpointOff = read_i64_le_at(
       dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_OFFSET_OFF);
   checkpointSize = read_u32_le_at(
       dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_SIZE_OFF);
   replayOff = read_i64_le_at(
       dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_REPLAY_OFF);
+  dataEnd = read_i64_le_at(
+      dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_DATA_END_OFF);
+  entryCount = read_u32_le_at(
+      dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_COUNT_OFF);
   check("open_checkpoint_geometry",
     checkpointOff>=MANIFEST_SIZE
+    && dataEnd>=MANIFEST_SIZE
+    && checkpointOff>=dataEnd
     && checkpointSize>0
-    && checkpointSize%CHUNK_INDEX_ENTRY_SIZE==0
+    && checkpointSize<=CS_INDEX_PAGE_SIZE
+    && entryCount>0
     && checkpointOff+CS_WAL_CHUNK_HDR_SIZE+checkpointSize==tailOff
     && replayOff>=tailOff+1+MANIFEST_SIZE);
 
@@ -1172,7 +1181,7 @@ static void test_large_wal_open_checkpoint(void){
   tailOff = file_size(dbpath) - (1 + MANIFEST_SIZE);
   check("open_checkpoint_propagated",
     read_u32_le_at(dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
-      ==CS_WAL_CHECKPOINT_MAGIC
+      ==CS_WAL_CHECKPOINT_MAGIC_V2
     && read_i64_le_at(dbpath,
          tailOff+1+CS_MANIFEST_CHECKPOINT_OFFSET_OFF)==checkpointOff);
   db = 0;
@@ -1212,6 +1221,67 @@ static void test_large_wal_open_checkpoint(void){
       sqlite3_free(pData);
       chunkStoreClose(&cs);
     }
+  }
+  removeDb(dbpath);
+}
+
+static void fill_checkpoint_value(unsigned char *a, int i){
+  int j;
+  for(j=0; j<32; j++) a[j] = (unsigned char)(i*37+j*11);
+  CS_WRITE_U32(a, (u32)i);
+}
+
+static void test_paged_checkpoint_large_index(void){
+  const char *dbpath = "/tmp/test_corr_paged_checkpoint.db";
+  const int nChunk = 20000;
+  const int aWant[] = { 0, 9999, 19999 };
+  ProllyHash aHash[3];
+  ChunkStore cs;
+  unsigned char value[32];
+  int i;
+  int rc;
+
+  printf("--- Test 24b: Paged checkpoint stays lazy for a large index ---\n");
+
+  removeDb(dbpath);
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  check("paged_checkpoint_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  for(i=0; i<nChunk && rc==SQLITE_OK; i++){
+    ProllyHash hash;
+    fill_checkpoint_value(value, i);
+    rc = chunkStorePut(&cs, value, sizeof(value), &hash);
+    if( i==aWant[0] ) aHash[0] = hash;
+    if( i==aWant[1] ) aHash[1] = hash;
+    if( i==aWant[2] ) aHash[2] = hash;
+  }
+  check("paged_checkpoint_put", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
+  check("paged_checkpoint_commit", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ) rc = csWriteWalCheckpoint(&cs, 1);
+  check("paged_checkpoint_write", rc==SQLITE_OK);
+  chunkStoreClose(&cs);
+
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("paged_checkpoint_reopen", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("paged_checkpoint_no_eager_entries", cs.index.nIndex==0);
+    check("paged_checkpoint_entry_count",
+          chunkIndexCount(&cs.index)==nChunk);
+    for(i=0; i<3; i++){
+      u8 *pData = 0;
+      int nData = 0;
+      char name[64];
+      fill_checkpoint_value(value, aWant[i]);
+      rc = chunkStoreGet(&cs, &aHash[i], &pData, &nData);
+      snprintf(name, sizeof(name), "paged_checkpoint_lookup_%d", i);
+      check(name, rc==SQLITE_OK && nData==(int)sizeof(value)
+                  && memcmp(pData, value, sizeof(value))==0);
+      sqlite3_free(pData);
+    }
+    chunkStoreClose(&cs);
   }
   removeDb(dbpath);
 }
@@ -1483,6 +1553,7 @@ int main(void){
   test_damage_far_before_sealing_root_poisons();
   test_crash_garbage_truncated_on_write();
   test_large_wal_open_checkpoint();
+  test_paged_checkpoint_large_index();
   test_root_seal_binds_file_offset();
   test_header_seal_detects_tampered_wal_offset();
   test_unsealed_header_still_opens();

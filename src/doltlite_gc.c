@@ -1001,6 +1001,13 @@ static int gcRun(
     }
   }
 
+  rc = csMaterializeIndex(cs);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    *pzPhase = "gc index load failed";
+    return rc;
+  }
+
   rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
