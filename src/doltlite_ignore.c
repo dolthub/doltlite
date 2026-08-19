@@ -13,6 +13,12 @@ struct IgnoreMatch {
   u8 removed;
 };
 
+static const char *ignoreUtf8Next(const char *z){
+  z++;
+  while( ((unsigned char)*z & 0xc0)==0x80 ) z++;
+  return z;
+}
+
 static int ignorePatternMatchMode(
   const char *zPat,
   const char *zStr,
@@ -30,13 +36,13 @@ static int ignorePatternMatchMode(
       zPat++;
     }else if( c=='?' && (!patternMode || (*zStr!='*' && *zStr!='%')) ){
       zPat++;
-      zStr++;
+      zStr = ignoreUtf8Next(zStr);
     }else if( c==(unsigned char)*zStr ){
       zPat++;
       zStr++;
     }else if( pStar ){
       zPat = pStar + 1;
-      sStar++;
+      sStar = ignoreUtf8Next(sStar);
       zStr = sStar;
     }else{
       return 0;
