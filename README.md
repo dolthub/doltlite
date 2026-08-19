@@ -259,16 +259,13 @@ SELECT dolt_commit('-m', 'accept higher-confidence edits');
 #### Ignoring Tables (`dolt_ignore`)
 
 Patterns skipped by `dolt_add` and hidden from `dolt_status` (tables stay in
-the working set). Create once per repo, then insert patterns (`*`/`%` =
-any; `?` = one char). Most-specific match wins; equal-specificity conflicts
-error.
+the working set). `SELECT` works before any pattern exists; the first write
+creates the backing table, which then commits, diffs, branches and merges
+like any other table. Patterns use `*`/`%` = any and `?` = one char.
+Most-specific match wins; equal-specificity conflicts error.
 
 ```sql
-CREATE TABLE dolt_ignore(
-  pattern TEXT NOT NULL,
-  ignored TINYINT NOT NULL,
-  PRIMARY KEY(pattern)
-);
+SELECT * FROM dolt_ignore;                       -- empty on a fresh repo
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 INSERT INTO dolt_ignore VALUES ('tmp_keep', 0);  -- un-ignore
 ```

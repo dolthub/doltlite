@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
+#include "doltlite_internal.h"
 #include "doltlite_ignore.h"
 #include <string.h>
 
@@ -199,6 +200,191 @@ int doltliteCheckIgnore(
   sqlite3_free(zBestPat);
   sqlite3_free(zTiePat);
   return SQLITE_OK;
+}
+
+typedef struct IgnoreVtab IgnoreVtab;
+struct IgnoreVtab {
+  sqlite3_vtab base;
+  sqlite3 *db;
+};
+
+typedef struct IgnoreCursor IgnoreCursor;
+struct IgnoreCursor {
+  sqlite3_vtab_cursor base;
+};
+
+static const char *zIgnoreVtabSchema =
+  "CREATE TABLE x(pattern TEXT NOT NULL PRIMARY KEY, "
+  "ignored TINYINT NOT NULL) WITHOUT ROWID";
+
+static const char *zIgnoreCreate =
+  "CREATE TABLE main.dolt_ignore("
+  "pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern))";
+
+static int ignoreSetErr(IgnoreVtab *p, int rc){
+  sqlite3_free(p->base.zErrMsg);
+  p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(p->db));
+  return rc;
+}
+
+static int ignoreConnect(sqlite3 *db, void *pAux, int argc,
+    const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  IgnoreVtab *pVtab;
+  int rc;
+  (void)pAux; (void)argc; (void)argv; (void)pzErr;
+  rc = doltliteVtabConnectSimple(db, zIgnoreVtabSchema,
+      sizeof(*pVtab), ppVtab);
+  if( rc!=SQLITE_OK ) return rc;
+  pVtab = (IgnoreVtab*)*ppVtab;
+  pVtab->db = db;
+  return SQLITE_OK;
+}
+
+static int ignoreBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  (void)pVtab;
+  pInfo->estimatedCost = 10.0;
+  pInfo->estimatedRows = 0;
+  return SQLITE_OK;
+}
+
+static int ignoreOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
+  (void)pVtab;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(IgnoreCursor));
+}
+
+static int ignoreFilter(sqlite3_vtab_cursor *pCursor,
+    int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
+  (void)pCursor; (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  return SQLITE_OK;
+}
+
+static int ignoreNext(sqlite3_vtab_cursor *pCursor){
+  (void)pCursor;
+  return SQLITE_OK;
+}
+
+static int ignoreEof(sqlite3_vtab_cursor *pCursor){
+  (void)pCursor;
+  return 1;
+}
+
+static int ignoreColumn(sqlite3_vtab_cursor *pCursor,
+    sqlite3_context *ctx, int iCol){
+  (void)pCursor; (void)ctx; (void)iCol;
+  return SQLITE_OK;
+}
+
+static int ignoreRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
+  (void)pCursor;
+  *pRowid = 0;
+  return SQLITE_OK;
+}
+
+static int ignoreMaterialize(IgnoreVtab *p){
+  char *zErr = 0;
+  int rc;
+  if( sqlite3FindTable(p->db, "dolt_ignore", "main") ) return SQLITE_OK;
+  rc = sqlite3_exec(p->db, zIgnoreCreate, 0, 0, &zErr);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(p->base.zErrMsg);
+    p->base.zErrMsg = sqlite3_mprintf("%s",
+        zErr ? zErr : sqlite3_errstr(rc));
+    sqlite3_free(zErr);
+  }
+  return rc;
+}
+
+static int ignoreBegin(sqlite3_vtab *pBase){
+  return ignoreMaterialize((IgnoreVtab*)pBase);
+}
+
+static int ignoreExecBound(IgnoreVtab *p, const char *zSql,
+                           sqlite3_value *pArg1, sqlite3_value *pArg2,
+                           sqlite3_value *pArg3){
+  sqlite3_stmt *pStmt = 0;
+  int rc = sqlite3_prepare_v3(p->db, zSql, -1,
+                              SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return ignoreSetErr(p, rc);
+  if( pArg1 ) sqlite3_bind_value(pStmt, 1, pArg1);
+  if( pArg2 ) sqlite3_bind_value(pStmt, 2, pArg2);
+  if( pArg3 ) sqlite3_bind_value(pStmt, 3, pArg3);
+  sqlite3_step(pStmt);
+  rc = sqlite3_finalize(pStmt);
+  if( rc!=SQLITE_OK ) return ignoreSetErr(p, rc);
+  return SQLITE_OK;
+}
+
+static const char *ignoreInsertSql(sqlite3 *db){
+  switch( sqlite3_vtab_on_conflict(db) ){
+    case SQLITE_REPLACE:
+      return "INSERT OR REPLACE INTO main.dolt_ignore(pattern, ignored) "
+             "VALUES(?1, ?2)";
+    case SQLITE_IGNORE:
+      return "INSERT OR IGNORE INTO main.dolt_ignore(pattern, ignored) "
+             "VALUES(?1, ?2)";
+    case SQLITE_FAIL:
+      return "INSERT OR FAIL INTO main.dolt_ignore(pattern, ignored) "
+             "VALUES(?1, ?2)";
+    case SQLITE_ROLLBACK:
+      return "INSERT OR ROLLBACK INTO main.dolt_ignore(pattern, ignored) "
+             "VALUES(?1, ?2)";
+    default:
+      return "INSERT INTO main.dolt_ignore(pattern, ignored) VALUES(?1, ?2)";
+  }
+}
+
+static const char *ignoreUpdateSql(sqlite3 *db){
+  switch( sqlite3_vtab_on_conflict(db) ){
+    case SQLITE_REPLACE:
+      return "UPDATE OR REPLACE main.dolt_ignore SET pattern=?1, ignored=?2 "
+             "WHERE pattern=?3";
+    case SQLITE_IGNORE:
+      return "UPDATE OR IGNORE main.dolt_ignore SET pattern=?1, ignored=?2 "
+             "WHERE pattern=?3";
+    case SQLITE_FAIL:
+      return "UPDATE OR FAIL main.dolt_ignore SET pattern=?1, ignored=?2 "
+             "WHERE pattern=?3";
+    case SQLITE_ROLLBACK:
+      return "UPDATE OR ROLLBACK main.dolt_ignore SET pattern=?1, ignored=?2 "
+             "WHERE pattern=?3";
+    default:
+      return "UPDATE main.dolt_ignore SET pattern=?1, ignored=?2 "
+             "WHERE pattern=?3";
+  }
+}
+
+static int ignoreUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
+                        sqlite3_int64 *pRowid){
+  IgnoreVtab *p = (IgnoreVtab*)pBase;
+  int rc;
+
+  rc = ignoreMaterialize(p);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( argc==1 ){
+    return ignoreExecBound(p,
+        "DELETE FROM main.dolt_ignore WHERE pattern=?1", argv[0], 0, 0);
+  }
+  if( sqlite3_value_type(argv[0])!=SQLITE_NULL ){
+    return ignoreExecBound(p,
+        ignoreUpdateSql(p->db), argv[2], argv[3], argv[0]);
+  }
+
+  rc = ignoreExecBound(p, ignoreInsertSql(p->db), argv[2], argv[3], 0);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRowid ) *pRowid = sqlite3_last_insert_rowid(p->db);
+  return SQLITE_OK;
+}
+
+static sqlite3_module doltliteIgnoreModule = {
+  0, 0, ignoreConnect, ignoreBestIndex, doltliteVtabDisconnect, 0,
+  ignoreOpen, doltliteVtabClose, ignoreFilter, ignoreNext, ignoreEof,
+  ignoreColumn, ignoreRowid,
+  ignoreUpdate, ignoreBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
+int doltliteIgnoreRegister(sqlite3 *db){
+  return sqlite3_create_module(db, "dolt_ignore", &doltliteIgnoreModule, 0);
 }
 
 #endif
