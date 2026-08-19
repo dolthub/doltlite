@@ -479,6 +479,7 @@ int btreeReloadBranchWorkingStateInto(
 
   p->vc.stagedCatalog = state.stagedCatalog;
   p->vc.isMerging = state.isMerging;
+  p->vc.pendingReplayCommit = 0;
   p->vc.mergeCommitHash = state.mergeCommit;
   p->vc.conflictsCatalogHash = state.conflictsCatalog;
   p->isRebasing = state.isRebasing;
@@ -781,14 +782,19 @@ int doltliteClearSessionMergeState(sqlite3 *db){
   return doltliteSetSessionMergeState(db, 0, 0, 0);
 }
 
-/* Record a new conflicts catalog without disturbing the source commit already
-** on the session. Reaching for doltliteSetSessionMergeState with a null
-** pMergeCommit zeroes it, which drops the second parent commit owes the merged
-** branch and blanks dolt_merge_status.source. */
-int doltliteSetSessionMergeConflicts(sqlite3 *db, const ProllyHash *pConflicts){
-  ProllyHash mergeCommit;
-  doltliteGetSessionMergeState(db, 0, &mergeCommit, 0);
-  return doltliteSetSessionMergeState(db, 1, &mergeCommit, pConflicts);
+int doltliteSetSessionPendingReplayCommit(sqlite3 *db, u8 pending){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    int rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+    p->vc.pendingReplayCommit = pending ? 1 : 0;
+  }
+  return SQLITE_OK;
+}
+
+int doltliteSessionHasPendingReplayCommit(sqlite3 *db){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
+  return db->aDb[0].pBt->vc.pendingReplayCommit!=0;
 }
 
 int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
@@ -935,9 +941,8 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   {
     Btree *p = db->aDb[0].pBt;
     if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE || db->pSavepoint ){
-      if( p->vc.isMerging ){
-        memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
-      }
+      /* Cherry-pick and revert record conflicts without isMerging. */
+      memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
       return;
     }
   }
@@ -1228,6 +1233,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   if( rc == SQLITE_NOTFOUND ){
     memset(&pBtree->vc.stagedCatalog, 0, sizeof(ProllyHash));
     pBtree->vc.isMerging = 0;
+    pBtree->vc.pendingReplayCommit = 0;
     memset(&pBtree->vc.mergeCommitHash, 0, sizeof(ProllyHash));
     memset(&pBtree->vc.conflictsCatalogHash, 0, sizeof(ProllyHash));
     pBtree->isRebasing = 0;
@@ -1241,6 +1247,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     return SQLITE_OK;
   }
   if( rc==SQLITE_OK ){
+    pBtree->vc.pendingReplayCommit = 0;
     sqlite3_free(pBtree->zRebaseOrigBranch);
     pBtree->zRebaseOrigBranch = zNewRebaseOrigBranch;
     sqlite3_free(pBtree->zRebaseReturnBranch);

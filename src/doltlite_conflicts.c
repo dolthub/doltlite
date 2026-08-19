@@ -395,9 +395,6 @@ static int storeConflictBytes(
     rc = chunkStorePut(cs, pData, nData, &newHash);
     if( rc!=SQLITE_OK ) return rc;
     rc = doltliteSetSessionConflictsCatalog(db, &newHash);
-    if( rc==SQLITE_OK ){
-      rc = doltliteSetSessionMergeConflicts(db, &newHash);
-    }
   }
   if( rc!=SQLITE_OK ) return rc;
   mode = doltliteVcTxnMode(db);

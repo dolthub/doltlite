@@ -791,6 +791,7 @@ int sqlite3BtreeOpen(
     p->headCommit = state.headCommit;
     p->vc.stagedCatalog = state.stagedCatalog;
     p->vc.isMerging = state.isMerging;
+    p->vc.pendingReplayCommit = 0;
     p->vc.mergeCommitHash = state.mergeCommit;
     p->vc.conflictsCatalogHash = state.conflictsCatalog;
     p->isRebasing = state.isRebasing;

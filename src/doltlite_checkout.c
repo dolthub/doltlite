@@ -1183,6 +1183,11 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteVcResultError(ctx, db, "unresolved merge conflicts \xe2\x80\x94 commit or abort first");
       return;
     }
+    if( doltliteSessionHasUnresolvedConflicts(db) ){
+      doltliteVcResultError(ctx, db,
+        "unresolved conflicts \xe2\x80\x94 resolve them or roll back first");
+      return;
+    }
   }
 
   if( strcmp(zBranch, "-b")==0 ){

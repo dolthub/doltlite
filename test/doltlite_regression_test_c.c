@@ -4530,6 +4530,147 @@ static void run_cherry_pick_stale_conflict_clears_session(void){
   removeDbFiles(dbpath);
 }
 
+static void run_cherry_pick_conflict_is_not_a_merge(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isMerging = 0;
+
+  printf("=== Cherry-pick Conflict Is Not A Merge Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_cherry_pick_conflict_is_not_a_merge");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_cherry_pick_conflict_not_merge",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_cherry_pick_conflict_not_merge", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A','-m','init');"
+    "SELECT dolt_checkout('-b','feat');"
+    "UPDATE t SET v='F';"
+    "SELECT dolt_commit('-A','-m','f');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v='M';"
+    "SELECT dolt_commit('-A','-m','m');"
+    "SELECT dolt_branch('other');")==SQLITE_OK);
+
+  check("begin_for_cherry_pick_conflict_not_merge",
+        execSql(db, "BEGIN;")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_cherry_pick('feat')");
+  check("cherry_pick_conflict_reports_conflicts",
+        strstr(res, "conflict")!=0);
+  doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+  check("cherry_pick_conflict_is_not_merging", isMerging==0);
+  check("cherry_pick_conflict_rows_are_visible",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"),
+               "1")==0);
+  res = queryScalarText(db, "SELECT dolt_checkout('other')");
+  check("cherry_pick_conflict_blocks_checkout",
+        strstr(res, "unresolved conflicts")!=0);
+  check("cherry_pick_conflict_checkout_is_not_a_merge",
+        strstr(res, "unresolved merge conflicts")==0);
+  res = queryScalarText(db, "SELECT dolt_merge('--abort')");
+  check("cherry_pick_conflict_has_no_merge_to_abort",
+        strstr(res, "no merge in progress")!=0);
+  check("rollback_cherry_pick_conflict_not_merge",
+        execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_cherry_pick_conflict_ours_commits_single_parent(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isMerging = 0;
+
+  printf("=== Cherry-pick Conflict Ours Commits Single Parent Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_cherry_pick_conflict_ours_commits_single_parent");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_cherry_pick_ours_commit",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_cherry_pick_ours_commit", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A','-m','init');"
+    "SELECT dolt_checkout('-b','feat');"
+    "UPDATE t SET v='F';"
+    "SELECT dolt_commit('-A','-m','f');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v='M';"
+    "SELECT dolt_commit('-A','-m','m');")==SQLITE_OK);
+
+  check("begin_for_cherry_pick_ours_commit",
+        execSql(db, "BEGIN;")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_cherry_pick('feat')");
+  check("cherry_pick_ours_commit_reports_conflicts",
+        strstr(res, "conflict")!=0);
+  check("cherry_pick_ours_commit_resolve",
+        execSql(db, "SELECT dolt_conflicts_resolve('--ours', 't');")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_commit('-A','-m','picked')");
+  check("cherry_pick_ours_commit_creates_commit",
+        strstr(res, "ERROR:")==0 && strlen(res)>=40);
+  doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+  check("cherry_pick_ours_commit_is_not_merging", isMerging==0);
+  check("cherry_pick_ours_commit_single_parent",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_commit_ancestors "
+          "WHERE commit_hash = dolt_hashof('HEAD')"), "1")==0);
+  check("cherry_pick_ours_commit_message",
+        strcmp(queryScalarText(db,
+          "SELECT message FROM dolt_log LIMIT 1"), "picked")==0);
+  check("cherry_pick_ours_commit_keeps_ours",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "M")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_revert_conflict_is_not_a_merge(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isMerging = 0;
+
+  printf("=== Revert Conflict Is Not A Merge Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_revert_conflict_is_not_a_merge");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_revert_conflict_not_merge",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_revert_conflict_not_merge", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A','-m','init');"
+    "UPDATE t SET v='b';"
+    "SELECT dolt_commit('-A','-m','b');"
+    "UPDATE t SET v='c';"
+    "SELECT dolt_commit('-A','-m','c');")==SQLITE_OK);
+
+  check("begin_for_revert_conflict_not_merge",
+        execSql(db, "BEGIN;")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_revert('HEAD~1')");
+  check("revert_conflict_reports_conflicts",
+        strstr(res, "conflict")!=0);
+  doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+  check("revert_conflict_is_not_merging", isMerging==0);
+  check("revert_conflict_rows_are_visible",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"),
+               "1")==0);
+  res = queryScalarText(db, "SELECT dolt_merge('--abort')");
+  check("revert_conflict_has_no_merge_to_abort",
+        strstr(res, "no merge in progress")!=0);
+  check("rollback_revert_conflict_not_merge",
+        execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_cherry_pick_seal_fail_keeps_advanced_tip(void){
   sqlite3 *db = 0;
   ChunkStore *cs;
@@ -12955,6 +13096,9 @@ static const RegressionCase aCases[] = {
   { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
   { "cherry_pick_stale_conflict_clears_session", "Cherry-pick Stale Conflict Clears Session Test", run_cherry_pick_stale_conflict_clears_session },
+  { "cherry_pick_conflict_is_not_a_merge", "Cherry-pick Conflict Is Not A Merge Test", run_cherry_pick_conflict_is_not_a_merge },
+  { "cherry_pick_conflict_ours_commits_single_parent", "Cherry-pick Conflict Ours Commits Single Parent Test", run_cherry_pick_conflict_ours_commits_single_parent },
+  { "revert_conflict_is_not_a_merge", "Revert Conflict Is Not A Merge Test", run_revert_conflict_is_not_a_merge },
   { "cherry_pick_seal_fail_keeps_advanced_tip", "Cherry-pick Seal Failure Keeps Advanced Tip Test", run_cherry_pick_seal_fail_keeps_advanced_tip },
   { "failed_cherry_pick_reopen_preserves_conflict_state", "Failed Cherry-pick Reopen Preserves Conflict State Test", run_failed_cherry_pick_reopen_preserves_conflict_state },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },

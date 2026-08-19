@@ -834,7 +834,7 @@ static void doltliteCommitFunc(
   {
     u8 isMerging = 0;
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-    if( !isMerging && !amend ){
+    if( !isMerging && !amend && !doltliteSessionHasPendingReplayCommit(db) ){
       ProllyHash headCatHash;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
       if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash)
@@ -903,6 +903,7 @@ static void doltliteCommitFunc(
     return;
   }
   doltliteTxnStateClear(&mutationState);
+  (void)doltliteSetSessionPendingReplayCommit(db, 0);
 
   doltliteHashToHex(&commitHash, hexBuf);
 
