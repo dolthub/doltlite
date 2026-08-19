@@ -270,7 +270,8 @@ int tryResolveSchemaDivergence(
 int mergeAppendReindexName(char ***paz, int *pn, const char *zName);
 int mergeFilterDerivedShadowConflicts(sqlite3 *db,
     MergeConflictTable *aConflictTables, int *pnConflictTables,
-    int *pTotalConflicts, char ***pazRebuild, int *pnRebuild);
+    int *pTotalConflicts, char ***pazRebuild, int *pnRebuild,
+    char **pzRefuse);
 
 int mergeCatalogPass1(
   sqlite3 *db,

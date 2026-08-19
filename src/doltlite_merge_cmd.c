@@ -219,11 +219,24 @@ static int mergeRefInstallMergedCatalog(
   ** filter proved otherwise conflict-free. */
   if( *pnRebuildVtabs>0 && nMergeConflicts==0 ){
     int ri;
+    /* The owners live in the just-switched catalog, which sqlite3FindTable
+    ** cannot see until the schema is reloaded. */
+    (void)sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", 0, 0, 0);
     for(ri=0; ri<*pnRebuildVtabs && rc==SQLITE_OK; ri++){
-      char *zSql = sqlite3_mprintf(
-          "INSERT INTO \"%w\"(cmd, arg) VALUES('rebuild',"
-          " (SELECT val FROM \"%w_model\" WHERE id=1))",
-          (*pazRebuildVtabs)[ri], (*pazRebuildVtabs)[ri]);
+      const char *zOwner = (*pazRebuildVtabs)[ri];
+      Table *pTab = sqlite3FindTable(db, zOwner, "main");
+      char *zSql;
+      /* Each module spells its rebuild differently: vec1 takes the stored
+      ** model as an argument, fts names itself in its own hidden column. */
+      if( pTab && IsVirtual(pTab) && pTab->u.vtab.nArg>0
+       && sqlite3_stricmp(pTab->u.vtab.azArg[0], "vec1")!=0 ){
+        zSql = sqlite3_mprintf(
+            "INSERT INTO \"%w\"(\"%w\") VALUES('rebuild')", zOwner, zOwner);
+      }else{
+        zSql = sqlite3_mprintf(
+            "INSERT INTO \"%w\"(cmd, arg) VALUES('rebuild',"
+            " (SELECT val FROM \"%w_model\" WHERE id=1))", zOwner, zOwner);
+      }
       if( !zSql ){
         rc = SQLITE_NOMEM;
         break;

@@ -267,7 +267,13 @@ run_sql "SELECT dolt_checkout('-b','side'); $MUTATE SELECT dolt_commit('-am','si
 SELECT dolt_checkout('main'); SELECT dolt_merge('side');" "$DB" > /dev/null
 verify "merge_ff_vtab_content" "$DB" "$MUT_STATE"
 
-scenario "conflicted merge: resolve then rebuild the index"
+# Both sides writing an fts5 table collide in its segment shadows, and
+# neither side of that collision is the answer: taking one loses the other's
+# rows from the index while the content table keeps them. Since the merged
+# content is authoritative, the merge regenerates the index from it rather
+# than offering a resolution that cannot be right. (Before, this stopped
+# with conflicts whose only two resolutions both committed a broken index.)
+scenario "colliding vtab writes: the merge rebuilds the index itself"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
 run_sql "SELECT dolt_checkout('-b','side');
@@ -278,21 +284,17 @@ INSERT INTO f5(rowid, body) VALUES(20,'delta main');
 SELECT dolt_commit('-am','main doc');" "$DB" > /dev/null
 result=$(run_sql "BEGIN;
 SELECT dolt_merge('side');
-SELECT 'TX|' || (SELECT count(*)>0 FROM dolt_conflicts) || '|' || (SELECT count(*) FROM sqlite_master WHERE name='f5');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM sqlite_master WHERE name='f5');
 ROLLBACK;" "$DB" | grep '^TX|')
-check "merge_conflict_pending_state" "TX|1|1" "$result"
-# The documented recovery: take one side's shadows wholesale, then rebuild
-# the index from its content table so the segments match the row set.
-result=$(run_sql "BEGIN;
-SELECT dolt_merge('side');
-SELECT dolt_conflicts_resolve('--theirs', (SELECT \"table\" FROM dolt_conflicts LIMIT 1));
-SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)>0
-  THEN dolt_conflicts_resolve('--theirs', (SELECT \"table\" FROM dolt_conflicts LIMIT 1)) END;
-SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)>0
-  THEN dolt_conflicts_resolve('--theirs', (SELECT \"table\" FROM dolt_conflicts LIMIT 1)) END;
-INSERT INTO f5(f5) VALUES('rebuild');
-SELECT length(dolt_commit('-Am','resolved + rebuilt'))=40;" "$DB" | tail -1)
-check "merge_conflict_resolve_rebuild_commit" "1" "$result"
+check "merge_colliding_vtab_no_conflicts" "TX|0|1" "$result"
+check "merge_colliding_vtab_keeps_both_rows" "5" \
+  "$(run_sql "SELECT count(*) FROM f5_content;" "$DB")"
+# Each side's row has to be reachable through the index, not merely present
+# in the content table -- that is exactly what the discarded side lost.
+check "merge_colliding_vtab_finds_ours" "20" \
+  "$(run_sql "SELECT group_concat(rowid) FROM f5 WHERE f5 MATCH 'main';" "$DB")"
+check "merge_colliding_vtab_finds_theirs" "10" \
+  "$(run_sql "SELECT group_concat(rowid) FROM f5 WHERE f5 MATCH 'side';" "$DB")"
 result=$(run_sql "INSERT INTO f5(f5) VALUES('integrity-check'); SELECT 'ok'; PRAGMA integrity_check;" "$DB")
 check "merge_conflict_rebuilt_index_valid" "ok
 ok" "$result"
@@ -384,6 +386,82 @@ ok
 ok" "$result"
 run_sql "SELECT dolt_branch('old','HEAD~3');" "$DB" > /dev/null
 verify "gc_history_reachable" "$DB/old" "$BASE_STATE"
+
+# Concurrent writes on two branches always collide in a vtab's derived
+# shadows: the structures they keep are rewritten wholesale by every write.
+# Neither side of such a collision is a correct answer, so a merge either
+# regenerates the index from data that survived the merge, or refuses.
+DBM=/tmp/test_vtab_merge_shadow_$$.db; rm -f "$DBM"
+run_sql "CREATE VIRTUAL TABLE ft USING fts5(body);
+INSERT INTO ft(rowid,body) VALUES(1,'alpha common'),(2,'beta common');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('b1');
+SELECT dolt_branch('b2');" "$DBM" > /dev/null
+run_sql "INSERT INTO ft(rowid,body) VALUES(101,'zebra one');
+SELECT dolt_commit('-A','-m','b1');" "$DBM/b1" > /dev/null
+run_sql "INSERT INTO ft(rowid,body) VALUES(201,'banana two');
+SELECT dolt_commit('-A','-m','b2');" "$DBM/b2" > /dev/null
+run_sql "SELECT dolt_merge('b1');" "$DBM" > /dev/null
+result=$(run_sql "SELECT dolt_merge('b2');" "$DBM")
+case "$result" in
+  [0-9a-f]*) PASS=$((PASS+1));;
+  *) note_fail "fts5_merge_rebuilds" "merge did not succeed: $result";;
+esac
+check "fts5_merge_finds_ours" "101" \
+  "$(run_sql "SELECT group_concat(rowid) FROM ft WHERE ft MATCH 'zebra';" "$DBM")"
+check "fts5_merge_finds_theirs" "201" \
+  "$(run_sql "SELECT group_concat(rowid) FROM ft WHERE ft MATCH 'banana';" "$DBM")"
+check "fts5_merge_content_complete" "4" \
+  "$(run_sql "SELECT count(*) FROM ft_content;" "$DBM")"
+check "fts5_merge_integrity" "" \
+  "$(run_sql "INSERT INTO ft(ft) VALUES('integrity-check');" "$DBM")"
+rm -f "$DBM"
+
+# Contentless fts5 keeps no copy of the indexed text, so the discarded side
+# is unrecoverable and fts5 refuses 'rebuild' outright.
+DBC=/tmp/test_vtab_merge_contentless_$$.db; rm -f "$DBC"
+run_sql "CREATE VIRTUAL TABLE ftc USING fts5(body, content='');
+INSERT INTO ftc(rowid,body) VALUES(1,'seed');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('b1');
+SELECT dolt_branch('b2');" "$DBC" > /dev/null
+run_sql "INSERT INTO ftc(rowid,body) VALUES(101,'apple pie');
+SELECT dolt_commit('-A','-m','b1');" "$DBC/b1" > /dev/null
+run_sql "INSERT INTO ftc(rowid,body) VALUES(201,'banana split');
+SELECT dolt_commit('-A','-m','b2');" "$DBC/b2" > /dev/null
+run_sql "SELECT dolt_merge('b1');" "$DBC" > /dev/null
+result=$(run_sql "SELECT dolt_merge('b2');" "$DBC")
+case "$result" in
+  *"cannot be rebuilt"*) PASS=$((PASS+1));;
+  *) note_fail "contentless_fts5_merge_refused" "expected a refusal, got: $result";;
+esac
+rm -f "$DBC"
+
+# An r-tree stores its coordinates in the node blobs themselves and offers
+# no rebuild, so a colliding node cannot be regenerated from anything.
+DBR=/tmp/test_vtab_merge_rtree_$$.db; rm -f "$DBR"
+run_sql "CREATE VIRTUAL TABLE rt2 USING rtree(id,x0,x1,y0,y1);
+WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<300)
+  INSERT INTO rt2 SELECT i, i%50, i%50+1, i/50, i/50+1 FROM c;
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('b1');
+SELECT dolt_branch('b2');" "$DBR" > /dev/null
+run_sql "INSERT INTO rt2 VALUES(1001,10.0,10.1,1.0,1.1);
+SELECT dolt_commit('-A','-m','b1');" "$DBR/b1" > /dev/null
+run_sql "INSERT INTO rt2 VALUES(2001,10.2,10.3,1.2,1.3);
+SELECT dolt_commit('-A','-m','b2');" "$DBR/b2" > /dev/null
+run_sql "SELECT dolt_merge('b1');" "$DBR" > /dev/null
+result=$(run_sql "SELECT dolt_merge('b2');" "$DBR")
+case "$result" in
+  *"cannot be rebuilt"*) PASS=$((PASS+1));;
+  *) note_fail "rtree_merge_refused" "expected a refusal, got: $result";;
+esac
+check "rtree_refusal_leaves_tree_intact" "ok" \
+  "$(run_sql "SELECT rtreecheck('rt2');" "$DBR")"
+# A refusal must not cost the merge that had already landed cleanly.
+check "rtree_refusal_keeps_first_merge" "1001" \
+  "$(run_sql "SELECT group_concat(id) FROM rt2 WHERE id>1000;" "$DBR")"
+rm -f "$DBR"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
