@@ -1053,4 +1053,106 @@ run_test "merge_keeps_undeleted_objects" \
    WHERE name IN ('v','tg') ORDER BY name;" "view:v,trigger:tg" "$DB"
 rm -f "$DB"
 
+# An index over a column the other branch dropped cannot be carried into the
+# merge: the merged table has no such column, so the catalog it would build
+# cannot be loaded, and the merge used to fail "database disk image is
+# malformed" with no way past it in either direction. Dolt drops the index
+# along with the column.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_idx_dropcol_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    OURS="ALTER TABLE t DROP COLUMN b;"; THEIRS="CREATE INDEX ix ON t(b);"
+  else
+    OURS="CREATE INDEX ix ON t(b);"; THEIRS="ALTER TABLE t DROP COLUMN b;"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1'),(2,'a2','b2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+$OURS
+SELECT dolt_commit('-A','-m','main side');
+SELECT dolt_checkout('feat');
+$THEIRS
+SELECT dolt_commit('-A','-m','feat side');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_index_over_dropped_column_${dir}_hash" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_index_over_dropped_column_${dir}_objects" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master ORDER BY name;" \
+    "table:t" "$DB"
+  run_test "merge_index_over_dropped_column_${dir}_rows" \
+    "SELECT group_concat(k||':'||a) FROM t ORDER BY k;" "1:a1,2:a2" "$DB"
+  run_test "merge_index_over_dropped_column_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# A composite index goes the same way when any of its columns is dropped, and a
+# unique one too: the constraint cannot outlive the column it constrains.
+DB=/tmp/test_merge_idx_dropcol_composite_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+CREATE INDEX ix ON t(a,b);
+CREATE UNIQUE INDEX ux ON t(b);
+SELECT dolt_commit('-A','-m','indexes on main');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b on feat');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_composite_index_over_dropped_column_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_composite_index_over_dropped_column_objects" \
+  "SELECT group_concat(type||':'||name) FROM sqlite_master ORDER BY name;" \
+  "table:t" "$DB"
+rm -f "$DB"
+
+# An index whose columns all survive must be adopted exactly as before: both
+# branches indexing different surviving columns keeps both indexes, and an
+# index over a column their side added comes across with it.
+DB=/tmp/test_merge_idx_survives_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+CREATE INDEX ix2 ON t(a);
+SELECT dolt_commit('-A','-m','index on main');
+SELECT dolt_checkout('feat');
+CREATE INDEX ix ON t(b);
+SELECT dolt_commit('-A','-m','index on feat');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_both_indexes_survive_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_both_indexes_survive" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index' ORDER BY name;" \
+  "ix,ix2" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_idx_added_col_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES(1,'a1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES(2,'a2');
+SELECT dolt_commit('-A','-m','row on main');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN d TEXT;
+CREATE INDEX ix ON t(d);
+SELECT dolt_commit('-A','-m','add and index d on feat');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_index_over_added_column_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_index_over_added_column_kept" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
+rm -f "$DB"
+
 dltest_finish
