@@ -91,6 +91,19 @@ run_test "patterns_are_case_sensitive" \
 dolt_ignore|1|new table
 tmp_a|1|new table" "$DB2"
 
+DB4=/tmp/test_ignore_utf8_$$.db
+rm -f "$DB4"
+
+run_test "question_mark_matches_utf8_character" \
+  "INSERT INTO dolt_ignore VALUES('tmp_?', 1);
+   CREATE TABLE \"tmp_é\"(id INTEGER PRIMARY KEY);
+   CREATE TABLE tmp_xy(id INTEGER PRIMARY KEY);
+   SELECT dolt_add('-A');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;" \
+  "0
+dolt_ignore|1|new table
+tmp_xy|1|new table" "$DB4"
+
 DB3=/tmp/test_ignore_specificity_$$.db
 rm -f "$DB3"
 
@@ -100,6 +113,6 @@ run_test_match "incomparable_patterns_conflict" \
    SELECT dolt_add('-A');" \
   "matches conflicting patterns" "$DB3"
 
-rm -f "$DB" "$DB2" "$DB3"
+rm -f "$DB" "$DB2" "$DB3" "$DB4"
 
 dltest_finish

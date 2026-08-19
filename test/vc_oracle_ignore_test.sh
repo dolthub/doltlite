@@ -146,6 +146,12 @@ CREATE TABLE ea(x INT PRIMARY KEY);
 CREATE TABLE eabc(x INT PRIMARY KEY);
 "
 
+oracle "question_mark_utf8" "
+INSERT INTO dolt_ignore VALUES ('tmp_?', 1);
+CREATE TABLE \"tmp_é\"(x INT PRIMARY KEY);
+CREATE TABLE tmp_xy(x INT PRIMARY KEY);
+"
+
 oracle "case_sensitive" "
 INSERT INTO dolt_ignore VALUES ('TMP_*', 1);
 CREATE TABLE tmp_a(x INT PRIMARY KEY);
