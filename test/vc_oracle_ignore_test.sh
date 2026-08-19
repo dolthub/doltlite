@@ -146,6 +146,11 @@ CREATE TABLE ea(x INT PRIMARY KEY);
 CREATE TABLE eabc(x INT PRIMARY KEY);
 "
 
+oracle "case_sensitive" "
+INSERT INTO dolt_ignore VALUES ('TMP_*', 1);
+CREATE TABLE tmp_a(x INT PRIMARY KEY);
+"
+
 echo "--- specificity ---"
 
 oracle "exact_over_wild" "
@@ -194,6 +199,13 @@ INSERT INTO dolt_ignore VALUES ('foo_%', 1);
 INSERT INTO dolt_ignore VALUES ('%_bar', 0);
 CREATE TABLE foo_bar(x INT PRIMARY KEY);
 SELECT dolt_add('foo_bar');
+"
+
+oracle_error "conflict_incomparable_specificity" "
+INSERT INTO dolt_ignore VALUES ('a*bc', 1);
+INSERT INTO dolt_ignore VALUES ('ab*', 0);
+CREATE TABLE abxbc(x INT PRIMARY KEY);
+SELECT dolt_add('-A');
 "
 
 echo "--- dolt_add ---"
