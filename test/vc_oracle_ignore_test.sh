@@ -13,18 +13,13 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() { tr -d '\r' | grep -v '^S|dolt_ignore|' | sort; }
 
-DL_IGNORE_PREFIX="CREATE TABLE IF NOT EXISTS dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));"
-
 oracle() {
   local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local dl_setup="$DL_IGNORE_PREFIX
-$setup"
-
   local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S|' || table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$dl_setup" \
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S|' || table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$setup" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^S|' \
            | normalize)
@@ -70,11 +65,8 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local dl_setup="$DL_IGNORE_PREFIX
-$setup"
-
   local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
   dl_rc=$?
 
   local dolt_setup
@@ -403,7 +395,6 @@ doltlite_runtime_reject() {
 }
 
 doltlite_runtime_expect "temp_shadow_ignored_main_wins" "
-CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 CREATE TEMP TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
 INSERT INTO temp.dolt_ignore VALUES ('tmp_*', 0);
