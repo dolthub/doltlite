@@ -818,6 +818,28 @@ static int mergePass1BothSides(
   sqlite3_free(zOursPrevSql);
   zOursPrevSql = 0;
 
+  /* The mirror: our schema was kept for a rename on our side, so theirs is
+  ** the layout left behind. Judged on the schema for the same reason. */
+  if( zName && !bSchemaConflict && schemaChoice==SCHEMA_MERGE_OURS ){
+    SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+    SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+    SchemaEntry *theirSE = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
+    int bRelaid = 0;
+    if( ancSE && ourSE && theirSE ){
+      rc = mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
+          ourSE->zSql, theirSE->zSql, c->aOurs[iOurs].flags,
+          &c->aOurs[iOurs].root, &theirsEntry->root, &ancEntry->root,
+          &otherNormRoot, &ancNormRoot, &bRelaid);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    if( bRelaid ){
+      ancAdj = *ancEntry;
+      memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
+      pMergeAnc = &ancAdj;
+      pMergeTheirsRoot = &otherNormRoot;
+    }
+  }
+
   if( zName && oursChanged && theirsChanged
    && ourSchemaChanged!=theirSchemaChanged ){
     int bRelaid = 0;

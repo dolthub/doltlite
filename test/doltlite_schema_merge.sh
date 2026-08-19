@@ -834,6 +834,37 @@ run_test "drop_col_merge_dual_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 rm -f "$DB"
 
+# The same pairing with the sides swapped. Only a rename on their side was
+# recognized, so ours went unseen and the merge stopped as incompatible.
+# Values verified against Dolt 2.2.2, which merges this cleanly.
+DB=/tmp/test_rename_ours_drop_theirs_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
+INSERT INTO t VALUES(1,'a1','b1','c1',101),(2,'a2','b2','c2',202);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+INSERT INTO t(k,a,c,d) VALUES(3,'a3','c3',303);
+SELECT dolt_commit('-A','-m','drop b and insert on feat');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN c TO renamed_c;
+SELECT dolt_commit('-A','-m','rename c on main');
+EOF
+run_test_match "rename_ours_drop_theirs_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rename_ours_drop_theirs_cols" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" \
+  "k,a,renamed_c,d" "$DB"
+run_test "rename_ours_drop_theirs_base_row" \
+  "SELECT a||'|'||renamed_c||'|'||d FROM t WHERE k=1;" "a1|c1|101" "$DB"
+run_test "rename_ours_drop_theirs_incoming_row" \
+  "SELECT a||'|'||renamed_c||'|'||d FROM t WHERE k=3;" "a3|c3|303" "$DB"
+run_test "rename_ours_drop_theirs_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+run_test "rename_ours_drop_theirs_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 # Dropping the trailing column leaves the incoming value with nowhere to go,
 # the one shape where no surviving column later claims its slot.
 DB=/tmp/test_drop_last_col_merge_$$.db; rm -f "$DB"

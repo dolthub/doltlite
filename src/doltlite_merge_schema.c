@@ -795,6 +795,36 @@ int trySchemaColumnMerge(
     }
   }
 
+  /* The scan above only recognizes a rename on their side, so one on ours
+  ** went unseen and the merge fell through to incompatible. A column of ours
+  ** that the ancestor never had, sitting where a vanished ancestor column
+  ** used to sit and carrying its definition, is that rename. */
+  if( *pSchemaChoice==SCHEMA_MERGE_DEFAULT ){
+    for(i=0; i<nOurs; i++){
+      ParsedColumn *theirAncestor;
+      if( findColumn(aAnc, nAnc, aOurs[i].zName)
+       || findColumn(aTheirs, nTheirs, aOurs[i].zName)
+       || i>=nAnc
+       || sqlite3_stricmp(aOurs[i].zName, aAnc[i].zName)==0
+       || findColumn(aOurs, nOurs, aAnc[i].zName)
+       || !parsedColumnDefinitionsMatch(&aOurs[i], &aAnc[i]) ){
+        continue;
+      }
+      theirAncestor = findColumn(aTheirs, nTheirs, aAnc[i].zName);
+      if( theirAncestor && strcmp(theirAncestor->zDef, aAnc[i].zDef)==0 ){
+        *pSchemaChoice = SCHEMA_MERGE_OURS;
+      }else{
+        if( pzErrDetail ){
+          *pzErrDetail = sqlite3_mprintf(
+            "column '%s' renamed on one branch and modified on another",
+            aAnc[i].zName);
+        }
+        rc = SQLITE_ERROR;
+        goto schema_merge_cleanup;
+      }
+    }
+  }
+
   for(i=0; i<nOurs; i++){
     ParsedColumn *ancCol = findColumn(aAnc, nAnc, aOurs[i].zName);
     if( ancCol ){
