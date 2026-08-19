@@ -1685,7 +1685,17 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
     if( iTable!=1 || pBtree->bMasterRootChangedTxn ){
       memcpy(q, pTE->root.data, PROLLY_HASH_SIZE);
     }
-    q += PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
+    q += PROLLY_HASH_SIZE;
+    /* Only roots are patched, so every object the baseline names is published
+    ** as it stands there. Matching entry counts and table numbers do not make
+    ** it this catalog -- a connection that switched branches has a baseline
+    ** describing the branch it left -- and its schema hash is what tells the
+    ** two apart. */
+    if( iTable!=1 && memcmp(q, pTE->schemaHash.data, PROLLY_HASH_SIZE)!=0 ){
+      sqlite3_free(buf);
+      return SQLITE_NOTFOUND;
+    }
+    q += PROLLY_HASH_SIZE;
     nPatched++;
 
     if( iFormat!=CATALOG_FORMAT_V3 ){
