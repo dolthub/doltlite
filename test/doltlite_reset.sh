@@ -106,6 +106,18 @@ run_test "multipath_reset_all_missing_unstages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "0" "$DB3C"
 
+DB3D=/tmp/test_reset3d_$$.db; rm -f "$DB3D"
+echo "CREATE TABLE Camel(id INTEGER PRIMARY KEY, v INT); CREATE INDEX Camel_v ON Camel(v); INSERT INTO Camel VALUES(1,10); SELECT dolt_commit('-Am','base'); UPDATE Camel SET v=20; SELECT dolt_add('Camel'); SELECT dolt_reset('cAmEl');" | $DOLTLITE "$DB3D" > /dev/null 2>&1
+run_test "path_reset_is_case_insensitive" \
+  "SELECT staged, status FROM dolt_status WHERE table_name='Camel';" \
+  "0|modified" "$DB3D"
+run_test "case_insensitive_reset_keeps_working_change" \
+  "SELECT v FROM Camel WHERE id=1;" \
+  "20" "$DB3D"
+run_test_match "case_insensitive_reset_clears_staged_indexes" \
+  "SELECT dolt_commit('-m','unexpected');" \
+  "nothing to commit" "$DB3D"
+
 DB4=/tmp/test_reset4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB4" > /dev/null 2>&1

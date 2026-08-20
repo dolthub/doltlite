@@ -446,6 +446,26 @@ SELECT concat('Q|vals|', group_concat(s ORDER BY id SEPARATOR '|')) FROM a;"
 
 echo "--- table-name positional unstage ---"
 
+CASE_RESET_SEED="
+CREATE TABLE Camel(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX Camel_v ON Camel(v);
+INSERT INTO Camel VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+UPDATE Camel SET v=20;
+SELECT dolt_add('Camel');
+SELECT dolt_reset('cAmEl');
+"
+
+oracle "reset_path_is_case_insensitive" "
+$CASE_RESET_SEED
+"
+
+oracle_error "reset_case_insensitive_clears_staged_indexes" "
+$CASE_RESET_SEED
+SELECT dolt_commit('-m', 'nothing is staged');
+"
+
 oracle "reset_specific_table_unstages_only_that" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
