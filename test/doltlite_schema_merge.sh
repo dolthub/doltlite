@@ -1167,6 +1167,140 @@ run_test "merge_expr_index_surviving_column_kept" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
 rm -f "$DB"
 
+# COLLATE names the collation, not a column. A dropped column whose name
+# happens to be nocase must not take an index on (a COLLATE nocase) with it.
+DB=/tmp/test_merge_idx_collate_survives_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, nocase TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','n1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+CREATE INDEX ix ON t(a COLLATE nocase);
+SELECT dolt_commit('-A','-m','index on a');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN nocase;
+SELECT dolt_commit('-A','-m','drop nocase');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_collate_index_survives_dropped_collation_name_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_collate_index_survives_dropped_collation_name_kept" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
+run_test "merge_collate_index_survives_dropped_collation_name_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# An index over a quoted identifier with an embedded quote still tracks the
+# real column. Dropping "odd""name" has to drop the index; dropping some other
+# column must not.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_idx_dropcol_quoted_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    OURS='ALTER TABLE t DROP COLUMN "odd""name";'
+    THEIRS='CREATE INDEX ix ON t("odd""name");'
+  else
+    OURS='CREATE INDEX ix ON t("odd""name");'
+    THEIRS='ALTER TABLE t DROP COLUMN "odd""name";'
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, "odd""name" TEXT, b TEXT);
+INSERT INTO t VALUES(1,'o1','b1'),(2,'o2','b2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+$OURS
+SELECT dolt_commit('-A','-m','main side');
+SELECT dolt_checkout('feat');
+$THEIRS
+SELECT dolt_commit('-A','-m','feat side');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_quoted_index_over_dropped_column_${dir}_hash" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_quoted_index_over_dropped_column_${dir}_objects" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master ORDER BY name;" \
+    "table:t" "$DB"
+  run_test "merge_quoted_index_over_dropped_column_${dir}_rows" \
+    "SELECT group_concat(k||':'||b) FROM t ORDER BY k;" "1:b1,2:b2" "$DB"
+  run_test "merge_quoted_index_over_dropped_column_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+DB=/tmp/test_merge_idx_quoted_survives_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, "odd""name" TEXT, b TEXT);
+INSERT INTO t VALUES(1,'o1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+CREATE INDEX ix ON t("odd""name");
+SELECT dolt_commit('-A','-m','index on quoted');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_quoted_index_surviving_column_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_quoted_index_surviving_column_kept" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
+rm -f "$DB"
+
+# A partial index's WHERE clause names columns too. Dropping one of those
+# used to leave the index in the catalog and fail the merge as malformed.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_idx_dropcol_where_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    OURS="ALTER TABLE t DROP COLUMN b;"
+    THEIRS="CREATE INDEX ix ON t(a) WHERE b = 'keep';"
+  else
+    OURS="CREATE INDEX ix ON t(a) WHERE b = 'keep';"
+    THEIRS="ALTER TABLE t DROP COLUMN b;"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','keep'),(2,'a2','drop');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+$OURS
+SELECT dolt_commit('-A','-m','main side');
+SELECT dolt_checkout('feat');
+$THEIRS
+SELECT dolt_commit('-A','-m','feat side');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_partial_index_over_dropped_column_${dir}_hash" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_partial_index_over_dropped_column_${dir}_objects" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master ORDER BY name;" \
+    "table:t" "$DB"
+  run_test "merge_partial_index_over_dropped_column_${dir}_rows" \
+    "SELECT group_concat(k||':'||a) FROM t ORDER BY k;" "1:a1,2:a2" "$DB"
+  run_test "merge_partial_index_over_dropped_column_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# The WHERE literal is not a column. Dropping some other column keeps a
+# partial index whose predicate only names surviving columns.
+DB=/tmp/test_merge_idx_where_survives_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'keep','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+CREATE INDEX ix ON t(a) WHERE a = 'keep';
+SELECT dolt_commit('-A','-m','partial on a');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_partial_index_surviving_predicate_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_partial_index_surviving_predicate_kept" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
+rm -f "$DB"
+
 # An index whose columns all survive must be adopted exactly as before: both
 # branches indexing different surviving columns keeps both indexes, and an
 # index over a column their side added comes across with it.
