@@ -1625,6 +1625,8 @@ doltlite_merge_pass1.o:	$(TOP)/src/doltlite_merge_pass1.c $(TOP)/src/doltlite_me
 
 doltlite_merge_pass2.o:	$(TOP)/src/doltlite_merge_pass2.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_pass2.c
+doltlite_merge_predetect.o:	$(TOP)/src/doltlite_merge_predetect.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_predetect.c
 
 doltlite_merge_rows.o:	$(TOP)/src/doltlite_merge_rows.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_rows.c
