@@ -436,7 +436,47 @@ PRAGMA integrity_check;"   "0
 aux|kv
 ok" "$DB14"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
+DB15=/tmp/test_dolt_author_$$.db; rm -f "$DB15"
+
+run_test_match "author_validation_setup"   "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','base');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-Am','bad','--author','not-an-author');" \
+  "Author not formatted correctly" "$DB15"
+
+run_test "malformed_author_does_not_commit" \
+  "SELECT count(*) FROM dolt_log WHERE message='bad';" "0" "$DB15"
+
+run_test_match "empty_author_rejected" \
+  "SELECT dolt_commit('-m','bad','--author','');" \
+  "Option 'author' requires a value" "$DB15"
+
+run_test_match "empty_author_email_rejected" \
+  "SELECT dolt_commit('-Am','empty email','--author','Edge Case <>');" \
+  "Aborting commit due to empty author email" "$DB15"
+
+run_test "empty_author_email_does_not_commit" \
+  "SELECT count(*) FROM dolt_log WHERE message='empty email';" "0" "$DB15"
+
+run_test_match "author_without_closing_bracket" \
+  "SELECT dolt_commit('-Am','missing close','--author','John Doe <john@example.com');" \
+  "^[0-9a-f]{40}$" "$DB15"
+
+run_test "author_without_closing_bracket_fields" \
+  "SELECT committer || '|' || email FROM dolt_log WHERE message='missing close';" \
+  "John Doe|john@example.com" "$DB15"
+
+run_test_match "author_removes_closing_brackets" \
+  "INSERT INTO t VALUES(3);
+SELECT dolt_commit('-Am','brackets','--author','Angle <a>b>');" \
+  "^[0-9a-f]{40}$" "$DB15"
+
+run_test "author_removes_closing_brackets_fields" \
+  "SELECT committer || '|' || email FROM dolt_log WHERE message='brackets';" \
+  "Angle|ab" "$DB15"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

@@ -931,6 +931,10 @@ void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
 void doltliteCmdResultMissingOptionValue(
   sqlite3_context *ctx, const char *zOptName
 );
+int doltliteCmdParseAuthor(
+  sqlite3_context *ctx, const char *zAuthor,
+  char **pzName, char **pzEmail
+);
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
 int doltliteCmdFinishWithConflicts(
   sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,

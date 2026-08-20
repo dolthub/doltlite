@@ -188,6 +188,60 @@ void doltliteCmdResultMissingOptionValue(
   }
 }
 
+int doltliteCmdParseAuthor(
+  sqlite3_context *ctx,
+  const char *zAuthor,
+  char **pzName,
+  char **pzEmail
+){
+  const char *z = zAuthor;
+  if( pzName ) *pzName = 0;
+  if( pzEmail ) *pzEmail = 0;
+  if( !z || !z[0] ){
+    sqlite3_result_error(ctx, "Option 'author' requires a value", -1);
+    return SQLITE_ERROR;
+  }
+  while( 1 ){
+    const char *zEnd = strchr(z, ')');
+    const char *zSep = 0;
+    const char *p;
+    char *zName;
+    char *zEmail;
+    int nEmail;
+    int i;
+    int j;
+    if( !zEnd ) zEnd = z + strlen(z);
+    for(p=z+1; p+2<zEnd; p++){
+      if( p[0]==' ' && p[1]=='<' ) zSep = p;
+    }
+    if( zSep ){
+      if( !pzName || !pzEmail ) return SQLITE_OK;
+      zName = sqlite3_mprintf("%.*s", (int)(zSep-z), z);
+      nEmail = (int)(zEnd-zSep-2);
+      zEmail = sqlite3_malloc64((sqlite3_uint64)nEmail+1);
+      if( !zName || !zEmail ){
+        sqlite3_free(zName);
+        sqlite3_free(zEmail);
+        sqlite3_result_error_nomem(ctx);
+        return SQLITE_NOMEM;
+      }
+      for(i=0, j=0; i<nEmail; i++){
+        if( zSep[i+2]!='>' ) zEmail[j++] = zSep[i+2];
+      }
+      zEmail[j] = 0;
+      *pzName = zName;
+      *pzEmail = zEmail;
+      return SQLITE_OK;
+    }
+    if( !zEnd[0] ) break;
+    z = zEnd + 1;
+  }
+  sqlite3_result_error(ctx,
+    "Author not formatted correctly. Use 'Name <author@example.com>' format",
+    -1);
+  return SQLITE_ERROR;
+}
+
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp){
   char *zErr = sqlite3_mprintf(
     "%s conflict: another connection committed to this branch. "

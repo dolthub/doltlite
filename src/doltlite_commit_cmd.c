@@ -114,6 +114,23 @@ static int doltliteCommitParseOptions(
   return SQLITE_OK;
 }
 
+static int doltliteCommitValidateAuthor(
+  sqlite3_context *context,
+  const char *zAuthor
+){
+  char *zName = 0;
+  char *zEmail = 0;
+  int rc = doltliteCmdParseAuthor(context, zAuthor, &zName, &zEmail);
+  if( rc==SQLITE_OK && zEmail[0]==0 ){
+    sqlite3_result_error(context,
+      "Aborting commit due to empty author email. Is your config set?", -1);
+    rc = SQLITE_ERROR;
+  }
+  sqlite3_free(zName);
+  sqlite3_free(zEmail);
+  return rc;
+}
+
 /* Rebuild the staged catalog for `dolt_commit -a`, overlaying working-tree
 ** changes for tables that already exist in HEAD onto the staged catalog, and
 ** publish it as the session's staged catalog. On failure the context error is
@@ -568,17 +585,9 @@ static int doltliteCommitCreateObject(
   }
 
   if( zAuthor ){
-    const char *lt = strchr(zAuthor, '<');
-    const char *gt = lt ? strchr(lt, '>') : 0;
-    if( lt && gt ){
-      int nameLen = (int)(lt - zAuthor);
-      while( nameLen>0 && zAuthor[nameLen-1]==' ' ) nameLen--;
-      zParsedName = sqlite3_mprintf("%.*s", nameLen, zAuthor);
-      zParsedEmail = sqlite3_mprintf("%.*s", (int)(gt-lt-1), lt+1);
-    }else{
-      zParsedName = sqlite3_mprintf("%s", zAuthor);
-      zParsedEmail = sqlite3_mprintf("");
-    }
+    rc = doltliteCmdParseAuthor(context, zAuthor,
+                                &zParsedName, &zParsedEmail);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   {
@@ -643,6 +652,10 @@ static void doltliteCommitFunc(
   }
 
   if( doltliteCommitParseOptions(context, argc, argv, &opts)!=SQLITE_OK ){
+    return;
+  }
+  if( opts.zAuthor
+   && doltliteCommitValidateAuthor(context, opts.zAuthor)!=SQLITE_OK ){
     return;
   }
   zMessage = opts.zMessage;

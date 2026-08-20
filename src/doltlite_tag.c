@@ -110,22 +110,10 @@ static void doltTagParsedFunc(
   }
 
   if( zAuthor ){
-    const char *lt = strchr(zAuthor, '<');
-    const char *gt = lt ? strchr(lt, '>') : 0;
-    if( lt && gt ){
-      int nameLen = (int)(lt - zAuthor);
-      while( nameLen>0 && zAuthor[nameLen-1]==' ' ) nameLen--;
-      zParsedTagger = sqlite3_mprintf("%.*s", nameLen, zAuthor);
-      zParsedEmail  = sqlite3_mprintf("%.*s", (int)(gt-lt-1), lt+1);
-    }else{
-      zParsedTagger = sqlite3_mprintf("%s", zAuthor);
-      zParsedEmail  = sqlite3_mprintf("");
-    }
-    if( !zParsedTagger || !zParsedEmail ){
-      sqlite3_free(zParsedTagger);
-      sqlite3_free(zParsedEmail);
+    rc = doltliteCmdParseAuthor(ctx, zAuthor,
+                                &zParsedTagger, &zParsedEmail);
+    if( rc!=SQLITE_OK ){
       tagSealSavepointError(ctx);
-      sqlite3_result_error_nomem(ctx);
       return;
     }
     m.zTagger = zParsedTagger;

@@ -61,5 +61,26 @@ run_test "tag_persists" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;" "par
 parenttilde
 v1.0" "$DB"
 
-rm -f "$DB" "$DB2"
+DB3=/tmp/test_tag_author_$$.db; rm -f "$DB3"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','base');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+
+run_test_match "tag_malformed_author" \
+  "SELECT dolt_tag('bad','--author','not-an-author');" \
+  "Author not formatted correctly" "$DB3"
+run_test "tag_malformed_author_not_created" \
+  "SELECT count(*) FROM dolt_tags WHERE tag_name='bad';" "0" "$DB3"
+run_test "tag_author_without_closing_bracket" \
+  "SELECT dolt_tag('missing-close','--author','Tag Name <tag@example.com');
+SELECT tagger || '|' || email FROM dolt_tags WHERE tag_name='missing-close';" \
+  "0
+Tag Name|tag@example.com" "$DB3"
+run_test "tag_author_resumes_after_parenthesis" \
+  "SELECT dolt_tag('after-paren','--author','ignored)Real Name <real@example.com>');
+SELECT tagger || '|' || email FROM dolt_tags WHERE tag_name='after-paren';" \
+  "0
+Real Name|real@example.com" "$DB3"
+
+rm -f "$DB" "$DB2" "$DB3"
 dltest_finish

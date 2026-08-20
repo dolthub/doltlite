@@ -264,6 +264,27 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--author', 'Bob Bare-Name <bob@example.com>');
 "
 
+oracle "commit_author_missing_closing_bracket" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first', '--author', 'Alice Author <alice@example.com');
+"
+
+oracle_error "commit_malformed_author" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first', '--author', 'not-an-author');
+"
+
+oracle_error "commit_empty_author_email" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first', '--author', 'Alice Author <>');
+"
+
 echo "--- --amend ---"
 
 oracle "commit_amend_message_only" "
