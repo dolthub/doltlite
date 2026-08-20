@@ -28,7 +28,8 @@ static int tableExists(sqlite3 *db, const char *zName){
   int rc;
 
   zSql = sqlite3_mprintf(
-      "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=%Q",
+      "SELECT 1 FROM main.sqlite_master "
+      "WHERE type='table' AND name=%Q COLLATE NOCASE",
       zName);
   if( !zSql ) return -1;
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);

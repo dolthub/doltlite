@@ -135,6 +135,17 @@ echo "--- FK: named table with no violations ---"
 run_oracle "fk_named_other" "$FK_SETUP" "'otherTable'" \
   "$FOLLOW_AGG_COUNT" 1
 
+echo "--- FK: named table lookup is case insensitive ---"
+run_oracle "fk_named_table_case_insensitive" \
+"CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE \`MiXeD\`(pk INTEGER PRIMARY KEY, parent_pk INT REFERENCES parent(pk));
+PRAGMA foreign_keys=OFF;
+INSERT INTO \`MiXeD\` VALUES (1,99);
+PRAGMA foreign_keys=ON;
+" \
+"'mixed'" \
+"$FOLLOW_AGG" 0
+
 
 # A merge records violations up front. Verifying an unrelated table must not
 # retract them: the commit gate reads that record, so clearing it wholesale
