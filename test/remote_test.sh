@@ -67,6 +67,22 @@ check_match "remote add extra arg errors" "too many arguments|invalid argument|E
 result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes;")
 check "remote add extra arg preserves remotes" "1" "$result"
 
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','bad/name','$R/bad.db');" 2>&1)
+check_match "remote add rejects invalid name" "remote name invalid" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes WHERE name='bad/name';")
+check "invalid remote not stored" "0" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','  spaced  ','$R/spaced.db');")
+check "remote add trims name" "0" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT name FROM dolt_remotes WHERE name='spaced';")
+check "trimmed remote stored canonically" "spaced" "$result"
+
+"$DB" "$TMPDIR/src.db" "SELECT dolt_remote('remove','  spaced  ');" > /dev/null
+result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes;")
+check "remote remove trims name" "1" "$result"
+
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('remove','origin','extra');" 2>&1)
 check_match "remote remove extra arg errors" "too many arguments|invalid argument|ERROR" "$result"
 

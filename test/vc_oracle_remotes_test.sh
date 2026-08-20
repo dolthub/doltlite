@@ -668,6 +668,14 @@ oracle "add_remote_with_non_standard_name" "
 SELECT dolt_remote('add', 'backup-1', 'file:///tmp/oracle_backup');
 "
 
+oracle "add_remote_trims_name" "
+SELECT dolt_remote('add', '  backup  ', 'file:///tmp/oracle_backup');
+"
+
+oracle "add_remote_with_allowed_punctuation" "
+SELECT dolt_remote('add', 'backup:local~1', 'file:///tmp/oracle_backup');
+"
+
 echo "--- remove ---"
 
 oracle "remove_only_remote" "
@@ -692,6 +700,14 @@ echo "--- error paths ---"
 oracle_error "add_duplicate_remote" "
 SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');
 SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_other');
+"
+
+oracle_error "add_remote_with_slash" "
+SELECT dolt_remote('add', 'bad/name', 'file:///tmp/oracle_bad');
+"
+
+oracle_error "add_remote_with_internal_space" "
+SELECT dolt_remote('add', 'bad name', 'file:///tmp/oracle_bad');
 "
 
 oracle_error "remove_nonexistent_remote" "
