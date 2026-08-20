@@ -34,6 +34,8 @@ ren_b_view:uniq_b:index over a renamed column is not retargeted (#2302)
 idx_a:ren_a:index over a renamed column is not retargeted (#2302)
 ren_a:idx_a:index over a renamed column is not retargeted (#2302)
 ren_b_view:ren_a:dual rename with a dependent view naming the renamed column (#2301)
+trig:ren_tbl:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2309)
+ren_tbl:trig:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2309)
 "
 
 # Pairs we MERGE while Dolt refuses. Not safe: we resolve on the user's behalf
@@ -55,8 +57,6 @@ drop_b_with_index:rows:a row edit of a column the other branch dropped, table in
 # on. Listed only to keep the suite honest about what remains; an unlisted one
 # fails, and so does a listed one that stops corrupting.
 CORRUPT_TODAY="
-trig:ren_tbl:a trigger on a table the other branch renamed (#2309)
-ren_tbl:trig:a trigger on a table the other branch renamed (#2309)
 "
 
 # Pairs where both engines merge but to different answers. The worst class in

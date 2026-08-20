@@ -1056,6 +1056,85 @@ static int mergePass1CollectDualRename(
   return SQLITE_OK;
 }
 
+/* A trigger whose table the other side renamed away. A trigger has to resolve
+** when the schema loads -- unlike a view, which is only text until it is used
+** -- so a merged catalog holding a trigger on a table that is no longer there
+** cannot be loaded, and the merge reported the database as malformed.
+**
+** Dolt merges this and keeps the trigger pointing at the old name, which is a
+** dangling trigger its own information_schema cannot read. That is not a
+** result this engine can represent, so refuse and say why. */
+static int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
+  int side, i, j;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aTrig = side ? c->aTheirsSchema : c->aOursSchema;
+    int nTrig = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOther = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOther = side ? c->nOursSchema : c->nTheirsSchema;
+
+    for(i=0; i<nTrig; i++){
+      const char *zTable = aTrig[i].zTblName;
+      int bRenamed = 0;
+      if( !aTrig[i].zType || strcmp(aTrig[i].zType, "trigger")!=0 ) continue;
+      if( !aTrig[i].zName || !zTable ) continue;
+      /* A trigger the ancestor already had went through the rename with the
+      ** table on the renaming side, so the merge has a correct copy to keep.
+      ** Only one added beside the rename has nowhere to land. */
+      if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aTrig[i].zName) ){
+        continue;
+      }
+      if( !findSchemaEntry(c->aAncSchema, c->nAncSchema, zTable) ) continue;
+      if( findSchemaEntry(aOther, nOther, zTable) ) continue;
+      /* Gone from the other side under its ancestor name. A table of theirs the
+      ** ancestor never had, whose columns are the ancestor table's columns, is
+      ** that table under a new name. Dropping it and creating something
+      ** unrelated looks the same from the names alone, so the columns have to
+      ** match before this refuses anything. */
+      {
+        SchemaEntry *pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema,
+                                               zTable);
+        ParsedColumn *aAncCols = 0;
+        int nAncCols = 0;
+        if( !pAncTbl || !pAncTbl->zSql ) continue;
+        if( parseColumns(pAncTbl->zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
+          continue;
+        }
+        for(j=0; j<nOther && !bRenamed; j++){
+          ParsedColumn *aCand = 0;
+          int nCand = 0, m, same;
+          if( !aOther[j].zType || strcmp(aOther[j].zType, "table")!=0 ) continue;
+          if( !aOther[j].zName || !aOther[j].zSql ) continue;
+          if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aOther[j].zName) ){
+            continue;
+          }
+          if( parseColumns(aOther[j].zSql, &aCand, &nCand)!=SQLITE_OK ) continue;
+          same = nCand==nAncCols;
+          for(m=0; m<nCand && same; m++){
+            if( sqlite3_stricmp(aCand[m].zName, aAncCols[m].zName)!=0
+             || !parsedColumnDefinitionsMatch(&aCand[m], &aAncCols[m]) ){
+              same = 0;
+            }
+          }
+          freeColumns(aCand, nCand);
+          if( same ) bRenamed = 1;
+        }
+        freeColumns(aAncCols, nAncCols);
+      }
+      if( !bRenamed ) continue;
+      if( c->pzErrMsg ){
+        sqlite3_free(*c->pzErrMsg);
+        *c->pzErrMsg = sqlite3_mprintf(
+            "cannot merge: trigger '%s' runs on table '%s', which the other "
+            "branch renamed; drop or recreate the trigger, then merge",
+            aTrig[i].zName, zTable);
+      }
+      return SQLITE_ERROR;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* An index one side added over a column the other side renamed. Nothing here
 ** retargets the index to the new name, and a merged catalog naming a column
 ** its table does not have cannot be loaded at all -- the merge used to report
@@ -1355,6 +1434,7 @@ int mergeCatalogPass1(
   c.pazReindex = pazReindex; c.pnReindex = pnReindex;
 
   rc = mergePass1CheckIndexOverRenamedColumn(&c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckTriggerOverRenamedTable(&c);
   if( rc!=SQLITE_OK ){
     mergePass1Free(&c);
     return rc;
