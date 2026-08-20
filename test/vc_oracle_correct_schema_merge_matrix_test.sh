@@ -222,10 +222,14 @@ EOF
   fi
 
   dl_out=$("$DOLTLITE" "$db" "SELECT coalesce(dolt_merge('feat'),'NULL');" 2>&1)
+  dl_rc=$?
   # dolt_merge's own result table has a column called "conflicts", so the
   # outcome has to be read from that column's value, never from the text.
   dt_out=$(cd "$repo" && "$DOLT" sql -r csv -q "CALL dolt_merge('feat');" 2>&1)
+  dt_rc=$?
   dl_ok=1; dt_ok=1; dl_corrupt=0
+  [ "$dl_rc" -ne 0 ] && dl_ok=0
+  [ "$dt_rc" -ne 0 ] && dt_ok=0
   case "$dl_out" in *rror*|*onflict*|*NULL*) dl_ok=0;; esac
   case "$dl_out" in *"disk image is malformed"*) dl_corrupt=1;; esac
   if printf '%s\n' "$dt_out" | grep -qiE '^error|error:'; then
@@ -262,7 +266,14 @@ EOF
     fi
     return
   fi
-  if [ "$dl_ok" = 0 ] && [ "$dt_ok" = 0 ]; then pass_name "$name (both refuse)"; return; fi
+  if [ "$dl_ok" = 0 ] && [ "$dt_ok" = 0 ]; then
+    if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$o:$t:"; then
+      fail_name "$name (listed as a gap but we no longer merge -- delete the entry)"
+      return
+    fi
+    pass_name "$name (both refuse)"
+    return
+  fi
 
   reason=$(printf '%s\n' "$REFUSE_WHERE_DOLT_MERGES" | grep "^$o:$t:" | cut -d: -f3-)
   if [ "$dl_ok" = 0 ] && [ "$dt_ok" = 1 ]; then
