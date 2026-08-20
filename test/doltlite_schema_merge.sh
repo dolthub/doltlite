@@ -1620,4 +1620,89 @@ run_test "merge_index_row_unaffected_keeps_both" \
   "ix,ix0" "$DB"
 rm -f "$DB"
 
+# A trigger added beside the other branch's rename of its table. A trigger has
+# to resolve when the schema loads -- unlike a view, which is only text until
+# used -- so a merged catalog holding a trigger on a table that is no longer
+# there cannot be loaded, and the merge reported the database as malformed.
+#
+# Dolt merges this and keeps the trigger pointing at the old name, which its own
+# information_schema cannot then read. That is not a result this engine can
+# represent, so it refuses instead: a deliberate divergence, asserted in
+# vc_oracle_correct_schema_merge_matrix_test.sh.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_trig_ren_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
+    FEAT="ALTER TABLE t RENAME TO t2;"
+    WANT="table:t,trigger:tg"
+  else
+    MAIN="ALTER TABLE t RENAME TO t2;"
+    FEAT="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
+    WANT="table:t2"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_trigger_over_renamed_table_${dir}_refused" \
+    "SELECT dolt_merge('feat');" \
+    "cannot merge: trigger 'tg' runs on table 't', which the other branch renamed" "$DB"
+  run_test "merge_trigger_over_renamed_table_${dir}_intact" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master;" "$WANT" "$DB"
+  run_test "merge_trigger_over_renamed_table_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# A trigger the ancestor already had rides along with the rename on the side
+# that renamed, so there is a correct copy to keep and no reason to refuse. A
+# table rename against a row change on the other side is a conflict here for
+# reasons of its own, so assert only that this is not the trigger refusal.
+DB=/tmp/test_merge_trig_ancestor_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;
+INSERT INTO t VALUES(1,'a1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(7,'a7',77);
+SELECT dolt_commit('-Am','feat row');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_commit('-Am','main renames');
+EOF
+run_test_match "merge_ancestor_trigger_not_refused_for_rename" \
+  "SELECT dolt_merge('feat');" "conflicts detected" "$DB"
+rm -f "$DB"
+
+# A view over a renamed table needs no refusal: it stays as text and the
+# catalog loads.
+DB=/tmp/test_merge_view_ren_tbl_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_commit('-Am','feat renames');
+SELECT dolt_checkout('main');
+CREATE VIEW v AS SELECT n FROM t;
+SELECT dolt_commit('-Am','main adds view');
+EOF
+run_test_match "merge_view_over_renamed_table_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_view_over_renamed_table_objects" \
+  "SELECT group_concat(type||':'||name) FROM sqlite_master;" "table:t2,view:v" "$DB"
+rm -f "$DB"
+
 dltest_finish
