@@ -1397,4 +1397,89 @@ run_test "merge_add_vs_drop_values" \
 run_test "merge_add_vs_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
+# Each branch renaming a different column. The adopted schema keeps the other
+# side's column under its ancestor name, so the rename has to be carried across
+# as a rename: replaying it as an addition kept the old column and left the new
+# one empty, which read as NULL through the name the branch actually uses.
+DB=/tmp/test_merge_dual_rename_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-A','-m','main renames a');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-A','-m','feat renames b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_dual_rename_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_dual_rename_columns" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a2,b2,n" "$DB"
+run_test "merge_dual_rename_values" \
+  "SELECT group_concat(k||':'||a2||':'||b2||':'||n) FROM (SELECT * FROM t ORDER BY k);" \
+  "1:a1:b1:11,2:a2:b2:22" "$DB"
+run_test "merge_dual_rename_types" \
+  "SELECT DISTINCT typeof(a2)||','||typeof(n) FROM t;" "text,integer" "$DB"
+run_test "merge_dual_rename_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+# SQLite keeps the quoting the rename used, and a column spelled "a2" here but
+# a2 by hand reads as a different definition -- which would turn a later merge
+# of two identical schemas into a conflict.
+run_test "merge_dual_rename_quoting_matches_plain_rename" \
+  "SELECT sql FROM sqlite_master WHERE name='t';" \
+  "CREATE TABLE t(k INTEGER PRIMARY KEY, a2 TEXT, b2 TEXT, n INTEGER)" "$DB"
+rm -f "$DB"
+
+# A merged rename must still merge against a branch that made the same rename
+# by hand.
+DB=/tmp/test_merge_rename_then_merge_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_branch('other');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-A','-m','main renames a');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-A','-m','feat renames b');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+SELECT dolt_checkout('other');
+ALTER TABLE t RENAME COLUMN a TO a2;
+INSERT INTO t VALUES(2,'a2v','b2v');
+SELECT dolt_commit('-A','-m','other renames a by hand');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_after_merged_rename_hash" "SELECT dolt_merge('other');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_after_merged_rename_rows" \
+  "SELECT group_concat(k||':'||a2) FROM (SELECT k,a2 FROM t ORDER BY k);" \
+  "1:a1,2:a2v" "$DB"
+rm -f "$DB"
+
+# A renamed-to name that cannot be written bare still has to be quoted.
+DB=/tmp/test_merge_dual_rename_quoted_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO "select";
+SELECT dolt_commit('-A','-m','main renames a to a keyword');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO "my col";
+SELECT dolt_commit('-A','-m','feat renames b with a space');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_dual_rename_quoted_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_dual_rename_quoted_values" \
+  "SELECT \"select\" || '/' || \"my col\" FROM t;" "a1/b1" "$DB"
+run_test "merge_dual_rename_quoted_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 dltest_finish

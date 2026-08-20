@@ -641,6 +641,7 @@ int trySchemaColumnMerge(
   const char *zTheirsSql,
   char ***ppAddCols, int *pnAddCols,
   char ***ppDropCols, int *pnDropCols,
+  char ***ppRenameCols, int *pnRenameCols,
   int *pSchemaChoice,
   int *pResolvedDivergence,
   char **pzErrDetail
@@ -652,12 +653,16 @@ int trySchemaColumnMerge(
   int nAdd = 0, nAddAlloc = 0;
   char **azDrop = 0;
   int nDrop = 0, nDropAlloc = 0;
+  char **azRename = 0;
+  int nRename = 0, nRenameAlloc = 0;
   int i;
 
   *ppAddCols = 0;
   *pnAddCols = 0;
   if( ppDropCols ) *ppDropCols = 0;
   if( pnDropCols ) *pnDropCols = 0;
+  if( ppRenameCols ) *ppRenameCols = 0;
+  if( pnRenameCols ) *pnRenameCols = 0;
   *pSchemaChoice = SCHEMA_MERGE_DEFAULT;
   *pResolvedDivergence = 0;
 
@@ -857,6 +862,18 @@ int trySchemaColumnMerge(
     nAdd = 0;
     nAddAlloc = 0;
     for(i=0; i<nOurs; i++){
+      /* A column of ours the ancestor never had, sitting where a vanished
+      ** ancestor column sat and carrying its definition, is our rename. The
+      ** adopted schema keeps that column under its old name, so replaying the
+      ** new name as an addition would keep both and leave the new one empty.
+      ** The rename pass below carries it across instead. */
+      if( i<nAnc
+       && !findColumn(aAnc, nAnc, aOurs[i].zName)
+       && !findColumn(aOurs, nOurs, aAnc[i].zName)
+       && findColumn(aTheirs, nTheirs, aAnc[i].zName)
+       && parsedColumnDefinitionsMatch(&aOurs[i], &aAnc[i]) ){
+        continue;
+      }
       if( !findColumn(aAnc, nAnc, aOurs[i].zName)
        && !findColumn(aTheirs, nTheirs, aOurs[i].zName) ){
         rc = DOLTLITE_GROW_ARRAY(&azAdd, &nAddAlloc, nAdd+1, 4);
@@ -889,6 +906,22 @@ schema_merge_done:
       if( i<nOth
        && !findColumn(aAnc, nAnc, aOth[i].zName)
        && parsedColumnDefinitionsMatch(&aOth[i], &aAnc[i]) ){
+        /* Renamed, not deleted. The adopted layout still calls the column by
+        ** its ancestor name, so the merge has to carry the rename across or
+        ** the other side's new name is simply lost. */
+        if( ppRenameCols && pnRenameCols ){
+          rc = DOLTLITE_GROW_ARRAY(&azRename, &nRenameAlloc, nRename+2, 4);
+          if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
+          azRename[nRename] = sqlite3_mprintf("%s", aAnc[i].zName);
+          azRename[nRename+1] = sqlite3_mprintf("%s", aOth[i].zName);
+          if( !azRename[nRename] || !azRename[nRename+1] ){
+            sqlite3_free(azRename[nRename]);
+            sqlite3_free(azRename[nRename+1]);
+            rc = SQLITE_NOMEM;
+            goto schema_merge_cleanup;
+          }
+          nRename += 2;
+        }
         continue;
       }
       rc = DOLTLITE_GROW_ARRAY(&azDrop, &nDropAlloc, nDrop+1, 4);
@@ -909,6 +942,11 @@ schema_merge_done:
     *pnDropCols = nDrop;
     azDrop = 0; nDrop = 0;
   }
+  if( ppRenameCols && pnRenameCols ){
+    *ppRenameCols = azRename;
+    *pnRenameCols = nRename;
+    azRename = 0; nRename = 0;
+  }
 
 schema_merge_cleanup:
   freeColumns(aAnc, nAnc);
@@ -916,6 +954,8 @@ schema_merge_cleanup:
   freeColumns(aTheirs, nTheirs);
   { int j; for(j=0;j<nDrop;j++) sqlite3_free(azDrop[j]); }
   sqlite3_free(azDrop);
+  { int j; for(j=0;j<nRename;j++) sqlite3_free(azRename[j]); }
+  sqlite3_free(azRename);
   if( rc!=SQLITE_OK ){
     { int j; for(j=0;j<nAdd;j++) sqlite3_free(azAdd[j]); }
     sqlite3_free(azAdd);
@@ -938,7 +978,7 @@ int doltliteTableSchemaConflictDetail(
   *pzDetail = 0;
   if( !zAncestorSql || !zOurSql || !zTheirSql ) return SQLITE_OK;
   rc = trySchemaColumnMerge(zAncestorSql, zOurSql, zTheirSql,
-                            &azAdd, &nAdd, 0, 0, &schemaChoice,
+                            &azAdd, &nAdd, 0, 0, 0, 0, &schemaChoice,
                             &resolvedDivergence, pzDetail);
   for(i=0; i<nAdd; i++) sqlite3_free(azAdd[i]);
   sqlite3_free(azAdd);
@@ -1313,169 +1353,6 @@ done:
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);
   return rc;
-}
-
-static const char *mergeIndexSkipQuoted(const char *z, char q){
-  char qEnd = (q=='[') ? ']' : q;
-  z++;
-  while( *z ){
-    if( q!='[' && *z==q && z[1]==q ){ z += 2; continue; }
-    if( *z==qEnd ) return z+1;
-    z++;
-  }
-  return z;
-}
-
-static const char *mergeIndexSkipName(const char *z, const char *zEnd){
-  while( z<zEnd && sqlite3Isspace(*z) ) z++;
-  if( z>=zEnd ) return z;
-  if( *z=='\'' || *z=='"' || *z=='`' || *z=='[' ) return mergeIndexSkipQuoted(z, *z);
-  if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
-    z++;
-    while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
-  }
-  return z;
-}
-
-static int mergeIndexIsSortKeyword(const char *z, int n){
-  static const char *const azKw[] = {
-    "ASC", "COLLATE", "DESC", "FIRST", "LAST", "NULLS"
-  };
-  int i;
-  for(i=0; i<(int)(sizeof(azKw)/sizeof(azKw[0])); i++){
-    if( sqlite3_strnicmp(z, azKw[i], n)==0 && azKw[i][n]==0 ) return 1;
-  }
-  return 0;
-}
-
-static char *mergeIndexDupIdent(const char *z, int n){
-  char *zOut = n>0 ? sqlite3_malloc(n+1) : 0;
-  if( zOut ){ memcpy(zOut, z, n); zOut[n] = 0; }
-  return zOut;
-}
-
-/* Walk CREATE INDEX column-list and WHERE identifiers. Skip function names,
-** sort keywords, the ident after COLLATE, and single-quoted literals. */
-static int mergeIndexEachColumn(
-  const char *zIndexSql,
-  int (*xEach)(void*, const char*),
-  void *pCtx
-){
-  const char *zOpen = zIndexSql ? strchr(zIndexSql, '(') : 0;
-  const char *zEnd, *z, *zIdent, *zLook;
-  char *zCol;
-  int depth, nIdent, rc = SQLITE_OK;
-
-  if( !zOpen ) return SQLITE_OK;
-  depth = 1;
-  zEnd = zOpen + 1;
-  while( *zEnd && depth>0 ){
-    if( *zEnd=='\'' || *zEnd=='"' || *zEnd=='`' || *zEnd=='[' ){
-      zEnd = mergeIndexSkipQuoted(zEnd, *zEnd);
-      continue;
-    }
-    if( *zEnd=='(' ) depth++;
-    else if( *zEnd==')' ) depth--;
-    if( depth>0 ) zEnd++;
-  }
-  if( depth!=0 ) return SQLITE_OK;
-
-  z = zOpen + 1;
-  zEnd = zIndexSql + strlen(zIndexSql);
-  while( z<zEnd && rc==SQLITE_OK ){
-    if( *z=='\'' ){ z = mergeIndexSkipQuoted(z, '\''); continue; }
-    if( *z=='"' || *z=='`' || *z=='[' ){
-      zIdent = z;
-      z = mergeIndexSkipQuoted(z, *z);
-      zCol = mergeIndexDupIdent(zIdent, (int)(z-zIdent));
-      if( !zCol ) return SQLITE_NOMEM;
-      sqlite3Dequote(zCol);
-      if( zCol[0] ) rc = xEach(pCtx, zCol);
-      sqlite3_free(zCol);
-      continue;
-    }
-    if( !(sqlite3Isalnum(*z) || *z=='_' || *z=='$') ){ z++; continue; }
-    zIdent = z++;
-    while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
-    nIdent = (int)(z-zIdent);
-    zLook = z;
-    while( zLook<zEnd && sqlite3Isspace(*zLook) ) zLook++;
-    if( zLook<zEnd && *zLook=='(' ) continue;
-    if( mergeIndexIsSortKeyword(zIdent, nIdent) ){
-      if( nIdent==7 && sqlite3_strnicmp(zIdent, "COLLATE", 7)==0 ){
-        z = mergeIndexSkipName(z, zEnd);
-      }
-      continue;
-    }
-    zCol = mergeIndexDupIdent(zIdent, nIdent);
-    if( !zCol ) return SQLITE_NOMEM;
-    rc = xEach(pCtx, zCol);
-    sqlite3_free(zCol);
-  }
-  return rc;
-}
-
-typedef struct MergeIndexColCtx MergeIndexColCtx;
-struct MergeIndexColCtx {
-  ParsedColumn *aAnc; int nAnc;
-  ParsedColumn *aSide; int nSide;
-  char *zMissing;
-};
-
-static int mergeIndexColSurvives(void *pCtx, const char *zCol){
-  MergeIndexColCtx *p = (MergeIndexColCtx*)pCtx;
-  int iAnc;
-  if( p->zMissing ) return SQLITE_OK;
-  if( findColumn(p->aSide, p->nSide, zCol) ) return SQLITE_OK;
-  /* Absent from this side and never in the ancestor means the other side added
-  ** it, and the merge carries additions over. */
-  iAnc = parsedColumnIndexByName(p->aAnc, p->nAnc, zCol);
-  if( iAnc<0 ) return SQLITE_OK;
-  /* A column of this side sitting at the vanished one's position, carrying its
-  ** definition, is a rename, not a drop: the indexed column still exists under
-  ** the new name and the index has to follow it there rather than disappear.
-  ** Retargeting the index is not expressible here yet, so leave those alone. */
-  if( iAnc<p->nSide
-   && !findColumn(p->aAnc, p->nAnc, p->aSide[iAnc].zName)
-   && parsedColumnDefinitionsMatch(&p->aSide[iAnc], &p->aAnc[iAnc]) ){
-    return SQLITE_OK;
-  }
-  p->zMissing = sqlite3_mprintf("%s", zCol);
-  return p->zMissing ? SQLITE_OK : SQLITE_NOMEM;
-}
-
-int mergeIndexColumnGoneFrom(
-  const char *zIndexSql,
-  const char *zAncTableSql,
-  const char *zSideTableSql,
-  char **pzColumn
-){
-  MergeIndexColCtx ctx;
-  int rc;
-
-  if( pzColumn ) *pzColumn = 0;
-  if( !zIndexSql || !zAncTableSql || !zSideTableSql ) return 0;
-
-  memset(&ctx, 0, sizeof(ctx));
-  if( parseColumns(zAncTableSql, &ctx.aAnc, &ctx.nAnc)!=SQLITE_OK ) return 0;
-  if( parseColumns(zSideTableSql, &ctx.aSide, &ctx.nSide)!=SQLITE_OK ){
-    freeColumns(ctx.aAnc, ctx.nAnc);
-    return 0;
-  }
-
-  rc = mergeIndexEachColumn(zIndexSql, mergeIndexColSurvives, &ctx);
-  freeColumns(ctx.aAnc, ctx.nAnc);
-  freeColumns(ctx.aSide, ctx.nSide);
-  if( rc!=SQLITE_OK || !ctx.zMissing ){
-    sqlite3_free(ctx.zMissing);
-    return 0;
-  }
-  if( pzColumn ){
-    *pzColumn = ctx.zMissing;
-  }else{
-    sqlite3_free(ctx.zMissing);
-  }
-  return 1;
 }
 
 #endif

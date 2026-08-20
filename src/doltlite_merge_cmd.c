@@ -93,6 +93,28 @@ int mergeFastForward(
   return SQLITE_OK;
 }
 
+/* SQLite keeps whatever quoting the rename statement used, so a name quoted
+** here lands quoted in the stored schema while the same rename typed by hand
+** lands bare -- and the two then read as different column definitions, which
+** turns a later merge of two identical schemas into a conflict. Quote only
+** what cannot be written bare. */
+static char *mergeQuotedIfNeeded(const char *zName){
+  int i;
+  int bPlain = zName[0]!=0
+            && (sqlite3Isalpha(zName[0]) || zName[0]=='_');
+  for(i=0; bPlain && zName[i]; i++){
+    if( !sqlite3Isalnum(zName[i]) && zName[i]!='_' && zName[i]!='$' ){
+      bPlain = 0;
+    }
+  }
+  if( bPlain
+   && sqlite3KeywordCode((const u8*)zName, (int)strlen(zName))!=TK_ID ){
+    bPlain = 0;
+  }
+  return bPlain ? sqlite3_mprintf("%s", zName)
+                : sqlite3_mprintf("\"%w\"", zName);
+}
+
 static int doltliteApplyMergeSchemaActions(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -114,6 +136,21 @@ static int doltliteApplyMergeSchemaActions(
       rc = sqlite3_exec(db, zAlter, 0, 0, 0);
       sqlite3_free(zAlter);
       if( rc!=SQLITE_OK ) break;
+    }
+    /* A rename the other side made. The adopted schema still calls the column
+    ** by its old name, and renaming rewrites no rows, so this only has to tell
+    ** the merged catalog the new name -- which also carries the dependent
+    ** index and view definitions across for free. */
+    for(sj=0; rc==SQLITE_OK && sj+1<aSchemaActions[si].nRenameColumns; sj+=2){
+      char *zNew = mergeQuotedIfNeeded(aSchemaActions[si].azRenameColumns[sj+1]);
+      char *zAlter = zNew ? sqlite3_mprintf(
+          "ALTER TABLE \"%w\" RENAME COLUMN \"%w\" TO %s",
+          aSchemaActions[si].zTableName,
+          aSchemaActions[si].azRenameColumns[sj], zNew) : 0;
+      sqlite3_free(zNew);
+      if( !zAlter ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+      sqlite3_free(zAlter);
     }
     /* Deletions the side whose schema was not adopted had already made. */
     for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nDropColumns; sj++){

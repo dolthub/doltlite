@@ -376,7 +376,9 @@ int recordSchemaColumnChanges(
   char **azAddCols,
   int nAddCols,
   char **azDropCols,
-  int nDropCols
+  int nDropCols,
+  char **azRenameCols,
+  int nRenameCols
 ){
   SchemaMergeAction *aNew;
   aNew = sqlite3_realloc(*ppSchemaActions,
@@ -389,6 +391,8 @@ int recordSchemaColumnChanges(
   aNew[*pnSchemaActions].nAddColumns = nAddCols;
   aNew[*pnSchemaActions].azDropColumns = azDropCols;
   aNew[*pnSchemaActions].nDropColumns = nDropCols;
+  aNew[*pnSchemaActions].azRenameColumns = azRenameCols;
+  aNew[*pnSchemaActions].nRenameColumns = nRenameCols;
   (*pnSchemaActions)++;
   return SQLITE_OK;
 }
@@ -401,7 +405,7 @@ int recordSchemaAddColumns(
   int nAddCols
 ){
   return recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
-                                   azAddCols, nAddCols, 0, 0);
+                                   azAddCols, nAddCols, 0, 0, 0, 0);
 }
 
 int schemaEntryChangedByName(
@@ -1043,6 +1047,8 @@ int tryResolveSchemaDivergence(
   int nAddCols = 0;
   char **azDropCols = 0;
   int nDropCols = 0;
+  char **azRenameCols = 0;
+  int nRenameCols = 0;
   int schemaChoice = SCHEMA_MERGE_DEFAULT;
   int resolvedDivergence = 0;
   char *zSchemaErr = 0;
@@ -1065,7 +1071,8 @@ int tryResolveSchemaDivergence(
    && theirSchEntry && theirSchEntry->zSql ){
     rc = trySchemaColumnMerge(
       ancSchEntry->zSql, ourSchEntry->zSql, theirSchEntry->zSql,
-      &azAddCols, &nAddCols, &azDropCols, &nDropCols, &schemaChoice,
+      &azAddCols, &nAddCols, &azDropCols, &nDropCols,
+      &azRenameCols, &nRenameCols, &schemaChoice,
       &resolvedDivergence, &zSchemaErr);
   }else{
     rc = SQLITE_ERROR;
@@ -1099,20 +1106,25 @@ int tryResolveSchemaDivergence(
     if( ppSchemaActions && pnSchemaActions ){
       rc = recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
                                      azAddCols, nAddCols,
-                                     azDropCols, nDropCols);
+                                     azDropCols, nDropCols,
+                                     azRenameCols, nRenameCols);
       if( rc!=SQLITE_OK ){
         freeAddedColumns(azAddCols, nAddCols);
         freeAddedColumns(azDropCols, nDropCols);
+        freeAddedColumns(azRenameCols, nRenameCols);
         return rc;
       }
       azAddCols = 0;
       nAddCols = 0;
       azDropCols = 0;
       nDropCols = 0;
+      azRenameCols = 0;
+      nRenameCols = 0;
     }
     *pSchemaChoice = schemaChoice;
     freeAddedColumns(azAddCols, nAddCols);
     freeAddedColumns(azDropCols, nDropCols);
+    freeAddedColumns(azRenameCols, nRenameCols);
     return SQLITE_OK;
   }
 
@@ -1125,29 +1137,35 @@ int tryResolveSchemaDivergence(
   /* Their deletions are as much a schema change as their additions: with no
   ** action recorded for them the merge has nothing to apply, and the two
   ** sqlite_master rows go on to conflict over a table that merges cleanly. */
-  if( nAddCols>0 || nDropCols>0 ){
+  if( nAddCols>0 || nDropCols>0 || nRenameCols>0 ){
     if( ppSchemaActions && pnSchemaActions ){
       rc = recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
                                      azAddCols, nAddCols,
-                                     azDropCols, nDropCols);
+                                     azDropCols, nDropCols,
+                                     azRenameCols, nRenameCols);
       if( rc!=SQLITE_OK ){
         freeAddedColumns(azAddCols, nAddCols);
         freeAddedColumns(azDropCols, nDropCols);
+        freeAddedColumns(azRenameCols, nRenameCols);
         return rc;
       }
       azAddCols = 0;
       nAddCols = 0;
       azDropCols = 0;
       nDropCols = 0;
+      azRenameCols = 0;
+      nRenameCols = 0;
     }
     freeAddedColumns(azAddCols, nAddCols);
     freeAddedColumns(azDropCols, nDropCols);
+    freeAddedColumns(azRenameCols, nRenameCols);
     *pSkipRowMerge = 1;
     return SQLITE_OK;
   }
 
   freeAddedColumns(azAddCols, nAddCols);
   freeAddedColumns(azDropCols, nDropCols);
+  freeAddedColumns(azRenameCols, nRenameCols);
   return SQLITE_OK;
 }
 
