@@ -1482,4 +1482,88 @@ run_test "merge_dual_rename_quoted_values" \
 run_test "merge_dual_rename_quoted_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
+# An index one side adds over a column the other side renames. The indexed
+# column still exists under the new name, but nothing retargets the index to
+# it, and a merged catalog naming a column its table does not have cannot be
+# loaded -- the merge used to report the database as corrupt. Refuse it with a
+# message naming the index and column instead, leaving the branch untouched.
+#
+# Dolt merges these and keeps the index on the renamed column, so this is a
+# deliberate divergence, asserted as such in vc_oracle_schema_merge_test.sh.
+# Retargeting the index would close it (issue #2302).
+for dir in ours theirs; do
+  DB=/tmp/test_merge_ix_over_rename_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="CREATE INDEX ix ON t(b);"; FEAT="ALTER TABLE t RENAME COLUMN b TO b2;"
+    WANTCOLS="k,a,b"
+  else
+    MAIN="ALTER TABLE t RENAME COLUMN b TO b2;"; FEAT="CREATE INDEX ix ON t(b);"
+    WANTCOLS="k,a,b2"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1'),(2,'a2','b2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-A','-m','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-A','-m','main side');
+EOF
+  run_test_match "merge_index_over_renamed_column_${dir}_refused" \
+    "SELECT dolt_merge('feat');" \
+    "cannot merge: index 'ix' covers column 'b' of table 't'" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_schema_intact" \
+    "SELECT group_concat(name) FROM pragma_table_info('t');" "$WANTCOLS" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_rows_intact" \
+    "SELECT count(*) FROM t;" "2" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_clean_status" \
+    "SELECT count(*) FROM dolt_status;" "0" "$DB"
+  rm -f "$DB"
+done
+
+# A unique index gets the same refusal: dropping it silently would drop the
+# constraint with it.
+DB=/tmp/test_merge_ux_over_rename_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-A','-m','feat renames');
+SELECT dolt_checkout('main');
+CREATE UNIQUE INDEX ux ON t(b);
+SELECT dolt_commit('-A','-m','main indexes');
+EOF
+run_test_match "merge_unique_index_over_renamed_column_refused" \
+  "SELECT dolt_merge('feat');" "cannot merge: index 'ux' covers column 'b'" "$DB"
+rm -f "$DB"
+
+# An index over a column nobody renamed still merges, and so does an index over
+# a column the other side dropped -- that one drops with the column (#2289).
+DB=/tmp/test_merge_ix_unaffected_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-A','-m','feat renames b');
+SELECT dolt_checkout('main');
+CREATE INDEX ix ON t(a);
+SELECT dolt_commit('-A','-m','main indexes a');
+EOF
+run_test_match "merge_index_over_other_column_still_merges" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_index_over_other_column_result" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a,b2" "$DB"
+rm -f "$DB"
+
 dltest_finish

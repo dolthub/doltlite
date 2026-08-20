@@ -1286,6 +1286,12 @@ int doltliteMergeCatalogs(
   iNextMerged = iNextOurs > iNextTheirs ? iNextOurs : iNextTheirs;
   bDisjointSchemaChanges = catalogHasDisjointSchemaChanges(db, ancestor, ours, theirs);
 
+  rc = mergePreDetectDualIndexOverlap(
+      aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+      aTheirsSchema, nTheirsSchema,
+      &aConflictTables, &nConflictTables, &totalConflicts);
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
+
   rc = preDetectIndexSchemaConflicts(
       aAncSchema, nAncSchema, aOursSchema, nOursSchema,
       aTheirsSchema, nTheirsSchema,

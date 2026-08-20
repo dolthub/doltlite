@@ -103,6 +103,21 @@ expect_merge_outcome() {
 expect_merge_ok() { expect_merge_outcome "$1" "$2" ok; }
 expect_merge_conflict() { expect_merge_outcome "$1" "$2" conflict; }
 
+# A merge DoltLite deliberately refuses while Dolt completes it. Asserting both
+# sides pins the difference instead of leaving it to be rediscovered, and turns
+# a future fix into a visible failure here rather than a silent change.
+expect_merge_divergence() {
+  local name="$1" db="$2" dl_want="$3" dt_want="$4" dl_got dt_got
+  dl_got=$(run_merge_outcome doltlite "$db" "$name")
+  dt_got=$(run_merge_outcome dolt "$db" "$name")
+  if [ "$dl_got" = "$dl_want" ] && [ "$dt_got" = "$dt_want" ]; then
+    pass_name "$name"
+  else
+    fail_name "$name"
+    echo "    expected doltlite=$dl_want dolt=$dt_want; got doltlite=$dl_got dolt=$dt_got"
+  fi
+}
+
 run_dual_command_outcome() {
   local name="$1" db="$2" dl_sql="$3" dt_sql="$4" want="$5"
   local repo dl_rc dt_rc dl_got=ok dt_got=ok
@@ -1222,6 +1237,38 @@ expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
   "1:10,2:14,3:22" \
   "SELECT group_concat(id || ':' || x, ',') FROM (SELECT id,x FROM t ORDER BY id);" \
   "SELECT GROUP_CONCAT(CONCAT(id, ':', x) ORDER BY id SEPARATOR ',') FROM t;"
+
+echo ""
+echo "--- Index over a renamed column (deliberate divergence) ---"
+
+# One branch indexes a column the other renames. Nothing retargets the index to
+# the new name, and a merged catalog naming a column its table does not have
+# cannot be loaded, so DoltLite refuses the merge and says which index and
+# column are in the way. Dolt merges these and keeps the index on the renamed
+# column; closing that gap needs the index to follow the rename, tracked in
+# issue #2302. Until then the refusal is the behavior worth pinning: it used to
+# report the database as corrupt instead.
+for dir in ours theirs; do
+  DB="$TMPROOT/ixren_$dir.db"; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="CREATE INDEX ix ON t(b);"; FEAT="ALTER TABLE t RENAME COLUMN b TO b2;"
+  else
+    MAIN="ALTER TABLE t RENAME COLUMN b TO b2;"; FEAT="CREATE INDEX ix ON t(b);"
+  fi
+  cat <<SQL | dl_setup "$DB" "ixren_$dir"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(9), b VARCHAR(9));
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat_side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main_side');
+SQL
+  expect_merge_divergence "index_over_renamed_column_$dir" "$DB" conflict ok
+done
 
 echo ""
 echo "--- Column renames on both sides ---"
