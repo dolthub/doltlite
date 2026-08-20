@@ -19,7 +19,7 @@
 #include <time.h>
 
 static int resetPathMatchesName(const struct TableEntry *pEntry, const char *zName){
-  return pEntry->zName && strcmp(pEntry->zName, zName)==0;
+  return pEntry->zName && sqlite3_stricmp(pEntry->zName, zName)==0;
 }
 
 static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
@@ -105,9 +105,11 @@ static int resetStageNamedPaths(
   }
 
   for(p=0; p<nPaths; p++){
-    const char *zTable = azPaths[p];
-    int iH = resetFindTableIndex(aHead, nHead, zTable);
-    int iS = resetFindTableIndex(aStaged, nStaged, zTable);
+    const char *zPath = azPaths[p];
+    int iH = resetFindTableIndex(aHead, nHead, zPath);
+    int iS = resetFindTableIndex(aStaged, nStaged, zPath);
+    const char *zHeadTable = iH>=0 ? aHead[iH].zName : 0;
+    const char *zStagedTable = iS>=0 ? aStaged[iS].zName : 0;
     char *zDup;
     if( iH<0 && iS<0 ){
       rc = SQLITE_NOTFOUND;
@@ -125,8 +127,8 @@ static int resetStageNamedPaths(
       if( rc!=SQLITE_OK ) goto done;
       if( pMate ) continue;
       addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aStagedSchema, nStagedSchema, zTable);
-      iS = resetFindTableIndex(aStaged, nStaged, zTable);
+                                   aStagedSchema, nStagedSchema, zStagedTable);
+      iS = resetFindTableIndex(aStaged, nStaged, zStagedTable);
       sqlite3_free(aStaged[iS].zName);
       if( iS+1<nStaged ){
         memmove(&aStaged[iS], &aStaged[iS+1],
@@ -174,7 +176,7 @@ static int resetStageNamedPaths(
       }
       aStaged = aNew;
       addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aStagedSchema, nStagedSchema, zTable);
+                                   aStagedSchema, nStagedSchema, zHeadTable);
       zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
       if( aHead[iH].zName && !zDup ){
         rc = SQLITE_NOMEM;
@@ -187,14 +189,19 @@ static int resetStageNamedPaths(
       rc = addAppendIndexEntriesOfTable(0, &aStaged, &nStaged,
                                         aHead, nHead,
                                         aHeadSchema, nHeadSchema,
-                                        zTable);
+                                        zHeadTable);
       if( rc!=SQLITE_OK ) goto done;
     }else{
       /* Take HEAD's content under the STAGED entry's number so the entry
       ** keeps pairing with the staged catalog's schema row. The table's
       ** index set resets with it: replace whatever index entries staging
       ** carried for this table with HEAD's. */
-      Pgno iKeep = aStaged[iS].iTable;
+      Pgno iKeep;
+      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
+                                   aStagedSchema, nStagedSchema,
+                                   zStagedTable);
+      iS = resetFindTableIndex(aStaged, nStaged, zStagedTable);
+      iKeep = aStaged[iS].iTable;
       zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
       if( aHead[iH].zName && !zDup ){
         rc = SQLITE_NOMEM;
@@ -204,12 +211,10 @@ static int resetStageNamedPaths(
       aStaged[iS] = aHead[iH];
       aStaged[iS].zName = zDup;
       aStaged[iS].iTable = iKeep;
-      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aStagedSchema, nStagedSchema, zTable);
       rc = addAppendIndexEntriesOfTable(0, &aStaged, &nStaged,
                                         aHead, nHead,
                                         aHeadSchema, nHeadSchema,
-                                        zTable);
+                                        zHeadTable);
       if( rc!=SQLITE_OK ) goto done;
     }
   }
