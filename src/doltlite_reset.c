@@ -453,6 +453,11 @@ static void doltliteResetFunc(
   int havePreResetHead = 0;
   int isHard = 0;
   int isSoft = 0;
+  DoltliteCmdArgs args;
+  DoltliteCmdOption aOption[] = {
+    { "hard", 0, DOLTLITE_CMD_OPTION_FLAG, &isHard, 0 },
+    { "soft", 0, DOLTLITE_CMD_OPTION_FLAG, &isSoft, 0 }
+  };
   const char *zRef = 0;
   const char **azPaths = 0;
   int nPaths = 0;
@@ -461,6 +466,8 @@ static void doltliteResetFunc(
   int graphLocked = 0;
   u8 isMerging = 0;
   int bSucceeded = 0;
+
+  memset(&args, 0, sizeof(args));
 
   assert( context!=0 );
   assert( argc>=0 );
@@ -475,20 +482,15 @@ static void doltliteResetFunc(
     havePreResetHead = 1;
   }
 
-  azPaths = (const char**)sqlite3_malloc(sizeof(char*) * (argc>0?argc:1));
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) goto reset_cleanup;
+  azPaths = (const char**)sqlite3_malloc(
+      sizeof(char*) * (args.nPositional>0 ? args.nPositional : 1));
   if( !azPaths ){ sqlite3_result_error_nomem(context); goto reset_cleanup; }
-  for(i=0; i<argc; i++){
-    const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( !arg ) continue;
-    if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
-    else if( strcmp(arg, "--soft")==0 ){ isSoft = 1; }
-    else if( arg[0]=='-' ){
-      doltliteCmdResultUnknownOption(context, arg);
-      sqlite3_free(azPaths);
-      azPaths = 0;
-      goto reset_cleanup;
-    }
-    else if( !zRef ){
+  for(i=0; i<args.nPositional; i++){
+    const char *arg = args.azPositional[i];
+    if( !zRef ){
 
       if( isHard || isSoft ){
         zRef = arg;
@@ -697,6 +699,7 @@ static void doltliteResetFunc(
   bSucceeded = 1;
 reset_cleanup:
   sqlite3_free(azPaths);
+  doltliteCmdArgsClear(&args);
   if( graphLocked ){
     chunkStoreUnlock(cs);
   }

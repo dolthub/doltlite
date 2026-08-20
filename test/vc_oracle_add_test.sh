@@ -664,6 +664,14 @@ INSERT INTO beta VALUES (1, 10);
 SELECT dolt_add('alpha');
 "
 
+oracle "add_end_options_dash_table" "
+CREATE TABLE \`-A\`(id INT PRIMARY KEY);
+CREATE TABLE other(id INT PRIMARY KEY);
+INSERT INTO \`-A\` VALUES (1);
+INSERT INTO other VALUES (2);
+SELECT dolt_add('--', '-A');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

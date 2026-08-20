@@ -35,38 +35,34 @@ static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
                               p->timestamp, p->zMessage);
 }
 
-static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+static void doltTagParsedFunc(
+  sqlite3_context *ctx,
+  int isDelete,
+  int nPositional,
+  const char **azPositional,
+  const char *zMessage,
+  const char *zAuthor
+){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   TagMutationCtx m;
-  const char *arg0;
-  const char *zMessage = 0;
-  const char *zAuthor = 0;
-  const char *zCommitRef = 0;
+  const char *arg0 = nPositional>0 ? azPositional[0] : 0;
+  const char *zCommitRef = nPositional>1 ? azPositional[1] : 0;
   char *zParsedTagger = 0;
   char *zParsedEmail = 0;
-  int rc, i;
+  int rc;
 
-  if( doltliteCmdRejectDetached(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
-  if( argc<1 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
+  if( nPositional<1 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
 
   memset(&m, 0, sizeof(m));
 
-  arg0 = (const char*)sqlite3_value_text(argv[0]);
-  if( !arg0 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
-
-
-  if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
-    const char *zName;
-    if( argc<2 ){ doltliteVcResultError(ctx, db, "tag name required for delete"); return; }
-    if( argc!=2 ){
+  if( isDelete ){
+    if( nPositional!=1 ){
       doltliteVcResultError(ctx, db, "too many positional arguments to dolt_tag");
       return;
     }
-    zName = (const char*)sqlite3_value_text(argv[1]);
-    if( !zName ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
-    m.zName = zName;
+    m.zName = arg0;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
@@ -94,25 +90,9 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
 
-  for(i=1; i<argc; i++){
-    const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( !arg ) continue;
-    if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
-      zMessage = doltliteCmdTakeValueArg(ctx, argc, argv, &i, "message");
-      if( !zMessage ){ tagSealSavepointError(ctx); return; }
-    }else if( strcmp(arg, "--author")==0 ){
-      zAuthor = doltliteCmdTakeValueArg(ctx, argc, argv, &i, "author");
-      if( !zAuthor ){ tagSealSavepointError(ctx); return; }
-    }else if( arg[0]=='-' ){
-      tagSealSavepointError(ctx);
-      doltliteCmdResultUnknownOption(ctx, arg);
-      return;
-    }else if( !zCommitRef ){
-      zCommitRef = arg;
-    }else{
-      doltliteVcResultError(ctx, db, "too many positional arguments to dolt_tag");
-      return;
-    }
+  if( nPositional>2 ){
+    doltliteVcResultError(ctx, db, "too many positional arguments to dolt_tag");
+    return;
   }
 
   if( zCommitRef ){
@@ -177,6 +157,41 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
   sqlite3_result_int(ctx, 0);
+}
+
+static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  DoltliteCmdArgs args;
+  int isDelete = 0;
+  const char *zMessage = 0;
+  const char *zAuthor = 0;
+  DoltliteCmdOption aOption[] = {
+    { "delete", 'd', DOLTLITE_CMD_OPTION_FLAG, &isDelete, 0 },
+    { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &zMessage },
+    { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zAuthor }
+  };
+  int rc;
+
+  if( doltliteCmdRejectDetached(ctx) ) return;
+  if( argc<1 ){
+    doltliteVcResultError(ctx, sqlite3_context_db_handle(ctx),
+                          "tag name required");
+    return;
+  }
+  rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ){
+    tagSealSavepointError(ctx);
+    return;
+  }
+  if( isDelete && (zMessage || zAuthor) ){
+    doltliteCmdArgsClear(&args);
+    doltliteVcResultError(ctx, sqlite3_context_db_handle(ctx),
+                          "too many positional arguments to dolt_tag");
+    return;
+  }
+  doltTagParsedFunc(ctx, isDelete, args.nPositional, args.azPositional,
+                    zMessage, zAuthor);
+  doltliteCmdArgsClear(&args);
 }
 
 typedef struct TagVtab TagVtab;

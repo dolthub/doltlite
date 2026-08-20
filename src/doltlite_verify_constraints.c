@@ -177,6 +177,11 @@ static void doltVerifyConstraintsFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   int bAll = 0;
   int bOutputOnly = 0;
+  DoltliteCmdArgs args;
+  DoltliteCmdOption aOption[] = {
+    { "all", 'a', DOLTLITE_CMD_OPTION_FLAG, &bAll, 0 },
+    { "output-only", 0, DOLTLITE_CMD_OPTION_FLAG, &bOutputOnly, 0 }
+  };
   const char **azArgTables = 0;
   int nArgTables = 0;
   int nArgAlloc = 0;
@@ -197,34 +202,22 @@ static void doltVerifyConstraintsFunc(
   memset(&emptyCat, 0, sizeof(emptyCat));
   memset(&headCommit, 0, sizeof(headCommit));
   memset(&headHash, 0, sizeof(headHash));
+  memset(&args, 0, sizeof(args));
 
   if( doltliteCmdRejectDetached(context) ) return;
   for(i=0; i<argc; i++){
     const char *zArg = (const char*)sqlite3_value_text(argv[i]);
-    int exists;
     if( !zArg || !zArg[0] ){
       sqlite3_result_error(context, "invalid empty argument", -1);
       goto cleanup;
     }
-    if( strcmp(zArg, "--all")==0 || strcmp(zArg, "-a")==0 ){
-      bAll = 1;
-      continue;
-    }
-    if( strcmp(zArg, "--output-only")==0 ){
-      bOutputOnly = 1;
-      continue;
-    }
-    if( zArg[0]=='-' ){
-      char *zErr = sqlite3_mprintf(
-          "unknown flag '%s' (supported: --all, --output-only)", zArg);
-      if( zErr ){
-        sqlite3_result_error(context, zErr, -1);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(context);
-      }
-      goto cleanup;
-    }
+  }
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) goto cleanup;
+  for(i=0; i<args.nPositional; i++){
+    const char *zArg = args.azPositional[i];
+    int exists;
     exists = tableExists(db, zArg);
     if( exists<0 ){
       sqlite3_result_error_nomem(context);
@@ -381,6 +374,7 @@ detection_done:
 cleanup:
   freeStringList(azChanged, nChanged);
   sqlite3_free((void*)azArgTables);
+  doltliteCmdArgsClear(&args);
 }
 
 int doltliteVerifyConstraintsRegister(sqlite3 *db){

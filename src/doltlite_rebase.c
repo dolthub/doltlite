@@ -2090,9 +2090,19 @@ static void doltliteRebaseFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *zArg0;
+  DoltliteCmdArgs args;
+  const char *zArg0 = 0;
+  int isAbort = 0, isContinue = 0, isInteractive = 0;
+  DoltliteCmdOption aOption[] = {
+    { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
+    { "continue", 0, DOLTLITE_CMD_OPTION_FLAG, &isContinue, 0 },
+    { "interactive", 'i', DOLTLITE_CMD_OPTION_FLAG, &isInteractive, 0 }
+  };
   int sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
   int keepTopLevelSavepoint = 0;
+  int rc;
+
+  memset(&args, 0, sizeof(args));
 
   if( doltliteCmdRejectDetached(context) ) return;
   if( !cs ){ sqlite3_result_error(context, "no database", -1); goto rebase_cleanup; }
@@ -2101,49 +2111,56 @@ static void doltliteRebaseFunc(
     goto rebase_cleanup;
   }
 
-  zArg0 = (const char*)sqlite3_value_text(argv[0]);
-  if( !zArg0 ){
-    sqlite3_result_error(context, "upstream ref required", -1);
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) goto rebase_cleanup;
+  if( isAbort + isContinue + isInteractive > 1 ){
+    sqlite3_result_error(context, "conflicting flags", -1);
     goto rebase_cleanup;
   }
+  if( args.nPositional>0 ) zArg0 = args.azPositional[0];
 
-  if( strcmp(zArg0, "--abort")==0 ){
+  if( isAbort ){
+    if( args.nPositional!=0 ){
+      sqlite3_result_error(context, "--abort does not take other arguments", -1);
+      goto rebase_cleanup;
+    }
     doltliteRebaseInteractiveAbort(context, db);
     goto rebase_cleanup;
   }
-  if( strcmp(zArg0, "--continue")==0 ){
+  if( isContinue ){
+    if( args.nPositional!=0 ){
+      sqlite3_result_error(context, "--continue does not take other arguments", -1);
+      goto rebase_cleanup;
+    }
     keepTopLevelSavepoint = 1;
     doltliteRebaseInteractiveContinue(context, db);
     goto rebase_cleanup;
   }
-  if( strcmp(zArg0, "-i")==0 || strcmp(zArg0, "--interactive")==0 ){
+  if( isInteractive ){
     const char *zUpstream;
     keepTopLevelSavepoint = 1;
-    if( argc<2 ){
+    if( args.nPositional<1 ){
       sqlite3_result_error(context,
         "interactive rebase requires upstream branch: "
         "dolt_rebase('-i', 'upstream')", -1);
       goto rebase_cleanup;
     }
-    if( argc!=2 ){
+    if( args.nPositional!=1 ){
       sqlite3_result_error(context,
         "interactive rebase takes exactly one upstream branch", -1);
       goto rebase_cleanup;
     }
-    zUpstream = (const char*)sqlite3_value_text(argv[1]);
-    if( !zUpstream ){
-      sqlite3_result_error(context, "upstream ref required", -1);
-      goto rebase_cleanup;
-    }
+    zUpstream = args.azPositional[0];
     doltliteRebaseInteractiveStart(context, db, zUpstream);
     goto rebase_cleanup;
   }
 
-  if( zArg0[0]=='-' ){
-    doltliteCmdResultUnknownOption(context, zArg0);
+  if( !zArg0 ){
+    sqlite3_result_error(context, "upstream ref required", -1);
     goto rebase_cleanup;
   }
-  if( argc!=1 ){
+  if( args.nPositional!=1 ){
     sqlite3_result_error(context,
       "too many positional arguments to dolt_rebase", -1);
     goto rebase_cleanup;
@@ -2158,6 +2175,7 @@ static void doltliteRebaseFunc(
   }
 
 rebase_cleanup:
+  doltliteCmdArgsClear(&args);
   if( sealTopLevel && !keepTopLevelSavepoint ){
     (void)doltliteVcSealTopLevelSavepointTxn(db);
   }

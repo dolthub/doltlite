@@ -1384,21 +1384,18 @@ static void conflictsResolveFinishNoConflictTable(
   sqlite3_result_error(ctx, "table not found", -1);
 }
 
-static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+static void conflictsResolveParsedFunc(
+  sqlite3_context *ctx,
+  int useOurs,
+  const char *zTable
+){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *zMode, *zTable;
   ConflictTableInfo table;
   int found = 0;
   int j, rc;
 
-  if( doltliteCmdRejectDetached(ctx) ) return;
   if(!cs){ sqlite3_result_error(ctx,"no database",-1); return; }
-  if(argc!=2){ sqlite3_result_error(ctx,"usage: dolt_conflicts_resolve('--ours'|'--theirs','table')",-1); return; }
-
-  zMode = (const char*)sqlite3_value_text(argv[0]);
-  zTable = (const char*)sqlite3_value_text(argv[1]);
-  if(!zMode||!zTable){ sqlite3_result_error(ctx,"invalid args",-1); return; }
 
   rc = loadConflictTable(db, cs, zTable, &table, &found);
   if( rc!=SQLITE_OK ){
@@ -1416,7 +1413,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   freeConflictTable(&table);
   found = 0;
 
-  if( strcmp(zMode,"--ours")==0 ){
+  if( useOurs ){
     rc = removeConflictTableFromCatalog(db, cs, zTable, &found);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
@@ -1428,7 +1425,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
       conflictsResolveFinishNoConflictTable(ctx, db, zTable);
     }
 
-  }else if( strcmp(zMode,"--theirs")==0 ){
+  }else{
     rc = loadConflictTable(db, cs, zTable, &table, &found);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
@@ -1458,9 +1455,30 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
       conflictsResolveFinishNoConflictTable(ctx, db, zTable);
     }
 
-  }else{
-    sqlite3_result_error(ctx, "use --ours or --theirs", -1);
   }
+}
+
+static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  DoltliteCmdArgs args;
+  int useOurs = 0, useTheirs = 0;
+  DoltliteCmdOption aOption[] = {
+    { "ours", 0, DOLTLITE_CMD_OPTION_FLAG, &useOurs, 0 },
+    { "theirs", 0, DOLTLITE_CMD_OPTION_FLAG, &useTheirs, 0 }
+  };
+  int rc;
+
+  if( doltliteCmdRejectDetached(ctx) ) return;
+  rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) return;
+  if( useOurs + useTheirs!=1 || args.nPositional!=1 ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(ctx,
+      "usage: dolt_conflicts_resolve('--ours'|'--theirs','table')", -1);
+    return;
+  }
+  conflictsResolveParsedFunc(ctx, useOurs, args.azPositional[0]);
+  doltliteCmdArgsClear(&args);
 }
 
 int doltliteConflictsRegister(sqlite3 *db){

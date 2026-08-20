@@ -987,6 +987,16 @@ SELECT dolt_reset('t');
 SELECT dolt_commit('-m', 'nothing is staged');
 "
 
+oracle "reset_end_options_dash_table" "
+CREATE TABLE \`--hard\`(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO \`--hard\` VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+UPDATE \`--hard\` SET v = 20;
+SELECT dolt_add('--', '--hard');
+SELECT dolt_reset('--', '--hard');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

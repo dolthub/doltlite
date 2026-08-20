@@ -80,79 +80,37 @@ static int doltliteCommitParseOptions(
   sqlite3_value **argv,
   DoltliteCommitOptions *opts
 ){
-  int i;
+  DoltliteCmdArgs args;
+  DoltliteCmdOption aOption[] = {
+    { 0, 'A', DOLTLITE_CMD_OPTION_FLAG, &opts->addAll, 0 },
+    { "all", 'a', DOLTLITE_CMD_OPTION_FLAG, &opts->addModifiedOnly, 0 },
+    { "force", 'f', DOLTLITE_CMD_OPTION_FLAG, &opts->force, 0 },
+    { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zMessage },
+    { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zAuthor },
+    { "date", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zDate },
+    { "amend", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->amend, 0 },
+    { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->allowEmpty, 0 },
+    { "skip-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->skipEmpty, 0 }
+  };
+  int rc;
   memset(opts, 0, sizeof(*opts));
-  for(i=0; i<argc; i++){
-    const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( !arg ) continue;
-    if( arg[0]=='-' && arg[1]!='-' && arg[1]!=0 && arg[2]!=0 ){
-      int j;
-      for(j=1; arg[j]; j++){
-        if( arg[j]=='A' ){
-          opts->addAll = 1;
-        }else if( arg[j]=='a' ){
-          opts->addModifiedOnly = 1;
-        }else if( arg[j]=='f' ){
-          opts->force = 1;
-        }else if( arg[j]=='m' ){
-          if( arg[j+1]!=0 ){
-            opts->zMessage = &arg[j+1];
-          }else if( i+1<argc ){
-            opts->zMessage = (const char*)sqlite3_value_text(argv[++i]);
-          }else{
-            doltliteCmdResultMissingOptionValue(context, "message");
-            return SQLITE_ERROR;
-          }
-          break;
-        }else{
-          char opt[3] = { '-', (char)arg[j], 0 };
-          doltliteCmdResultUnknownOption(context, opt);
-          return SQLITE_ERROR;
-        }
-      }
-    }else if( strcmp(arg, "-m")==0 ){
-      opts->zMessage = doltliteCmdTakeValueArg(
-          context, argc, argv, &i, "message");
-      if( !opts->zMessage ) return SQLITE_ERROR;
-    }else if( strcmp(arg, "--message")==0 ){
-      opts->zMessage = doltliteCmdTakeValueArg(
-          context, argc, argv, &i, "message");
-      if( !opts->zMessage ) return SQLITE_ERROR;
-    }else if( strcmp(arg, "--author")==0 ){
-      opts->zAuthor = doltliteCmdTakeValueArg(
-          context, argc, argv, &i, "author");
-      if( !opts->zAuthor ) return SQLITE_ERROR;
-    }else if( strcmp(arg, "--date")==0 ){
-      opts->zDate = doltliteCmdTakeValueArg(
-          context, argc, argv, &i, "date");
-      if( !opts->zDate ) return SQLITE_ERROR;
-    }else if( strcmp(arg, "--amend")==0 ){
-      opts->amend = 1;
-    }else if( strcmp(arg, "--allow-empty")==0 ){
-      opts->allowEmpty = 1;
-    }else if( strcmp(arg, "--skip-empty")==0 ){
-      opts->skipEmpty = 1;
-    }else if( strcmp(arg, "-f")==0 || strcmp(arg, "--force")==0 ){
-      opts->force = 1;
-    }else if( strcmp(arg, "-A")==0 ){
-      opts->addAll = 1;
-    }else if( strcmp(arg, "-a")==0 || strcmp(arg, "--all")==0 ){
-      opts->addModifiedOnly = 1;
-    }else if( arg[0]=='-' ){
-      doltliteCmdResultUnknownOption(context, arg);
-      return SQLITE_ERROR;
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            DOLTLITE_CMD_PARSE_SHORT_GROUPS, &args);
+  if( rc!=SQLITE_OK ) return rc;
+  if( args.nPositional>0 ){
+    const char *arg = args.azPositional[0];
+    char *zErr = sqlite3_mprintf(
+        "commit does not take positional arguments, but found 1: %s", arg);
+    if( zErr ){
+      sqlite3_result_error(context, zErr, -1);
+      sqlite3_free(zErr);
     }else{
-      char *zErr = sqlite3_mprintf(
-          "commit does not take positional arguments, but found 1: %s", arg);
-      if( zErr ){
-        sqlite3_result_error(context, zErr, -1);
-        sqlite3_free(zErr);
-      }else{
-        sqlite3_result_error_nomem(context);
-      }
-      return SQLITE_ERROR;
+      sqlite3_result_error_nomem(context);
     }
+    doltliteCmdArgsClear(&args);
+    return SQLITE_ERROR;
   }
+  doltliteCmdArgsClear(&args);
   return SQLITE_OK;
 }
 

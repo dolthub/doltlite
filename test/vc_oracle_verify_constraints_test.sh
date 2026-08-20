@@ -310,6 +310,22 @@ SELECT dolt_commit('-Am', 'clean');
 "'--all'" \
 "$FOLLOW_AGG_COUNT" 1
 
+run_oracle "end_options_dash_table" \
+"
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE bad(pk INTEGER PRIMARY KEY, parent_pk INT REFERENCES parent(pk));
+CREATE TABLE \`--all\`(pk INTEGER PRIMARY KEY, v INT);
+INSERT INTO parent VALUES (1);
+INSERT INTO \`--all\` VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+PRAGMA foreign_keys=OFF;
+INSERT INTO bad VALUES (1, 99);
+PRAGMA foreign_keys=ON;
+UPDATE \`--all\` SET v = 20 WHERE pk = 1;
+" \
+"'--', '--all'" \
+"$FOLLOW_AGG_COUNT" 0
+
 echo ""
 echo "Results: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
