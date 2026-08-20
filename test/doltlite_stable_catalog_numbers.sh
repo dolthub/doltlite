@@ -82,6 +82,45 @@ EOF
 REOPEN_SQL=$("$DOLTLITE" "$TMPROOT/sql" "SELECT sql FROM sqlite_master WHERE name='t'" 2>/dev/null)
 check "sql_stable_across_reopen" "$(printf '%s\n' "$INSESSION_SQL" | grep CREATE)" "$REOPEN_SQL"
 
+echo "--- comment markers inside quoted identifiers remain schema text ---"
+
+QUOTED=$("$DOLTLITE" "$TMPROOT/quoted" 2>/dev/null <<'EOF'
+CREATE TABLE q(
+  `back--tick` TEXT,
+  [bracket/*name] INTEGER,
+  "double""--quote" TEXT
+);
+CREATE INDEX `index--name` ON q(`back--tick`);
+CREATE VIEW `view--name` AS
+ SELECT `back--tick`, [bracket/*name] FROM q;
+CREATE TRIGGER `trigger--name` AFTER INSERT ON q BEGIN
+  UPDATE q SET `back--tick`=NEW.`back--tick`
+   WHERE [bracket/*name]=NEW.[bracket/*name];
+END;
+INSERT INTO q VALUES('value',1,'quoted');
+SELECT 'C:'||(dolt_commit('-A','-m','quoted') IS NOT NULL);
+SELECT 'Q:'||count(*) FROM pragma_table_xinfo('q')
+ WHERE name IN ('back--tick','bracket/*name','double"--quote');
+SELECT 'O:'||count(*) FROM sqlite_master
+ WHERE name IN ('index--name','view--name','trigger--name');
+SELECT 'V:'||count(*) FROM `view--name` WHERE `back--tick`='value';
+SELECT 'K:'||integrity_check FROM pragma_integrity_check;
+EOF
+)
+check "quoted_comment_markers_in_session" "C:1 Q:3 O:3 V:1 K:ok" \
+  "$(printf '%s\n' "$QUOTED" | tr '\n' ' ' | sed 's/ $//')"
+QUOTED_REOPEN=$("$DOLTLITE" "$TMPROOT/quoted" 2>/dev/null <<'EOF'
+SELECT 'Q:'||count(*) FROM pragma_table_xinfo('q')
+ WHERE name IN ('back--tick','bracket/*name','double"--quote');
+SELECT 'O:'||count(*) FROM sqlite_master
+ WHERE name IN ('index--name','view--name','trigger--name');
+SELECT 'V:'||count(*) FROM `view--name` WHERE `back--tick`='value';
+SELECT 'K:'||integrity_check FROM pragma_integrity_check;
+EOF
+)
+check "quoted_comment_markers_after_reopen" "Q:3 O:3 V:1 K:ok" \
+  "$(printf '%s\n' "$QUOTED_REOPEN" | tr '\n' ' ' | sed 's/ $//')"
+
 echo "--- rolled-back DDL leaves view and cleanliness intact ---"
 
 RB=$("$DOLTLITE" "$DB" 2>/dev/null <<EOF
