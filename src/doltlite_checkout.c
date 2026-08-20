@@ -1136,7 +1136,12 @@ static int doltliteCheckoutTables(
   return rc;
 }
 
-void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+static void doltCheckoutParsedFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv,
+  int parseOptions
+){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   CheckoutMutationCtx m;
@@ -1157,7 +1162,7 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   if( doltliteIsDetached(db) ){
     ProllyHash probe;
-    if( strcmp(zBranch, "-b")==0 ){
+    if( parseOptions && strcmp(zBranch, "-b")==0 ){
       doltliteVcResultError(ctx, db,
           "unable to create new branch in a read-only database");
       return;
@@ -1194,7 +1199,7 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  if( strcmp(zBranch, "-b")==0 ){
+  if( parseOptions && strcmp(zBranch, "-b")==0 ){
     if( argc<2 ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
     if( argc>3 ){ doltliteVcResultError(ctx, db, "too many arguments"); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
@@ -1390,6 +1395,35 @@ checkout_done:
     }
   }
   sqlite3_result_int(ctx, 0);
+}
+
+void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3_value **aArgs;
+  int endOptions = 0;
+  int parseOptions = 1;
+  int nArgs = 0;
+  int i;
+
+  if( argc==0 ){
+    doltCheckoutParsedFunc(ctx, argc, argv, parseOptions);
+    return;
+  }
+  aArgs = sqlite3_malloc(argc * (int)sizeof(*aArgs));
+  if( !aArgs ){
+    sqlite3_result_error_nomem(ctx);
+    return;
+  }
+  for(i=0; i<argc; i++){
+    const char *zArg = (const char*)sqlite3_value_text(argv[i]);
+    if( !endOptions && zArg && strcmp(zArg, "--")==0 ){
+      endOptions = 1;
+      if( nArgs==0 ) parseOptions = 0;
+      continue;
+    }
+    aArgs[nArgs++] = argv[i];
+  }
+  doltCheckoutParsedFunc(ctx, nArgs, aArgs, parseOptions);
+  sqlite3_free(aArgs);
 }
 
 #endif

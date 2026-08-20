@@ -657,7 +657,7 @@ int doltliteStageNamedTables(
     const char *zTable = (const char*)sqlite3_value_text(argv[i]);
     Pgno iTable = 0;
     int j;
-    if( !zTable || zTable[0]=='-' || strcmp(zTable, ".")==0 ) continue;
+    if( !zTable || strcmp(zTable, ".")==0 ) continue;
 
     {
       int ignored = 0;
@@ -977,8 +977,12 @@ static void doltliteAddFunc(
   int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
   int rc;
   int i;
+  int endOptions = 0;
+  int nTables = 0;
   int stageAll = 0;
+  int parsed = 0;
   int opRc = SQLITE_OK;
+  sqlite3_value **aTables = 0;
 
   if( doltliteCmdRejectDetached(context) ) return;
   if( !cs ){
@@ -989,21 +993,36 @@ static void doltliteAddFunc(
     sqlite3_result_error(context, "dolt_add requires table name or '-A'", -1);
     goto add_cleanup;
   }
+  aTables = sqlite3_malloc(argc * (int)sizeof(*aTables));
+  if( !aTables ){
+    sqlite3_result_error_nomem(context);
+    goto add_cleanup;
+  }
 
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
-    if( strcmp(arg, "-A")==0
-     || strcmp(arg, "--all")==0
-     || strcmp(arg, ".")==0 ){
+    if( !endOptions && strcmp(arg, "--")==0 ){
+      endOptions = 1;
+    }else if( (!endOptions && (strcmp(arg, "-A")==0
+                            || strcmp(arg, "--all")==0))
+           || strcmp(arg, ".")==0 ){
       stageAll = 1;
-    }else if( arg[0]=='-' ){
+    }else if( !endOptions && arg[0]=='-' ){
       doltliteCmdResultUnknownOption(context, arg);
       goto add_cleanup;
+    }else{
+      aTables[nTables++] = argv[i];
     }
   }
+  if( !stageAll && nTables==0 ){
+    sqlite3_result_error(context, "dolt_add requires table name or '-A'", -1);
+    goto add_cleanup;
+  }
 
-  opRc = doltliteStageArgsAndPersist(db, context, cs, argc, argv, stageAll);
+  parsed = 1;
+  opRc = doltliteStageArgsAndPersist(
+      db, context, cs, nTables, aTables, stageAll);
   if( opRc!=SQLITE_OK ) goto add_cleanup;
 
   sqlite3_result_int(context, 0);
@@ -1011,8 +1030,9 @@ static void doltliteAddFunc(
 add_cleanup:
   if( sealTopLevel ){
     rc = doltliteVcSealTopLevelSavepointTxn(db);
-    if( rc==SQLITE_OK && opRc==SQLITE_OK ){
-      rc = doltliteStageArgsAndPersist(db, context, cs, argc, argv, stageAll);
+    if( rc==SQLITE_OK && parsed && opRc==SQLITE_OK ){
+      rc = doltliteStageArgsAndPersist(
+          db, context, cs, nTables, aTables, stageAll);
       if( rc!=SQLITE_OK ){
         opRc = rc;
       }
@@ -1025,6 +1045,7 @@ add_cleanup:
   }else if( opRc!=SQLITE_OK ){
     sqlite3_result_error_code(context, opRc);
   }
+  sqlite3_free(aTables);
 }
 
 

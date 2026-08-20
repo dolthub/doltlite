@@ -1219,6 +1219,21 @@ UPDATE u SET v = 99;
 SELECT dolt_checkout('HEAD', 't');
 "
 
+oracle "checkout_end_options_dash_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE \`-b\`(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+INSERT INTO \`-b\` VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+UPDATE t SET v = 99;
+UPDATE \`-b\` SET v = 99;
+SELECT dolt_checkout('--', '-b');
+UPDATE \`-b\` SET v = 88;
+SELECT dolt_checkout('HEAD', '--', '-b');
+UPDATE t SET v = (SELECT v FROM \`-b\` WHERE id = 1) WHERE id = 1;
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

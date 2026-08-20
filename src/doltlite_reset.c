@@ -458,6 +458,7 @@ static void doltliteResetFunc(
   int nPaths = 0;
   int rc;
   int i;
+  int endOptions = 0;
   int graphLocked = 0;
   u8 isMerging = 0;
   int bSucceeded = 0;
@@ -480,9 +481,13 @@ static void doltliteResetFunc(
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
-    if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
-    else if( strcmp(arg, "--soft")==0 ){ isSoft = 1; }
-    else if( arg[0]=='-' ){
+    if( !endOptions && strcmp(arg, "--")==0 ){
+      endOptions = 1;
+      continue;
+    }
+    if( !endOptions && strcmp(arg, "--hard")==0 ){ isHard = 1; }
+    else if( !endOptions && strcmp(arg, "--soft")==0 ){ isSoft = 1; }
+    else if( !endOptions && arg[0]=='-' ){
       doltliteCmdResultUnknownOption(context, arg);
       sqlite3_free(azPaths);
       azPaths = 0;

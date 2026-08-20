@@ -185,6 +185,7 @@ static void doltVerifyConstraintsFunc(
   const char **azScan = 0;
   int nScan = 0;
   int i;
+  int endOptions = 0;
   int rc;
   int nViolations = 0;
   ProllyHash headCat;
@@ -206,15 +207,20 @@ static void doltVerifyConstraintsFunc(
       sqlite3_result_error(context, "invalid empty argument", -1);
       goto cleanup;
     }
-    if( strcmp(zArg, "--all")==0 || strcmp(zArg, "-a")==0 ){
+    if( !endOptions && strcmp(zArg, "--")==0 ){
+      endOptions = 1;
+      continue;
+    }
+    if( !endOptions
+     && (strcmp(zArg, "--all")==0 || strcmp(zArg, "-a")==0) ){
       bAll = 1;
       continue;
     }
-    if( strcmp(zArg, "--output-only")==0 ){
+    if( !endOptions && strcmp(zArg, "--output-only")==0 ){
       bOutputOnly = 1;
       continue;
     }
-    if( zArg[0]=='-' ){
+    if( !endOptions && zArg[0]=='-' ){
       char *zErr = sqlite3_mprintf(
           "unknown flag '%s' (supported: --all, --output-only)", zArg);
       if( zErr ){
