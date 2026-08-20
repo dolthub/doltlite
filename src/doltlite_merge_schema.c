@@ -1313,28 +1313,42 @@ done:
   return rc;
 }
 
-/* The identifier a plain index column-list item names, with quoting, sort
-** order and collation stripped. */
-static char *mergeIndexItemColumn(const char *z, int n){
-  int i = 0;
-  int j;
-  char *zOut;
-  while( i<n && (sqlite3Isspace(z[i]) || z[i]=='"' || z[i]=='`' || z[i]=='[') ){
-    i++;
+/* Skip a quoted span starting at z. q is the opening quote; ']' closes '['. */
+static const char *mergeIndexSkipQuoted(const char *z, char q){
+  char qEnd = (q=='[') ? ']' : q;
+  z++;
+  while( *z && *z!=qEnd ){
+    if( q=='\'' && *z=='\'' && z[1]=='\'' ){ z += 2; continue; }
+    z++;
   }
-  j = i;
-  while( j<n && (sqlite3Isalnum(z[j]) || z[j]=='_' || z[j]=='$') ) j++;
-  if( j==i ) return 0;
-  zOut = sqlite3_malloc(j-i+1);
+  return *z ? z+1 : z;
+}
+
+static int mergeIndexIsSortKeyword(const char *z, int n){
+  static const char *const azKw[] = {
+    "ASC", "COLLATE", "DESC", "FIRST", "LAST", "NULLS"
+  };
+  int i;
+  for(i=0; i<(int)(sizeof(azKw)/sizeof(azKw[0])); i++){
+    if( sqlite3_strnicmp(z, azKw[i], n)==0 && azKw[i][n]==0 ) return 1;
+  }
+  return 0;
+}
+
+static char *mergeIndexDupIdent(const char *z, int n){
+  char *zOut;
+  if( n<=0 ) return 0;
+  zOut = sqlite3_malloc(n+1);
   if( !zOut ) return 0;
-  memcpy(zOut, z+i, j-i);
-  zOut[j-i] = 0;
+  memcpy(zOut, z, n);
+  zOut[n] = 0;
   return zOut;
 }
 
-/* Walk the column list of a CREATE INDEX, calling xEach for each column it
-** names. An expression index has a nested paren and no plain column list to
-** read, so it reports nothing rather than guessing. */
+/* Walk identifiers in a CREATE INDEX column list, including those nested
+** inside expression indexes such as abs(length(b)). Function names (an
+** ident followed by '(') and ASC/DESC/COLLATE tokens are skipped so a
+** dropped column named abs is not required to kill every abs() index. */
 static int mergeIndexEachColumn(
   const char *zIndexSql,
   int (*xEach)(void*, const char*),
@@ -1342,28 +1356,61 @@ static int mergeIndexEachColumn(
 ){
   const char *zOpen = zIndexSql ? strchr(zIndexSql, '(') : 0;
   const char *zEnd;
-  const char *zItem;
   const char *z;
+  int depth;
   int rc = SQLITE_OK;
 
   if( !zOpen ) return SQLITE_OK;
+  depth = 1;
   zEnd = zOpen + 1;
-  while( *zEnd && *zEnd!=')' ){
-    if( *zEnd=='(' ) return SQLITE_OK;
-    zEnd++;
+  while( *zEnd && depth>0 ){
+    if( *zEnd=='\'' || *zEnd=='"' || *zEnd=='`' || *zEnd=='[' ){
+      zEnd = mergeIndexSkipQuoted(zEnd, *zEnd);
+      continue;
+    }
+    if( *zEnd=='(' ) depth++;
+    else if( *zEnd==')' ) depth--;
+    if( depth>0 ) zEnd++;
   }
-  if( *zEnd!=')' ) return SQLITE_OK;
+  if( depth!=0 ) return SQLITE_OK;
 
-  zItem = zOpen + 1;
-  for(z=zItem; z<=zEnd && rc==SQLITE_OK; z++){
-    if( z==zEnd || *z==',' ){
-      char *zCol = mergeIndexItemColumn(zItem, (int)(z-zItem));
+  z = zOpen + 1;
+  while( z<zEnd && rc==SQLITE_OK ){
+    const char *zIdent;
+    int nIdent;
+    char *zCol;
+    const char *zLook;
+
+    if( *z=='\'' || *z=='"' || *z=='`' || *z=='[' ){
+      char q = *z;
+      char qEnd = (q=='[') ? ']' : q;
+      zIdent = z + 1;
+      z = mergeIndexSkipQuoted(z, q);
+      nIdent = (int)((z>zIdent+1 && z[-1]==qEnd) ? (z-zIdent-1) : 0);
+      zCol = mergeIndexDupIdent(zIdent, nIdent);
+      if( !zCol && nIdent>0 ) return SQLITE_NOMEM;
       if( zCol ){
         rc = xEach(pCtx, zCol);
         sqlite3_free(zCol);
       }
-      zItem = z + 1;
+      continue;
     }
+    if( !(sqlite3Isalnum(*z) || *z=='_' || *z=='$') ){
+      z++;
+      continue;
+    }
+    zIdent = z;
+    z++;
+    while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
+    nIdent = (int)(z-zIdent);
+    zLook = z;
+    while( zLook<zEnd && sqlite3Isspace(*zLook) ) zLook++;
+    if( zLook<zEnd && *zLook=='(' ) continue;
+    if( mergeIndexIsSortKeyword(zIdent, nIdent) ) continue;
+    zCol = mergeIndexDupIdent(zIdent, nIdent);
+    if( !zCol ) return SQLITE_NOMEM;
+    rc = xEach(pCtx, zCol);
+    sqlite3_free(zCol);
   }
   return rc;
 }

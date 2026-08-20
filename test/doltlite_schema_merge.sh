@@ -1112,6 +1112,61 @@ run_test "merge_composite_index_over_dropped_column_objects" \
   "table:t" "$DB"
 rm -f "$DB"
 
+# Expression indexes name columns inside function calls (nested parens), not
+# as a plain list. Dropping that column used to leave the index in the catalog
+# and fail the merge with "database disk image is malformed".
+for dir in ours theirs; do
+  DB=/tmp/test_merge_idx_dropcol_expr_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    OURS="ALTER TABLE t DROP COLUMN b;"; THEIRS="CREATE INDEX ix ON t(abs(length(b)));"
+  else
+    OURS="CREATE INDEX ix ON t(abs(length(b)));"; THEIRS="ALTER TABLE t DROP COLUMN b;"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1'),(2,'a2','b2');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+$OURS
+SELECT dolt_commit('-A','-m','main side');
+SELECT dolt_checkout('feat');
+$THEIRS
+SELECT dolt_commit('-A','-m','feat side');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_expr_index_over_dropped_column_${dir}_hash" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_expr_index_over_dropped_column_${dir}_objects" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master ORDER BY name;" \
+    "table:t" "$DB"
+  run_test "merge_expr_index_over_dropped_column_${dir}_rows" \
+    "SELECT group_concat(k||':'||a) FROM t ORDER BY k;" "1:a1,2:a2" "$DB"
+  run_test "merge_expr_index_over_dropped_column_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# An expression index over a surviving column is not dropped just because a
+# different column disappeared, including when the expression calls abs().
+DB=/tmp/test_merge_idx_expr_survives_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+CREATE INDEX ix ON t(abs(length(a)));
+SELECT dolt_commit('-A','-m','index on a');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','drop b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_expr_index_surviving_column_hash" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_expr_index_surviving_column_kept" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
+rm -f "$DB"
+
 # An index whose columns all survive must be adopted exactly as before: both
 # branches indexing different surviving columns keeps both indexes, and an
 # index over a column their side added comes across with it.
