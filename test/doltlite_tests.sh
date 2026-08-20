@@ -123,20 +123,31 @@ run_test "runner_validation_results" \
      ('multi_stmt','validation','SELECT 1; SELECT 2','expected_rows','==','1'),
      ('write_stmt','validation','CREATE TABLE nope(x INT)','expected_rows','==','1'),
      ('command_stmt','validation','SELECT dolt_branch(''side_effect'')','expected_rows','==','1'),
+     ('pragma_read','validation','PRAGMA table_info(fixture)','expected_rows','>=','1'),
+     ('pragma_tail','validation','SELECT 1; PRAGMA query_only=ON','expected_rows','==','1'),
+     ('pragma_write','validation','PRAGMA query_only=ON','expected_rows','==','0'),
      ('recursive','validation','SELECT * FROM dolt_test_run()','expected_rows','==','1'),
      ('zero_rows','validation','SELECT i FROM fixture WHERE 0','expected_single_value','==','1'),
      ('many_cols','validation','SELECT i,s FROM fixture LIMIT 1','expected_single_value','==','1'),
      ('many_rows','validation','SELECT i FROM fixture','expected_single_value','==','1');
    SELECT test_name, status, message FROM dolt_test_run('validation');
-   SELECT count(*) FROM dolt_branches WHERE name='side_effect';" \
+   SELECT count(*) FROM dolt_branches WHERE name='side_effect';
+   PRAGMA query_only;
+   CREATE TABLE pragma_guard(id INT);
+   SELECT count(*) FROM sqlite_master WHERE name='pragma_guard';" \
   "command_stmt|FAIL|Cannot execute write queries
 many_cols|FAIL|expected_single_value expects exactly one cell. Received multiple columns
 many_rows|FAIL|expected_single_value expects exactly one cell. Received multiple rows
 multi_stmt|FAIL|Can only run exactly one query
+pragma_read|FAIL|Cannot execute PRAGMA queries
+pragma_tail|FAIL|Cannot execute PRAGMA queries
+pragma_write|FAIL|Cannot execute PRAGMA queries
 recursive|FAIL|Cannot call dolt_test_run in dolt_tests
 write_stmt|FAIL|Cannot execute write queries
 zero_rows|FAIL|expected_single_value expects exactly one cell. Received 0 rows
-0" "$DB"
+0
+0
+1" "$DB"
 
 run_test "runner_query_error" \
   "INSERT INTO dolt_tests VALUES

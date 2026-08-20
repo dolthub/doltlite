@@ -575,6 +575,7 @@ struct TestAuth {
   sqlite3_xauth xAuth;
   void *pAuthArg;
   int hasCommand;
+  int hasPragma;
 };
 
 static int testAuthorizer(void *pArg, int action, const char *z1,
@@ -587,6 +588,10 @@ static int testAuthorizer(void *pArg, int action, const char *z1,
     if( pFunc && (pFunc->funcFlags & SQLITE_FUNC_DIRECT)!=0 ){
       p->hasCommand = 1;
     }
+  }
+  if( rc==SQLITE_OK && action==SQLITE_PRAGMA ){
+    p->hasPragma = 1;
+    rc = SQLITE_DENY;
   }
   return rc;
 }
@@ -603,11 +608,17 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
   auth.xAuth = db->xAuth;
   auth.pAuthArg = db->pAuthArg;
   auth.hasCommand = 0;
+  auth.hasPragma = 0;
   db->xAuth = testAuthorizer;
   db->pAuthArg = &auth;
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, &zTail);
   db->xAuth = auth.xAuth;
   db->pAuthArg = auth.pAuthArg;
+  if( auth.hasPragma ){
+    sqlite3_finalize(pStmt);
+    *pzMessage = sqlite3_mprintf("Cannot execute PRAGMA queries");
+    return SQLITE_OK;
+  }
   if( rc!=SQLITE_OK ){
     *pzMessage = testPrepareError(db);
     return SQLITE_OK;
@@ -622,7 +633,19 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
     return SQLITE_OK;
   }
   while( zTail && zTail[0] ){
+    auth.hasCommand = 0;
+    auth.hasPragma = 0;
+    db->xAuth = testAuthorizer;
+    db->pAuthArg = &auth;
     rc = sqlite3_prepare_v2(db, zTail, -1, &pExtra, &zNext);
+    db->xAuth = auth.xAuth;
+    db->pAuthArg = auth.pAuthArg;
+    if( auth.hasPragma ){
+      sqlite3_finalize(pExtra);
+      sqlite3_finalize(pStmt);
+      *pzMessage = sqlite3_mprintf("Cannot execute PRAGMA queries");
+      return SQLITE_OK;
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_finalize(pStmt);
       *pzMessage = sqlite3_mprintf("Can only run exactly one query");
