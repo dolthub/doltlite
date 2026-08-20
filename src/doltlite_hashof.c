@@ -179,6 +179,8 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
   const char *z = zSql;
   int inSingle = 0;
   int inDouble = 0;
+  int inBacktick = 0;
+  int inBracket = 0;
   int pendingSpace = 0;
   int rc;
 
@@ -222,7 +224,31 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
     }
     if( inDouble ){
       sqlite3_str_appendchar(pStr, 1, (char)c);
-      if( c=='"' ) inDouble = 0;
+      if( c=='"' ){
+        if( z[1]=='"' ){
+          sqlite3_str_appendchar(pStr, 1, '"');
+          z++;
+        }else{
+          inDouble = 0;
+        }
+      }
+      continue;
+    }
+    if( inBacktick ){
+      sqlite3_str_appendchar(pStr, 1, (char)c);
+      if( c=='`' ){
+        if( z[1]=='`' ){
+          sqlite3_str_appendchar(pStr, 1, '`');
+          z++;
+        }else{
+          inBacktick = 0;
+        }
+      }
+      continue;
+    }
+    if( inBracket ){
+      sqlite3_str_appendchar(pStr, 1, (char)c);
+      if( c==']' ) inBracket = 0;
       continue;
     }
     if( c=='\'' ){
@@ -241,6 +267,24 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
       pendingSpace = 0;
       inDouble = 1;
       sqlite3_str_appendchar(pStr, 1, '"');
+      continue;
+    }
+    if( c=='`' ){
+      if( pendingSpace && sqlite3_str_length(pStr)>0 ){
+        sqlite3_str_appendchar(pStr, 1, ' ');
+      }
+      pendingSpace = 0;
+      inBacktick = 1;
+      sqlite3_str_appendchar(pStr, 1, '`');
+      continue;
+    }
+    if( c=='[' ){
+      if( pendingSpace && sqlite3_str_length(pStr)>0 ){
+        sqlite3_str_appendchar(pStr, 1, ' ');
+      }
+      pendingSpace = 0;
+      inBracket = 1;
+      sqlite3_str_appendchar(pStr, 1, '[');
       continue;
     }
     if( isspace(c) ){
