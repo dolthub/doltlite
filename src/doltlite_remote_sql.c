@@ -21,6 +21,28 @@ struct RemoteMutationCtx {
   int isDelete;
 };
 
+static const char *remoteSqlNormalizeName(
+  sqlite3_context *ctx,
+  const char *zName,
+  char **pzOwned
+){
+  const char *zInput = zName;
+  const char *zEnd;
+  *pzOwned = 0;
+  while( sqlite3Isspace(*zName) ) zName++;
+  zEnd = zName + strlen(zName);
+  while( zEnd>zName && sqlite3Isspace(zEnd[-1]) ) zEnd--;
+  if( zName==zInput && zEnd[0]==0 ) return zName;
+  *pzOwned = sqlite3_mprintf("%.*s", (int)(zEnd-zName), zName);
+  if( !*pzOwned ) sqlite3_result_error_nomem(ctx);
+  return *pzOwned;
+}
+
+static int remoteSqlNameIsValid(const char *zName){
+  return strpbrk(zName,
+    " \t\n\r./\\!@#$%^&*(){}[],.<>'\"?=+|")==0;
+}
+
 static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   RemoteMutationCtx *p = (RemoteMutationCtx*)pArg;
   (void)db;
@@ -189,6 +211,8 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
 
   if( strcmp(zAction, "add")==0 ){
     const char *zUrl;
+    const char *zNormalizedName;
+    char *zOwnedName;
     if( argc<3 ){
       doltliteVcResultError(ctx, db, "url required for add");
       return;
@@ -202,9 +226,17 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       doltliteVcResultError(ctx, db, "url required for add");
       return;
     }
-    m.zName = zName;
+    zNormalizedName = remoteSqlNormalizeName(ctx, zName, &zOwnedName);
+    if( !zNormalizedName ) return;
+    if( !remoteSqlNameIsValid(zNormalizedName) ){
+      sqlite3_free(zOwnedName);
+      doltliteVcResultError(ctx, db, "remote name invalid");
+      return;
+    }
+    m.zName = zNormalizedName;
     m.zUrl = zUrl;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
+    sqlite3_free(zOwnedName);
     if( rc!=SQLITE_OK ){
       (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
@@ -212,13 +244,18 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       return;
     }
   }else if( strcmp(zAction, "remove")==0 ){
+    const char *zNormalizedName;
+    char *zOwnedName;
     if( argc>2 ){
       doltliteVcResultError(ctx, db, "too many arguments");
       return;
     }
-    m.zName = zName;
+    zNormalizedName = remoteSqlNormalizeName(ctx, zName, &zOwnedName);
+    if( !zNormalizedName ) return;
+    m.zName = zNormalizedName;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
+    sqlite3_free(zOwnedName);
     if( rc!=SQLITE_OK ){
       (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
