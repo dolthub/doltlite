@@ -576,6 +576,7 @@ struct TestAuth {
   void *pAuthArg;
   int hasCommand;
   int hasPragma;
+  int hasTestRun;
 };
 
 static int testAuthorizer(void *pArg, int action, const char *z1,
@@ -593,6 +594,10 @@ static int testAuthorizer(void *pArg, int action, const char *z1,
     p->hasPragma = 1;
     rc = SQLITE_DENY;
   }
+  if( rc==SQLITE_OK && action==SQLITE_READ && z1
+      && sqlite3_stricmp(z1, "dolt_test_run")==0 ){
+    p->hasTestRun = 1;
+  }
   return rc;
 }
 
@@ -609,6 +614,7 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
   auth.pAuthArg = db->pAuthArg;
   auth.hasCommand = 0;
   auth.hasPragma = 0;
+  auth.hasTestRun = 0;
   db->xAuth = testAuthorizer;
   db->pAuthArg = &auth;
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, &zTail);
@@ -623,6 +629,11 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
     *pzMessage = testPrepareError(db);
     return SQLITE_OK;
   }
+  if( auth.hasTestRun ){
+    sqlite3_finalize(pStmt);
+    *pzMessage = sqlite3_mprintf("Cannot call dolt_test_run in dolt_tests");
+    return SQLITE_OK;
+  }
   if( !pStmt ){
     *pzMessage = sqlite3_mprintf("Can only run exactly one query");
     return SQLITE_OK;
@@ -635,6 +646,7 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
   while( zTail && zTail[0] ){
     auth.hasCommand = 0;
     auth.hasPragma = 0;
+    auth.hasTestRun = 0;
     db->xAuth = testAuthorizer;
     db->pAuthArg = &auth;
     rc = sqlite3_prepare_v2(db, zTail, -1, &pExtra, &zNext);
@@ -651,6 +663,13 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
       *pzMessage = sqlite3_mprintf("Can only run exactly one query");
       return SQLITE_OK;
     }
+    if( auth.hasTestRun ){
+      sqlite3_finalize(pExtra);
+      sqlite3_finalize(pStmt);
+      *pzMessage = sqlite3_mprintf(
+          "Cannot call dolt_test_run in dolt_tests");
+      return SQLITE_OK;
+    }
     if( pExtra ){
       sqlite3_finalize(pExtra);
       sqlite3_finalize(pStmt);
@@ -663,11 +682,6 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
   if( !sqlite3_stmt_readonly(pStmt) ){
     sqlite3_finalize(pStmt);
     *pzMessage = sqlite3_mprintf("Cannot execute write queries");
-    return SQLITE_OK;
-  }
-  if( sqlite3_strlike("%dolt_test_run(%", zQuery, 0)==0 ){
-    sqlite3_finalize(pStmt);
-    *pzMessage = sqlite3_mprintf("Cannot call dolt_test_run in dolt_tests");
     return SQLITE_OK;
   }
   *ppStmt = pStmt;
