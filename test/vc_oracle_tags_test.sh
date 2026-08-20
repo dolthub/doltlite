@@ -159,6 +159,22 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('v1.0', '-m', 'fix: x<y & z>w, ok?');
 "
 
+oracle "tag_author_missing_closing_bracket" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_tag('v1.0', '--author', 'Alice Author <alice@example.com');
+"
+
+oracle_error "tag_malformed_author" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_tag('v1.0', '--author', 'not-an-author');
+"
+
 echo "--- multiple tags ---"
 
 oracle "two_tags_on_same_commit" "
