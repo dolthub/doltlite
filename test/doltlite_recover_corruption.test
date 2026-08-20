@@ -300,6 +300,87 @@ do_execsql_test doltlite_recover_corruption-4.1 {
   PRAGMA integrity_check;
 } {0 B B C ok}
 
-forcedelete rch1.db rch2.db rcor.db
+db close
+
+do_test doltlite_recover_corruption-5.1 {
+  forcedelete checkpoint.db checkpoint-crash.db
+  set ::env(DOLTLITE_WAL_CHECKPOINT_THRESHOLD) 1024
+  sqlite3 db checkpoint.db
+  db eval {
+    CREATE TABLE cp(id INTEGER PRIMARY KEY, payload BLOB);
+    INSERT INTO cp VALUES(1, zeroblob(4096));
+    SELECT dolt_commit('-A','-m','checkpoint');
+  }
+  set ::cpSize [file size checkpoint.db]
+  set ::cpTail [expr {$::cpSize - 169}]
+  set ::cpOffset [rdI64 checkpoint.db [expr {$::cpTail + 13}]]
+  file copy -force checkpoint.db checkpoint-crash.db
+  list [format %08x [rdU32 checkpoint.db [expr {$::cpTail + 9}]]] \
+       [db eval {SELECT count(*), length(payload) FROM cp}]
+} {32504b43 {1 4096}}
+
+do_test doltlite_recover_corruption-5.2 {
+  sqlite3 dbc checkpoint-crash.db
+  set res [list [dbc eval {SELECT count(*), length(payload) FROM cp}] \
+                [dbc eval {PRAGMA integrity_check}]]
+  dbc close
+  set res
+} {{1 4096} ok}
+
+do_test doltlite_recover_corruption-5.3 {
+  db close
+  forcedelete checkpoint-torn.db
+  file copy -force checkpoint.db checkpoint-torn.db
+  set walOffset [rdI64 checkpoint-torn.db 84]
+  xorByte checkpoint-torn.db [expr {$walOffset + 1}]
+  set f [open checkpoint-torn.db a]
+  fconfigure $f -translation binary
+  puts -nonewline $f [binary format c 1]
+  close $f
+  sqlite3 dbc checkpoint-torn.db
+  set rc [catch {
+    list [dbc eval {SELECT count(*), length(payload) FROM cp}] \
+         [dbc eval {PRAGMA integrity_check}]
+  } res]
+  dbc close
+  list $rc $res
+} {0 {{1 4096} ok}}
+
+do_test doltlite_recover_corruption-5.4 {
+  forcedelete checkpoint-bad.db
+  file copy -force checkpoint.db checkpoint-bad.db
+  xorByte checkpoint-bad.db [expr {$::cpOffset + 25}]
+  sqlite3 dbc checkpoint-bad.db
+  set before [dbc eval {SELECT count(*), length(payload) FROM cp}]
+  set rc [catch {
+    dbc eval {
+      INSERT INTO cp VALUES(2, zeroblob(32));
+      SELECT dolt_commit('-A','-m','after checkpoint fallback');
+    }
+  }]
+  set after [dbc eval {SELECT count(*) FROM cp}]
+  dbc close
+  list $before $rc $after
+} {{1 4096} 0 2}
+
+do_test doltlite_recover_corruption-5.5 {
+  forcedelete checkpoint-gc.db
+  file copy -force checkpoint.db checkpoint-gc.db
+  sqlite3 dbc checkpoint-gc.db
+  dbc eval {SELECT dolt_gc()}
+  dbc close
+  set stamp [format %08x [rdU32 checkpoint-gc.db 8]]
+  sqlite3 dbc checkpoint-gc.db
+  set res [list $stamp \
+                [dbc eval {SELECT count(*), length(payload) FROM cp}] \
+                [dbc eval {PRAGMA integrity_check}]]
+  dbc close
+  set res
+} {00000000 {1 4096} ok}
+
+unset ::env(DOLTLITE_WAL_CHECKPOINT_THRESHOLD)
+
+forcedelete rch1.db rch2.db rcor.db checkpoint.db checkpoint-crash.db \
+            checkpoint-torn.db checkpoint-bad.db checkpoint-gc.db
 
 finish_test

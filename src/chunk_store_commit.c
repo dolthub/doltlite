@@ -268,6 +268,11 @@ static int csCommitPlanPendingIndex(
     return csGrowRecent(cs, cs->staging.nPending);
   }
 
+  {
+    int rc = csMaterializeIndex(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   if( cs->staging.nRecent > 0 ){
     *paMergePending = (ChunkIndexEntry*)sqlite3_malloc(
       (cs->staging.nRecent + cs->staging.nPending) * (int)sizeof(ChunkIndexEntry)
@@ -491,6 +496,7 @@ static int csCommitToFile(ChunkStore *cs){
     }
     rootRec[0] = CS_WAL_TAG_ROOT;
     csSerializeManifest(cs, rootRec + 1);
+    csStampWalCheckpoint(cs, rootRec + 1);
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, durableTo);
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, nextOff);
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, batchStart);
@@ -517,28 +523,39 @@ static int csCommitToFile(ChunkStore *cs){
   cs->wal.nWalData = contentEnd - cs->wal.iWalOffset;
   cs->wal.cleanCloseMarker = 0;
 
-commit_done:
-  csFileUnlock(lockFd, &lockName);
-
-  if( rc != SQLITE_OK ){
-    if( cs->file.pFile && writeOff > origFileSize ){
-      (void)csRollbackFailedAppend(cs, origFileSize);
-    }
-    (void)csRestoreCommittedRefsState(cs);
-    if( aCommittedPending!=aSmallCommittedPending ){
-      sqlite3_free(aCommittedPending);
-    }
-    sqlite3_free(aMergePending);
-    sqlite3_free(aMerged);
-    return rc;
-  }
-
   csCommitPublishStaging(cs, useRecent, aCommittedPending, aMerged, nMerged);
   if( aCommittedPending!=aSmallCommittedPending ){
     sqlite3_free(aCommittedPending);
   }
   sqlite3_free(aMergePending);
+  if( csWalCheckpointDue(cs) ){
+    int wroteCheckpoint = 0;
+    int checkpointRc;
+    sqlite3BeginBenignMalloc();
+    checkpointRc = csWriteWalCheckpoint(cs, sectorSize, &wroteCheckpoint);
+    sqlite3EndBenignMalloc();
+    if( checkpointRc!=SQLITE_OK ){
+      sqlite3_log(SQLITE_NOTICE,
+        "doltlite: unable to checkpoint chunk WAL after commit: %d",
+        checkpointRc);
+    }
+  }
+  csFileUnlock(lockFd, &lockName);
   return SQLITE_OK;
+
+commit_done:
+  csFileUnlock(lockFd, &lockName);
+
+  if( cs->file.pFile && writeOff > origFileSize ){
+    (void)csRollbackFailedAppend(cs, origFileSize);
+  }
+  (void)csRestoreCommittedRefsState(cs);
+  if( aCommittedPending!=aSmallCommittedPending ){
+    sqlite3_free(aCommittedPending);
+  }
+  sqlite3_free(aMergePending);
+  sqlite3_free(aMerged);
+  return rc;
 }
 
 int chunkStoreCommit(ChunkStore *cs){

@@ -72,6 +72,8 @@ doltlite_advanced.sh
 doltlite_working_set.sh
 doltlite_feature_deep.sh
 doltlite_deep_history.sh
+doltlite_open_perf.sh
+doltlite_checkpoint_perf.sh
 doltlite_perf.sh
 doltlite_count_perf.sh
 doltlite_demo.sh
@@ -118,6 +120,8 @@ doltlite_timing_suites() {
 large_merge_test.sh
 doltlite_diff_stat_scale.sh
 doltlite_branch_gc_stress.sh
+doltlite_open_perf.sh
+doltlite_checkpoint_perf.sh
 doltlite_perf.sh
 doltlite_count_perf.sh
 doltlite_gc_scale.sh

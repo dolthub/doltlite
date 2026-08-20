@@ -78,11 +78,11 @@ proc drs_run {iFail} {
 }
 
 do_test 1.1 {
-  drs_run 122
+  drs_run 127
 } {1 {disk I/O error} 1 1 {0 {1024 1 1024}} {0 {1023 1 512}} {0 ok}}
 
 do_test 1.2 {
-  drs_run 126
+  drs_run 129
 } {1 {disk I/O error} 1 1 {0 {1024 1 1024}} {0 {1023 1 512}} {0 ok}}
 
 sqlite3_enable_shared_cache $::drs_shared_cache

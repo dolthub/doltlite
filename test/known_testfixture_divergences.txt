@@ -683,7 +683,7 @@ misc7 misc7-5 class=intentional issue=1840  # journal path is a directory (mydir
 misc7 misc7-7.0 class=intentional issue=1840  # shared-cache read expects "database is locked"; MVCC snapshot read proceeds
 misc7 misc7-10 class=intentional issue=1840  # echo vtab over a PK-clustered backing table; doltlite-correct behavior in doltlite_recover_misc7 1.x
 misc7 misc7-11 class=intentional issue=1840  # same echo-on-clustered class
-misc7 misc7-12.64.3 class=intentional issue=1840  # ioerr faultsim recovery check inside the echo-on-clustered class
+misc7 misc7-12.67.3 class=intentional issue=1840  # ioerr faultsim recovery check inside the echo-on-clustered class
 misc7 misc7-13 class=intentional issue=1840  # same echo-on-clustered class (huge xBestIndex cost)
 misc7 misc7-15.2 class=intentional issue=1840  # DELETE ... WHERE rowid on a PK-clustered table: no rowid column
 misc7 misc7-22.3 class=intentional issue=1840  # read-only journal dir: stock cannot journal so the write fails; sidecar-free commit succeeds
@@ -1542,12 +1542,12 @@ attach2 attach2-4.12 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 # vec1's built-in registration adds ~25 allocations at connection open,
 # shifting every entry by +25. The dolt_tests and dolt_test_run module
 # registrations add four more. The dolt_ignore module registration adds
-# two more.
-attachmalloc attachmalloc-1.transient.502 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.927 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1421 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.935 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1437 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+# two more. Checkpoint discovery adds the remaining build-dependent shifts.
+attachmalloc attachmalloc-1.transient.505 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.933 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1429 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.938 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1440 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
@@ -2320,23 +2320,23 @@ memjournal2 memjournal2-1.0 class=intentional issue=1846  # in-memory journal pr
 # shared_err shared_ioerr-2.*.cleanup.1: shared-cache fault injection reaches
 # different lock/fault points under DoltLite. Native cleanup coverage in
 # doltlite_recover_shared_ioerr asserts the important contract for
-# representative points 122 and 126: IOERR does not crash, peer readers see a
+# representative points 127 and 129: IOERR does not crash, peer readers see a
 # consistent committed state, writer cleanup leaves a sane connection, and
 # integrity_check remains ok.
-shared_err shared_ioerr-2.122.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.123.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.124.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.125.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.126.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.127.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.128.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.129.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.130.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.131.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 shared_err shared_ioerr-2.132.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.133.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.134.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.135.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.133.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.134.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.135.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.136.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.137.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.138.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.139.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.140.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 wal4 wal4-2-cantopen-persistent.1 class=unsupported issue=1836  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-cantopen-transient.1 class=unsupported issue=1836  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-full.1 class=unsupported issue=1836  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
@@ -4032,23 +4032,23 @@ sysfault sysfault-2.2-vfsfault-transient.1 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.2 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.3 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.5 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.44 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.45 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.46 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.47 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.48 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.49 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.50 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.51 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.52 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.54 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.102 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.103 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.102 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.103 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.98 class=engine-gap issue=944
-sysfault sysfault-2.2-vfsfault-persistent.99 class=engine-gap issue=944
-sysfault sysfault-2.2-vfsfault-transient.98 class=engine-gap issue=944
-sysfault sysfault-2.2-vfsfault-transient.99 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-transient.55 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.56 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.58 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.110 @coverage class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.111 @coverage class=intentional
+sysfault sysfault-2.2-vfsfault-transient.110 @coverage class=intentional
+sysfault sysfault-2.2-vfsfault-transient.111 @coverage class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.106 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-persistent.107 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-transient.106 class=engine-gap issue=944
+sysfault sysfault-2.2-vfsfault-transient.107 class=engine-gap issue=944
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
@@ -5396,15 +5396,20 @@ ioerr ioerr-7.50.1 class=intentional  # hot-journal prep copies absent -journal 
 ioerr ioerr-7.51.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.52.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.53.1 class=intentional  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.54.1 class=intentional  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.55.1 class=intentional  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.56.1 class=intentional  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.57.1 class=intentional  # hot-journal prep copies absent -journal sidecar
+ioerr ioerr-7.58.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journal sidecar
 # ioerr-2 VACUUM gc-rewrite window: the injected error lands in a best-effort
 # finalization write gc deliberately consumes, so the statement succeeds after
 # the error was hit. Ordinals are ubuntu-runner IDs and track the streamed
 # writer's coalesced write count; macOS no longer trips the window at all.
-ioerr ioerr-2.29.3 @linux class=intentional
-ioerr ioerr-2.30.3 @linux class=intentional
-ioerr ioerr-2.31.3 @linux class=intentional
-ioerr ioerr-2.32.3 @linux class=intentional
+ioerr ioerr-2.29.3 @linux @coverage class=intentional
+ioerr ioerr-2.30.3 @linux @coverage class=intentional
+ioerr ioerr-2.31.3 @linux @coverage class=intentional
+ioerr ioerr-2.32.3 @linux @coverage class=intentional
 
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
@@ -5891,6 +5896,14 @@ sysfault sysfault-2.1-vfsfault-transient.100 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.101 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.102 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.103 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.104 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.105 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.106 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.107 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.108 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.109 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.110 @coverage class=intentional
+sysfault sysfault-2.1-vfsfault-transient.111 @coverage class=intentional
 sysfault sysfault-2.1-vfsfault-transient.88 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.89 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.90 class=intentional
@@ -5903,10 +5916,10 @@ sysfault sysfault-2.1-vfsfault-transient.96 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.97 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.98 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.99 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.100 class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.101 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.100 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.101 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.108 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.109 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.108 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.109 class=intentional
 
 stmt stmt-1.2 class=intentional  # retained graph-lock handle raises the instrumented open-file count
 stmt stmt-1.5 class=intentional  # retained graph-lock handle raises the instrumented open-file count

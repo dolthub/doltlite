@@ -530,13 +530,17 @@ int chunkStoreOpen(
       return rc;
     }
 
-    rc = csReadIndex(cs);
-    if( rc != SQLITE_OK ){
-      chunkStoreClose(cs);
-      return rc;
+    {
+      int loadedCheckpoint = 0;
+      i64 iSkipStart = 0;
+      i64 iSkipEnd = 0;
+      rc = csTryLoadWalCheckpoint(cs, &loadedCheckpoint,
+                                  &iSkipStart, &iSkipEnd);
+      if( rc==SQLITE_OK && !loadedCheckpoint ) rc = csReadIndex(cs);
+      if( rc==SQLITE_OK && !loadedCheckpoint ){
+        rc = csReplayWalSkipping(cs, iSkipStart, iSkipEnd);
+      }
     }
-
-    rc = csReplayWal(cs);
     if( rc != SQLITE_OK ){
       chunkStoreClose(cs);
       return rc;
@@ -664,7 +668,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   if( cs->isMemory || cs->isBuffer || cs->readOnly || cs->corruptMidStream ){
     return;
   }
-  if( !cs->file.pFile || !cs->file.zFilename || cs->wal.cleanCloseMarker ){
+  if( !cs->file.pFile || !cs->file.zFilename ){
     return;
   }
   if( cs->wal.iWalOffset<=0 || cs->wal.nWalData<=0 ){
@@ -676,6 +680,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   if( prollyHashCompare(&cs->refs.refsHash, &cs->refs.committedRefsHash)!=0 ){
     return;
   }
+  if( cs->wal.cleanCloseMarker && !csWalCheckpointDue(cs) ) return;
 
   lockHeld = cs->lockDepth>0;
   if( !lockHeld ){
@@ -697,6 +702,16 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     if( sectorSize > 65536 ) sectorSize = 65536;
   }
 
+  if( csWalCheckpointDue(cs) ){
+    int wroteCheckpoint = 0;
+    rc = csWriteWalCheckpoint(cs, sectorSize, &wroteCheckpoint);
+    if( rc!=SQLITE_OK ){
+      sqlite3_log(SQLITE_NOTICE,
+        "doltlite: unable to checkpoint chunk WAL on close: %d", rc);
+    }
+    if( wroteCheckpoint ) goto done;
+  }
+
   markerStart = cs->file.iFileSize;
   if( markerStart <= 0 ) goto done;
   markerEnd = markerStart + (i64)sizeof(rootRec);
@@ -708,6 +723,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
 
   rootRec[0] = CS_WAL_TAG_ROOT;
   csSerializeManifest(cs, rootRec + 1);
+  csStampWalCheckpoint(cs, rootRec + 1);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_DURABLE_TO_OFF, markerStart);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_NEXT_OFF_OFF, markerNext);
   CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, markerStart);
@@ -789,10 +805,12 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   int idx = -1;
   int rc;
+  ChunkIndexEntry entry;
   *pHas = 0;
   if( cs->notADatabase ) return SQLITE_NOTADB;
-  if( csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash) >= 0 ){
-    *pHas = 1;
+  rc = csIndexLookup(cs, hash, &entry, pHas);
+  if( rc!=SQLITE_OK ) return rc;
+  if( *pHas ){
     return SQLITE_OK;
   }
   rc = csSearchRecent(cs, hash, &idx);
@@ -851,16 +869,19 @@ int chunkStoreGet(
 
   {
     ChunkIndexEntry *e;
+    ChunkIndexEntry indexEntry;
+    int found = 0;
     rc = csSearchRecent(cs, hash, &idx);
     if( rc!=SQLITE_OK ) return rc;
     if( idx >= 0 ){
       e = &cs->staging.aRecent[idx];
     }else{
-      idx = csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash);
-      if( idx < 0 ){
+      rc = csIndexLookup(cs, hash, &indexEntry, &found);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !found ){
         return SQLITE_NOTFOUND;
       }
-      e = &cs->index.aIndex[idx];
+      e = &indexEntry;
     }
 
     if( cs->file.pFile == 0 ){
@@ -1295,6 +1316,8 @@ int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest){
   int rc;
 
   assert( chunkStoreIsEmpty(pDest) );
+  rc = csMaterializeIndex(pSrc);
+  if( rc!=SQLITE_OK ) return rc;
   chunkIndexGetEntries(&pSrc->index, &nEntry, &aEntry);
   rc = csCopyEntries(pSrc, pDest, aEntry, nEntry);
   if( rc!=SQLITE_OK ) return rc;
