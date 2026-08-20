@@ -133,6 +133,71 @@ static int mergeIndexColSurvives(void *pCtx, const char *zCol){
   return p->zMissing ? SQLITE_OK : SQLITE_NOMEM;
 }
 
+static int mergeIndexColRenamed(void *pCtx, const char *zCol){
+  MergeIndexColCtx *p = (MergeIndexColCtx*)pCtx;
+  int iAnc;
+  if( p->zMissing ) return SQLITE_OK;
+  if( parsedColumnIndexByName(p->aSide, p->nSide, zCol)>=0 ) return SQLITE_OK;
+  iAnc = parsedColumnIndexByName(p->aAnc, p->nAnc, zCol);
+  if( iAnc<0 ) return SQLITE_OK;
+  if( iAnc<p->nSide
+   && parsedColumnIndexByName(p->aAnc, p->nAnc, p->aSide[iAnc].zName)<0
+   && parsedColumnDefinitionsMatch(&p->aSide[iAnc], &p->aAnc[iAnc]) ){
+    p->zMissing = sqlite3_mprintf("%s", zCol);
+    return p->zMissing ? SQLITE_OK : SQLITE_NOMEM;
+  }
+  return SQLITE_OK;
+}
+
+/* Shared body: walk the index's columns with xEach and report the first one it
+** flagged. */
+static int mergeIndexColumnScan(
+  const char *zIndexSql,
+  const char *zAncTableSql,
+  const char *zSideTableSql,
+  int (*xEach)(void*, const char*),
+  char **pzColumn
+){
+  MergeIndexColCtx ctx;
+  int rc;
+
+  if( pzColumn ) *pzColumn = 0;
+  if( !zIndexSql || !zAncTableSql || !zSideTableSql ) return 0;
+  memset(&ctx, 0, sizeof(ctx));
+  if( parseColumns(zAncTableSql, &ctx.aAnc, &ctx.nAnc)!=SQLITE_OK ) return 0;
+  if( parseColumns(zSideTableSql, &ctx.aSide, &ctx.nSide)!=SQLITE_OK ){
+    freeColumns(ctx.aAnc, ctx.nAnc);
+    return 0;
+  }
+  rc = mergeIndexEachColumn(zIndexSql, xEach, &ctx);
+  freeColumns(ctx.aAnc, ctx.nAnc);
+  freeColumns(ctx.aSide, ctx.nSide);
+  if( rc!=SQLITE_OK || !ctx.zMissing ){
+    sqlite3_free(ctx.zMissing);
+    return 0;
+  }
+  if( pzColumn ){
+    *pzColumn = ctx.zMissing;
+  }else{
+    sqlite3_free(ctx.zMissing);
+  }
+  return 1;
+}
+
+/* The index names a column this side renamed rather than dropped. The indexed
+** column still exists under the new name, but nothing here retargets the index
+** to it, and a merged catalog naming a column the table does not have cannot be
+** loaded -- so the merge has to refuse instead of producing one. */
+int mergeIndexColumnRenamedAway(
+  const char *zIndexSql,
+  const char *zAncTableSql,
+  const char *zSideTableSql,
+  char **pzColumn
+){
+  return mergeIndexColumnScan(zIndexSql, zAncTableSql, zSideTableSql,
+                              mergeIndexColRenamed, pzColumn);
+}
+
 int mergeIndexColumnGoneFrom(
   const char *zIndexSql,
   const char *zAncTableSql,

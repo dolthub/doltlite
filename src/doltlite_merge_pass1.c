@@ -1056,6 +1056,54 @@ static int mergePass1CollectDualRename(
   return SQLITE_OK;
 }
 
+/* An index one side added over a column the other side renamed. Nothing here
+** retargets the index to the new name, and a merged catalog naming a column
+** its table does not have cannot be loaded at all -- the merge used to report
+** the database as corrupt. Refuse it instead, the way a primary-key change is
+** refused, and say why.
+**
+** This is a deliberate divergence from Dolt, which merges these and keeps the
+** index on the renamed column. */
+static int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c){
+  int side, i;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aNew = side ? c->aTheirsSchema : c->aOursSchema;
+    int nNew = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOther = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOther = side ? c->nOursSchema : c->nTheirsSchema;
+
+    for(i=0; i<nNew; i++){
+      SchemaEntry *pAncTbl;
+      SchemaEntry *pOtherTbl;
+      char *zCol = 0;
+      if( !aNew[i].zType || strcmp(aNew[i].zType, "index")!=0 ) continue;
+      if( !aNew[i].zName || !aNew[i].zSql || !aNew[i].zTblName ) continue;
+      if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aNew[i].zName) ){
+        continue;
+      }
+      if( findSchemaEntry(aOther, nOther, aNew[i].zName) ) continue;
+      pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema, aNew[i].zTblName);
+      pOtherTbl = findSchemaEntry(aOther, nOther, aNew[i].zTblName);
+      if( !pAncTbl || !pOtherTbl ) continue;
+      if( !mergeIndexColumnRenamedAway(aNew[i].zSql, pAncTbl->zSql,
+                                       pOtherTbl->zSql, &zCol) ){
+        continue;
+      }
+      if( c->pzErrMsg ){
+        sqlite3_free(*c->pzErrMsg);
+        *c->pzErrMsg = sqlite3_mprintf(
+            "cannot merge: index '%s' covers column '%s' of table '%s', which "
+            "the other branch renamed; drop or recreate the index, then merge",
+            aNew[i].zName, zCol, aNew[i].zTblName);
+      }
+      sqlite3_free(zCol);
+      return SQLITE_ERROR;
+    }
+  }
+  return SQLITE_OK;
+}
+
 static void mergePass1FreeRowPolicy(MergeRowPolicy *pPolicy){
   sqlite3_free((void*)pPolicy->azRenameOverDrop);
   sqlite3_free((void*)pPolicy->azDualRename);
@@ -1305,6 +1353,12 @@ int mergeCatalogPass1(
   c.bDisjointSchemaChanges = bDisjointSchemaChanges;
   c.bPreferOurMaster = bPreferOurMaster;
   c.pazReindex = pazReindex; c.pnReindex = pnReindex;
+
+  rc = mergePass1CheckIndexOverRenamedColumn(&c);
+  if( rc!=SQLITE_OK ){
+    mergePass1Free(&c);
+    return rc;
+  }
 
   for(i=0; i<nOurs; i++){
     if( aOurs[i].iTable==1 ){
