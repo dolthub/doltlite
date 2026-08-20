@@ -1315,15 +1315,26 @@ done:
   return rc;
 }
 
-/* Skip a quoted span starting at z. q is the opening quote; ']' closes '['. */
 static const char *mergeIndexSkipQuoted(const char *z, char q){
   char qEnd = (q=='[') ? ']' : q;
   z++;
-  while( *z && *z!=qEnd ){
-    if( q=='\'' && *z=='\'' && z[1]=='\'' ){ z += 2; continue; }
+  while( *z ){
+    if( q!='[' && *z==q && z[1]==q ){ z += 2; continue; }
+    if( *z==qEnd ) return z+1;
     z++;
   }
-  return *z ? z+1 : z;
+  return z;
+}
+
+static const char *mergeIndexSkipName(const char *z, const char *zEnd){
+  while( z<zEnd && sqlite3Isspace(*z) ) z++;
+  if( z>=zEnd ) return z;
+  if( *z=='\'' || *z=='"' || *z=='`' || *z=='[' ) return mergeIndexSkipQuoted(z, *z);
+  if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
+    z++;
+    while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
+  }
+  return z;
 }
 
 static int mergeIndexIsSortKeyword(const char *z, int n){
@@ -1338,29 +1349,22 @@ static int mergeIndexIsSortKeyword(const char *z, int n){
 }
 
 static char *mergeIndexDupIdent(const char *z, int n){
-  char *zOut;
-  if( n<=0 ) return 0;
-  zOut = sqlite3_malloc(n+1);
-  if( !zOut ) return 0;
-  memcpy(zOut, z, n);
-  zOut[n] = 0;
+  char *zOut = n>0 ? sqlite3_malloc(n+1) : 0;
+  if( zOut ){ memcpy(zOut, z, n); zOut[n] = 0; }
   return zOut;
 }
 
-/* Walk identifiers in a CREATE INDEX column list, including those nested
-** inside expression indexes such as abs(length(b)). Function names (an
-** ident followed by '(') and ASC/DESC/COLLATE tokens are skipped so a
-** dropped column named abs is not required to kill every abs() index. */
+/* Walk CREATE INDEX column-list and WHERE identifiers. Skip function names,
+** sort keywords, the ident after COLLATE, and single-quoted literals. */
 static int mergeIndexEachColumn(
   const char *zIndexSql,
   int (*xEach)(void*, const char*),
   void *pCtx
 ){
   const char *zOpen = zIndexSql ? strchr(zIndexSql, '(') : 0;
-  const char *zEnd;
-  const char *z;
-  int depth;
-  int rc = SQLITE_OK;
+  const char *zEnd, *z, *zIdent, *zLook;
+  char *zCol;
+  int depth, nIdent, rc = SQLITE_OK;
 
   if( !zOpen ) return SQLITE_OK;
   depth = 1;
@@ -1377,38 +1381,32 @@ static int mergeIndexEachColumn(
   if( depth!=0 ) return SQLITE_OK;
 
   z = zOpen + 1;
+  zEnd = zIndexSql + strlen(zIndexSql);
   while( z<zEnd && rc==SQLITE_OK ){
-    const char *zIdent;
-    int nIdent;
-    char *zCol;
-    const char *zLook;
-
-    if( *z=='\'' || *z=='"' || *z=='`' || *z=='[' ){
-      char q = *z;
-      char qEnd = (q=='[') ? ']' : q;
-      zIdent = z + 1;
-      z = mergeIndexSkipQuoted(z, q);
-      nIdent = (int)((z>zIdent+1 && z[-1]==qEnd) ? (z-zIdent-1) : 0);
-      zCol = mergeIndexDupIdent(zIdent, nIdent);
-      if( !zCol && nIdent>0 ) return SQLITE_NOMEM;
-      if( zCol ){
-        rc = xEach(pCtx, zCol);
-        sqlite3_free(zCol);
-      }
+    if( *z=='\'' ){ z = mergeIndexSkipQuoted(z, '\''); continue; }
+    if( *z=='"' || *z=='`' || *z=='[' ){
+      zIdent = z;
+      z = mergeIndexSkipQuoted(z, *z);
+      zCol = mergeIndexDupIdent(zIdent, (int)(z-zIdent));
+      if( !zCol ) return SQLITE_NOMEM;
+      sqlite3Dequote(zCol);
+      if( zCol[0] ) rc = xEach(pCtx, zCol);
+      sqlite3_free(zCol);
       continue;
     }
-    if( !(sqlite3Isalnum(*z) || *z=='_' || *z=='$') ){
-      z++;
-      continue;
-    }
-    zIdent = z;
-    z++;
+    if( !(sqlite3Isalnum(*z) || *z=='_' || *z=='$') ){ z++; continue; }
+    zIdent = z++;
     while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
     nIdent = (int)(z-zIdent);
     zLook = z;
     while( zLook<zEnd && sqlite3Isspace(*zLook) ) zLook++;
     if( zLook<zEnd && *zLook=='(' ) continue;
-    if( mergeIndexIsSortKeyword(zIdent, nIdent) ) continue;
+    if( mergeIndexIsSortKeyword(zIdent, nIdent) ){
+      if( nIdent==7 && sqlite3_strnicmp(zIdent, "COLLATE", 7)==0 ){
+        z = mergeIndexSkipName(z, zEnd);
+      }
+      continue;
+    }
     zCol = mergeIndexDupIdent(zIdent, nIdent);
     if( !zCol ) return SQLITE_NOMEM;
     rc = xEach(pCtx, zCol);
