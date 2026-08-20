@@ -1224,6 +1224,71 @@ expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
   "SELECT GROUP_CONCAT(CONCAT(id, ':', x) ORDER BY id SEPARATOR ',') FROM t;"
 
 echo ""
+echo "--- Column deletions ---"
+
+DB="$TMPROOT/dc1.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "dc1"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(9), b VARCHAR(9), c VARCHAR(9));
+INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','feat_drop_b');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','main_drop_a');
+SQL
+expect_merge_ok "each_side_drops_a_column" "$DB"
+expect_dual_value "each_side_drops_a_column_values" "$DB" "1:c1,2:c2" \
+  "SELECT group_concat(id || ':' || c, ',') FROM (SELECT id,c FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', c) ORDER BY id SEPARATOR ',') FROM t;"
+expect_dual_value "each_side_drops_a_column_columns" "$DB" "c,id" \
+  "SELECT group_concat(name, ',') FROM (SELECT name FROM pragma_table_info('t') ORDER BY name);" \
+  "SELECT GROUP_CONCAT(column_name ORDER BY column_name SEPARATOR ',') FROM information_schema.columns WHERE table_name='t';"
+
+DB="$TMPROOT/dc2.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "dc2"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(9), b VARCHAR(9));
+INSERT INTO t VALUES(1,'a1','b1'),(2,'a2','b2');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','feat_drop_a');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN d VARCHAR(9);
+SELECT dolt_commit('-Am','main_add_d');
+SQL
+expect_merge_ok "our_add_versus_their_drop" "$DB"
+expect_dual_value "our_add_versus_their_drop_columns" "$DB" "b,d,id" \
+  "SELECT group_concat(name, ',') FROM (SELECT name FROM pragma_table_info('t') ORDER BY name);" \
+  "SELECT GROUP_CONCAT(column_name ORDER BY column_name SEPARATOR ',') FROM information_schema.columns WHERE table_name='t';"
+expect_dual_value "our_add_versus_their_drop_values" "$DB" "1:b1,2:b2" \
+  "SELECT group_concat(id || ':' || b, ',') FROM (SELECT id,b FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', b) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/dc3.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "dc3"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(9), b VARCHAR(9));
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN a;
+INSERT INTO t(id,b) VALUES(2,'b2');
+SELECT dolt_commit('-Am','feat_drop_and_insert');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'a3','b3');
+SELECT dolt_commit('-Am','main_insert');
+SQL
+expect_merge_ok "their_drop_with_rows_on_both_sides" "$DB"
+expect_dual_value "their_drop_with_rows_on_both_sides_values" "$DB" \
+  "1:b1,2:b2,3:b3" \
+  "SELECT group_concat(id || ':' || b, ',') FROM (SELECT id,b FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id, ':', b) ORDER BY id SEPARATOR ',') FROM t;"
+
+echo ""
 echo "--- Primary key changes ---"
 
 DB="$TMPROOT/pk1.db"; rm -f "$DB"

@@ -1155,4 +1155,57 @@ run_test "merge_index_over_added_column_kept" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
 rm -f "$DB"
 
+# Each branch dropping a different column is an ordinary merge -- Dolt takes
+# both drops -- but with no action recorded for their deletion the two
+# sqlite_master rows used to conflict and the merge was refused. Assert types
+# as well as values: a layout that survives reopen with a value in the wrong
+# column shows up as a type mismatch, not a missing row.
+DB=/tmp/test_merge_dual_drop_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-A','-m','main drops a');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-A','-m','feat drops b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_dual_drop_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_dual_drop_columns" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "k,n" "$DB"
+run_test "merge_dual_drop_values" \
+  "SELECT group_concat(k||':'||n) FROM (SELECT k,n FROM t ORDER BY k);" \
+  "1:11,2:22" "$DB"
+run_test "merge_dual_drop_types" \
+  "SELECT DISTINCT typeof(n) FROM t;" "integer" "$DB"
+run_test "merge_dual_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# Our addition beside their deletion: the merged table carries both changes.
+DB=/tmp/test_merge_add_vs_drop_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'dd';
+SELECT dolt_commit('-A','-m','main adds d');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-A','-m','feat drops a');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_add_vs_drop_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_add_vs_drop_columns" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "k,n,d" "$DB"
+run_test "merge_add_vs_drop_values" \
+  "SELECT k||':'||n||':'||coalesce(d,'<null>') FROM t;" "1:11:dd" "$DB"
+run_test "merge_add_vs_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 dltest_finish

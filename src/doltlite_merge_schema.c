@@ -872,15 +872,17 @@ int trySchemaColumnMerge(
   }
 
 schema_merge_done:
-  /* Adopting one side's schema whole would also reinstate the columns the
-  ** other side deleted, so carry those deletions across. A column the other
-  ** side renamed is absent under its old name too, and its replacement sits
-  ** at the same position, which is what tells the two apart. */
-  if( *pSchemaChoice!=SCHEMA_MERGE_DEFAULT && ppDropCols && pnDropCols ){
-    ParsedColumn *aSel = *pSchemaChoice==SCHEMA_MERGE_OURS ? aOurs : aTheirs;
-    ParsedColumn *aOth = *pSchemaChoice==SCHEMA_MERGE_OURS ? aTheirs : aOurs;
-    int nSel = *pSchemaChoice==SCHEMA_MERGE_OURS ? nOurs : nTheirs;
-    int nOth = *pSchemaChoice==SCHEMA_MERGE_OURS ? nTheirs : nOurs;
+  /* The merged layout is the selected side's, so the columns the other side
+  ** deleted are still in it and have to be carried across as deletions. With
+  ** no side selected the layout is ours plus their additions, which leaves
+  ** their deletions just as unrepresented. A column the other side renamed is
+  ** absent under its old name too, and its replacement sits at the same
+  ** position, which is what tells the two apart. */
+  if( ppDropCols && pnDropCols ){
+    ParsedColumn *aSel = *pSchemaChoice==SCHEMA_MERGE_THEIRS ? aTheirs : aOurs;
+    ParsedColumn *aOth = *pSchemaChoice==SCHEMA_MERGE_THEIRS ? aOurs : aTheirs;
+    int nSel = *pSchemaChoice==SCHEMA_MERGE_THEIRS ? nTheirs : nOurs;
+    int nOth = *pSchemaChoice==SCHEMA_MERGE_THEIRS ? nOurs : nTheirs;
     for(i=0; i<nAnc; i++){
       if( !findColumn(aSel, nSel, aAnc[i].zName) ) continue;
       if( findColumn(aOth, nOth, aAnc[i].zName) ) continue;

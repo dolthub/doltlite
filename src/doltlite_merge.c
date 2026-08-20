@@ -1122,23 +1122,32 @@ int tryResolveSchemaDivergence(
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  if( nAddCols>0 ){
+  /* Their deletions are as much a schema change as their additions: with no
+  ** action recorded for them the merge has nothing to apply, and the two
+  ** sqlite_master rows go on to conflict over a table that merges cleanly. */
+  if( nAddCols>0 || nDropCols>0 ){
     if( ppSchemaActions && pnSchemaActions ){
-      rc = recordSchemaAddColumns(ppSchemaActions, pnSchemaActions, zName,
-                                  azAddCols, nAddCols);
+      rc = recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
+                                     azAddCols, nAddCols,
+                                     azDropCols, nDropCols);
       if( rc!=SQLITE_OK ){
         freeAddedColumns(azAddCols, nAddCols);
+        freeAddedColumns(azDropCols, nDropCols);
         return rc;
       }
       azAddCols = 0;
       nAddCols = 0;
+      azDropCols = 0;
+      nDropCols = 0;
     }
     freeAddedColumns(azAddCols, nAddCols);
+    freeAddedColumns(azDropCols, nDropCols);
     *pSkipRowMerge = 1;
     return SQLITE_OK;
   }
 
   freeAddedColumns(azAddCols, nAddCols);
+  freeAddedColumns(azDropCols, nDropCols);
   return SQLITE_OK;
 }
 
