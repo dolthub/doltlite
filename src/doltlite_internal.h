@@ -899,15 +899,37 @@ int doltliteCompareAndAdvanceBranch(
   const ProllyHash *pWorkingCatHash
 );
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
+#define DOLTLITE_CMD_OPTION_FLAG 0
+#define DOLTLITE_CMD_OPTION_VALUE 1
+#define DOLTLITE_CMD_PARSE_SHORT_GROUPS 0x01
+
+typedef struct DoltliteCmdOption DoltliteCmdOption;
+struct DoltliteCmdOption {
+  const char *zLong;
+  char shortName;
+  u8 eType;
+  int *pSeen;
+  const char **pzValue;
+};
+
+typedef struct DoltliteCmdArgs DoltliteCmdArgs;
+struct DoltliteCmdArgs {
+  sqlite3_value **apPositional;
+  const char **azPositional;
+  int nPositional;
+};
+
 /* Shared dolt_* command scaffolding (doltlite_cmd.c). */
+int doltliteCmdParseArgs(
+  sqlite3_context *ctx, int argc, sqlite3_value **argv,
+  DoltliteCmdOption *aOption, int nOption, int flags,
+  DoltliteCmdArgs *pArgs
+);
+void doltliteCmdArgsClear(DoltliteCmdArgs *pArgs);
 int doltliteCmdRejectDetached(sqlite3_context *ctx);
 void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
 void doltliteCmdResultMissingOptionValue(
   sqlite3_context *ctx, const char *zOptName
-);
-const char *doltliteCmdTakeValueArg(
-  sqlite3_context *ctx, int argc, sqlite3_value **argv, int *pI,
-  const char *zOptName
 );
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
 int doltliteCmdFinishWithConflicts(

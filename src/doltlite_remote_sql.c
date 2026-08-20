@@ -238,43 +238,19 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   sqlite3_result_int(ctx, 0);
 }
 
-static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+static void doltPushParsedFunc(
+  sqlite3_context *ctx,
+  const char *zRemoteName,
+  const char *zBranch,
+  int bForce
+){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl = 0;
-  const char *zRemoteName;
-  const char *zBranch;
-  int bForce = 0;
   int rc;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
-  if( argc<2 ){
-    doltliteVcResultError(ctx, db, "usage: dolt_push(remote, branch [, '--force'])");
-    return;
-  }
-
-  zRemoteName = (const char*)sqlite3_value_text(argv[0]);
-  zBranch = (const char*)sqlite3_value_text(argv[1]);
-  if( !zRemoteName || !zBranch ){
-    doltliteVcResultError(ctx, db, "remote and branch required");
-    return;
-  }
-
-  if( argc>=3 ){
-    const char *zOpt = (const char*)sqlite3_value_text(argv[2]);
-    if( argc>3 ){
-      doltliteVcResultError(ctx, db, "too many arguments");
-      return;
-    }
-    if( zOpt && strcmp(zOpt, "--force")==0 ){
-      bForce = 1;
-    }else{
-      (void)doltliteVcSealSavepointError(db);
-      doltliteCmdResultUnknownOption(ctx, zOpt);
-      return;
-    }
-  }
 
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
@@ -295,6 +271,40 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
   pRemote->xClose(pRemote);
   sqlite3_result_int(ctx, 0);
+}
+
+static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  DoltliteCmdArgs args;
+  int bForce = 0;
+  DoltliteCmdOption aOption[] = {
+    { "force", 0, DOLTLITE_CMD_OPTION_FLAG, &bForce, 0 }
+  };
+  int rc;
+
+  if( argc<2 ){
+    doltliteVcResultError(ctx, db,
+        "usage: dolt_push(remote, branch [, '--force'])");
+    return;
+  }
+  rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
+    return;
+  }
+  if( args.nPositional<2 ){
+    doltliteCmdArgsClear(&args);
+    doltliteVcResultError(ctx, db, "remote and branch required");
+    return;
+  }
+  if( args.nPositional>2 ){
+    doltliteCmdArgsClear(&args);
+    doltliteVcResultError(ctx, db, "too many arguments");
+    return;
+  }
+  doltPushParsedFunc(ctx, args.azPositional[0], args.azPositional[1], bForce);
+  doltliteCmdArgsClear(&args);
 }
 
 static int parseRemoteBranchNames(

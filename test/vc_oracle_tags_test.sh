@@ -135,6 +135,14 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('v1.0');
 "
 
+oracle "tag_after_end_options" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_tag('--', 'v1.0');
+"
+
 oracle "tag_head_with_message" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);

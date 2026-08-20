@@ -233,6 +233,16 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
+oracle "fast_forward_after_end_options" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--', 'feature');
+"
+
 echo "--- three-way no conflict ---"
 
 oracle "three_way_independent_inserts" "

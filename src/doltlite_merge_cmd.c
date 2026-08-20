@@ -682,10 +682,16 @@ static void doltliteMergeFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   const char *zBranch = 0;
   const char *zMessage = 0;
+  DoltliteCmdArgs args;
   int isAbort = 0;
   int noFastForward = 0;
+  DoltliteCmdOption aOption[] = {
+    { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
+    { "no-ff", 0, DOLTLITE_CMD_OPTION_FLAG, &noFastForward, 0 },
+    { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &zMessage }
+  };
   u8 isMerging = 0;
-  int rc, i;
+  int rc;
 
   if( doltliteCmdRejectDetached(context) ) return;
   if( !doltliteGetChunkStore(db) ){
@@ -697,48 +703,42 @@ static void doltliteMergeFunc(
     return;
   }
 
-  for(i=0; i<argc; i++){
-    const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( !arg ) continue;
-    if( strcmp(arg, "--abort")==0 ){
-      isAbort = 1;
-    }else if( strcmp(arg, "--no-ff")==0 ){
-      noFastForward = 1;
-    }else if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
-      zMessage = doltliteCmdTakeValueArg(context, argc, argv, &i, "message");
-      if( !zMessage ) return;
-    }else if( arg[0]=='-' ){
-      doltliteCmdResultUnknownOption(context, arg);
-      return;
-    }else if( !zBranch ){
-      zBranch = arg;
-    }else{
-      sqlite3_result_error(context, "too many positional arguments to dolt_merge", -1);
-      return;
-    }
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) return;
+  if( args.nPositional>1 ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context, "too many positional arguments to dolt_merge", -1);
+    return;
   }
+  if( args.nPositional==1 ) zBranch = args.azPositional[0];
 
   if( isAbort ){
     if( zBranch || zMessage || noFastForward ){
       sqlite3_result_error(context,
         "--abort does not take other arguments", -1);
+      doltliteCmdArgsClear(&args);
       return;
     }
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( !isMerging ){
       sqlite3_result_error(context, "no merge in progress", -1);
+      doltliteCmdArgsClear(&args);
       return;
     }
     rc = mergeAbortInPlace(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
+      doltliteCmdArgsClear(&args);
       return;
     }
     sqlite3_result_int(context, 0);
+    doltliteCmdArgsClear(&args);
     return;
   }
 
   (void)doltliteMergeRef(db, context, zBranch, zMessage, noFastForward);
+  doltliteCmdArgsClear(&args);
 }
 
 

@@ -182,6 +182,11 @@ $SEED
 SELECT dolt_branch('feature');
 "
 
+oracle "create_after_end_options" "
+$SEED
+SELECT dolt_branch('--', 'feature');
+"
+
 oracle "create_at_start_point" "
 $SEED
 INSERT INTO t VALUES (2, 20);

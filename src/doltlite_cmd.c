@@ -7,11 +7,154 @@
 
 #include <string.h>
 
-/*
-** Shared scaffolding for dolt_* SQL command functions: argv option errors,
-** peer-branch BUSY messages, and the three-way VC txn outcome switch for
-** merge conflicts / constraint violations.
-*/
+static DoltliteCmdOption *cmdFindLongOption(
+  DoltliteCmdOption *aOption,
+  int nOption,
+  const char *zName
+){
+  int i;
+  for(i=0; i<nOption; i++){
+    if( aOption[i].zLong && strcmp(aOption[i].zLong, zName)==0 ){
+      return &aOption[i];
+    }
+  }
+  return 0;
+}
+
+static DoltliteCmdOption *cmdFindShortOption(
+  DoltliteCmdOption *aOption,
+  int nOption,
+  char name
+){
+  int i;
+  for(i=0; i<nOption; i++){
+    if( aOption[i].shortName==name ) return &aOption[i];
+  }
+  return 0;
+}
+
+static int cmdSetOption(
+  sqlite3_context *ctx,
+  DoltliteCmdOption *pOption,
+  const char *zOpt,
+  const char *zAttached,
+  int argc,
+  sqlite3_value **argv,
+  int *pI
+){
+  const char *zValue;
+  if( pOption->eType==DOLTLITE_CMD_OPTION_FLAG ){
+    if( pOption->pSeen ) *pOption->pSeen = 1;
+    return SQLITE_OK;
+  }
+  if( zAttached && zAttached[0] ){
+    zValue = zAttached;
+  }else if( *pI+1<argc ){
+    zValue = (const char*)sqlite3_value_text(argv[++*pI]);
+  }else{
+    doltliteCmdResultMissingOptionValue(ctx, zOpt);
+    return SQLITE_ERROR;
+  }
+  if( !zValue ){
+    doltliteCmdResultMissingOptionValue(ctx, zOpt);
+    return SQLITE_ERROR;
+  }
+  if( pOption->pSeen ) *pOption->pSeen = 1;
+  if( pOption->pzValue ) *pOption->pzValue = zValue;
+  return SQLITE_OK;
+}
+
+void doltliteCmdArgsClear(DoltliteCmdArgs *pArgs){
+  if( !pArgs ) return;
+  sqlite3_free(pArgs->apPositional);
+  sqlite3_free((void*)pArgs->azPositional);
+  memset(pArgs, 0, sizeof(*pArgs));
+}
+
+int doltliteCmdParseArgs(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv,
+  DoltliteCmdOption *aOption,
+  int nOption,
+  int flags,
+  DoltliteCmdArgs *pArgs
+){
+  int endOptions = 0;
+  int i;
+  memset(pArgs, 0, sizeof(*pArgs));
+  for(i=0; i<nOption; i++){
+    if( aOption[i].pSeen ) *aOption[i].pSeen = 0;
+    if( aOption[i].pzValue ) *aOption[i].pzValue = 0;
+  }
+  if( argc>0 ){
+    pArgs->apPositional = sqlite3_malloc64((sqlite3_uint64)argc * sizeof(*argv));
+    pArgs->azPositional = sqlite3_malloc64(
+        (sqlite3_uint64)argc * sizeof(*pArgs->azPositional));
+    if( !pArgs->apPositional || !pArgs->azPositional ){
+      doltliteCmdArgsClear(pArgs);
+      sqlite3_result_error_nomem(ctx);
+      return SQLITE_NOMEM;
+    }
+  }
+  for(i=0; i<argc; i++){
+    const char *zArg = (const char*)sqlite3_value_text(argv[i]);
+    DoltliteCmdOption *pOption = 0;
+    int rc;
+    if( !zArg ) continue;
+    if( !endOptions && strcmp(zArg, "--")==0 ){
+      endOptions = 1;
+      continue;
+    }
+    if( !endOptions && zArg[0]=='-' && zArg[1]=='-' && zArg[2] ){
+      pOption = cmdFindLongOption(aOption, nOption, zArg+2);
+      if( !pOption ){
+        doltliteCmdResultUnknownOption(ctx, zArg);
+        doltliteCmdArgsClear(pArgs);
+        return SQLITE_ERROR;
+      }
+      rc = cmdSetOption(ctx, pOption, pOption->zLong, 0, argc, argv, &i);
+      if( rc!=SQLITE_OK ){
+        doltliteCmdArgsClear(pArgs);
+        return rc;
+      }
+      continue;
+    }
+    if( !endOptions && zArg[0]=='-' && zArg[1] && zArg[1]!='-' ){
+      int j;
+      int nShort = (flags & DOLTLITE_CMD_PARSE_SHORT_GROUPS)
+                 ? sqlite3Strlen30(zArg)-1 : 1;
+      if( !(flags & DOLTLITE_CMD_PARSE_SHORT_GROUPS) && zArg[2] ){
+        doltliteCmdResultUnknownOption(ctx, zArg);
+        doltliteCmdArgsClear(pArgs);
+        return SQLITE_ERROR;
+      }
+      for(j=1; j<=nShort; j++){
+        char zOpt[2] = { zArg[j], 0 };
+        pOption = cmdFindShortOption(aOption, nOption, zArg[j]);
+        if( !pOption ){
+          char zUnknown[3] = { '-', zArg[j], 0 };
+          doltliteCmdResultUnknownOption(ctx, zUnknown);
+          doltliteCmdArgsClear(pArgs);
+          return SQLITE_ERROR;
+        }
+        rc = cmdSetOption(ctx, pOption,
+            pOption->zLong ? pOption->zLong : zOpt,
+            pOption->eType==DOLTLITE_CMD_OPTION_VALUE ? zArg+j+1 : 0,
+            argc, argv, &i);
+        if( rc!=SQLITE_OK ){
+          doltliteCmdArgsClear(pArgs);
+          return rc;
+        }
+        if( pOption->eType==DOLTLITE_CMD_OPTION_VALUE ) break;
+      }
+      continue;
+    }
+    pArgs->apPositional[pArgs->nPositional] = argv[i];
+    pArgs->azPositional[pArgs->nPositional++] = zArg;
+  }
+  return SQLITE_OK;
+}
 
 int doltliteCmdRejectDetached(sqlite3_context *ctx){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
@@ -43,22 +186,6 @@ void doltliteCmdResultMissingOptionValue(
   }else{
     sqlite3_result_error_nomem(ctx);
   }
-}
-
-const char *doltliteCmdTakeValueArg(
-  sqlite3_context *ctx,
-  int argc,
-  sqlite3_value **argv,
-  int *pI,
-  const char *zOptName
-){
-  int i = *pI;
-  if( i+1>=argc ){
-    doltliteCmdResultMissingOptionValue(ctx, zOptName);
-    return 0;
-  }
-  *pI = i+1;
-  return (const char*)sqlite3_value_text(argv[i+1]);
 }
 
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp){
