@@ -1311,6 +1311,9 @@ struct SchemaMergeAction {
   int nAddColumns;
   char **azDropColumns;
   int nDropColumns;
+  /* Flat old,new pairs: a rename the merged layout still has to be told about. */
+  char **azRenameColumns;
+  int nRenameColumns;
 };
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);

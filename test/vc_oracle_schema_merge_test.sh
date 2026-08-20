@@ -1224,6 +1224,51 @@ expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
   "SELECT GROUP_CONCAT(CONCAT(id, ':', x) ORDER BY id SEPARATOR ',') FROM t;"
 
 echo ""
+echo "--- Column renames on both sides ---"
+
+DB="$TMPROOT/dr1.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "dr1"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(9), b VARCHAR(9), c VARCHAR(9));
+INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','feat_renames_b');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','main_renames_a');
+SQL
+expect_merge_ok "each_side_renames_a_column" "$DB"
+expect_dual_value "each_side_renames_a_column_columns" "$DB" "a2,b2,c,id" \
+  "SELECT group_concat(name, ',') FROM (SELECT name FROM pragma_table_info('t') ORDER BY name);" \
+  "SELECT GROUP_CONCAT(column_name ORDER BY column_name SEPARATOR ',') FROM information_schema.columns WHERE table_name='t';"
+expect_dual_value "each_side_renames_a_column_values" "$DB" \
+  "1:a1:b1:c1,2:a2:b2:c2" \
+  "SELECT group_concat(id||':'||a2||':'||b2||':'||c, ',') FROM (SELECT id,a2,b2,c FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id,':',a2,':',b2,':',c) ORDER BY id SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/dr2.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "dr2"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(9), b VARCHAR(9));
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+INSERT INTO t(id,a2,b) VALUES(2,'a2v','b2v');
+SELECT dolt_commit('-Am','feat_renames_a');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','main_renames_b');
+SQL
+expect_merge_ok "renames_with_rows_on_the_renaming_side" "$DB"
+expect_dual_value "renames_with_rows_on_the_renaming_side_values" "$DB" \
+  "1:a1:b1,2:a2v:b2v" \
+  "SELECT group_concat(id||':'||a2||':'||b2, ',') FROM (SELECT id,a2,b2 FROM t ORDER BY id);" \
+  "SELECT GROUP_CONCAT(CONCAT(id,':',a2,':',b2) ORDER BY id SEPARATOR ',') FROM t;"
+
+echo ""
 echo "--- Column deletions ---"
 
 DB="$TMPROOT/dc1.db"; rm -f "$DB"
