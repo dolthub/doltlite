@@ -1054,12 +1054,17 @@ static int csFindLastCheckpointRoot(
       stamp = *pStamp;
       if( aRoot[0]==CS_WAL_TAG_ROOT
        && csManifestHashState(aRoot+1, iRoot)==CS_MANIFEST_HASH_OK
-       && csValidateWalRootManifest(cs, aRoot+1, iRoot)==SQLITE_OK
-       && csReadCheckpointStamp(aRoot+1, iRoot, &stamp) ){
-        *pRootOffset = iRoot;
-        *pStamp = stamp;
-        *pFound = 1;
-        return SQLITE_OK;
+       && csValidateWalRootManifest(cs, aRoot+1, iRoot)==SQLITE_OK ){
+        if( csReadCheckpointStamp(aRoot+1, iRoot, &stamp) ){
+          *pRootOffset = iRoot;
+          *pStamp = stamp;
+          *pFound = 1;
+          return SQLITE_OK;
+        }
+        if( CS_READ_I64(aRoot+1+CS_MANIFEST_DURABLE_TO_OFF)==iRoot
+         && CS_READ_I64(aRoot+1+CS_MANIFEST_BATCH_START_OFF)==iRoot ){
+          return SQLITE_OK;
+        }
       }
     }
     if( iStart==cs->wal.iWalOffset ) break;
