@@ -1028,20 +1028,30 @@ static int csFindLastCheckpointRoot(
 ){
   u8 aBuf[65540];
   i64 iEnd = nFile;
+  i64 nZeroRun = 0;
 
   *pFound = 0;
   while( iEnd>cs->wal.iWalOffset ){
     i64 iStart = iEnd-(i64)sizeof(aBuf);
     int n;
     int i;
+    int iFirst;
     int rc;
     if( iStart<cs->wal.iWalOffset ) iStart = cs->wal.iWalOffset;
     n = (int)(iEnd-iStart);
     rc = sqlite3OsRead(cs->file.pFile, aBuf, n, iStart);
     if( rc!=SQLITE_OK ) return rc;
-    for(i=n-5; i>=0; i--){
+    iFirst = iEnd==nFile ? n-1 : n-5;
+    for(i=iFirst; i>=0; i--){
       i64 iRoot;
       WalState stamp;
+      if( aBuf[i]==0 ){
+        nZeroRun++;
+        if( nZeroRun>=CS_WAL_SCAN_MAX ) return SQLITE_OK;
+      }else{
+        nZeroRun = 0;
+      }
+      if( i>n-5 ) continue;
       if( aBuf[i]!=CS_WAL_TAG_ROOT
        || CS_READ_U32(aBuf+i+1)!=CHUNK_STORE_MAGIC ){
         continue;
