@@ -188,6 +188,84 @@ static int mergeIndexColumnScan(
 ** column still exists under the new name, but nothing here retargets the index
 ** to it, and a merged catalog naming a column the table does not have cannot be
 ** loaded -- so the merge has to refuse instead of producing one. */
+typedef struct MergeIndexNameList MergeIndexNameList;
+struct MergeIndexNameList { char **az; int n; };
+
+static int mergeIndexCollectName(void *pCtx, const char *zCol){
+  MergeIndexNameList *p = (MergeIndexNameList*)pCtx;
+  char **azNew = sqlite3_realloc(p->az, (p->n+1)*(int)sizeof(char*));
+  if( !azNew ) return SQLITE_NOMEM;
+  p->az = azNew;
+  p->az[p->n] = sqlite3_mprintf("%s", zCol);
+  if( !p->az[p->n] ) return SQLITE_NOMEM;
+  p->n++;
+  return SQLITE_OK;
+}
+
+static void mergeIndexNameListFree(MergeIndexNameList *p){
+  int i;
+  for(i=0; i<p->n; i++) sqlite3_free(p->az[i]);
+  sqlite3_free(p->az);
+}
+
+/* Two index definitions that name a column in common. */
+int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB){
+  MergeIndexNameList a;
+  MergeIndexNameList b;
+  int i, j, bOverlap = 0;
+
+  if( !zSqlA || !zSqlB ) return 0;
+  memset(&a, 0, sizeof(a));
+  memset(&b, 0, sizeof(b));
+  if( mergeIndexEachColumn(zSqlA, mergeIndexCollectName, &a)==SQLITE_OK
+   && mergeIndexEachColumn(zSqlB, mergeIndexCollectName, &b)==SQLITE_OK ){
+    for(i=0; i<a.n && !bOverlap; i++){
+      for(j=0; j<b.n && !bOverlap; j++){
+        if( sqlite3_stricmp(a.az[i], b.az[j])==0 ) bOverlap = 1;
+      }
+    }
+  }
+  mergeIndexNameListFree(&a);
+  mergeIndexNameListFree(&b);
+  return bOverlap;
+}
+
+/* Each side added its own index, under its own name, over a column they share.
+** That is a disagreement about how the column is indexed rather than two
+** independent additions -- keeping both would also impose one side's
+** uniqueness on the other -- and Dolt reports it as a conflict. */
+int mergePreDetectDualIndexOverlap(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  int *pTotalConflicts
+){
+  int i, j, rc;
+
+  for(i=0; i<nOurs; i++){
+    if( !aOurs[i].zType || strcmp(aOurs[i].zType, "index")!=0 ) continue;
+    if( !aOurs[i].zName || !aOurs[i].zSql || !aOurs[i].zTblName ) continue;
+    if( findSchemaEntry(aAnc, nAnc, aOurs[i].zName) ) continue;
+    for(j=0; j<nTheirs; j++){
+      int added = 0;
+      if( !aTheirs[j].zType || strcmp(aTheirs[j].zType, "index")!=0 ) continue;
+      if( !aTheirs[j].zName || !aTheirs[j].zSql || !aTheirs[j].zTblName ) continue;
+      if( findSchemaEntry(aAnc, nAnc, aTheirs[j].zName) ) continue;
+      if( sqlite3_stricmp(aOurs[i].zName, aTheirs[j].zName)==0 ) continue;
+      if( sqlite3_stricmp(aOurs[i].zTblName, aTheirs[j].zTblName)!=0 ) continue;
+      if( !mergeIndexColumnsOverlap(aOurs[i].zSql, aTheirs[j].zSql) ) continue;
+      rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                                aOurs[i].zTblName, aOurs[i].zName, &added);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pTotalConflicts ) *pTotalConflicts += added;
+      break;
+    }
+  }
+  return SQLITE_OK;
+}
+
 int mergeIndexColumnRenamedAway(
   const char *zIndexSql,
   const char *zAncTableSql,

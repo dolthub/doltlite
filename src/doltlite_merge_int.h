@@ -192,6 +192,17 @@ int hasAnySchemaConflict(
   int nConflictTables
 );
 
+int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB);
+
+int mergePreDetectDualIndexOverlap(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  int *pTotalConflicts
+);
+
 int mergeIndexColumnRenamedAway(
   const char *zIndexSql,
   const char *zAncTableSql,

@@ -3,6 +3,7 @@ vc_oracle_conflicts_table_test.sh
 vc_oracle_conflicts_test.sh
 vc_oracle_constraint_violations_test.sh
 vc_oracle_constraints_triggers_replay_test.sh
+vc_oracle_correct_schema_merge_matrix_test.sh
 vc_oracle_cross_op_conflict_cv_test.sh
 vc_oracle_fk_merge_test.sh
 vc_oracle_merge_base_test.sh
