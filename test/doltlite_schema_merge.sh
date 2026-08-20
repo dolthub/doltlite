@@ -1566,4 +1566,58 @@ run_test "merge_index_over_other_column_result" \
   "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a,b2" "$DB"
 rm -f "$DB"
 
+# An index of theirs over a column we dropped is not adopted, and the master row
+# for it must not be written either: the row lands at a number one of our own
+# indexes already occupies, so ours is displaced by an index that cannot resolve
+# against the merged table, and the catalog then does not load at all. Only
+# reachable when the table carries an index the drop does not touch, which is
+# why the no-other-index case merged correctly all along.
+for extra in "CREATE INDEX ix0 ON t(a);" "CREATE INDEX ix0 ON t(n);"; do
+  DB=/tmp/test_merge_idx_row_$$.db; rm -f "$DB"
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+$extra
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE INDEX ix ON t(b);
+SELECT dolt_commit('-Am','feat indexes b');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','main drops b');
+EOF
+  run_test_match "merge_index_row_over_dropped_column_hash" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_index_row_over_dropped_column_keeps_our_index" \
+    "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix0" "$DB"
+  run_test "merge_index_row_over_dropped_column_columns" \
+    "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a,n" "$DB"
+  run_test "merge_index_row_over_dropped_column_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# An index of theirs over a column that survives is still adopted beside ours.
+DB=/tmp/test_merge_idx_row_survives_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE INDEX ix ON t(n);
+SELECT dolt_commit('-Am','feat indexes n');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','main drops b');
+EOF
+run_test_match "merge_index_row_unaffected_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_index_row_unaffected_keeps_both" \
+  "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type='index' ORDER BY name);" \
+  "ix,ix0" "$DB"
+rm -f "$DB"
+
 dltest_finish

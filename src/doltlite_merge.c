@@ -942,6 +942,22 @@ static int rebuildDisjointSchemaRows(
                                  pSe->zName) ){
       continue;
     }
+    /* Pass 2 declines to adopt an index of theirs over a column we dropped,
+    ** because a catalog naming a column its table does not have cannot be
+    ** loaded. Writing the row here anyway puts that index back, and at a
+    ** number one of our own indexes already occupies, so ours is displaced by
+    ** an index that cannot resolve. */
+    {
+      SchemaEntry *pAncTbl = findSchemaEntry(aAncSchema, nAncSchema,
+                                             pSe->zTblName);
+      SchemaEntry *pOurTbl = findSchemaEntry(aOursSchema, nOursSchema,
+                                             pSe->zTblName);
+      if( pAncTbl && pOurTbl
+       && mergeIndexColumnGoneFrom(pSe->zSql, pAncTbl->zSql,
+                                   pOurTbl->zSql, 0) ){
+        continue;
+      }
+    }
     iRootpage = remapSchemaRootpage(aRemap, nRemap, pSe->iRootpage);
     rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, iRootpage);

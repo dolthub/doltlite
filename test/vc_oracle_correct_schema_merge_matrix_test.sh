@@ -55,7 +55,6 @@ drop_b_with_index:rows:a row edit of a column the other branch dropped, table in
 # on. Listed only to keep the suite honest about what remains; an unlisted one
 # fails, and so does a listed one that stops corrupting.
 CORRUPT_TODAY="
-drop_b_with_index:idx_b:ours drops a column their new index covers, with another index on the table (#2309)
 trig:ren_tbl:a trigger on a table the other branch renamed (#2309)
 ren_tbl:trig:a trigger on a table the other branch renamed (#2309)
 "
