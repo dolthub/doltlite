@@ -1705,4 +1705,30 @@ run_test "merge_view_over_renamed_table_objects" \
   "SELECT group_concat(type||':'||name) FROM sqlite_master;" "table:t2,view:v" "$DB"
 rm -f "$DB"
 
+# Dropping the table and creating an unrelated one looks like a rename if only
+# the names are compared: the ancestor's table is gone and a table the ancestor
+# never had is present. The columns are what tell them apart, and the refusal
+# must not fire on the drop.
+DB=/tmp/test_merge_trig_drop_create_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE u(x INTEGER PRIMARY KEY, y TEXT);
+SELECT dolt_commit('-Am','feat replaces the table');
+SELECT dolt_checkout('main');
+CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;
+SELECT dolt_commit('-Am','main adds trigger');
+EOF
+# The drop is not a rename, so the trigger refusal must not fire. What this
+# shape does instead is a separate, pre-existing problem -- a trigger left on a
+# table the other branch dropped still fails to load -- asserted here so the
+# refusal cannot quietly start covering it.
+run_test_match "merge_trigger_vs_drop_and_create_not_rename_refusal" \
+  "SELECT dolt_merge('feat');" "database disk image is malformed" "$DB"
+rm -f "$DB"
+
 dltest_finish

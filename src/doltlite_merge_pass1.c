@@ -1086,16 +1086,40 @@ static int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
       }
       if( !findSchemaEntry(c->aAncSchema, c->nAncSchema, zTable) ) continue;
       if( findSchemaEntry(aOther, nOther, zTable) ) continue;
-      /* Gone from the other side under its ancestor name, and a table it does
-      ** not share with the ancestor stands in its place: a rename. A plain
-      ** drop is a different question and keeps its own behaviour. */
-      for(j=0; j<nOther && !bRenamed; j++){
-        if( !aOther[j].zType || strcmp(aOther[j].zType, "table")!=0 ) continue;
-        if( !aOther[j].zName ) continue;
-        if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aOther[j].zName) ){
+      /* Gone from the other side under its ancestor name. A table of theirs the
+      ** ancestor never had, whose columns are the ancestor table's columns, is
+      ** that table under a new name. Dropping it and creating something
+      ** unrelated looks the same from the names alone, so the columns have to
+      ** match before this refuses anything. */
+      {
+        SchemaEntry *pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema,
+                                               zTable);
+        ParsedColumn *aAncCols = 0;
+        int nAncCols = 0;
+        if( !pAncTbl || !pAncTbl->zSql ) continue;
+        if( parseColumns(pAncTbl->zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
           continue;
         }
-        bRenamed = 1;
+        for(j=0; j<nOther && !bRenamed; j++){
+          ParsedColumn *aCand = 0;
+          int nCand = 0, m, same;
+          if( !aOther[j].zType || strcmp(aOther[j].zType, "table")!=0 ) continue;
+          if( !aOther[j].zName || !aOther[j].zSql ) continue;
+          if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aOther[j].zName) ){
+            continue;
+          }
+          if( parseColumns(aOther[j].zSql, &aCand, &nCand)!=SQLITE_OK ) continue;
+          same = nCand==nAncCols;
+          for(m=0; m<nCand && same; m++){
+            if( sqlite3_stricmp(aCand[m].zName, aAncCols[m].zName)!=0
+             || !parsedColumnDefinitionsMatch(&aCand[m], &aAncCols[m]) ){
+              same = 0;
+            }
+          }
+          freeColumns(aCand, nCand);
+          if( same ) bRenamed = 1;
+        }
+        freeColumns(aAncCols, nAncCols);
       }
       if( !bRenamed ) continue;
       if( c->pzErrMsg ){
