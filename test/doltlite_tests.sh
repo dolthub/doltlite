@@ -127,6 +127,10 @@ run_test "runner_validation_results" \
      ('pragma_tail','validation','SELECT 1; PRAGMA query_only=ON','expected_rows','==','1'),
      ('pragma_write','validation','PRAGMA query_only=ON','expected_rows','==','0'),
      ('recursive','validation','SELECT * FROM dolt_test_run()','expected_rows','==','1'),
+     ('recursive_bare','validation','SELECT * FROM dolt_test_run','expected_rows','==','1'),
+     ('recursive_comment','validation','SELECT * FROM dolt_test_run/**/()','expected_rows','==','1'),
+     ('recursive_quoted','validation','SELECT * FROM "dolt_test_run"()','expected_rows','==','1'),
+     ('recursive_space','validation','SELECT * FROM dolt_test_run ()','expected_rows','==','1'),
      ('zero_rows','validation','SELECT i FROM fixture WHERE 0','expected_single_value','==','1'),
      ('many_cols','validation','SELECT i,s FROM fixture LIMIT 1','expected_single_value','==','1'),
      ('many_rows','validation','SELECT i FROM fixture','expected_single_value','==','1');
@@ -143,6 +147,10 @@ pragma_read|FAIL|Cannot execute PRAGMA queries
 pragma_tail|FAIL|Cannot execute PRAGMA queries
 pragma_write|FAIL|Cannot execute PRAGMA queries
 recursive|FAIL|Cannot call dolt_test_run in dolt_tests
+recursive_bare|FAIL|Cannot call dolt_test_run in dolt_tests
+recursive_comment|FAIL|Cannot call dolt_test_run in dolt_tests
+recursive_quoted|FAIL|Cannot call dolt_test_run in dolt_tests
+recursive_space|FAIL|Cannot call dolt_test_run in dolt_tests
 write_stmt|FAIL|Cannot execute write queries
 zero_rows|FAIL|expected_single_value expects exactly one cell. Received 0 rows
 0
