@@ -882,6 +882,36 @@ int trySchemaColumnMerge(
   }
 
 schema_merge_done:
+  /* Same-position replacement looks like a rename. If the surviving side
+  ** already has the new name, both branches added it independently. */
+  for(i=0; i<nAnc; i++){
+    ParsedColumn *pDropping;
+    ParsedColumn *pSurviving;
+    int nDropping, nSurviving;
+    int inOurs = findColumn(aOurs, nOurs, aAnc[i].zName)!=0;
+    int inTheirs = findColumn(aTheirs, nTheirs, aAnc[i].zName)!=0;
+    if( inOurs==inTheirs ) continue;
+    if( inOurs ){
+      pDropping = aTheirs; nDropping = nTheirs;
+      pSurviving = aOurs; nSurviving = nOurs;
+    }else{
+      pDropping = aOurs; nDropping = nOurs;
+      pSurviving = aTheirs; nSurviving = nTheirs;
+    }
+    if( i<nDropping
+     && !findColumn(aAnc, nAnc, pDropping[i].zName)
+     && parsedColumnDefinitionsMatch(&pDropping[i], &aAnc[i])
+     && findColumn(pSurviving, nSurviving, pDropping[i].zName) ){
+      if( pzErrDetail ){
+        *pzErrDetail = sqlite3_mprintf(
+          "column '%s' dropped on one branch while both branches add column '%s'",
+          aAnc[i].zName, pDropping[i].zName);
+      }
+      rc = SQLITE_ERROR;
+      goto schema_merge_cleanup;
+    }
+  }
+
   /* Carry the other side's deletions. A rename is absent under the
   ** old name too; same-position replacement distinguishes it. */
   if( ppDropCols && pnDropCols ){

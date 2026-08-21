@@ -1484,6 +1484,22 @@ expect_merge_ok "pk_change_ours_only_theirs_untouched" "$DB"
 expect_dual_value "pk_change_ours_only_kept" "$DB" "7:70" \
   "SELECT pk || ':' || v FROM t;" "SELECT CONCAT(pk, ':', v) FROM t;"
 
+DB="$TMPROOT/both_add_and_drop.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "both_add_and_drop"
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1113 TEXT, c1899 TEXT);
+INSERT INTO t VALUES(1,'p','x','y');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN c1899;
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','feat_drop_and_add');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','main_add');
+SQL
+expect_merge_conflict "both_add_same_column_and_drop_other" "$DB"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
