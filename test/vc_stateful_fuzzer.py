@@ -7,6 +7,12 @@ import sys
 import tempfile
 import time
 
+# Autocommit merge refusals roll the merge back whole, so the in-memory
+# model still matches. dolt_pull's merge half is the same outcome. Every
+# such message -- conflicts, duplicate-index, dropped-column-vs-edit,
+# trigger-over-renamed/dropped-table -- starts with this prefix.
+MERGE_ROLLED_BACK = ("cannot merge:",)
+
 
 def sql_quote(s):
     return "'" + s.replace("'", "''") + "'"
@@ -545,16 +551,7 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         "SELECT dolt_merge(%s);" % sql_quote(source),
         "merge_%s_into_%s" % (source, target),
         timeout=30,
-        # An autocommit merge that conflicts is rolled back whole, so the model
-        # below still matches: the target keeps the state it had before. The
-        # refusals below are the same outcome by a different route -- Dolt
-        # reports each of these shapes as a conflict and rolls the merge back,
-        # and so do we, rather than resolving them on the user's behalf.
-        allowed_errors=(
-            "cannot merge: conflicts detected",
-            "cover the same columns of table",
-            "was dropped on one branch and its value changed",
-        ),
+        allowed_errors=MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, target, model)
 
@@ -756,7 +753,8 @@ def remote_operation(doltlite, db_path, branches, model, pushed, rng, step, op):
                 "conflict",
                 "diverged",
                 "non-fast-forward",
-            ),
+            )
+            + MERGE_ROLLED_BACK,
         )
         if op == "pull":
             sync_vc_result(doltlite, db_path, branch, model)
@@ -851,7 +849,10 @@ def main():
     op_counts = {}
     current_op = "setup"
 
-    print("stateful vc fuzzer: seed=%d seconds=%d db=%s" % (seed, seconds, db_path))
+    print(
+        "stateful vc fuzzer: seed=%d seconds=%d db=%s" % (seed, seconds, db_path),
+        flush=True,
+    )
     try:
         setup_repo(doltlite, db_path, remote_path)
         while time.time() < deadline:
@@ -944,7 +945,11 @@ def main():
 
             check_invariants(doltlite, db_path, branches, tags, model, rng)
             if step % 25 == 0:
-                print("  steps=%d branches=%d operations=%d" % (step, len(branches), len(op_counts)))
+                print(
+                    "  steps=%d branches=%d operations=%d"
+                    % (step, len(branches), len(op_counts)),
+                    flush=True,
+                )
 
         for b in list(branches):
             commit_branch(doltlite, db_path, b, model, step)
@@ -953,16 +958,19 @@ def main():
         assert_refs(doltlite, db_path, branches, tags)
         print(
             "OK: stateful vc fuzzer completed %d steps across %d branches; operations=%s"
-            % (step, len(branches), ",".join(sorted(op_counts)))
+            % (step, len(branches), ",".join(sorted(op_counts))),
+            flush=True,
         )
         return 0
     except Exception as e:
-        print(
-            "FAIL: stateful vc fuzzer seed=%d step=%d op=%s"
-            % (seed, step, current_op),
-            file=sys.stderr,
+        fail = "FAIL: stateful vc fuzzer seed=%d step=%d op=%s\n%s" % (
+            seed,
+            step,
+            current_op,
+            e,
         )
-        print(str(e), file=sys.stderr)
+        print(fail, flush=True)
+        print(fail, file=sys.stderr, flush=True)
         return 1
     finally:
         if os.environ.get("DOLTLITE_VC_STATEFUL_KEEP_DB") != "1":
