@@ -99,8 +99,7 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   if( rc!=SQLITE_OK ) return rc;
 
   if( nZeroTail>0 ){
-    /* Sparse leaves skip the node cache: readers reconstruct the dense
-    ** node through chunkStoreGet, and caching would materialize the tail. */
+    /* Sparse leaves skip the cache; caching would materialize the tail. */
     rc = chunkStorePutSparse(ch->pStore, pData, nData - (int)nZeroTail,
                              nZeroTail, pHash);
     sqlite3_free(pData);
@@ -110,8 +109,6 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
   if( rc==SQLITE_OK && ch->pCache ){
     ProllyCacheEntry *pEntry;
-    /* The cache adopts the finished node; copying it doubled the peak for
-    ** large single-value leaves. */
     pEntry = prollyCachePutOwned(ch->pCache, pHash, pData, nData, &rc);
     pData = 0;  /* consumed on every PutOwned path, including failure */
     if( pEntry ) prollyCacheRelease(ch->pCache, pEntry);
@@ -197,9 +194,7 @@ static int addToLevel(ProllyChunker *ch, int level,
   thisSize = PROLLY_NODE_ENTRY_BYTES(level, nKey, nVal);
   pLevel->nBytes += thisSize;
 
-  /* A single entry may be larger than the target chunk size. It cannot be
-  ** split, and flushing it immediately would propagate the same oversized
-  ** separator key up every level until SQLITE_FULL. */
+  /* One oversize entry cannot split; flushing it would propagate SQLITE_FULL. */
   if( pLevel->nItems>1 && pLevel->nBytes >= PROLLY_CHUNK_MIN ){
     int atBoundary;
     if( pLevel->nBytes >= PROLLY_CHUNK_MAX ){

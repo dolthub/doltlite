@@ -161,10 +161,7 @@ run_test "nonint_history_filter_correct" \
 
 rm -f "$DB2"
 
-# A pushed-down constraint is omitted, so xFilter is the only thing standing
-# between a NULL bound and a wrong answer. Nothing compares true against NULL,
-# yet sqlite3_value_int64 reads one as 0 -- so the pk=0 row below is what makes
-# the difference between "matches nothing" and "matches by accident".
+# sqlite3_value_int64 reads NULL as 0; the pk=0 row is what would match by accident.
 DB3=/tmp/test_pushdown_null_$$.db
 rm -f "$DB3"
 echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
@@ -190,13 +187,10 @@ run_test "null_table_name_diff_empty" \
 run_test "null_staged_status_empty" \
   "SELECT count(*) FROM dolt_status WHERE staged=NULL;" "0" "$DB3"
 
-# The same shape a join produces, which is how this reaches real queries.
 run_test "null_join_history_empty" \
   "WITH n(k) AS (SELECT NULL) SELECT count(*) FROM n JOIN dolt_history_t h ON h.pk=n.k;" \
   "0" "$DB3"
 
-# Non-NULL bounds must keep working, including the pk=0 row that a NULL used
-# to collide with.
 run_test "pk_eq_zero_still_matches" \
   "SELECT count(*) FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=0;" "1" "$DB3"
 run_test "pk_eq_one_still_matches" \
@@ -210,10 +204,7 @@ run_test "table_name_named_still_matches" \
 
 rm -f "$DB3"
 
-# An INTEGER PRIMARY KEY is a rowid alias only when the table has a rowid.
-# A WITHOUT ROWID table is clustered by its declared key instead, so reading
-# that column from the tree's integer key yields the raw key bytes as a number
-# and the pk constraints xBestIndex promised to apply are silently dropped.
+# INTEGER PK is a rowid alias only with a rowid; WITHOUT ROWID used to drop pushed pk constraints.
 DB4=/tmp/test_pushdown_worid_$$.db
 rm -f "$DB4"
 echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
@@ -252,8 +243,6 @@ run_test "worid_blame_pk_eq" \
 
 rm -f "$DB4"
 
-# A composite WITHOUT ROWID key has no single INTEGER column to mistake for a
-# rowid, so it already read correctly; keep it that way.
 DB4B=/tmp/test_pushdown_worid_comp_$$.db
 rm -f "$DB4B"
 echo "CREATE TABLE t(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
@@ -273,8 +262,7 @@ run_test "worid_composite_blame_renders_key" \
 
 rm -f "$DB4B"
 
-# The rowid table beside it must keep its pushdown: the fix narrows which
-# tables claim an alias, not whether the alias is used.
+# The rowid table beside it must keep its pushdown.
 DB5=/tmp/test_pushdown_rowid_$$.db
 rm -f "$DB5"
 echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);

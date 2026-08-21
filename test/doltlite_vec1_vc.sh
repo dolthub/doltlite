@@ -1,11 +1,5 @@
 #!/bin/bash
-# vec1 x version-control: the built-in vector extension against the VC
-# surfaces, plus the properties doltlite's versioning story depends on.
-# vec1's %_base keeps one row per rowid until 'rebuild' migrates vectors
-# into %_idx segment blobs, so: raw bases row-merge across branches; built
-# indexes conflict on their derived segments and are recovered by
-# rebuilding from an authoritative source; and rebuilds are deterministic,
-# which content-addressed storage turns into free no-op recompactions.
+# %_base rows merge; built %_idx segments conflict and recover via rebuild.
 DOLTLITE="${1:-./doltlite}"
 PASS=0
 FAIL=0
@@ -30,8 +24,7 @@ check() {
   fi
 }
 
-# Four 4-dim float32 vectors as little-endian blobs:
-#   V1=[1,0,0,0]  V2=[0,1,0,0]  V3=[0,0,1,0]  V4=[0,0,0,1]
+# V1=[1,0,0,0] V2=[0,1,0,0] V3=[0,0,1,0] V4=[0,0,0,1]
 V1="x'0000803f000000000000000000000000'"
 V2="x'000000000000803f0000000000000000'"
 V3="x'00000000000000000000803f00000000'"
@@ -170,11 +163,7 @@ SELECT dolt_commit('-am','left');
 SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
 INSERT INTO t(rowid, vector) VALUES (8001, x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f');
 SELECT dolt_commit('-am','right, same bucket');" "$DB" > /dev/null
-# With codesize>0 the raw vectors never migrate out of %_base, so it
-# row-merges with full fidelity and the only conflicts are on derived
-# %_idx segments. The merge absorbs those and rebuilds from the merged
-# base and stored model itself: no conflicts surface, and both branches'
-# vectors come out searchable.
+# codesize>0 keeps vectors in %_base; merge rebuilds from it.
 result=$(run_sql "SELECT dolt_checkout('left');
 SELECT length(dolt_merge('right'))=40;
 SELECT count(*) FROM dolt_conflicts;
@@ -184,8 +173,7 @@ check "vec1_pq_auto_merge" "0
 1
 0
 2|602" "$result"
-# Approximate PQ k=1 can return the other same-bucket row; both must still
-# appear in a wider probe so the merge did not drop either vector.
+# PQ k=1 may return the other same-bucket row.
 result=$(run_sql "SELECT count(*) FROM t(x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f', '{k: 16, nprobe: 8}') WHERE rowid=7001;
 SELECT count(*) FROM t(x'0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f0ad7a33f', '{k: 16, nprobe: 8}') WHERE rowid=8001;
 SELECT message FROM dolt_log LIMIT 1;
@@ -206,8 +194,7 @@ SELECT dolt_commit('-am','left');
 SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
 INSERT INTO t(rowid, vector) VALUES (20, $V3);
 SELECT dolt_commit('-am','right');" "$DB" > /dev/null
-# Migrated bases hold bucket numbers, not vectors; auto-resolving here
-# would silently lose the discarded side's data, so the merge must not.
+# Migrated bases hold buckets, not vectors; auto-resolve would drop data.
 result=$(run_sql "SELECT dolt_checkout('left'); SELECT dolt_merge('right');" "$DB" | grep -c "conflict")
 check "vec1_flat_guard_stays_loud" "1" "$result"
 
@@ -222,9 +209,7 @@ with open('$TDIR/gate600.sql','w') as f:
         blob = ''.join(f'{b:02x}' for b in struct.pack('<8f', *v))
         f.write(f\"INSERT INTO t(rowid, vector) VALUES ({i}, x'{blob}');\n\")
 "
-# vec1 treats a NULL rebuild argument as keep-the-current-model, so an
-# owner whose stored model row is gone must stay in the manual-conflict
-# path rather than let the merge commit a stale index.
+# NULL rebuild keeps the current model; missing model stays conflicted.
 run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
 .read $TDIR/gate600.sql
 CREATE TABLE m(id INTEGER PRIMARY KEY, v BLOB);
@@ -342,9 +327,7 @@ result=$(run_sql "SELECT rowid FROM t($V1, '{k: 1}'); PRAGMA integrity_check;" "
 check "vec1_drop_restore" "1
 ok" "$result"
 
-# ── second wave: divergence shapes and remaining VC surfaces ──────
-# Shared 600-vector fixtures for the PQ scenarios below (training needs
-# at least 512 vectors). gen600 <file> [table] [meta] writes inserts.
+# Train needs >=512 vectors. gen600 <file> [table] [meta]
 gen600() {
   python3 -c "
 import struct, random
@@ -497,12 +480,7 @@ check "vec1_cherry_pick_revert" "1
 ok" "$result"
 
 scenario "a conflicting cherry-pick stays manual"
-# Flat (uncompressed) builds leave bucket numbers in %_base, so derived-shadow
-# auto-absorb is ineligible — same guard as vec1_flat_guard_stays_loud. Cherry-
-# pick also never requests the rebuild list (unlike merge). Use flat + dual
-# inserts rather than PQ "same bucket" inserts: which PQ segment two vectors
-# share is platform-sensitive under train, and was flaking the loudness check
-# on macOS CI when the inserts did not actually conflict.
+# Flat builds cannot auto-absorb; cherry-pick never rebuilds. Dual inserts avoid platform-sensitive PQ buckets.
 newdb
 run_sql "CREATE VIRTUAL TABLE t USING vec1(vector);
 INSERT INTO t(rowid, vector) VALUES (1, $V1);

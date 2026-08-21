@@ -13,8 +13,6 @@
 #endif
 #endif
 
-/* Chunk-store commit/rollback path. */
-
 static int csFileHasMovedNoFault(ChunkStore *cs){
   int bMoved = 0;
   if( cs->file.pFile==0 ) return 0;
@@ -82,7 +80,7 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
   {
     int rc = chunkStoreReloadRefs(cs);
     if( rc!=SQLITE_OK ){
-      /* Clear refs without allocating; rollback is discarding staged chunks. */
+      /* Discard refs without allocating; rollback drops staged chunks. */
       csFreeBranches(cs);
       csFreeTags(cs);
       csFreeRemotes(cs);
@@ -115,9 +113,6 @@ static int csCommitToMemory(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-/* Open/lock the store file, resolve logical EOF, and sector-align the
-** next commit batch. On entry *pLockFd / *pzLockName are zeroed by the
-** caller when the graph lock is already held. */
 static int csCommitResolveAppendPoint(
   ChunkStore *cs,
   int hadFile,
@@ -184,7 +179,7 @@ static int csCommitResolveAppendPoint(
     }
   }
 #endif
-  /* Append at logical EOF and truncate crash garbage beyond it. */
+  /* Append at logical EOF; truncate crash garbage past it. */
   if( hadFile && cs->file.iFileSize > fileSize ){
     fileSize = cs->file.iFileSize;
   }
@@ -192,7 +187,7 @@ static int csCommitResolveAppendPoint(
     (void)sqlite3OsTruncate(cs->file.pFile, fileSize);
   }
 
-  /* On non-atomic media, isolate commit batches on fresh sectors. */
+  /* Without powersafe overwrite, start each batch on a fresh sector. */
   if( (cs->file.pFile->pMethods->xDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
     sectorSize = cs->file.pFile->pMethods->xSectorSize(cs->file.pFile);
@@ -211,7 +206,6 @@ static int csCommitResolveAppendPoint(
   return SQLITE_OK;
 }
 
-/* Build the on-disk index plan for pending chunks (offsets + merge/recent). */
 static int csCommitPlanPendingIndex(
   ChunkStore *cs,
   i64 batchStart,
@@ -293,7 +287,6 @@ static int csCommitPlanPendingIndex(
   return csMergeIndex(&mergeView, paMerged, pnMerged);
 }
 
-/* Install the committed index view and clear staging after a successful sync. */
 static void csCommitPublishStaging(
   ChunkStore *cs,
   int useRecent,
@@ -369,8 +362,7 @@ static int csCommitToFile(ChunkStore *cs){
       cs, hadFile, lockHeld, &lockFd, &lockName,
       &fileSize, &origFileSize, &durableTo, &batchStart, &sectorSize);
   if( rc!=SQLITE_OK ){
-    /* Open-before-lock failures never held a commit lock; unlock is a no-op
-    ** when lockHeld or when the lock was never acquired. */
+    /* Open-before-lock never held the commit lock; unlock is a no-op. */
     if( !lockHeld ) csFileUnlock(lockFd, &lockName);
     return rc;
   }
@@ -412,8 +404,7 @@ static int csCommitToFile(ChunkStore *cs){
 
   writeOff = batchStart;
 
-  /* Append chunks before the root record. Recovery ignores appended data until
-  ** it finds a later valid root record that points at the new manifest. */
+  /* Chunks before the root; recovery ignores them until a later valid root. */
   if( cs->staging.nPending > 0 ){
     i64 walBytes = 0;
     int hasSparse = 0;
@@ -475,17 +466,14 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
-  /* Mid-transaction drains appended chunk bodies without a sync, but the
-  ** root record below declares everything before this batch durable, and
-  ** recovery poisons the store when damage lands below durableTo. The
-  ** drained bytes must reach disk before a root record can claim them. */
+  /* Drains append without a sync; the root below claims them durable, so
+  ** they must hit disk first (damage below durableTo poisons the store). */
   if( cs->staging.nRecentUncommitted > 0 ){
     CRASH_CHECK_WRITE();
     rc = csSyncFile(cs);
     if( rc != SQLITE_OK ) goto commit_done;
   }
 
-  /* The root record is the commit point for the append-only chunk store. */
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     i64 rootEnd = writeOff + (i64)sizeof(rootRec);
@@ -517,8 +505,7 @@ static int csCommitToFile(ChunkStore *cs){
 #endif
   if( rc != SQLITE_OK ) goto commit_done;
 
-  /* iFileSize is the logical append cursor (the aligned NEXT_OFF), nWalData
-  ** the physically present WAL content. */
+  /* iFileSize is NEXT_OFF; nWalData is physically present WAL. */
   cs->file.iFileSize = writeOff;
   cs->wal.nWalData = contentEnd - cs->wal.iWalOffset;
   cs->wal.cleanCloseMarker = 0;

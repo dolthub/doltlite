@@ -5,12 +5,8 @@
 #include <limits.h>
 #include "sqliteInt.h"
 
-/*
-** Read a SQLite-style varint from p (bounded by pEnd) into *pVal.
-** Returns the number of bytes consumed, or 0 on short input.
-** A return of 0 is the sentinel for "truncated"; callers MUST check
-** this to distinguish a parse failure from a legitimate single-byte 0.
-*/
+/* Read a varint from p (bounded by pEnd). Returns bytes consumed, or 0 if
+** truncated — not a valid single-byte 0. */
 static inline int dlReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   u64 v;
   int i;
@@ -49,8 +45,7 @@ static inline int dlSerialIsInt(int st){
 }
 
 static inline i64 dlReadIntBytes(const u8 *p, int nBytes){
-  /* Accumulate in unsigned: a left shift of a sign-extended negative i64 is
-  ** undefined behavior. Two's-complement makes the unsigned result identical. */
+  /* Accumulate unsigned: left-shifting a sign-extended i64 is UB. */
   u64 v = (nBytes>0 && (p[0] & 0x80)) ? ~(u64)0 : 0;
   int i;
   for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
@@ -81,9 +76,6 @@ int doltliteParseRecordStrict(const u8 *pData, int nData,
 
 void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo);
 
-/* Decode field iField of a parsed record as text into a freshly sqlite3_malloc'd
-** NUL-terminated string (*pzOut, NULL for a SQL NULL field). Returns SQLITE_OK,
-** SQLITE_CORRUPT on a malformed/non-text serial type, or SQLITE_NOMEM. */
 static inline int dlRecordTextField(
   const u8 *pVal,
   int nVal,
@@ -110,9 +102,7 @@ static inline int dlRecordTextField(
   return SQLITE_OK;
 }
 
-/* Decode field iField of a parsed record as a signed integer. Returns 0 for a
-** NULL, non-integer, or out-of-bounds field (serial type 8 is the constant 0,
-** type 9 the constant 1). */
+/* NULL, non-integer, or OOB field returns 0 (type 8 is 0, type 9 is 1). */
 static inline i64 dlRecordIntField(
   const u8 *pVal,
   int nVal,

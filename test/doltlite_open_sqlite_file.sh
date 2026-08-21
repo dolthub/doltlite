@@ -106,7 +106,6 @@ want_eq "R12_blob_pk_reads_payload_columns" \
   "$(dl_last "SELECT group_concat(hex(k)||':'||label||':'||n, ',') FROM (SELECT * FROM blobs ORDER BY k);" "$DB")" \
   "01:one:1,0203:two-three:23"
 
-# COUNT(*) WHERE INTEGER PK BETWEEN uses OP_CountRange on the orig adapter.
 DB=$TMP/r14.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1),(2),(3),(5),(8),(10);"
 want_eq "R14_count_between_last_row" \
@@ -336,13 +335,10 @@ want_eq "P3_stock_writes_after_doltlite_visible_in_doltlite" \
 echo ""
 echo "--- maintenance: VACUUM ---"
 
-# A stock file routes to the orig engine, so VACUUM must rewrite pages rather
-# than bridging to GC (which has no chunk store to compact).
+# Stock files VACUUM pages; they have no chunk store to GC.
 seed_big() {
   rm -f "$1"
-  # auto_vacuum has to be set before the first table, and the platform sqlite3
-  # may compile it on by default (the macOS runner does), which reclaims the
-  # deleted pages immediately and leaves nothing for VACUUM to do.
+  # auto_vacuum=NONE before the first table; default ON reclaims deletes immediately.
   $SQLITE3 "$1" "PRAGMA auto_vacuum=NONE;
 CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
 WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<20000)
@@ -357,8 +353,7 @@ dl_all "VACUUM;" "$DB" >/dev/null
 $SQLITE3 "$REF" "VACUUM;" >/dev/null 2>&1
 want_eq "M1_vacuum_matches_stock_size" \
   "$(wc -c < "$DB" | tr -d ' ')" "$(wc -c < "$REF" | tr -d ' ')"
-# Whether anything was reclaimable depends on how the file was seeded, so take
-# stock's own result as the expectation rather than hard-coding a shrink.
+# Expect stock's own VACUUM size, not a hard-coded shrink.
 if [ "$(wc -c < "$REF")" -lt "$before" ]; then
   want_eq "M1b_vacuum_shrank_like_stock" \
     "$([ "$(wc -c < "$DB")" -lt "$before" ] && echo yes || echo no)" "yes"
@@ -369,7 +364,6 @@ want_eq "M1c_vacuum_rows_intact" "$(sq_last "SELECT count(*) FROM t;" "$DB")" "1
 want_eq "M1d_vacuum_integrity" "$(sq_last "PRAGMA integrity_check;" "$DB")" "ok"
 want_eq "M1e_vacuum_still_stock_format" "$(head -c 15 "$DB")" "SQLite format 3"
 
-# VACUUM INTO is refused only for doltlite-format stores.
 DB=$TMP/v2.db; OUT=$TMP/v2out.db
 seed_big "$DB" 40; rm -f "$OUT"
 want_eq "M2_vacuum_into_no_error" "$(dl_all "VACUUM INTO '$OUT';" "$DB")" ""
@@ -380,8 +374,6 @@ want_eq "M2d_vacuum_into_source_untouched" "$(sq_last "SELECT count(*) FROM t;" 
 echo ""
 echo "--- maintenance: backup ---"
 
-# Destination starts with different content than the source, so a no-op or a
-# partial copy cannot pass.
 SRC=$TMP/b1src.db; DST=$TMP/b1dst.db
 seed_big "$SRC" 7; seed_big "$DST" 900
 want_eq "M3_backup_dest_differs_first" "$(sq_last "SELECT count(*) FROM t;" "$DST")" "900"
@@ -391,15 +383,13 @@ want_eq "M3c_backup_dest_integrity" "$(sq_last "PRAGMA integrity_check;" "$DST")
 want_eq "M3d_backup_dest_stock_format" "$(head -c 15 "$DST")" "SQLite format 3"
 want_eq "M3e_backup_source_untouched" "$(sq_last "SELECT count(*) FROM t;" "$SRC")" "7"
 
-# .restore is the same engine in the other direction.
 SRC=$TMP/b2src.db; DST=$TMP/b2dst.db
 seed_big "$SRC" 5; seed_big "$DST" 600
 printf '.restore %s\n' "$SRC" | $DOLTLITE "$DST" >/dev/null 2>&1
 want_eq "M4_restore_pulled_source" "$(sq_last "SELECT count(*) FROM t;" "$DST")" "5"
 want_eq "M4b_restore_integrity" "$(sq_last "PRAGMA integrity_check;" "$DST")" "ok"
 
-# A brand-new destination would default to a chunk store, so .backup asks for
-# the stock engine when the source is legacy.
+# New destinations default to a chunk store; .backup of a stock source must request sqlite.
 SRC=$TMP/b3src.db; DST=$TMP/b3dst.db
 seed_big "$SRC" 250; rm -f "$DST"
 printf '.backup %s\n' "$DST" | $DOLTLITE "$SRC" >/dev/null 2>&1
@@ -407,29 +397,22 @@ want_eq "M5_backup_to_new_file_is_stock_format" "$(head -c 15 "$DST" 2>/dev/null
 want_eq "M5b_backup_to_new_file_rows" "$(sq_last "SELECT count(*) FROM t;" "$DST")" "250"
 want_eq "M5c_backup_to_new_file_integrity" "$(sq_last "PRAGMA integrity_check;" "$DST")" "ok"
 
-# Paths carrying URI delimiters must survive the escaping. '?' is left out:
-# it is a reserved character in Windows filenames, so the file could not be
-# created there at all. '#' ends a URI path and '%' introduces an escape, which
-# is the pair that actually exercises the encoder.
+# '#' ends a URI path and '%' introduces an escape; '?' is reserved on Windows.
 SRC=$TMP/b4src.db; DST="$TMP/od#d%name.db"
 seed_big "$SRC" 11; rm -f "$DST"
 printf '.backup %s\n' "$DST" | $DOLTLITE "$SRC" >/dev/null 2>&1
 want_eq "M6_backup_path_with_uri_delimiters" "$(sq_last "SELECT count(*) FROM t;" "$DST")" "11"
 
-# The knob is public: opening a new file with doltlite_engine=sqlite yields a
-# stock database rather than a chunk store.
 URIDB=$TMP/b5uri.db; rm -f "$URIDB"
 dl_all "CREATE TABLE t(x);" "file:$URIDB?doltlite_engine=sqlite" >/dev/null 2>&1
 want_eq "M7_uri_knob_creates_stock_file" "$(head -c 15 "$URIDB" 2>/dev/null)" "SQLite format 3"
 want_eq "M7b_uri_knob_reports_orig_engine" \
   "$(dl_last "SELECT doltlite_engine();" "file:$URIDB?doltlite_engine=sqlite")" "orig"
 
-# Without the knob a new file is still a chunk store.
 PLAINDB=$TMP/b5plain.db; rm -f "$PLAINDB"
 dl_all "CREATE TABLE t(x);" "$PLAINDB" >/dev/null 2>&1
 want_eq "M8_new_file_defaults_to_doltlite" "$(dl_last "SELECT doltlite_engine();" "$PLAINDB")" "prolly"
 
-# Genuinely mixed engines still have no conversion and must be refused.
 SRC=$TMP/b6src.db; DLDST=$TMP/b6dst.db
 seed_big "$SRC" 5
 rm -f "$DLDST"; dl_all "CREATE TABLE keep(x);" "$DLDST" >/dev/null 2>&1

@@ -1,12 +1,6 @@
 #!/bin/bash
-#
-# Oracle: dolt_remote_branches must list remote-tracking refs the way real
-# Dolt does -- after a clone, and after fetching branches pushed to the
-# remote later. Names (remotes/<remote>/<branch>), commit messages, and the
-# local/remote branch split are compared; commit hashes, dates, and
-# committer identity differ by design and are never compared. Dolt's
-# latest_author* columns are not implemented (doltlite's dolt_branches
-# omits them for the same reason: commits store one name/email pair).
+# Compare remotes/<remote>/<branch> names, messages, and local/remote split; not hashes/dates/identity.
+# latest_author* is unimplemented (commits store one name/email pair).
 
 set -u
 
@@ -18,15 +12,11 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Same flow shape as vc_oracle_fetch_pull_convergence_test.sh: $seed
-# builds+pushes the source, $advance pushes more from the source, $consume
-# runs on the freshly cloned consumer, then one query is compared. The
-# remote URL/dir is substituted for the token @REMOTE@.
+# $seed/$advance/$consume; @REMOTE@ is substituted with the remote URL/dir.
 remote_flow() {
   local name="$1" seed="$2" advance="$3" consume="$4" dl_query="$5" dt_query="$6"
   local dir="$TMPROOT/$name"; mkdir -p "$dir"
 
-  # ---------- doltlite ----------
   local dl_remote="file://$dir/remote.db"
   local dl_src="$dir/src.db" dl_con="$dir/con.db"
   printf '%s\n' "${seed//@REMOTE@/$dl_remote}" \
@@ -44,7 +34,6 @@ remote_flow() {
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
            | "$DOLTLITE" "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
 
-  # ---------- dolt ----------
   local dt_remote="$dir/dt_remote"
   local dt_seed dt_advance dt_consume dt_q
   dt_seed=$(vc_oracle_translate_for_dolt "${seed//@REMOTE@/file://$dt_remote}")

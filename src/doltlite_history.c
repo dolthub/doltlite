@@ -42,8 +42,7 @@ struct HistVtab {
 typedef struct HistCursor HistCursor;
 struct HistCursor {
   DoltliteVtabCursorCommon common;
-  /* Columns as the visited commit's schema declares them, cached by schema
-  ** hash across commits. Invalid renders with the declared layout. */
+  /* Invalid renders with the declared layout. */
   DoltliteSideCols side;
   DoltliteCommitQueue queue;
   char zCommitHex[PROLLY_HASH_SIZE*2+1];

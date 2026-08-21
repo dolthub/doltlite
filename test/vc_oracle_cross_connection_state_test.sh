@@ -11,9 +11,7 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Every exec or query helper below starts a new CLI process.  These tests are
-# intentionally about state left by one SQL connection and observed or acted
-# upon by a later, independent connection.
+# Each helper starts a new CLI process; later connections observe leftover state.
 
 setup_pair() {
   local name="$1" setup="$2"
@@ -56,10 +54,7 @@ dl_exec_conflicting_merge() {
     | "$DOLTLITE" "$TMPROOT/$name/dl/db.sqlite" \
         >"$TMPROOT/$name/dl.exec.out" 2>"$TMPROOT/$name/dl.exec.err"
   rc=$?
-  # DoltLite reports the merge conflict as a handled SQL error, then the shell
-  # continues to COMMIT the explicit transaction.  Either a clean error or a
-  # future success return is acceptable here; the following connection proves
-  # whether the conflicted state was actually persisted.
+  # Conflict is a handled SQL error; the shell still COMMITs. Next connection proves persistence.
   if [ "$rc" -ge 128 ]; then
     echo "doltlite conflict connection crashed for $name (rc=$rc)" >&2
     sed 's/^/  /' "$TMPROOT/$name/dl.exec.err" >&2
@@ -147,8 +142,6 @@ INSERT INTO t VALUES(1, 'base');
 SELECT dolt_commit('-A', '-m', 'base');
 "
 
-# Connection A leaves an unstaged edit.  Connection B must see both the row
-# and its version-control status.
 dl_exec "working" "UPDATE t SET v='pending' WHERE id=1;"
 dt_exec "working" "UPDATE t SET v='pending' WHERE id=1;"
 paired_query "working" "unstaged_change_visible_to_next_connection" \
@@ -157,15 +150,12 @@ paired_query "working" "unstaged_change_visible_to_next_connection" \
   "SELECT CONCAT('Q|row|', v) FROM t WHERE id=1;
    SELECT CONCAT('Q|status|', table_name, '|', staged, '|', status) FROM dolt_status;"
 
-# Connection B stages it.  Connection C must inherit the staged root.
 dl_exec "working" "SELECT dolt_add('t');"
 dt_exec "working" "CALL dolt_add('t');"
 paired_query "working" "staged_change_visible_to_next_connection" \
   "SELECT 'Q|status|' || table_name || '|' || staged || '|' || status FROM dolt_status;" \
   "SELECT CONCAT('Q|status|', table_name, '|', staged, '|', status) FROM dolt_status;"
 
-# Connection C commits the already-staged edit.  Connection D sees a clean
-# working set and the new value without sharing any connection state.
 dl_exec "working" "SELECT dolt_commit('-m', 'pending');"
 dt_exec "working" "CALL dolt_commit('-m', 'pending');"
 paired_query "working" "commit_of_inherited_stage_visible_to_next_connection" \
@@ -186,7 +176,6 @@ SELECT dolt_commit('-A', '-m', 'base');
 SELECT dolt_branch('side');
 "
 
-# A connection pinned to side dirties only side's working set.
 dl_exec_branch "branches" "side" "UPDATE t SET v='side-pending' WHERE id=1;"
 dt_exec_branch "branches" "side" "UPDATE t SET v='side-pending' WHERE id=1;"
 paired_query "branches" "main_connection_isolated_from_side_working_set" \
@@ -205,17 +194,7 @@ paired_branch_query "branches" "side_connection_recovers_its_working_set" "side"
    SELECT CONCAT('Q|status|', table_name, '|', status) FROM dolt_status;"
 
 echo ""
-# Conflict handoff is deliberately not compared here. Dolt can commit a
-# transaction holding unresolved conflicts, so its conflicts outlive the
-# connection that made them and can be inspected, partially resolved and
-# aborted from later ones. DoltLite refuses that commit outright -- a conflict
-# never reaches disk -- so there is no shared behaviour for an oracle to diff.
-# The DoltLite contract is asserted directly instead:
-#   test/doltlite_merge_status.sh  conflict_commit_is_refused,
-#                                  conflict_does_not_outlive_transaction
-#   test/doltlite_conflicts.sh     in-transaction inspect/resolve/abort
-# Everything above this point -- working and staged handoff, branch-local
-# working sets -- is unaffected and still compared against Dolt.
+# Conflict handoff is not compared: Dolt can persist conflicts; DoltLite cannot.
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

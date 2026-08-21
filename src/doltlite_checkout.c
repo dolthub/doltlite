@@ -173,7 +173,7 @@ static int checkoutLoadAndApply(
   ProllyHash committedCatHash;
 
   if( prollyHashIsEmpty(pCommitHash) ){
-    /* Unborn branch: no commit, so its catalog baseline is empty. */
+    /* Unborn branch: catalog baseline is empty. */
     memset(&committedCatHash, 0, sizeof(committedCatHash));
   }else{
     rc = doltliteCommitCatalogHash(db, pCommitHash, &committedCatHash);
@@ -220,14 +220,13 @@ struct CheckoutMutationCtx {
   u8 requireActiveRebase;
   u8 targetRebaseInactive;
   int haveOldState;
-  /* Top-level branch connection checkout must persist even though SQLite has
-  ** a savepoint frame; ordinary nested savepoint checkout remains rollbackable. */
+  /* Top-level branch-connection checkout must persist despite a savepoint
+  ** frame; nested savepoint checkout remains rollbackable. */
   int bPersistUnderSavepoint;
 };
 
-/* Snapshot the current branch's working catalog into *pOldCatHash: serialize
-** uncommitted changes into the store, else use the persisted working hash
-** (falling back to HEAD). Returns an error code; callers handle reporting. */
+/* Snapshot the current working catalog into *pOldCatHash: serialize
+** uncommitted changes, else the persisted working hash (else HEAD). */
 static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
                                      ProllyHash *pOldCatHash){
   int dirty;
@@ -254,8 +253,7 @@ static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
   }
 }
 
-/* Mirror of checkoutRestoreSession: capture the session head/staged/merge/
-** rebase state so a failed checkout can roll back to it. */
+/* Capture session head/staged/merge/rebase so a failed checkout can roll back. */
 static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
   p->savedWasDetached = doltliteIsDetached(db);
   doltliteGetSessionHead(db, &p->savedSessionHead);
@@ -363,9 +361,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( !bSavepoint || p->bPersistUnderSavepoint ){
     rc = doltlitePersistWorkingSetWithHash(db, &p->targetCatHash);
     if( rc!=SQLITE_OK ) return rc;
-    /* The target branch is durable now, so it is what a rollback returns to.
-    ** Keeping the branch we left as the baseline reinstates its catalog --
-    ** its tables, under this branch. */
+    /* Target is durable now, so rollback returns here. Keeping the old
+    ** branch as baseline would reinstate its catalog under this branch. */
     doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
   }
 
@@ -563,10 +560,8 @@ int doltliteCheckoutBranchForRebaseWithOldCatalog(
   return checkoutBranchForRebase(db, zBranch, pOldCatHash, 0);
 }
 
-/* A restored table's indexes must follow it: named indexes present only in
-** the working schema are dropped, the source's named indexes are (re)created,
-** and differing definitions are replaced. Entry roots are reconciled
-** separately after the catalog flush. */
+/* Restored table indexes follow it: drop working-only named indexes,
+** (re)create the source's, replace differing defs. Entry roots after flush. */
 static int checkoutReconcileTableIndexes(
   sqlite3 *db,
   SchemaEntry *aSourceSchema,
@@ -650,11 +645,8 @@ static int checkoutReconcileTableIndexes(
   return SQLITE_OK;
 }
 
-/* Named indexes on a virtual table's shadow tables need the same DDL
-** reconcile as the requested table's own indexes: the shadow-entry
-** adoption below only swaps storage roots, so a working-only index would
-** survive pointing at a tree that no longer matches the adopted rows, and
-** a source-only index would never be created. */
+/* Shadow-table named indexes need the same DDL reconcile: adoption only
+** swaps storage roots. */
 static int checkoutReconcileVtabShadowIndexes(
   sqlite3 *db,
   SchemaEntry *aSourceSchema,
@@ -668,9 +660,8 @@ static int checkoutReconcileVtabShadowIndexes(
 
   if( !pTab || !IsVirtual(pTab) ) return SQLITE_OK;
 
-  /* Collect the shadow names before reconciling anything: the reconcile
-  ** below runs DROP/CREATE INDEX, and that schema reset frees pTab out
-  ** from under sqlite3IsShadowTableOf. */
+  /* Collect shadow names first: DROP/CREATE INDEX schema reset frees pTab
+  ** out from under sqlite3IsShadowTableOf. */
   for(i=0; i<nSourceSchema; i++){
     char **azNew;
     char *zDup;
@@ -698,10 +689,7 @@ static int checkoutReconcileVtabShadowIndexes(
   return rc;
 }
 
-/* Point the freshly flushed working catalog's index entries for zTable at
-** the source's trees. Each side is resolved through its OWN schema rows
-** (index entries are unnamed, so name-keyed overlays cannot see them), and
-** the DDL reconcile above guarantees the two row sets agree by name. */
+/* Point flushed working index entries at source trees via each side's schema. */
 static void checkoutAdoptSourceIndexRoots(
   struct TableEntry *aWorking, int nWorking,
   SchemaEntry *aWorkSchema, int nWorkSchema,
@@ -777,11 +765,8 @@ static int checkoutInstallSourceEntry(
   return SQLITE_OK;
 }
 
-/* Virtual tables persist through their shadow tables: a table-level
-** checkout of a vtab must swap the shadows' catalog entries, the same way
-** staging carries them. The vtab's own master row is schema-only and is
-** handled by the schema pass. Shadow table numbers stay in the working
-** catalog's domain; only the content roots come from the source. */
+/* Table-level checkout of a vtab swaps shadow catalog entries. Shadow
+** numbers stay in the working domain; only content roots come from source. */
 static int checkoutAdoptVtabShadows(
   sqlite3 *db,
   struct TableEntry **paWorking, int *pnWorking,
@@ -904,9 +889,7 @@ static int doltliteCheckoutTables(
         }
       }
       if( srcIdx<0 ){
-        /* Virtual tables have no catalog entry — their storage is the
-        ** shadow tables — so a vtab name is validated against the source
-        ** schema instead. */
+        /* Vtabs have no catalog entry; validate the name against source schema. */
         int hasVtab = 0;
         char *zSql = 0;
         rc = checkoutLoadSourceTableSql(db, aSource, nSource, zName,
@@ -1038,9 +1021,8 @@ static int doltliteCheckoutTables(
       if( aSchema[i].rebuilt && !aSchema[i].hasSource ){
         continue;
       }
-      /* A virtual table never has a catalog entry of its own; its schema
-      ** row was handled by the schema pass above and its content rides in
-      ** the shadow entries adopted below. */
+      /* Vtab has no catalog entry; schema pass handled the row, content
+      ** rides in the shadow entries adopted below. */
       if( (aSchema[i].hasSource && aSchema[i].zSourceSql
            && sqlite3_strnicmp(aSchema[i].zSourceSql, "CREATE VIRTUAL", 14)==0)
        || (aSchema[i].hasCurrent && aSchema[i].zCurrentSql
@@ -1116,9 +1098,7 @@ static int doltliteCheckoutTables(
     if( rc==SQLITE_OK ){
       rc = doltliteSwitchCatalog(db, &newWorkingHash);
     }
-    /* Checking a table out of a ref stages that table from the ref, and
-    ** only that table: adopting the whole working catalog as staged would
-    ** sweep every other table's working changes into the next commit. */
+    /* Checking a table out of a ref stages only that table. */
     if( rc==SQLITE_OK && zSourceRef ){
       rc = doltliteStageNamedTables(db, context, cs, &newWorkingHash,
                                     nNames, argv+iFirstName);
@@ -1371,8 +1351,7 @@ checkout_done:
     return;
   }
   if( rc==SQLITE_BUSY ){
-    /* Keep SQLITE_BUSY (not ERROR) so clients and busy_timeout/retry loops
-    ** treat peer lock contention as retryable, not a hard failure. */
+    /* Keep SQLITE_BUSY so clients/busy_timeout treat peer lock as retryable. */
     (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "database is locked by another connection", -1);
     sqlite3_result_error_code(ctx, SQLITE_BUSY);

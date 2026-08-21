@@ -81,10 +81,7 @@ SELECT dolt_checkout('main');
 PRAGMA foreign_keys=1;
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# The merge detects foreign-key violations, which it reports by scanning the
-# merged tables and recording what it finds. Assert the message rather than
-# discarding it: an assert-enabled build used to die inside that scan, and
-# matching only [0-9]+ on the counts below passed either way.
+# Assert the FK-violation message; matching only [0-9]+ used to pass an assert-death inside the scan.
 CV_MERGE_OUT=$(dltest_run_sql "PRAGMA foreign_keys=1; SELECT dolt_merge('feat');" "$DB")
 case "$CV_MERGE_OUT" in
   *"constraint violations"*) dltest_pass ;;
@@ -115,10 +112,7 @@ SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "detached_head_branch_intact" "SELECT count(*) FROM t;" "1" "$DB"
 
-# The revision cases below name the commit with @ rather than /, because MSYS
-# resolves a slash-qualified hash as a filesystem path before doltlite ever
-# sees the revision. The SQL goes in as an argument to match the form
-# doltlite_open_branch.sh uses for the same opens.
+# Use @ not /: MSYS treats a slash-qualified hash as a filesystem path.
 run_rev_test() {
   local name="$1" sql="$2" expected="$3" db="$4"
   local result
@@ -130,9 +124,7 @@ run_rev_test() {
   fi
 }
 
-# Pairs with the case below: same database, same open form, but a commit a
-# branch still reaches. If both fail, the revision open is at fault; if only
-# the unreachable one does, the sweep is.
+# Pair: reachable commit vs unreachable. If both fail, the revision open is at fault.
 run_rev_test "detached_reachable_head_before_gc" "SELECT count(*) FROM t;" "1" "$DB@$MAIN_TIP"
 run_rev_test "detached_head_before_gc" "SELECT count(*) FROM t;" "2" "$DB@$FEAT_TIP"
 

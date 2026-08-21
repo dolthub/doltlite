@@ -912,9 +912,7 @@ ROLLBACK TO sp1;
 echo ""
 echo "--- schema objects (views, triggers, indexes) ---"
 
-# Trigger bodies cannot share one script across dialects (SQLite BEGIN...END
-# vs MySQL FOR EACH ROW), so these run per-system setups against per-system
-# post-state queries.
+# Trigger syntax differs (BEGIN...END vs FOR EACH ROW); per-engine setups.
 oracle_dual_poststate() {
   local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
   local dir="$TMPROOT/${name}_dual"

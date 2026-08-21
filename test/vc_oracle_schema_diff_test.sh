@@ -287,10 +287,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_col_again');
 " "HEAD~3" "HEAD" "" "EXPECT_EMPTY"
 
-# Positive control for the net-zero range above: the same multi-commit span,
-# stopped one commit early (before the drop), must show the column add. This
-# proves the empty full-range result is a genuine net-zero, not a range-walk
-# that silently returns nothing over spans deeper than one commit.
+# Positive control: stop one commit early; empty full-range must be genuine net-zero, not a silent walk.
 oracle "net_addcol_dropcol_midrange_shows_add" "
 $SEED
 ALTER TABLE t ADD COLUMN extra TEXT;
@@ -703,14 +700,8 @@ oracle_error "bad_single_arg" "$SEED" \
 echo ""
 echo "--- schema objects (pinned per-system shapes) ---"
 
-# The two systems intentionally present schema objects differently:
-# doltlite emits one row per SQLite schema object (an index or view change
-# is its own row, named by the object), while Dolt folds index changes into
-# the owning table's row and stores views/triggers as rows of the
-# dolt_schemas table (whose own schema only changes when it is created or
-# dropped, so a view modification produces NO dolt_schema_diff row there).
-# Cross-comparing outputs is meaningless here; instead each system is
-# pinned to its own expected shape so a change on either side surfaces.
+# doltlite: one row per SQLite schema object. Dolt folds indexes into the table and stores views in dolt_schemas.
+# Pin each system to its own shape; do not cross-compare.
 DL_SHAPE_Q="SELECT 'ROW|' || coalesce(nullif(from_table_name,''),'~') || '|' || coalesce(nullif(to_table_name,''),'~') || '|' || (from_create_statement IS NOT NULL AND from_create_statement!='') || '|' || (to_create_statement IS NOT NULL AND to_create_statement!='') FROM dolt_schema_diff('HEAD~1','HEAD') ORDER BY 1;"
 DT_SHAPE_Q="SELECT CONCAT('ROW|', coalesce(nullif(from_table_name,''),'~'), '|', coalesce(nullif(to_table_name,''),'~'), '|', (from_create_statement IS NOT NULL AND from_create_statement!=''), '|', (to_create_statement IS NOT NULL AND to_create_statement!='')) FROM dolt_schema_diff('HEAD~1','HEAD') ORDER BY 1;"
 
@@ -876,8 +867,7 @@ SELECT dolt_commit('-Am','c');
 ROW|u|u|1|1
 ROW|~|dolt_schemas|0|1"
 
-# doltlite's third argument filters by SQLite schema-object name; the
-# owning table's filter shows only the table's own DDL changes.
+# Third arg filters by SQLite schema-object name, not the owning table.
 DL_FILTER_SETUP="
 CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
 SELECT dolt_commit('-Am','base');

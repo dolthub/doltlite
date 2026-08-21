@@ -4,8 +4,7 @@
 echo "=== Doltlite writable_schema catalog poke tests ==="
 echo ""
 
-# Default CLI must honor PRAGMA writable_schema without a prior
-# `.dbconfig defensive off` (see issue #1846 — not a prolly no-op).
+# CLI honors writable_schema without `.dbconfig defensive off`.
 DB=/tmp/test_dl_writable_schema_pragma_$$.db; rm -f "$DB"
 run_test "writable_schema_default_off" \
   "PRAGMA writable_schema;" \

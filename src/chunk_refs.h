@@ -39,7 +39,7 @@ struct TrackingBranch {
   ProllyHash commitHash;
 };
 
-/* Non-versioned AUTOINCREMENT counter shared across all branches. */
+/* Non-versioned AUTOINCREMENT high-water, shared across branches. */
 struct SequenceRef {
   char *zTableName;
   i64 iSeq;
@@ -67,16 +67,12 @@ void refsTableGetRemotes(const RefsTable *rt, int *pn, const RemoteRef **par);
 void refsTableGetTracking(const RefsTable *rt, int *pn, const TrackingBranch **par);
 void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par);
 
-/* Index of the ref whose leading char* name field equals zName, or -1. */
 int csFindNamedRef(const void *aBase, int n, int stride, const char *zName);
-
-/* Grow a packed ref array by one zeroed element; returns SQLITE_OK/NOMEM. */
 int csRefArrayGrow(void **paBase, int n, int stride);
 
 int refsTableBranchCount(const RefsTable *rt);
 int refsTableRemoteCount(const RefsTable *rt);
 
-/* Return the stored sequence for zTableName, or 0 if absent. */
 i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName);
 
 const ProllyHash *refsTableGetHash(const RefsTable *rt);
@@ -145,16 +141,11 @@ void csFreeRemotes(struct ChunkStore *cs);
 void csFreeTracking(struct ChunkStore *cs);
 void csFreeSequences(struct ChunkStore *cs);
 
-/* Look up the stored sequence for zTableName, or 0 if absent. */
 i64 chunkStoreGetSequenceValue(struct ChunkStore *cs, const char *zTableName);
-/* Set the stored sequence to max(existing, newSeq); creates row if absent.
-** Caller must hold the chunk-store lock. */
+/* max(existing, newSeq); creates the row if absent. Caller holds the lock. */
 int chunkStoreBumpSequence(struct ChunkStore *cs, const char *zTableName,
                            i64 newSeq);
-/* Delete the row for zTableName if present (mirrors SQLite's
-** "DELETE FROM sqlite_sequence WHERE name=…" on DROP TABLE). */
 void chunkStoreDropSequence(struct ChunkStore *cs, const char *zTableName);
-/* Rename zOld → zNew (mirrors ALTER TABLE RENAME). */
 int chunkStoreRenameSequence(struct ChunkStore *cs, const char *zOld,
                              const char *zNew);
 void csMarkRefsCommitted(struct ChunkStore *cs);

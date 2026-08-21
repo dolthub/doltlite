@@ -2,16 +2,9 @@
 
 #include "doltlite_merge_int.h"
 
-/* Catalog three-way merge: table roots, schema objects, conflicts, reindex. */
-
-/* Rewrite every record in theirs' table root from theirs' column order into
-** the merged column order (ours' columns, then theirs' added columns), using
-** the ancestor to retain renamed-column identity. Missing fields use their
-** declared defaults where needed, while encoded NULLs remain NULL. This lets
-** the positional cell-level three-way merge run
-** across a dual ADD COLUMN divergence: without it, theirs' added-column value
-** would be read at the wrong ordinal. Records are content-addressed and rebuilt
-** through the canonical doltliteBuildRecord, so the tree stays deterministic. */
+/* Rewrite theirs' records into merged column order so cell-level merge
+** reads added columns at the right ordinal. Missing fields take declared
+** defaults; encoded NULLs stay NULL. */
 
 static int serializeMergedCatalog(
   sqlite3 *db,
@@ -357,8 +350,7 @@ static int preDetectIndexSchemaConflicts(
        || mergeSchemaEntriesSame(pOurs, pTheirs) ){
         continue;
       }
-      /* Dolt keeps the modified index definition when the other branch
-      ** drops that index. Only competing surviving definitions conflict. */
+      /* Dolt keeps the modified index when the other branch drops it. */
       if( pAnc && (!pOurs || !pTheirs) ) continue;
       rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
                                 zTable, a[i].zName, &addedSchemaTable);
@@ -577,10 +569,8 @@ int mergeTableRenameOtherDrop(
     }
   }
   if( !pAnc || !pAncSe ) return 0;
-  /* The name the object had in the ancestor. Its catalog rows are the ones a
-  ** merge has to resolve toward the rename, and only this function can name
-  ** them: the row merge sees a rename as a delete plus an add, so it cannot
-  ** tell this shape from a rename on both sides. */
+  /* Ancestor name. Row merge sees rename as delete+add, so it cannot
+  ** distinguish this from a dual rename. */
   if( pzAncName ) *pzAncName = pAnc->zName;
   return 1;
 }
@@ -762,8 +752,7 @@ static SchemaEntry *mergedSchemaChoice(
   }
   if( oursChanged && !theirsChanged ) return pOurs;
   if( theirsChanged && !oursChanged ) return pTheirs;
-  /* Both sides dropped the object: falling back to the ancestor would
-  ** resurrect it in the merged catalog. */
+  /* Both sides dropped it: ancestor fallback would resurrect it. */
   if( oursChanged && theirsChanged && !pOurs && !pTheirs ) return 0;
   if( pOurs ) return pOurs;
   if( pTheirs ) return pTheirs;
@@ -849,10 +838,8 @@ static int appendMergedAuxSchemaRow(
                            aConflictTables, nConflictTables,
                            zName);
   if( !pSe || !pSe->zType || !pSe->zName ) return SQLITE_OK;
-  /* Storage-backed tables are appended from the merged catalog entries and
-  ** indexes from the index passes. Virtual tables have no catalog entry —
-  ** their storage is the shadow tables — so their schema rows (type "table",
-  ** rootpage 0) ride with the storage-free objects here. */
+  /* Virtual tables have no catalog entry; their schema rows (type "table",
+  ** rootpage 0) ride with storage-free objects here. */
   if( strcmp(pSe->zType, "index")==0 ) return SQLITE_OK;
   if( strcmp(pSe->zType, "table")==0 && pSe->iRootpage!=0 ){
     return SQLITE_OK;
@@ -942,11 +929,8 @@ static int rebuildDisjointSchemaRows(
                                  pSe->zName) ){
       continue;
     }
-    /* Pass 2 declines to adopt an index of theirs over a column we dropped,
-    ** because a catalog naming a column its table does not have cannot be
-    ** loaded. Writing the row here anyway puts that index back, and at a
-    ** number one of our own indexes already occupies, so ours is displaced by
-    ** an index that cannot resolve. */
+    /* Pass 2 already declined this index: writing it here would displace
+    ** one of ours with an index the catalog cannot load. */
     {
       SchemaEntry *pAncTbl = findSchemaEntry(aAncSchema, nAncSchema,
                                              pSe->zTblName);
@@ -1150,9 +1134,8 @@ int tryResolveSchemaDivergence(
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* Their deletions are as much a schema change as their additions: with no
-  ** action recorded for them the merge has nothing to apply, and the two
-  ** sqlite_master rows go on to conflict over a table that merges cleanly. */
+  /* Record their deletions too, or sqlite_master conflicts over a
+  ** table that merged cleanly. */
   if( nAddCols>0 || nDropCols>0 || nRenameCols>0 ){
     if( ppSchemaActions && pnSchemaActions ){
       rc = recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
@@ -1340,8 +1323,7 @@ int doltliteMergeCatalogs(
       if( aMerged[k].zName ){
         char *z = sqlite3_mprintf("%s", aMerged[k].zName);
         if( !z ){
-          /* Entries not yet re-duped still alias aOurs; null them so cleanup
-          ** frees each aliased name once (via aOurs), never twice. */
+          /* Remaining names still alias aOurs; null them so cleanup frees once. */
           int j;
           for(j=k; j<nMerged; j++) aMerged[j].zName = 0;
           rc = SQLITE_NOMEM;
@@ -1388,12 +1370,9 @@ int doltliteMergeCatalogs(
   }
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  /* Their schema supplies anything the merged rows do not carry, and an
-  ** object we deleted is exactly that, so the fallback would reinstate it --
-  ** and a reinstated trigger fires on the next write. Drop the ones we
-  ** deleted while their side left them alone. Tables and indexes are already
-  ** excluded by the serializer, and a deletion racing a change on their side
-  ** keeps today's behaviour rather than growing a new conflict here. */
+  /* Their schema would reinstall objects we deleted; drop those their
+  ** side left alone. Tables/indexes are already excluded. A deletion
+  ** racing their change keeps today's behaviour. */
   {
     SchemaEntry *aFallback = aTheirsSchema;
     int nFallback = nTheirsSchema;
@@ -1451,20 +1430,12 @@ void doltliteFreeNameList(char **az, int n){
   sqlite3_free(az);
 }
 
-/* Rebuild the named (merge-adopted) indexes over the merged rows. REINDEX
-** enforces uniqueness while rebuilding, but rows that collide under an
-** adopted unique index are exactly what the merge must SURFACE — as
-** resolvable constraint violations from the detector that runs after this
-** — not a bare "constraint failed" that aborts the merge with nothing
-** recorded. A unique index holds duplicates physically (entries carry the
-** row key), so the rebuild runs with enforcement off and the detector
-** owns the outcome, as Dolt does. Enforcement returns for ordinary DML
-** once onError is restored. */
+/* Rebuild adopted indexes with uniqueness off. Collisions must surface
+** as constraint violations, as Dolt does, not abort the merge. */
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n){
   int i, rc = SQLITE_OK;
   if( n>0 ){
-    /* The adopted indexes exist only in the just-switched catalog; the
-    ** schema reloads on this prepare, so the lookups below can see them. */
+    /* Reload schema so FindIndex sees the just-switched catalog. */
     rc = sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", 0, 0, 0);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -1478,8 +1449,7 @@ int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n){
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
     sqlite3_free(zSql);
     if( suppressed ){
-      /* Re-find rather than trust the pointer: a failed exec can reset
-      ** the schema and free the Index. */
+      /* Re-find: a failed exec can reset the schema and free the Index. */
       pIdx = sqlite3FindIndex(db, az[i], "main");
       if( pIdx ) pIdx->onError = savedOnError;
     }

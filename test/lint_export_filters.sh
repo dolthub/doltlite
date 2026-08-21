@@ -1,11 +1,5 @@
 #!/bin/bash
-#
-# The libdoltlite export filter is spelled twice because ld and ld64 take
-# different formats: src/libdoltlite.map (ELF version script) and
-# src/libdoltlite.sym (Mach-O exported symbols list, names underscore-prefixed).
-# Drift between them means one platform ships a different ABI than the other,
-# and CI only notices on whichever platform lost a symbol. Compare the pattern
-# sets directly.
+# ELF .map vs Mach-O .sym (underscore-prefixed); compare pattern sets so ABI drift cannot hide per-platform.
 
 SRCDIR="${1:-src}"
 MAP="$SRCDIR/libdoltlite.map"

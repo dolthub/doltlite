@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* B-tree lifecycle, dispatch tables, metadata, and public API shims. */
-
 static void btreeClearCatalogCache(Btree *p){
   sqlite3_free(p->pCatalogCache);
   p->pCatalogCache = 0;
@@ -487,8 +485,7 @@ static int doltliteResolveOpenBranchPath(
   return SQLITE_OK;
 }
 
-/* True when zFilename names a file that already holds bytes. Used to keep the
-** doltlite_engine URI knob from reinterpreting an existing database. */
+/* Non-empty file: keep doltlite_engine from reinterpreting an existing db. */
 static int doltliteFileHasContent(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -510,21 +507,17 @@ static int doltliteFileHasContent(
   if( rc!=SQLITE_OK ) return rc;
   if( !exists ) return SQLITE_OK;
 
-  /* zFilename is the ParseUri name, so its parameters live past the first nul
-  ** and only the double nul ends it. SQLITE_OPEN_MAIN_DB puts it under that
-  ** contract, so hand the VFS a plain copy rather than the parameter list. */
+  /* ParseUri names are double-nul; MAIN_DB walks URI params, so copy first. */
   rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
   if( rc!=SQLITE_OK ) return rc;
-  /* The handle keeps the name, not a copy of it, so zDup has to outlive the
-  ** close: unixClose logs pFile->zPath on the way out. */
+  /* The handle stores zPath, not a copy; unixClose logs it on close. */
   rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
     sqlite3_free(zDup);
-    /* Unreadable is not "empty": leave the knob inactive. */
-    *pHasContent = 1;
+    *pHasContent = 1;  /* unreadable is not empty */
     return SQLITE_OK;
   }
   rc = sqlite3OsFileSize(pFile, &sz);
@@ -560,23 +553,12 @@ int sqlite3BtreeOpen(
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
-   /* VACUUM copies pages, so its target must use the same engine as the legacy
-   ** database being vacuumed rather than defaulting to prolly. */
+   /* VACUUM copies pages; the target must match the legacy source engine. */
    || (db && (db->mDbFlags & DBFLAG_VacuumOrig)!=0);
-  /* A caller creating a file it intends to hold stock pages -- a backup or
-  ** VACUUM INTO target for a legacy database -- asks for the stock engine with
-  ** doltlite_engine=sqlite, since a new file otherwise becomes a chunk store.
-  ** It selects the engine for a database being created and is ignored once the
-  ** file has content, so it can never reinterpret an existing chunk store; a
-  ** file that already holds stock pages is detected below anyway.
-  **
-  ** Gated on SQLITE_OPEN_MAIN_DB because sqlite3_uri_parameter() is only
-  ** defined on a name sqlite3ParseUri() built: it resolves the name through
-  ** databaseName(), which reads zName[-1] through zName[-4] to walk back over
-  ** the URI's key/value pairs. Handed a plain string that is merely nul
-  ** terminated, it reads before the buffer. Main and ATTACH are the only opens
-  ** whose names come from ParseUri; every other caller reaches here with a name
-  ** it built itself. */
+  /* doltlite_engine=sqlite selects stock for a new empty file (backup /
+  ** VACUUM INTO). Ignored once the file has content. sqlite3_uri_parameter
+  ** only works on ParseUri names (MAIN_DB / ATTACH); a plain C string is
+  ** under-read. */
   if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
     const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
     if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
@@ -615,8 +597,7 @@ int sqlite3BtreeOpen(
       sqlite3_free(p);
       return rc;
     }
-    /* Registration resolves through db->aDb[0].pBt, so assign first. */
-    *ppBtree = p;
+    *ppBtree = p;  /* registerDoltiteFunctions reads db->aDb[0].pBt */
     rc = registerDoltiteFunctions(db);
     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
       *ppBtree = 0;
@@ -655,8 +636,7 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return rc;
   }
-  /* Serve the recovered prefix to the connection-open catalog reads below,
-  ** then re-arm so the first data access fails SQLITE_CORRUPT instead. */
+  /* Serve the recovered prefix to open-time catalog reads, then re-arm. */
   poisonAfterOpen = pBt->store.corruptMidStream;
   pBt->store.corruptMidStream = 0;
 
@@ -678,7 +658,6 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return SQLITE_NOMEM;
   }
-  /* Resolve shim file handles through the chunk store after reloads. */
   pagerShimSetStore(pBt->pPagerShim, &pBt->store);
 
   pBt->db = db;
@@ -874,11 +853,7 @@ int sqlite3BtreeUsesOrig(Btree *p){
   return p && p->pOps==&origBtreeVtOps;
 }
 
-/* db->aDb[].pBt always holds a doltlite Btree; for a legacy database that
-** wrapper delegates to a stock btree. The orig page copier is compiled against
-** the stock layout and needs that inner pointer, so it resolves schema names
-** through here rather than reading Db.pBt directly. Returns 0 for a
-** doltlite-format database, which the copier reports as "not a database". */
+/* Inner stock btree, or 0 for a doltlite-format db. */
 void *doltliteBtreeOrigPtr(void *pBtree){
   Btree *p = (Btree*)pBtree;
   if( !sqlite3BtreeUsesOrig(p) ) return 0;
@@ -962,14 +937,11 @@ int prollyBtreeSetCacheSize(Btree *p, int mxPage){
   if( mxPage>0 ){
     nEntry = mxPage;
   }else{
-    /* Negative cache_size is a KiB budget. Map it to node-cache entries via
-    ** the page size, mirroring how the stock pager turns KiB into pages. */
+    /* Negative cache_size is a KiB budget, mapped like the stock pager. */
     u32 pgsz = p->pBt->pageSize>0 ? p->pBt->pageSize : PROLLY_DEFAULT_PAGE_SIZE;
     nEntry = (-(i64)mxPage * 1024) / pgsz;
   }
-  /* cache_size only grows the node cache. The stock default (-2000) and
-  ** memory-shrink requests must not drop it below the engine's baseline,
-  ** which the prolly backend relies on for its aggressive node caching. */
+  /* Never shrink below the engine baseline (stock default is -2000). */
   if( nEntry < PROLLY_DEFAULT_CACHE_SIZE ) nEntry = PROLLY_DEFAULT_CACHE_SIZE;
   p->pBt->cache.nCapacity = (int)nEntry;
   return SQLITE_OK;
@@ -1012,8 +984,7 @@ int sqlite3BtreeSetPagerFlags(Btree *p, unsigned pgFlags){
 
 int prollyBtreeSetPageSize(Btree *p, int nPagesize, int nReserve, int eFix){
   (void)nReserve; (void)eFix;
-  /* Same validation as the stock btree: ignore values that are not a power
-  ** of two in [512,65536]. The value is layout-inert either way. */
+  /* Stock range: power of two in [512,65536]. Layout-inert either way. */
   if( nPagesize>=512 && nPagesize<=65536 && ((nPagesize-1)&nPagesize)==0 ){
     p->pBt->pageSize = (u32)nPagesize;
   }
@@ -1089,7 +1060,6 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
 }
 
 int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
-  /* Prolly storage has no page freelist; accept auto_vacuum as a no-op. */
   (void)p; (void)autoVacuum;
   return SQLITE_OK;
 }
@@ -1108,8 +1078,7 @@ int sqlite3BtreeGetAutoVacuum(Btree *p){
 }
 
 int prollyBtreeIncrVacuum(Btree *p){
-  /* No freelist pages to reclaim: report completion immediately, exactly
-  ** like stock on a database whose auto_vacuum is none. */
+  /* No freelist: SQLITE_DONE, like stock auto_vacuum=none. */
   (void)p;
   return SQLITE_DONE;
 }
@@ -1210,10 +1179,7 @@ int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
 
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
 
-  /* Hand the dropped table's pending edits to any open savepoint that captured
-  ** it (the path flushPendingForTable/clearTable use), so ROLLBACK TO can
-  ** restore a table created and dropped within the same transaction. Otherwise
-  ** catRemove frees the map outright and the pre-drop rows are lost. */
+  /* Snapshot pending edits so ROLLBACK TO can restore a same-txn create/drop. */
   {
     int rc = syncBtreeSavepoints(p);
     if( rc!=SQLITE_OK ) return rc;
@@ -1230,9 +1196,6 @@ int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
     }
   }
 
-  /* Clear any cursor aliases of the dropped table's pending mutmap before
-  ** catRemove frees it; otherwise rollback (prollyBtreeRollback) would
-  ** later iterate live cursors and dereference a freed map. */
   refreshCursorMutMapAliases(p, pBt, (Pgno)iTable, 0);
   removeTable(p, (Pgno)iTable);
 
@@ -1268,10 +1231,7 @@ int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
     return SQLITE_OK;
   }
 
-  /* Save, don't abort, cursors on this table before mutating it: the truncate
-  ** optimization (DELETE with no WHERE) can fire while another statement scans
-  ** the table, and that scan must restore against the now-empty tree and
-  ** continue rather than fail with SQLITE_ABORT. */
+  /* Save, don't abort: truncate can fire while another statement scans. */
   {
     int rc = saveAllCursors(p, pBt, (Pgno)iTable, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -1283,14 +1243,12 @@ int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   }
 
   if( pnChange ){
-    /* Count pending rows too; same-transaction writes may not be flushed. */
     int rc = flushPendingForTable(p, pBt, pTE, 1);
     if( rc!=SQLITE_OK ) return rc;
     rc = countTreeEntries(p, (Pgno)iTable, pnChange);
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* TRUNCATE discards pending rows, preserving savepoint rollback state. */
   if( pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     ProllyMutMap *pFlushMap = pMap;
@@ -1354,8 +1312,7 @@ int prollyBtreeUpdateMeta(Btree *p, int idx, u32 value){
   }
 
   {
-    /* Btree savepoints push lazily at write time; a meta write is a write,
-    ** so push them here or ROLLBACK TO cannot restore the old value. */
+    /* Meta write is a write; push lazy savepoints so ROLLBACK TO restores. */
     int rc = syncBtreeSavepoints(p);
     if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(p);
     if( rc!=SQLITE_OK ) return rc;
@@ -1448,7 +1405,7 @@ int prollyBtreeCursor(
 
   pTE = findTable(p, iTable);
   if( !pTE ){
-    /* Missing old roots are stale-schema errors; future roots are imports. */
+    /* Missing past roots are stale schema; future roots are imports. */
     if( iTable!=1 && iTable < p->cat.iNextTable ){
       sqlite3_log(SQLITE_CORRUPT,
         "doltlite: cursor open on iTable=%u not in catalog "
@@ -1459,8 +1416,7 @@ int prollyBtreeCursor(
         pKeyInfo ? "BLOBKEY" : "INTKEY");
       return SQLITE_CORRUPT_PGNO(iTable);
     }
-    /* The schema root (page 1) is never a dropped user table; an absent
-    ** entry just means an empty schema, so synthesize rather than reject. */
+    /* Absent page 1 is an empty schema, not a dropped table. */
     {
       u8 flags = pKeyInfo ? BTREE_BLOBKEY : BTREE_INTKEY;
       pTE = addTable(p, iTable, flags);
@@ -1586,10 +1542,7 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
 int prollyBtCursorCursorHasMoved(BtCursor *pCur){
   return (pCur->eState!=CURSOR_VALID);
 }
-/* -1: handle invalidated (SQL write to its row, or a cursor trip) — abort.
-**  1: cursor saved by an unrelated write — caller must re-seek.
-**  0: nothing to do; also all orig-engine cursors, whose incrblob cursors
-**     never move and restore themselves in accessPayloadChecked. */
+/* -1 abort, 1 reseek, 0 ok. Orig incrblob never moves. */
 int sqlite3BtreeIncrblobCursorReseek(BtCursor *pCur){
   if( pCur->pCurOps!=&prollyCursorOps ) return 0;
   if( pCur->eState==CURSOR_VALID ){
@@ -1667,11 +1620,8 @@ void sqlite3BtreeEnterAll(sqlite3 *db){
     if( p ) p->pOps->xEnter(p);
   }}
 }
-/* A prolly btree is never shared, so these answered for that case alone. A
-** legacy database delegates to a stock btree that can be sharable, and the
-** stock code then expects the whole protocol: answering 0 here suppressed the
-** OP_TableLock the code generator would otherwise emit, and the no-op cursor
-** mutex left that btree's cursors unguarded. */
+/* Prolly is never shared; a legacy orig btree may be. Must not answer 0
+** for orig or OP_TableLock and cursor mutexes are skipped. */
 int sqlite3BtreeSharable(Btree *p){
   void *pOrig = doltliteBtreeOrigPtr(p);
   return pOrig ? origBtreeSharable(pOrig) : 0;
@@ -1736,7 +1686,6 @@ int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){
   }
   return SQLITE_OK;
 }
-/* Cross-backend row transfer must use public cursor accessors. */
 static int btreeGenericTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   int rc;
   BtreePayload x;
@@ -1987,9 +1936,7 @@ int sqlite3BtreeIntegrityCheck(
 integrity_done:
   prollyHashSetFree(&ctx.seen);
   if( rc!=SQLITE_OK ){
-    /* OP_IntegrityCk reads *pnErr and frees *pzOut even when an error is
-    ** returned, so the outputs must be set on every path.  Count the failed
-    ** check itself as an error, as the stock btree does for OOM. */
+    /* OP_IntegrityCk always reads *pnErr and frees *pzOut; count this fail. */
     if( pnErr ) *pnErr = nErr+1;
     if( pzOut ) *pzOut = 0;
     return rc;
@@ -2012,9 +1959,6 @@ integrity_done:
 int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   int i;
 
-  /* A legacy VACUUM copies stock pages between two orig btrees; only the prolly
-  ** path below has a catalog to rebuild. The bridge lives in backup.c, which is
-  ** compiled out with the rest of VACUUM, so the delegation goes with it. */
 #ifndef SQLITE_OMIT_VACUUM
   if( pTo->pOrigBtree && pFrom->pOrigBtree ){
     return origBtreeCopyFile(pTo->pOrigBtree, pFrom->pOrigBtree);
@@ -2078,9 +2022,7 @@ static void doltiteEngineFunc(
   sqlite3_result_text(context, zEngine, -1, SQLITE_STATIC);
 }
 
-/* The store behind one specific btree. Maintenance operations act on the
-** database they were given, so they resolve their store from its Btree rather
-** than from db->aDb[0]. */
+/* Store for this btree, not always db->aDb[0]. */
 ChunkStore *doltliteBtreeChunkStore(Btree *p){
   if( !p || !sqlite3BtreeIsDoltliteFormat(p) || !p->pBt ) return 0;
   return &p->pBt->store;

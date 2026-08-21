@@ -103,9 +103,7 @@ expect_merge_outcome() {
 expect_merge_ok() { expect_merge_outcome "$1" "$2" ok; }
 expect_merge_conflict() { expect_merge_outcome "$1" "$2" conflict; }
 
-# A merge DoltLite deliberately refuses while Dolt completes it. Asserting both
-# sides pins the difference instead of leaving it to be rediscovered, and turns
-# a future fix into a visible failure here rather than a silent change.
+# DoltLite refuses this merge; Dolt completes it. Pin both sides.
 expect_merge_divergence() {
   local name="$1" db="$2" dl_want="$3" dt_want="$4" dl_got dt_got
   dl_got=$(run_merge_outcome doltlite "$db" "$name")
@@ -244,13 +242,7 @@ expect_dual_value "schema_conflicts_schema_rows" "$DB" "t|1|1|1" \
 run_dual_command_outcome "schema_conflicts_resolve_refused" "$DB" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t');" \
   "CALL dolt_conflicts_resolve('--ours','t');" error
-# No outcome comparison for the abort itself: DoltLite can only reach an active
-# merge inside the transaction that created it, and that transaction necessarily
-# carries the expected conflict error, which output_is_error cannot tell apart
-# from a real failure. The abort is compared by its effect in
-# schema_conflicts_abort_clears below, and exercised directly in
-# test/doltlite_schema_merge.sh. Dolt still holds a committed conflicted merge at
-# this point, so it needs the abort run for the next comparison to line up.
+# Abort is compared by effect, not output: the creating txn already carries the conflict error.
 DT_AB=$(dt_repo_for_db "$DB")
 (cd "$DT_AB" && printf '%s\n' "CALL dolt_merge('--abort');" | "$DOLT" sql) \
   >"$TMPROOT/schema_conflicts_abort.dt.out" 2>"$TMPROOT/schema_conflicts_abort.dt.err" || true
@@ -1241,13 +1233,7 @@ expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
 echo ""
 echo "--- Index over a renamed column (deliberate divergence) ---"
 
-# One branch indexes a column the other renames. Nothing retargets the index to
-# the new name, and a merged catalog naming a column its table does not have
-# cannot be loaded, so DoltLite refuses the merge and says which index and
-# column are in the way. Dolt merges these and keeps the index on the renamed
-# column; closing that gap needs the index to follow the rename, tracked in
-# issue #2302. Until then the refusal is the behavior worth pinning: it used to
-# report the database as corrupt instead.
+# Index on a renamed column: DoltLite refuses (used to report corrupt); Dolt keeps the index.
 for dir in ours theirs; do
   DB="$TMPROOT/ixren_$dir.db"; rm -f "$DB"
   if [ "$dir" = ours ]; then

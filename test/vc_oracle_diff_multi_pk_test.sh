@@ -367,10 +367,7 @@ SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('main', 'feat', 'u');"
 
 echo "--- Group K: replay history on multi-col PK table additions ---"
-# Previously EXPECT_EMPTY + a query that selected non-existent
-# dolt_history_u.message (issue #839). Both engines now return history
-# rows for the table added via merge/cherry-pick/rebase atop a structural
-# change on the receiver; assert parity with message joined from dolt_log.
+# History rows for a table added via merge/cherry-pick/rebase; join message from dolt_log.
 
 oracle "k_merge_replay_multi_pk_history" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -389,7 +386,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_merge('feat');
 " "SELECT CONCAT('R|', h.a, '|', h.b, '|', h.v, '|', IFNULL(l.message,'')) FROM dolt_history_u h LEFT JOIN dolt_log l ON l.commit_hash = h.commit_hash ORDER BY h.a, h.b, IFNULL(l.message,'');"
 
-# Positive control: the merge must actually bring table u onto main.
 oracle "k_merge_replay_multi_pk_data_present" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');

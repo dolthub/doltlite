@@ -204,11 +204,7 @@ if [ -z "$cur_csv" ] || [ -z "$cur_series" ]; then
   exit 1
 fi
 
-# The tag list is resolved from repo state, not commit state, so a tag pushed
-# while a run is in flight makes a prebuilt consumer demand a binary the
-# producer never saw -- and rerunning only the failed job can never recover,
-# because the artifact is frozen. The producer therefore records the list it
-# built, and a prebuilt consumer tests exactly that list.
+# Tag list is repo state; a mid-run push would freeze a consumer against a binary the producer never built.
 if [ "$MODE" = "test" ] && [ "${DOLTLITE_COMPAT_PREBUILT:-0}" = "1" ] \
    && [ -z "${DOLTLITE_COMPAT_TAGS:-}" ] && [ -s "$CACHE_DIR/TAGS" ]; then
   DOLTLITE_COMPAT_TAGS=$(cat "$CACHE_DIR/TAGS")

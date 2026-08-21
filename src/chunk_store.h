@@ -54,31 +54,21 @@
 
 #define CS_MANIFEST_MAGIC_OFF        0
 #define CS_MANIFEST_VERSION_OFF      4
-/* A sealed root may point at an index checkpoint made of ordinary WAL chunks.
-** Readers that do not understand the stamp safely replay those chunks. */
+/* Checkpoint is ordinary WAL chunks; unknown stamps replay them. */
 #define CS_MANIFEST_CHECKPOINT_MAGIC_OFF 8
 #define CS_MANIFEST_CHECKPOINT_OFFSET_OFF 12
 #define CS_MANIFEST_CHECKPOINT_SIZE_OFF 20
 #define CS_MANIFEST_CHUNK_COUNT_OFF  28
 #define CS_MANIFEST_INDEX_OFFSET_OFF 32
 #define CS_MANIFEST_INDEX_SIZE_OFF   40
-/* Root-record commit metadata (zero in legacy stores and in the offset-0
-** header manifest, which describes no commit batch):
-**   DURABLE_TO: absolute offset of the valid prefix the writer observed
-**     when it began this commit batch. All bytes below it were valid then,
-**     so WAL damage below a sealed root's DURABLE_TO is mid-stream
-**     corruption; damage at or above every sealed root's DURABLE_TO is a
-**     torn tail from a crashed batch.
-**   BATCH_START: absolute offset of the batch's first byte. On devices
-**     without powersafe-overwrite the writer starts each batch on a fresh
-**     sector (a crashed batch must never tear a sector holding previously
-**     synced bytes), so BATCH_START can sit past DURABLE_TO; the bytes
-**     between are an unwritten gap that replay resumes across.
-**   NEXT_OFF: absolute offset where the writer puts the next batch (the
-**     sector-aligned end of this one). Replay skips the gap unread.
-**   SELF_HASH: hash of the manifest with this field zeroed, followed by the
-**     root record's absolute file offset. A root whose stored hash is nonzero
-**     and wrong is damage, not a commit point. */
+/* Root commit metadata (zero in legacy / offset-0 header):
+**   DURABLE_TO: valid prefix at batch start. Damage below is mid-stream
+**     corruption; at/above every sealed DURABLE_TO is a torn tail.
+**   BATCH_START: first byte of the batch. Without powersafe-overwrite this
+**     is a fresh sector, so it can sit past DURABLE_TO (unwritten gap).
+**   NEXT_OFF: sector-aligned start of the next batch; replay skips the gap.
+**   SELF_HASH: hash of the manifest with this field zeroed plus the root's
+**     file offset. Nonzero-and-wrong is damage, not a commit point. */
 #define CS_MANIFEST_DURABLE_TO_OFF   44
 #define CS_MANIFEST_NEXT_OFF_OFF     52
 #define CS_MANIFEST_BATCH_START_OFF  60
@@ -122,10 +112,8 @@
 #define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE)
 #define WS_TOTAL_SIZE_V2    (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)
 #define WS_REBASING_OFF     WS_TOTAL_SIZE_V2
-/* Bit 0: rebase in progress. Bit 1: return-branch blob is a metadata
-** overlay that must not replace a dirty catalog. Whole-blob mirror is
-** bit 0 alone. Stay inside the v5 size: GC classifies working sets by
-** exact length. */
+/* Bit 0: rebase in progress. Bit 1: return-branch is a metadata overlay
+** (must not replace a dirty catalog). Keep the v5 length; GC uses it. */
 #define WS_REBASE_FLAG_ACTIVE      0x01
 #define WS_REBASE_FLAG_META_MIRROR 0x02
 #define WS_PRE_REBASE_CAT_OFF (WS_REBASING_OFF + 1)
@@ -182,46 +170,35 @@ typedef struct ChunkStore ChunkStore;
 struct ChunkStore {
   ChunkFile file;
   RefsTable refs;
-  u8 bRefsStale;          /* refs restore failed under OOM and was cleared;
-                          ** reload from refsHash before the next use */
+  u8 bRefsStale;          /* OOM cleared refs; reload from refsHash */
   ChunkIndex index;
   WalState wal;
   ChunkStaging staging;
 
   u8 readOnly;
 
-  /* Set while the file this handle opened has been renamed or unlinked away and
-
-  ** nothing replaced it: writes are refused, reads keep serving the open handle.
-
-  ** Re-evaluated on every refresh, so restoring the file restores writability. */
-
+  /* Path renamed/unlinked with no replacement: writes refused, reads stay
+  ** on the open handle. Re-evaluated on refresh. */
   u8 movedReadOnly;
 
-  /* One-shot: adopt whatever file is now at the path on the next refresh. Only an
-  ** operation that installed a database there itself may set this -- a backup
-  ** destination is replaced with unrelated content on purpose, which no external
-  ** change detection can be expected to bless. */
+  /* One-shot: adopt the path on next refresh. Only the installer may set
+  ** this (backup dest is replaced on purpose). */
   u8 adoptReplacement;
   u8 isMemory;
   u8 isBuffer;
-  u8 fullFsync;           /* PRAGMA fullfsync: syncs use SQLITE_SYNC_FULL */
-  u8 noSync;              /* PRAGMA synchronous=OFF: skip durability syncs */
+  u8 fullFsync;           /* PRAGMA fullfsync -> SQLITE_SYNC_FULL */
+  u8 noSync;              /* PRAGMA synchronous=OFF: skip syncs */
   u8 snapshotPinned;
-  u8 corruptMidStream;    /* WAL replay found mid-stream damage; chunk reads
-                          ** and commits fail SQLITE_CORRUPT, but open itself
-                          ** succeeds (stock surfaces corruption on first
-                          ** access, never from sqlite3_open) */
-  u8 notADatabase;        /* Header is missing/wrong magic (short file or
-                          ** garbage). Open succeeds like stock; first access
-                          ** returns SQLITE_NOTADB without overwriting the
-                          ** file (ticket #1370 / misc5-4.1). */
+  u8 corruptMidStream;    /* Mid-stream WAL damage: reads/commits CORRUPT;
+                          ** open still succeeds (stock surfaces on first use) */
+  u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use
+                          ** is SQLITE_NOTADB and does not overwrite (misc5-4.1). */
   sqlite3_file *pGraphLockFile;
-  char *pGraphLockName;        /* owned name kept alive for pGraphLockFile (xOpen contract) */
+  char *pGraphLockName;        /* owned name for pGraphLockFile (xOpen) */
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 
-  /* Prevent checkpoint reentry through VFS write hooks. */
+  /* Block checkpoint reentry via VFS write hooks. */
   int checkpointActive;
   sqlite3_vfs *pOwnedVfs;
 };
@@ -240,8 +217,7 @@ int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
 
-/* Connection-private stores have no peer to race, so their lock calls are
-** no-ops and leave lockDepth at zero. */
+/* Memory/buffer stores have no peer; lock calls are no-ops (lockDepth 0). */
 #define PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs) do{ \
   assert( (cs)!=0 ); \
   assert( (cs)->isMemory || (cs)->isBuffer \
@@ -332,16 +308,11 @@ const char *chunkStoreFilename(ChunkStore *cs);
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged);
 
-/* Reload persisted refs from disk for a VC write op, bypassing the file-size/
-** HAS_MOVED change heuristic (which can miss a peer commit when the WAL is
-** reused, leaving a stale branch tip). Reloads only at the outermost lock
-** acquisition; caller holds the graph lock. */
+/* Reload refs for a VC write, bypassing the size/HAS_MOVED heuristic
+** (WAL reuse can hide a peer commit). Outermost lock only. */
 int chunkStoreForceRefresh(ChunkStore *cs);
 
-/* Duplicate z into a fresh buffer terminated by TWO '\0' bytes, as required
-** for any filename handed to a VFS xOpen() with SQLITE_OPEN_MAIN_DB (the
-** empty URI-parameter terminator; sqlite3_uri_parameter and test VFSes scan
-** past the first nul). Returns SQLITE_OK or SQLITE_NOMEM. */
+/* Duplicate z with two trailing nuls (SQLITE_OPEN_MAIN_DB xOpen URI term). */
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
 
 #endif

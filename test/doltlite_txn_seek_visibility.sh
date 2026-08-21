@@ -64,11 +64,7 @@ run_test "intkey_uncommitted_insert_visible_to_range_seeks" \
 
 db_rm "$DB"
 
-# The same visibility on a blob-key table root. A probe covering the whole
-# primary key names one row, so the pending map can be searched by exact key --
-# but only for an equality. A range bound names no row, so that lookup found
-# nothing and every pending row the range should have returned went missing:
-# invisible to SELECT, and skipped by UPDATE and DELETE.
+# Range bounds cannot exact-key the pending map; equality can.
 run_test "blobkey_range_seek_sees_pending_row_above_tree" \
   "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
    INSERT INTO t VALUES(5,'c');
@@ -90,8 +86,7 @@ run_test "blobkey_range_seek_sees_pending_row_above_tree" \
 
 db_rm "$DB"
 
-# With no committed rows at all there is no tree row to fall back on, so the
-# range sees nothing whatsoever.
+# No committed rows, so the range has nothing to fall back on.
 run_test "blobkey_range_seek_sees_pending_only_table" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, v TEXT) WITHOUT ROWID;
    BEGIN;
@@ -109,10 +104,7 @@ run_test "blobkey_range_seek_sees_pending_only_table" \
 
 db_rm "$DB"
 
-# A >= bound is a forward seek that SQLite marks with a positive default_rc,
-# the same mark it puts on the backward <. Reading that mark as the direction
-# lost the pending landing for >=, so a range starting at or below a pending
-# row missed it while the same range written with > found it.
+# >= uses positive default_rc; treating that as direction used to miss pending landings.
 run_test "ge_bound_sees_pending_row" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
    BEGIN;
@@ -132,8 +124,7 @@ run_test "ge_bound_sees_pending_row" \
 
 db_rm "$DB"
 
-# A prefix GLOB or LIKE is compiled into a >= / < range, so it reaches the same
-# path through a secondary index.
+# GLOB/LIKE compile to >= / < on a secondary index.
 run_test "prefix_match_sees_pending_row" \
   "CREATE TABLE t(k INTEGER, a, b TEXT);
    CREATE INDEX i_b ON t(b, a);
@@ -150,9 +141,7 @@ run_test "prefix_match_sees_pending_row" \
 
 db_rm "$DB"
 
-# The other half of the contract, and the one an earlier attempt at this broke:
-# a landing above the key is not a match. An equality seek for a key that does
-# not exist must not settle for the next pending row above it.
+# Equality must not take the next pending row above a missing key.
 run_test "equality_seek_does_not_match_greater_pending_row" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, a, b TEXT);
    BEGIN;
@@ -278,9 +267,7 @@ run_test "prefix_seek_sees_updated_row_value" \
 
 db_rm "$DB"
 
-# A deferred merged seek that lands on a row present in both the tree and
-# the pending mut map must serve the pending value: the mut-map entry
-# shadows the committed row.
+# Pending mut-map entry shadows the committed row.
 run_test "deferred_seek_lands_on_shadowed_row_reads_pending_value" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
    INSERT INTO t VALUES (12,'old'),(27,'far');
@@ -321,10 +308,7 @@ run_test "fts4_langid_rebuild_preserves_partitions" \
 
 db_rm "$DB"
 
-# A join of three or more tables emits OP_IfEmpty for the third and later
-# loops, which breaks out of the whole join when the table is empty. Answering
-# that from the persisted root alone dropped rows written earlier in the same
-# transaction, because they are still in the pending map.
+# OP_IfEmpty must see pending inserts, not only the persisted root.
 DB=/tmp/test_txn_ifempty_$$.db; db_rm "$DB"
 
 run_test "join_sees_table_populated_only_in_this_txn" \
@@ -346,8 +330,7 @@ run_test "join_sees_table_populated_only_in_this_txn" \
 
 db_rm "$DB"
 
-# The optimization must still fire for a table that really is empty, and a
-# table emptied inside the transaction must still join to nothing.
+# Still empty if emptied in-transaction.
 DB=/tmp/test_txn_ifempty_neg_$$.db; db_rm "$DB"
 
 run_test "join_still_empty_for_empty_and_emptied_tables" \
@@ -374,10 +357,7 @@ run_test "join_still_empty_for_empty_and_emptied_tables" \
 
 db_rm "$DB"
 
-# A one-pass DELETE/UPDATE scan steps off each row it just wrote. When the
-# departed row was mut-map-sourced, the step must resume from that row's key:
-# the tree cursor is parked at the next committed row, and a step seeded from
-# it skips every pending row in between.
+# After a mut-map-sourced write, resume from that key, not the tree cursor.
 DB=/tmp/test_txn_onepass_resume_$$.db; db_rm "$DB"
 
 run_test "onepass_delete_covers_pending_rows" \
@@ -406,8 +386,7 @@ run_test "onepass_update_covers_pending_rows" \
 
 db_rm "$DB"
 
-# The step lands merged: pending rows interleave committed ones, and a
-# pending update shadowing a committed row must survive as the merged value.
+# Pending update shadowing a committed row must survive as the merged value.
 run_test "onepass_update_resume_lands_merged" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
    INSERT INTO t VALUES (13,130),(27,270);
@@ -421,10 +400,7 @@ run_test "onepass_update_resume_lands_merged" \
 
 db_rm "$DB"
 
-# The same resume contract on blob keys. Writing a row that exists only in the
-# pending map must not step the tree cursor: the tree already sits on the next
-# committed row above it, so advancing drops that row from the rest of the scan.
-# The pending row has to sort between two committed ones for the skip to show.
+# Pending-only row must not advance the tree cursor; it has to sort between two committed rows.
 run_test "onepass_update_blobkey_covers_committed_row_after_pending" \
   "CREATE TABLE t(k INTEGER, j TEXT, v TEXT, PRIMARY KEY(k, j)) WITHOUT ROWID;
    INSERT INTO t VALUES (1,'a','x'),(3,'c','x');
@@ -451,8 +427,6 @@ run_test "onepass_delete_blobkey_covers_committed_row_after_pending" \
 
 db_rm "$DB"
 
-# Several pending rows interleaved with several committed ones: every committed
-# row above a pending write must still be visited.
 run_test "onepass_update_blobkey_interleaved_rows" \
   "CREATE TABLE t(k INTEGER, j TEXT, v TEXT, PRIMARY KEY(k, j)) WITHOUT ROWID;
    INSERT INTO t VALUES (10,'a','x'),(30,'c','x'),(50,'e','x'),(70,'g','x');
@@ -466,11 +440,7 @@ run_test "onepass_update_blobkey_interleaved_rows" \
 
 db_rm "$DB"
 
-# A scan whose moveto lands on a pending row defers the tree-side seek. When
-# a deferred write then deactivates the merge state, the resume re-seeds both
-# sides past the departed key; a surviving deferral would re-seek the tree
-# back to that key on the following step, skipping pending rows or
-# resurrecting delete-masked ones.
+# Resume must re-seed both sides; a leftover deferral re-seeks the departed key.
 DB=/tmp/test_txn_onepass_deferred_$$.db; db_rm "$DB"
 
 run_test "onepass_update_from_deferred_seek_landing" \
@@ -564,12 +534,7 @@ run_test "onepass_interleaved_writes_covers_late_insert" \
 
 db_rm "$DB"
 
-# An index seek that finds nothing at or above its key lands on the merged last
-# row, which is reached by scanning backwards. That leaves the tree side below a
-# mut-map-sourced landing, so a forward step from it used to serve a tree row the
-# scan had already passed -- a scan bounded only from below then walked backwards
-# and matched rows outside its range. The blob here outsorts every text value, so
-# the pre-update index entry sits above the seek keys.
+# Seek past last lands via BtreeLast (backward); a forward step must not walk back into range.
 DB=/tmp/test_txn_index_seek_past_end_$$.db; db_rm "$DB"
 
 run_test "index_seek_past_end_after_pending_update" \
@@ -607,11 +572,7 @@ run_test "index_delete_past_end_spares_all_rows" \
 
 db_rm "$DB"
 
-# The same landing with the tree as its source. The backward scan walks the
-# mut-map index down past the landing key, possibly off the start, and a forward
-# step left with no mut-map side cannot mask a delete -- so a range scan served
-# the row this transaction deleted. Reachable whenever the deleted row is the
-# greatest one, which is why the keys here sort with it last.
+# Deleted last row: backward last-landing with no mut-map side used to unmask the delete.
 DB=/tmp/test_txn_masked_last_row_$$.db; db_rm "$DB"
 
 run_test "range_scan_masks_deleted_last_row" \
@@ -650,9 +611,7 @@ a" \
 
 db_rm "$DB"
 
-# Serving that phantom row to an UPDATE made the VDBE try to delete an index
-# entry for a row that is not there, which surfaces as OP_IdxDelete's
-# "index corruption" rather than as a wrong answer.
+# Phantom last-row served to UPDATE surfaces as OP_IdxDelete index corruption.
 run_test "update_over_deleted_last_row_is_not_corruption" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, a) WITHOUT ROWID;
    CREATE INDEX i_a ON t(a);
@@ -668,11 +627,7 @@ run_test "update_over_deleted_last_row_is_not_corruption" \
 
 db_rm "$DB"
 
-# A prefix seek that reports "below the key" with an equal prefix sends OP_Seek
-# through its prolly-specific walk, which ends in BtreeLast when every remaining
-# entry matched. BtreeLast also lands by scanning backwards, so the forward step
-# SeekGT then makes must not serve the pending row sitting below that landing --
-# nothing follows the last row.
+# Prefix walk to BtreeLast: SeekGT must not serve a pending row below that landing.
 DB=/tmp/test_txn_atlast_forward_$$.db; db_rm "$DB"
 
 run_test "seek_gt_after_last_landing_finds_nothing" \
@@ -694,7 +649,6 @@ m,a
 
 db_rm "$DB"
 
-# Backward stepping from that same landing must still reach the row below it.
 run_test "index_seek_past_end_steps_backward" \
   "CREATE TABLE t(k INTEGER UNIQUE, a, b TEXT);
    CREATE INDEX i_b ON t(b, a);
@@ -711,12 +665,7 @@ run_test "index_seek_past_end_steps_backward" \
 
 db_rm "$DB"
 
-# A numeric key no double represents exactly is stored as the neighbouring
-# double plus the exact integer, so its key bytes begin with the key of that
-# neighbour. Seeking to the neighbour lands on such a pending row with the bytes
-# equal and the values not, and that landing used to be dropped: the row was
-# invisible to every bounded seek while it was pending, so a range UPDATE
-# reported no changes and left it stale.
+# Keys no double represents exactly share a prefix with the neighbour; that landing used to drop pending rows.
 DB=/tmp/test_txn_extended_numeric_$$.db; db_rm "$DB"
 
 run_test "range_update_reaches_pending_extended_numeric_key" \
@@ -735,8 +684,6 @@ run_test "range_update_reaches_pending_extended_numeric_key" \
 
 db_rm "$DB"
 
-# The same landing through a bare lower bound, and for the positive key, whose
-# base double sits below it too.
 run_test "bounded_seek_sees_pending_extended_numeric_keys" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
    INSERT INTO t VALUES(500, 'c');
@@ -756,8 +703,7 @@ run_test "bounded_seek_sees_pending_extended_numeric_keys" \
 
 db_rm "$DB"
 
-# An equality seek must still resolve to the row it names. The landing above is
-# reported as above, not as an equality, or an UPDATE would rewrite a neighbour.
+# Landing is above, not equality, or UPDATE rewrites a neighbour.
 run_test "equality_seek_near_extended_numeric_key_hits_right_row" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
    BEGIN;
@@ -773,9 +719,7 @@ run_test "equality_seek_near_extended_numeric_key_hits_right_row" \
 
 db_rm "$DB"
 
-# Reporting the landing means the scan walks past a pending tombstone that
-# shares the prefix instead of stopping at it, so check the row between the key
-# and that tombstone still comes back and the deleted row stays masked.
+# Walk past a pending prefix-equal tombstone; the in-between row still comes back.
 run_test "tombstone_sharing_extended_prefix_does_not_hide_row" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
    INSERT INTO t VALUES(-9007199254740993,'ext'),(-9007199254740992,'mid');
@@ -792,10 +736,7 @@ run_test "tombstone_sharing_extended_prefix_does_not_hide_row" \
 
 db_rm "$DB"
 
-# A committed prefix-equal key plus a committed extended-numeric neighbour
-# makes the tree scan land on the bound with res<0. Comparing the neighbour
-# then cleared eqSeen, so SeekGT took one step onto a pending twin of the
-# same bound instead of walking past every prefix match.
+# Committed prefix-equal + extended-numeric neighbour cleared eqSeen; SeekGT stepped onto a pending twin.
 run_test "gt_excludes_pending_twin_of_extended_bound" \
   "CREATE TABLE t(k INTEGER, j TEXT, a, PRIMARY KEY(k, j));
    INSERT INTO t VALUES(-9007199254740994, 'A', 1);
@@ -811,8 +752,6 @@ run_test "gt_excludes_pending_twin_of_extended_bound" \
 
 db_rm "$DB"
 
-# All three adjacent keys pending at once: the bounds must exclude the rows they
-# name and the range must land on exactly the one between them.
 run_test "adjacent_extended_keys_respect_both_bounds" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
    BEGIN;
@@ -831,8 +770,7 @@ run_test "adjacent_extended_keys_respect_both_bounds" \
 
 db_rm "$DB"
 
-# Deleted and re-inserted in one transaction, so the live row is a pending
-# insert sitting behind a pending tombstone at the same key.
+# Delete+reinsert: live row is a pending insert behind a tombstone at the same key.
 run_test "reinserted_extended_key_is_reachable_by_range" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
    INSERT INTO t VALUES(-9007199254740993,'old');
@@ -851,7 +789,6 @@ run_test "reinserted_extended_key_is_reachable_by_range" \
 
 db_rm "$DB"
 
-# The same landing reached while stepping backwards.
 run_test "backward_scan_reaches_pending_extended_keys" \
   "CREATE TABLE t(k NUMERIC PRIMARY KEY, b TEXT);
    BEGIN;
@@ -865,12 +802,7 @@ run_test "backward_scan_reaches_pending_extended_keys" \
 
 db_rm "$DB"
 
-# A backward seek whose bound is below every row lands above the bound, and the
-# step that follows has to move down and find nothing. The pending-row candidate
-# for that step is chosen from a lower-bound search, so it is always the entry
-# before the landing -- keeping the landing itself made a pending row above the
-# cursor the answer to a step that has to move down, and a backward scan
-# returned it.
+# Backward step from a below-all landing must move down, not keep a pending row above the cursor.
 DB=/tmp/test_txn_backward_landing_$$.db; db_rm "$DB"
 
 run_test "backward_seek_below_all_rows_finds_nothing" \
@@ -890,9 +822,7 @@ none
 
 db_rm "$DB"
 
-# The ordering that reaches the same step through a plan rather than a bound:
-# DESC NULLS FIRST is the one ordering an index cannot serve by walking
-# backwards, so it scans the NULL region separately and re-seeks for the rest.
+# DESC NULLS FIRST cannot walk an index backwards; it re-seeks after the NULL region.
 run_test "desc_nulls_first_does_not_repeat_pending_row" \
   "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
    CREATE INDEX i_a ON t(a);
@@ -910,12 +840,7 @@ run_test "desc_nulls_first_does_not_repeat_pending_row" \
 
 db_rm "$DB"
 
-# Reversing direction mid-scan. A prefix seek walks forward past the matching
-# range so the step back can land on the last match, which leaves both sides of
-# the merge primed for forward travel: the pending index parked past its last
-# entry, and the tree cursor above the row -- or run off the end entirely. A
-# backward step that trusts either one skips every row underneath, so these
-# assert the rows on the far side of the reversal are still served.
+# Prefix seek parks both merge sides for forward travel; a backward step that trusts them skips rows underneath.
 DB=/tmp/test_txn_reverse_$$.db; db_rm "$DB"
 
 run_test "reversal_serves_pending_null_row" \
@@ -948,8 +873,6 @@ run_test "reversal_serves_committed_null_row" \
 
 db_rm "$DB"
 
-# Three rows spanning the reversal, so the NULL region and the rows above it are
-# both crossed, and a pending row sits among them.
 run_test "reversal_across_null_region_keeps_order" \
   "CREATE TABLE t(k TEXT PRIMARY KEY, a, b TEXT) WITHOUT ROWID;
    CREATE INDEX i_a ON t(a);

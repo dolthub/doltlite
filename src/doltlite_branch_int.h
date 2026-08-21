@@ -1,8 +1,6 @@
 #ifndef DOLTLITE_BRANCH_INT_H
 #define DOLTLITE_BRANCH_INT_H
 
-/* Private declarations shared by the branch/checkout implementation modules. */
-
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
@@ -25,5 +23,5 @@ extern sqlite3_module doltliteRemoteBranchesModule;
 void doltCheckoutFunc(sqlite3_context*, int, sqlite3_value**);
 void doltConnectBranchFunc(sqlite3_context*, int, sqlite3_value**);
 
-#endif /* DOLTLITE_BRANCH_INT_H */
+#endif
 

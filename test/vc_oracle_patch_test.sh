@@ -12,9 +12,7 @@ fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Compare the operation stream and normalized data SQL with Dolt. Identifier
-# quotes and insignificant spaces are removed before hex encoding so CSV
-# parsing cannot confuse commas inside generated statements.
+# Strip identifier quotes/spaces before hex so CSV cannot split on commas in SQL.
 oracle_data() {
   local name="$1" setup="$2" args="$3" where="${4:-1}"
   local dir="$TMPROOT/$name"
@@ -91,8 +89,7 @@ oracle_error() {
   fi
 }
 
-# Apply both directions of a generated patch and compare a caller-supplied
-# schema+data fingerprint. setup must create tags named base and target.
+# Both patch directions vs a fingerprint. setup must create tags base and target.
 apply_bidirectional() {
   local name="$1" setup="$2" fingerprint_sql="$3"
   local dir="$TMPROOT/apply_$name"
@@ -268,9 +265,7 @@ UPDATE t SET v='main' WHERE pk=1;
 SELECT dolt_commit('-A','-m','main');
 " "'feature...main'" "diff_type='data'"
 
-# This matrix is ported from Dolt's "using branch refs different ways" patch
-# test. It checks explicit, two-dot, and both three-dot directions against a
-# divergent history with simultaneous schema and row changes.
+# Explicit, two-dot, and both three-dot directions vs Dolt.
 branch_matrix_setup="
 CREATE TABLE t(pk INTEGER PRIMARY KEY, c1 TEXT, c2 TEXT);
 INSERT INTO t VALUES(1,'one','two');
@@ -300,8 +295,7 @@ oracle_data branch_three_dot_to_branch "$branch_matrix_setup" \
 oracle_data branch_three_dot_to_main "$branch_matrix_setup" \
   "'branch1...main'" "diff_type='data'"
 
-# Dolt accepts both the old and new names as a filter for a rename, including
-# when the renamed table also receives new data in the same revision.
+# Dolt accepts both old and new names as a rename filter (including new data).
 rename_oracle_setup="
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b INTEGER);
 INSERT INTO t1 VALUES(1,2);
@@ -335,9 +329,7 @@ oracle_shape working_to_working_empty "$workspace_matrix_setup" \
 oracle_shape staged_to_staged_empty "$workspace_matrix_setup" \
   "'STAGED..STAGED'" "count(*)"
 
-# Exercise enough ordered changes to span many prolly chunks. Exact normalized
-# statements are still compared to Dolt, so this checks both diff iteration
-# across internal nodes and globally stable statement ordering.
+# Enough ordered changes to span prolly chunks; compare exact statement order.
 scale_setup="CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);"
 scale_values=""
 for i in $(seq 1 400); do
@@ -385,8 +377,7 @@ oracle_error bad_range_from_ref "$error_setup" \
 oracle_error bad_range_to_ref "$error_setup" \
   "SELECT * FROM dolt_patch('HEAD~1..missing-ref','t');"
 
-# SQLite-specific verification: generate a schema+data patch, reset to the
-# source revision, execute every statement, and compare the target fingerprint.
+# Apply generated patch after reset; compare the target fingerprint.
 apply_dir="$TMPROOT/apply_schema"
 mkdir -p "$apply_dir"
 apply_db="$apply_dir/db"
@@ -417,7 +408,7 @@ else
 fi
 vc_oracle_assert_match apply_schema_and_data "$actual_fingerprint" "$target_fingerprint"
 
-# Literal round-trip covers quotes, embedded NUL text, blobs, reals and NULL.
+# Quotes, embedded NUL, blobs, reals, NULL.
 literal_dir="$TMPROOT/apply_literals"
 mkdir -p "$literal_dir"
 literal_db="$literal_dir/db"
@@ -440,9 +431,7 @@ else
 fi
 vc_oracle_assert_match apply_literal_round_trip "$actual_fingerprint" "$target_fingerprint"
 
-# A pure table rename should be represented as a rebuild that remains
-# executable, including quoted identifiers and an index recreated under the
-# new table name.
+# Table rename as an executable rebuild, including quoted ids and the index.
 rename_dir="$TMPROOT/apply_rename"
 mkdir -p "$rename_dir"
 rename_db="$rename_dir/db"
@@ -469,8 +458,7 @@ else
 fi
 vc_oracle_assert_match apply_table_rename "$actual_fingerprint" "$target_fingerprint"
 
-# Ported from Dolt's WORKING/STAGED schema test: rename, drop, and add columns
-# together, then prove both forward and reverse generated patches execute.
+# Rename/drop/add columns; both generated directions must execute.
 columns_dir="$TMPROOT/apply_columns"
 mkdir -p "$columns_dir"
 columns_db="$columns_dir/db"
@@ -497,8 +485,7 @@ else
 fi
 vc_oracle_assert_match apply_column_rename_drop_add "$actual_fingerprint" "$target_fingerprint"
 
-# Bidirectional application matrix. These cases target record layouts and DDL
-# interactions that simple statement comparison cannot validate.
+# Record layouts and DDL that statement comparison cannot validate.
 apply_bidirectional table_add_drop_multi_table "
 CREATE TABLE common(pk INTEGER PRIMARY KEY,v TEXT);
 CREATE TABLE old_table(pk INTEGER PRIMARY KEY,v TEXT);
@@ -795,10 +782,7 @@ PRAGMA integrity_check;
 "
 
 
-# Views are emitted as DDL (Dolt writes dolt_schemas rows instead — dialect
-# divergence): a changed view drops and recreates, a new one creates, and
-# creates run after all table statements since a view may reference any
-# table. Bidirectional apply covers the dropped-view direction too.
+# Views as DDL (Dolt uses dolt_schemas); creates after tables; bidirectional drop.
 apply_bidirectional view_redefine_and_add "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 CREATE VIEW v_old AS SELECT id FROM t;
@@ -815,9 +799,7 @@ SELECT group_concat(name||'='||replace(sql,' ',''),';') FROM (SELECT name, sql F
 SELECT group_concat(id||':'||v,',') FROM (SELECT * FROM t ORDER BY id);
 "
 
-# A quoted table name containing a paren must not split the CREATE body at
-# the wrong position: the rebuild's temp-table statement has to stay
-# executable SQL.
+# Quoted table name with a paren must not split the CREATE body.
 apply_bidirectional quoted_paren_table_name "
 CREATE TABLE \"we (them)\"(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO \"we (them)\" VALUES(1,'x');

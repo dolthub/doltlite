@@ -100,9 +100,8 @@ static struct TableEntry *addFindEntryByName(
   return 0;
 }
 
-/* Catalog name->entry index over the shared DoltliteNameIndex, which reads
-** names through the live array so it survives dolt_commit -A rewriting entry
-** names in place. */
+/* Catalog name->entry index over DoltliteNameIndex; reads live array names
+** so it survives dolt_commit -A rewriting names in place. */
 int addNameIndexInit(
   AddNameIndex *pIdx,
   struct TableEntry *aEntry,
@@ -158,11 +157,8 @@ void doltliteAlignStagedEntriesToWorking(
   addNameIndexFree(&workingIdx);
 }
 
-/* Move staged entries whose tables no longer exist in working onto fresh
-** numbers above both domains. Alignment cannot renumber them (nothing to
-** align to), and the number they hold may have been reused by the working
-** domain for a different table. Rows follow through the master composer,
-** which stamps old-sourced table rows from the final entry numbering. */
+/* Move staged entries whose tables are gone from working onto fresh numbers;
+** their old numbers may have been reused. */
 void doltliteRenumberStaleStagedEntries(
   struct TableEntry *aStaged, int nStaged,
   struct TableEntry *aWorking, int nWorking
@@ -239,10 +235,8 @@ static int addWriteStagedCatalog(
   return rc;
 }
 
-/* True when the two catalogs' index schema rows for zTable differ: any
-** index added, dropped, re-targeted, or redefined. Index changes carry no
-** named catalog entry, so every surface that reports per-table change
-** (status, the diff summary) attributes them through this comparison. */
+/* True when the catalogs' index schema rows for zTable differ. Index
+** changes have no named catalog entry, so status/diff use this. */
 int doltliteIndexSchemaRowsDifferForTable(
   SchemaEntry *aA, int nA,
   SchemaEntry *aB, int nB,
@@ -278,9 +272,8 @@ int doltliteIndexSchemaRowsDifferForTable(
   return nMatchA!=nBForTable;
 }
 
-/* True when the final staged entry list contains a table entry named
-** zTbl. Index entries follow their parent table through -a staging, and
-** the parent's presence decides whether an index entry belongs at all. */
+/* True when the staged list has a table entry named zTbl. Index entries
+** follow their parent through -a staging. */
 int amTableStagedByName(struct TableEntry *aStaged, int nStaged,
                                const char *zTbl){
   int i;
@@ -401,9 +394,8 @@ static int addStageAllTables(
   return rc;
 }
 
-/* Remove unnamed (index) staged entries whose parent table is zTable,
-** resolving parents through the staged catalog's own schema rows — entry
-** numbers do not carry across catalogs. */
+/* Remove unnamed (index) staged entries of zTable, resolving parents
+** through the staged schema; entry numbers do not carry across catalogs. */
 void addRemoveIndexEntriesOfTable(
   struct TableEntry *aStaged,
   int *pnStaged,
@@ -433,8 +425,7 @@ void addRemoveIndexEntriesOfTable(
   }
 }
 
-/* Stage zTable's index entries from the working catalog alongside its
-** table entry: an index travels with its table through staging. */
+/* Stage zTable's index entries from working; an index travels with its table. */
 int addAppendIndexEntriesOfTable(
   sqlite3_context *context,
   struct TableEntry **paStaged,
@@ -466,9 +457,7 @@ int addAppendIndexEntriesOfTable(
   return SQLITE_OK;
 }
 
-/* Virtual tables persist through their shadow tables: staging a vtab by
-** name must carry the shadows (and their indexes) along, exactly as index
-** entries travel with ordinary tables. */
+/* Staging a vtab by name must carry its shadow tables (and their indexes). */
 static int addStageShadowTablesOf(
   sqlite3 *db,
   sqlite3_context *context,
@@ -528,11 +517,8 @@ static int addStageShadowTablesOf(
   return SQLITE_OK;
 }
 
-/* Remove staged entries for shadow tables of a dropped virtual table. The
-** vtab is gone from the live schema, so shadows are identified through the
-** staged catalog's own rows: table rows prefixed "<zTable>_" whose parent
-** row is a CREATE VIRTUAL TABLE statement and which no longer exist in
-** working. */
+/* Drop staged shadow entries of a dropped vtab via staged "<zTable>_"
+** tables whose parent is CREATE VIRTUAL TABLE and missing from working. */
 static void addRemoveShadowEntriesOfDroppedVtab(
   struct TableEntry *aStaged,
   int *pnStaged,
@@ -597,9 +583,8 @@ int doltliteStageNamedTables(
   SchemaEntry *aStagedSchema = 0;
   int nWorkSchema = 0;
   int nStagedSchema = 0;
-  /* Objects whose master rows follow WORKING in this operation: the named
-  ** tables (adds and staged drops) plus a staged vtab's shadows. Names are
-  ** borrowed from the argv values and schema arrays, which outlive use. */
+  /* Master rows that follow WORKING: named tables plus a staged vtab's shadows.
+  ** Names are borrowed from argv/schema arrays. */
   char **azTouched = 0;
   int nTouched = 0;
 
@@ -669,10 +654,8 @@ int doltliteStageNamedTables(
       if( ignored ) continue;
     }
 
-    /* Virtual tables carry no catalog entry of their own (schema row
-    ** only), so the entry-based flow below cannot see them: their commit
-    ** content IS the shadow tables. Stage those, and adopt the working
-    ** master so the vtab's schema row travels too. */
+    /* Vtabs have no catalog entry; commit content is the shadow tables. Stage
+    ** those and adopt the working master so the vtab schema row travels too. */
     {
       Table *pLive = sqlite3FindTable(db, zTable, "main");
       if( pLive && IsVirtual(pLive) ){
@@ -712,8 +695,7 @@ int doltliteStageNamedTables(
         }
       }
       if( !found && findSchemaEntry(aStagedSchema, nStagedSchema, zTable) ){
-        /* A dropped virtual table has a staged schema row but no entry;
-        ** the master adoption below stages the row's removal. */
+        /* Dropped vtab: staged schema row but no entry; master adoption stages removal. */
         found = 1;
       }
       if( found ){
@@ -764,11 +746,8 @@ int doltliteStageNamedTables(
         int iRetired = -1;
         struct TableEntry *pRenameMate = 0;
         updateMaster = 1;
-        /* A staged rename pairs by content identity, never by a bare
-        ** number match: table numbers are canonical-by-sorted-name, so a
-        ** drop reuses its number for the next table (a drop plus a create
-        ** is not a rename), and a rename that shifts the sort order
-        ** changes its number (still one object). */
+        /* Rename pairs by content identity, not number: numbers are
+        ** canonical-by-sorted-name (drop+create reuses; sort-shift rename changes). */
         rc = doltliteCatalogRenameMate(db, aStaged, nStaged,
                                        aWorking, nWorking,
                                        &aWorking[j], 0, &pRenameMate);
@@ -781,10 +760,8 @@ int doltliteStageNamedTables(
           int nameMatch = aStaged[k].zName && aWorking[j].zName
             && strcmp(aStaged[k].zName, aWorking[j].zName)==0;
           int rootMatch = aStaged[k].iTable==iTable;
-          /* An unnamed staged entry on a bare number match can be a
-          ** cross-domain collision with an index entry; pair only when
-          ** the staged catalog's own schema rows say the entry at this
-          ** number is this very table. */
+          /* An unnamed staged entry on a number match may be an index; pair only
+          ** when the staged schema says this number is this table. */
           int unnamedRootMatch = 0;
           int renameRootMatch = (pRenameMate==&aStaged[k]);
           if( rootMatch && !aStaged[k].zName && aWorking[j].zName ){
@@ -806,9 +783,8 @@ int doltliteStageNamedTables(
               || (aStaged[k].zName && aWorking[j].zName
                   && strcmp(aStaged[k].zName, aWorking[j].zName)!=0);
             char *zDup;
-            /* A rename retires the old name: its rows (and its indexes'
-            ** rows, keyed by the old tbl_name) must follow WORKING too,
-            ** where they no longer exist. */
+            /* A rename retires the old name; its rows (and old-tbl_name indexes)
+            ** must follow WORKING too. */
             if( nameChanged && aStaged[k].zName ){
               ADDNAMED_TOUCH(aStaged[k].zName);
               iRetired = nTouched-1;
@@ -834,10 +810,8 @@ int doltliteStageNamedTables(
             return rc;
           }
         }
-        /* An index travels with its table: replace whatever index entries
-        ** the staged catalog carried for this table with the working ones.
-        ** A staged rename's index entries resolve through the OLD name in
-        ** the staged schema rows, so the retired name's entries go too. */
+        /* Indexes travel with the table. A staged rename's index entries resolve
+        ** through the OLD name, so drop the retired name's entries too. */
         addRemoveIndexEntriesOfTable(aStaged, &nStaged,
                                      aStagedSchema, nStagedSchema, zTable);
         if( iRetired>=0 ){
@@ -866,12 +840,8 @@ int doltliteStageNamedTables(
     }
   }
 
-  /* Settle the final numbering before composing the master, so the
-  ** composed rows can follow it: alignment moves same-named entries to
-  ** working numbers, and entries whose tables no longer exist in working
-  ** move off numbers the working domain may have reused for different
-  ** tables (a bare number collision makes the serialized catalog
-  ** ambiguous and can pair a table with another object's schema row). */
+  /* Settle numbering before composing the master. Alignment uses working
+  ** numbers; stale entries move off numbers working may have reused. */
   doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
   doltliteRenumberStaleStagedEntries(aStaged, nStaged, aWorking, nWorking);
 
@@ -879,12 +849,8 @@ int doltliteStageNamedTables(
     struct TableEntry *pWorkingMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
     struct TableEntry *pStagedMaster = doltliteFindTableByNumber(aStaged, nStaged, 1);
     if( pWorkingMaster ){
-      /* The staged master must share the entries' numbering domain, but a
-      ** wholesale adoption would carry unstaged view and trigger changes
-      ** into the commit (Dolt keeps them out of a named add). Compose the
-      ** master: table and index rows from working, view and trigger rows
-      ** from the previously staged state, numbered from the final entry
-      ** list. */
+      /* Compose staged master: table/index from working, view/trigger from prior
+      ** staged. Wholesale adoption would commit unstaged view/trigger changes. */
       ProllyHash composedRoot;
       rc = doltliteBuildNamedStageMasterRoot(db,
               &pWorkingMaster->root, pWorkingMaster->flags,

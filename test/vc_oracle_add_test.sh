@@ -509,10 +509,7 @@ SELECT dolt_add('nonexistent');
 "
 
 
-# ── schema objects through staging ────────────────────────────────
-# Views and triggers surface as dolt_schemas in status; index changes
-# mark their parent table. Named adds must not stage either kind of
-# entry-less object, while -A carries them.
+# Named add skips views/triggers/index-only; -A stages them.
 
 oracle "view_unstaged_after_named_add" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

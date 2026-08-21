@@ -1,18 +1,6 @@
 #!/bin/bash
-#
-# Cross-op oracle: when a single version-control op produces BOTH row conflicts
-# and constraint violations, merge / cherry-pick / revert / pull must leave the
-# same unfinished post-state as Dolt under an open transaction:
-#   conflicts count, constraint-violation count, and the surviving row set.
-#
-# Autocommit rolls both engines back (covered elsewhere). This suite focuses on
-# the plain BEGIN path that keeps both surfaces inspectable — the finish-path
-# alignment after pull started calling merge internals directly.
-#
-# Dolt needs @@autocommit=0 and @@dolt_allow_commit_conflicts=1 so the failed
-# op does not abort the session before the post-state query. Doltlite injects
-# BEGIN immediately before the op under test (same pattern as
-# vc_oracle_constraint_violations_test.sh).
+# Dual conflict+CV post-state vs Dolt under an open txn (autocommit rolls back).
+# Dolt: @@autocommit=0 and @@dolt_allow_commit_conflicts=1. Doltlite: inject BEGIN.
 
 set -u
 set -o pipefail
@@ -29,7 +17,6 @@ normalize() {
   tr -d '\r' | sed -E 's/, /,/g' | sort
 }
 
-# Post-state fingerprint: conflicts | CVs | ordered rows.
 POST_QUERY_DL="SELECT 'S|' || (SELECT count(*) FROM dolt_conflicts) || '|' ||
   (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
   (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM
@@ -39,8 +26,7 @@ POST_QUERY_DT="SELECT CONCAT('S|',
   (SELECT COUNT(*) FROM dolt_constraint_violations), '|',
   (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t));"
 
-# Dual-outcome seed: same cell edit (conflict on v) plus unique collision on u.
-# Shared by merge and cherry-pick.
+# Same-cell edit (conflict on v) plus unique collision on u.
 DUAL_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base'),(2,2,'base');
@@ -54,8 +40,7 @@ UPDATE t SET v='main', u=9 WHERE id=1;
 SELECT dolt_commit('-Am','main');
 "
 
-# Inject BEGIN immediately before the named VC op so the open txn preserves
-# conflict/CV state for the following query (Dolt uses @@autocommit=0 instead).
+# BEGIN just before the VC op so the open txn preserves conflict/CV state.
 oracle_tx_poststate() {
   local name="$1" setup="$2" op_pat="$3"
   local dir="$TMPROOT/$name"
@@ -104,13 +89,8 @@ SELECT dolt_cherry_pick('feat');
 " "dolt_cherry_pick"
 
 echo "--- revert: dual conflict + unique CV under open txn ---"
-# History: base -> main sets u=9 on id=1 -> feat-side unique on id=2 lands via
-# a later commit that also edits v on id=1 so revert of the mid commit conflicts
-# on v while the unique CV remains from the side-effect shape.
-# Simpler revert dual path: after init, commit A sets (1,9,a); commit B sets
-# (2,1,b) taking u=1; revert of A wants to restore id=1 to (1,1,base) but u=1 is
-# now on id=2 → unique CV, and if B also changed id=1's v we get a conflict.
-# Revert of HEAD~1 where HEAD diverged cell-wise from what A introduced:
+# Revert of A: restore id=1 to (1,1,base) but u=1 is now on id=2 (unique CV);
+# B also changed id=1's v (conflict).
 oracle_tx_poststate "revert_conflict_and_cv" \
 "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
@@ -125,18 +105,7 @@ SELECT dolt_revert('HEAD~1');
 " "dolt_revert"
 
 echo "--- pull: divergent remote merge yields dual conflict + CV ---"
-# Build a file:// remote at the dual-outcome state by pushing both sides from
-# a source that holds main and feat, then clone onto main and pull feat through
-# a tracking ref is awkward. Instead: push main at the dual-seed main tip, push
-# feat, clone, checkout main (at main tip), then pull origin feat after renaming
-# tracking — doltlite pull merges origin/branch into current when non-ff.
-#
-# Practical shape matching remotes suites: source pushes main (base+main side)
-# and feat (base+feat side). Consumer clones (on main). Consumer is already at
-# main tip; pull origin main is up-to-date. To force a merge pull on main:
-# consumer rewinds? Not exposed. Alternative: consumer starts from clone of
-# base-only remote, makes main-side edits, remote advances with feat-side
-# merged into main on the source.
+# Clone of base-only remote, local main-side edits, remote advances with feat-side.
 pull_dual_flow() {
   local name="$1"
   local dir="$TMPROOT/$name"
@@ -145,14 +114,6 @@ pull_dual_flow() {
   local remote="file://$dir/remote.db"
   local src="$dir/src.db" con="$dir/con.db"
 
-  # Source: base, push; main-side commit; push. feat side is applied on source
-  # main as a second push after consumer has forked with the dual main side...
-  # Cleaner dual:
-  # 1) source: init base, push remote
-  # 2) clone consumer
-  # 3) source: apply feat-side changes on main, push
-  # 4) consumer: apply main-side changes (conflict+unique), commit
-  # 5) consumer: pull origin main → merge of source's feat-side into local
   printf '%s\n' "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base'),(2,2,'base');
@@ -182,7 +143,6 @@ SELECT dolt_pull('origin','main');
 $POST_QUERY_DL
 " | "$DOLTLITE" "$con" 2>"$dir/dl_pull.err" | grep '^S|' | tr -d '"' | normalize)
 
-  # Dolt remote is a directory repo.
   local dt_remote="$dir/dt_remote" dt_src="$dir/dt_src" dt_con="$dir/dt_con"
   mkdir -p "$dt_remote" "$dt_src" "$dt_con"
   (
@@ -194,7 +154,6 @@ INSERT INTO t VALUES (1,1,'base'),(2,2,'base');
 CALL dolt_commit('-Am','init');
 " >/dev/null 2>"$dir/dt_seed.err"
     "$DOLT" remote add origin "file://$dt_remote" >/dev/null 2>>"$dir/dt_seed.err"
-    # Dolt file remotes are bare clones of the repo path.
     "$DOLT" push --set-upstream origin main >/dev/null 2>>"$dir/dt_seed.err" || \
       "$DOLT" push origin main >/dev/null 2>>"$dir/dt_seed.err"
   )

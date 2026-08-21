@@ -169,8 +169,7 @@ static int deserializeAllConflicts(
     if( rc!=SQLITE_OK ) goto conflicts_cleanup;
     nc = dlReadU32(&r);
     if( r.err || nc<0 ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
-    /* Reject impossible counts up front: each row needs at least one byte, so
-    ** nc can't exceed the bytes remaining. malloc64 avoids 32-bit overflow. */
+    /* nc cannot exceed remaining bytes; malloc64 avoids 32-bit overflow. */
     if( (sqlite3_uint64)nc > (sqlite3_uint64)(r.end - r.p) ){
       rc = SQLITE_CORRUPT; goto conflicts_cleanup;
     }
@@ -671,9 +670,7 @@ static int cfClose(sqlite3_vtab_cursor *cur){
   sqlite3_free(c); return SQLITE_OK;
 }
 
-/* Dolt lists a schema conflict in dolt_conflicts only when the conflicted
-** table exists in the working root.  A conflict whose "ours" side deleted
-** the table remains visible in dolt_schema_conflicts and dolt_status. */
+/* Schema conflicts appear here only if the table still exists in the working root. */
 static void cfPruneDeletedSchemaConflicts(sqlite3 *db, ConflictsCur *c){
   int i;
   int nOut = 0;

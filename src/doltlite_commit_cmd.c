@@ -58,9 +58,8 @@ static time_t dlWinTimegm(struct tm *pTm){
 #define strptime dlWinStrptime
 #define timegm dlWinTimegm
 #endif
-/* Parse dolt_commit's argv into opts. On a malformed option the context error
-** is set and a non-OK code returned; explicitTimestamp is left zero for the
-** caller to fill from --date after its own validation ordering. */
+/* Parse dolt_commit argv into opts. Malformed options set the context error.
+** explicitTimestamp stays 0 for the caller to fill from --date. */
 typedef struct DoltliteCommitOptions {
   const char *zMessage;
   const char *zAuthor;
@@ -131,10 +130,8 @@ static int doltliteCommitValidateAuthor(
   return rc;
 }
 
-/* Rebuild the staged catalog for `dolt_commit -a`, overlaying working-tree
-** changes for tables that already exist in HEAD onto the staged catalog, and
-** publish it as the session's staged catalog. On failure the context error is
-** set and a non-OK code returned. */
+/* Rebuild the staged catalog for dolt_commit -a: overlay working-tree
+** changes for tables that already exist in HEAD. */
 static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash;
@@ -227,10 +224,8 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     return rc;
   }
 
-  /* Names whose master rows follow WORKING in this operation: tables
-  ** overlaid from working and tables staged as deleted. Rename-kept and
-  ** staged-only tables keep their previous rows through the composed
-  ** master below. Names are borrowed from the catalog arrays. */
+  /* Master rows that follow WORKING: tables overlaid from working and
+  ** staged deletions. Rename-kept and staged-only keep prior rows. */
   azTouched = sqlite3_malloc((nWorking+nHead+1)*(int)sizeof(char*));
   if( !azTouched ){
     sqlite3_result_error_nomem(context);
@@ -278,11 +273,9 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     struct TableEntry *pStaged;
     struct TableEntry *pMate = 0;
     if( addNameIndexFind(&workingIdx, zName) ) continue;
-    /* A HEAD table missing from working is a deletion — unless it is the
-    ** old name of a working-tree rename. Dolt's -a leaves the rename in
-    ** the working tree (the new name reads as a new table, which -a never
-    ** stages); staging just this half commits the rename as a bare DROP
-    ** and the table's history is gone. */
+    /* A HEAD table missing from working is a deletion unless it is the old
+    ** name of a working-tree rename. -a must not stage that half (bare DROP
+    ** would drop the table's history). */
     rc = doltliteCatalogRenameMate(db, aHead, nHead, aWorking, nWorking,
                                    &aHead[k], 1, &pMate);
     if( rc!=SQLITE_OK ){
@@ -313,15 +306,10 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     k++;
   }
 
-  /* Index entries carry no name, so the by-name overlays above never
-  ** refresh them: the staged list still holds the old index roots under
-  ** tables whose data was just staged from working, committing a catalog
-  ** whose indexes disagree with their tables. Rebuild the unnamed
-  ** entries so each index follows its table's source: indexes of
-  ** working-sourced tables adopt the working entries, indexes kept for
-  ** staged-only tables stay, and indexes of deleted tables go away.
-  ** Parents resolve through each catalog's own schema rows because entry
-  ** numbers are meaningless across catalogs. */
+  /* Index entries are unnamed, so by-name overlays never refresh them.
+  ** Rebuild: working-sourced tables take working indexes, staged-only keep
+  ** theirs, deleted tables drop them. Parents resolve through each catalog's
+  ** own schema rows. */
   {
     SchemaEntry *aWorkSchema = 0, *aOldSchema = 0;
     int nWorkSchema = 0, nOldSchema = 0;
@@ -358,10 +346,8 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
        && amTableStagedByName(aStaged, nStaged, zParent)
        && !(addNameIndexFind(&workingIdx, zParent)
             && addNameIndexFind(&headIdx, zParent)) ){
-        /* Staged-sourced index: its table was staged explicitly (or is a
-        ** rename kept out of -a) and is not refreshed from working. The
-        ** composed master keeps its previous rows, so the entry keeps
-        ** its previous number and pairs as stored. */
+        /* Staged-sourced index: table was staged explicitly (or a rename
+        ** kept out of -a). Keep its previous number so it pairs as stored. */
         k2++;
         continue;
       }
@@ -422,12 +408,9 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     freeSchemaEntries(aOldSchema, nOldSchema);
   }
 
-  /* Settle the final numbering, then compose the staged master so its
-  ** rows follow it: touched tables' rows come from working, everything
-  ** else keeps its previous rows stamped to the final entry numbers.
-  ** Wholesale adoption of the working master dropped the rows of tables
-  ** deliberately kept out of -a (a working-tree rename), and the
-  ** serializer then dropped their unpairable entries from the commit. */
+  /* Settle numbering, then compose the staged master: touched tables from
+  ** working, everything else keeps prior rows. Wholesale working-master
+  ** adoption dropped rename-kept tables from the commit. */
   doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
   doltliteRenumberStaleStagedEntries(aStaged, nStaged, aWorking, nWorking);
   {
@@ -484,9 +467,8 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
   return SQLITE_OK;
 }
 
-/* Resolve the parent, author, and message (handling --amend and --author
-** parsing) and store the new commit object, returning its hash via
-** pCommitHashOut. On failure the context error is set and non-OK returned. */
+/* Resolve parent, author, and message (--amend/--author) and store the
+** commit; hash in pCommitHashOut. */
 static int doltliteCommitCreateObject(
   sqlite3 *db,
   sqlite3_context *context,
@@ -541,9 +523,8 @@ static int doltliteCommitCreateObject(
       }
       memcpy(&parentHash, pParent, sizeof(ProllyHash));
     }
-    /* Carry the remaining parents. Amending a merge with only its first parent
-    ** drops the merged branch out of ancestry, so later merge bases are
-    ** computed against a history that no longer records the merge. */
+    /* Carry remaining parents. Amending a merge with only its first parent
+    ** drops the merged branch out of ancestry. */
     {
       int nParent = doltliteCommitParentCount(&headCommit);
       int i;
@@ -561,11 +542,8 @@ static int doltliteCommitCreateObject(
     doltliteCommitClear(&headCommit);
   }
 
-  /* A commit concluding a merge owes the merged branch a second parent, or the
-  ** merge leaves no trace in ancestry and later merge bases are computed
-  ** against a history that never recorded it. Only a real merge records a
-  ** source commit here: cherry-pick, revert, and rebase replay leave it empty
-  ** because their result is a single-parent commit. */
+  /* A merge commit needs a second parent. Cherry-pick, revert, and rebase
+  ** replay leave the source empty (single-parent result). */
   {
     u8 isMerging = 0;
     ProllyHash mergeCommit;
@@ -640,8 +618,8 @@ static void doltliteCommitFunc(
     return;
   }
 
-  /* Top-level SAVEPOINT is sealed before option validation because Dolt keeps
-  ** that SQL transaction boundary durable even when dolt_commit later errors. */
+  /* Seal top-level SAVEPOINT before option validation: Dolt keeps that
+  ** SQL txn durable even when dolt_commit later errors. */
   if( sealTopLevel ){
     rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
     if( rc!=SQLITE_OK ){
@@ -722,8 +700,7 @@ static void doltliteCommitFunc(
    && (!db->autoCommit
        || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
        || db->pSavepoint) ){
-    /* Plain BEGIN and nested SAVEPOINT cases stay rollbackable until argument
-    ** validation and basic commit guards have succeeded. */
+    /* Plain BEGIN and nested SAVEPOINT stay rollbackable until validation. */
     rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, sqlite3_errmsg(db), -1);

@@ -1,12 +1,5 @@
 #!/bin/bash
-#
-# The live session and the persisted catalog must never diverge: after any
-# schema-changing commit the connection adopts the canonical catalog form
-# (sorted rows, positional numbering), so sqlite_master reads identically
-# in-session, after dolt_commit, and after reopen -- and the canonical form
-# makes the catalog hash independent of DDL construction order. Before this
-# held, reloads scrambled rowid bindings mid-connection (fts shadow tables
-# were the visible casualty) and OOM-retry harnesses saw phantom DDL.
+# After a schema commit the session adopts the canonical catalog; hash is independent of DDL order.
 
 set -u
 

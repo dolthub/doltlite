@@ -12,13 +12,7 @@
 #define N_ROUNDS 4
 #define DEFAULT_RENAME_ROUNDS 50
 
-/* Retry budgets here are wall clock, not attempt counts. An attempt count is
-** not a bound on anything: the same 600 attempts are seconds when contention
-** resolves quickly and tens of minutes when each one blocks out a busy
-** timeout, so it cannot express "keep trying for a while, then say so".
-** Under ThreadSanitizer, which runs the same work roughly 10x slower on a
-** two-core runner, that ambiguity is the difference between passing and a
-** silent give-up. threadtest5 buys the same headroom with THREADTEST5_BUSY_MS. */
+/* Wall-clock retry budgets, not attempt counts (TSan is ~10x slower). */
 #define STRESS_BUSY_MS_DEFAULT 60000
 
 static sqlite3_int64 nowMs(void){
@@ -43,12 +37,7 @@ struct Budget {
   int attempts;
 };
 
-/* Budgets nest -- commitBranchRow retries around execSqlWithRetry, which
-** retries around a statement -- so a per-call budget alone bounds nothing: a
-** worker gets one per operation per round, and the product can outrun the CI
-** job's own timeout, turning a legible failure into a killed job. Each phase
-** therefore caps the budgets inside it, so the whole test is bounded by the
-** number of phases rather than by how deeply its retries happen to nest. */
+/* Nested retries: cap inner budgets per phase so the product cannot outrun CI. */
 static sqlite3_int64 gPhaseDeadline = 0;
 
 static void startPhase(void){
@@ -72,11 +61,7 @@ static int budgetLive(Budget *p){
   return nowMs() < p->deadline;
 }
 
-/* Every give-up path reports itself. A bare SQLITE_BUSY out of a retry loop
-** reaches the caller with nothing set on the handle, so the worker used to
-** report "rc=5 msg=not an error" without naming what it had been waiting on.
-** budgetLive() counts the check that ends the loop, so zero attempts here
-** means the phase budget was already spent before this call ran at all. */
+/* Give-up must name the op. SQLITE_BUSY from a loop used to report "not an error". */
 static int budgetSpent(Budget *p, const char *zOp, int rc, const char *zMsg){
   fprintf(stderr, "gave up on %s after %d attempts in %dms; last rc=%d msg=%s\n",
           zOp, p->attempts - 1, stressBusyMs(), rc,
@@ -210,11 +195,7 @@ static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
   return rc;
 }
 
-/* The worker reopens between rounds, and an open that loses the race for the
-** store lock is as retryable as any other step here. Left unretried it was
-** also the only way out of a worker loop that reported no error at all: it
-** returns straight through the caller, and the fresh handle it leaves behind
-** answers sqlite3_errmsg() with "not an error". */
+/* Open racing the store lock is retryable; unretried it returned "not an error". */
 static int reopenDb(const char *path, sqlite3 **pDb){
   Budget budget;
   int rc = SQLITE_OK;
@@ -336,9 +317,7 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
       rc = queryTextWithRetry(db, sql, out, sizeof(out));
       if( rc==SQLITE_OK
        && (strlen(out)==40 || msgContains(out, "Already up to date")) ){
-        /* Never treat a merge result as success unless the worker row is
-        ** actually on main — a lost-update CAS clobber used to return a
-        ** 40-char hash while dropping a peer's already-merged rows. */
+        /* Hash is not success unless the worker row is on main (CAS clobber). */
         count = 0;
         snprintf(sql, sizeof(sql),
                  "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);

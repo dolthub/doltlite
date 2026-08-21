@@ -331,10 +331,7 @@ run_test_match "gc_taghist_diff" \
 
 db_rm "$DB"
 
-# A mark failure must name the unresolvable chunk (hash, source, rc), not
-# just "gc mark phase failed" — that hash is what makes a field report
-# actionable. Flipping the first WAL record's tag byte makes the chunks
-# behind it unreachable while the store still opens.
+# Mark failure must name the chunk (hash, source, rc). Flip the first WAL tag to make later chunks unreachable.
 DB=/tmp/test_gc_mark_diag_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');

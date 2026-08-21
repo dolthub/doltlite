@@ -67,8 +67,7 @@ void prollyCursorClose(ProllyCursor *cur);
 int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
                        const ProllyHash *pHash, u64 *pCount);
 
-/* Get pHash's node from cache, faulting it in from the store on a miss.
-** On SQLITE_OK *ppEntry is a held entry the caller must release. */
+/* Cache get, faulting from the store. Caller must release *ppEntry. */
 int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
                    const ProllyHash *pHash, ProllyCacheEntry **ppEntry);
 

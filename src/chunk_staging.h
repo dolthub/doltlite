@@ -11,12 +11,9 @@ struct ChunkStaging {
   ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
-  /* Parallel to aPending: symbolic trailing zero bytes per staged chunk. */
-  i64 *aPendingZeroTail;
+  i64 *aPendingZeroTail;  /* parallel to aPending: symbolic zero tails */
   ChunkIndexEntry *aRecent;
-  /* Parallel to aRecent: symbolic trailing zero bytes preserved for chunks
-  ** committed by this connection and still in the recent table. */
-  i64 *aRecentZeroTail;
+  i64 *aRecentZeroTail;   /* parallel to aRecent: symbolic zero tails */
   int nRecent;
   int nRecentAlloc;
   int nRecentUncommitted;

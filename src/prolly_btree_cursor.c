@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Cursor navigation, seeking, comparison, and payload access. */
-
 void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
     const u8 *pVal; int nVal; int nAvail;
@@ -235,8 +233,6 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   assert( pCur->mmActive );
   assert( pCur->pMutMap!=0 );
 #ifdef SQLITE_DEBUG
-  /* The deferral must still describe the mut-map landing it was armed on;
-  ** anything that repositions the merge state owes a cleared flag. */
   if( pCur->curIntKey && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
     ProllyMutMapEntry *eChk = 0;
     assert( orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &eChk)==SQLITE_OK );
@@ -269,11 +265,7 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   return rc;
 }
 
-/* Complete a table moveto whose merged repositioning was deferred: place
-** the merged cursor on the first live row >= cachedIntKey. When nothing at
-** or above the key survives, the cursor is left CURSOR_INVALID with the
-** merge state primed one past the end, so a backward step from here lands
-** on the last live row. */
+/* First live row >= cachedIntKey; if none, prime past EOF for a backward step. */
 static int deferredMergedSeekPosition(BtCursor *pCur){
   ProllyMutMapIter it;
   int res = 0;
@@ -297,8 +289,6 @@ static int deferredMergedSeekPosition(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-/* Complete a deferred merged seek forward: land on the first live row above
-** cachedIntKey (the key itself is known dead). */
 static int materializeDeferredMergedSeek(BtCursor *pCur){
   int res = 0;
   int rc;
@@ -309,25 +299,18 @@ static int materializeDeferredMergedSeek(BtCursor *pCur){
   if( rc!=SQLITE_OK ) return rc;
   if( res==0 ){
     pCur->eState = CURSOR_VALID;
-    /* Only a pure tree landing may serve the tree payload: on a BOTH
-    ** landing the mut-map entry shadows the tree row, and getCursorPayload
-    ** consults the cached payload before the merge source. */
+    /* BOTH shadows the tree; getCursorPayload prefers the cache. */
     if( pCur->mergeSrc==MERGE_SRC_TREE ){
       cacheCurrentTreePayloadIfIntKey(pCur);
     }
   }else{
-    /* Nothing live at or above the key: leave the merge state primed one
-    ** past the end so a backward step lands on the last live row. */
     pCur->mergeSrc = MERGE_SRC_BOTH;
     pCur->eState = CURSOR_INVALID;
   }
   return SQLITE_OK;
 }
 
-/* Complete a deferred merged seek backward: land on the last live row below
-** cachedIntKey, matching the res<0 contract the deferred moveto reported.
-** Used by the passive consumers (Eof and the payload/rowid readers), which
-** read the current position rather than stepping. */
+/* Last live row below cachedIntKey (res<0). For Eof/payload, not a step. */
 int materializeDeferredMergedSeekBackward(BtCursor *pCur){
   int res = 0;
   int rc;
@@ -361,19 +344,13 @@ static int mergeStepForward(BtCursor *pCur){
   rc = cursorNormalizeMmPhys(pCur);
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->deferredMergedSeek ){
-    /* The cursor conceptually sits on the hole left at cachedIntKey, so a
-    ** forward step means landing on the first live row above it. */
     rc = materializeDeferredMergedSeek(pCur);
     if( rc!=SQLITE_OK ) return rc;
     return pCur->eState==CURSOR_VALID ? SQLITE_OK : SQLITE_DONE;
   }
   rc = materializeDeferredTreeSeek(pCur, 1);
   if( rc!=SQLITE_OK ) return rc;
-  /* Mirror of the reversal re-seek in mergeStepBackward: backward travel
-  ** onto a mut-map row leaves the tree cursor below it (or run off the
-  ** front), and a forward step does not touch the tree for a MUT row, so
-  ** the merge would re-serve tree rows the scan already passed. Re-seek the
-  ** tree to this key and put it above. */
+  /* After a backward MUT landing, re-seek the tree above this key. */
   if( pCur->mergeStepDir < 0
    && pCur->mergeSrc==MERGE_SRC_MUT
    && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
@@ -393,18 +370,11 @@ static int mergeStepForward(BtCursor *pCur){
         rc = prollyCursorNext(&pCur->pCur);
         if( rc!=SQLITE_OK ) return rc;
       }else if( res==0 ){
-        /* The tree holds this key too, so the row is on both sides and the
-        ** step below has to advance both. */
         pCur->mergeSrc = MERGE_SRC_BOTH;
       }
     }
   }
-  /* A row reached by scanning backwards leaves the mut-map index at or below
-  ** it, which is what a further backward step wants. Going forward instead,
-  ** those entries are behind the cursor and must not be served again -- and one
-  ** of them may be the tombstone that masks the very tree row about to be
-  ** stepped onto. Normal forward scanning already satisfies this, so the loop
-  ** only does work after a direction change. */
+  /* After a reversal, skip mut-map entries now behind the cursor. */
   if( pCur->mergeSrc==MERGE_SRC_TREE && prollyCursorIsValid(&pCur->pCur) ){
     if( pCur->mmIdx < 0 ) pCur->mmIdx = 0;
     while( pCur->mmIdx < pCur->pMutMap->nEntries ){
@@ -433,22 +403,13 @@ static int mergeStepBackward(BtCursor *pCur){
   rc = cursorNormalizeMmPhys(pCur);
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->deferredMergedSeek ){
-    /* The cursor conceptually sits on the hole left at cachedIntKey. Seed
-    ** both sides at the first entries >= the key so the normal backward
-    ** step below retreats onto the last live row underneath it. */
     rc = deferredMergedSeekPosition(pCur);
     if( rc!=SQLITE_OK ) return rc;
     pCur->mergeSrc = MERGE_SRC_BOTH;
   }
   rc = materializeDeferredTreeSeek(pCur, -1);
   if( rc!=SQLITE_OK ) return rc;
-  /* Reversing onto a mut-map row leaves the tree side stale the same way. The
-  ** step below does not touch the tree cursor for a MUT row, so whatever
-  ** forward travel left it on -- a row above this one, or nothing at all once
-  ** it ran off the end -- stands in for "the next tree row below", and every
-  ** tree row underneath goes unserved. Re-seek it to this key and put it below.
-  ** Only on a reversal: a backward scan already leaves it correctly placed, and
-  ** an exhausted tree side would otherwise pay a seek per row. */
+  /* After a forward MUT landing, re-seek the tree below this key. */
   if( pCur->mergeStepDir > 0
    && pCur->mergeSrc==MERGE_SRC_MUT
    && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
@@ -468,18 +429,11 @@ static int mergeStepBackward(BtCursor *pCur){
         rc = prollyCursorPrev(&pCur->pCur);
         if( rc!=SQLITE_OK ) return rc;
       }else if( res==0 ){
-        /* The tree holds this key too, so the row is on both sides and the
-        ** step below has to retreat both. */
         pCur->mergeSrc = MERGE_SRC_BOTH;
       }
     }
   }
-  /* The mirror of the forward loop above. A row reached by scanning forwards
-  ** leaves the mut-map index at or above it, which is what a further forward
-  ** step wants; going backwards instead, those entries are ahead of the cursor
-  ** and the entry the step needs is below them. Left alone, an index parked past
-  ** the last entry reads as "no pending row below" and the rows under it are
-  ** never served -- which is how a reversal dropped a pending row entirely. */
+  /* After a reversal, walk mmIdx back onto the pending row below. */
   if( pCur->mergeSrc==MERGE_SRC_TREE && prollyCursorIsValid(&pCur->pCur) ){
     if( pCur->mmIdx >= pCur->pMutMap->nEntries ){
       pCur->mmIdx = pCur->pMutMap->nEntries - 1;
@@ -535,13 +489,7 @@ static int seedMutMapIterFromCursor(
   return SQLITE_NOTFOUND;
 }
 
-/* Resume a merged scan whose merge state a deferred write deactivated.
-** cachedIntKey is the logical position: the row the cursor sat on
-** (BTCF_ValidNKey) or the hole a delete left there (BTCF_DeleteKey). The
-** tree cursor is only a parking spot -- when the departed row was
-** mut-map-sourced it sits past every pending row between the key and the
-** next tree row, so seeding the step from it skips them. Re-seed both
-** sides strictly past the key and let mergeScan pick the next live row. */
+/* Resume after a write deactivated merge: re-seed both sides past cachedIntKey. */
 static int resumeDeactivatedMergedScan(BtCursor *pCur, int dir){
   ProllyMutMapIter it;
   i64 intKey = pCur->cachedIntKey;
@@ -573,13 +521,7 @@ static int resumeDeactivatedMergedScan(BtCursor *pCur, int dir){
   pCur->mmPhysIdx = -1;
   pCur->mmPhysActive = 0;
   pCur->mmActive = 1;
-  /* This re-seek supersedes any tree positioning the pre-write moveto
-  ** deferred; a surviving deferral would re-seek the tree back to the
-  ** departed key on the next step, skipping pending rows and re-serving
-  ** delete-masked ones. */
   pCur->deferredTreeSeek = 0;
-  /* The resume IS this scan's travel: a later reversal must compare
-  ** against it, not against whatever direction preceded the write. */
   pCur->mergeStepDir = (i8)(dir>0 ? 1 : -1);
   rc = mergeScan(pCur, dir, &res);
   if( rc!=SQLITE_OK ) return rc;
@@ -588,9 +530,6 @@ static int resumeDeactivatedMergedScan(BtCursor *pCur, int dir){
     return SQLITE_DONE;
   }
   pCur->eState = CURSOR_VALID;
-  /* Only a pure tree row may serve the tree payload: on a BOTH landing the
-  ** mut-map entry shadows the tree row, and getCursorPayload consults the
-  ** cached payload before the merge source. */
   if( pCur->mergeSrc==MERGE_SRC_TREE ){
     cacheCurrentTreePayloadIfIntKey(pCur);
   }
@@ -695,8 +634,7 @@ static SQLITE_INLINE int prollyBtCursorStepPrologue(
     return SQLITE_DONE;
   }
 
-  /* Faulted mid-scan: cached nodes are already released, so return the stored
-  ** error instead of advancing into freed memory. */
+  /* Faulted: nodes already released; do not step into freed memory. */
   if( pCur->eState==CURSOR_FAULT ){
     return pCur->skipNext;
   }
@@ -751,10 +689,7 @@ static int prollyCursorApplyMergeStep(BtCursor *pCur, int dir){
   return rc;
 }
 
-/* Fold a raw tree-step rc into cursor state. The tree step signals end-of-data
-** through eState, never by returning SQLITE_DONE, so returning SQLITE_DONE here
-** unambiguously means "went invalid" and lets callers skip the trailing
-** curFlags clear exactly as the open-coded versions did. */
+/* Tree steps never return SQLITE_DONE; map EOF eState to SQLITE_DONE. */
 static SQLITE_INLINE int prollyCursorFinishTreeStep(BtCursor *pCur, int rc){
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
@@ -780,9 +715,7 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
   rc = prollyBtCursorStepPrologue(pCur, 1, &immediate);
   if( immediate ) return rc;
 
-  /* Nothing follows the last row, and any write since would have cleared this
-  ** flag along with the merge state. Without this, a merged cursor parked by
-  ** BtreeLast steps forward into whichever side the backward scan left behind. */
+  /* BTCF_AtLast: a merged Last cursor must not step into leftover merge state. */
   if( pCur->mmActive && (pCur->curFlags & BTCF_AtLast)!=0 ){
     pCur->eState = CURSOR_INVALID;
     return SQLITE_DONE;
@@ -802,8 +735,7 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
          && (pCur->curFlags & (BTCF_ValidNKey|BTCF_DeleteKey))
          && !(prollyCursorIsValid(&pCur->pCur)
               && prollyCursorIntKey(&pCur->pCur)==pCur->cachedIntKey) ){
-    /* A tree cursor parked on the logical key seeds the fast branch below;
-    ** parked anywhere else it would skip the pending rows in between. */
+    /* Tree not on the logical key: resume from cachedIntKey, not the tree. */
     rc = ensureCursorMutMapOrder(pCur);
     if( rc!=SQLITE_OK ) return rc;
     rc = resumeDeactivatedMergedScan(pCur, 1);
@@ -871,12 +803,7 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
     ProllyMutMapIter it;
     rc = ensureCursorMutMapOrder(pCur);
     if( rc!=SQLITE_OK ) return rc;
-    /* The seek is a lower bound, so it lands on the first pending entry at or
-    ** above the tree row. A backward step needs the entry strictly below it,
-    ** which is always the one before that landing -- including when the landing
-    ** sorts above the tree row, which is the case a conditional decrement got
-    ** wrong: keeping it made the pending row above the cursor the candidate for
-    ** a step that has to move down, so a backward scan returned it. */
+    /* Seek is a lower bound; a backward step always uses the prior entry. */
     if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
       rc = prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
                                 prollyCursorIntKey(&pCur->pCur));
@@ -931,9 +858,7 @@ int prollyBtCursorEof(BtCursor *pCur){
   return (pCur->eState!=CURSOR_VALID);
 }
 
-/* Whether the EOF just reported means end-of-data or a failed deferred seek.
-** Orig cursors surface their own faults through the stock paths, so they
-** always answer SQLITE_OK. */
+/* SQLITE_OK for orig; otherwise skipNext of a CURSOR_FAULT. */
 int doltliteBtreeCursorFaultCode(BtCursor *pCur){
   if( !pCur || pCur->pCurOps!=&prollyCursorOps ) return SQLITE_OK;
   if( pCur->eState!=CURSOR_FAULT ) return SQLITE_OK;
@@ -952,15 +877,7 @@ int prollyBtCursorIsEmpty(BtCursor *pCur, int *pRes){
     *pRes = 1;
     return SQLITE_OK;
   }
-  /* Rows written in this transaction sit in the pending map until it drains,
-  ** so a table whose persisted root is still empty is not necessarily empty.
-  ** Answering from the root alone made OP_IfEmpty break out of a join over a
-  ** table that had rows.
-  **
-  ** A non-empty map counts as non-empty even if every entry is a tombstone.
-  ** Erring that way only forgoes the optimization, while erring the other way
-  ** drops rows, and it keeps this O(1): OP_IfEmpty sits inside the enclosing
-  ** loops, so it re-runs per outer row and cannot afford to scan the map. */
+  /* Pending rows (even tombstones) make the table non-empty. O(1) for OP_IfEmpty. */
   *pRes = (prollyHashIsEmpty(&pTE->root)
         && (pTE->pPending==0 || prollyMutMapIsEmpty(pTE->pPending))) ? 1 : 0;
   return SQLITE_OK;
@@ -1142,10 +1059,7 @@ int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
   return SQLITE_OK;
 }
 
-/* In the amalgamation, testfixture also links test_btree.c which defines this
-** same SQLITE_TEST-only debug helper; skip ours there to avoid a duplicate
-** symbol (the non-amalgamation build never compiles this — libdoltlite.a is
-** built without SQLITE_TEST). */
+/* Amalgamation testfixture already defines this via test_btree.c. */
 #ifndef SQLITE_AMALGAMATION
 void sqlite3BtreeCursorList(Btree *p){
 #ifndef SQLITE_OMIT_TRACE

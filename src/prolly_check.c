@@ -39,7 +39,7 @@ static int checkSubtree(
     return rc;
   }
 
-  /* Re-hash cached chunks too; chunkStoreGet verifies only disk reads. */
+  /* Get verifies disk reads only. */
   {
     ProllyHash computed;
     if( nDataPhys<nData ){

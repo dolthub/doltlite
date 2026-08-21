@@ -112,14 +112,8 @@ static int rebaseRestoreReturnBranchWorkingState(
   doltliteCommitClear(&c);
   return rc;
 }
-/* True if zBranch holds working-set changes its head commit does not. An
-** interactive rebase mirrors onto the return branch so a reopen can resume.
-** The whole-blob mirror is only loadable when workingCommit equals that
-** branch's HEAD, so a dirty return branch -- or one whose HEAD is not the
-** rebase upstream -- keeps its catalog and only receives rebase metadata.
-** Restore undoes the same choice. Rebase already refuses to start with a
-** dirty current branch; the return branch is a different one and has no
-** such guarantee. */
+/* Dirty zBranch. Return-branch mirror is loadable only when workingCommit
+** equals that HEAD; otherwise overlay rebase metadata so restore matches. */
 static int rebaseBranchHasUncommittedWork(
   sqlite3 *db,
   const char *zBranch,
@@ -215,8 +209,7 @@ static int doltliteRebaseCollectReplaySet(
     doltliteCommitClear(&c);
   }
 
-  /* BFS from HEAD dissolves merge commits: traverse all parents but only
-  ** include non-merge commits in the replay set, linearizing the history. */
+  /* BFS from HEAD: walk all parents, replay only non-merge commits. */
   qHead = qTail = 0;
   queue[qTail++] = *pHeadHash;
 
@@ -506,9 +499,8 @@ static int doltliteRebaseLinearReplay(
 
     if( rc!=SQLITE_OK ) goto rollback;
     if( nConflicts>0 ){ bConflict = 1; rc = SQLITE_ERROR; goto rollback; }
-    /* The finish helper rolled the replay back and returned OK; without
-    ** this stop the loop would move on and the rebase would finalize
-    ** WITHOUT this commit — its rows silently gone from the branch. */
+    /* Finish rolled this replay back and returned OK; stop or the loop
+    ** finalizes without this commit. */
     if( nViolations>0 ){ bViolation = 1; rc = SQLITE_ERROR; goto rollback; }
   }
 
@@ -833,11 +825,8 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
-/* SwitchCatalog updates the live catalog but not the txn rollback snapshot.
-** A later ROLLBACK of an enclosing BEGIN would otherwise undo the restore
-** and leave the original branch showing the working-branch (upstream)
-** catalog. Pin the committed baseline to HEAD's catalog so ROLLBACK keeps
-** the restored state. */
+/* SwitchCatalog does not update the txn rollback snapshot. Pin HEAD's
+** catalog so ROLLBACK of an enclosing BEGIN keeps the restored branch. */
 static void rebaseAdoptRestoredCatalog(sqlite3 *db){
   ProllyHash cat;
   memset(&cat, 0, sizeof(cat));
@@ -888,8 +877,8 @@ static int rebaseWritePlanRows(
 static int rebaseEndBusyRetry(sqlite3 *db);
 static int rebaseRetryableRc(int rc);
 
-/* A source-tip CAS reject must not delete the plan or working branch.
-** Dolt leaves both so --abort can clean up without rewriting the peer tip. */
+/* CAS reject must not delete the plan or working branch; --abort still
+** needs them, matching Dolt. */
 static int rebaseRestoreInProgress(
   sqlite3 *db,
   const RebasePlanRow *aPlan,
@@ -900,19 +889,14 @@ static int rebaseRestoreInProgress(
   const char *zReturnBranch
 ){
   int rc;
-  /* Every step here writes, so the peer whose tip won the CAS can hold a lock
-  ** against any of them. Retry the restore as a whole -- rewriting the plan
-  ** rows and re-persisting are idempotent -- because giving up turns a
-  ** recoverable "aborted due to changes in branch X" into a report that the
-  ** pre-rebase state may not have been restored. */
+  /* Retry the whole restore: later writes can hit the CAS-winning peer's
+  ** lock, and aborting mid-restore reports a false unrestored state. */
   db->busyHandler.nBusy = 0;
   do {
     rc = rebaseWritePlanRows(db, aPlan, nPlan);
     if( rc==SQLITE_OK ){
-      /* Claim already cleared session flags. Persist remirrors the working
-      ** catalog onto the return branch unless META_MIRROR is set, which
-      ** would replace uncommitted work on a dirty default. Restore is not
-      ** a finish, so overlay metadata only. */
+      /* Persist remirrors the working catalog onto the return branch unless
+      ** META_MIRROR, which would clobber uncommitted work. Overlay metadata. */
       u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
       rc = doltliteSetSessionRebaseState(db, flags, pPreRebaseCat, pExpectedOrigHead,
                                          zOrigBranch, zReturnBranch);
@@ -1033,10 +1017,9 @@ void doltliteTestSetRebaseBeforeAdvanceHook(void (*xHook)(void)){
   rebaseBeforeAdvanceHook = xHook;
 }
 
-/* Refresh while the write txn holds lockDepth==1, before replay stages
-** chunks. CompareAndAdvance later reenters the lock so its ForceRefresh
-** is a no-op; refreshing after CreateAndStoreCommit would drop the
-** pending commit. */
+/* Refresh now at lockDepth==1. A post-CreateAndStoreCommit ForceRefresh
+** would drop the pending commit; CompareAndAdvance's reentrant refresh is
+** a no-op. */
 static int rebaseRefreshWorkingRefs(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   if( rebaseBeforeAdvanceHook ){
@@ -1055,11 +1038,8 @@ static int rebaseAdvanceWorkingBranch(
   const ProllyHash *pCatalogHash
 ){
   int rc;
-  /* This returns SQLITE_BUSY both for a peer holding the graph lock and for
-  ** the expected tip having moved, and the replay's caller reads any BUSY as
-  ** "the source branch changed" and aborts the whole rebase. Retry so a peer
-  ** that merely held the lock does not cost a claimed rebase; a tip that
-  ** really moved still returns BUSY on every attempt and still aborts. */
+  /* BUSY is lock contention or a moved tip; the caller aborts either as
+  ** "source changed". Retry so lock-only BUSY does not abort a claimed rebase. */
   db->busyHandler.nBusy = 0;
   do {
     rc = doltliteCompareAndAdvanceBranch(
@@ -1203,10 +1183,8 @@ static int rebaseReadActive(
   return rc;
 }
 
-/* Lock contention reaches this file as SQLITE_BUSY, SQLITE_LOCKED and their
-** extended forms -- SQLITE_BUSY_SNAPSHOT in particular, which a write txn gets
-** when a peer committed and the view must be re-taken. Comparing against the
-** primary codes alone silently skips the retry for those. */
+/* Retry BUSY, LOCKED, and extended forms (BUSY_SNAPSHOT). Matching only
+** primary codes skips the write-txn retry after a peer commit. */
 static int rebaseRetryableRc(int rc){
   return (rc&0xff)==SQLITE_BUSY || (rc&0xff)==SQLITE_LOCKED;
 }
@@ -1234,8 +1212,8 @@ static int rebaseReadActiveRetry(
   return rc;
 }
 
-/* Put cleared claim ownership back so a later abort/continue can retry.
-** The rollback persist must not share the claim-commit fault point. */
+/* Restore claim ownership for a later abort/continue. Rollback persist
+** must not share the claim-commit fault point. */
 static int rebaseUnclaimActiveEnd(
   sqlite3 *db,
   u8 flags,
@@ -1258,13 +1236,8 @@ static int rebaseUnclaimActiveEnd(
   return chunkStoreCommit(cs);
 }
 
-/* Claim exclusive ownership of ending the active rebase.
-**
-** Returns SQLITE_DONE if durable isRebasing is already clear (peer won).
-** Returns SQLITE_OK after this connection clears isRebasing. Storage failures
-** after mutation restore ownership so a retry can still abort or continue,
-** and return an error without reporting "no rebase in progress".
-** Callers must copy branch names out of session state before claiming. */
+/* Exclusive claim to end the rebase. DONE if isRebasing already clear;
+** OK after this connection clears it. Storage failure restores ownership. */
 static int rebaseClaimActiveEnd(
   sqlite3 *db,
   const char *zWorkingBranch
@@ -1296,8 +1269,7 @@ static int rebaseClaimActiveEnd(
   locked = 1;
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ) goto claim_done;
-  /* The return branch mirrors rebase state for reopen; only the temporary
-  ** working branch is canonical for terminal-operation ownership. */
+  /* Return branch is a reopen mirror; the temp working branch owns terminal ops. */
   rc = doltliteLoadWorkingSet(db, zWorkingBranch);
   if( rc!=SQLITE_OK ) goto claim_done;
   savedFlags = doltliteGetSessionRebaseFlags(db);
@@ -1382,9 +1354,8 @@ static int rebaseRetryDbOp(sqlite3 *db, int (*xOp)(sqlite3*)){
   return rc;
 }
 
-/* Checkout original branch and delete the temporary working branch. Idempotent
-** for a missing working branch. Assumes rebaseClaimActiveEnd already cleared
-** durable isRebasing / the plan table. */
+/* Checkout original and drop the temp working branch (ok if missing).
+** Assumes claim already cleared isRebasing and the plan table. */
 static int rebaseCleanupAfterClaim(
   sqlite3 *db,
   const char *zOrigBranch,
@@ -1601,10 +1572,8 @@ static void doltliteRebaseInteractiveStart(
     goto fail;
   }
   bWorkingBranchCreated = 1;
-  /* Persist the working branch now. The sub-ops below (checkout, plan table)
-  ** each reload persisted refs at their lock — the VC fresh-read that closes
-  ** the concurrency window — which would discard this still-in-memory branch.
-  ** Committing it makes the reload re-read it instead. */
+  /* Persist the working branch now. Checkout/plan reload persisted refs
+  ** under lock and would drop this still-in-memory branch. */
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
   if( rc==SQLITE_OK && sqlite3FaultSim(960) ) rc = SQLITE_BUSY;
@@ -1660,9 +1629,8 @@ fail:
   }
 }
 
-/* Reopen of $db lands on the default branch with a mirrored working set,
-** and $db/<orig> has no plan. Continue/abort must run on dolt_rebase_<orig>
-** so replay advances that tip instead of CAS-failing against feat. */
+/* Reopen of $db lands on the default branch; continue/abort must run on
+** dolt_rebase_<orig> so replay CASes that tip, not feat. */
 static int rebaseAdoptPersistedRebase(sqlite3 *db){
   const char *zCur;
   const char *zOrig = 0;
@@ -1734,7 +1702,7 @@ static void doltliteRebaseInteractiveAbort(
     return;
   }
 
-  /* Capture names before claim clears session rebase state. */
+  /* Names before claim clears session rebase state. */
   rc = rebaseClaimActiveEndRetry(db, zWorking);
   if( rc==SQLITE_DONE ){
     sqlite3_free(zReturnBranch);
@@ -1744,9 +1712,8 @@ static void doltliteRebaseInteractiveAbort(
     return;
   }
   if( rc!=SQLITE_OK ){
-    /* Storage/claim failure: only claim returns DONE when a successful
-    ** durable read proved isRebasing is clear. Any other error is recovery
-    ** failure (including fault-injected DROP after a partial attempt). */
+    /* Only claim returns DONE when a durable read showed isRebasing clear.
+    ** Any other error is recovery failure. */
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     sqlite3_free(zOrigBranch);
@@ -1855,10 +1822,8 @@ static void doltliteRebaseInteractiveContinue(
   rc = rebaseReadPlan(db, &aPlan, &nPlan);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  /* Reject any unknown plan verb (e.g. a typo in dolt_rebase.action) instead of
-  ** silently treating it as a pick. The rebase stays in progress so the plan can
-  ** be corrected and --continue retried, so name the offending action rather
-  ** than reporting a bare failure. */
+  /* Unknown plan verbs (typos in dolt_rebase.action) are not silent picks.
+  ** Stay in progress and name the action so --continue can retry. */
   for(i=0; i<nPlan; i++){
     const char *zAct = aPlan[i].zAction;
     if( strcmp(zAct,"pick")!=0 && strcmp(zAct,"reword")!=0
@@ -1889,8 +1854,8 @@ static void doltliteRebaseInteractiveContinue(
     goto abort_err_silent;
   }
 
-  /* Claim before replaying so a concurrent --abort loses cleanly with
-  ** "no rebase in progress" instead of both failing mid-recovery. */
+  /* Claim before replay so a concurrent --abort loses with "no rebase
+  ** in progress" rather than both failing mid-recovery. */
   rc = rebaseClaimActiveEndRetry(db, zWorking);
   if( rc==SQLITE_DONE ){
     sqlite3_result_error(context, "no rebase in progress", -1);
@@ -1899,17 +1864,13 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
   bPlanDropped = 1;
 
-  /* The peer that lost the claim can still be reading main.dolt_rebase, and
-  ** dropping it is the winner's own completion work: a transient lock here
-  ** must not turn a claimed rebase into an aborted one. rebaseCleanupAfterClaim
-  ** already drops it this way. */
+  /* Peer may still read main.dolt_rebase; a transient lock on DROP must
+  ** not abort a claimed rebase. rebaseCleanupAfterClaim drops it this way. */
   rc = rebaseRetryDbOp(db, rebaseDropPlan);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  /* Seal savepoints AND the enclosing transaction: constraint detection
-  ** during the replay re-prepares against the switched catalog, which needs
-  ** the claim and plan-drop schema changes committed, not pending in an
-  ** open transaction. Releasing savepoints alone leaves that BEGIN open. */
+  /* Seal savepoints and enclosing BEGIN: replay constraint detection needs
+  ** claim/plan-drop committed. Releasing savepoints alone leaves BEGIN open. */
   rc = doltliteVcSealActiveSavepoints(db);
   if( rc==SQLITE_OK ) rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ) goto abort_err;
@@ -1960,16 +1921,14 @@ static void doltliteRebaseInteractiveContinue(
   if( rc==SQLITE_BUSY ) goto abort_err_cas;
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  /* Claim already cleared durable isRebasing; keep session clear and finish
-  ** checkout / working-branch deletion / return-branch restore. */
+  /* Claim already cleared durable isRebasing; finish checkout, working-branch
+  ** delete, and return-branch restore. */
   rc = doltliteClearSessionRebaseState(db);
   if( rc==SQLITE_OK ) rc = rebaseRetryDbOp(db, doltlitePersistWorkingSet);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  /* curCat is already the exact flushed catalog installed by the replay and
-  ** persisted above; the live SQLite schema is transitional until checkout
-  ** completes, so do not re-prepare and re-serialize it merely to capture
-  ** the branch being discarded. */
+  /* curCat is the flushed catalog just persisted; do not re-serialize the
+  ** discarded branch while schema is transitional. */
   db->busyHandler.nBusy = 0;
   do {
     rc = doltliteCheckoutBranchForRebaseWithOldCatalog(

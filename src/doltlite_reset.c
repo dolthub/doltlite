@@ -31,10 +31,8 @@ static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
   return -1;
 }
 
-/* True when zName names a table in the live schema, the staged catalog,
-** or HEAD — the domains a path argument can act on. Used to give a table
-** precedence over a same-named ref, as Dolt does: a bare dolt_reset('x')
-** must never rewind HEAD when x is a table the caller meant to unstage. */
+/* True when zName is a table in live schema, staged, or HEAD. A table
+** beats a same-named ref: dolt_reset('x') must not rewind HEAD. */
 static int resetNameIsTablePath(sqlite3 *db, const char *zName){
   struct TableEntry *aCat = 0;
   ProllyHash hash;
@@ -93,8 +91,7 @@ static int resetStageNamedPaths(
   if( !prollyHashIsEmpty(&stagedHash) ){
     rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
     if( rc!=SQLITE_OK ) goto done;
-    /* Staged index entries are unnamed and resolve to their parent table
-    ** only through the staged catalog's own schema rows. */
+    /* Staged index entries are unnamed; resolve parents through staged schema. */
     rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedHash,
                                &aStagedSchema, &nStagedSchema);
     if( rc!=SQLITE_OK ) goto done;
@@ -116,11 +113,9 @@ static int resetStageNamedPaths(
       goto done;
     }
     if( iH<0 ){
-      /* A staged-only name is a staged new table, or the new name of a
-      ** staged rename. Dolt keeps a staged rename fully staged when its
-      ** new name is reset; a staged new table leaves as one object, its
-      ** unnamed index entries with it, or the commit carries indexes over
-      ** a table that no longer exists. */
+      /* Staged-only: new table, or new name of a staged rename. Dolt keeps
+      ** a staged rename fully staged when its new name is reset; a new table
+      ** leaves with its index entries. */
       struct TableEntry *pMate = 0;
       rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
                                      &aStaged[iS], 0, &pMate);
@@ -136,9 +131,8 @@ static int resetStageNamedPaths(
       }
       nStaged--;
     }else if( iS<0 ){
-      /* A HEAD-only name is a staged drop, or the old name of a staged
-      ** rename. A rename resets as one object: retire the staged new-name
-      ** entry and its indexes here, then restore HEAD's state below. */
+      /* HEAD-only: staged drop, or old name of a staged rename. Reset a
+      ** rename as one object: retire the staged new-name entry and indexes. */
       struct TableEntry *pMate = 0;
       struct TableEntry *aNew;
       rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
@@ -164,10 +158,8 @@ static int resetStageNamedPaths(
           nStaged--;
         }
       }
-      /* Restoring a staged-dropped table: the HEAD entry is numbered in
-      ** HEAD's domain and its schema row is absent from the staged master
-      ** (and from the live schema -- the table is dropped there), so it
-      ** gets a fresh number and its row comes from the HEAD fallback. */
+      /* Restoring a staged-dropped table: HEAD numbering/schema do not
+      ** match staged, so give it a fresh number and take the HEAD row. */
       aNew = sqlite3_realloc(aStaged,
           (nStaged+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
@@ -192,10 +184,8 @@ static int resetStageNamedPaths(
                                         zHeadTable);
       if( rc!=SQLITE_OK ) goto done;
     }else{
-      /* Take HEAD's content under the STAGED entry's number so the entry
-      ** keeps pairing with the staged catalog's schema row. The table's
-      ** index set resets with it: replace whatever index entries staging
-      ** carried for this table with HEAD's. */
+      /* Take HEAD content under the STAGED number so it still pairs with
+      ** the staged schema row. Replace staged index entries with HEAD's. */
       Pgno iKeep;
       addRemoveIndexEntriesOfTable(aStaged, &nStaged,
                                    aStagedSchema, nStagedSchema,
@@ -368,14 +358,9 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
       rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
                                  &aWorkSchema, &nWorkSchema);
     }
-    /* Build FROM the target so every tracked table -- including ones
-    ** dropped in the working tree -- is restored, then append the
-    ** untracked entries renumbered past the target range (working numbers
-    ** can collide with target numbers for different tables). Loaded index
-    ** entries carry no name, so each untracked object is located through
-    ** the working schema rows (name -> working number -> entry); its
-    ** schema row reaches the blob via the fallback list, which pairs by
-    ** name and stamps the appended number. */
+    /* Build FROM the target so dropped tracked tables are restored, then
+    ** append untracked entries past the target range (working numbers can
+    ** collide). Locate untracked objects through working schema rows. */
     if( rc==SQLITE_OK ){
       for(k=0; k<nTarget; k++){
         if( aTarget[k].iTable >= iNextFree ) iNextFree = aTarget[k].iTable + 1;
@@ -600,15 +585,9 @@ static void doltliteResetFunc(
     }
     graphLocked = 1;
 
-    /* Move the ref before the session head. There is no rollback on this path,
-    ** so the other order leaves the session reading a commit the branch was
-    ** never advanced to when the update fails. The update needs only the
-    ** session branch, so the order costs nothing.
-    **
-    ** This is the ordering only: reset --hard is not atomic against a failure
-    ** part way through, and dolt does not make it atomic either -- an explicit
-    ** ROLLBACK around CALL dolt_reset('--hard', ...) leaves HEAD moved -- so
-    ** there is no rollback contract here to hold up. */
+    /* Move the ref before the session head. The other order leaves the
+    ** session reading a commit the branch never reached if the update fails.
+    ** reset --hard is not atomic (nor in Dolt). */
     rc = chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);

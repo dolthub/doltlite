@@ -15,7 +15,6 @@ translate_for_dolt() {
   sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g'
 }
 
-# oracle: standard R|-prefixed oracle comparison
 oracle() {
   local name="$1" setup="$2" query="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/$name"
@@ -49,8 +48,7 @@ oracle() {
   fi
 }
 
-# oracle_replay_fail: run setup then replay (which may fail), then query state.
-# Both doltlite (bail off) and dolt (sql -c) continue past errors.
+# replay_fail: both engines continue past errors (bail off / sql -c).
 oracle_replay_fail() {
   local name="$1" setup="$2" replay="$3" query="$4"
   local dir="$TMPROOT/$name"
@@ -83,10 +81,7 @@ oracle_replay_fail() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
-# oracle_triggers_dual: separate dl/dt setup for trigger syntax differences.
-# SQLite: AFTER INSERT ON t BEGIN ... END
-# MySQL:  AFTER INSERT ON t FOR EACH ROW ...
-# Setup and query run in ONE session so the active branch after VC ops is visible.
+# Trigger syntax: SQLite BEGIN...END vs MySQL FOR EACH ROW. Setup+query in one session.
 oracle_triggers_dual() {
   local name="$1" dl_setup="$2" dt_setup="$3" query="$4" allow_empty="${5:-}"
   local dir="$TMPROOT/$name"

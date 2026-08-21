@@ -7,11 +7,7 @@
 #define DOLTLITE_DECIMAL_INVALID  1
 #define DOLTLITE_DECIMAL_RANGE    2
 
-/*
-** Parse the non-empty decimal span [zBegin,zEnd) without accepting signs,
-** whitespace, or trailing characters. Return DOLTLITE_DECIMAL_RANGE when
-** the value exceeds mxValue, before performing overflowing arithmetic.
-*/
+/* Unsigned decimal in [zBegin,zEnd). RANGE if value > mxValue, before overflow. */
 static int doltliteParseDecimal(
   const char *zBegin,
   const char *zEnd,

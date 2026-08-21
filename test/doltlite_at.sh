@@ -328,10 +328,7 @@ run_test "empty_at_c2" \
 
 rm -f "$DB"
 
-# A historical root whose key shape differs from the declared schema (table
-# dropped and recreated across a rowid/WITHOUT ROWID boundary) must render
-# the historical row values -- matching Dolt's AS OF -- and pushed-down PK
-# constraints must still filter (they were silently dropped for such roots).
+# Historical root with a different key shape must render values and still apply pushed-down PK filters.
 DB=/tmp/test_at_keyshape_$$.db; rm -f "$DB"
 echo "CREATE TABLE s(a TEXT PRIMARY KEY, b TEXT) WITHOUT ROWID;
 INSERT INTO s VALUES('x','one'),('y','two');
@@ -362,7 +359,6 @@ run_test "keyshape_upper_bound_scans_all" \
 rm -f "$DB"
 
 
-# dolt_at renders the pinned commit's rows with that commit's schema.
 DBA=/tmp/test_at_namemap_$$.db; rm -f "$DBA"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
 INSERT INTO t VALUES(1,'BEE','CEE');

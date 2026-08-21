@@ -39,7 +39,7 @@ static int parseHexHash(const char *z, ProllyHash *pOut){
   return 1;
 }
 
-/* Golden XXH32(seed=0) for 8-byte big-endian int keys 0..31. */
+/* XXH32(seed=0), BE int keys 0..31. */
 static const struct { int key; u32 h; } aXxh[] = {
   {0, 0xdeb39513u},
   {1, 0xf414a945u},
@@ -75,8 +75,7 @@ static const struct { int key; u32 h; } aXxh[] = {
   {31, 0xf5b8a0e0u},
 };
 
-/* Golden prollyWeibullCheck results for a fixed (size, thisSize, hash) grid.
-** Captures current float-based Weibull behavior bit-for-bit. */
+/* Weibull grid, float bit-for-bit. */
 static const struct {
   u32 size;
   u32 thisSize;
@@ -1085,7 +1084,7 @@ static const struct {
   {16384u, 512u, 0x0f0f0f0fu, 1},
 };
 
-/* Golden prollyChunker roots for N intkey rows with value {1,2,3,4}. */
+/* Chunker roots, N intkey rows. */
 static const struct { int n; const char *zRoot; } aRoots[] = {
   {0, "0000000000000000000000000000000000000000"},
   {1, "98f292686c25a82ec24688a20fc9b9a7b63483f8"},

@@ -2,8 +2,6 @@
 #ifndef DOLTLITE_MERGE_INT_H
 #define DOLTLITE_MERGE_INT_H
 
-/* Private declarations shared by the doltlite merge implementation modules. */
-
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
@@ -30,7 +28,7 @@ struct MergeIndexInfo {
   int nColumn;
   i16 *aiColumn;
   KeyInfo *pKeyInfo;
-  int iPKey;          /* IPK column in the parent table schema, -1 if none */
+  int iPKey;          /* IPK column, -1 if none */
   Index *pIdx;
 };
 
@@ -52,17 +50,12 @@ struct SchemaRootpageRemap {
   Pgno newPg;
 };
 
-/* ── rows (doltlite_merge_rows.c) ─────────────────────────────────────── */
-
-/* Shared with the pre-detection module, which reads the same pass-1 state. */
 typedef struct IndexMergePatch IndexMergePatch;
 struct IndexMergePatch {
   Pgno iTable;
   ProllyHash mergedRoot;
 };
 
-/* Shared state for pass-1 catalog merge. Keeps the long parameter list off
-** the leaf helpers and makes the patch list a single ownership root. */
 typedef struct MergePass1Ctx MergePass1Ctx;
 struct MergePass1Ctx {
   sqlite3 *db;
@@ -82,9 +75,8 @@ struct MergePass1Ctx {
   SchemaMergeAction **ppSchemaActions; int *pnSchemaActions;
   int bDisjointSchemaChanges;
   int bPreferOurMaster;
-  /* A merge of two branches, as opposed to a replay of one commit onto
-  ** another (revert, cherry-pick, rebase). Refusals that encode Dolt's
-  ** judgement about a merge only apply to the former. */
+  /* Branch merge, not revert/cherry-pick/rebase. Dolt merge refusals
+  ** apply only here. */
   int bBranchMerge;
   char ***pazReindex; int *pnReindex;
   IndexMergePatch *aPatches;
@@ -115,21 +107,10 @@ int canFastMerge(
   int schemaUnchangedBothSides
 );
 
-/* Row-merge policy. Scoped by object identity, computed where both full
-** catalogs are visible, so enabling it cannot change any conflict but the ones
-** it names.
-**
-** azRenameOverDrop holds ancestor object names one side renamed and the other
-** dropped. A catalog row whose base name or tbl_name is listed resolves to the
-** surviving side instead of conflicting, matching Dolt, which keeps such a
-** table as an add.
-**
-** azDualRename holds ancestor names both sides renamed to different names.
-** A modify/modify on those catalog rows is not a user conflict: pass 2 keeps
-** both tables. The row merge leaves ours in place; serialize rebuilds master.
-** Resolving inside the row merge keeps the merged root canonical, which the
-** history-independence gate requires.
-*/
+/* azRenameOverDrop: ancestor names one side renamed and the other
+** dropped. Resolve to the survivor, matching Dolt.
+** azDualRename: both sides renamed differently. Not a user conflict;
+** pass 2 keeps both. Resolve in row merge so the root stays canonical. */
 typedef struct MergeRowPolicy MergeRowPolicy;
 struct MergeRowPolicy {
   const char **azRenameOverDrop;
@@ -153,8 +134,6 @@ int mergeTableRows(
   int nIndexes,
   const MergeRowPolicy *pPolicy
 );
-
-/* ── schema IR (doltlite_merge_schema.c) ──────────────────────────────── */
 
 int parseColumns(
   const char *zSql,
@@ -182,8 +161,6 @@ int trySchemaColumnMerge(
   int *pResolvedDivergence,
   char **pzErrDetail
 );
-
-/* ── catalog helpers shared with pass1 (doltlite_merge.c) ────────────── */
 
 void freeConflictRows(DoltliteConflictRow *aRows, int nRows);
 void freeAddedColumns(char **azCols, int nCols);
@@ -348,8 +325,6 @@ int tryResolveSchemaDivergence(
   char **pzErrMsg
 );
 
-/* ── pass1 (doltlite_merge_pass1.c) ───────────────────────────────────── */
-
 int mergeAppendReindexName(char ***paz, int *pn, const char *zName);
 int mergeFilterDerivedShadowConflicts(sqlite3 *db,
     MergeConflictTable *aConflictTables, int *pnConflictTables,
@@ -377,8 +352,6 @@ int mergeCatalogPass1(
   int bBranchMerge,
   char ***pazReindex, int *pnReindex
 );
-
-/* ── pass2 (doltlite_merge_pass2.c) ───────────────────────────────────── */
 
 int mergeCatalogPass2(
   struct TableEntry *aAnc, int nAnc,

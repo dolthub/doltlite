@@ -143,7 +143,7 @@ static i64 csWalCheckpointThreshold(void){
 int csWalCheckpointDue(const ChunkStore *cs){
   i64 iBase = cs->wal.iCheckpointReplay>0
             ? cs->wal.iCheckpointReplay : cs->wal.iWalOffset;
-  /* Ref-less raw stores retain eager verification of every WAL chunk. */
+  /* Ref-less raw stores still verify every WAL chunk. */
   return !prollyHashIsEmpty(&cs->refs.refsHash)
       && iBase>0 && cs->file.iFileSize>=iBase
       && cs->file.iFileSize-iBase>=csWalCheckpointThreshold();
@@ -553,12 +553,9 @@ void csFreeReloadState(ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
 }
 
-/* Cap the zero-tail probe; valid writer gaps are sector-bounded, so a
-** legitimate preallocated tail never hides data past this window. */
+/* Zero-tail probe cap; writer gaps are sector-bounded. */
 #define CS_WAL_SCAN_MAX (64*1024*1024)
 
-/* True if the WAL region from pos to walSize is zero as far as the scan
-** cap reaches. */
 static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
   u8 buf[4096];
   i64 off = cs->wal.iWalOffset + pos;
@@ -580,7 +577,7 @@ static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
 #define CS_DAMAGE_MIDSTREAM 1
 #define CS_DAMAGE_RESUME    2
 
-/* Classify WAL damage as committed corruption, declared gap, or torn tail. */
+/* Classify WAL damage: mid-stream, declared gap, or torn tail. */
 static int csWalResolveDamage(
   ChunkStore *cs,
   i64 damagePos,
@@ -592,11 +589,8 @@ static int csWalResolveDamage(
   i64 q = damagePos + 1;
   i64 last = walSize - 5;
   i64 damageAbs = cs->wal.iWalOffset + damagePos;
-  /* The scan must reach the end of the WAL: a single batch can span far
-  ** more than any fixed window (drains plus large chunks), and a sealed
-  ** root past a capped window proves the damaged region was committed.
-  ** Stopping early would default that case to TORN, silently rewinding
-  ** committed batches that the next append then overwrites. */
+  /* Scan to WAL end: a sealed root past a capped window proves the
+  ** damage was committed; stopping early would rewind it as TORN. */
   *pAction = CS_DAMAGE_TORN;
   *pResume = 0;
   while( q <= last ){
@@ -630,7 +624,6 @@ static int csWalResolveDamage(
             *pResume = batchStart - cs->wal.iWalOffset;
             return SQLITE_OK;
           }
-          /* A root of the damaged batch itself; keep scanning. */
         }
       }
     }
@@ -677,7 +670,7 @@ static int csReplayWalFrom(
     cs->file.iFileSize = fileSize;
   }
   if( walSize <= 0 ){
-    /* Without a WAL tail, chunk_count must describe the compacted index. */
+    /* No WAL tail: chunk_count must match the compacted index. */
     if( chunkIndexCount(&cs->index)>0
      && cs->index.nChunks!=chunkIndexCount(&cs->index) ){
       return SQLITE_CORRUPT;
@@ -822,8 +815,7 @@ static int csReplayWalFrom(
                          cs->wal.iWalOffset + pos);
       if( rc != SQLITE_OK ) goto replay_error;
       hashState = csManifestHashState(m, cs->wal.iWalOffset + recPos);
-      /* Offsetless v12 seals are safe only at a sequentially parsed boundary;
-      ** damage scans must require an offset-bound seal. */
+      /* Offsetless v12 seals are only safe at a sequential parse boundary. */
       if( hashState==CS_MANIFEST_HASH_BAD
        && csManifestHashStateOffsetless(m)==CS_MANIFEST_HASH_OK ){
         hashState = CS_MANIFEST_HASH_OK;
@@ -876,9 +868,7 @@ static int csReplayWalFrom(
       nRootRecordsSeen++;
 
     } else if( tag == 0 && csWalTailIsZero(cs, recPos, walSize) ){
-      /* SQLITE_FCNTL_SIZE_HINT (or filesystem preallocation) zero-extends the
-      ** file past the last commit. Treat the all-zero tail as absent: the
-      ** post-loop rewind lets the next append reclaim it. */
+      /* SIZE_HINT/prealloc zero-extends past commit; treat as absent. */
       break;
 
     } else {
@@ -890,7 +880,7 @@ static int csReplayWalFrom(
       if( rc != SQLITE_OK ) goto replay_error;
       sawDamage = 1;
       if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
-      /* Foreign bytes at WAL start are corruption; later junk is crash tail. */
+      /* Bytes at WAL start are corruption; later junk is a crash tail. */
       if( damageAction==CS_DAMAGE_TORN && recPos == 0 && tag != 0 ){
         rc = SQLITE_CORRUPT;
         goto replay_error;
@@ -900,10 +890,8 @@ static int csReplayWalFrom(
     }
   }
 
-  /* Do not let damaged initial WAL bytes masquerade as a fresh empty store.
-  ** A legitimate preallocated tail reaches the zero-tail case without setting
-  ** sawDamage; once non-zero WAL bytes are malformed, the file is corrupt even
-  ** if no root manifest can be replayed. */
+  /* Damaged WAL start is not an empty store. Prealloc zeros never set
+  ** sawDamage; malformed non-zero bytes are corrupt even with no root. */
   if( sawDamage
    && nRootRecordsSeen == 0
    && nPendingBefore == 0 && chunkIndexCount(&cs->index)==0 ){
@@ -913,7 +901,7 @@ static int csReplayWalFrom(
     sawMidStream = 1;
   }
 
-  /* Reclaim uncommitted tail bytes unless the store is poisoned. */
+  /* Reclaim uncommitted tail unless poisoned. */
   if( !sawMidStream ){
     cs->wal.nWalData = lastBoundary < walSize ? lastBoundary : walSize;
     cs->file.iFileSize = cs->wal.iWalOffset + lastBoundary;

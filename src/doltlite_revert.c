@@ -235,10 +235,7 @@ static void doltliteRevertFunc(
 
   {
     char msg[512];
-    /* Base the commit on HEAD, not the working catalog: the revert commit
-    ** must contain only the revert, while unrelated uncommitted changes
-    ** (the overlap gate above rejects related ones) stay in the working
-    ** set, matching Dolt. */
+    /* Commit from HEAD, not the working catalog, so unrelated dirty changes stay uncommitted. */
     const ProllyHash *pCommitOurs =
         prollyHashCompare(&liveOurCatalog, &ourCommit.catalogHash)!=0
           ? &ourCommit.catalogHash : 0;
@@ -278,8 +275,7 @@ static void doltliteRevertFunc(
   }
   sqlite3_free(zApplyErr);
 
-  /* Conflict / CV finish helpers already set the context error (including the
-  ** combined conflicts+CVs message). Do not overwrite it here. */
+  /* Finish helpers already set the context error; do not overwrite. */
   if( nConflicts > 0 ) return;
   if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);

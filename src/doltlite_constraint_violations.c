@@ -187,9 +187,7 @@ static int deserializeAllViolations(
     if( rc!=SQLITE_OK ) goto fail;
     nr = dlReadU32(&rd);
     if( rd.err || nr<0 ){ rc = SQLITE_CORRUPT; goto fail; }
-    /* Reject impossible counts up front: every row needs at least one byte, so
-    ** nr can't exceed the bytes remaining. sqlite3_malloc64 below avoids 32-bit
-    ** overflow on the row-array allocation. */
+    /* nr cannot exceed remaining bytes (1 byte/row min). malloc64 avoids 32-bit overflow. */
     if( (sqlite3_uint64)nr > (sqlite3_uint64)(rd.end - rd.p) ){
       rc = SQLITE_CORRUPT; goto fail;
     }
@@ -522,7 +520,6 @@ delete_violation_done:
   return rc;
 }
 
-/* Append one violation row to an in-memory table set. */
 static int cvAppendRow(
   ConstraintViolationTable **paTables, int *pnTables,
   const char *zTable, u8 violationType, i64 intKey,
@@ -564,8 +561,7 @@ typedef struct ConstraintViolationBatch ConstraintViolationBatch;
 struct ConstraintViolationBatch {
   ConstraintViolationTable *aTables;
   int nTables;
-  int nAppended;   /* stays 0 when no violation was added, matching the
-                   ** non-batch path, which never stores in that case */
+  int nAppended;   /* 0 when nothing was added, matching the non-batch path */
 };
 
 int doltliteConstraintViolationBatchBegin(sqlite3 *db){
@@ -573,7 +569,7 @@ int doltliteConstraintViolationBatchBegin(sqlite3 *db){
   ConstraintViolationBatch *pBatch;
   int rc;
   if( !cs ) return SQLITE_ERROR;
-  if( doltliteGetCvBatch(db) ) return SQLITE_MISUSE;  /* not nestable */
+  if( doltliteGetCvBatch(db) ) return SQLITE_MISUSE;
   pBatch = sqlite3_malloc(sizeof(*pBatch));
   if( !pBatch ) return SQLITE_NOMEM;
   memset(pBatch, 0, sizeof(*pBatch));
@@ -615,8 +611,6 @@ int doltliteAppendConstraintViolation(
 
   if( !cs || !zTable ) return SQLITE_ERROR;
 
-  /* Inside a batch, accumulate in memory; the single load and store happen
-  ** at Begin/End, turning a per-violation O(total) round-trip into O(1). */
   pBatch = (ConstraintViolationBatch*)doltliteGetCvBatch(db);
   if( pBatch ){
     rc = cvAppendRow(&pBatch->aTables, &pBatch->nTables, zTable,
@@ -636,10 +630,8 @@ int doltliteAppendConstraintViolation(
   return rc;
 }
 
-/* Drop the recorded violations for the named tables, leaving every other
-** table's untouched. Verifying one table must not retract findings about
-** the others: the commit gate reads this catalog, so clearing it wholesale
-** turns a scoped re-check into permission to commit violating rows. */
+/* Drop recorded violations only for named tables. Wholesale clear would
+** let a scoped re-check hide other tables from the commit gate. */
 int doltliteClearConstraintViolationsForTables(
   sqlite3 *db,
   const char *const *azTables,
@@ -666,8 +658,7 @@ int doltliteClearConstraintViolationsForTables(
       }
     }
     if( drop ){
-      /* Free this entry's contents only: the array itself is one block
-      ** that freeViolationTables releases once, at the end. */
+      /* Free contents only; the array is one block released at the end. */
       freeViolationTable(&aTables[i]);
       memset(&aTables[i], 0, sizeof(aTables[i]));
     }else{
@@ -895,8 +886,7 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_text(ctx, violationTypeName(r->violationType), -1, SQLITE_STATIC);
   }else if( col >= 1 && col <= nUserCols ){
     if( r->nVal==0 && r->nKey>0 ){
-      /* PK-only clustered rows store an empty value; rebuild the record from
-      ** the key once and keep it as the row's value. */
+      /* PK-only clustered rows store an empty value; rebuild from the key. */
       u8 *pRec = 0; int nRec = 0;
       if( doltliteRecordFromClusteredKey(v->db, v->zTableName,
               r->pKey, r->nKey, &pRec, &nRec)==SQLITE_OK && pRec ){

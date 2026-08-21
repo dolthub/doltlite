@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze chunk size distribution in a DoltLite database file.
-
-The DB file IS the chunk store. Layout (see src/chunk_store.h):
-
-    [Manifest: 168 bytes at offset 0]
-    [Chunk data region]
-    [Sorted index: nChunks * 32 bytes]
-        each entry: hash(20) + file_offset(8 LE) + data_size(4 LE)
-    [WAL region: append-only]
-        chunk record: tag(0x01) + hash(20) + len_le32(4) + data(len)
-        root record:  tag(0x02) + manifest_snapshot(168)
-
-Reads sizes from the index AND walks the WAL so chunks written since
-the last manifest checkpoint are also counted.
-
-Usage: chunk_size_dist.py <db-file> [--min MIN] [--max MAX]
-                                    [--target N] [--json]
-"""
+"""Chunk size distribution in a DoltLite chunk-store file. Layout: src/chunk_store.h."""
 import argparse
 import json
 import struct
@@ -65,7 +48,6 @@ def read_index(f, manifest):
 
 
 def read_wal_chunks(f, manifest):
-    """Walk the WAL appending chunk records since the last checkpoint."""
     if manifest["wal_offset"] == 0:
         return []
     f.seek(0, 2)
@@ -136,8 +118,7 @@ def main():
     if not all_sizes:
         raise SystemExit("no chunks found")
 
-    # Separate "prolly-shaped" chunks (>= MIN) from small admin chunks
-    # (commit objects, working-set blobs, catalog, branch refs).
+    # Prolly chunks are >= MIN; smaller ones are admin objects.
     prolly_sizes = [s for s in all_sizes if s >= args.min]
     admin_sizes = [s for s in all_sizes if s < args.min]
     sorted_p = sorted(prolly_sizes)

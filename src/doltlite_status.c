@@ -350,10 +350,8 @@ static int statusMaybeAddParentSchemaChange(
   return addRow(pCur, zParent, staged, "modified");
 }
 
-/* True when zTblA's indexes in aA and zTblB's in aB carry the same name
-** set. A renamed table's index rows re-key their tbl_name and SQL text to
-** the new table, so the exact-SQL comparator reads a pure rename as two
-** changes; across a rename pair the index names are the identity. */
+/* Index identity across a rename is the name set; exact-SQL sees a rename
+** as two changes because tbl_name/SQL are rewritten. */
 static int statusIndexNameSetsMatch(
   SchemaEntry *aA, int nA, const char *zTblA,
   SchemaEntry *aB, int nB, const char *zTblB
@@ -409,10 +407,7 @@ static int statusCompareIndexSchemaObjects(
   rc = loadSchemaFromCatalog(db, cs, pCache, pToCat, &aTo, &nTo);
   if( rc!=SQLITE_OK ) goto index_schema_done;
 
-  /* One comparison per distinct parent table across both row sets; the
-  ** shared comparator decides whether that table's index set changed. A
-  ** parent participating in a rename pair compares across the pair, and
-  ** any real change attributes to the new name. */
+  /* One comparison per parent table; rename pairs attribute changes to the new name. */
   for(i=0; i<nFrom+nTo; i++){
     SchemaEntry *pRow = i<nFrom ? &aFrom[i] : &aTo[i-nFrom];
     int seen = 0;
@@ -589,11 +584,8 @@ static int statusRootsShareAnyKey(
   return rc;
 }
 
-/* isRenamePair without the same-number gate, for renames that shift the
-** canonical order and therefore the table number. Row-content identity
-** carries the pairing; two EMPTY roots compare equal without being the
-** same object (a dropped empty table and a new one), so emptiness defers
-** to the rename-tolerant schema comparison instead. */
+/* Like isRenamePair but without the same-number gate. EMPTY roots compare
+** equal without being the same object, so emptiness uses schema comparison. */
 static int isRenamePairContent(
   sqlite3 *db,
   const StatusCatalogIndex *pFromIdx,
@@ -639,17 +631,10 @@ static int isRenamePair(
   return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB);
 }
 
-/* True when another to-side entry carries the same non-empty row content
-** as the from-side table: two candidates for one identity, and the rename
-** pairing cannot choose (Dolt's tags could; content cannot). From-side
-** duplicates do not contest — a dropped identical sibling never makes a
-** real rename ambiguous — and empty tables carry no content to contest
-** with. A candidate that is the new half of its own same-number rename is
-** spoken for and does not contest either: eighty identical tables renamed
-** together stay eighty renames. Otherwise staging state is deliberately
-** ignored: a contestant staged a moment ago is still a contestant, or
-** staging one of two identical new tables would hand the other the
-** dropped table's identity. */
+/* True if another to-side table has the same non-empty content: the rename
+** pairing cannot choose. From-side duplicates and empty tables do not contest.
+** A same-number rename's new half is spoken for. Staging is ignored so staging
+** one of two identical new tables cannot steal the dropped identity. */
 static int renameMateIsContested(
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
@@ -677,10 +662,7 @@ static int renameMateIsContested(
   return 0;
 }
 
-/* Find the rename mate of pKnown across the from/to catalogs, using the
-** same pairing dolt_status renders, so every staging surface agrees on
-** which two entries are one renamed object. bKnownIsFrom says which side
-** pKnown sits on; the mate is looked up on the other side. */
+/* Rename mate using the same pairing dolt_status renders. */
 int doltliteCatalogRenameMate(
   sqlite3 *db,
   struct TableEntry *aFrom, int nFrom,
@@ -710,9 +692,7 @@ int doltliteCatalogRenameMate(
     if( !isRenamePair(db, &fromIdx, &toIdx, pA, pB) ) pMate = 0;
   }
   if( !pMate ){
-    /* A rename that shifts the canonical order changes the number, so
-    ** the number lookup misses it; scan by content and accept only an
-    ** unambiguous mate. */
+    /* Number lookup misses order-shifting renames; scan by content, require uniqueness. */
     struct TableEntry *aOther = bKnownIsFrom ? aTo : aFrom;
     int nOther = bKnownIsFrom ? nTo : nFrom;
     int i;
@@ -782,9 +762,7 @@ static int compareCatalogs(
         toHandled[j] = 1;
       }
     }
-    /* Second pass for renames whose canonical order shifted: the number
-    ** changed, so pairing goes by content, and only an unambiguous mate
-    ** counts. */
+    /* Second pass: order-shifted renames pair by content, unambiguous mate only. */
     for(i=0; i<nFrom; i++){
       int jMate = -1;
       if( aFrom[i].iTable<=1 || fromHandled[i] || !aFrom[i].zName ) continue;
@@ -1165,8 +1143,7 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   memset(&baseCatHash, 0, sizeof(baseCatHash));
   if( idxNum & STATUS_IDX_STAGED_EQ ){
     if( iArg>=argc ) return SQLITE_OK;
-    /* NULL reads as 0 through sqlite3_value_int, which would quietly become
-    ** "staged=0" for a constraint that can never be true. */
+    /* NULL sqlite3_value_int is 0, which would become staged=0 for an impossible constraint. */
     if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ) return SQLITE_OK;
     iStagedOnly = sqlite3_value_int(argv[iArg++]);
     if( iStagedOnly!=0 && iStagedOnly!=1 ) return SQLITE_OK;

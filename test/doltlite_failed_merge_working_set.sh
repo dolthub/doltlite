@@ -27,10 +27,7 @@ objs() {
     "SELECT coalesce(group_concat(type || ':' || name), '<none>') FROM sqlite_master;"
 }
 
-# A merge whose source branch was visited earlier in the same session used to
-# publish that branch's catalog as our working set: the branch we left won the
-# working tree, dolt_status reported it as the user's own edits, and the next
-# commit wrote it into history.
+# Same-session visit of the source used to publish that branch's catalog as our working set.
 DB="$TMPROOT/failed_merge.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
@@ -55,8 +52,7 @@ check "failed_merge_keeps_our_head" "ours rename" \
   "$("$DOLTLITE" "$DB" "SELECT message FROM dolt_log LIMIT 1;")"
 check "failed_merge_side_untouched" "table:t,trigger:tg" "$(objs "$DB/side")"
 
-# The same staleness reached any write commit after a same-session checkout:
-# the catalog the connection left behind was the one serialized from.
+# Same-session checkout used to serialize the catalog of the branch we left.
 DB="$TMPROOT/checkout_then_write.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
@@ -74,8 +70,7 @@ check "write_after_checkout_keeps_our_schema" "table:t" "$(objs "$DB")"
 check "write_after_checkout_keeps_rows" "1|a1
 2|a2" "$("$DOLTLITE" "$DB" "SELECT k || '|' || a FROM t ORDER BY k;")"
 
-# Rolling back after a same-session checkout must restore the branch we are on,
-# not the catalog of the branch we visited.
+# ROLLBACK after same-session checkout must restore the branch we are on.
 DB="$TMPROOT/rollback_after_checkout.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);

@@ -172,11 +172,7 @@ run_test_match "theirs_delete_trigger_skipped" \
   "^TDT\\|0$" "$DB9"
 
 
-# A commit refused for unresolved conflicts must leave the transaction the
-# caller opened intact. Committing the transaction first and only then
-# checking left the session in autocommit with live merge state, so the next
-# resolve wrote the still-conflicted working set to disk -- the one thing a
-# conflicted merge must never do -- and reported success without applying.
+# Refused conflict commit must leave the caller's transaction intact, not persist the working set.
 DB10=/tmp/test_conf10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
@@ -198,8 +194,6 @@ run_test "refused_commit_leaves_no_conflicts" \
 run_test "refused_commit_keeps_our_rows" \
   "SELECT v FROM t;" "ours" "$DB10"
 
-# The same refusal with nothing resolved first must also leave clean state,
-# and the surfaces that read merge state must stay readable.
 DB11=/tmp/test_conf11_$$.db; rm -f "$DB11"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-Am','base'); SELECT dolt_branch('br');" | $DOLTLITE "$DB11" > /dev/null 2>&1
@@ -213,7 +207,6 @@ run_test "refused_commit_no_prior_resolve_clean" \
 run_test "refused_commit_conflicts_readable" \
   "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB11"
 
-# Resolving everything inside the transaction still commits the merge.
 DB12=/tmp/test_conf12_$$.db; rm -f "$DB12"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
@@ -231,9 +224,7 @@ run_test "resolve_both_then_commit_lands" \
 run_test "resolve_both_then_commit_not_merging" \
   "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB12"
 
-# dolt_branch/dolt_tag serialize the whole refs blob. A conflicted merge
-# in BEGIN saves the unfinished working set in memory; those commands
-# must not commit it.
+# dolt_branch/dolt_tag serialize refs; they must not commit an in-memory conflicted working set.
 DB13=/tmp/test_conf13_$$.db; rm -f "$DB13"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-Am','base'); SELECT dolt_branch('br');" | $DOLTLITE "$DB13" > /dev/null 2>&1

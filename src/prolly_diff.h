@@ -55,9 +55,7 @@ struct ProllyDiffIter {
   u8 flags;
   u8 oldFlags;
   u8 newFlags;
-  /* The roots hold different key shapes: no cross-shape order exists, so
-  ** the walk drains every old row as a delete, then every new row as an
-  ** add — a key-shape change is a drop plus a recreate. */
+  /* Different key shapes: drain old as deletes, new as adds (drop+recreate). */
   u8 shapeMismatch;
 
   ProllyCursor *pCurOld;
@@ -84,9 +82,7 @@ int prollyDiffIterOpen(ProllyDiffIter *pIter, ChunkStore *pStore,
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange);
 void prollyDiffIterClose(ProllyDiffIter *pIter);
 
-/* Fetch pHash from the store and parse it into pNode. On SQLITE_OK *ppData
-** owns the backing buffer the caller must sqlite3_free; on error nothing
-** is left allocated. */
+/* On SQLITE_OK *ppData owns the buffer (sqlite3_free); on error nothing is allocated. */
 int prollyFetchNode(ChunkStore *pStore, const ProllyHash *pHash,
                     ProllyNode *pNode, u8 **ppData);
 

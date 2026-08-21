@@ -9,8 +9,7 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 
-/* Min/max bounds for content-defined chunks. The chunker may split after the
-** minimum when the key hash passes prollyWeibullCheck, and must split at max. */
+/* May split after min if Weibull fires; must split at max. */
 #define PROLLY_CHUNK_MIN     512
 #define PROLLY_CHUNK_MAX     16384
 

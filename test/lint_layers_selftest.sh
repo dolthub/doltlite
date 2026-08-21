@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
 
-# lint_layers.sh decides pass/fail from a violation log and exits immediately, so
-# a guard appended below that decision is dead code: it compiles, reads correctly
-# in review, and never runs. That happened -- the chunk_store_lock.c guard shipped
-# below the verdict and stayed dead across two merges before a third merge moved
-# it above by accident. Nothing noticed, because a dead guard is silent by
-# definition.
-#
-# Two checks. The structural one covers every guard, including ones not written
-# yet, and is what would have caught that bug immediately. The behavioural ones
-# confirm the guards actually reject the states they describe, so the structural
-# check is not the only thing standing between us and a silent lint.
+# Guards after the verdict never run. Structural check plus behavioural rejects.
 
 set -uo pipefail
 
@@ -27,7 +17,6 @@ bad() { FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $1\n  $2"; }
 
 echo "=== lint_layers self-test ==="
 
-# --- structural: nothing may report a violation after the verdict is computed ---
 
 verdict_line=$(grep -n '^NFAIL=' "$LINT" | head -1 | cut -d: -f1)
 if [ -z "$verdict_line" ]; then
@@ -44,14 +33,11 @@ $stranded"
   fi
 fi
 
-# --- behavioural: the guards reject what they claim to reject ---
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-# An unverified fixture is the same defect this whole file exists to prevent: a
-# partial copy still lints clean, so every behavioural assertion below would pass
-# while proving nothing. Abort loudly rather than report coverage we do not have.
+# Abort if the fixture is incomplete rather than reporting false coverage.
 setup_failed() {
   echo "SETUP FAILED: $1" >&2
   echo "  The behavioural checks below would pass against an incomplete fixture" >&2
@@ -66,8 +52,7 @@ $(sed 's/^/    /' "$cp_err")"
 fi
 rm -f "$cp_err"
 
-# cp can also return 0 having copied less than asked, so compare counts instead
-# of trusting the status alone.
+# cp can succeed after a partial copy; compare counts.
 want=$(ls "$SRC"/*.c "$SRC"/*.h 2>/dev/null | wc -l | tr -d ' ')
 got=$(ls "$WORK"/*.c "$WORK"/*.h 2>/dev/null | wc -l | tr -d ' ')
 if [ "$want" -eq 0 ]; then
@@ -84,8 +69,7 @@ expect_clean() {
 $out"; fi
 }
 
-# The message must name the offending file: a guard that fires with the wrong
-# subject is as unhelpful as one that does not fire.
+# The message must name the offending file.
 expect_violation() {
   local name="$1" needle="$2" out rc
   out=$(bash "$LINT" "$WORK" 2>&1)
@@ -102,8 +86,7 @@ $out"
 
 expect_clean "baseline_unperturbed_src_passes"
 
-# One module per guard family, so a family whose guard goes dead is caught.
-# GUARDED is "<file>:<cap>" -- the cap each guard enforces.
+# GUARDED is "<file>:<cap>".
 GUARDED="
 chunk_store_lock.c:1200
 prolly_btree_cursor_count.c:1500

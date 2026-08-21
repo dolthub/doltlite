@@ -5,9 +5,7 @@
 #include <string.h>
 #include <assert.h>
 
-/* Trailing zero bytes appended to every cached node buffer so a reader
-** parsing the last cell's record header can safely over-read one serial-type
-** varint (max 9 bytes) past the payload, matching SQLite's page-buffer slack. */
+/* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
 #define PROLLY_NODE_BUFFER_SLOP 8
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
@@ -205,7 +203,6 @@ ProllyCacheEntry *prollyCachePutOwned(
     memset(pEntry, 0, sizeof(*pEntry));
   }
 
-  /* Add SQLite-style trailing slop for speculative varint reads. */
   {
     u8 *pPadded = (u8*)sqlite3_realloc(pData, nData + PROLLY_NODE_BUFFER_SLOP);
     if( pPadded==0 ){

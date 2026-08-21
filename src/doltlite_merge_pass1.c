@@ -2,9 +2,6 @@
 
 #include "doltlite_merge_int.h"
 
-/* Catalog merge pass 1: walk ours/theirs entries, row-merge tables, record
-** schema conflicts and secondary-index patches. */
-
 int mergeAppendReindexName(char ***paz, int *pn, const char *zName){
   char **azNew;
   char *zDup;
@@ -38,7 +35,6 @@ static int mergePass1NoteSchemaConflict(
   return SQLITE_OK;
 }
 
-/* Free KeyInfo refs owned by collectIndexes before freeing the array. */
 static void mergePass1FreeIdxInfo(MergeIndexInfo *aIdxInfo, int nIdxInfo){
   int i;
   if( !aIdxInfo ) return;
@@ -51,8 +47,6 @@ static void mergePass1FreeIdxInfo(MergeIndexInfo *aIdxInfo, int nIdxInfo){
   sqlite3_free(aIdxInfo);
 }
 
-/* Build secondary-index merge descriptors for a named table. Every secondary
-** index is patched inline with a real KeyInfo (NOCASE/RTRIM/DESC included). */
 static int mergePass1CollectIndexes(
   MergePass1Ctx *c,
   const char *zName,
@@ -78,15 +72,14 @@ static int mergePass1CollectIndexes(
 
   aIdxInfo = sqlite3_malloc(nIdx * (int)sizeof(MergeIndexInfo));
   if( !aIdxInfo ){
-    /* Proceeding would merge table rows but leave secondary indexes stale. */
+    /* Else table rows merge with stale secondary indexes. */
     return SQLITE_NOMEM;
   }
   memset(aIdxInfo, 0, nIdx*(int)sizeof(MergeIndexInfo));
 
   for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
     struct TableEntry *oursIdx;
-    /* On WITHOUT ROWID tables the PK pseudo-index is the table tree itself;
-    ** on rowid tables it is a real unique index that merges like any other. */
+    /* WITHOUT ROWID PK is the table tree; skip it. */
     if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
     oursIdx = doltliteFindTableByNumber(c->aOurs, c->nOurs, pIdx->tnum);
     if( oursIdx ){
@@ -134,7 +127,6 @@ static int mergePass1RecordIndexPatches(
   return SQLITE_OK;
 }
 
-/* Three-way merge one table's data (and inline secondary indexes). */
 static int mergePass1MergeTableData(
   MergePass1Ctx *c,
   const char *zName,
@@ -206,7 +198,6 @@ static int mergePass1MergeTableData(
   return SQLITE_OK;
 }
 
-/* Resolve catalog lookups for one ours entry (named table or unnamed index). */
 static int mergePass1ResolveOursEntry(
   MergePass1Ctx *c,
   int iOurs,
@@ -280,7 +271,6 @@ static int mergePass1AddedSchemaMatches(
   return strcmp(ourSE->zSql, theirSE->zSql)==0;
 }
 
-/* Ours added the object (absent from ancestor). */
 static int mergePass1OursAdded(
   MergePass1Ctx *c,
   int iOurs,
@@ -291,9 +281,7 @@ static int mergePass1OursAdded(
 ){
   int rc;
 
-  /* An index we added over a column their side dropped cannot survive: the
-  ** merged table has no such column, so the catalog it would produce cannot
-  ** be loaded. Dolt drops the index with the column. */
+  /* Index over a column they dropped cannot load. Dolt drops it too. */
   if( !zName && zSchemaMergeName && zSchemaConflictTable ){
     SchemaEntry *pOurIdx = findSchemaEntry(
         c->aOursSchema, c->nOursSchema, zSchemaMergeName);
@@ -376,7 +364,6 @@ static int mergePass1OursAdded(
   return SQLITE_OK;
 }
 
-/* Ancestor had it; theirs dropped it. */
 static int mergePass1OursModifyTheirsDelete(
   MergePass1Ctx *c,
   int iOurs,
@@ -392,8 +379,8 @@ static int mergePass1OursModifyTheirsDelete(
 
   if( !oursChanged ) return SQLITE_OK;
 
-  /* An index root moves with table data; only a definition change is a
-  ** real modify-versus-delete conflict. Unchanged definition: DROP wins. */
+  /* Index root moves with table data; only a definition change conflicts.
+  ** Unchanged definition: DROP wins. */
   if( !zName && zSchemaMergeName && zSchemaMergeName[0]
    && !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
                                 c->aOursSchema, c->nOursSchema,
@@ -415,21 +402,8 @@ static int mergePass1OursModifyTheirsDelete(
   return SQLITE_OK;
 }
 
-/* Ordered primary-key signature ("name type,name type") of the table zSql
-** creates, built by executing it in a scratch db. No declared PK yields the
-** empty signature, which matches SQLite treating those tables as rowid keyed
-** regardless of the rest of the schema. */
-/* Ordered primary-key signature of the table zSql creates, built by
-** executing it in a scratch db.
-**
-** The signature must name everything that decides where a row sorts and
-** which rows collide, because that is what makes two keyspaces mergeable:
-** the columns in key order, their types, their collations, and their sort
-** directions. A table with a real primary-key index reads all four from
-** that index. Otherwise the key is either a rowid alias, where none of it
-** applies, or absent entirely; both fall back to the declared columns, and
-** no declared PK yields the empty signature, matching SQLite treating such
-** tables as rowid keyed regardless of the rest of the schema. */
+/* PK signature: key columns in order, types, collations, sort dirs.
+** No declared PK yields empty, matching SQLite rowid-keyed tables. */
 static int mergePass1AppendSigRow(
   char **pzSig,
   const char *zName,
@@ -518,9 +492,7 @@ done:
   return *pzSig ? SQLITE_OK : SQLITE_NOMEM;
 }
 
-/* Tables whose primary keys differ never row-merge: the keys identify
-** different things, so there is no shared ancestor keyspace to merge in.
-** Refuse the merge outright, the same way Dolt does. */
+/* Different PKs are different keyspaces; refuse, as Dolt does. */
 static int mergePass1CheckPrimaryKeysMatch(
   MergePass1Ctx *c,
   const char *zName,
@@ -566,13 +538,10 @@ static int mergePass1CheckPrimaryKeysMatch(
   return SQLITE_ERROR;
 }
 
-/* The row merge addresses every side by merged column position, so a side
-** still holding the old layout has to be re-laid out first: otherwise a
-** column the merged layout no longer has shifts every later value one slot
-** left, and an ancestor read at the wrong positions reports cells as changed
-** that neither side touched. zOtherSql is the layout of the side that did not
-** supply the merged one, which is not always what the schema arrays hold —
-** adopting theirs overwrites our entry's SQL. */
+/* Cell merge is by merged column position. Relayout the unmerged side
+** first or dropped columns shift later values and the ancestor looks
+** changed. zOtherSql is that side's layout, not always the schema array
+** (adopting theirs overwrites our SQL). */
 static int mergePass1RelayoutToMergedSchema(
   MergePass1Ctx *c,
   const char *zName,
@@ -604,8 +573,7 @@ static int mergePass1RelayoutToMergedSchema(
   return SQLITE_OK;
 }
 
-/* Exactly one side changed the table's columns, so the merged layout is
-** that side's and the other side plus the ancestor have to move onto it. */
+/* One side changed columns: that layout wins; move the other and ancestor. */
 static int mergePass1RelayoutOneSidedSchema(
   MergePass1Ctx *c,
   const char *zName,
@@ -633,7 +601,6 @@ static int mergePass1RelayoutOneSidedSchema(
       &pAnc->root, pOtherOut, pAncOut, pbRelaid);
 }
 
-/* Both sides still have the object. */
 static int mergePass1BothSides(
   MergePass1Ctx *c,
   int iOurs,
@@ -677,8 +644,7 @@ static int mergePass1BothSides(
         zSchemaMergeName);
   }
 
-  /* A theirs side that never touched the table keeps ours verbatim, so no
-  ** cross-key merge can happen and the primary keys need not agree. */
+  /* Untouched theirs keeps ours verbatim; PKs need not agree. */
   if( zName && (ourSchemaChanged || theirSchemaChanged)
    && (theirsChanged || theirSchemaChanged) ){
     rc = mergePass1CheckPrimaryKeysMatch(
@@ -716,8 +682,7 @@ static int mergePass1BothSides(
         sqlite3_free(zSql);
         return pOurSe ? SQLITE_NOMEM : SQLITE_CORRUPT;
       }
-      /* Our rows still follow the layout being replaced here; keep it so the
-      ** relayout below can move them onto the adopted one. */
+      /* Ours still uses the old layout; keep it for the relayout below. */
       zOursPrevSql = pOurSe->zSql;
       pOurSe->zSql = zSql;
     }
@@ -756,7 +721,7 @@ static int mergePass1BothSides(
     }
   }
 
-  /* sqlite_sequence / sqlite_stat* are derived; refresh after merge. */
+  /* sqlite_sequence / sqlite_stat* are derived; skip row merge. */
   if( !skipRowMerge && zName
    && strcmp(zName, "sqlite_sequence")==0
    && oursChanged && theirsChanged ){
@@ -776,10 +741,8 @@ static int mergePass1BothSides(
     return SQLITE_OK;
   }
 
-  /* Their schema was adopted whole for a rename, so the merged layout is
-  ** theirs and our rows are the ones left behind. A rename rewrites no rows,
-  ** so their root can be unchanged while the layout still moved: the move has
-  ** to be judged on the schema, never on whether either side wrote rows. */
+  /* Adopted their schema for a rename: our rows are off-layout. Judge
+  ** the move on the schema, not on whether either side wrote rows. */
   if( zName && zOursPrevSql ){
     SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
     SchemaEntry *mergedSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
@@ -806,8 +769,7 @@ static int mergePass1BothSides(
   sqlite3_free(zOursPrevSql);
   zOursPrevSql = 0;
 
-  /* The mirror: our schema was kept for a rename on our side, so theirs is
-  ** the layout left behind. Judged on the schema for the same reason. */
+  /* Mirror: we kept our schema, so theirs is the off-layout side. */
   if( zName && !bSchemaConflict && schemaChoice==SCHEMA_MERGE_OURS ){
     SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
     SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
@@ -903,7 +865,6 @@ static int mergePass1MergeOursEntry(MergePass1Ctx *c, int iOurs){
       zSchemaMergeName, zSchemaConflictTable, ancEntry, theirsEntry);
 }
 
-/* Modify-versus-delete where the survivor is on theirs. */
 static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
   int i, rc;
 
@@ -959,9 +920,8 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* Objects one side renamed and the other dropped, by the name they had in the
-** ancestor. Collected from both sides: Dolt keeps such a table whichever branch
-** did the renaming. */
+/* Ancestor names one side renamed and the other dropped. Dolt keeps
+** the renamed table from either branch. */
 static int mergePass1CollectRenameOverDrop(
   MergePass1Ctx *c,
   MergeRowPolicy *pPolicy
@@ -1049,8 +1009,7 @@ static int mergePass1AuxSchemaSame(const SchemaEntry *pA, const SchemaEntry *pB)
   return strcmp(zASql, zBSql)==0 && sqlite3_stricmp(zATbl, zBTbl)==0;
 }
 
-/* Views and triggers live only as catalog rows. Competing definitions are
-** schema conflicts; they must not become (sqlite_master) row conflicts. */
+/* Views/triggers are catalog-only; competing defs are schema conflicts. */
 static int mergePass1NoteAuxSchemaConflicts(MergePass1Ctx *c){
   int side, i, rc;
 
@@ -1090,7 +1049,6 @@ static int mergePass1NoteAuxSchemaConflicts(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* Merge catalog root (iTable==1). Deferred so schema actions are known. */
 static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
   struct TableEntry *ancEntry;
   struct TableEntry *theirsEntry;
@@ -1297,8 +1255,7 @@ int mergeCatalogPass1(
     }
   }
 
-  /* Conflicts whose surviving object is on theirs must be recorded before
-  ** the master-catalog root is chosen below. */
+  /* Record theirs-surviving conflicts before choosing the master root. */
   rc = mergePass1TheirsModifyDelete(&c);
   if( rc!=SQLITE_OK ){
     mergePass1Free(&c);
@@ -1307,7 +1264,6 @@ int mergeCatalogPass1(
 
   rc = mergePass1MergeMaster(&c, iTable1Idx);
   if( rc==SQLITE_DONE ){
-    /* Prefer-our-master path: original returned before patch apply. */
     mergePass1Free(&c);
     return SQLITE_OK;
   }
@@ -1316,7 +1272,7 @@ int mergeCatalogPass1(
     return rc;
   }
 
-  /* Prefer inline index roots; they already account for row conflicts. */
+  /* Inline index roots already include row conflicts. */
   mergePass1ApplyIndexPatches(&c);
   mergePass1Free(&c);
   return rc;

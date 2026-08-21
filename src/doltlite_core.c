@@ -43,9 +43,8 @@ void doltliteTestFailNextHeadConfirm(void){
 static void (*xTestBeforeRefInstall)(void*) = 0;
 static void *pTestBeforeRefInstallArg = 0;
 
-/* Fires once, unlocked, where a fetch has committed its chunks but has not
-** yet rooted them with a tracking ref -- the window a concurrent gc can
-** empty. Lets a test drive that gc deterministically. */
+/* Unlocked hook after fetch commits chunks but before a tracking ref roots
+** them — the window a concurrent gc can empty. */
 void doltliteTestSetBeforeRefInstallHook(void (*xHook)(void*), void *pArg){
   xTestBeforeRefInstall = xHook;
   pTestBeforeRefInstallArg = pArg;
@@ -168,29 +167,23 @@ int doltliteRefreshAndConfirmHead(
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Refresh in-memory state so a subsequent advance builds on the current
-  ** view. This is a no-op when we hold the lock reentrantly (a VC op already
-  ** in a write transaction), so it cannot be the basis of the CAS below. */
+  /* Refresh in-memory state. No-op under a reentrant lock, so not a CAS basis. */
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     return rc;
   }
 
-  /* Compare against the authoritative on-disk tip, read directly rather than
-  ** from the in-memory refs. The in-memory tip can be stale here: force-refresh
-  ** above is suppressed under a reentrant lock, and even the lock-time heuristic
-  ** can miss a peer commit when WAL reuse leaves the file size unchanged. A
-  ** stale tip would let this advance clobber the peer's commit (lost update). */
+  /* Compare the on-disk tip, not in-memory refs. Force-refresh is a no-op
+  ** under a reentrant lock, and WAL reuse can hide a peer commit. */
   zBranch = doltliteGetSessionBranch(db);
   rc = chunkStoreReadDiskBranchTip(cs, zBranch, &branchTip, &found);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     return rc;
   }
-  /* A non-empty expected tip means the branch must already exist on disk.
-  ** Treating a missing branch as "confirmed" would let the advance install a
-  ** tip without having compared against a peer that already created it. */
+  /* A non-empty expected tip requires the branch to exist on disk; treating
+  ** missing as confirmed would skip a peer that already created it. */
   if( !found ){
     if( !prollyHashIsEmpty(pExpectedHead) ){
       chunkStoreUnlock(cs);
@@ -269,9 +262,8 @@ int doltliteUpdateSchemaHashes(sqlite3 *db){
   sqlite3_stmt *pStmt = 0;
   int rc;
   int rc2;
-  /* One scan of sqlite_master covers every table and index; both key their
-  ** catalog entry by rootpage and canonicalize by their own name. Virtual
-  ** tables have rootpage zero and no corresponding catalog entry. */
+  /* One sqlite_master scan for tables and indexes, keyed by rootpage.
+  ** Virtual tables have rootpage 0 and no catalog entry. */
   if( !db ) return SQLITE_MISUSE;
   rc = sqlite3_prepare_v2(
       db,
@@ -400,10 +392,8 @@ int doltliteMutateRefsExpected(
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* xMutate edits the in-memory refs and serializeRefs rewrites the whole refs
-  ** blob, so a stale view would drop a peer's concurrent ref change (e.g. a
-  ** branch delete clobbering main's just-merged advance). Reload persisted
-  ** refs first rather than trusting the lock-time change heuristic. */
+  /* xMutate + serializeRefs rewrite the whole refs blob; reload persisted
+  ** refs rather than trusting the lock-time size heuristic. */
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
@@ -429,9 +419,8 @@ int doltliteMutateRefsExpected(
   }
 
   if( rc==SQLITE_OK ) rc = xMutate(db, cs, pArg);
-  /* PersistWorkingSet and commit phase one refuse a conflicted working set.
-  ** Walk the refs about to land, not the session hash, so abort helpers
-  ** that rewrite a clean working set can still finish. */
+  /* PersistWorkingSet refuses a conflicted working set. Walk the refs about
+  ** to land, not the session hash, so abort helpers can still finish. */
   if( rc==SQLITE_OK ){
     refsTableGetBranches(&cs->refs, &nBr, &aBr);
     for(iBr=0; rc==SQLITE_OK && iBr<nBr; iBr++){
@@ -671,14 +660,8 @@ int doltliteSeedStoreIfNeeded(
   return rc;
 }
 
-/* Advance the current branch tip and persist the working set. When
-** bSwitchBeforePersist is set, adopt the catalog into the live session before
-** persisting (the historical path used by non-CAS advances). The CAS path
-** leaves it clear so no lock-cycling SQL runs between tip confirm and the
-** durable refs commit — SwitchCatalog / nested statement commits can drop
-** lockDepth to 0, after which PersistWorkingSetWithHash may re-acquire the
-** lock, reload a peer tip, then overwrite it with the local tip (lost update).
-*/
+/* Advance the branch tip and persist. CAS leaves bSwitchBeforePersist
+** clear so SwitchCatalog cannot drop lockDepth between confirm and commit. */
 static int doltliteAdvanceBranchWithState(
   sqlite3 *db,
   const ProllyHash *pNewHead,
@@ -770,16 +753,13 @@ int doltliteCompareAndAdvanceBranch(
   }
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
 
-  /* Persist the tip under the confirm lock without SwitchCatalog: any SQL that
-  ** cycles the graph lock between confirm and commit can let a peer land and
-  ** then be clobbered when this connection re-acquires and writes its tip. */
+  /* Persist the tip under the confirm lock without SwitchCatalog; lock-cycling
+  ** SQL between confirm and commit can let a peer land and then be clobbered. */
   rc = doltliteAdvanceBranchWithState(
       db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 0);
   if( rc==SQLITE_OK ){
-    /* Belt-and-suspenders: the durable tip must be ours before we unlock.
-    ** PersistWorkingSetWithHash can silently skip the commit when a conflicts
-    ** catalog is present; refuse that here rather than report a successful
-    ** advance that never hit disk. */
+    /* Durable tip must be ours before unlock. PersistWorkingSetWithHash can
+    ** skip the commit when a conflicts catalog is present. */
     rc = chunkStoreReadDiskBranchTip(
         cs, doltliteGetSessionBranch(db), &diskTip, &found);
     if( rc==SQLITE_OK
@@ -787,18 +767,16 @@ int doltliteCompareAndAdvanceBranch(
       rc = SQLITE_BUSY;
     }
     if( rc!=SQLITE_OK ){
-      /* AdvanceBranchWithState already cleared saved on success; rebuild a
-      ** restore from the pre-confirm session by re-saving is impossible here.
-      ** Surface BUSY so the caller retries on a fresh view. */
+      /* AdvanceBranchWithState already cleared saved on success; cannot rebuild
+      ** a restore here. BUSY so the caller retries on a fresh view. */
     }
   }
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
   chunkStoreUnlock(cs);
 
   if( rc==SQLITE_OK ){
-    /* Adopt the advanced catalog into the live session after the durable tip
-    ** is on disk. Failure here leaves HEAD advanced with a recoverable
-    ** working-set mismatch on reopen. */
+    /* Adopt the catalog after the durable tip is on disk. Failure leaves HEAD
+    ** advanced with a recoverable working-set mismatch on reopen. */
     if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
       int src = doltliteSwitchCatalog(db, pWorkingCatHash);
       if( src!=SQLITE_OK ) rc = src;
@@ -852,14 +830,10 @@ int doltliteDetectConstraintViolationsFiltered(
       "       AND (instr(upper(sql), 'REFERENCES')>0 "
       "            OR instr(upper(sql), 'CHECK')>0 "
       "            OR instr(upper(sql), 'UNIQUE')>0 "
-      /* NOT NULL has a detector too. Without this term a table whose only
-      ** constraint is NOT NULL returned from here reporting nothing, so
-      ** dolt_verify_constraints could not see a violating row at all. Matching
-      ** a column merely named like the keyword only costs a scan the detectors
-      ** find nothing in; missing one reports a clean database that is not. */
+      /* NOT NULL has a detector too; without this term a NOT-NULL-only table
+      ** is invisible to dolt_verify_constraints. */
       "            OR instr(upper(sql), 'NOT NULL')>0 "
-      /* STRICT tables have a type detector; the keyword sits at the tail
-      ** of the CREATE statement. */
+      /* STRICT tables have a type detector; the keyword is at the tail of CREATE. */
       "            OR instr(upper(sql), 'STRICT')>0)) "
       "   OR (type='index' AND sql IS NOT NULL "
       "       AND instr(upper(sql), 'CREATE UNIQUE INDEX')>0) "
@@ -929,9 +903,8 @@ int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
   return db->pSavepoint!=0 && db->nSavepoint==0;
 }
 
-/* SQLite represents a top-level SAVEPOINT as the transaction boundary.
-** Doltlite treats that like autocommit for VC operations: seal the boundary
-** instead of leaving a savepoint that later ROLLBACK TO can undo. */
+/* A top-level SAVEPOINT is the txn boundary; seal it like autocommit so
+** later ROLLBACK TO cannot undo the VC op. */
 int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db){
   if( doltliteSavepointIsTopLevelTxn(db) ){
     return sqlite3_exec(db, "COMMIT", 0, 0, 0);
@@ -964,10 +937,8 @@ int doltliteVcSealActiveSavepoints(sqlite3 *db){
   return rc;
 }
 
-/* End the enclosing SQL transaction after a ref advance, the same boundary
-** dolt_commit draws. Releasing savepoints alone leaves a plain BEGIN open,
-** and a later ROLLBACK then reverts the working set while the advanced ref
-** stays, splitting HEAD from the data. */
+/* End the enclosing SQL txn after a ref advance. Releasing savepoints
+** alone leaves BEGIN open; ROLLBACK then splits HEAD from the data. */
 int doltliteVcSealEnclosingTxn(sqlite3 *db){
   if( failNextVcSeal ){
     failNextVcSeal = 0;
@@ -999,10 +970,8 @@ int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   if( db->pSavepoint ){
     rc = doltliteVcSealActiveSavepoints(db);
     if( rc!=SQLITE_OK ) return rc;
-    /* Releasing the savepoints leaves any enclosing BEGIN open, and a later
-    ** ROLLBACK would then revert the working set to the branch we left while
-    ** the ref already names the one we switched to. Seal that too. A top-level
-    ** SAVEPOINT was the transaction, so releasing it ended everything. */
+    /* Releasing savepoints leaves an enclosing BEGIN open; ROLLBACK would
+    ** revert the working set while the ref already names the new branch. */
     if( db->autoCommit ) return SQLITE_OK;
   }
   rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);

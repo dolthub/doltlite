@@ -165,19 +165,15 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     return;
   }
 
-  /* Every row has to be rewritten to carry the new column, but the user wrote
-  ** ALTER TABLE, not an UPDATE. DBFLAG_InternalDml keeps triggers from firing
-  ** for rows nobody changed, and the change counters are put back afterwards,
-  ** so the statement is as invisible as stock's, which touches no rows at all.
-  */
+  /* Rewrite rows for the new column as InternalDml so triggers do not fire;
+  ** restore change counters. Stock ALTER touches no rows. */
   {
     int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
     i64 nChange = db->nChange;
     i64 nTotalChange = db->nTotalChange;
     db->mDbFlags |= DBFLAG_InternalDml;
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    /* Clear the one bit rather than restoring the word: preparing a statement
-    ** moves other bits, and putting the old word back would undo that. */
+    /* Clear this bit only: restoring the word would undo flags set by prepare. */
     if( !bWasSet ) db->mDbFlags &= ~DBFLAG_InternalDml;
     db->nChange = nChange;
     db->nTotalChange = nTotalChange;

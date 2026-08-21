@@ -539,7 +539,7 @@ int csReadIndex(ChunkStore *cs){
   if( nEntries > INT_MAX/(int)sizeof(ChunkIndexEntry) ){
     return SQLITE_TOOBIG;
   }
-  /* nChunks includes WAL chunks; only compacted entries are in this index. */
+  /* nChunks includes WAL; index compacted. */
   if( nEntries > cs->index.nChunks ){
     return SQLITE_CORRUPT;
   }

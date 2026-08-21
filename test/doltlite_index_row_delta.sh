@@ -1,13 +1,10 @@
 #!/bin/bash
-# Secondary-index row-delta paths (conflicts resolve, merge, workspace) must
-# use the same KeyInfo-aware encoding as VDBE. BINARY-only sort keys leave
-# ghost entries on NOCASE/RTRIM/DESC indexes and fail integrity_check.
+# Index row-delta must use KeyInfo encoding; BINARY-only keys leave ghosts on NOCASE/RTRIM/DESC.
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite Index Row-Delta Unification ==="
 echo ""
 
-# --- NOCASE: conflicts_resolve --theirs renames the indexed column -----------
 DB=/tmp/test_idx_delta_nocase_resolve_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -48,7 +45,6 @@ else
 fi
 rm -f "$DB"
 
-# --- RTRIM: conflict resolve ------------------------------------------------
 DB=/tmp/test_idx_delta_rtrim_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -75,7 +71,6 @@ run_test "rtrim_resolve_seek" \
 run_test_lastline "rtrim_resolve_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# --- DESC + NOCASE merge (inline patch, not post-merge REINDEX-only) --------
 DB=/tmp/test_idx_delta_desc_merge_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -108,9 +103,7 @@ else
 fi
 rm -f "$DB"
 
-# Expression-index keys must include the expression value. Theirs-added
-# rows used to be stored under a rowid-only key, so INDEXED BY missed them
-# and integrity_check reported the row missing from the index.
+# Expression-index keys must include the expression; theirs-added rows used a rowid-only key.
 DB=/tmp/test_idx_delta_expr_merge_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -169,9 +162,7 @@ run_test "ours_index_merge_expression_rows" \
 run_test_lastline "ours_index_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# Partial unique indexes only constrain rows that match WHERE. Both
-# branches inserting v=-1 must merge cleanly; v=9 on both is a real
-# unique violation.
+# Partial unique: v=-1 merges; v=9 on both is a unique violation.
 DB=/tmp/test_idx_delta_partial_unique_neg_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -247,7 +238,6 @@ run_test "partial_unique_wr_neg_no_cv" \
 run_test_lastline "partial_unique_wr_neg_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# --- Workspace stage of NOCASE index row ------------------------------------
 DB=/tmp/test_idx_delta_ws_nocase_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -270,7 +260,6 @@ run_test "ws_nocase_seek_abc_gone" \
 run_test_lastline "ws_nocase_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# --- BINARY unique index still works on resolve (regression) ----------------
 DB=/tmp/test_idx_delta_binary_$$.db
 rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1

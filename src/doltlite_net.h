@@ -5,9 +5,8 @@
 #include <string.h>
 #include <time.h>
 
-/* Thin cross-platform socket shim shared by doltlite_tls.c and
- * doltlite_remotesrv.c. Socket handles are kept as int to match
- * mbedtls_net_context, which stores its fd as int on Windows too. */
+/* Socket shim for tls and remotesrv. int handles match mbedtls_net_context
+ * fd on Windows. */
 
 #ifdef _WIN32
 
@@ -33,8 +32,7 @@ static inline int doltliteSocketSetTimeout(int fd, int timeoutMs) {
   return rc1 == 0 && rc2 == 0 ? 0 : 1;
 }
 
-/* WSAStartup is refcounted and never torn down here; process exit reclaims
- * it. Idempotent enough for a CLI and the test server. */
+/* WSAStartup is refcounted; process exit reclaims it. */
 static inline int doltliteNetInit(void) {
   static int done = 0;
   WSADATA wsa;

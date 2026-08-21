@@ -169,8 +169,8 @@ static int gcVerifyHashCb(void *ctx, const ProllyHash *pHash){
   if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
   v->rc = chunkStoreGet(v->cs, pHash, &data, &nData);
   sqlite3_free(data);
-  /* Only NOTFOUND means the sweep collected a live hash. Other errors
-  ** (injected IO faults, OOM) leave the check inconclusive. */
+  /* Only NOTFOUND means the sweep collected a live hash; other errors
+  ** leave the check inconclusive. */
   if( v->rc==SQLITE_NOTFOUND ){
     fprintf(stderr,
             "doltlite: GC invariant: session hash unreachable after sweep\n");
@@ -193,8 +193,7 @@ static int gcVerifySessionHashCb(void *ctx, const ProllyHash *pHash){
 static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
   GcVerifyCtx v;
   v.cs = cs; v.rc = SQLITE_OK;
-  /* Diagnostic-only pass; allocation failures inside it are deliberately
-  ** inconclusive (see gcVerifyHashCb), so mark them benign. */
+  /* Diagnostic-only; allocation failures are inconclusive (gcVerifyHashCb). */
   sqlite3BeginBenignMalloc();
   (void)doltliteSeedSessionHashes(db, cs, gcVerifySessionHashCb, &v);
   sqlite3EndBenignMalloc();
@@ -359,8 +358,7 @@ static void gcFormatMarkFailure(
   }
 }
 
-/* Crash-injection plumbing shared by every write the gc rewrite issues.
-** DOLTLITE_CRASH_GC_WRITE=N hard-exits the process on the Nth write. */
+/* DOLTLITE_CRASH_GC_WRITE=N hard-exits on the Nth gc rewrite write. */
 #ifdef SQLITE_TEST
 static int gcCrashTarget = -2;
 static int gcCrashCount = 0;
@@ -381,13 +379,12 @@ static void gcCrashResetForRun(void){
 #define GC_CRASH_CHECK() ((void)0)
 #endif
 
-/* Buffered forward-only writer for the gc tmp file. The compacted store is
-** streamed through this fixed-size buffer instead of being assembled in
-** memory, so gc RAM stays bounded no matter how much live data survives. */
+/* Buffered forward-only writer for the gc tmp file; streams so RAM stays
+** bounded. */
 typedef struct GcFileWriter GcFileWriter;
 struct GcFileWriter {
   sqlite3_file *pFile;
-  i64 iOff;           /* file offset of the first unflushed buffered byte */
+  i64 iOff;
   int nBuf;
   u8 aBuf[65536];
 };
@@ -423,8 +420,8 @@ static int gcStreamMarkedChunk(
   ChunkStore *cs,
   const ProllyHash *pHash,
   ProllyHashSet *marked,
-  GcFileWriter *pW,          /* may be NULL: validate + index only */
-  i64 *piPos,                /* running offset in the compacted layout */
+  GcFileWriter *pW,
+  i64 *piPos,
   ChunkIndexEntry *aNewIndex,
   int *pnNewIndex
 ){
@@ -458,10 +455,8 @@ static int gcStreamMarkedChunk(
 }
 
 /* Assemble the compacted index without materializing chunk data. Offsets
-** describe the compacted layout (length-prefixed chunks after the manifest);
-** the writer, when given, streams that layout to the gc tmp file. Without a
-** writer (in-memory stores) each chunk is still fetched and discarded so
-** every kept chunk is validated against its hash. */
+** describe the compacted layout; a writer streams it. Without a writer,
+** fetch-and-discard still hash-validates every kept chunk. */
 static int gcBuildCompactedIndex(
   ChunkStore *cs,
   ProllyHashSet *marked,
@@ -601,9 +596,8 @@ static int gcRewriteFile(
 
   gcCrashResetForRun();
 
-  /* The manifest leads the file, so the compacted geometry must be known
-  ** before any chunk is streamed. Chunk sizes come from the source entries;
-  ** the streaming pass re-checks the layout against the fetched data. */
+  /* Manifest leads the file, so compacted geometry must be known before
+  ** streaming. The streaming pass re-checks layout against fetched data. */
   {
     int nIdx; const ChunkIndexEntry *aIdx;
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
@@ -658,8 +652,7 @@ static int gcRewriteFile(
     sqlite3_free(aNewIndex);
     return SQLITE_NOMEM;
   }
-  /* Opened with SQLITE_OPEN_MAIN_DB below, so the name needs the VFS's
-  ** double-nul terminator. */
+  /* SQLITE_OPEN_MAIN_DB: the name needs the VFS's double-nul terminator. */
   rc = chunkStoreDupFilenameDoubleNul(zRaw, &zTmp);
   sqlite3_free(zRaw);
   if( rc!=SQLITE_OK ){
@@ -673,8 +666,7 @@ static int gcRewriteFile(
                  | SQLITE_OPEN_MAIN_DB;
     GcFileWriter w;
 
-    /* Best-effort removal of a stale tmp file; a failure here (including
-    ** the OS-layer fault probe) must not fail the GC. */
+    /* Best-effort stale-tmp removal; failure here must not fail GC. */
     sqlite3BeginBenignMalloc();
     sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
     sqlite3EndBenignMalloc();
@@ -717,9 +709,8 @@ static int gcRewriteFile(
       }
     }
 
-    /* The manifest was written from the precomputed geometry; if the
-    ** streamed layout disagrees, the size bookkeeping in the source
-    ** entries is wrong and the rewrite must not replace the live file. */
+    /* If streamed layout disagrees with precomputed geometry, do not
+    ** replace the live file. */
     if( rc==SQLITE_OK
      && (nNewIndex!=kept || iPos!=CHUNK_MANIFEST_SIZE + nDataBytes) ){
       rc = SQLITE_CORRUPT;
@@ -753,9 +744,8 @@ static int gcRewriteFile(
       sqlite3_file *pNewFile = 0;
 
 #if SQLITE_OS_WIN
-      /* Windows will not reliably replace either an open source file or an
-      ** open destination file. Close both before the atomic replace call,
-      ** and restore the destination handle if replacement fails. */
+      /* Windows will not reliably replace an open file. Close both before
+      ** the atomic replace; restore the destination handle on failure. */
       sqlite3OsCloseFree(pTmpFile);
       pTmpFile = 0;
       if( pOldFile ){
@@ -915,10 +905,7 @@ static int gcSweep(
   return rc;
 }
 
-/* Report a gc phase failure without masking canonical resource errors:
-** callers (e.g. the fault harnesses) must see SQLITE_NOMEM / SQLITE_FULL
-** when the underlying failure was one of those result codes, not a generic
-** SQLITE_ERROR message. */
+/* Report a gc phase failure without masking SQLITE_NOMEM / SQLITE_FULL. */
 static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
     sqlite3_result_error_nomem(context);
@@ -930,15 +917,9 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   }
 }
 
-/* Acquire the graph lock for gc. When bBusyRetry is set (an explicit
-** dolt_gc() the caller expects to wait), spin on the busy handler while the
-** lock is contended. The checkpoint-driven compaction path passes 0: it is
-** best-effort and MUST NOT spin, because a checkpoint can be re-entered on a
-** second connection from within a testvfs xWrite callback while the first
-** connection already holds the shared graph file lock on this thread -- a
-** self-deadlock the busy handler can never resolve (it would spin forever).
-** Trying once and skipping compaction on BUSY is safe; stock does not compact
-** on checkpoint at all. */
+/* Graph lock for gc. bBusyRetry spins (explicit dolt_gc). Checkpoint
+** compaction must not: testvfs xWrite can re-enter while this thread
+** already holds the graph lock (self-deadlock). */
 static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs, int bBusyRetry){
   int rc;
   assert( sqlite3_mutex_held(db->mutex) );
@@ -948,9 +929,8 @@ static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs, int bBusyRetry){
   return rc;
 }
 
-/* Lock, mark, sweep and verify the chunk store. On failure pzPhase names the
-** stage that failed so callers can report it; the lock is released before
-** return on every path that acquired it. */
+/* Lock, mark, sweep, verify. On failure pzPhase names the stage; the lock
+** is released before return on every acquired path. */
 static int gcRun(
   sqlite3 *db,
   ChunkStore *cs,
@@ -980,11 +960,9 @@ static int gcRun(
     *pzPhase = "failed to acquire lock for gc";
     return rc;
   }
-  /* The sweep republishes the store by renaming a rebuilt file over this path.
-  ** A connection that may not write must not do that, and neither may one
-  ** whose file was replaced underneath it: the path now names a database this
-  ** handle never opened, and the rename would destroy it. Checked after the
-  ** refresh, which is what detects the replacement. */
+  /* Sweep republishes by renaming over this path. A non-writable connection,
+  ** or one whose file was replaced underneath it, must not. Checked after
+  ** refresh, which detects the replacement. */
   if( cs->readOnly || cs->movedReadOnly ){
     chunkStoreUnlock(cs);
     *pzPhase = cs->readOnly
@@ -1081,10 +1059,8 @@ static void doltliteGcFunc(
   sqlite3_result_text(context, result, -1, SQLITE_TRANSIENT);
 }
 
-/* Compaction is always aimed at one specific store. gcMarkReachable seeds
-** every root from cs itself, and doltliteSeedSessionHashes walks all of db's
-** btrees but keeps only those sharing cs, so a store reached through an
-** ATTACH is marked from its own refs and its own session state. */
+/* Compaction targets one store. Mark from cs's own refs and session hashes
+** sharing cs, so an ATTACH is marked from its own state. */
 int doltliteGcCompactStoreWithPhase(
   sqlite3 *db,
   ChunkStore *cs,

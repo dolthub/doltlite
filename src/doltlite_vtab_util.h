@@ -11,12 +11,7 @@
 int sqlite3DoltliteVtabConstraintIsCorrelated(sqlite3_index_info *pIdxInfo,
                                               int iConstraint);
 
-/*
- * Shared prefix for virtual table instances whose per-table metadata
- * consist of (db, zTableName, cols) immediately after the base vtab.
- * AtVtab and HistVtab both start with this exact layout, so a pointer
- * to either can safely be cast to DoltliteVtabCommon*.
- */
+/* Shared (db, zTableName, cols) prefix; AtVtab and HistVtab start with this. */
 typedef struct DoltliteVtabCommon DoltliteVtabCommon;
 struct DoltliteVtabCommon {
   sqlite3_vtab base;
@@ -25,13 +20,7 @@ struct DoltliteVtabCommon {
   DoltliteColInfo cols;
 };
 
-/*
- * Shared prefix for virtual table cursors whose per-row state includes
- * a prolly cursor, intKey, pVal/nVal, hasRow, and iRowid.  Both
- * AtCursor and HistCursor embed this as their first member so that
- * the shared inline helpers below can operate through a
- * DoltliteVtabCursorCommon pointer.
- */
+/* Shared cursor prefix (prolly cursor, intKey, pVal/nVal, hasRow, iRowid). */
 typedef struct DoltliteVtabCursorCommon DoltliteVtabCursorCommon;
 struct DoltliteVtabCursorCommon {
   sqlite3_vtab_cursor base;
@@ -67,9 +56,8 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
   c->pVal = 0; c->nVal = 0;
-  /* A blobkey node holds no integer key, and the column renderer ignores this
-  ** field without rootIntKey. History spanning a key-shape change visits both
-  ** shapes, so the read has to follow the node rather than the table. */
+  /* Blob-key nodes have no integer key; follow the node, not the table, when
+  ** history spans a key-shape change. */
   c->intKey = c->rootIntKey ? prollyCursorIntKey(&c->tblCur) : 0;
   prollyCursorValue(&c->tblCur, &pVal, &nVal);
   if( pVal && nVal>0 ){
@@ -78,10 +66,7 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
     memcpy(c->pVal, pVal, nVal);
     c->nVal = nVal;
   }else{
-    /* Clustered rows whose PRIMARY KEY covers every column store an empty
-    ** value; the row lives in the sort key. Rebuild the record from the key
-    ** — with the visited schema's primary key when one is loaded — so
-    ** column reads see the PK values instead of NULLs. */
+    /* Clustered all-PK rows store an empty value; rebuild the record from the key. */
     const u8 *pKey; int nKey;
     int rc;
     prollyCursorKey(&c->tblCur, &pKey, &nKey);
@@ -127,14 +112,7 @@ static SQLITE_INLINE int doltliteVtabCommonRowid(
   return SQLITE_OK;
 }
 
-/*
- * xConnect/xCreate body for a per-user-table vtab whose instance begins with
- * DoltliteVtabCommon: derive the table name from the module name (zPrefix) or
- * argv[3], load its columns, build the schema via xBuildSchema, and declare
- * the vtab. Allocates nByte (>= sizeof(DoltliteVtabCommon)) so callers with
- * trailing fields can use it and fill them in after success. On any failure
- * the partial instance is freed through doltliteVtabCommonDisconnect.
- */
+/* Allocates nByte (>= sizeof(DoltliteVtabCommon)); caller fills trailing fields. */
 int doltliteLoadHistoricalTableColumns(sqlite3*, const char*,
                                        DoltliteColInfo*, char**);
 
@@ -211,4 +189,4 @@ static SQLITE_INLINE int doltliteVtabConnectHistoricalTable(
                                   xBuildSchema, 1, ppVtab, pzErr);
 }
 
-#endif /* DOLTLITE_VTAB_UTIL_H */
+#endif

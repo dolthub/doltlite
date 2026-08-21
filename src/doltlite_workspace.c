@@ -23,10 +23,8 @@ struct WorkspaceRow {
   u8 *pNewVal; int nNewVal;
 };
 
-/* One scan's rows, shared between the cursor producing them and the table,
-** which keeps the latest set so xUpdate can resolve the rowids that scan
-** handed out. A plain buffer on the table could not do both: a second cursor
-** starting its own scan freed the array the first was still reading. */
+/* Rows shared by the producing cursor and the table (xUpdate rowids). A
+** second cursor must not free the first's array. */
 typedef struct WorkspaceRows WorkspaceRows;
 struct WorkspaceRows {
   int nRef;
@@ -56,8 +54,7 @@ struct WorkspaceCursor {
   ProllyDiffIter iter;
   ProllyHash headRoot, stagedRoot, workingRoot;
   u8 headFlags, stagedFlags, workingFlags;
-  /* Columns as each phase's catalog declares them; an invalid side renders
-  ** with the vtab's declared layout. */
+  /* Invalid side renders with the vtab's declared layout. */
   DoltliteSideCols headSide, stagedSide, workingSide;
   int stagedOnly;
   WorkspaceRows *pRows;
@@ -151,8 +148,7 @@ static int wsAppendRow(
     memcpy(row.pNewVal, pChange->pNewVal, pChange->nNewVal);
     row.nNewVal = pChange->nNewVal;
   }
-  /* PK-only clustered rows store an empty value; rebuild the record from the
-  ** key for each side the diff type says exists. */
+  /* PK-only clustered rows store an empty value; rebuild from the key. */
   if( (row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
    || (row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
     const DoltliteSideCols *pFromSide = staged ? &c->headSide : &c->stagedSide;
@@ -365,8 +361,7 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
 static int wsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   (void)pAux;
-  /* pLastRows starts null, which the shared Connect guarantees, and only gets
-  ** set in xFilter; wsDisconnect drops the reference at teardown. */
+  /* pLastRows is set in xFilter; wsDisconnect drops it. */
   return doltliteVtabConnectUserTable(db, argc, argv, "dolt_workspace_",
                                       sizeof(WorkspaceVtab), wsBuildSchema,
                                       ppVtab, pzErr);
@@ -521,7 +516,6 @@ static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
   return 0;
 }
 
-/* Apply one row's old/new records to one secondary-index root. */
 static int wsApplyRowToIndex(
   sqlite3 *db,
   ChunkStore *cs, ProllyCache *pCache,
@@ -563,7 +557,6 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   cs = doltliteGetChunkStore(db);
   pCache = doltliteGetCache(db);
 
-  /* Staging rewrites data by PK and secondary indexes by old/new index key. */
   pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
   nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
   pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;
@@ -582,8 +575,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   doltliteGetSessionStaged(db, &stagedCat);
   if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
 
-  /* Load the staged catalog once and patch the data root and every secondary
-  ** index root in place, then reserialize as a single new catalog. */
+  /* Patch data and secondary-index roots in the staged catalog, then reserialize. */
   rc = doltliteLoadCatalog(db, &stagedCat, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
@@ -607,9 +599,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     Index *pIdx;
     for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
       struct TableEntry *idxEntry;
-      /* For WITHOUT ROWID tables the PK is exposed as a pseudo-index whose
-      ** root is the table tree itself; it is not a separate secondary index.
-      ** On rowid tables the PK is a real unique index and must be applied. */
+      /* WITHOUT ROWID PK is the table tree, not a secondary index. Rowid-table PK is. */
       if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
       idxEntry = doltliteFindTableByNumber(aTables, nTables, pIdx->tnum);
       if( !idxEntry ) continue;
@@ -650,7 +640,7 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
           "cannot delete staged rows from workspace");
       return SQLITE_ERROR;
     }
-    /* Discard unstaged working edit: restore staged/HEAD side for this PK. */
+    /* Unstaged delete: restore staged/HEAD for this PK. */
     if( r->diffType==PROLLY_DIFF_ADD ){
       pVal = 0;
       nVal = 0;

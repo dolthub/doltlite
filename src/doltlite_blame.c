@@ -180,8 +180,7 @@ static int blameLoadPkColumns(
     n++;
   }
 
-  /* Only a rowid alias is served from the tree's integer key. A WITHOUT ROWID
-  ** table never sets intKey, so claiming the alias renders every pk as 0. */
+  /* Only a rowid alias comes from the integer key. WITHOUT ROWID never sets intKey. */
   if( nTmp == 1 && aTmp[0].isIntegerType ){
     Table *pTab = sqlite3FindTable(db, zTable, "main");
     if( pTab && HasRowid(pTab) ) intPkCid = aTmp[0].cid;
@@ -311,9 +310,7 @@ static int blameCollectLiveRows(
       memcpy(r->pCurVal, pVal, nVal);
       r->nCurVal = nVal;
     }else if( r->pKey && r->nKey>0 ){
-      /* All-column-PK rows store an empty value; the row lives in the sort
-      ** key. Rebuild the record so PK columns render and ancestor comparison
-      ** sees real data instead of matching every empty value. */
+      /* All-column-PK rows store an empty value; rebuild from the key. */
       BlameVtab *v = (BlameVtab*)pCur->base.pVtab;
       rc = doltliteRecordFromClusteredKey(v->db, v->zTableName,
                                           r->pKey, r->nKey,
@@ -501,10 +498,8 @@ static int blameCompareAgainstRef(
       }
     }
 
-    /* A matched all-column-PK row stores an empty value in the ref too, so
-    ** rebuild it from the key like the live side; otherwise the reconstructed
-    ** live record would compare unequal to the empty ref and look changed.
-    ** An absent ref row keeps an empty value here and stays a real change. */
+    /* Rebuild the ref's all-column-PK empty value from the key too, or it
+    ** compares unequal to the live record. An absent ref stays empty. */
     pRefEff = pRefVal;
     nRefEff = nRefVal;
     if( refFound && !(pRefVal && nRefVal>0)

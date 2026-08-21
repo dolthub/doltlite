@@ -9,14 +9,8 @@ db_rm() {
 echo "=== Count index range: extended-numeric BETWEEN ==="
 echo ""
 
-# COUNT(*) WHERE k BETWEEN lo AND hi uses OP_CountIndexRange. The upper
-# exclusive bound used to be a raw byte successor of the encoded sort
-# key. An integer beyond ±2^53 is 18 bytes whose first 9 are the IEEE
-# neighbor, so that successor sat above the neighbor and counted it.
-#
-#   lo  = -9007199254740995
-#   eq  = -9007199254740994   (9-byte exact)
-#   ext = -9007199254740993   (18-byte, same 9-byte prefix as eq)
+# CountIndexRange used a byte-successor upper bound; 18-byte ints beyond ±2^53 share a 9-byte IEEE prefix.
+# lo=-9007199254740995 eq=-9007199254740994 (9-byte) ext=-9007199254740993 (18-byte prefix of eq)
 
 DB=/tmp/test_count_numeric_range_$$.db
 db_rm "$DB"

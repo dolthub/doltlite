@@ -229,11 +229,8 @@ int doltliteValidateRefsTargetGraph(
 
 #define SYNC_BATCH_SIZE 256
 
-/* A fetched chunk must hash to the address it was requested under. Without this
-** a remote serving the wrong bytes is stored under their own address, leaving
-** the requested one absent and surfacing much later as a confusing NOTFOUND --
-** and the payload is walked by syncEnqueueChildren either way, so unverified
-** content would steer the traversal. */
+/* Fetched chunk must hash to the requested address, else wrong bytes are
+** stored under their own hash and still walked by syncEnqueueChildren. */
 static int syncVerifyFetchedChunk(
   const ProllyHash *pWant,
   const u8 *pData,
@@ -297,8 +294,8 @@ int doltliteSyncChunks(
     }
     bFirstBatch = 0;
 
-    /* A resumed partial put may have persisted a parent before its missing
-    ** descendants. Scan below present roots in that case. */
+    /* A resumed partial put may have persisted a parent before missing
+    ** descendants; scan below present roots. */
     {
       ProllyHash aFetch[SYNC_BATCH_SIZE];
       u8 aPut[SYNC_BATCH_SIZE];
@@ -359,9 +356,8 @@ int doltliteSyncChunks(
   return rc;
 }
 
-/* Shared prefix: both FsRemote and LocalAsRemote start with the vtable
-** base followed by a ChunkStore*, so the chunk/refs read ops below can
-** reach the backing store through one cast regardless of family. */
+/* FsRemote and LocalAsRemote both start with the vtable then ChunkStore*,
+** so chunk/refs reads can use one cast. */
 typedef struct RemoteStoreHdr RemoteStoreHdr;
 struct RemoteStoreHdr {
   DoltliteRemote base;
@@ -734,16 +730,13 @@ static int scopedSameText(const char *zA, const char *zB){
   return strcmp(zA ? zA : "", zB ? zB : "")==0;
 }
 
-/* Same fallback csSerializeRefsBlob applies, so an unset default and an
-** explicit "main" compare equal rather than reading as a repoint. */
+/* Unset default and explicit "main" compare equal (same serialize fallback). */
 static const char *scopedDefaultBranch(const RefsTable *rt){
   return rt->zDefaultBranch ? rt->zDefaultBranch : "main";
 }
 
-/* Refs lookups resolve a name to its first matching slot, so a duplicate name
-** is a shadow entry: unreachable through the refs API, invisible to a scope
-** check that compares first matches, yet carried forward by every later
-** reserialization. Every named section must be a set. */
+/* Refs lookups use the first matching slot, so a duplicate is a shadow
+** entry still carried by reserialization. Every named section must be a set. */
 static int scopedNamesAreUnique(const void *aBase, int n, int stride){
   const char *p = (const char*)aBase;
   int i, j;
@@ -758,7 +751,7 @@ static int scopedNamesAreUnique(const void *aBase, int n, int stride){
   return 1;
 }
 
-/* Tracking entries are keyed by the remote/branch pair, not the leading name. */
+/* Tracking entries are keyed by remote/branch, not the leading name. */
 static int scopedTrackingIsUnique(const TrackingBranch *a, int n){
   int i, j;
   for(i=0; i<n; i++){
@@ -825,8 +818,8 @@ static int scopedTrackingMatch(const TrackingBranch *aCur, int nCur,
   return 1;
 }
 
-/* Push bumps the shared AUTOINCREMENT counters, so these may rise and gain
-** entries. Regressing or dropping one would hand out row ids already used. */
+/* Push may bump AUTOINCREMENT counters; regressing or dropping one would
+** reuse row ids. */
 static int scopedSequencesOnlyAdvance(const SequenceRef *aCur, int nCur,
                                       const SequenceRef *aInc, int nInc){
   int i, j;
@@ -887,9 +880,7 @@ int doltliteValidateScopedRefsUpdate(
     goto done;
   }
 
-  /* Every current branch other than the one being pushed must survive
-  ** unchanged: same name present, same commit and working set. Blocks rewrite
-  ** and delete. */
+  /* Every other current branch must survive unchanged (name, commit, working set). */
   for(i=0; i<nCur; i++){
     if( strcmp(aCur[i].zName, zBranch)==0 ) continue;
     for(j=0; j<nInc; j++){
@@ -903,7 +894,7 @@ int doltliteValidateScopedRefsUpdate(
     }
   }
 
-  /* The push may not introduce any branch other than the one declared. */
+  /* Push may not introduce any branch other than the declared one. */
   for(j=0; j<nInc; j++){
     if( strcmp(aInc[j].zName, zBranch)==0 ) continue;
     for(i=0; i<nCur; i++){
@@ -915,8 +906,7 @@ int doltliteValidateScopedRefsUpdate(
     }
   }
 
-  /* Tags are immutable over push: identical set, identical targets, identical
-  ** annotations. Remotes and tracking are likewise none of a push's business. */
+  /* Tags, remotes, and tracking are immutable over push. */
   if( !scopedTagsMatch(aCurTag, nCurTag, aIncTag, nIncTag)
    || !scopedRemotesMatch(aCurRem, nCurRem, aIncRem, nIncRem)
    || !scopedTrackingMatch(aCurTrk, nCurTrk, aIncTrk, nIncTrk)
@@ -925,25 +915,22 @@ int doltliteValidateScopedRefsUpdate(
     goto done;
   }
 
-  /* Whatever the default branch names is what a clone checks out and what
-  ** GET /root resolves, so a push may not repoint it. An empty target
-  ** legitimately adopts the pushed branch, the way doltlitePush seeds one. */
+  /* Push may not repoint the default branch (clone checkout / GET /root).
+  ** An empty target may adopt the pushed branch. */
   if( !scopedSameText(scopedDefaultBranch(&inc.refs),
                       nCur==0 ? zBranch : scopedDefaultBranch(&pStore->refs)) ){
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
 
-  /* The declared branch may be created freely, but an existing branch may only
-  ** move as a fast-forward unless the push is forced. */
+  /* Declared branch may be created; an existing one must fast-forward unless forced. */
   for(i=0; i<nCur; i++){
     if( strcmp(aCur[i].zName, zBranch)==0 ){ curB = &aCur[i]; break; }
   }
   for(j=0; j<nInc; j++){
     if( strcmp(aInc[j].zName, zBranch)==0 ){ incB = &aInc[j]; break; }
   }
-  /* A push creates or advances the declared branch, never deletes it. Omitting
-  ** it would otherwise skip the fast-forward gate below entirely. */
+  /* Push creates or advances the declared branch, never deletes it. */
   if( !incB ){
     rc = SQLITE_CONSTRAINT;
     goto done;
@@ -1062,10 +1049,8 @@ int doltlitePush(
       if( refsData2 && nRefsData2 > 0 ){
         rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
       }else{
-        /* A fresh target's default branch must name a branch it actually
-        ** has -- the one being pushed. Inheriting the source's default
-        ** (usually "main") left the target opening on a ref-less branch,
-        ** the way a clone of a foo1-only remote lands on foo1. */
+        /* A fresh target's default must name a branch it has — the one
+        ** being pushed. Inheriting "main" left clones on a missing ref. */
         chunkStoreSetDefaultBranch(&tmpCs, zBranch);
       }
       sqlite3_free(refsData2);
@@ -1083,9 +1068,8 @@ int doltlitePush(
         return rc;
       }
 
-      /* Working sets do not push: the remote carries commits and refs only,
-      ** so clear any working-set hash an older client left on this branch
-      ** rather than declare a chunk no cloner fetches. */
+      /* Working sets do not push; clear any leftover working-set hash so
+      ** cloners are not pointed at an unfetched chunk. */
       {
         ProllyHash emptyWs;
         memset(&emptyWs, 0, sizeof(emptyWs));
@@ -1161,14 +1145,8 @@ static int installFetchedRefs(
     rc = chunkStoreForceRefresh(pLocal);
   }
   if( rc==SQLITE_OK ){
-    /* Nothing roots the synced chunks until this tracking ref lands, so a
-    ** gc between the chunk commit and here -- a peer's dolt_gc, or the
-    ** compaction a WAL checkpoint runs -- can collect the whole fetched
-    ** history. Installing then leaves a tracking ref pointing at absent
-    ** chunks, which breaks gc permanently and aborts the historical-table
-    ** registration every later connection performs. Re-verify the graph
-    ** under the lock gc itself must hold, and fail the fetch so a retry
-    ** re-syncs what went missing. */
+    /* Nothing roots synced chunks until this tracking ref lands. A gc in that
+    ** window collects the fetch; installing then wedges later connections. */
     ProllyHash aRoots[1];
     memcpy(&aRoots[0], pRemoteCommit, sizeof(aRoots[0]));
     rc = remoteValidateGraph(pLocal, aRoots, 1);
@@ -1343,9 +1321,8 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
 
     if( rc==SQLITE_OK ) rc = pLocalDst->xCommit(pLocalDst);
     pLocalDst->xClose(pLocalDst);
-    /* The synced chunks are rooted by nothing until the refs blob below
-    ** lands. A sweep in that window is refused because the store still holds
-    ** the pre-sweep file identity -- the hook lets a test drive one. */
+    /* Synced chunks are unrooted until the refs blob lands. The hook lets a
+    ** test drive a sweep in that window. */
     if( rc==SQLITE_OK ) doltliteTestRunBeforeRefInstallHook();
     if( rc!=SQLITE_OK ){
       sqlite3_free(aRoots);
@@ -1354,13 +1331,8 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
     }
   }
 
-  /* Same window as fetch: nothing roots the synced chunks until this refs
-  ** blob lands. Hold the store lock across validate + install + commit
-  ** (chunkStoreCommit is reentrant at lockDepth>0). Re-walk every collected
-  ** root under the lock gc itself must hold, and fail SQLITE_BUSY_SNAPSHOT
-  ** so a retry re-syncs what went missing. Installing branch refs over a
-  ** collected graph wedges later connections: the dolt_* registration
-  ** chain aborts on the first missing member. */
+  /* Hold the store lock across validate+install+commit. Re-walk roots under
+  ** the gc lock; BUSY_SNAPSHOT so a retry re-syncs. */
   rc = chunkStoreLockAndRefresh(pLocal);
   if( rc==SQLITE_OK ){
     locked = 1;
@@ -1383,10 +1355,8 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   refsData = 0;
   if( rc!=SQLITE_OK ) goto clone_restore_refs;
 
-  /* Working sets do not pull: cloned branches start clean at their heads.
-  ** Clear any working-set hashes in the installed refs (older clients
-  ** pushed them) -- the commit-graph sync above never fetches those
-  ** chunks, so a kept hash would dangle. */
+  /* Cloned branches start clean; clear working-set hashes in installed refs
+  ** (the commit-graph sync never fetches those chunks). */
   {
     int nBr = 0;
     int i;

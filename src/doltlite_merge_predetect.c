@@ -2,16 +2,10 @@
 
 #include "doltlite_merge_int.h"
 
-/* Merge pre-detection: refusals decided by reading the three schemas, before
-** pass 1 walks a single entry. A merge whose correct answer this engine cannot
-** represent has to be refused here, while the branches are still intact. */
+/* Schema-level refusals, before pass 1 mutates anything. */
 
-/* The index's key columns, but only for the plain case: a parenthesised list of
-** bare column names with nothing after it. An expression index, a partial
-** index's WHERE clause, an explicit collation or a sort order all make two
-** indexes over the same column different things, and this reports those as not
-** plain rather than trying to compare them. Returns 0 unless every element is a
-** bare name. */
+/* Bare column-name keys only. Expression, partial, COLLATE, or sort
+** order make two indexes different; those are not compared. */
 static int mergeIndexPlainKey(const char *zSql, char ***pazCol, int *pnCol){
   const char *zOpen, *zClose, *z;
   char **az = 0;
@@ -23,7 +17,7 @@ static int mergeIndexPlainKey(const char *zSql, char ***pazCol, int *pnCol){
   zOpen = strchr(zSql, '(');
   if( !zOpen ) return 0;
   for(zClose=zOpen+1; *zClose && *zClose!=')'; zClose++){
-    /* A nested paren is a function call or a parenthesised expression. */
+    /* Nested paren: function or parenthesised expression. */
     if( *zClose=='(' ) return 0;
   }
   if( *zClose!=')' ) return 0;
@@ -42,8 +36,7 @@ static int mergeIndexPlainKey(const char *zSql, char ***pazCol, int *pnCol){
     while( nTok>0 && sqlite3Isspace(zTok[nTok-1]) ) nTok--;
     if( nTok<=0 ) goto plain_key_fail;
     for(i=0; i<nTok; i++){
-      /* Anything but one bare name -- ASC, COLLATE, a quoted form -- is not a
-      ** comparison this can make safely. */
+      /* ASC, COLLATE, or a quoted form is not a safe comparison. */
       if( !(sqlite3Isalnum(zTok[i]) || zTok[i]=='_' || zTok[i]=='$') ){
         goto plain_key_fail;
       }
@@ -68,7 +61,6 @@ plain_key_fail:
   return 0;
 }
 
-/* Two indexes whose key is the same bare columns in the same order. */
 static int mergeIndexSameKey(const char *zSqlA, const char *zSqlB){
   char **azA = 0, **azB = 0;
   int nA = 0, nB = 0, i, same = 0;
@@ -88,19 +80,14 @@ static int mergeIndexSameKey(const char *zSqlA, const char *zSqlB){
   return same;
 }
 
-/* One side added an index covering the same columns as an index that already
-** existed. Dolt refuses to merge that -- "multiple indexes covering the same
-** column set cannot be merged" -- because it cannot tell which of the two the
-** merged table should keep, and keeping both would impose one side's
-** uniqueness on the other. Only a merge that also has to reconcile the other
-** branch's work reaches this; an addition on its own is the user's business. */
+/* One side added an index over columns another index already covers.
+** Dolt refuses ("cannot be merged"): keeping both would impose one
+** side's uniqueness. Solo additions are the user's business. */
 int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
   int side, i, j;
 
-  /* A merge only. Reverting, cherry-picking or rebasing a commit has one
-  ** intended result, and the branch it replays onto asked for it, so there is
-  ** no disagreement here to hand back. Refusing would also reject restoring a
-  ** state the branch held before. */
+  /* Merge only. Replay (revert/cherry-pick/rebase) has one intended
+  ** result; refusing would also reject restoring a prior state. */
   if( !c->bBranchMerge ) return SQLITE_OK;
 
   for(side=0; side<2; side++){
@@ -120,9 +107,7 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
         if( !pOld->zType || strcmp(pOld->zType, "index")!=0 ) continue;
         if( !pOld->zName || !pOld->zSql || !pOld->zTblName ) continue;
         if( sqlite3_stricmp(pOld->zTblName, aNew[i].zTblName)!=0 ) continue;
-        /* Only a merge that keeps both of them duplicates anything. A side that
-        ** dropped the older index replaced it rather than doubling it, and the
-        ** drop carries into the merge, so there is nothing to refuse. */
+        /* A drop of the older index is a replacement, not a duplicate. */
         if( !findSchemaEntry(aNew, nNew, pOld->zName) ) continue;
         if( !findSchemaEntry(aOther, nOther, pOld->zName) ) continue;
         if( !mergeIndexSameKey(aNew[i].zSql, pOld->zSql) ) continue;
@@ -140,12 +125,8 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* One side dropped a column while the other edited that same column's value in
-** a row they both already had. The edit has nowhere to go in the merged table,
-** and discarding it decides for the user which branch's intent wins. Dolt
-** reports it as a conflict; refuse rather than resolve it here. Rows the other
-** side added or removed are not affected, and neither is an edit to any other
-** column. */
+/* Drop on one side, edit of that column on the other, in a shared
+** row. Dolt reports a conflict; refuse rather than pick a winner. */
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   int side, i, j;
 
@@ -157,8 +138,8 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
     struct TableEntry *aEditCat = side ? c->aOurs : c->aTheirs;
     int nEditCat = side ? c->nOurs : c->nTheirs;
 
-    /* On replay, theirs is the patch being applied. Dolt protects non-NULL
-    ** live values; a NULL or a column already absent from ours can be dropped. */
+    /* Replay: Dolt protects non-NULL live values; NULL or already-absent
+    ** can drop. */
     if( !c->bBranchMerge && side==0 ) continue;
 
     for(i=0; i<c->nAncSchema; i++){
@@ -176,8 +157,7 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
       pDropSe = findSchemaEntry(aDrop, nDrop, zTable);
       pEditSe = findSchemaEntry(aEdit, nEdit, zTable);
       if( !pDropSe || !pEditSe || !pDropSe->zSql || !pEditSe->zSql ) continue;
-      /* The editing side must have left the columns alone, or this is a schema
-      ** disagreement the schema merge already judges. */
+      /* Schema disagreement is judged by the schema merge. */
       if( strcmp(pEditSe->zSql, c->aAncSchema[i].zSql)!=0 ) continue;
       if( strcmp(pDropSe->zSql, c->aAncSchema[i].zSql)==0 ) continue;
       pAncCat = doltliteFindTableByName(c->aAnc, c->nAnc, zTable);
@@ -198,7 +178,7 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
                                     aAncCols[j].zName)>=0 ){
           continue;
         }
-        /* Renamed rather than dropped keeps its own behaviour. */
+        /* Rename, not drop. */
         if( j<nDropCols
          && parsedColumnIndexByName(aAncCols, nAncCols,
                                     aDropCols[j].zName)<0 ){
@@ -240,12 +220,9 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* Does this object's definition name the given column? The scan is by
-** identifier, quoted or bare -- a definition SQLite wrote may quote the name,
-** and comparing only bare tokens let a quoted one through. For an index the
-** scan starts at the column list so the index's own name cannot match. It
-** over-matches by design: an expression index over the column, or a view
-** naming it in any clause, breaks the same way a plain reference does. */
+/* Identifier scan, quoted or bare (SQLite may quote). Indexes start
+** at the column list so the index name cannot match. Over-matches by
+** design: an expression index or view naming it breaks the same way. */
 static int mergeSqlNamesColumn(const char *zSql, const char *zType,
                                const char *zColumn){
   const char *z;
@@ -282,9 +259,6 @@ static int mergeSqlNamesColumn(const char *zSql, const char *zType,
   return 0;
 }
 
-/* The columns this side renamed away, relative to the ancestor: an ancestor
-** column at the same position, with a matching definition, under a new name
-** the side does not otherwise have. */
 static int mergeSideRenamedColumnTo(const char *zAncSql, const char *zSideSql,
                                     const char *zColumn, char **pzNew){
   ParsedColumn *aAnc = 0;
@@ -317,7 +291,6 @@ static int mergeSideRenamedColumn(const char *zAncSql, const char *zSideSql,
   return mergeSideRenamedColumnTo(zAncSql, zSideSql, zColumn, 0);
 }
 
-/* Did this side rename any column of the table? */
 static int mergeSideRenamedAnyColumn(const char *zAncSql, const char *zSideSql){
   ParsedColumn *aAnc = 0;
   int nAnc = 0, i, bAny = 0;
@@ -330,13 +303,9 @@ static int mergeSideRenamedAnyColumn(const char *zAncSql, const char *zSideSql){
   return bAny;
 }
 
-/* Both sides renamed a column of one table, and an index, view or trigger on it
-** names a column this side renamed. The merged catalog takes its table from one
-** side and this object from the other, so the object names a column the adopted
-** table does not have: the catalog cannot be loaded, and the rename that would
-** retarget the object only runs once it has. Dolt merges these and renames the
-** object with the table, so this is a refusal where Dolt succeeds -- but a
-** refusal the user can act on, rather than a database reported as malformed. */
+/* Dual column-rename plus a dependent that names a renamed column.
+** Merged catalog takes the table from one side and the object from
+** the other, so it cannot load. Dolt retargets the object; we refuse. */
 int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
   int side, i, j;
 
@@ -361,13 +330,11 @@ int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
       pOtherTbl = findSchemaEntry(aOther, nOther, pDep->zTblName);
       if( !pAncTbl || !pDepTbl || !pOtherTbl ) continue;
       if( !pAncTbl->zSql || !pDepTbl->zSql || !pOtherTbl->zSql ) continue;
-      /* Only a merge that has to reconcile a rename on each side lands here.
-      ** One side renaming alone already carries its objects across. */
+      /* One-sided rename already carries its objects across. */
       if( !mergeSideRenamedAnyColumn(pAncTbl->zSql, pOtherTbl->zSql) ) continue;
       if( !mergeSideRenamedAnyColumn(pAncTbl->zSql, pDepTbl->zSql) ) continue;
-      /* Whose table the merged catalog takes, decided by the same code that
-      ** will decide it for real. This object goes in beside that table, so it
-      ** only breaks the catalog when the two come from different sides. */
+      /* Object sits beside the adopted table; only a cross-side pair
+      ** breaks the catalog. */
       {
         char **azAdd = 0, **azDrop = 0, **azRen = 0;
         int nAdd = 0, nDrop = 0, nRen = 0, k;
@@ -404,13 +371,11 @@ int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
           sqlite3_free(zNew);
           continue;
         }
-        /* This side's own rename already rewrote the object, so it names the
-        ** column as this side left it, not as the ancestor had it. */
+        /* This side already rewrote the object to the new name. */
         bNames = zNew && mergeSqlNamesColumn(pDep->zSql, pDep->zType, zNew);
         sqlite3_free(zNew);
         if( !bNames ) continue;
-        /* The other side renamed this one too: that disagreement is judged
-        ** elsewhere, and both sides' objects move together. */
+        /* Dual rename of this column is judged elsewhere. */
         if( mergeSideRenamedColumn(pAncTbl->zSql, pOtherTbl->zSql, zCol) ){
           continue;
         }
@@ -432,16 +397,9 @@ int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* A trigger whose table the other side renamed or dropped. A trigger has to
-** resolve when the schema loads -- unlike a view, which is only text until it
-** is used -- so a merged catalog holding a trigger on a table that is no
-** longer there cannot be loaded, and the merge reported the database as
-** malformed.
-**
-** Dolt merges a rename and keeps the trigger pointing at the old name, which
-** is a dangling trigger its own information_schema cannot read. That is not a
-** result this engine can represent, so refuse and say why. A drop of the
-** table is the same hole: refuse as dropped, not as renamed. */
+/* Trigger on a table the other side renamed or dropped. Triggers
+** resolve at schema load, so a dangling one cannot be represented.
+** Dolt keeps the old name; we refuse. Distinguish drop from rename. */
 int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
   int side, i, j;
 
@@ -456,19 +414,15 @@ int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
       int bRenamed = 0;
       if( !aTrig[i].zType || strcmp(aTrig[i].zType, "trigger")!=0 ) continue;
       if( !aTrig[i].zName || !zTable ) continue;
-      /* A trigger the ancestor already had went through the rename with the
-      ** table on the renaming side, so the merge has a correct copy to keep.
-      ** Only one added beside the rename has nowhere to land. */
+      /* Ancestor trigger already followed the rename; only one added
+      ** beside the rename has nowhere to land. */
       if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aTrig[i].zName) ){
         continue;
       }
       if( !findSchemaEntry(c->aAncSchema, c->nAncSchema, zTable) ) continue;
       if( findSchemaEntry(aOther, nOther, zTable) ) continue;
-      /* Gone from the other side under its ancestor name. A table of theirs the
-      ** ancestor never had, whose columns are the ancestor table's columns, is
-      ** that table under a new name. Dropping it and creating something
-      ** unrelated looks the same from the names alone, so the columns decide
-      ** whether this is a rename or a drop. */
+      /* Same columns as the ancestor table under a new name: rename,
+      ** not drop. Names alone cannot tell them apart. */
       {
         SchemaEntry *pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema,
                                                zTable);
@@ -519,14 +473,8 @@ int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* An index one side added over a column the other side renamed. Nothing here
-** retargets the index to the new name, and a merged catalog naming a column
-** its table does not have cannot be loaded at all -- the merge used to report
-** the database as corrupt. Refuse it instead, the way a primary-key change is
-** refused, and say why.
-**
-** This is a deliberate divergence from Dolt, which merges these and keeps the
-** index on the renamed column. */
+/* Index added over a column the other side renamed. Nothing retargets
+** it, and the catalog cannot load. Dolt keeps the index; we refuse. */
 int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c){
   int side, i;
 

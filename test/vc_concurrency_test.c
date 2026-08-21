@@ -8,8 +8,7 @@
 
 #define N_WORKERS 2
 #define N_COMMITS_PER_WORKER 6
-/* CI multi-process runs can hold the graph lock across a full commit;
-** budget enough wall time for peer contention (was 400*5ms ~= 2s). */
+/* Graph lock can span a commit; 1200 attempts covers peer wait. */
 #define N_OPERATION_ATTEMPTS 1200
 
 static int nPass = 0;

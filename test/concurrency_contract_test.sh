@@ -47,7 +47,7 @@ while IFS=$'\t' read -r id status evidence contract; do
   done
 done < <(tail -n +2 "$CONTRACT")
 
-# Direct multiproc smoke: two separate processes commit one after another.
+# Two processes, sequential commits.
 DB="$TMP/multiproc.db"
 rm -f "$DB"
 seed_out="$("$DOLTLITE" "$DB" "
@@ -70,12 +70,11 @@ fi
 
 run_test "multiproc_sequential_rows" \
   "SELECT count(*) FROM t;" "2" "$DB"
-# Initialize data repository + seed + second
+# init + seed + second
 run_test "multiproc_sequential_log" \
   "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
-# Graph-lock sidecar is not a SQLite journal/WAL; writers coordinate without
-# creating SQLite -wal/-shm files.
+# Graph lock is not a SQLite -wal/-shm.
 if [[ -e "$DB-journal" || -e "$DB-wal" || -e "$DB-shm" ]]; then
   dltest_fail "no_sqlite_sidecars_under_multiproc" "  SQLite sidecar exists for $DB"
 else

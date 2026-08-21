@@ -95,7 +95,6 @@ DEL_DB=/tmp/doltlite_workspace_delete_$$.db
 rm -rf "$DEL_DB"
 trap 'rm -rf "$DB"; rm -rf "$IDX_DB"; rm -rf "$NC_DB"; rm -rf "$DEL_DB"' EXIT
 
-# Discard unstaged insert
 dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 SELECT dolt_commit('-A','-m','seed empty');
@@ -108,7 +107,6 @@ run_test "workspace_delete_discards_insert_ws" \
   "SELECT count(*) || '|' || group_concat(to_id) FROM dolt_workspace_t;" \
   "1|43" "$DEL_DB"
 
-# Discard unstaged delete (restore row)
 rm -rf "$DEL_DB"
 dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
@@ -123,7 +121,6 @@ run_test "workspace_delete_restores_ws_remaining" \
   "SELECT count(*) || '|' || group_concat(from_id) FROM dolt_workspace_t;" \
   "1|43" "$DEL_DB"
 
-# Discard unstaged modify
 rm -rf "$DEL_DB"
 dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
@@ -135,7 +132,6 @@ DELETE FROM dolt_workspace_t WHERE to_id=42;
 run_test "workspace_delete_reverts_modify" \
   "SELECT id || '|' || val FROM t ORDER BY id;" $'42|42\n43|86' "$DEL_DB"
 
-# Cannot delete staged rows
 rm -rf "$DEL_DB"
 dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
@@ -154,7 +150,6 @@ else
   fi
 fi
 
-# Discard after unstage
 rm -rf "$DEL_DB"
 dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
@@ -169,7 +164,6 @@ run_test "workspace_delete_after_unstage" \
 run_test "workspace_delete_after_unstage_staged_remains" \
   "SELECT staged || '|' || to_id FROM dolt_workspace_t;" "1|43" "$DEL_DB"
 
-# Secondary indexes stay consistent when discarding a modify
 rm -rf "$DEL_DB"
 dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -186,9 +180,7 @@ run_test "workspace_delete_index_query_old" \
 run_test "workspace_delete_index_query_new" \
   "SELECT id FROM t WHERE v=2;" "" "$DEL_DB"
 
-# Two cursors are open at once here. Rows used to accumulate on the table, so
-# the second xFilter freed the array the first was still indexing into: the
-# join returned extra rows carrying ids that were never assigned.
+# Two open cursors: second xFilter used to free the array the first was still indexing.
 MC_DB=/tmp/doltlite_workspace_multicursor_$$.db
 rm -rf "$MC_DB"
 dltest_run_sql "
@@ -215,8 +207,7 @@ run_test "workspace_correlated_subquery" \
   "SELECT count(*) FROM dolt_workspace_t a
      WHERE EXISTS (SELECT 1 FROM dolt_workspace_t b WHERE b.id=a.id);" "3" "$MC_DB"
 
-# xUpdate has no cursor and resolves a rowid by replaying the scan, so it has
-# to replay the staged filter the rowid came from.
+# xUpdate has no cursor; it must replay the staged filter the rowid came from.
 run_test "workspace_stage_one_row" \
   "UPDATE dolt_workspace_t SET staged=1 WHERE id=1;
    SELECT group_concat(id || ':' || staged, ' ') FROM dolt_workspace_t;" \
@@ -229,9 +220,7 @@ run_test "workspace_delete_via_filtered_rowid" \
 
 rm -rf "$MC_DB"
 
-# An uncommitted key-shape recreate renders the head row under the head
-# shape: before the per-side fix, from_pk showed the raw text sort key
-# decoded as a sign-flipped integer.
+# Uncommitted key-shape recreate: from_pk used to decode the text sort key as a sign-flipped integer.
 WS_DB=/tmp/test_ws_shape_$$.db; rm -f "$WS_DB"
 echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID;
 INSERT INTO t VALUES('alpha', 1);
@@ -249,9 +238,7 @@ run_test "ws_shape_added_side" \
 rm -f "$WS_DB"
 
 
-# Uncommitted DDL: head still has column b mid-position, working does not.
-# The from side renders with head's schema by name, the to side with the
-# working schema.
+# From renders by name against head's schema; to against working.
 DBW=/tmp/test_ws_namemap_$$.db; rm -f "$DBW"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
 INSERT INTO t VALUES(1,'BEE','CEE');

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Scan a DoltLite chunk-store file for duplicate physical chunk hashes.
-
-The DB file is the chunk store. This walks compacted index entries and
-append-only WAL chunk records, groups physical records by content hash, and
-reports hashes stored more than once.
-"""
+"""Report content hashes stored more than once in a DoltLite chunk-store file."""
 import argparse
 import json
 import struct

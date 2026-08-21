@@ -1,9 +1,5 @@
 #!/bin/bash
-#
-# Oracle coverage for dolt_verify_constraints.
-# Doltlite exposes SELECT dolt_verify_constraints(...) -> 0/1.
-# Dolt exposes CALL dolt_verify_constraints(...) -> violations column.
-# Both sides are normalized to R|rc=N lines plus optional follow-up R|* rows.
+# SELECT vs CALL; both sides normalize to R|rc=N plus optional R|* rows.
 
 set -u
 set -o pipefail
@@ -29,8 +25,6 @@ translate_setup_for_dolt() {
       -e 's/PRAGMA[[:space:]]+foreign_keys[[:space:]]*=[[:space:]]*1/SET FOREIGN_KEY_CHECKS=1/Ig'
 }
 
-# name setup verify_args follow_sql allow_empty
-# verify_args: empty string, or SQL arg list like "'--all'" or "'child'"
 run_oracle() {
   local name="$1" setup="$2" verify_args="$3" follow="$4" allow_empty="$5"
   local dir="$TMPROOT/$name"
@@ -59,7 +53,6 @@ run_oracle() {
     call_sql="CALL dolt_verify_constraints($verify_args);"
   fi
 
-  # One Dolt session: setup + CALL + capture return + follow queries.
   local dt_raw
   dt_raw=$(
     cd "$dir/dt" || exit 1
@@ -74,7 +67,7 @@ run_oracle() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
 
-  # CALL emits a header "violations" then 0/1. Grab the last 0/1 line before R| rows.
+  # CALL emits header "violations" then 0/1; grab the last 0/1 before R| rows.
   local dt_rc
   dt_rc=$(printf '%s\n' "$dt_raw" | tr -d '"' | awk '
     $0=="0" || $0=="1" { v=$0 }
@@ -117,7 +110,7 @@ INSERT INTO child VALUES (1,99);
 PRAGMA foreign_keys=ON;
 "
 
-# CONCAT + backticks: Dolt is MySQL-dialect (|| is logical OR; "table" is a string).
+# CONCAT + backticks: Dolt is MySQL (|| is OR; "table" is a string).
 FOLLOW_AGG="SELECT CONCAT('R|agg=', tn, ':', nv) FROM (SELECT \`table\` AS tn, num_violations AS nv FROM dolt_constraint_violations) x ORDER BY 1;"
 FOLLOW_AGG_COUNT="SELECT CONCAT('R|agg_count=', count(*)) FROM dolt_constraint_violations;"
 FOLLOW_CHILD_ROWS="SELECT CONCAT('R|row=', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' WHEN 1 THEN 'FK' WHEN 2 THEN 'UQ' WHEN 3 THEN 'CK' ELSE '?' END, ':', pk) FROM dolt_constraint_violations_child ORDER BY pk;"
@@ -147,9 +140,7 @@ PRAGMA foreign_keys=ON;
 "$FOLLOW_AGG" 0
 
 
-# A merge records violations up front. Verifying an unrelated table must not
-# retract them: the commit gate reads that record, so clearing it wholesale
-# turns a scoped re-check into permission to commit violating rows.
+# Verifying an unrelated table must not retract merge-recorded violations.
 MERGE_CV_SETUP="
 CREATE TABLE parent(pk INTEGER PRIMARY KEY);
 CREATE TABLE child(pk INTEGER PRIMARY KEY, pid INT REFERENCES parent(pk));
@@ -264,9 +255,7 @@ DELETE FROM t WHERE pk=2;
 "$FOLLOW_AGG
 $FOLLOW_T_ROWS" 0
 
-# A default verify scans only the tables that differ from HEAD. It must not
-# clear findings for a table it never scans -- the commit gate reads this
-# catalog, so dropping them lets a commit through over a live violation.
+# Default verify scans only tables that differ from HEAD; it must not clear unscanned findings.
 UNSCANNED_SETUP="
 CREATE TABLE parent(pk INTEGER PRIMARY KEY, v INT UNIQUE);
 CREATE TABLE users(pk INTEGER PRIMARY KEY, v INT REFERENCES parent(v));

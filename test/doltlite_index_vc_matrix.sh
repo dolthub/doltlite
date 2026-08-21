@@ -1,9 +1,6 @@
 #!/bin/bash
-# Index x version-control matrix: every VC surface against every index
-# flavor, verifying after each step that (a) integrity_check passes and
-# (b) index-planned queries agree with table scans. Index entries are
-# unnamed in catalogs and by-name catalog overlays are structurally blind
-# to them; this suite is the intent-level oracle for that bug class.
+# Index × VC: integrity_check plus index-planned vs table-scan. Index entries
+# are unnamed in catalogs; by-name overlays are blind to them.
 DOLTLITE="${1:-./doltlite}"
 PASS=0
 FAIL=0
@@ -28,8 +25,6 @@ check() {
   fi
 }
 
-# The fixture covers every index flavor: secondary, UNIQUE, partial,
-# expression, PK/UNIQUE autoindexes, WITHOUT ROWID, and NOCASE.
 FIXTURE="CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER, s TEXT, e INTEGER);
 CREATE INDEX iv ON t(v);
 CREATE UNIQUE INDEX us ON t(s);
@@ -44,9 +39,6 @@ INSERT INTO u VALUES('k1',10),('k2',20);
 INSERT INTO w VALUES('w1',7),('w2',8);
 INSERT INTO nc VALUES('Ab',1),('aB',2),('cd',3);"
 
-# Every index-touching mutation class: key updates that move index
-# membership (incl. partial-index boundary), unique-key rewrites,
-# expression inputs, inserts and deletes on every table.
 MUTATE="UPDATE t SET v=v+100 WHERE id IN (1,2);
 UPDATE t SET s=s||'x' WHERE id IN (2,3);
 UPDATE t SET e=-e WHERE id IN (1,4);
@@ -58,8 +50,6 @@ UPDATE w SET x=x*10 WHERE k='w1';
 DELETE FROM nc WHERE z='cd';
 INSERT INTO nc VALUES('CD',4);"
 
-# One line per index: "<name>|<index-planned>|<table-scan>"; the two
-# projections must agree, and integrity_check must be clean.
 VERIFY_SQL="SELECT 'ic|'||(SELECT count(*) FROM pragma_integrity_check WHERE integrity_check='ok')||'|'||(SELECT count(*) FROM pragma_integrity_check);
 SELECT 'iv|'||(SELECT count(*)||','||coalesce(sum(v),0) FROM t INDEXED BY iv)||'|'||(SELECT count(*)||','||coalesce(sum(v),0) FROM t NOT INDEXED);
 SELECT 'us|'||(SELECT count(*)||','||coalesce(min(s),'-')||','||coalesce(max(s),'-') FROM t INDEXED BY us)||'|'||(SELECT count(*)||','||coalesce(min(s),'-')||','||coalesce(max(s),'-') FROM t NOT INDEXED);
@@ -70,7 +60,6 @@ SELECT 'ub|'||(SELECT count(*)||','||coalesce(sum(b),0) FROM u INDEXED BY sqlite
 SELECT 'w|'||(SELECT count(*)||','||coalesce(sum(x),0) FROM w)||'|'||(SELECT coalesce(count(k),0)||','||coalesce(sum(x),0) FROM w NOT INDEXED);
 SELECT 'ncz|'||(SELECT count(*) FROM nc INDEXED BY ncz WHERE z='ab')||'|'||(SELECT count(*) FROM nc NOT INDEXED WHERE z='ab');"
 
-# verify <label> <db>: same-session and fresh-session agreement
 verify() {
   local label="$1" db="$2" line lhs rhs name bad=""
   local out
@@ -91,8 +80,7 @@ EOF
   fi
 }
 
-# verify_commit <label> <db>: materialize HEAD on a copy and verify it,
-# so committed catalogs are checked independently of live session state.
+# Materialize HEAD on a copy so committed catalogs are independent of live state.
 verify_commit() {
   local label="$1" db="$2"
   cp "$db" "$db.headcopy"
@@ -108,7 +96,6 @@ newdb() { N=$((N+1)); DB="$TDIR/m$N.db"; }
 
 scenario() { echo "--- $1 ---"; }
 
-# ── staging surfaces ──────────────────────────────────────────────
 scenario "add -A + commit"
 newdb
 run_sql "$FIXTURE SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');" "$DB" > /dev/null
@@ -146,7 +133,6 @@ run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
 run_sql "$MUTATE SELECT dolt_add('-A'); SELECT dolt_reset('t'); SELECT dolt_add('t'); SELECT dolt_commit('-m','mut');" "$DB" > /dev/null
 verify "unstage_named_live" "$DB"; verify_commit "unstage_named_commit" "$DB"
 
-# ── reset surfaces ────────────────────────────────────────────────
 scenario "reset --hard discards index-touching mutations"
 newdb
 run_sql "$FIXTURE SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');" "$DB" > /dev/null
@@ -163,7 +149,6 @@ run_sql "$MUTATE SELECT dolt_commit('-am','mut');" "$DB" > /dev/null
 run_sql "SELECT dolt_reset('--soft','HEAD~1'); SELECT dolt_commit('-am','recommit');" "$DB" > /dev/null
 verify "reset_soft_live" "$DB"; verify_commit "reset_soft_commit" "$DB"
 
-# ── branch / checkout / merge ─────────────────────────────────────
 scenario "branch checkout roundtrip"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -196,11 +181,7 @@ result=$(run_sql "SELECT count(*) FROM t INDEXED BY ie WHERE e>=0; PRAGMA integr
 check "merge_index_schema" "3
 ok" "$result"
 
-# Both branches change disjoint rows of a table carrying a NOCASE and a
-# DESC secondary index, so the three-way row merge maintains those indexes
-# inline. Their sort keys must honor the real collation and sort order, or
-# theirs-applied index entries become unreachable by probe and mis-ordered
-# by scan while the table scan stays correct.
+# Three-way row merge must honor NOCASE/DESC sort keys or probes miss theirs rows.
 scenario "divergent merge maintains NOCASE and DESC secondary indexes"
 newdb
 run_sql "CREATE TABLE m(id INTEGER PRIMARY KEY, tx TEXT COLLATE NOCASE, n INTEGER);
@@ -232,7 +213,6 @@ check "merge_nocase_desc_head" "0
 45,35,15,5
 ok" "$result"
 
-# ── cherry-pick / revert ──────────────────────────────────────────
 scenario "cherry-pick an index-touching commit"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');" "$DB" > /dev/null
@@ -250,7 +230,6 @@ verify "revert_live" "$DB"; verify_commit "revert_commit" "$DB"
 result=$(run_sql "SELECT count(*) FROM t;" "$DB")
 check "revert_restores_rows" "4" "$result"
 
-# ── index DDL through VC ──────────────────────────────────────────
 scenario "CREATE INDEX / DROP INDEX through commit and checkout"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -273,7 +252,6 @@ check "rename_carries_indexes" "0
 4
 ok" "$result"
 
-# ── remotes and gc ────────────────────────────────────────────────
 scenario "clone/push/pull roundtrip preserves indexes"
 newdb
 REMOTE="file://$TDIR/rem$N.db"
@@ -291,7 +269,6 @@ run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
 run_sql "$MUTATE SELECT dolt_commit('-am','mut'); SELECT dolt_gc();" "$DB" > /dev/null
 verify "gc_live" "$DB"; verify_commit "gc_commit" "$DB"
 
-# ── virtual tables: shadow tables travel with their vtab ─────────
 scenario "vtab shadows through staging surfaces"
 newdb
 run_sql "CREATE VIRTUAL TABLE ft USING fts5(body);
@@ -335,10 +312,7 @@ check "vtab_clone" "0
 2
 ok" "$result"
 
-# ── vtab schema rows through three-way merge ─────────────────────
-# Virtual tables have no catalog entry (their storage is the shadow
-# tables), so the merged sqlite_master rebuild must carry their schema
-# rows explicitly or every real merge silently drops the vtab.
+# Vtabs have no catalog entry; merged sqlite_master must keep their schema rows.
 scenario "vtab survives clean three-way merge"
 newdb
 run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('base doc');
@@ -406,10 +380,7 @@ PRAGMA integrity_check;" "$DB")
 check "vtab_merge_drop_wins" "0
 ok" "$result"
 
-# ── table-level checkout of virtual tables ───────────────────────
-# Vtabs have no catalog entry (their storage is the shadow tables), so
-# name-based checkout must accept the vtab through its schema row and
-# swap the shadow entries the way staging carries them.
+# Name-based checkout must take the vtab via its schema row and swap shadows.
 scenario "table checkout discards working vtab changes"
 newdb
 run_sql "CREATE VIRTUAL TABLE ft USING fts5(body); INSERT INTO ft VALUES('one doc');

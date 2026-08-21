@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 
-# Shared measurement and ceiling logic for the sysbench-style workload
-# generators. The caller must define TMPDIR, READ_TESTS, WRITE_TESTS, and
-# WRITE_TESTS_AC before invoking run_section().
+# Caller must set TMPDIR, READ_TESTS, WRITE_TESTS, WRITE_TESTS_AC.
 
 BENCH_BASELINE_BINARY="${BENCH_BASELINE_BINARY:-$SQLITE3}"
 BENCH_CANDIDATE_BINARY="${BENCH_CANDIDATE_BINARY:-$DOLTLITE}"

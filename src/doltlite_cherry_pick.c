@@ -275,14 +275,9 @@ int applyMergedCatalogAndCommit(
         db, context, &savedState, *pnConflicts, zOpLabel, 1);
   }
 
-  /* The session merge folded the caller's uncommitted delta into
-  ** liveMergedCatHash so the working set keeps it. When the commit must be
-  ** based on pCommitOurCatHash instead (revert with unrelated dirty
-  ** changes), un-apply the delta for the commit only: a three-way with the
-  ** pre-op working catalog as base takes the dirty tables back to their
-  ** pCommitOurCatHash state and keeps the merge result everywhere else.
-  ** The caller's overlap gate keeps those table sets disjoint, so this
-  ** merge has nothing to conflict or reindex over. */
+  /* Un-apply the uncommitted delta from liveMergedCatHash when the commit must
+  ** be based on pCommitOurCatHash. Three-way with the pre-op working catalog
+  ** as base. Overlap gate keeps the table sets disjoint. */
   commitCatHash = liveMergedCatHash;
   if( pCommitOurCatHash
    && prollyHashCompare(pCommitOurCatHash, ourCatHash)!=0 ){
@@ -303,10 +298,8 @@ int applyMergedCatalogAndCommit(
     commitSplit = 1;
   }
 
-  /* Revert of a commit whose inverse is already in HEAD is Dolt's
-  ** "nothing to commit": the commit catalog equals HEAD, so do not
-  ** write another empty Revert commit. Restore the pre-op working
-  ** set (including unrelated dirty tables) and tell the caller. */
+  /* Inverse already in HEAD: do not write an empty Revert commit. Restore
+  ** the pre-op working set and tell the caller. */
   if( bRejectUnchanged && *pnConflicts==0 ){
     const ProllyHash *pHeadCat = pCommitOurCatHash
         ? pCommitOurCatHash : ourCatHash;
@@ -481,8 +474,7 @@ static void doltliteCherryPickFunc(
   }
   sqlite3_free(zApplyErr);
 
-  /* Conflict / CV finish helpers already set the context error (including the
-  ** combined conflicts+CVs message). Do not overwrite it here. */
+  /* Finish helpers already set the context error; do not overwrite. */
   if( nConflicts > 0 ) return;
   if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);

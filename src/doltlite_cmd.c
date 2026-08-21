@@ -343,11 +343,9 @@ int doltliteRollbackAutocommitConflict(
   int hadTopLevelSavepoint = db->pSavepoint!=0 && db->nSavepoint==0;
   sqlite3RollbackAll(db, SQLITE_OK);
   rc = doltliteRestoreTxnState(db, pSaved);
-  /* Put the merge markers back even when the restore above failed. pSaved is
-  ** cleared below, so a skipped restore leaves isMerging set from the merge we
-  ** just told the caller was rolled back, and the next merge refuses because
-  ** one is already in progress. These are in-memory writes; keep the first
-  ** error for the return value rather than the last. */
+  /* Restore merge markers even if the catalog restore failed; pSaved is
+  ** cleared below, and a leftover isMerging would block the next merge.
+  ** Keep the first error. */
   {
     int rc2 = doltliteSetSessionMergeState(db, pSaved->sessionIsMerging,
                                           &pSaved->sessionMergeCommit,

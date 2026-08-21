@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Catalog serialization, schema metadata, and schema invalidation. */
-
 u32 prollyBtreeGetU32LE(const u8 *p){
   return ((u32)p[0]) | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
 }
@@ -139,10 +137,7 @@ void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   }
 }
 
-/* Stock invalidateIncrblobCursors: a SQL-level write to a row aborts any
-** incrblob handle open on it. Blob-handle writes also route through
-** sqlite3BtreeInsert here (stock patches pages in place), so callers skip
-** this when the writer is itself an incrblob cursor. */
+/* Abort incrblob handles on this row; skip when the writer is itself incrblob. */
 void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
                                       i64 iRow, int isClearTable){
   BtCursor *p;
@@ -460,8 +455,7 @@ static void freeSchemaCatalogRows(SchemaCatalogRow *aRows, int nRows){
   sqlite3_free(aRows);
 }
 
-/* Reload order must place each object after everything it references: tables,
-** then their indexes, then views, then triggers (which fire on tables/views). */
+/* Reload order: tables, indexes, views, then triggers. */
 static int schemaTypeRank(const char *zType){
   if( strcmp(zType, "table")==0 ) return 0;
   if( strcmp(zType, "index")==0 ) return 1;
@@ -792,10 +786,7 @@ static int appendMissingSchemaCatalogRows(
     if( strcmp(aMeta[i].zType, "table")!=0 && strcmp(aMeta[i].zType, "index")!=0 ){
       continue;
     }
-    /* Live numbers can coincide with entries restored from another domain
-    ** (a reset rename). Adopting a live index row whose parent table is
-    ** not part of this catalog would retarget the index at a table the
-    ** catalog does not contain; its correct row comes from the fallback. */
+    /* Skip a live index whose parent is not in this catalog (cross-domain). */
     if( strcmp(aMeta[i].zType, "index")==0 ){
       int parentHere = 0;
       for(j=0; j<nRows && !parentHere; j++){
@@ -1015,16 +1006,7 @@ int doltliteSerializeCatalogEntries(
       db, aTables, nTables, 0, 0, ppOut, pnOut);
 }
 
-/* Build a master root for a NAMED staging operation. Rows follow the
-** source of their object's staging: table and index rows for objects
-** named in this operation (azTouched — the staged tables, staged drops,
-** and a staged vtab's shadows) come from the working master, everything
-** else — other tables' rows, view and trigger rows — keeps the
-** previously staged state. Wholesale working adoption leaked unstaged
-** schema changes of untouched objects into the commit; taking only the
-** touched objects' rows keeps the numbering domain of the freshly staged
-** entries while leaving the rest of the staged picture alone. A touched
-** name with no working rows is a staged drop: its old rows simply vanish. */
+/* Named staging master: touched objects from working, the rest from staged. */
 int doltliteBuildNamedStageMasterRoot(
   sqlite3 *db,
   const ProllyHash *pWorkingMaster, u8 workingFlags,
@@ -1088,8 +1070,7 @@ int doltliteBuildNamedStageMasterRoot(
     isEntryless = strcmp(pRow->zType, "view")==0
                || strcmp(pRow->zType, "trigger")==0;
     if( isEntryless ){
-      /* A named add keeps views and triggers at their staged state; -a
-      ** stages them from working, as Dolt does through dolt_schemas. */
+      /* Named add keeps views/triggers staged; -A/-a takes them from working. */
       if( fromWorking != (bEntrylessFromWorking!=0) ) continue;
     }else{
       zParent = strcmp(pRow->zType, "index")==0
@@ -1103,12 +1084,7 @@ int doltliteBuildNamedStageMasterRoot(
       }
       if( fromWorking != touched ) continue;
     }
-    /* Old-sourced table rows must carry the number their entry holds in
-    ** the FINAL entry list, or the composed rows collide across numbering
-    ** domains and no longer pair with their entries: aligned entries hold
-    ** working numbers, and entries whose tables left the working tree
-    ** hold fresh numbers. Index entries are unnamed and never renumbered;
-    ** their rows keep the old number. */
+    /* Old-sourced table rows take the FINAL entry number; indexes keep old. */
     iPg = pRow->oldPg;
     if( !fromWorking && strcmp(pRow->zType, "table")==0 && pRow->zName ){
       const struct TableEntry *pFinal = 0;
@@ -1189,15 +1165,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
-  /* A retired object can leave an index row behind at a number a restored
-  ** entry now occupies: the entry filter pairs one row to one entry and
-  ** cannot see that the row's parent table is gone from the set, and a
-  ** serialized catalog whose index has no table does not load. Purge by
-  ** parent before the supplementation passes, so the freed number can
-  ** receive the correct row from live or fallback schema. A parent whose
-  ** row arrives in those passes has a named entry here, so requiring a
-  ** parent row OR a parent entry keeps every live pairing. Constructed
-  ** arrays only: the live catalog never composes rows across domains. */
+  /* Constructed arrays: drop index rows whose parent table is gone. */
   if( aTables!=pBtree->cat.a ){
     int nOut = 0;
     for(i=0; i<nRows; i++){
@@ -1235,10 +1203,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     }
     nRows = nOut;
   }
-  /* Live-schema supplementation keys rows by the CONNECTION's table
-  ** numbers. Arrays numbered in a foreign domain (a reset target catalog)
-  ** must not use it -- a live number there can belong to a different table
-  ** entirely, and their missing rows come from the fallback schema. */
+  /* Live numbers belong to this connection; skip on a foreign-domain catalog. */
   if( !bForeignDomain ){
     rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
                                         &aRows, &nRows, aMeta, nMeta,
@@ -1256,11 +1221,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     ProllyMutMap mm;
     struct TableEntry masterEntry;
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
-    /* Canonical numbering: rows sort by type rank then name, and numbering
-    ** is positional, so the blob is a pure function of the logical catalog
-    ** (same schema reached through any DDL order hashes identically -- the
-    ** history-independence contract). The live session adopts this form at
-    ** every schema commit, so live and persisted never diverge. */
+    /* Positional numbers after type/name sort: history-independent blob. */
     for(i=0; i<nRows; i++){
       if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
         aRows[i].newPg = 0;
@@ -1282,10 +1243,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       int nRec = 0;
       u8 *pRec;
       ProllyHash h;
-      /* Canonicalized SQL text in the stored row: ADD COLUMN and RENAME
-      ** rewrite the statement differently than typing the final form, and
-      ** history independence requires equivalent schemas to serialize
-      ** identically. */
+      /* Canonical SQL so ADD COLUMN / RENAME match a typed-final schema. */
       if( (strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0)
        && aRows[i].zSql!=0 && aRows[i].zSql[0]!=0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
@@ -1393,19 +1351,11 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         aSorted[i].zTblName = "";
         continue;
       }
-      /* The table number is the entry's identity; match it first. For the
-      ** LIVE catalog that match is unconditional -- cached entry names go
-      ** stale across RENAME, so a name match is only a fallback for entries
-      ** whose number has no schema row. Constructed arrays (staging, merge,
-      ** reset) carry authoritative loaded names but may mix entries from
-      ** two numbering domains, so a number match that disagrees on name is
-      ** a cross-domain collision and must be rejected. */
+      /* Pair by table number first. Live: names may be stale after RENAME.
+      ** Constructed: a number/name mismatch is a cross-domain collision. */
       {
         int bLiveCatalog = (aTables==pBtree->cat.a);
-        /* Constructed arrays can mix numbering domains, and an
-        ** unnamed entry is always an index: a bare number match
-        ** against a table row is a cross-domain collision, not a
-        ** pairing. */
+        /* Unnamed constructed entries are indexes; a table-row hit is a collision. */
         if( aRowRef ){
           int iRef = catalogPgnoRefFind(aRowRef, nRows, aTables[i].iTable);
           for(; iRef>=0 && iRef<nRows
@@ -1481,19 +1431,8 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   }
 
 #ifdef DOLTLITE_PROLLY_CHECK
-  /* Two structural failures are detectable at write time regardless of
-  ** intent: an entry that pairs with no schema row and no live meta has
-  ** lost its identity crossing catalog numbering domains, and two entries
-  ** sharing a number would make the serialized catalog ambiguous. Both
-  ** are write-time signatures of the unnamed-entry overlay bug class —
-  ** fail fast instead of publishing the catalog. Only CONSTRUCTED arrays
-  ** (staging, merge, reset) are checked: that is where the overlay bugs
-  ** live, while the LIVE catalog can legitimately reach these states
-  ** through writable_schema vandalism that stock tolerates (deleted or
-  ** rootpage-aliased schema rows). A missing entry for an emitted row
-  ** cannot be checked at all: the row filter intentionally expresses
-  ** subset catalogs, so absence is indistinguishable from a staged
-  ** drop. */
+  /* Constructed catalogs only: unpaired or duplicate numbers abort. Live
+  ** catalogs can look like this under writable_schema vandalism. */
   for(i=0; aTables!=pBtree->cat.a && i<nTables; i++){
     if( aSorted[i].iTable<=1 ) continue;
     if( aSorted[i].zType && strcmp(aSorted[i].zType, "unknown")==0 ){
@@ -1681,16 +1620,11 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
     }
 
     q += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE;
-    /* Patch sqlite_master only after a surviving page-1 write. */
     if( iTable!=1 || pBtree->bMasterRootChangedTxn ){
       memcpy(q, pTE->root.data, PROLLY_HASH_SIZE);
     }
     q += PROLLY_HASH_SIZE;
-    /* Only roots are patched, so every object the baseline names is published
-    ** as it stands there. Matching entry counts and table numbers do not make
-    ** it this catalog -- a connection that switched branches has a baseline
-    ** describing the branch it left -- and its schema hash is what tells the
-    ** two apart. */
+    /* Schema hash, not table numbers, distinguishes a post-checkout baseline. */
     if( iTable!=1 && memcmp(q, pTE->schemaHash.data, PROLLY_HASH_SIZE)!=0 ){
       sqlite3_free(buf);
       return SQLITE_NOTFOUND;
@@ -1779,8 +1713,7 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   memset(aMetaNew, 0, sizeof(aMetaNew));
   aMetaNew[BTREE_FILE_FORMAT] = 4;
   aMetaNew[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
-  /* Keep session-scoped meta across in-connection catalog reloads. V5
-  ** catalogs persist user-visible header meta so new connections see it too. */
+  /* Keep session meta across reloads. V5 also persists user_version / app_id. */
   aMetaNew[BTREE_DEFAULT_CACHE_SIZE] = pBtree->aMeta[BTREE_DEFAULT_CACHE_SIZE];
   aMetaNew[BTREE_USER_VERSION] = pBtree->aMeta[BTREE_USER_VERSION];
   aMetaNew[BTREE_INCR_VACUUM] = pBtree->aMeta[BTREE_INCR_VACUUM];
@@ -1847,10 +1780,7 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       pTE->tableRootKnown = 1;
       if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
         pTE->isTableRoot = 1;
-        /* Views, triggers and virtual tables all serialize with table number
-        ** zero, so several entries legitimately share one number and catAdd
-        ** hands each of them the same entry. Release the name the previous
-        ** one left here before taking ownership of a new one. */
+        /* Views/triggers/vtables share table number 0; catAdd reuses the entry. */
         sqlite3_free(pTE->zName);
         pTE->zName = sqlite3_malloc(nName+1);
         if( !pTE->zName ){
@@ -1918,10 +1848,6 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  /* flushAllPending / flushDeferredEdits require a write transaction
-  ** (PROLLY_ASSERT_WRITE_TXN). Read-side callers such as the dirty-state
-  ** check in doltliteHasUncommittedChanges only need a consistent catalog
-  ** snapshot; outside a write txn there are no pending maps to flush. */
   if( pBtree->inTrans==TRANS_WRITE ){
     rc = flushAllPending(pBtree, pBt, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -1930,9 +1856,7 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* A new connection starts with only the runtime sqlite_master entry.
-  ** Repository seeding runs before that schema can be queried, and there
-  ** are no user-table hashes to refresh in that state. */
+  /* Fresh connections have only runtime sqlite_master; skip hash refresh. */
   if( pBtree->cat.n>1 ){
     rc = doltliteUpdateSchemaHashes(db);
     if( rc!=SQLITE_OK ) return rc;

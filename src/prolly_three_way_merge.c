@@ -9,8 +9,7 @@
 
 #include <string.h>
 
-/* Private sentinel: fast merge could not prove the result, so caller should
-** fall back to the full row-wise merge path without treating it as an error. */
+/* Fast merge could not prove the result; fall back to the full row-wise path. */
 #define FM_FALLBACK  SQLITE_DONE
 
 typedef struct FmCtx {
@@ -135,9 +134,7 @@ static void fmKeyFromCursor(u8 flags, ProllyCursor *pC, FmKey *pK){
   }
 }
 
-/* Pick the smallest of the three present keys into *pMin, then reset each
-** input's .has to whether that side actually holds the min key (the rest of
-** the merge advances exactly the sides flagged here). */
+/* Smallest present key into *pMin; .has flags which sides hold it. */
 static void fmSelectMinKey(u8 flags, FmKey *pA, FmKey *pO, FmKey *pT, FmKey *pMin){
   FmKey *aSide[3];
   int minSide = -1;
@@ -359,8 +356,7 @@ static int fmEmitChild(
   else if( prollyHashCompare(pTheirs, pAnc) == 0 )  pSplice = pOurs;
 
   if( pSplice ){
-    /* Preserve structural sharing only when the chunker is exactly aligned at
-    ** this parent level; otherwise emit rows so the rebuilt tree stays sorted. */
+    /* Share structure only when the chunker is aligned at this parent level. */
     if( prollyChunkerLevelsBelowEmpty(pCh, parentLevel) ){
       u64 spliceCount = 0;
       rc = prollySubtreeCount(fm->pStore, fm->pCache, pSplice, &spliceCount);

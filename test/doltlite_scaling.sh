@@ -1,14 +1,7 @@
 #!/bin/bash
-# Scaling-curve gates: asserts RATIOS between sizes/depths rather than
-# wall-clock, so runner speed cancels out. Catches superlinear regressions
-# in per-commit cost vs history depth, per-op cost vs table size, and
-# per-byte cost vs blob size.
-#
-# IMPORTANT: perf is meaningless on a DOLTLITE_PROLLY_CHECK build (it adds a
-# full-tree walk to every commit). CI builds a plain binary for this suite.
+# Ratio gates (not wall-clock). Meaningless on DOLTLITE_PROLLY_CHECK (full-tree walk per commit).
 set -uo pipefail
 
-# Odd N. Middle of the sorted list.
 median_n() {
   printf '%s\n' "$@" | sort -n | awk -v n="$#" 'NR==int((n+1)/2){print; exit}'
 }
@@ -49,7 +42,7 @@ fail=0
 
 check_ratio() {
   local desc="$1" num="$2" den="$3" max="$4"
-  # floor the denominator at 1ms so a fast run can't divide by ~zero
+  # floor den at 1ms
   local den_floored=$(( den > 0 ? den : 1 ))
   local ratio=$(( (num * 10) / den_floored ))
   if [ "$ratio" -le $(( max * 10 )) ]; then
@@ -87,7 +80,6 @@ ms_now() {
   python3 -c 'import time; print(int(time.time()*1000))'
 }
 
-# run_ms <db> <sql...>: run statements in one session, echo elapsed ms
 run_ms() {
   local db="$1"; shift
   local t0 t1
@@ -97,7 +89,7 @@ run_ms() {
   echo $(( t1 - t0 ))
 }
 
-# Median of SAMPLES (odd) tolerates (SAMPLES-1)/2 outliers in either direction.
+# Odd SAMPLES: median drops (SAMPLES-1)/2 outliers each side.
 run_ms_median() {
   local samples=() t i
   for (( i=0; i<SAMPLES; i++ )); do
@@ -122,10 +114,7 @@ commit_block() {
   run_ms "$db" "$stmts"
 }
 
-# Seed in ONE session: per-batch reopens would each replay the growing WAL,
-# turning large seeds quadratic and drowning the signal this suite gates.
-# The SQL goes over stdin — at 100M rows the statement list exceeds Linux's
-# 128KB single-argument limit and execve would fail before doltlite runs.
+# One session + stdin: reopen replays WAL (quadratic); argv hits 128KB.
 seed_rows() {
   local db="$1" total="$2" cols="$3"
   local i=1 end
@@ -138,13 +127,7 @@ seed_rows() {
   } | "$DOLTLITE" "$db" > /dev/null 2>&1
 }
 
-# Per-commit cost is depth-independent now that the head re-confirm proves
-# the store unchanged from the tail root record instead of replaying the
-# WAL; nominal growth is ~3x from residual per-session bookkeeping. Shared
-# CI hosts still spike a single 200-commit block (seen 8.0x vs a hard 6x
-# cut) and 500-row commits after a large GC (9.7x-16.7x vs an 8x cut).
-# The gate matches the O(n) scan/gc headroom; this suite has not caught a
-# real regression since early development.
+# Depth-independent after head re-confirm; CI spikes to ~16x, gate matches O(n) scan/gc headroom.
 COMMIT_GROWTH_GATE=20
 SESSION_OP_GATE=20
 
@@ -156,9 +139,7 @@ DBA="$TMPDIR/depth"
 seed_rows "$DBA" 10000 "x, 0"
 "$DOLTLITE" "$DBA" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed'); SELECT dolt_branch('anchor');" > /dev/null 2>&1
 
-# Side branches off the seed commit for merge timing, on disjoint rows so none
-# of them conflict. Three per depth because a branch can only be merged once and
-# one sample of a merge is mostly runner jitter.
+# Disjoint side branches; three per depth (merge once, jitter).
 sides_sql=""
 row=0
 for side in side1a side1b side1c side2a side2b side2c; do
@@ -172,16 +153,13 @@ median3() {
 }
 
 depth_ops() {
-  # echoes "log_ms checkout_ms merge_ms" for the current depth
   local prefix="$1"
   local lg co m1 m2 m3 mg
   lg=$(run_ms_median "$DBA" "SELECT count(*) FROM dolt_log;")
-  # Both checkouts in one session per sample. run_ms starts a fresh session on
-  # whatever branch the db is left on, so measuring them separately made every
-  # sample after the first a no-op: cheap and stable, but no longer a checkout.
+  # Both checkouts in one session: a leftover branch made later samples a no-op.
   co=$(run_ms_median "$DBA" \
        "SELECT dolt_checkout('anchor'); SELECT dolt_checkout('main');")
-  # One branch per sample, since merging the same one twice is a no-op.
+  # One branch per sample: merging twice is a no-op.
   m1=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}a');")
   m2=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}b');")
   m3=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}c');")
@@ -196,7 +174,6 @@ echo "  depth 200:   ${block1}ms/block ($((block1 / BLOCK))ms/commit) log=${log1
 for b in 1 2 3 4; do
   commit_block "$DBA" $(( b * BLOCK )) "$BLOCK" > /dev/null
 done
-# Median of SAMPLES deep blocks. Offsets continue from the 1000-commit warmup.
 deep_samples=()
 deep_start=$(( 5 * BLOCK ))
 for (( i=0; i<SAMPLES; i++ )); do
@@ -223,7 +200,6 @@ postgc=$(median_n "${postgc_samples[@]}")
 postgc_scaled=$(( postgc * BLOCK / 50 ))
 echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit) [samples $(IFS=,; echo "${postgc_samples[*]}")ms; median ${postgc}ms]"
 check_ratio "post-gc commit cost vs shallow-history cost" "$postgc_scaled" "$block1" "$COMMIT_GROWTH_GATE"
-# first block + 4 warmup blocks + SAMPLES deep blocks + SAMPLES post-gc blocks
 expect_commits=$(( BLOCK + 4 * BLOCK + SAMPLES * BLOCK + SAMPLES * 50 ))
 check_eq "commit increments all applied" "$expect_commits" "$(query "$DBA" "SELECT sum(v) FROM t;")"
 
@@ -255,25 +231,19 @@ for idx in 0 1 2 3; do
 
   T_SCAN[$idx]=$(run_ms_median "$db" "SELECT count(*) FROM t WHERE val >= 0;")
 
-  # Correctness at scale, one full pass: row count, key-set integrity
-  # (sum of ids has a closed form), value integrity (seed val=id%1000 plus
-  # the SAMPLES median delta commits above), and per-row content (name and
-  # pad are pure functions of id, so any lost/duplicated/corrupted row or
-  # chunk-boundary bug shows up).
+  # Closed-form id/val plus name/pad from id.
   sum_id=$(( n * (n + 1) / 2 ))
   sum_val=$(( n / 1000 * 499500 + SAMPLES * 500 ))
   check_eq "content verify at N=$n" "$n|$sum_id|$sum_val|0" \
     "$(query "$db" "SELECT count(*)||'|'||sum(id)||'|'||sum(val)||'|'||sum(name <> 'row_'||id OR pad <> printf('%032d',id)) FROM t;")"
 
-  # History read-back: the newest commit's diff must be exactly the 500
-  # modified rows, with old values one increment behind new values.
+  # Newest diff is the 500 modified rows, old=new-1.
   head_hash=$(query "$db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
   t0=$(ms_now)
   diff_out=$(query "$db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='$head_hash' AND diff_type='modified' AND to_val=from_val+1;")
   T_DIFF[$idx]=$(( $(ms_now) - t0 ))
   check_eq "history diff of newest commit at N=$n" "500" "$diff_out"
 
-  # branch isolation: a delete branch sees its deletion; main does not
   "$DOLTLITE" "$db" "SELECT dolt_checkout('-b','wipe'); DELETE FROM t WHERE id<=1000; SELECT dolt_commit('-am','wipe'); SELECT dolt_checkout('main');" > /dev/null 2>&1
   wipe_seen=$(query "$db" "SELECT dolt_checkout('wipe'); SELECT count(*) FROM t WHERE id<=1000;" | tail -1)
   main_seen=$(query "$db" "SELECT dolt_checkout('main'); SELECT count(*) FROM t WHERE id<=1000;" | tail -1)
@@ -287,9 +257,7 @@ for idx in 0 1 2 3; do
   rm -f "$db"
 done
 
-# 10x more rows per step; point ops should be ~O(log n), scans/gc ~O(n).
-# The diff-vtab commit filter currently enumerates ~O(n); the gate keeps it
-# from getting worse and tightens if pushdown improves.
+# 10x rows/step; point ~O(log n), scan/gc/diff ~O(n).
 for step in 1 2 3; do
   lo=${SIZES[$((step-1))]}; hi=${SIZES[$step]}
   check_ratio "open cost, ${hi} vs ${lo} rows" "${T_OPEN[$step]}" "${T_OPEN[$((step-1))]}" "$SESSION_OP_GATE"
@@ -312,7 +280,7 @@ r_small=$(run_ms_median "$DBC" "SELECT length(data) FROM b WHERE id=1;")
 r_big=$(run_ms_median "$DBC" "SELECT length(data) FROM b WHERE id=2;")
 echo "  insert+commit: 1MB=${b_small}ms 16MB=${b_big}ms; read: 1MB=${r_small}ms 16MB=${r_big}ms"
 check_eq "blob roundtrip lengths" "1048576|16777216" "$(query "$DBC" "SELECT group_concat(length(data),'|') FROM b ORDER BY id;")"
-# 16x the bytes; ~linear expected, gate at 3x headroom over linear
+# 16x bytes; ~linear, 3x headroom.
 check_ratio "blob insert+commit, 16MB vs 1MB" "$b_big" "$b_small" 48
 check_ratio "blob readback, 16MB vs 1MB" "$r_big" "$r_small" 48
 

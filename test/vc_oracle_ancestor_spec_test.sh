@@ -143,9 +143,7 @@ oracle_both_error "bare_tilde_1" "$MERGED" "~1"
 oracle_both_error "bare_caret" "$MERGED" "^"
 oracle_both_error "bare_caret_1" "$MERGED" "^1"
 
-# A long operator chain walks past the root and must error cleanly. The
-# resolver applies operators iteratively; the earlier recursive form used
-# O(depth) stack and O(depth^2) transient memory on inputs like this.
+# Walks past the root; must error. Iterative so deep chains stay O(1) stack.
 oracle_both_error "head_many_carets" "$MERGED" "HEAD$(printf '^%.0s' $(seq 1 64))"
 
 echo ""

@@ -38,9 +38,7 @@ db_rm "$DB"
 echo ""
 echo "--- checkpoint compacts the named database only ---"
 
-# Checkpoint bridges to GC, so aiming it at the wrong store rewrites a file the
-# caller never named. Both databases carry reclaimable chunks so either one
-# shrinking is visible.
+# Checkpoint is GC; the named store must shrink, the other must not.
 MAIN=/tmp/test_wc_main_$$.db; db_rm "$MAIN"
 AUX=/tmp/test_wc_aux_$$.db;  db_rm "$AUX"
 for D in "$MAIN" "$AUX"; do
@@ -66,7 +64,7 @@ run_test_eq "wc_aux_rows_intact" \
 
 db_rm "$MAIN"; db_rm "$AUX"
 
-# The main-named form must still compact main.
+# Named-main form still compacts main.
 DB=/tmp/test_wc_selfmain_$$.db; db_rm "$DB"
 $DOLTLITE "$DB" "CREATE TABLE big(a INTEGER PRIMARY KEY, b TEXT);
 WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000)

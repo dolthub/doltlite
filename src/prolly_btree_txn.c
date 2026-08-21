@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Transactions, savepoints, commit, rollback, and mutation flushing. */
-
 static void btreeTakeCatalogCache(Btree *p, u8 **ppData, int nData,
                                   const ProllyHash *pHash){
   sqlite3_free(p->pCatalogCache);
@@ -171,10 +169,7 @@ static int captureSavepointTables(
     pState->aCatalogSnapshot = 0;
     pState->bCatalogSnapshot = 0;
   }
-  /* Snapshot the live catalog entries verbatim. The commit-form catalog
-  ** serializer canonicalizes (sorts rows and renumbers roots), so a
-  ** round-trip through it reassigns iTable numbers and rebuilds the master
-  ** root, scrambling tables created inside the transaction. */
+  /* Snapshot live entries: the commit serializer renumbers iTable. */
   rc = captureSavepointCatalogSnapshot(pBtree, pState);
   if( rc!=SQLITE_OK ) return rc;
   if( pBtree->cat.n<=0 ){
@@ -376,9 +371,7 @@ static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
   }
 }
 
-/* If a dirty map is flushed while a savepoint is open, move that map into the
-** savepoint snapshot and continue with a fresh map. Rollback can then restore
-** the exact pre-flush edits even though the table root has already changed. */
+/* Move a flushed map into the savepoint snapshot; rollback restores it. */
 int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
                                    ProllyMutMap **ppPending,
                                    ProllyMutMap **ppFlushMap,
@@ -583,7 +576,6 @@ static int restoreTablesFromSavepoint(
       pBtree->cat.a[idx].pendingFlushSeekEdits =
           pState->aTables[k].pendingFlushSeekEdits;
       if( pState->aTables[k].pPending==0 ){
-        /* Restore pre-drop edits captured by this savepoint. */
         int iThis = (int)(pState - pBtree->aSavepointTables);
         int iSp = -1, iSnap = -1;
         ProllyMutMap *pSnap = findPendingSnapshot(
@@ -674,8 +666,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
 
-  /* Garbage/short files open successfully (stock timing) but any first
-  ** use — read or write — is SQLITE_NOTADB without rewriting the file. */
+  /* Open succeeds on garbage (stock timing); first use is SQLITE_NOTADB. */
   if( pBt->store.notADatabase ) return SQLITE_NOTADB;
 
   if( p->inTrans==TRANS_WRITE ){
@@ -754,21 +745,8 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
     btreeStoreCommittedFromCurrent(p, 0);
 
-    /* A peer can delete the branch this session sits on. Writing then
-    ** persists a working set for a ref that no longer exists, and that
-    ** persist -- the one ref install with no compare-and-swap -- puts the
-    ** branch back, undoing a delete that was durable for everyone else.
-    ** Refuse the write instead.
-    **
-    ** This is the last point where refusing is safe. Past here the persist
-    ** runs inside commit phase two, whose abort path releases the graph
-    ** lock while the transaction is still a write, so an error there trips
-    ** the lock assert in the rollback that follows.
-    **
-    ** A store with no branches at all is one being seeded, where the head
-    ** exists before any ref does and this very write is what creates it;
-    ** an empty head likewise means the branch is still being created. Only
-    ** a branch missing from an established set of refs was deleted. */
+    /* Refuse writes onto a peer-deleted branch: persist would resurrect it.
+    ** Last safe refusal point before phase two. Empty refs/head are seeding. */
     if( !prollyHashIsEmpty(&p->headCommit)
      && !p->isDetached
      && pBt->store.refs.nBranches>0 ){
@@ -779,11 +757,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
 
-    /* The transaction becomes a write here rather than after the savepoint
-    ** mirror below: pushSavepoint snapshots per-table state on behalf of a
-    ** write and says so with an assertion, and this is the caller that
-    ** establishes the very state it asserts on. A failed push still has to
-    ** leave nothing behind, so it puts both fields back. */
+    /* Become a write before pushSavepoint, which asserts TRANS_WRITE. */
     {
       u8 inTransBefore = p->inTrans;
       u8 inTransactionBefore = p->inTransaction;
@@ -831,29 +805,14 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   return p->pOps->xBeginTrans(p, wrFlag, pSchemaVersion);
 }
 
-/* DoltLite never persists a conflicted working set: unresolved conflicts are
-** inspectable inside the transaction that produced them and nowhere else. Phase
-** one is the only commit phase permitted to fail, so the veto belongs here --
-** phase two would already have written the working-set blob. A non-empty
-** conflicts catalog is the same predicate dolt_commit refuses on, and it covers
-** schema conflicts too, since those live in that catalog as zero-conflict
-** entries.
-**
-** Only the caller's own commit is refused. The dolt_* commands run inner SQL
-** while conflicts are legitimately present -- dolt_commit's -A staging, for one --
-** and those inner statements commit too; vetoing them would mask each command's
-** own diagnosis with a bare "constraint failed". nVdbeExec counts nested
-** VdbeExec calls, so it is >1 exactly when this commit belongs to a statement
-** running inside a SQL function. */
+/* Conflicts are in-txn only. Veto here (phase two already writes). Nested
+** VdbeExec>1 is inner SQL inside dolt_* and must not be refused. */
 int prollyBtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
   (void)zSuperJrnl;
   if( !p || p->inTrans!=TRANS_WRITE ) return SQLITE_OK;
   if( p->pBt && p->pBt->inCatalogSerialize ) return SQLITE_OK;
   if( p->db->nVdbeExec>1 ) return SQLITE_OK;
   if( !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ){
-    /* The halt path in vdbeaux discards this message, so the actionable
-    ** wording lives in the dolt_merge error the caller already saw; this code
-    ** is the backstop that makes the refusal unconditional. */
     sqlite3ErrorWithMsg(p->db, SQLITE_CONSTRAINT,
       "cannot merge: unresolved conflicts cannot be committed");
     return SQLITE_CONSTRAINT;
@@ -865,14 +824,11 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
   return p->pOps->xCommitPhaseOne(p, zSuperJrnl);
 }
 
-/* Drop graph lock + snapshot pin after a write-txn commit attempt. */
 static void commitPhaseTwoReleaseGraph(BtShared *pBt){
   chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
 }
 
-/* Abort a write commit that has not yet published: free catalog bytes,
-** roll back the store, release the graph. Optional reload catalog is freed. */
 static void commitPhaseTwoAbort(
   BtShared *pBt,
   u8 **ppCatData,
@@ -891,7 +847,6 @@ static void commitPhaseTwoAbort(
   commitPhaseTwoReleaseGraph(pBt);
 }
 
-/* Serialize working catalog + working-set blob + refs for a write commit. */
 static int commitPhaseTwoStageCatalog(
   Btree *p,
   BtShared *pBt,
@@ -926,8 +881,6 @@ static int commitPhaseTwoStageCatalog(
   return chunkStoreSerializeRefs(&pBt->store);
 }
 
-/* Deserialize the about-to-commit catalog and freeze peer cursors before
-** a schema-changing publish. */
 static int commitPhaseTwoPrepSchemaReload(
   Btree *p,
   BtShared *pBt,
@@ -946,7 +899,6 @@ static int commitPhaseTwoPrepSchemaReload(
     catFree(&pReload->cat);
     return rc;
   }
-  /* Save this handle's live cursors before refreshing the schema root. */
   for(pC = pBt->pCursor; pC; pC = pC->pNext){
     if( pC->pBtree==p ){
       if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
@@ -984,15 +936,12 @@ static void commitPhaseTwoAdoptReloadedCatalog(
     btreeFreeCatalogTables(p);
     p->cat = pReload->cat;
     memcpy(p->aMeta, pReload->aMeta, sizeof(p->aMeta));
-    /* sqlite already bumped its cookie for this DDL; keep the stock
-    ** value instead of the reload's hash-derived one so in-session
-    ** cookie semantics stay stock (writes stick, DDL increments). */
+    /* Keep sqlite's cookie, not the reload's hash-derived one. */
     p->aMeta[BTREE_SCHEMA_VERSION] = nativeSchemaCookie;
     memset(&pReload->cat, 0, sizeof(pReload->cat));
     *pbHaveReload = 0;
   }
-  /* A saved cursor whose table vanished in the reload would re-seek a
-  ** stale root; fault it. */
+  /* Fault saved cursors whose table vanished in the reload. */
   for(pC = pBt->pCursor; pC; pC = pC->pNext){
     if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
      && findTable(p, pC->pgnoRoot)==0 ){
@@ -1002,8 +951,7 @@ static void commitPhaseTwoAdoptReloadedCatalog(
   }
   invalidateSchema(p);
   if( p->db ){
-    /* Hard expiry: canonical renumbering can move rootpages compiled
-    ** into running statements (tkt-c694113d5). */
+    /* Hard expiry: canonical numbering can move compiled rootpages. */
     sqlite3ExpirePreparedStatements(p->db, 1);
     sqlite3ResetAllSchemasOfConnection(p->db);
   }
@@ -1017,8 +965,6 @@ static void commitPhaseTwoEndWriteTxn(Btree *p){
   p->bMasterRootChangedTxn = 0;
 }
 
-/* After chunkStoreCommit failed: restore pre-commit state or drop the
-** catalog if restore itself fails. Always releases the graph. */
 static int commitPhaseTwoFailRestore(
   Btree *p,
   BtShared *pBt,
@@ -1035,12 +981,7 @@ static int commitPhaseTwoFailRestore(
   }
   sqlite3_free(*ppCatData);
   *ppCatData = 0;
-  /* Detach the cursors' pending-edit map aliases before restoreFromCommitted()
-  ** frees the maps -- explicitly on the catalog-cache path, and via catFree on
-  ** the reload path. Only null the alias: catFree owns the map, so touching it
-  ** after the free is the use-after-free being avoided, and a prior savepoint
-  ** rollback may already have freed the one a cursor points at. ensureMutMap
-  ** re-aliases on reuse. Same shape as prollyBtreeRollback(). */
+  /* Null map aliases before restoreFromCommitted frees them (UAF). */
   {
     BtCursor *pC;
     for(pC = pBt->pCursor; pC; pC = pC->pNext){
@@ -1055,9 +996,7 @@ static int commitPhaseTwoFailRestore(
   }
   rc2 = restoreFromCommitted(p);
   if( rc2!=SQLITE_OK ){
-    /* Same shape as the rollback path: the restore OOM'd, but the
-    ** transaction must end with the partial state discarded, or the
-    ** next statement's autocommit publishes it. */
+    /* Restore OOM'd; discard partial state so autocommit cannot publish it. */
     btreeFreeCatalogTables(p);
     memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
     p->bCatalogDropped = 1;
@@ -1066,7 +1005,6 @@ static int commitPhaseTwoFailRestore(
     chunkStoreRollback(&pBt->store);
     commitPhaseTwoEndWriteTxn(p);
     commitPhaseTwoReleaseGraph(pBt);
-    /* Preserve the original commit error; restore failure is secondary. */
     return commitRc;
   }
   invalidateCursors(pBt, 0, commitRc);
@@ -1101,10 +1039,7 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
     return rc;
   }
 
-  /* A schema-changing commit adopts the canonical catalog wholesale --
-  ** including the canonical master root, so the live view and the
-  ** persisted form never diverge (rowid bindings, rootpages, and row
-  ** order all match what any reload would see). */
+  /* Schema commits adopt the canonical catalog (live == persisted). */
   bReloadSchema = p->bSchemaChangedTxn;
   if( bReloadSchema ){
     rc = commitPhaseTwoPrepSchemaReload(
@@ -1116,14 +1051,7 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
     bHaveReloadCatalog = 1;
   }
 
-  /* Phase one already refused the caller's own commit when conflicts are
-  ** unresolved, so reaching here with a non-empty conflicts catalog means this
-  ** is a statement commit nested inside a dolt_* command -- dolt_commit's
-  ** staging, typically. Those must not be failed, or the command's own
-  ** diagnosis is replaced by a bare "constraint failed", but they must not
-  ** make the conflict durable either. Leaving the batch pending satisfies
-  ** both: the chunks stay in the pending set exactly as an in-transaction save
-  ** leaves them, and only a later conflict-free commit flushes them. */
+  /* Nested dolt_* statement commit: leave conflicted chunks pending. */
   if( !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ){
     if( bHaveReloadCatalog ){
       catFree(&reloadBtree.cat);
@@ -1163,9 +1091,7 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   BtShared *pBt = p->pBt;
   (void)bCleanup;
 
-  /* Catalog serialization runs a SELECT whose finalize re-enters
-  ** commit/rollback; that nested call is read-only, so no-op it instead of
-  ** recursing into a stack overflow. */
+  /* Nested commit from catalog-serialize SELECT finalize: no-op. */
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
   if( p->inTrans!=TRANS_WRITE ){
@@ -1197,10 +1123,7 @@ int restoreFromCommitted(Btree *p){
   assert( p!=0 && p->pBt!=0 );
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
     if( p->bCatalogDropped ){
-      /* A prior OOM rollback dropped the catalog. Installing the default
-      ** empty catalog here would let the persist-on-rollback path write an
-      ** empty working set over real tables. Reload the committed state
-      ** from the store instead; failure keeps the dropped state. */
+      /* OOM drop: do not install an empty catalog over real tables. Reload. */
       ProllyHash loadedCatHash;
       int rc;
       memset(&loadedCatHash, 0, sizeof(loadedCatHash));
@@ -1305,12 +1228,7 @@ int restoreFromCommitted(Btree *p){
   return SQLITE_OK;
 }
 
-/* Releasing the graph lock while inTrans still says TRANS_WRITE leaves the
-** connection believing it holds a write transaction it no longer has: the next
-** write short-circuits prollyBtreeBeginTrans and mutates the store with no
-** cross-process lock, so a concurrent peer's commit can be clobbered.
-** sqlite3RollbackAll discards the return code, so the state has to be sound
-** before returning it. Mirrors the restoreFromCommitted failure path. */
+/* Clear TRANS_WRITE before unlocking; sqlite3RollbackAll discards rc. */
 static void rollbackAbandonWriteTxn(Btree *p, BtShared *pBt){
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
@@ -1332,14 +1250,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
 
   if( p->inTrans==TRANS_WRITE ){
     PROLLY_ASSERT_GRAPH_LOCKED(pBt);
-    /* Read cursors survive write-only rollback by reseeking the restored tree.
-    ** Write cursors, and all cursors after schema changes, are faulted.
-    ** Either way detach the cursor's pending-edit map alias before
-    ** restoreFromCommitted() (via catFree) frees it. Detach AFTER
-    ** saveCursorPosition(), which copies out the key it needs first. We only
-    ** null the alias — catFree owns the map, and a prior savepoint rollback may
-    ** already have freed the one this cursor points at, so clearing it would be
-    ** a use-after-free. ensureMutMap re-aliases on reuse. */
+    /* Save read cursors; fault writers. Null map aliases after save (UAF). */
     {
       BtCursor *pC;
       int tc = tripCode ? tripCode : SQLITE_ABORT;
@@ -1349,7 +1260,6 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
          && (pC->curFlags & BTCF_WriteFlag)==0
          && (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
          && saveCursorPosition(pC)==SQLITE_OK ){
-          /* read cursor saved -> CURSOR_REQUIRESEEK; survives the rollback */
         }else{
           pC->eState = CURSOR_FAULT;
           pC->skipNext = tc;
@@ -1368,7 +1278,6 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
-      /* Drop catalog pointers into staging before rollback discards chunks. */
       btreeFreeCatalogTables(p);
       memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
       p->bCatalogDropped = 1;
@@ -1389,8 +1298,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     if( bAutocommitOomRollback ){
       p->bFilterSchemaPlaceholders = 1;
     }
-    /* Autocommit OOM rollback restores in-memory state only. Persisting the
-    ** restored catalog here can make a failed DDL attempt the new baseline. */
+    /* Autocommit OOM: do not persist a failed DDL as the new baseline. */
     if( !bAutocommitOomRollback && !p->bCatalogDropped
      && !pBt->store.bRefsStale ){
       u8 *catData = 0;
@@ -1483,12 +1391,7 @@ int prollyBtreeBeginStmt(Btree *p, int iStatement){
     return SQLITE_ERROR;
   }
 
-  /* iStatement is db->nSavepoint+db->nStatement: the first db->nSavepoint
-  ** slots are named SAVEPOINTs (and must capture table roots), and only the
-  ** remainder are statement journals. Always pushing bStatement=1 made
-  ** SAVEPOINT ... ROLLBACK TO skip catalog capture, so a later flush (e.g.
-  ** ANALYZE after INSERT RETURNING) could leave index roots ahead of the
-  ** table after rollback (#2103). Match syncBtreeSavepoints. */
+  /* First nSavepoint slots are named SAVEPOINTs and must capture tables. */
   while( p->nSavepoint < iStatement ){
     int bStatement = 1;
     if( p->db && p->nSavepoint < p->db->nSavepoint ){
@@ -1517,10 +1420,7 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
   int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
   int rc = restoreFromCommitted(p);
   if( rc!=SQLITE_OK ){
-    /* The reload OOM'd partway; the catalog may still point at staged
-    ** chunks the rollback is about to discard (a DDL attempt repointed
-    ** the sqlite_master root). Drop it without allocating and let the
-    ** next BeginTrans reload the committed working state. */
+    /* Reload OOM: drop pointers into chunks rollback is about to discard. */
     btreeFreeCatalogTables(p);
     memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
     p->bCatalogDropped = 1;
@@ -1529,9 +1429,7 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
     resetConnectionSchema(p);
     return rc;
   }
-  /* Like invalidateCursors, but keep the code of an existing fault:
-  ** OP_Savepoint's cursor trip already stamped SQLITE_ABORT_ROLLBACK and
-  ** clobbering it to SQLITE_ABORT misreported the abort (savepoint7-2.2). */
+  /* Keep an existing fault code; do not clobber SQLITE_ABORT_ROLLBACK. */
   for(pC=pBt->pCursor; pC; pC=pC->pNext){
     if( pC->eState!=CURSOR_FAULT ){
       pC->eState = CURSOR_FAULT;
@@ -1600,7 +1498,6 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   int j;
   int rc;
   int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
-  /* Save cursors so parent statements survive nested-statement rollback. */
   if( p->db && p->db->mallocFailed ){
     for(pC=pBt->pCursor; pC; pC=pC->pNext){
       if( pC->pBtree!=p ) continue;
@@ -1633,9 +1530,6 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
     freeSavepointTables(&p->aSavepointTables[j]);
   }
   p->nSavepoint = iSavepoint;
-  /* The rollback may have freed or replaced pending-edit maps; detach every
-  ** cursor's now-stale map alias. Saved cursors re-seek; a cursor that could
-  ** not be saved (already invalid/faulted) is left as-is. */
   for(pC=pBt->pCursor; pC; pC=pC->pNext){
     if( pC->pBtree!=p ) continue;
     pC->pMutMap = 0;
@@ -1700,7 +1594,6 @@ int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
      && p->aSavepointTables ){
       return rollbackNamedSavepoint(p, pBt, iSavepoint);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      /* No pushed savepoint means this btree has no writes at that level. */
       return SQLITE_OK;
     } else if( iSavepoint<0 ){
       return rollbackAllSavepoints(p, pBt);

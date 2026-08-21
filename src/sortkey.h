@@ -10,21 +10,13 @@
 #define SORTKEY_TEXT    0x35
 #define SORTKEY_BLOB    0x45
 
-/* Terminates the 9-byte numeric form in a descending field so it is not a byte
-** prefix of the 18-byte one. Distinct from every tag, so a field's length is
-** still readable from this position. */
+/* DESC 9-byte numeric terminator so it is not a prefix of the 18-byte form. */
 #define SORTKEY_NUM_DESC_END 0x00
 
-/* True when b could begin a field, in either sort direction (a DESC field is
-** stored with every byte inverted, tag included).
-**
-** A byte-prefix match only means the encoded fields are equal if the shorter
-** key ends on a field boundary. A numeric field carrying an integer that no
-** double represents exactly is 18 bytes -- 9 bytes of IEEE base plus a
-** continuation marker and the exact value -- so the 9-byte encoding of its
-** base is a byte-prefix of it while denoting a different, smaller number.
-** Anything that is not a tag is treated as a continuation, so an encoding
-** grown later fails safe onto the authoritative comparator. */
+/* True if b can start a field in either direction (DESC inverts every byte).
+** Prefix match is equality only on a field boundary. An inexact integer is
+** 18 bytes, so the 9-byte IEEE base is a prefix of a smaller number. Non-tags
+** are continuations so a later encoding fails onto the real comparator. */
 static inline int sortKeyByteStartsField(u8 b){
   switch( b ){
     case SORTKEY_NULL:

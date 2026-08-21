@@ -7,10 +7,7 @@ import sys
 import tempfile
 import time
 
-# Autocommit merge refusals roll the merge back whole, so the in-memory
-# model still matches. dolt_pull's merge half is the same outcome. Every
-# such message -- conflicts, duplicate-index, dropped-column-vs-edit,
-# trigger-over-renamed/dropped-table -- starts with this prefix.
+# Autocommit merge refusals roll back whole; dolt_pull's merge half is the same. Prefix matches those errors.
 MERGE_ROLLED_BACK = ("cannot merge:",)
 
 
@@ -359,8 +356,7 @@ def commit_branch(doltlite, db_path, branch, model, step, stage_all=True):
         return
     msg = "stateful %s %d" % (branch, step)
     args = "'-A','-m',%s" % sql_quote(msg) if stage_all else "'-m',%s" % sql_quote(msg)
-    # A failed SQLite statement rolls back -A's restage along with the commit.
-    # Complete that restage successfully before treating it as a clean no-op.
+    # A failed statement rolls back -A's restage; complete it before treating as a no-op.
     out = run_sql(
         doltlite,
         db_for_branch(db_path, branch),
@@ -413,9 +409,7 @@ def reset_branch(doltlite, db_path, branch, model, hard):
             )
         model[branch]["working"] = dict(committed)
         model[branch]["staged"] = dict(committed)
-    # --soft without a ref moves nothing: Dolt leaves the working set AND the
-    # staged set exactly as they were, so the model must too. Only a mixed reset
-    # (no flag) unstages, and this fuzzer does not exercise that form.
+    # --soft without a ref moves nothing, including staged. Mixed reset (no flag) is not exercised.
 
 
 def create_branch(doltlite, db_path, branches, model, rng, name, via_checkout):

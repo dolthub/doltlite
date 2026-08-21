@@ -177,10 +177,7 @@ UPDATE t SET v='main_' || id WHERE id BETWEEN 1 AND $MERGE_CHANGE_ROWS;
 SELECT dolt_commit('-A','-m','main');" "$bin"
 }
 
-# Build the seed databases with |bin| into |dest|. Paired PR runs must not
-# share a seed: a candidate that changes on-disk layout (for example writing
-# a WAL index checkpoint on close) would otherwise pay that cost on a
-# baseline-produced file, which is an upgrade path, not steady-state VC.
+# Paired PR runs must not share a seed: layout changes would pay an upgrade cost, not steady-state VC.
 prepare_fixtures() {
   local dest="$1"
   local bin="$2"
@@ -322,14 +319,7 @@ bench_sql() {
   fi
 }
 
-# Absolute ceilings are meaningless on a runner whose disk is degraded: the
-# write-path benchmarks are fsync-bound, and shared-runner fsync latency has
-# been observed to swing several-fold while CPU-bound reads on the same run
-# got faster. Measure fsync cost with an engine-independent probe on the
-# benchmark disk and scale the ceilings when it exceeds the reference,
-# leaving them exact on a healthy runner. The probe is reported so the
-# reference can be retuned from nightly history; healthy GitHub runners
-# measure ~120us, so the reference only engages on real degradation.
+# Write-path is fsync-bound. Scale ceilings from an engine-independent probe; healthy runners are ~120us.
 VC_PERF_IO_REF_US=${VC_PERF_IO_REF_US:-1000}
 VC_PERF_IO_SCALE_MAX=${VC_PERF_IO_SCALE_MAX:-5}
 IO_PROBE_US=$(python3 - "$TMPDIR" <<'PYEOF'
@@ -356,8 +346,7 @@ def measure():
         except OSError:
             pass
 
-# The probe is an assist, not a gate: a transient IO error must not fail
-# the benchmark, so retry briefly and fall back to unscaled ceilings (0).
+# Probe is an assist, not a gate: retry, then fall back to unscaled ceilings (0).
 result = 0
 for attempt in range(3):
     try:

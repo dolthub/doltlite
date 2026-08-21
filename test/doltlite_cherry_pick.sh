@@ -562,9 +562,7 @@ run_test "rv_violation_state" \
 
 rm -f "$DB"
 
-# Cherry-pick / rebase must not treat a commit message starting with
-# "Revert" as dolt_revert. That skipped index patches and left a DROP INDEX
-# unapplied. Real dolt_revert still prefers ours and restores the index.
+# Cherry-pick/rebase must not treat a message starting with "Revert" as dolt_revert.
 DB=/tmp/test_cp_revert_msg_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 CREATE INDEX t_v ON t(v);
@@ -602,9 +600,7 @@ run_test "rv_drop_index_restored" \
   "1" "$DB"
 rm -f "$DB"
 
-# A conflicted cherry-pick is not a merge: is_merging stays 0,
-# dolt_merge('--abort') has nothing to abort, and checkout refuses
-# because conflicts cannot be persisted (not because a merge is open).
+# Conflicted cherry-pick is not a merge; checkout refuses because conflicts cannot persist.
 DB=/tmp/test_cp_conflict_not_merge_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -631,9 +627,7 @@ Error near line 6: no merge in progress" \
   "$DB"
 rm -f "$DB"
 
-# --ours can leave the working tree identical to HEAD. The concluding
-# commit must still be created as a single-parent commit, not refused
-# as empty and not recorded as a merge.
+# --ours can leave the tree identical to HEAD; still create a single-parent commit.
 DB=/tmp/test_cp_conflict_ours_commit_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -773,10 +767,7 @@ run_test "rv_edit_of_already_dropped_column_row" \
   "SELECT k || '|' || a FROM t;" "1|a1" "$DB"
 rm -f "$DB"
 
-# A clean cherry-pick / revert is a transaction boundary like dolt_commit:
-# it seals the enclosing BEGIN when it advances the ref. Leaving the
-# transaction open let a later ROLLBACK revert the working set while the
-# advanced ref stayed, splitting HEAD from the data.
+# Clean cherry-pick/revert seals the enclosing BEGIN when it advances the ref.
 DB=/tmp/test_cp_txn_seal_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');

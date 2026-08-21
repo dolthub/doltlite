@@ -9,8 +9,7 @@ void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
   blake3_hash_oneshot(pData, (size_t)nData, pOut->data, PROLLY_HASH_SIZE);
 }
 
-/* Hash of pData[0..nData) followed by nZeroTail zero bytes, without
-** materializing the zeros. */
+/* Hash pData[0..nData) plus nZeroTail zeros without materializing them. */
 void prollyHashComputeZeroTail(const void *pData, int nData, sqlite3_int64 nZeroTail,
                                ProllyHash *pOut){
   blake3_hasher h;
@@ -43,8 +42,6 @@ int prollyHashIsEmpty(const ProllyHash *h){
 #define PROLLY_WEIBULL_L  4096.0
 #define PROLLY_MAX_U32    4294967295.0
 
-/* Boundary predicate for content-defined chunking. `size` is the candidate
-** chunk size after adding the current item; `thisSize` is that item size. */
 int prollyWeibullCheck(u32 size, u32 thisSize, u32 hash){
 #if defined(__GNUC__) || defined(__clang__)
   static double aWeibull[PROLLY_CHUNK_MAX + 1];
@@ -66,7 +63,7 @@ int prollyWeibullCheck(u32 size, u32 thisSize, u32 hash){
       initState = 2;
     }else{
       while( initState!=2 ){
-        /* Another thread is initializing the immutable lookup table. */
+        /* Another thread is initializing the table. */
       }
       __sync_synchronize();
     }

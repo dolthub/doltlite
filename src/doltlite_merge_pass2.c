@@ -2,8 +2,6 @@
 
 #include "doltlite_merge_int.h"
 
-/* Catalog merge pass 2: adopt theirs-only tables/indexes, rootpage remap. */
-
 static const char *mergeIndexSkipQuoted(const char *z, char q){
   char qEnd = (q=='[') ? ']' : q;
   z++;
@@ -43,8 +41,6 @@ static char *mergeIndexDupIdent(const char *z, int n){
   return zOut;
 }
 
-/* Walk CREATE INDEX column-list and WHERE identifiers. Skip function names,
-** sort keywords, the ident after COLLATE, and single-quoted literals. */
 static int mergeIndexEachColumn(
   const char *zIndexSql,
   int (*xEach)(void*, const char*),
@@ -116,14 +112,11 @@ static int mergeIndexColSurvives(void *pCtx, const char *zCol){
   int iAnc;
   if( p->zMissing ) return SQLITE_OK;
   if( parsedColumnIndexByName(p->aSide, p->nSide, zCol)>=0 ) return SQLITE_OK;
-  /* Absent from this side and never in the ancestor means the other side added
-  ** it, and the merge carries additions over. */
+  /* Other side added it; merge carries additions. */
   iAnc = parsedColumnIndexByName(p->aAnc, p->nAnc, zCol);
   if( iAnc<0 ) return SQLITE_OK;
-  /* A column of this side sitting at the vanished one's position, carrying its
-  ** definition, is a rename, not a drop: the indexed column still exists under
-  ** the new name and the index has to follow it there rather than disappear.
-  ** Retargeting the index is not expressible here yet, so leave those alone. */
+  /* Same position, same definition: a rename, not a drop. Index
+  ** retarget is not expressible here yet. */
   if( iAnc<p->nSide
    && parsedColumnIndexByName(p->aAnc, p->nAnc, p->aSide[iAnc].zName)<0
    && parsedColumnDefinitionsMatch(&p->aSide[iAnc], &p->aAnc[iAnc]) ){
@@ -149,8 +142,6 @@ static int mergeIndexColRenamed(void *pCtx, const char *zCol){
   return SQLITE_OK;
 }
 
-/* Shared body: walk the index's columns with xEach and report the first one it
-** flagged. */
 static int mergeIndexColumnScan(
   const char *zIndexSql,
   const char *zAncTableSql,
@@ -184,10 +175,6 @@ static int mergeIndexColumnScan(
   return 1;
 }
 
-/* The index names a column this side renamed rather than dropped. The indexed
-** column still exists under the new name, but nothing here retargets the index
-** to it, and a merged catalog naming a column the table does not have cannot be
-** loaded -- so the merge has to refuse instead of producing one. */
 typedef struct MergeIndexNameList MergeIndexNameList;
 struct MergeIndexNameList { char **az; int n; };
 
@@ -208,7 +195,6 @@ static void mergeIndexNameListFree(MergeIndexNameList *p){
   sqlite3_free(p->az);
 }
 
-/* Two index definitions that name a column in common. */
 int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB){
   MergeIndexNameList a;
   MergeIndexNameList b;
@@ -230,10 +216,8 @@ int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB){
   return bOverlap;
 }
 
-/* Each side added its own index, under its own name, over a column they share.
-** That is a disagreement about how the column is indexed rather than two
-** independent additions -- keeping both would also impose one side's
-** uniqueness on the other -- and Dolt reports it as a conflict. */
+/* Dual added indexes over a shared column: Dolt reports a conflict;
+** keeping both would impose one side's uniqueness on the other. */
 int mergePreDetectDualIndexOverlap(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -364,10 +348,8 @@ int mergeCatalogPass2(
               aTheirsSchema, nTheirsSchema, pAncSe, pOurSe, pTheirSe) ){
           continue;
         }
-        /* An index of theirs over a column we dropped or renamed away cannot
-        ** be adopted: the merged table has no such column, so the catalog it
-        ** would produce cannot be loaded at all. Dolt drops the index with
-        ** the column, so leave it behind. */
+        /* Index over a column we dropped or renamed cannot load.
+        ** Dolt drops it with the column. */
         {
           SchemaEntry *pAncTbl = findSchemaEntry(
               aAncSchema, nAncSchema, pTheirSe->zTblName);
@@ -416,9 +398,7 @@ int mergeCatalogPass2(
             }
             if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
             aMerged[(*pnMerged)++] = newEntry;
-            /* The adopted tree covers only theirs' rows; ours' row changes
-            ** never touched it. Record the index for a rebuild over the
-            ** merged table once the merged catalog is live. */
+            /* Adopted tree is theirs-only; rebuild over merged rows. */
             rc = mergeAppendReindexName(pazReindex, pnReindex, pTheirSe->zName);
             if( rc!=SQLITE_OK ) return rc;
           }else if( schemaEntryChangedByName(
@@ -453,7 +433,7 @@ int mergeCatalogPass2(
             rc = mergeAppendReindexName(pazReindex, pnReindex, pTheirSe->zName);
             if( rc!=SQLITE_OK ) return rc;
           }else{
-            /* An unmodified index does not override our explicit DROP. */
+            /* Unmodified index does not override our DROP. */
           }
         }
         continue;
@@ -547,9 +527,7 @@ int mergeCatalogPass2(
   return SQLITE_OK;
 }
 
-/* Is this fts table contentless? Such a table has no authoritative copy of
-** the indexed text -- the index IS the data -- so nothing can regenerate a
-** discarded side, and fts5 refuses 'rebuild' on one outright. */
+/* Contentless FTS has no source to rebuild from; fts5 refuses 'rebuild'. */
 static int mergeFtsIsContentless(Table *pTab){
   int i;
   for(i=3; i<pTab->u.vtab.nArg; i++){
@@ -563,7 +541,7 @@ static int mergeFtsIsContentless(Table *pTab){
     if( *zEq!='=' ) continue;
     zEq++;
     while( *zEq==' ' ) zEq++;
-    /* content='' names no table; content='x' names an authoritative one. */
+    /* content='' is contentless; content='x' is not. */
     if( (zEq[0]=='\'' && zEq[1]=='\'') || (zEq[0]=='"' && zEq[1]=='"')
      || zEq[0]==0 ){
       return 1;
@@ -573,12 +551,8 @@ static int mergeFtsIsContentless(Table *pTab){
   return 0;
 }
 
-/* Classify zTable as a derived shadow of a virtual table: a shadow holding
-** state that is regenerated from data living elsewhere. Returns the malloc'd
-** owner name and sets *pbRebuildable to whether that regeneration is actually
-** possible. A shadow that is itself authoritative (%_content, %_base) is not
-** derived and is never reported here -- a conflict there is a conflict in the
-** data, which stays loud. */
+/* Derived shadow of a vtab (not %_content/%_base). Sets *pbRebuildable
+** if the owner can regenerate it. Authoritative shadows stay loud. */
 static char *mergeDerivedShadowOwner(
   sqlite3 *db,
   const char *zTable,
@@ -615,15 +589,13 @@ static char *mergeDerivedShadowOwner(
     if( sqlite3_stricmp(zModule, "fts5")==0
      || sqlite3_stricmp(zModule, "fts4")==0
      || sqlite3_stricmp(zModule, "fts3")==0 ){
-      /* The merged content is authoritative, so a rebuild regenerates the
-      ** index over both sides' rows. Contentless has no such content. */
+      /* Rebuild from merged content; contentless has none. */
       *pbRebuildable = !mergeFtsIsContentless(pTab);
       return zOwner;
     }
     if( sqlite3_stricmp(zModule, "rtree")==0
      || sqlite3_stricmp(zModule, "rtree_i32")==0 ){
-      /* An r-tree keeps its coordinates in %_node and offers no rebuild, so
-      ** a conflicting node is a conflict in the data itself. */
+      /* r-tree coordinates live in %_node; no rebuild. */
       *pbRebuildable = 0;
       return zOwner;
     }
@@ -632,18 +604,9 @@ static char *mergeDerivedShadowOwner(
       return 0;
     }
     {
-      /* Eligible only when %_base still holds raw vectors AND the stored
-      ** model the rebuild depends on is present: vec1 treats a NULL
-      ** rebuild argument as "keep the current model" and proceeds on
-      ** cached state, so a missing model row would let the merge commit
-      ** a stale index instead of failing. */
-      /* Eligible only when %_base still holds raw vectors AND the stored
-      ** model the rebuild depends on is present: vec1 treats a NULL
-      ** rebuild argument as "keep the current model" and proceeds on
-      ** cached state, so a missing model row would let the merge commit
-      ** a stale index instead of failing. Uncompressed builds store bucket
-      ** numbers in %_base instead of vectors, so auto-resolving their index
-      ** conflicts would silently lose the discarded side's vectors. */
+      /* Rebuild only if %_base holds raw vectors and the model row
+      ** is present. A NULL rebuild arg keeps cached state. Uncompressed
+      ** %_base stores buckets, not vectors; auto-resolve would drop them. */
       char *zQry = sqlite3_mprintf(
           "SELECT (SELECT count(*) FROM \"%w_base\""
           "         WHERE typeof(vector)!='blob')=0"
@@ -662,8 +625,7 @@ static char *mergeDerivedShadowOwner(
         *pbRebuildable = 1;
         return zOwner;
       }
-      /* An ineligible vec1 shadow keeps its conflicts resolvable, which is
-      ** this module's existing contract; it is not reported as derived. */
+      /* Ineligible vec1 stays resolvable; not reported as derived. */
       sqlite3_free(zOwner);
       return 0;
     }
@@ -671,13 +633,8 @@ static char *mergeDerivedShadowOwner(
   return 0;
 }
 
-/* Derived-shadow merge policy: when EVERY conflict in the merge is a
-** rebuildable vec1 shadow, the conflicts carry nothing a rebuild from the
-** merged %_base and stored model does not regenerate. Drop them (the
-** merged roots already hold ours' rows, exactly what --ours resolution
-** leaves) and hand the owners back so the caller can rebuild once the
-** merged catalog is live. Any non-derived conflict keeps every conflict
-** loud, today's behavior. */
+/* If every conflict is a rebuildable derived shadow, drop them and
+** return owners to rebuild. Any non-derived conflict keeps all loud. */
 int mergeFilterDerivedShadowConflicts(
   sqlite3 *db,
   MergeConflictTable *aConflictTables,
@@ -704,9 +661,8 @@ int mergeFilterDerivedShadowConflicts(
       return SQLITE_OK;
     }
     if( !bRebuildable ){
-      /* Neither resolution can be right: the discarded side's rows are gone
-      ** from an index nothing can regenerate, and committing either one puts
-      ** an index that disagrees with its own table into history. Refuse. */
+      /* Neither resolution is valid: the discarded side cannot be
+      ** regenerated. Refuse rather than commit a disagreeing index. */
       if( pzRefuse && *pzRefuse==0 ){
         *pzRefuse = sqlite3_mprintf(
             "cannot merge: '%s' indexes data that cannot be rebuilt from the "

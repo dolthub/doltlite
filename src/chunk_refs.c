@@ -24,11 +24,7 @@ int csRefArrayGrow(void **paBase, int n, int stride){
   i64 nByte;
   assert( paBase!=0 );
   assert( n>=0 && stride>0 );
-  /* (n+1)*stride in int wraps once n is large enough, which hands realloc a
-  ** small size and leaves the memset below writing past the allocation. The
-  ** callers append one ref at a time, so reaching that needs tens of millions
-  ** of successful appends -- but the arithmetic should not be what stands
-  ** between us and it. */
+  /* (n+1)*stride as int wraps; realloc then gets a small size. */
   nByte = ((i64)n + 1) * (i64)stride;
   if( nByte > (i64)INT_MAX ) return SQLITE_TOOBIG;
   aNew = sqlite3_realloc(*paBase, (int)nByte);
@@ -549,18 +545,10 @@ int csReplaceRefsStateFromBlob(
 
 #endif
 
-/* Three-way merge of the session's uncommitted ref changes onto a refs
-** table peers have advanced. cs->refs holds the DISK state just reloaded;
-** pLocal holds this session's arrays, derived from pBase (the blob at the
-** committedRefsHash the session last adopted). Refs the session did not
-** touch keep their disk value — that is the whole point: a wholesale
-** restore of pLocal silently reverted every peer change except the one
-** tip the branch CAS happened to check. Refs the session changed apply
-** onto disk unless a peer changed the same ref differently, which is a
-** real race and fails SQLITE_BUSY_SNAPSHOT rather than picking a winner.
-** Sequences are AUTOINCREMENT high-water marks and merge by max. The
-** scan runs conflict-detection first so the disk arrays are untouched
-** unless the whole merge applies. */
+/* Three-way merge of uncommitted refs onto reloaded disk. Untouched refs
+** keep disk (wholesale restore clobbered peer tips). Local changes apply
+** unless a peer moved the same ref (BUSY_SNAPSHOT). Sequences merge by
+** max. Detect conflicts first so disk is untouched unless the merge applies. */
 
 static int refsMergeHashEqual(const ProllyHash *a, const ProllyHash *b){
   return prollyHashCompare(a, b)==0;
@@ -607,9 +595,7 @@ static int refsMergeFindTrackingIdx(
   return -1;
 }
 
-/* One name-keyed category: detect conflicts when checkOnly, else apply.
-** The callbacks localize the per-type field handling; iteration and the
-** three-way decisions live here once. */
+/* Name-keyed category: checkOnly detects conflicts, else apply. */
 typedef struct RefsMergeCat RefsMergeCat;
 struct RefsMergeCat {
   const void *aLocal; int nLocal;
@@ -633,15 +619,15 @@ static int refsMergeCategory(RefsMergeCat *p, int checkOnly){
     const void *pB = iB<0 ? 0 : (const void*)(aBase + (size_t)iB*p->stride);
     int iD;
     void *pD;
-    if( pB && p->xEqual(pL, pB) ) continue;     /* not locally changed */
+    if( pB && p->xEqual(pL, pB) ) continue;
     iD = p->xFind(*p->paDisk, *p->pnDisk, pL);
     pD = iD<0 ? 0 : (void*)((u8*)(*p->paDisk) + (size_t)iD*p->stride);
     if( pD ){
       if( pB && !p->xEqual(pD, pB) && !p->xEqual(pD, pL) ){
-        return SQLITE_BUSY_SNAPSHOT;            /* both sides moved it */
+        return SQLITE_BUSY_SNAPSHOT;
       }
       if( !pB && !p->xEqual(pD, pL) ){
-        return SQLITE_BUSY_SNAPSHOT;            /* both sides created it */
+        return SQLITE_BUSY_SNAPSHOT;
       }
       if( !checkOnly ){
         p->xFreeEntry(pD);
@@ -649,7 +635,7 @@ static int refsMergeCategory(RefsMergeCat *p, int checkOnly){
       }
     }else{
       if( pB ){
-        return SQLITE_BUSY_SNAPSHOT;   /* peer deleted what we changed */
+        return SQLITE_BUSY_SNAPSHOT;
       }
       if( !checkOnly ){
         int rc = csRefArrayGrow(p->paDisk, *p->pnDisk, p->stride);
@@ -664,12 +650,12 @@ static int refsMergeCategory(RefsMergeCat *p, int checkOnly){
     const void *pB = aBase + (size_t)i*p->stride;
     int iL = p->xFind(p->aLocal, p->nLocal, pB);
     int iD;
-    if( iL>=0 ) continue;                       /* still present locally */
-    iD = p->xFind(*p->paDisk, *p->pnDisk, pB);  /* locally deleted */
+    if( iL>=0 ) continue;
+    iD = p->xFind(*p->paDisk, *p->pnDisk, pB);
     if( iD>=0 ){
       void *pD = (void*)((u8*)(*p->paDisk) + (size_t)iD*p->stride);
       if( !p->xEqual(pD, pB) ){
-        return SQLITE_BUSY_SNAPSHOT;   /* peer changed what we deleted */
+        return SQLITE_BUSY_SNAPSHOT;
       }
       if( !checkOnly ){
         p->xFreeEntry(pD);
@@ -818,7 +804,6 @@ int csMergeSavedRefsOntoDisk(
   aCat[3].xFreeEntry = refsMergeTrackingFree;
   aCat[3].xFind = refsMergeTrackingFind;
 
-  /* The default branch is a scalar three-way. */
   {
     const char *zL = pLocal->zDefaultBranch;
     const char *zB = pBase->zDefaultBranch;
@@ -845,23 +830,16 @@ int csMergeSavedRefsOntoDisk(
     cs->refs.zDefaultBranch = zDup;
   }
 
-  /* Each category merged in isolation, so a pairing that is legal in both
-  ** views separately can still be illegal together: one side repoints the
-  ** default branch while the other deletes that branch. The decoder
-  ** requires the default to name a live branch, so publishing that pair
-  ** leaves a store no open can read. Treat it as the conflict it is. */
+  /* Isolated category merges can still pair a new default with a deleted
+  ** branch; the decoder requires a live default, so that is a conflict. */
   if( cs->refs.zDefaultBranch
    && csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
                      (int)sizeof(BranchRef), cs->refs.zDefaultBranch)<0 ){
     return SQLITE_BUSY_SNAPSHOT;
   }
 
-  /* AUTOINCREMENT counters are high-water marks shared across branches:
-  ** the merged value is the max of both sides, never a conflict, and a
-  ** counter the session dropped (DROP TABLE) goes away. Counters the
-  ** session never touched are the peer's business -- bumping those back
-  ** onto disk resurrects one the peer dropped, so a recreated table would
-  ** resume from the old high-water mark. */
+  /* Sequences merge by max. Locally dropped counters go away; untouched
+  ** ones stay the peer's (do not resurrect a dropped high-water). */
   for(i=0; i<pLocal->nSequences; i++){
     const SequenceRef *pL = &pLocal->aSequences[i];
     int iBase = csFindNamedRef(pBase->aSequences, pBase->nSequences,

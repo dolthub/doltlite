@@ -1,13 +1,7 @@
 #!/bin/bash
-# Virtual-table x version-control matrix: every VC surface against every
-# built-in vtab flavor. Virtual tables have no catalog entry of their own —
-# their storage is the shadow tables and their schema row is storage-free —
-# so by-entry catalog rebuilds (merge, cherry-pick, revert, rebase, clone)
-# are structurally blind to them. This suite is the intent-level oracle for
-# that bug class, plus shadow-table content fidelity across every surface:
-# each step re-checks module self-checks (fts5/fts4 integrity-check,
-# rtreecheck), MATCH/bbox results, integrity_check, and fresh-session
-# agreement after schema replay.
+# Vtabs have no catalog entry (shadows + storage-free schema row), so by-entry
+# catalog rebuilds are blind to them. Check MATCH/bbox, module self-checks,
+# and fresh-session agreement after schema replay.
 DOLTLITE="${1:-./doltlite}"
 PASS=0
 FAIL=0
@@ -32,10 +26,6 @@ check() {
   fi
 }
 
-# Every built-in vtab flavor with distinct shadow-table shapes: fts5
-# (blob segments + WITHOUT ROWID idx), fts5 external-content (shadows
-# depend on a real table), fts4 (segdir composite keys + stat), fts3
-# (no docsize/stat), rtree (fixed-width node blobs).
 FIXTURE="CREATE TABLE docs(id INTEGER PRIMARY KEY, body TEXT);
 INSERT INTO docs VALUES(1,'alpha bravo'),(2,'bravo charlie'),(3,'charlie delta');
 CREATE VIRTUAL TABLE f5 USING fts5(body);
@@ -51,9 +41,6 @@ INSERT INTO rt VALUES(1, 0,1, 0,1),(2, 2,3, 2,3),(3, 4,5, 4,5);
 CREATE TABLE plain(k INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO plain VALUES(1,'p');"
 
-# Index-shape-churning mutations for every flavor: new docs, an updated
-# doc (delete+insert through the index), a delete, an fts5 optimize
-# (rewrites segment shadows wholesale), and an rtree move.
 MUTATE="INSERT INTO docs VALUES(4,'delta echo');
 INSERT INTO f5(rowid, body) VALUES(4,'delta echo');
 INSERT INTO f5x(rowid, body) VALUES(4,'delta echo');
@@ -71,10 +58,6 @@ UPDATE rt SET x1=10, x2=11 WHERE id=1;
 DELETE FROM rt WHERE id=2;
 UPDATE plain SET v='q' WHERE k=1;"
 
-# One line per flavor: "<name>|<actual>"; expectations are supplied by the
-# caller because fixture and mutated states differ. Module self-checks are
-# folded in: fts5/fts4 'integrity-check' raises on a malformed index and
-# rtreecheck returns 'ok' only for a consistent tree.
 VERIFY_SQL="SELECT 'ic|'||(SELECT count(*) FROM pragma_integrity_check WHERE integrity_check='ok')||'/'||(SELECT count(*) FROM pragma_integrity_check);
 SELECT 'rtck|'||rtreecheck('main','rt');
 INSERT INTO f5(f5) VALUES('integrity-check');
@@ -101,8 +84,6 @@ f4|3,4
 f3|3,4
 rt|1,3,4"
 
-# verify <label> <db> <expected-state>: run VERIFY_SQL in a fresh session
-# (schema replay included) and compare the whole projection.
 verify() {
   local label="$1" db="$2" expected="$3"
   local out
@@ -114,8 +95,7 @@ verify() {
   fi
 }
 
-# verify_commit <label> <db> <expected-state>: materialize HEAD on a copy,
-# so committed catalogs are checked independently of live session state.
+# Materialize HEAD on a copy so committed catalogs are independent of live state.
 verify_commit() {
   local label="$1" db="$2" expected="$3"
   cp "$db" "$db.headcopy"
@@ -131,7 +111,6 @@ newdb() { N=$((N+1)); DB="$TDIR/v$N.db"; }
 
 scenario() { echo "--- $1 ---"; }
 
-# ── staging surfaces ──────────────────────────────────────────────
 scenario "add -A + commit"
 newdb
 run_sql "$FIXTURE SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');" "$DB" > /dev/null
@@ -157,7 +136,6 @@ run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
 run_sql "$MUTATE SELECT dolt_commit('-am','mut');" "$DB" > /dev/null
 verify_commit "am_commit" "$DB" "$MUT_STATE"
 
-# ── reset surfaces ────────────────────────────────────────────────
 scenario "reset --hard discards vtab mutations"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -171,7 +149,6 @@ run_sql "$MUTATE SELECT dolt_commit('-am','mut');" "$DB" > /dev/null
 run_sql "SELECT dolt_reset('--soft','HEAD~1'); SELECT dolt_commit('-am','recommit');" "$DB" > /dev/null
 verify_commit "reset_soft_recommit" "$DB" "$MUT_STATE"
 
-# ── branch / checkout ─────────────────────────────────────────────
 scenario "branch isolation and roundtrip"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -242,7 +219,6 @@ check "rename_old_branch_has_old_name" "1
 0
 ok" "$result"
 
-# ── merge surfaces ────────────────────────────────────────────────
 scenario "clean merge with untouched vtabs"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -267,12 +243,7 @@ run_sql "SELECT dolt_checkout('-b','side'); $MUTATE SELECT dolt_commit('-am','si
 SELECT dolt_checkout('main'); SELECT dolt_merge('side');" "$DB" > /dev/null
 verify "merge_ff_vtab_content" "$DB" "$MUT_STATE"
 
-# Both sides writing an fts5 table collide in its segment shadows, and
-# neither side of that collision is the answer: taking one loses the other's
-# rows from the index while the content table keeps them. Since the merged
-# content is authoritative, the merge regenerates the index from it rather
-# than offering a resolution that cannot be right. (Before, this stopped
-# with conflicts whose only two resolutions both committed a broken index.)
+# Colliding fts5 segment shadows: neither side is right; merge rebuilds from content.
 scenario "colliding vtab writes: the merge rebuilds the index itself"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -289,8 +260,6 @@ ROLLBACK;" "$DB" | grep '^TX|')
 check "merge_colliding_vtab_no_conflicts" "TX|0|1" "$result"
 check "merge_colliding_vtab_keeps_both_rows" "5" \
   "$(run_sql "SELECT count(*) FROM f5_content;" "$DB")"
-# Each side's row has to be reachable through the index, not merely present
-# in the content table -- that is exactly what the discarded side lost.
 check "merge_colliding_vtab_finds_ours" "20" \
   "$(run_sql "SELECT group_concat(rowid) FROM f5 WHERE f5 MATCH 'main';" "$DB")"
 check "merge_colliding_vtab_finds_theirs" "10" \
@@ -320,7 +289,6 @@ check "merge_drop_wins" "0
 1
 ok" "$result"
 
-# ── cherry-pick / revert / rebase ─────────────────────────────────
 scenario "cherry-pick a vtab-content commit"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -348,7 +316,6 @@ verify "rebase_vtab_content" "$DB/side" "$MUT_STATE"
 result=$(run_sql "SELECT v FROM plain WHERE k=2;" "$DB")
 check "rebase_picked_up_main" "m" "$result"
 
-# ── remotes ───────────────────────────────────────────────────────
 scenario "clone with all vtab flavors"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -369,7 +336,6 @@ run_sql "$MUTATE SELECT dolt_commit('-am','mut'); SELECT dolt_push('origin','mai
 run_sql "SELECT dolt_pull('origin','main');" "$CLONE" > /dev/null
 verify "pull_vtab_changes" "$CLONE" "$MUT_STATE"
 
-# ── gc ────────────────────────────────────────────────────────────
 scenario "gc after vtab churn"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
@@ -387,10 +353,7 @@ ok" "$result"
 run_sql "SELECT dolt_branch('old','HEAD~3');" "$DB" > /dev/null
 verify "gc_history_reachable" "$DB/old" "$BASE_STATE"
 
-# Concurrent writes on two branches always collide in a vtab's derived
-# shadows: the structures they keep are rewritten wholesale by every write.
-# Neither side of such a collision is a correct answer, so a merge either
-# regenerates the index from data that survived the merge, or refuses.
+# Concurrent vtab writes rewrite shadows wholesale; merge rebuilds or refuses.
 DBM=/tmp/test_vtab_merge_shadow_$$.db; rm -f "$DBM"
 run_sql "CREATE VIRTUAL TABLE ft USING fts5(body);
 INSERT INTO ft(rowid,body) VALUES(1,'alpha common'),(2,'beta common');
@@ -417,8 +380,7 @@ check "fts5_merge_integrity" "" \
   "$(run_sql "INSERT INTO ft(ft) VALUES('integrity-check');" "$DBM")"
 rm -f "$DBM"
 
-# Contentless fts5 keeps no copy of the indexed text, so the discarded side
-# is unrecoverable and fts5 refuses 'rebuild' outright.
+# Contentless fts5 has no copy of the text; fts5 refuses 'rebuild'.
 DBC=/tmp/test_vtab_merge_contentless_$$.db; rm -f "$DBC"
 run_sql "CREATE VIRTUAL TABLE ftc USING fts5(body, content='');
 INSERT INTO ftc(rowid,body) VALUES(1,'seed');
@@ -437,8 +399,7 @@ case "$result" in
 esac
 rm -f "$DBC"
 
-# An r-tree stores its coordinates in the node blobs themselves and offers
-# no rebuild, so a colliding node cannot be regenerated from anything.
+# r-tree coords live in node blobs with no rebuild; colliding nodes cannot be regenerated.
 DBR=/tmp/test_vtab_merge_rtree_$$.db; rm -f "$DBR"
 run_sql "CREATE VIRTUAL TABLE rt2 USING rtree(id,x0,x1,y0,y1);
 WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<300)
@@ -458,7 +419,7 @@ case "$result" in
 esac
 check "rtree_refusal_leaves_tree_intact" "ok" \
   "$(run_sql "SELECT rtreecheck('rt2');" "$DBR")"
-# A refusal must not cost the merge that had already landed cleanly.
+# Refusal must not undo the merge that already landed.
 check "rtree_refusal_keeps_first_merge" "1001" \
   "$(run_sql "SELECT group_concat(id) FROM rt2 WHERE id>1000;" "$DBR")"
 rm -f "$DBR"

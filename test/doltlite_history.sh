@@ -344,10 +344,7 @@ run_test_match "filter_commit" \
 
 rm -f "$DB"
 
-# Rows from a historical root whose key shape differs from the declared
-# schema must render their real values and honor PK constraints; the old
-# code returned raw sort-key bytes for the key column and dropped the
-# pushed-down filter entirely.
+# Historical root with a different key shape used to return raw sort-key bytes and drop PK filters.
 DB=/tmp/test_hist_keyshape_$$.db; rm -f "$DB"
 echo "CREATE TABLE s(a TEXT PRIMARY KEY, b TEXT) WITHOUT ROWID;
 INSERT INTO s VALUES('x','one'),('y','two');
@@ -374,7 +371,6 @@ y" "$DB"
 rm -f "$DB"
 
 
-# Rows at old commits render by column NAME against that commit's schema.
 DBH=/tmp/test_hist_namemap_$$.db; rm -f "$DBH"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
 INSERT INTO t VALUES(1,'BEE','CEE');

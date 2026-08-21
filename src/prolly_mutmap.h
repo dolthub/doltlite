@@ -20,9 +20,8 @@ struct ProllyMutMapEntry {
   u8 *pVal;
   int nVal;
   int nValAlloc;
-  /* The logical value is pVal[0..nVal) followed by nZeroTail zero bytes
-  ** that are never materialized in pVal. Only intkey-table inserts create
-  ** tails; blob-key (index) entries always have nZeroTail==0. */
+  /* Logical value is pVal[0..nVal) plus nZeroTail zeros never stored in pVal.
+  ** Only intkey inserts create tails. */
   i64 nZeroTail;
   int bornAt;
 };
@@ -52,8 +51,7 @@ struct ProllyMutMap {
   int nAlloc;
   int levelBase;
   ProllyMutMapEntry *aEntries;
-  /* aEntries is append ordered. aOrder is key sorted, aPos maps physical
-  ** entry indexes back into aOrder, and aHash accelerates point lookup. */
+  /* aEntries is append order; aOrder is key-sorted; aPos maps physical to aOrder. */
   int *aOrder;
   int *aPos;
   int *aHash;
@@ -64,8 +62,7 @@ struct ProllyMutMap {
   ProllyMutMapUndoRec *aUndo;
   int nUndo;
   int nUndoAlloc;
-  /* Cursors cache this value so they can detect pending-map replacement or
-  ** rollback without pointer comparisons against recycled allocations. */
+  /* Cursors detect map replacement/rollback without comparing recycled pointers. */
   u32 generation;
 };
 
@@ -127,14 +124,9 @@ struct ProllyMutMapIter {
   int idx;
 };
 
-/* Compute the sorted iteration order up front, returning SQLITE_NOMEM on
-** allocation failure. Useful before a loop of ordered reads that cannot
-** conveniently propagate an error mid-iteration. */
 int prollyMutMapEnsureOrder(ProllyMutMap *mm);
 
-/* Iterator initializers materialize the sorted order and return SQLITE_NOMEM
-** if that allocation fails; the iterator is left invalid (past the end) so an
-** unchecked caller iterates nothing rather than a stale order. */
+/* Iterator init materializes sort order; on OOM the iterator is past-end. */
 int prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm);
 
 void prollyMutMapIterNext(ProllyMutMapIter *it);

@@ -24,7 +24,7 @@ typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 #define DOLTLITE_RANGE_TWO_DOT   2
 #define DOLTLITE_RANGE_THREE_DOT 3
 
-/* Repository commands must not execute from persistent schema objects. */
+/* Commands must not run from persistent schema objects. */
 #define DOLTLITE_COMMAND_FUNC_FLAGS (SQLITE_UTF8 | SQLITE_DIRECTONLY)
 
 static SQLITE_INLINE int doltliteSplitRevisionRange(
@@ -74,7 +74,7 @@ struct DoltlitePkRange {
   int hasPkHi;
   int pkLoStrict;
   int pkHiStrict;
-  int isEmpty;            /* A NULL bound: the scan can match nothing. */
+  int isEmpty;            /* NULL bound: scan matches nothing. */
 };
 
 struct DoltliteCommitQueue {
@@ -179,9 +179,6 @@ enum DoltliteVcTxnMode {
   DOLTLITE_VC_TXN_NESTED_SAVEPOINT = 2
 };
 
-/* FNV-1a row-fingerprint helpers shared by the conflicts and constraint-
-** violation vtab rowid functions: fold each field with doltliteFnv1aBytes/
-** I64/Str, calling doltliteFnv1aSep between fields. */
 #define DOLTLITE_FNV1A_OFFSET 1469598103934665603ULL
 #define DOLTLITE_FNV1A_PRIME  1099511628211ULL
 
@@ -350,9 +347,8 @@ static SQLITE_INLINE int doltliteBestIndexIntPkRange(
 
   if( iEq >= 0 ){
     pInfo->aConstraintUsage[iEq].argvIndex = ++nArg;
-    /* The visited root's key shape may not match the declared schema's
-    ** rowid alias, so the constraint is applied against the rendered
-    ** values rather than omitted; the seek stays a pushdown fast path. */
+    /* Apply to rendered values: visited key shape may not match the
+    ** declared rowid alias. Seek stays a pushdown fast path. */
     pInfo->aConstraintUsage[iEq].omit = 0;
     idxNum |= idxEq;
     pInfo->estimatedCost = eqCost;
@@ -402,9 +398,8 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
   int iArg = 0;
   memset(pRange, 0, sizeof(*pRange));
 
-  /* No value compares true against NULL, so any NULL bound empties the scan.
-  ** sqlite3_value_int64 would read it as 0 and happily match the pk=0 row, and
-  ** xBestIndex omits these constraints, so nothing downstream rechecks them. */
+  /* NULL bound empties the scan. sqlite3_value_int64 would treat it as 0;
+  ** xBestIndex omits these, so nothing rechecks them. */
   if( idxNum & idxEq ){
     if( iArg < argc ){
       if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
@@ -528,8 +523,6 @@ static SQLITE_INLINE int doltliteVtabOpenCursor(
   return SQLITE_OK;
 }
 
-/* Declare a fixed-schema vtab and allocate its zeroed instance. The caller
-** owns any per-vtab fields (e.g. ->db) after this returns SQLITE_OK. */
 static SQLITE_INLINE int doltliteVtabConnectSimple(
   sqlite3 *db,
   const char *zSchema,
@@ -546,9 +539,7 @@ static SQLITE_INLINE int doltliteVtabConnectSimple(
   return SQLITE_OK;
 }
 
-/* Effective catalog hash for a branch ref: the committed catalog unless the
-** branch has an uncommitted working-set catalog recorded against this exact
-** commit, in which case that working catalog wins. */
+/* Branch catalog: working-set catalog wins if recorded against this commit. */
 static SQLITE_INLINE void doltliteResolveBranchEffectiveCatalog(
   ChunkStore *cs,
   const char *zBranch,
@@ -559,7 +550,7 @@ static SQLITE_INLINE void doltliteResolveBranchEffectiveCatalog(
   ProllyHash wsCatHash, wsCommitHash;
   memset(&wsCatHash, 0, sizeof(wsCatHash));
   memset(&wsCommitHash, 0, sizeof(wsCommitHash));
-  /* An unborn branch matches its working set on the all-zero commit hash. */
+  /* Unborn branch: working set matches the all-zero commit hash. */
   if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCatHash, &wsCommitHash)==SQLITE_OK
    && (!prollyHashIsEmpty(&wsCommitHash) || prollyHashIsEmpty(pBranchCommit))
    && memcmp(wsCommitHash.data, pBranchCommit->data, PROLLY_HASH_SIZE)==0
@@ -570,9 +561,7 @@ static SQLITE_INLINE void doltliteResolveBranchEffectiveCatalog(
   }
 }
 
-/* True if a trimmed CREATE TABLE body segment is a table-level constraint
-** (PRIMARY KEY / UNIQUE / CHECK / FOREIGN KEY / CONSTRAINT) rather than a
-** column definition. s/len delimit the already-trimmed segment. */
+/* True if the trimmed CREATE TABLE segment is a table-level constraint. */
 static SQLITE_INLINE int doltliteSegmentIsTableConstraint(const char *s, int len){
   if( len>=11 && sqlite3_strnicmp(s, "PRIMARY KEY", 11)==0
       && (len==11 || !isalnum((unsigned char)s[11])) ) return 1;
@@ -675,7 +664,6 @@ static SQLITE_INLINE int doltliteLoadTableRootByNameOrEmpty(
   return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
 }
 
-/* Sticky little-endian cursor for conflicts and constraint-violation codecs. */
 typedef struct DlByteReader { const u8 *p; const u8 *end; int err; } DlByteReader;
 
 static SQLITE_INLINE void dlReaderInit(DlByteReader *r, const u8 *data, int n){
@@ -701,7 +689,6 @@ static SQLITE_INLINE i64 dlReadI64(DlByteReader *r){
                 | ((u64)r->p[6]<<48) | ((u64)r->p[7]<<56));
     r->p += 8; return v; }
 }
-/* u32-length-prefixed raw value blob; empty -> (*pp=0,*pn=0). */
 static SQLITE_INLINE int dlReadU32Blob(DlByteReader *r, u8 **pp, int *pn){
   int n = dlReadU32(r);
   *pp = 0; *pn = 0;
@@ -716,7 +703,6 @@ static SQLITE_INLINE int dlReadU32Blob(DlByteReader *r, u8 **pp, int *pn){
   r->p += n;
   return SQLITE_OK;
 }
-/* u16-length-prefixed name -> fresh nul-terminated string (empty -> ""). */
 static SQLITE_INLINE int dlReadU16Name(DlByteReader *r, char **pz){
   int n = dlReadU16(r);
   *pz = 0;
@@ -729,7 +715,6 @@ static SQLITE_INLINE int dlReadU16Name(DlByteReader *r, char **pz){
   r->p += n;
   return SQLITE_OK;
 }
-/* u32-length-prefixed string -> fresh nul-terminated string; empty -> NULL. */
 static SQLITE_INLINE int dlReadU32Str(DlByteReader *r, char **pz){
   int n = dlReadU32(r);
   *pz = 0;
@@ -815,8 +800,6 @@ static SQLITE_INLINE void dlWriteBytes(DlByteWriter *w, const u8 *p, int n){
   }
 }
 
-/* Magic (3 bytes) + version + a u16 table count: the framed header shared by
-** the conflicts and constraint-violation session blobs. */
 static SQLITE_INLINE void dlWriteFramedHeader(DlByteWriter *w, u8 m0, u8 m1,
                                               u8 m2, u8 ver, int nTables){
   dlWriteU8(w, m0);
@@ -919,7 +902,6 @@ struct DoltliteCmdArgs {
   int nPositional;
 };
 
-/* Shared dolt_* command scaffolding (doltlite_cmd.c). */
 int doltliteCmdParseArgs(
   sqlite3_context *ctx, int argc, sqlite3_value **argv,
   DoltliteCmdOption *aOption, int nOption, int flags,
@@ -1025,9 +1007,6 @@ int mergeFastForward(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
   const ProllyHash *pOurHead, const ProllyHash *pTheirHead
 );
-/* Merge zBranch/zRef into the current session HEAD. Sets a SQL result on
-** context (commit hash, "Already up to date", or error). Returns SQLITE_OK
-** only when a non-error result was produced. */
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1060,9 +1039,7 @@ int doltliteRefreshConstraintViolationTables(sqlite3 *db);
 int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 int doltliteUpdateSchemaHashes(sqlite3 *db);
 
-/* Post-merge / verify constraint detectors (doltlite_merge_constraints.c).
-** azTables/nTables optionally restrict which tables are scanned; nTables<=0
-** means all user tables. */
+/* nTables<=0 scans every user table. */
 int doltliteDetectMergeFkViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
                                     char **pzErrMsg, int *pnFound,
                                     const char **azTables, int nTables);
@@ -1132,13 +1109,10 @@ int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
 int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
                              ProllyHash *pCatHash);
 
-/* True when zRef names the working set / staged pseudo-refs. */
 int doltliteRefIsWorking(const char *zRef);
 int doltliteRefIsStaged(const char *zRef);
 
-/* Resolve any ref -- a commit/branch/tag, the WORKING or STAGED pseudo-refs,
-** or NULL for HEAD -- to its catalog hash. WORKING reflects uncommitted
-** in-session edits; STAGED falls back to HEAD when nothing is staged. */
+/* NULL ref is HEAD. WORKING is uncommitted edits; STAGED falls back to HEAD. */
 int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
                                      ProllyHash *pCatHash);
 
@@ -1161,11 +1135,8 @@ struct DoltliteConflictRow {
 };
 
 typedef struct DoltliteConflictTable DoltliteConflictTable;
-/* nConflicts==0 is an overloaded sentinel: such an entry is a schema-conflict
-** table (schema differs across the merge; its objects live in azSchemaObjects
-** and aRows is unused), not an empty data-conflict table. Data conflicts always
-** carry nConflicts>0 with aRows populated, so a zero-conflict table must never
-** be treated as "no conflicts here." */
+/* nConflicts==0 marks a schema-conflict table (azSchemaObjects), not an
+** empty data-conflict table. Data conflicts always have nConflicts>0. */
 struct DoltliteConflictTable {
   char *zName;
   int nConflicts;
@@ -1179,9 +1150,7 @@ int doltliteSerializeConflicts(ChunkStore *cs,
                                DoltliteConflictTable *aTables,
                                int nTables, ProllyHash *pHash);
 
-/* Index key construction helpers (see doltlite_merge_rows.c). Shared by
-** merge, dolt_conflicts_resolve, and workspace so secondary indexes stay
-** consistent with VDBE (including NOCASE/RTRIM/DESC). */
+/* Index keys must match VDBE (NOCASE/RTRIM/DESC). */
 void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
 void doltliteIpkWriteBE(u8 *p, i64 v, int n);
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
@@ -1338,7 +1307,7 @@ struct SchemaMergeAction {
   int nAddColumns;
   char **azDropColumns;
   int nDropColumns;
-  /* Flat old,new pairs: a rename the merged layout still has to be told about. */
+  /* Flat old,new rename pairs the merged layout still needs. */
   char **azRenameColumns;
   int nRenameColumns;
 };

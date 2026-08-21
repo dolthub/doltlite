@@ -136,7 +136,7 @@ struct DoltliteDiffCursor {
   int hasRow;
   i64 iRowid;
   int singleCommit;
-  int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING only, 2=STAGED only */
+  int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING, 2=STAGED */
 };
 
 static const char *diffSchema =
@@ -335,7 +335,6 @@ static int diffFilteredTableRoots(
   }
 }
 
-/* Fast path for table_name constrained scans. */
 static int diffCatalogPairOne(
   DoltliteDiffCursor *pCur, sqlite3 *db,
   struct TableEntry *aChild, int nChild,
@@ -394,10 +393,6 @@ static int diffCatalogPairOne(
                      dataChange, schemaChange);
 }
 
-/* Diff child against parent catalogs, emitting one batch row per changed table
-** (plus the dolt_schemas view/trigger special case and reverse scan for
-** drops). zHex/pCommit label the rows: "WORKING"+null for the working set, the
-** commit hex+commit for a committed diff. */
 static int diffCatalogPair(
   DoltliteDiffCursor *pCur, sqlite3 *db,
   struct TableEntry *aChild, int nChild,
@@ -432,8 +427,7 @@ static int diffCatalogPair(
       struct TableEntry *pOldMaster;
       int hasDiff;
       int oldHas;
-      /* Only the master entry carries schema rows; unnamed index entries
-      ** are attributed to their tables through the row comparison below. */
+      /* Only the master entry carries schema rows; indexes attribute via row comparison. */
       if( e->iTable!=1 ) continue;
       memset(&emptyRoot, 0, sizeof(emptyRoot));
       pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
@@ -484,8 +478,6 @@ diff_done:
   return rc;
 }
 
-/* Emit batch rows for the changed tables between two catalogs, labelling each
-** with zLabel ("WORKING" or "STAGED"). No rows when the catalogs match. */
 static int computeCatalogPairBatch(
   DoltliteDiffCursor *pCur, sqlite3 *db,
   const ProllyHash *pChildCat, const ProllyHash *pParentCat,
@@ -534,10 +526,7 @@ static int computeCatalogPairBatch(
   return rc;
 }
 
-/* The uncommitted diff, mirroring Dolt's dolt_diff: a STAGED row per table
-** where the staged catalog differs from HEAD, and a WORKING row per table
-** where the working set differs from staged. pseudoFilter narrows this to one
-** label when the query constrains commit_hash. */
+/* Uncommitted diff: STAGED vs HEAD, WORKING vs staged. pseudoFilter may keep one label. */
 static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   ProllyHash headCat, stagedCat, workCat;
   int rc;
@@ -817,9 +806,7 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
     const char *z;
-    /* A NULL name matches no table. Leaving the filter unset would read as
-    ** "no filter" and return every row, and xBestIndex omits the constraint
-    ** so nothing rechecks it. */
+    /* NULL name matches no table. Unset filter would mean "no filter"; xBestIndex omits it. */
     if( sqlite3_value_type(argv[argIdx])==SQLITE_NULL ) return SQLITE_OK;
     z = (const char*)sqlite3_value_text(argv[argIdx++]);
     if( z ){

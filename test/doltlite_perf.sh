@@ -13,10 +13,7 @@ time_ms() {
   echo $((end - start))
 }
 
-# Median of n samples. A single-op timing is mostly process start and db open,
-# so one sample measures runner jitter as much as the operation; the SELECT
-# cases below already loop 100 times for the same reason. Median rather than
-# mean so one stalled sample cannot carry the result.
+# Median of n samples; a single-op timing is mostly process start and db open.
 time_ms_median() {
   local n="$1"; shift
   local i
@@ -27,8 +24,7 @@ time_ms_median() {
   printf '%s' "$times" | grep -v '^$' | sort -n | awk -v n="$n" 'NR==int((n+1)/2){print; exit}'
 }
 
-# DELETE consumes the row it measures, so each sample needs its own. Ids count
-# down from base, which the fixtures populate densely from 0.
+# DELETE consumes the measured row; each sample needs its own. Ids count down from base.
 time_ms_median_delete() {
   local n="$1" db="$2" base="$3"
   local i
@@ -43,9 +39,7 @@ assert_ratio() {
   local name="$1" small="$2" large="$3" max_ratio="$4"
   local raw_small="$small"
   if [ "$small" -le 0 ]; then small=1; fi
-  # Single-op timings under ~50ms are mostly process start / runner jitter on
-  # CI (e.g. delete_100k_to_1m flaking 30ms→362ms at 12x over a 10x cap).
-  # Floor the baseline so the ratio reflects scale, not noise.
+  # Floor the baseline: sub-50ms timings are mostly process start / CI jitter.
   if [ "$small" -lt 50 ]; then small=50; fi
   local ratio=$((large * 100 / small))
   local limit=$((max_ratio * 100))

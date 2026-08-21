@@ -46,8 +46,7 @@ struct AuditRow {
   u8 keyIsIntKey;
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
-  /* Owned records rebuilt from a clustered key, one per side so each is
-  ** decoded with that side's primary key definition. */
+  /* Owned records rebuilt from a clustered key, one per side's PK definition. */
   u8 *pKeyRec; int nKeyRec;
   u8 *pOldKeyRec; int nOldKeyRec;
   char zFromCommit[PROLLY_HASH_SIZE*2+1];
@@ -95,9 +94,7 @@ struct DiffTblCursor {
   ProllyDiffIter diffIter;
   int diffIterOpen;
 
-  /* Columns as each side's commit declares them; cached by schema hash and
-  ** reused across pairs. An invalid side renders with the vtab's declared
-  ** layout. */
+  /* Invalid side renders with the vtab's declared layout. */
   DoltliteSideCols fromSide;
   DoltliteSideCols toSide;
   int    needFilter;
@@ -578,10 +575,7 @@ static int buildCommitDiffPair(
   rc = doltliteResolveRef(db, zToCommit, &toHash);
   if( rc!=SQLITE_OK ) return SQLITE_OK;
 
-  /* A pushed-down to_commit filter must select a subset of the full scan,
-  ** which only walks the session head's ancestry. A commit that is not
-  ** reachable from the head yields no rows, matching both the unfiltered
-  ** scan and Dolt. */
+  /* to_commit filter only walks the session head's ancestry; unreachable commits yield no rows. */
   {
     ProllyHash head, base;
     memset(&head, 0, sizeof(head));
@@ -654,10 +648,7 @@ struct DtSliceEnd {
   char zLabel[PROLLY_HASH_SIZE*2+1];
 };
 
-/* Resolve one endpoint of a dolt_diff_<table>(from, to) slice -- any commit
-** ref or the WORKING / STAGED pseudo-refs -- to its table root, catalog,
-** schema, commit date, and display label. Returns SQLITE_NOTFOUND for an
-** unresolvable ref so the caller can yield no rows, matching Dolt. */
+/* SQLITE_NOTFOUND for an unresolvable ref so the caller yields no rows. */
 static int dtResolveSliceEnd(
   sqlite3 *db, const char *zRef, const char *zTableName, DtSliceEnd *pEnd
 ){
@@ -911,9 +902,7 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
         pCur->row.pNewVal = pChange->pNewVal;
         pCur->row.nNewVal = pChange->pNewVal ? pChange->nNewVal : 0;
 
-        /* PK-only clustered rows store an empty value; both sides of the
-        ** change share one key, but each is decoded with its own side's
-        ** primary key definition so historical keys read correctly. */
+        /* Clustered empty value: decode each side with that side's PK definition. */
         if( (pCur->row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
          || (pCur->row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
           DiffTblVtab *pV = (DiffTblVtab*)pCur->base.pVtab;

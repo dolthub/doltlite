@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Mutation maps, inserts, deletes, transfers, and incremental blobs. */
-
 static int keyInfoHasLossyCollation(const KeyInfo *pKeyInfo){
   int i;
   if( !pKeyInfo ) return 0;
@@ -55,8 +53,6 @@ int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
   return SQLITE_OK;
 }
 
-/* Cache a payload stored as a prefix plus a symbolic zero tail,
-** materializing the zeros. */
 int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
                                int nData, i64 nZeroTail){
   i64 nTotal64 = (i64)nData + nZeroTail;
@@ -494,7 +490,7 @@ int flushPendingForTable(
 }
 int syncBtreeSavepoints(Btree *pBtree){
   sqlite3 *db = pBtree ? pBtree->db : 0;
-  /* vtab xSavepoint writes belong to the parent statement scope. */
+  /* vtab xSavepoint writes belong to the parent statement. */
   if( db && db->nVtabSavepoint==0 ){
     int target = db->nSavepoint + db->nStatement;
     while( pBtree->nSavepoint < target ){
@@ -508,8 +504,7 @@ static int syncSavepoints(BtCursor *pCur){
   return syncBtreeSavepoints(pCur->pBtree);
 }
 
-/* Pending edit maps are shared by every cursor on the same table. When a flush
-** swaps the table map, every live cursor must drop iterator state into it. */
+/* Shared per-table map: flush swap must drop every cursor's iterator state. */
 void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap){
   BtCursor *p;
@@ -539,7 +534,7 @@ int ensureMutMap(BtCursor *pCur){
 
   if( pTE->pPending ){
     ProllyMutMap *pExisting = (ProllyMutMap*)pTE->pPending;
-    /* Empty maps still track savepoint depth for later edits. */
+    /* Empty maps still track savepoint depth. */
     if( pCur->pBtree
      && prollyMutMapIsEmpty(pExisting)
      && pExisting->currentSavepointLevel != pCur->pBtree->nSavepoint ){
@@ -577,8 +572,7 @@ int saveCursorPosition(BtCursor *pCur){
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  /* A map-sourced row's key comes from the mutmap below; the tree cursor may
-  ** legitimately be unpositioned (all rows still pending). */
+  /* Mut-map rows may have no tree position (all rows still pending). */
   if( !prollyCursorIsValid(&pCur->pCur)
    && !(pCur->mmActive
         && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH)) ){
@@ -639,8 +633,7 @@ int saveCursorPosition(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-/* Borrowed pointer into the catalog or parsed schema; NULL if the number
-** names nothing. Never allocates, so absence is unambiguous. */
+/* Borrowed catalog/schema name, or NULL. Never allocates. */
 const char *findTableNumberName(sqlite3 *db, Pgno iTable){
   Btree *pBtree;
   Schema *pSchema;
@@ -676,7 +669,7 @@ int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
     if( z ){
       pTE->zName = sqlite3_mprintf("%s", z);
       if( !pTE->zName ){
-        /* Leave the verdict uncached so a post-OOM retry can classify. */
+        /* Uncached so a post-OOM retry can classify. */
         if( pRc ) *pRc = SQLITE_NOMEM;
         return 0;
       }
@@ -818,8 +811,7 @@ int prollyBtCursorInsert(
     nInsertedPayload = nData;
 
     if( pPayload->nZero > 0 ){
-      /* The zero tail stays symbolic all the way to the chunk store; the
-      ** zeros are never materialized in memory. */
+      /* Zero tail stays symbolic through the chunk store. */
       rc = prollyMutMapInsertZeroTail(pCur->pMutMap, pPayload->nKey,
                                       pData, nData, (i64)pPayload->nZero);
     }else if( pCur->mmExactMiss
@@ -869,9 +861,8 @@ int prollyBtCursorInsert(
       splitKey = 1;
       storePayload = 1;
     }
-    /* Numeric sort keys normalize INTEGER and integral REAL values for
-    ** comparison. Keep the original record when reconstruction must preserve
-    ** a REAL serial type for result rows or covering-index reads. */
+    /* Sort keys collapse INTEGER/integral REAL; keep the record if REAL type
+    ** must survive reconstruction. */
     if( !storePayload
      && sortKeyRecordNeedsPayload(
           (const u8*)pPayload->pKey, (int)pPayload->nKey,
@@ -951,10 +942,8 @@ int prollyBtCursorInsert(
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
         ProllyMutMapEntry *pEntry = 0;
         CLEAR_CACHED_PAYLOAD(pCur);
-        /* Step the tree off the row just written -- but only when the tree is
-        ** the side sitting on it. A mut-map-only row leaves the tree already
-        ** parked on the next committed row above it, so advancing here would
-        ** step over that row and drop it from the rest of the scan. */
+        /* Advance the tree only if it sat on the written row; MUT-only
+        ** already parks on the next committed row. */
         if( prollyCursorIsValid(&pCur->pCur)
          && (!pCur->mmActive || pCur->mergeSrc!=MERGE_SRC_MUT) ){
           int trc = prollyCursorNext(&pCur->pCur);
@@ -1046,7 +1035,7 @@ int flushIfNeeded(BtCursor *pCur){
     }
   }
 
-  /* Save the initiating cursor too; callback-driven COMMIT can keep it live. */
+  /* Save this cursor too; callback-driven COMMIT can keep it live. */
   if( !pCur->isPinned
    && (pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_SKIPNEXT) ){
     rc = saveCursorPosition(pCur);
@@ -1063,11 +1052,9 @@ int flushIfNeeded(BtCursor *pCur){
                      &pTE->root, pTE->flags);
     prollyCursorAllowSparse(&pCur->pCur, 1);
   }
-  /* The flush emptied the map; a saved cursor restoring with a stale
-  ** mmActive/mmIdx would consult it at a dead index. */
+  /* Flush emptied the map; drop stale mmActive/mmIdx. */
   refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
                              pTE ? (ProllyMutMap*)pTE->pPending : 0);
-  /* Preserve REQUIRESEEK/FAULT states across flush. */
   if( pCur->eState!=CURSOR_REQUIRESEEK && pCur->eState!=CURSOR_FAULT ){
     pCur->eState = CURSOR_INVALID;
   }
@@ -1259,7 +1246,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
 
-  /* No saved key means no-op; falling through would delete rowid 0 or ''. */
+  /* No key: no-op. Falling through would delete rowid 0 or ''. */
   if( !hasSavedKey ){
     rc = SQLITE_OK;
     goto delete_cleanup;
@@ -1314,7 +1301,6 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     }else{
       rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
     }
-    /* pKey may alias pSavedDelKey until the reseek below finishes. */
   }
 
   if( rc!=SQLITE_OK ) goto delete_cleanup;
@@ -1331,17 +1317,11 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
         pCur->flushSeekEdits = 1;
         if( pCur->curIntKey && hasSavedKey ){
-          /* Record the hole so the next step resumes from the deleted key;
-          ** the tree cursor may be parked past pending rows the scan still
-          ** owes (see resumeDeactivatedMergedScan). */
+          /* Hole at the deleted key; tree may sit past pending rows still owed. */
           pCur->cachedIntKey = iKey;
           pCur->curFlags |= BTCF_DeleteKey;
         }else if( !pCur->curIntKey && hasSavedKey && nKey>0 ){
-          /* Park the cursor on the mut-map tombstone of the deleted key so
-          ** the next step resumes the scan from there. Re-seeding from a
-          ** stale or unset position can restart the scan at an unrelated
-          ** row, making a delete loop re-visit (and delete) live rows that
-          ** never matched its constraint. */
+          /* Park on the tombstone so the next step resumes here, not a stale key. */
           ProllyMutMapEntry *pEntry = 0;
           rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, 0, &pEntry);
           if( rc!=SQLITE_OK ) goto delete_cleanup;
@@ -1412,9 +1392,7 @@ int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   memset(&payload, 0, sizeof(payload));
 
   if( pDest->curIntKey ){
-    /* Read the source value through getCursorPayload (mutmap-aware): a row that
-    ** lives in the source's pending mutmap has no tree node, so a bare
-    ** prollyCursorValue() on pSrc->pCur NULL-derefs in prollyNodeValue. */
+    /* Mutmap-aware read: a pending row has no tree node. */
     const u8 *pVal;
     int nVal;
     rc = getCursorPayload(pSrc, &pVal, &nVal);
@@ -1425,10 +1403,7 @@ int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
     payload.pData = pVal;
     payload.nData = nVal;
   } else {
-    /* Insert re-encodes pKey as a SQLite record (sortKeyFromIntRecordLocal /
-    ** sortKeyFromRecordPrefixCollBuffer). The tree/mutmap key is a sort key
-    ** (0x15/0x35 tags), not that record. Use the stored or reconstructed
-    ** record -- the same object a normal IdxInsert / covering read uses. */
+    /* Tree keys are sort keys, not SQLite records; pass the stored record. */
     const u8 *pKey;
     int nKey;
     rc = getCursorPayload(pSrc, &pKey, &nKey);
@@ -1516,8 +1491,7 @@ int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   }
   assert( pCur->curFlags & BTCF_Incrblob );
 
-  /* A mutmap-sourced row's current value lives in the pending map, not the
-  ** tree leaf; the raw tree value here is stale or unpositioned. */
+  /* Mutmap value lives in the pending map; the tree leaf is stale. */
   rc = getCursorPayload(pCur, &pVal, &nVal);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -1534,7 +1508,6 @@ int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   memset(&payload, 0, sizeof(payload));
 
   if( pCur->curIntKey ){
-    /* A row pending in the mutmap may have no positioned tree cursor. */
     if( pCur->mmActive
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
       ProllyMutMapEntry *pEntry;
@@ -1609,9 +1582,7 @@ int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   return SQLITE_NOTFOUND;
 }
 
-/* Declared in doltlite_internal.h. Forward-declared here because that
-** header redefines TableEntry/SchemaEntry in a shape incompatible with
-** this file's local definitions, so we can't just include it. */
+/* Forward-declared: doltlite_internal.h redefines TableEntry incompatibly. */
 extern int doltliteIndexApplyRowDelta(
   sqlite3 *db,
   ChunkStore *cs,
@@ -1625,9 +1596,7 @@ extern int doltliteIndexApplyRowDelta(
   const u8 *pNewVal, int nNewVal
 );
 
-/* Read the current value bytes at (pKey/intKey) in the table's prolly
-** tree. *ppOld is set to a freshly-allocated copy (caller frees) or
-** to NULL if the key is not present. */
+/* Allocated copy of the tree value at pKey/intKey, or NULL if absent. */
 static int readRowValue(
   BtShared *pBt,
   struct TableEntry *pTE,
@@ -1704,8 +1673,6 @@ int doltliteApplyRawRowMutation(
   rc = flushPendingForTable(pBtree, pBt, pTE, 0);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Read the existing row value so we can compute index keys to delete.
-  ** Only matters when the table has secondary indexes. */
   pTab = sqlite3FindTable(db, zTable, "main");
   if( pTab && pTab->pIndex ){
     rc = readRowValue(pBt, pTE, pKey, nKey, intKey, &pOldVal, &nOldVal);
@@ -1746,10 +1713,7 @@ int doltliteApplyRawRowMutation(
   }
   prollyMutMapFree(&mm);
 
-  /* Update secondary indexes (delete old key, insert new). pOldVal can
-  ** be NULL when this is an insert of a fresh PK; pVal is NULL when
-  ** this is a delete. Uses the shared KeyInfo-aware path so NOCASE/RTRIM
-  ** match VDBE-encoded index trees. */
+  /* Secondary indexes: KeyInfo path so NOCASE/RTRIM match VDBE encoding. */
   if( rc==SQLITE_OK && pTab && pTab->pIndex
    && (pOldVal || (pVal && nVal>0)) ){
     Index *pIdx;
@@ -1757,10 +1721,7 @@ int doltliteApplyRawRowMutation(
     for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
       struct TableEntry *pIdxTE = 0;
       int j;
-      /* WITHOUT ROWID tables expose the PK as a pseudo-INDEX whose
-      ** tnum equals the table's own root. Mutating it like a
-      ** secondary index would overwrite the table tree. Skip. On rowid
-      ** tables the PK is a real unique index and must be maintained. */
+      /* WITHOUT ROWID PK is a pseudo-index on the table root; skip. */
       if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
       for(j=0; j<pBtree->cat.n; j++){
         if( pBtree->cat.a[j].iTable==(Pgno)pIdx->tnum ){
@@ -1787,13 +1748,8 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  /* Taking a read first and upgrading is what refuses to promote a session
-  ** whose loaded working state has fallen behind -- and inside an explicit
-  ** transaction that refusal is the point, since reloading underneath the
-  ** caller would break its isolation. In autocommit there is no such caller:
-  ** the read only manufactures a stale upgrade to refuse, and because that
-  ** read stays open the refusal never clears however often the caller retries.
-  ** Begin the write directly there, which reloads the working state. */
+  /* Explicit txn: take a read first so a stale snapshot refuses the upgrade.
+  ** Autocommit: begin the write directly (the read would stick BUSY forever). */
   if( pBtree->inTrans==TRANS_NONE && !db->autoCommit ){
     rc = sqlite3BtreeBeginTrans(pBtree, 0, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -1803,8 +1759,7 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* VC functions can write through this btree layer without first touching a
-  ** SQL table, so mirror SQLite's active savepoint stack before mutating it. */
+  /* VC writes may skip SQL tables; mirror the savepoint stack first. */
   target = db->nSavepoint;
   while( pBtree->nSavepoint < target ){
     rc = pushSavepoint(pBtree, 0);

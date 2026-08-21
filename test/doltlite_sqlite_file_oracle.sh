@@ -1,5 +1,4 @@
 #!/bin/bash
-# Stock sqlite3 seeds the file; doltlite and sqlite3 must agree on the same SQL.
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
@@ -67,7 +66,6 @@ for page_size in 512 1024 4096 8192 16384 65536; do
   oracle "O_intpk_${page_size}_between_all" "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10;" "$DB"
 done
 
-# Stable name the compatibility contract pins.
 oracle "O_intpk_between_last" "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 10;" "$TMP/intpk-4096.db"
 
 echo ""
