@@ -76,6 +76,56 @@ oracle_agent() { oracle agent "$@"; }
 oracle_agent_count() { oracle agent_count "$@"; }
 oracle_diff_stat() { oracle diff_stat "$@"; }
 
+oracle_divergence() {
+  local name="$1" setup="$2" dl_query="$3" dt_query="$4"
+  local dl_expected="$5" dt_expected="$6"
+  local dl_expect_error="$7" dt_expect_error="$8"
+  local dir="$TMPROOT/${name}_div"
+  local dl_rc dt_rc dl_out dt_out dl_rc_ok=0 dt_rc_ok=0
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  printf "%s\n%s\n" "$setup" "$dl_query" \
+    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.raw" 2>"$dir/dl.err"
+  dl_rc=$?
+  dl_out=$(tr -d '\r"' < "$dir/dl.raw" | grep '^X|')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf "%s\n%s\n" "$dolt_setup" "$dt_query" \
+      | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_rc=$?
+  dt_out=$(tr -d '\r"' < "$dir/dt.raw" | grep '^X|')
+
+  if [ "$dl_expect_error" = "1" ]; then
+    vc_oracle_is_clean_error "$dl_rc" && dl_rc_ok=1
+  elif [ "$dl_rc" -eq 0 ]; then
+    dl_rc_ok=1
+  fi
+  if [ "$dt_expect_error" = "1" ]; then
+    vc_oracle_is_clean_error "$dt_rc" && dt_rc_ok=1
+  elif [ "$dt_rc" -eq 0 ]; then
+    dt_rc_ok=1
+  fi
+
+  if [ "$dl_rc_ok" -eq 1 ] && [ "$dt_rc_ok" -eq 1 ] \
+     && [ "$dl_out" = "$dl_expected" ] \
+     && [ "$dt_out" = "$dt_expected" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc/output: $dl_rc / $dl_out"
+    echo "    expected:           $dl_expect_error / $dl_expected"
+    echo "    dolt rc/output:     $dt_rc / $dt_out"
+    echo "    expected:           $dt_expect_error / $dt_expected"
+  fi
+}
+
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"
@@ -286,9 +336,12 @@ oracle_agent_count "agent_survives_other_writes" "
 INSERT INTO dolt_docs VALUES ('README.md', 'hi');
 "
 
-oracle_diff_stat "default_agent_is_not_versioned" "
+oracle_divergence "default_agent_is_versioned_in_doltlite" "
 INSERT INTO dolt_docs VALUES ('README.md', 'hi');
-"
+" \
+"SELECT 'X|' || rows_added || '|' || rows_deleted || '|' || rows_modified || '|' || old_row_count || '|' || new_row_count FROM dolt_diff_stat('HEAD', 'WORKING', 'dolt_docs');" \
+"SELECT concat('X|', rows_added, '|', rows_deleted, '|', rows_modified, '|', old_row_count, '|', new_row_count) FROM dolt_diff_stat('HEAD', 'WORKING', 'dolt_docs');" \
+"X|2|0|0|0|2" "X|1|0|0|0|1" 0 0
 
 oracle_agent "agent_replace_overrides_default" "
 REPLACE INTO dolt_docs VALUES ('AGENT.md', 'custom agent doc');
@@ -298,14 +351,20 @@ oracle_agent "agent_update_overrides_default" "
 UPDATE dolt_docs SET doc_text = 'edited agent doc' WHERE doc_name = 'AGENT.md';
 "
 
-oracle_agent "agent_insert_as_first_write" "
+oracle_divergence "agent_insert_obeys_stored_primary_key" "
 INSERT INTO dolt_docs VALUES ('AGENT.md', 'inserted agent doc');
-"
+" \
+"SELECT 'X|' || count(*) || '|' || coalesce(max(CASE WHEN doc_text='inserted agent doc' THEN 1 ELSE 0 END), 0) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+"SELECT concat('X|', count(*), '|', coalesce(max(CASE WHEN doc_text='inserted agent doc' THEN 1 ELSE 0 END), 0)) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+"X|1|0" "X|1|1" 1 0
 
-oracle_agent_count "agent_delete_resynthesizes_default" "
+oracle_divergence "agent_delete_sticks_in_doltlite" "
 REPLACE INTO dolt_docs VALUES ('AGENT.md', 'custom agent doc');
 DELETE FROM dolt_docs WHERE doc_name = 'AGENT.md';
-"
+" \
+"SELECT 'X|' || count(*) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+"SELECT concat('X|', count(*)) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+"X|0" "X|1" 0 0
 
 oracle_agent "agent_override_commits" "
 REPLACE INTO dolt_docs VALUES ('AGENT.md', 'committed agent doc');
