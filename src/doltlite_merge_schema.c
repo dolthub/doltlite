@@ -2,8 +2,6 @@
 
 #include "doltlite_merge_int.h"
 
-/* CREATE TABLE SQL parsing, schema IR, and column-level schema merge. */
-
 #define SCHEMA_IR_OTHER 0
 #define SCHEMA_IR_FK    1
 #define SCHEMA_IR_CHECK 2
@@ -800,10 +798,8 @@ int trySchemaColumnMerge(
     }
   }
 
-  /* The scan above only recognizes a rename on their side, so one on ours
-  ** went unseen and the merge fell through to incompatible. A column of ours
-  ** that the ancestor never had, sitting where a vanished ancestor column
-  ** used to sit and carrying its definition, is that rename. */
+  /* The scan above missed our rename. Ours at a vanished ancestor
+  ** slot with the same definition is that rename. */
   if( *pSchemaChoice==SCHEMA_MERGE_DEFAULT ){
     for(i=0; i<nOurs; i++){
       ParsedColumn *theirAncestor;
@@ -862,11 +858,8 @@ int trySchemaColumnMerge(
     nAdd = 0;
     nAddAlloc = 0;
     for(i=0; i<nOurs; i++){
-      /* A column of ours the ancestor never had, sitting where a vanished
-      ** ancestor column sat and carrying its definition, is our rename. The
-      ** adopted schema keeps that column under its old name, so replaying the
-      ** new name as an addition would keep both and leave the new one empty.
-      ** The rename pass below carries it across instead. */
+      /* Our rename: adopted schema still uses the old name, so do not
+      ** replay the new name as an ADD. The rename pass carries it. */
       if( i<nAnc
        && !findColumn(aAnc, nAnc, aOurs[i].zName)
        && !findColumn(aOurs, nOurs, aAnc[i].zName)
@@ -889,12 +882,8 @@ int trySchemaColumnMerge(
   }
 
 schema_merge_done:
-  /* The merged layout is the selected side's, so the columns the other side
-  ** deleted are still in it and have to be carried across as deletions. With
-  ** no side selected the layout is ours plus their additions, which leaves
-  ** their deletions just as unrepresented. A column the other side renamed is
-  ** absent under its old name too, and its replacement sits at the same
-  ** position, which is what tells the two apart. */
+  /* Carry the other side's deletions. A rename is absent under the
+  ** old name too; same-position replacement distinguishes it. */
   if( ppDropCols && pnDropCols ){
     ParsedColumn *aSel = *pSchemaChoice==SCHEMA_MERGE_THEIRS ? aTheirs : aOurs;
     ParsedColumn *aOth = *pSchemaChoice==SCHEMA_MERGE_THEIRS ? aOurs : aTheirs;
@@ -906,9 +895,7 @@ schema_merge_done:
       if( i<nOth
        && !findColumn(aAnc, nAnc, aOth[i].zName)
        && parsedColumnDefinitionsMatch(&aOth[i], &aAnc[i]) ){
-        /* Renamed, not deleted. The adopted layout still calls the column by
-        ** its ancestor name, so the merge has to carry the rename across or
-        ** the other side's new name is simply lost. */
+        /* Renamed, not deleted. Carry the new name or it is lost. */
         if( ppRenameCols && pnRenameCols ){
           rc = DOLTLITE_GROW_ARRAY(&azRename, &nRenameAlloc, nRename+2, 4);
           if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
@@ -987,15 +974,9 @@ int doltliteTableSchemaConflictDetail(
 }
 
 
-/* Column defaults for a table's declared columns, evaluated once.
-**
-** A row written before ADD COLUMN stops short of the new column, and reads
-** materialize the declared default for the missing field. Rewriting such a
-** row into a wider layout has to keep that promise: once any later column
-** is present the record physically covers the earlier slot, so leaving it
-** NULL replaces the default with a NULL the table never held. Defaults for
-** ADD COLUMN are constants, so evaluating the stored text in the scratch
-** database that already holds the schema yields the value to store. */
+/* Evaluate declared defaults once. A pre-ADD-COLUMN row omits the
+** new field; reads materialize the default. Rewriting into a wider
+** record covers that slot, so leaving NULL would replace the default. */
 void mergeColDefaultsFree(MergeColDefaults *p){
   int i;
   if( p->apOwned ){
@@ -1107,10 +1088,6 @@ done:
 }
 
 
-/* Rewrite the tree at pTheirsRoot, whose records follow zTheirsSql, into the
-** merged layout described by zOursSql. pOursRoot is the other side of the
-** merge, read only to tell rows that side also holds from rows this one
-** introduces. Either side of a merge can be the one converted. */
 int normalizeSideToMergedLayout(
   sqlite3 *db,
   const char *zTable,
@@ -1186,9 +1163,7 @@ int normalizeSideToMergedLayout(
     if( found>=0 ){
       aMap[j] = found;
     }else if( bInAnc ){
-      /* The ancestor had this column and the merged layout does not, so the
-      ** merged side dropped it. Appending it as a new column instead would
-      ** resurrect dropped data as a trailing field the schema cannot name. */
+      /* Merged layout dropped it. Appending would resurrect dropped data. */
       aMap[j] = -1;
       nDropped++;
     }else{
@@ -1197,9 +1172,7 @@ int normalizeSideToMergedLayout(
   }
   if( nMerged > DOLTLITE_MAX_RECORD_FIELDS ){ rc = SQLITE_ERROR; goto done; }
 
-  /* Records already sit at their merged positions, so the existing tree is
-  ** the answer. Trailing columns the merged layout adds read as absent from a
-  ** short record, which is what a rewrite would store anyway. */
+  /* Already at merged positions; trailing adds read as absent anyway. */
   if( nDropped==0 ){
     int bSamePositions = 1;
     for(j=0; j<nTheirs; j++){
@@ -1211,9 +1184,7 @@ int normalizeSideToMergedLayout(
     }
   }
 
-  /* Slots this side does not supply take the declared default of whichever
-  ** schema owns them: ours for the columns we keep, theirs for the ones
-  ** their side appended. */
+  /* Unsupplied slots take the owning schema's declared default. */
   rc = mergeColDefaultsLoad(zOursSql, zTable, &oursDefaults);
   if( rc!=SQLITE_OK ) goto done;
   rc = mergeColDefaultsLoad(zTheirsSql, zTable, &theirsDefaults);
@@ -1249,12 +1220,8 @@ int normalizeSideToMergedLayout(
       prollyCursorKey(&cur, &pKey, &nKey);
     }
 
-    /* Defaults belong to rows only their side has: those are inserts, and
-    ** the columns we added never applied to them, so they read as declared.
-    ** A row we also hold is about to be merged cell by cell against the
-    ** ancestor, and filling our column there would present their untouched
-    ** column as a change they made -- turning a clean merge into a
-    ** conflict. Those keep the empty slot the merge reads as "unchanged". */
+    /* Defaults only for rows theirs uniquely has. Filling our column
+    ** on a shared row would look like their change and conflict. */
     rowOnlyTheirs = 0;
     if( oursCurInit ){
       int oursRes = 0;

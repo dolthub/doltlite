@@ -5,9 +5,7 @@
 #include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
 
-/* Stock bounds a single VFS read at 128KiB -- os_unix asserts it, and the
-** write side masks the length outright -- so whole-buffer reads slice the way
-** the commit and WAL-replay writers already do. */
+/* unix VFS asserts a 128KiB read cap; writers already slice. */
 #define CS_IO_SLICE 65536
 int csReadSliced(ChunkStore *cs, void *pBuf, i64 nByte, i64 iOff){
   u8 *p = (u8*)pBuf;
@@ -22,11 +20,6 @@ int csReadSliced(ChunkStore *cs, void *pBuf, i64 nByte, i64 iOff){
   return SQLITE_OK;
 }
 #ifdef SQLITE_CRASH_TEST
-#endif
-
-
-#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
-/* Test hook: force one mid-commit reload after pending chunks drain. */
 #endif
 
 
@@ -88,8 +81,6 @@ int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize){
   return rc;
 }
 
-/* See chunk_store.h. Terminates with two nuls for the VFS xOpen() main-db
-** filename contract. */
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
   int n = (int)strlen(z);
   char *p = (char*)sqlite3_malloc(n + 2);
@@ -131,8 +122,7 @@ static int csCanonicalFilename(
     }
   }
 #endif
-  /* Match stock pagerOpen: FullPathname returns OK_SYMLINK when the path
-  ** traverses a symlink; SQLITE_OPEN_NOFOLLOW must refuse that open. */
+  /* pagerOpen: OK_SYMLINK means a symlink; SQLITE_OPEN_NOFOLLOW refuses. */
   if( rc==SQLITE_OK_SYMLINK ){
     if( flags & SQLITE_OPEN_NOFOLLOW ){
       sqlite3_free(zFull);
@@ -155,17 +145,12 @@ int csSyncFile(ChunkStore *cs){
                        cs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
 }
 
-/* Repair a stale refs table (cleared by an OOM rollback) by reloading it
-** from the committed refs blob. Called before refs lookups that would
-** otherwise read an empty table as a valid empty database. */
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memset(aBuf, 0, CHUNK_MANIFEST_SIZE);
   CS_WRITE_U32(aBuf + CS_MANIFEST_MAGIC_OFF, CHUNK_STORE_MAGIC);
   CS_WRITE_U32(aBuf + CS_MANIFEST_VERSION_OFF, CHUNK_STORE_VERSION);
 
-  /* Chunk count and index size are stored as u32, so the on-disk format caps
-  ** the store at ~4 billion chunks and a 4 GiB index. Truncating either here
-  ** would silently corrupt the manifest, so assert the values fit. */
+  /* nChunks and nIndexSize are u32 on disk; truncating would corrupt. */
   assert( cs->index.nChunks>=0 && (u64)cs->index.nChunks<=0xffffffffu );
   assert( cs->index.nIndexSize>=0 && (u64)cs->index.nIndexSize<=0xffffffffu );
   CS_WRITE_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF, (u32)cs->index.nChunks);
@@ -262,7 +247,7 @@ int csValidateWalRootManifest(
     return SQLITE_CORRUPT;
   }
   rootEnd = iRootOffset + 1 + CHUNK_MANIFEST_SIZE;
-  /* Both gaps are sector-alignment padding; writers cap sectors at 64KiB. */
+  /* Gaps are sector padding; writers cap sectors at 64KiB. */
   if( durableTo<iWalOffset || durableTo>batchStart
    || batchStart>iRootOffset || batchStart-durableTo>=65536
    || nextOff<rootEnd || nextOff-rootEnd>=65536 ){
@@ -277,10 +262,7 @@ static int csReadManifest(ChunkStore *cs){
   int rc;
 
   rc = sqlite3OsRead(cs->file.pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
-  /* A short file cannot hold a chunk-store header. Stock SQLite maps the same
-  ** class (garbage / truncated open) to SQLITE_NOTADB ("file is not a
-  ** database") rather than a bare IOERR_SHORT_READ / "disk I/O error" — see
-  ** misc5-4.1 / ticket #1370. */
+  /* Short/garbage open is SQLITE_NOTADB, not IOERR_SHORT_READ (misc5-4.1). */
   if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_NOTADB;
   if( rc != SQLITE_OK ) return rc;
 
@@ -303,20 +285,11 @@ static int csReadManifest(ChunkStore *cs){
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
-  /* A WAL offset below the data it is supposed to follow is the one header
-  ** value that turns damage into destruction: replay reads live chunk bytes as
-  ** WAL records, calls the tail torn, and rewinds the logical EOF, and the next
-  ** write-lock acquisition reclaims everything past it. Refusing the open keeps
-  ** a file whose rows are still readable readable.
-  **
-  ** The header carries a seal too, but it covers all 168 bytes including ones
-  ** no reader consults, so verifying it would reject files over damage that
-  ** cannot mislead anything. These bounds cover the harmful case on their own,
-  ** and cover pre-seal headers that no seal check could reach. */
+  /* A WAL offset inside live data makes replay rewind and reclaim rows.
+  ** Header-seal covers unused bytes, so these bounds are the harmful case. */
   if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
   if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
-  /* Compare without summing: a large iIndexOffset + nIndexSize can wrap i64
-  ** and accept a WAL offset that still sits inside live data. */
+  /* Do not sum: iIndexOffset + nIndexSize can wrap i64. */
   if( cs->index.iIndexOffset>0
    && ( cs->wal.iWalOffset < cs->index.iIndexOffset
      || cs->wal.iWalOffset - cs->index.iIndexOffset < cs->index.nIndexSize ) ){
@@ -326,7 +299,7 @@ static int csReadManifest(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-/* Classify unreadable headers as crashed creation or damaged committed DB. */
+/* Distinguish crashed first-commit from a damaged committed DB. */
 static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
                                   int *pCreationRoot){
   u8 buf[65536];
@@ -399,8 +372,7 @@ int chunkStoreOpen(
    || strcmp(zFilename, ":memory:")==0
    || (flags & SQLITE_OPEN_MEMORY)!=0 ){
     cs->isMemory = 1;
-    /* Honor SQLITE_OPEN_READONLY for in-memory stores too; otherwise a
-    ** read-only :memory: connection silently accepts writes. */
+    /* SQLITE_OPEN_READONLY applies to :memory: too. */
     cs->readOnly = (flags & SQLITE_OPEN_READONLY)!=0;
     cs->file.zFilename = sqlite3_mprintf(":memory:");
     if( cs->file.zFilename==0 ){
@@ -415,7 +387,6 @@ int chunkStoreOpen(
     return SQLITE_OK;
   }
 
-  /* File-backed stores need xDelete and HAS_MOVED file controls. */
   if( pVfs->xDelete==0 ){
     chunkStoreClose(cs);
     return SQLITE_CANTOPEN;
@@ -446,7 +417,6 @@ int chunkStoreOpen(
   }
 
   if( exists ){
-    /* Honor SQLITE_OPEN_READONLY even when the file is writable. */
     int wantReadOnly = (flags & SQLITE_OPEN_READONLY)!=0;
     int openFlags = (wantReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE)
                   | SQLITE_OPEN_MAIN_DB
@@ -454,7 +424,7 @@ int chunkStoreOpen(
     int outFlags = 0;
     rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
-      /* Do not downgrade OOM-failed writable opens to read-only. */
+      /* Do not fall back to read-only after an OOM on the writable open. */
       if( wantReadOnly || rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
         chunkStoreClose(cs);
         return rc;
@@ -466,7 +436,7 @@ int chunkStoreOpen(
         chunkStoreClose(cs);
         return rc;
       }
-      /* Probe fallback handles so directories fail at open time. */
+      /* Probe the fallback handle so a directory fails at open. */
       {
         u8 probe;
         if( sqlite3OsRead(cs->file.pFile, &probe, 1, 0)==SQLITE_IOERR_READ ){
@@ -476,19 +446,15 @@ int chunkStoreOpen(
       }
       cs->readOnly = 1;
     }else if( wantReadOnly || (outFlags & SQLITE_OPEN_READONLY) ){
-      /* Either the caller asked for read-only, or a read-write open silently
-      ** downgraded to read-only (VFS returned READONLY in the out-flags). Mark
-      ** the store read-only so writes fail with SQLITE_READONLY. */
+      /* Caller asked, or the VFS silently opened read-only. */
       cs->readOnly = 1;
     }
 
     rc = csReadManifest(cs);
-    /* NOTADB only: a header that still identifies as a chunk store but carries
-    ** impossible offsets is damaged data, not a crashed creation, and this
-    ** recovery ends in truncating the file to zero. */
+    /* Truncate-to-empty only for NOTADB, not for a damaged-but-identified header. */
     if( rc==SQLITE_NOTADB
      && (flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly ){
-      /* Recover only proven first-commit crashes to an empty database. */
+      /* Recover only a proven first-commit crash to empty. */
       int everCommitted = 1;
       int creationRoot = 0;
       int rc2 = csScanForCommittedRoot(cs, &everCommitted, &creationRoot);
@@ -514,8 +480,7 @@ int chunkStoreOpen(
         }
       }
     }
-    /* Stock defers NOTADB until first use (sqlite3_open succeeds; CREATE
-    ** fails with "file is not a database"). Keep the garbage bytes intact. */
+    /* Stock defers NOTADB until first use; keep the garbage bytes. */
     if( rc==SQLITE_NOTADB ){
       cs->notADatabase = 1;
       cs->index.nChunks = 0;
@@ -573,25 +538,12 @@ int chunkStoreOpen(
       chunkStoreClose(cs);
       return SQLITE_CANTOPEN;
     }
-    /* Fail early when the parent directory is missing so sqlite3_open
-    ** returns SQLITE_CANTOPEN like stock SQLite, instead of succeeding
-    ** with an empty connection that only fails on first write. Probe the
-    ** parent rather than creating the file: WASM/node VFSes can reject
-    ** eager CREATE while still supporting the usual first-write open.
-    **
-    ** Parent is OK if either ACCESS_READWRITE or ACCESS_EXISTS reports
-    ** success. Neither alone is portable:
-    **   - Windows ACCESS_EXISTS treats zero-length objects as missing, and
-    **     directories report size zero — so EXISTS alone CANTOPEN's every
-    **     new DB under a real parent.
-    **   - Some WASM/node VFSes reject ACCESS_READWRITE on directories that
-    **     still pass EXISTS (and reject eager CREATE), so READWRITE alone
-    **     breaks opens that only EXISTS can green-light.
-    **
-    ** Access failures (IOERR from faultsim, etc.) are treated as
-    ** inconclusive — fall through to deferred open rather than
-    ** promoting a probe error into open failure. Only a definitive
-    ** "parent is absent" answer becomes CANTOPEN. */
+    /* Missing parent -> CANTOPEN at open, not on first write. Probe the
+    ** parent rather than CREATE (WASM/node VFSes may reject eager CREATE).
+    ** Parent is OK if ACCESS_READWRITE or ACCESS_EXISTS succeeds: Windows
+    ** EXISTS treats size-0 dirs as missing; some WASM VFSes reject
+    ** READWRITE on dirs that still pass EXISTS. Probe IOERR is
+    ** inconclusive — only a definitive absent parent is CANTOPEN. */
     {
       const char *zPath = cs->file.zFilename;
       const char *zSlash = strrchr(zPath, '/');
@@ -621,10 +573,7 @@ int chunkStoreOpen(
         if( rc==SQLITE_OK ){
           parentOk = canWrite || exists;
           if( !parentOk ){
-            /* Parent is missing: still attempt OsOpen so the host VFS logs the
-            ** create-path failure like stock. oserror-1.3.2 expects a VFS log
-            ** line naming the failed create-path syscall. Access alone never
-            ** hits that log path. Create cannot succeed without a parent. */
+            /* OsOpen so the VFS logs the create-path failure (oserror-1.3.2). */
             sqlite3_file *pProbe = 0;
             int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                           | SQLITE_OPEN_MAIN_DB
@@ -635,7 +584,7 @@ int chunkStoreOpen(
             return SQLITE_CANTOPEN;
           }
         }
-        /* rc!=OK: probe inconclusive (e.g. ioerr fault injection) — defer. */
+        /* Probe IOERR: defer the open. */
       }
     }
     cs->index.nChunks = 0;
@@ -647,7 +596,7 @@ int chunkStoreOpen(
     cs->file.pFile = 0;
   }
 
-  /* Poison only after the open's own refs/branch reads are done. */
+  /* Poison after this open's refs/branch reads. */
   if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
 
   csMarkRefsCommitted(cs);
@@ -747,9 +696,7 @@ done:
 }
 
 int chunkStoreClose(ChunkStore *cs){
-  /* The marker is a pure optimization (skips recovery on the next open) and
-  ** every failure inside it is already a silent no-op, so its allocations
-  ** must not read as swallowed OOM under fault injection. */
+  /* Clean-close marker is optional; failures are silent, so malloc is benign. */
   sqlite3BeginBenignMalloc();
   csWriteCleanCloseMarker(cs);
   sqlite3EndBenignMalloc();
@@ -1212,7 +1159,6 @@ int chunkStorePut(
   return SQLITE_OK;
 }
 
-/* Stage pPrefix plus a symbolic zero tail without materializing the zeros. */
 int chunkStorePutSparse(
   ChunkStore *cs,
   const u8 *pPrefix,

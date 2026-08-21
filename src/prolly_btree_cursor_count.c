@@ -187,9 +187,7 @@ int sortKeyFromUnpackedForCount(
   return rc;
 }
 
-/* Smallest key sorting above every key that has pKey as a prefix. Trailing
-** 0xff bytes must be dropped, not carried: keeping them yields a bound above
-** the true successor, which counts keys past the end of the range. */
+/* Exclusive bound after prefix pKey. Drop trailing 0xff or the bound is too high. */
 static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
   int i;
   u8 *pOut;
@@ -208,12 +206,8 @@ static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut)
   return SQLITE_OK;
 }
 
-/* Exclusive end after a complete first-field encoding. A 9-byte exact
-** numeric is a byte prefix of the 18-byte neighbor that shares its IEEE
-** base; a raw prefix successor sits above that neighbor and would count
-** it as still inside the range. Extra composite columns start with a
-** field tag below 0x80, so appending the continuation marker keeps them
-** inside and leaves the neighbor out. */
+/* Exclusive end after a complete first field. Exact 9-byte numerics prefix
+** an 18-byte neighbor; a raw successor would count that neighbor in. */
 static int blobFieldSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
   if( nKey==9 && pKey[0]==SORTKEY_NUM ){
     u8 *pOut = sqlite3_malloc(10);
@@ -314,9 +308,6 @@ done:
   sqlite3_free(pUpperNext);
   return rc;
 }
-/* Drain any pending mutations for this cursor's table into the tree root so a
-** count walks committed data. Mirrors the snapshot/apply/clear sequence used
-** on the write path. */
 static int flushPendingForCount(BtCursor *pCur){
   struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( pTE && pTE->pPending ){

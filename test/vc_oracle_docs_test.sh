@@ -11,9 +11,7 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Both engines serve a synthetic default AGENT.md row, but the text differs.
-# Content comparisons filter it; agent scenarios compare it by name/count,
-# or by full row after the test overwrote the text.
+# Default AGENT.md text differs; filter it unless the test overwrote the row.
 normalize_docs() { tr -d '\r"' | grep '^D|' | grep -v '^D|AGENT\.md|' | sort; }
 normalize_status() { tr -d '\r"' | grep '^S|' | sort; }
 normalize_agent() { tr -d '\r"' | grep '^A|' | sort; }

@@ -338,15 +338,8 @@ int recordPrefixEquals(
   return 1;
 }
 
-/* Find the row whose primary key matches pPkRec.
-**
-** The stored value carries the key columns for an ordinary table, but when
-** the primary key covers every column there is nothing left to store and
-** the value record is empty -- the row lives entirely in the sort key.
-** Matching on the value alone therefore never finds those rows, and every
-** caller reads that as "no such row" and skips the check it was about to
-** make. Fall back to the record the sort key decodes to, and hand that back
-** as the row so the caller has the columns it came for. */
+/* PK-equals-all-columns rows store an empty value; match the sort-key
+** record instead or callers skip the check as "no such row". */
 int fetchRowByPkRecord(
   ChunkStore *cs,
   ProllyCache *pCache,

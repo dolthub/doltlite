@@ -7,15 +7,13 @@
 typedef struct PagerShim PagerShim;
 typedef struct PagerOps PagerOps;
 struct ChunkStore;
-/* PagerShim only satisfies the sqlite3Pager* calls Doltlite's btree facade
-** reaches; it is not a general replacement for SQLite's pager. */
+/* Satisfies sqlite3Pager* calls the btree facade reaches; not a real pager. */
 #define PAGER_SHIM_MAGIC 0x50534D31
 struct PagerShim {
   u32 magic;
   const PagerOps *pOps;
   sqlite3_file *pFd;
-  /* Non-NULL means shimPagerFile resolves the current store pFile. */
-  struct ChunkStore *pStore;
+  struct ChunkStore *pStore;  /* shimPagerFile uses current store pFile */
   char *zFilename;
   char *zJournal;
   u8 eLock;
@@ -29,11 +27,7 @@ PagerShim *pagerShimCreate(sqlite3_vfs *pVfs, const char *zFilename,
 
 void pagerShimDestroy(PagerShim *pShim);
 
-/* Bind the shim to a chunk store so file-handle resolution stays current
-** even when the underlying cs->pFile is replaced. */
 void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore);
-
-/* True when pPager is a chunk-store pager shim (vs a real SQLite pager). */
 int pagerShimIsShim(const Pager *pPager);
 
 sqlite3_file *sqlite3PagerFile(Pager*);

@@ -9,18 +9,6 @@
 
 #include <string.h>
 
-/*
-** SELECT dolt_verify_constraints([--all] [--output-only] [table...]);
-**
-** Mirrors Dolt's dolt_verify_constraints stored procedure:
-**   - Default: only tables that differ from HEAD are scanned, but every
-**     violating row in those tables is reported (not just rows new since HEAD).
-**   - --all: scan every table against an empty ancestor catalog.
-**   - Optional table names restrict which tables are scanned.
-**   - --output-only computes violations but does not persist them.
-** Returns 0 if no violations, 1 if any were found.
-*/
-
 static int tableExists(sqlite3 *db, const char *zName){
   sqlite3_stmt *pStmt = 0;
   char *zSql;
@@ -40,7 +28,6 @@ static int tableExists(sqlite3 *db, const char *zName){
   return found;
 }
 
-/* Collect user table names that differ between two catalogs. */
 static int collectChangedTables(
   sqlite3 *db,
   const ProllyHash *pAncCat,
@@ -259,12 +246,8 @@ static void doltVerifyConstraintsFunc(
     doltliteCommitClear(&headCommit);
   }
 
-  /*
-  ** Detection always uses an empty ancestor so every violating row in a
-  ** scanned table is reported (matching Dolt, which records both sides of a
-  ** unique-index collision). The default mode instead restricts the *set* of
-  ** tables to those that differ from HEAD.
-  */
+  /* Empty ancestor so every violating row is reported. Default mode only
+  ** restricts which tables are scanned (those differing from HEAD). */
   pDetectAnc = &emptyCat;
 
   if( bAll ){
@@ -277,7 +260,6 @@ static void doltVerifyConstraintsFunc(
       goto cleanup;
     }
     if( nArgTables>0 ){
-      /* Intersection of named tables and changed tables. */
       char **azInter = 0;
       int nInter = 0, nInterAlloc = 0;
       int j;
@@ -314,19 +296,15 @@ static void doltVerifyConstraintsFunc(
       nChanged = nInter;
     }
     if( nChanged==0 ){
-      /* No changed tables: nothing to scan. */
       goto detection_done;
     }
     azScan = (const char**)azChanged;
     nScan = nChanged;
   }
 
-  /* Only the tables about to be re-checked lose their recorded findings, so
-  ** the clear has to wait until the scan set is known. A default verify scans
-  ** just the tables that differ from HEAD; clearing the whole catalog would
-  ** drop findings for tables it never looks at, and the commit gate reads this
-  ** catalog. An empty scan set here means --all with no named tables, which
-  ** does re-check everything. */
+  /* Clear findings only for tables about to be re-checked. Default verify
+  ** scans tables that differ from HEAD; wholesale clear would drop others the
+  ** commit gate still reads. Empty scan set is --all with no names. */
   if( !bOutputOnly ){
     if( nScan>0 ){
       rc = doltliteClearConstraintViolationsForTables(
@@ -348,10 +326,8 @@ static void doltVerifyConstraintsFunc(
   }
 
 detection_done:
-  /* The result reports the catalog, not just this scan. A scoped verify that
-  ** looked at nothing violating still answers 1 while another table's finding
-  ** is recorded, because that finding is what the commit gate will refuse on.
-  ** Dolt answers the same way. */
+  /* Result is the catalog, not this scan: a scoped verify still returns 1 if
+  ** another table's finding remains. */
   if( nViolations==0 ){
     int found = 0;
     rc = hasRecordedViolations(db, azArgTables, nArgTables, &found);

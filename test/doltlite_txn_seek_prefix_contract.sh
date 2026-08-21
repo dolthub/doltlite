@@ -9,17 +9,9 @@ db_rm() {
 echo "=== Prefix-seek contract: bounds, tree+pending, extended numeric ==="
 echo ""
 
-# A prefix seek names only a leading column of a longer key. Moveto may land
-# on a prefix-equal row with res<0; vdbe then walks past every prefix match
-# for SeekGT/SeekLE, but only if eqSeen is set. An extended-numeric neighbour
-# shares the seek key's first 9 bytes, so comparing it used to clear eqSeen
-# and a single Next() would land on a pending twin of the bound.
-#
-# The rows in every case:
-#   lo  = k=-9007199254740995   (below the bound)
-#   eq  = k=-9007199254740994   (the exclusive/inclusive bound; 9-byte key)
-#   ext = k=-9007199254740993   (18-byte key that begins with eq's 9 bytes)
-# Plus a pending twin of eq with a different j, when the table is composite.
+# Prefix seek may land res<0; SeekGT/SeekLE walk matches only if eqSeen is set.
+# An 18-byte neighbour sharing the first 9 bytes used to clear eqSeen.
+# lo=-9007199254740995 eq=-9007199254740994 (9-byte) ext=-9007199254740993 (18-byte prefix of eq)
 
 DB=/tmp/test_seek_prefix_contract_$$.db
 db_rm "$DB"
@@ -78,8 +70,7 @@ run_test "desc_pk_pending_twin" \
 
 db_rm "$DB"
 
-# ext is pending, eq is committed. The 18-byte key used to be invisible to
-# a range whose bound is the 9-byte neighbour.
+# ext pending, eq committed; the 18-byte key used to be invisible to a 9-byte bound.
 run_test "pending_extended_neighbour" \
   "CREATE TABLE t(k INTEGER, j TEXT, a, PRIMARY KEY(k, j));
    INSERT INTO t VALUES(-9007199254740995, 'lo', 0);
@@ -154,7 +145,6 @@ run_test "positive_extended_pending_twin" \
 
 db_rm "$DB"
 
-# The exclusive lower bound must not rewrite the pending twin; only ext.
 run_test "range_update_skips_bound_twins" \
   "CREATE TABLE t(k INTEGER, j TEXT, a, PRIMARY KEY(k, j));
    INSERT INTO t VALUES(-9007199254740995, 'lo', 0);

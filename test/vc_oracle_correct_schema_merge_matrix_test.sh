@@ -1,15 +1,8 @@
 #!/bin/bash
 
-# Every ours x theirs schema-change pair, merged in DoltLite and in Dolt, with
-# the merged schema, the merged index set and the merged table data compared
-# column by column.
-#
-# The contract this enforces: either we produce exactly what Dolt produces, or
-# we refuse the merge. Merging to a different answer than Dolt is a failure,
-# and so is merging where Dolt refuses. A refusal where Dolt merges is a
-# divergence, allowed only while it is listed in KNOWN_DIVERGENCES below with
-# the reason and the issue that would close it -- an unlisted one fails, and so
-# does a listed one that starts passing, so the list cannot rot.
+# Ours×theirs schema pairs vs Dolt. Match or refuse; a different answer or
+# merging where Dolt refuses fails. A refusal where Dolt merges is listed
+# below; unlisted, or a listed pair that starts passing, fails.
 
 set -u
 
@@ -19,9 +12,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; gaps=0; corrupt=0; differs=0; skipped=0; FAILED_NAMES=""; GAP_NAMES=""; CORRUPT_NAMES=""; DIFFER_NAMES=""; SKIP_NAMES=""
 
-# Pairs we refuse while Dolt merges. Safe: refusing loses no data and the user
-# can still get there by hand. Each needs the reason and the issue that closes
-# it. A pair that starts merging fails here, so the list cannot rot.
+# Refuse while Dolt merges. A pair that starts merging fails here.
 REFUSE_WHERE_DOLT_MERGES="
 idx_b:ren_b:index over a renamed column is not retargeted (#2333)
 ren_b:idx_b:index over a renamed column is not retargeted (#2333)
@@ -45,25 +36,15 @@ btrig:ren_a:idx_a:rename under a pre-existing trigger while the other side index
 btrig:idx_a:ren_a:rename under a pre-existing trigger while the other side indexes it (#2333)
 "
 
-# Pairs we MERGE while Dolt refuses. Not safe: we resolve on the user's behalf
-# a disagreement Dolt hands back to them, so our answer is one Dolt would never
-# produce. Every entry here is a bug to fix by refusing, not a difference to
-# keep, and the suite prints them as gaps rather than passes.
+# Merge while Dolt refuses: a bug to fix by refusing, printed as a gap.
 MERGE_WHERE_DOLT_REFUSES="
 "
 
-# Pairs that still fail with "database disk image is malformed" -- a report of
-# corruption for a database that is fine. Never an acceptable refusal: the
-# message is wrong, the failure is permanent, and the user has nothing to act
-# on. Listed only to keep the suite honest about what remains; an unlisted one
-# fails, and so does a listed one that stops corrupting.
+# "disk image is malformed" is never an acceptable refusal; listed so rot is visible.
 CORRUPT_TODAY="
 "
 
-# Pairs where both engines merge but to different answers. The worst class in
-# this suite: we hand back a database Dolt would never have produced, and the
-# merge reports success. Listed only to keep the suite honest; fix by matching
-# Dolt or by refusing.
+# Both merge, different answers: match Dolt or refuse.
 MERGE_DIFFERS_TODAY="
 "
 
@@ -73,8 +54,7 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-# Some pairs only misbehave when the table already carries an index the change
-# does not touch, so the base for those ops includes one.
+# Some pairs only fail with an unrelated index already on the table.
 base_extra() {
   case "$1" in
     drop_b_with_index|idx_b_with_index) echo "CREATE INDEX ix0 ON t(a);";;
@@ -107,23 +87,15 @@ dt_op() {
   esac
 }
 
-# A view on b exists from the start only for the shapes that need it, so the
-# rename cases that carry a dependent are distinguishable from the bare ones.
+# View on b only for rename cases that carry a dependent.
 needs_view() { [ "$1" = ren_b_view ] || [ "$2" = ren_b_view ]; }
 
 OPS="ren_a ren_b drop_a drop_b add_d idx_b uniq_b idx_a rows ins ren_b_view drop_b_with_index trig ren_tbl"
 
-# The base fixture used to be bare, so every pair was only ever merged on a
-# table with no dependent object on it. That hid real corruption: a dual rename
-# breaks only when an index, view or trigger already covers a renamed column,
-# and the suite reported zero corrupting while that shape was live. These
-# variants replay a curated subset of the ops over a base that already carries
-# each kind of dependent.
+# Dual rename/index/view/trigger bugs only show with a dependent already present.
 BASE_VARIANT=""
 BASE_VARIANTS="bidx bview btrig"
-# Ops that can move a column or the table out from under a dependent. The full
-# matrix is not replayed per variant: at about a second a case it would put the
-# suite past ten minutes for pairs that cannot touch a dependent.
+# Ops that can move a column/table out from under a dependent (not the full matrix).
 VARIANT_OPS="ren_a ren_b drop_a drop_b idx_a ren_tbl rows"
 
 base_variant_dl() {
@@ -230,17 +202,13 @@ EOF
   dl_setup_err=$(printf '%s\n' "$dl_setup_out" | grep -iE '^error|error:' | head -1 | cut -c1-40)
   dt_setup_err=$(printf '%s\n' "$dt_setup_out" | grep -iE '^error|error:' | head -1 | cut -c1-40)
 
-  # Setup has to have produced the table on both sides, or the case says
-  # nothing about merging.
+  # Setup must produce the table on both sides.
   if ! "$DOLTLITE" "$db" "SELECT 1 FROM sqlite_master WHERE name IN ('t','t2') LIMIT 1;" \
         >/dev/null 2>&1; then
     fail_name "$name (doltlite setup failed)"; return
   fi
 
-  # Both engines must have reached the same starting point, or the merge
-  # results are not comparable. SQLite refuses DDL that MySQL accepts -- it
-  # will not drop a column an index covers -- so a setup statement can fail on
-  # one side only, and then the two are merging different histories.
+  # SQLite may reject DDL MySQL accepts (e.g. drop a covered column); skip mismatched setups.
   dl_pre=$("$DOLTLITE" "$db" \
     "SELECT group_concat(name) FROM pragma_table_info((SELECT name FROM sqlite_master
        WHERE type='table' AND name IN ('t','t2') LIMIT 1));" 2>/dev/null)
@@ -255,8 +223,7 @@ EOF
 
   dl_out=$("$DOLTLITE" "$db" "SELECT coalesce(dolt_merge('feat'),'NULL');" 2>&1)
   dl_rc=$?
-  # dolt_merge's own result table has a column called "conflicts", so the
-  # outcome has to be read from that column's value, never from the text.
+  # dolt_merge's result has a "conflicts" column; read that value, not the text.
   dt_out=$(cd "$repo" && "$DOLT" sql -r csv -q "CALL dolt_merge('feat');" 2>&1)
   dt_rc=$?
   dl_ok=1; dt_ok=1; dl_corrupt=0

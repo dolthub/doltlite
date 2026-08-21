@@ -1,8 +1,5 @@
 #!/bin/bash
-# NOCASE secondary indexes are patched inline during three-way merge with a
-# real KeyInfo (same path as conflicts resolve / workspace). This suite checks
-# that the post-merge index matches a full rebuild: same INDEXED BY results
-# before/after REINDEX, and after drop+recreate.
+# NOCASE indexes are patched inline with KeyInfo; post-merge must match a full rebuild.
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite Merge NOCASE Index Reindex Property ==="
@@ -40,7 +37,6 @@ run_test "nocase_merge_scores" \
   "SELECT group_concat(id || ':' || score, ',') FROM (SELECT id, score FROM t ORDER BY id);" \
   "1:11,2:21,3:30,4:40,5:50" "$DB"
 
-# Index seek uses NOCASE: 'alpha' matches Alpha.
 run_test "nocase_merge_idx_seek_alpha" \
   "SELECT id || ':' || score FROM t INDEXED BY idx_name WHERE name = 'alpha';" \
   "1:11" "$DB"
@@ -75,7 +71,6 @@ fi
 
 run_test_lastline "nocase_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 
-# DESC + NOCASE also uses KeyInfo-aware inline index patching.
 DB2=/tmp/test_merge_nocase_desc_$$.db
 rm -f "$DB2"
 cat <<'EOF' | $DOLTLITE "$DB2" > /dev/null 2>&1

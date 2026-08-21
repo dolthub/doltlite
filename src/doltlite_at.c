@@ -42,8 +42,7 @@ struct AtVtab {
 typedef struct AtCursor AtCursor;
 struct AtCursor {
   DoltliteVtabCursorCommon common;
-  /* Columns as the pinned commit's schema declares them; invalid renders
-  ** with the declared layout. */
+  /* Invalid renders with the declared layout. */
   DoltliteSideCols side;
   char *zCommitRef;
   int idxNum;
@@ -121,9 +120,7 @@ static int atEnqueueReachableRoots(
   return rc;
 }
 
-/* Whether the LIVE table's canonicalized schema hashes to pSchemaHash — when
-** it does, the declared layout is provably the visited schema's layout and
-** rendering with it cannot mislabel a value. */
+/* True if the live table schema hashes to pSchemaHash (safe to render as declared). */
 static int sideColsDeclaredSchemaMatches(
   sqlite3 *db,
   const char *zTable,
@@ -158,16 +155,9 @@ static int sideColsDeclaredSchemaMatches(
   return SQLITE_OK;
 }
 
-/* Load zTable's columns as the schema at pCatHash declares them and map the
-** declared (vtab-visible) columns onto them by name. Cached by schema hash.
-**
-** A side left invalid renders with the declared layout, so that fallback is
-** allowed only when it cannot mislabel a value: the table is absent at that
-** commit (nothing to render), or the live declared schema is byte-identical
-** to the visited one. Everything else — store errors, a schema row missing
-** for a side that holds rows, a schema the scratch db cannot parse (e.g. a
-** CHECK naming an application-registered function) that drifted — fails the
-** read instead of silently decoding records with the wrong layout. */
+/* Load columns as pCatHash declares them. Invalid-side fallback to declared
+** layout is allowed only when the table is absent or the live schema is
+** identical; otherwise fail rather than decode with the wrong layout. */
 int doltliteSideColsLoad(
   sqlite3 *db,
   const ProllyHash *pCatHash,
@@ -406,9 +396,7 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iRef].argvIndex=argvIdx++;
     pInfo->aConstraintUsage[iRef].omit=1;
     idxNum |= AT_IDX_REF;
-    /* Historical roots may not share the declared schema's key shape, so
-    ** PK constraints are never omitted: the values still push down for the
-    ** seek fast path, and SQLite re-checks them against the rendered row. */
+    /* Historical roots may differ in key shape: never omit PK constraints. */
     if( iEq>=0 ){
       pInfo->aConstraintUsage[iEq].argvIndex=argvIdx++;
       idxNum |= AT_IDX_PK_EQ;
@@ -586,8 +574,7 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  /* The EQ probe positioned the cursor only on an intkey root; a
-  ** shape-mismatched root is scanning and must keep stepping. */
+  /* EQ probe only positions intkey roots; mismatched shapes must keep stepping. */
   if( (c->idxNum & AT_IDX_PK_EQ) && c->common.rootIntKey ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;

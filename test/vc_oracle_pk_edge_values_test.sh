@@ -1,10 +1,5 @@
 #!/bin/bash
-#
-# Oracle tests for edge-case PRIMARY KEY *values* through the VC read
-# surfaces and merge. The pk-shape suites vary key column types but use
-# tame values; sort-key encoding has value-dependent paths (INT64
-# boundaries, empty and long strings, binary bytes, doubles), so exercise
-# those through commit -> diff -> AS OF -> merge against real Dolt.
+# PK *values* (INT64 bounds, empty/long strings, binary, doubles) through commit/diff/AS OF/merge vs Dolt.
 
 set -u
 

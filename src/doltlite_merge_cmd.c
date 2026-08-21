@@ -93,11 +93,8 @@ int mergeFastForward(
   return SQLITE_OK;
 }
 
-/* SQLite keeps whatever quoting the rename statement used, so a name quoted
-** here lands quoted in the stored schema while the same rename typed by hand
-** lands bare -- and the two then read as different column definitions, which
-** turns a later merge of two identical schemas into a conflict. Quote only
-** what cannot be written bare. */
+/* Quote only names that cannot be written bare: SQLite stores the
+** quoting, and quoted vs bare later conflict as different definitions. */
 static char *mergeQuotedIfNeeded(const char *zName){
   int i;
   int bPlain = zName[0]!=0
@@ -137,10 +134,8 @@ static int doltliteApplyMergeSchemaActions(
       sqlite3_free(zAlter);
       if( rc!=SQLITE_OK ) break;
     }
-    /* A rename the other side made. The adopted schema still calls the column
-    ** by its old name, and renaming rewrites no rows, so this only has to tell
-    ** the merged catalog the new name -- which also carries the dependent
-    ** index and view definitions across for free. */
+    /* Adopted schema still uses the old name; RENAME COLUMN rewrites no
+    ** rows and retargets dependent indexes and views. */
     for(sj=0; rc==SQLITE_OK && sj+1<aSchemaActions[si].nRenameColumns; sj+=2){
       char *zNew = mergeQuotedIfNeeded(aSchemaActions[si].azRenameColumns[sj+1]);
       char *zAlter = zNew ? sqlite3_mprintf(
@@ -152,7 +147,6 @@ static int doltliteApplyMergeSchemaActions(
       rc = sqlite3_exec(db, zAlter, 0, 0, 0);
       sqlite3_free(zAlter);
     }
-    /* Deletions the side whose schema was not adopted had already made. */
     for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nDropColumns; sj++){
       char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" DROP COLUMN \"%w\"",
                                       aSchemaActions[si].zTableName,
@@ -163,16 +157,12 @@ static int doltliteApplyMergeSchemaActions(
     }
   }
 
-  /* Row data (theirs' adds, edits to shared columns, deletes, and added-column
-  ** values) is merged three-way in doltliteMergeCatalogs against a normalized
-  ** theirs root, so only the schema evolution (the ALTERs above) happens here. */
   if( rc==SQLITE_OK ){
     rc = doltliteFlushCatalogToHash(db, pMergedCatHash);
   }
   return rc;
 }
 
-/* Load ours/theirs/ancestor commit catalogs for a three-way merge. */
 static int mergeRefLoadCatalogs(
   sqlite3 *db,
   const ProllyHash *pOurHead,
@@ -205,7 +195,6 @@ static int mergeRefLoadCatalogs(
   return SQLITE_OK;
 }
 
-/* After catalogs are merged: reindex, schema actions, flush/stage roots. */
 static int mergeRefInstallMergedCatalog(
   sqlite3 *db,
   const ProllyHash *pAncCat,
@@ -221,9 +210,8 @@ static int mergeRefInstallMergedCatalog(
 ){
   int rc;
 
-  /* Indexes adopted from the other branch carry only that branch's
-  ** rows; rebuild them over the merged tables while the merged catalog
-  ** is live so the flush below captures correct roots. */
+  /* Adopted indexes cover only their branch's rows; rebuild over merged
+  ** tables before the flush. */
   if( *pnReindex>0 ){
     rc = doltliteReindexNamedIndexes(db, *pazReindex, *pnReindex);
   }else{
@@ -249,22 +237,17 @@ static int mergeRefInstallMergedCatalog(
   *pnSchemaActions = 0;
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Derived vtab shadows whose conflicts were absorbed by the catalog
-  ** merge: rebuild each owner from its merged %_base and stored model
-  ** while the merged catalog is live, so the flush below captures the
-  ** rebuilt shadow roots. The list is only ever populated on merges the
-  ** filter proved otherwise conflict-free. */
+  /* Rebuild derived vtab shadows from merged %_base while the catalog
+  ** is live. Populated only on otherwise conflict-free merges. */
   if( *pnRebuildVtabs>0 && nMergeConflicts==0 ){
     int ri;
-    /* The owners live in the just-switched catalog, which sqlite3FindTable
-    ** cannot see until the schema is reloaded. */
+    /* Reload schema so FindTable sees the just-switched catalog. */
     (void)sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", 0, 0, 0);
     for(ri=0; ri<*pnRebuildVtabs && rc==SQLITE_OK; ri++){
       const char *zOwner = (*pazRebuildVtabs)[ri];
       Table *pTab = sqlite3FindTable(db, zOwner, "main");
       char *zSql;
-      /* Each module spells its rebuild differently: vec1 takes the stored
-      ** model as an argument, fts names itself in its own hidden column. */
+      /* vec1 takes the stored model; fts names itself in a hidden column. */
       if( pTab && IsVirtual(pTab) && pTab->u.vtab.nArg>0
        && sqlite3_stricmp(pTab->u.vtab.azArg[0], "vec1")!=0 ){
         zSql = sqlite3_mprintf(
@@ -287,7 +270,7 @@ static int mergeRefInstallMergedCatalog(
   *pnRebuildVtabs = 0;
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Regenerate stats after a clean merge; stat rows are derived data. */
+  /* sqlite_stat* is derived; ANALYZE after a clean merge. */
   if( nMergeConflicts==0 ){
     sqlite3_stmt *pProbe = 0;
     int hasStat1 = 0;
@@ -314,8 +297,6 @@ static int mergeRefInstallMergedCatalog(
   return rc;
 }
 
-/* Run post-merge constraint detectors. On SQLITE_OK, *pnViolations is the
-** total CV count; *pzErr may own a detector error string. */
 static int mergeRefDetectConstraintViolations(
   sqlite3 *db,
   const ProllyHash *pAncCat,
@@ -329,11 +310,8 @@ static int mergeRefDetectConstraintViolations(
 
   *pnViolations = 0;
   *pzErr = 0;
-  /* Each detector scans the merged tables with one statement and records what
-  ** it finds with another. In autocommit that inner write commits when it
-  ** halts, which ends the transaction the open scan is reading through -- the
-  ** next cursor it opens then has none, and an assert-enabled build dies on
-  ** it. Hold a transaction across the pass so the writes stay inside it. */
+  /* Detectors write while scanning. In autocommit that inner write
+  ** commits and the next cursor has no txn; hold one across the pass. */
   if( db->autoCommit ){
     vrc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
     if( vrc!=SQLITE_OK ) return vrc;
@@ -360,8 +338,6 @@ static int mergeRefDetectConstraintViolations(
   erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
   if( vrc==SQLITE_OK ) vrc = erc;
   if( bOwnTxn ){
-    /* Commit what the pass recorded, as the individual writes used to do on
-    ** their own. The caller decides what a non-empty violation set means. */
     erc = sqlite3_exec(db, vrc==SQLITE_OK ? "COMMIT" : "ROLLBACK", 0, 0, 0);
     if( vrc==SQLITE_OK ) vrc = erc;
   }
@@ -402,9 +378,8 @@ static int mergeRefCreateMergeCommit(
   rc = doltliteCreateAndStoreCommit(db, pOurHead, pMergedCat,
       msg, NULL, NULL, pTheirHead, 1, &commitHash);
   if( rc!=SQLITE_OK ){
-    /* The merged catalog is already live and staged; leaving it in place
-    ** lets a retry with plain dolt_commit record the merged data as a
-    ** single-parent commit, silently dropping theirHead from ancestry. */
+    /* Catalog is already live; leaving it lets dolt_commit drop theirHead
+    ** from ancestry. Restore first. */
     (void)doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
     sqlite3_result_error(context, "failed to create merge commit", -1);
     return SQLITE_ERROR;
@@ -542,7 +517,6 @@ int doltliteMergeRef(
                               &azRebuildVtabs, &nRebuildVtabs);
   if( rc!=SQLITE_OK ){
     if( !zOwnedErr ) zFail = "merge failed";
-    /* Catalog merge never mutated the live catalog; drop the snapshot. */
     goto merge_fail;
   }
   sqlite3_free(zOwnedErr);
@@ -551,15 +525,11 @@ int doltliteMergeRef(
   if( nMergeConflicts>0 ){
     ProllyHash conflictsHash;
     doltliteGetSessionConflictsCatalog(db, &conflictsHash);
-    /* From here the session is marked as merging, so every later exit has to
-    ** restore the saved state rather than discard it. Discarding leaves
-    ** isMerging set with a conflicts catalog while the caller is told the merge
-    ** did not happen, and the next merge then refuses because one is already in
-    ** progress. */
+    /* isMerging is now set: later failures must restore, not discard,
+    ** or the next merge refuses as already in progress. */
     bRestoreOnFail = 1;
     rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
-    /* Caching the spec only sharpens dolt_merge_status.source, which falls
-    ** back to the branch at theirHead, so losing it must not fail the merge. */
+    /* Spec cache only sharpens dolt_merge_status.source; ignore failure. */
     (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
     if( rc!=SQLITE_OK ) goto merge_fail;
   }
@@ -602,14 +572,8 @@ int doltliteMergeRef(
     goto merge_fail;
   }
   if( nViolations > 0 ){
-    /* A merge stopped by constraint violations is as unfinished as one
-    ** stopped by conflicts: the caller has to resolve
-    ** dolt_constraint_violations and commit. Record the merge so
-    ** dolt_merge_status reports it, before the finish path persists the
-    ** working set. Redundant when conflicts already set it, and the
-    ** autocommit/nested-savepoint modes inside the finish call roll it back
-    ** with the rest of the merge. When row/schema conflicts are also
-    ** present, report both so the caller does not miss dolt_conflicts. */
+    /* CVs leave the merge unfinished: record it so dolt_merge_status
+    ** reports it. If row/schema conflicts exist too, report both. */
     ProllyHash cvConflictsHash;
     doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
     if( doltliteSetSessionMergeState(db, 1, &theirHead,

@@ -1,15 +1,6 @@
 #!/bin/bash
-#
-# Oracle: after cloning a remote, fetching/pulling later pushes must converge
-# the consumer to the remote the same way real Dolt does -- fast-forward
-# pulls, divergent (merge) pulls, and multi-branch fetch + tracking checkout.
-# The existing vc_oracle_remotes suite covers a single fetch/checkout; this
-# adds the incremental "remote advances, consumer catches up" surface.
-#
-# doltlite consumes with dolt_clone/dolt_fetch/dolt_pull against a file:// .db
-# remote; Dolt clones a directory remote and fetches/pulls there. Commit
-# hashes and wall-clock dates differ by design and are never compared; row
-# sets, counts, commit messages, branch lists, and active branch are.
+# After clone, fetch/pull later pushes vs Dolt. file:// .db vs directory remote;
+# hashes/dates are never compared.
 
 set -u
 
@@ -21,16 +12,11 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Run a full doltlite-vs-dolt remote flow and compare one query. The flow is
-# expressed as three phases of engine-agnostic SQL (SELECT dolt_*; the dolt
-# side is auto-translated to CALL): $seed builds+pushes the source, $advance
-# pushes more from the source, $consume runs on the freshly cloned consumer.
-# The remote URL/dir is substituted for the token @REMOTE@.
+# seed (source push), advance (more from source), consume (cloned consumer). @REMOTE@.
 remote_flow() {
   local name="$1" seed="$2" advance="$3" consume="$4" dl_query="$5" dt_query="$6"
   local dir="$TMPROOT/$name"; mkdir -p "$dir"
 
-  # ---------- doltlite ----------
   local dl_remote="file://$dir/remote.db"
   local dl_src="$dir/src.db" dl_con="$dir/con.db"
   printf '%s\n' "${seed//@REMOTE@/$dl_remote}" \
@@ -46,7 +32,6 @@ remote_flow() {
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
            | "$DOLTLITE" "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
 
-  # ---------- dolt ----------
   local dt_remote="$dir/dt_remote"
   local dt_seed dt_advance dt_consume dt_q
   dt_seed=$(vc_oracle_translate_for_dolt "${seed//@REMOTE@/file://$dt_remote}")
@@ -76,7 +61,6 @@ remote_flow() {
 echo "=== Version Control Oracle Test: fetch/pull convergence ==="
 echo ""
 
-# ---- fast-forward pull: remote gains two commits, consumer pulls ----
 FF_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1,'one');
@@ -104,9 +88,6 @@ remote_flow "ff_log_count" "$FF_SEED" "$FF_ADVANCE" "$FF_PULL" \
   "SELECT 'R|'||count(*) FROM dolt_log;" \
   "SELECT CONCAT('R|',count(*)) FROM dolt_log;"
 
-# ---- fetch (no merge): remote advances, consumer fetches; working stays put,
-#      origin/main advances. Compare the tracked-ref row count via a topic
-#      branch off origin/main. ----
 echo "--- fetch then track origin/main ---"
 FETCH_TRACK="
 SELECT dolt_fetch('origin','main');
@@ -116,8 +97,6 @@ remote_flow "fetch_track_contents" "$FF_SEED" "$FF_ADVANCE" "$FETCH_TRACK" \
   "SELECT 'R|'||active_branch()||'|'||count(*) FROM t;" \
   "SELECT CONCAT('R|',active_branch(),'|',count(*)) FROM t;"
 
-# ---- fresh remote whose only pushed branch is not main: clone lands on that
-#      branch, then pull/fetch by explicit branch name after the remote moves. ----
 echo "--- fresh remote non-main branch pull/fetch ---"
 NONMAIN_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -143,8 +122,6 @@ remote_flow "nonmain_fetch_track_contents" "$NONMAIN_SEED" "$NONMAIN_ADVANCE" \
   "SELECT 'R|'||active_branch()||'|'||id||'|'||v FROM t;" \
   "SELECT CONCAT('R|',active_branch(),'|',id,'|',v) FROM t;"
 
-# ---- pull from an explicitly fetched remote-tracking branch after both the
-#      remote branch and the local topic branch gain independent commits. ----
 echo "--- divergent pull from refreshed remote tracking branch ---"
 TOPIC_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -179,8 +156,6 @@ remote_flow "tracking_branch_pull_log_count" "$TOPIC_SEED" "$TOPIC_ADVANCE" "$TO
   "SELECT 'R|'||active_branch()||'|'||count(*) FROM dolt_log;" \
   "SELECT CONCAT('R|',active_branch(),'|',count(*)) FROM dolt_log;"
 
-# ---- divergent pull: consumer commits a disjoint row locally while the
-#      remote gains a disjoint row; pull fetches origin/main and merges it. ----
 echo "--- divergent pull auto-merge (no conflict) ---"
 MERGE_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -209,8 +184,6 @@ remote_flow "merge_log_count" "$MERGE_SEED" "$MERGE_ADVANCE" "$MERGE_PULL" \
   "SELECT 'R|'||count(*) FROM dolt_log;" \
   "SELECT CONCAT('R|',count(*)) FROM dolt_log;"
 
-# ---- divergent pull with compatible schema/data changes: the remote changes
-#      schema while the consumer commits data against the old schema. ----
 echo "--- divergent pull auto-merge (schema + data) ---"
 SCHEMA_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -238,8 +211,6 @@ remote_flow "merge_schema_shape" "$SCHEMA_SEED" "$SCHEMA_ADVANCE" "$SCHEMA_PULL"
   "SELECT 'R|'||name FROM pragma_table_info('t') ORDER BY cid;" \
   "SELECT CONCAT('R|',column_name) FROM information_schema.columns WHERE table_name='t' ORDER BY ordinal_position;"
 
-# ---- divergent pull where the remote adds a table and the consumer changes
-#      existing data. ----
 echo "--- divergent pull auto-merge (new table + local row) ---"
 TABLE_ADVANCE="
 CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
@@ -251,8 +222,7 @@ remote_flow "merge_new_table_and_local_row" "$MERGE_SEED" "$TABLE_ADVANCE" "$MER
   "SELECT 'R|t|'||id||'|'||v FROM t UNION ALL SELECT 'R|u|'||id||'|'||v FROM u;" \
   "SELECT CONCAT('R|t|',id,'|',v) FROM t UNION ALL SELECT CONCAT('R|u|',id,'|',v) FROM u;"
 
-# ---- divergent pull with a data conflict: both sides update the same row.
-#      Compare the post-state, not exact error text. ----
+# Conflict: compare post-state, not error text.
 echo "--- divergent pull conflict post-state ---"
 CONFLICT_ADVANCE="
 UPDATE t SET v='from-remote' WHERE id=1;
@@ -268,7 +238,6 @@ remote_flow "pull_conflict_poststate" "$MERGE_SEED" "$CONFLICT_ADVANCE" "$CONFLI
   "SELECT 'R|'||(SELECT count(*) FROM dolt_conflicts)||'|'||(SELECT v FROM t WHERE id=1);" \
   "SELECT CONCAT('R|',(SELECT COUNT(*) FROM dolt_conflicts),'|',(SELECT v FROM t WHERE id=1));"
 
-# ---- divergent pull where both sides add independent indexes and rows. ----
 echo "--- divergent pull auto-merge (independent indexes) ---"
 INDEX_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(32), tag VARCHAR(32));
@@ -298,8 +267,6 @@ remote_flow "merge_independent_indexes_rows" "$INDEX_SEED" "$INDEX_ADVANCE" "$IN
    SELECT CONCAT('R|idx|',index_name) FROM information_schema.statistics
     WHERE table_name='t' AND index_name IN ('t_tag_idx','t_v_idx');"
 
-# ---- divergent pull where the remote renames/adds columns while the
-#      consumer inserts a row against the old schema. ----
 echo "--- divergent pull auto-merge (rename/add column + local insert) ---"
 RENAME_ADVANCE="
 ALTER TABLE t RENAME COLUMN v TO val;
@@ -317,8 +284,6 @@ remote_flow "merge_rename_add_column_local_insert" "$SCHEMA_SEED" "$RENAME_ADVAN
    UNION ALL
    SELECT CONCAT('R|row|',id,'|',val,'|',IFNULL(note,'NULL')) FROM t;"
 
-# ---- divergent pull where the remote drops a table while the consumer edits
-#      that table. Compare conflict/table existence post-state. ----
 echo "--- divergent pull conflict (remote drop + local edit) ---"
 DROP_ADVANCE="
 DROP TABLE t;
@@ -339,8 +304,6 @@ remote_flow "pull_drop_edit_conflict_poststate" "$MERGE_SEED" "$DROP_ADVANCE" "$
    SELECT CONCAT('R|tables|',count(*)) FROM information_schema.tables
     WHERE table_schema=database() AND table_name='t';"
 
-# ---- multi-branch fetch: two branches pushed; consumer fetches and tracks
-#      each; compare contents per tracked branch. ----
 echo "--- multi-branch fetch + tracking ---"
 MB_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -371,8 +334,7 @@ remote_flow "mb_featB" "$MB_SEED" "" \
 echo ""
 echo "--- schema objects (views, triggers, indexes) ---"
 
-# Same phases as remote_flow, but per-system scripts: trigger bodies cannot
-# share one script across dialects (SQLite BEGIN...END vs MySQL FOR EACH ROW).
+# Per-engine scripts: trigger bodies cannot share SQLite vs MySQL dialect.
 remote_flow_dual() {
   local name="$1" dl_seed="$2" dt_seed="$3" advance_dl="$4" advance_dt="$5" consume="$6" dl_query="$7" dt_query="$8"
   local dir="$TMPROOT/$name"; mkdir -p "$dir"

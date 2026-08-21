@@ -2,8 +2,7 @@
 
 #include "doltlite_merge_constraints_int.h"
 
-/* FK specs whose parent-side column is unnamed (azTo[i]==0) reference the
-** parent's primary key positionally; fill those slots from zParent's PK. */
+/* Unnamed azTo slots are the parent PK by position. */
 static int backfillParentPk(sqlite3 *db, const char *zParent,
                             char **azTo, int nCol){
   int i, needParentPk = 0;

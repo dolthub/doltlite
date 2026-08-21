@@ -243,9 +243,7 @@ void origBtreeLeave(void *p){
 }
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
 
-/* Probe failures normally mean "not a legacy sqlite file" (the chunk-store
-** open reports the real problem), but an OOM must propagate so it is not
-** masked by a successful chunk-store open. */
+/* Probe failure usually means "not a legacy sqlite file"; OOM must still propagate. */
 int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
                           int *pIsSqliteFile){
   sqlite3_file *pFile = 0;
@@ -269,13 +267,11 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
 
-  /* SQLITE_OPEN_MAIN_DB puts this name under the VFS double-nul contract:
-  ** the URI scan walks past the first nul. Callers hand us plain strings. */
+  /* SQLITE_OPEN_MAIN_DB uses VFS double-nul; callers hand us plain strings. */
   rc = chunkStoreDupFilenameDoubleNul(zFilename, &zProbe);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* The handle keeps the name, not a copy of it, so zProbe has to outlive the
-  ** close: unixClose logs pFile->zPath on the way out. */
+  /* zProbe must outlive close: unixClose logs pFile->zPath. */
   rc = sqlite3OsOpenMalloc(pVfs, zProbe, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                            &outFlags);

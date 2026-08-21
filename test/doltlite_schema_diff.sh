@@ -61,8 +61,7 @@ run_test_match "bad_to_ref_errors" \
 run_test_match "bad_single_arg_errors" \
   "SELECT count(*) FROM dolt_schema_diff('definitely_not_a_ref');" \
   "Error" "$DB"
-# A malformed range endpoint must name the unresolvable ref, not emit a
-# generic error, matching the two-arg form.
+# Malformed range endpoint must name the unresolvable ref, matching the two-arg form.
 run_test_match "bad_range_from_names_endpoint" \
   "SELECT count(*) FROM dolt_schema_diff('does-not-exist..HEAD');" \
   "from_ref 'does-not-exist' could not be resolved" "$DB"
@@ -394,10 +393,7 @@ run_test_match "rebase_replay_u_to_stmt" \
 
 rm -f "$DB"
 
-# WORKING / STAGED pseudo-refs must resolve like the other dolt_* surfaces.
-# Before the catalog-aware resolver fix, schema_diff only accepted commit refs,
-# so HEAD/WORKING (and HEAD..WORKING, HEAD/STAGED) errored with
-# "to_ref 'WORKING' could not be resolved".
+# WORKING/STAGED must resolve like other dolt_* surfaces, not only commit refs.
 DB=/tmp/test_sd_working_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');

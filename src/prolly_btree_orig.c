@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Dispatch adapters for attached databases backed by SQLite's B-tree. */
-
 int origBtreeCloseVt(Btree *p){
   int rc;
   assert( p!=0 && p->pOrigBtree!=0 );
@@ -260,7 +258,6 @@ int origCursorTransferRowVt(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   return origBtreeTransferRow(pDest->pOrigCursor, pSrc->pOrigCursor, iKey);
 }
 void origCursorClearCursorVt(BtCursor *pCur){
-  /* OP_NullRow must invalidate underlying orig cursors too. */
   origBtreeClearCursor(pCur->pOrigCursor);
 }
 int origCursorCountVt(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
@@ -311,9 +308,7 @@ int origCursorPutDataVt(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   return origBtreePutData(pCur->pOrigCursor, offset, amt, pBuf);
 }
 void origCursorIncrblobCursorVt(BtCursor *pCur){
-  /* Marks the stock cursor as an incremental-blob cursor, which is how the
-  ** stock btree knows to reseek it rather than invalidate it when the row is
-  ** written. Dropping it left blob handles stale across writes. */
+  /* Stock incrblob reseeks on write; omitting this left blob handles stale. */
   origBtreeIncrblobCursor(pCur->pOrigCursor);
 }
 #endif

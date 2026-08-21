@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Orig-adapter cursor ops must forward to stock B-tree, not stub or reimplement.
-# Dummy Offset/CountRange returns were silent SQLite-file corruption.
+# Dummy Offset/CountRange returns corrupted SQLite files.
 
 set -euo pipefail
 

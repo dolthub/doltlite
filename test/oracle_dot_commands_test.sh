@@ -45,9 +45,7 @@ oracle() {
   fi
 }
 
-# Listing commands enumerate sqlite_master, whose order is canonical
-# (type-rank/name sorted) in doltlite but creation order in stock; compare
-# these order-insensitively, content only.
+# sqlite_master order differs (canonical vs creation); compare sorted.
 oracle_sorted() {
   local name="$1" setup="$2" cmd="$3"
   local dir="$TMPROOT/$name"

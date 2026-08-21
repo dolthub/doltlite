@@ -1,19 +1,6 @@
 #!/bin/bash
-#
-# Oracle: push a non-main branch into a fresh remote, then consume it, and
-# require the consumer to match real Dolt across the version-control surface
-# -- active branch, table contents, branch list, log, status, history, and
-# post-consume mutation (commit, branch).
-#
-# doltlite consumes its own push target by opening the file directly (its
-# push writes a usable database, not a bare repo); Dolt consumes the bare
-# remote by cloning. After the push-default-branch fix both land on the
-# pushed branch, so every downstream VC read should agree. Commit hashes and
-# wall-clock dates legitimately differ and are never compared.
-#
-# Each branch is consumed ONCE into a pristine doltlite target file and a
-# pristine dolt clone; read scenarios query those directly, and mutation
-# scenarios run against forcecopy'd copies so they stay independent.
+# doltlite consumes a push by opening the file; Dolt clones the bare remote.
+# Hashes and dates differ and are never compared.
 
 set -u
 
@@ -25,11 +12,7 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Build a source whose feature branch $2 carries the given history, push only
-# that branch into a fresh remote, and materialize two consumers:
-#   $CONSUME_DL  -- doltlite target file (push writes it directly)
-#   $CONSUME_DT  -- dolt clone directory
-# $3 is the source body run before branching (main-side); $4 the feature-side.
+# $2 feature branch; $3 main-side body; $4 feature-side. CONSUME_DL file, CONSUME_DT clone.
 consume_branch() {
   local key="$1" branch="$2"
   local base="$TMPROOT/$key"
@@ -38,7 +21,6 @@ consume_branch() {
   CONSUME_DL="$base/tgt.db"
   CONSUME_DT="$base/clone"
 
-  # doltlite: source -> push $branch -> target file.
   printf '%s\n' "
     CREATE TABLE example(id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     INSERT INTO example VALUES (1, 'one');
@@ -56,7 +38,6 @@ consume_branch() {
     SELECT dolt_push('origin','$branch');
   " | "$DOLTLITE" "$base/src.db" >"$base/dl_push.out" 2>"$base/dl_push.err"
 
-  # dolt: source -> push $branch to a bare remote -> clone.
   (
     mkdir -p "$base/dsrc" "$base/drem"
     cd "$base/dsrc" || exit 1
@@ -135,8 +116,7 @@ SQL
   )
 }
 
-# Query the prebuilt consumers and compare. $mut (optional) is applied to a
-# fresh copy of each consumer first.
+# $mut (optional) is applied to a fresh copy of each consumer first.
 compare() {
   local name="$1" mut="$2" dl_query="$3" dt_query="$4"
   local dir="$TMPROOT/$name"

@@ -697,12 +697,7 @@ run_test_match "branch_name_after_rollback" \
   "SELECT name FROM dolt_branches ORDER BY name;" \
   "main" "$DB9"
 
-# A branch switch seals the transaction it runs in. Releasing the savepoints
-# is not enough on its own: an enclosing BEGIN left open means a later
-# ROLLBACK reverts the working set to the branch we left while the ref already
-# names the one we switched to, and that mismatch is what gets persisted. The
-# plain-BEGIN and bare-SAVEPOINT shapes above never had the open BEGIN, so the
-# combination is the case that needs pinning.
+# Branch switch seals the txn; an open enclosing BEGIN lets ROLLBACK split HEAD from the working set.
 DBSP1=/tmp/test_sp_begin_checkout_$$.db; rm -f "$DBSP1"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
 INSERT INTO t VALUES(1,10),(2,20);
@@ -727,8 +722,7 @@ run_test "begin_savepoint_checkout_target_clean" \
 run_test "begin_savepoint_checkout_source_intact" \
   "SELECT group_concat(a) FROM t WHERE a IN (1,2,4);" "1,2,4" "$DBSP1"
 
-# The same seal carries the interactive rebase claim and plan, which are
-# written before the switch and are lost with the transaction if it stays open.
+# The same seal carries the interactive rebase claim and plan.
 DBSP2=/tmp/test_sp_begin_rebase_$$.db; rm -f "$DBSP2"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
 INSERT INTO t VALUES(1,10);

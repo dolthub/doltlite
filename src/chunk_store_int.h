@@ -1,8 +1,6 @@
 #ifndef CHUNK_STORE_INT_H
 #define CHUNK_STORE_INT_H
 
-/* Private declarations shared by the chunk_store implementation modules. */
-
 #include "chunk_store.h"
 #include "prolly_hash.h"
 #include "prolly_encoding.h"

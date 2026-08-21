@@ -305,9 +305,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('--amend', '-m', 'amended with row 2');
 "
 
-# Amending a merge must keep every parent. Dropping all but the first takes the
-# merged branch out of ancestry, so the log loses a commit and a later merge of
-# the same branch is no longer a no-op.
+# Amending a merge must keep every parent; dropping them makes a later merge of the same branch replay.
 oracle "commit_amend_merge_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

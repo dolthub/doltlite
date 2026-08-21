@@ -172,9 +172,7 @@ run_test "constraint_violation_no_conflicts" "SELECT count(*) FROM dolt_conflict
 run_test "constraint_violation_no_violations" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11"
 run_test "constraint_violation_state_restored" "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id);" "1:9:main1,2:2:base2" "$DB11"
 
-# Same-cell data conflict plus a unique CV on the same merge. The finish path
-# used to report only constraint violations and return early, so callers never
-# saw that dolt_conflicts was also populated under BEGIN/COMMIT.
+# Same-cell conflict plus unique CV: finish used to report only CVs and skip conflicts.
 DB11B=/tmp/test_merge11b_$$.db; rm -f "$DB11B"
 cat <<'EOF' | $DOLTLITE "$DB11B" > /dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
@@ -401,10 +399,7 @@ run_test "fk_chain_delete_cascades_same_session" "PRAGMA foreign_keys=ON; DELETE
 run_test "fk_chain_reopen_state" "PRAGMA foreign_keys=ON; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "1|0|0" "$DB22"
 run_test "fk_chain_reopen_delete_last_root" "PRAGMA foreign_keys=ON; DELETE FROM gp WHERE id=2; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "0|0|0" "$DB22"
 
-# Many constraint violations in a single merge: feat adds 300 children, main
-# deletes their parent, so the merge orphans all 300 at once. Each is appended
-# to the violation set during one detection pass; the count must reflect every
-# one (exercises batched accumulation at scale, not just a single violation).
+# 300 orphans in one detection pass; the count must include every one.
 DB23=/tmp/test_merge23_$$.db; rm -f "$DB23"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY);
 CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT, FOREIGN KEY(pid) REFERENCES parent(id));
@@ -425,17 +420,14 @@ else
   FAIL=$((FAIL+1))
   ERRORS="$ERRORS\nFAIL: many_fk_violations_all_recorded\n  expected: TX|1|300\n  got:      $TX_OUT"
 fi
-# Autocommit merge with the same violations rolls the whole merge back.
+# Autocommit with the same CVs rolls the whole merge back.
 echo "SELECT dolt_merge('feat');" | $DOLTLITE "$DB23" > /dev/null 2>&1
 run_test "many_fk_violations_autocommit_rolled_back" \
   "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB23"
 run_test "many_fk_violations_parent_restored" \
   "SELECT count(*) FROM parent;" "0" "$DB23"
 
-# A clean merge is a transaction boundary like dolt_commit: it seals the
-# enclosing BEGIN when it advances the ref. Leaving the transaction open let
-# a later ROLLBACK revert the working set while the advanced ref stayed,
-# splitting HEAD from the data.
+# Clean merge seals the enclosing BEGIN; otherwise ROLLBACK split HEAD from data.
 DB24=/tmp/test_merge24_$$.db; rm -f "$DB24"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','base');
@@ -510,10 +502,7 @@ run_test "identical_recreate_rows" "SELECT group_concat(pk || ':' || v, ',') FRO
 run_test "identical_recreate_integrity" "PRAGMA integrity_check;" "ok" "$DB28"
 
 
-# The primary key decides where a row sorts and which rows collide, so a
-# change to its collation or sort direction makes the two keyspaces
-# incomparable just as a column or type change does. Merging across one
-# produced a committed table whose rows are out of key order.
+# PK collation/sort-order change makes keyspaces incomparable; used to commit out of order.
 DB29=/tmp/test_merge29_$$.db; rm -f "$DB29"
 echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB29" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB29" > /dev/null 2>&1
@@ -530,8 +519,7 @@ echo "INSERT INTO t VALUES(5,1,'m'); SELECT dolt_commit('-A','-m','main row');" 
 run_test_match "pk_sort_order_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB30"
 run_test "pk_sort_order_change_integrity" "PRAGMA integrity_check;" "ok" "$DB30"
 
-# Matching collations must still merge: the signature names collation, so a
-# table that always had one must not start refusing its own merges.
+# Matching collations must still merge (signature names collation).
 DB31=/tmp/test_merge31_$$.db; rm -f "$DB31"
 echo "CREATE TABLE t(pk TEXT COLLATE NOCASE PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB31" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB31" > /dev/null 2>&1
@@ -540,7 +528,7 @@ echo "INSERT INTO t VALUES('c',3); SELECT dolt_commit('-A','-m','main row');" | 
 run_test_match "pk_same_collation_merges" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB31"
 run_test "pk_same_collation_rows" "SELECT count(*) FROM t;" "3" "$DB31"
 
-# A DESC primary key on both sides is likewise unchanged, so it merges.
+# DESC PK on both sides is unchanged, so it merges.
 DB32=/tmp/test_merge32_$$.db; rm -f "$DB32"
 echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a DESC, b)) WITHOUT ROWID; INSERT INTO t VALUES(1,1,'x'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB32" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB32" > /dev/null 2>&1
@@ -548,10 +536,7 @@ echo "INSERT INTO t VALUES(2,1,'y'); SELECT dolt_commit('-A','-m','feat row');" 
 echo "INSERT INTO t VALUES(3,1,'z'); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB32" > /dev/null 2>&1
 run_test_match "pk_same_desc_merges" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB32"
 run_test "pk_same_desc_integrity" "PRAGMA integrity_check;" "ok" "$DB32"
-# When the primary key covers every column the value record is empty and the
-# row lives in the sort key, so a lookup that matched on the value alone
-# found nothing and every constraint detector skipped the row: violating
-# merges committed clean. Dolt records these and refuses the merge.
+# PK-only rows live in the sort key; a value-only lookup skipped them (CVs missed).
 DB33=/tmp/test_merge33_$$.db; rm -f "$DB33"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT REFERENCES parent(id), tag TEXT, PRIMARY KEY(pid,tag)); INSERT INTO parent VALUES(1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB33" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB33" > /dev/null 2>&1
@@ -576,8 +561,7 @@ echo "INSERT INTO t VALUES(2,5); SELECT dolt_commit('-A','-m','feat dup');" | $D
 echo "INSERT INTO t VALUES(3,5); SELECT dolt_commit('-A','-m','main dup');" | $DOLTLITE "$DB34" > /dev/null 2>&1
 run_test_match "pk_only_unique_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB34"
 
-# A table with a non-key column still stores its value record, so the
-# ordinary path must keep working.
+# A non-key column still stores a value record; ordinary path must keep working.
 DB35=/tmp/test_merge35_$$.db; rm -f "$DB35"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT REFERENCES parent(id), tag TEXT, note TEXT, PRIMARY KEY(pid,tag)); INSERT INTO parent VALUES(1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB35" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB35" > /dev/null 2>&1
@@ -585,7 +569,7 @@ echo "INSERT INTO child VALUES(1,'t1','n'); SELECT dolt_commit('-A','-m','child 
 echo "DELETE FROM parent WHERE id=1; SELECT dolt_commit('-A','-m','drop parent');" | $DOLTLITE "$DB35" > /dev/null 2>&1
 run_test_match "valued_row_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB35"
 
-# And a clean merge on a PK-only table must stay clean.
+# Clean merge on a PK-only table must stay clean.
 DB36=/tmp/test_merge36_$$.db; rm -f "$DB36"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT REFERENCES parent(id), tag TEXT, PRIMARY KEY(pid,tag)); INSERT INTO parent VALUES(1),(2); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB36" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB36" > /dev/null 2>&1
@@ -595,10 +579,7 @@ run_test_match "pk_only_clean_merge_hash" "SELECT dolt_merge('feature');" "^[0-9
 run_test "pk_only_clean_merge_rows" "SELECT count(*) FROM child;" "2" "$DB36"
 
 
-# Both sides adding a column leaves each side's rows short of the other's
-# column. Rewriting theirs into the merged layout has to fill our column
-# with its declared default: the record now physically covers that slot, so
-# an explicit NULL there replaces a default the table always read.
+# Dual add-column: rewrite must fill our column with its declared default, not NULL.
 DB37=/tmp/test_merge37_$$.db; rm -f "$DB37"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB37" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB37" > /dev/null 2>&1
@@ -607,8 +588,7 @@ echo "ALTER TABLE t ADD COLUMN n INT DEFAULT 9; SELECT dolt_commit('-A','-m','ma
 run_test_match "dual_add_column_merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB37"
 run_test "dual_add_column_defaults" "SELECT group_concat(id || ':' || quote(n) || ':' || quote(m), ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:9:5,2:9:7,3:9:NULL" "$DB37"
 
-# Text defaults take the same path, and a NOT NULL default must not turn
-# into a constraint violation invented by the rewrite.
+# NOT NULL default must not become a CV invented by the rewrite.
 DB38=/tmp/test_merge38_$$.db; rm -f "$DB38"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB38" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB38" > /dev/null 2>&1
@@ -618,8 +598,7 @@ run_test_match "dual_add_text_default_merge_hash" "SELECT dolt_merge('feature');
 run_test "dual_add_text_defaults" "SELECT group_concat(id || ':' || n || ':' || m, ',') FROM (SELECT id,n,m FROM t ORDER BY id);" "1:en:em,2:en:x" "$DB38"
 run_test "dual_add_not_null_no_violation" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB38"
 
-# A column with no default still reads NULL, and rows that predate it stay
-# NULL rather than gaining a value.
+# No default still reads NULL; pre-existing rows stay NULL.
 DB39=/tmp/test_merge39_$$.db; rm -f "$DB39"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB39" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB39" > /dev/null 2>&1

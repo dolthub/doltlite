@@ -1,10 +1,5 @@
 #!/bin/bash
-#
-# Oracle tests for clustered-key VC operations at multi-chunk scale. The
-# pk-shape suites use 3-5 row tables -- a single prolly leaf -- so tree
-# splits, internal nodes, and chunk-boundary keys never form. Build ~1500-row
-# tables per key shape, run branch edits over disjoint ranges plus a merge,
-# and compare aggregates, boundary samples, and diff counts against Dolt.
+# ~1500-row tables per key shape so splits and internal nodes form; compare aggregates vs Dolt.
 
 set -u
 
@@ -106,8 +101,7 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feat');
 "
 
-  # Ranged diff on the linear pre-merge history: post-merge per-commit
-  # attribution differs between the systems by design.
+  # Pre-merge ranged diff; post-merge per-commit attribution differs by design.
   LINEAR_SETUP="
 $DDL
 $SEED

@@ -2,18 +2,8 @@
 
 #include "doltlite_merge_constraints_int.h"
 
-/* STRICT type violations left behind by a merge.
-**
-** A merge can bring together a STRICT table schema and a row from the other
-** side whose stored type the declared column type forbids. Neither side
-** violated anything on its own, so nothing along the write path objects, and
-** the row lands: integrity_check reports it, but nothing records a violation
-** and the commit is clean.
-**
-** The predicate is typeof(c) against the declared type's allowed storage
-** class. NULL passes here — the NOT NULL detector owns missing values — and
-** ANY columns allow everything, so neither generates a term.
-*/
+/* Merge can pair a STRICT schema with a forbidden stored type. NULL
+** is the NOT NULL detector's; ANY admits everything. */
 
 static void strictFreeNames(char **az, int n){
   int i;
@@ -21,8 +11,7 @@ static void strictFreeNames(char **az, int n){
   sqlite3_free(az);
 }
 
-/* The storage class a STRICT column admits, or 0 for ANY. Declared types in
-** a STRICT table are exactly INT, INTEGER, TEXT, REAL, BLOB, ANY. */
+/* STRICT storage class, or 0 for ANY. */
 static const char *strictAllowedTypeof(const char *zDecl){
   if( sqlite3_stricmp(zDecl, "INT")==0
    || sqlite3_stricmp(zDecl, "INTEGER")==0 ){
@@ -58,7 +47,6 @@ static int tableIsStrict(sqlite3 *db, const char *zTable, int *pStrict){
   return finishConstraintStmt(pQ, rc);
 }
 
-/* The typed columns of a STRICT table with the storage class each admits. */
 static int loadStrictColumns(
   sqlite3 *db,
   const char *zTable,
@@ -220,8 +208,7 @@ int doltliteDetectMergeStrictViolations(
     }
     nKeyCol = hasRowid ? 1 : pkInfo.nPk;
 
-    /* One row per offending row, carrying a flag per typed column so every
-    ** column holding a forbidden storage class is named. */
+    /* One row per offender, with a flag per typed column. */
     pStr = sqlite3_str_new(db);
     sqlite3_str_appendf(pStr, "SELECT %s",
                         hasRowid ? "rowid" : pkInfo.zPkCols);
@@ -280,8 +267,7 @@ int doltliteDetectMergeStrictViolations(
         break;
       }
 
-      /* A row that already held the forbidden type before the merge is not
-      ** the merge's doing, same rule the other detectors apply. */
+      /* Pre-merge forbidden type is not this merge's violation. */
       if( aAnc ){
         u8 *pAncVal = 0; int nAncVal = 0;
         int ancRc = hasRowid

@@ -54,7 +54,7 @@ oracle() {
   fi
 }
 
-# Both engines must reject the script with a clean non-crash error.
+# Both engines must reject without crashing.
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"
@@ -518,7 +518,7 @@ UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id IN (1,2);
 SELECT dolt_commit('-m','range');
 " "SELECT CONCAT('R|RNG|', id, '|', v) FROM t WHERE v BETWEEN 15 AND 30 ORDER BY v, id;"
 
-# --- DELETE FROM dolt_workspace_* (discard unstaged working edits) ---
+
 
 oracle "workspace_delete_discards_insert" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);

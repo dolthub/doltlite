@@ -313,10 +313,8 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
 
   if( !zRef || !cs ) return SQLITE_ERROR;
 
-  /* A ref may carry a suffix of ~N / ^N parent-walk operators. Peel that
-  ** suffix off right-to-left to find the base ref, then apply the operators
-  ** left-to-right. This is iterative on purpose: recursing once per operator
-  ** let a long "^^^..." argument exhaust the stack. */
+  /* Peel ~N/^N suffixes right-to-left, apply left-to-right. Iterative so
+  ** a long ^^^... argument cannot exhaust the stack. */
   len = (int)strlen(zRef);
   base_len = len;
   for(;;){
@@ -330,8 +328,7 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   }
 
   if( base_len==len ){
-    /* No operator suffix: resolve the ref as-is (including "", which is not
-    ** a shorthand for HEAD and must fail like any unknown ref). */
+    /* No suffix: resolve as-is. "" is not HEAD. */
     rc = doltliteResolveBaseRef(db, zRef, pCommit);
   }else if( base_len==0 ){
     /* Parent-walk operators require an explicit base ref. */

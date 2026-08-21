@@ -122,8 +122,7 @@ oracle_summary() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
-# Same comparison as oracle_summary, with separate setup scripts for the
-# statements whose syntax diverges between engines (DROP INDEX, triggers).
+# Separate setups for DROP INDEX / trigger syntax.
 oracle_summary_dual() {
   local name="$1" dl_setup="$2" dt_setup="$3"
   local dir="$TMPROOT/${name}_summary"
@@ -916,9 +915,7 @@ SELECT dolt_commit('-m', 'drop_x');
 " "x"
 
 
-# ── schema objects through the diff summary ──────────────────────
-# Index changes carry no entry of their own; the summary must attribute
-# them to the parent table (schema_change=1), matching Dolt.
+# Index changes have no summary row; attribute to the parent table (schema_change=1).
 
 oracle_summary "summary_index_only_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

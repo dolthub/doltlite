@@ -11,8 +11,7 @@
 
 typedef struct DoltliteCommit DoltliteCommit;
 struct DoltliteCommit {
-  /* parentHash is the single-parent compatibility field. New commits use
-  ** aParents/nParents so merge commits can address multiple parents. */
+  /* parentHash is single-parent compat; merges use aParents. */
   ProllyHash parentHash;
   ProllyHash catalogHash;
   i64 timestamp;

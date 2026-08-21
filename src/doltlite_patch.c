@@ -10,10 +10,6 @@
 #include <math.h>
 #include <string.h>
 
-/* dolt_patch() materializes a diff as executable SQLite statements.  Its
-** public shape and ordering mirror Dolt's table function, but the statements
-** deliberately use SQLite syntax. */
-
 typedef struct PatchRow PatchRow;
 typedef struct PatchVtab PatchVtab;
 typedef struct PatchCursor PatchCursor;
@@ -252,9 +248,7 @@ static int patchRootsShareKey(
   return found;
 }
 
-/* The '(' that opens a CREATE statement's definition body: the first one
-** outside any quoted identifier or string. A quoted table name may itself
-** contain parens. */
+/* First '(' outside quotes; a quoted table name may contain parens. */
 static const char *patchSchemaBody(const char *zSql){
   const char *z = zSql;
   while( *z ){
@@ -326,10 +320,8 @@ static int patchBuildTables(
     if( pTo->iTable<=1 || !pTo->zName ) continue;
     pToSchema = patchFindTableSchema(aToSchema, nToSchema, pTo->zName);
     if( !pToSchema ) continue;
-    /* Names are the durable identity for ordinary changes. Catalog page
-    ** numbers can be reused when a table is added or dropped. Only use a
-    ** number to infer a rename when the old name disappeared and the roots
-    ** are equal, or the schemas match and at least one key survived. */
+    /* Names identify ordinary changes. Infer a rename from page number only if
+    ** the old name disappeared and roots are equal, or schemas match with a surviving key. */
     for(j=0; j<nFromTable; j++){
       if( aFromUsed[j] || !aFromTable[j].zName ) continue;
       if( strcmp(aFromTable[j].zName,pTo->zName)==0 ){
@@ -525,8 +517,7 @@ static int patchAppendObjectDrops(
     if( !p->zTblName || strcmp(p->zTblName,zTable)!=0 ) continue;
     if( !p->zSql ) continue;
     q = findSchemaEntry(aTo, nTo, p->zName);
-    /* Triggers must not run while the patch DML is replayed.  Drop every
-    ** trigger on a changed table, including triggers that are unchanged. */
+    /* Drop every trigger on a changed table so patch DML does not fire them. */
     if( (p->zType && sqlite3_stricmp(p->zType,"trigger")==0)
      || !q || !q->zSql || strcmp(p->zSql,q->zSql)!=0 ){
       rc = patchAppendDropObject(pCur, zTable, p);
@@ -568,12 +559,8 @@ static int patchAppendObjectDiffs(
   return rc;
 }
 
-/* Views never appear in the table walk: a view's tbl_name is the view
-** itself. Diff them by name against the other side's schema rows. Drops
-** run before any table statement so a view freeing its name (say for a
-** table that replaces it) is gone in time; creates run last, after every
-** table and trigger has reached its target state, since a view may
-** reference any of them. */
+/* Views are not in the table walk. Drop views first (name reuse); create last
+** (they may reference tables/triggers). */
 static int patchAppendViewDrops(
   PatchCursor *pCur, const char *zFilter,
   SchemaEntry *aFrom, int nFrom,
@@ -1506,9 +1493,7 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     rc=patchGenerateTable(pCur,pVtab->db,&aTable[i],aFromSchema,nFromSchema,
                           aToSchema,nToSchema,i+1);
   }
-  /* Recreate triggers only after every table's data has reached its target
-  ** state.  Otherwise replaying an INSERT or UPDATE can run target triggers
-  ** a second time and make the patch diverge from the target commit. */
+  /* Recreate triggers after all table data, or replayed DML would fire them. */
   for(i=0; rc==SQLITE_OK && i<nTable; i++){
     if( zFilter && (!aTable[i].zFromName
                  || sqlite3_stricmp(zFilter,aTable[i].zFromName)!=0)

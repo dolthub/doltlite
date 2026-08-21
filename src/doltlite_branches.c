@@ -15,11 +15,8 @@ typedef struct BrCur BrCur;
 struct BrCur {
   sqlite3_vtab_cursor base;
   int iRow;
-  /* Cursor-owned copy of the branches visible at xFilter time. A VC
-  ** function evaluated in the same statement mutates and reallocates the
-  ** live cs->refs arrays mid-scan, so rows must never be served from
-  ** them. Commit metadata is still loaded lazily by hash; commits are
-  ** immutable, so those lookups cannot go stale. */
+  /* Cursor-owned snapshot at xFilter. Same-statement VC functions may
+  ** reallocate cs->refs; commit metadata is immutable and loaded by hash. */
   int nRows;
   BranchRef *aSnap;
   int iCommitRow;
@@ -242,9 +239,7 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   {
     DoltliteCommit *cm;
     int rc;
-    /* An unborn branch (materialized by a first write on a ref-less default
-    ** branch, e.g. after pushing only a feature branch into a new database)
-    ** has the all-zero head: there is no commit to describe. */
+    /* Unborn branch has an all-zero head; there is no commit to describe. */
     if( prollyHashIsEmpty(&br->commitHash) ){
       sqlite3_result_null(ctx);
       return SQLITE_OK;
@@ -310,9 +305,7 @@ static int rbConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-/* Rows snapshot into BranchRef entries (name + commit hash only) so the
-** cursor can share the dolt_branches machinery: its first six columns are
-** exactly this table's schema. */
+/* Snapshot name+hash so dolt_remote_branches can share dolt_branches machinery. */
 static int rbFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
   BrVtab *pVtab = (BrVtab*)c->pVtab;
   BrCur *pCur = (BrCur*)c;

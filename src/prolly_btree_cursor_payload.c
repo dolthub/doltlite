@@ -45,12 +45,8 @@ int prollyBtreeCursorCurrentTreeValueCopy(
   return SQLITE_OK;
 }
 
-/* These accessors have no error channel, so a failed deferred-seek
-** materialization has to be recorded on the cursor instead: fault it and stash
-** the code in skipNext, the way prollyBtCursorEof() does, so the next cursor
-** operation returns the real error. Returning a zero key or an empty payload
-** without faulting reports a row that was never read -- an OOM or interrupt
-** during positioning became wrong data under SQLITE_OK. */
+/* No error channel: fault the cursor and stash rc in skipNext, else OOM
+** during a deferred seek would return a fake row under SQLITE_OK. */
 static SQLITE_NOINLINE i64 prollyBtCursorIntegerKeySlow(BtCursor *pCur){
   if( pCur->deferredMergedSeek ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
@@ -109,9 +105,7 @@ static int cursorPayloadFault(
   int *pnData
 ){
   sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
-  /* PayloadSize and PayloadFetch may both reconstruct payloads. Surface OOM
-  ** through db->mallocFailed so a size/fetch mismatch cannot masquerade as
-  ** a malformed record. */
+  /* Size and fetch can both reconstruct; surface OOM so they cannot disagree. */
   if( rc==SQLITE_NOMEM && db ){
     sqlite3OomFault(db);
   }
@@ -241,8 +235,7 @@ static SQLITE_NOINLINE u32 prollyBtCursorPayloadSizeSlow(BtCursor *pCur){
       pCur->skipNext = rc;
       return 0;
     }
-    /* Answer from the pending row before consulting the tree. The tree cursor
-    ** may still be valid for MERGE_SRC_BOTH, but its value is stale. */
+    /* BOTH landings still have a valid tree cursor; its value is stale. */
     return (u32)((i64)e->nVal + e->nZeroTail);
   }
   if( pCur->curIntKey && pCur->pCur.eState==PROLLY_CURSOR_VALID ){

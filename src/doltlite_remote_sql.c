@@ -140,9 +140,8 @@ static int remoteSqlOpenNamedRemote(
   return SQLITE_OK;
 }
 
-/* Report the NOTFOUND/CANTOPEN result of remoteSqlOpenNamedRemote and return 1
-** if rc was such an open failure (caller should return); 0 otherwise. Pass the
-** saved txn state to clear it (pull path), or 0 when there is none. */
+/* Report NOTFOUND/CANTOPEN from remoteSqlOpenNamedRemote; 1 means caller
+** returns. pSaved is pull's txn state, or 0. */
 static int remoteSqlReportOpenError(
   sqlite3_context *ctx,
   sqlite3 *db,
@@ -470,8 +469,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     pRemote->xClose(pRemote);
     pRemote = 0;
 
-    /* zUrl points into cs->refs.aRemotes; each doltliteFetch below can reload
-    ** refs and reallocate that array, so own a copy for the loop. */
+    /* zUrl points into cs->refs.aRemotes, which doltliteFetch may reallocate. */
     zUrlOwned = sqlite3_mprintf("%s", zUrl);
     if( !zUrlOwned ){
       doltliteFreeStringArray(azNames, nNames);
@@ -580,9 +578,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   rc = chunkStoreFindBranch(cs, zBranch, &localCommit);
   if( rc!=SQLITE_OK ){
-    /* Create and persist the local branch atomically: mutating the
-    ** in-memory refs outside the lock would either be clobbered by the
-    ** lock-time refresh of a later ref write or linger unpersisted. */
+    /* Persist the new local branch under the lock; an unlocked in-memory
+    ** mutation would be clobbered or left unpersisted. */
     DoltliteBranchExpectation exp;
     PullAdvanceCtx adv;
     exp.zBranch = zBranch;
@@ -625,7 +622,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
           "cannot pull non-current branch without fast-forward");
         return;
       }
-      /* Merge owns its own txn save/restore; drop pull's snapshot first. */
+      /* Merge owns txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
       zTrackingRef = sqlite3_mprintf("%s/%s", zRemoteName, zBranch);
       if( !zTrackingRef ){
@@ -635,10 +632,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       rc = doltliteMergeRef(db, ctx, zTrackingRef, 0, 0);
       sqlite3_free(zTrackingRef);
       if( rc!=SQLITE_OK ){
-        /* doltliteMergeRef already set the error on ctx. */
         return;
       }
-      /* Pull's public result is 0 on success, not the merge commit hash. */
+      /* Pull returns 0 on success, not the merge commit hash. */
       sqlite3_result_int(ctx, 0);
       return;
     }
@@ -657,12 +653,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  /* Advance and persist the branch through the atomic ref-mutation helper:
-  ** it force-refreshes under the graph lock before serializing the whole
-  ** refs blob (the lock-time size heuristic can miss a peer commit, and a
-  ** stale view here would clobber the peer's ref change), CAS-checks the
-  ** branch's authoritative on-disk tip against the one the fast-forward
-  ** was computed from, and restores the refs snapshot on failure. */
+  /* CAS-advance the branch: force-refresh under the graph lock, compare the
+  ** on-disk tip to the fast-forward base, restore refs on failure. A stale
+  ** view would clobber a peer ref change. */
   {
     DoltliteBranchExpectation exp;
     PullAdvanceCtx adv;
@@ -771,9 +764,8 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
-    /* openRemoteByUrl returns NULL for both bad schemes and open failures.
-    ** A file:// or http(s):// URL that fails to open is CANTOPEN (e.g. a
-    ** missing parent directory), not a scheme error. */
+    /* openRemoteByUrl is NULL for bad schemes and open failures. file:// or
+    ** http(s):// that fail to open are CANTOPEN, not a scheme error. */
     int openRc = SQLITE_ERROR;
     const char *zMsg =
       "failed to open remote (URL must start with file:// or http://)";
@@ -1118,7 +1110,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         "[, <authorized-keys-dir>]); use SELECT dolt_creds_new() to create");
   }
 }
-#endif /* DOLTLITE_HAVE_AUTH */
+#endif
 
 int doltliteRemoteSqlRegister(sqlite3 *db){
   int rc;

@@ -1,12 +1,6 @@
 #ifndef DOLTLITE_CATALOG_TYPES_H
 #define DOLTLITE_CATALOG_TYPES_H
 
-/*
-** Catalog and schema entry layouts shared by the Prolly B-tree and DoltLite
-** version-control layers.  Keep these definitions here so object builds and
-** the single-translation-unit amalgamation use one canonical owner.
-*/
-
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 

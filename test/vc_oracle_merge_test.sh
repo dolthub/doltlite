@@ -1157,9 +1157,7 @@ ROLLBACK;
 echo ""
 echo "--- Schema objects (views, triggers, indexes) ---"
 
-# Trigger bodies and DROP INDEX cannot share one script across dialects
-# (SQLite BEGIN...END vs MySQL FOR EACH ROW; DROP INDEX x vs x ON t), so
-# these run separate per-system setups against the same post-state query.
+# Trigger bodies and DROP INDEX cannot share one script across dialects.
 oracle_dual_poststate() {
   local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
   local dir="$TMPROOT/${name}_dual"
@@ -1546,11 +1544,7 @@ SELECT dolt_merge('feature');
 echo ""
 echo "--- Dual ADD COLUMN with concurrent row changes ---"
 
-# Both branches add a disjoint column; the row-level changes on each side must
-# still merge (edits to shared columns, deletes, and each side's new-column
-# values), and a true same-cell edit must still conflict. A naive "take ours +
-# backfill added columns" would silently drop theirs' shared-column edits and
-# deletes.
+# Dual ADD COLUMN must still three-way merge shared-column edits/deletes.
 CADD_BASE="
 CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
 INSERT INTO t VALUES (1, 'one'), (5, 'five'), (9, 'nine');
@@ -1617,8 +1611,7 @@ SELECT dolt_commit('-Am', 'main_change');
 SELECT dolt_merge('feature');
 "
 
-# Mixed-case shared columns in the ancestor CREATE TABLE: dual ADD COLUMN must
-# still three-way merge row edits/deletes (column-name remap is case-insensitive).
+# Mixed-case shared columns: remap is case-insensitive.
 oracle_error_poststate "dual_addcol_mixed_case_shared_cols" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, Name TEXT, Score INT);
 INSERT INTO t VALUES (1, 'alice', 10), (2, 'bob', 20);
@@ -1636,10 +1629,7 @@ SELECT dolt_merge('feature');
 " "SELECT id || '|' || Name || '|' || Score || '|' || coalesce(MainNote,'~') || '|' || coalesce(FeatNote,'~') FROM t" \
 "SELECT CONCAT(id, '|', Name, '|', Score, '|', coalesce(MainNote,'~'), '|', coalesce(FeatNote,'~')) FROM t"
 
-# Concluding a conflicted merge with dolt_commit still has to record the merged
-# branch as a second parent. Without it the merged commits leave the log, and
-# every later merge base is computed against a history that never recorded the
-# merge -- so dolt_merge('feature') would replay work already merged.
+# Concluding a conflicted merge must still record the second parent.
 oracle "conflict_resolved_commit_keeps_merged_branch_in_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
@@ -1657,8 +1647,7 @@ SELECT dolt_commit('-Am', 'resolved');
 COMMIT;
 "
 
-# Same shape through cherry-pick, which must stay a single-parent commit: the
-# picked branch is a source to resolve against, not a parent to record.
+# Cherry-pick stays a single-parent commit.
 oracle "conflict_resolved_cherry_pick_stays_single_parent" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
@@ -1676,8 +1665,6 @@ SELECT dolt_commit('-Am', 'picked');
 COMMIT;
 "
 
-# The merged branch really is an ancestor afterwards, so re-merging it is a
-# no-op rather than a replay of work already merged.
 oracle_reopen_state "conflict_resolved_commit_makes_merged_branch_an_ancestor" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');

@@ -1379,12 +1379,7 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
            queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
   check("first_commit_hash", strlen(firstCommit)==40);
   check("open_db2", open_db(dbpath, &db2)==SQLITE_OK);
-  /* Pin db2's snapshot before the peer commits so it genuinely cannot
-  ** observe that commit. Merely having opened earlier no longer makes a
-  ** session stale: a connection adopts the branch head with the catalog at
-  ** each statement, so an unpinned db2 would reset from a current view --
-  ** an ordinary backward reset, and what Dolt does (see
-  ** test_concurrent_refs_informed_reset_moves_branch). */
+  /* Pin db2 before the peer commits. An unpinned session adopts HEAD each statement. */
   check("pin_db2_snapshot", execSql(db2, "BEGIN")==SQLITE_OK);
   queryScalarText(db2, "SELECT count(*) FROM t");
 
@@ -1417,9 +1412,7 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
   removeDbFiles(dbpath);
 }
 
-/* The counterpart to the stale case: a session with a current view that
-** asks to reset backward gets the reset. Dolt 2.2.2 does the same -- the
-** branch moves to the named commit and the newer commit leaves the log. */
+/* Informed backward reset: current view gets the reset (Dolt does too). */
 static void test_concurrent_refs_informed_reset_moves_branch(void){
   sqlite3 *db1 = 0, *db2 = 0, *db3 = 0;
   char dbpath[256];
@@ -1443,8 +1436,7 @@ static void test_concurrent_refs_informed_reset_moves_branch(void){
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
 
-  /* db2 has no pinned snapshot, so this statement sees the peer commit
-  ** first and the reset is an informed one. */
+  /* Unpinned db2 sees the peer commit; this reset is informed. */
   snprintf(sql, sizeof(sql), "SELECT dolt_reset('%s')", firstCommit);
   queryScalarText(db2, sql);
   check("ir_reset_accepted", strstr(gBuf, "ERROR")==0 && strstr(gBuf, "conflict")==0);
@@ -1608,11 +1600,7 @@ static void checkLabeled(const char *zLabel, const char *zWhat, int cond){
   check(zName, cond);
 }
 
-/* A rollback that fails while persisting the restored working set still has to
-** end the write transaction. It releases the graph lock on the way out, and
-** sqlite3RollbackAll throws the return code away, so a connection left at
-** TRANS_WRITE would let the next write short-circuit prollyBtreeBeginTrans and
-** mutate the store unlocked. */
+/* Failed rollback persist must still end the write txn or the next write mutates unlocked. */
 static void rollbackPersistFaultCase(int iFault, const char *zLabel){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -1645,8 +1633,7 @@ static void rollbackPersistFaultCase(int iFault, const char *zLabel){
 
   checkLabeled(zLabel, "fault_injected", gRegressionFaultHits>0);
 
-  /* The rolled-back row must not reappear, and the connection must still be
-  ** usable rather than wedged in a phantom transaction. */
+  /* Rolled-back row must not reappear; connection must not stay in a phantom txn. */
   checkLabeled(zLabel, "pending_row_discarded",
       strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
   checkLabeled(zLabel, "writes_work_after_failed_rollback",
@@ -1660,10 +1647,7 @@ static void rollbackPersistFaultCase(int iFault, const char *zLabel){
 
 static void run_rollback_persist_failure_ends_txn(void){
   printf("=== Rollback Persist Failure Ends Write Txn Test ===\n\n");
-  /* Only the serialize failure is reachable from a test: the persist chain
-  ** below it is skipped whenever the restored working set already matches the
-  ** one on disk, which it does after an ordinary rollback. Both failures leave
-  ** through the same teardown. */
+  /* Only serialize failure is reachable: ordinary rollback already matches disk. */
   rollbackPersistFaultCase(957, "rollback_serialize_fault");
 }
 
@@ -2155,7 +2139,6 @@ static void run_status_many_table_renames(void){
   removeDbFiles(dbpath);
 }
 
-
 static void run_refs_commit_merges_concurrent_peer_refs(void){
   ChunkStore csA, csB, csC;
   ProllyHash h1, h2, h3, hB, chunkHash;
@@ -2175,7 +2158,6 @@ static void run_refs_commit_merges_concurrent_peer_refs(void){
   prollyHashCompute("three", 5, &h3);
   prollyHashCompute("peer", 4, &hB);
 
-  /* Seed the store with a branch. */
   check("rm_open_A",
         chunkStoreOpen(&csA, sqlite3_vfs_find(0), dbpath,
                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2186,7 +2168,7 @@ static void run_refs_commit_merges_concurrent_peer_refs(void){
   check("rm_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("rm_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
 
-  /* A peer advances the refs on disk; A's view stays at the old base. */
+  /* Peer advances refs on disk; A's view stays at the old base. */
   check("rm_open_B",
         chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2195,9 +2177,7 @@ static void run_refs_commit_merges_concurrent_peer_refs(void){
   check("rm_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
   check("rm_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
 
-  /* A stages a chunk and its own ref change over the stale view, then
-  ** commits: the resolve path adopts the peer's newer refs, and the
-  ** local delta must merge onto them instead of replacing them. */
+  /* Local delta must merge onto the peer's newer refs, not replace them. */
   check("rm_local_branch",
         chunkStoreAddBranch(&csA, "local_new", &h3)==SQLITE_OK);
   check("rm_local_chunk",
@@ -2206,8 +2186,7 @@ static void run_refs_commit_merges_concurrent_peer_refs(void){
   check("rm_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("rm_local_commit", chunkStoreCommit(&csA)==SQLITE_OK);
 
-  /* A fresh reader sees the union: the peer's branch, the local branch,
-  ** and the seed. */
+  /* Fresh reader sees peer + local + seed. */
   check("rm_open_C",
         chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2227,11 +2206,7 @@ static void run_refs_commit_merges_concurrent_peer_refs(void){
   removeDbFiles(dbpath);
 }
 
-/* Each ref category merges in isolation, so a pairing legal in both views
-** separately can still be illegal together: a peer repoints the default
-** branch while this session deletes that branch. The decoder requires the
-** default to name a live branch, so publishing that pair leaves a store no
-** open can read -- the merge must refuse it instead. */
+/* Peer repoints default while we delete that branch: merge must refuse a dangling default. */
 static void run_refs_merge_rejects_dangling_default(void){
   ChunkStore csA, csB, csC;
   ProllyHash h1, h2, chunkHash;
@@ -2257,7 +2232,6 @@ static void run_refs_merge_rejects_dangling_default(void){
   check("dd_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("dd_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
 
-  /* Peer repoints the default onto feat. */
   check("dd_open_B",
         chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
             SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2266,8 +2240,7 @@ static void run_refs_merge_rejects_dangling_default(void){
   check("dd_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
   check("dd_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
 
-  /* This session, still on the base view where the default is main,
-  ** legally deletes feat and commits alongside a staged chunk. */
+  /* Still on the base view (default=main), legally delete feat. */
   check("dd_local_delete", chunkStoreDeleteBranch(&csA, "feat")==SQLITE_OK);
   check("dd_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("dd_local_put",
@@ -2278,7 +2251,7 @@ static void run_refs_merge_rejects_dangling_default(void){
   chunkStoreClose(&csA);
   chunkStoreClose(&csB);
 
-  /* The store must still open: a published dangling default is unreadable. */
+  /* Store must still open: a published dangling default is unreadable. */
   check("dd_reopen",
         chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
             SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2288,10 +2261,7 @@ static void run_refs_merge_rejects_dangling_default(void){
   removeDbFiles(dbpath);
 }
 
-/* A commit that lost the refs merge reinstates its pre-merge view for the
-** caller to unwind over. Retrying that commit without rolling back first
-** must not republish the stale table wholesale -- that is exactly the peer
-** clobber the merge exists to prevent. */
+/* Retry after a refs-merge conflict must not republish the stale table. */
 static void run_refs_commit_retry_after_conflict_still_fails(void){
   ChunkStore csA, csB, csC;
   ProllyHash h1, hA, hB, hKeep, found, chunkHash;
@@ -2319,7 +2289,6 @@ static void run_refs_commit_retry_after_conflict_still_fails(void){
   check("rr_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("rr_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
 
-  /* Peer moves the shared branch and adds an unrelated one. */
   check("rr_open_B",
         chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
             SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2329,8 +2298,7 @@ static void run_refs_commit_retry_after_conflict_still_fails(void){
   check("rr_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
   check("rr_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
 
-  /* This session moves the same branch from its stale base: a real
-  ** conflict, correctly refused. */
+  /* Same branch from a stale base: real conflict, refused. */
   check("rr_local_update",
         chunkStoreUpdateBranch(&csA, "shared", &hA)==SQLITE_OK);
   check("rr_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
@@ -2356,10 +2324,7 @@ static void run_refs_commit_retry_after_conflict_still_fails(void){
   removeDbFiles(dbpath);
 }
 
-/* AUTOINCREMENT counters merge as high-water marks, but only for counters
-** this session actually changed. Bumping an untouched one back onto disk
-** resurrects a counter a peer dropped with its table, so a recreated table
-** would resume from the old mark instead of restarting. */
+/* Merge only AUTOINCREMENT counters this session changed; do not resurrect a peer-dropped one. */
 static void run_refs_merge_keeps_peer_sequence_drop(void){
   ChunkStore csA, csB, csC;
   ProllyHash h1, chunkHash;
@@ -2385,7 +2350,6 @@ static void run_refs_merge_keeps_peer_sequence_drop(void){
   check("sd_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("sd_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
 
-  /* Peer drops the table, taking its counter with it. */
   check("sd_open_B",
         chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
             SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2393,7 +2357,6 @@ static void run_refs_merge_keeps_peer_sequence_drop(void){
   check("sd_peer_serialize", chunkStoreSerializeRefs(&csB)==SQLITE_OK);
   check("sd_peer_commit", chunkStoreCommit(&csB)==SQLITE_OK);
 
-  /* This session commits something unrelated over its stale base. */
   check("sd_local_branch",
         chunkStoreAddBranch(&csA, "unrelated", &h1)==SQLITE_OK);
   check("sd_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
@@ -2443,7 +2406,6 @@ static void run_refs_commit_conflicting_peer_ref_fails(void){
   check("rc_seed_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
   check("rc_seed_commit", chunkStoreCommit(&csA)==SQLITE_OK);
 
-  /* Both sides move the SAME branch to different tips. */
   check("rc_open_B",
         chunkStoreOpen(&csB, sqlite3_vfs_find(0), dbpath,
                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2458,11 +2420,10 @@ static void run_refs_commit_conflicting_peer_ref_fails(void){
         chunkStorePut(&csA, payload, (int)sizeof(payload),
                       &chunkHash)==SQLITE_OK);
   check("rc_local_serialize", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
-  /* A real race on one ref must fail the commit, not pick a winner. */
+  /* Race on one ref must fail the commit, not pick a winner. */
   check("rc_commit_fails",
         chunkStoreCommit(&csA)==SQLITE_BUSY_SNAPSHOT);
 
-  /* The peer's move is what disk keeps. */
   check("rc_open_C",
         chunkStoreOpen(&csC, sqlite3_vfs_find(0), dbpath,
                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -2546,12 +2507,7 @@ static void run_remote_refs_corruption(void){
   removeDbFiles(clonePath);
 }
 
-/* A fetch commits its chunks before any ref roots them, so a gc landing in
-** that window collects the whole fetched history. Installing the tracking
-** ref anyway leaves it pointing at absent chunks, which breaks gc forever
-** and aborts the historical-table registration every later connection runs
-** -- taking dolt_remote/dolt_hashof and friends down with it, with no
-** in-band way back. The install must verify the graph and fail instead. */
+/* Fetch commits chunks before any ref roots them; install must verify the graph or GC orphans it. */
 static const char *gGcWindowPath = 0;
 static int gGcWindowCollected = 0;
 
@@ -2561,8 +2517,7 @@ static void gcInFetchWindow(void *pArg){
   gGcWindowCollected = 0;
   if( !gGcWindowPath ) return;
   if( open_db(gGcWindowPath, &gcDb)==SQLITE_OK ){
-    /* Platforms that cannot rewrite a file another handle holds open (and
-    ** so cannot gc here) still exercise the health invariants below. */
+    /* Platforms that cannot GC a file held open still check the health invariants below. */
     gGcWindowCollected = execSqlSilent(gcDb, "SELECT dolt_gc()")==SQLITE_OK;
   }
   sqlite3_close(gcDb);
@@ -2615,9 +2570,7 @@ static void run_fetch_ref_install_survives_window_gc(void){
   check("window_gc_close_remote_clean", sqlite3_close(remoteDb)==SQLITE_OK);
   remoteDb = 0;
 
-  /* A fresh connection must still get the full function surface: the
-  ** registration chain aborts on the first failing member, so a dangling
-  ** tracking ref silently removes everything after it. */
+  /* Registration aborts on the first failing member; a dangling tracking ref must not strip later functions. */
   check("window_gc_reopen", open_db(localPath, &afterDb)==SQLITE_OK);
   check("window_gc_remote_fn_alive",
         strstr(queryScalarText(afterDb,
@@ -2629,9 +2582,7 @@ static void run_fetch_ref_install_survives_window_gc(void){
   check("window_gc_local_data_intact",
         strcmp(queryScalarText(afterDb, "SELECT count(*) FROM u"), "1")==0);
 
-  /* And the fetch must heal on retry: the chunks the gc took are re-synced,
-  ** the tracking ref lands, and gc -- which walks tracking commits -- proves
-  ** the graph behind it is complete. */
+  /* Fetch must heal on retry: re-sync GC'd chunks, then tracking ref and GC walk succeed. */
   check("window_gc_retry_fetch",
         execSqlSilent(afterDb, "SELECT dolt_fetch('origin','main')")==SQLITE_OK);
   check("window_gc_retry_tracking_landed",
@@ -2645,10 +2596,7 @@ static void run_fetch_ref_install_survives_window_gc(void){
   removeDbFiles(localPath);
 }
 
-/* Clone has the same window as fetch: it commits the synced chunks, and
-** until the refs blob lands nothing roots them. A gc on the database being
-** cloned into collects the lot, and installing branch refs over that leaves
-** them naming absent chunks. */
+/* Clone has the same unrooted-chunk window as fetch; installing refs over a GC'd graph must fail. */
 static void run_clone_ref_install_survives_window_gc(void){
   sqlite3 *remoteDb = 0;
   sqlite3 *cloneDb = 0;
@@ -2693,18 +2641,14 @@ static void run_clone_ref_install_survives_window_gc(void){
   check("clone_window_close_remote_clean", sqlite3_close(remoteDb)==SQLITE_OK);
   remoteDb = 0;
 
-  /* The refused clone must leave a database that still works: the function
-  ** registration chain aborts on its first failing member, so a branch ref
-  ** naming absent chunks takes every later function down with it. */
+  /* Refused clone must leave a working DB; a branch ref naming absent chunks strips later functions. */
   check("clone_window_reopen", open_db(clonePath, &afterDb)==SQLITE_OK);
   check("clone_window_hashof_fn_alive",
         execSqlSilent(afterDb, "SELECT dolt_hashof('HEAD')")==SQLITE_OK);
   check("clone_window_gc_still_works",
         execSqlSilent(afterDb, "SELECT dolt_gc()")==SQLITE_OK);
 
-  /* And it must heal on retry, re-syncing whatever the gc took. Where the gc
-  ** could not run there was nothing to refuse, so the first clone landed and
-  ** a second one has nowhere to go -- the rows are already the proof. */
+  /* Clone must heal on retry. If GC could not run, the first clone already landed. */
   if( gGcWindowCollected ){
     snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
     check("clone_window_retry_succeeds",
@@ -2884,8 +2828,7 @@ static void init_v3_catalog_blob(u8 *aCat, int nCat, u16 nName){
   }
 }
 
-/* Two named V3 entries, the second numbered iSecond. 48 bytes per entry:
-** iTable(4) flags(1) root(20) schemaHash(20) nameLen(2) name(1). */
+/* V3 entry: iTable(4) flags(1) root(20) schemaHash(20) nameLen(2) name(1). */
 #define V3_TWO_ENTRY_CAT_SIZE 101
 static void init_v3_two_entry_catalog(u8 *aCat, u8 iSecond){
   memset(aCat, 0, V3_TWO_ENTRY_CAT_SIZE);
@@ -2945,11 +2888,7 @@ static void run_catalog_deserialize_corruption(void){
   doltliteFreeCatalog(aTables, nTables);
   aTables = 0; nTables = 0;
 
-  /* Two entries claiming the same table number, which is legitimate: views,
-  ** triggers and virtual tables all serialize as number zero. catAdd hands the
-  ** second entry the one the first already named, so the second name used to
-  ** overwrite a live pointer and strand it -- unbounded, since the blob picks
-  ** how many times to repeat. Reloading must not grow sqlite3's live total. */
+  /* Duplicate table number (views/triggers are 0): catAdd must not overwrite a live pointer. */
   init_v3_two_entry_catalog(dupTableCat, 2);
   check("put_duplicate_itable_catalog",
         chunkStorePut(cs, dupTableCat, (int)sizeof(dupTableCat), &h)==SQLITE_OK);
@@ -3066,9 +3005,7 @@ static void run_schema_loader_missing_master(void){
   sqlite3_close(db);
 }
 
-/* OP_RowCell / TransferRow for blob-key indexes and WITHOUT ROWID tables
-** must feed Insert a SQLite record. Passing the tree sort key makes
-** sortKeyFromIntRecordLocal treat 0x15/0x35 tags as a record header. */
+/* Blob-key / WITHOUT ROWID Insert must get a SQLite record, not the tree sort key. */
 static int xferBlobkeyPayloadEquals(
   BtCursor *pCur, const u8 *pWant, int nWant
 ){
@@ -3182,9 +3119,7 @@ static void run_transfer_row_blobkey_uses_record(void){
   sqlite3_close(db);
   removeDbFiles(dbpath);
 
-  /* User-facing copy path: secondary index + WITHOUT ROWID survive
-  ** INSERT…SELECT and VACUUM (prolly VACUUM is GC; integrity still
-  ** proves the indexes match the tables). */
+  /* Secondary index + WITHOUT ROWID survive INSERT SELECT; prolly VACUUM is GC. */
   check("xfer_reopen_sql", open_db(dbpath, &db)==SQLITE_OK);
   check("xfer_sql_setup", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n REAL);"
@@ -3402,12 +3337,7 @@ static void run_pull_persist_failure(void){
   removeDbFiles(remoteClientPath);
 }
 
-/* Pulling a branch that does not exist locally used to add it to the
-** in-memory refs outside the graph lock and never serialize it: the
-** branch answered queries for the rest of the session and silently
-** vanished on reopen (a later unrelated ref write could also clobber or
-** accidentally persist it). The create must go through the atomic
-** ref-mutation helper like every other ref write. */
+/* Pull of a missing local branch must create it via the atomic ref-mutation helper. */
 static void run_pull_new_branch_persists(void){
   sqlite3 *localDb = 0;
   sqlite3 *remoteDb = 0;
@@ -3966,10 +3896,7 @@ static void run_blame_all_parents_merge_base(void){
           chunkStorePut(cs, pCommitData, nCommitData, &mergeHash)==SQLITE_OK);
     check("commit_octopus_commit_for_blame_all_parents",
           chunkStoreCommit(cs)==SQLITE_OK);
-    /* These are internal entry points whose production callers run inside
-    ** sqlite3_step, so they expect the connection mutex to be held.
-    ** doltliteSwitchCatalog resets connection schemas and unlocks the vtab
-    ** list, which asserts on it. */
+    /* Production callers hold the connection mutex; doltliteSwitchCatalog asserts on it. */
     sqlite3_mutex_enter(sqlite3_db_mutex(db));
     doltliteSetSessionHead(db, &mergeHash);
     doltliteSetSessionStaged(db, &mergeCommit.catalogHash);
@@ -4907,10 +4834,7 @@ static void run_gc_rewrite_failure(void){
   removeDbFiles(dbpath);
 }
 
-/* The header-size varint is part of the header it measures, so adding it can
-** push the size across a varint width. With 127 single-byte type codes the
-** header reaches 128, which no longer fits the one byte that was reserved for
-** it; the record was then built one byte short and would not parse back. */
+/* Header-size varint is part of the header; 127 type-1 fields push it across a width. */
 static void run_record_header_varint_boundary(void){
   static const int aField[] = { 125, 126, 127, 128, 129, 253, 254, 255 };
   int k;
@@ -4933,8 +4857,7 @@ static void run_record_header_varint_boundary(void){
     for(i=0; i<nField; i++){
       memset(&aMem[i], 0, sizeof(aMem[i]));
       aMem[i].eType = SQLITE_INTEGER;
-      /* 2..127 all encode as serial type 1: one header byte, one body byte.
-      ** 128 would need type 2, which would change the header arithmetic. */
+      /* 2..127 encode as serial type 1; 128 would need type 2. */
       aMem[i].i = (i % 126) + 2;
     }
 
@@ -4956,10 +4879,7 @@ static void run_record_header_varint_boundary(void){
   }
 }
 
-/* csRefArrayGrow computed (n+1)*stride in int. At stride 72 and n 59652416 that
-** wraps to 6728 where the true size is 4294974024, so realloc succeeds with a
-** 6KB buffer and the zeroing memset writes 72 bytes at offset 4294973952. The
-** guard has to reject the request instead of allocating the wrapped size. */
+/* csRefArrayGrow (n+1)*stride in int wraps; reject instead of allocating the wrapped size. */
 static void run_ref_array_grow_rejects_overflow(void){
   void *aBase = 0;
   int rc;
@@ -4968,7 +4888,6 @@ static void run_ref_array_grow_rejects_overflow(void){
   check("ref_array_grow_rejects_wrapping_size", rc!=SQLITE_OK);
   check("ref_array_grow_left_the_array_alone", aBase==0);
 
-  /* An ordinary growth still works. */
   rc = csRefArrayGrow(&aBase, 0, 72);
   check("ref_array_grow_still_grows", rc==SQLITE_OK && aBase!=0);
   if( aBase ){
@@ -5486,19 +5405,14 @@ static void run_memory_chunk_lookup_corruption(void){
   chunkStoreClose(&cs);
 }
 
-/* A remote that answers every fetch with bytes that are not the chunk asked
-** for. doltliteSyncChunks must reject the payload rather than store it under
-** its own address -- which would leave the requested address absent -- and must
-** not walk it for children. */
+/* Wrong-address fetch: reject the payload; do not store or walk it. */
 typedef struct LyingRemote LyingRemote;
 struct LyingRemote {
   DoltliteRemote base;
   int nServed;
 };
 
-/* Serves a well-formed leaf node, just not the one requested. Unparseable bytes
-** would not test anything: syncEnqueueChildren rejects those on its own. A
-** valid node at the wrong address is the case that used to pass silently. */
+/* Well-formed leaf at the wrong address used to pass silently. */
 static int lyingGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
                          u8 **ppData, int *pnData){
   LyingRemote *p = (LyingRemote*)pRemote;
@@ -5564,15 +5478,13 @@ static void run_sync_rejects_wrong_chunk(void){
   dst.base.xPutChunk = sinkPutChunk;
   dst.base.xHasChunks = sinkHasChunks;
 
-  /* Any non-empty address the served payload will not hash to. */
+  /* Any non-empty address the payload will not hash to. */
   memset(&root, 0, sizeof(root));
   root.data[0] = 0xab;
   root.data[1] = 0xcd;
 
   rc = doltliteSyncChunks(&src.base, &dst.base, &root, 1);
-  /* The payload must not reach the store: writing it puts the content at its
-  ** own address and leaves the requested one absent, which only shows up much
-  ** later as a NOTFOUND on a ref that looks fine. */
+  /* Must not store the payload under its own hash; that leaves the requested address absent. */
   check("sync_does_not_store_a_chunk_from_the_wrong_address", dst.nPut==0);
   check("sync_reports_the_wrong_address_as_corrupt", rc!=SQLITE_OK);
   check("sync_stopped_after_the_first_bad_chunk", src.nServed==1);
@@ -5749,15 +5661,8 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
   removeDbFiles(dbpath);
 }
 
-/* A session that refreshes after a peer commit adopts the peer's catalog;
-** it must adopt that snapshot's branch head with it. Holding the old head
-** makes every later working-set persist record a commit the branch no
-** longer points at, and the load gate discards such a blob -- so rows this
-** session durably wrote vanish for every future connection. */
-/* Persisting a working set is the one ref install with no compare-and-swap:
-** when the branch ref is missing it created one. A session whose branch a
-** peer deleted would therefore resurrect it on its next write, restoring a
-** ref the peer removed and carrying that session's later commits on it. */
+/* Refresh after a peer commit must adopt that snapshot's branch head with the catalog. */
+/* Working-set persist has no CAS and must not resurrect a peer-deleted branch. */
 static void run_persist_does_not_resurrect_deleted_branch(void){
   sqlite3 *dbA = 0;
   sqlite3 *dbB = 0;
@@ -5780,7 +5685,6 @@ static void run_persist_does_not_resurrect_deleted_branch(void){
     "INSERT INTO t VALUES(2,'two');"
     "SELECT dolt_commit('-A','-m','feat work');")==SQLITE_OK);
 
-  /* A peer deletes the branch this session is on. */
   check("nr_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
   check("nr_peer_delete",
         execSql(dbB, "SELECT dolt_branch('-D','feat');")==SQLITE_OK);
@@ -5788,7 +5692,7 @@ static void run_persist_does_not_resurrect_deleted_branch(void){
         strcmp(queryScalarText(dbB,
             "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
 
-  /* The orphaned session's next write must not put the branch back. */
+  /* Orphaned session's next write must not put the branch back. */
   execSqlSilent(dbA, "INSERT INTO t VALUES(3,'three');");
   execSqlSilent(dbA, "SELECT dolt_commit('-A','-m','after delete');");
   sqlite3_close(dbA);
@@ -5826,7 +5730,6 @@ static void run_peer_commit_keeps_local_row_durable(void){
     "INSERT INTO t VALUES(1,'one');"
     "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
 
-  /* A writes an uncommitted row, then a peer commits on the same branch. */
   check("pk_local_row", execSql(dbA, "INSERT INTO t VALUES(2,'two');")==SQLITE_OK);
   check("pk_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
   check("pk_peer_commit", execSql(dbB,
@@ -5835,8 +5738,7 @@ static void run_peer_commit_keeps_local_row_durable(void){
   check("pk_close_B", sqlite3_close(dbB)==SQLITE_OK);
   dbB = 0;
 
-  /* A writes again after the peer landed. Autocommit reported success, so
-  ** the row must be there for anyone who opens the database next. */
+  /* Autocommit reported success, so the row must be there for the next opener. */
   check("pk_local_row_after_peer",
         execSql(dbA, "INSERT INTO t VALUES(4,'four');")==SQLITE_OK);
   check("pk_close_A", sqlite3_close(dbA)==SQLITE_OK);
@@ -5850,9 +5752,7 @@ static void run_peer_commit_keeps_local_row_durable(void){
   removeDbFiles(dbpath);
 }
 
-/* The same stale head is what dolt_commit compares against, so a session
-** that outlives a peer commit could never commit again -- every retry hit
-** the conflict error, and only reconnecting escaped it. */
+/* dolt_commit compared against the stale head, so a session that outlived a peer could never commit. */
 static void run_commit_recovers_after_peer_commit(void){
   sqlite3 *dbA = 0;
   sqlite3 *dbB = 0;
@@ -5995,9 +5895,7 @@ static void run_begin_write_refreshes_working_set_metadata(void){
     "SELECT dolt_add('-A');")==SQLITE_OK);
   doltliteGetSessionStaged(db1, &stagedExpected);
   memset(&mergeExpected, 0x55, sizeof(mergeExpected));
-  /* The conflicts catalog stays empty: a non-empty one is never written to disk,
-  ** so no connection can refresh one from disk and a distinctive value here would
-  ** simply never arrive. The merge flag and merge commit still prove the refresh. */
+  /* Conflicts catalog stays empty (never persisted); merge flag and merge commit still prove the refresh. */
   memset(&conflictsExpected, 0, sizeof(conflictsExpected));
   doltliteSetSessionMergeState(db1, 1, &mergeExpected, &conflictsExpected);
   check("persist_merge_state_for_begin_write_refresh",
@@ -6892,9 +6790,7 @@ static void run_btree_commit_failure_transactional(void){
   check("begin_write_txn", execSql(db, "BEGIN; INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   memset(&dummyStaged, 0x71, sizeof(dummyStaged));
   memset(&dummyMerge, 0x72, sizeof(dummyMerge));
-  /* Empty, so the commit gets far enough to hit the injected write failure:
-  ** unresolved conflicts are refused before any write is attempted. The staged
-  ** and merge-commit values below still carry the restoration check. */
+  /* Empty conflicts so the commit reaches the injected write failure. */
   memset(&dummyConflicts, 0, sizeof(dummyConflicts));
   doltliteSetSessionStaged(db, &dummyStaged);
   doltliteSetSessionMergeState(db, 1, &dummyMerge, &dummyConflicts);
@@ -7068,8 +6964,7 @@ static void run_write_rejects_foreign_database_at_path(void){
         strcmp(queryScalarText(db, "SELECT b FROM t1 WHERE a=673"), "dirty")==0);
   rc = execSqlSilent(db, "UPDATE t1 SET b='after';");
   check("foreign_path_write_readonly", rc==SQLITE_READONLY);
-  /* The VC write path force-refreshes before advancing the ref; it must refuse
-  ** the same way instead of reloading by path and adopting the stranger. */
+  /* VC write force-refreshes before advancing the ref; refuse, do not adopt the stranger. */
   rc = execSqlSilent(db, "SELECT dolt_commit('-A','-m','vc');");
   check("foreign_path_vc_commit_readonly", rc==SQLITE_READONLY);
   check("foreign_path_read_survives_refusals",
@@ -8153,8 +8048,7 @@ static void run_hard_reset_failure_restores_memory_state(void){
 
   gFailHits = 0;
   gFailWriteOnce = 1;
-  /* Production callers reach doltliteHardReset from inside sqlite3_step with
-  ** the connection mutex held; it resets connection schemas, which asserts. */
+  /* doltliteHardReset is called with the connection mutex held; it asserts. */
   sqlite3_mutex_enter(sqlite3_db_mutex(db));
   rc = doltliteHardReset(db, &headCatHash);
   sqlite3_mutex_leave(sqlite3_db_mutex(db));
@@ -11688,11 +11582,7 @@ static void putU32le(u8 *p, u32 v){
   p[3] = (u8)((v >> 24) & 0xff);
 }
 
-/* An internal node may not point at an empty leaf. Unchecked,
-** descendToExtremeLeaf sets idx to nItems-1 == -1 when walking right, and
-** prollyCursorNext/Prev then mark the cursor valid over a node whose key array
-** is a null pointer -- the next key read segfaults. prollyCursorFirst/Last
-** already refuse it, so only the step paths were exposed. */
+/* Internal node must not point at an empty leaf; Next/Prev used to mark that cursor VALID. */
 static void run_prolly_cursor_empty_leaf_under_internal(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -11753,8 +11643,7 @@ static void run_prolly_cursor_empty_leaf_under_internal(void){
   check("empty_leaf_internal_first_valid", res==0 && prollyCursorIsValid(&cur));
   rc = prollyCursorNext(&cur);
   check("empty_leaf_internal_next_reports_corrupt", rc==SQLITE_CORRUPT);
-  /* The error alone is not enough: the accessors gate on eState, so a cursor
-  ** left VALID here would happily read the empty child. */
+  /* Accessors gate on eState; a cursor left VALID would read the empty child. */
   check("empty_leaf_internal_next_leaves_cursor_unusable",
         !prollyCursorIsValid(&cur));
   prollyCursorClose(&cur);
@@ -11766,8 +11655,7 @@ static void run_prolly_cursor_empty_leaf_under_internal(void){
         !prollyCursorIsValid(&cur));
   prollyCursorClose(&cur);
 
-  /* Walking forward from the populated leaf must not expose a row from the
-  ** empty child, however the caller drives it. */
+  /* Walking forward from the populated leaf must not expose the empty child. */
   prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
   rc = prollyCursorFirst(&cur, &res);
   check("empty_leaf_internal_first_still_valid",
@@ -11787,10 +11675,7 @@ static void run_prolly_cursor_empty_leaf_under_internal(void){
   chunkStoreClose(&cs);
 }
 
-/* Offsets must start at 0. Readers reach key data both through the offset
-** array and by striding from pKeyData (prollyNodeIntKey uses i*8), so a
-** nonzero first offset makes them read different bytes of the same node while
-** every other structural check still passes. */
+/* Offsets must start at 0; a nonzero first offset makes offset-array and stride readers disagree. */
 static void run_prolly_node_first_offset_validation(void){
   ProllyNode node;
 
@@ -11840,8 +11725,7 @@ static void run_prolly_node_first_offset_validation(void){
   check("val_offsets_must_start_at_zero",
         prollyNodeParse(&node, valOffStartsLate,
                         (int)sizeof(valOffStartsLate))==SQLITE_CORRUPT);
-  /* The same shape with well-formed offsets still parses, so the new check is
-  ** not just rejecting everything. */
+  /* Same shape with well-formed offsets still parses. */
   check("zero_start_offsets_still_parse",
         prollyNodeParse(&node, bothStartAtZero,
                         (int)sizeof(bothStartAtZero))==SQLITE_OK);
@@ -12032,10 +11916,7 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   chunkStoreClose(&cs);
 }
 
-/* Incremental blob writes against a stock-format database. The wrapper
-** dispatches xPutData per cursor kind, and the legacy arm was a stub that
-** returned SQLITE_OK without touching the row, so sqlite3_blob_write reported
-** success and threw the bytes away. */
+/* Legacy xPutData stub returned SQLITE_OK without writing; sqlite3_blob_write threw the bytes away. */
 static void run_incrblob_legacy_engine_write(void){
   char dbpath[512];
   char zUri[640];
@@ -12072,7 +11953,7 @@ static void run_incrblob_legacy_engine_write(void){
         strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"),
                "WRITTEN!!!")==0);
 
-  /* And it is durable, not just visible to the writing connection. */
+  /* Durable, not just visible to the writer. */
   sqlite3_close(db);
   db = 0;
   rc = sqlite3_open_v2(zUri, &db, SQLITE_OPEN_READWRITE|SQLITE_OPEN_URI, 0);
@@ -12083,7 +11964,7 @@ static void run_incrblob_legacy_engine_write(void){
                  "WRITTEN!!!")==0);
   }
 
-  /* A partial overwrite must leave the rest of the value alone. */
+  /* Partial overwrite must leave the rest of the value alone. */
   pBlob = 0;
   if( db && sqlite3_blob_open(db, "main", "t", "v", 1, 1, &pBlob)==SQLITE_OK ){
     check("incrblob_legacy_partial_write",
@@ -12220,11 +12101,7 @@ static void run_incrblob_chunked_and_multihandle(void){
   removeDbFiles(dbpath);
 }
 
-/* Historical sides whose schema the scratch db cannot parse (a CHECK naming
-** an application-registered function) must never render records with the
-** wrong layout. When the visited schema drifted from the live one, the read
-** fails; when it is identical, the declared-layout fallback is provably
-** safe and the values still come back correct. */
+/* Unparseable historical schema: fail on drift; declared-layout fallback only when hashes match. */
 static void sideCheckFn(sqlite3_context *ctx, int n, sqlite3_value **v){
   (void)n;
   (void)v;
@@ -12247,8 +12124,7 @@ static void run_diff_side_schema_custom_function(void){
         sqlite3_create_function(db, "side_ok", 1, SQLITE_UTF8, 0,
                                 sideCheckFn, 0, 0)==SQLITE_OK);
 
-  /* Unchanged schema: both sides fail the scratch parse, but the live
-  ** schema hashes identically, so the fallback renders real values. */
+  /* Unchanged schema: scratch parse fails, hashes match, fallback renders values. */
   check("side_fn_setup_same", execSql(db,
       "CREATE TABLE s(a TEXT CHECK(side_ok(a)), pk TEXT PRIMARY KEY, c TEXT);"
       "INSERT INTO s VALUES('a1','k1','c1');"
@@ -12260,8 +12136,7 @@ static void run_diff_side_schema_custom_function(void){
             "SELECT from_c FROM dolt_diff_s WHERE diff_type='modified'"),
             "c1")==0);
 
-  /* Drifted schema: the from side cannot be mapped and cannot fall back,
-  ** so the read fails instead of mislabeling the dropped column's value. */
+  /* Drifted schema: fail rather than mislabel the dropped column's value. */
   check("side_fn_setup_drift", execSql(db,
       "CREATE TABLE t(a TEXT CHECK(side_ok(a)), pk TEXT PRIMARY KEY, c TEXT);"
       "INSERT INTO t VALUES('a1','k1','c1');"
@@ -12278,13 +12153,7 @@ static void run_diff_side_schema_custom_function(void){
   removeDbFiles(dbpath);
 }
 
-/* A single-column PRIMARY KEY named "rowid" keeps stock rowid-table form
-** instead of the usual conversion to WITHOUT ROWID storage. sqlite-vec
-** declares its vector-chunk shadow tables exactly this way and then writes
-** them through sqlite3_blob_open, which refuses WITHOUT ROWID tables. The
-** PK becomes a real unique index on a rowid table — a shape prolly-side
-** index maintenance never saw before this exemption — so this also pins
-** uniqueness enforcement and index consistency across updates and commits. */
+/* PK named "rowid" stays a rowid table (sqlite-vec / sqlite3_blob_open); PK is a real unique index. */
 static void run_rowid_named_pk_keeps_rowid_table(void){
   char dbpath[512];
   sqlite3 *db = 0;
@@ -12316,8 +12185,7 @@ static void run_rowid_named_pk_keeps_rowid_table(void){
             "SELECT substr(vectors, 4097, 10) FROM vc WHERE rowid=1"),
             "VECTORDATA")==0);
 
-  /* The PK is enforced through a real unique index, and that index is
-  ** maintained when the key column changes. */
+  /* PK unique index is maintained when the key column changes. */
   check("rowid_pk_unique_enforced",
         execSqlSilent(db, "INSERT INTO vc VALUES(1, x'00')")!=SQLITE_OK);
   check("rowid_pk_index_exists",
@@ -12333,8 +12201,7 @@ static void run_rowid_named_pk_keeps_rowid_table(void){
   check("rowid_pk_integrity",
         strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
-  /* The shape survives version control: commit, branch, and read the blob
-  ** back on the old branch. */
+  /* Shape survives commit/branch; blob still readable on the old branch. */
   check("rowid_pk_commit",
         execSql(db, "SELECT dolt_commit('-A','-m','vc rows')")==SQLITE_OK);
   check("rowid_pk_branch",
@@ -12365,14 +12232,7 @@ static void run_rowid_named_pk_keeps_rowid_table(void){
   removeDbFiles(dbpath);
 }
 
-/* The refs blob is untrusted (it comes from a .db file or a remote fetch).
-** Each section reads a u32 count and allocates count*sizeof(struct); the count
-** must be bounded by the smallest possible on-disk entry and the allocation
-** sized with a 64-bit product, or a crafted count wraps a 32-bit size into a
-** tiny allocation that the fill loop then overruns. This verifies a valid blob
-** round-trips and that oversized counts are rejected as corrupt rather than
-** trusted. (The wrap itself needs a >256MB input, beyond this corpus's and the
-** fuzzer's size budget, so it is prevented by construction here.) */
+/* Untrusted refs blob: bound each u32 count; oversized counts are corrupt, not a wrapped alloc. */
 static void run_refs_deserialize_overflow_guard(void){
   printf("=== Refs Deserialize Overflow Guard Test ===\n\n");
 
@@ -12528,11 +12388,7 @@ static void run_directonly_dolt_functions(void){
   removeDbFiles(dbpath);
 }
 
-/* A VC function evaluated in the same statement as a dolt_tags or
-** dolt_branches scan mutates and reallocates the live refs arrays the
-** cursors used to read rows from — the scan ended early against the
-** shrinking live count and the stale index read freed memory. The cursors
-** must serve rows from a snapshot taken at xFilter. */
+/* dolt_tags/dolt_branches cursors must snapshot refs at xFilter; a same-stmt mutate used to UAF. */
 static void run_refs_vtab_snapshot_stability(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -12554,10 +12410,7 @@ static void run_refs_vtab_snapshot_stability(void){
     "SELECT dolt_tag('tag_a'), dolt_tag('tag_b'), dolt_tag('tag_c');");
   check("snapshot_setup", rc==SQLITE_OK);
 
-  /* Deleting each tag while scanning must still visit every tag that was
-  ** visible when the scan started, and delete all of them. A subquery
-  ** would let the planner prune the side-effecting column, so step the
-  ** scan directly. */
+  /* Deleting while scanning must visit every tag visible at xFilter; step the scan, not a subquery. */
   {
     sqlite3_stmt *pStmt = 0;
     int nRows = 0;

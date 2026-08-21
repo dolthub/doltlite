@@ -137,13 +137,9 @@ static sqlite3_int64 encodedFieldSize(
   }
 }
 
-/* A descending field is stored with every byte inverted, so the 9-byte form
-** would remain a byte prefix of the 18-byte one and memcmp puts a prefix first
-** in either direction -- while descending order needs the longer form first,
-** since a nudged base is always strictly below the integer it stands for. The
-** terminator below breaks the prefix relation: inverted it becomes 0xFF, above
-** the inverted marker, so the extended form sorts first. No tag is 0x00, so
-** the length can still be read back from this byte. */
+/* DESC inverts every byte, so a 9-byte numeric would still prefix the 18-byte
+** form; memcmp puts prefixes first, but DESC needs the longer form first.
+** The 0x00 terminator inverts to 0xFF, above the marker. */
 static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData,
                          int desc){
   u8 buf[8];
@@ -155,9 +151,8 @@ static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData,
 
   pOut[0] = SORTKEY_NUM;
 
-  /* Convert SQLite numeric serial types to sortable IEEE bytes: positive
-  ** values flip the sign bit, negative values invert all bits. IEEE -0.0
-  ** compares equal to +0.0, so both use the +0.0 encoding. */
+  /* Sortable IEEE: positives flip the sign bit, negatives invert all bits.
+  ** -0.0 encodes as +0.0. */
   if( serialType == 7 ){
     memcpy(buf, pData, 8);
     if( buf[0]==0x80 && buf[1]==0 && buf[2]==0 && buf[3]==0
@@ -245,10 +240,8 @@ static int numericSortKeyLen(const u8 *pSortKey, int nAvail){
   return 9;
 }
 
-/* Bytes after the SORTKEY_NUM tag that decodeNumericSortKeyToRecord should
-** see. The 10-byte descending short form is tag + 8-byte base + terminator;
-** the terminator is only a length delimiter for memcmp order and must not be
-** fed into the numeric decoder as payload. */
+/* Payload after SORTKEY_NUM. DESC short form is 8-byte base + terminator;
+** do not feed the terminator to the numeric decoder. */
 static SQLITE_INLINE int numericSortKeyPayloadLen(int nNum){
   if( nNum==10 ) return 8;
   return nNum - 1;
@@ -479,7 +472,7 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
     return SQLITE_OK;
   }
   if( flags & MEM_IntReal ){
-    /* Encode integer-valued REALs identically to true REALs of that value. */
+    /* Integer-valued REAL encodes as a true REAL of that value. */
     intSerialType(pMem->u.i, pSerialType, pLen);
     return SQLITE_OK;
   }
@@ -494,7 +487,7 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
   }
   if( flags & (MEM_Str|MEM_Blob) ){
     if( flags & MEM_Zero ){
-      /* Expand zeroblob tails so indexed probes match stored keys. */
+      /* Expand zeroblob tails so probes match stored keys. */
       if( sqlite3VdbeMemExpandBlob(pMem)!=SQLITE_OK ){
         return SQLITE_NOMEM;
       }
@@ -532,7 +525,7 @@ static int sortKeyEncodeMemArray(
     int rc = sortKeyMemSerialType(pMem, &serialType, &fieldLen);
     if( rc==SQLITE_NOTFOUND ) return -3;
     if( rc!=SQLITE_OK ) return -1;
-    /* After the serial-type call: zeroblob expansion reallocates pMem->z. */
+    /* zeroblob expansion may have reallocated pMem->z. */
     pField = (const u8*)pMem->z;
 
     if( serialType <= 6 || serialType==8 || serialType==9 ){
@@ -1120,10 +1113,8 @@ int recordFromSortKeyBuffer(
     u8 tag;
 
     if( nFields==nFieldCap ){
-      /* More fields than the stack arrays hold (e.g. an index on 64+
-      ** columns): regrow all five parallel arrays into a single heap
-      ** carve. Truncating here used to silently drop the trailing
-      ** fields, corrupting every record decoded from a wide index. */
+      /* Wide index: grow the five parallel arrays. Truncating used to
+      ** drop trailing fields and corrupt the decoded record. */
       sqlite3_int64 nNew = (sqlite3_int64)nFieldCap*2;
       sqlite3_int64 nByte = nNew*(sizeof(const u8*) + 8
                                   + sizeof(u32)*2 + sizeof(int));
@@ -1147,8 +1138,7 @@ int recordFromSortKeyBuffer(
       memcpy(aNewType, aType, nFields*sizeof(u32));
       memcpy(aNewLen, aLen, nFields*sizeof(u32));
       memcpy(aNewEncLen, aEncLen, nFields*sizeof(int));
-      /* aFieldPtr entries that point into the old aIntBuf must follow
-      ** the integer payloads to their new location */
+      /* Pointers into the old aIntBuf must follow the payloads. */
       for(i = 0; i < nFields; i++){
         if( aFieldPtr[i]==aIntBuf[i] ) aNewFieldPtr[i] = aNewIntBuf[i];
       }

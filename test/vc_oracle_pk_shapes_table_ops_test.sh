@@ -1,10 +1,5 @@
 #!/bin/bash
-#
-# Oracle tests for table-scoped VC operations and schema-change interplay
-# across PRIMARY KEY shapes: selective staging (dolt_add of one table),
-# table-level checkout restore, diff_stat, and data diffs/history that span
-# an ALTER TABLE ADD COLUMN on a clustered table. These surfaces had oracle
-# coverage only for `id INT PRIMARY KEY` tables.
+# Table-scoped VC ops and ADD COLUMN on clustered tables, once per PK shape.
 
 set -u
 
@@ -81,7 +76,6 @@ for shape in comp_int text_pk pk_only; do
 
   echo "--- shape: $shape ---"
 
-  # Two tables so table-scoped operations distinguish their target.
   BASE="
 $DDL
 CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
@@ -90,7 +84,6 @@ INSERT INTO u VALUES (1,'u1');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 "
 
-  # Selective staging: only t is staged and committed; u stays dirty.
   oracle "${shape}_add_selective" "
 $BASE
 $MUT
@@ -99,7 +92,6 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'just t');
 " "SELECT CONCAT('R|', table_name, '|', staged, '|', status) FROM dolt_status;"
 
-  # Table-level checkout: discard t's working changes only.
   oracle "${shape}_checkout_table" "
 $BASE
 $MUT
@@ -114,15 +106,12 @@ INSERT INTO u VALUES (2,'u2');
 SELECT dolt_checkout('t');
 " "SELECT CONCAT('R|', table_name, '|', staged, '|', status) FROM dolt_status;"
 
-  # diff_stat over a committed change.
   oracle "${shape}_diff_stat" "
 $BASE
 $MUT
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 " "SELECT CONCAT('R|', table_name, '|', rows_added, '|', rows_deleted, '|', rows_modified) FROM dolt_diff_stat('HEAD~1', 'HEAD');"
 
-  # Schema change on a clustered table: rows written before and after an
-  # ADD COLUMN, then data diff and history spanning the change.
   SCHEMA_SETUP="
 $BASE
 ALTER TABLE t ADD COLUMN extra TEXT;

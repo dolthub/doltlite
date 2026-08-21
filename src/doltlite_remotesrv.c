@@ -24,7 +24,7 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #include <pthread.h>
 #include <errno.h>
 
-/* Bound resource use while keeping any one slow client off the accept loop. */
+/* Bound resource use; keep a slow client off the accept loop. */
 #define SERVER_WORKERS 4
 #define SERVER_QUEUE_SIZE 16
 #define SERVER_DEFAULT_TIMEOUT_MS 30000
@@ -38,8 +38,7 @@ struct DoltliteWorkerArg {
   int index;
 };
 
-/* Open ChunkStore cache keyed by db path. Workers serialize on h->mu so a
-** shared store is never used concurrently; pSrv->mutex only protects the list. */
+/* Open ChunkStore cache keyed by db path. Workers serialize on h->mu. */
 struct RemoteDbHandle {
   char *zPath;
   ChunkStore store;
@@ -121,8 +120,7 @@ static void sendOk(DoltliteConn *fd, const u8 *pBody, int nBody){
   sendResponse(fd, 200, "OK", pBody, nBody);
 }
 
-/* Structured error body: {"code":"...","sqlite":N,"message":"..."}.
-** Clients parse "message" for humans and "code"/"sqlite" for recovery. */
+/* Structured error body: {"code","sqlite","message"}. */
 static void sendStructuredError(
   DoltliteConn *fd,
   int httpStatus,
@@ -135,7 +133,7 @@ static void sendStructuredError(
   int nBody;
   const char *zMsg = zMessage && zMessage[0] ? zMessage : "error";
   const char *zC = zCode && zCode[0] ? zCode : "error";
-  /* Keep body simple ASCII so no JSON escaping is required for known strings. */
+  /* Plain ASCII so known strings need no JSON escaping. */
   sqlite3_snprintf(sizeof(zBody), zBody,
     "{\"code\":\"%s\",\"sqlite\":%d,\"message\":\"%s\"}",
     zC, sqliteRc, zMsg);
@@ -223,19 +221,14 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 
 #define MAX_HEADER_SIZE 4096
 
-/* Request/response caps for an unauthenticated protocol. Response cap matches
-** the client-side HTTP_RESP_MAX_BYTES in doltlite_http_remote.c so a batch
-** get-chunks cannot force the server to materialize an unbounded reply. */
-#define MAX_CHUNK_BYTES    (64 * 1024 * 1024)   /* 64 MiB single chunk */
-#define MAX_REQUEST_BYTES  (128 * 1024 * 1024)  /* 128 MiB total body */
-#define MAX_RESPONSE_BYTES MAX_REQUEST_BYTES    /* 128 MiB total reply */
+/* Unauthenticated protocol caps. Response matches HTTP_RESP_MAX_BYTES so
+** batch get-chunks cannot materialize an unbounded reply. */
+#define MAX_CHUNK_BYTES    (64 * 1024 * 1024)
+#define MAX_REQUEST_BYTES  (128 * 1024 * 1024)
+#define MAX_RESPONSE_BYTES MAX_REQUEST_BYTES
 
-/* Per-request read deadlines. The per-recv socket timeout only bounds a
-** single recv, so a client dribbling one byte per recv could pin a worker
-** for MAX_HEADER_SIZE * timeout. The whole header must arrive within one
-** timeout window; the body gets that same grace then must sustain
-** BODY_MIN_RATE, which aborts a slow-loris while allowing a genuinely slow
-** large upload. */
+/* Header must arrive in one timeout; body then sustains BODY_MIN_RATE
+** (slow-loris vs slow large upload). */
 #define SERVER_BODY_MIN_RATE     (64 * 1024)
 
 static i64 monotonicMs(void){
@@ -244,9 +237,7 @@ static i64 monotonicMs(void){
   return (i64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Grow *pp to at least need bytes, capped at MAX_RESPONSE_BYTES. Uses
-** sqlite3_realloc64 so sizes above 2 GiB-on-int truncation never under-alloc.
-** Returns SQLITE_OK, SQLITE_NOMEM, or SQLITE_TOOBIG. */
+/* Grow *pp to need bytes, capped at MAX_RESPONSE_BYTES (realloc64). */
 static int remoteSrvGrowBuf(u8 **pp, i64 *pnAlloc, i64 need){
   i64 nNew;
   u8 *pTmp;
@@ -400,8 +391,7 @@ static int parseRequest(
       rc = parseContentLength(pValue, pValueEnd, &contentLength);
       if( rc!=0 ) return rc;
     }else if( headerNameEquals(p, nName, "Transfer-Encoding") ){
-      /* Chunked request bodies are not implemented. Reject the request
-      ** instead of treating its first chunk as another HTTP request. */
+      /* Chunked request bodies are not implemented. */
       return -1;
     }else if( zAuth && nAuthMax>0
            && headerNameEquals(p, nName, "Authorization") ){
@@ -467,10 +457,7 @@ static int parsePath(
 
 static int isSafeDbName(const char *zDbName){
   int i;
-  /* Reject any leading-dot name. This covers "." and ".." plus dotfiles
-  ** like ".env", ".bashrc", ".gitignore" that an attacker could otherwise
-  ** plant in the served directory.
-  */
+  /* Reject leading-dot names (., .., and dotfiles). */
   if( zDbName[0]=='.' ) return 0;
   for(i=0; zDbName[i]; i++){
     char c = zDbName[i];
@@ -525,7 +512,6 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
     return;
   }
 
-  /* nHashes is bounded by MAX_REQUEST_BYTES / PROLLY_HASH_SIZE. */
   aResult = (u8*)sqlite3_malloc64((sqlite3_uint64)nHashes);
   if( !aResult ){
     sendSqliteError(fd, SQLITE_NOMEM);
@@ -549,10 +535,8 @@ static void handleHasChunks(ChunkStore *pStore, DoltliteConn *fd,
   sqlite3_free(aResult);
 }
 
-/* Batched read: body is N concatenated hashes; reply is the framed form
-** httpGetChunks parses -- per requested hash, a 4-byte big-endian length then
-** that many payload bytes, with length 0xFFFFFFFF marking an absent chunk.
-** Total reply size is capped at MAX_RESPONSE_BYTES (413 if exceeded). */
+/* Body is N concatenated hashes; reply is per-hash [u32be len][bytes],
+** 0xFFFFFFFF if absent. Capped at MAX_RESPONSE_BYTES (413). */
 static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
                             const u8 *pBody, int nBody){
   int nHashes, i, rc;
@@ -618,7 +602,7 @@ static void handleGetChunks(ChunkStore *pStore, DoltliteConn *fd,
     sqlite3_free(pData);
   }
 
-  /* nOut is bounded by MAX_RESPONSE_BYTES which fits in a positive int. */
+  /* nOut is bounded by MAX_RESPONSE_BYTES (fits in a positive int). */
   sendOk(fd, pOut, (int)nOut);
   sqlite3_free(pOut);
 }
@@ -816,9 +800,7 @@ static int remoteSrvApplyRefsIf(
   return rc;
 }
 
-/* Parse the [u16 branchLen][branch][u8 force] scope prefix a push prepends to
-** the refs body. On success *pzBranch is an owned string the caller frees, and
-** the rest output points at the remainder (refs blob, or expectedHash+blob). */
+/* Parse [u16 branchLen][branch][u8 force]; *pzBranch is owned. */
 static int remoteSrvParseRefsPrefix(
   const u8 *pBody, int nBody,
   char **pzBranch, int *pbForce, const u8 **ppRest, int *pnRest
@@ -915,8 +897,7 @@ int doltliteRemoteSrvApplyScopedRefsForTest(
 int doltliteRemoteSrvApplyRefsForTest(
   ChunkStore *pStore, const u8 *pBody, int nBody
 ){
-  /* Exercises the install/rollback path only; scope validation is covered
-  ** separately. */
+  /* Install/rollback path only; scope validation is covered separately. */
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = chunkStoreInstallRefsBlob(pStore, pBody, nBody);
@@ -992,8 +973,7 @@ static void remoteDbCacheClear(DoltliteServer *pSrv){
   }
 }
 
-/* Evict one idle handle under pSrv->mutex. Tries non-blocking handle locks so
-** a busy DB is skipped rather than stalling the cache insert path. */
+/* Evict one idle handle; skip busy DBs via non-blocking locks. */
 static void remoteDbCacheEvictOne(DoltliteServer *pSrv){
   RemoteDbHandle *h;
   RemoteDbHandle *pPrev = 0;
@@ -1021,8 +1001,7 @@ static void remoteDbCacheEvictOne(DoltliteServer *pSrv){
   remoteDbHandleFree(pBest);
 }
 
-/* Look up or create a handle, then take h->mu for exclusive request use.
-** On success *ppOut is locked; caller must remoteDbRelease. */
+/* Look up or create a handle; *ppOut is locked. Caller remoteDbRelease. */
 static int remoteDbAcquire(
   DoltliteServer *pSrv,
   const char *zPath,
@@ -1114,7 +1093,7 @@ acquire_error:
 
 static void remoteDbRelease(DoltliteServer *pSrv, RemoteDbHandle *h){
   if( !h ) return;
-  /* Leave the store open for the next request; only drop the exclusive lock. */
+  /* Leave the store open; only drop the exclusive lock. */
   if( h->bOpen
    && (h->store.staging.nPending>0 || h->store.staging.nRecentUncommitted>0) ){
     chunkStoreRollback(&h->store);
@@ -1318,8 +1297,7 @@ static void serverRequestStop(DoltliteServer *pSrv){
     doltliteShutdownSocket(fd);
     doltliteCloseSocket(fd);
   }
-  /* Workers close active sockets. shutdown() wakes their blocking I/O without
-  ** risking descriptor reuse between this thread and the owning worker. */
+  /* shutdown() wakes blocking I/O without descriptor reuse. */
   for(i=0; i<pSrv->nWorkers; i++){
     if( pSrv->activeFd[i]>=0 ){
       doltliteShutdownSocket(pSrv->activeFd[i]);
@@ -1411,12 +1389,8 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
     if( !pSrv->tls ){ serverCleanup(pSrv); return SQLITE_ERROR; }
   }
 
-  /* Loopback is all of 127/8, not just 127.0.0.1 — Linux routes the whole
-  ** range locally. Report the two exposures separately: TLS covers only
-  ** confidentiality, and warning about authentication when --auth-keys is set
-  ** trains operators to ignore the warning that matters. Authentication is the
-  ** graver of the two, because an unauthenticated write request opens the
-  ** store READWRITE|CREATE, so a reachable client can push as well as read. */
+  /* Loopback is 127/8, not just 127.0.0.1. Warn TLS and auth separately;
+  ** unauthenticated writes open the store READWRITE|CREATE. */
   if( (ntohl(bindIn.s_addr) >> 24) != 127 ){
     if( pSrv->tls==0 ){
       fprintf(stderr,

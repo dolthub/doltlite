@@ -212,11 +212,7 @@ run_test_match "vals_mod_to" "SELECT typeof(to_v) FROM dolt_diff_t WHERE diff_ty
 
 rm -f "$DB"
 
-# A key-shape recreate between commits renders each side under its own key
-# shape and pairs nothing across the shapes: the from row keeps its text
-# key, the to row its integer, and a raw-key collision ('AAAAA' aliases
-# intkey -5385951930834944000) is a remove plus an add, never one
-# "modified" row.
+# Recreate across key shapes pairs nothing; a raw-key collision is remove+add.
 DBS=/tmp/test_dt_shape_$$.db; rm -f "$DBS"
 echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID;
 INSERT INTO t VALUES('AAAAA', 1);
@@ -238,11 +234,7 @@ run_test "shape_no_modified_pairing" \
 rm -f "$DBS"
 
 
-# Historical sides render by column NAME against the schema at their commit,
-# not by record position under the current schema: after a mid-position
-# column drop, from_c must show the old row's c, and the base commit's
-# "added" row must show its c even though the record still holds three
-# fields.
+# Historical sides render by column name at that commit, not current positions.
 DBN=/tmp/test_dt_namemap_$$.db; rm -f "$DBN"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
 INSERT INTO t VALUES(1,'BEE','CEE');
@@ -257,9 +249,7 @@ run_test "namemap_to_at_old_commit" \
   "SELECT to_a || '=' || to_c FROM dolt_diff_t WHERE diff_type='added';" \
   "1=CEE" "$DBN"
 
-# Re-adding a dropped column moves it to the end of the declared order; the
-# base commit's record still holds it at its old position, so only a name
-# walk finds it.
+# Re-adding a dropped column moves it to the declared end.
 DBR=/tmp/test_dt_readd_$$.db; rm -f "$DBR"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
 INSERT INTO t VALUES(1,'BEE','CEE');
@@ -276,8 +266,7 @@ run_test "namemap_moved_col_to" \
   "SELECT to_b || '/' || to_c FROM dolt_diff_t WHERE diff_type='modified';" \
   "NEWBEE/CEE" "$DBR"
 
-# A PK-only WITHOUT ROWID table whose recreate swapped the key column order
-# decodes each side's key with that side's primary key definition.
+# Decode each side's key with that side's PK definition.
 DBK=/tmp/test_dt_pkswap_$$.db; rm -f "$DBK"
 echo "CREATE TABLE t(a TEXT, b TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
 INSERT INTO t VALUES('k1','k2');
@@ -292,10 +281,7 @@ run_test "namemap_pkswap_from" \
   "k1/k2" "$DBK"
 
 rm -f "$DBN" "$DBR" "$DBK"
-# A pushed-down to_commit filter is a SUBSET of the full scan: a commit not
-# reachable from the session head yields no rows, exactly like the
-# unfiltered scan (and Dolt). The +to_commit form blocks pushdown, so the
-# two must agree.
+# Unreachable to_commit is empty; +to_commit must agree with the unfiltered scan.
 DBG=/tmp/test_dt_ancgate_$$.db; rm -f "$DBG"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
@@ -317,11 +303,7 @@ run_test "ancestry_gate_reachable_commit" \
 rm -f "$DBG"
 
 
-# A STORED generated column holds a field in every record but is absent from
-# the declared column list, so every column after it sat one slot further
-# along than its declared position: reading by that position returned the
-# generated column's value instead. VIRTUAL ones are computed on read and
-# occupy nothing, so they must not shift anything.
+# STORED generated columns occupy a record slot; VIRTUAL ones do not.
 DBG1=/tmp/test_dt_gencol_$$.db; rm -f "$DBG1"
 echo "CREATE TABLE g(a INTEGER PRIMARY KEY, b TEXT, gs TEXT GENERATED ALWAYS AS (b||'S') STORED, gv TEXT AS (b||'V') VIRTUAL, c TEXT);
 INSERT INTO g(a,b,c) VALUES(1,'x','c1');
@@ -338,8 +320,7 @@ run_test "gencol_history" \
   "c2,c1" "$DBG1"
 run_test "gencol_at" "SELECT c FROM dolt_at_g WHERE commit_ref='HEAD~1';" "c1" "$DBG1"
 
-# The clustered layout puts key columns first and the rest in declared
-# order, generated ones included, so it needs the same accounting.
+# Clustered layout puts keys first, generated included.
 DBG2=/tmp/test_dt_gencol_wr_$$.db; rm -f "$DBG2"
 echo "CREATE TABLE w(k TEXT, b TEXT, gs TEXT GENERATED ALWAYS AS (b||'S') STORED, c TEXT, PRIMARY KEY(k)) WITHOUT ROWID;
 INSERT INTO w(k,b,c) VALUES('k1','x','c1');
@@ -354,8 +335,6 @@ run_test "gencol_clustered_history" \
   "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_w ORDER BY commit_date);" \
   "c2,c1" "$DBG2"
 
-# A key column that is not the first declared column, with a generated
-# column between it and the rest.
 DBG3=/tmp/test_dt_gencol_nlpk_$$.db; rm -f "$DBG3"
 echo "CREATE TABLE z(a TEXT, k TEXT PRIMARY KEY, gs TEXT GENERATED ALWAYS AS (a||'S') STORED, c TEXT) WITHOUT ROWID;
 INSERT INTO z(a,k,c) VALUES('av','k1','c1');

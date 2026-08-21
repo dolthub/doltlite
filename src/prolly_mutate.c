@@ -302,12 +302,8 @@ streaming_cleanup:
   return rc;
 }
 
-/* Boundary predicate shared with the chunker (prolly_chunker.c addToLevel): an
-** entry of thisSize bytes whose key is pKey closes a chunk when more than one
-** item is present and the running byte count reaches PROLLY_CHUNK_MAX, or
-** PROLLY_CHUNK_MIN and the Weibull roll fires. A single entry cannot be split.
-** Seeded with the node level so leaves and internal nodes match the shapes the
-** chunker produces. */
+/* Same boundary as the chunker: split at CHUNK_MAX, or CHUNK_MIN if Weibull
+** fires. One entry cannot split. Seeded by node level. */
 static int chunkBoundary(int nItems, int nBytes, int thisSize,
                          const u8 *pKey, int nKey, u8 level){
   if( nItems<=1 ) return 0;
@@ -609,8 +605,7 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
   if( pEdit->op!=PROLLY_EDIT_INSERT ){
     return SQLITE_NOTFOUND;
   }
-  /* These no-rechunk builders copy pVal verbatim; a symbolic zero tail
-  ** needs the chunker path, which knows how to keep it sparse. */
+  /* No-rechunk builders copy pVal verbatim; a symbolic zero tail needs the chunker. */
   if( pEdit->nZeroTail ){
     return SQLITE_NOTFOUND;
   }
@@ -1286,11 +1281,8 @@ static int replaceBatchLeafNoRechunk(
 
   if( changed ){
     if( sizeChanged ){
-      /* A replacement of a different length moves every following entry, so the
-      ** boundaries this leaf was chunked at may no longer be the ones a fresh
-      ** build would pick. Validate and let the caller rechunk if they moved,
-      ** the way the single-edit path does -- writing regardless freezes a shape
-      ** that history independence says must not depend on how we got here. */
+      /* A length-changing replacement may move chunk boundaries. Validate and
+      ** rechunk if they moved; history independence forbids freezing the old shape. */
       rc = finishAndWriteBuilderNode(pMut->pStore, 0, &b, !isLast, pHash);
     }else{
       rc = writeBuilderNode(pMut->pStore, 0, &b, pHash);
@@ -1556,10 +1548,8 @@ int prollyMutateFlush(ProllyMutator *pMut){
     return SQLITE_OK;
   }
 
-  /* Materialize the edit sort order before any strategy iterates it. The
-  ** iterator helpers compute it lazily and discard an allocation failure; an
-  ** OOM there would leave a stale order and a strategy (e.g. buildFromEdits)
-  ** would emit keys out of order, corrupting the tree. Fail cleanly instead. */
+  /* Materialize edit sort order first. Lazy OOM would leave a stale order
+  ** and emit keys out of order. */
   rc = prollyMutMapEnsureOrder(pMut->pEdits);
   if( rc!=SQLITE_OK ) return rc;
 

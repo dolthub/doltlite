@@ -45,12 +45,8 @@ int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit)
   return SQLITE_OK;
 }
 
-/* True when the on-disk store provably matches this handle's in-memory
-** state: same inode (a peer gc replaces the file), physical size equal to
-** the in-memory committed extent (the store is append-only, so any peer
-** commit or crash garbage grows it), and a sealed tail root record carrying
-** this handle's live refs hash (so uncommitted local ref changes, or any
-** size-coincident rewrite, force the slow path). */
+/* Disk matches memory: same inode, size equals committed extent, and a
+** sealed tail root carries this handle's live refs hash. */
 int csDiskStateMatchesMemory(ChunkStore *cs){
   int bMoved = 0;
   int hashState;
@@ -85,12 +81,8 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
                 cs->refs.refsHash.data, PROLLY_HASH_SIZE)==0;
 }
 
-/* The refs hash the on-disk manifest tail records, read fresh. The
-** in-memory committedRefsHash is only a proxy for it: an operation that
-** reinstates a pre-merge view leaves the two disagreeing, and a lock
-** refresh that finds the file unchanged never re-adopts it. Returns 0 when
-** the tail cannot be read as a sealed root record, which the caller must
-** treat as "cannot prove disk is unmoved". Caller holds the store lock. */
+/* Fresh refs hash from the sealed tail. committedRefsHash is a proxy
+** (pre-merge restore can disagree). 0 means cannot prove disk unmoved. */
 int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
   i64 physSize = 0;
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
@@ -98,18 +90,14 @@ int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
 
   memset(pOut, 0, sizeof(*pOut));
   if( cs->file.pFile==0 ) return 0;
-  /* Locate the tail from the file itself, not from this handle's WAL
-  ** bookkeeping: a peer's commit appended past where this handle believes
-  ** the content ends, and that append is exactly what must be detected. */
+  /* Tail from the file, not WAL bookkeeping: a peer may have appended. */
   if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK ) return 0;
   if( physSize < (i64)sizeof(aRoot) ) return 0;
   if( sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot),
                     physSize - (i64)sizeof(aRoot))!=SQLITE_OK ){
     return 0;
   }
-  /* An unsealed tail (this handle's own uncommitted append, or a torn
-  ** write) is not a published state; report "cannot prove" and let the
-  ** caller fall back to its in-memory comparison. */
+  /* Unsealed tail is unpublished; caller falls back to in-memory. */
   if( aRoot[0]!=CS_WAL_TAG_ROOT ) return 0;
   hashState = csManifestHashState(aRoot+1, physSize-(i64)sizeof(aRoot));
   if( hashState==CS_MANIFEST_HASH_BAD ){
@@ -124,14 +112,8 @@ int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
   return 1;
 }
 
-/* Read zName's committed tip straight from disk into *pTip, leaving this
-** store's in-memory state untouched. Opens a throwaway view of the file (as
-** csReloadFromDisk does) so a commit/merge head-CAS sees a peer's advance even
-** when its force-refresh is suppressed (a reentrant lock holder, or a WAL-reuse
-** commit the file-size heuristic misses). When the tail root record proves the
-** disk still matches this handle's state, the in-memory tip IS the disk tip
-** and the throwaway open is skipped. *pFound is 0 if the branch is absent.
-** Caller must hold the chunk-store lock. */
+/* Read zName's disk tip without touching this handle. Skip the throwaway
+** open when the tail root already matches. Caller holds the store lock. */
 int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
                                 ProllyHash *pTip, int *pFound){
   ChunkStore tmp;
@@ -247,7 +229,6 @@ int chunkStoreAddTagFull(
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
   int i = findTagIdx(cs, zName);
   if( i<0 ) return SQLITE_NOTFOUND;
-  /* Free every owned field, not just zName, before the swap-remove. */
   sqlite3_free(cs->refs.aTags[i].zName);
   sqlite3_free(cs->refs.aTags[i].zTagger);
   sqlite3_free(cs->refs.aTags[i].zEmail);
@@ -378,7 +359,6 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
     }
     sz += inc;
   }
-  /* SequenceRef section: u32 count, then for each: u32 nameLen, name, i64 seq. */
   sz += 4;
   for(i=0; i<cs->refs.nSequences; i++){
     int nameLen = cs->refs.aSequences[i].zTableName
@@ -483,10 +463,10 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
     p += PROLLY_HASH_SIZE;
     memcpy(p, cs->refs.aBranches[0].workingSetHash.data, PROLLY_HASH_SIZE);
     p += PROLLY_HASH_SIZE;
-    CS_WRITE_U32(p,0); p+=4;     /* nTags */
-    CS_WRITE_U32(p,0); p+=4;     /* nRemotes */
-    CS_WRITE_U32(p,0); p+=4;     /* nTracking */
-    CS_WRITE_U32(p,0); p+=4;     /* nSequences */
+    CS_WRITE_U32(p,0); p+=4;
+    CS_WRITE_U32(p,0); p+=4;
+    CS_WRITE_U32(p,0); p+=4;
+    CS_WRITE_U32(p,0); p+=4;
     assert( p==aBuf+sizeof(aBuf) );
     rc = chunkStorePut(cs, aBuf, (int)sizeof(aBuf), &refsHash);
     if( rc==SQLITE_OK ) memcpy(&cs->refs.refsHash, &refsHash, sizeof(ProllyHash));

@@ -1,12 +1,5 @@
 #!/bin/bash
-#
-# Oracle tests for the row-addressing version-control operations across
-# PRIMARY KEY shapes. merge/cherry-pick/revert/rebase/reset/checkout all
-# address rows by key across commits, but their oracle scenarios only used
-# `id INT PRIMARY KEY` tables; the history-family NULL-decode bugs showed
-# that single-shape suites are blind to clustered-key handling. Every
-# scenario here runs once per key shape and compares the resulting table
-# contents (and status where relevant) against real Dolt.
+# Row-addressing VC ops once per PRIMARY KEY shape vs Dolt. Single-shape suites missed clustered keys.
 
 set -u
 
@@ -50,9 +43,7 @@ oracle() {
 echo "=== Version Control Oracle Tests: VC ops across PK shapes ==="
 echo ""
 
-# Each shape defines: DDL, three seed rows r1/r2/r3, two extra rows r4/r5,
-# an UPDATE touching r1 (shapes without a value column substitute a
-# delete+insert pair), and a projection of the full table.
+# Shapes without a value column substitute delete+insert for the r1 UPDATE.
 for shape in comp_int text_pk mixed pk_only; do
   case $shape in
     comp_int)
@@ -101,7 +92,6 @@ $SEED
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 "
 
-  # merge: feat adds a row and edits r1; main deletes r2 and adds another row
   oracle "${shape}_merge" "
 $BASE
 SELECT dolt_checkout('-b', 'feat');
@@ -115,7 +105,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feat');
 " "$PROJ"
 
-  # cherry-pick: feat's lone commit (add + delete) applied onto advanced main
   oracle "${shape}_cherry_pick" "
 $BASE
 SELECT dolt_checkout('-b', 'feat');
@@ -128,7 +117,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main2');
 SELECT dolt_cherry_pick('feat');
 " "$PROJ"
 
-  # revert: undo the second commit
   oracle "${shape}_revert" "
 $BASE
 $EDIT_R1
@@ -137,7 +125,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 SELECT dolt_revert('HEAD');
 " "$PROJ"
 
-  # rebase: feat's two commits replayed onto advanced main
   oracle "${shape}_rebase" "
 $BASE
 SELECT dolt_checkout('-b', 'feat');
@@ -152,7 +139,6 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "$PROJ"
 
-  # reset --hard: dirty working changes discarded
   oracle "${shape}_reset_hard" "
 $BASE
 $EDIT_R1
@@ -161,7 +147,6 @@ $ROW4
 SELECT dolt_reset('--hard');
 " "$PROJ"
 
-  # checkout: rows committed per branch stay with their branch
   oracle "${shape}_checkout" "
 $BASE
 SELECT dolt_checkout('-b', 'feat');
@@ -173,7 +158,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main2');
 SELECT dolt_checkout('feat');
 " "$PROJ"
 
-  # status: dirty clustered tables report as modified
   oracle "${shape}_status" "
 $BASE
 $EDIT_R1

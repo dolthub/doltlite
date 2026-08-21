@@ -808,18 +808,13 @@ ROLLBACK TO sp1;
 echo ""
 echo "--- Schema objects (views, triggers, indexes) ---"
 
-# Schema-object observability diverges (sqlite_master vs dolt_schemas /
-# information_schema) and trigger bodies and DROP INDEX cannot share one
-# script across dialects, so these run per-system setups and queries and
-# compare the projected results.
+# Schema-object observability and trigger/DROP INDEX syntax diverge; per-system setups.
 oracle_dual_poststate() {
   local name="$1" dl_setup="$2" dt_setup="$3" dl_query="$4" dt_query="$5"
   local dir="$TMPROOT/${name}_dual"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # The observation runs in the SAME session as the setup: dolt_checkout is
-  # session-scoped, so a fresh session would observe the default branch.
-  # Queries tag their rows (Q|, V|, I|) and everything else is filtered out.
+  # Same session: checkout is session-scoped. Rows tagged Q|/V|/I|.
   local dl_post
   dl_post=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
             | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
@@ -1109,9 +1104,7 @@ SELECT dolt_checkout('main', 't');
 " "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT b FROM t WHERE a = 1);" \
 "SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT b FROM t WHERE a = 1));"
 
-# Same CREATE SQL for t on both branches. d1/d2 on feature shift t onto
-# main's index number; overlaying the source iTable then writes t's root
-# onto the working index and corrupts both the table and the index scan.
+# Same CREATE on both branches; overlaying source iTable used to write t's root onto the working index.
 oracle_dual_poststate "checkout_table_keeps_working_catalog_numbers" "
 CREATE TABLE seed(id INTEGER PRIMARY KEY);
 INSERT INTO seed VALUES (0);
@@ -1169,11 +1162,7 @@ SELECT 'I|' || id || '|' || b FROM t WHERE b = 77;" \
 ) q ORDER BY tbl, id;
 SELECT concat('I|', id, '|', b) FROM t WHERE b = 77;"
 
-# ROLLBACK does not revert dolt_checkout: the session stays on the branch it
-# checked out, and later writes land there. Reported once as state corruption
-# because dolt_default_branch() still says "main" -- that is the repo default,
-# not the session branch. Dolt behaves the same way, so this pins the parity and
-# keeps someone from "fixing" it into a divergence.
+# ROLLBACK does not revert dolt_checkout. dolt_default_branch() is the repo default, not the session branch.
 oracle "checkout_survives_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');

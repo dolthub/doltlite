@@ -172,7 +172,6 @@ static sqlite3_file *pagerShimDummyFile(void){
 
 static sqlite3_file *shimPagerFile(Pager *p){
   PagerShim *s = SHIM(p);
-  /* Resolve through the store so reloads cannot leave a stale file handle. */
   if( s->pStore ){
     sqlite3_file *pCurrent = chunkFileGetHandle(&((ChunkStore*)s->pStore)->file);
     /* Never fall back to s->pFd; it may be a freed pre-reload handle. */
@@ -331,10 +330,8 @@ static int shimPagerCheckpointTestWrites(Pager *p, sqlite3 *db){
   int i;
   int rc;
 
-  /* SQLite's interrupt2.test raises sqlite3_interrupt() from a testvfs xWrite
-  ** callback during checkpoint. DoltLite checkpoints may compact chunks without
-  ** rewriting the main file, so test builds perform content-preserving writes
-  ** to expose the same interruption point without changing database bytes. */
+  /* interrupt2.test interrupts from xWrite during checkpoint. Compaction may
+  ** not rewrite the main file, so test builds do content-preserving writes. */
   if( db && AtomicLoad(&db->u1.isInterrupted) ) return SQLITE_INTERRUPT;
   pFile = shimPagerFile(p);
   if( !pFile || !pFile->pMethods ) return SQLITE_OK;
@@ -371,12 +368,8 @@ static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
 #endif
   if( rc==SQLITE_OK && db && pCs ){
     rc = doltliteGcCompactStore(db, pCs);
-    /* Compacting here is opportunistic -- stock does not compact on checkpoint
-    ** at all, and answers a checkpoint on a database it may not write with
-    ** success, so a read-only store just stays uncompacted. A store whose file
-    ** was replaced is not that: stock has no such state to be consistent with,
-    ** and the caller is checkpointing a path that no longer holds the database
-    ** it opened, which it can only learn if we say so. */
+    /* Compaction is opportunistic; a plain read-only store stays uncompacted.
+    ** movedReadOnly is not that: the path no longer holds the DB we opened. */
     if( rc==SQLITE_READONLY && !pCs->movedReadOnly ) rc = SQLITE_OK;
   }
   if( pCs ) pCs->checkpointActive = 0;
@@ -508,9 +501,6 @@ static inline const PagerOps *getPagerOps(const Pager *p){
   return &origPagerOps;
 }
 
-/* True when pPager is doltlite's chunk-store pager shim rather than a real
-** SQLite pager. The shim only services the handful of pager calls the prolly
-** btree facade makes and has no page image. */
 int pagerShimIsShim(const Pager *p){
   return p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC;
 }
@@ -920,9 +910,8 @@ static int doltliteBackupSameFile(
     rc = sqlite3OsFullPathname(pDestVfs, zDestFile, nDest, zDestFull);
   }
   if( rc!=SQLITE_OK ){
-    /* Answering from the raw names would let an allocation or path failure
-    ** silently misclassify two spellings of one file as distinct databases
-    ** and start a self-overwriting backup. */
+    /* Do not fall back to raw names: a path failure could start a
+    ** self-overwriting backup. */
     *pRc = rc;
     goto backup_same_file_done;
   }
@@ -936,10 +925,7 @@ backup_same_file_done:
 
 typedef struct DoltliteBackup DoltliteBackup;
 struct DoltliteBackup {
-  /* Non-zero when both databases are legacy: every entry point forwards to the
-  ** stock page copier. Wrapping rather than returning its handle directly keeps
-  ** one object type flowing through the public API. */
-  sqlite3_backup *pOrig;
+  sqlite3_backup *pOrig;  /* stock copier when both sides are legacy */
   sqlite3 *pSrcDb;
   sqlite3 *pDestDb;
   Btree *pSrcBt;
@@ -961,13 +947,8 @@ extern int orig_sqlite3_backup_pagecount(sqlite3_backup*);
 static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
                                         sqlite3 *pSrc, const char *zSrcDb);
 
-/* Every failure path here reports through sqlite3ErrorWithMsg, which allocates
-** a Mem against pDest and writes db->pErr, and the body reads aDb[] on both
-** connections. Stock backup_init holds both mutexes across all of that; this
-** wrapper had none, so an assert build trips sqlite3DbMallocRawNN's
-** mutex-held check on the first such error and a threadsafe build races.
-** Connection mutexes are recursive, so the legacy delegation re-entering them
-** is safe. */
+/* Hold both connection mutexes: sqlite3ErrorWithMsg allocates against
+** pDest. Mutexes are recursive, so legacy backup_init may re-enter. */
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
                                     sqlite3 *pSrc, const char *zSrcDb){
   sqlite3_backup *pRet;
@@ -980,7 +961,6 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
   return pRet;
 }
 
-/* Runs with both connection mutexes held; see sqlite3_backup_init below. */
 static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
                                         sqlite3 *pSrc, const char *zSrcDb){
   DoltliteBackup *p;
@@ -1003,9 +983,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     return 0;
   }
 
-  /* Two legacy databases are copied page by page by the stock engine, whichever
-  ** schema each is attached as. The doltlite path below raw-copies a whole
-  ** chunk-store file, so it needs both sides to be doltlite-format. */
+  /* Two legacy DBs: stock page copier. Raw copy needs both doltlite. */
   if( !sqlite3BtreeIsDoltliteFormat(pSrc->aDb[iSrc].pBt)
    && !sqlite3BtreeIsDoltliteFormat(pDest->aDb[iDest].pBt)
   ){
@@ -1023,9 +1001,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     return (sqlite3_backup*)p;
   }
 
-  /* Only one side is doltlite-format: the page copier cannot write a chunk
-  ** store, and the raw copy would leave the other side's handle pointing at a
-  ** file of the wrong format. */
+  /* Mixed formats: page copier cannot write a chunk store. */
   if( !sqlite3BtreeIsDoltliteFormat(pSrc->aDb[iSrc].pBt)
    || !sqlite3BtreeIsDoltliteFormat(pDest->aDb[iDest].pBt)
   ){
@@ -1061,8 +1037,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     sqlite3ErrorWithMsg(pDest, SQLITE_ERROR, "destination database is in use");
     return 0;
   }
-  /* Do not raw-copy over (or from) a short/garbage file that stock would
-  ** refuse with SQLITE_NOTADB — ticket #1370 / misc5-4.1. */
+  /* Do not raw-copy a short/garbage file (stock: SQLITE_NOTADB). */
   if( srcCs->notADatabase || destCs->notADatabase ){
     sqlite3ErrorWithMsg(pDest, SQLITE_NOTADB, "file is not a database");
     return 0;
@@ -1075,8 +1050,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
                                       chunkFileGetFilename(&destCs->file),
                                       &sameRc);
     if( sameRc!=SQLITE_OK ){
-      /* Stock backup_init surfaces OOM as plain SQLITE_NOMEM; keep that
-      ** contract when the allocation failed inside the OS layer. */
+      /* Stock backup_init reports OS-layer OOM as SQLITE_NOMEM. */
       if( sameRc==SQLITE_IOERR_NOMEM ) sameRc = SQLITE_NOMEM;
       sqlite3Error(pDest, sameRc);
       return 0;
@@ -1107,8 +1081,7 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
     sqlite3Error(pDest, SQLITE_NOMEM);
     return 0;
   }
-  /* zSrcFile is opened with SQLITE_OPEN_MAIN_DB below, so it needs the VFS's
-  ** double-nul terminator (a plain "%s" copy keeps only the first nul). */
+  /* SQLITE_OPEN_MAIN_DB needs a double-nul name. */
   p->zSrcFile = 0;
   if( !srcCs->isMemory
    && chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&srcCs->file),
@@ -1266,9 +1239,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   }
   destLocked = 1;
 
-  /* The refresh above is what learns the destination file was replaced. The
-  ** path now names a database this handle never opened, and finishing would
-  ** rename our copy over it. */
+  /* Refresh learned the dest file was replaced; do not rename over it. */
   if( destCs->movedReadOnly ){
     rc = SQLITE_READONLY;
     p->rc = rc;
@@ -1390,9 +1361,7 @@ backup_step_done:
     destCs->adoptReplacement = 1;
     rc = chunkStoreLockAndRefresh(destCs);
     if( rc==SQLITE_OK ){
-      /* The chunk store now reflects the renamed file. Force the
-      ** destination's Btree handles to reload their catalog (and
-      ** schema cookie) on the next transaction. */
+      /* Dest now reflects the renamed file; reload catalog next txn. */
       doltliteInvalidateBtreeWorkingState(pDestBt);
       chunkStoreUnlock(destCs);
     }

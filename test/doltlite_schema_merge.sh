@@ -404,10 +404,7 @@ run_test "schema_merge_diff_cols_count" \
   "2" "$DB"
 rm -f "$DB"
 
-# Dual ADD COLUMN on a table whose shared columns use mixed-case spellings in
-# CREATE TABLE. normalizeTheirsToMergedLayout must match those names
-# case-insensitively (same contract as schema findColumn) so theirs' edits to
-# shared columns are not treated as a new ordinal.
+# Mixed-case shared columns: normalizeTheirsToMergedLayout matches names case-insensitively.
 DB=/tmp/test_schema_merge_dual_add_case_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, Name TEXT, Score INT);
@@ -499,8 +496,7 @@ SELECT dolt_merge('feat');
 COMMIT;
 EOF
 
-# Conflicts are never committed, so the merge and every inspection of it have to
-# share one session; sc() re-runs the merge and discards it afterwards.
+# Conflicts are never committed; sc() re-runs the merge in one session.
 sc() { printf "BEGIN;\nSELECT dolt_merge('feat');\n%s\nROLLBACK;\n" "$1"; }
 
 run_test "schema_conflicts_columns" \
@@ -522,7 +518,7 @@ run_test_match "schema_conflicts_commit_refused" \
   "$(sc "SELECT dolt_commit('-Am','must fail');")" \
   "unresolved schema conflicts|Error" "$DB"
 
-# The COMMIT in the setup above was refused, so nothing conflicted reached disk.
+# Setup COMMIT was refused, so nothing conflicted reached disk.
 run_test "schema_conflicts_not_persisted" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts);" \
   "0|0" "$DB"
@@ -642,10 +638,7 @@ run_test "schema_merge_many_rows_score_col" \
   "1" "$DB"
 rm -f "$DB"
 
-# Both branches ADD a disjoint column while theirs also edits a shared column
-# and deletes a row. The row-level changes must survive the schema merge --
-# taking ours wholesale and backfilling only the added columns silently drops
-# theirs' edit to id=5 and deletion of id=9.
+# Dual ADD COLUMN: theirs' shared-column edit and deletion must survive, not only the added columns.
 DB=/tmp/test_dual_addcol_rows_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
@@ -729,10 +722,7 @@ run_test "schema_tokenizer_comment" \
   "2" "$DB"
 rm -f "$DB"
 
-# Only one side changes the columns, so the other side and the ancestor still
-# store the dropped column. Every value right of it must not shift left, and a
-# cell neither side touched must not read as a conflict. Values verified
-# against Dolt 2.2.2.
+# One-sided DROP: values right of the dropped column must not shift; untouched cells are not conflicts.
 DB=/tmp/test_drop_col_merge_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
@@ -757,8 +747,7 @@ run_test "drop_col_merge_cols" \
 run_test "drop_col_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# The mirror direction: the side that dropped the column is the one merged in,
-# so it is our own rows that have to move into the merged layout.
+# Mirror: we dropped the column, so our rows move into the merged layout.
 DB=/tmp/test_drop_col_merge_rev_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
@@ -781,8 +770,7 @@ run_test "drop_col_merge_rev_cols" \
 run_test "drop_col_merge_rev_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# A row both sides hold, changed only by them: the ancestor has to be read at
-# merged positions or the untouched cell looks like a competing edit.
+# Shared-row edit: ancestor must be read at merged positions or an untouched cell looks like a conflict.
 DB=/tmp/test_drop_col_merge_mod_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
@@ -806,8 +794,7 @@ run_test "drop_col_merge_mod_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 rm -f "$DB"
 
-# Both sides change columns and one of them drops: the ancestor no longer
-# lines up with either side, so it too is read at merged positions.
+# Both sides change columns; ancestor also read at merged positions.
 DB=/tmp/test_drop_col_merge_dual_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
@@ -834,9 +821,7 @@ run_test "drop_col_merge_dual_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 rm -f "$DB"
 
-# The same pairing with the sides swapped. Only a rename on their side was
-# recognized, so ours went unseen and the merge stopped as incompatible.
-# Values verified against Dolt 2.2.2, which merges this cleanly.
+# Sides swapped: ours' rename was unseen and the merge used to stop as incompatible.
 DB=/tmp/test_rename_ours_drop_theirs_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
@@ -865,8 +850,7 @@ run_test "rename_ours_drop_theirs_conflicts" \
 run_test "rename_ours_drop_theirs_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# Dropping the trailing column leaves the incoming value with nowhere to go,
-# the one shape where no surviving column later claims its slot.
+# Dropping the trailing column: incoming value has nowhere to go.
 DB=/tmp/test_drop_last_col_merge_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
@@ -889,9 +873,7 @@ run_test "drop_last_col_merge_cols" \
 run_test "drop_last_col_merge_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# A rename makes the merge adopt the other side's schema whole, which would
-# also bring back the column this side deleted and read our rows at the
-# adopted positions. Values verified against Dolt 2.2.2.
+# Rename adopts the other schema whole; must not resurrect the column this side dropped.
 DB=/tmp/test_drop_vs_rename_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
@@ -920,7 +902,6 @@ run_test "drop_vs_rename_conflicts" "SELECT count(*) FROM dolt_conflicts;" \
 run_test "drop_vs_rename_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# The same pairing where their side also edits a row both sides hold.
 DB=/tmp/test_drop_vs_rename_edit_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
@@ -945,9 +926,7 @@ run_test "drop_vs_rename_edit_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 rm -f "$DB"
 
-# A rename rewrites no rows, so their root can be identical while the layout
-# has still moved. Nothing about whether a side wrote rows may decide whether
-# our rows are moved onto the adopted layout.
+# Rename rewrites no rows, so an identical root still needs a layout move.
 DB=/tmp/test_drop_vs_rename_norows_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
@@ -974,7 +953,6 @@ run_test "drop_vs_rename_norows_types" \
 run_test "drop_vs_rename_norows_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# A rename with no deletion opposite it must still keep every column.
 DB=/tmp/test_rename_no_drop_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d INT);
@@ -999,10 +977,7 @@ run_test "rename_no_drop_rows" \
   "1:a1x:c1,2:a2:c2" "$DB"
 rm -f "$DB"
 
-# Their schema supplies whatever the merged rows do not carry, and an object
-# this side deleted is exactly that -- so it came back, and a resurrected
-# trigger fires on the next write. Verified against Dolt 2.2.2, which keeps
-# the deletion.
+# Their schema must not resurrect a view/trigger this side deleted.
 DB=/tmp/test_merge_dropped_objects_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
@@ -1025,12 +1000,11 @@ run_test "merge_keeps_view_dropped" \
   "SELECT count(*) FROM sqlite_master WHERE name='v';" "0" "$DB"
 run_test "merge_keeps_trigger_dropped" \
   "SELECT count(*) FROM sqlite_master WHERE name='tg';" "0" "$DB"
-# A trigger that came back would rewrite this row on the way in.
+# A resurrected trigger would rewrite this row.
 run_test "merge_dropped_trigger_stays_silent" \
   "INSERT INTO t VALUES(3,'kept'); SELECT b FROM t WHERE a=3;" "kept" "$DB"
 rm -f "$DB"
 
-# Nothing was deleted, so both objects have to survive the same merge.
 DB=/tmp/test_merge_keeps_objects_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
@@ -1053,11 +1027,7 @@ run_test "merge_keeps_undeleted_objects" \
    WHERE name IN ('v','tg') ORDER BY name;" "view:v,trigger:tg" "$DB"
 rm -f "$DB"
 
-# An index over a column the other branch dropped cannot be carried into the
-# merge: the merged table has no such column, so the catalog it would build
-# cannot be loaded, and the merge used to fail "database disk image is
-# malformed" with no way past it in either direction. Dolt drops the index
-# along with the column.
+# Index over a dropped column cannot load; drop the index with the column (Dolt does too).
 for dir in ours theirs; do
   DB=/tmp/test_merge_idx_dropcol_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1089,8 +1059,7 @@ EOF
   rm -f "$DB"
 done
 
-# A composite index goes the same way when any of its columns is dropped, and a
-# unique one too: the constraint cannot outlive the column it constrains.
+# Composite and unique indexes also cannot outlive a dropped column.
 DB=/tmp/test_merge_idx_dropcol_composite_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1112,9 +1081,7 @@ run_test "merge_composite_index_over_dropped_column_objects" \
   "table:t" "$DB"
 rm -f "$DB"
 
-# Expression indexes name columns inside function calls (nested parens), not
-# as a plain list. Dropping that column used to leave the index in the catalog
-# and fail the merge with "database disk image is malformed".
+# Expression indexes name columns inside function calls; drop those with the column too.
 for dir in ours theirs; do
   DB=/tmp/test_merge_idx_dropcol_expr_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1146,8 +1113,7 @@ EOF
   rm -f "$DB"
 done
 
-# An expression index over a surviving column is not dropped just because a
-# different column disappeared, including when the expression calls abs().
+# Expression index over a surviving column stays, even with abs().
 DB=/tmp/test_merge_idx_expr_survives_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1167,8 +1133,7 @@ run_test "merge_expr_index_surviving_column_kept" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
 rm -f "$DB"
 
-# COLLATE names the collation, not a column. A dropped column whose name
-# happens to be nocase must not take an index on (a COLLATE nocase) with it.
+# COLLATE names a collation, not a column; dropping nocase must not drop (a COLLATE nocase).
 DB=/tmp/test_merge_idx_collate_survives_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, nocase TEXT, b TEXT);
@@ -1190,9 +1155,7 @@ run_test "merge_collate_index_survives_dropped_collation_name_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# An index over a quoted identifier with an embedded quote still tracks the
-# real column. Dropping "odd""name" has to drop the index; dropping some other
-# column must not.
+# Quoted identifier with an embedded quote still tracks the real column.
 for dir in ours theirs; do
   DB=/tmp/test_merge_idx_dropcol_quoted_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1245,8 +1208,7 @@ run_test "merge_quoted_index_surviving_column_kept" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
 rm -f "$DB"
 
-# A partial index's WHERE clause names columns too. Dropping one of those
-# used to leave the index in the catalog and fail the merge as malformed.
+# Partial-index WHERE names columns too; drop the index if that column is dropped.
 for dir in ours theirs; do
   DB=/tmp/test_merge_idx_dropcol_where_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1280,8 +1242,7 @@ EOF
   rm -f "$DB"
 done
 
-# The WHERE literal is not a column. Dropping some other column keeps a
-# partial index whose predicate only names surviving columns.
+# WHERE literals are not columns; keep a partial index whose predicate only names survivors.
 DB=/tmp/test_merge_idx_where_survives_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1301,9 +1262,7 @@ run_test "merge_partial_index_surviving_predicate_kept" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
 rm -f "$DB"
 
-# An index whose columns all survive must be adopted exactly as before: both
-# branches indexing different surviving columns keeps both indexes, and an
-# index over a column their side added comes across with it.
+# Indexes over surviving columns stay, including an index over a column their side added.
 DB=/tmp/test_merge_idx_survives_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1344,11 +1303,7 @@ run_test "merge_index_over_added_column_kept" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix" "$DB"
 rm -f "$DB"
 
-# Each branch dropping a different column is an ordinary merge -- Dolt takes
-# both drops -- but with no action recorded for their deletion the two
-# sqlite_master rows used to conflict and the merge was refused. Assert types
-# as well as values: a layout that survives reopen with a value in the wrong
-# column shows up as a type mismatch, not a missing row.
+# Dual DROP: sqlite_master used to conflict with no deletion action; assert types as well as values.
 DB=/tmp/test_merge_dual_drop_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
@@ -1374,7 +1329,6 @@ run_test "merge_dual_drop_types" \
 run_test "merge_dual_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# Our addition beside their deletion: the merged table carries both changes.
 DB=/tmp/test_merge_add_vs_drop_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1397,10 +1351,7 @@ run_test "merge_add_vs_drop_values" \
 run_test "merge_add_vs_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# Each branch renaming a different column. The adopted schema keeps the other
-# side's column under its ancestor name, so the rename has to be carried across
-# as a rename: replaying it as an addition kept the old column and left the new
-# one empty, which read as NULL through the name the branch actually uses.
+# Dual rename: replay as rename, not add, or the new name is empty/NULL.
 DB=/tmp/test_merge_dual_rename_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
@@ -1424,16 +1375,13 @@ run_test "merge_dual_rename_values" \
 run_test "merge_dual_rename_types" \
   "SELECT DISTINCT typeof(a2)||','||typeof(n) FROM t;" "text,integer" "$DB"
 run_test "merge_dual_rename_integrity" "PRAGMA integrity_check;" "ok" "$DB"
-# SQLite keeps the quoting the rename used, and a column spelled "a2" here but
-# a2 by hand reads as a different definition -- which would turn a later merge
-# of two identical schemas into a conflict.
+# SQLite keeps the rename's quoting; "a2" vs a2 would later conflict as different schemas.
 run_test "merge_dual_rename_quoting_matches_plain_rename" \
   "SELECT sql FROM sqlite_master WHERE name='t';" \
   "CREATE TABLE t(k INTEGER PRIMARY KEY, a2 TEXT, b2 TEXT, n INTEGER)" "$DB"
 rm -f "$DB"
 
-# A merged rename must still merge against a branch that made the same rename
-# by hand.
+# Merged rename must still merge against a hand-made same rename.
 DB=/tmp/test_merge_rename_then_merge_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1461,7 +1409,7 @@ run_test "merge_after_merged_rename_rows" \
   "1:a1,2:a2v" "$DB"
 rm -f "$DB"
 
-# A renamed-to name that cannot be written bare still has to be quoted.
+# Renamed-to names that cannot be written bare still have to be quoted.
 DB=/tmp/test_merge_dual_rename_quoted_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1482,15 +1430,7 @@ run_test "merge_dual_rename_quoted_values" \
 run_test "merge_dual_rename_quoted_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# An index one side adds over a column the other side renames. The indexed
-# column still exists under the new name, but nothing retargets the index to
-# it, and a merged catalog naming a column its table does not have cannot be
-# loaded -- the merge used to report the database as corrupt. Refuse it with a
-# message naming the index and column instead, leaving the branch untouched.
-#
-# Dolt merges these and keeps the index on the renamed column, so this is a
-# deliberate divergence, asserted as such in vc_oracle_schema_merge_test.sh.
-# Retargeting the index would close it (issue #2302).
+# Index added over a column the other side renamed: refuse (Dolt retargets; we cannot).
 for dir in ours theirs; do
   DB=/tmp/test_merge_ix_over_rename_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1526,8 +1466,7 @@ EOF
   rm -f "$DB"
 done
 
-# A unique index gets the same refusal: dropping it silently would drop the
-# constraint with it.
+# Unique index: the same refusal; dropping it silently would drop the constraint.
 DB=/tmp/test_merge_ux_over_rename_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1545,8 +1484,7 @@ run_test_match "merge_unique_index_over_renamed_column_refused" \
   "SELECT dolt_merge('feat');" "cannot merge: index 'ux' covers column 'b'" "$DB"
 rm -f "$DB"
 
-# An index over a column nobody renamed still merges, and so does an index over
-# a column the other side dropped -- that one drops with the column (#2289).
+# Index over an un-renamed column still merges; one over a dropped column drops with it.
 DB=/tmp/test_merge_ix_unaffected_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1566,12 +1504,7 @@ run_test "merge_index_over_other_column_result" \
   "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a,b2" "$DB"
 rm -f "$DB"
 
-# An index of theirs over a column we dropped is not adopted, and the master row
-# for it must not be written either: the row lands at a number one of our own
-# indexes already occupies, so ours is displaced by an index that cannot resolve
-# against the merged table, and the catalog then does not load at all. Only
-# reachable when the table carries an index the drop does not touch, which is
-# why the no-other-index case merged correctly all along.
+# Theirs' index over a dropped column must not displace ours' sqlite_master row.
 for extra in "CREATE INDEX ix0 ON t(a);" "CREATE INDEX ix0 ON t(n);"; do
   DB=/tmp/test_merge_idx_row_$$.db; rm -f "$DB"
   cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -1598,7 +1531,6 @@ EOF
   rm -f "$DB"
 done
 
-# An index of theirs over a column that survives is still adopted beside ours.
 DB=/tmp/test_merge_idx_row_survives_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
@@ -1620,15 +1552,7 @@ run_test "merge_index_row_unaffected_keeps_both" \
   "ix,ix0" "$DB"
 rm -f "$DB"
 
-# A trigger added beside the other branch's rename of its table. A trigger has
-# to resolve when the schema loads -- unlike a view, which is only text until
-# used -- so a merged catalog holding a trigger on a table that is no longer
-# there cannot be loaded, and the merge reported the database as malformed.
-#
-# Dolt merges this and keeps the trigger pointing at the old name, which its own
-# information_schema cannot then read. That is not a result this engine can
-# represent, so it refuses instead: a deliberate divergence, asserted in
-# vc_oracle_correct_schema_merge_matrix_test.sh.
+# Trigger added beside a table rename: refuse (trigger must resolve at load; Dolt keeps a dangling name).
 for dir in ours theirs; do
   DB=/tmp/test_merge_trig_ren_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1662,10 +1586,7 @@ EOF
   rm -f "$DB"
 done
 
-# A trigger the ancestor already had rides along with the rename on the side
-# that renamed, so there is a correct copy to keep and no reason to refuse. A
-# table rename against a row change on the other side is a conflict here for
-# reasons of its own, so assert only that this is not the trigger refusal.
+# Ancestor trigger rides the rename; this conflict is table-rename vs row-change, not a trigger refusal.
 DB=/tmp/test_merge_trig_ancestor_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1684,8 +1605,7 @@ run_test_match "merge_ancestor_trigger_not_refused_for_rename" \
   "SELECT dolt_merge('feat');" "conflicts detected" "$DB"
 rm -f "$DB"
 
-# A view over a renamed table needs no refusal: it stays as text and the
-# catalog loads.
+# View over a renamed table stays as text; catalog still loads.
 DB=/tmp/test_merge_view_ren_tbl_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1705,10 +1625,7 @@ run_test "merge_view_over_renamed_table_objects" \
   "SELECT group_concat(type||':'||name) FROM sqlite_master;" "table:t2,view:v" "$DB"
 rm -f "$DB"
 
-# Dropping the table and creating an unrelated one looks like a rename if only
-# the names are compared. The columns tell them apart, so this is a drop: the
-# trigger still has nowhere to land, refuse as dropped rather than renamed or
-# malformed.
+# Drop + unrelated CREATE looks like a rename by name; columns tell them apart -- refuse as dropped.
 for dir in ours theirs; do
   DB=/tmp/test_merge_trig_drop_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1742,7 +1659,6 @@ EOF
   rm -f "$DB"
 done
 
-# Same hole with no replacement table.
 DB=/tmp/test_merge_trig_drop_only_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1762,11 +1678,7 @@ run_test_match "merge_trigger_over_dropped_table_no_replacement_refused" \
 run_test "merge_trigger_over_dropped_table_no_replacement_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
-# One side drops a column while the other edits that same column's value in a
-# row they both already had. The edit cannot land in the merged table, and
-# discarding it silently decides which branch's intent wins, so refuse -- which
-# is what Dolt does. The rule is per row and per column: an edit to another
-# column, an inserted row carrying a value, and a deleted row all still merge.
+# Drop vs edit of that same column: refuse (Dolt does too); other-column edits, inserts, deletes still merge.
 for dir in ours theirs; do
   DB=/tmp/test_merge_drop_vs_edit_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1816,7 +1728,6 @@ run_test "merge_drop_vs_edit_added_column_kept" \
   "SELECT b FROM t WHERE k=1;" "edit" "$DB"
 rm -f "$DB"
 
-# Everything the rule must leave alone.
 for theirs in "UPDATE t SET n=99 WHERE k=1;" "UPDATE t SET a='edit' WHERE k=1;" \
               "INSERT INTO t VALUES(9,'a9','b9',99);" "DELETE FROM t WHERE k=1;"; do
   DB=/tmp/test_merge_drop_vs_other_$$.db; rm -f "$DB"
@@ -1837,9 +1748,7 @@ EOF
   rm -f "$DB"
 done
 
-# An index added over the columns an existing index already covers. Dolt refuses
-# it -- "multiple indexes covering the same column set cannot be merged" -- and
-# keeping both would impose one side's uniqueness on the other, so refuse too.
+# Duplicate-column-set indexes: refuse, as Dolt does.
 DB=/tmp/test_merge_dup_index_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
@@ -1858,8 +1767,7 @@ run_test_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat'
   "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB"
 rm -f "$DB"
 
-# Same refusal through dolt_pull: the branches diverged after a push, and pull's
-# merge half has to roll back rather than keep both indexes.
+# Same refusal through dolt_pull; merge half must roll back.
 DB=/tmp/test_pull_dup_index_$$.db
 REMOTE=/tmp/test_pull_dup_index_remote_$$.db
 rm -f "$DB" "$REMOTE"
@@ -1886,16 +1794,7 @@ run_test "pull_duplicate_index_columns_integrity" \
 run_test "pull_duplicate_index_columns_rolled_back" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix0" "$DB/feat"
 rm -f "$DB" "$REMOTE"
-# Each branch renames a different column of one table, and an index or trigger
-# on it names the column its own branch renamed. The merged catalog takes the
-# table from one branch and the object from the other, so the object names a
-# column the adopted table does not have: the catalog cannot be loaded, and the
-# rename that would retarget the object only runs once it has.
-#
-# DIVERGENCE FROM DOLT: Dolt merges all of these and renames the object along
-# with the table. We cannot represent that today (see the issue linked from the
-# commit), so refuse -- the user gets something to act on instead of a database
-# reported as malformed.
+# Dual rename + index/trigger naming one renamed column: refuse (Dolt retargets; we cannot).
 for dep in idx trig; do
   DB=/tmp/test_merge_dual_rename_${dep}_$$.db; rm -f "$DB"
   if [ "$dep" = idx ]; then
@@ -1922,9 +1821,7 @@ EOF
   rm -f "$DB"
 done
 
-# The same shape with the column quoted in the index definition. A definition
-# SQLite wrote may quote the name, so a scan that compares only bare tokens let
-# this through and the merge failed as a SQL logic error instead of refusing.
+# Same refusal when SQLite quoted the indexed column.
 for q in dquote backtick bracket; do
   DB=/tmp/test_merge_dual_rename_q_${q}_$$.db; rm -f "$DB"
   case "$q" in
@@ -1950,8 +1847,7 @@ EOF
   rm -f "$DB"
 done
 
-# The mirror merges: the object names the column the OTHER branch renamed, so it
-# arrives beside the table it belongs to and the rename retargets both.
+# Mirror: object names the other branch's renamed column, so the rename retargets both.
 DB=/tmp/test_merge_dual_rename_other_side_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1972,7 +1868,6 @@ run_test "merge_dual_rename_over_index_other_side_cols" \
   "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a2,b2" "$DB"
 rm -f "$DB"
 
-# One branch renaming alone still carries its index across untouched.
 DB=/tmp/test_merge_single_rename_index_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1994,10 +1889,7 @@ run_test "merge_single_rename_over_index_idx" \
   "CREATE INDEX ix0 ON t(a2)" "$DB"
 rm -f "$DB"
 
-# The duplicate-index and dropped-column refusals are Dolt's judgement about a
-# merge of two branches. A revert replays one commit onto the branch that asked
-# for it, with one intended result, so they must not fire there -- and must not
-# reject restoring a state the branch held before.
+# Duplicate-index and dropped-column refusals are merge judgements; revert must not fire them.
 DB=/tmp/test_revert_restores_dup_index_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, c TEXT);
@@ -2014,9 +1906,7 @@ run_test "revert_restoring_same_key_index_objects" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "iA,iB" "$DB"
 rm -f "$DB"
 
-# Replacing an index rather than doubling it: the same side drops the older
-# index and adds one over the same column, so the merge keeps a single index and
-# has nothing to refuse. Dolt merges this and keeps the new index.
+# Same side drops the old index and adds one over the same column: keep the new index, do not refuse.
 DB=/tmp/test_merge_replace_index_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -2038,7 +1928,6 @@ run_test "merge_index_replaced_not_duplicated_objects" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix_new" "$DB"
 rm -f "$DB"
 
-# An index over a column nothing else indexes is not affected.
 DB=/tmp/test_merge_new_index_ok_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);

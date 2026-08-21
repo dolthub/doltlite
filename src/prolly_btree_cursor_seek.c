@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Cursor seek / moveto paths and related key helpers. */
-
 static int keyInfoHasUnsupportedCollation(
   const KeyInfo *pKeyInfo,
   int nField
@@ -93,9 +91,7 @@ int prollyBtCursorTableMoveto(
       return SQLITE_OK;
     }
 
-    /* intKey is delete-masked or absent from the mut map. Probe the tree
-    ** for a live exact hit first so equality lookups stay on the fast
-    ** path. */
+    /* Delete-masked or absent: try a live tree hit first. */
     if( !pEntry ){
       refreshCursorRoot(pCur);
       if( !prollyHashIsEmpty(&pCur->pCur.root) ){
@@ -124,19 +120,8 @@ int prollyBtCursorTableMoveto(
       }
     }
 
-    /* No live exact match. Report "not found" now but defer the merged
-    ** repositioning (which materializes the mut-map order) until something
-    ** actually consumes the cursor position: equality probes on write paths
-    ** never do, while range seeks consume it immediately via Eof/Next/Prev.
-    ** The raw tree position must not leak out of this path: it can sit on a
-    ** delete-masked row, skip mut-map-only rows, or see an empty root when
-    ** every live row is in the mut map.
-    **
-    ** The result must be -1, not +1: the VDBE treats res>0 as "the cursor
-    ** sits on a row above the key" and reads it with no Eof check, which a
-    ** deferred position cannot honor when nothing at or above the key
-    ** survives. With res<0 every consumer either steps forward through the
-    ** merge machinery or checks Eof before reading. */
+    /* Defer merged repositioning. res must be -1: VDBE reads res>0 with no
+    ** Eof check, which a deferred miss cannot honor. */
 table_moveto_deferred_miss:
     pCur->deferredMergedSeek = 1;
     pCur->mmActive = 1;
@@ -152,8 +137,7 @@ table_moveto_deferred_miss:
     rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
   }
   if( rootIsEmpty ){
-    /* Empty tables return res<0 with an invalid cursor, matching stock. */
-    *pRes = -1;
+    *pRes = -1;  /* stock empty-table contract */
     pCur->eState = CURSOR_INVALID;
     return SQLITE_OK;
   }
@@ -285,12 +269,7 @@ static int findMatchingMutMapEntry(
     cmpLen = pEntry->nKey < nSortKey ? pEntry->nKey : nSortKey;
     prefixCmp = memcmp(pEntry->pKey, pSortKey, cmpLen);
     if( prefixCmp>0 ){
-      /* The first pending row above the seek key. That is a landing for any
-      ** direction -- the caller reports it as above and its consumer steps
-      ** from there. It is emphatically not an equality, so *pEqSeen stays
-      ** clear: claiming otherwise tells an equality seek it found a row.
-      ** default_rc says how a prefix-equal row compares, which is a different
-      ** question, and gating this on it lost the landing for SeekGE. */
+      /* First pending row above the key: a landing, not an equality. */
       if( pEntry->op==PROLLY_EDIT_INSERT ){
         pMatch = pEntry;
         cmp = 1;
@@ -314,15 +293,7 @@ static int findMatchingMutMapEntry(
     if( cmp<0 && !pIdxKey->eqSeen ){
       break;
     }
-    /* cmp>0 with no equality means this row sorts above the seek key even
-    ** though its key bytes started with the seek key's. A numeric value that
-    ** no double represents exactly is encoded as the neighbouring double plus
-    ** the exact integer, so its key literally begins with the key of that
-    ** neighbour: seeking to the neighbour lands here with the bytes equal and
-    ** the values not. That is the same landing the prefix-above branch reports,
-    ** so report it rather than losing the row. *pEqSeen stays clear -- nothing
-    ** compared equal, and claiming otherwise would let an equality seek
-    ** overwrite the wrong row. */
+    /* Prefix-equal but recCmp>0 (lossy numeric encoding): still a landing. */
     if( pEntry->op==PROLLY_EDIT_INSERT ){
       pMatch = pEntry;
       *pEqSeen = (cmp==0 || pIdxKey->eqSeen);
@@ -441,7 +412,6 @@ static int scanTreeForCustomCollation(
   return rc;
 }
 
-/* Build the sort-key probe for an index moveto; caches on pCur. */
 static int indexMovetoBuildSeekKey(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -459,7 +429,6 @@ static int indexMovetoBuildSeekKey(
   if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
     nSeekKeyField = (int)pIdxKey->nField;
   }
-  /* Table-root range seeks must ignore probe fields beyond the PK. */
   if( pCur->isTableRoot && pCur->pKeyInfo
    && pIdxKey->default_rc != 0
    && pIdxKey->nField > pCur->pKeyInfo->nKeyField
@@ -507,10 +476,7 @@ static int indexMovetoBuildSeekKey(
   *pnSeekKeyField = nSeekKeyField;
   pCur->nSeekSortKey = nSortKey;
   pCur->nSeekKeyField = nSeekKeyField;
-  /* A probe covering a table root's whole primary key names one row, so the
-  ** pending map can be searched by exact key -- but only when the probe is an
-  ** equality. A range bound names no row, and an exact lookup for it finds
-  ** nothing, which would hide every pending row the range should return. */
+  /* Full-PK table-root equality can exact-match the pending map; ranges cannot. */
   if( pCur->pKeyInfo
    && pIdxKey->default_rc == 0
    && nSeekKeyField == pCur->pKeyInfo->nKeyField
@@ -520,8 +486,6 @@ static int indexMovetoBuildSeekKey(
   return SQLITE_OK;
 }
 
-/* Exact full-key probe against cursor + pending mutmaps. *pDone is set when
-** the seek is fully resolved (hit or hard error already returned). */
 static int indexMovetoExactMutMap(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -552,9 +516,6 @@ static int indexMovetoExactMutMap(
       if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
       setCursorToMutMapEntryPhys(
           pCur, (int)(pEntry - pCur->pMutMap->aEntries));
-      /* The tree side is still wherever the last operation left it. A
-      ** later step must re-seek it to this key before merging, or it
-      ** feeds stale entries into the merge scan. */
       pCur->deferredTreeSeek = 1;
       *pRes = 0;
       pIdxKey->eqSeen = 1;
@@ -591,7 +552,6 @@ static int indexMovetoExactMutMap(
   return SQLITE_OK;
 }
 
-/* Unsupported-collation full scan of mutmaps + tree. *pDone when resolved. */
 static int indexMovetoCustomCollation(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -624,9 +584,6 @@ static int indexMovetoCustomCollation(
   if( pEntry ){
     setCursorToMutMapEntryPhys(
         pCur, (int)(pEntry - pCur->pMutMap->aEntries));
-    /* The tree side is still wherever the last operation left it, the same
-    ** as every other mut-map landing after a moveto: a later step must
-    ** re-seek it to this key before merging or it feeds stale rows in. */
     pCur->deferredTreeSeek = 1;
     *pRes = cmp;
     pIdxKey->eqSeen = 1;
@@ -668,8 +625,6 @@ static int indexMovetoCustomCollation(
   return SQLITE_OK;
 }
 
-/* After a non-exact tree seek, scan forward for the first live match /
-** successor, skipping mutmap-delete-masked rows. */
 static int indexMovetoScanTreeLeaf(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -719,9 +674,7 @@ static int indexMovetoScanTreeLeaf(
               rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
               if( rc!=SQLITE_OK ) break;
               if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-                /* Delete-masked row past the seek key: the next live row
-                ** is still the positioning answer, so keep scanning. */
-                continue;
+                continue;  /* delete-masked; next live row is the landing */
               }
             }
             bestIdx = i;
@@ -811,8 +764,7 @@ static int indexMovetoScanTreeLeaf(
     }
     if( rc!=SQLITE_OK || *pTreeFound || bestIdx>=0 ) break;
     if( !(pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)) ) break;
-    /* Everything from the seek point through the end of this leaf was
-    ** delete-masked; the first live row may sit in a later leaf. */
+    /* Rest of this leaf was delete-masked; try the next leaf. */
     if( nItems>0 ) pCur->pCur.aLevel[pCur->pCur.iLevel].idx = nItems-1;
     rc = prollyCursorNext(&pCur->pCur);
     if( rc!=SQLITE_OK ) break;
@@ -838,7 +790,6 @@ static int indexMovetoScanTreeLeaf(
   return SQLITE_OK;
 }
 
-/* Exact tree hit (not delete-masked). *pDone when resolved. */
 static int indexMovetoExactTreeHit(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -922,9 +873,7 @@ int prollyBtCursorIndexMoveto(
     rc = indexMovetoExactTreeHit(
         pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey, pRes, &done);
     if( rc!=SQLITE_OK || done ) return rc;
-    /* A failed tree seek must not fall through to the mut-map merge below:
-    ** that path resets rc and reports "row not found" for what was really
-    ** an I/O or allocation failure. */
+    /* Do not swallow a failed tree seek as "not found". */
     rc = indexMovetoScanTreeLeaf(
         pCur, pIdxKey, pSortKey, nSortKey, nSeekKeyField,
         &treeFound, &treeCmp, &treeEqSeen);
@@ -1007,8 +956,6 @@ int prollyBtCursorIndexMoveto(
           pCur->eState = CURSOR_VALID;
         }
         *pRes = mutCmp;
-        /* Only if the row actually compared equal. A landing above the key is
-        ** still a landing, but an equality seek must not read it as a hit. */
         if( mutEqSeen ) pIdxKey->eqSeen = 1;
         assert( pIdxKey->default_rc>=0 || mutCmp!=-1 || pIdxKey->eqSeen );
         return SQLITE_OK;
@@ -1018,10 +965,7 @@ int prollyBtCursorIndexMoveto(
       *pRes = treeCmp;
       if( treeEqSeen ) pIdxKey->eqSeen = 1;
       assert( pIdxKey->default_rc>=0 || treeCmp!=-1 || pIdxKey->eqSeen );
-      /* A prefix seek can land on a tree row whose value was overwritten in
-      ** this transaction (full-key seeks catch this in the exact-match fast
-      ** path above). Serve the row from the mut map, or the caller reads the
-      ** stale tree payload. */
+      /* Prefix seek may land on a tree row overwritten this txn. */
       if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
         const u8 *pTreeKey = 0;
         int nTreeKey = 0;
@@ -1047,9 +991,6 @@ int prollyBtCursorIndexMoveto(
     rc = prollyCursorLast(&pCur->pCur, &lastRes);
     if( rc!=SQLITE_OK ) return rc;
     if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-      /* No live row at or above the seek key on either side. Land on the
-      ** merged last row so delete-masked tree rows are never exposed and
-      ** mut-map-only rows are still reachable. */
       pCur->mmActive = 1;
       rc = mergeLast(pCur, &lastRes);
       if( rc!=SQLITE_OK ) return rc;
@@ -1058,19 +999,8 @@ int prollyBtCursorIndexMoveto(
       pCur->eState = CURSOR_VALID;
       *pRes = -1;
       if( !pCur->mmActive || pCur->mergeSrc==MERGE_SRC_TREE ){
-        /* Cache only on a pure tree landing: getCursorPayload serves the
-        ** cache before the merge source, so caching on a BOTH landing
-        ** serves the shadowed committed value instead of the pending one
-        ** written in this transaction. A BOTH landing needs no deferral
-        ** either -- mergeLast leaves the tree cursor ON the row, valid
-        ** for a step in either direction. */
         cacheCurrentTreeStoredPayloadNonIntKey(pCur);
       }else if( pCur->mergeSrc==MERGE_SRC_MUT ){
-        /* mergeLast scanned backwards to get here, so the tree side sits
-        ** below this mut-map row -- it was retreated past any delete-masked
-        ** row at the same key. Stepping forward from that would serve a tree
-        ** row the scan has already passed. Defer the tree seek so the first
-        ** step re-seeks to this row's key and adjusts for its own direction. */
         pCur->deferredTreeSeek = 1;
       }
     } else {
@@ -1153,10 +1083,7 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
       *pRes = -1;
     }else if( nKey > pCur->nSeekSortKey
            && !sortKeyByteStartsField(pKey[pCur->nSeekSortKey]) ){
-      /* The seek key stops mid-field, so the rows are not equal and their
-      ** order depends on the encoding rather than on the bytes compared
-      ** here. Decline and let the record comparator answer. */
-      return SQLITE_NOTFOUND;
+      return SQLITE_NOTFOUND;  /* seek key ended mid-field */
     }else{
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;
@@ -1196,7 +1123,6 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   }
 }
 
-/* Clear cached compare key before OP_SeekScan changes seek targets. */
 void sqlite3BtreeProllyClearCompareKey(BtCursor *pCur){
   if( pCur ){
     CLEAR_CACHED_COMPARE_KEY(pCur);

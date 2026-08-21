@@ -5,20 +5,16 @@
 #include <string.h>
 #include <stddef.h>
 
-/* An open-addressing index over an array of structs that maps a char* name
-** field to the row's index. The name is read back through the caller's array
-** (base + row*stride + nameOff) at both build and lookup time, so it stays
-** correct when the caller rewrites a name in place and never caches a pointer
-** that could dangle after the old name is freed (dolt_commit -A relies on
-** this). Rows whose name field is NULL are skipped; on a duplicate name the
-** first occurrence wins. Lookup returns the 0-based row index, or -1. */
+/* Open-addressing name to row index. Names are read from the caller's array
+** at lookup, so in-place rewrites stay valid (dolt_commit -A). NULL names
+** skipped; first duplicate wins. Lookup returns 0-based index or -1. */
 typedef struct DoltliteNameIndex DoltliteNameIndex;
 struct DoltliteNameIndex {
-  int *aSlot;          /* 1-based row index per slot; 0 = empty */
-  int nSlot;           /* power of two, or 0 when empty */
-  const char *aBase;   /* caller's array, viewed as bytes */
-  int stride;          /* sizeof(element) */
-  int nameOff;         /* byte offset of the char* name field in an element */
+  int *aSlot;
+  int nSlot;
+  const char *aBase;
+  int stride;
+  int nameOff;
 };
 
 static inline unsigned doltliteNameIndexHash(const char *z){
@@ -82,4 +78,4 @@ static inline void doltliteNameIndexFree(DoltliteNameIndex *p){
   memset(p, 0, sizeof(*p));
 }
 
-#endif /* DOLTLITE_NAME_INDEX_H */
+#endif

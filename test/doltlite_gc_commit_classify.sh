@@ -9,12 +9,7 @@ db_rm() {
 echo "=== GC/integrity over commits that collide with the V2 working-set size ==="
 echo ""
 
-# A DOLTLITE_COMMIT_V2 chunk and a WS_FORMAT_VERSION_V2 working set both
-# start with the byte 2. A one-parent commit whose author + email + message
-# total 46 bytes serializes to exactly WS_TOTAL_SIZE_V2 (102) bytes; the
-# chunk walker used to classify it as a working set and chase misaligned
-# bytes as child hashes, so dolt_gc's mark phase and integrity_check both
-# failed on a perfectly healthy store, permanently (the commit is history).
+# COMMIT_V2 and WS_V2 both start with byte 2; a 102-byte one-parent commit used to classify as a working set.
 
 DB=/tmp/test_gc_commit_classify_$$.db; db_rm "$DB"
 
@@ -36,7 +31,6 @@ run_test_lastline "integrity_ok_with_102_byte_commit" \
 
 db_rm "$DB"
 
-# The neighboring sizes (101 and 103 bytes) must classify as commits too.
 run_test_match "gc_ok_at_neighboring_commit_sizes" \
   "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
    INSERT INTO t VALUES (1,'x');
@@ -56,8 +50,7 @@ run_test_lastline "integrity_ok_at_neighboring_commit_sizes" \
 
 db_rm "$DB"
 
-# A two-parent merge commit at the colliding size: 26 string bytes
-# (default author 'doltlite' + empty email = 8, plus an 18-char message).
+# Two-parent at colliding size: 26 string bytes (author 8 + 18-char message).
 run_test_match "gc_ok_with_102_byte_merge_commit" \
   "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
    INSERT INTO t VALUES (1,'x');
@@ -81,12 +74,7 @@ run_test_lastline "integrity_ok_with_102_byte_merge_commit" \
 
 db_rm "$DB"
 
-# The conflicts ("DLC") and constraint-violations ("DCV") blobs lead with
-# 'D' == CATALOG_FORMAT_V3, so a leftover one in the working set made the walker
-# read it as a catalog with an absurd table count and fail the mark phase. A
-# conflict can no longer reach disk at all -- COMMIT refuses while any remain --
-# so the walker can never meet a DLC blob and the hazard is now exercised through
-# the violations blob, which is still committable and still leads with 'D'.
+# DLC/DCV lead with 'D' like CATALOG_V3. Conflicts never persist; exercise via the still-committable DCV blob.
 run_test_match "gc_ok_with_unresolved_violation" \
   "CREATE TABLE parent(id INTEGER PRIMARY KEY);
    CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT REFERENCES parent(id));

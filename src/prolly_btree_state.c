@@ -2,8 +2,6 @@
 
 #include "prolly_btree_int.h"
 
-/* Branch working-set persistence and connection-visible state changes. */
-
 int btreeLoadWorkingSetBlob(
   ChunkStore *cs,
   const char *zBranch,
@@ -381,9 +379,7 @@ int btreeWriteWorkingState(
   u8 isRebasing = 0;
   int rc;
 
-  /* pCommitHash is passed straight through to btreeFillWorkingSetBlob, which
-  ** writes the empty hash for a null one. doltliteHardReset relies on that to
-  ** clear the working commit, so requiring it here only broke assert builds. */
+  /* NULL pCommitHash writes the empty hash; hard-reset relies on that. */
   assert( cs!=0 && zBranch!=0 && pCatHash!=0 );
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &stagedCatalog, &isMerging,
                                &mergeCommitHash, &conflictsCatalogHash,
@@ -458,17 +454,9 @@ int btreeReloadBranchWorkingStateInto(
       }
     }
   }
-  /* Head and catalog come from one snapshot and must be adopted together.
-  ** Keeping a stale head beside the reloaded catalog makes every later
-  ** working-set persist record that stale commit, which the load gate then
-  ** discards -- silently dropping rows this session durably wrote -- and
-  ** makes the commit CAS compare against a tip no peer will ever restore,
-  ** so the session can never commit again without reconnecting.
-  **
-  ** An empty tip is not a newer state: it means the branch is absent from
-  ** the refs (a peer deleted it, or it does not exist yet), and zeroing a
-  ** live head there would turn an orphaned session into one that looks
-  ** brand new. */
+  /* Adopt head with catalog. A stale head is persisted into later working
+  ** sets, then discarded by the load gate. An empty tip means the branch is
+  ** gone; do not zero a live head into a brand-new session. */
   if( !prollyHashIsEmpty(&state.headCommit)
    || prollyHashIsEmpty(&p->headCommit) ){
     p->headCommit = state.headCommit;
@@ -728,10 +716,7 @@ void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged){
   }
 }
 
-/* Session VC state is captured per savepoint level by
-** captureSavepointSessionState when a level is pushed, and levels push
-** lazily at write time. Mutating this state is a write: push any pending
-** levels first so ROLLBACK TO restores the pre-mutation values. */
+/* VC mutations are writes; push lazy savepoints first so ROLLBACK TO restores. */
 static int sessionStateSyncSavepoints(Btree *p){
   if( p->inTrans==TRANS_WRITE ) return syncBtreeSavepoints(p);
   return SQLITE_OK;
@@ -834,7 +819,7 @@ void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                     const char **pzReturnBranch){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;
-    /* Callers treat this as a boolean; META_MIRROR is persist-mode only. */
+    /* Callers want a boolean; META_MIRROR is persist-mode only. */
     if( pIsRebasing ) *pIsRebasing = p->isRebasing & WS_REBASE_FLAG_ACTIVE;
     if( pPreRebaseCat ) memcpy(pPreRebaseCat, &p->preRebaseWorkingCat, sizeof(ProllyHash));
     if( pRebaseOnto ) memcpy(pRebaseOnto, &p->rebaseOntoCommit, sizeof(ProllyHash));
@@ -941,17 +926,13 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   {
     Btree *p = db->aDb[0].pBt;
     if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE || db->pSavepoint ){
-      /* Cherry-pick and revert record conflicts without isMerging. */
+      /* Cherry-pick/revert record conflicts without isMerging. */
       memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
       return;
     }
   }
   if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE ){
-    /* Idle sessions must see the DURABLE working set, not this session's
-    ** cached view. A locked refresh (cheap when the store is unchanged)
-    ** gives the in-memory read below the same guarantee the throwaway
-    ** read-only connection this used to open per call did — without paying
-    ** a full store open and WAL replay every time. */
+    /* Idle: refresh so the in-memory read sees the durable working set. */
     ChunkStore *pStore = &db->aDb[0].pBt->pBt->store;
     if( chunkStoreLockAndRefresh(pStore)==SQLITE_OK ){
       (void)chunkStoreForceRefresh(pStore);
@@ -1043,8 +1024,7 @@ int doltliteSeedSessionHashes(
     Btree *pBt = db->aDb[i].pBt;
     if( !pBt || pBt->pOps!=&prollyBtreeOps || !pBt->pBt ) continue;
     if( &pBt->pBt->store!=cs ) continue;
-    /* A detached session's head is reachable from no ref, so nothing else
-    ** keeps the commit it reads through alive. */
+    /* Detached heads are not reachable from any ref. */
     rc = xPush(pCtx, &pBt->headCommit);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.stagedCatalog);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.mergeCommitHash);
@@ -1052,9 +1032,7 @@ int doltliteSeedSessionHashes(
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.constraintViolationsHash);
-    /* The live catalog's roots: table 1 can be the runtime master-root view,
-    ** which is intentionally absent from the persisted catalog — without this
-    ** a GC collects it while the open session still reads through it. */
+    /* Live catalog roots, including a runtime master root GC would otherwise drop. */
     {
       int k;
       for(k=0; rc==SQLITE_OK && k<pBt->cat.n; k++){
@@ -1149,12 +1127,7 @@ int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCat
   if( !cs ) return SQLITE_ERROR;
   rc = doltliteSaveWorkingSetWithHash(db, pWorkingCatHash);
   if( rc!=SQLITE_OK ) return rc;
-  /* Saving keeps the working set in the pending chunk set, which is where an
-  ** unresolved conflict is allowed to live; committing is what would make it
-  ** durable, and DoltLite never persists conflicts. Callers reach here from
-  ** paths that persist as a side effect before diagnosing the conflict
-  ** themselves -- dolt_commit's staging, for one -- so this stays silent and
-  ** leaves the refusal to that caller and to commit phase one. */
+  /* Conflicts may sit in the pending set; do not commit them durable. */
   p = (db && db->nDb>0) ? db->aDb[0].pBt : 0;
   if( p && !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ) return SQLITE_OK;
   rc = chunkStoreSerializeRefs(cs);

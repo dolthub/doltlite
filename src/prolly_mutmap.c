@@ -21,9 +21,7 @@ static void prepKey(ProllyMutMap *mm,
                     i64 intKey, u8 buf[8]){
   if( !mm->isIntKey ) return;
   if( *ppKey != 0 && *pnKey > 0 ){
-    /* Callers may pass the encoded key together with the integer it encodes:
-    ** the three-way merge forwards both straight off a diff change. The
-    ** encoded key is what gets used, so only require that they agree. */
+    /* Encoded key plus the integer it encodes must agree; the encoded key is used. */
     assert( intKey == 0
          || (*pnKey==8 && prollyDecodeIntKey(*ppKey)==intKey) );
     return;
@@ -147,8 +145,7 @@ static int mutmapSortOrder(ProllyMutMap *mm){
   int needBytes;
   int i;
   if( n <= 1 ){
-    /* A single live entry is always packed at physical slot 0; reset aOrder so
-    ** a stale index left by a prior compaction can't point at a removed slot. */
+    /* Single live entry is at slot 0; reset aOrder so a stale index cannot hit a removed slot. */
     if( n == 1 ) mm->aOrder[0] = 0;
     return SQLITE_OK;
   }
@@ -443,8 +440,6 @@ static int ensureOrder(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
-/* Materialize the sorted iteration order now, propagating an allocation
-** failure. */
 int prollyMutMapEnsureOrder(ProllyMutMap *mm){
   return ensureOrder(mm);
 }
@@ -669,9 +664,7 @@ int prollyMutMapInsertAbsent(
                      PROLLY_EDIT_INSERT, 0);
 }
 
-/* Insert a value of pVal[0..nValPrefix) followed by nZeroTail zero bytes,
-** storing only the prefix. Intkey maps only: blob-key consumers read pVal
-** without consulting nZeroTail. */
+/* Store pVal[0..nValPrefix) plus nZeroTail zeros. Intkey maps only. */
 int prollyMutMapInsertZeroTail(
   ProllyMutMap *mm, i64 intKey,
   const u8 *pVal, int nValPrefix,
@@ -911,7 +904,7 @@ void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   if( !mm ) return;
   target = level - 1;
 
-  /* The levelBase shortcut is only safe when no nested edits exist. */
+  /* levelBase shortcut is only safe with no nested edits. */
   if( level==1 && target==0 && mm->currentSavepointLevel<=1 ){
     for(i=0; i<mm->nUndo; i++){
       sqlite3_free(mm->aUndo[i].prevVal);

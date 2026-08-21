@@ -117,10 +117,8 @@ int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
     if( keyOff > totalKeyBytes || valOff > totalValBytes ){
       return SQLITE_CORRUPT;
     }
-    /* Both arrays must start at 0. Readers reach key data two ways -- through
-    ** these offsets, and by striding from pKeyData for fixed-width keys, as
-    ** prollyNodeIntKey does with i*8 -- and a nonzero first offset makes the
-    ** two disagree about the same node while every other check still passes. */
+    /* Offset arrays must start at 0: readers also stride pKeyData (i*8 for
+    ** int keys); a nonzero first offset disagrees with that. */
     if( i==0 && (keyOff!=0 || valOff!=0) ){
       return SQLITE_CORRUPT;
     }
@@ -231,8 +229,6 @@ static SQLITE_INLINE int prollyKeyComparePrefix(
   const u8 *pRight,
   int n
 ){
-  /* Blob-key node searches compare many short keys. Check the first word
-  ** inline before calling memcmp() for any remaining suffix. */
   if( n>=8 ){
     u64 left = ((u64)pLeft[0]<<56) | ((u64)pLeft[1]<<48)
              | ((u64)pLeft[2]<<40) | ((u64)pLeft[3]<<32)
@@ -436,8 +432,7 @@ static int builderGrowValBuf(ProllyNodeBuilder *b, int nAdd){
       nNew *= 2;
     }
     if( nNew < nNeeded ) return SQLITE_NOMEM;
-    /* A single oversize value would leave most of a doubled buffer dead;
-    ** size to fit and let the next ordinary add resume doubling. */
+    /* Size an oversize value to fit; the next add resumes doubling. */
     if( nAdd >= 1024*1024 && nNew > nNeeded ) nNew = nNeeded;
     pNew = (u8*)sqlite3_realloc(b->pValBuf, (int)nNew);
     if( !pNew ) return SQLITE_NOMEM;
@@ -447,8 +442,7 @@ static int builderGrowValBuf(ProllyNodeBuilder *b, int nAdd){
   return SQLITE_OK;
 }
 
-/* Restore the physical-equals-logical invariant on pValBuf by writing the
-** symbolic zero tail of the last value into the buffer. */
+/* Write the last value's symbolic zero tail so pValBuf is physically complete. */
 static int builderMaterializeZeroTail(ProllyNodeBuilder *b){
   int rc;
   int nTail = (int)b->nValZeroTail;
@@ -534,10 +528,8 @@ int prollyNodeBuilderAddWithCount(
   return builderAddCore(b, pKey, nKey, pVal, nVal, subtreeCount, 1);
 }
 
-/* Add an entry whose value is pVal[0..nValPrefix) followed by nZeroTail zero
-** bytes. The zeros are recorded symbolically; they materialize only if
-** another entry is added afterward (the tail must remain the final bytes of
-** the value region) or the node is finished with the flat Finish. */
+/* Value is pVal[0..nValPrefix) plus nZeroTail zeros, recorded symbolically
+** until another entry is added or Finish materializes them. */
 int prollyNodeBuilderAddZeroTail(
   ProllyNodeBuilder *b,
   const u8 *pKey, int nKey,
@@ -603,11 +595,8 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
   return rc;
 }
 
-/* Like prollyNodeBuilderFinish, but a symbolic zero tail stays symbolic:
-** *ppOut holds the node minus its final *pnZeroTail zero bytes while *pnOut
-** is still the full logical size. Tails only arise on leaves, where the
-** value region is the last region of the node, so the omitted bytes are
-** always the chunk's final bytes. */
+/* Like Finish, but *ppOut omits the final *pnZeroTail zeros (*pnOut is
+** still logical). Only leaves: the value region is last. */
 int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
                                   i64 *pnZeroTail){
   int nOff;

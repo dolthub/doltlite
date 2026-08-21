@@ -1,33 +1,12 @@
 #!/usr/bin/env python3
-"""Emit a randomized SQL script for differential testing against stock SQLite.
+"""Random SQL for differential testing against stock SQLite.
 
-The script is printed on stdout and is valid for both engines: no dolt_*
-surfaces, and nothing that depends on rowid identity or physical row order,
-both of which diverge by design. Every result is either an aggregate or ordered
-by declared columns down to a total tiebreak, so a comparison only ever sees
-storage and query semantics -- a harness that reports position-dependent
-differences would be worse than no harness.
-
-The axis this exists for is transaction shape. Explicit BEGIN/SAVEPOINT blocks
-with reads interleaved between writes are where the merged-cursor state machine
-lives, and every bug it has found so far was in that machine: a one-pass scan
-skipping pending rows, a deferred seek serving a stale payload, a resumed scan
-re-seeking to a stale key, a landing only steppable backwards, a range seek
-hiding uncommitted rows, a descending index mis-ordered on disk.
-
-Feature groups layer more SQL over that axis and are selected individually so a
-divergence can be attributed to one group. Groups known to be clean are on by
-default; the runner documents how to narrow.
+No dolt_*, no rowid identity, no physical row order. Results are aggregates
+or totally ordered. Interleave reads with writes in BEGIN/SAVEPOINT.
 
 Usage: sql_differential_fuzzer.py SEED [--include-<group>]... [--all]
 Groups: large-ints desc expr agg setops cte window joins writesel ddl
         constraints triggers returning generated fkeys
-
-returning, generated and fkeys each add a write whose effect the statement does
-not spell out: RETURNING reads the row the write just produced, a generated
-column is recomputed from it, and a foreign-key action writes another table
-while the parent's scan is open. That is the shape the triggers group found bugs
-in, reached three other ways.
 """
 
 import random
@@ -37,8 +16,7 @@ GROUPS = ["large-ints", "desc", "expr", "agg", "setops", "cte", "window",
           "joins", "writesel", "ddl", "constraints", "triggers",
           "returning", "generated", "fkeys"]
 
-# Integers beyond 2^53 that no double represents exactly get a longer numeric
-# sort key, and the INT64 extremes are in that class too.
+# Integers past 2^53 (and INT64 extremes) use a longer numeric sort key.
 LARGE_INTS = [
     9007199254740992, 9007199254740993, 9007199254740994, 9007199254740995,
     -9007199254740992, -9007199254740993, -9007199254740994,
@@ -50,8 +28,7 @@ LARGE_INTS = [
 TEXTS = ["''", "'a'", "'A'", "'ab'", "'AB '", "'b'", "'z'", "'zz'",
          "'a' || char(0) || 'b'", "'  pad  '", "x'00'", "x'0001'", "x'ff'"]
 
-# Rendered so a value's type is visible: 2 and 2.0 and '2' must not compare as
-# equal output when the engines disagree about which one is stored.
+# quote() so 2, 2.0, and '2' stay distinguishable.
 Q = "coalesce(quote(%s), 'N')"
 
 
@@ -72,7 +49,6 @@ class Gen:
     def emit(self, s):
         self.out.append(s)
 
-    # ---- values ---------------------------------------------------------
     def int_val(self):
         if self.on("large-ints") and self.r.random() < 0.35:
             return str(self.r.choice(LARGE_INTS))
@@ -96,7 +72,6 @@ class Gen:
         return "%.3f" % self.r.uniform(-50, 50)
 
     def expr(self):
-        """A scalar expression over a row of t, for use in SET and predicates."""
         if not self.on("expr"):
             return self.val()
         r = self.r.random()
@@ -118,7 +93,6 @@ class Gen:
             return "abs(length(coalesce(quote(a),'')) - %d)" % self.r.randint(0, 5)
         return self.val()
 
-    # ---- schema ---------------------------------------------------------
     def schema(self):
         coll = self.r.choice(["", "", " COLLATE NOCASE", " COLLATE RTRIM"])
         shape = self.r.choice([
@@ -135,10 +109,7 @@ class Gen:
         bdecl = "b TEXT%s" % coll
         if self.on("constraints") and self.r.random() < 0.25:
             bdecl = "b TEXT%s DEFAULT 'dflt'" % coll
-        # A generated column is derived from the row on every read (VIRTUAL) or
-        # written with it (STORED), and an index over one has to be maintained
-        # by the same writes. Nothing else in the schema makes the engine
-        # recompute a column value while a scan of the row is open.
+        # Generated column recomputed while a scan of the row is open.
         self.gen_kind = ""
         if self.on("generated"):
             self.gen_kind = self.r.choice(["", "VIRTUAL", "STORED"])
@@ -173,7 +144,7 @@ class Gen:
             self.emit("CREATE UNIQUE INDEX i_u ON t(b, k);")
         if self.on("ddl"):
             if self.r.random() < 0.4:
-                # Partial index: rows enter and leave its scope as a changes.
+                # Partial index: rows enter and leave as a changes.
                 self.emit("CREATE INDEX i_p ON t(a) WHERE a IS NOT NULL;")
             if self.r.random() < 0.4:
                 self.emit("CREATE INDEX i_e ON t(length(coalesce(quote(b),'')));")
@@ -186,14 +157,9 @@ class Gen:
                 self.emit("INSERT INTO s(id, v, w) VALUES(%d, %s, %s);"
                           % (i, self.val(), self.text_val()))
         if self.on("triggers"):
-            # No unique constraint on n: inside a trigger body SQLite replaces
-            # the trigger statement's conflict policy with the outer
-            # statement's, so an OR IGNORE here still aborts under a plain
-            # INSERT. Collisions are certain because n is derived from a value,
-            # so the table records every firing instead.
+            # No UNIQUE on n: trigger INSERT OR IGNORE still aborts under a plain INSERT.
             self.emit("CREATE TABLE u(n INTEGER, tag TEXT);")
-            # Trigger bodies run inside the statement that fired them, so they
-            # write through the pending map while a scan of t is still open.
+            # Trigger bodies write the pending map while t is still being scanned.
             self.emit("CREATE TRIGGER tr_i AFTER INSERT ON t BEGIN "
                       "INSERT INTO u(n, tag) "
                       "VALUES(length(coalesce(quote(NEW.b),'')), 'i'); END;")
@@ -208,9 +174,7 @@ class Gen:
             self.emit("CREATE INDEX i_g ON t(g);")
         if self.on("fkeys") and self.shape in (
                 "int_pk", "text_pk", "numeric_pk", "unique_only"):
-            # A cascade is a write the user's statement did not name, applied to
-            # another table while the parent's scan is open -- the same shape as
-            # a trigger, reached through the foreign-key machinery instead.
+            # FK cascade writes another table while the parent's scan is open.
             self.has_child = True
             action = self.r.choice(["CASCADE", "SET NULL", "RESTRICT"])
             ktype = "TEXT" if self.key_kind == "text" else "INTEGER"
@@ -220,13 +184,7 @@ class Gen:
             self.emit("PRAGMA foreign_keys=ON;")
 
     def child_write(self):
-        """Insert or delete in the table that references t.
-
-        The ORDER BY is load-bearing: LIMIT 1 without one picks whichever row
-        the scan reaches first, which SQL does not define and which two engines
-        settle differently whenever they choose different plans. ch is only built
-        for shapes whose k is unique, so ordering by it is a total order.
-        """
+        """Child write. ORDER BY is load-bearing: LIMIT 1 without it is plan-dependent."""
         if self.r.random() < 0.7:
             self.emit("INSERT OR IGNORE INTO ch(cid, fk, note) "
                       "SELECT %d, k, %s FROM t WHERE %s ORDER BY %s LIMIT 1;"
@@ -236,13 +194,7 @@ class Gen:
             self.emit("DELETE FROM ch WHERE cid = %d;" % self.r.randint(1, 60))
 
     def returning(self):
-        """A write with RETURNING, kept to at most one row.
-
-        SQLite does not promise an order for RETURNING rows and it cannot carry
-        an ORDER BY, so a multi-row RETURNING would report row order as a
-        difference. Restricting these to a single row keeps the comparison
-        about the values.
-        """
+        """RETURNING of one row: SQLite does not order RETURNING and cannot take ORDER BY."""
         cols = "coalesce(quote(k),'N'), coalesce(quote(a),'N'), " \
                "coalesce(quote(b),'N')"
         r = self.r.random()
@@ -260,7 +212,6 @@ class Gen:
             self.emit("DELETE FROM t WHERE %s RETURNING %s;" % (eq, cols))
 
     def key_eq(self):
-        """An equality on the whole key, so it names at most one row."""
         if self.shape == "composite_pk":
             return "k = %s AND j = %s" % (self.int_val(), self.text_val())
         kv = self.text_val() if self.key_kind == "text" else self.int_val()
@@ -273,7 +224,6 @@ class Gen:
             return "k", self.text_val()
         return "k", self.int_val()
 
-    # ---- predicates -----------------------------------------------------
     def pred(self):
         r = self.r.random()
         if self.shape == "composite_pk" and r < 0.2:
@@ -306,7 +256,6 @@ class Gen:
                 "t2.a IS NOT NULL")
         return "a = %s" % self.val()
 
-    # ---- writes ---------------------------------------------------------
     def insert(self):
         kc, kv = self.key_args()
         verb = self.r.choice(["INSERT OR IGNORE", "INSERT OR REPLACE",
@@ -314,7 +263,7 @@ class Gen:
         if verb == "INSERT OR ROLLBACK" and self.in_txn:
             verb = "INSERT OR IGNORE"
         if self.on("writesel") and self.r.random() < 0.25:
-            # Several rows in one statement: one cursor, many pending writes.
+            # One statement, many pending writes.
             rows = ", ".join("(%s, %s, %s)" % (self.key_args()[1], self.val(),
                                                self.val("text"))
                              for _ in range(self.r.randint(2, 4)))
@@ -340,8 +289,7 @@ class Gen:
                      self.val("text"), self.r.choice(["1", "excluded.b > t.b"])))
 
     def insert_select(self):
-        # Reads and writes the same table in one statement, so the scan runs
-        # against a pending map the same statement is filling.
+        # Same-table INSERT SELECT scans a pending map the statement is filling.
         kc, _ = self.key_args()
         if self.shape == "composite_pk":
             sel = "k + %d, coalesce(quote(j),'x'), a, b" % self.r.randint(1, 50)
@@ -375,12 +323,12 @@ class Gen:
     def ddl_step(self):
         r = self.r.random()
         if r < 0.3 and not self.added_col:
-            # A column added mid-transaction, which every later row must carry.
+            # Column added mid-transaction; later rows must carry it.
             self.added_col = True
             self.emit("ALTER TABLE t ADD COLUMN c%s;"
                       % (" DEFAULT 7" if self.r.random() < 0.5 else ""))
         elif r < 0.55:
-            # Built over whatever is pending at this moment.
+            # Index over whatever is currently pending.
             self.emit("CREATE INDEX IF NOT EXISTS i_t ON t(b, a, k);")
         elif r < 0.7:
             self.emit("DROP INDEX IF EXISTS i_t;")
@@ -389,7 +337,6 @@ class Gen:
         else:
             self.emit("ANALYZE t;")
 
-    # ---- reads ----------------------------------------------------------
     def full_read(self, tbl="t"):
         cols = ["k", "a", "b"] + (["c"] if self.added_col else [])
         if self.shape == "composite_pk":
@@ -438,7 +385,7 @@ class Gen:
             self.emit("WITH w AS (SELECT k, a, b FROM t WHERE %s) "
                       "SELECT count(*), count(DISTINCT b) FROM w;" % self.pred())
         elif self.on("cte") and r < 0.85:
-            # Recursive, bounded: exercises the ephemeral queue, not t.
+            # Recursive CTE uses an ephemeral queue, not t.
             self.emit("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL "
                       "SELECT i+1 FROM n WHERE i < 5) "
                       "SELECT count(*) FROM n JOIN t ON "
@@ -457,7 +404,7 @@ class Gen:
                       "AS q FROM t %s s ON length(coalesce(quote(t.b),'')) = s.id "
                       "ORDER BY 1);" % (Q % "t.k", Q % "s.w", j))
         elif self.on("joins") and r < 0.98:
-            # Self-join: two cursors over one table, both seeing the pending map.
+            # Self-join: two cursors over one pending map.
             self.emit("SELECT count(*) FROM t AS x JOIN t AS y "
                       "ON x.b = y.b AND %s;"
                       % self.r.choice(["x.a IS NOT y.a", "x.a IS NOT NULL"]))
@@ -491,14 +438,12 @@ class Gen:
                       % (Q % "cid", Q % "fk"))
             self.emit("PRAGMA foreign_key_check;")
 
-    # ---- transaction shaping -------------------------------------------
     def open_txn(self):
         self.emit("BEGIN;")
         self.in_txn = True
 
     def close_txn(self):
-        # A rollback restoring the pre-transaction state is as much of the
-        # contract as a commit is.
+        # Rollback is as much of the contract as commit.
         self.emit(self.r.choice(["COMMIT;", "COMMIT;", "ROLLBACK;"]))
         self.in_txn = False
         self.savepoints = []

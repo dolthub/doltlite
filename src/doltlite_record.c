@@ -264,11 +264,8 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
 
   memset(ci, 0, sizeof(*ci));
   ci->iPkCol = -1;
-  /* table_xinfo also lists generated columns. They matter even though the
-  ** vtabs do not expose them: a STORED one occupies a field in every stored
-  ** record, so the columns after it sit one slot further along than their
-  ** declared position suggests, and reading by declared position returns a
-  ** neighbour's value. A VIRTUAL one is never stored and occupies nothing.
+  /* table_xinfo lists generated columns. STORED occupies a record field so
+  ** later columns sit one slot further; VIRTUAL occupies nothing.
   ** hidden: 0 ordinary, 2 virtual generated, 3 stored generated. */
   zSql = sqlite3_mprintf("PRAGMA main.table_xinfo(\"%w\")", zTable);
   if( !zSql ) return SQLITE_NOMEM;
@@ -313,11 +310,11 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     int hidden = sqlite3_column_int(pStmt, 6);
 
     if( hidden==2 ){
-      /* Virtual: computed on read, absent from the record entirely. */
+      /* Virtual: absent from the record. */
       continue;
     }
     if( hidden==3 ){
-      /* Stored: holds a field every later column sits behind. */
+      /* Stored: occupies a field every later column sits behind. */
       aStoredPk[nStored] = pk;
       aStoredDecl[nStored] = -1;
       nStored++;
@@ -357,11 +354,9 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     return rc;
   }
 
-  /* iPkCol marks a rowid alias: readers render that column from the tree's
-  ** integer key and seek on it. A WITHOUT ROWID table is clustered by its
-  ** declared primary key and has no integer key to read, so treating its
-  ** INTEGER pk as an alias yields the raw key bytes as a number and silently
-  ** drops the pk constraints xBestIndex promised to apply. */
+  /* iPkCol is a rowid alias. WITHOUT ROWID has no integer key; treating
+  ** INTEGER pk as an alias yields raw key bytes and drops xBestIndex pk
+  ** constraints. */
   {
     Table *pTab = sqlite3FindTable(db, zTable, "main");
     if( pTab ){
@@ -399,13 +394,11 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
       return SQLITE_NOMEM;
     }
     if( ci->iPkCol>=0 || nPkCols==0 ){
-      /* Declared order, but over record slots: a stored generated column
-      ** consumes one without being declared. */
+      /* Declared order over record slots: a stored generated column consumes one. */
       for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = aRecPos[i];
     }else{
-      /* Clustered layout: key columns in key order, then every other
-      ** stored column in declared order -- generated ones included, which
-      ** is why the walk is over stored columns rather than declared ones. */
+      /* Clustered: key columns in key order, then other stored columns in
+      ** declared order (generated included). */
       int iSlot;
       for(i=0; i<ci->nCol; i++){
         if( aPk[i]>0 ) ci->aColToRec[i] = aPk[i] - 1;
@@ -583,9 +576,8 @@ void doltliteResultUserCol(
     return;
   }
 
-  /* intKey is the row's key only when the visited root is an intkey tree.
-  ** A historical root with a different key shape stores the whole row in
-  ** the record, so the declared rowid-alias column reads from there. */
+  /* intKey is the row key only on an intkey tree. A historical root with
+  ** a different key shape stores the whole row in the record. */
   if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 && bRootIntKey ){
     sqlite3_result_int64(ctx, intKey);
     return;
@@ -606,14 +598,9 @@ void doltliteResultUserCol(
                       ri.aType[iRecField], ri.aOffset[iRecField]);
 }
 
-/* Reconstruct the row record for a clustered row whose stored value is
-** empty. When the PRIMARY KEY covers every column, the row lives entirely
-** in the sort key and the value record has no fields, so readers that only
-** look at the value (history/at/diff and friends) see NULLs. Decode the
-** sort key back into a record the same way the main read path does
-** (getCursorPayload's non-intkey branch). *ppRec receives a
-** sqlite3_malloc'd record the caller frees; it is left 0 for rowid tables,
-** which have no clustered key to decode. */
+/* Reconstruct a clustered row whose stored value is empty (PK covers every
+** column). Decode the sort key like getCursorPayload's non-intkey branch.
+** *ppRec is sqlite3_malloc'd or 0 for rowid tables. */
 int doltliteRecordFromClusteredKey(
   sqlite3 *db, const char *zTable,
   const u8 *pKey, int nKey,
@@ -650,8 +637,8 @@ int doltliteRecordFromClusteredKey(
   return SQLITE_OK;
 }
 
-/* Same reconstruction, but keyed by a DoltliteColInfo instead of the live
-** table, so a historical schema decodes keys its own primary key wrote. */
+/* Same reconstruction keyed by DoltliteColInfo, so a historical schema
+** decodes keys its own PK wrote. */
 int doltliteRecordFromClusteredKeyCols(
   sqlite3 *db, const DoltliteColInfo *ci,
   const u8 *pKey, int nKey,
@@ -734,10 +721,8 @@ u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut)
     hdrSize += sqlite3VarintLen(aType[i]);
     bodySize += (int)aLen[i];
   }
-  /* Adding the header-size varint can push the size across a varint width, so
-  ** re-check: 127 one-byte type codes need a two-byte size, not one. Stock does
-  ** the same in sqlite3VdbeMakeRecord, as do the sibling encoders by reserving
-  ** the byte up front and bumping past MAX_ONEBYTE_HEADER. */
+  /* Adding the header-size varint can cross a width: 127 one-byte type codes
+  ** need a two-byte size. Stock sqlite3VdbeMakeRecord does the same. */
   {
     int nVarint = sqlite3VarintLen(hdrSize);
     hdrSize += nVarint;

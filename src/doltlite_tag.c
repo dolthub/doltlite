@@ -188,9 +188,7 @@ typedef struct TagCur TagCur;
 struct TagCur {
   sqlite3_vtab_cursor base;
   int iRow;
-  /* Cursor-owned copy of the tags visible at xFilter time. A dolt_tag()
-  ** call evaluated in the same statement mutates and reallocates the live
-  ** cs->refs arrays mid-scan, so rows must never be served from them. */
+  /* Cursor-owned copy at xFilter: dolt_tag() in the same statement may reallocate cs->refs. */
   int nRows;
   TagRef *aSnap;
 };

@@ -40,7 +40,6 @@ static void test_basic(void){
   check("basic: b still absent", !prollyHashSetContains(&hs, &b));
   check("basic: add a again idempotent", prollyHashSetAdd(&hs, &a)==SQLITE_OK);
 
-  /* Force several grows to exercise the resize path. */
   for(i=0; i<1000; i++){
     ProllyHash h;
     hashFromInt(&h, (u32)(100+i));
@@ -50,9 +49,7 @@ static void test_basic(void){
   prollyHashSetFree(&hs);
 }
 
-/* A capacity whose rounded-up slot count times sizeof(ProllyHash) exceeds
-** INT_MAX must be rejected, not silently truncated into an undersized
-** allocation. 1e8 rounds to 2^28 slots; 2^28*20 wraps a 32-bit size. */
+/* Reject capacity where rounded slots * sizeof(ProllyHash) exceeds INT_MAX; 1e8 -> 2^28*20 wraps 32-bit size. */
 static void test_capacity_overflow_rejected(void){
   ProllyHashSet hs;
   int rc;

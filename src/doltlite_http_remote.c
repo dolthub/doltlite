@@ -30,8 +30,8 @@ struct HttpRemote {
   char *zBasePath;
 
 #ifdef DOLTLITE_HAVE_AUTH
-  DoltliteCreds *cred;  /* NULL when unauthenticated */
-  char *zAudience;      /* JWT audience: remote host or override */
+  DoltliteCreds *cred;
+  char *zAudience;      /* JWT audience */
 #endif
 
   u8 *pUploadBuf;
@@ -63,7 +63,6 @@ static void httpSetLastError(HttpRemote *p, const char *zMsg){
   }
 }
 
-/* Extract a JSON string value for "key" from a flat object body. */
 static char *httpJsonStringField(const u8 *p, int n, const char *zKey){
   char zNeedle[64];
   int nNeedle;
@@ -90,7 +89,7 @@ static char *httpJsonStringField(const u8 *p, int n, const char *zKey){
     {
       char *z = sqlite3_malloc(end - start + 1);
       if( !z ) return 0;
-      /* Bodies we emit are plain ASCII without escapes. */
+      /* Emitted bodies are plain ASCII (no escapes). */
       for(k=0; k<end-start; k++) z[k] = (char)p[start+k];
       z[end-start] = 0;
       return z;
@@ -132,8 +131,7 @@ static int httpJsonIntField(const u8 *p, int n, const char *zKey, int *pOut){
   return 0;
 }
 
-/* Map HTTP status (+ optional structured body) to an SQLite result code and
-** stash a message for xErrMsg. */
+/* Map HTTP status to an SQLite code; stash xErrMsg. */
 static int httpMapError(
   HttpRemote *p,
   int status,
@@ -180,7 +178,7 @@ static int httpMapError(
          || (zCode && (strcmp(zCode, "unauthorized")==0
                     || strcmp(zCode, "forbidden")==0))
          || (hasSqlite && sqliteRc==SQLITE_AUTH) ){
-    /* 403 (forbidden) is an auth failure too; SQLite has no separate authz code. */
+    /* 403 is auth failure; SQLite has no authz code. */
     rc = SQLITE_AUTH;
     if( !p->zLastError ){
       httpSetLastError(p, status==403 ? "forbidden" : "unauthorized");
@@ -337,10 +335,7 @@ static int readUntilEof(HttpConn *conn, u8 **ppOut, int *pnOut){
     nUsed += (i64)n;
   }
 
-  /* Callers scan the response as a C string (e.g. atoi on Content-Length), so
-  ** guarantee a trailing NUL. The growth loop keeps slack in practice, but a
-  ** buffer filled exactly to nAlloc would otherwise leave the parse to run off
-  ** the end. */
+  /* Callers scan as a C string; NUL-terminate even when nAlloc is filled. */
   if( nUsed >= nAlloc ){
     u8 *pNew = sqlite3_realloc64(pBuf, nUsed + 1);
     if( !pNew ){
@@ -775,10 +770,8 @@ int doltliteHttpParseResponseForTest(
   return rc;
 }
 
-/* Batched fetch: POST the concatenated hashes to /get-chunks and parse the
-** framed reply (per requested hash: a 4-byte big-endian length then that many
-** payload bytes; length 0xFFFFFFFF marks an absent chunk). One round trip
-** replaces one GET /chunk per hash. */
+/* POST hashes to /get-chunks; reply is per-hash [u32be len][bytes],
+** 0xFFFFFFFF if absent. */
 static int httpGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
                          int nHash, u8 **apData, int *anData){
   HttpRemote *p = (HttpRemote*)pRemote;
@@ -814,7 +807,7 @@ static int httpGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   }
   rc = httpParseChunkBatch(pResp, nResp, nHash, apData, anData);
   sqlite3_free(pResp);
-  return rc;   /* caller frees any apData[i] set before an error */
+  return rc;   /* caller frees apData[i] set before an error */
 }
 
 static int httpGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
@@ -904,9 +897,7 @@ static int httpCommit(DoltliteRemote *pRemote){
   if( rc!=SQLITE_OK ) return rc;
 
   if( p->pPendingRefs && p->nPendingRefs > 0 ){
-    /* Body: [u16 branchLen][branch][u8 force] then, for refs-if, the expected
-    ** refs hash, then the refs blob. The prefix declares the push scope so the
-    ** server can reject changes to any other ref. */
+    /* [u16 branchLen][branch][u8 force], then refs-if expected hash, then refs. */
     int nBranch = p->zPushBranch ? (int)strlen(p->zPushBranch) : 0;
     int nHashPart = p->hasExpectedRefsHash ? PROLLY_HASH_SIZE : 0;
     int nReq = 2 + nBranch + 1 + nHashPart + p->nPendingRefs;
@@ -1018,8 +1009,7 @@ static void httpResolveCreds(HttpRemote *p){
     if( aud && *aud ){
       p->zAudience = sqlite3_mprintf("%s", aud);
     }else if( strncmp(p->zHost, "doltliteremoteapi.", 18)==0 ){
-      /* reuse the doltremoteapi audience for doltlite repositories on dolthub
-      ** DOLT_OVERRIDE_GRPC_JWT_AUDIENCE overrides this. */
+      /* doltremoteapi audience for dolthub. */
       p->zAudience = sqlite3_mprintf("doltremoteapi.%s", p->zHost + 18);
     }else{
       p->zAudience = sqlite3_mprintf("%s", p->zHost);

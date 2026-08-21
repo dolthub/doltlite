@@ -587,9 +587,7 @@ static void diffIterFreeCopies(ProllyDiffIter *pIter){
   pIter->nNewValCopy = 0;
 }
 
-/* Copy a cursor value into the iterator-owned buffer and point the change at
-** it. On OOM sets pIter->rc and returns SQLITE_NOMEM; nSrc==0 leaves an empty
-** (null) value. */
+/* Copy into the iterator-owned buffer; nSrc==0 is null. */
 static int diffSetChangeVal(
   ProllyDiffIter *pIter,
   u8 **ppCopy, int *pnCopy,

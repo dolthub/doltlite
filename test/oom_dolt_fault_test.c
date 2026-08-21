@@ -277,8 +277,7 @@ static int opMerge(sqlite3 *db){
   return execSilent(db, "SELECT dolt_merge('br_merge')");
 }
 
-/* Divergent three-way merge: both sides insert rows so catalog pass1/pass2
-** and row merge run. Setup leaves main ready to merge feat. */
+/* Three-way merge: both sides insert so pass1/pass2 and row merge run. */
 static int setupThreeWayMerge(sqlite3 *db){
   int rc;
   rc = execSilent(db, "SELECT dolt_branch('feat')");
@@ -469,7 +468,6 @@ static OpEntry kOps[] = {
     0, 0, 0, 0, 0, 0, 0, 0 },
   { "dolt_merge",          opMerge, 0,
     "br_merge", 99, "merge-branch", 0, 0, "for-merge", 0, 0 },
-  /* Setup leaves HEAD at main-side; success advances to the merge commit. */
   { "dolt_three_way_merge", opThreeWayMerge, setupThreeWayMerge,
     "feat", 10, "main", 20, "feat",
     "Merge branch 'feat' into main", "main-side", 0 },
@@ -981,12 +979,7 @@ static int sweepOp(OpEntry *op){
   return opBugs;
 }
 
-/* A merge that fails while creating the merge commit must restore the
-** pre-merge session on the SAME connection: the merged catalog is already
-** live and staged at that point, so without the restore a plain
-** dolt_commit retry records the merged rows as a single-parent commit and
-** theirHead vanishes from ancestry. The reopen-based verification above
-** cannot see this — the residue lives in the failing connection. */
+/* Failed merge-commit must restore this connection; retry would record a single-parent commit. Residue is in-session, not on reopen. */
 static int childMergeRestoreCase(long long failAt){
   sqlite3 *db = 0;
   char zText[128];
@@ -1006,9 +999,7 @@ static int childMergeRestoreCase(long long failAt){
     return CHILD_BUG;
   }
 
-  /* Measure mode: count the merge's allocations without failing any, so
-  ** the parent can aim the sweep at the tail where the merge commit is
-  ** created and the branch advanced. */
+  /* failAt<=0 counts allocations so the parent can sweep the tail. */
   if( failAt<=0 ){
     char zPath[512];
     FILE *f;
@@ -1118,10 +1109,7 @@ static int sweepMergeRestore(void){
   long long nTotal = 0;
   long long n;
 
-  /* The commit-creation and branch-advance code this sweep exists to cover
-  ** sits at the end of the merge's allocation sequence, far past a
-  ** front-anchored MAX_FAIL_N window. Count the full merge once, then
-  ** sweep a window anchored at the tail. */
+  /* Commit+branch-advance sit at the tail, past a front-anchored window. */
   if( runMergeRestoreChild(0)!=CHILD_OK ){
     fprintf(stderr, "  BUG[merge_restore]: allocation measure run failed\n");
     return 1;

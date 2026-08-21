@@ -2,10 +2,7 @@
 
 #include "doltlite_merge_int.h"
 
-/* Index-key construction and three-way row/cell merge. */
-
-/* Serial type + body length for an i64 value, matching the encoding used
-** by SQLite's row records and prolly trees. */
+/* Serial type + body length for an i64, matching SQLite records. */
 void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen){
   if( v==0 ){ *pType = 8; *pLen = 0; return; }
   if( v==1 ){ *pType = 9; *pLen = 0; return; }
@@ -22,8 +19,8 @@ void doltliteIpkWriteBE(u8 *p, i64 v, int n){
   for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
 }
 
-/* KeyInfo for Index without a Parse context. Matches sqlite3KeyInfoOfIndex
-** collations/sort flags so VC raw-row paths encode the same sort keys as VDBE. */
+/* KeyInfo without Parse. Matches sqlite3KeyInfoOfIndex so VC paths
+** encode the same sort keys as VDBE. */
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx){
   int i;
   int nCol;
@@ -427,7 +424,6 @@ expr_fail:
   return rc;
 }
 
-/* Build index sort key (+ optional index-record payload) from a table row. */
 static int doltliteBuildIndexEntry(
   sqlite3 *db,
   Index *pIdx,
@@ -595,8 +591,8 @@ static int doltliteBuildIndexEntry(
   return SQLITE_OK;
 }
 
-/* Apply old/new table-row values to one secondary-index mutmap. Shared by
-** merge, conflicts resolve, and workspace so NOCASE/RTRIM/DESC match VDBE. */
+/* Apply old/new row values to one index mutmap. Shared so NOCASE/
+** RTRIM/DESC match VDBE. */
 int doltliteIndexMutMapRowDelta(
   sqlite3 *db,
   Index *pIdx,
@@ -763,10 +759,8 @@ static int parseRecordFields(const u8 *pRec, int nRec,
   return nFields;
 }
 
-/* Is this sqlite_master row one the listed ancestor names? Fields 1 and 2 are
-** name and tbl_name, so the table's own row matches by name and each of its
-** indexes and triggers matches by tbl_name. The base row is the one compared:
-** it carries the ancestor name, which is what the policy was built from. */
+/* sqlite_master fields 1/2 are name and tbl_name. Match the base
+** row: it carries the ancestor name the policy was built from. */
 static int catalogRowNamedInList(
   const char **azNames,
   int nNames,
@@ -779,7 +773,7 @@ static int catalogRowNamedInList(
 
   if( !azNames || nNames<=0 ) return 0;
   if( !pBase || nBase<=0 ) return 0;
-  /* Returns the field count, or -1; it is not an SQLITE_ code. */
+  /* Field count, or -1; not an SQLITE_ code. */
   if( parseRecordFields(pBase, nBase, &aBase, &nBaseF) < 0 ) return 0;
   for(f=1; f<=2 && !matched; f++){
     if( f>=nBaseF ) break;
@@ -918,11 +912,8 @@ static u8 *tryCellMerge(
 
   {
     MergeWinner *winners;
-    /* A field beyond a record's stored width is a trailing NULL (SQLite omits
-    ** them), semantically identical to an explicit NULL field. Treating "absent"
-    ** and "explicit NULL" uniformly lets the per-cell merge span records of
-    ** different widths -- e.g. a dual ADD COLUMN merge where each side's row
-    ** carries a different number of columns. */
+    /* Past stored width is a trailing NULL (SQLite omits them). Treat
+    ** absent and explicit NULL the same so dual ADD COLUMN can merge. */
     static const RecField kNullField = { 0, 0, 0 };
     int nEmit = 0;
 
@@ -951,7 +942,7 @@ static u8 *tryCellMerge(
       if( winners[i].pField->st != 0 ) nEmit = i+1;
     }
 
-    /* Drop trailing NULLs so the merged row re-encodes in canonical form. */
+    /* Drop trailing NULLs for canonical encoding. */
     result = buildMergedRecord(winners, nEmit, pnMerged);
     sqlite3_free(winners);
   }
@@ -1083,12 +1074,8 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     deliberate_fall_through
     case THREE_WAY_CONFLICT_DM: {
 
-      /* One side deleted the row, the other changed it. For a catalog row the
-      ** policy names -- an object one side renamed and the other dropped -- the
-      ** rename wins, which is what Dolt does. The policy carries the object
-      ** names rather than inferring them here, because a rename presents at this
-      ** level as a delete plus an add: inferring would also resolve a rename on
-      ** both sides, silently picking a winner for a real conflict. */
+      /* Policy-named catalog row (rename vs drop): rename wins, as Dolt.
+      ** Inferring here would also pick a winner for a dual rename. */
       if( pChange->type==THREE_WAY_CONFLICT_DM
        && catalogRowNamedByPolicy(ctx->pPolicy,
                                   pChange->pBaseVal, pChange->nBaseVal) ){
@@ -1152,11 +1139,8 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   return rc;
 }
 
-/* Did the other side change this column's value in a row that already existed?
-** Dropping a column and editing that same column's value on another branch is
-** a cell-level modify-versus-delete, which Dolt reports as a conflict. Rows
-** the other side added or removed do not count, and neither does an edit to
-** any other column, so the comparison has to be per row and per field. */
+/* Other side changed this field in a pre-existing row. Drop vs that
+** edit is a Dolt conflict; adds/removes and other columns are not. */
 int mergeRowEditsColumn(
   sqlite3 *db,
   const ProllyHash *pAncRoot,

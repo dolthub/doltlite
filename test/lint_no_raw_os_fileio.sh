@@ -35,11 +35,8 @@ raw_matches() {
   rg -n "$INCLUDE_RE" "${FILES[@]}" 2>/dev/null || true
 }
 
-# Credentials and entropy are OS-owned sidecar configuration, not database
-# storage. This module also needs OS APIs to enforce private-file modes.
-# doltlite_gc.c and chunk_store_commit.c include unistd.h only for crash-test
-# _exit(). doltlite_net.h uses Unix descriptors for sockets, not database
-# files; it needs fcntl (and <fcntl.h>) only to toggle O_NONBLOCK on a socket fd.
+# creds: OS sidecar + private-file modes. gc/commit: unistd.h for crash-test _exit().
+# net.h: sockets; fcntl only for O_NONBLOCK.
 raw_matches \
   | grep -Ev '^src/doltlite_creds\.c:' \
   | grep -Ev '^src/(doltlite_gc|chunk_store_commit)\.c:[0-9]+:#include <unistd\.h>' \

@@ -38,9 +38,7 @@ run_test "jm_dl_read" \
 run_test "jm_dl_set_wal" \
   "$($DOLTLITE "$DB" "PRAGMA journal_mode = WAL;" 2>&1)" "wal"
 
-# journal_mode is inapplicable to the chunk store, so a mode request is
-# silently ignored and the fixed mode ("wal") is reported -- SQLite's
-# convention for inapplicable journal modes, matching auto_vacuum.
+# Chunk store ignores journal_mode and reports wal.
 for mode in DELETE TRUNCATE PERSIST MEMORY OFF; do
   out=$($DOLTLITE "$DB" "PRAGMA journal_mode = $mode;" 2>&1)
   run_test "jm_dl_set_${mode}_noop" "$out" "wal"

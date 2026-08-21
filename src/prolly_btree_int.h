@@ -1,8 +1,6 @@
 #ifndef PROLLY_BTREE_INT_H
 #define PROLLY_BTREE_INT_H
 
-/* Private declarations shared by the Prolly B-tree implementation modules. */
-
 #include "sqliteInt.h"
 #include "btree.h"
 #include "prolly_hash.h"
@@ -278,9 +276,7 @@ struct BtCursorOps {
   int (*xCursorIsValidNN)(BtCursor*);
 };
 
-/* Working-set version-control state, tracked live, mirrored at commit, and
-** snapshotted per savepoint. Grouped so a new field is added once and the
-** three copies stay in sync. In-memory only; persisted field-by-field. */
+/* Live/commit/savepoint copies of session VC state. In-memory only. */
 typedef struct DoltVcState {
   ProllyHash stagedCatalog;
   u8 isMerging;
@@ -311,10 +307,8 @@ struct Btree {
   u8 bSchemaChangedTxn;
   u8 bMasterRootChangedTxn;
   u8 bFilterSchemaPlaceholders;
-  u8 bCatalogDropped;     /* OOM rollback dropped the catalog; reload before
-                          ** treating an empty committedCatalogHash as a
-                          ** fresh database */
-  Pgno mxPageCount;       /* Synthetic max_page_count limit */
+  u8 bCatalogDropped;     /* OOM drop: empty committedCatalogHash is not a new db */
+  Pgno mxPageCount;
 
   int nSavepoint;
   int nSavepointAlloc;
@@ -363,17 +357,9 @@ struct Btree {
   char *zRebaseOrigBranch;
   char *zRebaseReturnBranch;
 
-  /* Transient: a constraint-violation batch open across a merge detection
-  ** pass, so appends accumulate in memory and persist once. Owned by
-  ** doltlite_constraint_violations.c. */
-  void *pCvBatch;
+  void *pCvBatch;  /* merge-pass CV batch; owned by doltlite_constraint_violations.c */
 
-  /* Transient: the ref spec the caller passed to dolt_merge, reported as
-  ** dolt_merge_status.source. Not part of the persisted working set, so it is
-  ** only valid while mergeSourceSpecCommit still equals the merge commit that
-  ** produced it -- pairing them makes a savepoint rollback, a branch switch or
-  ** a second merge unable to hand back a spec belonging to a different merge.
-  ** Owned by doltlite_merge_status.c. */
+  /* Merge source spec, valid only while mergeSourceSpecCommit matches. */
   char *zMergeSourceSpec;
   ProllyHash mergeSourceSpecCommit;
 
@@ -436,11 +422,7 @@ struct BtCursor {
 #define MERGE_SRC_MUT   1
 #define MERGE_SRC_BOTH  2
   u8 mergeSrc;
-  /* Direction of the last merged step: +1, -1, or 0 when the position came
-  ** from a seek rather than a step. Each side of the merge is left primed for
-  ** the direction it was travelling, so a reversal has to re-derive the side
-  ** that did not produce the current row. */
-  i8 mergeStepDir;
+  i8 mergeStepDir;  /* last merge step: +1/-1, or 0 after a seek */
 
   i64 nKey;
   void *pKey;
@@ -794,7 +776,6 @@ int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
                               ProllyHash*, int*);
 
 
-/* Cursor payload helpers shared across cursor TUs (static inline). */
 static SQLITE_INLINE void cursorCurrentTreeValue(
   BtCursor *pCur,
   const u8 **ppData,

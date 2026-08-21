@@ -1,8 +1,6 @@
 #ifndef DOLTLITE_MERGE_CONSTRAINTS_INT_H
 #define DOLTLITE_MERGE_CONSTRAINTS_INT_H
 
-/* Private declarations shared by merge constraint-violation detectors. */
-
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "prolly_cursor.h"

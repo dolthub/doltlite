@@ -3,10 +3,8 @@
 #include "doltlite_merge_constraints_int.h"
 #include "vdbeInt.h"
 
-/* Every member of a colliding group is recorded, including rows that
-** predate the merge: the collision names them all as one violation, and
-** Dolt records both sides. The pre-existing-row skip the other detectors
-** apply does not belong here — it silently halved the violation. */
+/* Record every member of a colliding group, including pre-merge
+** rows. Dolt records both sides; the other detectors' skip halved this. */
 static int appendUniqueViolationByRowid(
   sqlite3 *db,
   const char *zTable,
@@ -89,7 +87,6 @@ static int uniqueIsIdent(char c){
   return sqlite3Isalnum(c) || c=='_';
 }
 
-/* Trailing WHERE of a CREATE INDEX statement, or NULL. */
 static char *uniqueIndexWhereFromSql(const char *zSql, int *pRc){
   const char *p = zSql;
   int depth = 0;

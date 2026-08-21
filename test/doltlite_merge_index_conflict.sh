@@ -255,14 +255,7 @@ DROP TABLE t;
 CREATE TABLE replacement(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','drop-add');
 EOF
-# A table renamed on one side and dropped on the other is now kept, matching
-# Dolt, so this cherry-pick no longer quietly discards `renamed` and its index.
-# It cannot be applied either: the current branch dropped t and gave its catalog
-# number to `replacement`, so the rename does not resolve and the catalog rows
-# conflict. The pick is refused with nothing committed and the schema untouched.
-# Dolt refuses this scenario too, reporting "no changes were made, nothing to
-# commit" -- a different message for the same outcome, and both are preferable
-# to the silent table drop this used to assert.
+# Dropped t reused its catalog number as replacement; the rename cannot apply.
 out=$("$DOLTLITE" "$DB/feat" "SELECT dolt_cherry_pick('main');" 2>/dev/null)
 rc=$?
 check "rename_vs_drop_cherry_pick_refuses" "1" "$rc"
@@ -362,11 +355,7 @@ EOF
 )
 check "index_on_excluded_rename_is_not_adopted" "1|c,ours_a" "$out"
 
-# A modify/modify change that touches disjoint columns merges cell-wise rather
-# than conflicting. The index delta for that merged row must be taken against
-# ours' row, since the index it patches is built over ours' root. Indexes
-# spanning both an ours-changed and a theirs-changed column are what expose a
-# base-keyed delete: it misses, and ours' entry survives beside the merged one.
+# Index delta for a cell-wise merge must key against ours, not base.
 DB="$TMPROOT/cellmerge.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(pk INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
@@ -400,8 +389,6 @@ PRE=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELEC
 POST=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
 check "cellmerge_index_matches_full_rebuild" "$POST" "$PRE"
 
-# Same shape reached through cherry-pick and revert, which replay onto ours
-# through the identical row-merge path.
 DB="$TMPROOT/cellmerge_pick.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(pk INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -421,9 +408,7 @@ check "cherry_pick_cellmerge_table_scan_rows" "1:a1:b1" "$out"
 out=$("$DOLTLITE" "$DB" "SELECT group_concat(pk||':'||a||':'||b,' ') FROM (SELECT pk,a,b FROM t INDEXED BY iab WHERE a>='' ORDER BY a,b,pk);")
 check "cherry_pick_cellmerge_index_has_no_stale_entry" "1:a1:b1" "$out"
 
-# The shape itself, in both directions and for cherry-pick: a table renamed on
-# one branch and dropped on the other is kept with its rows and its index, and
-# the merge is clean. Dolt 2.2.2 answers the same for all three.
+# Rename vs drop keeps the table and its index.
 for direction in theirs ours; do
   DB="$TMPROOT/rename_over_drop_$direction.db"
   rm -rf "$DB"
@@ -452,10 +437,7 @@ EOF
   check "rename_over_drop_${direction}_keeps_table" "2|i_v|ok" "$out"
 done
 
-# Both sides rename the same table to different names. Dolt treats each rename
-# as delete+add and keeps both tables with no conflicts. A phantom
-# sqlite_master modify/modify used to refuse the merge (or, earlier, succeed
-# and drop theirs). Both tables stay, and autocommit can finish.
+# Dual rename is delete+add; both tables stay.
 DB="$TMPROOT/rename_vs_rename.db"; rm -rf "$DB"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

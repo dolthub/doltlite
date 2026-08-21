@@ -25,10 +25,8 @@ static inline int prollyKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
 }
 
 typedef struct ProllyNode ProllyNode;
-/* Parsed view over immutable node bytes. Offsets in the node are little-endian
-** on disk; accessors decode them instead of relying on host alignment.
-** aSubtreeCount is populated only when flags has PROLLY_NODE_SUBTREE_COUNTS
-** set; it stores the descendant row-count of each child slot. */
+/* Offsets are little-endian; accessors decode them. aSubtreeCount is set
+** only with PROLLY_NODE_SUBTREE_COUNTS. */
 struct ProllyNode {
   const u8 *pData;
   int nData;
@@ -109,8 +107,7 @@ struct ProllyNodeBuilder {
   int nKeyBufAlloc;
   u8 *pValBuf;
   int nValBufAlloc;
-  i64 nValZeroTail;        /* trailing zeros of the last value, not stored in
-                           ** pValBuf; nValBytes and aValOff stay logical */
+  i64 nValZeroTail;        /* trailing zeros of the last value, not stored in pValBuf */
   u64 *aSubtreeCount;
   int nSubtreeCountAlloc;
 };

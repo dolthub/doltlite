@@ -15,9 +15,7 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','add row');
 INSERT INTO meta VALUES(1,'side');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Unstaged change to an unrelated table: revert succeeds, commits only the
-# revert, and the change stays in the working set (Dolt 2.2.2: dolt_status
-# keeps the table modified and no commit contains it).
+# Unrelated unstaged change stays in the working set; revert still commits.
 run_test_match "rv_dirty_unrelated_hash" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^[0-9a-f]{40}$" "$DB"
@@ -55,11 +53,7 @@ run_test "rv_dirty_same_row_kept" \
 db_rm "$DB"
 
 
-# Index-only revert of table t plus a dirty row on t: Dolt refuses. The
-# table-entry overlap check misses this because DROP INDEX is a separate
-# catalog object, so the split revert used to write the restored index
-# into the working set, fail the commit-side merge, restore only in
-# memory, and reopen with the index back.
+# DROP INDEX is a separate catalog object; table-entry overlap used to miss a dirty row on t.
 DB=/tmp/test_rv_dirty_same_index_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'one');
@@ -157,8 +151,7 @@ run_test "rv_clean_t_reverted" "SELECT count(*) FROM t;" "0" "$DB"
 db_rm "$DB"
 
 
-# Dolt: a second revert of the same commit is "nothing to commit", not
-# another Revert commit. Reverting the revert commit itself still works.
+# Second revert of the same commit is "nothing to commit", not another Revert commit.
 DB=/tmp/test_rv_dup_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 CREATE INDEX t_v ON t(v);

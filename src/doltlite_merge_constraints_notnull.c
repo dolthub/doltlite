@@ -2,17 +2,9 @@
 
 #include "doltlite_merge_constraints_int.h"
 
-/* NOT NULL violations left behind by a merge.
-**
-** A merge can bring together a schema that declares a column NOT NULL and a
-** row from the other side that has NULL in it. Neither side violated anything
-** on its own, so nothing along the write path objects, and the row lands.
-**
-** The predicate has to be typeof(c)='null' rather than c IS NULL: the column is
-** declared NOT NULL, so the planner knows the test cannot be true and strength-
-** reduces it away. That is also why the row is invisible to the obvious query
-** and why this needs its own detector rather than a WHERE clause somewhere.
-*/
+/* Merge can pair a NOT NULL schema with a NULL from the other side.
+** Use typeof(c)='null': IS NULL is strength-reduced away on NOT NULL
+** columns, so the obvious query never sees these rows. */
 
 static void freeNames(char **az, int n){
   int i;
@@ -20,7 +12,6 @@ static void freeNames(char **az, int n){
   sqlite3_free(az);
 }
 
-/* The columns a table declares NOT NULL, in declaration order. */
 static int loadNotNullColumns(
   sqlite3 *db,
   const char *zTable,
@@ -151,8 +142,7 @@ int doltliteDetectMergeNotNullViolations(
     }
     nKeyCol = hasRowid ? 1 : pkInfo.nPk;
 
-    /* One row per offending row, carrying a flag per declared-NOT NULL column
-    ** so every column that is NULL in it is named, the way Dolt reports them. */
+    /* One row per offender, with a flag per NOT NULL column, as Dolt. */
     pStr = sqlite3_str_new(db);
     sqlite3_str_appendf(pStr, "SELECT %s",
                         hasRowid ? "rowid" : pkInfo.zPkCols);
@@ -207,8 +197,7 @@ int doltliteDetectMergeNotNullViolations(
         break;
       }
 
-      /* A row that already had the NULL before the merge is not the merge's
-      ** doing, same rule the other detectors apply. */
+      /* Pre-merge NULL is not this merge's violation. */
       if( aAnc ){
         u8 *pAncVal = 0; int nAncVal = 0;
         int ancRc = hasRowid

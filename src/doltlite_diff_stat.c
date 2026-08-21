@@ -93,12 +93,10 @@ static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
 
 typedef struct DsColMap DsColMap;
 struct DsColMap {
-  /* All indices are RECORD-FIELD indices, already translated through each
-  ** side's aColToRec: WITHOUT ROWID records store PK columns first, so a
-  ** declared column index is not a field index. */
-  int *aToRecTo;    /* to column i in the to record */
-  int *aToRecFrom;  /* to column i in the from record, -1 when absent */
-  int *aFromRec;    /* from column j in the from record */
+  /* Indices are record-field indices via aColToRec, not declared column indices. */
+  int *aToRecTo;
+  int *aToRecFrom;
+  int *aFromRec;
   u8 *aFromMatched;
   int nTo;
   int nFrom;
@@ -155,15 +153,9 @@ static int dsBuildColMap(
   return SQLITE_OK;
 }
 
-/* Two different questions, which the same walk answers.
-**
-** *pnDiffer is whether the row changed at all, and so whether it counts toward
-** rows_modified. Gaining or losing a column that held a value counts; gaining
-** or losing one that is NULL on both sides does not.
-**
-** *pnModified is cells_modified, which is narrower: a column the range added
-** counts whatever its value, and a column the range dropped never counts.
-** Those cells are already reported by cells_added and cells_deleted. */
+/* *pnDiffer is rows_modified: a gained/lost column counts only if it held a
+** value. *pnModified is cells_modified: added columns count, dropped ones do
+** not (already in cells_added/cells_deleted). */
 static void dsCountChangedCells(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
@@ -187,8 +179,7 @@ static void dsCountChangedCells(
     int fromRec = pColMap->aToRecFrom ? pColMap->aToRecFrom[i] : -1;
     int fromType, fromOffset, toType, toOffset;
     if( fromRec<0 ){
-      /* A trailing NULL is not stored, so the field may be absent from the
-      ** record even though the column exists on the to side. */
+      /* Trailing NULLs are omitted from the record even when the to-column exists. */
       nModified++;
       if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) nDiffer++;
       continue;
@@ -705,11 +696,8 @@ static int dsTableNameMatchesFilter(const DsFilterCtx *pCtx, const char *zName){
       || sqlite3_stricmp(zName, pCtx->zTblFilter)==0;
 }
 
-/* pRef is present in one root but its name is absent from the other. If the
-** same table (same iTable) is present in aOther under a different name, and
-** that name is likewise absent from pRef's own side (pRefSideIdx), the pair is
-** a rename: return the counterpart. A name that still exists on both sides is
-** a coincidental reuse, not a rename, so it is rejected. */
+/* Name missing on the other side: same iTable under a name also absent from
+** this side is a rename. A name still on both sides is coincidental reuse. */
 static struct TableEntry *dsRenamePartner(
   struct TableEntry *aOther, int nOther,
   const struct TableEntry *pRef,
@@ -826,8 +814,7 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   if( rc!=SQLITE_OK ) goto done;
   rc = doltliteLoadCatalog(db, &c->fctx.toCat, &c->aToCat, &c->nToCat, 0);
   if( rc!=SQLITE_OK ) goto done;
-  /* Match Dolt: a table filter must name a table present on at least one
-  ** side. Absent from both is "table not found", not an empty result. */
+  /* Table filter must name a table on at least one side; else "table not found". */
   if( c->fctx.zTblFilter
    && !dsFindTableByNameNoCase(c->aFromCat, c->nFromCat,
                                c->fctx.zTblFilter)
@@ -1004,11 +991,8 @@ static int dssSetRow(DssCursor *c, const char *zFrom, const char *zTo,
   return SQLITE_OK;
 }
 
-/* Records carry their column values, so any schema change rewrites every row
-** and moves the table root -- a dropped column that held only NULLs included.
-** The root alone therefore cannot answer whether data changed; walk the rows
-** and ask whether any value did. Only reached when the schema also changed,
-** so the ordinary data-only diff keeps its hash comparison. */
+/* Schema change rewrites every row, so root hash cannot answer data change;
+** walk values. Only used when schema also changed. */
 static int dssDataActuallyChanged(
   sqlite3 *db,
   const DsFilterCtx *pCtx,
@@ -1030,7 +1014,6 @@ static int dssDataActuallyChanged(
   memset(&fromCi, 0, sizeof(fromCi));
   memset(&toCi, 0, sizeof(toCi));
   memset(&colMap, 0, sizeof(colMap));
-  /* Anything unexpected falls back to the root comparison's answer. */
   *pChanged = 1;
   if( !cs || !pCache ) return SQLITE_OK;
 

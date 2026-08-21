@@ -248,11 +248,7 @@ run_test "path_reset_recreated_table_keeps_live_row" \
   "SELECT k || '|' || n FROM a;" \
   "7|70" "$DB10"
 
-# Hard reset with untracked tables present must restore every tracked
-# table (including ones dropped in the working tree), revert tracked
-# modifications, and preserve the untracked tables with their indexes --
-# with drops and creates having shifted the catalogs' positional numbering
-# so the merged catalog spans two numbering domains.
+# Hard reset with untracked tables: restore tracked (incl. dropped), keep untracked indexes across numbering domains.
 DB11=/tmp/test_reset11_$$.db; rm -f "$DB11"
 $DOLTLITE "$DB11" > /dev/null 2>&1 <<'SQL'
 CREATE TABLE t1(a INTEGER PRIMARY KEY, v TEXT);

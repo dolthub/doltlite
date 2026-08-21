@@ -1,8 +1,6 @@
 #!/bin/bash
 
-# True only for a clean, handled non-zero exit. A status >=128 is 128+signal
-# (139 = SIGSEGV, 134 = SIGABRT, 136 = SIGFPE, ...): a crash, which must never
-# be scored the same as Dolt's orderly error rejection in an oracle_error case.
+# True only for a handled non-zero exit. Status >=128 is a crash, not an orderly error.
 vc_oracle_is_clean_error() {
   [ "$1" -ne 0 ] && [ "$1" -lt 128 ]
 }

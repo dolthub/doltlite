@@ -1,11 +1,5 @@
 #!/bin/bash
-#
-# Oracle tests for tables whose PRIMARY KEY covers every column. Such rows
-# store an empty value record (the row lives in the clustered key), a shape
-# no other oracle scenario exercises: every diff/history/at oracle table
-# carries a non-PK column, which is exactly what masked the NULL-decode bugs
-# in the history-family tables. Dolt is ground truth for row values in
-# dolt_diff_/dolt_history_ and point-in-time reads.
+# PK-only rows store an empty value record; other oracles' non-PK columns masked NULL-decode bugs.
 
 set -u
 

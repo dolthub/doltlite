@@ -9,8 +9,7 @@ lint() {
   echo "LINT: $1"
 }
 
-# Keep the Prolly B-tree implementation split into reviewable units. The
-# private header is intentionally excluded because it contains shared types.
+# prolly_btree*.c split; private header excluded (shared types).
 for f in "$SRCDIR"/prolly_btree*.c; do
   [ -f "$f" ] || continue
   nline=$(wc -l < "$f" | tr -d ' ')
@@ -19,9 +18,7 @@ for f in "$SRCDIR"/prolly_btree*.c; do
   fi
 done
 
-# Cursor count extraction: require the split file. Cap only the extracted
-# module at 1500 for now; the parent cursor file is tightened after
-# payload/seek extractions land.
+# Require cursor split files; cap extracted modules at 1500.
 if [ ! -f "$SRCDIR/prolly_btree_cursor_count.c" ]; then
   lint "$SRCDIR/prolly_btree_cursor_count.c: missing — prolly cursor count must stay split"
 else
@@ -49,7 +46,6 @@ else
   fi
 fi
 
-# Branch/checkout split: require doltlite_branches.c; cap at 1500.
 if [ ! -f "$SRCDIR/doltlite_branches.c" ]; then
   lint "$SRCDIR/doltlite_branches.c: missing — dolt_branches vtab must stay split"
 else
@@ -68,7 +64,6 @@ else
   fi
 fi
 
-# chunk_store split: require lock module; cap at 1200.
 if [ ! -f "$SRCDIR/chunk_store_lock.c" ]; then
   lint "$SRCDIR/chunk_store_lock.c: missing — chunk_store lock must stay split"
 else
@@ -96,10 +91,7 @@ else
   fi
 fi
 
-# Keep doltlite merge split into reviewable units. The core catalog/rows/
-# schema/pass1/pass2 modules must exist (so a re-monolith can't drop a file
-# and still pass by only checking what remains) and stay under 1500 lines.
-# Command and constraints modules get a higher but still finite cap.
+# Merge core modules must exist and stay under 1500; cmd/constraints have a higher cap.
 for f in \
   "$SRCDIR"/doltlite_merge.c \
   "$SRCDIR"/doltlite_merge_pass1.c \
@@ -127,8 +119,6 @@ else
   fi
 fi
 
-# Constraint detectors: require the FK/unique/CHECK split so the monolith
-# cannot return. Cap shared helpers + each detector at 1500.
 for f in \
   "$SRCDIR"/doltlite_merge_constraints.c \
   "$SRCDIR"/doltlite_merge_constraints_unique.c \

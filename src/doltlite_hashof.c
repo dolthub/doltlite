@@ -129,7 +129,7 @@ static int isSimpleSqlIdent(const char *zName){
     c = (unsigned char)zName[i];
     if( !(sqlite3Isalnum(c) || c=='_') ) return 0;
   }
-  /* A bare reserved word (a table named "ON") would not re-parse. */
+  /* Bare reserved word (table "ON") would not re-parse. */
   if( sqlite3KeywordCode((const unsigned char*)zName, i)!=TK_ID ) return 0;
   return 1;
 }
@@ -291,9 +291,8 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
       pendingSpace = 1;
       continue;
     }
-    /* Comments must be dropped, not whitespace-collapsed: folding the
-    ** newline after "-- comment" into a space would make the comment
-    ** swallow the rest of the statement on re-parse. */
+    /* Drop comments; folding a "--" newline into a space swallows the rest
+    ** on re-parse. */
     if( c=='-' && z[1]=='-' ){
       z += 2;
       while( *z && *z!='\n' ) z++;
@@ -582,10 +581,8 @@ static int hashofDbInCatalog(
   return SQLITE_OK;
 }
 
-/* Resolve a ref-spec argument to its commit's catalog hash. On NULL/empty input
-** or any resolve/load failure it sets the SQL result (null or an error prefixed
-** with zFn) and returns 1, meaning the caller should return immediately. On
-** success returns 0 with *pCatHash set. */
+/* Resolve ref-spec to catalog hash. Empty/failure sets the SQL result and
+** returns 1. */
 static int hashofResolveRefCatalog(
   sqlite3_context *ctx,
   sqlite3 *db,

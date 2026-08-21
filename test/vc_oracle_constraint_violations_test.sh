@@ -1,22 +1,7 @@
 #!/bin/bash
-#
-# Oracle coverage for the dolt_constraint_violations_<table> and aggregate
-# dolt_constraint_violations tables. Existing merge suites only assert
-# count(*); this one compares the actual row contents against Dolt:
-# violation_type, the offending row, and the semantic keys of violation_info
-# (Columns / ReferencedTable / ReferencedColumns / Expression).
-#
-# FK and unique-index violations are oracled against Dolt. CHECK violations are
-# not: producing one requires introducing a CHECK on one branch, which needs the
-# SQLite recreate-and-rename trick, and Dolt then refuses the merge ("table has
-# different primary keys"). So CHECK is asserted doltlite-only against a fixed
-# expected value, matching vc_oracle_fk_merge_test.sh's split.
-#
-# violation_type is compared through a CASE map: Dolt stores it as an enum that
-# CONCAT coerces to its ordinal, so a raw compare would diverge. The CASE label
-# matches by enum label on Dolt and by text on doltlite. Multi-element
-# violation_info arrays render as "[a, b]" on Dolt and "[a,b]" on doltlite, so
-# normalize() collapses ", " to ",".
+# Row contents of dolt_constraint_violations vs Dolt (not just count(*)).
+# CHECK is doltlite-only: SQLite recreate-and-rename reads as a PK change in Dolt.
+# CASE-map violation_type (Dolt enum ordinal vs text); normalize ", " to ",".
 
 set -u
 set -o pipefail
@@ -186,13 +171,7 @@ SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" 
 R|CK|2|-5|expr=v>0"
 
 echo "--- not null: column tightened on one branch, NULL row on the other ---"
-# Same split as CHECK above, and for the same reason: tightening a column to NOT
-# NULL needs SQLite's recreate-and-rename, which Dolt reads as a primary-key
-# change and refuses. Expressed Dolt's way (ALTER TABLE t MODIFY b ... NOT NULL)
-# on Dolt 2.2.2, the merge reports one violation and
-# dolt_constraint_violations_t holds exactly the row asserted here:
-#   not null | 2 | {"Columns": ["b"]}
-# so the expectation below is Dolt's answer, not just doltlite's.
+# Same CHECK split: NOT NULL tighten is recreate-and-rename. Expectation is Dolt's.
 dl_expect "not_null_tightened_other_branch_inserts_null" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, b TEXT);
 INSERT INTO t VALUES (1,'x');
@@ -214,9 +193,7 @@ SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" 
 "R|AGG|t|1
 R|NN|2|cols=[b]"
 
-# A column added NOT NULL WITH a default is not a violation on either engine:
-# the rows merged in from the other branch take the default. Asserted so the
-# detector cannot start reporting those.
+# NOT NULL WITH default is not a violation: other-branch rows take the default.
 dl_expect "not_null_added_with_default_is_clean" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1,'a');
@@ -237,12 +214,7 @@ R|ROW|1|'7'
 R|ROW|2|'7'"
 
 echo "--- not null: dolt_verify_constraints --all sees the merged row ---"
-# The detectors sit behind a precheck that scans each table's SQL for a
-# constraint worth looking for. It listed REFERENCES, CHECK and UNIQUE, so a
-# table whose only constraint is NOT NULL returned "nothing to detect" and
-# dolt_verify_constraints could not see a violating row at all -- the merge path
-# refused it, but verification called the database clean. Reported by Ito QA on
-# the pull request that added the detector.
+# Precheck used to skip NOT NULL-only tables, so verify_constraints missed them.
 dl_expect "not_null_verify_all_reports_merged_row" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, b TEXT);
 INSERT INTO t VALUES (1,'x');
@@ -301,11 +273,7 @@ SELECT dolt_merge('feat');
 SELECT CONCAT('R|AGG|', \`table\`, '|', num_violations) FROM dolt_constraint_violations ORDER BY \`table\`;"
 
 echo "--- strict table: forbidden storage class arrives on merge (doltlite-only) ---"
-# Same split as CHECK: Dolt has no STRICT/flexible distinction (every table is
-# typed, so the violating row cannot exist on the source branch), and the
-# recreate-and-rename tighten reads as a primary-key change there. The closest
-# Dolt behavior is a type conflict; doltlite records a violation naming the
-# column, in the shape the other detectors use.
+# STRICT is doltlite-only (Dolt has no flexible tables); same recreate-and-rename split.
 dl_expect "strict_type_violating_row_arrives_on_merge" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1,10);

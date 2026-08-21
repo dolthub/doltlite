@@ -37,7 +37,7 @@ import struct
 import sys
 
 with open(sys.argv[1], "rb") as f:
-    # The final root is 169 bytes and its manifest starts at byte 1.
+    # 169-byte root; manifest at offset 1.
     f.seek(-169, os.SEEK_END)
     manifest = f.read(169)[1:]
     print("%08x %d %d" % (
@@ -238,7 +238,7 @@ BELOW_WAL_BYTES=0
 for ((trial=1; trial<=TRIALS; trial++)); do
   MEASURE_DB="$TMP/checkpoint_measure_$trial.db"
   cp "$BASE_DB" "$MEASURE_DB"
-  # Keep clone writeback out of the first append timing.
+
   sync_file "$MEASURE_DB"
 
   if ! read -r BELOW_SECONDS BELOW_WAL_BYTES BELOW_APPEND_MAGIC \

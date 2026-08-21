@@ -1,6 +1,4 @@
 #!/bin/bash
-# SQLITE_OPEN_NOFOLLOW must refuse a path that is a symlink (symlink-1.1.2).
-# Exercised via the C API; the CLI has no -nofollow flag.
 DOLTLITE_SRC="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${DOLTLITE_BUILD_DIR:-$DOLTLITE_SRC/build}"
 

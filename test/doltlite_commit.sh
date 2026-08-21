@@ -299,9 +299,7 @@ run_test "compound_am_multi_data" \
   "SELECT count(*) FROM t;" \
   "2" "$DB8"
 
-# Index entries travel with their table through staging: a named dolt_add
-# must stage the table's indexes, and -am commits on top of partial staging
-# must keep every index root paired with its table across catalog domains.
+# Named dolt_add stages the table's indexes; -am must keep index roots paired across catalog domains.
 DB9=/tmp/test_dolt_stageidx_$$.db; rm -f "$DB9"
 
 run_test_match "staged_index_named_add_setup"   "CREATE TABLE a(id INTEGER PRIMARY KEY, v INTEGER);
@@ -341,9 +339,7 @@ PRAGMA integrity_check;"   "0
 0
 ok" "$DB10"
 
-# Named add stages tables, never entry-less schema objects: an unstaged
-# view or trigger must not ride into the commit on the master adoption,
-# while -A and -am legitimately carry them.
+# Named add must not adopt unstaged views/triggers; -A and -am may.
 DB11=/tmp/test_dolt_viewstage_$$.db; rm -f "$DB11"
 
 run_test_match "view_stage_setup"   "CREATE TABLE t(a INTEGER PRIMARY KEY);
@@ -370,10 +366,7 @@ run_test "view_in_am_commit"   "SELECT dolt_reset('--hard');
 SELECT name FROM sqlite_master WHERE type='view';"   "0
 v2" "$DB11"
 
-# A named add stages exactly the named objects: unstaged schema changes of
-# OTHER tables must not ride into the commit on the master adoption, and
-# previously staged state (including index roots) must survive unstaged
-# working changes and cross-domain entry-number collisions.
+# Named add must not adopt other tables' unstaged schema; staged index roots must survive.
 DB12=/tmp/test_dolt_namedscope_$$.db; rm -f "$DB12"
 
 run_test_match "named_scope_setup"   "CREATE TABLE p(id INTEGER PRIMARY KEY, v INT);

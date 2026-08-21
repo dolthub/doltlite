@@ -575,7 +575,7 @@ static int mkdirp(const char *path) {
     if (tmp[i] == '/' || tmp[i] == '\\') {
       char sep = tmp[i];
       tmp[i] = '\0';
-      /* Skip a Windows drive prefix like "C:" which cannot be created. */
+      /* Skip a Windows drive prefix ("C:"). */
       if (tmp[i - 1] != ':' && makeDir(tmp) != 0 && errno != EEXIST) {
         sqlite3_free(tmp);
         return 1;
@@ -733,7 +733,6 @@ done:
   return rc;
 }
 
-/* Minimal cross-platform directory iteration over the creds dir. */
 typedef struct DirIter {
 #ifdef _WIN32
   HANDLE h;

@@ -47,8 +47,7 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
 SELECT dolt_checkout('feat');
 SQL
 
-# Invalid-plan --continue must leave the rebase in progress so the plan
-# can be edited and retried. Start, edit, and continue run in one session.
+# Invalid-plan --continue must leave the rebase in progress (one session).
 run_test_match "invalid_plan_continue_errors" \
   "SELECT dolt_rebase('-i', 'main');
    UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';
@@ -99,11 +98,8 @@ run_test "start_failure_temp_branch_removed" \
   "0" \
   "$DB2"
 
-# An interactive rebase mirrors its working set onto the branch a reopen would
-# land on, and clears that branch when it finishes. Rebase only refuses to
-# start over a dirty *current* branch, so uncommitted work on the other branch
-# used to be destroyed. The two controls establish that neither a plain
-# checkout roundtrip nor a non-interactive rebase ever did this.
+# Interactive rebase mirrors onto the reopen branch. It only refuses a dirty
+# *current* branch, so uncommitted work on the other used to be destroyed.
 seed_dirty_main() {
   rm -f "$1"
   cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
@@ -162,8 +158,7 @@ run_test_match "noninteractive_rebase_keeps_other_branch_uncommitted_work" \
   "^1$" \
   "$DB3"
 
-# Reopen used to lose the rebase when main was dirty: no mirror meant
-# --abort said "no rebase in progress" and dolt_rebase_feat was left behind.
+# Dirty main: no mirror meant --abort said "no rebase" and left dolt_rebase_feat.
 seed_dirty_main "$DB3"
 run_test_match "interactive_rebase_dirty_main_starts" \
   "SELECT dolt_checkout('feat');
@@ -198,10 +193,8 @@ run_test "interactive_rebase_continue_after_reopen_dirty_main" \
 0" \
   "$DB3"
 
-# --continue claims first, which drops META_MIRROR. If the source tip moved,
-# restore used to persist a whole-blob remirror onto the dirty default.
-# Replay of a pick now moves the working HEAD and persist overlays, but an
-# all-drop plan never moves HEAD and still remirrored without this restore.
+# --continue claims first (drops META_MIRROR). An all-drop plan never moves HEAD
+# and used to remirror the dirty default.
 seed_dirty_main "$DB3"
 run_test_match "interactive_rebase_dirty_main_starts_for_cas_drop" \
   "SELECT dolt_checkout('feat');
@@ -255,9 +248,7 @@ run_test "interactive_rebase_continue_cas_pick_keeps_dirty_main" \
 1" \
   "$DB3"
 
-# Rebase onto a non-default upstream used to stamp that tip as the default
-# branch's workingCommit. Open of $DB then discarded the mirror, so continue
-# and abort reported no rebase in progress and left dolt_rebase_<orig> behind.
+# Onto a non-default upstream used to stamp that tip as the default workingCommit.
 seed_onto_other() {
   rm -f "$1"
   cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
@@ -316,10 +307,7 @@ base,feat
 base" \
   "$DB_OTHER_ABORT"
 
-# An unrecognised plan verb used to report a bare "rebase failed", which reads
-# as though the rebase had been rolled back. It is not: the plan and working
-# branch are deliberately kept so the action can be corrected and --continue
-# retried, so the error has to name what was wrong.
+# Unrecognised verb must name the error; plan and working branch stay for --continue.
 DB4=/tmp/test_rebase_verb_$$.db
 seed_verb_repo() {
   rm -f "$1"
@@ -404,8 +392,7 @@ feat
 0" \
   "$DB5_SHORT/dolt_rebase_feat"
 
-# Reopen of the default DB used to see the mirrored plan then CAS-fail
-# (issue 1961). Reopen of the original branch had no plan at all.
+# Reopen of the default DB used to see the mirrored plan then CAS-fail.
 DB5_DEFAULT=/tmp/test_rebase_default_continue_$$.db
 seed_rebase_name_repo "$DB5_DEFAULT" "feat"
 run_test_match "rebase_default_reopen_starts" \
@@ -526,9 +513,7 @@ run_test "rebase_64_byte_default_branch_rejection_is_atomic" \
 0" \
   "$DB8"
 
-# Constraint detection must run for --continue regardless of the enclosing
-# transaction shape: a replayed commit that orphans an FK row has to abort
-# the rebase in every mode, never advance the branch with the violation.
+# --continue must detect FK orphans in every enclosing txn shape.
 seed_fk_conflict_repo() {
   local d="$1"
   rm -f "$d"
@@ -580,9 +565,7 @@ run_test "continue_in_savepoint_no_orphans" \
 feat adds child" \
   "$DB9"
 
-# Linear rebase used the replayed commit message to decide revert vs
-# cherry-pick. A DROP INDEX titled "Revert leftover" skipped index patches
-# and left the index in place.
+# Linear rebase used the commit message to pick revert vs cherry-pick.
 DB10=/tmp/test_rebase_revert_msg_$$.db; rm -f "$DB10"
 cat <<'SQL' | "$DOLTLITE" "$DB10" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -615,8 +598,7 @@ else
 fi
 rm -f "$DB10"
 
-# A successful linear rebase is a transaction boundary like dolt_commit:
-# it seals the enclosing BEGIN when it advances the ref.
+# Successful linear rebase seals the enclosing BEGIN when it advances the ref.
 DB11=/tmp/test_rebase_txn_seal_$$.db; rm -f "$DB11"
 cat <<'SQL' | "$DOLTLITE" "$DB11" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -650,9 +632,7 @@ else
 fi
 rm -f "$DB11"
 
-# A failed linear rebase restores feat, but AdoptRollbackBaseline used to
-# run only in autocommit. ROLLBACK of the enclosing BEGIN then reinstalled
-# the working-branch (upstream) catalog on feat.
+# Failed linear rebase must restore feat even inside BEGIN (not only autocommit).
 DB12=/tmp/test_rebase_fail_txn_$$.db; rm -f "$DB12"
 cat <<'SQL' | "$DOLTLITE" "$DB12" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -694,7 +674,7 @@ else
 fi
 rm -f "$DB12"
 
-# Same split after a conflicted interactive --continue aborts the rebase.
+# Same split after a conflicted interactive --continue.
 DB13=/tmp/test_rebase_iconflict_txn_$$.db; rm -f "$DB13"
 cat <<'SQL' | "$DOLTLITE" "$DB13" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

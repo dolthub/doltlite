@@ -1,4 +1,4 @@
-/* Prefix stock btree/pager/wal/backup symbols so shims can coexist. */
+/* Prefix stock btree symbols. */
 
 #ifndef BTREE_ORIG_PREFIX_H
 #define BTREE_ORIG_PREFIX_H

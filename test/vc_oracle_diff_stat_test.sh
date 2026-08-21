@@ -102,7 +102,6 @@ oracle_both() {
   oracle_summary "$@"
 }
 
-# Both engines must reject the script with a clean non-zero exit (not a crash).
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"
@@ -244,9 +243,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
-# The case above gives the added column a value on the row it edits, which is
-# what kept it agreeing. A column that stays NULL on an otherwise-modified row
-# still counts as a modified cell.
+# A NULL added column on an otherwise-modified row still counts as a modified cell.
 oracle_both "add_null_column_plus_update_same_row" "
 $SEED
 ALTER TABLE t ADD COLUMN extra INT;
@@ -265,8 +262,7 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- schema change: DROP COLUMN ---"
 
-# Dropped cells are reported by cells_deleted and must not also be counted as
-# modified, whether or not the dropped column held a value.
+# Dropped cells are cells_deleted, never also modified.
 oracle_both "drop_null_column_no_data_change" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
 INSERT INTO t VALUES(1, 10, NULL), (2, 20, NULL);
@@ -309,12 +305,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
-# A schema change rewrites every record, so the table root moves whether or not
-# any value did. data_change has to reflect the values, not the root.
-# Summary only: dolt_diff_stat emits an all-zero row for an in-place column
-# rename where Dolt emits none. Narrowing the emission gate to "no counters, no
-# row" is not the fix -- Dolt does emit that row when the table was recreated,
-# which diff_stat_revert_schema_change_with_later_added_table pins.
+# data_change follows values, not the moved table root. An all-zero in-place rename row is expected.
 oracle_summary "rename_column_no_data_change" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10), (2, 20);
@@ -390,7 +381,6 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- missing table filter (match Dolt) ---"
 
-# dolt_diff_stat: filter naming a table on neither side is an error.
 oracle_error "diff_stat_missing_table" "
 $SEED
 SELECT * FROM dolt_diff_stat('HEAD', 'HEAD', 'doesnotexist');
@@ -404,7 +394,6 @@ SELECT dolt_commit('-m', 'c2');
 SELECT * FROM dolt_diff_stat('HEAD~1', 'HEAD', 'doesnotexist');
 "
 
-# After drop + empty commit, neither side has t under that name.
 oracle_error "diff_stat_filter_absent_on_both_sides" "
 $SEED
 DROP TABLE t;
@@ -424,7 +413,6 @@ $SEED
 SELECT * FROM dolt_diff_stat('HEAD', 'definitely_not_a_ref', 't');
 "
 
-# dolt_diff_summary: missing filter is empty success on both engines.
 oracle_summary "diff_summary_missing_table" "
 $SEED
 " "HEAD" "HEAD" "doesnotexist" "EXPECT_EMPTY"
@@ -741,9 +729,7 @@ INSERT INTO t VALUES(3, 30);
 " "STAGED" "WORKING"
 
 
-# WITHOUT ROWID records store PK columns first, so declared column order and
-# record field order differ when the PK is not the first column. Cell
-# counting must translate through each side's layout.
+# WITHOUT ROWID stores PK first; cell counts must use each side's layout.
 oracle_both "nonleading_pk_update" "
 CREATE TABLE t(a VARCHAR(16), pk VARCHAR(16) PRIMARY KEY, c VARCHAR(16));
 INSERT INTO t VALUES('a1','k1','c1');

@@ -76,12 +76,9 @@ static int mergeStatusClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-/* Fallback for a merge this connection did not run: DoltLite's working set
-** persists only the resolved merge commit, so recover a name by finding the
-** branch that still points at it. A raw-hash spec has no matching branch and
-** falls through to the hash, which is what Dolt echoes back for that shape. The
-** merged-into branch is skipped so a just-fast-forwarded target can never
-** masquerade as the source. */
+/* Working set stores only the merge commit. Recover a branch name,
+** skipping the merged-into target so a fast-forward cannot masquerade.
+** Raw-hash specs fall through to the hash, as Dolt does. */
 static char *mergeStatusSourceName(
   sqlite3 *db,
   const ProllyHash *pMergeCommit,
@@ -103,13 +100,8 @@ static char *mergeStatusSourceName(
   return 0;
 }
 
-/* Data conflicts, constraint violations and schema conflicts, deduplicated and
-** name-ordered. Dolt builds the same union from a Go map, so its ordering is
-** unspecified when more than one table is unmerged; sorting here makes the
-** column deterministic. An active merge with everything already resolved
-** reports the empty string, matching Dolt -- which is why the empty case cannot
-** go through sqlite3_str_finish, whose NULL return is indistinguishable from
-** OOM. */
+/* Unmerged tables, deduped and sorted. Dolt's Go map order is
+** unspecified. Empty must not use sqlite3_str_finish: NULL looks like OOM. */
 static int mergeStatusUnmergedTables(sqlite3 *db, char **pzOut){
   static const char *zSql =
     "SELECT \"table\" FROM dolt_conflicts"
