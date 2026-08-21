@@ -386,6 +386,19 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature', '--message', 'release sync');
 "
 
+oracle "merge_with_message_long_equals" "
+$SEED
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature', '--message=release sync');
+"
+
 echo "--- conflict (no merge commit) ---"
 
 oracle_no_merge_commit "modify_modify_conflict_blocks_merge" "

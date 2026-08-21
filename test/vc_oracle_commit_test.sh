@@ -195,6 +195,13 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('--message', 'first commit');
 "
 
+oracle "commit_long_message_equals" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--message=first commit');
+"
+
 echo "--- combo / stage-all flags ---"
 
 oracle "commit_uppercase_A_new_table" "
