@@ -164,7 +164,8 @@ dl_state() {
   dep=$("$DOLTLITE" "$db" "SELECT group_concat(x, ' ') FROM (
       SELECT type || ':' || name || '->' || coalesce(tbl_name,'') AS x
       FROM sqlite_master WHERE type IN ('view','trigger') ORDER BY x);" 2>&1)
-  case "$dep" in *rror*) dep=UNREADABLE;; esac
+  case "$(printf '%s' "$dep" | tr 'A-Z' 'a-z')" in
+    *error*|*"table not found"*|*malformed*) dep=UNREADABLE;; esac
   echo "dep=$dep"
   for c in $(echo "$cols" | tr ',' ' '); do
     out=$("$DOLTLITE" "$db" \
@@ -199,7 +200,10 @@ dt_state() {
       SELECT concat('view:', table_name, '->', table_name) AS x
         FROM information_schema.tables
         WHERE table_schema=database() AND table_type='VIEW') q;" 2>&1)
-  case "$dep" in *error*|*Error*) dep=UNREADABLE;;
+  # Matched case-insensitively: an engine is free to shout its errors, and a
+  # read that failed must never be scored as a catalog with nothing in it.
+  case "$(printf '%s' "$dep" | tr 'A-Z' 'a-z')" in
+    *error*|*"table not found"*|*malformed*) dep=UNREADABLE;;
     *) dep=$(printf '%s\n' "$dep" | tail -n +2 | tr -d '"');; esac
   echo "dep=$dep"
   for c in $(echo "$cols" | tr ',' ' '); do
