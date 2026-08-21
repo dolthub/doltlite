@@ -164,6 +164,15 @@ void origBtreeIncrblobCursor(void *pCur){
 int origBtreeCount(sqlite3 *db, void *pCur, i64 *pn){
   return orig_sqlite3BtreeCount(db, C(pCur), pn);
 }
+int origBtreeCountRange(
+  sqlite3 *db,
+  void *pCur,
+  i64 iLower,
+  i64 iUpper,
+  i64 *pn
+){
+  return orig_sqlite3BtreeCountRange(db, C(pCur), iLower, iUpper, pn);
+}
 int origBtreeCountIndexRange(
   sqlite3 *db,
   void *pCur,

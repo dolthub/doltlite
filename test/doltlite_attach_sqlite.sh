@@ -155,7 +155,28 @@ PRAGMA side.integrity_check;" \
   "1
 ok" "$DLDB_IC"
 
-rm -f "$SQLDB1" "$SQLDB2" "$DLDB" "$SQLDB_W" "$SQLDB_IC" "$DLDB_IC"
+SQLDB_CR=/tmp/test_attach_countrange_$$.db
+$SQLITE3 "$SQLDB_CR" "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1),(2),(3),(5),(8),(10);"
+run_test "attach_count_between_last" \
+  "ATTACH DATABASE '$SQLDB_CR' AS s;
+SELECT count(*) FROM s.t WHERE id BETWEEN 8 AND 10;" \
+  "2" ":memory:"
+run_test "attach_count_between_gap" \
+  "ATTACH DATABASE '$SQLDB_CR' AS s;
+SELECT count(*) FROM s.t WHERE id BETWEEN 6 AND 7;" \
+  "0" ":memory:"
+
+DLDB_CR=/tmp/test_attach_dl_countrange_$$.db
+rm -f "$DLDB_CR"
+run_test "doltlite_main_attach_count_between_last" \
+  "CREATE TABLE m(x INTEGER); INSERT INTO m VALUES(1);
+SELECT dolt_commit('-Am','init') IS NOT NULL;
+ATTACH DATABASE '$SQLDB_CR' AS s;
+SELECT count(*) FROM s.t WHERE id BETWEEN 8 AND 10;" \
+  "1
+2" "$DLDB_CR"
+
+rm -f "$SQLDB1" "$SQLDB2" "$DLDB" "$SQLDB_W" "$SQLDB_IC" "$DLDB_IC" "$SQLDB_CR" "$DLDB_CR"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -75,6 +75,8 @@ int origBtreePutData(void *pCur, u32 offset, u32 amt, void *pBuf);
 void origBtreeIncrblobCursor(void *pCur);
 #endif
 int origBtreeCount(sqlite3 *db, void *pCur, i64 *pnEntry);
+int origBtreeCountRange(sqlite3 *db, void *pCur, i64 iLower, i64 iUpper,
+                        i64 *pnEntry);
 int origBtreeCountIndexRange(sqlite3 *db, void *pCur, UnpackedRecord *pLower,
                              UnpackedRecord *pUpper, i64 *pnEntry);
 int origBtreeClosesWithCursor(void *p, void *pCur);

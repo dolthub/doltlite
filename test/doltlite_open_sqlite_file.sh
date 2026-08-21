@@ -106,6 +106,27 @@ want_eq "R12_blob_pk_reads_payload_columns" \
   "$(dl_last "SELECT group_concat(hex(k)||':'||label||':'||n, ',') FROM (SELECT * FROM blobs ORDER BY k);" "$DB")" \
   "01:one:1,0203:two-three:23"
 
+# COUNT(*) WHERE INTEGER PK BETWEEN uses OP_CountRange on the orig adapter.
+DB=$TMP/r14.db
+seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1),(2),(3),(5),(8),(10);"
+want_eq "R14_count_between_last_row" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 10;" "$DB")" "2"
+want_eq "R14_count_between_gap" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 6 AND 7;" "$DB")" "0"
+want_eq "R14_count_between_all" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10;" "$DB")" "6"
+want_eq "R14_count_between_mid" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 4 AND 9;" "$DB")" "2"
+
+DB=$TMP/r14b.db
+seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(5);"
+want_eq "R14b_count_between_one_hit" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10;" "$DB")" "1"
+want_eq "R14b_count_between_miss_high" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 6 AND 10;" "$DB")" "0"
+want_eq "R14b_count_between_miss_low" \
+  "$(dl_last "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 4;" "$DB")" "0"
+
 for page_size in 1024 4096 8192 16384; do
   DB=$TMP/r13-$page_size.db
   seed_stock "$DB" "PRAGMA page_size=$page_size; CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB, s TEXT); WITH r(i) AS (VALUES(1),(2),(3)) INSERT INTO t SELECT i,CAST(char(64+i)||substr(hex(zeroblob(25000)),1,49999) AS BLOB),char(96+i)||substr(hex(zeroblob(25000)),1,49999) FROM r;"
