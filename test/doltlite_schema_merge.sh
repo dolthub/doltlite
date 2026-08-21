@@ -1836,6 +1836,26 @@ run_test_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat'
   "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB"
 rm -f "$DB"
 
+# The duplicate-index and dropped-column refusals are Dolt's judgement about a
+# merge of two branches. A revert replays one commit onto the branch that asked
+# for it, with one intended result, so they must not fire there -- and must not
+# reject restoring a state the branch held before.
+DB=/tmp/test_revert_restores_dup_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, c TEXT);
+CREATE INDEX iA ON t(c);
+CREATE INDEX iB ON t(c);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-Am','base holds two indexes over c');
+DROP INDEX iA;
+SELECT dolt_commit('-Am','drop iA');
+EOF
+run_test_match "revert_restoring_same_key_index_hash" "SELECT dolt_revert('HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "revert_restoring_same_key_index_objects" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "iA,iB" "$DB"
+rm -f "$DB"
+
 # Replacing an index rather than doubling it: the same side drops the older
 # index and adds one over the same column, so the merge keeps a single index and
 # has nothing to refuse. Dolt merges this and keeps the new index.

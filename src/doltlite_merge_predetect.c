@@ -97,6 +97,12 @@ static int mergeIndexSameKey(const char *zSqlA, const char *zSqlB){
 int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
   int side, i, j;
 
+  /* A merge only. Reverting, cherry-picking or rebasing a commit has one
+  ** intended result, and the branch it replays onto asked for it, so there is
+  ** no disagreement here to hand back. Refusing would also reject restoring a
+  ** state the branch held before. */
+  if( !c->bBranchMerge ) return SQLITE_OK;
+
   for(side=0; side<2; side++){
     SchemaEntry *aNew = side ? c->aTheirsSchema : c->aOursSchema;
     int nNew = side ? c->nTheirsSchema : c->nOursSchema;
@@ -142,6 +148,12 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
 ** column. */
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   int side, i, j;
+
+  /* A merge only. Reverting, cherry-picking or rebasing a commit has one
+  ** intended result, and the branch it replays onto asked for it, so there is
+  ** no disagreement here to hand back. Refusing would also reject restoring a
+  ** state the branch held before. */
+  if( !c->bBranchMerge ) return SQLITE_OK;
 
   for(side=0; side<2; side++){
     SchemaEntry *aDrop = side ? c->aTheirsSchema : c->aOursSchema;

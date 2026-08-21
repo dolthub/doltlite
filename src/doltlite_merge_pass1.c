@@ -1248,6 +1248,7 @@ int mergeCatalogPass1(
   SchemaMergeAction **ppSchemaActions, int *pnSchemaActions,
   int bDisjointSchemaChanges,
   int bPreferOurMaster,
+  int bBranchMerge,
   char ***pazReindex, int *pnReindex
 ){
   MergePass1Ctx c;
@@ -1271,6 +1272,7 @@ int mergeCatalogPass1(
   c.ppSchemaActions = ppSchemaActions; c.pnSchemaActions = pnSchemaActions;
   c.bDisjointSchemaChanges = bDisjointSchemaChanges;
   c.bPreferOurMaster = bPreferOurMaster;
+  c.bBranchMerge = bBranchMerge;
   c.pazReindex = pazReindex; c.pnReindex = pnReindex;
 
   rc = mergePass1CheckIndexOverRenamedColumn(&c);

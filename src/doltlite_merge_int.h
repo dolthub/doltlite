@@ -82,6 +82,10 @@ struct MergePass1Ctx {
   SchemaMergeAction **ppSchemaActions; int *pnSchemaActions;
   int bDisjointSchemaChanges;
   int bPreferOurMaster;
+  /* A merge of two branches, as opposed to a replay of one commit onto
+  ** another (revert, cherry-pick, rebase). Refusals that encode Dolt's
+  ** judgement about a merge only apply to the former. */
+  int bBranchMerge;
   char ***pazReindex; int *pnReindex;
   IndexMergePatch *aPatches;
   int nPatches;
@@ -368,6 +372,7 @@ int mergeCatalogPass1(
   SchemaMergeAction **ppSchemaActions, int *pnSchemaActions,
   int bDisjointSchemaChanges,
   int bPreferOurMaster,
+  int bBranchMerge,
   char ***pazReindex, int *pnReindex
 );
 
