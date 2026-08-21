@@ -378,6 +378,16 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD" "t"
 
+oracle_both "filter_table_case_insensitive" "
+CREATE TABLE \`MiXeD\`(id INT PRIMARY KEY, v INT);
+INSERT INTO \`MiXeD\` VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+UPDATE \`MiXeD\` SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "mixed"
+
 echo "--- missing table filter (match Dolt) ---"
 
 # dolt_diff_stat: filter naming a table on neither side is an error.

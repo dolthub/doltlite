@@ -280,6 +280,21 @@ static struct TableEntry *dsNameIndexFind(
   return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
 }
 
+static struct TableEntry *dsFindTableByNameNoCase(
+  struct TableEntry *aCat,
+  int nCat,
+  const char *zName
+){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<nCat; i++){
+    if( aCat[i].zName && sqlite3_stricmp(aCat[i].zName, zName)==0 ){
+      return &aCat[i];
+    }
+  }
+  return 0;
+}
+
 static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
   if( (idxNum & 3)!=3 ){
     sqlite3_free(pVtab->zErrMsg);
@@ -686,7 +701,8 @@ static int dsFilterInit(
 }
 
 static int dsTableNameMatchesFilter(const DsFilterCtx *pCtx, const char *zName){
-  return !pCtx->zTblFilter || strcmp(zName, pCtx->zTblFilter)==0;
+  return !pCtx->zTblFilter
+      || sqlite3_stricmp(zName, pCtx->zTblFilter)==0;
 }
 
 /* pRef is present in one root but its name is absent from the other. If the
@@ -716,14 +732,18 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
 
   while( c->iName<pCtx->nNames ){
     const char *zName = pCtx->azNames[c->iName++];
+    const char *zFromName = zName;
+    const char *zToName = zName;
     struct TableEntry *pFromEntry, *pToEntry;
     DsStatRow row;
 
     if( !dsTableNameMatchesFilter(pCtx, zName) ) continue;
 
     if( pCtx->zTblFilter ){
-      pFromEntry = doltliteFindTableByName(c->aFromCat, c->nFromCat, zName);
-      pToEntry = doltliteFindTableByName(c->aToCat, c->nToCat, zName);
+      pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);
+      pToEntry = dsFindTableByNameNoCase(c->aToCat, c->nToCat, zName);
+      if( pFromEntry ) zFromName = pFromEntry->zName;
+      if( pToEntry ) zToName = pToEntry->zName;
     }else{
       pFromEntry = dsNameIndexFind(&c->fromIdx, zName);
       pToEntry = dsNameIndexFind(&c->toIdx, zName);
@@ -756,13 +776,23 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
      && prollyHashCompare(&pFromEntry->schemaHash, &pToEntry->schemaHash)==0 ){
       continue;
     }
-    rc = dsComputeTableStats(db, zName, zName, &pCtx->fromCat, &pCtx->toCat,
+    rc = dsComputeTableStats(db, zFromName, zToName,
+                             &pCtx->fromCat, &pCtx->toCat,
                              pFromEntry, pToEntry, &row);
     if( rc!=SQLITE_OK ){
       sqlite3_free(row.zTableName);
       return rc;
     }
     if( !row.zTableName ) continue;
+    if( pCtx->zTblFilter ){
+      char *zFilteredName = sqlite3_mprintf("%s", pCtx->zTblFilter);
+      if( !zFilteredName ){
+        sqlite3_free(row.zTableName);
+        return SQLITE_NOMEM;
+      }
+      sqlite3_free(row.zTableName);
+      row.zTableName = zFilteredName;
+    }
 
     if( row.rowsAdded==0 && row.rowsDeleted==0 && row.rowsModified==0
      && row.cellsAdded==0 && row.cellsDeleted==0 && row.cellsModified==0 ){
@@ -799,8 +829,10 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   /* Match Dolt: a table filter must name a table present on at least one
   ** side. Absent from both is "table not found", not an empty result. */
   if( c->fctx.zTblFilter
-   && !doltliteFindTableByName(c->aFromCat, c->nFromCat, c->fctx.zTblFilter)
-   && !doltliteFindTableByName(c->aToCat, c->nToCat, c->fctx.zTblFilter) ){
+   && !dsFindTableByNameNoCase(c->aFromCat, c->nFromCat,
+                               c->fctx.zTblFilter)
+   && !dsFindTableByNameNoCase(c->aToCat, c->nToCat,
+                               c->fctx.zTblFilter) ){
     sqlite3_free(v->base.zErrMsg);
     v->base.zErrMsg = sqlite3_mprintf("table not found: %s", c->fctx.zTblFilter);
     rc = SQLITE_ERROR;
@@ -1103,8 +1135,8 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
     if( !dsTableNameMatchesFilter(pCtx, zName) ) continue;
 
     if( pCtx->zTblFilter ){
-      pFromEntry = doltliteFindTableByName(c->aFromCat, c->nFromCat, zName);
-      pToEntry = doltliteFindTableByName(c->aToCat, c->nToCat, zName);
+      pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);
+      pToEntry = dsFindTableByNameNoCase(c->aToCat, c->nToCat, zName);
     }else{
       pFromEntry = dsNameIndexFind(&c->fromIdx, zName);
       pToEntry = dsNameIndexFind(&c->toIdx, zName);
@@ -1124,6 +1156,10 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
                                 &c->toIdx) ){
         continue;
       }
+    }
+    if( pCtx->zTblFilter ){
+      if( pToEntry ) zName = pToEntry->zName;
+      else if( pFromEntry ) zName = pFromEntry->zName;
     }
     rc = dssAppendTableChange(c, db, zName, pFromEntry, pToEntry);
     if( rc!=SQLITE_OK ) return rc;
