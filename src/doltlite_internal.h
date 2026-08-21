@@ -1350,6 +1350,7 @@ int doltliteMergeCatalogs(sqlite3 *db,
     int *pnConflicts, char **pzErrMsg,
     SchemaMergeAction **ppActions, int *pnActions,
     int bPreferOurMaster,
+    int bBranchMerge,
     char ***pazReindex, int *pnReindex,
     char ***pazRebuildVtabs, int *pnRebuildVtabs);
 void doltliteFreeNameList(char **az, int n);

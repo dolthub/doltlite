@@ -54,6 +54,59 @@ struct SchemaRootpageRemap {
 
 /* ── rows (doltlite_merge_rows.c) ─────────────────────────────────────── */
 
+/* Shared with the pre-detection module, which reads the same pass-1 state. */
+typedef struct IndexMergePatch IndexMergePatch;
+struct IndexMergePatch {
+  Pgno iTable;
+  ProllyHash mergedRoot;
+};
+
+/* Shared state for pass-1 catalog merge. Keeps the long parameter list off
+** the leaf helpers and makes the patch list a single ownership root. */
+typedef struct MergePass1Ctx MergePass1Ctx;
+struct MergePass1Ctx {
+  sqlite3 *db;
+  struct TableEntry *aAnc; int nAnc;
+  struct TableEntry *aOurs; int nOurs;
+  struct TableEntry *aTheirs; int nTheirs;
+  SchemaEntry *aAncSchema; int nAncSchema;
+  SchemaEntry *aOursSchema; int nOursSchema;
+  SchemaEntry *aTheirsSchema; int nTheirsSchema;
+  struct TableEntry *aMerged; int *pnMerged;
+  MergeConflictTable **ppConflictTables; int *pnConflictTables;
+  int *pTotalConflicts;
+  char **pzErrMsg;
+  const ProllyHash *pCatAnc;
+  const ProllyHash *pCatOurs;
+  const ProllyHash *pCatTheirs;
+  SchemaMergeAction **ppSchemaActions; int *pnSchemaActions;
+  int bDisjointSchemaChanges;
+  int bPreferOurMaster;
+  /* A merge of two branches, as opposed to a replay of one commit onto
+  ** another (revert, cherry-pick, rebase). Refusals that encode Dolt's
+  ** judgement about a merge only apply to the former. */
+  int bBranchMerge;
+  char ***pazReindex; int *pnReindex;
+  IndexMergePatch *aPatches;
+  int nPatches;
+  int nPatchesAlloc;
+};
+
+int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c);
+int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c);
+int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c);
+int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c);
+
+int mergeRowEditsColumn(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pOtherRoot,
+  u8 ancFlags,
+  u8 otherFlags,
+  int iField,
+  int *pbEdited
+);
+
 int canFastMerge(
   sqlite3 *db,
   const char *zName,
@@ -319,6 +372,7 @@ int mergeCatalogPass1(
   SchemaMergeAction **ppSchemaActions, int *pnSchemaActions,
   int bDisjointSchemaChanges,
   int bPreferOurMaster,
+  int bBranchMerge,
   char ***pazReindex, int *pnReindex
 );
 

@@ -1762,5 +1762,144 @@ run_test_match "merge_trigger_over_dropped_table_no_replacement_refused" \
 run_test "merge_trigger_over_dropped_table_no_replacement_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
+# One side drops a column while the other edits that same column's value in a
+# row they both already had. The edit cannot land in the merged table, and
+# discarding it silently decides which branch's intent wins, so refuse -- which
+# is what Dolt does. The rule is per row and per column: an edit to another
+# column, an inserted row carrying a value, and a deleted row all still merge.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_drop_vs_edit_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="ALTER TABLE t DROP COLUMN b;"; FEAT="UPDATE t SET b='edit' WHERE k=1;"
+  else
+    MAIN="UPDATE t SET b='edit' WHERE k=1;"; FEAT="ALTER TABLE t DROP COLUMN b;"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_drop_vs_edit_of_that_column_${dir}_refused" \
+    "SELECT dolt_merge('feat');" \
+    "column 'b' of table 't' was dropped on one branch and its value changed" "$DB"
+  run_test "merge_drop_vs_edit_of_that_column_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# Everything the rule must leave alone.
+for theirs in "UPDATE t SET n=99 WHERE k=1;" "UPDATE t SET a='edit' WHERE k=1;" \
+              "INSERT INTO t VALUES(9,'a9','b9',99);" "DELETE FROM t WHERE k=1;"; do
+  DB=/tmp/test_merge_drop_vs_other_$$.db; rm -f "$DB"
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$theirs
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','main drops b');
+EOF
+  run_test_match "merge_drop_vs_unrelated_change_merges" "SELECT dolt_merge('feat');" \
+    "^[0-9a-f]{40}$" "$DB"
+  rm -f "$DB"
+done
+
+# An index added over the columns an existing index already covers. Dolt refuses
+# it -- "multiple indexes covering the same column set cannot be merged" -- and
+# keeping both would impose one side's uniqueness on the other, so refuse too.
+DB=/tmp/test_merge_dup_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','feat drops b');
+SELECT dolt_checkout('main');
+CREATE INDEX ia ON t(a);
+SELECT dolt_commit('-Am','main duplicates the index');
+EOF
+run_test_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat');" \
+  "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB"
+rm -f "$DB"
+
+# The duplicate-index and dropped-column refusals are Dolt's judgement about a
+# merge of two branches. A revert replays one commit onto the branch that asked
+# for it, with one intended result, so they must not fire there -- and must not
+# reject restoring a state the branch held before.
+DB=/tmp/test_revert_restores_dup_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, c TEXT);
+CREATE INDEX iA ON t(c);
+CREATE INDEX iB ON t(c);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-Am','base holds two indexes over c');
+DROP INDEX iA;
+SELECT dolt_commit('-Am','drop iA');
+EOF
+run_test_match "revert_restoring_same_key_index_hash" "SELECT dolt_revert('HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "revert_restoring_same_key_index_objects" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "iA,iB" "$DB"
+rm -f "$DB"
+
+# Replacing an index rather than doubling it: the same side drops the older
+# index and adds one over the same column, so the merge keeps a single index and
+# has nothing to refuse. Dolt merges this and keeps the new index.
+DB=/tmp/test_merge_replace_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP INDEX ix0;
+CREATE INDEX ix_new ON t(a);
+SELECT dolt_commit('-Am','feat replaces the index');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'a2','b2');
+SELECT dolt_commit('-Am','main adds a row');
+EOF
+run_test_match "merge_index_replaced_not_duplicated_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_index_replaced_not_duplicated_objects" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix_new" "$DB"
+rm -f "$DB"
+
+# An index over a column nothing else indexes is not affected.
+DB=/tmp/test_merge_new_index_ok_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','feat drops b');
+SELECT dolt_checkout('main');
+CREATE INDEX ic ON t(n);
+SELECT dolt_commit('-Am','main indexes n');
+EOF
+run_test_match "merge_new_index_other_column_merges" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_new_index_other_column_keeps_both" \
+  "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type='index' ORDER BY name);" \
+  "ic,ix0" "$DB"
+rm -f "$DB"
 
 dltest_finish

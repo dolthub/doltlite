@@ -1258,6 +1258,7 @@ int doltliteMergeCatalogs(
   SchemaMergeAction **ppActions,
   int *pnActions,
   int bPreferOurMaster,
+  int bBranchMerge,
   char ***pazReindex,
   int *pnReindex,
   char ***pazRebuildVtabs,
@@ -1325,6 +1326,7 @@ int doltliteMergeCatalogs(
                           ppActions, pnActions,
                           bDisjointSchemaChanges,
                           bPreferOurMaster,
+                          bBranchMerge,
                           pazReindex, pnReindex);
   if( rc!=SQLITE_OK ){
     int k;

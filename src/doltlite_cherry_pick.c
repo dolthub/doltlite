@@ -148,7 +148,8 @@ int applyMergedCatalogAndCommit(
     int nReindex = 0;
     rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
                                 &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
-                                bPreferOurMaster, &azReindex, &nReindex, 0, 0);
+                                bPreferOurMaster, 0,
+                                &azReindex, &nReindex, 0, 0);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zMergeErr);
       doltliteTxnStateClear(&savedState);
@@ -285,7 +286,7 @@ int applyMergedCatalogAndCommit(
     char *zCErr = 0;
     rc = doltliteMergeCatalogs(db, ourCatHash, &liveMergedCatHash,
                                pCommitOurCatHash, &commitCatHash,
-                               &nCommitConflicts, &zCErr, 0, 0, 0,
+                               &nCommitConflicts, &zCErr, 0, 0, 0, 0,
                                &azReindexC, &nReindexC, 0, 0);
     sqlite3_free(zCErr);
     doltliteFreeNameList(azReindexC, nReindexC);

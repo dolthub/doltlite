@@ -43,12 +43,6 @@ ren_tbl:trig:Dolt keeps a trigger on the old table name, which no loadable catal
 # produce. Every entry here is a bug to fix by refusing, not a difference to
 # keep, and the suite prints them as gaps rather than passes.
 MERGE_WHERE_DOLT_REFUSES="
-drop_b:rows:a row edit of a column the other branch dropped (#2306)
-rows:drop_b:a row edit of a column the other branch dropped (#2306)
-idx_a:drop_b_with_index:adding an index while they drop a column, table already indexed (#2311)
-drop_b_with_index:idx_a:adding an index while they drop a column, table already indexed (#2311)
-rows:drop_b_with_index:a row edit of a column the other branch dropped, table indexed (#2306)
-drop_b_with_index:rows:a row edit of a column the other branch dropped, table indexed (#2306)
 "
 
 # Pairs that still fail with "database disk image is malformed" -- a report of

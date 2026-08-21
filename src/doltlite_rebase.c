@@ -997,7 +997,7 @@ static int rebaseApplyPlanRowCatalog(
     int nReindex = 0;
     rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
                                &replayC.catalogHash, pMergedCat,
-                               &nConflicts, 0, 0, 0, 0,
+                               &nConflicts, 0, 0, 0, 0, 0,
                                &azReindex, &nReindex, 0, 0);
     if( rc==SQLITE_OK && nConflicts==0 ){
       rc = doltliteSwitchCatalog(db, pMergedCat);

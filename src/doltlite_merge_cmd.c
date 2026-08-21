@@ -537,7 +537,7 @@ int doltliteMergeRef(
 
   rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
                               &mergedCatHash, &nMergeConflicts, &zOwnedErr,
-                              &aSchemaActions, &nSchemaActions, 0,
+                              &aSchemaActions, &nSchemaActions, 0, 1,
                               &azReindex, &nReindex,
                               &azRebuildVtabs, &nRebuildVtabs);
   if( rc!=SQLITE_OK ){

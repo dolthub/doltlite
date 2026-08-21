@@ -1152,6 +1152,62 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   return rc;
 }
 
+/* Did the other side change this column's value in a row that already existed?
+** Dropping a column and editing that same column's value on another branch is
+** a cell-level modify-versus-delete, which Dolt reports as a conflict. Rows
+** the other side added or removed do not count, and neither does an edit to
+** any other column, so the comparison has to be per row and per field. */
+int mergeRowEditsColumn(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pOtherRoot,
+  u8 ancFlags,
+  u8 otherFlags,
+  int iField,
+  int *pbEdited
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyDiffIter iter;
+  ProllyDiffChange *pChange = 0;
+  int rc;
+
+  *pbEdited = 0;
+  if( !cs || !pCache || iField<0 ) return SQLITE_OK;
+  if( prollyHashIsEmpty(pAncRoot) || prollyHashIsEmpty(pOtherRoot) ){
+    return SQLITE_OK;
+  }
+  memset(&iter, 0, sizeof(iter));
+  rc = prollyDiffIterOpen(&iter, cs, pCache, pAncRoot, pOtherRoot,
+                          ancFlags, otherFlags);
+  if( rc!=SQLITE_OK ) return rc;
+
+  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW ){
+    RecField *aOld = 0;
+    RecField *aNew = 0;
+    int nOld = 0, nNew = 0;
+    if( pChange->type!=PROLLY_DIFF_MODIFY ) continue;
+    if( !pChange->pOldVal || !pChange->pNewVal ) continue;
+    if( parseRecordFields(pChange->pOldVal, pChange->nOldVal, &aOld, &nOld)<0 ){
+      continue;
+    }
+    if( parseRecordFields(pChange->pNewVal, pChange->nNewVal, &aNew, &nNew)<0 ){
+      sqlite3_free(aOld);
+      continue;
+    }
+    if( iField<nOld && iField<nNew
+     && fieldEquals(pChange->pOldVal, &aOld[iField],
+                    pChange->pNewVal, &aNew[iField])!=0 ){
+      *pbEdited = 1;
+    }
+    sqlite3_free(aOld);
+    sqlite3_free(aNew);
+    if( *pbEdited ) break;
+  }
+  prollyDiffIterClose(&iter);
+  return rc==SQLITE_ROW || rc==SQLITE_DONE ? SQLITE_OK : rc;
+}
+
 int canFastMerge(
   sqlite3 *db,
   const char *zName,
