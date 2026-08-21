@@ -149,6 +149,7 @@ const void *origBtreePayloadFetch(void *pCur, u32 *pAmt){
   return orig_sqlite3BtreePayloadFetch(C(pCur), pAmt);
 }
 i64 origBtreeIntegerKey(void *pCur){ return orig_sqlite3BtreeIntegerKey(C(pCur)); }
+i64 origBtreeOffset(void *pCur){ return orig_sqlite3BtreeOffset(C(pCur)); }
 u32 origBtreePayloadChecked(void *pCur, u32 off, u32 amt, void *pBuf){
   return orig_sqlite3BtreePayloadChecked(C(pCur), off, amt, pBuf);
 }

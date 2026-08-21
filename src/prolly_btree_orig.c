@@ -248,8 +248,7 @@ sqlite3_int64 origCursorMaxRecordSizeVt(BtCursor *pCur){
   return origBtreeMaxRecordSize(pCur->pOrigCursor);
 }
 i64 origCursorOffsetVt(BtCursor *pCur){
-  (void)pCur;
-  return -1;
+  return origBtreeOffset(pCur->pOrigCursor);
 }
 int origCursorInsertVt(BtCursor *pCur, const BtreePayload *pPayload, int flags, int seekResult){
   return origBtreeInsert(pCur->pOrigCursor, pPayload, flags, seekResult);

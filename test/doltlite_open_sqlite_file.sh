@@ -106,6 +106,33 @@ want_eq "R12_blob_pk_reads_payload_columns" \
   "$(dl_last "SELECT group_concat(hex(k)||':'||label||':'||n, ',') FROM (SELECT * FROM blobs ORDER BY k);" "$DB")" \
   "01:one:1,0203:two-three:23"
 
+for page_size in 1024 4096 8192 16384; do
+  DB=$TMP/r13-$page_size.db
+  seed_stock "$DB" "PRAGMA page_size=$page_size; CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB, s TEXT); WITH r(i) AS (VALUES(1),(2),(3)) INSERT INTO t SELECT i,CAST(char(64+i)||substr(hex(zeroblob(25000)),1,49999) AS BLOB),char(96+i)||substr(hex(zeroblob(25000)),1,49999) FROM r;"
+  want_eq "R13_${page_size}_distinct_overflow_payloads" \
+    "$(dl_last "SELECT (SELECT count(DISTINCT b) FROM t)||':'||(SELECT count(DISTINCT s) FROM t);" "$DB")" "3:3"
+  want_eq "R13_${page_size}_group_overflow_payloads" \
+    "$(dl_last "SELECT (SELECT count(*) FROM (SELECT b FROM t GROUP BY b))||':'||(SELECT count(*) FROM (SELECT s FROM t GROUP BY s));" "$DB")" "3:3"
+  want_eq "R13_${page_size}_materialized_overflow_payloads" \
+    "$(dl_last "SELECT (SELECT count(*) FROM (SELECT DISTINCT hex(b) FROM t))||':'||(SELECT count(*) FROM (SELECT DISTINCT hex(s) FROM t));" "$DB")" "3:3"
+  want_eq "R13_${page_size}_except_overflow_payloads" \
+    "$(dl_last "SELECT (SELECT count(*) FROM (SELECT b FROM t EXCEPT SELECT b FROM t WHERE id=1))||':'||(SELECT count(*) FROM (SELECT s FROM t EXCEPT SELECT s FROM t WHERE id=1));" "$DB")" "2:2"
+  want_eq "R13_${page_size}_overflow_bytes_types_lengths" \
+    "$(dl_last "SELECT group_concat(substr(hex(b),1,2)||substr(s,1,1)||':'||typeof(b)||':'||length(b)||':'||typeof(s)||':'||length(s),',') FROM (SELECT b,s FROM t ORDER BY id);" "$DB")" \
+    "41a:blob:50000:text:50000,42b:blob:50000:text:50000,43c:blob:50000:text:50000"
+done
+
+SRC=$TMP/r13-4096.db; DST=$TMP/r13dest.db
+dl_all "ATTACH '$SRC' AS legacy; CREATE TABLE db(g TEXT PRIMARY KEY, id INTEGER, b BLOB); INSERT INTO db SELECT 'g'||id,id,b FROM legacy.t; CREATE TABLE ds(g TEXT PRIMARY KEY, id INTEGER, s TEXT); INSERT INTO ds SELECT 'g'||id,id,s FROM legacy.t; SELECT dolt_commit('-A','-m','overflow copy');" "$DST" >/dev/null
+want_eq "R13b_insert_select_distinct_after_commit_reopen" \
+  "$(dl_last "SELECT (SELECT count(DISTINCT b) FROM db)||':'||(SELECT count(DISTINCT s) FROM ds);" "$DST")" "3:3"
+want_eq "R13c_insert_select_bytes_after_commit_reopen" \
+  "$(dl_last "SELECT (SELECT group_concat(substr(hex(b),1,2),',') FROM (SELECT b FROM db ORDER BY g))||':'||(SELECT group_concat(substr(s,1,1),',') FROM (SELECT s FROM ds ORDER BY g));" "$DST")" "41,42,43:a,b,c"
+want_eq "R13d_insert_select_exact_after_commit_reopen" \
+  "$(dl_last "SELECT (SELECT sum(b=CAST(char(64+id)||substr(hex(zeroblob(25000)),1,49999) AS BLOB)) FROM db)||':'||(SELECT sum(s=char(96+id)||substr(hex(zeroblob(25000)),1,49999)) FROM ds);" "$DST")" "3:3"
+want_eq "R13e_insert_select_matches_attached_source" \
+  "$(dl_last "ATTACH '$SRC' AS legacy; SELECT (SELECT count(*) FROM (SELECT id,b FROM db EXCEPT SELECT id,b FROM legacy.t))||':'||(SELECT count(*) FROM (SELECT id,b FROM legacy.t EXCEPT SELECT id,b FROM db))||':'||(SELECT count(*) FROM (SELECT id,s FROM ds EXCEPT SELECT id,s FROM legacy.t))||':'||(SELECT count(*) FROM (SELECT id,s FROM legacy.t EXCEPT SELECT id,s FROM ds));" "$DST")" "0:0:0:0"
+
 echo ""
 echo "--- autocommit writes ---"
 
