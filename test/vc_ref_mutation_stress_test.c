@@ -195,6 +195,19 @@ static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
   return rc;
 }
 
+/* Merge refuses a dirty working set. A failed reset must surface so the
+** retry loop does not treat leftover dirt as a successful cleanup. */
+static int discardWorking(sqlite3 *db, char *out, int nOut){
+  char *err = 0;
+  int rc = sqlite3_exec(db, "SELECT dolt_reset('--hard')", 0, 0, &err);
+  if( rc!=SQLITE_OK && out && nOut>0 ){
+    const char *msg = err ? err : sqlite3_errmsg(db);
+    snprintf(out, nOut, "%s", msg && msg[0] ? msg : "reset failed");
+  }
+  sqlite3_free(err);
+  return rc;
+}
+
 /* Open racing the store lock is retryable; unretried it returned "not an error". */
 static int reopenDb(const char *path, sqlite3 **pDb){
   Budget budget;
@@ -313,19 +326,25 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
                "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);
       rc = queryIntWithRetry(db, sql, &count);
       if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
-      snprintf(sql, sizeof(sql), "SELECT dolt_merge('%s')", branch);
-      rc = queryTextWithRetry(db, sql, out, sizeof(out));
-      if( rc==SQLITE_OK
-       && (strlen(out)==40 || msgContains(out, "Already up to date")) ){
-        /* Hash is not success unless the worker row is on main (CAS clobber). */
-        count = 0;
-        snprintf(sql, sizeof(sql),
-                 "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);
-        rc = queryIntWithRetry(db, sql, &count);
-        if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
+      rc = discardWorking(db, out, sizeof(out));
+      if( rc==SQLITE_OK ){
+        snprintf(sql, sizeof(sql), "SELECT dolt_merge('%s')", branch);
+        rc = queryTextWithRetry(db, sql, out, sizeof(out));
+        if( rc==SQLITE_OK
+         && (strlen(out)==40 || msgContains(out, "Already up to date")) ){
+          /* Hash is not success unless the worker row is on main (CAS clobber). */
+          count = 0;
+          snprintf(sql, sizeof(sql),
+                   "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);
+          rc = queryIntWithRetry(db, sql, &count);
+          if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
+        }
+        if( msgContains(out, "uncommitted changes") ){
+          discardWorking(db, out, sizeof(out));
+        }
       }
     }
-    sqlite3_sleep(5);
+    sqlite3_sleep(msgContains(out, "uncommitted changes") ? 25 : 5);
     rc = reopenDb(path, pDb);
     if( rc!=SQLITE_OK ) return rc;
     db = *pDb;
@@ -513,6 +532,7 @@ static void runDefaultRenameStress(void){
     char value = 0;
     char sql[256];
     int rc;
+    startPhase();
     check("default_rename_signal_setter", pipeSend(toChild[1], '1')==0);
     check("default_rename_setter_completed",
           pipeReceive(fromChild[0], &value)==0 && value=='1');
