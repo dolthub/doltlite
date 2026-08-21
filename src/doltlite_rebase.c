@@ -341,6 +341,7 @@ static int doltliteRebaseLinearReplay(
   int i;
   int dirty = 0;
   char *zFailedMsg = 0;
+  char *zApplyErr = 0;
   int bConflict = 0;
   int bViolation = 0;
   assert( db!=0 && context!=0 && zUpstream!=0 && pzFinalMessage!=0 );
@@ -497,7 +498,7 @@ static int doltliteRebaseLinearReplay(
         &replayCommit.catalogHash,
         &curHead, 0,
         replayCommit.zMessage ? replayCommit.zMessage : "",
-        0, 0, &nConflicts, &nViolations, 0, hexBuf);
+        0, 0, &nConflicts, &nViolations, &zApplyErr, hexBuf);
 
     doltliteCommitClear(&replayCommit);
     doltliteCommitClear(&parentCommit);
@@ -545,6 +546,7 @@ static int doltliteRebaseLinearReplay(
   doltliteCommitClear(&origCommit);
   sqlite3_free(aReplay);
   sqlite3_free(zFailedMsg);
+  sqlite3_free(zApplyErr);
   rc = doltliteVcSealEnclosingTxn(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -580,7 +582,10 @@ rollback:
   sqlite3_free(aReplay);
   {
     char *zErr;
-    if( bConflict && zFailedMsg && zFailedMsg[0] ){
+    if( zApplyErr ){
+      zErr = zApplyErr;
+      zApplyErr = 0;
+    }else if( bConflict && zFailedMsg && zFailedMsg[0] ){
       zErr = sqlite3_mprintf(
           "conflict rebasing \"%s\"; rebase aborted, branch restored to pre-rebase state",
           zFailedMsg);
@@ -605,6 +610,7 @@ rollback:
     }
   }
   sqlite3_free(zFailedMsg);
+  sqlite3_free(zApplyErr);
   sqlite3_free(zOrig);
   sqlite3_free(zWorking);
   if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
