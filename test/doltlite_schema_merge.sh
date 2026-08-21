@@ -1706,10 +1706,44 @@ run_test "merge_view_over_renamed_table_objects" \
 rm -f "$DB"
 
 # Dropping the table and creating an unrelated one looks like a rename if only
-# the names are compared: the ancestor's table is gone and a table the ancestor
-# never had is present. The columns are what tell them apart, and the refusal
-# must not fire on the drop.
-DB=/tmp/test_merge_trig_drop_create_$$.db; rm -f "$DB"
+# the names are compared. The columns tell them apart, so this is a drop: the
+# trigger still has nowhere to land, refuse as dropped rather than renamed or
+# malformed.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_trig_drop_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
+    FEAT="DROP TABLE t; CREATE TABLE u(x INTEGER PRIMARY KEY, y TEXT);"
+    WANT="table:t,trigger:tg"
+  else
+    MAIN="DROP TABLE t; CREATE TABLE u(x INTEGER PRIMARY KEY, y TEXT);"
+    FEAT="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
+    WANT="table:u"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_trigger_over_dropped_table_${dir}_refused" \
+    "SELECT dolt_merge('feat');" \
+    "cannot merge: trigger 'tg' runs on table 't', which the other branch dropped" "$DB"
+  run_test "merge_trigger_over_dropped_table_${dir}_intact" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master;" "$WANT" "$DB"
+  run_test "merge_trigger_over_dropped_table_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# Same hole with no replacement table.
+DB=/tmp/test_merge_trig_drop_only_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
 INSERT INTO t VALUES(1,'a1',11);
@@ -1717,18 +1751,16 @@ SELECT dolt_commit('-A','-m','base');
 SELECT dolt_branch('feat');
 SELECT dolt_checkout('feat');
 DROP TABLE t;
-CREATE TABLE u(x INTEGER PRIMARY KEY, y TEXT);
-SELECT dolt_commit('-Am','feat replaces the table');
+SELECT dolt_commit('-Am','feat drops t');
 SELECT dolt_checkout('main');
 CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;
 SELECT dolt_commit('-Am','main adds trigger');
 EOF
-# The drop is not a rename, so the trigger refusal must not fire. What this
-# shape does instead is a separate, pre-existing problem -- a trigger left on a
-# table the other branch dropped still fails to load -- asserted here so the
-# refusal cannot quietly start covering it.
-run_test_match "merge_trigger_vs_drop_and_create_not_rename_refusal" \
-  "SELECT dolt_merge('feat');" "database disk image is malformed" "$DB"
+run_test_match "merge_trigger_over_dropped_table_no_replacement_refused" \
+  "SELECT dolt_merge('feat');" \
+  "cannot merge: trigger 'tg' runs on table 't', which the other branch dropped" "$DB"
+run_test "merge_trigger_over_dropped_table_no_replacement_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
 dltest_finish
