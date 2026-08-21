@@ -312,6 +312,39 @@ DELETE FROM gp WHERE id = 1;
 SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);
 " "1|0|0"
 
+DROP_RESTORE_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, d TEXT);
+INSERT INTO t VALUES(1,'base','base-d');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('feat');
+UPDATE t SET d='main-live';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','set d main');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN d;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','drop d feature');
+ALTER TABLE t ADD COLUMN d TEXT;
+UPDATE t SET d='feature-live';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','restore d feature');
+"
+
+run_db_match "rebase_schema_drop_changed_column_error" "
+$DROP_RESTORE_SETUP
+SELECT dolt_rebase('main');
+" "cannot apply: column 'd' of table 't' would be dropped, discarding a changed value"
+
+run_db_eq "rebase_schema_drop_changed_column_rollback" "
+$DROP_RESTORE_SETUP
+SELECT dolt_rebase('main');
+SELECT active_branch() || '|' || d || '|' ||
+  (SELECT count(*) FROM dolt_log WHERE message='restore d feature') || '|' ||
+  (SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase')
+FROM t;
+" "feat|feature-live|1|0"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
