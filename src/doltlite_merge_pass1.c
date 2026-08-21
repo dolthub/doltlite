@@ -1056,14 +1056,16 @@ static int mergePass1CollectDualRename(
   return SQLITE_OK;
 }
 
-/* A trigger whose table the other side renamed away. A trigger has to resolve
-** when the schema loads -- unlike a view, which is only text until it is used
-** -- so a merged catalog holding a trigger on a table that is no longer there
-** cannot be loaded, and the merge reported the database as malformed.
+/* A trigger whose table the other side renamed or dropped. A trigger has to
+** resolve when the schema loads -- unlike a view, which is only text until it
+** is used -- so a merged catalog holding a trigger on a table that is no
+** longer there cannot be loaded, and the merge reported the database as
+** malformed.
 **
-** Dolt merges this and keeps the trigger pointing at the old name, which is a
-** dangling trigger its own information_schema cannot read. That is not a
-** result this engine can represent, so refuse and say why. */
+** Dolt merges a rename and keeps the trigger pointing at the old name, which
+** is a dangling trigger its own information_schema cannot read. That is not a
+** result this engine can represent, so refuse and say why. A drop of the
+** table is the same hole: refuse as dropped, not as renamed. */
 static int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
   int side, i, j;
 
@@ -1089,8 +1091,8 @@ static int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
       /* Gone from the other side under its ancestor name. A table of theirs the
       ** ancestor never had, whose columns are the ancestor table's columns, is
       ** that table under a new name. Dropping it and creating something
-      ** unrelated looks the same from the names alone, so the columns have to
-      ** match before this refuses anything. */
+      ** unrelated looks the same from the names alone, so the columns decide
+      ** whether this is a rename or a drop. */
       {
         SchemaEntry *pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema,
                                                zTable);
@@ -1121,13 +1123,19 @@ static int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
         }
         freeColumns(aAncCols, nAncCols);
       }
-      if( !bRenamed ) continue;
       if( c->pzErrMsg ){
         sqlite3_free(*c->pzErrMsg);
-        *c->pzErrMsg = sqlite3_mprintf(
-            "cannot merge: trigger '%s' runs on table '%s', which the other "
-            "branch renamed; drop or recreate the trigger, then merge",
-            aTrig[i].zName, zTable);
+        if( bRenamed ){
+          *c->pzErrMsg = sqlite3_mprintf(
+              "cannot merge: trigger '%s' runs on table '%s', which the other "
+              "branch renamed; drop or recreate the trigger, then merge",
+              aTrig[i].zName, zTable);
+        }else{
+          *c->pzErrMsg = sqlite3_mprintf(
+              "cannot merge: trigger '%s' runs on table '%s', which the other "
+              "branch dropped; drop or recreate the trigger, then merge",
+              aTrig[i].zName, zTable);
+        }
       }
       return SQLITE_ERROR;
     }
