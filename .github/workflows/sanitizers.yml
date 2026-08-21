@@ -11,11 +11,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite:
-          - oracles
-          - oracles-merge
-          - native
-          - c-regression
+        include:
+          - suite: oracles
+          - suite: oracles-refs-workspace
+            bucket: refs-workspace
+          - suite: oracles-diff-history-data
+            bucket: diff-history-data
+          - suite: oracles-remotes-recovery
+            bucket: remotes-recovery
+          - suite: oracles-merge
+            bucket: merge-replay-schema
+          - suite: native
+          - suite: c-regression
 
     steps:
     - uses: actions/checkout@v4
@@ -25,7 +32,7 @@ jobs:
         bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
 
     - name: Install Dolt
-      if: matrix.suite == 'oracles' || matrix.suite == 'oracles-merge'
+      if: startsWith(matrix.suite, 'oracles')
       run: bash .github/scripts/install-dolt-oracle.sh
 
     - name: Download ASan/UBSan build
@@ -47,10 +54,6 @@ jobs:
         echo "LSAN_OPTIONS=suppressions=$GITHUB_WORKSPACE/.github/lsan.supp:print_suppressions=0" >> $GITHUB_ENV
         echo "UBSAN_OPTIONS=abort_on_error=1:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
 
-    # SQL oracles plus the non-merge VC glob. Merge/schema VC oracles run on
-    # oracles-merge (the same bucket as oracle-tests) so the 25-minute VC step
-    # stays under budget. New vc_oracle_* files still land here until they are
-    # added to merge-replay-schema.txt.
     - name: SQL oracle tests (vs stock SQLite and Dolt)
       if: matrix.suite == 'oracles'
       run: |
@@ -64,30 +67,22 @@ jobs:
         done
       timeout-minutes: 15
 
-    - name: Version control oracle tests (vs Dolt)
-      if: matrix.suite == 'oracles'
-      run: |
-        cd build
-        bucket="../test/oracle-buckets/merge-replay-schema.txt"
-        for f in ../test/vc_oracle_*_test.sh; do
-          base=$(basename "$f")
-          if grep -Fxq "$base" "$bucket"; then
-            continue
-          fi
-          echo "--- $base ---"
-          bash "$f" ./doltlite dolt || exit 1
-        done
-      timeout-minutes: 25
+    # One job per bucket, matching oracle-tests. The manifest check is what
+    # makes that safe to rely on: it proves every vc_oracle_*_test.sh is in
+    # exactly one bucket, so nothing runs twice and nothing goes unrun.
+    - name: Check oracle bucket manifests
+      if: startsWith(matrix.suite, 'oracles')
+      run: bash test/check_oracle_buckets.sh
 
-    - name: Merge/schema version control oracle tests (vs Dolt)
-      if: matrix.suite == 'oracles-merge'
+    - name: Version control oracle tests (vs Dolt)
+      if: matrix.bucket
       run: |
         cd build
         while IFS= read -r oracle; do
           [ -z "$oracle" ] && continue
           echo "--- $oracle ---"
           bash "../test/$oracle" ./doltlite dolt || exit 1
-        done < "../test/oracle-buckets/merge-replay-schema.txt"
+        done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
       timeout-minutes: 25
 
     - name: Correctness regression tests
