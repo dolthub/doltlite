@@ -258,6 +258,16 @@ SELECT dolt_tag('temp');
 SELECT dolt_tag('-d', 'temp');
 " "EXPECT_EMPTY"
 
+oracle "delete_multiple_tags" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_tag('one');
+SELECT dolt_tag('two');
+SELECT dolt_tag('-d', 'one', 'two');
+" "EXPECT_EMPTY"
+
 oracle "delete_one_keep_others" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);

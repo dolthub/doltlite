@@ -234,6 +234,13 @@ SELECT dolt_branch('feature');
 SELECT dolt_branch('-d', 'feature');
 "
 
+oracle "delete_multiple" "
+$SEED
+SELECT dolt_branch('one');
+SELECT dolt_branch('two');
+SELECT dolt_branch('-d', 'one', 'two');
+"
+
 oracle "delete_force" "
 $SEED
 SELECT dolt_branch('feature');
@@ -260,6 +267,18 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat');
 SELECT dolt_checkout('main');
 SELECT dolt_branch('-D', 'feature');
+"
+
+oracle "delete_multiple_unmerged_force" "
+$SEED
+SELECT dolt_branch('one');
+SELECT dolt_branch('two');
+SELECT dolt_checkout('one');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'one');
+SELECT dolt_checkout('main');
+SELECT dolt_branch('-D', 'one', 'two');
 "
 
 echo "--- copy ---"
@@ -488,10 +507,10 @@ SELECT dolt_branch('src');
 SELECT dolt_branch('-m', 'src', 'dest', 'extra');
 "
 
-oracle_error "delete_extra_arg" "
+oracle_error "delete_multiple_with_missing" "
 $SEED
 SELECT dolt_branch('feature');
-SELECT dolt_branch('-d', 'feature', 'extra');
+SELECT dolt_branch('-d', 'feature', 'missing');
 "
 
 oracle_error "no_args" "

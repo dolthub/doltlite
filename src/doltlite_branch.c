@@ -161,6 +161,46 @@ enum DoltliteBranchMode {
   MODE_CREATE, MODE_DELETE, MODE_COPY, MODE_MOVE
 };
 
+typedef struct BranchDeleteCtx BranchDeleteCtx;
+struct BranchDeleteCtx {
+  int nName;
+  const char **azName;
+  int force;
+  int notMerged;
+  int isDefault;
+};
+
+static int mutateBranchDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
+  BranchDeleteCtx *p = (BranchDeleteCtx*)pArg;
+  ProllyHash currentHead;
+  const char *zDefault = chunkStoreGetDefaultBranch(cs);
+  int i;
+  int rc;
+
+  if( !p->force ) doltliteGetSessionHead(db, &currentHead);
+  for(i=0; i<p->nName; i++){
+    ProllyHash branchHead, ancestor;
+    if( zDefault && strcmp(p->azName[i], zDefault)==0 ){
+      p->isDefault = 1;
+      return SQLITE_CONSTRAINT;
+    }
+    rc = chunkStoreFindBranch(cs, p->azName[i], &branchHead);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !p->force ){
+      rc = doltliteFindAncestor(db, &currentHead, &branchHead, &ancestor);
+      if( rc!=SQLITE_OK || prollyHashCompare(&ancestor, &branchHead)!=0 ){
+        p->notMerged = 1;
+        return rc==SQLITE_OK ? SQLITE_CONSTRAINT : rc;
+      }
+    }
+  }
+  for(i=0; i<p->nName; i++){
+    rc = chunkStoreDeleteBranch(cs, p->azName[i]);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
 static void doltBranchParsedFunc(
   sqlite3_context *ctx,
   enum DoltliteBranchMode mode,
@@ -178,48 +218,42 @@ static void doltBranchParsedFunc(
 
   switch( mode ){
     case MODE_DELETE: {
-      BranchMutationCtx m;
-      ProllyHash branchHead, currentHead, ancestor;
-      if( nPositional>1 ){
-        branchError(ctx, hadSavepoint, "too many arguments");
-        return;
-      }
+      BranchDeleteCtx m;
+      int i;
       if( nPositional<1 ){
         branchError(ctx, hadSavepoint, "branch name required"); return;
       }
-      if( branchNameEmpty(aPositional[0]) ){
-        branchError(ctx, hadSavepoint, "branch name required"); return;
-      }
-      if( strcmp(aPositional[0], doltliteGetSessionBranch(db))==0 ){
-        branchError(ctx, hadSavepoint, "cannot delete the current branch");
-        return;
-      }
-      if( !force ){
-        rc = chunkStoreFindBranch(cs, aPositional[0], &branchHead);
-        if( rc!=SQLITE_OK ){
-          branchNamedResultError(ctx, hadSavepoint, rc, "branch not found", 0);
-          return;
+      for(i=0; i<nPositional; i++){
+        if( branchNameEmpty(aPositional[i]) ){
+          branchError(ctx, hadSavepoint, "branch name required"); return;
         }
-        doltliteGetSessionHead(db, &currentHead);
-        rc = doltliteFindAncestor(db, &currentHead, &branchHead, &ancestor);
-        if( rc!=SQLITE_OK || prollyHashCompare(&ancestor, &branchHead)!=0 ){
-          branchError(ctx, hadSavepoint, "branch is not fully merged");
+        if( strcmp(aPositional[i], doltliteGetSessionBranch(db))==0 ){
+          branchError(ctx, hadSavepoint, "cannot delete the current branch");
           return;
         }
       }
       memset(&m, 0, sizeof(m));
-      m.zName = aPositional[0];
-      m.isDelete = 1;
-      rc = doltliteMutateRefs(db, mutateBranchRef, &m);
+      m.nName = nPositional;
+      m.azName = aPositional;
+      m.force = force;
+      rc = doltliteMutateRefs(db, mutateBranchDelete, &m);
       if( rc==SQLITE_CONSTRAINT ){
         if( doltliteSessionHasUnresolvedConflicts(db) ){
           branchError(ctx, hadSavepoint,
             "cannot update refs: unresolved merge conflicts");
-        }else{
+        }else if( m.isDefault ){
           branchError(ctx, hadSavepoint,
             "cannot delete the default branch; "
             "call dolt_default_branch(<other>) first");
+        }else if( m.notMerged ){
+          branchError(ctx, hadSavepoint, "branch is not fully merged");
+        }else{
+          branchErrorCode(ctx, hadSavepoint, rc);
         }
+        return;
+      }
+      if( m.notMerged ){
+        branchError(ctx, hadSavepoint, "branch is not fully merged");
         return;
       }
       if( rc!=SQLITE_OK ){
@@ -415,11 +449,6 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   else if( isCopy ) mode = MODE_COPY;
   else if( isMove ) mode = MODE_MOVE;
   if( isForceDelete ) force = 1;
-  if( args.nPositional>3 ){
-    doltliteCmdArgsClear(&args);
-    branchError(ctx, hadSavepoint, "too many arguments");
-    return;
-  }
   doltBranchParsedFunc(ctx, mode, force, args.nPositional,
                        args.azPositional);
   doltliteCmdArgsClear(&args);
