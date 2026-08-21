@@ -23,22 +23,27 @@ want_eq() {
 
 oracle() {
   local name="$1" sql="$2" db="$3"
-  local s d
+  local s d s_rc d_rc
   s=$(printf '%s\n' "$sql" | $SQLITE3 "$db" 2>&1)
+  s_rc=$?
   d=$(printf '%s\n' "$sql" | $DOLTLITE "$db" 2>&1)
+  d_rc=$?
   s="${s//$'\r'/}"
   d="${d//$'\r'/}"
-  if [ "$s" = "$d" ]; then
+  if [ "$s_rc" -eq 0 ] && [ "$d_rc" -eq 0 ] && [ "$s" = "$d" ]; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\n  FAIL: $name\n    sqlite3:  $(printf %q "$s")\n    doltlite: $(printf %q "$d")"
+    ERRORS="$ERRORS\n  FAIL: $name\n    sqlite3 rc=$s_rc $(printf %q "$s")\n    doltlite rc=$d_rc $(printf %q "$d")"
   fi
 }
 
 seed_stock() {
   rm -f "$1" "$1-wal" "$1-shm" "$1-journal"
-  $SQLITE3 "$1" "$2" >/dev/null
+  if ! $SQLITE3 "$1" "$2" >/dev/null; then
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\n  FAIL: seed $1"
+  fi
 }
 
 copy_db() {
@@ -47,23 +52,30 @@ copy_db() {
   [ -f "$1-shm" ] && cp "$1-shm" "$2-shm" || true
 }
 
-# Mutating SQL: each engine gets its own copy of the sqlite3-seeded file.
+# Mutating SQL: each engine gets its own copy. Then a fresh sqlite3 reads the
+# doltlite-mutated file and a fresh doltlite reads the sqlite3-mutated file.
 oracle_copy() {
-  local name="$1" sql="$2" src="$3"
+  local name="$1" sql="$2" src="$3" reopen="${4:-}"
   local sdb="$TMP/ora-s.db" ddb="$TMP/ora-d.db"
-  local s d
+  local s d s_rc d_rc
   rm -f "$sdb" "$sdb-wal" "$sdb-shm" "$ddb" "$ddb-wal" "$ddb-shm"
   copy_db "$src" "$sdb"
   copy_db "$src" "$ddb"
   s=$(printf '%s\n' "$sql" | $SQLITE3 "$sdb" 2>&1)
+  s_rc=$?
   d=$(printf '%s\n' "$sql" | $DOLTLITE "$ddb" 2>&1)
+  d_rc=$?
   s="${s//$'\r'/}"
   d="${d//$'\r'/}"
-  if [ "$s" = "$d" ]; then
+  if [ "$s_rc" -eq 0 ] && [ "$d_rc" -eq 0 ] && [ "$s" = "$d" ]; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\n  FAIL: $name\n    sqlite3:  $(printf %q "$s")\n    doltlite: $(printf %q "$d")"
+    ERRORS="$ERRORS\n  FAIL: $name\n    sqlite3 rc=$s_rc $(printf %q "$s")\n    doltlite rc=$d_rc $(printf %q "$d")"
+  fi
+  if [ -n "$reopen" ]; then
+    oracle "${name}_sqlite3_reads_dl" "$reopen" "$ddb"
+    oracle "${name}_dl_reads_sqlite3" "$reopen" "$sdb"
   fi
 }
 
@@ -85,6 +97,10 @@ both_contain() {
 skip() {
   SKIP=$((SKIP+1))
   echo "  SKIP: $1 — $2"
+}
+
+stock_magic() {
+  want_eq "$1" "$(head -c 15 "$2" 2>/dev/null | tr -d '\0')" "SQLite format 3"
 }
 
 echo "=== doltlite vs stock sqlite3 on a sqlite3-created file ==="
@@ -133,14 +149,67 @@ DB=$TMP/wal.db
 seed_stock "$DB" "PRAGMA journal_mode=WAL; CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a');"
 oracle "O_wal_mode" "PRAGMA journal_mode;" "$DB"
 oracle "O_wal_count_seed" "SELECT count(*) FROM t;" "$DB"
-printf '%s\n' "INSERT INTO t VALUES(2,'b');" | $DOLTLITE "$DB" >/dev/null
+if ! printf '%s\n' "INSERT INTO t VALUES(2,'b');" | $DOLTLITE "$DB" >/dev/null; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\n  FAIL: O_wal_dl_insert (doltlite exited nonzero)"
+fi
 want_eq "O_wal_sqlite3_sees_doltlite_insert" \
   "$(printf '%s\n' "SELECT count(*)||group_concat(v,'') FROM (SELECT v FROM t ORDER BY id);" | $SQLITE3 "$DB" | tr -d '\r')" \
   "2ab"
-printf '%s\n' "INSERT INTO t VALUES(3,'c');" | $SQLITE3 "$DB" >/dev/null
+oracle "O_wal_reopen_after_dl" "SELECT count(*) FROM t;" "$DB"
+if ! printf '%s\n' "INSERT INTO t VALUES(3,'c');" | $SQLITE3 "$DB" >/dev/null; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\n  FAIL: O_wal_sqlite3_insert (sqlite3 exited nonzero)"
+fi
 want_eq "O_wal_doltlite_sees_sqlite3_insert" \
   "$(printf '%s\n' "SELECT count(*)||group_concat(v,'') FROM (SELECT v FROM t ORDER BY id);" | $DOLTLITE "$DB" 2>&1 | tr -d '\r' | tail -1)" \
   "3abc"
+oracle "O_wal_reopen_after_sq" "SELECT count(*) FROM t;" "$DB"
+
+echo ""
+echo "--- overflow VACUUM / backup ---"
+
+OV=$TMP/ov-dur.db
+seed_stock "$OV" "PRAGMA page_size=4096; CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB, s TEXT); WITH r(i) AS (VALUES(1),(2),(3)) INSERT INTO t SELECT i, CAST(char(64+i)||substr(hex(zeroblob(25000)),1,49999) AS BLOB), char(96+i)||substr(hex(zeroblob(25000)),1,49999) FROM r;"
+OVSEL="SELECT (SELECT count(DISTINCT b) FROM t)||':'||(SELECT count(DISTINCT s) FROM t);"
+
+oracle_copy "O_vac_overflow" "VACUUM; $OVSEL" "$OV" "$OVSEL"
+stock_magic "O_vac_overflow_still_stock" "$TMP/ora-d.db"
+oracle "O_vac_overflow_integrity" "PRAGMA integrity_check;" "$TMP/ora-d.db"
+
+oracle_copy "O_ov_update" "UPDATE t SET s='Z'||s WHERE id=2; $OVSEL" "$OV" "$OVSEL"
+
+OUT=$TMP/ov-into.db
+rm -f "$OUT"
+if ! printf '%s\n' "VACUUM INTO '$OUT';" | $DOLTLITE "$OV" >/dev/null; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\n  FAIL: O_vac_into (doltlite exited nonzero)"
+fi
+stock_magic "O_vac_into_overflow_still_stock" "$OUT"
+oracle "O_vac_into_overflow_distinct" "$OVSEL" "$OUT"
+oracle "O_vac_into_overflow_integrity" "PRAGMA integrity_check;" "$OUT"
+oracle "O_vac_into_source_untouched" "$OVSEL" "$OV"
+
+DST=$TMP/ov-bak.db
+seed_stock "$DST" "CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB, s TEXT); INSERT INTO t VALUES(9, x'00', 'old');"
+if ! printf '.backup %s\n' "$DST" | $DOLTLITE "$OV" >/dev/null 2>&1; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\n  FAIL: O_backup (doltlite exited nonzero)"
+fi
+stock_magic "O_backup_overflow_still_stock" "$DST"
+oracle "O_backup_overflow_distinct" "$OVSEL" "$DST"
+oracle "O_backup_overflow_integrity" "PRAGMA integrity_check;" "$DST"
+oracle "O_backup_source_untouched" "$OVSEL" "$OV"
+
+DST2=$TMP/ov-restore.db
+seed_stock "$DST2" "CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB, s TEXT); INSERT INTO t VALUES(9, x'00', 'old');"
+if ! printf '.restore %s\n' "$OV" | $DOLTLITE "$DST2" >/dev/null 2>&1; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\n  FAIL: O_restore (doltlite exited nonzero)"
+fi
+stock_magic "O_restore_overflow_still_stock" "$DST2"
+oracle "O_restore_overflow_distinct" "$OVSEL" "$DST2"
+oracle "O_restore_overflow_integrity" "PRAGMA integrity_check;" "$DST2"
 
 echo ""
 echo "--- encodings ---"
