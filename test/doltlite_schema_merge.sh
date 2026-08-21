@@ -1836,6 +1836,35 @@ run_test_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat'
   "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB"
 rm -f "$DB"
 
+# Same refusal through dolt_pull: the branches diverged after a push, and pull's
+# merge half has to roll back rather than keep both indexes.
+DB=/tmp/test_pull_dup_index_$$.db
+REMOTE=/tmp/test_pull_dup_index_remote_$$.db
+rm -f "$DB" "$REMOTE"
+cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1',11);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE INDEX ia ON t(a);
+SELECT dolt_commit('-Am','feat duplicates the index');
+SELECT dolt_remote('add','origin','file://$REMOTE');
+SELECT dolt_push('origin','feat');
+SELECT dolt_reset('--hard','HEAD~1');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','feat drops b after reset');
+EOF
+run_test_match "pull_duplicate_index_columns_refused" \
+  "SELECT dolt_pull('origin','feat');" \
+  "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB/feat"
+run_test "pull_duplicate_index_columns_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB/feat"
+run_test "pull_duplicate_index_columns_rolled_back" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix0" "$DB/feat"
+rm -f "$DB" "$REMOTE"
+
 # The duplicate-index and dropped-column refusals are Dolt's judgement about a
 # merge of two branches. A revert replays one commit onto the branch that asked
 # for it, with one intended result, so they must not fire there -- and must not
