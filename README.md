@@ -17,7 +17,7 @@ You can read more about DoltLite, including its
 [origin story](https://www.dolthub.com/blog/2026-03-24-a-week-in-gas-town/), 
 on the [DoltHub blog](https://www.dolthub.com/blog/?tags=doltlite). DoltLite is 
 the proud product of 
-[agentic engineering](https://www.dolthub.com/blog/2026-08-17-top-5-agent-engineered-open-source-projects/)
+[agentic engineering](https://www.dolthub.com/blog/2026-08-17-top-5-agent-engineered-open-source-projects/).
 
 ## Install
 
