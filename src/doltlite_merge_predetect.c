@@ -100,6 +100,8 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
   for(side=0; side<2; side++){
     SchemaEntry *aNew = side ? c->aTheirsSchema : c->aOursSchema;
     int nNew = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOther = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOther = side ? c->nOursSchema : c->nTheirsSchema;
 
     for(i=0; i<nNew; i++){
       if( !aNew[i].zType || strcmp(aNew[i].zType, "index")!=0 ) continue;
@@ -112,6 +114,11 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
         if( !pOld->zType || strcmp(pOld->zType, "index")!=0 ) continue;
         if( !pOld->zName || !pOld->zSql || !pOld->zTblName ) continue;
         if( sqlite3_stricmp(pOld->zTblName, aNew[i].zTblName)!=0 ) continue;
+        /* Only a merge that keeps both of them duplicates anything. A side that
+        ** dropped the older index replaced it rather than doubling it, and the
+        ** drop carries into the merge, so there is nothing to refuse. */
+        if( !findSchemaEntry(aNew, nNew, pOld->zName) ) continue;
+        if( !findSchemaEntry(aOther, nOther, pOld->zName) ) continue;
         if( !mergeIndexSameKey(aNew[i].zSql, pOld->zSql) ) continue;
         if( c->pzErrMsg ){
           sqlite3_free(*c->pzErrMsg);

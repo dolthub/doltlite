@@ -1836,6 +1836,30 @@ run_test_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat'
   "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB"
 rm -f "$DB"
 
+# Replacing an index rather than doubling it: the same side drops the older
+# index and adds one over the same column, so the merge keeps a single index and
+# has nothing to refuse. Dolt merges this and keeps the new index.
+DB=/tmp/test_merge_replace_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP INDEX ix0;
+CREATE INDEX ix_new ON t(a);
+SELECT dolt_commit('-Am','feat replaces the index');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'a2','b2');
+SELECT dolt_commit('-Am','main adds a row');
+EOF
+run_test_match "merge_index_replaced_not_duplicated_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_index_replaced_not_duplicated_objects" \
+  "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix_new" "$DB"
+rm -f "$DB"
+
 # An index over a column nothing else indexes is not affected.
 DB=/tmp/test_merge_new_index_ok_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
