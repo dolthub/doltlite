@@ -83,6 +83,7 @@ doltlite_dbpage.sh
 doltlite_arm_correctness.sh
 doltlite_open_sqlite_file.sh
 doltlite_sqlite_file_oracle.sh
+doltlite_sqlite_file_oracle_failure.sh
 doltlite_open_nofollow.sh
 doltlite_readonly_directory.sh
 doltlite_readonly_file_replacement.sh
@@ -181,6 +182,7 @@ chunk_physical_dups_test.sh
 chunker_boundary_golden.sh
 doltlite_open_sqlite_file.sh
 doltlite_sqlite_file_oracle.sh
+doltlite_sqlite_file_oracle_failure.sh
 doltlite_open_missing_path.sh
 doltlite_comparison.sh
 doltlite_merge_ignore_corners.sh

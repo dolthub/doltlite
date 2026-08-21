@@ -207,13 +207,18 @@ fi
 copy_overflow() {
   local distinct_name="$1" except_name="$2" ddl="$3" insert="$4" except_sql="$5"
   local dst="$TMP/copy-$distinct_name.db"
+  local output
   rm -f "$dst"
-  printf '%s\n' \
-    "ATTACH '$SRC' AS s;" \
-    "$ddl" \
-    "$insert" \
-    "SELECT dolt_commit('-A','-m','overflow copy');" \
-    | $DOLTLITE "$dst" >/dev/null 2>&1
+  if ! output=$(printf '%s\n' \
+      "ATTACH '$SRC' AS s;" \
+      "$ddl" \
+      "$insert" \
+      "SELECT dolt_commit('-A','-m','overflow copy');" \
+      | "$DOLTLITE" "$dst" 2>&1); then
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\n  FAIL: ${distinct_name%_distinct}_copy\n    output: $(printf %q "$output")"
+    return
+  fi
   want_eq "$distinct_name" \
     "$(printf '%s\n' "SELECT count(DISTINCT b) FROM d;" | $DOLTLITE "$dst" 2>&1 | tr -d '\r' | tail -1)" \
     "3"
