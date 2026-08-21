@@ -49,10 +49,10 @@ run_test "delete_tag" "SELECT dolt_tag('-d','v0.9');" "0" "$DB"
 run_test "delete_and_recreate_same_name" "SELECT dolt_tag('-d','parenttilde'); SELECT dolt_tag('parenttilde');" "0
 0" "$DB"
 run_test "three_tags_left" "SELECT count(*) FROM dolt_tags;" "3" "$DB"
-run_test_match "delete_tag_extra_arg" \
+run_test_match "delete_multiple_tags_with_missing" \
   "SELECT dolt_tag('-d','v1.0','extra');" \
-  "too many positional arguments to dolt_tag" "$DB"
-run_test "delete_extra_arg_keeps_tag" \
+  "not found" "$DB"
+run_test "delete_multiple_tags_with_missing_keeps_tag" \
   "SELECT count(*) FROM dolt_tags WHERE tag_name='v1.0';" "1" "$DB"
 
 run_test_match "delete_missing" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
@@ -82,5 +82,13 @@ SELECT tagger || '|' || email FROM dolt_tags WHERE tag_name='after-paren';" \
   "0
 Real Name|real@example.com" "$DB3"
 
-rm -f "$DB" "$DB2" "$DB3"
+DB4=/tmp/test_tag_batch_$$.db; rm -f "$DB4"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_tag('one'); SELECT dolt_tag('two');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+run_test "delete_multiple_tags" "SELECT dolt_tag('-d','one','two');" "0" "$DB4"
+run_test "delete_multiple_tags_removed" "SELECT count(*) FROM dolt_tags;" "0" "$DB4"
+echo "SELECT dolt_tag('one'); SELECT dolt_tag('two');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+run_test_match "delete_multiple_tags_missing_is_atomic" "SELECT dolt_tag('-d','one','missing','two');" "not found" "$DB4"
+run_test "delete_multiple_tags_missing_keeps_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB4"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4"
 dltest_finish

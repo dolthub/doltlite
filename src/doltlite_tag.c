@@ -13,7 +13,6 @@ typedef struct TagMutationCtx TagMutationCtx;
 struct TagMutationCtx {
   const char *zName;
   ProllyHash commitHash;
-  int isDelete;
   const char *zTagger;
   const char *zEmail;
   i64 timestamp;
@@ -28,11 +27,32 @@ static void tagSealSavepointError(sqlite3_context *ctx){
 static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   TagMutationCtx *p = (TagMutationCtx*)pArg;
   (void)db;
-  if( p->isDelete ) return chunkStoreDeleteTag(cs, p->zName);
   if( !doltliteUserRefNameIsValid(p->zName) ) return SQLITE_CONSTRAINT;
   return chunkStoreAddTagFull(cs, p->zName, &p->commitHash,
                               p->zTagger, p->zEmail,
                               p->timestamp, p->zMessage);
+}
+
+typedef struct TagDeleteCtx TagDeleteCtx;
+struct TagDeleteCtx {
+  int nName;
+  const char **azName;
+};
+
+static int mutateTagDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
+  TagDeleteCtx *p = (TagDeleteCtx*)pArg;
+  int i;
+  int rc;
+  (void)db;
+  for(i=0; i<p->nName; i++){
+    rc = chunkStoreFindTag(cs, p->azName[i], 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  for(i=0; i<p->nName; i++){
+    rc = chunkStoreDeleteTag(cs, p->azName[i]);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
 }
 
 static void doltTagParsedFunc(
@@ -58,13 +78,10 @@ static void doltTagParsedFunc(
   memset(&m, 0, sizeof(m));
 
   if( isDelete ){
-    if( nPositional!=1 ){
-      doltliteVcResultError(ctx, db, "too many positional arguments to dolt_tag");
-      return;
-    }
-    m.zName = arg0;
-    m.isDelete = 1;
-    rc = doltliteMutateRefs(db, mutateTagRef, &m);
+    TagDeleteCtx d;
+    d.nName = nPositional;
+    d.azName = azPositional;
+    rc = doltliteMutateRefs(db, mutateTagDelete, &d);
     if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
       doltliteVcResultError(ctx, db,
         "cannot update refs: unresolved merge conflicts");

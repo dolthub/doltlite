@@ -173,5 +173,16 @@ run_test "inactive_branch_staged_changes_are_dirty" "SELECT dirty FROM dolt_bran
 echo "SELECT dolt_checkout('feature'); SELECT dolt_commit('-m','feature change'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB14" > /dev/null 2>&1
 run_test "inactive_branch_committed_changes_are_clean" "SELECT dirty FROM dolt_branches WHERE name='feature';" "0" "$DB14"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
+DB15=/tmp/test_branch15_$$.db; rm -f "$DB15"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('one'); SELECT dolt_branch('two');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test "delete_multiple_branches" "SELECT dolt_branch('-d','one','two');" "0" "$DB15"
+run_test "delete_multiple_branches_removed" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "0" "$DB15"
+echo "SELECT dolt_branch('one'); SELECT dolt_branch('two');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test_match "delete_multiple_missing_is_atomic" "SELECT dolt_branch('-d','one','missing','two');" "not found" "$DB15"
+run_test "delete_multiple_missing_keeps_branches" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "2" "$DB15"
+echo "SELECT dolt_checkout('one'); INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','one'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test "force_delete_multiple_branches" "SELECT dolt_branch('-D','one','two');" "0" "$DB15"
+run_test "force_delete_multiple_branches_removed" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "0" "$DB15"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
 dltest_finish
