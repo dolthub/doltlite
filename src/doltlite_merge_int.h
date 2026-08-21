@@ -96,6 +96,7 @@ int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c);
 int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c);
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c);
 int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c);
+int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c);
 
 int mergeRowEditsColumn(
   sqlite3 *db,

@@ -235,6 +235,198 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
+/* Does this object's definition name the given column? The scan is by
+** identifier, quoted or bare -- a definition SQLite wrote may quote the name,
+** and comparing only bare tokens let a quoted one through. For an index the
+** scan starts at the column list so the index's own name cannot match. It
+** over-matches by design: an expression index over the column, or a view
+** naming it in any clause, breaks the same way a plain reference does. */
+static int mergeSqlNamesColumn(const char *zSql, const char *zType,
+                               const char *zColumn){
+  const char *z;
+  int nCol;
+
+  if( !zSql || !zType || !zColumn || !zColumn[0] ) return 0;
+  nCol = (int)strlen(zColumn);
+  z = zSql;
+  if( strcmp(zType, "index")==0 ){
+    z = strchr(zSql, '(');
+    if( !z ) return 0;
+    z++;
+  }
+  while( *z ){
+    const char *zTok;
+    int nTok;
+    if( *z=='"' || *z=='`' || *z=='[' || *z=='\'' ){
+      char cEnd = *z=='[' ? ']' : *z;
+      z++;
+      zTok = z;
+      while( *z && *z!=cEnd ) z++;
+      nTok = (int)(z-zTok);
+      if( *z ) z++;
+    }else if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
+      zTok = z;
+      while( *z && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
+      nTok = (int)(z-zTok);
+    }else{
+      z++;
+      continue;
+    }
+    if( nTok==nCol && sqlite3_strnicmp(zTok, zColumn, nCol)==0 ) return 1;
+  }
+  return 0;
+}
+
+/* The columns this side renamed away, relative to the ancestor: an ancestor
+** column at the same position, with a matching definition, under a new name
+** the side does not otherwise have. */
+static int mergeSideRenamedColumnTo(const char *zAncSql, const char *zSideSql,
+                                    const char *zColumn, char **pzNew){
+  ParsedColumn *aAnc = 0;
+  ParsedColumn *aSide = 0;
+  int nAnc = 0, nSide = 0, i, bRenamed = 0;
+
+  if( pzNew ) *pzNew = 0;
+  if( !zAncSql || !zSideSql ) return 0;
+  if( parseColumns(zAncSql, &aAnc, &nAnc)!=SQLITE_OK ) return 0;
+  if( parseColumns(zSideSql, &aSide, &nSide)!=SQLITE_OK ){
+    freeColumns(aAnc, nAnc);
+    return 0;
+  }
+  for(i=0; i<nAnc && i<nSide; i++){
+    if( sqlite3_stricmp(aAnc[i].zName, zColumn)!=0 ) continue;
+    if( sqlite3_stricmp(aSide[i].zName, aAnc[i].zName)==0 ) break;
+    if( parsedColumnIndexByName(aSide, nSide, aAnc[i].zName)>=0 ) break;
+    if( !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ) break;
+    bRenamed = 1;
+    if( pzNew ) *pzNew = sqlite3_mprintf("%s", aSide[i].zName);
+    break;
+  }
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSide, nSide);
+  return bRenamed;
+}
+
+static int mergeSideRenamedColumn(const char *zAncSql, const char *zSideSql,
+                                  const char *zColumn){
+  return mergeSideRenamedColumnTo(zAncSql, zSideSql, zColumn, 0);
+}
+
+/* Did this side rename any column of the table? */
+static int mergeSideRenamedAnyColumn(const char *zAncSql, const char *zSideSql){
+  ParsedColumn *aAnc = 0;
+  int nAnc = 0, i, bAny = 0;
+
+  if( parseColumns(zAncSql, &aAnc, &nAnc)!=SQLITE_OK ) return 0;
+  for(i=0; i<nAnc && !bAny; i++){
+    if( mergeSideRenamedColumn(zAncSql, zSideSql, aAnc[i].zName) ) bAny = 1;
+  }
+  freeColumns(aAnc, nAnc);
+  return bAny;
+}
+
+/* Both sides renamed a column of one table, and an index, view or trigger on it
+** names a column this side renamed. The merged catalog takes its table from one
+** side and this object from the other, so the object names a column the adopted
+** table does not have: the catalog cannot be loaded, and the rename that would
+** retarget the object only runs once it has. Dolt merges these and renames the
+** object with the table, so this is a refusal where Dolt succeeds -- but a
+** refusal the user can act on, rather than a database reported as malformed. */
+int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
+  int side, i, j;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aDep = side ? c->aTheirsSchema : c->aOursSchema;
+    int nDep = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOther = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOther = side ? c->nOursSchema : c->nTheirsSchema;
+
+    for(i=0; i<nDep; i++){
+      SchemaEntry *pDep = &aDep[i];
+      SchemaEntry *pAncTbl;
+      SchemaEntry *pDepTbl;
+      SchemaEntry *pOtherTbl;
+      ParsedColumn *aAncCols = 0;
+      int nAncCols = 0;
+
+      if( !pDep->zType || !pDep->zSql || !pDep->zTblName ) continue;
+      if( strcmp(pDep->zType, "table")==0 ) continue;
+      pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema, pDep->zTblName);
+      pDepTbl = findSchemaEntry(aDep, nDep, pDep->zTblName);
+      pOtherTbl = findSchemaEntry(aOther, nOther, pDep->zTblName);
+      if( !pAncTbl || !pDepTbl || !pOtherTbl ) continue;
+      if( !pAncTbl->zSql || !pDepTbl->zSql || !pOtherTbl->zSql ) continue;
+      /* Only a merge that has to reconcile a rename on each side lands here.
+      ** One side renaming alone already carries its objects across. */
+      if( !mergeSideRenamedAnyColumn(pAncTbl->zSql, pOtherTbl->zSql) ) continue;
+      if( !mergeSideRenamedAnyColumn(pAncTbl->zSql, pDepTbl->zSql) ) continue;
+      /* Whose table the merged catalog takes, decided by the same code that
+      ** will decide it for real. This object goes in beside that table, so it
+      ** only breaks the catalog when the two come from different sides. */
+      {
+        char **azAdd = 0, **azDrop = 0, **azRen = 0;
+        int nAdd = 0, nDrop = 0, nRen = 0, k;
+        int choice = SCHEMA_MERGE_DEFAULT, resolved = 0, bLoser;
+        char *zErr = 0;
+        const char *zOursTblSql = side ? pOtherTbl->zSql : pDepTbl->zSql;
+        const char *zTheirsTblSql = side ? pDepTbl->zSql : pOtherTbl->zSql;
+        if( trySchemaColumnMerge(pAncTbl->zSql, zOursTblSql, zTheirsTblSql,
+                                 &azAdd, &nAdd, &azDrop, &nDrop,
+                                 &azRen, &nRen, &choice, &resolved,
+                                 &zErr)!=SQLITE_OK ){
+          choice = SCHEMA_MERGE_DEFAULT;
+        }
+        for(k=0; k<nAdd; k++) sqlite3_free(azAdd[k]);
+        for(k=0; k<nDrop; k++) sqlite3_free(azDrop[k]);
+        for(k=0; k<nRen; k++) sqlite3_free(azRen[k]);
+        sqlite3_free(azAdd);
+        sqlite3_free(azDrop);
+        sqlite3_free(azRen);
+        sqlite3_free(zErr);
+        bLoser = side ? (choice==SCHEMA_MERGE_OURS)
+                      : (choice==SCHEMA_MERGE_THEIRS);
+        if( !bLoser ) continue;
+      }
+      if( parseColumns(pAncTbl->zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
+        continue;
+      }
+      for(j=0; j<nAncCols; j++){
+        const char *zCol = aAncCols[j].zName;
+        char *zNew = 0;
+        int bNames;
+        if( !mergeSideRenamedColumnTo(pAncTbl->zSql, pDepTbl->zSql, zCol,
+                                      &zNew) ){
+          sqlite3_free(zNew);
+          continue;
+        }
+        /* This side's own rename already rewrote the object, so it names the
+        ** column as this side left it, not as the ancestor had it. */
+        bNames = zNew && mergeSqlNamesColumn(pDep->zSql, pDep->zType, zNew);
+        sqlite3_free(zNew);
+        if( !bNames ) continue;
+        /* The other side renamed this one too: that disagreement is judged
+        ** elsewhere, and both sides' objects move together. */
+        if( mergeSideRenamedColumn(pAncTbl->zSql, pOtherTbl->zSql, zCol) ){
+          continue;
+        }
+        if( c->pzErrMsg ){
+          sqlite3_free(*c->pzErrMsg);
+          *c->pzErrMsg = sqlite3_mprintf(
+              "cannot merge: %s '%s' covers column '%s' of table '%s', which "
+              "one branch renamed while the other renamed another column of "
+              "the same table; rename on one branch only, or drop the %s, "
+              "then merge",
+              pDep->zType, pDep->zName, zCol, pDep->zTblName, pDep->zType);
+        }
+        freeColumns(aAncCols, nAncCols);
+        return SQLITE_ERROR;
+      }
+      freeColumns(aAncCols, nAncCols);
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* A trigger whose table the other side renamed or dropped. A trigger has to
 ** resolve when the schema loads -- unlike a view, which is only text until it
 ** is used -- so a merged catalog holding a trigger on a table that is no

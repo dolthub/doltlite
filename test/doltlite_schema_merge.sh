@@ -1864,6 +1864,113 @@ run_test "pull_duplicate_index_columns_integrity" \
 run_test "pull_duplicate_index_columns_rolled_back" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix0" "$DB/feat"
 rm -f "$DB" "$REMOTE"
+# Each branch renames a different column of one table, and an index or trigger
+# on it names the column its own branch renamed. The merged catalog takes the
+# table from one branch and the object from the other, so the object names a
+# column the adopted table does not have: the catalog cannot be loaded, and the
+# rename that would retarget the object only runs once it has.
+#
+# DIVERGENCE FROM DOLT: Dolt merges all of these and renames the object along
+# with the table. We cannot represent that today (see the issue linked from the
+# commit), so refuse -- the user gets something to act on instead of a database
+# reported as malformed.
+for dep in idx trig; do
+  DB=/tmp/test_merge_dual_rename_${dep}_$$.db; rm -f "$DB"
+  if [ "$dep" = idx ]; then
+    DEP="CREATE INDEX ix0 ON t(a);"; WANT="index 'ix0' covers column 'a'"
+  else
+    DEP="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET a=a; END;"
+    WANT="trigger 'tg' covers column 'a'"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+$DEP
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','ours renames the covered column');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','theirs renames another column');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_dual_rename_over_${dep}_refused" "SELECT dolt_merge('feat');" \
+    "$WANT" "$DB"
+  rm -f "$DB"
+done
+
+# The same shape with the column quoted in the index definition. A definition
+# SQLite wrote may quote the name, so a scan that compares only bare tokens let
+# this through and the merge failed as a SQL logic error instead of refusing.
+for q in dquote backtick bracket; do
+  DB=/tmp/test_merge_dual_rename_q_${q}_$$.db; rm -f "$DB"
+  case "$q" in
+    dquote)   DEP='CREATE INDEX ix0 ON t("a");';;
+    backtick) DEP='CREATE INDEX ix0 ON t(`a`);';;
+    bracket)  DEP='CREATE INDEX ix0 ON t([a]);';;
+  esac
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+$DEP
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','ours renames the covered column');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','theirs renames another column');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_dual_rename_over_quoted_${q}_refused" \
+    "SELECT dolt_merge('feat');" "index 'ix0' covers column 'a'" "$DB"
+  rm -f "$DB"
+done
+
+# The mirror merges: the object names the column the OTHER branch renamed, so it
+# arrives beside the table it belongs to and the rename retargets both.
+DB=/tmp/test_merge_dual_rename_other_side_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','ours renames another column');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','theirs renames the covered column');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_dual_rename_over_index_other_side_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_dual_rename_over_index_other_side_cols" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a2,b2" "$DB"
+rm -f "$DB"
+
+# One branch renaming alone still carries its index across untouched.
+DB=/tmp/test_merge_single_rename_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','ours renames the covered column');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'a2','b2');
+SELECT dolt_commit('-Am','theirs adds a row');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_single_rename_over_index_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_single_rename_over_index_idx" \
+  "SELECT sql FROM sqlite_master WHERE type='index';" \
+  "CREATE INDEX ix0 ON t(a2)" "$DB"
+rm -f "$DB"
 
 # The duplicate-index and dropped-column refusals are Dolt's judgement about a
 # merge of two branches. A revert replays one commit onto the branch that asked
