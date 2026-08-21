@@ -18,16 +18,16 @@ run_test "fresh_not_in_sqlite_master" \
   "SELECT count(*) FROM sqlite_master WHERE name='dolt_docs';" \
   "0" "$DB"
 
-run_test "insert_materializes_without_storing_agent" \
+run_test "insert_materializes_and_stores_agent" \
   "INSERT INTO dolt_docs VALUES('README.md','# hello');
    SELECT doc_name FROM dolt_docs ORDER BY doc_name;" \
   "AGENT.md
 README.md" "$DB"
 
-run_test "default_agent_not_in_working_diff" \
+run_test "default_agent_in_working_diff" \
   "SELECT rows_added, old_row_count, new_row_count
      FROM dolt_diff_stat('HEAD','WORKING','dolt_docs');" \
-  "1|0|1" "$DB"
+  "2|0|2" "$DB"
 
 run_test "status_new_table" \
   "SELECT table_name, staged, status FROM dolt_status;" \
@@ -160,8 +160,16 @@ rm -f "$DB"
 DB=/tmp/test_docs5_$$.db
 rm -f "$DB"
 
-run_test "agent_insert_over_seed_first_write" \
-  "INSERT INTO dolt_docs VALUES('AGENT.md','mine');
+run_test_match "agent_insert_over_seed_first_write_rejected" \
+  "INSERT INTO dolt_docs VALUES('AGENT.md','mine');" \
+  "UNIQUE constraint failed: dolt_docs.doc_name" "$DB"
+
+run_test "agent_default_survives_rejected_insert" \
+  "SELECT doc_name, length(doc_text) > 500 FROM dolt_docs;" \
+  "AGENT.md|1" "$DB"
+
+run_test "agent_replace_over_seed_first_write" \
+  "REPLACE INTO dolt_docs VALUES('AGENT.md','mine');
    SELECT doc_name, doc_text FROM dolt_docs;" \
   "AGENT.md|mine" "$DB"
 
@@ -182,10 +190,14 @@ rm -f "$DB"
 DB=/tmp/test_docs7_$$.db
 rm -f "$DB"
 
-run_test "agent_delete_resynthesizes_default" \
+run_test "agent_delete_sticks" \
   "DELETE FROM dolt_docs WHERE doc_name='AGENT.md';
-   SELECT count(*), length(doc_text) > 500 FROM dolt_docs;" \
-  "1|1" "$DB"
+   SELECT count(*) FROM dolt_docs;" \
+  "0" "$DB"
+
+run_test "agent_delete_sticks_after_reopen" \
+  "SELECT count(*) FROM dolt_docs;" \
+  "0" "$DB"
 
 rm -f "$DB"
 DB=/tmp/test_docs8_$$.db
@@ -196,6 +208,38 @@ run_test "agent_default_visible_after_commit" \
    SELECT dolt_commit('-A','-m','docs') IS NOT NULL;
    SELECT count(*) FROM dolt_docs WHERE doc_name='AGENT.md';" \
   "1
+1" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_docs9_$$.db
+rm -f "$DB"
+
+echo "INSERT INTO dolt_docs VALUES('README.md','hi'); SELECT dolt_commit('-A','-m','docs');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "agent_delete_has_row_diff" \
+  "DELETE FROM dolt_docs WHERE doc_name='AGENT.md';
+   SELECT rows_deleted, old_row_count, new_row_count
+     FROM dolt_diff_stat('HEAD','WORKING','dolt_docs');" \
+  "1|2|1" "$DB"
+
+run_test "agent_reset_restores_stored_row" \
+  "SELECT dolt_reset('--hard');
+   SELECT count(*) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+  "0
+1" "$DB"
+
+run_test "agent_committed_delete_sticks" \
+  "DELETE FROM dolt_docs WHERE doc_name='AGENT.md';
+   SELECT dolt_commit('-A','-m','delete agent') IS NOT NULL;
+   SELECT count(*) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+  "1
+0" "$DB"
+
+run_test "agent_table_checkout_restores_historical_row" \
+  "SELECT dolt_checkout('HEAD~1','dolt_docs');
+   SELECT count(*) FROM dolt_docs WHERE doc_name='AGENT.md';" \
+  "0
 1" "$DB"
 
 rm -f "$DB"
