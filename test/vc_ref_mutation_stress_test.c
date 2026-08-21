@@ -195,6 +195,14 @@ static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
   return rc;
 }
 
+/* Merge refuses a dirty working set. Retrying checkout/merge without reset
+** livelocks the TSan phase (thousands of attempts, full 120s) on that error. */
+static void discardWorking(sqlite3 *db){
+  char *err = 0;
+  sqlite3_exec(db, "SELECT dolt_reset('--hard')", 0, 0, &err);
+  sqlite3_free(err);
+}
+
 /* Open racing the store lock is retryable; unretried it returned "not an error". */
 static int reopenDb(const char *path, sqlite3 **pDb){
   Budget budget;
@@ -313,6 +321,7 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
                "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);
       rc = queryIntWithRetry(db, sql, &count);
       if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
+      discardWorking(db);
       snprintf(sql, sizeof(sql), "SELECT dolt_merge('%s')", branch);
       rc = queryTextWithRetry(db, sql, out, sizeof(out));
       if( rc==SQLITE_OK
@@ -324,8 +333,11 @@ static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int ro
         rc = queryIntWithRetry(db, sql, &count);
         if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
       }
+      if( msgContains(out, "uncommitted changes") ){
+        discardWorking(db);
+      }
     }
-    sqlite3_sleep(5);
+    sqlite3_sleep(msgContains(out, "uncommitted changes") ? 25 : 5);
     rc = reopenDb(path, pDb);
     if( rc!=SQLITE_OK ) return rc;
     db = *pDb;
@@ -513,6 +525,7 @@ static void runDefaultRenameStress(void){
     char value = 0;
     char sql[256];
     int rc;
+    startPhase();
     check("default_rename_signal_setter", pipeSend(toChild[1], '1')==0);
     check("default_rename_setter_completed",
           pipeReceive(fromChild[0], &value)==0 && value=='1');
