@@ -160,23 +160,25 @@ dt_state() {
       FROM information_schema.statistics WHERE table_name='$tbl' AND index_name<>'PRIMARY'
       GROUP BY index_name ORDER BY index_name) q;" 2>/dev/null | tail -n +2 | tr -d '"')
   echo "idx=$idx"
-  # Dolt cannot always read its own trigger catalog back: a trigger whose body
-  # names a renamed column makes information_schema.triggers fail outright
-  # ("table not found: new"). Swallowing that would report the trigger as
-  # absent and score a false divergence, so it is reported as unreadable and
-  # the case is not compared.
-  dep=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT group_concat(x ORDER BY x SEPARATOR ' ') FROM (
-      SELECT concat('trigger:', trigger_name, '->', event_object_table) AS x
-        FROM information_schema.triggers WHERE trigger_schema=database()
-      UNION ALL
-      SELECT concat('view:', table_name, '->', table_name) AS x
-        FROM information_schema.tables
-        WHERE table_schema=database() AND table_type='VIEW') q;" 2>&1)
-  # Matched case-insensitively: an engine is free to shout its errors, and a
-  # read that failed must never be scored as a catalog with nothing in it.
-  case "$(printf '%s' "$dep" | tr 'A-Z' 'a-z')" in
+  # Triggers come from SHOW TRIGGERS, not information_schema.triggers: that
+  # view resolves the trigger body and fails outright once a rename has left it
+  # naming a column that is gone (dolthub/dolt#11587), which took five
+  # comparable cases out of the suite. SHOW TRIGGERS returns the stored
+  # definition without resolving it. The unreadable guard stays as a backstop.
+  dep_trg=$(cd "$repo" && "$DOLT" sql -r csv -q "SHOW TRIGGERS;" 2>&1)
+  case "$(printf '%s' "$dep_trg" | tr 'A-Z' 'a-z')" in
     *error*|*"table not found"*|*malformed*) dep=UNREADABLE;;
-    *) dep=$(printf '%s\n' "$dep" | tail -n +2 | tr -d '"');; esac
+    *)
+      dep_trg=$(printf '%s\n' "$dep_trg" | tail -n +2 \
+        | awk -F, 'NF>2 {gsub(/"/,"",$1); gsub(/"/,"",$3); print "trigger:" $1 "->" $3}')
+      dep_vw=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT table_name
+          FROM information_schema.tables
+          WHERE table_schema=database() AND table_type='VIEW';" 2>/dev/null \
+        | tail -n +2 | tr -d '"' | awk 'NF {print "view:" $1 "->" $1}')
+      dep=$(printf '%s\n%s\n' "$dep_trg" "$dep_vw" | grep -v '^$' | sort \
+        | tr '\n' ' ' | sed 's/ *$//')
+      ;;
+  esac
   echo "dep=$dep"
   for c in $(echo "$cols" | tr ',' ' '); do
     out=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT group_concat(v SEPARATOR '|') FROM
