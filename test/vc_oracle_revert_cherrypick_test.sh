@@ -613,6 +613,32 @@ SELECT dolt_revert('HEAD~1');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
+oracle_error_poststate "revert_added_column_edit_rolls_back" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t ADD COLUMN d TEXT;
+SELECT dolt_commit('-Am', 'add d');
+UPDATE t SET d = 'x' WHERE id = 1;
+SELECT dolt_commit('-Am', 'set d');
+SELECT dolt_revert('HEAD~1');
+" "SELECT 'Q|' || d || '|' || (SELECT message FROM dolt_log LIMIT 1) FROM t WHERE id = 1" \
+"SELECT CONCAT('Q|', d, '|', (SELECT message FROM dolt_log LIMIT 1)) FROM t WHERE id = 1"
+
+oracle_error_poststate "cherry_pick_drop_edited_column_rolls_back" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, d TEXT);
+INSERT INTO t VALUES (1, 'a', NULL);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'dropper');
+ALTER TABLE t DROP COLUMN d;
+SELECT dolt_commit('-Am', 'drop d');
+SELECT dolt_checkout('main');
+UPDATE t SET d = 'x' WHERE id = 1;
+SELECT dolt_commit('-Am', 'set d');
+SELECT dolt_cherry_pick('dropper');
+" "SELECT 'Q|' || d || '|' || (SELECT message FROM dolt_log LIMIT 1) FROM t WHERE id = 1" \
+"SELECT CONCAT('Q|', d, '|', (SELECT message FROM dolt_log LIMIT 1)) FROM t WHERE id = 1"
+
 echo "--- error paths ---"
 
 oracle_error "cherry_pick_no_args" "

@@ -1794,6 +1794,28 @@ EOF
   rm -f "$DB"
 done
 
+DB=/tmp/test_merge_drop_vs_edit_added_column_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES(1,'a1');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t ADD COLUMN b TEXT;
+SELECT dolt_commit('-Am','add b');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','feat drops b');
+SELECT dolt_checkout('main');
+UPDATE t SET b='edit' WHERE k=1;
+SELECT dolt_commit('-Am','main edits b');
+EOF
+run_test_match "merge_drop_vs_edit_added_column_refused" \
+  "SELECT dolt_merge('feat');" \
+  "column 'b' of table 't' was dropped on one branch and its value changed" "$DB"
+run_test "merge_drop_vs_edit_added_column_kept" \
+  "SELECT b FROM t WHERE k=1;" "edit" "$DB"
+rm -f "$DB"
+
 # Everything the rule must leave alone.
 for theirs in "UPDATE t SET n=99 WHERE k=1;" "UPDATE t SET a='edit' WHERE k=1;" \
               "INSERT INTO t VALUES(9,'a9','b9',99);" "DELETE FROM t WHERE k=1;"; do

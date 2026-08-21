@@ -104,6 +104,7 @@ int mergeRowEditsColumn(
   u8 ancFlags,
   u8 otherFlags,
   int iField,
+  int bNonNullOnly,
   int *pbEdited
 );
 

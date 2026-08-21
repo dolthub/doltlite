@@ -1164,6 +1164,7 @@ int mergeRowEditsColumn(
   u8 ancFlags,
   u8 otherFlags,
   int iField,
+  int bNonNullOnly,
   int *pbEdited
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1185,6 +1186,7 @@ int mergeRowEditsColumn(
   while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW ){
     RecField *aOld = 0;
     RecField *aNew = 0;
+    static const RecField kNullField = { 0, 0, 0 };
     int nOld = 0, nNew = 0;
     if( pChange->type!=PROLLY_DIFF_MODIFY ) continue;
     if( !pChange->pOldVal || !pChange->pNewVal ) continue;
@@ -1195,9 +1197,11 @@ int mergeRowEditsColumn(
       sqlite3_free(aOld);
       continue;
     }
-    if( iField<nOld && iField<nNew
-     && fieldEquals(pChange->pOldVal, &aOld[iField],
-                    pChange->pNewVal, &aNew[iField])!=0 ){
+    if( (!bNonNullOnly || (iField<nNew && aNew[iField].st!=0))
+     && fieldEquals(pChange->pOldVal,
+                    iField<nOld ? &aOld[iField] : (RecField*)&kNullField,
+                    pChange->pNewVal,
+                    iField<nNew ? &aNew[iField] : (RecField*)&kNullField)!=0 ){
       *pbEdited = 1;
     }
     sqlite3_free(aOld);

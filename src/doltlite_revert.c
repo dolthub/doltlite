@@ -149,6 +149,7 @@ static void doltliteRevertFunc(
   DoltliteCommit revertCommit, parentCommit, ourCommit;
   int nConflicts = 0;
   int rc;
+  char *zApplyErr = 0;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
 
   memset(&revertCommit, 0, sizeof(revertCommit));
@@ -247,7 +248,7 @@ static void doltliteRevertFunc(
     rc = applyMergedCatalogAndCommit(db, context,
         &revertCommit.catalogHash, &liveOurCatalog,
         &parentCommit.catalogHash, &ourHead, pCommitOurs, msg, 1, 1,
-        &nConflicts, 0, hexBuf);
+        &nConflicts, 0, &zApplyErr, hexBuf);
   }
 
   doltliteCommitClear(&revertCommit);
@@ -255,19 +256,27 @@ static void doltliteRevertFunc(
   doltliteCommitClear(&ourCommit);
 
   if( rc==SQLITE_BUSY ){
+    sqlite3_free(zApplyErr);
     doltliteCmdResultPeerBranchBusy(context, "revert");
     return;
   }
   if( rc==SQLITE_DONE ){
+    sqlite3_free(zApplyErr);
     sqlite3_result_error(context, "nothing to commit", -1);
     return;
   }
   if( rc!=SQLITE_OK ){
-    char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
-    sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
-    sqlite3_free(zMsg);
+    if( zApplyErr ){
+      sqlite3_result_error(context, zApplyErr, -1);
+    }else{
+      char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
+      sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
+      sqlite3_free(zMsg);
+    }
+    sqlite3_free(zApplyErr);
     return;
   }
+  sqlite3_free(zApplyErr);
 
   /* Conflict / CV finish helpers already set the context error (including the
   ** combined conflicts+CVs message). Do not overwrite it here. */

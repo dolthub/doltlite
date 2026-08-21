@@ -149,12 +149,6 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   int side, i, j;
 
-  /* A merge only. Reverting, cherry-picking or rebasing a commit has one
-  ** intended result, and the branch it replays onto asked for it, so there is
-  ** no disagreement here to hand back. Refusing would also reject restoring a
-  ** state the branch held before. */
-  if( !c->bBranchMerge ) return SQLITE_OK;
-
   for(side=0; side<2; side++){
     SchemaEntry *aDrop = side ? c->aTheirsSchema : c->aOursSchema;
     int nDrop = side ? c->nTheirsSchema : c->nOursSchema;
@@ -162,6 +156,10 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
     int nEdit = side ? c->nOursSchema : c->nTheirsSchema;
     struct TableEntry *aEditCat = side ? c->aOurs : c->aTheirs;
     int nEditCat = side ? c->nOurs : c->nTheirs;
+
+    /* On replay, theirs is the patch being applied. Dolt protects non-NULL
+    ** live values; a NULL or a column already absent from ours can be dropped. */
+    if( !c->bBranchMerge && side==0 ) continue;
 
     for(i=0; i<c->nAncSchema; i++){
       const char *zTable = c->aAncSchema[i].zName;
@@ -208,7 +206,7 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
         }
         rc = mergeRowEditsColumn(c->db, &pAncCat->root, &pEditCatEnt->root,
                                  pAncCat->flags, pEditCatEnt->flags,
-                                 j, &bEdited);
+                                 j, !c->bBranchMerge, &bEdited);
         if( rc!=SQLITE_OK ){
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
@@ -217,11 +215,18 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
         if( bEdited ){
           if( c->pzErrMsg ){
             sqlite3_free(*c->pzErrMsg);
-            *c->pzErrMsg = sqlite3_mprintf(
-                "cannot merge: column '%s' of table '%s' was dropped on one "
-                "branch and its value changed on the other; drop the column "
-                "on both branches, or revert the change, then merge",
-                aAncCols[j].zName, zTable);
+            if( c->bBranchMerge ){
+              *c->pzErrMsg = sqlite3_mprintf(
+                  "cannot merge: column '%s' of table '%s' was dropped on one "
+                  "branch and its value changed on the other; drop the column "
+                  "on both branches, or revert the change, then merge",
+                  aAncCols[j].zName, zTable);
+            }else{
+              *c->pzErrMsg = sqlite3_mprintf(
+                  "cannot apply: column '%s' of table '%s' would be dropped, "
+                  "discarding a changed value",
+                  aAncCols[j].zName, zTable);
+            }
           }
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);

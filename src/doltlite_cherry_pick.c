@@ -107,6 +107,7 @@ int applyMergedCatalogAndCommit(
   int bRejectUnchanged,
   int *pnConflicts,
   int *pnViolations,
+  char **pzApplyErr,
   char *hexBuf
 ){
   ChunkStore *cs;
@@ -125,6 +126,7 @@ int applyMergedCatalogAndCommit(
   assert( db!=0 && context!=0 );
   assert( ancCatHash!=0 && ourCatHash!=0 && theirCatHash!=0 );
   assert( ourHead!=0 && zMessage!=0 && pnConflicts!=0 );
+  if( pzApplyErr ) *pzApplyErr = 0;
   cs = doltliteGetChunkStore(db);
   memset(&savedState, 0, sizeof(savedState));
   if( hexBuf ) hexBuf[0] = '\0';
@@ -151,6 +153,10 @@ int applyMergedCatalogAndCommit(
                                 bPreferOurMaster, 0,
                                 &azReindex, &nReindex, 0, 0);
     if( rc!=SQLITE_OK ){
+      if( pzApplyErr && zMergeErr ){
+        *pzApplyErr = zMergeErr;
+        zMergeErr = 0;
+      }
       sqlite3_free(zMergeErr);
       doltliteTxnStateClear(&savedState);
       doltliteFreeNameList(azReindex, nReindex);
@@ -370,6 +376,7 @@ static void doltliteCherryPickFunc(
   int nConflicts = 0;
   int dirty = 0;
   int rc;
+  char *zApplyErr = 0;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
 
   memset(&pickCommit, 0, sizeof(pickCommit));
@@ -449,7 +456,7 @@ static void doltliteCherryPickFunc(
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
         &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, &nConflicts, 0,
-        hexBuf);
+        &zApplyErr, hexBuf);
   }
 
   doltliteCommitClear(&pickCommit);
@@ -457,15 +464,22 @@ static void doltliteCherryPickFunc(
   doltliteCommitClear(&ourCommit);
 
   if( rc==SQLITE_BUSY ){
+    sqlite3_free(zApplyErr);
     doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
     return;
   }
   if( rc!=SQLITE_OK ){
-    char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
-    sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
-    sqlite3_free(zMsg);
+    if( zApplyErr ){
+      sqlite3_result_error(context, zApplyErr, -1);
+    }else{
+      char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
+      sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
+      sqlite3_free(zMsg);
+    }
+    sqlite3_free(zApplyErr);
     return;
   }
+  sqlite3_free(zApplyErr);
 
   /* Conflict / CV finish helpers already set the context error (including the
   ** combined conflicts+CVs message). Do not overwrite it here. */

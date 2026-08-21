@@ -1123,6 +1123,7 @@ int applyMergedCatalogAndCommit(
   int bRejectUnchanged,
   int *pnConflicts,
   int *pnViolations,
+  char **pzApplyErr,
   char *hexBuf
 );
 

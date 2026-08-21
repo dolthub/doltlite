@@ -682,6 +682,97 @@ Error near line 5: no merge in progress" \
   "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_rv_drop_edited_column_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES(1,'a1'),(2,'a2');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t ADD COLUMN d TEXT;
+SELECT dolt_commit('-Am','add d');
+UPDATE t SET d='x' WHERE k=1;
+SELECT dolt_commit('-Am','set d');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_drop_edited_column_refuses" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "column 'd' of table 't' would be dropped, discarding a changed value" "$DB"
+run_test "rv_drop_edited_column_schema_kept" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='d';" "1" "$DB"
+run_test "rv_drop_edited_column_value_kept" \
+  "SELECT d FROM t WHERE k=1;" "x" "$DB"
+run_test "rv_drop_edited_column_no_commit" \
+  "SELECT message FROM dolt_log LIMIT 1;" "set d" "$DB"
+run_test "rv_drop_edited_column_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_cp_drop_edited_column_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, d TEXT);
+INSERT INTO t VALUES(1,'a1',NULL),(2,'a2',NULL);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','dropper');
+ALTER TABLE t DROP COLUMN d;
+SELECT dolt_commit('-Am','drop d');
+SELECT dolt_checkout('main');
+UPDATE t SET d='x' WHERE k=1;
+SELECT dolt_commit('-Am','set d');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "cp_drop_edited_column_refuses" \
+  "SELECT dolt_cherry_pick('dropper');" \
+  "column 'd' of table 't' would be dropped, discarding a changed value" "$DB"
+run_test "cp_drop_edited_column_schema_kept" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='d';" "1" "$DB"
+run_test "cp_drop_edited_column_value_kept" \
+  "SELECT d FROM t WHERE k=1;" "x" "$DB"
+run_test "cp_drop_edited_column_no_commit" \
+  "SELECT message FROM dolt_log LIMIT 1;" "set d" "$DB"
+run_test "cp_drop_edited_column_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rv_drop_unedited_column_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES(1,'a1');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t ADD COLUMN d TEXT;
+SELECT dolt_commit('-Am','add d');
+UPDATE t SET a='a1x' WHERE k=1;
+SELECT dolt_commit('-Am','edit a');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_drop_unedited_column_hash" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_drop_unedited_column_result" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('t') WHERE name='d') || '|' || a FROM t WHERE k=1;" \
+  "0|a1x" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rv_drop_null_column_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
+INSERT INTO t VALUES(1,'a1');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'z';
+SELECT dolt_commit('-Am','add d');
+UPDATE t SET d=NULL WHERE k=1;
+SELECT dolt_commit('-Am','clear d');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_drop_null_column_hash" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_drop_null_column_result" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('t') WHERE name='d') || '|' || a FROM t WHERE k=1;" \
+  "0|a1" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rv_edit_of_already_dropped_column_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, d TEXT);
+INSERT INTO t VALUES(1,'a1','before');
+SELECT dolt_commit('-Am','base');
+UPDATE t SET d='after' WHERE k=1;
+SELECT dolt_commit('-Am','edit d');
+ALTER TABLE t DROP COLUMN d;
+SELECT dolt_commit('-Am','drop d');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "rv_edit_of_already_dropped_column_hash" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "nothing to commit" "$DB"
+run_test "rv_edit_of_already_dropped_column_schema" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='d';" "0" "$DB"
+run_test "rv_edit_of_already_dropped_column_row" \
+  "SELECT k || '|' || a FROM t;" "1|a1" "$DB"
+rm -f "$DB"
+
 # A clean cherry-pick / revert is a transaction boundary like dolt_commit:
 # it seals the enclosing BEGIN when it advances the ref. Leaving the
 # transaction open let a later ROLLBACK revert the working set while the
