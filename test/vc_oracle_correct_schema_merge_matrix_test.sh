@@ -23,19 +23,26 @@ pass=0; fail=0; gaps=0; corrupt=0; differs=0; skipped=0; FAILED_NAMES=""; GAP_NA
 # can still get there by hand. Each needs the reason and the issue that closes
 # it. A pair that starts merging fails here, so the list cannot rot.
 REFUSE_WHERE_DOLT_MERGES="
-idx_b:ren_b:index over a renamed column is not retargeted (#2302)
-ren_b:idx_b:index over a renamed column is not retargeted (#2302)
-uniq_b:ren_b:unique index over a renamed column is not retargeted (#2302)
-ren_b:uniq_b:unique index over a renamed column is not retargeted (#2302)
-idx_b:ren_b_view:index over a renamed column is not retargeted (#2302)
-ren_b_view:idx_b:index over a renamed column is not retargeted (#2302)
-uniq_b:ren_b_view:index over a renamed column is not retargeted (#2302)
-ren_b_view:uniq_b:index over a renamed column is not retargeted (#2302)
-idx_a:ren_a:index over a renamed column is not retargeted (#2302)
-ren_a:idx_a:index over a renamed column is not retargeted (#2302)
-ren_b_view:ren_a:dual rename with a dependent view naming the renamed column (#2301)
-trig:ren_tbl:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2309)
-ren_tbl:trig:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2309)
+idx_b:ren_b:index over a renamed column is not retargeted (#2333)
+ren_b:idx_b:index over a renamed column is not retargeted (#2333)
+uniq_b:ren_b:unique index over a renamed column is not retargeted (#2333)
+ren_b:uniq_b:unique index over a renamed column is not retargeted (#2333)
+idx_b:ren_b_view:index over a renamed column is not retargeted (#2333)
+ren_b_view:idx_b:index over a renamed column is not retargeted (#2333)
+uniq_b:ren_b_view:index over a renamed column is not retargeted (#2333)
+ren_b_view:uniq_b:index over a renamed column is not retargeted (#2333)
+idx_a:ren_a:index over a renamed column is not retargeted (#2333)
+ren_a:idx_a:index over a renamed column is not retargeted (#2333)
+ren_b_view:ren_a:dual rename with a dependent view naming the renamed column (#2333)
+trig:ren_tbl:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2333)
+ren_tbl:trig:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2333)
+bidx:ren_a:ren_b:dual rename with a pre-existing index on the renamed column (#2333)
+bview:ren_a:ren_b:dual rename with a pre-existing view on the renamed column (#2333)
+bview:ren_a:idx_a:rename under a pre-existing view while the other side indexes it (#2333)
+bview:idx_a:ren_a:rename under a pre-existing view while the other side indexes it (#2333)
+btrig:ren_a:ren_b:dual rename with a pre-existing trigger on the renamed column (#2333)
+btrig:ren_a:idx_a:rename under a pre-existing trigger while the other side indexes it (#2333)
+btrig:idx_a:ren_a:rename under a pre-existing trigger while the other side indexes it (#2333)
 "
 
 # Pairs we MERGE while Dolt refuses. Not safe: we resolve on the user's behalf
@@ -106,6 +113,34 @@ needs_view() { [ "$1" = ren_b_view ] || [ "$2" = ren_b_view ]; }
 
 OPS="ren_a ren_b drop_a drop_b add_d idx_b uniq_b idx_a rows ins ren_b_view drop_b_with_index trig ren_tbl"
 
+# The base fixture used to be bare, so every pair was only ever merged on a
+# table with no dependent object on it. That hid real corruption: a dual rename
+# breaks only when an index, view or trigger already covers a renamed column,
+# and the suite reported zero corrupting while that shape was live. These
+# variants replay a curated subset of the ops over a base that already carries
+# each kind of dependent.
+BASE_VARIANT=""
+BASE_VARIANTS="bidx bview btrig"
+# Ops that can move a column or the table out from under a dependent. The full
+# matrix is not replayed per variant: at about a second a case it would put the
+# suite past ten minutes for pairs that cannot touch a dependent.
+VARIANT_OPS="ren_a ren_b drop_a drop_b idx_a ren_tbl rows"
+
+base_variant_dl() {
+  case "$1" in
+    bidx)  echo "CREATE INDEX ix0 ON t(a);";;
+    bview) echo "CREATE VIEW v0 AS SELECT a FROM t;";;
+    btrig) echo "CREATE TRIGGER tg0 AFTER INSERT ON t FOR EACH ROW BEGIN UPDATE t SET a=a WHERE k=NEW.k; END;";;
+    *)     echo "";;
+  esac
+}
+base_variant_dt() {
+  case "$1" in
+    btrig) echo "CREATE TRIGGER tg0 BEFORE INSERT ON t FOR EACH ROW SET NEW.a = NEW.a;";;
+    *)     base_variant_dl "$1";;
+  esac
+}
+
 dl_state() {
   local db="$1" tbl cols c out idx
   tbl=$("$DOLTLITE" "$db" \
@@ -150,7 +185,9 @@ dt_state() {
 }
 
 run_case() {
-  local o="$1" t="$2" name="${1}__${2}"
+  local o="$1" t="$2"
+  local name="${BASE_VARIANT:+${BASE_VARIANT}__}${1}__${2}"
+  local key="${BASE_VARIANT:+${BASE_VARIANT}:}${1}:${2}"
   local db="$TMPROOT/$name.db" repo="$TMPROOT/repo_$name"
   local view="" dl_out dt_out dl_ok dt_ok dl_corrupt dl_st dt_st reason dt_cf dl_pre dt_pre dl_setup_out dt_setup_out dl_setup_err dt_setup_err
 
@@ -164,6 +201,7 @@ $(base_extra "$t")"
   dl_setup_out=$("$DOLTLITE" "$db" 2>&1 <<EOF
 CREATE TABLE t(k INT PRIMARY KEY, a VARCHAR(9), b VARCHAR(9), n INT);
 INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+$(base_variant_dl "$BASE_VARIANT")
 $view
 SELECT dolt_add('-A'), dolt_commit('-m','base');
 SELECT dolt_branch('feat');
@@ -178,6 +216,7 @@ EOF
   dt_setup_out=$(cd "$repo" && "$DOLT" sql 2>&1 <<EOF
 CREATE TABLE t(k INT PRIMARY KEY, a VARCHAR(9), b VARCHAR(9), n INT);
 INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+$(base_variant_dt "$BASE_VARIANT")
 $view
 CALL dolt_add('-A'); CALL dolt_commit('-m','base');
 CALL dolt_branch('feat');
@@ -233,7 +272,7 @@ EOF
   fi
 
   if [ "$dl_corrupt" = 1 ]; then
-    reason=$(printf '%s\n' "$CORRUPT_TODAY" | grep "^$o:$t:" | cut -d: -f3-)
+    reason=$(printf '%s\n' "$CORRUPT_TODAY" | grep "^$key:" | cut -d: -f3-)
     if [ -n "$reason" ]; then
       corrupt=$((corrupt+1)); CORRUPT_NAMES="$CORRUPT_NAMES $name"
       echo "  CORRUPT: $name -- reports the database as malformed: $reason"
@@ -243,13 +282,13 @@ EOF
     fi
     return
   fi
-  if printf '%s\n' "$CORRUPT_TODAY" | grep -q "^$o:$t:"; then
+  if printf '%s\n' "$CORRUPT_TODAY" | grep -q "^$key:"; then
     fail_name "$name (listed as corrupting but no longer does -- delete the entry)"
     return
   fi
 
   if [ "$dl_ok" = 1 ] && [ "$dt_ok" = 0 ]; then
-    reason=$(printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep "^$o:$t:" | cut -d: -f3-)
+    reason=$(printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep "^$key:" | cut -d: -f3-)
     if [ -n "$reason" ]; then
       gaps=$((gaps+1)); GAP_NAMES="$GAP_NAMES $name"
       echo "  GAP:  $name -- we merge where Dolt refuses: $reason"
@@ -260,7 +299,7 @@ EOF
     return
   fi
   if [ "$dl_ok" = 0 ] && [ "$dt_ok" = 0 ]; then
-    if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$o:$t:"; then
+    if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$key:"; then
       fail_name "$name (listed as a gap but we no longer merge -- delete the entry)"
       return
     fi
@@ -268,7 +307,7 @@ EOF
     return
   fi
 
-  reason=$(printf '%s\n' "$REFUSE_WHERE_DOLT_MERGES" | grep "^$o:$t:" | cut -d: -f3-)
+  reason=$(printf '%s\n' "$REFUSE_WHERE_DOLT_MERGES" | grep "^$key:" | cut -d: -f3-)
   if [ "$dl_ok" = 0 ] && [ "$dt_ok" = 1 ]; then
     if [ -n "$reason" ]; then
       pass_name "$name (refuses by design: $reason)"
@@ -282,20 +321,20 @@ EOF
     fail_name "$name (listed as refusing by design but now merges -- delete the entry)"
     return
   fi
-  if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$o:$t:"; then
+  if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$key:"; then
     fail_name "$name (listed as a gap but Dolt merges it too -- delete the entry)"
     return
   fi
 
   dl_st=$(dl_state "$db"); dt_st=$(dt_state "$repo")
   if [ "$dl_st" = "$dt_st" ]; then
-    if printf '%s\n' "$MERGE_DIFFERS_TODAY" | grep -q "^$o:$t:"; then
+    if printf '%s\n' "$MERGE_DIFFERS_TODAY" | grep -q "^$key:"; then
       fail_name "$name (listed as differing but now matches -- delete the entry)"
       return
     fi
     pass_name "$name"
   else
-    reason=$(printf '%s\n' "$MERGE_DIFFERS_TODAY" | grep "^$o:$t:" | cut -d: -f3-)
+    reason=$(printf '%s\n' "$MERGE_DIFFERS_TODAY" | grep "^$key:" | cut -d: -f3-)
     if [ -n "$reason" ]; then
       differs=$((differs+1)); DIFFER_NAMES="$DIFFER_NAMES $name"
       echo "  DIFFERS: $name -- merged to a different answer than Dolt: $reason"
@@ -314,6 +353,17 @@ for o in $OPS; do
     run_case "$o" "$t"
   done
 done
+
+for BASE_VARIANT in $BASE_VARIANTS; do
+  echo "--- base already carries a dependent: $BASE_VARIANT ---"
+  for o in $VARIANT_OPS; do
+    for t in $VARIANT_OPS; do
+      [ "$o" = "$t" ] && continue
+      run_case "$o" "$t"
+    done
+  done
+done
+BASE_VARIANT=""
 
 echo ""
 echo "======================================="
