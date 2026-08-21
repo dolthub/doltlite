@@ -127,6 +127,18 @@ dl_state() {
       FROM sqlite_master m WHERE m.type='index' AND m.sql IS NOT NULL
       ORDER BY m.name);" 2>/dev/null)
   echo "idx=$idx"
+  # Views and triggers, by name and the table they run on. The definitions
+  # themselves are not comparable across engines -- a trigger body is written in
+  # each engine's own dialect -- but a dependent that the merge dropped, kept
+  # when it should have gone, or left pointing at another table shows up here.
+  # Without this a merge could match on columns, indexes and rows while its
+  # view or trigger was missing.
+  dep=$("$DOLTLITE" "$db" "SELECT group_concat(x, ' ') FROM (
+      SELECT type || ':' || name || '->' || coalesce(tbl_name,'') AS x
+      FROM sqlite_master WHERE type IN ('view','trigger') ORDER BY x);" 2>&1)
+  case "$(printf '%s' "$dep" | tr 'A-Z' 'a-z')" in
+    *error*|*"table not found"*|*malformed*) dep=UNREADABLE;; esac
+  echo "dep=$dep"
   for c in $(echo "$cols" | tr ',' ' '); do
     out=$("$DOLTLITE" "$db" \
       "SELECT group_concat(v, '|') FROM (SELECT coalesce(CAST(\"$c\" AS TEXT),'~') AS v
@@ -148,6 +160,24 @@ dt_state() {
       FROM information_schema.statistics WHERE table_name='$tbl' AND index_name<>'PRIMARY'
       GROUP BY index_name ORDER BY index_name) q;" 2>/dev/null | tail -n +2 | tr -d '"')
   echo "idx=$idx"
+  # Dolt cannot always read its own trigger catalog back: a trigger whose body
+  # names a renamed column makes information_schema.triggers fail outright
+  # ("table not found: new"). Swallowing that would report the trigger as
+  # absent and score a false divergence, so it is reported as unreadable and
+  # the case is not compared.
+  dep=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT group_concat(x ORDER BY x SEPARATOR ' ') FROM (
+      SELECT concat('trigger:', trigger_name, '->', event_object_table) AS x
+        FROM information_schema.triggers WHERE trigger_schema=database()
+      UNION ALL
+      SELECT concat('view:', table_name, '->', table_name) AS x
+        FROM information_schema.tables
+        WHERE table_schema=database() AND table_type='VIEW') q;" 2>&1)
+  # Matched case-insensitively: an engine is free to shout its errors, and a
+  # read that failed must never be scored as a catalog with nothing in it.
+  case "$(printf '%s' "$dep" | tr 'A-Z' 'a-z')" in
+    *error*|*"table not found"*|*malformed*) dep=UNREADABLE;;
+    *) dep=$(printf '%s\n' "$dep" | tail -n +2 | tr -d '"');; esac
+  echo "dep=$dep"
   for c in $(echo "$cols" | tr ',' ' '); do
     out=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT group_concat(v SEPARATOR '|') FROM
       (SELECT coalesce(CAST(\`$c\` AS CHAR),'~') AS v FROM \`$tbl\` ORDER BY k) q;" \
@@ -294,6 +324,11 @@ EOF
   fi
 
   dl_st=$(dl_state "$db"); dt_st=$(dt_state "$repo")
+  if printf '%s%s' "$dl_st" "$dt_st" | grep -q 'dep=UNREADABLE'; then
+    skipped=$((skipped+1)); SKIP_NAMES="$SKIP_NAMES $name"
+    echo "  SKIP: $name -- an engine could not read its own dependent catalog back"
+    return
+  fi
   if [ "$dl_st" = "$dt_st" ]; then
     if printf '%s\n' "$MERGE_DIFFERS_TODAY" | grep -q "^$key:"; then
       fail_name "$name (listed as differing but now matches -- delete the entry)"
