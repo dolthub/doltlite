@@ -1440,20 +1440,6 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     patchSetError(&pVtab->base,"dolt_patch: invalid arguments%s","");
     return SQLITE_ERROR;
   }
-  {
-    const char *zDots = strstr(zArg1,"...");
-    int nDots = 3;
-    if( !zDots ){
-      zDots = strstr(zArg1,"..");
-      nDots = 2;
-    }
-    if( zDots && (zDots==zArg1 || zDots[nDots]==0) ){
-      patchSetError(&pVtab->base,
-                    "dolt_patch: range endpoints must not be empty near '%s'",
-                    zArg1);
-      return SQLITE_ERROR;
-    }
-  }
   rc=doltliteSplitRevisionRange(zArg1,&zLeft,&zRight,&rangeType);
   if( rc==SQLITE_OK ){
     zFrom=zLeft; zTo=zRight; zFilter=zArg2;

@@ -362,6 +362,8 @@ oracle_error bad_to_ref "$error_setup" "SELECT * FROM dolt_patch('HEAD','missing
 oracle_error missing_table "$error_setup" "SELECT * FROM dolt_patch('HEAD~1','HEAD','missing_table');"
 oracle_error empty_range_right "$error_setup" "SELECT * FROM dolt_patch('HEAD~1..');"
 oracle_error empty_range_left "$error_setup" "SELECT * FROM dolt_patch('..HEAD');"
+oracle_error empty_three_dot_range_right "$error_setup" "SELECT * FROM dolt_patch('HEAD~1...');"
+oracle_error empty_three_dot_range_left "$error_setup" "SELECT * FROM dolt_patch('...HEAD');"
 oracle_error four_arguments "$error_setup" \
   "SELECT * FROM dolt_patch('HEAD~1','HEAD','t','extra');"
 oracle_error null_arguments "$error_setup" \

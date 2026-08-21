@@ -697,6 +697,12 @@ oracle_error "bad_to_ref" "$SEED" \
 oracle_error "bad_single_arg" "$SEED" \
   "SELECT * FROM dolt_schema_diff('nope');"
 
+oracle_error "range_missing_left" "$SEED" \
+  "SELECT * FROM dolt_schema_diff('..HEAD');"
+
+oracle_error "range_missing_right" "$SEED" \
+  "SELECT * FROM dolt_schema_diff('HEAD..');"
+
 echo ""
 echo "--- schema objects (pinned per-system shapes) ---"
 

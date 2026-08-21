@@ -52,10 +52,9 @@ static SQLITE_INLINE int doltliteSplitRevisionRange(
   if( strstr(zSep + nSep, "..") ) return SQLITE_ERROR;
 
   nLeft = (int)(zSep - zSpec);
-  *pzLeft = nLeft ? sqlite3_mprintf("%.*s", nLeft, zSpec)
-                  : sqlite3_mprintf("HEAD");
-  *pzRight = zSep[nSep] ? sqlite3_mprintf("%s", zSep + nSep)
-                        : sqlite3_mprintf("HEAD");
+  if( nLeft==0 || zSep[nSep]==0 ) return SQLITE_ERROR;
+  *pzLeft = sqlite3_mprintf("%.*s", nLeft, zSpec);
+  *pzRight = sqlite3_mprintf("%s", zSep + nSep);
   if( !*pzLeft || !*pzRight ){
     sqlite3_free(*pzLeft);
     sqlite3_free(*pzRight);
