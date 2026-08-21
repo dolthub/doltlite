@@ -273,26 +273,7 @@ int origCursorCountRangeVt(
   i64 iUpper,
   i64 *pnEntry
 ){
-  int rc;
-  int res = 0;
-  i64 n = 0;
-  (void)db;
-
-  *pnEntry = 0;
-  if( iLower>iUpper ) return SQLITE_OK;
-  rc = origBtreeTableMoveto(pCur->pOrigCursor, iLower, 0, &res);
-  if( rc!=SQLITE_OK ) return rc;
-  if( res!=0 && origBtreeEof(pCur->pOrigCursor) ){
-    return SQLITE_OK;
-  }
-  while( !origBtreeEof(pCur->pOrigCursor) ){
-    if( origBtreeIntegerKey(pCur->pOrigCursor)>iUpper ) break;
-    n++;
-    rc = origBtreeNext(pCur->pOrigCursor, 0);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  *pnEntry = n;
-  return SQLITE_OK;
+  return origBtreeCountRange(db, pCur->pOrigCursor, iLower, iUpper, pnEntry);
 }
 int origCursorCountIndexRangeVt(
   sqlite3 *db,
