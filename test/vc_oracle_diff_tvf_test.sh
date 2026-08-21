@@ -50,6 +50,31 @@ oracle() {
   fi
 }
 
+oracle_error() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/${name}_err"
+  local dl_rc dt_rc dolt_setup dolt_query
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" \
+    "$dir/dl.err" "$(printf '%s\n%s\n' "$setup" "$query")"
+  dl_rc=$?
+
+  dolt_setup=$(echo "$setup" | translate_for_dolt)
+  dolt_query=$(echo "$query" | translate_for_dolt)
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" \
+    "$dir/dt.err" "$(printf '%s\n%s\n' "$dolt_setup" "$dolt_query")"
+  dt_rc=$?
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (doltlite rc=$dl_rc, dolt rc=$dt_rc)"
+  fi
+}
+
 oracle_reopen() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/$name"
@@ -196,6 +221,30 @@ oracle "log_two_dot" "$SETUP_DIVERGENT" \
 
 oracle "log_three_dot" "$SETUP_DIVERGENT" \
   "SELECT CONCAT('R|', message) FROM dolt_log('main...feature');"
+
+oracle_error "diff_two_dot_missing_left" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('..feature');"
+
+oracle_error "diff_two_dot_missing_right" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('feature..');"
+
+oracle_error "diff_three_dot_missing_left" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('...feature');"
+
+oracle_error "diff_three_dot_missing_right" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('feature...');"
+
+oracle_error "log_two_dot_missing_left" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_log('..feature');"
+
+oracle_error "log_two_dot_missing_right" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_log('feature..');"
+
+oracle_error "log_three_dot_missing_left" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_log('...feature');"
+
+oracle_error "log_three_dot_missing_right" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_log('feature...');"
 
 echo "--- multi-column table ---"
 

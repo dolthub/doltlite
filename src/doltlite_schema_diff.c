@@ -820,31 +820,15 @@ static int sdParseArgs(
   }
 
   if( zFromRef && !zToRef ){
-    const char *zDots = strstr(zFromRef, "..");
-    if( zDots ){
-      int nFrom = (int)(zDots - zFromRef);
-      int nTo = (int)strlen(zDots + 2);
-      char *zRangeFrom = 0;
-      char *zRangeTo = 0;
+    char *zRangeFrom = 0;
+    char *zRangeTo = 0;
+    int rangeType = DOLTLITE_RANGE_NONE;
+    int rc;
+
+    rc = doltliteSplitRevisionRange(zFromRef, &zRangeFrom, &zRangeTo,
+                                    &rangeType);
+    if( rc==SQLITE_OK && rangeType==DOLTLITE_RANGE_TWO_DOT ){
       ProllyHash probe;
-      int rc;
-
-      if( nFrom<=0 || nTo<=0 ){
-        sqlite3_free(pVtab->zErrMsg);
-        pVtab->zErrMsg = sqlite3_mprintf(
-          "Invalid argument to dolt_schema_diff: %s",
-          zFromRef
-        );
-        return SQLITE_ERROR;
-      }
-
-      zRangeFrom = sqlite3_mprintf("%.*s", nFrom, zFromRef);
-      zRangeTo = sqlite3_mprintf("%s", zDots + 2);
-      if( !zRangeFrom || !zRangeTo ){
-        sqlite3_free(zRangeFrom);
-        sqlite3_free(zRangeTo);
-        return SQLITE_NOMEM;
-      }
 
       rc = doltliteResolveCatalogHashForRef(db, zRangeFrom, &probe);
       if( rc==SQLITE_OK ){
@@ -868,9 +852,13 @@ static int sdParseArgs(
       zFromRef = zRangeFrom;
       zToRef = zRangeTo;
     }else{
+      sqlite3_free(zRangeFrom);
+      sqlite3_free(zRangeTo);
+      if( rc==SQLITE_NOMEM ) return rc;
       sqlite3_free(pVtab->zErrMsg);
       pVtab->zErrMsg = sqlite3_mprintf(
-        "Invalid argument to dolt_schema_diff: There are less than 2 arguments present, and the first does not contain '..'"
+        "Invalid argument to dolt_schema_diff: %s",
+        zFromRef
       );
       return SQLITE_ERROR;
     }

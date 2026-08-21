@@ -61,6 +61,12 @@ run_test_match "bad_to_ref_errors" \
 run_test_match "bad_single_arg_errors" \
   "SELECT count(*) FROM dolt_schema_diff('definitely_not_a_ref');" \
   "Error" "$DB"
+run_test_match "range_missing_left_errors" \
+  "SELECT count(*) FROM dolt_schema_diff('..HEAD');" \
+  "Invalid argument" "$DB"
+run_test_match "range_missing_right_errors" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD..');" \
+  "Invalid argument" "$DB"
 # Malformed range endpoint must name the unresolvable ref, matching the two-arg form.
 run_test_match "bad_range_from_names_endpoint" \
   "SELECT count(*) FROM dolt_schema_diff('does-not-exist..HEAD');" \

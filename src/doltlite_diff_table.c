@@ -1073,6 +1073,11 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       pVtab->base.zErrMsg = sqlite3_mprintf(
           "dolt_diff_%s requires a '..' or '...' revision range",
           pVtab->zTableName);
+    }else if( rc==SQLITE_ERROR ){
+      sqlite3_free(pVtab->base.zErrMsg);
+      pVtab->base.zErrMsg = sqlite3_mprintf(
+          "dolt_diff_%s: invalid revision range '%s'",
+          pVtab->zTableName, zSpec ? zSpec : "");
     }
   }else if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
     const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);

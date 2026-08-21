@@ -33,8 +33,21 @@ run_test "two_dot_snapshot_diff" \
         FROM dolt_diff_t('main..feature') ORDER BY id);" \
   "1:removed,2:added" "$DB"
 
-run_test "two_dot_omitted_head" \
-  "SELECT count(*) FROM dolt_diff_t('..feature');" "2" "$DB"
+run_test_match "two_dot_missing_left_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('..feature');" \
+  "invalid revision range" "$DB"
+
+run_test_match "two_dot_missing_right_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('feature..');" \
+  "invalid revision range" "$DB"
+
+run_test_match "three_dot_missing_left_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('...feature');" \
+  "invalid revision range" "$DB"
+
+run_test_match "three_dot_missing_right_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('feature...');" \
+  "invalid revision range" "$DB"
 
 run_test "three_dot_feature" \
   "SELECT coalesce(from_id,to_id) || ':' || diff_type
@@ -63,6 +76,22 @@ run_test "log_three_dot" \
   "SELECT group_concat(message, ',') FROM
      (SELECT message FROM dolt_log('main...feature') ORDER BY message);" \
   "feature change,main change" "$DB"
+
+run_test_match "log_two_dot_missing_left_rejected" \
+  "SELECT count(*) FROM dolt_log('..feature');" \
+  "invalid dolt_log revision" "$DB"
+
+run_test_match "log_two_dot_missing_right_rejected" \
+  "SELECT count(*) FROM dolt_log('feature..');" \
+  "invalid dolt_log revision" "$DB"
+
+run_test_match "log_three_dot_missing_left_rejected" \
+  "SELECT count(*) FROM dolt_log('...feature');" \
+  "invalid dolt_log revision" "$DB"
+
+run_test_match "log_three_dot_missing_right_rejected" \
+  "SELECT count(*) FROM dolt_log('feature...');" \
+  "invalid dolt_log revision" "$DB"
 
 HDB=/tmp/test_dt_history_$$.db; rm -f "$HDB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
