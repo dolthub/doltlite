@@ -10,11 +10,15 @@
 static DoltliteCmdOption *cmdFindLongOption(
   DoltliteCmdOption *aOption,
   int nOption,
-  const char *zName
+  const char *zName,
+  int nName
 ){
   int i;
   for(i=0; i<nOption; i++){
-    if( aOption[i].zLong && strcmp(aOption[i].zLong, zName)==0 ){
+    if( aOption[i].zLong
+     && sqlite3Strlen30(aOption[i].zLong)==nName
+     && memcmp(aOption[i].zLong, zName, (size_t)nName)==0
+    ){
       return &aOption[i];
     }
   }
@@ -141,13 +145,17 @@ int doltliteCmdParseArgs(
       continue;
     }
     if( !endOptions && zArg[0]=='-' && zArg[1]=='-' && zArg[2] ){
-      pOption = cmdFindLongOption(aOption, nOption, zArg+2);
-      if( !pOption ){
+      const char *zName = zArg + 2;
+      const char *zEquals = strchr(zName, '=');
+      int nName = zEquals ? (int)(zEquals-zName) : sqlite3Strlen30(zName);
+      pOption = cmdFindLongOption(aOption, nOption, zName, nName);
+      if( !pOption || (zEquals && pOption->eType!=DOLTLITE_CMD_OPTION_VALUE) ){
         doltliteCmdResultUnknownOption(ctx, zArg);
         doltliteCmdArgsClear(pArgs);
         return SQLITE_ERROR;
       }
-      rc = cmdSetOption(ctx, pOption, pOption->zLong, 0, argc, argv, &i);
+      rc = cmdSetOption(ctx, pOption, pOption->zLong,
+                        zEquals ? zEquals+1 : 0, argc, argv, &i);
       if( rc!=SQLITE_OK ){
         doltliteCmdArgsClear(pArgs);
         return rc;
