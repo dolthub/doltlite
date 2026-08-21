@@ -68,6 +68,7 @@ int origBtreePayloadSize(void *pCur);
 int origBtreePayload(void *pCur, u32 offset, u32 amt, void *pBuf);
 const void *origBtreePayloadFetch(void *pCur, u32 *pAmt);
 i64 origBtreeIntegerKey(void *pCur);
+i64 origBtreeOffset(void *pCur);
 u32 origBtreePayloadChecked(void *pCur, u32 offset, u32 amt, void *pBuf);
 #ifndef SQLITE_OMIT_INCRBLOB
 int origBtreePutData(void *pCur, u32 offset, u32 amt, void *pBuf);
