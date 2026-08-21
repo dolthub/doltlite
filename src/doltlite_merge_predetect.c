@@ -235,11 +235,12 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* Does this object's definition name the given column? The scan is by bare
-** identifier, and for an index it starts at the column list so the index's own
-** name cannot match. It over-matches by design: an expression index over the
-** column, or a view naming it in any clause, breaks the same way a plain
-** reference does. */
+/* Does this object's definition name the given column? The scan is by
+** identifier, quoted or bare -- a definition SQLite wrote may quote the name,
+** and comparing only bare tokens let a quoted one through. For an index the
+** scan starts at the column list so the index's own name cannot match. It
+** over-matches by design: an expression index over the column, or a view
+** naming it in any clause, breaks the same way a plain reference does. */
 static int mergeSqlNamesColumn(const char *zSql, const char *zType,
                                const char *zColumn){
   const char *z;
@@ -255,22 +256,23 @@ static int mergeSqlNamesColumn(const char *zSql, const char *zType,
   }
   while( *z ){
     const char *zTok;
-    if( !(sqlite3Isalnum(*z) || *z=='_' || *z=='$') ){
-      if( *z=='\'' || *z=='"' || *z=='`' ){
-        char q = *z=='[' ? ']' : *z;
-        z++;
-        while( *z && *z!=q ) z++;
-        if( *z ) z++;
-        continue;
-      }
+    int nTok;
+    if( *z=='"' || *z=='`' || *z=='[' || *z=='\'' ){
+      char cEnd = *z=='[' ? ']' : *z;
+      z++;
+      zTok = z;
+      while( *z && *z!=cEnd ) z++;
+      nTok = (int)(z-zTok);
+      if( *z ) z++;
+    }else if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
+      zTok = z;
+      while( *z && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
+      nTok = (int)(z-zTok);
+    }else{
       z++;
       continue;
     }
-    zTok = z;
-    while( *z && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
-    if( (int)(z-zTok)==nCol && sqlite3_strnicmp(zTok, zColumn, nCol)==0 ){
-      return 1;
-    }
+    if( nTok==nCol && sqlite3_strnicmp(zTok, zColumn, nCol)==0 ) return 1;
   }
   return 0;
 }

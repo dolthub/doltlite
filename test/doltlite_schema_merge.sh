@@ -1900,6 +1900,34 @@ EOF
   rm -f "$DB"
 done
 
+# The same shape with the column quoted in the index definition. A definition
+# SQLite wrote may quote the name, so a scan that compares only bare tokens let
+# this through and the merge failed as a SQL logic error instead of refusing.
+for q in dquote backtick bracket; do
+  DB=/tmp/test_merge_dual_rename_q_${q}_$$.db; rm -f "$DB"
+  case "$q" in
+    dquote)   DEP='CREATE INDEX ix0 ON t("a");';;
+    backtick) DEP='CREATE INDEX ix0 ON t(`a`);';;
+    bracket)  DEP='CREATE INDEX ix0 ON t([a]);';;
+  esac
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+$DEP
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','ours renames the covered column');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','theirs renames another column');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_dual_rename_over_quoted_${q}_refused" \
+    "SELECT dolt_merge('feat');" "index 'ix0' covers column 'a'" "$DB"
+  rm -f "$DB"
+done
+
 # The mirror merges: the object names the column the OTHER branch renamed, so it
 # arrives beside the table it belongs to and the rename retargets both.
 DB=/tmp/test_merge_dual_rename_other_side_$$.db; rm -f "$DB"
