@@ -182,13 +182,7 @@ jobs:
   oracle-tests:
     name: oracle-tests-${{ matrix.bucket }}
     runs-on: ubuntu-latest
-    # The sql bucket budgets 10 minutes for the oracle suites and 25 for the
-    # differential sweep. A 20-minute job cap made both of those fiction: the
-    # cap always bit first, so a sweep slowed by runner load was killed at 20
-    # with "The operation was canceled" instead of failing on its own budget
-    # with a message naming the step. The other buckets ask for 18 and finish
-    # in about 4, so they keep a tight cap.
-    timeout-minutes: ${{ matrix.bucket == 'sql' && 40 || 25 }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -256,25 +250,58 @@ jobs:
         done
       timeout-minutes: 10
 
-    # A fixed seed window, so a red here is reproducible from the seed alone
-    # rather than depending on when it ran. The nightly job sweeps a moving
-    # window for breadth; this one is the per-PR gate.
-    - name: Randomized SQL differential sweep (vs stock SQLite)
-      if: matrix.bucket == 'sql'
-      run: |
-        cd build-coverage
-        bash ../test/sql_differential_test.sh ./doltlite ./sqlite3-stock 1 10000 || exit 1
-      # 10,000 seeds measured at ~41ms each on this runner, so ~7 minutes. The
-      # budget is deliberately more than double that: the sweep spawns two
-      # engines and a generator per seed, so it slows down with runner load
-      # rather than with anything about the change under test.
-      timeout-minutes: 25
-
     - name: Upload oracle coverage profiles
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: coverage-profile-oracles-${{ matrix.bucket }}
+        path: ${{ runner.temp }}/coverage-profiles
+        if-no-files-found: warn
+        retention-days: 1
+
+  sql-differential:
+    name: sql-differential-${{ matrix.first }}-${{ matrix.last }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - first: 1
+            last: 5000
+          - first: 5001
+            last: 10000
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev
+
+    - name: Download instrumented build
+      uses: actions/download-artifact@v4
+      with:
+        name: coverage-build
+
+    - name: Extract instrumented build
+      run: |
+        tar -xzf coverage-build.tar.gz
+        mkdir -p "$RUNNER_TEMP/coverage-profiles"
+        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
+
+    - name: Randomized SQL differential sweep (vs stock SQLite)
+      run: |
+        cd build-coverage
+        bash ../test/sql_differential_test.sh \
+          ./doltlite ./sqlite3-stock \
+          ${{ matrix.first }} ${{ matrix.last }}
+      timeout-minutes: 15
+
+    - name: Upload SQL differential coverage profiles
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-profile-sql-differential-${{ matrix.first }}-${{ matrix.last }}
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
@@ -473,6 +500,7 @@ jobs:
   source-coverage:
     needs:
       - oracle-tests
+      - sql-differential
       - sqlite-regression
       - coverage-native
       - coverage-remotes
