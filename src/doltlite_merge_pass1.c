@@ -1279,6 +1279,7 @@ int mergeCatalogPass1(
   if( rc==SQLITE_OK ) rc = mergePass1CheckTriggerOverRenamedTable(&c);
   if( rc==SQLITE_OK ) rc = mergePass1CheckRowEditOfDroppedColumn(&c);
   if( rc==SQLITE_OK ) rc = mergePass1CheckDuplicateIndexColumns(&c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckDependentOverDualRename(&c);
   if( rc!=SQLITE_OK ){
     mergePass1Free(&c);
     return rc;
