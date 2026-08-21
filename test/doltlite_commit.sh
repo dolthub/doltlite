@@ -476,7 +476,46 @@ run_test "author_removes_closing_brackets_fields" \
   "SELECT committer || '|' || email FROM dolt_log WHERE message='brackets';" \
   "Angle|ab" "$DB15"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
+DB16=/tmp/test_dolt_nul_args_$$.db; rm -f "$DB16"
+
+run_test_match "nul_argument_setup" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','base');
+INSERT INTO t VALUES(2);" \
+  "^[0-9a-f]{40}$" "$DB16"
+
+run_test_match "nul_positional_rejected" \
+  "SELECT dolt_branch('visible' || char(0) || 'hidden');" \
+  "command arguments may not contain NUL bytes" "$DB16"
+
+run_test "nul_positional_does_not_create_prefix_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='visible';" \
+  "0" "$DB16"
+
+run_test_match "nul_table_argument_rejected" \
+  "SELECT dolt_add('t' || char(0) || 'hidden');" \
+  "command arguments may not contain NUL bytes" "$DB16"
+
+run_test "nul_table_argument_does_not_stage_prefix" \
+  "SELECT staged FROM dolt_status WHERE table_name='t';" \
+  "0" "$DB16"
+
+run_test_match "nul_detached_option_value_rejected" \
+  "SELECT dolt_commit('-A','-m','visible' || char(0) || 'hidden');" \
+  "command arguments may not contain NUL bytes" "$DB16"
+
+run_test_match "nul_attached_option_value_rejected" \
+  "SELECT dolt_commit('-A','-mvisible' || char(0) || 'hidden');" \
+  "command arguments may not contain NUL bytes" "$DB16"
+
+run_test "nul_option_values_do_not_commit_or_stage" \
+  "SELECT count(*) FROM dolt_log WHERE message='visible';
+SELECT staged FROM dolt_status WHERE table_name='t';" \
+  "0
+0" "$DB16"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

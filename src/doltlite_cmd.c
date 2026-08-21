@@ -33,6 +33,33 @@ static DoltliteCmdOption *cmdFindShortOption(
   return 0;
 }
 
+static int cmdValueText(
+  sqlite3_context *ctx,
+  sqlite3_value *pValue,
+  const char **pzValue
+){
+  const char *zValue;
+  int eType = sqlite3_value_type(pValue);
+  int nValue;
+  *pzValue = 0;
+  zValue = (const char*)sqlite3_value_text(pValue);
+  if( !zValue ){
+    if( eType!=SQLITE_NULL ){
+      sqlite3_result_error_nomem(ctx);
+      return SQLITE_NOMEM;
+    }
+    return SQLITE_OK;
+  }
+  nValue = sqlite3_value_bytes(pValue);
+  if( memchr(zValue, 0, (size_t)nValue) ){
+    sqlite3_result_error(ctx,
+        "command arguments may not contain NUL bytes", -1);
+    return SQLITE_ERROR;
+  }
+  *pzValue = zValue;
+  return SQLITE_OK;
+}
+
 static int cmdSetOption(
   sqlite3_context *ctx,
   DoltliteCmdOption *pOption,
@@ -43,6 +70,7 @@ static int cmdSetOption(
   int *pI
 ){
   const char *zValue;
+  int rc;
   if( pOption->eType==DOLTLITE_CMD_OPTION_FLAG ){
     if( pOption->pSeen ) *pOption->pSeen = 1;
     return SQLITE_OK;
@@ -50,7 +78,8 @@ static int cmdSetOption(
   if( zAttached && zAttached[0] ){
     zValue = zAttached;
   }else if( *pI+1<argc ){
-    zValue = (const char*)sqlite3_value_text(argv[++*pI]);
+    rc = cmdValueText(ctx, argv[++*pI], &zValue);
+    if( rc!=SQLITE_OK ) return rc;
   }else{
     doltliteCmdResultMissingOptionValue(ctx, zOpt);
     return SQLITE_ERROR;
@@ -98,9 +127,14 @@ int doltliteCmdParseArgs(
     }
   }
   for(i=0; i<argc; i++){
-    const char *zArg = (const char*)sqlite3_value_text(argv[i]);
+    const char *zArg;
     DoltliteCmdOption *pOption = 0;
     int rc;
+    rc = cmdValueText(ctx, argv[i], &zArg);
+    if( rc!=SQLITE_OK ){
+      doltliteCmdArgsClear(pArgs);
+      return rc;
+    }
     if( !zArg ) continue;
     if( !endOptions && strcmp(zArg, "--")==0 ){
       endOptions = 1;
