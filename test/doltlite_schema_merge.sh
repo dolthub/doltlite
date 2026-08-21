@@ -1949,4 +1949,72 @@ run_test "merge_new_index_other_column_keeps_both" \
   "ic,ix0" "$DB"
 rm -f "$DB"
 
+# Both add the same column and one side drops another: not a rename of the
+# dropped column onto the shared new name (that was SQL logic error).
+for dir in ours theirs; do
+  DB=/tmp/test_merge_both_add_and_drop_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="ALTER TABLE t ADD COLUMN c1699 TEXT;"
+    FEAT="ALTER TABLE t DROP COLUMN c1899; ALTER TABLE t ADD COLUMN c1699 TEXT;"
+  else
+    MAIN="ALTER TABLE t DROP COLUMN c1899; ALTER TABLE t ADD COLUMN c1699 TEXT;"
+    FEAT="ALTER TABLE t ADD COLUMN c1699 TEXT;"
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1113 TEXT, c1899 TEXT);
+INSERT INTO t VALUES(1,'p','x','y');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_both_add_same_col_and_drop_other_${dir}_refused" \
+    "SELECT dolt_merge('feat');" \
+    "cannot merge: conflicts detected" "$DB"
+  sc_both_add() { printf "BEGIN;\nSELECT dolt_merge('feat');\n%s\nROLLBACK;\n" "$1"; }
+  run_test_lastline "merge_both_add_same_col_and_drop_other_${dir}_description" \
+    "$(sc_both_add "SELECT description FROM dolt_schema_conflicts;")" \
+    "column 'c1899' dropped on one branch while both branches add column 'c1699'" "$DB"
+  run_test "merge_both_add_same_col_and_drop_other_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+DB=/tmp/test_merge_both_add_same_col_no_drop_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1113 TEXT, c1899 TEXT);
+INSERT INTO t VALUES(1,'p','x','y');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','feat adds');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','main adds');
+EOF
+run_test_match "merge_both_add_same_col_no_drop_merges" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_one_side_drop_and_add_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1113 TEXT, c1899 TEXT);
+INSERT INTO t VALUES(1,'p','x','y');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN c1899;
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','feat drop and add');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_one_side_drop_and_add_merges" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+rm -f "$DB"
+
 dltest_finish
