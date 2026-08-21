@@ -546,8 +546,15 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         "merge_%s_into_%s" % (source, target),
         timeout=30,
         # An autocommit merge that conflicts is rolled back whole, so the model
-        # below still matches: the target keeps the state it had before.
-        allowed_errors=("cannot merge: conflicts detected",),
+        # below still matches: the target keeps the state it had before. The
+        # refusals below are the same outcome by a different route -- Dolt
+        # reports each of these shapes as a conflict and rolls the merge back,
+        # and so do we, rather than resolving them on the user's behalf.
+        allowed_errors=(
+            "cannot merge: conflicts detected",
+            "cover the same columns of table",
+            "was dropped on one branch and its value changed",
+        ),
     )
     sync_vc_result(doltlite, db_path, target, model)
 
