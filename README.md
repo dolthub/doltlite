@@ -760,6 +760,11 @@ For a DoltLite-format main database, the compatibility contract is:
   `PRAGMA journal_mode` reports `wal` as a compatibility value and ignores
   requests to change it. All `PRAGMA wal_checkpoint` modes bridge to DoltLite
   garbage collection and report zero WAL frames.
+- A transaction that writes more than one file-backed database is rejected
+  with `atomic commit across multiple file-backed databases is not supported`
+  and rolled back in full. This includes TEMP triggers that write `main` while
+  changing an attached file. Single-file writes and transactions involving a
+  `:memory:` attachment are supported.
 - `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
   `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
   collection instead of rebuilding SQLite pages.
