@@ -97,6 +97,7 @@ for f in \
   "$SRCDIR"/doltlite_merge_pass1.c \
   "$SRCDIR"/doltlite_merge_pass2.c \
   "$SRCDIR"/doltlite_merge_predetect.c \
+  "$SRCDIR"/doltlite_merge_rebuild.c \
   "$SRCDIR"/doltlite_merge_rows.c \
   "$SRCDIR"/doltlite_merge_schema.c
 do

@@ -123,6 +123,21 @@ static int doltliteApplyMergeSchemaActions(
   int rc = SQLITE_OK;
   int si;
 
+  /* Table renames first: SQLite's rewriter carries every dependent along,
+  ** so column actions and reindexes see the final table names. */
+  for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){
+    char *zAlter;
+    char *zNew;
+    if( !aSchemaActions[si].zRenameTable ) continue;
+    zNew = mergeQuotedIfNeeded(aSchemaActions[si].zRenameTable);
+    zAlter = zNew ? sqlite3_mprintf("ALTER TABLE \"%w\" RENAME TO %s",
+                                    aSchemaActions[si].zTableName, zNew) : 0;
+    sqlite3_free(zNew);
+    if( !zAlter ) return SQLITE_NOMEM;
+    rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+    sqlite3_free(zAlter);
+  }
+
   for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){
     int sj;
     for(sj=0; sj<aSchemaActions[si].nAddColumns; sj++){

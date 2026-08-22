@@ -58,7 +58,7 @@ PROLLY_OBJS = \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_seek.o prolly_btree_cursor_payload.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
               doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o doltlite_merge_status.o \
-              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_branches.o doltlite_checkout.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_predetect.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
+              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_branches.o doltlite_checkout.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_predetect.o doltlite_merge_rebuild.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_docs.o doltlite_tests.o doltlite_hashof.o \
               doltlite_constraint_violations.o doltlite_verify_constraints.o \
