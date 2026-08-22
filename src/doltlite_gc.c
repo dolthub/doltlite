@@ -1155,6 +1155,12 @@ int doltliteGcVacuumInto(
     *pzPhase = "non-text filename";
     return SQLITE_ERROR;
   }
+  /* A memdb target has no chunk-store file to write; without this the VFS
+  ** would create a literal file named ":memory:". */
+  if( strcmp(zOut, ":memory:")==0 ){
+    *pzPhase = "cannot VACUUM a doltlite database INTO an in-memory target";
+    return SQLITE_ERROR;
+  }
 
   {
     int exists = 0;

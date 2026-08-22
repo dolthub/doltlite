@@ -116,14 +116,14 @@ VACUUM;
 COMMIT;
 SELECT group_concat(id) FROM t;" \
   "cannot VACUUM from within a transaction" "$DB"
-run_test "vacuum_in_txn_commit_survives" \
+run_test_match "vacuum_in_txn_commit_survives_error" \
   "BEGIN;
 INSERT INTO t VALUES(3,3);
 VACUUM;
-COMMIT;
-SELECT count(*) FROM t;" \
-  "Error near line 3: cannot VACUUM from within a transaction
-3" "$DB"
+COMMIT;" \
+  "cannot VACUUM from within a transaction" "$DB"
+run_test "vacuum_in_txn_commit_survives_rows" \
+  "SELECT count(*) FROM t;" "3" "$DB"
 run_test_match "vacuum_into_in_txn_errors" \
   "BEGIN;
 VACUUM INTO '/tmp/test_vac_txn_into_$$.db';" \

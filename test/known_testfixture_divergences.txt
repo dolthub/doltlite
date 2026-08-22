@@ -2158,27 +2158,12 @@ syscall syscall-8.4.2 class=intentional  # fault-injected syscall error text; ch
 syscall syscall-8.4.3 class=intentional  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.4.4 class=intentional  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.4.5 class=intentional  # fault-injected syscall error text; chunk-store file size
-vacuum-into vacuum-into-110 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-120 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-130 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-140 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-150 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-200 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-300 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-310 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-410 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-500 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-510 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-620 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-710.1 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-710.2 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-720.1 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-720.2 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-730.1 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-740.1 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-740.2 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-750.1 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
-vacuum-into vacuum-into-750.2 class=unsupported issue=1016  # VACUUM INTO explicitly rejected
+vacuum-into vacuum-into-200 class=unsupported issue=2373  # VACUUM INTO ':memory:' refused: a chunk-store copy needs a file
+vacuum-into vacuum-into-710.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
+vacuum-into vacuum-into-720.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
+vacuum-into vacuum-into-730.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
+vacuum-into vacuum-into-740.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
+vacuum-into vacuum-into-750.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; fullfsync does not round-trip
 wal7 wal7-1.0 class=unsupported issue=1836  # -wal sidecar absent
 wal7 wal7-1.1 class=unsupported issue=1836  # -wal sidecar absent
 wal7 wal7-1.2 class=unsupported issue=1836  # -wal sidecar absent
