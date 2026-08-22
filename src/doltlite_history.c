@@ -12,7 +12,8 @@ static char *htBuildSchema(const DoltliteColInfo *ci){
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, 0, 0)!=SQLITE_OK ){
+  if( doltliteAppendIntegerPkColumnList(pStr, ci->azName, ci->nCol,
+                                        ci->iPkCol)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }

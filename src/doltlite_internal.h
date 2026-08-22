@@ -392,7 +392,7 @@ static SQLITE_INLINE int doltliteBestIndexIntPkRange(
   return SQLITE_OK;
 }
 
-static SQLITE_INLINE int doltlitePkRangeIntArg(
+static SQLITE_INLINE int doltliteExactInt64Arg(
   sqlite3_value *pArg,
   i64 *pValue
 ){
@@ -420,7 +420,7 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
 
   if( idxNum & idxEq ){
     if( iArg < argc ){
-      eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+      eArg = doltliteExactInt64Arg(argv[iArg++], &v);
       if( eArg<0 ){
         pRange->isEmpty = 1;
         return;
@@ -433,7 +433,7 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
   }else{
     if( idxNum & idxGe ){
       if( iArg < argc ){
-        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        eArg = doltliteExactInt64Arg(argv[iArg++], &v);
         if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
@@ -447,7 +447,7 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
     }
     if( idxNum & idxGt ){
       if( iArg < argc ){
-        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        eArg = doltliteExactInt64Arg(argv[iArg++], &v);
         if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
@@ -463,7 +463,7 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
     }
     if( idxNum & idxLe ){
       if( iArg < argc ){
-        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        eArg = doltliteExactInt64Arg(argv[iArg++], &v);
         if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
@@ -477,7 +477,7 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
     }
     if( idxNum & idxLt ){
       if( iArg < argc ){
-        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        eArg = doltliteExactInt64Arg(argv[iArg++], &v);
         if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
@@ -618,6 +618,21 @@ static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   for(i=0; i<nName; i++){
     if( i>0 ) sqlite3_str_appendall(pStr, zSep);
     sqlite3_str_appendf(pStr, "\"%s%w\"", zPrefix, azName[i]);
+  }
+  return sqlite3_str_errcode(pStr);
+}
+
+static SQLITE_INLINE int doltliteAppendIntegerPkColumnList(
+  sqlite3_str *pStr,
+  char *const *azName,
+  int nName,
+  int iIntegerPk
+){
+  int i;
+  for(i=0; i<nName; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    sqlite3_str_appendf(pStr, "\"%w\"%s", azName[i],
+                        i==iIntegerPk ? " INTEGER" : "");
   }
   return sqlite3_str_errcode(pStr);
 }

@@ -202,9 +202,15 @@ static void blameFreePkColumns(char **azNames, int *aColIdx, int nCols){
 static char *blameBuildSchema(BlameVtab *v){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
+  int i;
+  int iIntPk = -1;
   if( !pStr ) return 0;
+  for(i=0; i<v->nPkCols; i++){
+    if( v->aPkColIdx[i]==v->intPkCid ) iIntPk = i;
+  }
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  if( doltliteAppendQuotedColumnList(pStr, v->azPkNames, v->nPkCols, 0, 0)!=SQLITE_OK ){
+  if( doltliteAppendIntegerPkColumnList(pStr, v->azPkNames, v->nPkCols,
+                                        iIntPk)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }
