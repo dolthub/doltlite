@@ -160,24 +160,12 @@ where where-5.7 class=intentional issue=1840  # w IN (same subquery): fewer seek
 where where-5.8 class=intentional issue=1840  # w+0 IN (same subquery): fewer seeks
 
 # ── index ──
-index index-7.3 class=intentional issue=1840  # PK auto-index not listed in sqlite_master
 index index-11.1 class=intentional  # sqlite_search_count instrumentation not reproduced (value correct)
-index index-13.2 class=intentional issue=1840  # PK auto-index not listed in sqlite_master (2 auto-indexes vs 3)
-index index-16.1 class=intentional issue=1840  # PK auto-index not listed in sqlite_master
-index index-16.2 class=intentional issue=1840  # PK auto-index not listed in sqlite_master
-index index-16.3 class=intentional issue=1840  # PK auto-index not listed in sqlite_master
-index index-16.4 class=intentional issue=1840  # PK auto-index not listed in sqlite_master
-index index-16.5 class=intentional issue=1840  # PK auto-index not listed in sqlite_master
-index index-17.1 class=intentional issue=1840  # PK auto-index not listed in sqlite_master (2 auto-index names vs 3)
 
 # ── bestindex4 ──
 bestindex4 bestindex4-2.1 class=intentional  # EQP names the table PRIMARY KEY instead of sqlite_autoindex_t1_1
 
 # ── alter ──
-alter alter-1.2 class=intentional issue=1840  # PK auto-index row absent from sqlite_master on PK-clustered tables
-alter alter-1.5 class=intentional issue=1840  # PK auto-index row absent from sqlite_master on PK-clustered tables
-alter alter-1.6 class=intentional issue=1840  # PK auto-index row absent from sqlite_master on PK-clustered tables
-alter alter-1.7 class=intentional issue=1840  # PK auto-index row absent from sqlite_master on PK-clustered tables
 alter alter-6.2 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
 alter alter-6.3 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
 alter alter-6.4 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
@@ -196,8 +184,6 @@ in3 in3-1.16 class=intentional issue=1840  # IN clause variant using rowid
 in3 in3-1.17 class=intentional issue=1840  # IN clause variant using rowid
 
 # ── intpkey ──
-intpkey intpkey-1.1 class=intentional  # "int PRIMARY KEY" is PK-clustered: no sqlite_autoindex_t1_1 row in sqlite_master
-
 # ── collate1 ──
 collate1 collate1-6.7 class=intentional  # cascade: p1 never created (6.5's PRIMARY KEY COLLATE '"""' rejected)
 

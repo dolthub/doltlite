@@ -1317,6 +1317,31 @@ run_test "both_landing_tombstone_reroute" \
   "new|old" "$DB"
 rm -f "$DB"
 
+echo "--- Guard 25: clustered primary-key autoindex catalog row (#2375) ---"
+
+DB=/tmp/test_rg_pk_autoindex_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, u TEXT UNIQUE, v INT);
+INSERT INTO t VALUES('a','one',1);
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "pk_autoindex_schema_rows" \
+  "SELECT group_concat(name,'|') FROM (SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='t' ORDER BY name);" \
+  "sqlite_autoindex_t_1|sqlite_autoindex_t_2" "$DB"
+run_test "pk_autoindex_schema_sql" \
+  "SELECT group_concat(name||':'||coalesce(sql,'NULL'),'|') FROM (SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='t' ORDER BY name);" \
+  "sqlite_autoindex_t_1:NULL|sqlite_autoindex_t_2:NULL" "$DB"
+run_test "pk_autoindex_pragma_unchanged" \
+  "SELECT group_concat(name||':'||origin,'|') FROM (SELECT name,origin FROM pragma_index_list('t') ORDER BY seq);" \
+  "sqlite_autoindex_t_2:u|sqlite_autoindex_t_1:pk" "$DB"
+run_test "pk_autoindex_shares_table_root" \
+  "SELECT i.rootpage=t.rootpage FROM sqlite_master AS i JOIN sqlite_master AS t ON t.name=i.tbl_name WHERE i.name='sqlite_autoindex_t_1';" \
+  "1" "$DB"
+run_test "pk_autoindex_forced_scan" \
+  "SELECT v FROM t INDEXED BY sqlite_autoindex_t_1 WHERE k='a';" \
+  "1" "$DB"
+run_test "pk_autoindex_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

@@ -494,6 +494,25 @@ static int schemaNameIsInternalAutoindex(const char *zName){
   return zName && strncmp(zName, "sqlite_autoindex_", 17)==0;
 }
 
+static int schemaCatalogRowIsClusteredPrimaryKey(
+  SchemaCatalogRow *aRows,
+  int nRows,
+  int iRow
+){
+  SchemaCatalogRow *pRow = &aRows[iRow];
+  int i;
+  if( !pRow->zType || strcmp(pRow->zType, "index")!=0 ) return 0;
+  if( !schemaNameIsInternalAutoindex(pRow->zName) || !pRow->zTblName ) return 0;
+  for(i=0; i<nRows; i++){
+    if( aRows[i].zType && strcmp(aRows[i].zType, "table")==0
+     && aRows[i].zName && strcmp(aRows[i].zName, pRow->zTblName)==0
+     && aRows[i].oldPg==pRow->oldPg ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 typedef struct SchemaFieldValue SchemaFieldValue;
 struct SchemaFieldValue {
   int eType;
@@ -1225,6 +1244,15 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     for(i=0; i<nRows; i++){
       if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
         aRows[i].newPg = 0;
+      }else if( schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, i) ){
+        for(j=0; j<nRows; j++){
+          if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0
+           && aRows[j].zName
+           && strcmp(aRows[j].zName, aRows[i].zTblName)==0 ){
+            aRows[i].newPg = aRows[j].newPg;
+            break;
+          }
+        }
       }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
         aRows[i].newPg = (Pgno)(i + 2);
       }else{
@@ -1264,10 +1292,12 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
                                         aRows[i].zTblName, aRows[i].newPg,
                                         aRows[i].zSql, &nRec);
       }
-      for(j=0; j<nTables; j++){
-        if( aTables[j].iTable==aRows[i].oldPg ){
-          aTables[j].schemaHash = h;
-          break;
+      if( !schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, i) ){
+        for(j=0; j<nTables; j++){
+          if( aTables[j].iTable==aRows[i].oldPg ){
+            aTables[j].schemaHash = h;
+            break;
+          }
         }
       }
       if( !pRec ){
