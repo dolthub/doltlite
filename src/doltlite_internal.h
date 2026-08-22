@@ -622,6 +622,21 @@ static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   return sqlite3_str_errcode(pStr);
 }
 
+static SQLITE_INLINE int doltliteAppendIntegerPkColumnList(
+  sqlite3_str *pStr,
+  char *const *azName,
+  int nName,
+  int iIntegerPk
+){
+  int i;
+  for(i=0; i<nName; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    sqlite3_str_appendf(pStr, "\"%w\"%s", azName[i],
+                        i==iIntegerPk ? " INTEGER" : "");
+  }
+  return sqlite3_str_errcode(pStr);
+}
+
 static SQLITE_INLINE void doltliteFreeStringArray(char **az, int n){
   int i;
   if( !az ) return;

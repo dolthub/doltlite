@@ -409,11 +409,20 @@ run_test "history_numeric_text_range_still_matches" \
 run_test "history_integral_real_equality_matches" \
   "SELECT group_concat(pk, ',') FROM dolt_history_t WHERE pk=5.0;" \
   "5" "$DB6"
+run_test "history_numeric_text_equality_matches" \
+  "SELECT group_concat(pk, ',') FROM dolt_history_t WHERE pk='5';" \
+  "5" "$DB6"
 run_test "blame_integral_real_equality_matches" \
   "SELECT group_concat(pk, ',') FROM dolt_blame_t WHERE pk=5.0;" \
   "5" "$DB6"
+run_test "blame_numeric_text_equality_matches" \
+  "SELECT group_concat(pk, ',') FROM dolt_blame_t WHERE pk='5';" \
+  "5" "$DB6"
 run_test "at_integral_real_equality_matches" \
   "SELECT group_concat(pk, ',') FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=5.0;" \
+  "5" "$DB6"
+run_test "at_numeric_text_equality_matches" \
+  "SELECT group_concat(pk, ',') FROM dolt_at_t WHERE commit_ref='HEAD' AND pk='5';" \
   "5" "$DB6"
 
 rm -f "$DB6"
