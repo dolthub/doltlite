@@ -359,7 +359,7 @@ run_test "keyshape_history_eq_filters" \
   "7|seven" "$DB"
 run_test "keyshape_history_upper_bound" \
   "SELECT count(*) FROM dolt_history_s WHERE a<'z';" \
-  "2" "$DB"
+  "5" "$DB"
 run_test "keyshape_history_values_render" \
   "SELECT a FROM dolt_history_s ORDER BY a;" \
   "1

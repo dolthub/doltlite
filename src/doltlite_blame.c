@@ -251,7 +251,7 @@ static int blameCollectLiveRows(
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
 
-  if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) ){
+  if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) && hasPkLo ){
     rc = prollyCursorSeekInt(&cur, pkLo, &res);
     if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
     if( res!=0 || !prollyCursorIsValid(&cur) ){
@@ -277,7 +277,7 @@ static int blameCollectLiveRows(
     int nKey = 0, nVal = 0;
     BlameRow *r;
 
-    if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) ){
+    if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) && hasPkLo ){
       i64 k = prollyCursorIntKey(&cur);
       if( k != pkLo ) break;
     }else if( pushIntKey && hasPkHi ){

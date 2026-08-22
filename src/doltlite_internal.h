@@ -383,6 +383,16 @@ static SQLITE_INLINE int doltliteBestIndexIntPkRange(
   return SQLITE_OK;
 }
 
+static SQLITE_INLINE int doltlitePkRangeIntArg(
+  sqlite3_value *pArg,
+  i64 *pValue
+){
+  if( sqlite3_value_type(pArg)==SQLITE_NULL ) return -1;
+  if( sqlite3_value_numeric_type(pArg)!=SQLITE_INTEGER ) return 0;
+  *pValue = sqlite3_value_int64(pArg);
+  return 1;
+}
+
 static SQLITE_INLINE void doltlitePkRangeFromArgs(
   int idxNum,
   int idxEq,
@@ -395,69 +405,80 @@ static SQLITE_INLINE void doltlitePkRangeFromArgs(
   DoltlitePkRange *pRange
 ){
   int iArg = 0;
+  int eArg;
+  i64 v;
   memset(pRange, 0, sizeof(*pRange));
 
-  /* NULL bound empties the scan. sqlite3_value_int64 would treat it as 0;
-  ** xBestIndex omits these, so nothing rechecks them. */
   if( idxNum & idxEq ){
     if( iArg < argc ){
-      if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+      eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+      if( eArg<0 ){
         pRange->isEmpty = 1;
         return;
       }
-      pRange->pkLo = sqlite3_value_int64(argv[iArg++]);
-      pRange->hasPkLo = 1;
+      if( eArg>0 ){
+        pRange->pkLo = v;
+        pRange->hasPkLo = 1;
+      }
     }
   }else{
     if( idxNum & idxGe ){
       if( iArg < argc ){
-        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
         }
-        pRange->pkLo = sqlite3_value_int64(argv[iArg++]);
-        pRange->hasPkLo = 1;
-        pRange->pkLoStrict = 0;
+        if( eArg>0 ){
+          pRange->pkLo = v;
+          pRange->hasPkLo = 1;
+          pRange->pkLoStrict = 0;
+        }
       }
     }
     if( idxNum & idxGt ){
       if( iArg < argc ){
-        i64 v2;
-        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
         }
-        v2 = sqlite3_value_int64(argv[iArg++]);
-        if( !pRange->hasPkLo || v2 >= pRange->pkLo ){
-          pRange->pkLo = v2;
-          pRange->hasPkLo = 1;
-          pRange->pkLoStrict = 1;
+        if( eArg>0 ){
+          if( !pRange->hasPkLo || v >= pRange->pkLo ){
+            pRange->pkLo = v;
+            pRange->hasPkLo = 1;
+            pRange->pkLoStrict = 1;
+          }
         }
       }
     }
     if( idxNum & idxLe ){
       if( iArg < argc ){
-        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
         }
-        pRange->pkHi = sqlite3_value_int64(argv[iArg++]);
-        pRange->hasPkHi = 1;
-        pRange->pkHiStrict = 0;
+        if( eArg>0 ){
+          pRange->pkHi = v;
+          pRange->hasPkHi = 1;
+          pRange->pkHiStrict = 0;
+        }
       }
     }
     if( idxNum & idxLt ){
       if( iArg < argc ){
-        i64 v2;
-        if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+        eArg = doltlitePkRangeIntArg(argv[iArg++], &v);
+        if( eArg<0 ){
           pRange->isEmpty = 1;
           return;
         }
-        v2 = sqlite3_value_int64(argv[iArg++]);
-        if( !pRange->hasPkHi || v2 <= pRange->pkHi ){
-          pRange->pkHi = v2;
-          pRange->hasPkHi = 1;
-          pRange->pkHiStrict = 1;
+        if( eArg>0 ){
+          if( !pRange->hasPkHi || v <= pRange->pkHi ){
+            pRange->pkHi = v;
+            pRange->hasPkHi = 1;
+            pRange->pkHiStrict = 1;
+          }
         }
       }
     }
