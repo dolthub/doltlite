@@ -20,5 +20,12 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'ba
 run_test "tag_does_not_change_log_count_after_reopen" "SELECT count(*) FROM dolt_log;" "3" "$DB3"
 run_test "tag_does_not_change_log_top_message_after_reopen" "SELECT message FROM dolt_log LIMIT 1;" "c2" "$DB3"
 
-rm -f "$DB1" "$DB2" "$DB3"
+DB4=/tmp/test_log4_$$.db; rm -f "$DB4"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2); SELECT dolt_commit('-Am','feat-only'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+run_test "hash_filter_excludes_unreachable_commit" "SELECT count(*) FROM dolt_log WHERE commit_hash=dolt_hashof('feat');" "0" "$DB4"
+run_test "hash_filter_matches_unpushed_predicate" "SELECT count(*) FROM dolt_log WHERE (commit_hash||'')=dolt_hashof('feat');" "0" "$DB4"
+run_test "hash_filter_includes_reachable_commit" "SELECT count(*) FROM dolt_log WHERE commit_hash=dolt_hashof('main');" "1" "$DB4"
+run_test "hash_filter_honors_explicit_revision" "SELECT count(*) FROM dolt_log('feat') WHERE commit_hash=dolt_hashof('feat');" "1" "$DB4"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4"
 dltest_finish
