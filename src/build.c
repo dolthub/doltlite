@@ -2711,6 +2711,9 @@ void sqlite3EndTable(
   sqlite3 *db = pParse->db; /* The database connection */
   int iDb;                  /* Database in which the table lives */
   Index *pIdx;              /* An implied index of the table */
+#ifdef DOLTLITE_PROLLY
+  int bUserWithoutRowid = 0;
+#endif
 
   if( pEnd==0 && pSelect==0 ){
     return;
@@ -2788,57 +2791,26 @@ void sqlite3EndTable(
 
 #ifdef DOLTLITE_PROLLY
   /* Cluster non-INTEGER PRIMARY KEY tables as WITHOUT ROWID so the
-  ** storage key is the user PK (merge identity). Keep VisibleRowid so
-  ** SQL rowid / last_insert_rowid() still resolve; the value is the
-  ** integer PK when there is one, otherwise a stable hash of the PK.
-  ** Explicit WITHOUT ROWID stays hidden, matching SQLite. */
-  {
-    int bUserWithoutRowid = (tabOpts & TF_WithoutRowid)!=0;
-    if( !bUserWithoutRowid
-     && iDb!=1
+  ** storage key is the user PK (merge identity). convertToWithoutRowidTable
+  ** runs later, after the dolt_* schema guards, so PK-implied NOT NULL
+  ** does not hide a missing user NOT NULL. Keep VisibleRowid so SQL rowid
+  ** still resolves; explicit WITHOUT ROWID stays hidden, matching SQLite. */
+  bUserWithoutRowid = (tabOpts & TF_WithoutRowid)!=0;
+  if( !bUserWithoutRowid
+   && iDb!=1
 #ifndef SQLITE_TEST
-     && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+   && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
 #endif
-     && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
-     && IsOrdinaryTable(p)
-     && sqlite3StrNICmp(p->zName, "sqlite_", 7)!=0
-     && (p->tabFlags & TF_HasPrimaryKey)!=0
-     && p->iPKey<0 ){
-      Index *pPk = sqlite3PrimaryKeyIndex(p);
-      if( !(pPk && pPk->nKeyCol==1 && pPk->aiColumn[0]>=0
-         && sqlite3StrICmp(p->aCol[pPk->aiColumn[0]].zCnName, "rowid")==0) ){
-        tabOpts |= TF_WithoutRowid;
-      }
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && sqlite3StrNICmp(p->zName, "sqlite_", 7)!=0
+   && (p->tabFlags & TF_HasPrimaryKey)!=0
+   && p->iPKey<0 ){
+    Index *pPk = sqlite3PrimaryKeyIndex(p);
+    if( !(pPk && pPk->nKeyCol==1 && pPk->aiColumn[0]>=0
+       && sqlite3StrICmp(p->aCol[pPk->aiColumn[0]].zCnName, "rowid")==0) ){
+      tabOpts |= TF_WithoutRowid;
     }
-    if( tabOpts & TF_WithoutRowid ){
-      if( (p->tabFlags & TF_Autoincrement) ){
-        sqlite3ErrorMsg(pParse,
-            "AUTOINCREMENT not allowed on WITHOUT ROWID tables");
-        return;
-      }
-      if( (p->tabFlags & TF_HasPrimaryKey)==0 ){
-        sqlite3ErrorMsg(pParse, "PRIMARY KEY missing on table %s", p->zName);
-        return;
-      }
-      p->tabFlags |= TF_WithoutRowid;
-      if( bUserWithoutRowid ) p->tabFlags |= TF_NoVisibleRowid;
-      convertToWithoutRowidTable(pParse, p);
-    }
-  }
-#else
-  /* Special processing for WITHOUT ROWID Tables */
-  if( tabOpts & TF_WithoutRowid ){
-    if( (p->tabFlags & TF_Autoincrement) ){
-      sqlite3ErrorMsg(pParse,
-          "AUTOINCREMENT not allowed on WITHOUT ROWID tables");
-      return;
-    }
-    if( (p->tabFlags & TF_HasPrimaryKey)==0 ){
-      sqlite3ErrorMsg(pParse, "PRIMARY KEY missing on table %s", p->zName);
-      return;
-    }
-    p->tabFlags |= TF_WithoutRowid | TF_NoVisibleRowid;
-    convertToWithoutRowidTable(pParse, p);
   }
 #endif
 
@@ -3014,6 +2986,38 @@ void sqlite3EndTable(
           zFail);
       return;
     }
+  }
+#endif
+
+#ifdef DOLTLITE_PROLLY
+  if( tabOpts & TF_WithoutRowid ){
+    if( (p->tabFlags & TF_Autoincrement) ){
+      sqlite3ErrorMsg(pParse,
+          "AUTOINCREMENT not allowed on WITHOUT ROWID tables");
+      return;
+    }
+    if( (p->tabFlags & TF_HasPrimaryKey)==0 ){
+      sqlite3ErrorMsg(pParse, "PRIMARY KEY missing on table %s", p->zName);
+      return;
+    }
+    p->tabFlags |= TF_WithoutRowid;
+    if( bUserWithoutRowid ) p->tabFlags |= TF_NoVisibleRowid;
+    convertToWithoutRowidTable(pParse, p);
+  }
+#else
+  /* Special processing for WITHOUT ROWID Tables */
+  if( tabOpts & TF_WithoutRowid ){
+    if( (p->tabFlags & TF_Autoincrement) ){
+      sqlite3ErrorMsg(pParse,
+          "AUTOINCREMENT not allowed on WITHOUT ROWID tables");
+      return;
+    }
+    if( (p->tabFlags & TF_HasPrimaryKey)==0 ){
+      sqlite3ErrorMsg(pParse, "PRIMARY KEY missing on table %s", p->zName);
+      return;
+    }
+    p->tabFlags |= TF_WithoutRowid | TF_NoVisibleRowid;
+    convertToWithoutRowidTable(pParse, p);
   }
 #endif
 

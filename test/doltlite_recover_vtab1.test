@@ -119,16 +119,17 @@ do_execsql_test 3.0 {
   CREATE VIRTUAL TABLE epkt USING echo(pkt);
 } {}
 
-do_catchsql_test 3.1 {
-  SELECT rowid, a, b, c FROM pkt;
-} {1 {no such column: rowid}}
+do_execsql_test 3.1 {
+  SELECT a, b, c FROM pkt;
+  SELECT typeof(rowid) FROM pkt;
+} {1 2 3 integer}
 
 do_test 3.2 {
   set ::echo_module ""
   catchsql {
     SELECT a FROM epkt WHERE a = 1;
   }
-} {1 {SQL logic error}}
+} {0 1}
 
 do_test 3.3 {
   set ::echo_module

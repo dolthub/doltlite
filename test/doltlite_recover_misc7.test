@@ -55,9 +55,9 @@ do_ioerr_test 2 -tclprep {
 do_execsql_test 3.0 {
   CREATE TABLE abc(a PRIMARY KEY, b, c);
 }
-do_catchsql_test 3.1 {
+do_execsql_test 3.1 {
   SELECT * FROM abc AS t2 WHERE rowid = 1;
-} {1 {no such column: rowid}}
+} {}
 do_eqp_test 3.2 {
   SELECT * FROM abc AS t2 WHERE a = 1;
 } {

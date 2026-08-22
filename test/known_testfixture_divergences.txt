@@ -24,9 +24,9 @@
 # behavior in any of these forms produce different (but correct under
 # doltlite's model) results:
 #
-#   * `WHERE rowid = N` against tables that doltlite auto-converts
-#     to WITHOUT ROWID, where rowid no longer exists as an
-#     addressable column
+#   * `WHERE rowid = N` against explicit WITHOUT ROWID tables, where
+#     rowid is hidden. Auto-converted clustered PK tables still expose
+#     a SQL rowid (the integer PK, or a hash of a non-integer PK).
 #   * Unordered SELECT relying on insertion order (sqlite returns
 #     rowid order, doltlite returns user-PK order)
 #   * `pragma table_info` reporting non-PK columns differently for
@@ -240,9 +240,6 @@ fkey2 fkey2-14.2.2.2 class=intentional issue=1840  # canonical adoption: sqlite_
 # ── triggerC ──
 triggerC triggerC-2.1.1 class=intentional issue=1840  # trigger flow control with rowid access
 triggerC triggerC-2.1.2 class=intentional issue=1840
-triggerC triggerC-2.1.3 class=intentional issue=1840
-triggerC triggerC-2.1.4 class=intentional issue=1840
-triggerC triggerC-2.1.6 class=intentional issue=1840
 
 # ── window1 ──
 window1 window1-10.7 class=intentional issue=1840  # rowid-order vs PK-order on unordered SELECT
@@ -285,7 +282,6 @@ e_createtable e_createtable-5.4.2.1 class=intentional issue=1840  # no-rowid sto
 e_createtable e_createtable-5.4.2.2 class=intentional issue=1840  # no-rowid storage: test probes rowid/PK-autoindex internals
 e_createtable e_createtable-5.4.2.3 class=intentional issue=1840  # no-rowid storage: test probes rowid/PK-autoindex internals
 e_createtable e_createtable-5.4.2.4 class=intentional issue=1840  # no-rowid storage: test probes rowid/PK-autoindex internals
-e_createtable e_createtable-5.4.3 class=intentional issue=1840  # no-rowid storage: test probes rowid/PK-autoindex internals
 e_createtable e_createtable-5.6.1 class=intentional issue=1840  # no-rowid storage: test probes rowid/PK-autoindex internals
 
 # ── e_select ──
@@ -293,7 +289,6 @@ e_select e_select-4.9.4 class=intentional issue=1840  # rowid-order vs PK-order 
 
 # ── e_fkey ──
 e_fkey e_fkey-16.4 class=intentional issue=1840  # explicit rowid reference (no such column: rowid)
-e_fkey e_fkey-17.4 class=intentional issue=1840  # explicit rowid reference
 e_fkey e_fkey-44.2 class=intentional issue=1840  # ON DELETE SET NULL via rowid lookup
 e_fkey e_fkey-44.3 class=intentional issue=1840
 e_fkey e_fkey-44.4 class=intentional issue=1840
@@ -307,7 +302,6 @@ e_fkey e_fkey-51.2 class=intentional issue=1840
 e_fkey e_fkey-51.3 class=intentional issue=1840
 e_fkey e_fkey-52.6 class=intentional issue=1840
 e_fkey e_fkey-57.7 class=intentional issue=1840
-e_fkey e_fkey-58.3 class=intentional issue=1840
 e_fkey e_fkey-56.4 class=intentional issue=1840  # canonical adoption: sqlite_master row order after schema commit
 
 # ── pragma ── (completes now that attached-db writes work; PRAGMA output / attached-db / integrity divergences)
@@ -1091,7 +1085,6 @@ notnull notnull-6.5 class=intentional  # plan uses a seek not OP_Next: non-integ
 # t3(a PRIMARY KEY,b,c). DoltLite stores a non-integer PRIMARY KEY as WITHOUT
 # ROWID (#1176), so there is no rowid column → "no such column: rowid". The
 # non-rowid UPDATE (2.2, WHERE b=?) passes. WITHOUT-ROWID-PK divergence.
-update2 update2-2.3 class=intentional issue=1840  # explicit rowid on a non-integer-PK (WITHOUT ROWID) table (#1176)
 
 # whereF — whereF-4.0 runs `EXPLAIN QUERY PLAN SELECT rowid FROM t4 ...` where
 # t4 has PRIMARY KEY(a,b,c) (composite → WITHOUT ROWID, #1176), so rowid does
@@ -1359,8 +1352,6 @@ multiplex4 multiplex4-1.10 class=intentional  # multiplex VFS not used by doltli
 multiplex4 multiplex4-1.11 class=intentional  # multiplex VFS not used by doltlite
 
 # tkt1567 — explicit rowid reference on a non-integer-PK (WITHOUT ROWID) table.
-tkt1567 tkt1567-1.3 class=intentional issue=1840  # explicit rowid on a WITHOUT-ROWID table (#1176)
-tkt1567 tkt1567-1.4 class=intentional issue=1840  # explicit rowid on a WITHOUT-ROWID table (#1176)
 
 # tkt1512 — asserts [file size test.db] around DROP TABLE/VACUUM; chunk-store
 # file sizes differ (no page reclamation). tkt2920 simulates a full disk via
@@ -1487,7 +1478,6 @@ skipscan2 skipscan2-1.5eqp class=intentional  # EQP: skip-scan plan choice diffe
 # autoindex3 / autoindex5 — EXPLAIN QUERY PLAN shape for automatic-index
 # choices; results equivalent.
 autoindex3 autoindex3-310 class=intentional  # EQP plan shape
-autoindex5 autoindex5-1.1 class=intentional  # EQP plan shape
 index5 index5-1.3 class=intentional  # file-format page count / index page layout
 
 # pragma6-1.0 deserializes a stock SQLite page image, not a DoltLite image.
@@ -1566,12 +1556,6 @@ zeroblob zeroblob-1.1.1 class=intentional  # sqlite3_max_blobsize allocation met
 # that internal query ("SQL logic error" / "vtable constructor failed"), and
 # the files' later assertions cascade off the poisoned setup. The vtab layer
 # itself is fine: echo over rowid tables passes throughout these files.
-tkt3871 tkt3871-1.1 class=intentional issue=1840  # echo over PK table: internal SELECT rowid fails (WITHOUT ROWID)
-tkt3871 tkt3871-1.2 class=intentional issue=1840  # cascade: echo vtab e unusable
-tkt3871 tkt3871-1.3 class=intentional issue=1840  # cascade: echo vtab e unusable
-tkt3871 tkt3871-1.4 class=intentional issue=1840  # cascade: echo vtab e unusable
-tkt3871 tkt3871-1.5 class=intentional issue=1840  # cascade: echo vtab e unusable
-tkt3121 vtabD-1.2 class=intentional issue=1840  # echo over r2(col PRIMARY KEY): internal SELECT rowid fails
 
 # vtab2-5.3 — UTF-16 + hex-encoded names: PRAGMA encoding ignored (#1164) so
 # the %C8/%C9 byte names decode differently and the "already exists" malformed
@@ -1585,17 +1569,7 @@ vtab2 vtab2-5.3 class=intentional  # encoding-dependent corruption-injection err
 # 1.3 cascades (half-applied echo writes, empty callback logs, the real
 # UNIQUE message where stock saw "unknown error").
 vtab4 vtab4-1.3 class=intentional issue=1840  # echo internal SELECT rowid fails (WITHOUT ROWID)
-vtab4 vtab4-1.4 class=intentional issue=1840  # cascade
-vtab4 vtab4-2.1 class=intentional issue=1840  # cascade
 vtab4 vtab4-2.2 class=intentional issue=1840  # cascade
-vtab4 vtab4-2.3 class=intentional issue=1840  # cascade
-vtab4 vtab4-2.4 class=intentional issue=1840  # cascade
-vtab4 vtab4-2.5 class=intentional issue=1840  # cascade
-vtab4 vtab4-2.6 class=intentional issue=1840  # cascade
-vtab4 vtab4-2.7 class=intentional issue=1840  # cascade
-vtab4 vtab4-3.1 class=intentional issue=1840  # cascade: real UNIQUE message vs stock "unknown error"
-vtab4 vtab4-3.2 class=intentional issue=1840  # cascade
-vtab4 vtab4-3.3 class=intentional issue=1840  # cascade
 vtab4 vtab4-1.2 class=intentional issue=1840  # adoption schema reset triggers vtab xConnect; extra xConnect in echo trace
 
 # vtabH-1.1 — extra leading xConnect (schema reload reconnects the vtab);
@@ -5841,20 +5815,30 @@ fkey_malloc fkey_malloc-7.transient.198 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.199 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.477 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.478 @no-coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.62 @coverage class=intentional
-fkey_malloc fkey_malloc-6.persistent.62 @coverage class=intentional
+fkey_malloc fkey_malloc-1.transient.147 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.34 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.150 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.153 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.154 @coverage class=intentional
 vtab_err vtab_err-1.3.3 class=intentional
 vtab_err vtab_err-2.transient.685 @no-coverage class=intentional
 vtab_err vtab_err-2.transient.708 @no-coverage class=intentional
 vtab_err vtab_err-2.persistent.708 @no-coverage class=intentional
 vtab_err vtab_err-3-oom-transient.424 @no-coverage class=intentional
-vtab_err vtab_err-2.transient.704 @coverage class=intentional
-vtab_err vtab_err-2.transient.727 @coverage class=intentional
-vtab_err vtab_err-2.transient.728 @coverage class=intentional
-vtab_err vtab_err-2.persistent.727 @coverage class=intentional
-vtab_err vtab_err-2.persistent.728 @coverage class=intentional
-vtab_err vtab_err-3-oom-transient.436 @coverage class=intentional
-vtab_err vtab_err-3-oom-transient.437 @coverage class=intentional
+vtab_err vtab_err-2.transient.644 @coverage class=intentional
+vtab_err vtab_err-2.transient.705 @coverage class=intentional
+vtab_err vtab_err-2.transient.738 @coverage class=intentional
+vtab_err vtab_err-2.transient.740 @coverage class=intentional
+vtab_err vtab_err-2.transient.779 @coverage class=intentional
+vtab_err vtab_err-2.transient.781 @coverage class=intentional
+vtab_err vtab_err-2.transient.782 @coverage class=intentional
+vtab_err vtab_err-2.persistent.781 @coverage class=intentional
+vtab_err vtab_err-2.persistent.782 @coverage class=intentional
+fts3cov fts3cov-8.transient.593 @coverage class=intentional
+fts3cov fts3cov-8.transient.807 @coverage class=intentional
+fts3cov fts3cov-10.transient.92 @coverage class=intentional
+fts3cov fts3cov-10.transient.338 @coverage class=intentional
+fts3cov fts3cov-10.persistent.338 @coverage class=intentional
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=1846  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
