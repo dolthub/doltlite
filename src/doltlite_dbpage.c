@@ -121,24 +121,25 @@ static int dlDbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   (void)pVtab;
 
   for(i=0; i<pInfo->nConstraint; i++){
-    if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
-    if( pInfo->aConstraint[i].iColumn==0 && iPgno<0 ){
+    if( pInfo->aConstraint[i].iColumn==2 ){
+      if( !pInfo->aConstraint[i].usable ) return SQLITE_CONSTRAINT;
+      if( iSchema<0 ) iSchema = i;
+    }else if( pInfo->aConstraint[i].usable
+           && pInfo->aConstraint[i].iColumn==0 && iPgno<0 ){
       iPgno = i;
-    }else if( pInfo->aConstraint[i].iColumn==2 && iSchema<0 ){
-      iSchema = i;
     }
   }
 
-  if( iPgno>=0 ){
-    pInfo->aConstraintUsage[iPgno].argvIndex = ++nArg;
-    pInfo->aConstraintUsage[iPgno].omit = 1;
-    idxNum |= 1;
-  }
   if( iSchema>=0 ){
     pInfo->aConstraintUsage[iSchema].argvIndex = ++nArg;
     pInfo->aConstraintUsage[iSchema].omit = 1;
     idxNum |= 2;
+  }
+  if( iPgno>=0 ){
+    pInfo->aConstraintUsage[iPgno].argvIndex = ++nArg;
+    pInfo->aConstraintUsage[iPgno].omit = 1;
+    idxNum |= 1;
   }
 
   pInfo->idxNum = idxNum;
@@ -162,6 +163,11 @@ static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
   pCur->iRow = 0;
   pCur->hasRow = 0;
 
+  if( idxNum & 2 ){
+    const char *zSchema = (const char*)sqlite3_value_text(argv[iArg++]);
+    if( sqlite3FindDbName(pVtab->db, zSchema)!=0 ) return SQLITE_OK;
+  }
+
   if( idxNum & 1 ){
     sqlite3_int64 pgno = sqlite3_value_int64(argv[iArg++]);
     if( pgno!=1 ){
@@ -171,10 +177,6 @@ static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
         "(content-addressed chunk store has no page layout)");
       return SQLITE_ERROR;
     }
-  }
-
-  if( idxNum & 2 ){
-    iArg++;
   }
 
   synthesizeHeader(pVtab->db, pCur->aPage);
@@ -205,6 +207,8 @@ static int dlDbpageColumn(sqlite3_vtab_cursor *pCursor,
                           SQLITE_TRANSIENT);
       break;
     case 2:
+      sqlite3_result_text(ctx, "main", -1, SQLITE_STATIC);
+      break;
     default:
       sqlite3_result_null(ctx);
       break;
