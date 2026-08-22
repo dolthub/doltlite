@@ -212,6 +212,32 @@ run_test "workspace_stage_one_row" \
   "UPDATE dolt_workspace_t SET staged=1 WHERE id=1;
    SELECT group_concat(id || ':' || staged, ' ') FROM dolt_workspace_t;" \
   "1:1 2:0 3:0" "$MC_DB"
+run_test "workspace_staged_numeric_text_zero" \
+  "SELECT group_concat(to_pk || ':' || staged, ' ')
+     FROM (SELECT to_pk, staged FROM dolt_workspace_t WHERE staged='0' ORDER BY to_pk);" \
+  "2:0 3:0" "$MC_DB"
+run_test "workspace_staged_numeric_text_one" \
+  "SELECT group_concat(to_pk || ':' || staged, ' ')
+     FROM (SELECT to_pk, staged FROM dolt_workspace_t WHERE staged='1' ORDER BY to_pk);" \
+  "1:1" "$MC_DB"
+run_test "workspace_staged_integral_real_zero" \
+  "SELECT group_concat(to_pk || ':' || staged, ' ')
+     FROM (SELECT to_pk, staged FROM dolt_workspace_t WHERE staged=0.0 ORDER BY to_pk);" \
+  "2:0 3:0" "$MC_DB"
+run_test "workspace_staged_integral_real_one" \
+  "SELECT group_concat(to_pk || ':' || staged, ' ')
+     FROM (SELECT to_pk, staged FROM dolt_workspace_t WHERE staged=1.0 ORDER BY to_pk);" \
+  "1:1" "$MC_DB"
+run_test "workspace_staged_nonnumeric_text_empty" \
+  "SELECT count(*) FROM dolt_workspace_t WHERE staged='abc';" "0" "$MC_DB"
+run_test "workspace_staged_fractional_zero_side_empty" \
+  "SELECT count(*) FROM dolt_workspace_t WHERE staged=0.5;" "0" "$MC_DB"
+run_test "workspace_staged_fractional_one_side_empty" \
+  "SELECT count(*) FROM dolt_workspace_t WHERE staged=1.5;" "0" "$MC_DB"
+run_test "workspace_staged_blob_empty" \
+  "SELECT count(*) FROM dolt_workspace_t WHERE staged=x'00';" "0" "$MC_DB"
+run_test "workspace_staged_null_empty" \
+  "SELECT count(*) FROM dolt_workspace_t WHERE staged=NULL;" "0" "$MC_DB"
 run_test "workspace_delete_via_filtered_rowid" \
   "DELETE FROM dolt_workspace_t
      WHERE id=(SELECT id FROM dolt_workspace_t WHERE staged=0 LIMIT 1);

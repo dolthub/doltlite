@@ -232,12 +232,16 @@ rm -f "$DB_COLLATION"
 DB3=/tmp/test_pushdown_null_$$.db
 rm -f "$DB3"
 echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE s(pk INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(0,'zero');
 INSERT INTO t VALUES(1,'one');
+INSERT INTO s VALUES(1,'one');
 SELECT dolt_commit('-A','-m','init');
 UPDATE t SET v='changed' WHERE pk=1;
 SELECT dolt_commit('-A','-m','c2');
-UPDATE t SET v='dirty' WHERE pk=0;" | $DOLTLITE "$DB3" > /dev/null 2>&1
+UPDATE t SET v='dirty' WHERE pk=0;
+UPDATE s SET v='staged' WHERE pk=1;
+SELECT dolt_add('s');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 
 run_test "null_pk_eq_at_empty" \
   "SELECT count(*) FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=NULL;" "0" "$DB3"
@@ -266,6 +270,26 @@ run_test "pk_ge_zero_still_matches" \
   "SELECT count(*) FROM dolt_history_t WHERE pk>=0;" "4" "$DB3"
 run_test "staged_zero_still_matches" \
   "SELECT count(*) FROM dolt_status WHERE staged=0;" "1" "$DB3"
+run_test "staged_one_still_matches" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB3"
+run_test "staged_numeric_text_zero_matches" \
+  "SELECT table_name FROM dolt_status WHERE staged='0';" "t" "$DB3"
+run_test "staged_numeric_text_one_matches" \
+  "SELECT table_name FROM dolt_status WHERE staged='1';" "s" "$DB3"
+run_test "staged_integral_real_zero_matches" \
+  "SELECT table_name FROM dolt_status WHERE staged=0.0;" "t" "$DB3"
+run_test "staged_integral_real_one_matches" \
+  "SELECT table_name FROM dolt_status WHERE staged=1.0;" "s" "$DB3"
+run_test "staged_nonnumeric_text_empty" \
+  "SELECT count(*) FROM dolt_status WHERE staged='abc';" "0" "$DB3"
+run_test "staged_fractional_zero_side_empty" \
+  "SELECT count(*) FROM dolt_status WHERE staged=0.5;" "0" "$DB3"
+run_test "staged_fractional_one_side_empty" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1.5;" "0" "$DB3"
+run_test "staged_blob_empty" \
+  "SELECT count(*) FROM dolt_status WHERE staged=x'00';" "0" "$DB3"
+run_test "staged_out_of_domain_empty" \
+  "SELECT count(*) FROM dolt_status WHERE staged=2;" "0" "$DB3"
 run_test "table_name_named_still_matches" \
   "SELECT count(*) FROM dolt_diff WHERE table_name='t';" "3" "$DB3"
 

@@ -1133,6 +1133,8 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   int headLoaded = 0;
   int stagedLoaded = 0;
   int workingLoaded = 0;
+  int eStagedArg;
+  i64 stagedArg;
   (void)idxStr;
 
   statusFreeRows(pCur);
@@ -1143,10 +1145,12 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   memset(&baseCatHash, 0, sizeof(baseCatHash));
   if( idxNum & STATUS_IDX_STAGED_EQ ){
     if( iArg>=argc ) return SQLITE_OK;
-    /* NULL sqlite3_value_int is 0, which would become staged=0 for an impossible constraint. */
-    if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ) return SQLITE_OK;
-    iStagedOnly = sqlite3_value_int(argv[iArg++]);
-    if( iStagedOnly!=0 && iStagedOnly!=1 ) return SQLITE_OK;
+    eStagedArg = doltliteExactInt64Arg(argv[iArg++], &stagedArg);
+    if( eStagedArg<0 ) return SQLITE_OK;
+    if( eStagedArg>0 ){
+      if( stagedArg!=0 && stagedArg!=1 ) return SQLITE_OK;
+      iStagedOnly = (int)stagedArg;
+    }
   }
   if( idxNum & STATUS_IDX_TABLE_EQ ){
     if( iArg>=argc ) return SQLITE_OK;
@@ -1288,7 +1292,7 @@ static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
   if( iStagedEq>=0 ){
     pInfo->aConstraintUsage[iStagedEq].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iStagedEq].omit = 1;
+    pInfo->aConstraintUsage[iStagedEq].omit = 0;
     idxNum |= STATUS_IDX_STAGED_EQ;
   }
   if( iTableEq>=0 ){

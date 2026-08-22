@@ -428,6 +428,8 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
   int rc;
+  int eStagedArg;
+  i64 stagedArg;
   (void)idxStr;
   wsCloseIter(c);
   wsClearSides(c);
@@ -445,11 +447,12 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   c->stagedOnly = -1;
   if( idxNum & WS_IDX_STAGED_EQ ){
     if( argc<1 ) return SQLITE_OK;
-    c->stagedOnly = sqlite3_value_int(argv[0]);
-    if( c->stagedOnly!=0 && c->stagedOnly!=1 ){
+    eStagedArg = doltliteExactInt64Arg(argv[0], &stagedArg);
+    if( eStagedArg<0 || (eStagedArg>0 && stagedArg!=0 && stagedArg!=1) ){
       c->eof = 1;
       return SQLITE_OK;
     }
+    if( eStagedArg>0 ) c->stagedOnly = (int)stagedArg;
   }
   rc = wsInitCursorRoots(c, p);
   if( rc!=SQLITE_OK ) return rc;
