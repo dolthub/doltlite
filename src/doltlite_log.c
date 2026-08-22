@@ -347,7 +347,8 @@ static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
     if( !pC->usable ) continue;
     if( pC->op != SQLITE_INDEX_CONSTRAINT_EQ ) continue;
-    if( pC->iColumn == 0 && iHashEq < 0 ){
+    if( pC->iColumn == 0 && iHashEq < 0
+     && doltliteVtabConstraintIsBinary(pInfo, i) ){
       iHashEq = i;
     }else if( pC->iColumn == 5 && iRevisionEq < 0 ){
       iRevisionEq = i;
@@ -362,7 +363,7 @@ static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->estimatedRows = 10;
   }else if( iHashEq >= 0 ){
     pInfo->aConstraintUsage[iHashEq].argvIndex = 1;
-    pInfo->aConstraintUsage[iHashEq].omit = 1;
+    pInfo->aConstraintUsage[iHashEq].omit = 0;
     idxNum |= LOG_IDX_HASH_EQ;
     pInfo->estimatedCost = 10.0;
     pInfo->estimatedRows = 1;
