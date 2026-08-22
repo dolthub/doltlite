@@ -566,13 +566,20 @@ static int gcReopenChunkFile(ChunkStore *cs, sqlite3_file **ppFile){
   return SQLITE_OK;
 }
 
-static int gcRewriteFile(
+/* Write the compacted image of cs (manifest, marked chunks, sorted index)
+** to zPath, which must carry the VFS double-nul terminator. On success the
+** open, synced file handle is returned for the caller to swap or close;
+** the source store is not touched. */
+static int gcWriteCompactedTo(
   ChunkStore *cs,
   ProllyHashSet *marked,
+  const char *zPath,
+  int bDeleteExisting,
+  sqlite3_file **ppFileOut,
+  i64 *pFinalSize,
   ChunkIndexEntry **ppNewIndex,
   int *pnNewIndex,
-  i64 *pnNewData,
-  int *pReplaced
+  i64 *pnNewData
 ){
   int i;
   int kept = 0;
@@ -584,12 +591,10 @@ static int gcRewriteFile(
   i64 iPos = CHUNK_MANIFEST_SIZE;
   u8 manifest[CHUNK_MANIFEST_SIZE];
   ChunkStore manifestCs;
-  char *zRaw;
-  char *zTmp = 0;
   int rc = SQLITE_OK;
-  int retainTmp = 0;
 
-  *pReplaced = 0;
+  *ppFileOut = 0;
+  *pFinalSize = 0;
   *ppNewIndex = 0;
   *pnNewIndex = 0;
   *pnNewData = 0;
@@ -647,33 +652,21 @@ static int gcRewriteFile(
     if( !aNewIndex ) return SQLITE_NOMEM;
   }
 
-  zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
-  if( !zRaw ){
-    sqlite3_free(aNewIndex);
-    return SQLITE_NOMEM;
-  }
-  /* SQLITE_OPEN_MAIN_DB: the name needs the VFS's double-nul terminator. */
-  rc = chunkStoreDupFilenameDoubleNul(zRaw, &zTmp);
-  sqlite3_free(zRaw);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(aNewIndex);
-    return rc;
-  }
-
   {
     sqlite3_file *pTmpFile = 0;
     int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                  | SQLITE_OPEN_MAIN_DB;
     GcFileWriter w;
 
-    /* Best-effort stale-tmp removal; failure here must not fail GC. */
-    sqlite3BeginBenignMalloc();
-    sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
-    sqlite3EndBenignMalloc();
+    if( bDeleteExisting ){
+      /* Best-effort stale-tmp removal; failure here must not fail GC. */
+      sqlite3BeginBenignMalloc();
+      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zPath, 0);
+      sqlite3EndBenignMalloc();
+    }
 
-    rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
+    rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zPath, &pTmpFile, tmpFlags, 0);
     if( rc != SQLITE_OK ){
-      sqlite3_free(zTmp);
       sqlite3_free(aNewIndex);
       return rc;
     }
@@ -739,7 +732,59 @@ static int gcRewriteFile(
       GC_CRASH_CHECK();
       rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
     }
-    if( rc==SQLITE_OK ){
+    if( rc!=SQLITE_OK ){
+      sqlite3OsCloseFree(pTmpFile);
+      sqlite3BeginBenignMalloc();
+      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zPath, 0);
+      sqlite3EndBenignMalloc();
+      sqlite3_free(aNewIndex);
+      return rc;
+    }
+    *ppFileOut = pTmpFile;
+  }
+  *pFinalSize = finalSize;
+  *ppNewIndex = aNewIndex;
+  *pnNewIndex = nNewIndex;
+  *pnNewData = nDataBytes;
+  return SQLITE_OK;
+}
+
+static int gcRewriteFile(
+  ChunkStore *cs,
+  ProllyHashSet *marked,
+  ChunkIndexEntry **ppNewIndex,
+  int *pnNewIndex,
+  i64 *pnNewData,
+  int *pReplaced
+){
+  i64 finalSize = 0;
+  char *zRaw;
+  char *zTmp = 0;
+  sqlite3_file *pTmpFile = 0;
+  int rc;
+  int retainTmp = 0;
+
+  *pReplaced = 0;
+  *ppNewIndex = 0;
+  *pnNewIndex = 0;
+  *pnNewData = 0;
+
+  zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
+  if( !zRaw ) return SQLITE_NOMEM;
+  /* SQLITE_OPEN_MAIN_DB: the name needs the VFS's double-nul terminator. */
+  rc = chunkStoreDupFilenameDoubleNul(zRaw, &zTmp);
+  sqlite3_free(zRaw);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = gcWriteCompactedTo(cs, marked, zTmp, 1, &pTmpFile, &finalSize,
+                          ppNewIndex, pnNewIndex, pnNewData);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zTmp);
+    return rc;
+  }
+
+  {
+    {
       sqlite3_file *pOldFile = chunkFileGetHandle(&cs->file);
       sqlite3_file *pNewFile = 0;
 
@@ -757,11 +802,9 @@ static int gcRewriteFile(
 #endif
 
       GC_CRASH_CHECK();
-      if( rc==SQLITE_OK ){
-        rc = sqlite3OsReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
-                                  chunkFileGetFilename(&cs->file),
-                                  &retainTmp);
-      }
+      rc = sqlite3OsReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
+                                chunkFileGetFilename(&cs->file),
+                                &retainTmp);
       if( rc!=SQLITE_OK ){
 #if SQLITE_OS_WIN
         if( chunkFileGetHandle(&cs->file)==0 ){
@@ -812,20 +855,12 @@ static int gcRewriteFile(
       }else if( pNewFile ){
         sqlite3OsCloseFree(pNewFile);
       }
-    }else{
-      sqlite3BeginBenignMalloc();
-      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
-      sqlite3EndBenignMalloc();
     }
     if( !*pReplaced && pTmpFile ){
       sqlite3OsCloseFree(pTmpFile);
     }
   }
   sqlite3_free(zTmp);
-
-  *ppNewIndex = aNewIndex;
-  *pnNewIndex = nNewIndex;
-  *pnNewData = nDataBytes;
   return rc;
 }
 
@@ -1084,6 +1119,108 @@ int doltliteGcCompactStoreWithPhase(
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs){
   const char *zPhase = 0;
   return doltliteGcCompactStoreWithPhase(db, cs, &zPhase);
+}
+
+/* VACUUM INTO for a doltlite-format database: write a compacted copy of
+** the store — the same image gc would swap in, so same committed data and
+** current working state, dead chunks dropped — to zOut. The source store
+** is only read; nothing is swapped or adopted. Stock's contract for the
+** target is kept: it must not exist unless it is an empty file. */
+int doltliteGcVacuumInto(
+  sqlite3 *db,
+  int iDb,
+  const char *zOut,
+  const char **pzPhase
+){
+  ChunkStore *cs;
+  ProllyHashSet marked;
+  GcMarkTrace markTrace;
+  ChunkIndexEntry *aNewIndex = 0;
+  int nNewIndex = 0;
+  i64 nNewData = 0;
+  i64 finalSize = 0;
+  sqlite3_file *pOutFile = 0;
+  char *zPath = 0;
+  int rc;
+
+  *pzPhase = 0;
+  if( !db || iDb<0 || iDb>=db->nDb ) return SQLITE_ERROR;
+  cs = doltliteBtreeChunkStore(db->aDb[iDb].pBt);
+  if( !cs || !chunkFileGetFilename(&cs->file)
+   || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
+    *pzPhase = "cannot VACUUM an in-memory database INTO a file";
+    return SQLITE_ERROR;
+  }
+  if( !zOut || zOut[0]==0 ){
+    *pzPhase = "non-text filename";
+    return SQLITE_ERROR;
+  }
+
+  {
+    int exists = 0;
+    if( sqlite3OsAccess(chunkFileGetVfs(&cs->file), zOut,
+                        SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+     && exists ){
+      sqlite3_file *pProbe = 0;
+      i64 sz = 0;
+      char *zProbe = 0;
+      rc = chunkStoreDupFilenameDoubleNul(zOut, &zProbe);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zProbe, &pProbe,
+                               SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, 0);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3OsFileSize(pProbe, &sz);
+        sqlite3OsCloseFree(pProbe);
+      }
+      sqlite3_free(zProbe);
+      if( rc!=SQLITE_OK || sz>0 ){
+        *pzPhase = "output file already exists";
+        return SQLITE_ERROR;
+      }
+    }
+  }
+
+  rc = gcLockAndRefresh(db, cs, 1);
+  if( rc!=SQLITE_OK ){
+    *pzPhase = "failed to acquire lock for vacuum into";
+    return rc;
+  }
+  rc = csMaterializeIndex(cs);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    *pzPhase = "vacuum into index load failed";
+    return rc;
+  }
+  rc = prollyHashSetInit(&marked,
+      chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    *pzPhase = "vacuum into mark phase failed";
+    return rc;
+  }
+  rc = gcMarkReachable(db, cs, &marked, &markTrace);
+  if( rc!=SQLITE_OK ){
+    prollyHashSetFree(&marked);
+    chunkStoreUnlock(cs);
+    *pzPhase = "vacuum into mark phase failed";
+    return rc;
+  }
+
+  rc = chunkStoreDupFilenameDoubleNul(zOut, &zPath);
+  if( rc==SQLITE_OK ){
+    rc = gcWriteCompactedTo(cs, &marked, zPath, 0, &pOutFile, &finalSize,
+                            &aNewIndex, &nNewIndex, &nNewData);
+    sqlite3_free(zPath);
+  }
+  prollyHashSetFree(&marked);
+  chunkStoreUnlock(cs);
+  if( rc!=SQLITE_OK ){
+    *pzPhase = "vacuum into write failed";
+    return rc;
+  }
+  sqlite3OsCloseFree(pOutFile);
+  sqlite3_free(aNewIndex);
+  return SQLITE_OK;
 }
 
 int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase){
