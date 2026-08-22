@@ -248,12 +248,12 @@ void sqlite3AlterRenameTable(
         "UPDATE \"%w\".sqlite_sequence set name = %Q WHERE name = %Q",
         zDb, zName, pTab->zName);
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-    {
+    if( iDb!=1 && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
       int regOld = ++pParse->nMem;
       int regNew = ++pParse->nMem;
       sqlite3VdbeLoadString(v, regOld, pTab->zName);
       sqlite3VdbeLoadString(v, regNew, zName);
-      sqlite3VdbeAddOp2(v, OP_DoltliteSeqRename, regOld, regNew);
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqRename, regOld, regNew, iDb);
     }
 #endif
   }

@@ -3718,12 +3718,12 @@ void sqlite3CodeDropTable(Parse *pParse, Table *pTab, int iDb, int isView){
       pDb->zDbSName, pTab->zName
     );
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-    {
+    if( iDb!=1 && pDb->pBt && !sqlite3BtreeUsesOrig(pDb->pBt) ){
       Vdbe *vSeq = sqlite3GetVdbe(pParse);
       if( vSeq ){
         int regName = ++pParse->nMem;
         sqlite3VdbeLoadString(vSeq, regName, pTab->zName);
-        sqlite3VdbeAddOp1(vSeq, OP_DoltliteSeqDrop, regName);
+        sqlite3VdbeAddOp3(vSeq, OP_DoltliteSeqDrop, regName, 0, iDb);
       }
     }
 #endif
