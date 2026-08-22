@@ -741,7 +741,7 @@ int mergePreNormalizeRenamedDependents(
     int bPureO = 0, bPureT = 0;
     const char *zBase = 0;
     int bBaseOurs = 0, bBaseTheirs = 0;
-    int bAllCoherent, bBail;
+    int bBail;
 
     if( !pAncT->zType || strcmp(pAncT->zType, "table")!=0 ) continue;
     if( !pAncT->zName || !pAncT->zSql ) continue;
@@ -777,7 +777,6 @@ int mergePreNormalizeRenamedDependents(
       azCand[1] = pOurT->zSql;
       azCand[2] = pTheirT->zSql;
       zBase = 0;
-      bAllCoherent = 1;
       bBail = 0;
       for(c=0; c<3 && !bBail; c++){
         int bOk = 1;
@@ -821,7 +820,6 @@ int mergePreNormalizeRenamedDependents(
           pPick = pDepOurs ? pDepOurs : pDepTheirs;
           if( !mergeDependentCoherent(pPick, azCand[c], azUni, nUni) ){
             bOk = 0;
-            if( c==0 ) bAllCoherent = 0;
           }
         }
         if( bBail ) break;
