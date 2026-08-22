@@ -27,30 +27,35 @@ objs() {
     "SELECT coalesce(group_concat(type || ':' || name), '<none>') FROM sqlite_master;"
 }
 
-# Same-session visit of the source used to publish that branch's catalog as our working set.
+# Same-session visit of the source used to publish that branch's catalog as
+# our working set. The specimen is a drop-versus-edit refusal; the old
+# trigger-versus-rename specimen merges now that triggers follow their table.
 DB="$TMPROOT/failed_merge.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
-CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT);
-INSERT INTO t VALUES(1,'a1');
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
 SELECT dolt_add('-A'), dolt_commit('-m','init');
 SELECT dolt_branch('side');
-ALTER TABLE t RENAME TO t2;
-SELECT dolt_add('-A'), dolt_commit('-m','ours rename');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_add('-A'), dolt_commit('-m','ours drop');
 SELECT dolt_checkout('side');
-CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET a='TG' WHERE k=new.k; END;
-SELECT dolt_add('-A'), dolt_commit('-m','theirs trigger');
+UPDATE t SET b='edit' WHERE k=1;
+SELECT dolt_add('-A'), dolt_commit('-m','theirs edit');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 EOF
 
-check "failed_merge_keeps_our_schema" "table:t2" "$(objs "$DB")"
+check "failed_merge_keeps_our_schema" "table:t" "$(objs "$DB")"
 check "failed_merge_keeps_our_rows" "1|a1" \
-  "$("$DOLTLITE" "$DB" "SELECT k || '|' || a FROM t2 ORDER BY k;")"
+  "$("$DOLTLITE" "$DB" "SELECT k || '|' || a FROM t ORDER BY k;")"
+check "failed_merge_keeps_our_columns" "k,a" \
+  "$("$DOLTLITE" "$DB" "SELECT group_concat(name) FROM pragma_table_info('t');")"
 check "failed_merge_leaves_no_edits" "" \
   "$("$DOLTLITE" "$DB" "SELECT group_concat(table_name || '/' || status) FROM dolt_status;")"
-check "failed_merge_keeps_our_head" "ours rename" \
+check "failed_merge_keeps_our_head" "ours drop" \
   "$("$DOLTLITE" "$DB" "SELECT message FROM dolt_log LIMIT 1;")"
-check "failed_merge_side_untouched" "table:t,trigger:tg" "$(objs "$DB/side")"
+check "failed_merge_side_untouched" "1|a1|edit" \
+  "$("$DOLTLITE" "$DB/side" "SELECT k || '|' || a || '|' || b FROM t;")"
 
 # Same-session checkout used to serialize the catalog of the branch we left.
 DB="$TMPROOT/checkout_then_write.db"
