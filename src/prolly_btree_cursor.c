@@ -906,6 +906,11 @@ int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_NOTFOUND;
   }
+  if( pCur->isTableRoot ){
+    *pRowid = sqlite3BtreeSqlRowid(pCur);
+    if( pCur->eState==CURSOR_FAULT ) return pCur->skipNext;
+    return SQLITE_OK;
+  }
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){

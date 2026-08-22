@@ -776,8 +776,10 @@ For a DoltLite-format main database, the compatibility contract is:
   because prolly sort keys cannot depend on application callbacks. An index
   may override such a column with `BINARY`, `NOCASE`, or `RTRIM`. Replacing one
   of those built-ins is rejected while a persisted index uses its name.
-- A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key and has
-  no separate `rowid` column.
+- A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key.
+  `rowid` and `last_insert_rowid()` still work: a single integer PK is that
+  value, otherwise a stable hash of the PK. Explicit `WITHOUT ROWID` tables
+  have no `rowid`, matching SQLite.
 - `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
   attached database, as one operation; its page-count argument is not
   incremental. File-backed and in-memory DoltLite databases can be copied in

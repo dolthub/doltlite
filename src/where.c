@@ -4227,6 +4227,13 @@ static int whereLoopAddBtree(
           pNew->wsFlags = WHERE_IDX_ONLY | WHERE_INDEXED;
         }
       }
+#ifdef DOLTLITE_PROLLY
+      if( (pNew->wsFlags & WHERE_IDX_ONLY)!=0
+       && pSrc->fg.rowidUsed && !HasRowid(pTab)
+       && !IsPrimaryKeyIndex(pProbe) ){
+        pNew->wsFlags &= ~WHERE_IDX_ONLY;
+      }
+#endif
 
       /* Full scan via index */
       if( b
@@ -6391,7 +6398,11 @@ static int whereShortCut(WhereLoopBuilder *pBuilder){
   pLoop->nSkip = 0;
   pTerm = whereScanInit(&scan, pWC, iCur, -1, WO_EQ|WO_IS, 0);
   while( pTerm && pTerm->prereqRight ) pTerm = whereScanNext(&scan);
+#ifdef DOLTLITE_PROLLY
+  if( pTerm && HasRowid(pTab) ){
+#else
   if( pTerm ){
+#endif
     testcase( pTerm->eOperator & WO_IS );
     pLoop->wsFlags = WHERE_COLUMN_EQ|WHERE_IPK|WHERE_ONEROW;
     pLoop->aLTerm[0] = pTerm;
@@ -6418,6 +6429,10 @@ static int whereShortCut(WhereLoopBuilder *pBuilder){
       if( j!=pIdx->nKeyCol ) continue;
       pLoop->wsFlags = WHERE_COLUMN_EQ|WHERE_ONEROW|WHERE_INDEXED;
       if( pIdx->isCovering || (pItem->colUsed & pIdx->colNotIdxed)==0 ){
+#ifdef DOLTLITE_PROLLY
+        if( !(pItem->fg.rowidUsed && !HasRowid(pTab)
+           && !IsPrimaryKeyIndex(pIdx)) )
+#endif
         pLoop->wsFlags |= WHERE_IDX_ONLY;
       }
       pLoop->nLTerm = j;
@@ -7877,9 +7892,14 @@ void sqlite3WhereEnd(WhereInfo *pWInfo){
             }
           }
         }else if( pOp->opcode==OP_Rowid ){
-          pOp->p1 = pLevel->iIdxCur;
-          pOp->opcode = OP_IdxRowid;
-          OpcodeRewriteTrace(db, k, pOp);
+#ifdef DOLTLITE_PROLLY
+          if( HasRowid(pTab) || IsPrimaryKeyIndex(pIdx) )
+#endif
+          {
+            pOp->p1 = pLevel->iIdxCur;
+            pOp->opcode = OP_IdxRowid;
+            OpcodeRewriteTrace(db, k, pOp);
+          }
         }else if( pOp->opcode==OP_IfNullRow ){
           pOp->p1 = pLevel->iIdxCur;
           OpcodeRewriteTrace(db, k, pOp);

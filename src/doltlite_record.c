@@ -4,8 +4,77 @@
 #include "sqliteInt.h"
 #include "doltlite_record.h"
 #include "sortkey.h"
+#include "prolly_xxhash.h"
 #include <string.h>
 #include <stdio.h>
+
+static i64 doltliteRowidHash(const u8 *p, int n){
+  u64 h;
+  if( !p || n<=0 ) return 1;
+  h = ((u64)prollyXXH32(p, n, 0)<<32) | (u64)prollyXXH32(p, n, 0x9e3779b9U);
+  h &= ((u64)1<<63)-1;
+  return h ? (i64)h : 1;
+}
+
+static int doltliteRecordFirstInt(const u8 *pRec, int nRec, i64 *pOut){
+  u64 hdr = 0, serial = 0;
+  int nHdrBytes, nSerialBytes, nBody;
+  const u8 *pEnd;
+  const u8 *pBody;
+
+  if( !pRec || nRec<=0 ) return 0;
+  pEnd = pRec + nRec;
+  nHdrBytes = dlReadVarint(pRec, pEnd, &hdr);
+  if( nHdrBytes<=0 || hdr<(u64)nHdrBytes+1 || hdr>(u64)nRec ) return 0;
+  nSerialBytes = dlReadVarint(pRec+nHdrBytes, pRec+(int)hdr, &serial);
+  if( nSerialBytes<=0 || nHdrBytes+nSerialBytes>(int)hdr ) return 0;
+  pBody = pRec + (int)hdr;
+  nBody = nRec - (int)hdr;
+  if( serial==8 ){ *pOut = 0; return 1; }
+  if( serial==9 ){ *pOut = 1; return 1; }
+  if( serial>=1 && serial<=6 ){
+    int nB = dlSerialTypeLen(serial);
+    if( nB<=0 || nB>nBody ) return 0;
+    *pOut = dlReadIntBytes(pBody, nB);
+    return 1;
+  }
+  return 0;
+}
+
+i64 doltliteSyntheticRowidFromRecord(const u8 *pRec, int nRec,
+    const KeyInfo *pKeyInfo){
+  i64 v = 0;
+  u8 *pSk = 0;
+  int nAlloc = 0, nSk = 0;
+  int nKeyField = pKeyInfo ? pKeyInfo->nKeyField : 0;
+
+  if( nKeyField==1 && doltliteRecordFirstInt(pRec, nRec, &v) ) return v;
+  if( pKeyInfo && sortKeyFromRecordPrefixCollBuffer(
+        pRec, nRec, nKeyField, pKeyInfo, &pSk, &nAlloc, &nSk)==SQLITE_OK ){
+    v = doltliteRowidHash(pSk, nSk);
+    sqlite3_free(pSk);
+    return v;
+  }
+  sqlite3_free(pSk);
+  return doltliteRowidHash(pRec, nRec);
+}
+
+i64 doltliteSyntheticRowidFromSortKey(const u8 *pSortKey, int nSortKey,
+    const KeyInfo *pKeyInfo){
+  u8 *pRec = 0;
+  int nAlloc = 0, nRec = 0;
+  i64 v;
+  int nKeyField = pKeyInfo ? pKeyInfo->nKeyField : 0;
+
+  if( pKeyInfo && recordFromSortKeyBufferColl(
+        pSortKey, nSortKey, pKeyInfo, &pRec, &nAlloc, &nRec)==SQLITE_OK
+   && nKeyField==1 && doltliteRecordFirstInt(pRec, nRec, &v) ){
+    sqlite3_free(pRec);
+    return v;
+  }
+  sqlite3_free(pRec);
+  return doltliteRowidHash(pSortKey, nSortKey);
+}
 
 u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
   if( pVal->eType == SQLITE_NULL ){ *pLen = 0; return 0; }
