@@ -2042,6 +2042,14 @@ EOF
   else
     run_test_match "merge_bothadd_$1_merges" "SELECT dolt_merge('feat');" \
       "^[0-9a-f]{40}$" "$DB"
+    if [ -n "${5:-}" ]; then
+      run_test "merge_bothadd_$1_schema" \
+        "SELECT group_concat(name, ',') FROM pragma_table_info('t');" \
+        "$5" "$DB"
+      run_test "merge_bothadd_$1_row" \
+        "SELECT id || ':' || payload || ':' || c1899 || ':' || COALESCE(c1699, 'NULL') FROM t;" \
+        "1:p:y:NULL" "$DB"
+    fi
   fi
   run_test "merge_bothadd_$1_integrity" "PRAGMA integrity_check;" "ok" "$DB"
   rm -f "$DB"
@@ -2066,6 +2074,12 @@ both_add_drop_case "one_versus_two_disjoint" \
 # Equal drop counts merge, even when the sides dropped different columns.
 both_add_drop_case "one_each_disjoint" \
   "ALTER TABLE t DROP COLUMN c1899;" "ALTER TABLE t DROP COLUMN c1113;" merge
+both_add_drop_case "one_each_disjoint_last_theirs" \
+  "ALTER TABLE t DROP COLUMN c1113;" "ALTER TABLE t DROP COLUMN c2000;" \
+  merge "id,payload,c1899,c1699"
+both_add_drop_case "one_each_disjoint_last_ours" \
+  "ALTER TABLE t DROP COLUMN c2000;" "ALTER TABLE t DROP COLUMN c1113;" \
+  merge "id,payload,c1899,c1699"
 both_add_drop_case "one_each_same_column" \
   "ALTER TABLE t DROP COLUMN c1113;" "ALTER TABLE t DROP COLUMN c1113;" merge
 both_add_drop_case "two_each_overlapping" \

@@ -966,9 +966,7 @@ schema_merge_done:
     for(i=0; i<nAnc; i++){
       if( !findColumn(aSel, nSel, aAnc[i].zName) ) continue;
       if( findColumn(aOth, nOth, aAnc[i].zName) ) continue;
-      if( i<nOth
-       && !findColumn(aAnc, nAnc, aOth[i].zName)
-       && parsedColumnDefinitionsMatch(&aOth[i], &aAnc[i]) ){
+      if( columnRenamedAt(aOth, nOth, aAnc, nAnc, i, aSel, nSel) ){
         /* Renamed, not deleted. Carry the new name or it is lost. */
         if( ppRenameCols && pnRenameCols ){
           rc = DOLTLITE_GROW_ARRAY(&azRename, &nRenameAlloc, nRename+2, 4);

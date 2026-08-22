@@ -1500,6 +1500,31 @@ SELECT dolt_commit('-Am','main_add');
 SQL
 expect_merge_conflict "both_add_same_column_and_drop_other" "$DB"
 
+DB="$TMPROOT/both_add_and_disjoint_drop.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "both_add_and_disjoint_drop"
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1113 TEXT, c1899 TEXT, c2000 TEXT);
+INSERT INTO t VALUES(1,'p','x','y','z');
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN c2000;
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','feat_drop_last_and_add');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN c1113;
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','main_drop_middle_and_add');
+SQL
+expect_merge_ok "both_add_same_column_and_disjoint_drop" "$DB"
+expect_dual_value "both_add_same_column_and_disjoint_drop_schema" "$DB" \
+  "id,payload,c1899,c1699" \
+  "SELECT group_concat(name, ',') FROM pragma_table_info('t');" \
+  "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ',') FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
+expect_dual_value "both_add_same_column_and_disjoint_drop_row" "$DB" \
+  "1:p:y:NULL" \
+  "SELECT id || ':' || payload || ':' || c1899 || ':' || COALESCE(c1699, 'NULL') FROM t;" \
+  "SELECT CONCAT(id, ':', payload, ':', c1899, ':', COALESCE(c1699, 'NULL')) FROM t;"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
