@@ -675,11 +675,6 @@ lock4 lock4-1.1 class=intentional  # raw file-size metric: chunk files are not 2
 # CI's default nofile limit -- high-fd machines need `ulimit -n 256` locally).
 misc7 misc7-5 class=intentional issue=1840  # journal path is a directory (mydir-journal/): stock fails CREATE; doltlite has no -journal sidecar
 misc7 misc7-7.0 class=intentional issue=1840  # shared-cache read expects "database is locked"; MVCC snapshot read proceeds
-misc7 misc7-10 class=intentional issue=1840  # echo vtab over a PK-clustered backing table; doltlite-correct behavior in doltlite_recover_misc7 1.x
-misc7 misc7-11 class=intentional issue=1840  # same echo-on-clustered class
-misc7 misc7-12.67.3 class=intentional issue=1840  # ioerr faultsim recovery check inside the echo-on-clustered class
-misc7 misc7-13 class=intentional issue=1840  # same echo-on-clustered class (huge xBestIndex cost)
-misc7 misc7-15.2 class=intentional issue=1840  # DELETE ... WHERE rowid on a PK-clustered table: no rowid column
 misc7 misc7-22.3 class=intentional issue=1840  # read-only journal dir: stock cannot journal so the write fails; sidecar-free commit succeeds
 misc7 misc7-22.4 class=intentional issue=1840  # same: SQLITE_OK, not SQLITE_READONLY_ROLLBACK
 # CHECK-constraint error text echoes the schema expression. doltlite regenerates
@@ -1086,11 +1081,6 @@ notnull notnull-6.5 class=intentional  # plan uses a seek not OP_Next: non-integ
 # ROWID (#1176), so there is no rowid column → "no such column: rowid". The
 # non-rowid UPDATE (2.2, WHERE b=?) passes. WITHOUT-ROWID-PK divergence.
 
-# whereF — whereF-4.0 runs `EXPLAIN QUERY PLAN SELECT rowid FROM t4 ...` where
-# t4 has PRIMARY KEY(a,b,c) (composite → WITHOUT ROWID, #1176), so rowid does
-# not exist. WITHOUT-ROWID-PK divergence.
-whereF whereF-4.0 class=intentional issue=1840  # explicit rowid on a composite-PK (WITHOUT ROWID) table (#1176)
-
 # without_rowid5 — the file contrasts a normal (rowid) table against a WITHOUT
 # ROWID one. -1.1 selects rowid/_rowid_/oid from t1(a PRIMARY KEY,b,c) expecting
 # the rowid alias to exist, but DoltLite stores a non-integer PK as WITHOUT ROWID
@@ -1435,11 +1425,8 @@ whereL whereL-122 class=intentional  # EQP plan shape; results equivalent
 # without_rowid1-7.x and where4-5.2.
 tkt-3a77c9714e tkt-3a77c9714e-3.0 class=intentional  # INT PRIMARY KEY stored WITHOUT ROWID (#1176); NULL PK rejected
 
-# without_rowid1-7.x — t70a(a INT CHECK(rowid!=33), b TEXT PRIMARY KEY): stock
-# keeps it a rowid table so the CHECK can reference rowid; doltlite stores
-# non-INTEGER-PK tables WITHOUT ROWID, where rowid is not a column. 7.1's
-# CREATE fails resolving the CHECK; 7.2 cascades (no such table).
-without_rowid1 without_rowid1-7.1 class=intentional issue=1840  # CHECK(rowid) on implicit WITHOUT ROWID table
+# without_rowid1-7.2 remains gated; 7.1 (CHECK(rowid) CREATE) now passes
+# because clustered PKs expose a SQL rowid.
 without_rowid1 without_rowid1-7.2 class=intentional issue=1840  # cascade: t70a was never created
 # rowvalue9 — section 1 INSERTs into / SELECTs `rowid` on a1, which has a
 # composite PRIMARY KEY(a, b) and is therefore stored WITHOUT ROWID (#1176):
@@ -3060,13 +3047,10 @@ dbfuzz001 dbfuzz001-330 class=intentional
 dbfuzz001 dbfuzz001-420 class=intentional
 dbfuzz001 dbfuzz001-440 class=intentional
 
-# Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite —
-# no rowid alias, so `DELETE FROM q WHERE rowid=1` errors "no such column:
-# rowid" (reproduced directly). 1.8/1.11 are cascades: the row that the
-# rowid DELETE should have removed is still present.
-delete2 delete2-1.6 class=intentional
+# Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite.
+# DELETE WHERE rowid now resolves (1.6/1.9 pass). 1.8/1.11 still diverge
+# on remaining rows after that delete.
 delete2 delete2-1.8 class=intentional
-delete2 delete2-1.9 class=intentional
 delete2 delete2-1.11 class=intentional
 
 # doltlite never creates -journal/-wal/-shm sidecars (verified: no sidecar

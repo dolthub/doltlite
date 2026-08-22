@@ -14,7 +14,6 @@
 
 alter2 class=intentional  # raw file-format setup prevents the db command from opening
 backup_ioerr class=harness  # cap-truncated page-copy fault sequence; unbucketed
-btreefault class=intentional issue=1840  # rowid setup failure cascades into the fault simulator
 corrupt4 class=harness  # raw-offset outcome varies by build; unbucketed
 crash2 class=harness issue=2072  # crash2-2.* crash test.db-journal, which doltlite never writes, so the child commits instead of crashing; crash2-3.*.2 may recover the committed state because the commit point is a main-file sync; layout-dependent; unbucketed
 crash8 class=harness  # crash-simulation timing is nondeterministic; unbucketed
