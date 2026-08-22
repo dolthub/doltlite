@@ -1212,7 +1212,6 @@ dbpage dbpage-200 class=unsupported issue=947  # sqlite_dbpage raw page access; 
 dbpage dbpage-210 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-220 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-230 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
-dbpage dbpage-240 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-241 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-250 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-260 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
