@@ -70,4 +70,23 @@ run_test_match "non_integer_pk_has_no_rowid" \
   "SELECT rowid FROM keyed;" \
   "no such column: rowid" "$DB"
 
+MAIN_DB="$TMP/multifile-main.db"
+AUX_DB="$TMP/multifile-aux.db"
+run_test_match "multifile_temp_trigger_rejected" \
+  "CREATE TABLE insert_log(db TEXT, a, b, c);
+ATTACH '$AUX_DB' AS aux;
+CREATE TABLE aux.t4(a INTEGER PRIMARY KEY, b, c);
+CREATE TEMP TRIGGER trig AFTER INSERT ON aux.t4 BEGIN
+  INSERT INTO insert_log VALUES('aux', new.a, new.b, new.c);
+END;
+INSERT INTO aux.t4 VALUES(7,8,9);" \
+  "atomic commit across multiple file-backed databases is not supported" \
+  "$MAIN_DB"
+
+run_test "multifile_trigger_rolls_back_main" \
+  "SELECT count(*) FROM insert_log;" "0" "$MAIN_DB"
+
+run_test "multifile_trigger_rolls_back_attached" \
+  "ATTACH '$AUX_DB' AS aux; SELECT count(*) FROM aux.t4;" "0" "$MAIN_DB"
+
 dltest_finish
