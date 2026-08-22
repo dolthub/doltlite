@@ -59,6 +59,7 @@ chunker_boundary_golden.sh
 doltlite_savepoint.sh
 doltlite_rollback_durability.sh
 doltlite_delete_or.sh
+doltlite_autoinc_schema.sh
 doltlite_nocase_index.sh
 doltlite_update_replace_trigger.sh
 doltlite_unique_index_delete.sh

@@ -512,11 +512,12 @@ void sqlite3AutoincrementBegin(Parse *pParse){
     aOp[7].p1 = memId;
     aOp[10].p2 = memId;
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-    /* Consult the shared per-database AUTOINCREMENT counter so branches
-    ** see each other's allocations even though sqlite_sequence is
-    ** branch-local. memId holds the max read from the local table; the
-    ** shared counter (keyed by table name in memId-1) wins if higher. */
-    sqlite3VdbeAddOp2(v, OP_DoltliteSeqMax, memId, memId-1);
+    /* Shared counter is per chunk-store (P3=iDb). TEMP and orig-format
+    ** schemas keep sqlite_sequence only — a name-only key would leak
+    ** allocations across schemas. */
+    if( p->iDb!=1 && pDb->pBt && !sqlite3BtreeUsesOrig(pDb->pBt) ){
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqMax, memId, memId-1, p->iDb);
+    }
 #endif
     if( pParse->nTab==0 ) pParse->nTab = 1;
   }
@@ -579,10 +580,9 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
     aOp[3].p3 = memId+1;
     aOp[3].p5 = OPFLAG_APPEND;
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-    /* Mirror the new max into the shared per-database counter. Emitted
-    ** at the Le jump target so it runs on both the write path and the
-    ** no-change path — the bump is a max-merge and is safe either way. */
-    sqlite3VdbeAddOp2(v, OP_DoltliteSeqBump, memId, memId-1);
+    if( p->iDb!=1 && pDb->pBt && !sqlite3BtreeUsesOrig(pDb->pBt) ){
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqBump, memId, memId-1, p->iDb);
+    }
 #endif
     sqlite3ReleaseTempReg(pParse, iRec);
   }

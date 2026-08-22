@@ -26,7 +26,11 @@ const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
 #endif
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 #include "chunk_store.h"
-struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+ChunkStore *doltliteBtreeChunkStore(Btree*);
+static ChunkStore *vdbeDoltliteSeqStore(sqlite3 *db, int iDb){
+  if( iDb<0 || iDb>=db->nDb || iDb==1 ) return 0;
+  return doltliteBtreeChunkStore(db->aDb[iDb].pBt);
+}
 #endif
 /*
 ** High-resolution hardware timer used for debugging and testing only.
@@ -3962,15 +3966,15 @@ case OP_CountRange: {    /* out2 */
 }
 
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-/* Opcode: DoltliteSeqMax P1 P2 * * *
+/* Opcode: DoltliteSeqMax P1 P2 P3 * *
 ** Synopsis: r[P1]=max(r[P1], chunkStoreGetSequenceValue(r[P2]))
 **
-** Doltlite-only. Consult the per-database shared AUTOINCREMENT counter
-** for the table name in register P2 and raise the value in register P1
-** (the autoinc max-rowid register) to at least that value. This is how
-** branches see each other's allocations without sharing sqlite_sequence
-** itself — the counter lives in ChunkRefs.aSequences, not in any
-** branch's working set.
+** Doltlite-only. Consult the shared AUTOINCREMENT counter for the table
+** name in register P2 on the doltlite-format schema P3 and raise register
+** P1 to at least that value. TEMP (iDb==1) and orig-format schemas have
+** no shared counter: sqlite_sequence in that schema is enough. The
+** counter lives in ChunkRefs.aSequences so branches of the same file
+** see each other's allocations without sharing sqlite_sequence itself.
 */
 case OP_DoltliteSeqMax: {
   Mem *pCtr;
@@ -3981,7 +3985,7 @@ case OP_DoltliteSeqMax: {
   pCtr  = &aMem[pOp->p1];
   pName = &aMem[pOp->p2];
   if( (pName->flags & MEM_Str)==0 ) break;
-  pCs = doltliteGetChunkStore(db);
+  pCs = vdbeDoltliteSeqStore(db, pOp->p3);
   if( !pCs ) break;
   zName = (const char*)pName->z;
   if( !zName ) break;
@@ -3993,13 +3997,12 @@ case OP_DoltliteSeqMax: {
   break;
 }
 
-/* Opcode: DoltliteSeqBump P1 P2 * * *
+/* Opcode: DoltliteSeqBump P1 P2 P3 * *
 ** Synopsis: chunkStoreBumpSequence(r[P2], r[P1])
 **
-** Doltlite-only. Raise the per-database shared AUTOINCREMENT counter
-** for the table name in register P2 to at least r[P1]. Emitted at
-** autoIncrementEnd to mirror the local sqlite_sequence update into
-** the shared counter so other branches see the new max.
+** Doltlite-only. Raise the shared AUTOINCREMENT counter for the table
+** name in register P2 on schema P3 to at least r[P1]. Emitted at
+** autoIncrementEnd so other branches of that file see the new max.
 */
 case OP_DoltliteSeqBump: {
   Mem *pCtr;
@@ -4010,7 +4013,7 @@ case OP_DoltliteSeqBump: {
   pName = &aMem[pOp->p2];
   if( (pCtr->flags & MEM_Int)==0 ) break;
   if( (pName->flags & MEM_Str)==0 ) break;
-  pCs = doltliteGetChunkStore(db);
+  pCs = vdbeDoltliteSeqStore(db, pOp->p3);
   if( !pCs ) break;
   zName = (const char*)pName->z;
   if( !zName ) break;
@@ -4018,31 +4021,31 @@ case OP_DoltliteSeqBump: {
   break;
 }
 
-/* Opcode: DoltliteSeqDrop P1 * * * *
+/* Opcode: DoltliteSeqDrop P1 * P3 * *
 ** Synopsis: chunkStoreDropSequence(r[P1])
 **
 ** Doltlite-only. Remove the shared AUTOINCREMENT counter for the table
-** name in register P1. Emitted at DROP TABLE so a later CREATE+INSERT
-** of the same name starts fresh from 1, matching Dolt's behavior.
+** name in register P1 on schema P3. Emitted at DROP TABLE so a later
+** CREATE+INSERT of the same name on that schema starts from 1.
 */
 case OP_DoltliteSeqDrop: {
   Mem *pName;
   ChunkStore *pCs;
   pName = &aMem[pOp->p1];
   if( (pName->flags & MEM_Str)==0 ) break;
-  pCs = doltliteGetChunkStore(db);
+  pCs = vdbeDoltliteSeqStore(db, pOp->p3);
   if( !pCs ) break;
   if( !pName->z ) break;
   chunkStoreDropSequence(pCs, (const char*)pName->z);
   break;
 }
 
-/* Opcode: DoltliteSeqRename P1 P2 * * *
+/* Opcode: DoltliteSeqRename P1 P2 P3 * *
 ** Synopsis: chunkStoreRenameSequence(r[P1], r[P2])
 **
 ** Doltlite-only. Rename the shared AUTOINCREMENT counter from r[P1] to
-** r[P2]. Emitted at ALTER TABLE RENAME so inserts under the new name
-** continue from the existing max.
+** r[P2] on schema P3. Emitted at ALTER TABLE RENAME so inserts under
+** the new name continue from the existing max on that schema.
 */
 case OP_DoltliteSeqRename: {
   Mem *pOld;
@@ -4052,7 +4055,7 @@ case OP_DoltliteSeqRename: {
   pNew = &aMem[pOp->p2];
   if( (pOld->flags & MEM_Str)==0 ) break;
   if( (pNew->flags & MEM_Str)==0 ) break;
-  pCs = doltliteGetChunkStore(db);
+  pCs = vdbeDoltliteSeqStore(db, pOp->p3);
   if( !pCs ) break;
   if( !pOld->z || !pNew->z ) break;
   chunkStoreRenameSequence(pCs, (const char*)pOld->z, (const char*)pNew->z);
