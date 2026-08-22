@@ -1231,9 +1231,8 @@ expect_dual_value "generated_vs_plain_ours_generated_value" "$DB" \
   "SELECT GROUP_CONCAT(CONCAT(id, ':', x) ORDER BY id SEPARATOR ',') FROM t;"
 
 echo ""
-echo "--- Index over a renamed column (deliberate divergence) ---"
+echo "--- Index over a renamed column (follows the table, as Dolt) ---"
 
-# Index on a renamed column: DoltLite refuses (used to report corrupt); Dolt keeps the index.
 for dir in ours theirs; do
   DB="$TMPROOT/ixren_$dir.db"; rm -f "$DB"
   if [ "$dir" = ours ]; then
@@ -1253,7 +1252,11 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-Am','main_side');
 SQL
-  expect_merge_divergence "index_over_renamed_column_$dir" "$DB" conflict ok
+  expect_merge_ok "index_over_renamed_column_$dir" "$DB"
+  expect_dual_value "index_over_renamed_column_${dir}_lookup" "$DB" \
+    "1:b1" \
+    "SELECT group_concat(id || ':' || b2, ',') FROM (SELECT id,b2 FROM t WHERE b2='b1' ORDER BY id);" \
+    "SELECT GROUP_CONCAT(CONCAT(id, ':', b2) ORDER BY id SEPARATOR ',') FROM t WHERE b2='b1';"
 done
 
 echo ""

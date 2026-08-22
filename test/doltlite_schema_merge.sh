@@ -1430,15 +1430,14 @@ run_test "merge_dual_rename_quoted_values" \
 run_test "merge_dual_rename_quoted_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
-# Index added over a column the other side renamed: refuse (Dolt retargets; we cannot).
+# Index added over a column the other side renamed: the dependent follows
+# its table, so the index is retargeted to the new name, as Dolt does.
 for dir in ours theirs; do
   DB=/tmp/test_merge_ix_over_rename_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
     MAIN="CREATE INDEX ix ON t(b);"; FEAT="ALTER TABLE t RENAME COLUMN b TO b2;"
-    WANTCOLS="k,a,b"
   else
     MAIN="ALTER TABLE t RENAME COLUMN b TO b2;"; FEAT="CREATE INDEX ix ON t(b);"
-    WANTCOLS="k,a,b2"
   fi
   cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1452,21 +1451,21 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-A','-m','main side');
 EOF
-  run_test_match "merge_index_over_renamed_column_${dir}_refused" \
-    "SELECT dolt_merge('feat');" \
-    "cannot merge: index 'ix' covers column 'b' of table 't'" "$DB"
-  run_test "merge_index_over_renamed_column_${dir}_schema_intact" \
-    "SELECT group_concat(name) FROM pragma_table_info('t');" "$WANTCOLS" "$DB"
-  run_test "merge_index_over_renamed_column_${dir}_rows_intact" \
-    "SELECT count(*) FROM t;" "2" "$DB"
+  run_test_match "merge_index_over_renamed_column_${dir}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_retargeted" \
+    "SELECT sql FROM sqlite_master WHERE type='index';" \
+    "CREATE INDEX ix ON t(b2)" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_schema" \
+    "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a,b2" "$DB"
+  run_test "merge_index_over_renamed_column_${dir}_lookup" \
+    "SELECT count(*) FROM t WHERE b2='b1';" "1" "$DB"
   run_test "merge_index_over_renamed_column_${dir}_integrity" \
     "PRAGMA integrity_check;" "ok" "$DB"
-  run_test "merge_index_over_renamed_column_${dir}_clean_status" \
-    "SELECT count(*) FROM dolt_status;" "0" "$DB"
   rm -f "$DB"
 done
 
-# Unique index: the same refusal; dropping it silently would drop the constraint.
+# Unique index: retargeted the same way, and the constraint still enforces.
 DB=/tmp/test_merge_ux_over_rename_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1480,8 +1479,13 @@ SELECT dolt_checkout('main');
 CREATE UNIQUE INDEX ux ON t(b);
 SELECT dolt_commit('-A','-m','main indexes');
 EOF
-run_test_match "merge_unique_index_over_renamed_column_refused" \
-  "SELECT dolt_merge('feat');" "cannot merge: index 'ux' covers column 'b'" "$DB"
+run_test_match "merge_unique_index_over_renamed_column_merges" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_unique_index_over_renamed_column_retargeted" \
+  "SELECT sql FROM sqlite_master WHERE type='index';" \
+  "CREATE UNIQUE INDEX ux ON t(b2)" "$DB"
+run_test_match "merge_unique_index_over_renamed_column_enforces" \
+  "INSERT INTO t VALUES(2,'x','b1');" "UNIQUE constraint failed" "$DB"
 rm -f "$DB"
 
 # Index over an un-renamed column still merges; one over a dropped column drops with it.
@@ -1794,14 +1798,18 @@ run_test "pull_duplicate_index_columns_integrity" \
 run_test "pull_duplicate_index_columns_rolled_back" \
   "SELECT group_concat(name) FROM sqlite_master WHERE type='index';" "ix0" "$DB/feat"
 rm -f "$DB" "$REMOTE"
-# Dual rename + index/trigger naming one renamed column: refuse (Dolt retargets; we cannot).
+# Dual rename + index/trigger naming one renamed column: the dependent
+# follows its table through both renames, as Dolt does.
 for dep in idx trig; do
   DB=/tmp/test_merge_dual_rename_${dep}_$$.db; rm -f "$DB"
   if [ "$dep" = idx ]; then
-    DEP="CREATE INDEX ix0 ON t(a);"; WANT="index 'ix0' covers column 'a'"
+    DEP="CREATE INDEX ix0 ON t(a);"
+    WANTQ="SELECT sql FROM sqlite_master WHERE type='index';"
+    WANT="CREATE INDEX ix0 ON t(a2)"
   else
     DEP="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET a=a; END;"
-    WANT="trigger 'tg' covers column 'a'"
+    WANTQ="SELECT sql FROM sqlite_master WHERE type='trigger';"
+    WANT="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET a2=a2; END"
   fi
   cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -1816,12 +1824,17 @@ ALTER TABLE t RENAME COLUMN b TO b2;
 SELECT dolt_commit('-Am','theirs renames another column');
 SELECT dolt_checkout('main');
 EOF
-  run_test_match "merge_dual_rename_over_${dep}_refused" "SELECT dolt_merge('feat');" \
-    "$WANT" "$DB"
+  run_test_match "merge_dual_rename_over_${dep}_merges" "SELECT dolt_merge('feat');" \
+    "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_dual_rename_over_${dep}_follows" "$WANTQ" "$WANT" "$DB"
+  run_test "merge_dual_rename_over_${dep}_cols" \
+    "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a2,b2" "$DB"
+  run_test "merge_dual_rename_over_${dep}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
   rm -f "$DB"
 done
 
-# Same refusal when SQLite quoted the indexed column.
+# The retarget still lands when SQLite quoted the indexed column.
 for q in dquote backtick bracket; do
   DB=/tmp/test_merge_dual_rename_q_${q}_$$.db; rm -f "$DB"
   case "$q" in
@@ -1842,8 +1855,13 @@ ALTER TABLE t RENAME COLUMN b TO b2;
 SELECT dolt_commit('-Am','theirs renames another column');
 SELECT dolt_checkout('main');
 EOF
-  run_test_match "merge_dual_rename_over_quoted_${q}_refused" \
-    "SELECT dolt_merge('feat');" "index 'ix0' covers column 'a'" "$DB"
+  run_test_match "merge_dual_rename_over_quoted_${q}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test_match "merge_dual_rename_over_quoted_${q}_retargeted" \
+    "SELECT sql FROM sqlite_master WHERE type='index';" \
+    "CREATE INDEX ix0 ON t\(.?a2.?\)" "$DB"
+  run_test "merge_dual_rename_over_quoted_${q}_lookup" \
+    "SELECT count(*) FROM t WHERE a2='a1';" "1" "$DB"
   rm -f "$DB"
 done
 
@@ -2085,5 +2103,77 @@ both_add_drop_case "one_each_same_column" \
 both_add_drop_case "two_each_overlapping" \
   "ALTER TABLE t DROP COLUMN c1113; ALTER TABLE t DROP COLUMN c1899;" \
   "ALTER TABLE t DROP COLUMN c2000; ALTER TABLE t DROP COLUMN c1113;" merge
+
+# A view over the renamed column follows its table through a dual rename.
+# The rename mechanically rewrote the view on its own branch; the merge
+# regenerates that rewrite instead of pairing it with the other side's table.
+DB=/tmp/test_merge_view_dual_rename_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE VIEW v0 AS SELECT a FROM t;
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','ours renames the viewed column');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','theirs renames another column');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_view_over_dual_rename_merges" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_view_over_dual_rename_follows" \
+  "SELECT sql FROM sqlite_master WHERE type='view';" \
+  "CREATE VIEW v0 AS SELECT a2 FROM t" "$DB"
+run_test "merge_view_over_dual_rename_readable" "SELECT * FROM v0;" "a1" "$DB"
+rm -f "$DB"
+
+# Rename plus an index on the new name, against a rename of another column:
+# the new index pins the merge baseline to its own side.
+DB=/tmp/test_merge_rename_newname_index_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+CREATE INDEX ixn ON t(a2);
+SELECT dolt_commit('-Am','ours renames and indexes the new name');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','theirs renames another column');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_newname_index_merges" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_newname_index_kept" \
+  "SELECT sql FROM sqlite_master WHERE type='index';" \
+  "CREATE INDEX ixn ON t(a2)" "$DB"
+run_test "merge_rename_newname_index_cols" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "k,a2,b2" "$DB"
+rm -f "$DB"
+
+# The merged database must stay readable in a fresh connection, and the
+# retargeted index must serve lookups there.
+DB=/tmp/test_merge_retarget_reopen_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX ix0 ON t(a);
+INSERT INTO t VALUES(1,'a1','b1');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am','ours renames');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b2;
+SELECT dolt_commit('-Am','theirs renames');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+EOF
+run_test "merge_retarget_reopen_lookup" \
+  "SELECT k||'/'||a2 FROM t WHERE a2='a1';" "1/a1" "$DB"
+run_test "merge_retarget_reopen_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
 
 dltest_finish

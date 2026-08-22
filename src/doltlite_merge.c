@@ -890,14 +890,42 @@ static int rebuildDisjointSchemaRows(
     if( rc!=SQLITE_OK ) return rc;
   }
 
+  /* Every surviving index writes its row from the merge's own arrays. An
+  ** unchanged index used to ride on the serializer's live-schema top-up,
+  ** which resurrects this connection's pre-merge text; when the merge has
+  ** normalized a rename away, that text names a column the merged table
+  ** does not have. Survival is judged by name — a rootpage number can be
+  ** reused by a drop-and-recreate on the other side. */
   for(i=0; i<nOursSchema; i++){
     SchemaEntry *pSe = &aOursSchema[i];
-    if( !pSe->zName || !pSe->zType ) continue;
+    if( !pSe->zName || !pSe->zType || !pSe->zSql ) continue;
     if( strcmp(pSe->zType, "index")!=0 ) continue;
+    if( !pSe->zTblName
+     || !doltliteFindTableByName(aMerged, nMerged, pSe->zTblName) ){
+      continue;
+    }
+    if( findSchemaEntry(aAncSchema, nAncSchema, pSe->zName)
+     && !findSchemaEntry(aTheirsSchema, nTheirsSchema, pSe->zName) ){
+      /* Theirs dropped it. */
+      continue;
+    }
     if( !schemaEntryChangedByName(aAncSchema, nAncSchema,
                                   aOursSchema, nOursSchema,
                                   pSe->zName) ){
-      continue;
+      /* Unchanged here: theirs' loop below writes it if they changed it,
+      ** and a conflicted object keeps its pre-merge projection. */
+      if( hasSchemaConflictObject(aConflictTables, nConflictTables, pSe->zName)
+       || (pSe->zTblName
+           && hasSchemaConflictTable(aConflictTables, nConflictTables,
+                                     pSe->zTblName)) ){
+        continue;
+      }
+      if( findSchemaEntry(aTheirsSchema, nTheirsSchema, pSe->zName)
+       && schemaEntryChangedByName(aAncSchema, nAncSchema,
+                                   aTheirsSchema, nTheirsSchema,
+                                   pSe->zName) ){
+        continue;
+      }
     }
     rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, pSe->iRootpage);
@@ -1280,6 +1308,20 @@ int doltliteMergeCatalogs(
     rc = loadSchemaFromCatalog(db, cs, pCache, ancestor, &aAncSchema, &nAncSchema);
     if( rc==SQLITE_OK ) rc = loadSchemaFromCatalog(db, cs, pCache, ours, &aOursSchema, &nOursSchema);
     if( rc==SQLITE_OK ) rc = loadSchemaFromCatalog(db, cs, pCache, theirs, &aTheirsSchema, &nTheirsSchema);
+    if( rc!=SQLITE_OK ) goto merge_cleanup;
+  }
+
+  /* Column renames with dependents in play are lifted out of the merge
+  ** here and re-applied as post-load schema actions, so every later pass
+  ** sees a world where the rename never happened. Only a branch merge has
+  ** the action plumbing to re-apply them. */
+  if( ppActions && pnActions && bBranchMerge ){
+    rc = mergePreNormalizeRenamedDependents(aAnc, nAnc, aOurs, nOurs,
+                                            aTheirs, nTheirs,
+                                            aAncSchema, nAncSchema,
+                                            aOursSchema, nOursSchema,
+                                            aTheirsSchema, nTheirsSchema,
+                                            ppActions, pnActions);
     if( rc!=SQLITE_OK ) goto merge_cleanup;
   }
 

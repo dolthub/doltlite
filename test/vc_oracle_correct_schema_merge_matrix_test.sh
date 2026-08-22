@@ -13,27 +13,11 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; gaps=0; corrupt=0; differs=0; skipped=0; FAILED_NAMES=""; GAP_NAMES=""; CORRUPT_NAMES=""; DIFFER_NAMES=""; SKIP_NAMES=""
 
 # Refuse while Dolt merges. A pair that starts merging fails here.
+# Dolt keeps a trigger on a renamed-away table name; no loadable SQLite
+# catalog can hold that, so the refusal stands as a documented divergence.
 REFUSE_WHERE_DOLT_MERGES="
-idx_b:ren_b:index over a renamed column is not retargeted (#2333)
-ren_b:idx_b:index over a renamed column is not retargeted (#2333)
-uniq_b:ren_b:unique index over a renamed column is not retargeted (#2333)
-ren_b:uniq_b:unique index over a renamed column is not retargeted (#2333)
-idx_b:ren_b_view:index over a renamed column is not retargeted (#2333)
-ren_b_view:idx_b:index over a renamed column is not retargeted (#2333)
-uniq_b:ren_b_view:index over a renamed column is not retargeted (#2333)
-ren_b_view:uniq_b:index over a renamed column is not retargeted (#2333)
-idx_a:ren_a:index over a renamed column is not retargeted (#2333)
-ren_a:idx_a:index over a renamed column is not retargeted (#2333)
-ren_b_view:ren_a:dual rename with a dependent view naming the renamed column (#2333)
 trig:ren_tbl:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2333)
 ren_tbl:trig:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2333)
-bidx:ren_a:ren_b:dual rename with a pre-existing index on the renamed column (#2333)
-bview:ren_a:ren_b:dual rename with a pre-existing view on the renamed column (#2333)
-bview:ren_a:idx_a:rename under a pre-existing view while the other side indexes it (#2333)
-bview:idx_a:ren_a:rename under a pre-existing view while the other side indexes it (#2333)
-btrig:ren_a:ren_b:dual rename with a pre-existing trigger on the renamed column (#2333)
-btrig:ren_a:idx_a:rename under a pre-existing trigger while the other side indexes it (#2333)
-btrig:idx_a:ren_a:rename under a pre-existing trigger while the other side indexes it (#2333)
 "
 
 # Merge while Dolt refuses: a bug to fix by refusing, printed as a gap.
