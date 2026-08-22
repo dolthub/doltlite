@@ -327,11 +327,13 @@ static int doltliteBuildIndexEntryWithExpr(
   int nOut = 0;
   int nAlloc;
   int iPKeyUsed = 0;
+  int hasRowid;
   int storePayload = 0;
   int i, rc;
 
   doltliteParseRecord(pRec, nRec, &info);
   if( info.nField==0 ) return SQLITE_CORRUPT;
+  hasRowid = pIdx && pIdx->pTable && HasRowid(pIdx->pTable);
 
   nAlloc = nIdxCol + 1;
   aMem = sqlite3_malloc(nAlloc * (int)sizeof(DoltliteSerialValue));
@@ -368,7 +370,7 @@ static int doltliteBuildIndexEntryWithExpr(
       nOut++;
     }
   }
-  if( iPKey>=0 && !iPKeyUsed ){
+  if( hasRowid && !iPKeyUsed ){
     aMem[nOut].eType = SQLITE_INTEGER;
     aMem[nOut].i = intKey;
     nOut++;
@@ -388,7 +390,7 @@ static int doltliteBuildIndexEntryWithExpr(
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
   rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
                                     ppSortKey, pnSortKey);
-  if( rc==SQLITE_OK && iPKey<0 && pTreeKey && nTreeKey>0 ){
+  if( rc==SQLITE_OK && !hasRowid && pTreeKey && nTreeKey>0 ){
     u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
     if( !pCombined ){
       sqlite3_free(*ppSortKey);
@@ -451,7 +453,8 @@ static int doltliteBuildIndexEntry(
   if( pnIdxRec ) *pnIdxRec = 0;
   if( pStorePayload ) *pStorePayload = 0;
 
-  if( indexColumnIsExpr(aiColumn, nIdxCol) ){
+  if( indexColumnIsExpr(aiColumn, nIdxCol)
+   || (iPKey<0 && pIdx && pIdx->pTable && HasRowid(pIdx->pTable)) ){
     return doltliteBuildIndexEntryWithExpr(
         db, pIdx, pRec, nRec, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
         pTreeKey, nTreeKey, ppSortKey, pnSortKey, ppIdxRec, pnIdxRec,
@@ -564,7 +567,8 @@ static int doltliteBuildIndexEntry(
   rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
                                     ppSortKey, pnSortKey);
   /* WITHOUT ROWID secondary indexes suffix the table-tree key. */
-  if( rc==SQLITE_OK && iPKey<0 && pTreeKey && nTreeKey>0 ){
+  if( rc==SQLITE_OK && pIdx && pIdx->pTable
+   && !HasRowid(pIdx->pTable) && pTreeKey && nTreeKey>0 ){
     u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
     if( !pCombined ){
       sqlite3_free(*ppSortKey);
