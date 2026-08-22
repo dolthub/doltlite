@@ -453,19 +453,16 @@ int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
         }
         freeColumns(aAncCols, nAncCols);
       }
+      /* Dropped, not renamed: the trigger follows its table out of the
+      ** merge. MySQL drops triggers with their table; Dolt keeps an
+      ** orphan no loadable catalog can hold (dolthub/dolt#11588). */
+      if( !bRenamed ) continue;
       if( c->pzErrMsg ){
         sqlite3_free(*c->pzErrMsg);
-        if( bRenamed ){
-          *c->pzErrMsg = sqlite3_mprintf(
-              "cannot merge: trigger '%s' runs on table '%s', which the other "
-              "branch renamed; drop or recreate the trigger, then merge",
-              aTrig[i].zName, zTable);
-        }else{
-          *c->pzErrMsg = sqlite3_mprintf(
-              "cannot merge: trigger '%s' runs on table '%s', which the other "
-              "branch dropped; drop or recreate the trigger, then merge",
-              aTrig[i].zName, zTable);
-        }
+        *c->pzErrMsg = sqlite3_mprintf(
+            "cannot merge: trigger '%s' runs on table '%s', which the other "
+            "branch renamed; drop or recreate the trigger, then merge",
+            aTrig[i].zName, zTable);
       }
       return SQLITE_ERROR;
     }
@@ -688,6 +685,219 @@ static void mergeSetEntryText(SchemaEntry *pSe, const char *zSql){
   }
 }
 
+/* zSql with every identifier token equal to zOld replaced by zNew, quoting
+** style preserved. Everything outside identifier tokens is untouched. */
+static char *mergeRewriteIdent(
+  const char *zSql,
+  const char *zOld,
+  const char *zNew
+){
+  sqlite3_str *pOut = sqlite3_str_new(0);
+  const char *z = zSql;
+  int nOld = (int)strlen(zOld);
+
+  while( *z ){
+    if( *z=='"' || *z=='`' || *z=='[' ){
+      char cOpen = *z;
+      char cEnd = *z=='[' ? ']' : *z;
+      const char *zTok;
+      int nTok;
+      z++;
+      zTok = z;
+      while( *z && *z!=cEnd ) z++;
+      nTok = (int)(z-zTok);
+      if( *z ) z++;
+      if( nTok==nOld && sqlite3_strnicmp(zTok, zOld, nOld)==0 ){
+        sqlite3_str_appendf(pOut, "%c%s%c", cOpen, zNew, cEnd);
+      }else{
+        sqlite3_str_appendf(pOut, "%c%.*s%c", cOpen, nTok, zTok, cEnd);
+      }
+    }else if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
+      const char *zTok = z;
+      int nTok;
+      while( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ) z++;
+      nTok = (int)(z-zTok);
+      if( nTok==nOld && sqlite3_strnicmp(zTok, zOld, nOld)==0 ){
+        sqlite3_str_appendall(pOut, zNew);
+      }else{
+        sqlite3_str_append(pOut, zTok, nTok);
+      }
+    }else{
+      sqlite3_str_appendchar(pOut, 1, *z);
+      z++;
+    }
+  }
+  return sqlite3_str_finish(pOut);
+}
+
+static int mergeRecordTableRename(
+  SchemaMergeAction **ppActions,
+  int *pnActions,
+  const char *zOld,
+  const char *zNew
+){
+  SchemaMergeAction *aNew;
+  aNew = sqlite3_realloc(*ppActions,
+                         (*pnActions+1)*(int)sizeof(SchemaMergeAction));
+  if( !aNew ) return SQLITE_NOMEM;
+  *ppActions = aNew;
+  memset(&aNew[*pnActions], 0, sizeof(SchemaMergeAction));
+  aNew[*pnActions].zTableName = sqlite3_mprintf("%s", zOld);
+  aNew[*pnActions].zRenameTable = sqlite3_mprintf("%s", zNew);
+  if( !aNew[*pnActions].zTableName || !aNew[*pnActions].zRenameTable ){
+    return SQLITE_NOMEM;
+  }
+  (*pnActions)++;
+  return SQLITE_OK;
+}
+
+/* One side renamed a table the other side put a trigger on. Un-rename the
+** table in that side's arrays and queue ALTER TABLE RENAME TO instead, so
+** the trigger lands on a table the catalog has, and the post-load rename
+** carries it — and every other dependent — to the new name. Dolt instead
+** keeps an orphaned trigger no loadable catalog can hold and that rebinds
+** to any future table with the old name (dolthub/dolt#11588); following
+** the table is a deliberate divergence. */
+static int mergePreNormalizeTableRename(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  SchemaMergeAction **ppActions, int *pnActions
+){
+  int side, t, i, rc = SQLITE_OK;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aSide = side ? aTheirsSchema : aOursSchema;
+    int nSide = side ? nTheirsSchema : nOursSchema;
+    SchemaEntry *aOther = side ? aOursSchema : aTheirsSchema;
+    int nOther = side ? nOursSchema : nTheirsSchema;
+    struct TableEntry *aSideEnt = side ? aTheirs : aOurs;
+    int nSideEnt = side ? nTheirs : nOurs;
+
+    for(t=0; t<nAncSchema; t++){
+      SchemaEntry *pAncT = &aAncSchema[t];
+      SchemaEntry *pNewT = 0;
+      char *azPair[2];
+      int nCand = 0, bTrigger = 0;
+
+      if( !pAncT->zType || strcmp(pAncT->zType, "table")!=0 ) continue;
+      if( !pAncT->zName || !pAncT->zSql ) continue;
+      if( findSchemaEntry(aSide, nSide, pAncT->zName) ) continue;
+      /* The other side must still hold the table under its old name. */
+      if( !findSchemaEntry(aOther, nOther, pAncT->zName) ) continue;
+
+      /* Exactly one new table whose text is the ancestor's under a new
+      ** name is a rename; anything else stays a drop plus a create. */
+      for(i=0; i<nSide; i++){
+        char *azProbe[2];
+        if( !aSide[i].zType || strcmp(aSide[i].zType, "table")!=0 ) continue;
+        if( !aSide[i].zName || !aSide[i].zSql ) continue;
+        if( findSchemaEntry(aAncSchema, nAncSchema, aSide[i].zName) ) continue;
+        azProbe[0] = pAncT->zName;
+        azProbe[1] = aSide[i].zName;
+        if( !mergeTextsEqualModuloRenames(pAncT->zSql, aSide[i].zSql,
+                                          azProbe, 2) ){
+          continue;
+        }
+        pNewT = &aSide[i];
+        nCand++;
+      }
+      if( nCand!=1 || !pNewT ) continue;
+
+      /* Only a trigger the non-renaming side holds on the old name forces
+      ** this; everything else already merges as a drop plus a create. */
+      for(i=0; i<nOther && !bTrigger; i++){
+        if( aOther[i].zType && strcmp(aOther[i].zType, "trigger")==0
+         && aOther[i].zTblName
+         && sqlite3_stricmp(aOther[i].zTblName, pAncT->zName)==0
+         && !findSchemaEntry(aAncSchema, nAncSchema, aOther[i].zName) ){
+          bTrigger = 1;
+        }
+      }
+      if( !bTrigger ) continue;
+
+      azPair[0] = pAncT->zName;
+      azPair[1] = pNewT->zName;
+
+      /* Un-rename the side's dependents first, while the new name still
+      ** identifies them. Ancestor text when the change is mechanical,
+      ** a token rewrite when the dependent was created after the rename. */
+      for(i=0; i<nSide; i++){
+        SchemaEntry *pDep = &aSide[i];
+        SchemaEntry *pDepAnc;
+        if( pDep==pNewT || !pDep->zType || !pDep->zName ) continue;
+        if( strcmp(pDep->zType, "table")==0 ) continue;
+        if( !pDep->zTblName
+         || sqlite3_stricmp(pDep->zTblName, pNewT->zName)!=0 ){
+          /* Views name themselves; catch ones shadow-rewritten to the
+          ** new table name by content. */
+          if( strcmp(pDep->zType, "view")!=0 || !pDep->zSql
+           || !mergeSqlNamesColumn(pDep->zSql, pDep->zType, pNewT->zName) ){
+            continue;
+          }
+        }
+        pDepAnc = findSchemaEntry(aAncSchema, nAncSchema, pDep->zName);
+        if( pDepAnc && pDepAnc->zSql && pDep->zSql
+         && mergeTextsEqualModuloRenames(pDepAnc->zSql, pDep->zSql,
+                                         azPair, 2) ){
+          mergeSetEntryText(pDep, pDepAnc->zSql);
+        }else if( pDep->zSql ){
+          char *z = mergeRewriteIdent(pDep->zSql, pNewT->zName, pAncT->zName);
+          if( !z ) return SQLITE_NOMEM;
+          sqlite3_free(pDep->zSql);
+          pDep->zSql = z;
+        }
+        if( pDep->zTblName
+         && sqlite3_stricmp(pDep->zTblName, pNewT->zName)==0 ){
+          char *z = sqlite3_mprintf("%s", pAncT->zName);
+          if( !z ) return SQLITE_NOMEM;
+          sqlite3_free(pDep->zTblName);
+          pDep->zTblName = z;
+        }
+      }
+
+      /* Queue the replay before renaming the row, while both names are
+      ** still in hand. */
+      rc = mergeRecordTableRename(ppActions, pnActions,
+                                  pAncT->zName, pNewT->zName);
+      if( rc!=SQLITE_OK ) return rc;
+
+      /* The side's catalog entry follows the row back to the old name. */
+      {
+        struct TableEntry *pEnt =
+            doltliteFindTableByName(aSideEnt, nSideEnt, pNewT->zName);
+        struct TableEntry *pEntAnc =
+            doltliteFindTableByName(aAnc, nAnc, pAncT->zName);
+        if( pEnt ){
+          char *z = sqlite3_mprintf("%s", pAncT->zName);
+          if( !z ) return SQLITE_NOMEM;
+          sqlite3_free(pEnt->zName);
+          pEnt->zName = z;
+          if( pEntAnc ) pEnt->schemaHash = pEntAnc->schemaHash;
+        }
+      }
+      {
+        char *z1 = sqlite3_mprintf("%s", pAncT->zName);
+        char *z2 = sqlite3_mprintf("%s", pAncT->zName);
+        if( !z1 || !z2 ){
+          sqlite3_free(z1);
+          sqlite3_free(z2);
+          return SQLITE_NOMEM;
+        }
+        sqlite3_free(pNewT->zName);
+        pNewT->zName = z1;
+        sqlite3_free(pNewT->zTblName);
+        pNewT->zTblName = z2;
+        mergeSetEntryText(pNewT, pAncT->zSql);
+      }
+    }
+  }
+  return rc;
+}
+
 /* A dependent of zTbl surviving into the merge, or a view whose cross-side
 ** texts are the mechanical shadow of these renames. Views carry their own
 ** name in zTblName, so they qualify by shape rather than by parent. */
@@ -732,6 +942,14 @@ int mergePreNormalizeRenamedDependents(
   SchemaMergeAction **ppActions, int *pnActions
 ){
   int t, i, rc = SQLITE_OK;
+
+  rc = mergePreNormalizeTableRename(aAnc, nAnc, aOurs, nOurs,
+                                    aTheirs, nTheirs,
+                                    aAncSchema, nAncSchema,
+                                    aOursSchema, nOursSchema,
+                                    aTheirsSchema, nTheirsSchema,
+                                    ppActions, pnActions);
+  if( rc!=SQLITE_OK ) return rc;
 
   for(t=0; t<nAncSchema; t++){
     SchemaEntry *pAncT = &aAncSchema[t];

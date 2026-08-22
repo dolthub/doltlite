@@ -1556,17 +1556,16 @@ run_test "merge_index_row_unaffected_keeps_both" \
   "ix,ix0" "$DB"
 rm -f "$DB"
 
-# Trigger added beside a table rename: refuse (trigger must resolve at load; Dolt keeps a dangling name).
+# Trigger added beside a table rename: the trigger follows the table to its
+# new name. Dolt keeps a dangling name instead (dolthub/dolt#11588).
 for dir in ours theirs; do
   DB=/tmp/test_merge_trig_ren_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
     MAIN="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
     FEAT="ALTER TABLE t RENAME TO t2;"
-    WANT="table:t,trigger:tg"
   else
     MAIN="ALTER TABLE t RENAME TO t2;"
     FEAT="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
-    WANT="table:t2"
   fi
   cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1580,11 +1579,11 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-Am','main side');
 EOF
-  run_test_match "merge_trigger_over_renamed_table_${dir}_refused" \
-    "SELECT dolt_merge('feat');" \
-    "cannot merge: trigger 'tg' runs on table 't', which the other branch renamed" "$DB"
-  run_test "merge_trigger_over_renamed_table_${dir}_intact" \
-    "SELECT group_concat(type||':'||name) FROM sqlite_master;" "$WANT" "$DB"
+  run_test_match "merge_trigger_over_renamed_table_${dir}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_trigger_over_renamed_table_${dir}_follows" \
+    "SELECT type||':'||name||':'||tbl_name FROM sqlite_master WHERE type='trigger';" \
+    "trigger:tg:t2" "$DB"
   run_test "merge_trigger_over_renamed_table_${dir}_integrity" \
     "PRAGMA integrity_check;" "ok" "$DB"
   rm -f "$DB"
@@ -1629,17 +1628,16 @@ run_test "merge_view_over_renamed_table_objects" \
   "SELECT group_concat(type||':'||name) FROM sqlite_master;" "table:t2,view:v" "$DB"
 rm -f "$DB"
 
-# Drop + unrelated CREATE looks like a rename by name; columns tell them apart -- refuse as dropped.
+# Drop + unrelated CREATE looks like a rename by name; columns tell them
+# apart, so the trigger is dropped with its table rather than followed.
 for dir in ours theirs; do
   DB=/tmp/test_merge_trig_drop_${dir}_$$.db; rm -f "$DB"
   if [ "$dir" = ours ]; then
     MAIN="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
     FEAT="DROP TABLE t; CREATE TABLE u(x INTEGER PRIMARY KEY, y TEXT);"
-    WANT="table:t,trigger:tg"
   else
     MAIN="DROP TABLE t; CREATE TABLE u(x INTEGER PRIMARY KEY, y TEXT);"
     FEAT="CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;"
-    WANT="table:u"
   fi
   cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1653,11 +1651,10 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-Am','main side');
 EOF
-  run_test_match "merge_trigger_over_dropped_table_${dir}_refused" \
-    "SELECT dolt_merge('feat');" \
-    "cannot merge: trigger 'tg' runs on table 't', which the other branch dropped" "$DB"
-  run_test "merge_trigger_over_dropped_table_${dir}_intact" \
-    "SELECT group_concat(type||':'||name) FROM sqlite_master;" "$WANT" "$DB"
+  run_test_match "merge_trigger_over_dropped_table_${dir}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_trigger_over_dropped_table_${dir}_dropped" \
+    "SELECT group_concat(type||':'||name) FROM sqlite_master;" "table:u" "$DB"
   run_test "merge_trigger_over_dropped_table_${dir}_integrity" \
     "PRAGMA integrity_check;" "ok" "$DB"
   rm -f "$DB"
@@ -1676,9 +1673,10 @@ SELECT dolt_checkout('main');
 CREATE TRIGGER tg AFTER INSERT ON t BEGIN UPDATE t SET n=n; END;
 SELECT dolt_commit('-Am','main adds trigger');
 EOF
-run_test_match "merge_trigger_over_dropped_table_no_replacement_refused" \
-  "SELECT dolt_merge('feat');" \
-  "cannot merge: trigger 'tg' runs on table 't', which the other branch dropped" "$DB"
+run_test_match "merge_trigger_over_dropped_table_no_replacement_merges" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_trigger_over_dropped_table_no_replacement_gone" \
+  "SELECT count(*) FROM sqlite_master;" "0" "$DB"
 run_test "merge_trigger_over_dropped_table_no_replacement_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
@@ -2175,5 +2173,94 @@ run_test "merge_retarget_reopen_lookup" \
   "SELECT k||'/'||a2 FROM t WHERE a2='a1';" "1/a1" "$DB"
 run_test "merge_retarget_reopen_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
+
+# Triggers follow their table through a merge, by decree. Dolt keeps an
+# orphaned trigger that errors introspection and rebinds to any future
+# table with the old name (dolthub/dolt#11588); we diverge deliberately.
+
+# One side adds a trigger, the other renames the table: the trigger lands
+# on the renamed table and fires there.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_trig_follows_rename_${dir}_$$.db; rm -f "$DB"
+  TRIG="CREATE TRIGGER tg0 AFTER INSERT ON t BEGIN INSERT INTO audit VALUES(NEW.k,'saw it'); END;"
+  if [ "$dir" = ours ]; then MAIN="$TRIG"; FEAT="ALTER TABLE t RENAME TO t9;"
+  else MAIN="ALTER TABLE t RENAME TO t9;"; FEAT="$TRIG"; fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, n INTEGER);
+CREATE TABLE audit(k INTEGER PRIMARY KEY, note TEXT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_trigger_follows_rename_${dir}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_trigger_follows_rename_${dir}_target" \
+    "SELECT tbl_name FROM sqlite_master WHERE type='trigger';" "t9" "$DB"
+  run_test "merge_trigger_follows_rename_${dir}_fires" \
+    "INSERT INTO t9 VALUES(7,70); SELECT note FROM audit WHERE k=7;" \
+    "saw it" "$DB"
+  run_test "merge_trigger_follows_rename_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# Row edits merge across the rename rather than being lost to drop-plus-add.
+DB=/tmp/test_merge_trig_rename_rows_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+CREATE TRIGGER tg0 AFTER INSERT ON t BEGIN UPDATE t SET n=n WHERE k=NEW.k; END;
+UPDATE t SET n=11 WHERE k=1;
+INSERT INTO t VALUES(2,20);
+SELECT dolt_commit('-Am','main trigger and rows');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME TO t9;
+INSERT INTO t9 VALUES(3,30);
+SELECT dolt_commit('-Am','feat renames and inserts');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_trig_rename_rows_merges" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_trig_rename_rows_data" \
+  "SELECT group_concat(k||':'||n) FROM (SELECT k,n FROM t9 ORDER BY k);" \
+  "1:11,2:20,3:30" "$DB"
+rm -f "$DB"
+
+# One side adds a trigger, the other drops the table: both go, and a new
+# table with the old name inherits nothing.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_trig_drop_${dir}_$$.db; rm -f "$DB"
+  TRIG="CREATE TRIGGER tg0 BEFORE INSERT ON t BEGIN SELECT 1; END;"
+  if [ "$dir" = ours ]; then MAIN="$TRIG"; FEAT="DROP TABLE t;"
+  else MAIN="DROP TABLE t;"; FEAT="$TRIG"; fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_trigger_dropped_with_table_${dir}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_trigger_dropped_with_table_${dir}_gone" \
+    "SELECT count(*) FROM sqlite_master;" "0" "$DB"
+  run_test "merge_trigger_dropped_with_table_${dir}_no_zombie" \
+    "CREATE TABLE t(k INTEGER PRIMARY KEY, n INTEGER);
+     SELECT count(*) FROM sqlite_master WHERE type='trigger';" "0" "$DB"
+  rm -f "$DB"
+done
 
 dltest_finish

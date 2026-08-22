@@ -13,11 +13,11 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; gaps=0; corrupt=0; differs=0; skipped=0; FAILED_NAMES=""; GAP_NAMES=""; CORRUPT_NAMES=""; DIFFER_NAMES=""; SKIP_NAMES=""
 
 # Refuse while Dolt merges. A pair that starts merging fails here.
-# Dolt keeps a trigger on a renamed-away table name; no loadable SQLite
-# catalog can hold that, so the refusal stands as a documented divergence.
+# Triggers follow their table through renames and drops by decree, a
+# deliberate divergence from Dolt, which keeps an orphaned trigger that
+# errors introspection and rebinds by name (dolthub/dolt#11588). Those
+# pairs skip as not-comparable: Dolt cannot read its own result back.
 REFUSE_WHERE_DOLT_MERGES="
-trig:ren_tbl:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2333)
-ren_tbl:trig:Dolt keeps a trigger on the old table name, which no loadable catalog can hold (#2333)
 "
 
 # Merge while Dolt refuses: a bug to fix by refusing, printed as a gap.

@@ -89,6 +89,15 @@ int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c);
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c);
 int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c);
 int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c);
+int rebuildDisjointSchemaRows(
+  sqlite3 *db,
+  struct TableEntry *aMerged, int nMerged,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  MergeConflictTable *aConflictTables, int nConflictTables,
+  SchemaRootpageRemap *aRemap, int nRemap
+);
 int mergePreNormalizeRenamedDependents(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,

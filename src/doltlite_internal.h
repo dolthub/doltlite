@@ -1309,6 +1309,8 @@ struct SchemaMergeAction {
   /* Flat old,new rename pairs the merged layout still needs. */
   char **azRenameColumns;
   int nRenameColumns;
+  /* Rename the whole table to this name, before any column action runs. */
+  char *zRenameTable;
 };
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);
