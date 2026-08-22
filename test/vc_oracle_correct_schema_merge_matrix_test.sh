@@ -24,6 +24,64 @@ REFUSE_WHERE_DOLT_MERGES="
 MERGE_WHERE_DOLT_REFUSES="
 "
 
+# Merge while Dolt conflicts, by decree: a pure table rename is a rename,
+# not a drop plus a create, so the other side's changes compose with it.
+# Dolt cannot tell the two apart (dolthub/dolt#2016-class) and conflicts.
+MERGE_WHERE_DOLT_CONFLICTS_BY_DECREE="
+add_d:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:drop_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:ren_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:ren_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:ren_tbl:drop_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:ren_tbl:ren_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:ren_tbl:ren_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:ren_tbl:rows:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bidx:rows:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:drop_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:idx_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_tbl:drop_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_tbl:idx_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_tbl:ren_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_tbl:ren_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:ren_tbl:rows:a table rename composes with the other side, where Dolt sees a drop and conflicts
+btrig:rows:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:drop_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:idx_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_tbl:drop_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_tbl:idx_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_tbl:ren_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_tbl:ren_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:ren_tbl:rows:a table rename composes with the other side, where Dolt sees a drop and conflicts
+bview:rows:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+drop_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+drop_b_with_index:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+drop_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+idx_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+idx_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ins:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_a:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_b_view:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:add_d:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:drop_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:drop_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:drop_b_with_index:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:idx_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:idx_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:ins:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:ren_a:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:ren_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:ren_b_view:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:rows:a table rename composes with the other side, where Dolt sees a drop and conflicts
+ren_tbl:uniq_b:a table rename composes with the other side, where Dolt sees a drop and conflicts
+rows:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+uniq_b:ren_tbl:a table rename composes with the other side, where Dolt sees a drop and conflicts
+"
+
 # "disk image is malformed" is never an acceptable refusal; listed so rot is visible.
 CORRUPT_TODAY="
 "
@@ -271,6 +329,11 @@ EOF
   fi
 
   if [ "$dl_ok" = 1 ] && [ "$dt_ok" = 0 ]; then
+    reason=$(printf '%s\n' "$MERGE_WHERE_DOLT_CONFLICTS_BY_DECREE" | grep "^$key:" | cut -d: -f3-)
+    if [ -n "$reason" ]; then
+      pass_name "$name (merges by decree: $reason)"
+      return
+    fi
     reason=$(printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep "^$key:" | cut -d: -f3-)
     if [ -n "$reason" ]; then
       gaps=$((gaps+1)); GAP_NAMES="$GAP_NAMES $name"
@@ -284,6 +347,10 @@ EOF
   if [ "$dl_ok" = 0 ] && [ "$dt_ok" = 0 ]; then
     if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$key:"; then
       fail_name "$name (listed as a gap but we no longer merge -- delete the entry)"
+      return
+    fi
+    if printf '%s\n' "$MERGE_WHERE_DOLT_CONFLICTS_BY_DECREE" | grep -q "^$key:"; then
+      fail_name "$name (listed as merging by decree but refuses -- delete the entry)"
       return
     fi
     pass_name "$name (both refuse)"
@@ -306,6 +373,10 @@ EOF
   fi
   if printf '%s\n' "$MERGE_WHERE_DOLT_REFUSES" | grep -q "^$key:"; then
     fail_name "$name (listed as a gap but Dolt merges it too -- delete the entry)"
+    return
+  fi
+  if printf '%s\n' "$MERGE_WHERE_DOLT_CONFLICTS_BY_DECREE" | grep -q "^$key:"; then
+    fail_name "$name (listed as merging by decree but Dolt merges it too -- delete the entry)"
     return
   fi
 

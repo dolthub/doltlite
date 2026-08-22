@@ -1589,7 +1589,8 @@ EOF
   rm -f "$DB"
 done
 
-# Ancestor trigger rides the rename; this conflict is table-rename vs row-change, not a trigger refusal.
+# A table rename composes with the other side's row change: the rows land
+# in the renamed table and the ancestor trigger rides along.
 DB=/tmp/test_merge_trig_ancestor_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
@@ -1604,8 +1605,12 @@ SELECT dolt_checkout('main');
 ALTER TABLE t RENAME TO t2;
 SELECT dolt_commit('-Am','main renames');
 EOF
-run_test_match "merge_ancestor_trigger_not_refused_for_rename" \
-  "SELECT dolt_merge('feat');" "conflicts detected" "$DB"
+run_test_match "merge_ancestor_trigger_rename_composes" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_ancestor_trigger_rename_rows" \
+  "SELECT group_concat(k) FROM (SELECT k FROM t2 ORDER BY k);" "1,7" "$DB"
+run_test "merge_ancestor_trigger_rename_trigger" \
+  "SELECT tbl_name FROM sqlite_master WHERE type='trigger';" "t2" "$DB"
 rm -f "$DB"
 
 # View over a renamed table stays as text; catalog still loads.
@@ -2262,5 +2267,97 @@ EOF
      SELECT count(*) FROM sqlite_master WHERE type='trigger';" "0" "$DB"
   rm -f "$DB"
 done
+
+# A pure table rename is a rename, not a drop plus a create: the other
+# side's row and schema changes land in the renamed table. Dolt conflicts
+# here (it sees a drop), a deliberate divergence.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_ren_tbl_rows_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then MAIN="ALTER TABLE t RENAME TO t9;"; FEAT="UPDATE t SET n=11 WHERE k=1; INSERT INTO t VALUES(2,'b',20);"
+  else MAIN="UPDATE t SET n=11 WHERE k=1; INSERT INTO t VALUES(2,'b',20);"; FEAT="ALTER TABLE t RENAME TO t9;"; fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$FEAT
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_match "merge_table_rename_composes_rows_${dir}_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_table_rename_composes_rows_${dir}_data" \
+    "SELECT group_concat(k||':'||n) FROM (SELECT k,n FROM t9 ORDER BY k);" \
+    "1:11,2:20" "$DB"
+  run_test "merge_table_rename_composes_rows_${dir}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# Rename plus row edit on one side, row insert on the other: full compose.
+DB=/tmp/test_merge_ren_tbl_bothedit_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3,'c',30);
+SELECT dolt_commit('-Am','feat inserts');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO t9;
+UPDATE t9 SET a='x1' WHERE k=1;
+SELECT dolt_commit('-Am','main renames and edits');
+EOF
+run_test_match "merge_table_rename_and_edit_composes" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_table_rename_and_edit_data" \
+  "SELECT group_concat(k||':'||a) FROM (SELECT k,a FROM t9 ORDER BY k);" \
+  "1:x1,3:c" "$DB"
+rm -f "$DB"
+
+# Schema changes compose across the rename too.
+DB=/tmp/test_merge_ren_tbl_addcol_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN x TEXT;
+SELECT dolt_commit('-Am','feat adds column');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO t9;
+SELECT dolt_commit('-Am','main renames');
+EOF
+run_test_match "merge_table_rename_addcol_composes" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_table_rename_addcol_schema" \
+  "SELECT group_concat(name) FROM pragma_table_info('t9');" "k,a,n,x" "$DB"
+rm -f "$DB"
+
+# Renames to two different names stay a drop plus two creates, as before.
+DB=/tmp/test_merge_dual_tbl_rename_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1',10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME TO t8;
+SELECT dolt_commit('-Am','feat renames to t8');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME TO t9;
+SELECT dolt_commit('-Am','main renames to t9');
+EOF
+run_test_match "merge_dual_table_rename_merges" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_dual_table_rename_objects" \
+  "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type='table' ORDER BY name);" \
+  "t8,t9" "$DB"
+rm -f "$DB"
 
 dltest_finish
