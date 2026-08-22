@@ -2017,4 +2017,59 @@ run_test_match "merge_one_side_drop_and_add_merges" \
   "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
 rm -f "$DB"
 
+# Dolt decides this pair on how many columns each side dropped, not on which
+# ones or where the added column landed: same count merges, differing count is
+# a schema conflict. Each expectation below was read off Dolt 2.2.2.
+both_add_drop_case() {
+  DB=/tmp/test_merge_bothadd_$1_$$.db; rm -f "$DB"
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, c1113 TEXT, c1899 TEXT, c2000 TEXT);
+INSERT INTO t VALUES(1,'p','x','y','z');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+$3
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+$2
+ALTER TABLE t ADD COLUMN c1699 TEXT;
+SELECT dolt_commit('-Am','main side');
+EOF
+  if [ "$4" = refuse ]; then
+    run_test_match "merge_bothadd_$1_refused" "SELECT dolt_merge('feat');" \
+      "cannot merge: conflicts detected" "$DB"
+  else
+    run_test_match "merge_bothadd_$1_merges" "SELECT dolt_merge('feat');" \
+      "^[0-9a-f]{40}$" "$DB"
+  fi
+  run_test "merge_bothadd_$1_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+}
+
+# Unequal drop counts: a conflict wherever the dropped column sat.
+both_add_drop_case "theirs_drops_middle" \
+  "" "ALTER TABLE t DROP COLUMN c1113;" refuse
+both_add_drop_case "ours_drops_middle" \
+  "ALTER TABLE t DROP COLUMN c1113;" "" refuse
+both_add_drop_case "ours_drops_last" \
+  "ALTER TABLE t DROP COLUMN c2000;" "" refuse
+both_add_drop_case "theirs_drops_two" \
+  "" "ALTER TABLE t DROP COLUMN c1113; ALTER TABLE t DROP COLUMN c1899;" refuse
+both_add_drop_case "one_versus_two_overlapping" \
+  "ALTER TABLE t DROP COLUMN c1113;" \
+  "ALTER TABLE t DROP COLUMN c1113; ALTER TABLE t DROP COLUMN c1899;" refuse
+both_add_drop_case "one_versus_two_disjoint" \
+  "ALTER TABLE t DROP COLUMN c1113;" \
+  "ALTER TABLE t DROP COLUMN c1899; ALTER TABLE t DROP COLUMN c2000;" refuse
+
+# Equal drop counts merge, even when the sides dropped different columns.
+both_add_drop_case "one_each_disjoint" \
+  "ALTER TABLE t DROP COLUMN c1899;" "ALTER TABLE t DROP COLUMN c1113;" merge
+both_add_drop_case "one_each_same_column" \
+  "ALTER TABLE t DROP COLUMN c1113;" "ALTER TABLE t DROP COLUMN c1113;" merge
+both_add_drop_case "two_each_overlapping" \
+  "ALTER TABLE t DROP COLUMN c1113; ALTER TABLE t DROP COLUMN c1899;" \
+  "ALTER TABLE t DROP COLUMN c2000; ALTER TABLE t DROP COLUMN c1113;" merge
+
 dltest_finish

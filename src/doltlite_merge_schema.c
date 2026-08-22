@@ -633,6 +633,41 @@ static int schemaConstraintModifyDeleteChoice(
   return rc;
 }
 
+/* True when zName sits on this side as a plain addition: absent from the
+** ancestor, and not standing in an ancestor column's slot with its type,
+** which is what a rename leaves behind. */
+static int columnPlainlyAdded(
+  ParsedColumn *aSide, int nSide,
+  ParsedColumn *aAnc, int nAnc,
+  const char *zName
+){
+  int i = parsedColumnIndexByName(aSide, nSide, zName);
+  if( i<0 || findColumn(aAnc, nAnc, zName) ) return 0;
+  if( i<nAnc
+   && !findColumn(aSide, nSide, aAnc[i].zName)
+   && parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ){
+    return 0;
+  }
+  return 1;
+}
+
+/* True when the ancestor column at iAnc left this side by being renamed
+** rather than dropped. The other side decides the ambiguous case: if the
+** replacement's name is a plain addition over there, both sides added it
+** and this side really did drop a column. */
+static int columnRenamedAt(
+  ParsedColumn *aSide, int nSide,
+  ParsedColumn *aAnc, int nAnc,
+  int iAnc,
+  ParsedColumn *aOther, int nOther
+){
+  if( iAnc>=nSide ) return 0;
+  if( findColumn(aAnc, nAnc, aSide[iAnc].zName) ) return 0;
+  if( !parsedColumnDefinitionsMatch(&aSide[iAnc], &aAnc[iAnc]) ) return 0;
+  if( columnPlainlyAdded(aOther, nOther, aAnc, nAnc, aSide[iAnc].zName) ) return 0;
+  return 1;
+}
+
 int trySchemaColumnMerge(
   const char *zAncSql,
   const char *zOursSql,
@@ -882,33 +917,42 @@ int trySchemaColumnMerge(
   }
 
 schema_merge_done:
-  /* Same-position replacement looks like a rename. If the surviving side
-  ** already has the new name, both branches added it independently. */
-  for(i=0; i<nAnc; i++){
-    ParsedColumn *pDropping;
-    ParsedColumn *pSurviving;
-    int nDropping, nSurviving;
-    int inOurs = findColumn(aOurs, nOurs, aAnc[i].zName)!=0;
-    int inTheirs = findColumn(aTheirs, nTheirs, aAnc[i].zName)!=0;
-    if( inOurs==inTheirs ) continue;
-    if( inOurs ){
-      pDropping = aTheirs; nDropping = nTheirs;
-      pSurviving = aOurs; nSurviving = nOurs;
-    }else{
-      pDropping = aOurs; nDropping = nOurs;
-      pSurviving = aTheirs; nSurviving = nTheirs;
-    }
-    if( i<nDropping
-     && !findColumn(aAnc, nAnc, pDropping[i].zName)
-     && parsedColumnDefinitionsMatch(&pDropping[i], &aAnc[i])
-     && findColumn(pSurviving, nSurviving, pDropping[i].zName) ){
-      if( pzErrDetail ){
-        *pzErrDetail = sqlite3_mprintf(
-          "column '%s' dropped on one branch while both branches add column '%s'",
-          aAnc[i].zName, pDropping[i].zName);
+  /* Both branches independently adding a column of the same name is only
+  ** mergeable when they dropped the same number of ancestor columns; Dolt
+  ** reports a schema conflict otherwise, whichever columns went and wherever
+  ** the added one sits. Renames must not be counted as drops, and a rename is
+  ** what a same-position replacement of matching type looks like -- so the
+  ** shared name has to turn up somewhere it cannot be a rename before this
+  ** reads the pair as two independent adds. */
+  {
+    int nDropOurs = 0, nDropTheirs = 0, iAsym = -1;
+    for(i=0; i<nAnc; i++){
+      int inOurs = findColumn(aOurs, nOurs, aAnc[i].zName)!=0;
+      int inTheirs = findColumn(aTheirs, nTheirs, aAnc[i].zName)!=0;
+      if( !inOurs && !columnRenamedAt(aOurs, nOurs, aAnc, nAnc, i, aTheirs, nTheirs) ){
+        nDropOurs++;
       }
-      rc = SQLITE_ERROR;
-      goto schema_merge_cleanup;
+      if( !inTheirs && !columnRenamedAt(aTheirs, nTheirs, aAnc, nAnc, i, aOurs, nOurs) ){
+        nDropTheirs++;
+      }
+      if( inOurs!=inTheirs && iAsym<0 ) iAsym = i;
+    }
+    if( nDropOurs!=nDropTheirs && iAsym>=0 ){
+      for(i=0; i<nOurs; i++){
+        if( findColumn(aAnc, nAnc, aOurs[i].zName) ) continue;
+        if( !findColumn(aTheirs, nTheirs, aOurs[i].zName) ) continue;
+        if( !columnPlainlyAdded(aOurs, nOurs, aAnc, nAnc, aOurs[i].zName)
+         && !columnPlainlyAdded(aTheirs, nTheirs, aAnc, nAnc, aOurs[i].zName) ){
+          continue;
+        }
+        if( pzErrDetail ){
+          *pzErrDetail = sqlite3_mprintf(
+            "column '%s' dropped on one branch while both branches add column '%s'",
+            aAnc[iAsym].zName, aOurs[i].zName);
+        }
+        rc = SQLITE_ERROR;
+        goto schema_merge_cleanup;
+      }
     }
   }
 
