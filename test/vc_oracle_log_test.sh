@@ -375,6 +375,32 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 "
 
+oracle_commit_relations "commit_hash_filter_stays_in_current_history" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT 'C1|' || dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2);
+SELECT 'C2|' || dolt_commit('-Am', 'feat-only');
+SELECT dolt_checkout('main');
+SELECT 'L1|' || count(*) FROM dolt_log WHERE message='feat-only';
+SELECT 'L2|' || count(*) FROM dolt_log WHERE commit_hash=dolt_hashof('feat');
+SELECT 'L3|' || count(*) FROM dolt_log WHERE (commit_hash||'')=dolt_hashof('feat');
+SELECT 'L4|' || count(*) FROM dolt_log WHERE commit_hash=dolt_hashof('main');
+" "
+CREATE TABLE t(id int primary key);
+INSERT INTO t VALUES (1);
+CALL dolt_commit('-Am', 'base');
+CALL dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2);
+CALL dolt_commit('-Am', 'feat-only');
+CALL dolt_checkout('main');
+SELECT concat('L1|', count(*)) FROM dolt_log WHERE message='feat-only';
+SELECT concat('L2|', count(*)) FROM dolt_log WHERE commit_hash=dolt_hashof('feat');
+SELECT concat('L3|', count(*)) FROM dolt_log WHERE concat(commit_hash,'')=dolt_hashof('feat');
+SELECT concat('L4|', count(*)) FROM dolt_log WHERE commit_hash=dolt_hashof('main');
+"
+
 oracle "log_on_branch_created_from_tag_ref" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
