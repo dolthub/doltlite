@@ -276,7 +276,8 @@ static int caBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   for(i=0; i<pInfo->nConstraint; i++){
     const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
     if( !pC->usable ) continue;
-    if( pC->iColumn==0 && pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+    if( pC->iColumn==0 && pC->op==SQLITE_INDEX_CONSTRAINT_EQ
+     && doltliteVtabConstraintIsBinary(pInfo, i) ){
       iCommitEq = i;
       break;
     }
@@ -284,7 +285,7 @@ static int caBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
   if( iCommitEq>=0 ){
     pInfo->aConstraintUsage[iCommitEq].argvIndex = 1;
-    pInfo->aConstraintUsage[iCommitEq].omit = 1;
+    pInfo->aConstraintUsage[iCommitEq].omit = 0;
     pInfo->idxNum = CA_IDX_COMMIT_EQ;
     pInfo->estimatedCost = 10.0;
     pInfo->estimatedRows = 2;

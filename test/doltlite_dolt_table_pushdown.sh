@@ -161,6 +161,73 @@ run_test "nonint_history_filter_correct" \
 
 rm -f "$DB2"
 
+DB_COLLATION=/tmp/test_pushdown_collation_$$.db
+rm -f "$DB_COLLATION"
+echo "CREATE TABLE Foo(id INTEGER PRIMARY KEY, v TEXT);
+CREATE VIEW MyView AS SELECT * FROM Foo;
+INSERT INTO Foo VALUES(1,'a');
+SELECT dolt_commit('-A','-m','Seed');
+SELECT dolt_branch('Feature');
+SELECT dolt_tag('Release');
+SELECT dolt_remote('add','Origin','file:///tmp/origin');
+UPDATE Foo SET v='b' WHERE id=1;" | $DOLTLITE "$DB_COLLATION" > /dev/null 2>&1
+
+run_test_match "binary_name_equality_still_pushes" \
+  "EXPLAIN QUERY PLAN SELECT * FROM dolt_branches WHERE name='main';" \
+  "VIRTUAL TABLE INDEX 1" "$DB_COLLATION"
+run_test_match "nocase_name_equality_scans" \
+  "EXPLAIN QUERY PLAN SELECT * FROM dolt_branches WHERE name COLLATE NOCASE='MAIN';" \
+  "VIRTUAL TABLE INDEX 0" "$DB_COLLATION"
+run_test "branches_nocase_equality" \
+  "SELECT name FROM dolt_branches WHERE name COLLATE NOCASE='MAIN';" \
+  "main" "$DB_COLLATION"
+run_test "branches_rtrim_equality" \
+  "SELECT name FROM dolt_branches WHERE name COLLATE RTRIM='main   ';" \
+  "main" "$DB_COLLATION"
+run_test "tags_nocase_equality" \
+  "SELECT tag_name FROM dolt_tags WHERE tag_name COLLATE NOCASE='release';" \
+  "Release" "$DB_COLLATION"
+run_test "remotes_nocase_equality" \
+  "SELECT name FROM dolt_remotes WHERE name COLLATE NOCASE='origin';" \
+  "Origin" "$DB_COLLATION"
+run_test "status_table_nocase_equality" \
+  "SELECT table_name FROM dolt_status WHERE table_name COLLATE NOCASE='foo';" \
+  "Foo" "$DB_COLLATION"
+
+COLLATION_DIFF_COUNT=$(echo "SELECT count(*) FROM dolt_diff WHERE (table_name||'') COLLATE NOCASE='foo';" | $DOLTLITE "$DB_COLLATION")
+run_test "diff_table_nocase_equality" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name COLLATE NOCASE='foo';" \
+  "$COLLATION_DIFF_COUNT" "$DB_COLLATION"
+run_test "schemas_name_nocase_equality" \
+  "SELECT name FROM dolt_schemas WHERE name COLLATE NOCASE='myview';" \
+  "MyView" "$DB_COLLATION"
+run_test "schemas_type_nocase_equality" \
+  "SELECT type FROM dolt_schemas WHERE type COLLATE NOCASE='VIEW';" \
+  "view" "$DB_COLLATION"
+run_test "patch_type_nocase_equality" \
+  "SELECT count(*) FROM dolt_patch('HEAD','WORKING') WHERE diff_type COLLATE NOCASE='DATA';" \
+  "1" "$DB_COLLATION"
+run_test "log_binary_uppercase_hash_rechecked" \
+  "SELECT count(*) FROM dolt_log WHERE commit_hash=upper((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "0" "$DB_COLLATION"
+run_test "log_nocase_uppercase_hash" \
+  "SELECT count(*) FROM dolt_log WHERE commit_hash COLLATE NOCASE=upper((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "1" "$DB_COLLATION"
+run_test "history_binary_uppercase_hash_rechecked" \
+  "SELECT count(*) FROM dolt_history_Foo WHERE commit_hash=upper((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "0" "$DB_COLLATION"
+run_test "history_nocase_uppercase_hash" \
+  "SELECT count(*) FROM dolt_history_Foo WHERE commit_hash COLLATE NOCASE=upper((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "1" "$DB_COLLATION"
+run_test "ancestors_binary_uppercase_hash_rechecked" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash=upper((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "0" "$DB_COLLATION"
+run_test "ancestors_nocase_uppercase_hash" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash COLLATE NOCASE=upper((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "1" "$DB_COLLATION"
+
+rm -f "$DB_COLLATION"
+
 # sqlite3_value_int64 reads NULL as 0; the pk=0 row is what would match by accident.
 DB3=/tmp/test_pushdown_null_$$.db
 rm -f "$DB3"

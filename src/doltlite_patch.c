@@ -1373,7 +1373,11 @@ static int patchBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( !pInfo->aConstraint[i].usable
      || pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     switch( pInfo->aConstraint[i].iColumn ){
-      case 4: iType=i; break;
+      case 4:
+        if( doltliteVtabConstraintIsBinary(pInfo, i) ){
+          iType=i;
+        }
+        break;
       case 6: iFrom=i; break;
       case 7: iTo=i; break;
       case 8: iTable=i; break;
@@ -1393,7 +1397,7 @@ static int patchBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   }
   if( iType>=0 ){
     pInfo->aConstraintUsage[iType].argvIndex=iArg++;
-    pInfo->aConstraintUsage[iType].omit=1;
+    pInfo->aConstraintUsage[iType].omit=0;
   }
   pInfo->idxNum=(iFrom>=0?1:0)|(iTo>=0?2:0)|(iTable>=0?4:0)|(iType>=0?8:0);
   pInfo->estimatedCost=1000.0;

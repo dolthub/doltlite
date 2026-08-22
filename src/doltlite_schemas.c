@@ -65,6 +65,7 @@ static int schemasBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
     if( !pC->usable ) continue;
     if( pC->op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( !doltliteVtabConstraintIsBinary(pInfo, i) ) continue;
     if( pC->iColumn==0 && iTypeEq<0 ){
       iTypeEq = i;
     }else if( pC->iColumn==1 && iNameEq<0 ){
@@ -74,12 +75,12 @@ static int schemasBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
   if( iTypeEq>=0 ){
     pInfo->aConstraintUsage[iTypeEq].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTypeEq].omit = 1;
+    pInfo->aConstraintUsage[iTypeEq].omit = 0;
     idxNum |= SCHEMAS_IDX_TYPE_EQ;
   }
   if( iNameEq>=0 ){
     pInfo->aConstraintUsage[iNameEq].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iNameEq].omit = 1;
+    pInfo->aConstraintUsage[iNameEq].omit = 0;
     idxNum |= SCHEMAS_IDX_NAME_EQ;
   }
 

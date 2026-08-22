@@ -264,6 +264,7 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
     if( !pC->usable ) continue;
     if( pC->iColumn==iCommitCol
      && pC->op==SQLITE_INDEX_CONSTRAINT_EQ
+     && doltliteVtabConstraintIsBinary(p, i)
      && !sqlite3DoltliteVtabConstraintIsCorrelated(p, i) ){
       iCommitEq = i;
     }else if( pC->iColumn==iStartRefCol
@@ -273,7 +274,7 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   }
   if( iCommitEq>=0 ){
     p->aConstraintUsage[iCommitEq].argvIndex = ++nArg;
-    p->aConstraintUsage[iCommitEq].omit = 1;
+    p->aConstraintUsage[iCommitEq].omit = 0;
     idxNum |= HIST_IDX_COMMIT_EQ;
     p->estimatedCost = (idxNum & HIST_IDX_PK_ANY) ? 10.0 : 50.0;
     p->estimatedRows = (idxNum & HIST_IDX_PK_ANY) ? 1 : 10;

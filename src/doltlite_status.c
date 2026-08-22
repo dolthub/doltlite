@@ -1280,7 +1280,8 @@ static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( pC->op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pC->iColumn==1 ){
       iStagedEq = i;
-    }else if( pC->iColumn==0 ){
+    }else if( pC->iColumn==0
+           && doltliteVtabConstraintIsBinary(pInfo, i) ){
       iTableEq = i;
     }
   }
@@ -1292,7 +1293,7 @@ static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   }
   if( iTableEq>=0 ){
     pInfo->aConstraintUsage[iTableEq].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTableEq].omit = 1;
+    pInfo->aConstraintUsage[iTableEq].omit = 0;
     idxNum |= STATUS_IDX_TABLE_EQ;
   }
 

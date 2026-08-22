@@ -719,6 +719,7 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( !doltliteVtabConstraintIsBinary(pInfo, i) ) continue;
     switch( pInfo->aConstraint[i].iColumn ){
       case DIFF_COL_TABLE_NAME:
         if( iTableName<0 ) iTableName = i;
@@ -731,12 +732,12 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
   if( iCommitHash>=0 ){
     pInfo->aConstraintUsage[iCommitHash].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iCommitHash].omit = 1;
+    pInfo->aConstraintUsage[iCommitHash].omit = 0;
     idxNum |= DIFF_IDX_COMMIT_HASH;
   }
   if( iTableName>=0 ){
     pInfo->aConstraintUsage[iTableName].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTableName].omit = 1;
+    pInfo->aConstraintUsage[iTableName].omit = 0;
     idxNum |= DIFF_IDX_TABLE_NAME;
   }
 

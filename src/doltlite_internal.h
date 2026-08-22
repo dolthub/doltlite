@@ -242,6 +242,14 @@ static SQLITE_INLINE struct TableEntry *doltliteFindTableByName(
   return 0;
 }
 
+static SQLITE_INLINE int doltliteVtabConstraintIsBinary(
+  sqlite3_index_info *pInfo,
+  int iConstraint
+){
+  const char *zColl = sqlite3_vtab_collation(pInfo, iConstraint);
+  return zColl && sqlite3_stricmp(zColl, "BINARY")==0;
+}
+
 static SQLITE_INLINE int doltliteBestIndexRefs(
   sqlite3_index_info *pInfo,
   int iFromCol,
@@ -293,8 +301,9 @@ static SQLITE_INLINE int doltliteBestIndexEq(
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pInfo->aConstraint[i].iColumn!=iColumn ) continue;
+    if( !doltliteVtabConstraintIsBinary(pInfo, i) ) continue;
     pInfo->aConstraintUsage[i].argvIndex = 1;
-    pInfo->aConstraintUsage[i].omit = 1;
+    pInfo->aConstraintUsage[i].omit = 0;
     pInfo->idxNum = 1;
     pInfo->estimatedCost = 1.0;
     pInfo->estimatedRows = 1;
