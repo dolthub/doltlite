@@ -307,9 +307,9 @@ rm -f "$DBG"
 DBG1=/tmp/test_dt_gencol_$$.db; rm -f "$DBG1"
 echo "CREATE TABLE g(a INTEGER PRIMARY KEY, b TEXT, gs TEXT GENERATED ALWAYS AS (b||'S') STORED, gv TEXT AS (b||'V') VIRTUAL, c TEXT);
 INSERT INTO g(a,b,c) VALUES(1,'x','c1');
-SELECT dolt_commit('-Am','base');
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
 UPDATE g SET c='c2';
-SELECT dolt_commit('-am','upd');" | $DOLTLITE "$DBG1" > /dev/null 2>&1
+SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBG1" > /dev/null 2>&1
 
 run_test "gencol_diff_sides" \
   "SELECT to_c || '/' || from_c FROM dolt_diff_g WHERE diff_type='modified';" \
@@ -317,23 +317,23 @@ run_test "gencol_diff_sides" \
 run_test "gencol_live_matches_diff" "SELECT c FROM g;" "c2" "$DBG1"
 run_test "gencol_history" \
   "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_g ORDER BY commit_date);" \
-  "c2,c1" "$DBG1"
+  "c1,c2" "$DBG1"
 run_test "gencol_at" "SELECT c FROM dolt_at_g WHERE commit_ref='HEAD~1';" "c1" "$DBG1"
 
 # Clustered layout puts keys first, generated included.
 DBG2=/tmp/test_dt_gencol_wr_$$.db; rm -f "$DBG2"
 echo "CREATE TABLE w(k TEXT, b TEXT, gs TEXT GENERATED ALWAYS AS (b||'S') STORED, c TEXT, PRIMARY KEY(k)) WITHOUT ROWID;
 INSERT INTO w(k,b,c) VALUES('k1','x','c1');
-SELECT dolt_commit('-Am','base');
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
 UPDATE w SET c='c2';
-SELECT dolt_commit('-am','upd');" | $DOLTLITE "$DBG2" > /dev/null 2>&1
+SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBG2" > /dev/null 2>&1
 
 run_test "gencol_clustered_diff_sides" \
   "SELECT to_c || '/' || from_c FROM dolt_diff_w WHERE diff_type='modified';" \
   "c2/c1" "$DBG2"
 run_test "gencol_clustered_history" \
   "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_w ORDER BY commit_date);" \
-  "c2,c1" "$DBG2"
+  "c1,c2" "$DBG2"
 
 DBG3=/tmp/test_dt_gencol_nlpk_$$.db; rm -f "$DBG3"
 echo "CREATE TABLE z(a TEXT, k TEXT PRIMARY KEY, gs TEXT GENERATED ALWAYS AS (a||'S') STORED, c TEXT) WITHOUT ROWID;
