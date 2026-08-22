@@ -781,7 +781,7 @@ static int mergePreNormalizeTableRename(
       SchemaEntry *pAncT = &aAncSchema[t];
       SchemaEntry *pNewT = 0;
       char *azPair[2];
-      int nCand = 0, bTrigger = 0;
+      int nCand = 0;
 
       if( !pAncT->zType || strcmp(pAncT->zType, "table")!=0 ) continue;
       if( !pAncT->zName || !pAncT->zSql ) continue;
@@ -807,17 +807,28 @@ static int mergePreNormalizeTableRename(
       }
       if( nCand!=1 || !pNewT ) continue;
 
-      /* Only a trigger the non-renaming side holds on the old name forces
-      ** this; everything else already merges as a drop plus a create. */
-      for(i=0; i<nOther && !bTrigger; i++){
-        if( aOther[i].zType && strcmp(aOther[i].zType, "trigger")==0
-         && aOther[i].zTblName
-         && sqlite3_stricmp(aOther[i].zTblName, pAncT->zName)==0
-         && !findSchemaEntry(aAncSchema, nAncSchema, aOther[i].zName) ){
-          bTrigger = 1;
+      /* The pairing must be bijective. If the new table's text also matches
+      ** another ancestor table this side no longer has, tables with equal
+      ** column lists make the rename ambiguous — a dropped table could be
+      ** claimed by an unrelated rename — so it stays a drop plus a create. */
+      {
+        int bAmbiguous = 0;
+        for(i=0; i<nAncSchema && !bAmbiguous; i++){
+          char *azProbe[2];
+          SchemaEntry *pOtherAnc = &aAncSchema[i];
+          if( pOtherAnc==pAncT ) continue;
+          if( !pOtherAnc->zType || strcmp(pOtherAnc->zType, "table")!=0 ) continue;
+          if( !pOtherAnc->zName || !pOtherAnc->zSql ) continue;
+          if( findSchemaEntry(aSide, nSide, pOtherAnc->zName) ) continue;
+          azProbe[0] = pOtherAnc->zName;
+          azProbe[1] = pNewT->zName;
+          if( mergeTextsEqualModuloRenames(pOtherAnc->zSql, pNewT->zSql,
+                                           azProbe, 2) ){
+            bAmbiguous = 1;
+          }
         }
+        if( bAmbiguous ) continue;
       }
-      if( !bTrigger ) continue;
 
       azPair[0] = pAncT->zName;
       azPair[1] = pNewT->zName;
