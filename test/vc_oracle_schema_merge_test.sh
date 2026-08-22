@@ -1370,6 +1370,87 @@ expect_dual_value "their_drop_with_rows_on_both_sides_values" "$DB" \
   "SELECT GROUP_CONCAT(CONCAT(id, ':', b) ORDER BY id SEPARATOR ',') FROM t;"
 
 echo ""
+echo "--- Keyless tables ---"
+
+DB="$TMPROOT/keyless_rows.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "keyless_rows"
+CREATE TABLE t(a INTEGER, b VARCHAR(64), c INTEGER);
+INSERT INTO t VALUES(1,'needle',2);
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET c=3;
+SELECT dolt_commit('-Am','feat_update');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5,'other',1);
+SELECT dolt_commit('-Am','main_insert');
+SQL
+expect_merge_ok "keyless_diverged_rows" "$DB"
+expect_dual_value "keyless_diverged_rows_count" "$DB" "2" \
+  "SELECT count(*) FROM t;" "SELECT count(*) FROM t;"
+expect_dual_value "keyless_diverged_rows_index" "$DB" "1" \
+  "SELECT count(*) FROM t INDEXED BY idx_b WHERE b='needle';" \
+  "SELECT count(*) FROM t FORCE INDEX (idx_b) WHERE b='needle';"
+expect_dual_value "keyless_diverged_rows_values" "$DB" \
+  "1:needle:3,5:other:1" \
+  "SELECT group_concat(a || ':' || b || ':' || c, ',') FROM (SELECT a,b,c FROM t NOT INDEXED ORDER BY a);" \
+  "SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', c) ORDER BY a SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/keyless_schema.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "keyless_schema"
+CREATE TABLE t(a INTEGER, b VARCHAR(64), c INTEGER);
+INSERT INTO t VALUES(1,'needle',2);
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN c TO renamed_c;
+UPDATE t SET renamed_c=3;
+SELECT dolt_commit('-Am','feat_rename_update');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5,'other',1);
+SELECT dolt_commit('-Am','main_insert');
+SQL
+expect_merge_ok "keyless_schema_merge" "$DB"
+expect_dual_value "keyless_schema_merge_columns" "$DB" \
+  "a,b,renamed_c" \
+  "SELECT group_concat(name, ',') FROM pragma_table_info('t');" \
+  "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ',') FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
+expect_dual_value "keyless_schema_merge_count" "$DB" "2" \
+  "SELECT count(*) FROM t;" "SELECT count(*) FROM t;"
+expect_dual_value "keyless_schema_merge_index" "$DB" "1" \
+  "SELECT count(*) FROM t INDEXED BY idx_b WHERE b='needle';" \
+  "SELECT count(*) FROM t FORCE INDEX (idx_b) WHERE b='needle';"
+expect_dual_value "keyless_schema_merge_values" "$DB" \
+  "1:needle:3,5:other:1" \
+  "SELECT group_concat(a || ':' || b || ':' || renamed_c, ',') FROM (SELECT a,b,renamed_c FROM t NOT INDEXED ORDER BY a);" \
+  "SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', renamed_c) ORDER BY a SEPARATOR ',') FROM t;"
+
+DB="$TMPROOT/keyless_pk_control.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "keyless_pk_control"
+CREATE TABLE t(a INTEGER, b VARCHAR(64), c INTEGER, PRIMARY KEY(a,b));
+INSERT INTO t VALUES(1,'needle',2);
+CREATE INDEX idx_c ON t(c);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET c=3;
+SELECT dolt_commit('-Am','feat_update');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5,'other',1);
+SELECT dolt_commit('-Am','main_insert');
+SQL
+expect_merge_ok "keyless_declared_pk_control" "$DB"
+expect_dual_value "keyless_declared_pk_control_index" "$DB" "1" \
+  "SELECT count(*) FROM t INDEXED BY idx_c WHERE c=3;" \
+  "SELECT count(*) FROM t FORCE INDEX (idx_c) WHERE c=3;"
+expect_dual_value "keyless_declared_pk_control_values" "$DB" \
+  "1:needle:3,5:other:1" \
+  "SELECT group_concat(a || ':' || b || ':' || c, ',') FROM (SELECT a,b,c FROM t ORDER BY a);" \
+  "SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', c) ORDER BY a SEPARATOR ',') FROM t;"
+
+echo ""
 echo "--- Primary key changes ---"
 
 DB="$TMPROOT/pk1.db"; rm -f "$DB"
