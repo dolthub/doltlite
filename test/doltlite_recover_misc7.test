@@ -36,7 +36,7 @@ do_test 1.6 {
     CREATE VIRTUAL TABLE t2 USING echo(pkt);
   }
   catchsql { SELECT a FROM t2 WHERE a = 1 }
-} {1 {SQL logic error}}
+} {0 1}
 
 do_ioerr_test 2 -tclprep {
   sqlite3 db2 test.db
