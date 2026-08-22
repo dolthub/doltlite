@@ -444,3 +444,10 @@ if [ "$fail" -ne 0 ]; then
   echo "failed:$FAILED_NAMES"
   exit 1
 fi
+# A run that compared nothing validated nothing. With no passes, every pair
+# skipped or gapped — a missing or broken reference binary looks exactly like
+# this — and a green exit here would silently disable the whole oracle.
+if [ "$pass" -eq 0 ]; then
+  echo "no pair produced a comparison: the reference engine is unusable"
+  exit 1
+fi
