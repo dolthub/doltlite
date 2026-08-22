@@ -1,0 +1,76 @@
+# The nightlies are silent when green and cut issues when they fail — but a
+# run that is cancelled whole, or never scheduled at all, produces nothing.
+# GitHub cancels every job in a cancelled run, per-run watchdogs included, so
+# absence cannot be detected from inside the run. This weekly job looks at
+# the record from outside: each of the last seven nights must show a
+# scheduled run that reached a conclusion (success, or failure — failures
+# report themselves) for every nightly workflow, and each workflow must
+# still be active (a repo without pushes for 60 days gets its schedules
+# disabled by GitHub). Silent when the record is complete.
+name: Nightly Heartbeat
+
+on:
+  schedule:
+    - cron: '30 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Audit the last seven nights
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        BODY="$RUNNER_TEMP/heartbeat-body.md"
+        : > "$BODY"
+        SINCE=$(date -u -d '8 days ago' +%Y-%m-%d)
+        for wf in nightly-fuzz nightly-stress nightly-scale nightly-performance; do
+          state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml" --jq .state)
+          if [ "$state" != "active" ]; then
+            echo "- \`$wf\` is **$state** — its schedule is not running at all." >> "$BODY"
+            continue
+          fi
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml/runs?event=schedule&created=>=${SINCE}&per_page=50" \
+                 --jq '[.workflow_runs[] | {day: (.run_started_at[0:10]), conclusion}]')
+          for i in 1 2 3 4 5 6 7; do
+            day=$(date -u -d "-$i days" +%Y-%m-%d)
+            day_concls=$(printf '%s' "$runs" | jq -r --arg d "$day" '[.[] | select(.day==$d) | .conclusion // "in_progress"] | join(",")')
+            if [ -z "$day_concls" ]; then
+              echo "- \`$wf\` has **no scheduled run** on $day." >> "$BODY"
+            elif ! printf '%s' "$day_concls" | grep -qE 'success|failure'; then
+              echo "- \`$wf\` on $day never reached a conclusion (got: $day_concls) — likely cancelled, and a cancelled run reports nothing." >> "$BODY"
+            fi
+          done
+        done
+        if [ -s "$BODY" ]; then
+          {
+            echo "The nightly record for the last seven nights has holes. A missing or"
+            echo "cancelled night reports nothing on its own — that is why this check exists."
+            echo ""
+            cat "$BODY"
+          } > "$RUNNER_TEMP/heartbeat-issue.md"
+          echo "gaps=1" >> "$GITHUB_OUTPUT"
+          echo "HEARTBEAT_GAPS=1" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/heartbeat-issue.md"
+        else
+          echo "All four nightlies ran to a conclusion every night. Silent."
+        fi
+
+    - name: Report the gaps
+      if: env.HEARTBEAT_GAPS == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-heartbeat
+        title: "Nightly runs are missing or cancelled"
+        body-file: ${{ runner.temp }}/heartbeat-issue.md
+        token: ${{ secrets.GITHUB_TOKEN }}

@@ -182,3 +182,30 @@ jobs:
       run: |
         echo "::error::nightly scale failure in large_scale_test full mode"
         exit 1
+
+  # A red or cancelled night must never be silent. Specific failures above
+  # cut their own issues; this catches the classes they cannot: a setup or
+  # build step failing before the reporter arms, or a job cancelled while
+  # the run survives. A whole-run cancellation kills this job too, which is
+  # what the weekly nightly-heartbeat exists to catch.
+  watchdog:
+    needs: [build, large-full]
+    if: failure() || cancelled()
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Describe the incident
+      run: |
+        {
+          echo "The scheduled nightly-scale run did not finish green and no step-level reporter covered it."
+          echo ""
+          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+          echo "If a more specific issue (fuzz crash, stress failure) was filed for this night, triage there; this entry exists so no red nightly is silent."
+        } > "$RUNNER_TEMP/watchdog-body.md"
+    - uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-scale-watchdog
+        title: "Nightly scale run did not finish"
+        body-file: ${{ runner.temp }}/watchdog-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
