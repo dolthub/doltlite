@@ -125,7 +125,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   seekable = c->common.rootIntKey
           && (c->idxNum & HIST_IDX_PK_ANY) != 0;
 
-  if( seekable && (c->idxNum & HIST_IDX_PK_EQ) ){
+  if( seekable && (c->idxNum & HIST_IDX_PK_EQ) && c->pkRange.hasPkLo ){
     rc = prollyCursorSeekInt(&c->common.tblCur, c->pkRange.pkLo, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
@@ -183,7 +183,8 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
   int rc;
 
   if( c->common.tblCurOpen ){
-    if( (c->idxNum & HIST_IDX_PK_EQ) && c->common.rootIntKey ){
+    if( (c->idxNum & HIST_IDX_PK_EQ) && c->pkRange.hasPkLo
+     && c->common.rootIntKey ){
       prollyCursorClose(&c->common.tblCur);
       c->common.tblCurOpen = 0;
     }else{

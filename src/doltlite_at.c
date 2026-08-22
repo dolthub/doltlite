@@ -508,7 +508,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   seekable = c->common.rootIntKey
           && (idxNum & AT_IDX_PK_ANY) != 0;
 
-  if( seekable && (idxNum & AT_IDX_PK_EQ) ){
+  if( seekable && (idxNum & AT_IDX_PK_EQ) && c->pkRange.hasPkLo ){
     rc = prollyCursorSeekInt(&c->common.tblCur, c->pkRange.pkLo, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
@@ -575,7 +575,8 @@ static int atNext(sqlite3_vtab_cursor *cur){
     return SQLITE_OK;
   }
   /* EQ probe only positions intkey roots; mismatched shapes must keep stepping. */
-  if( (c->idxNum & AT_IDX_PK_EQ) && c->common.rootIntKey ){
+  if( (c->idxNum & AT_IDX_PK_EQ) && c->pkRange.hasPkLo
+   && c->common.rootIntKey ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;

@@ -285,4 +285,46 @@ run_test "rowid_blame_renders_pk" \
 
 rm -f "$DB5"
 
+DB6=/tmp/test_pushdown_affinity_$$.db
+rm -f "$DB6"
+echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(-5,'negative'),(0,'zero'),(5,'positive');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+
+run_test "history_text_range_matches_integer_affinity" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_history_t WHERE pk<'abc' ORDER BY pk);" \
+  "-5,0,5" "$DB6"
+run_test "blame_text_range_matches_integer_affinity" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_blame_t WHERE pk<'abc' ORDER BY pk);" \
+  "-5,0,5" "$DB6"
+run_test "at_text_range_matches_integer_affinity" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_at_t WHERE commit_ref='HEAD' AND pk<'abc' ORDER BY pk);" \
+  "-5,0,5" "$DB6"
+run_test "history_real_range_preserves_fraction" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_history_t WHERE pk<0.5 ORDER BY pk);" \
+  "-5,0" "$DB6"
+run_test "blame_real_range_preserves_fraction" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_blame_t WHERE pk<0.5 ORDER BY pk);" \
+  "-5,0" "$DB6"
+run_test "at_blob_range_preserves_storage_class" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_at_t WHERE commit_ref='HEAD' AND pk<x'00' ORDER BY pk);" \
+  "-5,0,5" "$DB6"
+run_test "history_mixed_range_ignores_only_unsafe_bound" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_history_t WHERE pk>=0 AND pk<'abc' ORDER BY pk);" \
+  "0,5" "$DB6"
+run_test "history_numeric_text_range_still_matches" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_history_t WHERE pk<'1' ORDER BY pk);" \
+  "-5,0" "$DB6"
+run_test "history_integral_real_equality_matches" \
+  "SELECT group_concat(pk, ',') FROM dolt_history_t WHERE pk=5.0;" \
+  "5" "$DB6"
+run_test "blame_integral_real_equality_matches" \
+  "SELECT group_concat(pk, ',') FROM dolt_blame_t WHERE pk=5.0;" \
+  "5" "$DB6"
+run_test "at_integral_real_equality_matches" \
+  "SELECT group_concat(pk, ',') FROM dolt_at_t WHERE commit_ref='HEAD' AND pk=5.0;" \
+  "5" "$DB6"
+
+rm -f "$DB6"
+
 dltest_finish
