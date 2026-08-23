@@ -13,7 +13,8 @@
 
 typedef struct WorkspaceRow WorkspaceRow;
 struct WorkspaceRow {
-  i64 rowid;
+  i64 id;
+  i64 xRowid;
   int staged;
   u8 diffType;
   u8 flags;
@@ -31,6 +32,7 @@ struct WorkspaceRows {
   WorkspaceRow *a;
   int n;
   int nAlloc;
+  WorkspaceRows *pNext;
 };
 
 typedef struct WorkspaceVtab WorkspaceVtab;
@@ -39,7 +41,8 @@ struct WorkspaceVtab {
   sqlite3 *db;
   char *zTableName;
   DoltliteColInfo cols;
-  WorkspaceRows *pLastRows;
+  WorkspaceRows *pRows;
+  i64 nextRowid;
 };
 
 typedef struct WorkspaceCursor WorkspaceCursor;
@@ -57,6 +60,7 @@ struct WorkspaceCursor {
   /* Invalid side renders with the vtab's declared layout. */
   DoltliteSideCols headSide, stagedSide, workingSide;
   int stagedOnly;
+  int nextId;
   WorkspaceRows *pRows;
 };
 
@@ -83,6 +87,25 @@ static void wsRowsRelease(WorkspaceRows *p){
   if( --p->nRef > 0 ) return;
   wsFreeRows(p->a, p->n);
   sqlite3_free(p);
+}
+
+static void wsRowsPrune(WorkspaceVtab *p){
+  WorkspaceRows **pp = &p->pRows;
+  while( *pp ){
+    WorkspaceRows *pRows = *pp;
+    if( pRows->nRef==1 ){
+      *pp = pRows->pNext;
+      wsRowsRelease(pRows);
+    }else{
+      pp = &pRows->pNext;
+    }
+  }
+}
+
+static void wsRowsRetainForUpdate(WorkspaceVtab *p, WorkspaceRows *pRows){
+  pRows->pNext = p->pRows;
+  p->pRows = pRows;
+  pRows->nRef++;
 }
 
 static char *wsBuildSchema(const DoltliteColInfo *ci){
@@ -113,6 +136,7 @@ static char *wsBuildSchema(const DoltliteColInfo *ci){
 
 static int wsAppendRow(
   WorkspaceCursor *c,
+  int id,
   int staged,
   u8 flags,
   const ProllyDiffChange *pChange
@@ -124,7 +148,8 @@ static int wsAppendRow(
   int nNew;
 
   memset(&row, 0, sizeof(row));
-  row.rowid = pRows->n + 1;
+  row.id = id;
+  row.xRowid = ++pVtab->nextRowid;
   row.staged = staged;
   row.diffType = pChange->type;
   row.flags = flags;
@@ -304,20 +329,12 @@ static int wsOpenNextIter(WorkspaceCursor *c, WorkspaceVtab *pVtab){
   }
   while( c->phase<2 ){
     if( c->phase==0 ){
-      if( c->stagedOnly==0 ){
-        c->phase++;
-        continue;
-      }
       pFromRoot = &c->headRoot;
       pToRoot = &c->stagedRoot;
       fromFlags = c->headFlags;
       toFlags = c->stagedFlags;
       staged = 1;
     }else{
-      if( c->stagedOnly==1 ){
-        c->phase++;
-        continue;
-      }
       pFromRoot = &c->stagedRoot;
       pToRoot = &c->workingRoot;
       fromFlags = c->stagedFlags;
@@ -350,7 +367,11 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
     }
     rc = prollyDiffIterStep(&c->iter, &pChange);
     if( rc==SQLITE_ROW && pChange ){
-      return wsAppendRow(c, c->iterStaged, c->iterFlags, pChange);
+      c->nextId++;
+      if( c->stagedOnly<0 || c->stagedOnly==c->iterStaged ){
+        return wsAppendRow(c, c->nextId, c->iterStaged, c->iterFlags, pChange);
+      }
+      continue;
     }
     if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ) return rc;
     wsCloseIter(c);
@@ -361,7 +382,6 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
 static int wsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   (void)pAux;
-  /* pLastRows is set in xFilter; wsDisconnect drops it. */
   return doltliteVtabConnectUserTable(db, argc, argv, "dolt_workspace_",
                                       sizeof(WorkspaceVtab), wsBuildSchema,
                                       ppVtab, pzErr);
@@ -369,8 +389,11 @@ static int wsConnect(sqlite3 *db, void *pAux, int argc,
 
 static int wsDisconnect(sqlite3_vtab *pBase){
   WorkspaceVtab *p = (WorkspaceVtab*)pBase;
-  wsRowsRelease(p->pLastRows);
-  p->pLastRows = 0;
+  while( p->pRows ){
+    WorkspaceRows *pRows = p->pRows;
+    p->pRows = pRows->pNext;
+    wsRowsRelease(pRows);
+  }
   doltliteFreeColInfo(&p->cols);
   sqlite3_free(p->zTableName);
   sqlite3_free(p);
@@ -434,17 +457,17 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   wsCloseIter(c);
   wsClearSides(c);
   wsRowsRelease(c->pRows);
+  wsRowsPrune(p);
   c->pRows = wsRowsNew();
   if( !c->pRows ) return SQLITE_NOMEM;
-  wsRowsRelease(p->pLastRows);
-  p->pLastRows = c->pRows;
-  c->pRows->nRef++;
+  wsRowsRetainForUpdate(p, c->pRows);
   c->iRow = 0;
   c->eof = 0;
   c->phase = 0;
   c->iterStaged = 0;
   c->iterFlags = 0;
   c->stagedOnly = -1;
+  c->nextId = 0;
   if( idxNum & WS_IDX_STAGED_EQ ){
     if( argc<1 ) return SQLITE_OK;
     eStagedArg = doltliteExactInt64Arg(argv[0], &stagedArg);
@@ -482,7 +505,7 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }
   r = &c->pRows->a[c->iRow];
   if( col==0 ){
-    sqlite3_result_int64(ctx, r->rowid);
+    sqlite3_result_int64(ctx, r->id);
   }else if( col==1 ){
     sqlite3_result_int(ctx, r->staged);
   }else if( col==2 ){
@@ -506,15 +529,25 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 static int wsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *pRowid){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   if( !c->pRows || c->iRow<0 || c->iRow>=c->pRows->n ) return SQLITE_ERROR;
-  *pRowid = c->pRows->a[c->iRow].rowid;
+  *pRowid = c->pRows->a[c->iRow].xRowid;
   return SQLITE_OK;
 }
 
 static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
-  WorkspaceRows *pRows = p->pLastRows;
-  if( pRows && rowid>=1 && rowid<=pRows->n ){
-    WorkspaceRow *r = &pRows->a[rowid - 1];
-    if( r->rowid==rowid ) return r;
+  WorkspaceRows *pRows;
+  for(pRows=p->pRows; pRows; pRows=pRows->pNext){
+    int lo = 0;
+    int hi = pRows->n - 1;
+    while( lo<=hi ){
+      int mid = lo + (hi-lo)/2;
+      if( pRows->a[mid].xRowid<rowid ){
+        lo = mid + 1;
+      }else if( pRows->a[mid].xRowid>rowid ){
+        hi = mid - 1;
+      }else{
+        return &pRows->a[mid];
+      }
+    }
   }
   return 0;
 }

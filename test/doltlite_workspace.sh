@@ -212,6 +212,10 @@ run_test "workspace_stage_one_row" \
   "UPDATE dolt_workspace_t SET staged=1 WHERE id=1;
    SELECT group_concat(id || ':' || staged, ' ') FROM dolt_workspace_t;" \
   "1:1 2:0 3:0" "$MC_DB"
+run_test "workspace_filtered_ids_stable" \
+  "SELECT group_concat(to_pk || ':' || id, ' ')
+     FROM (SELECT id, to_pk FROM dolt_workspace_t WHERE staged=0 ORDER BY to_pk);" \
+  "2:2 3:3" "$MC_DB"
 run_test "workspace_staged_numeric_text_zero" \
   "SELECT group_concat(to_pk || ':' || staged, ' ')
      FROM (SELECT to_pk, staged FROM dolt_workspace_t WHERE staged='0' ORDER BY to_pk);" \
@@ -243,6 +247,20 @@ run_test "workspace_delete_via_filtered_rowid" \
      WHERE id=(SELECT id FROM dolt_workspace_t WHERE staged=0 LIMIT 1);
    SELECT group_concat(id || ':' || staged, ' ') FROM dolt_workspace_t;" \
   "1:1 2:0" "$MC_DB"
+run_test "workspace_unstage_via_opposite_self_subquery" \
+  "UPDATE dolt_workspace_t SET staged=0
+     WHERE to_pk=1
+       AND EXISTS (SELECT 1 FROM dolt_workspace_t WHERE staged=0);
+   SELECT group_concat(to_pk || ':' || staged, ' ')
+     FROM (SELECT to_pk, staged FROM dolt_workspace_t ORDER BY to_pk);" \
+  "1:0 3:0" "$MC_DB"
+run_test "workspace_stage_via_filtered_self_subquery" \
+  "UPDATE dolt_workspace_t SET staged=1 WHERE to_pk=1;
+   UPDATE dolt_workspace_t SET staged=1
+     WHERE to_pk IN (SELECT to_pk FROM dolt_workspace_t WHERE staged=0);
+   SELECT group_concat(to_pk || ':' || staged, ' ')
+     FROM (SELECT to_pk, staged FROM dolt_workspace_t ORDER BY to_pk);" \
+  "1:1 3:1" "$MC_DB"
 
 rm -rf "$MC_DB"
 
