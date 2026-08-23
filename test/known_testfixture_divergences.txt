@@ -2159,6 +2159,7 @@ syscall syscall-8.4.3 class=intentional  # fault-injected syscall error text; ch
 syscall syscall-8.4.4 class=intentional  # fault-injected syscall error text; chunk-store file size
 syscall syscall-8.4.5 class=intentional  # fault-injected syscall error text; chunk-store file size
 vacuum-into vacuum-into-200 class=unsupported issue=2373  # VACUUM INTO ':memory:' refused: a chunk-store copy needs a file
+vacuum-into vacuum-into-300 class=unsupported issue=2373  # expression target resolving to ':memory:' refused like the literal
 vacuum-into vacuum-into-710.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
 vacuum-into vacuum-into-720.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
 vacuum-into vacuum-into-730.2 class=intentional issue=2373  # copy has no pager sync mode to inherit; synchronous reads default
@@ -5695,7 +5696,6 @@ shared3 shared3-2.8 class=unsupported issue=1837
 # ── vacuum ──
 # VACUUM on doltlite format runs the chunk-store GC (dolt_gc) instead of
 # rebuilding page images, so stock page-layout side effects don't apply.
-vacuum vacuum-2.1.1 class=intentional  # prolly VACUUM is GC: open transaction is SQLITE_OK no-op, not stock refuse
 vacuum vacuum-5.1 class=intentional issue=1840  # INSERT NULL into `int primary key` errors: doltlite PK tables enforce NOT NULL where stock's rowid-table quirk allows it
 vacuum vacuum-7.1 class=intentional issue=1840  # PRAGMA freelist_count is 0 — no freelist on a chunk store
 vacuum vacuum-7.6 class=intentional issue=1840  # PRAGMA auto_vacuum reads back 0 after set (accepted as no-op, mode not persisted)

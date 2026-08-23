@@ -575,6 +575,7 @@ static int gcWriteCompactedTo(
   ProllyHashSet *marked,
   const char *zPath,
   int bDeleteExisting,
+  int *pbTargetNonEmpty,
   sqlite3_file **ppFileOut,
   i64 *pFinalSize,
   ChunkIndexEntry **ppNewIndex,
@@ -669,6 +670,23 @@ static int gcWriteCompactedTo(
     if( rc != SQLITE_OK ){
       sqlite3_free(aNewIndex);
       return rc;
+    }
+
+    /* The pre-open emptiness probe is advisory; only the handle we hold is
+    ** authoritative. A writer that filled the target between the probe and
+    ** this open must not be clobbered — refuse and leave their file alone. */
+    if( pbTargetNonEmpty ){
+      i64 szNow = 0;
+      rc = sqlite3OsFileSize(pTmpFile, &szNow);
+      if( rc==SQLITE_OK && szNow>0 ){
+        *pbTargetNonEmpty = 1;
+        rc = SQLITE_ERROR;
+      }
+      if( rc!=SQLITE_OK ){
+        sqlite3OsCloseFree(pTmpFile);
+        sqlite3_free(aNewIndex);
+        return rc;
+      }
     }
 
     w.pFile = pTmpFile;
@@ -776,7 +794,7 @@ static int gcRewriteFile(
   sqlite3_free(zRaw);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcWriteCompactedTo(cs, marked, zTmp, 1, &pTmpFile, &finalSize,
+  rc = gcWriteCompactedTo(cs, marked, zTmp, 1, 0, &pTmpFile, &finalSize,
                           ppNewIndex, pnNewIndex, pnNewData);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zTmp);
@@ -1162,30 +1180,6 @@ int doltliteGcVacuumInto(
     return SQLITE_ERROR;
   }
 
-  {
-    int exists = 0;
-    if( sqlite3OsAccess(chunkFileGetVfs(&cs->file), zOut,
-                        SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
-     && exists ){
-      sqlite3_file *pProbe = 0;
-      i64 sz = 0;
-      char *zProbe = 0;
-      rc = chunkStoreDupFilenameDoubleNul(zOut, &zProbe);
-      if( rc!=SQLITE_OK ) return rc;
-      rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zProbe, &pProbe,
-                               SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, 0);
-      if( rc==SQLITE_OK ){
-        rc = sqlite3OsFileSize(pProbe, &sz);
-        sqlite3OsCloseFree(pProbe);
-      }
-      sqlite3_free(zProbe);
-      if( rc!=SQLITE_OK || sz>0 ){
-        *pzPhase = "output file already exists";
-        return SQLITE_ERROR;
-      }
-    }
-  }
-
   rc = gcLockAndRefresh(db, cs, 1);
   if( rc!=SQLITE_OK ){
     *pzPhase = "failed to acquire lock for vacuum into";
@@ -1214,9 +1208,17 @@ int doltliteGcVacuumInto(
 
   rc = chunkStoreDupFilenameDoubleNul(zOut, &zPath);
   if( rc==SQLITE_OK ){
-    rc = gcWriteCompactedTo(cs, &marked, zPath, 0, &pOutFile, &finalSize,
+    int bTargetNonEmpty = 0;
+    rc = gcWriteCompactedTo(cs, &marked, zPath, 0, &bTargetNonEmpty,
+                            &pOutFile, &finalSize,
                             &aNewIndex, &nNewIndex, &nNewData);
     sqlite3_free(zPath);
+    if( bTargetNonEmpty ){
+      prollyHashSetFree(&marked);
+      chunkStoreUnlock(cs);
+      *pzPhase = "output file already exists";
+      return SQLITE_ERROR;
+    }
   }
   prollyHashSetFree(&marked);
   chunkStoreUnlock(cs);

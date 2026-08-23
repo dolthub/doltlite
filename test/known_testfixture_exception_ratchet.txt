@@ -7,7 +7,7 @@
 # Lowering a number is the point. Raising one is a deliberate act that belongs
 # in a PR description.
 gates 4753
-intentional 3427
-unsupported 1165
+intentional 3426
+unsupported 1166
 harness 11
 engine-gap 150
