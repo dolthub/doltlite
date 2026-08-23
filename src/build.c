@@ -2713,6 +2713,7 @@ void sqlite3EndTable(
   Index *pIdx;              /* An implied index of the table */
 #ifdef DOLTLITE_PROLLY
   int bUserWithoutRowid = 0;
+  int bDoltPkCatalogRow = 0;
 #endif
 
   if( pEnd==0 && pSelect==0 ){
@@ -2809,6 +2810,9 @@ void sqlite3EndTable(
     Index *pPk = sqlite3PrimaryKeyIndex(p);
     if( !(pPk && pPk->nKeyCol==1 && pPk->aiColumn[0]>=0
        && sqlite3StrICmp(p->aCol[pPk->aiColumn[0]].zCnName, "rowid")==0) ){
+#ifdef DOLTLITE_PROLLY
+      bDoltPkCatalogRow = 1;
+#endif
       tabOpts |= TF_WithoutRowid;
     }
   }
@@ -3199,6 +3203,18 @@ void sqlite3EndTable(
       zStmt,
       pParse->u1.cr.regRowid
     );
+#ifdef DOLTLITE_PROLLY
+    if( bDoltPkCatalogRow && (pIdx = sqlite3PrimaryKeyIndex(p))!=0 ){
+      sqlite3NestedParse(pParse,
+        "INSERT INTO %Q." LEGACY_SCHEMA_TABLE
+        " VALUES('index',%Q,%Q,#%d,NULL)",
+        db->aDb[iDb].zDbSName,
+        pIdx->zName,
+        p->zName,
+        pParse->u1.cr.regRoot
+      );
+    }
+#endif
     sqlite3DbFree(db, zStmt);
     sqlite3ChangeCookie(pParse, iDb);
 
@@ -4708,7 +4724,11 @@ void sqlite3CreateIndex(
       assert( sqlite3SchemaMutexHeld(db, 0, pIndex->pSchema) );
       if( pTblName!=0 ){
         pIndex->tnum = db->init.newTnum;
-        if( sqlite3IndexHasDuplicateRootPage(pIndex) ){
+        if( sqlite3IndexHasDuplicateRootPage(pIndex)
+#ifdef DOLTLITE_PROLLY
+         || (HasRowid(pIndex->pTable) && pIndex->tnum==pIndex->pTable->tnum)
+#endif
+        ){
           sqlite3ErrorMsg(pParse, "invalid rootpage");
           pParse->rc = SQLITE_CORRUPT_BKPT;
           goto exit_create_index;

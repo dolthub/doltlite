@@ -36,6 +36,11 @@ struct SdCursor {
   int iRow;
 };
 
+static int sdIsSqliteAutoindex(const SchemaEntry *p){
+  return p && p->zType && strcmp(p->zType, "index")==0
+      && p->zName && strncmp(p->zName, "sqlite_autoindex_", 17)==0;
+}
+
 static void freeSchemaDiffRows(SdCursor *c){
   int i;
   for(i=0; i<c->nRows; i++){
@@ -228,6 +233,36 @@ load_schema_done:
     *ppEntries = 0;
     *pnEntries = 0;
     return rc;
+  }
+  {
+    int iOut = 0;
+    for(i=0; i<nEntries; i++){
+      int j, clustered = 0;
+      if( aEntries[i].zType && strcmp(aEntries[i].zType, "index")==0
+       && aEntries[i].zName && strncmp(aEntries[i].zName, "sqlite_autoindex_", 17)==0
+       && (!aEntries[i].zSql || !aEntries[i].zSql[0]) ){
+        for(j=0; j<nEntries; j++){
+          if( aEntries[j].zType && strcmp(aEntries[j].zType, "table")==0
+           && aEntries[j].zName && aEntries[i].zTblName
+           && strcmp(aEntries[j].zName, aEntries[i].zTblName)==0
+           && aEntries[j].iRootpage==aEntries[i].iRootpage ){
+            clustered = 1;
+            break;
+          }
+        }
+      }
+      if( clustered ){
+        sqlite3_free(aEntries[i].zName);
+        sqlite3_free(aEntries[i].zTblName);
+        sqlite3_free(aEntries[i].zSql);
+        sqlite3_free(aEntries[i].zType);
+        memset(&aEntries[i], 0, sizeof(aEntries[i]));
+        continue;
+      }
+      if( iOut!=i ) aEntries[iOut] = aEntries[i];
+      iOut++;
+    }
+    nEntries = iOut;
   }
   *ppEntries = aEntries;
   *pnEntries = nEntries;
@@ -444,6 +479,7 @@ static int computeSchemaDiff(
     struct TableEntry *toTE;
     int j;
 
+    if( sdIsSqliteAutoindex(&aTo[i]) ) continue;
     fromEntry = sdSchemaIndexFind(&fromSchemaIdx, aTo[i].zName);
     if( fromEntry ) continue;
 
@@ -477,6 +513,7 @@ static int computeSchemaDiff(
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry;
     if( toConsumed && toConsumed[i] ) continue;
+    if( sdIsSqliteAutoindex(&aTo[i]) ) continue;
     fromEntry = sdSchemaIndexFind(&fromSchemaIdx, aTo[i].zName);
 
     if( !fromEntry ){
@@ -496,6 +533,7 @@ static int computeSchemaDiff(
   for(i=0; i<nFrom; i++){
     SchemaEntry *toEntry;
     if( fromConsumed && fromConsumed[i] ) continue;
+    if( sdIsSqliteAutoindex(&aFrom[i]) ) continue;
     toEntry = sdSchemaIndexFind(&toSchemaIdx, aFrom[i].zName);
     if( !toEntry ){
 

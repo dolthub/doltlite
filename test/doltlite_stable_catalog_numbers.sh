@@ -45,7 +45,7 @@ EOF
 )
 REOPEN=$("$DOLTLITE" "$DB" ".mode list" "$MASTER_Q" 2>/dev/null)
 
-check "post_nonempty" "6" "$(printf '%s\n' "$POST" | grep -c '|')"
+check "post_nonempty" "7" "$(printf '%s\n' "$POST" | grep -c '|')"
 check "committed_matches_post" "$POST" "$(printf '%s\n' "$COMMITTED" | grep '|')"
 check "reopen_matches_post" "$POST" "$REOPEN"
 

@@ -18,6 +18,50 @@ static Pgno remapSchemaRootpage(
   return iRootpage;
 }
 
+static int tableSqlNeedsClusteredPkAutoindex(const char *zSql){
+  const char *z;
+  if( !zSql ) return 0;
+  for(z=zSql; *z; z++){
+    if( sqlite3_strnicmp(z, "INTEGER PRIMARY KEY", 19)==0 ) return 0;
+  }
+  for(z=zSql; *z; z++){
+    if( sqlite3_strnicmp(z, "PRIMARY KEY", 11)==0 ) return 1;
+  }
+  return 0;
+}
+
+static int schemaHasName(SchemaEntry *a, int n, const char *zName){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<n; i++){
+    if( a[i].zName && strcmp(a[i].zName, zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+/* UNIQUE sqlite_autoindex_<table>_1 is a physical btree. Clustered PK
+** autoindexes are catalog-only and must not reuse that name. */
+static char *mergedClusteredPkAutoindexName(
+  const char *zTable,
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs
+){
+  int n = 1;
+  for(;;){
+    char *z = sqlite3_mprintf("sqlite_autoindex_%s_%d", zTable, n);
+    if( !z ) return 0;
+    if( !schemaHasName(aAnc, nAnc, z)
+     && !schemaHasName(aOurs, nOurs, z)
+     && !schemaHasName(aTheirs, nTheirs, z) ){
+      return z;
+    }
+    sqlite3_free(z);
+    n++;
+    if( n>1000 ) return 0;
+  }
+}
+
 static u8 *mergeBuildSchemaCatalogRecord(
   const char *zType,
   const char *zName,
@@ -103,6 +147,7 @@ static int appendMergedHiddenIndexRow(
   ProllyHash *pRoot,
   u8 flags,
   i64 *piNextRowid,
+  struct TableEntry *aMerged, int nMerged,
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
@@ -122,6 +167,10 @@ static int appendMergedHiddenIndexRow(
   if( !pSe || !pSe->zType || !pSe->zName ) return SQLITE_OK;
   if( strcmp(pSe->zType, "index")!=0 ) return SQLITE_OK;
   if( pSe->zSql ) return SQLITE_OK;
+  if( !pSe->zTblName
+   || !doltliteFindTableByName(aMerged, nMerged, pSe->zTblName) ){
+    return SQLITE_OK;
+  }
 
   iRootpage = pSe->iRootpage;
   if( pSe>=aTheirsSchema && pSe<aTheirsSchema+nTheirsSchema ){
@@ -212,6 +261,23 @@ int rebuildDisjointSchemaRows(
     rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, aMerged[i].iTable);
     if( rc!=SQLITE_OK ) return rc;
+    if( pSe && pSe->zType && strcmp(pSe->zType, "table")==0
+     && pSe->zSql && tableSqlNeedsClusteredPkAutoindex(pSe->zSql) ){
+      SchemaEntry autoIdx;
+      char *zAuto = mergedClusteredPkAutoindexName(
+          zName, aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+          aTheirsSchema, nTheirsSchema);
+      if( !zAuto ) return SQLITE_NOMEM;
+      memset(&autoIdx, 0, sizeof(autoIdx));
+      autoIdx.zType = "index";
+      autoIdx.zName = zAuto;
+      autoIdx.zTblName = (char*)zName;
+      autoIdx.zSql = 0;
+      rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
+                                           &autoIdx, aMerged[i].iTable);
+      sqlite3_free(zAuto);
+      if( rc!=SQLITE_OK ) return rc;
+    }
   }
 
   /* Every surviving index writes its row from the merge's own arrays. An
@@ -302,6 +368,7 @@ int rebuildDisjointSchemaRows(
 
   for(i=0; i<nAncSchema; i++){
     rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
+                                    aMerged, nMerged,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
                                     aTheirsSchema, nTheirsSchema,
@@ -313,6 +380,7 @@ int rebuildDisjointSchemaRows(
   for(i=0; i<nOursSchema; i++){
     if( findSchemaEntry(aAncSchema, nAncSchema, aOursSchema[i].zName) ) continue;
     rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
+                                    aMerged, nMerged,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
                                     aTheirsSchema, nTheirsSchema,
@@ -325,6 +393,7 @@ int rebuildDisjointSchemaRows(
     if( findSchemaEntry(aAncSchema, nAncSchema, aTheirsSchema[i].zName) ) continue;
     if( findSchemaEntry(aOursSchema, nOursSchema, aTheirsSchema[i].zName) ) continue;
     rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
+                                    aMerged, nMerged,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
                                     aTheirsSchema, nTheirsSchema,

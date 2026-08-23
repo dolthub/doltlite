@@ -350,8 +350,33 @@ static int statusMaybeAddParentSchemaChange(
   return addRow(pCur, zParent, staged, "modified");
 }
 
+static int statusIndexNamesMatchAcrossRename(
+  const char *zNameA, const char *zTblA,
+  const char *zNameB, const char *zTblB
+){
+  static const char zPre[] = "sqlite_autoindex_";
+  const int nPre = 17;
+  size_t nTblA, nTblB;
+  if( !zNameA || !zNameB ) return 0;
+  if( strcmp(zNameA, zNameB)==0 ) return 1;
+  if( !zTblA || !zTblB ) return 0;
+  if( strncmp(zNameA, zPre, nPre)!=0 || strncmp(zNameB, zPre, nPre)!=0 ){
+    return 0;
+  }
+  nTblA = strlen(zTblA);
+  nTblB = strlen(zTblB);
+  if( strncmp(zNameA+nPre, zTblA, nTblA)!=0 || zNameA[nPre+nTblA]!='_' ){
+    return 0;
+  }
+  if( strncmp(zNameB+nPre, zTblB, nTblB)!=0 || zNameB[nPre+nTblB]!='_' ){
+    return 0;
+  }
+  return strcmp(zNameA+nPre+nTblA, zNameB+nPre+nTblB)==0;
+}
+
 /* Index identity across a rename is the name set; exact-SQL sees a rename
-** as two changes because tbl_name/SQL are rewritten. */
+** as two changes because tbl_name/SQL are rewritten. Clustered PK
+** sqlite_autoindex_<table>_N follows the table name, so match on N. */
 static int statusIndexNameSetsMatch(
   SchemaEntry *aA, int nA, const char *zTblA,
   SchemaEntry *aB, int nB, const char *zTblB
@@ -366,8 +391,8 @@ static int statusIndexNameSetsMatch(
     for(j=0; j<nB; j++){
       if( aB[j].zType && strcmp(aB[j].zType, "index")==0
        && aB[j].zTblName && strcmp(aB[j].zTblName, zTblB)==0
-       && aB[j].zName && aA[i].zName
-       && strcmp(aB[j].zName, aA[i].zName)==0 ){
+       && statusIndexNamesMatchAcrossRename(aA[i].zName, zTblA,
+                                            aB[j].zName, zTblB) ){
         break;
       }
     }
@@ -416,6 +441,9 @@ static int statusCompareIndexSchemaObjects(
     struct TableEntry *pMate = 0;
     if( !pRow->zType || strcmp(pRow->zType, "index")!=0
      || !pRow->zTblName ){
+      continue;
+    }
+    if( pRow->zName && strncmp(pRow->zName, "sqlite_autoindex_", 17)==0 ){
       continue;
     }
     for(j=0; j<i; j++){

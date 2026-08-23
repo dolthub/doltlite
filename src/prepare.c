@@ -191,6 +191,9 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
      || pIndex->tnum<2
      || pIndex->tnum>pData->mxPage
      || sqlite3IndexHasDuplicateRootPage(pIndex)
+#ifdef DOLTLITE_PROLLY
+     || (HasRowid(pIndex->pTable) && pIndex->tnum==pIndex->pTable->tnum)
+#endif
     ){
       if( sqlite3Config.bExtraSchemaChecks ){
         corruptSchema(pData, argv, "invalid rootpage");

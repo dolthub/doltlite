@@ -55,7 +55,7 @@ do_test doltlite_recover_ordering-3.2 {
     SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='t5'
     ORDER BY name
   }
-} {sqlite_autoindex_t5_1 sqlite_autoindex_t5_3}
+} {sqlite_autoindex_t5_1 sqlite_autoindex_t5_2 sqlite_autoindex_t5_3}
 do_test doltlite_recover_ordering-3.3 {
   catchsql {INSERT INTO t5 VALUES(2,2,4)}
 } {1 {UNIQUE constraint failed: t5.b}}
@@ -75,7 +75,7 @@ do_test doltlite_recover_ordering-4.1 {
     SELECT name FROM sqlite_master WHERE tbl_name = 't7' AND type = 'index'
     ORDER BY name;
   }
-} {sqlite_autoindex_t7_1 sqlite_autoindex_t7_2}
+} {sqlite_autoindex_t7_1 sqlite_autoindex_t7_2 sqlite_autoindex_t7_3}
 do_test doltlite_recover_ordering-4.2 {
   execsql {INSERT INTO t7 VALUES(1, 2)}
   list [catchsql {INSERT INTO t7 VALUES(1, 3)}] \
