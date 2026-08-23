@@ -95,15 +95,18 @@ do_execsql_test doltlite_recover_withoutrowid-6.1 {
   SELECT a,b,c FROM wr1 ORDER BY a;
   SELECT a,b,c FROM wr1w ORDER BY a;
 } {425 358 1306 1429 1190 1619 1565 681 1148 425 358 1306 1429 1190 1619 1565 681 1148}
-do_catchsql_test doltlite_recover_withoutrowid-6.2 {
-  SELECT rowid FROM wr1;
+do_execsql_test doltlite_recover_withoutrowid-6.2 {
+  SELECT count(rowid) FROM wr1;
+} {3}
+do_execsql_test doltlite_recover_withoutrowid-6.3 {
+  SELECT count(_rowid_) FROM wr1;
+} {3}
+do_execsql_test doltlite_recover_withoutrowid-6.4 {
+  SELECT count(oid) FROM wr1;
+} {3}
+do_catchsql_test doltlite_recover_withoutrowid-6.4b {
+  SELECT rowid FROM wr1w;
 } {1 {no such column: rowid}}
-do_catchsql_test doltlite_recover_withoutrowid-6.3 {
-  SELECT _rowid_ FROM wr1;
-} {1 {no such column: _rowid_}}
-do_catchsql_test doltlite_recover_withoutrowid-6.4 {
-  SELECT oid FROM wr1;
-} {1 {no such column: oid}}
 do_execsql_test doltlite_recover_withoutrowid-6.5 {
   CREATE TABLE wrnn(a, b, c, d, e, PRIMARY KEY(c,a,e));
   INSERT INTO wrnn VALUES(1,2,3,4,5);
@@ -246,15 +249,16 @@ do_execsql_test doltlite_recover_withoutrowid-12.2 {
     FROM tk1;
 } {{}}
 
-do_catchsql_test doltlite_recover_withoutrowid-13.1 {
+do_execsql_test doltlite_recover_withoutrowid-13.1 {
   CREATE TABLE t70a(
      a INT CHECK( rowid!=33 ),
      b TEXT PRIMARY KEY
   );
-} {1 {no such column: rowid}}
-do_catchsql_test doltlite_recover_withoutrowid-13.2 {
+} {}
+do_execsql_test doltlite_recover_withoutrowid-13.2 {
   INSERT INTO t70a(a,b) VALUES(99,'hello');
-} {1 {no such table: t70a}}
+  SELECT a, b FROM t70a;
+} {99 hello}
 
 do_execsql_test doltlite_recover_withoutrowid-14.1 {
   CREATE TABLE a1(lbl, c, b INTEGER, a TEXT, PRIMARY KEY(a, b));
@@ -708,10 +712,10 @@ do_test doltlite_recover_withoutrowid-24.16 {
   } {
     catchsql { DROP TABLE et5 }
     execsql $create
-    lappend res [catchsql { SELECT rowid FROM et5 }]
+    lappend res [lindex [catchsql { SELECT rowid FROM et5 }] 0]
   }
   set res
-} [lrepeat 4 {1 {no such column: rowid}}]
+} {0 0 0 0}
 do_test doltlite_recover_withoutrowid-24.17 {
   execsql {
     CREATE TABLE et6(pk INT primary key);
@@ -719,9 +723,11 @@ do_test doltlite_recover_withoutrowid-24.17 {
     CREATE TABLE et8(pk SHORT INTEGER primary key);
     CREATE TABLE et9(pk UNSIGNED INTEGER primary key);
   }
-  list [catchsql {SELECT rowid FROM et6}] [catchsql {SELECT rowid FROM et7}] \
-       [catchsql {SELECT rowid FROM et8}] [catchsql {SELECT rowid FROM et9}]
-} [lrepeat 4 {1 {no such column: rowid}}]
+  list [lindex [catchsql {SELECT rowid FROM et6}] 0] \
+       [lindex [catchsql {SELECT rowid FROM et7}] 0] \
+       [lindex [catchsql {SELECT rowid FROM et8}] 0] \
+       [lindex [catchsql {SELECT rowid FROM et9}] 0]
+} {0 0 0 0}
 do_execsql_test doltlite_recover_withoutrowid-24.18 {
   INSERT INTO et6 VALUES('2.0');
   INSERT INTO et7 VALUES('2.0');
@@ -739,7 +745,7 @@ do_test doltlite_recover_withoutrowid-24.20 {
   execsql { CREATE TABLE etd(x INTEGER PRIMARY KEY DESC, y, z) }
   list [catchsql { SELECT rowid FROM etd }] \
        [execsql { INSERT INTO etd VALUES(5,1,2); SELECT x,y,z FROM etd }]
-} {{1 {no such column: rowid}} {5 1 2}}
+} {{0 {}} {5 1 2}}
 
 do_execsql_test doltlite_recover_withoutrowid-25.1 {
   CREATE TABLE kt1(a COLLATE nocase PRIMARY KEY);

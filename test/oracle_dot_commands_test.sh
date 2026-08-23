@@ -74,7 +74,9 @@ oracle_dbinfo() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
-  local filter='grep -Ev "^(file change counter|database page count|schema cookie|autovacuum top root|data version)"'
+  # Clustered PK tables omit the sqlite_schema autoindex stock emits for
+  # a non-INTEGER PRIMARY KEY; .indexes still lists the in-memory PK.
+  local filter='grep -Ev "^(file change counter|database page count|schema cookie|autovacuum top root|data version|number of indexes:)"'
 
   local dl_out
   dl_out=$(printf '%s\n.dbinfo\n' "$setup" \

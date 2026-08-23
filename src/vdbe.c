@@ -23,6 +23,7 @@
 
 #ifdef DOLTLITE_PROLLY
 const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
+i64 doltliteSyntheticRowidFromRecord(const u8*, int, const KeyInfo*);
 #endif
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 #include "chunk_store.h"
@@ -6607,7 +6608,11 @@ case OP_Rowid: {                 /* out2, ncycle */
       pOut->flags = MEM_Null;
       break;
     }
+#ifdef DOLTLITE_PROLLY
+    v = sqlite3BtreeSqlRowid(pC->uc.pCursor);
+#else
     v = sqlite3BtreeIntegerKey(pC->uc.pCursor);
+#endif
   }
   pOut->u.i = v;
   break;
@@ -7019,6 +7024,12 @@ case OP_IdxInsert: {        /* in2 */
   assert( pC->deferredMoveto==0 );
   pC->cacheStatus = CACHE_STALE;
   if( rc) goto abort_due_to_error;
+#ifdef DOLTLITE_PROLLY
+  if( (pOp->p5 & OPFLAG_LASTROWID)!=0 && (pIn2->flags & MEM_Blob)!=0 ){
+    db->lastRowid = doltliteSyntheticRowidFromRecord(
+        (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
+  }
+#endif
   break;
 }
 

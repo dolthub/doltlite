@@ -66,9 +66,9 @@ else
   dltest_pass
 fi
 
-run_test_match "non_integer_pk_has_no_rowid" \
-  "SELECT rowid FROM keyed;" \
-  "no such column: rowid" "$DB"
+run_test "non_integer_pk_has_rowid" \
+  "INSERT INTO keyed VALUES('b','two'); SELECT last_insert_rowid() = rowid FROM keyed WHERE k='b';" \
+  "1" "$DB"
 
 MAIN_DB="$TMP/multifile-main.db"
 AUX_DB="$TMP/multifile-aux.db"

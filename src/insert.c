@@ -2861,6 +2861,11 @@ void sqlite3CompleteInsertion(
       pik_flags |= (update_flags & OPFLAG_SAVEPOSITION);
       if( update_flags==0 ){
         codeWithoutRowidPreupdate(pParse, pTab, iIdxCur+i, aRegIdx[i]);
+#ifdef DOLTLITE_PROLLY
+        if( !pParse->nested && VisibleRowid(pTab) ){
+          pik_flags |= OPFLAG_LASTROWID;
+        }
+#endif
       }
     }
     sqlite3VdbeAddOp4Int(v, OP_IdxInsert, iIdxCur+i, aRegIdx[i],

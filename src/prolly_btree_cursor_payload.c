@@ -2,6 +2,9 @@
 
 #include "prolly_btree_int.h"
 
+i64 doltliteSyntheticRowidFromSortKey(const u8*, int, const KeyInfo*);
+static SQLITE_NOINLINE i64 prollyBtCursorSyntheticRowid(BtCursor *pCur);
+
 void prollyBtreeCursorCurrentTreeValueSpan(
   BtCursor *pCur,
   const u8 **ppData,
@@ -96,6 +99,49 @@ i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
     return prollyBtCursorIntegerKey(pCur);
   }
   return pCur->pCurOps->xIntegerKey(pCur);
+}
+
+i64 sqlite3BtreeSqlRowid(BtCursor *pCur){
+  if( pCur->pCurOps==&prollyCursorOps ){
+    if( pCur->curIntKey ) return prollyBtCursorIntegerKey(pCur);
+    return prollyBtCursorSyntheticRowid(pCur);
+  }
+  return pCur->pCurOps->xIntegerKey(pCur);
+}
+
+static SQLITE_NOINLINE i64 prollyBtCursorSyntheticRowid(BtCursor *pCur){
+  const u8 *pKey = 0;
+  int nKey = 0;
+
+  if( pCur->deferredMergedSeek ){
+    int rc = materializeDeferredMergedSeekBackward(pCur);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
+    if( pCur->eState!=CURSOR_VALID ) return 0;
+  }
+  if( pCur->eState!=CURSOR_VALID ) return 0;
+
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
+    if( !e ) return 0;
+    pKey = e->pKey;
+    nKey = e->nKey;
+  }else if( prollyCursorIsValid(&pCur->pCur) ){
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+  }else{
+    return 0;
+  }
+  return doltliteSyntheticRowidFromSortKey(pKey, nKey, pCur->pKeyInfo);
 }
 
 static int cursorPayloadFault(
