@@ -444,6 +444,81 @@ static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable)
   return 0;
 }
 
+static Pgno schemaCatalogTableOldPg(
+  SchemaCatalogRow *aRows,
+  int nRows,
+  const char *zTblName
+){
+  int i;
+  if( !zTblName ) return 0;
+  for(i=0; i<nRows; i++){
+    if( aRows[i].zType && strcmp(aRows[i].zType, "table")==0
+     && aRows[i].zName && strcmp(aRows[i].zName, zTblName)==0 ){
+      return aRows[i].oldPg;
+    }
+  }
+  return 0;
+}
+
+static void schemaCatalogDedupeTypeName(SchemaCatalogRow *aRows, int *pnRows){
+  int i, nOut = 0;
+  int nRows = *pnRows;
+  for(i=0; i<nRows; i++){
+    int j, dup = -1;
+    Pgno iTblPg;
+    for(j=0; j<nOut; j++){
+      if( aRows[j].zType && aRows[i].zType
+       && strcmp(aRows[j].zType, aRows[i].zType)==0
+       && aRows[j].zName && aRows[i].zName
+       && strcmp(aRows[j].zName, aRows[i].zName)==0 ){
+        dup = j;
+        break;
+      }
+    }
+    if( dup<0 ){
+      if( nOut!=i ) aRows[nOut] = aRows[i];
+      nOut++;
+      continue;
+    }
+    iTblPg = 0;
+    if( aRows[i].zType && strcmp(aRows[i].zType, "index")==0 ){
+      iTblPg = schemaCatalogTableOldPg(aRows, nRows, aRows[i].zTblName);
+    }
+    if( iTblPg && aRows[i].oldPg==iTblPg && aRows[dup].oldPg!=iTblPg ){
+      sqlite3_free(aRows[dup].zType);
+      sqlite3_free(aRows[dup].zName);
+      sqlite3_free(aRows[dup].zTblName);
+      sqlite3_free(aRows[dup].zSql);
+      aRows[dup] = aRows[i];
+    }else{
+      sqlite3_free(aRows[i].zType);
+      sqlite3_free(aRows[i].zName);
+      sqlite3_free(aRows[i].zTblName);
+      sqlite3_free(aRows[i].zSql);
+    }
+    memset(&aRows[i], 0, sizeof(aRows[i]));
+  }
+  *pnRows = nOut;
+}
+
+static int schemaCatalogHasTypeName(
+  SchemaCatalogRow *aRows,
+  int nRows,
+  const char *zType,
+  const char *zName
+){
+  int i;
+  if( !zType || !zName ) return 0;
+  for(i=0; i<nRows; i++){
+    if( aRows[i].zType && aRows[i].zName
+     && strcmp(aRows[i].zType, zType)==0
+     && strcmp(aRows[i].zName, zName)==0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static void freeSchemaCatalogRows(SchemaCatalogRow *aRows, int nRows){
   int i;
   for(i=0; i<nRows; i++){
@@ -802,6 +877,9 @@ static int appendMissingSchemaCatalogRows(
     int wanted = 0;
     if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
     if( !aMeta[i].zType || !aMeta[i].zName || !aMeta[i].zTblName ) continue;
+    if( schemaCatalogHasTypeName(aRows, nRows, aMeta[i].zType, aMeta[i].zName) ){
+      continue;
+    }
     if( strcmp(aMeta[i].zType, "table")!=0 && strcmp(aMeta[i].zType, "index")!=0 ){
       continue;
     }
@@ -930,6 +1008,9 @@ static int appendFallbackSchemaCatalogRows(
       break;
     }
     if( !pSe ) continue;
+    if( schemaCatalogHasTypeName(aRows, nRows, pSe->zType, pSe->zName) ){
+      continue;
+    }
     if( nRows>=nAlloc ){
       i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
       SchemaCatalogRow *aNew;
@@ -1239,6 +1320,22 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   if( nRows>0 ){
     ProllyMutMap mm;
     struct TableEntry masterEntry;
+    schemaCatalogDedupeTypeName(aRows, &nRows);
+    for(i=0; i<nRows; i++){
+      Pgno iTblPg;
+      int bPhys = 0;
+      if( !aRows[i].zType || strcmp(aRows[i].zType, "index")!=0 ) continue;
+      if( !schemaNameIsInternalAutoindex(aRows[i].zName) ) continue;
+      iTblPg = schemaCatalogTableOldPg(aRows, nRows, aRows[i].zTblName);
+      if( !iTblPg || aRows[i].oldPg==iTblPg ) continue;
+      for(j=0; j<nTables; j++){
+        if( aTables[j].iTable==aRows[i].oldPg ){
+          bPhys = 1;
+          break;
+        }
+      }
+      if( !bPhys ) aRows[i].oldPg = iTblPg;
+    }
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
     /* Positional numbers after type/name sort: history-independent blob. */
     for(i=0; i<nRows; i++){
