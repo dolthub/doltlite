@@ -443,6 +443,9 @@ static int statusCompareIndexSchemaObjects(
      || !pRow->zTblName ){
       continue;
     }
+    if( pRow->zName && strncmp(pRow->zName, "sqlite_autoindex_", 17)==0 ){
+      continue;
+    }
     for(j=0; j<i; j++){
       SchemaEntry *pPrev = j<nFrom ? &aFrom[j] : &aTo[j-nFrom];
       if( pPrev->zType && strcmp(pPrev->zType, "index")==0

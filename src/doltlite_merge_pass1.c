@@ -249,6 +249,24 @@ static int mergePass1ResolveOursEntry(
 
   *ppAnc = doltliteFindTableByName(c->aAnc, c->nAnc, zName);
   *ppTheirs = doltliteFindTableByName(c->aTheirs, c->nTheirs, zName);
+  if( !*ppAnc ){
+    struct TableEntry *pByNo = doltliteFindTableByNumber(
+        c->aAnc, c->nAnc, c->aOurs[iOurs].iTable);
+    if( pByNo && pByNo->zName && strcmp(pByNo->zName, zName)!=0 ){
+      struct TableEntry *pTheirsByNo = doltliteFindTableByNumber(
+          c->aTheirs, c->nTheirs, c->aOurs[iOurs].iTable);
+      if( pTheirsByNo && pTheirsByNo->zName
+       && strcmp(pTheirsByNo->zName, pByNo->zName)!=0
+       && strcmp(pTheirsByNo->zName, zName)!=0 ){
+        pTheirsByNo = 0;
+        pByNo = 0;
+      }
+      if( pByNo ){
+        *ppAnc = pByNo;
+        if( !*ppTheirs && pTheirsByNo ) *ppTheirs = pTheirsByNo;
+      }
+    }
+  }
   return SQLITE_OK;
 }
 
@@ -635,7 +653,9 @@ static int mergePass1BothSides(
   const ProllyHash *pMergeTheirsRoot = &theirsEntry->root;
   int rc = SQLITE_OK;
 
-  if( zSchemaMergeName && zSchemaMergeName[0] ){
+  if( zSchemaMergeName && zSchemaMergeName[0]
+   && !(ancEntry && ancEntry->zName && zName
+        && strcmp(ancEntry->zName, zName)!=0) ){
     ourSchemaChanged = ourSchemaChanged || schemaEntryChangedByName(
         c->aAncSchema, c->nAncSchema, c->aOursSchema, c->nOursSchema,
         zSchemaMergeName);
@@ -672,11 +692,25 @@ static int mergePass1BothSides(
       return rc;
     }
     if( !bSchemaConflict && schemaChoice==SCHEMA_MERGE_THEIRS ){
-      SchemaEntry *pOurSe = findSchemaEntry(
+      SchemaEntry *pOurSe;
+      SchemaEntry *pTheirSe;
+      char *zSql;
+      pOurSe = findSchemaEntry(
           c->aOursSchema, c->nOursSchema, zSchemaMergeName);
-      SchemaEntry *pTheirSe = findSchemaEntry(
+      pTheirSe = findSchemaEntry(
           c->aTheirsSchema, c->nTheirsSchema, zSchemaMergeName);
-      char *zSql = pTheirSe && pTheirSe->zSql
+      if( !pOurSe && zName ){
+        pOurSe = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+      }
+      if( !pTheirSe && ancEntry && ancEntry->zName ){
+        pTheirSe = findSchemaEntry(
+            c->aTheirsSchema, c->nTheirsSchema, ancEntry->zName);
+      }
+      if( !pTheirSe ){
+        pTheirSe = findSchemaEntryByRootpage(
+            c->aTheirsSchema, c->nTheirsSchema, c->aOurs[iOurs].iTable);
+      }
+      zSql = pTheirSe && pTheirSe->zSql
                  ? sqlite3_mprintf("%s", pTheirSe->zSql) : 0;
       if( !pOurSe || !zSql ){
         sqlite3_free(zSql);
@@ -879,6 +913,16 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
     if( zObject ){
       pAncEntry = doltliteFindTableByName(c->aAnc, c->nAnc, zObject);
       pOurEntry = doltliteFindTableByName(c->aOurs, c->nOurs, zObject);
+      if( !pOurEntry ){
+        struct TableEntry *pByNo = doltliteFindTableByNumber(
+            c->aOurs, c->nOurs, c->aTheirs[i].iTable);
+        if( pByNo && pByNo->zName && pAncEntry && pAncEntry->zName
+         && strcmp(pByNo->zName, pAncEntry->zName)!=0
+         && strcmp(zObject, pAncEntry->zName)!=0 ){
+          pByNo = 0;
+        }
+        pOurEntry = pByNo;
+      }
       if( pAncEntry ){
         changed = prollyHashCompare(&c->aTheirs[i].root, &pAncEntry->root)!=0
                || prollyHashCompare(&c->aTheirs[i].schemaHash,

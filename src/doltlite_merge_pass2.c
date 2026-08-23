@@ -496,6 +496,20 @@ int mergeCatalogPass2(
     }
     oursEntry = doltliteFindTableByName(aOurs, nOurs, zName);
     if( oursEntry ) continue;
+    {
+      struct TableEntry *pOursSame = doltliteFindTableByNumber(
+          aOurs, nOurs, aTheirs[i].iTable);
+      struct TableEntry *pAncSame = doltliteFindTableByNumber(
+          aAnc, nAnc, aTheirs[i].iTable);
+      if( pOursSame && zName && pAncSame && pAncSame->zName
+       && strcmp(zName, pAncSame->zName)==0 ){
+        continue;
+      }
+      if( pOursSame && pOursSame->zName && zName
+       && strcmp(pOursSame->zName, zName)==0 ){
+        continue;
+      }
+    }
 
     {
       struct TableEntry *ancEntry = doltliteFindTableByName(aAnc, nAnc, zName);

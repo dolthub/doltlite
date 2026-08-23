@@ -1337,23 +1337,31 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       if( !bPhys ) aRows[i].oldPg = iTblPg;
     }
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
-    /* Positional numbers after type/name sort: history-independent blob. */
-    for(i=0; i<nRows; i++){
-      if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
-        aRows[i].newPg = 0;
-      }else if( schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, i) ){
-        for(j=0; j<nRows; j++){
-          if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0
-           && aRows[j].zName
-           && strcmp(aRows[j].zName, aRows[i].zTblName)==0 ){
-            aRows[i].newPg = aRows[j].newPg;
-            break;
+    /* Unique oldPg values get sequential numbers; rows that share a root
+    ** (clustered PK autoindex, or writable_schema vandalism) share newPg. */
+    {
+      Pgno iNextPg = 2;
+      for(i=0; i<nRows; i++){
+        if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
+          aRows[i].newPg = 0;
+        }else if( strcmp(aRows[i].zType, "table")==0
+               || strcmp(aRows[i].zType, "index")==0 ){
+          Pgno reused = 0;
+          for(j=0; j<i; j++){
+            if( aRows[j].oldPg==aRows[i].oldPg
+             && aRows[j].newPg
+             && aRows[j].zType
+             && (strcmp(aRows[j].zType, "table")==0
+                 || strcmp(aRows[j].zType, "index")==0)
+             && !schemaCatalogRowIsVirtualTable(&aRows[j]) ){
+              reused = aRows[j].newPg;
+              break;
+            }
           }
+          aRows[i].newPg = reused ? reused : iNextPg++;
+        }else{
+          aRows[i].newPg = aRows[i].oldPg;
         }
-      }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
-        aRows[i].newPg = (Pgno)(i + 2);
-      }else{
-        aRows[i].newPg = aRows[i].oldPg;
       }
     }
 
@@ -1499,8 +1507,11 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
                && aRows[j].zType && strcmp(aRows[j].zType, "index")!=0 ){
                 continue;
               }
-              pRow = &aRows[j];
-              break;
+              if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0 ){
+                pRow = &aRows[j];
+                break;
+              }
+              if( !pRow ) pRow = &aRows[j];
             }
           }
         }else{
@@ -1516,8 +1527,11 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
                && aRows[j].zType && strcmp(aRows[j].zType, "index")!=0 ){
                 continue;
               }
-              pRow = &aRows[j];
-              break;
+              if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0 ){
+                pRow = &aRows[j];
+                break;
+              }
+              if( !pRow ) pRow = &aRows[j];
             }
           }
         }

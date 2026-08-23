@@ -4724,7 +4724,11 @@ void sqlite3CreateIndex(
       assert( sqlite3SchemaMutexHeld(db, 0, pIndex->pSchema) );
       if( pTblName!=0 ){
         pIndex->tnum = db->init.newTnum;
-        if( sqlite3IndexHasDuplicateRootPage(pIndex) ){
+        if( sqlite3IndexHasDuplicateRootPage(pIndex)
+#ifdef DOLTLITE_PROLLY
+         || (HasRowid(pIndex->pTable) && pIndex->tnum==pIndex->pTable->tnum)
+#endif
+        ){
           sqlite3ErrorMsg(pParse, "invalid rootpage");
           pParse->rc = SQLITE_CORRUPT_BKPT;
           goto exit_create_index;

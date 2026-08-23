@@ -461,11 +461,16 @@ SchemaEntry *findSchemaEntryByRootpage(
   int nSchema,
   Pgno iRootpage
 ){
+  SchemaEntry *pOther = 0;
   int i;
   for(i=0; i<nSchema; i++){
-    if( aSchema[i].iRootpage==iRootpage ) return &aSchema[i];
+    if( aSchema[i].iRootpage!=iRootpage ) continue;
+    if( aSchema[i].zType && strcmp(aSchema[i].zType, "table")==0 ){
+      return &aSchema[i];
+    }
+    if( !pOther ) pOther = &aSchema[i];
   }
-  return 0;
+  return pOther;
 }
 
 static int mergeTableSchemaBodiesSame(
@@ -739,6 +744,16 @@ int tryResolveSchemaDivergence(
   ancSchEntry = findSchemaEntry(aAncSchema, nAncSchema, zName);
   ourSchEntry = findSchemaEntry(aOursSchema, nOursSchema, zName);
   theirSchEntry = findSchemaEntry(aTheirsSchema, nTheirsSchema, zName);
+  if( ourSchEntry && ourSchEntry->iRootpage ){
+    if( !ancSchEntry || (ancSchEntry->zType && strcmp(ancSchEntry->zType, "table")!=0) ){
+      ancSchEntry = findSchemaEntryByRootpage(
+          aAncSchema, nAncSchema, ourSchEntry->iRootpage);
+    }
+    if( !theirSchEntry || (theirSchEntry->zType && strcmp(theirSchEntry->zType, "table")!=0) ){
+      theirSchEntry = findSchemaEntryByRootpage(
+          aTheirsSchema, nTheirsSchema, ourSchEntry->iRootpage);
+    }
+  }
 
   if( ancSchEntry && ancSchEntry->zSql
    && ourSchEntry && ourSchEntry->zSql
