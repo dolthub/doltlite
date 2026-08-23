@@ -2872,6 +2872,11 @@ void sqlite3CompleteInsertion(
                          aRegIdx[i]+1,
                          pIdx->uniqNotNull ? pIdx->nKeyCol: pIdx->nColumn);
     sqlite3VdbeChangeP5(v, pik_flags);
+#ifdef DOLTLITE_PROLLY
+    if( IsPrimaryKeyIndex(pIdx) && VisibleRowid(pTab) && !HasRowid(pTab) ){
+      sqlite3VdbeAddOp3(v, OP_Rowid, iIdxCur+i, regNewData, aRegIdx[i]);
+    }
+#endif
   }
   if( !HasRowid(pTab) ) return;
   if( pParse->nested ){

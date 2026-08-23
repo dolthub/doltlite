@@ -920,6 +920,12 @@ void sqlite3Update(
 #endif
       sqlite3VdbeAddOp2(v, OP_Copy, regOldRowid, regNewRowid);
     }
+#ifdef DOLTLITE_PROLLY
+    else if( VisibleRowid(pTab) && pPk!=0 ){
+      sqlite3VdbeAddOp2(v, OP_Rowid, iDataCur, regOldRowid);
+      sqlite3VdbeAddOp2(v, OP_Copy, regOldRowid, regNewRowid);
+    }
+#endif
   }
 
   /* Populate the array of registers beginning at regNew with the new
