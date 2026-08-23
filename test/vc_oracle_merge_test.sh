@@ -1740,6 +1740,22 @@ SELECT dolt_merge('feat');
 echo ""
 echo "--- add/add matching schema ---"
 
+oracle_error_poststate "dual_add_same_table_with_peer_drop" "
+CREATE TABLE p(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO p VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am', 'main adds q');
+SELECT dolt_checkout('feat');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+DROP TABLE p;
+SELECT dolt_commit('-Am', 'feat adds q and drops p');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name IN ('p','q') ORDER BY name)" \
+"SELECT GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME SEPARATOR ',') FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('p','q')"
+
 oracle_error_poststate "dual_add_table_same_schema_union" "
 SELECT dolt_commit('-Am', 'init empty');
 SELECT dolt_branch('feat');
