@@ -615,5 +615,67 @@ run_test_match "constraint_detector_sql_error_merge_errors" "SELECT dolt_merge('
 run_test "constraint_detector_sql_error_restores_rows" "SELECT count(*) FROM t;" "0" "$DB40"
 run_test "constraint_detector_sql_error_preserves_head" "SELECT message FROM dolt_log LIMIT 1;" "add json check" "$DB40"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40"
+DB41=/tmp/test_merge41_$$.db; rm -f "$DB41"
+run_test_match "same_added_table_with_peer_drop_merge" "
+CREATE TABLE p(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO p VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feature');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_checkout('feature');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+DROP TABLE p;
+SELECT dolt_commit('-A','-m','feature');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT 'RESULT|' || group_concat(name, ',') FROM (
+  SELECT name FROM sqlite_master
+  WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name
+);" "^RESULT\|q$" "$DB41"
+run_test "same_added_table_with_peer_drop_schema" "SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);" "q" "$DB41"
+run_test "same_added_table_with_peer_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB41"
+
+DB42=/tmp/test_merge42_$$.db; rm -f "$DB42"
+run_test_match "same_added_table_with_our_drop_merge" "
+CREATE TABLE p(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO p VALUES(1,'a');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feature');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO q VALUES(1,'main');
+DROP TABLE p;
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_checkout('feature');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO q VALUES(2,'feature');
+SELECT dolt_commit('-A','-m','feature');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT 'RESULT|' || group_concat(id || ':' || v, ',') FROM (
+  SELECT id,v FROM q ORDER BY id
+);" "^RESULT\|1:main,2:feature$" "$DB42"
+run_test "same_added_table_with_our_drop_schema" "SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);" "q" "$DB42"
+run_test "same_added_table_with_our_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB42"
+
+DB43=/tmp/test_merge43_$$.db; rm -f "$DB43"
+run_test_match "same_empty_added_table_with_peer_drop_merge" "
+CREATE TABLE p(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feature');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_checkout('feature');
+CREATE TABLE q(id INTEGER PRIMARY KEY, v TEXT);
+DROP TABLE p;
+SELECT dolt_commit('-A','-m','feature');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT 'RESULT|' || group_concat(name, ',') FROM (
+  SELECT name FROM sqlite_master
+  WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name
+);" "^RESULT\|q$" "$DB43"
+run_test "same_empty_added_table_with_peer_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB43"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43"
 dltest_finish

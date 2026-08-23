@@ -806,6 +806,7 @@ static int mergePreNormalizeTableRename(
         nCand++;
       }
       if( nCand!=1 || !pNewT ) continue;
+      if( findSchemaEntry(aOther, nOther, pNewT->zName) ) continue;
 
       /* The pairing must be bijective. If the new table's text also matches
       ** another ancestor table this side no longer has, tables with equal
