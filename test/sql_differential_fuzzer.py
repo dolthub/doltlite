@@ -293,12 +293,15 @@ class Gen:
         kc, _ = self.key_args()
         if self.shape == "composite_pk":
             sel = "k + %d, coalesce(quote(j),'x'), a, b" % self.r.randint(1, 50)
+            order = ", ".join(Q % col for col in ("k", "j", "a", "b"))
         else:
             base = "coalesce(quote(k),'x') || 'x'" if self.key_kind == "text" \
                 else "k + %d" % self.r.randint(1, 50)
             sel = "%s, a, b" % base
-        self.emit("INSERT OR IGNORE INTO t(%s, a, b) SELECT %s FROM t WHERE %s;"
-                  % (kc, sel, self.pred()))
+            order = ", ".join(Q % col for col in ("k", "a", "b"))
+        self.emit("INSERT OR IGNORE INTO t(%s, a, b) "
+                  "SELECT %s FROM t WHERE %s ORDER BY %s;"
+                  % (kc, sel, self.pred(), order))
 
     def update(self):
         col = self.r.choice(["a", "b"])
@@ -366,9 +369,9 @@ class Gen:
                       "(SELECT a FROM t WHERE %s);" % self.pred())
         elif self.on("agg") and r < 0.62:
             having = " HAVING count(*) > 1" if self.r.random() < 0.5 else ""
-            self.emit("SELECT group_concat(g, '|') FROM (SELECT %s || ':' || "
-                      "count(*) AS g FROM t GROUP BY b%s ORDER BY 1);"
-                      % (Q % "b", having))
+            self.emit("SELECT group_concat(g, '|') FROM (SELECT "
+                      "min(%s) || ':' || count(*) AS g FROM t "
+                      "GROUP BY b%s ORDER BY 1);" % (Q % "b", having))
         elif self.on("agg") and r < 0.68:
             self.emit("SELECT count(*), sum(length(coalesce(quote(a),''))), "
                       "count(DISTINCT b), max(length(coalesce(quote(b),''))) "
