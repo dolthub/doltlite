@@ -315,7 +315,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Skip when a step-level reporter already covered this run
+      id: sibling
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        LABEL_PREFIXES: "fuzz-crash- sql-differential-divergence"
+      run: |
+        started=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq .run_started_at)
+        covered=0
+        for prefix in fuzz-crash- sql-differential-divergence; do
+          n=$(gh api -X GET "repos/${{ github.repository }}/issues" \
+                -f state=all -f per_page=50 -f sort=updated -f direction=desc \
+              | jq --arg p "$prefix" --arg t "$started" --arg w "nightly-fuzz-watchdog" \
+                  '[.[] | select([.labels[].name] | any(startswith($p) and . != $w)) | select(.updated_at >= $t)] | length')
+          [ "${n:-0}" -gt 0 ] && covered=1
+        done
+        echo "covered=$covered" >> "$GITHUB_OUTPUT"
+        echo "sibling reporter coverage since $started: covered=$covered"
     - name: Describe the incident
+      if: steps.sibling.outputs.covered != '1'
       run: |
         {
           echo "The scheduled nightly-fuzz run did not finish green and no step-level reporter covered it."
@@ -325,6 +343,7 @@ jobs:
           echo "If a more specific issue (fuzz crash, stress failure) was filed for this night, triage there; this entry exists so no red nightly is silent."
         } > "$RUNNER_TEMP/watchdog-body.md"
     - uses: ./.github/actions/report-failure-issue
+      if: steps.sibling.outputs.covered != '1'
       with:
         label: nightly-fuzz-watchdog
         title: "Nightly fuzz run did not finish"
