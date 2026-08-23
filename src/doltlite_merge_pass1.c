@@ -252,7 +252,8 @@ static int mergePass1ResolveOursEntry(
   if( !*ppAnc ){
     struct TableEntry *pByNo = doltliteFindTableByNumber(
         c->aAnc, c->nAnc, c->aOurs[iOurs].iTable);
-    if( pByNo && pByNo->zName && strcmp(pByNo->zName, zName)!=0 ){
+    if( pByNo && pByNo->zName && strcmp(pByNo->zName, zName)!=0
+     && !doltliteFindTableByName(c->aOurs, c->nOurs, pByNo->zName) ){
       struct TableEntry *pTheirsByNo = doltliteFindTableByNumber(
           c->aTheirs, c->nTheirs, c->aOurs[iOurs].iTable);
       if( pTheirsByNo && pTheirsByNo->zName
@@ -394,6 +395,15 @@ static int mergePass1OursModifyTheirsDelete(
                  || prollyHashCompare(&c->aOurs[iOurs].schemaHash,
                                       &ancEntry->schemaHash)!=0;
   int rc;
+  const char *zRenameAnc = 0;
+
+  if( zName && mergeTableRenameOtherDrop(
+        c->aAnc, c->nAnc, c->aTheirs, c->nTheirs, c->aOurs, c->nOurs,
+        c->aAncSchema, c->nAncSchema, c->aOursSchema, c->nOursSchema,
+        &c->aOurs[iOurs], &zRenameAnc) ){
+    c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+    return SQLITE_OK;
+  }
 
   if( !oursChanged ) return SQLITE_OK;
 

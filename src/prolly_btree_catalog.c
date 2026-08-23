@@ -1337,9 +1337,13 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       if( !bPhys ) aRows[i].oldPg = iTblPg;
     }
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
-    /* Unique oldPg values get sequential numbers; rows that share a root
-    ** (clustered PK autoindex, or writable_schema vandalism) share newPg. */
+    /* Unique oldPg values get sequential numbers so a live serialize of
+    ** a just-committed catalog matches the bytes stored at commit.
+    ** Clustered PK autoindexes share the parent table number. A physical
+    ** index that reused a dropped number (constructed catalogs mix
+    ** staged and working domains) must not collapse into a new table. */
     {
+      int bLive = (aTables==pBtree->cat.a);
       Pgno iNextPg = 2;
       for(i=0; i<nRows; i++){
         if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
@@ -1348,17 +1352,28 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
                || strcmp(aRows[i].zType, "index")==0 ){
           Pgno reused = 0;
           for(j=0; j<i; j++){
-            if( aRows[j].oldPg==aRows[i].oldPg
-             && aRows[j].newPg
-             && aRows[j].zType
-             && (strcmp(aRows[j].zType, "table")==0
-                 || strcmp(aRows[j].zType, "index")==0)
-             && !schemaCatalogRowIsVirtualTable(&aRows[j]) ){
+            int jTab, iTab;
+            if( aRows[j].oldPg!=aRows[i].oldPg || !aRows[j].newPg ) continue;
+            if( !aRows[j].zType ) continue;
+            jTab = strcmp(aRows[j].zType, "table")==0;
+            iTab = strcmp(aRows[i].zType, "table")==0;
+            if( bLive ){
               reused = aRows[j].newPg;
               break;
             }
+            if( jTab==iTab ) continue;
+            if( !schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, i)
+             && !schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, j) ){
+              continue;
+            }
+            reused = aRows[j].newPg;
+            break;
           }
-          aRows[i].newPg = reused ? reused : iNextPg++;
+          if( reused ){
+            aRows[i].newPg = reused;
+          }else{
+            aRows[i].newPg = iNextPg++;
+          }
         }else{
           aRows[i].newPg = aRows[i].oldPg;
         }

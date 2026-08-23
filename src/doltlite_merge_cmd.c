@@ -226,8 +226,9 @@ static int mergeRefInstallMergedCatalog(
   int rc;
 
   /* Adopted indexes cover only their branch's rows; rebuild over merged
-  ** tables before the flush. */
-  if( *pnReindex>0 ){
+  ** tables before the flush. Skip when the merge already conflicted:
+  ** those names may belong to an excluded dual-rename parent. */
+  if( *pnReindex>0 && nMergeConflicts==0 ){
     rc = doltliteReindexNamedIndexes(db, *pazReindex, *pnReindex);
   }else{
     rc = SQLITE_OK;
@@ -242,7 +243,7 @@ static int mergeRefInstallMergedCatalog(
     return rc;
   }
 
-  if( *pnSchemaActions > 0 ){
+  if( *pnSchemaActions > 0 && nMergeConflicts==0 ){
     rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
                                          *paSchemaActions, *pnSchemaActions,
                                          pMergedCat);
