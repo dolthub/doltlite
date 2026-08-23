@@ -4184,9 +4184,6 @@ e_vacuum e_vacuum-1.3.1.1 class=intentional issue=1840  # page_size/page_count p
 e_vacuum e_vacuum-1.3.1.2 class=intentional issue=1840  # page_size/page_count pair
 e_vacuum e_vacuum-1.3.3.2 class=intentional issue=1840  # page_size/page_count pair
 e_vacuum e_vacuum-3.1.2 class=intentional issue=1840  # VACUUM-as-gc does not renumber free rowids (stock expectation predates rowid preservation)
-e_vacuum e_vacuum-3.1.6 class=intentional issue=1840  # VACUUM INTO is not supported for doltlite databases (intentional error)
-e_vacuum e_vacuum-3.2.1.2 class=intentional  # prolly VACUUM is GC: open transaction is SQLITE_OK no-op, not stock refuse
-e_vacuum e_vacuum-3.2.1.6 class=intentional  # prolly VACUUM is GC: open savepoint/txn is SQLITE_OK no-op, not stock refuse
 e_vacuum e_vacuum-3.2.2.1 class=intentional issue=1840  # "cannot VACUUM - SQL statements in progress" never raised (gc path skips the nVdbeActive check)
 e_vacuum e_vacuum-3.3.1 class=intentional issue=1840  # PRAGMA auto_vacuum reads back 0 (accepted as no-op)
 e_vacuum e_vacuum-3.3.2.1 class=intentional issue=1840  # file size after auto_vacuum=FULL deletes: no reclamation
