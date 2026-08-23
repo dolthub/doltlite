@@ -70,6 +70,15 @@ run_test "non_integer_pk_has_rowid" \
   "INSERT INTO keyed VALUES('b','two'); SELECT last_insert_rowid() = rowid FROM keyed WHERE k='b';" \
   "1" "$DB"
 
+PKNN_DB="$TMP/pk-clustered-notnull.db"
+run_test "text_pk_clustered_notnull" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
+SELECT name, \"notnull\", pk FROM pragma_table_info('t') WHERE name='k';" \
+  "k|1|1" "$PKNN_DB"
+run_test_match "text_pk_clustered_null_insert" \
+  "INSERT INTO t VALUES(NULL, 1);" \
+  "NOT NULL constraint failed: t.k" "$PKNN_DB"
+
 MAIN_DB="$TMP/multifile-main.db"
 AUX_DB="$TMP/multifile-aux.db"
 run_test_match "multifile_temp_trigger_rejected" \

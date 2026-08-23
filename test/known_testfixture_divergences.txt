@@ -31,6 +31,9 @@
 #     rowid order, doltlite returns user-PK order)
 #   * `pragma table_info` reporting non-PK columns differently for
 #     auto-converted WITHOUT-ROWID tables
+#   * PK columns of auto-converted clustered tables are NOT NULL
+#     (`pragma table_info` notnull=1, INSERT NULL rejected), matching
+#     explicit WITHOUT ROWID rather than SQLite rowid tables
 #   * AUTOINCREMENT / sqlite_sequence behavior tied to rowid
 #     allocation
 #   * Foreign key SET NULL / SET DEFAULT actions whose triggering
