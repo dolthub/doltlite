@@ -832,7 +832,7 @@ void sqlite3GenerateRowDelete(
     /* Populate the OLD.* pseudo-table register array. These values will be
     ** used by any BEFORE and AFTER triggers that exist.  */
 #ifdef DOLTLITE_PROLLY
-    if( VisibleRowid(pTab) && !HasRowid(pTab) ){
+    if( VisibleRowid(pTab) && !HasRowid(pTab) && pTrigger ){
       sqlite3VdbeAddOp2(v, OP_Rowid, iDataCur, iOld);
     }else
 #endif

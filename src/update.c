@@ -921,7 +921,7 @@ void sqlite3Update(
       sqlite3VdbeAddOp2(v, OP_Copy, regOldRowid, regNewRowid);
     }
 #ifdef DOLTLITE_PROLLY
-    else if( VisibleRowid(pTab) && pPk!=0 ){
+    else if( VisibleRowid(pTab) && pPk!=0 && pTrigger ){
       sqlite3VdbeAddOp2(v, OP_Rowid, iDataCur, regOldRowid);
       sqlite3VdbeAddOp2(v, OP_Copy, regOldRowid, regNewRowid);
     }
