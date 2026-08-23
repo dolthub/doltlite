@@ -780,6 +780,12 @@ For a DoltLite-format main database, the compatibility contract is:
   `rowid` and `last_insert_rowid()` still work: a single integer PK is that
   value, otherwise a stable hash of the PK. Explicit `WITHOUT ROWID` tables
   have no `rowid`, matching SQLite.
+- Those clustered primary keys are `NOT NULL`, matching SQLite
+  `WITHOUT ROWID` tables. `PRAGMA table_info` reports `notnull=1` on the PK
+  columns, and inserting NULL fails with `NOT NULL constraint failed`. SQLite
+  rowid tables still allow NULL in a TEXT, `INT`, `INTEGER PRIMARY KEY DESC`,
+  or composite PK. TEMP tables are not clustered and keep SQLite's nullable
+  PK. An `INTEGER PRIMARY KEY` remains a rowid alias.
 - `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
   attached database, as one operation; its page-count argument is not
   incremental. File-backed and in-memory DoltLite databases can be copied in
