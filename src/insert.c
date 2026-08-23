@@ -1621,6 +1621,18 @@ void sqlite3Insert(
   }
 
   if( pTrigger ){
+#ifdef DOLTLITE_PROLLY
+    if( !isView && !IsVirtual(pTab) && VisibleRowid(pTab) && withoutRowid ){
+      int ii;
+      Index *pPkIdx;
+      for(ii=0, pPkIdx=pTab->pIndex; pPkIdx; pPkIdx=pPkIdx->pNext, ii++){
+        if( IsPrimaryKeyIndex(pPkIdx) && aRegIdx[ii] ){
+          sqlite3VdbeAddOp3(v, OP_Rowid, iIdxCur+ii, regRowid, aRegIdx[ii]);
+          break;
+        }
+      }
+    }
+#endif
     /* Code AFTER triggers */
     sqlite3CodeRowTrigger(pParse, pTrigger, TK_INSERT, 0, TRIGGER_AFTER,
         pTab, regData-2-pTab->nCol, onError, endOfLoop);
@@ -2872,11 +2884,6 @@ void sqlite3CompleteInsertion(
                          aRegIdx[i]+1,
                          pIdx->uniqNotNull ? pIdx->nKeyCol: pIdx->nColumn);
     sqlite3VdbeChangeP5(v, pik_flags);
-#ifdef DOLTLITE_PROLLY
-    if( IsPrimaryKeyIndex(pIdx) && VisibleRowid(pTab) && !HasRowid(pTab) ){
-      sqlite3VdbeAddOp3(v, OP_Rowid, iIdxCur+i, regNewData, aRegIdx[i]);
-    }
-#endif
   }
   if( !HasRowid(pTab) ) return;
   if( pParse->nested ){

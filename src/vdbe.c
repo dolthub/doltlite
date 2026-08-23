@@ -7046,7 +7046,6 @@ case OP_IdxInsert: {        /* in2 */
   pC->cacheStatus = CACHE_STALE;
   if( rc) goto abort_due_to_error;
 #ifdef DOLTLITE_PROLLY
-  pC->nullRow = 0;
   if( (pOp->p5 & OPFLAG_LASTROWID)!=0 && (pIn2->flags & MEM_Blob)!=0 ){
     db->lastRowid = doltliteSyntheticRowidFromRecord(
         (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
