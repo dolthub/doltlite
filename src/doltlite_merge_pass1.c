@@ -395,12 +395,11 @@ static int mergePass1OursModifyTheirsDelete(
                  || prollyHashCompare(&c->aOurs[iOurs].schemaHash,
                                       &ancEntry->schemaHash)!=0;
   int rc;
-  const char *zRenameAnc = 0;
 
   if( zName && mergeTableRenameOtherDrop(
         c->aAnc, c->nAnc, c->aTheirs, c->nTheirs, c->aOurs, c->nOurs,
         c->aAncSchema, c->nAncSchema, c->aOursSchema, c->nOursSchema,
-        &c->aOurs[iOurs], &zRenameAnc) ){
+        &c->aOurs[iOurs], 0) ){
     c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
     return SQLITE_OK;
   }
