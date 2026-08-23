@@ -254,7 +254,14 @@ static int mergePass1ResolveOursEntry(
         c->aAnc, c->nAnc, c->aOurs[iOurs].iTable);
     if( pByNo && pByNo->zName && strcmp(pByNo->zName, zName)!=0
      && !doltliteFindTableByName(c->aOurs, c->nOurs, pByNo->zName) ){
-      struct TableEntry *pTheirsByNo = doltliteFindTableByNumber(
+      struct TableEntry *pTheirsByNo;
+      /* Drop plus a dual add: the new name is on both sides and was not
+      ** in the ancestor. Reusing the dropped table's number is not a rename. */
+      if( doltliteFindTableByName(c->aTheirs, c->nTheirs, zName)
+       && !doltliteFindTableByName(c->aAnc, c->nAnc, zName) ){
+        return SQLITE_OK;
+      }
+      pTheirsByNo = doltliteFindTableByNumber(
           c->aTheirs, c->nTheirs, c->aOurs[iOurs].iTable);
       if( pTheirsByNo && pTheirsByNo->zName
        && strcmp(pTheirsByNo->zName, pByNo->zName)!=0
@@ -925,6 +932,12 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
       if( !pOurEntry ){
         struct TableEntry *pByNo = doltliteFindTableByNumber(
             c->aOurs, c->nOurs, c->aTheirs[i].iTable);
+        if( pByNo && pByNo->zName
+         && doltliteFindTableByName(c->aTheirs, c->nTheirs, pByNo->zName)
+         && doltliteFindTableByName(c->aOurs, c->nOurs, pByNo->zName)
+         && !doltliteFindTableByName(c->aAnc, c->nAnc, pByNo->zName) ){
+          pByNo = 0;
+        }
         if( pByNo && pByNo->zName && pAncEntry && pAncEntry->zName
          && strcmp(pByNo->zName, pAncEntry->zName)!=0
          && strcmp(zObject, pAncEntry->zName)!=0 ){

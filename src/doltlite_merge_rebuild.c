@@ -30,6 +30,38 @@ static int tableSqlNeedsClusteredPkAutoindex(const char *zSql){
   return 0;
 }
 
+static int schemaHasName(SchemaEntry *a, int n, const char *zName){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<n; i++){
+    if( a[i].zName && strcmp(a[i].zName, zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+/* UNIQUE sqlite_autoindex_<table>_1 is a physical btree. Clustered PK
+** autoindexes are catalog-only and must not reuse that name. */
+static char *mergedClusteredPkAutoindexName(
+  const char *zTable,
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs
+){
+  int n = 1;
+  for(;;){
+    char *z = sqlite3_mprintf("sqlite_autoindex_%s_%d", zTable, n);
+    if( !z ) return 0;
+    if( !schemaHasName(aAnc, nAnc, z)
+     && !schemaHasName(aOurs, nOurs, z)
+     && !schemaHasName(aTheirs, nTheirs, z) ){
+      return z;
+    }
+    sqlite3_free(z);
+    n++;
+    if( n>1000 ) return 0;
+  }
+}
+
 static u8 *mergeBuildSchemaCatalogRecord(
   const char *zType,
   const char *zName,
@@ -232,7 +264,9 @@ int rebuildDisjointSchemaRows(
     if( pSe && pSe->zType && strcmp(pSe->zType, "table")==0
      && pSe->zSql && tableSqlNeedsClusteredPkAutoindex(pSe->zSql) ){
       SchemaEntry autoIdx;
-      char *zAuto = sqlite3_mprintf("sqlite_autoindex_%s_1", zName);
+      char *zAuto = mergedClusteredPkAutoindexName(
+          zName, aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+          aTheirsSchema, nTheirsSchema);
       if( !zAuto ) return SQLITE_NOMEM;
       memset(&autoIdx, 0, sizeof(autoIdx));
       autoIdx.zType = "index";

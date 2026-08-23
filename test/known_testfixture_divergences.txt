@@ -3944,14 +3944,11 @@ sysfault sysfault-2.2-vfsfault-transient.1 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.2 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.3 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.5 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.48 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.49 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.50 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.51 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.52 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.53 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.54 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.55 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.56 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.57 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.58 class=intentional
@@ -3960,10 +3957,6 @@ sysfault sysfault-2.2-vfsfault-persistent.110 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.111 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-transient.110 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-transient.111 @coverage class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.106 class=engine-gap issue=944
-sysfault sysfault-2.2-vfsfault-persistent.107 class=engine-gap issue=944
-sysfault sysfault-2.2-vfsfault-transient.106 class=engine-gap issue=944
-sysfault sysfault-2.2-vfsfault-transient.107 class=engine-gap issue=944
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
