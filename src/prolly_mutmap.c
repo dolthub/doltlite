@@ -69,12 +69,26 @@ static int compareEntryToKey(
   return prollyKeyCmp(e->pKey, e->nKey, pKey, nKey);
 }
 
+/* Hash-table filter only: every consumer re-checks with a full key compare,
+** so a large key hashes a head+tail window instead of all of it. Bulk index
+** builds carry multi-KB keys and the full scan dominated their insert cost. */
 static u32 hashKey(const u8 *pKey, int nKey){
   u32 h = 2166136261u;
   int i;
-  for(i=0; i<nKey; i++){
-    h ^= pKey[i];
-    h *= 16777619u;
+  if( nKey > 128 ){
+    for(i=0; i<64; i++){
+      h ^= pKey[i];
+      h *= 16777619u;
+    }
+    for(i=nKey-64; i<nKey; i++){
+      h ^= pKey[i];
+      h *= 16777619u;
+    }
+  }else{
+    for(i=0; i<nKey; i++){
+      h ^= pKey[i];
+      h *= 16777619u;
+    }
   }
   h ^= (u32)nKey;
   h *= 16777619u;
