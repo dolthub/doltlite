@@ -360,7 +360,32 @@ int rebuildDisjointSchemaRows(
         continue;
       }
     }
-    iRootpage = remapSchemaRootpage(aRemap, nRemap, pSe->iRootpage);
+    /* Rootpage numbers are per-branch: once histories renumber, theirs'
+    ** number can be a different object here. The remap table records where
+    ** pass 2 actually placed their entry, so a mapping is authoritative.
+    ** Without one, an index we also hold by name was adopted by pass 1
+    ** into our-numbered entry, so the row must carry our number; theirs'
+    ** raw number is only trustworthy when neither side relocated it. */
+    {
+      int bMapped = 0;
+      int j;
+      for(j=0; j<nRemap; j++){
+        if( aRemap[j].oldPg==pSe->iRootpage ){
+          iRootpage = aRemap[j].newPg;
+          bMapped = 1;
+          break;
+        }
+      }
+      if( !bMapped ){
+        SchemaEntry *pOurSe = findSchemaEntry(aOursSchema, nOursSchema,
+                                              pSe->zName);
+        if( pOurSe && pOurSe->zType && strcmp(pOurSe->zType, "index")==0 ){
+          iRootpage = pOurSe->iRootpage;
+        }else{
+          iRootpage = pSe->iRootpage;
+        }
+      }
+    }
     rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, iRootpage);
     if( rc!=SQLITE_OK ) return rc;

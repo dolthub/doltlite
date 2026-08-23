@@ -2360,4 +2360,38 @@ run_test "merge_dual_table_rename_objects" \
   "t8,t9" "$DB"
 rm -f "$DB"
 
+# Rootpage numbers are per-branch once histories renumber. Theirs recreates
+# an index we also hold while our side's numbering has shifted; the merged
+# row must carry our entry's number, not theirs' (which is another object
+# here). Used to assemble two rows on one rootpage: disk image is malformed.
+DB=/tmp/test_merge_renumbered_index_$$.db; rm -f "$DB"
+cat <<'EOF2' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE ma(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE zz(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX iz ON zz(v);
+INSERT INTO zz VALUES(1,'x');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+CREATE TABLE aa(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','ours adds aa, renumbering everything after it');
+SELECT dolt_checkout('feat');
+DROP INDEX iz;
+CREATE INDEX iz ON zz(id);
+SELECT dolt_commit('-Am','theirs recreates iz under its own numbering');
+SELECT dolt_checkout('main');
+EOF2
+run_test_match "merge_renumbered_index_merges" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_renumbered_index_takes_theirs" \
+  "SELECT sql FROM sqlite_master WHERE name='iz';" \
+  "CREATE INDEX iz ON zz(id)" "$DB"
+run_test "merge_renumbered_index_distinct_pages" \
+  "SELECT count(DISTINCT rootpage) = count(*) FROM sqlite_master WHERE rootpage > 0;" \
+  "1" "$DB"
+run_test "merge_renumbered_index_reopen" \
+  "SELECT v FROM zz WHERE id=1; PRAGMA integrity_check;" \
+  "x
+ok" "$DB"
+rm -f "$DB"
+
 dltest_finish
