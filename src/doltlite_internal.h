@@ -867,6 +867,8 @@ ChunkStore *doltliteBtreeChunkStore(Btree *p);
 int doltliteGcCompactStoreWithPhase(sqlite3 *db, ChunkStore *cs, const char **pzPhase);
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);
 int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase);
+int doltliteGcVacuumInto(sqlite3 *db, int iDb, const char *zOut,
+                         const char **pzPhase);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 int doltliteIsStockSqliteDb(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);

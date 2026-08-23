@@ -57,25 +57,16 @@ run_test "vacuum_after_empty_commit" "VACUUM;" "" "$DB"
 db_rm "$DB"
 
 echo ""
-echo "--- VACUUM INTO is refused ---"
+echo "--- VACUUM INTO writes a working copy (basic) ---"
 
-DB=/tmp/test_vac_into_$$.db; db_rm "$DB"
+DB=/tmp/test_vac_into_basic_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1);" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "vacuum_into_rejected" \
+run_test "vacuum_into_accepted" \
   "VACUUM INTO '/tmp/test_vac_into_target_$$.db';" \
-  "VACUUM INTO is not supported" "$DB"
+  "" "$DB"
+run_test "vacuum_into_target_readable" \
+  "SELECT x FROM t;" "1" "/tmp/test_vac_into_target_$$.db"
 rm -f "/tmp/test_vac_into_target_$$.db"
-db_rm "$DB"
-
-echo ""
-echo "--- VACUUM inside explicit transaction is a GC no-op ---"
-
-DB=/tmp/test_vac_txn_$$.db; db_rm "$DB"
-echo "CREATE TABLE t(x); INSERT INTO t VALUES(1);" | $DOLTLITE "$DB" > /dev/null 2>&1
-# Prolly VACUUM bridges to GC; open transactions skip compaction (SQLITE_OK).
-run_test "vacuum_in_txn_noop" \
-  "BEGIN; VACUUM; SELECT count(*) FROM t; COMMIT;" \
-  "1" "$DB"
 db_rm "$DB"
 
 echo ""
@@ -109,6 +100,90 @@ else
 fi
 
 db_rm "$DB"; db_rm "$DB_B"
+
+echo ""
+echo "--- VACUUM inside a transaction errors like stock; the txn survives ---"
+
+DB=/tmp/test_vac_txn_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "vacuum_in_txn_errors" \
+  "BEGIN;
+INSERT INTO t VALUES(2,2);
+VACUUM;
+COMMIT;
+SELECT group_concat(id) FROM t;" \
+  "cannot VACUUM from within a transaction" "$DB"
+run_test_match "vacuum_in_txn_commit_survives_error" \
+  "BEGIN;
+INSERT INTO t VALUES(3,3);
+VACUUM;
+COMMIT;" \
+  "cannot VACUUM from within a transaction" "$DB"
+run_test "vacuum_in_txn_commit_survives_rows" \
+  "SELECT count(*) FROM t;" "3" "$DB"
+run_test_match "vacuum_into_in_txn_errors" \
+  "BEGIN;
+VACUUM INTO '/tmp/test_vac_txn_into_$$.db';" \
+  "cannot VACUUM from within a transaction" "$DB"
+db_rm "$DB"; rm -f "/tmp/test_vac_txn_into_$$.db"
+
+echo ""
+echo "--- VACUUM INTO writes an independent compacted copy ---"
+
+DB=/tmp/test_vac_into_$$.db; COPY=/tmp/test_vac_into_copy_$$.db
+db_rm "$DB"; db_rm "$COPY"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'kept');
+SELECT dolt_commit('-A','-m','first');
+INSERT INTO t VALUES(2,'second');
+SELECT dolt_commit('-A','-m','second');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "vacuum_into_runs" "VACUUM INTO '$COPY';" "" "$DB"
+run_test "vacuum_into_copy_rows" \
+  "SELECT group_concat(id||':'||v) FROM t;" "1:kept,2:second" "$COPY"
+run_test "vacuum_into_copy_history" \
+  "SELECT count(*) FROM dolt_log;" "3" "$COPY"
+run_test "vacuum_into_copy_integrity" "PRAGMA integrity_check;" "ok" "$COPY"
+run_test "vacuum_into_copy_independent" \
+  "INSERT INTO t VALUES(9,'copy only'); SELECT count(*) FROM t;" "3" "$COPY"
+run_test "vacuum_into_source_untouched" \
+  "SELECT count(*) FROM t;" "2" "$DB"
+run_test_match "vacuum_into_existing_target_errors" \
+  "VACUUM INTO '$COPY';" "output file already exists" "$DB"
+db_rm "$COPY"
+
+echo ""
+echo "--- VACUUM INTO onto an empty file is allowed, like stock ---"
+: > "$COPY"
+run_test "vacuum_into_empty_target_runs" "VACUUM INTO '$COPY';" "" "$DB"
+run_test "vacuum_into_empty_target_readable" \
+  "SELECT v FROM t WHERE id=1;" "kept" "$COPY"
+db_rm "$DB"; db_rm "$COPY"
+
+echo ""
+echo "--- VACUUM INTO drops chunks history no longer reaches ---"
+
+DB=/tmp/test_vac_into_gc_$$.db; COPY=/tmp/test_vac_into_gc_copy_$$.db
+db_rm "$DB"; db_rm "$COPY"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t SELECT x, 'val_'||x FROM (WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM r WHERE x<2000) SELECT x FROM r);
+SELECT dolt_commit('-A','-m','big');
+DELETE FROM t WHERE id > 10;
+SELECT dolt_commit('-A','-m','small');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "VACUUM INTO '$COPY';" | $DOLTLITE "$DB" > /dev/null 2>&1
+SRC_SIZE=$(wc -c < "$DB" | tr -d ' ')
+COPY_SIZE=$(wc -c < "$COPY" | tr -d ' ')
+if [ -s "$COPY" ] && [ "$COPY_SIZE" -le "$SRC_SIZE" ]; then
+  PASS=$((PASS+1)); echo "  PASS: vacuum_into_copy_not_larger ($COPY_SIZE <= $SRC_SIZE)"
+else
+  FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: vacuum_into_copy_not_larger"
+  echo "  FAIL: vacuum_into_copy_not_larger ($COPY_SIZE vs $SRC_SIZE)"
+fi
+run_test "vacuum_into_gc_copy_rows" "SELECT count(*) FROM t;" "10" "$COPY"
+db_rm "$DB"; db_rm "$COPY"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests ==="

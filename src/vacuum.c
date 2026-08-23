@@ -171,16 +171,39 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   ** falls through to the page-vacuum path below even in a doltlite build. */
   if( sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt) ){
     extern int doltliteGcCompactDbWithPhase(sqlite3*, int, const char**);
-    if( pOut ){
-      sqlite3SetString(pzErrMsg, db,
-        "VACUUM INTO is not supported for doltlite databases");
+    extern int doltliteGcVacuumInto(sqlite3*, int, const char*, const char**);
+    /* The VACUUM statement rejects an open transaction like stock. Only this
+    ** statement path does: checkpoint-driven compaction and dolt_gc() call
+    ** doltliteGcCompactDbWithPhase directly, where !autoCommit stays a
+    ** successful no-op by contract. */
+    if( !db->autoCommit ){
+      sqlite3SetString(pzErrMsg, db, "cannot VACUUM from within a transaction");
       return SQLITE_ERROR;
     }
-    /* Prolly VACUUM is a GC bridge, not stock page rewrite. Do not reject open
-    ** transactions here: doltliteGcCompactDbWithPhase treats !autoCommit, held
-    ** graph lock, and uncommitted staging as a successful no-op (checkpoint-
-    ** driven compaction uses the same contract). Stock's "cannot VACUUM from
-    ** within a transaction" applies only to the page-vacuum path below. */
+    if( pOut ){
+      const char *zPhase = 0;
+      const char *zInto;
+      int rcInto;
+      if( sqlite3_value_type(pOut)!=SQLITE_TEXT ){
+        sqlite3SetString(pzErrMsg, db, "non-text filename");
+        return SQLITE_ERROR;
+      }
+      zInto = (const char*)sqlite3_value_text(pOut);
+      rcInto = doltliteGcVacuumInto(db, iDb, zInto, &zPhase);
+      if( rcInto!=SQLITE_OK ){
+        if( rcInto==SQLITE_NOMEM || rcInto==SQLITE_IOERR_NOMEM ){
+          sqlite3SetString(pzErrMsg, db, "out of memory");
+        }else if( (rcInto & 0xff)==SQLITE_IOERR || rcInto==SQLITE_FULL ){
+          sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rcInto));
+        }else{
+          sqlite3SetString(pzErrMsg, db,
+                           zPhase ? zPhase : sqlite3ErrStr(rcInto));
+        }
+        return rcInto;
+      }
+      return SQLITE_OK;
+    }
+    /* Prolly VACUUM is a GC bridge, not stock page rewrite. */
     {
       const char *zPhase = 0;
       int rcGc = doltliteGcCompactDbWithPhase(db, iDb, &zPhase);

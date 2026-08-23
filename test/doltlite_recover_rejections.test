@@ -174,49 +174,50 @@ do_test doltlite_recover_rejections-5.0 {
 } {50 2550 30000}
 set ::sig5 [execsql {SELECT dolt_hashof_table('t1')}]
 
-do_catchsql_test doltlite_recover_rejections-5.1 {
-  VACUUM main INTO 'out.db';
-} {1 {VACUUM INTO is not supported for doltlite databases}}
+do_test doltlite_recover_rejections-5.1 {
+  list [catchsql {VACUUM main INTO 'out.db'}] [file exists out.db]
+} {{0 {}} 1}
 do_test doltlite_recover_rejections-5.2 {
-  file exists out.db
-} {0}
+  sqlite3 dbout out.db
+  set res [dbout eval {SELECT count(*), sum(a), sum(length(b)) FROM t1}]
+  dbout close
+  set res
+} {50 2550 30000}
 do_catchsql_test doltlite_recover_rejections-5.3 {
   VACUUM INTO 'out.db';
-} {1 {VACUUM INTO is not supported for doltlite databases}}
+} {1 {output file already exists}}
 do_test doltlite_recover_rejections-5.4 {
-  list [catchsql {VACUUM INTO 'out2.db'}] \
-       [catchsql {VACUUM INTO 'out2.db'}] \
-       [file exists out2.db]
-} {{1 {VACUUM INTO is not supported for doltlite databases}} {1 {VACUUM INTO is not supported for doltlite databases}} 0}
+  list [catchsql {VACUUM INTO 'out2.db'}]        [catchsql {VACUUM INTO 'out2.db'}]        [file exists out2.db]
+} {{0 {}} {1 {output file already exists}} 1}
 do_catchsql_test doltlite_recover_rejections-5.5 {
   VACUUM main INTO ':memory:';
-} {1 {VACUUM INTO is not supported for doltlite databases}}
+} {1 {cannot VACUUM a doltlite database INTO an in-memory target}}
 do_test doltlite_recover_rejections-5.6 {
   execsql {
     CREATE TABLE t2(name TEXT);
     INSERT INTO t2 VALUES(':memory:');
   }
   catchsql {VACUUM main INTO (SELECT name FROM t2)}
-} {1 {VACUUM INTO is not supported for doltlite databases}}
+} {1 {cannot VACUUM a doltlite database INTO an in-memory target}}
 do_catchsql_test doltlite_recover_rejections-5.7 {
   VACUUM INTO null;
-} {1 {VACUUM INTO is not supported for doltlite databases}}
+} {1 {non-text filename}}
 do_test doltlite_recover_rejections-5.8 {
   db func target target
   proc target {} { return "test.db2" }
   list [catchsql {VACUUM INTO target()}] [file exists test.db2]
-} {{1 {VACUUM INTO is not supported for doltlite databases}} 0}
+} {{0 {}} 1}
 do_test doltlite_recover_rejections-5.9 {
-  list [string equal $::sig5 [execsql {SELECT dolt_hashof_table('t1')}]] \
-       [execsql {SELECT count(*), sum(a), sum(length(b)) FROM t1}]
+  list [string equal $::sig5 [execsql {SELECT dolt_hashof_table('t1')}]]        [execsql {SELECT count(*), sum(a), sum(length(b)) FROM t1}]
 } {1 {50 2550 30000}}
 do_test doltlite_recover_rejections-5.10 {
   execsql {SELECT name FROM sqlite_master WHERE name IN ('t1','t1b','t2') ORDER BY 1}
 } {t1 t1b t2}
 do_test doltlite_recover_rejections-5.11 {
+  forcedelete test.db2
   execsql {PRAGMA page_size=1024}
   list [catchsql {VACUUM INTO 'test.db2'}] [file exists test.db2]
-} {{1 {VACUUM INTO is not supported for doltlite databases}} 0}
+} {{0 {}} 1}
 
 set tn 0
 foreach pragma {
@@ -230,17 +231,16 @@ foreach pragma {
   do_test doltlite_recover_rejections-5.12.$tn {
     forcedelete test.db2
     db eval $pragma
-    list [catchsql {VACUUM INTO 'test.db2'}] \
-         [file exists test.db2] \
-         [string equal $::sig5 [execsql {SELECT dolt_hashof_table('t1')}]]
-  } {{1 {VACUUM INTO is not supported for doltlite databases}} 0 1}
+    list [catchsql {VACUUM INTO 'test.db2'}]          [file exists test.db2]          [string equal $::sig5 [execsql {SELECT dolt_hashof_table('t1')}]]
+  } {{0 {}} 1 1}
 }
 
 do_test doltlite_recover_rejections-5.13 {
   db close
   sqlite3 db test.db
+  forcedelete out.db
   catchsql {VACUUM INTO 'out.db'}
-} {1 {VACUUM INTO is not supported for doltlite databases}}
+} {0 {}}
 do_test doltlite_recover_rejections-5.14 {
   execsql {
     INSERT INTO t1(a,b) VALUES(101, 200);
