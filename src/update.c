@@ -920,6 +920,12 @@ void sqlite3Update(
 #endif
       sqlite3VdbeAddOp2(v, OP_Copy, regOldRowid, regNewRowid);
     }
+#ifdef DOLTLITE_PROLLY
+    else if( VisibleRowid(pTab) && pPk!=0 && pTrigger ){
+      sqlite3VdbeAddOp2(v, OP_Rowid, iDataCur, regOldRowid);
+      sqlite3VdbeAddOp2(v, OP_Copy, regOldRowid, regNewRowid);
+    }
+#endif
   }
 
   /* Populate the array of registers beginning at regNew with the new
@@ -1115,6 +1121,18 @@ void sqlite3Update(
   }
 
   if( pTrigger ){
+#ifdef DOLTLITE_PROLLY
+    if( !isView && VisibleRowid(pTab) && pPk!=0 ){
+      int ii;
+      Index *pPkIdx;
+      for(ii=0, pPkIdx=pTab->pIndex; pPkIdx; pPkIdx=pPkIdx->pNext, ii++){
+        if( IsPrimaryKeyIndex(pPkIdx) && aRegIdx[ii] ){
+          sqlite3VdbeAddOp3(v, OP_Rowid, iIdxCur+ii, regNewRowid, aRegIdx[ii]);
+          break;
+        }
+      }
+    }
+#endif
     sqlite3CodeRowTrigger(pParse, pTrigger, TK_UPDATE, pChanges,
         TRIGGER_AFTER, pTab, regOldRowid, onError, labelContinue);
   }

@@ -6563,7 +6563,7 @@ case OP_RowData: {
   break;
 }
 
-/* Opcode: Rowid P1 P2 * * *
+/* Opcode: Rowid P1 P2 P3 * *
 ** Synopsis: r[P2]=PX rowid of P1
 **
 ** Store in register P2 an integer which is the key of the table entry that
@@ -6572,6 +6572,11 @@ case OP_RowData: {
 ** P1 can be either an ordinary table or a virtual table.  There used to
 ** be a separate OP_VRowid opcode for use with virtual tables, but this
 ** one opcode now works for both table types.
+**
+** If P3 is non-zero, P1 is used only for KeyInfo and r[P2] is the SQL
+** rowid of the index record in r[P3]. Clustered PRIMARY KEY RETURNING
+** and NEW.rowid use that form because the PK cursor is still a null row
+** after OP_IdxInsert.
 */
 case OP_Rowid: {                 /* out2, ncycle */
   VdbeCursor *pC;
@@ -6583,6 +6588,22 @@ case OP_Rowid: {                 /* out2, ncycle */
   assert( pOp->p1>=0 && pOp->p1<p->nCursor );
   pC = p->apCsr[pOp->p1];
   assert( pC!=0 );
+#ifdef DOLTLITE_PROLLY
+  if( pOp->p3 ){
+    Mem *pRec = &aMem[pOp->p3];
+    assert( pC->eCurType==CURTYPE_BTREE );
+    rc = ExpandBlob(pRec);
+    if( rc ) goto abort_due_to_error;
+    if( (pRec->flags & MEM_Blob)==0 ){
+      pOut->flags = MEM_Null;
+      break;
+    }
+    v = doltliteSyntheticRowidFromRecord(
+        (const u8*)pRec->z, pRec->n, pC->pKeyInfo);
+    pOut->u.i = v;
+    break;
+  }
+#endif
   assert( pC->eCurType!=CURTYPE_PSEUDO || pC->nullRow );
   if( pC->nullRow ){
     pOut->flags = MEM_Null;
