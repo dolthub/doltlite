@@ -2394,4 +2394,29 @@ run_test "merge_renumbered_index_reopen" \
 ok" "$DB"
 rm -f "$DB"
 
+# Reverting a table rename makes theirs' index share a name with ours' index
+# on a DIFFERENT table; pass 2 installs theirs' entry at its own number, so
+# the merged row must not be redirected to ours' number (which shifted with
+# the extra table and matches no merged entry). Used to fail the revert.
+DB=/tmp/test_revert_renamed_index_$$.db; rm -f "$DB"
+cat <<'EOF2' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(a INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX ix ON t(v);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t RENAME TO t2;
+CREATE TABLE a0(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','rename plus new table');
+EOF2
+run_test_match "revert_renamed_index_succeeds" "SELECT dolt_revert('HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "revert_renamed_index_follows_back" \
+  "SELECT name, tbl_name FROM sqlite_master WHERE type='index';" \
+  "ix|t" "$DB"
+run_test "revert_renamed_index_intact" \
+  "SELECT v FROM t WHERE v='x'; PRAGMA integrity_check;" \
+  "x
+ok" "$DB"
+rm -f "$DB"
+
 dltest_finish
