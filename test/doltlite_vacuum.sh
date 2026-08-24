@@ -67,6 +67,13 @@ run_test "vacuum_into_accepted" \
 run_test "vacuum_into_target_readable" \
   "SELECT x FROM t;" "1" "/tmp/test_vac_into_target_$$.db"
 rm -f "/tmp/test_vac_into_target_$$.db"
+run_test_match "vacuum_into_memory_refused" \
+  "VACUUM INTO ':memory:';" \
+  "cannot VACUUM a doltlite database INTO an in-memory target" "$DB"
+run_test_match "vacuum_into_memory_expr_refused" \
+  "CREATE TABLE t2(name TEXT); INSERT INTO t2 VALUES(':memory:');
+VACUUM main INTO (SELECT name FROM t2);" \
+  "cannot VACUUM a doltlite database INTO an in-memory target" "$DB"
 db_rm "$DB"
 
 echo ""
