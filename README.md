@@ -767,7 +767,9 @@ For a DoltLite-format main database, the compatibility contract is:
   `:memory:` attachment are supported.
 - `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
   `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
-  collection instead of rebuilding SQLite pages.
+  collection instead of rebuilding SQLite pages. File-backed `VACUUM INTO`
+  writes a compacted DoltLite-format copy; `:memory:` as the destination is
+  refused.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
 - Application-defined collations registered with `sqlite3_create_collation*`
