@@ -5560,14 +5560,22 @@ static int exprColumnOfTable(Expr *pExpr, Table *pTab){
   return -2;
 }
 
-static Index *findSingleColumnIndex(Table *pTab, int iColumn){
+static Index *findSingleColumnIndex(
+  SrcItem *pSrc,
+  Table *pTab,
+  int iColumn,
+  const char *zColl
+){
   Index *pIdx;
-  for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+  if( pSrc->fg.notIndexed ) return 0;
+  pIdx = pSrc->fg.isIndexedBy ? pSrc->u2.pIBIndex : pTab->pIndex;
+  for(; pIdx; pIdx=pSrc->fg.isIndexedBy ? 0 : pIdx->pNext){
     if( pIdx->pPartIdxWhere==0
      && pIdx->bUnordered==0
      && pIdx->nKeyCol>=1
      && pIdx->aiColumn[0]==iColumn
      && (pIdx->aSortOrder==0 || pIdx->aSortOrder[0]==0)
+     && sqlite3StrICmp(pIdx->azColl[0], zColl)==0
     ){
       return pIdx;
     }
@@ -5660,6 +5668,8 @@ static Index *isSimpleIndexRangeCount(
   ExprList *pArgs;
   SrcItem *pSrc;
   Index *pIdx;
+  CollSeq *pColl;
+  CollSeq *pCollHigh;
   int iColumn;
   int iArgColumn;
 
@@ -5696,7 +5706,12 @@ static Index *isSimpleIndexRangeCount(
   ){
     return 0;
   }
-  pIdx = findSingleColumnIndex(pTab, iColumn);
+  pColl = sqlite3BinaryCompareCollSeq(pParse, p->pWhere->pLeft, *ppLow);
+  pCollHigh = sqlite3BinaryCompareCollSeq(pParse, p->pWhere->pLeft, *ppHigh);
+  if( pColl==0 ) pColl = pParse->db->pDfltColl;
+  if( pCollHigh==0 ) pCollHigh = pParse->db->pDfltColl;
+  if( sqlite3StrICmp(pColl->zName, pCollHigh->zName) ) return 0;
+  pIdx = findSingleColumnIndex(pSrc, pTab, iColumn, pColl->zName);
   if( !pIdx ) return 0;
 
   pExpr = p->pEList->a[0].pExpr;
