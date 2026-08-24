@@ -55,4 +55,48 @@ do_execsql_test 3.0 {
          (SELECT md5sum(term, docid, col, pos) FROM t2check);
 } {1}
 
+# A failed CREATE VIRTUAL TABLE must abort only its own statement. It used
+# to roll back the whole btree transaction: earlier DML in an open BEGIN
+# vanished while SQL still believed the transaction was open.
+do_execsql_test 3.0 {
+  CREATE TABLE keepme(a INTEGER PRIMARY KEY, b TEXT);
+  BEGIN;
+  INSERT INTO keepme VALUES(1, 'keep');
+}
+do_catchsql_test 3.1 {
+  CREATE VIRTUAL TABLE vbad USING fts3(x, tokenize nosuch);
+} {1 {unknown tokenizer: nosuch}}
+do_test 3.2 { sqlite3_get_autocommit db } {0}
+do_execsql_test 3.3 { SELECT a, b FROM keepme } {1 keep}
+do_execsql_test 3.4 {
+  SELECT count(*) FROM sqlite_master WHERE name='vbad';
+} {0}
+do_execsql_test 3.5 { COMMIT }
+do_execsql_test 3.6 { SELECT a, b FROM keepme } {1 keep}
+
+# Control: the same failure outside a transaction leaves the database
+# usable and records nothing.
+do_catchsql_test 3.7 {
+  CREATE VIRTUAL TABLE vbad2 USING fts3(x, tokenize nosuch);
+} {1 {unknown tokenizer: nosuch}}
+do_test 3.8 { sqlite3_get_autocommit db } {1}
+do_execsql_test 3.9 {
+  CREATE TABLE alive(a);
+  INSERT INTO alive VALUES(7);
+  SELECT a FROM alive;
+} {7}
+do_execsql_test 3.10 {
+  SELECT count(*) FROM sqlite_master WHERE name LIKE 'vbad%';
+} {0}
+do_execsql_test 3.11 {
+  BEGIN;
+  INSERT INTO keepme VALUES(2, 'more');
+}
+do_catchsql_test 3.12 {
+  CREATE VIRTUAL TABLE vbad3 USING fts3(x, tokenize nosuch);
+} {1 {unknown tokenizer: nosuch}}
+do_execsql_test 3.13 { ROLLBACK }
+do_test 3.14 { sqlite3_get_autocommit db } {1}
+do_execsql_test 3.15 { SELECT a, b FROM keepme } {1 keep}
+
 finish_test
