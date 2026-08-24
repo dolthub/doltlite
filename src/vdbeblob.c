@@ -67,7 +67,11 @@ static int blobSeekToRow(Incrblob *p, sqlite3_int64 iRow, char **pzErr){
   ** counter is faster. */
   if( v->pc>4 ){
     v->pc = 4;
-    assert( v->aOp[v->pc].opcode==OP_NotExists );
+    assert( v->aOp[v->pc].opcode==OP_NotExists
+#ifdef DOLTLITE_PROLLY
+         || v->aOp[v->pc].opcode==OP_Rewind
+#endif
+    );
     rc = sqlite3VdbeExec(v);
   }else{
     rc = sqlite3_step(p->pStmt);
@@ -174,7 +178,17 @@ int sqlite3_blob_open(
       pTab = 0;
       sqlite3ErrorMsg(&sParse, "cannot open virtual table: %s", zTable);
     }
+#ifndef SQLITE_OMIT_VIEW
+    if( pTab && IsView(pTab) ){
+      pTab = 0;
+      sqlite3ErrorMsg(&sParse, "cannot open view: %s", zTable);
+    }
+#endif
+#ifdef DOLTLITE_PROLLY
+    if( pTab && !VisibleRowid(pTab) ){
+#else
     if( pTab && !HasRowid(pTab) ){
+#endif
       pTab = 0;
       sqlite3ErrorMsg(&sParse, "cannot open table without rowid: %s", zTable);
     }
@@ -183,12 +197,6 @@ int sqlite3_blob_open(
       sqlite3ErrorMsg(&sParse, "cannot open table with generated columns: %s",
                       zTable);
     }
-#ifndef SQLITE_OMIT_VIEW
-    if( pTab && IsView(pTab) ){
-      pTab = 0;
-      sqlite3ErrorMsg(&sParse, "cannot open view: %s", zTable);
-    }
-#endif
     if( pTab==0
      || ((iDb = sqlite3SchemaToIndex(db, pTab->pSchema))==1 &&
          sqlite3OpenTempDatabase(&sParse))
@@ -294,6 +302,53 @@ int sqlite3_blob_open(
                            pTab->pSchema->iGeneration);
       sqlite3VdbeChangeP5(v, 1);
       assert( sqlite3VdbeCurrentAddr(v)==2 || db->mallocFailed );
+#ifdef DOLTLITE_PROLLY
+      if( !HasRowid(pTab) ){
+        Index *pPk = sqlite3PrimaryKeyIndex(pTab);
+        int iStore;
+        int addrRewind, addrRowid, addrEq, addrMiss, addrFound;
+
+        sqlite3VdbeUsesBtree(v, iDb);
+        iStore = pPk ? sqlite3TableColumnToIndex(pPk, iCol) : -1;
+        if( iStore<0 ){
+          sqlite3DbFree(db, zErr);
+          zErr = sqlite3MPrintf(db, "no such column: \"%s\"", zColumn);
+          rc = SQLITE_ERROR;
+          sqlite3BtreeLeaveAll(db);
+          goto blob_open_out;
+        }
+        pBlob->iCol = (u16)iStore;
+#ifdef SQLITE_OMIT_SHARED_CACHE
+        sqlite3VdbeAddOp0(v, OP_Noop);
+#else
+        sqlite3VdbeAddOp3(v, OP_TableLock, iDb, pTab->tnum, wrFlag);
+        sqlite3VdbeChangeP4(v, 2, pTab->zName, P4_TRANSIENT);
+#endif
+        sqlite3VdbeAddOp3(v, wrFlag ? OP_OpenWrite : OP_OpenRead,
+                          0, pPk->tnum, iDb);
+        sqlite3VdbeSetP4KeyInfo(&sParse, pPk);
+        /* blobSeekToRow() restarts at addr 4 (OP_Rewind). */
+        assert( sqlite3VdbeCurrentAddr(v)==4 || db->mallocFailed );
+        addrRewind = sqlite3VdbeAddOp2(v, OP_Rewind, 0, 0);
+        addrRowid = sqlite3VdbeAddOp2(v, OP_Rowid, 0, 2);
+        addrEq = sqlite3VdbeAddOp3(v, OP_Eq, 1, 0, 2);
+        sqlite3VdbeChangeP5(v, SQLITE_AFF_NUMERIC|SQLITE_NULLEQ);
+        sqlite3VdbeAddOp2(v, OP_Next, 0, addrRowid);
+        addrMiss = sqlite3VdbeAddOp0(v, OP_Halt);
+        addrFound = sqlite3VdbeAddOp3(v, OP_Column, 0, iStore, 3);
+        sqlite3VdbeAddOp2(v, OP_ResultRow, 1, 0);
+        sqlite3VdbeAddOp0(v, OP_Halt);
+        if( db->mallocFailed==0 ){
+          sqlite3VdbeChangeP2(v, addrRewind, addrMiss);
+          sqlite3VdbeChangeP2(v, addrEq, addrFound);
+          sParse.nVar = 0;
+          sParse.nMem = 3;
+          sParse.nTab = 1;
+          sqlite3VdbeMakeReady(v, &sParse);
+        }
+      }else
+#endif
+      {
       aOp = sqlite3VdbeAddOpList(v, ArraySize(openBlob), openBlob, iLn);
 
       /* Make sure a mutex is held on the table to be accessed */
@@ -335,9 +390,16 @@ int sqlite3_blob_open(
         sParse.nTab = 1;
         sqlite3VdbeMakeReady(v, &sParse);
       }
+      }
     }
    
+#ifdef DOLTLITE_PROLLY
+    if( HasRowid(pTab) ){
+      pBlob->iCol = iCol;
+    }
+#else
     pBlob->iCol = iCol;
+#endif
     pBlob->db = db;
     sqlite3BtreeLeaveAll(db);
     if( db->mallocFailed ){

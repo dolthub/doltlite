@@ -216,7 +216,6 @@ collate4 collate4-1.2.13 class=intentional
 fkey1 fkey1-4.2 class=intentional  # table_info notnull=1 on the TEXT PK column (PK-clustered; matches stock WITHOUT ROWID), not FK-related
 
 # ── fkey2 ──
-fkey2 fkey2-5.2 class=intentional issue=1840  # FK + rowid interaction
 fkey2 fkey2-5.3 class=intentional issue=1840
 fkey2 fkey2-5.4 class=intentional issue=1840
 fkey2 fkey2-13.1.2.1 class=intentional issue=1840
@@ -1840,7 +1839,6 @@ dbstatus2 dbstatus2-1.2 class=intentional  # DBSTATUS cache stats zero under chu
 dbstatus2 dbstatus2-1.3 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.4 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.5 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
-dbstatus2 dbstatus2-1.7 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.8 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.9 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-2.2 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
@@ -3111,13 +3109,9 @@ e_blobclose e_blobclose-3.3 class=intentional
 e_blobclose e_blobclose-3.4 class=intentional
 e_blobclose e_blobclose-3.5 class=intentional
 
-# All 4.8.* tests call sqlite3_blob_open on t3(a PRIMARY KEY, b, c, d, e, f,
-# UNIQUE(e,f)) — an explicit-PK table that doltlite stores without a rowid,
-# so blob_open fails "cannot open table without rowid: t3" (rowid-on-PK
-# class). The 4.8.1.* read-access opens that stock allows fail outright, and
-# the 4.8.2.* cases that expect "cannot open indexed column for writing"
-# get the without-rowid message instead. Every blob_open test on genuine
-# rowid tables (sections 1-4.7, 4.9+) passes.
+# t3 is clustered TEXT PK. blob_open is allowed, but iRow=1 is not the
+# hashed SQL rowid of 'aaaa', so 4.8.1.* reads and 4.8.2.3/4 writes that
+# stock allows still fail. Indexed-column write guards now match stock.
 e_blobopen e_blobopen-4.8.1.1.1 class=intentional
 e_blobopen e_blobopen-4.8.1.1.2 class=intentional
 e_blobopen e_blobopen-4.8.1.1.3 class=intentional
@@ -3142,8 +3136,6 @@ e_blobopen e_blobopen-4.8.1.6.1 class=intentional
 e_blobopen e_blobopen-4.8.1.6.2 class=intentional
 e_blobopen e_blobopen-4.8.1.6.3 class=intentional
 e_blobopen e_blobopen-4.8.1.6.4 class=intentional
-e_blobopen e_blobopen-4.8.2.1.3 class=intentional
-e_blobopen e_blobopen-4.8.2.2.3 class=intentional
 e_blobopen e_blobopen-4.8.2.3.1 class=intentional
 e_blobopen e_blobopen-4.8.2.3.2 class=intentional
 e_blobopen e_blobopen-4.8.2.3.3 class=intentional
@@ -3152,8 +3144,6 @@ e_blobopen e_blobopen-4.8.2.4.1 class=intentional
 e_blobopen e_blobopen-4.8.2.4.2 class=intentional
 e_blobopen e_blobopen-4.8.2.4.3 class=intentional
 e_blobopen e_blobopen-4.8.2.4.4 class=intentional
-e_blobopen e_blobopen-4.8.2.5.3 class=intentional
-e_blobopen e_blobopen-4.8.2.6.3 class=intentional
 
 # e_reindex-1.3 hides the indexes via writable_schema, mutates the table,
 # restores the index rows, and checks integrity_check output. doltlite
