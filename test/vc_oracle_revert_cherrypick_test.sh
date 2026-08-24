@@ -993,6 +993,38 @@ SELECT dolt_revert('HEAD');
 " "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE name = 'idx') || '|' || (SELECT group_concat(id, ',') FROM (SELECT id FROM t WHERE v = 10 ORDER BY id))" \
 "SELECT concat('Q|', (SELECT count(*) FROM information_schema.statistics WHERE table_name = 't' AND index_name = 'idx'), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM t WHERE v = 10))"
 
+oracle_dual_poststate "revert_renumbered_indexes" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+INSERT INTO a VALUES (1, 'one'), (2, 'two');
+CREATE INDEX i1 ON a(payload);
+CREATE INDEX i2 ON a(payload);
+CREATE INDEX i3 ON a(payload);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE a RENAME TO c;
+CREATE TABLE d(id INTEGER PRIMARY KEY);
+INSERT INTO c VALUES (3, 'three');
+SELECT dolt_commit('-Am', 'rename and add');
+SELECT dolt_revert('HEAD');
+" "
+CREATE TABLE a(id INT PRIMARY KEY, payload VARCHAR(100));
+CREATE TABLE b(id INT PRIMARY KEY);
+INSERT INTO a VALUES (1, 'one'), (2, 'two');
+CREATE INDEX i1 ON a(payload);
+CREATE INDEX i2 ON a(payload);
+CREATE INDEX i3 ON a(payload);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE a RENAME TO c;
+CREATE TABLE d(id INT PRIMARY KEY);
+INSERT INTO c VALUES (3, 'three');
+SELECT dolt_commit('-Am', 'rename and add');
+SELECT dolt_revert('HEAD');
+" "SELECT 'Q|' ||
+       (SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' ORDER BY name)) || '|' ||
+       (SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='index' ORDER BY name)) || '|' ||
+       (SELECT group_concat(id, ',') FROM (SELECT id FROM a ORDER BY id))" \
+"SELECT concat('Q|', (SELECT group_concat(table_name ORDER BY table_name SEPARATOR ',') FROM information_schema.tables WHERE table_name IN ('a','b','c','d')), '|', (SELECT group_concat(index_name ORDER BY index_name SEPARATOR ',') FROM information_schema.statistics WHERE index_name IN ('i1','i2','i3')), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM a))"
+
 oracle_error "revert_view_add_after_modify_conflicts" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_commit('-Am', 'base');

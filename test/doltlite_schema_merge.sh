@@ -2419,4 +2419,39 @@ run_test "revert_renamed_index_intact" \
 ok" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_revert_renumbered_indexes_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE a(id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+INSERT INTO a VALUES(1,'one'),(2,'two');
+CREATE INDEX i1 ON a(payload);
+CREATE INDEX i2 ON a(payload);
+CREATE INDEX i3 ON a(payload);
+SELECT dolt_commit('-Am','base');
+ALTER TABLE a RENAME TO c;
+CREATE TABLE d(id INTEGER PRIMARY KEY);
+INSERT INTO c VALUES(3,'three');
+SELECT dolt_commit('-Am','rename and add');
+EOF
+run_test_match "revert_renumbered_indexes_hash" "SELECT dolt_revert('HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "revert_renumbered_indexes_tables" \
+  "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type='table' ORDER BY name);" \
+  "a,b" "$DB"
+run_test "revert_renumbered_indexes_owners" \
+  "SELECT group_concat(name || ':' || tbl_name) FROM (SELECT name,tbl_name FROM sqlite_master WHERE type='index' ORDER BY name);" \
+  "i1:a,i2:a,i3:a" "$DB"
+run_test "revert_renumbered_indexes_rows" \
+  "SELECT id FROM a INDEXED BY i1 WHERE payload='two';
+   SELECT id FROM a INDEXED BY i2 WHERE payload='two';
+   SELECT id FROM a INDEXED BY i3 WHERE payload='two';" \
+  "2
+2
+2" "$DB"
+run_test "revert_renumbered_indexes_distinct_pages" \
+  "SELECT count(DISTINCT rootpage) = count(*) FROM sqlite_master WHERE rootpage > 0;" \
+  "1" "$DB"
+run_test "revert_renumbered_indexes_reopen" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 dltest_finish
