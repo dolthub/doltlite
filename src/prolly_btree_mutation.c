@@ -1522,13 +1522,8 @@ int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
     payload.pData = pNew;
     payload.nData = nVal;
   } else {
-    const u8 *pKey;
-    int nKey;
-    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-    payload.pKey = pKey;
-    payload.nKey = nKey;
-    payload.pData = pNew;
-    payload.nData = nVal;
+    payload.pKey = pNew;
+    payload.nKey = nVal;
   }
 
   rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);

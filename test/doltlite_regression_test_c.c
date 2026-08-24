@@ -85,6 +85,17 @@ static const char *queryScalarText(sqlite3 *db, const char *sql){
   return gBuf;
 }
 
+static sqlite3_int64 queryInt64(sqlite3 *db, const char *sql){
+  sqlite3_stmt *stmt = 0;
+  sqlite3_int64 v = 0;
+  if( sqlite3_prepare_v2(db, sql, -1, &stmt, 0)==SQLITE_OK
+   && sqlite3_step(stmt)==SQLITE_ROW ){
+    v = sqlite3_column_int64(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return v;
+}
+
 static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -12232,6 +12243,116 @@ static void run_rowid_named_pk_keeps_rowid_table(void){
   removeDbFiles(dbpath);
 }
 
+/* Clustered TEXT PK tables expose SQL rowid; sqlite3_blob_open must seek by that
+** rowid. Explicit WITHOUT ROWID stays rejected. */
+static void run_clustered_pk_blob_open(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3_blob *pBlob = 0;
+  sqlite3_int64 rowid;
+  sqlite3_int64 rowid2;
+  unsigned char buf[8];
+  int rc;
+
+  printf("=== Clustered PK Blob Open Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_clustered_pk_blob_open");
+  removeDbFiles(dbpath);
+
+  rc = sqlite3_open(dbpath, &db);
+  check("cpk_blob_open_db", rc==SQLITE_OK);
+  if( !db ) return;
+
+  check("cpk_blob_setup", execSql(db,
+      "CREATE TABLE cpk(k TEXT PRIMARY KEY, b BLOB);"
+      "INSERT INTO cpk VALUES('k', x'0102');")==SQLITE_OK);
+  rowid = queryInt64(db, "SELECT rowid FROM cpk");
+  check("cpk_blob_sql_rowid_nonzero", rowid!=0);
+
+  rc = sqlite3_blob_open(db, "main", "cpk", "b", rowid, 0, &pBlob);
+  check("cpk_blob_open_read", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "  cpk_blob_open_read: %s\n", sqlite3_errmsg(db));
+  }
+  if( pBlob ){
+    memset(buf, 0, sizeof(buf));
+    check("cpk_blob_bytes", sqlite3_blob_bytes(pBlob)==2);
+    check("cpk_blob_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_OK
+          && buf[0]==0x01 && buf[1]==0x02);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  rc = sqlite3_blob_open(db, "main", "cpk", "b", rowid, 1, &pBlob);
+  check("cpk_blob_open_write", rc==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_write", sqlite3_blob_write(pBlob, "AB", 2, 0)==SQLITE_OK);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+  check("cpk_blob_write_landed",
+        strcmp(queryScalarText(db, "SELECT hex(b) FROM cpk"), "4142")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  rc = sqlite3_open(dbpath, &db);
+  check("cpk_blob_reopen_db", rc==SQLITE_OK);
+  if( db ){
+    check("cpk_blob_write_persisted",
+          strcmp(queryScalarText(db, "SELECT hex(b) FROM cpk"), "4142")==0);
+  }
+
+  check("cpk_blob_blob_first_col", execSql(db,
+      "CREATE TABLE cpk2(b BLOB, k TEXT PRIMARY KEY);"
+      "INSERT INTO cpk2 VALUES(x'aa', 'x');"
+      "INSERT INTO cpk2 VALUES(x'bb', 'y');")==SQLITE_OK);
+  rowid = queryInt64(db, "SELECT rowid FROM cpk2 WHERE k='x'");
+  rowid2 = queryInt64(db, "SELECT rowid FROM cpk2 WHERE k='y'");
+  rc = sqlite3_blob_open(db, "main", "cpk2", "b", rowid, 0, &pBlob);
+  check("cpk_blob_open_non_leading_pk", rc==SQLITE_OK);
+  if( pBlob ){
+    memset(buf, 0, sizeof(buf));
+    check("cpk_blob_read_non_leading_pk",
+          sqlite3_blob_read(pBlob, buf, 1, 0)==SQLITE_OK && buf[0]==0xaa);
+    check("cpk_blob_reopen_other_row",
+          sqlite3_blob_reopen(pBlob, rowid2)==SQLITE_OK);
+    memset(buf, 0, sizeof(buf));
+    check("cpk_blob_reopen_read",
+          sqlite3_blob_read(pBlob, buf, 1, 0)==SQLITE_OK && buf[0]==0xbb);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("ipk_blob_setup", execSql(db,
+      "CREATE TABLE ipk(id INTEGER PRIMARY KEY, b BLOB);"
+      "INSERT INTO ipk VALUES(1, x'0102');")==SQLITE_OK);
+  rc = sqlite3_blob_open(db, "main", "ipk", "b", 1, 0, &pBlob);
+  check("ipk_blob_open", rc==SQLITE_OK);
+  if( pBlob ){
+    memset(buf, 0, sizeof(buf));
+    check("ipk_blob_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_OK
+          && buf[0]==0x01 && buf[1]==0x02);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("wor_blob_setup", execSql(db,
+      "CREATE TABLE wor(k TEXT PRIMARY KEY, b BLOB) WITHOUT ROWID;"
+      "INSERT INTO wor VALUES('k', x'0102');")==SQLITE_OK);
+  rc = sqlite3_blob_open(db, "main", "wor", "b", 1, 0, &pBlob);
+  check("wor_blob_open_rejected", rc==SQLITE_ERROR);
+  check("wor_blob_open_msg",
+        strstr(sqlite3_errmsg(db), "cannot open table without rowid")!=0);
+  if( pBlob ){
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 /* Untrusted refs blob: bound each u32 count; oversized counts are corrupt, not a wrapped alloc. */
 static void run_refs_deserialize_overflow_guard(void){
   printf("=== Refs Deserialize Overflow Guard Test ===\n\n");
@@ -13082,6 +13203,7 @@ static const RegressionCase aCases[] = {
   { "incrblob_legacy_engine_write", "Incrblob Legacy Engine Write Test", run_incrblob_legacy_engine_write },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
+  { "clustered_pk_blob_open", "Clustered PK Blob Open Test", run_clustered_pk_blob_open },
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
