@@ -178,6 +178,12 @@ int sqlite3_blob_open(
       pTab = 0;
       sqlite3ErrorMsg(&sParse, "cannot open virtual table: %s", zTable);
     }
+#ifndef SQLITE_OMIT_VIEW
+    if( pTab && IsView(pTab) ){
+      pTab = 0;
+      sqlite3ErrorMsg(&sParse, "cannot open view: %s", zTable);
+    }
+#endif
 #ifdef DOLTLITE_PROLLY
     if( pTab && !VisibleRowid(pTab) ){
 #else
@@ -191,12 +197,6 @@ int sqlite3_blob_open(
       sqlite3ErrorMsg(&sParse, "cannot open table with generated columns: %s",
                       zTable);
     }
-#ifndef SQLITE_OMIT_VIEW
-    if( pTab && IsView(pTab) ){
-      pTab = 0;
-      sqlite3ErrorMsg(&sParse, "cannot open view: %s", zTable);
-    }
-#endif
     if( pTab==0
      || ((iDb = sqlite3SchemaToIndex(db, pTab->pSchema))==1 &&
          sqlite3OpenTempDatabase(&sParse))
@@ -336,7 +336,7 @@ int sqlite3_blob_open(
         sqlite3VdbeAddOp2(v, OP_Next, 0, addrRowid);
         addrMiss = sqlite3VdbeAddOp0(v, OP_Halt);
         addrFound = sqlite3VdbeAddOp3(v, OP_Column, 0, iStore, 3);
-        sqlite3VdbeAddOp2(v, OP_ResultRow, 3, 1);
+        sqlite3VdbeAddOp2(v, OP_ResultRow, 1, 0);
         sqlite3VdbeAddOp0(v, OP_Halt);
         if( db->mallocFailed==0 ){
           sqlite3VdbeChangeP2(v, addrRewind, addrMiss);

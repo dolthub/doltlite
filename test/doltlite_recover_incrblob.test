@@ -19,26 +19,41 @@ do_execsql_test 1.0 {
 } {}
 
 do_test 1.1 {
-  set rc [catch {db incrblob pk b 1} msg]
-  list $rc $msg [sqlite3_errmsg db]
-} {1 {cannot open table without rowid: pk} {cannot open table without rowid: pk}}
+  set rowid [db one {SELECT rowid FROM pk}]
+  set blob [db incrblob pk b $rowid]
+  fconfigure $blob -translation binary
+  binary scan [read $blob] H* h
+  close $blob
+  set h
+} {0102030405060708090a}
 
 do_test 1.2 {
-  set rc [catch {db incrblob -readonly pk b 1} msg]
-  list $rc $msg [sqlite3_errmsg db]
-} {1 {cannot open table without rowid: pk} {cannot open table without rowid: pk}}
+  set rowid [db one {SELECT rowid FROM pk}]
+  set blob [db incrblob -readonly pk b $rowid]
+  fconfigure $blob -translation binary
+  binary scan [read $blob] H* h
+  close $blob
+  set h
+} {0102030405060708090a}
 
 do_test 1.3 {
   unset -nocomplain B
-  set rc [catch {sqlite3_blob_open db main pk b 1 0 B} msg]
-  list $rc $msg [sqlite3_errmsg db]
-} {1 SQLITE_ERROR {cannot open table without rowid: pk}}
+  set rowid [db one {SELECT rowid FROM pk}]
+  sqlite3_blob_open db main pk b $rowid 0 B
+  set n [sqlite3_blob_bytes $B]
+  binary scan [sqlite3_blob_read $B 0 $n] H* h
+  sqlite3_blob_close $B
+  list $n $h
+} {10 0102030405060708090a}
 
 do_test 1.4 {
   unset -nocomplain B
-  set rc [catch {sqlite3_blob_open db main pk b 1 1 B} msg]
-  list $rc $msg [sqlite3_errmsg db]
-} {1 SQLITE_ERROR {cannot open table without rowid: pk}}
+  set rowid [db one {SELECT rowid FROM pk}]
+  sqlite3_blob_open db main pk b $rowid 1 B
+  sqlite3_blob_write $B 0 ABCDEFGHIJ
+  sqlite3_blob_close $B
+  db eval {SELECT hex(b) FROM pk}
+} {4142434445464748494A}
 
 do_test 1.5 {
   set blob [db incrblob ipk b 1]
@@ -60,7 +75,7 @@ do_execsql_test 1.7 {
   SELECT a, hex(b) FROM pk;
   SELECT id, hex(b) FROM ipk;
   PRAGMA integrity_check;
-} {one 0102030405060708090A 1 0102030405060708090A ok}
+} {one 4142434445464748494A 1 0102030405060708090A ok}
 
 do_ioerr_test 2 -count 20 -cksum 1 -sqlprep {
   CREATE TABLE blobs(k INTEGER PRIMARY KEY, v BLOB);
