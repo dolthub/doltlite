@@ -377,9 +377,15 @@ int rebuildDisjointSchemaRows(
         }
       }
       if( !bMapped ){
+        /* Mirror pass 2's adoption test: it declines theirs' entry only
+        ** when ours holds the same object by name AND table, so a
+        ** same-named index on a different table stays pass-2-installed
+        ** at theirs' own number. */
         SchemaEntry *pOurSe = findSchemaEntry(aOursSchema, nOursSchema,
                                               pSe->zName);
-        if( pOurSe && pOurSe->zType && strcmp(pOurSe->zType, "index")==0 ){
+        if( pOurSe && pOurSe->zType && strcmp(pOurSe->zType, "index")==0
+         && pOurSe->zTblName && pSe->zTblName
+         && strcmp(pOurSe->zTblName, pSe->zTblName)==0 ){
           iRootpage = pOurSe->iRootpage;
         }else{
           iRootpage = pSe->iRootpage;
