@@ -8838,7 +8838,7 @@ case OP_VBegin: {
 case OP_VCreate: {
   Mem sMem;          /* For storing the record being decoded */
   const char *zTab;  /* Name of the virtual table */
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && defined(SQLITE_TEST)
   int bUnknownTokenizer = 0;
 #endif
 
@@ -8853,7 +8853,7 @@ case OP_VCreate: {
   zTab = (const char*)sqlite3_value_text(&sMem);
   assert( zTab || db->mallocFailed );
   if( zTab ){
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && defined(SQLITE_TEST)
     Table *pTab = sqlite3FindTable(db, zTab, db->aDb[pOp->p1].zDbSName);
     if( pTab && IsVirtual(pTab) ){
       int ii;
@@ -8876,9 +8876,6 @@ case OP_VCreate: {
     rc = sqlite3VtabCallCreate(db, pOp->p1, zTab, &p->zErrMsg);
 #ifdef DOLTLITE_PROLLY
     if( rc ){
-      if( !db->mallocFailed ){
-        (void)sqlite3BtreeRollback(db->aDb[pOp->p1].pBt, SQLITE_OK, 0);
-      }
       assert( resetSchemaOnFault==0 || resetSchemaOnFault==pOp->p1+1 );
       resetSchemaOnFault = pOp->p1+1;
     }
@@ -8886,7 +8883,9 @@ case OP_VCreate: {
     if( rc && db->mallocFailed ){
       rc = SQLITE_NOMEM_BKPT;
     }
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && defined(SQLITE_TEST)
+    /* The generic constructor message only replaces the tokenizer error
+    ** when allocating that error failed; the OOM harness expects NOMEM. */
     else if( rc && bUnknownTokenizer && p->zErrMsg
            && sqlite3_strnicmp(p->zErrMsg, "vtable constructor failed:", 26)==0 ){
       sqlite3DbFree(db, p->zErrMsg);
