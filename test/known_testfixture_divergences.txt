@@ -904,13 +904,11 @@ tkt-f3e5abed55 tkt-f3e5abed55-2.5 class=engine-gap issue=944
 # open-timing, locking, and catalog level (not row data). Recovered into the
 # gated suite after the capi3-7.x raw file-format block was gated out and the
 # prollyBtreeRollback use-after-free was fixed.
-capi3 capi3-8.3 class=intentional issue=1852  # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
 capi3 capi3-11.3.4 class=intentional issue=1846  # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
 # capi3c is the sqlite3_prepare_v2 mirror of capi3; its raw file-format block
 # (capi3c-7.x) is gated with ifcapable !doltlite like capi3's, which lets the
 # remaining 294 tests run. Same divergence classes as capi3 plus the MVCC
 # locking model.
-capi3c capi3c-8.3 class=intentional issue=1852  # all-NULL sqlite_master row tolerated at schema load; stock refuses ("malformed database schema")
 capi3c capi3-11.3.4 class=intentional issue=1846  # upstream misnamed test inside capi3c.test; PRAGMA lock_status reports doltlite's locking model
 capi3c capi3c-18.3 class=intentional  # BEGIN EXCLUSIVE on a 2nd connection does not block an MVCC snapshot reader (SQLITE_ROW vs SQLITE_BUSY)
 capi3c capi3c-18.4 class=intentional  # same: finalize returns SQLITE_OK, not the sticky BUSY

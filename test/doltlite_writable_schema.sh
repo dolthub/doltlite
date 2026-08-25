@@ -17,6 +17,17 @@ run_test "writable_schema_off_roundtrip" \
   "0" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_dl_writable_schema_null_row_$$.db; rm -f "$DB"
+cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
+CREATE TABLE t(a);
+PRAGMA writable_schema=ON;
+INSERT INTO sqlite_master VALUES(NULL, NULL, NULL, NULL, NULL);
+SQL
+run_test_match "all_null_schema_row_malformed_on_reopen" \
+  "SELECT name FROM sqlite_master;" \
+  "malformed database schema" "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_dl_writable_schema_root_$$.db; rm -f "$DB"
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
 CREATE TABLE t1(oid INTEGER PRIMARY KEY, a INT);
