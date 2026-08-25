@@ -22,6 +22,25 @@
 
 #ifndef SQLITE_OMIT_EXPLAIN
 
+#ifdef DOLTLITE_PROLLY
+static int doltlitePkAutoindexIsCovering(
+  const SrcItem *pItem,
+  const Index *pIdx
+){
+  Bitmask mKey = 0;
+  int i;
+  for(i=0; i<pIdx->nKeyCol; i++){
+    int iCol = pIdx->aiColumn[i];
+    if( iCol>=BMS-1 ){
+      mKey |= TOPBIT;
+    }else if( iCol>=0 ){
+      mKey |= MASKBIT(iCol);
+    }
+  }
+  return (pItem->colUsed & ~mKey)==0;
+}
+#endif
+
 /*
 ** Return the name of the i-th column of the pIdx index.
 */
@@ -159,10 +178,22 @@ void sqlite3WhereAddExplainText(
       assert( pLoop->u.btree.pIndex!=0 );
       pIdx = pLoop->u.btree.pIndex;
       assert( !(flags&WHERE_AUTO_INDEX) || (flags&WHERE_IDX_ONLY) );
-      if( !HasRowid(pItem->pSTab) && IsPrimaryKeyIndex(pIdx) ){
+      if( !HasRowid(pItem->pSTab) && IsPrimaryKeyIndex(pIdx)
+#ifdef DOLTLITE_PROLLY
+       && !IsDoltClusteredPk(pItem->pSTab)
+#endif
+      ){
         if( isSearch ){
           zFmt = "PRIMARY KEY";
         }
+#ifdef DOLTLITE_PROLLY
+      }else if( IsDoltClusteredPk(pItem->pSTab)
+             && IsPrimaryKeyIndex(pIdx) ){
+        if( isSearch || pItem->fg.isIndexedBy ){
+          zFmt = doltlitePkAutoindexIsCovering(pItem, pIdx)
+               ? "COVERING INDEX %s" : "INDEX %s";
+        }
+#endif
       }else if( flags & WHERE_PARTIALIDX ){
         zFmt = "AUTOMATIC PARTIAL COVERING INDEX";
       }else if( flags & WHERE_AUTO_INDEX ){

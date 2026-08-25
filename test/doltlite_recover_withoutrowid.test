@@ -198,7 +198,7 @@ do_test doltlite_recover_withoutrowid-10.2 {
   set p3 [wr_plan {SELECT * FROM ga, gb WHERE a2=5 AND b1=a1}]
   set p4 [wr_plan {SELECT * FROM ga, gb WHERE a2=5 AND a1=b1}]
   list [expr {$p1 eq $p2}] [expr {$p1 eq $p3}] [expr {$p1 eq $p4}] \
-       [string match {*SEARCH gb USING PRIMARY KEY (b1=?)*} $p1]
+       [string match {*SEARCH gb USING INDEX sqlite_autoindex_gb_1 (b1=?)*} $p1]
 } {1 1 1 1}
 do_execsql_test doltlite_recover_withoutrowid-10.3 {
   SELECT * FROM ga, gb WHERE a2=5 AND a1=b1;
@@ -225,7 +225,7 @@ do_test doltlite_recover_withoutrowid-11.2 {
   set p121 [wr_plan $q121]
   set p122 [wr_plan $q122]
   list [expr {$p120 eq $p121}] [expr {$p120 eq $p122}] \
-       [string match {*SEARCH lt1 USING PRIMARY KEY (a=?)*} $p120] \
+       [string match {*SEARCH lt1 USING INDEX sqlite_autoindex_lt1_1 (a=?)*} $p120] \
        [expr {[execsql $q120] eq [execsql $q121]}] \
        [expr {[execsql $q120] eq [execsql $q122]}]
 } {1 0 1 1 1}
@@ -340,7 +340,7 @@ do_execsql_test doltlite_recover_withoutrowid-16.1 {
 do_execsql_test doltlite_recover_withoutrowid-16.2 {
   EXPLAIN QUERY PLAN
   SELECT a,b,c,d,'|' FROM sk2 WHERE d<>99 AND b=345 ORDER BY a;
-} {/* PRIMARY KEY (ANY(a) AND b=?)*/}
+} {/* INDEX sqlite_autoindex_sk2_1 (ANY(a) AND b=?)*/}
 do_execsql_test doltlite_recover_withoutrowid-16.3 {
   CREATE TABLE skt1 (c1, c2, c3, c4, PRIMARY KEY(c4, c3));
   INSERT INTO skt1 VALUES(3,0,1,7);
@@ -357,7 +357,7 @@ do_execsql_test doltlite_recover_withoutrowid-16.4 {
   EXPLAIN QUERY PLAN
   SELECT DISTINCT quote(c1), quote(c2), quote(c3), quote(c4), '|'
     FROM skt1 WHERE skt1.c3 = 1;
-} {/* PRIMARY KEY (ANY(c4) AND c3=?)*/}
+} {/* INDEX sqlite_autoindex_skt1_1 (ANY(c4) AND c3=?)*/}
 do_execsql_test doltlite_recover_withoutrowid-16.5 {
   CREATE TABLE people(
     name TEXT PRIMARY KEY,
@@ -684,7 +684,7 @@ do_execsql_test doltlite_recover_withoutrowid-24.12 {
   CREATE TABLE eq1(a, b PRIMARY KEY);
   INSERT INTO eq1 VALUES('x', 5);
   EXPLAIN QUERY PLAN SELECT * FROM eq1 WHERE b = 5;
-} {/*SEARCH eq1 USING PRIMARY KEY (b=?)*/}
+} {/*SEARCH eq1 USING INDEX sqlite_autoindex_eq1_1 (b=?)*/}
 do_execsql_test doltlite_recover_withoutrowid-24.13 {
   SELECT * FROM eq1 WHERE b = 5;
 } {x 5}

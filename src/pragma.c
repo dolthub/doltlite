@@ -1383,7 +1383,11 @@ void sqlite3Pragma(
       ** WITHOUT ROWID table named zRight, and if there is, show the
       ** structure of the PRIMARY KEY index for that table. */
       pTab = sqlite3LocateTable(pParse, LOCATE_NOERR, zRight, zDb);
-      if( pTab && !HasRowid(pTab) ){
+      if( pTab && !HasRowid(pTab)
+#ifdef DOLTLITE_PROLLY
+       && !IsDoltClusteredPk(pTab)
+#endif
+      ){
         pIdx = sqlite3PrimaryKeyIndex(pTab);
       }
     }

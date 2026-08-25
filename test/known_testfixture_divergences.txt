@@ -164,9 +164,6 @@ where where-5.8 class=intentional issue=1840  # w+0 IN (same subquery): fewer se
 # ── index ──
 index index-11.1 class=intentional  # sqlite_search_count instrumentation not reproduced (value correct)
 
-# ── bestindex4 ──
-bestindex4 bestindex4-2.1 class=intentional  # EQP names the table PRIMARY KEY instead of sqlite_autoindex_t1_1
-
 # ── alter ──
 alter alter-6.2 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
 alter alter-6.3 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
@@ -256,7 +253,6 @@ e_createtable e_createtable-2.3.1.2 class=intentional issue=1840  # newest-row p
 e_createtable e_createtable-2.3.1.3 class=intentional issue=1840  # newest-row probe via ORDER BY rowid DESC; doltlite rowid assignment differs
 e_createtable e_createtable-2.3.1.4 class=intentional issue=1840  # newest-row probe via ORDER BY rowid DESC; doltlite rowid assignment differs
 e_createtable e_createtable-3.11.2 class=intentional issue=1840  # adoption reparse under runtime-lowered SQLITE_LIMIT_COLUMN re-parses a legal 501-column table into a malformed-schema error; stock only reparses on rarer triggers
-e_createtable e_createtable-4.10.1 class=intentional issue=1840  # no-rowid storage: test probes rowid/PK-autoindex internals
 e_createtable e_createtable-4.15.5.4 class=intentional issue=1840  # canonical adoption: sqlite_master row order after schema commit
 e_createtable e_createtable-5.3.4 class=intentional issue=1840  # cascade: erroring rowid-probe helper leaves a stale t5 row (no-rowid storage class)
 e_createtable e_createtable-5.3.5 class=intentional issue=1840  # cascade: erroring rowid-probe helper leaves a stale t5 row (no-rowid storage class)
@@ -1371,7 +1367,7 @@ tkt3457 tkt3457-1.5 class=intentional  # no rollback-journal file to back up
 # DROP immediately, so CREATE TEMP TRIGGER fails "no such table: t1" and the
 # orphan never exists; temp.sqlite_master is empty.
 
-# where4 / whereD / whereG / whereL — query-planner and storage-model
+# where4 / whereD / whereL — query-planner and storage-model
 # divergences; in every case the result rows are correct, only a plan metric,
 # plan shape, or rowid availability differs:
 #   * where4-5.2/5.3: `SELECT rowid FROM t4` where t4 has a composite PRIMARY
@@ -1380,9 +1376,6 @@ tkt3457 tkt3457-1.5 class=intentional  # no rollback-journal file to back up
 #     class as without_rowid1-7.x).
 #   * whereD-3.4.*: assert sqlite_search_count (internal btree-step metric).
 #     The query results match; only the step count differs under prolly.
-#   * whereG-3.*: EXPLAIN QUERY PLAN shape. DoltLite's planner satisfies the
-#     `b.b1=?` lookup via the PRIMARY KEY rather than secondary index b_1 — a
-#     valid equivalent plan; the query returns the same rows.
 #   * whereL-110/120/121/122: EXPLAIN QUERY PLAN shape (constant-propagation
 #     join order); plan text differs, results are equivalent.
 where4 where4-5.2 class=intentional issue=1840  # SELECT rowid on composite-PK (WITHOUT ROWID) table: no such column rowid
@@ -1391,14 +1384,6 @@ whereD whereD-3.4.1 class=intentional  # sqlite_search_count plan metric; rows m
 whereD whereD-3.4.2 class=intentional  # sqlite_search_count plan metric; rows match
 whereD whereD-3.4.3 class=intentional  # sqlite_search_count plan metric; rows match
 whereD whereD-3.4.4 class=intentional  # sqlite_search_count plan metric; rows match
-whereG whereG-3.1 class=intentional  # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
-whereG whereG-3.2 class=intentional  # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
-whereG whereG-3.3 class=intentional  # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
-whereG whereG-3.4 class=intentional  # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
-whereL whereL-110 class=intentional  # EQP plan shape; results equivalent
-whereL whereL-120 class=intentional  # EQP plan shape; results equivalent
-whereL whereL-121 class=intentional  # EQP plan shape; results equivalent
-whereL whereL-122 class=intentional  # EQP plan shape; results equivalent
 
 # tkt-3a77c9714e-3.0 — `CREATE TABLE t1(i INT PRIMARY KEY, a, b)` then
 # `INSERT INTO t1 VALUES(NULL,...)`. Stock treats `INT PRIMARY KEY` (not the
@@ -1432,19 +1417,10 @@ rowvalue9 rowvalue9-1.5.3 class=intentional issue=1840  # rowid on composite-PK 
 rowvalue9 rowvalue9-1.6.1 class=intentional issue=1840  # rowid on composite-PK (WITHOUT ROWID) table
 rowvalue9 rowvalue9-1.6.2 class=intentional issue=1840  # rowid on composite-PK (WITHOUT ROWID) table
 
-# without_rowid7-2.4 — t3 has PRIMARY KEY(a COLLATE nocase, a) without the
-# WITHOUT ROWID keyword; stock keeps it a rowid table so index_info(t3) is
-# empty, doltlite stores it WITHOUT ROWID (#1176) so the PK index info shows.
-without_rowid7 without_rowid7-2.4 class=intentional  # index_info on implicit WITHOUT ROWID table
-
-# skipscan1 / skipscan2 — EQP plan-shape (PRIMARY KEY vs sqlite_autoindex
-# naming under WITHOUT ROWID storage; skip-scan plan choice), plus the
-# section-6 t1(c1..c4, PRIMARY KEY(c4,c3)) NULL-into-PK rejection (#1176).
-# Row results match wherever the query runs.
-skipscan1 skipscan1-2.2eqp class=intentional  # EQP: PRIMARY KEY vs sqlite_autoindex name
+# skipscan1 section-6 t1(c1..c4, PRIMARY KEY(c4,c3)) NULL-into-PK rejection
+# (#1176). Row results match wherever the query runs.
 skipscan1 skipscan1-3.1 class=intentional  # NULL into PK column of implicit WITHOUT ROWID table (#1176)
 skipscan1 skipscan1-3.2 class=intentional  # cascade of 3.1 (rows missing from failed insert)
-skipscan2 skipscan2-1.5eqp class=intentional  # EQP: skip-scan plan choice differs
 
 # autoindex3 / autoindex5 — EXPLAIN QUERY PLAN shape for automatic-index
 # choices; results equivalent.
@@ -3494,15 +3470,6 @@ incrblob2 incrblob2-5.3 class=intentional  # db-level lock message, not table-le
 incrblob2 incrblob2-5.5 class=intentional  # readonly blob open succeeds; no shared-cache table lock
 incrblob2 incrblob2-5.6 class=intentional  # no dirty read of other connection's uncommitted row
 incrblob2 incrblob2-5.8 class=intentional  # cascade from 5.6: stale $blob channel
-
-# ── indexedby ──
-# t3(e PRIMARY KEY, f) is clustered on e, so INDEXED BY
-# sqlite_autoindex_t3_1 resolves to the primary key and the plans read
-# "SCAN t3" / "SEARCH t3 USING PRIMARY KEY (e=?)" instead of
-# "... USING INDEX sqlite_autoindex_t3_1". The INDEXED BY name itself
-# is still accepted (3.7/3.10 pass).
-indexedby indexedby-3.8 class=intentional
-indexedby indexedby-3.9 class=intentional
 
 # ── memsubsys1 ──
 # Table data lives in the prolly chunk store, not pager pages, so the
