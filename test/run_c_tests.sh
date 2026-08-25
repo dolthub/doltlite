@@ -38,6 +38,7 @@ COVERAGE_TESTS=(
   sequence_reload_test
   remotesrv_init_failure_test
   commit_deserialize_test
+  serialize_pending_test
 )
 
 SPECIALIZED_TESTS=(

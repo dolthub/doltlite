@@ -2035,6 +2035,8 @@ ChunkStore *doltliteBtreeChunkStore(Btree *p){
 
 int doltliteBtreeSerialize(
   Btree *p,
+  const char *zBranch,
+  const void *pLiveCat,
   unsigned char **ppData,
   sqlite3_int64 *pnData
 ){
@@ -2061,9 +2063,39 @@ int doltliteBtreeSerialize(
   rc = chunkStoreLockAndRefresh(pSrc);
   if( rc==SQLITE_OK ){
     locked = 1;
-    rc = chunkStoreCopyIntoEmpty(pSrc, &dest);
+    rc = chunkStoreCopyIntoEmptyNoCommit(pSrc, &dest);
   }
   if( locked ) chunkStoreUnlock(pSrc);
+  /* Stock serialize captures dirty pages; the image's working set follows
+  ** the live catalog so uncommitted writes deserialize as content. */
+  /* Stock serialize captures dirty pages; the image's working set follows
+  ** the live catalog so uncommitted writes deserialize as content. The
+  ** loader only adopts a working set whose commit binding matches the
+  ** branch tip, and the write must precede the single commit below or the
+  ** refs update never reaches the image bytes. */
+  if( rc==SQLITE_OK && zBranch && pLiveCat ){
+    ProllyHash headCommit;
+    const ProllyHash *pCommit = 0;
+    if( chunkStoreFindBranch(&dest, zBranch, &headCommit)==SQLITE_OK ){
+      pCommit = &headCommit;
+    }
+    rc = btreeWriteWorkingState(&dest, zBranch,
+                                (const ProllyHash*)pLiveCat, pCommit);
+    /* The manifest points at a serialized refs blob; re-serialize so the
+    ** branch mutation reaches the image instead of the copied blob. */
+    if( rc==SQLITE_OK ){
+      u8 *pRefs = 0;
+      int nRefs = 0;
+      rc = chunkStoreSerializeRefsToBlob(&dest, &pRefs, &nRefs);
+      if( rc==SQLITE_OK ){
+        rc = chunkStoreInstallRefsBlob(&dest, pRefs, nRefs);
+      }
+      sqlite3_free(pRefs);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreCommit(&dest);
+  }
   if( rc==SQLITE_OK ){
     rc = sqlite3MemdbPrivateVfsData(pVfs, ppData, pnData, 1);
   }

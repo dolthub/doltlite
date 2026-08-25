@@ -1254,7 +1254,7 @@ static int csCopyEntries(
   return SQLITE_OK;
 }
 
-int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest){
+int chunkStoreCopyIntoEmptyNoCommit(ChunkStore *pSrc, ChunkStore *pDest){
   const ChunkIndexEntry *aEntry = 0;
   u8 *pRefs = 0;
   int nEntry = 0;
@@ -1281,6 +1281,11 @@ int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest){
     rc = chunkStoreInstallRefsBlob(pDest, pRefs, nRefs);
   }
   sqlite3_free(pRefs);
+  return rc;
+}
+
+int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest){
+  int rc = chunkStoreCopyIntoEmptyNoCommit(pSrc, pDest);
   if( rc!=SQLITE_OK ) return rc;
   return chunkStoreCommit(pDest);
 }

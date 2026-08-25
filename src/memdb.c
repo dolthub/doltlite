@@ -851,10 +851,15 @@ unsigned char *sqlite3_serialize(
   if( pBt==0 ) goto serialize_out;
 #ifdef DOLTLITE_PROLLY
   if( sqlite3BtreeIsDoltliteFormat(pBt) ){
-    if( mFlags & SQLITE_SERIALIZE_NOCOPY ) goto serialize_out;
-    rc = doltliteBtreeSerialize(pBt, &pOut, &sz);
+    rc = doltliteSerializeDb(db, pBt, &pOut, &sz);
     if( rc==SQLITE_OK ){
       if( piSize ) *piSize = sz;
+      if( mFlags & SQLITE_SERIALIZE_NOCOPY ){
+        /* No in-memory image exists to hand out; stock still reports the
+        ** size a copying call would return. */
+        sqlite3_free(pOut);
+        pOut = 0;
+      }
     }else if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
       sqlite3OomFault(db);
     }

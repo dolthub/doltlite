@@ -368,7 +368,9 @@ static void run_serialize_deserialize(void){
   }
   pDirect = sqlite3_serialize(
       db, "main", &nDirect, SQLITE_SERIALIZE_NOCOPY);
-  check("serialize_disk_nocopy", pDirect==0 && nDirect==-1);
+  /* No in-memory image exists for a file-backed db, but stock still
+  ** reports the size a copying call would return. */
+  check("serialize_disk_nocopy", pDirect==0 && nDirect>0);
 
   probe.db = db;
   probe.rc = SQLITE_ERROR;
