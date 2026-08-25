@@ -2731,7 +2731,12 @@ DOLTLITE_C_TESTS = \
 	chunk_store_fork_lock_test$(T.exe) \
 	remotesrv_init_failure_test$(T.exe) \
 	commit_deserialize_test$(T.exe) \
+	serialize_pending_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe)
+
+serialize_pending_test$(T.exe): $(TOP)/test/serialize_pending_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/serialize_pending_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/ancestor_test.c \

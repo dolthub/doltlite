@@ -469,6 +469,20 @@ int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
   return rc;
 }
 
+int doltliteSerializeDb(sqlite3 *db, Btree *pBt,
+                        unsigned char **ppData, sqlite3_int64 *pnData){
+  const char *zBranch = 0;
+  ProllyHash liveHash;
+  const void *pLive = 0;
+  if( db && db->nDb>0 && db->aDb[0].pBt==pBt ){
+    int rc = doltliteFlushCatalogToHash(db, &liveHash);
+    if( rc!=SQLITE_OK ) return rc;
+    zBranch = doltliteGetSessionBranch(db);
+    pLive = &liveHash;
+  }
+  return doltliteBtreeSerialize(pBt, zBranch, pLive, ppData, pnData);
+}
+
 int doltlitePrepareCatalogForPersistence(sqlite3 *db){
   UNUSED_PARAMETER(db);
   return SQLITE_OK;

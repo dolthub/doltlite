@@ -296,6 +296,7 @@ int chunkStorePutSparse(ChunkStore *cs, const u8 *pPrefix, int nPrefix,
 int chunkStoreCommit(ChunkStore *cs);
 
 int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest);
+int chunkStoreCopyIntoEmptyNoCommit(ChunkStore *pSrc, ChunkStore *pDest);
 
 void chunkStoreRollback(ChunkStore *cs);
 int chunkStoreEnsureRefsFresh(ChunkStore *cs);
