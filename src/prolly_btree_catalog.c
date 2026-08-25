@@ -151,6 +151,7 @@ static void faultIncrblobCursor(BtCursor *p){
 void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
                                       i64 iRow, int isClearTable){
   BtCursor *p;
+  if( pBt->nIncrblobCur==0 ) return;
   for(p=pBt->pCursor; p; p=p->pNext){
     if( (p->curFlags & BTCF_Incrblob)==0 || p->pgnoRoot!=pgnoRoot ) continue;
     if( !isClearTable ){
@@ -167,6 +168,7 @@ void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
 void prollyInvalidateIncrblobCursorsByKey(BtShared *pBt, Pgno pgnoRoot,
                                            const u8 *pKey, int nKey){
   BtCursor *p;
+  if( pBt->nIncrblobCur==0 ) return;
   for(p=pBt->pCursor; p; p=p->pNext){
     const u8 *pCursorKey = 0;
     int nCursorKey = 0;

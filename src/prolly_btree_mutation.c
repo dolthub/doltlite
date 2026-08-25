@@ -1559,7 +1559,10 @@ int sqlite3BtreePutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
 }
 
 void prollyBtCursorIncrblobCursor(BtCursor *pCur){
-  pCur->curFlags |= BTCF_Incrblob;
+  if( !(pCur->curFlags & BTCF_Incrblob) ){
+    pCur->curFlags |= BTCF_Incrblob;
+    pCur->pBt->nIncrblobCur++;
+  }
 }
 void sqlite3BtreeIncrblobCursor(BtCursor *pCur){
   pCur->pCurOps->xIncrblobCursor(pCur);

@@ -185,6 +185,7 @@ struct BtShared {
   u32 pageSize;
   u32 iWorkingStateVersion;
   int nRef;
+  int nIncrblobCur;
   u8 inCatalogSerialize;
 };
 
