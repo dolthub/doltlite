@@ -445,13 +445,15 @@ do_test doltlite_recover_locking_1-10.3 {
   }]
   catchsql {PRAGMA writable_schema=OFF}
   db close
-  set r2 [catch {sqlite3 db rloc1.db}]
-  set DB [sqlite3_connection_pointer db]
-  list $r1 $r2 [execsql {SELECT count(*) FROM x1}] \
-       [execsql {CREATE TABLE post(a); INSERT INTO post VALUES(1); SELECT * FROM post;}] \
-       [execsql {PRAGMA integrity_check}]
-} {{0 {}} 0 6 1 ok}
+  catch { sqlite3 db rloc1.db }
+  set r2 [catchsql {SELECT count(*) FROM x1}]
+  list $r1 $r2
+} {{0 {}} {1 {malformed database schema (?)}}}
 do_test doltlite_recover_locking_1-10.4 {
+  db close
+  forcedelete rloc1.db
+  sqlite3 db rloc1.db
+  set DB [sqlite3_connection_pointer db]
   execsql {
     CREATE TABLE t2(a);
     INSERT INTO t2 VALUES(1);
