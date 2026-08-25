@@ -109,17 +109,6 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
     return 1;
   }
 
-#ifdef DOLTLITE_PROLLY
-  /* doltlite's prolly master root can retain an all-NULL placeholder record
-  ** after a schema write is interrupted by OOM (the same empty records #1224
-  ** drops when rebuilding the root; they persist until the next rebuild). Such
-  ** a row carries no schema object -- skip it rather than reporting the
-  ** database as malformed. A genuinely corrupt row never presents as all-NULL. */
-  if( argv[0]==0 && argv[1]==0 && argv[3]==0 && argv[4]==0 ){
-    return 0;
-  }
-#endif
-
   assert( iDb>=0 && iDb<db->nDb );
   assert( db->aDb[iDb].pSchema!=0 );
   if( argv[3]==0 ){
