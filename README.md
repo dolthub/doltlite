@@ -779,9 +779,13 @@ For a DoltLite-format main database, the compatibility contract is:
   may override such a column with `BINARY`, `NOCASE`, or `RTRIM`. Replacing one
   of those built-ins is rejected while a persisted index uses its name.
 - A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key.
-  `rowid` and `last_insert_rowid()` still work: a single integer PK is that
-  value, otherwise a stable hash of the PK. Explicit `WITHOUT ROWID` tables
-  have no `rowid`, matching SQLite.
+  `rowid` and `last_insert_rowid()` still work as a read-only SQL alias:
+  a single integer PK is that value, otherwise a stable hash of the PK.
+  `INSERT` and `UPDATE` of `rowid` fail with `no such column`, matching
+  explicit `WITHOUT ROWID` — there is no stored `rowid` column. TEMP tables
+  are not clustered, so those writes still work. An `INTEGER PRIMARY KEY`
+  remains a writable rowid alias. Explicit `WITHOUT ROWID` tables have no
+  `rowid` at all, matching SQLite.
 - Those clustered primary keys are `NOT NULL`, matching SQLite
   `WITHOUT ROWID` tables. `PRAGMA table_info` reports `notnull=1` on the PK
   columns, and inserting NULL fails with `NOT NULL constraint failed`. SQLite

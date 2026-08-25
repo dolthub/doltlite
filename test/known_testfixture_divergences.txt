@@ -26,7 +26,10 @@
 #
 #   * `WHERE rowid = N` against explicit WITHOUT ROWID tables, where
 #     rowid is hidden. Auto-converted clustered PK tables still expose
-#     a SQL rowid (the integer PK, or a hash of a non-integer PK).
+#     a read-only SQL rowid for SELECT / last_insert_rowid (the integer
+#     PK, or a hash of a non-integer PK). INSERT and UPDATE of rowid
+#     are rejected like explicit WITHOUT ROWID; there is no stored
+#     rowid column.
 #   * Unordered SELECT relying on insertion order (sqlite returns
 #     rowid order, doltlite returns user-PK order)
 #   * `pragma table_info` reporting non-PK columns differently for
