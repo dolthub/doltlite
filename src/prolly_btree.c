@@ -1479,6 +1479,11 @@ int prollyBtCursorCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
+  if( pCur->curFlags & BTCF_Incrblob ){
+    assert( pBt->nIncrblobCur>0 );
+    pBt->nIncrblobCur--;
+  }
+
   if( pCur->pMutMap && pCur->flushSeekEdits ){
     struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pTE ){

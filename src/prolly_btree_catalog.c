@@ -137,10 +137,21 @@ void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   }
 }
 
+static void faultIncrblobCursor(BtCursor *p){
+  p->eState = CURSOR_FAULT;
+  p->skipNext = SQLITE_ABORT;
+  p->mmActive = 0;
+  p->mmPhysActive = 0;
+  p->mmIdx = -1;
+  p->mmPhysIdx = -1;
+  prollyCursorReleaseAll(&p->pCur);
+}
+
 /* Abort incrblob handles on this row; skip when the writer is itself incrblob. */
 void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
                                       i64 iRow, int isClearTable){
   BtCursor *p;
+  if( pBt->nIncrblobCur==0 ) return;
   for(p=pBt->pCursor; p; p=p->pNext){
     if( (p->curFlags & BTCF_Incrblob)==0 || p->pgnoRoot!=pgnoRoot ) continue;
     if( !isClearTable ){
@@ -150,13 +161,35 @@ void prollyInvalidateIncrblobCursors(BtShared *pBt, Pgno pgnoRoot,
         if( p->cachedIntKey!=iRow ) continue;
       }
     }
-    p->eState = CURSOR_FAULT;
-    p->skipNext = SQLITE_ABORT;
-    p->mmActive = 0;
-    p->mmPhysActive = 0;
-    p->mmIdx = -1;
-    p->mmPhysIdx = -1;
-    prollyCursorReleaseAll(&p->pCur);
+    faultIncrblobCursor(p);
+  }
+}
+
+void prollyInvalidateIncrblobCursorsByKey(BtShared *pBt, Pgno pgnoRoot,
+                                           const u8 *pKey, int nKey){
+  BtCursor *p;
+  if( pBt->nIncrblobCur==0 ) return;
+  for(p=pBt->pCursor; p; p=p->pNext){
+    const u8 *pCursorKey = 0;
+    int nCursorKey = 0;
+    if( (p->curFlags & BTCF_Incrblob)==0
+     || p->pgnoRoot!=pgnoRoot
+     || p->curIntKey ){
+      continue;
+    }
+    if( p->eState==CURSOR_REQUIRESEEK ){
+      pCursorKey = (const u8*)p->pKey;
+      nCursorKey = (int)p->nKey;
+    }else if( prollyCursorIsValid(&p->pCur) ){
+      prollyCursorKey(&p->pCur, &pCursorKey, &nCursorKey);
+    }else{
+      continue;
+    }
+    if( nCursorKey!=nKey
+     || (nKey>0 && memcmp(pCursorKey, pKey, nKey)!=0) ){
+      continue;
+    }
+    faultIncrblobCursor(p);
   }
 }
 
