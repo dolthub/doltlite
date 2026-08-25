@@ -13234,6 +13234,87 @@ static void run_reset_database_current_branch(void){
   removeDbFiles(dbpath);
 }
 
+typedef struct UpdateHookLog UpdateHookLog;
+struct UpdateHookLog {
+  char z[512];
+};
+
+static void clusteredUpdateHook(
+  void *p,
+  int op,
+  const char *zDb,
+  const char *zTbl,
+  sqlite3_int64 rowid
+){
+  UpdateHookLog *pLog = (UpdateHookLog*)p;
+  char zOp;
+  char zOne[96];
+  (void)zDb;
+  if( op==SQLITE_INSERT ) zOp = 'I';
+  else if( op==SQLITE_UPDATE ) zOp = 'U';
+  else if( op==SQLITE_DELETE ) zOp = 'D';
+  else zOp = '?';
+  snprintf(zOne, sizeof(zOne), "%s%c:%s:%lld",
+           pLog->z[0] ? "," : "", zOp, zTbl ? zTbl : "", (long long)rowid);
+  if( strlen(pLog->z)+strlen(zOne)+1 < sizeof(pLog->z) ){
+    strcat(pLog->z, zOne);
+  }
+}
+
+static void run_clustered_pk_update_hook(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  UpdateHookLog log;
+  sqlite3_int64 rA, rB;
+
+  printf("=== Clustered PK Update Hook Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_clustered_pk_update_hook");
+  removeDbFiles(dbpath);
+  check("cpk_hook_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  memset(&log, 0, sizeof(log));
+  sqlite3_update_hook(db, clusteredUpdateHook, &log);
+  check("cpk_hook_intpk_dml", execSql(db,
+      "CREATE TABLE ipk(a INTEGER PRIMARY KEY, v INT);"
+      "INSERT INTO ipk VALUES(1,1);"
+      "UPDATE ipk SET v=2 WHERE a=1;"
+      "DELETE FROM ipk WHERE a=1;")==SQLITE_OK);
+  check("cpk_hook_intpk_events", strcmp(log.z, "I:ipk:1,U:ipk:1,D:ipk:1")==0);
+
+  memset(&log, 0, sizeof(log));
+  check("cpk_hook_textpk_create", execSql(db,
+      "CREATE TABLE t(k TEXT PRIMARY KEY, v INT);")==SQLITE_OK);
+  check("cpk_hook_textpk_insert_a",
+        execSql(db, "INSERT INTO t VALUES('a',1);")==SQLITE_OK);
+  rA = queryInt64(db, "SELECT rowid FROM t WHERE k='a'");
+  check("cpk_hook_textpk_insert_b",
+        execSql(db, "INSERT INTO t VALUES('b',2);")==SQLITE_OK);
+  rB = queryInt64(db, "SELECT rowid FROM t WHERE k='b'");
+  check("cpk_hook_textpk_update",
+        execSql(db, "UPDATE t SET v=3 WHERE k='a';")==SQLITE_OK);
+  check("cpk_hook_textpk_delete",
+        execSql(db, "DELETE FROM t WHERE k='b';")==SQLITE_OK);
+  {
+    char zWant[160];
+    snprintf(zWant, sizeof(zWant), "I:t:%lld,I:t:%lld,U:t:%lld,D:t:%lld",
+             (long long)rA, (long long)rB, (long long)rA, (long long)rB);
+    check("cpk_hook_textpk_rowids_nonzero", rA!=0 && rB!=0 && rA!=rB);
+    check("cpk_hook_textpk_events", strcmp(log.z, zWant)==0);
+  }
+
+  memset(&log, 0, sizeof(log));
+  check("cpk_hook_without_rowid_dml", execSql(db,
+      "CREATE TABLE w(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;"
+      "INSERT INTO w VALUES('a',1),('b',2);"
+      "UPDATE w SET v=3 WHERE k='a';"
+      "DELETE FROM w WHERE k='b';")==SQLITE_OK);
+  check("cpk_hook_without_rowid_silent", log.z[0]==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -13430,7 +13511,8 @@ static const RegressionCase aCases[] = {
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
   { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq },
-  { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch }
+  { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch },
+  { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook }
 };
 
 static int run_case_by_name(const char *zName){

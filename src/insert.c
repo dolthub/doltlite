@@ -2879,7 +2879,19 @@ void sqlite3CompleteInsertion(
         }
 #endif
       }
+#ifdef DOLTLITE_PROLLY
+      if( VisibleRowid(pTab) ){
+        pik_flags |= (update_flags & OPFLAG_ISUPDATE);
+      }
+#endif
     }
+#ifdef DOLTLITE_PROLLY
+    if( (pik_flags & OPFLAG_NCHANGE)!=0 && VisibleRowid(pTab)
+     && !pParse->nested ){
+      sqlite3VdbeAddOp3(v, OP_IdxInsert, iIdxCur+i, aRegIdx[i], aRegIdx[i]+1);
+      sqlite3VdbeAppendP4(v, pTab, P4_TABLE);
+    }else
+#endif
     sqlite3VdbeAddOp4Int(v, OP_IdxInsert, iIdxCur+i, aRegIdx[i],
                          aRegIdx[i]+1,
                          pIdx->uniqNotNull ? pIdx->nKeyCol: pIdx->nColumn);
@@ -3518,6 +3530,12 @@ static int xferOptimization(
       }
     }
     sqlite3VdbeAddOp2(v, OP_IdxInsert, iDest, regData);
+#ifdef DOLTLITE_PROLLY
+    if( (idxInsFlags & OPFLAG_NCHANGE)!=0 && VisibleRowid(pDest)
+     && !pParse->nested ){
+      sqlite3VdbeAppendP4(v, pDest, P4_TABLE);
+    }
+#endif
     sqlite3VdbeChangeP5(v, idxInsFlags|OPFLAG_APPEND);
     sqlite3VdbeAddOp2(v, OP_Next, iSrc, addr1+1); VdbeCoverage(v);
     sqlite3VdbeJumpHere(v, addr1);

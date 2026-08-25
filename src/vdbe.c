@@ -6327,6 +6327,9 @@ case OP_Delete: {
   const char *zDb;
   Table *pTab;
   int opflags;
+#ifdef DOLTLITE_PROLLY
+  i64 iHookRowid = 0;
+#endif
 
   opflags = pOp->p2;
   assert( pOp->p1>=0 && pOp->p1<p->nCursor );
@@ -6364,6 +6367,11 @@ case OP_Delete: {
     if( (pOp->p5 & OPFLAG_SAVEPOSITION)!=0 && pC->isTable ){
       pC->movetoTarget = sqlite3BtreeIntegerKey(pC->uc.pCursor);
     }
+#ifdef DOLTLITE_PROLLY
+    if( VisibleRowid(pTab) && !HasRowid(pTab) && db->xUpdateCallback ){
+      iHookRowid = sqlite3BtreeSqlRowid(pC->uc.pCursor);
+    }
+#endif
   }else{
     zDb = 0;
     pTab = 0;
@@ -6414,9 +6422,20 @@ case OP_Delete: {
   /* Invoke the update-hook if required. */
   if( opflags & OPFLAG_NCHANGE ){
     p->nChange++;
-    if( db->xUpdateCallback && ALWAYS(pTab!=0) && HasRowid(pTab) ){
+    if( db->xUpdateCallback && ALWAYS(pTab!=0)
+#ifdef DOLTLITE_PROLLY
+     && VisibleRowid(pTab)
+#else
+     && HasRowid(pTab)
+#endif
+    ){
+#ifdef DOLTLITE_PROLLY
+      db->xUpdateCallback(db->pUpdateArg, SQLITE_DELETE, zDb, pTab->zName,
+          HasRowid(pTab) ? pC->movetoTarget : iHookRowid);
+#else
       db->xUpdateCallback(db->pUpdateArg, SQLITE_DELETE, zDb, pTab->zName,
           pC->movetoTarget);
+#endif
       assert( pC->iDb>=0 );
     }
   }
@@ -7036,8 +7055,16 @@ case OP_IdxInsert: {        /* in2 */
   if( rc ) goto abort_due_to_error;
   x.nKey = pIn2->n;
   x.pKey = pIn2->z;
-  x.aMem = aMem + pOp->p3;
-  x.nMem = (u16)pOp->p4.i;
+#ifdef DOLTLITE_PROLLY
+  if( pOp->p4type==P4_TABLE ){
+    x.aMem = 0;
+    x.nMem = 0;
+  }else
+#endif
+  {
+    x.aMem = aMem + pOp->p3;
+    x.nMem = (u16)pOp->p4.i;
+  }
   rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
        (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT)),
       ((pOp->p5 & OPFLAG_USESEEKRESULT) ? pC->seekResult : 0)
@@ -7046,9 +7073,27 @@ case OP_IdxInsert: {        /* in2 */
   pC->cacheStatus = CACHE_STALE;
   if( rc) goto abort_due_to_error;
 #ifdef DOLTLITE_PROLLY
-  if( (pOp->p5 & OPFLAG_LASTROWID)!=0 && (pIn2->flags & MEM_Blob)!=0 ){
-    db->lastRowid = doltliteSyntheticRowidFromRecord(
-        (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
+  if( (pIn2->flags & MEM_Blob)!=0 ){
+    i64 iRowid = 0;
+    int bRowid = 0;
+    if( (pOp->p5 & OPFLAG_LASTROWID)!=0 ){
+      iRowid = doltliteSyntheticRowidFromRecord(
+          (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
+      db->lastRowid = iRowid;
+      bRowid = 1;
+    }
+    if( pOp->p4type==P4_TABLE && db->xUpdateCallback!=0 ){
+      Table *pTab = pOp->p4.pTab;
+      if( pTab && pTab->aCol && VisibleRowid(pTab) && pC->iDb>=0 ){
+        if( !bRowid ){
+          iRowid = doltliteSyntheticRowidFromRecord(
+              (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
+        }
+        db->xUpdateCallback(db->pUpdateArg,
+            (pOp->p5 & OPFLAG_ISUPDATE) ? SQLITE_UPDATE : SQLITE_INSERT,
+            db->aDb[pC->iDb].zDbSName, pTab->zName, iRowid);
+      }
+    }
   }
 #endif
   break;
