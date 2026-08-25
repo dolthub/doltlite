@@ -1067,7 +1067,11 @@ static void analyzeOneTable(
     if( pIdx->pPartIdxWhere==0 ) needTableCnt = 0;
     if( !HasRowid(pTab) && IsPrimaryKeyIndex(pIdx) ){
       nCol = pIdx->nKeyCol;
+#ifdef DOLTLITE_PROLLY
+      zIdxName = IsDoltClusteredPk(pTab) ? pIdx->zName : pTab->zName;
+#else
       zIdxName = pTab->zName;
+#endif
       nColTest = nCol - 1;
     }else{
       nCol = pIdx->nColumn;

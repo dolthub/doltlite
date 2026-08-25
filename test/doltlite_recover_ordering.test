@@ -36,7 +36,7 @@ do_test doltlite_recover_ordering-2.2 {
     lappend res [set x(detail)]
   }
   set res
-} {{SEARCH t3 USING PRIMARY KEY (b=?)}}
+} {{SEARCH t3 USING INDEX sqlite_autoindex_t3_1 (b=?)}}
 
 do_test doltlite_recover_ordering-3.1 {
   execsql {

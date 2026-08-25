@@ -2566,6 +2566,9 @@ struct Table {
 /* Does the table have a rowid */
 #define HasRowid(X)     (((X)->tabFlags & TF_WithoutRowid)==0)
 #define VisibleRowid(X) (((X)->tabFlags & TF_NoVisibleRowid)==0)
+#ifdef DOLTLITE_PROLLY
+# define IsDoltClusteredPk(X) (!HasRowid(X) && VisibleRowid(X))
+#endif
 
 /* Macro is true if the SQLITE_ALLOW_ROWID_IN_VIEW (mis-)feature is
 ** available.  By default, this macro is false

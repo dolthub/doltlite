@@ -1339,7 +1339,38 @@ run_test "pk_autoindex_shares_table_root" \
 run_test "pk_autoindex_forced_scan" \
   "SELECT v FROM t INDEXED BY sqlite_autoindex_t_1 WHERE k='a';" \
   "1" "$DB"
+run_test "pk_autoindex_analyze_name" \
+  "ANALYZE t; SELECT group_concat(idx,'|') FROM (SELECT idx FROM sqlite_stat1 WHERE tbl='t' ORDER BY idx);" \
+  "sqlite_autoindex_t_1|sqlite_autoindex_t_2" "$DB"
+run_test "pk_autoindex_no_table_pragma" \
+  "PRAGMA index_info(t);" \
+  "" "$DB"
+run_test "pk_autoindex_named_pragma" \
+  "PRAGMA index_info('sqlite_autoindex_t_1');" \
+  "0|0|k" "$DB"
+run_test_match "pk_autoindex_query_plan" \
+  "EXPLAIN QUERY PLAN SELECT * FROM t WHERE k='a';" \
+  "USING INDEX sqlite_autoindex_t_1" "$DB"
+run_test_match "pk_autoindex_covering_query_plan" \
+  "EXPLAIN QUERY PLAN SELECT k FROM t WHERE k='a';" \
+  "USING COVERING INDEX sqlite_autoindex_t_1" "$DB"
 run_test "pk_autoindex_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rg_without_rowid_pk_name_$$.db; rm -f "$DB"
+echo "CREATE TABLE wr(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
+INSERT INTO wr VALUES('a',1);
+ANALYZE wr;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "without_rowid_analyze_table_name" \
+  "SELECT idx FROM sqlite_stat1 WHERE tbl='wr';" \
+  "wr" "$DB"
+run_test "without_rowid_table_pragma" \
+  "PRAGMA index_info(wr);" \
+  "0|0|k" "$DB"
+run_test_match "without_rowid_query_plan" \
+  "EXPLAIN QUERY PLAN SELECT * FROM wr WHERE k='a';" \
+  "USING PRIMARY KEY" "$DB"
 rm -f "$DB"
 
 echo ""
