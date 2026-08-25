@@ -193,5 +193,35 @@ run_test "vacuum_into_gc_copy_rows" "SELECT count(*) FROM t;" "10" "$COPY"
 db_rm "$DB"; db_rm "$COPY"
 
 echo ""
+echo "--- VACUUM replays catalog SQL like stock ---"
+
+# Malformed CREATE text left by writable_schema must fail VACUUM with the
+# parser's error, not survive the GC copy.
+DB=/tmp/test_vac_writable_schema_$$.db; db_rm "$DB"
+OUT=$(echo "CREATE TABLE t7(x);
+INSERT INTO t7 VALUES(1);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE [M%s%s%s%s%s%s%s%s%s%s%s%s%s' WHERE name='t7';
+VACUUM;" | $DOLTLITE "$DB" 2>&1)
+if echo "$OUT" | grep -q 'unrecognized token'; then
+  PASS=$((PASS+1)); echo "  PASS: vacuum_rejects_poked_schema"
+else
+  FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: vacuum_rejects_poked_schema"
+  echo "  FAIL: vacuum_rejects_poked_schema (got: $OUT)"
+fi
+db_rm "$DB"
+
+# A healthy schema still vacuums, and the scratch replay leaves no debris.
+DB=/tmp/test_vac_replay_clean_$$.db; db_rm "$DB"
+echo "CREATE TABLE a(x INTEGER PRIMARY KEY, y TEXT);
+CREATE INDEX ay ON a(y);
+INSERT INTO a VALUES(1,'z');
+VACUUM;" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "vacuum_replay_clean_data" "SELECT y FROM a WHERE x=1; PRAGMA integrity_check;" "z
+ok" "$DB"
+run_test "vacuum_replay_no_scratch_db" "SELECT count(*) FROM pragma_database_list WHERE name LIKE 'vacuum_%';" "0" "$DB"
+db_rm "$DB"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests ==="
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
