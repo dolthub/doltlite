@@ -5270,10 +5270,10 @@ ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journa
 # finalization write gc deliberately consumes, so the statement succeeds after
 # the error was hit. Ordinals are ubuntu-runner IDs and track the streamed
 # writer's coalesced write count; macOS no longer trips the window at all.
-ioerr ioerr-2.29.3 @linux @coverage class=intentional
 ioerr ioerr-2.30.3 @linux @coverage class=intentional
 ioerr ioerr-2.31.3 @linux @coverage class=intentional
 ioerr ioerr-2.32.3 @linux @coverage class=intentional
+ioerr ioerr-2.33.3 @linux @coverage class=intentional
 
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
