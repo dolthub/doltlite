@@ -84,6 +84,7 @@ static int doltliteVacuumReplaySchema(sqlite3 *db, int iDb, char **pzErrMsg){
   u64 saved_flags = db->flags;
   u32 saved_mDbFlags = db->mDbFlags;
   u32 saved_openFlags = db->openFlags;
+  u8 saved_mTrace = db->mTrace;  /* replayed statements stay out of traces */
   int nDb = db->nDb;
   const char *zDbMain = db->aDb[iDb].zDbSName;
   u64 iRandom;
@@ -97,6 +98,7 @@ static int doltliteVacuumReplaySchema(sqlite3 *db, int iDb, char **pzErrMsg){
   db->flags &= ~(u64)(SQLITE_ForeignKeys | SQLITE_Defensive
                       | SQLITE_CountRows);
   db->mDbFlags |= DBFLAG_PreferBuiltin | DBFLAG_Vacuum;
+  db->mTrace = 0;
 
   /* A read-only connection may VACUUM INTO; the scratch attach must not
   ** inherit its read-only open flags. */
@@ -131,6 +133,7 @@ static int doltliteVacuumReplaySchema(sqlite3 *db, int iDb, char **pzErrMsg){
   }
   db->flags = saved_flags;
   db->mDbFlags = saved_mDbFlags;
+  db->mTrace = saved_mTrace;
   return rc;
 }
 #endif
