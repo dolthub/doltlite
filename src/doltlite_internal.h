@@ -1226,6 +1226,7 @@ int doltliteIndexApplyRowDelta(
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
+int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg);
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash,
                                      const ProllyHash *pCommitHash);

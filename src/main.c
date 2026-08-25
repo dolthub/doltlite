@@ -1047,18 +1047,6 @@ int sqlite3_db_config(sqlite3 *db, int op, ...){
           int onoff = va_arg(ap, int);
           int *pRes = va_arg(ap, int*);
           u64 oldFlags = db->flags;
-#ifdef DOLTLITE_PROLLY
-          /* VACUUM does not implement the reset for doltlite-format
-          ** databases, so enabling the flag would silently no-op.
-          ** Refuse it instead of pretending the next VACUUM will reset. */
-          if( op==SQLITE_DBCONFIG_RESET_DATABASE && onoff>0
-           && sqlite3BtreeIsDoltliteFormat(db->aDb[0].pBt)
-          ){
-            if( pRes ) *pRes = 0;
-            rc = SQLITE_ERROR;
-            break;
-          }
-#endif
           if( onoff>0 ){
             db->flags |= aFlagOp[i].mask;
           }else if( onoff==0 ){

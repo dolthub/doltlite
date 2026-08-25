@@ -2542,5 +2542,103 @@ int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
   return btreeReadWorkingCatalog(cs, zBranch, pCatHash, pCommitHash);
 }
 
+/*
+** SQLITE_DBCONFIG_RESET_DATABASE + VACUUM: drop every stored object on the
+** current branch working catalog so sqlite_master is empty. HEAD commits
+** and other branches are unchanged; dolt_reset('--hard') restores this
+** branch from HEAD.
+*/
+int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
+  Btree *p;
+  struct TableEntry *pMaster;
+  Pgno *aDrop = 0;
+  int nDrop = 0;
+  int nCat;
+  int i;
+  int iMoved = 0;
+  int rc;
+  u32 userVersion = 0;
+  u32 appId = 0;
+  u32 cacheSize = 0;
+
+  if( !db || iDb<0 || iDb>=db->nDb || !db->aDb[iDb].pBt ){
+    sqlite3SetString(pzErrMsg, db, "unable to reset database");
+    return SQLITE_ERROR;
+  }
+  p = db->aDb[iDb].pBt;
+  if( sqlite3BtreeIsReadonly(p) ){
+    sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(SQLITE_READONLY));
+    return SQLITE_READONLY;
+  }
+
+  sqlite3BtreeGetMeta(p, BTREE_USER_VERSION, &userVersion);
+  sqlite3BtreeGetMeta(p, BTREE_APPLICATION_ID, &appId);
+  sqlite3BtreeGetMeta(p, BTREE_DEFAULT_CACHE_SIZE, &cacheSize);
+
+  rc = sqlite3BtreeBeginTrans(p, 2, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rc));
+    return rc;
+  }
+
+  invalidateCursors(p->pBt, 0, SQLITE_ABORT);
+
+  nCat = p->cat.n;
+  if( nCat>0 ){
+    aDrop = sqlite3_malloc64(sizeof(Pgno)*(sqlite3_int64)nCat);
+    if( !aDrop ){
+      sqlite3BtreeRollback(p, SQLITE_NOMEM, 1);
+      sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(SQLITE_NOMEM));
+      return SQLITE_NOMEM;
+    }
+    for(i=0; i<nCat; i++){
+      if( p->cat.a[i].iTable!=1 ){
+        aDrop[nDrop++] = p->cat.a[i].iTable;
+      }
+    }
+  }
+  for(i=0; i<nDrop && rc==SQLITE_OK; i++){
+    rc = sqlite3BtreeDropTable(p, (int)aDrop[i], &iMoved);
+  }
+  sqlite3_free(aDrop);
+  if( rc==SQLITE_OK ){
+    pMaster = findTable(p, 1);
+    if( pMaster && pMaster->pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)pMaster->pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pMaster->pPending = 0;
+    }
+    rc = sqlite3BtreeNewDb(p);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3BtreeUpdateMeta(p, BTREE_USER_VERSION, userVersion);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3BtreeUpdateMeta(p, BTREE_APPLICATION_ID, appId);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3BtreeUpdateMeta(p, BTREE_DEFAULT_CACHE_SIZE, cacheSize);
+  }
+  if( rc==SQLITE_OK ){
+    u32 schemaVersion = 0;
+    sqlite3BtreeGetMeta(p, BTREE_SCHEMA_VERSION, &schemaVersion);
+    rc = sqlite3BtreeUpdateMeta(p, BTREE_SCHEMA_VERSION, schemaVersion+1);
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3BtreeRollback(p, rc, 1);
+    sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rc));
+    return rc;
+  }
+
+  rc = sqlite3BtreeCommit(p);
+  sqlite3ExpirePreparedStatements(db, 0);
+  sqlite3ResetAllSchemasOfConnection(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rc));
+  }
+  return rc;
+}
+
 
 #endif /* DOLTLITE_PROLLY */

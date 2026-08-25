@@ -251,7 +251,14 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
                        "cannot VACUUM - SQL statements in progress");
       return SQLITE_ERROR;
     }
-    {
+    if( (db->flags & SQLITE_ResetDatabase)!=0 && pOut==0 ){
+      /* Empty the current branch working catalog, then GC. Other branches
+      ** and HEAD history stay. VACUUM INTO copies the store and does not
+      ** reset the source. */
+      extern int doltliteVacuumResetCurrentBranch(sqlite3*, int, char**);
+      int rcReset = doltliteVacuumResetCurrentBranch(db, iDb, pzErrMsg);
+      if( rcReset!=SQLITE_OK ) return rcReset;
+    }else{
       int rcReplay = doltliteVacuumReplaySchema(db, iDb, pzErrMsg);
       if( rcReplay!=SQLITE_OK ) return rcReplay;
     }
