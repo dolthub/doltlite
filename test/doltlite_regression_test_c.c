@@ -12249,6 +12249,7 @@ static void run_clustered_pk_blob_open(void){
   char dbpath[512];
   sqlite3 *db = 0;
   sqlite3_blob *pBlob = 0;
+  sqlite3_blob *pOther = 0;
   sqlite3_int64 rowid;
   sqlite3_int64 rowid2;
   unsigned char buf[8];
@@ -12319,6 +12320,122 @@ static void run_clustered_pk_blob_open(void){
     memset(buf, 0, sizeof(buf));
     check("cpk_blob_reopen_read",
           sqlite3_blob_read(pBlob, buf, 1, 0)==SQLITE_OK && buf[0]==0xbb);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("cpk_blob_abort_setup", execSql(db,
+      "CREATE TABLE cpk_abort(k TEXT PRIMARY KEY, n INT, b BLOB);"
+      "INSERT INTO cpk_abort VALUES('a', 1, x'0102');"
+      "INSERT INTO cpk_abort VALUES('b', 2, x'0304');")==SQLITE_OK);
+  rowid = queryInt64(db, "SELECT rowid FROM cpk_abort WHERE k='a'");
+  rowid2 = queryInt64(db, "SELECT rowid FROM cpk_abort WHERE k='b'");
+  check("cpk_blob_abort_open_same",
+        sqlite3_blob_open(db, "main", "cpk_abort", "b", rowid, 0,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_open_other",
+        sqlite3_blob_open(db, "main", "cpk_abort", "b", rowid2, 0,
+                          &pOther)==SQLITE_OK);
+  check("cpk_blob_abort_sql_update", execSql(db,
+      "UPDATE cpk_abort SET b=x'ffff' WHERE k='a'")==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_abort_update_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_ABORT);
+    check("cpk_blob_abort_update_msg",
+          strcmp(sqlite3_errmsg(db), "query aborted")==0);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+  if( pOther ){
+    memset(buf, 0, sizeof(buf));
+    check("cpk_blob_other_row_survives",
+          sqlite3_blob_read(pOther, buf, 2, 0)==SQLITE_OK
+          && buf[0]==0x03 && buf[1]==0x04);
+    sqlite3_blob_close(pOther);
+    pOther = 0;
+  }
+
+  check("cpk_blob_abort_open_nonblob_update",
+        sqlite3_blob_open(db, "main", "cpk_abort", "b", rowid, 0,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_nonblob_update", execSql(db,
+      "UPDATE cpk_abort SET n=n+1 WHERE k='a'")==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_abort_nonblob_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_ABORT);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("cpk_blob_abort_open_different_update",
+        sqlite3_blob_open(db, "main", "cpk_abort", "b", rowid, 0,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_different_update", execSql(db,
+      "UPDATE cpk_abort SET b=x'eeee' WHERE k='b'")==SQLITE_OK);
+  if( pBlob ){
+    memset(buf, 0, sizeof(buf));
+    check("cpk_blob_different_update_survives",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_OK
+          && buf[0]==0xff && buf[1]==0xff);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("cpk_blob_abort_open_delete",
+        sqlite3_blob_open(db, "main", "cpk_abort", "b", rowid, 0,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_delete", execSql(db,
+      "DELETE FROM cpk_abort WHERE k='a'")==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_abort_delete_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_ABORT);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("cpk_blob_abort_write_setup", execSql(db,
+      "INSERT INTO cpk_abort VALUES('c', 3, x'0506')")==SQLITE_OK);
+  rowid = queryInt64(db, "SELECT rowid FROM cpk_abort WHERE k='c'");
+  check("cpk_blob_abort_open_write",
+        sqlite3_blob_open(db, "main", "cpk_abort", "b", rowid, 1,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_write_sql_update", execSql(db,
+      "UPDATE cpk_abort SET n=4 WHERE k='c'")==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_abort_write",
+          sqlite3_blob_write(pBlob, "ZZ", 2, 0)==SQLITE_ABORT);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("cpk_blob_abort_int_setup", execSql(db,
+      "CREATE TABLE cpk_int(k INT PRIMARY KEY, b BLOB);"
+      "INSERT INTO cpk_int VALUES(7, x'0708')")==SQLITE_OK);
+  rowid = queryInt64(db, "SELECT rowid FROM cpk_int");
+  check("cpk_blob_abort_int_open",
+        sqlite3_blob_open(db, "main", "cpk_int", "b", rowid, 0,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_int_update", execSql(db,
+      "UPDATE cpk_int SET b=x'090a' WHERE k=7")==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_abort_int_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_ABORT);
+    sqlite3_blob_close(pBlob);
+    pBlob = 0;
+  }
+
+  check("cpk_blob_abort_composite_setup", execSql(db,
+      "CREATE TABLE cpk_comp(a TEXT, k INT, b BLOB, PRIMARY KEY(a,k));"
+      "INSERT INTO cpk_comp VALUES('x', 9, x'0b0c')")==SQLITE_OK);
+  rowid = queryInt64(db, "SELECT rowid FROM cpk_comp");
+  check("cpk_blob_abort_composite_open",
+        sqlite3_blob_open(db, "main", "cpk_comp", "b", rowid, 0,
+                          &pBlob)==SQLITE_OK);
+  check("cpk_blob_abort_composite_update", execSql(db,
+      "UPDATE cpk_comp SET b=x'0d0e' WHERE a='x' AND k=9")==SQLITE_OK);
+  if( pBlob ){
+    check("cpk_blob_abort_composite_read",
+          sqlite3_blob_read(pBlob, buf, 2, 0)==SQLITE_ABORT);
     sqlite3_blob_close(pBlob);
     pBlob = 0;
   }

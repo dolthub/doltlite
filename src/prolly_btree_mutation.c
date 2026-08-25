@@ -888,6 +888,10 @@ int prollyBtCursorInsert(
       pSortKey = pCur->pSeekSortKey;
     }
     if( rc==SQLITE_OK ){
+      if( !(pCur->curFlags & BTCF_Incrblob) ){
+        prollyInvalidateIncrblobCursorsByKey(
+            pCur->pBt, pCur->pgnoRoot, pSortKey, nSortKey);
+      }
       if( pCur->mmExactMiss
        && pCur->pMutMap
        && pCur->mmMissGeneration==pCur->pMutMap->generation
@@ -1241,6 +1245,9 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   if( pCur->curIntKey && hasSavedKey ){
     prollyInvalidateIncrblobCursors(pCur->pBt, pCur->pgnoRoot, savedIntKey, 0);
+  }else if( !pCur->curIntKey && hasSavedKey ){
+    prollyInvalidateIncrblobCursorsByKey(
+        pCur->pBt, pCur->pgnoRoot, pSavedDelKey, nSavedDelKey);
   }
 
   rc = ensureMutMap(pCur);

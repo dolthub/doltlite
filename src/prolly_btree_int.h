@@ -739,6 +739,7 @@ int deserializeCatalog(Btree*, const u8*, int);
 void initDefaultMeta(Btree*);
 void resetConnectionSchema(Btree*);
 void prollyInvalidateIncrblobCursors(BtShared*, Pgno, i64, int);
+void prollyInvalidateIncrblobCursorsByKey(BtShared*, Pgno, const u8*, int);
 void refreshCursorRoot(BtCursor*);
 int applyMutMapToTableRoot(BtShared*, struct TableEntry*, ProllyMutMap*);
 int flushAllPending(Btree*, BtShared*, Pgno);
