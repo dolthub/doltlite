@@ -217,8 +217,8 @@ echo "CREATE TABLE a(x INTEGER PRIMARY KEY, y TEXT);
 CREATE INDEX ay ON a(y);
 INSERT INTO a VALUES(1,'z');
 VACUUM;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "vacuum_replay_clean_data" "SELECT y FROM a WHERE x=1; PRAGMA integrity_check;" "z
-ok" "$DB"
+run_test "vacuum_replay_clean_data" "SELECT y FROM a WHERE x=1;" "z" "$DB"
+run_test "vacuum_replay_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 run_test "vacuum_replay_no_scratch_db" "SELECT count(*) FROM pragma_database_list WHERE name LIKE 'vacuum_%';" "0" "$DB"
 db_rm "$DB"
 

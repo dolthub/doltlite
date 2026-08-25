@@ -5674,22 +5674,22 @@ vacuum3 vacuum3-5.2 class=intentional issue=1846  # memdb page_size read-back af
 # The window widens by one whenever the session root set does: the post-sweep
 # resolvability check re-reads every seeded hash, so each added root is one
 # more fault point inside it. .32 arrived with the session head commit.
-vacuum3 vacuum3-ioerr-1.29.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-1.30.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-1.31.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-1.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-2.29.3 @linux class=intentional
+vacuum3 vacuum3-ioerr-1.33.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-2.30.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-2.31.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-2.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-3.29.3 @linux class=intentional
+vacuum3 vacuum3-ioerr-2.33.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-3.30.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-3.31.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-3.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-4.29.3 @linux class=intentional
+vacuum3 vacuum3-ioerr-3.33.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-4.30.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-4.31.3 @linux class=intentional
 vacuum3 vacuum3-ioerr-4.32.3 @linux class=intentional
+vacuum3 vacuum3-ioerr-4.33.3 @linux class=intentional
 
 # fkey_malloc / vtab_err: OOM fault indices, re-derived after allocations were
 # removed from the large-blob insert and integer-index seek paths; indices
