@@ -62,6 +62,7 @@ doltlite_delete_or.sh
 doltlite_autoinc_schema.sh
 doltlite_rowid_identity.sh
 doltlite_pk_clustered_notnull.sh
+doltlite_pk_clustered_rowid_readonly.sh
 doltlite_rowid_returning.sh
 doltlite_nocase_index.sh
 doltlite_update_replace_trigger.sh

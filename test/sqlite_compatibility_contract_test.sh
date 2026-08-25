@@ -79,6 +79,16 @@ run_test_match "text_pk_clustered_null_insert" \
   "INSERT INTO t VALUES(NULL, 1);" \
   "NOT NULL constraint failed: t.k" "$PKNN_DB"
 
+ROWID_DB="$TMP/pk-clustered-rowid-readonly.db"
+run_test_match "text_pk_clustered_rowid_insert" \
+  "CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
+INSERT INTO t(rowid, k, v) VALUES(99, 'a', 1);" \
+  "has no column named rowid" "$ROWID_DB"
+run_test "text_pk_clustered_rowid_select" \
+  "INSERT INTO t VALUES('a', 1);
+SELECT last_insert_rowid() = rowid FROM t;" \
+  "1" "$ROWID_DB"
+
 MAIN_DB="$TMP/multifile-main.db"
 AUX_DB="$TMP/multifile-aux.db"
 run_test_match "multifile_temp_trigger_rejected" \
