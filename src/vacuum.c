@@ -72,6 +72,72 @@ static int execSqlF(sqlite3 *db, char **pzErrMsg, const char *zSql, ...){
   return rc;
 }
 
+#ifdef DOLTLITE_PROLLY
+/* Stock VACUUM re-executes every table and index CREATE while rebuilding,
+** so catalog text damaged under writable_schema fails the statement. GC
+** copies chunks and never parses; replay the same rows into a scratch
+** in-memory attach so the damage raises stock's error instead of
+** surviving. Views, triggers, and virtual tables are copied verbatim by
+** stock too, so they are not replayed here either. */
+static int doltliteVacuumReplaySchema(sqlite3 *db, int iDb, char **pzErrMsg){
+  int rc;
+  u64 saved_flags = db->flags;
+  u32 saved_mDbFlags = db->mDbFlags;
+  u32 saved_openFlags = db->openFlags;
+  u8 saved_mTrace = db->mTrace;  /* replayed statements stay out of traces */
+  int nDb = db->nDb;
+  const char *zDbMain = db->aDb[iDb].zDbSName;
+  u64 iRandom;
+  char zScratch[42];
+
+  sqlite3_randomness(sizeof(iRandom), &iRandom);
+  sqlite3_snprintf(sizeof(zScratch), zScratch, "vacuum_%016llx", iRandom);
+
+  db->flags |= SQLITE_WriteSchema | SQLITE_IgnoreChecks | SQLITE_Comments
+             | SQLITE_AttachCreate | SQLITE_AttachWrite;
+  db->flags &= ~(u64)(SQLITE_ForeignKeys | SQLITE_Defensive
+                      | SQLITE_CountRows);
+  db->mDbFlags |= DBFLAG_PreferBuiltin | DBFLAG_Vacuum;
+  db->mTrace = 0;
+
+  /* A read-only connection may VACUUM INTO; the scratch attach must not
+  ** inherit its read-only open flags. */
+  db->openFlags &= ~(u32)SQLITE_OPEN_READONLY;
+  db->openFlags |= SQLITE_OPEN_CREATE|SQLITE_OPEN_READWRITE;
+  rc = execSqlF(db, pzErrMsg, "ATTACH ':memory:' AS %s", zScratch);
+  db->openFlags = saved_openFlags;
+  if( rc==SQLITE_OK ){
+    assert( db->nDb-1==nDb );
+    db->init.iDb = nDb; /* force replayed CREATE statements into the scratch */
+    rc = execSqlF(db, pzErrMsg,
+        "SELECT sql FROM \"%w\".sqlite_schema"
+        " WHERE type='table'AND name<>'sqlite_sequence'"
+        " AND coalesce(rootpage,1)>0",
+        zDbMain);
+    if( rc==SQLITE_OK ){
+      rc = execSqlF(db, pzErrMsg,
+          "SELECT sql FROM \"%w\".sqlite_schema WHERE type='index'",
+          zDbMain);
+    }
+    db->init.iDb = 0;
+    /* The scratch btree holds a write transaction that cannot autocommit
+    ** while the VACUUM vdbe is active, so DETACH would refuse it. Close it
+    ** the way stock's end_of_vacuum drops its temp attach. */
+    {
+      Db *pScratch = &db->aDb[nDb];
+      sqlite3BtreeClose(pScratch->pBt);
+      pScratch->pBt = 0;
+      pScratch->pSchema = 0;
+      sqlite3ResetAllSchemasOfConnection(db);
+    }
+  }
+  db->flags = saved_flags;
+  db->mDbFlags = saved_mDbFlags;
+  db->mTrace = saved_mTrace;
+  return rc;
+}
+#endif
+
 /*
 ** The VACUUM command is used to clean up the database,
 ** collapse free space, etc.  It is modelled after the VACUUM command
@@ -179,6 +245,15 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
     if( !db->autoCommit ){
       sqlite3SetString(pzErrMsg, db, "cannot VACUUM from within a transaction");
       return SQLITE_ERROR;
+    }
+    if( db->nVdbeActive>1 ){
+      sqlite3SetString(pzErrMsg, db,
+                       "cannot VACUUM - SQL statements in progress");
+      return SQLITE_ERROR;
+    }
+    {
+      int rcReplay = doltliteVacuumReplaySchema(db, iDb, pzErrMsg);
+      if( rcReplay!=SQLITE_OK ) return rcReplay;
     }
     if( pOut ){
       const char *zPhase = 0;

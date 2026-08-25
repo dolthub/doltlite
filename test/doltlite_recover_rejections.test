@@ -54,12 +54,12 @@ do_test doltlite_recover_rejections-2.2 {
     lappend rows $a
   }
   list $rows $vres
-} {{1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16} {0 {}}}
+} {{1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16} {1 {cannot VACUUM - SQL statements in progress}}}
 do_test doltlite_recover_rejections-2.3 {
   list [catch {
     db eval {SELECT 1, 2, 3} { execsql VACUUM }
   } msg] $msg
-} {0 {}}
+} {1 {cannot VACUUM - SQL statements in progress}}
 do_test doltlite_recover_rejections-2.4 {
   set res {}
   set res2 {}
@@ -68,7 +68,7 @@ do_test doltlite_recover_rejections-2.4 {
     lappend res2 $a
   }
   lappend res2 $res
-} {1 2 3 4 5 6 7 8 9 10 {0 {}}}
+} {1 2 3 4 5 6 7 8 9 10 {1 {cannot VACUUM - SQL statements in progress}}}
 do_test doltlite_recover_rejections-2.5 {
   list [execsql {SELECT count(*), min(a), max(a) FROM t1}] \
        [execsql {PRAGMA integrity_check}]
