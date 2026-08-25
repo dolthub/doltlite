@@ -2058,14 +2058,14 @@ resetdb resetdb-320 class=intentional  # sqlite_dbpage writes rejected; page cou
 resetdb resetdb-330 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-400 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-500 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
-resetdb resetdb-630 class=intentional  # cascade of the resetdb-820 RESET_DATABASE refusal: db2 still sees the schema
+
 resetdb resetdb-700 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-710 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-740 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
-resetdb resetdb-820 class=intentional  # RESET_DATABASE dbconfig is refused on doltlite-format dbs (was a silent no-op): read-back value stays 0
-resetdb resetdb-840 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
-resetdb resetdb-850 class=intentional  # encoding fixed at UTF-8 + RESET_DATABASE refused: no encoding mismatch can exist
-resetdb resetdb-860 class=intentional  # encoding fixed at UTF-8 + RESET_DATABASE refused: no encoding mismatch can exist
+
+resetdb resetdb-840 class=intentional  # encoding fixed at UTF-8; RESET+VACUUM cannot switch the database to UTF-16
+resetdb resetdb-850 class=intentional  # encoding fixed at UTF-8: no encoding mismatch can exist
+resetdb resetdb-860 class=intentional  # encoding fixed at UTF-8: no encoding mismatch can exist
 rowallock rowallock-1.1.2 class=intentional  # mmap statistics zero under chunk store
 rowallock rowallock-1.1.4 class=intentional  # file-exists probe on test.db-wal; no -wal sidecar
 rowallock rowallock-1.1.5 class=intentional  # file-exists probe on test.db-wal; no -wal sidecar

@@ -13131,6 +13131,107 @@ static void run_negzero_sortkey_eq(void){
   removeDbFiles(dbpath);
 }
 
+static int resetDatabaseAndVacuum(sqlite3 *db){
+  int res = -1;
+  int rc;
+  char *err = 0;
+  rc = sqlite3_db_config(db, SQLITE_DBCONFIG_RESET_DATABASE, 1, &res);
+  if( rc!=SQLITE_OK || res!=1 ) return rc!=SQLITE_OK ? rc : SQLITE_ERROR;
+  rc = sqlite3_exec(db, "VACUUM", 0, 0, &err);
+  sqlite3_free(err);
+  sqlite3_db_config(db, SQLITE_DBCONFIG_RESET_DATABASE, 0, &res);
+  return rc;
+}
+
+static void run_reset_database_current_branch(void){
+  sqlite3 *db = 0;
+  sqlite3 *peer = 0;
+  char dbpath[256];
+  int res = -1;
+  int rc;
+
+  printf("=== Reset Database Current Branch Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_reset_database_current_branch");
+  removeDbFiles(dbpath);
+
+  check("reset_database_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("reset_database_setup", execSql(db,
+    "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);"
+    "INSERT INTO t VALUES(1,'kept');"
+    "CREATE VIEW v AS SELECT a FROM t;"
+    "PRAGMA user_version=7;"
+    "PRAGMA application_id=99;"
+    "SELECT dolt_commit('-A','-m','on main');"
+    "SELECT dolt_branch('other');")==SQLITE_OK);
+  check("reset_database_other_branch_row", execSql(db,
+    "SELECT dolt_checkout('other');"
+    "INSERT INTO t VALUES(2,'other');"
+    "SELECT dolt_commit('-A','-m','on other');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  rc = sqlite3_db_config(db, SQLITE_DBCONFIG_RESET_DATABASE, 1, &res);
+  check("reset_database_flag_on", rc==SQLITE_OK && res==1);
+  check("reset_database_peer_open_before_vacuum",
+        open_db(dbpath, &peer)==SQLITE_OK);
+  check("reset_database_peer_before_vacuum_still_sees_table",
+        strcmp(queryScalarText(peer, "SELECT count(*) FROM t"), "1")==0);
+  sqlite3_close(peer);
+  peer = 0;
+  check("reset_database_vacuum",
+        sqlite3_exec(db, "VACUUM", 0, 0, 0)==SQLITE_OK);
+  sqlite3_db_config(db, SQLITE_DBCONFIG_RESET_DATABASE, 0, &res);
+  check("reset_database_flag_off", res==0);
+
+  check("reset_database_sqlite_master_empty",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master"), "0")==0);
+  check("reset_database_table_gone",
+        execSqlSilent(db, "SELECT * FROM t")==SQLITE_ERROR);
+  check("reset_database_user_version_preserved",
+        strcmp(queryScalarText(db, "PRAGMA user_version"), "7")==0);
+  check("reset_database_application_id_preserved",
+        strcmp(queryScalarText(db, "PRAGMA application_id"), "99")==0);
+  check("reset_database_head_history",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+
+  check("reset_database_peer_open", open_db(dbpath, &peer)==SQLITE_OK);
+  check("reset_database_peer_sees_empty",
+        strcmp(queryScalarText(peer,
+          "SELECT count(*) FROM sqlite_master"), "0")==0);
+  sqlite3_close(peer);
+  peer = 0;
+
+  check("reset_database_other_branch_intact", execSql(db,
+    "SELECT dolt_checkout('other');")==SQLITE_OK);
+  check("reset_database_other_branch_rows",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(a||':'||b) FROM t"), "1:kept,2:other")==0);
+
+  check("reset_database_back_to_main", execSql(db,
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("reset_database_main_still_empty",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master"), "0")==0);
+  check("reset_database_hard_reset_restores", execSql(db,
+    "SELECT dolt_reset('--hard');")==SQLITE_OK);
+  check("reset_database_hard_reset_row",
+        strcmp(queryScalarText(db, "SELECT b FROM t WHERE a=1"), "kept")==0);
+
+  check("reset_database_second_reset",
+        resetDatabaseAndVacuum(db)==SQLITE_OK);
+  check("reset_database_second_empty",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master"), "0")==0);
+  check("reset_database_recreate",
+        execSql(db, "CREATE TABLE u(x INTEGER PRIMARY KEY); INSERT INTO u VALUES(5);")
+        ==SQLITE_OK);
+  check("reset_database_recreate_row",
+        strcmp(queryScalarText(db, "SELECT x FROM u"), "5")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -13326,7 +13427,8 @@ static const RegressionCase aCases[] = {
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
-  { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq }
+  { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq },
+  { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch }
 };
 
 static int run_case_by_name(const char *zName){

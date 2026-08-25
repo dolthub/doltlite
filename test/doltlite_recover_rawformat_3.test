@@ -399,11 +399,10 @@ do_test doltlite_recover_rawformat_3-5.6 {
   db eval VACUUM
   set r2 [sqlite3_db_config db RESET_DB 0]
   list $r1 $r2 [execsql {
-    SELECT count(*) FROM rt1;
     SELECT count(*) FROM sqlite_master WHERE name LIKE 'rt1%';
     PRAGMA quick_check;
   } db2]
-} {0 0 {20 3 ok}}
+} {1 0 {0 ok}}
 do_test doltlite_recover_rawformat_3-5.7 {
   list [execsql {PRAGMA journal_mode=WAL}] \
        [catchsql {PRAGMA journal_mode=DELETE}] \
