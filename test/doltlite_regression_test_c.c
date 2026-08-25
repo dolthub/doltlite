@@ -897,6 +897,171 @@ backup_safety_done:
   removeDbFiles(zMemFile);
 }
 
+static void run_backup_source_write_busy(void){
+  sqlite3 *src = 0;
+  sqlite3 *dest = 0;
+  sqlite3 *memSrc = 0;
+  sqlite3 *memDest = 0;
+  sqlite3 *attachedSrc = 0;
+  sqlite3 *attachedDest = 0;
+  sqlite3_backup *pBackup = 0;
+  char zSrc[512];
+  char zDest[512];
+  char zAttachedSrc[512];
+  char zAttachedDest[512];
+  char zAux[512];
+  char *zSql = 0;
+
+  make_dbpath(zSrc, sizeof(zSrc), "backup_write_src");
+  make_dbpath(zDest, sizeof(zDest), "backup_write_dest");
+  make_dbpath(zAttachedSrc, sizeof(zAttachedSrc), "backup_write_attached_src");
+  make_dbpath(zAttachedDest, sizeof(zAttachedDest), "backup_write_attached_dest");
+  make_dbpath(zAux, sizeof(zAux), "backup_write_aux");
+  removeDbFiles(zSrc);
+  removeDbFiles(zDest);
+  removeDbFiles(zAttachedSrc);
+  removeDbFiles(zAttachedDest);
+  removeDbFiles(zAux);
+
+  check("backup_write_open_src", open_db(zSrc, &src)==SQLITE_OK);
+  check("backup_write_open_dest", open_db(zDest, &dest)==SQLITE_OK);
+  if( src && dest ){
+    check("backup_write_seed", execSql(src,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO t VALUES(1,'committed');")==SQLITE_OK);
+    check("backup_write_dest_seed", execSql(dest,
+        "CREATE TABLE sentinel(v TEXT);"
+        "INSERT INTO sentinel VALUES('unchanged');")==SQLITE_OK);
+    check("backup_write_begin", execSql(src,
+        "BEGIN; INSERT INTO t VALUES(2,'dirty');")==SQLITE_OK);
+    pBackup = sqlite3_backup_init(dest, "main", src, "main");
+    check("backup_write_init", pBackup!=0);
+    if( pBackup ){
+      check("backup_write_step_busy",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_BUSY);
+      check("backup_write_remaining", sqlite3_backup_remaining(pBackup)==1);
+      check("backup_write_pagecount", sqlite3_backup_pagecount(pBackup)==1);
+      check("backup_write_dest_unchanged",
+            strcmp(queryScalarText(dest, "SELECT v FROM sentinel"),
+                   "unchanged")==0);
+      check("backup_write_commit", execSql(src, "COMMIT")==SQLITE_OK);
+      check("backup_write_retry_done",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_DONE);
+      check("backup_write_finish", sqlite3_backup_finish(pBackup)==SQLITE_OK);
+      pBackup = 0;
+      check("backup_write_retry_rows", strcmp(queryScalarText(dest,
+          "SELECT group_concat(id || ':' || v, ',') FROM t"),
+          "1:committed,2:dirty")==0);
+      check("backup_write_retry_replaced_dest", strcmp(queryScalarText(dest,
+          "SELECT count(*) FROM sqlite_master WHERE name='sentinel'"),
+          "0")==0);
+    }
+
+    check("backup_write_rollback_begin", execSql(src,
+        "BEGIN; INSERT INTO t VALUES(3,'rolled-back');")==SQLITE_OK);
+    pBackup = sqlite3_backup_init(dest, "main", src, "main");
+    check("backup_write_rollback_init", pBackup!=0);
+    if( pBackup ){
+      check("backup_write_rollback_busy",
+            sqlite3_backup_step(pBackup, 1)==SQLITE_BUSY);
+      check("backup_write_rollback", execSql(src, "ROLLBACK")==SQLITE_OK);
+      check("backup_write_rollback_retry",
+            sqlite3_backup_step(pBackup, 1)==SQLITE_DONE);
+      check("backup_write_rollback_finish",
+            sqlite3_backup_finish(pBackup)==SQLITE_OK);
+      pBackup = 0;
+      check("backup_write_rollback_rows", strcmp(queryScalarText(dest,
+          "SELECT group_concat(id || ':' || v, ',') FROM t"),
+          "1:committed,2:dirty")==0);
+    }
+
+    check("backup_read_begin", execSql(src,
+        "BEGIN; SELECT count(*) FROM t;")==SQLITE_OK);
+    pBackup = sqlite3_backup_init(dest, "main", src, "main");
+    check("backup_read_init", pBackup!=0);
+    if( pBackup ){
+      check("backup_read_step_done",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_DONE);
+      check("backup_read_finish", sqlite3_backup_finish(pBackup)==SQLITE_OK);
+      pBackup = 0;
+    }
+    check("backup_read_commit", execSql(src, "COMMIT")==SQLITE_OK);
+  }
+
+  check("backup_write_memory_open_src", open_db(":memory:", &memSrc)==SQLITE_OK);
+  check("backup_write_memory_open_dest", open_db(":memory:", &memDest)==SQLITE_OK);
+  if( memSrc && memDest ){
+    check("backup_write_memory_seed", execSql(memSrc,
+        "CREATE TABLE m(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO m VALUES(1,'committed');"
+        "BEGIN; INSERT INTO m VALUES(2,'dirty');")==SQLITE_OK);
+    pBackup = sqlite3_backup_init(memDest, "main", memSrc, "main");
+    check("backup_write_memory_init", pBackup!=0);
+    if( pBackup ){
+      check("backup_write_memory_busy",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_BUSY);
+      check("backup_write_memory_rollback", execSql(memSrc, "ROLLBACK")==SQLITE_OK);
+      check("backup_write_memory_retry",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_DONE);
+      check("backup_write_memory_finish",
+            sqlite3_backup_finish(pBackup)==SQLITE_OK);
+      pBackup = 0;
+      check("backup_write_memory_rows",
+            strcmp(queryScalarText(memDest,
+              "SELECT group_concat(id || ':' || v) FROM m"),
+              "1:committed")==0);
+    }
+  }
+
+  check("backup_write_attached_open_src",
+        open_db(zAttachedSrc, &attachedSrc)==SQLITE_OK);
+  check("backup_write_attached_open_dest",
+        open_db(zAttachedDest, &attachedDest)==SQLITE_OK);
+  if( attachedSrc && attachedDest ){
+    zSql = sqlite3_mprintf(
+        "ATTACH %Q AS aux;"
+        "CREATE TABLE aux.a(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO aux.a VALUES(1,'committed');"
+        "BEGIN; INSERT INTO aux.a VALUES(2,'dirty');", zAux);
+    check("backup_write_attached_alloc", zSql!=0);
+    check("backup_write_attached_seed",
+          zSql && execSql(attachedSrc, zSql)==SQLITE_OK);
+    sqlite3_free(zSql);
+    zSql = 0;
+    pBackup = sqlite3_backup_init(
+        attachedDest, "main", attachedSrc, "aux");
+    check("backup_write_attached_init", pBackup!=0);
+    if( pBackup ){
+      check("backup_write_attached_busy",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_BUSY);
+      check("backup_write_attached_commit",
+            execSql(attachedSrc, "COMMIT")==SQLITE_OK);
+      check("backup_write_attached_retry",
+            sqlite3_backup_step(pBackup, -1)==SQLITE_DONE);
+      check("backup_write_attached_finish",
+            sqlite3_backup_finish(pBackup)==SQLITE_OK);
+      pBackup = 0;
+      check("backup_write_attached_rows", strcmp(queryScalarText(attachedDest,
+          "SELECT group_concat(id || ':' || v, ',') FROM a"),
+          "1:committed,2:dirty")==0);
+    }
+  }
+
+  if( pBackup ) sqlite3_backup_finish(pBackup);
+  sqlite3_free(zSql);
+  if( src ) sqlite3_close(src);
+  if( dest ) sqlite3_close(dest);
+  if( memSrc ) sqlite3_close(memSrc);
+  if( memDest ) sqlite3_close(memDest);
+  if( attachedSrc ) sqlite3_close(attachedSrc);
+  if( attachedDest ) sqlite3_close(attachedDest);
+  removeDbFiles(zSrc);
+  removeDbFiles(zDest);
+  removeDbFiles(zAttachedSrc);
+  removeDbFiles(zAttachedDest);
+  removeDbFiles(zAux);
+}
+
 static void run_integer_pk_autocommit_append_correctness(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -13137,6 +13302,7 @@ static const RegressionCase aCases[] = {
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
+  { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
   { "serialize_deserialize", "Serialize Deserialize Test", run_serialize_deserialize },
