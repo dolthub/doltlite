@@ -13293,6 +13293,8 @@ static void run_clustered_pk_update_hook(void){
   rB = queryInt64(db, "SELECT rowid FROM t WHERE k='b'");
   check("cpk_hook_textpk_update",
         execSql(db, "UPDATE t SET v=3 WHERE k='a';")==SQLITE_OK);
+  check("cpk_hook_textpk_update_unique",
+        queryInt64(db, "SELECT count(*) FROM t WHERE k='a'")==1);
   check("cpk_hook_textpk_delete",
         execSql(db, "DELETE FROM t WHERE k='b';")==SQLITE_OK);
   {
@@ -13310,6 +13312,42 @@ static void run_clustered_pk_update_hook(void){
       "UPDATE w SET v=3 WHERE k='a';"
       "DELETE FROM w WHERE k='b';")==SQLITE_OK);
   check("cpk_hook_without_rowid_silent", log.z[0]==0);
+
+  check("cpk_hook_cascade_schema", execSql(db,
+      "PRAGMA foreign_keys=ON;"
+      "CREATE TABLE p1(pid PRIMARY KEY);"
+      "CREATE TABLE c1(cid PRIMARY KEY,"
+      "  pid REFERENCES p1(pid) ON UPDATE CASCADE);"
+      "INSERT INTO p1 VALUES(10),(20);"
+      "INSERT INTO c1 VALUES(11,10),(12,10),(21,20),(22,20);"
+      "UPDATE p1 SET pid = pid * 10;")==SQLITE_OK);
+  check("cpk_hook_cascade_child_count",
+        queryInt64(db, "SELECT count(*) FROM c1")==4);
+  check("cpk_hook_cascade_child_rows",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(cid||' '||pid, ' ') "
+          "FROM (SELECT cid, pid FROM c1 ORDER BY cid)"),
+          "11 100 12 100 21 200 22 200")==0);
+  check("cpk_hook_cascade_parent_rows",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(pid, ' ') FROM (SELECT pid FROM p1 ORDER BY pid)"),
+          "100 200")==0);
+
+  check("cpk_hook_cascade_attach", execSql(db,
+      "ATTACH ':memory:' AS aux;"
+      "CREATE TABLE aux.p1(pid PRIMARY KEY);"
+      "CREATE TABLE aux.c1(cid PRIMARY KEY,"
+      "  pid REFERENCES p1(pid) ON UPDATE CASCADE);"
+      "INSERT INTO aux.p1 VALUES(10),(20);"
+      "INSERT INTO aux.c1 VALUES(11,10),(12,10),(21,20),(22,20);"
+      "UPDATE aux.p1 SET pid = pid * 10;")==SQLITE_OK);
+  check("cpk_hook_cascade_attach_count",
+        queryInt64(db, "SELECT count(*) FROM aux.c1")==4);
+  check("cpk_hook_cascade_attach_rows",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(cid||' '||pid, ' ') "
+          "FROM (SELECT cid, pid FROM aux.c1 ORDER BY cid)"),
+          "11 100 12 100 21 200 22 200")==0);
 
   sqlite3_close(db);
   removeDbFiles(dbpath);

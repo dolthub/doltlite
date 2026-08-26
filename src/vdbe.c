@@ -7057,8 +7057,13 @@ case OP_IdxInsert: {        /* in2 */
   x.pKey = pIn2->z;
 #ifdef DOLTLITE_PROLLY
   if( pOp->p4type==P4_TABLE ){
-    x.aMem = 0;
-    x.nMem = 0;
+    if( pOp->p3>0 && pC->pKeyInfo!=0 ){
+      x.aMem = aMem + pOp->p3;
+      x.nMem = pC->pKeyInfo->nKeyField;
+    }else{
+      x.aMem = 0;
+      x.nMem = 0;
+    }
   }else
 #endif
   {
