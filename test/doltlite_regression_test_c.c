@@ -1942,6 +1942,102 @@ static int denySchemaMasterRead(
   return SQLITE_OK;
 }
 
+typedef struct AlterDefaultAuth AlterDefaultAuth;
+struct AlterDefaultAuth {
+  int nAlter;
+  int nMasterUpdate;
+  int nUserRead;
+  int nUserUpdate;
+};
+
+static int denyAlterDefaultUserUpdate(
+  void *pCtx,
+  int action,
+  const char *zArg1,
+  const char *zArg2,
+  const char *zDb,
+  const char *zTrigger
+){
+  AlterDefaultAuth *p = (AlterDefaultAuth*)pCtx;
+  int isUserTable = zArg1
+                 && (strcmp(zArg1, "t")==0 || strcmp(zArg1, "u")==0);
+  (void)zArg2;
+  (void)zDb;
+  (void)zTrigger;
+  if( action==SQLITE_ALTER_TABLE ) p->nAlter++;
+  if( action==SQLITE_UPDATE && zArg1
+   && strcmp(zArg1, "sqlite_master")==0 ){
+    p->nMasterUpdate++;
+  }
+  if( action==SQLITE_READ && isUserTable ) p->nUserRead++;
+  if( action==SQLITE_UPDATE && isUserTable ){
+    p->nUserUpdate++;
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+static void run_alter_default_authorizer(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char auxpath[256];
+  char *zSql = 0;
+  AlterDefaultAuth auth;
+
+  make_dbpath(dbpath, sizeof(dbpath), "test_alter_default_authorizer");
+  make_dbpath(auxpath, sizeof(auxpath), "test_alter_default_authorizer_aux");
+  removeDbFiles(dbpath);
+  removeDbFiles(auxpath);
+  check("alter_default_auth_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  zSql = sqlite3_mprintf(
+      "CREATE TABLE t(a INTEGER PRIMARY KEY);"
+      "INSERT INTO t VALUES(1),(2);"
+      "ATTACH %Q AS aux;"
+      "CREATE TABLE aux.u(a INTEGER PRIMARY KEY);"
+      "INSERT INTO aux.u VALUES(3),(4);", auxpath);
+  check("alter_default_auth_setup_alloc", zSql!=0);
+  check("alter_default_auth_setup", zSql && execSql(db, zSql)==SQLITE_OK);
+  sqlite3_free(zSql);
+  memset(&auth, 0, sizeof(auth));
+  check("alter_default_auth_install",
+      sqlite3_set_authorizer(db, denyAlterDefaultUserUpdate, &auth)==SQLITE_OK);
+
+  check("alter_default_auth_main",
+      execSqlSilent(db,
+        "ALTER TABLE t ADD COLUMN b INTEGER DEFAULT 42")==SQLITE_OK);
+  check("alter_default_auth_main_authorized", auth.nAlter==1);
+  check("alter_default_auth_main_master_update", auth.nMasterUpdate>0);
+  check("alter_default_auth_main_no_user_read", auth.nUserRead==0);
+  check("alter_default_auth_main_no_user_update", auth.nUserUpdate==0);
+  check("alter_default_auth_main_rows", strcmp(queryScalarText(db,
+      "SELECT group_concat(a || ':' || b, ',') FROM t"),
+      "1:42,2:42")==0);
+  check("alter_default_auth_restored",
+      execSqlSilent(db, "UPDATE t SET b=43")==SQLITE_AUTH);
+
+  memset(&auth, 0, sizeof(auth));
+  check("alter_default_auth_attached",
+      execSqlSilent(db,
+        "ALTER TABLE aux.u ADD COLUMN c TEXT DEFAULT 'x'")==SQLITE_OK);
+  check("alter_default_auth_attached_authorized", auth.nAlter==1);
+  check("alter_default_auth_attached_master_update", auth.nMasterUpdate>0);
+  check("alter_default_auth_attached_no_user_read", auth.nUserRead==0);
+  check("alter_default_auth_attached_no_user_update", auth.nUserUpdate==0);
+  check("alter_default_auth_attached_rows", strcmp(queryScalarText(db,
+      "SELECT group_concat(a || ':' || c, ',') FROM aux.u"),
+      "3:x,4:x")==0);
+  check("alter_default_auth_attached_restored",
+      execSqlSilent(db, "UPDATE aux.u SET c='y'")==SQLITE_AUTH);
+  check("alter_default_auth_clear",
+      sqlite3_set_authorizer(db, 0, 0)==SQLITE_OK);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+  removeDbFiles(auxpath);
+}
+
 static void run_schema_hash_error_propagation(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -13515,6 +13611,7 @@ static const RegressionCase aCases[] = {
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
+  { "alter_default_authorizer", "ALTER Default Authorizer Test", run_alter_default_authorizer },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },

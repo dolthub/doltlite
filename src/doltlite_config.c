@@ -165,14 +165,22 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     return;
   }
 
-  /* Rewrite rows for the new column as InternalDml so triggers do not fire;
-  ** restore change counters. Stock ALTER touches no rows. */
+  /* Stock ALTER exposes no row DML to triggers, counters, or authorizers. */
   {
     int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
     i64 nChange = db->nChange;
     i64 nTotalChange = db->nTotalChange;
+#ifndef SQLITE_OMIT_AUTHORIZATION
+    sqlite3_xauth xAuth = db->xAuth;
+#endif
     db->mDbFlags |= DBFLAG_InternalDml;
+#ifndef SQLITE_OMIT_AUTHORIZATION
+    db->xAuth = 0;
+#endif
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
+#ifndef SQLITE_OMIT_AUTHORIZATION
+    db->xAuth = xAuth;
+#endif
     /* Clear this bit only: restoring the word would undo flags set by prepare. */
     if( !bWasSet ) db->mDbFlags &= ~DBFLAG_InternalDml;
     db->nChange = nChange;
