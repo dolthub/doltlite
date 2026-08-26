@@ -906,25 +906,19 @@ static void run_backup_source_write_busy(void){
   sqlite3 *attachedDest = 0;
   sqlite3_backup *pBackup = 0;
   char zSrc[512];
-  char zDest[512];
   char zAttachedSrc[512];
-  char zAttachedDest[512];
   char zAux[512];
   char *zSql = 0;
 
   make_dbpath(zSrc, sizeof(zSrc), "backup_write_src");
-  make_dbpath(zDest, sizeof(zDest), "backup_write_dest");
   make_dbpath(zAttachedSrc, sizeof(zAttachedSrc), "backup_write_attached_src");
-  make_dbpath(zAttachedDest, sizeof(zAttachedDest), "backup_write_attached_dest");
   make_dbpath(zAux, sizeof(zAux), "backup_write_aux");
   removeDbFiles(zSrc);
-  removeDbFiles(zDest);
   removeDbFiles(zAttachedSrc);
-  removeDbFiles(zAttachedDest);
   removeDbFiles(zAux);
 
   check("backup_write_open_src", open_db(zSrc, &src)==SQLITE_OK);
-  check("backup_write_open_dest", open_db(zDest, &dest)==SQLITE_OK);
+  check("backup_write_open_dest", open_db(":memory:", &dest)==SQLITE_OK);
   if( src && dest ){
     check("backup_write_seed", execSql(src,
         "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
@@ -1016,7 +1010,7 @@ static void run_backup_source_write_busy(void){
   check("backup_write_attached_open_src",
         open_db(zAttachedSrc, &attachedSrc)==SQLITE_OK);
   check("backup_write_attached_open_dest",
-        open_db(zAttachedDest, &attachedDest)==SQLITE_OK);
+        open_db(":memory:", &attachedDest)==SQLITE_OK);
   if( attachedSrc && attachedDest ){
     zSql = sqlite3_mprintf(
         "ATTACH %Q AS aux;"
@@ -1056,9 +1050,7 @@ static void run_backup_source_write_busy(void){
   if( attachedSrc ) sqlite3_close(attachedSrc);
   if( attachedDest ) sqlite3_close(attachedDest);
   removeDbFiles(zSrc);
-  removeDbFiles(zDest);
   removeDbFiles(zAttachedSrc);
-  removeDbFiles(zAttachedDest);
   removeDbFiles(zAux);
 }
 
