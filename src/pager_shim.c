@@ -1137,6 +1137,11 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   sqlite3BtreeEnter(p->pSrcBt);
   sqlite3_mutex_enter(p->pDestDb->mutex);
 
+  if( sqlite3BtreeTxnState(p->pSrcBt)==SQLITE_TXN_WRITE ){
+    rc = SQLITE_BUSY;
+    goto backup_step_done;
+  }
+
   srcCs = doltliteBtreeChunkStore(p->pSrcBt);
   iDest = sqlite3FindDbName(p->pDestDb, p->zDestDb);
   if( iDest<0 ){
