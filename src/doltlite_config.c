@@ -228,7 +228,14 @@ int doltliteMaybeSeedRepo(sqlite3 *db){
       "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  return doltliteAdvanceBranch(db, &seedHash, &emptyCatalog, 0);
+  /* Tables created before the seed live only in the session; the working
+  ** set must carry them, not the seed's empty catalog. */
+  {
+    ProllyHash liveCatalog;
+    rc = doltliteFlushCatalogToHash(db, &liveCatalog);
+    if( rc!=SQLITE_OK ) return rc;
+    return doltliteAdvanceBranch(db, &seedHash, &emptyCatalog, &liveCatalog);
+  }
 }
 
 int doltliteConfigRegister(sqlite3 *db){
