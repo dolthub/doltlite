@@ -495,18 +495,33 @@ H_HEAD_COMMITTED=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
 exec_pair "$DB" "INSERT INTO t VALUES (2, 'b');"
 H_T_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 H_DB_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
+H_DB_NAMED_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof_db('WORKING');")
+H_DB_EMPTY=$(run_hash_on "$DB" "SELECT dolt_hashof_db('');")
+H_DB_STAGED_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_db('STAGED');")
+H_DB_HEAD_NAMED=$(run_hash_on "$DB" "SELECT dolt_hashof_db('HEAD');")
 H_HEAD_WORKING=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
 different "working_change_updates_table_hash" "$H_T_COMMITTED" "$H_T_WORKING"
 different "working_change_updates_db_hash" "$H_DB_COMMITTED" "$H_DB_WORKING"
 same "working_change_does_not_move_HEAD" "$H_HEAD_COMMITTED" "$H_HEAD_WORKING"
+same "named_working_equals_noarg_db" "$H_DB_WORKING" "$H_DB_NAMED_WORKING"
+same "empty_ref_equals_working_db" "$H_DB_EMPTY" "$H_DB_NAMED_WORKING"
+same "staged_equals_head_before_add" "$H_DB_STAGED_BEFORE" "$H_DB_HEAD_NAMED"
+different "named_working_differs_from_head_when_dirty" "$H_DB_NAMED_WORKING" "$H_DB_HEAD_NAMED"
+both_error "hashof_working_is_commit_only" "$DB" "SELECT dolt_hashof('WORKING');"
+both_error "hashof_staged_is_commit_only" "$DB" "SELECT dolt_hashof('STAGED');"
 
 exec_pair "$DB" "SELECT dolt_add('-A');"
 H_T_STAGED=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 H_DB_STAGED=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
+H_DB_STAGED_NAMED=$(run_hash_on "$DB" "SELECT dolt_hashof_db('STAGED');")
+H_DB_WORKING_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_db('WORKING');")
+H_DB_HEAD_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_db('HEAD');")
 H_HEAD_STAGED=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD');")
 same "staging_keeps_working_table_hash" "$H_T_WORKING" "$H_T_STAGED"
 same "staging_keeps_working_db_hash" "$H_DB_WORKING" "$H_DB_STAGED"
 same "staging_does_not_move_HEAD" "$H_HEAD_COMMITTED" "$H_HEAD_STAGED"
+same "named_staged_equals_working_after_add" "$H_DB_STAGED_NAMED" "$H_DB_WORKING_AFTER"
+different "named_staged_differs_from_head_after_add" "$H_DB_STAGED_NAMED" "$H_DB_HEAD_AFTER"
 
 echo ""
 
