@@ -2664,9 +2664,29 @@ sqlite3d$(T.exe):	shell.c $(LIBOBJS0)
 shell_renamed.c: shell.c
 	sed 's/^int SQLITE_CDECL main(/int SQLITE_CDECL sqlite3_shell_main(/' shell.c > $@
 
-doltlite$(T.exe):	shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0)
+# The CLI embeds the amalgamation, stock's own model for its shell:
+# EXPLAIN comments change the Op struct layout, so the flag must cover
+# the whole engine in one translation unit and cannot mix with the
+# canonical library objects, which stay without the documented ~5%
+# comment-recording cost. The engine unit compiles WITHOUT SHELL_OPT:
+# its DQS and subtype flags would change SQL semantics that doltlite
+# code and tests assume, so they stay confined to the shell unit.
+#
+# DOLTLITE_CLI_OBJECTS=1 links the canonical objects instead (and loses
+# the comment column): clang's coverage mapping attributes an embedded
+# amalgamation to sqlite3.c, so the instrumented build must drive the
+# per-source objects for the report to see them.
+DOLTLITE_CLI_OBJECTS ?= 0
+doltlite-cli-engine.0 = sqlite3-cli.o
+doltlite-cli-engine.1 = $(LIBOBJS0)
+DOLTLITE_CLI_COMMENT_FLAG ?= -DSQLITE_ENABLE_EXPLAIN_COMMENTS
+sqlite3-cli.o:	sqlite3.c
+	$(T.cc.sqlite) $(DOLTLITE_CLI_COMMENT_FLAG) \
+		-c sqlite3.c -o $@
+doltlite$(T.exe):	shell_renamed.c $(TOP)/src/shell_wrapper.c $(doltlite-cli-engine.$(DOLTLITE_CLI_OBJECTS))
 	$(T.link) -o $@ \
-		shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0) \
+		shell_renamed.c $(TOP)/src/shell_wrapper.c \
+		$(doltlite-cli-engine.$(DOLTLITE_CLI_OBJECTS)) \
 		$(CFLAGS.readline) $(SHELL_OPT) \
 		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline)
 

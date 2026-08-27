@@ -109,6 +109,7 @@ doltlite_snapshot_isolation.sh
 doltlite_storage_locking.sh
 doltlite_unknown_table_cursor.sh
 doltlite_unknown_sql_function.sh
+doltlite_explain_comments.sh
 doltlite_behavior.sh
 doltlite_branch_edge.sh
 doltlite_diff_alter.sh

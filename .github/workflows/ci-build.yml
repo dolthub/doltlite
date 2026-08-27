@@ -408,7 +408,10 @@ jobs:
         cd build-coverage
         set -o pipefail
         {
-          make -j2 DOLTLITE_PROLLY_CHECK=1 \
+          # DOLTLITE_CLI_OBJECTS: the coverage report needs the CLI to
+          # drive per-source objects; an embedded amalgamation attributes
+          # everything to sqlite3.c and the report loses it.
+          make -j2 DOLTLITE_PROLLY_CHECK=1 DOLTLITE_CLI_OBJECTS=1 \
             doltlite doltlite-remotesrv doltlite-lib testfixture \
             doltlite-c-tests-build doltlite-regression-test-c-build
           make DOLTLITE_PROLLY=0 sqlite3
