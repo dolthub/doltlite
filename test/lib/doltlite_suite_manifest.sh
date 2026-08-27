@@ -108,6 +108,7 @@ doltlite_writable_schema.sh
 doltlite_snapshot_isolation.sh
 doltlite_storage_locking.sh
 doltlite_unknown_table_cursor.sh
+doltlite_unknown_sql_function.sh
 doltlite_behavior.sh
 doltlite_branch_edge.sh
 doltlite_diff_alter.sh
@@ -200,5 +201,6 @@ doltlite_pragma_user_version.sh
 doltlite_pragma_wal_checkpoint.sh
 doltlite_row_count_estimate.sh
 doltlite_schema_cookie.sh
+doltlite_unknown_sql_function.sh
 EOF
 }
