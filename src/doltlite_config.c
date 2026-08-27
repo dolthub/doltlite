@@ -253,6 +253,15 @@ int doltliteConfigRegister(sqlite3 *db){
       "doltlite_internal_materialize_default_column",
       3, DOLTLITE_COMMAND_FUNC_FLAGS, 0,
       doltliteInternalMaterializeDefaultColumnFunc, 0, 0);
+  if( rc==SQLITE_OK ){
+    /* ALTER's codegen resolves this FuncDef directly; user SQL must not.
+    ** SQLITE_FUNC_INTERNAL is stock's mechanism for exactly that split:
+    ** name resolution reports no such function and PRAGMA function_list
+    ** hides it, same as stock's own internal helpers. */
+    FuncDef *pDef = sqlite3FindFunction(db,
+        "doltlite_internal_materialize_default_column", 3, SQLITE_UTF8, 0);
+    if( pDef ) pDef->funcFlags |= SQLITE_FUNC_INTERNAL;
+  }
   return rc;
 }
 

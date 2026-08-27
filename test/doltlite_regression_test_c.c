@@ -12845,7 +12845,7 @@ static void run_directonly_dolt_functions(void){
     "'dolt_connect_branch','dolt_creds','dolt_creds_new',"
     "'dolt_default_branch','dolt_fetch','dolt_gc','dolt_merge','dolt_pull',"
     "'dolt_push','dolt_rebase','dolt_remote','dolt_reset','dolt_revert',"
-    "'dolt_tag','doltlite_internal_materialize_default_column'";
+    "'dolt_tag'";
   sqlite3 *db = 0;
   char dbpath[256];
   char *zSql;
@@ -12866,8 +12866,34 @@ static void run_directonly_dolt_functions(void){
   if( zSql ){
     zResult = queryScalarText(db, zSql);
     check("all_command_functions_are_directonly",
-          strcmp(zResult, "23|23")==0);
+          strcmp(zResult, "22|22")==0);
     sqlite3_free(zSql);
+  }
+
+  /* The ALTER materialize helper is internal-only: hidden from the
+  ** function list and unresolvable from user SQL, like stock's own
+  ** internal helpers. ALTER's codegen resolves the FuncDef directly. */
+  zResult = queryScalarText(db,
+    "SELECT count(*) FROM pragma_function_list "
+    "WHERE name='doltlite_internal_materialize_default_column'");
+  check("materialize_helper_not_listed", strcmp(zResult, "0")==0);
+  {
+    sqlite3_stmt *pStmt = 0;
+    rc = sqlite3_prepare_v2(db,
+      "SELECT doltlite_internal_materialize_default_column('main','t','c')",
+      -1, &pStmt, 0);
+    check("materialize_helper_unresolvable", rc==SQLITE_ERROR
+          && strstr(sqlite3_errmsg(db), "no such function")!=0);
+    sqlite3_finalize(pStmt);
+  }
+  {
+    const char *zB;
+    check("materialize_alter_setup", execSql(db,
+      "CREATE TABLE mat_t(a INTEGER PRIMARY KEY);"
+      "INSERT INTO mat_t VALUES(1);"
+      "ALTER TABLE mat_t ADD COLUMN b TEXT DEFAULT 'z';")==SQLITE_OK);
+    zB = queryScalarText(db, "SELECT b FROM mat_t WHERE a=1");
+    check("materialize_alter_still_fills_default", strcmp(zB, "z")==0);
   }
 
   zSql = sqlite3_mprintf(
