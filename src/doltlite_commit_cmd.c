@@ -19,45 +19,88 @@
 #include <time.h>
 
 #ifdef _WIN32
-static const char *dlWinStrptime(
-  const char *zDate,
-  const char *zFmt,
-  struct tm *pTm
-){
-  int year = 0, month = 0, day = 0;
-  int hour = 0, minute = 0, second = 0;
-  char sep = 0;
-  int n = 0;
-
-  if( strcmp(zFmt, "%Y-%m-%dT%H:%M:%S")==0 ){
-    n = sscanf(zDate, "%d-%d-%dT%d:%d:%d%c",
-               &year, &month, &day, &hour, &minute, &second, &sep);
-    if( n!=6 ) return 0;
-  }else if( strcmp(zFmt, "%Y-%m-%d %H:%M:%S")==0 ){
-    n = sscanf(zDate, "%d-%d-%d %d:%d:%d%c",
-               &year, &month, &day, &hour, &minute, &second, &sep);
-    if( n!=6 ) return 0;
-  }else{
-    return 0;
-  }
-
-  memset(pTm, 0, sizeof(*pTm));
-  pTm->tm_year = year - 1900;
-  pTm->tm_mon = month - 1;
-  pTm->tm_mday = day;
-  pTm->tm_hour = hour;
-  pTm->tm_min = minute;
-  pTm->tm_sec = second;
-  pTm->tm_isdst = 0;
-  return zDate + sqlite3Strlen30(zDate);
-}
-
 static time_t dlWinTimegm(struct tm *pTm){
   return _mkgmtime(pTm);
 }
-#define strptime dlWinStrptime
 #define timegm dlWinTimegm
 #endif
+
+static int parseFixedInt(const char **pz, int nDigits, int *pOut){
+  const char *z = *pz;
+  int i, v = 0;
+  for(i=0; i<nDigits; i++){
+    if( z[i]<'0' || z[i]>'9' ) return 0;
+    v = v*10 + (z[i]-'0');
+  }
+  *pz = z + nDigits;
+  *pOut = v;
+  return 1;
+}
+
+/* YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SS with optional frac and Z/±HH:MM.
+** Fractional seconds are accepted and dropped; commit timestamps are
+** whole seconds. */
+static int doltliteParseCommitDate(const char *zDate, i64 *pUnix){
+  const char *p = zDate;
+  int y, mo, d, h = 0, mi = 0, s = 0;
+  int offSign = 0, offH = 0, offM = 0;
+  struct tm tm;
+  time_t t;
+  struct tm *pBack;
+
+  if( !zDate || !pUnix ) return SQLITE_ERROR;
+  if( !parseFixedInt(&p, 4, &y) || *p++!='-'
+   || !parseFixedInt(&p, 2, &mo) || *p++!='-'
+   || !parseFixedInt(&p, 2, &d) ){
+    return SQLITE_ERROR;
+  }
+  if( *p=='T' ){
+    p++;
+    if( !parseFixedInt(&p, 2, &h) || *p++!=':'
+     || !parseFixedInt(&p, 2, &mi) || *p++!=':'
+     || !parseFixedInt(&p, 2, &s) ){
+      return SQLITE_ERROR;
+    }
+    if( *p=='.' || *p==',' ){
+      p++;
+      if( *p<'0' || *p>'9' ) return SQLITE_ERROR;
+      while( *p>='0' && *p<='9' ) p++;
+    }
+    if( *p=='Z' ){
+      p++;
+    }else if( *p=='+' || *p=='-' ){
+      offSign = (*p=='+') ? 1 : -1;
+      p++;
+      if( !parseFixedInt(&p, 2, &offH) || *p++!=':'
+       || !parseFixedInt(&p, 2, &offM) ){
+        return SQLITE_ERROR;
+      }
+    }
+  }
+  if( *p!=0 ) return SQLITE_ERROR;
+  if( y<1 || y>9999 || mo<1 || mo>12 || d<1 || d>31 ) return SQLITE_ERROR;
+  if( h>23 || mi>59 || s>59 || offH>23 || offM>59 ) return SQLITE_ERROR;
+
+  memset(&tm, 0, sizeof(tm));
+  tm.tm_year = y - 1900;
+  tm.tm_mon = mo - 1;
+  tm.tm_mday = d;
+  tm.tm_hour = h;
+  tm.tm_min = mi;
+  tm.tm_sec = s;
+  tm.tm_isdst = 0;
+  t = timegm(&tm);
+  pBack = gmtime(&t);
+  if( !pBack
+   || pBack->tm_year!=y-1900 || pBack->tm_mon!=mo-1
+   || pBack->tm_mday!=d || pBack->tm_hour!=h
+   || pBack->tm_min!=mi || pBack->tm_sec!=s ){
+    return SQLITE_ERROR;
+  }
+  *pUnix = (i64)t - (i64)offSign*((i64)offH*3600 + (i64)offM*60);
+  return SQLITE_OK;
+}
+
 /* Parse dolt_commit argv into opts. Malformed options set the context error.
 ** explicitTimestamp stays 0 for the caller to fill from --date. */
 typedef struct DoltliteCommitOptions {
@@ -655,22 +698,14 @@ static void doltliteCommitFunc(
   }
 
   if( zDate ){
-    struct tm tm;
-    const char *p;
-    memset(&tm, 0, sizeof(tm));
-    p = strptime(zDate, "%Y-%m-%dT%H:%M:%S", &tm);
-    if( !p ){
-      memset(&tm, 0, sizeof(tm));
-      p = strptime(zDate, "%Y-%m-%d %H:%M:%S", &tm);
-    }
-    if( !p ){
+    if( doltliteParseCommitDate(zDate, &opts.explicitTimestamp)!=SQLITE_OK ){
       char *zErr = sqlite3_mprintf(
-          "could not parse --date `%s` (expected YYYY-MM-DDTHH:MM:SS)", zDate);
+          "could not parse --date `%s` (expected YYYY-MM-DD or "
+          "YYYY-MM-DDTHH:MM:SS[Z|±HH:MM])", zDate);
       sqlite3_result_error(context, zErr ? zErr : "bad --date", -1);
       sqlite3_free(zErr);
       return;
     }
-    opts.explicitTimestamp = (i64)timegm(&tm);
   }
 
   if( !zMessage || zMessage[0]==0 ){
