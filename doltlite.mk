@@ -139,11 +139,13 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # fts3*.o as empty translation units and (worse) strips the matching
   # entries out of main.o's sqlite3BuiltinExtensions[] — so sqlite_dbpage /
   # sqlite_stmt / rtree / fts4 / bytecode / dbstat never register on a
-  # doltlite connection. Promote ONLY the vtable-enable macros into the
-  # compile flags. Deliberately NOT propagating SHELL_OPT wholesale — it
-  # also carries behavioral flags like SQLITE_DQS=0 and
-  # SQLITE_STRICT_SUBTYPE=1 that would change semantics for code and
-  # tests that were written assuming the doltlite default.
+  # doltlite connection. Promote the vtable-enable macros and
+  # SQLITE_ENABLE_UNKNOWN_SQL_FUNCTION (the stock CLI registers unknown()
+  # by compiling the amalgamation with SHELL_OPT). Deliberately NOT
+  # propagating SHELL_OPT wholesale — it also carries behavioral flags
+  # like SQLITE_DQS=0 and SQLITE_STRICT_SUBTYPE=1 that would change
+  # semantics for code and tests that were written assuming the doltlite
+  # default.
   OPT_FEATURE_FLAGS += \
     -DSQLITE_ENABLE_BYTECODE_VTAB \
     -DSQLITE_ENABLE_DBPAGE_VTAB \
@@ -151,5 +153,6 @@ ifeq ($(DOLTLITE_PROLLY),1)
     -DSQLITE_ENABLE_FTS4 \
     -DSQLITE_ENABLE_FTS5 \
     -DSQLITE_ENABLE_RTREE \
-    -DSQLITE_ENABLE_STMTVTAB
+    -DSQLITE_ENABLE_STMTVTAB \
+    -DSQLITE_ENABLE_UNKNOWN_SQL_FUNCTION
 endif
