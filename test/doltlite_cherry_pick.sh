@@ -186,6 +186,27 @@ run_test "rv_merge_commit_first_parent_rows" \
 
 rm -f "$DB"
 
+DB=/tmp/test_cp_empty_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_err_already_applied" \
+  "SELECT dolt_cherry_pick(dolt_hashof('HEAD~1'));" \
+  "no changes were made, nothing to commit" "$DB"
+
+run_test "cp_err_already_applied_log_unchanged" \
+  "SELECT count(*) FROM dolt_log;" \
+  "3" "$DB"
+
+run_test "cp_err_already_applied_rows_unchanged" \
+  "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);" \
+  "1,2" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_cp_persist_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'init');

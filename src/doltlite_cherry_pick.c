@@ -456,7 +456,7 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, &nConflicts, 0,
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 1, &nConflicts, 0,
         &zApplyErr, hexBuf);
   }
 
@@ -467,6 +467,11 @@ static void doltliteCherryPickFunc(
   if( rc==SQLITE_BUSY ){
     sqlite3_free(zApplyErr);
     doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
+    return;
+  }
+  if( rc==SQLITE_DONE ){
+    sqlite3_free(zApplyErr);
+    sqlite3_result_error(context, "no changes were made, nothing to commit", -1);
     return;
   }
   if( rc!=SQLITE_OK ){
