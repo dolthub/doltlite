@@ -34,7 +34,6 @@ bestindexF
 between
 bigmmap
 bigrow
-bigsort
 bind
 bind2
 bindxfer
