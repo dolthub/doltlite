@@ -390,6 +390,29 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--date', '2024-01-15T10:00:00Z');
 "
 
+oracle_query "commit_date_offset_utc" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'off', '--date', '2024-01-15T10:00:00-05:00');
+" "SELECT 'R|' || date FROM dolt_log WHERE message='off';" \
+  "SELECT concat('R|', DATE_FORMAT(date, '%Y-%m-%d %H:%i:%s')) FROM dolt_log WHERE message='off';"
+
+oracle_query "commit_date_only_midnight" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'day', '--date', '2024-01-15');
+" "SELECT 'R|' || date FROM dolt_log WHERE message='day';" \
+  "SELECT concat('R|', DATE_FORMAT(date, '%Y-%m-%d %H:%i:%s')) FROM dolt_log WHERE message='day';"
+
+oracle_error "commit_date_junk_rejected" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'bad', '--date', '2024-01-15T10:00:00junk');
+"
+
 echo "--- schema edge commits ---"
 
 oracle "commit_renamed_and_modified_table" "

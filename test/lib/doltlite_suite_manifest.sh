@@ -8,6 +8,7 @@ concurrency_contract_test.sh
 storage_format_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
+doltlite_commit_date.sh
 doltlite_staging.sh
 doltlite_workspace.sh
 doltlite_docs.sh
@@ -155,6 +156,7 @@ concurrency_contract_test.sh
 storage_format_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
+doltlite_commit_date.sh
 doltlite_staging.sh
 doltlite_workspace.sh
 doltlite_docs.sh
