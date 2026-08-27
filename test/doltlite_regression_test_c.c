@@ -48,6 +48,16 @@ extern int btreeReadWorkingCatalog(
 static int nPass = 0;
 static int nFail = 0;
 static char gBuf[8192];
+static int gRegressionFaultCode = 0;
+static int gRegressionFaultHits = 0;
+
+static int regressionFaultCallback(int iCode){
+  if( iCode==gRegressionFaultCode ){
+    gRegressionFaultHits++;
+    return 1;
+  }
+  return 0;
+}
 
 typedef struct RegressionCase RegressionCase;
 struct RegressionCase {
@@ -1104,6 +1114,117 @@ static void run_backup_source_write_busy(void){
   removeDbFiles(zAux);
 }
 
+static void run_backup_dest_missing_branch(void){
+  sqlite3 *src = 0;
+  sqlite3 *dest = 0;
+  sqlite3 *memDest = 0;
+  char zSrc[512];
+  char zDest[512];
+  int rc;
+
+  make_dbpath(zSrc, sizeof(zSrc), "backup_missing_branch_src");
+  make_dbpath(zDest, sizeof(zDest), "backup_missing_branch_dest");
+  removeDbFiles(zSrc);
+  removeDbFiles(zDest);
+
+  check("backup_missing_branch_open_src", open_db(zSrc, &src)==SQLITE_OK);
+  check("backup_missing_branch_open_dest", open_db(zDest, &dest)==SQLITE_OK);
+  if( src==0 || dest==0 ) goto backup_missing_branch_done;
+
+  rc = execSql(src,
+    "CREATE TABLE s(x INTEGER PRIMARY KEY);"
+    "INSERT INTO s VALUES(1);"
+    "SELECT dolt_commit('-Am','src-c1');");
+  check("backup_missing_branch_seed_src", rc==SQLITE_OK);
+
+  rc = execSql(dest,
+    "CREATE TABLE d(y INTEGER PRIMARY KEY);"
+    "INSERT INTO d VALUES(2);"
+    "SELECT dolt_commit('-Am','dst-c1');"
+    "SELECT dolt_branch('dstbranch');"
+    "SELECT dolt_checkout('dstbranch');");
+  check("backup_missing_branch_seed_dest", rc==SQLITE_OK);
+  check("backup_missing_branch_dest_parked",
+        strcmp(queryScalarText(dest, "SELECT active_branch()"),
+               "dstbranch")==0);
+
+  gRegressionFaultCode = 962;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = backup_db(src, dest);
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("backup_missing_branch_file_oom_injected", gRegressionFaultHits==1);
+  check("backup_missing_branch_file_oom_reported", rc==SQLITE_NOMEM);
+  check("backup_missing_branch_file_oom_branch_preserved",
+        strcmp(queryScalarText(dest, "SELECT active_branch()"),
+               "dstbranch")==0);
+  check("backup_missing_branch_file_oom_content_preserved",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM d"), "1")==0);
+
+  check("backup_missing_branch_copy", backup_db(src, dest)==SQLITE_OK);
+
+  check("backup_missing_branch_active_default",
+        strcmp(queryScalarText(dest, "SELECT active_branch()"), "main")==0);
+  check("backup_missing_branch_new_content",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM s"), "1")==0);
+  check("backup_missing_branch_old_table_gone",
+        strcmp(queryScalarText(dest,
+          "SELECT count(*) FROM sqlite_master WHERE name='d'"), "0")==0);
+  check("backup_missing_branch_integrity",
+        strcmp(queryScalarText(dest, "PRAGMA integrity_check"), "ok")==0);
+  check("backup_missing_branch_write_ok",
+        execSql(dest, "INSERT INTO s VALUES(3);")==SQLITE_OK);
+  check("backup_missing_branch_status_ok",
+        strcmp(queryScalarText(dest,
+          "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("backup_missing_branch_commit_ok",
+        execSql(dest, "SELECT dolt_commit('-Am','post-backup');")==SQLITE_OK);
+
+  check("backup_missing_branch_open_memory_dest",
+        open_db(":memory:", &memDest)==SQLITE_OK);
+  if( memDest ){
+    rc = execSql(memDest,
+      "CREATE TABLE md(y INTEGER PRIMARY KEY);"
+      "SELECT dolt_commit('-Am','mem-c1');"
+      "SELECT dolt_branch('membranch');"
+      "SELECT dolt_checkout('membranch');");
+    check("backup_missing_branch_seed_memory_dest", rc==SQLITE_OK);
+    gRegressionFaultCode = 962;
+    gRegressionFaultHits = 0;
+    sqlite3_test_control(
+        SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+    rc = backup_db(src, memDest);
+    sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+    gRegressionFaultCode = 0;
+    check("backup_missing_branch_memory_oom_injected",
+          gRegressionFaultHits==1);
+    check("backup_missing_branch_memory_oom_reported", rc==SQLITE_NOMEM);
+    check("backup_missing_branch_memory_oom_branch_preserved",
+          strcmp(queryScalarText(memDest, "SELECT active_branch()"),
+                 "membranch")==0);
+    check("backup_missing_branch_memory_oom_content_preserved",
+          strcmp(queryScalarText(memDest,
+            "SELECT count(*) FROM sqlite_master WHERE name='md'"), "1")==0);
+    check("backup_missing_branch_memory_copy",
+          backup_db(src, memDest)==SQLITE_OK);
+    check("backup_missing_branch_memory_active_default",
+          strcmp(queryScalarText(memDest, "SELECT active_branch()"),
+                 "main")==0);
+    check("backup_missing_branch_memory_content",
+          strcmp(queryScalarText(memDest, "SELECT count(*) FROM s"), "1")==0);
+    check("backup_missing_branch_memory_write_ok",
+          execSql(memDest, "INSERT INTO s VALUES(4);")==SQLITE_OK);
+  }
+
+backup_missing_branch_done:
+  if( src ) sqlite3_close(src);
+  if( dest ) sqlite3_close(dest);
+  if( memDest ) sqlite3_close(memDest);
+  removeDbFiles(zSrc);
+  removeDbFiles(zDest);
+}
+
 static void run_integer_pk_autocommit_append_correctness(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -1326,17 +1447,6 @@ static int gFailHits = 0;
 static int gFailFullPathnameHits = 0;
 static const char *gFullPathnameSuffix = 0;
 static char gRewrittenFullPath[512];
-static int gRegressionFaultCode = 0;
-static int gRegressionFaultHits = 0;
-
-static int regressionFaultCallback(int iCode){
-  if( iCode==gRegressionFaultCode ){
-    gRegressionFaultHits++;
-    return 1;
-  }
-  return 0;
-}
-
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
 static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut);
 
@@ -13770,6 +13880,7 @@ static const RegressionCase aCases[] = {
   { "alter_default_authorizer", "ALTER Default Authorizer Test", run_alter_default_authorizer },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
+  { "backup_dest_missing_branch", "Backup Dest Missing Branch Test", run_backup_dest_missing_branch },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
   { "serialize_deserialize", "Serialize Deserialize Test", run_serialize_deserialize },

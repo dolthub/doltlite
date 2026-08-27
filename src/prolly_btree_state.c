@@ -590,6 +590,32 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
   return "main";
 }
 
+int doltliteBtreePrepareBackupBranch(
+  Btree *p,
+  ChunkStore *cs,
+  char **pzPrepared
+){
+  const char *zDef;
+  int rc;
+  if( !pzPrepared ) return SQLITE_MISUSE;
+  *pzPrepared = 0;
+  if( !p || !p->pBt || !cs || p->isDetached ) return SQLITE_OK;
+  rc = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0);
+  if( rc==SQLITE_OK ) return SQLITE_OK;
+  if( rc!=SQLITE_NOTFOUND ) return rc;
+  zDef = chunkStoreGetDefaultBranch(cs);
+  if( !zDef ) zDef = "main";
+  if( sqlite3FaultSim(962) ) return SQLITE_NOMEM;
+  *pzPrepared = sqlite3_mprintf("%s", zDef);
+  return *pzPrepared ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+void doltliteBtreeInstallBackupBranch(Btree *p, char *zPrepared){
+  if( !p || !zPrepared ) return;
+  sqlite3_free(p->zBranch);
+  p->zBranch = zPrepared;
+}
+
 int doltliteIsDetached(sqlite3 *db){
   return db && db->nDb>0 && db->aDb[0].pBt
       && db->aDb[0].pBt->isDetached;
