@@ -437,6 +437,14 @@ static void doltliteCherryPickFunc(
     sqlite3_result_error(context, "failed to load HEAD commit", -1);
     return;
   }
+  if( doltliteCommitParentCount(&pickCommit)>1 ){
+    doltliteCommitClear(&pickCommit);
+    doltliteCommitClear(&parentCommit);
+    doltliteCommitClear(&ourCommit);
+    sqlite3_result_error(context,
+      "cherry-picking a merge commit is not supported", -1);
+    return;
+  }
 
   {
     const char *zMsg = pickCommit.zMessage;

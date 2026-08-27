@@ -718,6 +718,45 @@ $SEED
 SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'));
 "
 
+oracle_error "cherry_pick_merge_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'f');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'm');
+SELECT dolt_merge('feat', '--no-ff', '-m', 'mf');
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+SELECT dolt_reset('--hard', 'HEAD~1');
+SELECT dolt_cherry_pick('main');
+"
+
+oracle "revert_merge_commit_first_parent" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'f');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'm');
+SELECT dolt_merge('feat', '--no-ff', '-m', 'mf');
+SELECT dolt_revert('HEAD');
+"
+
 oracle_error_poststate "cherry_pick_constraint_violation_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');

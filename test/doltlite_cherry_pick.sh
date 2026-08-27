@@ -134,6 +134,58 @@ run_test_match "cp_err_initial" \
 
 rm -f "$DB"
 
+DB=/tmp/test_cp_merge_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','b');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,3);
+SELECT dolt_commit('-A','-m','m');
+SELECT dolt_merge('feat','--no-ff','-m','mf');
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+SELECT dolt_reset('--hard','HEAD~1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_err_merge_commit" \
+  "SELECT dolt_checkout('other');
+SELECT dolt_cherry_pick('main');" \
+  "cherry-picking a merge commit is not supported" "$DB"
+
+run_test_lastline "cp_err_merge_commit_rows_unchanged" \
+  "SELECT dolt_checkout('other');
+SELECT dolt_cherry_pick('main');
+SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);" \
+  "1,3" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rv_merge_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','b');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,3);
+SELECT dolt_commit('-A','-m','m');
+SELECT dolt_merge('feat','--no-ff','-m','mf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "rv_merge_commit_hash" \
+  "SELECT dolt_revert('HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+
+run_test "rv_merge_commit_first_parent_rows" \
+  "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);" \
+  "1,3" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_cp_persist_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'init');
