@@ -911,6 +911,7 @@ int doltliteCreateAndStoreCommitWithTime(
   const char *zAuthorEmail,
   const ProllyHash *aExtraParents,
   int nExtraParents,
+  int hasExplicitTimestamp,
   i64 explicitTimestamp,
   ProllyHash *pCommitHash
 );

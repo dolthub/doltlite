@@ -625,7 +625,7 @@ static int doltliteCommitCreateObject(
 
   rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, pCatalogHash,
       zMessage, zParsedName, zParsedEmail, aExtraParents, nExtraParents,
-      opts->explicitTimestamp, pCommitHashOut);
+      opts->zDate!=0, opts->explicitTimestamp, pCommitHashOut);
   sqlite3_free(zParsedName);
   sqlite3_free(zParsedEmail);
   if( rc!=SQLITE_OK ){
