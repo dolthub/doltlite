@@ -568,6 +568,7 @@ def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
             "nothing to commit",
             "already exists",
             "cherry-pick of",
+            "cherry-picking a merge commit",
         ),
     )
     sync_vc_result(doltlite, db_path, target, model)
