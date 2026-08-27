@@ -186,8 +186,10 @@ class Gen:
     def child_write(self):
         """Child write. ORDER BY is load-bearing: LIMIT 1 without it is plan-dependent."""
         if self.r.random() < 0.7:
+            # quote() collapses embedded NULs, so distinct keys can tie and
+            # LIMIT 1 would pick by scan order; the raw key totalizes it.
             self.emit("INSERT OR IGNORE INTO ch(cid, fk, note) "
-                      "SELECT %d, k, %s FROM t WHERE %s ORDER BY %s LIMIT 1;"
+                      "SELECT %d, k, %s FROM t WHERE %s ORDER BY %s, k LIMIT 1;"
                       % (self.r.randint(1, 60), self.text_val(), self.pred(),
                          Q % "k"))
         else:
@@ -294,11 +296,13 @@ class Gen:
         if self.shape == "composite_pk":
             sel = "k + %d, coalesce(quote(j),'x'), a, b" % self.r.randint(1, 50)
             order = ", ".join(Q % col for col in ("k", "j", "a", "b"))
+            order += ", k, j, a, b"
         else:
             base = "coalesce(quote(k),'x') || 'x'" if self.key_kind == "text" \
                 else "k + %d" % self.r.randint(1, 50)
             sel = "%s, a, b" % base
             order = ", ".join(Q % col for col in ("k", "a", "b"))
+            order += ", k, a, b"
         self.emit("INSERT OR IGNORE INTO t(%s, a, b) "
                   "SELECT %s FROM t WHERE %s ORDER BY %s;"
                   % (kc, sel, self.pred(), order))
