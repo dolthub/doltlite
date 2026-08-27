@@ -4176,7 +4176,11 @@ int sqlite3_table_column_metadata(
     if( iCol>=0 ){
       pCol = &pTab->aCol[iCol];
     }else{
+#ifdef DOLTLITE_PROLLY
+      if( VisibleRowid(pTab) && sqlite3IsRowid(zColumnName) ){
+#else
       if( HasRowid(pTab) && sqlite3IsRowid(zColumnName) ){
+#endif
         iCol = pTab->iPKey;
         pCol = iCol>=0 ? &pTab->aCol[iCol] : 0;
       }else{

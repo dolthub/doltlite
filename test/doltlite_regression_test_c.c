@@ -13680,6 +13680,88 @@ static void run_clustered_pk_update_hook(void){
   removeDbFiles(dbpath);
 }
 
+static void run_clustered_pk_rowid_metadata(void){
+  char dbpath[256];
+  sqlite3 *db = 0;
+  const char *dtype = 0;
+  const char *coll = 0;
+  int notnull = 0;
+  int pk = 0;
+  int autoinc = 0;
+  int rc;
+
+  printf("=== Clustered PK Rowid Metadata Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_clustered_pk_rowid_metadata");
+  removeDbFiles(dbpath);
+  check("cpk_meta_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("cpk_meta_setup", execSql(db,
+      "CREATE TABLE t(k TEXT PRIMARY KEY, v BLOB);"
+      "INSERT INTO t VALUES('a', x'01');")==SQLITE_OK);
+  check("cpk_meta_sql_rowid",
+        strcmp(queryScalarText(db, "SELECT typeof(rowid) FROM t"),
+               "integer")==0);
+
+  rc = sqlite3_table_column_metadata(db, "main", "t", "rowid",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_rowid_rc", rc==SQLITE_OK);
+  check("cpk_meta_rowid_dtype", dtype && strcmp(dtype, "INTEGER")==0);
+  check("cpk_meta_rowid_coll", coll && strcmp(coll, "BINARY")==0);
+  check("cpk_meta_rowid_notnull", notnull==0);
+  check("cpk_meta_rowid_pk", pk==1);
+  check("cpk_meta_rowid_autoinc", autoinc==0);
+
+  rc = sqlite3_table_column_metadata(db, "main", "t", "oid",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_oid_rc", rc==SQLITE_OK);
+  check("cpk_meta_oid_dtype", dtype && strcmp(dtype, "INTEGER")==0);
+  check("cpk_meta_oid_pk", pk==1);
+
+  rc = sqlite3_table_column_metadata(db, "main", "t", "_rowid_",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_underscore_rc", rc==SQLITE_OK);
+  check("cpk_meta_underscore_dtype", dtype && strcmp(dtype, "INTEGER")==0);
+  check("cpk_meta_underscore_pk", pk==1);
+
+  rc = sqlite3_table_column_metadata(db, "main", "t", "k",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_k_rc", rc==SQLITE_OK);
+  check("cpk_meta_k_dtype", dtype && strcmp(dtype, "TEXT")==0);
+  check("cpk_meta_k_notnull", notnull==1);
+  check("cpk_meta_k_pk", pk==1);
+
+  check("cpk_meta_without_rowid_setup", execSql(db,
+      "CREATE TABLE wr(k TEXT PRIMARY KEY, v BLOB) WITHOUT ROWID;"
+      "INSERT INTO wr VALUES('a', x'01');")==SQLITE_OK);
+  rc = sqlite3_table_column_metadata(db, "main", "wr", "rowid",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_without_rowid_rejected", rc==SQLITE_ERROR);
+  check("cpk_meta_without_rowid_errmsg",
+        strstr(sqlite3_errmsg(db), "no such table column: wr.rowid")!=0);
+
+  check("cpk_meta_intpk_setup", execSql(db,
+      "CREATE TABLE ipk(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO ipk VALUES(1, 'a');")==SQLITE_OK);
+  rc = sqlite3_table_column_metadata(db, "main", "ipk", "rowid",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_intpk_rc", rc==SQLITE_OK);
+  check("cpk_meta_intpk_dtype", dtype && strcmp(dtype, "INTEGER")==0);
+  check("cpk_meta_intpk_pk", pk==1);
+
+  check("cpk_meta_temp_setup", execSql(db,
+      "CREATE TEMP TABLE tmp(k TEXT PRIMARY KEY, v INT);"
+      "INSERT INTO tmp VALUES('a', 1);")==SQLITE_OK);
+  rc = sqlite3_table_column_metadata(db, "temp", "tmp", "rowid",
+                                     &dtype, &coll, &notnull, &pk, &autoinc);
+  check("cpk_meta_temp_rc", rc==SQLITE_OK);
+  check("cpk_meta_temp_dtype", dtype && strcmp(dtype, "INTEGER")==0);
+  check("cpk_meta_temp_pk", pk==1);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -13879,7 +13961,8 @@ static const RegressionCase aCases[] = {
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
   { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq },
   { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch },
-  { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook }
+  { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook },
+  { "clustered_pk_rowid_metadata", "Clustered PK Rowid Metadata Test", run_clustered_pk_rowid_metadata }
 };
 
 static int run_case_by_name(const char *zName){
