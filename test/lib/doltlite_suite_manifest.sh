@@ -9,6 +9,7 @@ storage_format_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
 doltlite_commit_date.sh
+doltlite_hashof_refs.sh
 doltlite_staging.sh
 doltlite_workspace.sh
 doltlite_docs.sh
@@ -157,6 +158,7 @@ storage_format_contract_test.sh
 doltlite_parity.sh
 doltlite_commit.sh
 doltlite_commit_date.sh
+doltlite_hashof_refs.sh
 doltlite_staging.sh
 doltlite_workspace.sh
 doltlite_docs.sh

@@ -581,7 +581,7 @@ static int hashofDbInCatalog(
   return SQLITE_OK;
 }
 
-/* Resolve ref-spec to catalog hash. Empty/failure sets the SQL result and
+/* Resolve ref-spec to catalog hash. NULL/failure sets the SQL result and
 ** returns 1. */
 static int hashofResolveRefCatalog(
   sqlite3_context *ctx,
@@ -603,6 +603,16 @@ static int hashofResolveRefCatalog(
   if( !zRef ){
     sqlite3_result_null(ctx);
     return 1;
+  }
+  if( zRef[0]==0 || doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef) ){
+    rc = doltliteResolveCatalogHashForRef(db, zRef[0] ? zRef : "WORKING",
+                                          pCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_snprintf(sizeof(zErr), zErr, "%s: invalid ref spec", zFn);
+      sqlite3_result_error(ctx, zErr, -1);
+      return 1;
+    }
+    return 0;
   }
   rc = doltliteResolveRef(db, zRef, &commitHash);
   if( rc==SQLITE_NOTFOUND ){
