@@ -324,6 +324,7 @@ jobs:
           - fts4-core
           - fts4-merge
           - ported
+          - slow-plain
     steps:
     - uses: actions/checkout@v4
 
@@ -332,15 +333,32 @@ jobs:
         bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
 
     - name: Download instrumented build
+      if: matrix.bucket != 'slow-plain'
       uses: actions/download-artifact@v4
       with:
         name: coverage-build
 
     - name: Extract instrumented build
+      if: matrix.bucket != 'slow-plain'
       run: |
         tar -xzf coverage-build.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
+        echo "FIXTURE_DIR=build-coverage" >> "$GITHUB_ENV"
+
+    # The slow-plain lane exists for files whose runtime cannot absorb the
+    # coverage-instrumentation multiplier inside the 600s per-file budget
+    # (issue 2397: bigsort). A plain build keeps them fast and the budget
+    # meaningful; their line coverage is exercised by the other buckets.
+    - name: Build plain testfixture
+      if: matrix.bucket == 'slow-plain'
+      run: |
+        bash .github/scripts/install-apt-deps.sh tcl-dev
+        mkdir build-plain && cd build-plain
+        ../configure
+        make -j$(nproc) testfixture
+        echo "FIXTURE_DIR=build-plain" >> "$GITHUB_ENV"
+        echo "TESTFIXTURE_VARIANT=plain" >> "$GITHUB_ENV"
 
     # Inherited upstream SQLite .test files that pass clean (or only with
     # already-recorded divergences) against doltlite, swept and gated under
@@ -372,15 +390,12 @@ jobs:
 
     - name: SQLite regression tests - ${{ matrix.bucket }}
       run: |
-        cd build-coverage
-        # bigsort alone runs ~260s healthy; with DOLTLITE_PROLLY_CHECK=1 and
-        # runner load it has crossed 450s and flaked as "did not produce
-        # summary line" (timeout kill). Give ~10 min per file.
+        cd "$FIXTURE_DIR"
         bash ../test/run_testfixture.sh "SQLite regression ${{ matrix.bucket }}" 600 \
           $(tr '\n' ' ' < ../test/regression-buckets/${{ matrix.bucket }}.txt)
 
     - name: Upload regression coverage profiles
-      if: always()
+      if: always() && matrix.bucket != 'slow-plain'
       uses: actions/upload-artifact@v4
       with:
         name: coverage-profile-regression-${{ matrix.bucket }}
