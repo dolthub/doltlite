@@ -590,27 +590,30 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
   return "main";
 }
 
-/* After a backup wholesale-replaces the session's store, a pinned branch
-** absent from the adopted image would fail every reload: reads keep serving
-** the pre-backup catalog while writes, status, and checkout all error.
-** Fall back to the image's default branch, matching a fresh open. */
-int doltliteBtreeRetargetMissingBranch(Btree *p){
-  ChunkStore *cs;
+int doltliteBtreePrepareBackupBranch(
+  Btree *p,
+  ChunkStore *cs,
+  char **pzPrepared
+){
   const char *zDef;
-  char *zNew;
-  if( !p || !p->pBt || p->isDetached ) return SQLITE_OK;
-  cs = &p->pBt->store;
-  if( chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0)
-        ==SQLITE_OK ){
-    return SQLITE_OK;
-  }
+  int rc;
+  if( !pzPrepared ) return SQLITE_MISUSE;
+  *pzPrepared = 0;
+  if( !p || !p->pBt || !cs || p->isDetached ) return SQLITE_OK;
+  rc = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0);
+  if( rc==SQLITE_OK ) return SQLITE_OK;
+  if( rc!=SQLITE_NOTFOUND ) return rc;
   zDef = chunkStoreGetDefaultBranch(cs);
   if( !zDef ) zDef = "main";
-  zNew = sqlite3_mprintf("%s", zDef);
-  if( !zNew ) return SQLITE_NOMEM;
+  if( sqlite3FaultSim(962) ) return SQLITE_NOMEM;
+  *pzPrepared = sqlite3_mprintf("%s", zDef);
+  return *pzPrepared ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+void doltliteBtreeInstallBackupBranch(Btree *p, char *zPrepared){
+  if( !p || !zPrepared ) return;
   sqlite3_free(p->zBranch);
-  p->zBranch = zNew;
-  return SQLITE_OK;
+  p->zBranch = zPrepared;
 }
 
 int doltliteIsDetached(sqlite3 *db){

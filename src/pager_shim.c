@@ -880,7 +880,9 @@ ChunkStore *doltliteBtreeChunkStore(Btree *p);
 void doltliteBtreeBackupStart(Btree *p);
 void doltliteBtreeBackupFinish(Btree *p);
 void doltliteInvalidateBtreeWorkingState(Btree *p);
-int doltliteBtreeRetargetMissingBranch(Btree *p);
+int doltliteBtreePrepareBackupBranch(Btree *p, ChunkStore *cs,
+                                     char **pzPrepared);
+void doltliteBtreeInstallBackupBranch(Btree *p, char *zPrepared);
 
 static int doltliteBackupSameFile(
   sqlite3_vfs *pSrcVfs,
@@ -1116,6 +1118,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   sqlite3_file *pSrc = 0;
   sqlite3_file *pTmp = 0;
   char *zTmpFile = 0;
+  char *zPreparedBranch = 0;
   int retainTmp = 0;
   i64 fileSize = 0;
   int rc;
@@ -1253,6 +1256,10 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     goto backup_step_done;
   }
 
+  rc = doltliteBtreePrepareBackupBranch(
+      pDestBt, srcCs, &zPreparedBranch);
+  if( rc!=SQLITE_OK ) goto backup_step_done;
+
   if( destCs->isMemory ){
     openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
               | SQLITE_OPEN_MEMORY | SQLITE_OPEN_MAIN_DB;
@@ -1269,8 +1276,9 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     memset(&tmpStore, 0, sizeof(tmpStore));
     tmpStoreOpen = 0;
     memoryAdopted = 1;
+    doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
+    zPreparedBranch = 0;
     doltliteInvalidateBtreeWorkingState(pDestBt);
-    rc = doltliteBtreeRetargetMissingBranch(pDestBt);
     goto backup_step_done;
   }
 
@@ -1344,14 +1352,36 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     }
   }
   if( rc == SQLITE_OK ){
+#if SQLITE_OS_WIN
+    csCloseFile(chunkFileGetHandle(&destCs->file));
+    chunkFileSetHandle(&destCs->file, 0);
+#endif
     rc = sqlite3OsReplaceFile(pDestVfs, zTmpFile, zDestFile,
                               &retainTmp);
+    if( rc==SQLITE_OK ){
+      doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
+      zPreparedBranch = 0;
+    }
+#if SQLITE_OS_WIN
+    {
+      sqlite3_file *pReopened = 0;
+      int rcReopen = sqlite3OsOpenMalloc(
+          pDestVfs, zDestFile, &pReopened,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB, 0);
+      if( rcReopen==SQLITE_OK ){
+        chunkFileSetHandle(&destCs->file, pReopened);
+      }else if( rc==SQLITE_OK ){
+        rc = rcReopen;
+      }
+    }
+#endif
   }
 
 backup_step_done:
   if( pSrc ) sqlite3OsCloseFree(pSrc);
   if( pTmp ) sqlite3OsCloseFree(pTmp);
   if( tmpStoreOpen ) chunkStoreClose(&tmpStore);
+  sqlite3_free(zPreparedBranch);
   if( zTmpFile ){
     if( rc!=SQLITE_OK && !retainTmp ){
       (void)sqlite3OsDelete(pDestVfs, zTmpFile, 0);
@@ -1370,7 +1400,6 @@ backup_step_done:
     if( rc==SQLITE_OK ){
       /* Dest now reflects the renamed file; reload catalog next txn. */
       doltliteInvalidateBtreeWorkingState(pDestBt);
-      rc = doltliteBtreeRetargetMissingBranch(pDestBt);
       chunkStoreUnlock(destCs);
     }
   }

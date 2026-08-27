@@ -48,6 +48,16 @@ extern int btreeReadWorkingCatalog(
 static int nPass = 0;
 static int nFail = 0;
 static char gBuf[8192];
+static int gRegressionFaultCode = 0;
+static int gRegressionFaultHits = 0;
+
+static int regressionFaultCallback(int iCode){
+  if( iCode==gRegressionFaultCode ){
+    gRegressionFaultHits++;
+    return 1;
+  }
+  return 0;
+}
 
 typedef struct RegressionCase RegressionCase;
 struct RegressionCase {
@@ -1104,9 +1114,6 @@ static void run_backup_source_write_busy(void){
   removeDbFiles(zAux);
 }
 
-/* A backup dest session checked out on a branch that does not exist in the
-** source image must land on the image's default branch, like a fresh open;
-** its old branch context would otherwise wedge every reload. */
 static void run_backup_dest_missing_branch(void){
   sqlite3 *src = 0;
   sqlite3 *dest = 0;
@@ -1141,6 +1148,20 @@ static void run_backup_dest_missing_branch(void){
         strcmp(queryScalarText(dest, "SELECT active_branch()"),
                "dstbranch")==0);
 
+  gRegressionFaultCode = 962;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  rc = backup_db(src, dest);
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("backup_missing_branch_file_oom_injected", gRegressionFaultHits==1);
+  check("backup_missing_branch_file_oom_reported", rc==SQLITE_NOMEM);
+  check("backup_missing_branch_file_oom_branch_preserved",
+        strcmp(queryScalarText(dest, "SELECT active_branch()"),
+               "dstbranch")==0);
+  check("backup_missing_branch_file_oom_content_preserved",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM d"), "1")==0);
+
   check("backup_missing_branch_copy", backup_db(src, dest)==SQLITE_OK);
 
   check("backup_missing_branch_active_default",
@@ -1169,6 +1190,22 @@ static void run_backup_dest_missing_branch(void){
       "SELECT dolt_branch('membranch');"
       "SELECT dolt_checkout('membranch');");
     check("backup_missing_branch_seed_memory_dest", rc==SQLITE_OK);
+    gRegressionFaultCode = 962;
+    gRegressionFaultHits = 0;
+    sqlite3_test_control(
+        SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+    rc = backup_db(src, memDest);
+    sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+    gRegressionFaultCode = 0;
+    check("backup_missing_branch_memory_oom_injected",
+          gRegressionFaultHits==1);
+    check("backup_missing_branch_memory_oom_reported", rc==SQLITE_NOMEM);
+    check("backup_missing_branch_memory_oom_branch_preserved",
+          strcmp(queryScalarText(memDest, "SELECT active_branch()"),
+                 "membranch")==0);
+    check("backup_missing_branch_memory_oom_content_preserved",
+          strcmp(queryScalarText(memDest,
+            "SELECT count(*) FROM sqlite_master WHERE name='md'"), "1")==0);
     check("backup_missing_branch_memory_copy",
           backup_db(src, memDest)==SQLITE_OK);
     check("backup_missing_branch_memory_active_default",
@@ -1410,17 +1447,6 @@ static int gFailHits = 0;
 static int gFailFullPathnameHits = 0;
 static const char *gFullPathnameSuffix = 0;
 static char gRewrittenFullPath[512];
-static int gRegressionFaultCode = 0;
-static int gRegressionFaultHits = 0;
-
-static int regressionFaultCallback(int iCode){
-  if( iCode==gRegressionFaultCode ){
-    gRegressionFaultHits++;
-    return 1;
-  }
-  return 0;
-}
-
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
 static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut);
 
