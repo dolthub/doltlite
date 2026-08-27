@@ -318,6 +318,16 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('bad name');
 "
 
+oracle_error "checkout_colliding_tag_is_detached" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c');
+SELECT dolt_branch('feat');
+SELECT dolt_tag('feat');
+SELECT dolt_checkout('feat');
+"
+
 echo "--- savepoint parity ---"
 
 oracle_savepoint_tag_poststate "tag_inside_savepoint_releases_savepoint" "

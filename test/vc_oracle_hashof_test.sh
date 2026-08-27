@@ -556,6 +556,29 @@ H_ID_OUT=$(query_pair_separate "$DB" \
   "SELECT dolt_hashof('$(pair_dt "$H_HEAD")');")
 same "commit_hash_is_identity_on_hashof" "$H_HEAD" "$H_ID_OUT"
 
+COLLIDE_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'later');
+SELECT dolt_checkout('main');
+SELECT dolt_tag('feat');
+"
+
+DB="tag_branch_collide"
+setup_pair "$DB" "$COLLIDE_SEED"
+H_TAG=$(run_hash_on "$DB" "SELECT tag_hash FROM dolt_tags WHERE tag_name='feat';")
+H_BRANCH=$(run_hash_on "$DB" "SELECT hash FROM dolt_branches WHERE name='feat';")
+H_NAME=$(run_hash_on "$DB" "SELECT dolt_hashof('feat');")
+same "hashof_colliding_name_equals_branch" "$H_BRANCH" "$H_NAME"
+different "hashof_colliding_name_differs_from_tag" "$H_TAG" "$H_NAME"
+both_error "checkout_colliding_name_is_tag" "$DB" "SELECT dolt_checkout('feat');"
+
 echo ""
 
 echo "--- 10. Engine-specific shape conformance ---"

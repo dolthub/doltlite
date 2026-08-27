@@ -90,5 +90,62 @@ echo "SELECT dolt_tag('one'); SELECT dolt_tag('two');" | $DOLTLITE "$DB4" > /dev
 run_test_match "delete_multiple_tags_missing_is_atomic" "SELECT dolt_tag('-d','one','missing','two');" "not found" "$DB4"
 run_test "delete_multiple_tags_missing_keeps_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB4"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4"
+DB5=/tmp/test_tag_collide_$$.db; rm -f "$DB5"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-A','-m','c');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-A','-m','later');
+SELECT dolt_checkout('main');
+SELECT dolt_tag('feat');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+
+run_test_match "checkout_colliding_name_is_tag" \
+  "SELECT dolt_checkout('feat');" \
+  "does not support a detached head state" "$DB5"
+
+run_test "hashof_colliding_name_equals_branch" \
+  "SELECT dolt_hashof('feat') = (SELECT hash FROM dolt_branches WHERE name='feat');" \
+  "1" "$DB5"
+
+run_test "hashof_colliding_name_not_tag" \
+  "SELECT dolt_hashof('feat') = (SELECT tag_hash FROM dolt_tags WHERE tag_name='feat');" \
+  "0" "$DB5"
+
+run_test "checkout_unique_branch_still_works" \
+  "SELECT dolt_checkout('main'); SELECT active_branch();" \
+  "0
+main" "$DB5"
+
+run_test_lastline "checkout_b_from_colliding_name_uses_branch" \
+  "SELECT dolt_checkout('-b','fromtag','feat');
+SELECT active_branch();" \
+  "fromtag" "$DB5"
+
+run_test "checkout_b_from_colliding_name_at_branch_tip" \
+  "SELECT (SELECT hash FROM dolt_branches WHERE name='fromtag')
+          = (SELECT hash FROM dolt_branches WHERE name='feat');" \
+  "1" "$DB5"
+
+DB6=/tmp/test_tag_collide_onbranch_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-A','-m','c');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+
+run_test_lastline "checkout_colliding_name_stays_on_branch" \
+  "SELECT dolt_checkout('feat');
+SELECT dolt_tag('feat');
+SELECT dolt_checkout('feat');
+SELECT active_branch();" \
+  "feat" "$DB6"
+
+run_test_match "checkout_colliding_name_errors_while_on_branch" \
+  "SELECT dolt_checkout('feat');
+SELECT dolt_tag('feat');
+SELECT dolt_checkout('feat');" \
+  "does not support a detached head state" "$DB6"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6"
 dltest_finish
