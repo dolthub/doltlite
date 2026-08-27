@@ -6304,6 +6304,28 @@ static int selectExpander(Walker *pWalker, Select *p){
       assert( pFrom->pSTab==0 );
       pFrom->pSTab = pTab = sqlite3LocateTableItem(pParse, 0, pFrom);
       if( pTab==0 ) return WRC_Abort;
+#ifdef DOLTLITE_PROLLY
+      if( IsVirtual(pTab)
+       && pTab->u.vtab.nArg>0
+       && pTab->u.vtab.azArg[0]
+       && sqlite3StrNICmp(pTab->u.vtab.azArg[0], "dolt_", 5)==0
+      ){
+        const char *zDb;
+        if( pFrom->fg.fixedSchema ){
+          int iDb = sqlite3SchemaToIndex(db, pFrom->u4.pSchema);
+          assert( iDb>=0 && iDb<db->nDb );
+          zDb = db->aDb[iDb].zDbSName;
+        }else{
+          zDb = pFrom->u4.zDatabase;
+        }
+        if( zDb && sqlite3StrICmp(zDb, "main")!=0 ){
+          sqlite3ErrorMsg(pParse, "%s is only available in the main database",
+                          pTab->zName);
+          pFrom->pSTab = 0;
+          return WRC_Abort;
+        }
+      }
+#endif
       if( pTab->nTabRef>=0xffff ){
         sqlite3ErrorMsg(pParse, "too many references to \"%s\": max 65535",
            pTab->zName);

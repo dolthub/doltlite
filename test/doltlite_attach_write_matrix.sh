@@ -17,6 +17,17 @@ want_eq() {
   fi
 }
 
+want_contains() {
+  local name="$1" got="$2" want="$3"
+  case "$got" in
+    *"$want"*) PASS=$((PASS+1)) ;;
+    *)
+      FAIL=$((FAIL+1))
+      ERRORS="$ERRORS\n  FAIL: $name\n    want substring: $(printf %q "$want")\n    got:  $(printf %q "$got")"
+      ;;
+  esac
+}
+
 dl_last() { printf '%s\n' "$1" | $DOLTLITE "$2" 2>&1 | tail -1; }
 dl_all()  { printf '%s\n' "$1" | $DOLTLITE "$2" 2>&1; }
 sq_last() { printf '%s\n' "$1" | $SQLITE3 "$2" 2>&1 | tail -1; }
@@ -224,6 +235,23 @@ else
   R=$(dl_last "ATTACH '$STOCK_ATT' AS x; BEGIN; INSERT INTO t VALUES(1); INSERT INTO x.u VALUES(1); COMMIT; SELECT (SELECT count(*) FROM t) || '/' || (SELECT count(*) FROM x.u);" "$STOCK_MAIN")
   want_eq "stock_file__stock_file/T2_explicit_txn_both_commit" "$R" "1/1"
 fi
+
+VC_MAIN="$TMP/vtab_main.db"
+VC_ATT="$TMP/vtab_att.db"
+dl_all "CREATE TABLE t(id INTEGER PRIMARY KEY);
+  SELECT dolt_commit('-Am','main init');
+  SELECT dolt_branch('main_only_branch');" "$VC_MAIN" >/dev/null
+dl_all "CREATE TABLE u(id INTEGER PRIMARY KEY);
+  INSERT INTO u VALUES(1);
+  SELECT dolt_commit('-Am','attached init');
+  INSERT INTO u VALUES(2);" "$VC_ATT" >/dev/null
+for surface in dolt_branches dolt_log dolt_status; do
+  R=$(dl_all "ATTACH '$VC_ATT' AS x; SELECT * FROM x.$surface;" "$VC_MAIN")
+  want_contains "attached_vtab/$surface" "$R" \
+    "$surface is only available in the main database"
+done
+R=$(dl_last "SELECT group_concat(name,',') FROM dolt_branches;" "$VC_MAIN")
+want_eq "main_vtab_still_available" "$R" "main,main_only_branch"
 
 echo ""
 echo "============================="
