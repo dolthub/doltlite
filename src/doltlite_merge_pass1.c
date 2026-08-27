@@ -263,9 +263,12 @@ static int mergePass1ResolveOursEntry(
       }
       pTheirsByNo = doltliteFindTableByNumber(
           c->aTheirs, c->nTheirs, c->aOurs[iOurs].iTable);
-      if( pTheirsByNo && pTheirsByNo->zName
-       && strcmp(pTheirsByNo->zName, pByNo->zName)!=0
-       && strcmp(pTheirsByNo->zName, zName)!=0 ){
+      if( pTheirsByNo && !pTheirsByNo->zName ){
+        pTheirsByNo = 0;
+        pByNo = 0;
+      }else if( pTheirsByNo
+             && strcmp(pTheirsByNo->zName, pByNo->zName)!=0
+             && strcmp(pTheirsByNo->zName, zName)!=0 ){
         pTheirsByNo = 0;
         pByNo = 0;
       }

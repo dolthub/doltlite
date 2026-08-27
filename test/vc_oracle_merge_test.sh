@@ -1818,6 +1818,33 @@ SELECT dolt_merge('feat');
 " "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT group_concat(id || ':' || k, ',') FROM (SELECT id, k FROM t ORDER BY id)) || '|' || (SELECT group_concat(id || ':' || k, ',') FROM (SELECT id, k FROM t INDEXED BY tk WHERE k >= 10 ORDER BY k))" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', k) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', k) ORDER BY k SEPARATOR ',') FROM t WHERE k >= 10))"
 
+oracle_reopen_state "table_index_rootpage_collision" "
+CREATE TABLE parent(id INTEGER PRIMARY KEY, payload VARCHAR(20));
+CREATE TABLE old_table(id INTEGER PRIMARY KEY, payload TEXT);
+INSERT INTO parent VALUES (1, 'one');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+DROP TABLE old_table;
+CREATE TABLE added_table(id INTEGER PRIMARY KEY, payload TEXT);
+INSERT INTO added_table VALUES (1, 'ours');
+SELECT dolt_commit('-Am', 'ours');
+SELECT dolt_checkout('feat');
+DROP TABLE old_table;
+CREATE INDEX parent_payload ON parent(payload);
+SELECT dolt_commit('-Am', 'theirs');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='old_table') || '|' ||
+          (SELECT count(*) FROM added_table) || '|' ||
+          (SELECT count(*) FROM sqlite_master WHERE type='index' AND name='parent_payload') || '|' ||
+          (SELECT count(*) FROM parent INDEXED BY parent_payload WHERE payload='one');" \
+"SELECT CONCAT('Q', char(9),
+          (SELECT COUNT(*) FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='old_table'), '|',
+          (SELECT COUNT(*) FROM added_table), '|',
+          (SELECT COUNT(*) FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='parent' AND INDEX_NAME='parent_payload'), '|',
+          (SELECT COUNT(*) FROM parent WHERE payload='one'));"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
