@@ -3797,10 +3797,6 @@ strict2 strict2-3.0 class=intentional
 # on the chunk store finishes the backup in one step (SQLITE_DONE)
 subjournal subjournal-2.1 class=intentional
 
-# unionvtab rowid-table probe fails on a PK-keyed doltlite table, so the
-# error surfaces one check earlier than stock's schema-mismatch message
-swarmvtab swarmvtab-2.3 class=intentional
-
 # sections 1/1.2.x: open/getcwd/fstat fault injection — the chunk store
 # performs different syscalls at each fault index, so some fault points
 # surface "disk I/O error" / "attempt to write a readonly database" where
