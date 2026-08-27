@@ -45,7 +45,7 @@ run_test "cp_twice_first" "SELECT count(*) FROM t;" "2" "$DB"
 
 run_test_match "cp_twice_second" \
   "SELECT dolt_cherry_pick('feat');" \
-  "^[0-9a-f]{40}$" "$DB"
+  "no changes were made, nothing to commit" "$DB"
 run_test "cp_twice_still2" "SELECT count(*) FROM t;" "2" "$DB"
 
 db_rm "$DB"
