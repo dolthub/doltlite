@@ -519,6 +519,7 @@ static int doltliteCreateAndStoreCommitOnStore(
   const char *zAuthorEmail,
   const ProllyHash *aExtraParents,
   int nExtraParents,
+  int hasExplicitTimestamp,
   i64 explicitTimestamp,
   ProllyHash *pCommitHash
 );
@@ -535,7 +536,8 @@ int doltliteCreateAndStoreCommit(
   ProllyHash *pCommitHash
 ){
   return doltliteCreateAndStoreCommitWithTime(db, pParent, pCatalog, zMessage,
-      zAuthorName, zAuthorEmail, aExtraParents, nExtraParents, 0, pCommitHash);
+      zAuthorName, zAuthorEmail, aExtraParents, nExtraParents, 0, 0,
+      pCommitHash);
 }
 
 static int doltliteCreateAndStoreCommitOnStore(
@@ -548,6 +550,7 @@ static int doltliteCreateAndStoreCommitOnStore(
   const char *zAuthorEmail,
   const ProllyHash *aExtraParents,
   int nExtraParents,
+  int hasExplicitTimestamp,
   i64 explicitTimestamp,
   ProllyHash *pCommitHash
 ){
@@ -562,7 +565,7 @@ static int doltliteCreateAndStoreCommitOnStore(
   memset(&c, 0, sizeof(c));
   memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
   memcpy(&c.catalogHash, pCatalog, sizeof(ProllyHash));
-  c.timestamp = explicitTimestamp ? explicitTimestamp : (i64)time(0);
+  c.timestamp = hasExplicitTimestamp ? explicitTimestamp : (i64)time(0);
   c.zName  = sqlite3_mprintf("%s", zAuthorName  ? zAuthorName  : doltliteGetAuthorName(db));
   if( c.zName==0 ){
     rc = SQLITE_NOMEM;
@@ -605,6 +608,7 @@ int doltliteCreateAndStoreCommitWithTime(
   const char *zAuthorEmail,
   const ProllyHash *aExtraParents,
   int nExtraParents,
+  int hasExplicitTimestamp,
   i64 explicitTimestamp,
   ProllyHash *pCommitHash
 ){
@@ -612,7 +616,7 @@ int doltliteCreateAndStoreCommitWithTime(
   assert( cs!=0 );
   return doltliteCreateAndStoreCommitOnStore(db, cs, pParent, pCatalog,
       zMessage, zAuthorName, zAuthorEmail, aExtraParents, nExtraParents,
-      explicitTimestamp, pCommitHash);
+      hasExplicitTimestamp, explicitTimestamp, pCommitHash);
 }
 
 int doltliteSeedStoreIfNeeded(
@@ -655,7 +659,7 @@ int doltliteSeedStoreIfNeeded(
 
   memset(&empty, 0, sizeof(empty));
   rc = doltliteCreateAndStoreCommitOnStore(db, cs, &empty, &empty,
-      "Initialize data repository", 0, 0, 0, 0, 0, pSeedHash);
+      "Initialize data repository", 0, 0, 0, 0, 0, 0, pSeedHash);
   if( rc==SQLITE_OK ){
     if( nBranches==0 ){
       rc = chunkStoreAddBranch(cs, zBranch, pSeedHash);

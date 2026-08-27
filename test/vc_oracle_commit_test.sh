@@ -413,6 +413,24 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'bad', '--date', '2024-01-15T10:00:00junk');
 "
 
+oracle_query "commit_with_epoch_date" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'epoch', '--date', '1970-01-01T00:00:00Z');
+" \
+"SELECT 'R|' || unixepoch(date) FROM dolt_log WHERE message='epoch';" \
+"SELECT CONCAT('R|', TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', date)) FROM dolt_log WHERE message='epoch';"
+
+oracle_query "commit_with_pre_epoch_date" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'pre-epoch', '--date', '1969-12-31T23:59:59Z');
+" \
+"SELECT 'R|' || unixepoch(date) FROM dolt_log WHERE message='pre-epoch';" \
+"SELECT CONCAT('R|', TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', date)) FROM dolt_log WHERE message='pre-epoch';"
+
 echo "--- schema edge commits ---"
 
 oracle "commit_renamed_and_modified_table" "

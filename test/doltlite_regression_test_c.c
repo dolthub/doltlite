@@ -3525,11 +3525,11 @@ static void run_ancestor_criss_cross_single_walk(void){
 
   rc = doltliteCreateAndStoreCommitWithTime(db, &rootHash,
       &rootCommit.catalogHash, "left-0", "test", "test@example.com", 0, 0,
-      1000, &left);
+      1, 1000, &left);
   if( rc==SQLITE_OK ){
     rc = doltliteCreateAndStoreCommitWithTime(db, &rootHash,
         &rootCommit.catalogHash, "right-0", "test", "test@example.com", 0, 0,
-        1001, &right);
+        1, 1001, &right);
   }
   for(i=1; rc==SQLITE_OK && i<=CRISS_CROSS_DEPTH; i++){
     ProllyHash nextLeft;
@@ -3539,12 +3539,12 @@ static void run_ancestor_criss_cross_single_walk(void){
     snprintf(zMessage, sizeof(zMessage), "left-%d", i);
     rc = doltliteCreateAndStoreCommitWithTime(db, &previousLeft,
         &rootCommit.catalogHash, zMessage, "test", "test@example.com",
-        &previousRight, 1, 1000 + i*2, &nextLeft);
+        &previousRight, 1, 1, 1000 + i*2, &nextLeft);
     if( rc==SQLITE_OK ){
       snprintf(zMessage, sizeof(zMessage), "right-%d", i);
       rc = doltliteCreateAndStoreCommitWithTime(db, &previousRight,
           &rootCommit.catalogHash, zMessage, "test", "test@example.com",
-          &previousLeft, 1, 1001 + i*2, &nextRight);
+          &previousLeft, 1, 1, 1001 + i*2, &nextRight);
     }
     left = nextLeft;
     right = nextRight;
