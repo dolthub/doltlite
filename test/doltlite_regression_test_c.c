@@ -172,6 +172,7 @@ static void custom_collation_destroy(void *pCtx){
 static void run_custom_collation_unindexed(void){
   char dbpath[256];
   sqlite3 *db = 0;
+  sqlite3 *controlDb = 0;
   int rc;
   int nDestroy = 0;
 
@@ -216,6 +217,25 @@ static void run_custom_collation_unindexed(void){
       execSqlSilent(db,
         "CREATE TABLE custom_pk(v TEXT PRIMARY KEY COLLATE reverse)")
         ==SQLITE_ERROR);
+  check("custom_collation_builtin_index_setup", execSql(db,
+      "CREATE TABLE builtin_indexed("
+      "id INTEGER PRIMARY KEY, b TEXT COLLATE NOCASE);"
+      "CREATE INDEX builtin_indexed_b ON builtin_indexed(b);"
+      "INSERT INTO builtin_indexed VALUES(1,'A');")==SQLITE_OK);
+  check("custom_collation_builtin_index_before", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM builtin_indexed INDEXED BY builtin_indexed_b "
+      "WHERE b='a'"), "1")==0);
+  rc = sqlite3_create_collation(
+      db, "NOCASE", SQLITE_UTF8, 0, custom_collation_cmp);
+  check("custom_collation_builtin_index_replacement_rejected",
+      rc==SQLITE_ERROR);
+  check("custom_collation_builtin_index_replacement_errmsg",
+      strcmp(sqlite3_errmsg(db),
+        "doltlite cannot replace collation 'NOCASE' used by index "
+        "'builtin_indexed_b'")==0);
+  check("custom_collation_builtin_index_after", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM builtin_indexed INDEXED BY builtin_indexed_b "
+      "WHERE b='a'"), "1")==0);
   rc = sqlite3_create_collation(
       db, "BINARY", SQLITE_UTF8, 0, custom_collation_cmp);
   check("custom_collation_builtin_replacement_rejected", rc==SQLITE_ERROR);
@@ -268,6 +288,34 @@ static void run_custom_collation_unindexed(void){
         strcmp(queryScalarText(db,
           "SELECT v FROM custom_values ORDER BY v LIMIT 1"), "gamma")==0);
     sqlite3_close(db);
+  }
+
+  check("custom_collation_builtin_control_open",
+      open_db(":memory:", &controlDb)==SQLITE_OK);
+  if( controlDb ){
+    check("custom_collation_builtin_control_setup", execSql(controlDb,
+        "CREATE TABLE builtin_unindexed("
+        "id INTEGER PRIMARY KEY, b TEXT COLLATE NOCASE);"
+        "INSERT INTO builtin_unindexed VALUES(1,'A');")==SQLITE_OK);
+    check("custom_collation_builtin_unindexed_before",
+        strcmp(queryScalarText(controlDb,
+          "SELECT count(*) FROM builtin_unindexed WHERE b='a'"), "1")==0);
+    check("custom_collation_builtin_unindexed_replacement",
+        sqlite3_create_collation(controlDb, "NOCASE", SQLITE_UTF8, 0,
+          custom_collation_cmp)==SQLITE_OK);
+    check("custom_collation_builtin_unindexed_after",
+        strcmp(queryScalarText(controlDb,
+          "SELECT count(*) FROM builtin_unindexed WHERE b='a'"), "0")==0);
+    check("custom_collation_builtin_unused_before",
+        strcmp(queryScalarText(controlDb,
+          "SELECT 'a'='a ' COLLATE RTRIM"), "1")==0);
+    check("custom_collation_builtin_unused_replacement",
+        sqlite3_create_collation(controlDb, "RTRIM", SQLITE_UTF8, 0,
+          custom_collation_cmp)==SQLITE_OK);
+    check("custom_collation_builtin_unused_after",
+        strcmp(queryScalarText(controlDb,
+          "SELECT 'a'='a ' COLLATE RTRIM"), "0")==0);
+    sqlite3_close(controlDb);
   }
   removeDbFiles(dbpath);
 }
