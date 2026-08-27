@@ -880,6 +880,7 @@ ChunkStore *doltliteBtreeChunkStore(Btree *p);
 void doltliteBtreeBackupStart(Btree *p);
 void doltliteBtreeBackupFinish(Btree *p);
 void doltliteInvalidateBtreeWorkingState(Btree *p);
+int doltliteBtreeRetargetMissingBranch(Btree *p);
 
 static int doltliteBackupSameFile(
   sqlite3_vfs *pSrcVfs,
@@ -1269,6 +1270,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     tmpStoreOpen = 0;
     memoryAdopted = 1;
     doltliteInvalidateBtreeWorkingState(pDestBt);
+    rc = doltliteBtreeRetargetMissingBranch(pDestBt);
     goto backup_step_done;
   }
 
@@ -1368,6 +1370,7 @@ backup_step_done:
     if( rc==SQLITE_OK ){
       /* Dest now reflects the renamed file; reload catalog next txn. */
       doltliteInvalidateBtreeWorkingState(pDestBt);
+      rc = doltliteBtreeRetargetMissingBranch(pDestBt);
       chunkStoreUnlock(destCs);
     }
   }

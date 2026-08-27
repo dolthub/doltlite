@@ -590,6 +590,29 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
   return "main";
 }
 
+/* After a backup wholesale-replaces the session's store, a pinned branch
+** absent from the adopted image would fail every reload: reads keep serving
+** the pre-backup catalog while writes, status, and checkout all error.
+** Fall back to the image's default branch, matching a fresh open. */
+int doltliteBtreeRetargetMissingBranch(Btree *p){
+  ChunkStore *cs;
+  const char *zDef;
+  char *zNew;
+  if( !p || !p->pBt || p->isDetached ) return SQLITE_OK;
+  cs = &p->pBt->store;
+  if( chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0)
+        ==SQLITE_OK ){
+    return SQLITE_OK;
+  }
+  zDef = chunkStoreGetDefaultBranch(cs);
+  if( !zDef ) zDef = "main";
+  zNew = sqlite3_mprintf("%s", zDef);
+  if( !zNew ) return SQLITE_NOMEM;
+  sqlite3_free(p->zBranch);
+  p->zBranch = zNew;
+  return SQLITE_OK;
+}
+
 int doltliteIsDetached(sqlite3 *db){
   return db && db->nDb>0 && db->aDb[0].pBt
       && db->aDb[0].pBt->isDetached;
