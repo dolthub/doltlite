@@ -722,7 +722,13 @@ static int doltliteAdvanceBranchWithState(
     }
   }
 
-  rc = doltlitePersistWorkingSetWithHash(db, pWorkingCatHash);
+  /* A null working catalog used to flush the live session here, but the
+  ** head confirm can have reloaded that session from a peer's freshly
+  ** written working set: the persist then binds the peer's content to the
+  ** new head and the staleness gate waves it through. Advancing with no
+  ** explicit working catalog means the working set IS the new catalog. */
+  rc = doltlitePersistWorkingSetWithHash(
+      db, pWorkingCatHash ? pWorkingCatHash : pCatalogHash);
   if( rc!=SQLITE_OK ){
     return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
   }
