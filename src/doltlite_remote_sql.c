@@ -629,7 +629,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         sqlite3_result_error_nomem(ctx);
         return;
       }
-      rc = doltliteMergeRef(db, ctx, zTrackingRef, 0, 0);
+      rc = doltliteMergeRef(db, ctx, zTrackingRef, 0, 0, 0, 0);
       sqlite3_free(zTrackingRef);
       if( rc!=SQLITE_OK ){
         return;

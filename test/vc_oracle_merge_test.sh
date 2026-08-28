@@ -358,6 +358,88 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature', '--no-ff');
 "
 
+echo "--- --no-commit / --squash ---"
+
+oracle_reopen_state "ff_squash_applies_without_commit" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--squash', 'feature');
+" "SELECT 'Q' || char(9) || count(*) FROM t;
+SELECT 'Q' || char(9) || message FROM dolt_log LIMIT 1;
+SELECT 'Q' || char(9) || count(*) FROM dolt_status;" \
+"SELECT concat('Q', char(9), count(*)) FROM t;
+SELECT concat('Q', char(9), message) FROM dolt_log ORDER BY commit_order DESC LIMIT 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_status;"
+
+oracle "ff_nocommit_still_fast_forwards" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--no-commit', 'feature');
+"
+
+oracle_reopen_state "three_way_nocommit_applies_without_commit" "
+$SEED
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--no-commit', 'feature');
+" "SELECT 'Q' || char(9) || count(*) FROM t;
+SELECT 'Q' || char(9) || message FROM dolt_log LIMIT 1;
+SELECT 'Q' || char(9) || count(*) FROM dolt_status;" \
+"SELECT concat('Q', char(9), count(*)) FROM t;
+SELECT concat('Q', char(9), message) FROM dolt_log ORDER BY commit_order DESC LIMIT 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_status;"
+
+oracle "three_way_squash" "
+$SEED
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--squash', 'feature');
+"
+
+oracle "three_way_squash_nocommit_then_commit" "
+$SEED
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--squash', '--no-commit', 'feature');
+SELECT dolt_commit('-m', 'squashed');
+"
+
+oracle_error "squash_and_no_ff_rejected" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--squash', '--no-ff', 'feature');
+"
+
 echo "--- custom message ---"
 
 oracle "merge_with_custom_message" "

@@ -42,7 +42,8 @@ int mergeFastForward(
   sqlite3_context *context,
   ChunkStore *cs,
   const ProllyHash *pOurHead,
-  const ProllyHash *pTheirHead
+  const ProllyHash *pTheirHead,
+  int squash
 ){
   DoltliteCommit theirCommit;
   DoltliteTxnState savedState;
@@ -65,13 +66,28 @@ int mergeFastForward(
     return rc;
   }
   rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
-  if( rc==SQLITE_OK ){
-    rc = doltliteUpdateBranchWorkingState(db, doltliteGetSessionBranch(db),
-                                          &theirCommit.catalogHash, NULL);
-  }
-  if( rc==SQLITE_OK ){
-    rc = doltliteCompareAndAdvanceBranch(
-        db, pOurHead, pTheirHead, &theirCommit.catalogHash, 0);
+  if( squash ){
+    if( rc==SQLITE_OK ){
+      rc = doltliteSetSessionStaged(db, &theirCommit.catalogHash);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
+    }
+    if( rc==SQLITE_OK ){
+      int persistRc = doltlitePersistWorkingSetWithHash(
+          db, &theirCommit.catalogHash);
+      chunkStoreUnlock(cs);
+      rc = persistRc;
+    }
+  }else{
+    if( rc==SQLITE_OK ){
+      rc = doltliteUpdateBranchWorkingState(db, doltliteGetSessionBranch(db),
+                                            &theirCommit.catalogHash, NULL);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltliteCompareAndAdvanceBranch(
+          db, pOurHead, pTheirHead, &theirCommit.catalogHash, 0);
+    }
   }
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&theirCommit);
@@ -371,7 +387,8 @@ static int mergeRefCreateMergeCommit(
   const ProllyHash *pTheirHead,
   const ProllyHash *pMergedCat,
   const char *zBranch,
-  const char *zMessage
+  const char *zMessage,
+  int nExtraParents
 ){
   ProllyHash commitHash;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -392,7 +409,8 @@ static int mergeRefCreateMergeCommit(
              zBranch, doltliteGetSessionBranch(db));
   }
   rc = doltliteCreateAndStoreCommit(db, pOurHead, pMergedCat,
-      msg, NULL, NULL, pTheirHead, 1, &commitHash);
+      msg, NULL, NULL, nExtraParents ? pTheirHead : NULL, nExtraParents,
+      &commitHash);
   if( rc!=SQLITE_OK ){
     /* Catalog is already live; leaving it lets dolt_commit drop theirHead
     ** from ancestry. Restore first. */
@@ -425,12 +443,69 @@ static int mergeRefCreateMergeCommit(
   return SQLITE_OK;
 }
 
+static int mergeRefLeaveUncommitted(
+  sqlite3 *db,
+  sqlite3_context *context,
+  DoltliteTxnState *pSaved,
+  const ProllyHash *pOurHead,
+  const ProllyHash *pTheirHead,
+  const ProllyHash *pMergedCat,
+  const char *zBranch,
+  int bSetMergeState
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash empty;
+  int rc;
+
+  memset(&empty, 0, sizeof(empty));
+  if( bSetMergeState ){
+    rc = doltliteSetSessionMergeState(db, 1, pTheirHead, &empty);
+    if( rc==SQLITE_OK ){
+      (void)doltliteSetSessionMergeSourceSpec(db, zBranch, pTheirHead);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+      return SQLITE_ERROR;
+    }
+  }
+
+  rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
+  if( rc==SQLITE_BUSY ){
+    doltliteCmdResultPeerBranchBusy(context, "merge");
+    doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    return SQLITE_ERROR;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+    return SQLITE_ERROR;
+  }
+  rc = doltlitePersistWorkingSetWithHash(db, pMergedCat);
+  chunkStoreUnlock(cs);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+    return SQLITE_ERROR;
+  }
+  rc = doltliteVcSealEnclosingTxn(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return SQLITE_ERROR;
+  }
+  doltliteTxnStateClear(pSaved);
+  sqlite3_result_int(context, 0);
+  return SQLITE_OK;
+}
+
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
   const char *zBranch,
   const char *zMessage,
-  int noFastForward
+  int noFastForward,
+  int noCommit,
+  int squash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash ourHead, theirHead, ancestorHash;
@@ -514,7 +589,7 @@ int doltliteMergeRef(
   }
 
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
-    return mergeFastForward(db, context, cs, &ourHead, &theirHead);
+    return mergeFastForward(db, context, cs, &ourHead, &theirHead, squash);
   }
 
   rc = mergeRefLoadCatalogs(db, &ourHead, &theirHead, &ancestorHash,
@@ -620,9 +695,14 @@ int doltliteMergeRef(
     return SQLITE_ERROR;
   }
 
+  if( noCommit ){
+    return mergeRefLeaveUncommitted(
+        db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
+        zBranch, !squash);
+  }
   return mergeRefCreateMergeCommit(
       db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
-      zBranch, zMessage);
+      zBranch, zMessage, squash ? 0 : 1);
 
 merge_fail:
   if( graphLocked ){
@@ -665,9 +745,13 @@ static void doltliteMergeFunc(
   DoltliteCmdArgs args;
   int isAbort = 0;
   int noFastForward = 0;
+  int noCommit = 0;
+  int squash = 0;
   DoltliteCmdOption aOption[] = {
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
     { "no-ff", 0, DOLTLITE_CMD_OPTION_FLAG, &noFastForward, 0 },
+    { "no-commit", 0, DOLTLITE_CMD_OPTION_FLAG, &noCommit, 0 },
+    { "squash", 0, DOLTLITE_CMD_OPTION_FLAG, &squash, 0 },
     { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &zMessage }
   };
   u8 isMerging = 0;
@@ -694,7 +778,7 @@ static void doltliteMergeFunc(
   if( args.nPositional==1 ) zBranch = args.azPositional[0];
 
   if( isAbort ){
-    if( zBranch || zMessage || noFastForward ){
+    if( zBranch || zMessage || noFastForward || noCommit || squash ){
       sqlite3_result_error(context,
         "--abort does not take other arguments", -1);
       doltliteCmdArgsClear(&args);
@@ -717,7 +801,15 @@ static void doltliteMergeFunc(
     return;
   }
 
-  (void)doltliteMergeRef(db, context, zBranch, zMessage, noFastForward);
+  if( squash && noFastForward ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context,
+      "flags '--squash' and '--no-ff' cannot be used together", -1);
+    return;
+  }
+
+  (void)doltliteMergeRef(db, context, zBranch, zMessage, noFastForward,
+                         noCommit, squash);
   doltliteCmdArgsClear(&args);
 }
 

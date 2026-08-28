@@ -698,5 +698,168 @@ echo "ALTER TABLE t ADD COLUMN added TEXT DEFAULT 'dd'; UPDATE t SET v='edited' 
 echo "DELETE FROM t WHERE id=2; SELECT dolt_commit('-A','-m','delete row');" | $DOLTLITE "$DB46" > /dev/null 2>&1
 run_test_match "delete_vs_real_edit_with_add_column_conflicts" "SELECT dolt_merge('feature');" "conflict" "$DB46"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46"
+DB47=/tmp/test_merge47_$$.db; rm -f "$DB47"
+cat <<'EOF' | $DOLTLITE "$DB47" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "ff_nocommit_still_ff" "SELECT dolt_merge('--no-commit','f');" "^[0-9a-f]{40}$" "$DB47"
+run_test "ff_nocommit_count" "SELECT count(*) FROM t;" "2" "$DB47"
+run_test "ff_nocommit_log" "SELECT message FROM dolt_log LIMIT 1;" "f" "$DB47"
+run_test "ff_nocommit_status" "SELECT count(*) FROM dolt_status;" "0" "$DB47"
+run_test "ff_nocommit_merging" "SELECT is_merging FROM dolt_merge_status;" "0" "$DB47"
+
+DB48=/tmp/test_merge48_$$.db; rm -f "$DB48"
+cat <<'EOF' | $DOLTLITE "$DB48" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "ff_squash_hash" "SELECT dolt_merge('--squash','f');" "^[0-9a-f]{40}$" "$DB48"
+run_test "ff_squash_count" "SELECT count(*) FROM t;" "2" "$DB48"
+run_test "ff_squash_log" "SELECT message FROM dolt_log LIMIT 1;" "b" "$DB48"
+run_test "ff_squash_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "t|1|modified" "$DB48"
+run_test "ff_squash_merging" "SELECT is_merging FROM dolt_merge_status;" "0" "$DB48"
+run_test_match "ff_squash_abort_none" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB48"
+
+DB49=/tmp/test_merge49_$$.db; rm -f "$DB49"
+cat <<'EOF' | $DOLTLITE "$DB49" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+INSERT INTO t VALUES(3,'m');
+SELECT dolt_commit('-Am','m');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test "threeway_nocommit_ret" "SELECT dolt_merge('--no-commit','f');" "0" "$DB49"
+run_test "threeway_nocommit_count" "SELECT count(*) FROM t;" "3" "$DB49"
+run_test "threeway_nocommit_log" "SELECT message FROM dolt_log LIMIT 1;" "m" "$DB49"
+run_test "threeway_nocommit_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "t|1|modified" "$DB49"
+run_test "threeway_nocommit_merging" "SELECT is_merging FROM dolt_merge_status;" "1" "$DB49"
+run_test_match "threeway_nocommit_blocks_second" \
+  "SELECT dolt_merge('f');" "uncommitted" "$DB49"
+run_test_match "threeway_nocommit_finish" \
+  "SELECT dolt_commit('-m','finished merge');" "^[0-9a-f]{40}$" "$DB49"
+run_test "threeway_nocommit_after_log" \
+  "SELECT message FROM dolt_log LIMIT 1;" "finished merge" "$DB49"
+run_test "threeway_nocommit_feat_ancestor" \
+  "SELECT count(*) FROM dolt_log WHERE message='f';" "1" "$DB49"
+run_test "threeway_nocommit_after_merging" \
+  "SELECT is_merging FROM dolt_merge_status;" "0" "$DB49"
+run_test "threeway_nocommit_after_status" "SELECT count(*) FROM dolt_status;" "0" "$DB49"
+
+DB50=/tmp/test_merge50_$$.db; rm -f "$DB50"
+cat <<'EOF' | $DOLTLITE "$DB50" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+INSERT INTO t VALUES(3,'m');
+SELECT dolt_commit('-Am','m');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "threeway_squash_hash" \
+  "SELECT dolt_merge('--squash','f');" "^[0-9a-f]{40}$" "$DB50"
+run_test "threeway_squash_count" "SELECT count(*) FROM t;" "3" "$DB50"
+run_test "threeway_squash_log" \
+  "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'f' into main" "$DB50"
+run_test "threeway_squash_feat_absent" \
+  "SELECT count(*) FROM dolt_log WHERE message='f';" "0" "$DB50"
+run_test "threeway_squash_status" "SELECT count(*) FROM dolt_status;" "0" "$DB50"
+run_test "threeway_squash_merging" "SELECT is_merging FROM dolt_merge_status;" "0" "$DB50"
+
+DB51=/tmp/test_merge51_$$.db; rm -f "$DB51"
+cat <<'EOF' | $DOLTLITE "$DB51" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+INSERT INTO t VALUES(3,'m');
+SELECT dolt_commit('-Am','m');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test "threeway_squash_nocommit_ret" \
+  "SELECT dolt_merge('--squash','--no-commit','f');" "0" "$DB51"
+run_test "threeway_squash_nocommit_count" "SELECT count(*) FROM t;" "3" "$DB51"
+run_test "threeway_squash_nocommit_log" \
+  "SELECT message FROM dolt_log LIMIT 1;" "m" "$DB51"
+run_test "threeway_squash_nocommit_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "t|1|modified" "$DB51"
+run_test "threeway_squash_nocommit_merging" \
+  "SELECT is_merging FROM dolt_merge_status;" "0" "$DB51"
+run_test_match "threeway_squash_nocommit_commit" \
+  "SELECT dolt_commit('-m','squashed');" "^[0-9a-f]{40}$" "$DB51"
+run_test "threeway_squash_nocommit_after_log" \
+  "SELECT message FROM dolt_log LIMIT 1;" "squashed" "$DB51"
+run_test "threeway_squash_nocommit_feat_absent" \
+  "SELECT count(*) FROM dolt_log WHERE message='f';" "0" "$DB51"
+
+DB52=/tmp/test_merge52_$$.db; rm -f "$DB52"
+cat <<'EOF' | $DOLTLITE "$DB52" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "squash_noff_rejected" \
+  "SELECT dolt_merge('--squash','--no-ff','f');" \
+  "cannot be used together" "$DB52"
+run_test "squash_noff_unchanged" "SELECT count(*) FROM t;" "1" "$DB52"
+
+DB53=/tmp/test_merge53_$$.db; rm -f "$DB53"
+cat <<'EOF' | $DOLTLITE "$DB53" > /dev/null 2>&1
+CREATE TABLE t(i INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'b');
+SELECT dolt_commit('-Am','b');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(2,'f');
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+run_test "ff_nocommit_noff_ret" \
+  "SELECT dolt_merge('--no-commit','--no-ff','f');" "0" "$DB53"
+run_test "ff_nocommit_noff_count" "SELECT count(*) FROM t;" "2" "$DB53"
+run_test "ff_nocommit_noff_log" "SELECT message FROM dolt_log LIMIT 1;" "b" "$DB53"
+run_test "ff_nocommit_noff_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "t|1|modified" "$DB53"
+run_test "ff_nocommit_noff_merging" \
+  "SELECT is_merging FROM dolt_merge_status;" "1" "$DB53"
+run_test "ff_nocommit_noff_abort" "SELECT dolt_merge('--abort');" "0" "$DB53"
+run_test "ff_nocommit_noff_abort_count" "SELECT count(*) FROM t;" "1" "$DB53"
+run_test "ff_nocommit_noff_abort_merging" \
+  "SELECT is_merging FROM dolt_merge_status;" "0" "$DB53"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53"
 dltest_finish
