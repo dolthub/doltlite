@@ -491,12 +491,17 @@ static int doltliteRebaseLinearReplay(
         &replayCommit.catalogHash,
         &curHead, 0,
         replayCommit.zMessage ? replayCommit.zMessage : "",
-        0, 0, &nConflicts, &nViolations, &zApplyErr, hexBuf);
+        0, 1, &nConflicts, &nViolations, &zApplyErr, hexBuf);
 
     doltliteCommitClear(&replayCommit);
     doltliteCommitClear(&parentCommit);
     doltliteCommitClear(&curHeadCommit);
 
+    if( rc==SQLITE_DONE ){
+      sqlite3_free(zApplyErr);
+      zApplyErr = 0;
+      continue;
+    }
     if( rc!=SQLITE_OK ) goto rollback;
     if( nConflicts>0 ){ bConflict = 1; rc = SQLITE_ERROR; goto rollback; }
     /* Finish rolled this replay back and returned OK; stop or the loop
@@ -1058,9 +1063,11 @@ static int rebaseReplayPlanGroup(
   int *piNext
 ){
   char *combinedMsg = 0;
+  ProllyHash startCat;
   int rc;
   int j;
 
+  startCat = *pCurCat;
   rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -1092,6 +1099,12 @@ static int rebaseReplayPlanGroup(
       if( !combinedMsg ) return SQLITE_NOMEM;
     }
     j++;
+  }
+
+  if( prollyHashCompare(pCurCat, &startCat)==0 ){
+    sqlite3_free(combinedMsg);
+    *piNext = j;
+    return SQLITE_OK;
   }
 
   {
