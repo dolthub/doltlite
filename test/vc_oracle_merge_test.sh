@@ -1642,6 +1642,37 @@ SELECT dolt_merge('feature');
 " "SELECT id || '|' || Name || '|' || Score || '|' || coalesce(MainNote,'~') || '|' || coalesce(FeatNote,'~') FROM t" \
 "SELECT CONCAT(id, '|', Name, '|', Score, '|', coalesce(MainNote,'~'), '|', coalesce(FeatNote,'~')) FROM t"
 
+oracle_error_poststate "delete_vs_add_column_default" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+DELETE FROM t WHERE id = 2;
+SELECT dolt_commit('-Am', 'delete row');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN added TEXT DEFAULT 'dd';
+SELECT dolt_commit('-Am', 'add col');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT group_concat(id || ':' || added, ',') FROM (SELECT id, added FROM t ORDER BY id)" \
+"SELECT GROUP_CONCAT(CONCAT(id, ':', added) ORDER BY id SEPARATOR ',') FROM t"
+
+oracle_error_poststate "add_column_not_null_default_vs_indexed_delete" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX tv ON t(v);
+INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+ALTER TABLE t ADD COLUMN added TEXT NOT NULL DEFAULT 'dd';
+SELECT dolt_commit('-Am', 'add col');
+SELECT dolt_checkout('feat');
+DELETE FROM t WHERE id = 2;
+SELECT dolt_commit('-Am', 'delete row');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT group_concat(id || ':' || added, ',') FROM (SELECT id, added FROM t ORDER BY id)" \
+"SELECT GROUP_CONCAT(CONCAT(id, ':', added) ORDER BY id SEPARATOR ',') FROM t"
+
 # Concluding a conflicted merge must still record the second parent.
 oracle "conflict_resolved_commit_keeps_merged_branch_in_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
