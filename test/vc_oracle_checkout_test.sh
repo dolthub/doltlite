@@ -261,6 +261,14 @@ SELECT dolt_checkout('main');
 SELECT dolt_checkout('-b', 'newfeat', 'feature');
 "
 
+oracle "dash_b_from_raw_hash_documented_order" "
+$SEED
+INSERT INTO t VALUES (2, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout(dolt_hashof('HEAD~1'), '-b', 'from_c1');
+"
+
 echo "--- per-table checkout ---"
 
 oracle "revert_single_table_working" "
@@ -487,6 +495,14 @@ echo "--- error paths ---"
 oracle_error "checkout_nonexistent" "
 $SEED
 SELECT dolt_checkout('nope');
+"
+
+oracle_error "checkout_raw_hash_refuses_detached_head" "
+$SEED
+INSERT INTO t VALUES (2, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout(dolt_hashof('HEAD~1'));
 "
 
 oracle_error "dash_b_existing_branch" "

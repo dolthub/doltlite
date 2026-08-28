@@ -1116,11 +1116,19 @@ static int doltliteCheckoutTables(
   return rc;
 }
 
+static void checkoutDetachedHeadError(sqlite3_context *ctx, sqlite3 *db){
+  doltliteVcResultError(ctx, db,
+      "dolt does not support a detached head state. To create a branch at "
+      "this commit instead, run SELECT dolt_checkout(<start_point>, '-b', "
+      "<new_branch_name>)");
+}
+
 static void doltCheckoutParsedFunc(
   sqlite3_context *ctx,
   int argc,
   sqlite3_value **argv,
-  int createBranch
+  int createBranch,
+  int startFirst
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1153,14 +1161,12 @@ static void doltCheckoutParsedFunc(
     }
     if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
      && !prollyHashIsEmpty(&probe) ){
-      doltliteVcResultError(ctx, db,
-          "dolt does not support a detached head state");
+      checkoutDetachedHeadError(ctx, db);
       return;
     }
     if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK ){
       if( doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
-        doltliteVcResultError(ctx, db,
-            "dolt does not support a detached head state");
+        checkoutDetachedHeadError(ctx, db);
       }else{
         char *zErr = sqlite3_mprintf("no such branch or table: %s", zBranch);
         doltliteVcResultError(ctx, db,
@@ -1186,9 +1192,12 @@ static void doltCheckoutParsedFunc(
   }
 
   if( createBranch ){
+    int iBranch = startFirst ? 1 : 0;
+    int iStart = startFirst ? 0 : 1;
     if( argc<1 ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
+    if( startFirst && argc<2 ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
     if( argc>2 ){ doltliteVcResultError(ctx, db, "too many arguments"); return; }
-    zBranch = (const char*)sqlite3_value_text(argv[0]);
+    zBranch = (const char*)sqlite3_value_text(argv[iBranch]);
     if( branchNameEmpty(zBranch) ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
     if( !doltliteUserRefNameIsValid(zBranch) ){
       doltliteVcResultError(ctx, db, "invalid branch name");
@@ -1196,7 +1205,7 @@ static void doltCheckoutParsedFunc(
     }
 
     if( argc>=2 ){
-      const char *zStart = (const char*)sqlite3_value_text(argv[1]);
+      const char *zStart = (const char*)sqlite3_value_text(argv[iStart]);
       if( !zStart ){
         doltliteVcResultError(ctx, db, "start point not found");
         return;
@@ -1223,11 +1232,15 @@ static void doltCheckoutParsedFunc(
   }
 
   if( !createBranch && argc==1 ){
-    ProllyHash tagHash;
-    if( chunkStoreFindTag(cs, zBranch, &tagHash)==SQLITE_OK
-     && !prollyHashIsEmpty(&tagHash) ){
-      doltliteVcResultError(ctx, db,
-          "dolt does not support a detached head state");
+    ProllyHash probe;
+    if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
+     && !prollyHashIsEmpty(&probe) ){
+      checkoutDetachedHeadError(ctx, db);
+      return;
+    }
+    if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
+     && doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
+      checkoutDetachedHeadError(ctx, db);
       return;
     }
   }
@@ -1392,16 +1405,39 @@ checkout_done:
   sqlite3_result_int(ctx, 0);
 }
 
+static int checkoutStartPointBeforeDashB(
+  int argc,
+  sqlite3_value **argv
+){
+  int i;
+  int seenPositional = 0;
+  int endOptions = 0;
+  for(i=0; i<argc; i++){
+    const char *zArg = (const char*)sqlite3_value_text(argv[i]);
+    if( !zArg ) continue;
+    if( !endOptions && strcmp(zArg, "--")==0 ){
+      endOptions = 1;
+      continue;
+    }
+    if( !endOptions && strcmp(zArg, "-b")==0 ){
+      return seenPositional;
+    }
+    seenPositional = 1;
+  }
+  return 0;
+}
+
 void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteCmdArgs args;
   int createBranch = 0;
+  int startFirst = 0;
   DoltliteCmdOption aOption[] = {
     { 0, 'b', DOLTLITE_CMD_OPTION_FLAG, &createBranch, 0 }
   };
   int rc;
 
   if( argc==0 ){
-    doltCheckoutParsedFunc(ctx, argc, argv, createBranch);
+    doltCheckoutParsedFunc(ctx, argc, argv, createBranch, startFirst);
     return;
   }
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
@@ -1410,8 +1446,11 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     (void)doltliteVcSealSavepointError(sqlite3_context_db_handle(ctx));
     return;
   }
+  if( createBranch ){
+    startFirst = checkoutStartPointBeforeDashB(argc, argv);
+  }
   doltCheckoutParsedFunc(ctx, args.nPositional, args.apPositional,
-                         createBranch);
+                         createBranch, startFirst);
   doltliteCmdArgsClear(&args);
 }
 

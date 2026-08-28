@@ -163,6 +163,12 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'ba
 run_test "branch_from_first_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p1"
 run_test "branch_from_second_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p2"
 run_test "branch_from_second_parent_hash_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_hash"
+run_test_match "checkout_raw_hash_refuses_detached_head" "SELECT dolt_checkout(dolt_hashof('HEAD^2'));" "does not support a detached head state" "$DB13"
+run_test_match "checkout_raw_hash_suggests_branch" "SELECT dolt_checkout(dolt_hashof('HEAD^2'));" "To create a branch at this commit instead" "$DB13"
+run_test "checkout_b_raw_hash_documented_order" "SELECT dolt_checkout(dolt_hashof('HEAD^2'),'-b','checkout_from_hash');" "0" "$DB13"
+run_test "checkout_b_raw_hash_documented_order_rows" "SELECT count(*) FROM t;" "2" "$DB13/checkout_from_hash"
+run_test "checkout_b_raw_hash_flag_first" "SELECT dolt_checkout('-b','checkout_from_hash_flag_first',dolt_hashof('HEAD^1'));" "0" "$DB13"
+run_test "checkout_b_raw_hash_flag_first_rows" "SELECT count(*) FROM t;" "2" "$DB13/checkout_from_hash_flag_first"
 
 DB14=/tmp/test_branch14_$$.db; rm -f "$DB14"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feature'); SELECT dolt_checkout('feature'); UPDATE t SET v='working' WHERE id=1; SELECT dolt_checkout('main');" | $DOLTLITE "$DB14" > /dev/null 2>&1
