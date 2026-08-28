@@ -1480,11 +1480,11 @@ attach2 attach2-4.12 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 # shifting every entry by +25. The dolt_tests and dolt_test_run module
 # registrations add four more. The dolt_ignore module registration adds
 # two more. Checkpoint discovery adds the remaining build-dependent shifts.
-attachmalloc attachmalloc-1.transient.505 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.933 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1429 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.938 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1440 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.507 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.932 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1426 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.940 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1442 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
