@@ -1482,6 +1482,9 @@ doltlite_cmd.o:	$(TOP)/src/doltlite_cmd.c $(DEPS_OBJ_COMMON)
 doltlite_add.o:	$(TOP)/src/doltlite_add.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_add.c
 
+doltlite_clean.o:	$(TOP)/src/doltlite_clean.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_clean.c
+
 doltlite_commit_cmd.o:	$(TOP)/src/doltlite_commit_cmd.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_commit_cmd.c
 
