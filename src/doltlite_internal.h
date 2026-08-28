@@ -1052,14 +1052,17 @@ int doltliteCatalogRenameMate(
 int mergeAbortInPlace(sqlite3 *db);
 int mergeFastForward(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
-  const ProllyHash *pOurHead, const ProllyHash *pTheirHead
+  const ProllyHash *pOurHead, const ProllyHash *pTheirHead,
+  int squash
 );
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
   const char *zBranch,
   const char *zMessage,
-  int noFastForward
+  int noFastForward,
+  int noCommit,
+  int squash
 );
 
 int doltliteAddRegister(sqlite3 *db);
