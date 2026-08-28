@@ -1151,6 +1151,12 @@ static void doltCheckoutParsedFunc(
       doltliteVcResultError(ctx, db, "no current branch");
       return;
     }
+    if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
+     && !prollyHashIsEmpty(&probe) ){
+      doltliteVcResultError(ctx, db,
+          "dolt does not support a detached head state");
+      return;
+    }
     if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK ){
       if( doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
         doltliteVcResultError(ctx, db,
@@ -1214,6 +1220,16 @@ static void doltCheckoutParsedFunc(
       return;
     }
     isCreateAndSwitch = 1;
+  }
+
+  if( !createBranch && argc==1 ){
+    ProllyHash tagHash;
+    if( chunkStoreFindTag(cs, zBranch, &tagHash)==SQLITE_OK
+     && !prollyHashIsEmpty(&tagHash) ){
+      doltliteVcResultError(ctx, db,
+          "dolt does not support a detached head state");
+      return;
+    }
   }
 
   if( !doltliteIsDetached(db)
