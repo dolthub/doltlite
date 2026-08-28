@@ -1169,6 +1169,7 @@ int normalizeSideToMergedLayout(
   const char *zAncSql,
   const char *zOursSql,
   const char *zTheirsSql,
+  int bFillSharedDefaults,
   ProllyHash *pOutRoot
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1245,7 +1246,7 @@ int normalizeSideToMergedLayout(
   if( nMerged > DOLTLITE_MAX_RECORD_FIELDS ){ rc = SQLITE_ERROR; goto done; }
 
   /* Already at merged positions; trailing adds read as absent anyway. */
-  if( nDropped==0 ){
+  if( nDropped==0 && !bFillSharedDefaults ){
     int bSamePositions = 1;
     for(j=0; j<nTheirs; j++){
       if( aMap[j]!=j ){ bSamePositions = 0; break; }
@@ -1292,8 +1293,8 @@ int normalizeSideToMergedLayout(
       prollyCursorKey(&cur, &pKey, &nKey);
     }
 
-    /* Defaults only for rows theirs uniquely has. Filling our column
-    ** on a shared row would look like their change and conflict. */
+    /* Dual-schema relayout fills defaults only for rows unique to this side.
+    ** A one-sided append projects every row into the wider logical layout. */
     rowOnlyTheirs = 0;
     if( oursCurInit ){
       int oursRes = 0;
@@ -1312,11 +1313,11 @@ int normalizeSideToMergedLayout(
     for(k=0; k<nMerged; k++){
       memset(&aMem[k], 0, sizeof(aMem[k]));
       aMem[k].eType = SQLITE_NULL;
-      if( rowOnlyTheirs && k<oursDefaults.nCol ){
+      if( (rowOnlyTheirs || bFillSharedDefaults) && k<oursDefaults.nCol ){
         aMem[k] = oursDefaults.aVal[k];
       }
     }
-    if( rowOnlyTheirs ){
+    if( rowOnlyTheirs || bFillSharedDefaults ){
       for(j=0; j<nTheirs; j++){
         if( aMap[j]>=nOurs && j<theirsDefaults.nCol ){
           aMem[aMap[j]] = theirsDefaults.aVal[j];

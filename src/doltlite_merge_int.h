@@ -327,6 +327,7 @@ int normalizeSideToMergedLayout(
   const char *zAncSql,
   const char *zOursSql,
   const char *zTheirsSql,
+  int bFillSharedDefaults,
   ProllyHash *pOutRoot
 );
 
