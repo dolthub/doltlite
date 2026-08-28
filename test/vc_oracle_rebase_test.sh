@@ -256,6 +256,54 @@ SELECT dolt_rebase('main');
 oracle "descendant_log_order" "$DESCEND_SETUP" \
   "SELECT CONCAT('LOG|', message) FROM dolt_log;"
 
+echo "--- rebase drops a pick whose patch is already on upstream ---"
+
+EMPTY_PICK_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_add_2');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+SELECT dolt_checkout('feat');
+"
+
+oracle "empty_pick_dropped_log" "$EMPTY_PICK_SETUP" \
+  "SELECT CONCAT('LOG|', message) FROM dolt_log WHERE message NOT LIKE 'Initialize%';"
+
+oracle "empty_pick_table" "$EMPTY_PICK_SETUP" \
+  "SELECT CONCAT('LOG|', id, '=', v) FROM t ORDER BY id;"
+
+EMPTY_THEN_REAL_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_same');
+INSERT INTO t VALUES (3, 'feat_only');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_only');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_same');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+SELECT dolt_checkout('feat');
+"
+
+oracle "empty_then_real_log" "$EMPTY_THEN_REAL_SETUP" \
+  "SELECT CONCAT('LOG|', message) FROM dolt_log WHERE message NOT LIKE 'Initialize%';"
+
+oracle "empty_then_real_table" "$EMPTY_THEN_REAL_SETUP" \
+  "SELECT CONCAT('LOG|', id, '=', v) FROM t ORDER BY id;"
+
 echo "--- rebase with multi-commit chain preserving order ---"
 
 MULTI_SETUP="

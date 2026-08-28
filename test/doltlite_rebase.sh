@@ -718,7 +718,96 @@ else
 fi
 rm -f "$DB13"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9"
+DBE=/tmp/test_rebase_empty_pick_$$.db; rm -f "$DBE"
+cat <<'SQL' | "$DOLTLITE" "$DBE" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_add_2');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+SQL
+run_test "empty_pick_dropped_log" \
+  "SELECT dolt_checkout('feat');
+   SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "0
+main_add_2,base" \
+  "$DBE"
+run_test "empty_pick_not_duplicate_catalog" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_hashof_db('HEAD') = dolt_hashof_db('HEAD~1');" \
+  "0
+0" \
+  "$DBE"
+run_test "empty_pick_lands_on_onto" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_hashof('HEAD') = dolt_hashof('main');" \
+  "0
+1" \
+  "$DBE"
+
+DBE2=/tmp/test_rebase_empty_then_real_$$.db; rm -f "$DBE2"
+cat <<'SQL' | "$DOLTLITE" "$DBE2" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_same');
+INSERT INTO t VALUES (3, 'feat_only');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_only');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_same');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+SQL
+run_test "empty_then_real_log" \
+  "SELECT dolt_checkout('feat');
+   SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "0
+feat_only,main_same,base" \
+  "$DBE2"
+run_test "empty_then_real_rows" \
+  "SELECT dolt_checkout('feat');
+   SELECT group_concat(id || ':' || v, ',') FROM t;" \
+  "0
+1:base,2:same,3:feat_only" \
+  "$DBE2"
+
+DBE3=/tmp/test_rebase_interactive_empty_$$.db; rm -f "$DBE3"
+cat <<'SQL' | "$DOLTLITE" "$DBE3" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 'same');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_add_2');
+SELECT dolt_checkout('feat');
+SQL
+run_test "interactive_empty_pick_dropped_log" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   SELECT dolt_rebase('--continue');
+   SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "0
+interactive rebase started on branch dolt_rebase_feat; adjust the rebase plan in the dolt_rebase table, then continue rebasing by calling dolt_rebase('--continue')
+Successfully rebased and updated refs/heads/feat
+main_add_2,base" \
+  "$DBE3"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DBE" "$DBE2" "$DBE3"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
