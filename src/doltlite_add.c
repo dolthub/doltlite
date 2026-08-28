@@ -288,7 +288,8 @@ static int addStageAllTables(
   sqlite3 *db,
   sqlite3_context *context,
   ChunkStore *cs,
-  const ProllyHash *pWorkingHash
+  const ProllyHash *pWorkingHash,
+  int bForce
 ){
   struct TableEntry *aWorking = 0;
   struct TableEntry *aStaged = 0;
@@ -330,7 +331,7 @@ static int addStageAllTables(
   for(k=0; k<nWorking; k++){
     const char *zName = aWorking[k].zName;
     struct TableEntry *pUse = &aWorking[k];
-    if( aWorking[k].iTable>1 && zName ){
+    if( aWorking[k].iTable>1 && zName && !bForce ){
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
       if( rc!=SQLITE_OK ){
@@ -358,6 +359,8 @@ static int addStageAllTables(
     const char *zName = aStaged[k].zName;
     if( aStaged[k].iTable<=1 || !zName ) continue;
     if( addNameIndexFind(&workingIdx, zName) ) continue;
+    /* Force stages the deletion of an ignored table like any other. */
+    if( bForce ) continue;
     {
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
@@ -569,7 +572,8 @@ int doltliteStageNamedTables(
   ChunkStore *cs,
   const ProllyHash *pWorkingHash,
   int argc,
-  sqlite3_value **argv
+  sqlite3_value **argv,
+  int bForce
 ){
   struct TableEntry *aWorking = 0;
   struct TableEntry *aStaged = 0;
@@ -644,7 +648,7 @@ int doltliteStageNamedTables(
     int j;
     if( !zTable || strcmp(zTable, ".")==0 ) continue;
 
-    {
+    if( !bForce ){
       int ignored = 0;
       rc = addCheckIgnore(db, context, zTable, &ignored);
       if( rc!=SQLITE_OK ){
@@ -897,7 +901,8 @@ static int doltliteStageArgsAndPersist(
   ChunkStore *cs,
   int argc,
   sqlite3_value **argv,
-  int stageAll
+  int stageAll,
+  int bForce
 ){
   ProllyHash workingHash;
   ProllyHash savedStaged;
@@ -918,9 +923,10 @@ static int doltliteStageArgsAndPersist(
   }
 
   if( stageAll ){
-    rc = addStageAllTables(db, context, cs, &workingHash);
+    rc = addStageAllTables(db, context, cs, &workingHash, bForce);
   }else{
-    rc = doltliteStageNamedTables(db, context, cs, &workingHash, argc, argv);
+    rc = doltliteStageNamedTables(db, context, cs, &workingHash, argc, argv,
+                                  bForce);
   }
   if( rc!=SQLITE_OK ) return rc;
 
@@ -942,9 +948,11 @@ static void doltliteAddFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
   int stageAll = 0;
+  int force = 0;
   DoltliteCmdArgs args;
   DoltliteCmdOption aOption[] = {
-    { "all", 'A', DOLTLITE_CMD_OPTION_FLAG, &stageAll, 0 }
+    { "all", 'A', DOLTLITE_CMD_OPTION_FLAG, &stageAll, 0 },
+    { "force", 'f', DOLTLITE_CMD_OPTION_FLAG, &force, 0 }
   };
   int rc;
   int i;
@@ -981,7 +989,7 @@ static void doltliteAddFunc(
 
   parsed = 1;
   opRc = doltliteStageArgsAndPersist(
-      db, context, cs, nTables, args.apPositional, stageAll);
+      db, context, cs, nTables, args.apPositional, stageAll, force);
   if( opRc!=SQLITE_OK ) goto add_cleanup;
 
   sqlite3_result_int(context, 0);
@@ -991,7 +999,7 @@ add_cleanup:
     rc = doltliteVcSealTopLevelSavepointTxn(db);
     if( rc==SQLITE_OK && parsed && opRc==SQLITE_OK ){
       rc = doltliteStageArgsAndPersist(
-          db, context, cs, nTables, args.apPositional, stageAll);
+          db, context, cs, nTables, args.apPositional, stageAll, force);
       if( rc!=SQLITE_OK ){
         opRc = rc;
       }

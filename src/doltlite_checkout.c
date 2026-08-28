@@ -1101,7 +1101,7 @@ static int doltliteCheckoutTables(
     /* Checking a table out of a ref stages only that table. */
     if( rc==SQLITE_OK && zSourceRef ){
       rc = doltliteStageNamedTables(db, context, cs, &newWorkingHash,
-                                    nNames, argv+iFirstName);
+                                    nNames, argv+iFirstName, 0);
     }
     if( rc==SQLITE_OK ){
       rc = doltlitePersistWorkingSet(db);

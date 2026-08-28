@@ -1038,7 +1038,8 @@ int addAppendIndexEntriesOfTable(
 );
 int doltliteStageNamedTables(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
-  const ProllyHash *pWorkingHash, int argc, sqlite3_value **argv
+  const ProllyHash *pWorkingHash, int argc, sqlite3_value **argv,
+  int bForce
 );
 int doltliteCatalogRenameMate(
   sqlite3 *db,
