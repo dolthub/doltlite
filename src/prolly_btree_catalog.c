@@ -2030,13 +2030,13 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
 }
 
 
-int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
-  BtShared *pBt = doltliteGetBtShared(db);
-  Btree *pBtree;
+int doltliteFlushAndSerializeBtreeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
+  BtShared *pBt;
   int rc;
-  if( !pBt ) return SQLITE_ERROR;
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
-  pBtree = db->aDb[0].pBt;
+  if( !pBtree || !sqlite3BtreeIsDoltliteFormat(pBtree) || !pBtree->pBt ){
+    return SQLITE_ERROR;
+  }
+  pBt = pBtree->pBt;
   if( pBtree->inTrans==TRANS_WRITE ){
     rc = flushAllPending(pBtree, pBt, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -2047,10 +2047,15 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
 
   /* Fresh connections have only runtime sqlite_master; skip hash refresh. */
   if( pBtree->cat.n>1 ){
-    rc = doltliteUpdateSchemaHashes(db);
+    rc = doltliteUpdateSchemaHashesForBtree(pBtree);
     if( rc!=SQLITE_OK ) return rc;
   }
-  return serializeCatalog(db->aDb[0].pBt, ppOut, pnOut);
+  return serializeCatalog(pBtree, ppOut, pnOut);
+}
+
+int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return doltliteFlushAndSerializeBtreeCatalog(db->aDb[0].pBt, ppOut, pnOut);
 }
 
 int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData){
