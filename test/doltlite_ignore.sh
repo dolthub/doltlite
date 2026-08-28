@@ -113,6 +113,61 @@ run_test_match "incomparable_patterns_conflict" \
    SELECT dolt_add('-A');" \
   "matches conflicting patterns" "$DB3"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4"
+DB5=/tmp/test_ignore_force_$$.db
+rm -f "$DB5"
+
+run_test "force_add_named_ignored" \
+  "INSERT INTO dolt_ignore VALUES('tmp_*', 1);
+   CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
+   CREATE TABLE keep(id INTEGER PRIMARY KEY);
+   SELECT dolt_add('-f', 'tmp_secret');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;" \
+  "0
+dolt_ignore|0|new table
+keep|0|new table
+tmp_secret|1|new table" "$DB5"
+
+run_test "force_added_table_commits" \
+  "SELECT dolt_add('dolt_ignore', 'keep');
+   SELECT dolt_commit('-m','forced') IS NOT NULL;
+   SELECT count(*) FROM dolt_status;
+   INSERT INTO tmp_secret VALUES(1);
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;" \
+  "0
+1
+0
+tmp_secret|0|modified" "$DB5"
+
+DB6=/tmp/test_ignore_force_all_$$.db
+rm -f "$DB6"
+
+run_test "force_add_all_stages_ignored" \
+  "INSERT INTO dolt_ignore VALUES('tmp_*', 1);
+   CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
+   CREATE TABLE keep(id INTEGER PRIMARY KEY);
+   SELECT dolt_add('-A', '-f');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;" \
+  "0
+dolt_ignore|1|new table
+keep|1|new table
+tmp_secret|1|new table" "$DB6"
+
+DB7=/tmp/test_ignore_force_dot_$$.db
+rm -f "$DB7"
+
+run_test "force_add_dot_stages_ignored" \
+  "INSERT INTO dolt_ignore VALUES('tmp_*', 1);
+   CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
+   SELECT dolt_add('--force', '.');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;" \
+  "0
+dolt_ignore|1|new table
+tmp_secret|1|new table" "$DB7"
+
+run_test_match "force_requires_name" \
+  "SELECT dolt_add('-f');" \
+  "requires table name" "$DB7"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 
 dltest_finish

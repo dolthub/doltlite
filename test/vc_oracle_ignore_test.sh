@@ -244,6 +244,35 @@ CREATE TABLE keep(x INT PRIMARY KEY);
 SELECT dolt_add('keep');
 "
 
+echo "--- dolt_add -f ---"
+
+oracle "add_force_explicit_ignored" "
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+CREATE TABLE keep(x INT PRIMARY KEY);
+SELECT dolt_add('-f', 'tmp_foo');
+"
+
+oracle "add_force_long_option" "
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+SELECT dolt_add('--force', 'tmp_foo');
+"
+
+oracle "add_force_dash_A_stages_ignored" "
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+CREATE TABLE keep(x INT PRIMARY KEY);
+SELECT dolt_add('-A', '-f');
+"
+
+oracle "add_force_dot_stages_ignored" "
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+CREATE TABLE keep(x INT PRIMARY KEY);
+SELECT dolt_add('-f', '.');
+"
+
 echo "--- dolt_commit -A ---"
 
 oracle "commit_A_skips_ignored" "
