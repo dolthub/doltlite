@@ -11,6 +11,7 @@ doltlite_commit.sh
 doltlite_commit_date.sh
 doltlite_hashof_refs.sh
 doltlite_staging.sh
+doltlite_clean.sh
 doltlite_workspace.sh
 doltlite_docs.sh
 doltlite_tests.sh
@@ -160,6 +161,7 @@ doltlite_commit.sh
 doltlite_commit_date.sh
 doltlite_hashof_refs.sh
 doltlite_staging.sh
+doltlite_clean.sh
 doltlite_workspace.sh
 doltlite_docs.sh
 doltlite_tests.sh

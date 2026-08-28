@@ -833,7 +833,7 @@ proc emit_doltlite_engine_block {} {
     prolly_btree_mutation.c prolly_btree_orig.c prolly_btree_state.c
     prolly_btree_txn.c pager_shim.c sortkey.c
     doltlite_creds.c doltlite_tls.c
-    doltlite.c doltlite_core.c doltlite_cmd.c doltlite_add.c doltlite_commit_cmd.c
+    doltlite.c doltlite_core.c doltlite_cmd.c doltlite_add.c doltlite_clean.c doltlite_commit_cmd.c
     doltlite_reset.c doltlite_merge_cmd.c doltlite_cherry_pick.c
     doltlite_revert.c doltlite_rebase.c doltlite_config.c
     doltlite_commit.c doltlite_ref.c doltlite_log.c

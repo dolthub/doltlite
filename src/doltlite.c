@@ -31,6 +31,7 @@ int doltliteRegister(sqlite3 *db){
   int rc;
   if( (rc = doltliteCommitCmdRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteAddRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteCleanRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteResetRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteMergeCmdRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteCherryPickRegister(db))!=SQLITE_OK ) return rc;

@@ -1067,6 +1067,7 @@ int doltliteMergeRef(
 );
 
 int doltliteAddRegister(sqlite3 *db);
+int doltliteCleanRegister(sqlite3 *db);
 int doltliteCommitCmdRegister(sqlite3 *db);
 int doltliteResetRegister(sqlite3 *db);
 int doltliteMergeCmdRegister(sqlite3 *db);
