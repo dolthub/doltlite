@@ -258,19 +258,34 @@ int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty){
   }
 }
 
-int doltliteUpdateSchemaHashes(sqlite3 *db){
+int doltliteUpdateSchemaHashesForBtree(Btree *pBtree){
+  sqlite3 *db;
   sqlite3_stmt *pStmt = 0;
+  char *zSql = 0;
+  const char *zSchema = 0;
+  int i;
   int rc;
   int rc2;
   /* One sqlite_master scan for tables and indexes, keyed by rootpage.
   ** Virtual tables have rootpage 0 and no catalog entry. */
+  if( !pBtree ) return SQLITE_MISUSE;
+  db = pBtree->db;
   if( !db ) return SQLITE_MISUSE;
-  rc = sqlite3_prepare_v2(
-      db,
+  for(i=0; i<db->nDb; i++){
+    if( db->aDb[i].pBt==pBtree ){
+      zSchema = db->aDb[i].zDbSName;
+      break;
+    }
+  }
+  if( !zSchema ) zSchema = "main";
+  zSql = sqlite3_mprintf(
       "SELECT name, rootpage, sql "
-      "FROM main.sqlite_master "
+      "FROM \"%w\".sqlite_master "
       "WHERE type IN ('table','index') AND sql IS NOT NULL AND rootpage>0",
-      -1, &pStmt, 0);
+      zSchema);
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  sqlite3_free(zSql);
   if( rc!=SQLITE_OK ){
     sqlite3_finalize(pStmt);
     return rc;
@@ -281,6 +296,8 @@ int doltliteUpdateSchemaHashes(sqlite3 *db){
     const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
     ProllyHash h;
     char *zCanon;
+    int j;
+    int found = 0;
     if( !zName || !zCreate ){
       rc = db->mallocFailed ? SQLITE_NOMEM : SQLITE_CORRUPT;
       break;
@@ -300,7 +317,14 @@ int doltliteUpdateSchemaHashes(sqlite3 *db){
     }
     prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
     sqlite3_free(zCanon);
-    rc = doltliteSetTableSchemaHash(db, (Pgno)iRoot, &h);
+    for(j=0; j<pBtree->cat.n; j++){
+      if( pBtree->cat.a[j].iTable==(Pgno)iRoot ){
+        memcpy(&pBtree->cat.a[j].schemaHash, &h, sizeof(ProllyHash));
+        found = 1;
+        break;
+      }
+    }
+    rc = found ? SQLITE_OK : SQLITE_NOTFOUND;
     if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_CORRUPT;
     }
@@ -312,6 +336,11 @@ int doltliteUpdateSchemaHashes(sqlite3 *db){
   rc2 = sqlite3_finalize(pStmt);
   if( rc==SQLITE_OK ) rc = rc2;
   return rc;
+}
+
+int doltliteUpdateSchemaHashes(sqlite3 *db){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_MISUSE;
+  return doltliteUpdateSchemaHashesForBtree(db->aDb[0].pBt);
 }
 
 int doltliteLoadLiveSchemaSql(
@@ -457,16 +486,25 @@ int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
   return doltliteMutateRefsExpected(db, 0, 0, xMutate, pArg);
 }
 
-int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
-  ChunkStore *cs = doltliteGetChunkStore(db);
+static int doltliteFlushBtreeCatalogToHash(Btree *pBtree, ProllyHash *pHash){
+  ChunkStore *cs = doltliteBtreeChunkStore(pBtree);
   u8 *catData = 0;
   int nCatData = 0;
   int rc;
-  rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
-  if( rc!=SQLITE_OK ) return rc;
+  if( !cs ) return SQLITE_ERROR;
+  rc = doltliteFlushAndSerializeBtreeCatalog(pBtree, &catData, &nCatData);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(catData);
+    return rc;
+  }
   rc = chunkStorePut(cs, catData, nCatData, pHash);
   sqlite3_free(catData);
   return rc;
+}
+
+int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return doltliteFlushBtreeCatalogToHash(db->aDb[0].pBt, pHash);
 }
 
 int doltliteSerializeDb(sqlite3 *db, Btree *pBt,
@@ -474,10 +512,11 @@ int doltliteSerializeDb(sqlite3 *db, Btree *pBt,
   const char *zBranch = 0;
   ProllyHash liveHash;
   const void *pLive = 0;
-  if( db && db->nDb>0 && db->aDb[0].pBt==pBt ){
-    int rc = doltliteFlushCatalogToHash(db, &liveHash);
+  UNUSED_PARAMETER(db);
+  if( pBt && sqlite3BtreeIsDoltliteFormat(pBt) ){
+    int rc = doltliteFlushBtreeCatalogToHash(pBt, &liveHash);
     if( rc!=SQLITE_OK ) return rc;
-    zBranch = doltliteGetSessionBranch(db);
+    zBranch = pBt->zBranch ? pBt->zBranch : "main";
     pLive = &liveHash;
   }
   return doltliteBtreeSerialize(pBt, zBranch, pLive, ppData, pnData);

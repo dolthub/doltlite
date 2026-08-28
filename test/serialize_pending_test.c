@@ -122,6 +122,159 @@ static void createOnlyCase(const char *zPath){
   unlink(zPath);
 }
 
+static void unlinkDb(const char *zPath){
+  char zLock[512];
+  unlink(zPath);
+  snprintf(zLock, sizeof(zLock), "%s-lock", zPath);
+  unlink(zLock);
+}
+
+static void attachedDirtyTxnCase(const char *zMain, const char *zAux){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  unsigned char *p = 0;
+  sqlite3_int64 n = 0;
+  char *z;
+  char zSql[700];
+
+  unlinkDb(zMain);
+  unlinkDb(zAux);
+  check(sqlite3_open(zMain, &db)==SQLITE_OK, "open attached source");
+  snprintf(zSql, sizeof(zSql), "ATTACH '%s' AS aux;", zAux);
+  check(sqlite3_exec(db, zSql, 0, 0, 0)==SQLITE_OK, "attach aux");
+  check(sqlite3_exec(db,
+      "CREATE TABLE aux.t(a INTEGER PRIMARY KEY, b TEXT);"
+      "INSERT INTO aux.t VALUES(1,'committed');"
+      "BEGIN;"
+      "INSERT INTO aux.t VALUES(2,'dirty');"
+      "CREATE TABLE aux.u(x INT);"
+      "INSERT INTO aux.u VALUES(9);", 0, 0, 0)==SQLITE_OK,
+      "populate attached + dirty txn");
+
+  p = sqlite3_serialize(db, "aux", &n, 0);
+  check(p!=0 && n>0, "serialize attached returns image");
+
+  db2 = deserializeInto(p, n);
+  check(db2!=0, "deserialize attached image");
+  p = 0;
+  if( db2 ){
+    z = oneText(db2,
+        "SELECT group_concat(name) FROM sqlite_master"
+        " WHERE type='table' ORDER BY name");
+    check(z && strstr(z,"t") && strstr(z,"u"),
+          "attached image has both tables");
+    free(z);
+    z = oneText(db2, "SELECT group_concat(b) FROM t");
+    check(z && strstr(z,"committed") && strstr(z,"dirty"),
+          "attached image has committed and dirty rows");
+    free(z);
+    z = oneText(db2, "SELECT x FROM u");
+    check(z && strcmp(z,"9")==0, "attached image has dirty-only table");
+    free(z);
+    sqlite3_close(db2);
+  }
+
+  check(sqlite3_get_autocommit(db)==0, "attached source still in transaction");
+  check(sqlite3_exec(db, "COMMIT", 0, 0, 0)==SQLITE_OK,
+        "attached source commit after serialize");
+  z = oneText(db, "SELECT group_concat(b) FROM aux.t");
+  check(z && strstr(z,"committed") && strstr(z,"dirty"),
+        "attached commit keeps dirty row");
+  free(z);
+  sqlite3_close(db);
+  unlinkDb(zMain);
+  unlinkDb(zAux);
+}
+
+static void attachedCreateOnlyCase(const char *zMain, const char *zAux){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  unsigned char *p = 0;
+  sqlite3_int64 n = 0;
+  char *z;
+  char zSql[700];
+
+  unlinkDb(zMain);
+  unlinkDb(zAux);
+  check(sqlite3_open(zMain, &db)==SQLITE_OK, "open attached fresh source");
+  snprintf(zSql, sizeof(zSql), "ATTACH '%s' AS aux;", zAux);
+  check(sqlite3_exec(db, zSql, 0, 0, 0)==SQLITE_OK, "attach fresh aux");
+  check(sqlite3_exec(db,
+      "BEGIN; CREATE TABLE aux.only_dirty(x INT);"
+      "INSERT INTO aux.only_dirty VALUES(7);", 0, 0, 0)==SQLITE_OK,
+      "attached create-only dirty txn");
+  p = sqlite3_serialize(db, "aux", &n, 0);
+  check(p!=0 && n>0, "attached fresh-db serialize returns image");
+  db2 = deserializeInto(p, n);
+  check(db2!=0, "attached fresh-db image deserializes");
+  if( db2 ){
+    z = oneText(db2, "SELECT x FROM only_dirty");
+    check(z && strcmp(z,"7")==0,
+          "attached image has create-only table and row");
+    free(z);
+    sqlite3_close(db2);
+  }
+  sqlite3_close(db);
+  unlinkDb(zMain);
+  unlinkDb(zAux);
+}
+
+static void attachedDoesNotLeakIntoMain(const char *zMain, const char *zAux){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  unsigned char *p = 0;
+  sqlite3_int64 n = 0;
+  char *z;
+  char zSql[700];
+
+  unlinkDb(zMain);
+  unlinkDb(zAux);
+  check(sqlite3_open(zMain, &db)==SQLITE_OK, "open crosstalk source");
+  snprintf(zSql, sizeof(zSql), "ATTACH '%s' AS aux;", zAux);
+  check(sqlite3_exec(db, zSql, 0, 0, 0)==SQLITE_OK, "attach crosstalk aux");
+  check(sqlite3_exec(db,
+      "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);"
+      "INSERT INTO t VALUES(1,'main-committed');"
+      "CREATE TABLE aux.t(a INTEGER PRIMARY KEY, b TEXT);"
+      "INSERT INTO aux.t VALUES(1,'aux-committed');"
+      "BEGIN;"
+      "INSERT INTO t VALUES(2,'main-dirty');"
+      "INSERT INTO aux.t VALUES(2,'aux-dirty');", 0, 0, 0)==SQLITE_OK,
+      "populate main and aux dirty txns");
+
+  p = sqlite3_serialize(db, "main", &n, 0);
+  check(p!=0 && n>0, "serialize main with aux attached");
+  db2 = deserializeInto(p, n);
+  check(db2!=0, "deserialize main image");
+  p = 0;
+  if( db2 ){
+    z = oneText(db2, "SELECT group_concat(b) FROM t");
+    check(z && strstr(z,"main-committed") && strstr(z,"main-dirty")
+          && strstr(z,"aux-dirty")==0,
+          "main image has main dirty rows only");
+    free(z);
+    sqlite3_close(db2);
+  }
+
+  p = sqlite3_serialize(db, "aux", &n, 0);
+  check(p!=0 && n>0, "serialize aux with main dirty");
+  db2 = deserializeInto(p, n);
+  check(db2!=0, "deserialize aux image");
+  p = 0;
+  if( db2 ){
+    z = oneText(db2, "SELECT group_concat(b) FROM t");
+    check(z && strstr(z,"aux-committed") && strstr(z,"aux-dirty")
+          && strstr(z,"main-dirty")==0,
+          "aux image has aux dirty rows only");
+    free(z);
+    sqlite3_close(db2);
+  }
+
+  sqlite3_close(db);
+  unlinkDb(zMain);
+  unlinkDb(zAux);
+}
+
 static void nocopyCase(const char *zPath){
   sqlite3 *db = 0;
   unsigned char *p = 0;
@@ -149,6 +302,12 @@ static void nocopyCase(const char *zPath){
 int main(void){
   dirtyTxnCase("serialize_pending_test.db");
   createOnlyCase("serialize_pending_fresh_test.db");
+  attachedDirtyTxnCase("serialize_pending_attach_main.db",
+                       "serialize_pending_attach_aux.db");
+  attachedCreateOnlyCase("serialize_pending_attach_fresh_main.db",
+                         "serialize_pending_attach_fresh_aux.db");
+  attachedDoesNotLeakIntoMain("serialize_pending_crosstalk_main.db",
+                              "serialize_pending_crosstalk_aux.db");
   nocopyCase("serialize_pending_nocopy_test.db");
   if( failures ){
     fprintf(stderr, "%d failure(s)\n", failures);

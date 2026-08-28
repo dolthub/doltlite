@@ -42,6 +42,7 @@
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 int doltliteUpdateSchemaHashes(sqlite3 *db);
+int doltliteUpdateSchemaHashesForBtree(Btree *pBtree);
 int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
                               const char *zDb,
                               const char *zName, const char *zTblName,
@@ -735,6 +736,7 @@ void freeSavepointTables(struct SavepointTableState*);
 int snapshotPendingForFlush(Btree*, Pgno, ProllyMutMap**, ProllyMutMap**, int*);
 void btreeDiscardAllSavepoints(Btree*);
 int serializeCatalog(Btree*, u8**, int*);
+int doltliteFlushAndSerializeBtreeCatalog(Btree*, u8**, int*);
 int serializeCatalogForCommit(Btree*, u8**, int*);
 int deserializeCatalog(Btree*, const u8*, int);
 void initDefaultMeta(Btree*);
