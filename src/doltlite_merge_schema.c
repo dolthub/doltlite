@@ -1077,7 +1077,7 @@ int mergeColDefaultsLoad(
   if( rc!=SQLITE_OK ) goto done;
 
   zQuery = sqlite3_mprintf(
-      "SELECT cid, dflt_value FROM pragma_table_info(%Q) ORDER BY cid",
+      "SELECT cid, dflt_value, type FROM pragma_table_info(%Q) ORDER BY cid",
       zTable);
   if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
   rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
@@ -1101,6 +1101,7 @@ int mergeColDefaultsLoad(
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     int cid = sqlite3_column_int(pStmt, 0);
     const char *zDflt = (const char*)sqlite3_column_text(pStmt, 1);
+    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     sqlite3_stmt *pEval = 0;
     char *zEval;
     if( !zDflt || !zDflt[0] || cid<0 || cid>=pOut->nCol ) continue;
@@ -1109,22 +1110,25 @@ int mergeColDefaultsLoad(
     if( sqlite3_prepare_v2(tmp, zEval, -1, &pEval, 0)==SQLITE_OK
      && sqlite3_step(pEval)==SQLITE_ROW ){
       DoltliteSerialValue *m = &pOut->aVal[cid];
-      switch( sqlite3_column_type(pEval, 0) ){
+      sqlite3_value *pVal = sqlite3_column_value(pEval, 0);
+      sqlite3ValueApplyAffinity(
+          pVal, sqlite3AffinityType(zType ? zType : "", 0), SQLITE_UTF8);
+      switch( sqlite3_value_type(pVal) ){
         case SQLITE_INTEGER:
           m->eType = SQLITE_INTEGER;
-          m->i = sqlite3_column_int64(pEval, 0);
+          m->i = sqlite3_value_int64(pVal);
           break;
         case SQLITE_FLOAT:
           m->eType = SQLITE_FLOAT;
-          m->r = sqlite3_column_double(pEval, 0);
+          m->r = sqlite3_value_double(pVal);
           break;
         case SQLITE_TEXT:
         case SQLITE_BLOB: {
-          int isText = sqlite3_column_type(pEval, 0)==SQLITE_TEXT;
+          int isText = sqlite3_value_type(pVal)==SQLITE_TEXT;
           const void *p = isText
-              ? (const void*)sqlite3_column_text(pEval, 0)
-              : sqlite3_column_blob(pEval, 0);
-          int n = sqlite3_column_bytes(pEval, 0);
+              ? (const void*)sqlite3_value_text(pVal)
+              : sqlite3_value_blob(pVal);
+          int n = sqlite3_value_bytes(pVal);
           u8 *pCopy = 0;
           if( n>0 ){
             pCopy = sqlite3_malloc(n);

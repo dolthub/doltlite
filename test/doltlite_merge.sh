@@ -687,9 +687,9 @@ run_test "delete_vs_add_column_default_rows" "SELECT group_concat(id || ':' || a
 DB45=/tmp/test_merge45_$$.db; rm -f "$DB45"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX tv ON t(v); INSERT INTO t VALUES(1,'one'),(2,'two'),(3,'three'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB45" > /dev/null 2>&1
 echo "DELETE FROM t WHERE id=2; SELECT dolt_commit('-A','-m','delete row');" | $DOLTLITE "$DB45/feature" > /dev/null 2>&1
-echo "ALTER TABLE t ADD COLUMN added TEXT NOT NULL DEFAULT 'dd'; SELECT dolt_commit('-A','-m','add col');" | $DOLTLITE "$DB45" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN added TEXT NOT NULL DEFAULT 7; SELECT dolt_commit('-A','-m','add col');" | $DOLTLITE "$DB45" > /dev/null 2>&1
 run_test_match "add_column_default_vs_delete_merges" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB45"
-run_test "add_column_default_vs_delete_rows" "SELECT group_concat(id || ':' || added, ',') FROM (SELECT id,added FROM t INDEXED BY tv ORDER BY v);" "1:dd,3:dd" "$DB45"
+run_test "add_column_default_vs_delete_rows" "SELECT group_concat(id || ':' || quote(added), ',') FROM (SELECT id,added FROM t INDEXED BY tv ORDER BY v);" "1:'7',3:'7'" "$DB45"
 run_test "add_column_default_vs_delete_integrity" "PRAGMA integrity_check;" "ok" "$DB45"
 
 DB46=/tmp/test_merge46_$$.db; rm -f "$DB46"
