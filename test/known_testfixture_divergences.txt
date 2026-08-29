@@ -77,42 +77,46 @@ corrupt corrupt-5.2 class=intentional  # hexio lands on CTLD bytes, not btree ce
 corrupt corrupt-8.1 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-8.2 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 
-# ── canonical adoption (per-entry class) ──
-altercol altercol-1.13.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-1.17.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-1.5.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-1.6.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-11.1 class=engine-gap issue=1200  # canonical adoption: sqlite_master row order after schema commit
-altercol altercol-2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-22.0 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-4.1 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-4.4 class=engine-gap issue=1200  # canonical adoption: row order and canonicalized SQL text after schema commit
-altercons2 altercons2-1.2.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-1.4.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-12.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-12.5 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-4.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-6.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-9.1 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-alterqf alterqf-2.1 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-1.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-17.0 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-18.1.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-18.2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-19.100 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-23.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-23.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-24.2.1 class=engine-gap issue=1200  # canonical adoption: reparse order changes which malformed object reports the missing-table error
-altertab altertab-30.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-2.1 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-2.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.1.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.3.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.4.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-check check-4.6 class=engine-gap issue=1200  # canonical adoption: sqlite_master row order after schema commit
-check check-4.9 class=engine-gap issue=1200  # canonical adoption: sqlite_master row order after schema commit
+# ── canonical adoption ──
+# sqlite_master is a projection of the prolly catalog (#1852): CREATE text is
+# canonicalized on schema commit and row order follows the catalog, not DDL
+# order. That is the storage model, not an engine-gap. #1200 tracks the SQL
+# spelling / CHECK-message side of the same projection.
+altercol altercol-1.13.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-1.17.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-1.5.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-1.6.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-11.1 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
+altercol altercol-2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-22.0 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-4.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-4.4 class=intentional issue=1200  # canonical adoption: row order and canonicalized SQL text after schema commit
+altercons2 altercons2-1.2.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-1.4.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-12.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-12.5 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-4.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-6.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-9.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+alterqf alterqf-2.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-1.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-17.0 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-18.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-18.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-19.100 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-23.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-23.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-24.2.1 class=intentional issue=1200  # canonical adoption: reparse order changes which malformed object reports the missing-table error
+altertab altertab-30.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-2.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-2.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.3.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.4.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+check check-4.6 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
+check check-4.9 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
 fts3fault2 fts3fault2-8.0 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 fts3matchinfo fts3matchinfo-1.0 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 fts4langid fts4langid-1.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
@@ -813,92 +817,95 @@ tkt-2d1a5c67d tkt-2d1a5c67d-3.6 class=intentional
 # Every assertion needs two on-disk connections + a testvfs snapshot: 1.4/2.3 expect
 # "database is locked" (doltlite has no pager write-lock), 1.5/2.4/2.5 ride on that
 # locked state. The single-connection row data (1|2 3|4 1|2 3|4) matches stock.
-altercol altercol-18.0 class=engine-gap issue=944
-attach2 attach2-4.13 class=engine-gap issue=944
-attach2 attach2-5.2 class=engine-gap issue=944
-attach2 attach2-5.4 class=engine-gap issue=944
-attach2 attach2-6.1 class=engine-gap issue=944
-attach4 attach4-1.3 class=engine-gap issue=944
-attach4 attach4-1.4 class=engine-gap issue=944
-attach4 attach4-1.5 class=engine-gap issue=944
-attach4 attach4-1.6 class=engine-gap issue=944
-attach4 attach4-1.7 class=engine-gap issue=944
-attach4 attach4-1.8 class=engine-gap issue=944
-cacheflush cacheflush-2.1.5 class=engine-gap issue=944
-cacheflush cacheflush-2.2.1 class=engine-gap issue=944
-cacheflush cacheflush-2.2.2 class=engine-gap issue=944
-cacheflush cacheflush-2.2.4 class=engine-gap issue=944
-cacheflush cacheflush-2.2.7 class=engine-gap issue=944
-e_delete e_delete-2.3.2 class=engine-gap issue=944
-e_delete e_delete-2.3.3 class=engine-gap issue=944
-jrnlmode jrnlmode-2.3 class=engine-gap issue=944
-jrnlmode jrnlmode-2.5 class=engine-gap issue=944
-jrnlmode jrnlmode-3.2 class=engine-gap issue=944
-jrnlmode jrnlmode-6.9 class=engine-gap issue=944
-ioerr ioerr-5.11.3 class=engine-gap issue=944
-savepoint savepoint-10.2.9 class=engine-gap issue=944
-savepoint savepoint-10.2.10 class=engine-gap issue=944
-savepoint savepoint-10.2.11 class=engine-gap issue=944
-savepoint savepoint-10.2.12 class=engine-gap issue=944
-savepoint savepoint-10.2.13 class=engine-gap issue=944
-sync sync-1.4 class=engine-gap issue=944
-syscall syscall-4.2.wal.1 class=engine-gap issue=944
-syscall syscall-4.2.wal.2 class=engine-gap issue=944
-syscall syscall-4.2.wal.3 class=engine-gap issue=944
-syscall syscall-4.2.wal.4 class=engine-gap issue=944
-syscall syscall-4.2.wal.5 class=engine-gap issue=944
-syscall syscall-4.2.wal.6 class=engine-gap issue=944
-syscall syscall-4.2.wal.7 class=engine-gap issue=944
-syscall syscall-4.2.wal.8 class=engine-gap issue=944
-syscall syscall-4.2.wal.9 class=engine-gap issue=944
-syscall syscall-4.2.wal.10 class=engine-gap issue=944
-syscall syscall-4.2.wal.11 class=engine-gap issue=944
-syscall syscall-4.2.wal.12 class=engine-gap issue=944
-syscall syscall-4.2.wal.13 class=engine-gap issue=944
-syscall syscall-4.2.wal.14 class=engine-gap issue=944
-syscall syscall-4.2.wal.15 class=engine-gap issue=944
-syscall syscall-4.2.wal.16 class=engine-gap issue=944
-syscall syscall-4.2.wal.17 class=engine-gap issue=944
-syscall syscall-4.2.wal.18 class=engine-gap issue=944
-syscall syscall-4.2.wal.19 class=engine-gap issue=944
-syscall syscall-4.2.delete.1 class=engine-gap issue=944
-syscall syscall-4.2.delete.2 class=engine-gap issue=944
-syscall syscall-4.2.delete.3 class=engine-gap issue=944
-syscall syscall-4.2.delete.4 class=engine-gap issue=944
-syscall syscall-4.2.delete.5 class=engine-gap issue=944
-syscall syscall-4.2.delete.6 class=engine-gap issue=944
-syscall syscall-4.2.delete.7 class=engine-gap issue=944
-syscall syscall-4.2.delete.8 class=engine-gap issue=944
-syscall syscall-4.2.delete.9 class=engine-gap issue=944
-syscall syscall-4.2.delete.10 class=engine-gap issue=944
-syscall syscall-4.2.delete.11 class=engine-gap issue=944
-syscall syscall-4.2.delete.12 class=engine-gap issue=944
-syscall syscall-4.2.delete.13 class=engine-gap issue=944
-syscall syscall-4.2.delete.14 class=engine-gap issue=944
-syscall syscall-4.2.delete.15 class=engine-gap issue=944
-syscall syscall-4.2.delete.16 class=engine-gap issue=944
-syscall syscall-4.2.delete.17 class=engine-gap issue=944
-syscall syscall-4.2.delete.18 class=engine-gap issue=944
-syscall syscall-4.2.delete.19 class=engine-gap issue=944
-temptrigger temptrigger-7.1 class=engine-gap issue=944
-temptrigger temptrigger-7.3.2 class=engine-gap issue=944
-temptrigger temptrigger-8.1.2 class=engine-gap issue=944
-temptrigger temptrigger-8.2.2 class=engine-gap issue=944
-temptrigger temptrigger-8.3.2 class=engine-gap issue=944
-trigger1 trigger1-10.3 class=engine-gap issue=944
-trigger1 trigger1-10.4 class=engine-gap issue=944
-trigger1 trigger1-10.6 class=engine-gap issue=944
-trigger1 trigger1-10.7 class=engine-gap issue=944
-trigger1 trigger1-10.8 class=engine-gap issue=944
-trigger1 trigger1-10.10 class=engine-gap issue=944
-trigger1 trigger1-10.11 class=engine-gap issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.2 class=engine-gap issue=944
-vtab7 vtab7-3.1 class=engine-gap issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-1.4 class=engine-gap issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-1.5 class=engine-gap issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.3 class=engine-gap issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.4 class=engine-gap issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.5 class=engine-gap issue=944
+# Multi-file writes are rejected (README / contract transaction.multifile_write).
+# These assertions expect SQLite super-journal 2PC; that is unsupported, not
+# an engine-gap to implement later.
+altercol altercol-18.0 class=unsupported issue=944
+attach2 attach2-4.13 class=unsupported issue=944
+attach2 attach2-5.2 class=unsupported issue=944
+attach2 attach2-5.4 class=unsupported issue=944
+attach2 attach2-6.1 class=unsupported issue=944
+attach4 attach4-1.3 class=unsupported issue=944
+attach4 attach4-1.4 class=unsupported issue=944
+attach4 attach4-1.5 class=unsupported issue=944
+attach4 attach4-1.6 class=unsupported issue=944
+attach4 attach4-1.7 class=unsupported issue=944
+attach4 attach4-1.8 class=unsupported issue=944
+cacheflush cacheflush-2.1.5 class=unsupported issue=944
+cacheflush cacheflush-2.2.1 class=unsupported issue=944
+cacheflush cacheflush-2.2.2 class=unsupported issue=944
+cacheflush cacheflush-2.2.4 class=unsupported issue=944
+cacheflush cacheflush-2.2.7 class=unsupported issue=944
+e_delete e_delete-2.3.2 class=unsupported issue=944
+e_delete e_delete-2.3.3 class=unsupported issue=944
+jrnlmode jrnlmode-2.3 class=unsupported issue=944
+jrnlmode jrnlmode-2.5 class=unsupported issue=944
+jrnlmode jrnlmode-3.2 class=unsupported issue=944
+jrnlmode jrnlmode-6.9 class=unsupported issue=944
+ioerr ioerr-5.11.3 class=unsupported issue=944
+savepoint savepoint-10.2.9 class=unsupported issue=944
+savepoint savepoint-10.2.10 class=unsupported issue=944
+savepoint savepoint-10.2.11 class=unsupported issue=944
+savepoint savepoint-10.2.12 class=unsupported issue=944
+savepoint savepoint-10.2.13 class=unsupported issue=944
+sync sync-1.4 class=unsupported issue=944
+syscall syscall-4.2.wal.1 class=unsupported issue=944
+syscall syscall-4.2.wal.2 class=unsupported issue=944
+syscall syscall-4.2.wal.3 class=unsupported issue=944
+syscall syscall-4.2.wal.4 class=unsupported issue=944
+syscall syscall-4.2.wal.5 class=unsupported issue=944
+syscall syscall-4.2.wal.6 class=unsupported issue=944
+syscall syscall-4.2.wal.7 class=unsupported issue=944
+syscall syscall-4.2.wal.8 class=unsupported issue=944
+syscall syscall-4.2.wal.9 class=unsupported issue=944
+syscall syscall-4.2.wal.10 class=unsupported issue=944
+syscall syscall-4.2.wal.11 class=unsupported issue=944
+syscall syscall-4.2.wal.12 class=unsupported issue=944
+syscall syscall-4.2.wal.13 class=unsupported issue=944
+syscall syscall-4.2.wal.14 class=unsupported issue=944
+syscall syscall-4.2.wal.15 class=unsupported issue=944
+syscall syscall-4.2.wal.16 class=unsupported issue=944
+syscall syscall-4.2.wal.17 class=unsupported issue=944
+syscall syscall-4.2.wal.18 class=unsupported issue=944
+syscall syscall-4.2.wal.19 class=unsupported issue=944
+syscall syscall-4.2.delete.1 class=unsupported issue=944
+syscall syscall-4.2.delete.2 class=unsupported issue=944
+syscall syscall-4.2.delete.3 class=unsupported issue=944
+syscall syscall-4.2.delete.4 class=unsupported issue=944
+syscall syscall-4.2.delete.5 class=unsupported issue=944
+syscall syscall-4.2.delete.6 class=unsupported issue=944
+syscall syscall-4.2.delete.7 class=unsupported issue=944
+syscall syscall-4.2.delete.8 class=unsupported issue=944
+syscall syscall-4.2.delete.9 class=unsupported issue=944
+syscall syscall-4.2.delete.10 class=unsupported issue=944
+syscall syscall-4.2.delete.11 class=unsupported issue=944
+syscall syscall-4.2.delete.12 class=unsupported issue=944
+syscall syscall-4.2.delete.13 class=unsupported issue=944
+syscall syscall-4.2.delete.14 class=unsupported issue=944
+syscall syscall-4.2.delete.15 class=unsupported issue=944
+syscall syscall-4.2.delete.16 class=unsupported issue=944
+syscall syscall-4.2.delete.17 class=unsupported issue=944
+syscall syscall-4.2.delete.18 class=unsupported issue=944
+syscall syscall-4.2.delete.19 class=unsupported issue=944
+temptrigger temptrigger-7.1 class=unsupported issue=944
+temptrigger temptrigger-7.3.2 class=unsupported issue=944
+temptrigger temptrigger-8.1.2 class=unsupported issue=944
+temptrigger temptrigger-8.2.2 class=unsupported issue=944
+temptrigger temptrigger-8.3.2 class=unsupported issue=944
+trigger1 trigger1-10.3 class=unsupported issue=944
+trigger1 trigger1-10.4 class=unsupported issue=944
+trigger1 trigger1-10.6 class=unsupported issue=944
+trigger1 trigger1-10.7 class=unsupported issue=944
+trigger1 trigger1-10.8 class=unsupported issue=944
+trigger1 trigger1-10.10 class=unsupported issue=944
+trigger1 trigger1-10.11 class=unsupported issue=944
+tkt-f3e5abed55 tkt-f3e5abed55-2.2 class=unsupported issue=944
+vtab7 vtab7-3.1 class=unsupported issue=944
+tkt-f3e5abed55 tkt-f3e5abed55-1.4 class=unsupported issue=944
+tkt-f3e5abed55 tkt-f3e5abed55-1.5 class=unsupported issue=944
+tkt-f3e5abed55 tkt-f3e5abed55-2.3 class=unsupported issue=944
+tkt-f3e5abed55 tkt-f3e5abed55-2.4 class=unsupported issue=944
+tkt-f3e5abed55 tkt-f3e5abed55-2.5 class=unsupported issue=944
 
 # capi3 — C-API behaviors that diverge from stock sqlite at the error-code,
 # open-timing, locking, and catalog level (not row data). Recovered into the
@@ -1006,13 +1013,13 @@ alter3 alter3-1.5 class=intentional issue=1852  # canonical adoption: canonicali
 # chunk store, not SQLite pages, so page_count is not a stable per-table page
 # metric and differs. Raw page-format pragma; the drop itself is correct
 # (altertab3-31.2 reads the surviving column back as 5.0).
-altertab3 altertab3-31.1 class=engine-gap issue=1200  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
-altertab3 altertab3-27.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab3 altertab3-32.1.2 class=engine-gap issue=1200  # canonical adoption: sqlite_master row order after schema commit
-altertab3 altertab3-32.2.2 class=engine-gap issue=1200  # canonical adoption: sqlite_master row order after schema commit
-altertab3 altertab3-7.1.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab3 altertab3-8.1 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab3 altertab3-8.2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-31.1 class=intentional issue=1846  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
+altertab3 altertab3-27.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-32.1.2 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
+altertab3 altertab3-32.2.2 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
+altertab3 altertab3-7.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-8.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-8.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
 
 # altercol — three divergence classes, none in the ALTER rename itself:
 #   * 11.1: order of rows returned from sqlite_schema. DoltLite returns catalog
@@ -1024,23 +1031,23 @@ altertab3 altertab3-8.2.2 class=engine-gap issue=1200  # canonical adoption: can
 #     CREATE TABLE text after DROP COLUMN ("... PRIMARY KEY) " vs "...)").
 #   * altercons 6.4.1: DoltLite normalizes "CHECK (expr)" to "CHECK(expr)" in
 #     stored DDL.
-altercons altercons-3.8.2 class=engine-gap issue=1200  # trailing space in rewritten DDL after DROP COLUMN
-altercons altercons-1.15.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.19.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.21.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.22.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.8.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-3.10.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-3.11.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-3.9.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.3.1.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.3.2.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.3.3.3 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.4.1 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-8.1.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-8.2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-9.2.2 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-9.2.4 class=engine-gap issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.8.2 class=intentional issue=1200  # trailing space in rewritten DDL after DROP COLUMN
+altercons altercons-1.15.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.19.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.21.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.22.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.8.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.10.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.11.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.9.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.3.1.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.3.2.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.3.3.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.4.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-8.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-8.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-9.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-9.2.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
 
 # limit2 — limit2-110.3 compares sqlite_search_count between an indexed and an
 # unindexed ORDER BY ... LIMIT, asserting the indexed plan scans <2% as many

@@ -108,4 +108,12 @@ run_test "multifile_trigger_rolls_back_main" \
 run_test "multifile_trigger_rolls_back_attached" \
   "ATTACH '$AUX_DB' AS aux; SELECT count(*) FROM aux.t4;" "0" "$MAIN_DB"
 
+CANON_DB="$TMP/sqlite-master-canonical.db"
+run_test_lastline "sqlite_master_sql_canonical" \
+  "CREATE TABLE t(a INTEGER PRIMARY KEY,   b   TEXT  );
+SELECT dolt_commit('-Am','c');
+SELECT sql FROM sqlite_master WHERE name='t';" \
+  "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT)" \
+  "$CANON_DB"
+
 dltest_finish

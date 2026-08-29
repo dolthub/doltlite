@@ -795,6 +795,12 @@ For a DoltLite-format main database, the compatibility contract is:
   rowid tables still allow NULL in a TEXT, `INT`, `INTEGER PRIMARY KEY DESC`,
   or composite PK. TEMP tables are not clustered and keep SQLite's nullable
   PK. An `INTEGER PRIMARY KEY` remains a rowid alias.
+- `sqlite_master` / `sqlite_schema` is a projection of the prolly catalog,
+  not a stored table of verbatim DDL. After a schema commit, `sql` is the
+  canonical `CREATE` text (whitespace and quoting normalized) and row order
+  follows the catalog, not insertion order. `CHECK` constraint error messages
+  follow that canonical form. Query results and constraint enforcement are
+  unchanged.
 - `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
   attached database, as one operation; its page-count argument is not
   incremental. File-backed and in-memory DoltLite databases can be copied in
