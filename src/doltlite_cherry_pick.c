@@ -366,6 +366,11 @@ static void doltliteCherryPickFunc(
   const char *zRef;
   ProllyHash pickHash, ourHead;
   DoltliteCommit pickCommit, parentCommit, ourCommit;
+  DoltliteCmdArgs args;
+  int isAbort = 0;
+  DoltliteCmdOption aOption[] = {
+    { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 }
+  };
   int nConflicts = 0;
   int dirty = 0;
   int rc;
@@ -382,17 +387,41 @@ static void doltliteCherryPickFunc(
     sqlite3_result_error(context, "usage: dolt_cherry_pick('commit_hash')", -1);
     return;
   }
-  if( argc>1 ){
+
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) return;
+  if( args.nPositional>1 ){
+    doltliteCmdArgsClear(&args);
     sqlite3_result_error(context,
       "cherry-picking multiple commits is not supported yet.", -1);
     return;
   }
+  if( isAbort ){
+    u8 isMerging = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( !isMerging && !doltliteSessionHasPendingReplayCommit(db) ){
+      doltliteCmdArgsClear(&args);
+      sqlite3_result_error(context, "no cherry-pick in progress", -1);
+      return;
+    }
+    rc = mergeAbortInPlace(db);
+    doltliteCmdArgsClear(&args);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+    sqlite3_result_int(context, 0);
+    return;
+  }
 
-  zRef = (const char*)sqlite3_value_text(argv[0]);
+  zRef = args.nPositional==1 ? args.azPositional[0] : 0;
   if( !zRef ){
+    doltliteCmdArgsClear(&args);
     sqlite3_result_error(context, "commit hash required", -1);
     return;
   }
+  doltliteCmdArgsClear(&args);
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
