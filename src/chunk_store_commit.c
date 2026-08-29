@@ -591,6 +591,7 @@ int chunkStoreCommit(ChunkStore *cs){
     return SQLITE_READONLY;
   }
   rc = csCommitToFile(cs);
+  if( rc==SQLITE_OK && !cs->isBuffer ) csGenBump(cs);
   if( acquiredLock ) chunkStoreUnlock(cs);
   return rc;
 }

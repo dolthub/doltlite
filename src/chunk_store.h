@@ -201,7 +201,19 @@ struct ChunkStore {
   /* Block checkpoint reentry via VFS write hooks. */
   int checkpointActive;
   sqlite3_vfs *pOwnedVfs;
+
+  /* Cross-process change hint: an 8-byte generation counter mapped from
+  ** the lock sidecar. Publishers bump it; readers skip the per-statement
+  ** stat while it is unchanged, with a timed stat as the safety net for
+  ** publishers that do not bump (older versions). Absent map (Windows,
+  ** map failure) keeps the stat-per-statement path. */
+  volatile unsigned char *pGenMap;
+  u64 lastSeenGen;
+  i64 iLastDetectMs;
 };
+
+void csGenMapClose(ChunkStore *cs);
+void csGenBump(ChunkStore *cs);
 
 void csManifestSeal(u8 *aBuf, i64 iOffset);
 int csManifestHashState(const u8 *aBuf, i64 iOffset);

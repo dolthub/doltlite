@@ -1225,6 +1225,74 @@ backup_missing_branch_done:
   removeDbFiles(zDest);
 }
 
+/* Prepared statements must survive a peer's data-only commit (the schema
+** cookie is derived from schema-bearing catalog bytes, not table roots)
+** and must still invalidate on a peer's DDL. */
+static void run_peer_commit_keeps_statements(void){
+  sqlite3 *a = 0;
+  sqlite3 *b = 0;
+  sqlite3_stmt *pStmt = 0;
+  char dbpath[512];
+  int reprep;
+  int rc;
+
+  make_dbpath(dbpath, sizeof(dbpath), "peer_commit_stmt");
+  removeDbFiles(dbpath);
+
+  check("pcks_open_a", open_db(dbpath, &a)==SQLITE_OK);
+  check("pcks_seed", execSql(a,
+    "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'first');"
+    "SELECT dolt_commit('-Am','seed');")==SQLITE_OK);
+  check("pcks_open_b", open_db(dbpath, &b)==SQLITE_OK);
+  if( a==0 || b==0 ) goto pcks_done;
+
+  /* Settle: a's locally-created schema carries the counter cookie; the
+  ** first reload swaps to the derived one. The contract under test is
+  ** steady-state data commits. */
+  check("pcks_settle_commit", execSql(b,
+    "UPDATE t SET v='settled' WHERE k=1;"
+    "SELECT dolt_commit('-Am','settle');")==SQLITE_OK);
+  check("pcks_settle_read",
+        strcmp(queryScalarText(a, "SELECT v FROM t WHERE k=1"), "settled")==0);
+
+  rc = sqlite3_prepare_v2(a, "SELECT v FROM t WHERE k=1", -1, &pStmt, 0);
+  check("pcks_prepare", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto pcks_done;
+  check("pcks_first_read",
+        sqlite3_step(pStmt)==SQLITE_ROW
+        && strcmp((const char*)sqlite3_column_text(pStmt,0), "settled")==0);
+  sqlite3_reset(pStmt);
+
+  check("pcks_peer_data_commit", execSql(b,
+    "UPDATE t SET v='second' WHERE k=1;"
+    "SELECT dolt_commit('-Am','peer-data');")==SQLITE_OK);
+
+  check("pcks_sees_peer_write",
+        sqlite3_step(pStmt)==SQLITE_ROW
+        && strcmp((const char*)sqlite3_column_text(pStmt,0), "second")==0);
+  sqlite3_reset(pStmt);
+  reprep = sqlite3_stmt_status(pStmt, SQLITE_STMTSTATUS_REPREPARE, 0);
+  check("pcks_no_reprepare_on_data_commit", reprep==0);
+
+  check("pcks_peer_ddl_commit", execSql(b,
+    "ALTER TABLE t ADD COLUMN z TEXT;"
+    "SELECT dolt_commit('-Am','peer-ddl');")==SQLITE_OK);
+  check("pcks_survives_ddl",
+        sqlite3_step(pStmt)==SQLITE_ROW
+        && strcmp((const char*)sqlite3_column_text(pStmt,0), "second")==0);
+  sqlite3_reset(pStmt);
+  reprep = sqlite3_stmt_status(pStmt, SQLITE_STMTSTATUS_REPREPARE, 0);
+  check("pcks_reprepares_on_ddl", reprep>=1);
+
+pcks_done:
+  if( pStmt ) sqlite3_finalize(pStmt);
+  if( a ) sqlite3_close(a);
+  if( b ) sqlite3_close(b);
+  removeDbFiles(dbpath);
+}
+
+
 static void run_integer_pk_autocommit_append_correctness(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -13881,6 +13949,7 @@ static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "backup_dest_missing_branch", "Backup Dest Missing Branch Test", run_backup_dest_missing_branch },
+  { "peer_commit_keeps_statements", "Peer Commit Keeps Statements Test", run_peer_commit_keeps_statements },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
   { "serialize_deserialize", "Serialize Deserialize Test", run_serialize_deserialize },

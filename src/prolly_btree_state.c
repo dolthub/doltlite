@@ -552,6 +552,8 @@ int btreeRefreshFromDisk(Btree *p){
   u8 snapshotPinned;
   int bAutocommitBoundary;
   ProllyHash loadedCatHash;
+  ProllyHash oldTip, oldWs;
+  int hadOldTip = 0;
   int rc;
 
   assert( p!=0 && p->pBt!=0 );
@@ -559,6 +561,16 @@ int btreeRefreshFromDisk(Btree *p){
   snapshotPinned = pBt->store.snapshotPinned;
   bAutocommitBoundary = p->inTrans==TRANS_NONE
     && p->db && p->db->autoCommit && !p->db->pSavepoint;
+
+  memset(&oldTip, 0, sizeof(oldTip));
+  memset(&oldWs, 0, sizeof(oldWs));
+  if( !p->isDetached ){
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    if( chunkStoreFindBranch(&pBt->store, zBr, &oldTip)==SQLITE_OK ){
+      hadOldTip = 1;
+      (void)chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &oldWs);
+    }
+  }
 
   if( bAutocommitBoundary ){
     pBt->store.snapshotPinned = 0;
@@ -570,6 +582,22 @@ int btreeRefreshFromDisk(Btree *p){
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
   if( p->isDetached ) return SQLITE_OK;
+
+  /* Peers moved other branches only: this session's view is intact, so
+  ** keep its catalog and prepared statements undisturbed. */
+  if( hadOldTip ){
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    ProllyHash newTip, newWs;
+    memset(&newTip, 0, sizeof(newTip));
+    memset(&newWs, 0, sizeof(newWs));
+    if( chunkStoreFindBranch(&pBt->store, zBr, &newTip)==SQLITE_OK
+     && prollyHashCompare(&newTip, &oldTip)==0 ){
+      (void)chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &newWs);
+      if( prollyHashCompare(&newWs, &oldWs)==0 ){
+        return SQLITE_OK;
+      }
+    }
+  }
 
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));
   rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);

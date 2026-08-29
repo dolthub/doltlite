@@ -1881,6 +1881,84 @@ void initDefaultMeta(Btree *pBtree){
 
 }
 
+/* Schema cookie over the schema-bearing catalog bytes only. Table roots
+** change on every data commit; hashing them expired every prepared
+** statement on every peer (and own) commit. The master entry's root
+** (iTable<=1) carries the sqlite_master rows, so it stays in. Any walk
+** disagreement falls back to the whole blob — over-invalidation is safe,
+** under-invalidation is not. */
+static u32 catalogSchemaCookie(
+  const u8 *data, int nData,
+  int iFormat, int nTables, const u8 *pEntries
+){
+  const u8 *q = pEntries;
+  const u8 *end = data + nData;
+  u8 *buf;
+  int n = 0;
+  int i;
+  ProllyHash h;
+
+  if( nData<0 || nData>0x7ffffff0 ) goto whole_blob;
+  buf = sqlite3_malloc(nData+16);
+  if( !buf ) goto whole_blob;
+  buf[n++] = (u8)iFormat;
+  buf[n++] = (u8)(nTables & 0xff);
+  buf[n++] = (u8)((nTables>>8) & 0xff);
+  buf[n++] = (u8)((nTables>>16) & 0xff);
+  buf[n++] = (u8)((nTables>>24) & 0xff);
+  for(i=0; i<nTables; i++){
+    Pgno iTable;
+    if( q+4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE > end ) goto walk_mismatch;
+    iTable = (Pgno)prollyBtreeGetU32LE(q);
+    memcpy(buf+n, q, 5);
+    n += 5;
+    q += 5;
+    if( iTable<=1 ){
+      memcpy(buf+n, q, PROLLY_HASH_SIZE);
+      n += PROLLY_HASH_SIZE;
+    }
+    q += PROLLY_HASH_SIZE;
+    memcpy(buf+n, q, PROLLY_HASH_SIZE);
+    n += PROLLY_HASH_SIZE;
+    q += PROLLY_HASH_SIZE;
+    if( iFormat!=CATALOG_FORMAT_V3 ){
+      int nType, nName, nTbl;
+      if( q+6 > end ) goto walk_mismatch;
+      nType = q[0] | (q[1]<<8);
+      nName = q[2] | (q[3]<<8);
+      nTbl = q[4] | (q[5]<<8);
+      if( q+6+nType+nName+nTbl > end ) goto walk_mismatch;
+      memcpy(buf+n, q, 6+nType+nName+nTbl);
+      n += 6+nType+nName+nTbl;
+      q += 6+nType+nName+nTbl;
+    }else{
+      int nLen;
+      if( q+2 > end ) goto walk_mismatch;
+      nLen = q[0] | (q[1]<<8);
+      if( q+2+nLen > end ) goto walk_mismatch;
+      memcpy(buf+n, q, 2+nLen);
+      n += 2+nLen;
+      q += 2+nLen;
+    }
+  }
+  if( q!=end ) goto walk_mismatch;
+  prollyHashCompute(buf, n, &h);
+  sqlite3_free(buf);
+  return (((u32)h.data[0])
+        | ((u32)h.data[1] << 8)
+        | ((u32)h.data[2] << 16)
+        | ((u32)h.data[3] << 24)) | 1;
+
+walk_mismatch:
+  sqlite3_free(buf);
+whole_blob:
+  prollyHashCompute(data, nData, &h);
+  return (((u32)h.data[0])
+        | ((u32)h.data[1] << 8)
+        | ((u32)h.data[2] << 16)
+        | ((u32)h.data[3] << 24)) | 1;
+}
+
 int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   const u8 *q = data;
   int nTables, i;
@@ -1912,20 +1990,8 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     aMetaNew[BTREE_APPLICATION_ID] = prollyBtreeGetU32LE(data + CAT_HEADER_SIZE_V3 + 4);
   }
 
-  {
-    ProllyHash h;
-    u32 schemaHash;
-    if( iFormat==CATALOG_FORMAT_V5 ){
-      prollyHashCompute(q, (int)(nData - (q - data)), &h);
-    }else{
-      prollyHashCompute(data, nData, &h);
-    }
-    schemaHash = ((u32)h.data[0])
-               | ((u32)h.data[1] << 8)
-               | ((u32)h.data[2] << 16)
-               | ((u32)h.data[3] << 24);
-    aMetaNew[BTREE_SCHEMA_VERSION] = schemaHash | 1;
-  }
+  aMetaNew[BTREE_SCHEMA_VERSION] =
+      catalogSchemaCookie(data, nData, iFormat, nTables, q);
 
   for(i=0; i<nTables; i++){
     Pgno iTable;

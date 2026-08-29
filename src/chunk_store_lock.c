@@ -7,6 +7,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
@@ -243,6 +249,32 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 }
 
 
+static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs);
+
+/* The replaced-file guard must hold at every write-intent moment, not
+** ride on a reader statement having statted first: the pinned-snapshot
+** early return in refresh skips detection under the lock. One fcntl. */
+static void csNoteMovedUnderLock(ChunkStore *cs){
+  int bMoved = 0;
+  if( cs->isMemory || cs->isBuffer || cs->file.pFile==0 ) return;
+  if( sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
+                           &bMoved)!=SQLITE_OK ){
+    return;
+  }
+  if( !bMoved ){
+    cs->movedReadOnly = 0;
+    return;
+  }
+  {
+    int bOurs = 0;
+    if( csMovedFileIsOurs(cs, &bOurs)==SQLITE_OK && bOurs ){
+      cs->movedReadOnly = 0;
+    }else{
+      cs->movedReadOnly = 1;
+    }
+  }
+}
+
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
   int changed = 0;
   int rc;
@@ -270,6 +302,7 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     return rc;
   }
   cs->lockDepth = 1;
+  csNoteMovedUnderLock(cs);
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
     cs->lockDepth = 0;
@@ -412,6 +445,169 @@ int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
   return csDetectExternalChanges(cs, pChanged);
 }
 
+#define CS_GEN_MAP_SIZE 64
+#define CS_GEN_STAT_INTERVAL_MS 20
+
+static void csGenMapEnsure(ChunkStore *cs){
+#if !defined(_WIN32)
+  char *zLock;
+  int fd;
+  void *pMap;
+  struct stat st;
+  if( cs->pGenMap || cs->isMemory || cs->isBuffer
+   || !cs->file.zFilename ){
+    return;
+  }
+  zLock = csLockPath(cs->file.zFilename);
+  if( !zLock ) return;
+  fd = open(zLock, O_RDWR|O_CREAT|O_CLOEXEC, 0644);
+  sqlite3_free(zLock);
+  if( fd<0 ) return;
+  if( fstat(fd, &st)==0 && st.st_size<CS_GEN_MAP_SIZE
+   && ftruncate(fd, CS_GEN_MAP_SIZE)!=0 ){
+    close(fd);
+    return;
+  }
+  pMap = mmap(0, CS_GEN_MAP_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+  if( pMap==MAP_FAILED ) return;
+  cs->pGenMap = (volatile unsigned char*)pMap;
+  memcpy(&cs->lastSeenGen, (const void*)cs->pGenMap, sizeof(u64));
+  cs->iLastDetectMs = 0;
+#else
+  (void)cs;
+#endif
+}
+
+void csGenMapClose(ChunkStore *cs){
+#if !defined(_WIN32)
+  if( cs->pGenMap ){
+    munmap((void*)cs->pGenMap, CS_GEN_MAP_SIZE);
+    cs->pGenMap = 0;
+  }
+#else
+  (void)cs;
+#endif
+}
+
+void csGenBump(ChunkStore *cs){
+#if !defined(_WIN32)
+  csGenMapEnsure(cs);
+  if( cs->pGenMap ){
+    __atomic_fetch_add((u64*)(void*)cs->pGenMap, 1, __ATOMIC_RELAXED);
+  }
+#else
+  (void)cs;
+#endif
+}
+
+static i64 csGenNowMs(ChunkStore *cs){
+  i64 ms = 0;
+  if( cs->file.pVfs
+   && sqlite3OsCurrentTimeInt64(cs->file.pVfs, &ms)==SQLITE_OK ){
+    return ms;
+  }
+  return 0;
+}
+
+/* Unchanged counter means "probably unchanged"; a timed stat keeps
+** publishers that never bump (older versions) visible within the
+** interval instead of never. *pGenSeen is adopted by the caller only
+** after a successful detect, so a failed one retries promptly. */
+static int csGenChangePossible(ChunkStore *cs, u64 *pGenSeen){
+  i64 now;
+  csGenMapEnsure(cs);
+  if( !cs->pGenMap ){
+    *pGenSeen = cs->lastSeenGen;
+    return 1;
+  }
+  memcpy(pGenSeen, (const void*)cs->pGenMap, sizeof(u64));
+  if( *pGenSeen!=cs->lastSeenGen ) return 1;
+  now = csGenNowMs(cs);
+  if( now==0 || cs->iLastDetectMs==0
+   || now - cs->iLastDetectMs >= CS_GEN_STAT_INTERVAL_MS
+   || now < cs->iLastDetectMs ){
+    return 1;
+  }
+  return 0;
+}
+
+/* The store is append-only between compactions: when the file only grew
+** and our sealed tail root is still byte-intact, ingest just the new
+** records instead of reopening the whole store. Any doubt falls back to
+** the full reload. */
+static int csIncrementalTailRefresh(ChunkStore *cs){
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  i64 contentEnd;
+  i64 rootOff;
+  int hashState;
+  int rc;
+
+  if( cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0
+   || cs->bRefsStale || cs->movedReadOnly || cs->corruptMidStream
+   || cs->notADatabase || cs->file.pFile==0
+   || cs->wal.iWalOffset<=0
+   || cs->wal.nWalData < (i64)sizeof(aRoot)
+   || prollyHashCompare(&cs->refs.refsHash,
+                        &cs->refs.committedRefsHash)!=0 ){
+    return SQLITE_MISMATCH;
+  }
+
+  contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
+  rootOff = contentEnd - (i64)sizeof(aRoot);
+  if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
+  rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
+  if( rc!=SQLITE_OK ) return SQLITE_MISMATCH;
+  if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
+  hashState = csManifestHashState(aRoot+1, rootOff);
+  if( hashState!=CS_MANIFEST_HASH_OK ){
+    hashState = csManifestHashStateOffsetless(aRoot+1);
+  }
+  if( hashState!=CS_MANIFEST_HASH_OK
+   || memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
+             cs->refs.refsHash.data, PROLLY_HASH_SIZE)!=0 ){
+    return SQLITE_MISMATCH;
+  }
+
+  rc = csReplayWalTail(cs, cs->file.iFileSize);
+  if( rc!=SQLITE_OK ) return rc;
+  csMarkRefsCommitted(cs);
+
+  /* Fold a grown recent set into the eager index in memory: a sorted
+  ** merge every few thousand commits, instead of reopening the store. */
+  if( cs->staging.nRecent>4096 && cs->staging.nPending==0 ){
+    int i;
+    rc = SQLITE_OK;
+    for(i=0; i<cs->staging.nRecent && rc==SQLITE_OK; i++){
+      rc = csGrowPending(cs);
+      if( rc==SQLITE_OK ){
+        cs->staging.aPending[cs->staging.nPending++] =
+            cs->staging.aRecent[i];
+      }
+    }
+    if( rc==SQLITE_OK ){
+      ChunkIndexEntry *aMerged = 0;
+      int nMerged = 0;
+      rc = csMergeIndex(cs, &aMerged, &nMerged);
+      if( rc==SQLITE_OK ){
+        csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase,
+                          cs->index.aIndexMmapSize);
+        cs->index.aIndex = aMerged;
+        cs->index.nIndex = nMerged;
+        cs->index.aIndexMmapBase = 0;
+        cs->index.aIndexMmapSize = 0;
+        cs->staging.nRecent = 0;
+        csRecentHTClear(cs);
+      }
+    }
+    cs->staging.nPending = 0;
+    csPendHTReset(cs);
+    /* Consolidation is an optimization; the refresh already succeeded. */
+    rc = SQLITE_OK;
+  }
+  return SQLITE_OK;
+}
+
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
@@ -431,9 +627,25 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   if( cs->snapshotPinned ) return SQLITE_OK;
-  rc = csDetectExternalChanges(cs, &bChanged);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Readers only: under the graph lock the stat is the correctness
+  ** basis for append points and CAS bases, never skip it there. */
+  {
+    u64 genSeen = 0;
+    if( cs->lockDepth==0 && !cs->movedReadOnly && cs->file.pFile
+     && !csGenChangePossible(cs, &genSeen) ){
+      return SQLITE_OK;
+    }
+    rc = csDetectExternalChanges(cs, &bChanged);
+    if( rc!=SQLITE_OK ) return rc;
+    cs->iLastDetectMs = csGenNowMs(cs);
+    if( cs->pGenMap ) cs->lastSeenGen = genSeen;
+  }
   if( !bChanged ) return SQLITE_OK;
+
+  if( cs->lockDepth==0 && csIncrementalTailRefresh(cs)==SQLITE_OK ){
+    *pChanged = 1;
+    return SQLITE_OK;
+  }
 
   rc = csReloadFromDisk(cs);
   if( rc!=SQLITE_OK ) return rc;

@@ -1064,6 +1064,7 @@ static int gcRun(
 #ifdef DOLTLITE_PROLLY_CHECK
   if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
 #endif
+  if( rc==SQLITE_OK ) csGenBump(cs);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ) *pzPhase = "gc sweep phase failed";
   return rc;
