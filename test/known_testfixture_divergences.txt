@@ -1257,27 +1257,27 @@ format4 format4-1.1 class=intentional  # file-size page-multiple assertion; chun
 format4 format4-1.2 class=intentional  # file-size page-multiple assertion; chunk-store size differs
 format4 format4-1.3 class=intentional  # file-size page-multiple assertion; chunk-store size differs
 
-# stat — the dbstat vtable reports per-page b-tree statistics (cells, payload,
-# page numbers). The chunk store has no SQLite pages, so dbstat returns no rows.
-# Page-statistics vtable not applicable.
-stat stat-0.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-1.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-1.2 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-1.3 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-2.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-2.1agg class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-2.2 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-3.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-3.2 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-4.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-5.20 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.1.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.1.2 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.1.3 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.1.4 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+# stat — the dbstat vtable reports per-page b-tree statistics. A DoltLite-format
+# schema has no SQLite pages, so a scan errors rather than pretending the
+# database is empty.
+stat stat-0.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-1.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-1.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-1.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-2.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-2.1agg class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-2.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-3.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-3.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-4.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-5.20 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.4 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
 stat stat-7.2 class=intentional  # DROP of a dbstat vtab whose ATTACHed schema was detached fails at xConnect re-resolve (schema-reload timing; stock only fails cross-connection)
-stat stat-7.2.1 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
-stat stat-7.2.3 class=intentional  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-7.2.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
 stat stat-7.2.4 class=intentional  # cascade of 7.2: x3 never dropped, CREATE collides ("table x3 already exists")
 # io — counts VFS write/sync operations and checks on-disk file size via a test
 # VFS. DoltLite's chunk store batches I/O differently and its file layout is not

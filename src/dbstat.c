@@ -554,7 +554,11 @@ static int statGetPage(
 
   rc = sqlite3PagerGet(sqlite3BtreePager(pBt), iPg, &pDbPage, 0);
   if( rc==SQLITE_OK ){
-    const u8 *a = sqlite3PagerGetData(pDbPage);
+    const u8 *a;
+#ifdef DOLTLITE_PROLLY
+    if( pDbPage==0 ) return SQLITE_ERROR;
+#endif
+    a = sqlite3PagerGetData(pDbPage);
     memcpy(pPg->aPg, a, pgsz);
     sqlite3PagerUnref(pDbPage);
   }
@@ -762,6 +766,18 @@ static int statFilter(
   }else{
     pCsr->iDb = pTab->iDb;
   }
+#ifdef DOLTLITE_PROLLY
+  if( pCsr->iDb>=0 && pCsr->iDb<pTab->db->nDb ){
+    Btree *pScanBt = pTab->db->aDb[pCsr->iDb].pBt;
+    if( pScanBt && sqlite3BtreeIsDoltliteFormat(pScanBt) ){
+      sqlite3_free(pTab->base.zErrMsg);
+      pTab->base.zErrMsg = sqlite3_mprintf(
+        "doltlite: dbstat is not supported "
+        "(content-addressed chunk store has no page layout)");
+      return SQLITE_ERROR;
+    }
+  }
+#endif
   if( idxNum & 0x02 ){
     /* name=? constraint is present */
     zName = (const char*)sqlite3_value_text(argv[iArg++]);

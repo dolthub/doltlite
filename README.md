@@ -809,6 +809,9 @@ For a DoltLite-format main database, the compatibility contract is:
   DoltLite database image, including the commit graph, refs, and working sets.
   The image is an existing DoltLite storage-format file represented as bytes,
   not a SQLite page image or a SQL dump, and is not readable by stock SQLite.
+- `dbstat` is not supported on a DoltLite-format database: the chunk store has
+  no SQLite page layout. A scan fails with an error rather than reporting an
+  empty database. `dbstat` on an attached stock SQLite file still walks pages.
 
 The machine-readable contract and its test mapping live in
 [`test/sqlite_compatibility_contract.tsv`](test/sqlite_compatibility_contract.tsv).
