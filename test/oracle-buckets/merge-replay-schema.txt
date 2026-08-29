@@ -1,3 +1,4 @@
+vc_oracle_cherry_pick_abort_test.sh
 vc_oracle_conflicts_resolve_test.sh
 vc_oracle_conflicts_table_test.sh
 vc_oracle_conflicts_test.sh
