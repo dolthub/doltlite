@@ -348,4 +348,57 @@ run_test "gencol_nonleading_pk_diff" \
 
 rm -f "$DBG1" "$DBG2" "$DBG3"
 
+# Revision specs in from_commit/to_commit constraints resolve like the
+# function form; both-ends-named is the arbitrary-pair diff.
+DBRS=/tmp/test_dt_revspec_$$.db; rm -f "$DBRS"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-A','-m','c1');
+UPDATE t SET v='A' WHERE id=1;
+SELECT dolt_commit('-A','-m','c2');
+UPDATE t SET v='B' WHERE id=2;
+SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DBRS" > /dev/null 2>&1
+
+run_test "revspec_from_to_adjacent" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~1' AND to_commit='HEAD';" \
+  "1" "$DBRS"
+run_test "revspec_from_to_nonadjacent_slice" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~2' AND to_commit='HEAD';" \
+  "2" "$DBRS"
+run_test "revspec_to_only" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='HEAD';" \
+  "1" "$DBRS"
+run_test "revspec_from_only" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~1';" \
+  "1" "$DBRS"
+run_test "revspec_from_only_row" \
+  "SELECT diff_type || ':' || to_v FROM dolt_diff_t WHERE from_commit='HEAD~1';" \
+  "modified:B" "$DBRS"
+run_test "revspec_hash_pair_still_works" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2') AND to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c3');" \
+  "1" "$DBRS"
+run_test "revspec_garbage_from_matches_nothing" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='nosuchref' AND to_commit='HEAD';" \
+  "0" "$DBRS"
+run_test "revspec_garbage_to_matches_nothing" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='garbage';" \
+  "0" "$DBRS"
+run_test "revspec_to_working" \
+  "INSERT INTO t VALUES(3,'dirty');
+   SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
+  "1" "$DBRS"
+run_test "revspec_from_head_to_working" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD' AND to_commit='WORKING';" \
+  "1" "$DBRS"
+run_test "revspec_to_staged" \
+  "SELECT dolt_add('t');
+   SELECT count(*) FROM dolt_diff_t WHERE to_commit='STAGED';" \
+  "0
+1" "$DBRS"
+run_test "revspec_unconstrained_unchanged" \
+  "SELECT count(*) FROM dolt_diff_t;" \
+  "5" "$DBRS"
+
+rm -f "$DBRS"
+
 dltest_finish
