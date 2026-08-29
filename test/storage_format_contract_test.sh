@@ -11,7 +11,8 @@ CONTRACT="$SCRIPT_DIR/storage_format_contract.tsv"
 CORPUS_DIR="$SCRIPT_DIR/format-corpus/v12"
 CORPUS_DB="$CORPUS_DIR/seed.db"
 CORPUS_MANIFEST="$CORPUS_DIR/MANIFEST"
-CORPUS_RECIPE="$CORPUS_DIR/seed.sql"
+CORPUS_RECIPE="$CORPUS_DIR/generate.sh"
+CORPUS_SQL="$CORPUS_DIR/seed.sql"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -51,7 +52,8 @@ while IFS=$'\t' read -r id status evidence contract; do
   done
 done < <(tail -n +2 "$CONTRACT")
 
-if [[ ! -f "$CORPUS_DB" || ! -f "$CORPUS_MANIFEST" || ! -f "$CORPUS_RECIPE" ]]; then
+if [[ ! -f "$CORPUS_DB" || ! -f "$CORPUS_MANIFEST" \
+   || ! -x "$CORPUS_RECIPE" || ! -f "$CORPUS_SQL" ]]; then
   dltest_fail "corpus_present" "  missing version 12 corpus artifact"
   dltest_finish
   exit 1
@@ -94,49 +96,130 @@ fi
 
 OPEN_DB="$TMP/open_seed.db"
 cp "$CORPUS_DB" "$OPEN_DB"
-run_test "corpus_v12_main_rows" \
-  "SELECT group_concat(id || ':' || name || ':' || v, ',') FROM t ORDER BY id;" \
-  "1:alpha:10,2:beta:20" "$OPEN_DB"
-run_test "corpus_v12_index_rows" \
-  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY idx_name ORDER BY name);" \
-  "1,2" "$OPEN_DB"
+run_test "corpus_v12_deep_tree" \
+  "SELECT count(*) FROM deep NOT INDEXED;" "20001" "$OPEN_DB/main"
+run_test "corpus_v12_secondary_indexes" \
+  "SELECT count(*) FROM deep INDEXED BY deep_grp_score;
+   SELECT group_concat(id, ',') FROM (
+     SELECT id FROM deep INDEXED BY deep_score_partial
+      WHERE id % 2 = 0 AND id IN (30, 40) ORDER BY id
+   );" \
+  "20001
+30,40" "$OPEN_DB/main"
 run_test "corpus_v12_composite_blob_rows" \
   "SELECT group_concat(a || ':' || hex(b) || ':' || v, ',') FROM (SELECT * FROM keyed ORDER BY a, b);" \
-  "a:00FF:1.5,b:1020:-2.25" "$OPEN_DB"
-run_test "corpus_v12_schema" \
-  "SELECT sql FROM sqlite_schema WHERE name='idx_name';" \
-  "CREATE INDEX idx_name ON t(name)" "$OPEN_DB"
-run_test "corpus_v12_sequence" \
-  "SELECT seq FROM sqlite_sequence WHERE name='seq';" "1" "$OPEN_DB"
+  "Alpha:00FF:1.5,beta:1020:-2.25,gamma:FF00:3.75" "$OPEN_DB/main"
+run_test "corpus_v12_catalog_objects" \
+  "SELECT count(*) FROM sqlite_schema
+    WHERE name IN ('deep','deep_grp_score','deep_score_partial','keyed',
+                   'generated_values','deep_even','deep_audit','docs',
+                   'feature_only','main_only','branch_data');
+   SELECT group_concat(id || ':' || stored || ':' || virtual, ',')
+     FROM generated_values ORDER BY id;
+   SELECT count(*) FROM deep_even;
+   SELECT count(*) FROM docs WHERE docs MATCH 'prolly';
+   SELECT count(*) FROM audit;" \
+  "11
+1:10:6,2:18:10
+10001
+1
+2" "$OPEN_DB/main"
+run_test "corpus_v12_sequences" \
+  "SELECT group_concat(name || ':' || seq, ',')
+     FROM (SELECT name, seq FROM sqlite_sequence ORDER BY name);" \
+  "audit:2,seq:3" "$OPEN_DB/main"
 run_test "corpus_v12_integrity" \
-  "PRAGMA integrity_check;" "ok" "$OPEN_DB"
-run_test "corpus_v12_log" \
-  "SELECT count(*) FROM dolt_log;" "2" "$OPEN_DB"
-run_test "corpus_v12_feature_branch" \
-  "SELECT count(*) FROM dolt_branches WHERE name='feature';" "1" "$OPEN_DB"
-run_test "corpus_v12_tag" \
-  "SELECT count(*) FROM dolt_tags WHERE tag_name='v12-seed';" "1" "$OPEN_DB"
-run_test "corpus_v12_feature_rows" \
-  "SELECT dolt_checkout('feature'); SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;" \
-  "0
-3
-3" "$OPEN_DB"
+  "PRAGMA integrity_check;" "ok" "$OPEN_DB/main"
+run_test "corpus_v12_merge_commit" \
+  "SELECT count(*) FROM dolt_commit_ancestors
+    WHERE commit_hash=(
+      SELECT commit_hash FROM dolt_log WHERE message LIKE 'Merge branch%'
+    );" "2" "$OPEN_DB/main"
+run_test "corpus_v12_branches" \
+  "SELECT group_concat(name, ',') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
+  "dolt_rebase_rebase_source,feature,main,rebase_source,violations,workspace" \
+  "$OPEN_DB/main"
+run_test "corpus_v12_annotated_tags" \
+  "SELECT group_concat(tag_name || ':' || tagger || ':' || email || ':' || message, '|')
+     FROM (SELECT * FROM dolt_tags ORDER BY tag_name);" \
+  "v12-base:Format Tagger:tagger@example.com:annotated format baseline|v12-merge:Merge Tagger:merge@example.com:annotated merge result" \
+  "$OPEN_DB/main"
+run_test "corpus_v12_remote_tracking" \
+  "SELECT group_concat(name || ':' || (url GLOB 'file://*/origin.db'), ',')
+     FROM dolt_remotes;
+   SELECT group_concat(name, ',') FROM dolt_remote_branches;" \
+  "origin:1
+remotes/origin/main" "$OPEN_DB/main"
+run_test "corpus_v12_dirty_staged_working_set" \
+  "SELECT group_concat(id || ':' || grp, ',') FROM (
+     SELECT id, grp FROM deep WHERE id>20000 ORDER BY id
+   );
+   SELECT group_concat(table_name || ':' || status || ':' || staged, ',') FROM (
+     SELECT table_name, status, staged FROM dolt_status ORDER BY table_name, staged
+   );" \
+  "20001:working,20002:unstaged
+deep:modified:0,deep:modified:1" "$OPEN_DB/workspace"
+run_test "corpus_v12_constraint_violations" \
+  "SELECT count(*) FROM child;
+   SELECT group_concat(\"table\" || ':' || num_violations, ',')
+     FROM dolt_constraint_violations;
+   SELECT violation_type FROM dolt_constraint_violations_child;" \
+  "2
+child:1
+foreign key" "$OPEN_DB/violations"
+run_test "corpus_v12_rebase_working_set" \
+  "SELECT count(*) FROM dolt_rebase;
+   SELECT group_concat(rebase_order || ':' || action || ':' || commit_message, ',')
+     FROM dolt_rebase;" \
+  "1
+1.0:pick:v12 rebase source" "$OPEN_DB/dolt_rebase_rebase_source"
+run_test "corpus_v12_rebase_return_branch" \
+  "SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase';" \
+  "1" "$OPEN_DB/main"
+
+REBUILT_DB="$TMP/rebuilt_seed.db"
+if "$CORPUS_RECIPE" "$DOLTLITE" "$REBUILT_DB" >/dev/null \
+ && [[ "$("$DOLTLITE" "$REBUILT_DB/main" "SELECT count(*) FROM deep NOT INDEXED;")" = "20001" ]]; then
+  dltest_pass
+else
+  dltest_fail "corpus_v12_recipe_rebuild" "  generation recipe did not reproduce the semantic fixture"
+fi
 
 WRITE_DB="$TMP/write_seed.db"
 cp "$CORPUS_DB" "$WRITE_DB"
 run_test "corpus_v12_write_commit" \
-  "INSERT INTO t VALUES(4, 'delta', 40); SELECT length(dolt_commit('-A', '-m', 'extend v12'));" \
-  "40" "$WRITE_DB"
+  "INSERT INTO deep(id, grp, score, payload)
+   VALUES(21000, 'forward', 2100.0, x'11223344');
+   SELECT length(dolt_commit('-A', '-m', 'extend v12'));" \
+  "40" "$WRITE_DB/feature"
 run_test "corpus_v12_reopen_after_write" \
-  "SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;" \
-  "3
-3" "$WRITE_DB"
+  "SELECT count(*) FROM deep NOT INDEXED;
+   SELECT message FROM dolt_log LIMIT 1;" \
+  "20001
+extend v12" "$WRITE_DB/feature"
 run_test_match "corpus_v12_gc" \
-  "SELECT dolt_gc();" "chunks removed" "$WRITE_DB"
+  "SELECT dolt_gc();" "chunks removed" "$WRITE_DB/feature"
 run_test "corpus_v12_post_gc_rows" \
-  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY idx_name ORDER BY name); SELECT count(*) FROM dolt_log;" \
-  "1,2,4
-3" "$WRITE_DB"
+  "SELECT count(*) FROM deep NOT INDEXED;
+   SELECT count(*) FROM deep WHERE id=21000;
+   PRAGMA integrity_check;" \
+  "20001
+1
+ok" "$WRITE_DB/feature"
+run_test "corpus_v12_post_gc_working_sets" \
+  "SELECT count(*) FROM deep WHERE id IN (20001, 20002);
+   SELECT count(*) FROM dolt_status WHERE table_name='deep';" \
+  "2
+2" "$WRITE_DB/workspace"
+run_test "corpus_v12_post_gc_constraint_violations" \
+  "SELECT coalesce(sum(num_violations), 0) FROM dolt_constraint_violations;" \
+  "1" "$WRITE_DB/violations"
+run_test "corpus_v12_post_gc_rebase" \
+  "SELECT count(*) FROM dolt_rebase;" "1" \
+  "$WRITE_DB/dolt_rebase_rebase_source"
+run_test "corpus_v12_post_gc_tracking" \
+  "SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/main';" \
+  "1" "$WRITE_DB/main"
 
 patch_u32() {
   local src="$1" dst="$2" off="$3" value="$4"
