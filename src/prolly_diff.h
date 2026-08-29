@@ -48,6 +48,20 @@ int prollyValuesEqual(
   int *pEqual
 );
 
+/* One partially-walked pair of same-level internal nodes. The walk skips
+** children whose subtree hashes match; only differing subtrees descend. */
+typedef struct DiffIterFrame DiffIterFrame;
+struct DiffIterFrame {
+  ProllyHash oldHash;
+  ProllyHash newHash;
+  ProllyNode oldNode;
+  ProllyNode newNode;
+  u8 *pOldData;
+  u8 *pNewData;
+  int i;
+  int j;
+};
+
 typedef struct ProllyDiffIter ProllyDiffIter;
 struct ProllyDiffIter {
   ChunkStore *pStore;
@@ -60,6 +74,12 @@ struct ProllyDiffIter {
 
   ProllyCursor *pCurOld;
   ProllyCursor *pCurNew;
+  /* Cursors cover a bounded differing range; frames hold suspended
+  ** internal-node walks above it. */
+  u8 cursorsActive;
+  DiffIterFrame *aFrames;
+  int nFrames;
+  int nFramesAlloc;
 
   u8 eof;
   int rc;
