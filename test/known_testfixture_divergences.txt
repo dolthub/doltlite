@@ -61,7 +61,7 @@
 # Many entries below are downstream of PRAGMAs that DoltLite accepts and then
 # ignores -- journal_mode, auto_vacuum, secure_delete, journal_size_limit,
 # mmap_size, writable_schema -- plus the synthetic page_count/freelist_count/
-# schema_version values. That whole class is described once in #1846 rather than
+# schema_version values. That whole class is described once in #2493 rather than
 # restated per suite; gates naming one of those PRAGMAs cite it.
 
 # ── storage corruption probes ──
@@ -80,43 +80,42 @@ corrupt corrupt-8.2 class=intentional  # hexio lands on CTLD bytes, not btree ce
 # ── canonical adoption ──
 # sqlite_master is a projection of the prolly catalog (#1852): CREATE text is
 # canonicalized on schema commit and row order follows the catalog, not DDL
-# order. That is the storage model, not an engine-gap. #1200 tracks the SQL
-# spelling / CHECK-message side of the same projection.
-altercol altercol-1.13.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-1.17.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-1.5.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-1.6.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-11.1 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
-altercol altercol-2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-22.0 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-4.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercol altercol-4.4 class=intentional issue=1200  # canonical adoption: row order and canonicalized SQL text after schema commit
-altercons2 altercons2-1.2.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-1.4.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-12.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-12.5 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-4.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-6.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons2 altercons2-9.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-alterqf alterqf-2.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-1.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-17.0 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-18.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-18.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-19.100 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-23.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-23.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab altertab-24.2.1 class=intentional issue=1200  # canonical adoption: reparse order changes which malformed object reports the missing-table error
-altertab altertab-30.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-2.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-2.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.3.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab2 altertab2-3.4.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-check check-4.6 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
-check check-4.9 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
+# order. That is the storage model, not an engine-gap.
+altercol altercol-1.13.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-1.17.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-1.5.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-1.6.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-11.1 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
+altercol altercol-2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-22.0 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-4.1 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercol altercol-4.4 class=intentional issue=1852  # canonical adoption: row order and canonicalized SQL text after schema commit
+altercons2 altercons2-1.2.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-1.4.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-12.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-12.5 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-4.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-6.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons2 altercons2-9.1 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+alterqf alterqf-2.1 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-1.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-17.0 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-18.1.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-18.2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-19.100 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-23.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-23.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab altertab-24.2.1 class=intentional issue=1852  # canonical adoption: reparse order changes which malformed object reports the missing-table error
+altertab altertab-30.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-2.1 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-2.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.1.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.3.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab2 altertab2-3.4.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+check check-4.6 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
+check check-4.9 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 fts3fault2 fts3fault2-8.0 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 fts3matchinfo fts3matchinfo-1.0 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 fts4langid fts4langid-1.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
@@ -339,18 +338,18 @@ pragma pragma-8.1.17 class=intentional
 pragma pragma-8.1.9 class=intentional
 pragma pragma-8.2.4.1 class=intentional
 pragma pragma-8.2.4.3 class=intentional
-pragma pragma-14.3 class=intentional issue=1846  # page_count/freelist pragmas: no page-based storage
-pragma pragma-14.3uc class=intentional issue=1846  # page_count/freelist pragmas: no page-based storage
-pragma pragma-14.4 class=intentional issue=1846  # page_count/freelist pragmas: no page-based storage
-pragma pragma-14.5 class=intentional issue=1846  # page_count/freelist pragmas: no page-based storage
-pragma pragma-14.6 class=intentional issue=1846  # page_count/freelist pragmas: no page-based storage
-pragma pragma-14.6uc class=intentional issue=1846  # page_count/freelist pragmas: no page-based storage
-pragma pragma-17.1.1 class=intentional issue=1846  # auto_vacuum is a no-op echo in doltlite
-pragma pragma-17.1.2 class=intentional issue=1846  # auto_vacuum is a no-op echo in doltlite
-pragma pragma-17.1.FULL class=intentional issue=1846  # auto_vacuum is a no-op echo in doltlite
-pragma pragma-17.1.INCREMENTAL class=intentional issue=1846  # auto_vacuum is a no-op echo in doltlite
-pragma pragma-17.1.full class=intentional issue=1846  # auto_vacuum is a no-op echo in doltlite
-pragma pragma-17.1.incremental class=intentional issue=1846  # auto_vacuum is a no-op echo in doltlite
+pragma pragma-14.3 class=intentional issue=2493  # page_count/freelist pragmas: no page-based storage
+pragma pragma-14.3uc class=intentional issue=2493  # page_count/freelist pragmas: no page-based storage
+pragma pragma-14.4 class=intentional issue=2493  # page_count/freelist pragmas: no page-based storage
+pragma pragma-14.5 class=intentional issue=2493  # page_count/freelist pragmas: no page-based storage
+pragma pragma-14.6 class=intentional issue=2493  # page_count/freelist pragmas: no page-based storage
+pragma pragma-14.6uc class=intentional issue=2493  # page_count/freelist pragmas: no page-based storage
+pragma pragma-17.1.1 class=intentional issue=2493  # auto_vacuum is a no-op echo in doltlite
+pragma pragma-17.1.2 class=intentional issue=2493  # auto_vacuum is a no-op echo in doltlite
+pragma pragma-17.1.FULL class=intentional issue=2493  # auto_vacuum is a no-op echo in doltlite
+pragma pragma-17.1.INCREMENTAL class=intentional issue=2493  # auto_vacuum is a no-op echo in doltlite
+pragma pragma-17.1.full class=intentional issue=2493  # auto_vacuum is a no-op echo in doltlite
+pragma pragma-17.1.incremental class=intentional issue=2493  # auto_vacuum is a no-op echo in doltlite
 pragma pragma-22.2 class=intentional  # raw file corruption pokes byte offsets; doltlite format differs
 pragma pragma-22.3.1 class=intentional  # raw file corruption pokes byte offsets; doltlite format differs
 pragma pragma-22.3.3 class=intentional  # raw file corruption pokes byte offsets; doltlite format differs
@@ -818,105 +817,105 @@ tkt-2d1a5c67d tkt-2d1a5c67d-3.6 class=intentional
 # "database is locked" (doltlite has no pager write-lock), 1.5/2.4/2.5 ride on that
 # locked state. The single-connection row data (1|2 3|4 1|2 3|4) matches stock.
 # Multi-file writes are rejected (README / contract transaction.multifile_write).
-# These assertions expect SQLite super-journal 2PC; that is unsupported, not
-# an engine-gap to implement later.
-altercol altercol-18.0 class=unsupported issue=944
-attach2 attach2-4.13 class=unsupported issue=944
-attach2 attach2-5.2 class=unsupported issue=944
-attach2 attach2-5.4 class=unsupported issue=944
-attach2 attach2-6.1 class=unsupported issue=944
-attach4 attach4-1.3 class=unsupported issue=944
-attach4 attach4-1.4 class=unsupported issue=944
-attach4 attach4-1.5 class=unsupported issue=944
-attach4 attach4-1.6 class=unsupported issue=944
-attach4 attach4-1.7 class=unsupported issue=944
-attach4 attach4-1.8 class=unsupported issue=944
-cacheflush cacheflush-2.1.5 class=unsupported issue=944
-cacheflush cacheflush-2.2.1 class=unsupported issue=944
-cacheflush cacheflush-2.2.2 class=unsupported issue=944
-cacheflush cacheflush-2.2.4 class=unsupported issue=944
-cacheflush cacheflush-2.2.7 class=unsupported issue=944
-e_delete e_delete-2.3.2 class=unsupported issue=944
-e_delete e_delete-2.3.3 class=unsupported issue=944
-jrnlmode jrnlmode-2.3 class=unsupported issue=944
-jrnlmode jrnlmode-2.5 class=unsupported issue=944
-jrnlmode jrnlmode-3.2 class=unsupported issue=944
-jrnlmode jrnlmode-6.9 class=unsupported issue=944
-ioerr ioerr-5.11.3 class=unsupported issue=944
-savepoint savepoint-10.2.9 class=unsupported issue=944
-savepoint savepoint-10.2.10 class=unsupported issue=944
-savepoint savepoint-10.2.11 class=unsupported issue=944
-savepoint savepoint-10.2.12 class=unsupported issue=944
-savepoint savepoint-10.2.13 class=unsupported issue=944
-sync sync-1.4 class=unsupported issue=944
-syscall syscall-4.2.wal.1 class=unsupported issue=944
-syscall syscall-4.2.wal.2 class=unsupported issue=944
-syscall syscall-4.2.wal.3 class=unsupported issue=944
-syscall syscall-4.2.wal.4 class=unsupported issue=944
-syscall syscall-4.2.wal.5 class=unsupported issue=944
-syscall syscall-4.2.wal.6 class=unsupported issue=944
-syscall syscall-4.2.wal.7 class=unsupported issue=944
-syscall syscall-4.2.wal.8 class=unsupported issue=944
-syscall syscall-4.2.wal.9 class=unsupported issue=944
-syscall syscall-4.2.wal.10 class=unsupported issue=944
-syscall syscall-4.2.wal.11 class=unsupported issue=944
-syscall syscall-4.2.wal.12 class=unsupported issue=944
-syscall syscall-4.2.wal.13 class=unsupported issue=944
-syscall syscall-4.2.wal.14 class=unsupported issue=944
-syscall syscall-4.2.wal.15 class=unsupported issue=944
-syscall syscall-4.2.wal.16 class=unsupported issue=944
-syscall syscall-4.2.wal.17 class=unsupported issue=944
-syscall syscall-4.2.wal.18 class=unsupported issue=944
-syscall syscall-4.2.wal.19 class=unsupported issue=944
-syscall syscall-4.2.delete.1 class=unsupported issue=944
-syscall syscall-4.2.delete.2 class=unsupported issue=944
-syscall syscall-4.2.delete.3 class=unsupported issue=944
-syscall syscall-4.2.delete.4 class=unsupported issue=944
-syscall syscall-4.2.delete.5 class=unsupported issue=944
-syscall syscall-4.2.delete.6 class=unsupported issue=944
-syscall syscall-4.2.delete.7 class=unsupported issue=944
-syscall syscall-4.2.delete.8 class=unsupported issue=944
-syscall syscall-4.2.delete.9 class=unsupported issue=944
-syscall syscall-4.2.delete.10 class=unsupported issue=944
-syscall syscall-4.2.delete.11 class=unsupported issue=944
-syscall syscall-4.2.delete.12 class=unsupported issue=944
-syscall syscall-4.2.delete.13 class=unsupported issue=944
-syscall syscall-4.2.delete.14 class=unsupported issue=944
-syscall syscall-4.2.delete.15 class=unsupported issue=944
-syscall syscall-4.2.delete.16 class=unsupported issue=944
-syscall syscall-4.2.delete.17 class=unsupported issue=944
-syscall syscall-4.2.delete.18 class=unsupported issue=944
-syscall syscall-4.2.delete.19 class=unsupported issue=944
-temptrigger temptrigger-7.1 class=unsupported issue=944
-temptrigger temptrigger-7.3.2 class=unsupported issue=944
-temptrigger temptrigger-8.1.2 class=unsupported issue=944
-temptrigger temptrigger-8.2.2 class=unsupported issue=944
-temptrigger temptrigger-8.3.2 class=unsupported issue=944
-trigger1 trigger1-10.3 class=unsupported issue=944
-trigger1 trigger1-10.4 class=unsupported issue=944
-trigger1 trigger1-10.6 class=unsupported issue=944
-trigger1 trigger1-10.7 class=unsupported issue=944
-trigger1 trigger1-10.8 class=unsupported issue=944
-trigger1 trigger1-10.10 class=unsupported issue=944
-trigger1 trigger1-10.11 class=unsupported issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.2 class=unsupported issue=944
-vtab7 vtab7-3.1 class=unsupported issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-1.4 class=unsupported issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-1.5 class=unsupported issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.3 class=unsupported issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.4 class=unsupported issue=944
-tkt-f3e5abed55 tkt-f3e5abed55-2.5 class=unsupported issue=944
+# These assertions expect SQLite super-journal 2PC; that is unsupported (#2490),
+# not an engine-gap to implement later.
+altercol altercol-18.0 class=unsupported issue=2490
+attach2 attach2-4.13 class=unsupported issue=2490
+attach2 attach2-5.2 class=unsupported issue=2490
+attach2 attach2-5.4 class=unsupported issue=2490
+attach2 attach2-6.1 class=unsupported issue=2490
+attach4 attach4-1.3 class=unsupported issue=2490
+attach4 attach4-1.4 class=unsupported issue=2490
+attach4 attach4-1.5 class=unsupported issue=2490
+attach4 attach4-1.6 class=unsupported issue=2490
+attach4 attach4-1.7 class=unsupported issue=2490
+attach4 attach4-1.8 class=unsupported issue=2490
+cacheflush cacheflush-2.1.5 class=unsupported issue=2490
+cacheflush cacheflush-2.2.1 class=unsupported issue=2490
+cacheflush cacheflush-2.2.2 class=unsupported issue=2490
+cacheflush cacheflush-2.2.4 class=unsupported issue=2490
+cacheflush cacheflush-2.2.7 class=unsupported issue=2490
+e_delete e_delete-2.3.2 class=unsupported issue=2490
+e_delete e_delete-2.3.3 class=unsupported issue=2490
+jrnlmode jrnlmode-2.3 class=unsupported issue=2490
+jrnlmode jrnlmode-2.5 class=unsupported issue=2490
+jrnlmode jrnlmode-3.2 class=unsupported issue=2490
+jrnlmode jrnlmode-6.9 class=unsupported issue=2490
+ioerr ioerr-5.11.3 class=unsupported issue=2490
+savepoint savepoint-10.2.9 class=unsupported issue=2490
+savepoint savepoint-10.2.10 class=unsupported issue=2490
+savepoint savepoint-10.2.11 class=unsupported issue=2490
+savepoint savepoint-10.2.12 class=unsupported issue=2490
+savepoint savepoint-10.2.13 class=unsupported issue=2490
+sync sync-1.4 class=unsupported issue=2490
+syscall syscall-4.2.wal.1 class=unsupported issue=2490
+syscall syscall-4.2.wal.2 class=unsupported issue=2490
+syscall syscall-4.2.wal.3 class=unsupported issue=2490
+syscall syscall-4.2.wal.4 class=unsupported issue=2490
+syscall syscall-4.2.wal.5 class=unsupported issue=2490
+syscall syscall-4.2.wal.6 class=unsupported issue=2490
+syscall syscall-4.2.wal.7 class=unsupported issue=2490
+syscall syscall-4.2.wal.8 class=unsupported issue=2490
+syscall syscall-4.2.wal.9 class=unsupported issue=2490
+syscall syscall-4.2.wal.10 class=unsupported issue=2490
+syscall syscall-4.2.wal.11 class=unsupported issue=2490
+syscall syscall-4.2.wal.12 class=unsupported issue=2490
+syscall syscall-4.2.wal.13 class=unsupported issue=2490
+syscall syscall-4.2.wal.14 class=unsupported issue=2490
+syscall syscall-4.2.wal.15 class=unsupported issue=2490
+syscall syscall-4.2.wal.16 class=unsupported issue=2490
+syscall syscall-4.2.wal.17 class=unsupported issue=2490
+syscall syscall-4.2.wal.18 class=unsupported issue=2490
+syscall syscall-4.2.wal.19 class=unsupported issue=2490
+syscall syscall-4.2.delete.1 class=unsupported issue=2490
+syscall syscall-4.2.delete.2 class=unsupported issue=2490
+syscall syscall-4.2.delete.3 class=unsupported issue=2490
+syscall syscall-4.2.delete.4 class=unsupported issue=2490
+syscall syscall-4.2.delete.5 class=unsupported issue=2490
+syscall syscall-4.2.delete.6 class=unsupported issue=2490
+syscall syscall-4.2.delete.7 class=unsupported issue=2490
+syscall syscall-4.2.delete.8 class=unsupported issue=2490
+syscall syscall-4.2.delete.9 class=unsupported issue=2490
+syscall syscall-4.2.delete.10 class=unsupported issue=2490
+syscall syscall-4.2.delete.11 class=unsupported issue=2490
+syscall syscall-4.2.delete.12 class=unsupported issue=2490
+syscall syscall-4.2.delete.13 class=unsupported issue=2490
+syscall syscall-4.2.delete.14 class=unsupported issue=2490
+syscall syscall-4.2.delete.15 class=unsupported issue=2490
+syscall syscall-4.2.delete.16 class=unsupported issue=2490
+syscall syscall-4.2.delete.17 class=unsupported issue=2490
+syscall syscall-4.2.delete.18 class=unsupported issue=2490
+syscall syscall-4.2.delete.19 class=unsupported issue=2490
+temptrigger temptrigger-7.1 class=unsupported issue=2490
+temptrigger temptrigger-7.3.2 class=unsupported issue=2490
+temptrigger temptrigger-8.1.2 class=unsupported issue=2490
+temptrigger temptrigger-8.2.2 class=unsupported issue=2490
+temptrigger temptrigger-8.3.2 class=unsupported issue=2490
+trigger1 trigger1-10.3 class=unsupported issue=2490
+trigger1 trigger1-10.4 class=unsupported issue=2490
+trigger1 trigger1-10.6 class=unsupported issue=2490
+trigger1 trigger1-10.7 class=unsupported issue=2490
+trigger1 trigger1-10.8 class=unsupported issue=2490
+trigger1 trigger1-10.10 class=unsupported issue=2490
+trigger1 trigger1-10.11 class=unsupported issue=2490
+tkt-f3e5abed55 tkt-f3e5abed55-2.2 class=unsupported issue=2490
+vtab7 vtab7-3.1 class=unsupported issue=2490
+tkt-f3e5abed55 tkt-f3e5abed55-1.4 class=unsupported issue=2490
+tkt-f3e5abed55 tkt-f3e5abed55-1.5 class=unsupported issue=2490
+tkt-f3e5abed55 tkt-f3e5abed55-2.3 class=unsupported issue=2490
+tkt-f3e5abed55 tkt-f3e5abed55-2.4 class=unsupported issue=2490
+tkt-f3e5abed55 tkt-f3e5abed55-2.5 class=unsupported issue=2490
 
 # capi3 — C-API behaviors that diverge from stock sqlite at the error-code,
 # open-timing, locking, and catalog level (not row data). Recovered into the
 # gated suite after the capi3-7.x raw file-format block was gated out and the
 # prollyBtreeRollback use-after-free was fixed.
-capi3 capi3-11.3.4 class=intentional issue=1846  # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
+capi3 capi3-11.3.4 class=intentional issue=2493  # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
 # capi3c is the sqlite3_prepare_v2 mirror of capi3; its raw file-format block
 # (capi3c-7.x) is gated with ifcapable !doltlite like capi3's, which lets the
 # remaining 294 tests run. Same divergence classes as capi3 plus the MVCC
 # locking model.
-capi3c capi3-11.3.4 class=intentional issue=1846  # upstream misnamed test inside capi3c.test; PRAGMA lock_status reports doltlite's locking model
+capi3c capi3-11.3.4 class=intentional issue=2493  # upstream misnamed test inside capi3c.test; PRAGMA lock_status reports doltlite's locking model
 capi3c capi3c-18.3 class=intentional  # BEGIN EXCLUSIVE on a 2nd connection does not block an MVCC snapshot reader (SQLITE_ROW vs SQLITE_BUSY)
 capi3c capi3c-18.4 class=intentional  # same: finalize returns SQLITE_OK, not the sticky BUSY
 # capi3-11.4/11.5 (step/finalize after COMMIT-during-active-read) now pass: the
@@ -1013,13 +1012,13 @@ alter3 alter3-1.5 class=intentional issue=1852  # canonical adoption: canonicali
 # chunk store, not SQLite pages, so page_count is not a stable per-table page
 # metric and differs. Raw page-format pragma; the drop itself is correct
 # (altertab3-31.2 reads the surviving column back as 5.0).
-altertab3 altertab3-31.1 class=intentional issue=1846  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
-altertab3 altertab3-27.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab3 altertab3-32.1.2 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
-altertab3 altertab3-32.2.2 class=intentional issue=1200  # canonical adoption: sqlite_master row order after schema commit
-altertab3 altertab3-7.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab3 altertab3-8.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altertab3 altertab3-8.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-31.1 class=intentional issue=2493  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
+altertab3 altertab3-27.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-32.1.2 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
+altertab3 altertab3-32.2.2 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
+altertab3 altertab3-7.1.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-8.1 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altertab3 altertab3-8.2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
 
 # altercol — three divergence classes, none in the ALTER rename itself:
 #   * 11.1: order of rows returned from sqlite_schema. DoltLite returns catalog
@@ -1031,23 +1030,23 @@ altertab3 altertab3-8.2.2 class=intentional issue=1200  # canonical adoption: ca
 #     CREATE TABLE text after DROP COLUMN ("... PRIMARY KEY) " vs "...)").
 #   * altercons 6.4.1: DoltLite normalizes "CHECK (expr)" to "CHECK(expr)" in
 #     stored DDL.
-altercons altercons-3.8.2 class=intentional issue=1200  # trailing space in rewritten DDL after DROP COLUMN
-altercons altercons-1.15.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.19.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.21.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.22.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-1.8.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-3.10.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-3.11.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-3.9.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.3.1.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.3.2.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.3.3.3 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-6.4.1 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-8.1.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-8.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-9.2.2 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
-altercons altercons-9.2.4 class=intentional issue=1200  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.8.2 class=intentional issue=1852  # trailing space in rewritten DDL after DROP COLUMN
+altercons altercons-1.15.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.19.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.21.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.22.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-1.8.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.10.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.11.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-3.9.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.3.1.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.3.2.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.3.3.3 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-6.4.1 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-8.1.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-8.2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-9.2.2 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
+altercons altercons-9.2.4 class=intentional issue=1852  # canonical adoption: canonicalized SQL text after schema commit
 
 # limit2 — limit2-110.3 compares sqlite_search_count between an indexed and an
 # unindexed ORDER BY ... LIMIT, asserting the indexed plan scans <2% as many
@@ -1201,36 +1200,36 @@ dbpage dbpage-820 class=unsupported issue=947  # sqlite_dbpage raw page access; 
 # connections and session assignments do not alter the stored layout. Tests
 # that assert persisted SQLite file-header page sizes or page_count/page_size
 # arithmetic diverge.
-pagesize pagesize-1.3 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.512.2 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.512.3 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.512.6 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.512.10 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.2048.2 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.2048.3 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.2048.6 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.2048.10 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.4096.2 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.4096.3 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.4096.6 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.4096.10 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.8192.2 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.8192.3 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.8192.6 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-2.8192.10 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-3.1 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
-pagesize pagesize-3.3 class=intentional issue=1846  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-1.3 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.2 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.3 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.6 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.512.10 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.2 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.3 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.6 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.2048.10 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.2 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.3 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.6 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.4096.10 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.2 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.3 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.6 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-2.8192.10 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-3.1 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
+pagesize pagesize-3.3 class=intentional issue=2493  # page_size pragma is a connection-local echo, not enforced/persisted on the chunk store
 
 # securedel — PRAGMA secure_delete is a no-op: there is no page freelist to zero
 # (content-addressed chunks, freed on GC). The pragma reads back 0 and the raw
 # byte scans differ. The DELETE itself is correct.
-securedel securedel-1.1 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
-securedel securedel-1.4 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
-securedel securedel-1.5 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
-securedel securedel-1.6 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
-securedel securedel-1.7 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
-securedel securedel-1.8 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
-securedel securedel-2.1 class=intentional issue=1846  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.1 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.4 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.5 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.6 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.7 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.8 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-2.1 class=intentional issue=2493  # secure_delete pragma no-op: no page freelist to zero
 
 # securedel2 — freed space is not zeroed in place (content-addressed store; GC
 # reclaims old chunks), so the freed-byte scans find old data. Not applicable to
@@ -1337,10 +1336,10 @@ multiplex4 multiplex4-1.11 class=intentional  # multiplex VFS not used by doltli
 tkt1512 tkt1512-1.2 class=intentional  # file-size assertion; chunk-store size differs
 tkt1512 tkt1512-1.3 class=intentional  # file-size assertion; chunk-store size differs
 tkt1512 tkt1512-1.4 class=intentional  # file-size assertion; chunk-store size differs
-tkt2920 tkt2920-1.1 class=intentional issue=1846  # page_size / disk-full simulation; chunk store has neither
-tkt2920 tkt2920-1.3 class=intentional issue=1846  # page_size / disk-full simulation; chunk store has neither
-tkt2920 tkt2920-1.5 class=intentional issue=1846  # page_size / disk-full simulation; chunk store has neither
-tkt2920 tkt2920-1.9 class=intentional issue=1846  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.1 class=intentional issue=2493  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.3 class=intentional issue=2493  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.5 class=intentional issue=2493  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.9 class=intentional issue=2493  # page_size / disk-full simulation; chunk store has neither
 
 # tkt2409 / tkt2854 / tkt4018 — depend on the SQLite SHARED/RESERVED locking and
 # rollback-journal model (table/schema locked, cross-process lock visibility).
@@ -1457,28 +1456,28 @@ windowE windowE-1.3 class=intentional  # cascade: matches stock's no-index resul
 # expects an encoding-mismatch ATTACH error that cannot fire when every
 # database is UTF-8 (#1164).
 attach2 attach2-2.4 class=intentional  # ATTACH encoding-mismatch check unfirable under UTF-8-only (#1164)
-attach2 attach2-4.2.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.3.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.2.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.3.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
 attach2 attach2-4.4 class=intentional  # write not blocked: doltlite supports concurrent writers
-attach2 attach2-4.4.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.5.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.5.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.6.1.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.6.1.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.6.2.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.6.2.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.7.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.7.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.4.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.5.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.5.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.1.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.1.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.2.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.2.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.7.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.7.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
 attach2 attach2-4.8 class=intentional  # write not blocked: doltlite supports concurrent writers
-attach2 attach2-4.8.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.8.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.9.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.9.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.8.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.8.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.9.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.9.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
 attach2 attach2-4.10 class=intentional  # write not blocked: doltlite supports concurrent writers
-attach2 attach2-4.10.1 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.10.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.11.2 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
-attach2 attach2-4.12 class=intentional issue=1846  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.10.1 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.10.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.11.2 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.12 class=intentional issue=2493  # PRAGMA lock_status: doltlite locking model
 
 
 # Parent-dir Access probe adds allocations on multi-component open/ATTACH
@@ -1487,15 +1486,15 @@ attach2 attach2-4.12 class=intentional issue=1846  # PRAGMA lock_status: doltlit
 # shifting every entry by +25. The dolt_tests and dolt_test_run module
 # registrations add four more. The dolt_ignore module registration adds
 # two more. Checkpoint discovery adds the remaining build-dependent shifts.
-attachmalloc attachmalloc-1.transient.507 class=unsupported issue=1839  # OOM fault-point shift (parent probe)
-attachmalloc attachmalloc-1.transient.932 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1426 @no-coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.940 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1442 @coverage class=unsupported issue=1839  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.507 class=unsupported issue=2492  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.932 @no-coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1426 @no-coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.940 @coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1442 @coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
-temptable2 temptable2-8.1 class=intentional issue=1846  # PRAGMA page_count: chunk store has no SQLite page count
+temptable2 temptable2-8.1 class=intentional issue=2493  # PRAGMA page_count: chunk store has no SQLite page count
 temptable2 temptable2-8.3 class=intentional  # sqlite3_backup_init: page-image backup unsupported on prolly
 temptable2 temptable2-8.6 class=intentional  # sqlite3_backup_init: page-image backup unsupported on prolly
 # zeroblob-1.1.x — internal instrumentation: sqlite3_max_blobsize tracks the
@@ -1537,11 +1536,11 @@ vtab4 vtab4-1.2 class=intentional issue=1840  # adoption schema reset triggers v
 # -- feature-gap sweep wave 2 (#1208): 38 completing files, every failing
 # assertion reproduced and its mechanism verified (rejection message, header
 # offset, sidecar absence, snapshot-concurrency contract, or fault shift).
-autovacuum2 autovacuum2-1.0 class=intentional issue=1846  # auto_vacuum pragma rejected; freelist/page metrics + cascade
-autovacuum2 autovacuum2-1.1 class=intentional issue=1846  # auto_vacuum pragma rejected; freelist/page metrics + cascade
-autovacuum2 autovacuum2-1.3 class=intentional issue=1846  # auto_vacuum pragma rejected; freelist/page metrics + cascade
-autovacuum2 autovacuum2-1.4 class=intentional issue=1846  # auto_vacuum pragma rejected; freelist/page metrics + cascade
-autovacuum2 autovacuum2-1.20 class=intentional issue=1846  # auto_vacuum pragma rejected; freelist/page metrics + cascade
+autovacuum2 autovacuum2-1.0 class=intentional issue=2493  # auto_vacuum pragma rejected; freelist/page metrics + cascade
+autovacuum2 autovacuum2-1.1 class=intentional issue=2493  # auto_vacuum pragma rejected; freelist/page metrics + cascade
+autovacuum2 autovacuum2-1.3 class=intentional issue=2493  # auto_vacuum pragma rejected; freelist/page metrics + cascade
+autovacuum2 autovacuum2-1.4 class=intentional issue=2493  # auto_vacuum pragma rejected; freelist/page metrics + cascade
+autovacuum2 autovacuum2-1.20 class=intentional issue=2493  # auto_vacuum pragma rejected; freelist/page metrics + cascade
 busy busy-2.1 class=intentional  # snapshot concurrency: reader does not block the commit, busy handler never fires
 busy busy-2.2 class=intentional  # snapshot concurrency: reader does not block the commit, busy handler never fires
 busy busy-3.5 class=intentional  # snapshot concurrency: reader does not block the commit, busy handler never fires
@@ -1596,26 +1595,26 @@ incrblobfault incrblobfault-3-ioerr-persistent.3 class=intentional  # IO-fault p
 incrblobfault incrblobfault-3-ioerr-transient.2 class=intentional  # IO-fault point shift under fault injection
 incrblobfault incrblobfault-3-ioerr-transient.3 class=intentional  # IO-fault point shift under fault injection
 journal1 journal1-1.2 class=unsupported issue=1836  # copies test.db-journal: no rollback-journal sidecar
-lock lock-2.3.2 class=intentional issue=1846  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
-lock lock-2.4.2 class=intentional issue=1846  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
-lock lock-7.2 class=intentional issue=1846  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
-lock lock-7.3 class=intentional issue=1846  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
+lock lock-2.3.2 class=intentional issue=2493  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
+lock lock-2.4.2 class=intentional issue=2493  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
+lock lock-7.2 class=intentional issue=2493  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
+lock lock-7.3 class=intentional issue=2493  # locking model: snapshot reads proceed; lock_status reports doltlite states; journal_mode cascade
 lock2 lock2-1.5 class=intentional  # locking model: schema read not blocked by writer; commit-state cascade
 lock2 lock2-1.7 class=intentional  # locking model: schema read not blocked by writer; commit-state cascade
 lock2 lock2-1.8 class=intentional  # locking model: schema read not blocked by writer; commit-state cascade
 lock3 lock3-4.1 class=intentional  # locking model: read proceeds where stock blocks
-lock7 lock7-1.6 class=intentional issue=1846  # PRAGMA lock_status reports doltlite locking model
+lock7 lock7-1.6 class=intentional issue=2493  # PRAGMA lock_status reports doltlite locking model
 mallocK mallocK-6.0 class=intentional  # custom collation utf16_aligned explicitly rejected
 memdb memdb-6.12 class=intentional issue=1840  # rowid on composite-PK (WITHOUT ROWID) table; auto_vacuum rejected
 memdb memdb-9.1 class=intentional issue=1840  # rowid on composite-PK (WITHOUT ROWID) table; auto_vacuum rejected
-memjournal memjournal-1.0 class=intentional issue=1846  # journal_mode pragma rejected + cascade
+memjournal memjournal-1.0 class=intentional issue=2493  # journal_mode pragma rejected + cascade
 mmapcorrupt mmapcorrupt-2.1 class=intentional  # mmap stock-page corruption: offset misses chunk-store structures
-mmapwarm mmapwarm-1.0 class=intentional issue=1846  # PRAGMA page_count: chunk store has no SQLite page count
+mmapwarm mmapwarm-1.0 class=intentional issue=2493  # PRAGMA page_count: chunk store has no SQLite page count
 oserror oserror-2.1.1 class=intentional  # no -wal sidecar to unlink; error log stays empty
 oserror oserror-2.1.2 class=intentional  # no -wal sidecar to unlink; error log stays empty
-pager3 pager3-1.1.1 class=intentional issue=1846  # journal-file existence probes; journal_mode rejected
-pager3 pager3-1.4.2 class=intentional issue=1846  # journal-file existence probes; journal_mode rejected
-pager3 pager3-1.5.2 class=intentional issue=1846  # journal-file existence probes; journal_mode rejected
+pager3 pager3-1.1.1 class=intentional issue=2493  # journal-file existence probes; journal_mode rejected
+pager3 pager3-1.4.2 class=intentional issue=2493  # journal-file existence probes; journal_mode rejected
+pager3 pager3-1.5.2 class=intentional issue=2493  # journal-file existence probes; journal_mode rejected
 rdonly rdonly-1.2 class=intentional  # stock write-version header byte poke (offset 18) has no doltlite meaning; cascade
 rdonly rdonly-1.3.1 class=intentional  # stock write-version header byte poke (offset 18) has no doltlite meaning; cascade
 rdonly rdonly-1.4 class=intentional  # stock write-version header byte poke (offset 18) has no doltlite meaning; cascade
@@ -1626,10 +1625,10 @@ shared7 shared7-1.2 class=unsupported issue=1837  # shared-cache ATTACH restrict
 shared7 shared7-1.3 class=unsupported issue=1837  # shared-cache ATTACH restrictions not applicable
 shared7 shared7-1.4 class=unsupported issue=1837  # shared-cache ATTACH restrictions not applicable
 sharedlock sharedlock-2.4 class=unsupported issue=1837  # shared-cache table lock not raised; snapshot read proceeds
-unixexcl unixexcl-1.1.4.multiproc class=intentional issue=1846  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
-unixexcl unixexcl-3.1.1.multiproc class=intentional issue=1846  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
-unixexcl unixexcl-3.2.3 class=intentional issue=1846  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
-unixexcl unixexcl-3.2.7 class=intentional issue=1846  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
+unixexcl unixexcl-1.1.4.multiproc class=intentional issue=2493  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
+unixexcl unixexcl-3.1.1.multiproc class=intentional issue=2493  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
+unixexcl unixexcl-3.2.3 class=intentional issue=2493  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
+unixexcl unixexcl-3.2.7 class=intentional issue=2493  # multiproc locking model; wal_checkpoint frame counters zero (no-op checkpoint); data assertions pass
 wal64k wal64k-1.1 class=unsupported issue=1836  # reads test.db-shm: no shm sidecar
 wal64k wal64k-1.2 class=unsupported issue=1836  # reads test.db-shm: no shm sidecar
 wal9 wal9-1.3 class=unsupported issue=1836  # file-size metric + missing -wal/-shm sidecars
@@ -1687,25 +1686,25 @@ walshared walshared-1.3 class=unsupported issue=1836  # shared-cache WAL table l
 
 # -- feature-gap sweep wave 3 (#1208): 44 completing files (6-100 failures),
 # every file's failure set reproduced and classified by verified mechanism.
-backup2 backup2-4 class=unsupported issue=1839  # backup format/file hash and error-text differ; in-memory backup rejected
-backup2 backup2-5 class=unsupported issue=1839  # backup format/file hash and error-text differ; in-memory backup rejected
-backup2 backup2-6 class=unsupported issue=1839  # backup format/file hash and error-text differ; in-memory backup rejected
-backup2 backup2-7 class=unsupported issue=1839  # backup format/file hash and error-text differ; in-memory backup rejected
-backup2 backup2-11 class=unsupported issue=1839  # backup format/file hash and error-text differ; in-memory backup rejected
-backup4 backup4-2.2 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-backup4 backup4-2.3 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-backup4 backup4-2.4 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-backup4 backup4-3.2 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-backup4 backup4-3.3 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-backup4 backup4-3.4 class=unsupported issue=1839  # chunk-store file sizes; in-memory doltlite backup rejected
-busy2 busy2-2.1.2 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.1.3 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.1.4 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.1.5 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.2.2 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.2.3 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.2.4 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
-busy2 busy2-2.2.5 class=intentional issue=1846  # wal_checkpoint counters zero; no external WAL frames
+backup2 backup2-4 class=unsupported issue=2491  # backup format/file hash and error-text differ; in-memory backup rejected
+backup2 backup2-5 class=unsupported issue=2491  # backup format/file hash and error-text differ; in-memory backup rejected
+backup2 backup2-6 class=unsupported issue=2491  # backup format/file hash and error-text differ; in-memory backup rejected
+backup2 backup2-7 class=unsupported issue=2491  # backup format/file hash and error-text differ; in-memory backup rejected
+backup2 backup2-11 class=unsupported issue=2491  # backup format/file hash and error-text differ; in-memory backup rejected
+backup4 backup4-2.2 class=unsupported issue=2491  # chunk-store file sizes; in-memory doltlite backup rejected
+backup4 backup4-2.3 class=unsupported issue=2491  # chunk-store file sizes; in-memory doltlite backup rejected
+backup4 backup4-2.4 class=unsupported issue=2491  # chunk-store file sizes; in-memory doltlite backup rejected
+backup4 backup4-3.2 class=unsupported issue=2491  # chunk-store file sizes; in-memory doltlite backup rejected
+backup4 backup4-3.3 class=unsupported issue=2491  # chunk-store file sizes; in-memory doltlite backup rejected
+backup4 backup4-3.4 class=unsupported issue=2491  # chunk-store file sizes; in-memory doltlite backup rejected
+busy2 busy2-2.1.2 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.1.3 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.1.4 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.1.5 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.2 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.3 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.4 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
+busy2 busy2-2.2.5 class=intentional issue=2493  # wal_checkpoint counters zero; no external WAL frames
 busy2 busy2-3.1.2 class=intentional  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 busy2 busy2-3.1.3 class=intentional  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
 busy2 busy2-3.2.2 class=intentional  # snapshot read instead of SQLITE_BUSY; busy handler correctly never invoked
@@ -1750,10 +1749,10 @@ corruptE corruptE-3.14 class=intentional  # stock page cell-order /out of order/
 # corruptK — freelist corruption via sqlite_dbpage page writes + page_count.
 # dbpage writes are rejected (no SQLite pages); page_count is synthetic.
 # Architectural — not a freelist implementation gap.
-corruptK corruptK-1.1 class=intentional issue=1846  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
+corruptK corruptK-1.1 class=intentional issue=2493  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
 corruptK corruptK-1.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 corruptK corruptK-1.3 class=intentional  # cascade of 1.2: damaged batch has no durable root; recovery drops t1 (architectural)
-corruptK corruptK-2.1 class=intentional issue=1846  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
+corruptK corruptK-2.1 class=intentional issue=2493  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
 corruptK corruptK-2.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 corruptK corruptK-3.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 corruptK corruptK-3.3 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
@@ -2052,8 +2051,8 @@ nolock nolock-3.12 class=intentional  # VFS xLock call counts differ under chunk
 nolock nolock-4.1 class=intentional  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.3 class=intentional  # VFS xLock call counts differ under chunk-store locking
 pager4 pager4-1.4 class=engine-gap issue=1884  # two databases created in the same second are byte-identical, so a same-second stranger at the vacated path carries our own seed commit and passes the tip proof; any database with a real commit is protected
-pager4 pager4-1.7 class=intentional issue=1846  # journal_mode is fixed at wal and the PRAGMA is a no-op reporting 'wal', so OFF cannot grant stock's moved-file write exception; the write is refused
-pager4 pager4-1.8 class=intentional issue=1846  # journal_mode is fixed at wal and the PRAGMA is a no-op reporting 'wal', so MEMORY cannot grant stock's moved-file write exception; the write is refused
+pager4 pager4-1.7 class=intentional issue=2493  # journal_mode is fixed at wal and the PRAGMA is a no-op reporting 'wal', so OFF cannot grant stock's moved-file write exception; the write is refused
+pager4 pager4-1.8 class=intentional issue=2493  # journal_mode is fixed at wal and the PRAGMA is a no-op reporting 'wal', so MEMORY cannot grant stock's moved-file write exception; the write is refused
 resetdb resetdb-100 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-110 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
 resetdb resetdb-200 class=intentional  # sqlite_dbpage writes rejected; page counts/journal-mode reporting differ
@@ -2217,7 +2216,7 @@ corruptF corruptF-2.2 class=intentional  # SQLite multi-page file-size probe; no
 corruptF corruptF-2.3 class=intentional  # SQLite freelist-header hexio probe; no page freelist layout (architectural)
 corruptF corruptF-2.4 class=intentional  # SQLite freelist-trunk hexio probe; no page freelist layout (architectural)
 corruptF corruptF-2.6 class=intentional  # freelist poke aliases leaf page; no page freelist (architectural)
-memjournal2 memjournal2-1.0 class=intentional issue=1846  # in-memory journal premise: journal_mode fixed, sidecar absent
+memjournal2 memjournal2-1.0 class=intentional issue=2493  # in-memory journal premise: journal_mode fixed, sidecar absent
 # mallocG-1 closes and reopens an empty database under malloc fault injection.
 # DoltLite's lazy chunk-store open avoids the stock early allocation/failure
 # points for the first transient fault indexes.
@@ -2703,12 +2702,12 @@ wal5 wal5-capi-2.4.11.1.2 class=unsupported issue=1836  # busy handler not fired
 wal5 wal5-capi-2.4.11.2.2 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
 wal5 wal5-capi-2.4.12.1.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
 wal5 wal5-capi-2.4.12.2.3 class=unsupported issue=1836  # busy handler not fired by opportunistic compaction
-pagerfault3 pagerfault3-pre1 class=intentional issue=1846  # synthetic chunk-format page_count
-pagerfault3 pagerfault3-pre2 class=intentional issue=1846  # synthetic chunk-format page_count
+pagerfault3 pagerfault3-pre1 class=intentional issue=2493  # synthetic chunk-format page_count
+pagerfault3 pagerfault3-pre2 class=intentional issue=2493  # synthetic chunk-format page_count
 
 # ── sqllimits1 ──
-sqllimits1 sqllimits1-7.7.1 class=intentional issue=1846  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
-sqllimits1 sqllimits1-7.7.3 class=intentional issue=1846  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
+sqllimits1 sqllimits1-7.7.1 class=intentional issue=2493  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
+sqllimits1 sqllimits1-7.7.3 class=intentional issue=2493  # max_page_count/page_count use DoltLite synthetic chunk counts, not stock file pages
 
 # Raw corruption probes. 3.x is a writable_schema rootpage swap: full scans
 # return the intact correct data, writes detect the mismatch and error
@@ -4049,14 +4048,14 @@ autovacuum autovacuum-2.5.2 class=intentional  # sqlite_master rootpage numberin
 autovacuum autovacuum-2.5.3 class=intentional  # sqlite_master rootpage numbering / no autoindex shadow
 autovacuum autovacuum-2.5.4 class=intentional  # sqlite_master rootpage numbering / no autoindex shadow
 autovacuum autovacuum-2.5.5 class=intentional  # sqlite_master rootpage numbering / no autoindex shadow
-autovacuum autovacuum-3.1 class=intentional issue=1846  # auto_vacuum reads back 0 / not persisted
-autovacuum autovacuum-3.2 class=intentional issue=1846  # auto_vacuum reads back 0 / not persisted
-autovacuum autovacuum-3.3 class=intentional issue=1846  # auto_vacuum reads back 0 / not persisted
-autovacuum autovacuum-4.0 class=intentional issue=1846  # auto_vacuum reads back 0 / not persisted
+autovacuum autovacuum-3.1 class=intentional issue=2493  # auto_vacuum reads back 0 / not persisted
+autovacuum autovacuum-3.2 class=intentional issue=2493  # auto_vacuum reads back 0 / not persisted
+autovacuum autovacuum-3.3 class=intentional issue=2493  # auto_vacuum reads back 0 / not persisted
+autovacuum autovacuum-4.0 class=intentional issue=2493  # auto_vacuum reads back 0 / not persisted
 autovacuum autovacuum-7.1 class=intentional  # file_pages: chunk-store size, no page reclamation
 autovacuum autovacuum-7.2 class=intentional  # file_pages: chunk-store size, no page reclamation
 autovacuum autovacuum-7.3 class=intentional  # file_pages: chunk-store size, no page reclamation
-autovacuum autovacuum-8.1 class=intentional issue=1846  # auto_vacuum reads back 0 / not persisted
+autovacuum autovacuum-8.1 class=intentional issue=2493  # auto_vacuum reads back 0 / not persisted
 autovacuum autovacuum-8.2 class=intentional  # no "database is locked" for cross-connection pragma during BEGIN EXCLUSIVE
 autovacuum autovacuum-9.1 class=intentional  # file_pages: chunk-store size, no page reclamation
 autovacuum autovacuum-9.2 class=intentional  # file_pages: chunk-store size, no page reclamation
@@ -4067,7 +4066,7 @@ autovacuum autovacuum-9.5 class=intentional  # file_pages: chunk-store size, no 
 # avtrans is trans.test under auto_vacuum=full (now an accepted no-op, so
 # the old setup-cascade entries are gone). Remaining: only the auto_vacuum
 # read-back probe.
-avtrans avtrans-1.0.1 class=intentional issue=1846  # PRAGMA auto_vacuum reads back 0, not 1
+avtrans avtrans-1.0.1 class=intentional issue=2493  # PRAGMA auto_vacuum reads back 0, not 1
 
 # corrupt8 — stock pointer-map page byte pokes (auto_vacuum ptrmap).
 # Chunk-store files have no SQLite pointer-map pages; the raw write is not
@@ -5187,7 +5186,7 @@ incrvacuum incrvacuum-7.319.3 class=intentional  # injection point shifted by cl
 # freelist), so post-vacuum file-size shrink expectations differ, and the
 # wal-mode subtests read a test.db-wal sidecar that doltlite never creates
 # (chunk WAL is internal).
-incrvacuum2 incrvacuum2-1.1 class=intentional issue=1846  # file size: no shrink from incremental_vacuum
+incrvacuum2 incrvacuum2-1.1 class=intentional issue=2493  # file size: no shrink from incremental_vacuum
 incrvacuum2 incrvacuum2-1.2 class=intentional  # file size
 incrvacuum2 incrvacuum2-1.3 class=intentional  # file size
 incrvacuum2 incrvacuum2-1.4 class=intentional  # file size
@@ -5281,8 +5280,8 @@ ioerr ioerr-2.33.3 @linux @coverage class=intentional
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
 # so freelist_count stays 0 after the mass DELETE instead of 64.
-ioerr4 ioerr4-1.3 class=intentional issue=1846  # auto_vacuum no-op reads back 0
-ioerr4 ioerr4-1.6 class=intentional issue=1846  # no page freelist; freelist_count always 0
+ioerr4 ioerr4-1.3 class=intentional issue=2493  # auto_vacuum no-op reads back 0
+ioerr4 ioerr4-1.6 class=intentional issue=2493  # no page freelist; freelist_count always 0
 
 # jrnlmode — doltlite-format databases do not expose SQLite's journal-mode
 # switching: the default mode reports as the chunk WAL ('wal' where stock
@@ -5361,71 +5360,71 @@ jrnlmode jrnlmode-9.2 class=unsupported issue=1836
 # 0; PRAGMA page_count reflects chunk pages, not stock page images; the
 # .5 subtests read btree_pager_stats(read), instrumentation the chunk
 # store doesn't feed. count(*)/integrity_check pass throughout.
-mmap1 mmap1-1.1.1.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.1.1.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.1.1.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.1.1.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.1.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.1.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.1.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.1.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.1.1.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.1.2.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.1.2.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.1.2.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.1.2.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.2.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.2.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.2.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.1.2.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.1.2.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.2.1.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.2.1.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.2.1.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.2.1.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.1.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.1.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.1.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.1.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.2.1.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.2.2.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.2.2.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.2.2.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.2.2.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.2.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.2.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.2.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.2.2.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.2.2.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.3.1.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.3.1.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.3.1.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.3.1.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.1.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.1.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.1.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.1.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.3.1.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.3.2.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.3.2.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.3.2.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.3.2.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.2.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.2.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.2.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.3.2.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.3.2.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.4.1.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.4.1.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.4.1.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.4.1.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.1.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.1.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.1.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.1.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.4.1.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.4.2.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.4.2.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.4.2.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.4.2.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.2.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.2.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.2.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.4.2.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.4.2.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.5.1.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.5.1.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.5.1.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.5.1.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.1.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.1.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.1.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.1.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.5.1.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.5.2.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.5.2.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.5.2.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.5.2.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.2.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.2.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.2.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.5.2.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.5.2.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.6.1.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.6.1.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.6.1.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.6.1.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.1.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.1.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.1.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.1.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.6.1.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-1.6.2.1 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.6.2.2 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.6.2.3 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-1.6.2.4 class=intentional issue=1846  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.2.1 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.2.2 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.2.3 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-1.6.2.4 class=intentional issue=2493  # page_count: chunk-page accounting
 mmap1 mmap1-1.6.2.5 class=intentional  # nRead pager-stats instrumentation
-mmap1 mmap1-2.1 class=intentional issue=1846  # mmap_size reads back 0 / mmap stats 0
-mmap1 mmap1-2.2 class=intentional issue=1846  # mmap_size reads back 0 / mmap stats 0
-mmap1 mmap1-2.4 class=intentional issue=1846  # page_count: chunk-page accounting
-mmap1 mmap1-5.1 class=intentional issue=1846  # auto_vacuum reads back 0 (row data matches)
-mmap1 mmap1-6.2 class=intentional issue=1846  # mmap_size reads back 0 / mmap stats 0
+mmap1 mmap1-2.1 class=intentional issue=2493  # mmap_size reads back 0 / mmap stats 0
+mmap1 mmap1-2.2 class=intentional issue=2493  # mmap_size reads back 0 / mmap stats 0
+mmap1 mmap1-2.4 class=intentional issue=2493  # page_count: chunk-page accounting
+mmap1 mmap1-5.1 class=intentional issue=2493  # auto_vacuum reads back 0 (row data matches)
+mmap1 mmap1-6.2 class=intentional issue=2493  # mmap_size reads back 0 / mmap stats 0
 
 # multiplex VFS over a chunk store: journal_mode is not configurable on
 # doltlite-format databases (dominant failure: the multiplex tests set
@@ -5632,12 +5631,12 @@ vacuum vacuum-7.6 class=intentional issue=1840  # PRAGMA auto_vacuum reads back 
 # in-progress-statement VACUUM error path all diverge.
 vacuum2 vacuum2-2.1 class=intentional  # hexio read of page-1 change counter (offset 24) — no stock header in a chunk file
 vacuum2 vacuum2-2.2 class=intentional  # same header-poke arithmetic
-vacuum2 vacuum2-3.3 class=intentional issue=1846  # file size / page_size expectation
-vacuum2 vacuum2-3.13 class=intentional issue=1846  # file size / page_size expectation
-vacuum2 vacuum2-4.2 class=intentional issue=1846  # auto_vacuum reads back 0 (no-op, not persisted)
-vacuum2 vacuum2-4.4 class=intentional issue=1846  # auto_vacuum reads back 0
-vacuum2 vacuum2-4.5 class=intentional issue=1846  # auto_vacuum reads back 0
-vacuum2 vacuum2-4.7 class=intentional issue=1846  # auto_vacuum reads back 0
+vacuum2 vacuum2-3.3 class=intentional issue=2493  # file size / page_size expectation
+vacuum2 vacuum2-3.13 class=intentional issue=2493  # file size / page_size expectation
+vacuum2 vacuum2-4.2 class=intentional issue=2493  # auto_vacuum reads back 0 (no-op, not persisted)
+vacuum2 vacuum2-4.4 class=intentional issue=2493  # auto_vacuum reads back 0
+vacuum2 vacuum2-4.5 class=intentional issue=2493  # auto_vacuum reads back 0
+vacuum2 vacuum2-4.7 class=intentional issue=2493  # auto_vacuum reads back 0
 vacuum2 vacuum2-6.0 class=intentional  # PRIMARY KEY with custom collation rejected: "doltlite does not support indexes with custom collation 'cmp'"
 
 # ── vacuum3 ──
@@ -5669,7 +5668,7 @@ vacuum3 vacuum3-2.7.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-2.8.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-2.9.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-2.10.2 class=intentional  # file size = chunk payload
-vacuum3 vacuum3-5.2 class=intentional issue=1846  # memdb page_size read-back after VACUUM (no rebuild)
+vacuum3 vacuum3-5.2 class=intentional issue=2493  # memdb page_size read-back after VACUUM (no rebuild)
 # VACUUM gc-rewrite ioerr window: the injected error lands in a best-effort
 # finalization write that gc deliberately consumes, so the statement succeeds
 # after the error was hit; checksum subtests pass, data intact. Ordinals are
@@ -5735,7 +5734,7 @@ fts3cov fts3cov-10.transient.338 @coverage class=intentional
 fts3cov fts3cov-10.persistent.338 @coverage class=intentional
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
-pager2 pager2-2.1 class=intentional issue=1846  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
+pager2 pager2-2.1 class=intentional issue=2493  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
 pager2 pager2-2.2 class=intentional  # file size = chunk payload (13088), not a page-count multiple
 pager2 pager2-3.1 class=intentional  # shared-cache in-memory db (file:...?mode=memory&cache=shared): cross-connection table visibility differs
 
