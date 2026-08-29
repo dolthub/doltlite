@@ -6,17 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DOLTLITE="${1:-$REPO_ROOT/build/doltlite}"
 OUTPUT="${2:-$SCRIPT_DIR/seed.db}"
-REMOTE="/tmp/doltlite-format-corpus-v12-origin.db"
 TMP="$(mktemp -d)"
+REMOTE="$TMP/origin.db"
+SEED_SQL="$TMP/seed.sql"
 
 cleanup() {
   rm -rf "$TMP"
-  rm -f "$REMOTE" "$REMOTE-lock" "$REMOTE-name-lock"
 }
 trap cleanup EXIT
 
-rm -f "$REMOTE" "$REMOTE-lock" "$REMOTE-name-lock"
-"$DOLTLITE" "$TMP/seed.db" < "$SCRIPT_DIR/seed.sql" >/dev/null
+sed "s|@REMOTE_URI@|file://$REMOTE|g" "$SCRIPT_DIR/seed.sql" > "$SEED_SQL"
+"$DOLTLITE" "$TMP/seed.db" < "$SEED_SQL" >/dev/null
 cp "$TMP/seed.db" "$OUTPUT"
 
 if command -v sha256sum >/dev/null 2>&1; then

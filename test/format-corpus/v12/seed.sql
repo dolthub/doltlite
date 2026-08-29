@@ -84,7 +84,7 @@ SELECT dolt_commit('-A', '-m', 'v12 comprehensive base',
 SELECT dolt_tag('v12-base', '-m', 'annotated format baseline',
                 '--author', 'Format Tagger <tagger@example.com>');
 SELECT dolt_remote('add', 'origin',
-                   'file:///tmp/doltlite-format-corpus-v12-origin.db');
+                   '@REMOTE_URI@');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_fetch('origin', 'main');
 

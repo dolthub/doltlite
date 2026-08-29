@@ -145,9 +145,10 @@ run_test "corpus_v12_annotated_tags" \
   "v12-base:Format Tagger:tagger@example.com:annotated format baseline|v12-merge:Merge Tagger:merge@example.com:annotated merge result" \
   "$OPEN_DB/main"
 run_test "corpus_v12_remote_tracking" \
-  "SELECT group_concat(name || ':' || url, ',') FROM dolt_remotes;
+  "SELECT group_concat(name || ':' || (url GLOB 'file://*/origin.db'), ',')
+     FROM dolt_remotes;
    SELECT group_concat(name, ',') FROM dolt_remote_branches;" \
-  "origin:file:///tmp/doltlite-format-corpus-v12-origin.db
+  "origin:1
 remotes/origin/main" "$OPEN_DB/main"
 run_test "corpus_v12_dirty_staged_working_set" \
   "SELECT group_concat(id || ':' || grp, ',') FROM (
