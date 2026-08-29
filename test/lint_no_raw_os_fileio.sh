@@ -37,7 +37,13 @@ raw_matches() {
 
 # creds: OS sidecar + private-file modes. gc/commit: unistd.h for crash-test _exit().
 # net.h: sockets; fcntl only for O_NONBLOCK.
+# chunk_store_lock.c gen sidecar: the cross-process change counter needs a
+# writable shared mapping, which the VFS cannot express (xFetch is
+# read-only). The -gen sidecar is never byte-range locked, so its raw
+# open/close cannot drop POSIX locks the process holds elsewhere.
 raw_matches \
+  | grep -Ev '^src/chunk_store_lock\.c:[0-9]+:.*\b(open|close|mmap|munmap|ftruncate)[[:space:]]*\(' \
+  | grep -Ev '^src/chunk_store_lock\.c:[0-9]+:#[[:space:]]*include <(sys/mman|fcntl|unistd)\.h>' \
   | grep -Ev '^src/doltlite_creds\.c:' \
   | grep -Ev '^src/(doltlite_gc|chunk_store_commit)\.c:[0-9]+:#include <unistd\.h>' \
   | grep -Ev '^src/doltlite_net\.h:[0-9]+:#include <(unistd|fcntl)\.h>' \

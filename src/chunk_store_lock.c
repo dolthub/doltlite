@@ -7,11 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#if !defined(_WIN32)
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+/* The generation sidecar needs a writable shared mapping, which the VFS
+** cannot express (xFetch is read-only). Unix only; everywhere else the
+** map stays absent and readers keep the stat-per-statement path. */
+#if SQLITE_OS_UNIX && !defined(SQLITE_WASI)
+# define DOLTLITE_GEN_MAP 1
+# include <sys/mman.h>   /* amalgamator: keep */
+# include <fcntl.h>      /* amalgamator: keep */
+# include <unistd.h>     /* amalgamator: keep */
 #endif
 
 int csFileLockHeld(sqlite3_file *pFile){
@@ -448,23 +451,38 @@ int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
 #define CS_GEN_MAP_SIZE 64
 #define CS_GEN_STAT_INTERVAL_MS 20
 
+/* A dedicated sidecar, deliberately NOT the -lock file: raw close() of
+** any fd on an inode drops every POSIX lock the process holds on it,
+** including the graph lock held through the VFS. Nothing ever locks
+** the -gen file, so opening and closing it here is always safe. */
+static char *csGenPath(const char *path){
+  const char *zBase = strrchr(path, '/');
+  int nDir = 0;
+
+  if( zBase ){
+    nDir = (int)(zBase - path) + 1;
+    zBase++;
+  }else{
+    zBase = path;
+  }
+  return sqlite3_mprintf("%.*s.%s-gen", nDir, path, zBase);
+}
+
 static void csGenMapEnsure(ChunkStore *cs){
-#if !defined(_WIN32)
-  char *zLock;
+#ifdef DOLTLITE_GEN_MAP
+  char *zGen;
   int fd;
   void *pMap;
-  struct stat st;
   if( cs->pGenMap || cs->isMemory || cs->isBuffer
    || !cs->file.zFilename ){
     return;
   }
-  zLock = csLockPath(cs->file.zFilename);
-  if( !zLock ) return;
-  fd = open(zLock, O_RDWR|O_CREAT|O_CLOEXEC, 0644);
-  sqlite3_free(zLock);
+  zGen = csGenPath(cs->file.zFilename);
+  if( !zGen ) return;
+  fd = open(zGen, O_RDWR|O_CREAT|O_CLOEXEC, 0644);
+  sqlite3_free(zGen);
   if( fd<0 ) return;
-  if( fstat(fd, &st)==0 && st.st_size<CS_GEN_MAP_SIZE
-   && ftruncate(fd, CS_GEN_MAP_SIZE)!=0 ){
+  if( ftruncate(fd, CS_GEN_MAP_SIZE)!=0 ){
     close(fd);
     return;
   }
@@ -480,7 +498,7 @@ static void csGenMapEnsure(ChunkStore *cs){
 }
 
 void csGenMapClose(ChunkStore *cs){
-#if !defined(_WIN32)
+#ifdef DOLTLITE_GEN_MAP
   if( cs->pGenMap ){
     munmap((void*)cs->pGenMap, CS_GEN_MAP_SIZE);
     cs->pGenMap = 0;
@@ -491,7 +509,7 @@ void csGenMapClose(ChunkStore *cs){
 }
 
 void csGenBump(ChunkStore *cs){
-#if !defined(_WIN32)
+#ifdef DOLTLITE_GEN_MAP
   csGenMapEnsure(cs);
   if( cs->pGenMap ){
     __atomic_fetch_add((u64*)(void*)cs->pGenMap, 1, __ATOMIC_RELAXED);
