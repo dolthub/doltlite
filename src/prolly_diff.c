@@ -605,6 +605,211 @@ static int diffSetChangeVal(
   return SQLITE_OK;
 }
 
+/* Open dual cursors over a differing range: whole subtrees, or a subtree
+** tail past the boundary key a suspended internal walk stopped at. */
+static int diffIterActivateRange(
+  ProllyDiffIter *pIter,
+  const ProllyHash *pOldHash,
+  const ProllyHash *pNewHash,
+  const ProllyNode *pSeekNode,
+  int iSeekItem
+){
+  int rc = SQLITE_OK;
+  int emO = 0, emN = 0;
+
+  pIter->pCurOld = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
+  pIter->pCurNew = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
+  if( !pIter->pCurOld || !pIter->pCurNew ){
+    sqlite3_free(pIter->pCurOld);
+    sqlite3_free(pIter->pCurNew);
+    pIter->pCurOld = 0;
+    pIter->pCurNew = 0;
+    return SQLITE_NOMEM;
+  }
+  prollyCursorInit(pIter->pCurOld, pIter->pStore, pIter->pCache,
+                   pOldHash, pIter->oldFlags);
+  prollyCursorInit(pIter->pCurNew, pIter->pStore, pIter->pCache,
+                   pNewHash, pIter->newFlags);
+
+  if( pSeekNode && (pIter->flags & PROLLY_NODE_INTKEY) ){
+    i64 seekKey = prollyNodeIntKey(pSeekNode, iSeekItem);
+    rc = prollyCursorSeekInt(pIter->pCurOld, seekKey, &emO);
+    if( rc==SQLITE_OK && emO==0 ) rc = prollyCursorNext(pIter->pCurOld);
+    if( rc==SQLITE_OK ){
+      rc = prollyCursorSeekInt(pIter->pCurNew, seekKey, &emN);
+      if( rc==SQLITE_OK && emN==0 ) rc = prollyCursorNext(pIter->pCurNew);
+    }
+  }else if( pSeekNode ){
+    const u8 *pSK; int nSK;
+    prollyNodeKey(pSeekNode, iSeekItem, &pSK, &nSK);
+    rc = prollyCursorSeekBlob(pIter->pCurOld, pSK, nSK, &emO);
+    if( rc==SQLITE_OK && emO==0 ) rc = prollyCursorNext(pIter->pCurOld);
+    if( rc==SQLITE_OK ){
+      rc = prollyCursorSeekBlob(pIter->pCurNew, pSK, nSK, &emN);
+      if( rc==SQLITE_OK && emN==0 ) rc = prollyCursorNext(pIter->pCurNew);
+    }
+  }else{
+    rc = prollyCursorFirst(pIter->pCurOld, &emO);
+    if( rc==SQLITE_OK ) rc = prollyCursorFirst(pIter->pCurNew, &emN);
+  }
+
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(pIter->pCurOld);
+    prollyCursorClose(pIter->pCurNew);
+    sqlite3_free(pIter->pCurOld);
+    sqlite3_free(pIter->pCurNew);
+    pIter->pCurOld = 0;
+    pIter->pCurNew = 0;
+    return rc;
+  }
+  pIter->cursorsActive = 1;
+  return SQLITE_OK;
+}
+
+static void diffIterCloseCursors(ProllyDiffIter *pIter){
+  if( pIter->pCurOld ){
+    prollyCursorClose(pIter->pCurOld);
+    sqlite3_free(pIter->pCurOld);
+    pIter->pCurOld = 0;
+  }
+  if( pIter->pCurNew ){
+    prollyCursorClose(pIter->pCurNew);
+    sqlite3_free(pIter->pCurNew);
+    pIter->pCurNew = 0;
+  }
+  pIter->cursorsActive = 0;
+}
+
+static void diffIterPopFrame(ProllyDiffIter *pIter){
+  DiffIterFrame *pF;
+  if( pIter->nFrames<=0 ) return;
+  pF = &pIter->aFrames[--pIter->nFrames];
+  sqlite3_free(pF->pOldData);
+  sqlite3_free(pF->pNewData);
+  memset(pF, 0, sizeof(*pF));
+}
+
+/* Expand one differing subtree pair: identical hashes vanish, same-level
+** internal pairs suspend as a frame, everything else (leaves, mixed
+** levels, one empty side) becomes a cursor range. */
+static int diffIterDescendPair(
+  ProllyDiffIter *pIter,
+  const ProllyHash *pOldHash,
+  const ProllyHash *pNewHash
+){
+  ProllyNode oldNode, newNode;
+  u8 *pOldData = 0, *pNewData = 0;
+  int rc;
+
+  if( prollyHashCompare(pOldHash, pNewHash)==0 ) return SQLITE_OK;
+  if( prollyHashIsEmpty(pOldHash) && prollyHashIsEmpty(pNewHash) ){
+    return SQLITE_OK;
+  }
+  if( prollyHashIsEmpty(pOldHash) || prollyHashIsEmpty(pNewHash) ){
+    return diffIterActivateRange(pIter, pOldHash, pNewHash, 0, 0);
+  }
+
+  rc = prollyFetchNode(pIter->pStore, pOldHash, &oldNode, &pOldData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyFetchNode(pIter->pStore, pNewHash, &newNode, &pNewData);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pOldData);
+    return rc;
+  }
+
+  if( oldNode.level>0 && newNode.level>0 && oldNode.level==newNode.level ){
+    DiffIterFrame *pF;
+    if( pIter->nFrames+1 > pIter->nFramesAlloc ){
+      int nNew = pIter->nFramesAlloc ? pIter->nFramesAlloc*2 : 8;
+      DiffIterFrame *aNew = sqlite3_realloc(pIter->aFrames,
+          nNew * (int)sizeof(DiffIterFrame));
+      if( !aNew ){
+        sqlite3_free(pOldData);
+        sqlite3_free(pNewData);
+        return SQLITE_NOMEM;
+      }
+      pIter->aFrames = aNew;
+      pIter->nFramesAlloc = nNew;
+    }
+    pF = &pIter->aFrames[pIter->nFrames++];
+    memset(pF, 0, sizeof(*pF));
+    pF->oldHash = *pOldHash;
+    pF->newHash = *pNewHash;
+    pF->oldNode = oldNode;
+    pF->newNode = newNode;
+    pF->pOldData = pOldData;
+    pF->pNewData = pNewData;
+    return SQLITE_OK;
+  }
+
+  sqlite3_free(pOldData);
+  sqlite3_free(pNewData);
+  return diffIterActivateRange(pIter, pOldHash, pNewHash, 0, 0);
+}
+
+/* Resume the top frame's child walk until it activates a cursor range,
+** pushes a deeper frame, or exhausts (pop). */
+static int diffIterAdvanceFrame(ProllyDiffIter *pIter){
+  DiffIterFrame *pF = &pIter->aFrames[pIter->nFrames-1];
+  int rc = SQLITE_OK;
+
+  while( pF->i < (int)pF->oldNode.nItems
+      && pF->j < (int)pF->newNode.nItems ){
+    ProllyHash oldChild, newChild;
+    int cmp;
+    prollyNodeChildHash(&pF->oldNode, pF->i, &oldChild);
+    prollyNodeChildHash(&pF->newNode, pF->j, &newChild);
+
+    if( prollyHashCompare(&oldChild, &newChild)==0 ){
+      pF->i++;
+      pF->j++;
+      continue;
+    }
+
+    cmp = diffNodeKeyCmp(&pF->oldNode, pF->i, &pF->newNode, pF->j,
+                         pIter->flags);
+    if( cmp==0 ){
+      pF->i++;
+      pF->j++;
+      return diffIterDescendPair(pIter, &oldChild, &newChild);
+    }
+
+    /* Chunk boundaries diverged; walk the rest of both subtrees as one
+    ** range starting past the last shared boundary. */
+    {
+      int iSeek = pF->i - 1;
+      const ProllyNode *pSeekNode = iSeek>=0 ? &pF->oldNode : 0;
+      ProllyHash oldHash = pF->oldHash;
+      ProllyHash newHash = pF->newHash;
+      pF->i = (int)pF->oldNode.nItems;
+      pF->j = (int)pF->newNode.nItems;
+      rc = diffIterActivateRange(pIter, &oldHash, &newHash,
+                                 pSeekNode, iSeek);
+      return rc;
+    }
+  }
+
+  if( pF->i < (int)pF->oldNode.nItems ){
+    ProllyHash ch;
+    ProllyHash empty;
+    memset(&empty, 0, sizeof(empty));
+    prollyNodeChildHash(&pF->oldNode, pF->i, &ch);
+    pF->i++;
+    return diffIterActivateRange(pIter, &ch, &empty, 0, 0);
+  }
+  if( pF->j < (int)pF->newNode.nItems ){
+    ProllyHash ch;
+    ProllyHash empty;
+    memset(&empty, 0, sizeof(empty));
+    prollyNodeChildHash(&pF->newNode, pF->j, &ch);
+    pF->j++;
+    return diffIterActivateRange(pIter, &empty, &ch, 0, 0);
+  }
+
+  diffIterPopFrame(pIter);
+  return SQLITE_OK;
+}
+
 int prollyDiffIterOpen(
   ProllyDiffIter *pIter,
   ChunkStore *pStore,
@@ -615,7 +820,6 @@ int prollyDiffIterOpen(
   u8 newFlags
 ){
   int rc = SQLITE_OK;
-  int emptyOld = 0, emptyNew = 0;
 
   memset(pIter, 0, sizeof(*pIter));
   pIter->pStore = pStore;
@@ -626,32 +830,23 @@ int prollyDiffIterOpen(
   pIter->shapeMismatch =
       ((oldFlags ^ newFlags) & PROLLY_NODE_INTKEY)!=0;
 
-  pIter->pCurOld = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
-  pIter->pCurNew = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
-  if( !pIter->pCurOld || !pIter->pCurNew ){
-    sqlite3_free(pIter->pCurOld);
-    sqlite3_free(pIter->pCurNew);
-    pIter->pCurOld = 0;
-    pIter->pCurNew = 0;
-    pIter->eof = 1;
-    pIter->rc = SQLITE_NOMEM;
-    return SQLITE_NOMEM;
+  if( pIter->shapeMismatch ){
+    rc = diffIterActivateRange(pIter, pOldRoot, pNewRoot, 0, 0);
+  }else{
+    rc = diffIterDescendPair(pIter, pOldRoot, pNewRoot);
   }
-
-  prollyCursorInit(pIter->pCurOld, pStore, pCache, pOldRoot, oldFlags);
-  prollyCursorInit(pIter->pCurNew, pStore, pCache, pNewRoot, newFlags);
-
-  rc = prollyCursorFirst(pIter->pCurOld, &emptyOld);
-  if( rc==SQLITE_OK ) rc = prollyCursorFirst(pIter->pCurNew, &emptyNew);
-
   if( rc!=SQLITE_OK ){
     pIter->eof = 1;
     pIter->rc = rc;
     return rc;
   }
 
-  if( !prollyCursorIsValid(pIter->pCurOld) &&
-      !prollyCursorIsValid(pIter->pCurNew) ){
+  if( !pIter->cursorsActive && pIter->nFrames==0 ){
+    pIter->eof = 1;
+  }else if( pIter->cursorsActive
+         && !prollyCursorIsValid(pIter->pCurOld)
+         && !prollyCursorIsValid(pIter->pCurNew)
+         && pIter->nFrames==0 ){
     pIter->eof = 1;
   }
 
@@ -671,17 +866,27 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 
   diffIterFreeCopies(pIter);
 
-  pOld = pIter->pCurOld;
-  pNew = pIter->pCurNew;
   pCh = &pIter->current;
 
   for(;;){
+    if( !pIter->cursorsActive ){
+      if( pIter->nFrames==0 ){
+        pIter->eof = 1;
+        return SQLITE_DONE;
+      }
+      pIter->rc = diffIterAdvanceFrame(pIter);
+      if( pIter->rc!=SQLITE_OK ) return pIter->rc;
+      continue;
+    }
+
+    pOld = pIter->pCurOld;
+    pNew = pIter->pCurNew;
     validOld = prollyCursorIsValid(pOld);
     validNew = prollyCursorIsValid(pNew);
 
     if( !validOld && !validNew ){
-      pIter->eof = 1;
-      return SQLITE_DONE;
+      diffIterCloseCursors(pIter);
+      continue;
     }
 
     memset(pCh, 0, sizeof(*pCh));
@@ -772,16 +977,13 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
 }
 
 void prollyDiffIterClose(ProllyDiffIter *pIter){
-  if( pIter->pCurOld ){
-    prollyCursorClose(pIter->pCurOld);
-    sqlite3_free(pIter->pCurOld);
-    pIter->pCurOld = 0;
+  diffIterCloseCursors(pIter);
+  while( pIter->nFrames>0 ){
+    diffIterPopFrame(pIter);
   }
-  if( pIter->pCurNew ){
-    prollyCursorClose(pIter->pCurNew);
-    sqlite3_free(pIter->pCurNew);
-    pIter->pCurNew = 0;
-  }
+  sqlite3_free(pIter->aFrames);
+  pIter->aFrames = 0;
+  pIter->nFramesAlloc = 0;
   diffIterFreeCopies(pIter);
   pIter->eof = 1;
 }

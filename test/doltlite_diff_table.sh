@@ -348,4 +348,51 @@ run_test "gencol_nonleading_pk_diff" \
 
 rm -f "$DBG1" "$DBG2" "$DBG3"
 
+# Deep multi-level trees: the diff iterator skips shared subtrees, so pin
+# sparse edits, contiguous range deletes, and height-mismatched pairs.
+DBDEEP=/tmp/test_dt_deep_$$.db; rm -f "$DBDEEP"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
+WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<2500)
+INSERT INTO t SELECT x, printf('v%05d', x) FROM c;
+SELECT dolt_commit('-Am','big');
+UPDATE t SET v='edit' WHERE k IN (3, 1250, 2498);
+SELECT dolt_commit('-Am','sparse');
+DELETE FROM t WHERE k BETWEEN 800 AND 899;
+SELECT dolt_commit('-Am','range-del');" | $DOLTLITE "$DBDEEP" > /dev/null 2>&1
+
+run_test "deep_sparse_edit_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='sparse');" \
+  "3" "$DBDEEP"
+run_test "deep_sparse_edit_rows" \
+  "SELECT group_concat(to_k, ',') FROM (SELECT to_k FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='sparse') ORDER BY to_k);" \
+  "3,1250,2498" "$DBDEEP"
+run_test "deep_range_delete_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='range-del') AND diff_type='removed';" \
+  "100" "$DBDEEP"
+run_test "deep_range_delete_edges" \
+  "SELECT min(from_k) || '-' || max(from_k) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='range-del');" \
+  "800-899" "$DBDEEP"
+run_test "deep_slice_spans_heights" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~2','HEAD');" \
+  "103" "$DBDEEP"
+
+rm -f "$DBDEEP"
+
+DBMIX=/tmp/test_dt_mixheight_$$.db; rm -f "$DBMIX"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+SELECT dolt_commit('-Am','tiny');
+WITH RECURSIVE c(x) AS (VALUES(4) UNION ALL SELECT x+1 FROM c WHERE x<3000)
+INSERT INTO t SELECT x, printf('g%05d', x) FROM c;
+SELECT dolt_commit('-Am','grown');" | $DOLTLITE "$DBMIX" > /dev/null 2>&1
+
+run_test "mixheight_added_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='grown');" \
+  "2997" "$DBMIX"
+run_test "mixheight_originals_untouched" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='grown') AND to_k <= 3;" \
+  "0" "$DBMIX"
+
+rm -f "$DBMIX"
+
 dltest_finish
