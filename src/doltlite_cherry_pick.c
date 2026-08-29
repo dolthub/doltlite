@@ -398,9 +398,7 @@ static void doltliteCherryPickFunc(
     return;
   }
   if( isAbort ){
-    u8 isMerging = 0;
-    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-    if( !isMerging && !doltliteSessionHasPendingReplayCommit(db) ){
+    if( !doltliteSessionHasPendingReplayCommit(db) ){
       doltliteCmdArgsClear(&args);
       sqlite3_result_error(context, "no cherry-pick in progress", -1);
       return;
