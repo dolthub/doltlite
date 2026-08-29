@@ -326,7 +326,6 @@ static int doltliteBuildIndexEntryWithExpr(
   int nIdxRec = 0;
   int nOut = 0;
   int nAlloc;
-  int iPKeyUsed = 0;
   int hasRowid;
   int storePayload = 0;
   int i, rc;
@@ -356,13 +355,11 @@ static int doltliteBuildIndexEntryWithExpr(
     }else if( col==XN_ROWID || col==iPKey ){
       aMem[nOut].eType = SQLITE_INTEGER;
       aMem[nOut].i = intKey;
-      iPKeyUsed = 1;
       nOut++;
     }else if( col>=0 && col<info.nField ){
       if( iPKey>=0 && col==iPKey ){
         aMem[nOut].eType = SQLITE_INTEGER;
         aMem[nOut].i = intKey;
-        iPKeyUsed = 1;
       }else{
         rc = serialValueFromRecordField(pRec, nRec, &info, col, &aMem[nOut]);
         if( rc!=SQLITE_OK ) goto expr_fail;
@@ -370,7 +367,8 @@ static int doltliteBuildIndexEntryWithExpr(
       nOut++;
     }
   }
-  if( hasRowid && !iPKeyUsed ){
+  /* SQLite appends rowid even when an IPK is already an index term. */
+  if( hasRowid ){
     aMem[nOut].eType = SQLITE_INTEGER;
     aMem[nOut].i = intKey;
     nOut++;
@@ -477,15 +475,11 @@ static int doltliteBuildIndexEntry(
     int nTotal;
     u8 *p;
 
-    int nOutField = info.nField;
-    int *aFieldOrder = sqlite3_malloc(nOutField * sizeof(int));
-    u8 *aUsed = sqlite3_malloc(info.nField);
-    if( !aFieldOrder || !aUsed ){
-      sqlite3_free(aFieldOrder);
-      sqlite3_free(aUsed);
+    int nOutField;
+    int *aFieldOrder = sqlite3_malloc((nIdxCol + 1) * sizeof(int));
+    if( !aFieldOrder ){
       return SQLITE_NOMEM;
     }
-    memset(aUsed, 0, info.nField);
 
     {
       int out = 0;
@@ -493,13 +487,10 @@ static int doltliteBuildIndexEntry(
         int col = aiColumn[i];
         if( col>=0 && col<info.nField ){
           aFieldOrder[out++] = col;
-          aUsed[col] = 1;
         }
       }
-      /* IPK is the secondary-index tie-breaker. */
-      if( iPKey>=0 && iPKey<info.nField && !aUsed[iPKey] ){
+      if( iPKey>=0 && iPKey<info.nField ){
         aFieldOrder[out++] = iPKey;
-        aUsed[iPKey] = 1;
       }
       nOutField = out;
     }
@@ -522,7 +513,6 @@ static int doltliteBuildIndexEntry(
     pIdxRec = sqlite3_malloc(nTotal);
     if( !pIdxRec ){
       sqlite3_free(aFieldOrder);
-      sqlite3_free(aUsed);
       return SQLITE_NOMEM;
     }
 
@@ -560,7 +550,6 @@ static int doltliteBuildIndexEntry(
     }
     nIdxRec = (int)(p - pIdxRec);
     sqlite3_free(aFieldOrder);
-    sqlite3_free(aUsed);
   }
 
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);

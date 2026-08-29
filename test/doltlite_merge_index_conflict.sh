@@ -101,6 +101,38 @@ check "clean_merge_iv_complete" "1|1
 2|20
 3|30" "$out"
 
+DB="$TMPROOT/explicit_ipk_index.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, score INT NOT NULL);
+CREATE INDEX score_id ON t(score,id);
+CREATE INDEX id_score ON t(id,score);
+CREATE UNIQUE INDEX unique_score_id ON t(score,id);
+CREATE INDEX expression_id ON t((score+1),id);
+INSERT INTO t VALUES(1,1),(2,2),(3,3);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feature');
+UPDATE t SET score=101 WHERE id=1;
+DELETE FROM t WHERE id=3;
+INSERT INTO t VALUES(4,104);
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET score=202 WHERE id=2;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(id || ':' || score, ',') FROM (SELECT * FROM t NOT INDEXED ORDER BY id);")
+check "explicit_ipk_table_rows" "1:101,2:202,4:104" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(id || ':' || score, ',') FROM (SELECT * FROM t INDEXED BY score_id WHERE score>0 ORDER BY score,id);")
+check "explicit_ipk_score_index_rows" "1:101,4:104,2:202" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(id || ':' || score, ',') FROM (SELECT * FROM t INDEXED BY id_score WHERE id>0 ORDER BY id,score);")
+check "explicit_ipk_leading_index_rows" "1:101,2:202,4:104" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(id || ':' || score, ',') FROM (SELECT * FROM t INDEXED BY unique_score_id WHERE score>0 ORDER BY score,id);")
+check "explicit_ipk_unique_index_rows" "1:101,4:104,2:202" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT group_concat(id || ':' || score, ',') FROM (SELECT * FROM t INDEXED BY expression_id WHERE score+1>0 ORDER BY score+1,id);")
+check "explicit_ipk_expression_index_rows" "1:101,4:104,2:202" "$out"
+out=$("$DOLTLITE" "$DB" "PRAGMA integrity_check;")
+check "explicit_ipk_index_integrity" "ok" "$out"
+
 DB="$TMPROOT/twoidx.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
