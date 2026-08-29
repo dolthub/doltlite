@@ -104,9 +104,11 @@ struct DiffTblCursor {
   i64 iRowid;
 };
 
-#define DT_IDX_TO_COMMIT_EQ  0x01
-#define DT_IDX_SLICE         0x02
-#define DT_IDX_RANGE_SPEC    0x04
+#define DT_IDX_TO_COMMIT_EQ   0x01
+#define DT_IDX_SLICE          0x02
+#define DT_IDX_RANGE_SPEC     0x04
+#define DT_IDX_FROM_TO_COMMIT 0x08
+#define DT_IDX_FROM_COMMIT_EQ 0x10
 
 static void clearAuditRow(AuditRow *r){
   sqlite3_free(r->pKeyRec);
@@ -975,10 +977,12 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   DiffTblVtab *p = (DiffTblVtab*)pVtab;
   int i;
   int iToCommitEq = -1;
+  int iFromCommitEq = -1;
   int iFromRefEq = -1;
   int iToRefEq = -1;
   int nUser = p->cols.nCol;
   int toCommitCol = nUser;
+  int fromCommitCol = 2*nUser + 2;
   int fromRefCol  = 2*nUser + 5;
   int toRefCol    = 2*nUser + 6;
 
@@ -987,6 +991,8 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pInfo->aConstraint[i].iColumn==toCommitCol ){
       iToCommitEq = i;
+    }else if( pInfo->aConstraint[i].iColumn==fromCommitCol ){
+      iFromCommitEq = i;
     }else if( pInfo->aConstraint[i].iColumn==fromRefCol ){
       iFromRefEq = i;
     }else if( pInfo->aConstraint[i].iColumn==toRefCol ){
@@ -1006,10 +1012,26 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iFromRefEq].argvIndex = 1;
     pInfo->aConstraintUsage[iFromRefEq].omit = 1;
     pInfo->estimatedCost = 10.0;
+  }else if( iFromCommitEq>=0 && iToCommitEq>=0 ){
+    /* Both ends named: the arbitrary-pair diff, same as the function
+    ** form. Constraints are consumed after ref resolution, so revision
+    ** specs never face a text recheck against the rendered hash. */
+    pInfo->idxNum = DT_IDX_FROM_TO_COMMIT;
+    pInfo->aConstraintUsage[iFromCommitEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iFromCommitEq].omit = 1;
+    pInfo->aConstraintUsage[iToCommitEq].argvIndex = 2;
+    pInfo->aConstraintUsage[iToCommitEq].omit = 1;
+    pInfo->estimatedCost = 10.0;
   }else if( iToCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_TO_COMMIT_EQ;
     pInfo->aConstraintUsage[iToCommitEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iToCommitEq].omit = 1;
     pInfo->estimatedCost = 100.0;
+  }else if( iFromCommitEq>=0 ){
+    pInfo->idxNum = DT_IDX_FROM_COMMIT_EQ;
+    pInfo->aConstraintUsage[iFromCommitEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iFromCommitEq].omit = 1;
+    pInfo->estimatedCost = 500.0;
   }else{
     pInfo->idxNum = 0;
     pInfo->estimatedCost = 10000.0;
@@ -1079,12 +1101,46 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
           "dolt_diff_%s: invalid revision range '%s'",
           pVtab->zTableName, zSpec ? zSpec : "");
     }
+  }else if( (idxNum & DT_IDX_FROM_TO_COMMIT)!=0 && argc>=2 ){
+    const char *zFrom = (const char*)sqlite3_value_text(argv[0]);
+    const char *zTo = (const char*)sqlite3_value_text(argv[1]);
+    rc = buildSliceDiffPair(c, db, pVtab->zTableName, zFrom, zTo);
   }else if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
     const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);
     if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){
       rc = buildWorkingDiffPair(c, db, pVtab->zTableName);
+    }else if( zToCommit && sqlite3_stricmp(zToCommit, "STAGED")==0 ){
+      rc = buildSliceDiffPair(c, db, pVtab->zTableName, "HEAD", "STAGED");
     }else{
       rc = buildCommitDiffPair(c, db, pVtab->zTableName, zToCommit);
+    }
+  }else if( (idxNum & DT_IDX_FROM_COMMIT_EQ)!=0 && argc>=1 ){
+    /* Resolve the ref once, then keep only history pairs departing it. */
+    const char *zFrom = (const char*)sqlite3_value_text(argv[0]);
+    char zLabel[PROLLY_HASH_SIZE*2+1];
+    rc = SQLITE_OK;
+    zLabel[0] = 0;
+    if( zFrom && (sqlite3_stricmp(zFrom, "WORKING")==0
+               || sqlite3_stricmp(zFrom, "STAGED")==0) ){
+      sqlite3_snprintf(sizeof(zLabel), zLabel, "%s", zFrom);
+    }else if( zFrom ){
+      ProllyHash fromHash;
+      if( doltliteResolveRef(db, zFrom, &fromHash)==SQLITE_OK ){
+        doltliteHashToHex(&fromHash, zLabel);
+      }
+    }
+    if( zLabel[0] ){
+      rc = buildDiffPairs(c, db, pVtab->zTableName);
+      if( rc==SQLITE_OK ){
+        int iKeep = 0;
+        int iScan;
+        for(iScan=0; iScan<c->nPairs; iScan++){
+          if( sqlite3_stricmp(c->aPairs[iScan].zFromCommit, zLabel)==0 ){
+            c->aPairs[iKeep++] = c->aPairs[iScan];
+          }
+        }
+        c->nPairs = iKeep;
+      }
     }
   }else{
 
