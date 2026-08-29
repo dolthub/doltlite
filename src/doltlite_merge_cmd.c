@@ -26,6 +26,7 @@ int mergeAbortInPlace(sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteSetSessionStaged(db, &headCatHash);
   if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
+  if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
   if( rc==SQLITE_OK ){
     extern int doltliteClearAllConstraintViolations(sqlite3*);
     if( doltliteSessionHasConstraintViolations(db) ){

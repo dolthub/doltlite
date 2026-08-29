@@ -700,6 +700,83 @@ Error near line 6: no merge in progress" \
   "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_cp_abort_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='F';
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+UPDATE t SET v='M';
+SELECT dolt_commit('-A','-m','m');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "cp_abort_conflict" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_cherry_pick('--abort');
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT count(*) FROM dolt_status;
+   SELECT v FROM t;
+   COMMIT;" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+0
+M" \
+  "$DB"
+run_test_match "cp_abort_without_active" \
+  "SELECT dolt_cherry_pick('--abort');" \
+  "no cherry-pick in progress" "$DB"
+run_test "cp_abort_after_resolve" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_conflicts_resolve('--ours','t');
+   SELECT dolt_cherry_pick('--abort');
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT v FROM t;
+   COMMIT;" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+0
+M" \
+  "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_cp_abort_merge_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='F';
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+UPDATE t SET v='M';
+SELECT dolt_commit('-A','-m','m');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "cp_abort_preserves_merge" \
+  "BEGIN;
+   SELECT dolt_merge('feat');
+   SELECT dolt_cherry_pick('--abort');
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT v FROM t;
+   SELECT dolt_merge('--abort');
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT v FROM t;
+   COMMIT;" \
+  "Error near line 2: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
+Error near line 3: no cherry-pick in progress
+1
+1
+M
+0
+0
+0
+M" \
+  "$DB"
+rm -f "$DB"
+
 # --ours can leave the tree identical to HEAD; still create a single-parent commit.
 DB=/tmp/test_cp_conflict_ours_commit_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
