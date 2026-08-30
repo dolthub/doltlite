@@ -1490,11 +1490,11 @@ attach2 attach2-4.12 class=intentional issue=2493  # PRAGMA lock_status: doltlit
 # shifting every entry by +25. The dolt_tests and dolt_test_run module
 # registrations add four more. The dolt_ignore module registration adds
 # two more. Checkpoint discovery adds the remaining build-dependent shifts.
-attachmalloc attachmalloc-1.transient.507 class=unsupported issue=2492  # OOM fault-point shift (parent probe)
+attachmalloc attachmalloc-1.transient.508 class=unsupported issue=2492  # OOM fault-point shift (parent probe)
 attachmalloc attachmalloc-1.transient.932 @no-coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
 attachmalloc attachmalloc-1.transient.1426 @no-coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.940 @coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
-attachmalloc attachmalloc-1.transient.1442 @coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.943 @coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
+attachmalloc attachmalloc-1.transient.1447 @coverage class=unsupported issue=2492  # OOM fault-point shift (ATTACH seed)
 
 # temptable2 section 8 — page_count is a chunk-store metric, not SQLite
 # pages; backup_init needs the page-image backup API, unsupported on prolly.
@@ -2233,20 +2233,20 @@ memjournal2 memjournal2-1.0 class=intentional issue=2493  # in-memory journal pr
 # representative points 127 and 129: IOERR does not crash, peer readers see a
 # consistent committed state, writer cleanup leaves a sane connection, and
 # integrity_check remains ok.
-shared_err shared_ioerr-2.127.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.128.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.129.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.130.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.131.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.132.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.133.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.134.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.135.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.136.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.137.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.138.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.139.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
-shared_err shared_ioerr-2.140.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.109.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.110.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.111.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.112.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.113.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.114.cleanup.1 class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.115.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.116.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.117.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.118.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.119.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.120.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.121.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
+shared_err shared_ioerr-2.122.cleanup.1 @coverage class=unsupported issue=1837  # peer reader gets snapshot isolation instead of shared-cache read-uncommitted (fails identically with no fault)
 wal4 wal4-2-cantopen-persistent.1 class=unsupported issue=1836  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-cantopen-transient.1 class=unsupported issue=1836  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
 wal4 wal4-2-full.1 class=unsupported issue=1836  # WAL recovery premise: no -wal sidecar; checkpoint counters zero
@@ -4014,7 +4014,6 @@ utf16align utf16align-2.1 class=unsupported issue=1838
 # registered on db) and no shared-cache table locks
 vtab_shared vtab_shared-1.8.2 class=unsupported issue=1837
 vtab_shared vtab_shared-1.8.3 class=unsupported issue=1837
-vtab_shared vtab_shared-1.8.5 class=unsupported issue=1837
 vtab_shared vtab_shared-1.10 class=unsupported issue=1837
 vtab_shared vtab_shared-1.12.1 class=unsupported issue=1837
 vtab_shared vtab_shared-1.12.2 class=unsupported issue=1837
@@ -5717,33 +5716,31 @@ fkey_malloc fkey_malloc-7.transient.198 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.199 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.477 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.478 @no-coverage class=intentional
-fkey_malloc fkey_malloc-1.transient.147 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.34 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.150 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.153 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.154 @coverage class=intentional
+fkey_malloc fkey_malloc-1.transient.148 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.35 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.152 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.155 @coverage class=intentional
+fkey_malloc fkey_malloc-6.transient.156 @coverage class=intentional
 vtab_err vtab_err-1.3.3 class=intentional
 vtab_err vtab_err-2.transient.685 @no-coverage class=intentional
 vtab_err vtab_err-2.transient.708 @no-coverage class=intentional
 vtab_err vtab_err-2.persistent.708 @no-coverage class=intentional
 vtab_err vtab_err-3-oom-transient.424 @no-coverage class=intentional
-vtab_err vtab_err-2.transient.680 @coverage class=intentional
-vtab_err vtab_err-2.transient.741 @coverage class=intentional
-vtab_err vtab_err-2.transient.774 @coverage class=intentional
-vtab_err vtab_err-2.transient.776 @coverage class=intentional
-vtab_err vtab_err-2.transient.815 @coverage class=intentional
-vtab_err vtab_err-2.transient.817 @coverage class=intentional
-vtab_err vtab_err-2.transient.818 @coverage class=intentional
-vtab_err vtab_err-2.persistent.817 @coverage class=intentional
-vtab_err vtab_err-2.persistent.818 @coverage class=intentional
+vtab_err vtab_err-2.transient.681 @coverage class=intentional
+vtab_err vtab_err-2.transient.742 @coverage class=intentional
+vtab_err vtab_err-2.transient.775 @coverage class=intentional
+vtab_err vtab_err-2.transient.777 @coverage class=intentional
+vtab_err vtab_err-2.transient.816 @coverage class=intentional
+vtab_err vtab_err-2.transient.819 @coverage class=intentional
+vtab_err vtab_err-2.persistent.819 @coverage class=intentional
 # extra sqlite_schema INSERT for clustered PK autoindexes shifts this OOM
 # injection: count(*) from sqlite_master is no longer 4 at fail-point 90.
 doltlite_fts3_oom doltlite_fts3_oom-2.2.1 class=intentional
-fts3cov fts3cov-8.transient.594 @coverage class=intentional
-fts3cov fts3cov-8.transient.808 @coverage class=intentional
-fts3cov fts3cov-10.transient.92 @coverage class=intentional
-fts3cov fts3cov-10.transient.338 @coverage class=intentional
-fts3cov fts3cov-10.persistent.338 @coverage class=intentional
+fts3cov fts3cov-10.transient.92 class=intentional
+fts3cov fts3cov-10.transient.338 class=intentional
+fts3cov fts3cov-10.persistent.338 class=intentional
+fts3cov fts3cov-8.transient.595 class=intentional issue=2492  # OOM fault-point shift: latent fts3 segdir-write swallow, reachable in plain builds since the schema cookie added a catalog-load allocation
+fts3cov fts3cov-8.transient.809 class=intentional issue=2492  # OOM fault-point shift (fts3 segdir write)
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=2493  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
