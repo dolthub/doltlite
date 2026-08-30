@@ -5731,7 +5731,9 @@ vtab_err vtab_err-2.transient.742 @coverage class=intentional
 vtab_err vtab_err-2.transient.775 @coverage class=intentional
 vtab_err vtab_err-2.transient.777 @coverage class=intentional
 vtab_err vtab_err-2.transient.816 @coverage class=intentional
+vtab_err vtab_err-2.transient.818 @coverage class=intentional
 vtab_err vtab_err-2.transient.819 @coverage class=intentional
+vtab_err vtab_err-2.persistent.818 @coverage class=intentional
 vtab_err vtab_err-2.persistent.819 @coverage class=intentional
 # extra sqlite_schema INSERT for clustered PK autoindexes shifts this OOM
 # injection: count(*) from sqlite_master is no longer 4 at fail-point 90.
