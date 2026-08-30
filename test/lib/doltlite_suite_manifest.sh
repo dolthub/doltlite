@@ -88,6 +88,7 @@ doltlite_demo.sh
 doltlite_e2e.sh
 doltlite_attach_sqlite.sh
 doltlite_dbpage.sh
+doltlite_dbstat.sh
 doltlite_arm_correctness.sh
 doltlite_open_sqlite_file.sh
 doltlite_sqlite_file_oracle.sh
@@ -187,6 +188,7 @@ doltlite_gc_scale.sh
 doltlite_vacuum.sh
 doltlite_memory_db.sh
 doltlite_dbpage.sh
+doltlite_dbstat.sh
 doltlite_record_format.sh
 doltlite_rollback_durability.sh
 doltlite_unique_index_delete.sh
