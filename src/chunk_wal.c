@@ -652,6 +652,7 @@ static int csReplayWalFrom(
   int bTailMode
 ){
   i64 walSize;
+  i64 iFileSizeBefore;
   ChunkStoreReplayState saved;
   i64 pos;
   i64 lastBoundary;
@@ -674,6 +675,7 @@ static int csReplayWalFrom(
   if( cs->wal.iWalOffset <= 0 || !cs->file.pFile ) return SQLITE_OK;
   if( iStart<cs->wal.iWalOffset ) return SQLITE_CORRUPT;
 
+  iFileSizeBefore = cs->file.iFileSize;
   {
     i64 fileSize = 0;
     int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
@@ -695,6 +697,10 @@ static int csReplayWalFrom(
   }
 
   csCaptureReplayState(cs, &saved);
+  /* iFileSize was already advanced to the disk size above; rollback must
+  ** rewind to the pre-replay value or a failed replay leaves the store
+  ** claiming a size it never ingested and it stops re-detecting. */
+  saved.iFileSize = iFileSizeBefore;
 
   cs->wal.nWalData = walSize;
   lastBoundary = iStart - cs->wal.iWalOffset;

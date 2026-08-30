@@ -554,6 +554,7 @@ int btreeRefreshFromDisk(Btree *p){
   ProllyHash loadedCatHash;
   ProllyHash oldTip, oldWs;
   int hadOldTip = 0;
+  u32 oldReloadGen;
   int rc;
 
   assert( p!=0 && p->pBt!=0 );
@@ -564,6 +565,7 @@ int btreeRefreshFromDisk(Btree *p){
 
   memset(&oldTip, 0, sizeof(oldTip));
   memset(&oldWs, 0, sizeof(oldWs));
+  oldReloadGen = pBt->store.reloadGen;
   if( !p->isDetached ){
     const char *zBr = p->zBranch ? p->zBranch : "main";
     if( chunkStoreFindBranch(&pBt->store, zBr, &oldTip)==SQLITE_OK ){
@@ -584,8 +586,13 @@ int btreeRefreshFromDisk(Btree *p){
   if( p->isDetached ) return SQLITE_OK;
 
   /* Peers moved other branches only: this session's view is intact, so
-  ** keep its catalog and prepared statements undisturbed. */
-  if( hadOldTip ){
+  ** keep its catalog and prepared statements undisturbed. Only sound
+  ** after an incremental refresh (a full reload replaced the store
+  ** wholesale) and while the view really is loaded — a failed statement
+  ** drops the catalog without moving the tip, and skipping then would
+  ** latch the empty catalog. */
+  if( hadOldTip && pBt->store.reloadGen==oldReloadGen
+   && !p->bCatalogDropped ){
     const char *zBr = p->zBranch ? p->zBranch : "main";
     ProllyHash newTip, newWs;
     memset(&newTip, 0, sizeof(newTip));
@@ -601,7 +608,14 @@ int btreeRefreshFromDisk(Btree *p){
 
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));
   rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    /* The store adopted the change but this session's view did not load.
+    ** The change signal is spent, so leave the version marker behind:
+    ** the next shared-working-state refresh retries the load once the
+    ** failure (OOM, transient IO) clears. */
+    p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+    return rc;
+  }
 
   btreeStoreCommittedFromCurrent(p, &loadedCatHash);
   btreeMarkWorkingStateChanged(p, 0);

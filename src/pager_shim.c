@@ -1279,7 +1279,6 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
     zPreparedBranch = 0;
     doltliteInvalidateBtreeWorkingState(pDestBt);
-    csGenBump(destCs);
     goto backup_step_done;
   }
 
@@ -1401,7 +1400,6 @@ backup_step_done:
     if( rc==SQLITE_OK ){
       /* Dest now reflects the renamed file; reload catalog next txn. */
       doltliteInvalidateBtreeWorkingState(pDestBt);
-      csGenBump(destCs);
       chunkStoreUnlock(destCs);
     }
   }

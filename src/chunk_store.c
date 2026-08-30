@@ -686,7 +686,6 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     cs->file.iFileSize = markerNext;
     cs->wal.nWalData = markerEnd - cs->wal.iWalOffset;
     cs->wal.cleanCloseMarker = 1;
-    csGenBump(cs);
   }else{
     sqlite3_log(SQLITE_NOTICE,
       "doltlite: unable to append clean-close WAL marker: %d", rc);
@@ -701,7 +700,6 @@ int chunkStoreClose(ChunkStore *cs){
   sqlite3BeginBenignMalloc();
   csWriteCleanCloseMarker(cs);
   sqlite3EndBenignMalloc();
-  csGenMapClose(cs);
   chunkStoreUnlock(cs);
   csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;

@@ -189,6 +189,9 @@ struct ChunkStore {
   u8 fullFsync;           /* PRAGMA fullfsync -> SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip syncs */
   u8 snapshotPinned;
+  /* Bumped on every full reload-from-disk. Session-level state caches
+  ** (catalog, working roots) are only valid while this is unchanged. */
+  u32 reloadGen;
   u8 corruptMidStream;    /* Mid-stream WAL damage: reads/commits CORRUPT;
                           ** open still succeeds (stock surfaces on first use) */
   u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use
@@ -202,18 +205,7 @@ struct ChunkStore {
   int checkpointActive;
   sqlite3_vfs *pOwnedVfs;
 
-  /* Cross-process change hint: an 8-byte generation counter mapped from
-  ** the lock sidecar. Publishers bump it; readers skip the per-statement
-  ** stat while it is unchanged, with a timed stat as the safety net for
-  ** publishers that do not bump (older versions). Absent map (Windows,
-  ** map failure) keeps the stat-per-statement path. */
-  volatile unsigned char *pGenMap;
-  u64 lastSeenGen;
-  i64 iLastDetectMs;
 };
-
-void csGenMapClose(ChunkStore *cs);
-void csGenBump(ChunkStore *cs);
 
 void csManifestSeal(u8 *aBuf, i64 iOffset);
 int csManifestHashState(const u8 *aBuf, i64 iOffset);

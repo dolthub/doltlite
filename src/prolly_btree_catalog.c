@@ -1886,10 +1886,13 @@ void initDefaultMeta(Btree *pBtree){
 ** statement on every peer (and own) commit. The master entry's root
 ** (iTable<=1) carries the sqlite_master rows, so it stays in. Any walk
 ** disagreement falls back to the whole blob — over-invalidation is safe,
-** under-invalidation is not. */
-static u32 catalogSchemaCookie(
+** under-invalidation is not. OOM must fail the load: falling back would
+** publish a different cookie value than a fault-free run of the same
+** bytes. */
+static int catalogSchemaCookie(
   const u8 *data, int nData,
-  int iFormat, int nTables, const u8 *pEntries
+  int iFormat, int nTables, const u8 *pEntries,
+  u32 *pCookie
 ){
   const u8 *q = pEntries;
   const u8 *end = data + nData;
@@ -1898,9 +1901,12 @@ static u32 catalogSchemaCookie(
   int i;
   ProllyHash h;
 
-  if( nData<0 || nData>0x7ffffff0 ) goto whole_blob;
+  if( nData<0 || nData>0x7ffffff0 ){
+    buf = 0;
+    goto whole_blob;
+  }
   buf = sqlite3_malloc(nData+16);
-  if( !buf ) goto whole_blob;
+  if( !buf ) return SQLITE_NOMEM;
   buf[n++] = (u8)iFormat;
   buf[n++] = (u8)(nTables & 0xff);
   buf[n++] = (u8)((nTables>>8) & 0xff);
@@ -1944,19 +1950,21 @@ static u32 catalogSchemaCookie(
   if( q!=end ) goto walk_mismatch;
   prollyHashCompute(buf, n, &h);
   sqlite3_free(buf);
-  return (((u32)h.data[0])
+  *pCookie = ((((u32)h.data[0])
         | ((u32)h.data[1] << 8)
         | ((u32)h.data[2] << 16)
-        | ((u32)h.data[3] << 24)) | 1;
+        | ((u32)h.data[3] << 24)) | 1);
+  return SQLITE_OK;
 
 walk_mismatch:
-  sqlite3_free(buf);
 whole_blob:
+  sqlite3_free(buf);
   prollyHashCompute(data, nData, &h);
-  return (((u32)h.data[0])
+  *pCookie = ((((u32)h.data[0])
         | ((u32)h.data[1] << 8)
         | ((u32)h.data[2] << 16)
-        | ((u32)h.data[3] << 24)) | 1;
+        | ((u32)h.data[3] << 24)) | 1);
+  return SQLITE_OK;
 }
 
 int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
@@ -1990,8 +1998,13 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     aMetaNew[BTREE_APPLICATION_ID] = prollyBtreeGetU32LE(data + CAT_HEADER_SIZE_V3 + 4);
   }
 
-  aMetaNew[BTREE_SCHEMA_VERSION] =
-      catalogSchemaCookie(data, nData, iFormat, nTables, q);
+  {
+    u32 cookie = 0;
+    int rcCookie = catalogSchemaCookie(data, nData, iFormat, nTables, q,
+                                       &cookie);
+    if( rcCookie!=SQLITE_OK ) return rcCookie;
+    aMetaNew[BTREE_SCHEMA_VERSION] = cookie;
+  }
 
   for(i=0; i<nTables; i++){
     Pgno iTable;

@@ -7,15 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-/* The generation sidecar needs a writable shared mapping, which the VFS
-** cannot express (xFetch is read-only). Unix only; everywhere else the
-** map stays absent and readers keep the stat-per-statement path. */
-#if SQLITE_OS_UNIX && !defined(SQLITE_WASI)
-# define DOLTLITE_GEN_MAP 1
-# include <sys/mman.h>   /* amalgamator: keep */
-# include <fcntl.h>      /* amalgamator: keep */
-# include <unistd.h>     /* amalgamator: keep */
-#endif
 
 int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
@@ -256,26 +247,26 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs);
 
 /* The replaced-file guard must hold at every write-intent moment, not
 ** ride on a reader statement having statted first: the pinned-snapshot
-** early return in refresh skips detection under the lock. One fcntl. */
-static void csNoteMovedUnderLock(ChunkStore *cs){
+** early return in refresh skips detection under the lock. One fcntl.
+** Real failures surface: absorbing them here hides injected faults. */
+static int csNoteMovedUnderLock(ChunkStore *cs){
   int bMoved = 0;
-  if( cs->isMemory || cs->isBuffer || cs->file.pFile==0 ) return;
-  if( sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
-                           &bMoved)!=SQLITE_OK ){
-    return;
-  }
+  int rc;
+  if( cs->isMemory || cs->isBuffer || cs->file.pFile==0 ) return SQLITE_OK;
+  rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
   if( !bMoved ){
     cs->movedReadOnly = 0;
-    return;
+    return SQLITE_OK;
   }
   {
     int bOurs = 0;
-    if( csMovedFileIsOurs(cs, &bOurs)==SQLITE_OK && bOurs ){
-      cs->movedReadOnly = 0;
-    }else{
-      cs->movedReadOnly = 1;
-    }
+    rc = csMovedFileIsOurs(cs, &bOurs);
+    if( rc!=SQLITE_OK ) return rc;
+    cs->movedReadOnly = bOurs ? 0 : 1;
   }
+  return SQLITE_OK;
 }
 
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
@@ -305,8 +296,8 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     return rc;
   }
   cs->lockDepth = 1;
-  csNoteMovedUnderLock(cs);
-  rc = chunkStoreRefreshIfChanged(cs, &changed);
+  rc = csNoteMovedUnderLock(cs);
+  if( rc==SQLITE_OK ) rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
     cs->lockDepth = 0;
     csFileUnlockKeepOpen(CS_GRAPH_LOCK(cs));
@@ -379,13 +370,21 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   return rc;
 }
 
-static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
+/* *pMovedAdopt distinguishes "the inode at our path changed and the new
+** file proved to be ours" from same-file growth: adoption must reload
+** by path, never ingest a tail through the stale handle. */
+static int csDetectExternalChanges(
+  ChunkStore *cs,
+  int *pChanged,
+  int *pMovedAdopt
+){
   DoltliteFileState fileState;
   int bMoved = 0;
   int haveFileState = 0;
   int rc;
 
   *pChanged = 0;
+  if( pMovedAdopt ) *pMovedAdopt = 0;
   if( cs->isMemory || cs->isBuffer ) return SQLITE_OK;
 
   if( cs->file.pFile==0 ){
@@ -427,6 +426,7 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     }
     cs->movedReadOnly = 0;
     *pChanged = 1;
+    if( pMovedAdopt ) *pMovedAdopt = 1;
     return SQLITE_OK;
   }
   cs->movedReadOnly = 0;
@@ -445,109 +445,7 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
 }
 
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
-  return csDetectExternalChanges(cs, pChanged);
-}
-
-#define CS_GEN_MAP_SIZE 64
-#define CS_GEN_STAT_INTERVAL_MS 20
-
-/* A dedicated sidecar, deliberately NOT the -lock file: raw close() of
-** any fd on an inode drops every POSIX lock the process holds on it,
-** including the graph lock held through the VFS. Nothing ever locks
-** the -gen file, so opening and closing it here is always safe. */
-static char *csGenPath(const char *path){
-  const char *zBase = strrchr(path, '/');
-  int nDir = 0;
-
-  if( zBase ){
-    nDir = (int)(zBase - path) + 1;
-    zBase++;
-  }else{
-    zBase = path;
-  }
-  return sqlite3_mprintf("%.*s.%s-gen", nDir, path, zBase);
-}
-
-static void csGenMapEnsure(ChunkStore *cs){
-#ifdef DOLTLITE_GEN_MAP
-  char *zGen;
-  int fd;
-  void *pMap;
-  if( cs->pGenMap || cs->isMemory || cs->isBuffer
-   || !cs->file.zFilename ){
-    return;
-  }
-  zGen = csGenPath(cs->file.zFilename);
-  if( !zGen ) return;
-  fd = open(zGen, O_RDWR|O_CREAT|O_CLOEXEC, 0644);
-  sqlite3_free(zGen);
-  if( fd<0 ) return;
-  if( ftruncate(fd, CS_GEN_MAP_SIZE)!=0 ){
-    close(fd);
-    return;
-  }
-  pMap = mmap(0, CS_GEN_MAP_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-  close(fd);
-  if( pMap==MAP_FAILED ) return;
-  cs->pGenMap = (volatile unsigned char*)pMap;
-  memcpy(&cs->lastSeenGen, (const void*)cs->pGenMap, sizeof(u64));
-  cs->iLastDetectMs = 0;
-#else
-  (void)cs;
-#endif
-}
-
-void csGenMapClose(ChunkStore *cs){
-#ifdef DOLTLITE_GEN_MAP
-  if( cs->pGenMap ){
-    munmap((void*)cs->pGenMap, CS_GEN_MAP_SIZE);
-    cs->pGenMap = 0;
-  }
-#else
-  (void)cs;
-#endif
-}
-
-void csGenBump(ChunkStore *cs){
-#ifdef DOLTLITE_GEN_MAP
-  csGenMapEnsure(cs);
-  if( cs->pGenMap ){
-    __atomic_fetch_add((u64*)(void*)cs->pGenMap, 1, __ATOMIC_RELAXED);
-  }
-#else
-  (void)cs;
-#endif
-}
-
-static i64 csGenNowMs(ChunkStore *cs){
-  i64 ms = 0;
-  if( cs->file.pVfs
-   && sqlite3OsCurrentTimeInt64(cs->file.pVfs, &ms)==SQLITE_OK ){
-    return ms;
-  }
-  return 0;
-}
-
-/* Unchanged counter means "probably unchanged"; a timed stat keeps
-** publishers that never bump (older versions) visible within the
-** interval instead of never. *pGenSeen is adopted by the caller only
-** after a successful detect, so a failed one retries promptly. */
-static int csGenChangePossible(ChunkStore *cs, u64 *pGenSeen){
-  i64 now;
-  csGenMapEnsure(cs);
-  if( !cs->pGenMap ){
-    *pGenSeen = cs->lastSeenGen;
-    return 1;
-  }
-  memcpy(pGenSeen, (const void*)cs->pGenMap, sizeof(u64));
-  if( *pGenSeen!=cs->lastSeenGen ) return 1;
-  now = csGenNowMs(cs);
-  if( now==0 || cs->iLastDetectMs==0
-   || now - cs->iLastDetectMs >= CS_GEN_STAT_INTERVAL_MS
-   || now < cs->iLastDetectMs ){
-    return 1;
-  }
-  return 0;
+  return csDetectExternalChanges(cs, pChanged, 0);
 }
 
 /* The store is append-only between compactions: when the file only grew
@@ -575,7 +473,11 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
   rootOff = contentEnd - (i64)sizeof(aRoot);
   if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
   rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
-  if( rc!=SQLITE_OK ) return SQLITE_MISMATCH;
+  /* A short read means the file shrank (compaction/replacement): not
+  ** eligible, reload. Any other IO failure is a real error and must not
+  ** be absorbed by the reload retry. */
+  if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
+  if( rc!=SQLITE_OK ) return rc;
   if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
   hashState = csManifestHashState(aRoot+1, rootOff);
   if( hashState!=CS_MANIFEST_HASH_OK ){
@@ -592,9 +494,12 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
   csMarkRefsCommitted(cs);
 
   /* Fold a grown recent set into the eager index in memory: a sorted
-  ** merge every few thousand commits, instead of reopening the store. */
+  ** merge every few thousand commits, instead of reopening the store.
+  ** Benign: the refresh already succeeded and a failed fold leaves the
+  ** recent set intact for the next attempt. */
   if( cs->staging.nRecent>4096 && cs->staging.nPending==0 ){
     int i;
+    sqlite3BeginBenignMalloc();
     rc = SQLITE_OK;
     for(i=0; i<cs->staging.nRecent && rc==SQLITE_OK; i++){
       rc = csGrowPending(cs);
@@ -620,8 +525,7 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
     }
     cs->staging.nPending = 0;
     csPendHTReset(cs);
-    /* Consolidation is an optimization; the refresh already succeeded. */
-    rc = SQLITE_OK;
+    sqlite3EndBenignMalloc();
   }
   return SQLITE_OK;
 }
@@ -629,6 +533,7 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
+  int bMovedAdopt = 0;
   if( cs->isMemory || cs->isBuffer ){
     *pChanged = 0;
     return SQLITE_OK;
@@ -645,24 +550,20 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   if( cs->snapshotPinned ) return SQLITE_OK;
-  /* Readers only: under the graph lock the stat is the correctness
-  ** basis for append points and CAS bases, never skip it there. */
-  {
-    u64 genSeen = 0;
-    if( cs->lockDepth==0 && !cs->movedReadOnly && cs->file.pFile
-     && !csGenChangePossible(cs, &genSeen) ){
-      return SQLITE_OK;
-    }
-    rc = csDetectExternalChanges(cs, &bChanged);
-    if( rc!=SQLITE_OK ) return rc;
-    cs->iLastDetectMs = csGenNowMs(cs);
-    if( cs->pGenMap ) cs->lastSeenGen = genSeen;
-  }
+  rc = csDetectExternalChanges(cs, &bChanged, &bMovedAdopt);
+  if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
 
-  if( cs->lockDepth==0 && csIncrementalTailRefresh(cs)==SQLITE_OK ){
-    *pChanged = 1;
-    return SQLITE_OK;
+  if( cs->lockDepth==0 && !bMovedAdopt ){
+    rc = csIncrementalTailRefresh(cs);
+    if( rc==SQLITE_OK ){
+      *pChanged = 1;
+      return SQLITE_OK;
+    }
+    /* MISMATCH = not eligible, take the full reload. A real failure
+    ** (NOMEM, IOERR) already rolled back and must surface: the reload
+    ** would absorb an injected fault and report success. */
+    if( rc!=SQLITE_MISMATCH ) return rc;
   }
 
   rc = csReloadFromDisk(cs);
@@ -729,6 +630,7 @@ int csReloadFromDisk(ChunkStore *cs){
   csFreeReloadState(&saved);
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
+  cs->reloadGen++;
 
   /* Torn-tail recovery rewinds logical EOF in memory; crash garbage past
   ** it retrips the size check. Under the graph lock, truncate it. Failures
