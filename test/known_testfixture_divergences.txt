@@ -3782,21 +3782,29 @@ sidedelete sidedelete-3.98.1 class=intentional
 sidedelete sidedelete-3.99.1 class=intentional
 sidedelete sidedelete-3.100.1 class=intentional
 
-# dbstat vtable (per-page b-tree stats) empty on chunk store: the no-fault
-# result is 0, never the expected 8 pages
-statfault statfault-1-cantopen-persistent.1 class=intentional
-statfault statfault-1-cantopen-transient.1 class=intentional
-statfault statfault-1-full.1 class=intentional
-statfault statfault-1-interrupt.27 class=intentional
-statfault statfault-1-interrupt.28 class=intentional
-statfault statfault-1-ioerr-persistent.3 class=intentional
-statfault statfault-1-ioerr-transient.3 class=intentional
-statfault statfault-1-oom-persistent.130 @no-coverage class=intentional
-statfault statfault-1-oom-transient.130 @no-coverage class=intentional
-statfault statfault-1-oom-persistent.132 @coverage class=intentional
-statfault statfault-1-oom-transient.132 @coverage class=intentional
-statfault statfault-1-shmerr-persistent.1 class=intentional
-statfault statfault-1-shmerr-transient.1 class=intentional
+# dbstat scans of a DoltLite-format schema error rather than walking pages.
+# faultsim's no-fault iteration (and nearby recovered iterations) now fail
+# with that refusal instead of comparing an empty page count.
+statfault statfault-1-cantopen-persistent.1 class=unsupported issue=2500
+statfault statfault-1-cantopen-transient.1 class=unsupported issue=2500
+statfault statfault-1-full.1 class=unsupported issue=2500
+statfault statfault-1-interrupt.*{6} class=unsupported issue=2500
+statfault statfault-1-ioerr-persistent.2 class=unsupported issue=2500
+statfault statfault-1-ioerr-transient.2 class=unsupported issue=2500
+statfault statfault-1-oom-persistent.*{3} class=unsupported issue=2500
+statfault statfault-1-oom-transient.*{4} class=unsupported issue=2500
+statfault statfault-1-shmerr-persistent.1 class=unsupported issue=2500
+statfault statfault-1-shmerr-transient.1 class=unsupported issue=2500
+statfault statfault-2-cantopen-persistent.1 class=unsupported issue=2500
+statfault statfault-2-cantopen-transient.1 class=unsupported issue=2500
+statfault statfault-2-full.1 class=unsupported issue=2500
+statfault statfault-2-interrupt.*{5} class=unsupported issue=2500
+statfault statfault-2-ioerr-persistent.2 class=unsupported issue=2500
+statfault statfault-2-ioerr-transient.2 class=unsupported issue=2500
+statfault statfault-2-oom-persistent.*{3} class=unsupported issue=2500
+statfault statfault-2-oom-transient.*{4} class=unsupported issue=2500
+statfault statfault-2-shmerr-persistent.1 class=unsupported issue=2500
+statfault statfault-2-shmerr-transient.1 class=unsupported issue=2500
 
 # writable_schema rootpage aliasing (raw-format poke): the post-DDL schema
 # reload can't rebind tables whose rootpage was pointed at another table's
