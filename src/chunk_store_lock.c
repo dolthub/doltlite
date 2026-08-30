@@ -243,6 +243,32 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 }
 
 
+static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs);
+
+/* The replaced-file guard must hold at every write-intent moment, not
+** ride on a reader statement having statted first: the pinned-snapshot
+** early return in refresh skips detection under the lock. One fcntl.
+** Real failures surface: absorbing them here hides injected faults. */
+static int csNoteMovedUnderLock(ChunkStore *cs){
+  int bMoved = 0;
+  int rc;
+  if( cs->isMemory || cs->isBuffer || cs->file.pFile==0 ) return SQLITE_OK;
+  rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  if( !bMoved ){
+    cs->movedReadOnly = 0;
+    return SQLITE_OK;
+  }
+  {
+    int bOurs = 0;
+    rc = csMovedFileIsOurs(cs, &bOurs);
+    if( rc!=SQLITE_OK ) return rc;
+    cs->movedReadOnly = bOurs ? 0 : 1;
+  }
+  return SQLITE_OK;
+}
+
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
   int changed = 0;
   int rc;
@@ -270,7 +296,8 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     return rc;
   }
   cs->lockDepth = 1;
-  rc = chunkStoreRefreshIfChanged(cs, &changed);
+  rc = csNoteMovedUnderLock(cs);
+  if( rc==SQLITE_OK ) rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
     cs->lockDepth = 0;
     csFileUnlockKeepOpen(CS_GRAPH_LOCK(cs));
@@ -343,13 +370,21 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   return rc;
 }
 
-static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
+/* *pMovedAdopt distinguishes "the inode at our path changed and the new
+** file proved to be ours" from same-file growth: adoption must reload
+** by path, never ingest a tail through the stale handle. */
+static int csDetectExternalChanges(
+  ChunkStore *cs,
+  int *pChanged,
+  int *pMovedAdopt
+){
   DoltliteFileState fileState;
   int bMoved = 0;
   int haveFileState = 0;
   int rc;
 
   *pChanged = 0;
+  if( pMovedAdopt ) *pMovedAdopt = 0;
   if( cs->isMemory || cs->isBuffer ) return SQLITE_OK;
 
   if( cs->file.pFile==0 ){
@@ -391,6 +426,7 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     }
     cs->movedReadOnly = 0;
     *pChanged = 1;
+    if( pMovedAdopt ) *pMovedAdopt = 1;
     return SQLITE_OK;
   }
   cs->movedReadOnly = 0;
@@ -409,12 +445,95 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
 }
 
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
-  return csDetectExternalChanges(cs, pChanged);
+  return csDetectExternalChanges(cs, pChanged, 0);
+}
+
+/* The store is append-only between compactions: when the file only grew
+** and our sealed tail root is still byte-intact, ingest just the new
+** records instead of reopening the whole store. Any doubt falls back to
+** the full reload. */
+static int csIncrementalTailRefresh(ChunkStore *cs){
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  i64 contentEnd;
+  i64 rootOff;
+  int hashState;
+  int rc;
+
+  if( cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0
+   || cs->bRefsStale || cs->movedReadOnly || cs->corruptMidStream
+   || cs->notADatabase || cs->file.pFile==0
+   || cs->wal.iWalOffset<=0
+   || cs->wal.nWalData < (i64)sizeof(aRoot)
+   || prollyHashCompare(&cs->refs.refsHash,
+                        &cs->refs.committedRefsHash)!=0 ){
+    return SQLITE_MISMATCH;
+  }
+
+  contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
+  rootOff = contentEnd - (i64)sizeof(aRoot);
+  if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
+  rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
+  /* A short read means the file shrank (compaction/replacement): not
+  ** eligible, reload. Any other IO failure is a real error and must not
+  ** be absorbed by the reload retry. */
+  if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
+  if( rc!=SQLITE_OK ) return rc;
+  if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
+  hashState = csManifestHashState(aRoot+1, rootOff);
+  if( hashState!=CS_MANIFEST_HASH_OK ){
+    hashState = csManifestHashStateOffsetless(aRoot+1);
+  }
+  if( hashState!=CS_MANIFEST_HASH_OK
+   || memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
+             cs->refs.refsHash.data, PROLLY_HASH_SIZE)!=0 ){
+    return SQLITE_MISMATCH;
+  }
+
+  rc = csReplayWalTail(cs, cs->file.iFileSize);
+  if( rc!=SQLITE_OK ) return rc;
+  csMarkRefsCommitted(cs);
+
+  /* Fold a grown recent set into the eager index in memory: a sorted
+  ** merge every few thousand commits, instead of reopening the store.
+  ** Benign: the refresh already succeeded and a failed fold leaves the
+  ** recent set intact for the next attempt. */
+  if( cs->staging.nRecent>4096 && cs->staging.nPending==0 ){
+    int i;
+    sqlite3BeginBenignMalloc();
+    rc = SQLITE_OK;
+    for(i=0; i<cs->staging.nRecent && rc==SQLITE_OK; i++){
+      rc = csGrowPending(cs);
+      if( rc==SQLITE_OK ){
+        cs->staging.aPending[cs->staging.nPending++] =
+            cs->staging.aRecent[i];
+      }
+    }
+    if( rc==SQLITE_OK ){
+      ChunkIndexEntry *aMerged = 0;
+      int nMerged = 0;
+      rc = csMergeIndex(cs, &aMerged, &nMerged);
+      if( rc==SQLITE_OK ){
+        csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase,
+                          cs->index.aIndexMmapSize);
+        cs->index.aIndex = aMerged;
+        cs->index.nIndex = nMerged;
+        cs->index.aIndexMmapBase = 0;
+        cs->index.aIndexMmapSize = 0;
+        cs->staging.nRecent = 0;
+        csRecentHTClear(cs);
+      }
+    }
+    cs->staging.nPending = 0;
+    csPendHTReset(cs);
+    sqlite3EndBenignMalloc();
+  }
+  return SQLITE_OK;
 }
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
+  int bMovedAdopt = 0;
   if( cs->isMemory || cs->isBuffer ){
     *pChanged = 0;
     return SQLITE_OK;
@@ -431,9 +550,21 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   if( cs->snapshotPinned ) return SQLITE_OK;
-  rc = csDetectExternalChanges(cs, &bChanged);
+  rc = csDetectExternalChanges(cs, &bChanged, &bMovedAdopt);
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
+
+  if( cs->lockDepth==0 && !bMovedAdopt ){
+    rc = csIncrementalTailRefresh(cs);
+    if( rc==SQLITE_OK ){
+      *pChanged = 1;
+      return SQLITE_OK;
+    }
+    /* MISMATCH = not eligible, take the full reload. A real failure
+    ** (NOMEM, IOERR) already rolled back and must surface: the reload
+    ** would absorb an injected fault and report success. */
+    if( rc!=SQLITE_MISMATCH ) return rc;
+  }
 
   rc = csReloadFromDisk(cs);
   if( rc!=SQLITE_OK ) return rc;
@@ -499,6 +630,7 @@ int csReloadFromDisk(ChunkStore *cs){
   csFreeReloadState(&saved);
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
+  cs->reloadGen++;
 
   /* Torn-tail recovery rewinds logical EOF in memory; crash garbage past
   ** it retrips the size check. Under the graph lock, truncate it. Failures

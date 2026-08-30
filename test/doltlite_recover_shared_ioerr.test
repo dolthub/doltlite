@@ -77,13 +77,48 @@ proc drs_run {iFail} {
   list $rc $msg $::drs_residx [expr {$hit>0}] $peer $writer $ic
 }
 
-do_test 1.1 {
-  drs_run 127
-} {1 {disk I/O error} 1 1 {0 {1024 1 1024}} {0 {1023 1 512}} {0 ok}}
-
-do_test 1.2 {
-  drs_run 129
-} {1 {disk I/O error} 1 1 {0 {1024 1 1024}} {0 {1023 1 512}} {0 ok}}
+# Sweep every IO-op offset until the body runs fault-free, instead of
+# pinning two offsets: the count of IO ops per statement shifts whenever
+# the refresh or commit path changes shape, and a stale offset silently
+# stops hitting. Every hit must leave the writer at a statement boundary,
+# the read-uncommitted peer undisturbed, and the store intact.
+set iFail 1
+set nHit 0
+set nPhase2 0
+while {$iFail < 2000} {
+  set res [drs_run $iFail]
+  foreach {rc msg residx hit peer writer ic} $res break
+  if {!$hit} break
+  incr nHit
+  if {$residx==1} { incr nPhase2 }
+  do_test 1.sweep.$iFail {
+    set r {}
+    if {$peer ne {0 {1024 1 1024}}} { lappend r "peer view disturbed: $peer" }
+    if {$ic ne {0 ok}} { lappend r "integrity: $ic" }
+    if {$rc} {
+      if {$msg ne "disk I/O error"} { lappend r "unexpected error: $msg" }
+      # An error during COMMIT after the durable point reports failure
+      # while the change persists, so the boundary ahead is also legal.
+      if {$residx==0 && $writer ne {0 {1024 1 1024}}
+          && $writer ne {0 {1023 1 512}}} {
+        lappend r "delete left mid-statement state: $writer"
+      }
+      if {$residx==1 && $writer ne {0 {1023 1 512}}
+          && $writer ne {0 {string994 1 1170}}} {
+        lappend r "txn left mid-statement state: $writer"
+      }
+    } else {
+      if {$residx!=2 || $writer ne {0 {string994 1 1170}}} {
+        lappend r "hit without failure left: $residx $writer"
+      }
+    }
+    set r
+  } {}
+  incr iFail
+}
+do_test 1.sweep.coverage {
+  list [expr {$nHit>=20}] [expr {$nPhase2>=1}]
+} {1 1}
 
 sqlite3_enable_shared_cache $::drs_shared_cache
 unset -nocomplain ::drs_shared_cache ::drs_residx

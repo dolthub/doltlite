@@ -444,7 +444,14 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
   pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
   pSaved->lazy = cs->index.lazy;
-  csCaptureSavedRefsState(cs, &pSaved->refs);
+  pSaved->refsHash = cs->refs.refsHash;
+  pSaved->nChunks = cs->index.nChunks;
+  pSaved->iFileSize = cs->file.iFileSize;
+  pSaved->wal = cs->wal;
+  /* Detach, do not alias: the finalize frees the live refs before
+  ** adopting the replayed ones, so an aliasing save would double-free
+  ** when replay runs on a store that already holds refs (tail refresh). */
+  csDetachSavedRefsState(cs, &pSaved->refs);
 }
 
 static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
@@ -453,6 +460,10 @@ static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pS
   cs->index.aIndexMmapBase = pSaved->aIndexMmapBase;
   cs->index.aIndexMmapSize = pSaved->aIndexMmapSize;
   cs->index.lazy = pSaved->lazy;
+  cs->refs.refsHash = pSaved->refsHash;
+  cs->index.nChunks = pSaved->nChunks;
+  cs->file.iFileSize = pSaved->iFileSize;
+  cs->wal = pSaved->wal;
   csRestoreSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -637,9 +648,11 @@ static int csReplayWalFrom(
   ChunkStore *cs,
   i64 iStart,
   i64 iSkipStart,
-  i64 iSkipEnd
+  i64 iSkipEnd,
+  int bTailMode
 ){
   i64 walSize;
+  i64 iFileSizeBefore;
   ChunkStoreReplayState saved;
   i64 pos;
   i64 lastBoundary;
@@ -662,6 +675,7 @@ static int csReplayWalFrom(
   if( cs->wal.iWalOffset <= 0 || !cs->file.pFile ) return SQLITE_OK;
   if( iStart<cs->wal.iWalOffset ) return SQLITE_CORRUPT;
 
+  iFileSizeBefore = cs->file.iFileSize;
   {
     i64 fileSize = 0;
     int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
@@ -683,6 +697,10 @@ static int csReplayWalFrom(
   }
 
   csCaptureReplayState(cs, &saved);
+  /* iFileSize was already advanced to the disk size above; rollback must
+  ** rewind to the pre-replay value or a failed replay leaves the store
+  ** claiming a size it never ingested and it stops re-detecting. */
+  saved.iFileSize = iFileSizeBefore;
 
   cs->wal.nWalData = walSize;
   lastBoundary = iStart - cs->wal.iWalOffset;
@@ -780,8 +798,22 @@ static int csReplayWalFrom(
         ChunkIndexEntry existingEntry;
         int existing = 0;
         ChunkIndexEntry *e = 0;
-        rc = csIndexLookup(cs, &hash, &existingEntry, &existing);
-        if( rc!=SQLITE_OK ) goto replay_error;
+        if( bTailMode ){
+          /* Fresh commits are almost never duplicates, and the lazy index
+          ** verifies whole pages per probe. Duplicate entries are
+          ** tolerated everywhere, so probe only the cheap sets. */
+          int iRec = -1;
+          existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex,
+                                   &hash)>=0;
+          if( !existing ){
+            rc = csSearchRecent(cs, &hash, &iRec);
+            if( rc!=SQLITE_OK ) goto replay_error;
+            existing = iRec>=0;
+          }
+        }else{
+          rc = csIndexLookup(cs, &hash, &existingEntry, &existing);
+          if( rc!=SQLITE_OK ) goto replay_error;
+        }
         if( !existing ){
           rc = csGrowPending(cs);
           if( rc != SQLITE_OK ) goto replay_error;
@@ -917,16 +949,32 @@ static int csReplayWalFrom(
   }
 
   if( cs->staging.nPending > 0 ){
-    ChunkIndexEntry *aMerged = 0;
-    int nMerged = 0;
-    rc = csMergeIndex(cs, &aMerged, &nMerged);
-    if( rc != SQLITE_OK ) goto replay_error;
-    cs->index.aIndex = aMerged;
-    cs->index.nIndex = nMerged;
-    cs->index.aIndexMmapBase = 0;
-    cs->index.aIndexMmapSize = 0;
-    cs->staging.nPending = 0;
-    csPendHTClear(cs);
+    if( bTailMode ){
+      /* O(delta): the replayed chunks are committed content, exactly what
+      ** a local commit appends to the recent set. Merging into the main
+      ** index would copy it whole for every peer commit. */
+      int i;
+      rc = csGrowRecent(cs, cs->staging.nPending);
+      if( rc != SQLITE_OK ) goto replay_error;
+      for(i=0; i<cs->staging.nPending; i++){
+        cs->staging.aRecent[cs->staging.nRecent] = cs->staging.aPending[i];
+        cs->staging.aRecentZeroTail[cs->staging.nRecent] = 0;
+        cs->staging.nRecent++;
+      }
+      cs->staging.nPending = 0;
+      csPendHTReset(cs);
+    }else{
+      ChunkIndexEntry *aMerged = 0;
+      int nMerged = 0;
+      rc = csMergeIndex(cs, &aMerged, &nMerged);
+      if( rc != SQLITE_OK ) goto replay_error;
+      cs->index.aIndex = aMerged;
+      cs->index.nIndex = nMerged;
+      cs->index.aIndexMmapBase = 0;
+      cs->index.aIndexMmapSize = 0;
+      cs->staging.nPending = 0;
+      csPendHTClear(cs);
+    }
   }
 
   if( !prollyHashIsEmpty(&cs->refs.refsHash) ){
@@ -967,6 +1015,12 @@ int csReplayWal(ChunkStore *cs){
   return csReplayWalSkipping(cs, 0, 0);
 }
 
+/* Ingest records appended after iStart into the live store. The caller
+** proved the prefix below iStart is the content it already holds. */
+int csReplayWalTail(ChunkStore *cs, i64 iStart){
+  return csReplayWalFrom(cs, iStart, 0, 0, 1);
+}
+
 int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd){
   cs->wal.iCheckpointOffset = 0;
   cs->wal.nCheckpointIndex = 0;
@@ -980,7 +1034,7 @@ int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd){
        && (iSkipStart<cs->wal.iWalOffset || iSkipEnd<=iSkipStart)) ){
     return SQLITE_CORRUPT;
   }
-  return csReplayWalFrom(cs, cs->wal.iWalOffset, iSkipStart, iSkipEnd);
+  return csReplayWalFrom(cs, cs->wal.iWalOffset, iSkipStart, iSkipEnd, 0);
 }
 
 static int csCheckpointIndexInsert(
@@ -1221,7 +1275,7 @@ int csTryLoadWalCheckpoint(
     cs->wal.nCheckpointEntries = stamp.nCheckpointEntries;
     cs->wal.checkpointHash = stamp.checkpointHash;
     cs->wal.checkpointMagic = stamp.checkpointMagic;
-    rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0);
+    rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0);
     if( rc!=SQLITE_OK ){
       memset(&cs->index.lazy, 0, sizeof(cs->index.lazy));
       cs->wal.iCheckpointOffset = 0;
@@ -1300,7 +1354,7 @@ int csTryLoadWalCheckpoint(
   cs->wal.checkpointHash = stamp.checkpointHash;
   cs->wal.checkpointMagic = stamp.checkpointMagic;
   aIndex = 0;
-  rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0);
+  rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
   *pLoaded = 1;
   return SQLITE_OK;

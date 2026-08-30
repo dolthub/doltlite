@@ -189,6 +189,9 @@ struct ChunkStore {
   u8 fullFsync;           /* PRAGMA fullfsync -> SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip syncs */
   u8 snapshotPinned;
+  /* Bumped on every full reload-from-disk. Session-level state caches
+  ** (catalog, working roots) are only valid while this is unchanged. */
+  u32 reloadGen;
   u8 corruptMidStream;    /* Mid-stream WAL damage: reads/commits CORRUPT;
                           ** open still succeeds (stock surfaces on first use) */
   u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use
@@ -201,6 +204,7 @@ struct ChunkStore {
   /* Block checkpoint reentry via VFS write hooks. */
   int checkpointActive;
   sqlite3_vfs *pOwnedVfs;
+
 };
 
 void csManifestSeal(u8 *aBuf, i64 iOffset);

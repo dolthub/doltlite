@@ -552,6 +552,9 @@ int btreeRefreshFromDisk(Btree *p){
   u8 snapshotPinned;
   int bAutocommitBoundary;
   ProllyHash loadedCatHash;
+  ProllyHash oldTip, oldWs;
+  int hadOldTip = 0;
+  u32 oldReloadGen;
   int rc;
 
   assert( p!=0 && p->pBt!=0 );
@@ -559,6 +562,17 @@ int btreeRefreshFromDisk(Btree *p){
   snapshotPinned = pBt->store.snapshotPinned;
   bAutocommitBoundary = p->inTrans==TRANS_NONE
     && p->db && p->db->autoCommit && !p->db->pSavepoint;
+
+  memset(&oldTip, 0, sizeof(oldTip));
+  memset(&oldWs, 0, sizeof(oldWs));
+  oldReloadGen = pBt->store.reloadGen;
+  if( !p->isDetached ){
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    if( chunkStoreFindBranch(&pBt->store, zBr, &oldTip)==SQLITE_OK ){
+      hadOldTip = 1;
+      (void)chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &oldWs);
+    }
+  }
 
   if( bAutocommitBoundary ){
     pBt->store.snapshotPinned = 0;
@@ -571,9 +585,37 @@ int btreeRefreshFromDisk(Btree *p){
   if( !bChanged ) return SQLITE_OK;
   if( p->isDetached ) return SQLITE_OK;
 
+  /* Peers moved other branches only: this session's view is intact, so
+  ** keep its catalog and prepared statements undisturbed. Only sound
+  ** after an incremental refresh (a full reload replaced the store
+  ** wholesale) and while the view really is loaded — a failed statement
+  ** drops the catalog without moving the tip, and skipping then would
+  ** latch the empty catalog. */
+  if( hadOldTip && pBt->store.reloadGen==oldReloadGen
+   && !p->bCatalogDropped ){
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    ProllyHash newTip, newWs;
+    memset(&newTip, 0, sizeof(newTip));
+    memset(&newWs, 0, sizeof(newWs));
+    if( chunkStoreFindBranch(&pBt->store, zBr, &newTip)==SQLITE_OK
+     && prollyHashCompare(&newTip, &oldTip)==0 ){
+      (void)chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &newWs);
+      if( prollyHashCompare(&newWs, &oldWs)==0 ){
+        return SQLITE_OK;
+      }
+    }
+  }
+
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));
   rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    /* The store adopted the change but this session's view did not load.
+    ** The change signal is spent, so leave the version marker behind:
+    ** the next shared-working-state refresh retries the load once the
+    ** failure (OOM, transient IO) clears. */
+    p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+    return rc;
+  }
 
   btreeStoreCommittedFromCurrent(p, &loadedCatHash);
   btreeMarkWorkingStateChanged(p, 0);

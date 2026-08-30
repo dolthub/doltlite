@@ -31,6 +31,13 @@ struct ChunkStoreReplayState {
   i64 aIndexMmapSize;
   ChunkIndexLazy lazy;
   SavedRefsState refs;
+  /* Value state the replay loop mutates in place. Rollback must restore
+  ** it or a live store (tail refresh) is left claiming the new size with
+  ** the old index, never re-detecting the change. */
+  ProllyHash refsHash;
+  int nChunks;
+  i64 iFileSize;
+  WalState wal;
 };
 
 struct ChunkStoreReloadState {
@@ -50,6 +57,7 @@ void walStateSetDataSize(WalState *w, i64 nData);
 struct ChunkStore;
 int csReplayWal(struct ChunkStore *cs);
 int csReplayWalSkipping(struct ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd);
+int csReplayWalTail(struct ChunkStore *cs, i64 iStart);
 int csTryLoadWalCheckpoint(struct ChunkStore *cs, int *pLoaded,
                            i64 *pSkipStart, i64 *pSkipEnd);
 int csWriteWalCheckpoint(struct ChunkStore *cs, int sectorSize, int *pWritten);
