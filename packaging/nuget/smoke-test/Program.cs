@@ -52,10 +52,26 @@ Doltlite.Init();
 
 string dbPath = Path.Combine(
     Path.GetTempPath(), $"doltlite-net-smoke-{Environment.ProcessId}.db");
-foreach (string f in new[] { dbPath, $"{dbPath}-lock" })
+string[] dbFiles = { dbPath, $"{dbPath}-lock" };
+
+void Cleanup()
 {
-    File.Delete(f);
+    // Disposing a SqliteConnection returns it to the pool rather than
+    // closing the handle, and Windows refuses to delete a file still open.
+    SqliteConnection.ClearAllPools();
+    foreach (string f in dbFiles)
+    {
+        try
+        {
+            File.Delete(f);
+        }
+        catch (IOException)
+        {
+        }
+    }
 }
+
+Cleanup();
 
 using (var conn = new SqliteConnection($"Data Source={dbPath}"))
 {
@@ -131,7 +147,7 @@ using (var conn = new SqliteConnection($"Data Source={dbPath}"))
     Check("dolt_log sees both commits", (long)Scalar("SELECT count(*) FROM dolt_log")! >= 2, true);
 }
 
-File.Delete(dbPath);
+Cleanup();
 
 Console.WriteLine(failures == 0
     ? "smoke-test: all checks passed"
