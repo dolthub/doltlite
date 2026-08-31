@@ -197,6 +197,14 @@ jobs:
       run: cd build && bash ../test/windows_path_smoke.sh ./doltlite.exe
       timeout-minutes: 2
 
+    - name: Set up PHP
+      if: matrix.platform != 'windows'
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: ffi
+        tools: composer
+
     - name: Smoke test the dolthub/doltlite-php Composer package
       if: matrix.platform != 'windows'
       run: |
