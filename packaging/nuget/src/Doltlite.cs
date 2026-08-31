@@ -26,6 +26,18 @@ namespace DoltHub.Doltlite
                     return;
                 }
                 IntPtr lib = LoadNativeLibrary();
+                // A library that loads but exports nothing usable otherwise
+                // surfaces as a NullReferenceException from deep inside the
+                // provider, naming neither the library nor the symbol.
+                if (!NativeLibrary.TryGetExport(
+                        lib, "sqlite3_libversion_number", out IntPtr _))
+                {
+                    throw new DllNotFoundException(
+                        "The doltlite native library loaded but does not export " +
+                        "the SQLite C API (sqlite3_libversion_number is missing). " +
+                        "It is likely not a doltlite build, or was built without " +
+                        "an export table.");
+                }
                 SQLite3Provider_dynamic_cdecl.Setup("doltlite", new Exports(lib));
                 raw.SetProvider(new SQLite3Provider_dynamic_cdecl());
                 _initialized = true;
