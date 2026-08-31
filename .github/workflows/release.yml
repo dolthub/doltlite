@@ -828,6 +828,84 @@ jobs:
         git tag "${VERSION}"
         git push origin "${VERSION}"
 
+  # ── Publish the .NET NuGet package ───────────────────────
+  # nuget.org takes uploaded artifacts, so there is no split repo: assemble
+  # the package with every platform's native library extracted from this
+  # release's doltlite-lib-*.zip assets, then push. Authentication is nuget.org
+  # trusted publishing -- the NuGet/login action exchanges this job's OIDC
+  # token for a short-lived API key, so there is no stored secret. The policy
+  # is bound to this workflow file and the DoltHub.* package glob.
+  release-nuget:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Stage every runtime's native library
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+        mkdir -p stage/pkg
+        cp packaging/nuget/DoltHub.Doltlite.csproj stage/pkg/
+        cp -R packaging/nuget/src stage/pkg/src
+        cp packaging/nuget/README.md stage/pkg/README.md
+
+        # release target -> RID : source library : packaged library name.
+        # Windows drops the lib prefix because NativeLibrary.Load("doltlite")
+        # probes doltlite.dll there, not libdoltlite.dll.
+        for spec in \
+          "linux-x64 linux-x64 libdoltlite.so libdoltlite.so" \
+          "linux-arm64 linux-arm64 libdoltlite.so libdoltlite.so" \
+          "osx-arm64 osx-arm64 libdoltlite.dylib libdoltlite.dylib" \
+          "osx-x64 osx-x64 libdoltlite.dylib libdoltlite.dylib" \
+          "win-x64 win-x64 libdoltlite.dll doltlite.dll"; do
+          read -r target rid src dst <<<"$spec"
+          gh release download "${VERSION}" --repo dolthub/doltlite \
+            --pattern "doltlite-lib-${target}-${version}.zip" --dir stage
+          unzip -q "stage/doltlite-lib-${target}-${version}.zip" -d stage
+          lib="stage/doltlite-lib-${target}-${version}/${src}"
+          if [ ! -f "$lib" ]; then
+            echo "ERROR: missing ${src} in doltlite-lib-${target}-${version}.zip"
+            exit 1
+          fi
+          mkdir -p "stage/pkg/runtimes/${rid}/native"
+          cp "$lib" "stage/pkg/runtimes/${rid}/native/${dst}"
+        done
+
+    - name: Pack
+      run: |
+        version="${VERSION#v}"
+        dotnet pack stage/pkg/DoltHub.Doltlite.csproj \
+          -p:Version="$version" -c Release -o dist --nologo
+
+    - name: Authenticate to NuGet (trusted publishing)
+      uses: NuGet/login@v1
+      id: nuget-login
+      with:
+        user: dolthub
+
+    - name: Push to nuget.org
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+        # Idempotent: --skip-duplicate keeps a re-run of the release workflow
+        # from failing when this version is already on the registry.
+        dotnet nuget push "dist/DoltHub.Doltlite.${version}.nupkg" \
+          --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate
+
   # from here — build the canonical npm distributables (make -C ext/wasm npm),
   # stage them with packaging/npm, and npm publish. Requires the NPM_TOKEN
   # secret: an npm automation token with publish rights to the @dolthub scope.
