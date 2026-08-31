@@ -155,7 +155,8 @@ done
 exit 43
 EOF
 chmod +x "$WRAPPER_TMP/cc-stub"
-if DOLTLITE_BUILD_DIR="$WRAPPER_TMP" \
+if DOLTLITE_REGRESSION_PREBUILT=0 \
+   DOLTLITE_BUILD_DIR="$WRAPPER_TMP" \
    DOLTLITE_TEST_ARCHIVE="$WRAPPER_TMP/libdoltlite.a" \
    CC="$WRAPPER_TMP/cc-stub" \
    bash "$HERE/run_doltlite_regression_case.sh" all >/dev/null 2>&1; then
