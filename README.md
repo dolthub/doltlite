@@ -19,6 +19,8 @@ on the [DoltHub blog](https://www.dolthub.com/blog/?tags=doltlite). DoltLite is
 the proud product of 
 [agentic engineering](https://www.dolthub.com/blog/2026-08-17-top-5-agent-engineered-open-source-projects/).
 
+[DoltLite is Beta](https://www.dolthub.com/blog/2026-08-31-doltlite-beta/).
+
 ## Install
 
 Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dolthub/doltlite/releases).
