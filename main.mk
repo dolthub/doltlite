@@ -2939,13 +2939,19 @@ LDFLAGS.libdoltlite.exports = $(if $(libdoltlite.exports.file),-Wl$(libdoltlite.
 # export table also settles what an unfiltered MinGW link only guesses at:
 # its auto-export heuristic is disabled by any one dllexport anywhere in the
 # link, which silently produced a DLL that dlopen'd but resolved no symbols.
+# Data exports (sqlite3_version, sqlite3_temp_directory) carry the DATA
+# keyword: without it the import library hands a consumer the address of the
+# indirection slot instead of the variable.
 libdoltlite.def: $(LIBOBJS0)
 	echo EXPORTS > $@
 	nm -g --defined-only $(LIBOBJS0) \
-		| sed -n 's/^.*[[:space:]][TRD][[:space:]]_\{0,1\}\(sqlite3_[A-Za-z0-9_]*\)$$/\1/p' \
+		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(sqlite3_[A-Za-z0-9_]*\)$$/\1/p' \
 		| sort -u >> $@
 	nm -g --defined-only $(LIBOBJS0) \
-		| sed -n 's/^.*[[:space:]][TRD][[:space:]]_\{0,1\}\(doltliteServe[A-Za-z0-9_]*\)$$/\1/p' \
+		| sed -n 's/^.*[[:space:]][RDB][[:space:]]_\{0,1\}\(sqlite3_[A-Za-z0-9_]*\)$$/\1 DATA/p' \
+		| sort -u >> $@
+	nm -g --defined-only $(LIBOBJS0) \
+		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(doltliteServe[A-Za-z0-9_]*\)$$/\1/p' \
 		| sort -u >> $@
 
 libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)
