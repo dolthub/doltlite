@@ -1260,29 +1260,29 @@ format4 format4-1.3 class=intentional  # file-size page-multiple assertion; chun
 # stat — the dbstat vtable reports per-page b-tree statistics. A DoltLite-format
 # schema has no SQLite pages, so a scan errors rather than pretending the
 # database is empty.
-stat stat-0.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-0.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-1.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-1.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-1.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-2.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-2.1agg class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-2.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-3.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-3.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-4.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-5.20 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-7.1.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-7.1.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-7.1.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-7.1.4 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-0.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-0.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-1.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-1.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-1.3 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-2.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-2.1agg class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-2.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-3.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-3.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-4.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-5.20 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.3 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-7.1.4 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
 stat stat-7.2 class=intentional  # DROP of a dbstat vtab whose ATTACHed schema was detached fails at xConnect re-resolve (schema-reload timing; stock only fails cross-connection)
-stat stat-7.2.1 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-7.2.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-7.2.1 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-7.2.3 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
 stat stat-7.2.4 class=intentional  # cascade of 7.2: x3 never dropped, CREATE collides ("table x3 already exists")
-stat stat-8.2 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-8.3 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
-stat stat-8.4 class=unsupported issue=2500  # dbstat scan errors; chunk store has no page layout
+stat stat-8.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-8.3 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-8.4 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
 # io — counts VFS write/sync operations and checks on-disk file size via a test
 # VFS. DoltLite's chunk store batches I/O differently and its file layout is not
 # SQLite-page-sized, so the operation counts and file sizes differ. I/O-model
@@ -3785,26 +3785,26 @@ sidedelete sidedelete-3.100.1 class=intentional
 # dbstat scans of a DoltLite-format schema error rather than walking pages.
 # faultsim's no-fault iteration (and nearby recovered iterations) now fail
 # with that refusal instead of comparing an empty page count.
-statfault statfault-1-cantopen-persistent.1 class=unsupported issue=2500
-statfault statfault-1-cantopen-transient.1 class=unsupported issue=2500
-statfault statfault-1-full.1 class=unsupported issue=2500
-statfault statfault-1-interrupt.*{6} class=unsupported issue=2500
-statfault statfault-1-ioerr-persistent.2 class=unsupported issue=2500
-statfault statfault-1-ioerr-transient.2 class=unsupported issue=2500
-statfault statfault-1-oom-persistent.*{3} class=unsupported issue=2500
-statfault statfault-1-oom-transient.*{4} class=unsupported issue=2500
-statfault statfault-1-shmerr-persistent.1 class=unsupported issue=2500
-statfault statfault-1-shmerr-transient.1 class=unsupported issue=2500
-statfault statfault-2-cantopen-persistent.1 class=unsupported issue=2500
-statfault statfault-2-cantopen-transient.1 class=unsupported issue=2500
-statfault statfault-2-full.1 class=unsupported issue=2500
-statfault statfault-2-interrupt.*{5} class=unsupported issue=2500
-statfault statfault-2-ioerr-persistent.2 class=unsupported issue=2500
-statfault statfault-2-ioerr-transient.2 class=unsupported issue=2500
-statfault statfault-2-oom-persistent.*{3} class=unsupported issue=2500
-statfault statfault-2-oom-transient.*{4} class=unsupported issue=2500
-statfault statfault-2-shmerr-persistent.1 class=unsupported issue=2500
-statfault statfault-2-shmerr-transient.1 class=unsupported issue=2500
+statfault statfault-1-cantopen-persistent.1 class=unsupported issue=2508
+statfault statfault-1-cantopen-transient.1 class=unsupported issue=2508
+statfault statfault-1-full.1 class=unsupported issue=2508
+statfault statfault-1-interrupt.*{6} class=unsupported issue=2508
+statfault statfault-1-ioerr-persistent.2 class=unsupported issue=2508
+statfault statfault-1-ioerr-transient.2 class=unsupported issue=2508
+statfault statfault-1-oom-persistent.*{3} class=unsupported issue=2508
+statfault statfault-1-oom-transient.*{4} class=unsupported issue=2508
+statfault statfault-1-shmerr-persistent.1 class=unsupported issue=2508
+statfault statfault-1-shmerr-transient.1 class=unsupported issue=2508
+statfault statfault-2-cantopen-persistent.1 class=unsupported issue=2508
+statfault statfault-2-cantopen-transient.1 class=unsupported issue=2508
+statfault statfault-2-full.1 class=unsupported issue=2508
+statfault statfault-2-interrupt.*{5} class=unsupported issue=2508
+statfault statfault-2-ioerr-persistent.2 class=unsupported issue=2508
+statfault statfault-2-ioerr-transient.2 class=unsupported issue=2508
+statfault statfault-2-oom-persistent.*{3} class=unsupported issue=2508
+statfault statfault-2-oom-transient.*{4} class=unsupported issue=2508
+statfault statfault-2-shmerr-persistent.1 class=unsupported issue=2508
+statfault statfault-2-shmerr-transient.1 class=unsupported issue=2508
 
 # writable_schema rootpage aliasing (raw-format poke): the post-DDL schema
 # reload can't rebind tables whose rootpage was pointed at another table's
