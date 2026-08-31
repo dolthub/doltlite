@@ -26,11 +26,19 @@ bash "$PKG_DIR/assemble.sh" "0.0.0-ci" "$STAGE/feed" "$BUILD_DIR"
 
 cp "$PKG_DIR/smoke-test/smoke-test.csproj" "$CONSUMER/"
 cp "$PKG_DIR/smoke-test/Program.cs" "$CONSUMER/"
+
+# NuGet reads the source as a literal path, and under Git Bash a shell path
+# like /tmp/x resolves to C:\tmp\x for the native dotnet. Hand it the OS path.
+FEED="$STAGE/feed"
+if command -v cygpath >/dev/null 2>&1; then
+  FEED="$(cygpath -w "$FEED")"
+fi
+
 cat > "$CONSUMER/nuget.config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
-    <add key="local" value="$STAGE/feed" />
+    <add key="local" value="$FEED" />
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
 </configuration>
