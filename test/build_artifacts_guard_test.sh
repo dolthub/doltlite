@@ -131,6 +131,42 @@ else
   echo "  (skipping sanitizer probes: set DOLTLITE_SAN_ARCHIVE to an instrumented libdoltlite.a)"
 fi
 
+WRAPPER_TMP=$(mktemp -d)
+printf 'stale\n' > "$WRAPPER_TMP/libdoltlite.a"
+cat > "$WRAPPER_TMP/Makefile" <<'EOF'
+.PHONY: libdoltlite.a
+libdoltlite.a:
+	@printf 'refreshed\n' > libdoltlite.a
+EOF
+cat > "$WRAPPER_TMP/cc-stub" <<'EOF'
+#!/bin/sh
+if ! grep -qx refreshed "$DOLTLITE_TEST_ARCHIVE"; then
+  exit 42
+fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    shift
+    printf '#!/bin/sh\nexit 0\n' > "$1"
+    chmod +x "$1"
+    exit 0
+  fi
+  shift
+done
+exit 43
+EOF
+chmod +x "$WRAPPER_TMP/cc-stub"
+if DOLTLITE_REGRESSION_PREBUILT=0 \
+   DOLTLITE_BUILD_DIR="$WRAPPER_TMP" \
+   DOLTLITE_TEST_ARCHIVE="$WRAPPER_TMP/libdoltlite.a" \
+   CC="$WRAPPER_TMP/cc-stub" \
+   bash "$HERE/run_doltlite_regression_case.sh" all >/dev/null 2>&1; then
+  ok
+else
+  bad "regression_wrapper_refreshes_archive" \
+      "regression wrapper linked without refreshing libdoltlite.a"
+fi
+rm -rf "$WRAPPER_TMP"
+
 echo
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ "$FAIL" -gt 0 ]; then
