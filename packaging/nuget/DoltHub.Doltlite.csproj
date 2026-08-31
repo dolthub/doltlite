@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>DoltHub.Doltlite</RootNamespace>
+    <AssemblyName>DoltHub.Doltlite</AssemblyName>
+
+    <PackageId>DoltHub.Doltlite</PackageId>
+    <Description>DoltLite for .NET: SQLite with Git-style version control (branch, commit, merge, diff). Plugs the bundled libdoltlite engine into SQLitePCLRaw, so Microsoft.Data.Sqlite.Core, EF Core, and Dapper work unchanged on top.</Description>
+    <Authors>DoltHub</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/dolthub/doltlite</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/dolthub/doltlite</RepositoryUrl>
+    <PackageTags>doltlite;dolt;sqlite;database;version-control</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.10" />
+    <PackageReference Include="SQLitePCLRaw.provider.dynamic_cdecl" Version="2.1.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="runtimes/**" Pack="true" PackagePath="runtimes/" />
+  </ItemGroup>
+
+</Project>
