@@ -1,5 +1,12 @@
 # dolthub/doltlite-php
 
+> The installable package is distributed through
+> [dolthub/doltlite-php](https://github.com/dolthub/doltlite-php), whose
+> contents — including the prebuilt `lib/` binaries — are pushed by
+> [dolthub/doltlite](https://github.com/dolthub/doltlite)'s release workflow
+> on every tagged release. The package source lives in that repository under
+> `packaging/composer/`; send issues and pull requests there.
+
 [DoltLite](https://github.com/dolthub/doltlite) for PHP: SQLite with Git-style
 version control — branch, commit, merge, and diff your relational data. The
 binding runs over PHP's FFI extension against the `libdoltlite` shared library
