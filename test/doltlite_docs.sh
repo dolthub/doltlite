@@ -10,6 +10,15 @@ run_test "fresh_select_shows_default_agent" \
   "SELECT doc_name, length(doc_text) > 500 FROM dolt_docs;" \
   "AGENT.md|1" "$DB"
 
+run_test "fresh_agent_documents_beta_contracts" \
+  "SELECT instr(doc_text, 'storage format version 12') > 0,
+          instr(doc_text, 'dolt_push') > 0,
+          instr(doc_text, 'dolt_constraint_violations') > 0,
+          instr(doc_text, 'one transaction may write only one file-backed') > 0,
+          instr(doc_text, 'Standard SQLite applies everywhere else') = 0
+     FROM dolt_docs WHERE doc_name='AGENT.md';" \
+  "1|1|1|1|1" "$DB"
+
 run_test "fresh_no_status_row" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB"
