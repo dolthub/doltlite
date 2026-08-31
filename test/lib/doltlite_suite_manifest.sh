@@ -3,6 +3,7 @@
 doltlite_all_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
+install_sh_layout_test.sh
 sqlite_compatibility_contract_test.sh
 concurrency_contract_test.sh
 storage_format_contract_test.sh
