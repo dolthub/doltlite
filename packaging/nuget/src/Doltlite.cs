@@ -17,6 +17,16 @@ namespace DoltHub.Doltlite
         private static readonly object Gate = new object();
         private static bool _initialized;
 
+        /// <summary>
+        /// Proves the loaded library is doltlite with a working export table.
+        /// Deliberately not a sqlite3_* name: a stock SQLite satisfies those,
+        /// so pointing DOLTLITE_NET_LIB at one would pass here and then fail
+        /// far away on the first dolt_ function. This symbol is doltlite's, is
+        /// defined whether or not the build has remote support, and is covered
+        /// by the export filter on every platform.
+        /// </summary>
+        private const string Marker = "doltliteServerPort";
+
         public static void Init()
         {
             lock (Gate)
@@ -25,18 +35,17 @@ namespace DoltHub.Doltlite
                 {
                     return;
                 }
-                IntPtr lib = LoadNativeLibrary();
-                // A library that loads but exports nothing usable otherwise
-                // surfaces as a NullReferenceException from deep inside the
-                // provider, naming neither the library nor the symbol.
-                if (!NativeLibrary.TryGetExport(
-                        lib, "sqlite3_libversion_number", out IntPtr _))
+                string source;
+                IntPtr lib = LoadNativeLibrary(out source);
+                // Without this, a library that loads but cannot back the API
+                // fails as a null dereference inside the provider, naming
+                // neither the library nor what was missing.
+                if (!NativeLibrary.TryGetExport(lib, Marker, out IntPtr _))
                 {
-                    throw new DllNotFoundException(
-                        "The doltlite native library loaded but does not export " +
-                        "the SQLite C API (sqlite3_libversion_number is missing). " +
-                        "It is likely not a doltlite build, or was built without " +
-                        "an export table.");
+                    throw new EntryPointNotFoundException(
+                        $"The native library loaded from {source} does not " +
+                        $"export {Marker}, so it is not a doltlite build or " +
+                        "was built without an export table.");
                 }
                 SQLite3Provider_dynamic_cdecl.Setup("doltlite", new Exports(lib));
                 raw.SetProvider(new SQLite3Provider_dynamic_cdecl());
@@ -44,17 +53,19 @@ namespace DoltHub.Doltlite
             }
         }
 
-        private static IntPtr LoadNativeLibrary()
+        private static IntPtr LoadNativeLibrary(out string source)
         {
             string? overridePath =
                 Environment.GetEnvironmentVariable("DOLTLITE_NET_LIB");
             if (!string.IsNullOrEmpty(overridePath))
             {
+                source = $"DOLTLITE_NET_LIB ({overridePath})";
                 return NativeLibrary.Load(overridePath);
             }
             // Probes the platform name variants (libdoltlite.so/.dylib,
             // doltlite.dll) through the assembly's package context, which
             // includes this package's runtimes/<rid>/native payload.
+            source = "this package's bundled runtimes";
             return NativeLibrary.Load(
                 "doltlite", typeof(Doltlite).Assembly, null);
         }

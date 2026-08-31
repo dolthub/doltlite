@@ -24,6 +24,30 @@ void Check(string name, object? got, object? want)
     }
 }
 
+// A library that loads but is not an engine must say so, not fail as a null
+// dereference inside the provider. Runs before Init() since the provider is
+// process-wide and set once; the harness builds the decoy.
+string? decoy = Environment.GetEnvironmentVariable("DOLTLITE_TEST_DECOY");
+if (string.IsNullOrEmpty(decoy))
+{
+    Console.WriteLine("  SKIP: non-engine library is rejected (no decoy built)");
+}
+else
+{
+    Environment.SetEnvironmentVariable("DOLTLITE_NET_LIB", decoy);
+    try
+    {
+        Doltlite.Init();
+        Check("non-engine library is rejected", "no exception", "exception");
+    }
+    catch (EntryPointNotFoundException e)
+    {
+        Check("non-engine library is rejected",
+            e.Message.Contains("does not export"), true);
+    }
+    Environment.SetEnvironmentVariable("DOLTLITE_NET_LIB", null);
+}
+
 Doltlite.Init();
 
 string dbPath = Path.Combine(
