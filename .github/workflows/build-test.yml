@@ -212,6 +212,13 @@ jobs:
         bash packaging/composer/test-package.sh build
       timeout-minutes: 5
 
+    - name: Smoke test the DoltHub.Doltlite NuGet package
+      shell: bash
+      run: |
+        chmod +x packaging/nuget/assemble.sh packaging/nuget/test-package.sh
+        bash packaging/nuget/test-package.sh build
+      timeout-minutes: 10
+
     - name: GC smoke tests
       if: matrix.platform != 'windows'
       run: |

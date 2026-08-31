@@ -2933,8 +2933,31 @@ libdoltlite.exports.file = $(if $(filter .so,$(T.dll)),$(TOP)/src/libdoltlite.ma
 libdoltlite.exports.flag = $(if $(filter .so,$(T.dll)),--version-script,$(if $(filter .dylib,$(T.dll)),-exported_symbols_list,))
 LDFLAGS.libdoltlite.exports = $(if $(libdoltlite.exports.file),-Wl$(libdoltlite.comma)$(libdoltlite.exports.flag)$(libdoltlite.comma)$(libdoltlite.exports.file),)
 
-libdoltlite$(T.dll):	$(LIBOBJS0) $(libdoltlite.exports.file)
-	$(T.link.shared) -o $@ $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
+# PE has no version-script equivalent, and the export lists above are globs
+# that a .def cannot express, so the same export set is resolved against the
+# objects here -- upstream generates sqlite3.def the same way. Naming an
+# export table also settles what an unfiltered MinGW link only guesses at:
+# its auto-export heuristic is disabled by any one dllexport anywhere in the
+# link, which silently produced a DLL that dlopen'd but resolved no symbols.
+# Data exports (sqlite3_version, sqlite3_temp_directory) carry the DATA
+# keyword: without it the import library hands a consumer the address of the
+# indirection slot instead of the variable.
+libdoltlite.def: $(LIBOBJS0)
+	echo EXPORTS > $@
+	nm -g --defined-only $(LIBOBJS0) \
+		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(sqlite3_[A-Za-z0-9_]*\)$$/\1/p' \
+		| sort -u >> $@
+	nm -g --defined-only $(LIBOBJS0) \
+		| sed -n 's/^.*[[:space:]][RDB][[:space:]]_\{0,1\}\(sqlite3_[A-Za-z0-9_]*\)$$/\1 DATA/p' \
+		| sort -u >> $@
+	nm -g --defined-only $(LIBOBJS0) \
+		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(doltliteServe[A-Za-z0-9_]*\)$$/\1/p' \
+		| sort -u >> $@
+
+libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)
+
+libdoltlite$(T.dll):	$(LIBOBJS0) $(libdoltlite.exports.file) $(libdoltlite.deffile)
+	$(T.link.shared) -o $@ $(libdoltlite.deffile) $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
 		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname) \
 		$(LDFLAGS.libdoltlite.exports)
 	$(if $(filter .so,$(T.dll)),ln -sf libdoltlite$(T.dll) libdoltlite$(T.dll).0)
