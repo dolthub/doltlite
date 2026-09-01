@@ -559,6 +559,9 @@ static int buildCommitDiffPair(
   char zFromLabel[PROLLY_HASH_SIZE*2+1];
   char zToLabel[PROLLY_HASH_SIZE*2+1];
   const ProllyHash *pParent;
+  int nParents;
+  int nIter;
+  int i;
   int rc;
 
   if( !zToCommit ) return SQLITE_OK;
@@ -602,42 +605,60 @@ static int buildCommitDiffPair(
     return rc;
   }
 
-  pParent = doltliteCommitParentHash(&toCommit, 0);
-  if( pParent && !prollyHashIsEmpty(pParent) ){
-    DoltliteCommit fromCommit;
-    memset(&fromCommit, 0, sizeof(fromCommit));
-    fromHash = *pParent;
-    rc = doltliteLoadCommit(db, &fromHash, &fromCommit);
-    if( rc==SQLITE_OK ){
-      memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
-      fromDate = fromCommit.timestamp;
-      rc = doltliteLoadTableRootByNameOrEmpty(db, &fromCatHash, zTableName,
-                                              &fromTblRoot, &fromFlags,
-                                              &fromSchemaHash);
+  nParents = doltliteCommitParentCount(&toCommit);
+  nIter = nParents>0 ? nParents : 1;
+  doltliteHashToHex(&toHash, zToLabel);
+  for(i=0; i<nIter; i++){
+    u8 pairFromFlags;
+    u8 pairToFlags;
+
+    memset(&fromHash, 0, sizeof(fromHash));
+    memset(&fromTblRoot, 0, sizeof(fromTblRoot));
+    memset(&fromCatHash, 0, sizeof(fromCatHash));
+    memset(&fromSchemaHash, 0, sizeof(fromSchemaHash));
+    fromFlags = 0;
+    fromDate = 0;
+
+    if( nParents>0 ){
+      DoltliteCommit fromCommit;
+      pParent = doltliteCommitParentHash(&toCommit, i);
+      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+      memset(&fromCommit, 0, sizeof(fromCommit));
+      fromHash = *pParent;
+      rc = doltliteLoadCommit(db, &fromHash, &fromCommit);
+      if( rc==SQLITE_OK ){
+        memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
+        fromDate = fromCommit.timestamp;
+        rc = doltliteLoadTableRootByNameOrEmpty(db, &fromCatHash, zTableName,
+                                                &fromTblRoot, &fromFlags,
+                                                &fromSchemaHash);
+      }
+      doltliteCommitClear(&fromCommit);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&toCommit);
+        return rc;
+      }
     }
-    doltliteCommitClear(&fromCommit);
+
+    if( prollyHashCompare(&fromTblRoot, &toTblRoot)==0
+     && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
+      continue;
+    }
+
+    pairFromFlags = fromFlags ? fromFlags : toFlags;
+    pairToFlags = toFlags ? toFlags : fromFlags;
+    doltliteHashToHex(&fromHash, zFromLabel);
+    rc = pairsAppend(pCur, zFromLabel, &fromTblRoot, &fromCatHash,
+                     &fromSchemaHash, pairFromFlags, fromDate,
+                     zToLabel, &toTblRoot, &toCatHash, &toSchemaHash,
+                     pairToFlags, toCommit.timestamp);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&toCommit);
       return rc;
     }
   }
-
-  if( prollyHashCompare(&fromTblRoot, &toTblRoot)==0
-   && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
-    doltliteCommitClear(&toCommit);
-    return SQLITE_OK;
-  }
-
-  if( !fromFlags ) fromFlags = toFlags;
-  if( !toFlags ) toFlags = fromFlags;
-  doltliteHashToHex(&fromHash, zFromLabel);
-  doltliteHashToHex(&toHash, zToLabel);
-  rc = pairsAppend(pCur, zFromLabel, &fromTblRoot, &fromCatHash,
-                   &fromSchemaHash, fromFlags, fromDate,
-                   zToLabel, &toTblRoot, &toCatHash, &toSchemaHash,
-                   toFlags, toCommit.timestamp);
   doltliteCommitClear(&toCommit);
-  return rc;
+  return SQLITE_OK;
 }
 
 typedef struct DtSliceEnd DtSliceEnd;

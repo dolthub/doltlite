@@ -98,8 +98,50 @@ SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "merge_count" "SELECT count(*) FROM dolt_diff_t;" "^[3-9]" "$DB"
 run_test_match "merge_has_merge_commit" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" "^[3-9]" "$DB"
+run_test "merge_to_commit_eq_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
+  "2" "$DB"
+run_test "merge_to_commit_eq_matches_plus" \
+  "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1)) = (SELECT count(*) FROM dolt_diff_t WHERE +to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "1" "$DB"
+run_test "merge_to_commit_head_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='HEAD';" \
+  "2" "$DB"
+run_test "merge_to_commit_distinct_parents" \
+  "SELECT count(DISTINCT from_commit) FROM dolt_diff_t WHERE to_commit='HEAD';" \
+  "2" "$DB"
+run_test "merge_to_commit_head_ids" \
+  "SELECT group_concat(coalesce(to_id, from_id), ',') FROM (SELECT to_id, from_id FROM dolt_diff_t WHERE to_commit='HEAD' ORDER BY coalesce(to_id, from_id));" \
+  "2,3" "$DB"
 
 rm -f "$DB"
+
+# Two-parent merge whose parents each change a different row: the to_commit
+# EQ pushdown must emit both parent pairs, matching the unconstrained scan.
+DBMTC=/tmp/test_dt_merge_to_commit_$$.db; rm -f "$DBMTC"
+echo "CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(100,'a'),(200,'b');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('side');
+UPDATE t SET v='main' WHERE k=100;
+SELECT dolt_commit('-Am','mainc');
+SELECT dolt_checkout('side');
+UPDATE t SET v='side' WHERE k=200;
+SELECT dolt_commit('-Am','sidec');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('side');" | $DOLTLITE "$DBMTC" > /dev/null 2>&1
+
+run_test "merge_to_commit_both_rows" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
+  "2" "$DBMTC"
+run_test "merge_to_commit_both_keys" \
+  "SELECT group_concat(coalesce(to_k, from_k), ',') FROM (SELECT to_k, from_k FROM dolt_diff_t WHERE to_commit='HEAD' ORDER BY coalesce(to_k, from_k));" \
+  "100,200" "$DBMTC"
+run_test "merge_to_commit_plus_agrees" \
+  "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1)) = (SELECT count(*) FROM dolt_diff_t WHERE +to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "1" "$DBMTC"
+
+rm -f "$DBMTC"
 
 DB=/tmp/test_dt_cp_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

@@ -303,6 +303,20 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_commit');
 SELECT dolt_checkout('main');
 " "SELECT CONCAT('R|', count(*)) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log('feat') LIMIT 1);"
 
+oracle "to_commit_merge_emits_all_parents" "
+CREATE TABLE t(k INTEGER PRIMARY KEY, v VARCHAR(32));
+INSERT INTO t VALUES(100,'a'),(200,'b');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+SELECT dolt_branch('side');
+UPDATE t SET v='main' WHERE k=100;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','mainc');
+SELECT dolt_checkout('side');
+UPDATE t SET v='side' WHERE k=200;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','sidec');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('side');
+" "SELECT CONCAT('R|', IFNULL(to_k,''), '|', IFNULL(from_v,''), '|', IFNULL(to_v,''), '|', diff_type, '|', IFNULL(log_from.message, from_commit)) FROM dolt_diff_t dt LEFT JOIN dolt_log log_from ON log_from.commit_hash = dt.from_commit WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
