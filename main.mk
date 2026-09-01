@@ -2736,6 +2736,7 @@ DOLTLITE_C_TESTS = \
 	remote_chunk_integrity_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
+	chunk_store_put_bounds_test$(T.exe) \
 	remotesrv_init_failure_test$(T.exe) \
 	commit_deserialize_test$(T.exe) \
 	serialize_pending_test$(T.exe) \
@@ -2799,6 +2800,10 @@ sequence_reload_test$(T.exe): $(TOP)/test/sequence_reload_test.c libdoltlite$(T.
 
 chunk_store_fork_lock_test$(T.exe): $(TOP)/test/chunk_store_fork_lock_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/chunk_store_fork_lock_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+chunk_store_put_bounds_test$(T.exe): $(TOP)/test/chunk_store_put_bounds_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/chunk_store_put_bounds_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 remotesrv_init_failure_test$(T.exe): $(TOP)/test/remotesrv_init_failure_test.c libdoltlite$(T.lib)

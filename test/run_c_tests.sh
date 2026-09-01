@@ -39,6 +39,7 @@ COVERAGE_TESTS=(
   remotesrv_init_failure_test
   commit_deserialize_test
   serialize_pending_test
+  chunk_store_put_bounds_test
 )
 
 SPECIALIZED_TESTS=(

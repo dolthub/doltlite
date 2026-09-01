@@ -115,7 +115,6 @@ static int csPendHTEnsure(ChunkStore *cs){
     int *aNew = sqlite3_realloc(cs->staging.aPendingHT, newSize * (int)sizeof(int));
     if( aNew ){
       cs->staging.aPendingHT = aNew;
-      cs->staging.nPendingHTSize = newSize;
       if( !cs->staging.aPendingHTNext || cs->staging.nPendingAlloc > cs->staging.nPendingHTNextAlloc ){
         int nAlloc = cs->staging.nPendingAlloc > 0 ? cs->staging.nPendingAlloc : 64;
         int *aNew2 = sqlite3_realloc(cs->staging.aPendingHTNext, nAlloc*(int)sizeof(int));
@@ -123,6 +122,9 @@ static int csPendHTEnsure(ChunkStore *cs){
         cs->staging.aPendingHTNext = aNew2;
         cs->staging.nPendingHTNextAlloc = nAlloc;
       }
+      /* Mask follows both reallocs. A larger size with uninit buckets
+      ** misses hits and treats garbage as next-indexes. */
+      cs->staging.nPendingHTSize = newSize;
       return csPendHTRebuild(cs);
     }
 
