@@ -72,6 +72,7 @@ functions, subject to the [storage-engine exceptions](#sqlite-compatibility).
 | PHP | `composer require dolthub/doltlite-php` | this repo ([`packaging/composer`](packaging/composer)), distributed via [dolthub/doltlite-php](https://github.com/dolthub/doltlite-php) |
 | .NET | `dotnet add package DoltHub.Doltlite` | this repo ([`packaging/nuget`](packaging/nuget)); works under Microsoft.Data.Sqlite.Core, EF Core, Dapper |
 | Rust | `cargo add doltlite` | this repo ([`packaging/rust`](packaging/rust)); engine vendored, or point `rusqlite` at a build with `SQLITE3_LIB_DIR` |
+| Go | `go get github.com/dolthub/doltlite-go` | this repo ([`packaging/go`](packaging/go)); `database/sql` driver, engine vendored |
 | Browser / WASM | `npm install @dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
 | Swift (iOS / macOS) | SwiftPM: `https://github.com/dolthub/doltlite-swift` | [dolthub/doltlite-swift](https://github.com/dolthub/doltlite-swift) (XCFramework built by [`packaging/swift`](packaging/swift)) |
 | Android | Gradle: `com.dolthub:doltlite-android` | [dolthub/doltlite-android](https://github.com/dolthub/doltlite-android) (AAR + JNA) |
