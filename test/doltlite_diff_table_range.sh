@@ -49,6 +49,14 @@ run_test_match "three_dot_missing_right_rejected" \
   "SELECT count(*) FROM dolt_diff_t('feature...');" \
   "invalid revision range" "$DB"
 
+run_test_match "two_dot_unknown_ref_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('nosuchref..feature');" \
+  "invalid revision range" "$DB"
+
+run_test_match "three_dot_invalid_ancestor_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~99...feature');" \
+  "invalid revision range" "$DB"
+
 run_test "three_dot_feature" \
   "SELECT coalesce(from_id,to_id) || ':' || diff_type
      FROM dolt_diff_t('main...feature');" "2:added" "$DB"
