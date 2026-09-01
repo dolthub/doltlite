@@ -22,6 +22,14 @@ file_signature() {
   stat -c "%s-%a-%i-%h" "$1" 2>/dev/null || stat -f "%z-%Lp-%i-%l" "$1"
 }
 
+readonly_result_ok() {
+  if [ "$1" = "PRAGMA wal_checkpoint;" ]; then
+    [ "$2" -eq 0 ] && echo "$3" | grep -qE '^[0-9]+\|'
+  else
+    [ "$2" -ne 0 ] && echo "$3" | grep -q "readonly"
+  fi
+}
+
 seed_db() {
   rm -f "$1"
   echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
@@ -35,14 +43,18 @@ for op in "VACUUM;" "PRAGMA wal_checkpoint;" "SELECT dolt_gc();"; do
   ln "$DB" "$ROOT/link.db"
   chmod 0444 "$DB"
   before=$(file_signature "$DB")
-  $DOLTLITE "file:$DB?mode=ro" "$op" > /dev/null 2>&1
+  out=$($DOLTLITE "file:$DB?mode=ro" "$op" 2>&1)
+  rc=$?
   after=$(file_signature "$DB")
   label=$(echo "$op" | tr -cd '[:alnum:]_')
-  if [ "$before" = "$after" ]; then
+  if [ "$before" != "$after" ]; then
+    dltest_fail "readonly_untouched_$label" \
+      "  file changed: $before -> $after (size-mode-inode-links)"
+  elif readonly_result_ok "$op" "$rc" "$out"; then
     dltest_pass "readonly_untouched_$label"
   else
     dltest_fail "readonly_untouched_$label" \
-      "  file changed: $before -> $after (size-mode-inode-links)"
+      "  unexpected result (status $rc): $out"
   fi
   chmod u+w "$DB"; rm -f "$DB" "$ROOT/link.db"
 done
