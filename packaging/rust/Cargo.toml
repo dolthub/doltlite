@@ -2,7 +2,7 @@
 name = "doltlite"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.63"
+rust-version = "1.68"
 description = "DoltLite: SQLite with Git-style version control (branch, commit, merge, diff). Bundles the engine; no system library required."
 license = "Apache-2.0"
 repository = "https://github.com/dolthub/doltlite"
