@@ -135,6 +135,7 @@ struct MergeRowPolicy {
   int nRenameOverDrop;
   const char **azDualRename;
   int nDualRename;
+  int nDeleteCompareFields;
 };
 
 int mergeTableRows(
@@ -167,6 +168,7 @@ int parsedColumnDefinitionsMatch(
   const ParsedColumn *pA,
   const ParsedColumn *pB
 );
+int parsedColumnIsVirtual(const ParsedColumn *pCol);
 
 int trySchemaColumnMerge(
   const char *zAncSql,

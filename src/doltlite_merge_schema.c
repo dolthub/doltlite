@@ -211,12 +211,13 @@ static int schemaTokenTextIs(const char *z, int n, const char *zText){
   return n==nText && sqlite3_strnicmp(z, zText, n)==0;
 }
 
-static const char *schemaGeneratedTailStart(const char *zDef){
+static const char *schemaGeneratedTailStart(const char *zDef, int *pbVirtual){
   const char *zEnd = zDef + strlen(zDef);
   const char *zGenerated;
   const char *zAs;
   const char *p;
   int type, n;
+  int bVirtual = 1;
 
   zGenerated = schemaFindToken(zDef, zEnd, "GENERATED", 9);
   if( zGenerated ){
@@ -243,11 +244,20 @@ static const char *schemaGeneratedTailStart(const char *zDef){
   if( p<zEnd ){
     if( schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK ) return 0;
     if( type==TK_VIRTUAL || schemaTokenTextIs(p, n, "STORED") ){
+      if( schemaTokenTextIs(p, n, "STORED") ) bVirtual = 0;
       p += n;
     }
   }
   p = schemaSkipTrivia(p, zEnd);
-  return p==zEnd ? (zGenerated ? zGenerated : zAs) : 0;
+  if( p!=zEnd ) return 0;
+  if( pbVirtual ) *pbVirtual = bVirtual;
+  return zGenerated ? zGenerated : zAs;
+}
+
+int parsedColumnIsVirtual(const ParsedColumn *pCol){
+  int bVirtual = 0;
+  if( !pCol || !pCol->zDef ) return 0;
+  return schemaGeneratedTailStart(pCol->zDef, &bVirtual) && bVirtual;
 }
 
 static int schemaColumnsMergeEquivalent(
@@ -260,8 +270,8 @@ static int schemaColumnsMergeEquivalent(
   int nTheirs;
 
   if( schemaDefinitionsEquivalent(zOurs, zTheirs) ) return 1;
-  zOurTail = schemaGeneratedTailStart(zOurs);
-  zTheirTail = schemaGeneratedTailStart(zTheirs);
+  zOurTail = schemaGeneratedTailStart(zOurs, 0);
+  zTheirTail = schemaGeneratedTailStart(zTheirs, 0);
   if( !zOurTail && !zTheirTail ) return 0;
   nOurs = zOurTail ? (int)(zOurTail-zOurs) : (int)strlen(zOurs);
   nTheirs = zTheirTail ? (int)(zTheirTail-zTheirs) : (int)strlen(zTheirs);
@@ -1077,7 +1087,7 @@ int mergeColDefaultsLoad(
   if( rc!=SQLITE_OK ) goto done;
 
   zQuery = sqlite3_mprintf(
-      "SELECT cid, dflt_value, type FROM pragma_table_info(%Q) ORDER BY cid",
+      "SELECT cid, dflt_value, type FROM pragma_table_xinfo(%Q) ORDER BY cid",
       zTable);
   if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
   rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
@@ -1181,7 +1191,11 @@ int normalizeSideToMergedLayout(
   ParsedColumn *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
   int *aMap = 0;
+  int *aMergedRecord = 0;
+  int *aTheirsRecord = 0;
   int nMerged;
+  int nMergedRecord = 0;
+  int nTheirsRecord = 0;
   int nDropped = 0;
   ProllyMutMap mm;
   int mmInit = 0;
@@ -1211,11 +1225,24 @@ int normalizeSideToMergedLayout(
 
   nMerged = nOurs;
   aMap = sqlite3_malloc((nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
-  if( !aMap ){ rc = SQLITE_NOMEM; goto done; }
+  aMergedRecord = sqlite3_malloc(
+      (nOurs+nTheirs>0 ? nOurs+nTheirs : 1) * (int)sizeof(int));
+  aTheirsRecord = sqlite3_malloc(
+      (nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
+  if( !aMap || !aMergedRecord || !aTheirsRecord ){
+    rc = SQLITE_NOMEM;
+    goto done;
+  }
+  for(j=0; j<nOurs; j++){
+    aMergedRecord[j] = parsedColumnIsVirtual(&aOurs[j])
+        ? -1 : nMergedRecord++;
+  }
   for(j=0; j<nTheirs; j++){
     int found = parsedColumnIndexByName(
         aOurs, nOurs, aTheirs[j].zName);
     int bInAnc = 0;
+    aTheirsRecord[j] = parsedColumnIsVirtual(&aTheirs[j])
+        ? -1 : nTheirsRecord++;
     if( found<0 ){
       int ai = parsedColumnIndexByName(
           aAnc, nAnc, aTheirs[j].zName);
@@ -1244,10 +1271,16 @@ int normalizeSideToMergedLayout(
       aMap[j] = -1;
       nDropped++;
     }else{
-      aMap[j] = nMerged++;
+      aMap[j] = nMerged;
+      aMergedRecord[nMerged] = parsedColumnIsVirtual(&aTheirs[j])
+          ? -1 : nMergedRecord++;
+      nMerged++;
     }
   }
-  if( nMerged > DOLTLITE_MAX_RECORD_FIELDS ){ rc = SQLITE_ERROR; goto done; }
+  if( nMergedRecord > DOLTLITE_MAX_RECORD_FIELDS ){
+    rc = SQLITE_ERROR;
+    goto done;
+  }
 
   /* Already at merged positions; trailing adds read as absent anyway. */
   if( nDropped==0 && !bFillSharedDefaults ){
@@ -1314,26 +1347,33 @@ int normalizeSideToMergedLayout(
     }
 
     doltliteParseRecord(pVal, nVal, &info);
-    for(k=0; k<nMerged; k++){
+    for(k=0; k<nMergedRecord; k++){
       memset(&aMem[k], 0, sizeof(aMem[k]));
       aMem[k].eType = SQLITE_NULL;
-      if( (rowOnlyTheirs || bFillSharedDefaults) && k<oursDefaults.nCol ){
-        aMem[k] = oursDefaults.aVal[k];
-      }
     }
     if( rowOnlyTheirs || bFillSharedDefaults ){
+      for(k=0; k<nOurs && k<oursDefaults.nCol; k++){
+        int tgt = aMergedRecord[k];
+        if( tgt>=0 ) aMem[tgt] = oursDefaults.aVal[k];
+      }
       for(j=0; j<nTheirs; j++){
         if( aMap[j]>=nOurs && j<theirsDefaults.nCol ){
-          aMem[aMap[j]] = theirsDefaults.aVal[j];
+          int tgt = aMergedRecord[aMap[j]];
+          if( tgt>=0 ) aMem[tgt] = theirsDefaults.aVal[j];
         }
       }
     }
-    for(j=0; j<info.nField && j<nTheirs; j++){
-      int tgt = aMap[j];
-      int st = info.aType[j];
-      const u8 *body = pVal + info.aOffset[j];
+    for(j=0; j<nTheirs; j++){
+      int src = aTheirsRecord[j];
+      int tgt;
+      int st;
+      const u8 *body;
       DoltliteSerialValue *m;
+      if( src<0 || src>=info.nField || aMap[j]<0 ) continue;
+      tgt = aMergedRecord[aMap[j]];
       if( tgt<0 ) continue;
+      st = info.aType[src];
+      body = pVal + info.aOffset[src];
       m = &aMem[tgt];
       memset(m, 0, sizeof(*m));
       m->eType = SQLITE_NULL;
@@ -1358,7 +1398,7 @@ int normalizeSideToMergedLayout(
       }
       if( m->eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
     }
-    for(k=0; k<nMerged; k++){
+    for(k=0; k<nMergedRecord; k++){
       if( aMem[k].eType!=SQLITE_NULL && k+1>nEmit ) nEmit = k+1;
     }
 
@@ -1393,6 +1433,8 @@ done:
   if( curInit ) prollyCursorClose(&cur);
   if( mmInit ) prollyMutMapFree(&mm);
   sqlite3_free(aMap);
+  sqlite3_free(aMergedRecord);
+  sqlite3_free(aTheirsRecord);
   freeColumns(aAnc, nAnc);
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);

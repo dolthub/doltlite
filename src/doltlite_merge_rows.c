@@ -803,12 +803,45 @@ static int catalogRowNamedByDualRename(
       pPolicy->azDualRename, pPolicy->nDualRename, pBase, nBase);
 }
 
-static int fieldEquals(const u8 *pRecA, RecField *fA,
-                       const u8 *pRecB, RecField *fB){
+static int fieldEquals(const u8 *pRecA, const RecField *fA,
+                       const u8 *pRecB, const RecField *fB){
   if(fA->st != fB->st) return 1;
   if(fA->len != fB->len) return 1;
   if(fA->len==0) return 0;
   return memcmp(pRecA + fA->off, pRecB + fB->off, fA->len);
+}
+
+static int recordsEqualPrefix(
+  const u8 *pA,
+  int nA,
+  const u8 *pB,
+  int nB,
+  int nField,
+  int *pbEqual
+){
+  static const RecField nullField = { 0, 0, 0 };
+  RecField *aA = 0, *aB = 0;
+  int nFieldA = 0, nFieldB = 0;
+  int i;
+
+  *pbEqual = 0;
+  if( parseRecordFields(pA, nA, &aA, &nFieldA)<0 ) return SQLITE_CORRUPT;
+  if( parseRecordFields(pB, nB, &aB, &nFieldB)<0 ){
+    sqlite3_free(aA);
+    return SQLITE_CORRUPT;
+  }
+  *pbEqual = 1;
+  for(i=0; i<nField; i++){
+    const RecField *pFieldA = i<nFieldA ? &aA[i] : &nullField;
+    const RecField *pFieldB = i<nFieldB ? &aB[i] : &nullField;
+    if( fieldEquals(pA, pFieldA, pB, pFieldB)!=0 ){
+      *pbEqual = 0;
+      break;
+    }
+  }
+  sqlite3_free(aA);
+  sqlite3_free(aB);
+  return SQLITE_OK;
 }
 
 typedef struct MergeWinner MergeWinner;
@@ -1066,6 +1099,37 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     }
     deliberate_fall_through
     case THREE_WAY_CONFLICT_DM: {
+
+      if( pChange->type==THREE_WAY_CONFLICT_DM && ctx->pPolicy
+       && ctx->pPolicy->nDeleteCompareFields>0 ){
+        const u8 *pSurv = pChange->pOurVal ? pChange->pOurVal
+                                           : pChange->pTheirVal;
+        int nSurv = pChange->pOurVal ? pChange->nOurVal : pChange->nTheirVal;
+        int bSharedEqual = 0;
+        rc = recordsEqualPrefix(
+            pChange->pBaseVal, pChange->nBaseVal,
+            pSurv, nSurv, ctx->pPolicy->nDeleteCompareFields,
+            &bSharedEqual);
+        if( rc!=SQLITE_OK ) return rc;
+        if( bSharedEqual ){
+          if( pChange->pOurVal && !pChange->pTheirVal ){
+            rc = prollyMutMapDelete(ctx->pEdits,
+                pChange->pKey, pChange->nKey, pChange->intKey);
+            if( rc==SQLITE_OK && ctx->nIndexes>0 ){
+              int ix;
+              for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+                MergeIndexInfo *mi = &ctx->aIndexes[ix];
+                rc = doltliteIndexMutMapRowDelta(
+                    ctx->db, mi->pIdx, mi->pEdits,
+                    mi->aiColumn, mi->nColumn, mi->pKeyInfo, mi->iPKey,
+                    pChange->intKey, pChange->pKey, pChange->nKey,
+                    pChange->pOurVal, pChange->nOurVal, 0, 0);
+              }
+            }
+          }
+          break;
+        }
+      }
 
       /* Policy-named catalog row (rename vs drop): rename wins, as Dolt.
       ** Inferring here would also pick a winner for a dual rename. */

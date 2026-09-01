@@ -47,6 +47,53 @@ static void mergePass1FreeIdxInfo(MergeIndexInfo *aIdxInfo, int nIdxInfo){
   sqlite3_free(aIdxInfo);
 }
 
+static int mergePass1SchemaPrefixInfo(
+  const char *zAncSql,
+  const char *zSideSql,
+  int *pbPrefix,
+  int *pnAnc,
+  int *pnSide,
+  int *pnAncRecord
+){
+  ParsedColumn *aAnc = 0;
+  ParsedColumn *aSide = 0;
+  int nAnc = 0;
+  int nSide = 0;
+  int i;
+  int rc;
+
+  *pbPrefix = 0;
+  *pnAnc = 0;
+  *pnSide = 0;
+  if( pnAncRecord ) *pnAncRecord = 0;
+  if( !zAncSql || !zSideSql ) return SQLITE_OK;
+  rc = parseColumns(zAncSql, &aAnc, &nAnc);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = parseColumns(zSideSql, &aSide, &nSide);
+  if( rc!=SQLITE_OK ){
+    freeColumns(aAnc, nAnc);
+    return rc;
+  }
+  if( nSide>=nAnc ){
+    *pbPrefix = 1;
+    for(i=0; i<nAnc; i++){
+      if( sqlite3_stricmp(aAnc[i].zName, aSide[i].zName)!=0
+       || !parsedColumnDefinitionsMatch(&aAnc[i], &aSide[i]) ){
+        *pbPrefix = 0;
+        break;
+      }
+    }
+  }
+  *pnAnc = nAnc;
+  *pnSide = nSide;
+  for(i=0; pnAncRecord && i<nAnc; i++){
+    if( !parsedColumnIsVirtual(&aAnc[i]) ) (*pnAncRecord)++;
+  }
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSide, nSide);
+  return SQLITE_OK;
+}
+
 static int mergePass1CollectIndexes(
   MergePass1Ctx *c,
   const char *zName,
@@ -144,8 +191,40 @@ static int mergePass1MergeTableData(
   DoltliteConflictRow *aConflictRows = 0;
   MergeIndexInfo *aIdxInfo = 0;
   int nIdxInfo = 0;
+  MergeRowPolicy rowPolicy;
+  const MergeRowPolicy *pRowPolicy = 0;
   int rc;
   int handled = 0;
+
+  memset(&rowPolicy, 0, sizeof(rowPolicy));
+
+  if( zName && (ourSchemaChanged || theirSchemaChanged) ){
+    SchemaEntry *pAncSe = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+    SchemaEntry *pOurSe = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+    SchemaEntry *pTheirSe = findSchemaEntry(
+        c->aTheirsSchema, c->nTheirsSchema, zName);
+    int bOurPrefix = 0, bTheirPrefix = 0;
+    int nAncOur = 0, nAncTheir = 0;
+    int nOur = 0, nTheir = 0;
+    int nAncOurRecord = 0, nAncTheirRecord = 0;
+    if( pAncSe && pOurSe && pTheirSe ){
+      rc = mergePass1SchemaPrefixInfo(
+          pAncSe->zSql, pOurSe->zSql, &bOurPrefix,
+          &nAncOur, &nOur, &nAncOurRecord);
+      if( rc==SQLITE_OK ){
+        rc = mergePass1SchemaPrefixInfo(
+            pAncSe->zSql, pTheirSe->zSql,
+            &bTheirPrefix, &nAncTheir, &nTheir, &nAncTheirRecord);
+      }
+      if( rc!=SQLITE_OK ) return rc;
+      if( bOurPrefix && bTheirPrefix && nAncOur==nAncTheir
+       && nAncOurRecord==nAncTheirRecord
+       && (nOur>nAncOur || nTheir>nAncTheir) ){
+        rowPolicy.nDeleteCompareFields = nAncOurRecord;
+        pRowPolicy = &rowPolicy;
+      }
+    }
+  }
 
   rc = mergePass1CollectIndexes(c, zName, &aIdxInfo, &nIdxInfo);
   if( rc!=SQLITE_OK ) return rc;
@@ -166,7 +245,7 @@ static int mergePass1MergeTableData(
                         pTheirsRoot, pOurs->flags,
                         pAnc->flags, pTheirsEntry->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
-                        aIdxInfo, nIdxInfo, 0);
+                        aIdxInfo, nIdxInfo, pRowPolicy);
     if( rc!=SQLITE_OK ){
       mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
       return rc;
@@ -575,6 +654,12 @@ static int mergePass1CheckPrimaryKeysMatch(
   return SQLITE_ERROR;
 }
 
+static int mergePass1SchemaAppendsColumns(
+  const char *zAncSql,
+  const char *zSideSql,
+  int *pbAppends
+);
+
 /* Cell merge is by merged column position. Relayout the unmerged side
 ** first or dropped columns shift later values and the ancestor looks
 ** changed. zOtherSql is that side's layout, not always the schema array
@@ -589,15 +674,19 @@ static int mergePass1RelayoutToMergedSchema(
   const ProllyHash *pMergedRoot,
   const ProllyHash *pOtherRoot,
   const ProllyHash *pAncRoot,
-  int bFillSharedDefaults,
   ProllyHash *pOtherOut,
   ProllyHash *pAncOut,
   int *pbRelaid
 ){
+  int bFillSharedDefaults = 0;
   int rc;
 
   *pbRelaid = 0;
   if( !zAncSql || !zMergedSql || !zOtherSql ) return SQLITE_OK;
+
+  rc = mergePass1SchemaAppendsColumns(
+      zAncSql, zMergedSql, &bFillSharedDefaults);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
                                    flags, zAncSql,
@@ -618,35 +707,15 @@ static int mergePass1SchemaAppendsColumns(
   const char *zSideSql,
   int *pbAppends
 ){
-  ParsedColumn *aAnc = 0;
-  ParsedColumn *aSide = 0;
-  int nAnc = 0;
-  int nSide = 0;
-  int i;
+  int bPrefix = 0;
+  int nAnc = 0, nSide = 0;
   int rc;
 
   *pbAppends = 0;
-  if( !zAncSql || !zSideSql ) return SQLITE_OK;
-  rc = parseColumns(zAncSql, &aAnc, &nAnc);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = parseColumns(zSideSql, &aSide, &nSide);
-  if( rc!=SQLITE_OK ){
-    freeColumns(aAnc, nAnc);
-    return rc;
-  }
-  if( nSide>nAnc ){
-    *pbAppends = 1;
-    for(i=0; i<nAnc; i++){
-      if( sqlite3_stricmp(aAnc[i].zName, aSide[i].zName)!=0
-       || !parsedColumnDefinitionsMatch(&aAnc[i], &aSide[i]) ){
-        *pbAppends = 0;
-        break;
-      }
-    }
-  }
-  freeColumns(aAnc, nAnc);
-  freeColumns(aSide, nSide);
-  return SQLITE_OK;
+  rc = mergePass1SchemaPrefixInfo(
+      zAncSql, zSideSql, &bPrefix, &nAnc, &nSide, 0);
+  if( rc==SQLITE_OK ) *pbAppends = bPrefix && nSide>nAnc;
+  return rc;
 }
 
 /* One side changed columns: that layout wins; move the other and ancestor. */
@@ -664,16 +733,9 @@ static int mergePass1RelayoutOneSidedSchema(
   SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
   SchemaEntry *theirSE = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
   SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
-  int bFillSharedDefaults = 0;
-  int rc;
 
   *pbRelaid = 0;
   if( !ancSE || !ourSE || !theirSE ) return SQLITE_OK;
-
-  rc = mergePass1SchemaAppendsColumns(
-      ancSE->zSql, bMergedIsOurs ? ourSE->zSql : theirSE->zSql,
-      &bFillSharedDefaults);
-  if( rc!=SQLITE_OK ) return rc;
 
   return mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
       bMergedIsOurs ? ourSE->zSql : theirSE->zSql,
@@ -681,7 +743,7 @@ static int mergePass1RelayoutOneSidedSchema(
       pOurs->flags,
       bMergedIsOurs ? &pOurs->root : &pTheirs->root,
       bMergedIsOurs ? &pTheirs->root : &pOurs->root,
-      &pAnc->root, bFillSharedDefaults,
+      &pAnc->root,
       pOtherOut, pAncOut, pbRelaid);
 }
 
@@ -793,21 +855,12 @@ static int mergePass1BothSides(
       SchemaEntry *ancSE = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
       if( ancSE && ancSE->zSql && ourSE && ourSE->zSql
        && theirSE && theirSE->zSql ){
-        rc = normalizeSideToMergedLayout(c->db, zName,
-                                           &c->aOurs[iOurs].root,
-                                           &theirsEntry->root,
-                                           c->aOurs[iOurs].flags, ancSE->zSql,
-                                           ourSE->zSql, theirSE->zSql,
-                                           0,
-                                           &theirsNormRoot);
-        if( rc!=SQLITE_OK ) return rc;
-        rc = normalizeSideToMergedLayout(c->db, zName,
-                                           &c->aOurs[iOurs].root,
-                                           &ancEntry->root,
-                                           c->aOurs[iOurs].flags, ancSE->zSql,
-                                           ourSE->zSql, ancSE->zSql,
-                                           0,
-                                           &ancNormRoot);
+        int bRelaid = 0;
+        rc = mergePass1RelayoutToMergedSchema(c, zName,
+            ancSE->zSql, ourSE->zSql, theirSE->zSql,
+            c->aOurs[iOurs].flags, &c->aOurs[iOurs].root,
+            &theirsEntry->root, &ancEntry->root,
+            &theirsNormRoot, &ancNormRoot, &bRelaid);
         if( rc!=SQLITE_OK ) return rc;
         ancAdj = *ancEntry;
         memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
@@ -853,7 +906,6 @@ static int mergePass1BothSides(
       rc = mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
           mergedSE->zSql, zOursPrevSql, c->aOurs[iOurs].flags,
           &theirsEntry->root, &c->aOurs[iOurs].root, &ancEntry->root,
-          0,
           &otherNormRoot, &ancNormRoot, &bRelaid);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zOursPrevSql);
@@ -882,7 +934,6 @@ static int mergePass1BothSides(
       rc = mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
           ourSE->zSql, theirSE->zSql, c->aOurs[iOurs].flags,
           &c->aOurs[iOurs].root, &theirsEntry->root, &ancEntry->root,
-          0,
           &otherNormRoot, &ancNormRoot, &bRelaid);
       if( rc!=SQLITE_OK ) return rc;
     }
@@ -1110,6 +1161,7 @@ static void mergePass1FreeRowPolicy(MergeRowPolicy *pPolicy){
   pPolicy->azDualRename = 0;
   pPolicy->nRenameOverDrop = 0;
   pPolicy->nDualRename = 0;
+  pPolicy->nDeleteCompareFields = 0;
 }
 
 static int mergePass1IsAuxSchemaType(const char *zType){
