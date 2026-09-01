@@ -1304,6 +1304,97 @@ int doltliteFetch(
   return rc;
 }
 
+int doltliteCloneLazy(
+  ChunkStore *pLocal,
+  DoltliteRemote *pRemote,
+  const char *zUrl
+){
+  ChunkStore refsView;
+  ChunkStoreRefsSnapshot snapshot;
+  const BranchRef *aBranch = 0;
+  ProllyHash defaultCommit;
+  ProllyHash emptyWs;
+  u8 *pRemoteRefs = 0;
+  u8 *pLocalRefs = 0;
+  int nRemoteRefs = 0;
+  int nLocalRefs = 0;
+  int nBranch = 0;
+  int haveSnapshot = 0;
+  int locked = 0;
+  int rc;
+  int i;
+
+  memset(&refsView, 0, sizeof(refsView));
+  memset(&snapshot, 0, sizeof(snapshot));
+  memset(&defaultCommit, 0, sizeof(defaultCommit));
+  memset(&emptyWs, 0, sizeof(emptyWs));
+  if( !zUrl ) return SQLITE_MISUSE;
+
+  rc = pRemote->xGetRefs(pRemote, &pRemoteRefs, &nRemoteRefs);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreLoadRefsFromBlob(&refsView, pRemoteRefs, nRemoteRefs);
+  }
+  sqlite3_free(pRemoteRefs);
+  if( rc!=SQLITE_OK ) goto lazy_clone_done;
+
+  refsTableGetBranches(&refsView.refs, &nBranch, &aBranch);
+  if( nBranch>0 ){
+    rc = chunkStoreFindBranch(
+        &refsView, chunkStoreGetDefaultBranch(&refsView), &defaultCommit);
+    if( rc!=SQLITE_OK || prollyHashIsEmpty(&defaultCommit) ){
+      rc = SQLITE_ERROR;
+      goto lazy_clone_done;
+    }
+  }
+
+  rc = chunkStoreDeleteRemote(&refsView, "origin");
+  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ) rc = chunkStoreAddRemote(&refsView, "origin", zUrl);
+  for(i=0; i<nBranch && rc==SQLITE_OK; i++){
+    rc = chunkStoreSetBranchWorkingSet(
+        &refsView, aBranch[i].zName, &emptyWs);
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreUpdateTracking(
+          &refsView, "origin", aBranch[i].zName, &aBranch[i].commitHash);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSerializeRefsToBlob(
+        &refsView, &pLocalRefs, &nLocalRefs);
+  }
+  if( rc!=SQLITE_OK ) goto lazy_clone_done;
+
+  rc = chunkStoreLockAndRefresh(pLocal);
+  if( rc==SQLITE_OK ){
+    locked = 1;
+    rc = chunkStoreForceRefresh(pLocal);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSnapshotRefs(pLocal, &snapshot);
+    if( rc==SQLITE_OK ) haveSnapshot = 1;
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreInstallRefsBlob(pLocal, pLocalRefs, nLocalRefs);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreCommit(pLocal);
+  }
+  if( haveSnapshot ){
+    if( rc==SQLITE_OK ){
+      chunkStoreDiscardRefsSnapshot(&snapshot);
+    }else{
+      chunkStoreRollback(pLocal);
+      chunkStoreRestoreRefsSnapshot(pLocal, &snapshot);
+    }
+  }
+  if( locked ) chunkStoreUnlock(pLocal);
+
+lazy_clone_done:
+  chunkStoreClose(&refsView);
+  sqlite3_free(pLocalRefs);
+  return rc;
+}
+
 int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   u8 *refsData = 0;
   int nRefsData = 0;

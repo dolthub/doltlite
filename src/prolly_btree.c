@@ -11,6 +11,24 @@ static void btreeClearCatalogCache(Btree *p){
 
 static int registerDoltiteFunctions(sqlite3 *db);
 
+static int btreeApplyChunkSourceError(
+  sqlite3 *db,
+  ChunkStore *cs,
+  int rc
+){
+  char *zErr;
+  int sourceRc = SQLITE_OK;
+  zErr = chunkStoreSourceTakeError(cs, &sourceRc);
+  if( sourceRc!=SQLITE_OK ) rc = sourceRc;
+  if( zErr ){
+    sqlite3ErrorWithMsg(db, rc, "%s", zErr);
+    sqlite3_free(zErr);
+  }else if( sourceRc!=SQLITE_OK ){
+    sqlite3Error(db, rc);
+  }
+  return rc;
+}
+
 
 #define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT 65536
 
@@ -540,6 +558,7 @@ int sqlite3BtreeOpen(
   BtShared *pBt = 0;
   int rc = SQLITE_OK;
   int useOrig;
+  int useOriginSource = 0;
   int hasMainBtree;
   u8 poisonAfterOpen = 0;
   char *zStoreFilename = 0;
@@ -561,6 +580,7 @@ int sqlite3BtreeOpen(
   ** under-read. */
   if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
     const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
+    useOriginSource = sqlite3_uri_boolean(zFilename, "lazy_origin", 0);
     if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
       int hasContent = 1;
       rc = doltliteFileHasContent(pVfs, zFilename, &hasContent);
@@ -636,6 +656,16 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return rc;
   }
+  if( useOriginSource ){
+    rc = doltliteOriginSourceEnable(&pBt->store, db, 0);
+    if( rc!=SQLITE_OK ){
+      chunkStoreClose(&pBt->store);
+      sqlite3_free(zStoreFilename);
+      sqlite3_free(pBt);
+      sqlite3_free(p);
+      return rc;
+    }
+  }
   /* Serve the recovered prefix to open-time catalog reads, then re-arm. */
   poisonAfterOpen = pBt->store.corruptMidStream;
   pBt->store.corruptMidStream = 0;
@@ -702,15 +732,18 @@ int sqlite3BtreeOpen(
       rc = doltliteResolveOpenRevision(&pBt->store, zDef, &branchCommit,
                                        &revisionCatalog, &isBranchRevision);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
-      if( rc==SQLITE_NOTFOUND && isBranchRevision ){
+      if( rc==SQLITE_NOTFOUND && isBranchRevision
+       && !chunkStoreOriginSourceEnabled(&pBt->store) ){
         bDeferredOpen = 1;
         rc = SQLITE_OK;
       }
 #endif
     }
     if( zBranchFromPath && rc!=SQLITE_OK ){
-      int openRc = rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM
-                 ? rc : SQLITE_ERROR;
+      int openRc;
+      rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
+      openRc = rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM
+             || rc==SQLITE_IOERR_CHUNK_SOURCE ? rc : SQLITE_ERROR;
       if( openRc==SQLITE_ERROR ){
         sqlite3ErrorWithMsg(db, SQLITE_ERROR,
                             "unable to select branch \"%s\"", zDef);
@@ -733,13 +766,15 @@ int sqlite3BtreeOpen(
     }else{
       rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
-      if( rc==SQLITE_NOTFOUND ){
+      if( rc==SQLITE_NOTFOUND
+       && !chunkStoreOriginSourceEnabled(&pBt->store) ){
         bDeferredOpen = 1;
         rc = SQLITE_OK;
       }
 #endif
     }
     if( rc!=SQLITE_OK ){
+      rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
       chunkStoreClose(&pBt->store);
@@ -768,12 +803,14 @@ int sqlite3BtreeOpen(
       }else{
         sqlite3_free(catData);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
-        if( rc==SQLITE_NOTFOUND && !p->isDetached ){
+        if( rc==SQLITE_NOTFOUND && !p->isDetached
+         && !chunkStoreOriginSourceEnabled(&pBt->store) ){
           bDeferredOpen = 1;
           rc = SQLITE_OK;
         }
 #endif
         if( rc!=SQLITE_OK ){
+          rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
           btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
@@ -867,6 +904,9 @@ int sqlite3BtreeOpen(
     sqlite3_free(zStoreFilename);
     sqlite3BtreeClose(p);
     return rc;
+  }
+  if( rc!=SQLITE_OK && chunkStoreOriginSourceEnabled(&pBt->store) ){
+    p->bDeferredRegister = 1;
   }
 
   sqlite3_free(zStoreFilename);
