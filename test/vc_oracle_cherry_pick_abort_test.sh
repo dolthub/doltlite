@@ -135,8 +135,11 @@ SELECT dolt_commit('-Am', 'main edit');
 abort_oracle "cherry_pick_abort_conflict" \
   "$CONFLICT_SETUP" "feature" "'--abort'"
 
-abort_oracle "cherry_pick_abort_ignores_one_positional" \
-  "$CONFLICT_SETUP" "feature" "'--abort', 'HEAD'"
+error_oracle "cherry_pick_abort_rejects_extra_args" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_cherry_pick('--abort', 'extra');
+"
 
 CV_SETUP="
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
