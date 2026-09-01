@@ -62,6 +62,8 @@ tsrc/
 # Test scratch
 /test.db
 /testdir/
+/same.db
+/.same.db-lock
 
 # Gas Town (added by gt)
 .beads/

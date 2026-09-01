@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="doltlite-logo.png" alt="DoltLite" width="600">
+  <img src="art/doltlite-logo.png" alt="DoltLite" width="600">
 </p>
 
 # DoltLite
@@ -692,6 +692,8 @@ With no directory argument, `dolt_creds('export', '<credential-id>')` returns
 the public JWK. The server rejects private credential files in `--auth-keys`.
 Default HTTP timeout is 30s (`DOLTLITE_HTTP_TIMEOUT_MS`). Embeddable as
 `doltliteServeAsync` in `doltlite_remotesrv.h`. Transfers are content-addressed.
+JWT, TLS, and credential-store details:
+[doc/doltlite/auth.md](doc/doltlite/auth.md).
 
 #### Version String
 
