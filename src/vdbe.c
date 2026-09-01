@@ -719,7 +719,7 @@ static u64 filterHash(const Mem *aMem, const Op *pOp){
     }else if( p->flags & MEM_Str ){
       u64 x;
       h += p->n;
-      if( p->n >= sizeof(x) ){
+      if( p->n >= (int)sizeof(x) ){
         memcpy(&x, p->z, sizeof(x));
         h += x;
         memcpy(&x, p->z + p->n - sizeof(x), sizeof(x));
@@ -733,7 +733,7 @@ static u64 filterHash(const Mem *aMem, const Op *pOp){
       int n = p->n;
       u64 x = 0;
       if( n ){
-        memcpy(&x, p->z, MIN(n, sizeof(x)));
+        memcpy(&x, p->z, MIN(n, (int)sizeof(x)));
         h += x;
       }
       h += n;
@@ -1442,31 +1442,35 @@ case OP_Integer: {         /* out2 */
   break;
 }
 
-/* Opcode: Int64 * P2 * P4 *
-** Synopsis: r[P2]=P4
+/* Opcode: Int64 P1 P2 P3 * *
+** Synopsis: r[P2]=PINT13
 **
-** P4 is a pointer to a 64-bit integer value.
-** Write that value into register P2.
+** Combine P1 and P3 into a signed 64-bit integer.  P1 is the least
+** significant 32 bits and P3 is the most significant.  Store the
+** result in register P2.
 */
 case OP_Int64: {           /* out2 */
   pOut = out2Prerelease(p, pOp);
-  assert( pOp->p4.pI64!=0 );
-  pOut->u.i = *pOp->p4.pI64;
+  pOut->u.i = INT32_TO_64(pOp->p1,pOp->p3);
   break;
 }
 
 #ifndef SQLITE_OMIT_FLOATING_POINT
-/* Opcode: Real * P2 * P4 *
-** Synopsis: r[P2]=P4
+/* Opcode: Real P1 P2 P3 * *
+** Synopsis: r[P2]=PDBL13
 **
-** P4 is a pointer to a 64-bit floating point value.
-** Write that value into register P2.
+** P1 and P3 are combined to 64 bits with P1 being the lower the P3
+** the upper.  The result is interpreted as a 64-bit floating-point
+** and stored in register P2.
 */
 case OP_Real: {            /* same as TK_FLOAT, out2 */
+  u64 ii;
   pOut = out2Prerelease(p, pOp);
   pOut->flags = MEM_Real;
-  assert( !sqlite3IsNaN(*pOp->p4.pReal) );
-  pOut->u.r = *pOp->p4.pReal;
+  ii = (u64)INT32_TO_64(pOp->p1,pOp->p3);
+  swapMixedEndianFloat(ii);
+  memcpy(&pOut->u.r, &ii, 8);
+  assert( !sqlite3IsNaN(pOut->u.r) );
   break;
 }
 #endif
@@ -3300,30 +3304,91 @@ op_column_restart:
   assert( t==pC->aType[p2] );
   if( pC->szRow>=aOffset[p2+1] ){
     /* This is the common case where the desired content fits on the original
-    ** page - where the content is not on an overflow page */
+    ** page - where the content is not on an overflow page.
+    **
+    ** The big switch() is an in-line variant of sqlite3VdbeSerialGet() that
+    ** has been optimized for the OP_Column opcode.
+    */
     zData = pC->aRow + aOffset[p2];
-    if( t<12 ){
-      sqlite3VdbeSerialGet(zData, t, pDest);
-    }else{
-      /* If the column value is a string, we need a persistent value, not
-      ** a MEM_Ephem value.  This branch is a fast short-cut that is equivalent
-      ** to calling sqlite3VdbeSerialGet() and sqlite3VdbeDeephemeralize().
-      */
-      static const u16 aFlag[] = { MEM_Blob, MEM_Str|MEM_Term };
-      pDest->n = len = (t-12)/2;
-      pDest->enc = encoding;
-      if( pDest->szMalloc < len+2 ){
-        if( len>db->aLimit[SQLITE_LIMIT_LENGTH] ) goto too_big;
+    switch( t ){
+      case 0:
+      case 11:
         pDest->flags = MEM_Null;
-        if( sqlite3VdbeMemGrow(pDest, len+2, 0) ) goto no_mem;
-      }else{
-        pDest->z = pDest->zMalloc;
+        break;
+      case 1:
+        pDest->u.i = ONE_BYTE_INT(zData);
+        pDest->flags = MEM_Int;
+        testcase( pDest->u.i<0 );
+        break;
+      case 2:
+        pDest->u.i = TWO_BYTE_INT(zData);
+        pDest->flags = MEM_Int;
+        testcase( pDest->u.i<0 );
+        break;
+      case 3:
+        pDest->u.i = THREE_BYTE_INT(zData);
+        pDest->flags = MEM_Int;
+        testcase( pDest->u.i<0 );
+        break;
+      case 4:
+        pDest->u.i = FOUR_BYTE_INT(zData);
+        pDest->flags = MEM_Int;
+        testcase( pDest->u.i<0 );
+        break;
+      case 5:
+        pDest->u.i = SIX_BYTE_INT(zData);
+        pDest->flags = MEM_Int;
+        testcase( pDest->u.i<0 );
+        break;
+      case 6: {
+        pDest->u.i = (i64)sqlite3Get8byte(zData);
+        pDest->flags = MEM_Int;
+        testcase( pDest->u.i<0 );
+        break;
       }
-      memcpy(pDest->z, zData, len);
-      pDest->z[len] = 0;
-      pDest->z[len+1] = 0;
-      pDest->flags = aFlag[t&1];
-    }
+      case 7: {
+        u64 x = sqlite3Get8byte(zData);
+        swapMixedEndianFloat(x);
+        pDest->flags = IsNaN(x) ? MEM_Null : MEM_Real;
+        memcpy(&pDest->u.r, &x, sizeof(x));
+        testcase( pDest->u.r<0 );
+        break;
+      }
+      case 8:
+      case 9: {
+        pDest->u.i = t-8;
+        pDest->flags = MEM_Int;
+        break;
+      }
+      case 10:
+        /* Internal use only: NULL with virtual table
+        ** UPDATE no-change flag set */
+        pDest->flags = MEM_Null|MEM_Zero;
+        pDest->u.nZero = 0;
+        pDest->n = 0;
+        break;
+      default: {
+        /* If the column value is a string or blob, we need a persistent
+        ** value, not a MEM_Ephem value.  This case is a fast short-cut
+        ** that is equivalent to calling sqlite3VdbeSerialGet() and
+        ** sqlite3VdbeDeephemeralize().
+        */
+        static const u16 aFlag[] = { MEM_Blob, MEM_Str|MEM_Term };
+        pDest->n = len = (t-12)/2;
+        pDest->enc = encoding;
+        if( pDest->szMalloc < len+2 ){
+          if( len>db->aLimit[SQLITE_LIMIT_LENGTH] ) goto too_big;
+          pDest->flags = MEM_Null;
+          if( sqlite3VdbeMemGrow(pDest, len+2, 0) ) goto no_mem;
+        }else{
+          pDest->z = pDest->zMalloc;
+        }
+        memcpy(pDest->z, zData, len);
+        pDest->z[len] = 0;
+        pDest->z[len+1] = 0;
+        pDest->flags = aFlag[t&1];
+      }
+    } /* End of switch */
   }else{
     u8 p5;
     pDest->enc = encoding;
@@ -3523,22 +3588,9 @@ case OP_Affinity: {
     assert( zAffinity[0]==SQLITE_AFF_NONE || memIsValid(pIn1) );
     applyAffinity(pIn1, zAffinity[0], encoding);
     if( zAffinity[0]==SQLITE_AFF_REAL && (pIn1->flags & MEM_Int)!=0 ){
-      /* When applying REAL affinity, if the result is still an MEM_Int
-      ** that will fit in 6 bytes, then change the type to MEM_IntReal
-      ** so that we keep the high-resolution integer value but know that
-      ** the type really wants to be REAL. */
-      testcase( pIn1->u.i==140737488355328LL );
-      testcase( pIn1->u.i==140737488355327LL );
-      testcase( pIn1->u.i==-140737488355328LL );
-      testcase( pIn1->u.i==-140737488355329LL );
-      if( pIn1->u.i<=140737488355327LL && pIn1->u.i>=-140737488355328LL ){
-        pIn1->flags |= MEM_IntReal;
-        pIn1->flags &= ~MEM_Int;
-      }else{
-        pIn1->u.r = (double)pIn1->u.i;
-        pIn1->flags |= MEM_Real;
-        pIn1->flags &= ~(MEM_Int|MEM_Str);
-      }
+      pIn1->u.r = (double)pIn1->u.i;
+      pIn1->flags |= MEM_Real;
+      pIn1->flags &= ~(MEM_Int|MEM_Str);
     }
     REGISTER_TRACE((int)(pIn1-aMem), pIn1);
     zAffinity++;
@@ -3791,12 +3843,24 @@ case OP_MakeRecord: {
   }
   nByte = nHdr+nData;
 
+  /* If we are able to put an over-run area of 7 bytes on the end of the
+  ** memory allocation into which the record is being constructed, then
+  ** the encoding of integer values can go faster. This is only possible
+  ** if SQLITE_MAX_LENGTH is no with 7 of INT32_MAX and if the host CPU
+  ** byte-order is known at compile-time.
+  */
+#if SQLITE_MAX_LENGTH<=2147483640 && SQLITE_BYTEORDER>0
+# define OVERRUN 7   /* We are able to allocate an overrun of 7 bytes */
+#else
+# define OVERRUN 0   /* No overrun will be available */
+#endif
+
   /* Make sure the output register has a buffer large enough to store
   ** the new record. The output register (pOp->p3) is not allowed to
   ** be one of the input registers (because the following call to
   ** sqlite3VdbeMemClearAndResize() could clobber the value before it is used).
   */
-  if( nByte+nZero<=pOut->szMalloc ){
+  if( nByte+nZero<=pOut->szMalloc-OVERRUN ){
     /* The output register is already large enough to hold the record.
     ** No error checks or buffer enlargement is required */
     pOut->z = pOut->zMalloc;
@@ -3806,7 +3870,7 @@ case OP_MakeRecord: {
     if( nByte+nZero>db->aLimit[SQLITE_LIMIT_LENGTH] ){
       goto too_big;
     }
-    if( sqlite3VdbeMemClearAndResize(pOut, (int)nByte) ){
+    if( sqlite3VdbeMemClearAndResize(pOut, (int)nByte+OVERRUN) ){
       goto no_mem;
     }
   }
@@ -3849,6 +3913,27 @@ case OP_MakeRecord: {
         }
         len = sqlite3SmallTypeSizes[serial_type];
         assert( len>=1 && len<=8 && len!=5 && len!=7 );
+#if SQLITE_BYTEORDER==1234
+        v = sqlite3BSwap64(v);
+        if( OVERRUN ){
+          static const u8 aShift[] = { 0, 56, 48, 40, 32, 16, 0, 0 };
+          v >>= aShift[serial_type];
+          memcpy(zPayload, &v, 8);
+        }else{
+          /* Test this limb by compiling with -DSQLITE_MAX_LENGTH=2147483647 */
+          memcpy(zPayload, (u8*)&v + 8 - len, len);
+        }
+#elif SQLITE_BYTEORDER==4321
+        if( OVERRUN ){
+          static const u8 aShift[] = { 0, 56, 48, 40, 32, 16, 0, 0 };
+          v <<= aShift[serial_type];
+          memcpy(zPayload, &v, 8);
+        }else{
+          /* Test this limb by compiling with -DSQLITE_MAX_LENGTH=2147483647 */
+          memcpy(zPayload, (u8*)&v + 8 - len, len);
+        }
+#else
+        /* Test this limb by compiling with -DSQLITE_BYTEORDER=0 */
         switch( len ){
           default: zPayload[7] = (u8)(v&0xff); v >>= 8;
                    zPayload[6] = (u8)(v&0xff); v >>= 8;
@@ -3864,6 +3949,8 @@ case OP_MakeRecord: {
                    /* no break */ deliberate_fall_through
           case 1:  zPayload[0] = (u8)(v&0xff);
         }
+#endif
+#undef OVERRUN  /* We are done with the OVERRUN macro now */
         zPayload += len;
       }
     }else if( serial_type<0x80 ){
@@ -5058,21 +5145,21 @@ case OP_Close: {             /* ncycle */
 }
 
 #ifdef SQLITE_ENABLE_COLUMN_USED_MASK
-/* Opcode: ColumnsUsed P1 * * P4 *
+/* Opcode: ColumnsUsed P1 P2 P3 * *
+** Synopsis: Cursor P1 uses columns PHEX23
 **
 ** This opcode (which only exists if SQLite was compiled with
 ** SQLITE_ENABLE_COLUMN_USED_MASK) identifies which columns of the
-** table or index for cursor P1 are used.  P4 is a 64-bit integer
-** (P4_INT64) in which the first 63 bits are one for each of the
-** first 63 columns of the table or index that are actually used
-** by the cursor.  The high-order bit is set if any column after
-** the 64th is used.
+** table or index for cursor P1 are used.  P2 and P3 combine to give
+** a 64-bit unsigned integer mask.  P2 stores the lower 32 bits and
+** P3 stores the upper 32 bits.  If the high-order bit of P3 is set
+** that means that and 64-th or some later column is used.
 */
 case OP_ColumnsUsed: {
   VdbeCursor *pC;
   pC = p->apCsr[pOp->p1];
   assert( pC->eCurType==CURTYPE_BTREE );
-  pC->maskUsed = *(u64*)pOp->p4.pI64;
+  pC->maskUsed = INT32_TO_64(pOp->p2,pOp->p3);
   break;
 }
 #endif

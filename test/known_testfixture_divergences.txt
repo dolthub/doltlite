@@ -2054,6 +2054,7 @@ nolock nolock-3.2 class=intentional  # VFS xLock call counts differ under chunk-
 nolock nolock-3.12 class=intentional  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.1 class=intentional  # VFS xLock call counts differ under chunk-store locking
 nolock nolock-4.3 class=intentional  # VFS xLock call counts differ under chunk-store locking
+nolock nolock-5.2 class=intentional  # immutable hot-journal behavior does not apply to the chunk store
 pager4 pager4-1.4 class=engine-gap issue=1884  # two databases created in the same second are byte-identical, so a same-second stranger at the vacated path carries our own seed commit and passes the tip proof; any database with a real commit is protected
 pager4 pager4-1.7 class=intentional issue=2493  # journal_mode is fixed at wal and the PRAGMA is a no-op reporting 'wal', so OFF cannot grant stock's moved-file write exception; the write is refused
 pager4 pager4-1.8 class=intentional issue=2493  # journal_mode is fixed at wal and the PRAGMA is a no-op reporting 'wal', so MEMORY cannot grant stock's moved-file write exception; the write is refused
@@ -5209,6 +5210,9 @@ incrvacuum2 incrvacuum2-2.5 class=intentional  # file size
 incrvacuum2 incrvacuum2-2.6 class=intentional  # file size
 incrvacuum2 incrvacuum2-4.2.1 class=intentional  # reads test.db-wal sidecar that doltlite never creates
 incrvacuum2 incrvacuum2-4.3 class=intentional  # -wal sidecar absent
+incrvacuum2 incrvacuum2-5.3 class=intentional  # page-WAL frame count does not apply to the chunk store
+incrvacuum2 incrvacuum2-5.7 class=intentional  # page-WAL frame count does not apply to the chunk store
+incrvacuum2 incrvacuum2-5.12 class=intentional  # page-WAL frame count does not apply to the chunk store
 
 # ioerr: doltlite VACUUM maps to dolt_gc. Under DOLTLITE_PROLLY_CHECK (the
 # CI testfixture build) gc runs a post-sweep session-resolvability check
