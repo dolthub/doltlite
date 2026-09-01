@@ -954,8 +954,8 @@ Train with `codesize > 0` and concurrent branch writes to a built index
 merge automatically: the raw vectors merge row-by-row and the index
 rebuilds itself from the merged data, deterministically. Uncompressed
 indexes, mixed conflicts, and missing models surface explicit conflicts
-instead of losing data. Design notes and the verified merge semantics live
-in [docs/vec1-native-design.md](docs/vec1-native-design.md).
+instead of losing data. Merge and storage semantics:
+[doc/doltlite/vec1.md](doc/doltlite/vec1.md).
 
 ## Performance
 
