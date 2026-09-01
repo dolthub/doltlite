@@ -623,6 +623,14 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
           "cannot pull non-current branch without fast-forward");
         return;
       }
+      if( strcmp(zRemoteName, "origin")==0
+       && chunkStoreOriginSourceEnabled(cs) ){
+        remoteSqlRestoreAndReport(
+          ctx, db, cs, &savedState, SQLITE_ERROR,
+          "cannot merge a non-fast-forward pull in a lazy store; "
+          "materialize the store first");
+        return;
+      }
       /* Merge owns txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
       zTrackingRef = sqlite3_mprintf("%s/%s", zRemoteName, zBranch);

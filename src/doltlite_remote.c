@@ -1143,7 +1143,8 @@ static int installFetchedRefs(
   ChunkStore *pRemoteRefs,
   const char *zRemoteName,
   const char *zBranch,
-  const ProllyHash *pRemoteCommit
+  const ProllyHash *pRemoteCommit,
+  int bSkipGraphValidation
 ){
   ChunkStore nextRefs;
   SavedRefsState savedRefs;
@@ -1168,7 +1169,11 @@ static int installFetchedRefs(
     locked = 1;
     rc = chunkStoreForceRefresh(pLocal);
   }
-  if( rc==SQLITE_OK ){
+  if( rc==SQLITE_OK && bSkipGraphValidation
+   && !chunkStoreOriginSourceEnabled(pLocal) ){
+    bSkipGraphValidation = 0;
+  }
+  if( rc==SQLITE_OK && !bSkipGraphValidation ){
     /* Nothing roots synced chunks until this tracking ref lands. A gc in that
     ** window collects the fetch; installing then wedges later connections. */
     ProllyHash aRoots[1];
@@ -1241,11 +1246,14 @@ int doltliteFetch(
   ProllyHash trackingCommit;
   DoltliteRemote *pLocalDst = 0;
   ChunkStore remoteRefs;
+  int bLazyOrigin;
   int rc;
 
   memset(&remoteCommit, 0, sizeof(remoteCommit));
   memset(&trackingCommit, 0, sizeof(trackingCommit));
   memset(&remoteRefs, 0, sizeof(remoteRefs));
+  bLazyOrigin = chunkStoreOriginSourceEnabled(pLocal)
+             && strcmp(zRemoteName, "origin")==0;
 
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
@@ -1284,20 +1292,25 @@ int doltliteFetch(
     return rc;
   }
 
-  pLocalDst = doltliteLocalAsRemote(pLocal);
-  if( !pLocalDst ){
-    chunkStoreClose(&remoteRefs);
-    return SQLITE_NOMEM;
+  if( !bLazyOrigin ){
+    pLocalDst = doltliteLocalAsRemote(pLocal);
+    if( !pLocalDst ){
+      chunkStoreClose(&remoteRefs);
+      return SQLITE_NOMEM;
+    }
+
+    rc = doltliteSyncChunks(pRemote, pLocalDst, &remoteCommit, 1);
+
+    if( rc==SQLITE_OK ) rc = pLocalDst->xCommit(pLocalDst);
+    pLocalDst->xClose(pLocalDst);
+  }else{
+    rc = SQLITE_OK;
   }
-
-  rc = doltliteSyncChunks(pRemote, pLocalDst, &remoteCommit, 1);
-
-  if( rc==SQLITE_OK ) rc = pLocalDst->xCommit(pLocalDst);
-  pLocalDst->xClose(pLocalDst);
   if( rc==SQLITE_OK ){
     doltliteTestRunBeforeRefInstallHook();
     rc = installFetchedRefs(
-        pLocal, &remoteRefs, zRemoteName, zBranch, &remoteCommit);
+        pLocal, &remoteRefs, zRemoteName, zBranch, &remoteCommit,
+        bLazyOrigin);
   }
 
   chunkStoreClose(&remoteRefs);
