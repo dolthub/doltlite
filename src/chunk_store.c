@@ -772,6 +772,22 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   return SQLITE_OK;
 }
 
+int chunkStoreVerifyChunk(
+  const ProllyHash *hash,
+  u8 **ppData,
+  int *pnData
+){
+  ProllyHash h;
+  prollyHashCompute(*ppData, *pnData, &h);
+  if( memcmp(&h, hash, sizeof(ProllyHash)) != 0 ){
+    sqlite3_free(*ppData);
+    *ppData = 0;
+    *pnData = 0;
+    return SQLITE_CORRUPT;
+  }
+  return SQLITE_OK;
+}
+
 int chunkStoreGet(
   ChunkStore *cs,
   const ProllyHash *hash,
@@ -799,19 +815,9 @@ int chunkStoreGet(
 
     memcpy(pCopy, cs->staging.pWriteBuf + off + 4, (size_t)(sz - nZ));
     if( nZ>0 ) memset(pCopy + (sz - nZ), 0, (size_t)nZ);
-#ifdef SQLITE_DEBUG
-    {
-      ProllyHash h;
-      prollyHashCompute(pCopy, sz, &h);
-      if( memcmp(&h, hash, sizeof(ProllyHash))!=0 ){
-        sqlite3_free(pCopy);
-        return SQLITE_CORRUPT;
-      }
-    }
-#endif
     *ppData = pCopy;
     *pnData = sz;
-    return SQLITE_OK;
+    return chunkStoreVerifyChunk(hash, ppData, pnData);
   }
 
   {
@@ -837,19 +843,9 @@ int chunkStoreGet(
         u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
         if( pCopy == 0 ) return SQLITE_NOMEM;
         memcpy(pCopy, cs->staging.pWriteBuf + e->offset + 4, e->size);
-#ifdef SQLITE_DEBUG
-        {
-          ProllyHash h;
-          prollyHashCompute(pCopy, e->size, &h);
-          if( memcmp(&h, hash, sizeof(ProllyHash))!=0 ){
-            sqlite3_free(pCopy);
-            return SQLITE_CORRUPT;
-          }
-        }
-#endif
         *ppData = pCopy;
         *pnData = e->size;
-        return SQLITE_OK;
+        return chunkStoreVerifyChunk(hash, ppData, pnData);
       }
       return SQLITE_CORRUPT;
     }
@@ -882,17 +878,7 @@ int chunkStoreGet(
     }
   }
 
-  {
-    ProllyHash h;
-    prollyHashCompute(*ppData, *pnData, &h);
-    if( memcmp(&h, hash, sizeof(ProllyHash)) != 0 ){
-      sqlite3_free(*ppData);
-      *ppData = 0;
-      *pnData = 0;
-      return SQLITE_CORRUPT;
-    }
-  }
-  return SQLITE_OK;
+  return chunkStoreVerifyChunk(hash, ppData, pnData);
 }
 
 int chunkStoreGetSparse(
@@ -928,7 +914,6 @@ int chunkStoreGetSparse(
     if( nPhys>0 ){
       memcpy(pBuf, cs->staging.pWriteBuf + e->offset + 4, nPhys);
     }
-#ifdef SQLITE_DEBUG
     {
       ProllyHash h;
       prollyHashComputeZeroTail(pBuf, nPhys, zeroTail, &h);
@@ -937,7 +922,6 @@ int chunkStoreGetSparse(
         return SQLITE_CORRUPT;
       }
     }
-#endif
     *ppData = pBuf;
     *pnData = e->size;
     *pnDataPhys = nPhys;
