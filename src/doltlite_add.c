@@ -235,6 +235,59 @@ static int addWriteStagedCatalog(
   return rc;
 }
 
+static int addComposeStageAllMaster(
+  sqlite3 *db,
+  sqlite3_context *context,
+  struct TableEntry *aWorking,
+  int nWorking,
+  struct TableEntry *aStaged,
+  int nStaged,
+  struct TableEntry *aNew,
+  int nNew
+){
+  const char **azTouched = 0;
+  struct TableEntry *pWorkingMaster;
+  struct TableEntry *pStagedMaster;
+  struct TableEntry *pNewMaster;
+  ProllyHash composedRoot;
+  int nTouched = 0;
+  int i;
+  int rc = SQLITE_OK;
+
+  if( nWorking>0 ){
+    azTouched = sqlite3_malloc64((sqlite3_uint64)nWorking * sizeof(*azTouched));
+    if( !azTouched ){
+      sqlite3_result_error_nomem(context);
+      return SQLITE_NOMEM;
+    }
+  }
+  for(i=0; i<nWorking; i++){
+    int ignored = 0;
+    if( aWorking[i].iTable<=1 || !aWorking[i].zName ) continue;
+    rc = addCheckIgnore(db, context, aWorking[i].zName, &ignored);
+    if( rc!=SQLITE_OK ) break;
+    if( !ignored ) azTouched[nTouched++] = aWorking[i].zName;
+  }
+  pWorkingMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
+  pStagedMaster = doltliteFindTableByNumber(aStaged, nStaged, 1);
+  pNewMaster = doltliteFindTableByNumber(aNew, nNew, 1);
+  if( rc==SQLITE_OK && (!pWorkingMaster || !pNewMaster) ) rc = SQLITE_CORRUPT;
+  if( rc==SQLITE_OK && pWorkingMaster && pNewMaster ){
+    rc = doltliteBuildNamedStageMasterRoot(db,
+            &pWorkingMaster->root, pWorkingMaster->flags,
+            pStagedMaster ? &pStagedMaster->root : 0,
+            pStagedMaster ? pStagedMaster->flags : 0,
+            azTouched, nTouched, aNew, nNew, 1, &composedRoot);
+    if( rc==SQLITE_OK ){
+      pNewMaster->root = composedRoot;
+      pNewMaster->schemaHash = pWorkingMaster->schemaHash;
+      pNewMaster->flags = pWorkingMaster->flags;
+    }
+  }
+  sqlite3_free(azTouched);
+  return rc;
+}
+
 /* True when the catalogs' index schema rows for zTable differ. Index
 ** changes have no named catalog entry, so status/diff use this. */
 int doltliteIndexSchemaRowsDifferForTable(
@@ -386,7 +439,13 @@ static int addStageAllTables(
     rc = doltliteSetSessionStaged(db, pWorkingHash);
   }else{
     doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
-    rc = addWriteStagedCatalog(db, cs, aNew, nNew);
+    doltliteRenumberStaleStagedEntries(aNew, nNew, aWorking, nWorking);
+    rc = addComposeStageAllMaster(db, context,
+                                  aWorking, nWorking, aStaged, nStaged,
+                                  aNew, nNew);
+    if( rc==SQLITE_OK ){
+      rc = addWriteStagedCatalog(db, cs, aNew, nNew);
+    }
   }
   if( workingIdxInit ) addNameIndexFree(&workingIdx);
   if( stagedIdxInit ) addNameIndexFree(&stagedIdx);

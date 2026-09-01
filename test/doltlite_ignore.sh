@@ -168,6 +168,49 @@ run_test_match "force_requires_name" \
   "SELECT dolt_add('-f');" \
   "requires table name" "$DB7"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+DB8=/tmp/test_ignore_dropped_$$.db
+rm -f "$DB8"
+
+run_test "add_all_preserves_dropped_ignored_table" \
+  "CREATE TABLE tracked(id INT PRIMARY KEY);
+   INSERT INTO tracked VALUES(1);
+   SELECT dolt_add('-A');
+   SELECT dolt_commit('-m','base') IS NOT NULL;
+   INSERT INTO dolt_ignore VALUES('ig_*',1);
+   CREATE TABLE ig_one(id INT);
+   SELECT dolt_add('-f','ig_one');
+   SELECT dolt_add('dolt_ignore');
+   SELECT dolt_commit('-m','forced') IS NOT NULL;
+   DROP TABLE ig_one;
+   SELECT dolt_add('-A');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;" \
+  "0
+1
+0
+0
+1
+0
+ig_one|0|deleted" "$DB8"
+
+run_test "dropped_ignored_state_survives_reopen" \
+  "SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;" \
+  "ig_one|0|deleted" "$DB8"
+
+run_test "commit_after_preserved_ignored_drop" \
+  "UPDATE tracked SET id=2;
+   SELECT dolt_add('-A');
+   SELECT dolt_commit('-m','tracked update') IS NOT NULL;
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;" \
+  "0
+1
+ig_one|0|deleted" "$DB8"
+
+run_test "force_add_all_stages_dropped_ignored_table" \
+  "SELECT dolt_add('-A','-f');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;" \
+  "0
+ig_one|1|deleted" "$DB8"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 
 dltest_finish
