@@ -57,7 +57,7 @@ PROLLY_OBJS = \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_seek.o prolly_btree_cursor_payload.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \
-              doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_clean.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o doltlite_merge_status.o \
+              doltlite_chunk_source.o doltlite.o doltlite_core.o doltlite_cmd.o doltlite_add.o doltlite_clean.o doltlite_commit_cmd.o doltlite_reset.o doltlite_merge_cmd.o doltlite_cherry_pick.o doltlite_revert.o doltlite_rebase.o doltlite_config.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o doltlite_merge_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_branches.o doltlite_checkout.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_merge_pass1.o doltlite_merge_pass2.o doltlite_merge_predetect.o doltlite_merge_rebuild.o doltlite_merge_rows.o doltlite_merge_schema.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_patch.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_docs.o doltlite_tests.o doltlite_hashof.o \
@@ -74,6 +74,7 @@ PROLLY_OBJS = \
 DOLTLITE_PROLLY ?= 1
 DOLTLITE_VEC1 ?= 1
 DOLTLITE_ENABLE_REMOTES ?= 1
+DOLTLITE_ENABLE_CHUNK_SOURCE ?= 1
 DOLTLITE_VERSION ?= $(shell cat $(TOP)/.dolt_release_version 2>/dev/null || git describe --tags --always 2>/dev/null || echo "dev")
 ifeq ($(DOLTLITE_ENABLE_REMOTES),1)
   DOLTLITE_REMOTE_OBJS = $(DOLTLITE_AUTH_OBJS) doltlite_remote.o \
@@ -84,6 +85,11 @@ else
     DOLTLITE_REMOTE_OBJS = doltlite_remote_sql.o
   else
     $(error DOLTLITE_ENABLE_REMOTES must be 0 or 1)
+  endif
+endif
+ifneq ($(DOLTLITE_ENABLE_CHUNK_SOURCE),1)
+  ifneq ($(DOLTLITE_ENABLE_CHUNK_SOURCE),0)
+    $(error DOLTLITE_ENABLE_CHUNK_SOURCE must be 0 or 1)
   endif
 endif
 LIBOBJS0 := $(filter-out vec1.o,$(LIBOBJS0))
@@ -99,6 +105,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
   OPT_FEATURE_FLAGS += -DDOLTLITE_ENABLE_REMOTES=$(DOLTLITE_ENABLE_REMOTES)
+  OPT_FEATURE_FLAGS += -DDOLTLITE_ENABLE_CHUNK_SOURCE=$(DOLTLITE_ENABLE_CHUNK_SOURCE)
   OPT_FEATURE_FLAGS += -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD
   # Generate a real doltlite amalgamation (prolly engine + VC layer woven in).
   AMALGAMATION_GEN_FLAGS += --doltlite

@@ -539,6 +539,7 @@ int sqlite3_exec(
 #define SQLITE_IOERR_IN_PAGE           (SQLITE_IOERR | (34<<8))
 #define SQLITE_IOERR_BADKEY            (SQLITE_IOERR | (35<<8))
 #define SQLITE_IOERR_CODEC             (SQLITE_IOERR | (36<<8))
+#define SQLITE_IOERR_CHUNK_SOURCE      (SQLITE_IOERR | (37<<8))
 #define SQLITE_LOCKED_SHAREDCACHE      (SQLITE_LOCKED |  (1<<8))
 #define SQLITE_LOCKED_VTAB             (SQLITE_LOCKED |  (2<<8))
 #define SQLITE_BUSY_RECOVERY           (SQLITE_BUSY   |  (1<<8))
@@ -11210,6 +11211,54 @@ int sqlite3_snapshot_cmp(
 ** [SQLITE_ENABLE_SNAPSHOT] option.
 */
 int sqlite3_snapshot_recover(sqlite3 *db, const char *zDb);
+
+/*
+** CAPI3REF: DoltLite chunk source
+**
+** A chunk source supplies content-addressed chunks that are absent from one
+** database on a connection. Version 1 requires both callbacks. xGetMany()
+** receives a contiguous array of 20-byte hashes and must leave absent entries
+** as NULL. A successful callback allocates each returned buffer with
+** sqlite3_malloc(); DoltLite takes ownership and frees it.
+**
+** Callbacks are synchronous and must not re-enter the same database
+** connection. The source is used only for reads. Verified chunks are cached
+** in the database file when it is writable, or in a bounded connection-local
+** memory cache when it is read-only. The callback object and its context must
+** outlive the registration. Passing NULL clears the registration.
+**
+** zDbName selects one attached database and follows SQLite database-name
+** conventions; NULL selects "main". This seam is also intended for a future
+** built-in source backed by the recorded origin remote.
+*/
+typedef struct doltlite_chunk_source doltlite_chunk_source;
+struct doltlite_chunk_source {
+  int iVersion;
+  void *pCtx;
+  int (SQLITE_CALLBACK *xGet)(
+    void *pCtx,
+    const unsigned char aHash[20],
+    unsigned char **ppBytes,
+    int *pnBytes
+  );
+  int (SQLITE_CALLBACK *xGetMany)(
+    void *pCtx,
+    int nHash,
+    const unsigned char *aHash,
+    unsigned char **apBytes,
+    int *anBytes
+  );
+};
+
+#define DOLTLITE_SOURCE_OK        0
+#define DOLTLITE_SOURCE_NOTFOUND  1
+#define DOLTLITE_SOURCE_IOERR     2
+
+SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
+  sqlite3 *db,
+  const char *zDbName,
+  doltlite_chunk_source *pSource
+);
 
 /*
 ** CAPI3REF: Serialize a database

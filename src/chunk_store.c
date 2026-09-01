@@ -696,6 +696,7 @@ done:
 }
 
 int chunkStoreClose(ChunkStore *cs){
+  chunkStoreSourceClose(cs);
   /* Clean-close marker is optional; failures are silent, so malloc is benign. */
   sqlite3BeginBenignMalloc();
   csWriteCleanCloseMarker(cs);
@@ -768,8 +769,11 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   }
   rc = csSearchPending(cs, hash, &idx);
   if( rc!=SQLITE_OK ) return rc;
-  if( idx >= 0 ) *pHas = 1;
-  return SQLITE_OK;
+  if( idx >= 0 ){
+    *pHas = 1;
+    return SQLITE_OK;
+  }
+  return chunkStoreSourceHas(cs, hash, pHas);
 }
 
 int chunkStoreVerifyChunk(
@@ -832,7 +836,7 @@ int chunkStoreGet(
       rc = csIndexLookup(cs, hash, &indexEntry, &found);
       if( rc!=SQLITE_OK ) return rc;
       if( !found ){
-        return SQLITE_NOTFOUND;
+        return chunkStoreSourceGet(cs, hash, ppData, pnData);
       }
       e = &indexEntry;
     }

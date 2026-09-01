@@ -5490,6 +5490,9 @@ void sqlite3ErrorWithMsg(sqlite3*, int, const char*,...);
 void sqlite3Error(sqlite3*,int);
 void sqlite3ErrorClear(sqlite3*);
 void sqlite3SystemError(sqlite3*,int);
+#ifdef DOLTLITE_PROLLY
+char *doltliteTakeChunkSourceError(sqlite3*);
+#endif
 #if !defined(SQLITE_OMIT_BLOB_LITERAL)
 void *sqlite3HexToBlob(sqlite3*, const char *z, int n);
 #endif

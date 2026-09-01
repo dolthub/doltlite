@@ -170,6 +170,9 @@ if {$doltlite} {
 #ifndef DOLTLITE_ENABLE_REMOTES
 # define DOLTLITE_ENABLE_REMOTES 1
 #endif
+#ifndef DOLTLITE_ENABLE_CHUNK_SOURCE
+# define DOLTLITE_ENABLE_CHUNK_SOURCE 1
+#endif
 #if DOLTLITE_ENABLE_REMOTES
 # define DOLTLITE_AMALGAMATION_AUTH 1
 # define DOLTLITE_AUTH_CLIENT_ONLY 1
@@ -831,7 +834,7 @@ proc emit_doltlite_engine_block {} {
     prolly_btree_cursor_payload.c
     prolly_btree_cursor_count.c
     prolly_btree_mutation.c prolly_btree_orig.c prolly_btree_state.c
-    prolly_btree_txn.c pager_shim.c sortkey.c
+    prolly_btree_txn.c pager_shim.c sortkey.c doltlite_chunk_source.c
     doltlite_creds.c doltlite_tls.c
     doltlite.c doltlite_core.c doltlite_cmd.c doltlite_add.c doltlite_clean.c doltlite_commit_cmd.c
     doltlite_reset.c doltlite_merge_cmd.c doltlite_cherry_pick.c

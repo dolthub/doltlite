@@ -1450,6 +1450,9 @@ prolly_btree_state.o:	$(TOP)/src/prolly_btree_state.c $(TOP)/src/prolly_btree_in
 prolly_btree_txn.o:	$(TOP)/src/prolly_btree_txn.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_txn.c
 
+doltlite_chunk_source.o:	$(TOP)/src/doltlite_chunk_source.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_chunk_source.c
+
 pager_shim.o:	$(TOP)/src/pager_shim.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/pager_shim.c
 
@@ -2961,6 +2964,9 @@ libdoltlite.def: $(LIBOBJS0)
 		| sort -u >> $@
 	nm -g --defined-only $(LIBOBJS0) \
 		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(doltliteServe[A-Za-z0-9_]*\)$$/\1/p' \
+		| sort -u >> $@
+	nm -g --defined-only $(LIBOBJS0) \
+		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(doltlite_set_chunk_source\)$$/\1/p' \
 		| sort -u >> $@
 
 libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)
