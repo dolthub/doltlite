@@ -220,6 +220,14 @@ jobs:
         bash packaging/composer/test-package.sh build
       timeout-minutes: 5
 
+    - name: Smoke test the doltlite-go module
+      if: matrix.platform != 'windows'
+      shell: bash
+      run: |
+        chmod +x packaging/go/assemble.sh packaging/go/test-package.sh
+        bash packaging/go/test-package.sh build
+      timeout-minutes: 20
+
     - name: Smoke test the doltlite Rust crate
       if: matrix.platform != 'windows'
       shell: bash
