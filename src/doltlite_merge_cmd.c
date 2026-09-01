@@ -505,10 +505,13 @@ static int mergeRefAbortAfterWriteTxn(
   const char *zMsg,
   int rc
 ){
-  /* SELECT VMs stay read-only, so halt skips RollbackAll for a btree
-  ** write started here. autocommit would then still show TXN_WRITE. */
-  if( db->autoCommit ){
-    sqlite3RollbackAll(db, SQLITE_OK);
+  /* Halt will not end a write started from this read-only SELECT.
+  ** RollbackAll restores the txn snapshot and persists it, which wipes
+  ** earlier autocommit merges still sitting in the same write. These
+  ** refusals have not mutated; commit the write so txn_state is NONE. */
+  if( db->autoCommit && db->nDb>0 && db->aDb[0].pBt
+   && sqlite3BtreeTxnState(db->aDb[0].pBt)==SQLITE_TXN_WRITE ){
+    sqlite3BtreeCommit(db->aDb[0].pBt);
     sqlite3CloseSavepoints(db);
   }
   if( zMsg ){
