@@ -514,10 +514,13 @@ static void fsClose(DoltliteRemote *pRemote){
   sqlite3_free(p);
 }
 
-DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath){
+static DoltliteRemote *fsRemoteOpen(
+  sqlite3_vfs *pVfs,
+  const char *zPath,
+  int flags
+){
   FsRemote *p;
   int rc;
-  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
 
   p = sqlite3_malloc(sizeof(FsRemote));
   if( !p ) return 0;
@@ -540,6 +543,25 @@ DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath){
   }
 
   return &p->base;
+}
+
+DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath){
+  return fsRemoteOpen(pVfs, zPath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+}
+
+DoltliteRemote *doltliteRemoteOpenReadOnly(
+  sqlite3_vfs *pVfs,
+  const char *zUrl
+){
+  if( strncmp(zUrl, "file://", 7)==0 ){
+    return fsRemoteOpen(pVfs, zUrl + 7,
+                        SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
+  }
+  if( strncmp(zUrl, "http://", 7)==0 || strncmp(zUrl, "https://", 8)==0 ){
+    return doltliteHttpRemoteOpen(zUrl);
+  }
+  return 0;
 }
 
 ChunkStore *doltliteFsRemoteStoreForTest(DoltliteRemote *pRemote){

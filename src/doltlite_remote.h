@@ -61,6 +61,9 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote);
 
 DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath);
 
+DoltliteRemote *doltliteRemoteOpenReadOnly(sqlite3_vfs *pVfs,
+                                           const char *zUrl);
+
 DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal);
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl);
