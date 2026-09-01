@@ -636,7 +636,8 @@ int doltliteMergeRef(
 
   if( nMergeConflicts>0 ){
     ProllyHash conflictsHash;
-    doltliteGetSessionConflictsCatalog(db, &conflictsHash);
+    rc = doltliteGetSessionConflictsCatalog(db, &conflictsHash);
+    if( rc!=SQLITE_OK ) goto merge_fail;
     /* isMerging is now set: later failures must restore, not discard,
     ** or the next merge refuses as already in progress. */
     bRestoreOnFail = 1;
@@ -687,7 +688,11 @@ int doltliteMergeRef(
     /* CVs leave the merge unfinished: record it so dolt_merge_status
     ** reports it. If row/schema conflicts exist too, report both. */
     ProllyHash cvConflictsHash;
-    doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
+    rc = doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
+    if( rc!=SQLITE_OK ){
+      bRestoreOnFail = 1;
+      goto merge_fail;
+    }
     if( doltliteSetSessionMergeState(db, 1, &theirHead,
                                     &cvConflictsHash)==SQLITE_OK ){
       (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);

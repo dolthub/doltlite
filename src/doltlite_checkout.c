@@ -180,9 +180,9 @@ static int checkoutLoadAndApply(
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  doltliteResolveBranchEffectiveCatalog(cs, zBranch, pCommitHash,
-                                        &committedCatHash, pCatHash);
-  rc = doltliteSwitchCatalog(db, pCatHash);
+  rc = doltliteResolveBranchEffectiveCatalog(
+      cs, zBranch, pCommitHash, &committedCatHash, pCatHash);
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCatHash);
   return rc;
 }
 

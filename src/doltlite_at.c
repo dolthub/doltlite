@@ -57,6 +57,20 @@ struct AtSeenTable {
   int nAlloc;
 };
 
+static int atTakeChunkSourceError(
+  ChunkStore *cs,
+  char **pzErr,
+  int *pRc
+){
+  int sourceRc = SQLITE_OK;
+  char *zErr = chunkStoreSourceTakeError(cs, &sourceRc);
+  if( !zErr && sourceRc==SQLITE_OK ) return 0;
+  if( pzErr ) *pzErr = zErr;
+  else sqlite3_free(zErr);
+  if( pRc && sourceRc!=SQLITE_OK ) *pRc = sourceRc;
+  return 1;
+}
+
 static void atSeenTableClear(AtSeenTable *pSeen){
   int i;
   for(i=0; i<pSeen->nName; i++) sqlite3_free(pSeen->azName[i]);
@@ -279,7 +293,11 @@ int doltliteLoadHistoricalTableColumns(
     if( tmp ) sqlite3_close(tmp);
     clearSchemaEntry(&entry);
     doltliteCommitClear(&commit);
-    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc==SQLITE_NOTFOUND ){
+      if( !atTakeChunkSourceError(cs, pzErr, &rc) ) rc = SQLITE_OK;
+    }else if( rc!=SQLITE_OK ){
+      atTakeChunkSourceError(cs, pzErr, &rc);
+    }
   }
   doltliteCommitQueueClear(&q);
 
@@ -474,6 +492,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   rc=doltliteRefToCatalogHash(db,zRef,&catHash);
   if(rc==SQLITE_NOTFOUND){
     sqlite3_free(cur->pVtab->zErrMsg);
+    cur->pVtab->zErrMsg = 0;
+    if( atTakeChunkSourceError(cs, &cur->pVtab->zErrMsg, &rc) ) return rc;
     cur->pVtab->zErrMsg = sqlite3_mprintf("ref not found: %s", zRef);
     return SQLITE_ERROR;
   }
@@ -485,20 +505,27 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
                     && !prollyHashIsEmpty(&branchCommit));
     if( isBranch ){
-      doltliteResolveBranchEffectiveCatalog(cs, zRef, &branchCommit,
-                                            &catHash, &effCatHash);
+      rc = doltliteResolveBranchEffectiveCatalog(
+          cs, zRef, &branchCommit, &catHash, &effCatHash);
     }else{
       memcpy(&effCatHash, &catHash, sizeof(ProllyHash));
     }
-    rc=doltliteLoadTableRootByName(db,&effCatHash,v->zTableName,&tableRoot,
-                                   &flags,&schemaHash);
+    if( rc==SQLITE_OK ){
+      rc=doltliteLoadTableRootByName(db,&effCatHash,v->zTableName,&tableRoot,
+                                     &flags,&schemaHash);
+    }
     if( rc==SQLITE_OK ){
       rc = doltliteSideColsLoad(db, &effCatHash, &schemaHash,
                                 v->zTableName, &v->cols,
                                 !prollyHashIsEmpty(&tableRoot), &c->side);
     }
   }
-  if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
+  if(rc==SQLITE_NOTFOUND){
+    sqlite3_free(cur->pVtab->zErrMsg);
+    cur->pVtab->zErrMsg = 0;
+    if( atTakeChunkSourceError(cs, &cur->pVtab->zErrMsg, &rc) ) return rc;
+    return SQLITE_OK;
+  }
   if(rc!=SQLITE_OK) return rc;
 
   if( prollyHashIsEmpty(&tableRoot) ) return SQLITE_OK;

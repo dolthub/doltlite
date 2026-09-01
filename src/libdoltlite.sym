@@ -3,4 +3,5 @@
 # why the filter exists. Names carry the Mach-O leading underscore.
 _sqlite3_*
 _doltliteServe*
+_doltlite_init_lazy
 _doltlite_set_chunk_source

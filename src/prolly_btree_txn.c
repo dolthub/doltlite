@@ -669,6 +669,14 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   /* Open succeeds on garbage (stock timing); first use is SQLITE_NOTADB. */
   if( pBt->store.notADatabase ) return SQLITE_NOTADB;
 
+  if( p->bDeferredOpen ){
+    rc = doltliteBtreeHydrateDeferred(p);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pSchemaVersion ){
+      *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
+    }
+  }
+
   if( p->inTrans==TRANS_WRITE ){
     return SQLITE_OK;
   }

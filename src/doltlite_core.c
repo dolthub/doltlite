@@ -458,7 +458,7 @@ int doltliteMutateRefsExpected(
       if( !aBr[iBr].zName ) continue;
       loadRc = btreeLoadWorkingSetBlob(cs, aBr[iBr].zName, 0, 0, 0, 0, 0,
                                        &conflicts, 0, 0, 0, 0, 0, 0);
-      if( loadRc==SQLITE_NOTFOUND ) continue;
+      if( loadRc==SQLITE_EMPTY ) continue;
       if( loadRc!=SQLITE_OK ){
         rc = loadRc;
       }else if( !prollyHashIsEmpty(&conflicts) ){

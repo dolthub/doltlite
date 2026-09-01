@@ -136,6 +136,21 @@ done:
   return rc;
 }
 
+static int revertSourceResultError(
+  sqlite3_context *context,
+  ChunkStore *cs,
+  int rc
+){
+  int pendingRc = SQLITE_OK;
+  char *zErr = chunkStoreSourceTakeError(cs, &pendingRc);
+  if( !zErr && pendingRc==SQLITE_OK ) return 0;
+  if( zErr ) sqlite3_result_error(context, zErr, -1);
+  sqlite3_result_error_code(
+      context, pendingRc!=SQLITE_OK ? pendingRc : rc);
+  sqlite3_free(zErr);
+  return 1;
+}
+
 static void doltliteRevertFunc(
   sqlite3_context *context,
   int argc,
@@ -183,7 +198,13 @@ static void doltliteRevertFunc(
 
   rc = doltliteResolveRef(db,zRef, &revertHash);
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "invalid commit hash", -1);
+    if( !revertSourceResultError(context, cs, rc) ){
+      if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
+        sqlite3_result_error(context, "invalid commit hash", -1);
+      }else{
+        sqlite3_result_error_code(context, rc);
+      }
+    }
     return;
   }
   rc = doltliteLoadHeadAndParentedCommit(
@@ -193,7 +214,10 @@ static void doltliteRevertFunc(
   if( rc==SQLITE_NOTFOUND ){
     doltliteCommitClear(&revertCommit);
     doltliteCommitClear(&parentCommit);
-    sqlite3_result_error(context, "commit not found", -1);
+    doltliteCommitClear(&ourCommit);
+    if( !revertSourceResultError(context, cs, rc) ){
+      sqlite3_result_error(context, "commit not found", -1);
+    }
     return;
   }
   if( rc==SQLITE_EMPTY ){
@@ -207,10 +231,13 @@ static void doltliteRevertFunc(
     sqlite3_result_error(context, "no commits on current branch", -1);
     return;
   }
-  if( rc==SQLITE_ABORT ){
+  if( rc!=SQLITE_OK ){
     doltliteCommitClear(&revertCommit);
     doltliteCommitClear(&parentCommit);
-    sqlite3_result_error(context, "failed to load HEAD commit", -1);
+    doltliteCommitClear(&ourCommit);
+    if( !revertSourceResultError(context, cs, rc) ){
+      sqlite3_result_error_code(context, rc);
+    }
     return;
   }
 
@@ -254,7 +281,9 @@ static void doltliteRevertFunc(
 
   if( rc==SQLITE_BUSY ){
     sqlite3_free(zApplyErr);
-    doltliteCmdResultPeerBranchBusy(context, "revert");
+    if( !revertSourceResultError(context, cs, rc) ){
+      doltliteCmdResultPeerBranchBusy(context, "revert");
+    }
     return;
   }
   if( rc==SQLITE_DONE ){
@@ -263,12 +292,14 @@ static void doltliteRevertFunc(
     return;
   }
   if( rc!=SQLITE_OK ){
-    if( zApplyErr ){
-      sqlite3_result_error(context, zApplyErr, -1);
-    }else{
-      char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
-      sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
-      sqlite3_free(zMsg);
+    if( !revertSourceResultError(context, cs, rc) ){
+      if( zApplyErr ){
+        sqlite3_result_error(context, zApplyErr, -1);
+      }else{
+        char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
+        sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
+        sqlite3_free(zMsg);
+      }
     }
     sqlite3_free(zApplyErr);
     return;
@@ -286,7 +317,7 @@ revert_error:
   doltliteCommitClear(&revertCommit);
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
-  {
+  if( !revertSourceResultError(context, cs, rc) ){
     char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
     sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
     sqlite3_free(zMsg);

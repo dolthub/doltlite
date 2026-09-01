@@ -32,6 +32,23 @@ struct DoltliteLogCursor {
   int singleCommit;
 };
 
+static int logMapChunkSourceError(
+  DoltliteLogCursor *pCur,
+  sqlite3 *db,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  if( zErr ){
+    sqlite3_free(pCur->base.pVtab->zErrMsg);
+    pCur->base.pVtab->zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
 static const char *doltliteLogSchema =
   "CREATE TABLE x("
   "  commit_hash TEXT,"
@@ -104,9 +121,10 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
     if( rc!=SQLITE_OK ){
       if( pCur->singleCommit ){
+        rc = logMapChunkSourceError(pCur, db, rc, SQLITE_OK);
         doltliteCommitClear(&pCur->curCommit);
         memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
-        return SQLITE_OK;
+        return rc;
       }
       return rc;
     }

@@ -64,6 +64,40 @@ struct WorkspaceCursor {
   WorkspaceRows *pRows;
 };
 
+static int wsMapChunkSourceError(
+  WorkspaceCursor *pCur,
+  WorkspaceVtab *pVtab,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  if( zErr ){
+    sqlite3_free(pCur->base.pVtab->zErrMsg);
+    pCur->base.pVtab->zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
+static int wsLoadTableRootOrEmpty(
+  WorkspaceCursor *pCur,
+  WorkspaceVtab *pVtab,
+  const ProllyHash *pCatHash,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  int rc = doltliteLoadTableRootByName(
+      pVtab->db, pCatHash, pVtab->zTableName,
+      pRoot, pFlags, pSchemaHash);
+  if( rc==SQLITE_NOTFOUND ){
+    rc = wsMapChunkSourceError(pCur, pVtab, rc, SQLITE_OK);
+  }
+  return rc;
+}
+
 static void wsFreeRows(WorkspaceRow *aRow, int nRow){
   int i;
   for(i=0; i<nRow; i++){
@@ -269,18 +303,16 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &headCat, pVtab->zTableName,
-                                          &c->headRoot, &c->headFlags,
-                                          &headSchema);
+  rc = wsLoadTableRootOrEmpty(
+      c, pVtab, &headCat, &c->headRoot, &c->headFlags, &headSchema);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &stagedCat, pVtab->zTableName,
-                                          &c->stagedRoot, &c->stagedFlags,
-                                          &stagedSchema);
+  rc = wsLoadTableRootOrEmpty(
+      c, pVtab, &stagedCat, &c->stagedRoot, &c->stagedFlags, &stagedSchema);
   if( rc!=SQLITE_OK ) return rc;
   if( c->stagedOnly!=1 ){
-    rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, pVtab->zTableName,
-                                            &c->workingRoot, &c->workingFlags,
-                                            &workingSchema);
+    rc = wsLoadTableRootOrEmpty(c, pVtab, &workingCat,
+                                &c->workingRoot, &c->workingFlags,
+                                &workingSchema);
     if( rc!=SQLITE_OK ) return rc;
   }
 

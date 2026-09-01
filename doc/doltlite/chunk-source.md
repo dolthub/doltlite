@@ -40,7 +40,9 @@ new manifest, and prefetched chunks are immediately visible to the query. A
 later normal transaction-boundary refresh discovers the durable append.
 Read-only stores skip the cache writer and use only this memory cache. The same
 applies when there is no stable writable file, including memory and buffer
-stores.
+stores. The 16 MiB byte budget is soft for one chunk: a larger valid chunk is
+retained as the cache's only entry and remains bounded by the engine record
+limit.
 
 The cache writer is opened without `SQLITE_OPEN_CREATE`, has no chunk source of
 its own, and lives until the registration is cleared or its connection closes.
@@ -63,11 +65,12 @@ tree walks may still encounter a chunk miss. Calling a host or trying to take
 the cache writer's lock from such a path would either block peer processes or
 deadlock behind the live store.
 
-An already cached chunk remains readable while the live store holds the graph
-lock. A new source miss while that lock is held is refused with a busy result;
-the engine never invokes `xGet` or `xGetMany` there. Hosts that intend to write
-against a lazy store must first warm the chunks those writes will inspect. This
-keeps the seam read-only and avoids adding cross-process network coordination.
+An already cached chunk remains readable while a graph lock is held. A new
+source miss while any attached DoltLite store on the connection holds a graph
+lock is refused with a busy result; the engine never invokes `xGet` or
+`xGetMany` there. Hosts that intend to write against a lazy store must first
+warm the chunks those writes will inspect. This keeps the seam read-only and
+avoids adding cross-process network coordination.
 
 ## Full and sparse chunks
 
@@ -85,23 +88,31 @@ write paths. Both representations hash to the same logical bytes.
 can replace the refs blob when the remote advances. Old cached chunks remain
 valid because their addresses are content hashes.
 
-The SQL B-tree open path currently loads the branch working set or head commit
+The SQL B-tree open path normally loads the branch working set or head commit
 and then the catalog before a caller can register a source through an API that
-takes `sqlite3 *`. A refs-only file cannot therefore be reopened lazily without
-one more read-path change: store open must retain the refs and defer graph
-hydration until a source can be registered or the graph is first accessed.
-With no source registered, that deferred access must preserve the existing
-`SQLITE_NOTFOUND` behavior. Installing refs into an already open fresh store is
-the compatible same-connection bootstrap; reopening that store depends on the
-deferred hydration change.
+takes `sqlite3 *`. When those graph chunks are absent, source-enabled builds
+now retain the refs and branch tip, install a placeholder catalog, and defer
+hydration. Registering a source or beginning the first transaction retries the
+load. With no source registered, that access preserves `SQLITE_NOTFOUND`.
+
+`doltlite_init_lazy()` installs and commits a serialized refs blob into a fresh
+or existing main database. It may replace the refs while a lazy database is
+open; old cached chunks remain addressable, and the live session hydrates the
+new working state through its source. A refs blob already carries remote and
+tracking records, including `origin` when the producer serialized it.
 
 ## Interface and build limits
 
 Registration is per attached database. The source object and its context are
 owned by the host and must outlive registration; returned chunk buffers use
-SQLite's allocator and become engine-owned. Source `NOTFOUND`, corruption, and
-I/O failures affect only the read statement, and partially returned batches
-are freed without being persisted.
+SQLite's allocator and become engine-owned as soon as their output pointers are
+published, including partial results from a failing callback. Source
+`NOTFOUND`, corruption, and I/O failures during a read unwind only that
+statement, and partially returned batches are freed without being persisted.
+Registration may synchronously load the deferred branch and fails without
+retaining the new source. Lazy refs are committed before immediate hydration,
+so a hydration failure from `doltlite_init_lazy()` leaves the refs installed
+for a later retry.
 
 The feature is guarded by `DOLTLITE_ENABLE_CHUNK_SOURCE`, defaulting to 1. A
 compiled-out build and a connection with no registered source retain the old

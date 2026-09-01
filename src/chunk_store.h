@@ -303,9 +303,10 @@ int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
                         u8 **ppData, int *pnData);
 int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,
                                  int nHash);
-int chunkStoreSourceSet(ChunkStore *cs, doltlite_chunk_source *pSource);
+int chunkStoreSourceSet(ChunkStore *cs, sqlite3 *db,
+                        doltlite_chunk_source *pSource, int *pChanged);
 void chunkStoreSourceClose(ChunkStore *cs);
-char *chunkStoreSourceTakeError(ChunkStore *cs);
+char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc);
 
 int chunkStorePut(ChunkStore *cs, const u8 *pData, int nData,
                   ProllyHash *pHash);

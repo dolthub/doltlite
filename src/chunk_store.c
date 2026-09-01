@@ -614,7 +614,8 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   char *lockName = 0;
   int lockHeld;
 
-  if( cs->isMemory || cs->isBuffer || cs->readOnly || cs->corruptMidStream ){
+  if( cs->isMemory || cs->isBuffer || cs->readOnly || cs->movedReadOnly
+   || cs->corruptMidStream ){
     return;
   }
   if( !cs->file.pFile || !cs->file.zFilename ){

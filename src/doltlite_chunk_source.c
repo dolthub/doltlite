@@ -24,6 +24,7 @@ struct DoltliteChunkSourceEntry {
 
 struct DoltliteChunkSourceState {
   doltlite_chunk_source *pSource;
+  sqlite3 *db;
   DoltliteChunkSourceEntry *aHash[CS_SOURCE_CACHE_BUCKETS];
   DoltliteChunkSourceEntry *pLruHead;
   DoltliteChunkSourceEntry *pLruTail;
@@ -32,6 +33,7 @@ struct DoltliteChunkSourceState {
   ChunkStore writer;
   u8 writerOpen;
   u8 memoryOnly;
+  int errRc;
   char *zErr;
 };
 
@@ -165,16 +167,23 @@ static int csSourceCacheGet(
   return chunkStoreVerifyChunk(pHash, ppData, pnData);
 }
 
+static void csSourceClearError(DoltliteChunkSourceState *p){
+  sqlite3_free(p->zErr);
+  p->zErr = 0;
+  p->errRc = SQLITE_OK;
+}
+
 static void csSourceSetHashError(
   DoltliteChunkSourceState *p,
+  int rc,
   const char *zPrefix,
   const ProllyHash *pHash
 ){
   static const char zHex[] = "0123456789abcdef";
   char zHash[PROLLY_HASH_SIZE*2 + 1];
   int i;
-  sqlite3_free(p->zErr);
-  p->zErr = 0;
+  csSourceClearError(p);
+  p->errRc = rc;
   for(i=0; i<PROLLY_HASH_SIZE; i++){
     zHash[i*2] = zHex[pHash->data[i] >> 4];
     zHash[i*2 + 1] = zHex[pHash->data[i] & 0x0f];
@@ -183,11 +192,30 @@ static void csSourceSetHashError(
   p->zErr = sqlite3_mprintf("%s %s", zPrefix, zHash);
 }
 
-static int csSourceOpenWriter(
+static int csSourceGraphLockHeld(
   ChunkStore *cs,
   DoltliteChunkSourceState *p
 ){
+  int i;
+  if( p->db ){
+    for(i=0; i<p->db->nDb; i++){
+      ChunkStore *pAttached = doltliteBtreeChunkStore(p->db->aDb[i].pBt);
+      if( pAttached && pAttached->lockDepth>0 ) return 1;
+    }
+  }else if( cs->lockDepth>0 ){
+    return 1;
+  }
+  return p->writerOpen && p->writer.lockDepth>0;
+}
+
+static int csSourceOpenWriter(
+  ChunkStore *cs,
+  DoltliteChunkSourceState *p,
+  int *pChanged
+){
+  int changed = 0;
   int rc;
+  if( pChanged ) *pChanged = 0;
   if( p->writerOpen || p->memoryOnly ) return SQLITE_OK;
   if( cs->readOnly || cs->isMemory || cs->isBuffer || cs->movedReadOnly ){
     p->memoryOnly = 1;
@@ -195,7 +223,7 @@ static int csSourceOpenWriter(
   }
   if( cs->file.pFile==0 ) return SQLITE_OK;
   if( cs->lockDepth>0 ) return SQLITE_BUSY;
-  rc = chunkStoreLockAndRefresh(cs);
+  rc = chunkStoreLockAndRefreshChanged(cs, &changed);
   if( rc!=SQLITE_OK ) return rc;
   if( cs->movedReadOnly ){
     p->memoryOnly = 1;
@@ -211,6 +239,7 @@ static int csSourceOpenWriter(
     }
   }
   chunkStoreUnlock(cs);
+  if( pChanged ) *pChanged = changed;
   return rc;
 }
 
@@ -229,12 +258,18 @@ static int csSourcePersistMany(
   if( p->memoryOnly ) return SQLITE_OK;
   for(i=0; i<nHash && !apData[i]; i++){}
   if( i==nHash ) return SQLITE_OK;
-  rc = csSourceOpenWriter(cs, p);
+  rc = csSourceOpenWriter(cs, p, 0);
   if( rc!=SQLITE_OK || !p->writerOpen ) return rc;
   rc = chunkStoreLockAndRefresh(&p->writer);
-  if( rc==SQLITE_OK ) rc = chunkStoreForceRefresh(&p->writer);
   if( rc==SQLITE_OK && p->writer.movedReadOnly ){
     p->memoryOnly = 1;
+  }
+  if( rc==SQLITE_OK && !p->memoryOnly ){
+    rc = chunkStoreForceRefresh(&p->writer);
+    if( rc==SQLITE_READONLY && p->writer.movedReadOnly ){
+      p->memoryOnly = 1;
+      rc = SQLITE_OK;
+    }
   }
   for(i=0; rc==SQLITE_OK && !p->memoryOnly && i<nHash; i++){
     int has = 0;
@@ -289,8 +324,7 @@ int chunkStoreSourceGet(
   int sourceRc;
   int rc;
   if( !p ) return SQLITE_NOTFOUND;
-  sqlite3_free(p->zErr);
-  p->zErr = 0;
+  csSourceClearError(p);
   rc = csSourceCacheGet(p, pHash, ppData, pnData);
   if( rc!=SQLITE_NOTFOUND ) return rc;
   if( p->writerOpen ){
@@ -306,8 +340,8 @@ int chunkStoreSourceGet(
     }
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
-  if( cs->lockDepth>0 || (p->writerOpen && p->writer.lockDepth>0) ){
-    csSourceSetHashError(p,
+  if( csSourceGraphLockHeld(cs, p) ){
+    csSourceSetHashError(p, SQLITE_BUSY,
       "chunk source fetch blocked by active graph lock for", pHash);
     return SQLITE_BUSY;
   }
@@ -315,16 +349,22 @@ int chunkStoreSourceGet(
                               &pData, &nData);
   if( sourceRc==DOLTLITE_SOURCE_NOTFOUND ){
     sqlite3_free(pData);
-    csSourceSetHashError(p, "chunk source did not contain", pHash);
+    csSourceSetHashError(
+        p, SQLITE_NOTFOUND, "chunk source did not contain", pHash);
     return SQLITE_NOTFOUND;
   }
   if( sourceRc!=DOLTLITE_SOURCE_OK || !pData || nData<0 ){
     sqlite3_free(pData);
-    csSourceSetHashError(p, "chunk source I/O error for", pHash);
+    csSourceSetHashError(
+        p, SQLITE_IOERR_CHUNK_SOURCE, "chunk source I/O error for", pHash);
     return SQLITE_IOERR_CHUNK_SOURCE;
   }
   rc = chunkStoreVerifyChunk(pHash, &pData, &nData);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    csSourceSetHashError(
+        p, rc, "chunk source returned corrupt bytes for", pHash);
+    return rc;
+  }
   apData[0] = pData;
   anData[0] = nData;
   rc = csSourcePersistMany(cs, p, pHash, apData, anData, 1);
@@ -355,8 +395,7 @@ int chunkStoreSourcePrefetchMany(
 
   if( !p || nHash==0 ) return SQLITE_OK;
   if( nHash<0 ) return SQLITE_MISUSE;
-  sqlite3_free(p->zErr);
-  p->zErr = 0;
+  csSourceClearError(p);
 
   aPresent = (u8*)sqlite3_malloc64((sqlite3_uint64)nHash);
   aMissing = (ProllyHash*)sqlite3_malloc64(
@@ -371,8 +410,8 @@ int chunkStoreSourcePrefetchMany(
     if( !aPresent[i] ) aMissing[nMissing++] = aHash[i];
   }
   if( nMissing==0 ) goto prefetch_done;
-  if( cs->lockDepth>0 || (p->writerOpen && p->writer.lockDepth>0) ){
-    csSourceSetHashError(p,
+  if( csSourceGraphLockHeld(cs, p) ){
+    csSourceSetHashError(p, SQLITE_BUSY,
       "chunk source fetch blocked by active graph lock for", &aMissing[0]);
     rc = SQLITE_BUSY;
     goto prefetch_done;
@@ -400,7 +439,8 @@ int chunkStoreSourcePrefetchMany(
         break;
       }
     }
-    csSourceSetHashError(p, "chunk source batch I/O error for",
+    csSourceSetHashError(p, SQLITE_IOERR_CHUNK_SOURCE,
+                         "chunk source batch I/O error for",
                          &aMissing[iErr]);
     rc = SQLITE_IOERR_CHUNK_SOURCE;
     goto prefetch_done;
@@ -409,13 +449,14 @@ int chunkStoreSourcePrefetchMany(
   for(i=0; i<nMissing; i++){
     if( !apData[i] ) continue;
     if( anData[i]<0 ){
-      csSourceSetHashError(p, "chunk source I/O error for", &aMissing[i]);
+      csSourceSetHashError(p, SQLITE_IOERR_CHUNK_SOURCE,
+                           "chunk source I/O error for", &aMissing[i]);
       rc = SQLITE_IOERR_CHUNK_SOURCE;
       goto prefetch_done;
     }
     rc = chunkStoreVerifyChunk(&aMissing[i], &apData[i], &anData[i]);
     if( rc!=SQLITE_OK ){
-      csSourceSetHashError(p, "chunk source returned corrupt bytes for",
+      csSourceSetHashError(p, rc, "chunk source returned corrupt bytes for",
                            &aMissing[i]);
       goto prefetch_done;
     }
@@ -446,24 +487,27 @@ void chunkStoreSourceClose(ChunkStore *cs){
   cs->pChunkSource = 0;
   if( p->writerOpen ) chunkStoreClose(&p->writer);
   while( p->pLruTail ) csSourceCacheRemove(p, p->pLruTail);
-  sqlite3_free(p->zErr);
+  csSourceClearError(p);
   sqlite3_free(p);
 }
 
 int chunkStoreSourceSet(
   ChunkStore *cs,
-  doltlite_chunk_source *pSource
+  sqlite3 *db,
+  doltlite_chunk_source *pSource,
+  int *pChanged
 ){
   DoltliteChunkSourceState *p;
-  int changed = 0;
   int rc = SQLITE_OK;
+  if( pChanged ) *pChanged = 0;
   chunkStoreSourceClose(cs);
-  if( !pSource ) return chunkStoreRefreshIfChanged(cs, &changed);
+  if( !pSource ) return chunkStoreRefreshIfChanged(cs, pChanged);
   p = (DoltliteChunkSourceState*)sqlite3_malloc(sizeof(*p));
   if( !p ) return SQLITE_NOMEM;
   memset(p, 0, sizeof(*p));
   p->pSource = pSource;
-  rc = csSourceOpenWriter(cs, p);
+  p->db = db;
+  rc = csSourceOpenWriter(cs, p, pChanged);
   if( rc!=SQLITE_OK ){
     if( p->writerOpen ) chunkStoreClose(&p->writer);
     sqlite3_free(p);
@@ -473,25 +517,52 @@ int chunkStoreSourceSet(
   return SQLITE_OK;
 }
 
-char *chunkStoreSourceTakeError(ChunkStore *cs){
-  DoltliteChunkSourceState *p = cs->pChunkSource;
-  char *zErr;
-  if( !p ) return 0;
-  zErr = p->zErr;
-  p->zErr = 0;
+static char *csSourceTakeError(
+  DoltliteChunkSourceState *p,
+  int *pRc
+){
+  char *zErr = 0;
+  int rc = SQLITE_OK;
+  if( p ){
+    zErr = p->zErr;
+    rc = p->errRc;
+    p->zErr = 0;
+    p->errRc = SQLITE_OK;
+  }
+  if( pRc ) *pRc = rc;
   return zErr;
 }
 
-char *doltliteTakeChunkSourceError(sqlite3 *db){
+char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc){
+  DoltliteChunkSourceState *p = cs->pChunkSource;
+  return csSourceTakeError(p, pRc);
+}
+
+char *doltliteTakeChunkSourceError(sqlite3 *db, int *pRc){
   int i;
+  if( pRc ) *pRc = SQLITE_OK;
   for(i=0; i<db->nDb; i++){
     ChunkStore *cs = doltliteBtreeChunkStore(db->aDb[i].pBt);
     char *zErr;
+    int rc;
     if( !cs ) continue;
-    zErr = chunkStoreSourceTakeError(cs);
-    if( zErr ) return zErr;
+    zErr = csSourceTakeError(cs->pChunkSource, &rc);
+    if( zErr || rc!=SQLITE_OK ){
+      if( pRc ) *pRc = rc;
+      return zErr;
+    }
   }
   return 0;
+}
+
+static void csSourceSetApiError(sqlite3 *db, ChunkStore *cs, int rc){
+  char *zErr = chunkStoreSourceTakeError(cs, 0);
+  if( zErr ){
+    sqlite3ErrorWithMsg(db, rc, "%s", zErr);
+    sqlite3_free(zErr);
+  }else{
+    sqlite3ErrorWithMsg(db, rc, "%s", sqlite3ErrStr(rc));
+  }
 }
 
 SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
@@ -500,6 +571,10 @@ SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
   doltlite_chunk_source *pSource
 ){
   Btree *pBtree;
+  ChunkStore *cs;
+  char *zSourceErr = 0;
+  int installed = 0;
+  int storeChanged = 0;
   int rc = SQLITE_OK;
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ) return SQLITE_MISUSE_BKPT;
@@ -509,7 +584,8 @@ SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
   if( !pBtree || !sqlite3BtreeIsDoltliteFormat(pBtree) ){
     rc = SQLITE_NOTFOUND;
     sqlite3ErrorWithMsg(db, rc, "database is not a DoltLite database");
-  }else if( pBtree->inTransaction!=TRANS_NONE ){
+  }else if( !db->autoCommit || pBtree->inTrans!=TRANS_NONE
+         || pBtree->inTransaction!=TRANS_NONE ){
     rc = SQLITE_BUSY;
     sqlite3ErrorWithMsg(db, rc,
                         "cannot change chunk source during a transaction");
@@ -519,11 +595,111 @@ SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
     sqlite3ErrorWithMsg(db, rc, "invalid DoltLite chunk source version 1");
   }else{
     sqlite3BtreeEnter(pBtree);
-    rc = chunkStoreSourceSet(doltliteBtreeChunkStore(pBtree), pSource);
+    cs = doltliteBtreeChunkStore(pBtree);
+    rc = chunkStoreSourceSet(cs, db, pSource, &storeChanged);
+    if( storeChanged && !pBtree->isDetached ){
+      pBtree->iLoadedWorkingStateVersion =
+          pBtree->pBt->iWorkingStateVersion - 1;
+    }
+    if( rc==SQLITE_OK && pSource ){
+      installed = 1;
+      rc = doltliteBtreeHydrateDeferred(pBtree);
+    }
+    if( rc!=SQLITE_OK && installed ){
+      zSourceErr = chunkStoreSourceTakeError(cs, 0);
+      chunkStoreSourceClose(cs);
+    }
     sqlite3BtreeLeave(pBtree);
+    if( rc==SQLITE_OK && pSource
+     && pBtree==sqlite3DbNameToBtree(db, 0)
+     && pBtree->bDeferredRegister ){
+      rc = doltliteRegister(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3BtreeEnter(pBtree);
+        zSourceErr = chunkStoreSourceTakeError(cs, 0);
+        chunkStoreSourceClose(cs);
+        sqlite3BtreeLeave(pBtree);
+      }
+    }
     if( rc==SQLITE_OK ) sqlite3Error(db, SQLITE_OK);
-    else sqlite3ErrorWithMsg(db, rc, "%s", sqlite3ErrStr(rc));
+    else if( zSourceErr ) sqlite3ErrorWithMsg(db, rc, "%s", zSourceErr);
+    else csSourceSetApiError(db, cs, rc);
   }
+  sqlite3_free(zSourceErr);
+  rc = sqlite3ApiExit(db, rc);
+  sqlite3_mutex_leave(db->mutex);
+  return rc;
+}
+
+SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
+  sqlite3 *db,
+  const void *pRefs,
+  int nRefs
+){
+  Btree *pBtree;
+  ChunkStore *cs = 0;
+  char *zOldErr;
+  char *zPreparedBranch = 0;
+  int locked = 0;
+  int rc = SQLITE_OK;
+#ifdef SQLITE_ENABLE_API_ARMOR
+  if( !sqlite3SafetyCheckOk(db) ) return SQLITE_MISUSE_BKPT;
+#endif
+  sqlite3_mutex_enter(db->mutex);
+  pBtree = sqlite3DbNameToBtree(db, 0);
+  if( !pBtree || !sqlite3BtreeIsDoltliteFormat(pBtree) ){
+    rc = SQLITE_NOTFOUND;
+    sqlite3ErrorWithMsg(db, rc, "main is not a DoltLite database");
+  }else if( pBtree->isDetached ){
+    rc = SQLITE_READONLY;
+    sqlite3ErrorWithMsg(db, rc,
+                        "cannot install DoltLite refs in a detached session");
+  }else if( !pRefs || nRefs<=0 ){
+    rc = SQLITE_MISUSE;
+    sqlite3ErrorWithMsg(db, rc, "invalid DoltLite refs blob");
+  }else if( !db->autoCommit || pBtree->inTrans!=TRANS_NONE
+         || pBtree->inTransaction!=TRANS_NONE ){
+    rc = SQLITE_BUSY;
+    sqlite3ErrorWithMsg(db, rc,
+                        "cannot install DoltLite refs during a transaction");
+  }else{
+    sqlite3BtreeEnter(pBtree);
+    cs = doltliteBtreeChunkStore(pBtree);
+    zOldErr = chunkStoreSourceTakeError(cs, 0);
+    sqlite3_free(zOldErr);
+    rc = chunkStoreLockAndRefresh(cs);
+    if( rc==SQLITE_OK ){
+      locked = 1;
+      rc = chunkStoreForceRefresh(cs);
+    }
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreInstallRefsBlob(cs, (const u8*)pRefs, nRefs);
+    }
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreCommit(cs);
+      if( rc==SQLITE_OK ) pBtree->bDeferredOpen = 1;
+    }
+    if( rc!=SQLITE_OK ) chunkStoreRollback(cs);
+    if( locked ) chunkStoreUnlock(cs);
+    if( rc==SQLITE_OK ){
+      rc = doltliteBtreePrepareBackupBranch(
+          pBtree, cs, &zPreparedBranch);
+    }
+    if( rc==SQLITE_OK && zPreparedBranch ){
+      doltliteBtreeInstallBackupBranch(pBtree, zPreparedBranch);
+      zPreparedBranch = 0;
+    }
+    if( rc==SQLITE_OK && cs->pChunkSource ){
+      rc = doltliteBtreeHydrateDeferred(pBtree);
+    }
+    sqlite3BtreeLeave(pBtree);
+    if( rc==SQLITE_OK && cs->pChunkSource && pBtree->bDeferredRegister ){
+      rc = doltliteRegister(db);
+    }
+    if( rc==SQLITE_OK ) sqlite3Error(db, SQLITE_OK);
+    else csSourceSetApiError(db, cs, rc);
+  }
+  sqlite3_free(zPreparedBranch);
   rc = sqlite3ApiExit(db, rc);
   sqlite3_mutex_leave(db->mutex);
   return rc;
@@ -555,18 +731,23 @@ int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,
   return SQLITE_OK;
 }
 
-int chunkStoreSourceSet(ChunkStore *cs, doltlite_chunk_source *pSource){
+int chunkStoreSourceSet(ChunkStore *cs, sqlite3 *db,
+                        doltlite_chunk_source *pSource, int *pChanged){
   UNUSED_PARAMETER(cs);
+  UNUSED_PARAMETER(db);
+  if( pChanged ) *pChanged = 0;
   return pSource ? SQLITE_NOTFOUND : SQLITE_OK;
 }
 
 void chunkStoreSourceClose(ChunkStore *cs){ UNUSED_PARAMETER(cs); }
-char *chunkStoreSourceTakeError(ChunkStore *cs){
+char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc){
   UNUSED_PARAMETER(cs);
+  if( pRc ) *pRc = SQLITE_OK;
   return 0;
 }
-char *doltliteTakeChunkSourceError(sqlite3 *db){
+char *doltliteTakeChunkSourceError(sqlite3 *db, int *pRc){
   UNUSED_PARAMETER(db);
+  if( pRc ) *pRc = SQLITE_OK;
   return 0;
 }
 
@@ -584,6 +765,24 @@ SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
   rc = pSource ? SQLITE_NOTFOUND : SQLITE_OK;
   if( rc==SQLITE_OK ) sqlite3Error(db, SQLITE_OK);
   else sqlite3ErrorWithMsg(db, rc, "DoltLite chunk source support is disabled");
+  rc = sqlite3ApiExit(db, rc);
+  sqlite3_mutex_leave(db->mutex);
+  return rc;
+}
+
+SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
+  sqlite3 *db,
+  const void *pRefs,
+  int nRefs
+){
+  int rc = SQLITE_NOTFOUND;
+#ifdef SQLITE_ENABLE_API_ARMOR
+  if( !sqlite3SafetyCheckOk(db) ) return SQLITE_MISUSE_BKPT;
+#endif
+  UNUSED_PARAMETER(pRefs);
+  UNUSED_PARAMETER(nRefs);
+  sqlite3_mutex_enter(db->mutex);
+  sqlite3ErrorWithMsg(db, rc, "DoltLite chunk source support is disabled");
   rc = sqlite3ApiExit(db, rc);
   sqlite3_mutex_leave(db->mutex);
   return rc;

@@ -218,7 +218,8 @@ static int loadAllConflicts(
   int nData = 0;
   int rc;
 
-  doltliteGetSessionConflictsCatalog(db, &hash);
+  rc = doltliteGetSessionConflictsCatalog(db, &hash);
+  if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&hash) ){
     *ppTables = 0;
     *pnTables = 0;
@@ -232,21 +233,22 @@ static int loadAllConflicts(
   return rc;
 }
 
-int doltliteSessionHasSchemaConflicts(sqlite3 *db){
+int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas){
   ConflictTableInfo *aTables = 0;
   int nTables = 0;
   int i;
   int rc = loadAllConflicts(db, doltliteGetChunkStore(db),
                             &aTables, &nTables);
-  if( rc!=SQLITE_OK ) return 0;
+  *pHas = 0;
+  if( rc!=SQLITE_OK ) return rc;
   for(i=0; i<nTables; i++){
     if( aTables[i].nConflicts==0 ){
-      freeConflictTables(aTables, nTables);
-      return 1;
+      *pHas = 1;
+      break;
     }
   }
   freeConflictTables(aTables, nTables);
-  return 0;
+  return SQLITE_OK;
 }
 
 int doltliteForEachSchemaConflict(
@@ -278,14 +280,14 @@ static int loadConflictTable(
 ){
   ProllyHash hash;
   u8 *data = 0; int nData = 0;
-  extern void doltliteGetSessionConflictsCatalog(sqlite3*, ProllyHash*);
   DlByteReader r;
   int nTables, i, j, rc;
 
   memset(pTable, 0, sizeof(*pTable));
   *pFound = 0;
 
-  doltliteGetSessionConflictsCatalog(db, &hash);
+  rc = doltliteGetSessionConflictsCatalog(db, &hash);
+  if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
@@ -420,9 +422,8 @@ static int deleteConflictRowFromCatalog(
   int nTables, nOutTables = 0;
   int i, j, rc = SQLITE_OK;
   int deleted = 0;
-  extern void doltliteGetSessionConflictsCatalog(sqlite3*, ProllyHash*);
-
-  doltliteGetSessionConflictsCatalog(db, &hash);
+  rc = doltliteGetSessionConflictsCatalog(db, &hash);
+  if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
@@ -556,10 +557,9 @@ static int removeConflictTableFromCatalog(
   DlByteWriter w;
   int nTables, nOutTables = 0;
   int i, j, rc = SQLITE_OK;
-  extern void doltliteGetSessionConflictsCatalog(sqlite3*, ProllyHash*);
-
   *pFound = 0;
-  doltliteGetSessionConflictsCatalog(db, &hash);
+  rc = doltliteGetSessionConflictsCatalog(db, &hash);
+  if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);

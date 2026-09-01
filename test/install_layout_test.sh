@@ -98,6 +98,7 @@ int main(void){
   DoltliteServer *srv;
   if( sqlite3_open(":memory:", &db)!=SQLITE_OK ) return 1;
   if( doltlite_set_chunk_source(db, "main", 0)!=SQLITE_OK ) return 5;
+  if( doltlite_init_lazy(db, 0, 0)!=SQLITE_MISUSE ) return 6;
   source.iVersion = 1;
   if( sqlite3_prepare_v2(db, "SELECT doltlite_engine()", -1, &st, 0)!=SQLITE_OK ) return 2;
   if( sqlite3_step(st)!=SQLITE_ROW ) return 3;

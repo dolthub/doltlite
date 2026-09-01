@@ -28,7 +28,8 @@ Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dol
 Each install method places the same set of files (paths shown for `/usr/local`):
 
 - `bin/doltlite`, `bin/doltlite-remotesrv` — the CLI shell and remote sync server
-- `include/doltlite.h` — embedding header (`sqlite3_*` C API; `#include <doltlite.h>`)
+- `include/doltlite.h` — embedding header (`sqlite3_*` plus DoltLite C APIs;
+  `#include <doltlite.h>`)
 - `include/doltlite_remotesrv.h` — in-process remote server API
 - `lib/libdoltlite.a` — static library
 - `lib/libdoltlite.{so,dylib}` — shared library
@@ -136,20 +137,30 @@ an Emscripten-compatible socket transport or proxy; see
 [`examples/wa-sqlite-clone.mjs`](examples/wa-sqlite-clone.mjs) for a public
 clone request that exercises the client.
 
+`DOLTLITE_ENABLE_CHUNK_SOURCE=0` omits host-provided lazy chunk fetching. The
+feature is enabled by default.
+
 ## Using as a C Library
 
-Public C API is the bundled SQLite declarations under `sqlite3_*` names via
-`doltlite.h`. Port supported programs by switching the include/link to
-`libdoltlite`; APIs tied to SQLite's pager, page format, or journaling differ
-(see [SQLite Compatibility](#sqlite-compatibility)). Dolt features are SQL
-functions (`dolt_commit`, `dolt_branch`, …) and virtual tables
-(`dolt_log`, `dolt_diff_<table>`, …).
+Public C API is the bundled SQLite declarations under `sqlite3_*` names plus
+the DoltLite-specific declarations in `doltlite.h`. Port supported programs by
+switching the include/link to `libdoltlite`; APIs tied to SQLite's pager, page
+format, or journaling differ (see [SQLite Compatibility](#sqlite-compatibility)).
+Dolt features are SQL functions (`dolt_commit`, `dolt_branch`, …) and virtual
+tables (`dolt_log`, `dolt_diff_<table>`, …).
+
+`doltlite_set_chunk_source()` registers synchronous `xGet` and `xGetMany`
+callbacks for one attached database. `doltlite_init_lazy()` installs a refs
+blob into a fresh or existing main database, allowing missing graph chunks to
+be fetched and cached on demand. Source objects remain owned by the host and
+must outlive their registrations.
 
 Loadable extensions use `doltliteext.h` (rebranded `sqlite3ext.h`, shipped in
-the amalgamation zip). The shared library exports only `sqlite3_*` and
-`doltliteServe*` (`doltlite_remotesrv.h`); prolly/chunk-store/`doltlite*`
-internals and vendored crypto are hidden. The static archive is unfiltered for
-tests and tooling.
+the amalgamation zip). The shared library exports only `sqlite3_*`,
+`doltliteServe*` (`doltlite_remotesrv.h`), `doltlite_set_chunk_source`, and
+`doltlite_init_lazy`; prolly/chunk-store internals, other `doltlite*` symbols,
+and vendored crypto are hidden. The static archive is unfiltered for tests and
+tooling.
 
 ```bash
 cd build

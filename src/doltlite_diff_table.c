@@ -102,7 +102,43 @@ struct DiffTblCursor {
   AuditRow row;
   int hasRow;
   i64 iRowid;
+  int sourceError;
 };
+
+static int dtMapChunkSourceError(
+  DiffTblCursor *pCur,
+  sqlite3 *db,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  pCur->sourceError = 1;
+  if( zErr ){
+    sqlite3_free(pCur->base.pVtab->zErrMsg);
+    pCur->base.pVtab->zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
+static int dtLoadTableRootOrEmpty(
+  DiffTblCursor *pCur,
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  int rc = doltliteLoadTableRootByName(
+      db, pCatHash, zTableName, pRoot, pFlags, pSchemaHash);
+  if( rc==SQLITE_NOTFOUND ){
+    rc = dtMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+  }
+  return rc;
+}
 
 #define DT_IDX_TO_COMMIT_EQ   0x01
 #define DT_IDX_SLICE          0x02
@@ -311,6 +347,7 @@ static int stackPushUnique(ProllyHashSet *pSeen,
 }
 
 static int seedWorkingChildInfo(
+  DiffTblCursor *pCur,
   sqlite3 *db,
   const ProllyHash *pHeadHash,
   const char *zTableName,
@@ -331,9 +368,9 @@ static int seedWorkingChildInfo(
 
   rc = doltliteFlushCatalogToHash(db, &workingCat);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &workingCat, zTableName,
-                                          &workingTblRoot, &workingFlags,
-                                          &workingSchemaHash);
+  rc = dtLoadTableRootOrEmpty(pCur, db, &workingCat, zTableName,
+                              &workingTblRoot, &workingFlags,
+                              &workingSchemaHash);
   if( rc!=SQLITE_OK ) return rc;
   return cmMapPut(pMap, pHeadHash, &workingTblRoot, &workingCat,
                   &workingSchemaHash, workingFlags, zWorking, 0);
@@ -421,7 +458,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
 
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
-  rc = seedWorkingChildInfo(db, &headHash, zTableName, &map);
+  rc = seedWorkingChildInfo(pCur, db, &headHash, zTableName, &map);
   if( rc!=SQLITE_OK ) goto walk_done;
 
   rc = prollyHashSetInit(&seen, 64);
@@ -448,9 +485,9 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     rc = doltliteLoadCommit(db, &curr, &commit);
     if( rc!=SQLITE_OK ) break;
 
-    rc = doltliteLoadTableRootByNameOrEmpty(db, &commit.catalogHash,
-                                            zTableName, &curTblRoot,
-                                            &curFlags, &curSchemaHash);
+    rc = dtLoadTableRootOrEmpty(pCur, db, &commit.catalogHash,
+                                zTableName, &curTblRoot,
+                                &curFlags, &curSchemaHash);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&commit);
       break;
@@ -517,15 +554,15 @@ static int buildWorkingDiffPair(
                                     &workingTblRoot, &workingFlags,
                                     &workingSchemaHash);
   if( rc==SQLITE_NOTFOUND ){
-    rc = SQLITE_OK;
+    rc = dtMapChunkSourceError(pCur, db, rc, SQLITE_OK);
   }
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &headCommit.catalogHash,
-                                          zTableName, &headTblRoot,
-                                          &headFlags, &headSchemaHash);
+  rc = dtLoadTableRootOrEmpty(pCur, db, &headCommit.catalogHash,
+                              zTableName, &headTblRoot,
+                              &headFlags, &headSchemaHash);
   if( rc==SQLITE_OK ){
     int rootsDiffer = prollyHashCompare(&headTblRoot, &workingTblRoot)!=0;
     int schemasDiffer = prollyHashCompare(&headSchemaHash, &workingSchemaHash)!=0;
@@ -602,8 +639,10 @@ static int buildCommitDiffPair(
     doltliteGetSessionHead(db, &head);
     if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
     rc = doltliteFindAncestor(db, &head, &toHash, &base);
-    if( rc==SQLITE_NOTFOUND
-     || (rc==SQLITE_OK && prollyHashCompare(&base, &toHash)!=0) ){
+    if( rc==SQLITE_NOTFOUND ){
+      return dtMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+    }
+    if( rc==SQLITE_OK && prollyHashCompare(&base, &toHash)!=0 ){
       return SQLITE_OK;
     }
     if( rc!=SQLITE_OK ) return rc;
@@ -612,9 +651,8 @@ static int buildCommitDiffPair(
   rc = doltliteLoadCommit(db, &toHash, &toCommit);
   if( rc!=SQLITE_OK ) return rc;
   memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &toCatHash, zTableName,
-                                          &toTblRoot, &toFlags,
-                                          &toSchemaHash);
+  rc = dtLoadTableRootOrEmpty(pCur, db, &toCatHash, zTableName,
+                              &toTblRoot, &toFlags, &toSchemaHash);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&toCommit);
     return rc;
@@ -644,9 +682,9 @@ static int buildCommitDiffPair(
       if( rc==SQLITE_OK ){
         memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
         fromDate = fromCommit.timestamp;
-        rc = doltliteLoadTableRootByNameOrEmpty(db, &fromCatHash, zTableName,
-                                                &fromTblRoot, &fromFlags,
-                                                &fromSchemaHash);
+        rc = dtLoadTableRootOrEmpty(pCur, db, &fromCatHash, zTableName,
+                                    &fromTblRoot, &fromFlags,
+                                    &fromSchemaHash);
       }
       doltliteCommitClear(&fromCommit);
       if( rc!=SQLITE_OK ){
@@ -687,7 +725,8 @@ struct DtSliceEnd {
 };
 
 static int dtResolveSliceEnd(
-  sqlite3 *db, const char *zRef, const char *zTableName, DtSliceEnd *pEnd,
+  DiffTblCursor *pCur, sqlite3 *db, const char *zRef,
+  const char *zTableName, DtSliceEnd *pEnd,
   int *pbRefError
 ){
   int rc;
@@ -703,16 +742,18 @@ static int dtResolveSliceEnd(
   if( doltliteRefIsWorking(zRef) ){
     rc = doltliteGetWorkingTableState(db, zTableName, &pEnd->tblRoot,
                                       &pEnd->flags, &pEnd->schemaHash);
-    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc==SQLITE_NOTFOUND ){
+      rc = dtMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+    }
     if( rc!=SQLITE_OK ) return rc;
     memcpy(pEnd->zLabel, "WORKING", 8);
     return SQLITE_OK;
   }
 
-  rc = doltliteLoadTableRootByNameOrEmpty(db, &pEnd->catHash, zTableName,
-                                          &pEnd->tblRoot, &pEnd->flags,
-                                          &pEnd->schemaHash);
-  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  rc = dtLoadTableRootOrEmpty(pCur, db, &pEnd->catHash, zTableName,
+                              &pEnd->tblRoot, &pEnd->flags,
+                              &pEnd->schemaHash);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( doltliteRefIsStaged(zRef) ){
     memcpy(pEnd->zLabel, "STAGED", 7);
@@ -752,10 +793,12 @@ static int buildSliceDiffPair(
   *pzBadRef = 0;
   if( !zFromRef || !zToRef ) return SQLITE_OK;
 
-  rc = dtResolveSliceEnd(db, zFromRef, zTableName, &from, &bRefError);
+  rc = dtResolveSliceEnd(
+      pCur, db, zFromRef, zTableName, &from, &bRefError);
   if( bRefError ) *pzBadRef = zFromRef;
   if( rc!=SQLITE_OK ) return rc;
-  rc = dtResolveSliceEnd(db, zToRef, zTableName, &to, &bRefError);
+  rc = dtResolveSliceEnd(
+      pCur, db, zToRef, zTableName, &to, &bRefError);
   if( bRefError ) *pzBadRef = zToRef;
   if( rc!=SQLITE_OK ) return rc;
 
@@ -1122,6 +1165,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   c->pairsDone = 0;
   c->hasRow = 0;
   c->iRowid = 0;
+  c->sourceError = 0;
 
   {
     ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1147,7 +1191,8 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       pVtab->base.zErrMsg = sqlite3_mprintf(
           "dolt_diff_%s requires a '..' or '...' revision range",
           pVtab->zTableName);
-    }else if( rc==SQLITE_ERROR || rc==SQLITE_NOTFOUND ){
+    }else if( !c->sourceError
+           && (rc==SQLITE_ERROR || rc==SQLITE_NOTFOUND) ){
       sqlite3_free(pVtab->base.zErrMsg);
       pVtab->base.zErrMsg = sqlite3_mprintf(
           "dolt_diff_%s: invalid revision range '%s'",

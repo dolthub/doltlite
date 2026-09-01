@@ -245,6 +245,13 @@ static void attachFunc(
 #endif
     if( !REOPEN_AS_MEMDB(db) ){
       rc = sqlite3Init(db, &zErrDyn);
+#ifdef DOLTLITE_PROLLY
+      if( rc==SQLITE_NOTFOUND && sqlite3BtreeIsDeferred(pNew->pBt) ){
+        sqlite3DbFree(db, zErrDyn);
+        zErrDyn = 0;
+        rc = SQLITE_OK;
+      }
+#endif
     }
     sqlite3BtreeLeaveAll(db);
     assert( zErrDyn==0 || rc!=SQLITE_OK );

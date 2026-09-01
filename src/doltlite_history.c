@@ -54,6 +54,23 @@ struct HistCursor {
   int singleCommit;
 };
 
+static int htMapChunkSourceError(
+  HistCursor *c,
+  sqlite3 *db,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  if( zErr ){
+    sqlite3_free(c->common.base.pVtab->zErrMsg);
+    c->common.base.pVtab->zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
 static void htCursorReset(HistCursor *c){
   doltliteVtabCommonReset(&c->common);
   doltliteSideColsClear(&c->side);
@@ -113,7 +130,9 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
                               !prollyHashIsEmpty(&tableRoot), &c->side);
   }
   doltliteCommitClear(&commit);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc==SQLITE_NOTFOUND ){
+    rc = htMapChunkSourceError(c, db, rc, SQLITE_OK);
+  }
   if( rc!=SQLITE_OK ) return rc;
 
   if( prollyHashIsEmpty(&tableRoot) ){

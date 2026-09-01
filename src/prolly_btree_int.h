@@ -310,6 +310,8 @@ struct Btree {
   u8 bMasterRootChangedTxn;
   u8 bFilterSchemaPlaceholders;
   u8 bCatalogDropped;     /* OOM drop: empty committedCatalogHash is not a new db */
+  u8 bDeferredOpen;
+  u8 bDeferredRegister;
   Pgno mxPageCount;
 
   int nSavepoint;
@@ -728,6 +730,9 @@ void btreeBumpLocalDataVersion(Btree*);
 int btreeRefreshFromDisk(Btree*);
 int btreeRefreshSharedWorkingState(Btree*);
 int btreeReloadBranchWorkingStateInto(Btree*, int, ProllyHash*);
+int doltliteBtreeHydrateDeferred(Btree*);
+int doltliteBtreeRunDeferredWork(sqlite3*);
+void doltliteBtreeRegistrationDone(sqlite3*);
 void btreeStoreCommittedFromCurrent(Btree*, const ProllyHash*);
 int syncBtreeSavepoints(Btree*);
 int ensureStatementSavepointsCaptured(Btree*);
