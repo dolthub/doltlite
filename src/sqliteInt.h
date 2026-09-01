@@ -291,22 +291,50 @@ int sqlite3OsDoltliteFileState(sqlite3_file*, DoltliteFileState*);
 #endif
 
 /*
-** Macros to hint to the compiler that a function should or should not be
-** inlined.
+** Hint to the compiler that a function should or should not be inlined:
+**
+**    SQLITE_NOINLINE         Never in-line this function
+**
+**    SQLITE_INLINE           Strive to in-line this function
+**
+**    SQLITE_OPT_INLINE       In-line this function if building the
+**                            amalgamation.
+**
+**    SQLITE_USES_INLINE      Set to 1 or 0 according to whether or not
+**                            inline functions are supported.
 */
-#if defined(__GNUC__)
-#  define SQLITE_NOINLINE  __attribute__((noinline))
-#  define SQLITE_INLINE    __attribute__((always_inline)) inline
+#if defined(SQLITE_DISABLE_INLINE)
+#  define SQLITE_NOINLINE
+#  define SQLITE_INLINE
+#  define SQLITE_OPT_INLINE
+#  define SQLITE_USES_INLINE 0
+#elif defined(__GNUC__)
+#  define SQLITE_NOINLINE    __attribute__((noinline))
+#  define SQLITE_INLINE      __attribute__((always_inline)) inline
+#  define SQLITE_OPT_INLINE  __attribute__((always_inline)) inline
+#  define SQLITE_USES_INLINE 1
 #elif defined(_MSC_VER) && _MSC_VER>=1310
-#  define SQLITE_NOINLINE  __declspec(noinline)
-#  define SQLITE_INLINE    __forceinline
+#  define SQLITE_NOINLINE    __declspec(noinline)
+#  define SQLITE_INLINE      __forceinline
+#  define SQLITE_OPT_INLINE  __forceinline
+#  define SQLITE_USES_INLINE 1
 #else
 #  define SQLITE_NOINLINE
 #  define SQLITE_INLINE
+#  define SQLITE_OPT_INLINE
+#  define SQLITE_USES_INLINE 0
 #endif
 #if defined(SQLITE_COVERAGE_TEST) || defined(__STRICT_ANSI__)
 # undef SQLITE_INLINE
 # define SQLITE_INLINE
+# undef SQLITE_OPT_INLINE
+# define SQLITE_OPT_INLINE
+# undef SQLITE_USES_INLINE
+# define SQLITE_USES_INLINE 0
+#endif
+#if !defined(SQLITE_AMALGAMATION)
+# undef SQLITE_OPT_INLINE
+# define SQLITE_OPT_INLINE
 #endif
 
 /*
@@ -1555,7 +1583,7 @@ struct Schema {
 ** The number of different kinds of things that can be limited
 ** using the sqlite3_limit() interface.
 */
-#define SQLITE_N_LIMIT (SQLITE_LIMIT_SCHEMA+1)
+#define SQLITE_N_LIMIT (SQLITE_LIMIT_TRIGGER_STEPS+1)
 
 /*
 ** Lookaside malloc is a set of fixed-size buffers that can be used
@@ -1922,7 +1950,7 @@ struct sqlite3 {
 #define SQLITE_QueryFlattener 0x00000001 /* Query flattening */
 #define SQLITE_WindowFunc     0x00000002 /* Use xInverse for window functions */
 #define SQLITE_GroupByOrder   0x00000004 /* GROUPBY cover of ORDERBY */
-#define SQLITE_FactorOutConst 0x00000008 /* Constant factoring */
+                           /* 0x00000008 -- Available for reuse */
 #define SQLITE_DistinctOpt    0x00000010 /* DISTINCT using indexes */
 #define SQLITE_CoverIdxScan   0x00000020 /* Covering index scans */
 #define SQLITE_OrderByIdxJoin 0x00000040 /* ORDER BY of joins via index */
@@ -1931,7 +1959,7 @@ struct sqlite3 {
 #define SQLITE_CountOfView    0x00000200 /* The count-of-view optimization */
 #define SQLITE_CursorHints    0x00000400 /* Add OP_CursorHint opcodes */
 #define SQLITE_Stat4          0x00000800 /* Use STAT4 data */
-   /* TH3 expects this value  ^^^^^^^^^^ to be 0x0000800. Don't change it */
+   /* TH3 expects this value  ^^^^^^^^^^ */
 #define SQLITE_PushDown       0x00001000 /* WHERE-clause push-down opt */
 #define SQLITE_SimplifyJoin   0x00002000 /* Convert LEFT JOIN to JOIN */
 #define SQLITE_SkipScan       0x00004000 /* Skip-scans */
@@ -1939,13 +1967,14 @@ struct sqlite3 {
 #define SQLITE_MinMaxOpt      0x00010000 /* The min/max optimization */
 #define SQLITE_SeekScan       0x00020000 /* The OP_SeekScan optimization */
 #define SQLITE_OmitOrderBy    0x00040000 /* Omit pointless ORDER BY */
-   /* TH3 expects this value  ^^^^^^^^^^ to be 0x40000. Coordinate any change */
-#define SQLITE_BloomFilter    0x00080000 /* Use a Bloom filter on searches */
-#define SQLITE_BloomPulldown  0x00100000 /* Run Bloom filters early */
+   /* TH3 expects this value  ^^^^^^^^^^ */
+#define SQLITE_BloomFilter    0x00080000 /* Use a Bloom filters */
+   /* TH3 expects this value  ^^^^^^^^^^ */
+                          /*  0x00100000 -- Available for reuse */
 #define SQLITE_BalancedMerge  0x00200000 /* Balance multi-way merges */
 #define SQLITE_ReleaseReg     0x00400000 /* Use OP_ReleaseReg for testing */
 #define SQLITE_FlttnUnionAll  0x00800000 /* Disable the UNION ALL flattener */
-   /* TH3 expects this value  ^^^^^^^^^^ See flatten04.test */
+   /* TH3 expects this value  ^^^^^^^^^^ */
 #define SQLITE_IndexedExpr    0x01000000 /* Pull exprs from index when able */
 #define SQLITE_Coroutines     0x02000000 /* Co-routines for subqueries */
 #define SQLITE_NullUnusedCols 0x04000000 /* NULL unused columns in subqueries */
@@ -1953,6 +1982,7 @@ struct sqlite3 {
 #define SQLITE_OrderBySubq    0x10000000 /* ORDER BY in subquery helps outer */
 #define SQLITE_StarQuery      0x20000000 /* Heurists for star queries */
 #define SQLITE_ExistsToJoin   0x40000000 /* The EXISTS-to-JOIN optimization */
+#define SQLITE_UnionLimit     0x80000000 /* Optimizations for UNION + LIMIT */
 #define SQLITE_AllOpts        0xffffffff /* All optimizations */
 
 /*
@@ -3883,6 +3913,13 @@ struct ParseCleanup {
 };
 
 /*
+** Number of 64-bit entried in the variable number bitmap cache (VNBMC).
+*/
+#ifndef SQLITE_VNBMC
+# define SQLITE_VNBMC 2
+#endif
+
+/*
 ** An SQL parser context.  A copy of this structure is passed through
 ** the parser and down into all the parser action routine in order to
 ** carry around information that is global to the entire parse.
@@ -4000,6 +4037,7 @@ struct Parse {
 
   Token sLastToken;       /* The last token parsed */
   ynVar nVar;               /* Number of '?' variables seen in the SQL so far */
+  u64 aVnbmc[SQLITE_VNBMC]; /* Varible Number Bitmap Cache */
   u8 iPkSortOrder;          /* ASC or DESC for INTEGER PRIMARY KEY */
   u8 explain;               /* True if the EXPLAIN flag is found on the query */
   u8 eParseMode;            /* PARSE_MODE_XXX constant */
@@ -5039,6 +5077,7 @@ void sqlite3ExprListSetName(Parse*,ExprList*,const Token*,int);
 void sqlite3ExprListSetSpan(Parse*,ExprList*,const char*,const char*);
 void sqlite3ExprListDelete(sqlite3*, ExprList*);
 void sqlite3ExprListDeleteGeneric(sqlite3*,void*);
+int sqlite3ExprCanReturnSubtype(Parse*,Expr*);
 u32 sqlite3ExprListFlags(const ExprList*);
 int sqlite3IndexHasDuplicateRootPage(Index*);
 int sqlite3Init(sqlite3*, char**);
@@ -5054,6 +5093,7 @@ void sqlite3CollapseDatabaseArray(sqlite3*);
 void sqlite3CommitInternalChanges(sqlite3*);
 void sqlite3ColumnSetExpr(Parse*,Table*,Column*,Expr*);
 Expr *sqlite3ColumnExpr(Table*,Column*);
+Expr *sqlite3ColumnExprAuth(Table*,Column*,Parse*);
 void sqlite3ColumnSetColl(sqlite3*,Column*,const char*zColl);
 const char *sqlite3ColumnColl(Column*);
 void sqlite3DeleteColumnNames(sqlite3*,Table*);
@@ -5263,10 +5303,11 @@ int sqlite3ExprIsConstant(Parse*,Expr*);
 int sqlite3ExprIsConstantOrFunction(Expr*, u8);
 int sqlite3ExprIsConstantOrGroupBy(Parse*, Expr*, ExprList*);
 int sqlite3ExprIsSingleTableConstraint(Expr*,const SrcList*,int,int);
+int sqlite3ExprListIsConstant(Parse *pParse, ExprList *pList, int bNoIs);
 #ifdef SQLITE_ENABLE_CURSOR_HINTS
 int sqlite3ExprContainsSubquery(Expr*);
 #endif
-int sqlite3ExprIsInteger(const Expr*, int*, Parse*);
+int sqlite3ExprIsInteger(const Expr*, int*, Parse*, int);
 int sqlite3ExprCanBeNull(const Expr*);
 int sqlite3ExprNeedsNoAffinityChange(const Expr*, char);
 int sqlite3ExprIsLikeOperator(const Expr*);
@@ -5418,6 +5459,7 @@ int sqlite3VListNameToNum(VList*,const char*,int);
 */
 int sqlite3PutVarint(unsigned char*, u64);
 u8 sqlite3GetVarint(const unsigned char *, u64 *);
+i64 sqlite3VarintValue(const unsigned char*);
 u8 sqlite3GetVarint32(const unsigned char *, u32 *);
 int sqlite3VarintLen(u64 v);
 
@@ -5433,9 +5475,6 @@ int sqlite3VarintLen(u64 v);
 #define putVarint32(A,B)  \
   (u8)(((u32)(B)<(u32)0x80)?(*(A)=(unsigned char)(B)),1:\
   sqlite3PutVarint((A),(B)))
-#define getVarint    sqlite3GetVarint
-#define putVarint    sqlite3PutVarint
-
 
 const char *sqlite3IndexAffinityStr(sqlite3*, Index*);
 char *sqlite3TableAffinityStr(sqlite3*,const Table*);
@@ -5906,6 +5945,10 @@ void sqlite3ExprSetHeightAndFlags(Parse *pParse, Expr *p);
 void sqlite3ExprSetErrorOffset(Expr*,int);
 
 u32 sqlite3Get4byte(const u8*);
+SQLITE_OPT_INLINE u64 sqlite3Get8byte(const u8*);
+#if SQLITE_BYTEORDER!=4321
+SQLITE_OPT_INLINE u64 sqlite3BSwap64(u64);
+#endif
 void sqlite3Put4byte(u8*, u32);
 
 #ifdef SQLITE_ENABLE_UNLOCK_NOTIFY

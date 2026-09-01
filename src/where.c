@@ -1251,9 +1251,7 @@ end_auto_index_create:
 ** for pLevel.
 **
 ** If there are inner loops within pLevel that have the WHERE_BLOOMFILTER
-** flag set, initialize a Bloomfilter for them as well.  Except don't do
-** this recursive initialization if the SQLITE_BloomPulldown optimization has
-** been turned off.
+** flag set, initialize a Bloomfilter for them as well.
 **
 ** When the Bloom filter is initialized, the WHERE_BLOOMFILTER flag is cleared
 ** from the loop, but the regFilter value is set to a register that implements
@@ -1362,7 +1360,6 @@ static SQLITE_NOINLINE void sqlite3ConstructBloomFilter(
     VdbeCoverage(v);
     sqlite3VdbeJumpHere(v, addrTop);
     pLoop->wsFlags &= ~WHERE_BLOOMFILTER;
-    if( OptimizationDisabled(pParse->db, SQLITE_BloomPulldown) ) break;
     while( ++iLevel < pWInfo->nLevel ){
       const SrcItem *pTabItem;
       pLevel = &pWInfo->a[iLevel];
@@ -3042,6 +3039,13 @@ static void whereLoopOutputAdjust(
   int i, j;
   LogEst iReduce = 0;    /* pLoop->nOut should not exceed nRow-iReduce */
 
+  /* Skip all this if the FROM clause of the query is a single table and
+  ** there is no ORDER BY. In this case it doesn't matter how accurate
+  ** the WhereLoop.nOut values are.  */
+  if( pWC->pWInfo->pTabList->nSrc<=1 && pWC->pWInfo->pOrderBy==0 ){
+    return;
+  }
+
   assert( (pLoop->wsFlags & WHERE_AUTO_INDEX)==0 );
   for(i=pWC->nBase, pTerm=pWC->a; i>0; i--, pTerm++){
     assert( pTerm!=0 );
@@ -3089,7 +3093,7 @@ static void whereLoopOutputAdjust(
           Parse *pParse = pWC->pWInfo->pParse;
           int k = 0;
           testcase( pOpExpr->op==TK_IS );
-          if( sqlite3ExprIsInteger(pRight, &k, pParse) && k>=(-1) && k<=1 ){
+          if( sqlite3ExprIsInteger(pRight, &k, pParse, 1) && k>=(-1) && k<=1 ){
             k = 10;
           }else{
             k = 20;
@@ -5280,12 +5284,20 @@ static i8 wherePathSatisfiesOrderBy(
       if( (pTerm->eOperator&(WO_EQ|WO_IS))!=0 && pOBExpr->iColumn>=0 ){
         Parse *pParse = pWInfo->pParse;
         CollSeq *pColl1 = sqlite3ExprNNCollSeq(pParse, pOrderBy->a[i].pExpr);
-        CollSeq *pColl2 = sqlite3ExprCompareCollSeq(pParse, pTerm->pExpr);
+        const Expr *pCExpr = pTerm->pExpr;
+        CollSeq *pColl2 = sqlite3ExprCompareCollSeq(pParse, pCExpr);
+        char affRight;
         assert( pColl1 );
         if( pColl2==0 || sqlite3StrICmp(pColl1->zName, pColl2->zName) ){
           continue;
         }
-        testcase( pTerm->pExpr->op==TK_IS );
+        affRight = sqlite3ExprAffinity(pCExpr->pRight);
+        /* Left operand must be a column, hence always has affinity */
+        assert( sqlite3ExprAffinity(pCExpr->pLeft)!=0 );
+        if( affRight!=0 && affRight!=sqlite3ExprAffinity(pCExpr->pLeft) ){
+          continue;  /* An affinity conversion would be required */
+        }
+        testcase( pCExpr->op==TK_IS );
       }
       obSat |= MASKBIT(i);
     }
@@ -7331,8 +7343,8 @@ WhereInfo *sqlite3WhereBegin(
         sqlite3VdbeChangeP5(v, bFordelete);
       }
 #ifdef SQLITE_ENABLE_COLUMN_USED_MASK
-      sqlite3VdbeAddOp4Dup8(v, OP_ColumnsUsed, pTabItem->iCursor, 0, 0,
-                            (const u8*)&pTabItem->colUsed, P4_INT64);
+      sqlite3VdbeAddOp3(v, OP_ColumnsUsed, pTabItem->iCursor,
+                    LOWER32(pTabItem->colUsed), UPPER32(pTabItem->colUsed));
 #endif
       if( ii>=2
        && (pTabItem[0].fg.jointype & (JT_LTORJ|JT_LEFT))==0 
@@ -7409,8 +7421,8 @@ WhereInfo *sqlite3WhereBegin(
             if( (pTabItem->colUsed & MASKBIT(jj))==0 ) continue;
             colUsed |= ((u64)1)<<(ii<63 ? ii : 63);
           }
-          sqlite3VdbeAddOp4Dup8(v, OP_ColumnsUsed, iIndexCur, 0, 0,
-                                (u8*)&colUsed, P4_INT64);
+          sqlite3VdbeAddOp3(v, OP_ColumnsUsed, iIndexCur,
+                            LOWER32(colUsed),UPPER32(colUsed));
         }
 #endif /* SQLITE_ENABLE_COLUMN_USED_MASK */
 #ifdef SQLITE_ENABLE_CURSOR_HINTS
@@ -7636,17 +7648,17 @@ void sqlite3WhereEnd(WhereInfo *pWInfo){
       VdbeCoverageIf(v, pLevel->op==OP_Next);
       VdbeCoverageIf(v, pLevel->op==OP_Prev);
       VdbeCoverageIf(v, pLevel->op==OP_VNext);
-      if( pLevel->regBignull ){
-        sqlite3VdbeResolveLabel(v, pLevel->addrBignull);
-        sqlite3VdbeAddOp2(v, OP_DecrJumpZero, pLevel->regBignull, pLevel->p2-1);
-        VdbeCoverage(v);
-      }
 #ifndef SQLITE_DISABLE_SKIPAHEAD_DISTINCT
       if( addrSeek ){
         sqlite3VdbeJumpHere(v, addrSeek);
         addrSeek = 0;
       }
 #endif
+      if( pLevel->regBignull ){
+        sqlite3VdbeResolveLabel(v, pLevel->addrBignull);
+        sqlite3VdbeAddOp2(v, OP_DecrJumpZero, pLevel->regBignull, pLevel->p2-1);
+        VdbeCoverage(v);
+      }
     }
     if( (pLoop->wsFlags & WHERE_IN_ABLE)!=0 && pLevel->u.in.nIn>0 ){
       struct InLoop *pIn;

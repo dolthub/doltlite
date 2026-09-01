@@ -215,7 +215,7 @@ static void setPragmaResultColumnNames(
 ** Generate code to return a single integer value.
 */
 static void returnSingleInt(Vdbe *v, i64 value){
-  sqlite3VdbeAddOp4Dup8(v, OP_Int64, 0, 1, 0, (const u8*)&value, P4_INT64);
+  sqlite3VdbeAddInt64(v, 1, value);
   sqlite3VdbeAddOp2(v, OP_ResultRow, 1, 1);
 }
 
@@ -1763,10 +1763,9 @@ void sqlite3Pragma(
       for(cnt=0, x=sqliteHashFirst(pTbls); x; x=sqliteHashNext(x)){
         Table *pTab = sqliteHashData(x);  /* Current table */
         Index *pIdx;                      /* An index on pTab */
-        int nIdx;                         /* Number of indexes on pTab */
         if( tableSkipIntegrityCheck(pTab,pObjTab) ) continue;
         if( HasRowid(pTab) ) cnt++;
-        for(nIdx=0, pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext, nIdx++){ cnt++; }
+        for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){ cnt++; }
       }
       if( cnt==0 ) continue;
       if( pObjTab ) cnt++;
@@ -1951,8 +1950,8 @@ void sqlite3Pragma(
           }else{
             if( pCol->iDflt ){
               sqlite3_value *pDfltValue = 0;
-              sqlite3ValueFromExpr(db, sqlite3ColumnExpr(pTab,pCol), ENC(db),
-                                   pCol->affinity, &pDfltValue);
+              sqlite3ValueFromExpr(db, sqlite3ColumnExprAuth(pTab,pCol,pParse),
+                                   ENC(db), pCol->affinity, &pDfltValue);
               if( pDfltValue ){
                 p4 = sqlite3_value_type(pDfltValue);
                 sqlite3ValueFree(pDfltValue);

@@ -617,23 +617,11 @@ void sqlite3MultiValuesEnd(Parse *pParse, Select *pVal){
 
 /*
 ** Return true if all expressions in the expression-list passed as the
-** only argument are constant.
-*/
-static int exprListIsConstant(Parse *pParse, ExprList *pRow){
-  int ii;
-  for(ii=0; ii<pRow->nExpr; ii++){
-    if( 0==sqlite3ExprIsConstant(pParse, pRow->a[ii].pExpr) ) return 0;
-  }
-  return 1;
-}
-
-/*
-** Return true if all expressions in the expression-list passed as the
 ** only argument are both constant and have no affinity.
 */
 static int exprListIsNoAffinity(Parse *pParse, ExprList *pRow){
   int ii;
-  if( exprListIsConstant(pParse,pRow)==0 ) return 0;
+  if( sqlite3ExprListIsConstant(pParse, pRow, 0)==0 ) return 0;
   for(ii=0; ii<pRow->nExpr; ii++){
     Expr *pExpr = pRow->a[ii].pExpr;
     assert( pExpr->op!=TK_RAISE );
@@ -699,7 +687,7 @@ Select *sqlite3MultiValues(Parse *pParse, Select *pLeft, ExprList *pRow){
 
   if( pParse->bHasWith                   /* condition (a) above */
    || pParse->db->init.busy              /* condition (b) above */
-   || exprListIsConstant(pParse,pRow)==0 /* condition (c) above */
+   || sqlite3ExprListIsConstant(pParse, pRow, 1)==0   /* condition (c) above */
    || (pLeft->pSrc->nSrc==0 &&
        exprListIsNoAffinity(pParse,pLeft->pEList)==0) /* condition (d) above */
    || IN_SPECIAL_PARSE
@@ -1412,7 +1400,7 @@ void sqlite3Insert(
         /* Hidden columns that are not explicitly named in the INSERT
         ** get their default value */
         sqlite3ExprCodeFactorable(pParse,
-            sqlite3ColumnExpr(pTab, &pTab->aCol[i]),
+            sqlite3ColumnExprAuth(pTab, &pTab->aCol[i], pParse),
             iRegStore);
         continue;
       }
@@ -1424,7 +1412,7 @@ void sqlite3Insert(
         /* A column not named in the insert column list gets its
         ** default value */
         sqlite3ExprCodeFactorable(pParse,
-            sqlite3ColumnExpr(pTab, &pTab->aCol[i]),
+            sqlite3ColumnExprAuth(pTab, &pTab->aCol[i], pParse),
             iRegStore);
         continue;
       }
@@ -1432,7 +1420,7 @@ void sqlite3Insert(
     }else if( nColumn==0 ){
       /* This is INSERT INTO ... DEFAULT VALUES.  Load the default value. */
       sqlite3ExprCodeFactorable(pParse,
-          sqlite3ColumnExpr(pTab, &pTab->aCol[i]),
+          sqlite3ColumnExprAuth(pTab, &pTab->aCol[i], pParse),
           iRegStore);
       continue;
     }else{
@@ -2042,7 +2030,7 @@ void sqlite3GenerateConstraintChecks(
             assert( (pCol->colFlags & COLFLAG_GENERATED)==0 );
             nSeenReplace++;
             sqlite3ExprCodeCopy(pParse,
-               sqlite3ColumnExpr(pTab, pCol), iReg);
+               sqlite3ColumnExprAuth(pTab, pCol, pParse), iReg);
             sqlite3VdbeJumpHere(v, addr1);
             break;
           }
@@ -2698,7 +2686,7 @@ void sqlite3GenerateConstraintChecks(
         ** Hence, make a complete copy of the opcode, rather than using
         ** a pointer to the opcode. */
         x = *sqlite3VdbeGetOp(v, addrConflictCk);
-        if( x.opcode!=OP_IdxRowid ){
+        if( x.opcode!=OP_IdxRowid || isUpdate ){
           int p2;      /* New P2 value for copied conflict check opcode */
           const char *zP4;
           if( sqlite3OpcodeProperty[x.opcode]&OPFLG_JUMP ){
