@@ -13,7 +13,7 @@ documented way to be handed a different one. Where that hook exists, adopting
 DoltLite is a configuration change rather than a port.
 
 If your language has a
-[packaged binding](../README.md#bindings), use it — it bundles the engine and
+[packaged binding](../../README.md#bindings), use it — it bundles the engine and
 needs none of this. This document is for everything else.
 
 ## What you need
@@ -54,7 +54,7 @@ cargo build
 ```
 
 Do not enable its `bundled` feature — that compiles its own copy of SQLite and
-ignores yours. There is also a [`doltlite` crate](../packaging/rust) that
+ignores yours. There is also a [`doltlite` crate](../../packaging/rust) that
 vendors the engine if you would rather not manage the library.
 
 ## Go (mattn/go-sqlite3)
@@ -101,7 +101,7 @@ carry the native library.
 
 ## .NET
 
-Covered by the [`DoltHub.Doltlite`](../packaging/nuget) package: it plugs the
+Covered by the [`DoltHub.Doltlite`](../../packaging/nuget) package: it plugs the
 engine into SQLitePCLRaw, under `Microsoft.Data.Sqlite.Core`, EF Core, and
 Dapper. Use `Microsoft.Data.Sqlite.Core` rather than `Microsoft.Data.Sqlite`,
 which pins its own bundled engine.
@@ -109,7 +109,7 @@ which pins its own bundled engine.
 ## Python, PHP, Node, Ruby
 
 All have packaged bindings — see the
-[bindings table](../README.md#bindings). Python additionally works with the
+[bindings table](../../README.md#bindings). Python additionally works with the
 stdlib `sqlite3` module when the interpreter links a shared `libsqlite3`; the
 [`doltlite`](https://github.com/dolthub/doltlite-python) package handles that
 for you.
@@ -140,7 +140,7 @@ this work?" in a few seconds before committing to a real integration.
 ## What changes, and what does not
 
 The SQL surface, the C API, and your queries stay the same, with the
-[storage-engine exceptions](../README.md#sqlite-compatibility) — those are
+[storage-engine exceptions](../../README.md#sqlite-compatibility) — those are
 about page-level and journaling APIs, not about SQL. What you gain is that
 every write can be committed, branched, diffed, and merged.
 
