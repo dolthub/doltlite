@@ -132,11 +132,13 @@ void csStampWalCheckpoint(const ChunkStore *cs, u8 *aManifest){
 
 static i64 csWalCheckpointThreshold(void){
   i64 n = 64*1024*1024;
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
   const char *z = getenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD");
   if( z && z[0] ){
     i64 v = (i64)strtoll(z, 0, 10);
     if( v>0 ) n = v;
   }
+#endif
   return n;
 }
 
