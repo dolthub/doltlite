@@ -643,9 +643,14 @@ SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_clone('file:///path/to/source.doltlite');
 SELECT dolt_fetch('origin', 'main');
-SELECT dolt_pull('origin', 'main');   -- fetch + fast-forward
+SELECT dolt_pull('origin', 'main');   -- fetch, then fast-forward or merge
 SELECT * FROM dolt_remotes;
 ```
+
+`dolt_pull` fetches, then fast-forwards if the local branch is an ancestor
+of the remote tip. If the current branch has diverged, it three-way merges
+like `dolt_merge`. A non-current branch that is not a fast-forward is
+refused.
 
 ##### HTTP Remotes
 

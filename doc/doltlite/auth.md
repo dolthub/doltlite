@@ -23,9 +23,30 @@ The audience normally equals the remote host. A
 `doltliteremoteapi.<suffix>` host uses `doltremoteapi.<suffix>` to match
 DoltHub's existing audience. `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE` overrides both.
 
-`doltlite-remotesrv --auth-keys` requires `--audience`. Verification accepts
-either a string `aud` or a Dolt-shaped one-element (or multi-element) array
-and rejects a missing audience rather than treating it as "any".
+DoltLite **mints** those claims, including `iat` and `exp`. Clients attach
+the JWT only on HTTPS remotes; plain `http://` requests never send
+`Authorization`.
+
+## What `doltlite-remotesrv` verifies
+
+`--auth-keys` requires `--audience`. Verification accepts either a string
+`aud` or a Dolt-shaped one-element (or multi-element) array and rejects a
+missing audience rather than treating it as "any".
+
+The remotesrv verifier checks:
+
+- header `alg` is `EdDSA` and `dolt_token_version` is `2023.01`
+- `kid` is present and the matching public JWK is in `--auth-keys`
+- Ed25519 signature over the JWT signing input
+- `iss`, `sub`, and `aud` as above
+- `exp` is present and strictly in the future (`now >= exp` is rejected)
+
+It does not check `iat` or `nbf`, and it does not apply a clock-skew
+window other than the `exp` comparison.
+
+The `Authorization` scheme must be the six characters `Bearer ` (capital
+B, one space). `bearer` is rejected. Extra spaces after `Bearer ` are
+allowed.
 
 ## Credential interface
 

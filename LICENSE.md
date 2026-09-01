@@ -56,8 +56,8 @@ public domain.
 >   *   May you find forgiveness for yourself and forgive others.
 >   *   May you share freely, never taking more than you give.
 
-Almost every file you find in this source repository will be
-public domain.  But there are a small number of exceptions:
+SQLite's own sources in this repository are public domain. DoltLite
+code and the vendored libraries below are not. Other exceptions:
 
 Non-Public-Domain Code Included With This Source Repository AS A Convenience
 ----------------------------------------------------------------------------
@@ -68,18 +68,12 @@ words, there are some non-public-domain files used to implement:
 
 > ./configure && make
 
-In all cases, the non-public-domain files included with this
-repository have generous BSD-style licenses.  So anyone is free to
-use any of the code in this source repository for any purpose, though
-attribution may be required to reuse or republish the configure and
-build scripts.  None of the non-public-domain code ever actually reaches
-the build products, such as "sqlite3.c", however, so no attribution is
-required to use SQLite itself.  The non-public-domain code consists of
-scripts used to help compile SQLite.  The non-public-domain code is
-technically not part of SQLite.  The non-public-domain code is
-included in this repository as a convenience to developers, so that those
-who want to build SQLite do not need to go download a bunch of
-third-party build scripts in order to compile SQLite.
+SQLite's configure/build scripts (autosetup, legacy autoconf) have
+BSD-style licenses and do not reach the DoltLite build products. They
+are included as a convenience so a source checkout can `./configure &&
+make` without fetching third-party build tools. Other non-public-domain
+code in this tree — DoltLite itself (Apache-2.0) and the vendored
+libraries below — **does** reach `libdoltlite` and the CLI.
 
 Non-public-domain code included in this respository includes:
 
@@ -103,11 +97,26 @@ Non-public-domain code included in this respository includes:
      and `ext/blake3/README.md` for the full license texts and a
      description of DoltLite-specific modifications.
 
-The following unix shell command can be run from the top-level
-of this source repository in order to remove all non-public-domain
-code:
+  *  Vendored [Mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/)
+     under `ext/mbedtls/`, used for HTTPS remotes and `doltlite-remotesrv`
+     TLS. Dual-licensed Apache-2.0 OR GPL-2.0-or-later; see
+     `ext/mbedtls/LICENSE`. This code is linked into builds that include
+     remotes.
+
+  *  Vendored Ed25519 (Orson Peters) under `ext/ed25519/`, used for JWT
+     signing and verification. zlib-style license; see
+     `ext/ed25519/LICENSE`. This code is linked into credential and
+     remotesrv builds.
+
+Autosetup and the legacy autoconf scripts do not reach `libdoltlite` or
+the CLI. BLAKE3, Mbed TLS, and Ed25519 do: they are in the DoltLite
+build products, not "build scripts only."
+
+The following unix shell command removes the configure/build-script
+exceptions:
 
 > rm -rf configure autosetup autoconf
 
-If you unpack this source repository and then run the command above, what
-is left will be 100% public domain.
+That does **not** leave a 100% public-domain tree. What remains is
+public-domain SQLite, Apache-2.0 DoltLite code, and the vendored
+libraries listed above.
