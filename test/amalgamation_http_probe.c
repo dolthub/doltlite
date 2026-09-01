@@ -39,15 +39,17 @@ int main(int argc, char **argv){
   char *zSql;
   const char *zSrc;
   const char *zClone;
+  const char *zLazy = 0;
   const char *zUrl;
 
-  if( argc!=4 ){
-    fprintf(stderr, "usage: %s SRC_DB CLONE_DB HTTP_URL\n", argv[0]);
+  if( argc!=4 && argc!=5 ){
+    fprintf(stderr, "usage: %s SRC_DB CLONE_DB HTTP_URL [LAZY_DB]\n", argv[0]);
     return 1;
   }
   zSrc = argv[1];
   zClone = argv[2];
   zUrl = argv[3];
+  if( argc==5 ) zLazy = argv[4];
 
   if( doltliteInstallAutoExt()!=SQLITE_OK ){
     fprintf(stderr, "doltliteInstallAutoExt failed\n");
@@ -81,6 +83,21 @@ int main(int argc, char **argv){
   }
   sqlite3_free(zSql);
   sqlite3_close(db);
+
+  if( zLazy ){
+    if( sqlite3_open(zLazy, &db)!=SQLITE_OK ){
+      fprintf(stderr, "%s\n", db ? sqlite3_errmsg(db) : "sqlite3_open failed");
+      return 1;
+    }
+    zSql = sqlite3_mprintf("SELECT dolt_clone('--lazy',%Q);", zUrl);
+    if( !zSql || exec_sql(db, zSql) ){
+      sqlite3_free(zSql);
+      sqlite3_close(db);
+      return 1;
+    }
+    sqlite3_free(zSql);
+    sqlite3_close(db);
+  }
 
   if( sqlite3_open(zClone, &db)!=SQLITE_OK ){
     fprintf(stderr, "%s\n", db ? sqlite3_errmsg(db) : "sqlite3_open failed");

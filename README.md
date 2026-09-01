@@ -137,8 +137,8 @@ an Emscripten-compatible socket transport or proxy; see
 [`examples/wa-sqlite-clone.mjs`](examples/wa-sqlite-clone.mjs) for a public
 clone request that exercises the client.
 
-`DOLTLITE_ENABLE_CHUNK_SOURCE=0` omits host-provided lazy chunk fetching. The
-feature is enabled by default.
+`DOLTLITE_ENABLE_CHUNK_SOURCE=0` omits host-provided and origin-backed lazy
+chunk fetching. The feature is enabled by default.
 
 ## Using as a C Library
 
@@ -653,10 +653,25 @@ Git-like push / fetch / pull / clone between databases.
 SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_clone('file:///path/to/source.doltlite');
+SELECT dolt_clone('--lazy', 'file:///path/to/source.doltlite');
 SELECT dolt_fetch('origin', 'main');
 SELECT dolt_pull('origin', 'main');   -- fetch, then fast-forward or merge
 SELECT * FROM dolt_remotes;
 ```
+
+A lazy clone installs refs and records `origin` without copying the reachable
+chunk graph. It enables origin-backed reads on its current connection. To
+reopen the clone in another process, opt in before the B-tree opens:
+
+```sh
+doltlite 'file:/path/to/lazy.db?lazy_origin=1'
+```
+
+Missing chunks are fetched and cached as queries need them. Fetch and
+fast-forward pull remain refs-only while the connection is origin-enabled. A
+divergent lazy pull is refused until the store is fully materialized.
+Opening without `lazy_origin=1` leaves cached chunks available, but an
+uncached miss fails with a hash-named error instead of contacting `origin`.
 
 `dolt_pull` fetches, then fast-forwards if the local branch is an ancestor
 of the remote tip. If the current branch has diverged, it three-way merges
@@ -671,6 +686,7 @@ Same ops as filesystem remotes; the URL includes the database name:
 SELECT dolt_remote('add', 'origin', 'http://myserver:8080/mydb.db');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_clone('http://myserver:8080/mydb.db');
+SELECT dolt_clone('--lazy', 'http://myserver:8080/mydb.db');
 ```
 
 ##### Remote Server (`doltlite-remotesrv`)

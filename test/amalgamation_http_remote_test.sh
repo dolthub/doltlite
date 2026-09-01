@@ -101,7 +101,8 @@ if [ -z "$port" ]; then
 fi
 
 DOLTLITE_CREDS_DIR="$tmp/creds" \
-  "$probe" "$tmp/src.db" "$tmp/clone.db" "http://127.0.0.1:$port/repo.db"
+  "$probe" "$tmp/src.db" "$tmp/clone.db" "http://127.0.0.1:$port/repo.db" \
+  "$tmp/lazy-off.db"
 
 offline_probe="$tmp/amalg_remotes_disabled_probe"
 case "$(uname -s)" in
@@ -127,7 +128,7 @@ esac
 "$cc_bin" -Wno-comment -DDOLTLITE_ENABLE_CHUNK_SOURCE=0 -I. \
   ../test/amalgamation_chunk_source_probe.c ./sqlite3.c \
   "${probe_libs[@]}" -o "$chunk_source_off_probe"
-"$chunk_source_off_probe"
+"$chunk_source_off_probe" "$tmp/lazy-off.db"
 
 if nm "$offline_probe" | grep -Eq \
     'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)|mbedtls_ssl_tls13'; then

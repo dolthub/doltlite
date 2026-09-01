@@ -488,12 +488,36 @@ static int createLazyFile(
   return rc;
 }
 
+static int createOriginLazyFile(const char *zPath, const char *zSource){
+  sqlite3 *db = 0;
+  char *zUrl = 0;
+  char *zSql = 0;
+  int rc;
+  removeStore(zPath);
+  rc = openDb(zPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, &db);
+  if( rc==SQLITE_OK ){
+    zUrl = sqlite3_mprintf("file://%s", zSource);
+    zSql = zUrl ? sqlite3_mprintf(
+        "SELECT dolt_clone('--lazy',%Q)", zUrl) : 0;
+    if( !zSql ) rc = SQLITE_NOMEM;
+  }
+  if( rc==SQLITE_OK ) rc = execSql(db, zSql);
+  sqlite3_free(zSql);
+  sqlite3_free(zUrl);
+  if( db ){
+    int crc = sqlite3_close(db);
+    if( rc==SQLITE_OK && crc!=SQLITE_OK ) rc = crc;
+  }
+  return rc;
+}
+
 static int collectMissingHashes(
   ChunkStore *pDest,
   const ChunkIndexEntry *aEntry,
   int nEntry,
   ProllyHash *aOut,
   int nWant,
+  int bIncludeSource,
   int *pnOut
 ){
   int rc = SQLITE_OK;
@@ -502,16 +526,21 @@ static int collectMissingHashes(
     int has = 0;
     rc = chunkStoreHas(pDest, &aEntry[i].hash, &has);
     if( rc!=SQLITE_OK ) return rc;
+    if( !has && bIncludeSource ){
+      rc = chunkStoreSourceHas(pDest, &aEntry[i].hash, &has);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     if( !has ) aOut[(*pnOut)++] = aEntry[i].hash;
   }
   return SQLITE_OK;
 }
 
-static int findMissingHashes(
+static int findMissingHashesImpl(
   sqlite3 *db,
   SourceCtx *pCtx,
   ProllyHash *aOut,
-  int nWant
+  int nWant,
+  int bIncludeSource
 ){
   Btree *pBtree = db->aDb[0].pBt;
   ChunkStore *pDest;
@@ -529,22 +558,40 @@ static int findMissingHashes(
   if( rc==SQLITE_OK ){
     chunkIndexGetEntries(&pCtx->store.index, &nEntry, &aEntry);
     rc = collectMissingHashes(
-        pDest, aEntry, nEntry, aOut, nWant, &nOut);
+        pDest, aEntry, nEntry, aOut, nWant, bIncludeSource, &nOut);
   }
   if( rc==SQLITE_OK && nOut<nWant ){
     chunkStagingGetRecent(&pCtx->store.staging, &nEntry, &aEntry);
     rc = collectMissingHashes(
-        pDest, aEntry, nEntry, aOut, nWant, &nOut);
+        pDest, aEntry, nEntry, aOut, nWant, bIncludeSource, &nOut);
   }
   if( rc==SQLITE_OK && nOut<nWant ){
     chunkStagingGetPending(&pCtx->store.staging, &nEntry, &aEntry);
     rc = collectMissingHashes(
-        pDest, aEntry, nEntry, aOut, nWant, &nOut);
+        pDest, aEntry, nEntry, aOut, nWant, bIncludeSource, &nOut);
   }
   sqlite3BtreeLeave(pBtree);
   sqlite3_mutex_leave(db->mutex);
   if( rc==SQLITE_OK && nOut<nWant ) rc = SQLITE_NOTFOUND;
   return rc;
+}
+
+static int findMissingHashes(
+  sqlite3 *db,
+  SourceCtx *pCtx,
+  ProllyHash *aOut,
+  int nWant
+){
+  return findMissingHashesImpl(db, pCtx, aOut, nWant, 0);
+}
+
+static int findUncachedHashes(
+  sqlite3 *db,
+  SourceCtx *pCtx,
+  ProllyHash *aOut,
+  int nWant
+){
+  return findMissingHashesImpl(db, pCtx, aOut, nWant, 1);
 }
 
 static int getDbChunk(
@@ -615,6 +662,124 @@ static void hashHex(const unsigned char *aHash, char zOut[41]){
     zOut[i*2+1] = zHex[aHash[i] & 0x0f];
   }
   zOut[40] = 0;
+}
+
+static void testOriginPrecedenceAndReuse(
+  const char *zPath,
+  const char *zSource,
+  const char *zSourceAway,
+  SourceCtx *pCtx,
+  doltlite_chunk_source *pApi
+){
+  sqlite3 *db = 0;
+  ProllyHash aMissing[3];
+  unsigned char *pData = 0;
+  int nData = 0;
+  int nHostRequest = 0;
+  int sourceMoved = 0;
+  int sourceErrRc = SQLITE_OK;
+  sqlite3_int64 value = 0;
+  char zHash[41];
+  char *zErr = 0;
+  char *zUri = 0;
+  int rc;
+
+  removeStore(zPath);
+  removeStore(zSourceAway);
+  rc = createOriginLazyFile(zPath, zSource);
+  check("create origin-backed lazy clone", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto origin_done;
+  zUri = sqlite3_mprintf(
+      "file:%s?lazy_origin=1", zPath);
+  rc = zUri ? openDb(
+      zUri, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &db) : SQLITE_NOMEM;
+  sqlite3_free(zUri);
+  zUri = 0;
+  check("reopen lazy clone with origin chunk source URI", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto origin_done;
+
+  sourceResetCounters(pCtx);
+  pCtx->mode = SOURCE_NORMAL;
+  rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("host source overrides built-in source", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto origin_done;
+  sourceResetCounters(pCtx);
+  rc = findUncachedHashes(db, pCtx, aMissing, 3);
+  check("find distinct uncached chunks for source precedence", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto origin_done;
+
+  rc = rename(zSource, zSourceAway);
+  check("make built-in origin unavailable under host override", rc==0);
+  if( rc!=0 ) goto origin_done;
+  sourceMoved = 1;
+  rc = getDbChunk(db, &aMissing[0], &pData, &nData);
+  check("host callback serves miss while built-in is offline",
+        rc==SQLITE_OK && pData!=0 && nData>0 && pCtx->nRequest>0);
+  sqlite3_free(pData);
+  pData = 0;
+  nData = 0;
+  nHostRequest = pCtx->nRequest;
+  rc = rename(zSourceAway, zSource);
+  check("restore built-in origin after host override", rc==0);
+  if( rc!=0 ) goto origin_done;
+  sourceMoved = 0;
+
+  rc = doltlite_set_chunk_source(db, "main", 0);
+  check("clear host source falls back to built-in", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto origin_done;
+  rc = getDbChunk(db, &aMissing[1], &pData, &nData);
+  check("built-in source serves distinct miss after host clear",
+        rc==SQLITE_OK && pData!=0 && nData>0);
+  check("built-in fallback does not call cleared host",
+        pCtx->nRequest==nHostRequest);
+  sqlite3_free(pData);
+  pData = 0;
+  nData = 0;
+
+  rc = rename(zSource, zSourceAway);
+  check("make built-in origin unavailable", rc==0);
+  if( rc!=0 ) goto origin_done;
+  sourceMoved = 1;
+  rc = getDbChunk(db, &aMissing[2], &pData, &nData);
+  check("offline built-in miss returns chunk-source IOERR",
+        rc==SQLITE_IOERR_CHUNK_SOURCE);
+  sqlite3_free(pData);
+  pData = 0;
+  nData = 0;
+  zErr = doltliteTakeChunkSourceError(db, &sourceErrRc);
+  hashHex(aMissing[2].data, zHash);
+  check("offline built-in IOERR names requested hash",
+        sourceErrRc==SQLITE_IOERR_CHUNK_SOURCE
+        && zErr && strstr(zErr, zHash)!=0);
+  sqlite3_free(zErr);
+  zErr = 0;
+
+  rc = rename(zSourceAway, zSource);
+  check("restore built-in origin after IOERR", rc==0);
+  if( rc!=0 ) goto origin_done;
+  sourceMoved = 0;
+  rc = queryInt64(db, "SELECT 42", &value);
+  check("connection remains usable after built-in IOERR",
+        rc==SQLITE_OK && value==42);
+  rc = getDbChunk(db, &aMissing[2], &pData, &nData);
+  check("same connection retries built-in miss after origin recovers",
+        rc==SQLITE_OK && pData!=0 && nData>0);
+  check("recovered built-in source still bypasses cleared host",
+        pCtx->nRequest==nHostRequest);
+
+origin_done:
+  sqlite3_free(pData);
+  sqlite3_free(zErr);
+  sqlite3_free(zUri);
+  if( sourceMoved ){
+    rc = rename(zSourceAway, zSource);
+    check("restore origin during precedence cleanup", rc==0);
+  }
+  if( db ){
+    (void)doltlite_set_chunk_source(db, "main", 0);
+    sqlite3_close(db);
+  }
+  pCtx->mode = SOURCE_NORMAL;
 }
 
 static void runOracleComparisons(sqlite3 *a, sqlite3 *b){
@@ -2251,6 +2416,8 @@ int main(void){
   char zScalarIoerr[192];
   char zPrepareIoerr[192];
   char zIntegrity[192];
+  char zOriginLazy[192];
+  char zOriginAway[208];
   int rc;
 
   sqlite3_initialize();
@@ -2279,6 +2446,8 @@ int main(void){
   snprintf(zPrepareIoerr, sizeof(zPrepareIoerr),
            "%s_prepare_ioerr.db", zPrefix);
   snprintf(zIntegrity, sizeof(zIntegrity), "%s_integrity.db", zPrefix);
+  snprintf(zOriginLazy, sizeof(zOriginLazy), "%s_origin_lazy.db", zPrefix);
+  snprintf(zOriginAway, sizeof(zOriginAway), "%s_source.db.offline", zPrefix);
 
   printf("DoltLite host chunk source test\n");
   printf("===============================\n");
@@ -2301,6 +2470,9 @@ int main(void){
   if( !pNewRefs ) goto test_done;
   rc = queryInt64(sourceDb, "SELECT count(*) FROM items", &expectedRows);
   check("count advanced source rows", rc==SQLITE_OK && expectedRows>BASE_ROWS);
+
+  testOriginPrecedenceAndReuse(
+      zOriginLazy, zSource, zOriginAway, &source, &api);
 
   sourceResetCounters(&source);
   source.mode = SOURCE_NORMAL;
@@ -2360,6 +2532,8 @@ test_done:
   removeStore(zScalarIoerr);
   removeStore(zPrepareIoerr);
   removeStore(zIntegrity);
+  removeStore(zOriginLazy);
+  removeStore(zOriginAway);
   sqlite3_shutdown();
   printf("\n%d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

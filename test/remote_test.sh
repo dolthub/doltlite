@@ -778,6 +778,142 @@ check "dirty row stays in the source working set" "0
 dirty-uncommitted
 1" "$result"
 
+echo "=== Lazy file clone faults data in and survives reopen ==="
+"$DB" "$TMPDIR/lazy_origin.db" <<'ENDSQL' > /dev/null
+CREATE TABLE lazy_rows(id INTEGER PRIMARY KEY, v TEXT, payload BLOB);
+CREATE TABLE lazy_cold(id INTEGER PRIMARY KEY, payload BLOB);
+WITH RECURSIVE seq(i) AS (
+  VALUES(1) UNION ALL SELECT i + 1 FROM seq WHERE i < 800
+)
+INSERT INTO lazy_rows SELECT i, printf('row-%04d', i), randomblob(2048) FROM seq;
+WITH RECURSIVE seq(i) AS (
+  VALUES(1) UNION ALL SELECT i + 1 FROM seq WHERE i < 100
+)
+INSERT INTO lazy_cold SELECT i, randomblob(4096) FROM seq;
+SELECT dolt_commit('-Am','lazy base');
+UPDATE lazy_rows SET v='changed' WHERE id=1;
+INSERT INTO lazy_rows VALUES(801,'added',randomblob(2048));
+SELECT dolt_commit('-am','lazy update');
+SELECT dolt_branch('feature');
+.quit
+ENDSQL
+
+lazy_parity_sql="
+SELECT count(*) || '|' || sum(id) || '|' || sum(length(payload)) FROM lazy_rows;
+SELECT count(*) || '|' || max(message='lazy update') FROM dolt_log;
+SELECT group_concat(name || ':' || dirty, ',') FROM (SELECT name, dirty FROM dolt_branches ORDER BY name);
+SELECT rows_added || '|' || rows_deleted || '|' || rows_modified || '|' || old_row_count || '|' || new_row_count FROM dolt_diff_stat('HEAD~1','HEAD','lazy_rows');
+SELECT count(*) || '|' || sum(id) FROM dolt_at_lazy_rows('HEAD~1');
+SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM lazy_rows WHERE id IN (1,400,801) ORDER BY id);
+"
+lazy_expected=$("$DB" "$TMPDIR/lazy_origin.db" "$lazy_parity_sql")
+lazy_origin_size=$(file_size "$TMPDIR/lazy_origin.db")
+
+result=$("$DB" "$TMPDIR/lazy_bad_option.db" "SELECT dolt_clone('--unknown','$R/lazy_origin.db');" 2>&1)
+check_match "lazy clone rejects unknown option" "unknown option" "$result"
+
+result=$("$DB" "$TMPDIR/lazy_extra_arg.db" "SELECT dolt_clone('--lazy','$R/lazy_origin.db','extra');" 2>&1)
+check_match "lazy clone rejects an extra URL" "too many arguments" "$result"
+
+lazy_bootstrap_uri="file:$TMPDIR/lazy_bootstrap.db?lazy_origin=1"
+result=$("$DB" "$lazy_bootstrap_uri" \
+  "SELECT dolt_clone('--lazy','$R/lazy_origin.db'); SELECT count(*) || '|' || sum(id) FROM lazy_rows;")
+check "lazy URI bootstraps and queries in the clone connection" "0
+801|321201" "$result"
+
+lazy_clone_uri="file:$TMPDIR/lazy_clone.db?lazy_origin=1"
+result=$("$DB" "$lazy_clone_uri" "SELECT dolt_clone('--lazy','$R/lazy_origin.db');")
+check "lazy clone succeeds" "0" "$result"
+
+lazy_size_before=$(file_size "$TMPDIR/lazy_clone.db")
+if [ "$lazy_size_before" -lt "$lazy_origin_size" ] &&
+   [ $((lazy_size_before * 4)) -lt "$lazy_origin_size" ]; then
+  lazy_refs_sized=1
+else
+  lazy_refs_sized=0
+fi
+check "lazy clone is refs-sized before use" "1" "$lazy_refs_sized"
+
+lazy_actual=$("$DB" "$lazy_clone_uri" "$lazy_parity_sql")
+check "lazy clone matches rows, log, branches, diff stat, historical rows, and full scan" "$lazy_expected" "$lazy_actual"
+
+lazy_size_after_rows=$(file_size "$TMPDIR/lazy_clone.db")
+if [ "$lazy_size_after_rows" -gt "$lazy_size_before" ]; then
+  lazy_rows_grew=1
+else
+  lazy_rows_grew=0
+fi
+check "lazy clone grows when rows are read" "1" "$lazy_rows_grew"
+
+lazy_cold_expected=$("$DB" "$TMPDIR/lazy_origin.db" \
+  "SELECT count(*) || '|' || sum(id) || '|' || sum(length(payload)) FROM lazy_cold;")
+lazy_cold_actual=$("$DB" "$lazy_clone_uri" \
+  "SELECT count(*) || '|' || sum(id) || '|' || sum(length(payload)) FROM lazy_cold;")
+check "fresh-process reopen faults in an unread table" "$lazy_cold_expected" "$lazy_cold_actual"
+
+lazy_size_after_reopen=$(file_size "$TMPDIR/lazy_clone.db")
+if [ "$lazy_size_after_reopen" -gt "$lazy_size_after_rows" ]; then
+  lazy_reopen_grew=1
+else
+  lazy_reopen_grew=0
+fi
+check "reopened lazy clone persists newly fetched chunks" "1" "$lazy_reopen_grew"
+
+"$DB" "$TMPDIR/lazy_origin.db" <<'ENDSQL' > /dev/null
+INSERT INTO lazy_rows VALUES(802,'after-fetch',randomblob(1048576));
+SELECT dolt_commit('-am','lazy refresh');
+.quit
+ENDSQL
+lazy_origin_head=$("$DB" "$TMPDIR/lazy_origin.db" "SELECT hash FROM dolt_branches WHERE name='main';")
+lazy_size_before_fetch=$(file_size "$TMPDIR/lazy_clone.db")
+result=$("$DB" "$lazy_clone_uri" "SELECT dolt_fetch('origin');")
+check "fetch on a lazy clone succeeds" "0" "$result"
+lazy_size_after_fetch=$(file_size "$TMPDIR/lazy_clone.db")
+lazy_tracking_head=$("$DB" "$lazy_clone_uri" \
+  "SELECT hash FROM dolt_remote_branches WHERE name='remotes/origin/main';")
+check "lazy fetch advances the origin tracking ref" "$lazy_origin_head" "$lazy_tracking_head"
+
+lazy_fetch_growth=$((lazy_size_after_fetch - lazy_size_before_fetch))
+if [ "$lazy_fetch_growth" -ge 0 ] && [ "$lazy_fetch_growth" -lt 262144 ]; then
+  lazy_fetch_refs_only=1
+else
+  lazy_fetch_refs_only=0
+fi
+check "lazy fetch installs refs without bulk chunk transfer" "1" "$lazy_fetch_refs_only"
+
+result=$("$DB" "$lazy_clone_uri" \
+  "SELECT length(payload) FROM dolt_at_lazy_rows('remotes/origin/main') WHERE id=802;")
+check "new remote data faults in after fetch" "1048576" "$result"
+lazy_size_after_refresh_read=$(file_size "$TMPDIR/lazy_clone.db")
+if [ "$lazy_size_after_refresh_read" -gt "$lazy_size_after_fetch" ]; then
+  lazy_refresh_grew=1
+else
+  lazy_refresh_grew=0
+fi
+check "reading newly fetched history grows the lazy store" "1" "$lazy_refresh_grew"
+
+"$DB" "$TMPDIR/lazy_origin.db" <<'ENDSQL' > /dev/null
+INSERT INTO lazy_rows VALUES(803,'cached-offline',randomblob(524288));
+INSERT INTO lazy_cold VALUES(101,randomblob(1048576));
+SELECT dolt_commit('-am','lazy offline');
+.quit
+ENDSQL
+"$DB" "$lazy_clone_uri" "SELECT dolt_fetch('origin');" > /dev/null
+result=$("$DB" "$lazy_clone_uri" \
+  "SELECT length(payload) FROM dolt_at_lazy_rows('remotes/origin/main') WHERE id=803;")
+check "selected remote data is cached before going offline" "524288" "$result"
+
+mv "$TMPDIR/lazy_origin.db" "$TMPDIR/lazy_origin.offline.db"
+result=$("$DB" "$TMPDIR/lazy_clone.db" \
+  "SELECT length(payload) FROM dolt_at_lazy_rows('remotes/origin/main') WHERE id=803;")
+check "cached lazy data remains readable without the URI parameter" "524288" "$result"
+
+result=$("$DB" "$TMPDIR/lazy_clone.db" \
+  "SELECT length(payload) FROM dolt_at_lazy_cold('remotes/origin/main') WHERE id=101;" 2>&1)
+check_match "uncached lazy data fails without the URI parameter with its chunk hash" "[0-9a-f]{40}" "$result"
+check "uncached no-parameter failure is not reported as corruption" "0" \
+  "$(echo "$result" | grep -Eic 'corrupt|malformed|database disk image')"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
