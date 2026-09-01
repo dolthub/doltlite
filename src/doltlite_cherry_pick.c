@@ -391,13 +391,13 @@ static void doltliteCherryPickFunc(
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) return;
-  if( args.nPositional>1 ){
-    doltliteCmdArgsClear(&args);
-    sqlite3_result_error(context,
-      "cherry-picking multiple commits is not supported yet.", -1);
-    return;
-  }
   if( isAbort ){
+    if( args.nPositional>0 ){
+      doltliteCmdArgsClear(&args);
+      sqlite3_result_error(context,
+        "--abort does not take other arguments", -1);
+      return;
+    }
     if( !doltliteSessionHasPendingReplayCommit(db) ){
       doltliteCmdArgsClear(&args);
       sqlite3_result_error(context, "no cherry-pick in progress", -1);
@@ -410,6 +410,12 @@ static void doltliteCherryPickFunc(
       return;
     }
     sqlite3_result_int(context, 0);
+    return;
+  }
+  if( args.nPositional>1 ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context,
+      "cherry-picking multiple commits is not supported yet.", -1);
     return;
   }
 

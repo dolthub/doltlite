@@ -727,6 +727,25 @@ M" \
 run_test_match "cp_abort_without_active" \
   "SELECT dolt_cherry_pick('--abort');" \
   "no cherry-pick in progress" "$DB"
+run_test_match "cp_abort_extra_args" \
+  "SELECT dolt_cherry_pick('--abort', 'extra');" \
+  "--abort does not take other arguments" "$DB"
+run_test "cp_abort_extra_preserves_conflict" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_cherry_pick('--abort', 'HEAD');
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT v FROM t;
+   SELECT dolt_cherry_pick('--abort');
+   SELECT count(*) FROM dolt_conflicts;
+   COMMIT;" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+Error near line 3: --abort does not take other arguments
+1
+M
+0
+0" \
+  "$DB"
 run_test "cp_abort_after_resolve" \
   "BEGIN;
    SELECT dolt_cherry_pick('feat');
