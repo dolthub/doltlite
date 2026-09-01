@@ -1108,6 +1108,7 @@ int chunkStorePut(
   ProllyHash h;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( nData<0 ) return SQLITE_TOOBIG;
   prollyHashCompute(pData, nData, &h);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
