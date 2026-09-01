@@ -74,3 +74,5 @@ tsrc/
 __pycache__/
 state.json
 .compat-cache/
+packaging/rust/vendor/
+packaging/rust/target/
