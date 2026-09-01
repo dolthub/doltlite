@@ -5742,11 +5742,15 @@ vtab_err vtab_err-2.persistent.819 @coverage class=intentional
 # extra sqlite_schema INSERT for clustered PK autoindexes shifts this OOM
 # injection: count(*) from sqlite_master is no longer 4 at fail-point 90.
 doltlite_fts3_oom doltlite_fts3_oom-2.2.1 class=intentional
-fts3cov fts3cov-10.transient.92 class=intentional
-fts3cov fts3cov-10.transient.338 class=intentional
-fts3cov fts3cov-10.persistent.338 class=intentional
-fts3cov fts3cov-8.transient.595 class=intentional issue=2492  # OOM fault-point shift: latent fts3 segdir-write swallow, reachable in plain builds since the schema cookie added a catalog-load allocation
-fts3cov fts3cov-8.transient.809 class=intentional issue=2492  # OOM fault-point shift (fts3 segdir write)
+fts3cov fts3cov-10.transient.46 class=intentional
+fts3cov fts3cov-10.transient.287 @no-coverage class=intentional
+fts3cov fts3cov-10.persistent.287 @no-coverage class=intentional
+fts3cov fts3cov-10.transient.292 @coverage class=intentional
+fts3cov fts3cov-10.persistent.292 @coverage class=intentional
+fts3cov fts3cov-8.transient.573 @no-coverage class=intentional issue=2492  # OOM fault-point shift: latent fts3 segdir-write swallow
+fts3cov fts3cov-8.transient.722 @no-coverage class=intentional issue=2492  # OOM fault-point shift (fts3 segdir write)
+fts3cov fts3cov-8.transient.576 @coverage class=intentional issue=2492  # OOM fault-point shift: latent fts3 segdir-write swallow
+fts3cov fts3cov-8.transient.725 @coverage class=intentional issue=2492  # OOM fault-point shift (fts3 segdir write)
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=2493  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
