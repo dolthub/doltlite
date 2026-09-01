@@ -279,6 +279,21 @@ conflict durability, update the TSV and keep the multiproc C suites green
 The version-control correctness invariants above remain load-bearing for
 implementors even when a claim is also listed in the contract.
 
+## SQLite compatibility contract
+
+The user-facing SQLite compatibility contract lives in the README **SQLite
+Compatibility** section; claims and evidence live in
+`test/sqlite_compatibility_contract.tsv`. Update the README, contract row, and
+its evidence together when observable compatibility behavior changes.
+
+Do not infer poor SQLite compatibility from an intentional storage-engine
+adaptation. DoltLite uses chunks rather than pages, has no SQLite WAL or
+rollback journal, and cannot use an anonymous rowid as a version-controlled
+key because identity must be history-independent. Classify inherited-suite
+exceptions through `test/known_testfixture_divergences.txt`: `engine-gap` is a
+bug to fix, while `intentional`, `unsupported`, and `harness` entries describe
+known boundaries. SQLLogicTest remains a zero-divergence correctness gate.
+
 ## Storage format version
 
 Chunk-store version **12** is the beta format freeze. User-facing rules live in
@@ -297,8 +312,22 @@ Any incompatible change to a nested write format, including working sets,
 catalogs, refs, commits, prolly nodes, or key encoding, must bump
 `CHUNK_STORE_VERSION`. Do not silently reinterpret another version.
 
-## Move fast
+The release workflow also runs `test/doltlite_compat_test.sh` against prior
+releases. Run it when changing format recognition, readers, writers, or version
+handling; version-12 databases already created by Beta users are compatibility
+fixtures, not disposable test data.
 
-External integration tests and remaining pre-beta docs freezes are deprioritized
-when they are not on the beta path. Prefer fixing the engine and proving it with
-tests; format and concurrency contracts that already ship must stay accurate.
+## Beta release surfaces
+
+DoltLite is public Beta. Move quickly on engine fixes, but treat documented
+behavior, version-12 data, the compatibility and concurrency contracts, public
+C headers and exports, release packages, and binding inputs as shipped
+surfaces. A change under `packaging/`, the install/export rules, amalgamation
+generation, or `.github/workflows/release.yml` must run the relevant package or
+artifact smoke test; core engine tests alone do not validate a distributed
+artifact.
+
+External integration and documentation work is no longer a pre-Beta
+deprioritized category. Scope validation to the surface being changed, preserve
+the published contracts, and fix the engine with fail-before/pass-after
+evidence when behavior is wrong.

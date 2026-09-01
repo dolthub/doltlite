@@ -32,8 +32,8 @@ static const char *zDocsAgentName = "AGENT.md";
 static const char *zDocsAgentDefault =
   "# AGENT.md - DoltLite Database Operations Guide\n"
   "\n"
-  "This database is a DoltLite database: SQLite-compatible SQL with\n"
-  "Dolt-style version control (commits, branches, diffs, merges) built in.\n"
+  "This is a DoltLite database: SQLite-compatible SQL with Dolt-style\n"
+  "version control (commits, branches, diffs, merges) built in.\n"
   "Version control operations are SQL function calls, not stored\n"
   "procedures: use `SELECT dolt_commit(...)`, never `CALL dolt_commit(...)`.\n"
   "\n"
@@ -61,6 +61,15 @@ static const char *zDocsAgentDefault =
   "Each branch has its own working state; uncommitted changes are\n"
   "per-branch.\n"
   "\n"
+  "## Remotes\n"
+  "\n"
+  "```sql\n"
+  "SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.db');\n"
+  "SELECT dolt_push('origin', 'main');\n"
+  "SELECT dolt_pull('origin', 'main');\n"
+  "SELECT dolt_clone('file:///path/to/source.db');\n"
+  "```\n"
+  "\n"
   "## Diffs and History\n"
   "\n"
   "```sql\n"
@@ -85,6 +94,10 @@ static const char *zDocsAgentDefault =
   "SELECT dolt_commit('-m', 'merged');\n"
   "```\n"
   "\n"
+  "Constraint violations may persist after merges. Inspect\n"
+  "`dolt_constraint_violations` and `dolt_constraint_violations_<t>`, then\n"
+  "run `SELECT dolt_verify_constraints('--all')` after repairs.\n"
+  "\n"
   "## Undoing Changes\n"
   "\n"
   "```sql\n"
@@ -98,8 +111,12 @@ static const char *zDocsAgentDefault =
   "- `dolt_docs` (this table) stores versioned documents keyed by name;\n"
   "  `dolt_ignore` holds patterns for tables `dolt_add` should skip. Both\n"
   "  commit, diff, branch and merge like ordinary tables.\n"
-  "- Standard SQLite applies everywhere else: `.tables`, `PRAGMA`, ATTACH,\n"
-  "  triggers, views, FTS5, R-Tree.\n";
+  "- Beta storage format version 12 is not SQLite's page format; stock SQLite\n"
+  "  cannot open it, and no SQLite journal, `-wal`, or `-shm` sidecars exist.\n"
+  "- ATTACH works, but one transaction may write only one file-backed database.\n"
+  "- Most SQLite SQL features remain available, including triggers, views,\n"
+  "  FTS5, and R-Tree. For storage-coupled API and PRAGMA differences, see\n"
+  "  https://github.com/dolthub/doltlite#sqlite-compatibility.\n";
 
 static int docsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
