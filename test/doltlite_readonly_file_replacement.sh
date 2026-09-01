@@ -14,6 +14,14 @@ echo ""
 ROOT=$(mktemp -d /tmp/dl_ro_repl_XXXXXX)
 trap 'chmod -R u+w "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
+# GNU stat spells the format -c and uses -f for filesystem info; BSD stat is
+# the reverse. Probing -c first keeps the Linux path from capturing statfs
+# output, whose free-block counters any concurrent write perturbs -- the file
+# signature then compares unequal even though the file never changed.
+file_signature() {
+  stat -c "%s-%a-%i-%h" "$1" 2>/dev/null || stat -f "%z-%Lp-%i-%l" "$1"
+}
+
 seed_db() {
   rm -f "$1"
   echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
@@ -26,9 +34,9 @@ for op in "VACUUM;" "PRAGMA wal_checkpoint;" "SELECT dolt_gc();"; do
   seed_db "$DB"
   ln "$DB" "$ROOT/link.db"
   chmod 0444 "$DB"
-  before=$(stat -f "%z-%Lp-%i-%l" "$DB" 2>/dev/null || stat -c "%s-%a-%i-%h" "$DB")
+  before=$(file_signature "$DB")
   $DOLTLITE "file:$DB?mode=ro" "$op" > /dev/null 2>&1
-  after=$(stat -f "%z-%Lp-%i-%l" "$DB" 2>/dev/null || stat -c "%s-%a-%i-%h" "$DB")
+  after=$(file_signature "$DB")
   label=$(echo "$op" | tr -cd '[:alnum:]_')
   if [ "$before" = "$after" ]; then
     dltest_pass "readonly_untouched_$label"
