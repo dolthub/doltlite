@@ -212,6 +212,14 @@ jobs:
         bash packaging/composer/test-package.sh build
       timeout-minutes: 5
 
+    - name: Smoke test the doltlite Rust crate
+      if: matrix.platform != 'windows'
+      shell: bash
+      run: |
+        chmod +x packaging/rust/assemble.sh packaging/rust/test-package.sh
+        bash packaging/rust/test-package.sh build
+      timeout-minutes: 25
+
     - name: Smoke test the DoltHub.Doltlite NuGet package
       shell: bash
       run: |

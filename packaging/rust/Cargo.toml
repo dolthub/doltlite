@@ -1,0 +1,20 @@
+[package]
+name = "doltlite"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.63"
+description = "DoltLite: SQLite with Git-style version control (branch, commit, merge, diff). Bundles the engine; no system library required."
+license = "Apache-2.0"
+repository = "https://github.com/dolthub/doltlite"
+homepage = "https://github.com/dolthub/doltlite"
+keywords = ["doltlite", "dolt", "sqlite", "database", "version-control"]
+categories = ["database", "database-implementations"]
+readme = "README.md"
+include = ["src/**", "build.rs", "vendor/doltlite.c", "vendor/doltlite.h", "README.md", "Cargo.toml"]
+
+[build-dependencies]
+cc = "1.0"
+
+[lib]
+name = "doltlite"
+path = "src/lib.rs"
