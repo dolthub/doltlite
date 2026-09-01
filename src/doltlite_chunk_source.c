@@ -214,17 +214,21 @@ static int csSourceOpenWriter(
   return rc;
 }
 
-static int csSourcePersistOne(
+static int csSourcePersistMany(
   ChunkStore *cs,
   DoltliteChunkSourceState *p,
-  const ProllyHash *pHash,
-  const u8 *pData,
-  int nData
+  const ProllyHash *aHash,
+  u8 **apData,
+  const int *anData,
+  int nHash
 ){
   ProllyHash putHash;
-  int has = 0;
+  int nPut = 0;
   int rc;
+  int i;
   if( p->memoryOnly ) return SQLITE_OK;
+  for(i=0; i<nHash && !apData[i]; i++){}
+  if( i==nHash ) return SQLITE_OK;
   rc = csSourceOpenWriter(cs, p);
   if( rc!=SQLITE_OK || !p->writerOpen ) return rc;
   rc = chunkStoreLockAndRefresh(&p->writer);
@@ -232,15 +236,20 @@ static int csSourcePersistOne(
   if( rc==SQLITE_OK && p->writer.movedReadOnly ){
     p->memoryOnly = 1;
   }
-  if( rc==SQLITE_OK && !p->memoryOnly ){
-    rc = chunkStoreHas(&p->writer, pHash, &has);
+  for(i=0; rc==SQLITE_OK && !p->memoryOnly && i<nHash; i++){
+    int has = 0;
+    if( !apData[i] ) continue;
+    rc = chunkStoreHas(&p->writer, &aHash[i], &has);
+    if( rc==SQLITE_OK && !has ){
+      rc = chunkStorePut(&p->writer, apData[i], anData[i], &putHash);
+      if( rc==SQLITE_OK
+       && memcmp(&putHash, &aHash[i], sizeof(aHash[i]))!=0 ){
+        rc = SQLITE_CORRUPT;
+      }
+      if( rc==SQLITE_OK ) nPut++;
+    }
   }
-  if( rc==SQLITE_OK && !p->memoryOnly && !has ){
-    rc = chunkStorePut(&p->writer, pData, nData, &putHash);
-    if( rc==SQLITE_OK
-     && memcmp(&putHash, pHash, sizeof(*pHash))!=0 ) rc = SQLITE_CORRUPT;
-  }
-  if( rc==SQLITE_OK && !p->memoryOnly && !has ){
+  if( rc==SQLITE_OK && !p->memoryOnly && nPut>0 ){
     rc = chunkStoreCommit(&p->writer);
   }
   if( rc!=SQLITE_OK ) chunkStoreRollback(&p->writer);
@@ -274,7 +283,9 @@ int chunkStoreSourceGet(
 ){
   DoltliteChunkSourceState *p = cs->pChunkSource;
   u8 *pData = 0;
+  u8 *apData[1];
   int nData = 0;
+  int anData[1];
   int sourceRc;
   int rc;
   if( !p ) return SQLITE_NOTFOUND;
@@ -295,7 +306,7 @@ int chunkStoreSourceGet(
     }
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
-  if( cs->lockDepth>0 ){
+  if( cs->lockDepth>0 || (p->writerOpen && p->writer.lockDepth>0) ){
     csSourceSetHashError(p,
       "chunk source fetch blocked by active graph lock for", pHash);
     return SQLITE_BUSY;
@@ -314,7 +325,9 @@ int chunkStoreSourceGet(
   }
   rc = chunkStoreVerifyChunk(pHash, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = csSourcePersistOne(cs, p, pHash, pData, nData);
+  apData[0] = pData;
+  anData[0] = nData;
+  rc = csSourcePersistMany(cs, p, pHash, apData, anData, 1);
   if( rc==SQLITE_OK ) rc = csSourceCachePut(p, pHash, pData, nData);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pData);
@@ -323,6 +336,108 @@ int chunkStoreSourceGet(
   *ppData = pData;
   *pnData = nData;
   return SQLITE_OK;
+}
+
+int chunkStoreSourcePrefetchMany(
+  ChunkStore *cs,
+  const ProllyHash *aHash,
+  int nHash
+){
+  DoltliteChunkSourceState *p = cs->pChunkSource;
+  u8 *aPresent = 0;
+  ProllyHash *aMissing = 0;
+  u8 **apData = 0;
+  int *anData = 0;
+  int nMissing = 0;
+  int sourceRc;
+  int rc = SQLITE_OK;
+  int i;
+
+  if( !p || nHash==0 ) return SQLITE_OK;
+  if( nHash<0 ) return SQLITE_MISUSE;
+  sqlite3_free(p->zErr);
+  p->zErr = 0;
+
+  aPresent = (u8*)sqlite3_malloc64((sqlite3_uint64)nHash);
+  aMissing = (ProllyHash*)sqlite3_malloc64(
+      (sqlite3_uint64)nHash * sizeof(ProllyHash));
+  if( !aPresent || !aMissing ){
+    rc = SQLITE_NOMEM;
+    goto prefetch_done;
+  }
+  rc = chunkStoreHasMany(cs, aHash, nHash, aPresent);
+  if( rc!=SQLITE_OK ) goto prefetch_done;
+  for(i=0; i<nHash; i++){
+    if( !aPresent[i] ) aMissing[nMissing++] = aHash[i];
+  }
+  if( nMissing==0 ) goto prefetch_done;
+  if( cs->lockDepth>0 || (p->writerOpen && p->writer.lockDepth>0) ){
+    csSourceSetHashError(p,
+      "chunk source fetch blocked by active graph lock for", &aMissing[0]);
+    rc = SQLITE_BUSY;
+    goto prefetch_done;
+  }
+
+  apData = (u8**)sqlite3_malloc64(
+      (sqlite3_uint64)nMissing * sizeof(u8*));
+  anData = (int*)sqlite3_malloc64(
+      (sqlite3_uint64)nMissing * sizeof(int));
+  if( !apData || !anData ){
+    rc = SQLITE_NOMEM;
+    goto prefetch_done;
+  }
+  memset(apData, 0, (size_t)nMissing * sizeof(u8*));
+  memset(anData, 0, (size_t)nMissing * sizeof(int));
+
+  sourceRc = p->pSource->xGetMany(
+      p->pSource->pCtx, nMissing, (const u8*)aMissing, apData, anData);
+  if( sourceRc==DOLTLITE_SOURCE_NOTFOUND ) goto prefetch_done;
+  if( sourceRc!=DOLTLITE_SOURCE_OK ){
+    int iErr = 0;
+    for(i=0; i<nMissing; i++){
+      if( !apData[i] ){
+        iErr = i;
+        break;
+      }
+    }
+    csSourceSetHashError(p, "chunk source batch I/O error for",
+                         &aMissing[iErr]);
+    rc = SQLITE_IOERR_CHUNK_SOURCE;
+    goto prefetch_done;
+  }
+
+  for(i=0; i<nMissing; i++){
+    if( !apData[i] ) continue;
+    if( anData[i]<0 ){
+      csSourceSetHashError(p, "chunk source I/O error for", &aMissing[i]);
+      rc = SQLITE_IOERR_CHUNK_SOURCE;
+      goto prefetch_done;
+    }
+    rc = chunkStoreVerifyChunk(&aMissing[i], &apData[i], &anData[i]);
+    if( rc!=SQLITE_OK ){
+      csSourceSetHashError(p, "chunk source returned corrupt bytes for",
+                           &aMissing[i]);
+      goto prefetch_done;
+    }
+  }
+
+  rc = csSourcePersistMany(cs, p, aMissing, apData, anData, nMissing);
+  if( rc!=SQLITE_OK ) goto prefetch_done;
+  for(i=0; i<nMissing; i++){
+    if( !apData[i] ) continue;
+    rc = csSourceCachePut(p, &aMissing[i], apData[i], anData[i]);
+    if( rc!=SQLITE_OK ) goto prefetch_done;
+  }
+
+prefetch_done:
+  if( apData ){
+    for(i=0; i<nMissing; i++) sqlite3_free(apData[i]);
+  }
+  sqlite3_free(anData);
+  sqlite3_free(apData);
+  sqlite3_free(aMissing);
+  sqlite3_free(aPresent);
+  return rc;
 }
 
 void chunkStoreSourceClose(ChunkStore *cs){
@@ -430,6 +545,14 @@ int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
   UNUSED_PARAMETER(ppData);
   UNUSED_PARAMETER(pnData);
   return SQLITE_NOTFOUND;
+}
+
+int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,
+                                 int nHash){
+  UNUSED_PARAMETER(cs);
+  UNUSED_PARAMETER(aHash);
+  UNUSED_PARAMETER(nHash);
+  return SQLITE_OK;
 }
 
 int chunkStoreSourceSet(ChunkStore *cs, doltlite_chunk_source *pSource){

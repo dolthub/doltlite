@@ -97,8 +97,34 @@ int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
 
 static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
                     ProllyCacheEntry **ppEntry){
-  return prollyLoadNodeMaybeSparse(
+  ProllyHash *aHash;
+  ProllyNode *pNode;
+  int rc;
+  int i;
+
+  rc = prollyLoadNodeMaybeSparse(
       cur->pStore, cur->pCache, hash, cur->bAllowSparse, ppEntry);
+  if( rc!=SQLITE_OK ) return rc;
+  pNode = &(*ppEntry)->node;
+  if( pNode->level==0 || !cur->pStore->pChunkSource ) return SQLITE_OK;
+
+  aHash = (ProllyHash*)sqlite3_malloc64(
+      (sqlite3_uint64)pNode->nItems * sizeof(ProllyHash));
+  if( !aHash ){
+    prollyCacheRelease(cur->pCache, *ppEntry);
+    *ppEntry = 0;
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<(int)pNode->nItems; i++){
+    prollyNodeChildHash(pNode, i, &aHash[i]);
+  }
+  rc = chunkStoreSourcePrefetchMany(cur->pStore, aHash, pNode->nItems);
+  sqlite3_free(aHash);
+  if( rc!=SQLITE_OK ){
+    prollyCacheRelease(cur->pCache, *ppEntry);
+    *ppEntry = 0;
+  }
+  return rc;
 }
 
 static int initCursorAtRoot(ProllyCursor *cur, ProllyCacheEntry **ppRoot){

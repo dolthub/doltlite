@@ -301,6 +301,8 @@ int chunkStoreGetSparse(ChunkStore *cs, const ProllyHash *hash,
 int chunkStoreSourceHas(ChunkStore *cs, const ProllyHash *pHash, int *pHas);
 int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
                         u8 **ppData, int *pnData);
+int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,
+                                 int nHash);
 int chunkStoreSourceSet(ChunkStore *cs, doltlite_chunk_source *pSource);
 void chunkStoreSourceClose(ChunkStore *cs);
 char *chunkStoreSourceTakeError(ChunkStore *cs);
