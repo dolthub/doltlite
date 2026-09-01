@@ -913,27 +913,20 @@ jobs:
   # uploading -- because a crates.io publish is permanent: there is no
   # delete and no unlist, only `cargo yank`, which still serves the files.
   #
-  # Authentication is a stored token only because trusted publishing is
-  # configured per crate and the crate has to exist first. Once the first
-  # version is up, register this workflow on the crate and swap the token
-  # for rust-lang/crates-io-auth-action with id-token: write, matching how
-  # release-nuget authenticates.
+  # Authentication is crates.io trusted publishing: the action exchanges
+  # this job's OIDC token for a short-lived key, so there is no stored
+  # secret. The crate's publisher policy names this workflow file, so
+  # renaming or moving it breaks publishing until the policy is updated.
   release-crates:
     if: github.event_name != 'workflow_dispatch'
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     env:
       VERSION: ${{ github.ref_name }}
     steps:
-    - name: Check crates.io token
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      run: |
-        if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
-          echo "CARGO_REGISTRY_TOKEN is required to publish the doltlite crate"
-          exit 1
-        fi
-
     - uses: actions/checkout@v4
 
     - name: Install dependencies
@@ -950,9 +943,13 @@ jobs:
         version="${VERSION#v}"
         bash packaging/rust/assemble.sh "$version" dist/crate build
 
+    - name: Authenticate to crates.io (trusted publishing)
+      uses: rust-lang/crates-io-auth-action@v1
+      id: crates-auth
+
     - name: Publish to crates.io
       env:
-        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
       run: |
         set -euo pipefail
         version="${VERSION#v}"
