@@ -8,6 +8,7 @@
 #   DOLTLITE_INSTALL_DIR — target directory (default /usr/local/bin)
 #   DOLTLITE_VERSION     — pin to a specific version, e.g. v0.10.3
 #                          (default: the latest GitHub release)
+#   DOLTLITE_BASE_URL    — override the release asset URL (tests)
 
 set -euo pipefail
 
@@ -96,7 +97,7 @@ esac
 
 TOOLS_ZIP="doltlite-tools-${TARGET}-${VERSION_NUM}.zip"
 LIB_ZIP="doltlite-lib-${TARGET}-${VERSION_NUM}.zip"
-BASE_URL="https://github.com/dolthub/doltlite/releases/download/${VERSION}"
+BASE_URL="${DOLTLITE_BASE_URL:-https://github.com/dolthub/doltlite/releases/download/${VERSION}}"
 
 TMP_DIR="$(mktemp -d -t doltlite-install-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -123,7 +124,9 @@ for bin in doltlite doltlite-remotesrv; do
   echo "Installed ${INSTALL_DIR}/${bin}"
 done
 
-for hdr in sqlite3.h doltlite.h doltlite_remotesrv.h; do
+# Deb and Homebrew install doltlite.h only. sqlite3.h collides with
+# system SQLite headers; skip it even if a lib zip still contains it.
+for hdr in doltlite.h doltlite_remotesrv.h; do
   if [ -f "${LIB_SRC_DIR}/${hdr}" ]; then
     install -m 0644 "${LIB_SRC_DIR}/${hdr}" "${INCLUDE_DIR}/${hdr}"
     echo "Installed ${INCLUDE_DIR}/${hdr}"
