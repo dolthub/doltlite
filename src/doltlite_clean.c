@@ -3,6 +3,7 @@
 #include "sqliteInt.h"
 #include "chunk_store.h"
 #include "doltlite_internal.h"
+#include "doltlite_ignore.h"
 
 #include <string.h>
 
@@ -154,6 +155,23 @@ static int cleanDropTables(sqlite3 *db, const CleanNames *pNames){
   return rc;
 }
 
+static int cleanCheckIgnore(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const char *zName,
+  int *pIgnored
+){
+  char *zErr = 0;
+  int rc = doltliteCheckIgnore(db, zName, pIgnored, &zErr);
+  if( rc==SQLITE_CONSTRAINT ){
+    sqlite3_result_error(context, zErr ? zErr : "dolt_ignore conflict", -1);
+  }else if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+  }
+  sqlite3_free(zErr);
+  return rc;
+}
+
 static void doltliteCleanFunc(
   sqlite3_context *context,
   int argc,
@@ -221,6 +239,12 @@ static void doltliteCleanFunc(
   if( rc!=SQLITE_OK ) goto clean_error;
   for(i=0; i<selected.n; i++){
     if( !cleanNamesContains(&staged, selected.az[i]) ){
+      if( args.nPositional==0 ){
+        int ignored = 0;
+        rc = cleanCheckIgnore(db, context, selected.az[i], &ignored);
+        if( rc!=SQLITE_OK ) goto clean_done;
+        if( ignored ) continue;
+      }
       rc = cleanNamesAppend(&untracked, selected.az[i]);
       if( rc!=SQLITE_OK ) goto clean_error;
     }
