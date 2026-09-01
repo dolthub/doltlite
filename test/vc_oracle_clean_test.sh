@@ -11,20 +11,22 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-normalize_status() {
+normalize_state() {
   tr -d '\r"' \
-    | awk -F'\t' 'NF >= 4 && $1 == "S" { print }' \
-    | sort -t$'\t' -k2,2 -k3,3 -k4,4
+    | awk -F'\t' 'NF >= 4 && $1 == "S" { print }
+        NF >= 2 && $1 == "T" && $2 !~ /^(dolt_|sqlite_)/ { print }' \
+    | sort
 }
 
 oracle() {
   local name="$1" setup="$2"
+  local compare="${3:-all}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt" "$dir/dt.rows"
 
   local dl_status dl_rows
-  dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\n" "$setup" \
-    | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | normalize_status)
+  dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\nSELECT 'T' || char(9) || name FROM pragma_table_list WHERE schema='main' AND type IN ('table','virtual');\n" "$setup" \
+    | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | normalize_state)
   dl_rows=$(printf "%s\nSELECT count(*) FROM t;\n" "$setup" \
     | "$DOLTLITE" "$dir/dl.rows" 2>>"$dir/dl.err" | tail -1)
 
@@ -35,8 +37,13 @@ oracle() {
     vc_oracle_init_repo
     printf '%s\n' "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat('S', char(9), table_name, char(9), staged, char(9), status) FROM dolt_status;" 2>>"$dir/dt.err"
+    "$DOLT" sql -r csv -q "SELECT concat('T', char(9), table_name) FROM information_schema.tables WHERE table_schema=database() AND table_type='BASE TABLE';" 2>>"$dir/dt.err"
   ) >"$dir/dt.status"
-  dt_status=$(tail -n +2 "$dir/dt.status" | normalize_status)
+  dt_status=$(tail -n +2 "$dir/dt.status" | normalize_state)
+  if [ "$compare" = "tables" ]; then
+    dl_status=$(printf '%s\n' "$dl_status" | awk -F'\t' '$1 == "T"')
+    dt_status=$(printf '%s\n' "$dt_status" | awk -F'\t' '$1 == "T"')
+  fi
   (
     cd "$dir/dt.rows" || exit 1
     vc_oracle_init_repo
@@ -89,6 +96,22 @@ CREATE TABLE u(id INTEGER PRIMARY KEY);
 CREATE TABLE v(id INTEGER PRIMARY KEY);
 SELECT dolt_clean();
 "
+
+oracle "clean_all_preserves_ignored" "
+$SEED
+INSERT INTO dolt_ignore VALUES ('ig_%', 1);
+CREATE TABLE ig_temp(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+SELECT dolt_clean();
+" tables
+
+oracle "clean_named_overrides_ignore" "
+$SEED
+INSERT INTO dolt_ignore VALUES ('ig_%', 1);
+CREATE TABLE ig_temp(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+SELECT dolt_clean('ig_temp');
+" tables
 
 oracle "clean_dry_run" "
 $SEED

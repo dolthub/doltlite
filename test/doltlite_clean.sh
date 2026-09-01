@@ -76,5 +76,15 @@ echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER
 run_test "clean_with_only_tracked_fk_tables" "SELECT dolt_clean();" "0" "$DB7"
 run_test "clean_with_only_tracked_fk_tables_keeps_both" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('child','parent');" "2" "$DB7"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+DB8=/tmp/test_clean_ignore_$$.db; rm -f "$DB8"
+echo "CREATE TABLE tracked(id INTEGER PRIMARY KEY); SELECT dolt_commit('-Am','base'); INSERT INTO dolt_ignore VALUES('ig_%', 1); CREATE TABLE ig_temp(id INTEGER PRIMARY KEY); CREATE TABLE untracked(id INTEGER PRIMARY KEY);" | $DOLTLITE "$DB8" >/dev/null 2>&1
+run_test "clean_all_respects_ignore" "SELECT dolt_clean();" "0" "$DB8"
+run_test "clean_all_keeps_ignored" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ig_temp';" "1" "$DB8"
+run_test "clean_all_drops_non_ignored" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='untracked';" "0" "$DB8"
+echo "CREATE TABLE ig_named(id INTEGER PRIMARY KEY); CREATE TABLE other(id INTEGER PRIMARY KEY);" | $DOLTLITE "$DB8" >/dev/null 2>&1
+run_test "clean_named_overrides_ignore" "SELECT dolt_clean('ig_named');" "0" "$DB8"
+run_test "clean_named_drops_ignored_target" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ig_named';" "0" "$DB8"
+run_test "clean_named_keeps_other_untracked" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='other';" "1" "$DB8"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 dltest_finish

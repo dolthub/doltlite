@@ -482,6 +482,47 @@ SELECT concat('Q|', group_concat(concat(column_name, ':', replace(lower(column_t
  WHERE table_schema = database() AND table_name = 'a';
 SELECT concat('Q|', k, '|', n) FROM a;"
 
+oracle_reopen "add_all_preserves_dropped_ignored_table" "
+CREATE TABLE tracked(id INT PRIMARY KEY);
+INSERT INTO tracked VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+INSERT INTO dolt_ignore VALUES ('ig_*', 1);
+CREATE TABLE ig_one(id INT);
+SELECT dolt_add('-f', 'ig_one');
+SELECT dolt_add('dolt_ignore');
+SELECT dolt_commit('-m', 'forced');
+DROP TABLE ig_one;
+SELECT dolt_add('-A');
+" "SELECT 'Q|' || table_name || '|' || staged || '|' || status
+     FROM dolt_status
+    ORDER BY table_name, staged, status;" \
+"SELECT concat('Q|', table_name, '|', staged, '|', status)
+   FROM dolt_status
+  ORDER BY table_name, staged, status;"
+
+oracle_reopen "commit_after_preserved_ignored_drop" "
+CREATE TABLE tracked(id INT PRIMARY KEY);
+INSERT INTO tracked VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+INSERT INTO dolt_ignore VALUES ('ig_*', 1);
+CREATE TABLE ig_one(id INT);
+SELECT dolt_add('-f', 'ig_one');
+SELECT dolt_add('dolt_ignore');
+SELECT dolt_commit('-m', 'forced');
+DROP TABLE ig_one;
+SELECT dolt_add('-A');
+UPDATE tracked SET id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'tracked update');
+" "SELECT 'Q|' || table_name || '|' || staged || '|' || status
+     FROM dolt_status
+    ORDER BY table_name, staged, status;" \
+"SELECT concat('Q|', table_name, '|', staged, '|', status)
+   FROM dolt_status
+  ORDER BY table_name, staged, status;"
+
 echo "--- noop and clean states ---"
 
 oracle "all_on_empty_repo" "
