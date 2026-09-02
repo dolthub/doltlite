@@ -598,7 +598,8 @@ static int csWalResolveDamage(
   int *pAction,
   i64 *pResume
 ){
-  u8 buf[65536];
+  u8 *buf;
+  int rc = SQLITE_OK;
   i64 q = damagePos + 1;
   i64 last = walSize - 5;
   i64 damageAbs = cs->wal.iWalOffset + damagePos;
@@ -606,12 +607,14 @@ static int csWalResolveDamage(
   ** damage was committed; stopping early would rewind it as TORN. */
   *pAction = CS_DAMAGE_TORN;
   *pResume = 0;
+  buf = sqlite3_malloc(CS_SCAN_WINDOW);
+  if( !buf ) return SQLITE_NOMEM;
   while( q <= last ){
     i64 nAvail = walSize - q;
-    int n = nAvail > (i64)sizeof(buf) ? (int)sizeof(buf) : (int)nAvail;
+    int n = nAvail > (i64)CS_SCAN_WINDOW ? CS_SCAN_WINDOW : (int)nAvail;
     int i;
-    int rc = sqlite3OsRead(cs->file.pFile, buf, n, cs->wal.iWalOffset + q);
-    if( rc != SQLITE_OK ) return rc;
+    rc = sqlite3OsRead(cs->file.pFile, buf, n, cs->wal.iWalOffset + q);
+    if( rc != SQLITE_OK ) goto damage_done;
     for(i=0; i+5<=n && q+i<=last; i++){
       if( buf[i]==CS_WAL_TAG_ROOT && CS_READ_U32(buf+i+1)==CHUNK_STORE_MAGIC ){
         u8 m[CHUNK_MANIFEST_SIZE];
@@ -620,7 +623,7 @@ static int csWalResolveDamage(
         if( cand + 1 + CHUNK_MANIFEST_SIZE > walSize ) continue;
         rc = sqlite3OsRead(cs->file.pFile, m, CHUNK_MANIFEST_SIZE,
                            cs->wal.iWalOffset + cand + 1);
-        if( rc != SQLITE_OK ) return rc;
+        if( rc != SQLITE_OK ) goto damage_done;
         state = csManifestHashState(m, cs->wal.iWalOffset + cand);
         if( state==CS_MANIFEST_HASH_OK
          && csValidateWalRootManifest(
@@ -630,12 +633,12 @@ static int csWalResolveDamage(
           if( durableTo > damageAbs ){
             cs->wal.recoveredMidStream = 1;
             *pAction = CS_DAMAGE_MIDSTREAM;
-            return SQLITE_OK;
+            goto damage_done;
           }
           if( batchStart > damageAbs ){
             *pAction = CS_DAMAGE_RESUME;
             *pResume = batchStart - cs->wal.iWalOffset;
-            return SQLITE_OK;
+            goto damage_done;
           }
         }
       }
@@ -643,7 +646,10 @@ static int csWalResolveDamage(
     if( (i64)n >= nAvail ) break;
     q += n - 4;
   }
-  return SQLITE_OK;
+
+damage_done:
+  sqlite3_free(buf);
+  return rc;
 }
 
 static int csReplayWalFrom(
@@ -667,6 +673,7 @@ static int csReplayWalFrom(
   int sawDamage = 0;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
+  u8 *chunkBuf = 0;
   int rc = SQLITE_OK;
 
   assert( cs!=0 );
@@ -697,6 +704,9 @@ static int csReplayWalFrom(
     }
     return SQLITE_OK;
   }
+
+  chunkBuf = sqlite3_malloc(CS_SCAN_WINDOW);
+  if( !chunkBuf ) return SQLITE_NOMEM;
 
   csCaptureReplayState(cs, &saved);
   /* iFileSize was already advanced to the disk size above; rollback must
@@ -767,14 +777,13 @@ static int csReplayWalFrom(
       {
         blake3_hasher hasher;
         ProllyHash bodyHash;
-        u8 chunkBuf[65536];
         u32 nRemaining = len;
         i64 readOff = cs->wal.iWalOffset + pos;
         int hashMismatch = 0;
         blake3_hasher_init(&hasher);
         while( nRemaining > 0 ){
-          u32 toRead = nRemaining > sizeof(chunkBuf)
-                     ? (u32)sizeof(chunkBuf) : nRemaining;
+          u32 toRead = nRemaining > (u32)CS_SCAN_WINDOW
+                     ? (u32)CS_SCAN_WINDOW : nRemaining;
           rc = sqlite3OsRead(cs->file.pFile, chunkBuf, (int)toRead, readOff);
           if( rc != SQLITE_OK ) goto replay_error;
           blake3_hasher_update(&hasher, chunkBuf, (size_t)toRead);
@@ -1005,11 +1014,13 @@ static int csReplayWalFrom(
   if( rc!=SQLITE_OK ) goto replay_error;
 
   csReleaseReplayState(cs, &saved);
+  sqlite3_free(chunkBuf);
   return SQLITE_OK;
 
 replay_error:
   if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
   csRollbackReplayState(cs, &saved, nPendingBefore);
+  sqlite3_free(chunkBuf);
   return rc;
 }
 
@@ -1070,28 +1081,28 @@ static int csFindLastCheckpointRoot(
   WalState *pStamp,
   int *pFound
 ){
-  u8 aBuf[65540];
+  u8 *aBuf;
   i64 iEnd = nFile;
   i64 nZeroRun = 0;
+  int rc = SQLITE_OK;
 
   *pFound = 0;
+  aBuf = sqlite3_malloc(CS_ROOT_SCAN_WINDOW);
+  if( !aBuf ) return SQLITE_NOMEM;
   while( iEnd>cs->wal.iWalOffset ){
-    i64 iStart = iEnd-(i64)sizeof(aBuf);
+    i64 iStart = iEnd-(i64)CS_ROOT_SCAN_WINDOW;
     int n;
     int i;
-    int iFirst;
-    int rc;
     if( iStart<cs->wal.iWalOffset ) iStart = cs->wal.iWalOffset;
     n = (int)(iEnd-iStart);
     rc = sqlite3OsRead(cs->file.pFile, aBuf, n, iStart);
-    if( rc!=SQLITE_OK ) return rc;
-    iFirst = iEnd==nFile ? n-1 : n-5;
-    for(i=iFirst; i>=0; i--){
+    if( rc!=SQLITE_OK ) goto root_scan_done;
+    for(i=(iEnd==nFile ? n-1 : n-5); i>=0; i--){
       i64 iRoot;
       WalState stamp;
       if( aBuf[i]==0 ){
         nZeroRun++;
-        if( nZeroRun>=CS_WAL_SCAN_MAX ) return SQLITE_OK;
+        if( nZeroRun>=CS_WAL_SCAN_MAX ) goto root_scan_done;
       }else{
         nZeroRun = 0;
       }
@@ -1104,7 +1115,7 @@ static int csFindLastCheckpointRoot(
       if( iRoot>nFile-(i64)(1+CHUNK_MANIFEST_SIZE) ) continue;
       rc = sqlite3OsRead(cs->file.pFile, aRoot,
                          1+CHUNK_MANIFEST_SIZE, iRoot);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto root_scan_done;
       stamp = *pStamp;
       if( aRoot[0]==CS_WAL_TAG_ROOT
        && csManifestHashState(aRoot+1, iRoot)==CS_MANIFEST_HASH_OK
@@ -1113,18 +1124,21 @@ static int csFindLastCheckpointRoot(
           *pRootOffset = iRoot;
           *pStamp = stamp;
           *pFound = 1;
-          return SQLITE_OK;
+          goto root_scan_done;
         }
         if( CS_READ_I64(aRoot+1+CS_MANIFEST_DURABLE_TO_OFF)==iRoot
          && CS_READ_I64(aRoot+1+CS_MANIFEST_BATCH_START_OFF)==iRoot ){
-          return SQLITE_OK;
+          goto root_scan_done;
         }
       }
     }
     if( iStart==cs->wal.iWalOffset ) break;
     iEnd = iStart+4;
   }
-  return SQLITE_OK;
+
+root_scan_done:
+  sqlite3_free(aBuf);
+  return rc;
 }
 
 static void csCheckpointSkipRange(
@@ -1146,7 +1160,7 @@ int csTryLoadWalCheckpoint(
   u8 aTail[1 + CHUNK_MANIFEST_SIZE];
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
   u8 aHeader[CS_WAL_CHUNK_HDR_SIZE];
-  u8 aBuf[65536];
+  u8 *aBuf = 0;
   i64 nFile = 0;
   i64 iTail;
   i64 iRoot;
@@ -1300,12 +1314,17 @@ int csTryLoadWalCheckpoint(
   aIndex = sqlite3_malloc64(
       (sqlite3_uint64)(nIndex+1) * sizeof(ChunkIndexEntry));
   if( !aIndex ) return SQLITE_NOMEM;
+  aBuf = sqlite3_malloc(CS_SCAN_WINDOW);
+  if( !aBuf ){
+    sqlite3_free(aIndex);
+    return SQLITE_NOMEM;
+  }
 
   blake3_hasher_init(&hasher);
   iRead = stamp.iCheckpointOffset + CS_WAL_CHUNK_HDR_SIZE;
   nRemain = stamp.nCheckpointIndex;
   while( nRemain>0 ){
-    int n = nRemain>(i64)sizeof(aBuf) ? (int)sizeof(aBuf) : (int)nRemain;
+    int n = nRemain>(i64)CS_SCAN_WINDOW ? CS_SCAN_WINDOW : (int)nRemain;
     int i;
     rc = sqlite3OsRead(cs->file.pFile, aBuf, n, iRead);
     if( rc!=SQLITE_OK ) goto checkpoint_invalid;
@@ -1356,6 +1375,8 @@ int csTryLoadWalCheckpoint(
   cs->wal.checkpointHash = stamp.checkpointHash;
   cs->wal.checkpointMagic = stamp.checkpointMagic;
   aIndex = 0;
+  sqlite3_free(aBuf);
+  aBuf = 0;
   rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
   *pLoaded = 1;
@@ -1363,6 +1384,7 @@ int csTryLoadWalCheckpoint(
 
 checkpoint_invalid:
   sqlite3_free(aIndex);
+  sqlite3_free(aBuf);
   if( rc!=SQLITE_NOMEM ){
     csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
   }
