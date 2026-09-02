@@ -1362,10 +1362,13 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       iTblPg = schemaCatalogTableOldPg(aRows, nRows, aRows[i].zTblName);
       if( !iTblPg || aRows[i].oldPg==iTblPg ) continue;
       for(j=0; j<nTables; j++){
-        if( aTables[j].iTable==aRows[i].oldPg ){
-          bPhys = 1;
-          break;
-        }
+        if( aTables[j].iTable!=aRows[i].oldPg ) continue;
+        /* Only an unnamed entry can be this index's own; a named one claiming
+        ** the number belongs to another domain, not proof of a physical
+        ** index. Live entry names may be stale after RENAME. */
+        if( aTables!=pBtree->cat.a && aTables[j].zName ) continue;
+        bPhys = 1;
+        break;
       }
       if( !bPhys ) aRows[i].oldPg = iTblPg;
     }
@@ -1446,11 +1449,19 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
                                         aRows[i].zSql, &nRec);
       }
       if( !schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, i) ){
+        int bLiveCatalog = (aTables==pBtree->cat.a);
         for(j=0; j<nTables; j++){
-          if( aTables[j].iTable==aRows[i].oldPg ){
-            aTables[j].schemaHash = h;
-            break;
+          if( aTables[j].iTable!=aRows[i].oldPg ) continue;
+          /* Constructed catalogs mix numbering domains, so a number match
+          ** alone can land on a different object; an index row carrying a
+          ** stale number would then zero a table's schema hash. Live names
+          ** may be stale after RENAME, so only names are checked here. */
+          if( !bLiveCatalog && aTables[j].zName && aRows[i].zName
+           && strcmp(aTables[j].zName, aRows[i].zName)!=0 ){
+            continue;
           }
+          aTables[j].schemaHash = h;
+          break;
         }
       }
       if( !pRec ){
