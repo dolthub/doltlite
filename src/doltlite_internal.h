@@ -569,25 +569,40 @@ static SQLITE_INLINE int doltliteVtabConnectSimple(
 }
 
 /* Branch catalog: working-set catalog wins if recorded against this commit. */
-static SQLITE_INLINE void doltliteResolveBranchEffectiveCatalog(
+static SQLITE_INLINE int doltliteResolveBranchEffectiveCatalog(
   ChunkStore *cs,
   const char *zBranch,
   const ProllyHash *pBranchCommit,
   const ProllyHash *pCommittedCatHash,
   ProllyHash *pCatHash
 ){
-  ProllyHash wsCatHash, wsCommitHash;
+  ProllyHash wsHash, wsCatHash, wsCommitHash;
+  int rc;
+  memset(&wsHash, 0, sizeof(wsHash));
   memset(&wsCatHash, 0, sizeof(wsCatHash));
   memset(&wsCommitHash, 0, sizeof(wsCommitHash));
+  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
+  if( rc==SQLITE_NOTFOUND ){
+    memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
+    return SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&wsHash) ){
+    memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
+    return SQLITE_OK;
+  }
+  rc = chunkStoreReadBranchWorkingCatalog(
+      cs, zBranch, &wsCatHash, &wsCommitHash);
+  if( rc!=SQLITE_OK ) return rc;
   /* Unborn branch: working set matches the all-zero commit hash. */
-  if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCatHash, &wsCommitHash)==SQLITE_OK
-   && (!prollyHashIsEmpty(&wsCommitHash) || prollyHashIsEmpty(pBranchCommit))
+  if( (!prollyHashIsEmpty(&wsCommitHash) || prollyHashIsEmpty(pBranchCommit))
    && memcmp(wsCommitHash.data, pBranchCommit->data, PROLLY_HASH_SIZE)==0
    && memcmp(wsCatHash.data, pCommittedCatHash->data, PROLLY_HASH_SIZE)!=0 ){
     memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));
   }else{
     memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
   }
+  return SQLITE_OK;
 }
 
 /* True if the trimmed CREATE TABLE segment is a table-level constraint. */
@@ -694,19 +709,6 @@ int doltliteLoadTableRootById(
   u8 *pFlags,
   ProllyHash *pSchemaHash
 );
-
-static SQLITE_INLINE int doltliteLoadTableRootByNameOrEmpty(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  const char *zTableName,
-  ProllyHash *pRoot,
-  u8 *pFlags,
-  ProllyHash *pSchemaHash
-){
-  int rc = doltliteLoadTableRootByName(db, pCatHash, zTableName,
-                                       pRoot, pFlags, pSchemaHash);
-  return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
-}
 
 typedef struct DlByteReader { const u8 *p; const u8 *end; int err; } DlByteReader;
 
@@ -1279,7 +1281,7 @@ int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
 int doltliteClearSessionRebaseState(sqlite3 *db);
 int doltliteBranchWorkingSetRebaseFlags(sqlite3 *db, const char *zBranch, u8 *pFlags);
 int doltliteClearBranchRebaseMetadata(sqlite3 *db, const char *zBranch);
-void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
+int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSessionHasUnresolvedConflicts(sqlite3 *db);
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
@@ -1397,7 +1399,7 @@ void doltliteAlignStagedEntriesToWorking(
 int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
     const char *zOurSql, const char *zTheirSql, char **pzDetail);
-int doltliteSessionHasSchemaConflicts(sqlite3 *db);
+int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas);
 int doltliteForEachSchemaConflict(sqlite3 *db,
     int (*xConflict)(void*, const char*), void *pCtx);
 

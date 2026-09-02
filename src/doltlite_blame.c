@@ -56,6 +56,23 @@ struct BlameCursor {
   int iRow;
 };
 
+static int blameMapChunkSourceError(
+  BlameCursor *pCur,
+  sqlite3 *db,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  if( zErr ){
+    sqlite3_free(pCur->base.pVtab->zErrMsg);
+    pCur->base.pVtab->zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
 static int blameIntPkEnabled(const BlameVtab *v){
   if( v->nPkCols != 1 ) return 0;
   if( v->intPkCid < 0 ) return 0;
@@ -452,7 +469,12 @@ static int blameCompareAgainstRef(
     rc = doltliteLoadTableRootByName(db, pRefCatHash, zTableName,
                                      &refRoot, &refFlags, 0);
     if( rc==SQLITE_OK ) haveRef = 1;
-    else if( rc!=SQLITE_NOTFOUND ) return rc;
+    else if( rc==SQLITE_NOTFOUND ){
+      rc = blameMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+      if( rc!=SQLITE_OK ) return rc;
+    }else{
+      return rc;
+    }
   }
 
   if( haveRef && pCurRoot
@@ -536,6 +558,7 @@ static int blameUnresolvedCount(BlameCursor *pCur){
 }
 
 static int blameFindAllParentMergeBase(
+  BlameCursor *pCur,
   sqlite3 *db,
   const DoltliteCommit *pCommit,
   ProllyHash *pBaseHash
@@ -560,11 +583,17 @@ static int blameFindAllParentMergeBase(
     }
     memset(&nextBase, 0, sizeof(nextBase));
     rc = doltliteFindAncestor(db, &base, pParent, &nextBase);
-    if( rc==SQLITE_NOTFOUND || prollyHashIsEmpty(&nextBase) ){
+    if( rc==SQLITE_NOTFOUND ){
+      rc = blameMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+      if( rc!=SQLITE_OK ) return rc;
       memset(&base, 0, sizeof(base));
       break;
     }
     if( rc!=SQLITE_OK ) return rc;
+    if( prollyHashIsEmpty(&nextBase) ){
+      memset(&base, 0, sizeof(base));
+      break;
+    }
     base = nextBase;
   }
 
@@ -596,7 +625,13 @@ static int blameWalk(
     rc = doltliteLoadTableRootByName(db, &commit.catalogHash, zTableName,
                                      &curTableRoot, &curFlags, 0);
     if( rc==SQLITE_OK ) haveCurTable = 1;
-    else if( rc!=SQLITE_NOTFOUND ){
+    else if( rc==SQLITE_NOTFOUND ){
+      rc = blameMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&commit);
+        return rc;
+      }
+    }else{
       doltliteCommitClear(&commit);
       return rc;
     }
@@ -604,7 +639,7 @@ static int blameWalk(
     if( doltliteCommitParentCount(&commit) >= 2 ){
       ProllyHash baseHash;
       memset(&baseHash, 0, sizeof(baseHash));
-      rc = blameFindAllParentMergeBase(db, &commit, &baseHash);
+      rc = blameFindAllParentMergeBase(pCur, db, &commit, &baseHash);
       if( rc!=SQLITE_OK ){
         doltliteCommitClear(&commit);
         return rc;
@@ -818,7 +853,9 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
 
   rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
                                    &tableRoot, &tableFlags, 0);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc==SQLITE_NOTFOUND ){
+    rc = blameMapChunkSourceError(c, db, rc, SQLITE_OK);
+  }
   if( rc!=SQLITE_OK ) return rc;
 
   rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags,

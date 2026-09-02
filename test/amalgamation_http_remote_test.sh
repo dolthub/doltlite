@@ -39,6 +39,18 @@ for invalid_setting in 2 "" "1 0"; do
   fi
 done
 
+for invalid_setting in 2 "" "1 0"; do
+  if make -n "DOLTLITE_ENABLE_CHUNK_SOURCE=$invalid_setting" doltlite >"$tmp/invalid-chunk-source-option.log" 2>&1; then
+    echo "FAIL: invalid DOLTLITE_ENABLE_CHUNK_SOURCE value accepted: '$invalid_setting'"
+    exit 1
+  fi
+  if ! grep -Fq "DOLTLITE_ENABLE_CHUNK_SOURCE must be 0 or 1" "$tmp/invalid-chunk-source-option.log"; then
+    echo "FAIL: invalid DOLTLITE_ENABLE_CHUNK_SOURCE value did not produce a clear error: '$invalid_setting'"
+    cat "$tmp/invalid-chunk-source-option.log"
+    exit 1
+  fi
+done
+
 if grep -Eq 'Begin file doltlite_remotesrv\.c|doltliteServe' ./sqlite3.c; then
   echo "FAIL: remote server implementation present in amalgamation"
   exit 1
@@ -50,6 +62,10 @@ for source in doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c \
     exit 1
   fi
 done
+if ! grep -q "Begin file doltlite_chunk_source.c" ./sqlite3.c; then
+  echo "FAIL: chunk source implementation missing from amalgamation"
+  exit 1
+fi
 
 probe_libs=(-lz -lpthread -lm)
 case "$(uname -s)" in
@@ -96,10 +112,27 @@ esac
   "${probe_libs[@]}" -o "$offline_probe"
 "$offline_probe"
 
+chunk_source_probe="$tmp/amalg_chunk_source_probe"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) chunk_source_probe="${chunk_source_probe}.exe" ;;
+esac
+"$cc_bin" -Wno-comment -I. ../test/amalgamation_chunk_source_probe.c \
+  ./sqlite3.c "${probe_libs[@]}" -o "$chunk_source_probe"
+"$chunk_source_probe"
+
+chunk_source_off_probe="$tmp/amalg_chunk_source_off_probe"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) chunk_source_off_probe="${chunk_source_off_probe}.exe" ;;
+esac
+"$cc_bin" -Wno-comment -DDOLTLITE_ENABLE_CHUNK_SOURCE=0 -I. \
+  ../test/amalgamation_chunk_source_probe.c ./sqlite3.c \
+  "${probe_libs[@]}" -o "$chunk_source_off_probe"
+"$chunk_source_off_probe"
+
 if nm "$offline_probe" | grep -Eq \
     'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)|mbedtls_ssl_tls13'; then
   echo "FAIL: networking implementation present in remotes-disabled amalgamation"
   exit 1
 fi
 
-echo "amalgamation remote, credentials, and offline option: PASS"
+echo "amalgamation remote, chunk source, credentials, and offline options: PASS"

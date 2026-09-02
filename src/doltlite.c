@@ -62,7 +62,9 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteDocsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteTestsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteIgnoreRegister(db))!=SQLITE_OK ) return rc;
-  return doltliteMaybeSeedRepo(db);
+  rc = doltliteMaybeSeedRepo(db);
+  if( rc==SQLITE_OK ) doltliteBtreeRegistrationDone(db);
+  return rc;
 }
 
 #endif

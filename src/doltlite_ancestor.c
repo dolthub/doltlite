@@ -377,7 +377,17 @@ static void doltMergeBaseFunc(
     doltliteHashToHex(&ancestor, hexBuf);
     sqlite3_result_text(ctx, hexBuf, -1, SQLITE_TRANSIENT);
   }else if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_null(ctx);
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    int pendingRc = SQLITE_OK;
+    char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+    if( zErr || pendingRc!=SQLITE_OK ){
+      if( zErr ) sqlite3_result_error(ctx, zErr, -1);
+      sqlite3_result_error_code(
+          ctx, pendingRc!=SQLITE_OK ? pendingRc : rc);
+      sqlite3_free(zErr);
+    }else{
+      sqlite3_result_null(ctx);
+    }
   }else{
     sqlite3_result_error(ctx, "error finding common ancestor", -1);
   }

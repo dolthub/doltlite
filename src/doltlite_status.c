@@ -202,58 +202,61 @@ static int statusSchemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
 
 static int statusSchemaHasViewOrTrigger(sqlite3 *db,
                                         const ProllyHash *pRoot,
-                                        u8 flags){
+                                        u8 flags,
+                                        int *pFound){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyCursor cur;
   int rc, res;
-  int found = 0;
-  if( !cs || !pCache ) return 0;
-  if( prollyHashIsEmpty(pRoot) ) return 0;
+  *pFound = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
   rc = prollyCursorFirst(&cur, &res);
   if( rc!=SQLITE_OK || res ){
     prollyCursorClose(&cur);
-    return 0;
+    return rc;
   }
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal;
     int nVal;
     prollyCursorValue(&cur, &pVal, &nVal);
     if( statusSchemaRecordIsViewOrTrigger(pVal, nVal) ){
-      found = 1;
+      *pFound = 1;
       break;
     }
-    if( prollyCursorNext(&cur)!=SQLITE_OK ) break;
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
   }
   prollyCursorClose(&cur);
-  return found;
+  return rc;
 }
 
 static int statusSchemaHasViewOrTriggerDiff(sqlite3 *db,
                                             const ProllyHash *pOldRoot,
                                             const ProllyHash *pNewRoot,
-                                            u8 flags){
+                                            u8 flags,
+                                            int *pFound){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyDiffIter iter;
   ProllyDiffChange *pChange = 0;
   int rc;
-  int found = 0;
-  if( !cs || !pCache ) return 0;
-  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return 0;
+  *pFound = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return SQLITE_OK;
   rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags,
                           flags);
-  if( rc!=SQLITE_OK ) return 0;
+  if( rc!=SQLITE_OK ) return rc;
   while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
     if( statusSchemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)
      || statusSchemaRecordIsViewOrTrigger(pChange->pOldVal, pChange->nOldVal) ){
-      found = 1;
+      *pFound = 1;
       break;
     }
   }
   prollyDiffIterClose(&iter);
-  return found;
+  return rc==SQLITE_ROW || rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 static int statusCompareDoltSchemas(
@@ -272,8 +275,10 @@ static int statusCompareDoltSchemas(
   struct TableEntry *pOldMaster;
   struct TableEntry *pNewMaster;
   u8 flags;
+  int changed;
   int oldHas;
   int newHas;
+  int rc;
 
   if( zFilter && strcmp(zFilter, "dolt_schemas")!=0 ) return SQLITE_OK;
 
@@ -286,12 +291,14 @@ static int statusCompareDoltSchemas(
   pNewRoot = pNewMaster ? &pNewMaster->root : &emptyRoot;
   flags = pNewMaster ? pNewMaster->flags : pOldMaster->flags;
 
-  if( !statusSchemaHasViewOrTriggerDiff(db, pOldRoot, pNewRoot, flags) ){
-    return SQLITE_OK;
-  }
+  rc = statusSchemaHasViewOrTriggerDiff(
+      db, pOldRoot, pNewRoot, flags, &changed);
+  if( rc!=SQLITE_OK || !changed ) return rc;
 
-  oldHas = statusSchemaHasViewOrTrigger(db, pOldRoot, flags);
-  newHas = statusSchemaHasViewOrTrigger(db, pNewRoot, flags);
+  rc = statusSchemaHasViewOrTrigger(db, pOldRoot, flags, &oldHas);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = statusSchemaHasViewOrTrigger(db, pNewRoot, flags, &newHas);
+  if( rc!=SQLITE_OK ) return rc;
   if( !oldHas && newHas ){
     return addRow(pCur, "dolt_schemas", staged, "new table");
   }
@@ -569,25 +576,29 @@ static int statusSchemaHashMatchesRename(
 static int statusRootsShareAnyKey(
   sqlite3 *db,
   const struct TableEntry *pOld,
-  const struct TableEntry *pNew
+  const struct TableEntry *pNew,
+  int *pShared
 ){
   ChunkStore *cs;
   ProllyCache *cache;
   ProllyCursor curOld, curNew;
   int rc, res;
 
-  if( !pOld || !pNew ) return 0;
-  if( prollyHashIsEmpty(&pOld->root) || prollyHashIsEmpty(&pNew->root) ) return 0;
+  *pShared = 0;
+  if( !pOld || !pNew ) return SQLITE_OK;
+  if( prollyHashIsEmpty(&pOld->root) || prollyHashIsEmpty(&pNew->root) ){
+    return SQLITE_OK;
+  }
 
   cs = doltliteGetChunkStore(db);
   cache = doltliteGetCache(db);
-  if( !cs || !cache ) return 0;
+  if( !cs || !cache ) return SQLITE_ERROR;
 
   prollyCursorInit(&curOld, cs, cache, &pOld->root, pOld->flags);
   rc = prollyCursorFirst(&curOld, &res);
   if( rc!=SQLITE_OK || res!=0 || !prollyCursorIsValid(&curOld) ){
     prollyCursorClose(&curOld);
-    return 0;
+    return rc;
   }
 
   prollyCursorInit(&curNew, cs, cache, &pNew->root, pNew->flags);
@@ -604,12 +615,12 @@ static int statusRootsShareAnyKey(
   prollyCursorClose(&curOld);
   if( rc!=SQLITE_OK ){
     prollyCursorClose(&curNew);
-    return 0;
+    return rc;
   }
 
-  rc = (res==0 && prollyCursorIsValid(&curNew));
+  *pShared = res==0 && prollyCursorIsValid(&curNew);
   prollyCursorClose(&curNew);
-  return rc;
+  return SQLITE_OK;
 }
 
 /* Like isRenamePair but without the same-number gate. EMPTY roots compare
@@ -619,33 +630,39 @@ static int isRenamePairContent(
   const StatusCatalogIndex *pFromIdx,
   const StatusCatalogIndex *pToIdx,
   const struct TableEntry *pA,
-  const struct TableEntry *pB
+  const struct TableEntry *pB,
+  int *pMatch
 ){
   int rc;
   int foundLive = 0;
+  int shared = 0;
   char *zLiveSql = 0;
-  int bMatch = 0;
 
-  if( !pA->zName || !pB->zName ) return 0;
-  if( strcmp(pA->zName, pB->zName)==0 ) return 0;
-  if( statusCatalogFindName(pFromIdx, pB->zName)!=0 ) return 0;
-  if( statusCatalogFindName(pToIdx, pA->zName)!=0 ) return 0;
+  *pMatch = 0;
+  if( !pA->zName || !pB->zName ) return SQLITE_OK;
+  if( strcmp(pA->zName, pB->zName)==0 ) return SQLITE_OK;
+  if( statusCatalogFindName(pFromIdx, pB->zName)!=0 ) return SQLITE_OK;
+  if( statusCatalogFindName(pToIdx, pA->zName)!=0 ) return SQLITE_OK;
   if( !prollyHashIsEmpty(&pA->root)
    && prollyHashCompare(&pA->root, &pB->root)==0 ){
-    return 1;
+    *pMatch = 1;
+    return SQLITE_OK;
   }
 
   rc = statusLoadLiveTableSql(db, pB->zName, &foundLive, &zLiveSql);
   if( rc!=SQLITE_OK || !foundLive ) goto content_done;
-  if( statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName)
-   && (statusRootsShareAnyKey(db, pA, pB)
-       || (prollyHashIsEmpty(&pA->root) && prollyHashIsEmpty(&pB->root))) ){
-    bMatch = 1;
+  if( statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName) ){
+    if( prollyHashIsEmpty(&pA->root) && prollyHashIsEmpty(&pB->root) ){
+      shared = 1;
+    }else{
+      rc = statusRootsShareAnyKey(db, pA, pB, &shared);
+    }
+    if( rc==SQLITE_OK && shared ) *pMatch = 1;
   }
 
 content_done:
   sqlite3_free(zLiveSql);
-  return bMatch;
+  return rc;
 }
 
 static int isRenamePair(
@@ -653,10 +670,12 @@ static int isRenamePair(
   const StatusCatalogIndex *pFromIdx,
   const StatusCatalogIndex *pToIdx,
   const struct TableEntry *pA,
-  const struct TableEntry *pB
+  const struct TableEntry *pB,
+  int *pMatch
 ){
-  if( pA->iTable != pB->iTable ) return 0;
-  return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB);
+  *pMatch = 0;
+  if( pA->iTable != pB->iTable ) return SQLITE_OK;
+  return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB, pMatch);
 }
 
 /* True if another to-side table has the same non-empty content: the rename
@@ -717,7 +736,10 @@ int doltliteCatalogRenameMate(
   if( pMate ){
     const struct TableEntry *pA = bKnownIsFrom ? pKnown : pMate;
     const struct TableEntry *pB = bKnownIsFrom ? pMate : pKnown;
-    if( !isRenamePair(db, &fromIdx, &toIdx, pA, pB) ) pMate = 0;
+    int isPair = 0;
+    rc = isRenamePair(db, &fromIdx, &toIdx, pA, pB, &isPair);
+    if( rc!=SQLITE_OK ) goto rename_done;
+    if( !isPair ) pMate = 0;
   }
   if( !pMate ){
     /* Number lookup misses order-shifting renames; scan by content, require uniqueness. */
@@ -727,8 +749,12 @@ int doltliteCatalogRenameMate(
     for(i=0; i<nOther; i++){
       const struct TableEntry *pA = bKnownIsFrom ? pKnown : &aOther[i];
       const struct TableEntry *pB = bKnownIsFrom ? &aOther[i] : pKnown;
+      int isPair = 0;
       if( aOther[i].iTable<=1 || !aOther[i].zName ) continue;
-      if( !isRenamePairContent(db, &fromIdx, &toIdx, pA, pB) ) continue;
+      rc = isRenamePairContent(
+          db, &fromIdx, &toIdx, pA, pB, &isPair);
+      if( rc!=SQLITE_OK ) goto rename_done;
+      if( !isPair ) continue;
       if( pMate ){
         pMate = 0;
         break;
@@ -741,10 +767,11 @@ int doltliteCatalogRenameMate(
     const struct TableEntry *pT = bKnownIsFrom ? pMate : pKnown;
     if( renameMateIsContested(aFrom, nFrom, aTo, nTo, pF, pT) ) pMate = 0;
   }
+rename_done:
   statusCatalogIndexFree(&fromIdx);
   statusCatalogIndexFree(&toIdx);
-  *ppMate = pMate;
-  return SQLITE_OK;
+  if( rc==SQLITE_OK ) *ppMate = pMate;
+  return rc;
 }
 
 static int compareCatalogs(
@@ -774,12 +801,16 @@ static int compareCatalogs(
   if( useRename ){
     for(i=0; i<nFrom; i++){
       struct TableEntry *pTo;
+      int isPair = 0;
       if( aFrom[i].iTable<=1 || fromHandled[i] ) continue;
       pTo = statusCatalogFindNumber(&toIdx, aFrom[i].iTable);
       if( !pTo ) continue;
       j = (int)(pTo - aTo);
       if( j<0 || j>=nTo || toHandled[j] || pTo->iTable<=1 ) continue;
-      if( isRenamePair(db, &fromIdx, &toIdx, &aFrom[i], pTo)
+      rc = isRenamePair(
+          db, &fromIdx, &toIdx, &aFrom[i], pTo, &isPair);
+      if( rc!=SQLITE_OK ) goto compare_done;
+      if( isPair
        && !renameMateIsContested(aFrom, nFrom, aTo, nTo, &aFrom[i], pTo) ){
         char *zCompound = sqlite3_mprintf("%s -> %s", aFrom[i].zName, pTo->zName);
         if( !zCompound ){ rc = SQLITE_NOMEM; goto compare_done; }
@@ -796,10 +827,12 @@ static int compareCatalogs(
       if( aFrom[i].iTable<=1 || fromHandled[i] || !aFrom[i].zName ) continue;
       if( statusCatalogFindName(&toIdx, aFrom[i].zName) ) continue;
       for(j=0; j<nTo; j++){
+        int isPair = 0;
         if( toHandled[j] || aTo[j].iTable<=1 || !aTo[j].zName ) continue;
-        if( !isRenamePairContent(db, &fromIdx, &toIdx, &aFrom[i], &aTo[j]) ){
-          continue;
-        }
+        rc = isRenamePairContent(
+            db, &fromIdx, &toIdx, &aFrom[i], &aTo[j], &isPair);
+        if( rc!=SQLITE_OK ) goto compare_done;
+        if( !isPair ) continue;
         if( jMate>=0 ){
           jMate = -1;
           break;
@@ -921,10 +954,12 @@ static int statusMaybeAddRename(
   int *pIsRename
 ){
   int rc = SQLITE_OK;
+  int isPair = 0;
   *pIsRename = 0;
   if( !pFrom || !pTo ) return SQLITE_OK;
-  if( isRenamePair(db, pFromIdx, pToIdx, pFrom, pTo)
-   && !renameMateIsContested(pFromIdx->aEntry, pFromIdx->nEntry,
+  rc = isRenamePair(db, pFromIdx, pToIdx, pFrom, pTo, &isPair);
+  if( rc!=SQLITE_OK ) return rc;
+  if( isPair && !renameMateIsContested(pFromIdx->aEntry, pFromIdx->nEntry,
                              pToIdx->aEntry, pToIdx->nEntry, pFrom, pTo) ){
     char *zCompound;
     *pIsRename = 1;

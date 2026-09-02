@@ -36,7 +36,24 @@ static void put4byteBE(unsigned char *p, unsigned int v){
   p[3] = (unsigned char)(v & 0xff);
 }
 
-static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
+static int dbpageMapChunkSourceError(
+  DbpageVtab *pVtab,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  if( zErr ){
+    sqlite3_free(pVtab->base.zErrMsg);
+    pVtab->base.zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
+static int synthesizeHeader(DbpageVtab *pVtab, unsigned char *aPage){
+  sqlite3 *db = pVtab->db;
   ProllyHash headHash;
   ProllyHash catHash;
   struct TableEntry *aTables = 0;
@@ -47,6 +64,7 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   unsigned int pageCount = 0;
   unsigned int largestRoot = 0;
   unsigned char *aHdr = aPage;
+  int rc;
   int i;
 
   memset(aPage, 0, DOLTLITE_DBPAGE_PAGE_BYTES);
@@ -68,11 +86,17 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   }
   put4byteBE(aHdr + 24, changeCounter);
 
-  if( doltliteGetHeadCatalogHash(db, &catHash)==SQLITE_OK
-   && !prollyHashIsEmpty(&catHash)
-   && doltliteLoadCatalog(db, &catHash, &aTables, &nTables, &iNextTable)==SQLITE_OK
-  ){
+  rc = doltliteGetHeadCatalogHash(db, &catHash);
+  if( rc!=SQLITE_OK ){
+    return dbpageMapChunkSourceError(pVtab, rc, SQLITE_OK);
+  }
+  if( !prollyHashIsEmpty(&catHash) ){
     int userTables = 0;
+    rc = doltliteLoadCatalog(db, &catHash, &aTables, &nTables, &iNextTable);
+    if( rc!=SQLITE_OK ){
+      doltliteFreeCatalog(aTables, nTables);
+      return dbpageMapChunkSourceError(pVtab, rc, SQLITE_OK);
+    }
     for(i=0; i<nTables; i++){
 
       if( aTables[i].iTable<=1 ) continue;
@@ -98,6 +122,7 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
 
   put4byteBE(aHdr + 92, changeCounter);
   put4byteBE(aHdr + 96, SQLITE_VERSION_NUMBER);
+  return SQLITE_OK;
 }
 
 static const char *zDbpageSchema =
@@ -158,6 +183,7 @@ static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
   DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
   DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
   int iArg = 0;
+  int rc;
   (void)idxStr; (void)argc;
 
   pCur->iRow = 0;
@@ -179,7 +205,8 @@ static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
     }
   }
 
-  synthesizeHeader(pVtab->db, pCur->aPage);
+  rc = synthesizeHeader(pVtab, pCur->aPage);
+  if( rc!=SQLITE_OK ) return rc;
   pCur->hasRow = 1;
   return SQLITE_OK;
 }

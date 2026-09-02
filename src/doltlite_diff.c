@@ -139,6 +139,23 @@ struct DoltliteDiffCursor {
   int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING, 2=STAGED */
 };
 
+static int diffMapChunkSourceError(
+  DoltliteDiffCursor *pCur,
+  sqlite3 *db,
+  int sourceRc,
+  int mappedRc
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int pendingRc = SQLITE_OK;
+  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
+  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
+  if( zErr ){
+    sqlite3_free(pCur->base.pVtab->zErrMsg);
+    pCur->base.pVtab->zErrMsg = zErr;
+  }
+  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
 static const char *diffSchema =
   "CREATE TABLE x("
   "  commit_hash   TEXT,"
@@ -283,8 +300,14 @@ static int diffFilteredTableRoots(
 
   rc = doltliteLoadTableRootByName(db, pChildCat, pCur->zFilterTable,
                                    &childRoot, 0, &childSchema);
-  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
-  childFound = rc==SQLITE_OK;
+  if( rc==SQLITE_NOTFOUND ){
+    rc = diffMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+    if( rc!=SQLITE_OK ) return rc;
+    childFound = 0;
+  }else{
+    if( rc!=SQLITE_OK ) return rc;
+    childFound = 1;
+  }
   if( !childFound ){
     memset(&childRoot, 0, sizeof(childRoot));
     memset(&childSchema, 0, sizeof(childSchema));
@@ -292,8 +315,14 @@ static int diffFilteredTableRoots(
 
   rc = doltliteLoadTableRootByName(db, pParentCat, pCur->zFilterTable,
                                    &parentRoot, 0, &parentSchema);
-  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
-  parentFound = rc==SQLITE_OK;
+  if( rc==SQLITE_NOTFOUND ){
+    rc = diffMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+    if( rc!=SQLITE_OK ) return rc;
+    parentFound = 0;
+  }else{
+    if( rc!=SQLITE_OK ) return rc;
+    parentFound = 1;
+  }
   if( !parentFound ){
     memset(&parentRoot, 0, sizeof(parentRoot));
     memset(&parentSchema, 0, sizeof(parentSchema));

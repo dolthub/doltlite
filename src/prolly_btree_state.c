@@ -39,7 +39,9 @@ int btreeLoadWorkingSetBlob(
   if( pConstraintViolations ) memset(pConstraintViolations, 0, sizeof(ProllyHash));
 
   rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
-  if( rc!=SQLITE_OK || prollyHashIsEmpty(&wsHash) ) return SQLITE_NOTFOUND;
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_EMPTY;
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&wsHash) ) return SQLITE_EMPTY;
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
@@ -157,6 +159,8 @@ int btreeLoadBranchState(
   ProllyHash committedCatalog;
   ProllyHash headCommit;
   ProllyHash workingCommit;
+  ProllyHash workingSetRef;
+  int hasWorkingSetRef;
   int useWorkingState;
   int rc;
 
@@ -165,21 +169,34 @@ int btreeLoadBranchState(
   memset(&committedCatalog, 0, sizeof(committedCatalog));
   memset(&headCommit, 0, sizeof(headCommit));
   memset(&workingCommit, 0, sizeof(workingCommit));
+  memset(&workingSetRef, 0, sizeof(workingSetRef));
 
   rc = chunkStoreFindBranch(cs, zBranch, &headCommit);
   if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = btreeLoadWorkingSetBlob(
-      cs, zBranch, &pState->catalog, &workingCommit,
-      &pState->stagedCatalog, &pState->isMerging,
-      &pState->mergeCommit, &pState->conflictsCatalog,
-      &pState->isRebasing, &pState->preRebaseCatalog,
-      &pState->rebaseOnto, &pState->zRebaseOrigBranch,
-      &pState->zRebaseReturnBranch, &pState->constraintViolations);
-  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
-    btreeClearBranchState(pState);
+  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &workingSetRef);
+  if( rc==SQLITE_NOTFOUND ){
+    hasWorkingSetRef = 0;
+  }else if( rc!=SQLITE_OK ){
     return rc;
+  }else{
+    hasWorkingSetRef = !prollyHashIsEmpty(&workingSetRef);
+  }
+  if( hasWorkingSetRef ){
+    rc = btreeLoadWorkingSetBlob(
+        cs, zBranch, &pState->catalog, &workingCommit,
+        &pState->stagedCatalog, &pState->isMerging,
+        &pState->mergeCommit, &pState->conflictsCatalog,
+        &pState->isRebasing, &pState->preRebaseCatalog,
+        &pState->rebaseOnto, &pState->zRebaseOrigBranch,
+        &pState->zRebaseReturnBranch, &pState->constraintViolations);
+    if( rc!=SQLITE_OK ){
+      btreeClearBranchState(pState);
+      return rc;
+    }
+  }else{
+    rc = SQLITE_NOTFOUND;
   }
   useWorkingState = rc==SQLITE_OK
     && (prollyHashCompare(&workingCommit, &headCommit)==0
@@ -190,7 +207,10 @@ int btreeLoadBranchState(
   if( !useWorkingState || prollyHashIsEmpty(&pState->catalog) ){
     if( !prollyHashIsEmpty(&headCommit) ){
       rc = btreeLoadBranchHeadCatalog(cs, zBranch, &committedCatalog, 0);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ){
+        btreeClearBranchState(pState);
+        return rc;
+      }
     }
     pState->catalog = committedCatalog;
   }
@@ -313,7 +333,7 @@ int btreePutRebaseMetadataOnBranch(
                                &zIgnoreOrig, &zIgnoreReturn, &cvs);
   sqlite3_free(zIgnoreOrig);
   sqlite3_free(zIgnoreReturn);
-  if( rc==SQLITE_NOTFOUND ){
+  if( rc==SQLITE_EMPTY ){
     rc = btreeLoadBranchHeadCatalog(cs, zBranch, &cat, &commit);
     if( rc!=SQLITE_OK ) return rc;
     memset(&staged, 0, sizeof(staged));
@@ -344,7 +364,7 @@ int btreeClearRebaseMetadataOnBranch(ChunkStore *cs, const char *zBranch){
                                &zIgnoreOrig, &zIgnoreReturn, &cvs);
   sqlite3_free(zIgnoreOrig);
   sqlite3_free(zIgnoreReturn);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc==SQLITE_EMPTY ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
   if( (oldFlags & WS_REBASE_FLAG_META_MIRROR)==0 ) return SQLITE_OK;
   return btreeStoreWorkingSetBlob(cs, zBranch, &cat, &commit, &staged, merging,
@@ -357,8 +377,9 @@ int btreeReadWorkingCatalog(
   ProllyHash *pCatHash,
   ProllyHash *pCommitHash
 ){
-  return btreeLoadWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
-                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  int rc = btreeLoadWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
+                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  return rc==SQLITE_EMPTY ? SQLITE_NOTFOUND : rc;
 }
 
 int btreeWriteWorkingState(
@@ -386,12 +407,12 @@ int btreeWriteWorkingState(
                                &isRebasing, &preRebaseCat, &rebaseOnto,
                                &zRebaseOrigBranch, &zRebaseReturnBranch,
                                &constraintViolationsHash);
-  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
+  if( rc!=SQLITE_OK && rc!=SQLITE_EMPTY ){
     sqlite3_free(zRebaseOrigBranch);
     sqlite3_free(zRebaseReturnBranch);
     return rc;
   }
-  if( rc==SQLITE_NOTFOUND ){
+  if( rc==SQLITE_EMPTY ){
     memset(&stagedCatalog, 0, sizeof(ProllyHash));
     memset(&mergeCommitHash, 0, sizeof(ProllyHash));
     memset(&conflictsCatalogHash, 0, sizeof(ProllyHash));
@@ -543,6 +564,52 @@ int btreeRefreshSharedWorkingState(Btree *p){
   p->bCatalogDropped = 0;
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
   btreeBumpExternalDataVersion(p);
+  return SQLITE_OK;
+}
+
+int doltliteBtreeHydrateDeferred(Btree *p){
+  ProllyHash loadedCatHash;
+  ChunkStore *cs;
+  char *zPrepared = 0;
+  char *zOldBranch = 0;
+  int rc;
+
+  if( !p || !p->pBt ) return SQLITE_MISUSE;
+  if( !p->bDeferredOpen ) return SQLITE_OK;
+  if( p->inTrans!=TRANS_NONE || p->inTransaction!=TRANS_NONE ){
+    return SQLITE_BUSY;
+  }
+
+  cs = &p->pBt->store;
+  rc = chunkStoreEnsureRefsFresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteBtreePrepareBackupBranch(p, cs, &zPrepared);
+  if( rc!=SQLITE_OK ) return rc;
+  if( zPrepared ){
+    zOldBranch = p->zBranch;
+    p->zBranch = zPrepared;
+  }
+
+  memset(&loadedCatHash, 0, sizeof(loadedCatHash));
+  rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
+  if( rc!=SQLITE_OK ){
+    if( zPrepared ){
+      p->zBranch = zOldBranch;
+      sqlite3_free(zPrepared);
+    }
+    return rc;
+  }
+  if( zPrepared ) sqlite3_free(zOldBranch);
+  btreeStoreCommittedFromCurrent(p, &loadedCatHash);
+  p->bCatalogDropped = 0;
+  p->bDeferredOpen = 0;
+  if( p->db && p->db->nDb>0 && p->db->aDb[0].pBt==p ){
+    p->bDeferredRegister = 1;
+  }
+  btreeMarkWorkingStateChanged(p, 0);
+  if( p->db && !p->db->init.busy && p->db->nVdbeExec==0 ){
+    resetConnectionSchema(p);
+  }
   return SQLITE_OK;
 }
 
@@ -967,7 +1034,7 @@ int doltliteBranchWorkingSetRebaseFlags(
   if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, 0, 0, 0, 0,
                                pFlags, 0, 0, 0, 0, 0);
-  if( rc==SQLITE_NOTFOUND ){
+  if( rc==SQLITE_EMPTY ){
     if( pFlags ) *pFlags = 0;
     return SQLITE_OK;
   }
@@ -987,36 +1054,40 @@ int doltliteSessionHasUnresolvedConflicts(sqlite3 *db){
   return !prollyHashIsEmpty(&p->vc.conflictsCatalogHash);
 }
 
-void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
+int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
+  Btree *p;
+  ChunkStore *pStore;
+  const char *zBr;
   u8 isMerging = 0;
+  int rc;
   if( pHash ) memset(pHash, 0, sizeof(*pHash));
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pHash ) return;
-  {
-    Btree *p = db->aDb[0].pBt;
-    if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE || db->pSavepoint ){
-      /* Cherry-pick/revert record conflicts without isMerging. */
-      memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
-      return;
-    }
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pHash ){
+    return SQLITE_ERROR;
+  }
+  p = db->aDb[0].pBt;
+  if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
+   || db->pSavepoint ){
+    /* Cherry-pick/revert record conflicts without isMerging. */
+    memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
+    return SQLITE_OK;
   }
   if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE ){
     /* Idle: refresh so the in-memory read sees the durable working set. */
-    ChunkStore *pStore = &db->aDb[0].pBt->pBt->store;
+    pStore = &p->pBt->store;
     if( chunkStoreLockAndRefresh(pStore)==SQLITE_OK ){
       (void)chunkStoreForceRefresh(pStore);
       chunkStoreUnlock(pStore);
     }
   }
-  {
-    Btree *p = db->aDb[0].pBt;
-    const char *zBr = p->zBranch ? p->zBranch : "main";
-    int rc = btreeLoadWorkingSetBlob(&p->pBt->store, zBr,
-                                     0, 0, 0, &isMerging,
-                                     0, pHash, 0, 0, 0, 0, 0, 0);
-    if( rc!=SQLITE_OK || !isMerging ){
-      memset(pHash, 0, sizeof(*pHash));
-    }
+  zBr = p->zBranch ? p->zBranch : "main";
+  rc = btreeLoadWorkingSetBlob(&p->pBt->store, zBr,
+                               0, 0, 0, &isMerging,
+                               0, pHash, 0, 0, 0, 0, 0, 0);
+  if( rc==SQLITE_EMPTY ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK || !isMerging ){
+    memset(pHash, 0, sizeof(*pHash));
   }
+  return rc;
 }
 
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
@@ -1244,7 +1315,7 @@ int doltliteBranchWorkingSetIsRebasing(
   if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, 0, 0, 0, 0,
                                &isRebasing, 0, 0, 0, 0, 0);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc==SQLITE_EMPTY ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
   if( pActive ) *pActive = isRebasing!=0;
   return SQLITE_OK;
@@ -1253,8 +1324,16 @@ int doltliteBranchWorkingSetIsRebasing(
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
+  ProllyHash stagedCatalog;
+  ProllyHash mergeCommitHash;
+  ProllyHash conflictsCatalogHash;
+  ProllyHash preRebaseWorkingCat;
+  ProllyHash rebaseOntoCommit;
+  ProllyHash constraintViolationsHash;
   char *zNewRebaseOrigBranch = 0;
   char *zNewRebaseReturnBranch = 0;
+  u8 isMerging = 0;
+  u8 isRebasing = 0;
   int rc;
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
@@ -1262,16 +1341,16 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   if( !cs ) return SQLITE_ERROR;
 
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0,
-                               &pBtree->vc.stagedCatalog,
-                               &pBtree->vc.isMerging, &pBtree->vc.mergeCommitHash,
-                               &pBtree->vc.conflictsCatalogHash,
-                               &pBtree->isRebasing,
-                               &pBtree->preRebaseWorkingCat,
-                               &pBtree->rebaseOntoCommit,
+                               &stagedCatalog,
+                               &isMerging, &mergeCommitHash,
+                               &conflictsCatalogHash,
+                               &isRebasing,
+                               &preRebaseWorkingCat,
+                               &rebaseOntoCommit,
                                &zNewRebaseOrigBranch,
                                &zNewRebaseReturnBranch,
-                               &pBtree->vc.constraintViolationsHash);
-  if( rc == SQLITE_NOTFOUND ){
+                               &constraintViolationsHash);
+  if( rc == SQLITE_EMPTY ){
     memset(&pBtree->vc.stagedCatalog, 0, sizeof(ProllyHash));
     pBtree->vc.isMerging = 0;
     pBtree->vc.pendingReplayCommit = 0;
@@ -1288,6 +1367,14 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     return SQLITE_OK;
   }
   if( rc==SQLITE_OK ){
+    pBtree->vc.stagedCatalog = stagedCatalog;
+    pBtree->vc.isMerging = isMerging;
+    pBtree->vc.mergeCommitHash = mergeCommitHash;
+    pBtree->vc.conflictsCatalogHash = conflictsCatalogHash;
+    pBtree->isRebasing = isRebasing;
+    pBtree->preRebaseWorkingCat = preRebaseWorkingCat;
+    pBtree->rebaseOntoCommit = rebaseOntoCommit;
+    pBtree->vc.constraintViolationsHash = constraintViolationsHash;
     pBtree->vc.pendingReplayCommit = 0;
     sqlite3_free(pBtree->zRebaseOrigBranch);
     pBtree->zRebaseOrigBranch = zNewRebaseOrigBranch;

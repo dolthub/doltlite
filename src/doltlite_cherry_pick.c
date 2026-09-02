@@ -39,14 +39,14 @@ int doltliteLoadHeadAndParentedCommit(
   DoltliteCommit *pOurCommit
 ){
   int rc = doltliteLoadCommit(db, pTargetHash, pTargetCommit);
-  if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+  if( rc!=SQLITE_OK ) return rc;
 
   if( doltliteCommitParentCount(pTargetCommit)==0 ){
     return SQLITE_EMPTY;
   }
 
   rc = doltliteLoadFirstParentCommit(db, pTargetCommit, pParentCommit);
-  if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+  if( rc!=SQLITE_OK ) return rc;
 
   doltliteGetSessionHead(db, pOurHead);
   if( prollyHashIsEmpty(pOurHead) ){
@@ -54,8 +54,7 @@ int doltliteLoadHeadAndParentedCommit(
   }
 
   rc = doltliteLoadCommit(db, pOurHead, pOurCommit);
-  if( rc!=SQLITE_OK ) return SQLITE_ABORT;
-  return SQLITE_OK;
+  return rc;
 }
 
 typedef struct ApplyAbortRefsCtx ApplyAbortRefsCtx;
@@ -356,6 +355,21 @@ apply_rollback:
   }
 }
 
+static int cherryPickSourceResultError(
+  sqlite3_context *context,
+  ChunkStore *cs,
+  int rc
+){
+  int pendingRc = SQLITE_OK;
+  char *zErr = chunkStoreSourceTakeError(cs, &pendingRc);
+  if( !zErr && pendingRc==SQLITE_OK ) return 0;
+  if( zErr ) sqlite3_result_error(context, zErr, -1);
+  sqlite3_result_error_code(
+      context, pendingRc!=SQLITE_OK ? pendingRc : rc);
+  sqlite3_free(zErr);
+  return 1;
+}
+
 static void doltliteCherryPickFunc(
   sqlite3_context *context,
   int argc,
@@ -406,7 +420,9 @@ static void doltliteCherryPickFunc(
     rc = mergeAbortInPlace(db);
     doltliteCmdArgsClear(&args);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
+      if( !cherryPickSourceResultError(context, cs, rc) ){
+        sqlite3_result_error_code(context, rc);
+      }
       return;
     }
     sqlite3_result_int(context, 0);
@@ -429,7 +445,9 @@ static void doltliteCherryPickFunc(
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
+    if( !cherryPickSourceResultError(context, cs, rc) ){
+      sqlite3_result_error_code(context, rc);
+    }
     return;
   }
   if( dirty ){
@@ -440,7 +458,13 @@ static void doltliteCherryPickFunc(
 
   rc = doltliteResolveRef(db,zRef, &pickHash);
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "invalid commit hash", -1);
+    if( !cherryPickSourceResultError(context, cs, rc) ){
+      if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
+        sqlite3_result_error(context, "invalid commit hash", -1);
+      }else{
+        sqlite3_result_error_code(context, rc);
+      }
+    }
     return;
   }
   rc = doltliteLoadHeadAndParentedCommit(
@@ -450,7 +474,10 @@ static void doltliteCherryPickFunc(
   if( rc==SQLITE_NOTFOUND ){
     doltliteCommitClear(&pickCommit);
     doltliteCommitClear(&parentCommit);
-    sqlite3_result_error(context, "commit not found", -1);
+    doltliteCommitClear(&ourCommit);
+    if( !cherryPickSourceResultError(context, cs, rc) ){
+      sqlite3_result_error(context, "commit not found", -1);
+    }
     return;
   }
   if( rc==SQLITE_EMPTY ){
@@ -464,10 +491,13 @@ static void doltliteCherryPickFunc(
     sqlite3_result_error(context, "no commits on current branch", -1);
     return;
   }
-  if( rc==SQLITE_ABORT ){
+  if( rc!=SQLITE_OK ){
     doltliteCommitClear(&pickCommit);
     doltliteCommitClear(&parentCommit);
-    sqlite3_result_error(context, "failed to load HEAD commit", -1);
+    doltliteCommitClear(&ourCommit);
+    if( !cherryPickSourceResultError(context, cs, rc) ){
+      sqlite3_result_error_code(context, rc);
+    }
     return;
   }
   if( doltliteCommitParentCount(&pickCommit)>1 ){
@@ -499,7 +529,9 @@ static void doltliteCherryPickFunc(
 
   if( rc==SQLITE_BUSY ){
     sqlite3_free(zApplyErr);
-    doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
+    if( !cherryPickSourceResultError(context, cs, rc) ){
+      doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
+    }
     return;
   }
   if( rc==SQLITE_DONE ){
@@ -508,12 +540,14 @@ static void doltliteCherryPickFunc(
     return;
   }
   if( rc!=SQLITE_OK ){
-    if( zApplyErr ){
-      sqlite3_result_error(context, zApplyErr, -1);
-    }else{
-      char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
-      sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
-      sqlite3_free(zMsg);
+    if( !cherryPickSourceResultError(context, cs, rc) ){
+      if( zApplyErr ){
+        sqlite3_result_error(context, zApplyErr, -1);
+      }else{
+        char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
+        sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
+        sqlite3_free(zMsg);
+      }
     }
     sqlite3_free(zApplyErr);
     return;

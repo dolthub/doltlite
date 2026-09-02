@@ -692,6 +692,7 @@ int sqlite3BtreeOpen(
     ProllyHash branchCommit;
     ProllyHash revisionCatalog;
     u8 isBranchRevision = 0;
+    u8 bDeferredOpen = 0;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
       chunkStoreGetDefaultBranch(&pBt->store);
     if( !zDef ) zDef = "main";
@@ -700,6 +701,12 @@ int sqlite3BtreeOpen(
     if( zBranchFromPath ){
       rc = doltliteResolveOpenRevision(&pBt->store, zDef, &branchCommit,
                                        &revisionCatalog, &isBranchRevision);
+#if DOLTLITE_ENABLE_CHUNK_SOURCE
+      if( rc==SQLITE_NOTFOUND && isBranchRevision ){
+        bDeferredOpen = 1;
+        rc = SQLITE_OK;
+      }
+#endif
     }
     if( zBranchFromPath && rc!=SQLITE_OK ){
       int openRc = rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM
@@ -725,6 +732,12 @@ int sqlite3BtreeOpen(
       rc = SQLITE_OK;
     }else{
       rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
+#if DOLTLITE_ENABLE_CHUNK_SOURCE
+      if( rc==SQLITE_NOTFOUND ){
+        bDeferredOpen = 1;
+        rc = SQLITE_OK;
+      }
+#endif
     }
     if( rc!=SQLITE_OK ){
       pagerShimDestroy(pBt->pPagerShim);
@@ -735,7 +748,7 @@ int sqlite3BtreeOpen(
       sqlite3_free(p);
       return rc;
     }
-    if( !prollyHashIsEmpty(&state.catalog) ){
+    if( !bDeferredOpen && !prollyHashIsEmpty(&state.catalog) ){
       u8 *catData = 0;
       int nCatData = 0;
       rc = chunkStoreGet(&pBt->store, &state.catalog, &catData, &nCatData);
@@ -754,6 +767,12 @@ int sqlite3BtreeOpen(
         }
       }else{
         sqlite3_free(catData);
+#if DOLTLITE_ENABLE_CHUNK_SOURCE
+        if( rc==SQLITE_NOTFOUND && !p->isDetached ){
+          bDeferredOpen = 1;
+          rc = SQLITE_OK;
+        }
+#endif
         if( rc!=SQLITE_OK ){
           btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
@@ -767,18 +786,23 @@ int sqlite3BtreeOpen(
       }
     }
 
-    p->headCommit = state.headCommit;
-    p->vc.stagedCatalog = state.stagedCatalog;
-    p->vc.isMerging = state.isMerging;
-    p->vc.pendingReplayCommit = 0;
-    p->vc.mergeCommitHash = state.mergeCommit;
-    p->vc.conflictsCatalogHash = state.conflictsCatalog;
-    p->isRebasing = state.isRebasing;
-    p->preRebaseWorkingCat = state.preRebaseCatalog;
-    p->rebaseOntoCommit = state.rebaseOnto;
-    p->zRebaseOrigBranch = state.zRebaseOrigBranch;
-    p->zRebaseReturnBranch = state.zRebaseReturnBranch;
-    p->vc.constraintViolationsHash = state.constraintViolations;
+    if( bDeferredOpen ){
+      btreeClearBranchState(&state);
+    }else{
+      p->headCommit = state.headCommit;
+      p->vc.stagedCatalog = state.stagedCatalog;
+      p->vc.isMerging = state.isMerging;
+      p->vc.pendingReplayCommit = 0;
+      p->vc.mergeCommitHash = state.mergeCommit;
+      p->vc.conflictsCatalogHash = state.conflictsCatalog;
+      p->isRebasing = state.isRebasing;
+      p->preRebaseWorkingCat = state.preRebaseCatalog;
+      p->rebaseOntoCommit = state.rebaseOnto;
+      p->zRebaseOrigBranch = state.zRebaseOrigBranch;
+      p->zRebaseReturnBranch = state.zRebaseReturnBranch;
+      p->vc.constraintViolationsHash = state.constraintViolations;
+    }
+    p->bDeferredOpen = bDeferredOpen;
   }
 
   p->cat.iNextTable = 2;
@@ -851,6 +875,10 @@ int sqlite3BtreeOpen(
 
 int sqlite3BtreeUsesOrig(Btree *p){
   return p && p->pOps==&origBtreeVtOps;
+}
+
+int sqlite3BtreeIsDeferred(Btree *p){
+  return p && !sqlite3BtreeUsesOrig(p) && p->bDeferredOpen;
 }
 
 /* Inner stock btree, or 0 for a doltlite-format db. */
@@ -1784,6 +1812,8 @@ static int integrityCheckChunkGraph(
 
   rc = chunkStoreGet(&pCtx->pBt->store, pHash, &pData, &nData);
   if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+    char *zSourceErr = chunkStoreSourceTakeError(&pCtx->pBt->store, 0);
+    sqlite3_free(zSourceErr);
     (*pCtx->pnErr)++;
     return SQLITE_OK;
   }
@@ -2186,6 +2216,43 @@ ProllyCache *doltliteGetCache(sqlite3 *db){
   BtShared *pBt = doltliteGetBtShared(db);
   if( pBt ) return &pBt->cache;
   return 0;
+}
+
+void doltliteBtreeRegistrationDone(sqlite3 *db){
+  Btree *p;
+  if( !db || db->nDb<=0 ) return;
+  p = db->aDb[0].pBt;
+  if( p && sqlite3BtreeIsDoltliteFormat(p) ) p->bDeferredRegister = 0;
+}
+
+int doltliteBtreeRunDeferredWork(sqlite3 *db){
+  int i;
+  int rc = SQLITE_OK;
+  Btree *pMain;
+
+  if( !db || db->init.busy || db->nVdbeExec ) return SQLITE_OK;
+  for(i=0; i<db->nDb; i++){
+    Btree *p = db->aDb[i].pBt;
+    if( p && sqlite3BtreeIsDeferred(p) ){
+      rc = doltliteBtreeHydrateDeferred(p);
+      if( rc!=SQLITE_OK ) break;
+    }
+  }
+  pMain = db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( rc==SQLITE_OK && pMain && sqlite3BtreeIsDoltliteFormat(pMain)
+   && pMain->bDeferredRegister ){
+    rc = doltliteRegister(db);
+  }
+  if( rc!=SQLITE_OK ){
+    char *zErr = doltliteTakeChunkSourceError(db, 0);
+    if( zErr ){
+      sqlite3ErrorWithMsg(db, rc, "%s", zErr);
+      sqlite3_free(zErr);
+    }else{
+      sqlite3Error(db, rc);
+    }
+  }
+  return rc;
 }
 
 

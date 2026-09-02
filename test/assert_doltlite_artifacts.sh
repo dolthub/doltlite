@@ -104,12 +104,12 @@ if [ "${DOLTLITE_CHECK_EXPORTS:-1}" != 0 ] && command -v nm >/dev/null 2>&1; the
     # _init/_fini/__bss_start/_edata/_end are defined by the linker itself,
     # after version-script processing, so `local: *` cannot hide them.
     leaked=$(printf '%s\n' "$exported" \
-             | grep -vE '^(sqlite3_|doltliteServe)' \
+             | grep -vE '^(sqlite3_|doltliteServe|doltlite_(init_lazy|set_chunk_source)$)' \
              | grep -vE '^(_init|_fini|__bss_start|_edata|_end)$' \
              | sort -u || true)
     if [ -n "$leaked" ]; then
       n=$(printf '%s\n' "$leaked" | wc -l | tr -d ' ')
-      echo "libdoltlite exports: $n symbol(s) outside sqlite3_*/doltliteServe*" >&2
+      echo "libdoltlite exports: $n unexpected symbol(s)" >&2
       # awk rather than head: head closes the pipe early, which under pipefail
       # surfaces as a broken-pipe error instead of this diagnostic.
       printf '%s\n' "$leaked" \

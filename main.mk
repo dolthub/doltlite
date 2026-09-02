@@ -1450,6 +1450,9 @@ prolly_btree_state.o:	$(TOP)/src/prolly_btree_state.c $(TOP)/src/prolly_btree_in
 prolly_btree_txn.o:	$(TOP)/src/prolly_btree_txn.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_btree_txn.c
 
+doltlite_chunk_source.o:	$(TOP)/src/doltlite_chunk_source.c $(TOP)/src/prolly_btree_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_chunk_source.c
+
 pager_shim.o:	$(TOP)/src/pager_shim.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/pager_shim.c
 
@@ -2734,6 +2737,7 @@ DOLTLITE_C_TESTS = \
 	prolly_chunker_boundary_test$(T.exe) \
 	scoped_refs_push_test$(T.exe) \
 	remote_chunk_integrity_test$(T.exe) \
+	chunk_source_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
 	chunk_store_put_bounds_test$(T.exe) \
@@ -2882,6 +2886,11 @@ remote_chunk_integrity_test$(T.exe): $(TOP)/test/remote_chunk_integrity_test.c l
 		-o $@ $(TOP)/test/remote_chunk_integrity_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
+chunk_source_test$(T.exe): $(TOP)/test/chunk_source_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/chunk_source_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
 # oom_dolt_fault_test installs a wrapper allocator that fails the Nth
 # malloc, then sweeps N across a series of dolt_* operations. Forks
 # per-iteration so crashes in dolt_* OOM paths show up as child signals
@@ -2961,6 +2970,9 @@ libdoltlite.def: $(LIBOBJS0)
 		| sort -u >> $@
 	nm -g --defined-only $(LIBOBJS0) \
 		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(doltliteServe[A-Za-z0-9_]*\)$$/\1/p' \
+		| sort -u >> $@
+	nm -g --defined-only $(LIBOBJS0) \
+		| sed -n 's/^.*[[:space:]]T[[:space:]]_\{0,1\}\(doltlite_\(init_lazy\|set_chunk_source\)\)$$/\1/p' \
 		| sort -u >> $@
 
 libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)

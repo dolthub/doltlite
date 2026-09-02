@@ -160,6 +160,11 @@ static SQLITE_INLINE int catalogParseHeaderEx(
 }
 
 typedef struct ChunkStore ChunkStore;
+typedef struct DoltliteChunkSourceState DoltliteChunkSourceState;
+
+#ifndef DOLTLITE_ENABLE_CHUNK_SOURCE
+# define DOLTLITE_ENABLE_CHUNK_SOURCE 1
+#endif
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #  define CHUNK_STORE_LE_PACKING 1
@@ -204,6 +209,7 @@ struct ChunkStore {
   /* Block checkpoint reentry via VFS write hooks. */
   int checkpointActive;
   sqlite3_vfs *pOwnedVfs;
+  DoltliteChunkSourceState *pChunkSource;
 
 };
 
@@ -289,8 +295,18 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas);
 
 int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
                   u8 **ppData, int *pnData);
+int chunkStoreVerifyChunk(const ProllyHash *hash, u8 **ppData, int *pnData);
 int chunkStoreGetSparse(ChunkStore *cs, const ProllyHash *hash,
                         u8 **ppData, int *pnData, int *pnDataPhys);
+int chunkStoreSourceHas(ChunkStore *cs, const ProllyHash *pHash, int *pHas);
+int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
+                        u8 **ppData, int *pnData);
+int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,
+                                 int nHash);
+int chunkStoreSourceSet(ChunkStore *cs, sqlite3 *db,
+                        doltlite_chunk_source *pSource, int *pChanged);
+void chunkStoreSourceClose(ChunkStore *cs);
+char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc);
 
 int chunkStorePut(ChunkStore *cs, const u8 *pData, int nData,
                   ProllyHash *pHash);

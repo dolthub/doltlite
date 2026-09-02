@@ -121,19 +121,22 @@ static int rebaseBranchHasUncommittedWork(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCommit c;
-  ProllyHash headHash, wsCat, wsCommit;
+  ProllyHash headHash, wsHash, wsCat, wsCommit;
   int rc;
 
   *pDirty = 0;
   if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
   rc = chunkStoreFindBranch(cs, zBranch, &headHash);
   if( rc!=SQLITE_OK ) return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
+  memset(&wsHash, 0, sizeof(wsHash));
   memset(&wsCat, 0, sizeof(wsCat));
   memset(&wsCommit, 0, sizeof(wsCommit));
-  if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCat, &wsCommit)
-        !=SQLITE_OK ){
-    return SQLITE_OK;
-  }
+  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&wsHash) ) return SQLITE_OK;
+  rc = chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCat, &wsCommit);
+  if( rc!=SQLITE_OK ) return rc;
   memset(&c, 0, sizeof(c));
   rc = doltliteLoadCommit(db, &headHash, &c);
   if( rc==SQLITE_OK

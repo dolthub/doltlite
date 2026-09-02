@@ -881,6 +881,9 @@ static int sqlite3LockAndPrepare(
 ){
   int rc;
   int cnt = 0;
+#ifdef DOLTLITE_PROLLY
+  int bTopLevel;
+#endif
 
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( ppStmt==0 ) return SQLITE_MISUSE_BKPT;
@@ -891,6 +894,15 @@ static int sqlite3LockAndPrepare(
   }
   sqlite3_mutex_enter(db->mutex);
   sqlite3BtreeEnterAll(db);
+#ifdef DOLTLITE_PROLLY
+  bTopLevel = db->pParse==0;
+  if( bTopLevel ){
+    char *zOldSourceErr = doltliteTakeChunkSourceError(db, 0);
+    sqlite3_free(zOldSourceErr);
+  }
+  rc = doltliteBtreeRunDeferredWork(db);
+  if( rc!=SQLITE_OK ) goto lock_and_prepare_out;
+#endif
   do{
     /* Make multiple attempts to compile the SQL, until it either succeeds
     ** or encounters a permanent error.  A schema problem after one schema
@@ -901,6 +913,27 @@ static int sqlite3LockAndPrepare(
     cnt++;
   }while( (rc==SQLITE_ERROR_RETRY && ALWAYS(cnt<=SQLITE_MAX_PREPARE_RETRY))
        || (rc==SQLITE_SCHEMA && (sqlite3ResetOneSchema(db,-1), cnt)==1) );
+#ifdef DOLTLITE_PROLLY
+lock_and_prepare_out:
+  if( bTopLevel ){
+    int sourceRc = SQLITE_OK;
+    char *zSourceErr = doltliteTakeChunkSourceError(db, &sourceRc);
+    if( sourceRc!=SQLITE_OK ){
+      if( rc==SQLITE_OK && *ppStmt ){
+        sqlite3VdbeFinalize((Vdbe*)*ppStmt);
+        *ppStmt = 0;
+      }
+      if( !db->mallocFailed ) rc = sourceRc;
+    }
+    if( zSourceErr ){
+      sqlite3ErrorWithMsg(db, sourceRc!=SQLITE_OK ? sourceRc : rc,
+                         "%s", zSourceErr);
+    }else if( sourceRc!=SQLITE_OK && !db->mallocFailed ){
+      sqlite3Error(db, sourceRc);
+    }
+    sqlite3_free(zSourceErr);
+  }
+#endif
   sqlite3BtreeLeaveAll(db);
   assert( rc!=SQLITE_ERROR_RETRY );
   rc = sqlite3ApiExit(db, rc);

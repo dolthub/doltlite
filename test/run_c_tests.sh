@@ -29,6 +29,7 @@ COVERAGE_TESTS=(
   prolly_chunker_boundary_test
   scoped_refs_push_test
   remote_chunk_integrity_test
+  chunk_source_test
   cross_branch_test
   corruption_test
   gc_tip_survival_test

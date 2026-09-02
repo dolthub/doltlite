@@ -10011,6 +10011,20 @@ abort_due_to_error:
   }else if( rc==SQLITE_IOERR_CORRUPTFS ){
     rc = SQLITE_CORRUPT_BKPT;
   }
+#ifdef DOLTLITE_PROLLY
+  if( db->pParse==0 ){
+    int chunkSourceRc = SQLITE_OK;
+    char *zChunkSourceErr = doltliteTakeChunkSourceError(
+        db, &chunkSourceRc);
+    if( zChunkSourceErr ){
+      sqlite3VdbeError(p, "%s", zChunkSourceErr);
+      sqlite3_free(zChunkSourceErr);
+    }
+    if( chunkSourceRc!=SQLITE_OK && !db->mallocFailed ){
+      rc = chunkSourceRc;
+    }
+  }
+#endif
   assert( rc );
 #ifdef SQLITE_DEBUG
   if( db->flags & SQLITE_VdbeTrace ){

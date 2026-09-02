@@ -286,7 +286,7 @@ static int doltliteSelectParent(
   pParent = doltliteCommitParentHash(&commit, iParent);
   if( !pParent ){
     doltliteCommitClear(&commit);
-    return SQLITE_NOTFOUND;
+    return SQLITE_ERROR;
   }
   memcpy(pCommit, pParent, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
@@ -364,7 +364,7 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
     }else{
       rc = doltliteSelectParent(db, pCommit, n-1);
     }
-    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_ERROR;
+    if( rc==SQLITE_NOTFOUND && !cs->pChunkSource ) rc = SQLITE_ERROR;
     if( rc!=SQLITE_OK ) return rc;
   }
   return rc;

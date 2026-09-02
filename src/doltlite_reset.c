@@ -31,32 +31,69 @@ static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
   return -1;
 }
 
+static int resetSourceResultError(
+  sqlite3_context *context,
+  ChunkStore *cs,
+  int *pRc
+){
+  int pendingRc = SQLITE_OK;
+  char *zErr = chunkStoreSourceTakeError(cs, &pendingRc);
+  if( !zErr && pendingRc==SQLITE_OK ) return 0;
+  if( zErr ) sqlite3_result_error(context, zErr, -1);
+  if( pendingRc!=SQLITE_OK ) *pRc = pendingRc;
+  sqlite3_result_error_code(context, *pRc);
+  sqlite3_free(zErr);
+  return 1;
+}
+
 /* True when zName is a table in live schema, staged, or HEAD. A table
 ** beats a same-named ref: dolt_reset('x') must not rewind HEAD. */
-static int resetNameIsTablePath(sqlite3 *db, const char *zName){
+static int resetNameIsTablePath(
+  sqlite3_context *context,
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zName,
+  int *pFound
+){
   struct TableEntry *aCat = 0;
   ProllyHash hash;
   Pgno iLive = 0;
   int nCat = 0;
-  int found = 0;
+  int rc;
 
-  if( doltliteResolveTableName(db, zName, &iLive)==SQLITE_OK ) return 1;
+  *pFound = 0;
+  if( doltliteResolveTableName(db, zName, &iLive)==SQLITE_OK ){
+    *pFound = 1;
+    return SQLITE_OK;
+  }
   doltliteGetSessionStaged(db, &hash);
-  if( !prollyHashIsEmpty(&hash)
-   && doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0)==SQLITE_OK ){
-    found = resetFindTableIndex(aCat, nCat, zName)>=0;
-    doltliteFreeCatalog(aCat, nCat);
-    if( found ) return 1;
-    aCat = 0;
-    nCat = 0;
+  if( !prollyHashIsEmpty(&hash) ){
+    rc = doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0);
+    if( rc!=SQLITE_OK ){
+      if( resetSourceResultError(context, cs, &rc) ) return rc;
+    }else{
+      *pFound = resetFindTableIndex(aCat, nCat, zName)>=0;
+      doltliteFreeCatalog(aCat, nCat);
+      if( *pFound ) return SQLITE_OK;
+      aCat = 0;
+      nCat = 0;
+    }
   }
-  if( doltliteGetHeadCatalogHash(db, &hash)==SQLITE_OK
-   && !prollyHashIsEmpty(&hash)
-   && doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0)==SQLITE_OK ){
-    found = resetFindTableIndex(aCat, nCat, zName)>=0;
-    doltliteFreeCatalog(aCat, nCat);
+  rc = doltliteGetHeadCatalogHash(db, &hash);
+  if( rc!=SQLITE_OK ){
+    if( resetSourceResultError(context, cs, &rc) ) return rc;
+    return SQLITE_OK;
   }
-  return found;
+  if( !prollyHashIsEmpty(&hash) ){
+    rc = doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0);
+    if( rc!=SQLITE_OK ){
+      if( resetSourceResultError(context, cs, &rc) ) return rc;
+    }else{
+      *pFound = resetFindTableIndex(aCat, nCat, zName)>=0;
+      doltliteFreeCatalog(aCat, nCat);
+    }
+  }
+  return SQLITE_OK;
 }
 
 static int resetStageNamedPaths(
@@ -462,8 +499,10 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
-  if( doltliteGetHeadCatalogHash(db, &preResetHeadCatHash)==SQLITE_OK
-   && !prollyHashIsEmpty(&preResetHeadCatHash) ){
+  rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
+  if( rc!=SQLITE_OK && resetSourceResultError(context, cs, &rc) ){
+    goto reset_cleanup;
+  }else if( rc==SQLITE_OK && !prollyHashIsEmpty(&preResetHeadCatHash) ){
     havePreResetHead = 1;
   }
 
@@ -475,15 +514,26 @@ static void doltliteResetFunc(
   if( !azPaths ){ sqlite3_result_error_nomem(context); goto reset_cleanup; }
   for(i=0; i<args.nPositional; i++){
     const char *arg = args.azPositional[i];
+    int isTable = 0;
     if( !zRef ){
 
       if( isHard || isSoft ){
         zRef = arg;
       }else{
         ProllyHash probe;
-        if( !resetNameIsTablePath(db, arg)
-         && doltliteResolveRef(db, arg, &probe)==SQLITE_OK ){
-          zRef = arg;
+        rc = resetNameIsTablePath(context, db, cs, arg, &isTable);
+        if( rc!=SQLITE_OK ){
+          goto reset_cleanup;
+        }
+        if( !isTable ){
+          rc = doltliteResolveRef(db, arg, &probe);
+          if( rc==SQLITE_OK ){
+            zRef = arg;
+          }else if( resetSourceResultError(context, cs, &rc) ){
+            goto reset_cleanup;
+          }else{
+            azPaths[nPaths++] = arg;
+          }
         }else{
           azPaths[nPaths++] = arg;
         }

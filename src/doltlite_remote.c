@@ -649,37 +649,41 @@ DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal){
 static int syncIsAncestor(
   ChunkStore *cs,
   const ProllyHash *pAncestor,
-  const ProllyHash *pDescendant
+  const ProllyHash *pDescendant,
+  int *pIsAncestor
 ){
   SyncQueue queue;
   ProllyHashSet visited;
-  int found = 0;
   int rc;
 
-  if( prollyHashCompare(pAncestor, pDescendant)==0 ) return 1;
+  *pIsAncestor = 0;
+  if( prollyHashCompare(pAncestor, pDescendant)==0 ){
+    *pIsAncestor = 1;
+    return SQLITE_OK;
+  }
 
   rc = syncQueueInit(&queue);
-  if( rc!=SQLITE_OK ) return -1;
+  if( rc!=SQLITE_OK ) return rc;
   rc = prollyHashSetInit(&visited, 256);
   if( rc!=SQLITE_OK ){
     syncQueueFree(&queue);
-    return -1;
+    return rc;
   }
 
   rc = syncQueuePush(&queue, pDescendant);
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&visited);
     syncQueueFree(&queue);
-    return -1;
+    return rc;
   }
   rc = prollyHashSetAdd(&visited, pDescendant);
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&visited);
     syncQueueFree(&queue);
-    return -1;
+    return rc;
   }
 
-  while( !found ){
+  while( rc==SQLITE_OK && !*pIsAncestor ){
     ProllyHash current;
     u8 *data = 0;
     int nData = 0;
@@ -687,43 +691,38 @@ static int syncIsAncestor(
     if( !syncQueuePop(&queue, &current) ) break;
 
     rc = chunkStoreGet(cs, &current, &data, &nData);
-    if( rc!=SQLITE_OK ) break;
+    if( rc==SQLITE_NOTFOUND && !cs->pChunkSource ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK || !data ) break;
 
     if( doltliteClassifyChunk(data, nData) == CHUNK_COMMIT ){
       DoltliteCommit commit;
       memset(&commit, 0, sizeof(commit));
-      if( doltliteCommitDeserialize(data, nData, &commit)==SQLITE_OK ){
+      rc = doltliteCommitDeserialize(data, nData, &commit);
+      if( rc==SQLITE_OK ){
         int pi;
         for(pi=0; pi<doltliteCommitParentCount(&commit); pi++){
           const ProllyHash *pParent = doltliteCommitParentHash(&commit, pi);
           if( !pParent || prollyHashIsEmpty(pParent) ) continue;
           if( prollyHashCompare(pParent, pAncestor)==0 ){
-            found = 1;
+            *pIsAncestor = 1;
             break;
           }
           if( !prollyHashSetContains(&visited, pParent) ){
             rc = prollyHashSetAdd(&visited, pParent);
-            if( rc!=SQLITE_OK ){
-              found = -1;
-              break;
-            }
+            if( rc!=SQLITE_OK ) break;
             rc = syncQueuePush(&queue, pParent);
-            if( rc!=SQLITE_OK ){
-              found = -1;
-              break;
-            }
+            if( rc!=SQLITE_OK ) break;
           }
         }
-        doltliteCommitClear(&commit);
       }
+      doltliteCommitClear(&commit);
     }
     sqlite3_free(data);
-    if( found<0 ) break;
   }
 
   prollyHashSetFree(&visited);
   syncQueueFree(&queue);
-  return found;
+  return rc;
 }
 
 static int scopedSameText(const char *zA, const char *zB){
@@ -937,8 +936,10 @@ int doltliteValidateScopedRefsUpdate(
   }
   if( !bForce && curB && incB
    && prollyHashCompare(&curB->commitHash, &incB->commitHash)!=0 ){
-    int anc = syncIsAncestor(pStore, &curB->commitHash, &incB->commitHash);
-    if( anc<0 ){ rc = SQLITE_NOMEM; goto done; }
+    int anc = 0;
+    rc = syncIsAncestor(
+        pStore, &curB->commitHash, &incB->commitHash, &anc);
+    if( rc!=SQLITE_OK ) goto done;
     if( anc==0 ){ rc = SQLITE_CONSTRAINT; goto done; }
   }
 
@@ -1011,10 +1012,11 @@ int doltlitePush(
         sqlite3_free(refsData);
         return SQLITE_OK;
       }else if( !bForce ){
-        int isAnc = syncIsAncestor(pLocal, &remoteCommit, &localCommit);
-        if( isAnc <= 0 ){
+        int isAnc = 0;
+        rc = syncIsAncestor(pLocal, &remoteCommit, &localCommit, &isAnc);
+        if( rc!=SQLITE_OK || !isAnc ){
           sqlite3_free(refsData);
-          return isAnc<0 ? SQLITE_NOMEM : SQLITE_CONSTRAINT;
+          return rc!=SQLITE_OK ? rc : SQLITE_CONSTRAINT;
         }
       }
     }
