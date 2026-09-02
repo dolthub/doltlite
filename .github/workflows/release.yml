@@ -517,6 +517,9 @@ jobs:
     - name: Cross-version compatibility tests
       run: bash test/doltlite_compat_test.sh build/doltlite
 
+    - name: Frozen storage format contract
+      run: bash test/storage_format_contract_test.sh build/doltlite
+
   # ── Create GitHub release ─────────────────────────────────
   release:
     if: github.event_name != 'workflow_dispatch'
