@@ -659,3 +659,9 @@ jobs:
       env:
         DOLTLITE_COMPAT_PREBUILT: 1
       run: bash test/doltlite_compat_test.sh build/doltlite
+
+    - name: Contract tests
+      run: |
+        bash test/sqlite_compatibility_contract_test.sh build/doltlite
+        bash test/concurrency_contract_test.sh build/doltlite
+        bash test/storage_format_contract_test.sh build/doltlite
