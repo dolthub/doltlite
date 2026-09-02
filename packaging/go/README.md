@@ -49,10 +49,7 @@ remotes — is reachable through SQL; there is no separate API. See the
 ## Concurrency
 
 Safe to use from multiple goroutines through `*sql.DB`, including its
-connection pool. Each connection runs its engine calls on a dedicated OS
-thread, because the engine ties a transaction's lock to the thread that took
-it and a goroutine can move between threads at any call boundary
-([#2577](https://github.com/dolthub/doltlite/issues/2577)).
+connection pool.
 
 Writers to one database still serialize, as in SQLite. A connection waits up
 to five seconds for a contended write before returning "database is locked";
