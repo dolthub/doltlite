@@ -220,6 +220,21 @@ jobs:
         bash packaging/composer/test-package.sh build
       timeout-minutes: 5
 
+    - name: Set up Go
+      if: matrix.platform != 'windows'
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: false
+
+    - name: Smoke test the doltlite-driver module
+      if: matrix.platform != 'windows'
+      shell: bash
+      run: |
+        chmod +x packaging/go/assemble.sh packaging/go/test-package.sh
+        bash packaging/go/test-package.sh build
+      timeout-minutes: 20
+
     - name: Smoke test the doltlite Rust crate
       if: matrix.platform != 'windows'
       shell: bash

@@ -76,3 +76,5 @@ state.json
 .compat-cache/
 packaging/rust/vendor/
 packaging/rust/target/
+packaging/go/doltlite.c
+packaging/go/doltlite.h

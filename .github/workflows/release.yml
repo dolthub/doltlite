@@ -801,6 +801,73 @@ jobs:
         git tag "${VERSION}"
         git push origin "${VERSION}"
 
+  # ── Publish the Go module ────────────────────────────────
+  # Go resolves modules from a VCS path and takes the version from a repo tag,
+  # so publishing means pushing the staged module and a matching tag into
+  # dolthub/doltlite-driver. The module vendors the amalgamation, so the tag
+  # tracks this engine release. Named -driver, not -go: dolthub/doltlite-go is
+  # a different, pure-Go library for the sync protocol.
+  release-go:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+    - name: Check release bot token
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to push commits and tags to doltlite-driver"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev tcl
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - name: Build the amalgamation
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make sqlite3.c sqlite3.h
+
+    - name: Release doltlite-driver
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+
+        if gh api "repos/dolthub/doltlite-driver/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+          echo "doltlite-driver ${VERSION} already exists; skipping"
+          exit 0
+        fi
+
+        stage="$(mktemp -d)"
+        bash packaging/go/assemble.sh "$version" "$stage/pkg" build
+
+        gh repo clone dolthub/doltlite-driver "$stage/doltlite-driver"
+        cd "$stage/doltlite-driver"
+        git checkout main
+        find . -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
+        cp -R "$stage/pkg/." .
+        # assemble.sh leaves .version for the pushing side; the tag carries it.
+        rm -f .version
+        git add -A
+        if ! git diff --cached --quiet; then
+          git commit -m "doltlite ${VERSION}"
+          git push origin main
+        fi
+        git tag "${VERSION}"
+        git push origin "${VERSION}"
+
   # ── Publish the .NET NuGet package ───────────────────────
   # nuget.org takes uploaded artifacts, so there is no split repo: assemble
   # the package with every platform's native library extracted from this
