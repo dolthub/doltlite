@@ -165,13 +165,29 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     return;
   }
 
-  /* Stock ALTER exposes no row DML to triggers, counters, or authorizers. */
+  /* Stock ALTER exposes no row DML to triggers, counters, authorizers,
+  ** or update/preupdate hooks. */
   {
     int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
     i64 nChange = db->nChange;
     i64 nTotalChange = db->nTotalChange;
+    void (*xUpdateCallback)(void*,int,const char*,const char*,sqlite_int64);
+    void *pUpdateArg;
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+    void (*xPreUpdateCallback)(void*,sqlite3*,int,char const*,char const*,
+                               sqlite3_int64,sqlite3_int64);
+    void *pPreUpdateArg;
+#endif
 #ifndef SQLITE_OMIT_AUTHORIZATION
     sqlite3_xauth xAuth = db->xAuth;
+#endif
+    xUpdateCallback = db->xUpdateCallback;
+    pUpdateArg = db->pUpdateArg;
+    db->xUpdateCallback = 0;
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+    xPreUpdateCallback = db->xPreUpdateCallback;
+    pPreUpdateArg = db->pPreUpdateArg;
+    db->xPreUpdateCallback = 0;
 #endif
     db->mDbFlags |= DBFLAG_InternalDml;
 #ifndef SQLITE_OMIT_AUTHORIZATION
@@ -180,6 +196,12 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
 #ifndef SQLITE_OMIT_AUTHORIZATION
     db->xAuth = xAuth;
+#endif
+    db->xUpdateCallback = xUpdateCallback;
+    db->pUpdateArg = pUpdateArg;
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+    db->xPreUpdateCallback = xPreUpdateCallback;
+    db->pPreUpdateArg = pPreUpdateArg;
 #endif
     /* Clear this bit only: restoring the word would undo flags set by prepare. */
     if( !bWasSet ) db->mDbFlags &= ~DBFLAG_InternalDml;

@@ -2264,6 +2264,73 @@ static void run_alter_default_authorizer(void){
   removeDbFiles(auxpath);
 }
 
+static int nAlterDefaultUpdateHook;
+
+static void countAlterDefaultUpdateHook(
+  void *p,
+  int op,
+  const char *zDb,
+  const char *zTbl,
+  sqlite3_int64 rowid
+){
+  (void)p;
+  (void)zDb;
+  (void)zTbl;
+  (void)rowid;
+  if( op==SQLITE_UPDATE ) nAlterDefaultUpdateHook++;
+}
+
+static void run_alter_default_update_hook(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== ALTER Default Update Hook Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_alter_default_update_hook");
+  removeDbFiles(dbpath);
+  check("alter_default_hook_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("alter_default_hook_empty_setup", execSql(db,
+      "CREATE TABLE t0(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+  nAlterDefaultUpdateHook = 0;
+  sqlite3_update_hook(db, countAlterDefaultUpdateHook, 0);
+  check("alter_default_hook_empty_alter", execSql(db,
+      "ALTER TABLE t0 ADD COLUMN v INT DEFAULT 7")==SQLITE_OK);
+  check("alter_default_hook_empty_count", nAlterDefaultUpdateHook==0);
+  check("alter_default_hook_empty_value",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t0"), "0")==0);
+
+  check("alter_default_hook_one_setup", execSql(db,
+      "CREATE TABLE t1(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t1 VALUES(1);")==SQLITE_OK);
+  nAlterDefaultUpdateHook = 0;
+  check("alter_default_hook_one_alter", execSql(db,
+      "ALTER TABLE t1 ADD COLUMN v INT DEFAULT 7")==SQLITE_OK);
+  check("alter_default_hook_one_count", nAlterDefaultUpdateHook==0);
+  check("alter_default_hook_one_value",
+        strcmp(queryScalarText(db, "SELECT v FROM t1"), "7")==0);
+
+  check("alter_default_hook_multi_setup", execSql(db,
+      "CREATE TABLE t3(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t3 VALUES(1),(2),(3);")==SQLITE_OK);
+  nAlterDefaultUpdateHook = 0;
+  check("alter_default_hook_multi_alter", execSql(db,
+      "ALTER TABLE t3 ADD COLUMN v INT DEFAULT 7")==SQLITE_OK);
+  check("alter_default_hook_multi_count", nAlterDefaultUpdateHook==0);
+  check("alter_default_hook_multi_value",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id||':'||v,',') FROM t3"),
+          "1:7,2:7,3:7")==0);
+
+  nAlterDefaultUpdateHook = 0;
+  check("alter_default_hook_real_update", execSql(db,
+      "UPDATE t3 SET v=8 WHERE id=1")==SQLITE_OK);
+  check("alter_default_hook_real_update_count", nAlterDefaultUpdateHook==1);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_schema_hash_error_propagation(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -13962,6 +14029,7 @@ static const RegressionCase aCases[] = {
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "alter_default_authorizer", "ALTER Default Authorizer Test", run_alter_default_authorizer },
+  { "alter_default_update_hook", "ALTER Default Update Hook Test", run_alter_default_update_hook },
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "backup_dest_missing_branch", "Backup Dest Missing Branch Test", run_backup_dest_missing_branch },
