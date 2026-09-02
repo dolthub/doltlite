@@ -1,4 +1,4 @@
-# doltlite-go
+# doltlite-driver
 
 [DoltLite](https://github.com/dolthub/doltlite) for Go: SQLite with Git-style
 version control — branch, commit, merge, and diff your relational data,
@@ -8,7 +8,7 @@ from a vendored amalgamation, so there is no system library to install.
 ## Install
 
 ```sh
-go get github.com/dolthub/doltlite-go
+go get github.com/dolthub/doltlite-driver
 ```
 
 Requires cgo (`CGO_ENABLED=1`, the default when a C compiler is present) and
@@ -19,7 +19,7 @@ zlib. The first build compiles the engine and is then cached.
 ```go
 import (
     "database/sql"
-    _ "github.com/dolthub/doltlite-go"
+    _ "github.com/dolthub/doltlite-driver"
 )
 
 db, err := sql.Open("doltlite", "app.db")
@@ -45,6 +45,20 @@ rows, err := db.Query(`SELECT commit_hash, message FROM dolt_log`)
 Every DoltLite feature — branches, merges, `dolt_log`/`dolt_diff`/`dolt_branches`,
 remotes — is reachable through SQL; there is no separate API. See the
 [DoltLite documentation](https://github.com/dolthub/doltlite).
+
+## Concurrency
+
+Safe to use from multiple goroutines through `*sql.DB`, including its
+connection pool. Each connection runs its engine calls on a dedicated OS
+thread, because the engine ties a transaction's lock to the thread that took
+it and a goroutine can move between threads at any call boundary
+([#2577](https://github.com/dolthub/doltlite/issues/2577)).
+
+Writers to one database still serialize, as in SQLite. A connection waits up
+to five seconds for a contended write before returning "database is locked";
+change that per connection with `PRAGMA busy_timeout = <ms>`. Transactions
+begin as `BEGIN IMMEDIATE`, so contention surfaces at `Begin` where it can be
+waited on, rather than partway through a transaction where it cannot.
 
 ## Why not embedded Dolt?
 

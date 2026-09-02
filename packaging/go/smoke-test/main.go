@@ -1,4 +1,4 @@
-// Package-level smoke test for doltlite-go. Runs from a consumer module
+// Package-level smoke test for doltlite-driver. Runs from a consumer module
 // against the staged package, covering the driver surface end to end: every
 // value type, transactions, error paths, and a version-control round trip
 // (commit, branch, checkout, merge, dolt_log reads).
@@ -10,8 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
-	doltlite "github.com/dolthub/doltlite-go"
+	doltlite "github.com/dolthub/doltlite-driver"
 )
 
 var failures int
@@ -33,7 +34,7 @@ func check(name string, got, want any) {
 
 func main() {
 	dir := os.TempDir()
-	dbPath := filepath.Join(dir, fmt.Sprintf("doltlite-go-smoke-%d.db", os.Getpid()))
+	dbPath := filepath.Join(dir, fmt.Sprintf("doltlite-driver-smoke-%d.db", os.Getpid()))
 	cleanup := func() {
 		os.Remove(dbPath)
 		os.Remove(filepath.Join(dir, "."+filepath.Base(dbPath)+"-lock"))
@@ -143,6 +144,13 @@ func main() {
 	must(db.QueryRow(`SELECT count(*) FROM dolt_log`).Scan(&logCount))
 	check("dolt_log sees both commits", logCount >= 2, true)
 
+	// Transactions through the pool, which is how database/sql is actually
+	// used. The engine attributes its store lock to the thread that took it,
+	// so without the driver pinning a thread per connection these fail with
+	// "database is locked" -- every time at MaxOpenConns(1), where nothing is
+	// even concurrent.
+	concurrentTx(dbPath)
+
 	if failures == 0 {
 		fmt.Println("smoke-test: all checks passed")
 		return
@@ -155,5 +163,75 @@ func must(err error) {
 	if err != nil {
 		fmt.Println("fatal:", err)
 		os.Exit(1)
+	}
+}
+
+func concurrentTx(dbPath string) {
+	for _, maxConns := range []int{1, 4, 16} {
+		db, err := sql.Open("doltlite", dbPath)
+		if err != nil {
+			fmt.Printf("  FAIL: pool open (max %d): %v\n", maxConns, err)
+			failures++
+			continue
+		}
+		db.SetMaxOpenConns(maxConns)
+		table := fmt.Sprintf("pool%d", maxConns)
+		if _, err := db.Exec(`CREATE TABLE ` + table + `(pk INTEGER PRIMARY KEY)`); err != nil {
+			fmt.Printf("  FAIL: pool table (max %d): %v\n", maxConns, err)
+			failures++
+			db.Close()
+			continue
+		}
+
+		const writers = 16
+		var wg sync.WaitGroup
+		errs := make(chan error, writers)
+		for i := 0; i < writers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				tx, err := db.Begin()
+				if err != nil {
+					errs <- err
+					return
+				}
+				if _, err := tx.Exec(`INSERT INTO `+table+`(pk) VALUES (?)`, i); err != nil {
+					tx.Rollback()
+					errs <- err
+					return
+				}
+				if err := tx.Commit(); err != nil {
+					errs <- err
+				}
+			}(i)
+		}
+		wg.Wait()
+		close(errs)
+
+		failed := 0
+		var first error
+		for err := range errs {
+			if first == nil {
+				first = err
+			}
+			failed++
+		}
+		if failed > 0 {
+			fmt.Printf("  FAIL: %d of %d pooled transactions (max %d conns): %v\n",
+				failed, writers, maxConns, first)
+			failures++
+			db.Close()
+			continue
+		}
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil {
+			fmt.Printf("  FAIL: pool count (max %d): %v\n", maxConns, err)
+			failures++
+			db.Close()
+			continue
+		}
+		check(fmt.Sprintf("%d pooled transactions (max %d conns)", writers, maxConns),
+			n, writers)
+		db.Close()
 	}
 }

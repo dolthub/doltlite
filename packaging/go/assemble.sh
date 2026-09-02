@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Stage the doltlite-go module into an output directory ready to push to the
+# Stage the doltlite-driver module into an output directory ready to push to the
 # distribution repo. Copies this directory's module source and vendors the
 # amalgamation the build produced (build/sqlite3.c is genuinely doltlite --
 # mksqlite3c.tcl --doltlite weaves the prolly engine and version control into
@@ -41,5 +41,5 @@ cp "$BUILD_DIR/sqlite3.h" "$OUT_DIR/doltlite.h"
 # there is nothing to stamp -- record it for the pushing side instead.
 echo "$VERSION" > "$OUT_DIR/.version"
 
-echo "Staged doltlite-go $VERSION in $OUT_DIR:"
+echo "Staged doltlite-driver $VERSION in $OUT_DIR:"
 ls -la "$OUT_DIR"

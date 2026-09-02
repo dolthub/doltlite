@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -48,6 +49,10 @@ func Version() string {
 	return C.GoString(C.sqlite3_libversion())
 }
 
+// defaultBusyTimeoutMs is how long a connection waits for a contended write
+// before giving up. Overridable per connection with PRAGMA busy_timeout.
+const defaultBusyTimeoutMs = 5000
+
 // Error is an engine error carrying its result code.
 type Error struct {
 	Code int
@@ -60,27 +65,90 @@ func (e *Error) Error() string { return fmt.Sprintf("doltlite: %s (code %d)", e.
 type Driver struct{}
 
 func (Driver) Open(name string) (driver.Conn, error) {
-	cname := C.CString(name)
-	defer C.free(unsafe.Pointer(cname))
+	c := newConn()
 
 	var db *C.sqlite3
-	rc := C.sqlite3_open_v2(cname, &db,
-		C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE, nil)
-	if rc != C.SQLITE_OK {
-		msg := "unable to open database"
-		if db != nil {
-			msg = C.GoString(C.sqlite3_errmsg(db))
-			C.sqlite3_close_v2(db)
+	var rc C.int
+	var msg string
+	c.run(func() {
+		cname := C.CString(name)
+		defer C.free(unsafe.Pointer(cname))
+		rc = C.sqlite3_open_v2(cname, &db,
+			C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE, nil)
+		if rc != C.SQLITE_OK {
+			msg = "unable to open database"
+			if db != nil {
+				msg = C.GoString(C.sqlite3_errmsg(db))
+				C.sqlite3_close_v2(db)
+			}
 		}
+	})
+	if rc != C.SQLITE_OK {
+		c.stop()
 		return nil, &Error{Code: int(rc), Msg: msg}
 	}
-	return &conn{db: db}, nil
+	// database/sql hands out a pool of connections, and every one of them is a
+	// separate writer to the same store. Without a busy handler the loser of a
+	// write race fails immediately with SQLITE_BUSY, so ordinary concurrent use
+	// through the pool drops writes. Wait instead; callers who want different
+	// behaviour can set their own with PRAGMA busy_timeout.
+	c.db = db
+	c.run(func() { C.sqlite3_busy_timeout(db, C.int(defaultBusyTimeoutMs)) })
+	return c, nil
 }
 
+// conn owns a dedicated OS thread and runs every engine call on it.
+//
+// The engine holds its store lock for the life of an explicit transaction and
+// attributes that lock to the thread that took it, so a transaction whose
+// statements arrive on different threads fails with SQLITE_BUSY (dolthub/
+// doltlite#2577). A goroutine can move between OS threads at any call
+// boundary, which makes that unavoidable here rather than unlikely: through
+// database/sql's pool it loses writes, and it fails every time even with
+// SetMaxOpenConns(1). Pinning one thread per connection keeps every call for
+// a connection on the thread that owns its locks. Remove this once the engine
+// no longer ties the lock to a thread.
 type conn struct {
 	mu     sync.Mutex
 	db     *C.sqlite3
 	closed bool
+	calls  chan func()
+	done   chan struct{}
+}
+
+func newConn() *conn {
+	c := &conn{calls: make(chan func()), done: make(chan struct{})}
+	started := make(chan struct{})
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		close(started)
+		for {
+			select {
+			case fn := <-c.calls:
+				fn()
+			case <-c.done:
+				return
+			}
+		}
+	}()
+	<-started
+	return c
+}
+
+// run executes fn on the connection's own OS thread and waits for it. It must
+// not be called from fn itself: the thread runs one call at a time.
+func (c *conn) run(fn func()) {
+	finished := make(chan struct{})
+	c.calls <- func() {
+		defer close(finished)
+		fn()
+	}
+	<-finished
+}
+
+func (c *conn) stop() {
+	close(c.done)
 }
 
 func (c *conn) err(rc C.int) error {
@@ -98,7 +166,8 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.closed = true
-	C.sqlite3_close_v2(c.db)
+	c.run(func() { C.sqlite3_close_v2(c.db) })
+	c.stop()
 	return nil
 }
 
@@ -108,11 +177,14 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	if c.closed {
 		return nil, driver.ErrBadConn
 	}
-	cq := C.CString(query)
-	defer C.free(unsafe.Pointer(cq))
-
 	var st *C.sqlite3_stmt
-	if rc := C.sqlite3_prepare_v2(c.db, cq, -1, &st, nil); rc != C.SQLITE_OK {
+	var rc C.int
+	c.run(func() {
+		cq := C.CString(query)
+		defer C.free(unsafe.Pointer(cq))
+		rc = C.sqlite3_prepare_v2(c.db, cq, -1, &st, nil)
+	})
+	if rc != C.SQLITE_OK {
 		return nil, c.err(rc)
 	}
 	if st == nil {
@@ -121,8 +193,14 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	return &stmt{c: c, st: st, nInput: int(C.sqlite3_bind_parameter_count(st))}, nil
 }
 
+// Begin starts a write transaction. IMMEDIATE, not the default DEFERRED: a
+// deferred transaction takes its write lock at the first write, and losing
+// that upgrade returns SQLITE_BUSY without consulting the busy handler,
+// because waiting there could deadlock. Taking the lock up front puts the
+// contention where the handler can wait on it, which is what a pooled
+// database/sql caller needs.
 func (c *conn) Begin() (driver.Tx, error) {
-	if err := c.exec("BEGIN"); err != nil {
+	if err := c.exec("BEGIN IMMEDIATE"); err != nil {
 		return nil, err
 	}
 	return &tx{c: c}, nil
@@ -158,7 +236,7 @@ func (s *stmt) Close() error {
 	s.closed = true
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
-	C.sqlite3_finalize(s.st)
+	s.c.run(func() { C.sqlite3_finalize(s.st) })
 	return nil
 }
 
@@ -211,38 +289,54 @@ func (s *stmt) bind(args []driver.Value) error {
 func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
-	if err := s.bind(args); err != nil {
-		return nil, err
-	}
-	for {
-		rc := C.sqlite3_step(s.st)
-		if rc == C.SQLITE_ROW {
-			continue
+	var res result
+	var bindErr error
+	var stepRc C.int
+	s.c.run(func() {
+		if bindErr = s.bind(args); bindErr != nil {
+			return
 		}
-		if rc != C.SQLITE_DONE {
-			C.sqlite3_reset(s.st)
-			return nil, s.c.err(rc)
+		for {
+			stepRc = C.sqlite3_step(s.st)
+			if stepRc == C.SQLITE_ROW {
+				continue
+			}
+			break
 		}
-		break
+		if stepRc == C.SQLITE_DONE {
+			res = result{
+				lastID:  int64(C.sqlite3_last_insert_rowid(s.c.db)),
+				changes: int64(C.sqlite3_changes(s.c.db)),
+			}
+		}
+		C.sqlite3_reset(s.st)
+	})
+	if bindErr != nil {
+		return nil, bindErr
 	}
-	res := result{
-		lastID:  int64(C.sqlite3_last_insert_rowid(s.c.db)),
-		changes: int64(C.sqlite3_changes(s.c.db)),
+	if stepRc != C.SQLITE_DONE {
+		return nil, s.c.err(stepRc)
 	}
-	C.sqlite3_reset(s.st)
 	return res, nil
 }
 
 func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
-	if err := s.bind(args); err != nil {
-		return nil, err
-	}
-	n := int(C.sqlite3_column_count(s.st))
-	cols := make([]string, n)
-	for i := 0; i < n; i++ {
-		cols[i] = C.GoString(C.sqlite3_column_name(s.st, C.int(i)))
+	var cols []string
+	var bindErr error
+	s.c.run(func() {
+		if bindErr = s.bind(args); bindErr != nil {
+			return
+		}
+		n := int(C.sqlite3_column_count(s.st))
+		cols = make([]string, n)
+		for i := 0; i < n; i++ {
+			cols[i] = C.GoString(C.sqlite3_column_name(s.st, C.int(i)))
+		}
+	})
+	if bindErr != nil {
+		return nil, bindErr
 	}
 	return &rows{s: s, cols: cols}, nil
 }
@@ -270,7 +364,7 @@ func (r *rows) Close() error {
 	r.closed = true
 	r.s.c.mu.Lock()
 	defer r.s.c.mu.Unlock()
-	C.sqlite3_reset(r.s.st)
+	r.s.c.run(func() { C.sqlite3_reset(r.s.st) })
 	return nil
 }
 
@@ -278,32 +372,35 @@ func (r *rows) Next(dest []driver.Value) error {
 	r.s.c.mu.Lock()
 	defer r.s.c.mu.Unlock()
 
-	rc := C.sqlite3_step(r.s.st)
+	var rc C.int
+	r.s.c.run(func() { rc = C.sqlite3_step(r.s.st) })
 	if rc == C.SQLITE_DONE {
 		return io.EOF
 	}
 	if rc != C.SQLITE_ROW {
 		return r.s.c.err(rc)
 	}
-	for i := range dest {
-		idx := C.int(i)
-		switch C.sqlite3_column_type(r.s.st, idx) {
-		case C.SQLITE_NULL:
-			dest[i] = nil
-		case C.SQLITE_INTEGER:
-			dest[i] = int64(C.sqlite3_column_int64(r.s.st, idx))
-		case C.SQLITE_FLOAT:
-			dest[i] = float64(C.sqlite3_column_double(r.s.st, idx))
-		case C.SQLITE_BLOB:
-			dest[i] = columnBytes(r.s.st, idx, C.sqlite3_column_blob(r.s.st, idx))
-		default:
-			// Text: copied by length rather than as a C string, since a value
-			// may contain embedded NULs.
-			b := columnBytes(r.s.st, idx,
-				unsafe.Pointer(C.sqlite3_column_text(r.s.st, idx)))
-			dest[i] = string(b)
+	r.s.c.run(func() {
+		for i := range dest {
+			idx := C.int(i)
+			switch C.sqlite3_column_type(r.s.st, idx) {
+			case C.SQLITE_NULL:
+				dest[i] = nil
+			case C.SQLITE_INTEGER:
+				dest[i] = int64(C.sqlite3_column_int64(r.s.st, idx))
+			case C.SQLITE_FLOAT:
+				dest[i] = float64(C.sqlite3_column_double(r.s.st, idx))
+			case C.SQLITE_BLOB:
+				dest[i] = columnBytes(r.s.st, idx, C.sqlite3_column_blob(r.s.st, idx))
+			default:
+				// Text: copied by length rather than as a C string, since a value
+				// may contain embedded NULs.
+				b := columnBytes(r.s.st, idx,
+					unsafe.Pointer(C.sqlite3_column_text(r.s.st, idx)))
+				dest[i] = string(b)
+			}
 		}
-	}
+	})
 	return nil
 }
 

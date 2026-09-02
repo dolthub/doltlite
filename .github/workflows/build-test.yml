@@ -220,7 +220,7 @@ jobs:
         bash packaging/composer/test-package.sh build
       timeout-minutes: 5
 
-    - name: Smoke test the doltlite-go module
+    - name: Smoke test the doltlite-driver module
       if: matrix.platform != 'windows'
       shell: bash
       run: |
