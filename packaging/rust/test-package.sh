@@ -31,6 +31,10 @@ tar -xzf "$TARBALL" -C "$STAGE/extracted"
 EXTRACTED="$STAGE/extracted/doltlite-0.0.0"
 [ -f "$EXTRACTED/vendor/doltlite.c" ] || {
   echo "ERROR: packaged crate has no vendored amalgamation" >&2; exit 1; }
+# The vendored amalgamation carries mbedtls/ed25519/BLAKE3, whose notices live
+# in LICENSE.md.
+[ -f "$EXTRACTED/LICENSE.md" ] || {
+  echo "ERROR: packaged crate has no LICENSE.md" >&2; exit 1; }
 
 cp -R "$PKG_DIR/smoke-test/." "$CONSUMER/"
 # Point the consumer at the extracted package rather than crates.io.
@@ -38,4 +42,4 @@ sed -i.bak "s|^doltlite = .*|doltlite = { path = \"$EXTRACTED\" }|" \
   "$CONSUMER/Cargo.toml"
 rm -f "$CONSUMER/Cargo.toml.bak"
 cd "$CONSUMER"
-cargo run --release --quiet
+DOLTLITE_EXPECT_VERSION="v0.0.0" cargo run --release --quiet
