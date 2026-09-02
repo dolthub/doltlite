@@ -13694,10 +13694,10 @@ static void run_reset_database_current_branch(void){
           "SELECT count(*) FROM sqlite_master"), "0")==0);
   check("reset_database_table_gone",
         execSqlSilent(db, "SELECT * FROM t")==SQLITE_ERROR);
-  check("reset_database_user_version_preserved",
-        strcmp(queryScalarText(db, "PRAGMA user_version"), "7")==0);
-  check("reset_database_application_id_preserved",
-        strcmp(queryScalarText(db, "PRAGMA application_id"), "99")==0);
+  check("reset_database_user_version_cleared",
+        strcmp(queryScalarText(db, "PRAGMA user_version"), "0")==0);
+  check("reset_database_application_id_cleared",
+        strcmp(queryScalarText(db, "PRAGMA application_id"), "0")==0);
   check("reset_database_head_history",
         strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
 
@@ -13705,6 +13705,10 @@ static void run_reset_database_current_branch(void){
   check("reset_database_peer_sees_empty",
         strcmp(queryScalarText(peer,
           "SELECT count(*) FROM sqlite_master"), "0")==0);
+  check("reset_database_peer_user_version",
+        strcmp(queryScalarText(peer, "PRAGMA user_version"), "0")==0);
+  check("reset_database_peer_application_id",
+        strcmp(queryScalarText(peer, "PRAGMA application_id"), "0")==0);
   sqlite3_close(peer);
   peer = 0;
 
@@ -13713,6 +13717,10 @@ static void run_reset_database_current_branch(void){
   check("reset_database_other_branch_rows",
         strcmp(queryScalarText(db,
           "SELECT group_concat(a||':'||b) FROM t"), "1:kept,2:other")==0);
+  check("reset_database_other_branch_user_version",
+        strcmp(queryScalarText(db, "PRAGMA user_version"), "7")==0);
+  check("reset_database_other_branch_application_id",
+        strcmp(queryScalarText(db, "PRAGMA application_id"), "99")==0);
 
   check("reset_database_back_to_main", execSql(db,
     "SELECT dolt_checkout('main');")==SQLITE_OK);
@@ -13723,12 +13731,20 @@ static void run_reset_database_current_branch(void){
     "SELECT dolt_reset('--hard');")==SQLITE_OK);
   check("reset_database_hard_reset_row",
         strcmp(queryScalarText(db, "SELECT b FROM t WHERE a=1"), "kept")==0);
+  check("reset_database_hard_reset_user_version",
+        strcmp(queryScalarText(db, "PRAGMA user_version"), "7")==0);
+  check("reset_database_hard_reset_application_id",
+        strcmp(queryScalarText(db, "PRAGMA application_id"), "99")==0);
 
   check("reset_database_second_reset",
         resetDatabaseAndVacuum(db)==SQLITE_OK);
   check("reset_database_second_empty",
         strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master"), "0")==0);
+  check("reset_database_second_user_version",
+        strcmp(queryScalarText(db, "PRAGMA user_version"), "0")==0);
+  check("reset_database_second_application_id",
+        strcmp(queryScalarText(db, "PRAGMA application_id"), "0")==0);
   check("reset_database_recreate",
         execSql(db, "CREATE TABLE u(x INTEGER PRIMARY KEY); INSERT INTO u VALUES(5);")
         ==SQLITE_OK);

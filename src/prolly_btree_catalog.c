@@ -2672,9 +2672,9 @@ int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
 
 /*
 ** SQLITE_DBCONFIG_RESET_DATABASE + VACUUM: drop every stored object on the
-** current branch working catalog so sqlite_master is empty. HEAD commits
-** and other branches are unchanged; dolt_reset('--hard') restores this
-** branch from HEAD.
+** current branch working catalog so sqlite_master is empty, and zero
+** user_version and application_id. HEAD commits and other branches are
+** unchanged; dolt_reset('--hard') restores this branch from HEAD.
 */
 int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
   Btree *p;
@@ -2685,8 +2685,6 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
   int i;
   int iMoved = 0;
   int rc;
-  u32 userVersion = 0;
-  u32 appId = 0;
   u32 cacheSize = 0;
 
   if( !db || iDb<0 || iDb>=db->nDb || !db->aDb[iDb].pBt ){
@@ -2699,8 +2697,6 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
     return SQLITE_READONLY;
   }
 
-  sqlite3BtreeGetMeta(p, BTREE_USER_VERSION, &userVersion);
-  sqlite3BtreeGetMeta(p, BTREE_APPLICATION_ID, &appId);
   sqlite3BtreeGetMeta(p, BTREE_DEFAULT_CACHE_SIZE, &cacheSize);
 
   rc = sqlite3BtreeBeginTrans(p, 2, 0);
@@ -2738,12 +2734,6 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
       pMaster->pPending = 0;
     }
     rc = sqlite3BtreeNewDb(p);
-  }
-  if( rc==SQLITE_OK ){
-    rc = sqlite3BtreeUpdateMeta(p, BTREE_USER_VERSION, userVersion);
-  }
-  if( rc==SQLITE_OK ){
-    rc = sqlite3BtreeUpdateMeta(p, BTREE_APPLICATION_ID, appId);
   }
   if( rc==SQLITE_OK ){
     rc = sqlite3BtreeUpdateMeta(p, BTREE_DEFAULT_CACHE_SIZE, cacheSize);
