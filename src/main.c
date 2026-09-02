@@ -3698,6 +3698,9 @@ static int openDatabase(
     if( rc==SQLITE_IOERR_NOMEM ){
       rc = SQLITE_NOMEM_BKPT;
     }
+#ifdef DOLTLITE_PROLLY
+    if( rc!=SQLITE_IOERR_CHUNK_SOURCE )
+#endif
     sqlite3Error(db, rc);
     goto opendb_out;
   }

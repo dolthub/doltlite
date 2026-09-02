@@ -20,6 +20,8 @@ typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
 typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 
+int chunkStoreOriginSourceEnabled(ChunkStore*);
+
 #define DOLTLITE_RANGE_NONE      0
 #define DOLTLITE_RANGE_TWO_DOT   2
 #define DOLTLITE_RANGE_THREE_DOT 3

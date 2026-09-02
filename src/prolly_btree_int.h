@@ -731,6 +731,8 @@ int btreeRefreshFromDisk(Btree*);
 int btreeRefreshSharedWorkingState(Btree*);
 int btreeReloadBranchWorkingStateInto(Btree*, int, ProllyHash*);
 int doltliteBtreeHydrateDeferred(Btree*);
+int doltliteOriginSourceEnable(ChunkStore*, sqlite3*, int*);
+int chunkStoreOriginSourceEnabled(ChunkStore*);
 int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 void btreeStoreCommittedFromCurrent(Btree*, const ProllyHash*);

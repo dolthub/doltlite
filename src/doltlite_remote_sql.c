@@ -9,6 +9,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include "doltlite_creds.h"
+#include "prolly_btree_int.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -622,6 +623,14 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
           "cannot pull non-current branch without fast-forward");
         return;
       }
+      if( strcmp(zRemoteName, "origin")==0
+       && chunkStoreOriginSourceEnabled(cs) ){
+        remoteSqlRestoreAndReport(
+          ctx, db, cs, &savedState, SQLITE_ERROR,
+          "cannot merge a non-fast-forward pull in a lazy store; "
+          "materialize the store first");
+        return;
+      }
       /* Merge owns txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
       zTrackingRef = sqlite3_mprintf("%s/%s", zRemoteName, zBranch);
@@ -698,26 +707,41 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
+  DoltliteCmdArgs args;
+  DoltliteCmdOption aOption[] = {
+    { "lazy", 0, DOLTLITE_CMD_OPTION_FLAG, 0, 0 }
+  };
   const char *zUrl;
   DoltliteTxnState savedState;
+  int bLazy = 0;
   int dirty = 0;
   int rc;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<1 ){
-    doltliteVcResultError(ctx, db, "usage: dolt_clone(url)");
+    doltliteVcResultError(ctx, db, "usage: dolt_clone(['--lazy'], url)");
     return;
   }
 
-  zUrl = (const char*)sqlite3_value_text(argv[0]);
-  if( !zUrl ){
+  aOption[0].pSeen = &bLazy;
+  rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
+    return;
+  }
+  if( args.nPositional<1 ){
+    doltliteCmdArgsClear(&args);
     doltliteVcResultError(ctx, db, "url required");
     return;
   }
-  if( argc>1 ){
+  if( args.nPositional>1 ){
+    doltliteCmdArgsClear(&args);
     doltliteVcResultError(ctx, db, "too many arguments");
     return;
   }
+  zUrl = args.azPositional[0];
+  doltliteCmdArgsClear(&args);
   memset(&savedState, 0, sizeof(savedState));
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
@@ -780,7 +804,17 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  rc = doltliteClone(cs, pRemote);
+  if( bLazy ){
+    rc = doltliteOriginSourceEnable(cs, db, 0);
+    if( rc!=SQLITE_OK ){
+      pRemote->xClose(pRemote);
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+                                "failed to initialize lazy clone");
+      return;
+    }
+  }
+  rc = bLazy ? doltliteCloneLazy(cs, pRemote, zUrl)
+             : doltliteClone(cs, pRemote);
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
     char *zOwned;
@@ -795,6 +829,32 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
   pRemote->xClose(pRemote);
+
+  if( bLazy ){
+    Btree *pBtree = sqlite3DbNameToBtree(db, 0);
+    char *zPreparedBranch = 0;
+    if( !pBtree || !sqlite3BtreeIsDoltliteFormat(pBtree) ){
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                                "failed to initialize lazy clone");
+      return;
+    }
+    pBtree->bDeferredOpen = 1;
+    rc = doltliteBtreePrepareBackupBranch(
+        pBtree, cs, &zPreparedBranch);
+    if( rc==SQLITE_OK && zPreparedBranch ){
+      doltliteBtreeInstallBackupBranch(pBtree, zPreparedBranch);
+      zPreparedBranch = 0;
+    }
+    sqlite3_free(zPreparedBranch);
+    if( rc!=SQLITE_OK ){
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+                                "failed to initialize lazy clone");
+      return;
+    }
+    remoteSqlExpireCurrentStatement(db);
+    remoteSqlClearAndSucceed(ctx, &savedState);
+    return;
+  }
 
   rc = chunkStoreAddRemote(cs, "origin", zUrl);
   if( rc!=SQLITE_OK ){

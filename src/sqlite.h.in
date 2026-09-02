@@ -11228,11 +11228,14 @@ int sqlite3_snapshot_recover(sqlite3 *db, const char *zDb);
 ** in the database file when it is writable, or in a bounded connection-local
 ** memory cache when it is read-only. The callback object and its context must
 ** outlive a successful registration. A failed registration does not retain
-** pSource. Passing NULL clears the registration.
+** pSource. A host registration takes precedence over an origin-backed source
+** selected for the current database open. Passing NULL clears the host
+** registration and restores that built-in source when present.
+** The built-in source is selected with the lazy_origin=1 database URI
+** parameter and is inert until the store records an origin remote.
 **
 ** zDbName selects one attached database and follows SQLite database-name
-** conventions; NULL selects "main". This seam is also intended for a future
-** built-in source backed by the recorded origin remote.
+** conventions; NULL selects "main".
 */
 typedef struct doltlite_chunk_source doltlite_chunk_source;
 struct doltlite_chunk_source {

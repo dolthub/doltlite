@@ -331,6 +331,29 @@ SQL
 result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
 check "initial push returns 0" "0" "$result"
 
+echo "--- 1b. lazy clone faults chunks over http after reopen ---"
+LAZY="$TMP/lazy.db"
+LAZY_URI="file:$LAZY?lazy_origin=1"
+before_chunk_posts=$(grep -ac "^POST chunks$" "$TMP/counts.log")
+before_chunk_fetches=$(grep -Eac "^(GET chunk|POST get-chunks)$" "$TMP/counts.log")
+result=$("$DB" "$LAZY" "SELECT dolt_clone('--lazy','$URL');" 2>&1)
+after_clone_chunk_posts=$(grep -ac "^POST chunks$" "$TMP/counts.log")
+after_clone_chunk_fetches=$(grep -Eac "^(GET chunk|POST get-chunks)$" "$TMP/counts.log")
+check "lazy clone returns 0" "0" "$result"
+check "lazy clone posts no chunk payloads" "$before_chunk_posts" "$after_clone_chunk_posts"
+check "lazy clone fetches refs without chunk data" "$before_chunk_fetches" "$after_clone_chunk_fetches"
+
+result=$("$DB" "$LAZY_URI" "SELECT count(*)||'|'||sum(age) FROM users; SELECT sum(length(data)) FROM blobs;" 2>&1)
+after_reopen_chunk_fetches=$(grep -Eac "^(GET chunk|POST get-chunks)$" "$TMP/counts.log")
+check "reopened lazy clone reads origin-backed rows" "3|90
+2097152" "$result"
+if [ "$after_reopen_chunk_fetches" -gt "$after_clone_chunk_fetches" ]; then
+  echo "  PASS: reopened lazy clone fetched chunks on demand"; pass=$((pass+1))
+else
+  echo "  FAIL: reopened lazy clone did not fetch chunks on demand"
+  fail=$((fail+1))
+fi
+
 echo "--- 2. clone over http, full parity ---"
 result=$("$DB" "$B" "SELECT dolt_clone('$URL');" 2>&1)
 check "clone returns 0" "0" "$result"
