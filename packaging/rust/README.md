@@ -49,9 +49,14 @@ learn. See the [DoltLite documentation](https://github.com/dolthub/doltlite).
 
 If you would rather use [`rusqlite`](https://crates.io/crates/rusqlite) and its
 ecosystem, you do not need this crate: point `libsqlite3-sys` at a DoltLite
-build, which installs SQLite-named artifacts for exactly this purpose.
+source build. The full default build creates the SQLite-named artifacts that
+`libsqlite3-sys` expects; `make doltlite-lib` alone does not.
 
 ```sh
+cd /path/to/doltlite/build
+../configure
+make
+cd /path/to/rust/project
 SQLITE3_LIB_DIR=/path/to/doltlite/build \
 SQLITE3_INCLUDE_DIR=/path/to/doltlite/build \
 cargo build

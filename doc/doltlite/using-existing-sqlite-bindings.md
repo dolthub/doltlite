@@ -20,16 +20,19 @@ needs none of this. This document is for everything else.
 
 A DoltLite shared library, from a
 [release](https://github.com/dolthub/doltlite/releases) (`doltlite-lib-*.zip`,
-or the `.deb` packages) or built from source:
+or the `.deb` packages) or built from source. Bindings that require the
+library to be named `libsqlite3` need the full source build:
 
 ```sh
-cd build && ../configure && make doltlite-lib
+cd build && ../configure && make
 # → libdoltlite.{so,dylib}, libdoltlite.a, and SQLite-named copies
 #   (libsqlite3.*) of the same engine
 ```
 
-The SQLite-named artifacts exist precisely for this: bindings that hardcode
-`-lsqlite3` link them without knowing the difference.
+The full `make` target creates the SQLite-named artifacts so bindings that
+hardcode `-lsqlite3` can link them without knowing the difference.
+`make doltlite-lib` creates only the DoltLite-named libraries, and release
+packages omit the aliases to avoid colliding with system SQLite.
 
 ## Confirming you got DoltLite
 

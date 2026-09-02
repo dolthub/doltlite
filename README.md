@@ -71,7 +71,7 @@ functions, subject to the [storage-engine exceptions](#sqlite-compatibility).
 | Node.js / Bun | `npm install @dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
 | PHP | `composer require dolthub/doltlite-php` | this repo ([`packaging/composer`](packaging/composer)), distributed via [dolthub/doltlite-php](https://github.com/dolthub/doltlite-php) |
 | .NET | `dotnet add package DoltHub.Doltlite` | this repo ([`packaging/nuget`](packaging/nuget)); works under Microsoft.Data.Sqlite.Core, EF Core, Dapper |
-| Rust | `cargo add doltlite` | this repo ([`packaging/rust`](packaging/rust)); engine vendored, or point `rusqlite` at a build with `SQLITE3_LIB_DIR` |
+| Rust | `cargo add doltlite` | this repo ([`packaging/rust`](packaging/rust)); engine vendored, or run the full default build and point `rusqlite` at it with `SQLITE3_LIB_DIR` |
 | Browser / WASM | `npm install @dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
 | Swift (iOS / macOS) | SwiftPM: `https://github.com/dolthub/doltlite-swift` | [dolthub/doltlite-swift](https://github.com/dolthub/doltlite-swift) (XCFramework built by [`packaging/swift`](packaging/swift)) |
 | Android | Gradle: `com.dolthub:doltlite-android` | [dolthub/doltlite-android](https://github.com/dolthub/doltlite-android) (AAR + JNA) |
