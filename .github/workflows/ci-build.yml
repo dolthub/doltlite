@@ -826,7 +826,7 @@ jobs:
           mkdir -p build
           cd build
           ../configure
-          make doltlite
+          make doltlite doltlite-remotesrv
           cd ..
           make -C ext/wasm fiddle npm
           mkdir -p ci-wasm-runtime
@@ -844,6 +844,7 @@ jobs:
       run: |
         tar -czf ci-wasm-build.tar.gz \
           build/doltlite \
+          build/doltlite-remotesrv \
           ext/wasm/jswasm \
           ext/wasm/sqlite-wasm-*.zip
 

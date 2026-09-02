@@ -36,7 +36,8 @@ raw_matches() {
 }
 
 # creds: OS sidecar + private-file modes. gc/commit: unistd.h for crash-test _exit().
-# net.h: sockets; fcntl only for O_NONBLOCK.
+# net.h: sockets; fcntl only for O_NONBLOCK. http_remote: xhr.open is the
+# browser request API inside an EM_JS body, not a file open.
 raw_matches \
   | grep -Ev '^src/doltlite_creds\.c:' \
   | grep -Ev '^src/(doltlite_gc|chunk_store_commit)\.c:[0-9]+:#include <unistd\.h>' \
@@ -44,6 +45,7 @@ raw_matches \
   | grep -Ev '^src/doltlite_net\.h:[0-9]+:.*\bfcntl[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remotesrv\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_http_remote\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
+  | grep -Ev '^src/doltlite_http_remote\.c:[0-9]+:.*\bxhr\.open[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remote\.c:[0-9]+:.*\bwrite[[:space:]]*\(' \
   | grep -Ev '^src/os_kv\.c:[0-9]+:.*\b(fopen|fclose|fread|unlink|access|stat)[[:space:]]*\(' \
   | grep -Ev '^src/(doltlite_remotesrv|doltlite_http_remote|doltlite_remote|os_kv)\.c:[0-9]+:#include <unistd\.h>' \

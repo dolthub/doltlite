@@ -456,6 +456,222 @@ static int httpParseResponse(
   return SQLITE_OK;
 }
 
+/* Emscripten has no usable sockets: connect() is emulated as a WebSocket dial,
+** so the socket client above cannot reach an ordinary HTTP server from a
+** browser or from node. Requests go through the host's own HTTP stack
+** instead, which also hands TLS to the host and makes https remotes work
+** without mbedtls. The call has to block, because it runs inside a SQL
+** statement: XHR in synchronous mode where it exists, and a worker signalled
+** through Atomics.wait under node. */
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+
+EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
+                                  const char *zAuth,
+                                  const unsigned char *pBody, int nBody,
+                                  int timeoutMs), {
+  var st = Module.__doltliteHttp || (Module.__doltliteHttp = {});
+  st.resp = null;
+  var url = UTF8ToString(zUrl);
+  var method = UTF8ToString(zMethod);
+  var auth = zAuth ? UTF8ToString(zAuth) : "";
+  var body = null;
+  if (nBody > 0) {
+    body = new Uint8Array(nBody);
+    body.set(HEAPU8.subarray(pBody, pBody + nBody));
+  }
+  try {
+    if (typeof XMLHttpRequest !== "undefined") {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, url, false);
+      var binaryString = false;
+      try {
+        xhr.responseType = "arraybuffer";
+      } catch (e) {
+        binaryString = true;
+      }
+      if (xhr.responseType !== "arraybuffer") binaryString = true;
+      if (binaryString && xhr.overrideMimeType) {
+        xhr.overrideMimeType("text/plain; charset=x-user-defined");
+      }
+      if (auth) xhr.setRequestHeader("Authorization", auth);
+      if (body) xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.send(body);
+      if (binaryString) {
+        var text = xhr.responseText || "";
+        var out = new Uint8Array(text.length);
+        for (var i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+        st.resp = out;
+      } else {
+        st.resp = xhr.response ? new Uint8Array(xhr.response) : new Uint8Array(0);
+      }
+      return xhr.status;
+    }
+    if (typeof require === "function" && typeof SharedArrayBuffer !== "undefined") {
+      if (!st.node) {
+        var wt = require("node:worker_threads");
+        var src = [
+          "const { workerData } = require('node:worker_threads');",
+          "const ctl = new Int32Array(workerData.ctl);",
+          "const req = workerData.req;",
+          "const data = workerData.data;",
+          "const dec = new TextDecoder();",
+          "(async function(){ for(;;){",
+          "  Atomics.wait(ctl, 0, 0);",
+          "  if(Atomics.load(ctl,0) !== 1) continue;",
+          "  let status = 0, len = 0, over = 0, bad = 0;",
+          "  try {",
+          "    const nj = Atomics.load(ctl,4), nb = Atomics.load(ctl,5);",
+          "    const spec = JSON.parse(dec.decode(new Uint8Array(req, 0, nj)));",
+          "    const opt = { method: spec.method };",
+          "    if(spec.timeoutMs > 0 && typeof AbortSignal !== 'undefined'",
+          "       && AbortSignal.timeout) opt.signal = AbortSignal.timeout(spec.timeoutMs);",
+          "    if(spec.auth) opt.headers = { Authorization: spec.auth };",
+          "    if(nb > 0){",
+          "      opt.body = Buffer.from(new Uint8Array(req, nj, nb));",
+          "      opt.headers = Object.assign({}, opt.headers, {'Content-Type':'application/octet-stream'});",
+          "    }",
+          "    const r = await fetch(spec.url, opt);",
+          "    status = r.status;",
+          "    const b = new Uint8Array(await r.arrayBuffer());",
+          "    len = b.length;",
+          "    if(len > data.byteLength){ over = 1; }",
+          "    else { new Uint8Array(data).set(b); }",
+          "  } catch(e){ bad = 1; }",
+          "  Atomics.store(ctl,1,status); Atomics.store(ctl,2,len);",
+          "  Atomics.store(ctl,3,bad); Atomics.store(ctl,6,over);",
+          "  Atomics.store(ctl,0,2); Atomics.notify(ctl,0);",
+          "} })();"
+        ].join("\n");
+        var ctlSab = new SharedArrayBuffer(32);
+        st.node = {
+          ctl: new Int32Array(ctlSab),
+          ctlSab: ctlSab,
+          req: new SharedArrayBuffer(8 * 1024 * 1024),
+          data: new SharedArrayBuffer(8 * 1024 * 1024),
+          src: src,
+          wt: wt
+        };
+        st.node.worker = new wt.Worker(src, {
+          eval: true,
+          workerData: { ctl: ctlSab, req: st.node.req, data: st.node.data }
+        });
+        st.node.worker.unref();
+      }
+      var n = st.node;
+      for (;;) {
+        var spec = JSON.stringify({ url: url, method: method, auth: auth,
+                                    timeoutMs: timeoutMs });
+        var enc = new TextEncoder().encode(spec);
+        if (enc.length + (body ? body.length : 0) > n.req.byteLength) return 0;
+        new Uint8Array(n.req).set(enc, 0);
+        if (body) new Uint8Array(n.req).set(body, enc.length);
+        Atomics.store(n.ctl, 4, enc.length);
+        Atomics.store(n.ctl, 5, body ? body.length : 0);
+        Atomics.store(n.ctl, 6, 0);
+        Atomics.store(n.ctl, 0, 1);
+        Atomics.notify(n.ctl, 0);
+        Atomics.wait(n.ctl, 0, 1);
+        var over = Atomics.load(n.ctl, 6);
+        var need = Atomics.load(n.ctl, 2);
+        var bad = Atomics.load(n.ctl, 3);
+        var status = Atomics.load(n.ctl, 1);
+        Atomics.store(n.ctl, 0, 0);
+        if (over) {
+          var grow = n.data.byteLength;
+          while (grow < need) grow *= 2;
+          n.data = new SharedArrayBuffer(grow);
+          n.worker.terminate();
+          n.worker = new n.wt.Worker(n.src, {
+            eval: true,
+            workerData: { ctl: n.ctlSab, req: n.req, data: n.data }
+          });
+          n.worker.unref();
+          continue;
+        }
+        if (bad) return 0;
+        st.resp = new Uint8Array(need);
+        st.resp.set(new Uint8Array(n.data, 0, need));
+        return status;
+      }
+    }
+  } catch (e) {
+    st.resp = null;
+    return 0;
+  }
+  return 0;
+});
+
+EM_JS(int, doltliteWasmHttpRespLen, (void), {
+  var st = Module.__doltliteHttp;
+  return (st && st.resp) ? st.resp.length : 0;
+});
+
+EM_JS(void, doltliteWasmHttpRespTake, (unsigned char *pDest), {
+  var st = Module.__doltliteHttp;
+  if (st && st.resp) HEAPU8.set(st.resp, pDest);
+  if (st) st.resp = null;
+});
+
+static int httpRequest(
+  HttpRemote *p,
+  const char *zMethod,
+  const char *zPath,
+  const u8 *pBody, i64 nBody,
+  int *pStatus,
+  u8 **ppResp, int *pnResp
+){
+  char *zUrl;
+  char *zAuth = 0;
+  int status;
+  int nResp;
+
+  *pStatus = 0;
+  *ppResp = 0;
+  *pnResp = 0;
+  httpClearLastError(p);
+
+  if( nBody > 0x7fffffff ) return SQLITE_TOOBIG;
+
+  zUrl = sqlite3_mprintf("%s%s:%d%s", p->useTls ? "https://" : "http://",
+                         p->zHost, p->port, zPath);
+  if( !zUrl ) return SQLITE_NOMEM;
+
+#ifdef DOLTLITE_HAVE_AUTH
+  if( p->useTls && p->cred ){
+    char *jwt = 0;
+    if( doltliteCredsBearerToken(p->cred, p->zAudience, &jwt)==0 && jwt ){
+      zAuth = sqlite3_mprintf("Bearer %s", jwt);
+    }
+    if( jwt ) sqlite3_free(jwt);
+  }
+#endif
+
+  status = doltliteWasmHttpSend(zUrl, zMethod, zAuth, pBody, (int)nBody,
+                                p->timeoutMs);
+  sqlite3_free(zUrl);
+  sqlite3_free(zAuth);
+  if( status<=0 ){
+    httpSetLastError(p, "could not connect to remote");
+    return SQLITE_ERROR;
+  }
+
+  nResp = doltliteWasmHttpRespLen();
+  if( nResp<0 || (i64)nResp>HTTP_RESP_MAX_BYTES ) return SQLITE_TOOBIG;
+  if( nResp>0 ){
+    /* One extra byte: callers scan the body as a C string. */
+    u8 *pResp = sqlite3_malloc(nResp + 1);
+    if( !pResp ) return SQLITE_NOMEM;
+    doltliteWasmHttpRespTake(pResp);
+    pResp[nResp] = 0;
+    *ppResp = pResp;
+    *pnResp = nResp;
+  }
+  *pStatus = status;
+  return SQLITE_OK;
+}
+
+#else
 static int httpRequest(
   HttpRemote *p,
   const char *zMethod,
@@ -539,6 +755,7 @@ static int httpRequest(
   sqlite3_free(pRaw);
   return rc;
 }
+#endif /* __EMSCRIPTEN__ */
 
 static int uploadBufAppend(HttpRemote *p, const u8 *pData, int nData){
   if( p->nUploadBuf + nData > p->nUploadBufAlloc ){
