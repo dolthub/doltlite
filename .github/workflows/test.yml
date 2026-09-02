@@ -190,6 +190,7 @@ jobs:
           - refs-workspace
           - diff-history-data
           - merge-replay-schema
+          - feature-interaction
           - remotes-recovery
           - sql
 
