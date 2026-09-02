@@ -148,6 +148,16 @@ fn main() -> std::process::ExitCode {
             })
             .unwrap_or_default()
     };
+    let engine_version = scalar("SELECT dolt_version()");
+    check(
+        "dolt_version is stamped, not the amalgamation placeholder",
+        (engine_version.starts_with('v') && engine_version != "doltlite-amalgamation").to_string(),
+        "true".into(),
+    );
+    if let Ok(want) = std::env::var("DOLTLITE_EXPECT_VERSION") {
+        check("dolt_version matches the crate version", engine_version, want);
+    }
+
     check("dolt_branch", scalar("SELECT dolt_branch('feature')"), "0".into());
     check(
         "dolt_checkout feature",
