@@ -11,6 +11,12 @@ trap 'rm -rf "$TMPROOT"' EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$SCRIPT_DIR/lib/vc_oracle_common.sh"
+DOLT_TEMPLATE="$TMPROOT/dolt-template"
+mkdir "$DOLT_TEMPLATE"
+(
+  cd "$DOLT_TEMPLATE" || exit 1
+  vc_oracle_init_repo
+) || exit 1
 
 normalize() {
   tr -d '\r' | grep -v '^$' | sort
@@ -20,6 +26,7 @@ oracle() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
+  cp -R "$DOLT_TEMPLATE/.dolt" "$dir/dt/.dolt"
 
   printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" \
       >/dev/null 2>"$dir/dl.err"
@@ -39,7 +46,6 @@ oracle() {
   local dt_out
   dt_out=$(
     cd "$dir/dt" || exit 1
-    vc_oracle_init_repo
     printf "%s\n" "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     printf "%s\n" "$dolt_query" | "$DOLT" sql -c -r csv 2>>"$dir/dt.err" \
       | tail -n +2 | tr -d '"'
