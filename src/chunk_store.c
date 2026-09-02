@@ -366,7 +366,7 @@ int chunkStoreOpen(
   cs->isBuffer = sqlite3IsDoltliteMemdb(pVfs);
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   cs->pGraphLockName = 0;
-  cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
+  cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
   if( cs->pLockMutex==0 && sqlite3GlobalConfig.bCoreMutex ){
     chunkStoreClose(cs);
     return SQLITE_NOMEM;

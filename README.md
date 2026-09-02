@@ -883,7 +883,8 @@ For a DoltLite-format main database, the concurrency contract is:
   transaction owns the graph lock. A peer that tries to begin a concurrent
   write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
   commits or rolls back. After the lock is free, the peer can retry
-  successfully.
+  successfully. In serialized threading mode, sequential calls from different
+  threads may continue and finish the same transaction.
 - **Snapshot-safe write upgrades.** A transaction that has established a read
   snapshot cannot upgrade to a writer after a peer advances the store; the
   upgrade returns `SQLITE_BUSY_SNAPSHOT` instead of mixing catalogs. Once a
