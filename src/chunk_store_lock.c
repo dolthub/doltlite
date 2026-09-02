@@ -279,6 +279,7 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
   }
   if( cs->lockDepth > 0 ){
     cs->lockDepth++;
+    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_OK;
   }
   if( !cs->file.zFilename ){
@@ -305,6 +306,7 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     return rc;
   }
   if( pChanged ) *pChanged = changed;
+  if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
   return SQLITE_OK;
 }
 
@@ -313,13 +315,14 @@ int chunkStoreLockAndRefresh(ChunkStore *cs){
 }
 
 void chunkStoreUnlock(ChunkStore *cs){
+  if( cs->pLockMutex ) sqlite3_mutex_enter(cs->pLockMutex);
   if( cs->lockDepth > 0 ){
     cs->lockDepth--;
     if( cs->lockDepth == 0 && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
       csFileUnlockKeepOpen(CS_GRAPH_LOCK(cs));
     }
-    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
   }
+  if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
 }
 
 static int csStoreHasAnyBranchTip(ChunkStore *pCand, const RefsTable *rt,

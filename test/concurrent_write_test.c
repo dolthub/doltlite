@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdlib.h>
+#include <pthread.h>
 #include "sqlite3.h"
 
 static int nPass = 0;
@@ -67,6 +67,184 @@ static int execSqlWithBusyRetry(sqlite3 *db, const char *sql, int maxRetries){
     }
   } while( attempts < maxRetries );
   return rc;
+}
+
+typedef struct ThreadSql ThreadSql;
+struct ThreadSql {
+  sqlite3 *db;
+  const char *sql;
+  int rc;
+  char *err;
+};
+
+static void *execSqlThreadMain(void *pArg){
+  ThreadSql *p = (ThreadSql*)pArg;
+  p->rc = sqlite3_exec(p->db, p->sql, 0, 0, &p->err);
+  return 0;
+}
+
+static int execSqlOnNewThread(sqlite3 *db, const char *sql){
+  pthread_t thread;
+  ThreadSql job;
+  int rc;
+  memset(&job, 0, sizeof(job));
+  job.db = db;
+  job.sql = sql;
+  rc = pthread_create(&thread, 0, execSqlThreadMain, &job);
+  if( rc!=0 ) return SQLITE_ERROR;
+  rc = pthread_join(thread, 0);
+  if( rc!=0 ) return SQLITE_ERROR;
+  if( job.rc!=SQLITE_OK ){
+    fprintf(stderr, "  SQL error: %s (rc=%d)\n  SQL: %s\n",
+            job.err ? job.err : "?", job.rc, sql);
+  }
+  sqlite3_free(job.err);
+  return job.rc;
+}
+
+typedef struct HeldThreadSql HeldThreadSql;
+struct HeldThreadSql {
+  ThreadSql job;
+  pthread_t thread;
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  int completed;
+  int release;
+};
+
+static void *execHeldSqlThreadMain(void *pArg){
+  HeldThreadSql *p = (HeldThreadSql*)pArg;
+  execSqlThreadMain(&p->job);
+  pthread_mutex_lock(&p->mutex);
+  p->completed = 1;
+  pthread_cond_signal(&p->cond);
+  while( !p->release ) pthread_cond_wait(&p->cond, &p->mutex);
+  pthread_mutex_unlock(&p->mutex);
+  return 0;
+}
+
+static int heldSqlStart(HeldThreadSql *p, sqlite3 *db, const char *sql){
+  int rc;
+  memset(p, 0, sizeof(*p));
+  p->job.db = db;
+  p->job.sql = sql;
+  rc = pthread_mutex_init(&p->mutex, 0);
+  if( rc!=0 ) return rc;
+  rc = pthread_cond_init(&p->cond, 0);
+  if( rc!=0 ){
+    pthread_mutex_destroy(&p->mutex);
+    return rc;
+  }
+  rc = pthread_create(&p->thread, 0, execHeldSqlThreadMain, p);
+  if( rc!=0 ){
+    pthread_cond_destroy(&p->cond);
+    pthread_mutex_destroy(&p->mutex);
+    return rc;
+  }
+  pthread_mutex_lock(&p->mutex);
+  while( !p->completed ) pthread_cond_wait(&p->cond, &p->mutex);
+  pthread_mutex_unlock(&p->mutex);
+  return 0;
+}
+
+static int heldSqlFinish(HeldThreadSql *p){
+  int rc = p->job.rc;
+  pthread_mutex_lock(&p->mutex);
+  p->release = 1;
+  pthread_cond_signal(&p->cond);
+  pthread_mutex_unlock(&p->mutex);
+  pthread_join(p->thread, 0);
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "  SQL error: %s (rc=%d)\n  SQL: %s\n",
+            p->job.err ? p->job.err : "?", rc, p->job.sql);
+  }
+  sqlite3_free(p->job.err);
+  pthread_cond_destroy(&p->cond);
+  pthread_mutex_destroy(&p->mutex);
+  return rc;
+}
+
+static void test_cross_thread_transaction(void){
+  sqlite3 *db = 0;
+  sqlite3 *peer = 0;
+  const char *dbpath = "/tmp/test_cross_thread_transaction.db";
+  int i;
+  int rc;
+  int allOk = 1;
+
+  printf("--- Test 12: Explicit transaction across threads ---\n");
+  remove(dbpath);
+  rc = sqlite3_open_v2(dbpath, &db,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, 0);
+  check("cross_thread_open", rc==SQLITE_OK);
+  sqlite3_busy_timeout(db, 5000);
+  rc = execSql(db, "CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT)");
+  check("cross_thread_create", rc==SQLITE_OK);
+
+  for(i=0; i<16; i++){
+    char sql[128];
+    HeldThreadSql begin;
+    rc = heldSqlStart(&begin, db, "BEGIN IMMEDIATE");
+    if( rc!=0 ){
+      allOk = 0;
+      break;
+    }
+    if( begin.job.rc==SQLITE_OK ){
+      sqlite3_snprintf(sizeof(sql), sql,
+          "INSERT INTO t(pk,v) VALUES(%d,'x')", i);
+      rc = execSqlOnNewThread(db, sql);
+    }else{
+      rc = begin.job.rc;
+    }
+    if( rc==SQLITE_OK ) rc = execSqlOnNewThread(db, "COMMIT");
+    heldSqlFinish(&begin);
+    if( rc!=SQLITE_OK ){
+      allOk = 0;
+      execSql(db, "ROLLBACK");
+      break;
+    }
+  }
+  check("cross_thread_all_transactions_ok", allOk);
+  check("cross_thread_all_rows_committed",
+    strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "16")==0);
+
+  {
+    HeldThreadSql begin;
+    int started = heldSqlStart(&begin, db, "BEGIN IMMEDIATE");
+    rc = started==0 ? begin.job.rc : SQLITE_ERROR;
+    if( rc==SQLITE_OK ) rc = execSqlOnNewThread(db, "ROLLBACK");
+    if( started==0 ) heldSqlFinish(&begin);
+    check("cross_thread_rollback_releases_lock", rc==SQLITE_OK);
+  }
+
+  rc = sqlite3_open_v2(dbpath, &peer,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, 0);
+  check("cross_thread_peer_open", rc==SQLITE_OK);
+  sqlite3_busy_timeout(peer, 100);
+  {
+    HeldThreadSql begin;
+    int started = heldSqlStart(&begin, db, "BEGIN IMMEDIATE");
+    int ownerRc = started==0 ? begin.job.rc : SQLITE_ERROR;
+    int peerRc = SQLITE_ERROR;
+    if( ownerRc==SQLITE_OK ){
+      ownerRc = execSqlOnNewThread(db,
+          "INSERT INTO t(pk,v) VALUES(100,'owner')");
+    }
+    if( ownerRc==SQLITE_OK ){
+      peerRc = execSql(peer, "INSERT INTO t(pk,v) VALUES(101,'peer')");
+      ownerRc = execSqlOnNewThread(db, "COMMIT");
+    }
+    if( started==0 ) heldSqlFinish(&begin);
+    check("cross_thread_owner_commit_ok", ownerRc==SQLITE_OK);
+    check("cross_thread_peer_blocked", peerRc==SQLITE_BUSY);
+  }
+  sqlite3_busy_timeout(peer, 5000);
+  rc = execSql(peer, "INSERT INTO t(pk,v) VALUES(101,'peer')");
+  check("cross_thread_peer_retries_after_commit", rc==SQLITE_OK);
+
+  sqlite3_close(peer);
+  sqlite3_close(db);
+  remove(dbpath);
 }
 
 static void test_multi_writer_dml(void){
@@ -188,7 +366,6 @@ int main(){
   sqlite3 *db1 = 0, *db2 = 0, *db3 = 0, *db4 = 0;
   const char *dbpath = "/tmp/test_concurrent_write.db";
   int rc;
-  const int RETRIES = 50;
 
   remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 
@@ -348,6 +525,7 @@ int main(){
   remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 
   test_multi_writer_dml();
+  test_cross_thread_transaction();
 
   printf("\nResults: %d passed, %d failed out of %d tests\n", nPass, nFail, nPass+nFail);
   return nFail > 0 ? 1 : 0;
