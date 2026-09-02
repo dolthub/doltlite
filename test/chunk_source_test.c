@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define BASE_ROWS 2400
@@ -37,6 +39,8 @@ struct SourceCtx {
   int nRequest;
   int nReturned;
   int faultIssued;
+  int lockSignalFd;
+  int lockSignalArmed;
   unsigned char lastHash[PROLLY_HASH_SIZE];
   unsigned char faultHash[PROLLY_HASH_SIZE];
 };
@@ -354,6 +358,14 @@ static void sourceClose(SourceCtx *p){
   p->storeOpen = 0;
 }
 
+static int sourceSignalLockRelease(SourceCtx *p){
+  char c = 'x';
+  if( !p->lockSignalArmed ) return DOLTLITE_SOURCE_OK;
+  p->lockSignalArmed = 0;
+  return write(p->lockSignalFd, &c, 1)==1
+      ? DOLTLITE_SOURCE_OK : DOLTLITE_SOURCE_IOERR;
+}
+
 static int sourceFetchOne(
   SourceCtx *p,
   const unsigned char *aHash,
@@ -397,8 +409,11 @@ static int sourceGet(
   int *pnBytes
 ){
   SourceCtx *p = (SourceCtx*)pCtx;
+  int rc;
   p->nGet++;
-  return sourceFetchOne(p, aHash, ppBytes, pnBytes);
+  rc = sourceFetchOne(p, aHash, ppBytes, pnBytes);
+  if( rc==DOLTLITE_SOURCE_OK ) rc = sourceSignalLockRelease(p);
+  return rc;
 }
 
 static int sourceGetMany(
@@ -439,7 +454,7 @@ static int sourceGetMany(
     }
     if( rc!=DOLTLITE_SOURCE_OK ) return rc;
   }
-  return DOLTLITE_SOURCE_OK;
+  return sourceSignalLockRelease(p);
 }
 
 static void initSourceApi(SourceCtx *p, doltlite_chunk_source *pApi){
@@ -1058,6 +1073,147 @@ graph_lock_done:
     sqlite3_close(db);
   }
   removeStore(zAuxPath);
+  pCtx->mode = SOURCE_NORMAL;
+}
+
+static void testSourcePersistenceBusyRetry(
+  const char *zPath,
+  sqlite3 *sourceDb,
+  SourceCtx *pCtx,
+  doltlite_chunk_source *pApi,
+  const unsigned char *pRefs,
+  int nRefs
+){
+  const char *zScan =
+      "SELECT sum(id+grp+length(payload)) FROM items";
+  sqlite3 *db = 0;
+  sqlite3_int64 want = 0;
+  sqlite3_int64 got = 0;
+  sqlite3_int64 offline = 0;
+  int readyFd[2] = {-1, -1};
+  int releaseFd[2] = {-1, -1};
+  pid_t pid = -1;
+  int status = 0;
+  int childReady = 0;
+  int waited = 0;
+  char c = 0;
+  int rc;
+
+  rc = queryInt64(sourceDb, zScan, &want);
+  check("compute busy-retry source scan", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto retry_done;
+  check("create busy-retry lazy store",
+        createLazyFile(zPath, pRefs, nRefs)==SQLITE_OK);
+  rc = openDb(zPath, SQLITE_OPEN_READWRITE, &db);
+  check("open busy-retry lazy store", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto retry_done;
+  sourceResetCounters(pCtx);
+  pCtx->mode = SOURCE_NORMAL;
+  rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("open busy-retry cache writer", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto retry_done;
+  rc = sqlite3_busy_timeout(db, 0);
+  check("use default source busy retry", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto retry_done;
+  rc = pipe(readyFd);
+  if( rc==0 ) rc = pipe(releaseFd);
+  check("create busy-retry synchronization pipes", rc==0);
+  if( rc!=0 ) goto retry_done;
+
+  pid = fork();
+  check("fork busy-retry lock holder", pid>=0);
+  if( pid==0 ){
+    ChunkStore lockStore;
+    int storeOpen = 0;
+    int locked = 0;
+    int childRc;
+    close(readyFd[0]);
+    close(releaseFd[1]);
+    memset(&lockStore, 0, sizeof(lockStore));
+    childRc = chunkStoreOpen(&lockStore, sqlite3_vfs_find(0), zPath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    if( childRc==SQLITE_OK ){
+      storeOpen = 1;
+      childRc = chunkStoreLockAndRefresh(&lockStore);
+      if( childRc==SQLITE_OK ) locked = 1;
+    }
+    c = childRc==SQLITE_OK ? '1' : '0';
+    if( write(readyFd[1], &c, 1)!=1 ) childRc = SQLITE_IOERR;
+    if( childRc==SQLITE_OK ){
+      if( read(releaseFd[0], &c, 1)==1 ){
+        usleep(200000);
+      }else{
+        childRc = SQLITE_IOERR;
+      }
+    }
+    if( locked ) chunkStoreUnlock(&lockStore);
+    if( storeOpen ) chunkStoreClose(&lockStore);
+    close(readyFd[1]);
+    close(releaseFd[0]);
+    _exit(childRc==SQLITE_OK ? 0 : 1);
+  }
+  if( pid<0 ) goto retry_done;
+  close(readyFd[1]);
+  readyFd[1] = -1;
+  close(releaseFd[0]);
+  releaseFd[0] = -1;
+  childReady = read(readyFd[0], &c, 1)==1 && c=='1';
+  check("child holds busy-retry graph lock", childReady);
+  if( !childReady ) goto retry_done;
+
+  sourceResetCounters(pCtx);
+  pCtx->lockSignalFd = releaseFd[1];
+  pCtx->lockSignalArmed = 1;
+  rc = queryInt64(db, zScan, &got);
+  if( pCtx->lockSignalArmed ){
+    c = 'x';
+    if( write(releaseFd[1], &c, 1)!=1 && rc==SQLITE_OK ){
+      rc = SQLITE_IOERR;
+    }
+    pCtx->lockSignalArmed = 0;
+  }
+  close(releaseFd[1]);
+  releaseFd[1] = -1;
+  check("busy-retry scan waits for cache writer", rc==SQLITE_OK);
+  check("busy-retry scan matches source", rc==SQLITE_OK && got==want);
+  check("busy-retry scan fetched uncached chunks", pCtx->nRequest>0);
+  waitpid(pid, &status, 0);
+  waited = 1;
+  check("busy-retry lock holder exits cleanly",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+  if( rc!=SQLITE_OK ) goto retry_done;
+
+  rc = doltlite_set_chunk_source(db, "main", 0);
+  check("clear source after busy-retry scan", rc==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+  sourceResetCounters(pCtx);
+  pCtx->mode = SOURCE_NOTFOUND;
+  rc = openDb(zPath, SQLITE_OPEN_READWRITE, &db);
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("reopen busy-retry store with unavailable source", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ) rc = queryInt64(db, zScan, &offline);
+  check("busy-retry scan persisted for offline reopen", rc==SQLITE_OK);
+  check("offline busy-retry scan matches source",
+        rc==SQLITE_OK && offline==want);
+  check("offline busy-retry scan needs no source callback",
+        pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+
+retry_done:
+  pCtx->lockSignalArmed = 0;
+  if( releaseFd[1]>=0 && childReady ){
+    c = 'x';
+    if( write(releaseFd[1], &c, 1)!=1 ) childReady = 0;
+  }
+  if( pid>0 && !waited ) waitpid(pid, &status, 0);
+  if( readyFd[0]>=0 ) close(readyFd[0]);
+  if( readyFd[1]>=0 ) close(readyFd[1]);
+  if( releaseFd[0]>=0 ) close(releaseFd[0]);
+  if( releaseFd[1]>=0 ) close(releaseFd[1]);
+  if( db ){
+    doltlite_set_chunk_source(db, "main", 0);
+    sqlite3_close(db);
+  }
   pCtx->mode = SOURCE_NORMAL;
 }
 
@@ -2085,6 +2241,7 @@ int main(void){
   char zOtherWorkingSetMiss[192];
   char zGraphLock[192];
   char zGraphAux[192];
+  char zBusyRetry[192];
   char zBatchIoerr[192];
   char zMoved[192];
   char zMovedAway[208];
@@ -2110,6 +2267,7 @@ int main(void){
            "%s_other_working_set_miss.db", zPrefix);
   snprintf(zGraphLock, sizeof(zGraphLock), "%s_graph_lock.db", zPrefix);
   snprintf(zGraphAux, sizeof(zGraphAux), "%s_graph_aux.db", zPrefix);
+  snprintf(zBusyRetry, sizeof(zBusyRetry), "%s_busy_retry.db", zPrefix);
   snprintf(zBatchIoerr, sizeof(zBatchIoerr), "%s_batch_ioerr.db", zPrefix);
   snprintf(zMoved, sizeof(zMoved), "%s_moved.db", zPrefix);
   snprintf(zMovedAway, sizeof(zMovedAway), "%s_moved.db.away", zPrefix);
@@ -2156,6 +2314,8 @@ int main(void){
       zOtherWorkingSetMiss, &source, &api, pNewRefs, nNewRefs);
   testGraphLockMiss(
       zGraphLock, zGraphAux, &source, &api, pNewRefs, nNewRefs);
+  testSourcePersistenceBusyRetry(
+      zBusyRetry, sourceDb, &source, &api, pNewRefs, nNewRefs);
   testBatchPartialIoerr(
       zBatchIoerr, &source, &api, pNewRefs, nNewRefs);
   testMovedWriterFallsBack(
@@ -2190,6 +2350,7 @@ test_done:
   removeStore(zOtherWorkingSetMiss);
   removeStore(zGraphLock);
   removeStore(zGraphAux);
+  removeStore(zBusyRetry);
   removeStore(zBatchIoerr);
   removeStore(zMoved);
   removeStore(zMovedAway);

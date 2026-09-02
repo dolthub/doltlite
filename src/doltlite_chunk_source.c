@@ -11,6 +11,8 @@
 #define CS_SOURCE_CACHE_BUCKETS 256
 #define CS_SOURCE_CACHE_MAX_ENTRIES 2048
 #define CS_SOURCE_CACHE_MAX_BYTES (16*1024*1024)
+#define CS_SOURCE_BUSY_RETRY_COUNT 200
+#define CS_SOURCE_BUSY_RETRY_US 5000
 
 typedef struct DoltliteChunkSourceEntry DoltliteChunkSourceEntry;
 struct DoltliteChunkSourceEntry {
@@ -208,6 +210,31 @@ static int csSourceGraphLockHeld(
   return p->writerOpen && p->writer.lockDepth>0;
 }
 
+static int csSourceBusyRetry(
+  DoltliteChunkSourceState *p,
+  int nBusy
+){
+  if( p->db && p->db->busyHandler.xBusyHandler ){
+    return sqlite3InvokeBusyHandler(&p->db->busyHandler);
+  }
+  if( !p->db || nBusy>=CS_SOURCE_BUSY_RETRY_COUNT ) return 0;
+  sqlite3OsSleep(p->db->pVfs, CS_SOURCE_BUSY_RETRY_US);
+  return 1;
+}
+
+static int csSourceLockAndRefresh(
+  ChunkStore *cs,
+  DoltliteChunkSourceState *p,
+  int *pChanged
+){
+  int nBusy = 0;
+  int rc;
+  do {
+    rc = chunkStoreLockAndRefreshChanged(cs, pChanged);
+  }while( (rc&0xff)==SQLITE_BUSY && csSourceBusyRetry(p, nBusy++) );
+  return rc;
+}
+
 static int csSourceOpenWriter(
   ChunkStore *cs,
   DoltliteChunkSourceState *p,
@@ -223,7 +250,7 @@ static int csSourceOpenWriter(
   }
   if( cs->file.pFile==0 ) return SQLITE_OK;
   if( cs->lockDepth>0 ) return SQLITE_BUSY;
-  rc = chunkStoreLockAndRefreshChanged(cs, &changed);
+  rc = csSourceLockAndRefresh(cs, p, &changed);
   if( rc!=SQLITE_OK ) return rc;
   if( cs->movedReadOnly ){
     p->memoryOnly = 1;
@@ -260,7 +287,7 @@ static int csSourcePersistMany(
   if( i==nHash ) return SQLITE_OK;
   rc = csSourceOpenWriter(cs, p, 0);
   if( rc!=SQLITE_OK || !p->writerOpen ) return rc;
-  rc = chunkStoreLockAndRefresh(&p->writer);
+  rc = csSourceLockAndRefresh(&p->writer, p, 0);
   if( rc==SQLITE_OK && p->writer.movedReadOnly ){
     p->memoryOnly = 1;
   }
