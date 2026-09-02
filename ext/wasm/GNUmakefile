@@ -1228,12 +1228,13 @@ sqlite3-wasm.c.in += $(doltlite.wasm.lib)
 endif
 
 ifeq (1,$(DOLTLITE_WASM))
-$(dir.doltlite.build)/Makefile: $(dir.top)/Makefile
+.PHONY: doltlite.wasm.sync
+doltlite.wasm.sync:
 	@mkdir -p $(dir.doltlite.build)
-	@cp $(dir.top)/Makefile $(dir.doltlite.build)/Makefile
-	@find $(dir.top) -maxdepth 1 \( -name '*.h' -o -name '*.c' \) -exec cp {} $(dir.doltlite.build) \;
+	@cp -f -p $(dir.top)/Makefile $(dir.doltlite.build)/Makefile
+	@find $(dir.top) -maxdepth 1 \( -name '*.h' -o -name '*.c' \) -exec cp -f -p {} $(dir.doltlite.build) \;
 
-$(doltlite.wasm.lib): $(dir.doltlite.build)/Makefile
+$(doltlite.wasm.lib): doltlite.wasm.sync
 	@echo "[$(emo.tool) doltlite] building wasm libdoltlite.a"
 	@$(MAKE) -C $(dir.doltlite.build) libdoltlite.a \
 		CC='$(bin.emcc)' AR=emar \
@@ -1279,6 +1280,10 @@ $(bin.mkwb): $(bin.mkwb).c $(MAKEFILE)
 -include .wasmbuilds.make
 endif
 CLEAN_FILES += .wasmbuilds.make $(bin.mkwb)
+
+ifeq (1,$(DOLTLITE_WASM))
+$(dir.dout)/sqlite3-node.mjs: $(dir.dout)/sqlite3.wasm
+endif
 
 #
 # $(sqlite3.ext.js) = API-related files which are standalone
