@@ -151,20 +151,6 @@ jobs:
             ext: ""
             lib_ext: ".dylib"
             static_ext: ".a"
-          # Intel Mac (x86_64) artifact, cross-compiled on the Apple Silicon
-          # runner via `-arch x86_64`. We don't use a macos-13 Intel runner:
-          # those are scarce and queue unreliably, and a stuck osx-x64 leg
-          # blocks the whole release (the release job needs the full matrix).
-          # The build cleanly separates host tools (lemon/mkkeywordhash/jimsh,
-          # built with bare $(B.cc), stay native arm64 and runnable) from the
-          # target objects/link (take -arch x86_64 via CFLAGS/LDFLAGS), and the
-          # SDK's libz is universal so `-lz` resolves the x86_64 slice.
-          - os: macos-latest
-            target: osx-x64
-            cross_arch: "-arch x86_64"
-            ext: ""
-            lib_ext: ".dylib"
-            static_ext: ".a"
           - os: windows-latest
             target: win-x64
             ext: ".exe"
@@ -186,26 +172,10 @@ jobs:
 
     - name: Configure and build (Unix)
       if: runner.os != 'Windows'
-      env:
-        # Empty for native targets; "-arch x86_64" for the cross-compiled
-        # Intel Mac build (see the osx-x64 matrix entry).
-        CROSS_ARCH: ${{ matrix.cross_arch }}
       run: |
         mkdir -p build && cd build
         ../configure
-        if [ -n "$CROSS_ARCH" ]; then
-          # Cross-compile the *target* compiler with the arch flag while pinning
-          # B.cc (build-host tools: lemon, mkkeywordhash, jimsh) to the native
-          # cc so they run on this arm64 runner. Overriding CC rather than
-          # CFLAGS preserves configure's -O2/-dynamic/-DNDEBUG flags, and the
-          # link inherits the arch via $(CC). The macOS SDK's libz is universal
-          # so -lz resolves the x86_64 slice.
-          make -j$(sysctl -n hw.ncpu) \
-            CC="cc $CROSS_ARCH" B.cc="cc" \
-            doltlite doltlite-remotesrv doltlite-lib
-        else
-          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
-        fi
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
 
     - name: Build (Windows / MSYS2)
       if: runner.os == 'Windows'
@@ -327,17 +297,13 @@ jobs:
           dist/*.deb
 
   # ── Package smoke test (.deb) ─────────────────────────────
-  # Non-blocking sanity check: download the just-built linux-x64 .debs,
+  # Required sanity check: download the just-built linux-x64 .debs,
   # `dpkg -i` them on a clean ubuntu-latest, and assert `doltlite` runs
   # and `SELECT dolt_version()` reports the release tag. Catches the
   # class of regression where the build succeeds but the package itself
   # is broken (missing files, bad paths, undeclared deps, etc.) —
   # exactly what ba3685707e ("make the autoconf release tarball
   # actually build") would have caught earlier.
-  #
-  # Started as non-blocking on purpose: the `release` job below does NOT
-  # depend on this. Promote to a required check once it has demonstrated
-  # reliability across a few releases.
   package-smoke-deb:
     needs: build
     runs-on: ubuntu-latest
@@ -528,7 +494,7 @@ jobs:
   # ── Create GitHub release ─────────────────────────────────
   release:
     if: github.event_name != 'workflow_dispatch'
-    needs: [source, build, benchmark, compat]
+    needs: [source, build, package-smoke-deb, benchmark, compat]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -795,7 +761,6 @@ jobs:
           "linux-x64 linux-x86_64 so" \
           "linux-arm64 linux-arm64 so" \
           "osx-arm64 darwin-arm64 dylib" \
-          "osx-x64 darwin-x86_64 dylib" \
           "win-x64 windows-x86_64 dll"; do
           read -r target platdir ext <<<"$spec"
           gh release download "${VERSION}" --repo dolthub/doltlite \
@@ -876,7 +841,6 @@ jobs:
           "linux-x64 linux-x64 libdoltlite.so libdoltlite.so" \
           "linux-arm64 linux-arm64 libdoltlite.so libdoltlite.so" \
           "osx-arm64 osx-arm64 libdoltlite.dylib libdoltlite.dylib" \
-          "osx-x64 osx-x64 libdoltlite.dylib libdoltlite.dylib" \
           "win-x64 win-x64 libdoltlite.dll doltlite.dll"; do
           read -r target rid src dst <<<"$spec"
           gh release download "${VERSION}" --repo dolthub/doltlite \

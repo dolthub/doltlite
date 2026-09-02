@@ -50,7 +50,7 @@ tables, remotes — is reachable through SQL; see the
 ## Requirements
 
 - .NET 6.0 or later.
-- Bundled native engines: `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`,
+- Bundled native engines: `linux-x64`, `linux-arm64`, `osx-arm64`, and
   `win-x64`. For anything else, set `DOLTLITE_NET_LIB` to the path of a
   `libdoltlite` shared library built from source.
 
