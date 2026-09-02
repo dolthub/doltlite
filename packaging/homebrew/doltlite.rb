@@ -1,13 +1,20 @@
 # Homebrew formula for doltlite. Held in this repo as the source-of-truth
 # copy until the project clears homebrew-core's notability threshold for
 # new third-party submissions (≥30 forks, ≥30 watchers, ≥75 stars).
+# release.yml rewrites url/sha256 on each tag so this tracks the latest
+# release rather than a pinned pre-freeze tarball.
 class Doltlite < Formula
   desc "SQLite fork with Git-style version control via prolly trees"
   homepage "https://github.com/dolthub/doltlite"
-  url "https://github.com/dolthub/doltlite/releases/download/v0.10.6/doltlite-autoconf-0.10.6.tar.gz"
-  sha256 "816ecedc369dd61fd06a0759985d5fbfbdf9fadcd1096cc1c35cc7f09447e7c3"
+  url "https://github.com/dolthub/doltlite/releases/download/v0.50.2/doltlite-autoconf-0.50.2.tar.gz"
+  sha256 "186742c40a2cc72183b6e626232d84d8f1223b1212be0e974de47d9374fb1b1e"
   license "Apache-2.0"
   head "https://github.com/dolthub/doltlite.git", branch: "master"
+
+  livecheck do
+    url :stable
+    strategy :github_latest
+  end
 
   uses_from_macos "zlib"
 
