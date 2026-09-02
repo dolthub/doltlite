@@ -861,5 +861,57 @@ run_test "ff_nocommit_noff_abort_count" "SELECT count(*) FROM t;" "1" "$DB53"
 run_test "ff_nocommit_noff_abort_merging" \
   "SELECT is_merging FROM dolt_merge_status;" "0" "$DB53"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53"
+# Persisted --no-commit merge: a refused second merge must not wedge the
+# next dolt_commit in that session (#2539).
+DB54=/tmp/test_merge54_$$.db; rm -f "$DB54"
+echo "CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('.'); SELECT dolt_commit('-m','base'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB54" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,2); SELECT dolt_commit('-am','feat1');" | $DOLTLITE "$DB54/feat" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,3); SELECT dolt_commit('-am','main1');" | $DOLTLITE "$DB54" > /dev/null 2>&1
+echo "SELECT dolt_merge('--no-commit','feat');" | $DOLTLITE "$DB54" > /dev/null 2>&1
+REFUSE_OUT=$(cat <<'EOF' | $DOLTLITE "$DB54" 2>&1
+SELECT dolt_merge('feat');
+SELECT dolt_commit('-m','after-fail');
+EOF
+)
+if echo "$REFUSE_OUT" | grep -q "uncommitted changes"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: nocommit_second_merge_refused\n  got: $REFUSE_OUT"
+fi
+if echo "$REFUSE_OUT" | grep -q "cannot commit - no transaction is active"; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: nocommit_refuse_does_not_wedge_commit\n  got: $REFUSE_OUT"
+else
+  PASS=$((PASS+1))
+fi
+if echo "$REFUSE_OUT" | grep -Eq '[0-9a-f]{40}'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: nocommit_refuse_then_commit_hash\n  got: $REFUSE_OUT"
+fi
+
+# A refused merge must not roll back earlier autocommit merges in the
+# same connection (error-recovery oracle: fan-in with bogus names).
+DB55=/tmp/test_merge55_$$.db; rm -f "$DB55"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(0);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','b1');
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','b1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b2');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','b2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('bogus');
+SELECT dolt_merge('b2');" | $DOLTLITE "$DB55" > /dev/null 2>&1
+run_test "refuse_does_not_undo_prior_merge" "SELECT count(*) FROM t;" "3" "$DB55"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55"
 dltest_finish

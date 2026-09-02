@@ -499,6 +499,29 @@ static int mergeRefLeaveUncommitted(
   return SQLITE_OK;
 }
 
+static int mergeRefAbortAfterWriteTxn(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const char *zMsg,
+  int rc
+){
+  /* Halt will not end a write started from this read-only SELECT.
+  ** RollbackAll restores the txn snapshot and persists it, which wipes
+  ** earlier autocommit merges still sitting in the same write. These
+  ** refusals have not mutated; commit the write so txn_state is NONE. */
+  if( db->autoCommit && db->nDb>0 && db->aDb[0].pBt
+   && sqlite3BtreeTxnState(db->aDb[0].pBt)==SQLITE_TXN_WRITE ){
+    sqlite3BtreeCommit(db->aDb[0].pBt);
+    sqlite3CloseSavepoints(db);
+  }
+  if( zMsg ){
+    sqlite3_result_error(context, zMsg, -1);
+  }else{
+    sqlite3_result_error_code(context, rc);
+  }
+  return SQLITE_ERROR;
+}
+
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
@@ -546,20 +569,19 @@ int doltliteMergeRef(
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return SQLITE_ERROR;
+    return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
   }
 
   doltliteGetSessionHead(db, &ourHead);
   if( prollyHashIsEmpty(&ourHead) ){
-    sqlite3_result_error(context, "no commits on current branch", -1);
-    return SQLITE_ERROR;
+    return mergeRefAbortAfterWriteTxn(db, context,
+        "no commits on current branch", rc);
   }
 
   rc = doltliteResolveRef(db, zBranch, &theirHead);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&theirHead) ){
-    sqlite3_result_error(context, "merge source not found", -1);
-    return SQLITE_ERROR;
+    return mergeRefAbortAfterWriteTxn(db, context,
+        "merge source not found", rc);
   }
 
   if( prollyHashCompare(&ourHead, &theirHead)==0 ){
@@ -569,19 +591,17 @@ int doltliteMergeRef(
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return SQLITE_ERROR;
+    return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
   }
   if( dirty ){
-    sqlite3_result_error(context,
-      "uncommitted changes \xe2\x80\x94 commit or reset before merging", -1);
-    return SQLITE_ERROR;
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
   }
 
   rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&ancestorHash) ){
-    sqlite3_result_error(context, "no common ancestor found", -1);
-    return SQLITE_ERROR;
+    return mergeRefAbortAfterWriteTxn(db, context,
+        "no common ancestor found", rc);
   }
 
   if( prollyHashCompare(&ancestorHash, &theirHead)==0 ){
