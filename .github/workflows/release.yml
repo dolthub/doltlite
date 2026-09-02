@@ -1282,3 +1282,52 @@ jobs:
         git pull --ff-only origin main
         git tag "${VERSION}"
         git push origin "${VERSION}"
+
+  # ── Bump the in-repo Homebrew formula ────────────────────
+  # packaging/homebrew/doltlite.rb is the source-of-truth copy until
+  # homebrew-core accepts a submission. Pinning a stale tarball ships a
+  # pre-format-freeze engine. After the autoconf tarball is on the GitHub
+  # release, rewrite url/sha256 and push to master.
+  release-homebrew:
+    if: github.event_name != 'workflow_dispatch'
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+    - name: Check release bot token
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to push Homebrew formula bumps to doltlite"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - uses: actions/checkout@v4
+      with:
+        ref: master
+        token: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+    - name: Bump Homebrew formula to this release
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+        asset="doltlite-autoconf-${version}.tar.gz"
+        gh release download "${VERSION}" --repo dolthub/doltlite \
+          --pattern "${asset}" --dir /tmp
+        sha256=$(sha256sum "/tmp/${asset}" | awk '{print $1}')
+        bash packaging/homebrew/bump-formula.sh "${version}" "${sha256}"
+        if git diff --quiet -- packaging/homebrew/doltlite.rb; then
+          echo "Homebrew formula already at ${version}"
+          exit 0
+        fi
+        git add packaging/homebrew/doltlite.rb
+        git commit -m "Bump Homebrew formula to ${version}"
+        git push origin master
