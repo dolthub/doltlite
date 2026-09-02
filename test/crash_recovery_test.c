@@ -492,7 +492,12 @@ static void test_07_five_commits_random_kill(void){
 
       if( nLog>0 ){
         int nRows = queryScalarInt(db, "SELECT count(*) FROM t", -1);
-        check("test_07: row count matches commit count", nRows==nLog);
+        int nHeadRows = queryScalarInt(db,
+          "SELECT count(*) FROM dolt_at_t('HEAD')", -1);
+        check("test_07: committed row count matches commit count",
+              nHeadRows==nLog);
+        check("test_07: working rows match commits or next insert",
+              nRows==nLog || (nLog<5 && nRows==nLog+1));
       }
     }
     sqlite3_close(db);
