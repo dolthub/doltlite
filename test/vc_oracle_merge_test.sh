@@ -1755,6 +1755,96 @@ SELECT dolt_merge('feat');
 " "SELECT group_concat(id || ':' || added, ',') FROM (SELECT id, added FROM t ORDER BY id)" \
 "SELECT GROUP_CONCAT(CONCAT(id, ':', added) ORDER BY id SEPARATOR ',') FROM t"
 
+oracle_error_poststate "dual_defaults_opposite_deletes_and_surviving_edit" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 1), (2, 2), (3, 3), (4, 4);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'x';
+DELETE FROM t WHERE a = 2;
+UPDATE t SET b = 30 WHERE a = 3;
+SELECT dolt_commit('-Am', 'feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+UPDATE t SET c = 8 WHERE a = 2;
+DELETE FROM t WHERE a = 4;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(a || ':' || b || ':' || c || ':' || d, ',') FROM (SELECT a, b, c, d FROM t ORDER BY a)" \
+"SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', c, ':', d) ORDER BY a SEPARATOR ',') FROM t"
+
+oracle_error_poststate "dual_multi_defaults_composite_pk_deletes" "
+CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
+CREATE INDEX tv ON t(v);
+INSERT INTO t VALUES (1, 1, 10), (2, 2, 20), (3, 3, 30), (4, 4, 40);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN d TEXT NOT NULL DEFAULT 9;
+ALTER TABLE t ADD COLUMN e INT DEFAULT 11;
+DELETE FROM t WHERE a = 2;
+UPDATE t SET v = 31 WHERE a = 3;
+SELECT dolt_commit('-Am', 'feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT 7;
+ALTER TABLE t ADD COLUMN f TEXT DEFAULT 'y';
+DELETE FROM t WHERE a = 4;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(a || ':' || b || ':' || v || ':' || c || ':' || f || ':' || d || ':' || e, ',') FROM (SELECT a, b, v, c, f, d, e FROM t ORDER BY a, b)" \
+"SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', v, ':', c, ':', f, ':', d, ':', e) ORDER BY a, b SEPARATOR ',') FROM t"
+
+oracle_error_poststate "one_sided_default_column_edit_vs_delete" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 1), (2, 2), (3, 3);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+UPDATE t SET c = 8 WHERE a = 2;
+SELECT dolt_commit('-Am', 'feature');
+SELECT dolt_checkout('main');
+DELETE FROM t WHERE a = 2;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(a || ':' || b || ':' || c, ',') FROM (SELECT a, b, c FROM t ORDER BY a)" \
+"SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', c) ORDER BY a SEPARATOR ',') FROM t"
+
+oracle_error "dual_defaults_delete_vs_ancestor_column_edit" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES (1, 1), (2, 2);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'x';
+DELETE FROM t WHERE a = 2;
+SELECT dolt_commit('-Am', 'feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+UPDATE t SET b = 20 WHERE a = 2;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_merge('feature');
+"
+
+oracle_error_poststate "dual_defaults_after_virtual_generated_column" "
+CREATE TABLE t(a INTEGER PRIMARY KEY, b INT,
+  gv INT GENERATED ALWAYS AS (b * 2) VIRTUAL);
+INSERT INTO t(a, b) VALUES (1, 1), (2, 2), (3, 3);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN d INT DEFAULT 9;
+DELETE FROM t WHERE a = 2;
+SELECT dolt_commit('-Am', 'feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+UPDATE t SET c = 8 WHERE a = 2;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_merge('feature');
+" "SELECT group_concat(a || ':' || b || ':' || gv || ':' || c || ':' || d, ',') FROM (SELECT a, b, gv, c, d FROM t ORDER BY a)" \
+"SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', gv, ':', c, ':', d) ORDER BY a SEPARATOR ',') FROM t"
+
 # Concluding a conflicted merge must still record the second parent.
 oracle "conflict_resolved_commit_keeps_merged_branch_in_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

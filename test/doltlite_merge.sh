@@ -913,5 +913,75 @@ SELECT dolt_merge('bogus');
 SELECT dolt_merge('b2');" | $DOLTLITE "$DB55" > /dev/null 2>&1
 run_test "refuse_does_not_undo_prior_merge" "SELECT count(*) FROM t;" "3" "$DB55"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55"
+DB56=/tmp/test_merge56_$$.db; rm -f "$DB56"
+echo "CREATE TABLE t(a INT PRIMARY KEY, b INT); CREATE INDEX tb ON t(b); INSERT INTO t VALUES(1,1),(2,2),(3,3),(4,4); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB56" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'x'; DELETE FROM t WHERE a=2; UPDATE t SET b=30 WHERE a=3; SELECT dolt_commit('-Am','feature');" | $DOLTLITE "$DB56/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN c INT DEFAULT 7; UPDATE t SET c=8 WHERE a=2; DELETE FROM t WHERE a=4; SELECT dolt_commit('-Am','main');" | $DOLTLITE "$DB56" > /dev/null 2>&1
+run_test_match "dual_defaults_and_opposite_deletes_merge" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB56"
+run_test "dual_defaults_and_opposite_deletes_rows" \
+  "SELECT group_concat(a || ':' || b || ':' || c || ':' || d, ',') FROM (SELECT a,b,c,d FROM t ORDER BY a);" \
+  "1:1:7:x,3:30:7:x" "$DB56"
+run_test "dual_defaults_and_opposite_deletes_index" \
+  "SELECT group_concat(a || ':' || b, ',') FROM (SELECT a,b FROM t INDEXED BY tb ORDER BY b);" \
+  "1:1,3:30" "$DB56"
+run_test "dual_defaults_and_opposite_deletes_clean" \
+  "SELECT (SELECT count(*) FROM dolt_conflicts) || ':' || (SELECT count(*) FROM dolt_constraint_violations) || ':' || (SELECT integrity_check FROM pragma_integrity_check);" \
+  "0:0:ok" "$DB56"
+run_test "dual_defaults_and_opposite_deletes_reopen" \
+  "SELECT group_concat(a || ':' || b || ':' || c || ':' || d, ',') FROM (SELECT a,b,c,d FROM t ORDER BY a);" \
+  "1:1:7:x,3:30:7:x" "$DB56"
+
+DB57=/tmp/test_merge57_$$.db; rm -f "$DB57"
+echo "CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a,b)); CREATE INDEX tv ON t(v); INSERT INTO t VALUES(1,1,10),(2,2,20),(3,3,30),(4,4,40); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB57" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN d TEXT NOT NULL DEFAULT 9; ALTER TABLE t ADD COLUMN e INT DEFAULT 11; DELETE FROM t WHERE a=2; UPDATE t SET v=31 WHERE a=3; SELECT dolt_commit('-Am','feature');" | $DOLTLITE "$DB57/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT 7; ALTER TABLE t ADD COLUMN f TEXT DEFAULT 'y'; DELETE FROM t WHERE a=4; SELECT dolt_commit('-Am','main');" | $DOLTLITE "$DB57" > /dev/null 2>&1
+run_test_match "dual_multi_defaults_composite_pk_merge" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB57"
+run_test "dual_multi_defaults_composite_pk_rows" \
+  "SELECT group_concat(a || ':' || b || ':' || v || ':' || quote(c) || ':' || f || ':' || quote(d) || ':' || e, ',') FROM (SELECT a,b,v,c,f,d,e FROM t ORDER BY a,b);" \
+  "1:1:10:'7':y:'9':11,3:3:31:'7':y:'9':11" "$DB57"
+run_test "dual_multi_defaults_composite_pk_index" \
+  "SELECT group_concat(a || ':' || b || ':' || v, ',') FROM (SELECT a,b,v FROM t INDEXED BY tv ORDER BY v);" \
+  "1:1:10,3:3:31" "$DB57"
+run_test "dual_multi_defaults_composite_pk_clean" \
+  "SELECT (SELECT count(*) FROM dolt_conflicts) || ':' || (SELECT count(*) FROM dolt_constraint_violations) || ':' || (SELECT integrity_check FROM pragma_integrity_check);" \
+  "0:0:ok" "$DB57"
+
+DB58=/tmp/test_merge58_$$.db; rm -f "$DB58"
+echo "CREATE TABLE t(a INT PRIMARY KEY, b INT); INSERT INTO t VALUES(1,1),(2,2); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB58" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'x'; DELETE FROM t WHERE a=2; SELECT dolt_commit('-Am','feature');" | $DOLTLITE "$DB58/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN c INT DEFAULT 7; UPDATE t SET b=20 WHERE a=2; SELECT dolt_commit('-Am','main');" | $DOLTLITE "$DB58" > /dev/null 2>&1
+run_test_match "dual_defaults_delete_vs_base_edit_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB58"
+run_test "dual_defaults_delete_vs_base_edit_rolls_back" \
+  "SELECT a || ':' || b || ':' || c FROM t WHERE a=2;" "2:20:7" "$DB58"
+run_test "dual_defaults_delete_vs_base_edit_not_persisted" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB58"
+
+DB59=/tmp/test_merge59_$$.db; rm -f "$DB59"
+echo "CREATE TABLE t(a INT PRIMARY KEY, b INT); INSERT INTO t VALUES(1,1),(2,2),(3,3); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB59" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN c INT DEFAULT 7; UPDATE t SET c=8 WHERE a=2; SELECT dolt_commit('-Am','feature');" | $DOLTLITE "$DB59/feature" > /dev/null 2>&1
+echo "DELETE FROM t WHERE a=2; SELECT dolt_commit('-Am','main');" | $DOLTLITE "$DB59" > /dev/null 2>&1
+run_test_match "one_sided_default_edit_vs_delete_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB59"
+run_test "one_sided_default_edit_vs_delete_rows" \
+  "SELECT group_concat(a || ':' || b || ':' || c, ',') FROM (SELECT a,b,c FROM t ORDER BY a);" \
+  "1:1:7,3:3:7" "$DB59"
+run_test "one_sided_default_edit_vs_delete_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB59"
+
+DB60=/tmp/test_merge60_$$.db; rm -f "$DB60"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b INT, gs INT GENERATED ALWAYS AS (b+10) STORED, gv INT GENERATED ALWAYS AS (b*2) VIRTUAL); INSERT INTO t(a,b) VALUES(1,1),(2,2),(3,3); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB60" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN d INT DEFAULT 9; DELETE FROM t WHERE a=2; SELECT dolt_commit('-Am','feature');" | $DOLTLITE "$DB60/feature" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN c INT DEFAULT 7; UPDATE t SET c=8 WHERE a=2; SELECT dolt_commit('-Am','main');" | $DOLTLITE "$DB60" > /dev/null 2>&1
+run_test_match "dual_defaults_after_generated_columns_merge" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB60"
+run_test "dual_defaults_after_generated_columns_rows" \
+  "SELECT group_concat(a || ':' || b || ':' || gs || ':' || gv || ':' || c || ':' || d, ',') FROM (SELECT a,b,gs,gv,c,d FROM t ORDER BY a);" \
+  "1:1:11:2:7:9,3:3:13:6:7:9" "$DB60"
+run_test "dual_defaults_after_generated_columns_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB60"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60"
 dltest_finish
