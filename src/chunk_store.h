@@ -92,6 +92,12 @@
 #define CS_WAL_CHUNK_LEN_OFF   (1 + PROLLY_HASH_SIZE)
 #define CS_WAL_CHUNK_HDR_SIZE  (1 + PROLLY_HASH_SIZE + 4)
 
+/* Scan/replay read window. Heap-allocated by its users: a buffer this size
+** exceeds the whole stack in small-stack builds (wasm defaults to 64K). */
+#define CS_SCAN_WINDOW 65536
+/* Backward root scan reads a window plus the 4-byte overlap it re-examines. */
+#define CS_ROOT_SCAN_WINDOW (CS_SCAN_WINDOW + 4)
+
 #define CS_INDEX_PAGE_LEAF_MAGIC 0x314c5049
 #define CS_INDEX_PAGE_INTERNAL_MAGIC 0x31495049
 #define CS_INDEX_PAGE_SIZE 4096

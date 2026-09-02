@@ -302,35 +302,37 @@ static int csReadManifest(ChunkStore *cs){
 /* Distinguish crashed first-commit from a damaged committed DB. */
 static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
                                   int *pCreationRoot){
-  u8 buf[65536];
+  u8 *buf;
   i64 fileSize = 0;
   i64 q = CHUNK_MANIFEST_SIZE;
   int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
   *pEverCommitted = 0;
   *pCreationRoot = 0;
   if( rc != SQLITE_OK ) return rc;
+  buf = sqlite3_malloc(CS_SCAN_WINDOW);
+  if( !buf ) return SQLITE_NOMEM;
   while( q + 5 <= fileSize ){
     i64 nAvail = fileSize - q;
-    int n = nAvail > (i64)sizeof(buf) ? (int)sizeof(buf) : (int)nAvail;
+    int n = nAvail > (i64)CS_SCAN_WINDOW ? CS_SCAN_WINDOW : (int)nAvail;
     int i;
     rc = sqlite3OsRead(cs->file.pFile, buf, n, q);
-    if( rc != SQLITE_OK ) return rc;
+    if( rc != SQLITE_OK ) goto scan_done;
     for(i=0; i+5<=n; i++){
       if( buf[i]==CS_WAL_TAG_ROOT && CS_READ_U32(buf+i+1)==CHUNK_STORE_MAGIC ){
         u8 m[CHUNK_MANIFEST_SIZE];
         int state;
         if( q + i + 1 + CHUNK_MANIFEST_SIZE > fileSize ) continue;
         rc = sqlite3OsRead(cs->file.pFile, m, CHUNK_MANIFEST_SIZE, q + i + 1);
-        if( rc != SQLITE_OK ) return rc;
+        if( rc != SQLITE_OK ) goto scan_done;
         state = csManifestHashState(m, q + i);
         if( state==CS_MANIFEST_HASH_OK ){
           if( csValidateWalRootManifest(0, m, q+i)!=SQLITE_OK ){
             *pEverCommitted = 1;
-            return SQLITE_OK;
+            goto scan_done;
           }
           if( CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF) > CHUNK_MANIFEST_SIZE ){
             *pEverCommitted = 1;
-            return SQLITE_OK;
+            goto scan_done;
           }
           *pCreationRoot = 1;
         }
@@ -339,7 +341,10 @@ static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
     if( (i64)n >= nAvail ) break;
     q += n - 4;
   }
-  return SQLITE_OK;
+
+scan_done:
+  sqlite3_free(buf);
+  return rc;
 }
 
 
