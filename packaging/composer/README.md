@@ -17,7 +17,7 @@ classes so existing code ports by search-and-replace.
 
 - PHP >= 8.1 with the `ffi` extension enabled (`php -m | grep FFI`). On
   hardened hosts check `ffi.enable`; the CLI default allows FFI.
-- Linux (x86_64/arm64) or macOS (x86_64/arm64). The package bundles a
+- Linux (x86_64/arm64) or macOS (arm64). The package bundles a
   prebuilt `libdoltlite` per platform; `DOLTLITE_PHP_LIB=/path/to/lib`
   overrides resolution for anything else.
 
