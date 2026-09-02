@@ -112,24 +112,28 @@ type conn struct {
 	mu     sync.Mutex
 	db     *C.sqlite3
 	closed bool
-	calls  chan func()
-	done   chan struct{}
+	stmts  map[*stmt]struct{}
+
+	// runMu orders dispatch against shutdown: a send and the close of calls
+	// cannot interleave, so run never sends on a closed channel and never
+	// blocks on one nobody is receiving from.
+	runMu   sync.Mutex
+	stopped bool
+	calls   chan func()
 }
 
+// errConnClosed is returned by run once the connection's thread is gone.
+var errConnClosed = errors.New("doltlite: connection is closed")
+
 func newConn() *conn {
-	c := &conn{calls: make(chan func()), done: make(chan struct{})}
+	c := &conn{calls: make(chan func()), stmts: map[*stmt]struct{}{}}
 	started := make(chan struct{})
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		close(started)
-		for {
-			select {
-			case fn := <-c.calls:
-				fn()
-			case <-c.done:
-				return
-			}
+		for fn := range c.calls {
+			fn()
 		}
 	}()
 	<-started
@@ -138,17 +142,31 @@ func newConn() *conn {
 
 // run executes fn on the connection's own OS thread and waits for it. It must
 // not be called from fn itself: the thread runs one call at a time.
-func (c *conn) run(fn func()) {
+func (c *conn) run(fn func()) error {
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+	if c.stopped {
+		return errConnClosed
+	}
 	finished := make(chan struct{})
 	c.calls <- func() {
 		defer close(finished)
 		fn()
 	}
 	<-finished
+	return nil
 }
 
+// stop retires the connection's thread. Serialized with run, so a call that
+// has already been accepted still completes.
 func (c *conn) stop() {
-	close(c.done)
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+	if c.stopped {
+		return
+	}
+	c.stopped = true
+	close(c.calls)
 }
 
 func (c *conn) err(rc C.int) error {
@@ -166,7 +184,23 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.closed = true
-	c.run(func() { C.sqlite3_close_v2(c.db) })
+	// Finalize what is still open before the thread retires. sqlite3_close_v2
+	// would otherwise keep the handle alive waiting for statements that can no
+	// longer be finalized, and their Close would have nowhere to run.
+	live := make([]*stmt, 0, len(c.stmts))
+	for s := range c.stmts {
+		live = append(live, s)
+	}
+	c.stmts = nil
+	c.run(func() {
+		for _, s := range live {
+			if !s.closed {
+				s.closed = true
+				C.sqlite3_finalize(s.st)
+			}
+		}
+		C.sqlite3_close_v2(c.db)
+	})
 	c.stop()
 	return nil
 }
@@ -179,18 +213,26 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	}
 	var st *C.sqlite3_stmt
 	var rc C.int
-	c.run(func() {
+	var nInput int
+	if err := c.run(func() {
 		cq := C.CString(query)
 		defer C.free(unsafe.Pointer(cq))
 		rc = C.sqlite3_prepare_v2(c.db, cq, -1, &st, nil)
-	})
+		if rc == C.SQLITE_OK && st != nil {
+			nInput = int(C.sqlite3_bind_parameter_count(st))
+		}
+	}); err != nil {
+		return nil, driver.ErrBadConn
+	}
 	if rc != C.SQLITE_OK {
 		return nil, c.err(rc)
 	}
 	if st == nil {
 		return nil, errors.New("doltlite: query contains no statement")
 	}
-	return &stmt{c: c, st: st, nInput: int(C.sqlite3_bind_parameter_count(st))}, nil
+	s := &stmt{c: c, st: st, nInput: nInput}
+	c.stmts[s] = struct{}{}
+	return s, nil
 }
 
 // Begin starts a write transaction. IMMEDIATE, not the default DEFERRED: a
@@ -230,13 +272,16 @@ type stmt struct {
 }
 
 func (s *stmt) Close() error {
+	s.c.mu.Lock()
+	defer s.c.mu.Unlock()
 	if s.closed {
 		return nil
 	}
 	s.closed = true
-	s.c.mu.Lock()
-	defer s.c.mu.Unlock()
-	s.c.run(func() { C.sqlite3_finalize(s.st) })
+	delete(s.c.stmts, s)
+	// A closed connection finalized this already; there is nothing to run and
+	// nowhere to run it.
+	_ = s.c.run(func() { C.sqlite3_finalize(s.st) })
 	return nil
 }
 
@@ -289,10 +334,13 @@ func (s *stmt) bind(args []driver.Value) error {
 func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
+	if s.closed {
+		return nil, driver.ErrBadConn
+	}
 	var res result
 	var bindErr error
 	var stepRc C.int
-	s.c.run(func() {
+	if err := s.c.run(func() {
 		if bindErr = s.bind(args); bindErr != nil {
 			return
 		}
@@ -310,7 +358,9 @@ func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 			}
 		}
 		C.sqlite3_reset(s.st)
-	})
+	}); err != nil {
+		return nil, driver.ErrBadConn
+	}
 	if bindErr != nil {
 		return nil, bindErr
 	}
@@ -323,9 +373,12 @@ func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
+	if s.closed {
+		return nil, driver.ErrBadConn
+	}
 	var cols []string
 	var bindErr error
-	s.c.run(func() {
+	if err := s.c.run(func() {
 		if bindErr = s.bind(args); bindErr != nil {
 			return
 		}
@@ -334,7 +387,9 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 		for i := 0; i < n; i++ {
 			cols[i] = C.GoString(C.sqlite3_column_name(s.st, C.int(i)))
 		}
-	})
+	}); err != nil {
+		return nil, driver.ErrBadConn
+	}
 	if bindErr != nil {
 		return nil, bindErr
 	}
@@ -364,23 +419,33 @@ func (r *rows) Close() error {
 	r.closed = true
 	r.s.c.mu.Lock()
 	defer r.s.c.mu.Unlock()
-	r.s.c.run(func() { C.sqlite3_reset(r.s.st) })
+	if r.s.closed {
+		return nil
+	}
+	_ = r.s.c.run(func() { C.sqlite3_reset(r.s.st) })
 	return nil
 }
 
 func (r *rows) Next(dest []driver.Value) error {
 	r.s.c.mu.Lock()
 	defer r.s.c.mu.Unlock()
+	// Closing the connection finalizes its statements, so a Rows held past
+	// that point must not touch one.
+	if r.s.closed {
+		return driver.ErrBadConn
+	}
 
 	var rc C.int
-	r.s.c.run(func() { rc = C.sqlite3_step(r.s.st) })
+	if err := r.s.c.run(func() { rc = C.sqlite3_step(r.s.st) }); err != nil {
+		return driver.ErrBadConn
+	}
 	if rc == C.SQLITE_DONE {
 		return io.EOF
 	}
 	if rc != C.SQLITE_ROW {
 		return r.s.c.err(rc)
 	}
-	r.s.c.run(func() {
+	if err := r.s.c.run(func() {
 		for i := range dest {
 			idx := C.int(i)
 			switch C.sqlite3_column_type(r.s.st, idx) {
@@ -400,7 +465,9 @@ func (r *rows) Next(dest []driver.Value) error {
 				dest[i] = string(b)
 			}
 		}
-	})
+	}); err != nil {
+		return driver.ErrBadConn
+	}
 	return nil
 }
 

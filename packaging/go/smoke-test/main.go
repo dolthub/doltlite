@@ -7,10 +7,12 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	doltlite "github.com/dolthub/doltlite-driver"
 )
@@ -150,6 +152,7 @@ func main() {
 	// "database is locked" -- every time at MaxOpenConns(1), where nothing is
 	// even concurrent.
 	concurrentTx(dbPath)
+	closedConnCleanup(dbPath)
 
 	if failures == 0 {
 		fmt.Println("smoke-test: all checks passed")
@@ -234,4 +237,79 @@ func concurrentTx(dbPath string) {
 			n, writers)
 		db.Close()
 	}
+}
+
+// A statement can outlive the connection that made it. Closing it must return
+// rather than block: the connection's thread is gone by then, so a cleanup
+// call with nowhere to run would wedge the goroutine for good.
+func closedConnCleanup(dbPath string) {
+	path := dbPath + ".closed"
+	os.Remove(path)
+	defer os.Remove(path)
+
+	c, err := doltlite.Driver{}.Open(path)
+	if err != nil {
+		fmt.Println("  FAIL: open for close test:", err)
+		failures++
+		return
+	}
+	st, err := c.Prepare("SELECT 1")
+	if err != nil {
+		fmt.Println("  FAIL: prepare for close test:", err)
+		failures++
+		c.Close()
+		return
+	}
+	if err := c.Close(); err != nil {
+		fmt.Println("  FAIL: conn close:", err)
+		failures++
+		return
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- st.(driver.Stmt).Close() }()
+	select {
+	case <-done:
+		check("statement close after connection close returns", true, true)
+	case <-time.After(10 * time.Second):
+		fmt.Println("  FAIL: statement close after connection close blocked")
+		failures++
+	}
+
+	// Rows outliving the connection: must error rather than block or read a
+	// finalized statement.
+	c2, err := doltlite.Driver{}.Open(path)
+	if err != nil {
+		fmt.Println("  FAIL: reopen for rows test:", err)
+		failures++
+		return
+	}
+	st2, err := c2.Prepare("SELECT 1")
+	if err != nil {
+		fmt.Println("  FAIL: prepare for rows test:", err)
+		failures++
+		c2.Close()
+		return
+	}
+	rws, err := st2.(driver.Stmt).Query(nil)
+	if err != nil {
+		fmt.Println("  FAIL: query for rows test:", err)
+		failures++
+		c2.Close()
+		return
+	}
+	c2.Close()
+	rowsDone := make(chan error, 1)
+	go func() {
+		dest := make([]driver.Value, 1)
+		rowsDone <- rws.Next(dest)
+	}()
+	select {
+	case err := <-rowsDone:
+		check("rows read after connection close errors", err != nil, true)
+	case <-time.After(10 * time.Second):
+		fmt.Println("  FAIL: rows read after connection close blocked")
+		failures++
+	}
+	rws.Close()
 }
