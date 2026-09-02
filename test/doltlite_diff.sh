@@ -59,7 +59,7 @@ run_test_match "diff_stat_no_such_table" \
 
 run_test_match "diff_bad_ref_errors" \
   "SELECT count(*) FROM dolt_diff_stat('definitely_not_a_ref', (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
-  "Error" "$DB"
+  "dolt_diff_stat: ref not found: definitely_not_a_ref" "$DB"
 
 DB2=/tmp/test_diff2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(x); SELECT dolt_commit('-A','-m','empty');" | $DOLTLITE "$DB2" > /dev/null 2>&1

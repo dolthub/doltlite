@@ -234,6 +234,21 @@ oracle_error "diff_three_dot_missing_left" "$SETUP_DIVERGENT" \
 oracle_error "diff_three_dot_missing_right" "$SETUP_DIVERGENT" \
   "SELECT count(*) FROM dolt_diff_t('feature...');"
 
+oracle_error "diff_slice_unknown_from_ref" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('nosuchref', 'feature');"
+
+oracle_error "diff_slice_unknown_to_ref" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('feature', 'nosuchref');"
+
+oracle_error "diff_slice_unknown_hash_prefix" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('abc123', 'feature');"
+
+oracle_error "diff_slice_invalid_ancestor" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~99', 'feature');"
+
+oracle_error "diff_range_unknown_ref" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('nosuchref..feature');"
+
 oracle_error "log_two_dot_missing_left" "$SETUP_DIVERGENT" \
   "SELECT count(*) FROM dolt_log('..feature');"
 

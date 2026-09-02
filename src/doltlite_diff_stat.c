@@ -645,6 +645,21 @@ static void dsFilterCtxClear(DsFilterCtx *pCtx){
   memset(pCtx, 0, sizeof(*pCtx));
 }
 
+static int dsRefError(
+  sqlite3_vtab *pVtab,
+  const char *zName,
+  const char *zRef,
+  int rc
+){
+  const char *zKind;
+  if( rc!=SQLITE_NOTFOUND && rc!=SQLITE_ERROR ) return rc;
+  zKind = rc==SQLITE_NOTFOUND ? "ref not found" : "invalid ref";
+  sqlite3_free(pVtab->zErrMsg);
+  pVtab->zErrMsg = sqlite3_mprintf(
+      "%s: %s: %s", zName, zKind, zRef ? zRef : "");
+  return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+}
+
 static int dsFilterInit(
   sqlite3 *db,
   sqlite3_vtab *pVtab,
@@ -672,9 +687,11 @@ static int dsFilterInit(
   }
 
   rc = doltliteResolveCatalogHashForRef(db, pCtx->zFromRef, &pCtx->fromCat);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) return dsRefError(
+      pVtab, zName, pCtx->zFromRef, rc);
   rc = doltliteResolveCatalogHashForRef(db, pCtx->zToRef, &pCtx->toCat);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) return dsRefError(
+      pVtab, zName, pCtx->zToRef, rc);
   if( pCtx->zTblFilter ){
     pCtx->azNames = sqlite3_malloc((int)sizeof(char*));
     if( !pCtx->azNames ) return SQLITE_NOMEM;

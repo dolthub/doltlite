@@ -413,6 +413,16 @@ $SEED
 SELECT * FROM dolt_diff_stat('HEAD', 'definitely_not_a_ref', 't');
 "
 
+oracle_error "diff_stat_invalid_from_ancestor" "
+$SEED
+SELECT * FROM dolt_diff_stat('HEAD~99', 'HEAD', 't');
+"
+
+oracle_error "diff_stat_invalid_to_ancestor" "
+$SEED
+SELECT * FROM dolt_diff_stat('HEAD', 'HEAD~99', 't');
+"
+
 oracle_summary "diff_summary_missing_table" "
 $SEED
 " "HEAD" "HEAD" "doesnotexist" "EXPECT_EMPTY"

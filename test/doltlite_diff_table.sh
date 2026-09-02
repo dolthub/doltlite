@@ -419,12 +419,39 @@ run_test "revspec_from_only_row" \
 run_test "revspec_hash_pair_still_works" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2') AND to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c3');" \
   "1" "$DBRS"
-run_test "revspec_garbage_from_matches_nothing" \
+run_test_match "revspec_garbage_from_rejected" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='nosuchref' AND to_commit='HEAD';" \
-  "0" "$DBRS"
-run_test "revspec_garbage_to_matches_nothing" \
+  "dolt_diff_t: ref not found: nosuchref" "$DBRS"
+run_test_match "revspec_garbage_to_rejected" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit='garbage';" \
-  "0" "$DBRS"
+  "dolt_diff_t: ref not found: garbage" "$DBRS"
+run_test_match "revspec_garbage_from_only_rejected" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='nosuchref';" \
+  "dolt_diff_t: ref not found: nosuchref" "$DBRS"
+run_test_match "revspec_invalid_ancestor_from_only_rejected" \
+  "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~99';" \
+  "dolt_diff_t: invalid ref: HEAD~99" "$DBRS"
+run_test_match "revspec_invalid_ancestor_to_only_rejected" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='HEAD~99';" \
+  "dolt_diff_t: invalid ref: HEAD~99" "$DBRS"
+run_test_match "revspec_tvf_garbage_from_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('nosuchref','HEAD');" \
+  "dolt_diff_t: ref not found: nosuchref" "$DBRS"
+run_test_match "revspec_tvf_garbage_to_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD','nosuchref');" \
+  "dolt_diff_t: ref not found: nosuchref" "$DBRS"
+run_test_match "revspec_tvf_hash_prefix_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('abc123','HEAD');" \
+  "dolt_diff_t: ref not found: abc123" "$DBRS"
+run_test_match "revspec_tvf_invalid_ancestor_rejected" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~99','HEAD');" \
+  "dolt_diff_t: invalid ref: HEAD~99" "$DBRS"
+run_test_match "diff_stat_garbage_ref_descriptive" \
+  "SELECT count(*) FROM dolt_diff_stat('nosuchref','HEAD','t');" \
+  "dolt_diff_stat: ref not found: nosuchref" "$DBRS"
+run_test_match "diff_stat_invalid_ancestor_descriptive" \
+  "SELECT count(*) FROM dolt_diff_stat('HEAD~99','HEAD','t');" \
+  "dolt_diff_stat: invalid ref: HEAD~99" "$DBRS"
 run_test "revspec_to_working" \
   "INSERT INTO t VALUES(3,'dirty');
    SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \

@@ -110,6 +110,16 @@ struct DiffTblCursor {
 #define DT_IDX_FROM_TO_COMMIT 0x08
 #define DT_IDX_FROM_COMMIT_EQ 0x10
 
+static int dtRefError(DiffTblVtab *pVtab, const char *zRef, int rc){
+  const char *zKind;
+  if( rc!=SQLITE_NOTFOUND && rc!=SQLITE_ERROR ) return rc;
+  zKind = rc==SQLITE_NOTFOUND ? "ref not found" : "invalid ref";
+  sqlite3_free(pVtab->base.zErrMsg);
+  pVtab->base.zErrMsg = sqlite3_mprintf(
+      "dolt_diff_%s: %s: %s", pVtab->zTableName, zKind, zRef ? zRef : "");
+  return pVtab->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+}
+
 static void clearAuditRow(AuditRow *r){
   sqlite3_free(r->pKeyRec);
   sqlite3_free(r->pOldKeyRec);
@@ -545,7 +555,8 @@ static int buildCommitDiffPair(
   DiffTblCursor *pCur,
   sqlite3 *db,
   const char *zTableName,
-  const char *zToCommit
+  const char *zToCommit,
+  int *pbRefError
 ){
   ProllyHash toHash;
   ProllyHash fromHash;
@@ -564,6 +575,7 @@ static int buildCommitDiffPair(
   int i;
   int rc;
 
+  *pbRefError = 0;
   if( !zToCommit ) return SQLITE_OK;
 
   memset(&toHash, 0, sizeof(toHash));
@@ -578,7 +590,10 @@ static int buildCommitDiffPair(
   memset(zToLabel, 0, sizeof(zToLabel));
 
   rc = doltliteResolveRef(db, zToCommit, &toHash);
-  if( rc!=SQLITE_OK ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ){
+    *pbRefError = 1;
+    return rc;
+  }
 
   /* to_commit filter only walks the session head's ancestry; unreachable commits yield no rows. */
   {
@@ -671,15 +686,19 @@ struct DtSliceEnd {
   char zLabel[PROLLY_HASH_SIZE*2+1];
 };
 
-/* SQLITE_NOTFOUND for an unresolvable ref so the caller yields no rows. */
 static int dtResolveSliceEnd(
-  sqlite3 *db, const char *zRef, const char *zTableName, DtSliceEnd *pEnd
+  sqlite3 *db, const char *zRef, const char *zTableName, DtSliceEnd *pEnd,
+  int *pbRefError
 ){
   int rc;
+  *pbRefError = 0;
   memset(pEnd, 0, sizeof(*pEnd));
 
   rc = doltliteResolveCatalogHashForRef(db, zRef, &pEnd->catHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    *pbRefError = 1;
+    return rc;
+  }
 
   if( doltliteRefIsWorking(zRef) ){
     rc = doltliteGetWorkingTableState(db, zTableName, &pEnd->tblRoot,
@@ -705,7 +724,10 @@ static int dtResolveSliceEnd(
     DoltliteCommit commit;
     memset(&commit, 0, sizeof(commit));
     rc = doltliteResolveRef(db, zRef, &commitHash);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      *pbRefError = 1;
+      return rc;
+    }
     rc = doltliteLoadCommit(db, &commitHash, &commit);
     if( rc!=SQLITE_OK ) return rc;
     pEnd->date = commit.timestamp;
@@ -720,18 +742,21 @@ static int buildSliceDiffPair(
   sqlite3 *db,
   const char *zTableName,
   const char *zFromRef,
-  const char *zToRef
+  const char *zToRef,
+  const char **pzBadRef
 ){
   DtSliceEnd from, to;
+  int bRefError = 0;
   int rc;
 
+  *pzBadRef = 0;
   if( !zFromRef || !zToRef ) return SQLITE_OK;
 
-  rc = dtResolveSliceEnd(db, zFromRef, zTableName, &from);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  rc = dtResolveSliceEnd(db, zFromRef, zTableName, &from, &bRefError);
+  if( bRefError ) *pzBadRef = zFromRef;
   if( rc!=SQLITE_OK ) return rc;
-  rc = dtResolveSliceEnd(db, zToRef, zTableName, &to);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  rc = dtResolveSliceEnd(db, zToRef, zTableName, &to, &bRefError);
+  if( bRefError ) *pzBadRef = zToRef;
   if( rc!=SQLITE_OK ) return rc;
 
   if( prollyHashCompare(&from.tblRoot, &to.tblRoot)==0
@@ -755,6 +780,7 @@ static int buildRangeSpecDiffPair(
 ){
   char *zLeft = 0;
   char *zRight = 0;
+  const char *zBadRef = 0;
   int rangeType = DOLTLITE_RANGE_NONE;
   int rc;
 
@@ -771,10 +797,12 @@ static int buildRangeSpecDiffPair(
     }
     if( rc==SQLITE_OK ){
       doltliteHashToHex(&ancestor, zAncestor);
-      rc = buildSliceDiffPair(pCur, db, zTableName, zAncestor, zRight);
+      rc = buildSliceDiffPair(
+          pCur, db, zTableName, zAncestor, zRight, &zBadRef);
     }
   }else{
-    rc = buildSliceDiffPair(pCur, db, zTableName, zLeft, zRight);
+    rc = buildSliceDiffPair(
+        pCur, db, zTableName, zLeft, zRight, &zBadRef);
   }
   sqlite3_free(zLeft);
   sqlite3_free(zRight);
@@ -1107,7 +1135,10 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   if( (idxNum & DT_IDX_SLICE)!=0 && argc>=2 ){
     const char *zFromRef = (const char*)sqlite3_value_text(argv[0]);
     const char *zToRef = (const char*)sqlite3_value_text(argv[1]);
-    rc = buildSliceDiffPair(c, db, pVtab->zTableName, zFromRef, zToRef);
+    const char *zBadRef = 0;
+    rc = buildSliceDiffPair(
+        c, db, pVtab->zTableName, zFromRef, zToRef, &zBadRef);
+    if( zBadRef ) rc = dtRefError(pVtab, zBadRef, rc);
   }else if( (idxNum & DT_IDX_RANGE_SPEC)!=0 && argc>=1 ){
     const char *zSpec = (const char*)sqlite3_value_text(argv[0]);
     rc = buildRangeSpecDiffPair(c, db, pVtab->zTableName, zSpec);
@@ -1116,24 +1147,34 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       pVtab->base.zErrMsg = sqlite3_mprintf(
           "dolt_diff_%s requires a '..' or '...' revision range",
           pVtab->zTableName);
-    }else if( rc==SQLITE_ERROR ){
+    }else if( rc==SQLITE_ERROR || rc==SQLITE_NOTFOUND ){
       sqlite3_free(pVtab->base.zErrMsg);
       pVtab->base.zErrMsg = sqlite3_mprintf(
           "dolt_diff_%s: invalid revision range '%s'",
           pVtab->zTableName, zSpec ? zSpec : "");
+      rc = pVtab->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
     }
   }else if( (idxNum & DT_IDX_FROM_TO_COMMIT)!=0 && argc>=2 ){
     const char *zFrom = (const char*)sqlite3_value_text(argv[0]);
     const char *zTo = (const char*)sqlite3_value_text(argv[1]);
-    rc = buildSliceDiffPair(c, db, pVtab->zTableName, zFrom, zTo);
+    const char *zBadRef = 0;
+    rc = buildSliceDiffPair(
+        c, db, pVtab->zTableName, zFrom, zTo, &zBadRef);
+    if( zBadRef ) rc = dtRefError(pVtab, zBadRef, rc);
   }else if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
     const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);
     if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){
       rc = buildWorkingDiffPair(c, db, pVtab->zTableName);
     }else if( zToCommit && sqlite3_stricmp(zToCommit, "STAGED")==0 ){
-      rc = buildSliceDiffPair(c, db, pVtab->zTableName, "HEAD", "STAGED");
+      const char *zBadRef = 0;
+      rc = buildSliceDiffPair(
+          c, db, pVtab->zTableName, "HEAD", "STAGED", &zBadRef);
+      if( zBadRef ) rc = dtRefError(pVtab, zBadRef, rc);
     }else{
-      rc = buildCommitDiffPair(c, db, pVtab->zTableName, zToCommit);
+      int bRefError = 0;
+      rc = buildCommitDiffPair(
+          c, db, pVtab->zTableName, zToCommit, &bRefError);
+      if( bRefError ) rc = dtRefError(pVtab, zToCommit, rc);
     }
   }else if( (idxNum & DT_IDX_FROM_COMMIT_EQ)!=0 && argc>=1 ){
     /* Resolve the ref once, then keep only history pairs departing it. */
@@ -1146,8 +1187,11 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       sqlite3_snprintf(sizeof(zLabel), zLabel, "%s", zFrom);
     }else if( zFrom ){
       ProllyHash fromHash;
-      if( doltliteResolveRef(db, zFrom, &fromHash)==SQLITE_OK ){
+      rc = doltliteResolveRef(db, zFrom, &fromHash);
+      if( rc==SQLITE_OK ){
         doltliteHashToHex(&fromHash, zLabel);
+      }else{
+        rc = dtRefError(pVtab, zFrom, rc);
       }
     }
     if( zLabel[0] ){
