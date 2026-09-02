@@ -810,9 +810,10 @@ For a DoltLite-format main database, the compatibility contract is:
   collection instead of rebuilding SQLite pages. File-backed `VACUUM INTO`
   writes a compacted DoltLite-format copy; `:memory:` as the destination is
   refused. `SQLITE_DBCONFIG_RESET_DATABASE` plus `VACUUM` empties the
-  current branch working catalog (`sqlite_master` has no user objects);
-  other branches and commit history remain, so `dolt_reset('--hard')`
-  restores this branch from HEAD.
+  current branch working catalog (`sqlite_master` has no user objects)
+  and zeros `user_version` and `application_id`; other branches and
+  commit history remain, so `dolt_reset('--hard')` restores this branch
+  from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
 - Application-defined collations registered with `sqlite3_create_collation*`
