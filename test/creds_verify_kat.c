@@ -32,10 +32,12 @@ static char *encodeRaw(const unsigned char *p, size_t n) {
   return z;
 }
 
-static char *tokenWithAudJson(
+static char *tokenWithClaims(
   const DoltliteCreds *c,
   const char *kid,
   const char *audJson,
+  const char *iat,
+  const char *nbf,
   const char *exp
 ) {
   char *header = NULL, *claims = NULL, *h64 = NULL, *c64 = NULL;
@@ -49,14 +51,18 @@ static char *tokenWithAudJson(
   snprintf(header, n,
            "{\"alg\":\"EdDSA\",\"kid\":\"%s\",\"dolt_token_version\":\"2023.01\"}",
            kid);
-  n = strlen(kid) * 2 + strlen(audJson) + strlen(exp) + 160;
+  n = strlen(kid) * 2 + strlen(audJson) +
+      (iat ? strlen(iat) : 0) + (nbf ? strlen(nbf) : 0) +
+      (exp ? strlen(exp) : 0) + 192;
   claims = (char *)malloc(n);
   if (!claims) goto done;
   snprintf(claims, n,
            "{\"iss\":\"dolt-client.dolthub.com\","
-           "\"sub\":\"doltClientCredentials/%s\",\"aud\":%s,"
-           "\"iat\":%ld,\"exp\":%s}",
-           kid, audJson, IAT, exp);
+           "\"sub\":\"doltClientCredentials/%s\",\"aud\":%s%s%s%s%s%s%s}",
+           kid, audJson,
+           iat ? ",\"iat\":" : "", iat ? iat : "",
+           nbf ? ",\"nbf\":" : "", nbf ? nbf : "",
+           exp ? ",\"exp\":" : "", exp ? exp : "");
   h64 = encodeRaw((const unsigned char *)header, strlen(header));
   c64 = encodeRaw((const unsigned char *)claims, strlen(claims));
   if (!h64 || !c64) goto done;
@@ -79,6 +85,15 @@ done:
   free(input);
   sqlite3_free(s64);
   return token;
+}
+
+static char *tokenWithAudJson(
+  const DoltliteCreds *c,
+  const char *kid,
+  const char *audJson,
+  const char *exp
+) {
+  return tokenWithClaims(c, kid, audJson, "1700000000", NULL, exp);
 }
 
 static char *tokenForKid(
@@ -177,6 +192,81 @@ int main(int argc, char **argv) {
 
   check("expired token rejected",
         doltliteCredsVerifyBearer(jwt, AUD, authDir, LATE, NULL) != 0);
+
+  check("iat at positive clock-skew boundary accepted",
+        doltliteCredsVerifyBearer(jwt, AUD, authDir, IAT - 60, NULL) == 0);
+  check("iat beyond positive clock-skew boundary rejected",
+        doltliteCredsVerifyBearer(jwt, AUD, authDir, IAT - 61, NULL) != 0);
+  check("token accepted at exp",
+        doltliteCredsVerifyBearer(jwt, AUD, authDir, IAT + 30, NULL) == 0);
+  check("token accepted at negative clock-skew boundary",
+        doltliteCredsVerifyBearer(jwt, AUD, authDir, IAT + 90, NULL) == 0);
+  check("token rejected beyond negative clock-skew boundary",
+        doltliteCredsVerifyBearer(jwt, AUD, authDir, IAT + 91, NULL) != 0);
+
+  {
+    char *missingIat = tokenWithClaims(c, kid, "\"" AUD "\"", NULL, NULL,
+                                       "1700000030");
+    char *futureNbf = tokenWithClaims(c, kid, "\"" AUD "\"", NULL,
+                                      "1700000060", "1700000090");
+    char *tooFutureNbf = tokenWithClaims(c, kid, "\"" AUD "\"", NULL,
+                                         "1700000061", "1700000090");
+    char *invalidIat = tokenWithClaims(c, kid, "\"" AUD "\"",
+                                       "1700000000x", NULL, "1700000030");
+    char *invalidNbf = tokenWithClaims(c, kid, "\"" AUD "\"", NULL,
+                                       "1700000000x", "1700000030");
+    char *longTtl = tokenWithClaims(c, kid, "\"" AUD "\"", "1700000000",
+                                    NULL, "1700000031");
+    char *reversed = tokenWithClaims(c, kid, "\"" AUD "\"", "1700000000",
+                                     NULL, "1699999999");
+    char *longRemaining = tokenWithClaims(c, kid, "\"" AUD "\"", NULL,
+                                          NULL, "1700000091");
+    char *nbfAfterExp = tokenWithClaims(c, kid, "\"" AUD "\"", NULL,
+                                        "1700000031", "1700000030");
+    char *missingExp = tokenWithClaims(c, kid, "\"" AUD "\"",
+                                       "1700000000", NULL, NULL);
+    check("missing iat accepted for Dolt compatibility",
+          missingIat &&
+              doltliteCredsVerifyBearer(missingIat, AUD, authDir, MID, NULL) == 0);
+    check("nbf at positive clock-skew boundary accepted",
+          futureNbf &&
+              doltliteCredsVerifyBearer(futureNbf, AUD, authDir, IAT, NULL) == 0);
+    check("nbf beyond positive clock-skew boundary rejected",
+          tooFutureNbf &&
+              doltliteCredsVerifyBearer(tooFutureNbf, AUD, authDir, IAT, NULL) != 0);
+    check("malformed iat rejected",
+          invalidIat &&
+              doltliteCredsVerifyBearer(invalidIat, AUD, authDir, MID, NULL) != 0);
+    check("malformed nbf rejected",
+          invalidNbf &&
+              doltliteCredsVerifyBearer(invalidNbf, AUD, authDir, MID, NULL) != 0);
+    check("token lifetime above 30 seconds rejected",
+          longTtl &&
+              doltliteCredsVerifyBearer(longTtl, AUD, authDir, MID, NULL) != 0);
+    check("exp before iat rejected",
+          reversed &&
+              doltliteCredsVerifyBearer(reversed, AUD, authDir, MID, NULL) != 0);
+    check("missing-iat token above maximum remaining lifetime rejected",
+          longRemaining &&
+              doltliteCredsVerifyBearer(longRemaining, AUD, authDir, IAT, NULL) != 0);
+    check("nbf after exp rejected",
+          nbfAfterExp &&
+              doltliteCredsVerifyBearer(nbfAfterExp, AUD, authDir, IAT, NULL) != 0);
+    check("missing exp rejected",
+          missingExp &&
+              doltliteCredsVerifyBearer(missingExp, AUD, authDir, MID, NULL) != 0);
+    free(missingIat);
+    free(futureNbf);
+    free(tooFutureNbf);
+    free(invalidIat);
+    free(invalidNbf);
+    free(longTtl);
+    free(reversed);
+    free(longRemaining);
+    free(nbfAfterExp);
+    free(missingExp);
+  }
+
   check("wrong audience rejected",
         doltliteCredsVerifyBearer(jwt, "evil.example.com", authDir, MID, NULL) != 0);
   check("unknown key (empty authorized dir) rejected",
