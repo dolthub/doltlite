@@ -829,6 +829,7 @@ jobs:
           make doltlite
           cd ..
           make -C ext/wasm fiddle npm
+          bash test/wasm_incremental_build_test.sh
           mkdir -p ci-wasm-runtime
           cp -a ext/wasm/jswasm/. ci-wasm-runtime/
           make -C ext/wasm dist
