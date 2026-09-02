@@ -33,6 +33,10 @@ if [ -z "$VERSION" ] || [ -z "$SHA256" ]; then
 fi
 VERSION="${VERSION#v}"
 
+if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "version must be X.Y.Z (got ${VERSION})" >&2
+  exit 2
+fi
 if ! printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
   echo "sha256 must be 64 lowercase hex characters" >&2
   exit 2
@@ -57,21 +61,15 @@ path = pathlib.Path(sys.argv[1])
 url = sys.argv[2]
 sha256 = sys.argv[3]
 text = path.read_text()
-text, n_url = re.subn(
-    r'url "https://github.com/dolthub/doltlite/releases/download/v[^"]+"',
-    f'url "{url}"',
-    text,
-    count=1,
-)
-text, n_sha = re.subn(
-    r'sha256 "[0-9a-fA-F]+"',
-    f'sha256 "{sha256}"',
-    text,
-    count=1,
-)
+url_pat = r'url "https://github.com/dolthub/doltlite/releases/download/v[^"]+"'
+sha_pat = r'sha256 "[0-9a-fA-F]+"'
+n_url = len(re.findall(url_pat, text))
+n_sha = len(re.findall(sha_pat, text))
 if n_url != 1 or n_sha != 1:
     raise SystemExit(
-        f"expected one url and one sha256 to rewrite, got url={n_url} sha256={n_sha}"
+        f"expected exactly one url and one sha256, got url={n_url} sha256={n_sha}"
     )
+text = re.sub(url_pat, f'url "{url}"', text, count=1)
+text = re.sub(sha_pat, f'sha256 "{sha256}"', text, count=1)
 path.write_text(text)
 PY

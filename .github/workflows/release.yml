@@ -96,12 +96,17 @@ jobs:
         tar czf doltlite-autoconf-${VERSION}.tar.gz \
           --transform "s,^,doltlite-autoconf-${VERSION}/," \
           configure Makefile.in Makefile.linux-generic Makefile.msc main.mk \
+          doltlite.mk \
           auto.def VERSION manifest manifest.tags manifest.uuid \
           pragma.h magic.txt lempar.c \
           sqlite3.pc.in sqlite.pc.in \
           src/ ext/ tool/ autosetup/ autoconf/ \
           sqlite3.c sqlite3.h sqlite3ext.h sqlite3session.h \
           .dolt_release_version
+        prefix="doltlite-autoconf-${VERSION}"
+        for req in configure main.mk doltlite.mk auto.def sqlite3.c sqlite3.h; do
+          tar tzf doltlite-autoconf-${VERSION}.tar.gz | grep -qx "${prefix}/${req}"
+        done
         rm .dolt_release_version
 
     - name: Package wasm distribution
@@ -1292,6 +1297,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     needs: release
     runs-on: ubuntu-latest
+    concurrency:
+      group: doltlite-homebrew-formula
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
       VERSION: ${{ github.ref_name }}
@@ -1323,11 +1331,38 @@ jobs:
         gh release download "${VERSION}" --repo dolthub/doltlite \
           --pattern "${asset}" --dir /tmp
         sha256=$(sha256sum "/tmp/${asset}" | awk '{print $1}')
-        bash packaging/homebrew/bump-formula.sh "${version}" "${sha256}"
-        if git diff --quiet -- packaging/homebrew/doltlite.rb; then
-          echo "Homebrew formula already at ${version}"
-          exit 0
-        fi
-        git add packaging/homebrew/doltlite.rb
-        git commit -m "Bump Homebrew formula to ${version}"
-        git push origin master
+
+        formula_ver() {
+          sed -n 's|.*/doltlite-autoconf-\([^"]*\)\.tar\.gz.*|\1|p' \
+            packaging/homebrew/doltlite.rb | head -1
+        }
+        should_skip() {
+          local current="$1"
+          [ "$current" = "$version" ] && return 0
+          [ -n "$current" ] || return 1
+          [ "$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1)" != "$version" ]
+        }
+
+        for attempt in 1 2 3 4 5; do
+          git fetch origin master
+          git reset --hard origin/master
+          current="$(formula_ver)"
+          if should_skip "$current"; then
+            echo "Homebrew formula already at ${current}; not writing ${version}"
+            exit 0
+          fi
+          bash packaging/homebrew/bump-formula.sh "${version}" "${sha256}"
+          if git diff --quiet -- packaging/homebrew/doltlite.rb; then
+            echo "Homebrew formula already at ${version}"
+            exit 0
+          fi
+          git add packaging/homebrew/doltlite.rb
+          git commit -m "Bump Homebrew formula to ${version}"
+          if git push origin master; then
+            exit 0
+          fi
+          echo "push rejected (attempt ${attempt}); retrying"
+          sleep $((attempt * 2))
+        done
+        echo "failed to push Homebrew formula bump after retries"
+        exit 1

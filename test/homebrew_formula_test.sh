@@ -67,4 +67,36 @@ else
   dltest_pass
 fi
 
+cp "$FORMULA" "$TMP/path.rb"
+cp "$TMP/path.rb" "$TMP/path-before.rb"
+if bash "$BUMP" --file "$TMP/path.rb" '9.9/../../evil' \
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+     >/dev/null 2>&1; then
+  dltest_fail "bump_formula_rejects_path_version" "  accepted a path-like version"
+elif ! cmp -s "$TMP/path.rb" "$TMP/path-before.rb"; then
+  dltest_fail "bump_formula_rejects_path_version" "  mutated the formula on invalid version"
+else
+  dltest_pass
+fi
+
+cp "$FORMULA" "$TMP/dup.rb"
+grep -E '^[[:space:]]*url "' "$TMP/dup.rb" | head -1 >> "$TMP/dup.rb"
+cp "$TMP/dup.rb" "$TMP/dup-before.rb"
+if bash "$BUMP" --file "$TMP/dup.rb" 9.9.9 \
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+     >/dev/null 2>&1; then
+  dltest_fail "bump_formula_rejects_duplicate_url" "  rewrote a formula with two urls"
+elif ! cmp -s "$TMP/dup.rb" "$TMP/dup-before.rb"; then
+  dltest_fail "bump_formula_rejects_duplicate_url" "  mutated the formula before rejecting"
+else
+  dltest_pass
+fi
+
+if grep -E 'tar czf doltlite-autoconf' -A6 "$RELEASE_YML" | grep -q 'doltlite.mk'; then
+  dltest_pass
+else
+  dltest_fail "autoconf_tarball_includes_doltlite_mk" \
+    "  release.yml tarball file list is missing doltlite.mk"
+fi
+
 dltest_finish
