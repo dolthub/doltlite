@@ -4547,6 +4547,13 @@ case OP_Transaction: {
     testcase( rc==SQLITE_BUSY_SNAPSHOT );
     testcase( rc==SQLITE_BUSY_RECOVERY );
     if( rc!=SQLITE_OK ){
+#ifdef DOLTLITE_PROLLY
+      const char *zMissingBranch = doltliteBtreeMissingWriteBranch(pBt);
+      if( zMissingBranch ){
+        sqlite3VdbeError(p, "cannot write: branch '%s' no longer exists",
+                         zMissingBranch);
+      }
+#endif
       if( (rc&0xff)==SQLITE_BUSY ){
         p->pc = (int)(pOp - aOp);
         p->rc = rc;

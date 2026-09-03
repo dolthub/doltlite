@@ -219,6 +219,7 @@ struct CheckoutMutationCtx {
   u8 savedWasDetached;
   u8 requireActiveRebase;
   u8 targetRebaseInactive;
+  u8 oldBranchExists;
   int haveOldState;
   /* Top-level branch-connection checkout must persist despite a savepoint
   ** frame; nested savepoint checkout remains rollbackable. */
@@ -304,7 +305,7 @@ static int checkoutRestoreDurableState(
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
   int rc = SQLITE_OK;
   UNUSED_PARAMETER(cs);
-  if( p->haveOldState && !p->savedWasDetached ){
+  if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
     if( rc!=SQLITE_OK ) return rc;
@@ -319,6 +320,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
 
   rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
   if( rc!=SQLITE_OK ) return rc;
+  if( !p->savedWasDetached ){
+    p->oldBranchExists =
+        chunkStoreFindBranch(cs, p->zCurrentBranch, 0)==SQLITE_OK;
+  }
 
   rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
                             &p->targetCommit, &p->targetCatHash);
@@ -366,7 +371,7 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
   }
 
-  if( p->haveOldState && !p->savedWasDetached ){
+  if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
     if( rc!=SQLITE_OK ){
