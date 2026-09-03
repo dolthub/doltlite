@@ -243,6 +243,28 @@ jobs:
         bash packaging/rust/test-package.sh build
       timeout-minutes: 25
 
+    # The step above runs on whatever stable the runner ships, which cannot
+    # tell us whether the crate still builds on the version it advertises.
+    # Read the MSRV out of the manifest so this leg cannot drift away from
+    # what the crate promises, and let the consumer resolve dependencies
+    # from scratch, so a dependency raising its own MSRV fails here rather
+    # than after publication.
+    - name: Smoke test the doltlite Rust crate on its declared MSRV
+      if: matrix.platform == 'ubuntu'
+      shell: bash
+      run: |
+        msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' packaging/rust/Cargo.toml)
+        if [ -z "$msrv" ]; then
+          echo "::error::packaging/rust/Cargo.toml declares no rust-version"
+          exit 1
+        fi
+        rustup toolchain install "$msrv" --profile minimal --no-self-update
+        export RUSTUP_TOOLCHAIN="$msrv"
+        echo "declared MSRV $msrv -> $(rustc --version)"
+        chmod +x packaging/rust/assemble.sh packaging/rust/test-package.sh
+        bash packaging/rust/test-package.sh build
+      timeout-minutes: 25
+
     - name: Smoke test the DoltHub.Doltlite NuGet package
       shell: bash
       run: |
