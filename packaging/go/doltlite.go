@@ -35,7 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -97,76 +96,43 @@ func (Driver) Open(name string) (driver.Conn, error) {
 	return c, nil
 }
 
-// conn owns a dedicated OS thread and runs every engine call on it.
-//
-// The engine holds its store lock for the life of an explicit transaction and
-// attributes that lock to the thread that took it, so a transaction whose
-// statements arrive on different threads fails with SQLITE_BUSY (dolthub/
-// doltlite#2577). A goroutine can move between OS threads at any call
-// boundary, which makes that unavoidable here rather than unlikely: through
-// database/sql's pool it loses writes, and it fails every time even with
-// SetMaxOpenConns(1). Pinning one thread per connection keeps every call for
-// a connection on the thread that owns its locks. Remove this once the engine
-// no longer ties the lock to a thread.
 type conn struct {
 	mu     sync.Mutex
 	db     *C.sqlite3
 	closed bool
 	stmts  map[*stmt]struct{}
 
-	// runMu orders dispatch against shutdown: a send and the close of calls
-	// cannot interleave, so run never sends on a closed channel and never
-	// blocks on one nobody is receiving from.
+	// runMu makes the retired check and the call that follows it atomic, so a
+	// statement or Rows finishing on another goroutine cannot reach the handle
+	// while Close is tearing it down.
 	runMu   sync.Mutex
-	stopped bool
-	calls   chan func()
+	retired bool
 }
 
-// errConnClosed is returned by run once the connection's thread is gone.
+// errConnClosed is returned by run once the connection is torn down.
 var errConnClosed = errors.New("doltlite: connection is closed")
 
 func newConn() *conn {
-	c := &conn{calls: make(chan func()), stmts: map[*stmt]struct{}{}}
-	started := make(chan struct{})
-	go func() {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		close(started)
-		for fn := range c.calls {
-			fn()
-		}
-	}()
-	<-started
-	return c
+	return &conn{stmts: map[*stmt]struct{}{}}
 }
 
-// run executes fn on the connection's own OS thread and waits for it. It must
-// not be called from fn itself: the thread runs one call at a time.
+// run performs an engine call unless the connection is already torn down.
 func (c *conn) run(fn func()) error {
 	c.runMu.Lock()
 	defer c.runMu.Unlock()
-	if c.stopped {
+	if c.retired {
 		return errConnClosed
 	}
-	finished := make(chan struct{})
-	c.calls <- func() {
-		defer close(finished)
-		fn()
-	}
-	<-finished
+	fn()
 	return nil
 }
 
-// stop retires the connection's thread. Serialized with run, so a call that
-// has already been accepted still completes.
+// stop marks the connection torn down. Serialized with run, so a call already
+// under way finishes first.
 func (c *conn) stop() {
 	c.runMu.Lock()
 	defer c.runMu.Unlock()
-	if c.stopped {
-		return
-	}
-	c.stopped = true
-	close(c.calls)
+	c.retired = true
 }
 
 func (c *conn) err(rc C.int) error {
@@ -184,9 +150,9 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.closed = true
-	// Finalize what is still open before the thread retires. sqlite3_close_v2
-	// would otherwise keep the handle alive waiting for statements that can no
-	// longer be finalized, and their Close would have nowhere to run.
+	// Finalize what is still open before the handle goes. sqlite3_close_v2
+	// would otherwise keep it alive waiting for statements that will never be
+	// finalized, because their Close short-circuits on a closed connection.
 	live := make([]*stmt, 0, len(c.stmts))
 	for s := range c.stmts {
 		live = append(live, s)
