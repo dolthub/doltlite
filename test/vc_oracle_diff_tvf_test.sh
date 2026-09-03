@@ -246,6 +246,12 @@ oracle_error "diff_slice_unknown_hash_prefix" "$SETUP_DIVERGENT" \
 oracle_error "diff_slice_invalid_ancestor" "$SETUP_DIVERGENT" \
   "SELECT count(*) FROM dolt_diff_t('HEAD~99', 'feature');"
 
+oracle_error "diff_slice_null_from_ref" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t(NULL, 'feature');"
+
+oracle_error "diff_slice_null_to_ref" "$SETUP_DIVERGENT" \
+  "SELECT count(*) FROM dolt_diff_t('main', NULL);"
+
 oracle_error "diff_range_unknown_ref" "$SETUP_DIVERGENT" \
   "SELECT count(*) FROM dolt_diff_t('nosuchref..feature');"
 

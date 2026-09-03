@@ -156,6 +156,21 @@ static int dtRefError(DiffTblVtab *pVtab, const char *zRef, int rc){
   return pVtab->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
 }
 
+static int dtArgText(
+  DiffTblVtab *pVtab,
+  sqlite3_value *pValue,
+  const char **pzValue
+){
+  if( sqlite3_value_type(pValue)==SQLITE_NULL ){
+    sqlite3_free(pVtab->base.zErrMsg);
+    pVtab->base.zErrMsg = sqlite3_mprintf(
+        "dolt_diff_%s: invalid argument: NULL", pVtab->zTableName);
+    return pVtab->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  *pzValue = (const char*)sqlite3_value_text(pValue);
+  return *pzValue ? SQLITE_OK : SQLITE_NOMEM;
+}
+
 static void clearAuditRow(AuditRow *r){
   sqlite3_free(r->pKeyRec);
   sqlite3_free(r->pOldKeyRec);
@@ -1177,11 +1192,15 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   }
 
   if( (idxNum & DT_IDX_SLICE)!=0 && argc>=2 ){
-    const char *zFromRef = (const char*)sqlite3_value_text(argv[0]);
-    const char *zToRef = (const char*)sqlite3_value_text(argv[1]);
+    const char *zFromRef;
+    const char *zToRef;
     const char *zBadRef = 0;
-    rc = buildSliceDiffPair(
-        c, db, pVtab->zTableName, zFromRef, zToRef, &zBadRef);
+    rc = dtArgText(pVtab, argv[0], &zFromRef);
+    if( rc==SQLITE_OK ) rc = dtArgText(pVtab, argv[1], &zToRef);
+    if( rc==SQLITE_OK ){
+      rc = buildSliceDiffPair(
+          c, db, pVtab->zTableName, zFromRef, zToRef, &zBadRef);
+    }
     if( zBadRef ) rc = dtRefError(pVtab, zBadRef, rc);
   }else if( (idxNum & DT_IDX_RANGE_SPEC)!=0 && argc>=1 ){
     const char *zSpec = (const char*)sqlite3_value_text(argv[0]);
