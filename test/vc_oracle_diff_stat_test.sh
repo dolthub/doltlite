@@ -381,6 +381,36 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- missing table filter (match Dolt) ---"
 
+oracle_error "diff_stat_null_from_ref" "
+$SEED
+SELECT * FROM dolt_diff_stat(NULL, 'HEAD~1', 't');
+"
+
+oracle_error "diff_stat_null_to_ref" "
+$SEED
+SELECT * FROM dolt_diff_stat('HEAD~1', NULL, 't');
+"
+
+oracle_error "diff_stat_null_table" "
+$SEED
+SELECT * FROM dolt_diff_stat('HEAD~1', 'HEAD', NULL);
+"
+
+oracle_error "diff_summary_null_from_ref" "
+$SEED
+SELECT * FROM dolt_diff_summary(NULL, 'HEAD~1', 't');
+"
+
+oracle_error "diff_summary_null_to_ref" "
+$SEED
+SELECT * FROM dolt_diff_summary('HEAD~1', NULL, 't');
+"
+
+oracle_error "diff_summary_null_table" "
+$SEED
+SELECT * FROM dolt_diff_summary('HEAD~1', 'HEAD', NULL);
+"
+
 oracle_error "diff_stat_missing_table" "
 $SEED
 SELECT * FROM dolt_diff_stat('HEAD', 'HEAD', 'doesnotexist');

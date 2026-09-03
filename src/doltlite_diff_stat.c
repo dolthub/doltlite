@@ -295,6 +295,21 @@ static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
   return SQLITE_OK;
 }
 
+static int dsArgText(
+  sqlite3_vtab *pVtab,
+  sqlite3_value *pValue,
+  const char *zName,
+  const char **pzValue
+){
+  if( sqlite3_value_type(pValue)==SQLITE_NULL ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf("%s: invalid argument: NULL", zName);
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  *pzValue = (const char*)sqlite3_value_text(pValue);
+  return *pzValue ? SQLITE_OK : SQLITE_NOMEM;
+}
+
 static int dsComputeTableStats(
   sqlite3 *db,
   const char *zFromName,
@@ -677,13 +692,16 @@ static int dsFilterInit(
   if( rc!=SQLITE_OK ) return rc;
 
   if( (idxNum & 1) && argIdx<argc ){
-    pCtx->zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+    rc = dsArgText(pVtab, argv[argIdx++], zName, &pCtx->zFromRef);
+    if( rc!=SQLITE_OK ) return rc;
   }
   if( (idxNum & 2) && argIdx<argc ){
-    pCtx->zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+    rc = dsArgText(pVtab, argv[argIdx++], zName, &pCtx->zToRef);
+    if( rc!=SQLITE_OK ) return rc;
   }
   if( (idxNum & 4) && argIdx<argc ){
-    pCtx->zTblFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
+    rc = dsArgText(pVtab, argv[argIdx++], zName, &pCtx->zTblFilter);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   rc = doltliteResolveCatalogHashForRef(db, pCtx->zFromRef, &pCtx->fromCat);
