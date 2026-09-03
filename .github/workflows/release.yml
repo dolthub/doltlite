@@ -1374,26 +1374,30 @@ jobs:
           [ "$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1)" != "$version" ]
         }
 
-        for attempt in 1 2 3 4 5; do
-          git fetch origin master
-          git reset --hard origin/master
-          current="$(formula_ver)"
-          if should_skip "$current"; then
-            echo "Homebrew formula already at ${current}; not writing ${version}"
-            exit 0
-          fi
-          bash packaging/homebrew/bump-formula.sh "${version}" "${sha256}"
-          if git diff --quiet -- packaging/homebrew/doltlite.rb; then
-            echo "Homebrew formula already at ${version}"
-            exit 0
-          fi
-          git add packaging/homebrew/doltlite.rb
-          git commit -m "Bump Homebrew formula to ${version}"
-          if git push origin master; then
-            exit 0
-          fi
-          echo "push rejected (attempt ${attempt}); retrying"
-          sleep $((attempt * 2))
-        done
-        echo "failed to push Homebrew formula bump after retries"
-        exit 1
+        git fetch origin master
+        git reset --hard origin/master
+        current="$(formula_ver)"
+        if should_skip "$current"; then
+          echo "Homebrew formula already at ${current}; not writing ${version}"
+          exit 0
+        fi
+        bash packaging/homebrew/bump-formula.sh "${version}" "${sha256}"
+        if git diff --quiet -- packaging/homebrew/doltlite.rb; then
+          echo "Homebrew formula already at ${version}"
+          exit 0
+        fi
+
+        # master requires status checks, so the bump arrives as a pull request
+        # rather than a push. A branch per version keeps re-runs idempotent.
+        branch="automation/homebrew-${version}"
+        if gh api "repos/dolthub/doltlite/git/ref/heads/${branch}" >/dev/null 2>&1; then
+          echo "branch ${branch} already exists; nothing to open"
+          exit 0
+        fi
+        git checkout -b "${branch}"
+        git add packaging/homebrew/doltlite.rb
+        git commit -m "Bump Homebrew formula to ${version}"
+        git push origin "${branch}"
+        gh pr create --base master --head "${branch}" \
+          --title "Bump Homebrew formula to ${version}" \
+          --body "Points the formula at the ${VERSION} release tarball. Opened by the release workflow."
