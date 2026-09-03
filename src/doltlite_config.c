@@ -165,7 +165,8 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     return;
   }
 
-  /* Stock ALTER exposes no row DML to triggers, counters, or authorizers. */
+  /* Stock ALTER exposes no row DML to triggers, counters, authorizers,
+  ** or update/preupdate hooks. */
   {
     int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
     i64 nChange = db->nChange;
