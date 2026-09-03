@@ -1774,11 +1774,10 @@ static void testIntegrityErrorConsumed(
   int nRefs
 ){
   sqlite3 *db = 0;
-  ProllyHash missing;
+  sqlite3_stmt *pStmt = 0;
   char *zIntegrity = 0;
   char *zErr = 0;
   int rc;
-  memset(&missing, 0, sizeof(missing));
   check("create integrity source-miss store",
         createLazyFile(zPath, pRefs, nRefs)==SQLITE_OK);
   rc = openDb(zPath, SQLITE_OPEN_READONLY, &db);
@@ -1788,21 +1787,35 @@ static void testIntegrityErrorConsumed(
   rc = doltlite_set_chunk_source(db, "main", pApi);
   check("register integrity source", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) goto integrity_done;
-  rc = findMissingHashes(db, pCtx, &missing, 1);
-  check("find integrity source miss", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(
+      db, "PRAGMA integrity_check(1)", -1, &pStmt, 0);
+  check("prepare integrity source-miss check", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) goto integrity_done;
   sourceResetCounters(pCtx);
-  pCtx->mode = SOURCE_ONE_NOTFOUND;
-  memcpy(pCtx->faultHash, missing.data, PROLLY_HASH_SIZE);
-  rc = queryResult(db, "PRAGMA integrity_check(1)", &zIntegrity);
+  pCtx->mode = SOURCE_NOTFOUND;
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    const unsigned char *z = sqlite3_column_text(pStmt, 0);
+    zIntegrity = sqlite3_mprintf("%s", z ? (const char*)z : "");
+    rc = zIntegrity ? SQLITE_OK : SQLITE_NOMEM;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_NOTFOUND;
+  }
+  {
+    int frc = sqlite3_finalize(pStmt);
+    pStmt = 0;
+    if( rc==SQLITE_OK && frc!=SQLITE_OK ) rc = frc;
+  }
+  check("integrity check handles source miss", rc==SQLITE_OK);
+  check("integrity check requests a source chunk", pCtx->nGet>0);
   check("integrity check reports source-missing graph as a result",
-        rc==SQLITE_OK && pCtx->faultIssued
-        && zIntegrity && strstr(zIntegrity, "integrity check failed")!=0);
+        zIntegrity && strstr(zIntegrity, "integrity check failed")!=0);
   rc = runToError(db, "SELECT abs(-9223372036854775808)", &zErr);
   check("handled integrity miss does not poison a later VDBE error",
         rc==SQLITE_ERROR && zErr && strstr(zErr, "integer overflow")!=0);
 
 integrity_done:
+  if( pStmt ) sqlite3_finalize(pStmt);
   sqlite3_free(zIntegrity);
   sqlite3_free(zErr);
   if( db ) sqlite3_close(db);
