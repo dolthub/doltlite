@@ -1387,17 +1387,4 @@ jobs:
           exit 0
         fi
 
-        # master requires status checks, so the bump arrives as a pull request
-        # rather than a push. A branch per version keeps re-runs idempotent.
-        branch="automation/homebrew-${version}"
-        if gh api "repos/dolthub/doltlite/git/ref/heads/${branch}" >/dev/null 2>&1; then
-          echo "branch ${branch} already exists; nothing to open"
-          exit 0
-        fi
-        git checkout -b "${branch}"
-        git add packaging/homebrew/doltlite.rb
-        git commit -m "Bump Homebrew formula to ${version}"
-        git push origin "${branch}"
-        gh pr create --base master --head "${branch}" \
-          --title "Bump Homebrew formula to ${version}" \
-          --body "Points the formula at the ${VERSION} release tarball. Opened by the release workflow."
+        bash packaging/homebrew/open-bump-pr.sh "$version" "$VERSION"
