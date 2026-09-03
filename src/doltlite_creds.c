@@ -239,6 +239,7 @@ void doltliteCredsSign(const DoltliteCreds *c, const unsigned char *msg,
 #define JWT_SUBJECT_PREFIX "doltClientCredentials/"
 #define JWT_TOKEN_VERSION "2023.01"
 #define JWT_TTL_SECONDS   30
+#define JWT_CLOCK_SKEW_SECONDS 60
 
 static char *b64urlRaw(const unsigned char *in, size_t len) {
   char *s = doltliteBase64UrlEncode(in, len);
@@ -450,8 +451,7 @@ static char *jsonFindString(const char *json, const char *key) {
   return jsonDupQuoted(credsJsonObjectValue(json, key));
 }
 
-static int jsonFindLong(const char *json, const char *key, long *out) {
-  const char *p = credsJsonObjectValue(json, key);
+static int jsonParseLong(const char *p, long *out) {
   const char *end;
   uint64_t v;
   if( !p || !out ) return 0;
@@ -464,6 +464,21 @@ static int jsonFindLong(const char *json, const char *key, long *out) {
   if( *end!=',' && *end!='}' ) return 0;
   *out = (long)v;
   return 1;
+}
+
+static int jsonFindLong(const char *json, const char *key, long *out) {
+  return jsonParseLong(credsJsonObjectValue(json, key), out);
+}
+
+static int jsonFindOptionalLong(
+  const char *json,
+  const char *key,
+  long *out,
+  int *present
+) {
+  const char *p = credsJsonObjectValue(json, key);
+  *present = p != 0;
+  return !p || jsonParseLong(p, out);
 }
 
 static int jsonAudienceMatches(const char *json, const char *expected){
@@ -1065,12 +1080,14 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   unsigned char *sig = NULL;
   size_t siglen = 0;
   unsigned char pub[DOLTLITE_PUBKEY_LEN];
-  long exp = 0;
+  long exp = 0, iat = 0, nbf = 0;
+  int hasIat = 0, hasNbf = 0;
   int rc = 1;
 
   if (kidOut) *kidOut = NULL;
   if (!authValue) return 1;
   if (!expectedAudience || !expectedAudience[0]) return 1;
+  if (now < 0) return 1;
 
   jwt = authValue;
   if (strncmp(jwt, "Bearer ", 7) == 0) jwt += 7;
@@ -1116,7 +1133,20 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   if (!jsonAudienceMatches(claims, expectedAudience)) goto done;
 
   if (!jsonFindLong(claims, "exp", &exp)) goto done;
-  if (now >= exp) goto done;
+  if (!jsonFindOptionalLong(claims, "iat", &iat, &hasIat)) goto done;
+  if (!jsonFindOptionalLong(claims, "nbf", &nbf, &hasNbf)) goto done;
+  if (now > exp && now - exp > JWT_CLOCK_SKEW_SECONDS) goto done;
+  if (exp > now && exp - now > JWT_TTL_SECONDS + JWT_CLOCK_SKEW_SECONDS) {
+    goto done;
+  }
+  if (hasIat) {
+    if (iat > now && iat - now > JWT_CLOCK_SKEW_SECONDS) goto done;
+    if (exp < iat || exp - iat > JWT_TTL_SECONDS) goto done;
+  }
+  if (hasNbf) {
+    if (nbf > now && nbf - now > JWT_CLOCK_SKEW_SECONDS) goto done;
+    if (nbf > exp) goto done;
+  }
 
   rc = 0;
   if (kidOut) {

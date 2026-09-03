@@ -39,10 +39,13 @@ The remotesrv verifier checks:
 - `kid` is present and the matching public JWK is in `--auth-keys`
 - Ed25519 signature over the JWT signing input
 - `iss`, `sub`, and `aud` as above
-- `exp` is present and strictly in the future (`now >= exp` is rejected)
-
-It does not check `iat` or `nbf`, and it does not apply a clock-skew
-window other than the `exp` comparison.
+- `exp` is present and the token is within a 60-second clock-skew window
+- optional `iat` and `nbf` claims are valid integers and no more than 60 seconds
+  ahead of the server clock
+- `exp` is not before `iat` or `nbf`, and an `iat`-bearing token has at most the
+  30-second lifetime DoltLite mints
+- a token without `iat` has no more than 90 seconds until `exp`, preserving
+  compatibility with Dolt credentials while rejecting far-future expirations
 
 The `Authorization` scheme must be the six characters `Bearer ` (capital
 B, one space). `bearer` is rejected. Extra spaces after `Bearer ` are
