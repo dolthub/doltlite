@@ -6159,7 +6159,9 @@ static void run_persist_does_not_resurrect_deleted_branch(void){
   sqlite3 *dbA = 0;
   sqlite3 *dbB = 0;
   sqlite3 *dbC = 0;
+  char *zErr = 0;
   char dbpath[256];
+  int rc;
 
   printf("=== Persist Does Not Resurrect Deleted Branch Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_persist_no_resurrect");
@@ -6184,9 +6186,24 @@ static void run_persist_does_not_resurrect_deleted_branch(void){
         strcmp(queryScalarText(dbB,
             "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
 
-  /* Orphaned session's next write must not put the branch back. */
-  execSqlSilent(dbA, "INSERT INTO t VALUES(3,'three');");
-  execSqlSilent(dbA, "SELECT dolt_commit('-A','-m','after delete');");
+  check("nr_parked_snapshot_readable",
+        strcmp(queryScalarText(dbA, "SELECT count(*) FROM t"), "2")==0);
+  rc = sqlite3_exec(dbA, "INSERT INTO t VALUES(3,'three');", 0, 0, &zErr);
+  check("nr_write_rejected", rc==SQLITE_BUSY);
+  check("nr_write_names_deleted_branch",
+        zErr!=0 && strstr(zErr, "branch 'feat' no longer exists")!=0);
+  sqlite3_free(zErr);
+  zErr = 0;
+  check("nr_rejected_write_does_not_resurrect",
+        strcmp(queryScalarText(dbB,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("nr_checkout_main_recovers",
+        execSql(dbA, "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("nr_checkout_does_not_resurrect",
+        strcmp(queryScalarText(dbB,
+            "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("nr_write_after_recovery",
+        execSql(dbA, "INSERT INTO t VALUES(3,'three');")==SQLITE_OK);
   sqlite3_close(dbA);
   dbA = 0;
   check("nr_still_deleted_for_peer",

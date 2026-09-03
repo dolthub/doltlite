@@ -662,6 +662,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   BtShared *pBt = p->pBt;
   int rc;
 
+  p->bBeginTransBranchMissing = 0;
   if( pSchemaVersion ){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
@@ -760,6 +761,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
      && pBt->store.refs.nBranches>0 ){
       const char *zBranchName = p->zBranch ? p->zBranch : "main";
       if( chunkStoreFindBranch(&pBt->store, zBranchName, 0)==SQLITE_NOTFOUND ){
+        p->bBeginTransBranchMissing = 1;
         chunkStoreUnlock(&pBt->store);
         return SQLITE_BUSY_SNAPSHOT;
       }
@@ -804,6 +806,12 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
 
   return SQLITE_OK;
 }
+
+const char *doltliteBtreeMissingWriteBranch(Btree *p){
+  if( !p || !p->bBeginTransBranchMissing ) return 0;
+  return p->zBranch ? p->zBranch : "main";
+}
+
 int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   if( wrFlag && p && p->db && p->db->nDb>0 && p->db->aDb[0].pBt
    && p->db->aDb[0].pBt->isDetached ){

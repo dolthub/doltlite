@@ -879,6 +879,10 @@ For a DoltLite-format main database, the concurrency contract is:
   uncommitted working set belongs to the branch, so another connection that
   selects that branch recovers it. Two connections may sit on different
   branches of the same file at once.
+- **Peer-deleted branches.** A connection parked on a branch that a peer
+  deletes may keep reading its snapshot, but writes fail and name the missing
+  branch. Checking out an existing branch recovers the connection without
+  recreating the deleted branch.
 - **One durable writer at a time.** A connection that holds an explicit write
   transaction owns the graph lock. A peer that tries to begin a concurrent
   write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
