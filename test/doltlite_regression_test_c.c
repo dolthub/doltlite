@@ -2331,6 +2331,75 @@ static void run_alter_default_update_hook(void){
   removeDbFiles(dbpath);
 }
 
+#if defined(SQLITE_ENABLE_SESSION) && defined(SQLITE_ENABLE_PREUPDATE_HOOK)
+static void run_alter_default_session_changeset(void){
+  sqlite3 *db = 0;
+  sqlite3_session *s1 = 0;
+  sqlite3_session *s2 = 0;
+  char dbpath[256];
+  int n = 0;
+  void *p = 0;
+
+  printf("=== ALTER Default Session Changeset Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_alter_default_session_changeset");
+  removeDbFiles(dbpath);
+  check("alter_default_session_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("alter_default_session_setup", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t VALUES(1),(2),(3);")==SQLITE_OK);
+
+  check("alter_default_session_create_before",
+      sqlite3session_create(db, "main", &s1)==SQLITE_OK);
+  check("alter_default_session_attach_before",
+      sqlite3session_attach(s1, "t")==SQLITE_OK);
+  check("alter_default_session_baseline",
+      sqlite3session_changeset(s1, &n, &p)==SQLITE_OK);
+  check("alter_default_session_baseline_empty", n==0);
+  sqlite3_free(p);
+  p = 0;
+  n = 0;
+
+  check("alter_default_session_alter", execSql(db,
+      "ALTER TABLE t ADD COLUMN v INTEGER DEFAULT 7")==SQLITE_OK);
+  check("alter_default_session_values",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id||':'||v,',') FROM t"),
+          "1:7,2:7,3:7")==0);
+  check("alter_default_session_live_after_alter",
+      sqlite3session_changeset(s1, &n, &p)==SQLITE_OK);
+  check("alter_default_session_live_empty", n==0);
+  sqlite3_free(p);
+  p = 0;
+  n = 0;
+  sqlite3session_delete(s1);
+  s1 = 0;
+
+  check("alter_default_session_create_after",
+      sqlite3session_create(db, "main", &s2)==SQLITE_OK);
+  check("alter_default_session_attach_after",
+      sqlite3session_attach(s2, "t")==SQLITE_OK);
+  check("alter_default_session_changeset_after",
+      sqlite3session_changeset(s2, &n, &p)==SQLITE_OK);
+  check("alter_default_session_changeset_empty", n==0);
+  sqlite3_free(p);
+
+  check("alter_default_session_real_update",
+      execSql(db, "UPDATE t SET v=8 WHERE id=1")==SQLITE_OK);
+  n = 0;
+  p = 0;
+  check("alter_default_session_real_changeset",
+      sqlite3session_changeset(s2, &n, &p)==SQLITE_OK);
+  check("alter_default_session_real_changeset_nonempty", n>0);
+  sqlite3_free(p);
+  sqlite3session_delete(s2);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+#endif
+
 static void run_schema_hash_error_propagation(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -14030,6 +14099,9 @@ static const RegressionCase aCases[] = {
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "alter_default_authorizer", "ALTER Default Authorizer Test", run_alter_default_authorizer },
   { "alter_default_update_hook", "ALTER Default Update Hook Test", run_alter_default_update_hook },
+#if defined(SQLITE_ENABLE_SESSION) && defined(SQLITE_ENABLE_PREUPDATE_HOOK)
+  { "alter_default_session_changeset", "ALTER Default Session Changeset Test", run_alter_default_session_changeset },
+#endif
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "backup_dest_missing_branch", "Backup Dest Missing Branch Test", run_backup_dest_missing_branch },

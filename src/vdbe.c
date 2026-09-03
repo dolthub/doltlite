@@ -112,9 +112,17 @@ static void updateMaxBlobsize(Mem *p){
 ** hook are enabled for database connect DB.
 */
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
-# define HAS_UPDATE_HOOK(DB) ((DB)->xPreUpdateCallback||(DB)->xUpdateCallback)
+# define HAS_UPDATE_HOOK_CB(DB) ((DB)->xPreUpdateCallback||(DB)->xUpdateCallback)
 #else
-# define HAS_UPDATE_HOOK(DB) ((DB)->xUpdateCallback)
+# define HAS_UPDATE_HOOK_CB(DB) ((DB)->xUpdateCallback)
+#endif
+#ifdef DOLTLITE_PROLLY
+  /* Internal DML must not fire hooks. Do not clear xPreUpdateCallback:
+  ** the session module stores its object list in pPreUpdateArg. */
+# define HAS_UPDATE_HOOK(DB) \
+    (HAS_UPDATE_HOOK_CB(DB) && ((DB)->mDbFlags & DBFLAG_InternalDml)==0)
+#else
+# define HAS_UPDATE_HOOK(DB) HAS_UPDATE_HOOK_CB(DB)
 #endif
 
 /*
@@ -7174,7 +7182,8 @@ case OP_IdxInsert: {        /* in2 */
       db->lastRowid = iRowid;
       bRowid = 1;
     }
-    if( pOp->p4type==P4_TABLE && db->xUpdateCallback!=0 ){
+    if( pOp->p4type==P4_TABLE && db->xUpdateCallback!=0
+     && (db->mDbFlags & DBFLAG_InternalDml)==0 ){
       Table *pTab = pOp->p4.pTab;
       if( pTab && pTab->aCol && VisibleRowid(pTab) && pC->iDb>=0 ){
         if( !bRowid ){
