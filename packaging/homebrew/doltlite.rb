@@ -8,7 +8,10 @@ class Doltlite < Formula
   homepage "https://github.com/dolthub/doltlite"
   url "https://github.com/dolthub/doltlite/releases/download/v0.50.2/doltlite-autoconf-0.50.2.tar.gz"
   sha256 "186742c40a2cc72183b6e626232d84d8f1223b1212be0e974de47d9374fb1b1e"
-  license "Apache-2.0"
+  # Composite, and both halves are real: the DoltLite extensions are
+  # Apache-2.0, the SQLite code they are built on is public domain. Stating
+  # only the first would misdescribe the tarball this formula builds.
+  license all_of: ["Apache-2.0", :public_domain]
   head "https://github.com/dolthub/doltlite.git", branch: "master"
 
   livecheck do
