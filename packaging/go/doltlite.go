@@ -73,7 +73,7 @@ func (Driver) Open(name string) (driver.Conn, error) {
 		cname := C.CString(name)
 		defer C.free(unsafe.Pointer(cname))
 		rc = C.sqlite3_open_v2(cname, &db,
-			C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE, nil)
+			C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE|C.SQLITE_OPEN_URI, nil)
 		if rc != C.SQLITE_OK {
 			msg = "unable to open database"
 			if db != nil {
