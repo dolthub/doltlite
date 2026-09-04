@@ -1317,6 +1317,23 @@ int doltliteFetch(
   return rc;
 }
 
+static int remotePrepareCloneRefs(ChunkStore *pStore, const char *zUrl){
+  const BranchRef *aBranch;
+  int nBranch;
+  int rc;
+  int i;
+
+  csFreeRemotes(pStore);
+  csFreeTracking(pStore);
+  rc = chunkStoreAddRemote(pStore, "origin", zUrl);
+  refsTableGetBranches(&pStore->refs, &nBranch, &aBranch);
+  for(i=0; i<nBranch && rc==SQLITE_OK; i++){
+    rc = chunkStoreUpdateTracking(
+        pStore, "origin", aBranch[i].zName, &aBranch[i].commitHash);
+  }
+  return rc;
+}
+
 int doltliteCloneLazy(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,
@@ -1360,17 +1377,11 @@ int doltliteCloneLazy(
     }
   }
 
-  rc = chunkStoreDeleteRemote(&refsView, "origin");
-  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-  if( rc==SQLITE_OK ) rc = chunkStoreAddRemote(&refsView, "origin", zUrl);
   for(i=0; i<nBranch && rc==SQLITE_OK; i++){
     rc = chunkStoreSetBranchWorkingSet(
         &refsView, aBranch[i].zName, &emptyWs);
-    if( rc==SQLITE_OK ){
-      rc = chunkStoreUpdateTracking(
-          &refsView, "origin", aBranch[i].zName, &aBranch[i].commitHash);
-    }
   }
+  if( rc==SQLITE_OK ) rc = remotePrepareCloneRefs(&refsView, zUrl);
   if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefsToBlob(
         &refsView, &pLocalRefs, &nLocalRefs);
@@ -1408,7 +1419,11 @@ lazy_clone_done:
   return rc;
 }
 
-int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
+int doltliteClone(
+  ChunkStore *pLocal,
+  DoltliteRemote *pRemote,
+  const char *zUrl
+){
   u8 *refsData = 0;
   int nRefsData = 0;
   ProllyHash *aRoots = 0;
@@ -1427,6 +1442,7 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
          sizeof(ProllyHash));
   memset(&savedRefs, 0, sizeof(savedRefs));
   oldRefsStale = pLocal->bRefsStale;
+  if( !zUrl ) return SQLITE_MISUSE;
 
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
@@ -1497,6 +1513,7 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
         rc = chunkStoreSetBranchWorkingSet(pLocal, aBr[i].zName, &emptyWs);
       }
     }
+    if( rc==SQLITE_OK ) rc = remotePrepareCloneRefs(pLocal, zUrl);
     if( rc==SQLITE_OK ){
       rc = chunkStoreSerializeRefs(pLocal);
     }
