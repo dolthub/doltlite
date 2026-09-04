@@ -368,9 +368,16 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   if( c->singleCommit ){
     head = startHash;
   }else if( idxNum & HIST_IDX_START_REF ){
-    const char *zRef = iArg<argc
-                     ? (const char*)sqlite3_value_text(argv[iArg]) : 0;
-    if( !zRef ) return SQLITE_OK;
+    const char *zRef;
+    if( iArg>=argc ) return SQLITE_OK;
+    if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
+      sqlite3_free(cur->pVtab->zErrMsg);
+      cur->pVtab->zErrMsg = sqlite3_mprintf(
+          "dolt_history_%s: invalid argument: NULL", v->zTableName);
+      return cur->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+    zRef = (const char*)sqlite3_value_text(argv[iArg]);
+    if( !zRef ) return SQLITE_NOMEM;
     rc = doltliteResolveRef(v->db, zRef, &head);
     if( rc==SQLITE_NOTFOUND ){
       sqlite3_free(cur->pVtab->zErrMsg);

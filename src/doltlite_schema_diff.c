@@ -846,15 +846,25 @@ static int sdParseArgs(
   const char *zFromRef = 0;
   const char *zToRef = 0;
   const char *zTableFilter = 0;
+  sqlite3_value *pArg;
 
   if( (idxNum & 1) && argIdx<argc ){
-    zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+    pArg = argv[argIdx++];
+    if( sqlite3_value_type(pArg)==SQLITE_NULL ) goto null_arg;
+    zFromRef = (const char*)sqlite3_value_text(pArg);
+    if( !zFromRef ) return SQLITE_NOMEM;
   }
   if( (idxNum & 2) && argIdx<argc ){
-    zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+    pArg = argv[argIdx++];
+    if( sqlite3_value_type(pArg)==SQLITE_NULL ) goto null_arg;
+    zToRef = (const char*)sqlite3_value_text(pArg);
+    if( !zToRef ) return SQLITE_NOMEM;
   }
   if( (idxNum & 4) && argIdx<argc ){
-    zTableFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
+    pArg = argv[argIdx++];
+    if( sqlite3_value_type(pArg)==SQLITE_NULL ) goto null_arg;
+    zTableFilter = (const char*)sqlite3_value_text(pArg);
+    if( !zTableFilter ) return SQLITE_NOMEM;
   }
 
   if( zFromRef && !zToRef ){
@@ -906,6 +916,12 @@ static int sdParseArgs(
   *pzToRef = zToRef;
   *pzTableFilter = zTableFilter;
   return SQLITE_OK;
+
+null_arg:
+  sqlite3_free(pVtab->zErrMsg);
+  pVtab->zErrMsg = sqlite3_mprintf(
+      "dolt_schema_diff: invalid argument: NULL");
+  return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
 }
 
 static int sdFilter(sqlite3_vtab_cursor *cur,

@@ -485,6 +485,7 @@ static void doltliteResetFunc(
   int nPaths = 0;
   int rc;
   int i;
+  int nNullArgs = 0;
   int graphLocked = 0;
   u8 isMerging = 0;
   int bSucceeded = 0;
@@ -506,9 +507,22 @@ static void doltliteResetFunc(
     havePreResetHead = 1;
   }
 
+  for(i=0; i<argc; i++){
+    if( sqlite3_value_type(argv[i])==SQLITE_NULL ) nNullArgs++;
+  }
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
-                            0, &args);
+                            DOLTLITE_CMD_PARSE_IGNORE_NULLS, &args);
   if( rc!=SQLITE_OK ) goto reset_cleanup;
+  if( argc==1 && nNullArgs==1 ){
+    sqlite3_result_error(context, "commit not found", -1);
+    goto reset_cleanup;
+  }
+  if( (isHard || isSoft) && args.nPositional+nNullArgs>1 ){
+    sqlite3_result_error(context,
+      isHard ? "--hard supports at most one additional param"
+             : "--soft supports at most one additional param", -1);
+    goto reset_cleanup;
+  }
   azPaths = (const char**)sqlite3_malloc(
       sizeof(char*) * (args.nPositional>0 ? args.nPositional : 1));
   if( !azPaths ){ sqlite3_result_error_nomem(context); goto reset_cleanup; }

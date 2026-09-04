@@ -936,6 +936,7 @@ int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
 #define DOLTLITE_CMD_OPTION_FLAG 0
 #define DOLTLITE_CMD_OPTION_VALUE 1
 #define DOLTLITE_CMD_PARSE_SHORT_GROUPS 0x01
+#define DOLTLITE_CMD_PARSE_IGNORE_NULLS 0x02
 
 typedef struct DoltliteCmdOption DoltliteCmdOption;
 struct DoltliteCmdOption {
