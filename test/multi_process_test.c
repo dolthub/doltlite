@@ -188,6 +188,74 @@ static void test_reader_during_write(void){
   remove(path);
 }
 
+static void test_reader_close_during_write_upgrade(void){
+  const char *path = "/tmp/test_mp_reader_close_upgrade.db";
+  int start[2];
+  int done[2];
+  pid_t pid;
+  int status;
+  char buf;
+
+  printf("--- Test 2b: Reader close during write upgrade ---\n");
+  setup_db(path);
+  mpPipe(start);
+  mpPipe(done);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    int childRc = 0;
+    close(start[1]);
+    close(done[0]);
+    mpRead(start[0], &buf);
+    if( sqlite3_open(path, &db)!=SQLITE_OK ){
+      childRc = 2;
+    }else if( strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")!=0 ){
+      childRc = 3;
+    }
+    if( db ) sqlite3_close(db);
+    mpWrite(done[1], "d");
+    _exit(childRc);
+  }
+
+  close(start[0]);
+  close(done[1]);
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    sqlite3_extended_result_codes(db, 1);
+    check("mp_reader_close_setup_write",
+      execSql(db, "UPDATE t SET v='updated' WHERE id=1")==SQLITE_OK);
+    check("mp_reader_close_begin", execSql(db, "BEGIN")==SQLITE_OK);
+    check("mp_reader_close_snapshot",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
+
+    mpWrite(start[1], "s");
+    mpRead(done[0], &buf);
+    waitpid(pid, &status, 0);
+    check("mp_reader_close_peer_ok",
+      WIFEXITED(status) && WEXITSTATUS(status)==0);
+    check("mp_reader_close_upgrade_write",
+      execSql(db, "INSERT INTO t VALUES(2, 'after reader')")==SQLITE_OK);
+    check("mp_reader_close_upgrade_rows",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
+    check("mp_reader_close_upgrade_commit", execSql(db, "COMMIT")==SQLITE_OK);
+    sqlite3_close(db);
+  }
+  close(start[1]);
+  close(done[0]);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("mp_reader_close_upgrade_durable",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
 static void test_sequential_processes(void){
   const char *path = "/tmp/test_mp_seq.db";
   pid_t pid;
@@ -634,6 +702,7 @@ int main(){
 
   test_two_writers();
   test_reader_during_write();
+  test_reader_close_during_write_upgrade();
   test_sequential_processes();
   test_gc_during_read();
   test_gc_blocked_by_writer();

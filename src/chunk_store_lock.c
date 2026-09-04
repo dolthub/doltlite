@@ -245,6 +245,49 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 
 static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs);
 
+static int csAdoptMatchingCloseMarker(
+  ChunkStore *cs,
+  i64 fileSize,
+  int *pAdopted
+){
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  u8 aExpected[CHUNK_MANIFEST_SIZE];
+  i64 iMarker = cs->file.iFileSize;
+  i64 iNext;
+  int rc;
+
+  *pAdopted = 0;
+  if( iMarker<=0
+   || iMarker>LARGEST_INT64-(i64)sizeof(aRoot)
+   || fileSize!=iMarker+(i64)sizeof(aRoot) ){
+    return SQLITE_OK;
+  }
+  rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), iMarker);
+  if( rc!=SQLITE_OK ) return rc;
+  if( aRoot[0]!=CS_WAL_TAG_ROOT
+   || csManifestHashState(aRoot+1, iMarker)!=CS_MANIFEST_HASH_OK
+   || csValidateWalRootManifest(cs, aRoot+1, iMarker)!=SQLITE_OK
+   || CS_READ_I64(aRoot+1+CS_MANIFEST_DURABLE_TO_OFF)!=iMarker
+   || CS_READ_I64(aRoot+1+CS_MANIFEST_BATCH_START_OFF)!=iMarker ){
+    return SQLITE_OK;
+  }
+
+  iNext = CS_READ_I64(aRoot+1+CS_MANIFEST_NEXT_OFF_OFF);
+  csSerializeManifest(cs, aExpected);
+  csStampWalCheckpoint(cs, aExpected);
+  CS_WRITE_I64(aExpected+CS_MANIFEST_DURABLE_TO_OFF, iMarker);
+  CS_WRITE_I64(aExpected+CS_MANIFEST_NEXT_OFF_OFF, iNext);
+  CS_WRITE_I64(aExpected+CS_MANIFEST_BATCH_START_OFF, iMarker);
+  csManifestSeal(aExpected, iMarker);
+  if( memcmp(aRoot+1, aExpected, sizeof(aExpected))!=0 ) return SQLITE_OK;
+
+  cs->file.iFileSize = iNext;
+  cs->wal.nWalData = fileSize - cs->wal.iWalOffset;
+  cs->wal.cleanCloseMarker = 1;
+  *pAdopted = 1;
+  return SQLITE_OK;
+}
+
 /* The replaced-file guard must hold at every write-intent moment, not
 ** ride on a reader statement having statted first: the pinned-snapshot
 ** early return in refresh skips detection under the lock. One fcntl.
@@ -441,7 +484,10 @@ static int csDetectExternalChanges(
       if( rc!=SQLITE_OK ) return rc;
     }
     if( fileSize > cs->file.iFileSize ){
-      *pChanged = 1;
+      int adopted = 0;
+      rc = csAdoptMatchingCloseMarker(cs, fileSize, &adopted);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !adopted ) *pChanged = 1;
     }
   }
   return SQLITE_OK;
