@@ -484,8 +484,14 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   if(!pBt) return SQLITE_OK;
   pCache=doltliteGetCache(db);
 
+  if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
+    sqlite3_free(cur->pVtab->zErrMsg);
+    cur->pVtab->zErrMsg = sqlite3_mprintf(
+        "dolt_at_%s: invalid argument: NULL", v->zTableName);
+    return cur->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
   zRef=(const char*)sqlite3_value_text(argv[0]);
-  if(!zRef) return SQLITE_OK;
+  if(!zRef) return SQLITE_NOMEM;
   c->zCommitRef = sqlite3_mprintf("%s", zRef);
   if( !c->zCommitRef ) return SQLITE_NOMEM;
 

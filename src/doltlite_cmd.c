@@ -139,7 +139,12 @@ int doltliteCmdParseArgs(
       doltliteCmdArgsClear(pArgs);
       return rc;
     }
-    if( !zArg ) continue;
+    if( !zArg ){
+      if( flags & DOLTLITE_CMD_PARSE_IGNORE_NULLS ) continue;
+      sqlite3_result_error(ctx, "invalid empty argument", -1);
+      doltliteCmdArgsClear(pArgs);
+      return SQLITE_ERROR;
+    }
     if( !endOptions && strcmp(zArg, "--")==0 ){
       endOptions = 1;
       continue;

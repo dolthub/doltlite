@@ -190,9 +190,13 @@ static void doltliteRevertFunc(
     return;
   }
 
+  if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
+    sqlite3_result_error(context, "invalid commit hash", -1);
+    return;
+  }
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
-    sqlite3_result_int(context, 0);
+    sqlite3_result_error_nomem(context);
     return;
   }
 
