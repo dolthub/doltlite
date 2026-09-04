@@ -403,10 +403,13 @@ y
 
 echo "--- 5. no-op push uploads no chunks ---"
 before=$(grep -ac "POST chunks" "$TMP/counts.log")
+size_before=$(wc -c < "$TMP/srv/repo.db" | tr -d ' ')
 result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
 after=$(grep -ac "POST chunks" "$TMP/counts.log")
+size_after=$(wc -c < "$TMP/srv/repo.db" | tr -d ' ')
 check "no-op push returns 0" "0" "$result"
 check "no-op push posts no chunk payloads" "$before" "$after"
+check "no-op push does not grow server store" "$size_before" "$size_after"
 
 echo "--- 6. branch push + fetch + checkout ---"
 result=$("$DB" "$A" "SELECT dolt_checkout('-b','feature'); INSERT INTO users VALUES(4,'dave',40); SELECT dolt_commit('-am','dave'); SELECT dolt_push('origin','feature'); SELECT dolt_checkout('main');" 2>&1 | grep -c "^0$")
@@ -472,7 +475,36 @@ result=$("$DB" "$TMP/d.db" "SELECT dolt_clone('$URL'); SELECT sum(length(data)) 
 check "restarted server serves complete store" "0
 4194304" "$result"
 
-echo "--- 12. protocol conformance across the whole run ---"
+echo "--- 12. push rejects a server-side working set ---"
+DIRTY_URL="http://127.0.0.1:$PROXY_PORT/dirty.db"
+"$DB" "$TMP/dirty-src.db" "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','initial'); SELECT dolt_remote('add','origin','$DIRTY_URL'); SELECT dolt_push('origin','main');" >/dev/null
+"$DB" "$TMP/srv/dirty.db" "INSERT INTO t VALUES(99); CREATE TABLE staged_only(id INTEGER PRIMARY KEY); INSERT INTO staged_only VALUES(7); SELECT dolt_add('staged_only');" >/dev/null
+dirty_head_before=$("$DB" "$TMP/srv/dirty.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
+result=$("$DB" "$TMP/dirty-src.db" "SELECT dolt_push('origin','main');" 2>&1)
+check_match "HTTP no-op push reports the target working set" \
+  "remote branch has uncommitted changes" "$result"
+result=$("$DB" "$TMP/dirty-src.db" \
+  "SELECT dolt_push('origin','main','--force');" 2>&1)
+check_match "HTTP no-op force push reports the target working set" \
+  "remote branch has uncommitted changes" "$result"
+"$DB" "$TMP/dirty-src.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','next');" >/dev/null
+result=$("$DB" "$TMP/dirty-src.db" "SELECT dolt_push('origin','main');" 2>&1)
+check_match "HTTP push reports the target working set" \
+  "remote branch has uncommitted changes" "$result"
+result=$("$DB" "$TMP/dirty-src.db" \
+  "SELECT dolt_push('origin','main','--force');" 2>&1)
+check_match "HTTP force push reports the target working set" \
+  "remote branch has uncommitted changes" "$result"
+dirty_head_after=$("$DB" "$TMP/srv/dirty.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
+check "rejected HTTP push leaves remote head unchanged" \
+  "$dirty_head_before" "$dirty_head_after"
+result=$("$DB" "$TMP/srv/dirty.db" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t ORDER BY id); SELECT id FROM staged_only; SELECT count(*) FROM dolt_status;")
+check "rejected HTTP push preserves server-side changes" "1,99
+7
+2" "$result"
+
+echo "--- 13. protocol conformance across the whole run ---"
 if [ -s "$TMP/violations.log" ]; then
   echo "  FAIL: HTTP protocol violations recorded:"
   sed 's/^/    /' "$TMP/violations.log" | head -10

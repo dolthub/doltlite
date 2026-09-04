@@ -22,6 +22,8 @@ struct DoltliteRemote {
                   const u8*, int);
   int (*xSetRefsIf)(DoltliteRemote*, const ProllyHash*, const char *zBranch,
                     int bForce, const u8*, int);
+  int (*xCheckRefsIf)(DoltliteRemote*, const ProllyHash*, const char *zBranch,
+                      int bForce, const u8*, int);
   int (*xCommit)(DoltliteRemote*);
   void (*xClose)(DoltliteRemote*);
   /* Last remote error, or NULL. Valid until the next op or xClose. */

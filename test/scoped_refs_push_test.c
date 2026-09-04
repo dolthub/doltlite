@@ -3,6 +3,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_commit.h"
 #include "doltlite_remote.h"
 
 static int nPass = 0;
@@ -398,6 +399,74 @@ int main(void){
     sqlite3_free(blob);
     chunkStoreClose(&fresh);
     remove("/tmp/scoped_refs_fresh.db");
+  }
+
+  {
+    ChunkStore working;
+    ChunkStore tmp;
+    DoltliteCommit commit;
+    ProllyHash empty = {{0}};
+    ProllyHash commitHash;
+    ProllyHash wsHash;
+    u8 *blob = 0; int n = 0;
+    u8 *commitData = 0; int nCommit = 0;
+    u8 wsData[WS_TOTAL_SIZE];
+    check("open target with dirty working set",
+          openStore(&working, "/tmp/scoped_refs_working.db")==SQLITE_OK);
+    memset(&commit, 0, sizeof(commit));
+    commit.catalogHash = Ha;
+    commit.zName = "test";
+    commit.zEmail = "test@example.com";
+    commit.zMessage = "test";
+    doltliteCommitSerialize(&commit, &commitData, &nCommit);
+    chunkStorePut(&working, commitData, nCommit, &commitHash);
+    sqlite3_free(commitData);
+    memset(wsData, 0, sizeof(wsData));
+    wsData[0] = WS_FORMAT_VERSION;
+    memcpy(wsData + WS_WORKING_CAT_OFF, Ha.data, PROLLY_HASH_SIZE);
+    memcpy(wsData + WS_WORKING_COMMIT_OFF, commitHash.data, PROLLY_HASH_SIZE);
+    memcpy(wsData + WS_STAGED_OFF, Hb.data, PROLLY_HASH_SIZE);
+    chunkStorePut(&working, wsData, sizeof(wsData), &wsHash);
+    chunkStoreSetDefaultBranch(&working, "main");
+    chunkStoreAddBranch(&working, "main", &Ha);
+    chunkStoreAddBranch(&working, "foo", &commitHash);
+    chunkStoreSetBranchWorkingSet(&working, "foo", &wsHash);
+    chunkStoreSerializeRefs(&working);
+    chunkStoreCommit(&working);
+
+    memset(&tmp, 0, sizeof(tmp));
+    chunkStoreSerializeRefsToBlob(&working, &blob, &n);
+    chunkStoreLoadRefsFromBlob(&tmp, blob, n);
+    sqlite3_free(blob);
+    blob = 0;
+    chunkStoreUpdateBranch(&tmp, "foo", &Hd);
+    chunkStoreSetBranchWorkingSet(&tmp, "foo", &empty);
+    chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
+    chunkStoreClose(&tmp);
+
+    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 0);
+    check("reject push over dirty target working set", rc==SQLITE_LOCKED);
+    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 1);
+    check("force cannot overwrite dirty target working set", rc==SQLITE_LOCKED);
+    sqlite3_free(blob);
+
+    memset(wsData + WS_STAGED_OFF, 0, PROLLY_HASH_SIZE);
+    chunkStorePut(&working, wsData, sizeof(wsData), &wsHash);
+    chunkStoreSetBranchWorkingSet(&working, "foo", &wsHash);
+    memset(&tmp, 0, sizeof(tmp));
+    chunkStoreSerializeRefsToBlob(&working, &blob, &n);
+    chunkStoreLoadRefsFromBlob(&tmp, blob, n);
+    sqlite3_free(blob);
+    blob = 0;
+    chunkStoreUpdateBranch(&tmp, "foo", &Hd);
+    chunkStoreSetBranchWorkingSet(&tmp, "foo", &empty);
+    chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
+    chunkStoreClose(&tmp);
+    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 1);
+    check("allow push over clean target working set", rc==SQLITE_OK);
+    sqlite3_free(blob);
+    chunkStoreClose(&working);
+    remove("/tmp/scoped_refs_working.db");
   }
 
   sqlite3_free(curBlob);

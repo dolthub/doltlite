@@ -902,6 +902,68 @@ check "dirty row stays in the source working set" "0
 dirty-uncommitted
 1" "$result"
 
+"$DB" "$TMPDIR/preopened_remote.db" "SELECT 1;" >/dev/null
+result=$("$DB" "$TMPDIR/preopened_src.db" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','initial'); SELECT dolt_remote('add','origin','$R/preopened_remote.db'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
+check "clean pre-opened remote accepts initial push" "0" "$result"
+result=$("$DB" "$TMPDIR/preopened_remote.db" "SELECT id FROM t;")
+check "initial push lands in clean pre-opened remote" "1" "$result"
+
+"$DB" "$TMPDIR/push_ws_src.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','initial');
+SELECT dolt_remote('add','origin','$R/push_ws_remote.db');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+"$DB" "$TMPDIR/push_ws_remote.db" <<'ENDSQL'
+INSERT INTO t VALUES(99);
+CREATE TABLE staged_only(id INTEGER PRIMARY KEY);
+INSERT INTO staged_only VALUES(7);
+SELECT dolt_add('staged_only');
+.quit
+ENDSQL
+result=$("$DB" "$TMPDIR/push_ws_src.db" \
+  "SELECT dolt_push('origin','main');" 2>&1)
+check_match "no-op push rejects a target working set" \
+  "remote branch has uncommitted changes" "$result"
+result=$("$DB" "$TMPDIR/push_ws_src.db" \
+  "SELECT dolt_push('origin','main','--force');" 2>&1)
+check_match "no-op force push rejects a target working set" \
+  "remote branch has uncommitted changes" "$result"
+result=$("$DB" "$TMPDIR/push_ws_src.db" \
+  "SELECT dolt_checkout('-b','feature'); INSERT INTO t VALUES(3); SELECT dolt_commit('-am','feature'); SELECT dolt_push('origin','feature');" 2>&1 | tail -1)
+check "dirty main does not block push to feature" "0" "$result"
+result=$("$DB" "$TMPDIR/push_ws_remote.db/feature" \
+  "SELECT count(*) FROM t WHERE id=3;")
+check "feature push lands beside dirty main" "1" "$result"
+remote_head_before=$("$DB" "$TMPDIR/push_ws_remote.db" \
+  "SELECT commit_hash FROM dolt_log LIMIT 1;")
+"$DB" "$TMPDIR/push_ws_src.db" \
+  "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','next');" >/dev/null
+
+result=$("$DB" "$TMPDIR/push_ws_src.db" \
+  "SELECT dolt_push('origin','main');" 2>&1)
+check_match "push rejects a target working set" \
+  "remote branch has uncommitted changes" "$result"
+result=$("$DB" "$TMPDIR/push_ws_src.db" \
+  "SELECT dolt_push('origin','main','--force');" 2>&1)
+check_match "force push rejects a target working set" \
+  "remote branch has uncommitted changes" "$result"
+
+remote_head_after=$("$DB" "$TMPDIR/push_ws_remote.db" \
+  "SELECT commit_hash FROM dolt_log LIMIT 1;")
+check "rejected pushes leave remote head unchanged" \
+  "$remote_head_before" "$remote_head_after"
+result=$("$DB" "$TMPDIR/push_ws_remote.db" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t ORDER BY id); SELECT id FROM staged_only; SELECT table_name || '|' || staged FROM dolt_status ORDER BY table_name, staged;")
+check "rejected pushes preserve working and staged changes" \
+"1,99
+7
+staged_only|1
+t|0" "$result"
+
 echo "=== Lazy file clone faults data in and survives reopen ==="
 "$DB" "$TMPDIR/lazy_origin.db" <<'ENDSQL' > /dev/null
 CREATE TABLE lazy_rows(id INTEGER PRIMARY KEY, v TEXT, payload BLOB);

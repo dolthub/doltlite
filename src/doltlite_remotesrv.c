@@ -154,6 +154,11 @@ static void sendBadRequest(DoltliteConn *fd){
 
 static void sendSqliteError(DoltliteConn *fd, int rc){
   switch( rc ){
+    case SQLITE_LOCKED:
+      sendStructuredError(fd, 409, "Conflict", "working_set", rc,
+                          "remote branch has uncommitted changes and cannot be "
+                          "overwritten by push");
+      return;
     case SQLITE_BUSY:
       sendStructuredError(fd, 409, "Conflict", "refs_changed", rc,
                           "remote refs changed; pull and retry");
@@ -739,10 +744,17 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
 
 static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
                                     int bForce, const u8 *pBody, int nBody){
+  ProllyHash refsHash;
   int rc;
 
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = doltliteValidateScopedRefsUpdate(pStore, pBody, nBody, zBranch, bForce);
+  if( rc==SQLITE_OK ){
+    prollyHashCompute(pBody, nBody, &refsHash);
+    if( prollyHashCompare(refsTableGetHash(&pStore->refs), &refsHash)==0 ){
+      return SQLITE_OK;
+    }
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteValidateRefsTargetGraph(pStore, pBody, nBody, zBranch);
   }
