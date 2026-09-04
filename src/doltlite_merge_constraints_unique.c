@@ -141,7 +141,7 @@ static char *uniqueIndexWhereFromSql(const char *zSql, int *pRc){
   return 0;
 }
 
-static int uniqueIndexWhereSql(sqlite3 *db, Index *pIdx, char **pzWhere){
+int doltlitePartialIndexWhereSql(sqlite3 *db, Index *pIdx, char **pzWhere){
   sqlite3_stmt *pStmt = 0;
   int rc;
   int stepRc;
@@ -172,17 +172,16 @@ static int uniqueValueFromRecord(
   DoltliteSerialValue *pValue
 );
 
-static int uniquePartialMatchesRecord(
+int doltlitePartialIndexMatchesRecord(
   sqlite3 *db,
   Index *pIdx,
   const char *zWhere,
   const u8 *pRec, int nRec,
   const DoltliteColInfo *pCols,
+  sqlite3_stmt **ppCached,
   int *pMatch
 ){
   Table *pTab;
-  sqlite3_str *pSql;
-  char *zSql;
   sqlite3_stmt *pStmt = 0;
   DoltliteRecordInfo info;
   int i, rc;
@@ -196,18 +195,26 @@ static int uniquePartialMatchesRecord(
   pTab = pIdx->pTable;
   rc = doltliteParseRecordStrict(pRec, nRec, &info);
   if( rc!=SQLITE_OK ) return rc;
-  pSql = sqlite3_str_new(0);
-  sqlite3_str_appendall(pSql, "SELECT 1 FROM (SELECT ");
-  for(i=0; i<pTab->nCol; i++){
-    if( i ) sqlite3_str_appendall(pSql, ", ");
-    sqlite3_str_appendf(pSql, "?%d AS \"%w\"", i+1, pTab->aCol[i].zCnName);
+  if( ppCached && *ppCached ){
+    pStmt = *ppCached;
+    sqlite3_reset(pStmt);
+    sqlite3_clear_bindings(pStmt);
+  }else{
+    sqlite3_str *pSql = sqlite3_str_new(0);
+    char *zSql;
+    sqlite3_str_appendall(pSql, "SELECT 1 FROM (SELECT ");
+    for(i=0; i<pTab->nCol; i++){
+      if( i ) sqlite3_str_appendall(pSql, ", ");
+      sqlite3_str_appendf(pSql, "?%d AS \"%w\"", i+1, pTab->aCol[i].zCnName);
+    }
+    sqlite3_str_appendf(pSql, ") WHERE (%s)", zWhere);
+    zSql = sqlite3_str_finish(pSql);
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+    sqlite3_free(zSql);
+    if( rc!=SQLITE_OK ) return rc;
+    if( ppCached ) *ppCached = pStmt;
   }
-  sqlite3_str_appendf(pSql, ") WHERE (%s)", zWhere);
-  zSql = sqlite3_str_finish(pSql);
-  if( !zSql ) return SQLITE_NOMEM;
-  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
-  sqlite3_free(zSql);
-  if( rc!=SQLITE_OK ) return rc;
   for(i=0; i<pTab->nCol && rc==SQLITE_OK; i++){
     int iField = (pCols && i<pCols->nCol) ? pCols->aColToRec[i] : i;
     DoltliteSerialValue v;
@@ -237,6 +244,11 @@ static int uniquePartialMatchesRecord(
     }else if( rc==SQLITE_DONE ){
       rc = SQLITE_OK;
     }
+  }
+  if( ppCached ){
+    /* The caller owns the statement; leave it prepared for the next row. */
+    sqlite3_reset(pStmt);
+    return rc;
   }
   return finishConstraintStmt(pStmt, rc);
 }
@@ -444,7 +456,7 @@ static int detectUniqueViolationsForIndex(
   if( !pKeyInfo ) goto unique_done;
   {
     char *zWhere = 0;
-    rc = uniqueIndexWhereSql(db, pIdx, &zWhere);
+    rc = doltlitePartialIndexWhereSql(db, pIdx, &zWhere);
     if( rc!=SQLITE_OK ) goto unique_done;
     if( zWhere ){
       zQuery = sqlite3_mprintf(
@@ -580,7 +592,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
   if( !pKeyInfo ) goto without_rowid_done;
   if( prollyHashIsEmpty(&pCurrent->root) ) goto without_rowid_done;
-  rc = uniqueIndexWhereSql(db, pIdx, &zPartWhere);
+  rc = doltlitePartialIndexWhereSql(db, pIdx, &zPartWhere);
   if( rc!=SQLITE_OK ) goto without_rowid_done;
 
   prollyCursorInit(
@@ -613,8 +625,9 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     }
     rc = doltliteParseRecordStrict(pRecord, nRecord, &info);
     if( rc==SQLITE_OK && zPartWhere ){
-      rc = uniquePartialMatchesRecord(db, pIdx, zPartWhere,
-                                      pRecord, nRecord, &cols, &partialMatch);
+      rc = doltlitePartialIndexMatchesRecord(db, pIdx, zPartWhere,
+                                      pRecord, nRecord, &cols, 0,
+                                      &partialMatch);
     }
     if( rc==SQLITE_OK && !partialMatch ){
       sqlite3_free(pOwnedRecord);

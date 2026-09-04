@@ -1211,6 +1211,7 @@ int doltliteSerializeConflicts(ChunkStore *cs,
 void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
 void doltliteIpkWriteBE(u8 *p, i64 v, int n);
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
+struct DoltlitePartialIndex;
 int doltliteIndexMutMapRowDelta(
   sqlite3 *db,
   Index *pIdx,
@@ -1220,7 +1221,8 @@ int doltliteIndexMutMapRowDelta(
   int iPKey, i64 intKey,
   const u8 *pTreeKey, int nTreeKey,
   const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
+  const u8 *pNewVal, int nNewVal,
+  struct DoltlitePartialIndex *pPart
 );
 int doltliteIndexApplyRowDelta(
   sqlite3 *db,

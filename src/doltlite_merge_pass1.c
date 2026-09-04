@@ -43,6 +43,7 @@ static void mergePass1FreeIdxInfo(MergeIndexInfo *aIdxInfo, int nIdxInfo){
       sqlite3KeyInfoUnref(aIdxInfo[i].pKeyInfo);
       aIdxInfo[i].pKeyInfo = 0;
     }
+    doltlitePartialIndexClear(&aIdxInfo[i].part);
   }
   sqlite3_free(aIdxInfo);
 }
@@ -142,6 +143,11 @@ static int mergePass1CollectIndexes(
       }
       mi->iPKey = pTab->iPKey;
       mi->pIdx = pIdx;
+      rc = doltlitePartialIndexLoad(c->db, pIdx, &mi->part);
+      if( rc!=SQLITE_OK ){
+        mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
+        return rc;
+      }
       nIdxInfo++;
     }
   }

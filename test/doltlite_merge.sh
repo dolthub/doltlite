@@ -983,5 +983,119 @@ run_test "dual_defaults_after_generated_columns_rows" \
 run_test "dual_defaults_after_generated_columns_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB60"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60"
+DB61=/tmp/test_merge61_$$.db; rm -f "$DB61"
+$DOLTLITE "$DB61" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE groups (id BLOB PRIMARY KEY NOT NULL) STRICT;
+CREATE TABLE items (
+    id BLOB PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    group_id BLOB NOT NULL,
+    parent_item_id BLOB,
+    FOREIGN KEY (group_id) REFERENCES groups (id),
+    FOREIGN KEY (parent_item_id) REFERENCES items (id)
+) STRICT;
+CREATE UNIQUE INDEX items_with_parent ON items(group_id, parent_item_id, name)
+  WHERE parent_item_id IS NOT NULL;
+CREATE UNIQUE INDEX items_without_parent ON items(group_id, name)
+  WHERE parent_item_id IS NULL;
+SELECT dolt_commit('-A','-m','schema');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO groups VALUES (x'11'), (x'12');
+INSERT INTO items VALUES (x'01','feature',x'11',NULL), (x'02','feature',x'12',NULL);
+SELECT dolt_commit('-A','-m','feature row');
+SELECT dolt_checkout('main');
+INSERT INTO groups VALUES (x'13');
+INSERT INTO items VALUES (x'03','main',x'13',NULL);
+SELECT dolt_commit('-A','-m','main row');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_partial_index_null_rows_no_false_violation" \
+  "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB61"
+run_test "merge_partial_index_null_rows_merged" \
+  "SELECT group_concat(hex(id),'|') FROM (SELECT id FROM items ORDER BY id);" \
+  "01|02|03" "$DB61"
+run_test "merge_partial_index_null_rows_verify_constraints" \
+  "SELECT dolt_verify_constraints();" "0" "$DB61"
+run_test "merge_partial_index_null_rows_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB61"
+
+DB64=/tmp/test_merge64_$$.db; rm -f "$DB64"
+$DOLTLITE "$DB64" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE groups (id BLOB PRIMARY KEY NOT NULL) STRICT;
+CREATE TABLE items (
+    id BLOB PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    group_id BLOB NOT NULL,
+    parent_item_id BLOB,
+    FOREIGN KEY (group_id) REFERENCES groups (id),
+    FOREIGN KEY (parent_item_id) REFERENCES items (id)
+) STRICT;
+CREATE UNIQUE INDEX items_with_parent ON items(group_id, parent_item_id, name)
+  WHERE parent_item_id IS NOT NULL;
+SELECT dolt_commit('-A','-m','schema');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO groups VALUES (x'11');
+INSERT INTO items VALUES (x'01','feature',x'11',NULL);
+SELECT dolt_commit('-A','-m','feature row');
+SELECT dolt_checkout('main');
+INSERT INTO groups VALUES (x'13');
+INSERT INTO items VALUES (x'03','main',x'13',NULL);
+SELECT dolt_commit('-A','-m','main row');
+SQL
+run_test_match "merge_partial_index_no_violations_in_txn" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'CV=' || count(*) FROM dolt_constraint_violations; ROLLBACK;" \
+  "CV=0" "$DB64"
+
+DB62=/tmp/test_merge62_$$.db; rm -f "$DB62"
+$DOLTLITE "$DB62" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE items(id INTEGER PRIMARY KEY, grp INT NOT NULL, name TEXT NOT NULL, parent INT);
+CREATE UNIQUE INDEX with_parent ON items(grp, parent, name) WHERE parent IS NOT NULL;
+CREATE UNIQUE INDEX without_parent ON items(grp, name) WHERE parent IS NULL;
+INSERT INTO items VALUES(1,1,'a',NULL),(2,1,'b',1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO items VALUES(10,2,'x',NULL),(11,2,'y',10);
+UPDATE items SET parent=1 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+INSERT INTO items VALUES(20,3,'z',NULL);
+UPDATE items SET parent=NULL WHERE id=2;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_partial_index_rows_move_in_and_out" \
+  "SELECT group_concat(id || ':' || coalesce(parent,'N'),'|') FROM (SELECT id, parent FROM items ORDER BY id);" \
+  "1:1|2:N|10:N|11:10|20:N" "$DB62"
+run_test "merge_partial_index_index_matches_scan" \
+  "SELECT (SELECT coalesce(group_concat(id),'none') FROM (SELECT id FROM items WHERE parent IS NOT NULL ORDER BY id)) || ' / ' || (SELECT coalesce(group_concat(id),'none') FROM (SELECT id FROM items NOT INDEXED WHERE parent IS NOT NULL ORDER BY id));" \
+  "1,11 / 1,11" "$DB62"
+run_test_match "merge_partial_index_unique_still_enforced_null_arm" \
+  "INSERT INTO items VALUES(30,2,'x',NULL);" "UNIQUE constraint failed" "$DB62"
+run_test_match "merge_partial_index_unique_still_enforced_nonnull_arm" \
+  "INSERT INTO items VALUES(31,2,'y',10);" "UNIQUE constraint failed" "$DB62"
+
+DB63=/tmp/test_merge63_$$.db; rm -f "$DB63"
+$DOLTLITE "$DB63" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE items(id INTEGER PRIMARY KEY, grp INT NOT NULL, name TEXT NOT NULL, parent INT);
+CREATE UNIQUE INDEX with_parent ON items(grp, parent, name) WHERE parent IS NOT NULL;
+INSERT INTO items VALUES(1,1,'a',NULL);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feature');
+INSERT INTO items VALUES(10,2,'x',NULL),(11,2,'y',10);
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+INSERT INTO items VALUES(20,3,'z',NULL);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_cherry_pick('feature');
+SQL
+run_test "cherry_pick_partial_index_null_rows" \
+  "SELECT group_concat(id,'|') FROM (SELECT id FROM items ORDER BY id);" \
+  "1|10|11|20" "$DB63"
+run_test "cherry_pick_partial_index_verify_constraints" \
+  "SELECT dolt_verify_constraints();" "0" "$DB63"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64"
 dltest_finish
