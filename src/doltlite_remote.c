@@ -1116,18 +1116,24 @@ static int remoteTagsWouldInstall(
   ChunkStore *pRemoteRefs,
   int *pWouldInstall
 ){
+  const TagRef *aLocalTag = 0;
   const TagRef *aRemoteTag = 0;
+  int nLocalTag = 0;
   int nRemoteTag = 0;
   int i;
   int rc;
 
   *pWouldInstall = 0;
+  refsTableGetTags(&pLocal->refs, &nLocalTag, &aLocalTag);
   refsTableGetTags(&pRemoteRefs->refs, &nRemoteTag, &aRemoteTag);
   for(i=0; i<nRemoteTag; i++){
     int available = 0;
-    if( chunkStoreFindTag(pLocal, aRemoteTag[i].zName, 0)==SQLITE_OK ){
-      continue;
+    int j;
+    for(j=0; j<nLocalTag; j++){
+      if( strcmp(aLocalTag[j].zName, aRemoteTag[i].zName)==0 ) break;
     }
+    if( j<nLocalTag
+     && scopedTagsMatch(&aLocalTag[j], 1, &aRemoteTag[i], 1) ) continue;
     rc = remoteTagTargetAvailable(
         pLocal, &aRemoteTag[i].commitHash, &available);
     if( rc!=SQLITE_OK ) return rc;
@@ -1336,9 +1342,11 @@ int doltlitePushTag(
 
   {
     DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
+    ProllyHash tagCommit;
     if( !pLocalSrc ) return SQLITE_NOMEM;
+    memcpy(&tagCommit, &pLocalTag->commitHash, sizeof(tagCommit));
     rc = doltliteSyncChunks(
-        pLocalSrc, pRemote, &pLocalTag->commitHash, 1);
+        pLocalSrc, pRemote, &tagCommit, 1);
     pLocalSrc->xClose(pLocalSrc);
   }
   if( rc!=SQLITE_OK ) return rc;
@@ -1461,11 +1469,22 @@ static int installFetchedRefs(
     refsTableGetTags(&pRemoteRefs->refs, &nRemTag, &aRemTag);
     for(i=0; i<nRemTag && rc==SQLITE_OK; i++){
       int available = 0;
-      if( chunkStoreFindTag(&nextRefs, aRemTag[i].zName, 0)==SQLITE_OK ){
-        continue;
+      const TagRef *aLocalTag = 0;
+      int nLocalTag = 0;
+      int j;
+      refsTableGetTags(&nextRefs.refs, &nLocalTag, &aLocalTag);
+      for(j=0; j<nLocalTag; j++){
+        if( strcmp(aLocalTag[j].zName, aRemTag[i].zName)==0 ) break;
       }
+      if( j<nLocalTag
+       && scopedTagsMatch(&aLocalTag[j], 1, &aRemTag[i], 1) ) continue;
       rc = remoteTagTargetAvailable(
           pLocal, &aRemTag[i].commitHash, &available);
+      if( rc==SQLITE_OK && available ){
+        if( j<nLocalTag ){
+          rc = chunkStoreDeleteTag(&nextRefs, aRemTag[i].zName);
+        }
+      }
       if( rc==SQLITE_OK && available ){
         rc = chunkStoreAddTagFull(
             &nextRefs, aRemTag[i].zName, &aRemTag[i].commitHash,

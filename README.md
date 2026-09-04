@@ -680,7 +680,7 @@ uncached miss fails with a hash-named error instead of contacting `origin`.
 of the remote tip. If the current branch has diverged, it three-way merges
 like `dolt_merge`. A non-current branch that is not a fast-forward is
 refused. Fetch and pull also install remote tags whose commits have been
-fetched, without replacing same-named local tags.
+fetched, replacing same-named local tags when the remote value differs.
 
 ##### HTTP Remotes
 
