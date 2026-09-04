@@ -14109,6 +14109,36 @@ static void run_clustered_pk_rowid_metadata(void){
   removeDbFiles(dbpath);
 }
 
+static void run_nocase_nul_record_parse(void){
+  static const char *azColl[] = { "NOCASE", "BINARY" };
+  int has = 0;
+  int rc;
+  const u8 valid[] = { 0x02, 19, 'a', 0, 'b' };
+  const u8 extra[] = { 0x02, 19, 'a', 0, 'b', 0xff };
+  const u8 twoValid[] = { 0x03, 19, 9, 'a', 0, 'b' };
+  const u8 twoTrunc[] = { 0x03, 19, 1, 'a', 0, 'b' };
+
+  printf("=== NOCASE NUL Record Parse Test ===\n\n");
+
+  has = 0;
+  rc = doltliteRecordHasNocaseNulForTest(valid, (int)sizeof(valid), 1, azColl, &has);
+  check("nocase_nul_valid_rc", rc==SQLITE_OK);
+  check("nocase_nul_valid_has", has==1);
+
+  has = 0;
+  rc = doltliteRecordHasNocaseNulForTest(extra, (int)sizeof(extra), 1, azColl, &has);
+  check("nocase_nul_extra_tail_corrupt", rc==SQLITE_CORRUPT);
+
+  has = 0;
+  rc = doltliteRecordHasNocaseNulForTest(twoValid, (int)sizeof(twoValid), 2, azColl, &has);
+  check("nocase_nul_two_field_rc", rc==SQLITE_OK);
+  check("nocase_nul_two_field_has", has==1);
+
+  has = 0;
+  rc = doltliteRecordHasNocaseNulForTest(twoTrunc, (int)sizeof(twoTrunc), 2, azColl, &has);
+  check("nocase_nul_truncated_field_corrupt", rc==SQLITE_CORRUPT);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -14315,7 +14345,8 @@ static const RegressionCase aCases[] = {
   { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq },
   { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch },
   { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook },
-  { "clustered_pk_rowid_metadata", "Clustered PK Rowid Metadata Test", run_clustered_pk_rowid_metadata }
+  { "clustered_pk_rowid_metadata", "Clustered PK Rowid Metadata Test", run_clustered_pk_rowid_metadata },
+  { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse }
 };
 
 static int run_case_by_name(const char *zName){

@@ -860,6 +860,9 @@ int doltliteDeserializeConflictsForTest(const u8 *data, int nData);
 int doltliteDeserializeConstraintViolationsForTest(
   const u8 *data, int nData
 );
+int doltliteRecordHasNocaseNulForTest(
+  const u8 *pRec, int nRec, int nKeyCol, const char *const *azColl, int *pHas
+);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 int doltliteCreateAndStoreCommit(
   sqlite3 *db,

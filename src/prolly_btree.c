@@ -41,13 +41,22 @@ static int recordHasNocaseNul(
      && sqlite3StrICmp(azColl[iField], "NOCASE")==0
      && nField>0 && memchr(pRec+(int)iData, 0, (size_t)nField)!=0 ){
       *pHas = 1;
-      return SQLITE_OK;
     }
     iHdr += nVarint;
     iData += nField;
     iField++;
   }
   return iData==(u64)nRec ? SQLITE_OK : SQLITE_CORRUPT;
+}
+
+int doltliteRecordHasNocaseNulForTest(
+  const u8 *pRec,
+  int nRec,
+  int nKeyCol,
+  const char *const *azColl,
+  int *pHas
+){
+  return recordHasNocaseNul(pRec, nRec, nKeyCol, azColl, pHas);
 }
 
 int sqlite3BtreeProllyIndexHasNocaseNul(
