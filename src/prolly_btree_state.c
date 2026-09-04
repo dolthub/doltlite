@@ -511,7 +511,7 @@ void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
   memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
 }
 
-void btreeBumpExternalDataVersion(Btree *p){
+static void btreeBumpExternalDataVersion(Btree *p){
   assert( p!=0 && p->pBt!=0 );
   if( p->pBt->pPagerShim ){
     p->pBt->pPagerShim->iDataVersion++;

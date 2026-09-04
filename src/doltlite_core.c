@@ -859,15 +859,6 @@ int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
   return doltliteSaveWorkingSet(db);
 }
 
-int doltliteDetectPostMergeConstraintViolations(
-  sqlite3 *db,
-  const ProllyHash *pAncCatHash,
-  int *pnViolations
-){
-  return doltliteDetectConstraintViolationsFiltered(
-      db, pAncCatHash, 0, 0, 1, pnViolations);
-}
-
 int doltliteDetectConstraintViolationsFiltered(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,

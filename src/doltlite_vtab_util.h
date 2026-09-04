@@ -81,12 +81,6 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
   return SQLITE_OK;
 }
 
-static SQLITE_INLINE int doltliteVtabCommonCaptureRow(
-  DoltliteVtabCursorCommon *c, sqlite3 *db, const char *zTableName
-){
-  return doltliteVtabCommonCaptureRowSide(c, db, zTableName, 0);
-}
-
 static SQLITE_INLINE int doltliteVtabCommonDisconnect(
   sqlite3_vtab *pVtab
 ){

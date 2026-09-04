@@ -309,79 +309,91 @@ static int markPendingReplayIfNotMerging(sqlite3 *db){
   return doltliteSetSessionPendingReplayCommit(db, 1);
 }
 
-int doltliteReportConflicts(
+static int persistPendingAndError(
+  sqlite3 *db,
+  sqlite3_context *ctx,
+  int bRegisterConflicts,
+  const char *zMsg
+){
+  int rc;
+  if( bRegisterConflicts ){
+    rc = doltliteRegisterConflictTables(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = doltlitePersistOrSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = markPendingReplayIfNotMerging(db);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_result_error(ctx, zMsg, -1);
+  return SQLITE_OK;
+}
+
+static int cmdReportConflicts(
   sqlite3 *db,
   sqlite3_context *ctx,
   int nConflicts,
   const char *zOp
 ){
   char msg[256];
-  int rc;
-  rc = doltliteRegisterConflictTables(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltlitePersistOrSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = markPendingReplayIfNotMerging(db);
-  if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
     zOp, nConflicts);
-  sqlite3_result_error(ctx, msg, -1);
-  return SQLITE_OK;
+  return persistPendingAndError(db, ctx, 1, msg);
 }
 
-int doltliteReportConstraintViolations(
+static int cmdReportConstraintViolations(
   sqlite3 *db,
   sqlite3_context *ctx,
   const char *zOp
 ){
   char msg[256];
-  int rc;
-  rc = doltlitePersistOrSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = markPendingReplayIfNotMerging(db);
-  if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s resulted in constraint violations. Resolve the rows in "
     "dolt_constraint_violations and then commit with dolt_commit.",
     zOp);
-  sqlite3_result_error(ctx, msg, -1);
-  return SQLITE_OK;
+  return persistPendingAndError(db, ctx, 0, msg);
 }
 
-int doltliteReportConflictsAndConstraintViolations(
+static int cmdReportConflictsAndConstraintViolations(
   sqlite3 *db,
   sqlite3_context *ctx,
   int nConflicts,
   const char *zOp
 ){
   char msg[384];
-  int rc;
-  rc = doltliteRegisterConflictTables(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltlitePersistOrSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = markPendingReplayIfNotMerging(db);
-  if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s) and constraint violations. Resolve "
     "dolt_conflicts and dolt_constraint_violations, then commit with "
     "dolt_commit.",
     zOp ? zOp : "Operation", nConflicts);
-  sqlite3_result_error(ctx, msg, -1);
+  return persistPendingAndError(db, ctx, 1, msg);
+}
+
+static int cmdFinishPlainAfterReport(
+  sqlite3 *db,
+  sqlite3_context *ctx,
+  DoltliteTxnState *pSaved,
+  int reportRc,
+  int bSealOnPlain
+){
+  if( reportRc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx,
+        doltliteRestoreTxnStateOnFailure(db, pSaved, reportRc));
+    return reportRc;
+  }
+  if( bSealOnPlain ){
+    int rc = doltliteVcSealActiveSavepoints(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx,
+          doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+      return rc;
+    }
+  }
+  doltliteTxnStateClear(pSaved);
   return SQLITE_OK;
 }
 
-void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
-  sqlite3_result_error(ctx,
-    "cannot merge: conflicts detected, autocommit transaction rolled back. "
-    "Run the merge inside BEGIN/COMMIT to inspect dolt_conflicts and "
-    "dolt_schema_conflicts, resolve with dolt_conflicts_resolve(), then commit "
-    "with dolt_commit(). Conflicts are never committed as conflicts",
-    -1);
-}
-
-int doltliteRollbackAutocommitConflict(
+static int cmdRollbackAutocommitConflict(
   sqlite3 *db,
   sqlite3_context *ctx,
   DoltliteTxnState *pSaved
@@ -410,7 +422,12 @@ int doltliteRollbackAutocommitConflict(
     rc = doltliteVcSealTopLevelSavepointTxn(db);
   }
   if( rc==SQLITE_OK ){
-    doltliteReportAutocommitConflictRollback(ctx);
+    sqlite3_result_error(ctx,
+      "cannot merge: conflicts detected, autocommit transaction rolled back. "
+      "Run the merge inside BEGIN/COMMIT to inspect dolt_conflicts and "
+      "dolt_schema_conflicts, resolve with dolt_conflicts_resolve(), then commit "
+      "with dolt_commit(). Conflicts are never committed as conflicts",
+      -1);
   }
   return rc;
 }
@@ -471,26 +488,12 @@ int doltliteCmdFinishWithConflicts(
   int rc;
   switch( doltliteVcTxnMode(db) ){
   case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
-    rc = doltliteRollbackAutocommitConflict(db, ctx, pSaved);
+    rc = cmdRollbackAutocommitConflict(db, ctx, pSaved);
     if( rc!=SQLITE_OK ) sqlite3_result_error_code(ctx, rc);
     return rc==SQLITE_OK ? SQLITE_OK : rc;
   case DOLTLITE_VC_TXN_PLAIN:
-    rc = doltliteReportConflicts(db, ctx, nConflicts, zOp);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx,
-          doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
-      return rc;
-    }
-    if( bSealOnPlain ){
-      rc = doltliteVcSealActiveSavepoints(db);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(ctx,
-            doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
-        return rc;
-      }
-    }
-    doltliteTxnStateClear(pSaved);
-    return SQLITE_OK;
+    return cmdFinishPlainAfterReport(db, ctx, pSaved,
+        cmdReportConflicts(db, ctx, nConflicts, zOp), bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
     rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
     if( rc!=SQLITE_OK ){
@@ -522,22 +525,8 @@ int doltliteCmdFinishWithConstraintViolations(
   case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
     return cmdRollbackAutocommitConstraintViolations(db, ctx, pSaved);
   case DOLTLITE_VC_TXN_PLAIN:
-    rc = doltliteReportConstraintViolations(db, ctx, zOp);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx,
-          doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
-      return rc;
-    }
-    if( bSealOnPlain ){
-      rc = doltliteVcSealActiveSavepoints(db);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(ctx,
-            doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
-        return rc;
-      }
-    }
-    doltliteTxnStateClear(pSaved);
-    return SQLITE_OK;
+    return cmdFinishPlainAfterReport(db, ctx, pSaved,
+        cmdReportConstraintViolations(db, ctx, zOp), bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
     rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
     if( rc!=SQLITE_OK ){
@@ -601,23 +590,10 @@ int doltliteCmdFinishWithConflictsAndConstraintViolations(
     return cmdRollbackAutocommitConflictsAndCVs(
         db, ctx, pSaved, nConflicts, zOp);
   case DOLTLITE_VC_TXN_PLAIN:
-    rc = doltliteReportConflictsAndConstraintViolations(
-        db, ctx, nConflicts, zOp);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx,
-          doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
-      return rc;
-    }
-    if( bSealOnPlain ){
-      rc = doltliteVcSealActiveSavepoints(db);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(ctx,
-            doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
-        return rc;
-      }
-    }
-    doltliteTxnStateClear(pSaved);
-    return SQLITE_OK;
+    return cmdFinishPlainAfterReport(db, ctx, pSaved,
+        cmdReportConflictsAndConstraintViolations(
+            db, ctx, nConflicts, zOp),
+        bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
     rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
     if( rc!=SQLITE_OK ){

@@ -37,7 +37,7 @@ int mutMapShouldDrain(BtCursor *pCur){
       && prollyMutMapCount(pCur->pMutMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
 }
 
-i64 prollyBtreeSyntheticPageCount(Btree *p){
+static i64 prollyBtreeSyntheticPageCount(Btree *p){
   ChunkStore *cs;
   i64 n;
   if( !p || !p->pBt ) return 0;
