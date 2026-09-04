@@ -997,6 +997,33 @@ SELECT dolt_reset('t');
 SELECT dolt_commit('-m', 'nothing is staged');
 "
 
+oracle "reset_hard_keeps_untracked_dolt_ignore" "
+$SEED
+INSERT INTO dolt_ignore VALUES ('scratch_%', 1);
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+SELECT dolt_reset('--hard');
+"
+
+oracle_same_session "reset_hard_keeps_untracked_dolt_ignore_rows" "
+$SEED
+INSERT INTO dolt_ignore VALUES ('scratch_%', 1);
+SELECT dolt_reset('--hard');
+" "SELECT 'Q|' || count(*) || '|' || coalesce(group_concat(pattern),'none') FROM dolt_ignore;" \
+"$SEED
+INSERT INTO dolt_ignore VALUES ('scratch_%', 1);
+SELECT dolt_reset('--hard');
+" "SELECT concat('Q|', count(*), '|', coalesce(group_concat(pattern),'none')) FROM dolt_ignore;"
+
+oracle "reset_hard_reverts_tracked_dolt_ignore" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+INSERT INTO dolt_ignore VALUES ('keep_%', 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO dolt_ignore VALUES ('extra_%', 0);
+SELECT dolt_reset('--hard');
+"
+
 oracle "reset_end_options_dash_table" "
 CREATE TABLE \`--hard\`(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO \`--hard\` VALUES (1, 10);
