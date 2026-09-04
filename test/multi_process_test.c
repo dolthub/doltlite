@@ -256,6 +256,80 @@ static void test_reader_close_during_write_upgrade(void){
   remove(path);
 }
 
+static void test_add_during_transaction(void){
+  const char *path = "/tmp/test_mp_add_txn.db";
+  int ready[2];
+  int release[2];
+  pid_t pid;
+  int status;
+  char buf;
+
+  printf("--- Test 2c: dolt_add during a transaction ---\n");
+  setup_db(path);
+  mpPipe(ready);
+  mpPipe(release);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    close(ready[0]);
+    close(release[1]);
+    if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(2);
+    if( execSql(db, "BEGIN")!=SQLITE_OK ) _exit(3);
+    if( execSql(db, "INSERT INTO t VALUES(2, 'uncommitted')")!=SQLITE_OK ){
+      _exit(4);
+    }
+    if( execSql(db, "SELECT dolt_add('t')")!=SQLITE_OK ) _exit(5);
+    mpWrite(ready[1], "r");
+    mpRead(release[0], &buf);
+    _exit(0);
+  }
+
+  close(ready[1]);
+  close(release[0]);
+  mpRead(ready[0], &buf);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("mp_add_peer_rows_committed_only",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
+    check("mp_add_peer_status_empty",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+    sqlite3_close(db);
+  }
+
+  mpWrite(release[1], "x");
+  close(ready[0]);
+  close(release[1]);
+  waitpid(pid, &status, 0);
+  check("mp_add_writer_exited_ok",
+    WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("mp_add_crash_rows_committed_only",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
+    check("mp_add_crash_status_empty",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+    check("mp_add_working_update",
+      execSql(db, "UPDATE t SET v='working' WHERE id=1")==SQLITE_OK);
+    check("mp_add_first_op_begin", execSql(db, "BEGIN")==SQLITE_OK);
+    check("mp_add_first_op_stage",
+      execSql(db, "SELECT dolt_add('t')")==SQLITE_OK);
+    check("mp_add_first_op_rollback", execSql(db, "ROLLBACK")==SQLITE_OK);
+    check("mp_add_first_op_rollback_unstaged",
+      strcmp(queryScalarText(db,
+        "SELECT staged FROM dolt_status WHERE table_name='t'"), "0")==0);
+    check("mp_add_first_op_rollback_keeps_working",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "working")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
 static void test_sequential_processes(void){
   const char *path = "/tmp/test_mp_seq.db";
   pid_t pid;
@@ -703,6 +777,7 @@ int main(){
   test_two_writers();
   test_reader_during_write();
   test_reader_close_during_write_upgrade();
+  test_add_during_transaction();
   test_sequential_processes();
   test_gc_during_read();
   test_gc_blocked_by_writer();

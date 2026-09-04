@@ -967,6 +967,12 @@ static int doltliteStageArgsAndPersist(
   ProllyHash savedStaged;
   int rc;
 
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+
   doltliteGetSessionStaged(db, &savedStaged);
 
   rc = doltlitePrepareCatalogForPersistence(db);
@@ -989,7 +995,7 @@ static int doltliteStageArgsAndPersist(
   }
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltlitePersistWorkingSet(db);
+  rc = doltlitePersistOrSaveWorkingSet(db);
   if( rc!=SQLITE_OK ){
     int restoreRc = doltliteSetSessionStaged(db, &savedStaged);
     sqlite3_result_error_code(context, rc);

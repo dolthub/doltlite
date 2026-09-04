@@ -895,10 +895,12 @@ For a DoltLite-format main database, the concurrency contract is:
   write transaction begins, it holds the graph lock and pins its snapshot
   until commit or rollback.
 - **Readers stay live.** A reader can see already-committed data while another
-  process holds an uncommitted write. A peer that only opens, reads, and closes
-  the database does not prevent a live read transaction from upgrading to a
-  writer. An open iterator completes safely while another process runs GC.
-  Readers do not create SQLite `-wal`/`-shm` sidecars.
+  process holds an uncommitted write. Running `dolt_add` inside that write
+  transaction does not publish its rows or staged state, and rolling the
+  transaction back restores its prior staging state. A peer that only opens,
+  reads, and closes the database does not prevent a live read transaction from
+  upgrading to a writer. An open iterator completes safely while another
+  process runs GC. Readers do not create SQLite `-wal`/`-shm` sidecars.
 - **Multi-process commits are CAS-safe.** A process that races `dolt_commit`
   against a peer either wins a clean tip advance or loses with a busy /
   conflict outcome. The loser's stale tip must not clobber the winner's
