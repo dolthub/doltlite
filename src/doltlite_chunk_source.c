@@ -666,6 +666,13 @@ void chunkStoreSourceClose(ChunkStore *cs){
   sqlite3_free(p);
 }
 
+void chunkStoreSourceCloseWriter(ChunkStore *cs){
+  DoltliteChunkSourceState *p = cs->pChunkSource;
+  if( !p || !p->writerOpen ) return;
+  chunkStoreClose(&p->writer);
+  p->writerOpen = 0;
+}
+
 static int csSourceCreate(
   ChunkStore *cs,
   sqlite3 *db,
@@ -1082,6 +1089,9 @@ void chunkStoreSourceClose(ChunkStore *cs){
   cs->pChunkSource = 0;
   sqlite3_free(p->zErr);
   sqlite3_free(p);
+}
+void chunkStoreSourceCloseWriter(ChunkStore *cs){
+  UNUSED_PARAMETER(cs);
 }
 char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc){
   DoltliteChunkSourceState *p = cs->pChunkSource;

@@ -311,6 +311,7 @@ int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,
                                  int nHash);
 int chunkStoreSourceSet(ChunkStore *cs, sqlite3 *db,
                         doltlite_chunk_source *pSource, int *pChanged);
+void chunkStoreSourceCloseWriter(ChunkStore *cs);
 void chunkStoreSourceClose(ChunkStore *cs);
 char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc);
 

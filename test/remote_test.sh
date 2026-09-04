@@ -868,7 +868,12 @@ lazy_gc_uri="file:$TMPDIR/lazy_gc.db?lazy_origin=1"
   "SELECT dolt_clone('--lazy','$R/lazy_origin.db');" > /dev/null
 result=$("$DB" "$lazy_gc_uri" "SELECT dolt_gc();" 2>&1)
 lazy_gc_rc=$?
-check "gc faults in uncached lazy chunks" "0" "$lazy_gc_rc"
+if [ "$lazy_gc_rc" -eq 0 ]; then
+  lazy_gc_status=0
+else
+  lazy_gc_status="$lazy_gc_rc: $result"
+fi
+check "gc faults in uncached lazy chunks" "0" "$lazy_gc_status"
 result=$("$DB" "$lazy_gc_uri" \
   "SELECT count(*) || '|' || sum(id) FROM lazy_rows;" 2>&1)
 check "lazy data remains intact after gc" "801|321201" "$result"

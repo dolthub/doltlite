@@ -1008,6 +1008,7 @@ static int gcRun(
     return SQLITE_BUSY;
   }
 
+  chunkStoreSourceCloseWriter(cs);
   rc = gcLockAndRefresh(db, cs, bBusyRetry);
   if( rc!=SQLITE_OK ){
     *pzPhase = "failed to acquire lock for gc";
