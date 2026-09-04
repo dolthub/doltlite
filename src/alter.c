@@ -499,7 +499,7 @@ void sqlite3AlterFinishAddColumn(Parse *pParse, Token *pColDef){
     }
 
 #ifdef DOLTLITE_PROLLY
-    if( pDflt && (pCol->colFlags & COLFLAG_GENERATED)==0 ){
+    if( (pCol->colFlags & COLFLAG_GENERATED)==0 ){
       FuncDef *pFunc = sqlite3FindFunction(
           db, "doltlite_internal_materialize_default_column", 3, ENC(db), 0);
       if( pFunc ){

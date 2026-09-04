@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_btree_int.h"
+#include "prolly_diff.h"
 
 static int keyInfoHasLossyCollation(const KeyInfo *pKeyInfo){
   int i;
@@ -807,6 +808,36 @@ int prollyBtCursorInsert(
     if( nData<0 || pPayload->nZero<0 || nTotal64 > 0x7fffffff ){
       return SQLITE_TOOBIG;
     }
+    if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
+     && pPayload->nZero==0 && pCur->eState==CURSOR_VALID
+     && !pCur->deferredMergedSeek ){
+      const u8 *pOld;
+      int nOld;
+      int equal;
+      int sameKey = 0;
+      if( pCur->mmActive
+       && (pCur->mergeSrc==MERGE_SRC_MUT
+           || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+        ProllyMutMapEntry *pEntry;
+        rc = currentMutMapEntry(pCur, &pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        sameKey = prollyMutMapEntryIntKey(pEntry)==pPayload->nKey;
+      }else if( prollyCursorIsValid(&pCur->pCur) ){
+        sameKey = cursorCurrentTreeIntKey(pCur)==pPayload->nKey;
+      }else if( pCur->curFlags & BTCF_ValidNKey ){
+        sameKey = pCur->cachedIntKey==pPayload->nKey;
+      }
+      if( sameKey ){
+        rc = getCursorPayload(pCur, &pOld, &nOld);
+        if( rc!=SQLITE_OK ) return rc;
+        rc = prollyValuesEqual(pOld, nOld, pData, nData, &equal);
+        if( rc!=SQLITE_OK ) return rc;
+        if( equal ){
+          pData = pOld;
+          nData = nOld;
+        }
+      }
+    }
     pInsertedPayload = pData;
     nInsertedPayload = nData;
 
@@ -848,6 +879,8 @@ int prollyBtCursorInsert(
     int splitKey = 0;
     int storePayload = 0;
     int isIndex = 0;
+    const u8 *pStoredPayload = (const u8*)pPayload->pKey;
+    int nStoredPayload = (int)pPayload->nKey;
     if( pCur->pKeyInfo ){
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
       int rcRoot = SQLITE_OK;
@@ -888,6 +921,42 @@ int prollyBtCursorInsert(
       pSortKey = pCur->pSeekSortKey;
     }
     if( rc==SQLITE_OK ){
+      const u8 *pCurrentKey = 0;
+      int nCurrentKey = 0;
+      if( pCur->eState==CURSOR_VALID ){
+        if( pCur->mmActive
+         && (pCur->mergeSrc==MERGE_SRC_MUT
+             || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+          ProllyMutMapEntry *pEntry;
+          rc = currentMutMapEntry(pCur, &pEntry);
+          if( rc==SQLITE_OK ){
+            pCurrentKey = pEntry->pKey;
+            nCurrentKey = pEntry->nKey;
+          }
+        }else if( prollyCursorIsValid(&pCur->pCur) ){
+          prollyCursorKey(&pCur->pCur, &pCurrentKey, &nCurrentKey);
+        }
+      }
+      if( rc==SQLITE_OK
+       && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
+       && storePayload && pCurrentKey
+       && nCurrentKey==nSortKey
+       && memcmp(pCurrentKey, pSortKey, nSortKey)==0 ){
+        const u8 *pOld;
+        int nOld;
+        int equal;
+        rc = getCursorPayload(pCur, &pOld, &nOld);
+        if( rc==SQLITE_OK ){
+          rc = prollyValuesEqual(
+              pOld, nOld, pStoredPayload, nStoredPayload, &equal);
+        }
+        if( rc==SQLITE_OK && equal ){
+          pStoredPayload = pOld;
+          nStoredPayload = nOld;
+        }
+      }
+    }
+    if( rc==SQLITE_OK ){
       if( !(pCur->curFlags & BTCF_Incrblob) ){
         prollyInvalidateIncrblobCursorsByKey(
             pCur->pBt, pCur->pgnoRoot, pSortKey, nSortKey);
@@ -899,12 +968,12 @@ int prollyBtCursorInsert(
        && memcmp(pCur->aSeekSortKey, pSortKey, nSortKey)==0 ){
         rc = prollyMutMapInsertAbsent(
             pCur->pMutMap, pSortKey, nSortKey, 0,
-            storePayload ? (const u8*)pPayload->pKey : NULL,
-            storePayload ? (int)pPayload->nKey : 0);
+            storePayload ? pStoredPayload : NULL,
+            storePayload ? nStoredPayload : 0);
       }else if( storePayload ){
         rc = prollyMutMapInsert(pCur->pMutMap,
                                  pSortKey, nSortKey, 0,
-                                 (const u8*)pPayload->pKey, (int)pPayload->nKey);
+                                 pStoredPayload, nStoredPayload);
       }else{
         rc = prollyMutMapInsert(pCur->pMutMap,
                                  pSortKey, nSortKey, 0,

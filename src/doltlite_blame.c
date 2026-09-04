@@ -5,6 +5,7 @@
 #include "prolly_hash.h"
 #include "prolly_cursor.h"
 #include "prolly_cache.h"
+#include "prolly_diff.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
@@ -415,15 +416,6 @@ static int blameCursorCompareRowKey(
   }
 }
 
-static int blameRowValueEqual(const u8 *pA, int nA, const u8 *pB, int nB){
-  int isA = (pA && nA>0);
-  int isB = (pB && nB>0);
-  if( !isA && !isB ) return 1;
-  if( !isA || !isB ) return 0;
-  if( nA != nB ) return 0;
-  return memcmp(pA, pB, nA)==0;
-}
-
 static int blameAssign(
   BlameRow *pRow,
   const ProllyHash *pCommitHash,
@@ -503,6 +495,7 @@ static int blameCompareAgainstRef(
     u8 *pRefRebuilt = 0;
     const u8 *pRefEff;
     int nRefEff;
+    int equal;
     if( r->blamed ) continue;
 
     if( haveRef ){
@@ -540,7 +533,13 @@ static int blameCompareAgainstRef(
       nRefEff = nR;
     }
 
-    if( !blameRowValueEqual(r->pCurVal, r->nCurVal, pRefEff, nRefEff) ){
+    rc = prollyValuesEqual(r->pCurVal, r->nCurVal,
+                           pRefEff, nRefEff, &equal);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pRefRebuilt);
+      goto blame_compare_done;
+    }
+    if( !equal ){
       rc = blameAssign(r, pCommitHash, pCommit);
       if( rc!=SQLITE_OK ){ sqlite3_free(pRefRebuilt); goto blame_compare_done; }
       pCur->nUnresolved--;
