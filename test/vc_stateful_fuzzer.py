@@ -245,6 +245,193 @@ def check_invariants(doltlite, db_path, branches, tags, model, rng):
             raise AssertionError("integrity_check on %s returned %r" % (branch, out))
     if rng.randrange(4) == 0:
         assert_refs(doltlite, db_path, branches, tags)
+    assert_related_consistent(doltlite, db_path, branch)
+    if rng.randrange(4) == 0:
+        assert_shadow_tables_consistent(doltlite, db_path, branch)
+    if rng.randrange(8) == 0:
+        assert_reindex_preserves_answers(doltlite, db_path, branch)
+
+
+def branch_base(branch):
+    return (0 if branch == "main" else int(branch[1:])) * 10000
+
+
+def mutate_related(doltlite, db_path, branch, rng, step):
+    """Write the foreign key, index and shadow-table shapes on one branch."""
+    base = branch_base(branch)
+    grp = base + rng.randrange(4)
+    key = base + 100 + rng.randrange(60)
+    action = rng.choice(
+        ("insert_null", "insert_parent", "flip_to_parent", "flip_to_null",
+         "delete_child", "duplicate", "doc_insert", "doc_delete")
+    )
+    parent = rng.randrange(1, SEED_PARENTS + 1)
+    text = "row %s %05d doc" % (branch, step)
+
+    if action == "insert_null":
+        sql = (
+            "INSERT INTO child(id, parent_id, grp, name, body) "
+            "VALUES(%d, NULL, %d, 'n%d', %s) "
+            "ON CONFLICT(id) DO UPDATE SET parent_id=NULL, grp=excluded.grp, "
+            "name=excluded.name, body=excluded.body;"
+            % (key, grp, key, sql_quote(text))
+        )
+    elif action == "insert_parent":
+        sql = (
+            "INSERT INTO child(id, parent_id, grp, name, body) "
+            "VALUES(%d, %d, %d, 'n%d', %s) "
+            "ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, "
+            "grp=excluded.grp, name=excluded.name, body=excluded.body;"
+            % (key, parent, grp, key, sql_quote(text))
+        )
+    elif action == "flip_to_parent":
+        sql = "UPDATE child SET parent_id=%d WHERE id=%d;" % (parent, key)
+    elif action == "flip_to_null":
+        sql = "UPDATE child SET parent_id=NULL WHERE id=%d;" % key
+    elif action == "delete_child":
+        sql = "DELETE FROM child WHERE id=%d;" % key
+    elif action == "doc_insert":
+        # fts5 has no UPSERT; replace the row instead.
+        rowid = base + 200 + rng.randrange(40)
+        sql = (
+            "DELETE FROM docs WHERE rowid=%d;\n"
+            "INSERT INTO docs(rowid, body) VALUES(%d, %s);"
+            % (rowid, rowid, sql_quote(text))
+        )
+    elif action == "doc_delete":
+        sql = "DELETE FROM docs WHERE rowid=%d;" % (base + 200 + rng.randrange(40))
+    else:
+        # A second row with the same partial-index key must still be refused,
+        # whatever merges and rebases did to the index in between.
+        # One row per (branch, grp) owns the duplicate probe name, so seeding
+        # it is idempotent however many times this action runs.
+        seed_id = base + 900 + (grp - base)
+        run_sql(
+            doltlite,
+            db_for_branch(db_path, branch),
+            "INSERT INTO child(id, parent_id, grp, name, body) "
+            "VALUES(%d, NULL, %d, 'dup%d', 'seed') "
+            "ON CONFLICT(id) DO UPDATE SET parent_id=NULL, grp=excluded.grp, "
+            "name=excluded.name;" % (seed_id, grp, grp),
+            "dup_seed_%s" % branch,
+        )
+        out = run_sql(
+            doltlite,
+            db_for_branch(db_path, branch),
+            "INSERT INTO child(id, parent_id, grp, name, body) "
+            "VALUES(%d, NULL, %d, 'dup%d', 'clash');" % (seed_id + 50, grp, grp),
+            "dup_clash_%s" % branch,
+            allowed_errors=("UNIQUE constraint failed",),
+        )
+        if out is not None:
+            raise AssertionError(
+                "duplicate partial-index key accepted on %s (grp=%d)" % (branch, grp)
+            )
+        return
+
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        sql,
+        "mutate_related_%s" % branch,
+        allowed_errors=("UNIQUE constraint failed",),
+    )
+
+
+def assert_related_consistent(doltlite, db_path, branch):
+    """Indexes must answer what a scan answers, and no constraint may fire.
+
+    A row the partial predicate excludes has no business in the index, and a
+    stale entry only shows up when something walks the whole index, which is
+    what the foreign-key and constraint checks do.
+    """
+    pairs = (
+        ("SELECT coalesce(group_concat(id),'') FROM "
+         "(SELECT id FROM child WHERE parent_id IS NOT NULL ORDER BY id);",
+         "SELECT coalesce(group_concat(id),'') FROM "
+         "(SELECT id FROM child NOT INDEXED WHERE parent_id IS NOT NULL ORDER BY id);"),
+        ("SELECT coalesce(group_concat(id),'') FROM "
+         "(SELECT id FROM child WHERE parent_id IS NULL ORDER BY id);",
+         "SELECT coalesce(group_concat(id),'') FROM "
+         "(SELECT id FROM child NOT INDEXED WHERE parent_id IS NULL ORDER BY id);"),
+        ("SELECT count(*) FROM child WHERE grp >= 0;",
+         "SELECT count(*) FROM child NOT INDEXED WHERE grp >= 0;"),
+    )
+    for indexed_sql, scan_sql in pairs:
+        via_index = query_scalar(doltlite, db_path, branch, indexed_sql, "idx_read")
+        via_scan = query_scalar(doltlite, db_path, branch, scan_sql, "scan_read")
+        if via_index != via_scan:
+            raise AssertionError(
+                "index and scan disagree on %s\nsql=%s\nindex=%r scan=%r"
+                % (branch, indexed_sql, via_index, via_scan)
+            )
+
+    fk = query_scalar(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT count(*) FROM pragma_foreign_key_check;",
+        "foreign_key_check",
+    )
+    if fk != "0":
+        raise AssertionError("foreign_key_check reported %s rows on %s" % (fk, branch))
+
+    violations = query_scalar(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT count(*) FROM dolt_constraint_violations;",
+        "constraint_violations",
+    )
+    if violations != "0":
+        raise AssertionError(
+            "%s constraint violations recorded on %s" % (violations, branch)
+        )
+
+
+def assert_shadow_tables_consistent(doltlite, db_path, branch):
+    """fts5 keeps its content, index and docsize shadow tables in step; its own
+    integrity command is the check for all three at once."""
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "INSERT INTO docs(docs) VALUES('integrity-check');",
+        "fts_integrity_%s" % branch,
+    )
+    matched = query_scalar(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT count(*) FROM docs WHERE docs MATCH 'doc';",
+        "fts_match",
+    )
+    stored = query_scalar(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT count(*) FROM docs WHERE body LIKE '%doc%';",
+        "fts_scan",
+    )
+    if matched != stored:
+        raise AssertionError(
+            "fts5 index and content disagree on %s: match=%s content=%s"
+            % (branch, matched, stored)
+        )
+
+
+def assert_reindex_preserves_answers(doltlite, db_path, branch):
+    """Rebuilding every index must not change a single answer."""
+    probe = (
+        "SELECT coalesce(group_concat(id),'') FROM "
+        "(SELECT id FROM child WHERE parent_id IS NOT NULL ORDER BY id);"
+    )
+    before = query_scalar(doltlite, db_path, branch, probe, "reindex_before")
+    run_sql(doltlite, db_for_branch(db_path, branch), "REINDEX;", "reindex_%s" % branch)
+    after = query_scalar(doltlite, db_path, branch, probe, "reindex_after")
+    if before != after:
+        raise AssertionError(
+            "REINDEX changed answers on %s\nbefore=%r after=%r" % (branch, before, after)
+        )
 
 
 def mutate_branch(doltlite, db_path, branch, model, rng, step):
@@ -508,7 +695,10 @@ def mutate_schema(doltlite, db_path, branch, rng, step):
     indexes = [line.split("|", 2)[1] for line in schema if line.startswith("index|aux_idx_")]
     actions = ["create_table"]
     if tables:
-        actions.extend(("add_column", "rename_table", "drop_table", "create_index"))
+        actions.extend((
+            "add_column", "rename_table", "drop_table",
+            "create_index", "create_partial_index",
+        ))
     if indexes:
         actions.append("drop_index")
     action = rng.choice(actions)
@@ -523,6 +713,11 @@ def mutate_schema(doltlite, db_path, branch, rng, step):
         sql = "DROP TABLE %s;" % rng.choice(tables)
     elif action == "create_index":
         sql = "CREATE INDEX aux_idx_%d ON %s(payload);" % (step, rng.choice(tables))
+    elif action == "create_partial_index":
+        sql = (
+            "CREATE INDEX aux_idx_%d ON %s(payload) WHERE payload IS NOT NULL;"
+            % (step, rng.choice(tables))
+        )
     else:
         sql = "DROP INDEX %s;" % rng.choice(indexes)
     run_sql(doltlite, db_for_branch(db_path, branch), sql, "ddl_%s_%s" % (action, branch))
@@ -767,6 +962,33 @@ def reset_remote_config(doltlite, db_path, remote_path):
     )
 
 
+# kv is modelled row by row. The related tables below are not: they carry the
+# shapes whose index maintenance runs outside the VDBE (a foreign key, a plain
+# index, two partial indexes and an fts5 virtual table's shadow tables) and are
+# checked by self-consistency instead. Every branch writes a disjoint id and
+# grp range and only ever points parent_id at a parent seeded in the first
+# commit, so no version-control operation can produce a legitimate constraint
+# violation: any violation the engine reports is a bug.
+SEED_PARENTS = 8
+
+RELATED_SCHEMA = (
+    "CREATE TABLE parent(id INTEGER PRIMARY KEY, label TEXT);\n"
+    "CREATE TABLE child(\n"
+    "  id INTEGER PRIMARY KEY,\n"
+    "  parent_id INTEGER REFERENCES parent(id),\n"
+    "  grp INTEGER NOT NULL,\n"
+    "  name TEXT NOT NULL,\n"
+    "  body TEXT\n"
+    ");\n"
+    "CREATE INDEX child_grp ON child(grp);\n"
+    "CREATE UNIQUE INDEX child_with_parent ON child(grp, parent_id, name)\n"
+    "  WHERE parent_id IS NOT NULL;\n"
+    "CREATE UNIQUE INDEX child_without_parent ON child(grp, name)\n"
+    "  WHERE parent_id IS NULL;\n"
+    "CREATE VIRTUAL TABLE docs USING fts5(body);\n"
+)
+
+
 def setup_repo(doltlite, db_path, remote_path):
     run_sql(
         doltlite,
@@ -774,7 +996,10 @@ def setup_repo(doltlite, db_path, remote_path):
         (
             "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);\n"
             "INSERT INTO kv VALUES(0, 'base', 0);\n"
-            "SELECT dolt_commit('-A','-m','init');\n"
+            + RELATED_SCHEMA
+            + "INSERT INTO parent SELECT value, 'p' || value "
+              "FROM generate_series(1, %d);\n" % SEED_PARENTS
+            + "SELECT dolt_commit('-A','-m','init');\n"
         ),
         "setup",
     )
@@ -790,6 +1015,7 @@ def setup_repo(doltlite, db_path, remote_path):
 
 OPERATIONS = (
     ["mutate"] * 4
+    + ["mutate_related"] * 3
     + ["ddl"] * 3
     + [
         "add",
@@ -819,6 +1045,7 @@ OPERATIONS = (
         "pull",
         "remote_config",
         "verify_constraints",
+        "reindex",
         "gc",
     ]
 )
@@ -861,6 +1088,10 @@ def main():
             branch = rng.choice(branches)
             if op == "mutate":
                 mutate_branch(doltlite, db_path, branch, model, rng, step)
+            elif op == "mutate_related":
+                mutate_related(doltlite, db_path, branch, rng, step)
+            elif op == "reindex":
+                assert_reindex_preserves_answers(doltlite, db_path, branch)
             elif op == "ddl":
                 mutate_schema(doltlite, db_path, branch, rng, step)
             elif op == "add":
