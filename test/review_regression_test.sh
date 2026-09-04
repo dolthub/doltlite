@@ -1373,6 +1373,41 @@ run_test_match "without_rowid_query_plan" \
   "USING PRIMARY KEY" "$DB"
 rm -f "$DB"
 
+echo "--- Guard 26: NOCASE secondary-index embedded NUL parity (#2614) ---"
+
+DB=/tmp/test_rg_nocase_nul_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+CREATE INDEX ts ON t(s);
+INSERT INTO t(s) VALUES
+  ('a'||char(0)||'b'),('a'||char(0)||'c'),('A'||char(0)||'B'),
+  ('a'||char(0)||'bb'),('a'||char(0)),('a');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "nocase_nul_equality" \
+  "SELECT group_concat(id) FROM (SELECT id FROM t WHERE s='a'||char(0)||'c' ORDER BY id);" \
+  "1,2,3" "$DB"
+run_test "nocase_nul_grouping" \
+  "SELECT group_concat(hex(s)||':'||n,',') FROM (SELECT s,count(*) n FROM t GROUP BY s ORDER BY s);" \
+  "61:1,6100:1,610062:3,61006262:1" "$DB"
+run_test "nocase_nul_distinct" \
+  "SELECT count(DISTINCT s) FROM t;" \
+  "4" "$DB"
+run_test "nocase_nul_order" \
+  "SELECT group_concat(hex(s),',') FROM (SELECT s FROM t ORDER BY s,id);" \
+  "61,6100,610062,610063,410042,61006262" "$DB"
+run_test "nocase_nul_forced_range" \
+  "SELECT group_concat(id) FROM (SELECT id FROM t INDEXED BY ts WHERE s>='a'||char(0)||'b' ORDER BY id);" \
+  "1,2,3,4" "$DB"
+run_test "nocase_nul_join" \
+  "CREATE TABLE q(s TEXT COLLATE NOCASE); INSERT INTO q VALUES('a'||char(0)||'c'); SELECT group_concat(id) FROM (SELECT t.id FROM t JOIN q ON t.s=q.s ORDER BY t.id);" \
+  "1,2,3" "$DB"
+run_test "nocase_nul_after_analyze" \
+  "ANALYZE; SELECT group_concat(id) FROM (SELECT id FROM t WHERE s='a'||char(0)||'c' ORDER BY id);" \
+  "1,2,3" "$DB"
+run_test "nocase_nul_unique" \
+  "CREATE TABLE u(s TEXT COLLATE NOCASE UNIQUE); INSERT OR IGNORE INTO u VALUES('x'||char(0)||'b'),('x'||char(0)||'c'); SELECT count(*) FROM u;" \
+  "1" "$DB"
+rm -f "$DB"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

@@ -22,6 +22,29 @@ static int keyInfoHasUnsupportedCollation(
   }
   return 0;
 }
+
+static int unpackedRecordHasNocaseNul(
+  const KeyInfo *pKeyInfo,
+  const UnpackedRecord *pIdxKey
+){
+  int i;
+  int nField;
+  if( !pKeyInfo || !pIdxKey ) return 0;
+  nField = pIdxKey->nField < pKeyInfo->nAllField
+    ? pIdxKey->nField : pKeyInfo->nAllField;
+  for(i=0; i<nField; i++){
+    const CollSeq *pColl = pKeyInfo->aColl[i];
+    const Mem *pMem = &pIdxKey->aMem[i];
+    if( pColl && pColl->zName
+     && sqlite3StrICmp(pColl->zName, "NOCASE")==0
+     && (pMem->flags & MEM_Str)!=0
+     && pMem->n>0
+     && memchr(pMem->z, 0, (size_t)pMem->n)!=0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
 int prollyBtCursorTableMoveto(
   BtCursor *pCur,
   i64 intKey,
@@ -565,14 +588,18 @@ static int indexMovetoCustomCollation(
   ProllyMutMapEntry *pEntry = 0;
   int cmp = 0;
   int treeFound = 0;
+  int hasNocaseNul;
   int rc;
 
   *pDone = 0;
-  if( !pCur->pKeyInfo
-   || !(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
-   || !keyInfoHasUnsupportedCollation(
-          pCur->pKeyInfo,
-          nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
+  if( !pCur->pKeyInfo ) return SQLITE_OK;
+  hasNocaseNul = !pCur->isTableRoot
+    && unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey);
+  if( !hasNocaseNul
+   && (!(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
+       || !keyInfoHasUnsupportedCollation(
+            pCur->pKeyInfo,
+            nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField)) ){
     return SQLITE_OK;
   }
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);

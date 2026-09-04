@@ -3232,6 +3232,9 @@ static int whereLoopAddBtreeIndex(
   WhereLoop *pNew;                /* Template WhereLoop under construction */
   WhereTerm *pTerm;               /* A WhereTerm under consideration */
   int opMask;                     /* Valid operators for constraints */
+#ifdef DOLTLITE_PROLLY
+  int doltliteNocaseScan = 0;
+#endif
   WhereScan scan;                 /* Iterator for WHERE terms */
   Bitmask saved_prereq;           /* Original value of pNew->prereq */
   u16 saved_nLTerm;               /* Original value of pNew->nLTerm */
@@ -3266,6 +3269,13 @@ static int whereLoopAddBtreeIndex(
   if( pProbe->bUnordered ){
     opMask &= ~(WO_GT|WO_GE|WO_LT|WO_LE);
   }
+#ifdef DOLTLITE_PROLLY
+  if( sqlite3DoltliteNocaseIndexNeedsScan(db, pProbe)
+   && sqlite3StrICmp(pProbe->azColl[pNew->u.btree.nEq], "NOCASE")==0 ){
+    doltliteNocaseScan = 1;
+    opMask = WO_GT|WO_GE|WO_LT|WO_LE;
+  }
+#endif
 
   assert( pNew->u.btree.nEq<pProbe->nColumn );
   assert( pNew->u.btree.nEq<pProbe->nKeyCol
@@ -3291,6 +3301,9 @@ static int whereLoopAddBtreeIndex(
     int nIn = 0;
 #ifdef SQLITE_ENABLE_STAT4
     int nRecValid = pBuilder->nRecValid;
+#endif
+#ifdef DOLTLITE_PROLLY
+    if( doltliteNocaseScan && (pTerm->wtFlags & TERM_LIKEOPT)==0 ) continue;
 #endif
     if( (eOp==WO_ISNULL || (pTerm->wtFlags&TERM_VNULL)!=0)
      && indexColumnNotNull(pProbe, saved_nEq)

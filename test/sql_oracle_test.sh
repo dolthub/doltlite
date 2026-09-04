@@ -2448,6 +2448,27 @@ SELECT count(*) FROM t WHERE v LIKE '%%';
 SELECT count(*) FROM t WHERE v LIKE '%' || char(0) || '%';
 "
 
+oracle "cat27_nocase_secondary_index_embedded_nul" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+CREATE INDEX ts ON t(s);
+INSERT INTO t(s) VALUES
+  ('a'||char(0)||'b'),('a'||char(0)||'c'),('A'||char(0)||'B'),
+  ('a'||char(0)||'bb'),('a'||char(0)),('a');
+SELECT group_concat(id) FROM (SELECT id FROM t WHERE s='a'||char(0)||'c' ORDER BY id);
+SELECT hex(s),count(*) FROM t GROUP BY s ORDER BY s;
+SELECT count(DISTINCT s) FROM t;
+SELECT hex(s) FROM t ORDER BY s,id;
+SELECT group_concat(id) FROM (SELECT id FROM t INDEXED BY ts WHERE s>='a'||char(0)||'b' ORDER BY id);
+CREATE TABLE q(s TEXT COLLATE NOCASE);
+INSERT INTO q VALUES('a'||char(0)||'c');
+SELECT group_concat(id) FROM (SELECT t.id FROM t JOIN q ON t.s=q.s ORDER BY t.id);
+ANALYZE;
+SELECT group_concat(id) FROM (SELECT id FROM t WHERE s='a'||char(0)||'c' ORDER BY id);
+CREATE TABLE u(s TEXT COLLATE NOCASE UNIQUE);
+INSERT OR IGNORE INTO u VALUES('x'||char(0)||'b'),('x'||char(0)||'c');
+SELECT count(*) FROM u;
+"
+
 echo ""
 echo "--- Category 28: ALTER TABLE with indexes ---"
 
