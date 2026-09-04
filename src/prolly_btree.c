@@ -703,9 +703,6 @@ int sqlite3BtreeOpen(
   if( pBt->store.readOnly ){
     pBt->btsFlags |= BTS_READ_ONLY;
   }
-  if( chunkStoreIsEmpty(&pBt->store) ){
-    pBt->btsFlags |= BTS_INITIALLY_EMPTY;
-  }
 
   p->aMeta[BTREE_FREE_PAGE_COUNT] = 0;
   p->aMeta[BTREE_SCHEMA_VERSION] = 0;
@@ -1801,7 +1798,7 @@ void prollyBtCursorClearCursor(BtCursor *pCur){
   CLEAR_CACHED_PAYLOAD(pCur);
   clearMergeCursorState(pCur);
   pCur->eState = CURSOR_INVALID;
-  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_ValidOvfl|BTCF_AtLast);
+  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
   pCur->skipNext = 0;
 }
 void sqlite3BtreeClearCursor(BtCursor *pCur){

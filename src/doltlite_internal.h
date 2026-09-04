@@ -861,7 +861,6 @@ int doltliteDeserializeConstraintViolationsForTest(
   const u8 *data, int nData
 );
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
-int doltlitePrepareCatalogForPersistence(sqlite3 *db);
 int doltliteCreateAndStoreCommit(
   sqlite3 *db,
   const ProllyHash *pParent,
@@ -937,6 +936,9 @@ int doltliteCmdParseAuthor(
   char **pzName, char **pzEmail
 );
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
+int doltliteCmdSourceResultError(
+  sqlite3_context *ctx, ChunkStore *cs, int *pRc
+);
 int doltliteCmdFinishWithConflicts(
   sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
   int nConflicts, const char *zOp, int bSealOnPlain
@@ -957,7 +959,8 @@ int doltliteDetectConstraintViolationsFiltered(
   const char **azTables,
   int nTables,
   int bPersist,
-  int *pnViolations
+  int *pnViolations,
+  char **pzErr
 );
 int doltliteVerifyConstraintsRegister(sqlite3 *db);
 int doltliteRefreshAndConfirmHead(

@@ -93,6 +93,20 @@ static int applyRestoreOriginalBranch(
   return rc==SQLITE_OK ? opRc : rc;
 }
 
+static int cherryPickRestoreAndPersist(
+  sqlite3 *db,
+  DoltliteTxnState *pSaved,
+  int opRc
+){
+  ProllyHash restoredCat = pSaved->sessionCatalogHash;
+  int restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, opRc);
+  if( restoreRc==opRc && !prollyHashIsEmpty(&restoredCat) ){
+    int persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
+    if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) restoreRc = persistRc;
+  }
+  return restoreRc;
+}
+
 int applyMergedCatalogAndCommit(
   sqlite3 *db,
   sqlite3_context *context,
@@ -201,42 +215,10 @@ int applyMergedCatalogAndCommit(
 
   {
     int nViolations = 0;
-    int nUnique = 0;
-    int nCheck = 0;
-    int nNotNull = 0;
-    int nStrict = 0;
     char *zDetectErrMsg = 0;
 
-    rc = doltliteConstraintViolationBatchBegin(db);
-    if( rc==SQLITE_OK ){
-      rc = doltliteDetectMergeFkViolations(db, ancCatHash,
-                                           &zDetectErrMsg, &nViolations,
-                                           0, 0);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteDetectMergeUniqueViolations(db, ancCatHash,
-                                               &zDetectErrMsg, &nUnique,
-                                               0, 0);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteDetectMergeCheckViolations(db, ancCatHash,
-                                              &zDetectErrMsg, &nCheck,
-                                              0, 0);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteDetectMergeNotNullViolations(db, ancCatHash,
-                                               &zDetectErrMsg, &nNotNull,
-                                               0, 0);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteDetectMergeStrictViolations(db, ancCatHash,
-                                              &zDetectErrMsg, &nStrict,
-                                              0, 0);
-    }
-    {
-      int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
-      if( rc==SQLITE_OK ) rc = erc;
-    }
+    rc = doltliteDetectConstraintViolationsFiltered(
+        db, ancCatHash, 0, 0, 1, &nViolations, &zDetectErrMsg);
     if( rc!=SQLITE_OK ){
       if( zDetectErrMsg ){
         sqlite3_result_error(context, zDetectErrMsg, -1);
@@ -246,9 +228,9 @@ int applyMergedCatalogAndCommit(
     }
     sqlite3_free(zDetectErrMsg);
 
-    if( nViolations + nUnique + nCheck + nNotNull + nStrict > 0 ){
+    if( nViolations > 0 ){
       if( pnViolations ){
-        *pnViolations = nViolations + nUnique + nCheck + nNotNull + nStrict;
+        *pnViolations = nViolations;
       }
       if( *pnConflicts > 0 ){
         return doltliteCmdFinishWithConflictsAndConstraintViolations(
@@ -303,18 +285,11 @@ int applyMergedCatalogAndCommit(
     const ProllyHash *pHeadCat = pCommitOurCatHash
         ? pCommitOurCatHash : ourCatHash;
     if( prollyHashCompare(&commitCatHash, pHeadCat)==0 ){
-      ProllyHash restoredCat = savedState.sessionCatalogHash;
-      int restoreRc;
       if( graphLocked ){
         chunkStoreUnlock(cs);
         graphLocked = 0;
       }
-      restoreRc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_DONE);
-      if( restoreRc==SQLITE_DONE && !prollyHashIsEmpty(&restoredCat) ){
-        int persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
-        if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) return persistRc;
-      }
-      return restoreRc;
+      return cherryPickRestoreAndPersist(db, &savedState, SQLITE_DONE);
     }
   }
 
@@ -344,30 +319,7 @@ apply_rollback:
   if( graphLocked ){
     chunkStoreUnlock(cs);
   }
-  {
-    ProllyHash restoredCat = savedState.sessionCatalogHash;
-    int restoreRc = doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
-    if( restoreRc==rc && !prollyHashIsEmpty(&restoredCat) ){
-      int persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
-      if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) restoreRc = persistRc;
-    }
-    return restoreRc;
-  }
-}
-
-static int cherryPickSourceResultError(
-  sqlite3_context *context,
-  ChunkStore *cs,
-  int rc
-){
-  int pendingRc = SQLITE_OK;
-  char *zErr = chunkStoreSourceTakeError(cs, &pendingRc);
-  if( !zErr && pendingRc==SQLITE_OK ) return 0;
-  if( zErr ) sqlite3_result_error(context, zErr, -1);
-  sqlite3_result_error_code(
-      context, pendingRc!=SQLITE_OK ? pendingRc : rc);
-  sqlite3_free(zErr);
-  return 1;
+  return cherryPickRestoreAndPersist(db, &savedState, rc);
 }
 
 static void doltliteCherryPickFunc(
@@ -420,7 +372,7 @@ static void doltliteCherryPickFunc(
     rc = mergeAbortInPlace(db);
     doltliteCmdArgsClear(&args);
     if( rc!=SQLITE_OK ){
-      if( !cherryPickSourceResultError(context, cs, rc) ){
+      if( !doltliteCmdSourceResultError(context, cs, &rc) ){
         sqlite3_result_error_code(context, rc);
       }
       return;
@@ -445,7 +397,7 @@ static void doltliteCherryPickFunc(
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
-    if( !cherryPickSourceResultError(context, cs, rc) ){
+    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
       sqlite3_result_error_code(context, rc);
     }
     return;
@@ -458,7 +410,7 @@ static void doltliteCherryPickFunc(
 
   rc = doltliteResolveRef(db,zRef, &pickHash);
   if( rc!=SQLITE_OK ){
-    if( !cherryPickSourceResultError(context, cs, rc) ){
+    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
       if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
         sqlite3_result_error(context, "invalid commit hash", -1);
       }else{
@@ -475,7 +427,7 @@ static void doltliteCherryPickFunc(
     doltliteCommitClear(&pickCommit);
     doltliteCommitClear(&parentCommit);
     doltliteCommitClear(&ourCommit);
-    if( !cherryPickSourceResultError(context, cs, rc) ){
+    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
       sqlite3_result_error(context, "commit not found", -1);
     }
     return;
@@ -495,7 +447,7 @@ static void doltliteCherryPickFunc(
     doltliteCommitClear(&pickCommit);
     doltliteCommitClear(&parentCommit);
     doltliteCommitClear(&ourCommit);
-    if( !cherryPickSourceResultError(context, cs, rc) ){
+    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
       sqlite3_result_error_code(context, rc);
     }
     return;
@@ -529,7 +481,7 @@ static void doltliteCherryPickFunc(
 
   if( rc==SQLITE_BUSY ){
     sqlite3_free(zApplyErr);
-    if( !cherryPickSourceResultError(context, cs, rc) ){
+    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
       doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
     }
     return;
@@ -540,7 +492,7 @@ static void doltliteCherryPickFunc(
     return;
   }
   if( rc!=SQLITE_OK ){
-    if( !cherryPickSourceResultError(context, cs, rc) ){
+    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
       if( zApplyErr ){
         sqlite3_result_error(context, zApplyErr, -1);
       }else{

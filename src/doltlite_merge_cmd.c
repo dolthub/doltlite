@@ -336,7 +336,6 @@ static int mergeRefDetectConstraintViolations(
   int *pnViolations,
   char **pzErr
 ){
-  int nFk = 0, nUnique = 0, nCheck = 0, nNotNull = 0, nStrict = 0;
   int vrc;
   int erc;
   int bOwnTxn = 0;
@@ -350,32 +349,11 @@ static int mergeRefDetectConstraintViolations(
     if( vrc!=SQLITE_OK ) return vrc;
     bOwnTxn = 1;
   }
-  vrc = doltliteConstraintViolationBatchBegin(db);
-  if( vrc==SQLITE_OK ){
-    vrc = doltliteDetectMergeFkViolations(db, pAncCat, pzErr, &nFk, 0, 0);
-  }
-  if( vrc==SQLITE_OK ){
-    vrc = doltliteDetectMergeUniqueViolations(db, pAncCat, pzErr, &nUnique, 0, 0);
-  }
-  if( vrc==SQLITE_OK ){
-    vrc = doltliteDetectMergeCheckViolations(db, pAncCat, pzErr, &nCheck, 0, 0);
-  }
-  if( vrc==SQLITE_OK ){
-    vrc = doltliteDetectMergeNotNullViolations(db, pAncCat, pzErr, &nNotNull,
-                                              0, 0);
-  }
-  if( vrc==SQLITE_OK ){
-    vrc = doltliteDetectMergeStrictViolations(db, pAncCat, pzErr, &nStrict,
-                                             0, 0);
-  }
-  erc = doltliteConstraintViolationBatchEnd(db, vrc==SQLITE_OK);
-  if( vrc==SQLITE_OK ) vrc = erc;
+  vrc = doltliteDetectConstraintViolationsFiltered(
+      db, pAncCat, 0, 0, 1, pnViolations, pzErr);
   if( bOwnTxn ){
     erc = sqlite3_exec(db, vrc==SQLITE_OK ? "COMMIT" : "ROLLBACK", 0, 0, 0);
     if( vrc==SQLITE_OK ) vrc = erc;
-  }
-  if( vrc==SQLITE_OK ){
-    *pnViolations = nFk + nUnique + nCheck + nNotNull + nStrict;
   }
   return vrc;
 }

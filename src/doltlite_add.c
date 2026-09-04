@@ -975,12 +975,6 @@ static int doltliteStageArgsAndPersist(
 
   doltliteGetSessionStaged(db, &savedStaged);
 
-  rc = doltlitePrepareCatalogForPersistence(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "failed to prepare catalog", -1);
-    return rc;
-  }
-
   rc = doltliteFlushCatalogToHash(db, &workingHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "failed to flush", -1);

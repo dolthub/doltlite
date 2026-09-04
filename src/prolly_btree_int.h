@@ -87,15 +87,12 @@ u32 prollyBtreeGetU32LE(const u8 *p);
 
 #define BTCF_WriteFlag  0x01
 #define BTCF_ValidNKey  0x02
-#define BTCF_ValidOvfl  0x04
 #define BTCF_AtLast     0x08
 #define BTCF_Incrblob   0x10
-#define BTCF_Multiple   0x20
 #define BTCF_Pinned     0x40
 #define BTCF_DeleteKey  0x80
 
 #define BTS_READ_ONLY       0x0001
-#define BTS_INITIALLY_EMPTY 0x0010
 
 #define CLEAR_CACHED_PAYLOAD(pCsr) do{ \
   if( (pCsr)->cachedPayloadOwned && (pCsr)->pCachedPayload ){ \
@@ -440,9 +437,6 @@ struct TableEntry *catFind(Catalog *cat, Pgno iTable);
 struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags);
 void catRemove(Catalog *cat, Pgno iTable);
 void catFree(Catalog *cat);
-int btreeLoadBranchHeadCatalog(ChunkStore *cs, const char *zBranch,
-                                      ProllyHash *pCatHash,
-                                      ProllyHash *pHeadCommit);
 
 static inline struct TableEntry *findTable(Btree *p, Pgno iTable){
   return catFind(&p->cat, iTable);
@@ -464,8 +458,6 @@ void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap);
 int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
 int flushIfNeeded(BtCursor *pCur);
-int flushAllPending(Btree *pBtree, BtShared *pBt, Pgno iTable);
-int applyMutMapToTableRoot(BtShared *pBt, struct TableEntry *pTE, ProllyMutMap *pMap);
 int flushPendingForTable(Btree *pBtree, BtShared *pBt,
                                 struct TableEntry *pTE, int clearInPlace);
 int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);

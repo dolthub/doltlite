@@ -617,4 +617,19 @@ int doltliteCmdFinishWithConflictsAndConstraintViolations(
   return SQLITE_OK;
 }
 
+int doltliteCmdSourceResultError(
+  sqlite3_context *ctx,
+  ChunkStore *cs,
+  int *pRc
+){
+  int pendingRc = SQLITE_OK;
+  char *zErr = chunkStoreSourceTakeError(cs, &pendingRc);
+  if( !zErr && pendingRc==SQLITE_OK ) return 0;
+  if( zErr ) sqlite3_result_error(ctx, zErr, -1);
+  if( pendingRc!=SQLITE_OK ) *pRc = pendingRc;
+  sqlite3_result_error_code(ctx, *pRc);
+  sqlite3_free(zErr);
+  return 1;
+}
+
 #endif

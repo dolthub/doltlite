@@ -1009,7 +1009,7 @@ static int rebaseApplyPlanRowCatalog(
   }
   if( rc==SQLITE_OK && nConflicts==0 ){
     rc = doltliteDetectConstraintViolationsFiltered(
-        db, &parentC.catalogHash, 0, 0, 1, &nViolations);
+        db, &parentC.catalogHash, 0, 0, 1, &nViolations, 0);
   }
   doltliteCommitClear(&parentC);
   doltliteCommitClear(&replayC);

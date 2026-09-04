@@ -851,6 +851,7 @@ sqlite3_file *sqlite3_database_file_object(const char *zName){
   return 0;
 }
 
+#if !defined(NDEBUG) || defined(SQLITE_TEST)
 Pgno sqlite3PagerPagenumber(DbPage *pPg){
   (void)pPg;
   return 0;
@@ -859,6 +860,9 @@ int sqlite3PagerIswriteable(DbPage *pPg){
   (void)pPg;
   return 1;
 }
+#endif
+
+#ifdef SQLITE_TEST
 int *sqlite3PagerStats(Pager *pPager){
   static int aStats[11];
   (void)pPager;
@@ -875,6 +879,7 @@ void disable_simulated_io_errors(void){
 }
 void enable_simulated_io_errors(void){
 }
+#endif
 
 ChunkStore *doltliteBtreeChunkStore(Btree *p);
 void doltliteBtreeBackupStart(Btree *p);
