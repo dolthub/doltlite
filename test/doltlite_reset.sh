@@ -314,6 +314,39 @@ run_test "hard_reset_preserves_only_untracked_new_table" \
 run_test "hard_reset_mixed_new_tables_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB13"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
+DB14=/tmp/test_reset14_$$.db; rm -f "$DB14"
+$DOLTLITE "$DB14" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-A','-m','base');
+INSERT INTO dolt_ignore VALUES('scratch_%',1);
+INSERT INTO dolt_docs VALUES('README.md','hello');
+INSERT INTO dolt_tests VALUES('t1','g','SELECT 1','expected_single_value','==','1');
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+CREATE TABLE dolt_custom(a INTEGER PRIMARY KEY);
+INSERT INTO dolt_custom VALUES(7);
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_keeps_untracked_lazy_system_tables" \
+  "SELECT group_concat(table_name,'|') FROM (SELECT table_name FROM dolt_status ORDER BY table_name);" \
+  "dolt_custom|dolt_docs|dolt_ignore|dolt_tests|newt" "$DB14"
+run_test "hard_reset_keeps_untracked_lazy_system_table_rows" \
+  "SELECT (SELECT count(*) FROM dolt_ignore) || '|' || (SELECT count(*) FROM dolt_docs WHERE doc_name='README.md') || '|' || (SELECT count(*) FROM dolt_tests) || '|' || (SELECT count(*) FROM dolt_custom);" \
+  "1|1|1|1" "$DB14"
+
+DB15=/tmp/test_reset15_$$.db; rm -f "$DB15"
+$DOLTLITE "$DB15" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO dolt_ignore VALUES('keep_%',1);
+INSERT INTO dolt_docs VALUES('README.md','committed');
+SELECT dolt_commit('-A','-m','base');
+INSERT INTO dolt_ignore VALUES('extra_%',0);
+UPDATE dolt_docs SET doc_text='edited' WHERE doc_name='README.md';
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_reverts_tracked_lazy_system_tables" \
+  "SELECT (SELECT count(*) FROM dolt_ignore) || '|' || (SELECT doc_text FROM dolt_docs WHERE doc_name='README.md') || '|' || (SELECT count(*) FROM dolt_status);" \
+  "1|committed|0" "$DB15"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
 
 dltest_finish

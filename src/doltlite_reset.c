@@ -296,7 +296,7 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   if( rc==SQLITE_OK ){
     rc = sqlite3_prepare_v2(db,
         "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' "
-        "AND m.name NOT LIKE 'sqlite_%' AND m.name NOT LIKE 'dolt_%' "
+        "AND m.name NOT LIKE 'sqlite_%' "
         "AND NOT EXISTS (SELECT 1 FROM dolt_status AS s "
         "WHERE s.status='renamed' AND "
         "substr(s.table_name, -(length(m.name)+4))=' -> ' || m.name)",
