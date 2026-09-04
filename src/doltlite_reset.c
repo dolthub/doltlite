@@ -278,12 +278,12 @@ done:
 static int doltlitePreserveUntrackedTablesOnHardReset(
   sqlite3 *db,
   ChunkStore *cs,
-  const ProllyHash *pPreResetHeadCatHash,
+  const ProllyHash *pPreResetStagedCatHash,
   ProllyHash *pTargetCatHash
 ){
-  struct TableEntry *aHead = 0;
+  struct TableEntry *aStaged = 0;
   SchemaEntry *aTargetSchema = 0;
-  int nHead = 0;
+  int nStaged = 0;
   int nTargetSchema = 0;
   int nUntracked = 0;
   char **azUntracked = 0;
@@ -291,7 +291,8 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   int j, k;
   int rc;
 
-  rc = doltliteLoadCatalog(db, pPreResetHeadCatHash, &aHead, &nHead, 0);
+  rc = doltliteLoadCatalog(
+      db, pPreResetStagedCatHash, &aStaged, &nStaged, 0);
   if( rc==SQLITE_OK ){
     rc = sqlite3_prepare_v2(db,
         "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' "
@@ -304,15 +305,15 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   if( rc==SQLITE_OK ){
     while( sqlite3_step(pStmt)==SQLITE_ROW ){
       const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
-      int inHead = 0;
+      int inStaged = 0;
       if( !zName ) continue;
-      for(k=0; k<nHead; k++){
-        if( aHead[k].zName && strcmp(aHead[k].zName, zName)==0 ){
-          inHead = 1;
+      for(k=0; k<nStaged; k++){
+        if( aStaged[k].zName && strcmp(aStaged[k].zName, zName)==0 ){
+          inStaged = 1;
           break;
         }
       }
-      if( !inHead ){
+      if( !inStaged ){
         char **aNew = sqlite3_realloc(azUntracked,
             (nUntracked+1)*(int)sizeof(char*));
         if( !aNew ){ rc = SQLITE_NOMEM; break; }
@@ -456,7 +457,7 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   if( pStmt ) sqlite3_finalize(pStmt);
   for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
   sqlite3_free(azUntracked);
-  doltliteFreeCatalog(aHead, nHead);
+  doltliteFreeCatalog(aStaged, nStaged);
   freeSchemaEntries(aTargetSchema, nTargetSchema);
   return rc;
 }
@@ -471,6 +472,7 @@ static void doltliteResetFunc(
   ProllyHash targetCatHash;
   ProllyHash targetCommit;
   ProllyHash preResetHeadCatHash;
+  ProllyHash preResetStagedCatHash;
   ProllyHash sessionHeadBeforeLock;
   int havePreResetHead = 0;
   int isHard = 0;
@@ -505,6 +507,11 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }else if( rc==SQLITE_OK && !prollyHashIsEmpty(&preResetHeadCatHash) ){
     havePreResetHead = 1;
+    doltliteGetSessionStaged(db, &preResetStagedCatHash);
+    if( prollyHashIsEmpty(&preResetStagedCatHash) ){
+      memcpy(&preResetStagedCatHash, &preResetHeadCatHash,
+             sizeof(ProllyHash));
+    }
   }
 
   for(i=0; i<argc; i++){
@@ -692,7 +699,7 @@ static void doltliteResetFunc(
 
     if( havePreResetHead ){
       rc = doltlitePreserveUntrackedTablesOnHardReset(
-        db, cs, &preResetHeadCatHash, &targetCatHash
+        db, cs, &preResetStagedCatHash, &targetCatHash
       );
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
