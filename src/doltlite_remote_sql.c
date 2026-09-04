@@ -278,8 +278,9 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
 static void doltPushParsedFunc(
   sqlite3_context *ctx,
   const char *zRemoteName,
-  const char *zBranch,
-  int bForce
+  const char *zRef,
+  int bForce,
+  int bTags
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -292,12 +293,27 @@ static void doltPushParsedFunc(
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
 
-  rc = doltlitePush(cs, pRemote, zBranch, bForce);
+  if( bTags ){
+    const TagRef *aTag = 0;
+    int nTag = 0;
+    int i;
+    refsTableGetTags(&cs->refs, &nTag, &aTag);
+    rc = SQLITE_OK;
+    for(i=0; i<nTag && rc==SQLITE_OK; i++){
+      rc = doltlitePushTag(cs, pRemote, aTag[i].zName);
+    }
+  }else if( chunkStoreFindBranch(cs, zRef, 0)==SQLITE_OK ){
+    rc = doltlitePush(cs, pRemote, zRef, bForce);
+  }else{
+    rc = doltlitePushTag(cs, pRemote, zRef);
+  }
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
     char *zOwned;
     if( !zMsg && rc==SQLITE_ERROR ){
       zMsg = "push failed (not a fast-forward?)";
+    }else if( !zMsg && rc==SQLITE_NOTFOUND ){
+      zMsg = "push failed: branch or tag not found";
     }
     zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
     pRemote->xClose(pRemote);
@@ -314,14 +330,17 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCmdArgs args;
   int bForce = 0;
+  int bTags = 0;
   DoltliteCmdOption aOption[] = {
-    { "force", 0, DOLTLITE_CMD_OPTION_FLAG, &bForce, 0 }
+    { "force", 0, DOLTLITE_CMD_OPTION_FLAG, &bForce, 0 },
+    { "tags", 0, DOLTLITE_CMD_OPTION_FLAG, &bTags, 0 }
   };
   int rc;
 
   if( argc<2 ){
     doltliteVcResultError(ctx, db,
-        "usage: dolt_push(remote, branch [, '--force'])");
+        "usage: dolt_push(remote, branch [, '--force']) or "
+        "dolt_push(remote, '--tags')");
     return;
   }
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
@@ -330,17 +349,21 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     (void)doltliteVcSealSavepointError(db);
     return;
   }
-  if( args.nPositional<2 ){
+  if( args.nPositional<(bTags ? 1 : 2) ){
     doltliteCmdArgsClear(&args);
-    doltliteVcResultError(ctx, db, "remote and branch required");
+    doltliteVcResultError(ctx, db,
+        bTags ? "remote required" : "remote and branch required");
     return;
   }
-  if( args.nPositional>2 ){
+  if( args.nPositional>(bTags ? 1 : 2) ){
     doltliteCmdArgsClear(&args);
-    doltliteVcResultError(ctx, db, "too many arguments");
+    doltliteVcResultError(ctx, db,
+        bTags ? "--tags cannot be combined with a branch"
+              : "too many arguments");
     return;
   }
-  doltPushParsedFunc(ctx, args.azPositional[0], args.azPositional[1], bForce);
+  doltPushParsedFunc(ctx, args.azPositional[0],
+                     bTags ? 0 : args.azPositional[1], bForce, bTags);
   doltliteCmdArgsClear(&args);
 }
 

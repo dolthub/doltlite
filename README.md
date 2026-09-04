@@ -653,6 +653,8 @@ Git-like push / fetch / pull / clone between databases.
 ```sql
 SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
 SELECT dolt_push('origin', 'main');
+SELECT dolt_push('origin', 'v1.0');       -- push one tag
+SELECT dolt_push('origin', '--tags');     -- push all tags
 SELECT dolt_clone('file:///path/to/source.doltlite');
 SELECT dolt_clone('--lazy', 'file:///path/to/source.doltlite');
 SELECT dolt_fetch('origin', 'main');
@@ -677,7 +679,8 @@ uncached miss fails with a hash-named error instead of contacting `origin`.
 `dolt_pull` fetches, then fast-forwards if the local branch is an ancestor
 of the remote tip. If the current branch has diverged, it three-way merges
 like `dolt_merge`. A non-current branch that is not a fast-forward is
-refused.
+refused. Fetch and pull also install remote tags whose commits have been
+fetched, replacing same-named local tags when the remote value differs.
 
 ##### HTTP Remotes
 

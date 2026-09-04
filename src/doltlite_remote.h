@@ -45,14 +45,16 @@ int doltliteSyncChunks(
 int doltlitePush(ChunkStore *pLocal, DoltliteRemote *pRemote,
                  const char *zBranch, int bForce);
 
-/* Allow only create/advance of zBranch (FF unless bForce); other branches
-** and tags must match pStore. */
+int doltlitePushTag(ChunkStore *pLocal, DoltliteRemote *pRemote,
+                    const char *zTag);
+
+/* Allow only the declared branch or tag update; every other ref must match. */
 int doltliteValidateScopedRefsUpdate(ChunkStore *pStore, const u8 *pBlob,
-                                     int nBlob, const char *zBranch,
+                                     int nBlob, const char *zRef,
                                      int bForce);
 
 int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
-                                    int nBlob, const char *zBranch);
+                                    int nBlob, const char *zRef);
 
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);
